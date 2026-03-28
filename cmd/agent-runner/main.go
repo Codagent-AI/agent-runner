@@ -19,6 +19,9 @@ import (
 	"github.com/codagent/agent-runner/internal/runner"
 )
 
+// version is set at build time via -ldflags "-X main.version=...".
+var version = "dev"
+
 // realProcessRunner implements exec.ProcessRunner using os/exec.
 type realProcessRunner struct{}
 
@@ -139,9 +142,11 @@ func main() {
 
 func run() int {
 	rootCmd := &cobra.Command{
-		Use:   "agent-runner",
-		Short: "CLI workflow orchestrator for AI agents",
+		Use:     "agent-runner",
+		Short:   "CLI workflow orchestrator for AI agents",
+		Version: version,
 	}
+	rootCmd.SetVersionTemplate("{{.Version}}\n")
 
 	runCmd := &cobra.Command{
 		Use:   "run <workflow.yaml> [params...] [--from <step>] [--session <id>]",

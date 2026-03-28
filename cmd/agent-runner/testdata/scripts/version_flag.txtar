@@ -1,0 +1,7 @@
+# --version prints the version and exits 0
+exec agent-runner --version
+stdout '^dev$'
+
+# -v behaves identically to --version
+exec agent-runner -v
+stdout '^dev$'
