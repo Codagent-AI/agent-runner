@@ -1,5 +1,0 @@
-[2026-03-28T16:16:03.971Z] [2026-03-28T16:16:03.971Z] Starting check: build
-[2026-03-28T16:16:03.971Z] Executing command: go build ./...
-[2026-03-28T16:16:03.972Z] Working directory: .
-
-[2026-03-28T16:16:04.619Z] Result: pass - Command exited with code 0

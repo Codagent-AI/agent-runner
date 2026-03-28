@@ -1,7 +1,0 @@
-{
-  "adapter": "codex",
-  "timestamp": "2026-03-28T16:16:12.885Z",
-  "status": "pass",
-  "rawOutput": "{\"status\":\"pass\",\"message\":\"No problems found\"}",
-  "violations": []
-}
