@@ -6,9 +6,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-type stubAuditLogger struct{ events []any }
-
-func (s *stubAuditLogger) String() string { return "stub" }
+type stubAuditLogger struct{}
 
 func TestCreateRootContext(t *testing.T) {
 	t.Run("creates a context with provided params", func(t *testing.T) {
@@ -147,7 +145,7 @@ func TestCreateSubWorkflowContext(t *testing.T) {
 			WorkflowFile: "parent.yaml",
 		})
 
-		child := NewSubWorkflowContext(parent, SubWorkflowContextOptions{
+		child := NewSubWorkflowContext(parent, &SubWorkflowContextOptions{
 			StepID:       "call-sub",
 			Params:       map[string]string{"child_param": "cval"},
 			WorkflowFile: "child.yaml",
@@ -173,7 +171,7 @@ func TestCreateSubWorkflowContext(t *testing.T) {
 			WorkflowFile: "parent.yaml",
 		})
 
-		child := NewSubWorkflowContext(parent, SubWorkflowContextOptions{
+		child := NewSubWorkflowContext(parent, &SubWorkflowContextOptions{
 			StepID:          "call-sub",
 			Params:          map[string]string{},
 			WorkflowFile:    "child.yaml",
@@ -196,7 +194,7 @@ func TestCreateSubWorkflowContext(t *testing.T) {
 			AuditLogger:  logger,
 		})
 
-		child := NewSubWorkflowContext(parent, SubWorkflowContextOptions{
+		child := NewSubWorkflowContext(parent, &SubWorkflowContextOptions{
 			StepID:       "call-sub",
 			Params:       map[string]string{},
 			WorkflowFile: "child.yaml",
@@ -236,7 +234,7 @@ func TestSeedSessionPropagation(t *testing.T) {
 			SessionIDs:   map[string]string{"_seed": "seed-123"},
 		})
 
-		child := NewSubWorkflowContext(parent, SubWorkflowContextOptions{
+		child := NewSubWorkflowContext(parent, &SubWorkflowContextOptions{
 			StepID:       "sub",
 			Params:       map[string]string{},
 			WorkflowFile: "child.yaml",
@@ -271,7 +269,7 @@ func TestSeedSessionPropagation(t *testing.T) {
 			SessionIDs:   map[string]string{"step1": "abc", "_seed": "seed-789"},
 		})
 
-		child := NewSubWorkflowContext(parent, SubWorkflowContextOptions{
+		child := NewSubWorkflowContext(parent, &SubWorkflowContextOptions{
 			StepID:       "sub",
 			Params:       map[string]string{},
 			WorkflowFile: "child.yaml",
@@ -292,7 +290,7 @@ func TestSeedSessionPropagation(t *testing.T) {
 			SessionIDs:   map[string]string{"step1": "abc"},
 		})
 
-		child := NewSubWorkflowContext(parent, SubWorkflowContextOptions{
+		child := NewSubWorkflowContext(parent, &SubWorkflowContextOptions{
 			StepID:       "sub",
 			Params:       map[string]string{},
 			WorkflowFile: "child.yaml",
@@ -310,13 +308,13 @@ func TestSeedSessionPropagation(t *testing.T) {
 			SessionIDs:   map[string]string{"_seed": "seed-nested"},
 		})
 
-		child1 := NewSubWorkflowContext(root, SubWorkflowContextOptions{
+		child1 := NewSubWorkflowContext(root, &SubWorkflowContextOptions{
 			StepID:       "sub1",
 			Params:       map[string]string{},
 			WorkflowFile: "child1.yaml",
 		})
 
-		child2 := NewSubWorkflowContext(child1, SubWorkflowContextOptions{
+		child2 := NewSubWorkflowContext(child1, &SubWorkflowContextOptions{
 			StepID:       "sub2",
 			Params:       map[string]string{},
 			WorkflowFile: "child2.yaml",

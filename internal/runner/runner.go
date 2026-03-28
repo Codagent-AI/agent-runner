@@ -17,6 +17,7 @@ import (
 // WorkflowResult represents the final result of a workflow run.
 type WorkflowResult string
 
+// Workflow result constants.
 const (
 	ResultSuccess WorkflowResult = "success"
 	ResultFailed  WorkflowResult = "failed"
@@ -37,7 +38,7 @@ type Options struct {
 	Log               exec.Logger
 }
 
-func validateParams(workflow model.Workflow, params map[string]string) error {
+func validateParams(workflow *model.Workflow, params map[string]string) error {
 	for _, param := range workflow.Params {
 		if _, ok := params[param.Name]; ok {
 			continue
@@ -46,19 +47,19 @@ func validateParams(workflow model.Workflow, params map[string]string) error {
 			if param.Default != "" {
 				params[param.Name] = param.Default
 			} else {
-				return fmt.Errorf("Missing required parameter: %s", param.Name)
+				return fmt.Errorf("missing required parameter: %s", param.Name)
 			}
 		}
 	}
 	return nil
 }
 
-func resolveStartIndex(workflow model.Workflow, from string) (int, error) {
+func resolveStartIndex(workflow *model.Workflow, from string) (int, error) {
 	if from == "" {
 		return 0, nil
 	}
-	for i, s := range workflow.Steps {
-		if s.ID == from {
+	for i := range workflow.Steps {
+		if workflow.Steps[i].ID == from {
 			return i, nil
 		}
 	}
@@ -119,45 +120,43 @@ func emitAudit(ctx *model.ExecutionContext, event audit.Event) {
 	}
 }
 
-// RunWorkflow executes a workflow with the given parameters.
-func RunWorkflow(
-	workflow model.Workflow,
-	params map[string]string,
-	opts Options,
-) (WorkflowResult, error) {
+// runState holds the internal state needed during workflow execution.
+type runState struct {
+	workflow     model.Workflow
+	ctx          *model.ExecutionContext
+	stateDir     string
+	workflowHash string
+	auditLogger  *audit.Logger
+	runStartTime time.Time
+	log          exec.Logger
+	runner       exec.ProcessRunner
+	glob         exec.GlobExpander
+}
+
+func initRunState(workflow *model.Workflow, params map[string]string, opts *Options) (*runState, error) {
 	if err := validateParams(workflow, params); err != nil {
-		return ResultFailed, err
+		return nil, err
 	}
 
 	if opts.Engine != nil {
 		if err := opts.Engine.ValidateWorkflow(workflow, params, opts.WorkflowFile); err != nil {
-			return ResultFailed, err
+			return nil, err
 		}
-	}
-
-	startIndex, err := resolveStartIndex(workflow, opts.From)
-	if err != nil {
-		return ResultFailed, err
 	}
 
 	defaultStateDir := opts.StateDir
 	if defaultStateDir == "" {
 		defaultStateDir, _ = os.Getwd()
 	}
-	stateDir := resolveStateDir(opts.Engine, params, defaultStateDir)
-	workflowHash := computeHash(opts.WorkflowFile)
-
-	auditLogger, err := audit.CreateLogger(workflow.Name, "")
-	if err != nil {
-		// Non-fatal: continue without audit logging
-		auditLogger = nil
-	}
-
-	runStartTime := time.Now()
 
 	var engineRef model.Engine
 	if opts.Engine != nil {
 		engineRef = opts.Engine
+	}
+
+	auditLogger, err := audit.CreateLogger(workflow.Name, "")
+	if err != nil {
+		auditLogger = nil
 	}
 
 	ctx := model.NewRootContext(model.RootContextOptions{
@@ -172,147 +171,180 @@ func RunWorkflow(
 		ctx.ResumeChildState = opts.ChildState
 	}
 
-	if auditLogger != nil {
-		auditData := map[string]any{
-			"workflow_file": opts.WorkflowFile,
-			"workflow_name": workflow.Name,
-			"workflow_hash": workflowHash,
-			"context": map[string]any{
-				"params":            params,
-				"capturedVariables": ctx.CapturedVariables,
-				"sessionIds":        ctx.SessionIDs,
-			},
-		}
-		if opts.From != "" {
-			auditData["resumed"] = true
-			auditData["resume_from"] = opts.From
-		}
-		auditLogger.Emit(audit.Event{
-			Timestamp: runStartTime.UTC().Format(time.RFC3339),
-			Type:      audit.EventRunStart,
-			Data:      auditData,
-		})
-	}
-
 	log := opts.Log
 	if log == nil {
 		log = &defaultLogger{}
 	}
 
-	log.Printf("\nagent-runner: running workflow %q\n\n", workflow.Name)
+	return &runState{
+		workflow:     *workflow,
+		ctx:          ctx,
+		stateDir:     resolveStateDir(opts.Engine, params, defaultStateDir),
+		workflowHash: computeHash(opts.WorkflowFile),
+		auditLogger:  auditLogger,
+		runStartTime: time.Now(),
+		log:          log,
+		runner:       opts.ProcessRunner,
+		glob:         opts.GlobExpander,
+	}, nil
+}
 
-	runner := opts.ProcessRunner
-	glob := opts.GlobExpander
+func emitRunStart(rs *runState, opts *Options) {
+	if rs.auditLogger == nil {
+		return
+	}
+	auditData := map[string]any{
+		"workflow_file": opts.WorkflowFile,
+		"workflow_name": rs.workflow.Name,
+		"workflow_hash": rs.workflowHash,
+		"context": map[string]any{
+			"params":            rs.ctx.Params,
+			"capturedVariables": rs.ctx.CapturedVariables,
+			"sessionIds":        rs.ctx.SessionIDs,
+		},
+	}
+	if opts.From != "" {
+		auditData["resumed"] = true
+		auditData["resume_from"] = opts.From
+	}
+	rs.auditLogger.Emit(audit.Event{
+		Timestamp: rs.runStartTime.UTC().Format(time.RFC3339),
+		Type:      audit.EventRunStart,
+		Data:      auditData,
+	})
+}
 
-	var result WorkflowResult = ResultFailed
-	ranToCompletion := true
-	for i := startIndex; i < len(workflow.Steps); i++ {
-		step := workflow.Steps[i]
+func executeSteps(rs *runState, startIndex int) WorkflowResult {
+	for i := startIndex; i < len(rs.workflow.Steps); i++ {
+		step := &rs.workflow.Steps[i]
 
-		if flowctl.ShouldSkip(step.SkipIf, ctx.LastStepOutcome) {
-			breadcrumb := textfmt.BuildBreadcrumb(nestingToFmt(ctx), step.ID)
-			log.Println(textfmt.Separator())
-			log.Println(textfmt.StepHeading(i, len(workflow.Steps), breadcrumb, "", true))
-
-			prefix := audit.BuildPrefix(nestingToAuditInfo(ctx), step.ID)
-			emitAudit(ctx, audit.Event{
-				Timestamp: time.Now().UTC().Format(time.RFC3339),
-				Prefix:    prefix,
-				Type:      audit.EventStepStart,
-				Data:      map[string]any{"context": contextSnapshot(ctx)},
-			})
-			emitAudit(ctx, audit.Event{
-				Timestamp: time.Now().UTC().Format(time.RFC3339),
-				Prefix:    prefix,
-				Type:      audit.EventStepEnd,
-				Data:      map[string]any{"outcome": "skipped", "skip_if": step.SkipIf, "duration_ms": 0},
-			})
+		if flowctl.ShouldSkip(step.SkipIf, rs.ctx.LastStepOutcome) {
+			emitSkippedStep(rs, step, i)
 			continue
 		}
 
 		stepType := step.StepType()
-		breadcrumb := textfmt.BuildBreadcrumb(nestingToFmt(ctx), step.ID)
-		log.Println(textfmt.Separator())
-		log.Println(textfmt.StepHeading(i, len(workflow.Steps), breadcrumb, stepType, false))
+		breadcrumb := textfmt.BuildBreadcrumb(nestingToFmt(rs.ctx), step.ID)
+		rs.log.Println(textfmt.Separator())
+		rs.log.Println(textfmt.StepHeading(i, len(rs.workflow.Steps), breadcrumb, stepType, false))
 
-		flush := func() {
-			writeStepState(step, ctx, workflow, workflowHash, stateDir, nil)
+		stepRef := step // capture for closure
+		rs.ctx.FlushState = func() {
+			writeStepState(stepRef, rs.ctx, &rs.workflow, rs.workflowHash, rs.stateDir, nil)
 		}
-		ctx.FlushState = flush
 
-		var outcome exec.StepOutcome
-		var loopResult *exec.LoopResult
-		var stepErr error
-
-		if step.Loop != nil && len(step.Steps) > 0 {
-			lr, err := exec.ExecuteLoopStep(step, ctx, runner, glob, log, exec.LoopExecuteOptions{})
-			stepErr = err
-			loopResult = &lr
-			outcome = exec.MapLoopOutcomeForRunner(lr.Outcome)
-		} else {
-			outcome, stepErr = exec.DispatchStep(step, ctx, runner, glob, log)
-		}
-		ctx.FlushState = nil
+		outcome, loopResult, stepErr := runStep(step, rs)
+		rs.ctx.FlushState = nil
 
 		if stepErr != nil {
-			result = ResultFailed
-			break
+			return ResultFailed
 		}
 
-		writeStepState(step, ctx, workflow, workflowHash, stateDir, loopResult)
+		writeStepState(step, rs.ctx, &rs.workflow, rs.workflowHash, rs.stateDir, loopResult)
 
 		if outcome == exec.OutcomeAborted {
-			log.Println("\nagent-runner: workflow stopped.")
-			result = ResultStopped
-			ranToCompletion = false
-			break
+			rs.log.Println("\nagent-runner: workflow stopped.")
+			return ResultStopped
 		}
 
 		if outcome == exec.OutcomeFailed {
 			o := string(outcome)
-			ctx.LastStepOutcome = &o
+			rs.ctx.LastStepOutcome = &o
 			if step.ContinueOnFailure {
-				log.Printf("--- step %q failed (continue_on_failure) ---\n\n", step.ID)
+				rs.log.Printf("--- step %q failed (continue_on_failure) ---\n\n", step.ID)
 				continue
 			}
-			log.Printf("\nagent-runner: step %q failed. Stopping.\n", step.ID)
-			result = ResultFailed
-			ranToCompletion = false
-			break
+			rs.log.Printf("\nagent-runner: step %q failed. Stopping.\n", step.ID)
+			return ResultFailed
 		}
 
 		o := "success"
-		ctx.LastStepOutcome = &o
-		log.Printf("--- step %q complete ---\n\n", step.ID)
+		rs.ctx.LastStepOutcome = &o
+		rs.log.Printf("--- step %q complete ---\n\n", step.ID)
 	}
 
-	if ranToCompletion {
-		result = ResultSuccess
+	return ResultSuccess
+}
+
+func emitSkippedStep(rs *runState, step *model.Step, index int) {
+	breadcrumb := textfmt.BuildBreadcrumb(nestingToFmt(rs.ctx), step.ID)
+	rs.log.Println(textfmt.Separator())
+	rs.log.Println(textfmt.StepHeading(index, len(rs.workflow.Steps), breadcrumb, "", true))
+
+	prefix := audit.BuildPrefix(nestingToAuditInfo(rs.ctx), step.ID)
+	emitAudit(rs.ctx, audit.Event{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Prefix:    prefix,
+		Type:      audit.EventStepStart,
+		Data:      map[string]any{"context": contextSnapshot(rs.ctx)},
+	})
+	emitAudit(rs.ctx, audit.Event{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Prefix:    prefix,
+		Type:      audit.EventStepEnd,
+		Data:      map[string]any{"outcome": "skipped", "skip_if": step.SkipIf, "duration_ms": 0},
+	})
+}
+
+func runStep(step *model.Step, rs *runState) (exec.StepOutcome, *exec.LoopResult, error) {
+	if step.Loop != nil && len(step.Steps) > 0 {
+		lr, err := exec.ExecuteLoopStep(step, rs.ctx, rs.runner, rs.glob, rs.log, exec.LoopExecuteOptions{})
+		return exec.MapLoopOutcomeForRunner(lr.Outcome), &lr, err
+	}
+	outcome, err := exec.DispatchStep(step, rs.ctx, rs.runner, rs.glob, rs.log)
+	return outcome, nil, err
+}
+
+func finalizeRun(rs *runState, result WorkflowResult) {
+	switch result {
+	case ResultSuccess:
+		stateio.DeleteState(rs.stateDir)
+		rs.log.Println("agent-runner: workflow complete")
+	case ResultFailed:
+		rs.log.Printf("agent-runner: to resume: agent-runner resume %s\n", stateio.GetStateFilePath(rs.stateDir))
+	case ResultStopped:
+		// No action needed
 	}
 
-	if result == ResultSuccess {
-		stateio.DeleteState(stateDir)
-		log.Println("agent-runner: workflow complete")
-	} else if result == ResultFailed {
-		log.Printf("agent-runner: to resume: agent-runner resume %s\n", stateio.GetStateFilePath(stateDir))
-	}
-
-	if auditLogger != nil {
-		auditLogger.Emit(audit.Event{
+	if rs.auditLogger != nil {
+		rs.auditLogger.Emit(audit.Event{
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
 			Type:      audit.EventRunEnd,
 			Data: map[string]any{
 				"outcome":     string(result),
-				"duration_ms": time.Since(runStartTime).Milliseconds(),
+				"duration_ms": time.Since(rs.runStartTime).Milliseconds(),
 			},
 		})
-		auditLogger.Close()
+		rs.auditLogger.Close()
 	}
+}
+
+// RunWorkflow executes a workflow with the given parameters.
+func RunWorkflow(
+	workflow *model.Workflow,
+	params map[string]string,
+	opts *Options,
+) (WorkflowResult, error) {
+	rs, err := initRunState(workflow, params, opts)
+	if err != nil {
+		return ResultFailed, err
+	}
+
+	startIndex, err := resolveStartIndex(workflow, opts.From)
+	if err != nil {
+		return ResultFailed, err
+	}
+
+	emitRunStart(rs, opts)
+	rs.log.Printf("\nagent-runner: running workflow %q\n\n", workflow.Name)
+
+	result := executeSteps(rs, startIndex)
+	finalizeRun(rs, result)
 
 	return result, nil
 }
 
-func writeStepState(step model.Step, ctx *model.ExecutionContext, workflow model.Workflow, workflowHash, stateDir string, loopResult *exec.LoopResult) {
+func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *model.Workflow, workflowHash, stateDir string, loopResult *exec.LoopResult) {
 	var child *model.NestedStepState
 
 	if loopResult != nil && loopResult.LastIteration >= 0 {
@@ -341,7 +373,7 @@ func writeStepState(step model.Step, ctx *model.ExecutionContext, workflow model
 		Params:       ctx.Params,
 		WorkflowHash: workflowHash,
 	}
-	stateio.WriteState(state, stateDir)
+	_ = stateio.WriteState(&state, stateDir)
 }
 
 func toNestedStepState(child *model.SubWorkflowChildState) *model.NestedStepState {
@@ -381,6 +413,6 @@ func copyMap(m map[string]string) map[string]string {
 
 type defaultLogger struct{}
 
-func (l *defaultLogger) Println(args ...any)                 { fmt.Println(args...) }
-func (l *defaultLogger) Printf(format string, args ...any)   { fmt.Printf(format, args...) }
-func (l *defaultLogger) Errorf(format string, args ...any)    { fmt.Fprintf(os.Stderr, format, args...) }
+func (l *defaultLogger) Println(args ...any)               { fmt.Println(args...) }
+func (l *defaultLogger) Printf(format string, args ...any) { fmt.Printf(format, args...) }
+func (l *defaultLogger) Errorf(format string, args ...any) { fmt.Fprintf(os.Stderr, format, args...) }

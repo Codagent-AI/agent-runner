@@ -40,9 +40,13 @@ func (g *mockGlob) Expand(_ string) ([]string, error) { return g.matches, nil }
 
 type mockLog struct{ lines []string }
 
-func (l *mockLog) Println(args ...any)               { l.lines = append(l.lines, fmt.Sprint(args...)) }
-func (l *mockLog) Printf(format string, args ...any) { l.lines = append(l.lines, fmt.Sprintf(format, args...)) }
-func (l *mockLog) Errorf(format string, args ...any)  { l.lines = append(l.lines, fmt.Sprintf(format, args...)) }
+func (l *mockLog) Println(args ...any) { l.lines = append(l.lines, fmt.Sprint(args...)) }
+func (l *mockLog) Printf(format string, args ...any) {
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
+func (l *mockLog) Errorf(format string, args ...any) {
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
 
 func shellStep(id, cmd string) model.Step {
 	return model.Step{ID: id, Mode: model.ModeShell, Command: cmd, Session: model.SessionNew}
@@ -56,7 +60,7 @@ func TestRunWorkflow(t *testing.T) {
 			Steps: []model.Step{shellStep("s1", "echo hi")},
 		}
 		w.ApplyDefaults()
-		result, err := RunWorkflow(w, map[string]string{}, Options{
+		result, err := RunWorkflow(&w, map[string]string{}, &Options{
 			ProcessRunner: runner,
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
@@ -80,7 +84,7 @@ func TestRunWorkflow(t *testing.T) {
 			},
 		}
 		w.ApplyDefaults()
-		result, _ := RunWorkflow(w, map[string]string{}, Options{
+		result, _ := RunWorkflow(&w, map[string]string{}, &Options{
 			ProcessRunner: runner,
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
@@ -104,7 +108,7 @@ func TestRunWorkflow(t *testing.T) {
 			},
 		}
 		w.ApplyDefaults()
-		result, _ := RunWorkflow(w, map[string]string{}, Options{
+		result, _ := RunWorkflow(&w, map[string]string{}, &Options{
 			ProcessRunner: runner,
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
@@ -128,7 +132,7 @@ func TestRunWorkflow(t *testing.T) {
 			},
 		}
 		w.ApplyDefaults()
-		result, _ := RunWorkflow(w, map[string]string{}, Options{
+		result, _ := RunWorkflow(&w, map[string]string{}, &Options{
 			ProcessRunner: runner,
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
@@ -152,7 +156,7 @@ func TestRunWorkflow(t *testing.T) {
 			},
 		}
 		w.ApplyDefaults()
-		result, _ := RunWorkflow(w, map[string]string{}, Options{
+		result, _ := RunWorkflow(&w, map[string]string{}, &Options{
 			ProcessRunner: runner,
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
@@ -173,7 +177,7 @@ func TestRunWorkflow(t *testing.T) {
 			Steps:  []model.Step{shellStep("s1", "echo")},
 		}
 		w.ApplyDefaults()
-		_, err := RunWorkflow(w, map[string]string{}, Options{
+		_, err := RunWorkflow(&w, map[string]string{}, &Options{
 			ProcessRunner: &mockRunner{},
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
@@ -192,7 +196,7 @@ func TestRunWorkflow(t *testing.T) {
 			Steps:  []model.Step{shellStep("s1", "echo {{env}}")},
 		}
 		w.ApplyDefaults()
-		result, _ := RunWorkflow(w, map[string]string{}, Options{
+		result, _ := RunWorkflow(&w, map[string]string{}, &Options{
 			ProcessRunner: runner,
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
@@ -216,7 +220,7 @@ func TestRunWorkflow(t *testing.T) {
 			},
 		}
 		w.ApplyDefaults()
-		result, _ := RunWorkflow(w, map[string]string{}, Options{
+		result, _ := RunWorkflow(&w, map[string]string{}, &Options{
 			ProcessRunner: runner,
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
@@ -240,7 +244,7 @@ func TestRunWorkflow(t *testing.T) {
 			Steps: []model.Step{shellStep("s1", "echo")},
 		}
 		w.ApplyDefaults()
-		_, err := RunWorkflow(w, map[string]string{}, Options{
+		_, err := RunWorkflow(&w, map[string]string{}, &Options{
 			ProcessRunner: &mockRunner{},
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},

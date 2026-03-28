@@ -8,6 +8,7 @@ import (
 // StepMode defines how a step executes.
 type StepMode string
 
+// Step mode constants.
 const (
 	ModeInteractive StepMode = "interactive"
 	ModeHeadless    StepMode = "headless"
@@ -17,6 +18,7 @@ const (
 // SessionStrategy defines how an agent session is managed.
 type SessionStrategy string
 
+// Session strategy constants.
 const (
 	SessionNew     SessionStrategy = "new"
 	SessionResume  SessionStrategy = "resume"

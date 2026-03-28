@@ -1,3 +1,4 @@
+// Package audit provides structured JSONL audit logging for workflow runs.
 package audit
 
 import (
@@ -39,7 +40,7 @@ func (l *Logger) Emit(event Event) {
 	}
 	dataJSON, _ := json.Marshal(event.Data)
 	line := fmt.Sprintf("%s%s %s %s\n", event.Timestamp, prefixPart, event.Type, string(dataJSON))
-	l.file.WriteString(line)
+	_, _ = l.file.WriteString(line)
 }
 
 // Close flushes and closes the log file.
@@ -48,7 +49,7 @@ func (l *Logger) Close() {
 		return
 	}
 	l.closed = true
-	l.file.Close()
+	_ = l.file.Close()
 }
 
 // NestingInfo holds the minimum info for building an audit prefix.

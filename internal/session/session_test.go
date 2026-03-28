@@ -16,7 +16,7 @@ func TestResolveInheritSession(t *testing.T) {
 		})
 		parent.LastSessionStepID = "step1"
 
-		child := model.NewSubWorkflowContext(parent, model.SubWorkflowContextOptions{
+		child := model.NewSubWorkflowContext(parent, &model.SubWorkflowContextOptions{
 			StepID:       "sub",
 			Params:       map[string]string{},
 			WorkflowFile: "child.yaml",
@@ -39,7 +39,7 @@ func TestResolveInheritSession(t *testing.T) {
 		})
 		parent.LastSessionStepID = "step2"
 
-		child := model.NewSubWorkflowContext(parent, model.SubWorkflowContextOptions{
+		child := model.NewSubWorkflowContext(parent, &model.SubWorkflowContextOptions{
 			StepID:       "sub",
 			Params:       map[string]string{},
 			WorkflowFile: "child.yaml",
@@ -60,7 +60,7 @@ func TestResolveInheritSession(t *testing.T) {
 			WorkflowFile: "parent.yaml",
 		})
 
-		child := model.NewSubWorkflowContext(parent, model.SubWorkflowContextOptions{
+		child := model.NewSubWorkflowContext(parent, &model.SubWorkflowContextOptions{
 			StepID:       "sub",
 			Params:       map[string]string{},
 			WorkflowFile: "child.yaml",
@@ -98,13 +98,13 @@ func TestResolveInheritSession(t *testing.T) {
 		})
 		root.LastSessionStepID = "step1"
 
-		mid := model.NewSubWorkflowContext(root, model.SubWorkflowContextOptions{
+		mid := model.NewSubWorkflowContext(root, &model.SubWorkflowContextOptions{
 			StepID:       "sub1",
 			Params:       map[string]string{},
 			WorkflowFile: "mid.yaml",
 		})
 
-		leaf := model.NewSubWorkflowContext(mid, model.SubWorkflowContextOptions{
+		leaf := model.NewSubWorkflowContext(mid, &model.SubWorkflowContextOptions{
 			StepID:       "sub2",
 			Params:       map[string]string{},
 			WorkflowFile: "leaf.yaml",

@@ -63,7 +63,7 @@ func TestExecuteShellStep(t *testing.T) {
 	t.Run("returns success for exit code 0", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		step := model.Step{ID: "s", Mode: model.ModeShell, Command: "echo hi", Session: model.SessionNew}
-		outcome, err := ExecuteShellStep(step, makeCtx(), runner, &mockLogger{})
+		outcome, err := ExecuteShellStep(&step, makeCtx(), runner, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -75,7 +75,7 @@ func TestExecuteShellStep(t *testing.T) {
 	t.Run("returns failed for non-zero exit code", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 1}}}
 		step := model.Step{ID: "s", Mode: model.ModeShell, Command: "false", Session: model.SessionNew}
-		outcome, _ := ExecuteShellStep(step, makeCtx(), runner, &mockLogger{})
+		outcome, _ := ExecuteShellStep(&step, makeCtx(), runner, &mockLogger{})
 		if outcome != OutcomeFailed {
 			t.Fatalf("expected failed, got %q", outcome)
 		}
@@ -88,7 +88,7 @@ func TestExecuteShellStep(t *testing.T) {
 			WorkflowFile: "test.yaml",
 		})
 		step := model.Step{ID: "s", Mode: model.ModeShell, Command: "echo {{name}}", Session: model.SessionNew}
-		ExecuteShellStep(step, ctx, runner, &mockLogger{})
+		ExecuteShellStep(&step, ctx, runner, &mockLogger{})
 		if len(runner.calls) == 0 {
 			t.Fatal("expected command to be called")
 		}
@@ -101,7 +101,7 @@ func TestExecuteShellStep(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "captured-output"}}}
 		ctx := makeCtx()
 		step := model.Step{ID: "s", Mode: model.ModeShell, Command: "echo hi", Session: model.SessionNew, Capture: "output"}
-		ExecuteShellStep(step, ctx, runner, &mockLogger{})
+		ExecuteShellStep(&step, ctx, runner, &mockLogger{})
 		if ctx.CapturedVariables["output"] != "captured-output" {
 			t.Fatalf("expected captured output, got %q", ctx.CapturedVariables["output"])
 		}
@@ -110,7 +110,7 @@ func TestExecuteShellStep(t *testing.T) {
 	t.Run("returns failed for empty command", func(t *testing.T) {
 		runner := &mockRunner{}
 		step := model.Step{ID: "s", Mode: model.ModeShell, Command: "", Session: model.SessionNew}
-		outcome, _ := ExecuteShellStep(step, makeCtx(), runner, &mockLogger{})
+		outcome, _ := ExecuteShellStep(&step, makeCtx(), runner, &mockLogger{})
 		if outcome != OutcomeFailed {
 			t.Fatalf("expected failed, got %q", outcome)
 		}
@@ -119,11 +119,11 @@ func TestExecuteShellStep(t *testing.T) {
 	t.Run("returns error for undefined variable in command", func(t *testing.T) {
 		runner := &mockRunner{}
 		step := model.Step{ID: "s", Mode: model.ModeShell, Command: "echo {{missing}}", Session: model.SessionNew}
-		_, err := ExecuteShellStep(step, makeCtx(), runner, &mockLogger{})
+		_, err := ExecuteShellStep(&step, makeCtx(), runner, &mockLogger{})
 		if err == nil {
 			t.Fatal("expected error")
 		}
-		if !strings.Contains(err.Error(), "Undefined variable") {
+		if !strings.Contains(err.Error(), "undefined variable") {
 			t.Fatalf("expected interpolation error, got: %v", err)
 		}
 	})
@@ -132,7 +132,7 @@ func TestExecuteShellStep(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		log := &mockLogger{}
 		step := model.Step{ID: "s", Mode: model.ModeShell, Command: "echo hi", Session: model.SessionNew}
-		ExecuteShellStep(step, makeCtx(), runner, log)
+		ExecuteShellStep(&step, makeCtx(), runner, log)
 		found := false
 		for _, line := range log.lines {
 			if strings.Contains(line, "echo hi") {
@@ -149,7 +149,7 @@ func TestExecuteShellStep(t *testing.T) {
 		ctx := makeCtx()
 		ctx.CapturedVariables["prev"] = "previous-value"
 		step := model.Step{ID: "s", Mode: model.ModeShell, Command: "echo {{prev}}", Session: model.SessionNew}
-		ExecuteShellStep(step, ctx, runner, &mockLogger{})
+		ExecuteShellStep(&step, ctx, runner, &mockLogger{})
 		if runner.calls[0][2] != "echo previous-value" {
 			t.Fatalf("expected interpolated command, got %q", runner.calls[0][2])
 		}

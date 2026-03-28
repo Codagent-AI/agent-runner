@@ -29,7 +29,7 @@ steps:
 		})
 
 		step := model.Step{ID: "sub", Workflow: "child.yaml", Session: model.SessionNew}
-		outcome, err := ExecuteSubWorkflowStep(step, ctx, runner, &mockGlob{}, &mockLogger{})
+		outcome, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -64,7 +64,7 @@ steps:
 			ID: "sub", Workflow: "child.yaml", Session: model.SessionNew,
 			Params: map[string]string{"msg": "{{greeting}}"},
 		}
-		outcome, err := ExecuteSubWorkflowStep(step, ctx, runner, &mockGlob{}, &mockLogger{})
+		outcome, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -99,7 +99,7 @@ steps:
 
 		step := model.Step{ID: "sub", Workflow: "child.yaml", Session: model.SessionNew}
 		// Should fail because child doesn't have parent_secret
-		_, err := ExecuteSubWorkflowStep(step, ctx, runner, &mockGlob{}, &mockLogger{})
+		_, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
 		if err == nil {
 			t.Fatal("expected error for undefined variable")
 		}
@@ -113,7 +113,7 @@ steps:
 		})
 
 		step := model.Step{ID: "sub", Workflow: "nonexistent.yaml", Session: model.SessionNew}
-		_, err := ExecuteSubWorkflowStep(step, ctx, runner, &mockGlob{}, &mockLogger{})
+		_, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -139,18 +139,18 @@ steps:
 		})
 
 		step := model.Step{ID: "sub", Workflow: "child.yaml", Session: model.SessionNew}
-		_, err := ExecuteSubWorkflowStep(step, ctx, runner, &mockGlob{}, &mockLogger{})
+		_, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
 		if err == nil {
 			t.Fatal("expected error")
 		}
-		if !strings.Contains(err.Error(), "Missing required parameter") {
-			t.Fatalf("expected 'Missing required parameter', got: %v", err)
+		if !strings.Contains(err.Error(), "missing required parameter") {
+			t.Fatalf("expected 'missing required parameter', got: %v", err)
 		}
 	})
 
 	t.Run("returns failed for empty workflow field", func(t *testing.T) {
 		step := model.Step{ID: "sub", Workflow: "", Session: model.SessionNew}
-		outcome, _ := ExecuteSubWorkflowStep(step, makeCtx(), &mockRunner{}, &mockGlob{}, &mockLogger{})
+		outcome, _ := ExecuteSubWorkflowStep(&step, makeCtx(), &mockRunner{}, &mockGlob{}, &mockLogger{})
 		if outcome != OutcomeFailed {
 			t.Fatalf("expected failed, got %q", outcome)
 		}

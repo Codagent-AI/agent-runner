@@ -1,3 +1,4 @@
+// Package textfmt provides text formatting utilities for console output.
 package textfmt
 
 import (

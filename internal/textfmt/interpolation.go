@@ -23,7 +23,7 @@ func Interpolate(template string, params, capturedVars map[string]string) (strin
 		key := placeholderRe.FindStringSubmatch(match)[1]
 		value, ok := merged[key]
 		if !ok {
-			errFound = fmt.Errorf("Undefined variable: {{%s}}", key)
+			errFound = fmt.Errorf("undefined variable: {{%s}}", key)
 			return match
 		}
 		return value

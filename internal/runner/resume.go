@@ -11,7 +11,7 @@ import (
 )
 
 // ResumeWorkflow resumes a workflow from a state file.
-func ResumeWorkflow(stateFilePath string, opts Options) (WorkflowResult, error) {
+func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error) {
 	state, err := stateio.ReadState(stateFilePath)
 	if err != nil {
 		return ResultFailed, err
@@ -53,8 +53,8 @@ func ResumeWorkflow(stateFilePath string, opts Options) (WorkflowResult, error) 
 
 	// Validate that the step still exists
 	found := false
-	for _, s := range workflow.Steps {
-		if s.ID == fromStep {
+	for i := range workflow.Steps {
+		if workflow.Steps[i].ID == fromStep {
 			found = true
 			break
 		}
@@ -76,7 +76,7 @@ func ResumeWorkflow(stateFilePath string, opts Options) (WorkflowResult, error) 
 		}
 	}
 
-	return RunWorkflow(workflow, state.Params, Options{
+	return RunWorkflow(&workflow, state.Params, &Options{
 		From:              fromStep,
 		WorkflowFile:      state.WorkflowFile,
 		StateDir:          opts.StateDir,

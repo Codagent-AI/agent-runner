@@ -21,7 +21,7 @@ func TestWorkflowConstraints(t *testing.T) {
 				{ID: "s1", Mode: model.ModeShell, Command: "echo", Session: model.SessionNew, SkipIf: "previous_success"},
 			},
 		}
-		err := WorkflowConstraints(w, Options{})
+		err := WorkflowConstraints(&w, Options{})
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -38,7 +38,7 @@ func TestWorkflowConstraints(t *testing.T) {
 				{ID: "s2", Mode: model.ModeShell, Command: "echo", Session: model.SessionNew, SkipIf: "previous_success"},
 			},
 		}
-		if err := WorkflowConstraints(w, Options{}); err != nil {
+		if err := WorkflowConstraints(&w, Options{}); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
@@ -54,7 +54,7 @@ func TestWorkflowConstraints(t *testing.T) {
 				},
 			}},
 		}
-		err := WorkflowConstraints(w, Options{})
+		err := WorkflowConstraints(&w, Options{})
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -67,7 +67,7 @@ func TestWorkflowConstraints(t *testing.T) {
 				{ID: "s1", Mode: model.ModeShell, Command: "echo", Session: model.SessionNew, BreakIf: "success"},
 			},
 		}
-		err := WorkflowConstraints(w, Options{})
+		err := WorkflowConstraints(&w, Options{})
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -87,7 +87,7 @@ func TestWorkflowConstraints(t *testing.T) {
 				},
 			}},
 		}
-		if err := WorkflowConstraints(w, Options{}); err != nil {
+		if err := WorkflowConstraints(&w, Options{}); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
@@ -99,7 +99,7 @@ func TestWorkflowConstraints(t *testing.T) {
 				{ID: "s1", Mode: model.ModeHeadless, Prompt: "p", Session: model.SessionInherit},
 			},
 		}
-		err := WorkflowConstraints(w, Options{})
+		err := WorkflowConstraints(&w, Options{})
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -119,7 +119,7 @@ func TestWorkflowConstraints(t *testing.T) {
 				},
 			}},
 		}
-		if err := WorkflowConstraints(w, Options{IsSubWorkflow: true}); err != nil {
+		if err := WorkflowConstraints(&w, Options{IsSubWorkflow: true}); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
@@ -138,7 +138,7 @@ func TestWorkflowConstraints(t *testing.T) {
 				}},
 			}},
 		}
-		if err := WorkflowConstraints(w, Options{}); err != nil {
+		if err := WorkflowConstraints(&w, Options{}); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})

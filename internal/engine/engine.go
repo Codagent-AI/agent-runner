@@ -1,3 +1,4 @@
+// Package engine defines the plugin interface and registry for workflow engines.
 package engine
 
 import (
@@ -9,7 +10,7 @@ import (
 // Engine defines the interface for workflow engine plugins.
 type Engine interface {
 	GetStateDir(params map[string]string) string
-	ValidateWorkflow(workflow model.Workflow, params map[string]string, workflowFile string) error
+	ValidateWorkflow(workflow *model.Workflow, params map[string]string, workflowFile string) error
 	NeedsDeferredValidation() bool
 	EnrichPrompt(stepID string, params map[string]string, opts EnrichOptions) string
 	ValidateStep(stepID string, params map[string]string) (bool, error)
@@ -39,7 +40,7 @@ func Create(engineConfig map[string]any) (Engine, error) {
 
 	ctor, ok := registry[engineType]
 	if !ok {
-		return nil, fmt.Errorf("Unknown engine type: %q", engineType)
+		return nil, fmt.Errorf("unknown engine type: %q", engineType)
 	}
 
 	// Pass remaining config fields (exclude "type").

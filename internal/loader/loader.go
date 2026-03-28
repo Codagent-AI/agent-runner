@@ -35,7 +35,7 @@ func LoadWorkflow(filePath string, opts Options) (model.Workflow, error) {
 		return model.Workflow{}, err
 	}
 
-	if err := validate.WorkflowConstraints(w, validate.Options{
+	if err := validate.WorkflowConstraints(&w, validate.Options{
 		IsSubWorkflow: opts.IsSubWorkflow,
 	}); err != nil {
 		return model.Workflow{}, err
@@ -60,18 +60,18 @@ func InterpolateParams(template string, params map[string]string) (string, error
 		key := filePlaceholderRe.FindStringSubmatch(match)[1]
 		filePath, ok := params[key]
 		if !ok {
-			firstErr = fmt.Errorf("Missing parameter: {{file:%s}}", key)
+			firstErr = fmt.Errorf("missing parameter: {{file:%s}}", key)
 			return match
 		}
 		content, err := os.ReadFile(filePath)
 		if err != nil {
-			firstErr = fmt.Errorf("Cannot read file for parameter {{file:%s}}: %s", key, filePath)
+			firstErr = fmt.Errorf("cannot read file for parameter {{file:%s}}: %q", key, filePath)
 			return match
 		}
 		block := strings.Join([]string{
 			"The following file was provided as context for this step. Use it to inform your work:",
 			"",
-			fmt.Sprintf(`<file path="%s">`, filePath),
+			fmt.Sprintf(`<file path=%q>`, filePath),
 			strings.TrimSpace(string(content)),
 			"</file>",
 		}, "\n")
@@ -92,7 +92,7 @@ func InterpolateParams(template string, params map[string]string) (string, error
 		key := placeholderRe.FindStringSubmatch(match)[1]
 		value, ok := params[key]
 		if !ok {
-			firstErr = fmt.Errorf("Missing parameter: {{%s}}", key)
+			firstErr = fmt.Errorf("missing parameter: {{%s}}", key)
 			return match
 		}
 		return value

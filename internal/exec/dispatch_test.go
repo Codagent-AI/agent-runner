@@ -18,7 +18,7 @@ func TestDispatchStep(t *testing.T) {
 	t.Run("dispatches shell step", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		step := model.Step{ID: "s", Mode: model.ModeShell, Command: "echo hi", Session: model.SessionNew}
-		outcome, err := DispatchStep(step, makeCtx(), runner, &mockGlob{}, &mockLogger{})
+		outcome, err := DispatchStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -30,7 +30,7 @@ func TestDispatchStep(t *testing.T) {
 	t.Run("dispatches agent step", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew}
-		outcome, err := DispatchStep(step, makeCtx(), runner, &mockGlob{}, &mockLogger{})
+		outcome, err := DispatchStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -48,7 +48,7 @@ func TestDispatchStep(t *testing.T) {
 				{ID: "a", Mode: model.ModeShell, Command: "echo", Session: model.SessionNew},
 			},
 		}
-		outcome, err := DispatchStep(step, makeCtx(), runner, &mockGlob{}, &mockLogger{})
+		outcome, err := DispatchStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -67,7 +67,7 @@ func TestDispatchStep(t *testing.T) {
 				{ID: "b", Mode: model.ModeShell, Command: "echo b", Session: model.SessionNew},
 			},
 		}
-		outcome, err := DispatchStep(step, makeCtx(), runner, &mockGlob{}, &mockLogger{})
+		outcome, err := DispatchStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -85,7 +85,7 @@ func TestDispatchStep(t *testing.T) {
 				{ID: "b", Mode: model.ModeShell, Command: "echo b", Session: model.SessionNew},
 			},
 		}
-		outcome, _ := DispatchStep(step, makeCtx(), runner, &mockGlob{}, &mockLogger{})
+		outcome, _ := DispatchStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{})
 		if outcome != OutcomeFailed {
 			t.Fatalf("expected failed, got %q", outcome)
 		}

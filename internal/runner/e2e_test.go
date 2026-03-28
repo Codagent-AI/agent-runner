@@ -35,7 +35,7 @@ steps:
 		{ExitCode: 0, Stdout: "hello"},
 		{ExitCode: 0},
 	}}
-	result, err := RunWorkflow(workflow, map[string]string{}, Options{
+	result, err := RunWorkflow(&workflow, map[string]string{}, &Options{
 		WorkflowFile:  wfPath,
 		ProcessRunner: runner,
 		GlobExpander:  &mockGlob{},
@@ -77,7 +77,7 @@ steps:
 		{ExitCode: 1},
 		{ExitCode: 0},
 	}}
-	result, _ := RunWorkflow(workflow, map[string]string{}, Options{
+	result, _ := RunWorkflow(&workflow, map[string]string{}, &Options{
 		WorkflowFile:  wfPath,
 		ProcessRunner: runner,
 		GlobExpander:  &mockGlob{},
@@ -109,7 +109,7 @@ steps:
 
 	workflow, _ := loader.LoadWorkflow(wfPath, loader.Options{})
 	runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}}}
-	result, _ := RunWorkflow(workflow, map[string]string{}, Options{
+	result, _ := RunWorkflow(&workflow, map[string]string{}, &Options{
 		WorkflowFile:  wfPath,
 		ProcessRunner: runner,
 		GlobExpander:  &mockGlob{},
@@ -143,7 +143,7 @@ steps:
 		{ExitCode: 0},
 		{ExitCode: 1},
 	}}
-	result, _ := RunWorkflow(workflow, map[string]string{}, Options{
+	result, _ := RunWorkflow(&workflow, map[string]string{}, &Options{
 		WorkflowFile:  wfPath,
 		ProcessRunner: runner,
 		GlobExpander:  &mockGlob{},
@@ -173,7 +173,7 @@ steps:
 
 	workflow, _ := loader.LoadWorkflow(wfPath, loader.Options{})
 	runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}}}
-	result, _ := RunWorkflow(workflow, map[string]string{}, Options{
+	result, _ := RunWorkflow(&workflow, map[string]string{}, &Options{
 		WorkflowFile:  wfPath,
 		ProcessRunner: runner,
 		GlobExpander:  &mockGlob{},

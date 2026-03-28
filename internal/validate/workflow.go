@@ -1,3 +1,4 @@
+// Package validate checks workflow-level constraints beyond schema validation.
 package validate
 
 import (
@@ -13,7 +14,7 @@ type Options struct {
 
 // WorkflowConstraints validates positional rules that cannot be expressed
 // in the schema alone (e.g., skip_if on first step, break_if outside loop).
-func WorkflowConstraints(w model.Workflow, opts Options) error {
+func WorkflowConstraints(w *model.Workflow, opts Options) error {
 	isTopLevel := !opts.IsSubWorkflow
 	return validateStepList(w.Steps, stepContext{insideLoop: false, isTopLevel: isTopLevel})
 }

@@ -1,3 +1,4 @@
+// Package model defines the core types for workflow execution.
 package model
 
 // NestingSegment records one level of nesting in the execution path.
@@ -141,7 +142,7 @@ type SubWorkflowContextOptions struct {
 }
 
 // NewSubWorkflowContext creates a child context for a sub-workflow.
-func NewSubWorkflowContext(parent *ExecutionContext, opts SubWorkflowContextOptions) *ExecutionContext {
+func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOptions) *ExecutionContext {
 	segment := NestingSegment{
 		StepID:          opts.StepID,
 		SubWorkflowName: opts.SubWorkflowName,

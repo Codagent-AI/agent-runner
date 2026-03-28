@@ -88,8 +88,8 @@ func TestInterpolateParams(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error")
 		}
-		if !strings.Contains(err.Error(), "Missing parameter") {
-			t.Fatalf("expected 'Missing parameter' error, got: %v", err)
+		if !strings.Contains(err.Error(), "missing parameter") {
+			t.Fatalf("expected 'missing parameter' error, got: %v", err)
 		}
 	})
 

@@ -1,3 +1,4 @@
+// Package session provides session ID resolution for agent steps.
 package session
 
 import (

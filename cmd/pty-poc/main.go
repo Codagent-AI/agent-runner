@@ -201,11 +201,6 @@ func startCodex() {
 		prompt = "You are running inside an Agent Runner PTY proof of concept. Keep responses short."
 	}
 
-	term := os.Getenv("TERM")
-	if term == "" {
-		term = defaultTerm
-	}
-
 	cmd := exec.Command(codexPath, "--no-alt-screen", prompt)
 	cmd.Env = os.Environ()
 

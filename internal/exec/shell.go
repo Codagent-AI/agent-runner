@@ -51,7 +51,7 @@ func emitAudit(ctx *model.ExecutionContext, event audit.Event) {
 
 // ExecuteShellStep runs a shell command step.
 func ExecuteShellStep(
-	step model.Step,
+	step *model.Step,
 	ctx *model.ExecutionContext,
 	runner ProcessRunner,
 	log Logger,

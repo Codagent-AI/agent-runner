@@ -18,7 +18,7 @@ const signalFile = ".agent-runner-signal"
 
 // ExecuteAgentStep runs an agent (Claude) step.
 func ExecuteAgentStep(
-	step model.Step,
+	step *model.Step,
 	ctx *model.ExecutionContext,
 	runner ProcessRunner,
 	log Logger,
@@ -69,7 +69,7 @@ func ExecuteAgentStep(
 		}
 	}
 
-	os.Remove(signalFile)
+	_ = os.Remove(signalFile)
 
 	spawnTime := time.Now()
 	result, runErr := runner.RunAgent(args)
@@ -89,8 +89,8 @@ func ExecuteAgentStep(
 		Prefix:    prefix,
 		Type:      audit.EventStepEnd,
 		Data: map[string]any{
-			"exit_code":              result.ExitCode,
-			"discovered_session_id":  discoveredID,
+			"exit_code":             result.ExitCode,
+			"discovered_session_id": discoveredID,
 			"outcome":               string(outcome),
 			"duration_ms":           time.Since(startTime).Milliseconds(),
 		},
@@ -99,13 +99,12 @@ func ExecuteAgentStep(
 	return outcome, nil
 }
 
-func buildAgentPrompt(step model.Step, ctx *model.ExecutionContext) (string, string, error) {
-	prompt, err := textfmt.Interpolate(step.Prompt, ctx.Params, ctx.CapturedVariables)
+func buildAgentPrompt(step *model.Step, ctx *model.ExecutionContext) (prompt, enrichment string, err error) {
+	prompt, err = textfmt.Interpolate(step.Prompt, ctx.Params, ctx.CapturedVariables)
 	if err != nil {
 		return "", "", err
 	}
 
-	var enrichment string
 	if eng, ok := ctx.EngineRef.(engine.Engine); ok && eng != nil {
 		result := eng.EnrichPrompt(step.ID, ctx.Params, engine.EnrichOptions{
 			SessionStrategy: string(step.Session),
@@ -119,7 +118,7 @@ func buildAgentPrompt(step model.Step, ctx *model.ExecutionContext) (string, str
 	return prompt, enrichment, nil
 }
 
-func buildAgentArgs(step model.Step, prompt, sessionID string) []string {
+func buildAgentArgs(step *model.Step, prompt, sessionID string) []string {
 	args := []string{"claude"}
 	if sessionID != "" {
 		args = append(args, "--resume", sessionID)
@@ -134,7 +133,7 @@ func buildAgentArgs(step model.Step, prompt, sessionID string) []string {
 	return args
 }
 
-func resolveSessionID(step model.Step, ctx *model.ExecutionContext) string {
+func resolveSessionID(step *model.Step, ctx *model.ExecutionContext) string {
 	if step.Session == model.SessionResume {
 		id, err := session.ResolveResumeSession(ctx)
 		if err != nil {
@@ -152,7 +151,7 @@ func resolveSessionID(step model.Step, ctx *model.ExecutionContext) string {
 	return ""
 }
 
-func emitAgentFailure(ctx *model.ExecutionContext, prefix string, startTime time.Time, mode string, step model.Step, errMsg string) {
+func emitAgentFailure(ctx *model.ExecutionContext, prefix string, startTime time.Time, mode string, step *model.Step, errMsg string) {
 	emitAudit(ctx, audit.Event{
 		Timestamp: startTime.UTC().Format(time.RFC3339),
 		Prefix:    prefix,
@@ -175,7 +174,7 @@ func emitAgentFailure(ctx *model.ExecutionContext, prefix string, startTime time
 	})
 }
 
-func discoverAndStoreSession(step model.Step, ctx *model.ExecutionContext, spawnTime time.Time, log Logger) string {
+func discoverAndStoreSession(step *model.Step, ctx *model.ExecutionContext, spawnTime time.Time, log Logger) string {
 	id := findConversationID(spawnTime)
 	if id != "" {
 		ctx.SessionIDs[step.ID] = id

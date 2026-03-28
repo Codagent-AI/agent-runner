@@ -11,8 +11,10 @@ type stubEngine struct {
 	config map[string]any
 }
 
-func (e *stubEngine) GetStateDir(params map[string]string) string                        { return "" }
-func (e *stubEngine) ValidateWorkflow(_ model.Workflow, _ map[string]string, _ string) error { return nil }
+func (e *stubEngine) GetStateDir(_ map[string]string) string { return "" }
+func (e *stubEngine) ValidateWorkflow(_ *model.Workflow, _ map[string]string, _ string) error {
+	return nil
+}
 func (e *stubEngine) NeedsDeferredValidation() bool                                      { return false }
 func (e *stubEngine) EnrichPrompt(_ string, _ map[string]string, _ EnrichOptions) string { return "" }
 func (e *stubEngine) ValidateStep(_ string, _ map[string]string) (bool, error)           { return true, nil }
@@ -23,7 +25,7 @@ func TestCreateEngine(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error")
 		}
-		if !strings.Contains(err.Error(), "Unknown engine type") {
+		if !strings.Contains(err.Error(), "unknown engine type") {
 			t.Fatalf("expected 'Unknown engine type', got: %v", err)
 		}
 	})
@@ -58,7 +60,7 @@ func TestRegisterEngine(t *testing.T) {
 			return &stubEngine{config: config}
 		})
 		eng, err := Create(map[string]any{
-			"type":        "config-test",
+			"type":         "config-test",
 			"change_param": "change_id",
 		})
 		if err != nil {

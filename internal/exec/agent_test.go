@@ -11,7 +11,7 @@ func TestExecuteAgentStep(t *testing.T) {
 	t.Run("returns success for exit code 0", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do something", Session: model.SessionNew}
-		outcome, err := ExecuteAgentStep(step, makeCtx(), runner, &mockLogger{})
+		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -23,7 +23,7 @@ func TestExecuteAgentStep(t *testing.T) {
 	t.Run("returns failed for non-zero exit code", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 1}}}
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do something", Session: model.SessionNew}
-		outcome, _ := ExecuteAgentStep(step, makeCtx(), runner, &mockLogger{})
+		outcome, _ := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if outcome != OutcomeFailed {
 			t.Fatalf("expected failed, got %q", outcome)
 		}
@@ -32,7 +32,7 @@ func TestExecuteAgentStep(t *testing.T) {
 	t.Run("returns failed for empty prompt", func(t *testing.T) {
 		runner := &mockRunner{}
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "", Session: model.SessionNew}
-		outcome, _ := ExecuteAgentStep(step, makeCtx(), runner, &mockLogger{})
+		outcome, _ := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if outcome != OutcomeFailed {
 			t.Fatalf("expected failed, got %q", outcome)
 		}
@@ -41,7 +41,7 @@ func TestExecuteAgentStep(t *testing.T) {
 	t.Run("builds correct claude args for headless mode", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "implement feature", Session: model.SessionNew}
-		ExecuteAgentStep(step, makeCtx(), runner, &mockLogger{})
+		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if len(runner.calls) == 0 {
 			t.Fatal("expected command to be called")
 		}
@@ -71,7 +71,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		ctx.SessionIDs["prev"] = "session-abc"
 		ctx.LastSessionStepID = "prev"
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "continue", Session: model.SessionResume}
-		ExecuteAgentStep(step, ctx, runner, &mockLogger{})
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 		args := runner.calls[0]
 		foundResume := false
 		for i, a := range args {
@@ -87,7 +87,7 @@ func TestExecuteAgentStep(t *testing.T) {
 	t.Run("adds --model flag for model override", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew, Model: "opus"}
-		ExecuteAgentStep(step, makeCtx(), runner, &mockLogger{})
+		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		args := runner.calls[0]
 		foundModel := false
 		for i, a := range args {
@@ -107,7 +107,7 @@ func TestExecuteAgentStep(t *testing.T) {
 			WorkflowFile: "test.yaml",
 		})
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "Do {{task}}", Session: model.SessionNew}
-		ExecuteAgentStep(step, ctx, runner, &mockLogger{})
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 		args := runner.calls[0]
 		if args[len(args)-1] != "Do build" {
 			t.Fatalf("expected interpolated prompt, got %q", args[len(args)-1])
@@ -117,7 +117,7 @@ func TestExecuteAgentStep(t *testing.T) {
 	t.Run("handles undefined variable gracefully", func(t *testing.T) {
 		runner := &mockRunner{}
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "{{missing}}", Session: model.SessionNew}
-		outcome, err := ExecuteAgentStep(step, makeCtx(), runner, &mockLogger{})
+		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -130,7 +130,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		log := &mockLogger{}
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew}
-		ExecuteAgentStep(step, makeCtx(), runner, log)
+		ExecuteAgentStep(&step, makeCtx(), runner, log)
 		found := false
 		for _, line := range log.lines {
 			if strings.Contains(line, "headless") {
@@ -145,7 +145,7 @@ func TestExecuteAgentStep(t *testing.T) {
 	t.Run("no -p flag for interactive mode", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew}
-		ExecuteAgentStep(step, makeCtx(), runner, &mockLogger{})
+		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		args := runner.calls[0]
 		for _, a := range args {
 			if a == "-p" {

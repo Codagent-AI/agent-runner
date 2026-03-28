@@ -1,3 +1,4 @@
+// Package flowctl provides skip and break condition evaluation for workflow steps.
 package flowctl
 
 // ShouldSkip determines whether a step should be skipped.
@@ -12,7 +13,7 @@ func ShouldSkip(skipIf string, lastStepOutcome *string) bool {
 }
 
 // EvaluateBreakIf evaluates whether a loop should break.
-func EvaluateBreakIf(breakIf string, outcome string) bool {
+func EvaluateBreakIf(breakIf, outcome string) bool {
 	if breakIf == "" {
 		return false
 	}

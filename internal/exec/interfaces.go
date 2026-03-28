@@ -3,6 +3,7 @@ package exec
 // StepOutcome represents the result of executing a step.
 type StepOutcome string
 
+// Step outcome constants.
 const (
 	OutcomeSuccess   StepOutcome = "success"
 	OutcomeFailed    StepOutcome = "failed"

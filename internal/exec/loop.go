@@ -17,7 +17,7 @@ type LoopExecuteOptions struct {
 
 // ExecuteLoopStep executes a step with a loop configuration.
 func ExecuteLoopStep(
-	step model.Step,
+	step *model.Step,
 	ctx *model.ExecutionContext,
 	runner ProcessRunner,
 	glob GlobExpander,
@@ -43,7 +43,7 @@ func ExecuteLoopStep(
 
 func executeCountedLoop(
 	stepID string,
-	max int,
+	maxIter int,
 	steps []model.Step,
 	ctx *model.ExecutionContext,
 	runner ProcessRunner,
@@ -60,7 +60,7 @@ func executeCountedLoop(
 		Type:      audit.EventStepStart,
 		Data: map[string]any{
 			"loop_type": "counted",
-			"max":       max,
+			"max":       maxIter,
 			"context":   contextSnapshot(ctx),
 		},
 	})
@@ -69,7 +69,7 @@ func executeCountedLoop(
 	lastIter := startIter
 	completed := 0
 
-	for i := startIter; i < max; i++ {
+	for i := startIter; i < maxIter; i++ {
 		lastIter = i
 		iterCtx := model.NewLoopIterationContext(ctx, model.LoopIterationOptions{
 			StepID:    stepID,
@@ -273,8 +273,8 @@ func executeIterationBody(
 	glob GlobExpander,
 	log Logger,
 ) (iterationResult, error) {
-	for _, childStep := range steps {
-		outcome, err := DispatchStep(childStep, iterCtx, runner, glob, log)
+	for i := range steps {
+		outcome, err := DispatchStep(&steps[i], iterCtx, runner, glob, log)
 		if err != nil {
 			return iterationResult{failed: true}, err
 		}
@@ -283,14 +283,14 @@ func executeIterationBody(
 			return iterationResult{aborted: true}, nil
 		}
 
-		if flowctl.EvaluateBreakIf(childStep.BreakIf, string(outcome)) {
+		if flowctl.EvaluateBreakIf(steps[i].BreakIf, string(outcome)) {
 			return iterationResult{breakTriggered: true}, nil
 		}
 
 		o := string(outcome)
 		iterCtx.LastStepOutcome = &o
 
-		if outcome == OutcomeFailed && !childStep.ContinueOnFailure {
+		if outcome == OutcomeFailed && !steps[i].ContinueOnFailure {
 			return iterationResult{failed: true}, nil
 		}
 	}

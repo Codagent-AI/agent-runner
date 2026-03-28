@@ -113,7 +113,7 @@ func (e *openSpecEngine) GetStateDir(params map[string]string) string {
 	return fmt.Sprintf("openspec/changes/%s/", changeName)
 }
 
-func (e *openSpecEngine) ValidateWorkflow(workflow model.Workflow, params map[string]string, _ string) error {
+func (e *openSpecEngine) ValidateWorkflow(workflow *model.Workflow, params map[string]string, _ string) error {
 	changeName, err := getChangeName(e.changeParam, params)
 	if err != nil {
 		return err
@@ -127,8 +127,8 @@ func (e *openSpecEngine) ValidateWorkflow(workflow model.Workflow, params map[st
 	e.artifactIDs = ids
 
 	stepIDs := make(map[string]bool)
-	for _, s := range workflow.Steps {
-		stepIDs[s.ID] = true
+	for i := range workflow.Steps {
+		stepIDs[workflow.Steps[i].ID] = true
 	}
 
 	var unmatched []string
@@ -169,7 +169,7 @@ func (e *openSpecEngine) EnrichPrompt(stepID string, params map[string]string, o
 		return ""
 	}
 
-	return buildEnrichmentBlock(data, opts.SessionStrategy)
+	return buildEnrichmentBlock(&data, opts.SessionStrategy)
 }
 
 func (e *openSpecEngine) ValidateStep(stepID string, params map[string]string) (bool, error) {
@@ -201,7 +201,7 @@ func (e *openSpecEngine) ValidateStep(stepID string, params map[string]string) (
 	return false, nil
 }
 
-func buildEnrichmentBlock(data instructionsOutput, sessionStrategy string) string {
+func buildEnrichmentBlock(data *instructionsOutput, sessionStrategy string) string {
 	outputPath := filepath.Join(data.ChangeDir, data.OutputPath)
 	templatePath := filepath.Join(data.ChangeDir, "..", "..", "schemas", data.SchemaName, "templates", data.ArtifactID+".md")
 	isResumed := sessionStrategy == "resume" || sessionStrategy == "inherit"

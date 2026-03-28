@@ -44,7 +44,7 @@ func TestInterpolate(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error")
 		}
-		if !strings.Contains(err.Error(), "Undefined variable: {{missing}}") {
+		if !strings.Contains(err.Error(), "undefined variable: {{missing}}") {
 			t.Fatalf("expected 'Undefined variable' error, got: %v", err)
 		}
 	})

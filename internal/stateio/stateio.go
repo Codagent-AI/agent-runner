@@ -1,3 +1,4 @@
+// Package stateio handles reading and writing workflow execution state files.
 package stateio
 
 import (
@@ -13,7 +14,7 @@ import (
 const stateFileName = "agent-runner-state.json"
 
 // WriteState writes the run state to a JSON file in the given directory.
-func WriteState(state model.RunState, dir string) error {
+func WriteState(state *model.RunState, dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create state dir: %w", err)
 	}
@@ -29,20 +30,20 @@ func ReadState(filePath string) (model.RunState, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return model.RunState{}, fmt.Errorf("State file not found: %s", filePath)
+			return model.RunState{}, fmt.Errorf("state file not found: %s", filePath)
 		}
 		return model.RunState{}, fmt.Errorf("read state: %w", err)
 	}
 	var state model.RunState
 	if err := json.Unmarshal(data, &state); err != nil {
-		return model.RunState{}, fmt.Errorf("Invalid state file (malformed JSON): %s", filePath)
+		return model.RunState{}, fmt.Errorf("invalid state file (malformed JSON): %s", filePath)
 	}
 	return state, nil
 }
 
 // DeleteState removes the state file from the given directory.
 func DeleteState(dir string) {
-	os.Remove(filepath.Join(dir, stateFileName))
+	_ = os.Remove(filepath.Join(dir, stateFileName))
 }
 
 // GetStateFilePath returns the full path to the state file in a directory.

@@ -6,7 +6,7 @@ import (
 
 // DispatchStep routes a step to the correct executor based on its type.
 func DispatchStep(
-	step model.Step,
+	step *model.Step,
 	ctx *model.ExecutionContext,
 	runner ProcessRunner,
 	glob GlobExpander,
@@ -61,8 +61,8 @@ func executeGroupStep(
 	glob GlobExpander,
 	log Logger,
 ) (StepOutcome, error) {
-	for _, childStep := range steps {
-		outcome, err := DispatchStep(childStep, ctx, runner, glob, log)
+	for i := range steps {
+		outcome, err := DispatchStep(&steps[i], ctx, runner, glob, log)
 		if err != nil {
 			return OutcomeFailed, err
 		}
@@ -71,7 +71,7 @@ func executeGroupStep(
 		}
 		o := string(outcome)
 		ctx.LastStepOutcome = &o
-		if outcome == OutcomeFailed && !childStep.ContinueOnFailure {
+		if outcome == OutcomeFailed && !steps[i].ContinueOnFailure {
 			return OutcomeFailed, nil
 		}
 	}

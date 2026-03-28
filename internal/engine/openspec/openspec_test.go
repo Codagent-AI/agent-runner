@@ -78,7 +78,7 @@ func TestOpenSpecEngine(t *testing.T) {
 				{ID: "design", Mode: model.ModeHeadless, Prompt: "p", Session: model.SessionNew},
 			},
 		}
-		err := eng.ValidateWorkflow(w, map[string]string{"change_name": "my-change"}, "")
+		err := eng.ValidateWorkflow(&w, map[string]string{"change_name": "my-change"}, "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -100,7 +100,7 @@ func TestOpenSpecEngine(t *testing.T) {
 				{ID: "proposal", Mode: model.ModeHeadless, Prompt: "p", Session: model.SessionNew},
 			},
 		}
-		err := eng.ValidateWorkflow(w, map[string]string{"change_name": "my-change"}, "")
+		err := eng.ValidateWorkflow(&w, map[string]string{"change_name": "my-change"}, "")
 		if err == nil {
 			t.Fatal("expected error")
 		}

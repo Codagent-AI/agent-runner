@@ -16,7 +16,7 @@ func TestExecuteLoopStep(t *testing.T) {
 			Loop:  &model.Loop{Max: intPtr(3)},
 			Steps: []model.Step{{ID: "a", Mode: model.ModeShell, Command: "echo", Session: model.SessionNew}},
 		}
-		result, err := ExecuteLoopStep(step, makeCtx(), runner, &mockGlob{}, &mockLogger{}, LoopExecuteOptions{})
+		result, err := ExecuteLoopStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{}, LoopExecuteOptions{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -38,7 +38,7 @@ func TestExecuteLoopStep(t *testing.T) {
 				BreakIf: "success",
 			}},
 		}
-		result, _ := ExecuteLoopStep(step, makeCtx(), runner, &mockGlob{}, &mockLogger{}, LoopExecuteOptions{})
+		result, _ := ExecuteLoopStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{}, LoopExecuteOptions{})
 		if result.Outcome != OutcomeSuccess {
 			t.Fatalf("expected success (break), got %q", result.Outcome)
 		}
@@ -54,7 +54,7 @@ func TestExecuteLoopStep(t *testing.T) {
 			Loop:  &model.Loop{Max: intPtr(3)},
 			Steps: []model.Step{{ID: "a", Mode: model.ModeShell, Command: "false", Session: model.SessionNew}},
 		}
-		result, _ := ExecuteLoopStep(step, makeCtx(), runner, &mockGlob{}, &mockLogger{}, LoopExecuteOptions{})
+		result, _ := ExecuteLoopStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{}, LoopExecuteOptions{})
 		if result.Outcome != OutcomeFailed {
 			t.Fatalf("expected failed, got %q", result.Outcome)
 		}
@@ -68,7 +68,7 @@ func TestExecuteLoopStep(t *testing.T) {
 			Loop:  &model.Loop{Over: "*.go", As: "file"},
 			Steps: []model.Step{{ID: "process", Mode: model.ModeShell, Command: "echo {{file}}", Session: model.SessionNew}},
 		}
-		result, err := ExecuteLoopStep(step, makeCtx(), runner, glob, &mockLogger{}, LoopExecuteOptions{})
+		result, err := ExecuteLoopStep(&step, makeCtx(), runner, glob, &mockLogger{}, LoopExecuteOptions{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -88,7 +88,7 @@ func TestExecuteLoopStep(t *testing.T) {
 			Loop:  &model.Loop{Over: "*.go", As: "file"},
 			Steps: []model.Step{{ID: "a", Mode: model.ModeShell, Command: "echo", Session: model.SessionNew}},
 		}
-		result, _ := ExecuteLoopStep(step, makeCtx(), runner, glob, &mockLogger{}, LoopExecuteOptions{})
+		result, _ := ExecuteLoopStep(&step, makeCtx(), runner, glob, &mockLogger{}, LoopExecuteOptions{})
 		if result.Outcome != OutcomeSuccess {
 			t.Fatalf("expected success, got %q", result.Outcome)
 		}
@@ -102,7 +102,7 @@ func TestExecuteLoopStep(t *testing.T) {
 			Loop:  &model.Loop{Over: "*.go", As: "file", RequireMatches: boolPtr(true)},
 			Steps: []model.Step{{ID: "a", Mode: model.ModeShell, Command: "echo", Session: model.SessionNew}},
 		}
-		result, _ := ExecuteLoopStep(step, makeCtx(), runner, glob, &mockLogger{}, LoopExecuteOptions{})
+		result, _ := ExecuteLoopStep(&step, makeCtx(), runner, glob, &mockLogger{}, LoopExecuteOptions{})
 		if result.Outcome != OutcomeFailed {
 			t.Fatalf("expected failed, got %q", result.Outcome)
 		}
@@ -115,7 +115,7 @@ func TestExecuteLoopStep(t *testing.T) {
 			Loop:  &model.Loop{Max: intPtr(3)},
 			Steps: []model.Step{{ID: "a", Mode: model.ModeShell, Command: "echo", Session: model.SessionNew}},
 		}
-		result, _ := ExecuteLoopStep(step, makeCtx(), runner, &mockGlob{}, &mockLogger{}, LoopExecuteOptions{ResumeFromIteration: 2})
+		result, _ := ExecuteLoopStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{}, LoopExecuteOptions{ResumeFromIteration: 2})
 		if result.Outcome != OutcomeExhausted {
 			t.Fatalf("expected exhausted, got %q", result.Outcome)
 		}
@@ -126,7 +126,7 @@ func TestExecuteLoopStep(t *testing.T) {
 
 	t.Run("returns failed for missing loop config", func(t *testing.T) {
 		step := model.Step{ID: "s", Session: model.SessionNew}
-		result, _ := ExecuteLoopStep(step, makeCtx(), &mockRunner{}, &mockGlob{}, &mockLogger{}, LoopExecuteOptions{})
+		result, _ := ExecuteLoopStep(&step, makeCtx(), &mockRunner{}, &mockGlob{}, &mockLogger{}, LoopExecuteOptions{})
 		if result.Outcome != OutcomeFailed {
 			t.Fatalf("expected failed, got %q", result.Outcome)
 		}

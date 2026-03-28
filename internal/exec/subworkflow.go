@@ -16,7 +16,7 @@ import (
 
 // ExecuteSubWorkflowStep executes a sub-workflow step.
 func ExecuteSubWorkflowStep(
-	step model.Step,
+	step *model.Step,
 	parentCtx *model.ExecutionContext,
 	runner ProcessRunner,
 	glob GlobExpander,
@@ -54,7 +54,7 @@ func ExecuteSubWorkflowStep(
 		return OutcomeFailed, err
 	}
 
-	if err := validateSubWorkflowParams(workflow, resolvedParams); err != nil {
+	if err := validateSubWorkflowParams(&workflow, resolvedParams); err != nil {
 		emitSubEnd(parentCtx, prefix, startTime, "failed", err.Error())
 		return OutcomeFailed, err
 	}
@@ -73,7 +73,7 @@ func ExecuteSubWorkflowStep(
 		childEngine = eng
 	}
 
-	childCtx := model.NewSubWorkflowContext(parentCtx, model.SubWorkflowContextOptions{
+	childCtx := model.NewSubWorkflowContext(parentCtx, &model.SubWorkflowContextOptions{
 		StepID:          step.ID,
 		Params:          resolvedParams,
 		WorkflowFile:    workflowPath,
@@ -99,7 +99,7 @@ func ExecuteSubWorkflowStep(
 
 	log.Printf("  sub-workflow: %s (%s)\n", workflow.Name, workflowPath)
 
-	outcome, err := executeChildSteps(workflow, childCtx, runner, glob, log, startFromStepID)
+	outcome, err := executeChildSteps(&workflow, childCtx, runner, glob, log, startFromStepID)
 
 	emitAudit(childCtx, audit.Event{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
@@ -116,7 +116,7 @@ func ExecuteSubWorkflowStep(
 }
 
 func executeChildSteps(
-	workflow model.Workflow,
+	workflow *model.Workflow,
 	childCtx *model.ExecutionContext,
 	runner ProcessRunner,
 	glob GlobExpander,
@@ -125,29 +125,29 @@ func executeChildSteps(
 ) (StepOutcome, error) {
 	reached := startFromStepID == ""
 
-	for _, childStep := range workflow.Steps {
+	for i := range workflow.Steps {
 		if !reached {
-			if childStep.ID == startFromStepID {
+			if workflow.Steps[i].ID == startFromStepID {
 				reached = true
 			} else {
 				continue
 			}
 		}
 
-		if flowctl.ShouldSkip(childStep.SkipIf, childCtx.LastStepOutcome) {
+		if flowctl.ShouldSkip(workflow.Steps[i].SkipIf, childCtx.LastStepOutcome) {
 			continue
 		}
 
-		recordChildProgress(childCtx, childStep.ID)
+		recordChildProgress(childCtx, workflow.Steps[i].ID)
 		if childCtx.ParentContext != nil && childCtx.ParentContext.FlushState != nil {
 			childCtx.ParentContext.FlushState()
 		}
 
-		outcome, err := DispatchStep(childStep, childCtx, runner, glob, log)
+		outcome, err := DispatchStep(&workflow.Steps[i], childCtx, runner, glob, log)
 		if err != nil {
 			return OutcomeFailed, err
 		}
-		recordChildProgress(childCtx, childStep.ID)
+		recordChildProgress(childCtx, workflow.Steps[i].ID)
 
 		if outcome == OutcomeAborted {
 			return OutcomeAborted, nil
@@ -156,7 +156,7 @@ func executeChildSteps(
 		o := string(outcome)
 		childCtx.LastStepOutcome = &o
 
-		if outcome == OutcomeFailed && !childStep.ContinueOnFailure {
+		if outcome == OutcomeFailed && !workflow.Steps[i].ContinueOnFailure {
 			return OutcomeFailed, nil
 		}
 	}
@@ -248,7 +248,7 @@ func resolveParams(params map[string]string, ctx *model.ExecutionContext) (map[s
 	return resolved, nil
 }
 
-func validateSubWorkflowParams(workflow model.Workflow, resolvedParams map[string]string) error {
+func validateSubWorkflowParams(workflow *model.Workflow, resolvedParams map[string]string) error {
 	for _, param := range workflow.Params {
 		if _, ok := resolvedParams[param.Name]; ok {
 			continue
@@ -256,7 +256,7 @@ func validateSubWorkflowParams(workflow model.Workflow, resolvedParams map[strin
 		if param.Default != "" {
 			resolvedParams[param.Name] = param.Default
 		} else if param.IsRequired() {
-			return fmt.Errorf("Missing required parameter: %s", param.Name)
+			return fmt.Errorf("missing required parameter: %s", param.Name)
 		}
 	}
 	return nil

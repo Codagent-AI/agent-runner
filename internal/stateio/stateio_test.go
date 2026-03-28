@@ -19,7 +19,7 @@ func TestWriteAndReadState(t *testing.T) {
 			Params:       map[string]string{"key": "val"},
 			WorkflowHash: "abc123",
 		}
-		if err := WriteState(state, dir); err != nil {
+		if err := WriteState(&state, dir); err != nil {
 			t.Fatalf("write error: %v", err)
 		}
 
@@ -47,7 +47,7 @@ func TestWriteAndReadState(t *testing.T) {
 			Params:       map[string]string{},
 			WorkflowHash: "h",
 		}
-		WriteState(state, dir)
+		WriteState(&state, dir)
 		DeleteState(dir)
 		_, err := os.Stat(filepath.Join(dir, "agent-runner-state.json"))
 		if !os.IsNotExist(err) {
@@ -65,8 +65,8 @@ func TestWriteAndReadState(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error")
 		}
-		if !strings.Contains(err.Error(), "State file not found") {
-			t.Fatalf("expected 'State file not found', got: %v", err)
+		if !strings.Contains(err.Error(), "state file not found") {
+			t.Fatalf("expected 'state file not found', got: %v", err)
 		}
 	})
 
@@ -86,7 +86,7 @@ func TestWriteAndReadState(t *testing.T) {
 			Params:       map[string]string{},
 			WorkflowHash: "h",
 		}
-		WriteState(state, dir)
+		WriteState(&state, dir)
 		restored, _ := ReadState(filepath.Join(dir, "agent-runner-state.json"))
 		if restored.CurrentStep.Nested == nil {
 			t.Fatal("expected nested state")

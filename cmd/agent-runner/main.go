@@ -90,7 +90,7 @@ type realLogger struct{}
 
 func (l *realLogger) Println(args ...any)               { fmt.Println(args...) }
 func (l *realLogger) Printf(format string, args ...any) { fmt.Printf(format, args...) }
-func (l *realLogger) Errorf(format string, args ...any)  { fmt.Fprintf(os.Stderr, format, args...) }
+func (l *realLogger) Errorf(format string, args ...any) { fmt.Fprintf(os.Stderr, format, args...) }
 
 func main() {
 	rootCmd := &cobra.Command{
@@ -111,7 +111,7 @@ func main() {
 				return fmt.Errorf("load workflow: %w", err)
 			}
 
-			result, err := runner.RunWorkflow(workflow, params, runner.Options{
+			result, err := runner.RunWorkflow(&workflow, params, &runner.Options{
 				WorkflowFile:  workflowFile,
 				ProcessRunner: &realProcessRunner{},
 				GlobExpander:  &realGlobExpander{},
@@ -146,7 +146,7 @@ func main() {
 		Short: "Resume an interrupted workflow",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			result, err := runner.ResumeWorkflow(args[0], runner.Options{
+			result, err := runner.ResumeWorkflow(args[0], &runner.Options{
 				ProcessRunner: &realProcessRunner{},
 				GlobExpander:  &realGlobExpander{},
 				Log:           &realLogger{},
