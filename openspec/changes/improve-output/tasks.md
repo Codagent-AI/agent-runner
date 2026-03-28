@@ -1,0 +1,2 @@
+- [ ] Console output formatting (`tasks/01-console-output-formatting.task.md`)
+- [ ] Headless progress indication (`tasks/02-headless-progress-indication.task.md`)

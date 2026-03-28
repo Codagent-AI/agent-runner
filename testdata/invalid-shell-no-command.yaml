@@ -1,0 +1,5 @@
+name: broken-shell
+steps:
+  - id: bad-step
+    mode: shell
+    prompt: "this should be command"

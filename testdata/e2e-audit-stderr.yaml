@@ -1,0 +1,5 @@
+name: audit-stderr-test
+params: []
+steps:
+  - id: noisy
+    command: echo "stderr content" >&2 && echo "stdout content"

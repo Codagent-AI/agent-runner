@@ -1,0 +1,4 @@
+command: go build ./...
+parallel: true
+run_in_ci: true
+run_locally: true

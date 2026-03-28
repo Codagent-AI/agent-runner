@@ -1,0 +1,14 @@
+name: e2e-counted-loop-break
+description: "E2E test: counted loop with break_if exits early"
+steps:
+  - id: retry-loop
+    loop:
+      max: 5
+    steps:
+      - id: check
+        mode: shell
+        command: echo "attempt"
+        break_if: success
+  - id: after-loop
+    mode: shell
+    command: echo "after-loop-reached"

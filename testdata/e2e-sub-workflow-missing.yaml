@@ -1,0 +1,5 @@
+name: e2e-sub-workflow-missing
+description: "E2E test: missing sub-workflow file"
+steps:
+  - id: invoke-missing
+    workflow: nonexistent-workflow.yaml

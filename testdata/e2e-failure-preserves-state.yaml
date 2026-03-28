@@ -1,0 +1,6 @@
+name: e2e-failure-preserves-state
+description: "E2E test: failed workflow preserves state file"
+steps:
+  - id: failing-step
+    mode: shell
+    command: exit 1

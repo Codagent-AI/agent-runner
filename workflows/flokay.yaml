@@ -1,0 +1,22 @@
+name: flokay
+description: "Full flokay change lifecycle"
+agent: claude-code
+
+params:
+  - name: change_name
+    required: true
+
+engine:
+  type: openspec
+  change_param: change_name
+
+steps:
+  - id: plan
+    workflow: plan-change.yaml
+    params:
+      change_name: "{{change_name}}"
+
+  - id: implement
+    workflow: implement-change.yaml
+    params:
+      change_name: "{{change_name}}"

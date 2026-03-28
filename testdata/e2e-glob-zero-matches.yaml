@@ -1,0 +1,14 @@
+name: e2e-glob-zero-matches
+description: "E2E test: glob with zero matches skips loop body"
+steps:
+  - id: empty-loop
+    loop:
+      over: "nonexistent-dir-xyz/*.task.md"
+      as: task_file
+    steps:
+      - id: never-runs
+        mode: shell
+        command: echo "SHOULD-NOT-APPEAR"
+  - id: after-empty
+    mode: shell
+    command: echo "skipped-empty-loop"

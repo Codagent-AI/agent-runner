@@ -1,0 +1,7 @@
+name: audit-test
+params: []
+steps:
+  - id: greet
+    command: echo hello
+  - id: warn
+    command: echo "warning msg" >&2

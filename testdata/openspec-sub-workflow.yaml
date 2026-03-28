@@ -1,0 +1,27 @@
+name: openspec-sub
+description: "Sub-workflow with artifact step IDs"
+
+params:
+  - name: change_name
+    required: true
+
+steps:
+  - id: proposal
+    mode: headless
+    prompt: "Propose it"
+
+  - id: specs
+    mode: headless
+    prompt: "Spec it"
+
+  - id: design
+    mode: headless
+    prompt: "Design it"
+
+  - id: tasks
+    mode: headless
+    prompt: "Plan it"
+
+  - id: review
+    mode: headless
+    prompt: "Review it"

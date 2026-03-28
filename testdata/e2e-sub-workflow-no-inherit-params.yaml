@@ -1,0 +1,9 @@
+name: e2e-sub-workflow-no-inherit-params
+description: "E2E test: sub-workflow does not inherit parent params implicitly"
+params:
+  - name: parent_only
+    required: true
+    default: "parent-value"
+steps:
+  - id: invoke-sub
+    workflow: sub-workflow-uses-parent-only.yaml

@@ -1,0 +1,9 @@
+name: sub-workflow-with-params
+description: "Child workflow that requires a param"
+params:
+  - name: msg
+    required: true
+steps:
+  - id: echo-param
+    mode: shell
+    command: echo "param:{{msg}}"

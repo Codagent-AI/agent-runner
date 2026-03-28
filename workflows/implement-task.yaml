@@ -1,0 +1,35 @@
+name: implement-task
+description: "Implement a single task: agent step then gauntlet retry"
+agent: claude-code
+
+params:
+  - name: task_file
+    required: true
+
+steps:
+  - id: implement
+    mode: headless
+    session: new
+    prompt: |
+      Implement the task described in {{task_file}}.
+
+      When you are done implementing, commit your changes with a clear,
+      descriptive commit message. Then summarize to the user what you changed.
+
+  - id: run-gauntlet
+    workflow: run-gauntlet.yaml
+
+  - id: check-clean
+    command: test -z "$(git status --porcelain)"
+    continue_on_failure: true
+
+  - id: commit-leftovers-if-needed
+    mode: headless
+    session: new
+    prompt: |
+      There are uncommitted changes leftover after implementing the task described in {{task_file}}.
+      Run git status and git diff to review them. Only stage and commit files
+      that are related to this task and appropriate to check into git — ignore
+      unrelated changes, generated artifacts, or files that should be gitignored.
+      Summarize which files you committed and which you left out, and why.
+    skip_if: previous_success

@@ -1,0 +1,7 @@
+name: sub-workflow-captures
+description: "Child workflow that captures a variable"
+steps:
+  - id: capture-in-sub
+    mode: shell
+    command: echo "captured-value"
+    capture: sub_capture

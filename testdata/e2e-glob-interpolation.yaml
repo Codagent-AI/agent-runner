@@ -1,0 +1,19 @@
+name: e2e-glob-interpolation
+description: "E2E test: glob pattern with param interpolation"
+params:
+  - name: base_dir
+    required: true
+  - name: change_name
+    required: true
+steps:
+  - id: foreach-interp
+    loop:
+      over: "{{base_dir}}/{{change_name}}/*.task.md"
+      as: task_file
+    steps:
+      - id: echo-file
+        mode: shell
+        command: echo "found:{{task_file}}"
+  - id: done
+    mode: shell
+    command: echo "interpolation-done"

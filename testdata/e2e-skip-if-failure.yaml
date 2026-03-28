@@ -1,0 +1,12 @@
+name: e2e-skip-if-failure
+description: "E2E test: skip_if previous_success runs step after failure"
+steps:
+  - id: failing-step
+    mode: shell
+    command: exit 1
+    continue_on_failure: true
+
+  - id: runs-after-failure
+    mode: shell
+    command: echo "EXECUTED-AFTER-FAILURE"
+    skip_if: previous_success

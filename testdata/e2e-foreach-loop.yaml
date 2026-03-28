@@ -1,0 +1,14 @@
+name: e2e-foreach-loop
+description: "E2E test: for-each loop over files"
+params:
+  - name: glob_pattern
+    required: true
+steps:
+  - id: foreach-loop
+    loop:
+      over: "{{glob_pattern}}"
+      as: task_file
+    steps:
+      - id: echo-file
+        mode: shell
+        command: echo "file:{{task_file}}"

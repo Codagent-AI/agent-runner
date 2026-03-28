@@ -1,0 +1,57 @@
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    # Bug detection
+    - errcheck
+    - govet
+    - staticcheck
+    - gosimple
+    - ineffassign
+    - unused
+
+    # Complexity
+    - gocognit
+    - funlen
+    - cyclop
+
+    # Style & quality
+    - gocritic
+    - revive
+    - misspell
+    - unconvert
+    - nolintlint
+    - goimports
+
+linters-settings:
+  gocognit:
+    min-complexity: 15
+
+  funlen:
+    lines: 75
+    statements: 50
+
+  cyclop:
+    max-complexity: 15
+
+  revive:
+    rules:
+      - name: blank-imports
+      - name: context-keys-type
+      - name: dot-imports
+      - name: error-return
+      - name: error-strings
+      - name: exported
+      - name: increment-decrement
+      - name: var-naming
+
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+      - performance
+
+  nolintlint:
+    require-explanation: true
+    require-specific: true

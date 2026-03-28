@@ -1,0 +1,15 @@
+name: e2e-skip-if-success
+description: "E2E test: skip_if previous_success skips step after success"
+steps:
+  - id: success-step
+    mode: shell
+    command: echo "success"
+
+  - id: skipped-step
+    mode: shell
+    command: echo "SHOULD-NOT-APPEAR"
+    skip_if: previous_success
+
+  - id: final-step
+    mode: shell
+    command: echo "final"

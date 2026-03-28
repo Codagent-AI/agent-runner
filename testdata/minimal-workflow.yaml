@@ -1,0 +1,5 @@
+name: minimal
+steps:
+  - id: only-step
+    mode: shell
+    command: echo hello

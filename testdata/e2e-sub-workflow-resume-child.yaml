@@ -1,0 +1,15 @@
+name: resume-child
+description: "Child workflow for sub-workflow resume test"
+
+steps:
+  - id: child-step1
+    mode: shell
+    command: echo "child-step1-done"
+
+  - id: child-step2
+    mode: shell
+    command: echo "child-step2-done"
+
+  - id: child-step3
+    mode: shell
+    command: echo "child-step3-done"

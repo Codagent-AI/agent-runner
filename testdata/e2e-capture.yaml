@@ -1,0 +1,11 @@
+name: e2e-capture
+description: "E2E test: shell capture and interpolation"
+steps:
+  - id: capture-step
+    mode: shell
+    command: echo "hello-captured"
+    capture: my_output
+
+  - id: use-capture
+    mode: shell
+    command: echo "got {{my_output}}"

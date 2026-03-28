@@ -1,0 +1,14 @@
+name: e2e-bare-group
+description: "E2E test: bare group (steps without loop) execute sequentially"
+steps:
+  - id: group1
+    steps:
+      - id: child1
+        mode: shell
+        command: echo "group-child-1"
+      - id: child2
+        mode: shell
+        command: echo "group-child-2"
+  - id: after-group
+    mode: shell
+    command: echo "after-group"

@@ -1,0 +1,11 @@
+name: e2e-continue-on-failure
+description: "E2E test: continue_on_failure allows workflow to proceed"
+steps:
+  - id: failing-step
+    mode: shell
+    command: exit 1
+    continue_on_failure: true
+
+  - id: next-step
+    mode: shell
+    command: echo "continued"

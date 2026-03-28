@@ -1,0 +1,14 @@
+name: e2e-counted-loop-exhaust
+description: "E2E test: counted loop exhaustion fails workflow"
+steps:
+  - id: retry-loop
+    loop:
+      max: 3
+    steps:
+      - id: always-fail
+        mode: shell
+        command: exit 1
+        continue_on_failure: true
+  - id: never-reached
+    mode: shell
+    command: echo "SHOULD-NOT-APPEAR"

@@ -1,0 +1,6 @@
+name: sub-workflow-uses-parent-only
+description: "Child workflow that tries to use a parent-only param"
+steps:
+  - id: use-parent-param
+    mode: shell
+    command: echo "got:{{parent_only}}"

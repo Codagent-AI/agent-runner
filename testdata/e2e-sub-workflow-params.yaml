@@ -1,0 +1,11 @@
+name: e2e-sub-workflow-params
+description: "E2E test: parent invokes sub-workflow with params"
+steps:
+  - id: invoke-sub
+    workflow: sub-workflow-with-params.yaml
+    params:
+      msg: "hello-from-parent"
+
+  - id: after-sub
+    mode: shell
+    command: echo "parent-after-sub"

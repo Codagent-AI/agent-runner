@@ -1,0 +1,251 @@
+# Flokay Workflow Architecture — Full Decomposition
+# Shows flokay.yaml → implement-change.yaml → implement-task.yaml → run-gauntlet.yaml
+
+vars: {
+  d2-config: {
+    layout-engine: elk
+  }
+}
+
+direction: down
+
+classes: {
+  shell_step: {
+    style.fill: "#E8F5E9"
+    style.stroke: "#2E7D32"
+    style.stroke-width: 2
+    style.border-radius: 8
+  }
+  interactive_step: {
+    style.fill: "#E3F2FD"
+    style.stroke: "#1565C0"
+    style.stroke-width: 2
+    style.border-radius: 8
+  }
+  headless_step: {
+    style.fill: "#F3E5F5"
+    style.stroke: "#7B1FA2"
+    style.stroke-width: 2
+    style.border-radius: 8
+  }
+  subworkflow_call: {
+    style.fill: "#FFF8E1"
+    style.stroke: "#F57F17"
+    style.stroke-width: 3
+    style.stroke-dash: 5
+    style.border-radius: 8
+  }
+  loop_container: {
+    style.fill: "#FFF3E0"
+    style.stroke: "#E65100"
+    style.stroke-width: 2
+    style.stroke-dash: 3
+  }
+  workflow_file: {
+    style.fill: "#FAFAFA"
+    style.stroke: "#424242"
+    style.stroke-width: 2
+  }
+  flow_arrow: {
+    style.stroke: "#546E7A"
+    style.stroke-width: 2
+  }
+  subworkflow_arrow: {
+    style.stroke: "#F57F17"
+    style.stroke-width: 2
+    style.animated: true
+  }
+}
+
+# ============================================================
+# Two-column layout: flokay on left, sub-workflows on right
+# ============================================================
+layout: "" {
+  grid-rows: 1
+  grid-columns: 2
+  grid-gap: 80
+  style.stroke: transparent
+  style.fill: transparent
+
+  # ============================================================
+  # flokay.yaml — Top-level workflow (left column)
+  # ============================================================
+  flokay: "flokay.yaml\nFull Change Lifecycle" {
+    class: workflow_file
+    direction: down
+
+    create: "create\nopenspec new change" {
+      class: shell_step
+    }
+
+    proposal: "proposal\n/flokay:propose" {
+      class: interactive_step
+    }
+
+    specs: "specs\n/flokay:spec\n(session: resume)" {
+      class: interactive_step
+    }
+
+    design: "design\n/flokay:design" {
+      class: interactive_step
+    }
+
+    tasks: "tasks\n/flokay:plan-tasks" {
+      class: headless_step
+    }
+
+    review: "review\n/gauntlet-run review" {
+      class: headless_step
+    }
+
+    implement_call: "implement  - - - - - - - - - - - - ->\nworkflow: implement-change.yaml\nparams: { change_name }" {
+      class: subworkflow_call
+    }
+
+    verify: "verify\n/gauntlet-run verify" {
+      class: headless_step
+    }
+
+    archive: "archive\n/opsx:archive" {
+      class: headless_step
+    }
+
+    archive_verify: "archive-verify\nagent-gauntlet skip" {
+      class: shell_step
+    }
+
+    finalize: "finalize\n/flokay:finalize-pr" {
+      class: headless_step
+    }
+
+    create -> proposal: {class: flow_arrow}
+    proposal -> specs: {class: flow_arrow}
+    specs -> design: {class: flow_arrow}
+    design -> tasks: {class: flow_arrow}
+    tasks -> review: {class: flow_arrow}
+    review -> implement_call: {class: flow_arrow}
+    implement_call -> verify: {class: flow_arrow}
+    verify -> archive: {class: flow_arrow}
+    archive -> archive_verify: {class: flow_arrow}
+    archive_verify -> finalize: {class: flow_arrow}
+  }
+
+  # ============================================================
+  # Sub-workflows (right column, stacked vertically)
+  # ============================================================
+  sub_workflows: "Sub-Workflows\n(invoked from implement step)" {
+    direction: down
+    style.fill: "#F5F5F5"
+    style.stroke: "#BDBDBD"
+    style.stroke-width: 1
+
+    # --- implement-change.yaml ---
+    implement_change: "implement-change.yaml" {
+      class: workflow_file
+      direction: down
+
+      params_note: "params: { change_name }" {
+        shape: text
+        style.font-size: 13
+        style.italic: true
+      }
+
+      task_loop: "for-each loop\nover: tasks/*.md\nas: task_file" {
+        class: loop_container
+        direction: down
+
+        implement_task_call: "invoke implement-task.yaml\nparams: { task_file, change_name }" {
+          class: subworkflow_call
+        }
+      }
+    }
+
+    # --- implement-task.yaml ---
+    implement_task: "implement-task.yaml" {
+      class: workflow_file
+      direction: down
+
+      params_note: "params: { task_file, change_name }" {
+        shape: text
+        style.font-size: 13
+        style.italic: true
+      }
+
+      implement: "implement\nagent: implement task\n(session: new)" {
+        class: headless_step
+      }
+
+      gauntlet_call: "run-gauntlet\nworkflow: run-gauntlet.yaml" {
+        class: subworkflow_call
+      }
+
+      implement -> gauntlet_call: {class: flow_arrow}
+    }
+
+    # --- run-gauntlet.yaml ---
+    run_gauntlet: "run-gauntlet.yaml" {
+      class: workflow_file
+      direction: down
+
+      retry_loop: "counted loop — max: 3" {
+        class: loop_container
+        direction: down
+
+        gauntlet: "gauntlet\nshell: gauntlet-run\ncapture: gauntlet_output\ncontinue_on_failure: true\nbreak_if: success" {
+          class: shell_step
+        }
+
+        fix: "fix\nagent: fix issues\nsession: inherit\nskip_if: previous_success" {
+          class: headless_step
+        }
+
+        gauntlet -> fix: "on failure" {
+          class: flow_arrow
+        }
+
+        fix -> gauntlet: "next iteration" {
+          style.stroke: "#E65100"
+          style.stroke-width: 2
+          style.stroke-dash: 5
+        }
+      }
+    }
+
+    # Vertical chaining arrows
+    implement_change.task_loop.implement_task_call -> implement_task: "invokes per task" {
+      class: subworkflow_arrow
+    }
+
+    implement_task.gauntlet_call -> run_gauntlet: "invokes" {
+      class: subworkflow_arrow
+    }
+  }
+}
+
+# ============================================================
+# LEGEND — bottom center
+# ============================================================
+legend: Legend {
+  near: bottom-center
+  style.fill: "#FAFAFA"
+  style.stroke: "#BDBDBD"
+
+  grid-rows: 1
+  grid-columns: 5
+
+  l_shell: "Shell Step" {
+    class: shell_step
+  }
+  l_interactive: "Interactive Agent" {
+    class: interactive_step
+  }
+  l_headless: "Headless Agent" {
+    class: headless_step
+  }
+  l_subwf: "Sub-Workflow Call" {
+    class: subworkflow_call
+  }
+  l_loop: "Loop" {
+    class: loop_container
+  }
+}

@@ -1,0 +1,6 @@
+name: e2e-success-deletes-state
+description: "E2E test: successful workflow deletes state file"
+steps:
+  - id: ok-step
+    mode: shell
+    command: echo "all good"

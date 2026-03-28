@@ -1,0 +1,34 @@
+name: implement-change
+description: "For-each loop over task files, invoking implement-task per task"
+agent: claude-code
+
+params:
+  - name: change_name
+    required: true
+
+steps:
+  - id: implement-tasks
+    loop:
+      over: "openspec/changes/{{change_name}}/tasks/*.task.md"
+      as: task_file
+      require_matches: true
+    steps:
+      - id: implement-single-task
+        workflow: implement-task.yaml
+        params:
+          task_file: "{{task_file}}"
+
+  - id: archive
+    mode: shell
+    command: openspec archive "{{change_name}}" --yes
+
+  - id: archive-verify
+    mode: shell
+    command: agent-gauntlet skip
+
+  - id: finalize
+    mode: headless
+    session: resume
+    prompt: |
+      Help me finalize the PR.
+      You MUST use the flokay:finalize-pr skill.

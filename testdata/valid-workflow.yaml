@@ -1,0 +1,15 @@
+name: test-workflow
+description: "A test workflow"
+params:
+  - name: project
+    required: true
+  - name: env
+    required: false
+    default: staging
+steps:
+  - id: setup
+    mode: shell
+    command: echo "setting up {{project}}"
+  - id: deploy
+    mode: headless
+    prompt: "Deploy {{project}} to {{env}}"

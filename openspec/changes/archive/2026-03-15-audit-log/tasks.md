@@ -1,0 +1,2 @@
+- [x] Audit logger core + runner + shell executor (`tasks/audit-logger-core.md`)
+- [x] Agent, loop, and sub-workflow audit events (`tasks/executor-audit-events.md`)

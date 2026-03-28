@@ -1,0 +1,9 @@
+name: e2e-sub-workflow-no-leak
+description: "E2E test: captured variables in sub-workflow don't leak to parent"
+steps:
+  - id: invoke-sub
+    workflow: sub-workflow-captures.yaml
+
+  - id: try-use-sub-capture
+    mode: shell
+    command: echo "leaked:{{sub_capture}}"
