@@ -109,6 +109,30 @@ func TestOpenSpecEngine(t *testing.T) {
 		}
 	})
 
+	t.Run("ValidateWorkflow passes for parent workflow with sub-workflow steps", func(t *testing.T) {
+		cmd := &mockCmdRunner{
+			results: map[string]string{
+				"status --change my-change --json": statusJSON([]artifact{
+					{ID: "proposal", Status: "pending"},
+					{ID: "specs", Status: "pending"},
+					{ID: "design", Status: "pending"},
+				}),
+			},
+		}
+		eng := NewEngineWithRunner(map[string]any{"change_param": "change_name"}, cmd)
+		w := model.Workflow{
+			Name: "parent",
+			Steps: []model.Step{
+				{ID: "plan", Workflow: "plan-change.yaml"},
+				{ID: "implement", Workflow: "implement-change.yaml"},
+			},
+		}
+		err := eng.ValidateWorkflow(&w, map[string]string{"change_name": "my-change"}, "")
+		if err != nil {
+			t.Fatalf("expected no error for parent workflow with sub-workflows, got: %v", err)
+		}
+	})
+
 	t.Run("EnrichPrompt returns enrichment for matching artifact", func(t *testing.T) {
 		cmd := &mockCmdRunner{
 			results: map[string]string{

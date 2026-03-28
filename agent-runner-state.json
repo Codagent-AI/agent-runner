@@ -1,0 +1,21 @@
+{
+  "workflowFile": "workflows/flokay.yaml",
+  "workflowName": "flokay",
+  "currentStep": {
+    "stepId": "plan",
+    "sessionIds": {},
+    "capturedVariables": {},
+    "child": {
+      "stepId": "specs",
+      "sessionIds": {
+        "proposal": "b8c2e496-9a7e-460d-b1e1-4df8c699f85e"
+      },
+      "capturedVariables": {},
+      "child": null
+    }
+  },
+  "params": {
+    "change_name": "test-change"
+  },
+  "workflowHash": "069c567136cce8b4d6df63cebf086333b6b5921f43f8119beeb9401153d76e0f"
+}

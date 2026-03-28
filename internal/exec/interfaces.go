@@ -18,10 +18,17 @@ type ProcessResult struct {
 	Stderr   string
 }
 
+// AgentProcess represents a running agent process that can be waited on or killed.
+type AgentProcess interface {
+	Wait() (ProcessResult, error)
+	Kill() error
+}
+
 // ProcessRunner abstracts process spawning for testability.
 type ProcessRunner interface {
 	RunShell(cmd string, captureStdout bool) (ProcessResult, error)
 	RunAgent(args []string) (ProcessResult, error)
+	StartAgent(args []string) (AgentProcess, error)
 }
 
 // GlobExpander abstracts file globbing for testability.

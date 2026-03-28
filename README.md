@@ -112,7 +112,7 @@ The built-in `openspec` engine integrates with the [OpenSpec](https://github.com
 ```yaml
 name: my-workflow
 description: "What this workflow does"
-agent: claude-code
+agent: claude
 
 params:
   - name: change_name
@@ -204,7 +204,7 @@ Configuration resolves in layers, each overriding the previous:
 3. **Workflow-level** — `agent` field in the workflow YAML
 4. **Step-level** — `model` field on individual steps
 
-This means a workflow can declare `agent: claude-code` at the top and override with `model: sonnet` on a single review step.
+This means a workflow can declare `agent: claude` at the top and override with `model: sonnet` on a single review step.
 
 ## Planned: Workflow extensibility
 

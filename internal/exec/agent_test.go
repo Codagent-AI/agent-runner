@@ -145,14 +145,14 @@ func TestExecuteAgentStep(t *testing.T) {
 	t.Run("uses configured agent command", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		ctx := makeCtx()
-		ctx.AgentCmd = "claude-code"
+		ctx.AgentCmd = "claude"
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew}
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 		if len(runner.calls) == 0 {
 			t.Fatal("expected command to be called")
 		}
-		if runner.calls[0][0] != "claude-code" {
-			t.Fatalf("expected 'claude-code' as agent command, got %q", runner.calls[0][0])
+		if runner.calls[0][0] != "claude" {
+			t.Fatalf("expected 'claude' as agent command, got %q", runner.calls[0][0])
 		}
 	})
 

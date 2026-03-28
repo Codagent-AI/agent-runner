@@ -6,6 +6,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+var originalTermState *unix.Termios
+
 func isTerminal(f *os.File) bool {
 	_, err := unix.IoctlGetTermios(int(f.Fd()), unix.TIOCGETA) // #nosec G115 -- uintptr→int safe on supported platforms
 	return err == nil

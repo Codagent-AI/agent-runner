@@ -332,8 +332,8 @@ func TestWorkflowSchema(t *testing.T) {
 		if err := w.Validate(); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if w.Agent != "claude-code" {
-			t.Fatalf("expected agent 'claude-code', got %q", w.Agent)
+		if w.Agent != "claude" {
+			t.Fatalf("expected agent 'claude', got %q", w.Agent)
 		}
 	})
 
@@ -343,8 +343,8 @@ func TestWorkflowSchema(t *testing.T) {
 			Steps: []Step{{ID: "s", Mode: ModeShell, Command: "echo", Session: SessionNew}},
 		}
 		w.ApplyDefaults()
-		if w.Agent != "claude-code" {
-			t.Fatalf("expected agent 'claude-code', got %q", w.Agent)
+		if w.Agent != "claude" {
+			t.Fatalf("expected agent 'claude', got %q", w.Agent)
 		}
 		if w.Params == nil || len(w.Params) != 0 {
 			t.Fatal("expected empty params slice")

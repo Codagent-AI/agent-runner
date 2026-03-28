@@ -216,7 +216,7 @@ type Workflow struct {
 // ApplyDefaults sets default values for Workflow fields.
 func (w *Workflow) ApplyDefaults() {
 	if w.Agent == "" {
-		w.Agent = "claude-code"
+		w.Agent = "claude"
 	}
 	if w.Params == nil {
 		w.Params = []Param{}

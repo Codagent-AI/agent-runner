@@ -32,7 +32,7 @@ type ExecutionContext struct {
 	// (Go maps are unordered, so we can't rely on insertion order).
 	LastSessionStepID string
 
-	// AgentCmd is the agent binary to invoke (e.g. "claude", "claude-code").
+	// AgentCmd is the agent binary to invoke (e.g. "claude").
 	AgentCmd string
 
 	NestingPath   []NestingSegment

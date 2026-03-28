@@ -1,6 +1,7 @@
 package exec
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sort"
@@ -69,17 +70,26 @@ func ExecuteAgentStep(
 		}
 	}
 
-	_ = os.Remove(signalFile)
+	cleanSignalFile()
 
 	spawnTime := time.Now()
-	result, runErr := runner.RunAgent(args)
-	if runErr != nil {
-		return OutcomeFailed, runErr
-	}
 
-	outcome := OutcomeSuccess
-	if result.ExitCode != 0 {
-		outcome = OutcomeFailed
+	var outcome StepOutcome
+	if mode == model.ModeHeadless {
+		result, runErr := runner.RunAgent(args)
+		if runErr != nil {
+			return OutcomeFailed, runErr
+		}
+		outcome = OutcomeSuccess
+		if result.ExitCode != 0 {
+			outcome = OutcomeFailed
+		}
+	} else {
+		proc, startErr := runner.StartAgent(args)
+		if startErr != nil {
+			return OutcomeFailed, startErr
+		}
+		outcome = waitForSignalOrExit(proc)
 	}
 
 	discoveredID := discoverAndStoreSession(step, ctx, spawnTime, log)
@@ -89,7 +99,6 @@ func ExecuteAgentStep(
 		Prefix:    prefix,
 		Type:      audit.EventStepEnd,
 		Data: map[string]any{
-			"exit_code":             result.ExitCode,
 			"discovered_session_id": discoveredID,
 			"outcome":               string(outcome),
 			"duration_ms":           time.Since(startTime).Milliseconds(),
@@ -237,4 +246,63 @@ func findConversationID(startTime time.Time) string {
 
 func encodeCwd(cwd string) string {
 	return strings.NewReplacer("/", "-", ".", "-", "_", "-").Replace(filepath.Clean(cwd))
+}
+
+func cleanSignalFile() {
+	_ = os.Remove(signalFile)
+}
+
+func readSignalAction() string {
+	data, err := os.ReadFile(signalFile) // #nosec G304 -- signal file path is a constant
+	if err != nil {
+		return "continue"
+	}
+	var signal struct {
+		Action string `json:"action"`
+	}
+	if err := json.Unmarshal(data, &signal); err != nil || signal.Action == "" {
+		return "continue"
+	}
+	return signal.Action
+}
+
+func waitForSignalOrExit(proc AgentProcess) StepOutcome {
+	type result struct {
+		outcome StepOutcome
+	}
+	done := make(chan result, 1)
+
+	// Poll for signal file.
+	go func() {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for range ticker.C {
+			if _, err := os.Stat(signalFile); err != nil {
+				continue
+			}
+			action := readSignalAction()
+			cleanSignalFile()
+			_ = proc.Kill()
+			if action == "continue" {
+				done <- result{outcome: OutcomeSuccess}
+			} else {
+				done <- result{outcome: OutcomeAborted}
+			}
+			return
+		}
+	}()
+
+	// Wait for process exit.
+	go func() {
+		res, _ := proc.Wait()
+		cleanSignalFile()
+		if res.ExitCode == 0 {
+			done <- result{outcome: OutcomeSuccess}
+		} else {
+			done <- result{outcome: OutcomeAborted}
+		}
+	}()
+
+	r := <-done
+	return r.outcome
 }

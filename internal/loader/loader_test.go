@@ -29,8 +29,8 @@ func TestLoadWorkflow(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if w.Agent != "claude-code" {
-			t.Fatalf("expected default agent 'claude-code', got %q", w.Agent)
+		if w.Agent != "claude" {
+			t.Fatalf("expected default agent 'claude', got %q", w.Agent)
 		}
 		if w.Params == nil {
 			t.Fatal("expected params to be initialized")

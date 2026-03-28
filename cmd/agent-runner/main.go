@@ -7,9 +7,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
+	"github.com/codagent/agent-runner/internal/engine"
 	_ "github.com/codagent/agent-runner/internal/engine/openspec"
 	iexec "github.com/codagent/agent-runner/internal/exec"
 	"github.com/codagent/agent-runner/internal/loader"
@@ -70,6 +72,43 @@ func (r *realProcessRunner) RunAgent(args []string) (iexec.ProcessResult, error)
 		}
 	}
 	return iexec.ProcessResult{ExitCode: exitCode}, nil
+}
+
+// realAgentProcess wraps an os/exec.Cmd for async wait/kill.
+type realAgentProcess struct {
+	cmd *exec.Cmd
+}
+
+func (p *realAgentProcess) Wait() (iexec.ProcessResult, error) {
+	err := p.cmd.Wait()
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			return iexec.ProcessResult{}, err
+		}
+	}
+	return iexec.ProcessResult{ExitCode: exitCode}, nil
+}
+
+func (p *realAgentProcess) Kill() error {
+	if p.cmd.Process == nil {
+		return nil
+	}
+	return p.cmd.Process.Signal(syscall.SIGTERM)
+}
+
+func (r *realProcessRunner) StartAgent(args []string) (iexec.AgentProcess, error) {
+	c := exec.Command(args[0], args[1:]...) // #nosec G204 -- CLI runner launches agent processes by design
+	c.Stdin = os.Stdin
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+
+	if err := c.Start(); err != nil {
+		return nil, err
+	}
+	return &realAgentProcess{cmd: c}, nil
 }
 
 // realGlobExpander implements exec.GlobExpander using filepath.Glob.
@@ -135,8 +174,21 @@ Positional args map to params in order; use key=value for explicit mapping.
 				return err
 			}
 
+			var eng engine.Engine
+			if workflow.Engine != nil {
+				engConfig := map[string]any{"type": workflow.Engine.Type}
+				for k, v := range workflow.Engine.Extras {
+					engConfig[k] = v
+				}
+				eng, err = engine.Create(engConfig)
+				if err != nil {
+					return fmt.Errorf("create engine: %w", err)
+				}
+			}
+
 			result, err := runner.RunWorkflow(&workflow, params, &runner.Options{
 				WorkflowFile:  workflowFile,
+				Engine:        eng,
 				ProcessRunner: &realProcessRunner{},
 				GlobExpander:  &realGlobExpander{},
 				Log:           &realLogger{},

@@ -127,8 +127,12 @@ func (e *openSpecEngine) ValidateWorkflow(workflow *model.Workflow, params map[s
 	e.artifactIDs = ids
 
 	stepIDs := make(map[string]bool)
+	hasSubWorkflows := false
 	for i := range workflow.Steps {
 		stepIDs[workflow.Steps[i].ID] = true
+		if workflow.Steps[i].Workflow != "" {
+			hasSubWorkflows = true
+		}
 	}
 
 	var unmatched []string
@@ -138,7 +142,10 @@ func (e *openSpecEngine) ValidateWorkflow(workflow *model.Workflow, params map[s
 		}
 	}
 
-	if len(unmatched) > 0 {
+	// If the workflow delegates to sub-workflows, unmatched artifacts may
+	// live in those sub-workflows — skip the error here and let each
+	// sub-workflow validate its own steps.
+	if len(unmatched) > 0 && !hasSubWorkflows {
 		return fmt.Errorf("workflow is missing steps for openspec artifacts: %s", strings.Join(unmatched, ", "))
 	}
 
