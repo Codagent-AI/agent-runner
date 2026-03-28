@@ -2,12 +2,14 @@
   "workflowFile": "workflows/flokay.yaml",
   "workflowName": "flokay",
   "currentStep": {
-    "stepId": "implement",
+    "stepId": "plan",
     "sessionIds": {},
     "capturedVariables": {},
     "child": {
-      "stepId": "implement-tasks",
-      "sessionIds": {},
+      "stepId": "specs",
+      "sessionIds": {
+        "proposal": "b8c2e496-9a7e-460d-b1e1-4df8c699f85e"
+      },
       "capturedVariables": {},
       "child": null
     }
