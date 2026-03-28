@@ -15,19 +15,19 @@ const stateFileName = "agent-runner-state.json"
 
 // WriteState writes the run state to a JSON file in the given directory.
 func WriteState(state *model.RunState, dir string) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("create state dir: %w", err)
 	}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal state: %w", err)
 	}
-	return os.WriteFile(filepath.Join(dir, stateFileName), data, 0o644)
+	return os.WriteFile(filepath.Join(dir, stateFileName), data, 0o600)
 }
 
 // ReadState reads a run state from a JSON file.
 func ReadState(filePath string) (model.RunState, error) {
-	data, err := os.ReadFile(filePath)
+	data, err := os.ReadFile(filePath) // #nosec G304 -- state file path is from internal state tracking
 	if err != nil {
 		if os.IsNotExist(err) {
 			return model.RunState{}, fmt.Errorf("state file not found: %s", filePath)

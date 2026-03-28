@@ -19,7 +19,7 @@ type Options struct {
 
 // LoadWorkflow reads a YAML file and returns a validated Workflow.
 func LoadWorkflow(filePath string, opts Options) (model.Workflow, error) {
-	data, err := os.ReadFile(filePath)
+	data, err := os.ReadFile(filePath) // #nosec G304 -- workflow file path is user-specified CLI input
 	if err != nil {
 		return model.Workflow{}, fmt.Errorf("cannot read workflow file: %w", err)
 	}
@@ -63,7 +63,7 @@ func InterpolateParams(template string, params map[string]string) (string, error
 			firstErr = fmt.Errorf("missing parameter: {{file:%s}}", key)
 			return match
 		}
-		content, err := os.ReadFile(filePath)
+		content, err := os.ReadFile(filePath) // #nosec G304 -- file: param reference resolved from workflow
 		if err != nil {
 			firstErr = fmt.Errorf("cannot read file for parameter {{file:%s}}: %q", key, filePath)
 			return match

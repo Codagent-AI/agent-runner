@@ -19,10 +19,10 @@ type Logger struct {
 
 // NewLogger creates an audit logger that appends to the given file path.
 func NewLogger(filePath string) (*Logger, error) {
-	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o750); err != nil {
 		return nil, fmt.Errorf("create audit log dir: %w", err)
 	}
-	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G304 -- audit log path is constructed internally
 	if err != nil {
 		return nil, fmt.Errorf("open audit log: %w", err)
 	}

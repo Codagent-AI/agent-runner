@@ -57,7 +57,7 @@ func ExecuteAgentStep(
 		},
 	})
 
-	args := buildAgentArgs(step, prompt, sessionID)
+	args := buildAgentArgs(step, prompt, sessionID, ctx.AgentCmd)
 
 	log.Printf("  mode: %s\n", mode)
 	if mode != model.ModeHeadless {
@@ -118,8 +118,11 @@ func buildAgentPrompt(step *model.Step, ctx *model.ExecutionContext) (prompt, en
 	return prompt, enrichment, nil
 }
 
-func buildAgentArgs(step *model.Step, prompt, sessionID string) []string {
-	args := []string{"claude"}
+func buildAgentArgs(step *model.Step, prompt, sessionID, agentCmd string) []string {
+	if agentCmd == "" {
+		agentCmd = "claude"
+	}
+	args := []string{agentCmd}
 	if sessionID != "" {
 		args = append(args, "--resume", sessionID)
 	}

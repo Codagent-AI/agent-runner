@@ -46,7 +46,7 @@ type CmdRunner interface {
 type realCmdRunner struct{}
 
 func (r *realCmdRunner) Run(args []string) (string, error) {
-	cmd := exec.Command("openspec", args...)
+	cmd := exec.Command("openspec", args...) // #nosec G204 -- openspec CLI is invoked with controlled arguments
 	out, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {

@@ -37,6 +37,7 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
 	var fromStep string
 	var sessionIDs map[string]string
 	var capturedVars map[string]string
+	var lastSessionStepID string
 	var childState *model.SubWorkflowChildState
 
 	if state.CurrentStep.Nested != nil {
@@ -44,6 +45,7 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
 		fromStep = nested.StepID
 		sessionIDs = nested.SessionIDs
 		capturedVars = nested.CapturedVariables
+		lastSessionStepID = nested.LastSessionStepID
 		if nested.Child != nil {
 			childState = nestedToChildState(nested.Child)
 		}
@@ -83,6 +85,7 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
 		Engine:            eng,
 		SessionIDs:        sessionIDs,
 		CapturedVariables: capturedVars,
+		LastSessionStepID: lastSessionStepID,
 		ChildState:        childState,
 		ProcessRunner:     opts.ProcessRunner,
 		GlobExpander:      opts.GlobExpander,

@@ -19,7 +19,7 @@ import (
 type realProcessRunner struct{}
 
 func (r *realProcessRunner) RunShell(cmd string, captureStdout bool) (iexec.ProcessResult, error) {
-	c := exec.Command("sh", "-c", cmd)
+	c := exec.Command("sh", "-c", cmd) // #nosec G204 -- CLI runner executes user-defined shell commands by design
 	c.Stdin = os.Stdin
 	c.Stderr = os.Stderr
 
@@ -53,7 +53,7 @@ func (r *realProcessRunner) RunShell(cmd string, captureStdout bool) (iexec.Proc
 }
 
 func (r *realProcessRunner) RunAgent(args []string) (iexec.ProcessResult, error) {
-	c := exec.Command(args[0], args[1:]...)
+	c := exec.Command(args[0], args[1:]...) // #nosec G204 -- CLI runner launches agent processes by design
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
@@ -164,6 +164,7 @@ func main() {
 	rootCmd.AddCommand(runCmd, validateCmd, resumeCmd)
 
 	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		os.Exit(1)
 	}
 }

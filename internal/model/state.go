@@ -7,6 +7,7 @@ type NestedStepState struct {
 	StepID            string            `json:"stepId"`
 	SessionIDs        map[string]string `json:"sessionIds"`
 	CapturedVariables map[string]string `json:"capturedVariables"`
+	LastSessionStepID string            `json:"lastSessionStepId,omitempty"`
 	Child             *NestedStepState  `json:"child"`
 }
 

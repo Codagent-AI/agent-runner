@@ -7,12 +7,12 @@ import (
 )
 
 func isTerminal(f *os.File) bool {
-	_, err := unix.IoctlGetTermios(int(f.Fd()), unix.TIOCGETA)
+	_, err := unix.IoctlGetTermios(int(f.Fd()), unix.TIOCGETA) // #nosec G115 -- uintptr→int safe on supported platforms
 	return err == nil
 }
 
 func makeRaw(fd uintptr) (*unix.Termios, error) {
-	termios, err := unix.IoctlGetTermios(int(fd), unix.TIOCGETA)
+	termios, err := unix.IoctlGetTermios(int(fd), unix.TIOCGETA) // #nosec G115 -- uintptr→int safe on supported platforms
 	if err != nil {
 		return nil, err
 	}
@@ -27,7 +27,7 @@ func makeRaw(fd uintptr) (*unix.Termios, error) {
 	termios.Cc[unix.VMIN] = 1
 	termios.Cc[unix.VTIME] = 0
 
-	if err := unix.IoctlSetTermios(int(fd), unix.TIOCSETA, termios); err != nil {
+	if err := unix.IoctlSetTermios(int(fd), unix.TIOCSETA, termios); err != nil { // #nosec G115 -- uintptr→int safe on supported platforms
 		return nil, err
 	}
 
@@ -35,5 +35,5 @@ func makeRaw(fd uintptr) (*unix.Termios, error) {
 }
 
 func restoreTerminal(fd uintptr, state *unix.Termios) {
-	unix.IoctlSetTermios(int(fd), unix.TIOCSETA, state)
+	unix.IoctlSetTermios(int(fd), unix.TIOCSETA, state) // #nosec G115,G104 -- uintptr→int safe on supported platforms; best-effort restore
 }

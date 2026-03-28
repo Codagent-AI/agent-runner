@@ -32,6 +32,7 @@ type Options struct {
 	Engine            engine.Engine
 	SessionIDs        map[string]string
 	CapturedVariables map[string]string
+	LastSessionStepID string
 	ChildState        *model.SubWorkflowChildState
 	ProcessRunner     exec.ProcessRunner
 	GlobExpander      exec.GlobExpander
@@ -80,7 +81,7 @@ func computeHash(workflowFile string) string {
 	if workflowFile == "" {
 		return ""
 	}
-	data, err := os.ReadFile(workflowFile)
+	data, err := os.ReadFile(workflowFile) // #nosec G304 -- workflow file is user-specified CLI input
 	if err != nil {
 		return ""
 	}
@@ -167,8 +168,12 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		CapturedVariables: opts.CapturedVariables,
 		AuditLogger:       auditLogger,
 	})
+	ctx.AgentCmd = workflow.Agent
 	if opts.ChildState != nil {
 		ctx.ResumeChildState = opts.ChildState
+	}
+	if opts.LastSessionStepID != "" {
+		ctx.LastSessionStepID = opts.LastSessionStepID
 	}
 
 	log := opts.Log
@@ -363,6 +368,7 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 		StepID:            step.ID,
 		SessionIDs:        copyMap(ctx.SessionIDs),
 		CapturedVariables: copyMap(ctx.CapturedVariables),
+		LastSessionStepID: ctx.LastSessionStepID,
 		Child:             child,
 	}
 
