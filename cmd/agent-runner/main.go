@@ -12,6 +12,7 @@ import (
 
 	iexec "github.com/codagent/agent-runner/internal/exec"
 	"github.com/codagent/agent-runner/internal/loader"
+	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runner"
 )
 
@@ -99,16 +100,34 @@ func main() {
 	}
 
 	runCmd := &cobra.Command{
-		Use:   "run <workflow.yaml> [param=value ...]",
+		Use:   "run <workflow.yaml> [params...] [--from <step>] [--session <id>]",
 		Short: "Execute a workflow",
-		Args:  cobra.MinimumNArgs(1),
+		Long: `Execute a workflow with positional or key=value parameters.
+Parameters from the workflow's params list are required unless marked optional.
+Positional args map to params in order; use key=value for explicit mapping.
+  Examples:
+    run workflow.yaml my-feature              # positional: maps to first param
+    run workflow.yaml my-feature "a description"  # multiple positional params
+    run workflow.yaml name=my-feature         # key=value format
+    run workflow.yaml my-feature desc="more"  # mixed: positional + override`,
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			workflowFile := args[0]
-			params := parseParams(args[1:])
 
+			// Load workflow first to validate params against its schema.
 			workflow, err := loader.LoadWorkflow(workflowFile, loader.Options{})
 			if err != nil {
 				return fmt.Errorf("load workflow: %w", err)
+			}
+
+			// Parse and match parameters.
+			positional, keyed, err := parseParams(args[1:])
+			if err != nil {
+				return err
+			}
+			params, err := matchParams(&workflow, positional, keyed)
+			if err != nil {
+				return err
 			}
 
 			result, err := runner.RunWorkflow(&workflow, params, &runner.Options{
@@ -169,13 +188,64 @@ func main() {
 	}
 }
 
-func parseParams(args []string) map[string]string {
-	params := make(map[string]string)
+// parseParams separates positional args from key=value pairs.
+// Returns (positional values, key=value map, error).
+func parseParams(args []string) (positional []string, keyed map[string]string, err error) {
+	positional = []string{}
+	keyed = make(map[string]string)
+
 	for _, arg := range args {
-		parts := strings.SplitN(arg, "=", 2)
-		if len(parts) == 2 {
-			params[parts[0]] = parts[1]
+		if strings.Contains(arg, "=") {
+			parts := strings.SplitN(arg, "=", 2)
+			if parts[0] == "" {
+				return nil, nil, fmt.Errorf("invalid parameter format: empty key in %q", arg)
+			}
+			keyed[parts[0]] = parts[1]
+		} else {
+			positional = append(positional, arg)
 		}
 	}
-	return params
+
+	return positional, keyed, nil
+}
+
+// matchParams maps CLI args to workflow parameters, validating required params.
+// Supports positional args (mapped to params in order) and key=value overrides.
+func matchParams(workflow *model.Workflow, positional []string, keyed map[string]string) (map[string]string, error) {
+	result := make(map[string]string)
+
+	// Apply positional arguments to workflow params in order.
+	if len(positional) > len(workflow.Params) {
+		return nil, fmt.Errorf("too many arguments: expected %d, got %d", len(workflow.Params), len(positional))
+	}
+
+	for i, val := range positional {
+		result[workflow.Params[i].Name] = val
+	}
+
+	// Apply key=value overrides.
+	for key, val := range keyed {
+		found := false
+		for _, p := range workflow.Params {
+			if p.Name == key {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("unknown parameter: %q", key)
+		}
+		result[key] = val
+	}
+
+	// Check for required parameters.
+	for _, p := range workflow.Params {
+		if p.Required != nil && *p.Required {
+			if _, ok := result[p.Name]; !ok {
+				return nil, fmt.Errorf("missing required parameter: %q", p.Name)
+			}
+		}
+	}
+
+	return result, nil
 }

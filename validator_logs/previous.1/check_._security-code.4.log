@@ -1,0 +1,343 @@
+[2026-03-28T16:12:41.298Z] [2026-03-28T16:12:41.298Z] Starting check: security-code
+[2026-03-28T16:12:41.299Z] Executing command: gosec ./...
+[2026-03-28T16:12:41.299Z] Working directory: .
+
+[2026-03-28T16:12:42.566Z] Results:
+
+
+[[97;41m/Users/paul/codagent/agent-runner/cmd/pty-poc/terminal.go:38[0m] - G115 (CWE-190): integer overflow conversion uintptr -> int (Confidence: MEDIUM, Severity: HIGH)
+    37: func restoreTerminal(fd uintptr, state *unix.Termios) {
+  > 38: 	unix.IoctlSetTermios(int(fd), unix.TIOCSETA, state)
+    39: }
+
+Autofix: 
+
+[[97;41m/Users/paul/codagent/agent-runner/cmd/pty-poc/terminal.go:30[0m] - G115 (CWE-190): integer overflow conversion uintptr -> int (Confidence: MEDIUM, Severity: HIGH)
+    29: 
+  > 30: 	if err := unix.IoctlSetTermios(int(fd), unix.TIOCSETA, termios); err != nil {
+    31: 		return nil, err
+
+Autofix: 
+
+[[97;41m/Users/paul/codagent/agent-runner/cmd/pty-poc/terminal.go:15[0m] - G115 (CWE-190): integer overflow conversion uintptr -> int (Confidence: MEDIUM, Severity: HIGH)
+    14: func makeRaw(fd uintptr) (*unix.Termios, error) {
+  > 15: 	termios, err := unix.IoctlGetTermios(int(fd), unix.TIOCGETA)
+    16: 	if err != nil {
+
+Autofix: 
+
+[[97;41m/Users/paul/codagent/agent-runner/cmd/pty-poc/terminal.go:10[0m] - G115 (CWE-190): integer overflow conversion uintptr -> int (Confidence: MEDIUM, Severity: HIGH)
+    9: func isTerminal(f *os.File) bool {
+  > 10: 	_, err := unix.IoctlGetTermios(int(f.Fd()), unix.TIOCGETA)
+    11: 	return err == nil
+
+Autofix: 
+
+[[97;41m/Users/paul/codagent/agent-runner/cmd/pty-poc/main.go:204[0m] - G702 (CWE-78): Command injection via taint analysis (Confidence: HIGH, Severity: HIGH)
+    203: 
+  > 204: 	cmd := exec.Command(codexPath, "--no-alt-screen", prompt)
+    205: 	cmd.Env = os.Environ()
+
+Autofix: 
+
+[[30;43m/Users/paul/codagent/agent-runner/internal/engine/openspec/openspec.go:49[0m] - G204 (CWE-78): Subprocess launched with variable (Confidence: HIGH, Severity: MEDIUM)
+    48: func (r *realCmdRunner) Run(args []string) (string, error) {
+  > 49: 	cmd := exec.Command("openspec", args...)
+    50: 	out, err := cmd.Output()
+
+Autofix: 
+
+[[30;43m/Users/paul/codagent/agent-runner/cmd/pty-poc/main.go:204[0m] - G204 (CWE-78): Subprocess launched with variable (Confidence: HIGH, Severity: MEDIUM)
+    203: 
+  > 204: 	cmd := exec.Command(codexPath, "--no-alt-screen", prompt)
+    205: 	cmd.Env = os.Environ()
+
+Autofix: 
+
+[[30;43m/Users/paul/codagent/agent-runner/cmd/agent-runner/main.go:22[0m] - G204 (CWE-78): Subprocess launched with variable (Confidence: HIGH, Severity: MEDIUM)
+    21: func (r *realProcessRunner) RunShell(cmd string, captureStdout bool) (iexec.ProcessResult, error) {
+  > 22: 	c := exec.Command("sh", "-c", cmd)
+    23: 	c.Stdin = os.Stdin
+
+Autofix: 
+
+[[30;43m/Users/paul/codagent/agent-runner/cmd/agent-runner/main.go:56[0m] - G204 (CWE-78): Subprocess launched with a potential tainted input or cmd arguments (Confidence: HIGH, Severity: MEDIUM)
+    55: func (r *realProcessRunner) RunAgent(args []string) (iexec.ProcessResult, error) {
+  > 56: 	c := exec.Command(args[0], args[1:]...)
+    57: 	c.Stdin = os.Stdin
+
+Autofix: 
+
+[[30;43m/Users/paul/codagent/agent-runner/internal/stateio/stateio.go:30[0m] - G304 (CWE-22): Potential file inclusion via variable (Confidence: HIGH, Severity: MEDIUM)
+    29: func ReadState(filePath string) (model.RunState, error) {
+  > 30: 	data, err := os.ReadFile(filePath)
+    31: 	if err != nil {
+
+Autofix: Consider using os.Root to scope file access under a fixed root (Go >=1.24). Prefer root.Open/root.Stat over os.Open/os.Stat to prevent directory traversal.
+
+[[30;43m/Users/paul/codagent/agent-runner/internal/runner/runner.go:84[0m] - G304 (CWE-22): Potential file inclusion via variable (Confidence: HIGH, Severity: MEDIUM)
+    83: 	}
+  > 84: 	data, err := os.ReadFile(workflowFile)
+    85: 	if err != nil {
+
+Autofix: Consider using os.Root to scope file access under a fixed root (Go >=1.24). Prefer root.Open/root.Stat over os.Open/os.Stat to prevent directory traversal.
+
+[[30;43m/Users/paul/codagent/agent-runner/internal/loader/loader.go:66[0m] - G304 (CWE-22): Potential file inclusion via variable (Confidence: HIGH, Severity: MEDIUM)
+    65: 		}
+  > 66: 		content, err := os.ReadFile(filePath)
+    67: 		if err != nil {
+
+Autofix: Consider using os.Root to scope file access under a fixed root (Go >=1.24). Prefer root.Open/root.Stat over os.Open/os.Stat to prevent directory traversal.
+
+[[30;43m/Users/paul/codagent/agent-runner/internal/loader/loader.go:22[0m] - G304 (CWE-22): Potential file inclusion via variable (Confidence: HIGH, Severity: MEDIUM)
+    21: func LoadWorkflow(filePath string, opts Options) (model.Workflow, error) {
+  > 22: 	data, err := os.ReadFile(filePath)
+    23: 	if err != nil {
+
+Autofix: Consider using os.Root to scope file access under a fixed root (Go >=1.24). Prefer root.Open/root.Stat over os.Open/os.Stat to prevent directory traversal.
+
+[[30;43m/Users/paul/codagent/agent-runner/internal/audit/logger.go:25[0m] - G304 (CWE-22): Potential file inclusion via variable (Confidence: HIGH, Severity: MEDIUM)
+    24: 	}
+  > 25: 	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+    26: 	if err != nil {
+
+Autofix: Consider using os.Root to scope file access under a fixed root (Go >=1.24). Prefer root.Open/root.Stat over os.Open/os.Stat to prevent directory traversal.
+
+[[30;43m/Users/paul/codagent/agent-runner/internal/audit/logger.go:25[0m] - G302 (CWE-276): Expect file permissions to be 0600 or less (Confidence: HIGH, Severity: MEDIUM)
+    24: 	}
+  > 25: 	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+    26: 	if err != nil {
+
+Autofix: 
+
+[[30;43m/Users/paul/codagent/agent-runner/internal/stateio/stateio.go:18[0m] - G301 (CWE-276): Expect directory permissions to be 0750 or less (Confidence: HIGH, Severity: MEDIUM)
+    17: func WriteState(state *model.RunState, dir string) error {
+  > 18: 	if err := os.MkdirAll(dir, 0o755); err != nil {
+    19: 		return fmt.Errorf("create state dir: %w", err)
+
+Autofix: 
+
+[[30;43m/Users/paul/codagent/agent-runner/internal/audit/logger.go:22[0m] - G301 (CWE-276): Expect directory permissions to be 0750 or less (Confidence: HIGH, Severity: MEDIUM)
+    21: func NewLogger(filePath string) (*Logger, error) {
+  > 22: 	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+    23: 		return nil, fmt.Errorf("create audit log dir: %w", err)
+
+Autofix: 
+
+[[30;43m/Users/paul/codagent/agent-runner/internal/stateio/stateio.go:25[0m] - G306 (CWE-276): Expect WriteFile permissions to be 0600 or less (Confidence: HIGH, Severity: MEDIUM)
+    24: 	}
+  > 25: 	return os.WriteFile(filepath.Join(dir, stateFileName), data, 0o644)
+    26: }
+
+Autofix: 
+
+[[30;43m/Users/paul/codagent/agent-runner/cmd/pty-poc/main.go:103[0m] - G306 (CWE-276): Expect WriteFile permissions to be 0600 or less (Confidence: HIGH, Severity: MEDIUM)
+    102: 	data, _ := json.Marshal(map[string]string{"action": "continue"})
+  > 103: 	os.WriteFile(signalFile, data, 0o644)
+    104: }
+
+Autofix: 
+
+[[37;40m/Users/paul/codagent/agent-runner/cmd/pty-poc/terminal.go:38[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    37: func restoreTerminal(fd uintptr, state *unix.Termios) {
+  > 38: 	unix.IoctlSetTermios(int(fd), unix.TIOCSETA, state)
+    39: }
+
+Autofix: 
+
+[[37;40m/Users/paul/codagent/agent-runner/cmd/pty-poc/main.go:339[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    338: 			if ptmx != nil {
+  > 339: 				ptmx.Write(chunk)
+    340: 			}
+
+Autofix: 
+
+[[37;40m/Users/paul/codagent/agent-runner/cmd/pty-poc/main.go:257[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    256: 	if logFile != nil {
+  > 257: 		logFile.Close()
+    258: 	}
+
+Autofix: 
+
+[[37;40m/Users/paul/codagent/agent-runner/cmd/pty-poc/main.go:248[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    247: 	if activeCmd != nil {
+  > 248: 		activeCmd.Process.Signal(syscall.SIGTERM)
+    249: 		activePTY = nil
+
+Autofix: 
+
+[[37;40m/Users/paul/codagent/agent-runner/cmd/pty-poc/main.go:226[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    225: 	go func() {
+  > 226: 		cmd.Wait()
+    227: 		logDebug("codex pty exited")
+
+Autofix: 
+
+[[37;40m/Users/paul/codagent/agent-runner/cmd/pty-poc/main.go:221[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    220: 	go func() {
+  > 221: 		io.Copy(os.Stdout, ptmx)
+    222: 	}()
+
+Autofix: 
+
+[[37;40m/Users/paul/codagent/agent-runner/cmd/pty-poc/main.go:145[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    144: 		if p != nil {
+  > 145: 			p.Write([]byte("\x04"))
+    146: 		}
+
+Autofix: 
+
+[[37;40m/Users/paul/codagent/agent-runner/cmd/pty-poc/main.go:135[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    134: 		if p != nil {
+  > 135: 			p.Write([]byte("\x15"))
+    136: 		}
+
+Autofix: 
+
+[[37;40m/Users/paul/codagent/agent-runner/cmd/pty-poc/main.go:127[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    126: 	// Esc interrupts an active run back to the prompt.
+  > 127: 	ptmx.Write([]byte("\x1b"))
+    128: 
+
+Autofix: 
+
+[[37;40m/Users/paul/codagent/agent-runner/cmd/pty-poc/main.go:103[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    102: 	data, _ := json.Marshal(map[string]string{"action": "continue"})
+  > 103: 	os.WriteFile(signalFile, data, 0o644)
+    104: }
+
+Autofix: 
+
+[[37;40m/Users/paul/codagent/agent-runner/cmd/pty-poc/main.go:98[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    97: func removeSignalFile() {
+  > 98: 	os.Remove(signalFile)
+    99: }
+
+Autofix: 
+
+[1;36mSummary:[0m
+  Gosec  : dev
+  Files  : 25
+  Lines  : 3494
+  Nosec  : 0
+  Issues : [1;31m30[0m
+
+[2026-03-28T16:12:42.566Z] 
+STDERR:
+[gosec] 2026/03/28 12:12:42 Including rules: default
+[gosec] 2026/03/28 12:12:42 Excluding rules: default
+[gosec] 2026/03/28 12:12:42 Including analyzers: default
+[gosec] 2026/03/28 12:12:42 Excluding analyzers: default
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/validate
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/engine
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/cmd/agent-runner
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/audit
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/stateio
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/cmd/pty-poc
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/exec
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/textfmt
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/engine/openspec
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/flowctl
+[gosec] 2026/03/28 12:12:42 Checking package: flowctl
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/flowctl/flowctl.go
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/loader
+[gosec] 2026/03/28 12:12:42 Checking package: audit
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/audit/logger.go
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/audit/types.go
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/model
+[gosec] 2026/03/28 12:12:42 Checking package: validate
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/validate/workflow.go
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/runner
+[gosec] 2026/03/28 12:12:42 Checking package: engine
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/engine/engine.go
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/session
+[gosec] 2026/03/28 12:12:42 Checking package: textfmt
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/textfmt/format.go
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/textfmt/interpolation.go
+[gosec] 2026/03/28 12:12:42 Checking package: openspec
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/engine/openspec/openspec.go
+[gosec] 2026/03/28 12:12:42 Checking package: stateio
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/stateio/stateio.go
+[gosec] 2026/03/28 12:12:42 Checking package: main
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/cmd/agent-runner/main.go
+[gosec] 2026/03/28 12:12:42 Checking package: main
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/cmd/pty-poc/main.go
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/cmd/pty-poc/terminal.go
+[gosec] 2026/03/28 12:12:42 Checking package: loader
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/loader/loader.go
+[gosec] 2026/03/28 12:12:42 Checking package: exec
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/exec/agent.go
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/exec/dispatch.go
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/exec/interfaces.go
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/exec/loop.go
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/exec/shell.go
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/exec/subworkflow.go
+[gosec] 2026/03/28 12:12:42 Checking package: session
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/session/session.go
+[gosec] 2026/03/28 12:12:42 Checking package: model
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/model/context.go
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/model/state.go
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/model/step.go
+[gosec] 2026/03/28 12:12:42 Checking package: runner
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/runner/resume.go
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/runner/runner.go
+[2026-03-28T16:12:42.566Z] 
+Command failed: Command failed: gosec ./...
+[gosec] 2026/03/28 12:12:42 Including rules: default
+[gosec] 2026/03/28 12:12:42 Excluding rules: default
+[gosec] 2026/03/28 12:12:42 Including analyzers: default
+[gosec] 2026/03/28 12:12:42 Excluding analyzers: default
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/validate
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/engine
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/cmd/agent-runner
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/audit
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/stateio
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/cmd/pty-poc
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/exec
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/textfmt
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/engine/openspec
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/flowctl
+[gosec] 2026/03/28 12:12:42 Checking package: flowctl
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/flowctl/flowctl.go
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/loader
+[gosec] 2026/03/28 12:12:42 Checking package: audit
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/audit/logger.go
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/audit/types.go
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/model
+[gosec] 2026/03/28 12:12:42 Checking package: validate
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/validate/workflow.go
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/runner
+[gosec] 2026/03/28 12:12:42 Checking package: engine
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/engine/engine.go
+[gosec] 2026/03/28 12:12:42 Import directory: /Users/paul/codagent/agent-runner/internal/session
+[gosec] 2026/03/28 12:12:42 Checking package: textfmt
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/textfmt/format.go
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/textfmt/interpolation.go
+[gosec] 2026/03/28 12:12:42 Checking package: openspec
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/engine/openspec/openspec.go
+[gosec] 2026/03/28 12:12:42 Checking package: stateio
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/stateio/stateio.go
+[gosec] 2026/03/28 12:12:42 Checking package: main
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/cmd/agent-runner/main.go
+[gosec] 2026/03/28 12:12:42 Checking package: main
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/cmd/pty-poc/main.go
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/cmd/pty-poc/terminal.go
+[gosec] 2026/03/28 12:12:42 Checking package: loader
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/loader/loader.go
+[gosec] 2026/03/28 12:12:42 Checking package: exec
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/exec/agent.go
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/exec/dispatch.go
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/exec/interfaces.go
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/exec/loop.go
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/exec/shell.go
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/exec/subworkflow.go
+[gosec] 2026/03/28 12:12:42 Checking package: session
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/session/session.go
+[gosec] 2026/03/28 12:12:42 Checking package: model
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/model/context.go
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/model/state.go
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/model/step.go
+[gosec] 2026/03/28 12:12:42 Checking package: runner
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/runner/resume.go
+[gosec] 2026/03/28 12:12:42 Checking file: /Users/paul/codagent/agent-runner/internal/runner/runner.go
+[2026-03-28T16:12:42.566Z] Result: fail - Exited with code 1

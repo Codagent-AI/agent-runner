@@ -23,3 +23,8 @@ type Event struct {
 	Type      EventType      `json:"type"`
 	Data      map[string]any `json:"data"`
 }
+
+// EventLogger is the contract for emitting audit events.
+type EventLogger interface {
+	Emit(event Event)
+}

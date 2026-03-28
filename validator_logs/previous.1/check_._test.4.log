@@ -1,0 +1,19 @@
+[2026-03-28T16:12:41.299Z] [2026-03-28T16:12:41.299Z] Starting check: test
+[2026-03-28T16:12:41.299Z] Executing command: go test ./...
+[2026-03-28T16:12:41.299Z] Working directory: .
+
+[2026-03-28T16:12:41.548Z] ?   	github.com/codagent/agent-runner/cmd/agent-runner	[no test files]
+?   	github.com/codagent/agent-runner/cmd/pty-poc	[no test files]
+ok  	github.com/codagent/agent-runner/internal/audit	(cached)
+ok  	github.com/codagent/agent-runner/internal/engine	(cached)
+ok  	github.com/codagent/agent-runner/internal/engine/openspec	(cached)
+ok  	github.com/codagent/agent-runner/internal/exec	(cached)
+ok  	github.com/codagent/agent-runner/internal/flowctl	(cached)
+ok  	github.com/codagent/agent-runner/internal/loader	(cached)
+ok  	github.com/codagent/agent-runner/internal/model	(cached)
+ok  	github.com/codagent/agent-runner/internal/runner	(cached)
+ok  	github.com/codagent/agent-runner/internal/session	(cached)
+ok  	github.com/codagent/agent-runner/internal/stateio	(cached)
+ok  	github.com/codagent/agent-runner/internal/textfmt	(cached)
+ok  	github.com/codagent/agent-runner/internal/validate	(cached)
+[2026-03-28T16:12:41.548Z] Result: pass - Command exited with code 0

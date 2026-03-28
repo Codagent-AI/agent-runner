@@ -3,10 +3,13 @@ package model
 import (
 	"testing"
 
+	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/google/go-cmp/cmp"
 )
 
 type stubAuditLogger struct{}
+
+func (s *stubAuditLogger) Emit(event audit.Event) {} // implements audit.EventLogger
 
 func TestCreateRootContext(t *testing.T) {
 	t.Run("creates a context with provided params", func(t *testing.T) {

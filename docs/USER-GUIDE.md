@@ -4,7 +4,7 @@
 
 ### Prerequisites
 
-- [Bun](https://bun.sh) v1.0+
+- [Go](https://golang.org) 1.23+
 - [Claude Code](https://claude.com/claude-code) CLI installed and authenticated
 - (Optional) [OpenSpec](https://github.com/pacaplan/openspec) CLI, if using the openspec engine
 
@@ -12,12 +12,11 @@
 
 ```bash
 git clone <repo-url>
-cd baton
-bun install
-bun run build    # compiles to bin/agent-runner
+cd agent-runner
+go build ./cmd/agent-runner    # compiles to agent-runner binary
 ```
 
-Add `bin/` to your PATH, or run directly with `bun src/index.ts`.
+Add the binary to your PATH, or run it directly from the current directory: `./agent-runner`.
 
 ## Writing workflows
 

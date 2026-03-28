@@ -1,0 +1,11 @@
+[2026-03-28T16:08:11.211Z] [2026-03-28T16:08:11.211Z] Starting check: security-code
+[2026-03-28T16:08:11.211Z] Executing command: gosec ./...
+[2026-03-28T16:08:11.211Z] Working directory: .
+
+[2026-03-28T16:08:11.215Z] 
+STDERR:
+/bin/sh: gosec: command not found
+[2026-03-28T16:08:11.216Z] 
+Command failed: Command failed: gosec ./...
+/bin/sh: gosec: command not found
+[2026-03-28T16:08:11.216Z] Result: fail - Exited with code 127

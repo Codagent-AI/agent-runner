@@ -1,0 +1,11 @@
+[2026-03-28T16:08:11.211Z] [2026-03-28T16:08:11.211Z] Starting check: lint
+[2026-03-28T16:08:11.211Z] Executing command: golangci-lint run ./...
+[2026-03-28T16:08:11.211Z] Working directory: .
+
+[2026-03-28T16:08:11.216Z] 
+STDERR:
+/bin/sh: golangci-lint: command not found
+[2026-03-28T16:08:11.216Z] 
+Command failed: Command failed: golangci-lint run ./...
+/bin/sh: golangci-lint: command not found
+[2026-03-28T16:08:11.216Z] Result: fail - Exited with code 127

@@ -113,11 +113,8 @@ func nestingToFmt(ctx *model.ExecutionContext) []textfmt.NestingInfo {
 }
 
 func emitAudit(ctx *model.ExecutionContext, event audit.Event) {
-	if ctx.AuditLogger == nil {
-		return
-	}
-	if al, ok := ctx.AuditLogger.(*audit.Logger); ok {
-		al.Emit(event)
+	if ctx.AuditLogger != nil {
+		ctx.AuditLogger.Emit(event)
 	}
 }
 
@@ -150,7 +147,7 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		defaultStateDir, _ = os.Getwd()
 	}
 
-	var engineRef model.Engine
+	var engineRef interface{}
 	if opts.Engine != nil {
 		engineRef = opts.Engine
 	}

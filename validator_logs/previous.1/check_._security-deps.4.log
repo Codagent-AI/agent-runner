@@ -1,0 +1,6 @@
+[2026-03-28T16:12:41.298Z] [2026-03-28T16:12:41.298Z] Starting check: security-deps
+[2026-03-28T16:12:41.299Z] Executing command: govulncheck ./...
+[2026-03-28T16:12:41.299Z] Working directory: .
+
+[2026-03-28T16:12:43.411Z] No vulnerabilities found.
+[2026-03-28T16:12:43.412Z] Result: pass - Command exited with code 0

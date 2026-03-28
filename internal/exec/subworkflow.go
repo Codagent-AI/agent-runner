@@ -59,7 +59,7 @@ func ExecuteSubWorkflowStep(
 		return OutcomeFailed, err
 	}
 
-	var childEngine model.Engine
+	var childEngine interface{}
 	if workflow.Engine != nil {
 		engConfig := map[string]any{"type": workflow.Engine.Type}
 		for k, v := range workflow.Engine.Extras {

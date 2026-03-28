@@ -1,0 +1,6 @@
+[2026-03-28T16:12:41.298Z] [2026-03-28T16:12:41.298Z] Starting check: lint
+[2026-03-28T16:12:41.299Z] Executing command: golangci-lint run ./...
+[2026-03-28T16:12:41.299Z] Working directory: .
+
+[2026-03-28T16:12:42.006Z] 0 issues.
+[2026-03-28T16:12:42.006Z] Result: pass - Command exited with code 0

@@ -35,17 +35,9 @@ func contextSnapshot(ctx *model.ExecutionContext) map[string]any {
 	}
 }
 
-// AuditEmitter is the interface that audit loggers must implement for exec to emit events.
-type AuditEmitter interface {
-	Emit(event audit.Event)
-}
-
 func emitAudit(ctx *model.ExecutionContext, event audit.Event) {
-	if ctx.AuditLogger == nil {
-		return
-	}
-	if al, ok := ctx.AuditLogger.(AuditEmitter); ok {
-		al.Emit(event)
+	if ctx.AuditLogger != nil {
+		ctx.AuditLogger.Emit(event)
 	}
 }
 

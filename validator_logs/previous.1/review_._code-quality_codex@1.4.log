@@ -1,0 +1,304 @@
+[2026-03-28T16:12:41.812Z] Entry point: .
+[2026-03-28T16:12:41.812Z] Starting review: code-quality
+[2026-03-28T16:12:41.812Z] Dispatching 1 review(s) via round-robin: codex@1
+[2026-03-28T16:12:41.812Z] Base branch: 2274a27
+[2026-03-28T16:12:41.812Z] [diff-stats] files=16 lines=280 chars=11863 est_tokens=2966
+[2026-03-28T16:12:41.812Z] [START] review:.:code-quality (codex@1)
+[2026-03-28T16:12:41.812Z] [input-stats] prompt_chars=7757 diff_chars=11863 total_chars=19620 prompt_est_tokens=1940 diff_est_tokens=2966 total_est_tokens=4906
+[2026-03-28T16:12:41.812Z] [diff]
+diff --git a/cmd/agent-runner/main.go b/cmd/agent-runner/main.go
+index 2c0a035..59bc068 100644
+--- a/cmd/agent-runner/main.go
++++ b/cmd/agent-runner/main.go
+@@ -164,6 +164,7 @@ func main() {
+ 	rootCmd.AddCommand(runCmd, validateCmd, resumeCmd)
+ 
+ 	if err := rootCmd.Execute(); err != nil {
++		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+ 		os.Exit(1)
+ 	}
+ }
+diff --git a/internal/exec/agent.go b/internal/exec/agent.go
+index 547f914..cfab68e 100644
+--- a/internal/exec/agent.go
++++ b/internal/exec/agent.go
+@@ -57,7 +57,7 @@ func ExecuteAgentStep(
+ 		},
+ 	})
+ 
+-	args := buildAgentArgs(step, prompt, sessionID)
++	args := buildAgentArgs(step, prompt, sessionID, ctx.AgentCmd)
+ 
+ 	log.Printf("  mode: %s\n", mode)
+ 	if mode != model.ModeHeadless {
+@@ -118,8 +118,11 @@ func buildAgentPrompt(step *model.Step, ctx *model.ExecutionContext) (prompt, en
+ 	return prompt, enrichment, nil
+ }
+ 
+-func buildAgentArgs(step *model.Step, prompt, sessionID string) []string {
+-	args := []string{"claude"}
++func buildAgentArgs(step *model.Step, prompt, sessionID, agentCmd string) []string {
++	if agentCmd == "" {
++		agentCmd = "claude"
++	}
++	args := []string{agentCmd}
+ 	if sessionID != "" {
+ 		args = append(args, "--resume", sessionID)
+ 	}
+diff --git a/internal/exec/agent_test.go b/internal/exec/agent_test.go
+index f7f945f..6ce5ada 100644
+--- a/internal/exec/agent_test.go
++++ b/internal/exec/agent_test.go
+@@ -142,6 +142,20 @@ func TestExecuteAgentStep(t *testing.T) {
+ 		}
+ 	})
+ 
++	t.Run("uses configured agent command", func(t *testing.T) {
++		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
++		ctx := makeCtx()
++		ctx.AgentCmd = "claude-code"
++		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew}
++		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
++		if len(runner.calls) == 0 {
++			t.Fatal("expected command to be called")
++		}
++		if runner.calls[0][0] != "claude-code" {
++			t.Fatalf("expected 'claude-code' as agent command, got %q", runner.calls[0][0])
++		}
++	})
++
+ 	t.Run("no -p flag for interactive mode", func(t *testing.T) {
+ 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+ 		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew}
+diff --git a/internal/model/context.go b/internal/model/context.go
+index 3ff8d2b..3e5da88 100644
+--- a/internal/model/context.go
++++ b/internal/model/context.go
+@@ -34,6 +34,9 @@ type ExecutionContext struct {
+ 	// (Go maps are unordered, so we can't rely on insertion order).
+ 	LastSessionStepID string
+ 
++	// AgentCmd is the agent binary to invoke (e.g. "claude", "claude-code").
++	AgentCmd string
++
+ 	NestingPath   []NestingSegment
+ 	ParentContext *ExecutionContext
+ 
+diff --git a/internal/model/state.go b/internal/model/state.go
+index be1e7b2..0bd04ae 100644
+--- a/internal/model/state.go
++++ b/internal/model/state.go
+@@ -7,6 +7,7 @@ type NestedStepState struct {
+ 	StepID            string            `json:"stepId"`
+ 	SessionIDs        map[string]string `json:"sessionIds"`
+ 	CapturedVariables map[string]string `json:"capturedVariables"`
++	LastSessionStepID string            `json:"lastSessionStepId,omitempty"`
+ 	Child             *NestedStepState  `json:"child"`
+ }
+ 
+diff --git a/internal/runner/resume.go b/internal/runner/resume.go
+index e9bf9db..f5df727 100644
+--- a/internal/runner/resume.go
++++ b/internal/runner/resume.go
+@@ -37,6 +37,7 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
+ 	var fromStep string
+ 	var sessionIDs map[string]string
+ 	var capturedVars map[string]string
++	var lastSessionStepID string
+ 	var childState *model.SubWorkflowChildState
+ 
+ 	if state.CurrentStep.Nested != nil {
+@@ -44,6 +45,7 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
+ 		fromStep = nested.StepID
+ 		sessionIDs = nested.SessionIDs
+ 		capturedVars = nested.CapturedVariables
++		lastSessionStepID = nested.LastSessionStepID
+ 		if nested.Child != nil {
+ 			childState = nestedToChildState(nested.Child)
+ 		}
+@@ -83,6 +85,7 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
+ 		Engine:            eng,
+ 		SessionIDs:        sessionIDs,
+ 		CapturedVariables: capturedVars,
++		LastSessionStepID: lastSessionStepID,
+ 		ChildState:        childState,
+ 		ProcessRunner:     opts.ProcessRunner,
+ 		GlobExpander:      opts.GlobExpander,
+diff --git a/internal/runner/runner.go b/internal/runner/runner.go
+index 7165020..3e846d7 100644
+--- a/internal/runner/runner.go
++++ b/internal/runner/runner.go
+@@ -32,6 +32,7 @@ type Options struct {
+ 	Engine            engine.Engine
+ 	SessionIDs        map[string]string
+ 	CapturedVariables map[string]string
++	LastSessionStepID string
+ 	ChildState        *model.SubWorkflowChildState
+ 	ProcessRunner     exec.ProcessRunner
+ 	GlobExpander      exec.GlobExpander
+@@ -167,9 +168,13 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
+ 		CapturedVariables: opts.CapturedVariables,
+ 		AuditLogger:       auditLogger,
+ 	})
++	ctx.AgentCmd = workflow.Agent
+ 	if opts.ChildState != nil {
+ 		ctx.ResumeChildState = opts.ChildState
+ 	}
++	if opts.LastSessionStepID != "" {
++		ctx.LastSessionStepID = opts.LastSessionStepID
++	}
+ 
+ 	log := opts.Log
+ 	if log == nil {
+@@ -363,6 +368,7 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
+ 		StepID:            step.ID,
+ 		SessionIDs:        copyMap(ctx.SessionIDs),
+ 		CapturedVariables: copyMap(ctx.CapturedVariables),
++		LastSessionStepID: ctx.LastSessionStepID,
+ 		Child:             child,
+ 	}
+ 
+
+diff --git a/validator_logs/.execution_state b/validator_logs/.execution_state
+new file mode 100644
+index 0000000..1a64844
+--- /dev/null
++++ b/validator_logs/.execution_state
+@@ -0,0 +1,6 @@
++{
++  "last_run_completed_at": "2026-03-28T16:08:40.622Z",
++  "branch": "main",
++  "commit": "48793c772d268406f200a6c75423a973cca995d2",
++  "working_tree_ref": "5091d382e955ece23deb2e75e34ea050239bfdba"
++}
+\ No newline at end of file
+
+diff --git a/validator_logs/check_._build.4.log b/validator_logs/check_._build.4.log
+new file mode 100644
+index 0000000..7a4f247
+--- /dev/null
++++ b/validator_logs/check_._build.4.log
+@@ -0,0 +1,4 @@
++[2026-03-28T16:12:41.298Z] [2026-03-28T16:12:41.298Z] Starting check: build
++[2026-03-28T16:12:41.299Z] Executing command: go build ./...
++[2026-03-28T16:12:41.299Z] Working directory: .
++
+
+diff --git a/validator_logs/check_._lint.4.log b/validator_logs/check_._lint.4.log
+new file mode 100644
+index 0000000..f002125
+--- /dev/null
++++ b/validator_logs/check_._lint.4.log
+@@ -0,0 +1,4 @@
++[2026-03-28T16:12:41.298Z] [2026-03-28T16:12:41.298Z] Starting check: lint
++[2026-03-28T16:12:41.299Z] Executing command: golangci-lint run ./...
++[2026-03-28T16:12:41.299Z] Working directory: .
++
+
+diff --git a/validator_logs/check_._security-code.4.log b/validator_logs/check_._security-code.4.log
+new file mode 100644
+index 0000000..5692ade
+--- /dev/null
++++ b/validator_logs/check_._security-code.4.log
+@@ -0,0 +1,4 @@
++[2026-03-28T16:12:41.298Z] [2026-03-28T16:12:41.298Z] Starting check: security-code
++[2026-03-28T16:12:41.299Z] Executing command: gosec ./...
++[2026-03-28T16:12:41.299Z] Working directory: .
++
+
+diff --git a/validator_logs/check_._security-deps.4.log b/validator_logs/check_._security-deps.4.log
+new file mode 100644
+index 0000000..2bc5602
+--- /dev/null
++++ b/validator_logs/check_._security-deps.4.log
+@@ -0,0 +1,4 @@
++[2026-03-28T16:12:41.298Z] [2026-03-28T16:12:41.298Z] Starting check: security-deps
++[2026-03-28T16:12:41.299Z] Executing command: govulncheck ./...
++[2026-03-28T16:12:41.299Z] Working directory: .
++
+
+diff --git a/validator_logs/check_._test.4.log b/validator_logs/check_._test.4.log
+new file mode 100644
+index 0000000..3927952
+--- /dev/null
++++ b/validator_logs/check_._test.4.log
+@@ -0,0 +1,4 @@
++[2026-03-28T16:12:41.299Z] [2026-03-28T16:12:41.299Z] Starting check: test
++[2026-03-28T16:12:41.299Z] Executing command: go test ./...
++[2026-03-28T16:12:41.299Z] Working directory: .
++
+
+diff --git a/validator_logs/console.4.log b/validator_logs/console.4.log
+new file mode 100644
+index 0000000..e85941b
+--- /dev/null
++++ b/validator_logs/console.4.log
+@@ -0,0 +1,7 @@
++[WARNING][validator.run] Found 4 gate(s) with 6 previous violation(s)
++[START] check:.:build
++[START] check:.:lint
++[START] check:.:security-code
++[START] check:.:security-deps
++[START] review:.:code-quality
++[START] check:.:test
+
+diff --git a/var/folders/xc/y3w73rks00798zs3zx3_rn140000gn/T/validator-xmNDCW/0-.validator-run.lock b/validator_logs/.validator-run.lock
+index a5ff65e..3e25397 100644
+--- a/var/folders/xc/y3w73rks00798zs3zx3_rn140000gn/T/validator-xmNDCW/0-.validator-run.lock
++++ b/validator_logs/.validator-run.lock
+@@ -1 +1 @@
+-42912
+\ No newline at end of file
++46071
+\ No newline at end of file
+diff --git a/var/folders/xc/y3w73rks00798zs3zx3_rn140000gn/T/validator-xmNDCW/9-review_._code-quality_codex@1.3.json b/validator_logs/review_._code-quality_codex@1.3.json
+index 8925a7b..e3c4422 100644
+--- a/var/folders/xc/y3w73rks00798zs3zx3_rn140000gn/T/validator-xmNDCW/9-review_._code-quality_codex@1.3.json
++++ b/validator_logs/review_._code-quality_codex@1.3.json
+@@ -10,7 +10,8 @@
+       "issue": "Agent execution is hard-coded to launch `claude`, but workflows default `workflow.agent` to `claude-code` and the selected agent is never consulted. On machines that only have `claude-code` installed, every agent step will fail at runtime even though the workflow validated successfully.",
+       "fix": "Pass the configured workflow/step agent executable through execution options/context and build the command from that value instead of the string literal. For example, change `buildAgentArgs` to accept an `agentCmd string` and start with `args := []string{agentCmd}`; initialize it from `workflow.Agent` (defaulting once during load) and thread it into `ExecuteAgentStep`.",
+       "priority": "high",
+-      "status": "new"
++      "status": "fixed",
++      "result": "buildAgentArgs now accepts agentCmd parameter from ExecutionContext.AgentCmd, which is set from Workflow.Agent during initRunState"
+     },
+     {
+       "file": "internal/runner/resume.go",
+@@ -18,7 +19,8 @@
+       "issue": "Resume restores `SessionIDs` from state, but it never restores the corresponding `LastSessionStepID`. `ResolveResumeSession` and `ResolveInheritSession` depend on that field, so any resumed workflow that uses `session: resume` or `session: inherit` will silently lose its prior conversation and either fail validation or start a fresh session unexpectedly.",
+       "fix": "Persist and restore the most recent session key together with `SessionIDs`. A concrete fix is to add `LastSessionStepID` to the serialized state, plumb it through `Options`/`RootContextOptions`, set it when reading state in `ResumeWorkflow`, and initialize `ExecutionContext.LastSessionStepID` from that restored value.",
+       "priority": "high",
+-      "status": "new"
++      "status": "fixed",
++      "result": "Added LastSessionStepID to NestedStepState, Options, and restore flow in ResumeWorkflow"
+     },
+     {
+       "file": "cmd/agent-runner/main.go",
+@@ -26,7 +28,8 @@
+       "issue": "Top-level CLI errors are now dropped on the floor. `rootCmd.Execute()` failures exit with status 1 without printing the error, so invalid workflow files, validation failures, and runtime errors become silent failures with no user-visible explanation.",
+       "fix": "Print the returned error before exiting, e.g. `if err := rootCmd.Execute(); err != nil { fmt.Fprintf(os.Stderr, \"agent-runner: %v\\n\", err); os.Exit(1) }`.",
+       "priority": "medium",
+-      "status": "new"
++      "status": "fixed",
++      "result": "Added fmt.Fprintf(os.Stderr) before os.Exit(1) to print the error"
+     }
+   ]
+ }
+\ No newline at end of file
+[2026-03-28T16:12:41.964Z] {"type":"thread.started","thread_id":"019d3538-185c-77d2-96dc-a73d831c639c"}
+[2026-03-28T16:12:41.966Z] {"type":"turn.started"}
+[2026-03-28T16:12:52.413Z] {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"{\"status\":\"pass\",\"message\":\"No problems found\"}"}}
+[2026-03-28T16:12:52.414Z] {"type":"turn.completed","usage":{"input_tokens":16078,"cached_input_tokens":2432,"output_tokens":290}}
+[2026-03-28T16:12:52.726Z] 
+[codex-telemetry] in=16078 cache=2432 out=290 api_requests=1
+[2026-03-28T16:12:52.727Z] 
+--- Review Output (codex) ---
+{"status":"pass","message":"No problems found"}
+[2026-03-28T16:12:52.728Z] 
+--- Parsed Result (codex) ---
+[2026-03-28T16:12:52.728Z] Status: PASS
+[2026-03-28T16:12:52.728Z] Message: No problems found
+[2026-03-28T16:12:52.728Z] ---------------------
+[2026-03-28T16:12:52.728Z] Review result (codex@1): pass - No problems found
+[2026-03-28T16:12:52.729Z] Result: pass - Passed

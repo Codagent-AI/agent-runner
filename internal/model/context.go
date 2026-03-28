@@ -1,6 +1,10 @@
 // Package model defines the core types for workflow execution.
 package model
 
+import (
+	"github.com/codagent/agent-runner/internal/audit"
+)
+
 // NestingSegment records one level of nesting in the execution path.
 type NestingSegment struct {
 	StepID          string            `json:"stepId"`
@@ -16,12 +20,6 @@ type SubWorkflowChildState struct {
 	CapturedVariables map[string]string      `json:"capturedVariables"`
 	Child             *SubWorkflowChildState `json:"child,omitempty"`
 }
-
-// AuditEmitter is satisfied by the audit logger (avoids import cycle with audit package).
-type AuditEmitter interface{}
-
-// Engine is satisfied by an engine implementation (avoids import cycle with engine package).
-type Engine interface{}
 
 // ExecutionContext carries state through workflow execution.
 type ExecutionContext struct {
@@ -41,8 +39,14 @@ type ExecutionContext struct {
 	ParentContext *ExecutionContext
 
 	WorkflowFile string
-	EngineRef    Engine
-	AuditLogger  AuditEmitter
+
+	// EngineRef holds the workflow engine implementation (internal/engine.Engine).
+	// Stored as interface{} to avoid circular imports.
+	// Callers should type-assert to engine.Engine before use.
+	EngineRef interface{}
+
+	// AuditLogger writes structured audit events (audit.EventLogger).
+	AuditLogger audit.EventLogger
 
 	LastSubWorkflowChild *SubWorkflowChildState
 	ResumeChildState     *SubWorkflowChildState
@@ -53,10 +57,10 @@ type ExecutionContext struct {
 type RootContextOptions struct {
 	Params            map[string]string
 	WorkflowFile      string
-	EngineRef         Engine
+	EngineRef         interface{} // internal/engine.Engine
 	SessionIDs        map[string]string
 	CapturedVariables map[string]string
-	AuditLogger       AuditEmitter
+	AuditLogger       audit.EventLogger
 }
 
 // NewRootContext creates a top-level execution context.
@@ -126,6 +130,8 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		SessionIDs:        sessionIDs,
 		CapturedVariables: make(map[string]string),
 		LastStepOutcome:   nil,
+		LastSessionStepID: parent.LastSessionStepID,
+		AgentCmd:          parent.AgentCmd,
 		NestingPath:       nestingPath,
 		ParentContext:     parent,
 		WorkflowFile:      parent.WorkflowFile,
@@ -140,8 +146,8 @@ type SubWorkflowContextOptions struct {
 	Params          map[string]string
 	WorkflowFile    string
 	SubWorkflowName string
-	EngineRef       Engine
-	EngineSet       bool // true if EngineRef was explicitly provided (even if nil)
+	EngineRef       interface{} // internal/engine.Engine
+	EngineSet       bool        // true if EngineRef was explicitly provided (even if nil)
 }
 
 // NewSubWorkflowContext creates a child context for a sub-workflow.
@@ -175,6 +181,8 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		SessionIDs:        sessionIDs,
 		CapturedVariables: make(map[string]string),
 		LastStepOutcome:   nil,
+		LastSessionStepID: parent.LastSessionStepID,
+		AgentCmd:          parent.AgentCmd,
 		NestingPath:       nestingPath,
 		ParentContext:     parent,
 		WorkflowFile:      opts.WorkflowFile,
