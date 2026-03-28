@@ -2,7 +2,7 @@
 
 ## Goal
 
-Add a `--version` / `-v` flag to the agent-runner CLI that prints the binary version and exits cleanly, using cobra's built-in version support with ldflags injection.
+Add a `--version` / `-v` flag to the agent-runner CLI that prints the binary version and exits cleanly.
 
 ## Background
 
