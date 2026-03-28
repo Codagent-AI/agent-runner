@@ -8,8 +8,7 @@ import (
 
 type stubAuditLogger struct{ events []any }
 
-func (s *stubAuditLogger) Emit(e any)  { s.events = append(s.events, e) }
-func (s *stubAuditLogger) Close()      {}
+func (s *stubAuditLogger) String() string { return "stub" }
 
 func TestCreateRootContext(t *testing.T) {
 	t.Run("creates a context with provided params", func(t *testing.T) {

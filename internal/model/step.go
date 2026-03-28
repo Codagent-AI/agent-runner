@@ -183,13 +183,16 @@ func (s *Step) Validate() error {
 // Param defines a workflow parameter.
 type Param struct {
 	Name     string `yaml:"name" json:"name"`
-	Required bool   `yaml:"required" json:"required"`
+	Required *bool  `yaml:"required,omitempty" json:"required,omitempty"`
 	Default  string `yaml:"default,omitempty" json:"default,omitempty"`
 }
 
-// ApplyParamDefaults sets default values for Param fields.
-func (p *Param) ApplyParamDefaults() {
-	// Required defaults to true — handled by custom unmarshaling or caller.
+// IsRequired returns whether this param is required (defaults to true).
+func (p *Param) IsRequired() bool {
+	if p.Required == nil {
+		return true
+	}
+	return *p.Required
 }
 
 // EngineConfig defines an engine configuration block.

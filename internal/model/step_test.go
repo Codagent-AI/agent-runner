@@ -303,15 +303,16 @@ func TestStepSchemaExtensions(t *testing.T) {
 
 func TestParamSchema(t *testing.T) {
 	t.Run("parses a required param", func(t *testing.T) {
-		p := Param{Name: "file", Required: true}
-		if p.Name != "file" || !p.Required {
+		p := Param{Name: "file"}
+		if p.Name != "file" || !p.IsRequired() {
 			t.Fatal("param not parsed correctly")
 		}
 	})
 
 	t.Run("parses an optional param with default", func(t *testing.T) {
-		p := Param{Name: "env", Required: false, Default: "dev"}
-		if p.Required || p.Default != "dev" {
+		f := false
+		p := Param{Name: "env", Required: &f, Default: "dev"}
+		if p.IsRequired() || p.Default != "dev" {
 			t.Fatal("param not parsed correctly")
 		}
 	})
@@ -322,7 +323,7 @@ func TestWorkflowSchema(t *testing.T) {
 		w := Workflow{
 			Name:        "test",
 			Description: "A test workflow",
-			Params:      []Param{{Name: "file", Required: true}},
+			Params:      []Param{{Name: "file"}},
 			Steps: []Step{
 				{ID: "build", Mode: ModeShell, Command: "echo hi", Session: SessionNew},
 			},

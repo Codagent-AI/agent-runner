@@ -17,10 +17,7 @@ type SubWorkflowChildState struct {
 }
 
 // AuditEmitter is satisfied by the audit logger (avoids import cycle with audit package).
-type AuditEmitter interface {
-	Emit(event any)
-	Close()
-}
+type AuditEmitter interface{}
 
 // Engine is satisfied by an engine implementation (avoids import cycle with engine package).
 type Engine interface{}
