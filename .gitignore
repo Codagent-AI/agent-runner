@@ -2,3 +2,4 @@ bin/
 *.out
 coverage.html
 .claude/worktrees/
+validator_logs/

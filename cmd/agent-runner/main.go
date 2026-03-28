@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	_ "github.com/codagent/agent-runner/internal/engine/openspec"
 	iexec "github.com/codagent/agent-runner/internal/exec"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
@@ -94,6 +95,10 @@ func (l *realLogger) Printf(format string, args ...any) { fmt.Printf(format, arg
 func (l *realLogger) Errorf(format string, args ...any) { fmt.Fprintf(os.Stderr, format, args...) }
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	rootCmd := &cobra.Command{
 		Use:   "agent-runner",
 		Short: "CLI workflow orchestrator for AI agents",
@@ -140,7 +145,9 @@ Positional args map to params in order; use key=value for explicit mapping.
 				return err
 			}
 			if result != runner.ResultSuccess {
-				os.Exit(1)
+				cmd.SilenceUsage = true
+				cmd.SilenceErrors = true
+				return fmt.Errorf("workflow failed")
 			}
 			return nil
 		},
@@ -174,7 +181,9 @@ Positional args map to params in order; use key=value for explicit mapping.
 				return err
 			}
 			if result != runner.ResultSuccess {
-				os.Exit(1)
+				cmd.SilenceUsage = true
+				cmd.SilenceErrors = true
+				return fmt.Errorf("workflow failed")
 			}
 			return nil
 		},
@@ -184,8 +193,9 @@ Positional args map to params in order; use key=value for explicit mapping.
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 // parseParams separates positional args from key=value pairs.

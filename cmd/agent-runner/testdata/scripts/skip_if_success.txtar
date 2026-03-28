@@ -1,0 +1,16 @@
+# Test that skip_if: previous_success skips a step when the prior step succeeded.
+exec agent-runner run workflow.yaml
+stdout 'workflow complete'
+stdout 'second \[skipped\]'
+! stdout 'skip me'
+
+-- workflow.yaml --
+name: e2e-skip
+steps:
+  - id: first
+    mode: shell
+    command: echo ok
+  - id: second
+    mode: shell
+    command: echo skip me
+    skip_if: previous_success

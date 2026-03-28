@@ -1,0 +1,14 @@
+# Test that continue_on_failure allows the workflow to proceed past a failed step.
+exec agent-runner run workflow.yaml
+stdout 'step "next-step" complete'
+
+-- workflow.yaml --
+name: e2e-continue
+steps:
+  - id: failing-step
+    mode: shell
+    command: "false"
+    continue_on_failure: true
+  - id: next-step
+    mode: shell
+    command: echo ok

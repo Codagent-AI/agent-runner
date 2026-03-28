@@ -1,0 +1,13 @@
+# Test that a failed workflow preserves a state file for resumption.
+! exec agent-runner run workflow.yaml
+exists agent-runner-state.json
+
+-- workflow.yaml --
+name: e2e-failure
+steps:
+  - id: first
+    mode: shell
+    command: echo ok
+  - id: second
+    mode: shell
+    command: "false"

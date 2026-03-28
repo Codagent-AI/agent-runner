@@ -36,7 +36,6 @@ entry_points:
 # -------------------------------------------------------------------
 
 # Git ref for detecting local changes via git diff (default: origin/main)
-git_ref: "2274a27"
 
 # Directory for per-job logs (default: gauntlet_logs)
 # log_dir: gauntlet_logs

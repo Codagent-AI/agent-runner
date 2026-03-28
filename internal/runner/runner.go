@@ -152,9 +152,10 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		engineRef = opts.Engine
 	}
 
+	var auditEventLogger audit.EventLogger
 	auditLogger, err := audit.CreateLogger(workflow.Name, "")
-	if err != nil {
-		auditLogger = nil
+	if err == nil {
+		auditEventLogger = auditLogger
 	}
 
 	ctx := model.NewRootContext(model.RootContextOptions{
@@ -163,7 +164,7 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		EngineRef:         engineRef,
 		SessionIDs:        opts.SessionIDs,
 		CapturedVariables: opts.CapturedVariables,
-		AuditLogger:       auditLogger,
+		AuditLogger:       auditEventLogger,
 	})
 	ctx.AgentCmd = workflow.Agent
 	if opts.ChildState != nil {
@@ -239,6 +240,7 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 		rs.ctx.FlushState = nil
 
 		if stepErr != nil {
+			rs.log.Printf("\nagent-runner: step %q error: %v\n", step.ID, stepErr)
 			return ResultFailed
 		}
 
