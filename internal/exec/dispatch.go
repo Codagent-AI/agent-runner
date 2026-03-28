@@ -39,6 +39,11 @@ func DispatchStep(
 	return OutcomeFailed, nil
 }
 
+// MapLoopOutcomeForRunner maps loop outcomes for the runner's step dispatch.
+func MapLoopOutcomeForRunner(outcome StepOutcome) StepOutcome {
+	return mapLoopOutcome(outcome)
+}
+
 func mapLoopOutcome(outcome StepOutcome) StepOutcome {
 	if outcome == OutcomeSuccess {
 		return OutcomeSuccess
