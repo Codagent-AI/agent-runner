@@ -238,9 +238,10 @@ func matchParams(workflow *model.Workflow, positional []string, keyed map[string
 		result[key] = val
 	}
 
-	// Check for required parameters.
+	// Check for required parameters (default to required if not specified).
 	for _, p := range workflow.Params {
-		if p.Required != nil && *p.Required {
+		required := p.Required == nil || *p.Required
+		if required {
 			if _, ok := result[p.Name]; !ok {
 				return nil, fmt.Errorf("missing required parameter: %q", p.Name)
 			}
