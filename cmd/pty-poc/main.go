@@ -51,6 +51,15 @@ func restoreTerminalModes() {
 	fmt.Fprint(os.Stdout, "\x1b[?25h")
 }
 
+func ensureTermEnv(env []string) []string {
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "TERM=") {
+			return env
+		}
+	}
+	return append(env, "TERM="+defaultTerm)
+}
+
 func resetDebugLog() {
 	var err error
 	logFile, err = os.Create(debugLog)
@@ -158,6 +167,32 @@ func requestGracefulExitFromCodex() {
 	})
 }
 
+func requestContinueExitFromCodex() {
+	mu.Lock()
+	ptmx := activePTY
+	mu.Unlock()
+	if ptmx == nil {
+		return
+	}
+
+	logDebug("trying injected /quit for continue flow")
+
+	// First try an in-band quit command while preserving Baton-owned continue semantics.
+	ptmx.Write([]byte("\x15/quit\r")) // #nosec G104 -- best-effort PTY write
+
+	// If Codex does not exit from /quit, fall back to the known-good graceful sequence.
+	time.AfterFunc(400*time.Millisecond, func() {
+		mu.Lock()
+		p := activePTY
+		stillContinuing := pendingContinue
+		mu.Unlock()
+		if p != nil && stillContinuing {
+			logDebug("injected /quit did not exit codex, falling back to graceful exit sequence")
+			requestGracefulExitFromCodex()
+		}
+	})
+}
+
 func continueOutOfCodex() {
 	mu.Lock()
 	if activePTY == nil {
@@ -174,7 +209,25 @@ func continueOutOfCodex() {
 	mu.Unlock()
 
 	fmt.Fprint(os.Stdout, "\r\n[agent-runner] continue intercepted, asking Codex to exit...\r\n")
-	requestGracefulExitFromCodex()
+	requestContinueExitFromCodex()
+}
+
+func syncPTYSize() {
+	mu.Lock()
+	ptmx := activePTY
+	mu.Unlock()
+	if ptmx == nil {
+		return
+	}
+
+	size, err := pty.GetsizeFull(os.Stdin)
+	if err != nil {
+		logDebug(fmt.Sprintf("failed to read stdin size: %v", err))
+		return
+	}
+	if err := pty.Setsize(ptmx, size); err != nil {
+		logDebug(fmt.Sprintf("failed to resize pty: %v", err))
+	}
 }
 
 func startCodex() {
@@ -202,9 +255,16 @@ func startCodex() {
 	}
 
 	cmd := exec.Command(codexPath, "--no-alt-screen", prompt) // #nosec G204,G702 -- PTY POC launches codex with user-provided prompt
-	cmd.Env = os.Environ()
+	cmd.Env = ensureTermEnv(os.Environ())
 
-	ptmx, err := pty.Start(cmd)
+	size, sizeErr := pty.GetsizeFull(os.Stdin)
+	var ptmx *os.File
+	if sizeErr == nil {
+		ptmx, err = pty.StartWithSize(cmd, size)
+	} else {
+		logDebug(fmt.Sprintf("failed to read initial stdin size: %v", sizeErr))
+		ptmx, err = pty.Start(cmd)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stdout, "[agent-runner] failed to launch Codex: %v\r\n", err)
 		renderHome()
@@ -246,12 +306,18 @@ func cleanupAndExit(code int) {
 	shuttingDown = true
 	if activeCmd != nil {
 		activeCmd.Process.Signal(syscall.SIGTERM) // #nosec G104 -- best-effort signal on shutdown
-		activePTY = nil
-		activeCmd = nil
 	}
+	if activePTY != nil {
+		activePTY.Close() // #nosec G104 -- best-effort PTY cleanup on exit
+	}
+	activePTY = nil
+	activeCmd = nil
 	mu.Unlock()
 
 	restoreTerminalModes()
+	if originalTermState != nil {
+		restoreTerminal(os.Stdin.Fd(), originalTermState)
+	}
 
 	if logFile != nil {
 		logFile.Close() // #nosec G104 -- best-effort cleanup on exit
@@ -276,6 +342,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to set raw mode: %v\n", err)
 		os.Exit(1)
 	}
+	originalTermState = oldState
 	defer restoreTerminal(os.Stdin.Fd(), oldState)
 
 	// Handle signals.
@@ -287,6 +354,14 @@ func main() {
 			cleanupAndExit(130)
 		}
 		cleanupAndExit(143)
+	}()
+
+	resizeCh := make(chan os.Signal, 1)
+	signal.Notify(resizeCh, syscall.SIGWINCH)
+	go func() {
+		for range resizeCh {
+			syncPTYSize()
+		}
 	}()
 
 	renderHome()
