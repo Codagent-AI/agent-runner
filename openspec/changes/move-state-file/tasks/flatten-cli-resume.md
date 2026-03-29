@@ -22,11 +22,9 @@ Replace Cobra with Go's `flag` stdlib, remove `run`/`resume`/`validate` subcomma
 - `--resume --session <id>`: look for `~/.agent-runner/projects/{encoded-cwd}/runs/<id>/state.json` directly. Error if not found.
 - `--session` without `--resume`: exit with error.
 - `--validate` and `--resume` together: exit with error (mutually exclusive).
-- `--resume` with workflow parameters (positional args beyond the workflow file): exit with error (mutually exclusive).
-- `--resume` without any positional args: valid — the workflow file is restored from the saved state.
+- `--resume` with any positional arguments (including workflow file): exit with error. Resume mode accepts no positional arguments — the workflow file and params are restored from the saved state.
 - `--validate`: load and validate the workflow file, print "workflow is valid", exit.
 - No flags: execute the workflow as the former `run` subcommand did.
-- Preserve existing `--version` / `-v` behavior (currently handled by Cobra's `.Version` field) using `flag` stdlib.
 - Write a manual `flag.Usage` function for help output.
 
 **Session directory path resolution:**
@@ -66,11 +64,11 @@ The CLI SHALL accept a `--resume` boolean flag and a `--session <id>` string fla
 - **WHEN** `--session <id>` is passed without `--resume`
 - **THEN** the runner exits with an error indicating `--session` requires `--resume`
 
-#### Scenario: Resume conflicts with positional arguments
-- **WHEN** `--resume` is passed alongside positional arguments beyond the workflow file (i.e., workflow parameters)
-- **THEN** the runner exits with an error indicating that resume mode does not accept workflow parameters
+#### Scenario: Resume rejects positional arguments
+- **WHEN** `--resume` is passed alongside any positional arguments (workflow file or parameters)
+- **THEN** the runner exits with an error indicating that resume mode does not accept positional arguments
 
-#### Scenario: Resume does not require a workflow file
+#### Scenario: Resume without positional arguments
 - **WHEN** `--resume` is passed without any positional arguments
 - **THEN** the runner proceeds with resume using the workflow file stored in the saved state
 
@@ -92,4 +90,4 @@ The `run`, `resume`, and `validate` subcommands SHALL be removed. The CLI SHALL 
 
 ## Done When
 
-Tests covering the above scenarios pass. Cobra is removed from dependencies. The CLI works as `agent-runner <workflow.yaml> [params...] [--resume] [--session <id>] [--validate]` with proper mutual exclusivity enforcement and session lookup logic.
+Tests covering the above scenarios pass. Cobra is removed from dependencies. The CLI works as `agent-runner [--resume] [--session <id>] [--validate] <workflow.yaml> [params...]` with proper mutual exclusivity enforcement and session lookup logic.

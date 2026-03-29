@@ -25,7 +25,7 @@ The resume experience also needs improvement. Currently, resuming requires passi
 ## Impact
 
 - **Runner state management**: State writing and reading logic updates to use session directory paths instead of external paths
-- **CLI interface**: `run` command gains `--resume` flag; `resume` command behavior changes or is deprecated
+- **CLI interface**: `run`, `resume`, and `validate` subcommands are removed; the CLI is flattened to a single command with `--resume` (boolean), `--session <id>`, and `--validate` flags; Cobra is replaced with Go's `flag` stdlib
 - **User experience**: Users no longer need to know or manage state file paths; workflow resumption is simpler and more discoverable
 - **Backward compatibility**: No migration of existing state files; old state in openspec directories is abandoned
 

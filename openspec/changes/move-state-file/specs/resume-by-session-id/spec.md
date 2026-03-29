@@ -24,11 +24,11 @@ The CLI SHALL accept a `--resume` boolean flag and a `--session <id>` string fla
 - **WHEN** `--session <id>` is passed without `--resume`
 - **THEN** the runner exits with an error indicating `--session` requires `--resume`
 
-#### Scenario: Resume conflicts with positional arguments
-- **WHEN** `--resume` is passed alongside positional arguments beyond the workflow file (i.e., workflow parameters)
-- **THEN** the runner exits with an error indicating that resume mode does not accept workflow parameters
+#### Scenario: Resume rejects positional arguments
+- **WHEN** `--resume` is passed alongside any positional arguments (workflow file or parameters)
+- **THEN** the runner exits with an error indicating that resume mode does not accept positional arguments
 
-#### Scenario: Resume does not require a workflow file
+#### Scenario: Resume without positional arguments
 - **WHEN** `--resume` is passed without any positional arguments
 - **THEN** the runner proceeds with resume using the workflow file stored in the saved state
 
