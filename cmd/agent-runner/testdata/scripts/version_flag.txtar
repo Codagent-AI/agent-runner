@@ -2,6 +2,6 @@
 exec agent-runner --version
 stdout '^dev$'
 
-# -version behaves identically to --version
-exec agent-runner -version
+# -v behaves identically to --version
+exec agent-runner -v
 stdout '^dev$'

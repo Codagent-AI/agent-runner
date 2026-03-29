@@ -146,6 +146,7 @@ func run() int {
 	sessionFlag := flag.String("session", "", "Session ID to resume (requires --resume)")
 	validateFlag := flag.Bool("validate", false, "Validate a workflow file without executing")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
+	vFlag := flag.Bool("v", false, "Print version and exit (shorthand)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: agent-runner [flags] <workflow.yaml> [params...]\n\n")
@@ -153,12 +154,12 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "  -resume\n\tResume an interrupted workflow\n")
 		fmt.Fprintf(os.Stderr, "  -session <id>\n\tSession ID to resume (requires -resume)\n")
 		fmt.Fprintf(os.Stderr, "  -validate\n\tValidate a workflow file without executing\n")
-		fmt.Fprintf(os.Stderr, "  -version\n\tPrint version and exit\n")
+		fmt.Fprintf(os.Stderr, "  -v, -version\n\tPrint version and exit\n")
 	}
 
 	flag.Parse()
 
-	if *versionFlag {
+	if *versionFlag || *vFlag {
 		fmt.Println(version)
 		return 0
 	}
@@ -233,7 +234,13 @@ func resolveResumeStatePath(sessionID string) (string, error) {
 	runsDir := filepath.Join(home, ".agent-runner", "projects", encoded, "runs")
 
 	if sessionID != "" {
+		if strings.ContainsAny(sessionID, "/\\") || sessionID == ".." || strings.Contains(sessionID, "..") {
+			return "", fmt.Errorf("invalid session ID: %s", sessionID)
+		}
 		stateFile := filepath.Join(runsDir, sessionID, "state.json")
+		if !strings.HasPrefix(filepath.Clean(stateFile), filepath.Clean(runsDir)+string(os.PathSeparator)) {
+			return "", fmt.Errorf("invalid session ID: %s", sessionID)
+		}
 		if _, err := os.Stat(stateFile); err != nil {
 			return "", fmt.Errorf("session not found: %s", sessionID)
 		}
@@ -242,8 +249,11 @@ func resolveResumeStatePath(sessionID string) (string, error) {
 
 	// Find most recent session by state.json modification time.
 	entries, err := os.ReadDir(runsDir)
-	if err != nil {
+	if os.IsNotExist(err) {
 		return "", fmt.Errorf("no previous sessions found")
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading sessions directory: %w", err)
 	}
 
 	var bestPath string
