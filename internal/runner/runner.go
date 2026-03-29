@@ -239,12 +239,12 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 		outcome, loopResult, stepErr := runStep(step, rs)
 		rs.ctx.FlushState = nil
 
+		writeStepState(step, rs.ctx, &rs.workflow, rs.workflowHash, rs.stateDir, loopResult)
+
 		if stepErr != nil {
 			rs.log.Printf("\nagent-runner: step %q error: %v\n", step.ID, stepErr)
 			return ResultFailed
 		}
-
-		writeStepState(step, rs.ctx, &rs.workflow, rs.workflowHash, rs.stateDir, loopResult)
 
 		if outcome == exec.OutcomeAborted {
 			rs.log.Println("\nagent-runner: workflow stopped.")

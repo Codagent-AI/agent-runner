@@ -32,8 +32,11 @@ dev-validate:
 dev-resume:
 	go run ./cmd/agent-runner resume $(filter-out $@,$(MAKECMDGOALS))
 
-dev-flokay:
-	go run ./cmd/agent-runner run workflows/flokay.yaml $(filter-out $@,$(MAKECMDGOALS))
+dev-plan:
+	go run ./cmd/agent-runner run workflows/plan-change.yaml $(filter-out $@,$(MAKECMDGOALS))
+
+dev-implement:
+	go run ./cmd/agent-runner run workflows/implement-change.yaml $(filter-out $@,$(MAKECMDGOALS))
 
 # Allow arbitrary args to be passed to dev-* targets
 %:
