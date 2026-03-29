@@ -20,6 +20,18 @@ func nestingToAudit(ctx *model.ExecutionContext) []audit.NestingInfo {
 	return result
 }
 
+func nestingToFmt(ctx *model.ExecutionContext) []textfmt.NestingInfo {
+	result := make([]textfmt.NestingInfo, len(ctx.NestingPath))
+	for i, seg := range ctx.NestingPath {
+		result[i] = textfmt.NestingInfo{
+			StepID:          seg.StepID,
+			Iteration:       seg.Iteration,
+			SubWorkflowName: seg.SubWorkflowName,
+		}
+	}
+	return result
+}
+
 func contextSnapshot(ctx *model.ExecutionContext) map[string]any {
 	params := make(map[string]any)
 	for k, v := range ctx.Params {

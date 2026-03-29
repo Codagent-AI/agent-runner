@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/textfmt"
 )
 
 func TestExecuteSubWorkflowStep(t *testing.T) {
@@ -153,6 +154,89 @@ steps:
 		outcome, _ := ExecuteSubWorkflowStep(&step, makeCtx(), &mockRunner{}, &mockGlob{}, &mockLogger{})
 		if outcome != OutcomeFailed {
 			t.Fatalf("expected failed, got %q", outcome)
+		}
+	})
+
+	t.Run("prints step heading for child workflow steps", func(t *testing.T) {
+		dir := t.TempDir()
+		childYAML := `name: child
+steps:
+  - id: s1
+    mode: shell
+    command: echo hello
+  - id: s2
+    mode: shell
+    command: echo world
+`
+		os.WriteFile(filepath.Join(dir, "child.yaml"), []byte(childYAML), 0o644)
+
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}, {ExitCode: 0}}}
+		log := &mockLogger{}
+		ctx := model.NewRootContext(model.RootContextOptions{
+			Params:       map[string]string{},
+			WorkflowFile: filepath.Join(dir, "parent.yaml"),
+		})
+
+		step := model.Step{ID: "sub", Workflow: "child.yaml", Session: model.SessionNew}
+		ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, log)
+
+		sep := textfmt.Separator()
+		sepCount := 0
+		heading1Found, heading2Found := false, false
+		for _, line := range log.lines {
+			if line == sep {
+				sepCount++
+			}
+			if strings.Contains(line, "━━ step 1/2:") && strings.Contains(line, "s1") {
+				heading1Found = true
+			}
+			if strings.Contains(line, "━━ step 2/2:") && strings.Contains(line, "s2") {
+				heading2Found = true
+			}
+		}
+		if sepCount < 2 {
+			t.Fatalf("expected at least 2 separators, got %d", sepCount)
+		}
+		if !heading1Found {
+			t.Fatal("expected heading for step s1 (1/2)")
+		}
+		if !heading2Found {
+			t.Fatal("expected heading for step s2 (2/2)")
+		}
+	})
+
+	t.Run("prints skipped heading for child steps with skip_if", func(t *testing.T) {
+		dir := t.TempDir()
+		childYAML := `name: child
+steps:
+  - id: s1
+    mode: shell
+    command: echo hello
+  - id: s2
+    mode: shell
+    command: echo world
+    skip_if: previous_success
+`
+		os.WriteFile(filepath.Join(dir, "child.yaml"), []byte(childYAML), 0o644)
+
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		log := &mockLogger{}
+		ctx := model.NewRootContext(model.RootContextOptions{
+			Params:       map[string]string{},
+			WorkflowFile: filepath.Join(dir, "parent.yaml"),
+		})
+
+		step := model.Step{ID: "sub", Workflow: "child.yaml", Session: model.SessionNew}
+		ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, log)
+
+		skippedFound := false
+		for _, line := range log.lines {
+			if strings.Contains(line, "[skipped]") && strings.Contains(line, "s2") {
+				skippedFound = true
+			}
+		}
+		if !skippedFound {
+			t.Fatal("expected skipped heading for step s2")
 		}
 	})
 }
