@@ -50,17 +50,6 @@ func instructionsJSON(artifactID, instruction string) string {
 }
 
 func TestOpenSpecEngine(t *testing.T) {
-	t.Run("GetStateDir returns change directory", func(t *testing.T) {
-		eng := NewEngineWithRunner(
-			map[string]any{"change_param": "change_name"},
-			&mockCmdRunner{},
-		)
-		dir := eng.GetStateDir(map[string]string{"change_name": "my-change"})
-		if dir != "openspec/changes/my-change/" {
-			t.Fatalf("expected 'openspec/changes/my-change/', got %q", dir)
-		}
-	})
-
 	t.Run("ValidateWorkflow checks all artifacts have steps", func(t *testing.T) {
 		cmd := &mockCmdRunner{
 			results: map[string]string{

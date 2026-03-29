@@ -81,7 +81,6 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
 	return RunWorkflow(&workflow, state.Params, &Options{
 		From:              fromStep,
 		WorkflowFile:      state.WorkflowFile,
-		StateDir:          opts.StateDir,
 		Engine:            eng,
 		SessionIDs:        sessionIDs,
 		CapturedVariables: capturedVars,

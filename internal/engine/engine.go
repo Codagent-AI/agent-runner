@@ -9,7 +9,6 @@ import (
 
 // Engine defines the interface for workflow engine plugins.
 type Engine interface {
-	GetStateDir(params map[string]string) string
 	ValidateWorkflow(workflow *model.Workflow, params map[string]string, workflowFile string) error
 	NeedsDeferredValidation() bool
 	EnrichPrompt(stepID string, params map[string]string, opts EnrichOptions) string

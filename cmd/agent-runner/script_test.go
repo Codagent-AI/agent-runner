@@ -15,5 +15,9 @@ func TestMain(m *testing.M) {
 func TestScript(t *testing.T) {
 	testscript.Run(t, testscript.Params{
 		Dir: "testdata/scripts",
+		Setup: func(env *testscript.Env) error {
+			env.Setenv("HOME", env.WorkDir)
+			return nil
+		},
 	})
 }

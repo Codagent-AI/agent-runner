@@ -11,7 +11,6 @@ type stubEngine struct {
 	config map[string]any
 }
 
-func (e *stubEngine) GetStateDir(_ map[string]string) string { return "" }
 func (e *stubEngine) ValidateWorkflow(_ *model.Workflow, _ map[string]string, _ string) error {
 	return nil
 }

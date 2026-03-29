@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 )
 
 // Logger writes audit events to a JSONL log file.
@@ -90,7 +89,9 @@ func EncodePath(dirPath string) string {
 	return pathUnsafeRe.ReplaceAllString(dirPath, "-")
 }
 
-func sanitizeWorkflowName(name string) string {
+// SanitizeWorkflowName replaces path traversal sequences and file-unsafe
+// characters with dashes, returning "workflow" for empty input.
+func SanitizeWorkflowName(name string) string {
 	sanitized := strings.ReplaceAll(name, "..", "-")
 	sanitized = fileUnsafeRe.ReplaceAllString(sanitized, "-")
 	sanitized = strings.TrimSpace(sanitized)
@@ -100,18 +101,3 @@ func sanitizeWorkflowName(name string) string {
 	return sanitized
 }
 
-// CreateLogger creates an audit logger for a workflow run.
-// Log path: ~/.agent-runner/projects/{encoded-cwd}/logs/{workflow-name}-{timestamp}.log
-func CreateLogger(workflowName, cwd string) (*Logger, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-	encoded := EncodePath(cwd)
-	timestamp := time.Now().Format(time.RFC3339)
-	timestamp = strings.ReplaceAll(timestamp, ":", "-")
-	safeName := sanitizeWorkflowName(workflowName)
-	logDir := filepath.Join(home, ".agent-runner", "projects", encoded, "logs")
-	logFile := filepath.Join(logDir, fmt.Sprintf("%s-%s.log", safeName, timestamp))
-	return NewLogger(logFile)
-}

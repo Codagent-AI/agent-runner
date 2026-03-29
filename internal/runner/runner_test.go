@@ -2,6 +2,8 @@ package runner
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/exec"
@@ -86,7 +88,7 @@ func TestRunWorkflow(t *testing.T) {
 			ProcessRunner: runner,
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
-			StateDir:      t.TempDir(),
+			SessionDir:      t.TempDir(),
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -110,7 +112,7 @@ func TestRunWorkflow(t *testing.T) {
 			ProcessRunner: runner,
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
-			StateDir:      t.TempDir(),
+			SessionDir:      t.TempDir(),
 		})
 		if result != ResultSuccess {
 			t.Fatalf("expected success, got %q", result)
@@ -134,7 +136,7 @@ func TestRunWorkflow(t *testing.T) {
 			ProcessRunner: runner,
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
-			StateDir:      t.TempDir(),
+			SessionDir:      t.TempDir(),
 		})
 		if result != ResultFailed {
 			t.Fatalf("expected failed, got %q", result)
@@ -158,7 +160,7 @@ func TestRunWorkflow(t *testing.T) {
 			ProcessRunner: runner,
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
-			StateDir:      t.TempDir(),
+			SessionDir:      t.TempDir(),
 		})
 		if result != ResultSuccess {
 			t.Fatalf("expected success, got %q", result)
@@ -182,7 +184,7 @@ func TestRunWorkflow(t *testing.T) {
 			ProcessRunner: runner,
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
-			StateDir:      t.TempDir(),
+			SessionDir:      t.TempDir(),
 		})
 		if result != ResultSuccess {
 			t.Fatalf("expected success, got %q", result)
@@ -203,7 +205,7 @@ func TestRunWorkflow(t *testing.T) {
 			ProcessRunner: &mockRunner{},
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
-			StateDir:      t.TempDir(),
+			SessionDir:      t.TempDir(),
 		})
 		if err == nil {
 			t.Fatal("expected error for missing required param")
@@ -222,7 +224,7 @@ func TestRunWorkflow(t *testing.T) {
 			ProcessRunner: runner,
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
-			StateDir:      t.TempDir(),
+			SessionDir:      t.TempDir(),
 		})
 		if result != ResultSuccess {
 			t.Fatalf("expected success, got %q", result)
@@ -247,7 +249,7 @@ func TestRunWorkflow(t *testing.T) {
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
 			From:          "s2",
-			StateDir:      t.TempDir(),
+			SessionDir:      t.TempDir(),
 		})
 		if result != ResultSuccess {
 			t.Fatalf("expected success, got %q", result)
@@ -271,10 +273,103 @@ func TestRunWorkflow(t *testing.T) {
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
 			From:          "nonexistent",
-			StateDir:      t.TempDir(),
+			SessionDir:      t.TempDir(),
 		})
 		if err == nil {
 			t.Fatal("expected error for unknown step")
 		}
 	})
+
+	t.Run("writes state.json and audit.log into session directory", func(t *testing.T) {
+		sessionDir := t.TempDir()
+		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 1}}}
+		w := model.Workflow{
+			Name:  "test",
+			Steps: []model.Step{shellStep("s1", "false")},
+		}
+		w.ApplyDefaults()
+		RunWorkflow(&w, map[string]string{}, &Options{
+			ProcessRunner: runner,
+			GlobExpander:  &mockGlob{},
+			Log:           &mockLog{},
+			SessionDir:    sessionDir,
+		})
+
+		// State file should be state.json (not agent-runner-state.json).
+		stateFile := filepath.Join(sessionDir, "state.json")
+		if _, err := os.Stat(stateFile); os.IsNotExist(err) {
+			t.Fatal("expected state.json in session directory")
+		}
+
+		// Audit log should exist in the same directory.
+		auditFile := filepath.Join(sessionDir, "audit.log")
+		if _, err := os.Stat(auditFile); os.IsNotExist(err) {
+			t.Fatal("expected audit.log in session directory")
+		}
+	})
+
+	t.Run("deletes state.json on success", func(t *testing.T) {
+		sessionDir := t.TempDir()
+		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}}}
+		w := model.Workflow{
+			Name:  "test",
+			Steps: []model.Step{shellStep("s1", "echo ok")},
+		}
+		w.ApplyDefaults()
+		result, _ := RunWorkflow(&w, map[string]string{}, &Options{
+			ProcessRunner: runner,
+			GlobExpander:  &mockGlob{},
+			Log:           &mockLog{},
+			SessionDir:    sessionDir,
+		})
+		if result != ResultSuccess {
+			t.Fatalf("expected success, got %q", result)
+		}
+
+		stateFile := filepath.Join(sessionDir, "state.json")
+		if _, err := os.Stat(stateFile); !os.IsNotExist(err) {
+			t.Fatal("expected state.json to be deleted on success")
+		}
+	})
+
+	t.Run("prints resume hint with session ID on failure", func(t *testing.T) {
+		sessionDir := t.TempDir()
+		log := &mockLog{}
+		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 1}}}
+		w := model.Workflow{
+			Name:  "deploy-service",
+			Steps: []model.Step{shellStep("s1", "false")},
+		}
+		w.ApplyDefaults()
+		RunWorkflow(&w, map[string]string{}, &Options{
+			ProcessRunner: runner,
+			GlobExpander:  &mockGlob{},
+			Log:           log,
+			SessionDir:    sessionDir,
+		})
+
+		found := false
+		for _, line := range log.lines {
+			if contains(line, "--resume --session deploy-service-") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected resume hint with session ID, got log lines: %v", log.lines)
+		}
+	})
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && findSubstring(s, substr)
+}
+
+func findSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

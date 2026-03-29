@@ -11,7 +11,7 @@ import (
 	"github.com/codagent/agent-runner/internal/model"
 )
 
-const stateFileName = "agent-runner-state.json"
+const stateFileName = "state.json"
 
 // WriteState writes the run state to a JSON file in the given directory.
 func WriteState(state *model.RunState, dir string) error {
@@ -44,11 +44,6 @@ func ReadState(filePath string) (model.RunState, error) {
 // DeleteState removes the state file from the given directory.
 func DeleteState(dir string) {
 	_ = os.Remove(filepath.Join(dir, stateFileName))
-}
-
-// GetStateFilePath returns the full path to the state file in a directory.
-func GetStateFilePath(dir string) string {
-	return filepath.Join(dir, stateFileName)
 }
 
 // ComputeWorkflowHash returns a hex-encoded SHA-256 hash of the content.

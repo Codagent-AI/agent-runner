@@ -3,6 +3,8 @@ package runner
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/codagent/agent-runner/internal/audit"
@@ -28,7 +30,7 @@ const (
 type Options struct {
 	From              string
 	WorkflowFile      string
-	StateDir          string
+	SessionDir        string // Override session directory (for testing); computed automatically if empty.
 	Engine            engine.Engine
 	SessionIDs        map[string]string
 	CapturedVariables map[string]string
@@ -65,16 +67,6 @@ func resolveStartIndex(workflow *model.Workflow, from string) (int, error) {
 		}
 	}
 	return 0, fmt.Errorf("step %q not found in workflow", from)
-}
-
-func resolveStateDir(eng engine.Engine, params map[string]string, defaultDir string) string {
-	if eng != nil {
-		dir := eng.GetStateDir(params)
-		if dir != "" {
-			return dir
-		}
-	}
-	return defaultDir
 }
 
 func computeHash(workflowFile string) string {
@@ -122,7 +114,8 @@ func emitAudit(ctx *model.ExecutionContext, event audit.Event) {
 type runState struct {
 	workflow     model.Workflow
 	ctx          *model.ExecutionContext
-	stateDir     string
+	sessionDir   string
+	sessionID    string
 	workflowHash string
 	auditLogger  *audit.Logger
 	runStartTime time.Time
@@ -142,9 +135,28 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		}
 	}
 
-	defaultStateDir := opts.StateDir
-	if defaultStateDir == "" {
-		defaultStateDir, _ = os.Getwd()
+	// Build session ID and directory.
+	safeName := audit.SanitizeWorkflowName(workflow.Name)
+	now := time.Now()
+	timestamp := strings.ReplaceAll(now.UTC().Format(time.RFC3339), ":", "-")
+	sessionID := safeName + "-" + timestamp
+
+	sessionDir := opts.SessionDir
+	if sessionDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("cannot determine home directory: %w", err)
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("cannot determine working directory: %w", err)
+		}
+		encoded := audit.EncodePath(cwd)
+		sessionDir = filepath.Join(home, ".agent-runner", "projects", encoded, "runs", sessionID)
+	}
+
+	if err := os.MkdirAll(sessionDir, 0o750); err != nil {
+		return nil, fmt.Errorf("create session dir: %w", err)
 	}
 
 	var engineRef interface{}
@@ -153,7 +165,7 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	}
 
 	var auditEventLogger audit.EventLogger
-	auditLogger, err := audit.CreateLogger(workflow.Name, "")
+	auditLogger, err := audit.NewLogger(filepath.Join(sessionDir, "audit.log"))
 	if err == nil {
 		auditEventLogger = auditLogger
 	}
@@ -182,10 +194,11 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	return &runState{
 		workflow:     *workflow,
 		ctx:          ctx,
-		stateDir:     resolveStateDir(opts.Engine, params, defaultStateDir),
+		sessionDir:   sessionDir,
+		sessionID:    sessionID,
 		workflowHash: computeHash(opts.WorkflowFile),
 		auditLogger:  auditLogger,
-		runStartTime: time.Now(),
+		runStartTime: now,
 		log:          log,
 		runner:       opts.ProcessRunner,
 		glob:         opts.GlobExpander,
@@ -233,13 +246,13 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 
 		stepRef := step // capture for closure
 		rs.ctx.FlushState = func() {
-			writeStepState(stepRef, rs.ctx, &rs.workflow, rs.workflowHash, rs.stateDir, nil)
+			writeStepState(stepRef, rs.ctx, &rs.workflow, rs.workflowHash, rs.sessionDir, nil)
 		}
 
 		outcome, loopResult, stepErr := runStep(step, rs)
 		rs.ctx.FlushState = nil
 
-		writeStepState(step, rs.ctx, &rs.workflow, rs.workflowHash, rs.stateDir, loopResult)
+		writeStepState(step, rs.ctx, &rs.workflow, rs.workflowHash, rs.sessionDir, loopResult)
 
 		if stepErr != nil {
 			rs.log.Printf("\nagent-runner: step %q error: %v\n", step.ID, stepErr)
@@ -302,10 +315,10 @@ func runStep(step *model.Step, rs *runState) (exec.StepOutcome, *exec.LoopResult
 func finalizeRun(rs *runState, result WorkflowResult) {
 	switch result {
 	case ResultSuccess:
-		stateio.DeleteState(rs.stateDir)
+		stateio.DeleteState(rs.sessionDir)
 		rs.log.Println("agent-runner: workflow complete")
 	case ResultFailed:
-		rs.log.Printf("agent-runner: to resume: agent-runner resume %s\n", stateio.GetStateFilePath(rs.stateDir))
+		rs.log.Printf("agent-runner: to resume: agent-runner --resume --session %s\n", rs.sessionID)
 	case ResultStopped:
 		// No action needed
 	}

@@ -46,6 +46,52 @@ func TestBuildPrefix(t *testing.T) {
 	})
 }
 
+func TestEncodePath(t *testing.T) {
+	t.Run("replaces slashes dots and underscores with dashes", func(t *testing.T) {
+		result := EncodePath("/Users/paul/codagent/agent-runner")
+		if result != "-Users-paul-codagent-agent-runner" {
+			t.Fatalf("expected '-Users-paul-codagent-agent-runner', got %q", result)
+		}
+	})
+
+	t.Run("replaces dots and underscores", func(t *testing.T) {
+		result := EncodePath("my_project.v2")
+		if result != "my-project-v2" {
+			t.Fatalf("expected 'my-project-v2', got %q", result)
+		}
+	})
+}
+
+func TestSanitizeWorkflowName(t *testing.T) {
+	t.Run("passes through simple names", func(t *testing.T) {
+		result := SanitizeWorkflowName("deploy-service")
+		if result != "deploy-service" {
+			t.Fatalf("expected 'deploy-service', got %q", result)
+		}
+	})
+
+	t.Run("replaces path traversal", func(t *testing.T) {
+		result := SanitizeWorkflowName("../../etc/passwd")
+		if strings.Contains(result, "..") {
+			t.Fatalf("expected no path traversal, got %q", result)
+		}
+	})
+
+	t.Run("replaces file-unsafe characters", func(t *testing.T) {
+		result := SanitizeWorkflowName("my:workflow*name")
+		if strings.ContainsAny(result, `:*?"<>|`) {
+			t.Fatalf("expected no unsafe chars, got %q", result)
+		}
+	})
+
+	t.Run("returns workflow for empty input", func(t *testing.T) {
+		result := SanitizeWorkflowName("")
+		if result != "workflow" {
+			t.Fatalf("expected 'workflow', got %q", result)
+		}
+	})
+}
+
 func TestLogger(t *testing.T) {
 	t.Run("writes events to log file", func(t *testing.T) {
 		dir := t.TempDir()

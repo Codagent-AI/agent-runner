@@ -105,14 +105,6 @@ func (e *openSpecEngine) ensureArtifactIDs(changeName string) (map[string]bool, 
 	return e.artifactIDs, nil
 }
 
-func (e *openSpecEngine) GetStateDir(params map[string]string) string {
-	changeName, err := getChangeName(e.changeParam, params)
-	if err != nil {
-		return ""
-	}
-	return fmt.Sprintf("openspec/changes/%s/", changeName)
-}
-
 func (e *openSpecEngine) ValidateWorkflow(workflow *model.Workflow, params map[string]string, _ string) error {
 	changeName, err := getChangeName(e.changeParam, params)
 	if err != nil {
