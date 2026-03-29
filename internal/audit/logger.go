@@ -84,7 +84,9 @@ func BuildPrefix(nestingPath []NestingInfo, stepID string) string {
 var pathUnsafeRe = regexp.MustCompile(`[/._]`)
 var fileUnsafeRe = regexp.MustCompile(`[\\/:*?"<>|]`)
 
-func encodePath(dirPath string) string {
+// EncodePath replaces path-unsafe characters (/, ., _) with dashes for use
+// in directory names under ~/.agent-runner/projects/.
+func EncodePath(dirPath string) string {
 	return pathUnsafeRe.ReplaceAllString(dirPath, "-")
 }
 
@@ -105,7 +107,7 @@ func CreateLogger(workflowName, cwd string) (*Logger, error) {
 	if err != nil {
 		return nil, err
 	}
-	encoded := encodePath(cwd)
+	encoded := EncodePath(cwd)
 	timestamp := time.Now().Format(time.RFC3339)
 	timestamp = strings.ReplaceAll(timestamp, ":", "-")
 	safeName := sanitizeWorkflowName(workflowName)

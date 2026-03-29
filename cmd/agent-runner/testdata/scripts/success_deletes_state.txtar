@@ -1,5 +1,5 @@
 # Test that a successful workflow cleans up the state file.
-exec agent-runner run workflow.yaml
+exec agent-runner workflow.yaml
 ! exists agent-runner-state.json
 
 -- workflow.yaml --

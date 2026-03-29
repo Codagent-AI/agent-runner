@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,9 +9,9 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
-	"github.com/spf13/cobra"
-
+	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/engine"
 	_ "github.com/codagent/agent-runner/internal/engine/openspec"
 	iexec "github.com/codagent/agent-runner/internal/exec"
@@ -141,115 +142,190 @@ func main() {
 }
 
 func run() int {
-	rootCmd := &cobra.Command{
-		Use:     "agent-runner",
-		Short:   "CLI workflow orchestrator for AI agents",
-		Version: version,
-	}
-	rootCmd.SetVersionTemplate("{{.Version}}\n")
+	resumeFlag := flag.Bool("resume", false, "Resume an interrupted workflow")
+	sessionFlag := flag.String("session", "", "Session ID to resume (requires --resume)")
+	validateFlag := flag.Bool("validate", false, "Validate a workflow file without executing")
+	versionFlag := flag.Bool("version", false, "Print version and exit")
 
-	runCmd := &cobra.Command{
-		Use:   "run <workflow.yaml> [params...] [--from <step>] [--session <id>]",
-		Short: "Execute a workflow",
-		Long: `Execute a workflow with positional or key=value parameters.
-Parameters from the workflow's params list are required unless marked optional.
-Positional args map to params in order; use key=value for explicit mapping.
-  Examples:
-    run workflow.yaml my-feature              # positional: maps to first param
-    run workflow.yaml my-feature "a description"  # multiple positional params
-    run workflow.yaml name=my-feature         # key=value format
-    run workflow.yaml my-feature desc="more"  # mixed: positional + override`,
-		Args: cobra.MinimumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			workflowFile := args[0]
-
-			// Load workflow first to validate params against its schema.
-			workflow, err := loader.LoadWorkflow(workflowFile, loader.Options{})
-			if err != nil {
-				return fmt.Errorf("load workflow: %w", err)
-			}
-
-			// Parse and match parameters.
-			positional, keyed, err := parseParams(args[1:])
-			if err != nil {
-				return err
-			}
-			params, err := matchParams(&workflow, positional, keyed)
-			if err != nil {
-				return err
-			}
-
-			var eng engine.Engine
-			if workflow.Engine != nil {
-				engConfig := map[string]any{"type": workflow.Engine.Type}
-				for k, v := range workflow.Engine.Extras {
-					engConfig[k] = v
-				}
-				eng, err = engine.Create(engConfig)
-				if err != nil {
-					return fmt.Errorf("create engine: %w", err)
-				}
-			}
-
-			result, err := runner.RunWorkflow(&workflow, params, &runner.Options{
-				WorkflowFile:  workflowFile,
-				Engine:        eng,
-				ProcessRunner: &realProcessRunner{},
-				GlobExpander:  &realGlobExpander{},
-				Log:           &realLogger{},
-			})
-			if err != nil {
-				return err
-			}
-			if result != runner.ResultSuccess {
-				cmd.SilenceUsage = true
-				cmd.SilenceErrors = true
-				return fmt.Errorf("workflow failed")
-			}
-			return nil
-		},
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: agent-runner [flags] <workflow.yaml> [params...]\n\n")
+		fmt.Fprintf(os.Stderr, "Flags:\n")
+		fmt.Fprintf(os.Stderr, "  -resume\n\tResume an interrupted workflow\n")
+		fmt.Fprintf(os.Stderr, "  -session <id>\n\tSession ID to resume (requires -resume)\n")
+		fmt.Fprintf(os.Stderr, "  -validate\n\tValidate a workflow file without executing\n")
+		fmt.Fprintf(os.Stderr, "  -version\n\tPrint version and exit\n")
 	}
 
-	validateCmd := &cobra.Command{
-		Use:   "validate <workflow.yaml>",
-		Short: "Validate a workflow file",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			_, err := loader.LoadWorkflow(args[0], loader.Options{})
-			if err != nil {
-				return err
-			}
-			fmt.Println("workflow is valid")
-			return nil
-		},
+	flag.Parse()
+
+	if *versionFlag {
+		fmt.Println(version)
+		return 0
 	}
 
-	resumeCmd := &cobra.Command{
-		Use:   "resume <state-file>",
-		Short: "Resume an interrupted workflow",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			result, err := runner.ResumeWorkflow(args[0], &runner.Options{
-				ProcessRunner: &realProcessRunner{},
-				GlobExpander:  &realGlobExpander{},
-				Log:           &realLogger{},
-			})
-			if err != nil {
-				return err
-			}
-			if result != runner.ResultSuccess {
-				cmd.SilenceUsage = true
-				cmd.SilenceErrors = true
-				return fmt.Errorf("workflow failed")
-			}
-			return nil
-		},
+	// Validate flag combinations.
+	if *sessionFlag != "" && !*resumeFlag {
+		fmt.Fprintln(os.Stderr, "agent-runner: --session requires --resume")
+		return 1
+	}
+	if *validateFlag && *resumeFlag {
+		fmt.Fprintln(os.Stderr, "agent-runner: --validate and --resume are mutually exclusive")
+		return 1
 	}
 
-	rootCmd.AddCommand(runCmd, validateCmd, resumeCmd)
+	args := flag.Args()
 
-	if err := rootCmd.Execute(); err != nil {
+	if *resumeFlag {
+		if len(args) > 0 {
+			fmt.Fprintln(os.Stderr, "agent-runner: --resume does not accept positional arguments")
+			return 1
+		}
+		return handleResume(*sessionFlag)
+	}
+
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "agent-runner: workflow file required")
+		flag.Usage()
+		return 1
+	}
+
+	if *validateFlag {
+		return handleValidate(args[0])
+	}
+
+	return handleRun(args)
+}
+
+func handleResume(sessionID string) int {
+	stateFilePath, err := resolveResumeStatePath(sessionID)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+
+	result, err := runner.ResumeWorkflow(stateFilePath, &runner.Options{
+		ProcessRunner: &realProcessRunner{},
+		GlobExpander:  &realGlobExpander{},
+		Log:           &realLogger{},
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+	if result != runner.ResultSuccess {
+		return 1
+	}
+	return 0
+}
+
+func resolveResumeStatePath(sessionID string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine working directory: %w", err)
+	}
+
+	encoded := audit.EncodePath(cwd)
+	runsDir := filepath.Join(home, ".agent-runner", "projects", encoded, "runs")
+
+	if sessionID != "" {
+		stateFile := filepath.Join(runsDir, sessionID, "state.json")
+		if _, err := os.Stat(stateFile); err != nil {
+			return "", fmt.Errorf("session not found: %s", sessionID)
+		}
+		return stateFile, nil
+	}
+
+	// Find most recent session by state.json modification time.
+	entries, err := os.ReadDir(runsDir)
+	if err != nil {
+		return "", fmt.Errorf("no previous sessions found")
+	}
+
+	var bestPath string
+	var bestTime time.Time
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		stateFile := filepath.Join(runsDir, entry.Name(), "state.json")
+		info, err := os.Stat(stateFile)
+		if err != nil {
+			continue
+		}
+		if bestPath == "" || info.ModTime().After(bestTime) {
+			bestPath = stateFile
+			bestTime = info.ModTime()
+		}
+	}
+
+	if bestPath == "" {
+		return "", fmt.Errorf("no previous sessions found")
+	}
+
+	return bestPath, nil
+}
+
+func handleValidate(workflowFile string) int {
+	_, err := loader.LoadWorkflow(workflowFile, loader.Options{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+	fmt.Println("workflow is valid")
+	return 0
+}
+
+func handleRun(args []string) int {
+	workflowFile := args[0]
+
+	workflow, err := loader.LoadWorkflow(workflowFile, loader.Options{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: load workflow: %v\n", err)
+		return 1
+	}
+
+	positional, keyed, err := parseParams(args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+	params, err := matchParams(&workflow, positional, keyed)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+
+	var eng engine.Engine
+	if workflow.Engine != nil {
+		engConfig := map[string]any{"type": workflow.Engine.Type}
+		for k, v := range workflow.Engine.Extras {
+			engConfig[k] = v
+		}
+		eng, err = engine.Create(engConfig)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: create engine: %v\n", err)
+			return 1
+		}
+	}
+
+	result, err := runner.RunWorkflow(&workflow, params, &runner.Options{
+		WorkflowFile:  workflowFile,
+		Engine:        eng,
+		ProcessRunner: &realProcessRunner{},
+		GlobExpander:  &realGlobExpander{},
+		Log:           &realLogger{},
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+	if result != runner.ResultSuccess {
 		return 1
 	}
 	return 0

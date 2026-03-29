@@ -1,5 +1,5 @@
 # Test that continue_on_failure allows the workflow to proceed past a failed step.
-exec agent-runner run workflow.yaml
+exec agent-runner workflow.yaml
 stdout 'step "next-step" complete'
 
 -- workflow.yaml --
