@@ -100,4 +100,3 @@ func SanitizeWorkflowName(name string) string {
 	}
 	return sanitized
 }
-

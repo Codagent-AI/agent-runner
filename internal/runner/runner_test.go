@@ -88,7 +88,7 @@ func TestRunWorkflow(t *testing.T) {
 			ProcessRunner: runner,
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
-			SessionDir:      t.TempDir(),
+			SessionDir:    t.TempDir(),
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -112,7 +112,7 @@ func TestRunWorkflow(t *testing.T) {
 			ProcessRunner: runner,
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
-			SessionDir:      t.TempDir(),
+			SessionDir:    t.TempDir(),
 		})
 		if result != ResultSuccess {
 			t.Fatalf("expected success, got %q", result)
@@ -136,7 +136,7 @@ func TestRunWorkflow(t *testing.T) {
 			ProcessRunner: runner,
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
-			SessionDir:      t.TempDir(),
+			SessionDir:    t.TempDir(),
 		})
 		if result != ResultFailed {
 			t.Fatalf("expected failed, got %q", result)
@@ -160,7 +160,7 @@ func TestRunWorkflow(t *testing.T) {
 			ProcessRunner: runner,
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
-			SessionDir:      t.TempDir(),
+			SessionDir:    t.TempDir(),
 		})
 		if result != ResultSuccess {
 			t.Fatalf("expected success, got %q", result)
@@ -184,7 +184,7 @@ func TestRunWorkflow(t *testing.T) {
 			ProcessRunner: runner,
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
-			SessionDir:      t.TempDir(),
+			SessionDir:    t.TempDir(),
 		})
 		if result != ResultSuccess {
 			t.Fatalf("expected success, got %q", result)
@@ -205,7 +205,7 @@ func TestRunWorkflow(t *testing.T) {
 			ProcessRunner: &mockRunner{},
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
-			SessionDir:      t.TempDir(),
+			SessionDir:    t.TempDir(),
 		})
 		if err == nil {
 			t.Fatal("expected error for missing required param")
@@ -224,7 +224,7 @@ func TestRunWorkflow(t *testing.T) {
 			ProcessRunner: runner,
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
-			SessionDir:      t.TempDir(),
+			SessionDir:    t.TempDir(),
 		})
 		if result != ResultSuccess {
 			t.Fatalf("expected success, got %q", result)
@@ -249,7 +249,7 @@ func TestRunWorkflow(t *testing.T) {
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
 			From:          "s2",
-			SessionDir:      t.TempDir(),
+			SessionDir:    t.TempDir(),
 		})
 		if result != ResultSuccess {
 			t.Fatalf("expected success, got %q", result)
@@ -273,7 +273,7 @@ func TestRunWorkflow(t *testing.T) {
 			GlobExpander:  &mockGlob{},
 			Log:           &mockLog{},
 			From:          "nonexistent",
-			SessionDir:      t.TempDir(),
+			SessionDir:    t.TempDir(),
 		})
 		if err == nil {
 			t.Fatal("expected error for unknown step")

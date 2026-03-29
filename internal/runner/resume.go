@@ -3,6 +3,7 @@ package runner
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/codagent/agent-runner/internal/engine"
 	"github.com/codagent/agent-runner/internal/loader"
@@ -81,6 +82,7 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
 	return RunWorkflow(&workflow, state.Params, &Options{
 		From:              fromStep,
 		WorkflowFile:      state.WorkflowFile,
+		SessionDir:        filepath.Dir(stateFilePath),
 		Engine:            eng,
 		SessionIDs:        sessionIDs,
 		CapturedVariables: capturedVars,

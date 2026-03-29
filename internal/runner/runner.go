@@ -138,7 +138,7 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	// Build session ID and directory.
 	safeName := audit.SanitizeWorkflowName(workflow.Name)
 	now := time.Now()
-	timestamp := strings.ReplaceAll(now.UTC().Format(time.RFC3339), ":", "-")
+	timestamp := strings.NewReplacer(":", "-", ".", "-").Replace(now.UTC().Format(time.RFC3339Nano))
 	sessionID := safeName + "-" + timestamp
 
 	sessionDir := opts.SessionDir
