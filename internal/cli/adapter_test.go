@@ -57,7 +57,27 @@ func TestRegistry(t *testing.T) {
 func TestClaudeAdapter(t *testing.T) {
 	adapter := &ClaudeAdapter{}
 
-	t.Run("fresh headless", func(t *testing.T) {
+	t.Run("fresh headless with session-id", func(t *testing.T) {
+		args := adapter.BuildArgs(BuildArgsInput{
+			Prompt:    "do something",
+			SessionID: "uuid-123",
+			Headless:  true,
+		})
+		expected := []string{"claude", "--session-id", "uuid-123", "-p", "do something"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("fresh interactive with session-id", func(t *testing.T) {
+		args := adapter.BuildArgs(BuildArgsInput{
+			Prompt:    "review code",
+			SessionID: "uuid-456",
+			Headless:  false,
+		})
+		expected := []string{"claude", "--session-id", "uuid-456", "review code"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("fresh headless without session-id", func(t *testing.T) {
 		args := adapter.BuildArgs(BuildArgsInput{
 			Prompt:   "do something",
 			Headless: true,
@@ -66,19 +86,11 @@ func TestClaudeAdapter(t *testing.T) {
 		assertArgs(t, expected, args)
 	})
 
-	t.Run("fresh interactive", func(t *testing.T) {
-		args := adapter.BuildArgs(BuildArgsInput{
-			Prompt:   "review code",
-			Headless: false,
-		})
-		expected := []string{"claude", "review code"}
-		assertArgs(t, expected, args)
-	})
-
 	t.Run("resume headless", func(t *testing.T) {
 		args := adapter.BuildArgs(BuildArgsInput{
 			Prompt:    "continue",
 			SessionID: "session-abc",
+			Resume:    true,
 			Headless:  true,
 		})
 		expected := []string{"claude", "--resume", "session-abc", "-p", "continue"}
@@ -89,6 +101,7 @@ func TestClaudeAdapter(t *testing.T) {
 		args := adapter.BuildArgs(BuildArgsInput{
 			Prompt:    "continue review",
 			SessionID: "session-abc",
+			Resume:    true,
 			Headless:  false,
 		})
 		expected := []string{"claude", "--resume", "session-abc", "continue review"}
@@ -109,6 +122,7 @@ func TestClaudeAdapter(t *testing.T) {
 		args := adapter.BuildArgs(BuildArgsInput{
 			Prompt:    "continue",
 			SessionID: "session-abc",
+			Resume:    true,
 			Model:     "sonnet",
 			Headless:  true,
 		})

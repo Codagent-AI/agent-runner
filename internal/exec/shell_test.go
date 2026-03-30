@@ -26,7 +26,7 @@ func (m *mockRunner) RunShell(cmd string, capture bool) (ProcessResult, error) {
 	return r, nil
 }
 
-func (m *mockRunner) RunAgent(args []string) (ProcessResult, error) {
+func (m *mockRunner) RunAgent(args []string, _ bool) (ProcessResult, error) {
 	m.calls = append(m.calls, args)
 	if m.idx >= len(m.results) {
 		return ProcessResult{ExitCode: 0}, nil

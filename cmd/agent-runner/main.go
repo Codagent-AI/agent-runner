@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,12 +61,27 @@ func (r *realProcessRunner) RunShell(cmd string, captureStdout bool) (iexec.Proc
 	return iexec.ProcessResult{ExitCode: exitCode}, nil
 }
 
-func (r *realProcessRunner) RunAgent(args []string) (iexec.ProcessResult, error) {
+func (r *realProcessRunner) RunAgent(args []string, captureStdout bool) (iexec.ProcessResult, error) {
 	c := exec.Command(args[0], args[1:]...) // #nosec G204 -- CLI runner launches agent processes by design
 	c.Stdin = os.Stdin
-	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 
+	if captureStdout {
+		var buf bytes.Buffer
+		c.Stdout = io.MultiWriter(os.Stdout, &buf)
+		err := c.Run()
+		exitCode := 0
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+			} else {
+				return iexec.ProcessResult{}, err
+			}
+		}
+		return iexec.ProcessResult{ExitCode: exitCode, Stdout: buf.String()}, nil
+	}
+
+	c.Stdout = os.Stdout
 	err := c.Run()
 	exitCode := 0
 	if err != nil {

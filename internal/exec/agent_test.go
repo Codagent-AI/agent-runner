@@ -50,18 +50,27 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatal("expected 'claude' as first arg")
 		}
 		// Should have -p flag for headless
-		found := false
-		for _, a := range args {
-			if a == "-p" {
-				found = true
-			}
-		}
-		if !found {
+		if !containsArg(args, "-p") {
 			t.Fatal("expected -p flag for headless mode")
 		}
 		// Last arg should be the prompt
 		if args[len(args)-1] != "implement feature" {
 			t.Fatalf("expected prompt as last arg, got %q", args[len(args)-1])
+		}
+	})
+
+	t.Run("fresh claude step uses --session-id with generated UUID", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew}
+		ctx := makeCtx()
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		args := runner.calls[0]
+		if !containsArg(args, "--session-id") {
+			t.Fatalf("expected --session-id for fresh claude step, got %v", args)
+		}
+		// Should store session ID in context
+		if ctx.SessionIDs["s"] == "" {
+			t.Fatal("expected session ID to be stored for fresh claude step")
 		}
 	})
 
@@ -171,10 +180,8 @@ func TestExecuteAgentStep(t *testing.T) {
 		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		args := runner.calls[0]
-		for _, a := range args {
-			if a == "-p" {
-				t.Fatal("did not expect -p flag for interactive mode")
-			}
+		if containsArg(args, "-p") {
+			t.Fatal("did not expect -p flag for interactive mode")
 		}
 	})
 
@@ -193,13 +200,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew, CLI: "codex"}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		args := runner.calls[0]
-		found := false
-		for _, a := range args {
-			if a == "--no-alt-screen" {
-				found = true
-			}
-		}
-		if !found {
+		if !containsArg(args, "--no-alt-screen") {
 			t.Fatalf("expected --no-alt-screen for codex interactive, got %v", args)
 		}
 	})
@@ -219,4 +220,13 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatalf("expected -m o3 in codex args, got %v", args)
 		}
 	})
+}
+
+func containsArg(args []string, target string) bool {
+	for _, a := range args {
+		if a == target {
+			return true
+		}
+	}
+	return false
 }

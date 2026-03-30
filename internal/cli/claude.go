@@ -15,7 +15,11 @@ func (a *ClaudeAdapter) BuildArgs(input BuildArgsInput) []string {
 	args := []string{"claude"}
 
 	if input.SessionID != "" {
-		args = append(args, "--resume", input.SessionID)
+		if input.Resume {
+			args = append(args, "--resume", input.SessionID)
+		} else {
+			args = append(args, "--session-id", input.SessionID)
+		}
 	}
 
 	if input.Model != "" {

@@ -32,7 +32,7 @@ type ExecutionContext struct {
 	// (Go maps are unordered, so we can't rely on insertion order).
 	LastSessionStepID string
 
-	NestingPath []NestingSegment
+	NestingPath   []NestingSegment
 	ParentContext *ExecutionContext
 
 	WorkflowFile string

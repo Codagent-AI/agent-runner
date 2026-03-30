@@ -9,7 +9,8 @@ import (
 // BuildArgsInput provides the parameters needed to construct CLI invocation args.
 type BuildArgsInput struct {
 	Prompt    string
-	SessionID string
+	SessionID string // Session ID to pass to the CLI (pre-generated for new, or existing for resume)
+	Resume    bool   // True when resuming an existing session, false for fresh sessions
 	Model     string
 	Headless  bool
 }
@@ -27,10 +28,10 @@ type Adapter interface {
 
 // DiscoverOptions provides context for session ID discovery after a CLI process exits.
 type DiscoverOptions struct {
-	SpawnTime    time.Time
-	PresetID     string // Pre-generated session ID (used by Claude adapter)
+	SpawnTime     time.Time
+	PresetID      string // Pre-generated session ID (used by Claude adapter)
 	ProcessOutput string // Captured stdout/stderr from the CLI process (used by Codex headless)
-	Headless     bool
+	Headless      bool
 }
 
 // registry holds the known CLI adapters, populated at init time.

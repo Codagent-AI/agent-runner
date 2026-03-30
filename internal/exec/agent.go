@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/engine"
@@ -26,10 +28,7 @@ func ExecuteAgentStep(
 
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 	startTime := time.Now()
-	mode := step.Mode
-	if mode == "" {
-		mode = model.ModeInteractive
-	}
+	mode := resolveMode(step)
 
 	prompt, enrichment, err := buildAgentPrompt(step, ctx)
 	if err != nil {
@@ -37,14 +36,7 @@ func ExecuteAgentStep(
 		return OutcomeFailed, nil
 	}
 
-	sessionID := resolveSessionID(step, ctx)
-
-	// Resolve CLI adapter (default to "claude").
-	cliName := step.CLI
-	if cliName == "" {
-		cliName = "claude"
-	}
-	adapter, err := cli.Get(cliName)
+	adapter, cliName, sessionID, isResume, err := resolveAdapterAndSession(step, ctx)
 	if err != nil {
 		emitAgentFailure(ctx, prefix, startTime, string(mode), step, err.Error())
 		return OutcomeFailed, nil
@@ -54,10 +46,111 @@ func ExecuteAgentStep(
 	args := adapter.BuildArgs(cli.BuildArgsInput{
 		Prompt:    prompt,
 		SessionID: sessionID,
+		Resume:    isResume,
 		Model:     step.Model,
 		Headless:  headless,
 	})
 
+	emitAgentStart(ctx, prefix, startTime, prompt, mode, step, sessionID, cliName, enrichment)
+	logAgentStep(log, mode, prompt)
+
+	spawnTime := time.Now()
+	outcome, result := runAgentProcess(runner, args, headless)
+
+	discoveredID := discoverAndStoreSession(adapter, step, ctx, spawnTime, sessionID, headless, result.Stdout, log)
+
+	emitAgentEnd(ctx, prefix, startTime, discoveredID, outcome)
+
+	return outcome, nil
+}
+
+func resolveMode(step *model.Step) model.StepMode {
+	if step.Mode == "" {
+		return model.ModeInteractive
+	}
+	return step.Mode
+}
+
+// resolveAdapterAndSession returns the CLI adapter, name, session ID, and
+// whether the session is a resume (vs. fresh). For fresh Claude sessions, a
+// new UUID is generated so the runner knows the session ID deterministically.
+func resolveAdapterAndSession(
+	step *model.Step, ctx *model.ExecutionContext,
+) (adapter cli.Adapter, cliName, sessionID string, isResume bool, err error) {
+	cliName = step.CLI
+	if cliName == "" {
+		cliName = "claude"
+	}
+	adapter, err = cli.Get(cliName)
+	if err != nil {
+		return nil, cliName, "", false, err
+	}
+
+	sessionID = resolveSessionID(step, ctx)
+	isResume = sessionID != ""
+
+	// For fresh Claude sessions, generate a UUID upfront so the adapter can
+	// pass it via --session-id and DiscoverSessionID can return it.
+	if !isResume && cliName == "claude" {
+		sessionID = uuid.New().String()
+	}
+
+	return adapter, cliName, sessionID, isResume, nil
+}
+
+func runAgentProcess(runner ProcessRunner, args []string, headless bool) (StepOutcome, ProcessResult) {
+	// Capture stdout for headless runs so that adapters (e.g. Codex) can
+	// parse session IDs from the process output.
+	result, runErr := runner.RunAgent(args, headless)
+	if runErr != nil {
+		return OutcomeFailed, result
+	}
+	if headless {
+		if result.ExitCode != 0 {
+			return OutcomeFailed, result
+		}
+		return OutcomeSuccess, result
+	}
+	// Interactive: non-zero exit is treated as abort.
+	if result.ExitCode != 0 {
+		return OutcomeAborted, result
+	}
+	return OutcomeSuccess, result
+}
+
+func discoverAndStoreSession(
+	adapter cli.Adapter,
+	step *model.Step,
+	ctx *model.ExecutionContext,
+	spawnTime time.Time,
+	presetID string,
+	headless bool,
+	processOutput string,
+	log Logger,
+) string {
+	discoveredID := adapter.DiscoverSessionID(cli.DiscoverOptions{
+		SpawnTime:     spawnTime,
+		PresetID:      presetID,
+		Headless:      headless,
+		ProcessOutput: processOutput,
+	})
+	if discoveredID != "" {
+		ctx.SessionIDs[step.ID] = discoveredID
+		ctx.LastSessionStepID = step.ID
+		log.Printf("  session: %s\n", discoveredID)
+	}
+	return discoveredID
+}
+
+func emitAgentStart(
+	ctx *model.ExecutionContext,
+	prefix string,
+	startTime time.Time,
+	prompt string,
+	mode model.StepMode,
+	step *model.Step,
+	sessionID, cliName, enrichment string,
+) {
 	emitAudit(ctx, audit.Event{
 		Timestamp: startTime.UTC().Format(time.RFC3339),
 		Prefix:    prefix,
@@ -73,53 +166,9 @@ func ExecuteAgentStep(
 			"context":             contextSnapshot(ctx),
 		},
 	})
+}
 
-	log.Printf("  mode: %s\n", mode)
-	if mode != model.ModeHeadless {
-		log.Println("  (exit to stop)")
-	}
-	if mode == model.ModeHeadless && os.Getenv("AGENT_RUNNER_SHOW_PROMPT") == "1" {
-		for _, line := range strings.Split(prompt, "\n") {
-			log.Printf("  %s\n", line)
-		}
-	}
-
-	spawnTime := time.Now()
-
-	var outcome StepOutcome
-	if headless {
-		result, runErr := runner.RunAgent(args)
-		if runErr != nil {
-			return OutcomeFailed, runErr
-		}
-		outcome = OutcomeSuccess
-		if result.ExitCode != 0 {
-			outcome = OutcomeFailed
-		}
-	} else {
-		// Interactive steps also use RunAgent; the PTY execution path
-		// will be implemented by the pseudo-terminal task.
-		result, runErr := runner.RunAgent(args)
-		if runErr != nil {
-			return OutcomeFailed, runErr
-		}
-		outcome = OutcomeSuccess
-		if result.ExitCode != 0 {
-			outcome = OutcomeAborted
-		}
-	}
-
-	discoveredID := adapter.DiscoverSessionID(cli.DiscoverOptions{
-		SpawnTime: spawnTime,
-		PresetID:  sessionID,
-		Headless:  headless,
-	})
-	if discoveredID != "" {
-		ctx.SessionIDs[step.ID] = discoveredID
-		ctx.LastSessionStepID = step.ID
-		log.Printf("  session: %s\n", discoveredID)
-	}
-
+func emitAgentEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, discoveredID string, outcome StepOutcome) {
 	emitAudit(ctx, audit.Event{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Prefix:    prefix,
@@ -130,8 +179,18 @@ func ExecuteAgentStep(
 			"duration_ms":           time.Since(startTime).Milliseconds(),
 		},
 	})
+}
 
-	return outcome, nil
+func logAgentStep(log Logger, mode model.StepMode, prompt string) {
+	log.Printf("  mode: %s\n", mode)
+	if mode != model.ModeHeadless {
+		log.Println("  (exit to stop)")
+	}
+	if mode == model.ModeHeadless && os.Getenv("AGENT_RUNNER_SHOW_PROMPT") == "1" {
+		for _, line := range strings.Split(prompt, "\n") {
+			log.Printf("  %s\n", line)
+		}
+	}
 }
 
 func buildAgentPrompt(step *model.Step, ctx *model.ExecutionContext) (prompt, enrichment string, err error) {

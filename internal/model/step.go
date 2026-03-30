@@ -120,6 +120,34 @@ func hasExactlyOneStepType(s *Step) bool {
 	return count == 1
 }
 
+// isAgentContext returns true if the step is an agent step (has a prompt or
+// an agent mode), as opposed to a shell, loop, sub-workflow, or group step.
+func (s *Step) isAgentContext() bool {
+	return s.Mode == ModeInteractive || s.Mode == ModeHeadless || s.Prompt != ""
+}
+
+func validateAgentOnlyField(fieldName string, mode StepMode, isAgent bool) error {
+	if mode == ModeShell {
+		return fmt.Errorf(`%q is only allowed on agent steps`, fieldName)
+	}
+	if !isAgent {
+		return fmt.Errorf(`%q is only allowed on agent steps`, fieldName)
+	}
+	return nil
+}
+
+func validateCLIName(cliValue string, knownCLIs []string) error {
+	if knownCLIs == nil {
+		return nil
+	}
+	for _, name := range knownCLIs {
+		if name == cliValue {
+			return nil
+		}
+	}
+	return fmt.Errorf(`unknown cli adapter: %q`, cliValue)
+}
+
 // Validate checks that a Step has a valid configuration.
 // knownCLIs is the list of registered CLI adapter names; if nil, CLI name
 // validation is skipped (useful for tests that don't care about CLI names).
@@ -128,6 +156,27 @@ func (s *Step) Validate(knownCLIs []string) error {
 		return fmt.Errorf(`step must have exactly one of: command, prompt/mode, loop+steps, workflow, or steps (group)`)
 	}
 
+	if err := s.validateFieldConstraints(knownCLIs); err != nil {
+		return err
+	}
+
+	if s.Loop != nil {
+		if err := s.Loop.Validate(); err != nil {
+			return err
+		}
+	}
+
+	for i := range s.Steps {
+		s.Steps[i].ApplyDefaults()
+		if err := s.Steps[i].Validate(knownCLIs); err != nil {
+			return fmt.Errorf("steps[%d]: %w", i, err)
+		}
+	}
+
+	return nil
+}
+
+func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 	if s.Mode == ModeShell && s.Command == "" {
 		return fmt.Errorf(`shell steps require "command", agent steps require "prompt"`)
 	}
@@ -139,37 +188,24 @@ func (s *Step) Validate(knownCLIs []string) error {
 		return fmt.Errorf(`"capture" is only allowed on shell steps`)
 	}
 
+	isAgent := s.isAgentContext()
+
 	if s.Model != "" {
-		if s.Mode == ModeShell {
-			return fmt.Errorf(`"model" is only allowed on agent steps`)
-		}
-		if s.Mode == "" && s.Prompt == "" {
-			return fmt.Errorf(`"model" is only allowed on agent steps`)
+		if err := validateAgentOnlyField("model", s.Mode, isAgent); err != nil {
+			return err
 		}
 	}
 
 	if s.CLI != "" {
-		if s.Mode == ModeShell {
-			return fmt.Errorf(`"cli" is only allowed on agent steps`)
+		if err := validateAgentOnlyField("cli", s.Mode, isAgent); err != nil {
+			return err
 		}
-		if s.Mode == "" && s.Prompt == "" {
-			return fmt.Errorf(`"cli" is only allowed on agent steps`)
-		}
-		if knownCLIs != nil {
-			found := false
-			for _, name := range knownCLIs {
-				if name == s.CLI {
-					found = true
-					break
-				}
-			}
-			if !found {
-				return fmt.Errorf(`unknown cli adapter: %q`, s.CLI)
-			}
+		if err := validateCLIName(s.CLI, knownCLIs); err != nil {
+			return err
 		}
 	}
 
-	if s.Loop != nil && (len(s.Steps) == 0) {
+	if s.Loop != nil && len(s.Steps) == 0 {
 		return fmt.Errorf(`"loop" requires a non-empty "steps" array`)
 	}
 
@@ -187,20 +223,6 @@ func (s *Step) Validate(knownCLIs []string) error {
 
 	if s.Mode != "" && s.Mode != ModeShell && s.Mode != ModeInteractive && s.Mode != ModeHeadless {
 		return fmt.Errorf(`invalid mode: %q`, s.Mode)
-	}
-
-	if s.Loop != nil {
-		if err := s.Loop.Validate(); err != nil {
-			return err
-		}
-	}
-
-	// Recursively validate child steps.
-	for i := range s.Steps {
-		s.Steps[i].ApplyDefaults()
-		if err := s.Steps[i].Validate(knownCLIs); err != nil {
-			return fmt.Errorf("steps[%d]: %w", i, err)
-		}
 	}
 
 	return nil
