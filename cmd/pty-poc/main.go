@@ -17,8 +17,22 @@ import (
 
 const (
 	signalFile  = ".agent-runner-signal"
-	debugLog    = "codex-pty-poc.log"
+	debugLog    = "pty-poc.log"
 	defaultTerm = "xterm-256color"
+)
+
+// Escape sequence parser states.  Covers all standard ANSI/xterm sequences:
+//   - CSI  (\x1b[)  — parameter bytes + final byte (0x40-0x7e)
+//   - OSC  (\x1b])  — payload terminated by BEL (0x07) or ST (\x1b\)
+//   - DCS  (\x1bP)  — same termination as OSC
+//   - PM   (\x1b^)  — same termination as OSC
+//   - APC  (\x1b_)  — same termination as OSC
+//   - SOS  (\x1bX)  — same termination as OSC
+const (
+	escNone      = iota
+	escSawEsc    // saw 0x1b, waiting for next byte
+	escInCSI     // inside CSI, waiting for final byte (0x40-0x7e)
+	escInStringSeq // inside OSC/DCS/PM/APC/SOS, waiting for BEL or ST
 )
 
 var (
@@ -29,12 +43,22 @@ var (
 	pendingContinue bool
 	mu              sync.Mutex
 	logFile         *os.File
+	lineBuffer      []byte
+	escState        int
 )
 
 func resolveCodexPath() (string, error) {
 	path, err := exec.LookPath("codex")
 	if err != nil {
 		return "", fmt.Errorf("could not resolve \"codex\" on PATH: %w", err)
+	}
+	return path, nil
+}
+
+func resolveClaudePath() (string, error) {
+	path, err := exec.LookPath("claude")
+	if err != nil {
+		return "", fmt.Errorf("could not resolve \"claude\" on PATH: %w", err)
 	}
 	return path, nil
 }
@@ -90,16 +114,17 @@ func renderHome() {
 	mu.Unlock()
 
 	clearScreen()
-	fmt.Fprintln(os.Stdout, "Agent Runner PTY Codex POC")
+	fmt.Fprintln(os.Stdout, "Agent Runner PTY POC")
 	fmt.Fprintln(os.Stdout)
 	cwd, _ := os.Getwd()
 	fmt.Fprintf(os.Stdout, "cwd: %s\n\n", cwd)
-	fmt.Fprintln(os.Stdout, "Controls")
-	fmt.Fprintln(os.Stdout, "  space  open Codex in a PTY")
-	fmt.Fprintln(os.Stdout, "  esc    exit this POC")
+	fmt.Fprintln(os.Stdout, "  c        launch Claude")
+	fmt.Fprintln(os.Stdout, "  x        launch Codex")
+	fmt.Fprintln(os.Stdout, "  esc      exit")
 	fmt.Fprintln(os.Stdout)
-	fmt.Fprintln(os.Stdout, "Inside Codex")
-	fmt.Fprintln(os.Stdout, "  ctrl-] continue back to this screen and write .agent-runner-signal")
+	fmt.Fprintln(os.Stdout, "Inside an agent")
+	fmt.Fprintln(os.Stdout, "  /next    continue back to this screen")
+	fmt.Fprintln(os.Stdout, "  ctrl-]   continue back to this screen")
 	fmt.Fprintf(os.Stdout, "\nDebug log: %s\n", debugLog)
 }
 
@@ -112,104 +137,122 @@ func writeContinueSignal() {
 	os.WriteFile(signalFile, data, 0o600) // #nosec G104 -- best-effort signal file write
 }
 
-func isContinueShortcut(data []byte) bool {
-	for _, b := range data {
-		if b == 0x1d { // Ctrl-]
+// processAgentInput processes a stdin chunk, forwarding bytes to the PTY
+// while tracking the current input line.  Returns true if a continue trigger
+// was detected (Ctrl-], enhanced-keyboard Ctrl-], or "/next" followed by Enter).
+//
+// Bytes are accumulated and flushed to the PTY in batches to preserve the
+// original chunk boundaries.  Writing byte-by-byte would break escape
+// sequences because the receiving application may interpret a lone \x1b as
+// a standalone Escape keypress.
+func processAgentInput(chunk []byte) bool {
+	// Check for enhanced-keyboard Ctrl-] encodings on the whole chunk first.
+	text := string(chunk)
+	if strings.Contains(text, "\x1b[93;5u") || strings.Contains(text, "\x1b[27;5;93~") {
+		logDebug("matched continue shortcut (enhanced keyboard)")
+		return true
+	}
+
+	mu.Lock()
+	ptmx := activePTY
+	mu.Unlock()
+
+	flush := func(data []byte) {
+		if ptmx != nil && len(data) > 0 {
+			ptmx.Write(data) // #nosec G104 -- best-effort PTY write
+		}
+	}
+
+	var buf []byte
+
+	for _, b := range chunk {
+		// Escape sequence state machine — consume full sequences without
+		// touching lineBuffer.
+		switch escState {
+		case escSawEsc:
+			switch b {
+			case '[':
+				escState = escInCSI
+			case ']', 'P', '^', '_', 'X': // OSC, DCS, PM, APC, SOS
+				escState = escInStringSeq
+			default:
+				escState = escNone // simple two-byte escape
+			}
+			buf = append(buf, b)
+			continue
+		case escInCSI:
+			if b >= 0x40 && b <= 0x7e { // final byte
+				escState = escNone
+			}
+			buf = append(buf, b)
+			continue
+		case escInStringSeq:
+			if b == 0x07 { // BEL terminates
+				escState = escNone
+			} else if b == 0x1b { // start of ST (\x1b\)
+				escState = escSawEsc
+			}
+			buf = append(buf, b)
+			continue
+		}
+
+		// Start of a new escape sequence.
+		if b == 0x1b {
+			escState = escSawEsc
+			buf = append(buf, b)
+			continue
+		}
+
+		// Ctrl-] — flush what we have, then signal continue.
+		if b == 0x1d {
+			flush(buf)
+			logDebug("matched continue shortcut (ctrl-])")
 			return true
 		}
-	}
-	text := string(data)
-	return strings.Contains(text, "\x1b[93;5u") || strings.Contains(text, "\x1b[27;5;93~")
-}
 
-func requestGracefulExitFromCodex() {
-	mu.Lock()
-	ptmx := activePTY
-	mu.Unlock()
-	if ptmx == nil {
-		return
-	}
-
-	logDebug("sending graceful codex exit sequence")
-
-	// Esc interrupts an active run back to the prompt.
-	ptmx.Write([]byte("\x1b")) // #nosec G104 -- best-effort PTY write
-
-	// Ctrl-U clears any partially typed command so Ctrl-D sees an empty prompt.
-	time.AfterFunc(75*time.Millisecond, func() {
-		mu.Lock()
-		p := activePTY
-		mu.Unlock()
-		if p != nil {
-			p.Write([]byte("\x15")) // #nosec G104 -- best-effort PTY write
+		// Update line buffer and check for /next on Enter.
+		switch {
+		case b == '\r' || b == '\n':
+			logDebug(fmt.Sprintf("enter pressed, lineBuffer=%q", string(lineBuffer)))
+			if string(lineBuffer) == "/next" {
+				// Flush everything before this Enter, but not the Enter itself.
+				flush(buf)
+				logDebug("matched /next command")
+				lineBuffer = lineBuffer[:0]
+				return true
+			}
+			lineBuffer = lineBuffer[:0]
+		case b == 0x7f || b == 0x08: // backspace / delete
+			if len(lineBuffer) > 0 {
+				lineBuffer = lineBuffer[:len(lineBuffer)-1]
+			}
+		case b == 0x15: // Ctrl-U (kill line)
+			lineBuffer = lineBuffer[:0]
+		case b >= 0x20 && b < 0x7f: // printable ASCII
+			lineBuffer = append(lineBuffer, b)
 		}
-	})
 
-	// Ctrl-D at an empty prompt exits Codex cleanly.
-	time.AfterFunc(150*time.Millisecond, func() {
-		mu.Lock()
-		p := activePTY
-		mu.Unlock()
-		if p != nil {
-			p.Write([]byte("\x04")) // #nosec G104 -- best-effort PTY write
-		}
-	})
-
-	// Timeout warning.
-	time.AfterFunc(2*time.Second, func() {
-		mu.Lock()
-		p := activePTY
-		mu.Unlock()
-		if p != nil {
-			logDebug("graceful exit timeout expired")
-			fmt.Fprint(os.Stdout, "\r\n[agent-runner] Codex did not exit yet. Press Ctrl-] again or exit Codex manually.\r\n")
-		}
-	})
-}
-
-func requestContinueExitFromCodex() {
-	mu.Lock()
-	ptmx := activePTY
-	mu.Unlock()
-	if ptmx == nil {
-		return
+		buf = append(buf, b)
 	}
 
-	logDebug("trying injected /quit for continue flow")
-
-	// First try an in-band quit command while preserving Baton-owned continue semantics.
-	ptmx.Write([]byte("\x15/quit\r")) // #nosec G104 -- best-effort PTY write
-
-	// If Codex does not exit from /quit, fall back to the known-good graceful sequence.
-	time.AfterFunc(400*time.Millisecond, func() {
-		mu.Lock()
-		p := activePTY
-		stillContinuing := pendingContinue
-		mu.Unlock()
-		if p != nil && stillContinuing {
-			logDebug("injected /quit did not exit codex, falling back to graceful exit sequence")
-			requestGracefulExitFromCodex()
-		}
-	})
+	flush(buf)
+	return false
 }
 
-func continueOutOfCodex() {
+func continueOutOfAgent() {
 	mu.Lock()
-	if activePTY == nil {
+	if activePTY == nil || activeCmd == nil {
 		mu.Unlock()
 		return
 	}
+	pendingContinue = true
+	cmd := activeCmd
 	mu.Unlock()
 
 	writeContinueSignal()
-	logDebug("continue shortcut intercepted")
+	logDebug("continue shortcut intercepted, sending SIGTERM to child")
 
-	mu.Lock()
-	pendingContinue = true
-	mu.Unlock()
-
-	fmt.Fprint(os.Stdout, "\r\n[agent-runner] continue intercepted, asking Codex to exit...\r\n")
-	requestContinueExitFromCodex()
+	cmd.Process.Signal(syscall.SIGTERM) // #nosec G104 -- best-effort signal
 }
 
 func syncPTYSize() {
@@ -236,10 +279,10 @@ func startCodex() {
 	mode = "codex"
 	pendingContinue = false
 	mu.Unlock()
+	lineBuffer = lineBuffer[:0]
+	escState = escNone
 
 	clearScreen()
-	fmt.Fprint(os.Stdout, "[agent-runner] launching Codex in PTY...\r\n")
-	fmt.Fprint(os.Stdout, "[agent-runner] press Ctrl-] to continue back to Agent Runner\r\n\r\n")
 	logDebug("launching codex")
 
 	codexPath, err := resolveCodexPath()
@@ -294,9 +337,79 @@ func startCodex() {
 		isShuttingDown := shuttingDown
 		mu.Unlock()
 
-		if wasPending || !isShuttingDown {
+		if wasPending {
 			restoreTerminalModes()
 			renderHome()
+		} else if !isShuttingDown {
+			cleanupAndExit(0)
+		}
+	}()
+}
+
+func startClaude() {
+	removeSignalFile()
+	mu.Lock()
+	mode = "claude"
+	pendingContinue = false
+	mu.Unlock()
+	lineBuffer = lineBuffer[:0]
+	escState = escNone
+
+	clearScreen()
+	logDebug("launching claude")
+
+	claudePath, err := resolveClaudePath()
+	if err != nil {
+		fmt.Fprintf(os.Stdout, "[agent-runner] failed to launch Claude: %v\r\n", err)
+		renderHome()
+		return
+	}
+
+	cmd := exec.Command(claudePath) // #nosec G204 -- PTY POC launches claude interactively
+	cmd.Env = ensureTermEnv(os.Environ())
+
+	size, sizeErr := pty.GetsizeFull(os.Stdin)
+	var ptmx *os.File
+	if sizeErr == nil {
+		ptmx, err = pty.StartWithSize(cmd, size)
+	} else {
+		logDebug(fmt.Sprintf("failed to read initial stdin size: %v", sizeErr))
+		ptmx, err = pty.Start(cmd)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stdout, "[agent-runner] failed to launch Claude: %v\r\n", err)
+		renderHome()
+		return
+	}
+
+	mu.Lock()
+	activePTY = ptmx
+	activeCmd = cmd
+	mu.Unlock()
+
+	// Read PTY output and forward to stdout.
+	go func() {
+		io.Copy(os.Stdout, ptmx) // #nosec G104 -- best-effort PTY→stdout copy
+	}()
+
+	// Wait for process exit.
+	go func() {
+		cmd.Wait() // #nosec G104 -- exit status handled via process state
+		logDebug("claude pty exited")
+
+		mu.Lock()
+		activePTY = nil
+		activeCmd = nil
+		wasPending := pendingContinue
+		pendingContinue = false
+		isShuttingDown := shuttingDown
+		mu.Unlock()
+
+		if wasPending {
+			restoreTerminalModes()
+			renderHome()
+		} else if !isShuttingDown {
+			cleanupAndExit(0)
 		}
 	}()
 }
@@ -377,41 +490,32 @@ func main() {
 
 		logDebug(fmt.Sprintf("stdin mode=%s %s", mode, describeChunk(chunk)))
 
-		// Ctrl-C always exits.
-		for _, b := range chunk {
-			if b == 0x03 {
-				cleanupAndExit(130)
-			}
-		}
-
 		mu.Lock()
 		currentMode := mode
 		mu.Unlock()
 
 		if currentMode == "home" {
 			for _, b := range chunk {
+				if b == 0x03 { // Ctrl-C
+					cleanupAndExit(130)
+				}
 				if b == 0x1b { // Esc
 					cleanupAndExit(0)
 				}
-				if b == 0x20 { // Space
+				if b == 'c' || b == 'C' {
+					startClaude()
+					break
+				}
+				if b == 'x' || b == 'X' {
 					startCodex()
 					break
 				}
 			}
 		} else {
-			logDebug(fmt.Sprintf("codex stdin %s", describeChunk(chunk)))
+			logDebug(fmt.Sprintf("%s stdin %s", currentMode, describeChunk(chunk)))
 
-			if isContinueShortcut(chunk) {
-				logDebug("matched continue shortcut")
-				continueOutOfCodex()
-				continue
-			}
-
-			mu.Lock()
-			ptmx := activePTY
-			mu.Unlock()
-			if ptmx != nil {
-				ptmx.Write(chunk) // #nosec G104 -- best-effort PTY write
+			if processAgentInput(chunk) {
+				continueOutOfAgent()
 			}
 		}
 	}
