@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -19,6 +18,7 @@ const (
 	signalFile  = ".agent-runner-signal"
 	debugLog    = "pty-poc.log"
 	defaultTerm = "xterm-256color"
+	hintDelay   = 800 * time.Millisecond
 )
 
 // Escape sequence parser states.  Covers all standard ANSI/xterm sequences:
@@ -45,6 +45,7 @@ var (
 	logFile         *os.File
 	lineBuffer      []byte
 	escState        int
+	hintTimer       *time.Timer
 )
 
 func resolveCodexPath() (string, error) {
@@ -240,6 +241,7 @@ func processAgentInput(chunk []byte) bool {
 }
 
 func continueOutOfAgent() {
+	cancelHintTimer()
 	mu.Lock()
 	if activePTY == nil || activeCmd == nil {
 		mu.Unlock()
@@ -270,6 +272,65 @@ func syncPTYSize() {
 	}
 	if err := pty.Setsize(ptmx, size); err != nil {
 		logDebug(fmt.Sprintf("failed to resize pty: %v", err))
+	}
+}
+
+func drawHint() {
+	mu.Lock()
+	currentMode := mode
+	isShutting := shuttingDown
+	mu.Unlock()
+
+	if currentMode == "home" || isShutting {
+		return
+	}
+
+	size, err := pty.GetsizeFull(os.Stdin)
+	if err != nil {
+		return
+	}
+
+	hint := " /next or Ctrl-] to continue to next step"
+	cols := int(size.Cols)
+	if len(hint) > cols {
+		hint = hint[:cols]
+	}
+
+	// Save cursor, move to bottom row, dim+reverse bar, restore cursor.
+	fmt.Fprintf(os.Stdout, "\x1b7\x1b[%d;1H\x1b[2;7m%-*s\x1b[0m\x1b8", size.Rows, cols, hint)
+	logDebug("drew idle hint")
+}
+
+func resetHintTimer() {
+	mu.Lock()
+	if hintTimer != nil {
+		hintTimer.Stop()
+	}
+	hintTimer = time.AfterFunc(hintDelay, drawHint)
+	mu.Unlock()
+}
+
+func cancelHintTimer() {
+	mu.Lock()
+	if hintTimer != nil {
+		hintTimer.Stop()
+		hintTimer = nil
+	}
+	mu.Unlock()
+}
+
+func forwardPTYOutput(ptmx *os.File) {
+	buf := make([]byte, 4096)
+	for {
+		n, err := ptmx.Read(buf)
+		if n > 0 {
+			os.Stdout.Write(buf[:n]) // #nosec G104 -- best-effort PTY→stdout copy
+			resetHintTimer()
+		}
+		if err != nil {
+			cancelHintTimer()
+			break
+		}
 	}
 }
 
@@ -319,10 +380,8 @@ func startCodex() {
 	activeCmd = cmd
 	mu.Unlock()
 
-	// Read PTY output and forward to stdout.
-	go func() {
-		io.Copy(os.Stdout, ptmx) // #nosec G104 -- best-effort PTY→stdout copy
-	}()
+	// Read PTY output, forward to stdout, and manage idle hint.
+	go forwardPTYOutput(ptmx)
 
 	// Wait for process exit.
 	go func() {
@@ -387,10 +446,8 @@ func startClaude() {
 	activeCmd = cmd
 	mu.Unlock()
 
-	// Read PTY output and forward to stdout.
-	go func() {
-		io.Copy(os.Stdout, ptmx) // #nosec G104 -- best-effort PTY→stdout copy
-	}()
+	// Read PTY output, forward to stdout, and manage idle hint.
+	go forwardPTYOutput(ptmx)
 
 	// Wait for process exit.
 	go func() {
@@ -415,6 +472,7 @@ func startClaude() {
 }
 
 func cleanupAndExit(code int) {
+	cancelHintTimer()
 	mu.Lock()
 	shuttingDown = true
 	if activeCmd != nil {

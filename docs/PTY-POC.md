@@ -231,6 +231,7 @@ The main runtime state in `main.go` is:
 - `logFile`: debug log handle
 - `lineBuffer`: tracks user-typed characters on the current input line
 - `escState`: current escape sequence parser state
+- `hintTimer`: timer that draws an idle hint after PTY output goes silent
 
 The state is guarded with a mutex because PTY exit, signal handling, and stdin processing all run concurrently.
 
@@ -253,7 +254,7 @@ The state is guarded with a mutex because PTY exit, signal handling, and stdin p
 3. reset line buffer and escape state
 4. clear the screen
 5. spawn the agent in a PTY
-6. copy PTY output to stdout
+6. forward PTY output to stdout with idle hint timer
 7. wait for agent exit in a goroutine
 
 ### Continue
@@ -279,6 +280,20 @@ The state is guarded with a mutex because PTY exit, signal handling, and stdin p
 
 Only `/next` and `Ctrl-]` are reserved by the host in agent mode.
 
+## Idle Hint
+
+When an agent is running and its PTY output goes silent for 800ms, the POC draws a dim hint bar on the bottom row of the terminal:
+
+```
+ /next or Ctrl-] to continue to next step
+```
+
+The hint is rendered with dim + reverse video (`\x1b[2;7m`) and spans the full terminal width. Cursor position is saved before drawing and restored after, so the agent's display is not disturbed.
+
+The hint disappears naturally when the agent produces more output — no explicit erase is needed. The timer resets on every PTY output chunk, so the hint only appears during genuine idle periods (e.g. when the agent is waiting for user input).
+
+The hint timer is cancelled on continue, agent exit, and POC shutdown.
+
 ## What This POC Proves
 
 This POC successfully demonstrates that Agent Runner can:
@@ -292,3 +307,4 @@ This POC successfully demonstrates that Agent Runner can:
 - resize the PTY with the terminal
 - recover terminal state on shutdown
 - support multiple agent backends from the same host
+- show a non-intrusive idle hint without conflicting with the agent's TUI
