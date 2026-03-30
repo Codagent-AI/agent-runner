@@ -12,6 +12,7 @@ There are many YAML-based workflow engines (Argo, Kestra, Step Functions) and CL
 
 ## Features
 
+- **Multi-CLI support**: invoke Claude, Codex, or other agent backends through a uniform adapter interface
 - **Three step modes**: interactive (collaborative), headless (autonomous), shell (CLI commands)
 - **Session management**: `new`, `resume`, or `inherit` sessions across steps and sub-workflows
 - **Loops**: counted loops (`loop: { max: N }`) and for-each loops (`loop: { over, as }`) with `break_if` conditions
@@ -112,7 +113,6 @@ The built-in `openspec` engine integrates with the [OpenSpec](https://github.com
 ```yaml
 name: my-workflow
 description: "What this workflow does"
-agent: claude
 
 params:
   - name: change_name
@@ -142,6 +142,12 @@ steps:
     session: new
     model: sonnet
     prompt: "Verify the implementation"
+
+  - id: codex-review
+    mode: headless
+    cli: codex
+    model: o3
+    prompt: "Review the implementation"
 ```
 
 ### Step fields
@@ -153,7 +159,8 @@ steps:
 | `prompt` | agent steps | Prompt passed to the agent. Supports `{{param}}` interpolation. |
 | `command` | shell steps | Shell command to execute. Supports `{{param}}` interpolation. |
 | `session` | no | `new` (default), `resume`, or `inherit`. Only applies to agent steps. |
-| `model` | no | Model override for agent steps. Passed as `--model <value>` to claude. |
+| `cli` | no | CLI backend for agent steps: `claude` (default) or `codex`. |
+| `model` | no | Model override for agent steps. Passed through the CLI adapter. |
 | `capture` | no | Variable name to capture shell stdout into. Shell steps only. |
 | `continue_on_failure` | no | If `true`, workflow continues even if this step fails. |
 | `skip_if` | no | `previous_success` -- skip this step if the prior step succeeded. |
@@ -199,12 +206,11 @@ The seed propagates through sub-workflows and loop iterations, so it works regar
 
 Configuration resolves in layers, each overriding the previous:
 
-1. **Global (user-level)** — `default_agent`, `default_model`
+1. **Global (user-level)** — `default_model`
 2. **Project-level** — project-specific defaults
-3. **Workflow-level** — `agent` field in the workflow YAML
-4. **Step-level** — `model` field on individual steps
+3. **Step-level** — `cli` and `model` fields on individual steps
 
-This means a workflow can declare `agent: claude` at the top and override with `model: sonnet` on a single review step.
+Steps default to the `claude` CLI adapter. Use `cli: codex` on a step to invoke Codex instead. The `model` field is passed through the CLI adapter.
 
 ## Planned: Workflow extensibility
 
@@ -240,6 +246,11 @@ Design goal: modify behavior without rewriting entire workflows.
 │   ├── runner/
 │   │   ├── runner.go          # Workflow execution loop
 │   │   └── resume.go          # State restoration
+│   │
+│   ├── cli/
+│   │   ├── adapter.go         # Adapter interface & registry
+│   │   ├── claude.go          # Claude CLI adapter
+│   │   └── codex.go           # Codex CLI adapter
 │   │
 │   ├── exec/                  # Step executors
 │   │   ├── agent.go           # Agent step executor

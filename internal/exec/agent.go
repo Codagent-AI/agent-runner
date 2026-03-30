@@ -1,23 +1,26 @@
 package exec
 
 import (
-	"encoding/json"
 	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/engine"
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/pty"
 	"github.com/codagent/agent-runner/internal/session"
 	"github.com/codagent/agent-runner/internal/textfmt"
 )
 
-const signalFile = ".agent-runner-signal"
+// interactiveRunnerFn runs an interactive agent step inside a PTY.
+// Defaults to pty.RunInteractive; replaced in tests.
+var interactiveRunnerFn = pty.RunInteractive
 
-// ExecuteAgentStep runs an agent (Claude) step.
+// ExecuteAgentStep runs an agent step using the resolved CLI adapter.
 func ExecuteAgentStep(
 	step *model.Step,
 	ctx *model.ExecutionContext,
@@ -30,10 +33,7 @@ func ExecuteAgentStep(
 
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 	startTime := time.Now()
-	mode := step.Mode
-	if mode == "" {
-		mode = model.ModeInteractive
-	}
+	mode := resolveMode(step)
 
 	prompt, enrichment, err := buildAgentPrompt(step, ctx)
 	if err != nil {
@@ -41,8 +41,135 @@ func ExecuteAgentStep(
 		return OutcomeFailed, nil
 	}
 
-	sessionID := resolveSessionID(step, ctx)
+	adapter, cliName, sessionID, isResume, err := resolveAdapterAndSession(step, ctx)
+	if err != nil {
+		emitAgentFailure(ctx, prefix, startTime, string(mode), step, err.Error())
+		return OutcomeFailed, nil
+	}
 
+	headless := mode == model.ModeHeadless
+	args := adapter.BuildArgs(cli.BuildArgsInput{
+		Prompt:    prompt,
+		SessionID: sessionID,
+		Resume:    isResume,
+		Model:     step.Model,
+		Headless:  headless,
+	})
+
+	emitAgentStart(ctx, prefix, startTime, prompt, mode, step, sessionID, cliName, enrichment)
+	logAgentStep(log, mode, prompt)
+
+	spawnTime := time.Now()
+	outcome, result, runErr := runAgentProcess(runner, args, headless, log)
+	if runErr != nil {
+		return OutcomeFailed, runErr
+	}
+
+	discoveredID := discoverAndStoreSession(adapter, step, ctx, spawnTime, sessionID, headless, result.Stdout, log)
+
+	emitAgentEnd(ctx, prefix, startTime, discoveredID, outcome)
+
+	return outcome, nil
+}
+
+func resolveMode(step *model.Step) model.StepMode {
+	if step.Mode == "" {
+		return model.ModeInteractive
+	}
+	return step.Mode
+}
+
+// resolveAdapterAndSession returns the CLI adapter, name, session ID, and
+// whether the session is a resume (vs. fresh). For fresh Claude sessions, a
+// new UUID is generated so the runner knows the session ID deterministically.
+func resolveAdapterAndSession(
+	step *model.Step, ctx *model.ExecutionContext,
+) (adapter cli.Adapter, cliName, sessionID string, isResume bool, err error) {
+	cliName = step.CLI
+	if cliName == "" {
+		cliName = "claude"
+	}
+	adapter, err = cli.Get(cliName)
+	if err != nil {
+		return nil, cliName, "", false, err
+	}
+
+	sessionID = resolveSessionID(step, ctx)
+	isResume = sessionID != ""
+
+	// For fresh Claude sessions, generate a UUID upfront so the adapter can
+	// pass it via --session-id and DiscoverSessionID can return it.
+	if !isResume && cliName == "claude" {
+		sessionID = uuid.New().String()
+	}
+
+	return adapter, cliName, sessionID, isResume, nil
+}
+
+func runAgentProcess(runner ProcessRunner, args []string, headless bool, log Logger) (StepOutcome, ProcessResult, error) {
+	if headless {
+		// Capture stdout for headless runs so that adapters (e.g. Codex) can
+		// parse session IDs from the process output.
+		result, runErr := runner.RunAgent(args, true)
+		if runErr != nil {
+			return OutcomeFailed, result, runErr
+		}
+		if result.ExitCode != 0 {
+			return OutcomeFailed, result, nil
+		}
+		return OutcomeSuccess, result, nil
+	}
+
+	// Interactive: run inside a PTY with continue-trigger detection.
+	ptyResult, err := interactiveRunnerFn(args, pty.Options{})
+	if err != nil {
+		return OutcomeFailed, ProcessResult{}, err
+	}
+
+	result := ProcessResult{ExitCode: ptyResult.ExitCode}
+
+	if ptyResult.ContinueTriggered {
+		return OutcomeSuccess, result, nil
+	}
+
+	// CLI exited without a continue trigger.
+	log.Printf("\n  CLI session exited. To resume this workflow, run:\n    agent-runner --resume\n\n")
+	return OutcomeAborted, result, nil
+}
+
+func discoverAndStoreSession(
+	adapter cli.Adapter,
+	step *model.Step,
+	ctx *model.ExecutionContext,
+	spawnTime time.Time,
+	presetID string,
+	headless bool,
+	processOutput string,
+	log Logger,
+) string {
+	discoveredID := adapter.DiscoverSessionID(cli.DiscoverOptions{
+		SpawnTime:     spawnTime,
+		PresetID:      presetID,
+		Headless:      headless,
+		ProcessOutput: processOutput,
+	})
+	if discoveredID != "" {
+		ctx.SessionIDs[step.ID] = discoveredID
+		ctx.LastSessionStepID = step.ID
+		log.Printf("  session: %s\n", discoveredID)
+	}
+	return discoveredID
+}
+
+func emitAgentStart(
+	ctx *model.ExecutionContext,
+	prefix string,
+	startTime time.Time,
+	prompt string,
+	mode model.StepMode,
+	step *model.Step,
+	sessionID, cliName, enrichment string,
+) {
 	emitAudit(ctx, audit.Event{
 		Timestamp: startTime.UTC().Format(time.RFC3339),
 		Prefix:    prefix,
@@ -53,47 +180,14 @@ func ExecuteAgentStep(
 			"session_strategy":    string(step.Session),
 			"resolved_session_id": sessionID,
 			"model":               step.Model,
+			"cli":                 cliName,
 			"enrichment":          enrichment,
 			"context":             contextSnapshot(ctx),
 		},
 	})
+}
 
-	args := buildAgentArgs(step, prompt, sessionID, ctx.AgentCmd)
-
-	log.Printf("  mode: %s\n", mode)
-	if mode != model.ModeHeadless {
-		log.Println("  (/continue to advance, exit to stop)")
-	}
-	if mode == model.ModeHeadless && os.Getenv("AGENT_RUNNER_SHOW_PROMPT") == "1" {
-		for _, line := range strings.Split(prompt, "\n") {
-			log.Printf("  %s\n", line)
-		}
-	}
-
-	cleanSignalFile()
-
-	spawnTime := time.Now()
-
-	var outcome StepOutcome
-	if mode == model.ModeHeadless {
-		result, runErr := runner.RunAgent(args)
-		if runErr != nil {
-			return OutcomeFailed, runErr
-		}
-		outcome = OutcomeSuccess
-		if result.ExitCode != 0 {
-			outcome = OutcomeFailed
-		}
-	} else {
-		proc, startErr := runner.StartAgent(args)
-		if startErr != nil {
-			return OutcomeFailed, startErr
-		}
-		outcome = waitForSignalOrExit(proc)
-	}
-
-	discoveredID := discoverAndStoreSession(step, ctx, spawnTime, log)
-
+func emitAgentEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, discoveredID string, outcome StepOutcome) {
 	emitAudit(ctx, audit.Event{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Prefix:    prefix,
@@ -104,8 +198,18 @@ func ExecuteAgentStep(
 			"duration_ms":           time.Since(startTime).Milliseconds(),
 		},
 	})
+}
 
-	return outcome, nil
+func logAgentStep(log Logger, mode model.StepMode, prompt string) {
+	log.Printf("  mode: %s\n", mode)
+	if mode != model.ModeHeadless {
+		log.Println("  (exit to stop)")
+	}
+	if mode == model.ModeHeadless && os.Getenv("AGENT_RUNNER_SHOW_PROMPT") == "1" {
+		for _, line := range strings.Split(prompt, "\n") {
+			log.Printf("  %s\n", line)
+		}
+	}
 }
 
 func buildAgentPrompt(step *model.Step, ctx *model.ExecutionContext) (prompt, enrichment string, err error) {
@@ -125,24 +229,6 @@ func buildAgentPrompt(step *model.Step, ctx *model.ExecutionContext) (prompt, en
 	}
 
 	return prompt, enrichment, nil
-}
-
-func buildAgentArgs(step *model.Step, prompt, sessionID, agentCmd string) []string {
-	if agentCmd == "" {
-		agentCmd = "claude"
-	}
-	args := []string{agentCmd}
-	if sessionID != "" {
-		args = append(args, "--resume", sessionID)
-	}
-	if step.Model != "" {
-		args = append(args, "--model", step.Model)
-	}
-	if step.Mode == model.ModeHeadless {
-		args = append(args, "-p")
-	}
-	args = append(args, prompt)
-	return args
 }
 
 func resolveSessionID(step *model.Step, ctx *model.ExecutionContext) string {
@@ -184,125 +270,4 @@ func emitAgentFailure(ctx *model.ExecutionContext, prefix string, startTime time
 			"duration_ms": time.Since(startTime).Milliseconds(),
 		},
 	})
-}
-
-func discoverAndStoreSession(step *model.Step, ctx *model.ExecutionContext, spawnTime time.Time, log Logger) string {
-	id := findConversationID(spawnTime)
-	if id != "" {
-		ctx.SessionIDs[step.ID] = id
-		ctx.LastSessionStepID = step.ID
-		log.Printf("  session: %s\n", id)
-	}
-	return id
-}
-
-func findConversationID(startTime time.Time) string {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	encodedCwd := encodeCwd(cwd)
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	projectDir := filepath.Join(home, ".claude", "projects", encodedCwd)
-
-	entries, err := os.ReadDir(projectDir)
-	if err != nil {
-		return ""
-	}
-
-	type candidate struct {
-		name    string
-		modTime time.Time
-	}
-	var candidates []candidate
-
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		if info.ModTime().Before(startTime) {
-			continue
-		}
-		candidates = append(candidates, candidate{name: entry.Name(), modTime: info.ModTime()})
-	}
-
-	if len(candidates) == 0 {
-		return ""
-	}
-
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].modTime.After(candidates[j].modTime)
-	})
-
-	return strings.TrimSuffix(candidates[0].name, ".jsonl")
-}
-
-func encodeCwd(cwd string) string {
-	return strings.NewReplacer("/", "-", ".", "-", "_", "-").Replace(filepath.Clean(cwd))
-}
-
-func cleanSignalFile() {
-	_ = os.Remove(signalFile)
-}
-
-func readSignalAction() string {
-	data, err := os.ReadFile(signalFile) // #nosec G304 -- signal file path is a constant
-	if err != nil {
-		return "continue"
-	}
-	var signal struct {
-		Action string `json:"action"`
-	}
-	if err := json.Unmarshal(data, &signal); err != nil || signal.Action == "" {
-		return "continue"
-	}
-	return signal.Action
-}
-
-func waitForSignalOrExit(proc AgentProcess) StepOutcome {
-	type result struct {
-		outcome StepOutcome
-	}
-	done := make(chan result, 1)
-
-	// Poll for signal file.
-	go func() {
-		ticker := time.NewTicker(500 * time.Millisecond)
-		defer ticker.Stop()
-		for range ticker.C {
-			if _, err := os.Stat(signalFile); err != nil {
-				continue
-			}
-			action := readSignalAction()
-			cleanSignalFile()
-			_ = proc.Kill()
-			if action == "continue" {
-				done <- result{outcome: OutcomeSuccess}
-			} else {
-				done <- result{outcome: OutcomeAborted}
-			}
-			return
-		}
-	}()
-
-	// Wait for process exit.
-	go func() {
-		res, _ := proc.Wait()
-		cleanSignalFile()
-		if res.ExitCode == 0 {
-			done <- result{outcome: OutcomeSuccess}
-		} else {
-			done <- result{outcome: OutcomeAborted}
-		}
-	}()
-
-	r := <-done
-	return r.outcome
 }

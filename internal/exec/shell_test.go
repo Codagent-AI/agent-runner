@@ -26,7 +26,7 @@ func (m *mockRunner) RunShell(cmd string, capture bool) (ProcessResult, error) {
 	return r, nil
 }
 
-func (m *mockRunner) RunAgent(args []string) (ProcessResult, error) {
+func (m *mockRunner) RunAgent(args []string, _ bool) (ProcessResult, error) {
 	m.calls = append(m.calls, args)
 	if m.idx >= len(m.results) {
 		return ProcessResult{ExitCode: 0}, nil
@@ -34,30 +34,6 @@ func (m *mockRunner) RunAgent(args []string) (ProcessResult, error) {
 	r := m.results[m.idx]
 	m.idx++
 	return r, nil
-}
-
-func (m *mockRunner) StartAgent(args []string) (AgentProcess, error) {
-	m.calls = append(m.calls, args)
-	if m.idx >= len(m.results) {
-		return &mockAgentProcess{result: ProcessResult{ExitCode: 0}}, nil
-	}
-	r := m.results[m.idx]
-	m.idx++
-	return &mockAgentProcess{result: r}, nil
-}
-
-type mockAgentProcess struct {
-	result ProcessResult
-	killed bool
-}
-
-func (p *mockAgentProcess) Wait() (ProcessResult, error) {
-	return p.result, nil
-}
-
-func (p *mockAgentProcess) Kill() error {
-	p.killed = true
-	return nil
 }
 
 type mockLogger struct {

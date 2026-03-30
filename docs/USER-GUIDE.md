@@ -78,11 +78,9 @@ Parameters are positional -- they map to the `params` array in order.
 
 ### Interactive
 
-The agent runs in full interactive mode. You collaborate with it in your terminal. When you're done with the step, type `/continue` (an agent-runner plugin skill) to advance to the next step.
+The agent runs in full interactive mode. You collaborate with it in your terminal. When you're done with the step, exit the agent session to advance to the next step.
 
-Behind the scenes: agent-runner watches for a `.agent-runner-signal` file. `/continue` writes this file, agent-runner detects it, terminates the session, and moves on.
-
-If you exit the session without `/continue`, agent-runner treats the step as aborted and stops the workflow. The state file persists so you can resume later.
+If you exit the session, agent-runner treats the step as complete and moves on. The state file persists so you can resume later if the workflow is interrupted.
 
 ### Headless
 
@@ -152,6 +150,24 @@ Crosses sub-workflow boundaries to resume the parent workflow's most recent sess
 
 `session: inherit` walks the parent context chain to find the nearest session from a different workflow file.
 
+## Per-step CLI override
+
+Agent steps can specify which CLI backend to use via the `cli` field:
+
+```yaml
+- id: implement
+  mode: headless
+  cli: codex
+  model: o3
+  prompt: "Implement the feature."
+
+- id: review
+  mode: headless
+  prompt: "Review the implementation."
+```
+
+When `cli` is set, agent-runner uses the corresponding CLI adapter for arg construction and session discovery. When absent, `claude` is used by default. Currently supported values: `claude`, `codex`. The `cli` field is only valid on agent steps (headless or interactive), not shell steps.
+
 ## Per-step model override
 
 Agent steps can specify which model the agent should use:
@@ -168,7 +184,7 @@ Agent steps can specify which model the agent should use:
   prompt: "Do a thorough code review."
 ```
 
-When `model` is set, agent-runner passes `--model <value>` to the claude invocation. When absent, claude uses its default model. The `model` field is only valid on agent steps (headless or interactive), not shell steps.
+When `model` is set, agent-runner passes it through the CLI adapter (e.g., `--model <value>` for Claude, `-m <value>` for Codex). When absent, the CLI uses its default model. The `model` field is only valid on agent steps (headless or interactive), not shell steps.
 
 ## Loops
 
@@ -549,11 +565,7 @@ The openspec engine requires the `openspec` CLI on your PATH. Install it and try
 
 ### Interactive step won't advance
 
-Make sure `/continue` is available as a skill. Agent Runner's Claude Code plugin must be installed for this to work. If it's not available, you can manually create the signal file:
-
-```bash
-echo '{"action":"continue"}' > .agent-runner-signal
-```
+Exit the agent session to advance to the next step. If the agent session is stuck, press ctrl-c to terminate it.
 
 ### Workflow interrupted, how to resume
 

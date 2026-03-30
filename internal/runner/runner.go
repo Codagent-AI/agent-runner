@@ -180,7 +180,6 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		CapturedVariables: opts.CapturedVariables,
 		AuditLogger:       auditEventLogger,
 	})
-	ctx.AgentCmd = workflow.Agent
 	if opts.ChildState != nil {
 		ctx.ResumeChildState = opts.ChildState
 	}

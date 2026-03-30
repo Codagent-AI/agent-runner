@@ -8,6 +8,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/validate"
 )
@@ -31,7 +32,7 @@ func LoadWorkflow(filePath string, opts Options) (model.Workflow, error) {
 
 	w.ApplyDefaults()
 
-	if err := w.Validate(); err != nil {
+	if err := w.Validate(cli.KnownCLIs()); err != nil {
 		return model.Workflow{}, err
 	}
 

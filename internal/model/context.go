@@ -32,9 +32,6 @@ type ExecutionContext struct {
 	// (Go maps are unordered, so we can't rely on insertion order).
 	LastSessionStepID string
 
-	// AgentCmd is the agent binary to invoke (e.g. "claude").
-	AgentCmd string
-
 	NestingPath   []NestingSegment
 	ParentContext *ExecutionContext
 
@@ -131,7 +128,6 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		CapturedVariables: make(map[string]string),
 		LastStepOutcome:   nil,
 		LastSessionStepID: parent.LastSessionStepID,
-		AgentCmd:          parent.AgentCmd,
 		NestingPath:       nestingPath,
 		ParentContext:     parent,
 		WorkflowFile:      parent.WorkflowFile,
@@ -182,7 +178,6 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		CapturedVariables: make(map[string]string),
 		LastStepOutcome:   nil,
 		LastSessionStepID: parent.LastSessionStepID,
-		AgentCmd:          parent.AgentCmd,
 		NestingPath:       nestingPath,
 		ParentContext:     parent,
 		WorkflowFile:      opts.WorkflowFile,
