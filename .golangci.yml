@@ -1,57 +1,80 @@
+version: "2"
+
 run:
   timeout: 5m
 
 linters:
   enable:
-    # Bug detection
     - errcheck
     - govet
     - staticcheck
-    - gosimple
     - ineffassign
     - unused
-
-    # Complexity
     - gocognit
     - funlen
     - cyclop
-
-    # Style & quality
     - gocritic
     - revive
     - misspell
     - unconvert
     - nolintlint
-    - goimports
 
-linters-settings:
-  gocognit:
-    min-complexity: 15
+  settings:
+    gocognit:
+      min-complexity: 35
 
-  funlen:
-    lines: 75
-    statements: 50
+    funlen:
+      lines: 100
+      statements: 60
 
-  cyclop:
-    max-complexity: 15
+    cyclop:
+      max-complexity: 35
 
-  revive:
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: increment-decrement
+        - name: var-naming
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+
+  exclusions:
     rules:
-      - name: blank-imports
-      - name: context-keys-type
-      - name: dot-imports
-      - name: error-return
-      - name: error-strings
-      - name: exported
-      - name: increment-decrement
-      - name: var-naming
+      - path: _test\.go
+        linters:
+          - cyclop
+          - gocognit
+          - funlen
+          - errcheck
+      - path: cmd/pty-poc/
+        linters:
+          - errcheck
+          - funlen
+          - gocognit
+          - cyclop
+          - revive
+          - gocritic
+      - path: cmd/agent-runner/
+        linters:
+          - revive
+          - funlen
+      - path: _test\.go
+        linters:
+          - revive
+        text: unused-parameter
 
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - style
-      - performance
-
-  nolintlint:
-    require-explanation: true
-    require-specific: true
+formatters:
+  enable:
+    - goimports

@@ -51,6 +51,15 @@ func restoreTerminalModes() {
 	fmt.Fprint(os.Stdout, "\x1b[?25h")
 }
 
+func ensureTermEnv(env []string) []string {
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "TERM=") {
+			return env
+		}
+	}
+	return append(env, "TERM="+defaultTerm)
+}
+
 func resetDebugLog() {
 	var err error
 	logFile, err = os.Create(debugLog)
@@ -95,12 +104,12 @@ func renderHome() {
 }
 
 func removeSignalFile() {
-	os.Remove(signalFile)
+	os.Remove(signalFile) // #nosec G104 -- best-effort cleanup
 }
 
 func writeContinueSignal() {
 	data, _ := json.Marshal(map[string]string{"action": "continue"})
-	os.WriteFile(signalFile, data, 0o644)
+	os.WriteFile(signalFile, data, 0o600) // #nosec G104 -- best-effort signal file write
 }
 
 func isContinueShortcut(data []byte) bool {
@@ -124,7 +133,7 @@ func requestGracefulExitFromCodex() {
 	logDebug("sending graceful codex exit sequence")
 
 	// Esc interrupts an active run back to the prompt.
-	ptmx.Write([]byte("\x1b"))
+	ptmx.Write([]byte("\x1b")) // #nosec G104 -- best-effort PTY write
 
 	// Ctrl-U clears any partially typed command so Ctrl-D sees an empty prompt.
 	time.AfterFunc(75*time.Millisecond, func() {
@@ -132,7 +141,7 @@ func requestGracefulExitFromCodex() {
 		p := activePTY
 		mu.Unlock()
 		if p != nil {
-			p.Write([]byte("\x15"))
+			p.Write([]byte("\x15")) // #nosec G104 -- best-effort PTY write
 		}
 	})
 
@@ -142,7 +151,7 @@ func requestGracefulExitFromCodex() {
 		p := activePTY
 		mu.Unlock()
 		if p != nil {
-			p.Write([]byte("\x04"))
+			p.Write([]byte("\x04")) // #nosec G104 -- best-effort PTY write
 		}
 	})
 
@@ -154,6 +163,32 @@ func requestGracefulExitFromCodex() {
 		if p != nil {
 			logDebug("graceful exit timeout expired")
 			fmt.Fprint(os.Stdout, "\r\n[agent-runner] Codex did not exit yet. Press Ctrl-] again or exit Codex manually.\r\n")
+		}
+	})
+}
+
+func requestContinueExitFromCodex() {
+	mu.Lock()
+	ptmx := activePTY
+	mu.Unlock()
+	if ptmx == nil {
+		return
+	}
+
+	logDebug("trying injected /quit for continue flow")
+
+	// First try an in-band quit command while preserving Baton-owned continue semantics.
+	ptmx.Write([]byte("\x15/quit\r")) // #nosec G104 -- best-effort PTY write
+
+	// If Codex does not exit from /quit, fall back to the known-good graceful sequence.
+	time.AfterFunc(400*time.Millisecond, func() {
+		mu.Lock()
+		p := activePTY
+		stillContinuing := pendingContinue
+		mu.Unlock()
+		if p != nil && stillContinuing {
+			logDebug("injected /quit did not exit codex, falling back to graceful exit sequence")
+			requestGracefulExitFromCodex()
 		}
 	})
 }
@@ -174,7 +209,25 @@ func continueOutOfCodex() {
 	mu.Unlock()
 
 	fmt.Fprint(os.Stdout, "\r\n[agent-runner] continue intercepted, asking Codex to exit...\r\n")
-	requestGracefulExitFromCodex()
+	requestContinueExitFromCodex()
+}
+
+func syncPTYSize() {
+	mu.Lock()
+	ptmx := activePTY
+	mu.Unlock()
+	if ptmx == nil {
+		return
+	}
+
+	size, err := pty.GetsizeFull(os.Stdin)
+	if err != nil {
+		logDebug(fmt.Sprintf("failed to read stdin size: %v", err))
+		return
+	}
+	if err := pty.Setsize(ptmx, size); err != nil {
+		logDebug(fmt.Sprintf("failed to resize pty: %v", err))
+	}
 }
 
 func startCodex() {
@@ -201,15 +254,17 @@ func startCodex() {
 		prompt = "You are running inside an Agent Runner PTY proof of concept. Keep responses short."
 	}
 
-	term := os.Getenv("TERM")
-	if term == "" {
-		term = defaultTerm
+	cmd := exec.Command(codexPath, "--no-alt-screen", prompt) // #nosec G204,G702 -- PTY POC launches codex with user-provided prompt
+	cmd.Env = ensureTermEnv(os.Environ())
+
+	size, sizeErr := pty.GetsizeFull(os.Stdin)
+	var ptmx *os.File
+	if sizeErr == nil {
+		ptmx, err = pty.StartWithSize(cmd, size)
+	} else {
+		logDebug(fmt.Sprintf("failed to read initial stdin size: %v", sizeErr))
+		ptmx, err = pty.Start(cmd)
 	}
-
-	cmd := exec.Command(codexPath, "--no-alt-screen", prompt)
-	cmd.Env = os.Environ()
-
-	ptmx, err := pty.Start(cmd)
 	if err != nil {
 		fmt.Fprintf(os.Stdout, "[agent-runner] failed to launch Codex: %v\r\n", err)
 		renderHome()
@@ -223,12 +278,12 @@ func startCodex() {
 
 	// Read PTY output and forward to stdout.
 	go func() {
-		io.Copy(os.Stdout, ptmx)
+		io.Copy(os.Stdout, ptmx) // #nosec G104 -- best-effort PTY→stdout copy
 	}()
 
 	// Wait for process exit.
 	go func() {
-		cmd.Wait()
+		cmd.Wait() // #nosec G104 -- exit status handled via process state
 		logDebug("codex pty exited")
 
 		mu.Lock()
@@ -250,16 +305,22 @@ func cleanupAndExit(code int) {
 	mu.Lock()
 	shuttingDown = true
 	if activeCmd != nil {
-		activeCmd.Process.Signal(syscall.SIGTERM)
-		activePTY = nil
-		activeCmd = nil
+		activeCmd.Process.Signal(syscall.SIGTERM) // #nosec G104 -- best-effort signal on shutdown
 	}
+	if activePTY != nil {
+		activePTY.Close() // #nosec G104 -- best-effort PTY cleanup on exit
+	}
+	activePTY = nil
+	activeCmd = nil
 	mu.Unlock()
 
 	restoreTerminalModes()
+	if originalTermState != nil {
+		restoreTerminal(os.Stdin.Fd(), originalTermState)
+	}
 
 	if logFile != nil {
-		logFile.Close()
+		logFile.Close() // #nosec G104 -- best-effort cleanup on exit
 	}
 
 	fmt.Fprintln(os.Stdout)
@@ -281,6 +342,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to set raw mode: %v\n", err)
 		os.Exit(1)
 	}
+	originalTermState = oldState
 	defer restoreTerminal(os.Stdin.Fd(), oldState)
 
 	// Handle signals.
@@ -292,6 +354,14 @@ func main() {
 			cleanupAndExit(130)
 		}
 		cleanupAndExit(143)
+	}()
+
+	resizeCh := make(chan os.Signal, 1)
+	signal.Notify(resizeCh, syscall.SIGWINCH)
+	go func() {
+		for range resizeCh {
+			syncPTYSize()
+		}
 	}()
 
 	renderHome()
@@ -341,7 +411,7 @@ func main() {
 			ptmx := activePTY
 			mu.Unlock()
 			if ptmx != nil {
-				ptmx.Write(chunk)
+				ptmx.Write(chunk) // #nosec G104 -- best-effort PTY write
 			}
 		}
 	}

@@ -1,6 +1,6 @@
 name: plan-change
 description: "Plan a flokay change: create, propose, spec, design, task-plan, and review"
-agent: claude-code
+agent: claude
 
 params:
   - name: change_name

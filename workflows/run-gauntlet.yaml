@@ -1,6 +1,6 @@
 name: run-gauntlet
 description: "Counted retry loop: run gauntlet, fix on failure, max 3 attempts"
-agent: claude-code
+agent: claude
 
 steps:
   - id: gauntlet-retry
