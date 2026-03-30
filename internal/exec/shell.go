@@ -2,11 +2,29 @@ package exec
 
 import (
 	"time"
+	"unicode/utf8"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/textfmt"
 )
+
+const maxAuditValueLen = 4096
+
+// truncateForAudit truncates a string to maxAuditValueLen to prevent large
+// blobs from inflating audit logs.
+func truncateForAudit(s string) string {
+	if len(s) <= maxAuditValueLen {
+		return s
+	}
+	// Walk back to a valid UTF-8 rune boundary to avoid splitting
+	// multi-byte sequences.
+	cut := maxAuditValueLen
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "...[truncated]"
+}
 
 func nestingToAudit(ctx *model.ExecutionContext) []audit.NestingInfo {
 	result := make([]audit.NestingInfo, len(ctx.NestingPath))
@@ -91,12 +109,22 @@ func ExecuteShellStep(
 		Timestamp: startTime.UTC().Format(time.RFC3339),
 		Prefix:    prefix,
 		Type:      audit.EventStepStart,
-		Data:      map[string]any{"command": command, "context": contextSnapshot(ctx)},
+		Data:      map[string]any{"command": truncateForAudit(command), "context": contextSnapshot(ctx)},
 	})
 
 	useCapture := step.Capture != ""
 	result, runErr := runner.RunShell(command, useCapture)
 	if runErr != nil {
+		emitAudit(ctx, audit.Event{
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+			Prefix:    prefix,
+			Type:      audit.EventStepEnd,
+			Data: map[string]any{
+				"outcome":     "failed",
+				"error":       runErr.Error(),
+				"duration_ms": time.Since(startTime).Milliseconds(),
+			},
+		})
 		return OutcomeFailed, runErr
 	}
 
@@ -111,12 +139,12 @@ func ExecuteShellStep(
 
 	endData := map[string]any{
 		"exit_code":   result.ExitCode,
-		"stderr":      result.Stderr,
+		"stderr":      truncateForAudit(result.Stderr),
 		"outcome":     string(outcome),
 		"duration_ms": time.Since(startTime).Milliseconds(),
 	}
 	if useCapture {
-		endData["stdout"] = result.Stdout
+		endData["stdout"] = truncateForAudit(result.Stdout)
 	}
 
 	emitAudit(ctx, audit.Event{
