@@ -55,7 +55,10 @@ func ExecuteAgentStep(
 	logAgentStep(log, mode, prompt)
 
 	spawnTime := time.Now()
-	outcome, result := runAgentProcess(runner, args, headless)
+	outcome, result, runErr := runAgentProcess(runner, args, headless)
+	if runErr != nil {
+		return OutcomeFailed, runErr
+	}
 
 	discoveredID := discoverAndStoreSession(adapter, step, ctx, spawnTime, sessionID, headless, result.Stdout, log)
 
@@ -98,24 +101,24 @@ func resolveAdapterAndSession(
 	return adapter, cliName, sessionID, isResume, nil
 }
 
-func runAgentProcess(runner ProcessRunner, args []string, headless bool) (StepOutcome, ProcessResult) {
+func runAgentProcess(runner ProcessRunner, args []string, headless bool) (StepOutcome, ProcessResult, error) {
 	// Capture stdout for headless runs so that adapters (e.g. Codex) can
 	// parse session IDs from the process output.
 	result, runErr := runner.RunAgent(args, headless)
 	if runErr != nil {
-		return OutcomeFailed, result
+		return OutcomeFailed, result, runErr
 	}
 	if headless {
 		if result.ExitCode != 0 {
-			return OutcomeFailed, result
+			return OutcomeFailed, result, nil
 		}
-		return OutcomeSuccess, result
+		return OutcomeSuccess, result, nil
 	}
 	// Interactive: non-zero exit is treated as abort.
 	if result.ExitCode != 0 {
-		return OutcomeAborted, result
+		return OutcomeAborted, result, nil
 	}
-	return OutcomeSuccess, result
+	return OutcomeSuccess, result, nil
 }
 
 func discoverAndStoreSession(
