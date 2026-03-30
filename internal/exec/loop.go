@@ -78,6 +78,7 @@ func executeCountedLoop(
 
 		result, err := executeIterationWithAudit(steps, iterCtx, runner, glob, log)
 		if err != nil {
+			emitLoopEnd(ctx, prefix, startTime, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, err
 		}
 		completed++
@@ -160,6 +161,7 @@ func executeForEachLoop(
 
 		result, err := executeIterationWithAudit(steps, iterCtx, runner, globExp, log)
 		if err != nil {
+			emitLoopEnd(ctx, prefix, startTime, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, err
 		}
 		completed++

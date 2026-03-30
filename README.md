@@ -20,7 +20,7 @@ There are many YAML-based workflow engines (Argo, Kestra, Step Functions) and CL
 - **Output capture**: capture shell stdout into variables for use in subsequent steps (`capture` field with tee behavior)
 - **Flow control**: `continue_on_failure`, `skip_if: previous_success`, `break_if: success|failure`
 - **Per-step model override**: specify which model an agent step should use (`model` field)
-- **State and resumption**: `agent-runner-state.json` persists after each step for resume on interruption
+- **State and resumption**: `state.json` persists after each step for resume on interruption
 - **Audit logging**: structured log of every execution event (step start/end, iterations, sub-workflows) for post-failure troubleshooting
 - **Engines**: pluggable lifecycle hooks for prompt enrichment, step validation, and state management
 - **PTY support**: improved terminal I/O for interactive agent sessions (via Go's creack/pty)
@@ -31,7 +31,7 @@ Requires [Go](https://golang.org) 1.23+.
 
 ```bash
 go build ./cmd/agent-runner
-./agent-runner validate workflows/flokay.yaml
+./agent-runner -validate workflows/flokay.yaml
 ```
 
 Or use the Makefile:
@@ -46,19 +46,16 @@ make lint        # run golangci-lint
 
 ```bash
 # Validate a workflow
-./agent-runner validate workflows/flokay.yaml
+./agent-runner -validate workflows/flokay.yaml
 
 # Run a workflow with parameters
-./agent-runner run workflows/flokay.yaml my-change-name
+./agent-runner workflows/flokay.yaml my-change-name
 
-# Start from a specific step
-./agent-runner run workflows/flokay.yaml my-change-name --from design
+# Resume an interrupted workflow (most recent session)
+./agent-runner -resume
 
-# Resume an existing Claude session into a new workflow
-./agent-runner run workflows/plan-change.yaml my-change --session <session-id>
-
-# Resume an interrupted workflow
-./agent-runner resume path/to/agent-runner-state.json
+# Resume a specific session
+./agent-runner -resume -session <session-id>
 ```
 
 ## How it works
@@ -95,7 +92,7 @@ Each agent step declares a session strategy:
 
 ### State and resumption
 
-Agent Runner writes `agent-runner-state.json` after each step. If a workflow is interrupted, `agent-runner resume` picks up from where it left off, including persisted session IDs, captured variables, and parameters. State is recursive -- nested loops and sub-workflows track their own position.
+Agent Runner writes `state.json` after each step. If a workflow is interrupted, `agent-runner resume` picks up from where it left off, including persisted session IDs, captured variables, and parameters. State is recursive -- nested loops and sub-workflows track their own position.
 
 ### Engines
 
@@ -175,7 +172,7 @@ steps:
 Parameters declared in `params:` are passed as positional arguments:
 
 ```bash
-./agent-runner run workflow.yaml value1 value2
+./agent-runner workflow.yaml value1 value2
 ```
 
 Referenced in prompts and commands as `{{param_name}}`. Captured variables from shell steps are also available via `{{var_name}}`.
@@ -183,21 +180,18 @@ Referenced in prompts and commands as `{{param_name}}`. Captured variables from 
 ## CLI reference
 
 ```
-agent-runner run <workflow.yaml> [params...] [--from <step>] [--session <id>]
-agent-runner validate <workflow.yaml> [params...]
-agent-runner resume <state-file-path>
+agent-runner [flags] <workflow.yaml> [params...]
+agent-runner -validate <workflow.yaml>
+agent-runner -resume [-session <id>]
 ```
 
-### --session
+### -session
 
-Seeds the workflow with an existing Claude session ID. The first step that uses `session: resume` will continue that conversation instead of starting fresh. Steps using `session: new` are unaffected.
-
-This is useful when you've been discussing an idea with Claude and want to transition into a structured workflow -- Claude keeps the conversational context from your discussion.
+Seeds the resume with a specific session ID. Requires `-resume`.
 
 ```bash
-# You've been chatting with Claude about a feature idea...
-# Now formalize it into a change, with Claude retaining the context:
-./agent-runner run workflows/plan-change.yaml my-feature --session abc-123-def
+# Resume a specific session
+./agent-runner -resume -session abc-123-def
 ```
 
 The seed propagates through sub-workflows and loop iterations, so it works regardless of nesting depth. If no step uses `session: resume`, the seeded session is ignored.
@@ -227,12 +221,9 @@ Design goal: modify behavior without rewriting entire workflows.
 ```
 .
 ├── cmd/
-│   ├── agent-runner/
-│   │   ├── main.go            # CLI entry (Cobra)
-│   │   └── helpers.go         # process runner, glob expander
-│   └── pty-poc/               # PTY proof of concept
-│       ├── main.go
-│       └── terminal.go
+│   └── agent-runner/
+│       ├── main.go            # CLI entry (flag-based)
+│       └── helpers.go         # process runner, glob expander
 │
 ├── internal/
 │   ├── model/

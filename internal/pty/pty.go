@@ -215,9 +215,6 @@ func processStdin(ptmx *os.File, cmd *exec.Cmd, hint *idleHint, state *ptyState,
 		}
 
 		result := proc.process(buf[:n])
-		if len(result.forward) > 0 && !state.isDone() {
-			_, _ = ptmx.Write(result.forward)
-		}
 		if result.triggered {
 			state.triggerContinue()
 			hint.cancel()
@@ -232,6 +229,9 @@ func processStdin(ptmx *os.File, cmd *exec.Cmd, hint *idleHint, state *ptyState,
 				}
 			}()
 			return
+		}
+		if len(result.forward) > 0 && !state.isDone() {
+			_, _ = ptmx.Write(result.forward)
 		}
 	}
 }

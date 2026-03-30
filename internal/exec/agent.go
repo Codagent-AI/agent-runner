@@ -62,6 +62,7 @@ func ExecuteAgentStep(
 	spawnTime := time.Now()
 	outcome, result, runErr := runAgentProcess(runner, args, headless, log)
 	if runErr != nil {
+		emitAgentEnd(ctx, prefix, startTime, "", OutcomeFailed)
 		return OutcomeFailed, runErr
 	}
 
@@ -94,7 +95,10 @@ func resolveAdapterAndSession(
 		return nil, cliName, "", false, err
 	}
 
-	sessionID = resolveSessionID(step, ctx)
+	sessionID, resolveErr := resolveSessionID(step, ctx)
+	if resolveErr != nil {
+		return nil, cliName, "", false, resolveErr
+	}
 	isResume = sessionID != ""
 
 	// For fresh Claude sessions, generate a UUID upfront so the adapter can
@@ -231,22 +235,22 @@ func buildAgentPrompt(step *model.Step, ctx *model.ExecutionContext) (prompt, en
 	return prompt, enrichment, nil
 }
 
-func resolveSessionID(step *model.Step, ctx *model.ExecutionContext) string {
+func resolveSessionID(step *model.Step, ctx *model.ExecutionContext) (string, error) {
 	if step.Session == model.SessionResume {
 		id, err := session.ResolveResumeSession(ctx)
 		if err != nil {
-			return ""
+			return "", err
 		}
-		return id
+		return id, nil
 	}
 	if step.Session == model.SessionInherit {
 		id, err := session.ResolveInheritSession(ctx)
 		if err != nil {
-			return ""
+			return "", err
 		}
-		return id
+		return id, nil
 	}
-	return ""
+	return "", nil
 }
 
 func emitAgentFailure(ctx *model.ExecutionContext, prefix string, startTime time.Time, mode string, step *model.Step, errMsg string) {

@@ -73,11 +73,12 @@ steps:
 			t.Fatalf("expected success, got %q", outcome)
 		}
 		// The shell command should have been interpolated with msg=hi
-		if len(runner.calls) > 0 {
-			cmd := runner.calls[0][2] // sh -c <cmd>
-			if cmd != "echo hi" {
-				t.Fatalf("expected 'echo hi', got %q", cmd)
-			}
+		if len(runner.calls) != 1 {
+			t.Fatalf("expected 1 call, got %d", len(runner.calls))
+		}
+		cmd := runner.calls[0][2] // sh -c <cmd>
+		if cmd != "echo hi" {
+			t.Fatalf("expected 'echo hi', got %q", cmd)
 		}
 	})
 
