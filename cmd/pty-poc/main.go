@@ -29,9 +29,9 @@ const (
 //   - APC  (\x1b_)  — same termination as OSC
 //   - SOS  (\x1bX)  — same termination as OSC
 const (
-	escNone      = iota
-	escSawEsc    // saw 0x1b, waiting for next byte
-	escInCSI     // inside CSI, waiting for final byte (0x40-0x7e)
+	escNone        = iota
+	escSawEsc      // saw 0x1b, waiting for next byte
+	escInCSI       // inside CSI, waiting for final byte (0x40-0x7e)
 	escInStringSeq // inside OSC/DCS/PM/APC/SOS, waiting for BEL or ST
 )
 
@@ -188,9 +188,10 @@ func processAgentInput(chunk []byte) bool {
 			buf = append(buf, b)
 			continue
 		case escInStringSeq:
-			if b == 0x07 { // BEL terminates
+			switch b {
+			case 0x07: // BEL terminates
 				escState = escNone
-			} else if b == 0x1b { // start of ST (\x1b\)
+			case 0x1b: // start of ST (\x1b\)
 				escState = escSawEsc
 			}
 			buf = append(buf, b)

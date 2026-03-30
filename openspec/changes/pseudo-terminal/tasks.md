@@ -1,0 +1,2 @@
+- [ ] CLI adapter and step schema (`tasks/cli-adapter-step-schema.md`)
+- [ ] PTY interactive execution (`tasks/pty-interactive-execution.md`)
