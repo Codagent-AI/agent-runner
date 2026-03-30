@@ -265,9 +265,79 @@ func syncPTYSize() {
 		return
 	}
 
+<<<<<<< HEAD
 	size, err := pty.GetsizeFull(os.Stdin)
 	if err != nil {
 		logDebug(fmt.Sprintf("failed to read stdin size: %v", err))
+=======
+	logDebug("sending graceful codex exit sequence")
+
+	// Esc interrupts an active run back to the prompt.
+	ptmx.Write([]byte("\x1b")) // #nosec G104 -- best-effort PTY write
+
+	// Ctrl-U clears any partially typed command so Ctrl-D sees an empty prompt.
+	time.AfterFunc(75*time.Millisecond, func() {
+		mu.Lock()
+		p := activePTY
+		mu.Unlock()
+		if p != nil {
+			p.Write([]byte("\x15")) // #nosec G104 -- best-effort PTY write
+		}
+	})
+
+	// Ctrl-D at an empty prompt exits Codex cleanly.
+	time.AfterFunc(150*time.Millisecond, func() {
+		mu.Lock()
+		p := activePTY
+		mu.Unlock()
+		if p != nil {
+			p.Write([]byte("\x04")) // #nosec G104 -- best-effort PTY write
+		}
+	})
+
+	// Timeout warning.
+	time.AfterFunc(2*time.Second, func() {
+		mu.Lock()
+		p := activePTY
+		mu.Unlock()
+		if p != nil {
+			logDebug("graceful exit timeout expired")
+			fmt.Fprint(os.Stdout, "\r\n[agent-runner] Codex did not exit yet. Press Ctrl-] again or exit Codex manually.\r\n")
+		}
+	})
+}
+
+func requestContinueExitFromCodex() {
+	mu.Lock()
+	ptmx := activePTY
+	mu.Unlock()
+	if ptmx == nil {
+		return
+	}
+
+	logDebug("trying injected /quit for continue flow")
+
+	// First try an in-band quit command while preserving Baton-owned continue semantics.
+	ptmx.Write([]byte("\x15/quit\r")) // #nosec G104 -- best-effort PTY write
+
+	// If Codex does not exit from /quit, fall back to the known-good graceful sequence.
+	time.AfterFunc(400*time.Millisecond, func() {
+		mu.Lock()
+		p := activePTY
+		stillContinuing := pendingContinue
+		mu.Unlock()
+		if p != nil && stillContinuing {
+			logDebug("injected /quit did not exit codex, falling back to graceful exit sequence")
+			requestGracefulExitFromCodex()
+		}
+	})
+}
+
+func continueOutOfCodex() {
+	mu.Lock()
+	if activePTY == nil {
+		mu.Unlock()
+>>>>>>> main
 		return
 	}
 	if err := pty.Setsize(ptmx, size); err != nil {
@@ -281,12 +351,25 @@ func drawHint() {
 	isShutting := shuttingDown
 	mu.Unlock()
 
+<<<<<<< HEAD
 	if currentMode == "home" || isShutting {
+=======
+	fmt.Fprint(os.Stdout, "\r\n[agent-runner] continue intercepted, asking Codex to exit...\r\n")
+	requestContinueExitFromCodex()
+}
+
+func syncPTYSize() {
+	mu.Lock()
+	ptmx := activePTY
+	mu.Unlock()
+	if ptmx == nil {
+>>>>>>> main
 		return
 	}
 
 	size, err := pty.GetsizeFull(os.Stdin)
 	if err != nil {
+<<<<<<< HEAD
 		return
 	}
 
@@ -331,6 +414,13 @@ func forwardPTYOutput(ptmx *os.File) {
 			cancelHintTimer()
 			break
 		}
+=======
+		logDebug(fmt.Sprintf("failed to read stdin size: %v", err))
+		return
+	}
+	if err := pty.Setsize(ptmx, size); err != nil {
+		logDebug(fmt.Sprintf("failed to resize pty: %v", err))
+>>>>>>> main
 	}
 }
 
@@ -380,8 +470,15 @@ func startCodex() {
 	activeCmd = cmd
 	mu.Unlock()
 
+<<<<<<< HEAD
 	// Read PTY output, forward to stdout, and manage idle hint.
 	go forwardPTYOutput(ptmx)
+=======
+	// Read PTY output and forward to stdout.
+	go func() {
+		io.Copy(os.Stdout, ptmx) // #nosec G104 -- best-effort PTY→stdout copy
+	}()
+>>>>>>> main
 
 	// Wait for process exit.
 	go func() {
@@ -572,8 +669,22 @@ func main() {
 		} else {
 			logDebug(fmt.Sprintf("%s stdin %s", currentMode, describeChunk(chunk)))
 
+<<<<<<< HEAD
 			if processAgentInput(chunk) {
 				continueOutOfAgent()
+=======
+			if isContinueShortcut(chunk) {
+				logDebug("matched continue shortcut")
+				continueOutOfCodex()
+				continue
+			}
+
+			mu.Lock()
+			ptmx := activePTY
+			mu.Unlock()
+			if ptmx != nil {
+				ptmx.Write(chunk) // #nosec G104 -- best-effort PTY write
+>>>>>>> main
 			}
 		}
 	}
