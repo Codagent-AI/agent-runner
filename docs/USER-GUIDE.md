@@ -4,7 +4,7 @@
 
 ### Prerequisites
 
-- [Bun](https://bun.sh) v1.0+
+- [Go](https://golang.org) 1.23+
 - [Claude Code](https://claude.com/claude-code) CLI installed and authenticated
 - (Optional) [OpenSpec](https://github.com/pacaplan/openspec) CLI, if using the openspec engine
 
@@ -12,12 +12,11 @@
 
 ```bash
 git clone <repo-url>
-cd baton
-bun install
-bun run build    # compiles to bin/agent-runner
+cd agent-runner
+go build ./cmd/agent-runner    # compiles to agent-runner binary
 ```
 
-Add `bin/` to your PATH, or run directly with `bun src/index.ts`.
+Add the binary to your PATH, or run it directly from the current directory: `./agent-runner`.
 
 ## Writing workflows
 
@@ -43,7 +42,7 @@ steps:
 Run it:
 
 ```bash
-agent-runner run hello.yaml
+agent-runner hello.yaml
 ```
 
 ### With parameters
@@ -70,7 +69,7 @@ steps:
 Run it:
 
 ```bash
-agent-runner run review-pr.yaml 42
+agent-runner review-pr.yaml 42
 ```
 
 Parameters are positional -- they map to the `params` array in order.
@@ -79,11 +78,9 @@ Parameters are positional -- they map to the `params` array in order.
 
 ### Interactive
 
-The agent runs in full interactive mode. You collaborate with it in your terminal. When you're done with the step, type `/continue` (an agent-runner plugin skill) to advance to the next step.
+The agent runs in full interactive mode. You collaborate with it in your terminal. When you're done with the step, exit the agent session to advance to the next step.
 
-Behind the scenes: agent-runner watches for a `.agent-runner-signal` file. `/continue` writes this file, agent-runner detects it, terminates the session, and moves on.
-
-If you exit the session without `/continue`, agent-runner treats the step as aborted and stops the workflow. The state file persists so you can resume later.
+If you exit the session, agent-runner treats the step as complete and moves on. The state file persists so you can resume later if the workflow is interrupted.
 
 ### Headless
 
@@ -153,6 +150,24 @@ Crosses sub-workflow boundaries to resume the parent workflow's most recent sess
 
 `session: inherit` walks the parent context chain to find the nearest session from a different workflow file.
 
+## Per-step CLI override
+
+Agent steps can specify which CLI backend to use via the `cli` field:
+
+```yaml
+- id: implement
+  mode: headless
+  cli: codex
+  model: o3
+  prompt: "Implement the feature."
+
+- id: review
+  mode: headless
+  prompt: "Review the implementation."
+```
+
+When `cli` is set, agent-runner uses the corresponding CLI adapter for arg construction and session discovery. When absent, `claude` is used by default. Currently supported values: `claude`, `codex`. The `cli` field is only valid on agent steps (headless or interactive), not shell steps.
+
 ## Per-step model override
 
 Agent steps can specify which model the agent should use:
@@ -169,7 +184,7 @@ Agent steps can specify which model the agent should use:
   prompt: "Do a thorough code review."
 ```
 
-When `model` is set, agent-runner passes `--model <value>` to the claude invocation. When absent, claude uses its default model. The `model` field is only valid on agent steps (headless or interactive), not shell steps.
+When `model` is set, agent-runner passes it through the CLI adapter (e.g., `--model <value>` for Claude, `-m <value>` for Codex). When absent, the CLI uses its default model. The `model` field is only valid on agent steps (headless or interactive), not shell steps.
 
 ## Loops
 
@@ -321,13 +336,13 @@ The captured output is both displayed to the terminal (tee behavior) and stored 
 ### Basic run
 
 ```bash
-agent-runner run workflows/flokay.yaml my-change
+agent-runner workflows/flokay.yaml my-change
 ```
 
 ### Starting from a specific step
 
 ```bash
-agent-runner run workflows/flokay.yaml my-change --from design
+agent-runner workflows/flokay.yaml my-change
 ```
 
 Skips all steps before `design` and starts there. Useful when you've already completed earlier steps manually or want to re-run a specific phase.
@@ -335,7 +350,7 @@ Skips all steps before `design` and starts there. Useful when you've already com
 ### Starting with an existing Claude session
 
 ```bash
-agent-runner run workflows/plan-change.yaml my-change --session <session-id>
+agent-runner workflows/plan-change.yaml my-change
 ```
 
 Seeds the workflow with a Claude session ID from a conversation you were already having. The first step that uses `session: resume` will continue that conversation, giving the agent full context from your prior discussion.
@@ -343,7 +358,7 @@ Seeds the workflow with a Claude session ID from a conversation you were already
 This is the natural flow when you've been exploring an idea with Claude and want to transition into a structured workflow:
 
 1. Chat with Claude about a feature idea
-2. Decide to formalize it: `agent-runner run workflows/plan-change.yaml my-feature --session <id>`
+2. Decide to formalize it: `agent-runner workflows/plan-change.yaml my-feature`
 3. The first `session: resume` step picks up where your conversation left off
 
 Steps using `session: new` are unaffected -- the seeded session is only used by `session: resume`. If no step uses `session: resume`, the flag is ignored. The seed propagates through sub-workflows and loop iterations, so it works even when the first agent step is inside a nested workflow.
@@ -352,22 +367,28 @@ You can find your current session ID in `~/.claude/projects/<encoded-cwd>/` -- i
 
 ### Resuming interrupted workflows
 
-If a workflow is interrupted (you abort, a step fails, your machine restarts), agent-runner saves its state to `agent-runner-state.json`. Resume with:
+If a workflow is interrupted (you abort, a step fails, your machine restarts), agent-runner saves its state to `state.json`. Resume with:
 
 ```bash
-agent-runner resume path/to/agent-runner-state.json
+agent-runner -resume
 ```
 
 This reloads the workflow, restores session IDs and parameters, and picks up from the last step. If the workflow file has changed since the state was written, agent-runner warns you but proceeds.
 
-The state file location depends on the engine. The openspec engine stores it in the change directory (`openspec/changes/<name>/agent-runner-state.json`). Without an engine, it's in the project root.
+To resume a specific session:
+
+```bash
+agent-runner -resume -session <session-id>
+```
+
+The state file location depends on the engine. The openspec engine stores it in the change directory. Without an engine, it's in the project root.
 
 ### Validating workflows
 
 Check that a workflow is syntactically valid without running it:
 
 ```bash
-agent-runner validate workflows/flokay.yaml
+agent-runner -validate workflows/flokay.yaml
 ```
 
 With an engine configured, this also runs engine-specific validation (e.g., checking that every openspec artifact has a matching workflow step).
@@ -386,7 +407,7 @@ The built-in openspec engine integrates with the OpenSpec CLI. It:
 
 3. **Validates the workflow** -- At load time, checks that every openspec schema artifact has a matching step ID in the workflow.
 
-4. **Controls state directory** -- Places `agent-runner-state.json` in the openspec change directory.
+4. **Controls state directory** -- Places `state.json` in the openspec change directory.
 
 #### Configuration
 
@@ -449,7 +470,7 @@ The `implement` step invokes `implement-change.yaml`, which loops over task file
 Run it:
 
 ```bash
-agent-runner run workflows/flokay.yaml my-feature-name
+agent-runner workflows/flokay.yaml my-feature-name
 ```
 
 ## Audit logging
@@ -550,16 +571,12 @@ The openspec engine requires the `openspec` CLI on your PATH. Install it and try
 
 ### Interactive step won't advance
 
-Make sure `/continue` is available as a skill. Agent Runner's Claude Code plugin must be installed for this to work. If it's not available, you can manually create the signal file:
-
-```bash
-echo '{"action":"continue"}' > .agent-runner-signal
-```
+Exit the agent session to advance to the next step. If the agent session is stuck, press ctrl-c to terminate it.
 
 ### Workflow interrupted, how to resume
 
-Find the `agent-runner-state.json` file (in the project root or the engine's state directory) and run:
+Resume with:
 
 ```bash
-agent-runner resume agent-runner-state.json
+agent-runner -resume
 ```

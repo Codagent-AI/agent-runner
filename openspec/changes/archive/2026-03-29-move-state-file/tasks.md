@@ -1,0 +1,2 @@
+- [ ] Unified session directory and state relocation (`tasks/session-directory-state.md`)
+- [ ] Flatten CLI and add resume-by-session (`tasks/flatten-cli-resume.md`)

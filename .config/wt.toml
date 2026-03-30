@@ -1,0 +1,6 @@
+# Worktrunk project config — shared team settings
+# Docs: https://worktrunk.dev/config/
+
+# Run before merging a worktree into the trunk branch
+[pre-merge]
+test = "make test"

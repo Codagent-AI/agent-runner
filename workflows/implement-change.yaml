@@ -1,6 +1,5 @@
 name: implement-change
 description: "For-each loop over task files, invoking implement-task per task"
-agent: claude-code
 
 params:
   - name: change_name
@@ -9,7 +8,7 @@ params:
 steps:
   - id: implement-tasks
     loop:
-      over: "openspec/changes/{{change_name}}/tasks/*.task.md"
+      over: "openspec/changes/{{change_name}}/tasks/*.md"
       as: task_file
       require_matches: true
     steps:

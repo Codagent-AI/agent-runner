@@ -1,0 +1,5 @@
+{
+  "enabledPlugins": {
+    "gopls@claude-code-lsps": true
+  }
+}

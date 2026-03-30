@@ -1,2 +1,5 @@
 builtin: code-quality
-num_reviews: 1
+num_reviews: 2
+cli_preference:
+  - codex
+  - claude

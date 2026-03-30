@@ -1,0 +1,11 @@
+# Test that a successful workflow cleans up the state file.
+exec agent-runner workflow.yaml
+exec find .agent-runner -name state.json
+! stdout state\.json
+
+-- workflow.yaml --
+name: e2e-success
+steps:
+  - id: only
+    mode: shell
+    command: echo ok
