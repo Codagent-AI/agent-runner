@@ -215,6 +215,11 @@ func processStdin(ptmx *os.File, cmd *exec.Cmd, hint *idleHint, state *ptyState,
 		}
 
 		result := proc.process(buf[:n])
+		// Flush forwarded bytes before handling triggers so user input
+		// preceding a control sequence is not silently dropped.
+		if len(result.forward) > 0 && !state.isDone() {
+			_, _ = ptmx.Write(result.forward)
+		}
 		if result.triggered {
 			state.triggerContinue()
 			hint.cancel()
@@ -229,9 +234,6 @@ func processStdin(ptmx *os.File, cmd *exec.Cmd, hint *idleHint, state *ptyState,
 				}
 			}()
 			return
-		}
-		if len(result.forward) > 0 && !state.isDone() {
-			_, _ = ptmx.Write(result.forward)
 		}
 	}
 }

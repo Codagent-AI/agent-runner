@@ -2,6 +2,7 @@ package exec
 
 import (
 	"time"
+	"unicode/utf8"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/model"
@@ -16,7 +17,13 @@ func truncateForAudit(s string) string {
 	if len(s) <= maxAuditValueLen {
 		return s
 	}
-	return s[:maxAuditValueLen] + "...[truncated]"
+	// Walk back to a valid UTF-8 rune boundary to avoid splitting
+	// multi-byte sequences.
+	cut := maxAuditValueLen
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "...[truncated]"
 }
 
 func nestingToAudit(ctx *model.ExecutionContext) []audit.NestingInfo {
