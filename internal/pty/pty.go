@@ -51,11 +51,18 @@ func (s *ptyState) markDone() {
 	s.mu.Unlock()
 }
 
-func (s *ptyState) triggerContinue() {
+// tryTriggerContinue atomically transitions to the continue-triggered state
+// only if the session is not already done. Returns false if the process has
+// already exited, preventing a late trigger from flipping the outcome.
+func (s *ptyState) tryTriggerContinue() bool {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.done {
+		return false
+	}
 	s.continueTriggered = true
 	s.done = true
-	s.mu.Unlock()
+	return true
 }
 
 // RunInteractive executes a command inside a pseudo-terminal with I/O proxying
@@ -221,7 +228,9 @@ func processStdin(ptmx *os.File, cmd *exec.Cmd, hint *idleHint, state *ptyState,
 			_, _ = ptmx.Write(result.forward)
 		}
 		if result.triggered {
-			state.triggerContinue()
+			if !state.tryTriggerContinue() {
+				return
+			}
 			hint.cancel()
 			_ = cmd.Process.Signal(syscall.SIGTERM)
 
