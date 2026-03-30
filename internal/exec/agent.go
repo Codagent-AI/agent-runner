@@ -11,9 +11,14 @@ import (
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/engine"
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/pty"
 	"github.com/codagent/agent-runner/internal/session"
 	"github.com/codagent/agent-runner/internal/textfmt"
 )
+
+// interactiveRunnerFn runs an interactive agent step inside a PTY.
+// Defaults to pty.RunInteractive; replaced in tests.
+var interactiveRunnerFn = pty.RunInteractive
 
 // ExecuteAgentStep runs an agent step using the resolved CLI adapter.
 func ExecuteAgentStep(
@@ -55,7 +60,7 @@ func ExecuteAgentStep(
 	logAgentStep(log, mode, prompt)
 
 	spawnTime := time.Now()
-	outcome, result, runErr := runAgentProcess(runner, args, headless)
+	outcome, result, runErr := runAgentProcess(runner, args, headless, log)
 	if runErr != nil {
 		return OutcomeFailed, runErr
 	}
@@ -101,24 +106,35 @@ func resolveAdapterAndSession(
 	return adapter, cliName, sessionID, isResume, nil
 }
 
-func runAgentProcess(runner ProcessRunner, args []string, headless bool) (StepOutcome, ProcessResult, error) {
-	// Capture stdout for headless runs so that adapters (e.g. Codex) can
-	// parse session IDs from the process output.
-	result, runErr := runner.RunAgent(args, headless)
-	if runErr != nil {
-		return OutcomeFailed, result, runErr
-	}
+func runAgentProcess(runner ProcessRunner, args []string, headless bool, log Logger) (StepOutcome, ProcessResult, error) {
 	if headless {
+		// Capture stdout for headless runs so that adapters (e.g. Codex) can
+		// parse session IDs from the process output.
+		result, runErr := runner.RunAgent(args, true)
+		if runErr != nil {
+			return OutcomeFailed, result, runErr
+		}
 		if result.ExitCode != 0 {
 			return OutcomeFailed, result, nil
 		}
 		return OutcomeSuccess, result, nil
 	}
-	// Interactive: non-zero exit is treated as abort.
-	if result.ExitCode != 0 {
-		return OutcomeAborted, result, nil
+
+	// Interactive: run inside a PTY with continue-trigger detection.
+	ptyResult, err := interactiveRunnerFn(args, pty.Options{})
+	if err != nil {
+		return OutcomeFailed, ProcessResult{}, err
 	}
-	return OutcomeSuccess, result, nil
+
+	result := ProcessResult{ExitCode: ptyResult.ExitCode}
+
+	if ptyResult.ContinueTriggered {
+		return OutcomeSuccess, result, nil
+	}
+
+	// CLI exited without a continue trigger.
+	log.Printf("\n  CLI session exited. To resume this workflow, run:\n    agent-runner --resume\n\n")
+	return OutcomeAborted, result, nil
 }
 
 func discoverAndStoreSession(

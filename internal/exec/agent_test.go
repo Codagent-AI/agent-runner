@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/pty"
 )
 
 func TestExecuteAgentStep(t *testing.T) {
@@ -176,11 +177,21 @@ func TestExecuteAgentStep(t *testing.T) {
 	})
 
 	t.Run("no -p flag for interactive mode", func(t *testing.T) {
-		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		var ptyCalls [][]string
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
+			ptyCalls = append(ptyCalls, args)
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		runner := &mockRunner{}
 		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
-		args := runner.calls[0]
-		if containsArg(args, "-p") {
+		if len(ptyCalls) == 0 {
+			t.Fatal("expected PTY to be called")
+		}
+		if containsArg(ptyCalls[0], "-p") {
 			t.Fatal("did not expect -p flag for interactive mode")
 		}
 	})
@@ -196,12 +207,22 @@ func TestExecuteAgentStep(t *testing.T) {
 	})
 
 	t.Run("codex interactive uses --no-alt-screen", func(t *testing.T) {
-		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		var ptyCalls [][]string
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
+			ptyCalls = append(ptyCalls, args)
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		runner := &mockRunner{}
 		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew, CLI: "codex"}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
-		args := runner.calls[0]
-		if !containsArg(args, "--no-alt-screen") {
-			t.Fatalf("expected --no-alt-screen for codex interactive, got %v", args)
+		if len(ptyCalls) == 0 {
+			t.Fatal("expected PTY to be called")
+		}
+		if !containsArg(ptyCalls[0], "--no-alt-screen") {
+			t.Fatalf("expected --no-alt-screen for codex interactive, got %v", ptyCalls[0])
 		}
 	})
 
@@ -218,6 +239,67 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 		if !foundModel {
 			t.Fatalf("expected -m o3 in codex args, got %v", args)
+		}
+	})
+
+	t.Run("interactive continue trigger returns success", func(t *testing.T) {
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(_ []string, _ pty.Options) (pty.Result, error) {
+			return pty.Result{ContinueTriggered: true, ExitCode: 0}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		runner := &mockRunner{}
+		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected success, got %q", outcome)
+		}
+	})
+
+	t.Run("interactive exit without trigger returns aborted", func(t *testing.T) {
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(_ []string, _ pty.Options) (pty.Result, error) {
+			return pty.Result{ContinueTriggered: false, ExitCode: 0}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		runner := &mockRunner{}
+		log := &mockLogger{}
+		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, log)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeAborted {
+			t.Fatalf("expected aborted, got %q", outcome)
+		}
+		foundResume := false
+		for _, line := range log.lines {
+			if strings.Contains(line, "agent-runner --resume") {
+				foundResume = true
+			}
+		}
+		if !foundResume {
+			t.Fatal("expected resume message in log output")
+		}
+	})
+
+	t.Run("interactive does not call RunAgent on ProcessRunner", func(t *testing.T) {
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(_ []string, _ pty.Options) (pty.Result, error) {
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		runner := &mockRunner{}
+		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew}
+		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		if len(runner.calls) != 0 {
+			t.Fatalf("expected no RunAgent calls for interactive step, got %d", len(runner.calls))
 		}
 	})
 }
