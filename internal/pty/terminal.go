@@ -36,15 +36,15 @@ func makeRaw(fd uintptr) (*unix.Termios, error) {
 }
 
 func restoreTerminal(fd uintptr, state *unix.Termios) {
-	unix.IoctlSetTermios(int(fd), unix.TIOCSETA, state) // #nosec G115,G104 -- uintptr→int safe; best-effort restore
+	_ = unix.IoctlSetTermios(int(fd), unix.TIOCSETA, state) // #nosec G115 -- uintptr→int safe on supported platforms
 }
 
 // restoreTerminalModes resets terminal overrides that the hosted CLI may have set
 // (enhanced keyboard, modifyOtherKeys, focus events, bracketed paste, cursor visibility).
 func restoreTerminalModes() {
-	fmt.Fprint(os.Stdout, "\x1b[<u")     // restore enhanced keyboard
-	fmt.Fprint(os.Stdout, "\x1b[>4;0m")  // disable modifyOtherKeys
-	fmt.Fprint(os.Stdout, "\x1b[?1004l") // disable focus events
-	fmt.Fprint(os.Stdout, "\x1b[?2004l") // disable bracketed paste
-	fmt.Fprint(os.Stdout, "\x1b[?25h")   // show cursor
+	_, _ = fmt.Fprint(os.Stdout, "\x1b[<u")     // restore enhanced keyboard
+	_, _ = fmt.Fprint(os.Stdout, "\x1b[>4;0m")  // disable modifyOtherKeys
+	_, _ = fmt.Fprint(os.Stdout, "\x1b[?1004l") // disable focus events
+	_, _ = fmt.Fprint(os.Stdout, "\x1b[?2004l") // disable bracketed paste
+	_, _ = fmt.Fprint(os.Stdout, "\x1b[?25h")   // show cursor
 }

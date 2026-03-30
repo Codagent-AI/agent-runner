@@ -52,7 +52,7 @@ func (h *idleHint) clearIfShown() {
 			return
 		}
 		// Save cursor, move to bottom row, clear line, restore cursor.
-		fmt.Fprintf(os.Stdout, "\x1b7\x1b[%d;1H\x1b[K\x1b8", size.Rows)
+		_, _ = fmt.Fprintf(os.Stdout, "\x1b7\x1b[%d;1H\x1b[K\x1b8", size.Rows)
 	}
 }
 
@@ -72,6 +72,6 @@ func (h *idleHint) draw() {
 	}
 
 	// Save cursor, move to bottom row, dim+reverse bar, restore cursor.
-	fmt.Fprintf(os.Stdout, "\x1b7\x1b[%d;1H\x1b[2;7m%-*s\x1b[0m\x1b8", size.Rows, cols, hint)
+	_, _ = fmt.Fprintf(os.Stdout, "\x1b7\x1b[%d;1H\x1b[2;7m%-*s\x1b[0m\x1b8", size.Rows, cols, hint)
 	h.shown = true
 }
