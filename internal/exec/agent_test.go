@@ -142,17 +142,27 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
-	t.Run("uses configured agent command", func(t *testing.T) {
+	t.Run("defaults to claude adapter", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		ctx := makeCtx()
-		ctx.AgentCmd = "claude"
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew}
-		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if len(runner.calls) == 0 {
 			t.Fatal("expected command to be called")
 		}
 		if runner.calls[0][0] != "claude" {
 			t.Fatalf("expected 'claude' as agent command, got %q", runner.calls[0][0])
+		}
+	})
+
+	t.Run("uses codex adapter when cli is codex", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew, CLI: "codex"}
+		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		if len(runner.calls) == 0 {
+			t.Fatal("expected command to be called")
+		}
+		if runner.calls[0][0] != "codex" {
+			t.Fatalf("expected 'codex' as agent command, got %q", runner.calls[0][0])
 		}
 	})
 
@@ -165,6 +175,48 @@ func TestExecuteAgentStep(t *testing.T) {
 			if a == "-p" {
 				t.Fatal("did not expect -p flag for interactive mode")
 			}
+		}
+	})
+
+	t.Run("codex headless uses exec subcommand", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew, CLI: "codex"}
+		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		args := runner.calls[0]
+		if len(args) < 2 || args[1] != "exec" {
+			t.Fatalf("expected 'exec' subcommand for codex headless, got %v", args)
+		}
+	})
+
+	t.Run("codex interactive uses --no-alt-screen", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew, CLI: "codex"}
+		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		args := runner.calls[0]
+		found := false
+		for _, a := range args {
+			if a == "--no-alt-screen" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected --no-alt-screen for codex interactive, got %v", args)
+		}
+	})
+
+	t.Run("codex model uses -m flag", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew, CLI: "codex", Model: "o3"}
+		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		args := runner.calls[0]
+		foundModel := false
+		for i, a := range args {
+			if a == "-m" && i+1 < len(args) && args[i+1] == "o3" {
+				foundModel = true
+			}
+		}
+		if !foundModel {
+			t.Fatalf("expected -m o3 in codex args, got %v", args)
 		}
 	})
 }

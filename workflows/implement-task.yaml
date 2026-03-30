@@ -1,6 +1,5 @@
 name: implement-task
 description: "Implement a single task: agent step then gauntlet retry"
-agent: claude
 
 params:
   - name: task_file

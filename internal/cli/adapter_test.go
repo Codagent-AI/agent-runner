@@ -1,0 +1,269 @@
+package cli
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestRegistry(t *testing.T) {
+	t.Run("resolves known CLI claude", func(t *testing.T) {
+		adapter, err := Get("claude")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if adapter == nil {
+			t.Fatal("expected non-nil adapter")
+		}
+	})
+
+	t.Run("resolves known CLI codex", func(t *testing.T) {
+		adapter, err := Get("codex")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if adapter == nil {
+			t.Fatal("expected non-nil adapter")
+		}
+	})
+
+	t.Run("returns error for unknown CLI", func(t *testing.T) {
+		_, err := Get("unknown")
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "unknown CLI adapter") {
+			t.Fatalf("expected 'unknown CLI adapter' error, got: %v", err)
+		}
+	})
+
+	t.Run("KnownCLIs returns all registered names", func(t *testing.T) {
+		names := KnownCLIs()
+		if len(names) < 2 {
+			t.Fatalf("expected at least 2 known CLIs, got %d", len(names))
+		}
+		found := map[string]bool{}
+		for _, name := range names {
+			found[name] = true
+		}
+		if !found["claude"] {
+			t.Fatal("expected 'claude' in known CLIs")
+		}
+		if !found["codex"] {
+			t.Fatal("expected 'codex' in known CLIs")
+		}
+	})
+}
+
+func TestClaudeAdapter(t *testing.T) {
+	adapter := &ClaudeAdapter{}
+
+	t.Run("fresh headless", func(t *testing.T) {
+		args := adapter.BuildArgs(BuildArgsInput{
+			Prompt:   "do something",
+			Headless: true,
+		})
+		expected := []string{"claude", "-p", "do something"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("fresh interactive", func(t *testing.T) {
+		args := adapter.BuildArgs(BuildArgsInput{
+			Prompt:   "review code",
+			Headless: false,
+		})
+		expected := []string{"claude", "review code"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("resume headless", func(t *testing.T) {
+		args := adapter.BuildArgs(BuildArgsInput{
+			Prompt:    "continue",
+			SessionID: "session-abc",
+			Headless:  true,
+		})
+		expected := []string{"claude", "--resume", "session-abc", "-p", "continue"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("resume interactive", func(t *testing.T) {
+		args := adapter.BuildArgs(BuildArgsInput{
+			Prompt:    "continue review",
+			SessionID: "session-abc",
+			Headless:  false,
+		})
+		expected := []string{"claude", "--resume", "session-abc", "continue review"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("model override", func(t *testing.T) {
+		args := adapter.BuildArgs(BuildArgsInput{
+			Prompt:   "do something",
+			Model:    "opus",
+			Headless: true,
+		})
+		expected := []string{"claude", "--model", "opus", "-p", "do something"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("resume with model override", func(t *testing.T) {
+		args := adapter.BuildArgs(BuildArgsInput{
+			Prompt:    "continue",
+			SessionID: "session-abc",
+			Model:     "sonnet",
+			Headless:  true,
+		})
+		expected := []string{"claude", "--resume", "session-abc", "--model", "sonnet", "-p", "continue"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("discover session ID returns preset", func(t *testing.T) {
+		id := adapter.DiscoverSessionID(DiscoverOptions{
+			PresetID: "preset-123",
+		})
+		if id != "preset-123" {
+			t.Fatalf("expected 'preset-123', got %q", id)
+		}
+	})
+
+	t.Run("discover session ID returns empty when no preset", func(t *testing.T) {
+		id := adapter.DiscoverSessionID(DiscoverOptions{})
+		if id != "" {
+			t.Fatalf("expected empty string, got %q", id)
+		}
+	})
+}
+
+func TestCodexAdapter(t *testing.T) {
+	adapter := &CodexAdapter{}
+
+	t.Run("fresh headless", func(t *testing.T) {
+		args := adapter.BuildArgs(BuildArgsInput{
+			Prompt:   "do something",
+			Headless: true,
+		})
+		expected := []string{"codex", "exec", "--json", "do something"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("fresh interactive", func(t *testing.T) {
+		args := adapter.BuildArgs(BuildArgsInput{
+			Prompt:   "review code",
+			Headless: false,
+		})
+		expected := []string{"codex", "--no-alt-screen", "review code"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("resume headless", func(t *testing.T) {
+		args := adapter.BuildArgs(BuildArgsInput{
+			Prompt:    "continue",
+			SessionID: "thread-abc",
+			Headless:  true,
+		})
+		expected := []string{"codex", "exec", "resume", "thread-abc", "continue"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("resume interactive", func(t *testing.T) {
+		args := adapter.BuildArgs(BuildArgsInput{
+			Prompt:    "continue review",
+			SessionID: "thread-abc",
+			Headless:  false,
+		})
+		expected := []string{"codex", "resume", "--no-alt-screen", "thread-abc", "continue review"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("model override headless", func(t *testing.T) {
+		args := adapter.BuildArgs(BuildArgsInput{
+			Prompt:   "do something",
+			Model:    "o3",
+			Headless: true,
+		})
+		expected := []string{"codex", "exec", "--json", "-m", "o3", "do something"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("model override interactive", func(t *testing.T) {
+		args := adapter.BuildArgs(BuildArgsInput{
+			Prompt:   "review",
+			Model:    "o3",
+			Headless: false,
+		})
+		expected := []string{"codex", "--no-alt-screen", "-m", "o3", "review"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("interactive always includes --no-alt-screen", func(t *testing.T) {
+		args := adapter.BuildArgs(BuildArgsInput{
+			Prompt:   "review",
+			Headless: false,
+		})
+		found := false
+		for _, a := range args {
+			if a == "--no-alt-screen" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected --no-alt-screen for interactive mode, got %v", args)
+		}
+	})
+
+	t.Run("headless does not include --no-alt-screen", func(t *testing.T) {
+		args := adapter.BuildArgs(BuildArgsInput{
+			Prompt:   "do something",
+			Headless: true,
+		})
+		for _, a := range args {
+			if a == "--no-alt-screen" {
+				t.Fatalf("did not expect --no-alt-screen for headless mode, got %v", args)
+			}
+		}
+	})
+
+	t.Run("discover headless session from JSONL", func(t *testing.T) {
+		output := `{"type":"thread.started","thread_id":"thread-xyz-123"}
+{"type":"message","content":"hello"}`
+		id := adapter.DiscoverSessionID(DiscoverOptions{
+			ProcessOutput: output,
+			Headless:      true,
+		})
+		if id != "thread-xyz-123" {
+			t.Fatalf("expected 'thread-xyz-123', got %q", id)
+		}
+	})
+
+	t.Run("discover headless session returns empty for no thread.started", func(t *testing.T) {
+		output := `{"type":"message","content":"hello"}`
+		id := adapter.DiscoverSessionID(DiscoverOptions{
+			ProcessOutput: output,
+			Headless:      true,
+		})
+		if id != "" {
+			t.Fatalf("expected empty string, got %q", id)
+		}
+	})
+
+	t.Run("discover headless session returns empty for empty output", func(t *testing.T) {
+		id := adapter.DiscoverSessionID(DiscoverOptions{
+			ProcessOutput: "",
+			Headless:      true,
+		})
+		if id != "" {
+			t.Fatalf("expected empty string, got %q", id)
+		}
+	})
+}
+
+func assertArgs(t *testing.T, expected, actual []string) {
+	t.Helper()
+	if len(expected) != len(actual) {
+		t.Fatalf("expected args %v, got %v", expected, actual)
+	}
+	for i := range expected {
+		if expected[i] != actual[i] {
+			t.Fatalf("arg[%d]: expected %q, got %q (full: %v)", i, expected[i], actual[i], actual)
+		}
+	}
+}

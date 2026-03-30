@@ -36,28 +36,6 @@ func (m *mockRunner) RunAgent(args []string) (exec.ProcessResult, error) {
 	return r, nil
 }
 
-func (m *mockRunner) StartAgent(args []string) (exec.AgentProcess, error) {
-	m.calls = append(m.calls, args)
-	if m.idx >= len(m.results) {
-		return &mockAgentProcess{result: exec.ProcessResult{ExitCode: 0}}, nil
-	}
-	r := m.results[m.idx]
-	m.idx++
-	return &mockAgentProcess{result: r}, nil
-}
-
-type mockAgentProcess struct {
-	result exec.ProcessResult
-}
-
-func (p *mockAgentProcess) Wait() (exec.ProcessResult, error) {
-	return p.result, nil
-}
-
-func (p *mockAgentProcess) Kill() error {
-	return nil
-}
-
 type mockGlob struct{ matches []string }
 
 func (g *mockGlob) Expand(_ string) ([]string, error) { return g.matches, nil }

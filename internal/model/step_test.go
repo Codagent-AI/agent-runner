@@ -10,7 +10,7 @@ func intPtr(n int) *int { return &n }
 func TestStepSchema(t *testing.T) {
 	t.Run("accepts a valid shell step with command", func(t *testing.T) {
 		s := Step{ID: "build", Mode: ModeShell, Command: "echo hi", Session: SessionNew}
-		if err := s.Validate(); err != nil {
+		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if s.Session != SessionNew {
@@ -20,14 +20,14 @@ func TestStepSchema(t *testing.T) {
 
 	t.Run("accepts a valid agent step with prompt", func(t *testing.T) {
 		s := Step{ID: "review", Mode: ModeInteractive, Prompt: "Review code", Session: SessionNew}
-		if err := s.Validate(); err != nil {
+		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("accepts a headless agent step", func(t *testing.T) {
 		s := Step{ID: "impl", Mode: ModeHeadless, Prompt: "Implement", Session: SessionResume}
-		if err := s.Validate(); err != nil {
+		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
@@ -42,7 +42,7 @@ func TestStepSchema(t *testing.T) {
 
 	t.Run("rejects shell step without command", func(t *testing.T) {
 		s := Step{ID: "bad", Mode: ModeShell, Session: SessionNew}
-		err := s.Validate()
+		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -50,7 +50,7 @@ func TestStepSchema(t *testing.T) {
 
 	t.Run("rejects agent step without prompt", func(t *testing.T) {
 		s := Step{ID: "bad", Mode: ModeInteractive, Session: SessionNew}
-		err := s.Validate()
+		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -58,7 +58,7 @@ func TestStepSchema(t *testing.T) {
 
 	t.Run("rejects invalid mode", func(t *testing.T) {
 		s := Step{ID: "bad", Mode: "invalid", Prompt: "hi", Session: SessionNew}
-		err := s.Validate()
+		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -69,21 +69,21 @@ func TestStepSchema(t *testing.T) {
 
 	t.Run("accepts a sub-workflow step with workflow field", func(t *testing.T) {
 		s := Step{ID: "sub", Workflow: "child.yaml", Session: SessionNew}
-		if err := s.Validate(); err != nil {
+		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("accepts a sub-workflow step with params", func(t *testing.T) {
 		s := Step{ID: "sub", Workflow: "child.yaml", Session: SessionNew, Params: map[string]string{"key": "val"}}
-		if err := s.Validate(); err != nil {
+		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("rejects workflow step with command", func(t *testing.T) {
 		s := Step{ID: "bad", Workflow: "child.yaml", Command: "echo", Session: SessionNew}
-		err := s.Validate()
+		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -94,7 +94,7 @@ func TestStepSchema(t *testing.T) {
 
 	t.Run("rejects workflow step with prompt", func(t *testing.T) {
 		s := Step{ID: "bad", Workflow: "child.yaml", Prompt: "hi", Session: SessionNew}
-		err := s.Validate()
+		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -105,7 +105,7 @@ func TestStepSchema(t *testing.T) {
 
 	t.Run("rejects workflow step with mode", func(t *testing.T) {
 		s := Step{ID: "bad", Workflow: "child.yaml", Mode: ModeHeadless, Session: SessionNew}
-		err := s.Validate()
+		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -118,21 +118,21 @@ func TestStepSchema(t *testing.T) {
 func TestStepSchemaExtensions(t *testing.T) {
 	t.Run("accepts inherit as a session strategy", func(t *testing.T) {
 		s := Step{ID: "s", Mode: ModeHeadless, Prompt: "p", Session: SessionInherit}
-		if err := s.Validate(); err != nil {
+		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("accepts a shell step with capture field", func(t *testing.T) {
 		s := Step{ID: "s", Mode: ModeShell, Command: "echo hi", Session: SessionNew, Capture: "output"}
-		if err := s.Validate(); err != nil {
+		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("rejects capture on an agent step", func(t *testing.T) {
 		s := Step{ID: "s", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, Capture: "output"}
-		err := s.Validate()
+		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -143,7 +143,7 @@ func TestStepSchemaExtensions(t *testing.T) {
 
 	t.Run("rejects capture on an interactive step", func(t *testing.T) {
 		s := Step{ID: "s", Mode: ModeInteractive, Prompt: "p", Session: SessionNew, Capture: "output"}
-		err := s.Validate()
+		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -154,21 +154,21 @@ func TestStepSchemaExtensions(t *testing.T) {
 
 	t.Run("accepts continue_on_failure on a shell step", func(t *testing.T) {
 		s := Step{ID: "s", Mode: ModeShell, Command: "echo", Session: SessionNew, ContinueOnFailure: true}
-		if err := s.Validate(); err != nil {
+		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("accepts skip_if with value previous_success", func(t *testing.T) {
 		s := Step{ID: "s", Mode: ModeShell, Command: "echo", Session: SessionNew, SkipIf: "previous_success"}
-		if err := s.Validate(); err != nil {
+		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("rejects skip_if with invalid value", func(t *testing.T) {
 		s := Step{ID: "s", Mode: ModeShell, Command: "echo", Session: SessionNew, SkipIf: "always"}
-		err := s.Validate()
+		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -176,28 +176,28 @@ func TestStepSchemaExtensions(t *testing.T) {
 
 	t.Run("accepts break_if with value success", func(t *testing.T) {
 		s := Step{ID: "s", Mode: ModeShell, Command: "echo", Session: SessionNew, BreakIf: "success"}
-		if err := s.Validate(); err != nil {
+		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("accepts break_if with value failure", func(t *testing.T) {
 		s := Step{ID: "s", Mode: ModeShell, Command: "echo", Session: SessionNew, BreakIf: "failure"}
-		if err := s.Validate(); err != nil {
+		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("accepts model on an agent step", func(t *testing.T) {
 		s := Step{ID: "s", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, Model: "opus"}
-		if err := s.Validate(); err != nil {
+		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("rejects model on a shell step", func(t *testing.T) {
 		s := Step{ID: "s", Mode: ModeShell, Command: "echo", Session: SessionNew, Model: "opus"}
-		err := s.Validate()
+		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -214,7 +214,7 @@ func TestStepSchemaExtensions(t *testing.T) {
 				{ID: "b", Mode: ModeShell, Command: "echo b", Session: SessionNew},
 			},
 		}
-		if err := s.Validate(); err != nil {
+		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
@@ -225,7 +225,7 @@ func TestStepSchemaExtensions(t *testing.T) {
 			Loop:  &Loop{Max: intPtr(3)},
 			Steps: []Step{{ID: "a", Mode: ModeShell, Command: "echo", Session: SessionNew}},
 		}
-		if err := s.Validate(); err != nil {
+		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
@@ -236,7 +236,7 @@ func TestStepSchemaExtensions(t *testing.T) {
 			Loop:  &Loop{Over: "task_files", As: "task_file"},
 			Steps: []Step{{ID: "a", Mode: ModeShell, Command: "echo", Session: SessionNew}},
 		}
-		if err := s.Validate(); err != nil {
+		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
@@ -247,7 +247,7 @@ func TestStepSchemaExtensions(t *testing.T) {
 			Loop:  &Loop{},
 			Steps: []Step{{ID: "a", Mode: ModeShell, Command: "echo", Session: SessionNew}},
 		}
-		err := s.Validate()
+		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -255,21 +255,21 @@ func TestStepSchemaExtensions(t *testing.T) {
 
 	t.Run("accepts workflow field for sub-workflow step", func(t *testing.T) {
 		s := Step{ID: "sub", Workflow: "workflows/sub.yaml", Session: SessionNew}
-		if err := s.Validate(); err != nil {
+		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("accepts params on a sub-workflow step", func(t *testing.T) {
 		s := Step{ID: "sub", Workflow: "sub.yaml", Session: SessionNew, Params: map[string]string{"out": "{{base}}/result.txt"}}
-		if err := s.Validate(); err != nil {
+		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("rejects step with both command and prompt", func(t *testing.T) {
 		s := Step{ID: "bad", Mode: ModeShell, Command: "echo", Prompt: "hi", Session: SessionNew}
-		err := s.Validate()
+		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -280,7 +280,7 @@ func TestStepSchemaExtensions(t *testing.T) {
 
 	t.Run("rejects step with both command and workflow", func(t *testing.T) {
 		s := Step{ID: "bad", Command: "echo", Workflow: "sub.yaml", Session: SessionNew}
-		err := s.Validate()
+		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -291,7 +291,7 @@ func TestStepSchemaExtensions(t *testing.T) {
 
 	t.Run("rejects step with neither command prompt workflow nor steps", func(t *testing.T) {
 		s := Step{ID: "empty", Session: SessionNew}
-		err := s.Validate()
+		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -329,23 +329,17 @@ func TestWorkflowSchema(t *testing.T) {
 			},
 		}
 		w.ApplyDefaults()
-		if err := w.Validate(); err != nil {
+		if err := w.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
-		}
-		if w.Agent != "claude" {
-			t.Fatalf("expected agent 'claude', got %q", w.Agent)
 		}
 	})
 
-	t.Run("applies default agent and empty params", func(t *testing.T) {
+	t.Run("applies defaults and empty params", func(t *testing.T) {
 		w := Workflow{
 			Name:  "test",
 			Steps: []Step{{ID: "s", Mode: ModeShell, Command: "echo", Session: SessionNew}},
 		}
 		w.ApplyDefaults()
-		if w.Agent != "claude" {
-			t.Fatalf("expected agent 'claude', got %q", w.Agent)
-		}
 		if w.Params == nil || len(w.Params) != 0 {
 			t.Fatal("expected empty params slice")
 		}
@@ -354,7 +348,7 @@ func TestWorkflowSchema(t *testing.T) {
 	t.Run("rejects workflow with no steps", func(t *testing.T) {
 		w := Workflow{Name: "test", Steps: []Step{}}
 		w.ApplyDefaults()
-		err := w.Validate()
+		err := w.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -363,7 +357,7 @@ func TestWorkflowSchema(t *testing.T) {
 	t.Run("rejects workflow without name", func(t *testing.T) {
 		w := Workflow{Steps: []Step{{ID: "s", Mode: ModeShell, Command: "echo", Session: SessionNew}}}
 		w.ApplyDefaults()
-		err := w.Validate()
+		err := w.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -376,7 +370,7 @@ func TestWorkflowSchema(t *testing.T) {
 			Engine: &EngineConfig{Type: "openspec"},
 		}
 		w.ApplyDefaults()
-		if err := w.Validate(); err != nil {
+		if err := w.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
@@ -387,7 +381,7 @@ func TestWorkflowSchema(t *testing.T) {
 			Steps: []Step{{ID: "s", Mode: ModeShell, Command: "echo", Session: SessionNew}},
 		}
 		w.ApplyDefaults()
-		if err := w.Validate(); err != nil {
+		if err := w.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if w.Engine != nil {
@@ -402,7 +396,7 @@ func TestWorkflowSchema(t *testing.T) {
 			Engine: &EngineConfig{},
 		}
 		w.ApplyDefaults()
-		err := w.Validate()
+		err := w.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -418,7 +412,7 @@ func TestWorkflowSchema(t *testing.T) {
 			}},
 		}
 		w.ApplyDefaults()
-		if err := w.Validate(); err != nil {
+		if err := w.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
@@ -429,7 +423,7 @@ func TestWorkflowSchema(t *testing.T) {
 			Steps: []Step{{ID: "sub", Workflow: "child.yaml", Session: SessionNew}},
 		}
 		w.ApplyDefaults()
-		if err := w.Validate(); err != nil {
+		if err := w.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
@@ -446,7 +440,61 @@ func TestWorkflowSchema(t *testing.T) {
 			}},
 		}
 		w.ApplyDefaults()
-		if err := w.Validate(); err != nil {
+		if err := w.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestCLIValidation(t *testing.T) {
+	knownCLIs := []string{"claude", "codex"}
+
+	t.Run("accepts cli on an agent step", func(t *testing.T) {
+		s := Step{ID: "s", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, CLI: "codex"}
+		if err := s.Validate(knownCLIs); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("accepts cli on an interactive step", func(t *testing.T) {
+		s := Step{ID: "s", Mode: ModeInteractive, Prompt: "p", Session: SessionNew, CLI: "claude"}
+		if err := s.Validate(knownCLIs); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("rejects cli on a shell step", func(t *testing.T) {
+		s := Step{ID: "s", Mode: ModeShell, Command: "echo", Session: SessionNew, CLI: "claude"}
+		err := s.Validate(knownCLIs)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "cli") {
+			t.Fatalf("expected cli error, got: %v", err)
+		}
+	})
+
+	t.Run("rejects unknown cli value", func(t *testing.T) {
+		s := Step{ID: "s", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, CLI: "unknown-cli"}
+		err := s.Validate(knownCLIs)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "unknown cli adapter") {
+			t.Fatalf("expected 'unknown cli adapter' error, got: %v", err)
+		}
+	})
+
+	t.Run("skips cli name validation when knownCLIs is nil", func(t *testing.T) {
+		s := Step{ID: "s", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, CLI: "anything"}
+		if err := s.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("accepts step with no cli field", func(t *testing.T) {
+		s := Step{ID: "s", Mode: ModeHeadless, Prompt: "p", Session: SessionNew}
+		if err := s.Validate(knownCLIs); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})

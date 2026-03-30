@@ -1,6 +1,5 @@
 name: implement-change
 description: "For-each loop over task files, invoking implement-task per task"
-agent: claude
 
 params:
   - name: change_name

@@ -65,6 +65,7 @@ type Step struct {
 	Command           string            `yaml:"command,omitempty" json:"command,omitempty"`
 	Mode              StepMode          `yaml:"mode,omitempty" json:"mode,omitempty"`
 	Session           SessionStrategy   `yaml:"session,omitempty" json:"session,omitempty"`
+	CLI               string            `yaml:"cli,omitempty" json:"cli,omitempty"`
 	Capture           string            `yaml:"capture,omitempty" json:"capture,omitempty"`
 	ContinueOnFailure bool              `yaml:"continue_on_failure,omitempty" json:"continue_on_failure,omitempty"`
 	SkipIf            string            `yaml:"skip_if,omitempty" json:"skip_if,omitempty"`
@@ -120,7 +121,9 @@ func hasExactlyOneStepType(s *Step) bool {
 }
 
 // Validate checks that a Step has a valid configuration.
-func (s *Step) Validate() error {
+// knownCLIs is the list of registered CLI adapter names; if nil, CLI name
+// validation is skipped (useful for tests that don't care about CLI names).
+func (s *Step) Validate(knownCLIs []string) error {
 	if !hasExactlyOneStepType(s) {
 		return fmt.Errorf(`step must have exactly one of: command, prompt/mode, loop+steps, workflow, or steps (group)`)
 	}
@@ -142,6 +145,27 @@ func (s *Step) Validate() error {
 		}
 		if s.Mode == "" && s.Prompt == "" {
 			return fmt.Errorf(`"model" is only allowed on agent steps`)
+		}
+	}
+
+	if s.CLI != "" {
+		if s.Mode == ModeShell {
+			return fmt.Errorf(`"cli" is only allowed on agent steps`)
+		}
+		if s.Mode == "" && s.Prompt == "" {
+			return fmt.Errorf(`"cli" is only allowed on agent steps`)
+		}
+		if knownCLIs != nil {
+			found := false
+			for _, name := range knownCLIs {
+				if name == s.CLI {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf(`unknown cli adapter: %q`, s.CLI)
+			}
 		}
 	}
 
@@ -174,7 +198,7 @@ func (s *Step) Validate() error {
 	// Recursively validate child steps.
 	for i := range s.Steps {
 		s.Steps[i].ApplyDefaults()
-		if err := s.Steps[i].Validate(); err != nil {
+		if err := s.Steps[i].Validate(knownCLIs); err != nil {
 			return fmt.Errorf("steps[%d]: %w", i, err)
 		}
 	}
@@ -207,7 +231,6 @@ type EngineConfig struct {
 type Workflow struct {
 	Name        string        `yaml:"name" json:"name"`
 	Description string        `yaml:"description,omitempty" json:"description,omitempty"`
-	Agent       string        `yaml:"agent,omitempty" json:"agent,omitempty"`
 	Params      []Param       `yaml:"params,omitempty" json:"params,omitempty"`
 	Steps       []Step        `yaml:"steps" json:"steps"`
 	Engine      *EngineConfig `yaml:"engine,omitempty" json:"engine,omitempty"`
@@ -215,9 +238,6 @@ type Workflow struct {
 
 // ApplyDefaults sets default values for Workflow fields.
 func (w *Workflow) ApplyDefaults() {
-	if w.Agent == "" {
-		w.Agent = "claude"
-	}
 	if w.Params == nil {
 		w.Params = []Param{}
 	}
@@ -227,7 +247,9 @@ func (w *Workflow) ApplyDefaults() {
 }
 
 // Validate checks that a Workflow has a valid configuration.
-func (w *Workflow) Validate() error {
+// knownCLIs is the list of registered CLI adapter names; if nil, CLI name
+// validation is skipped.
+func (w *Workflow) Validate(knownCLIs []string) error {
 	if w.Name == "" {
 		return fmt.Errorf("workflow name is required")
 	}
@@ -242,7 +264,7 @@ func (w *Workflow) Validate() error {
 
 	var errs []string
 	for i := range w.Steps {
-		if err := w.Steps[i].Validate(); err != nil {
+		if err := w.Steps[i].Validate(knownCLIs); err != nil {
 			errs = append(errs, fmt.Sprintf("steps[%d]: %v", i, err))
 		}
 	}
