@@ -153,6 +153,8 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		}
 		encoded := audit.EncodePath(cwd)
 		sessionDir = filepath.Join(home, ".agent-runner", "projects", encoded, "runs", sessionID)
+	} else {
+		sessionID = filepath.Base(sessionDir)
 	}
 
 	if err := os.MkdirAll(sessionDir, 0o750); err != nil {

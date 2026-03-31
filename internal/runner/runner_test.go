@@ -311,7 +311,7 @@ func TestRunWorkflow(t *testing.T) {
 	})
 
 	t.Run("prints resume hint with session ID on failure", func(t *testing.T) {
-		sessionDir := t.TempDir()
+		sessionDir := filepath.Join(t.TempDir(), "deploy-service-test")
 		log := &mockLog{}
 		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 1}}}
 		w := model.Workflow{
