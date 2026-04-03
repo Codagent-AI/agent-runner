@@ -122,7 +122,7 @@ func main() {
 
 func run() int {
 	resumeFlag := flag.Bool("resume", false, "Resume an interrupted workflow")
-	sessionFlag := flag.String("session", "", "Session ID to resume (requires --resume)")
+	sessionFlag := flag.String("session", "", "Session ID to resume (implies --resume)")
 	validateFlag := flag.Bool("validate", false, "Validate a workflow file without executing")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	vFlag := flag.Bool("v", false, "Print version and exit (shorthand)")
@@ -131,7 +131,7 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "Usage: agent-runner [flags] <workflow.yaml> [params...]\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		fmt.Fprintf(os.Stderr, "  -resume\n\tResume an interrupted workflow\n")
-		fmt.Fprintf(os.Stderr, "  -session <id>\n\tSession ID to resume (requires -resume)\n")
+		fmt.Fprintf(os.Stderr, "  -session <id>\n\tSession ID to resume (implies -resume)\n")
 		fmt.Fprintf(os.Stderr, "  -validate\n\tValidate a workflow file without executing\n")
 		fmt.Fprintf(os.Stderr, "  -v, -version\n\tPrint version and exit\n")
 	}
@@ -143,11 +143,12 @@ func run() int {
 		return 0
 	}
 
-	// Validate flag combinations.
-	if *sessionFlag != "" && !*resumeFlag {
-		fmt.Fprintln(os.Stderr, "agent-runner: --session requires --resume")
-		return 1
+	// Infer --resume when --session is provided.
+	if *sessionFlag != "" {
+		*resumeFlag = true
 	}
+
+	// Validate flag combinations.
 	if *validateFlag && *resumeFlag {
 		fmt.Fprintln(os.Stderr, "agent-runner: --validate and --resume are mutually exclusive")
 		return 1

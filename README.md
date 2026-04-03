@@ -55,7 +55,7 @@ make lint        # run golangci-lint
 ./agent-runner -resume
 
 # Resume a specific session
-./agent-runner -resume -session <session-id>
+./agent-runner --session <session-id>
 ```
 
 ## How it works
@@ -182,16 +182,17 @@ Referenced in prompts and commands as `{{param_name}}`. Captured variables from 
 ```
 agent-runner [flags] <workflow.yaml> [params...]
 agent-runner -validate <workflow.yaml>
-agent-runner -resume [-session <id>]
+agent-runner -resume [--session <id>]
+agent-runner --session <id>
 ```
 
 ### -session
 
-Seeds the resume with a specific session ID. Requires `-resume`.
+Seeds the resume with a specific session ID. Implies `--resume`.
 
 ```bash
 # Resume a specific session
-./agent-runner -resume -session abc-123-def
+./agent-runner --session abc-123-def
 ```
 
 The seed propagates through sub-workflows and loop iterations, so it works regardless of nesting depth. If no step uses `session: resume`, the seeded session is ignored.

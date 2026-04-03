@@ -54,11 +54,11 @@ If you only add `~/go/bin` to `.zshrc`, it will work in your terminal but **not*
 
 ```bash
 ./dev.sh workflows/plan-change.yaml my-change
-./dev.sh -validate workflows/plan-change.yaml
-./dev.sh -resume -session plan-change-2026-04-03T23-19-18-552111Z
+./dev.sh --validate workflows/plan-change.yaml
+./dev.sh --resume --session plan-change-2026-04-03T23-19-18-552111Z
 ```
 
-> **Why not `make`?** `make` intercepts `-flag` arguments as its own options, so flags like `-session` can't be passed through. `./dev.sh` avoids this.
+> **Why not `make`?** `make` intercepts `--flag` arguments as its own options, so flags like `--session` can't be passed through. `./dev.sh` avoids this.
 
 ## Linting
 
