@@ -1,4 +1,4 @@
-.PHONY: test lint build fmt test-verbose test-cover dev-agent-runner dev-run dev-validate dev-resume dev-flokay
+.PHONY: test lint build fmt test-verbose test-cover dev-agent-runner dev-run dev-validate dev-resume
 
 build:
 	go build -o bin/agent-runner ./cmd/agent-runner
