@@ -30,7 +30,7 @@ dev-validate:
 	go run ./cmd/agent-runner -validate $(filter-out $@,$(MAKECMDGOALS))
 
 dev-resume:
-	go run ./cmd/agent-runner -resume $(filter-out $@,$(MAKECMDGOALS))
+	go run ./cmd/agent-runner -resume $(if $(SESSION),-session $(SESSION),) $(filter-out $@,$(MAKECMDGOALS))
 
 dev-plan:
 	go run ./cmd/agent-runner workflows/plan-change.yaml $(filter-out $@,$(MAKECMDGOALS))
