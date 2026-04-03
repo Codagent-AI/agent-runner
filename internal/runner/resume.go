@@ -41,12 +41,15 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
 	var lastSessionStepID string
 	var childState *model.SubWorkflowChildState
 
+	var completed bool
+
 	if state.CurrentStep.Nested != nil {
 		nested := state.CurrentStep.Nested
 		fromStep = nested.StepID
 		sessionIDs = nested.SessionIDs
 		capturedVars = nested.CapturedVariables
 		lastSessionStepID = nested.LastSessionStepID
+		completed = nested.Completed
 		if nested.Child != nil {
 			childState = nestedToChildState(nested.Child)
 		}
@@ -54,17 +57,15 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
 		fromStep = state.CurrentStep.StepID
 	}
 
-	// Validate that the step still exists
-	found := false
-	for i := range workflow.Steps {
-		if workflow.Steps[i].ID == fromStep {
-			found = true
-			break
-		}
-	}
-	if !found {
+	// Resolve which step to actually resume from — advance past completed steps.
+	resolved, err := model.ResolveResumeStep(workflow.Steps, fromStep, completed)
+	if err != nil {
 		return ResultFailed, fmt.Errorf("step %q no longer exists in workflow", fromStep)
 	}
+	if resolved.AllDone {
+		return ResultSuccess, nil
+	}
+	fromStep = resolved.StepID
 
 	// Create engine if configured
 	var eng engine.Engine
@@ -102,6 +103,7 @@ func nestedToChildState(nested *model.NestedStepState) *model.SubWorkflowChildSt
 		StepID:            nested.StepID,
 		SessionIDs:        copyMap(nested.SessionIDs),
 		CapturedVariables: copyMap(nested.CapturedVariables),
+		Completed:         nested.Completed,
 		Child:             nestedToChildState(nested.Child),
 	}
 }

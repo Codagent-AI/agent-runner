@@ -82,7 +82,7 @@ func ExecuteSubWorkflowStep(
 		EngineSet:       workflow.Engine != nil,
 	})
 
-	startFromStepID := applyResumeState(parentCtx, childCtx)
+	startFromStepID, startCompleted := applyResumeState(parentCtx, childCtx)
 	childPrefix := buildNestingPrefix(childCtx.NestingPath)
 
 	subStart := time.Now()
@@ -99,7 +99,7 @@ func ExecuteSubWorkflowStep(
 
 	log.Printf("  sub-workflow: %s (%s)\n", workflow.Name, workflowPath)
 
-	outcome, err := executeChildSteps(&workflow, childCtx, runner, glob, log, startFromStepID)
+	outcome, err := executeChildSteps(&workflow, childCtx, runner, glob, log, startFromStepID, startCompleted)
 
 	emitAudit(childCtx, audit.Event{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
@@ -122,12 +122,26 @@ func executeChildSteps(
 	glob GlobExpander,
 	log Logger,
 	startFromStepID string,
+	startCompleted bool,
 ) (StepOutcome, error) {
-	reached := startFromStepID == ""
+	// Resolve which step to actually start from, advancing past completed steps.
+	resolvedStartID := startFromStepID
+	if startFromStepID != "" {
+		resolved, err := model.ResolveResumeStep(workflow.Steps, startFromStepID, startCompleted)
+		if err != nil {
+			return OutcomeFailed, fmt.Errorf("resume step %q not found in sub-workflow", startFromStepID)
+		}
+		if resolved.AllDone {
+			return OutcomeSuccess, nil
+		}
+		resolvedStartID = resolved.StepID
+	}
+
+	reached := resolvedStartID == ""
 
 	for i := range workflow.Steps {
 		if !reached {
-			if workflow.Steps[i].ID == startFromStepID {
+			if workflow.Steps[i].ID == resolvedStartID {
 				reached = true
 			} else {
 				continue
@@ -145,7 +159,7 @@ func executeChildSteps(
 		log.Println(textfmt.Separator())
 		log.Println(textfmt.StepHeading(i, len(workflow.Steps), breadcrumb, workflow.Steps[i].StepType(), false))
 
-		recordChildProgress(childCtx, workflow.Steps[i].ID)
+		recordChildProgress(childCtx, workflow.Steps[i].ID, false)
 		if childCtx.ParentContext != nil && childCtx.ParentContext.FlushState != nil {
 			childCtx.ParentContext.FlushState()
 		}
@@ -154,7 +168,8 @@ func executeChildSteps(
 		if err != nil {
 			return OutcomeFailed, err
 		}
-		recordChildProgress(childCtx, workflow.Steps[i].ID)
+		completed := outcome != OutcomeFailed && outcome != OutcomeAborted
+		recordChildProgress(childCtx, workflow.Steps[i].ID, completed)
 
 		if outcome == OutcomeAborted {
 			return OutcomeAborted, nil
@@ -168,13 +183,13 @@ func executeChildSteps(
 		}
 	}
 
-	if startFromStepID != "" && !reached {
-		return OutcomeFailed, fmt.Errorf("resume step %q not found in sub-workflow", startFromStepID)
+	if resolvedStartID != "" && !reached {
+		return OutcomeFailed, fmt.Errorf("resume step %q not found in sub-workflow", resolvedStartID)
 	}
 	return OutcomeSuccess, nil
 }
 
-func recordChildProgress(childCtx *model.ExecutionContext, childStepID string) {
+func recordChildProgress(childCtx *model.ExecutionContext, childStepID string, completed bool) {
 	parent := childCtx.ParentContext
 	if parent == nil {
 		return
@@ -190,15 +205,16 @@ func recordChildProgress(childCtx *model.ExecutionContext, childStepID string) {
 		StepID:            childStepID,
 		SessionIDs:        copyMap(childCtx.SessionIDs),
 		CapturedVariables: copyMap(childCtx.CapturedVariables),
+		Completed:         completed,
 		Child:             nestedChild,
 	}
 }
 
-func applyResumeState(parentCtx, childCtx *model.ExecutionContext) string {
+func applyResumeState(parentCtx, childCtx *model.ExecutionContext) (string, bool) {
 	resumeChild := parentCtx.ResumeChildState
 	parentCtx.ResumeChildState = nil
 	if resumeChild == nil {
-		return ""
+		return "", false
 	}
 
 	for k, v := range resumeChild.SessionIDs {
@@ -210,7 +226,7 @@ func applyResumeState(parentCtx, childCtx *model.ExecutionContext) string {
 	if resumeChild.Child != nil {
 		childCtx.ResumeChildState = resumeChild.Child
 	}
-	return resumeChild.StepID
+	return resumeChild.StepID, resumeChild.Completed
 }
 
 func buildNestingPrefix(nestingPath []model.NestingSegment) string {

@@ -1,6 +1,9 @@
 package model
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // NestedStepState tracks execution position within nested workflows/loops.
 type NestedStepState struct {
@@ -8,6 +11,7 @@ type NestedStepState struct {
 	SessionIDs        map[string]string `json:"sessionIds"`
 	CapturedVariables map[string]string `json:"capturedVariables"`
 	LastSessionStepID string            `json:"lastSessionStepId,omitempty"`
+	Completed         bool              `json:"completed,omitempty"`
 	Child             *NestedStepState  `json:"child"`
 }
 
@@ -52,4 +56,28 @@ type RunState struct {
 	CurrentStep  CurrentStep       `json:"currentStep"`
 	Params       map[string]string `json:"params"`
 	WorkflowHash string            `json:"workflowHash"`
+}
+
+// ResolveResumeStepResult holds the outcome of resolving which step to resume from.
+type ResolveResumeStepResult struct {
+	StepID    string // The step ID to resume from (empty if all steps completed).
+	AllDone   bool   // True when the recorded step was the last step and it completed.
+}
+
+// ResolveResumeStep determines which step to actually start executing on resume.
+// If the recorded step completed successfully, it advances to the next step.
+// If the recorded step did not complete, it returns that step (to re-run it).
+func ResolveResumeStep(steps []Step, recordedStepID string, completed bool) (ResolveResumeStepResult, error) {
+	for i := range steps {
+		if steps[i].ID == recordedStepID {
+			if completed {
+				if i+1 < len(steps) {
+					return ResolveResumeStepResult{StepID: steps[i+1].ID}, nil
+				}
+				return ResolveResumeStepResult{AllDone: true}, nil
+			}
+			return ResolveResumeStepResult{StepID: recordedStepID}, nil
+		}
+	}
+	return ResolveResumeStepResult{}, fmt.Errorf("step %q not found", recordedStepID)
 }
