@@ -48,22 +48,27 @@ If you only add `~/go/bin` to `.zshrc`, it will work in your terminal but **not*
 | `make lint` | `golangci-lint run ./...` | Run linter (strict config) |
 | `make fmt` | `goimports -w .` | Format code |
 
-### Development commands (go run, no build step)
+### Development commands (`./dev.sh` script)
 
-| Target | Description |
-|--------|-------------|
-| `make dev-agent-runner` | Show CLI help |
-| `make dev-run` | Run a workflow |
-| `make dev-validate` | Validate a workflow |
-| `make dev-resume` | Resume an interrupted workflow |
-| `make dev-flokay` | Run the flokay workflow |
+The `./dev.sh` script wraps `go run` and passes all flags through directly, so you can use the same arguments as the compiled binary:
 
-Example:
+| Command | Description |
+|---------|-------------|
+| `./dev.sh run` | Run a workflow |
+| `./dev.sh validate` | Validate a workflow |
+| `./dev.sh resume` | Resume an interrupted workflow |
+| `./dev.sh plan` | Run the plan-change workflow |
+| `./dev.sh implement` | Run the implement-change workflow |
+
+Examples:
 
 ```bash
-make dev-validate workflows/flokay.yaml
-make dev-run workflows/flokay.yaml my-change
+./dev.sh validate workflows/plan-change.yaml
+./dev.sh run workflows/plan-change.yaml my-change
+./dev.sh resume -session plan-change-2026-04-03T23-19-18-552111Z
 ```
+
+> **Why not `make`?** `make` intercepts any `--flag` or `-flag` arguments as its own options, so `make dev-resume -session foo` fails. The `./dev.sh` script avoids this by passing all arguments through to `go run` unchanged.
 
 ## Linting
 
