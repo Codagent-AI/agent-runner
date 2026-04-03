@@ -48,27 +48,17 @@ If you only add `~/go/bin` to `.zshrc`, it will work in your terminal but **not*
 | `make lint` | `golangci-lint run ./...` | Run linter (strict config) |
 | `make fmt` | `goimports -w .` | Format code |
 
-### Development commands (`./dev.sh` script)
+### Running without building (`./dev.sh`)
 
-The `./dev.sh` script wraps `go run` and passes all flags through directly, so you can use the same arguments as the compiled binary:
-
-| Command | Description |
-|---------|-------------|
-| `./dev.sh run` | Run a workflow |
-| `./dev.sh validate` | Validate a workflow |
-| `./dev.sh resume` | Resume an interrupted workflow |
-| `./dev.sh plan` | Run the plan-change workflow |
-| `./dev.sh implement` | Run the implement-change workflow |
-
-Examples:
+`./dev.sh` is a thin wrapper around `go run` that passes all arguments through unchanged. Use it exactly like the compiled binary:
 
 ```bash
-./dev.sh validate workflows/plan-change.yaml
-./dev.sh run workflows/plan-change.yaml my-change
-./dev.sh resume -session plan-change-2026-04-03T23-19-18-552111Z
+./dev.sh workflows/plan-change.yaml my-change
+./dev.sh -validate workflows/plan-change.yaml
+./dev.sh -resume -session plan-change-2026-04-03T23-19-18-552111Z
 ```
 
-> **Why not `make`?** `make` intercepts any `--flag` or `-flag` arguments as its own options, so `make dev-resume -session foo` fails. The `./dev.sh` script avoids this by passing all arguments through to `go run` unchanged.
+> **Why not `make`?** `make` intercepts `-flag` arguments as its own options, so flags like `-session` can't be passed through. `./dev.sh` avoids this.
 
 ## Linting
 
