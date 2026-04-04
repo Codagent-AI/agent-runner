@@ -30,4 +30,4 @@ steps:
     session: resume
     prompt: |
       Help me finalize the PR.
-      You MUST use the flokay:finalize-pr skill.
+      You MUST use the codagent:finalize-pr skill.

@@ -1,6 +1,6 @@
 ## Why
 
-Baton invokes flokay skills directly (e.g., `/flokay:propose`), bypassing the openspec instructions layer. The flokay skills expect template content, output paths, and dependency info to be "provided" to them — language like "to the outputPath provided, using the template structure provided." When `opsx:continue` orchestrates, it calls `openspec instructions` first and injects all of this. When baton orchestrates, none of it is provided. It works by accident (Claude searches the project and finds the template), but it's fragile and lossy.
+Baton invokes flokay skills directly (e.g., `/codagent:propose`), bypassing the openspec instructions layer. The flokay skills expect template content, output paths, and dependency info to be "provided" to them — language like "to the outputPath provided, using the template structure provided." When `opsx:continue` orchestrates, it calls `openspec instructions` first and injects all of this. When baton orchestrates, none of it is provided. It works by accident (Claude searches the project and finds the template), but it's fragile and lossy.
 
 Additionally, when resuming a partially-completed workflow, baton requires the user to pass `--from <step-id>` manually. A persistent state file enables `baton resume` to pick up where it left off.
 

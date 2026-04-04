@@ -130,7 +130,7 @@ The agent accumulates context with each iteration. When the outer loop moves to 
 
 ### 4. Prompt-Based Steps
 
-Steps send natural language prompts to agents, positioned as the first thing the agent sees (highest-attention position). Prompts can invoke skills directly (`/flokay:propose`), include interpolated parameters, and receive engine-enriched context.
+Steps send natural language prompts to agents, positioned as the first thing the agent sees (highest-attention position). Prompts can invoke skills directly (`/codagent:propose`), include interpolated parameters, and receive engine-enriched context.
 
 This is fundamentally different from "run a shell command." The prompt is a first-class workflow concept, not a string passed to `sh -c`.
 

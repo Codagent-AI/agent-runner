@@ -28,7 +28,7 @@ layout: "" {
   grid-rows: 1
   grid-columns: 2
   ...
-  flokay: { direction: down }
+  codagent: { direction: down }
   sub_workflows: { direction: down }
 }
 ```

@@ -127,7 +127,7 @@ steps:
   - id: proposal
     mode: interactive
     session: new
-    prompt: /flokay:propose "{{change_name}}"
+    prompt: /codagent:propose "{{change_name}}"
 
   - id: implement
     workflow: implement-change.yaml
