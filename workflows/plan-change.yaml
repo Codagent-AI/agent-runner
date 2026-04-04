@@ -44,24 +44,8 @@ steps:
       Help me plan tasks for the change.
       You MUST use the codagent:plan-tasks skill.
 
-  - id: validate-loop
-    loop:
-      max: 3
-    steps:
-      - id: validate
-        mode: shell
-        command: openspec validate --change "{{change_name}}"
-        capture: validate_output
-        continue_on_failure: true
-        break_if: success
-
-      - id: fix-validation
-        mode: interactive
-        session: resume
-        prompt: |
-          openspec validate found issues with the change artifacts. Fix them.
-
-          {{validate_output}}
+  - id: pre-review-validate
+    workflow: validate-change.yaml
 
   - id: review
     mode: interactive
@@ -70,3 +54,6 @@ steps:
       Review the OpenSpec change artifacts at: openspec/changes/{{change_name}}
       You MUST use the codagent:review-spec skill.
       Fix any issues you find. You may ask the user questions if needed.
+
+  - id: post-review-validate
+    workflow: validate-change.yaml
