@@ -155,18 +155,18 @@ func TestResolveResumeSession(t *testing.T) {
 		}
 	})
 
-	t.Run("errors when no session exists in current workflow", func(t *testing.T) {
+	t.Run("returns empty when no session exists in current workflow", func(t *testing.T) {
 		ctx := model.NewRootContext(model.RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: "test.yaml",
 		})
 
-		_, err := ResolveResumeSession(ctx)
-		if err == nil {
-			t.Fatal("expected error")
+		id, err := ResolveResumeSession(ctx)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
-		if !strings.Contains(err.Error(), "no prior session") {
-			t.Fatalf("expected 'no prior session' error, got: %v", err)
+		if id != "" {
+			t.Fatalf("expected empty session ID, got %q", id)
 		}
 	})
 }

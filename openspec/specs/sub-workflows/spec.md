@@ -64,7 +64,7 @@ A step with `session: inherit` SHALL resume the most recent session from the par
 
 #### Scenario: Resume with no prior session in same workflow
 - **WHEN** a step has `session: resume` but no prior step in the same workflow file created a session
-- **THEN** baton fails with a descriptive error
+- **THEN** the runner starts a fresh session (no resume flag passed to the CLI adapter)
 
 #### Scenario: Resume does not cross sub-workflow boundary
 - **WHEN** a parent workflow invokes a sub-workflow that created sessions, and the next parent step has `session: resume`

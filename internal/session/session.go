@@ -32,12 +32,10 @@ func ResolveInheritSession(ctx *model.ExecutionContext) (string, error) {
 
 // ResolveResumeSession returns the most recent session ID from the current
 // context's SessionIDs. Does NOT cross sub-workflow boundaries.
+// Returns empty string (no error) when no prior session exists, allowing
+// the CLI adapter to start a fresh session.
 func ResolveResumeSession(ctx *model.ExecutionContext) (string, error) {
-	id := getMostRecentSessionID(ctx)
-	if id == "" {
-		return "", fmt.Errorf(`session "resume" failed: no prior session in current workflow`)
-	}
-	return id, nil
+	return getMostRecentSessionID(ctx), nil
 }
 
 func getMostRecentSessionID(ctx *model.ExecutionContext) string {
