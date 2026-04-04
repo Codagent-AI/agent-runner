@@ -288,6 +288,48 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("captures stdout on headless step with capture", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "review-output"}}}
+		ctx := makeCtx()
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "review", Session: model.SessionNew, Capture: "review_result"}
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected success, got %q", outcome)
+		}
+		if ctx.CapturedVariables["review_result"] != "review-output" {
+			t.Fatalf("expected captured output, got %q", ctx.CapturedVariables["review_result"])
+		}
+	})
+
+	t.Run("captures stdout on failed headless step with capture", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 1, Stdout: "review-failures"}}}
+		ctx := makeCtx()
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "review", Session: model.SessionNew, Capture: "review_result"}
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeFailed {
+			t.Fatalf("expected failed, got %q", outcome)
+		}
+		if ctx.CapturedVariables["review_result"] != "review-failures" {
+			t.Fatalf("expected captured output on failure, got %q", ctx.CapturedVariables["review_result"])
+		}
+	})
+
+	t.Run("does not capture on headless step without capture field", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "some-output"}}}
+		ctx := makeCtx()
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew}
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if _, ok := ctx.CapturedVariables["output"]; ok {
+			t.Fatal("expected no captured variable when capture field is empty")
+		}
+	})
+
 	t.Run("interactive does not call RunAgent on ProcessRunner", func(t *testing.T) {
 		oldFn := interactiveRunnerFn
 		interactiveRunnerFn = func(_ []string, _ pty.Options) (pty.Result, error) {

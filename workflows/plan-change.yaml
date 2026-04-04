@@ -48,12 +48,7 @@ steps:
     workflow: validate-change.yaml
 
   - id: review
-    mode: interactive
-    session: new
-    prompt: |
-      Review the OpenSpec change artifacts at: openspec/changes/{{change_name}}
-      You MUST use the codagent:review-spec skill.
-      Fix any issues you find. You may ask the user questions if needed.
+    workflow: review-change.yaml
 
   - id: post-review-validate
     workflow: validate-change.yaml

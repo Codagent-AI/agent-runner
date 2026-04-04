@@ -1,0 +1,35 @@
+name: review-change
+description: "Retry loop: review OpenSpec change artifacts, fix on failure, max 3 attempts"
+
+params:
+  - name: change_name
+    required: true
+
+engine:
+  type: openspec
+  change_param: change_name
+
+steps:
+  - id: review-loop
+    loop:
+      max: 3
+    steps:
+      - id: review
+        mode: headless
+        session: new
+        capture: review_output
+        continue_on_failure: true
+        break_if: success
+        prompt: |
+          Review the OpenSpec change artifacts at: openspec/changes/{{change_name}}
+          You MUST use the codagent:review-spec skill.
+          If you find issues, list each one clearly and exit with a non-zero code.
+          If everything looks good, confirm it passes review.
+
+      - id: fix-review
+        mode: interactive
+        session: resume
+        prompt: |
+          The spec review found issues with the change artifacts. Fix them.
+
+          {{review_output}}

@@ -66,6 +66,10 @@ func ExecuteAgentStep(
 		return OutcomeFailed, runErr
 	}
 
+	if headless && step.Capture != "" {
+		ctx.CapturedVariables[step.Capture] = result.Stdout
+	}
+
 	discoveredID := discoverAndStoreSession(adapter, step, ctx, spawnTime, sessionID, headless, result.Stdout, log)
 
 	emitAgentEnd(ctx, prefix, startTime, discoveredID, outcome)

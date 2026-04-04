@@ -130,14 +130,10 @@ func TestStepSchemaExtensions(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects capture on an agent step", func(t *testing.T) {
+	t.Run("accepts capture on a headless step", func(t *testing.T) {
 		s := Step{ID: "s", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, Capture: "output"}
-		err := s.Validate(nil)
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if !strings.Contains(err.Error(), "capture") {
-			t.Fatalf("expected capture error, got: %v", err)
+		if err := s.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
