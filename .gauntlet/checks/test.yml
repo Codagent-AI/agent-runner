@@ -1,6 +1,0 @@
-command: go test ./...
-working_directory: "."
-parallel: false
-run_in_ci: true
-run_locally: true
-timeout: 300
