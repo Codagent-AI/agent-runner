@@ -60,8 +60,8 @@ type RunState struct {
 
 // ResolveResumeStepResult holds the outcome of resolving which step to resume from.
 type ResolveResumeStepResult struct {
-	StepID    string // The step ID to resume from (empty if all steps completed).
-	AllDone   bool   // True when the recorded step was the last step and it completed.
+	StepID  string // The step ID to resume from (empty if all steps completed).
+	AllDone bool   // True when the recorded step was the last step and it completed.
 }
 
 // ResolveResumeStep determines which step to actually start executing on resume.
