@@ -16,8 +16,8 @@ The full flokay change lifecycle decomposed into four workflow files:
 
 1. **flokay.yaml** — top-level: create → proposal → specs → design → tasks → review → implement (sub-workflow) → verify → archive → archive-verify → finalize
 2. **implement-change.yaml** — for-each loop over `tasks/*.md`, invokes implement-task per file
-3. **implement-task.yaml** — agent implements the task, then invokes run-gauntlet
-4. **run-gauntlet.yaml** — counted retry loop (max 3): shell gauntlet with `capture` + `break_if: success`, then agent fix with `session: inherit` + `skip_if: previous_success`
+3. **implement-task.yaml** — agent implements the task, then invokes run-validator
+4. **run-validator.yaml** — counted retry loop (max 3): shell validator with `capture` + `break_if: success`, then agent fix with `session: inherit` + `skip_if: previous_success`
 
 ## Layout Approach
 

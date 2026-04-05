@@ -33,7 +33,7 @@ reviews:
       - codex
       - claude
 
-# entry_points configured by /gauntlet-setup
+# entry_points configured by /validator-setup
 entry_points:
   - path: "."
     checks:
@@ -51,8 +51,8 @@ entry_points:
 
 # Git ref for detecting local changes via git diff (default: origin/main)
 
-# Directory for per-job logs (default: gauntlet_logs)
-# log_dir: gauntlet_logs
+# Directory for per-job logs (default: validator_logs)
+# log_dir: validator_logs
 
 # Run gates in parallel when possible (default: true)
 # allow_parallel: true
@@ -67,9 +67,9 @@ entry_points:
 # Options: critical, high, medium, low
 # rerun_new_issue_threshold: medium
 
-# Stop hook — auto-run gauntlet when the agent stops
-# Precedence: env vars > project config > global config (~/.config/agent-gauntlet/config.yml)
-# Env overrides: GAUNTLET_STOP_HOOK_ENABLED, GAUNTLET_STOP_HOOK_INTERVAL_MINUTES
+# Stop hook — auto-run validator when the agent stops
+# Precedence: env vars > project config > global config (~/.config/agent-validator/config.yml)
+# Env overrides: VALIDATOR_STOP_HOOK_ENABLED, VALIDATOR_STOP_HOOK_INTERVAL_MINUTES
 # stop_hook:
 #   enabled: false
 #   run_interval_minutes: 5       # Minimum minutes between runs (0 = always run)

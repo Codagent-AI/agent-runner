@@ -1,5 +1,5 @@
 name: implement-task
-description: "Implement a single task: agent step then gauntlet retry"
+description: "Implement a single task: agent step then validator retry"
 
 params:
   - name: task_file
@@ -15,8 +15,8 @@ steps:
       When you are done implementing, commit your changes with a clear,
       descriptive commit message. Then summarize to the user what you changed.
 
-  - id: run-gauntlet
-    workflow: run-gauntlet.yaml
+  - id: run-validator
+    workflow: run-validator.yaml
 
   - id: check-clean
     command: test -z "$(git status --porcelain)"

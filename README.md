@@ -78,7 +78,7 @@ agent-runner (harness)
   +-- step 3: headless     -> claude -p "Generate specs..."
   +-- step 4: loop (per-task)
   |     +-- step 4a: headless  -> claude -p "Implement {{task_file}}"
-  |     +-- step 4b: sub-workflow -> workflows/run-gauntlet.yaml
+  |     +-- step 4b: sub-workflow -> workflows/run-validator.yaml
   +-- step 5: headless     -> claude -p "Finalize..."
 ```
 

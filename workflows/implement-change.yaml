@@ -23,7 +23,7 @@ steps:
 
   - id: archive-verify
     mode: shell
-    command: agent-gauntlet skip
+    command: agent-validator skip
 
   - id: finalize
     mode: headless

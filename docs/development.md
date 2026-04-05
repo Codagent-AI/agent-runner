@@ -92,11 +92,11 @@ gosec ./...         # static security analysis
 govulncheck ./...   # known vulnerability detection
 ```
 
-Both are also run by the gauntlet checks (see `.gauntlet/checks/`).
+Both are also run by the validator checks (see `.validator/checks/`).
 
 ## Validating changes
 
-Use the `/validator-run` skill to run the full quality gate suite before committing. This runs all gauntlet checks (build, test, lint, security) and code quality reviews, then fixes any issues found.
+Use the `/validator-run` skill to run the full quality gate suite before committing. This runs all validator checks (build, test, lint, security) and code quality reviews, then fixes any issues found.
 
 ## PTY POC
 

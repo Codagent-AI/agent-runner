@@ -11,7 +11,7 @@ Defines how workflow steps can delegate to other workflow files, including param
 A step with a `workflow` field SHALL load and execute the referenced workflow file. The step MUST NOT have `prompt`, `command`, or `mode` — it delegates entirely to the sub-workflow. The sub-workflow executes in the same process as the parent.
 
 #### Scenario: Sub-workflow executes successfully
-- **WHEN** a step has `workflow: workflows/run-gauntlet.yaml` and the referenced file exists
+- **WHEN** a step has `workflow: workflows/run-validator.yaml` and the referenced file exists
 - **THEN** baton loads the sub-workflow, executes its steps, and continues with the next step in the parent
 
 #### Scenario: Sub-workflow file not found

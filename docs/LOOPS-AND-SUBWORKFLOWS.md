@@ -15,10 +15,10 @@ Repeat up to N times:
   loop:
     max: 3
   steps:
-    - id: gauntlet
+    - id: validator
       mode: shell
-      command: agent-gauntlet run
-      capture: gauntlet_output
+      command: agent-validator run
+      capture: validator_output
       continue_on_failure: true
       break_if: success
 
@@ -27,7 +27,7 @@ Repeat up to N times:
       session: resume
       prompt: |
         Fix these issues:
-        {{gauntlet_output}}
+        {{validator_output}}
       skip_if: previous_success
 ```
 
@@ -110,11 +110,11 @@ Sub-workflows:
 Inside a sub-workflow, `session: inherit` crosses the sub-workflow boundary to find the parent's most recent session:
 
 ```yaml
-# In run-gauntlet.yaml (a sub-workflow)
+# In run-validator.yaml (a sub-workflow)
 - id: fix-violations
   mode: headless
   session: inherit
-  prompt: "Fix the gauntlet violations..."
+  prompt: "Fix the validator violations..."
 ```
 
 This walks up the parent context chain until it finds a context with a different `workflowFile`, then returns that context's most recent session ID. It enables the pattern where a sub-workflow needs to resume the agent session that produced the code being verified.
@@ -124,9 +124,9 @@ This walks up the parent context chain until it finds a context with a different
 ### continue_on_failure
 
 ```yaml
-- id: gauntlet
+- id: validator
   mode: shell
-  command: agent-gauntlet run
+  command: agent-validator run
   continue_on_failure: true
 ```
 
@@ -146,9 +146,9 @@ Skip this step if the previous step succeeded. Pairs with `continue_on_failure` 
 ### break_if
 
 ```yaml
-- id: gauntlet
+- id: validator
   mode: shell
-  command: agent-gauntlet run
+  command: agent-validator run
   break_if: success
 ```
 
@@ -164,15 +164,15 @@ When triggered, execution continues with the next step after the loop. A loop th
 Shell steps can capture their stdout into a named variable:
 
 ```yaml
-- id: gauntlet
+- id: validator
   mode: shell
-  command: agent-gauntlet run
-  capture: gauntlet_output
+  command: agent-validator run
+  capture: validator_output
   continue_on_failure: true
 ```
 
 - Output is both displayed to the terminal and stored in the variable (tee behavior)
-- Captured variables are available to subsequent steps via `{{gauntlet_output}}` interpolation
+- Captured variables are available to subsequent steps via `{{validator_output}}` interpolation
 - Variables persist in the state file for resume
 - Captured variables take precedence over params when names collide
 - Only shell steps support `capture` (schema validation rejects it on agent steps)
@@ -201,7 +201,7 @@ steps:
           task_file: "{{task_file}}"
 ```
 
-**workflows/implement-task.yaml** -- agent step then gauntlet retry:
+**workflows/implement-task.yaml** -- agent step then validator retry:
 
 ```yaml
 name: implement-task
@@ -215,23 +215,23 @@ steps:
     session: new
     prompt: "Implement the task described in {{task_file}}."
 
-  - id: run-gauntlet
-    workflow: run-gauntlet.yaml
+  - id: run-validator
+    workflow: run-validator.yaml
 ```
 
-**workflows/run-gauntlet.yaml** -- counted retry loop with capture and flow control:
+**workflows/run-validator.yaml** -- counted retry loop with capture and flow control:
 
 ```yaml
-name: run-gauntlet
+name: run-validator
 steps:
-  - id: gauntlet-retry
+  - id: validator-retry
     loop:
       max: 3
     steps:
-      - id: run-gauntlet
+      - id: run-validator
         mode: shell
-        command: agent-gauntlet run --enable-review task-compliance
-        capture: gauntlet_output
+        command: agent-validator run --enable-review task-compliance
+        capture: validator_output
         continue_on_failure: true
         break_if: success
 
@@ -239,8 +239,8 @@ steps:
         mode: headless
         session: inherit
         prompt: |
-          The gauntlet found violations. Fix them:
-          {{gauntlet_output}}
+          The validator found violations. Fix them:
+          {{validator_output}}
         skip_if: previous_success
         continue_on_failure: true
 ```
@@ -258,15 +258,15 @@ The session behavior chains naturally:
 
 ```text
 Iteration 1:
-  gauntlet     -> shell (no session)
+  validator    -> shell (no session)
   fix          -> inherits implement's session -> S1'
 
-Iteration 2 (if gauntlet fails again):
-  gauntlet     -> shell (no session)
+Iteration 2 (if validator fails again):
+  validator    -> shell (no session)
   fix          -> resumes S1' -> S1''
 
 Iteration 3 (if still failing):
-  gauntlet     -> shell (no session)
+  validator    -> shell (no session)
   fix          -> resumes S1'' -> S1'''
 ```
 
