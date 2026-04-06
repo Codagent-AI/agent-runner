@@ -44,17 +44,23 @@ steps:
       Help me plan tasks for the change.
       You MUST use the codagent:plan-tasks skill.
 
-  - id: pre-review-validate
-    workflow: validate-change.yaml
-    params:
-      change_name: "{{change_name}}"
+  - id: validate
+    mode: headless
+    session: resume
+    prompt: |
+      Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports.
+      Keep running the command and fixing until it passes with no errors.
 
   - id: review
-    workflow: review-change.yaml
-    params:
-      change_name: "{{change_name}}"
+    mode: headless
+    session: resume
+    prompt: |
+      Review the OpenSpec change artifacts at: openspec/changes/{{change_name}}
+      You MUST use the codagent:review-spec skill.
 
   - id: post-review-validate
-    workflow: validate-change.yaml
-    params:
-      change_name: "{{change_name}}"
+    mode: headless
+    session: resume
+    prompt: |
+      Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports.
+      Keep running the command and fixing until it passes with no errors.
