@@ -30,8 +30,17 @@ func (a *ClaudeAdapter) BuildArgs(input BuildArgsInput) []string {
 		args = append(args, "-p")
 	}
 
+	if input.SystemPrompt != "" {
+		args = append(args, "--append-system-prompt", input.SystemPrompt)
+	}
+
 	args = append(args, input.Prompt)
 	return args
+}
+
+// SupportsSystemPrompt returns true — Claude CLI supports --append-system-prompt.
+func (a *ClaudeAdapter) SupportsSystemPrompt() bool {
+	return true
 }
 
 // DiscoverSessionID returns the pre-generated session ID.

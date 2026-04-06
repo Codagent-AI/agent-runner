@@ -47,6 +47,11 @@ func (a *CodexAdapter) BuildArgs(input BuildArgsInput) []string {
 	return args
 }
 
+// SupportsSystemPrompt returns false — Codex CLI has no native system prompt flag.
+func (a *CodexAdapter) SupportsSystemPrompt() bool {
+	return false
+}
+
 // DiscoverSessionID returns the session ID after a Codex process exits.
 // For headless mode, it parses the thread_id from the thread.started JSONL event.
 // For interactive mode, it scans ~/.codex/sessions/ for the most recent session file.

@@ -130,6 +130,45 @@ func TestClaudeAdapter(t *testing.T) {
 		assertArgs(t, expected, args)
 	})
 
+	t.Run("supports system prompt", func(t *testing.T) {
+		if !adapter.SupportsSystemPrompt() {
+			t.Fatal("expected Claude adapter to support system prompt")
+		}
+	})
+
+	t.Run("interactive with system prompt emits --append-system-prompt", func(t *testing.T) {
+		args := adapter.BuildArgs(BuildArgsInput{
+			SystemPrompt: "you are helpful",
+			SessionID:    "uuid-789",
+			Headless:     false,
+		})
+		expected := []string{"claude", "--session-id", "uuid-789", "--append-system-prompt", "you are helpful", ""}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("system prompt with headless prompt emits both", func(t *testing.T) {
+		args := adapter.BuildArgs(BuildArgsInput{
+			Prompt:       "do something",
+			SystemPrompt: "extra context",
+			SessionID:    "uuid-abc",
+			Headless:     true,
+		})
+		expected := []string{"claude", "--session-id", "uuid-abc", "-p", "--append-system-prompt", "extra context", "do something"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("no system prompt omits flag", func(t *testing.T) {
+		args := adapter.BuildArgs(BuildArgsInput{
+			Prompt:   "do something",
+			Headless: true,
+		})
+		for _, a := range args {
+			if a == "--append-system-prompt" {
+				t.Fatalf("did not expect --append-system-prompt when SystemPrompt is empty, got %v", args)
+			}
+		}
+	})
+
 	t.Run("discover session ID returns preset", func(t *testing.T) {
 		id := adapter.DiscoverSessionID(DiscoverOptions{
 			PresetID: "preset-123",
@@ -205,6 +244,22 @@ func TestCodexAdapter(t *testing.T) {
 			Headless: false,
 		})
 		expected := []string{"codex", "--no-alt-screen", "-m", "o3", "review"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("does not support system prompt", func(t *testing.T) {
+		if adapter.SupportsSystemPrompt() {
+			t.Fatal("expected Codex adapter to not support system prompt")
+		}
+	})
+
+	t.Run("ignores system prompt field", func(t *testing.T) {
+		args := adapter.BuildArgs(BuildArgsInput{
+			Prompt:       "do something",
+			SystemPrompt: "should be ignored",
+			Headless:     true,
+		})
+		expected := []string{"codex", "exec", "--json", "do something"}
 		assertArgs(t, expected, args)
 	})
 
