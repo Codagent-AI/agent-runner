@@ -44,7 +44,7 @@ steps:
       Help me plan tasks for the change.
       You MUST use the codagent:plan-tasks skill.
 
-  - id: validate
+  - id: pre-review-validate
     mode: headless
     session: resume
     prompt: |
