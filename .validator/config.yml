@@ -28,10 +28,10 @@ checks:
 reviews:
   code-quality:
     builtin: code-quality
-    num_reviews: 2
-    cli_preference:
-      - codex
-      - claude
+    model: claude-sonnet-4.6
+  security-and-errors:
+    builtin: security-and-errors
+    model: gpt-5.3-codex
 
 # entry_points configured by /validator-setup
 entry_points:
@@ -44,6 +44,7 @@ entry_points:
       - security-deps
     reviews:
       - code-quality
+      - security-and-errors
 
 # -------------------------------------------------------------------
 # All settings below are optional. Uncomment and change as needed.
