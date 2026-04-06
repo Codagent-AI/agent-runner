@@ -60,15 +60,16 @@ func ExecuteAgentStep(
 		Headless:  headless,
 	}
 
-	if headless {
+	switch {
+	case headless:
 		input.Prompt = fullPrompt
-	} else if adapter.SupportsSystemPrompt() {
+	case adapter.SupportsSystemPrompt():
 		input.SystemPrompt = fullPrompt
-	} else {
+	default:
 		input.Prompt = "<system>\n" + fullPrompt + "\n</system>"
 	}
 
-	args := adapter.BuildArgs(input)
+	args := adapter.BuildArgs(&input)
 
 	emitAgentStart(ctx, prefix, startTime, prompt, mode, step, sessionID, cliName, enrichment)
 	logAgentStep(log, mode, prompt)

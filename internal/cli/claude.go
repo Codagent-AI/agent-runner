@@ -11,7 +11,7 @@ type ClaudeAdapter struct{}
 //   - Resume interactive: claude --resume <uuid> <prompt>
 //   - Resume headless:    claude --resume <uuid> -p <prompt>
 //   - Model override:     appends --model <m>
-func (a *ClaudeAdapter) BuildArgs(input BuildArgsInput) []string {
+func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 	args := []string{"claude"}
 
 	if input.SessionID != "" {

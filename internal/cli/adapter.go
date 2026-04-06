@@ -19,7 +19,7 @@ type BuildArgsInput struct {
 // Adapter abstracts CLI invocation for a specific agent backend.
 type Adapter interface {
 	// BuildArgs constructs the full command and args for invoking the CLI.
-	BuildArgs(input BuildArgsInput) []string
+	BuildArgs(input *BuildArgsInput) []string
 
 	// DiscoverSessionID returns a session ID after the CLI process exits.
 	// For some adapters this is deterministic (e.g. a pre-generated UUID),

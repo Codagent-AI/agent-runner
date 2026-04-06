@@ -21,7 +21,7 @@ type CodexAdapter struct{}
 //   - Resume interactive: codex resume --no-alt-screen <uuid> <prompt>
 //   - Resume headless:    codex exec resume <uuid> <prompt>
 //   - Model override:     appends -m <m>
-func (a *CodexAdapter) BuildArgs(input BuildArgsInput) []string {
+func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 	args := []string{"codex"}
 
 	if input.Headless {

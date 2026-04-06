@@ -13,38 +13,27 @@ cli:
       allow_tool_use: false
       thinking_budget: high
 
-checks:
-  build:
-    command: go build ./...
-  lint:
-    command: golangci-lint run ./...
-  test:
-    command: go test ./...
-  security-code:
-    command: gosec ./...
-  security-deps:
-    command: govulncheck ./...
-
-reviews:
-  code-quality:
-    builtin: code-quality
-    model: claude-sonnet-4.6
-  security-and-errors:
-    builtin: security-and-errors
-    model: gpt-5.3-codex
-
 # entry_points configured by /validator-setup
 entry_points:
   - path: "."
     checks:
-      - build
-      - lint
-      - test
-      - security-code
-      - security-deps
+      - build:
+          command: go build ./...
+      - lint:
+          command: golangci-lint run ./...
+      - test:
+          command: go test ./...
+      - security-code:
+          command: gosec ./...
+      - security-deps:
+          command: govulncheck ./...
     reviews:
-      - code-quality
-      - security-and-errors
+      - code-quality:
+          builtin: code-quality
+          model: claude-sonnet-4.6
+      - security-and-errors:
+          builtin: security-and-errors
+          model: gpt-5.3-codex
 
 # -------------------------------------------------------------------
 # All settings below are optional. Uncomment and change as needed.
