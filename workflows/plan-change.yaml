@@ -46,9 +46,15 @@ steps:
 
   - id: pre-review-validate
     workflow: validate-change.yaml
+    params:
+      change_name: "{{change_name}}"
 
   - id: review
     workflow: review-change.yaml
+    params:
+      change_name: "{{change_name}}"
 
   - id: post-review-validate
     workflow: validate-change.yaml
+    params:
+      change_name: "{{change_name}}"
