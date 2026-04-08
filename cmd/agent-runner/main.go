@@ -278,7 +278,7 @@ var bareNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 func resolveWorkflowArg(arg string) (string, error) {
 	if !bareNamePattern.MatchString(arg) {
-		return "", fmt.Errorf("invalid workflow name %q: must match [a-zA-Z0-9_-]+", arg)
+		return "", fmt.Errorf("invalid workflow name %q: use bare name (e.g., 'myworkflow' not 'myworkflow.yaml'); workflows are resolved from workflows/ directory", arg)
 	}
 	yamlPath := filepath.Join("workflows", arg+".yaml")
 	if _, err := os.Stat(yamlPath); err == nil {

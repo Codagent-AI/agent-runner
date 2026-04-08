@@ -42,7 +42,7 @@ steps:
 Run it:
 
 ```bash
-agent-runner hello.yaml
+agent-runner hello
 ```
 
 ### With parameters
@@ -69,7 +69,7 @@ steps:
 Run it:
 
 ```bash
-agent-runner review-pr.yaml 42
+agent-runner review-pr 42
 ```
 
 Parameters are positional -- they map to the `params` array in order.
@@ -336,13 +336,13 @@ The captured output is both displayed to the terminal (tee behavior) and stored 
 ### Basic run
 
 ```bash
-agent-runner workflows/flokay.yaml my-change
+agent-runner flokay my-change
 ```
 
 ### Starting from a specific step
 
 ```bash
-agent-runner workflows/flokay.yaml my-change
+agent-runner flokay my-change
 ```
 
 Skips all steps before `design` and starts there. Useful when you've already completed earlier steps manually or want to re-run a specific phase.
@@ -350,7 +350,7 @@ Skips all steps before `design` and starts there. Useful when you've already com
 ### Starting with an existing Claude session
 
 ```bash
-agent-runner workflows/plan-change.yaml my-change
+agent-runner plan-change my-change
 ```
 
 Seeds the workflow with a Claude session ID from a conversation you were already having. The first step that uses `session: resume` will continue that conversation, giving the agent full context from your prior discussion.
@@ -358,7 +358,7 @@ Seeds the workflow with a Claude session ID from a conversation you were already
 This is the natural flow when you've been exploring an idea with Claude and want to transition into a structured workflow:
 
 1. Chat with Claude about a feature idea
-2. Decide to formalize it: `agent-runner workflows/plan-change.yaml my-feature`
+2. Decide to formalize it: `agent-runner plan-change my-feature`
 3. The first `session: resume` step picks up where your conversation left off
 
 Steps using `session: new` are unaffected -- the seeded session is only used by `session: resume`. If no step uses `session: resume`, the flag is ignored. The seed propagates through sub-workflows and loop iterations, so it works even when the first agent step is inside a nested workflow.
@@ -388,7 +388,7 @@ The state file location depends on the engine. The openspec engine stores it in 
 Check that a workflow is syntactically valid without running it:
 
 ```bash
-agent-runner -validate workflows/flokay.yaml
+agent-runner -validate flokay
 ```
 
 With an engine configured, this also runs engine-specific validation (e.g., checking that every openspec artifact has a matching workflow step).
@@ -470,7 +470,7 @@ The `implement` step invokes `implement-change.yaml`, which loops over task file
 Run it:
 
 ```bash
-agent-runner workflows/flokay.yaml my-feature-name
+agent-runner flokay my-feature-name
 ```
 
 ## Audit logging
