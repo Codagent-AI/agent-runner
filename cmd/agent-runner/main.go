@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -282,10 +283,14 @@ func resolveWorkflowArg(arg string) (string, error) {
 	yamlPath := filepath.Join("workflows", arg+".yaml")
 	if _, err := os.Stat(yamlPath); err == nil {
 		return yamlPath, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("stat %s: %w", yamlPath, err)
 	}
 	ymlPath := filepath.Join("workflows", arg+".yml")
 	if _, err := os.Stat(ymlPath); err == nil {
 		return ymlPath, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("stat %s: %w", ymlPath, err)
 	}
 	return "", fmt.Errorf("workflow %q not found (tried %s and %s)", arg, yamlPath, ymlPath)
 }
