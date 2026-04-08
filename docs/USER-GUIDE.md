@@ -350,7 +350,7 @@ Skips all steps before `design` and starts there. Useful when you've already com
 ### Starting with an existing Claude session
 
 ```bash
-agent-runner plan-change my-change
+agent-runner --session <session-id> plan-change my-change
 ```
 
 Seeds the workflow with a Claude session ID from a conversation you were already having. The first step that uses `session: resume` will continue that conversation, giving the agent full context from your prior discussion.
@@ -358,7 +358,7 @@ Seeds the workflow with a Claude session ID from a conversation you were already
 This is the natural flow when you've been exploring an idea with Claude and want to transition into a structured workflow:
 
 1. Chat with Claude about a feature idea
-2. Decide to formalize it: `agent-runner plan-change my-feature`
+2. Decide to formalize it: `agent-runner --session <session-id> plan-change my-feature`
 3. The first `session: resume` step picks up where your conversation left off
 
 Steps using `session: new` are unaffected -- the seeded session is only used by `session: resume`. If no step uses `session: resume`, the flag is ignored. The seed propagates through sub-workflows and loop iterations, so it works even when the first agent step is inside a nested workflow.

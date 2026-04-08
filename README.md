@@ -179,7 +179,7 @@ Referenced in prompts and commands as `{{param_name}}`. Captured variables from 
 
 ## CLI reference
 
-```
+```text
 agent-runner [flags] <workflow-name> [params...]
 agent-runner -validate <workflow-name>
 agent-runner -resume [--session <id>]

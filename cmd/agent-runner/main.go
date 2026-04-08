@@ -172,11 +172,17 @@ func run() int {
 		return 1
 	}
 
-	if *validateFlag {
-		return handleValidate(args[0])
+	workflowFile, err := resolveWorkflowArg(args[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
 	}
 
-	return handleRun(args)
+	if *validateFlag {
+		return handleValidate(workflowFile)
+	}
+
+	return handleRun(append([]string{workflowFile}, args[1:]...))
 }
 
 func handleResume(sessionID string) int {
@@ -296,11 +302,7 @@ func resolveWorkflowArg(arg string) (string, error) {
 }
 
 func handleRun(args []string) int {
-	workflowFile, err := resolveWorkflowArg(args[0])
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-		return 1
-	}
+	workflowFile := args[0]
 
 	workflow, err := loader.LoadWorkflow(workflowFile, loader.Options{})
 	if err != nil {
