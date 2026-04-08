@@ -170,6 +170,9 @@ func executeChildSteps(
 		}
 		completed := outcome != OutcomeFailed && outcome != OutcomeAborted
 		recordChildProgress(childCtx, workflow.Steps[i].ID, completed)
+		if childCtx.ParentContext != nil && childCtx.ParentContext.FlushState != nil {
+			childCtx.ParentContext.FlushState()
+		}
 
 		if outcome == OutcomeAborted {
 			return OutcomeAborted, nil

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -271,8 +272,30 @@ func handleValidate(workflowFile string) int {
 	return 0
 }
 
+// bareNamePattern matches valid bare workflow names (no paths or extensions).
+var bareNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+func resolveWorkflowArg(arg string) (string, error) {
+	if !bareNamePattern.MatchString(arg) {
+		return "", fmt.Errorf("invalid workflow name %q: must match [a-zA-Z0-9_-]+", arg)
+	}
+	yamlPath := filepath.Join("workflows", arg+".yaml")
+	if _, err := os.Stat(yamlPath); err == nil {
+		return yamlPath, nil
+	}
+	ymlPath := filepath.Join("workflows", arg+".yml")
+	if _, err := os.Stat(ymlPath); err == nil {
+		return ymlPath, nil
+	}
+	return "", fmt.Errorf("workflow %q not found (tried %s and %s)", arg, yamlPath, ymlPath)
+}
+
 func handleRun(args []string) int {
-	workflowFile := args[0]
+	workflowFile, err := resolveWorkflowArg(args[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
 
 	workflow, err := loader.LoadWorkflow(workflowFile, loader.Options{})
 	if err != nil {
