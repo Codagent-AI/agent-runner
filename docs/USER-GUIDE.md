@@ -339,14 +339,6 @@ The captured output is both displayed to the terminal (tee behavior) and stored 
 agent-runner flokay my-change
 ```
 
-### Starting from a specific step
-
-```bash
-agent-runner flokay my-change
-```
-
-Skips all steps before `design` and starts there. Useful when you've already completed earlier steps manually or want to re-run a specific phase.
-
 ### Starting with an existing Claude session
 
 ```bash
