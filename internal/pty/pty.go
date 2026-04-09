@@ -189,6 +189,11 @@ func forwardOutput(ptmx *os.File, hint *idleHint, cmd *exec.Cmd, state *ptyState
 			}
 			hint.reset()
 			if result.triggered {
+				// Flush any bytes buffered in a partial escape sequence that
+				// followed the sentinel in the same PTY read chunk.
+				if flushed := proc.flush(); len(flushed) > 0 {
+					_, _ = os.Stdout.Write(flushed)
+				}
 				if !state.tryTriggerContinue() {
 					return
 				}

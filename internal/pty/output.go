@@ -1,6 +1,14 @@
 package pty
 
-const sentinelPayload = "999;red-slippers"
+const (
+	sentinelPayload = "999;red-slippers"
+
+	// maxEscBuf caps the escape/OSC buffer to prevent unbounded memory growth
+	// when the PTY stream contains an unterminated OSC sequence (e.g., a
+	// runaway agent that emits \x1b] and never sends BEL or ST). When the
+	// limit is exceeded the accumulated bytes are flushed as normal output.
+	maxEscBuf = 8 * 1024
+)
 
 // outOSCSawEsc is an additional parser state for outputProcessor only:
 // inside an OSC sequence (\x1b]...), a \x1b byte was seen — it may be the
@@ -84,6 +92,14 @@ func (p *outputProcessor) process(chunk []byte) outputResult {
 			default:
 				p.escBuf = append(p.escBuf, b)
 				p.oscPayload = append(p.oscPayload, b)
+				// Guard against unbounded memory growth from unterminated OSC
+				// sequences: flush accumulated bytes as normal output and reset.
+				if len(p.escBuf) > maxEscBuf {
+					fwd = append(fwd, p.escBuf...)
+					p.escBuf = p.escBuf[:0]
+					p.oscPayload = p.oscPayload[:0]
+					p.escState = escNone
+				}
 			}
 			continue
 
