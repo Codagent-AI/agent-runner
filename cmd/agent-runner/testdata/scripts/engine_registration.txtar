@@ -1,9 +1,9 @@
 # Test that the openspec engine is registered and sub-workflows with engine
 # configs can be loaded. This catches missing blank imports for engine packages.
-exec agent-runner workflow.yaml test-change
+exec agent-runner workflow test-change
 stdout 'workflow complete'
 
--- workflow.yaml --
+-- workflows/workflow.yaml --
 name: engine-test
 params:
   - name: change_name
@@ -14,7 +14,7 @@ steps:
     params:
       change_name: "{{change_name}}"
 
--- child.yaml --
+-- workflows/child.yaml --
 name: child-with-engine
 params:
   - name: change_name

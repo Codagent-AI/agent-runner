@@ -55,8 +55,8 @@ steps:
     mode: headless
     session: resume
     prompt: |
-      Review the OpenSpec change artifacts at: openspec/changes/{{change_name}}
-      You MUST use the codagent:review-spec skill.
+      You MUST use a subagent to run the codagent:review-spec skill to review the change artifacts at openspec/changes/{{change_name}}.
+      Then address issues the review subagent finds.
 
   - id: post-review-validate
     mode: headless

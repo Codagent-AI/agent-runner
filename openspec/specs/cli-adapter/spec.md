@@ -26,7 +26,7 @@ Each adapter SHALL construct the CLI invocation args for both headless and inter
 
 ### Requirement: Adapter session ID return
 
-After a CLI process exits, the adapter SHALL return a session ID. The runner stores this ID in state.json for future resume. How the adapter obtains the session ID is adapter-specific.
+After a CLI process exits, the adapter SHALL attempt to return a session ID. The runner stores this ID in state.json for future resume. How the adapter obtains the session ID is adapter-specific. If the adapter cannot determine the session ID, it SHALL return empty.
 
 #### Scenario: Session ID returned after first run
 - **WHEN** a CLI step completes (fresh session, no prior session ID)

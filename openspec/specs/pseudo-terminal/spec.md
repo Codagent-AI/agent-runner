@@ -54,11 +54,15 @@ When the CLI exits on its own (user typed `/exit`, `quit`, etc.) or crashes, the
 
 ### Requirement: Escape sequence passthrough
 
-The PTY layer SHALL track ANSI escape sequence state and only evaluate continue triggers outside of escape sequences. Bytes that are part of CSI, OSC, DCS, or other escape sequences SHALL be forwarded to the CLI without interpretation.
+The PTY layer SHALL track ANSI escape sequence state and only evaluate continue triggers outside of escape sequences. Bytes that are part of CSI, OSC, DCS, or other escape sequences SHALL be forwarded to the CLI without interpretation. Exception: escape sequences that encode a continue-trigger keyboard shortcut SHALL still be intercepted and treated as a continue trigger.
 
 #### Scenario: Escape sequence containing trigger bytes
 - **WHEN** the user's terminal sends an escape sequence that contains bytes matching `/next`
 - **THEN** the bytes are forwarded to the CLI and not treated as a continue trigger
+
+#### Scenario: Continue-trigger shortcut encoded as escape sequence
+- **WHEN** the user presses a continue-trigger keyboard shortcut that the terminal encodes as an escape sequence
+- **THEN** the PTY layer intercepts the sequence and treats it as a continue trigger
 
 ### Requirement: Idle hint
 

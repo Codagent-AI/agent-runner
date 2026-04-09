@@ -31,7 +31,7 @@ Requires [Go](https://golang.org) 1.23+.
 
 ```bash
 go build ./cmd/agent-runner
-./agent-runner -validate workflows/flokay.yaml
+./agent-runner -validate flokay
 ```
 
 Or use the Makefile:
@@ -46,10 +46,10 @@ make lint        # run golangci-lint
 
 ```bash
 # Validate a workflow
-./agent-runner -validate workflows/flokay.yaml
+./agent-runner -validate flokay
 
 # Run a workflow with parameters
-./agent-runner workflows/flokay.yaml my-change-name
+./agent-runner flokay my-change-name
 
 # Resume an interrupted workflow (most recent session)
 ./agent-runner -resume
@@ -172,16 +172,16 @@ steps:
 Parameters declared in `params:` are passed as positional arguments:
 
 ```bash
-./agent-runner workflow.yaml value1 value2
+./agent-runner my-workflow value1 value2
 ```
 
 Referenced in prompts and commands as `{{param_name}}`. Captured variables from shell steps are also available via `{{var_name}}`.
 
 ## CLI reference
 
-```
-agent-runner [flags] <workflow.yaml> [params...]
-agent-runner -validate <workflow.yaml>
+```text
+agent-runner [flags] <workflow-name> [params...]
+agent-runner -validate <workflow-name>
 agent-runner -resume [--session <id>]
 agent-runner --session <id>
 ```

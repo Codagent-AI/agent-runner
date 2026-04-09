@@ -5,7 +5,7 @@
 # and step 2 re-runs (now succeeds because we create the missing file).
 
 # First run: step 1 succeeds, step 2 fails.
-! exec agent-runner workflow.yaml
+! exec agent-runner workflow
 stdout 'step "fail-once" failed'
 
 # Verify step 1 ran and created its marker.
@@ -31,7 +31,7 @@ stdout 'not-rerun'
 exec cat result.txt
 stdout 'step2-ok'
 
--- workflow.yaml --
+-- workflows/workflow.yaml --
 name: e2e-resume
 steps:
   - id: create-marker

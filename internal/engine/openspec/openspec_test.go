@@ -40,7 +40,7 @@ func statusJSON(artifacts []artifact) string {
 func instructionsJSON(artifactID, instruction string) string {
 	data, _ := json.Marshal(instructionsOutput{
 		ArtifactID:  artifactID,
-		SchemaName:  "flokay",
+		SchemaName:  "spec-driven",
 		Instruction: instruction,
 		OutputPath:  artifactID + ".md",
 		Template:    artifactID + ".md",

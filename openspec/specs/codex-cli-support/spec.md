@@ -38,7 +38,7 @@ The Codex adapter SHALL support session resume. For interactive mode, the adapte
 
 ### Requirement: Codex session discovery
 
-After a Codex step completes, the adapter SHALL return a session ID. For headless mode, the adapter SHALL parse the `thread_id` from the `thread.started` JSONL event emitted by `codex exec --json`. For interactive mode, the adapter SHALL scan `~/.codex/sessions/` for the most recent session file created after the step's spawn time, matching on CWD from the `session_meta` payload.
+After a Codex step completes, the adapter SHALL return a session ID. For headless mode, the adapter SHALL parse the `thread_id` from the `thread.started` JSONL event emitted by `codex exec --json`. For interactive mode, the adapter SHALL resolve the session directory from the `CODEX_HOME` environment variable (falling back to `~/.codex` if unset) and scan `$CODEX_HOME/sessions/` for the most recent session file created after the step's spawn time, matching on CWD from the `session_meta` payload.
 
 #### Scenario: Codex headless session ID from JSONL
 - **WHEN** a headless Codex step completes
@@ -46,4 +46,4 @@ After a Codex step completes, the adapter SHALL return a session ID. For headles
 
 #### Scenario: Codex interactive session ID from filesystem
 - **WHEN** an interactive Codex step completes
-- **THEN** the adapter scans `~/.codex/sessions/` for the most recent file created after spawn time and extracts the session ID from the `session_meta` payload, matching on CWD
+- **THEN** the adapter scans `$CODEX_HOME/sessions/` for the most recent file created after spawn time and extracts the session ID from the `session_meta` payload, matching on CWD
