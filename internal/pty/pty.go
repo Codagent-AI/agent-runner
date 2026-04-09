@@ -107,7 +107,7 @@ func RunInteractive(args []string, opts Options) (Result, error) {
 	outputDone := make(chan struct{})
 	go func() {
 		defer close(outputDone)
-		forwardOutput(ptmx, hint)
+		forwardOutput(ptmx, hint, cmd, state, exitCh)
 	}()
 
 	// Read stdin, process input, forward to PTY, detect continue triggers.
@@ -172,17 +172,42 @@ func startResizeHandler(ptmx *os.File) chan os.Signal {
 }
 
 // forwardOutput reads from the PTY master and writes to stdout, managing the
-// idle hint timer. Returns when the PTY master is closed or errors.
-func forwardOutput(ptmx *os.File, hint *idleHint) {
+// idle hint timer. It detects the sentinel OSC sequence in the output stream;
+// on detection, the sentinel is stripped and the continue + termination
+// protocol is triggered (SIGTERM then SIGKILL after killTimeout), mirroring
+// the logic in processStdin. Returns when the PTY master is closed or errors.
+func forwardOutput(ptmx *os.File, hint *idleHint, cmd *exec.Cmd, state *ptyState, exitCh chan struct{}) {
+	proc := &outputProcessor{}
 	buf := make([]byte, 4096)
 	for {
 		n, err := ptmx.Read(buf)
 		if n > 0 {
+			result := proc.process(buf[:n])
 			hint.clearIfShown()
-			_, _ = os.Stdout.Write(buf[:n])
+			if len(result.forward) > 0 {
+				_, _ = os.Stdout.Write(result.forward)
+			}
 			hint.reset()
+			if result.triggered {
+				if !state.tryTriggerContinue() {
+					return
+				}
+				hint.cancel()
+				_ = cmd.Process.Signal(syscall.SIGTERM)
+				go func() {
+					select {
+					case <-time.After(killTimeout):
+						_ = cmd.Process.Kill()
+					case <-exitCh:
+					}
+				}()
+				return
+			}
 		}
 		if err != nil {
+			if flushed := proc.flush(); len(flushed) > 0 {
+				_, _ = os.Stdout.Write(flushed)
+			}
 			hint.cancel()
 			return
 		}

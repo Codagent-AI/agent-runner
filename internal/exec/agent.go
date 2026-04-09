@@ -20,6 +20,10 @@ import (
 // Defaults to pty.RunInteractive; replaced in tests.
 var interactiveRunnerFn = pty.RunInteractive
 
+// sentinelInstruction is appended to the prompt for interactive agent steps
+// so the agent knows how to signal task completion via the stdout sentinel.
+const sentinelInstruction = "\n\nWhen you have completed your task, signal completion by running this command in the terminal:\nprintf '\\x1b]999;red-slippers\\x07'"
+
 // ExecuteAgentStep runs an agent step using the resolved CLI adapter.
 func ExecuteAgentStep(
 	step *model.Step,
@@ -52,6 +56,9 @@ func ExecuteAgentStep(
 	if enrichment != "" {
 		fullPrompt = prompt + "\n\n" + enrichment
 	}
+	if !headless {
+		fullPrompt += sentinelInstruction
+	}
 
 	input := cli.BuildArgsInput{
 		SessionID: sessionID,
@@ -73,7 +80,7 @@ func ExecuteAgentStep(
 	case enrichment != "":
 		input.Prompt = "<system>\n" + fullPrompt + "\n</system>"
 	default:
-		input.Prompt = prompt
+		input.Prompt = fullPrompt
 	}
 
 	args := adapter.BuildArgs(&input)
