@@ -142,7 +142,7 @@ func TestClaudeAdapter(t *testing.T) {
 			SessionID:    "uuid-789",
 			Headless:     false,
 		})
-		expected := []string{"claude", "--session-id", "uuid-789", "--append-system-prompt", "you are helpful", ""}
+		expected := []string{"claude", "--session-id", "uuid-789", "--append-system-prompt", "you are helpful"}
 		assertArgs(t, expected, args)
 	})
 

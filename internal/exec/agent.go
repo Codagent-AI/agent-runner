@@ -63,10 +63,13 @@ func ExecuteAgentStep(
 	switch {
 	case headless:
 		input.Prompt = fullPrompt
+	case enrichment == "":
+		input.Prompt = prompt
 	case adapter.SupportsSystemPrompt():
-		input.SystemPrompt = fullPrompt
+		input.Prompt = prompt
+		input.SystemPrompt = enrichment
 	default:
-		input.Prompt = "<system>\n" + fullPrompt + "\n</system>"
+		input.Prompt = "<system>\n" + enrichment + "\n</system>\n\n" + prompt
 	}
 
 	args := adapter.BuildArgs(&input)

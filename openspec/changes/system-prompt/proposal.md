@@ -8,7 +8,7 @@ Engine enrichment (workflow context, artifact instructions, dependency content) 
 
 - Add a `SystemPrompt` field to `BuildArgsInput` so adapters can receive enrichment separately from the user prompt.
 - **Claude adapter**: when `SystemPrompt` is non-empty, pass it via `--append-system-prompt` instead of concatenating it into the positional prompt argument.
-- **Codex adapter**: no change — Codex does not support a system prompt flag, so enrichment continues to be concatenated into the user-visible prompt.
+- **Codex adapter**: no native system prompt support — enrichment is wrapped in `<system>` XML tags and prepended to the positional prompt.
 - `buildAgentPrompt` splits its return into user prompt and enrichment, routing enrichment to `SystemPrompt` instead of concatenating unconditionally.
 
 ## Capabilities
@@ -26,6 +26,6 @@ Engine enrichment (workflow context, artifact instructions, dependency content) 
 
 - **`internal/cli/adapter.go`**: `BuildArgsInput` struct gains `SystemPrompt string` field.
 - **`internal/cli/claude.go`**: `BuildArgs` emits `--append-system-prompt <text>` when system prompt is provided.
-- **`internal/cli/codex.go`**: No change (falls back to prompt concatenation).
+- **`internal/cli/codex.go`**: No change (enrichment is wrapped in `<system>` XML tags by the caller).
 - **`internal/exec/agent.go`**: `buildAgentPrompt` returns prompt and enrichment separately; caller routes enrichment to `SystemPrompt` on the adapter input.
 - **Existing tests**: Adapter tests need updated expectations for the new flag; `buildAgentPrompt` tests need to verify separation.
