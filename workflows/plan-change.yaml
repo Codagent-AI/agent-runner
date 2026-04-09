@@ -10,6 +10,11 @@ engine:
   change_param: change_name
 
 steps:
+  - id: check-clean
+    mode: shell
+    # agent-validator detect: exit 0 = unvalidated changes present, exit 2 = clean (no changes)
+    command: "agent-validator detect; status=$?; if [ $status -eq 2 ]; then exit 0; elif [ $status -eq 0 ]; then echo 'Unvalidated changes detected. Run agent-validator before planning.' >&2; exit 1; else exit $status; fi"
+
   - id: create
     mode: shell
     command: openspec new change "{{change_name}}"
@@ -64,3 +69,7 @@ steps:
     prompt: |
       Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports.
       Keep running the command and fixing until it passes with no errors.
+
+  - id: skip-validator
+    mode: shell
+    command: agent-validator skip
