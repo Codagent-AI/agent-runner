@@ -1,0 +1,1 @@
+- [ ] Add agent-initiated continue trigger (`tasks/agent-continue-trigger.md`)
