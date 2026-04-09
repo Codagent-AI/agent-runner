@@ -3,6 +3,7 @@ package openspec
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -207,7 +208,15 @@ func buildEnrichmentBlock(data *instructionsOutput, sessionStrategy string) stri
 
 	lines := []string{
 		fmt.Sprintf("**Output path:** %s", outputPath),
-		fmt.Sprintf("**Template:** %s", templatePath),
+	}
+
+	// Only reference the template file if it actually exists on disk.
+	hasTemplate := false
+	if info, err := os.Stat(templatePath); err == nil && !info.IsDir() {
+		hasTemplate = true
+		lines = append(lines, fmt.Sprintf("**Template:** %s", templatePath))
+	} else if err != nil && !os.IsNotExist(err) {
+		lines = append(lines, fmt.Sprintf("**Template error:** %v", err))
 	}
 
 	if !isResumed && len(data.Dependencies) > 0 {
@@ -222,7 +231,11 @@ func buildEnrichmentBlock(data *instructionsOutput, sessionStrategy string) stri
 		lines = append(lines, "", strings.TrimSpace(data.Instruction))
 	}
 
-	lines = append(lines, "", "Read the template file for the expected output structure. Write your output to the output path.")
+	if hasTemplate {
+		lines = append(lines, "", "Read the template file for the expected output structure. Write your output to the output path.")
+	} else {
+		lines = append(lines, "", "Write your output to the output path.")
+	}
 
 	return strings.Join(lines, "\n")
 }
