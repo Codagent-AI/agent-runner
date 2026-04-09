@@ -88,7 +88,14 @@ func (p *outputProcessor) process(chunk []byte) outputResult {
 				}
 			case 0x1b: // potential start of ST (\x1b\)
 				p.escBuf = append(p.escBuf, b)
-				p.escState = outOSCSawEsc
+				if len(p.escBuf) > maxEscBuf {
+					fwd = append(fwd, p.escBuf...)
+					p.escBuf = p.escBuf[:0]
+					p.oscPayload = p.oscPayload[:0]
+					p.escState = escNone
+				} else {
+					p.escState = outOSCSawEsc
+				}
 			default:
 				p.escBuf = append(p.escBuf, b)
 				p.oscPayload = append(p.oscPayload, b)
@@ -115,6 +122,13 @@ func (p *outputProcessor) process(chunk []byte) outputResult {
 				// Not ST — treat the buffered \x1b and this byte as OSC payload.
 				p.oscPayload = append(p.oscPayload, 0x1b, b)
 				p.escState = escInStringSeq
+				// Centralized size guard: applies after any append to escBuf/oscPayload.
+				if len(p.escBuf) > maxEscBuf {
+					fwd = append(fwd, p.escBuf...)
+					p.escBuf = p.escBuf[:0]
+					p.oscPayload = p.oscPayload[:0]
+					p.escState = escNone
+				}
 			}
 			continue
 		}
