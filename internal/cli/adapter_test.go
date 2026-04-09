@@ -58,7 +58,7 @@ func TestClaudeAdapter(t *testing.T) {
 	adapter := &ClaudeAdapter{}
 
 	t.Run("fresh headless with session-id", func(t *testing.T) {
-		args := adapter.BuildArgs(BuildArgsInput{
+		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:    "do something",
 			SessionID: "uuid-123",
 			Headless:  true,
@@ -68,7 +68,7 @@ func TestClaudeAdapter(t *testing.T) {
 	})
 
 	t.Run("fresh interactive with session-id", func(t *testing.T) {
-		args := adapter.BuildArgs(BuildArgsInput{
+		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:    "review code",
 			SessionID: "uuid-456",
 			Headless:  false,
@@ -78,7 +78,7 @@ func TestClaudeAdapter(t *testing.T) {
 	})
 
 	t.Run("fresh headless without session-id", func(t *testing.T) {
-		args := adapter.BuildArgs(BuildArgsInput{
+		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:   "do something",
 			Headless: true,
 		})
@@ -87,7 +87,7 @@ func TestClaudeAdapter(t *testing.T) {
 	})
 
 	t.Run("resume headless", func(t *testing.T) {
-		args := adapter.BuildArgs(BuildArgsInput{
+		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:    "continue",
 			SessionID: "session-abc",
 			Resume:    true,
@@ -98,7 +98,7 @@ func TestClaudeAdapter(t *testing.T) {
 	})
 
 	t.Run("resume interactive", func(t *testing.T) {
-		args := adapter.BuildArgs(BuildArgsInput{
+		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:    "continue review",
 			SessionID: "session-abc",
 			Resume:    true,
@@ -109,7 +109,7 @@ func TestClaudeAdapter(t *testing.T) {
 	})
 
 	t.Run("model override", func(t *testing.T) {
-		args := adapter.BuildArgs(BuildArgsInput{
+		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:   "do something",
 			Model:    "opus",
 			Headless: true,
@@ -119,7 +119,7 @@ func TestClaudeAdapter(t *testing.T) {
 	})
 
 	t.Run("resume with model override", func(t *testing.T) {
-		args := adapter.BuildArgs(BuildArgsInput{
+		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:    "continue",
 			SessionID: "session-abc",
 			Resume:    true,
@@ -128,6 +128,45 @@ func TestClaudeAdapter(t *testing.T) {
 		})
 		expected := []string{"claude", "--resume", "session-abc", "--model", "sonnet", "-p", "continue"}
 		assertArgs(t, expected, args)
+	})
+
+	t.Run("supports system prompt", func(t *testing.T) {
+		if !adapter.SupportsSystemPrompt() {
+			t.Fatal("expected Claude adapter to support system prompt")
+		}
+	})
+
+	t.Run("interactive with system prompt emits --append-system-prompt", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			SystemPrompt: "you are helpful",
+			SessionID:    "uuid-789",
+			Headless:     false,
+		})
+		expected := []string{"claude", "--session-id", "uuid-789", "--append-system-prompt", "you are helpful"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("system prompt with headless prompt emits both", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:       "do something",
+			SystemPrompt: "extra context",
+			SessionID:    "uuid-abc",
+			Headless:     true,
+		})
+		expected := []string{"claude", "--session-id", "uuid-abc", "-p", "--append-system-prompt", "extra context", "do something"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("no system prompt omits flag", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "do something",
+			Headless: true,
+		})
+		for _, a := range args {
+			if a == "--append-system-prompt" {
+				t.Fatalf("did not expect --append-system-prompt when SystemPrompt is empty, got %v", args)
+			}
+		}
 	})
 
 	t.Run("discover session ID returns preset", func(t *testing.T) {
@@ -151,7 +190,7 @@ func TestCodexAdapter(t *testing.T) {
 	adapter := &CodexAdapter{}
 
 	t.Run("fresh headless", func(t *testing.T) {
-		args := adapter.BuildArgs(BuildArgsInput{
+		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:   "do something",
 			Headless: true,
 		})
@@ -160,7 +199,7 @@ func TestCodexAdapter(t *testing.T) {
 	})
 
 	t.Run("fresh interactive", func(t *testing.T) {
-		args := adapter.BuildArgs(BuildArgsInput{
+		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:   "review code",
 			Headless: false,
 		})
@@ -169,7 +208,7 @@ func TestCodexAdapter(t *testing.T) {
 	})
 
 	t.Run("resume headless", func(t *testing.T) {
-		args := adapter.BuildArgs(BuildArgsInput{
+		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:    "continue",
 			SessionID: "thread-abc",
 			Headless:  true,
@@ -179,7 +218,7 @@ func TestCodexAdapter(t *testing.T) {
 	})
 
 	t.Run("resume interactive", func(t *testing.T) {
-		args := adapter.BuildArgs(BuildArgsInput{
+		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:    "continue review",
 			SessionID: "thread-abc",
 			Headless:  false,
@@ -189,7 +228,7 @@ func TestCodexAdapter(t *testing.T) {
 	})
 
 	t.Run("model override headless", func(t *testing.T) {
-		args := adapter.BuildArgs(BuildArgsInput{
+		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:   "do something",
 			Model:    "o3",
 			Headless: true,
@@ -199,7 +238,7 @@ func TestCodexAdapter(t *testing.T) {
 	})
 
 	t.Run("model override interactive", func(t *testing.T) {
-		args := adapter.BuildArgs(BuildArgsInput{
+		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:   "review",
 			Model:    "o3",
 			Headless: false,
@@ -208,8 +247,24 @@ func TestCodexAdapter(t *testing.T) {
 		assertArgs(t, expected, args)
 	})
 
+	t.Run("does not support system prompt", func(t *testing.T) {
+		if adapter.SupportsSystemPrompt() {
+			t.Fatal("expected Codex adapter to not support system prompt")
+		}
+	})
+
+	t.Run("ignores system prompt field", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:       "do something",
+			SystemPrompt: "should be ignored",
+			Headless:     true,
+		})
+		expected := []string{"codex", "exec", "--json", "do something"}
+		assertArgs(t, expected, args)
+	})
+
 	t.Run("interactive always includes --no-alt-screen", func(t *testing.T) {
-		args := adapter.BuildArgs(BuildArgsInput{
+		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:   "review",
 			Headless: false,
 		})
@@ -225,7 +280,7 @@ func TestCodexAdapter(t *testing.T) {
 	})
 
 	t.Run("headless does not include --no-alt-screen", func(t *testing.T) {
-		args := adapter.BuildArgs(BuildArgsInput{
+		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:   "do something",
 			Headless: true,
 		})

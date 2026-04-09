@@ -48,13 +48,31 @@ func ExecuteAgentStep(
 	}
 
 	headless := mode == model.ModeHeadless
-	args := adapter.BuildArgs(cli.BuildArgsInput{
-		Prompt:    prompt,
+	fullPrompt := prompt
+	if enrichment != "" {
+		fullPrompt = prompt + "\n\n" + enrichment
+	}
+
+	input := cli.BuildArgsInput{
 		SessionID: sessionID,
 		Resume:    isResume,
 		Model:     step.Model,
 		Headless:  headless,
-	})
+	}
+
+	switch {
+	case headless:
+		input.Prompt = fullPrompt
+	case enrichment == "":
+		input.Prompt = prompt
+	case adapter.SupportsSystemPrompt():
+		input.Prompt = prompt
+		input.SystemPrompt = enrichment
+	default:
+		input.Prompt = "<system>\n" + enrichment + "\n</system>\n\n" + prompt
+	}
+
+	args := adapter.BuildArgs(&input)
 
 	emitAgentStart(ctx, prefix, startTime, prompt, mode, step, sessionID, cliName, enrichment)
 	logAgentStep(log, mode, prompt)
@@ -232,7 +250,6 @@ func buildAgentPrompt(step *model.Step, ctx *model.ExecutionContext) (prompt, en
 		})
 		if result != "" {
 			enrichment = result
-			prompt = prompt + "\n\n" + enrichment
 		}
 	}
 

@@ -21,7 +21,7 @@ type CodexAdapter struct{}
 //   - Resume interactive: codex resume --no-alt-screen <uuid> <prompt>
 //   - Resume headless:    codex exec resume <uuid> <prompt>
 //   - Model override:     appends -m <m>
-func (a *CodexAdapter) BuildArgs(input BuildArgsInput) []string {
+func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 	args := []string{"codex"}
 
 	if input.Headless {
@@ -45,6 +45,11 @@ func (a *CodexAdapter) BuildArgs(input BuildArgsInput) []string {
 
 	args = append(args, input.Prompt)
 	return args
+}
+
+// SupportsSystemPrompt returns false — Codex CLI has no native system prompt flag.
+func (a *CodexAdapter) SupportsSystemPrompt() bool {
+	return false
 }
 
 // DiscoverSessionID returns the session ID after a Codex process exits.

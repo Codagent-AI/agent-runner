@@ -11,7 +11,7 @@ type ClaudeAdapter struct{}
 //   - Resume interactive: claude --resume <uuid> <prompt>
 //   - Resume headless:    claude --resume <uuid> -p <prompt>
 //   - Model override:     appends --model <m>
-func (a *ClaudeAdapter) BuildArgs(input BuildArgsInput) []string {
+func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 	args := []string{"claude"}
 
 	if input.SessionID != "" {
@@ -30,8 +30,19 @@ func (a *ClaudeAdapter) BuildArgs(input BuildArgsInput) []string {
 		args = append(args, "-p")
 	}
 
-	args = append(args, input.Prompt)
+	if input.SystemPrompt != "" {
+		args = append(args, "--append-system-prompt", input.SystemPrompt)
+	}
+
+	if input.Prompt != "" {
+		args = append(args, input.Prompt)
+	}
 	return args
+}
+
+// SupportsSystemPrompt returns true — Claude CLI supports --append-system-prompt.
+func (a *ClaudeAdapter) SupportsSystemPrompt() bool {
+	return true
 }
 
 // DiscoverSessionID returns the pre-generated session ID.

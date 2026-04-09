@@ -298,7 +298,11 @@ func resolveWorkflowArg(arg string) (string, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("stat %s: %w", ymlPath, err)
 	}
-	return "", fmt.Errorf("workflow %q not found (tried %s and %s)", arg, yamlPath, ymlPath)
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("workflow %q not found (tried %s and %s); failed to get cwd: %w", arg, yamlPath, ymlPath, err)
+	}
+	return "", fmt.Errorf("workflow %q not found in %s (tried %s and %s)", arg, cwd, yamlPath, ymlPath)
 }
 
 func handleRun(args []string) int {

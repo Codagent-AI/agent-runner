@@ -344,6 +344,81 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatalf("expected no RunAgent calls for interactive step, got %d", len(runner.calls))
 		}
 	})
+
+	t.Run("interactive claude without enrichment passes prompt positionally", func(t *testing.T) {
+		var ptyCalls [][]string
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
+			ptyCalls = append(ptyCalls, args)
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		runner := &mockRunner{}
+		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review code", Session: model.SessionNew}
+		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		if len(ptyCalls) == 0 {
+			t.Fatal("expected PTY to be called")
+		}
+		args := ptyCalls[0]
+		lastArg := args[len(args)-1]
+		if lastArg != "review code" {
+			t.Fatalf("expected prompt as positional arg, got %q", lastArg)
+		}
+		if containsArg(args, "--append-system-prompt") {
+			t.Fatal("did not expect --append-system-prompt without enrichment")
+		}
+	})
+
+	t.Run("interactive codex without enrichment passes prompt positionally", func(t *testing.T) {
+		var ptyCalls [][]string
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
+			ptyCalls = append(ptyCalls, args)
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		runner := &mockRunner{}
+		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review code", Session: model.SessionNew, CLI: "codex"}
+		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		if len(ptyCalls) == 0 {
+			t.Fatal("expected PTY to be called")
+		}
+		args := ptyCalls[0]
+		lastArg := args[len(args)-1]
+		if lastArg != "review code" {
+			t.Fatalf("expected prompt as positional arg for codex without enrichment, got %q", lastArg)
+		}
+	})
+
+	t.Run("headless mode passes prompt as positional arg without wrapping", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "implement feature", Session: model.SessionNew}
+		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		args := runner.calls[0]
+		lastArg := args[len(args)-1]
+		if lastArg != "implement feature" {
+			t.Fatalf("expected plain prompt for headless, got %q", lastArg)
+		}
+		if containsArg(args, "--append-system-prompt") {
+			t.Fatalf("did not expect --append-system-prompt for headless mode, got %v", args)
+		}
+	})
+
+	t.Run("headless codex passes prompt without XML wrapping", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "implement feature", Session: model.SessionNew, CLI: "codex"}
+		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		args := runner.calls[0]
+		lastArg := args[len(args)-1]
+		if lastArg != "implement feature" {
+			t.Fatalf("expected plain prompt for headless codex, got %q", lastArg)
+		}
+		if strings.Contains(lastArg, "<system>") {
+			t.Fatalf("did not expect XML wrapping for headless mode, got %q", lastArg)
+		}
+	})
 }
 
 func containsArg(args []string, target string) bool {

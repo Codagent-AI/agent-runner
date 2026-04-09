@@ -8,22 +8,27 @@ import (
 
 // BuildArgsInput provides the parameters needed to construct CLI invocation args.
 type BuildArgsInput struct {
-	Prompt    string
-	SessionID string // Session ID to pass to the CLI (pre-generated for new, or existing for resume)
-	Resume    bool   // True when resuming an existing session, false for fresh sessions
-	Model     string
-	Headless  bool
+	Prompt       string
+	SystemPrompt string // Content to deliver as a system prompt (for adapters that support it)
+	SessionID    string // Session ID to pass to the CLI (pre-generated for new, or existing for resume)
+	Resume       bool   // True when resuming an existing session, false for fresh sessions
+	Model        string
+	Headless     bool
 }
 
 // Adapter abstracts CLI invocation for a specific agent backend.
 type Adapter interface {
 	// BuildArgs constructs the full command and args for invoking the CLI.
-	BuildArgs(input BuildArgsInput) []string
+	BuildArgs(input *BuildArgsInput) []string
 
 	// DiscoverSessionID returns a session ID after the CLI process exits.
 	// For some adapters this is deterministic (e.g. a pre-generated UUID),
 	// for others it requires parsing output or scanning the filesystem.
 	DiscoverSessionID(opts DiscoverOptions) string
+
+	// SupportsSystemPrompt reports whether this adapter can deliver content
+	// as a native system prompt (e.g. via --append-system-prompt).
+	SupportsSystemPrompt() bool
 }
 
 // DiscoverOptions provides context for session ID discovery after a CLI process exits.
