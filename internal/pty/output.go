@@ -88,25 +88,14 @@ func (p *outputProcessor) process(chunk []byte) outputResult {
 				}
 			case 0x1b: // potential start of ST (\x1b\)
 				p.escBuf = append(p.escBuf, b)
-				if len(p.escBuf) > maxEscBuf {
-					fwd = append(fwd, p.escBuf...)
-					p.escBuf = p.escBuf[:0]
-					p.oscPayload = p.oscPayload[:0]
-					p.escState = escNone
-				} else {
+				fwd = p.flushIfOverflow(fwd)
+				if p.escState == escInStringSeq { // not flushed
 					p.escState = outOSCSawEsc
 				}
 			default:
 				p.escBuf = append(p.escBuf, b)
 				p.oscPayload = append(p.oscPayload, b)
-				// Guard against unbounded memory growth from unterminated OSC
-				// sequences: flush accumulated bytes as normal output and reset.
-				if len(p.escBuf) > maxEscBuf {
-					fwd = append(fwd, p.escBuf...)
-					p.escBuf = p.escBuf[:0]
-					p.oscPayload = p.oscPayload[:0]
-					p.escState = escNone
-				}
+				fwd = p.flushIfOverflow(fwd)
 			}
 			continue
 
@@ -122,13 +111,7 @@ func (p *outputProcessor) process(chunk []byte) outputResult {
 				// Not ST — treat the buffered \x1b and this byte as OSC payload.
 				p.oscPayload = append(p.oscPayload, 0x1b, b)
 				p.escState = escInStringSeq
-				// Centralized size guard: applies after any append to escBuf/oscPayload.
-				if len(p.escBuf) > maxEscBuf {
-					fwd = append(fwd, p.escBuf...)
-					p.escBuf = p.escBuf[:0]
-					p.oscPayload = p.oscPayload[:0]
-					p.escState = escNone
-				}
+				fwd = p.flushIfOverflow(fwd)
 			}
 			continue
 		}
@@ -143,6 +126,20 @@ func (p *outputProcessor) process(chunk []byte) outputResult {
 	}
 
 	return outputResult{forward: fwd, triggered: triggered}
+}
+
+// flushIfOverflow checks whether escBuf exceeds maxEscBuf. If so, it appends
+// the buffered bytes to fwd, resets the parser, and returns the updated slice.
+// This centralises the overflow guard so the main process loop stays compact.
+func (p *outputProcessor) flushIfOverflow(fwd []byte) []byte {
+	if len(p.escBuf) <= maxEscBuf {
+		return fwd
+	}
+	fwd = append(fwd, p.escBuf...)
+	p.escBuf = p.escBuf[:0]
+	p.oscPayload = p.oscPayload[:0]
+	p.escState = escNone
+	return fwd
 }
 
 // flush returns any bytes buffered in a partial escape sequence as normal
