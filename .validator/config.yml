@@ -1,17 +1,8 @@
-# Ordered list of CLI agents to try for reviews
 cli:
-  default_preference:
-    - codex
-    - claude
-  # Recommended settings (see docs/eval-results.md)
   adapters:
-    codex:
+    github-copilot:
       allow_tool_use: false
       thinking_budget: low
-    claude:
-      model: sonnet
-      allow_tool_use: false
-      thinking_budget: high
 
 # entry_points configured by /validator-setup
 entry_points:
