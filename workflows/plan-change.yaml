@@ -19,8 +19,8 @@ steps:
     session: resume
     prompt: |
       Help me write a change proposal.
-      You MUST use the flokay:propose skill.
-      
+      You MUST use the codagent:propose skill.
+
       Before doing anything else, ask me to describe what this change is about and what I want to accomplish.
 
   - id: specs
@@ -28,21 +28,39 @@ steps:
     session: resume
     prompt: |
       Help me write the change spec.
-      You MUST use the flokay:spec skill.
+      You MUST use the codagent:spec skill.
 
   - id: design
     mode: interactive
     session: resume
     prompt: |
       Help me design the change.
-      You MUST use the flokay:design skill.
+      You MUST use the codagent:design skill.
 
   - id: tasks
     mode: interactive
     session: resume
     prompt: |
       Help me plan tasks for the change.
-      You MUST use the flokay:plan-tasks skill.
+      You MUST use the codagent:plan-tasks skill.
+
+  - id: pre-review-validate
+    mode: headless
+    session: resume
+    prompt: |
+      Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports.
+      Keep running the command and fixing until it passes with no errors.
 
   - id: review
-    workflow: run-gauntlet.yaml
+    mode: headless
+    session: resume
+    prompt: |
+      You MUST use a subagent to run the codagent:review-spec skill to review the change artifacts at openspec/changes/{{change_name}}.
+      Then address issues the review subagent finds.
+
+  - id: post-review-validate
+    mode: headless
+    session: resume
+    prompt: |
+      Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports.
+      Keep running the command and fixing until it passes with no errors.

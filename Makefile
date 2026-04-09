@@ -1,4 +1,4 @@
-.PHONY: test lint build fmt test-verbose test-cover dev-agent-runner dev-run dev-validate dev-resume dev-flokay
+.PHONY: test lint build fmt test-verbose test-cover
 
 build:
 	go build -o bin/agent-runner ./cmd/agent-runner
@@ -18,26 +18,3 @@ lint:
 
 fmt:
 	goimports -w .
-
-# Development commands (go run equivalents)
-dev-agent-runner:
-	go run ./cmd/agent-runner $(filter-out $@,$(MAKECMDGOALS))
-
-dev-run:
-	go run ./cmd/agent-runner $(filter-out $@,$(MAKECMDGOALS))
-
-dev-validate:
-	go run ./cmd/agent-runner -validate $(filter-out $@,$(MAKECMDGOALS))
-
-dev-resume:
-	go run ./cmd/agent-runner -resume $(filter-out $@,$(MAKECMDGOALS))
-
-dev-plan:
-	go run ./cmd/agent-runner workflows/plan-change.yaml $(filter-out $@,$(MAKECMDGOALS))
-
-dev-implement:
-	go run ./cmd/agent-runner workflows/implement-change.yaml $(filter-out $@,$(MAKECMDGOALS))
-
-# Allow arbitrary args to be passed to dev-* targets
-%:
-	@:

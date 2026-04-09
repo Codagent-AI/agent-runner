@@ -78,18 +78,18 @@ TASK 1 (001-add-schema.task.md)
 ┌─────────────────────────────────────────────────────────────┐
 │ implement [session: new] ──────────────────→ session A      │
 │                                                             │
-│ INNER LOOP: run-gauntlet (max 3)                           │
+│ INNER LOOP: run-validator (max 3)                           │
 │ ┌─────────────────────────────────────────────────────────┐ │
 │ │ Iteration 1:                                            │ │
-│ │   gauntlet [shell]        → fail                        │ │
+│ │   validator [shell]        → fail                        │ │
 │ │   fix [session: inherit]  → resumes A → session A'      │ │
 │ │                                                         │ │
 │ │ Iteration 2:                                            │ │
-│ │   gauntlet [shell]        → fail                        │ │
+│ │   validator [shell]        → fail                        │ │
 │ │   fix [session: inherit]  → resumes A' → session A''    │ │
 │ │                                                         │ │
 │ │ Iteration 3:                                            │ │
-│ │   gauntlet [shell]        → pass → BREAK                │ │
+│ │   validator [shell]        → pass → BREAK                │ │
 │ │   fix                     → SKIPPED                     │ │
 │ └─────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
@@ -100,10 +100,10 @@ TASK 2 (002-add-runner.task.md)
 │                                              ↑              │
 │                              fresh start, A/A'/A'' forgotten│
 │                                                             │
-│ INNER LOOP: run-gauntlet (max 3)                           │
+│ INNER LOOP: run-validator (max 3)                           │
 │ ┌─────────────────────────────────────────────────────────┐ │
 │ │ Iteration 1:                                            │ │
-│ │   gauntlet [shell]        → pass → BREAK                │ │
+│ │   validator [shell]        → pass → BREAK                │ │
 │ │   fix                     → SKIPPED                     │ │
 │ └─────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘

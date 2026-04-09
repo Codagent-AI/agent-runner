@@ -1,10 +1,10 @@
 # Test that a failed workflow preserves a state file for resumption.
-! exec agent-runner workflow.yaml
+! exec agent-runner workflow
 stdout 'to resume: agent-runner --resume --session'
 exec find .agent-runner -name state.json
 stdout state\.json
 
--- workflow.yaml --
+-- workflows/workflow.yaml --
 name: e2e-failure
 steps:
   - id: first

@@ -41,7 +41,7 @@ The closest existing tool. Taskfile is a YAML-based CLI task runner with `for:` 
 
 **Where it breaks down:**
 
-1. **No loop-until.** Taskfile has `retry:` which retries a single command on failure. It cannot retry a *sequence* of steps (run gauntlet → fix → re-run gauntlet). You must encode multi-step retry logic in a shell script inside a `cmd:` block, at which point the YAML is just a wrapper around bash.
+1. **No loop-until.** Taskfile has `retry:` which retries a single command on failure. It cannot retry a *sequence* of steps (run validator → fix → re-run validator). You must encode multi-step retry logic in a shell script inside a `cmd:` block, at which point the YAML is just a wrapper around bash.
 
 2. **No mid-pipeline output capture.** `vars.sh:` resolves once when the task starts, before any commands run. You cannot run command A, capture its stdout, and inject it into command B's arguments within the same task. Workaround: temp files, which pushes state management into shell land.
 
@@ -59,8 +59,8 @@ tasks:
         SESSION_ID=$(claude -p "Implement: $(cat {{.TASK_FILE}})" \
           --output-format json | jq -r '.session_id')
         for attempt in 1 2 3; do
-          GAUNTLET_OUT=$(agent-gauntlet run 2>&1) && break
-          claude --resume "$SESSION_ID" -p "Fix these: $GAUNTLET_OUT"
+          VALIDATOR_OUT=$(agent-validator run 2>&1) && break
+          claude --resume "$SESSION_ID" -p "Fix these: $VALIDATOR_OUT"
         done
 ```
 
@@ -130,7 +130,7 @@ The agent accumulates context with each iteration. When the outer loop moves to 
 
 ### 4. Prompt-Based Steps
 
-Steps send natural language prompts to agents, positioned as the first thing the agent sees (highest-attention position). Prompts can invoke skills directly (`/flokay:propose`), include interpolated parameters, and receive engine-enriched context.
+Steps send natural language prompts to agents, positioned as the first thing the agent sees (highest-attention position). Prompts can invoke skills directly (`/codagent:propose`), include interpolated parameters, and receive engine-enriched context.
 
 This is fundamentally different from "run a shell command." The prompt is a first-class workflow concept, not a string passed to `sh -c`.
 

@@ -247,13 +247,14 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 
 		stepRef := step // capture for closure
 		rs.ctx.FlushState = func() {
-			writeStepState(stepRef, rs.ctx, &rs.workflow, rs.workflowHash, rs.sessionDir, nil)
+			writeStepState(stepRef, rs.ctx, &rs.workflow, rs.workflowHash, rs.sessionDir, nil, false)
 		}
 
 		outcome, loopResult, stepErr := runStep(step, rs)
 		rs.ctx.FlushState = nil
 
-		writeStepState(step, rs.ctx, &rs.workflow, rs.workflowHash, rs.sessionDir, loopResult)
+		completed := stepErr == nil && outcome != exec.OutcomeAborted && outcome != exec.OutcomeFailed
+		writeStepState(step, rs.ctx, &rs.workflow, rs.workflowHash, rs.sessionDir, loopResult, completed)
 
 		if stepErr != nil {
 			rs.log.Printf("\nagent-runner: step %q error: %v\n", step.ID, stepErr)
@@ -362,7 +363,7 @@ func RunWorkflow(
 	return result, nil
 }
 
-func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *model.Workflow, workflowHash, stateDir string, loopResult *exec.LoopResult) {
+func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *model.Workflow, workflowHash, stateDir string, loopResult *exec.LoopResult, completed bool) {
 	var child *model.NestedStepState
 
 	if loopResult != nil && loopResult.LastIteration >= 0 {
@@ -382,6 +383,7 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 		SessionIDs:        copyMap(ctx.SessionIDs),
 		CapturedVariables: copyMap(ctx.CapturedVariables),
 		LastSessionStepID: ctx.LastSessionStepID,
+		Completed:         completed,
 		Child:             child,
 	}
 
@@ -403,6 +405,7 @@ func toNestedStepState(child *model.SubWorkflowChildState) *model.NestedStepStat
 		StepID:            child.StepID,
 		SessionIDs:        copyMap(child.SessionIDs),
 		CapturedVariables: copyMap(child.CapturedVariables),
+		Completed:         child.Completed,
 		Child:             toNestedStepState(child.Child),
 	}
 }

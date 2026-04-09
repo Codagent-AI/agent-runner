@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -122,7 +124,7 @@ func main() {
 
 func run() int {
 	resumeFlag := flag.Bool("resume", false, "Resume an interrupted workflow")
-	sessionFlag := flag.String("session", "", "Session ID to resume (requires --resume)")
+	sessionFlag := flag.String("session", "", "Session ID to resume (implies --resume)")
 	validateFlag := flag.Bool("validate", false, "Validate a workflow file without executing")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	vFlag := flag.Bool("v", false, "Print version and exit (shorthand)")
@@ -131,7 +133,7 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "Usage: agent-runner [flags] <workflow.yaml> [params...]\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		fmt.Fprintf(os.Stderr, "  -resume\n\tResume an interrupted workflow\n")
-		fmt.Fprintf(os.Stderr, "  -session <id>\n\tSession ID to resume (requires -resume)\n")
+		fmt.Fprintf(os.Stderr, "  -session <id>\n\tSession ID to resume (implies -resume)\n")
 		fmt.Fprintf(os.Stderr, "  -validate\n\tValidate a workflow file without executing\n")
 		fmt.Fprintf(os.Stderr, "  -v, -version\n\tPrint version and exit\n")
 	}
@@ -143,11 +145,12 @@ func run() int {
 		return 0
 	}
 
-	// Validate flag combinations.
-	if *sessionFlag != "" && !*resumeFlag {
-		fmt.Fprintln(os.Stderr, "agent-runner: --session requires --resume")
-		return 1
+	// Infer --resume when --session is provided.
+	if *sessionFlag != "" {
+		*resumeFlag = true
 	}
+
+	// Validate flag combinations.
 	if *validateFlag && *resumeFlag {
 		fmt.Fprintln(os.Stderr, "agent-runner: --validate and --resume are mutually exclusive")
 		return 1
@@ -169,11 +172,17 @@ func run() int {
 		return 1
 	}
 
-	if *validateFlag {
-		return handleValidate(args[0])
+	workflowFile, err := resolveWorkflowArg(args[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
 	}
 
-	return handleRun(args)
+	if *validateFlag {
+		return handleValidate(workflowFile)
+	}
+
+	return handleRun(append([]string{workflowFile}, args[1:]...))
 }
 
 func handleResume(sessionID string) int {
@@ -268,6 +277,28 @@ func handleValidate(workflowFile string) int {
 	}
 	fmt.Println("workflow is valid")
 	return 0
+}
+
+// bareNamePattern matches valid bare workflow names (no paths or extensions).
+var bareNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+func resolveWorkflowArg(arg string) (string, error) {
+	if !bareNamePattern.MatchString(arg) {
+		return "", fmt.Errorf("invalid workflow name %q: use bare name (e.g., 'myworkflow' not 'myworkflow.yaml'); workflows are resolved from workflows/ directory", arg)
+	}
+	yamlPath := filepath.Join("workflows", arg+".yaml")
+	if _, err := os.Stat(yamlPath); err == nil {
+		return yamlPath, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("stat %s: %w", yamlPath, err)
+	}
+	ymlPath := filepath.Join("workflows", arg+".yml")
+	if _, err := os.Stat(ymlPath); err == nil {
+		return ymlPath, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("stat %s: %w", ymlPath, err)
+	}
+	return "", fmt.Errorf("workflow %q not found (tried %s and %s)", arg, yamlPath, ymlPath)
 }
 
 func handleRun(args []string) int {

@@ -6,3 +6,5 @@ coverage.html
 validator_logs/
 agent-runner-state.json
 worktrees/
+.debug.log
+.debug.log.1

@@ -1,35 +1,35 @@
-# Capability: step-model
-
-## Purpose
-
-Defines per-step model override for agent steps and ctrl-c termination behavior for headless agent steps.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Per-step model override
 
-A step MAY include a `model` field specifying which model the agent should use. When present, baton SHALL pass the model to the agent invocation. When absent, the agent uses its default model. The `model` field is only valid on agent steps (headless or interactive), not shell steps.
+A step MAY include a `model` field specifying which model the agent should use. When present, the runner SHALL pass the model to the CLI adapter for inclusion in the invocation args. When absent, the CLI uses its default model. The `model` field is only valid on agent steps (headless or interactive), not shell steps.
 
 #### Scenario: Model specified on agent step
 - **WHEN** a headless step has `model: sonnet`
-- **THEN** baton passes the model flag to the claude invocation
+- **THEN** the runner passes the model to the CLI adapter for invocation
 
 #### Scenario: No model specified
 - **WHEN** a step does not have a `model` field
-- **THEN** baton invokes the agent without a model flag, using the agent's default
+- **THEN** the runner invokes the CLI adapter without a model override, using the CLI's default
 
 #### Scenario: Model on shell step
 - **WHEN** a shell step has a `model` field
-- **THEN** baton fails at load time with a validation error
+- **THEN** the runner fails at load time with a validation error
 
-### Requirement: Headless mode ctrl-c termination
+## ADDED Requirements
 
-When an agent step is running in headless mode, pressing ctrl-c (SIGINT) SHALL terminate the spawned agent subprocess and exit baton cleanly. The user must be able to interrupt a long-running headless agent step without leaving orphaned processes.
+### Requirement: Per-step CLI override
 
-#### Scenario: Ctrl-c terminates headless agent subprocess
-- **WHEN** a headless agent step is running and the user sends SIGINT (ctrl-c)
-- **THEN** baton kills the spawned agent subprocess and exits with a non-zero exit code
+A step MAY include a `cli` field specifying which CLI backend to use (e.g., `claude`, `codex`). When absent, the runner SHALL default to `claude`. The `cli` field is only valid on agent steps, not shell steps.
 
-#### Scenario: State file preserved on ctrl-c
-- **WHEN** a headless agent step is interrupted via ctrl-c
-- **THEN** the state file reflects the interrupted step so the workflow can be resumed
+#### Scenario: CLI specified on agent step
+- **WHEN** an agent step has `cli: codex`
+- **THEN** the runner uses the Codex adapter for that step
+
+#### Scenario: CLI not specified
+- **WHEN** an agent step has no `cli` field
+- **THEN** the runner uses the Claude adapter (hard-coded default)
+
+#### Scenario: CLI on shell step
+- **WHEN** a shell step has a `cli` field
+- **THEN** the runner fails with a validation error

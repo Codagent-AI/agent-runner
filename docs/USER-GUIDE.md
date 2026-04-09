@@ -42,7 +42,7 @@ steps:
 Run it:
 
 ```bash
-agent-runner hello.yaml
+agent-runner hello
 ```
 
 ### With parameters
@@ -69,7 +69,7 @@ steps:
 Run it:
 
 ```bash
-agent-runner review-pr.yaml 42
+agent-runner review-pr 42
 ```
 
 Parameters are positional -- they map to the `params` array in order.
@@ -140,13 +140,13 @@ Continues the most recent session within the current workflow. The agent has ful
 - id: fix
   mode: headless
   session: inherit
-  prompt: "Fix the issues found by the gauntlet."
+  prompt: "Fix the issues found by the validator."
 ```
 
 Crosses sub-workflow boundaries to resume the parent workflow's most recent session. Use this when:
 
 - A sub-workflow needs to continue the conversation from the parent
-- The gauntlet pattern: a sub-workflow needs to fix issues using the context of the step that created the code
+- The validator pattern: a sub-workflow needs to fix issues using the context of the step that created the code
 
 `session: inherit` walks the parent context chain to find the nearest session from a different workflow file.
 
@@ -197,10 +197,10 @@ Repeat a group of steps up to N times:
   loop:
     max: 3
   steps:
-    - id: gauntlet
+    - id: validator
       mode: shell
-      command: agent-gauntlet run
-      capture: gauntlet_output
+      command: agent-validator run
+      capture: validator_output
       continue_on_failure: true
       break_if: success
 
@@ -208,13 +208,13 @@ Repeat a group of steps up to N times:
       mode: headless
       session: new
       prompt: |
-        The gauntlet found issues:
-        {{gauntlet_output}}
+        The validator found issues:
+        {{validator_output}}
         Fix them.
       skip_if: previous_success
 ```
 
-The loop runs up to 3 times. If `break_if: success` triggers on the gauntlet step (exit code 0), the loop exits early. If the loop exhausts all iterations without breaking, it fails the workflow.
+The loop runs up to 3 times. If `break_if: success` triggers on the validator step (exit code 0), the loop exits early. If the loop exhausts all iterations without breaking, it fails the workflow.
 
 ### For-each loops
 
@@ -260,8 +260,8 @@ steps:
     session: new
     prompt: "Implement the task described in {{task_file}}."
 
-  - id: run-gauntlet
-    workflow: run-gauntlet.yaml
+  - id: run-validator
+    workflow: run-validator.yaml
 ```
 
 Invoke from a parent workflow:
@@ -288,13 +288,13 @@ Sub-workflows:
 By default, a failed step stops the workflow. `continue_on_failure: true` allows the workflow to proceed:
 
 ```yaml
-- id: gauntlet
+- id: validator
   mode: shell
-  command: agent-gauntlet run
+  command: agent-validator run
   continue_on_failure: true
 ```
 
-Essential for the verify-fix pattern where gauntlet failure is expected and handled by the next step.
+Essential for the verify-fix pattern where validator failure is expected and handled by the next step.
 
 ### skip_if
 
@@ -308,24 +308,24 @@ Skip a step based on the previous step's outcome:
   skip_if: previous_success
 ```
 
-When `skip_if: previous_success` is set, the step is skipped if the previous step succeeded. This pairs with `continue_on_failure` to create conditional execution: run the fix step only when the gauntlet fails.
+When `skip_if: previous_success` is set, the step is skipped if the previous step succeeded. This pairs with `continue_on_failure` to create conditional execution: run the fix step only when the validator fails.
 
 ## Output capture
 
 Shell steps can capture their stdout into a named variable:
 
 ```yaml
-- id: gauntlet
+- id: validator
   mode: shell
-  command: agent-gauntlet run
-  capture: gauntlet_output
+  command: agent-validator run
+  capture: validator_output
   continue_on_failure: true
 
 - id: fix
   mode: headless
   prompt: |
     Fix these issues:
-    {{gauntlet_output}}
+    {{validator_output}}
   skip_if: previous_success
 ```
 
@@ -336,21 +336,13 @@ The captured output is both displayed to the terminal (tee behavior) and stored 
 ### Basic run
 
 ```bash
-agent-runner workflows/flokay.yaml my-change
+agent-runner flokay my-change
 ```
-
-### Starting from a specific step
-
-```bash
-agent-runner workflows/flokay.yaml my-change
-```
-
-Skips all steps before `design` and starts there. Useful when you've already completed earlier steps manually or want to re-run a specific phase.
 
 ### Starting with an existing Claude session
 
 ```bash
-agent-runner workflows/plan-change.yaml my-change
+agent-runner --session <session-id> plan-change my-change
 ```
 
 Seeds the workflow with a Claude session ID from a conversation you were already having. The first step that uses `session: resume` will continue that conversation, giving the agent full context from your prior discussion.
@@ -358,7 +350,7 @@ Seeds the workflow with a Claude session ID from a conversation you were already
 This is the natural flow when you've been exploring an idea with Claude and want to transition into a structured workflow:
 
 1. Chat with Claude about a feature idea
-2. Decide to formalize it: `agent-runner workflows/plan-change.yaml my-feature`
+2. Decide to formalize it: `agent-runner --session <session-id> plan-change my-feature`
 3. The first `session: resume` step picks up where your conversation left off
 
 Steps using `session: new` are unaffected -- the seeded session is only used by `session: resume`. If no step uses `session: resume`, the flag is ignored. The seed propagates through sub-workflows and loop iterations, so it works even when the first agent step is inside a nested workflow.
@@ -388,7 +380,7 @@ The state file location depends on the engine. The openspec engine stores it in 
 Check that a workflow is syntactically valid without running it:
 
 ```bash
-agent-runner -validate workflows/flokay.yaml
+agent-runner -validate flokay
 ```
 
 With an engine configured, this also runs engine-specific validation (e.g., checking that every openspec artifact has a matching workflow step).
@@ -458,19 +450,19 @@ The flokay workflow (`workflows/flokay.yaml`) orchestrates the full change lifec
 | `specs` | interactive (resume) | Write specs based on the proposal |
 | `design` | interactive | Design the architecture |
 | `tasks` | headless | Generate implementation tasks |
-| `review` | headless (resume) | Run gauntlet review |
-| `implement` | sub-workflow | Loops over task files, implements each with gauntlet retry |
-| `verify` | headless | Verify implementation with gauntlet |
+| `review` | headless (resume) | Run validator review |
+| `implement` | sub-workflow | Loops over task files, implements each with validator retry |
+| `verify` | headless | Verify implementation with validator |
 | `archive` | headless (resume) | Archive the change, sync specs |
-| `archive-verify` | shell | Skip gauntlet for archive-only changes |
+| `archive-verify` | shell | Skip validator for archive-only changes |
 | `finalize` | headless (resume) | Push PR, wait for CI, fix failures |
 
-The `implement` step invokes `implement-change.yaml`, which loops over task files and for each one invokes `implement-task.yaml`, which itself invokes `run-gauntlet.yaml` for the verify-fix retry loop.
+The `implement` step invokes `implement-change.yaml`, which loops over task files and for each one invokes `implement-task.yaml`, which itself invokes `run-validator.yaml` for the verify-fix retry loop.
 
 Run it:
 
 ```bash
-agent-runner workflows/flokay.yaml my-feature-name
+agent-runner flokay my-feature-name
 ```
 
 ## Audit logging

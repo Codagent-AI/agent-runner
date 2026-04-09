@@ -48,22 +48,17 @@ If you only add `~/go/bin` to `.zshrc`, it will work in your terminal but **not*
 | `make lint` | `golangci-lint run ./...` | Run linter (strict config) |
 | `make fmt` | `goimports -w .` | Format code |
 
-### Development commands (go run, no build step)
+### Running without building (`./dev.sh`)
 
-| Target | Description |
-|--------|-------------|
-| `make dev-agent-runner` | Show CLI help |
-| `make dev-run` | Run a workflow |
-| `make dev-validate` | Validate a workflow |
-| `make dev-resume` | Resume an interrupted workflow |
-| `make dev-flokay` | Run the flokay workflow |
-
-Example:
+`./dev.sh` is a thin wrapper around `go run` that passes all arguments through unchanged. Use it exactly like the compiled binary:
 
 ```bash
-make dev-validate workflows/flokay.yaml
-make dev-run workflows/flokay.yaml my-change
+./dev.sh workflows/plan-change.yaml my-change
+./dev.sh --validate workflows/plan-change.yaml
+./dev.sh --resume --session plan-change-2026-04-03T23-19-18-552111Z
 ```
+
+> **Why not `make`?** `make` intercepts `--flag` arguments as its own options, so flags like `--session` can't be passed through. `./dev.sh` avoids this.
 
 ## Linting
 
@@ -97,11 +92,11 @@ gosec ./...         # static security analysis
 govulncheck ./...   # known vulnerability detection
 ```
 
-Both are also run by the gauntlet checks (see `.gauntlet/checks/`).
+Both are also run by the validator checks (see `.validator/checks/`).
 
 ## Validating changes
 
-Use the `/validator-run` skill to run the full quality gate suite before committing. This runs all gauntlet checks (build, test, lint, security) and code quality reviews, then fixes any issues found.
+Use the `/validator-run` skill to run the full quality gate suite before committing. This runs all validator checks (build, test, lint, security) and code quality reviews, then fixes any issues found.
 
 ## PTY POC
 

@@ -11,7 +11,7 @@ Defines how workflow steps can delegate to other workflow files, including param
 A step with a `workflow` field SHALL load and execute the referenced workflow file. The step MUST NOT have `prompt`, `command`, or `mode` — it delegates entirely to the sub-workflow. The sub-workflow executes in the same process as the parent.
 
 #### Scenario: Sub-workflow executes successfully
-- **WHEN** a step has `workflow: workflows/run-gauntlet.yaml` and the referenced file exists
+- **WHEN** a step has `workflow: workflows/run-validator.yaml` and the referenced file exists
 - **THEN** baton loads the sub-workflow, executes its steps, and continues with the next step in the parent
 
 #### Scenario: Sub-workflow file not found
@@ -64,7 +64,7 @@ A step with `session: inherit` SHALL resume the most recent session from the par
 
 #### Scenario: Resume with no prior session in same workflow
 - **WHEN** a step has `session: resume` but no prior step in the same workflow file created a session
-- **THEN** baton fails with a descriptive error
+- **THEN** the runner starts a fresh session (no resume flag passed to the CLI adapter)
 
 #### Scenario: Resume does not cross sub-workflow boundary
 - **WHEN** a parent workflow invokes a sub-workflow that created sessions, and the next parent step has `session: resume`

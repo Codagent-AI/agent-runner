@@ -15,8 +15,8 @@ The state file (`baton-state.json`) SHALL track the current execution position t
 - **THEN** the state file records `currentStep` as the step 2 ID (unchanged from current behavior)
 
 #### Scenario: Nested sub-workflow state
-- **WHEN** execution is inside step `run-gauntlet` of `implement-task.yaml`, which is itself inside the `implement-tasks` loop of `implement-change.yaml`, on the `gauntlet` step
-- **THEN** the state file captures the full path: implement-change → implement-tasks (iteration index) → implement-task → run-gauntlet → gauntlet
+- **WHEN** execution is inside step `run-validator` of `implement-task.yaml`, which is itself inside the `implement-tasks` loop of `implement-change.yaml`, on the `validator` step
+- **THEN** the state file captures the full path: implement-change → implement-tasks (iteration index) → implement-task → run-validator → validator
 
 #### Scenario: Loop iteration tracking
 - **WHEN** execution is on iteration 2 of a for-each loop
@@ -27,8 +27,8 @@ The state file (`baton-state.json`) SHALL track the current execution position t
 Captured variables SHALL be persisted in the state file alongside session IDs. This allows resume to restore captured values without re-executing the capture step.
 
 #### Scenario: Captured variable persisted
-- **WHEN** a shell step captures stdout into `gauntlet_output` and baton writes the state file
-- **THEN** the state file includes `gauntlet_output` and its value
+- **WHEN** a shell step captures stdout into `validator_output` and baton writes the state file
+- **THEN** the state file includes `validator_output` and its value
 
 #### Scenario: Resume restores captured variables
 - **WHEN** baton resumes from a state file that contains captured variables

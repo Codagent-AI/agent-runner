@@ -9,19 +9,19 @@ Defines how shell steps can capture their stdout into named variables for use in
 A shell step with a `capture` field SHALL capture its stdout into a named variable. The captured value is available to subsequent steps via `{{var_name}}` interpolation. Output SHALL be both captured and displayed to the terminal (tee behavior).
 
 #### Scenario: Capture stores stdout
-- **WHEN** a shell step has `capture: gauntlet_output` and produces stdout
-- **THEN** the stdout is stored in the variable `gauntlet_output` and available via `{{gauntlet_output}}` in subsequent steps
+- **WHEN** a shell step has `capture: validator_output` and produces stdout
+- **THEN** the stdout is stored in the variable `validator_output` and available via `{{validator_output}}` in subsequent steps
 
 #### Scenario: Tee behavior
-- **WHEN** a shell step has `capture: gauntlet_output`
+- **WHEN** a shell step has `capture: validator_output`
 - **THEN** stdout is displayed to the terminal in real time AND captured into the variable
 
 #### Scenario: Captured variable used in subsequent step prompt
-- **WHEN** a step's prompt contains `{{gauntlet_output}}` and a prior step captured into `gauntlet_output`
+- **WHEN** a step's prompt contains `{{validator_output}}` and a prior step captured into `validator_output`
 - **THEN** baton interpolates the captured value into the prompt
 
 #### Scenario: Captured variable not set
-- **WHEN** a step references `{{gauntlet_output}}` but no prior step captured into that variable
+- **WHEN** a step references `{{validator_output}}` but no prior step captured into that variable
 - **THEN** baton fails with a descriptive error naming the undefined variable
 
 #### Scenario: Capture on non-shell step

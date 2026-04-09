@@ -184,8 +184,8 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 		return fmt.Errorf(`shell steps require "command", agent steps require "prompt"`)
 	}
 
-	if s.Capture != "" && s.Mode != ModeShell && s.Command == "" {
-		return fmt.Errorf(`"capture" is only allowed on shell steps`)
+	if s.Capture != "" && s.Mode != ModeShell && s.Mode != ModeHeadless && s.Command == "" {
+		return fmt.Errorf(`"capture" is only allowed on shell and headless steps`)
 	}
 
 	isAgent := s.isAgentContext()

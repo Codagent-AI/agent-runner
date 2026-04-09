@@ -1,0 +1,47 @@
+# Test that resume skips completed steps and re-runs failed steps.
+#
+# Step 1 succeeds (creates a marker file), step 2 fails.
+# On resume, step 1 must be skipped (marker file not recreated)
+# and step 2 re-runs (now succeeds because we create the missing file).
+
+# First run: step 1 succeeds, step 2 fails.
+! exec agent-runner workflow
+stdout 'step "fail-once" failed'
+
+# Verify step 1 ran and created its marker.
+exec cat marker.txt
+stdout 'first-run'
+
+# Overwrite marker so we can detect if step 1 re-runs on resume.
+exec cp second-marker.txt marker.txt
+exec cat marker.txt
+stdout 'not-rerun'
+
+# Create the file that step 2 needs to succeed.
+exec cp success-trigger.txt trigger.txt
+
+# Resume: step 1 should be skipped, step 2 should re-run and succeed.
+exec agent-runner -resume
+
+# Verify step 1 was NOT re-run (marker still says not-rerun).
+exec cat marker.txt
+stdout 'not-rerun'
+
+# Verify step 2 ran successfully.
+exec cat result.txt
+stdout 'step2-ok'
+
+-- workflows/workflow.yaml --
+name: e2e-resume
+steps:
+  - id: create-marker
+    mode: shell
+    command: echo first-run > marker.txt
+  - id: fail-once
+    mode: shell
+    command: cat trigger.txt && echo step2-ok > result.txt
+
+-- second-marker.txt --
+not-rerun
+-- success-trigger.txt --
+trigger-exists

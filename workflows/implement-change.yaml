@@ -23,11 +23,11 @@ steps:
 
   - id: archive-verify
     mode: shell
-    command: agent-gauntlet skip
+    command: agent-validator skip
 
   - id: finalize
     mode: headless
     session: resume
     prompt: |
       Help me finalize the PR.
-      You MUST use the flokay:finalize-pr skill.
+      You MUST use the codagent:finalize-pr skill.
