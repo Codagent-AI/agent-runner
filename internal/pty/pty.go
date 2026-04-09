@@ -29,7 +29,8 @@ type Result struct {
 
 // Options configures the interactive PTY session.
 type Options struct {
-	Env []string // additional environment variables
+	Env     []string // additional environment variables
+	Workdir string   // working directory for the child process
 }
 
 // ptyState holds shared mutable state for a PTY session.
@@ -89,6 +90,9 @@ func RunInteractive(args []string, opts Options) (Result, error) {
 	// Build and start the command inside a PTY.
 	cmd := exec.Command(args[0], args[1:]...) // #nosec G204 -- interactive agent execution by design
 	cmd.Env = buildEnv(opts.Env)
+	if opts.Workdir != "" {
+		cmd.Dir = opts.Workdir
+	}
 
 	ptmx, err := startWithTermSize(cmd)
 	if err != nil {
@@ -171,49 +175,96 @@ func startResizeHandler(ptmx *os.File) chan os.Signal {
 	return ch
 }
 
+// writeStdout writes data to stdout, returning any write error.
+func writeStdout(data []byte) error {
+	_, err := os.Stdout.Write(data)
+	return err
+}
+
+// beginTermination triggers the continue protocol and schedules SIGTERM/SIGKILL.
+// Returns false if the continue trigger was already consumed elsewhere.
+func beginTermination(cmd *exec.Cmd, state *ptyState, hint *idleHint, exitCh chan struct{}) bool {
+	if !state.tryTriggerContinue() {
+		return false
+	}
+	hint.cancel()
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	go func() {
+		select {
+		case <-time.After(killTimeout):
+			_ = cmd.Process.Kill()
+		case <-exitCh:
+		}
+	}()
+	return true
+}
+
 // forwardOutput reads from the PTY master and writes to stdout, managing the
 // idle hint timer. It detects the sentinel OSC sequence in the output stream;
 // on detection, the sentinel is stripped and the continue + termination
 // protocol is triggered (SIGTERM then SIGKILL after killTimeout), mirroring
 // the logic in processStdin. Returns when the PTY master is closed or errors.
+// flushToStdout drains any buffered bytes from the output processor to stdout,
+// returning any write error so callers can handle it.
+func flushToStdout(proc *outputProcessor) error {
+	flushed := proc.flush()
+	if len(flushed) == 0 {
+		return nil
+	}
+	return writeStdout(flushed)
+}
+
+// forwardChunk processes a single chunk of PTY output, forwarding clean bytes
+// to stdout and detecting the sentinel trigger. Returns true if the sentinel
+// was triggered in this chunk (transitioning sentinelTriggered from false to true).
+// Returns false with a non-nil error if a write to stdout fails.
+func forwardChunk(result outputResult, proc *outputProcessor, hint *idleHint, sentinelTriggered bool) (triggered bool, err error) {
+	if !sentinelTriggered {
+		hint.clearIfShown()
+		if len(result.forward) > 0 {
+			if werr := writeStdout(result.forward); werr != nil {
+				return false, werr
+			}
+		}
+		hint.reset()
+	}
+	if result.triggered && !sentinelTriggered {
+		if ferr := flushToStdout(proc); ferr != nil {
+			return false, ferr
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
 func forwardOutput(ptmx *os.File, hint *idleHint, cmd *exec.Cmd, state *ptyState, exitCh chan struct{}) {
 	proc := &outputProcessor{}
 	buf := make([]byte, 4096)
+	sentinelTriggered := false
 	for {
 		n, err := ptmx.Read(buf)
 		if n > 0 {
 			result := proc.process(buf[:n])
-			hint.clearIfShown()
-			if len(result.forward) > 0 {
-				_, _ = os.Stdout.Write(result.forward)
+			triggered, werr := forwardChunk(result, proc, hint, sentinelTriggered)
+			if werr != nil {
+				hint.cancel()
+				return
 			}
-			hint.reset()
-			if result.triggered {
-				// Flush any bytes buffered in a partial escape sequence that
-				// followed the sentinel in the same PTY read chunk.
-				if flushed := proc.flush(); len(flushed) > 0 {
-					_, _ = os.Stdout.Write(flushed)
-				}
-				if !state.tryTriggerContinue() {
+			if triggered {
+				sentinelTriggered = true
+				if !beginTermination(cmd, state, hint, exitCh) {
 					return
 				}
-				hint.cancel()
-				_ = cmd.Process.Signal(syscall.SIGTERM)
-				go func() {
-					select {
-					case <-time.After(killTimeout):
-						_ = cmd.Process.Kill()
-					case <-exitCh:
-					}
-				}()
-				return
 			}
 		}
 		if err != nil {
-			if flushed := proc.flush(); len(flushed) > 0 {
-				_, _ = os.Stdout.Write(flushed)
+			if !sentinelTriggered {
+				if ferr := flushToStdout(proc); ferr != nil {
+					hint.cancel()
+					return
+				}
+				hint.cancel()
 			}
-			hint.cancel()
 			return
 		}
 	}

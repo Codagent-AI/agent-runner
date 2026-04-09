@@ -166,7 +166,7 @@ func runAgentProcess(runner ProcessRunner, args []string, headless bool, workdir
 	}
 
 	// Interactive: run inside a PTY with continue-trigger detection.
-	ptyResult, err := interactiveRunnerFn(args, pty.Options{})
+	ptyResult, err := interactiveRunnerFn(args, pty.Options{Workdir: workdir})
 	if err != nil {
 		return OutcomeFailed, ProcessResult{}, err
 	}
@@ -251,7 +251,7 @@ func logAgentStep(log Logger, mode model.StepMode, prompt string) {
 		log.Println("  (exit to stop)")
 	}
 	if mode == model.ModeHeadless && os.Getenv("AGENT_RUNNER_SHOW_PROMPT") == "1" {
-		for _, line := range strings.Split(prompt, "\n") {
+		for line := range strings.SplitSeq(prompt, "\n") {
 			log.Printf("  %s\n", line)
 		}
 	}

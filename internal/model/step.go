@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -142,10 +143,8 @@ func validateCLIName(cliValue string, knownCLIs []string) error {
 	if knownCLIs == nil {
 		return nil
 	}
-	for _, name := range knownCLIs {
-		if name == cliValue {
-			return nil
-		}
+	if slices.Contains(knownCLIs, cliValue) {
+		return nil
 	}
 	return fmt.Errorf(`unknown cli adapter: %q`, cliValue)
 }
@@ -188,6 +187,17 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 
 	if s.Capture != "" && s.Mode != ModeShell && s.Mode != ModeHeadless && s.Command == "" {
 		return fmt.Errorf(`"capture" is only allowed on shell and headless steps`)
+	}
+
+	if s.CaptureStderr && s.Capture == "" {
+		return fmt.Errorf(`"capture_stderr" requires "capture"`)
+	}
+	if s.CaptureStderr && s.Command == "" {
+		return fmt.Errorf(`"capture_stderr" is only allowed on shell steps`)
+	}
+
+	if s.Workdir != "" && s.Command == "" && !s.isAgentContext() {
+		return fmt.Errorf(`"workdir" is only allowed on shell and agent steps`)
 	}
 
 	isAgent := s.isAgentContext()
