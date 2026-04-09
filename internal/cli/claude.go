@@ -34,7 +34,9 @@ func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 		args = append(args, "--append-system-prompt", input.SystemPrompt)
 	}
 
-	args = append(args, input.Prompt)
+	if input.Prompt != "" {
+		args = append(args, input.Prompt)
+	}
 	return args
 }
 

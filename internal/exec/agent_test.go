@@ -364,9 +364,11 @@ func TestExecuteAgentStep(t *testing.T) {
 		if !containsArg(args, "--append-system-prompt") {
 			t.Fatalf("expected --append-system-prompt for interactive claude, got %v", args)
 		}
-		// Last arg should be empty (no positional prompt)
-		if args[len(args)-1] != "" {
-			t.Fatalf("expected empty positional prompt for interactive claude with system prompt, got %q", args[len(args)-1])
+		// No positional prompt argument — last arg should be the system prompt value, not empty
+		for i, a := range args {
+			if a == "" && i == len(args)-1 {
+				t.Fatal("expected no trailing empty positional prompt for interactive claude with system prompt")
+			}
 		}
 	})
 
