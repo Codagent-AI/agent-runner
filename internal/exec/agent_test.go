@@ -345,7 +345,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
-	t.Run("interactive claude uses system prompt instead of positional arg", func(t *testing.T) {
+	t.Run("interactive claude without enrichment passes prompt positionally", func(t *testing.T) {
 		var ptyCalls [][]string
 		oldFn := interactiveRunnerFn
 		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
@@ -361,18 +361,16 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatal("expected PTY to be called")
 		}
 		args := ptyCalls[0]
-		if !containsArg(args, "--append-system-prompt") {
-			t.Fatalf("expected --append-system-prompt for interactive claude, got %v", args)
+		lastArg := args[len(args)-1]
+		if lastArg != "review code" {
+			t.Fatalf("expected prompt as positional arg, got %q", lastArg)
 		}
-		// No positional prompt argument — last arg should be the system prompt value, not empty
-		for i, a := range args {
-			if a == "" && i == len(args)-1 {
-				t.Fatal("expected no trailing empty positional prompt for interactive claude with system prompt")
-			}
+		if containsArg(args, "--append-system-prompt") {
+			t.Fatal("did not expect --append-system-prompt without enrichment")
 		}
 	})
 
-	t.Run("interactive codex wraps prompt in system XML tags", func(t *testing.T) {
+	t.Run("interactive codex without enrichment passes prompt positionally", func(t *testing.T) {
 		var ptyCalls [][]string
 		oldFn := interactiveRunnerFn
 		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
@@ -389,11 +387,8 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 		args := ptyCalls[0]
 		lastArg := args[len(args)-1]
-		if !strings.HasPrefix(lastArg, "<system>\n") || !strings.HasSuffix(lastArg, "\n</system>") {
-			t.Fatalf("expected <system> XML wrapping for codex interactive, got %q", lastArg)
-		}
-		if !strings.Contains(lastArg, "review code") {
-			t.Fatalf("expected prompt content inside XML tags, got %q", lastArg)
+		if lastArg != "review code" {
+			t.Fatalf("expected prompt as positional arg for codex without enrichment, got %q", lastArg)
 		}
 	})
 
