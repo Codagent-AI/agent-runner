@@ -34,8 +34,9 @@ steps:
           Read the full log file if the summary lacks context.
 
           If the output below lacks detail (e.g. just "Status: error"),
-          read the validator debug log at validator_logs/.debug.log for
-          the full error context before attempting any fixes.
+          first inspect captured STDERR (if present). If detail is still
+          insufficient and validator_logs/.debug.log exists, read it for
+          full error context before attempting fixes.
 
           When you are done fixing, commit your changes with a clear,
           descriptive commit message. Then summarize to the user what
