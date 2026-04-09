@@ -330,6 +330,42 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("headless fails when AskUserQuestion error detected in output", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "Tool error: AskUserQuestion error: not supported in headless mode"}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "finalize", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeFailed {
+			t.Fatalf("expected failed for AskUserQuestion in headless, got %q", outcome)
+		}
+	})
+
+	t.Run("headless fails on case-variant AskUserQuestion error", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "Error: askuserquestion not available"}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "finalize", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeFailed {
+			t.Fatalf("expected failed for case-insensitive AskUserQuestion detection, got %q", outcome)
+		}
+	})
+
+	t.Run("headless succeeds when output mentions AskUserQuestion without error", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "I considered using AskUserQuestion but proceeded instead"}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected success when AskUserQuestion mentioned without error, got %q", outcome)
+		}
+	})
+
 	t.Run("interactive does not call RunAgent on ProcessRunner", func(t *testing.T) {
 		oldFn := interactiveRunnerFn
 		interactiveRunnerFn = func(_ []string, _ pty.Options) (pty.Result, error) {

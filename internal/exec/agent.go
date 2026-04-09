@@ -75,7 +75,7 @@ func ExecuteAgentStep(
 	logAgentStep(log, mode, prompt)
 
 	spawnTime := time.Now()
-	outcome, result, runErr := runAgentProcess(runner, args, headless, log)
+	outcome, result, runErr := runAgentProcess(runner, args, headless, step.Workdir, log)
 	if runErr != nil {
 		emitAgentEnd(ctx, prefix, startTime, "", OutcomeFailed)
 		return OutcomeFailed, runErr
@@ -129,15 +129,23 @@ func resolveAdapterAndSession(
 	return adapter, cliName, sessionID, isResume, nil
 }
 
-func runAgentProcess(runner ProcessRunner, args []string, headless bool, log Logger) (StepOutcome, ProcessResult, error) {
+func runAgentProcess(runner ProcessRunner, args []string, headless bool, workdir string, log Logger) (StepOutcome, ProcessResult, error) {
 	if headless {
 		// Capture stdout for headless runs so that adapters (e.g. Codex) can
 		// parse session IDs from the process output.
-		result, runErr := runner.RunAgent(args, true)
+		result, runErr := runner.RunAgent(args, true, workdir)
 		if runErr != nil {
 			return OutcomeFailed, result, runErr
 		}
 		if result.ExitCode != 0 {
+			return OutcomeFailed, result, nil
+		}
+		// Detect AskUserQuestion failures in headless mode — these indicate
+		// the agent could not complete the task autonomously. Use case-insensitive
+		// matching across both stdout and stderr to handle format variations.
+		combined := strings.ToLower(result.Stdout + "\n" + result.Stderr)
+		if strings.Contains(combined, "askuserquestion") && strings.Contains(combined, "error") {
+			log.Errorf("  headless session attempted interactive prompt (AskUserQuestion); treating as failure\n")
 			return OutcomeFailed, result, nil
 		}
 		return OutcomeSuccess, result, nil
