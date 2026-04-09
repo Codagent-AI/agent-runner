@@ -113,7 +113,7 @@ func ExecuteShellStep(
 	})
 
 	useCapture := step.Capture != ""
-	result, runErr := runner.RunShell(command, useCapture)
+	result, runErr := runner.RunShell(command, useCapture, step.Workdir)
 	if runErr != nil {
 		emitAudit(ctx, audit.Event{
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
@@ -129,7 +129,11 @@ func ExecuteShellStep(
 	}
 
 	if useCapture {
-		ctx.CapturedVariables[step.Capture] = result.Stdout
+		captured := result.Stdout
+		if step.CaptureStderr && result.ExitCode != 0 && result.Stderr != "" {
+			captured = captured + "\n\nSTDERR:\n" + result.Stderr
+		}
+		ctx.CapturedVariables[step.Capture] = captured
 	}
 
 	outcome := OutcomeSuccess

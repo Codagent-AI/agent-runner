@@ -10,6 +10,7 @@ steps:
         mode: shell
         command: agent-validator run --report --enable-review task-compliance
         capture: validator_output
+        capture_stderr: true
         continue_on_failure: true
         break_if: success
 
@@ -31,6 +32,11 @@ steps:
           To skip a review violation:
             agent-validator update-review skip <#> "why"
           Read the full log file if the summary lacks context.
+
+          If the output below lacks detail (e.g. just "Status: error"),
+          first inspect captured STDERR (if present). If detail is still
+          insufficient and validator_logs/.debug.log exists, read it for
+          full error context before attempting fixes.
 
           When you are done fixing, commit your changes with a clear,
           descriptive commit message. Then summarize to the user what

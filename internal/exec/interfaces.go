@@ -20,8 +20,8 @@ type ProcessResult struct {
 
 // ProcessRunner abstracts process spawning for testability.
 type ProcessRunner interface {
-	RunShell(cmd string, captureStdout bool) (ProcessResult, error)
-	RunAgent(args []string, captureStdout bool) (ProcessResult, error)
+	RunShell(cmd string, captureStdout bool, workdir string) (ProcessResult, error)
+	RunAgent(args []string, captureStdout bool, workdir string) (ProcessResult, error)
 }
 
 // GlobExpander abstracts file globbing for testability.

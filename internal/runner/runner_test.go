@@ -16,7 +16,7 @@ type mockRunner struct {
 	idx     int
 }
 
-func (m *mockRunner) RunShell(cmd string, capture bool) (exec.ProcessResult, error) {
+func (m *mockRunner) RunShell(cmd string, capture bool, _ string) (exec.ProcessResult, error) {
 	m.calls = append(m.calls, []string{"sh", "-c", cmd})
 	if m.idx >= len(m.results) {
 		return exec.ProcessResult{ExitCode: 0}, nil
@@ -26,7 +26,7 @@ func (m *mockRunner) RunShell(cmd string, capture bool) (exec.ProcessResult, err
 	return r, nil
 }
 
-func (m *mockRunner) RunAgent(args []string, _ bool) (exec.ProcessResult, error) {
+func (m *mockRunner) RunAgent(args []string, _ bool, _ string) (exec.ProcessResult, error) {
 	m.calls = append(m.calls, args)
 	if m.idx >= len(m.results) {
 		return exec.ProcessResult{ExitCode: 0}, nil

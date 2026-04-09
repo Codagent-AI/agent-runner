@@ -10,6 +10,11 @@ engine:
   change_param: change_name
 
 steps:
+  - id: check-clean
+    mode: shell
+    # agent-validator detect: exit 0 = unvalidated changes present, exit 2 = clean (no changes)
+    command: "agent-validator detect; status=$?; if [ $status -eq 2 ]; then exit 0; elif [ $status -eq 0 ]; then echo 'Unvalidated changes detected. Run agent-validator before planning.' >&2; exit 1; else exit $status; fi"
+
   - id: create
     mode: shell
     command: openspec new change "{{change_name}}"
@@ -18,30 +23,30 @@ steps:
     mode: interactive
     session: resume
     prompt: |
-      Help me write a change proposal.
+      Help the user write a change proposal.
       You MUST use the codagent:propose skill.
 
-      Before doing anything else, ask me to describe what this change is about and what I want to accomplish.
+      Before doing anything else, ask the user to describe what this change is about and what they want to accomplish.
 
   - id: specs
     mode: interactive
     session: resume
     prompt: |
-      Help me write the change spec.
+      Help the user write the change spec.
       You MUST use the codagent:spec skill.
 
   - id: design
     mode: interactive
     session: resume
     prompt: |
-      Help me design the change.
+      Help the user design the change.
       You MUST use the codagent:design skill.
 
   - id: tasks
     mode: interactive
     session: resume
     prompt: |
-      Help me plan tasks for the change.
+      Help the user plan tasks for the change.
       You MUST use the codagent:plan-tasks skill.
 
   - id: pre-review-validate
@@ -64,3 +69,7 @@ steps:
     prompt: |
       Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports.
       Keep running the command and fixing until it passes with no errors.
+
+  - id: skip-validator
+    mode: shell
+    command: agent-validator skip

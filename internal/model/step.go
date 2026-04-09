@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -67,10 +68,12 @@ type Step struct {
 	Session           SessionStrategy   `yaml:"session,omitempty" json:"session,omitempty"`
 	CLI               string            `yaml:"cli,omitempty" json:"cli,omitempty"`
 	Capture           string            `yaml:"capture,omitempty" json:"capture,omitempty"`
+	CaptureStderr     bool              `yaml:"capture_stderr,omitempty" json:"capture_stderr,omitempty"`
 	ContinueOnFailure bool              `yaml:"continue_on_failure,omitempty" json:"continue_on_failure,omitempty"`
 	SkipIf            string            `yaml:"skip_if,omitempty" json:"skip_if,omitempty"`
 	BreakIf           string            `yaml:"break_if,omitempty" json:"break_if,omitempty"`
 	Model             string            `yaml:"model,omitempty" json:"model,omitempty"`
+	Workdir           string            `yaml:"workdir,omitempty" json:"workdir,omitempty"`
 	Workflow          string            `yaml:"workflow,omitempty" json:"workflow,omitempty"`
 	Loop              *Loop             `yaml:"loop,omitempty" json:"loop,omitempty"`
 	Params            map[string]string `yaml:"params,omitempty" json:"params,omitempty"`
@@ -140,10 +143,8 @@ func validateCLIName(cliValue string, knownCLIs []string) error {
 	if knownCLIs == nil {
 		return nil
 	}
-	for _, name := range knownCLIs {
-		if name == cliValue {
-			return nil
-		}
+	if slices.Contains(knownCLIs, cliValue) {
+		return nil
 	}
 	return fmt.Errorf(`unknown cli adapter: %q`, cliValue)
 }
@@ -186,6 +187,17 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 
 	if s.Capture != "" && s.Mode != ModeShell && s.Mode != ModeHeadless && s.Command == "" {
 		return fmt.Errorf(`"capture" is only allowed on shell and headless steps`)
+	}
+
+	if s.CaptureStderr && s.Capture == "" {
+		return fmt.Errorf(`"capture_stderr" requires "capture"`)
+	}
+	if s.CaptureStderr && s.Command == "" {
+		return fmt.Errorf(`"capture_stderr" is only allowed on shell steps`)
+	}
+
+	if s.Workdir != "" && s.Command == "" && !s.isAgentContext() {
+		return fmt.Errorf(`"workdir" is only allowed on shell and agent steps`)
 	}
 
 	isAgent := s.isAgentContext()

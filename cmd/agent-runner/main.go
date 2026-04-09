@@ -29,12 +29,16 @@ var version = "dev"
 // realProcessRunner implements exec.ProcessRunner using os/exec.
 type realProcessRunner struct{}
 
-func (r *realProcessRunner) RunShell(cmd string, captureStdout bool) (iexec.ProcessResult, error) {
+func (r *realProcessRunner) RunShell(cmd string, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
 	c := exec.Command("sh", "-c", cmd) // #nosec G204 -- CLI runner executes user-defined shell commands by design
 	c.Stdin = os.Stdin
-	c.Stderr = os.Stderr
+	if workdir != "" {
+		c.Dir = filepath.Clean(workdir) // #nosec G304 -- workdir is from user-authored workflow YAML
+	}
 
 	if captureStdout {
+		var stderrBuf bytes.Buffer
+		c.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
 		out, err := c.Output()
 		exitCode := 0
 		if err != nil {
@@ -47,10 +51,12 @@ func (r *realProcessRunner) RunShell(cmd string, captureStdout bool) (iexec.Proc
 		return iexec.ProcessResult{
 			ExitCode: exitCode,
 			Stdout:   strings.TrimSpace(string(out)),
+			Stderr:   strings.TrimSpace(stderrBuf.String()),
 		}, nil
 	}
 
 	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
 	err := c.Run()
 	exitCode := 0
 	if err != nil {
@@ -63,14 +69,18 @@ func (r *realProcessRunner) RunShell(cmd string, captureStdout bool) (iexec.Proc
 	return iexec.ProcessResult{ExitCode: exitCode}, nil
 }
 
-func (r *realProcessRunner) RunAgent(args []string, captureStdout bool) (iexec.ProcessResult, error) {
+func (r *realProcessRunner) RunAgent(args []string, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
 	c := exec.Command(args[0], args[1:]...) // #nosec G204 -- CLI runner launches agent processes by design
 	c.Stdin = os.Stdin
 	c.Stderr = os.Stderr
+	if workdir != "" {
+		c.Dir = filepath.Clean(workdir) // #nosec G304 -- workdir is from user-authored workflow YAML
+	}
 
 	if captureStdout {
-		var buf bytes.Buffer
-		c.Stdout = io.MultiWriter(os.Stdout, &buf)
+		var stdoutBuf, stderrBuf bytes.Buffer
+		c.Stdout = io.MultiWriter(os.Stdout, &stdoutBuf)
+		c.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
 		err := c.Run()
 		exitCode := 0
 		if err != nil {
@@ -80,10 +90,11 @@ func (r *realProcessRunner) RunAgent(args []string, captureStdout bool) (iexec.P
 				return iexec.ProcessResult{}, err
 			}
 		}
-		return iexec.ProcessResult{ExitCode: exitCode, Stdout: buf.String()}, nil
+		return iexec.ProcessResult{ExitCode: exitCode, Stdout: stdoutBuf.String(), Stderr: stderrBuf.String()}, nil
 	}
 
 	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
 	err := c.Run()
 	exitCode := 0
 	if err != nil {

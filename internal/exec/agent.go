@@ -20,6 +20,10 @@ import (
 // Defaults to pty.RunInteractive; replaced in tests.
 var interactiveRunnerFn = pty.RunInteractive
 
+// sentinelInstruction is appended to the prompt for interactive agent steps
+// so the agent knows how to signal task completion via the stdout sentinel.
+const sentinelInstruction = "\n\nWhen you have completed your task, signal completion by running this command in the terminal:\nprintf '\\x1b]999;red-slippers\\x07'"
+
 // ExecuteAgentStep runs an agent step using the resolved CLI adapter.
 func ExecuteAgentStep(
 	step *model.Step,
@@ -52,6 +56,9 @@ func ExecuteAgentStep(
 	if enrichment != "" {
 		fullPrompt = prompt + "\n\n" + enrichment
 	}
+	if !headless {
+		fullPrompt += sentinelInstruction
+	}
 
 	input := cli.BuildArgsInput{
 		SessionID: sessionID,
@@ -63,13 +70,17 @@ func ExecuteAgentStep(
 	switch {
 	case headless:
 		input.Prompt = fullPrompt
-	case enrichment == "":
-		input.Prompt = prompt
 	case adapter.SupportsSystemPrompt():
-		input.Prompt = prompt
-		input.SystemPrompt = enrichment
+		input.SystemPrompt = fullPrompt
+		if isResume {
+			input.Prompt = "Let's continue"
+		} else {
+			input.Prompt = "Let's start"
+		}
+	case enrichment != "":
+		input.Prompt = "<system>\n" + fullPrompt + "\n</system>"
 	default:
-		input.Prompt = "<system>\n" + enrichment + "\n</system>\n\n" + prompt
+		input.Prompt = fullPrompt
 	}
 
 	args := adapter.BuildArgs(&input)
@@ -78,7 +89,7 @@ func ExecuteAgentStep(
 	logAgentStep(log, mode, prompt)
 
 	spawnTime := time.Now()
-	outcome, result, runErr := runAgentProcess(runner, args, headless, log)
+	outcome, result, runErr := runAgentProcess(runner, args, headless, step.Workdir, log)
 	if runErr != nil {
 		emitAgentEnd(ctx, prefix, startTime, "", OutcomeFailed)
 		return OutcomeFailed, runErr
@@ -132,22 +143,30 @@ func resolveAdapterAndSession(
 	return adapter, cliName, sessionID, isResume, nil
 }
 
-func runAgentProcess(runner ProcessRunner, args []string, headless bool, log Logger) (StepOutcome, ProcessResult, error) {
+func runAgentProcess(runner ProcessRunner, args []string, headless bool, workdir string, log Logger) (StepOutcome, ProcessResult, error) {
 	if headless {
 		// Capture stdout for headless runs so that adapters (e.g. Codex) can
 		// parse session IDs from the process output.
-		result, runErr := runner.RunAgent(args, true)
+		result, runErr := runner.RunAgent(args, true, workdir)
 		if runErr != nil {
 			return OutcomeFailed, result, runErr
 		}
 		if result.ExitCode != 0 {
 			return OutcomeFailed, result, nil
 		}
+		// Detect AskUserQuestion failures in headless mode — these indicate
+		// the agent could not complete the task autonomously. Use case-insensitive
+		// matching across both stdout and stderr to handle format variations.
+		combined := strings.ToLower(result.Stdout + "\n" + result.Stderr)
+		if strings.Contains(combined, "askuserquestion") && strings.Contains(combined, "error") {
+			log.Errorf("  headless session attempted interactive prompt (AskUserQuestion); treating as failure\n")
+			return OutcomeFailed, result, nil
+		}
 		return OutcomeSuccess, result, nil
 	}
 
 	// Interactive: run inside a PTY with continue-trigger detection.
-	ptyResult, err := interactiveRunnerFn(args, pty.Options{})
+	ptyResult, err := interactiveRunnerFn(args, pty.Options{Workdir: workdir})
 	if err != nil {
 		return OutcomeFailed, ProcessResult{}, err
 	}
@@ -232,7 +251,7 @@ func logAgentStep(log Logger, mode model.StepMode, prompt string) {
 		log.Println("  (exit to stop)")
 	}
 	if mode == model.ModeHeadless && os.Getenv("AGENT_RUNNER_SHOW_PROMPT") == "1" {
-		for _, line := range strings.Split(prompt, "\n") {
+		for line := range strings.SplitSeq(prompt, "\n") {
 			log.Printf("  %s\n", line)
 		}
 	}

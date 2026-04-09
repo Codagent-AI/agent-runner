@@ -16,7 +16,7 @@ type mockRunner struct {
 	idx     int
 }
 
-func (m *mockRunner) RunShell(cmd string, capture bool) (ProcessResult, error) {
+func (m *mockRunner) RunShell(cmd string, capture bool, _ string) (ProcessResult, error) {
 	m.calls = append(m.calls, []string{"sh", "-c", cmd})
 	if m.idx >= len(m.results) {
 		return ProcessResult{ExitCode: 0}, nil
@@ -26,7 +26,7 @@ func (m *mockRunner) RunShell(cmd string, capture bool) (ProcessResult, error) {
 	return r, nil
 }
 
-func (m *mockRunner) RunAgent(args []string, _ bool) (ProcessResult, error) {
+func (m *mockRunner) RunAgent(args []string, _ bool, _ string) (ProcessResult, error) {
 	m.calls = append(m.calls, args)
 	if m.idx >= len(m.results) {
 		return ProcessResult{ExitCode: 0}, nil
@@ -104,6 +104,41 @@ func TestExecuteShellStep(t *testing.T) {
 		ExecuteShellStep(&step, ctx, runner, &mockLogger{})
 		if ctx.CapturedVariables["output"] != "captured-output" {
 			t.Fatalf("expected captured output, got %q", ctx.CapturedVariables["output"])
+		}
+	})
+
+	t.Run("captures stdout and stderr on failure when capture_stderr enabled", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 1, Stdout: "Status: error", Stderr: "config parse failed: bad format"}}}
+		ctx := makeCtx()
+		step := model.Step{ID: "s", Mode: model.ModeShell, Command: "validator run", Session: model.SessionNew, Capture: "output", CaptureStderr: true}
+		ExecuteShellStep(&step, ctx, runner, &mockLogger{})
+		captured := ctx.CapturedVariables["output"]
+		if !strings.Contains(captured, "Status: error") {
+			t.Fatalf("expected stdout in capture, got %q", captured)
+		}
+		if !strings.Contains(captured, "STDERR:") || !strings.Contains(captured, "config parse failed") {
+			t.Fatalf("expected stderr appended on failure, got %q", captured)
+		}
+	})
+
+	t.Run("does not append stderr on failure without capture_stderr", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 1, Stdout: "Status: error", Stderr: "secret-token-abc123"}}}
+		ctx := makeCtx()
+		step := model.Step{ID: "s", Mode: model.ModeShell, Command: "validator run", Session: model.SessionNew, Capture: "output"}
+		ExecuteShellStep(&step, ctx, runner, &mockLogger{})
+		captured := ctx.CapturedVariables["output"]
+		if strings.Contains(captured, "secret-token") {
+			t.Fatalf("stderr should not be captured without capture_stderr, got %q", captured)
+		}
+	})
+
+	t.Run("does not append stderr on success even with capture_stderr", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "ok", Stderr: "some warning"}}}
+		ctx := makeCtx()
+		step := model.Step{ID: "s", Mode: model.ModeShell, Command: "echo ok", Session: model.SessionNew, Capture: "output", CaptureStderr: true}
+		ExecuteShellStep(&step, ctx, runner, &mockLogger{})
+		if ctx.CapturedVariables["output"] != "ok" {
+			t.Fatalf("expected only stdout on success, got %q", ctx.CapturedVariables["output"])
 		}
 	})
 

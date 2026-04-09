@@ -330,6 +330,42 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("headless fails when AskUserQuestion error detected in output", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "Tool error: AskUserQuestion error: not supported in headless mode"}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "finalize", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeFailed {
+			t.Fatalf("expected failed for AskUserQuestion in headless, got %q", outcome)
+		}
+	})
+
+	t.Run("headless fails on case-variant AskUserQuestion error", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "Error: askuserquestion not available"}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "finalize", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeFailed {
+			t.Fatalf("expected failed for case-insensitive AskUserQuestion detection, got %q", outcome)
+		}
+	})
+
+	t.Run("headless succeeds when output mentions AskUserQuestion without error", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "I considered using AskUserQuestion but proceeded instead"}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected success when AskUserQuestion mentioned without error, got %q", outcome)
+		}
+	})
+
 	t.Run("interactive does not call RunAgent on ProcessRunner", func(t *testing.T) {
 		oldFn := interactiveRunnerFn
 		interactiveRunnerFn = func(_ []string, _ pty.Options) (pty.Result, error) {
@@ -345,7 +381,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
-	t.Run("interactive claude without enrichment passes prompt positionally", func(t *testing.T) {
+	t.Run("interactive claude routes prompt to system prompt", func(t *testing.T) {
 		var ptyCalls [][]string
 		oldFn := interactiveRunnerFn
 		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
@@ -361,12 +397,12 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatal("expected PTY to be called")
 		}
 		args := ptyCalls[0]
-		lastArg := args[len(args)-1]
-		if lastArg != "review code" {
-			t.Fatalf("expected prompt as positional arg, got %q", lastArg)
+		if !containsArg(args, "--append-system-prompt") {
+			t.Fatal("expected --append-system-prompt for interactive claude step")
 		}
-		if containsArg(args, "--append-system-prompt") {
-			t.Fatal("did not expect --append-system-prompt without enrichment")
+		lastArg := args[len(args)-1]
+		if lastArg != "Let's start" {
+			t.Fatalf("expected 'Let's start' as positional arg, got %q", lastArg)
 		}
 	})
 
@@ -387,8 +423,12 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 		args := ptyCalls[0]
 		lastArg := args[len(args)-1]
-		if lastArg != "review code" {
+		if !strings.HasPrefix(lastArg, "review code") {
 			t.Fatalf("expected prompt as positional arg for codex without enrichment, got %q", lastArg)
+		}
+		// Interactive steps include the sentinel instruction appended to the prompt.
+		if !strings.Contains(lastArg, "red-slippers") {
+			t.Fatalf("expected sentinel instruction in codex interactive prompt, got %q", lastArg)
 		}
 	})
 
@@ -417,6 +457,49 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 		if strings.Contains(lastArg, "<system>") {
 			t.Fatalf("did not expect XML wrapping for headless mode, got %q", lastArg)
+		}
+	})
+
+	t.Run("interactive step prompt includes sentinel instruction", func(t *testing.T) {
+		var capturedArgs [][]string
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
+			capturedArgs = append(capturedArgs, args)
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		runner := &mockRunner{}
+		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "do the task", Session: model.SessionNew}
+		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		if len(capturedArgs) == 0 {
+			t.Fatal("expected PTY to be called")
+		}
+		// For Claude interactive, the sentinel goes into --append-system-prompt.
+		// Find the value after --append-system-prompt.
+		args := capturedArgs[0]
+		for i, a := range args {
+			if a == "--append-system-prompt" && i+1 < len(args) {
+				if !strings.Contains(args[i+1], "red-slippers") {
+					t.Fatalf("expected sentinel instruction in system prompt, got %q", args[i+1])
+				}
+				return
+			}
+		}
+		t.Fatalf("expected --append-system-prompt with sentinel instruction, got %v", args)
+	})
+
+	t.Run("headless step prompt does not include sentinel instruction", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do the task", Session: model.SessionNew}
+		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		if len(runner.calls) == 0 {
+			t.Fatal("expected command to be called")
+		}
+		// The last arg is the prompt for headless.
+		lastArg := runner.calls[0][len(runner.calls[0])-1]
+		if strings.Contains(lastArg, "red-slippers") {
+			t.Fatalf("expected no sentinel instruction in headless prompt, got %q", lastArg)
 		}
 	})
 }
