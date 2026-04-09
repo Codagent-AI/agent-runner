@@ -381,7 +381,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
-	t.Run("interactive claude without enrichment passes prompt positionally", func(t *testing.T) {
+	t.Run("interactive claude routes prompt to system prompt", func(t *testing.T) {
 		var ptyCalls [][]string
 		oldFn := interactiveRunnerFn
 		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
@@ -397,12 +397,12 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatal("expected PTY to be called")
 		}
 		args := ptyCalls[0]
-		lastArg := args[len(args)-1]
-		if lastArg != "review code" {
-			t.Fatalf("expected prompt as positional arg, got %q", lastArg)
+		if !containsArg(args, "--append-system-prompt") {
+			t.Fatal("expected --append-system-prompt for interactive claude step")
 		}
-		if containsArg(args, "--append-system-prompt") {
-			t.Fatal("did not expect --append-system-prompt without enrichment")
+		lastArg := args[len(args)-1]
+		if lastArg != "Let's start" {
+			t.Fatalf("expected 'Let's start' as positional arg, got %q", lastArg)
 		}
 	})
 

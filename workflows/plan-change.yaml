@@ -23,30 +23,30 @@ steps:
     mode: interactive
     session: resume
     prompt: |
-      Help me write a change proposal.
+      Help the user write a change proposal.
       You MUST use the codagent:propose skill.
 
-      Before doing anything else, ask me to describe what this change is about and what I want to accomplish.
+      Before doing anything else, ask the user to describe what this change is about and what they want to accomplish.
 
   - id: specs
     mode: interactive
     session: resume
     prompt: |
-      Help me write the change spec.
+      Help the user write the change spec.
       You MUST use the codagent:spec skill.
 
   - id: design
     mode: interactive
     session: resume
     prompt: |
-      Help me design the change.
+      Help the user design the change.
       You MUST use the codagent:design skill.
 
   - id: tasks
     mode: interactive
     session: resume
     prompt: |
-      Help me plan tasks for the change.
+      Help the user plan tasks for the change.
       You MUST use the codagent:plan-tasks skill.
 
   - id: pre-review-validate

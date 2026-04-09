@@ -29,5 +29,5 @@ steps:
     mode: headless
     session: resume
     prompt: |
-      Help me finalize the PR.
+      Help the user finalize the PR.
       You MUST use the codagent:finalize-pr skill.
