@@ -54,9 +54,10 @@ func TestExecuteAgentStep(t *testing.T) {
 		if !containsArg(args, "-p") {
 			t.Fatal("expected -p flag for headless mode")
 		}
-		// Last arg should be the prompt
-		if args[len(args)-1] != "implement feature" {
-			t.Fatalf("expected prompt as last arg, got %q", args[len(args)-1])
+		// Last arg should contain the prompt (with headless preamble prepended)
+		lastArg := args[len(args)-1]
+		if !strings.Contains(lastArg, "implement feature") {
+			t.Fatalf("expected prompt in last arg, got %q", lastArg)
 		}
 	})
 
@@ -119,8 +120,9 @@ func TestExecuteAgentStep(t *testing.T) {
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "Do {{task}}", Session: model.SessionNew}
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 		args := runner.calls[0]
-		if args[len(args)-1] != "Do build" {
-			t.Fatalf("expected interpolated prompt, got %q", args[len(args)-1])
+		lastArg := args[len(args)-1]
+		if !strings.Contains(lastArg, "Do build") {
+			t.Fatalf("expected interpolated prompt, got %q", lastArg)
 		}
 	})
 
@@ -438,8 +440,8 @@ func TestExecuteAgentStep(t *testing.T) {
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		args := runner.calls[0]
 		lastArg := args[len(args)-1]
-		if lastArg != "implement feature" {
-			t.Fatalf("expected plain prompt for headless, got %q", lastArg)
+		if !strings.Contains(lastArg, "implement feature") {
+			t.Fatalf("expected prompt in headless positional arg, got %q", lastArg)
 		}
 		if containsArg(args, "--append-system-prompt") {
 			t.Fatalf("did not expect --append-system-prompt for headless mode, got %v", args)
@@ -452,8 +454,8 @@ func TestExecuteAgentStep(t *testing.T) {
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		args := runner.calls[0]
 		lastArg := args[len(args)-1]
-		if lastArg != "implement feature" {
-			t.Fatalf("expected plain prompt for headless codex, got %q", lastArg)
+		if !strings.Contains(lastArg, "implement feature") {
+			t.Fatalf("expected prompt in headless codex positional arg, got %q", lastArg)
 		}
 		if strings.Contains(lastArg, "<system>") {
 			t.Fatalf("did not expect XML wrapping for headless mode, got %q", lastArg)
@@ -490,6 +492,106 @@ func TestExecuteAgentStep(t *testing.T) {
 			}
 		}
 		t.Fatalf("expected --append-system-prompt with completion instruction, got %v", args)
+	})
+
+	t.Run("headless prompt includes autonomy preamble", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do the task", Session: model.SessionNew}
+		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		lastArg := runner.calls[0][len(runner.calls[0])-1]
+		if !strings.Contains(lastArg, "autonomously in headless mode") {
+			t.Fatalf("expected headless preamble in prompt, got %q", lastArg)
+		}
+	})
+
+	t.Run("interactive prompt does not include autonomy preamble", func(t *testing.T) {
+		var ptyCalls [][]string
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
+			ptyCalls = append(ptyCalls, args)
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		runner := &mockRunner{}
+		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review code", Session: model.SessionNew}
+		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		args := ptyCalls[0]
+		for _, a := range args {
+			if strings.Contains(a, "autonomously in headless mode") {
+				t.Fatalf("did not expect headless preamble in interactive prompt, got %q", a)
+			}
+		}
+	})
+
+	t.Run("headless claude includes --disallowedTools AskUserQuestion", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew}
+		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		args := runner.calls[0]
+		foundDisallowed := false
+		for i, a := range args {
+			if a == "--disallowedTools" && i+1 < len(args) && args[i+1] == "AskUserQuestion" {
+				foundDisallowed = true
+			}
+		}
+		if !foundDisallowed {
+			t.Fatalf("expected --disallowedTools AskUserQuestion for headless claude, got %v", args)
+		}
+	})
+
+	t.Run("interactive claude does not include --disallowedTools", func(t *testing.T) {
+		var ptyCalls [][]string
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
+			ptyCalls = append(ptyCalls, args)
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		runner := &mockRunner{}
+		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew}
+		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		for _, a := range ptyCalls[0] {
+			if a == "--disallowedTools" {
+				t.Fatalf("did not expect --disallowedTools for interactive mode, got %v", ptyCalls[0])
+			}
+		}
+	})
+
+	t.Run("headless codex includes -a never", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew, CLI: "codex"}
+		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		args := runner.calls[0]
+		foundApproval := false
+		for i, a := range args {
+			if a == "-a" && i+1 < len(args) && args[i+1] == "never" {
+				foundApproval = true
+			}
+		}
+		if !foundApproval {
+			t.Fatalf("expected -a never for headless codex, got %v", args)
+		}
+	})
+
+	t.Run("interactive codex does not include -a never", func(t *testing.T) {
+		var ptyCalls [][]string
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
+			ptyCalls = append(ptyCalls, args)
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		runner := &mockRunner{}
+		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew, CLI: "codex"}
+		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		for i, a := range ptyCalls[0] {
+			if a == "-a" && i+1 < len(ptyCalls[0]) && ptyCalls[0][i+1] == "never" {
+				t.Fatalf("did not expect -a never for interactive codex, got %v", ptyCalls[0])
+			}
+		}
 	})
 
 	t.Run("headless step prompt does not include completion instruction", func(t *testing.T) {

@@ -25,6 +25,12 @@ var interactiveRunnerFn = pty.RunInteractive
 // so the agent knows how to signal step completion via the stdout sentinel.
 const completionInstruction = "\n\nWhen you or the user determine this step is complete, continue to the next step by running the following command without any additional commentary:\nprintf '\\x1b]999;signal-continuation\\x07' > \"$AGENT_RUNNER_TTY\""
 
+// headlessPreamble is prepended to headless prompts to reinforce autonomous behavior.
+const headlessPreamble = "You are running autonomously in headless mode with no human in the loop. " +
+	"Do not stop to ask for confirmation or clarification. " +
+	"Do not say things like \"let me know\", \"ready when you are\", or \"shall I proceed\". " +
+	"Make decisions and complete the entire task.\n\n"
+
 // ExecuteAgentStep runs an agent step using the resolved CLI adapter.
 func ExecuteAgentStep(
 	step *model.Step,
@@ -57,7 +63,9 @@ func ExecuteAgentStep(
 	if enrichment != "" {
 		fullPrompt = prompt + "\n\n" + enrichment
 	}
-	if !headless {
+	if headless {
+		fullPrompt = headlessPreamble + fullPrompt
+	} else {
 		fullPrompt = buildStepPrefix(step.ID, ctx, isResume) + fullPrompt + completionInstruction
 	}
 
@@ -66,6 +74,10 @@ func ExecuteAgentStep(
 		Resume:    isResume,
 		Model:     step.Model,
 		Headless:  headless,
+	}
+
+	if headless {
+		input.DisallowedTools = []string{"AskUserQuestion"}
 	}
 
 	switch {

@@ -30,6 +30,10 @@ func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 		args = append(args, "-p")
 	}
 
+	for _, tool := range input.DisallowedTools {
+		args = append(args, "--disallowedTools", tool)
+	}
+
 	if input.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", input.SystemPrompt)
 	}

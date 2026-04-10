@@ -8,12 +8,13 @@ import (
 
 // BuildArgsInput provides the parameters needed to construct CLI invocation args.
 type BuildArgsInput struct {
-	Prompt       string
-	SystemPrompt string // Content to deliver as a system prompt (for adapters that support it)
-	SessionID    string // Session ID to pass to the CLI (pre-generated for new, or existing for resume)
-	Resume       bool   // True when resuming an existing session, false for fresh sessions
-	Model        string
-	Headless     bool
+	Prompt          string
+	SystemPrompt    string // Content to deliver as a system prompt (for adapters that support it)
+	SessionID       string // Session ID to pass to the CLI (pre-generated for new, or existing for resume)
+	Resume          bool   // True when resuming an existing session, false for fresh sessions
+	Model           string
+	Headless        bool
+	DisallowedTools []string // Tool names to block (e.g. "AskUserQuestion"); adapter translates to CLI flags where supported
 }
 
 // Adapter abstracts CLI invocation for a specific agent backend.

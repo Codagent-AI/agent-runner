@@ -157,6 +157,38 @@ func TestClaudeAdapter(t *testing.T) {
 		assertArgs(t, expected, args)
 	})
 
+	t.Run("disallowed tools emits --disallowedTools flags", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:          "do something",
+			Headless:        true,
+			DisallowedTools: []string{"AskUserQuestion"},
+		})
+		expected := []string{"claude", "-p", "--disallowedTools", "AskUserQuestion", "do something"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("multiple disallowed tools", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:          "do something",
+			Headless:        true,
+			DisallowedTools: []string{"AskUserQuestion", "WebSearch"},
+		})
+		expected := []string{"claude", "-p", "--disallowedTools", "AskUserQuestion", "--disallowedTools", "WebSearch", "do something"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("no disallowed tools omits flag", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "do something",
+			Headless: true,
+		})
+		for _, a := range args {
+			if a == "--disallowedTools" {
+				t.Fatalf("did not expect --disallowedTools when DisallowedTools is empty, got %v", args)
+			}
+		}
+	})
+
 	t.Run("no system prompt omits flag", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:   "do something",
@@ -194,7 +226,7 @@ func TestCodexAdapter(t *testing.T) {
 			Prompt:   "do something",
 			Headless: true,
 		})
-		expected := []string{"codex", "exec", "--json", "do something"}
+		expected := []string{"codex", "exec", "--json", "-a", "never", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -213,7 +245,7 @@ func TestCodexAdapter(t *testing.T) {
 			SessionID: "thread-abc",
 			Headless:  true,
 		})
-		expected := []string{"codex", "exec", "resume", "thread-abc", "continue"}
+		expected := []string{"codex", "exec", "resume", "thread-abc", "-a", "never", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -233,7 +265,7 @@ func TestCodexAdapter(t *testing.T) {
 			Model:    "o3",
 			Headless: true,
 		})
-		expected := []string{"codex", "exec", "--json", "-m", "o3", "do something"}
+		expected := []string{"codex", "exec", "--json", "-a", "never", "-m", "o3", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -259,7 +291,7 @@ func TestCodexAdapter(t *testing.T) {
 			SystemPrompt: "should be ignored",
 			Headless:     true,
 		})
-		expected := []string{"codex", "exec", "--json", "do something"}
+		expected := []string{"codex", "exec", "--json", "-a", "never", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -287,6 +319,31 @@ func TestCodexAdapter(t *testing.T) {
 		for _, a := range args {
 			if a == "--no-alt-screen" {
 				t.Fatalf("did not expect --no-alt-screen for headless mode, got %v", args)
+			}
+		}
+	})
+
+	t.Run("interactive does not include -a never", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "review",
+			Headless: false,
+		})
+		for i, a := range args {
+			if a == "-a" && i+1 < len(args) && args[i+1] == "never" {
+				t.Fatalf("did not expect -a never for interactive mode, got %v", args)
+			}
+		}
+	})
+
+	t.Run("codex ignores DisallowedTools", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:          "do something",
+			Headless:        true,
+			DisallowedTools: []string{"AskUserQuestion"},
+		})
+		for _, a := range args {
+			if a == "--disallowedTools" {
+				t.Fatalf("did not expect --disallowedTools for codex, got %v", args)
 			}
 		}
 	})
