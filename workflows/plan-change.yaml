@@ -27,7 +27,7 @@ steps:
       You MUST use the codagent:propose skill.
 
       Before doing anything else, ask the user to describe what this change is about and what they want to accomplish.
-      Once the proposal document is written, signal completion.
+      Once the proposal document is written, continue to the next step.
 
   - id: specs
     mode: interactive
@@ -35,7 +35,7 @@ steps:
     prompt: |
       Help the user write the change spec.
       You MUST use the codagent:spec skill.
-      Once all spec documents are written, signal completion.
+      Once all spec documents are written, continue to the next step.
 
   - id: design
     mode: interactive
@@ -43,7 +43,7 @@ steps:
     prompt: |
       Help the user design the change.
       You MUST use the codagent:design skill.
-      Once the design document is written, signal completion.
+      Once the design document is written, continue to the next step.
 
   - id: tasks
     mode: interactive
@@ -51,7 +51,7 @@ steps:
     prompt: |
       Help the user plan tasks for the change.
       You MUST use the codagent:plan-tasks skill.
-      Once all task documents are written, signal completion.
+      Once all task documents are written, continue to the next step.
 
   - id: pre-review-validate
     mode: headless

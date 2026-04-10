@@ -427,7 +427,7 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatalf("expected prompt in positional arg for codex without enrichment, got %q", lastArg)
 		}
 		// Interactive steps include the completion instruction appended to the prompt.
-		if !strings.Contains(lastArg, "red-slippers") {
+		if !strings.Contains(lastArg, "signal-continuation") {
 			t.Fatalf("expected completion instruction in codex interactive prompt, got %q", lastArg)
 		}
 	})
@@ -480,7 +480,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		for i, a := range args {
 			if a == "--append-system-prompt" && i+1 < len(args) {
 				sysPrompt := args[i+1]
-				if !strings.Contains(sysPrompt, "red-slippers") {
+				if !strings.Contains(sysPrompt, "signal-continuation") {
 					t.Fatalf("expected completion instruction in system prompt, got %q", sysPrompt)
 				}
 				if !strings.Contains(sysPrompt, "you or the user") {
@@ -500,7 +500,7 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatal("expected command to be called")
 		}
 		lastArg := runner.calls[0][len(runner.calls[0])-1]
-		if strings.Contains(lastArg, "red-slippers") {
+		if strings.Contains(lastArg, "signal-continuation") {
 			t.Fatalf("expected no completion instruction in headless prompt, got %q", lastArg)
 		}
 	})

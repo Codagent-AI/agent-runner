@@ -23,7 +23,7 @@ var interactiveRunnerFn = pty.RunInteractive
 
 // completionInstruction is appended to the prompt for interactive agent steps
 // so the agent knows how to signal step completion via the stdout sentinel.
-const completionInstruction = "\n\nWhen you or the user determine this step is complete, signal completion by running this command in the terminal:\nprintf '\\x1b]999;red-slippers\\x07'"
+const completionInstruction = "\n\nWhen you or the user determine this step is complete, continue to the next step by running the following command without any additional commentary:\nprintf '\\x1b]999;signal-continuation\\x07' > \"$AGENT_RUNNER_TTY\""
 
 // ExecuteAgentStep runs an agent step using the resolved CLI adapter.
 func ExecuteAgentStep(

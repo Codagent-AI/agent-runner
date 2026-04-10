@@ -2,7 +2,7 @@ package pty
 
 import "testing"
 
-const sentinel = "\x1b]999;red-slippers\x07"
+const sentinel = "\x1b]999;signal-continuation\x07"
 
 func TestOutputProcessor(t *testing.T) {
 	t.Run("forwards regular text", func(t *testing.T) {

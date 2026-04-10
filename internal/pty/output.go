@@ -1,7 +1,7 @@
 package pty
 
 const (
-	sentinelPayload = "999;red-slippers"
+	sentinelPayload = "999;signal-continuation"
 
 	// maxEscBuf caps the escape/OSC buffer to prevent unbounded memory growth
 	// when the PTY stream contains an unterminated OSC sequence (e.g., a
@@ -16,7 +16,7 @@ const (
 const outOSCSawEsc = 10
 
 // outputProcessor tracks ANSI escape sequence state and detects the sentinel
-// OSC sequence \x1b]999;red-slippers\x07 in the output stream.
+// OSC sequence \x1b]999;signal-continuation\x07 in the output stream.
 //
 // The sentinel is stripped from output (never forwarded to the terminal).
 // All other bytes, including non-matching OSC sequences, are forwarded as-is.
