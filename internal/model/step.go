@@ -172,16 +172,9 @@ func (s *Step) Validate(knownCLIs []string) error {
 	return nil
 }
 
-func (s *Step) validateFieldConstraints(knownCLIs []string) error {
-	isAgent := s.isAgentContext()
-	isShell := s.Command != ""
-
-	// Agent steps must have a prompt.
-	if isAgent && s.Prompt == "" {
-		return fmt.Errorf(`agent steps require "prompt"`)
-	}
-
-	// Agent field validation: required on new-session agent steps, forbidden elsewhere.
+// validateAgentField checks that the agent field is used correctly:
+// required on session:new agent steps, forbidden on resume/inherit and shell steps.
+func (s *Step) validateAgentField(isAgent, isShell bool) error {
 	if isAgent {
 		switch s.Session {
 		case SessionNew:
@@ -197,19 +190,37 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 	if isShell && s.Agent != "" {
 		return fmt.Errorf(`"agent" is not valid on shell steps`)
 	}
+	return nil
+}
 
-	if s.Capture != "" && !isShell && s.Mode != ModeHeadless && !isAgent {
+// validateCaptureFields checks capture and capture_stderr constraints.
+func (s *Step) validateCaptureFields(isAgent, isShell bool) error {
+	if s.Capture != "" && !isShell && isAgent && s.Mode != ModeHeadless {
 		return fmt.Errorf(`"capture" is only allowed on shell and headless steps`)
 	}
-	if s.Capture != "" && isAgent && s.Mode != ModeHeadless {
-		return fmt.Errorf(`"capture" is only allowed on shell and headless steps`)
-	}
-
 	if s.CaptureStderr && s.Capture == "" {
 		return fmt.Errorf(`"capture_stderr" requires "capture"`)
 	}
 	if s.CaptureStderr && !isShell {
 		return fmt.Errorf(`"capture_stderr" is only allowed on shell steps`)
+	}
+	return nil
+}
+
+func (s *Step) validateFieldConstraints(knownCLIs []string) error {
+	isAgent := s.isAgentContext()
+	isShell := s.Command != ""
+
+	if isAgent && s.Prompt == "" {
+		return fmt.Errorf(`agent steps require "prompt"`)
+	}
+
+	if err := s.validateAgentField(isAgent, isShell); err != nil {
+		return err
+	}
+
+	if err := s.validateCaptureFields(isAgent, isShell); err != nil {
+		return err
 	}
 
 	if s.Workdir != "" && !isShell && !isAgent {

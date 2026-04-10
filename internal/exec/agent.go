@@ -119,15 +119,10 @@ func ExecuteAgentStep(
 		fullPrompt = buildStepPrefix(step.ID, ctx, isResume) + fullPrompt + completionInstruction
 	}
 
-	resolvedModel := profile.Model
-	if step.Model != "" {
-		resolvedModel = step.Model
-	}
-
 	input := cli.BuildArgsInput{
 		SessionID: sessionID,
 		Resume:    isResume,
-		Model:     resolvedModel,
+		Model:     profile.Model, // already has step.Model applied by resolveStepProfile
 		Effort:    profile.Effort,
 		Headless:  headless,
 	}
@@ -166,8 +161,10 @@ func ExecuteAgentStep(
 
 	discoveredID := discoverAndStoreSession(adapter, step, ctx, spawnTime, sessionID, headless, result.Stdout, log)
 
-	// Store profile association for new sessions.
-	if step.Session == model.SessionNew && step.Agent != "" && discoveredID != "" {
+	// Store profile association for new sessions regardless of whether session
+	// discovery succeeded — the profile name is needed by subsequent resume/inherit
+	// steps even if the session ID wasn't discovered.
+	if step.Session == model.SessionNew && step.Agent != "" {
 		ctx.SessionProfiles[step.ID] = step.Agent
 	}
 
