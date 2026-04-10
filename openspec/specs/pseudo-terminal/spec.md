@@ -27,11 +27,11 @@ The PTY layer SHALL intercept continue triggers from two sources: user input (`/
 - **THEN** the typed bytes are intercepted by the PTY layer and not delivered to the CLI process as input
 
 #### Scenario: Agent emits sentinel
-- **WHEN** the agent writes the designated sentinel escape sequence to stdout during an interactive step
+- **WHEN** the agent writes the designated sentinel escape sequence to the interactive terminal stream during an interactive step
 - **THEN** the runner terminates the CLI process and advances to the next step with outcome success
 
 #### Scenario: Agent sentinel not forwarded
-- **WHEN** the agent writes the designated sentinel escape sequence to stdout
+- **WHEN** the agent writes the designated sentinel escape sequence to the interactive terminal stream
 - **THEN** the sentinel bytes are stripped from the output and not displayed on the user's terminal
 
 ### Requirement: Graceful CLI termination on continue

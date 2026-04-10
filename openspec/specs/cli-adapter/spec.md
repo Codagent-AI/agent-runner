@@ -28,7 +28,7 @@ Adapters declare support via a `SupportsSystemPrompt() bool` method on the `Adap
 
 ### Requirement: Adapter arg construction
 
-Each adapter SHALL construct the CLI invocation args for both headless and interactive modes. The adapter receives the prompt, system prompt content (if applicable), session ID (if resuming), and model override (if specified), and returns the full command and args. When system prompt content is provided and the adapter supports it, the adapter SHALL include the appropriate CLI flags to deliver it as a system prompt (e.g., `--append-system-prompt` for Claude).
+Each adapter SHALL construct the CLI invocation args for both headless and interactive modes. The adapter receives the prompt, system prompt content (if applicable), session ID (when provided), and model override (if specified), and returns the full command and args. When system prompt content is provided and the adapter supports it, the adapter SHALL include the appropriate CLI flags to deliver it as a system prompt (e.g., `--append-system-prompt` for Claude).
 
 #### Scenario: Headless invocation with model override
 - **WHEN** the runner executes a headless step with `model: sonnet` and a session ID from state
