@@ -1,5 +1,3 @@
-## ADDED Requirements
-
 ### Requirement: PTY hosting for interactive steps
 
 Interactive agent steps SHALL be executed inside a pseudo-terminal. The runner creates a PTY, attaches the CLI process to the PTY slave, and proxies I/O between the user's terminal and the PTY master. Headless steps SHALL NOT use a PTY.
@@ -14,7 +12,7 @@ Interactive agent steps SHALL be executed inside a pseudo-terminal. The runner c
 
 ### Requirement: Continue triggers
 
-The PTY layer SHALL intercept two continue triggers: `/next` typed on a line followed by Enter, and a keyboard shortcut. When either is detected, the runner signals the CLI to terminate and advances to the next workflow step.
+The PTY layer SHALL intercept continue triggers from two sources: user input (`/next` typed on a line followed by Enter, or a keyboard shortcut) and agent output (a designated sentinel escape sequence). When any trigger is detected, the runner signals the CLI to terminate and advances to the next workflow step.
 
 #### Scenario: /next typed
 - **WHEN** the user types `/next` and presses Enter during an interactive step
@@ -27,6 +25,14 @@ The PTY layer SHALL intercept two continue triggers: `/next` typed on a line fol
 #### Scenario: Continue trigger not forwarded to CLI
 - **WHEN** the user types `/next` or presses the continue keyboard shortcut
 - **THEN** the typed bytes are intercepted by the PTY layer and not delivered to the CLI process as input
+
+#### Scenario: Agent emits sentinel
+- **WHEN** the agent writes the designated sentinel escape sequence to stdout during an interactive step
+- **THEN** the runner terminates the CLI process and advances to the next step with outcome success
+
+#### Scenario: Agent sentinel not forwarded
+- **WHEN** the agent writes the designated sentinel escape sequence to stdout
+- **THEN** the sentinel bytes are stripped from the output and not displayed on the user's terminal
 
 ### Requirement: Graceful CLI termination on continue
 
