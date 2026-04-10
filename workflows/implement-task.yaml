@@ -15,6 +15,13 @@ steps:
       When you are done implementing, commit your changes with a clear,
       descriptive commit message. Then summarize to the user what you changed.
 
+  - id: self-review
+    mode: headless
+    session: resume
+    prompt: |
+      Run the codagent:self-review skill against the task file {{task_file}}.
+      If you fix any gaps, commit your changes.
+
   - id: run-validator
     workflow: run-validator.yaml
 
@@ -24,7 +31,7 @@ steps:
 
   - id: commit-leftovers-if-needed
     mode: headless
-    session: new
+    session: resume
     prompt: |
       There are uncommitted changes leftover after implementing the task described in {{task_file}}.
       Run git status and git diff to review them. Only stage and commit files
@@ -32,3 +39,9 @@ steps:
       unrelated changes, generated artifacts, or files that should be gitignored.
       Summarize which files you committed and which you left out, and why.
     skip_if: previous_success
+
+  - id: session-report
+    mode: headless
+    session: resume
+    prompt: |
+      Run the codagent:session-report skill against the task file {{task_file}}.
