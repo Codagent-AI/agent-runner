@@ -42,9 +42,9 @@ Each adapter SHALL construct the CLI invocation args for both headless and inter
 - **WHEN** the runner provides system prompt content to the Claude adapter for an interactive step
 - **THEN** the adapter includes `--append-system-prompt` with the content in the args
 
-#### Scenario: System prompt content provided to unsupporting adapter
-- **WHEN** the runner provides system prompt content to an adapter that does not support it
-- **THEN** the adapter ignores the system prompt field (the runner handles fallback wrapping)
+#### Scenario: System prompt content with unsupporting adapter
+- **WHEN** the runner has system prompt content but the adapter does not support native system prompts
+- **THEN** the runner applies fallback wrapping into the prompt payload, and the adapter is invoked without native system-prompt flags
 
 ### Requirement: Adapter session ID return
 
