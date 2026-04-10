@@ -74,7 +74,7 @@ func ExecuteAgentStep(
 	case adapter.SupportsSystemPrompt():
 		input.SystemPrompt = fullPrompt
 		if isResume {
-			input.Prompt = fmt.Sprintf("Let's continue to the %s step", step.ID)
+			input.Prompt = fmt.Sprintf("Resume the %s step. If you already started on this step, resume from where you left off.", step.ID)
 		} else {
 			input.Prompt = fmt.Sprintf("Let's start the %s step", step.ID)
 		}
@@ -269,7 +269,7 @@ func buildStepPrefix(stepID string, ctx *model.ExecutionContext, isResume bool) 
 
 	switch {
 	case isResume:
-		fmt.Fprintf(&sb, "Now continuing to step: %q.\n\n", stepID)
+		fmt.Fprintf(&sb, "Resuming step: %q. If you already started on this step, resume from where you left off.\n\n", stepID)
 	case ctx.WorkflowName != "":
 		fmt.Fprintf(&sb, "You are running in the %q workflow", ctx.WorkflowName)
 		if ctx.WorkflowDescription != "" {
