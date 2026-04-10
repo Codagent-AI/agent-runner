@@ -68,5 +68,13 @@ steps:
       Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports.
       Keep running the command and fixing until it passes with no errors.
 
+  - id: commit-openspec
+    mode: headless
+    session: resume
+    prompt: |
+      Stage everything under openspec/changes/{{change_name}}/ and commit
+      with a clear message like "Add openspec documents for {{change_name}}".
+
   - id: skip-validator
     command: agent-validator skip
+
