@@ -318,7 +318,7 @@ func TestCodexAdapter(t *testing.T) {
 			Effort:   "medium",
 			Headless: true,
 		})
-		expected := []string{"codex", "exec", "--json", "--effort", "medium", "do something"}
+		expected := []string{"codex", "exec", "--json", "-a", "never", "--effort", "medium", "do something"}
 		assertArgs(t, expected, args)
 	})
 

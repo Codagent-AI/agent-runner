@@ -112,49 +112,7 @@ func ExecuteAgentStep(
 	}
 
 	headless := mode == model.ModeHeadless
-
-	// Build the full prompt: [system_prompt] [step prompt] [engine enrichment]
-	fullPrompt := prompt
-	if profile.SystemPrompt != "" {
-		fullPrompt = profile.SystemPrompt + "\n\n" + fullPrompt
-	}
-	if enrichment != "" {
-		fullPrompt = fullPrompt + "\n\n" + enrichment
-	}
-	if headless {
-		fullPrompt = headlessPreamble + fullPrompt
-	} else {
-		fullPrompt = buildStepPrefix(step.ID, ctx, isResume) + fullPrompt + completionInstruction
-	}
-
-	input := cli.BuildArgsInput{
-		SessionID: sessionID,
-		Resume:    isResume,
-		Model:     profile.Model, // already has step.Model applied by resolveStepProfile
-		Effort:    profile.Effort,
-		Headless:  headless,
-	}
-
-	if headless {
-		input.DisallowedTools = []string{"AskUserQuestion"}
-	}
-
-	switch {
-	case headless:
-		input.Prompt = fullPrompt
-	case adapter.SupportsSystemPrompt():
-		input.SystemPrompt = fullPrompt
-		if isResume {
-			input.Prompt = fmt.Sprintf("Resume the %s step. If you already started on this step, resume from where you left off.", step.ID)
-		} else {
-			input.Prompt = fmt.Sprintf("Let's start the %s step", step.ID)
-		}
-	case enrichment != "" || profile.SystemPrompt != "":
-		input.Prompt = "<system>\n" + fullPrompt + "\n</system>"
-	default:
-		input.Prompt = fullPrompt
-	}
-
+	input := buildAdapterInput(step, ctx, profile, adapter, prompt, enrichment, sessionID, isResume, headless)
 	args := adapter.BuildArgs(&input)
 
 	emitAgentStart(ctx, prefix, startTime, prompt, mode, step, sessionID, cliName, enrichment)
@@ -167,7 +125,12 @@ func ExecuteAgentStep(
 		return OutcomeFailed, runErr
 	}
 
-	if headless && step.Capture != "" {
+	if step.Capture != "" {
+		if !headless {
+			emitAgentFailure(ctx, prefix, startTime, string(mode), step,
+				fmt.Sprintf("capture requires headless mode, but step %q resolved to %s (check agent profile)", step.ID, mode))
+			return OutcomeFailed, nil
+		}
 		ctx.CapturedVariables[step.Capture] = result.Stdout
 	}
 
@@ -231,6 +194,60 @@ func resolveAdapterAndSession(
 	}
 
 	return adapter, cliName, sessionID, isResume, nil
+}
+
+// buildAdapterInput assembles the full prompt and CLI input for an agent step.
+func buildAdapterInput(
+	step *model.Step,
+	ctx *model.ExecutionContext,
+	profile *config.ResolvedProfile,
+	adapter cli.Adapter,
+	prompt, enrichment, sessionID string,
+	isResume, headless bool,
+) cli.BuildArgsInput {
+	// Build the full prompt: [system_prompt] [step prompt] [engine enrichment]
+	fullPrompt := prompt
+	if profile.SystemPrompt != "" {
+		fullPrompt = profile.SystemPrompt + "\n\n" + fullPrompt
+	}
+	if enrichment != "" {
+		fullPrompt = fullPrompt + "\n\n" + enrichment
+	}
+	if headless {
+		fullPrompt = headlessPreamble + fullPrompt
+	} else {
+		fullPrompt = buildStepPrefix(step.ID, ctx, isResume) + fullPrompt + completionInstruction
+	}
+
+	input := cli.BuildArgsInput{
+		SessionID: sessionID,
+		Resume:    isResume,
+		Model:     profile.Model,
+		Effort:    profile.Effort,
+		Headless:  headless,
+	}
+
+	if headless {
+		input.DisallowedTools = []string{"AskUserQuestion"}
+	}
+
+	switch {
+	case headless:
+		input.Prompt = fullPrompt
+	case adapter.SupportsSystemPrompt():
+		input.SystemPrompt = fullPrompt
+		if isResume {
+			input.Prompt = fmt.Sprintf("Resume the %s step. If you already started on this step, resume from where you left off.", step.ID)
+		} else {
+			input.Prompt = fmt.Sprintf("Let's start the %s step", step.ID)
+		}
+	case enrichment != "" || profile.SystemPrompt != "":
+		input.Prompt = "<system>\n" + fullPrompt + "\n</system>"
+	default:
+		input.Prompt = fullPrompt
+	}
+
+	return input
 }
 
 func runAgentProcess(runner ProcessRunner, args []string, headless bool, workdir string, log Logger) (StepOutcome, ProcessResult, error) {
