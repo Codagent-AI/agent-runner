@@ -12,6 +12,7 @@ engine:
 steps:
   - id: check-clean
     # agent-validator detect: exit 0 = unvalidated changes present, exit 2 = clean (no changes)
+    # todo move to script, add check for git porcelain
     command: "agent-validator detect; status=$?; if [ $status -eq 2 ]; then exit 0; elif [ $status -eq 0 ]; then echo 'Unvalidated changes detected. Run agent-validator before planning.' >&2; exit 1; else exit $status; fi"
 
   - id: create
