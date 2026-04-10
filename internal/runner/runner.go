@@ -172,13 +172,15 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		auditEventLogger = auditLogger
 	}
 
-	ctx := model.NewRootContext(model.RootContextOptions{
-		Params:            params,
-		WorkflowFile:      opts.WorkflowFile,
-		EngineRef:         engineRef,
-		SessionIDs:        opts.SessionIDs,
-		CapturedVariables: opts.CapturedVariables,
-		AuditLogger:       auditEventLogger,
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		Params:              params,
+		WorkflowFile:        opts.WorkflowFile,
+		WorkflowName:        workflow.Name,
+		WorkflowDescription: workflow.Description,
+		EngineRef:           engineRef,
+		SessionIDs:          opts.SessionIDs,
+		CapturedVariables:   opts.CapturedVariables,
+		AuditLogger:         auditEventLogger,
 	})
 	if opts.ChildState != nil {
 		ctx.ResumeChildState = opts.ChildState

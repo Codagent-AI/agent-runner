@@ -1,6 +1,7 @@
 package exec
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -20,9 +21,9 @@ import (
 // Defaults to pty.RunInteractive; replaced in tests.
 var interactiveRunnerFn = pty.RunInteractive
 
-// sentinelInstruction is appended to the prompt for interactive agent steps
-// so the agent knows how to signal task completion via the stdout sentinel.
-const sentinelInstruction = "\n\nWhen you have completed your task, signal completion by running this command in the terminal:\nprintf '\\x1b]999;red-slippers\\x07'"
+// completionInstruction is appended to the prompt for interactive agent steps
+// so the agent knows how to signal step completion via the stdout sentinel.
+const completionInstruction = "\n\nWhen you or the user determine this step is complete, signal completion by running this command in the terminal:\nprintf '\\x1b]999;red-slippers\\x07'"
 
 // ExecuteAgentStep runs an agent step using the resolved CLI adapter.
 func ExecuteAgentStep(
@@ -57,7 +58,7 @@ func ExecuteAgentStep(
 		fullPrompt = prompt + "\n\n" + enrichment
 	}
 	if !headless {
-		fullPrompt += sentinelInstruction
+		fullPrompt = buildStepPrefix(step.ID, ctx, isResume) + fullPrompt + completionInstruction
 	}
 
 	input := cli.BuildArgsInput{
@@ -73,9 +74,9 @@ func ExecuteAgentStep(
 	case adapter.SupportsSystemPrompt():
 		input.SystemPrompt = fullPrompt
 		if isResume {
-			input.Prompt = "Let's continue"
+			input.Prompt = fmt.Sprintf("Let's continue to the %s step", step.ID)
 		} else {
-			input.Prompt = "Let's start"
+			input.Prompt = fmt.Sprintf("Let's start the %s step", step.ID)
 		}
 	case enrichment != "":
 		input.Prompt = "<system>\n" + fullPrompt + "\n</system>"
@@ -255,6 +256,32 @@ func logAgentStep(log Logger, mode model.StepMode, prompt string) {
 			log.Printf("  %s\n", line)
 		}
 	}
+}
+
+// buildStepPrefix returns a preamble for interactive prompts that orients the
+// agent: which step is starting and (for fresh sessions) which workflow it
+// belongs to.
+// buildStepPrefix returns a preamble for interactive prompts that orients the
+// agent: which step is starting and (for fresh sessions) which workflow it
+// belongs to.
+func buildStepPrefix(stepID string, ctx *model.ExecutionContext, isResume bool) string {
+	var sb strings.Builder
+
+	switch {
+	case isResume:
+		fmt.Fprintf(&sb, "Now continuing to step: %q.\n\n", stepID)
+	case ctx.WorkflowName != "":
+		fmt.Fprintf(&sb, "You are running in the %q workflow", ctx.WorkflowName)
+		if ctx.WorkflowDescription != "" {
+			fmt.Fprintf(&sb, ": %s", ctx.WorkflowDescription)
+		}
+		fmt.Fprintf(&sb, "\n\nThe current step is %q.\n\n", stepID)
+	default:
+		fmt.Fprintf(&sb, "The current step is %q.\n\n", stepID)
+	}
+
+	sb.WriteString("Before doing anything else, announce that you are starting this step.\n\n")
+	return sb.String()
 }
 
 func buildAgentPrompt(step *model.Step, ctx *model.ExecutionContext) (prompt, enrichment string, err error) {

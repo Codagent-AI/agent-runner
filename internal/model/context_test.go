@@ -13,7 +13,7 @@ func (s *stubAuditLogger) Emit(event audit.Event) {} // implements audit.EventLo
 
 func TestCreateRootContext(t *testing.T) {
 	t.Run("creates a context with provided params", func(t *testing.T) {
-		ctx := NewRootContext(RootContextOptions{
+		ctx := NewRootContext(&RootContextOptions{
 			Params:       map[string]string{"file": "main.go"},
 			WorkflowFile: "test.yaml",
 		})
@@ -36,7 +36,7 @@ func TestCreateRootContext(t *testing.T) {
 	})
 
 	t.Run("restores session IDs from options", func(t *testing.T) {
-		ctx := NewRootContext(RootContextOptions{
+		ctx := NewRootContext(&RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: "test.yaml",
 			SessionIDs:   map[string]string{"step1": "abc123"},
@@ -48,7 +48,7 @@ func TestCreateRootContext(t *testing.T) {
 	})
 
 	t.Run("restores captured variables from options", func(t *testing.T) {
-		ctx := NewRootContext(RootContextOptions{
+		ctx := NewRootContext(&RootContextOptions{
 			Params:            map[string]string{},
 			WorkflowFile:      "test.yaml",
 			CapturedVariables: map[string]string{"output": "result"},
@@ -62,7 +62,7 @@ func TestCreateRootContext(t *testing.T) {
 
 func TestCreateLoopIterationContext(t *testing.T) {
 	t.Run("creates child context with loop variable in params", func(t *testing.T) {
-		parent := NewRootContext(RootContextOptions{
+		parent := NewRootContext(&RootContextOptions{
 			Params:       map[string]string{"base": "/src"},
 			WorkflowFile: "test.yaml",
 		})
@@ -91,7 +91,7 @@ func TestCreateLoopIterationContext(t *testing.T) {
 	})
 
 	t.Run("does not mutate parent context", func(t *testing.T) {
-		parent := NewRootContext(RootContextOptions{
+		parent := NewRootContext(&RootContextOptions{
 			Params:       map[string]string{"base": "/src"},
 			WorkflowFile: "test.yaml",
 		})
@@ -120,7 +120,7 @@ func TestCreateLoopIterationContext(t *testing.T) {
 func TestCreateRootContextWithAuditLogger(t *testing.T) {
 	t.Run("stores auditLogger when provided", func(t *testing.T) {
 		logger := &stubAuditLogger{}
-		ctx := NewRootContext(RootContextOptions{
+		ctx := NewRootContext(&RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: "test.yaml",
 			AuditLogger:  logger,
@@ -131,7 +131,7 @@ func TestCreateRootContextWithAuditLogger(t *testing.T) {
 	})
 
 	t.Run("defaults auditLogger to null when not provided", func(t *testing.T) {
-		ctx := NewRootContext(RootContextOptions{
+		ctx := NewRootContext(&RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: "test.yaml",
 		})
@@ -143,7 +143,7 @@ func TestCreateRootContextWithAuditLogger(t *testing.T) {
 
 func TestCreateSubWorkflowContext(t *testing.T) {
 	t.Run("creates child context with only explicit params", func(t *testing.T) {
-		parent := NewRootContext(RootContextOptions{
+		parent := NewRootContext(&RootContextOptions{
 			Params:       map[string]string{"parent_param": "val"},
 			WorkflowFile: "parent.yaml",
 		})
@@ -169,7 +169,7 @@ func TestCreateSubWorkflowContext(t *testing.T) {
 	})
 
 	t.Run("stores subWorkflowName on the nesting segment", func(t *testing.T) {
-		parent := NewRootContext(RootContextOptions{
+		parent := NewRootContext(&RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: "parent.yaml",
 		})
@@ -191,7 +191,7 @@ func TestCreateSubWorkflowContext(t *testing.T) {
 
 	t.Run("inherits auditLogger from parent", func(t *testing.T) {
 		logger := &stubAuditLogger{}
-		parent := NewRootContext(RootContextOptions{
+		parent := NewRootContext(&RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: "parent.yaml",
 			AuditLogger:  logger,
@@ -212,7 +212,7 @@ func TestCreateSubWorkflowContext(t *testing.T) {
 func TestLoopIterationContextAuditLogger(t *testing.T) {
 	t.Run("inherits auditLogger from parent", func(t *testing.T) {
 		logger := &stubAuditLogger{}
-		parent := NewRootContext(RootContextOptions{
+		parent := NewRootContext(&RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: "test.yaml",
 			AuditLogger:  logger,
@@ -231,7 +231,7 @@ func TestLoopIterationContextAuditLogger(t *testing.T) {
 
 func TestSeedSessionPropagation(t *testing.T) {
 	t.Run("propagates _seed from parent to sub-workflow context", func(t *testing.T) {
-		parent := NewRootContext(RootContextOptions{
+		parent := NewRootContext(&RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: "parent.yaml",
 			SessionIDs:   map[string]string{"_seed": "seed-123"},
@@ -249,7 +249,7 @@ func TestSeedSessionPropagation(t *testing.T) {
 	})
 
 	t.Run("propagates _seed from parent to loop iteration context", func(t *testing.T) {
-		parent := NewRootContext(RootContextOptions{
+		parent := NewRootContext(&RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: "test.yaml",
 			SessionIDs:   map[string]string{"_seed": "seed-456"},
@@ -266,7 +266,7 @@ func TestSeedSessionPropagation(t *testing.T) {
 	})
 
 	t.Run("does not propagate non-seed session IDs to sub-workflow", func(t *testing.T) {
-		parent := NewRootContext(RootContextOptions{
+		parent := NewRootContext(&RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: "parent.yaml",
 			SessionIDs:   map[string]string{"step1": "abc", "_seed": "seed-789"},
@@ -287,7 +287,7 @@ func TestSeedSessionPropagation(t *testing.T) {
 	})
 
 	t.Run("does not propagate when no seed exists", func(t *testing.T) {
-		parent := NewRootContext(RootContextOptions{
+		parent := NewRootContext(&RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: "parent.yaml",
 			SessionIDs:   map[string]string{"step1": "abc"},
@@ -305,7 +305,7 @@ func TestSeedSessionPropagation(t *testing.T) {
 	})
 
 	t.Run("propagates _seed through nested sub-workflows", func(t *testing.T) {
-		root := NewRootContext(RootContextOptions{
+		root := NewRootContext(&RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: "root.yaml",
 			SessionIDs:   map[string]string{"_seed": "seed-nested"},

@@ -36,7 +36,9 @@ type ExecutionContext struct {
 	NestingPath   []NestingSegment
 	ParentContext *ExecutionContext
 
-	WorkflowFile string
+	WorkflowFile        string
+	WorkflowName        string
+	WorkflowDescription string
 
 	// EngineRef holds the workflow engine implementation (internal/engine.Engine).
 	// Stored as interface{} to avoid circular imports.
@@ -53,16 +55,18 @@ type ExecutionContext struct {
 
 // RootContextOptions configures a new root execution context.
 type RootContextOptions struct {
-	Params            map[string]string
-	WorkflowFile      string
-	EngineRef         interface{} // internal/engine.Engine
-	SessionIDs        map[string]string
-	CapturedVariables map[string]string
-	AuditLogger       audit.EventLogger
+	Params              map[string]string
+	WorkflowFile        string
+	WorkflowName        string
+	WorkflowDescription string
+	EngineRef           interface{} // internal/engine.Engine
+	SessionIDs          map[string]string
+	CapturedVariables   map[string]string
+	AuditLogger         audit.EventLogger
 }
 
 // NewRootContext creates a top-level execution context.
-func NewRootContext(opts RootContextOptions) *ExecutionContext {
+func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 	params := make(map[string]string)
 	for k, v := range opts.Params {
 		params[k] = v
@@ -79,15 +83,17 @@ func NewRootContext(opts RootContextOptions) *ExecutionContext {
 	}
 
 	return &ExecutionContext{
-		Params:            params,
-		SessionIDs:        sessionIDs,
-		CapturedVariables: capturedVars,
-		LastStepOutcome:   nil,
-		NestingPath:       []NestingSegment{},
-		ParentContext:     nil,
-		WorkflowFile:      opts.WorkflowFile,
-		EngineRef:         opts.EngineRef,
-		AuditLogger:       opts.AuditLogger,
+		Params:              params,
+		SessionIDs:          sessionIDs,
+		CapturedVariables:   capturedVars,
+		LastStepOutcome:     nil,
+		NestingPath:         []NestingSegment{},
+		ParentContext:       nil,
+		WorkflowFile:        opts.WorkflowFile,
+		WorkflowName:        opts.WorkflowName,
+		WorkflowDescription: opts.WorkflowDescription,
+		EngineRef:           opts.EngineRef,
+		AuditLogger:         opts.AuditLogger,
 	}
 }
 
@@ -124,16 +130,18 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 	nestingPath[len(parent.NestingPath)] = segment
 
 	return &ExecutionContext{
-		Params:            params,
-		SessionIDs:        sessionIDs,
-		CapturedVariables: make(map[string]string),
-		LastStepOutcome:   nil,
-		LastSessionStepID: parent.LastSessionStepID,
-		NestingPath:       nestingPath,
-		ParentContext:     parent,
-		WorkflowFile:      parent.WorkflowFile,
-		EngineRef:         parent.EngineRef,
-		AuditLogger:       parent.AuditLogger,
+		Params:              params,
+		SessionIDs:          sessionIDs,
+		CapturedVariables:   make(map[string]string),
+		LastStepOutcome:     nil,
+		LastSessionStepID:   parent.LastSessionStepID,
+		NestingPath:         nestingPath,
+		ParentContext:       parent,
+		WorkflowFile:        parent.WorkflowFile,
+		WorkflowName:        parent.WorkflowName,
+		WorkflowDescription: parent.WorkflowDescription,
+		EngineRef:           parent.EngineRef,
+		AuditLogger:         parent.AuditLogger,
 	}
 }
 
@@ -174,15 +182,17 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 	}
 
 	return &ExecutionContext{
-		Params:            params,
-		SessionIDs:        sessionIDs,
-		CapturedVariables: make(map[string]string),
-		LastStepOutcome:   nil,
-		LastSessionStepID: parent.LastSessionStepID,
-		NestingPath:       nestingPath,
-		ParentContext:     parent,
-		WorkflowFile:      opts.WorkflowFile,
-		EngineRef:         engineRef,
-		AuditLogger:       parent.AuditLogger,
+		Params:              params,
+		SessionIDs:          sessionIDs,
+		CapturedVariables:   make(map[string]string),
+		LastStepOutcome:     nil,
+		LastSessionStepID:   parent.LastSessionStepID,
+		NestingPath:         nestingPath,
+		ParentContext:       parent,
+		WorkflowFile:        opts.WorkflowFile,
+		WorkflowName:        parent.WorkflowName,
+		WorkflowDescription: parent.WorkflowDescription,
+		EngineRef:           engineRef,
+		AuditLogger:         parent.AuditLogger,
 	}
 }

@@ -24,7 +24,7 @@ steps:
 		os.WriteFile(childPath, []byte(childYAML), 0o644)
 
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		ctx := model.NewRootContext(model.RootContextOptions{
+		ctx := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: filepath.Join(dir, "parent.yaml"),
 		})
@@ -56,7 +56,7 @@ steps:
 		os.WriteFile(childPath, []byte(childYAML), 0o644)
 
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		ctx := model.NewRootContext(model.RootContextOptions{
+		ctx := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{"greeting": "hi"},
 			WorkflowFile: filepath.Join(dir, "parent.yaml"),
 		})
@@ -94,7 +94,7 @@ steps:
 		os.WriteFile(childPath, []byte(childYAML), 0o644)
 
 		runner := &mockRunner{}
-		ctx := model.NewRootContext(model.RootContextOptions{
+		ctx := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{"parent_secret": "secret"},
 			WorkflowFile: filepath.Join(dir, "parent.yaml"),
 		})
@@ -109,7 +109,7 @@ steps:
 
 	t.Run("errors for missing workflow file", func(t *testing.T) {
 		runner := &mockRunner{}
-		ctx := model.NewRootContext(model.RootContextOptions{
+		ctx := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: "/tmp/parent.yaml",
 		})
@@ -135,7 +135,7 @@ steps:
 		os.WriteFile(childPath, []byte(childYAML), 0o644)
 
 		runner := &mockRunner{}
-		ctx := model.NewRootContext(model.RootContextOptions{
+		ctx := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: filepath.Join(dir, "parent.yaml"),
 		})
@@ -173,7 +173,7 @@ steps:
 
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}, {ExitCode: 0}}}
 		log := &mockLogger{}
-		ctx := model.NewRootContext(model.RootContextOptions{
+		ctx := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: filepath.Join(dir, "parent.yaml"),
 		})
@@ -222,7 +222,7 @@ steps:
 
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		log := &mockLogger{}
-		ctx := model.NewRootContext(model.RootContextOptions{
+		ctx := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: filepath.Join(dir, "parent.yaml"),
 		})

@@ -112,7 +112,7 @@ func TestExecuteAgentStep(t *testing.T) {
 
 	t.Run("interpolates prompt with params", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		ctx := model.NewRootContext(model.RootContextOptions{
+		ctx := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{"task": "build"},
 			WorkflowFile: "test.yaml",
 		})
@@ -401,8 +401,8 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatal("expected --append-system-prompt for interactive claude step")
 		}
 		lastArg := args[len(args)-1]
-		if lastArg != "Let's start" {
-			t.Fatalf("expected 'Let's start' as positional arg, got %q", lastArg)
+		if lastArg != "Let's start the s step" {
+			t.Fatalf("expected 'Let's start the s step' as positional arg, got %q", lastArg)
 		}
 	})
 
@@ -423,12 +423,12 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 		args := ptyCalls[0]
 		lastArg := args[len(args)-1]
-		if !strings.HasPrefix(lastArg, "review code") {
-			t.Fatalf("expected prompt as positional arg for codex without enrichment, got %q", lastArg)
+		if !strings.Contains(lastArg, "review code") {
+			t.Fatalf("expected prompt in positional arg for codex without enrichment, got %q", lastArg)
 		}
-		// Interactive steps include the sentinel instruction appended to the prompt.
+		// Interactive steps include the completion instruction appended to the prompt.
 		if !strings.Contains(lastArg, "red-slippers") {
-			t.Fatalf("expected sentinel instruction in codex interactive prompt, got %q", lastArg)
+			t.Fatalf("expected completion instruction in codex interactive prompt, got %q", lastArg)
 		}
 	})
 
@@ -460,7 +460,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
-	t.Run("interactive step prompt includes sentinel instruction", func(t *testing.T) {
+	t.Run("interactive step prompt includes completion instruction", func(t *testing.T) {
 		var capturedArgs [][]string
 		oldFn := interactiveRunnerFn
 		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
@@ -475,32 +475,126 @@ func TestExecuteAgentStep(t *testing.T) {
 		if len(capturedArgs) == 0 {
 			t.Fatal("expected PTY to be called")
 		}
-		// For Claude interactive, the sentinel goes into --append-system-prompt.
-		// Find the value after --append-system-prompt.
+		// For Claude interactive, the completion instruction goes into --append-system-prompt.
 		args := capturedArgs[0]
 		for i, a := range args {
 			if a == "--append-system-prompt" && i+1 < len(args) {
-				if !strings.Contains(args[i+1], "red-slippers") {
-					t.Fatalf("expected sentinel instruction in system prompt, got %q", args[i+1])
+				sysPrompt := args[i+1]
+				if !strings.Contains(sysPrompt, "red-slippers") {
+					t.Fatalf("expected completion instruction in system prompt, got %q", sysPrompt)
+				}
+				if !strings.Contains(sysPrompt, "you or the user") {
+					t.Fatalf("expected 'you or the user' wording in completion instruction, got %q", sysPrompt)
 				}
 				return
 			}
 		}
-		t.Fatalf("expected --append-system-prompt with sentinel instruction, got %v", args)
+		t.Fatalf("expected --append-system-prompt with completion instruction, got %v", args)
 	})
 
-	t.Run("headless step prompt does not include sentinel instruction", func(t *testing.T) {
+	t.Run("headless step prompt does not include completion instruction", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do the task", Session: model.SessionNew}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if len(runner.calls) == 0 {
 			t.Fatal("expected command to be called")
 		}
-		// The last arg is the prompt for headless.
 		lastArg := runner.calls[0][len(runner.calls[0])-1]
 		if strings.Contains(lastArg, "red-slippers") {
-			t.Fatalf("expected no sentinel instruction in headless prompt, got %q", lastArg)
+			t.Fatalf("expected no completion instruction in headless prompt, got %q", lastArg)
 		}
+	})
+
+	t.Run("interactive step includes step prefix with step ID", func(t *testing.T) {
+		var capturedArgs [][]string
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
+			capturedArgs = append(capturedArgs, args)
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		runner := &mockRunner{}
+		step := model.Step{ID: "my-step", Mode: model.ModeInteractive, Prompt: "do the task", Session: model.SessionNew}
+		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		args := capturedArgs[0]
+		for i, a := range args {
+			if a == "--append-system-prompt" && i+1 < len(args) {
+				sysPrompt := args[i+1]
+				if !strings.Contains(sysPrompt, "my-step") {
+					t.Fatalf("expected step ID in prefix, got %q", sysPrompt)
+				}
+				if !strings.Contains(sysPrompt, "announce that you are starting") {
+					t.Fatalf("expected announcement instruction in prefix, got %q", sysPrompt)
+				}
+				return
+			}
+		}
+		t.Fatalf("expected --append-system-prompt, got %v", args)
+	})
+
+	t.Run("fresh interactive step includes workflow name and description", func(t *testing.T) {
+		var capturedArgs [][]string
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
+			capturedArgs = append(capturedArgs, args)
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		runner := &mockRunner{}
+		step := model.Step{ID: "specs", Mode: model.ModeInteractive, Prompt: "write specs", Session: model.SessionNew}
+		ctx := makeCtx()
+		ctx.WorkflowName = "plan-change"
+		ctx.WorkflowDescription = "Plan a change"
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		args := capturedArgs[0]
+		for i, a := range args {
+			if a == "--append-system-prompt" && i+1 < len(args) {
+				sysPrompt := args[i+1]
+				if !strings.Contains(sysPrompt, "plan-change") {
+					t.Fatalf("expected workflow name in prefix, got %q", sysPrompt)
+				}
+				if !strings.Contains(sysPrompt, "Plan a change") {
+					t.Fatalf("expected workflow description in prefix, got %q", sysPrompt)
+				}
+				return
+			}
+		}
+		t.Fatalf("expected --append-system-prompt, got %v", args)
+	})
+
+	t.Run("resumed interactive step does not include workflow description", func(t *testing.T) {
+		var capturedArgs [][]string
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
+			capturedArgs = append(capturedArgs, args)
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		runner := &mockRunner{}
+		step := model.Step{ID: "specs", Mode: model.ModeInteractive, Prompt: "write specs", Session: model.SessionResume}
+		ctx := makeCtx()
+		ctx.WorkflowName = "plan-change"
+		ctx.WorkflowDescription = "Plan a change"
+		ctx.SessionIDs["specs"] = "existing-session"
+		ctx.LastSessionStepID = "specs"
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		args := capturedArgs[0]
+		for i, a := range args {
+			if a == "--append-system-prompt" && i+1 < len(args) {
+				sysPrompt := args[i+1]
+				if strings.Contains(sysPrompt, "Plan a change") {
+					t.Fatalf("expected no workflow description in resumed step prefix, got %q", sysPrompt)
+				}
+				if !strings.Contains(sysPrompt, "specs") {
+					t.Fatalf("expected step ID in resumed prefix, got %q", sysPrompt)
+				}
+				return
+			}
+		}
+		t.Fatalf("expected --append-system-prompt, got %v", args)
 	})
 }
 
