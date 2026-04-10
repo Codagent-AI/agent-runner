@@ -127,13 +127,27 @@ type runState struct {
 	glob         exec.GlobExpander
 }
 
+// workflowNeedsAgentProfiles returns true if any step in the tree is an agent
+// step (has a Prompt or Agent field), meaning profile configuration is needed.
+func workflowNeedsAgentProfiles(steps []model.Step) bool {
+	for i := range steps {
+		if steps[i].Prompt != "" || steps[i].Agent != "" {
+			return true
+		}
+		if len(steps[i].Steps) > 0 && workflowNeedsAgentProfiles(steps[i].Steps) {
+			return true
+		}
+	}
+	return false
+}
+
 func initRunState(workflow *model.Workflow, params map[string]string, opts *Options) (*runState, error) {
 	if err := validateParams(workflow, params); err != nil {
 		return nil, err
 	}
 
-	// Load agent profiles if not already provided.
-	if opts.ProfileStore == nil {
+	// Load agent profiles if not already provided and the workflow has agent steps.
+	if opts.ProfileStore == nil && workflowNeedsAgentProfiles(workflow.Steps) {
 		cfg, err := config.LoadOrGenerate(".agent-runner/config.yaml")
 		if err != nil {
 			return nil, fmt.Errorf("loading agent profiles: %w", err)
@@ -184,7 +198,7 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		auditEventLogger = auditLogger
 	}
 
-	var profileStore interface{}
+	var profileStore any
 	if opts.ProfileStore != nil {
 		profileStore = opts.ProfileStore
 	}

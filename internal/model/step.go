@@ -174,6 +174,7 @@ func (s *Step) Validate(knownCLIs []string) error {
 
 // validateAgentField checks that the agent field is used correctly:
 // required on session:new agent steps, forbidden on resume/inherit and shell steps.
+// Also rejects unknown session strategy values on agent steps.
 func (s *Step) validateAgentField(isAgent, isShell bool) error {
 	if isAgent {
 		switch s.Session {
@@ -184,6 +185,10 @@ func (s *Step) validateAgentField(isAgent, isShell bool) error {
 		case SessionResume, SessionInherit:
 			if s.Agent != "" {
 				return fmt.Errorf(`"agent" cannot be specified on %s steps`, s.Session)
+			}
+		default:
+			if s.Session != "" {
+				return fmt.Errorf(`invalid session strategy %q (must be new, resume, or inherit)`, s.Session)
 			}
 		}
 	}

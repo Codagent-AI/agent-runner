@@ -159,14 +159,17 @@ func ExecuteAgentStep(
 		ctx.CapturedVariables[step.Capture] = result.Stdout
 	}
 
-	discoveredID := discoverAndStoreSession(adapter, step, ctx, spawnTime, sessionID, headless, result.Stdout, log)
-
-	// Store profile association for new sessions regardless of whether session
-	// discovery succeeded — the profile name is needed by subsequent resume/inherit
-	// steps even if the session ID wasn't discovered.
-	if step.Session == model.SessionNew && step.Agent != "" {
-		ctx.SessionProfiles[step.ID] = step.Agent
+	// For session:new steps, set LastSessionStepID before session discovery so
+	// it is always available for subsequent resume/inherit steps, even if
+	// discovery returns empty (e.g. Codex).
+	if step.Session == model.SessionNew {
+		ctx.LastSessionStepID = step.ID
+		if step.Agent != "" {
+			ctx.SessionProfiles[step.ID] = step.Agent
+		}
 	}
+
+	discoveredID := discoverAndStoreSession(adapter, step, ctx, spawnTime, sessionID, headless, result.Stdout, log)
 
 	emitAgentEnd(ctx, prefix, startTime, discoveredID, outcome)
 

@@ -50,6 +50,11 @@ var validDefaultMode = map[string]bool{
 	"headless":    true,
 }
 
+var validCLI = map[string]bool{
+	"claude": true,
+	"codex":  true,
+}
+
 // LoadOrGenerate loads the config file at path. If the file does not exist,
 // it writes a default config and returns that. After loading, all profiles
 // are validated.
@@ -131,6 +136,10 @@ func (c *Config) Resolve(name string) (*ResolvedProfile, error) {
 
 // validate checks all profiles for completeness and correctness.
 func (c *Config) validate() error {
+	if len(c.Profiles) == 0 {
+		return fmt.Errorf("config must define at least one profile")
+	}
+
 	for name, p := range c.Profiles {
 		if p == nil {
 			return fmt.Errorf("profile %q: must not be empty", name)
@@ -158,6 +167,9 @@ func (c *Config) validate() error {
 		}
 		if p.Effort != "" && !validEffort[p.Effort] {
 			return fmt.Errorf("profile %q: invalid effort %q (must be low, medium, or high)", name, p.Effort)
+		}
+		if p.CLI != "" && !validCLI[p.CLI] {
+			return fmt.Errorf("profile %q: invalid cli %q (must be claude or codex)", name, p.CLI)
 		}
 	}
 

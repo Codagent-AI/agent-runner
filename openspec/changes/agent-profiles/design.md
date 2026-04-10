@@ -21,7 +21,7 @@ This design introduces named agent profiles loaded from a project-level config f
 
 ## Approach
 
-```
+```text
 .agent-runner/config.yaml          internal/config/
 +-----------------------+          +----------------------+
 | profiles:             |  load    | Config struct        |
@@ -138,7 +138,7 @@ All 5 workflow files updated mechanically:
 | Breaking all workflow files at once | Mechanical transformation. Existing test infrastructure covers workflow loading and execution. |
 | `SessionProfiles` not persisted on crash | `writeStepState` already persists after every step. Add `SessionProfiles` to the state struct alongside `SessionIDs`. |
 | Config auto-generation creates file user didn't ask for | File is small, well-commented, only created when missing. Users can delete and it regenerates. |
-| `ProfileStore` as `interface{}` in ExecutionContext | Follows existing `EngineRef` pattern. Type assertion at usage site. Could be improved later with a shared interface package. |
+| `ProfileStore` as `interface{}` in ExecutionContext | This follows the existing `EngineRef` pattern. Type assertions are done at usage sites, and this can be improved later with a shared interface package. |
 
 ## Migration Plan
 
