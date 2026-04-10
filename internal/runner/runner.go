@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/engine"
 	"github.com/codagent/agent-runner/internal/exec"
 	"github.com/codagent/agent-runner/internal/flowctl"
@@ -32,7 +33,9 @@ type Options struct {
 	WorkflowFile      string
 	SessionDir        string // Override session directory (for testing); computed automatically if empty.
 	Engine            engine.Engine
+	ProfileStore      *config.Config
 	SessionIDs        map[string]string
+	SessionProfiles   map[string]string
 	CapturedVariables map[string]string
 	LastSessionStepID string
 	ChildState        *model.SubWorkflowChildState
@@ -129,6 +132,15 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		return nil, err
 	}
 
+	// Load agent profiles if not already provided.
+	if opts.ProfileStore == nil {
+		cfg, err := config.LoadOrGenerate(".agent-runner/config.yaml")
+		if err != nil {
+			return nil, fmt.Errorf("loading agent profiles: %w", err)
+		}
+		opts.ProfileStore = cfg
+	}
+
 	if opts.Engine != nil {
 		if err := opts.Engine.ValidateWorkflow(workflow, params, opts.WorkflowFile); err != nil {
 			return nil, err
@@ -172,13 +184,20 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		auditEventLogger = auditLogger
 	}
 
+	var profileStore interface{}
+	if opts.ProfileStore != nil {
+		profileStore = opts.ProfileStore
+	}
+
 	ctx := model.NewRootContext(&model.RootContextOptions{
 		Params:              params,
 		WorkflowFile:        opts.WorkflowFile,
 		WorkflowName:        workflow.Name,
 		WorkflowDescription: workflow.Description,
 		EngineRef:           engineRef,
+		ProfileStore:        profileStore,
 		SessionIDs:          opts.SessionIDs,
+		SessionProfiles:     opts.SessionProfiles,
 		CapturedVariables:   opts.CapturedVariables,
 		AuditLogger:         auditEventLogger,
 	})
@@ -383,6 +402,7 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 	nested := &model.NestedStepState{
 		StepID:            step.ID,
 		SessionIDs:        copyMap(ctx.SessionIDs),
+		SessionProfiles:   copyMap(ctx.SessionProfiles),
 		CapturedVariables: copyMap(ctx.CapturedVariables),
 		LastSessionStepID: ctx.LastSessionStepID,
 		Completed:         completed,
@@ -406,6 +426,7 @@ func toNestedStepState(child *model.SubWorkflowChildState) *model.NestedStepStat
 	return &model.NestedStepState{
 		StepID:            child.StepID,
 		SessionIDs:        copyMap(child.SessionIDs),
+		SessionProfiles:   copyMap(child.SessionProfiles),
 		CapturedVariables: copyMap(child.CapturedVariables),
 		Completed:         child.Completed,
 		Child:             toNestedStepState(child.Child),

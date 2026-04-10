@@ -12,8 +12,6 @@ steps:
       as: task_file
     steps:
       - id: echo-file
-        mode: shell
         command: echo "found:{{task_file}}"
   - id: done
-    mode: shell
     command: echo "interpolation-done"

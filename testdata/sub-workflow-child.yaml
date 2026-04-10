@@ -2,5 +2,4 @@ name: sub-workflow-child
 description: "Simple child workflow for testing"
 steps:
   - id: child-echo
-    mode: shell
     command: echo "child-executed"

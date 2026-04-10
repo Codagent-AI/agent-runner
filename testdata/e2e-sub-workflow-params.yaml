@@ -7,5 +7,4 @@ steps:
       msg: "hello-from-parent"
 
   - id: after-sub
-    mode: shell
     command: echo "parent-after-sub"

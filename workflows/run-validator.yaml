@@ -7,7 +7,6 @@ steps:
       max: 3
     steps:
       - id: run-validator
-        mode: shell
         command: agent-validator run --report --enable-review task-compliance
         capture: validator_output
         capture_stderr: true
@@ -15,7 +14,6 @@ steps:
         break_if: success
 
       - id: fix-violations
-        mode: headless
         session: inherit
         prompt: |
           The validator found failures. Fix them.

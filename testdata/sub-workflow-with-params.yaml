@@ -5,5 +5,4 @@ params:
     required: true
 steps:
   - id: echo-param
-    mode: shell
     command: echo "param:{{msg}}"

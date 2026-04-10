@@ -51,7 +51,7 @@ func (l *mockLog) Errorf(format string, args ...any) {
 }
 
 func shellStep(id, cmd string) model.Step {
-	return model.Step{ID: id, Mode: model.ModeShell, Command: cmd, Session: model.SessionNew}
+	return model.Step{ID: id, Command: cmd, Session: model.SessionNew}
 }
 
 func TestRunWorkflow(t *testing.T) {
@@ -129,7 +129,7 @@ func TestRunWorkflow(t *testing.T) {
 		w := model.Workflow{
 			Name: "test",
 			Steps: []model.Step{
-				{ID: "s1", Mode: model.ModeShell, Command: "false", Session: model.SessionNew, ContinueOnFailure: true},
+				{ID: "s1", Command: "false", Session: model.SessionNew, ContinueOnFailure: true},
 				shellStep("s2", "echo yes"),
 			},
 		}
@@ -154,7 +154,7 @@ func TestRunWorkflow(t *testing.T) {
 			Name: "test",
 			Steps: []model.Step{
 				shellStep("s1", "echo ok"),
-				{ID: "s2", Mode: model.ModeShell, Command: "echo skip me", Session: model.SessionNew, SkipIf: "previous_success"},
+				{ID: "s2", Command: "echo skip me", Session: model.SessionNew, SkipIf: "previous_success"},
 			},
 		}
 		w.ApplyDefaults()

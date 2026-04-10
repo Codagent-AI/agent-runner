@@ -18,16 +18,13 @@ steps:
           task_file: "{{task_file}}"
 
   - id: archive
-    mode: shell
     command: openspec archive "{{change_name}}" --yes
 
   - id: archive-verify
-    mode: shell
     command: agent-validator skip
 
   - id: finalize
-    mode: headless
-    session: resume
+    agent: headless_base
     prompt: |
       Help the user finalize the PR.
       You MUST use the codagent:finalize-pr skill.

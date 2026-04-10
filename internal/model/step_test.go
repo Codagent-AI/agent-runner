@@ -9,7 +9,7 @@ func intPtr(n int) *int { return &n }
 
 func TestStepSchema(t *testing.T) {
 	t.Run("accepts a valid shell step with command", func(t *testing.T) {
-		s := Step{ID: "build", Mode: ModeShell, Command: "echo hi", Session: SessionNew}
+		s := Step{ID: "build", Command: "echo hi", Session: SessionNew}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -18,30 +18,40 @@ func TestStepSchema(t *testing.T) {
 		}
 	})
 
-	t.Run("accepts a valid agent step with prompt", func(t *testing.T) {
-		s := Step{ID: "review", Mode: ModeInteractive, Prompt: "Review code", Session: SessionNew}
+	t.Run("accepts a valid agent step with prompt and agent", func(t *testing.T) {
+		s := Step{ID: "review", Agent: "interactive_base", Mode: ModeInteractive, Prompt: "Review code", Session: SessionNew}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
-	t.Run("accepts a headless agent step", func(t *testing.T) {
+	t.Run("accepts a headless agent step with resume", func(t *testing.T) {
 		s := Step{ID: "impl", Mode: ModeHeadless, Prompt: "Implement", Session: SessionResume}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
-	t.Run("defaults session to new", func(t *testing.T) {
-		s := Step{ID: "build", Mode: ModeShell, Command: "echo hi"}
-		s.ApplyDefaults()
-		if s.Session != SessionNew {
-			t.Fatalf("expected session 'new', got %q", s.Session)
+	t.Run("workflow defaults first agentic step to session new", func(t *testing.T) {
+		w := Workflow{
+			Name: "test",
+			Steps: []Step{
+				{ID: "s1", Command: "echo hi"},
+				{ID: "s2", Agent: "headless_base", Prompt: "do it"},
+				{ID: "s3", Prompt: "continue"},
+			},
+		}
+		w.ApplyDefaults()
+		if w.Steps[1].Session != SessionNew {
+			t.Fatalf("expected first agentic step session 'new', got %q", w.Steps[1].Session)
+		}
+		if w.Steps[2].Session != SessionResume {
+			t.Fatalf("expected second agentic step session 'resume', got %q", w.Steps[2].Session)
 		}
 	})
 
-	t.Run("rejects shell step without command", func(t *testing.T) {
-		s := Step{ID: "bad", Mode: ModeShell, Session: SessionNew}
+	t.Run("rejects step with no type", func(t *testing.T) {
+		s := Step{ID: "bad", Session: SessionNew}
 		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
@@ -49,7 +59,7 @@ func TestStepSchema(t *testing.T) {
 	})
 
 	t.Run("rejects agent step without prompt", func(t *testing.T) {
-		s := Step{ID: "bad", Mode: ModeInteractive, Session: SessionNew}
+		s := Step{ID: "bad", Agent: "headless_base", Session: SessionNew}
 		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
@@ -57,7 +67,18 @@ func TestStepSchema(t *testing.T) {
 	})
 
 	t.Run("rejects invalid mode", func(t *testing.T) {
-		s := Step{ID: "bad", Mode: "invalid", Prompt: "hi", Session: SessionNew}
+		s := Step{ID: "bad", Mode: "invalid", Prompt: "hi", Agent: "headless_base", Session: SessionNew}
+		err := s.Validate(nil)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "invalid mode") {
+			t.Fatalf("expected 'invalid mode' error, got: %v", err)
+		}
+	})
+
+	t.Run("rejects mode shell as invalid", func(t *testing.T) {
+		s := Step{ID: "bad", Mode: "shell", Prompt: "hi", Agent: "headless_base", Session: SessionNew}
 		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
@@ -93,18 +114,7 @@ func TestStepSchema(t *testing.T) {
 	})
 
 	t.Run("rejects workflow step with prompt", func(t *testing.T) {
-		s := Step{ID: "bad", Workflow: "child.yaml", Prompt: "hi", Session: SessionNew}
-		err := s.Validate(nil)
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if !strings.Contains(err.Error(), "exactly one") {
-			t.Fatalf("expected 'exactly one' error, got: %v", err)
-		}
-	})
-
-	t.Run("rejects workflow step with mode", func(t *testing.T) {
-		s := Step{ID: "bad", Workflow: "child.yaml", Mode: ModeHeadless, Session: SessionNew}
+		s := Step{ID: "bad", Workflow: "child.yaml", Prompt: "hi", Agent: "headless_base", Session: SessionNew}
 		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
@@ -124,21 +134,21 @@ func TestStepSchemaExtensions(t *testing.T) {
 	})
 
 	t.Run("accepts a shell step with capture field", func(t *testing.T) {
-		s := Step{ID: "s", Mode: ModeShell, Command: "echo hi", Session: SessionNew, Capture: "output"}
+		s := Step{ID: "s", Command: "echo hi", Session: SessionNew, Capture: "output"}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("accepts capture on a headless step", func(t *testing.T) {
-		s := Step{ID: "s", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, Capture: "output"}
+		s := Step{ID: "s", Agent: "headless_base", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, Capture: "output"}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("rejects capture on an interactive step", func(t *testing.T) {
-		s := Step{ID: "s", Mode: ModeInteractive, Prompt: "p", Session: SessionNew, Capture: "output"}
+		s := Step{ID: "s", Agent: "interactive_base", Mode: ModeInteractive, Prompt: "p", Session: SessionNew, Capture: "output"}
 		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
@@ -149,21 +159,21 @@ func TestStepSchemaExtensions(t *testing.T) {
 	})
 
 	t.Run("accepts continue_on_failure on a shell step", func(t *testing.T) {
-		s := Step{ID: "s", Mode: ModeShell, Command: "echo", Session: SessionNew, ContinueOnFailure: true}
+		s := Step{ID: "s", Command: "echo", Session: SessionNew, ContinueOnFailure: true}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("accepts skip_if with value previous_success", func(t *testing.T) {
-		s := Step{ID: "s", Mode: ModeShell, Command: "echo", Session: SessionNew, SkipIf: "previous_success"}
+		s := Step{ID: "s", Command: "echo", Session: SessionNew, SkipIf: "previous_success"}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("rejects skip_if with invalid value", func(t *testing.T) {
-		s := Step{ID: "s", Mode: ModeShell, Command: "echo", Session: SessionNew, SkipIf: "always"}
+		s := Step{ID: "s", Command: "echo", Session: SessionNew, SkipIf: "always"}
 		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
@@ -171,28 +181,28 @@ func TestStepSchemaExtensions(t *testing.T) {
 	})
 
 	t.Run("accepts break_if with value success", func(t *testing.T) {
-		s := Step{ID: "s", Mode: ModeShell, Command: "echo", Session: SessionNew, BreakIf: "success"}
+		s := Step{ID: "s", Command: "echo", Session: SessionNew, BreakIf: "success"}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("accepts break_if with value failure", func(t *testing.T) {
-		s := Step{ID: "s", Mode: ModeShell, Command: "echo", Session: SessionNew, BreakIf: "failure"}
+		s := Step{ID: "s", Command: "echo", Session: SessionNew, BreakIf: "failure"}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("accepts model on an agent step", func(t *testing.T) {
-		s := Step{ID: "s", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, Model: "opus"}
+		s := Step{ID: "s", Agent: "headless_base", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, Model: "opus"}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("rejects model on a shell step", func(t *testing.T) {
-		s := Step{ID: "s", Mode: ModeShell, Command: "echo", Session: SessionNew, Model: "opus"}
+		s := Step{ID: "s", Command: "echo", Session: SessionNew, Model: "opus"}
 		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
@@ -206,8 +216,8 @@ func TestStepSchemaExtensions(t *testing.T) {
 		s := Step{
 			ID: "g", Session: SessionNew,
 			Steps: []Step{
-				{ID: "a", Mode: ModeShell, Command: "echo a", Session: SessionNew},
-				{ID: "b", Mode: ModeShell, Command: "echo b", Session: SessionNew},
+				{ID: "a", Command: "echo a", Session: SessionNew},
+				{ID: "b", Command: "echo b", Session: SessionNew},
 			},
 		}
 		if err := s.Validate(nil); err != nil {
@@ -219,7 +229,7 @@ func TestStepSchemaExtensions(t *testing.T) {
 		s := Step{
 			ID: "l", Session: SessionNew,
 			Loop:  &Loop{Max: intPtr(3)},
-			Steps: []Step{{ID: "a", Mode: ModeShell, Command: "echo", Session: SessionNew}},
+			Steps: []Step{{ID: "a", Command: "echo", Session: SessionNew}},
 		}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -230,7 +240,7 @@ func TestStepSchemaExtensions(t *testing.T) {
 		s := Step{
 			ID: "l", Session: SessionNew,
 			Loop:  &Loop{Over: "task_files", As: "task_file"},
-			Steps: []Step{{ID: "a", Mode: ModeShell, Command: "echo", Session: SessionNew}},
+			Steps: []Step{{ID: "a", Command: "echo", Session: SessionNew}},
 		}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -241,7 +251,7 @@ func TestStepSchemaExtensions(t *testing.T) {
 		s := Step{
 			ID: "l", Session: SessionNew,
 			Loop:  &Loop{},
-			Steps: []Step{{ID: "a", Mode: ModeShell, Command: "echo", Session: SessionNew}},
+			Steps: []Step{{ID: "a", Command: "echo", Session: SessionNew}},
 		}
 		err := s.Validate(nil)
 		if err == nil {
@@ -264,7 +274,7 @@ func TestStepSchemaExtensions(t *testing.T) {
 	})
 
 	t.Run("rejects step with both command and prompt", func(t *testing.T) {
-		s := Step{ID: "bad", Mode: ModeShell, Command: "echo", Prompt: "hi", Session: SessionNew}
+		s := Step{ID: "bad", Command: "echo", Prompt: "hi", Session: SessionNew}
 		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
@@ -321,7 +331,7 @@ func TestWorkflowSchema(t *testing.T) {
 			Description: "A test workflow",
 			Params:      []Param{{Name: "file"}},
 			Steps: []Step{
-				{ID: "build", Mode: ModeShell, Command: "echo hi", Session: SessionNew},
+				{ID: "build", Command: "echo hi", Session: SessionNew},
 			},
 		}
 		w.ApplyDefaults()
@@ -333,7 +343,7 @@ func TestWorkflowSchema(t *testing.T) {
 	t.Run("applies defaults and empty params", func(t *testing.T) {
 		w := Workflow{
 			Name:  "test",
-			Steps: []Step{{ID: "s", Mode: ModeShell, Command: "echo", Session: SessionNew}},
+			Steps: []Step{{ID: "s", Command: "echo", Session: SessionNew}},
 		}
 		w.ApplyDefaults()
 		if w.Params == nil || len(w.Params) != 0 {
@@ -351,7 +361,7 @@ func TestWorkflowSchema(t *testing.T) {
 	})
 
 	t.Run("rejects workflow without name", func(t *testing.T) {
-		w := Workflow{Steps: []Step{{ID: "s", Mode: ModeShell, Command: "echo", Session: SessionNew}}}
+		w := Workflow{Steps: []Step{{ID: "s", Command: "echo", Session: SessionNew}}}
 		w.ApplyDefaults()
 		err := w.Validate(nil)
 		if err == nil {
@@ -362,7 +372,7 @@ func TestWorkflowSchema(t *testing.T) {
 	t.Run("accepts workflow with engine block", func(t *testing.T) {
 		w := Workflow{
 			Name:   "test",
-			Steps:  []Step{{ID: "s", Mode: ModeShell, Command: "echo", Session: SessionNew}},
+			Steps:  []Step{{ID: "s", Command: "echo", Session: SessionNew}},
 			Engine: &EngineConfig{Type: "openspec"},
 		}
 		w.ApplyDefaults()
@@ -374,7 +384,7 @@ func TestWorkflowSchema(t *testing.T) {
 	t.Run("accepts workflow without engine block", func(t *testing.T) {
 		w := Workflow{
 			Name:  "test",
-			Steps: []Step{{ID: "s", Mode: ModeShell, Command: "echo", Session: SessionNew}},
+			Steps: []Step{{ID: "s", Command: "echo", Session: SessionNew}},
 		}
 		w.ApplyDefaults()
 		if err := w.Validate(nil); err != nil {
@@ -388,7 +398,7 @@ func TestWorkflowSchema(t *testing.T) {
 	t.Run("rejects engine block missing type", func(t *testing.T) {
 		w := Workflow{
 			Name:   "test",
-			Steps:  []Step{{ID: "s", Mode: ModeShell, Command: "echo", Session: SessionNew}},
+			Steps:  []Step{{ID: "s", Command: "echo", Session: SessionNew}},
 			Engine: &EngineConfig{},
 		}
 		w.ApplyDefaults()
@@ -404,7 +414,7 @@ func TestWorkflowSchema(t *testing.T) {
 			Steps: []Step{{
 				ID: "l", Session: SessionNew,
 				Loop:  &Loop{Max: intPtr(3)},
-				Steps: []Step{{ID: "a", Mode: ModeShell, Command: "echo", Session: SessionNew}},
+				Steps: []Step{{ID: "a", Command: "echo", Session: SessionNew}},
 			}},
 		}
 		w.ApplyDefaults()
@@ -430,8 +440,8 @@ func TestWorkflowSchema(t *testing.T) {
 			Steps: []Step{{
 				ID: "g", Session: SessionNew,
 				Steps: []Step{
-					{ID: "a", Mode: ModeShell, Command: "echo a", Session: SessionNew},
-					{ID: "b", Mode: ModeShell, Command: "echo b", Session: SessionNew},
+					{ID: "a", Command: "echo a", Session: SessionNew},
+					{ID: "b", Command: "echo b", Session: SessionNew},
 				},
 			}},
 		}
@@ -446,21 +456,21 @@ func TestCLIValidation(t *testing.T) {
 	knownCLIs := []string{"claude", "codex"}
 
 	t.Run("accepts cli on an agent step", func(t *testing.T) {
-		s := Step{ID: "s", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, CLI: "codex"}
+		s := Step{ID: "s", Agent: "headless_base", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, CLI: "codex"}
 		if err := s.Validate(knownCLIs); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("accepts cli on an interactive step", func(t *testing.T) {
-		s := Step{ID: "s", Mode: ModeInteractive, Prompt: "p", Session: SessionNew, CLI: "claude"}
+		s := Step{ID: "s", Agent: "interactive_base", Mode: ModeInteractive, Prompt: "p", Session: SessionNew, CLI: "claude"}
 		if err := s.Validate(knownCLIs); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("rejects cli on a shell step", func(t *testing.T) {
-		s := Step{ID: "s", Mode: ModeShell, Command: "echo", Session: SessionNew, CLI: "claude"}
+		s := Step{ID: "s", Command: "echo", Session: SessionNew, CLI: "claude"}
 		err := s.Validate(knownCLIs)
 		if err == nil {
 			t.Fatal("expected error")
@@ -471,7 +481,7 @@ func TestCLIValidation(t *testing.T) {
 	})
 
 	t.Run("rejects unknown cli value", func(t *testing.T) {
-		s := Step{ID: "s", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, CLI: "unknown-cli"}
+		s := Step{ID: "s", Agent: "headless_base", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, CLI: "unknown-cli"}
 		err := s.Validate(knownCLIs)
 		if err == nil {
 			t.Fatal("expected error")
@@ -482,14 +492,14 @@ func TestCLIValidation(t *testing.T) {
 	})
 
 	t.Run("skips cli name validation when knownCLIs is nil", func(t *testing.T) {
-		s := Step{ID: "s", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, CLI: "anything"}
+		s := Step{ID: "s", Agent: "headless_base", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, CLI: "anything"}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("accepts step with no cli field", func(t *testing.T) {
-		s := Step{ID: "s", Mode: ModeHeadless, Prompt: "p", Session: SessionNew}
+		s := Step{ID: "s", Agent: "headless_base", Mode: ModeHeadless, Prompt: "p", Session: SessionNew}
 		if err := s.Validate(knownCLIs); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

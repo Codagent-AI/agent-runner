@@ -37,6 +37,7 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
 	// Resolve the step to resume from
 	var fromStep string
 	var sessionIDs map[string]string
+	var sessionProfiles map[string]string
 	var capturedVars map[string]string
 	var lastSessionStepID string
 	var childState *model.SubWorkflowChildState
@@ -47,6 +48,7 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
 		nested := state.CurrentStep.Nested
 		fromStep = nested.StepID
 		sessionIDs = nested.SessionIDs
+		sessionProfiles = nested.SessionProfiles
 		capturedVars = nested.CapturedVariables
 		lastSessionStepID = nested.LastSessionStepID
 		completed = nested.Completed
@@ -86,6 +88,7 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
 		SessionDir:        filepath.Dir(stateFilePath),
 		Engine:            eng,
 		SessionIDs:        sessionIDs,
+		SessionProfiles:   sessionProfiles,
 		CapturedVariables: capturedVars,
 		LastSessionStepID: lastSessionStepID,
 		ChildState:        childState,
@@ -102,6 +105,7 @@ func nestedToChildState(nested *model.NestedStepState) *model.SubWorkflowChildSt
 	return &model.SubWorkflowChildState{
 		StepID:            nested.StepID,
 		SessionIDs:        copyMap(nested.SessionIDs),
+		SessionProfiles:   copyMap(nested.SessionProfiles),
 		CapturedVariables: copyMap(nested.CapturedVariables),
 		Completed:         nested.Completed,
 		Child:             nestedToChildState(nested.Child),

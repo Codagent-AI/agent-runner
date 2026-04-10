@@ -13,7 +13,6 @@ type StepMode string
 const (
 	ModeInteractive StepMode = "interactive"
 	ModeHeadless    StepMode = "headless"
-	ModeShell       StepMode = "shell"
 )
 
 // SessionStrategy defines how an agent session is managed.
@@ -64,6 +63,7 @@ type Step struct {
 	ID                string            `yaml:"id" json:"id"`
 	Prompt            string            `yaml:"prompt,omitempty" json:"prompt,omitempty"`
 	Command           string            `yaml:"command,omitempty" json:"command,omitempty"`
+	Agent             string            `yaml:"agent,omitempty" json:"agent,omitempty"`
 	Mode              StepMode          `yaml:"mode,omitempty" json:"mode,omitempty"`
 	Session           SessionStrategy   `yaml:"session,omitempty" json:"session,omitempty"`
 	CLI               string            `yaml:"cli,omitempty" json:"cli,omitempty"`
@@ -81,10 +81,9 @@ type Step struct {
 }
 
 // ApplyDefaults sets default values for fields that were not specified.
+// For individual steps; see Workflow.ApplyDefaults for session strategy defaults.
 func (s *Step) ApplyDefaults() {
-	if s.Session == "" {
-		s.Session = SessionNew
-	}
+	// No-op for individual steps. Session defaults are applied at the workflow level.
 }
 
 // StepType returns the classification of this step based on which fields are set.
@@ -92,7 +91,7 @@ func (s *Step) StepType() string {
 	if s.Command != "" {
 		return "shell"
 	}
-	if s.Prompt != "" || s.Mode == ModeInteractive || s.Mode == ModeHeadless {
+	if s.Prompt != "" || s.Agent != "" {
 		return "agent"
 	}
 	if s.Loop != nil && len(s.Steps) > 0 {
@@ -109,7 +108,7 @@ func (s *Step) StepType() string {
 
 func hasExactlyOneStepType(s *Step) bool {
 	isShell := s.Command != ""
-	isAgent := s.Prompt != "" || s.Mode == ModeInteractive || s.Mode == ModeHeadless
+	isAgent := s.Prompt != "" || s.Agent != ""
 	isLoop := s.Loop != nil && len(s.Steps) > 0
 	isSubWorkflow := s.Workflow != ""
 	isGroup := s.Loop == nil && len(s.Steps) > 0
@@ -124,15 +123,12 @@ func hasExactlyOneStepType(s *Step) bool {
 }
 
 // isAgentContext returns true if the step is an agent step (has a prompt or
-// an agent mode), as opposed to a shell, loop, sub-workflow, or group step.
+// an agent field), as opposed to a shell, loop, sub-workflow, or group step.
 func (s *Step) isAgentContext() bool {
-	return s.Mode == ModeInteractive || s.Mode == ModeHeadless || s.Prompt != ""
+	return s.Prompt != "" || s.Agent != ""
 }
 
-func validateAgentOnlyField(fieldName string, mode StepMode, isAgent bool) error {
-	if mode == ModeShell {
-		return fmt.Errorf(`%q is only allowed on agent steps`, fieldName)
-	}
+func validateAgentOnlyField(fieldName string, isAgent bool) error {
 	if !isAgent {
 		return fmt.Errorf(`%q is only allowed on agent steps`, fieldName)
 	}
@@ -168,7 +164,6 @@ func (s *Step) Validate(knownCLIs []string) error {
 	}
 
 	for i := range s.Steps {
-		s.Steps[i].ApplyDefaults()
 		if err := s.Steps[i].Validate(knownCLIs); err != nil {
 			return fmt.Errorf("steps[%d]: %w", i, err)
 		}
@@ -178,38 +173,57 @@ func (s *Step) Validate(knownCLIs []string) error {
 }
 
 func (s *Step) validateFieldConstraints(knownCLIs []string) error {
-	if s.Mode == ModeShell && s.Command == "" {
-		return fmt.Errorf(`shell steps require "command", agent steps require "prompt"`)
-	}
-	if (s.Mode == ModeInteractive || s.Mode == ModeHeadless) && s.Prompt == "" {
-		return fmt.Errorf(`shell steps require "command", agent steps require "prompt"`)
+	isAgent := s.isAgentContext()
+	isShell := s.Command != ""
+
+	// Agent steps must have a prompt.
+	if isAgent && s.Prompt == "" {
+		return fmt.Errorf(`agent steps require "prompt"`)
 	}
 
-	if s.Capture != "" && s.Mode != ModeShell && s.Mode != ModeHeadless && s.Command == "" {
+	// Agent field validation: required on new-session agent steps, forbidden elsewhere.
+	if isAgent {
+		switch s.Session {
+		case SessionNew:
+			if s.Agent == "" {
+				return fmt.Errorf(`"agent" is required on agent steps with session "new"`)
+			}
+		case SessionResume, SessionInherit:
+			if s.Agent != "" {
+				return fmt.Errorf(`"agent" cannot be specified on %s steps`, s.Session)
+			}
+		}
+	}
+	if isShell && s.Agent != "" {
+		return fmt.Errorf(`"agent" is not valid on shell steps`)
+	}
+
+	if s.Capture != "" && !isShell && s.Mode != ModeHeadless && !isAgent {
+		return fmt.Errorf(`"capture" is only allowed on shell and headless steps`)
+	}
+	if s.Capture != "" && isAgent && s.Mode != ModeHeadless {
 		return fmt.Errorf(`"capture" is only allowed on shell and headless steps`)
 	}
 
 	if s.CaptureStderr && s.Capture == "" {
 		return fmt.Errorf(`"capture_stderr" requires "capture"`)
 	}
-	if s.CaptureStderr && s.Command == "" {
+	if s.CaptureStderr && !isShell {
 		return fmt.Errorf(`"capture_stderr" is only allowed on shell steps`)
 	}
 
-	if s.Workdir != "" && s.Command == "" && !s.isAgentContext() {
+	if s.Workdir != "" && !isShell && !isAgent {
 		return fmt.Errorf(`"workdir" is only allowed on shell and agent steps`)
 	}
 
-	isAgent := s.isAgentContext()
-
 	if s.Model != "" {
-		if err := validateAgentOnlyField("model", s.Mode, isAgent); err != nil {
+		if err := validateAgentOnlyField("model", isAgent); err != nil {
 			return err
 		}
 	}
 
 	if s.CLI != "" {
-		if err := validateAgentOnlyField("cli", s.Mode, isAgent); err != nil {
+		if err := validateAgentOnlyField("cli", isAgent); err != nil {
 			return err
 		}
 		if err := validateCLIName(s.CLI, knownCLIs); err != nil {
@@ -233,7 +247,7 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 		return fmt.Errorf(`invalid break_if value: %q`, s.BreakIf)
 	}
 
-	if s.Mode != "" && s.Mode != ModeShell && s.Mode != ModeInteractive && s.Mode != ModeHeadless {
+	if s.Mode != "" && s.Mode != ModeInteractive && s.Mode != ModeHeadless {
 		return fmt.Errorf(`invalid mode: %q`, s.Mode)
 	}
 
@@ -271,12 +285,38 @@ type Workflow struct {
 }
 
 // ApplyDefaults sets default values for Workflow fields.
+// For agent steps, the first agentic step (one with a prompt) defaults to
+// session: new; all subsequent agentic steps default to session: resume.
+// Explicit session values are never overwritten.
 func (w *Workflow) ApplyDefaults() {
 	if w.Params == nil {
 		w.Params = []Param{}
 	}
-	for i := range w.Steps {
-		w.Steps[i].ApplyDefaults()
+	seenFirstAgentic := false
+	applyStepDefaults(w.Steps, &seenFirstAgentic)
+}
+
+// applyStepDefaults recursively applies session strategy defaults.
+func applyStepDefaults(steps []Step, seenFirstAgentic *bool) {
+	for i := range steps {
+		s := &steps[i]
+		isAgentic := s.Prompt != "" || s.Agent != ""
+		if isAgentic && s.Session == "" {
+			if !*seenFirstAgentic {
+				s.Session = SessionNew
+				*seenFirstAgentic = true
+			} else {
+				s.Session = SessionResume
+			}
+		} else if isAgentic && s.Session != "" {
+			if !*seenFirstAgentic {
+				*seenFirstAgentic = true
+			}
+		}
+		// Recurse into nested steps (groups/loops).
+		if len(s.Steps) > 0 {
+			applyStepDefaults(s.Steps, seenFirstAgentic)
+		}
 	}
 }
 

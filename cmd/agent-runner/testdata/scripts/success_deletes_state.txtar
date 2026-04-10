@@ -7,5 +7,4 @@ exec find .agent-runner -name state.json
 name: e2e-success
 steps:
   - id: only
-    mode: shell
     command: echo ok

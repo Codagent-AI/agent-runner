@@ -5,5 +5,4 @@ steps:
     workflow: sub-workflow-captures.yaml
 
   - id: try-use-sub-capture
-    mode: shell
     command: echo "leaked:{{sub_capture}}"
