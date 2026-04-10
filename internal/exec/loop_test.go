@@ -15,7 +15,7 @@ func TestExecuteLoopStep(t *testing.T) {
 		step := model.Step{
 			ID: "loop", Session: model.SessionNew,
 			Loop:  &model.Loop{Max: intPtr(3)},
-			Steps: []model.Step{{ID: "a", Mode: model.ModeShell, Command: "echo", Session: model.SessionNew}},
+			Steps: []model.Step{{ID: "a", Command: "echo", Session: model.SessionNew}},
 		}
 		result, err := ExecuteLoopStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{}, LoopExecuteOptions{})
 		if err != nil {
@@ -35,7 +35,7 @@ func TestExecuteLoopStep(t *testing.T) {
 			ID: "loop", Session: model.SessionNew,
 			Loop: &model.Loop{Max: intPtr(5)},
 			Steps: []model.Step{{
-				ID: "a", Mode: model.ModeShell, Command: "echo", Session: model.SessionNew,
+				ID: "a", Command: "echo", Session: model.SessionNew,
 				BreakIf: "success",
 			}},
 		}
@@ -53,7 +53,7 @@ func TestExecuteLoopStep(t *testing.T) {
 		step := model.Step{
 			ID: "loop", Session: model.SessionNew,
 			Loop:  &model.Loop{Max: intPtr(3)},
-			Steps: []model.Step{{ID: "a", Mode: model.ModeShell, Command: "false", Session: model.SessionNew}},
+			Steps: []model.Step{{ID: "a", Command: "false", Session: model.SessionNew}},
 		}
 		result, _ := ExecuteLoopStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{}, LoopExecuteOptions{})
 		if result.Outcome != OutcomeFailed {
@@ -67,7 +67,7 @@ func TestExecuteLoopStep(t *testing.T) {
 		step := model.Step{
 			ID: "loop", Session: model.SessionNew,
 			Loop:  &model.Loop{Over: "*.go", As: "file"},
-			Steps: []model.Step{{ID: "process", Mode: model.ModeShell, Command: "echo {{file}}", Session: model.SessionNew}},
+			Steps: []model.Step{{ID: "process", Command: "echo {{file}}", Session: model.SessionNew}},
 		}
 		result, err := ExecuteLoopStep(&step, makeCtx(), runner, glob, &mockLogger{}, LoopExecuteOptions{})
 		if err != nil {
@@ -87,7 +87,7 @@ func TestExecuteLoopStep(t *testing.T) {
 		step := model.Step{
 			ID: "loop", Session: model.SessionNew,
 			Loop:  &model.Loop{Over: "*.go", As: "file"},
-			Steps: []model.Step{{ID: "a", Mode: model.ModeShell, Command: "echo", Session: model.SessionNew}},
+			Steps: []model.Step{{ID: "a", Command: "echo", Session: model.SessionNew}},
 		}
 		result, _ := ExecuteLoopStep(&step, makeCtx(), runner, glob, &mockLogger{}, LoopExecuteOptions{})
 		if result.Outcome != OutcomeSuccess {
@@ -101,7 +101,7 @@ func TestExecuteLoopStep(t *testing.T) {
 		step := model.Step{
 			ID: "loop", Session: model.SessionNew,
 			Loop:  &model.Loop{Over: "*.go", As: "file", RequireMatches: boolPtr(true)},
-			Steps: []model.Step{{ID: "a", Mode: model.ModeShell, Command: "echo", Session: model.SessionNew}},
+			Steps: []model.Step{{ID: "a", Command: "echo", Session: model.SessionNew}},
 		}
 		result, _ := ExecuteLoopStep(&step, makeCtx(), runner, glob, &mockLogger{}, LoopExecuteOptions{})
 		if result.Outcome != OutcomeFailed {
@@ -114,7 +114,7 @@ func TestExecuteLoopStep(t *testing.T) {
 		step := model.Step{
 			ID: "loop", Session: model.SessionNew,
 			Loop:  &model.Loop{Max: intPtr(3)},
-			Steps: []model.Step{{ID: "a", Mode: model.ModeShell, Command: "echo", Session: model.SessionNew}},
+			Steps: []model.Step{{ID: "a", Command: "echo", Session: model.SessionNew}},
 		}
 		result, _ := ExecuteLoopStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{}, LoopExecuteOptions{ResumeFromIteration: 2})
 		if result.Outcome != OutcomeExhausted {
@@ -140,7 +140,7 @@ func TestExecuteLoopStep(t *testing.T) {
 			ID: "loop", Session: model.SessionNew,
 			Loop: &model.Loop{Max: intPtr(2)},
 			Steps: []model.Step{
-				{ID: "work", Mode: model.ModeShell, Command: "echo", Session: model.SessionNew},
+				{ID: "work", Command: "echo", Session: model.SessionNew},
 			},
 		}
 		ExecuteLoopStep(&step, makeCtx(), runner, &mockGlob{}, log, LoopExecuteOptions{})
@@ -163,7 +163,7 @@ func TestExecuteLoopStep(t *testing.T) {
 			ID: "task-loop", Session: model.SessionNew,
 			Loop: &model.Loop{Max: intPtr(1)},
 			Steps: []model.Step{
-				{ID: "implement", Mode: model.ModeShell, Command: "echo", Session: model.SessionNew},
+				{ID: "implement", Command: "echo", Session: model.SessionNew},
 			},
 		}
 		ExecuteLoopStep(&step, makeCtx(), runner, &mockGlob{}, log, LoopExecuteOptions{})

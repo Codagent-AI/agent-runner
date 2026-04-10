@@ -6,9 +6,7 @@ stdout 'captured:hello'
 name: e2e-capture
 steps:
   - id: capture-step
-    mode: shell
     command: echo hello
     capture: output
   - id: use-capture
-    mode: shell
     command: echo captured:{{output}}

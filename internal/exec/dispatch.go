@@ -32,7 +32,7 @@ func DispatchStep(
 		return ExecuteShellStep(step, ctx, runner, log)
 	}
 
-	if step.Prompt != "" || step.Mode == model.ModeInteractive || step.Mode == model.ModeHeadless {
+	if step.Agent != "" || step.Prompt != "" {
 		return ExecuteAgentStep(step, ctx, runner, log)
 	}
 

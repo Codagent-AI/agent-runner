@@ -35,10 +35,8 @@ stdout 'step2-ok'
 name: e2e-resume
 steps:
   - id: create-marker
-    mode: shell
     command: echo first-run > marker.txt
   - id: fail-once
-    mode: shell
     command: cat trigger.txt && echo step2-ok > result.txt
 
 -- second-marker.txt --

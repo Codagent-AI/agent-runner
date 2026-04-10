@@ -8,8 +8,6 @@ stdout state\.json
 name: e2e-failure
 steps:
   - id: first
-    mode: shell
     command: echo ok
   - id: second
-    mode: shell
     command: "false"

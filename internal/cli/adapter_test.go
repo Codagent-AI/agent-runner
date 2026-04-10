@@ -130,6 +130,39 @@ func TestClaudeAdapter(t *testing.T) {
 		assertArgs(t, expected, args)
 	})
 
+	t.Run("effort level specified", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "do something",
+			Effort:   "high",
+			Headless: true,
+		})
+		expected := []string{"claude", "--effort", "high", "-p", "do something"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("effort level not specified", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "do something",
+			Headless: true,
+		})
+		for _, a := range args {
+			if a == "--effort" {
+				t.Fatalf("did not expect --effort when Effort is empty, got %v", args)
+			}
+		}
+	})
+
+	t.Run("effort with model", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "do something",
+			Model:    "opus",
+			Effort:   "low",
+			Headless: true,
+		})
+		expected := []string{"claude", "--model", "opus", "--effort", "low", "-p", "do something"}
+		assertArgs(t, expected, args)
+	})
+
 	t.Run("supports system prompt", func(t *testing.T) {
 		if !adapter.SupportsSystemPrompt() {
 			t.Fatal("expected Claude adapter to support system prompt")
@@ -277,6 +310,37 @@ func TestCodexAdapter(t *testing.T) {
 		})
 		expected := []string{"codex", "--no-alt-screen", "-m", "o3", "review"}
 		assertArgs(t, expected, args)
+	})
+
+	t.Run("effort level specified headless", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "do something",
+			Effort:   "medium",
+			Headless: true,
+		})
+		expected := []string{"codex", "exec", "--json", "--effort", "medium", "do something"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("effort level specified interactive", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt: "review",
+			Effort: "high",
+		})
+		expected := []string{"codex", "--no-alt-screen", "--effort", "high", "review"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("effort level not specified", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "do something",
+			Headless: true,
+		})
+		for _, a := range args {
+			if a == "--effort" {
+				t.Fatalf("did not expect --effort when Effort is empty, got %v", args)
+			}
+		}
 	})
 
 	t.Run("does not support system prompt", func(t *testing.T) {

@@ -207,6 +207,7 @@ func recordChildProgress(childCtx *model.ExecutionContext, childStepID string, c
 	parent.LastSubWorkflowChild = &model.SubWorkflowChildState{
 		StepID:            childStepID,
 		SessionIDs:        copyMap(childCtx.SessionIDs),
+		SessionProfiles:   copyMap(childCtx.SessionProfiles),
 		CapturedVariables: copyMap(childCtx.CapturedVariables),
 		Completed:         completed,
 		Child:             nestedChild,
@@ -222,6 +223,9 @@ func applyResumeState(parentCtx, childCtx *model.ExecutionContext) (string, bool
 
 	for k, v := range resumeChild.SessionIDs {
 		childCtx.SessionIDs[k] = v
+	}
+	for k, v := range resumeChild.SessionProfiles {
+		childCtx.SessionProfiles[k] = v
 	}
 	for k, v := range resumeChild.CapturedVariables {
 		childCtx.CapturedVariables[k] = v

@@ -44,6 +44,10 @@ func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 		args = append(args, "-m", input.Model)
 	}
 
+	if input.Effort != "" {
+		args = append(args, "--effort", input.Effort)
+	}
+
 	args = append(args, input.Prompt)
 	return args
 }

@@ -26,6 +26,10 @@ func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 		args = append(args, "--model", input.Model)
 	}
 
+	if input.Effort != "" {
+		args = append(args, "--effort", input.Effort)
+	}
+
 	if input.Headless {
 		args = append(args, "-p")
 	}

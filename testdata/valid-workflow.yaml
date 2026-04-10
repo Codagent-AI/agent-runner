@@ -8,8 +8,8 @@ params:
     default: staging
 steps:
   - id: setup
-    mode: shell
     command: echo "setting up {{project}}"
   - id: deploy
+    agent: headless_base
     mode: headless
     prompt: "Deploy {{project}} to {{env}}"

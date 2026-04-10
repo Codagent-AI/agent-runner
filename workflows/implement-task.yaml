@@ -7,13 +7,20 @@ params:
 
 steps:
   - id: implement
-    mode: headless
+    agent: headless_base
     session: new
     prompt: |
       Implement the task described in {{task_file}}.
 
       When you are done implementing, commit your changes with a clear,
       descriptive commit message. Then summarize to the user what you changed.
+
+  - id: self-review
+    session: resume
+    prompt: |
+      Run the codagent:self-review skill against the task file {{task_file}}.
+      If you fix any gaps, commit your changes.
+
 
   - id: run-validator
     workflow: run-validator.yaml
@@ -23,7 +30,6 @@ steps:
     continue_on_failure: true
 
   - id: commit-leftovers-if-needed
-    mode: headless
     session: resume
     prompt: |
       There are uncommitted changes leftover after implementing the task described in {{task_file}}.
@@ -34,7 +40,6 @@ steps:
     skip_if: previous_success
 
   - id: session-report
-    mode: headless
     session: resume
     prompt: |
       Run the codagent:session-report skill against the task file {{task_file}}.

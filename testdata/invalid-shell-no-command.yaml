@@ -1,5 +1,4 @@
-name: broken-shell
+name: broken-agent
 steps:
   - id: bad-step
-    mode: shell
-    prompt: "this should be command"
+    prompt: "missing agent field"

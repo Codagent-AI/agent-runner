@@ -1,0 +1,2 @@
+- [ ] Config package and CLI adapter effort support (`tasks/config-and-effort.md`)
+- [ ] Step model, executor integration, and workflow updates (`tasks/step-integration-workflows.md`)

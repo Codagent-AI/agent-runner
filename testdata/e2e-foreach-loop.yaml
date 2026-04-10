@@ -10,5 +10,4 @@ steps:
       as: task_file
     steps:
       - id: echo-file
-        mode: shell
         command: echo "file:{{task_file}}"
