@@ -7,7 +7,7 @@ params:
 
 steps:
   - id: implement
-    mode: headless
+    agent: headless_base
     session: new
     prompt: |
       Implement the task described in {{task_file}}.
@@ -16,7 +16,6 @@ steps:
       descriptive commit message. Then summarize to the user what you changed.
 
   - id: self-review
-    mode: headless
     session: resume
     prompt: |
       Run the codagent:self-review skill against the task file {{task_file}}.
@@ -30,7 +29,6 @@ steps:
     continue_on_failure: true
 
   - id: commit-leftovers-if-needed
-    mode: headless
     session: resume
     prompt: |
       There are uncommitted changes leftover after implementing the task described in {{task_file}}.
@@ -41,7 +39,6 @@ steps:
     skip_if: previous_success
 
   - id: session-report
-    mode: headless
     session: resume
     prompt: |
       Run the codagent:session-report skill against the task file {{task_file}}.

@@ -6,9 +6,7 @@ steps:
       max: 3
     steps:
       - id: always-fail
-        mode: shell
         command: exit 1
         continue_on_failure: true
   - id: never-reached
-    mode: shell
     command: echo "SHOULD-NOT-APPEAR"

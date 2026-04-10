@@ -11,17 +11,14 @@ engine:
 
 steps:
   - id: check-clean
-    mode: shell
     # agent-validator detect: exit 0 = unvalidated changes present, exit 2 = clean (no changes)
     command: "agent-validator detect; status=$?; if [ $status -eq 2 ]; then exit 0; elif [ $status -eq 0 ]; then echo 'Unvalidated changes detected. Run agent-validator before planning.' >&2; exit 1; else exit $status; fi"
 
   - id: create
-    mode: shell
     command: openspec new change "{{change_name}}"
 
   - id: proposal
-    mode: interactive
-    session: resume
+    agent: interactive_base
     prompt: |
       Help the user write a change proposal.
       You MUST use the codagent:propose skill.
@@ -30,7 +27,6 @@ steps:
       Once the proposal document is written, continue to the next step.
 
   - id: specs
-    mode: interactive
     session: resume
     prompt: |
       Help the user write the change spec.
@@ -38,7 +34,6 @@ steps:
       Once all spec documents are written, continue to the next step.
 
   - id: design
-    mode: interactive
     session: resume
     prompt: |
       Help the user design the change.
@@ -46,7 +41,6 @@ steps:
       Once the design document is written, continue to the next step.
 
   - id: tasks
-    mode: interactive
     session: resume
     prompt: |
       Help the user plan tasks for the change.
@@ -75,5 +69,4 @@ steps:
       Keep running the command and fixing until it passes with no errors.
 
   - id: skip-validator
-    mode: shell
     command: agent-validator skip

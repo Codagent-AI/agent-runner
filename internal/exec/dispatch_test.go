@@ -17,7 +17,7 @@ func (g *mockGlob) Expand(_ string) ([]string, error) {
 func TestDispatchStep(t *testing.T) {
 	t.Run("dispatches shell step", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		step := model.Step{ID: "s", Mode: model.ModeShell, Command: "echo hi", Session: model.SessionNew}
+		step := model.Step{ID: "s", Command: "echo hi", Session: model.SessionNew}
 		outcome, err := DispatchStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -45,7 +45,7 @@ func TestDispatchStep(t *testing.T) {
 			ID: "l", Session: model.SessionNew,
 			Loop: &model.Loop{Max: intPtr(1)},
 			Steps: []model.Step{
-				{ID: "a", Mode: model.ModeShell, Command: "echo", Session: model.SessionNew},
+				{ID: "a", Command: "echo", Session: model.SessionNew},
 			},
 		}
 		outcome, err := DispatchStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{})
@@ -63,8 +63,8 @@ func TestDispatchStep(t *testing.T) {
 		step := model.Step{
 			ID: "g", Session: model.SessionNew,
 			Steps: []model.Step{
-				{ID: "a", Mode: model.ModeShell, Command: "echo a", Session: model.SessionNew},
-				{ID: "b", Mode: model.ModeShell, Command: "echo b", Session: model.SessionNew},
+				{ID: "a", Command: "echo a", Session: model.SessionNew},
+				{ID: "b", Command: "echo b", Session: model.SessionNew},
 			},
 		}
 		outcome, err := DispatchStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{})
@@ -81,8 +81,8 @@ func TestDispatchStep(t *testing.T) {
 		step := model.Step{
 			ID: "g", Session: model.SessionNew,
 			Steps: []model.Step{
-				{ID: "a", Mode: model.ModeShell, Command: "false", Session: model.SessionNew},
-				{ID: "b", Mode: model.ModeShell, Command: "echo b", Session: model.SessionNew},
+				{ID: "a", Command: "false", Session: model.SessionNew},
+				{ID: "b", Command: "echo b", Session: model.SessionNew},
 			},
 		}
 		outcome, _ := DispatchStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{})

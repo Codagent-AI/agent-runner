@@ -3,13 +3,12 @@ description: "Quick smoke test for interactive step completion signaling"
 
 steps:
   - id: greet
-    mode: interactive
+    agent: interactive_base
     prompt: |
       Say hello.
       Once you've done that, continue to the next step.
 
   - id: how-are-you
-    mode: interactive
     session: resume
     prompt: |
       Ask the user how they are doing.

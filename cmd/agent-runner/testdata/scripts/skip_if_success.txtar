@@ -8,9 +8,7 @@ stdout 'second \[skipped\]'
 name: e2e-skip
 steps:
   - id: first
-    mode: shell
     command: echo ok
   - id: second
-    mode: shell
     command: echo skip me
     skip_if: previous_success

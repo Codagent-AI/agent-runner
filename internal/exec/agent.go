@@ -10,6 +10,7 @@ import (
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
+	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/engine"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/pty"
@@ -25,6 +26,51 @@ var interactiveRunnerFn = pty.RunInteractive
 // so the agent knows how to signal step completion via the stdout sentinel.
 const completionInstruction = "\n\nWhen you or the user determine this step is complete, continue to the next step by running the following command without any additional commentary:\nprintf '\\x1b]999;signal-continuation\\x07' > \"$AGENT_RUNNER_TTY\""
 
+// resolveStepProfile resolves the agent profile for the given step.
+// For session:new steps, it resolves from step.Agent. For resume/inherit, it
+// looks up the profile name from the session-originating step.
+// Step-level overrides (Mode, Model, CLI) are applied on top of the profile.
+func resolveStepProfile(step *model.Step, ctx *model.ExecutionContext) (*config.ResolvedProfile, error) {
+	cfg, _ := ctx.ProfileStore.(*config.Config)
+	if cfg == nil {
+		// No profile store — return a minimal profile using step-level values.
+		return &config.ResolvedProfile{
+			DefaultMode: string(step.Mode),
+			CLI:         step.CLI,
+			Model:       step.Model,
+		}, nil
+	}
+
+	var profileName string
+	if step.Session == model.SessionNew {
+		profileName = step.Agent
+	} else {
+		// Resume/inherit: look up from session-originating step.
+		profileName = ctx.SessionProfiles[ctx.LastSessionStepID]
+		if profileName == "" {
+			return nil, fmt.Errorf("no profile found for session-originating step %q", ctx.LastSessionStepID)
+		}
+	}
+
+	resolved, err := cfg.Resolve(profileName)
+	if err != nil {
+		return nil, fmt.Errorf("resolving profile %q: %w", profileName, err)
+	}
+
+	// Apply step-level overrides.
+	if step.Mode != "" {
+		resolved.DefaultMode = string(step.Mode)
+	}
+	if step.Model != "" {
+		resolved.Model = step.Model
+	}
+	if step.CLI != "" {
+		resolved.CLI = step.CLI
+	}
+
+	return resolved, nil
+}
+
 // ExecuteAgentStep runs an agent step using the resolved CLI adapter.
 func ExecuteAgentStep(
 	step *model.Step,
@@ -38,7 +84,14 @@ func ExecuteAgentStep(
 
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 	startTime := time.Now()
-	mode := resolveMode(step)
+
+	profile, profileErr := resolveStepProfile(step, ctx)
+	if profileErr != nil {
+		emitAgentFailure(ctx, prefix, startTime, "", step, profileErr.Error())
+		return OutcomeFailed, nil
+	}
+
+	mode := resolveModeFromProfile(step, profile)
 
 	prompt, enrichment, err := buildAgentPrompt(step, ctx)
 	if err != nil {
@@ -46,16 +99,21 @@ func ExecuteAgentStep(
 		return OutcomeFailed, nil
 	}
 
-	adapter, cliName, sessionID, isResume, err := resolveAdapterAndSession(step, ctx)
+	adapter, cliName, sessionID, isResume, err := resolveAdapterAndSession(step, ctx, profile)
 	if err != nil {
 		emitAgentFailure(ctx, prefix, startTime, string(mode), step, err.Error())
 		return OutcomeFailed, nil
 	}
 
 	headless := mode == model.ModeHeadless
+
+	// Build the full prompt: [system_prompt] [step prompt] [engine enrichment]
 	fullPrompt := prompt
+	if profile.SystemPrompt != "" {
+		fullPrompt = profile.SystemPrompt + "\n\n" + fullPrompt
+	}
 	if enrichment != "" {
-		fullPrompt = prompt + "\n\n" + enrichment
+		fullPrompt = fullPrompt + "\n\n" + enrichment
 	}
 	if !headless {
 		fullPrompt = buildStepPrefix(step.ID, ctx, isResume) + fullPrompt + completionInstruction
@@ -64,7 +122,8 @@ func ExecuteAgentStep(
 	input := cli.BuildArgsInput{
 		SessionID: sessionID,
 		Resume:    isResume,
-		Model:     step.Model,
+		Model:     profile.Model, // already has step.Model applied by resolveStepProfile
+		Effort:    profile.Effort,
 		Headless:  headless,
 	}
 
@@ -78,7 +137,7 @@ func ExecuteAgentStep(
 		} else {
 			input.Prompt = fmt.Sprintf("Let's start the %s step", step.ID)
 		}
-	case enrichment != "":
+	case enrichment != "" || profile.SystemPrompt != "":
 		input.Prompt = "<system>\n" + fullPrompt + "\n</system>"
 	default:
 		input.Prompt = fullPrompt
@@ -100,6 +159,16 @@ func ExecuteAgentStep(
 		ctx.CapturedVariables[step.Capture] = result.Stdout
 	}
 
+	// For session:new steps, set LastSessionStepID before session discovery so
+	// it is always available for subsequent resume/inherit steps, even if
+	// discovery returns empty (e.g. Codex).
+	if step.Session == model.SessionNew {
+		ctx.LastSessionStepID = step.ID
+		if step.Agent != "" {
+			ctx.SessionProfiles[step.ID] = step.Agent
+		}
+	}
+
 	discoveredID := discoverAndStoreSession(adapter, step, ctx, spawnTime, sessionID, headless, result.Stdout, log)
 
 	emitAgentEnd(ctx, prefix, startTime, discoveredID, outcome)
@@ -107,20 +176,28 @@ func ExecuteAgentStep(
 	return outcome, nil
 }
 
-func resolveMode(step *model.Step) model.StepMode {
-	if step.Mode == "" {
-		return model.ModeInteractive
+// resolveModeFromProfile returns the effective mode, preferring the step-level
+// override, then the profile's DefaultMode, falling back to interactive.
+func resolveModeFromProfile(step *model.Step, profile *config.ResolvedProfile) model.StepMode {
+	if step.Mode != "" {
+		return step.Mode
 	}
-	return step.Mode
+	if profile != nil && profile.DefaultMode != "" {
+		return model.StepMode(profile.DefaultMode)
+	}
+	return model.ModeInteractive
 }
 
 // resolveAdapterAndSession returns the CLI adapter, name, session ID, and
 // whether the session is a resume (vs. fresh). For fresh Claude sessions, a
 // new UUID is generated so the runner knows the session ID deterministically.
 func resolveAdapterAndSession(
-	step *model.Step, ctx *model.ExecutionContext,
+	step *model.Step, ctx *model.ExecutionContext, profile *config.ResolvedProfile,
 ) (adapter cli.Adapter, cliName, sessionID string, isResume bool, err error) {
 	cliName = step.CLI
+	if cliName == "" && profile != nil && profile.CLI != "" {
+		cliName = profile.CLI
+	}
 	if cliName == "" {
 		cliName = "claude"
 	}

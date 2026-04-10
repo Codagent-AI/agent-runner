@@ -17,7 +17,6 @@ func TestExecuteSubWorkflowStep(t *testing.T) {
 		childYAML := `name: child
 steps:
   - id: s1
-    mode: shell
     command: echo hello
 `
 		childPath := filepath.Join(dir, "child.yaml")
@@ -49,7 +48,6 @@ params:
   - name: msg
 steps:
   - id: s1
-    mode: shell
     command: echo {{msg}}
 `
 		childPath := filepath.Join(dir, "child.yaml")
@@ -87,7 +85,6 @@ steps:
 		childYAML := `name: child
 steps:
   - id: s1
-    mode: shell
     command: echo {{parent_secret}}
 `
 		childPath := filepath.Join(dir, "child.yaml")
@@ -128,7 +125,6 @@ params:
   - name: required_param
 steps:
   - id: s1
-    mode: shell
     command: echo test
 `
 		childPath := filepath.Join(dir, "child.yaml")
@@ -163,10 +159,8 @@ steps:
 		childYAML := `name: child
 steps:
   - id: s1
-    mode: shell
     command: echo hello
   - id: s2
-    mode: shell
     command: echo world
 `
 		os.WriteFile(filepath.Join(dir, "child.yaml"), []byte(childYAML), 0o644)
@@ -211,10 +205,8 @@ steps:
 		childYAML := `name: child
 steps:
   - id: s1
-    mode: shell
     command: echo hello
   - id: s2
-    mode: shell
     command: echo world
     skip_if: previous_success
 `

@@ -24,5 +24,4 @@ engine:
   change_param: change_name
 steps:
   - id: step1
-    mode: shell
     command: echo engine loaded

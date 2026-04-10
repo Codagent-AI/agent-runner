@@ -17,6 +17,7 @@ type NestingSegment struct {
 type SubWorkflowChildState struct {
 	StepID            string                 `json:"stepId"`
 	SessionIDs        map[string]string      `json:"sessionIds"`
+	SessionProfiles   map[string]string      `json:"sessionProfiles,omitempty"`
 	CapturedVariables map[string]string      `json:"capturedVariables"`
 	Completed         bool                   `json:"completed,omitempty"`
 	Child             *SubWorkflowChildState `json:"child,omitempty"`
@@ -26,6 +27,7 @@ type SubWorkflowChildState struct {
 type ExecutionContext struct {
 	Params            map[string]string
 	SessionIDs        map[string]string
+	SessionProfiles   map[string]string // maps session-originating step ID → profile name
 	CapturedVariables map[string]string
 	LastStepOutcome   *string // nil, "success", or "failed"
 
@@ -45,6 +47,10 @@ type ExecutionContext struct {
 	// Callers should type-assert to engine.Engine before use.
 	EngineRef interface{}
 
+	// ProfileStore holds the agent profile configuration (*config.Config).
+	// Stored as interface{} to avoid circular imports (same pattern as EngineRef).
+	ProfileStore interface{}
+
 	// AuditLogger writes structured audit events (audit.EventLogger).
 	AuditLogger audit.EventLogger
 
@@ -60,7 +66,9 @@ type RootContextOptions struct {
 	WorkflowName        string
 	WorkflowDescription string
 	EngineRef           interface{} // internal/engine.Engine
+	ProfileStore        interface{} // *config.Config
 	SessionIDs          map[string]string
+	SessionProfiles     map[string]string
 	CapturedVariables   map[string]string
 	AuditLogger         audit.EventLogger
 }
@@ -82,9 +90,15 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		capturedVars[k] = v
 	}
 
+	sessionProfiles := make(map[string]string)
+	for k, v := range opts.SessionProfiles {
+		sessionProfiles[k] = v
+	}
+
 	return &ExecutionContext{
 		Params:              params,
 		SessionIDs:          sessionIDs,
+		SessionProfiles:     sessionProfiles,
 		CapturedVariables:   capturedVars,
 		LastStepOutcome:     nil,
 		NestingPath:         []NestingSegment{},
@@ -93,6 +107,7 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		WorkflowName:        opts.WorkflowName,
 		WorkflowDescription: opts.WorkflowDescription,
 		EngineRef:           opts.EngineRef,
+		ProfileStore:        opts.ProfileStore,
 		AuditLogger:         opts.AuditLogger,
 	}
 }
@@ -129,9 +144,15 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 	copy(nestingPath, parent.NestingPath)
 	nestingPath[len(parent.NestingPath)] = segment
 
+	sessionProfiles := make(map[string]string)
+	for k, v := range parent.SessionProfiles {
+		sessionProfiles[k] = v
+	}
+
 	return &ExecutionContext{
 		Params:              params,
 		SessionIDs:          sessionIDs,
+		SessionProfiles:     sessionProfiles,
 		CapturedVariables:   make(map[string]string),
 		LastStepOutcome:     nil,
 		LastSessionStepID:   parent.LastSessionStepID,
@@ -141,6 +162,7 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		WorkflowName:        parent.WorkflowName,
 		WorkflowDescription: parent.WorkflowDescription,
 		EngineRef:           parent.EngineRef,
+		ProfileStore:        parent.ProfileStore,
 		AuditLogger:         parent.AuditLogger,
 	}
 }
@@ -181,9 +203,15 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		engineRef = opts.EngineRef
 	}
 
+	sessionProfiles := make(map[string]string)
+	for k, v := range parent.SessionProfiles {
+		sessionProfiles[k] = v
+	}
+
 	return &ExecutionContext{
 		Params:              params,
 		SessionIDs:          sessionIDs,
+		SessionProfiles:     sessionProfiles,
 		CapturedVariables:   make(map[string]string),
 		LastStepOutcome:     nil,
 		LastSessionStepID:   parent.LastSessionStepID,
@@ -193,6 +221,7 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		WorkflowName:        parent.WorkflowName,
 		WorkflowDescription: parent.WorkflowDescription,
 		EngineRef:           engineRef,
+		ProfileStore:        parent.ProfileStore,
 		AuditLogger:         parent.AuditLogger,
 	}
 }

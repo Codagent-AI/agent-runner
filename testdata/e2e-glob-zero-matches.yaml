@@ -7,8 +7,6 @@ steps:
       as: task_file
     steps:
       - id: never-runs
-        mode: shell
         command: echo "SHOULD-NOT-APPEAR"
   - id: after-empty
-    mode: shell
     command: echo "skipped-empty-loop"

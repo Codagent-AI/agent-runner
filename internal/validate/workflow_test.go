@@ -10,7 +10,7 @@ import (
 func intPtr(n int) *int { return &n }
 
 func shellStep(id string) model.Step {
-	return model.Step{ID: id, Mode: model.ModeShell, Command: "echo", Session: model.SessionNew}
+	return model.Step{ID: id, Command: "echo", Session: model.SessionNew}
 }
 
 func TestWorkflowConstraints(t *testing.T) {
@@ -18,7 +18,7 @@ func TestWorkflowConstraints(t *testing.T) {
 		w := model.Workflow{
 			Name: "test",
 			Steps: []model.Step{
-				{ID: "s1", Mode: model.ModeShell, Command: "echo", Session: model.SessionNew, SkipIf: "previous_success"},
+				{ID: "s1", Command: "echo", Session: model.SessionNew, SkipIf: "previous_success"},
 			},
 		}
 		err := WorkflowConstraints(&w, Options{})
@@ -35,7 +35,7 @@ func TestWorkflowConstraints(t *testing.T) {
 			Name: "test",
 			Steps: []model.Step{
 				shellStep("s1"),
-				{ID: "s2", Mode: model.ModeShell, Command: "echo", Session: model.SessionNew, SkipIf: "previous_success"},
+				{ID: "s2", Command: "echo", Session: model.SessionNew, SkipIf: "previous_success"},
 			},
 		}
 		if err := WorkflowConstraints(&w, Options{}); err != nil {
@@ -50,7 +50,7 @@ func TestWorkflowConstraints(t *testing.T) {
 				ID: "loop", Session: model.SessionNew,
 				Loop: &model.Loop{Max: intPtr(3)},
 				Steps: []model.Step{
-					{ID: "s1", Mode: model.ModeShell, Command: "echo", Session: model.SessionNew, SkipIf: "previous_success"},
+					{ID: "s1", Command: "echo", Session: model.SessionNew, SkipIf: "previous_success"},
 				},
 			}},
 		}
@@ -64,7 +64,7 @@ func TestWorkflowConstraints(t *testing.T) {
 		w := model.Workflow{
 			Name: "test",
 			Steps: []model.Step{
-				{ID: "s1", Mode: model.ModeShell, Command: "echo", Session: model.SessionNew, BreakIf: "success"},
+				{ID: "s1", Command: "echo", Session: model.SessionNew, BreakIf: "success"},
 			},
 		}
 		err := WorkflowConstraints(&w, Options{})
@@ -83,7 +83,7 @@ func TestWorkflowConstraints(t *testing.T) {
 				ID: "loop", Session: model.SessionNew,
 				Loop: &model.Loop{Max: intPtr(3)},
 				Steps: []model.Step{
-					{ID: "s1", Mode: model.ModeShell, Command: "echo", Session: model.SessionNew, BreakIf: "success"},
+					{ID: "s1", Command: "echo", Session: model.SessionNew, BreakIf: "success"},
 				},
 			}},
 		}
@@ -133,7 +133,7 @@ func TestWorkflowConstraints(t *testing.T) {
 				Steps: []model.Step{{
 					ID: "group", Session: model.SessionNew,
 					Steps: []model.Step{
-						{ID: "s1", Mode: model.ModeShell, Command: "echo", Session: model.SessionNew, BreakIf: "success"},
+						{ID: "s1", Command: "echo", Session: model.SessionNew, BreakIf: "success"},
 					},
 				}},
 			}},

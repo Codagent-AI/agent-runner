@@ -6,9 +6,7 @@ stdout 'step "next-step" complete'
 name: e2e-continue
 steps:
   - id: failing-step
-    mode: shell
     command: "false"
     continue_on_failure: true
   - id: next-step
-    mode: shell
     command: echo ok

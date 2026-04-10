@@ -6,5 +6,4 @@ steps:
     workflow: e2e-sub-workflow-resume-child.yaml
 
   - id: parent-after
-    mode: shell
     command: echo "parent-after-done"
