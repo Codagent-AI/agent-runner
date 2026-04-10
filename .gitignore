@@ -1,6 +1,5 @@
 bin/
 /agent-runner
-.agent-runner/
 *.out
 coverage.html
 .claude/worktrees/
