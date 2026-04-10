@@ -19,7 +19,7 @@ steps:
     command: openspec new change "{{change_name}}"
 
   - id: proposal
-    agent: interactive_base
+    agent: planner
     prompt: |
       Help the user write a change proposal.
       You MUST use the codagent:propose skill.

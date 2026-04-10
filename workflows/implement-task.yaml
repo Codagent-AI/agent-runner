@@ -7,7 +7,7 @@ params:
 
 steps:
   - id: implement
-    agent: headless_base
+    agent: implementor
     session: new
     prompt: |
       Implement the task described in {{task_file}}.
