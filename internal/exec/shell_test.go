@@ -53,7 +53,7 @@ func (l *mockLogger) Errorf(format string, args ...any) {
 }
 
 func makeCtx() *model.ExecutionContext {
-	return model.NewRootContext(model.RootContextOptions{
+	return model.NewRootContext(&model.RootContextOptions{
 		Params:       map[string]string{},
 		WorkflowFile: "test.yaml",
 	})
@@ -83,7 +83,7 @@ func TestExecuteShellStep(t *testing.T) {
 
 	t.Run("interpolates command with params", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		ctx := model.NewRootContext(model.RootContextOptions{
+		ctx := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{"name": "world"},
 			WorkflowFile: "test.yaml",
 		})

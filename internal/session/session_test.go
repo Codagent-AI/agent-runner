@@ -9,7 +9,7 @@ import (
 
 func TestResolveInheritSession(t *testing.T) {
 	t.Run("walks parent context chain to find parent session", func(t *testing.T) {
-		parent := model.NewRootContext(model.RootContextOptions{
+		parent := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: "parent.yaml",
 			SessionIDs:   map[string]string{"step1": "parent-session"},
@@ -32,7 +32,7 @@ func TestResolveInheritSession(t *testing.T) {
 	})
 
 	t.Run("returns most recent parent session when multiple exist", func(t *testing.T) {
-		parent := model.NewRootContext(model.RootContextOptions{
+		parent := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: "parent.yaml",
 			SessionIDs:   map[string]string{"step1": "old", "step2": "latest"},
@@ -55,7 +55,7 @@ func TestResolveInheritSession(t *testing.T) {
 	})
 
 	t.Run("errors when no parent session exists", func(t *testing.T) {
-		parent := model.NewRootContext(model.RootContextOptions{
+		parent := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: "parent.yaml",
 		})
@@ -76,7 +76,7 @@ func TestResolveInheritSession(t *testing.T) {
 	})
 
 	t.Run("returns empty string when used in top-level workflow", func(t *testing.T) {
-		ctx := model.NewRootContext(model.RootContextOptions{
+		ctx := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: "test.yaml",
 		})
@@ -91,7 +91,7 @@ func TestResolveInheritSession(t *testing.T) {
 	})
 
 	t.Run("walks through nested sub-workflows to find session", func(t *testing.T) {
-		root := model.NewRootContext(model.RootContextOptions{
+		root := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: "root.yaml",
 			SessionIDs:   map[string]string{"step1": "root-session"},
@@ -122,7 +122,7 @@ func TestResolveInheritSession(t *testing.T) {
 
 func TestResolveResumeSession(t *testing.T) {
 	t.Run("resumes session from same workflow file", func(t *testing.T) {
-		ctx := model.NewRootContext(model.RootContextOptions{
+		ctx := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: "test.yaml",
 			SessionIDs:   map[string]string{"step1": "session-abc"},
@@ -139,7 +139,7 @@ func TestResolveResumeSession(t *testing.T) {
 	})
 
 	t.Run("returns most recent session from same workflow", func(t *testing.T) {
-		ctx := model.NewRootContext(model.RootContextOptions{
+		ctx := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: "test.yaml",
 			SessionIDs:   map[string]string{"step1": "old", "step2": "latest"},
@@ -156,7 +156,7 @@ func TestResolveResumeSession(t *testing.T) {
 	})
 
 	t.Run("returns empty when no session exists in current workflow", func(t *testing.T) {
-		ctx := model.NewRootContext(model.RootContextOptions{
+		ctx := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{},
 			WorkflowFile: "test.yaml",
 		})

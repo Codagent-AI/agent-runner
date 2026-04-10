@@ -89,14 +89,9 @@ func RunInteractive(args []string, opts Options) (Result, error) {
 
 	// Build and start the command inside a PTY.
 	cmd := exec.Command(args[0], args[1:]...) // #nosec G204 -- interactive agent execution by design
-	cmd.Env = buildEnv(opts.Env)
-	if opts.Workdir != "" {
-		cmd.Dir = opts.Workdir
-	}
-
-	ptmx, err := startWithTermSize(cmd)
+	ptmx, err := startInPTY(cmd, opts)
 	if err != nil {
-		return Result{}, fmt.Errorf("pty: failed to start process: %w", err)
+		return Result{}, err
 	}
 	defer func() { _ = ptmx.Close() }()
 
@@ -149,14 +144,44 @@ func RunInteractive(args []string, opts Options) (Result, error) {
 	}, nil
 }
 
-// startWithTermSize starts the command in a PTY, using the current terminal
-// size if available.
-func startWithTermSize(cmd *exec.Cmd) (*os.File, error) {
-	size, sizeErr := gopty.GetsizeFull(os.Stdin)
-	if sizeErr == nil {
-		return gopty.StartWithSize(cmd, size)
+// startInPTY opens a PTY pair, wires the command's stdio to the slave device,
+// sets AGENT_RUNNER_TTY in the environment so child processes can write directly
+// to the terminal, and starts the command. Returns the PTY master fd.
+func startInPTY(cmd *exec.Cmd, opts Options) (*os.File, error) {
+	ptmx, tty, err := gopty.Open()
+	if err != nil {
+		return nil, fmt.Errorf("pty: failed to open PTY: %w", err)
 	}
-	return gopty.Start(cmd)
+	ttyPath := tty.Name()
+	if ttyPath == "" {
+		_ = ptmx.Close()
+		_ = tty.Close()
+		return nil, fmt.Errorf("pty: slave device has no path")
+	}
+	if size, sizeErr := gopty.GetsizeFull(os.Stdin); sizeErr == nil {
+		_ = gopty.Setsize(ptmx, size)
+	}
+
+	cmd.Stdin = tty
+	cmd.Stdout = tty
+	cmd.Stderr = tty
+	cmd.Env = buildEnv(append(opts.Env, "AGENT_RUNNER_TTY="+ttyPath))
+	if opts.Workdir != "" {
+		cmd.Dir = opts.Workdir
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setsid:  true,
+		Setctty: true,
+		Ctty:    0, // stdin fd in the child process
+	}
+
+	if err := cmd.Start(); err != nil {
+		_ = ptmx.Close()
+		_ = tty.Close()
+		return nil, fmt.Errorf("pty: failed to start process: %w", err)
+	}
+	_ = tty.Close()
+	return ptmx, nil
 }
 
 // startResizeHandler spawns a goroutine that propagates SIGWINCH events to the
