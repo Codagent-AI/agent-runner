@@ -33,9 +33,3 @@ A step MAY include a `cli` field specifying which CLI backend to use. When prese
 #### Scenario: CLI on shell step
 - **WHEN** a shell step has a `cli` field
 - **THEN** the runner fails with a validation error
-
-## REMOVED Requirements
-
-### Requirement: Step mode field
-**Reason**: The `mode` field as a step-type discriminator is removed. Shell steps are identified by the `command` field. Agent steps are identified by the `prompt` and/or `agent` field. The execution mode (interactive/headless) is determined by the resolved agent profile's `default_mode`, with an optional per-step `mode` override.
-**Migration**: Replace `mode: interactive` or `mode: headless` with an `agent` profile reference on the first agentic step. For subsequent steps that resume the session, remove the `mode` field entirely or use the optional `mode` override to switch between interactive and headless.

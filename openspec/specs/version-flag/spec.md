@@ -1,4 +1,4 @@
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Version flag output
 The CLI SHALL support a `--version` / `-v` flag that prints the current binary version to stdout and exits with code 0.
