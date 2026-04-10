@@ -297,6 +297,23 @@ func TestValidation_CycleDetected(t *testing.T) {
 	}
 }
 
+func TestValidation_NilProfile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := "profiles:\n  empty:\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadOrGenerate(path)
+	if err == nil {
+		t.Fatal("expected validation error for nil profile")
+	}
+	if !strings.Contains(err.Error(), "must not be empty") {
+		t.Fatalf("expected 'must not be empty' error, got: %v", err)
+	}
+}
+
 func TestResolve_ChildOverridesOneField(t *testing.T) {
 	cfg := &Config{
 		Profiles: map[string]*Profile{

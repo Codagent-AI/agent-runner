@@ -54,7 +54,7 @@ var validDefaultMode = map[string]bool{
 // it writes a default config and returns that. After loading, all profiles
 // are validated.
 func LoadOrGenerate(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- config path is from internal caller
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return nil, fmt.Errorf("reading config: %w", err)
@@ -100,6 +100,9 @@ func (c *Config) Resolve(name string) (*ResolvedProfile, error) {
 		if !ok {
 			return nil, fmt.Errorf("profile %q (referenced by extends) not found", cur)
 		}
+		if p == nil {
+			return nil, fmt.Errorf("profile %q is nil", cur)
+		}
 		cur = p.Extends
 	}
 
@@ -129,6 +132,9 @@ func (c *Config) Resolve(name string) (*ResolvedProfile, error) {
 // validate checks all profiles for completeness and correctness.
 func (c *Config) validate() error {
 	for name, p := range c.Profiles {
+		if p == nil {
+			return fmt.Errorf("profile %q: must not be empty", name)
+		}
 		// Check extends references exist.
 		if p.Extends != "" {
 			if _, ok := c.Profiles[p.Extends]; !ok {
@@ -177,7 +183,11 @@ func (c *Config) detectCycle(name string) error {
 		}
 		visited[cur] = true
 		path = append(path, cur)
-		cur = c.Profiles[cur].Extends
+		p := c.Profiles[cur]
+		if p == nil {
+			return fmt.Errorf("profile %q is nil", cur)
+		}
+		cur = p.Extends
 	}
 	return nil
 }
@@ -208,12 +218,12 @@ func defaultConfig() *Config {
 }
 
 func writeDefault(path string, cfg *Config) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return os.WriteFile(path, data, 0o600)
 }
