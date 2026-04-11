@@ -328,7 +328,7 @@ func TestRunWorkflow(t *testing.T) {
 
 		found := false
 		for _, line := range log.lines {
-			if contains(line, "--resume --session deploy-service-") {
+			if contains(line, "--resume deploy-service-") {
 				found = true
 				break
 			}
