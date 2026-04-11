@@ -313,6 +313,13 @@ func discoverAndStoreSession(
 	})
 	if discoveredID != "" {
 		ctx.SessionIDs[step.ID] = discoveredID
+		// Propagate the agent profile from the previous session-originating step
+		// so that resume after workflow restart can resolve the profile for this step.
+		if step.Session == model.SessionResume && ctx.LastSessionStepID != "" {
+			if prev := ctx.SessionProfiles[ctx.LastSessionStepID]; prev != "" {
+				ctx.SessionProfiles[step.ID] = prev
+			}
+		}
 		ctx.LastSessionStepID = step.ID
 		log.Printf("  session: %s\n", discoveredID)
 	}

@@ -95,6 +95,25 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("resume step propagates session profile from originating step", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		ctx := makeCtx()
+		ctx.SessionIDs["proposal"] = "session-abc"
+		ctx.SessionProfiles["proposal"] = "planner"
+		ctx.LastSessionStepID = "proposal"
+		step := model.Step{ID: "specs", Mode: model.ModeHeadless, Prompt: "write specs", Session: model.SessionResume}
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		// After the resume step runs and discovers a session, it should
+		// propagate the profile so that a subsequent workflow resume can
+		// resolve the profile for "specs".
+		if ctx.SessionProfiles["specs"] != "planner" {
+			t.Fatalf("expected profile 'planner' propagated to 'specs', got %q", ctx.SessionProfiles["specs"])
+		}
+		if ctx.LastSessionStepID != "specs" {
+			t.Fatalf("expected LastSessionStepID to be 'specs', got %q", ctx.LastSessionStepID)
+		}
+	})
+
 	t.Run("adds --model flag for model override", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew, Model: "opus"}
