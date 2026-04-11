@@ -168,6 +168,7 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		EngineRef:           parent.EngineRef,
 		ProfileStore:        parent.ProfileStore,
 		AuditLogger:         parent.AuditLogger,
+		WorkflowResumed:     parent.WorkflowResumed,
 	}
 }
 
@@ -227,5 +228,6 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		EngineRef:           engineRef,
 		ProfileStore:        parent.ProfileStore,
 		AuditLogger:         parent.AuditLogger,
+		WorkflowResumed:     parent.WorkflowResumed,
 	}
 }
