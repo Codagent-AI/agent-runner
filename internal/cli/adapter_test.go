@@ -63,7 +63,7 @@ func TestClaudeAdapter(t *testing.T) {
 			SessionID: "uuid-123",
 			Headless:  true,
 		})
-		expected := []string{"claude", "--session-id", "uuid-123", "-p", "do something"}
+		expected := []string{"claude", "--session-id", "uuid-123", "-p", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -73,7 +73,7 @@ func TestClaudeAdapter(t *testing.T) {
 			SessionID: "uuid-456",
 			Headless:  false,
 		})
-		expected := []string{"claude", "--session-id", "uuid-456", "review code"}
+		expected := []string{"claude", "--session-id", "uuid-456", "--", "review code"}
 		assertArgs(t, expected, args)
 	})
 
@@ -82,7 +82,7 @@ func TestClaudeAdapter(t *testing.T) {
 			Prompt:   "do something",
 			Headless: true,
 		})
-		expected := []string{"claude", "-p", "do something"}
+		expected := []string{"claude", "-p", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -95,7 +95,7 @@ func TestClaudeAdapter(t *testing.T) {
 		})
 		// Headless resume uses --session-id because --resume requires a deferred
 		// tool marker which may not exist after a normal session completion.
-		expected := []string{"claude", "--session-id", "session-abc", "-p", "continue"}
+		expected := []string{"claude", "--session-id", "session-abc", "-p", "--", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -106,7 +106,7 @@ func TestClaudeAdapter(t *testing.T) {
 			Resume:    true,
 			Headless:  false,
 		})
-		expected := []string{"claude", "--resume", "session-abc", "continue review"}
+		expected := []string{"claude", "--resume", "session-abc", "--", "continue review"}
 		assertArgs(t, expected, args)
 	})
 
@@ -116,7 +116,7 @@ func TestClaudeAdapter(t *testing.T) {
 			Model:    "opus",
 			Headless: true,
 		})
-		expected := []string{"claude", "--model", "opus", "-p", "do something"}
+		expected := []string{"claude", "--model", "opus", "-p", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -128,7 +128,7 @@ func TestClaudeAdapter(t *testing.T) {
 			Model:     "sonnet",
 			Headless:  true,
 		})
-		expected := []string{"claude", "--session-id", "session-abc", "--model", "sonnet", "-p", "continue"}
+		expected := []string{"claude", "--session-id", "session-abc", "--model", "sonnet", "-p", "--", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -138,7 +138,7 @@ func TestClaudeAdapter(t *testing.T) {
 			Effort:   "high",
 			Headless: true,
 		})
-		expected := []string{"claude", "--effort", "high", "-p", "do something"}
+		expected := []string{"claude", "--effort", "high", "-p", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -161,7 +161,7 @@ func TestClaudeAdapter(t *testing.T) {
 			Effort:   "low",
 			Headless: true,
 		})
-		expected := []string{"claude", "--model", "opus", "--effort", "low", "-p", "do something"}
+		expected := []string{"claude", "--model", "opus", "--effort", "low", "-p", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -188,7 +188,7 @@ func TestClaudeAdapter(t *testing.T) {
 			SessionID:    "uuid-abc",
 			Headless:     true,
 		})
-		expected := []string{"claude", "--session-id", "uuid-abc", "-p", "--append-system-prompt", "extra context", "do something"}
+		expected := []string{"claude", "--session-id", "uuid-abc", "-p", "--append-system-prompt", "extra context", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -198,7 +198,7 @@ func TestClaudeAdapter(t *testing.T) {
 			Headless:        true,
 			DisallowedTools: []string{"AskUserQuestion"},
 		})
-		expected := []string{"claude", "-p", "--disallowedTools", "AskUserQuestion", "do something"}
+		expected := []string{"claude", "-p", "--disallowedTools", "AskUserQuestion", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -208,7 +208,7 @@ func TestClaudeAdapter(t *testing.T) {
 			Headless:        true,
 			DisallowedTools: []string{"AskUserQuestion", "WebSearch"},
 		})
-		expected := []string{"claude", "-p", "--disallowedTools", "AskUserQuestion", "--disallowedTools", "WebSearch", "do something"}
+		expected := []string{"claude", "-p", "--disallowedTools", "AskUserQuestion", "--disallowedTools", "WebSearch", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 

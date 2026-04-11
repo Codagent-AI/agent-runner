@@ -227,7 +227,10 @@ func buildAdapterInput(
 		Headless:  headless,
 	}
 
-	if headless {
+	// Block AskUserQuestion in headless mode so the agent cannot stall
+	// waiting for input. Skip this on resume sessions because Claude CLI
+	// rejects --disallowedTools combined with --resume.
+	if headless && !isResume {
 		input.DisallowedTools = []string{"AskUserQuestion"}
 	}
 
