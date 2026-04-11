@@ -86,14 +86,16 @@ func TestClaudeAdapter(t *testing.T) {
 		assertArgs(t, expected, args)
 	})
 
-	t.Run("resume headless", func(t *testing.T) {
+	t.Run("resume headless uses session-id not resume", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:    "continue",
 			SessionID: "session-abc",
 			Resume:    true,
 			Headless:  true,
 		})
-		expected := []string{"claude", "--resume", "session-abc", "-p", "continue"}
+		// Headless resume uses --session-id because --resume requires a deferred
+		// tool marker which may not exist after a normal session completion.
+		expected := []string{"claude", "--session-id", "session-abc", "-p", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -118,7 +120,7 @@ func TestClaudeAdapter(t *testing.T) {
 		assertArgs(t, expected, args)
 	})
 
-	t.Run("resume with model override", func(t *testing.T) {
+	t.Run("resume headless with model override", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:    "continue",
 			SessionID: "session-abc",
@@ -126,7 +128,7 @@ func TestClaudeAdapter(t *testing.T) {
 			Model:     "sonnet",
 			Headless:  true,
 		})
-		expected := []string{"claude", "--resume", "session-abc", "--model", "sonnet", "-p", "continue"}
+		expected := []string{"claude", "--session-id", "session-abc", "--model", "sonnet", "-p", "continue"}
 		assertArgs(t, expected, args)
 	})
 

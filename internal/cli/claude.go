@@ -9,13 +9,18 @@ type ClaudeAdapter struct{}
 //   - Fresh interactive:  claude --session-id <uuid> <prompt>
 //   - Fresh headless:     claude --session-id <uuid> -p <prompt>
 //   - Resume interactive: claude --resume <uuid> <prompt>
-//   - Resume headless:    claude --resume <uuid> -p <prompt>
+//   - Resume headless:    claude --session-id <uuid> -p <prompt>
 //   - Model override:     appends --model <m>
+//
+// Headless resume uses --session-id instead of --resume because --resume
+// requires a deferred tool marker in the session. When transitioning from
+// an interactive step that completed normally, no marker exists and --resume
+// fails. Using --session-id sends a new message to the existing session.
 func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 	args := []string{"claude"}
 
 	if input.SessionID != "" {
-		if input.Resume {
+		if input.Resume && !input.Headless {
 			args = append(args, "--resume", input.SessionID)
 		} else {
 			args = append(args, "--session-id", input.SessionID)
