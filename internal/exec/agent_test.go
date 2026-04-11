@@ -566,6 +566,21 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("headless resume does not include --disallowedTools", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		ctx := makeCtx()
+		ctx.SessionIDs["prev"] = "session-abc"
+		ctx.LastSessionStepID = "prev"
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "continue", Session: model.SessionResume}
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		args := runner.calls[0]
+		for _, a := range args {
+			if a == "--disallowedTools" {
+				t.Fatalf("expected no --disallowedTools on headless resume (breaks --resume), got %v", args)
+			}
+		}
+	})
+
 	t.Run("interactive claude does not include --disallowedTools", func(t *testing.T) {
 		var ptyCalls [][]string
 		oldFn := interactiveRunnerFn
