@@ -48,7 +48,10 @@ func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 	}
 
 	if input.Prompt != "" {
-		args = append(args, input.Prompt)
+		// Use "--" to terminate flags before the positional prompt. Without
+		// this, variadic flags like --disallowedTools consume the trailing
+		// prompt as an additional flag value.
+		args = append(args, "--", input.Prompt)
 	}
 	return args
 }
