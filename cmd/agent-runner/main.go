@@ -134,6 +134,7 @@ func main() {
 }
 
 func run() int {
+	chdirFlag := flag.String("C", "", "Change to `directory` before doing anything")
 	resumeFlag := flag.Bool("resume", false, "Resume an interrupted workflow")
 	sessionFlag := flag.String("session", "", "Session ID to resume (implies --resume)")
 	validateFlag := flag.Bool("validate", false, "Validate a workflow file without executing")
@@ -143,6 +144,7 @@ func run() int {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: agent-runner [flags] <workflow.yaml> [params...]\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
+		fmt.Fprintf(os.Stderr, "  -C <dir>\n\tChange to directory before doing anything\n")
 		fmt.Fprintf(os.Stderr, "  -resume\n\tResume an interrupted workflow\n")
 		fmt.Fprintf(os.Stderr, "  -session <id>\n\tSession ID to resume (implies -resume)\n")
 		fmt.Fprintf(os.Stderr, "  -validate\n\tValidate a workflow file without executing\n")
@@ -150,6 +152,13 @@ func run() int {
 	}
 
 	flag.Parse()
+
+	if *chdirFlag != "" {
+		if err := os.Chdir(*chdirFlag); err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: -C %s: %v\n", *chdirFlag, err)
+			return 1
+		}
+	}
 
 	if *versionFlag || *vFlag {
 		fmt.Println(version)
