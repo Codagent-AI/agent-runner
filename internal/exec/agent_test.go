@@ -666,7 +666,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		t.Fatalf("expected --append-system-prompt, got %v", args)
 	})
 
-	t.Run("resumed interactive step does not include workflow description", func(t *testing.T) {
+	t.Run("session resume step does not include workflow description", func(t *testing.T) {
 		var capturedArgs [][]string
 		oldFn := interactiveRunnerFn
 		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {

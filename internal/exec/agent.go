@@ -216,7 +216,7 @@ func buildAdapterInput(
 	if headless {
 		fullPrompt = headlessPreamble + fullPrompt
 	} else {
-		fullPrompt = buildStepPrefix(step.ID, ctx, isResume) + fullPrompt + completionInstruction
+		fullPrompt = buildStepPrefix(step.ID, ctx, ctx.WorkflowResumed, isResume) + fullPrompt + completionInstruction
 	}
 
 	input := cli.BuildArgsInput{
@@ -236,9 +236,12 @@ func buildAdapterInput(
 		input.Prompt = fullPrompt
 	case adapter.SupportsSystemPrompt():
 		input.SystemPrompt = fullPrompt
-		if isResume {
-			input.Prompt = fmt.Sprintf("Resume the %s step. If you already started on this step, resume from where you left off.", step.ID)
-		} else {
+		switch {
+		case ctx.WorkflowResumed:
+			input.Prompt = fmt.Sprintf("Resume the %s step.", step.ID)
+		case isResume:
+			input.Prompt = fmt.Sprintf("Let's continue to the %s step", step.ID)
+		default:
 			input.Prompt = fmt.Sprintf("Let's start the %s step", step.ID)
 		}
 	case enrichment != "" || profile.SystemPrompt != "":
@@ -246,6 +249,9 @@ func buildAdapterInput(
 	default:
 		input.Prompt = fullPrompt
 	}
+
+	// Clear the one-shot flag after the first agent step consumes it.
+	ctx.WorkflowResumed = false
 
 	return input
 }
@@ -366,16 +372,18 @@ func logAgentStep(log Logger, mode model.StepMode, prompt string) {
 
 // buildStepPrefix returns a preamble for interactive prompts that orients the
 // agent: which step is starting and (for fresh sessions) which workflow it
-// belongs to.
-// buildStepPrefix returns a preamble for interactive prompts that orients the
-// agent: which step is starting and (for fresh sessions) which workflow it
-// belongs to.
-func buildStepPrefix(stepID string, ctx *model.ExecutionContext, isResume bool) string {
+// belongs to. workflowResumed is true only on the first step after a --resume
+// invocation. isSessionReuse is true when the step reuses a CLI session
+// (session: resume) — in that case the workflow description is omitted since
+// the agent already received it.
+func buildStepPrefix(stepID string, ctx *model.ExecutionContext, workflowResumed, isSessionReuse bool) string {
 	var sb strings.Builder
 
 	switch {
-	case isResume:
+	case workflowResumed:
 		fmt.Fprintf(&sb, "Resuming step: %q. If you already started on this step, resume from where you left off.\n\n", stepID)
+	case isSessionReuse:
+		fmt.Fprintf(&sb, "Continuing to step %q.\n\n", stepID)
 	case ctx.WorkflowName != "":
 		fmt.Fprintf(&sb, "You are running in the %q workflow", ctx.WorkflowName)
 		if ctx.WorkflowDescription != "" {
