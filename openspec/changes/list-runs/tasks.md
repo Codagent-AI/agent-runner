@@ -1,0 +1,2 @@
+- [ ] Run lock file, runner integration, and run discovery (`tasks/runlock-runs-foundation.md`)
+- [ ] TUI and CLI entry point (`tasks/tui-cli.md`)
