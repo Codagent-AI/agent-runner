@@ -22,6 +22,7 @@ import (
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runner"
+	"github.com/codagent/agent-runner/internal/runs"
 	"github.com/codagent/agent-runner/internal/tui"
 )
 
@@ -249,7 +250,29 @@ func handleList() int {
 		return 1
 	}
 	if sel := finalModel.SelectedRun(); sel != nil {
-		return handleResume(sel.SessionID)
+		return handleResumeSelectedRun(sel)
+	}
+	return 0
+}
+
+func handleResumeSelectedRun(sel *runs.RunInfo) int {
+	stateFile := filepath.Join(sel.SessionDir, "state.json")
+	if _, err := os.Stat(stateFile); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: session state not found: %s\n", stateFile)
+		return 1
+	}
+
+	result, err := runner.ResumeWorkflow(stateFile, &runner.Options{
+		ProcessRunner: &realProcessRunner{},
+		GlobExpander:  &realGlobExpander{},
+		Log:           &realLogger{},
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+	if result != runner.ResultSuccess {
+		return 1
 	}
 	return 0
 }
