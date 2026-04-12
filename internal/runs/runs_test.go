@@ -237,8 +237,9 @@ func TestReadProjectPath(t *testing.T) {
 	t.Run("falls back to directory basename without meta.json", func(t *testing.T) {
 		dir := t.TempDir()
 		result := ReadProjectPath(dir)
-		if result != filepath.Base(dir) {
-			t.Fatalf("expected %q, got %q", filepath.Base(dir), result)
+		want := "? " + filepath.Base(dir)
+		if result != want {
+			t.Fatalf("expected %q, got %q", want, result)
 		}
 	})
 
@@ -247,8 +248,9 @@ func TestReadProjectPath(t *testing.T) {
 		os.WriteFile(filepath.Join(dir, "meta.json"), []byte("not json"), 0o600)
 
 		result := ReadProjectPath(dir)
-		if result != filepath.Base(dir) {
-			t.Fatalf("expected %q, got %q", filepath.Base(dir), result)
+		want := "? " + filepath.Base(dir)
+		if result != want {
+			t.Fatalf("expected %q, got %q", want, result)
 		}
 	})
 
@@ -259,8 +261,9 @@ func TestReadProjectPath(t *testing.T) {
 		os.WriteFile(filepath.Join(dir, "meta.json"), data, 0o600)
 
 		result := ReadProjectPath(dir)
-		if result != filepath.Base(dir) {
-			t.Fatalf("expected %q, got %q", filepath.Base(dir), result)
+		want := "? " + filepath.Base(dir)
+		if result != want {
+			t.Fatalf("expected %q, got %q", want, result)
 		}
 	})
 }

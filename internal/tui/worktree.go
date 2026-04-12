@@ -1,11 +1,11 @@
 package tui
 
 import (
-	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/runs"
@@ -32,11 +32,6 @@ func ListWorktrees(projectsRoot string) []WorktreeEntry {
 		return nil
 	}
 
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil
-	}
-
 	var entries []WorktreeEntry
 	for _, p := range paths {
 		encoded := audit.EncodePath(p)
@@ -51,15 +46,23 @@ func ListWorktrees(projectsRoot string) []WorktreeEntry {
 	}
 
 	sort.SliceStable(entries, func(i, j int) bool {
-		isCwdI := entries[i].Path == cwd
-		isCwdJ := entries[j].Path == cwd
-		if isCwdI != isCwdJ {
-			return isCwdI
+		ti, tj := mostRecentRun(entries[i].Runs), mostRecentRun(entries[j].Runs)
+		if !ti.Equal(tj) {
+			return ti.After(tj)
 		}
 		return entries[i].Name < entries[j].Name
 	})
 
 	return entries
+}
+
+// mostRecentRun returns the LastUpdate of the first run (runs are sorted
+// most-recent first by runs.ListForDir), or the zero time if there are none.
+func mostRecentRun(rs []runs.RunInfo) time.Time {
+	if len(rs) == 0 {
+		return time.Time{}
+	}
+	return rs[0].LastUpdate
 }
 
 func parseWorktreePaths(output string) []string {

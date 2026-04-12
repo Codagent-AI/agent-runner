@@ -32,6 +32,11 @@ type RunInfo struct {
 	CurrentStep  string // empty when status is Completed
 	Status       Status
 	StartTime    time.Time
+	LastUpdate   time.Time // most recent activity (audit.log mtime)
+	// ChangeName is pulled from the run's `change_name` param when present.
+	// TODO: replace with a first-class "run name" attribute on all runs, set
+	// explicitly by the workflow rather than sniffed from a conventional param.
+	ChangeName string
 }
 
 // projectMeta is the JSON structure of meta.json.
@@ -89,6 +94,7 @@ func ListForDir(projectDir string) ([]RunInfo, error) {
 			if readErr == nil {
 				info.WorkflowName = state.WorkflowName
 				info.CurrentStep = currentStepID(&state)
+				info.ChangeName = state.Params["change_name"]
 			}
 		}
 
@@ -99,30 +105,34 @@ func ListForDir(projectDir string) ([]RunInfo, error) {
 
 		// Parse start time from session ID.
 		info.StartTime = parseStartTime(sessionID)
+		info.LastUpdate = lastUpdateTime(sessionDir, info.StartTime)
 
 		results = append(results, info)
 	}
 
-	// Sort most recent first.
+	// Sort most recent first by last update.
 	sort.Slice(results, func(i, j int) bool {
-		return results[i].StartTime.After(results[j].StartTime)
+		return results[i].LastUpdate.After(results[j].LastUpdate)
 	})
 
 	return results, nil
 }
 
 // ReadProjectPath returns the stored path from meta.json, or the encoded
-// directory name if meta.json does not exist.
+// directory name (prefixed with "?") when meta.json is absent. The encoder in
+// audit.EncodePath collapses '/', '.', and '_' all to '-', so the original
+// path cannot be reliably recovered from the directory name alone.
+// meta.json is written on every run, so any active project will display
+// correctly once it has run at least once after meta.json support landed.
 func ReadProjectPath(projectDir string) string {
 	data, err := os.ReadFile(filepath.Join(projectDir, "meta.json")) // #nosec G304 -- project dir is from internal state tracking
-	if err != nil {
-		return filepath.Base(projectDir)
+	if err == nil {
+		var meta projectMeta
+		if jerr := json.Unmarshal(data, &meta); jerr == nil && meta.Path != "" {
+			return meta.Path
+		}
 	}
-	var meta projectMeta
-	if err := json.Unmarshal(data, &meta); err != nil || meta.Path == "" {
-		return filepath.Base(projectDir)
-	}
-	return meta.Path
+	return "? " + filepath.Base(projectDir)
 }
 
 // parseWorkflowName extracts the workflow name from a session ID by removing
@@ -191,6 +201,26 @@ func leafStepID(n *model.NestedStepState) string {
 		return leafStepID(n.Child)
 	}
 	return n.StepID
+}
+
+// lastUpdateTime returns the most recent mtime among audit.log, state.json,
+// and the session directory itself, falling back to fallback if none exist.
+func lastUpdateTime(sessionDir string, fallback time.Time) time.Time {
+	latest := fallback
+	for _, name := range []string{"audit.log", "state.json", ""} {
+		p := sessionDir
+		if name != "" {
+			p = filepath.Join(sessionDir, name)
+		}
+		fi, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		if m := fi.ModTime(); m.After(latest) {
+			latest = m
+		}
+	}
+	return latest
 }
 
 func fileExists(path string) bool {
