@@ -36,6 +36,44 @@ func (m *mockRunner) RunAgent(args []string, _ bool, _ string) (exec.ProcessResu
 	return r, nil
 }
 
+// lockProbeRunner is a mockRunner variant that records whether the lock file
+// exists at the moment RunShell/RunAgent is invoked (i.e. while the step is
+// "executing"). This proves the lock was written before the step runs,
+// rather than only checking after finalizeRun has already deleted it.
+type lockProbeRunner struct {
+	calls    [][]string
+	results  []exec.ProcessResult
+	idx      int
+	lockPath string
+	observed *bool
+}
+
+func (m *lockProbeRunner) RunShell(cmd string, _ bool, _ string) (exec.ProcessResult, error) {
+	m.calls = append(m.calls, []string{"sh", "-c", cmd})
+	if _, err := os.Stat(m.lockPath); err == nil && m.observed != nil {
+		*m.observed = true
+	}
+	if m.idx >= len(m.results) {
+		return exec.ProcessResult{ExitCode: 0}, nil
+	}
+	r := m.results[m.idx]
+	m.idx++
+	return r, nil
+}
+
+func (m *lockProbeRunner) RunAgent(args []string, _ bool, _ string) (exec.ProcessResult, error) {
+	m.calls = append(m.calls, args)
+	if _, err := os.Stat(m.lockPath); err == nil && m.observed != nil {
+		*m.observed = true
+	}
+	if m.idx >= len(m.results) {
+		return exec.ProcessResult{ExitCode: 0}, nil
+	}
+	r := m.results[m.idx]
+	m.idx++
+	return r, nil
+}
+
 type mockGlob struct{ matches []string }
 
 func (g *mockGlob) Expand(_ string) ([]string, error) { return g.matches, nil }
@@ -340,7 +378,13 @@ func TestRunWorkflow(t *testing.T) {
 
 	t.Run("creates lock file during run and deletes it on success", func(t *testing.T) {
 		sessionDir := t.TempDir()
-		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}}}
+		lockFile := filepath.Join(sessionDir, "lock")
+		lockSeenDuringStep := false
+		runner := &lockProbeRunner{
+			results:  []exec.ProcessResult{{ExitCode: 0}},
+			lockPath: lockFile,
+			observed: &lockSeenDuringStep,
+		}
 		w := model.Workflow{
 			Name:  "test",
 			Steps: []model.Step{shellStep("s1", "echo ok")},
@@ -355,8 +399,10 @@ func TestRunWorkflow(t *testing.T) {
 		if result != ResultSuccess {
 			t.Fatalf("expected success, got %q", result)
 		}
+		if !lockSeenDuringStep {
+			t.Fatal("expected lock file to exist while step was executing")
+		}
 
-		lockFile := filepath.Join(sessionDir, "lock")
 		if _, err := os.Stat(lockFile); !os.IsNotExist(err) {
 			t.Fatal("expected lock file to be deleted after successful run")
 		}

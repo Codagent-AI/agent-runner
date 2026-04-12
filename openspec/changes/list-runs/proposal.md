@@ -14,12 +14,12 @@ There is no way to see what workflow runs exist, what state they're in, or wheth
 
 ### New Capabilities
 
-- `list-runs`: The list command — reads run state and audit logs, determines run status, formats and displays the run table. Covers `--list` flag, `--dir` option, worktree detection, and output formatting.
+- `list-runs`: The list command — reads run state, determines run status, and renders a bubbletea/lipgloss TUI with three scoped tabs (current directory, worktrees, all directories). Covers `--list` flag, worktree detection, and TUI formatting.
 - `run-lock`: PID lock file lifecycle — creation on run start, cleanup on completion, stale lock detection via PID-alive checks. Consumed by list-runs for active status, but managed independently as part of the run lifecycle.
 
 ### Modified Capabilities
 
-- `resume-by-session-id`: The "Resume most recent session" scenario changes. `--resume` without `--session` no longer auto-resumes — it shows the run list instead. `--resume --session <id>` is unchanged.
+- `resume-by-session-id`: The "Resume most recent session" scenario changes. `--resume` without a session ID no longer auto-resumes — it shows the run list instead. The `--session` flag is removed; resuming a specific session is now spelled `--resume <id>`.
 
 ## Out of Scope
 

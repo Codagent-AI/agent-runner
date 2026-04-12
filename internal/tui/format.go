@@ -78,10 +78,14 @@ func fitCell(s string, n int) string {
 
 func shortenPath(p string) string {
 	home, err := os.UserHomeDir()
-	if err != nil {
+	if err != nil || home == "" {
 		return p
 	}
-	if strings.HasPrefix(p, home) {
+	if p == home {
+		return "~"
+	}
+	sep := string(os.PathSeparator)
+	if strings.HasPrefix(p, home+sep) {
 		return "~" + p[len(home):]
 	}
 	return p
@@ -149,7 +153,13 @@ func sanitize(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for _, r := range s {
-		if r == '\t' || (unicode.IsPrint(r) && !unicode.Is(unicode.Co, r)) {
+		if r == '\t' {
+			// Replace tabs with a single space so column widths measured via
+			// runewidth.StringWidth remain accurate.
+			b.WriteByte(' ')
+			continue
+		}
+		if unicode.IsPrint(r) && !unicode.Is(unicode.Co, r) {
 			b.WriteRune(r)
 		}
 	}

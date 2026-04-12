@@ -27,7 +27,7 @@ The TUI is a product investment — the vision is for agent-runner to evolve int
 
 PID lock file lifecycle. Knows nothing about workflows — only about process liveness.
 
-```
+```go
 Write(sessionDir string) error         // write lock file with os.Getpid()
 Delete(sessionDir string)              // delete lock file (best-effort)
 Check(sessionDir string) LockStatus   // Active | Stale | None
@@ -42,7 +42,7 @@ Check(sessionDir string) LockStatus   // Active | Stale | None
 
 Run discovery and status assembly. Reads session directories, delegates lock checks to `runlock`.
 
-```
+```go
 type RunInfo struct {
     SessionID    string
     SessionDir   string
@@ -67,7 +67,7 @@ Sorted most recent first (session ID timestamp, parsed from directory name).
 
 bubbletea Model. Three tabs; Worktrees and All tabs have a two-level sub-state (Picker → RunList).
 
-```
+```text
 Model
 ├── activeTab      Tab (CurrentDir | Worktrees | All)
 ├── currentDir     string
@@ -91,7 +91,7 @@ Library: `github.com/charmbracelet/bubbletea` + `github.com/charmbracelet/lipglo
 
 All colors defined in `internal/tui/styles.go` using `lipgloss.AdaptiveColor` (dark/light variant per token). Palette derived from codagent.dev:
 
-```
+```text
 Token           Dark      Light
 ─────────────────────────────────
 active green    #4ade80   #16a34a   (pulse: ↔ #2d8f57 / #86efac)
@@ -127,7 +127,7 @@ Used by the All tab to display human-readable directory paths. `EncodePath` is l
 
 ### CLI changes
 
-```
+```text
 agent-runner                       → handleList() — TUI
 agent-runner --list                → handleList() — TUI
 agent-runner --resume              → handleList() — TUI

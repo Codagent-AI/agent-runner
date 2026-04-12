@@ -14,7 +14,7 @@ Create the data foundation for the run list TUI: a PID lock file package that tr
   <encoded-cwd>/                        ← project directory (/ . _ → -)
     meta.json                           ← NEW: {"path": "/original/cwd"}
     runs/
-      <workflow-name>-<RFC3339>/        ← session directory
+      <workflow-name>-<RFC3339Nano>/    ← session directory (colons/dots → hyphens)
         lock                            ← NEW: plain text file containing PID integer
         state.json                      ← exists while run is resumable; deleted on success
         audit.log                       ← always persists
@@ -55,7 +55,12 @@ const (
 
 Lock file name: `lock` (plain text, contains the decimal PID integer, newline-terminated).
 
-PID liveness: use `os.FindProcess(pid)` followed by `process.Signal(syscall.Signal(0))`. A zero signal doesn't kill the process — it just checks if it's alive. An error from `Signal` means the process is dead.
+PID liveness: use `os.FindProcess(pid)` followed by `process.Signal(syscall.Signal(0))`. A zero signal doesn't kill the process — it just checks whether delivering a signal to the PID would succeed. Interpret the result by error kind:
+- `nil` → PID is alive
+- `syscall.EPERM` → PID is alive (process exists but the caller lacks permission to signal it)
+- `syscall.ESRCH` (or, more portably, `errors.Is(err, os.ErrProcessDone)`) → PID is dead
+
+Only treat ESRCH-equivalent errors as "dead"; any other error means the process is alive from our perspective. Treating every non-nil error as "dead" will misclassify still-running processes we don't own.
 
 **Runner integration — `internal/runner/runner.go`:**
 

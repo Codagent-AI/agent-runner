@@ -25,7 +25,9 @@ func setupSession(t *testing.T, projectDir, sessionID string, opts sessionOpts) 
 		}
 	}
 	if opts.lockPID != 0 {
-		os.WriteFile(filepath.Join(sessionDir, "lock"), []byte(fmt.Sprintf("%d\n", opts.lockPID)), 0o600)
+		if err := os.WriteFile(filepath.Join(sessionDir, "lock"), []byte(fmt.Sprintf("%d\n", opts.lockPID)), 0o600); err != nil {
+			t.Fatalf("failed to write lock file: %v", err)
+		}
 	}
 	return sessionDir
 }
@@ -208,8 +210,12 @@ func TestListForDir(t *testing.T) {
 	t.Run("skips non-directory entries", func(t *testing.T) {
 		projectDir := t.TempDir()
 		runsDir := filepath.Join(projectDir, "runs")
-		os.MkdirAll(runsDir, 0o750)
-		os.WriteFile(filepath.Join(runsDir, "stray-file.txt"), []byte("hi"), 0o600)
+		if err := os.MkdirAll(runsDir, 0o750); err != nil {
+			t.Fatalf("failed to create runs dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(runsDir, "stray-file.txt"), []byte("hi"), 0o600); err != nil {
+			t.Fatalf("failed to write stray file: %v", err)
+		}
 
 		infos, err := ListForDir(projectDir)
 		if err != nil {
@@ -225,8 +231,13 @@ func TestReadProjectPath(t *testing.T) {
 	t.Run("reads path from meta.json", func(t *testing.T) {
 		dir := t.TempDir()
 		meta := map[string]string{"path": "/home/user/myproject"}
-		data, _ := json.Marshal(meta)
-		os.WriteFile(filepath.Join(dir, "meta.json"), data, 0o600)
+		data, err := json.Marshal(meta)
+		if err != nil {
+			t.Fatalf("failed to marshal meta: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "meta.json"), data, 0o600); err != nil {
+			t.Fatalf("failed to write meta.json: %v", err)
+		}
 
 		result := ReadProjectPath(dir)
 		if result != "/home/user/myproject" {
@@ -245,7 +256,9 @@ func TestReadProjectPath(t *testing.T) {
 
 	t.Run("falls back for malformed meta.json", func(t *testing.T) {
 		dir := t.TempDir()
-		os.WriteFile(filepath.Join(dir, "meta.json"), []byte("not json"), 0o600)
+		if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte("not json"), 0o600); err != nil {
+			t.Fatalf("failed to write meta.json: %v", err)
+		}
 
 		result := ReadProjectPath(dir)
 		want := "? " + filepath.Base(dir)
@@ -257,8 +270,13 @@ func TestReadProjectPath(t *testing.T) {
 	t.Run("falls back for empty path in meta.json", func(t *testing.T) {
 		dir := t.TempDir()
 		meta := map[string]string{"path": ""}
-		data, _ := json.Marshal(meta)
-		os.WriteFile(filepath.Join(dir, "meta.json"), data, 0o600)
+		data, err := json.Marshal(meta)
+		if err != nil {
+			t.Fatalf("failed to marshal meta: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "meta.json"), data, 0o600); err != nil {
+			t.Fatalf("failed to write meta.json: %v", err)
+		}
 
 		result := ReadProjectPath(dir)
 		want := "? " + filepath.Base(dir)

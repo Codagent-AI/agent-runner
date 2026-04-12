@@ -130,9 +130,12 @@ func TestCheck(t *testing.T) {
 	t.Run("returns LockStale for unreadable lock file", func(t *testing.T) {
 		dir := t.TempDir()
 		lockPath := filepath.Join(dir, "lock")
-		os.WriteFile(lockPath, []byte("12345\n"), 0o600)
-		os.Chmod(lockPath, 0o000)
-		t.Cleanup(func() { os.Chmod(lockPath, 0o600) })
+		// Make "lock" a directory rather than a regular file so the read
+		// attempt deterministically fails on all platforms (chmod 0o000 is
+		// unreliable on Windows and bypassable by root on Unix).
+		if err := os.Mkdir(lockPath, 0o755); err != nil {
+			t.Fatalf("failed to create lock directory: %v", err)
+		}
 
 		status := Check(dir)
 		if status != LockStale {

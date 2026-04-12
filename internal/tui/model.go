@@ -124,6 +124,21 @@ func New() (*Model, error) {
 func (m *Model) loadData() {
 	var errs []string
 
+	// Capture stable identity of the currently-highlighted item in each view
+	// so we can re-anchor the numeric cursor after the underlying slices are
+	// rebuilt and possibly reordered.
+	prevCurrentSession := cursorSessionID(m.currentRuns, m.currentDirCursor)
+	prevWorktreePickerPath := cursorWorktreePath(m.worktreeTab.worktrees, m.worktreeTab.pickerCursor)
+	prevWorktreeRunSession := ""
+	if wt := m.selectedWorktree(); wt != nil {
+		prevWorktreeRunSession = cursorSessionID(wt.Runs, m.worktreeTab.listCursor)
+	}
+	prevAllPickerEncoded := cursorDirEncoded(m.allTab.dirs, m.allTab.pickerCursor)
+	prevAllRunSession := ""
+	if d := m.selectedAllDir(); d != nil {
+		prevAllRunSession = cursorSessionID(d.Runs, m.allTab.listCursor)
+	}
+
 	currentRuns, err := runs.ListForDir(m.projectDir)
 	if err != nil {
 		errs = append(errs, fmt.Sprintf("current dir: %v", err))
@@ -159,11 +174,77 @@ func (m *Model) loadData() {
 		}
 	}
 
+	// Re-anchor cursors using stable keys captured before the reload, then
+	// clamp against the new slice lengths.
+	m.currentDirCursor = reanchorRunCursor(m.currentRuns, prevCurrentSession, m.currentDirCursor)
+	m.worktreeTab.pickerCursor = reanchorWorktreeCursor(m.worktreeTab.worktrees, prevWorktreePickerPath, m.worktreeTab.pickerCursor)
+	if wt := m.selectedWorktree(); wt != nil {
+		m.worktreeTab.listCursor = reanchorRunCursor(wt.Runs, prevWorktreeRunSession, m.worktreeTab.listCursor)
+	}
+	m.allTab.pickerCursor = reanchorDirCursor(m.allTab.dirs, prevAllPickerEncoded, m.allTab.pickerCursor)
+	if d := m.selectedAllDir(); d != nil {
+		m.allTab.listCursor = reanchorRunCursor(d.Runs, prevAllRunSession, m.allTab.listCursor)
+	}
+
 	if len(errs) > 0 {
 		m.loadErr = strings.Join(errs, "; ")
 	} else {
 		m.loadErr = ""
 	}
+}
+
+func cursorSessionID(runList []runs.RunInfo, cursor int) string {
+	if cursor < 0 || cursor >= len(runList) {
+		return ""
+	}
+	return runList[cursor].SessionID
+}
+
+func cursorWorktreePath(wts []WorktreeEntry, cursor int) string {
+	if cursor < 0 || cursor >= len(wts) {
+		return ""
+	}
+	return wts[cursor].Path
+}
+
+func cursorDirEncoded(dirs []DirEntry, cursor int) string {
+	if cursor < 0 || cursor >= len(dirs) {
+		return ""
+	}
+	return dirs[cursor].Encoded
+}
+
+func reanchorRunCursor(runList []runs.RunInfo, key string, fallback int) int {
+	if key != "" {
+		for i := range runList {
+			if runList[i].SessionID == key {
+				return i
+			}
+		}
+	}
+	return clampCursor(fallback, len(runList))
+}
+
+func reanchorWorktreeCursor(wts []WorktreeEntry, key string, fallback int) int {
+	if key != "" {
+		for i := range wts {
+			if wts[i].Path == key {
+				return i
+			}
+		}
+	}
+	return clampCursor(fallback, len(wts))
+}
+
+func reanchorDirCursor(dirs []DirEntry, key string, fallback int) int {
+	if key != "" {
+		for i := range dirs {
+			if dirs[i].Encoded == key {
+				return i
+			}
+		}
+	}
+	return clampCursor(fallback, len(dirs))
 }
 
 func listAllDirs(projectsRoot string) []DirEntry {
