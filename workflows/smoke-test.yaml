@@ -1,14 +1,27 @@
 name: smoke-test
-description: "Quick smoke test for interactive step completion signaling"
+description: "Exercises interactive→headless resume with capture+disallowedTools, then interactive resume"
 
 steps:
   - id: greet
     agent: interactive_base
     prompt: |
-      Say hello.
+      Say hello briefly.
       Once you've done that, continue to the next step.
+
+  - id: headless-resume-capture
+    session: resume
+    mode: headless
+    capture: resume_reply
+    prompt: |
+      In one short sentence, confirm you remember saying hello.
+    # Verifies the fix: headless resume of an interactive-originated session
+    # must go through `claude --resume <uuid> -p --disallowedTools ...`.
+    # Before the fix this failed with "Session ID X is already in use"
+    # (wrong flag) or was blocked from combining --disallowedTools with
+    # --resume.
 
   - id: how-are-you
     session: resume
     prompt: |
-      Ask the user how they are doing.
+      You captured earlier: {{resume_reply}}
+      Now ask the user how they are doing.
