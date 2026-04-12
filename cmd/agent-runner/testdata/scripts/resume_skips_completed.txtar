@@ -21,7 +21,7 @@ stdout 'not-rerun'
 exec cp success-trigger.txt trigger.txt
 
 # Resume: step 1 should be skipped, step 2 should re-run and succeed.
-exec agent-runner -resume
+exec sh -c 'agent-runner -resume $(ls .agent-runner/projects/*/runs/)'
 
 # Verify step 1 was NOT re-run (marker still says not-rerun).
 exec cat marker.txt
