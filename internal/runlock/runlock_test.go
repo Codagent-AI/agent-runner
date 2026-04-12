@@ -106,4 +106,37 @@ func TestCheck(t *testing.T) {
 			t.Fatalf("expected LockActive with whitespace, got %d", status)
 		}
 	})
+
+	t.Run("returns LockStale for PID zero", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "lock"), []byte("0\n"), 0o600)
+
+		status := Check(dir)
+		if status != LockStale {
+			t.Fatalf("expected LockStale for PID 0, got %d", status)
+		}
+	})
+
+	t.Run("returns LockStale for negative PID", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "lock"), []byte("-1\n"), 0o600)
+
+		status := Check(dir)
+		if status != LockStale {
+			t.Fatalf("expected LockStale for negative PID, got %d", status)
+		}
+	})
+
+	t.Run("returns LockStale for unreadable lock file", func(t *testing.T) {
+		dir := t.TempDir()
+		lockPath := filepath.Join(dir, "lock")
+		os.WriteFile(lockPath, []byte("12345\n"), 0o600)
+		os.Chmod(lockPath, 0o000)
+		t.Cleanup(func() { os.Chmod(lockPath, 0o600) })
+
+		status := Check(dir)
+		if status != LockStale {
+			t.Fatalf("expected LockStale for unreadable lock, got %d", status)
+		}
+	})
 }

@@ -88,7 +88,7 @@ func ListForDir(projectDir string) ([]RunInfo, error) {
 			state, readErr := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
 			if readErr == nil {
 				info.WorkflowName = state.WorkflowName
-				info.CurrentStep = currentStepID(state)
+				info.CurrentStep = currentStepID(&state)
 			}
 		}
 
@@ -114,7 +114,7 @@ func ListForDir(projectDir string) ([]RunInfo, error) {
 // ReadProjectPath returns the stored path from meta.json, or the encoded
 // directory name if meta.json does not exist.
 func ReadProjectPath(projectDir string) string {
-	data, err := os.ReadFile(filepath.Join(projectDir, "meta.json"))
+	data, err := os.ReadFile(filepath.Join(projectDir, "meta.json")) // #nosec G304 -- project dir is from internal state tracking
 	if err != nil {
 		return filepath.Base(projectDir)
 	}
@@ -152,11 +152,11 @@ func parseStartTime(sessionID string) time.Time {
 	// We need to restore: T09-14-00 → T09:14:00
 	// The date part (2026-04-11) uses real hyphens, so we only fix the time part.
 	if len(tsPart) >= 19 {
-		// Positions 13 and 16 in the timestamp are where colons should be.
-		// "2026-04-11T09-14-00..." → "2026-04-11T09:14:00..."
 		ts := []byte(tsPart)
-		ts[13] = ':'
-		ts[16] = ':'
+		if ts[13] == '-' && ts[16] == '-' {
+			ts[13] = ':'
+			ts[16] = ':'
+		}
 		tsPart = string(ts)
 	}
 
@@ -178,7 +178,7 @@ func parseStartTime(sessionID string) time.Time {
 }
 
 // currentStepID extracts the leaf step ID from a RunState.
-func currentStepID(state model.RunState) string {
+func currentStepID(state *model.RunState) string {
 	if state.CurrentStep.Nested != nil {
 		return leafStepID(state.CurrentStep.Nested)
 	}

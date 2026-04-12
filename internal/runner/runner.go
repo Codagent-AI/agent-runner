@@ -190,15 +190,37 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		return nil, fmt.Errorf("create session dir: %w", err)
 	}
 
-	// Write lock file (non-fatal).
-	_ = runlock.Write(sessionDir)
+	if err := runlock.Write(sessionDir); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: warning: could not write lock file in %s: %v\n", sessionDir, err)
+	}
 
-	// Write meta.json to the project directory if it does not already exist.
 	if opts.SessionDir == "" {
 		projectDir := filepath.Dir(filepath.Dir(sessionDir)) // parent of runs/
 		writeMetaJSON(projectDir, cwd)
 	}
 
+	auditLogger, ctx := buildExecutionContext(workflow, params, opts, sessionDir)
+
+	log := opts.Log
+	if log == nil {
+		log = &defaultLogger{}
+	}
+
+	return &runState{
+		workflow:     *workflow,
+		ctx:          ctx,
+		sessionDir:   sessionDir,
+		sessionID:    sessionID,
+		workflowHash: computeHash(opts.WorkflowFile),
+		auditLogger:  auditLogger,
+		runStartTime: now,
+		log:          log,
+		runner:       opts.ProcessRunner,
+		glob:         opts.GlobExpander,
+	}, nil
+}
+
+func buildExecutionContext(workflow *model.Workflow, params map[string]string, opts *Options, sessionDir string) (*audit.Logger, *model.ExecutionContext) {
 	var engineRef interface{}
 	if opts.Engine != nil {
 		engineRef = opts.Engine
@@ -236,24 +258,7 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	if opts.From != "" {
 		ctx.WorkflowResumed = true
 	}
-
-	log := opts.Log
-	if log == nil {
-		log = &defaultLogger{}
-	}
-
-	return &runState{
-		workflow:     *workflow,
-		ctx:          ctx,
-		sessionDir:   sessionDir,
-		sessionID:    sessionID,
-		workflowHash: computeHash(opts.WorkflowFile),
-		auditLogger:  auditLogger,
-		runStartTime: now,
-		log:          log,
-		runner:       opts.ProcessRunner,
-		glob:         opts.GlobExpander,
-	}, nil
+	return auditLogger, ctx
 }
 
 func emitRunStart(rs *runState, opts *Options) {

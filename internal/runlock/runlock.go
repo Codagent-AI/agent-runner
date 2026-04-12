@@ -2,6 +2,7 @@
 package runlock
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,13 +36,16 @@ func Delete(sessionDir string) {
 
 // Check returns the lock status for the given session directory.
 func Check(sessionDir string) LockStatus {
-	data, err := os.ReadFile(filepath.Join(sessionDir, lockFileName))
+	data, err := os.ReadFile(filepath.Join(sessionDir, lockFileName)) // #nosec G304 -- session dir is from internal state tracking
 	if err != nil {
-		return LockNone
+		if os.IsNotExist(err) {
+			return LockNone
+		}
+		return LockStale
 	}
 
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
+	if err != nil || pid <= 0 {
 		return LockStale
 	}
 
@@ -58,5 +62,5 @@ func isProcessAlive(pid int) bool {
 		return false
 	}
 	err = proc.Signal(syscall.Signal(0))
-	return err == nil
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
