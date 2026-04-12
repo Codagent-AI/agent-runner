@@ -110,8 +110,13 @@ func ListForDir(projectDir string) ([]RunInfo, error) {
 		results = append(results, info)
 	}
 
-	// Sort most recent first by last update.
-	sort.Slice(results, func(i, j int) bool {
+	// Sort most recent first by last update, breaking ties by start time so
+	// the order is deterministic when filesystem timestamps collide (common in
+	// tests and when multiple runs land within the mtime resolution window).
+	sort.SliceStable(results, func(i, j int) bool {
+		if results[i].LastUpdate.Equal(results[j].LastUpdate) {
+			return results[i].StartTime.After(results[j].StartTime)
+		}
 		return results[i].LastUpdate.After(results[j].LastUpdate)
 	})
 
