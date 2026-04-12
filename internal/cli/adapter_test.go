@@ -63,7 +63,7 @@ func TestClaudeAdapter(t *testing.T) {
 			SessionID: "uuid-123",
 			Headless:  true,
 		})
-		expected := []string{"claude", "--session-id", "uuid-123", "-p", "do something"}
+		expected := []string{"claude", "--session-id", "uuid-123", "-p", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -73,7 +73,7 @@ func TestClaudeAdapter(t *testing.T) {
 			SessionID: "uuid-456",
 			Headless:  false,
 		})
-		expected := []string{"claude", "--session-id", "uuid-456", "review code"}
+		expected := []string{"claude", "--session-id", "uuid-456", "--", "review code"}
 		assertArgs(t, expected, args)
 	})
 
@@ -82,18 +82,20 @@ func TestClaudeAdapter(t *testing.T) {
 			Prompt:   "do something",
 			Headless: true,
 		})
-		expected := []string{"claude", "-p", "do something"}
+		expected := []string{"claude", "-p", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
-	t.Run("resume headless", func(t *testing.T) {
+	t.Run("resume headless uses --resume", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:    "continue",
 			SessionID: "session-abc",
 			Resume:    true,
 			Headless:  true,
 		})
-		expected := []string{"claude", "--resume", "session-abc", "-p", "continue"}
+		// --session-id is reserved for fresh sessions — Claude CLI rejects it
+		// for existing session IDs. Use --resume for headless continuations too.
+		expected := []string{"claude", "--resume", "session-abc", "-p", "--", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -104,7 +106,7 @@ func TestClaudeAdapter(t *testing.T) {
 			Resume:    true,
 			Headless:  false,
 		})
-		expected := []string{"claude", "--resume", "session-abc", "continue review"}
+		expected := []string{"claude", "--resume", "session-abc", "--", "continue review"}
 		assertArgs(t, expected, args)
 	})
 
@@ -114,11 +116,11 @@ func TestClaudeAdapter(t *testing.T) {
 			Model:    "opus",
 			Headless: true,
 		})
-		expected := []string{"claude", "--model", "opus", "-p", "do something"}
+		expected := []string{"claude", "--model", "opus", "-p", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
-	t.Run("resume with model override", func(t *testing.T) {
+	t.Run("resume headless with model override", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:    "continue",
 			SessionID: "session-abc",
@@ -126,7 +128,21 @@ func TestClaudeAdapter(t *testing.T) {
 			Model:     "sonnet",
 			Headless:  true,
 		})
-		expected := []string{"claude", "--resume", "session-abc", "--model", "sonnet", "-p", "continue"}
+		expected := []string{"claude", "--resume", "session-abc", "--model", "sonnet", "-p", "--", "continue"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("resume headless with disallowed tools", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:          "continue",
+			SessionID:       "session-abc",
+			Resume:          true,
+			Headless:        true,
+			DisallowedTools: []string{"AskUserQuestion"},
+		})
+		// --disallowedTools is compatible with --resume; both flags coexist on
+		// headless resume steps.
+		expected := []string{"claude", "--resume", "session-abc", "-p", "--disallowedTools", "AskUserQuestion", "--", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -136,7 +152,7 @@ func TestClaudeAdapter(t *testing.T) {
 			Effort:   "high",
 			Headless: true,
 		})
-		expected := []string{"claude", "--effort", "high", "-p", "do something"}
+		expected := []string{"claude", "--effort", "high", "-p", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -159,7 +175,7 @@ func TestClaudeAdapter(t *testing.T) {
 			Effort:   "low",
 			Headless: true,
 		})
-		expected := []string{"claude", "--model", "opus", "--effort", "low", "-p", "do something"}
+		expected := []string{"claude", "--model", "opus", "--effort", "low", "-p", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -186,8 +202,40 @@ func TestClaudeAdapter(t *testing.T) {
 			SessionID:    "uuid-abc",
 			Headless:     true,
 		})
-		expected := []string{"claude", "--session-id", "uuid-abc", "-p", "--append-system-prompt", "extra context", "do something"}
+		expected := []string{"claude", "--session-id", "uuid-abc", "-p", "--append-system-prompt", "extra context", "--", "do something"}
 		assertArgs(t, expected, args)
+	})
+
+	t.Run("disallowed tools emits --disallowedTools flags", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:          "do something",
+			Headless:        true,
+			DisallowedTools: []string{"AskUserQuestion"},
+		})
+		expected := []string{"claude", "-p", "--disallowedTools", "AskUserQuestion", "--", "do something"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("multiple disallowed tools", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:          "do something",
+			Headless:        true,
+			DisallowedTools: []string{"AskUserQuestion", "WebSearch"},
+		})
+		expected := []string{"claude", "-p", "--disallowedTools", "AskUserQuestion", "--disallowedTools", "WebSearch", "--", "do something"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("no disallowed tools omits flag", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "do something",
+			Headless: true,
+		})
+		for _, a := range args {
+			if a == "--disallowedTools" {
+				t.Fatalf("did not expect --disallowedTools when DisallowedTools is empty, got %v", args)
+			}
+		}
 	})
 
 	t.Run("no system prompt omits flag", func(t *testing.T) {
@@ -227,7 +275,7 @@ func TestCodexAdapter(t *testing.T) {
 			Prompt:   "do something",
 			Headless: true,
 		})
-		expected := []string{"codex", "exec", "--json", "do something"}
+		expected := []string{"codex", "exec", "--json", "-a", "never", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -246,7 +294,7 @@ func TestCodexAdapter(t *testing.T) {
 			SessionID: "thread-abc",
 			Headless:  true,
 		})
-		expected := []string{"codex", "exec", "resume", "thread-abc", "continue"}
+		expected := []string{"codex", "exec", "resume", "thread-abc", "-a", "never", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -266,7 +314,7 @@ func TestCodexAdapter(t *testing.T) {
 			Model:    "o3",
 			Headless: true,
 		})
-		expected := []string{"codex", "exec", "--json", "-m", "o3", "do something"}
+		expected := []string{"codex", "exec", "--json", "-a", "never", "-m", "o3", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -286,7 +334,7 @@ func TestCodexAdapter(t *testing.T) {
 			Effort:   "medium",
 			Headless: true,
 		})
-		expected := []string{"codex", "exec", "--json", "--effort", "medium", "do something"}
+		expected := []string{"codex", "exec", "--json", "-a", "never", "--effort", "medium", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -323,7 +371,7 @@ func TestCodexAdapter(t *testing.T) {
 			SystemPrompt: "should be ignored",
 			Headless:     true,
 		})
-		expected := []string{"codex", "exec", "--json", "do something"}
+		expected := []string{"codex", "exec", "--json", "-a", "never", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -351,6 +399,31 @@ func TestCodexAdapter(t *testing.T) {
 		for _, a := range args {
 			if a == "--no-alt-screen" {
 				t.Fatalf("did not expect --no-alt-screen for headless mode, got %v", args)
+			}
+		}
+	})
+
+	t.Run("interactive does not include -a never", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "review",
+			Headless: false,
+		})
+		for i, a := range args {
+			if a == "-a" && i+1 < len(args) && args[i+1] == "never" {
+				t.Fatalf("did not expect -a never for interactive mode, got %v", args)
+			}
+		}
+	})
+
+	t.Run("codex ignores DisallowedTools", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:          "do something",
+			Headless:        true,
+			DisallowedTools: []string{"AskUserQuestion"},
+		})
+		for _, a := range args {
+			if a == "--disallowedTools" {
+				t.Fatalf("did not expect --disallowedTools for codex, got %v", args)
 			}
 		}
 	})

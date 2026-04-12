@@ -24,7 +24,7 @@ steps:
     command: agent-validator skip
 
   - id: finalize
-    agent: headless_base
+    agent: implementor
     prompt: |
       Help the user finalize the PR.
       You MUST use the codagent:finalize-pr skill.

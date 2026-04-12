@@ -57,6 +57,10 @@ type ExecutionContext struct {
 	LastSubWorkflowChild *SubWorkflowChildState
 	ResumeChildState     *SubWorkflowChildState
 	FlushState           func()
+
+	// WorkflowResumed is true when the workflow was started via --resume.
+	// It is consumed (cleared) after the first agent step uses it.
+	WorkflowResumed bool
 }
 
 // RootContextOptions configures a new root execution context.
@@ -164,6 +168,7 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		EngineRef:           parent.EngineRef,
 		ProfileStore:        parent.ProfileStore,
 		AuditLogger:         parent.AuditLogger,
+		WorkflowResumed:     parent.WorkflowResumed,
 	}
 }
 
@@ -223,5 +228,6 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		EngineRef:           engineRef,
 		ProfileStore:        parent.ProfileStore,
 		AuditLogger:         parent.AuditLogger,
+		WorkflowResumed:     parent.WorkflowResumed,
 	}
 }

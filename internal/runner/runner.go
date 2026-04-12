@@ -221,6 +221,9 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	if opts.LastSessionStepID != "" {
 		ctx.LastSessionStepID = opts.LastSessionStepID
 	}
+	if opts.From != "" {
+		ctx.WorkflowResumed = true
+	}
 
 	log := opts.Log
 	if log == nil {

@@ -1,5 +1,9 @@
-## ADDED Requirements
+# Capability: cli-adapter
 
+## Purpose
+
+Defines the CLI adapter abstraction for constructing CLI invocation args across different backends (Claude, Codex) in headless and interactive modes.
+## Requirements
 ### Requirement: CLI adapter registry
 
 The runner SHALL maintain a hard-coded registry of known CLI adapters. Each adapter SHALL be identified by a string key (e.g., `claude`, `codex`). The registry is compile-time — adding a new CLI requires a code change.
@@ -27,8 +31,7 @@ Adapters declare support via a `SupportsSystemPrompt() bool` method on the `Adap
 - **THEN** the adapter indicates it does not support native system prompts
 
 ### Requirement: Adapter arg construction
-
-Each adapter SHALL construct the CLI invocation args for both headless and interactive modes. The adapter receives the prompt, system prompt content (if applicable), session ID (when provided), and model override (if specified), and returns the full command and args. When system prompt content is provided and the adapter supports it, the adapter SHALL include the appropriate CLI flags to deliver it as a system prompt (e.g., `--append-system-prompt` for Claude).
+Each adapter SHALL construct the CLI invocation args for both headless and interactive modes. The adapter receives the prompt, system prompt content (if applicable), session ID (if resuming), model override (if specified), effort level (if specified), and returns the full command and args. When effort is provided, the adapter SHALL include the appropriate CLI flag for the effort level. When effort is empty, no effort flag is emitted. When system prompt content is provided and the adapter supports it, the adapter SHALL include the appropriate CLI flags to deliver it as a system prompt (e.g., `--append-system-prompt` for Claude).
 
 #### Scenario: Headless invocation with model override
 - **WHEN** the runner executes a headless step with `model: sonnet` and a session ID from state
@@ -42,9 +45,17 @@ Each adapter SHALL construct the CLI invocation args for both headless and inter
 - **WHEN** the runner provides system prompt content to the Claude adapter for an interactive step
 - **THEN** the adapter includes `--append-system-prompt` with the content in the args
 
-#### Scenario: System prompt content with unsupporting adapter
-- **WHEN** the runner has system prompt content but the adapter does not support native system prompts
-- **THEN** the runner applies fallback wrapping into the prompt payload, and the adapter is invoked without native system-prompt flags
+#### Scenario: System prompt content provided to unsupporting adapter
+- **WHEN** the runner provides system prompt content to an adapter that does not support it
+- **THEN** the adapter ignores the system prompt field (the runner handles fallback wrapping)
+
+#### Scenario: Effort level specified
+- **WHEN** the runner provides effort level "high" to an adapter
+- **THEN** the adapter includes the CLI-appropriate effort flag in the args
+
+#### Scenario: Effort level not specified
+- **WHEN** the runner provides no effort level (empty string)
+- **THEN** the adapter does not include any effort flag in the args
 
 ### Requirement: Adapter session ID return
 
@@ -61,3 +72,4 @@ After a CLI process exits, the adapter SHALL attempt to return a session ID. The
 #### Scenario: Session ID unavailable
 - **WHEN** a CLI step completes but the adapter cannot determine the session ID
 - **THEN** the adapter returns empty and the runner logs a warning; future resume for this step is not possible
+

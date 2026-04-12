@@ -7,19 +7,13 @@ params:
 
 steps:
   - id: implement
-    agent: headless_base
+    agent: implementor
     session: new
     prompt: |
       Implement the task described in {{task_file}}.
 
       When you are done implementing, commit your changes with a clear,
       descriptive commit message. Then summarize to the user what you changed.
-
-  - id: self-review
-    session: resume
-    prompt: |
-      Run the codagent:self-review skill against the task file {{task_file}}.
-      If you fix any gaps, commit your changes.
 
   - id: run-validator
     workflow: run-validator.yaml

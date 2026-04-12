@@ -1,0 +1,15 @@
+profiles:
+    headless_base:
+        default_mode: headless
+        cli: claude
+        model: opus
+        effort: high
+    implementor:
+        extends: headless_base
+    interactive_base:
+        default_mode: interactive
+        cli: claude
+        model: sonnet
+        effort: high
+    planner:
+        extends: interactive_base

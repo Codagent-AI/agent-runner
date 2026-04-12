@@ -12,13 +12,14 @@ engine:
 steps:
   - id: check-clean
     # agent-validator detect: exit 0 = unvalidated changes present, exit 2 = clean (no changes)
+    # todo move to script, add check for git porcelain
     command: "agent-validator detect; status=$?; if [ $status -eq 2 ]; then exit 0; elif [ $status -eq 0 ]; then echo 'Unvalidated changes detected. Run agent-validator before planning.' >&2; exit 1; else exit $status; fi"
 
   - id: create
     command: openspec new change "{{change_name}}"
 
   - id: proposal
-    agent: interactive_base
+    agent: planner
     prompt: |
       Help the user write a change proposal.
       You MUST use the codagent:propose skill.
@@ -68,5 +69,13 @@ steps:
       Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports.
       Keep running the command and fixing until it passes with no errors.
 
+  - id: commit-openspec
+    mode: headless
+    session: resume
+    prompt: |
+      Stage everything under openspec/changes/{{change_name}}/ and commit
+      with a clear message like "Add openspec documents for {{change_name}}".
+
   - id: skip-validator
     command: agent-validator skip
+

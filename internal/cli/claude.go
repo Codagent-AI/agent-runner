@@ -11,6 +11,10 @@ type ClaudeAdapter struct{}
 //   - Resume interactive: claude --resume <uuid> <prompt>
 //   - Resume headless:    claude --resume <uuid> -p <prompt>
 //   - Model override:     appends --model <m>
+//
+// --session-id is reserved for fresh sessions — Claude CLI rejects it when
+// the UUID already exists on disk ("Session ID ... is already in use").
+// --resume works for both interactive and headless continuations.
 func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 	args := []string{"claude"}
 
@@ -34,12 +38,19 @@ func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 		args = append(args, "-p")
 	}
 
+	for _, tool := range input.DisallowedTools {
+		args = append(args, "--disallowedTools", tool)
+	}
+
 	if input.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", input.SystemPrompt)
 	}
 
 	if input.Prompt != "" {
-		args = append(args, input.Prompt)
+		// Use "--" to terminate flags before the positional prompt. Without
+		// this, variadic flags like --disallowedTools consume the trailing
+		// prompt as an additional flag value.
+		args = append(args, "--", input.Prompt)
 	}
 	return args
 }

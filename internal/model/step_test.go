@@ -147,6 +147,13 @@ func TestStepSchemaExtensions(t *testing.T) {
 		}
 	})
 
+	t.Run("accepts capture on agent step with profile (mode from profile)", func(t *testing.T) {
+		s := Step{ID: "s", Agent: "implementor", Prompt: "p", Session: SessionNew, Capture: "output"}
+		if err := s.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
 	t.Run("rejects capture on an interactive step", func(t *testing.T) {
 		s := Step{ID: "s", Agent: "interactive_base", Mode: ModeInteractive, Prompt: "p", Session: SessionNew, Capture: "output"}
 		err := s.Validate(nil)
@@ -155,6 +162,20 @@ func TestStepSchemaExtensions(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "capture") {
 			t.Fatalf("expected capture error, got: %v", err)
+		}
+	})
+
+	t.Run("accepts capture on session resume step without agent", func(t *testing.T) {
+		s := Step{ID: "s", Prompt: "p", Session: SessionResume, Capture: "output"}
+		if err := s.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("accepts capture on session inherit step without agent", func(t *testing.T) {
+		s := Step{ID: "s", Prompt: "p", Session: SessionInherit, Capture: "output"}
+		if err := s.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 

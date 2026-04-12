@@ -4,9 +4,13 @@ cli:
       allow_tool_use: false
       thinking_budget: low
 
-# entry_points configured by /validator-setup
 entry_points:
+  # Default: run standard checks plus reviews for code quality, security & errors
   - path: "."
+    exclude:
+      - .claude
+      - .validator
+      - openspec
     checks:
       - build:
           command: go build ./...
@@ -25,6 +29,16 @@ entry_points:
       - security-and-errors:
           builtin: security-and-errors
           model: gpt-5.3-codex
+
+  # Openspec: do not validate open or archived changes, ensure that live specs are 
+  # valid even if modified manually (non-strict, allows warnings)
+  - path: openspec/specs
+    exclude:
+      - archive
+      - changes
+    checks:
+      - openspec-validate:
+          command: openspec validate --specs --no-interactive
 
 # -------------------------------------------------------------------
 # All settings below are optional. Uncomment and change as needed.

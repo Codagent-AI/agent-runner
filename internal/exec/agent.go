@@ -26,6 +26,12 @@ var interactiveRunnerFn = pty.RunInteractive
 // so the agent knows how to signal step completion via the stdout sentinel.
 const completionInstruction = "\n\nWhen you or the user determine this step is complete, continue to the next step by running the following command without any additional commentary:\nprintf '\\x1b]999;signal-continuation\\x07' > \"$AGENT_RUNNER_TTY\""
 
+// headlessPreamble is prepended to headless prompts to reinforce autonomous behavior.
+const headlessPreamble = "You are running autonomously in headless mode with no human in the loop. " +
+	"Do not stop to ask for confirmation or clarification. " +
+	"Do not say things like \"let me know\", \"ready when you are\", or \"shall I proceed\". " +
+	"Make decisions and complete the entire task.\n\n"
+
 // resolveStepProfile resolves the agent profile for the given step.
 // For session:new steps, it resolves from step.Agent. For resume/inherit, it
 // looks up the profile name from the session-originating step.
@@ -106,43 +112,7 @@ func ExecuteAgentStep(
 	}
 
 	headless := mode == model.ModeHeadless
-
-	// Build the full prompt: [system_prompt] [step prompt] [engine enrichment]
-	fullPrompt := prompt
-	if profile.SystemPrompt != "" {
-		fullPrompt = profile.SystemPrompt + "\n\n" + fullPrompt
-	}
-	if enrichment != "" {
-		fullPrompt = fullPrompt + "\n\n" + enrichment
-	}
-	if !headless {
-		fullPrompt = buildStepPrefix(step.ID, ctx, isResume) + fullPrompt + completionInstruction
-	}
-
-	input := cli.BuildArgsInput{
-		SessionID: sessionID,
-		Resume:    isResume,
-		Model:     profile.Model, // already has step.Model applied by resolveStepProfile
-		Effort:    profile.Effort,
-		Headless:  headless,
-	}
-
-	switch {
-	case headless:
-		input.Prompt = fullPrompt
-	case adapter.SupportsSystemPrompt():
-		input.SystemPrompt = fullPrompt
-		if isResume {
-			input.Prompt = fmt.Sprintf("Let's continue to the %s step", step.ID)
-		} else {
-			input.Prompt = fmt.Sprintf("Let's start the %s step", step.ID)
-		}
-	case enrichment != "" || profile.SystemPrompt != "":
-		input.Prompt = "<system>\n" + fullPrompt + "\n</system>"
-	default:
-		input.Prompt = fullPrompt
-	}
-
+	input := buildAdapterInput(step, ctx, profile, adapter, prompt, enrichment, sessionID, isResume, headless)
 	args := adapter.BuildArgs(&input)
 
 	emitAgentStart(ctx, prefix, startTime, prompt, mode, step, sessionID, cliName, enrichment)
@@ -155,7 +125,12 @@ func ExecuteAgentStep(
 		return OutcomeFailed, runErr
 	}
 
-	if headless && step.Capture != "" {
+	if step.Capture != "" {
+		if !headless {
+			emitAgentFailure(ctx, prefix, startTime, string(mode), step,
+				fmt.Sprintf("capture requires headless mode, but step %q resolved to %s (check agent profile)", step.ID, mode))
+			return OutcomeFailed, nil
+		}
 		ctx.CapturedVariables[step.Capture] = result.Stdout
 	}
 
@@ -221,6 +196,68 @@ func resolveAdapterAndSession(
 	return adapter, cliName, sessionID, isResume, nil
 }
 
+// buildAdapterInput assembles the full prompt and CLI input for an agent step.
+func buildAdapterInput(
+	step *model.Step,
+	ctx *model.ExecutionContext,
+	profile *config.ResolvedProfile,
+	adapter cli.Adapter,
+	prompt, enrichment, sessionID string,
+	isResume, headless bool,
+) cli.BuildArgsInput {
+	// Build the full prompt: [system_prompt] [step prompt] [engine enrichment]
+	fullPrompt := prompt
+	if profile.SystemPrompt != "" {
+		fullPrompt = profile.SystemPrompt + "\n\n" + fullPrompt
+	}
+	if enrichment != "" {
+		fullPrompt = fullPrompt + "\n\n" + enrichment
+	}
+	if headless {
+		fullPrompt = headlessPreamble + fullPrompt
+	} else {
+		fullPrompt = buildStepPrefix(step.ID, ctx, ctx.WorkflowResumed, isResume) + fullPrompt + completionInstruction
+	}
+
+	input := cli.BuildArgsInput{
+		SessionID: sessionID,
+		Resume:    isResume,
+		Model:     profile.Model,
+		Effort:    profile.Effort,
+		Headless:  headless,
+	}
+
+	// Block AskUserQuestion in headless mode so the agent cannot stall
+	// waiting for input. Applies to fresh and resumed headless sessions alike.
+	if headless {
+		input.DisallowedTools = []string{"AskUserQuestion"}
+	}
+
+	switch {
+	case headless:
+		input.Prompt = fullPrompt
+	case adapter.SupportsSystemPrompt():
+		input.SystemPrompt = fullPrompt
+		switch {
+		case ctx.WorkflowResumed:
+			input.Prompt = fmt.Sprintf("Resume the %s step.", step.ID)
+		case isResume:
+			input.Prompt = fmt.Sprintf("Let's continue to the %s step", step.ID)
+		default:
+			input.Prompt = fmt.Sprintf("Let's start the %s step", step.ID)
+		}
+	case enrichment != "" || profile.SystemPrompt != "":
+		input.Prompt = "<system>\n" + fullPrompt + "\n</system>"
+	default:
+		input.Prompt = fullPrompt
+	}
+
+	// Clear the one-shot flag after the first agent step consumes it.
+	ctx.WorkflowResumed = false
+
+	return input
+}
+
 func runAgentProcess(runner ProcessRunner, args []string, headless bool, workdir string, log Logger) (StepOutcome, ProcessResult, error) {
 	if headless {
 		// Capture stdout for headless runs so that adapters (e.g. Codex) can
@@ -278,6 +315,13 @@ func discoverAndStoreSession(
 	})
 	if discoveredID != "" {
 		ctx.SessionIDs[step.ID] = discoveredID
+		// Propagate the agent profile from the previous session-originating step
+		// so that resume after workflow restart can resolve the profile for this step.
+		if (step.Session == model.SessionResume || step.Session == model.SessionInherit) && ctx.LastSessionStepID != "" {
+			if prev := ctx.SessionProfiles[ctx.LastSessionStepID]; prev != "" {
+				ctx.SessionProfiles[step.ID] = prev
+			}
+		}
 		ctx.LastSessionStepID = step.ID
 		log.Printf("  session: %s\n", discoveredID)
 	}
@@ -337,16 +381,18 @@ func logAgentStep(log Logger, mode model.StepMode, prompt string) {
 
 // buildStepPrefix returns a preamble for interactive prompts that orients the
 // agent: which step is starting and (for fresh sessions) which workflow it
-// belongs to.
-// buildStepPrefix returns a preamble for interactive prompts that orients the
-// agent: which step is starting and (for fresh sessions) which workflow it
-// belongs to.
-func buildStepPrefix(stepID string, ctx *model.ExecutionContext, isResume bool) string {
+// belongs to. workflowResumed is true only on the first step after a --resume
+// invocation. isSessionReuse is true when the step reuses a CLI session
+// (session: resume) — in that case the workflow description is omitted since
+// the agent already received it.
+func buildStepPrefix(stepID string, ctx *model.ExecutionContext, workflowResumed, isSessionReuse bool) string {
 	var sb strings.Builder
 
 	switch {
-	case isResume:
-		fmt.Fprintf(&sb, "Now continuing to step: %q.\n\n", stepID)
+	case workflowResumed:
+		fmt.Fprintf(&sb, "Resuming step: %q. If you already started on this step, resume from where you left off.\n\n", stepID)
+	case isSessionReuse:
+		fmt.Fprintf(&sb, "Continuing to step %q.\n\n", stepID)
 	case ctx.WorkflowName != "":
 		fmt.Fprintf(&sb, "You are running in the %q workflow", ctx.WorkflowName)
 		if ctx.WorkflowDescription != "" {
