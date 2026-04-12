@@ -3,8 +3,6 @@ package tui
 import "github.com/charmbracelet/lipgloss"
 
 var (
-	activeGreen   = lipgloss.AdaptiveColor{Dark: "#4ade80", Light: "#16a34a"}
-	activeDim     = lipgloss.AdaptiveColor{Dark: "#2d8f57", Light: "#86efac"}
 	inactiveAmber = lipgloss.AdaptiveColor{Dark: "#f0a830", Light: "#b45309"}
 	completedGray = lipgloss.AdaptiveColor{Dark: "#4b5a6e", Light: "#9ca3af"}
 	accentCyan    = lipgloss.AdaptiveColor{Dark: "#5ce0d8", Light: "#0891b2"}
@@ -21,7 +19,6 @@ var (
 	selectedStyle  = lipgloss.NewStyle().Foreground(selectedText)
 	normalStyle    = lipgloss.NewStyle().Foreground(bodyText)
 	dimStyle       = lipgloss.NewStyle().Foreground(dimText)
-	statusActive   = lipgloss.NewStyle().Foreground(activeGreen)
 	statusInactive = lipgloss.NewStyle().Foreground(inactiveAmber)
 	statusDone     = lipgloss.NewStyle().Foreground(completedGray)
 	helpStyle      = lipgloss.NewStyle().Foreground(dimText)

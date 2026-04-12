@@ -5,8 +5,10 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -40,14 +42,15 @@ type DirEntry struct {
 
 // Model is the bubbletea model for the run list TUI.
 type Model struct {
-	activeTab    tab
-	worktreeTab  worktreeTabState
-	allTab       allTabState
+	activeTab        tab
+	worktreeTab      worktreeTabState
+	allTab           allTabState
 	currentDirCursor int
 
 	projectDir   string
 	projectsRoot string
 	currentRuns  []runs.RunInfo
+	loadErr      string
 	pulsePhase   float64
 	termWidth    int
 	termHeight   int
@@ -88,27 +91,27 @@ func doPulse() tea.Cmd {
 }
 
 // SelectedRun returns the run the user chose to resume, or nil.
-func (m Model) SelectedRun() *runs.RunInfo {
+func (m *Model) SelectedRun() *runs.RunInfo {
 	return m.selected
 }
 
 // New creates a new Model.
-func New() (Model, error) {
+func New() (*Model, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return Model{}, fmt.Errorf("cannot determine home directory: %w", err)
+		return nil, fmt.Errorf("cannot determine home directory: %w", err)
 	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
-		return Model{}, fmt.Errorf("cannot determine working directory: %w", err)
+		return nil, fmt.Errorf("cannot determine working directory: %w", err)
 	}
 
 	projectsRoot := filepath.Join(home, ".agent-runner", "projects")
 	encoded := audit.EncodePath(cwd)
 	projectDir := filepath.Join(projectsRoot, encoded)
 
-	m := Model{
+	m := &Model{
 		projectDir:   projectDir,
 		projectsRoot: projectsRoot,
 	}
@@ -117,18 +120,47 @@ func New() (Model, error) {
 }
 
 func (m *Model) loadData() {
-	m.currentRuns, _ = runs.ListForDir(m.projectDir)
+	var errs []string
+
+	currentRuns, err := runs.ListForDir(m.projectDir)
+	if err != nil {
+		errs = append(errs, fmt.Sprintf("current dir: %v", err))
+	}
+	m.currentRuns = currentRuns
+
 	m.worktreeTab.worktrees = ListWorktrees(m.projectsRoot)
 	m.allTab.dirs = listAllDirs(m.projectsRoot)
 
-	// Refresh run data for the selected drill-in views.
 	if m.worktreeTab.subView == subViewRunList && m.worktreeTab.selectedDir != "" {
 		for i, wt := range m.worktreeTab.worktrees {
 			if wt.Path == m.worktreeTab.selectedDir {
-				m.worktreeTab.worktrees[i].Runs, _ = runs.ListForDir(filepath.Join(m.projectsRoot, wt.Encoded))
+				wtRuns, wtErr := runs.ListForDir(filepath.Join(m.projectsRoot, wt.Encoded))
+				if wtErr != nil {
+					errs = append(errs, fmt.Sprintf("worktree %s: %v", wt.Name, wtErr))
+				}
+				m.worktreeTab.worktrees[i].Runs = wtRuns
 				break
 			}
 		}
+	}
+
+	if m.allTab.subView == subViewRunList && m.allTab.selectedDir != "" {
+		for i, d := range m.allTab.dirs {
+			if d.Encoded == m.allTab.selectedDir {
+				dirRuns, dirErr := runs.ListForDir(filepath.Join(m.projectsRoot, d.Encoded))
+				if dirErr != nil {
+					errs = append(errs, fmt.Sprintf("dir %s: %v", d.Path, dirErr))
+				}
+				m.allTab.dirs[i].Runs = dirRuns
+				break
+			}
+		}
+	}
+
+	if len(errs) > 0 {
+		m.loadErr = strings.Join(errs, "; ")
+	} else {
+		m.loadErr = ""
 	}
 }
 
@@ -155,11 +187,11 @@ func listAllDirs(projectsRoot string) []DirEntry {
 	return dirs
 }
 
-func (m Model) Init() tea.Cmd {
+func (m *Model) Init() tea.Cmd {
 	return tea.Batch(doRefresh(), doPulse())
 }
 
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.termWidth = msg.Width
@@ -249,7 +281,7 @@ func (m *Model) moveCursor(delta int) {
 	}
 }
 
-func (m Model) handleEnter() (tea.Model, tea.Cmd) {
+func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 	switch m.activeTab {
 	case tabCurrentDir:
 		if m.currentDirCursor < len(m.currentRuns) {
@@ -333,7 +365,7 @@ func (m *Model) selectedAllDir() *DirEntry {
 	return nil
 }
 
-func (m Model) View() string {
+func (m *Model) View() string {
 	if m.quitting {
 		return ""
 	}
@@ -348,6 +380,12 @@ func (m Model) View() string {
 	b.WriteString(m.renderSubheader())
 	b.WriteString("\n\n")
 	b.WriteString(m.renderBody())
+
+	if m.loadErr != "" {
+		b.WriteString("\n")
+		b.WriteString("  " + dimStyle.Render("Error loading runs: "+sanitize(m.loadErr)))
+	}
+
 	b.WriteString("\n\n\n\n")
 	b.WriteString(m.renderHelp())
 	b.WriteString("\n")
@@ -355,7 +393,7 @@ func (m Model) View() string {
 	return b.String()
 }
 
-func (m Model) renderTabs() string {
+func (m *Model) renderTabs() string {
 	var parts []string
 
 	renderTab := func(label string, t tab) string {
@@ -374,25 +412,25 @@ func (m Model) renderTabs() string {
 	return "  " + strings.Join(parts, "    ")
 }
 
-func (m Model) renderSubheader() string {
+func (m *Model) renderSubheader() string {
 	switch m.activeTab {
 	case tabCurrentDir:
 		cwd, _ := os.Getwd()
-		return "  " + pathStyle.Render(shortenPath(cwd))
+		return "  " + pathStyle.Render(sanitize(shortenPath(cwd)))
 	case tabWorktrees:
 		if m.worktreeTab.subView == subViewRunList {
 			wt := m.selectedWorktree()
 			if wt != nil {
-				return "  " + dimStyle.Render("← Worktrees") + dimStyle.Render("  /  ") + normalStyle.Render(wt.Name)
+				return "  " + dimStyle.Render("← Worktrees") + dimStyle.Render("  /  ") + normalStyle.Render(sanitize(wt.Name))
 			}
 		}
 		cwd, _ := os.Getwd()
-		return "  " + pathStyle.Render(shortenPath(cwd)+"  (git repo)")
+		return "  " + pathStyle.Render(sanitize(shortenPath(cwd))+"  (git repo)")
 	case tabAll:
 		if m.allTab.subView == subViewRunList {
 			d := m.selectedAllDir()
 			if d != nil {
-				return "  " + dimStyle.Render("← All") + dimStyle.Render("  /  ") + normalStyle.Render(shortenPath(d.Path))
+				return "  " + dimStyle.Render("← All") + dimStyle.Render("  /  ") + normalStyle.Render(sanitize(shortenPath(d.Path)))
 			}
 		}
 		return "  " + pathStyle.Render("All project directories")
@@ -400,7 +438,7 @@ func (m Model) renderSubheader() string {
 	return ""
 }
 
-func (m Model) renderBody() string {
+func (m *Model) renderBody() string {
 	switch m.activeTab {
 	case tabCurrentDir:
 		if len(m.currentRuns) == 0 {
@@ -429,13 +467,13 @@ func (m Model) renderBody() string {
 	return ""
 }
 
-func (m Model) renderEmpty() string {
+func (m *Model) renderEmpty() string {
 	return "\n" +
 		dimStyle.Render("               No runs found for this directory.") + "\n\n" +
 		dimStyle.Render("               Press tab to view other scopes.")
 }
 
-func (m Model) renderRunList(runList []runs.RunInfo, cursor int) string {
+func (m *Model) renderRunList(runList []runs.RunInfo, cursor int) string {
 	var b strings.Builder
 	for i, r := range runList {
 		isSel := i == cursor
@@ -444,12 +482,12 @@ func (m Model) renderRunList(runList []runs.RunInfo, cursor int) string {
 			prefix = cursorStyle.Render("▶") + "  "
 		}
 
-		workflow := truncate(r.WorkflowName, 18)
+		workflow := sanitize(truncate(r.WorkflowName, 18))
 		step := r.CurrentStep
 		if step == "" {
 			step = "—"
 		}
-		step = truncate(step, 16)
+		step = sanitize(truncate(step, 16))
 
 		statusIcon := m.renderStatusIcon(r.Status)
 		ts := formatTime(r.StartTime)
@@ -470,7 +508,7 @@ func (m Model) renderRunList(runList []runs.RunInfo, cursor int) string {
 	return b.String()
 }
 
-func (m Model) renderStatusIcon(s runs.Status) string {
+func (m *Model) renderStatusIcon(s runs.Status) string {
 	switch s {
 	case runs.StatusActive:
 		t := (math.Sin(m.pulsePhase) + 1) / 2
@@ -484,7 +522,7 @@ func (m Model) renderStatusIcon(s runs.Status) string {
 	return " "
 }
 
-func (m Model) renderWorktreePicker() string {
+func (m *Model) renderWorktreePicker() string {
 	var b strings.Builder
 	for i, wt := range m.worktreeTab.worktrees {
 		isSel := i == m.worktreeTab.pickerCursor
@@ -499,8 +537,8 @@ func (m Model) renderWorktreePicker() string {
 		}
 
 		summary := runSummary(wt.Runs)
-		name := truncate(wt.Name, 14)
-		path := shortenPath(wt.Path)
+		name := sanitize(truncate(wt.Name, 14))
+		path := sanitize(shortenPath(wt.Path))
 
 		line := fmt.Sprintf("%-14s  %-40s  %s",
 			style.Render(name),
@@ -512,7 +550,7 @@ func (m Model) renderWorktreePicker() string {
 	return b.String()
 }
 
-func (m Model) renderAllPicker() string {
+func (m *Model) renderAllPicker() string {
 	var b strings.Builder
 	for i, d := range m.allTab.dirs {
 		isSel := i == m.allTab.pickerCursor
@@ -527,7 +565,7 @@ func (m Model) renderAllPicker() string {
 		}
 
 		summary := runSummary(d.Runs)
-		path := shortenPath(d.Path)
+		path := sanitize(shortenPath(d.Path))
 
 		line := fmt.Sprintf("%-50s  %s",
 			style.Render(truncate(path, 50)),
@@ -538,7 +576,7 @@ func (m Model) renderAllPicker() string {
 	return b.String()
 }
 
-func (m Model) renderHelp() string {
+func (m *Model) renderHelp() string {
 	var parts []string
 
 	switch m.activeTab {
@@ -567,15 +605,15 @@ func (m Model) renderHelp() string {
 
 // Helpers
 
-func clampCursor(v, max int) int {
-	if max <= 0 {
+func clampCursor(v, limit int) int {
+	if limit <= 0 {
 		return 0
 	}
 	if v < 0 {
 		return 0
 	}
-	if v >= max {
-		return max - 1
+	if v >= limit {
+		return limit - 1
 	}
 	return v
 }
@@ -591,11 +629,11 @@ func shortenPath(p string) string {
 	return p
 }
 
-func truncate(s string, max int) string {
-	if runewidth.StringWidth(s) <= max {
+func truncate(s string, width int) string {
+	if runewidth.StringWidth(s) <= width {
 		return s
 	}
-	return runewidth.Truncate(s, max-1, "…")
+	return runewidth.Truncate(s, width-1, "…")
 }
 
 func formatTime(t time.Time) string {
@@ -647,9 +685,22 @@ func lerpColor(hex1, hex2 string, t float64) string {
 	return fmt.Sprintf("#%02x%02x%02x", r, g, b)
 }
 
-func parseHex(hex string) (uint8, uint8, uint8) {
+func parseHex(hex string) (r, g, b uint8) {
 	hex = strings.TrimPrefix(hex, "#")
-	var r, g, b uint8
-	fmt.Sscanf(hex, "%02x%02x%02x", &r, &g, &b)
+	_, _ = fmt.Sscanf(hex, "%02x%02x%02x", &r, &g, &b)
 	return r, g, b
+}
+
+var ansiEscapeRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b\][^\x1b]*\x1b\\`)
+
+func sanitize(s string) string {
+	s = ansiEscapeRe.ReplaceAllString(s, "")
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r == '\t' || (unicode.IsPrint(r) && !unicode.Is(unicode.Co, r)) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }

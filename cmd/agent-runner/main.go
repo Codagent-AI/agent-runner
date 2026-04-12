@@ -243,7 +243,11 @@ func handleList() int {
 		return 1
 	}
 
-	finalModel := result.(tui.Model)
+	finalModel, ok := result.(*tui.Model)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "agent-runner: unexpected TUI model type %T\n", result)
+		return 1
+	}
 	if sel := finalModel.SelectedRun(); sel != nil {
 		return handleResume(sel.SessionID)
 	}
