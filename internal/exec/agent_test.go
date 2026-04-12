@@ -76,7 +76,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
-	t.Run("headless resume uses session-id not resume flag", func(t *testing.T) {
+	t.Run("headless resume uses --resume flag", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		ctx := makeCtx()
 		ctx.SessionIDs["prev"] = "session-abc"
@@ -84,20 +84,20 @@ func TestExecuteAgentStep(t *testing.T) {
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "continue", Session: model.SessionResume}
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 		args := runner.calls[0]
-		// Headless resume uses --session-id because --resume requires a
-		// deferred tool marker which may not exist.
-		foundSessionID := false
+		// Headless resume uses --resume because --session-id is rejected by
+		// Claude CLI when the UUID already exists on disk.
+		foundResume := false
 		for i, a := range args {
-			if a == "--session-id" && i+1 < len(args) && args[i+1] == "session-abc" {
-				foundSessionID = true
+			if a == "--resume" && i+1 < len(args) && args[i+1] == "session-abc" {
+				foundResume = true
 			}
 		}
-		if !foundSessionID {
-			t.Fatalf("expected --session-id session-abc, got %v", args)
+		if !foundResume {
+			t.Fatalf("expected --resume session-abc, got %v", args)
 		}
 		for _, a := range args {
-			if a == "--resume" {
-				t.Fatalf("expected no --resume for headless resume, got %v", args)
+			if a == "--session-id" {
+				t.Fatalf("expected no --session-id for headless resume, got %v", args)
 			}
 		}
 	})
@@ -566,7 +566,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
-	t.Run("headless resume does not include --disallowedTools", func(t *testing.T) {
+	t.Run("headless resume includes --disallowedTools", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		ctx := makeCtx()
 		ctx.SessionIDs["prev"] = "session-abc"
@@ -574,10 +574,14 @@ func TestExecuteAgentStep(t *testing.T) {
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "continue", Session: model.SessionResume}
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 		args := runner.calls[0]
-		for _, a := range args {
-			if a == "--disallowedTools" {
-				t.Fatalf("expected no --disallowedTools on headless resume (breaks --resume), got %v", args)
+		foundDisallowed := false
+		for i, a := range args {
+			if a == "--disallowedTools" && i+1 < len(args) && args[i+1] == "AskUserQuestion" {
+				foundDisallowed = true
 			}
+		}
+		if !foundDisallowed {
+			t.Fatalf("expected --disallowedTools AskUserQuestion on headless resume, got %v", args)
 		}
 	})
 
