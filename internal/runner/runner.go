@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/codagent/agent-runner/internal/exec"
 	"github.com/codagent/agent-runner/internal/flowctl"
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/stateio"
 	"github.com/codagent/agent-runner/internal/textfmt"
 )
@@ -168,12 +170,13 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	sessionID := safeName + "-" + timestamp
 
 	sessionDir := opts.SessionDir
+	var cwd string
 	if sessionDir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return nil, fmt.Errorf("cannot determine home directory: %w", err)
 		}
-		cwd, err := os.Getwd()
+		cwd, err = os.Getwd()
 		if err != nil {
 			return nil, fmt.Errorf("cannot determine working directory: %w", err)
 		}
@@ -187,6 +190,37 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		return nil, fmt.Errorf("create session dir: %w", err)
 	}
 
+	if err := runlock.Write(sessionDir); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: warning: could not write lock file in %s: %v\n", sessionDir, err)
+	}
+
+	if opts.SessionDir == "" {
+		projectDir := filepath.Dir(filepath.Dir(sessionDir)) // parent of runs/
+		writeMetaJSON(projectDir, cwd)
+	}
+
+	auditLogger, ctx := buildExecutionContext(workflow, params, opts, sessionDir)
+
+	log := opts.Log
+	if log == nil {
+		log = &defaultLogger{}
+	}
+
+	return &runState{
+		workflow:     *workflow,
+		ctx:          ctx,
+		sessionDir:   sessionDir,
+		sessionID:    sessionID,
+		workflowHash: computeHash(opts.WorkflowFile),
+		auditLogger:  auditLogger,
+		runStartTime: now,
+		log:          log,
+		runner:       opts.ProcessRunner,
+		glob:         opts.GlobExpander,
+	}, nil
+}
+
+func buildExecutionContext(workflow *model.Workflow, params map[string]string, opts *Options, sessionDir string) (*audit.Logger, *model.ExecutionContext) {
 	var engineRef interface{}
 	if opts.Engine != nil {
 		engineRef = opts.Engine
@@ -221,24 +255,10 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	if opts.LastSessionStepID != "" {
 		ctx.LastSessionStepID = opts.LastSessionStepID
 	}
-
-	log := opts.Log
-	if log == nil {
-		log = &defaultLogger{}
+	if opts.From != "" {
+		ctx.WorkflowResumed = true
 	}
-
-	return &runState{
-		workflow:     *workflow,
-		ctx:          ctx,
-		sessionDir:   sessionDir,
-		sessionID:    sessionID,
-		workflowHash: computeHash(opts.WorkflowFile),
-		auditLogger:  auditLogger,
-		runStartTime: now,
-		log:          log,
-		runner:       opts.ProcessRunner,
-		glob:         opts.GlobExpander,
-	}, nil
+	return auditLogger, ctx
 }
 
 func emitRunStart(rs *runState, opts *Options) {
@@ -350,12 +370,14 @@ func runStep(step *model.Step, rs *runState) (exec.StepOutcome, *exec.LoopResult
 }
 
 func finalizeRun(rs *runState, result WorkflowResult) {
+	runlock.Delete(rs.sessionDir)
+
 	switch result {
 	case ResultSuccess:
 		stateio.DeleteState(rs.sessionDir)
 		rs.log.Println("agent-runner: workflow complete")
 	case ResultFailed:
-		rs.log.Printf("agent-runner: to resume: agent-runner --resume --session %s\n", rs.sessionID)
+		rs.log.Printf("agent-runner: to resume: agent-runner --resume %s\n", rs.sessionID)
 	case ResultStopped:
 		// No action needed
 	}
@@ -475,3 +497,17 @@ type defaultLogger struct{}
 func (l *defaultLogger) Println(args ...any)               { fmt.Println(args...) }
 func (l *defaultLogger) Printf(format string, args ...any) { fmt.Printf(format, args...) }
 func (l *defaultLogger) Errorf(format string, args ...any) { fmt.Fprintf(os.Stderr, format, args...) }
+
+// writeMetaJSON writes a meta.json file to projectDir if it does not already exist.
+// Non-fatal: errors are silently ignored.
+func writeMetaJSON(projectDir, cwd string) {
+	metaPath := filepath.Join(projectDir, "meta.json")
+	if _, err := os.Stat(metaPath); err == nil {
+		return // already exists
+	}
+	data, err := json.Marshal(map[string]string{"path": cwd})
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(metaPath, data, 0o600)
+}

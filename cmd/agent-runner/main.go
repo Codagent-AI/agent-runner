@@ -12,7 +12,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/engine"
@@ -21,6 +22,8 @@ import (
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runner"
+	"github.com/codagent/agent-runner/internal/runs"
+	"github.com/codagent/agent-runner/internal/tui"
 )
 
 // version is set at build time via -ldflags "-X main.version=...".
@@ -134,31 +137,35 @@ func main() {
 }
 
 func run() int {
-	resumeFlag := flag.Bool("resume", false, "Resume an interrupted workflow")
-	sessionFlag := flag.String("session", "", "Session ID to resume (implies --resume)")
+	chdirFlag := flag.String("C", "", "Change to `directory` before doing anything")
+	resumeFlag := flag.Bool("resume", false, "Resume an interrupted workflow (optionally followed by session ID)")
+	listFlag := flag.Bool("list", false, "Launch the run list TUI")
 	validateFlag := flag.Bool("validate", false, "Validate a workflow file without executing")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	vFlag := flag.Bool("v", false, "Print version and exit (shorthand)")
 
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: agent-runner [flags] <workflow.yaml> [params...]\n\n")
+		fmt.Fprintf(os.Stderr, "Usage: agent-runner [flags] [workflow [params...]]\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
-		fmt.Fprintf(os.Stderr, "  -resume\n\tResume an interrupted workflow\n")
-		fmt.Fprintf(os.Stderr, "  -session <id>\n\tSession ID to resume (implies -resume)\n")
+		fmt.Fprintf(os.Stderr, "  -C <dir>\n\tChange to directory before doing anything\n")
+		fmt.Fprintf(os.Stderr, "  -list\n\tLaunch the run list TUI\n")
+		fmt.Fprintf(os.Stderr, "  -resume [session-id]\n\tResume an interrupted workflow; launches TUI if no session ID given\n")
 		fmt.Fprintf(os.Stderr, "  -validate\n\tValidate a workflow file without executing\n")
 		fmt.Fprintf(os.Stderr, "  -v, -version\n\tPrint version and exit\n")
 	}
 
 	flag.Parse()
 
+	if *chdirFlag != "" {
+		if err := os.Chdir(*chdirFlag); err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: -C %s: %v\n", *chdirFlag, err)
+			return 1
+		}
+	}
+
 	if *versionFlag || *vFlag {
 		fmt.Println(version)
 		return 0
-	}
-
-	// Infer --resume when --session is provided.
-	if *sessionFlag != "" {
-		*resumeFlag = true
 	}
 
 	// Validate flag combinations.
@@ -169,18 +176,23 @@ func run() int {
 
 	args := flag.Args()
 
+	if *listFlag {
+		return handleList()
+	}
+
 	if *resumeFlag {
-		if len(args) > 0 {
-			fmt.Fprintln(os.Stderr, "agent-runner: --resume does not accept positional arguments")
+		if len(args) > 1 {
+			fmt.Fprintln(os.Stderr, "agent-runner: --resume accepts at most one argument (the session ID)")
 			return 1
 		}
-		return handleResume(*sessionFlag)
+		if len(args) == 1 {
+			return handleResume(args[0])
+		}
+		return handleList()
 	}
 
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "agent-runner: workflow file required")
-		flag.Usage()
-		return 1
+		return handleList()
 	}
 
 	workflowFile, err := resolveWorkflowArg(args[0])
@@ -218,6 +230,53 @@ func handleResume(sessionID string) int {
 	return 0
 }
 
+func handleList() int {
+	m, err := tui.New()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	result, err := p.Run()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+
+	finalModel, ok := result.(*tui.Model)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "agent-runner: unexpected TUI model type %T\n", result)
+		return 1
+	}
+	if sel := finalModel.SelectedRun(); sel != nil {
+		return handleResumeSelectedRun(sel)
+	}
+	return 0
+}
+
+func handleResumeSelectedRun(sel *runs.RunInfo) int {
+	stateFile := filepath.Join(sel.SessionDir, "state.json")
+	if _, err := os.Stat(stateFile); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: session state not found: %s\n", stateFile)
+		return 1
+	}
+
+	result, err := runner.ResumeWorkflow(stateFile, &runner.Options{
+		ProcessRunner: &realProcessRunner{},
+		GlobExpander:  &realGlobExpander{},
+		Log:           &realLogger{},
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+	if result != runner.ResultSuccess {
+		return 1
+	}
+	return 0
+}
+
 func resolveResumeStatePath(sessionID string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -232,52 +291,17 @@ func resolveResumeStatePath(sessionID string) (string, error) {
 	encoded := audit.EncodePath(cwd)
 	runsDir := filepath.Join(home, ".agent-runner", "projects", encoded, "runs")
 
-	if sessionID != "" {
-		if strings.ContainsAny(sessionID, "/\\") || sessionID == ".." || strings.Contains(sessionID, "..") {
-			return "", fmt.Errorf("invalid session ID: %s", sessionID)
-		}
-		stateFile := filepath.Join(runsDir, sessionID, "state.json")
-		if !strings.HasPrefix(filepath.Clean(stateFile), filepath.Clean(runsDir)+string(os.PathSeparator)) {
-			return "", fmt.Errorf("invalid session ID: %s", sessionID)
-		}
-		if _, err := os.Stat(stateFile); err != nil {
-			return "", fmt.Errorf("session not found: %s", sessionID)
-		}
-		return stateFile, nil
+	if strings.ContainsAny(sessionID, "/\\") || sessionID == ".." || strings.Contains(sessionID, "..") {
+		return "", fmt.Errorf("invalid session ID: %s", sessionID)
 	}
-
-	// Find most recent session by state.json modification time.
-	entries, err := os.ReadDir(runsDir)
-	if os.IsNotExist(err) {
-		return "", fmt.Errorf("no previous sessions found")
+	stateFile := filepath.Join(runsDir, sessionID, "state.json")
+	if !strings.HasPrefix(filepath.Clean(stateFile), filepath.Clean(runsDir)+string(os.PathSeparator)) {
+		return "", fmt.Errorf("invalid session ID: %s", sessionID)
 	}
-	if err != nil {
-		return "", fmt.Errorf("reading sessions directory: %w", err)
+	if _, err := os.Stat(stateFile); err != nil {
+		return "", fmt.Errorf("session not found: %s", sessionID)
 	}
-
-	var bestPath string
-	var bestTime time.Time
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		stateFile := filepath.Join(runsDir, entry.Name(), "state.json")
-		info, err := os.Stat(stateFile)
-		if err != nil {
-			continue
-		}
-		if bestPath == "" || info.ModTime().After(bestTime) {
-			bestPath = stateFile
-			bestTime = info.ModTime()
-		}
-	}
-
-	if bestPath == "" {
-		return "", fmt.Errorf("no previous sessions found")
-	}
-
-	return bestPath, nil
+	return stateFile, nil
 }
 
 func handleValidate(workflowFile string) int {

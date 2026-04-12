@@ -2,6 +2,8 @@
 
 CLI workflow orchestrator for AI agents, written in Go. Runs multi-step workflows by spawning separate agent sessions per step.
 
+> **Pre-release**: This project is under active development. No backwards compatibility guarantees are made at this time.
+
 ## Directory structure
 
 ```

@@ -31,6 +31,7 @@ func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 		} else {
 			args = append(args, "--json")
 		}
+		args = append(args, "-a", "never")
 	} else {
 		if input.SessionID != "" {
 			args = append(args, "resume", "--no-alt-screen", input.SessionID)
