@@ -86,16 +86,16 @@ func TestClaudeAdapter(t *testing.T) {
 		assertArgs(t, expected, args)
 	})
 
-	t.Run("resume headless uses session-id not resume", func(t *testing.T) {
+	t.Run("resume headless uses --resume", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:    "continue",
 			SessionID: "session-abc",
 			Resume:    true,
 			Headless:  true,
 		})
-		// Headless resume uses --session-id because --resume requires a deferred
-		// tool marker which may not exist after a normal session completion.
-		expected := []string{"claude", "--session-id", "session-abc", "-p", "--", "continue"}
+		// --session-id is reserved for fresh sessions — Claude CLI rejects it
+		// for existing session IDs. Use --resume for headless continuations too.
+		expected := []string{"claude", "--resume", "session-abc", "-p", "--", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -128,7 +128,21 @@ func TestClaudeAdapter(t *testing.T) {
 			Model:     "sonnet",
 			Headless:  true,
 		})
-		expected := []string{"claude", "--session-id", "session-abc", "--model", "sonnet", "-p", "--", "continue"}
+		expected := []string{"claude", "--resume", "session-abc", "--model", "sonnet", "-p", "--", "continue"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("resume headless with disallowed tools", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:          "continue",
+			SessionID:       "session-abc",
+			Resume:          true,
+			Headless:        true,
+			DisallowedTools: []string{"AskUserQuestion"},
+		})
+		// --disallowedTools is compatible with --resume; both flags coexist on
+		// headless resume steps.
+		expected := []string{"claude", "--resume", "session-abc", "-p", "--disallowedTools", "AskUserQuestion", "--", "continue"}
 		assertArgs(t, expected, args)
 	})
 

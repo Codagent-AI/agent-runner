@@ -228,9 +228,8 @@ func buildAdapterInput(
 	}
 
 	// Block AskUserQuestion in headless mode so the agent cannot stall
-	// waiting for input. Skip this on resume sessions because Claude CLI
-	// rejects --disallowedTools combined with --resume.
-	if headless && !isResume {
+	// waiting for input. Applies to fresh and resumed headless sessions alike.
+	if headless {
 		input.DisallowedTools = []string{"AskUserQuestion"}
 	}
 
@@ -318,7 +317,7 @@ func discoverAndStoreSession(
 		ctx.SessionIDs[step.ID] = discoveredID
 		// Propagate the agent profile from the previous session-originating step
 		// so that resume after workflow restart can resolve the profile for this step.
-		if step.Session == model.SessionResume && ctx.LastSessionStepID != "" {
+		if (step.Session == model.SessionResume || step.Session == model.SessionInherit) && ctx.LastSessionStepID != "" {
 			if prev := ctx.SessionProfiles[ctx.LastSessionStepID]; prev != "" {
 				ctx.SessionProfiles[step.ID] = prev
 			}

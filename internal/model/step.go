@@ -207,7 +207,7 @@ func (s *Step) validateCaptureFields(isAgent, isShell bool) error {
 		if s.Mode != "" && s.Mode != ModeHeadless {
 			return fmt.Errorf(`"capture" is only allowed on shell and headless steps`)
 		}
-		if s.Mode == "" && s.Agent == "" {
+		if s.Mode == "" && s.Agent == "" && s.Session != SessionResume && s.Session != SessionInherit {
 			return fmt.Errorf(`"capture" is only allowed on shell and headless steps`)
 		}
 	}

@@ -229,6 +229,43 @@ func TestLoopIterationContextAuditLogger(t *testing.T) {
 	})
 }
 
+func TestWorkflowResumedPropagation(t *testing.T) {
+	t.Run("propagates WorkflowResumed to loop iteration context", func(t *testing.T) {
+		parent := NewRootContext(&RootContextOptions{
+			Params:       map[string]string{},
+			WorkflowFile: "test.yaml",
+		})
+		parent.WorkflowResumed = true
+
+		child := NewLoopIterationContext(parent, LoopIterationOptions{
+			StepID:    "loop",
+			Iteration: 0,
+		})
+
+		if !child.WorkflowResumed {
+			t.Fatal("expected WorkflowResumed propagated to loop iteration context")
+		}
+	})
+
+	t.Run("propagates WorkflowResumed to sub-workflow context", func(t *testing.T) {
+		parent := NewRootContext(&RootContextOptions{
+			Params:       map[string]string{},
+			WorkflowFile: "parent.yaml",
+		})
+		parent.WorkflowResumed = true
+
+		child := NewSubWorkflowContext(parent, &SubWorkflowContextOptions{
+			StepID:       "sub",
+			Params:       map[string]string{},
+			WorkflowFile: "child.yaml",
+		})
+
+		if !child.WorkflowResumed {
+			t.Fatal("expected WorkflowResumed propagated to sub-workflow context")
+		}
+	})
+}
+
 func TestSeedSessionPropagation(t *testing.T) {
 	t.Run("propagates _seed from parent to sub-workflow context", func(t *testing.T) {
 		parent := NewRootContext(&RootContextOptions{

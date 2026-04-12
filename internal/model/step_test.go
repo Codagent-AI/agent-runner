@@ -165,6 +165,20 @@ func TestStepSchemaExtensions(t *testing.T) {
 		}
 	})
 
+	t.Run("accepts capture on session resume step without agent", func(t *testing.T) {
+		s := Step{ID: "s", Prompt: "p", Session: SessionResume, Capture: "output"}
+		if err := s.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("accepts capture on session inherit step without agent", func(t *testing.T) {
+		s := Step{ID: "s", Prompt: "p", Session: SessionInherit, Capture: "output"}
+		if err := s.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
 	t.Run("accepts continue_on_failure on a shell step", func(t *testing.T) {
 		s := Step{ID: "s", Command: "echo", Session: SessionNew, ContinueOnFailure: true}
 		if err := s.Validate(nil); err != nil {
