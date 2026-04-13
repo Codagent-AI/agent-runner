@@ -1,0 +1,81 @@
+name: plan-change
+description: "Plan a flokay change: create, propose, spec, design, task-plan, and review"
+
+params:
+  - name: change_name
+    required: true
+
+engine:
+  type: openspec
+  change_param: change_name
+
+steps:
+  - id: check-clean
+    # agent-validator detect: exit 0 = unvalidated changes present, exit 2 = clean (no changes)
+    # todo move to script, add check for git porcelain
+    command: "agent-validator detect; status=$?; if [ $status -eq 2 ]; then exit 0; elif [ $status -eq 0 ]; then echo 'Unvalidated changes detected. Run agent-validator before planning.' >&2; exit 1; else exit $status; fi"
+
+  - id: create
+    command: openspec new change "{{change_name}}"
+
+  - id: proposal
+    agent: planner
+    prompt: |
+      Help the user write a change proposal.
+      You MUST use the codagent:propose skill.
+
+      Before doing anything else, ask the user to describe what this change is about and what they want to accomplish.
+      Once the proposal document is written, continue to the next step.
+
+  - id: specs
+    session: resume
+    prompt: |
+      Help the user write the change spec.
+      You MUST use the codagent:spec skill.
+      Once all spec documents are written, continue to the next step.
+
+  - id: design
+    session: resume
+    prompt: |
+      Help the user design the change.
+      You MUST use the codagent:design skill.
+      Once the design document is written, continue to the next step.
+
+  - id: tasks
+    session: resume
+    prompt: |
+      Help the user plan tasks for the change.
+      You MUST use the codagent:plan-tasks skill.
+      Once all task documents are written, continue to the next step.
+
+  - id: pre-review-validate
+    mode: headless
+    session: resume
+    prompt: |
+      Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports.
+      Keep running the command and fixing until it passes with no errors.
+
+  - id: review
+    mode: headless
+    session: resume
+    prompt: |
+      You MUST use a subagent to run the codagent:review-spec skill to review the change artifacts at openspec/changes/{{change_name}}.
+      Then address issues the review subagent finds.
+
+  - id: post-review-validate
+    mode: headless
+    session: resume
+    prompt: |
+      Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports.
+      Keep running the command and fixing until it passes with no errors.
+
+  - id: commit-openspec
+    mode: headless
+    session: resume
+    prompt: |
+      Stage everything under openspec/changes/{{change_name}}/ and commit
+      with a clear message like "Add openspec documents for {{change_name}}".
+
+  - id: skip-validator
+    command: agent-validator skip
+
