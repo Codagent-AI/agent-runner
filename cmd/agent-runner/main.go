@@ -299,20 +299,23 @@ func handleValidate(workflowFile string) int {
 	return 0
 }
 
-// bareNamePattern matches valid bare workflow names (no paths or extensions).
-var bareNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+// bareNamePattern matches valid workflow names. A name is either a bare
+// identifier (e.g., "myworkflow") or a namespaced name (e.g., "openspec:plan-change")
+// where the namespace corresponds to a subdirectory of workflows/.
+var bareNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+(:[a-zA-Z0-9_-]+)?$`)
 
 func resolveWorkflowArg(arg string) (string, error) {
 	if !bareNamePattern.MatchString(arg) {
-		return "", fmt.Errorf("invalid workflow name %q: use bare name (e.g., 'myworkflow' not 'myworkflow.yaml'); workflows are resolved from workflows/ directory", arg)
+		return "", fmt.Errorf("invalid workflow name %q: use bare name (e.g., 'myworkflow' or 'namespace:myworkflow', not 'myworkflow.yaml'); workflows are resolved from workflows/ directory", arg)
 	}
-	yamlPath := filepath.Join("workflows", arg+".yaml")
+	base := filepath.Join("workflows", strings.ReplaceAll(arg, ":", string(os.PathSeparator)))
+	yamlPath := base + ".yaml"
 	if _, err := os.Stat(yamlPath); err == nil {
 		return yamlPath, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("stat %s: %w", yamlPath, err)
 	}
-	ymlPath := filepath.Join("workflows", arg+".yml")
+	ymlPath := base + ".yml"
 	if _, err := os.Stat(ymlPath); err == nil {
 		return ymlPath, nil
 	} else if !errors.Is(err, os.ErrNotExist) {

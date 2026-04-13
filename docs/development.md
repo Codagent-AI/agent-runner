@@ -53,8 +53,8 @@ If you only add `~/go/bin` to `.zshrc`, it will work in your terminal but **not*
 `./dev.sh` is a thin wrapper around `go run` that passes all arguments through unchanged. Use it exactly like the compiled binary:
 
 ```bash
-./dev.sh workflows/plan-change.yaml my-change
-./dev.sh --validate workflows/plan-change.yaml
+./dev.sh openspec:plan-change my-change
+./dev.sh --validate openspec:plan-change
 ./dev.sh --resume --session plan-change-2026-04-03T23-19-18-552111Z
 ```
 
