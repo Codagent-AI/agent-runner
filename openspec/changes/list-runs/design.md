@@ -56,10 +56,10 @@ ListForDir(projectDir string) ([]RunInfo, error)
 ```
 
 Status determination:
-- `runlock.Active` → `Active`
-- `runlock.Stale` → `Inactive`
-- `runlock.None` + `state.json` present → `Inactive`
-- `runlock.None` + no `state.json` → `Completed`
+- `runlock.LockActive` → `Active`
+- `runlock.LockStale` → `Inactive`
+- `runlock.LockNone` + `state.json` present → `Inactive`
+- `runlock.LockNone` + no `state.json` → `Completed`
 
 Sorted most recent first (session ID timestamp, parsed from directory name).
 

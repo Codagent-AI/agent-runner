@@ -9,7 +9,7 @@ Create the data foundation for the run list TUI: a PID lock file package that tr
 **Why this exists:** The TUI needs to know each run's status (active / inactive / completed) and display fields (workflow name, current step, start time). That requires two new capabilities: (1) a lock file written on run start so active runs can be detected by PID liveness, and (2) a discovery layer that reads session directories and assembles structured run info.
 
 **State storage layout:**
-```
+```text
 ~/.agent-runner/projects/
   <encoded-cwd>/                        ← project directory (/ . _ → -)
     meta.json                           ← NEW: {"path": "/original/cwd"}
