@@ -61,11 +61,12 @@ Status determination:
 - `runlock.LockNone` + `state.json` present → `Inactive`
 - `runlock.LockNone` + no `state.json` → `Completed`
 
-Sorted most recent first (session ID timestamp, parsed from directory name).
+Sorted most recent first by last-update time (for example, audit log mtime),
+with session start time used as a deterministic tie-breaker.
 
 **`internal/tui`**
 
-bubbletea Model. Three tabs; Worktrees and All tabs have a two-level sub-state (Picker → RunList).
+Bubble Tea model. Three tabs; Worktrees and All tabs have a two-level sub-state (Picker → RunList).
 
 ```text
 Model
