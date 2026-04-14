@@ -1,0 +1,53 @@
+# Test that resume skips completed iterations of a loop that sits inside a
+# sub-workflow. This matches the openspec:change → implement-change pattern
+# where the iteration state lives one level down from the top-level step.
+
+exec sh -c 'mkdir -p items && echo a > items/a.txt && echo b > items/b.txt && echo c > items/c.txt'
+
+# First run: iteration 0 succeeds, iteration 1 fails (no trigger).
+! exec agent-runner top
+stdout 'step "outer" failed'
+
+exec cat counter-a.txt
+stdout '^1$'
+
+# Overwrite counter-a to detect if iteration 0 re-runs.
+exec sh -c 'echo overwritten > counter-a.txt'
+exec sh -c 'echo ok > trigger.txt'
+
+exec sh -c 'agent-runner -resume "$(ls -d .agent-runner/projects/*/runs/*/ | head -1 | xargs basename)"'
+
+# Iteration 0 must NOT have re-run.
+exec cat counter-a.txt
+stdout '^overwritten$'
+
+exec cat counter-b.txt
+stdout '^1$'
+
+exec cat counter-c.txt
+stdout '^1$'
+
+-- workflows/top.yaml --
+name: e2e-nested-loop-resume-top
+steps:
+  - id: outer
+    workflow: inner.yaml
+-- workflows/inner.yaml --
+name: e2e-nested-loop-resume-inner
+steps:
+  - id: process
+    loop:
+      over: "items/*.txt"
+      as: item
+    steps:
+      - id: process-item
+        command: |
+          name=$(basename "{{item}}" .txt)
+          if [ "$name" = "b" ] && [ ! -f trigger.txt ]; then
+            exit 1
+          fi
+          count=0
+          if [ -f "counter-$name.txt" ]; then
+            count=$(cat "counter-$name.txt")
+          fi
+          echo $((count + 1)) > "counter-$name.txt"

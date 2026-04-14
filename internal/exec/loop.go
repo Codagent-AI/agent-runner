@@ -54,6 +54,11 @@ func executeCountedLoop(
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), stepID)
 	startTime := time.Now()
 
+	resumeIter, _ := consumeLoopResume(ctx, stepID)
+	if resumeIter > opts.ResumeFromIteration {
+		opts.ResumeFromIteration = resumeIter
+	}
+
 	emitAudit(ctx, audit.Event{
 		Timestamp: startTime.UTC().Format(time.RFC3339),
 		Prefix:    prefix,
@@ -71,6 +76,7 @@ func executeCountedLoop(
 
 	for i := startIter; i < maxIter; i++ {
 		lastIter = i
+		recordLoopIterationProgress(ctx, stepID, i, false)
 		iterCtx := model.NewLoopIterationContext(ctx, model.LoopIterationOptions{
 			StepID:    stepID,
 			Iteration: i,
@@ -91,6 +97,8 @@ func executeCountedLoop(
 			emitLoopEnd(ctx, prefix, startTime, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, nil
 		}
+		recordLoopIterationProgress(ctx, stepID, i+1, false)
+		flushLoopState(ctx)
 		if result.breakTriggered {
 			emitLoopEnd(ctx, prefix, startTime, completed, true, "success")
 			return LoopResult{Outcome: OutcomeSuccess, LastIteration: i}, nil
@@ -124,6 +132,11 @@ func executeForEachLoop(
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), stepID)
 	startTime := time.Now()
 
+	resumeIter, _ := consumeLoopResume(ctx, stepID)
+	if resumeIter > opts.ResumeFromIteration {
+		opts.ResumeFromIteration = resumeIter
+	}
+
 	emitAudit(ctx, audit.Event{
 		Timestamp: startTime.UTC().Format(time.RFC3339),
 		Prefix:    prefix,
@@ -153,6 +166,7 @@ func executeForEachLoop(
 	for i := startIter; i < len(matches); i++ {
 		lastIter = i
 		loopVar := map[string]string{asVar: matches[i]}
+		recordLoopIterationProgress(ctx, stepID, i, false)
 		iterCtx := model.NewLoopIterationContext(ctx, model.LoopIterationOptions{
 			StepID:    stepID,
 			Iteration: i,
@@ -174,6 +188,8 @@ func executeForEachLoop(
 			emitLoopEnd(ctx, prefix, startTime, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, nil
 		}
+		recordLoopIterationProgress(ctx, stepID, i+1, false)
+		flushLoopState(ctx)
 		if result.breakTriggered {
 			emitLoopEnd(ctx, prefix, startTime, completed, true, "success")
 			return LoopResult{Outcome: OutcomeSuccess, LastIteration: i}, nil
@@ -182,6 +198,57 @@ func executeForEachLoop(
 
 	emitLoopEnd(ctx, prefix, startTime, completed, false, "success")
 	return LoopResult{Outcome: OutcomeSuccess, LastIteration: lastIter}, nil
+}
+
+// recordLoopIterationProgress stores the loop step's current iteration index
+// on ctx.LastSubWorkflowChild using the loop step's own ID. The merge branch
+// in recordChildProgress (triggered when the stored StepID matches childStepID)
+// and the top-level branch in writeStepState both recognise this and promote
+// Iteration onto the correct entry in the state chain.
+func recordLoopIterationProgress(ctx *model.ExecutionContext, loopStepID string, iteration int, loopCompleted bool) {
+	iterCopy := iteration
+	ctx.LastSubWorkflowChild = &model.SubWorkflowChildState{
+		StepID:            loopStepID,
+		SessionIDs:        copyMap(ctx.SessionIDs),
+		SessionProfiles:   copyMap(ctx.SessionProfiles),
+		CapturedVariables: copyMap(ctx.CapturedVariables),
+		Completed:         loopCompleted,
+		Iteration:         &iterCopy,
+	}
+}
+
+// flushLoopState propagates ctx.LastSubWorkflowChild up through the context
+// chain via recordChildProgress at each level, then triggers a state.json write
+// through the inherited FlushState callback. Walking up is necessary because
+// mid-loop flushes happen inside a DispatchStep call, before the enclosing
+// sub-workflow's post-step recordChildProgress refreshes the chain.
+func flushLoopState(ctx *model.ExecutionContext) {
+	cur := ctx
+	for cur.ParentContext != nil {
+		if len(cur.NestingPath) == 0 {
+			break
+		}
+		seg := cur.NestingPath[len(cur.NestingPath)-1]
+		if seg.StepID == "" {
+			break
+		}
+		recordChildProgress(cur, seg.StepID, false)
+		cur = cur.ParentContext
+	}
+	if ctx.FlushState != nil {
+		ctx.FlushState()
+	}
+}
+
+// consumeLoopResume checks if the context carries resume state for this loop
+// step and, if so, extracts the iteration index and clears the pointer.
+func consumeLoopResume(ctx *model.ExecutionContext, loopStepID string) (int, bool) {
+	if ctx.ResumeChildState == nil || ctx.ResumeChildState.StepID != loopStepID || ctx.ResumeChildState.Iteration == nil {
+		return 0, false
+	}
+	iter := *ctx.ResumeChildState.Iteration
+	ctx.ResumeChildState = nil
+	return iter, true
 }
 
 func emitLoopEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, completed int, breakTriggered bool, outcome string) {

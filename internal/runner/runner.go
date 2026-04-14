@@ -130,10 +130,13 @@ type runState struct {
 }
 
 // workflowNeedsAgentProfiles returns true if any step in the tree is an agent
-// step (has a Prompt or Agent field), meaning profile configuration is needed.
+// step (has a Prompt or Agent field) or delegates to a sub-workflow (Workflow
+// field set). Sub-workflows are assumed to potentially contain agent steps
+// since the referenced YAML isn't parsed here; loading profiles eagerly is
+// cheap and avoids silently falling back to an empty profile at dispatch time.
 func workflowNeedsAgentProfiles(steps []model.Step) bool {
 	for i := range steps {
-		if steps[i].Prompt != "" || steps[i].Agent != "" {
+		if steps[i].Prompt != "" || steps[i].Agent != "" || steps[i].Workflow != "" {
 			return true
 		}
 		if len(steps[i].Steps) > 0 && workflowNeedsAgentProfiles(steps[i].Steps) {
@@ -300,6 +303,10 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 		rs.log.Println(textfmt.Separator())
 		rs.log.Println(textfmt.StepHeading(i, len(rs.workflow.Steps), breadcrumb, stepType, false))
 
+		// Fresh chain for each top-level step; writeStepState intentionally
+		// does not clear it so the mid-step and post-step writes can share.
+		rs.ctx.LastSubWorkflowChild = nil
+
 		stepRef := step // capture for closure
 		rs.ctx.FlushState = func() {
 			writeStepState(stepRef, rs.ctx, &rs.workflow, rs.workflowHash, rs.sessionDir, nil, false)
@@ -422,17 +429,34 @@ func RunWorkflow(
 
 func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *model.Workflow, workflowHash, stateDir string, loopResult *exec.LoopResult, completed bool) {
 	var child *model.NestedStepState
+	var iteration *int
 
-	if loopResult != nil && loopResult.LastIteration >= 0 {
-		child = &model.NestedStepState{
-			StepID:            fmt.Sprintf("%s:iteration", step.ID),
-			SessionIDs:        map[string]string{},
-			CapturedVariables: map[string]string{"_iteration": fmt.Sprintf("%d", loopResult.LastIteration)},
-			Child:             nil,
+	// When the loop executor wrote iteration metadata onto ctx.LastSubWorkflowChild
+	// (top-level loop case), promote Iteration onto the top-level NestedStepState
+	// instead of wrapping in a duplicated child entry. Only do this if the stored
+	// StepID matches the step we are writing for — otherwise the child is
+	// genuinely a nested step.
+	//
+	// Note: we intentionally do not clear ctx.LastSubWorkflowChild here. The
+	// mid-step FlushState callback and the post-step write both read it, and
+	// clearing would make the post-step write see an empty chain after the
+	// mid-step flush consumed it. executeSteps resets the chain at the top of
+	// the next iteration.
+	switch {
+	case ctx.LastSubWorkflowChild != nil && ctx.LastSubWorkflowChild.StepID == step.ID:
+		iteration = ctx.LastSubWorkflowChild.Iteration
+		if ctx.LastSubWorkflowChild.Child != nil {
+			child = toNestedStepState(ctx.LastSubWorkflowChild.Child)
 		}
-	} else if ctx.LastSubWorkflowChild != nil {
+	case ctx.LastSubWorkflowChild != nil:
 		child = toNestedStepState(ctx.LastSubWorkflowChild)
-		ctx.LastSubWorkflowChild = nil
+	case loopResult != nil && loopResult.LastIteration >= 0:
+		// Fallback: a loop step finished without writing iteration metadata
+		// through the new channel (e.g. the mechanism was skipped because the
+		// loop ran to exhaustion without any iteration). Record the last
+		// completed iteration index so resume can start from the next one.
+		next := loopResult.LastIteration + 1
+		iteration = &next
 	}
 
 	nested := &model.NestedStepState{
@@ -442,6 +466,7 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 		CapturedVariables: copyMap(ctx.CapturedVariables),
 		LastSessionStepID: ctx.LastSessionStepID,
 		Completed:         completed,
+		Iteration:         iteration,
 		Child:             child,
 	}
 
@@ -465,6 +490,7 @@ func toNestedStepState(child *model.SubWorkflowChildState) *model.NestedStepStat
 		SessionProfiles:   copyMap(child.SessionProfiles),
 		CapturedVariables: copyMap(child.CapturedVariables),
 		Completed:         child.Completed,
+		Iteration:         child.Iteration,
 		Child:             toNestedStepState(child.Child),
 	}
 }

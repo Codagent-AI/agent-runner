@@ -6,6 +6,11 @@ import (
 )
 
 // NestedStepState tracks execution position within nested workflows/loops.
+//
+// For a loop step, Iteration is the next iteration index to execute on resume.
+// At iteration N start it is set to N; when iteration N completes it advances
+// to N+1. When the loop finishes, Iteration equals the total count and
+// Completed is true.
 type NestedStepState struct {
 	StepID            string            `json:"stepId"`
 	SessionIDs        map[string]string `json:"sessionIds"`
@@ -13,6 +18,7 @@ type NestedStepState struct {
 	CapturedVariables map[string]string `json:"capturedVariables"`
 	LastSessionStepID string            `json:"lastSessionStepId,omitempty"`
 	Completed         bool              `json:"completed,omitempty"`
+	Iteration         *int              `json:"iteration,omitempty"`
 	Child             *NestedStepState  `json:"child"`
 }
 

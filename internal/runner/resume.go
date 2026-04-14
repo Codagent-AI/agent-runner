@@ -52,7 +52,16 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
 		capturedVars = nested.CapturedVariables
 		lastSessionStepID = nested.LastSessionStepID
 		completed = nested.Completed
-		if nested.Child != nil {
+		if nested.Iteration != nil {
+			// Top-level loop step captured mid-iteration. Carry the iteration
+			// (and any deeper chain) through as ChildState so ExecuteLoopStep's
+			// consumeLoopResume can pick it up when the step is dispatched.
+			childState = &model.SubWorkflowChildState{
+				StepID:    nested.StepID,
+				Iteration: nested.Iteration,
+				Child:     nestedToChildState(nested.Child),
+			}
+		} else if nested.Child != nil {
 			childState = nestedToChildState(nested.Child)
 		}
 	} else {
@@ -108,6 +117,7 @@ func nestedToChildState(nested *model.NestedStepState) *model.SubWorkflowChildSt
 		SessionProfiles:   copyMap(nested.SessionProfiles),
 		CapturedVariables: copyMap(nested.CapturedVariables),
 		Completed:         nested.Completed,
+		Iteration:         nested.Iteration,
 		Child:             nestedToChildState(nested.Child),
 	}
 }
