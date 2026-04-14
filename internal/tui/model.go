@@ -7,12 +7,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/runs"
+	"github.com/codagent/agent-runner/internal/tuistyle"
 )
 
 type tab int
@@ -77,20 +77,11 @@ type allTabState struct {
 	selectedDir  string
 }
 
-type refreshMsg struct{}
-type pulseMsg struct{}
+type refreshMsg = tuistyle.RefreshMsg
+type pulseMsg = tuistyle.PulseMsg
 
-func doRefresh() tea.Cmd {
-	return tea.Every(2*time.Second, func(t time.Time) tea.Msg {
-		return refreshMsg{}
-	})
-}
-
-func doPulse() tea.Cmd {
-	return tea.Every(50*time.Millisecond, func(t time.Time) tea.Msg {
-		return pulseMsg{}
-	})
-}
+var doRefresh = tuistyle.DoRefresh
+var doPulse = tuistyle.DoPulse
 
 // SelectedRun returns the run the user chose to resume, or nil.
 func (m *Model) SelectedRun() *runs.RunInfo {
