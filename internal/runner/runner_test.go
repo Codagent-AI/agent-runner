@@ -36,6 +36,44 @@ func (m *mockRunner) RunAgent(args []string, _ bool, _ string) (exec.ProcessResu
 	return r, nil
 }
 
+// lockProbeRunner is a mockRunner variant that records whether the lock file
+// exists at the moment RunShell/RunAgent is invoked (i.e. while the step is
+// "executing"). This proves the lock was written before the step runs,
+// rather than only checking after finalizeRun has already deleted it.
+type lockProbeRunner struct {
+	calls    [][]string
+	results  []exec.ProcessResult
+	idx      int
+	lockPath string
+	observed *bool
+}
+
+func (m *lockProbeRunner) RunShell(cmd string, _ bool, _ string) (exec.ProcessResult, error) {
+	m.calls = append(m.calls, []string{"sh", "-c", cmd})
+	if _, err := os.Stat(m.lockPath); err == nil && m.observed != nil {
+		*m.observed = true
+	}
+	if m.idx >= len(m.results) {
+		return exec.ProcessResult{ExitCode: 0}, nil
+	}
+	r := m.results[m.idx]
+	m.idx++
+	return r, nil
+}
+
+func (m *lockProbeRunner) RunAgent(args []string, _ bool, _ string) (exec.ProcessResult, error) {
+	m.calls = append(m.calls, args)
+	if _, err := os.Stat(m.lockPath); err == nil && m.observed != nil {
+		*m.observed = true
+	}
+	if m.idx >= len(m.results) {
+		return exec.ProcessResult{ExitCode: 0}, nil
+	}
+	r := m.results[m.idx]
+	m.idx++
+	return r, nil
+}
+
 type mockGlob struct{ matches []string }
 
 func (g *mockGlob) Expand(_ string) ([]string, error) { return g.matches, nil }
@@ -328,13 +366,100 @@ func TestRunWorkflow(t *testing.T) {
 
 		found := false
 		for _, line := range log.lines {
-			if contains(line, "--resume --session deploy-service-") {
+			if contains(line, "--resume deploy-service-") {
 				found = true
 				break
 			}
 		}
 		if !found {
 			t.Fatalf("expected resume hint with session ID, got log lines: %v", log.lines)
+		}
+	})
+
+	t.Run("creates lock file during run and deletes it on success", func(t *testing.T) {
+		sessionDir := t.TempDir()
+		lockFile := filepath.Join(sessionDir, "lock")
+		lockSeenDuringStep := false
+		runner := &lockProbeRunner{
+			results:  []exec.ProcessResult{{ExitCode: 0}},
+			lockPath: lockFile,
+			observed: &lockSeenDuringStep,
+		}
+		w := model.Workflow{
+			Name:  "test",
+			Steps: []model.Step{shellStep("s1", "echo ok")},
+		}
+		w.ApplyDefaults()
+		result, _ := RunWorkflow(&w, map[string]string{}, &Options{
+			ProcessRunner: runner,
+			GlobExpander:  &mockGlob{},
+			Log:           &mockLog{},
+			SessionDir:    sessionDir,
+		})
+		if result != ResultSuccess {
+			t.Fatalf("expected success, got %q", result)
+		}
+		if !lockSeenDuringStep {
+			t.Fatal("expected lock file to exist while step was executing")
+		}
+
+		if _, err := os.Stat(lockFile); !os.IsNotExist(err) {
+			t.Fatal("expected lock file to be deleted after successful run")
+		}
+	})
+
+	t.Run("deletes lock file on failure", func(t *testing.T) {
+		sessionDir := t.TempDir()
+		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 1}}}
+		w := model.Workflow{
+			Name:  "test",
+			Steps: []model.Step{shellStep("s1", "false")},
+		}
+		w.ApplyDefaults()
+		result, _ := RunWorkflow(&w, map[string]string{}, &Options{
+			ProcessRunner: runner,
+			GlobExpander:  &mockGlob{},
+			Log:           &mockLog{},
+			SessionDir:    sessionDir,
+		})
+		if result != ResultFailed {
+			t.Fatalf("expected failed, got %q", result)
+		}
+
+		lockFile := filepath.Join(sessionDir, "lock")
+		if _, err := os.Stat(lockFile); !os.IsNotExist(err) {
+			t.Fatal("expected lock file to be deleted after failed run")
+		}
+	})
+}
+
+func TestWriteMetaJSON(t *testing.T) {
+	t.Run("creates meta.json with project path", func(t *testing.T) {
+		dir := t.TempDir()
+		writeMetaJSON(dir, "/home/user/myproject")
+
+		data, err := os.ReadFile(filepath.Join(dir, "meta.json"))
+		if err != nil {
+			t.Fatalf("failed to read meta.json: %v", err)
+		}
+		if !contains(string(data), "/home/user/myproject") {
+			t.Fatalf("expected path in meta.json, got %s", data)
+		}
+	})
+
+	t.Run("does not overwrite existing meta.json", func(t *testing.T) {
+		dir := t.TempDir()
+		existing := `{"path":"/original/path"}`
+		os.WriteFile(filepath.Join(dir, "meta.json"), []byte(existing), 0o600)
+
+		writeMetaJSON(dir, "/new/path")
+
+		data, err := os.ReadFile(filepath.Join(dir, "meta.json"))
+		if err != nil {
+			t.Fatalf("failed to read meta.json: %v", err)
+		}
+		if string(data) != existing {
+			t.Fatalf("meta.json was overwritten: got %s", data)
 		}
 	})
 }

@@ -29,24 +29,24 @@ The runner's agent step executor SHALL resolve the agent profile before delegati
 
 ### Requirement: Resume prompt messaging
 
-When a workflow is resumed via `--resume`, the **first** step that executes SHALL receive resume-specific messaging. All subsequent steps in that run SHALL receive normal (non-resume) messaging. The resume messaging is distinct from `session: resume` session reuse — a step that reuses a CLI session during normal (non-resumed) workflow execution is NOT a workflow resume.
+When a workflow is resumed via `--resume`, the **first agent step** that executes SHALL receive resume-specific messaging. All subsequent agent steps in that run SHALL receive normal (non-resume) messaging. Non-agent steps (shell, group, loop, sub-workflow containers) do not consume or emit resume messaging — only agent-step execution consults `WorkflowResumed`. The resume messaging is distinct from `session: resume` session reuse — a step that reuses a CLI session during normal (non-resumed) workflow execution is NOT a workflow resume.
 
-For adapters that support system prompts, the runner constructs both a user-visible prompt (`input.Prompt`) and a system-level step prefix (`buildStepPrefix`). The messaging rules are:
+For adapters that support system prompts, the runner constructs both a user-visible prompt (`input.Prompt`) and a system-level step prefix (`buildStepPrefix`). The messaging rules below apply to agent steps only:
 
 | Condition | `input.Prompt` | `buildStepPrefix` |
 |---|---|---|
-| Workflow resumed (first step only) | `"Resume the {step} step."` | `"Resuming step: {step}. If you already started on this step, resume from where you left off."` |
+| Workflow resumed (first agent step only) | `"Resume the {step} step."` | `"Resuming step: {step}. If you already started on this step, resume from where you left off."` |
 | Session reuse (`session: resume`), normal flow | `"Let's continue to the {step} step"` | Normal workflow description prefix |
 | New session (`session: new`) | `"Let's start the {step} step"` | Normal workflow description prefix |
 
-The `WorkflowResumed` flag SHALL be set on `ExecutionContext` when `opts.From` is non-empty (indicating a `--resume` invocation). It SHALL be cleared after the first agent step consumes it, so only the first step receives resume messaging.
+The `WorkflowResumed` flag SHALL be set on `ExecutionContext` when `opts.From` is non-empty (indicating a `--resume` invocation). The flag is consumed by agent-step execution (see `internal/exec/agent.go`) and cleared after the first agent step uses it, so only that first agent step receives resume messaging. Non-agent steps executed before the first agent step SHALL NOT consume the flag.
 
-#### Scenario: Workflow resumed — first step gets resume messaging
-- **WHEN** a workflow is resumed via `--resume` and the first step executes
+#### Scenario: Workflow resumed — first agent step gets resume messaging
+- **WHEN** a workflow is resumed via `--resume` and the first agent step executes
 - **THEN** the user prompt is `"Resume the {step} step."` and the system prefix includes "If you already started on this step, resume from where you left off."
 
-#### Scenario: Workflow resumed — second step gets normal messaging
-- **WHEN** a workflow is resumed via `--resume` and the second step executes (after the first resumed step completes)
+#### Scenario: Workflow resumed — second agent step gets normal messaging
+- **WHEN** a workflow is resumed via `--resume` and the second agent step executes (after the first resumed agent step completes)
 - **THEN** the user prompt is `"Let's continue to the {step} step"` (if `session: resume`) or `"Let's start the {step} step"` (if `session: new`) with no resume prefix
 
 #### Scenario: Session reuse without workflow resume

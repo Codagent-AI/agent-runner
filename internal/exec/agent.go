@@ -98,6 +98,13 @@ func ExecuteAgentStep(
 	}
 
 	mode := resolveModeFromProfile(step, profile)
+	headless := mode == model.ModeHeadless
+
+	if step.Capture != "" && !headless {
+		emitAgentFailure(ctx, prefix, startTime, string(mode), step,
+			fmt.Sprintf("capture requires headless mode, but step %q resolved to %s (check agent profile)", step.ID, mode))
+		return OutcomeFailed, nil
+	}
 
 	prompt, enrichment, err := buildAgentPrompt(step, ctx)
 	if err != nil {
@@ -111,7 +118,6 @@ func ExecuteAgentStep(
 		return OutcomeFailed, nil
 	}
 
-	headless := mode == model.ModeHeadless
 	input := buildAdapterInput(step, ctx, profile, adapter, prompt, enrichment, sessionID, isResume, headless)
 	args := adapter.BuildArgs(&input)
 
@@ -126,11 +132,6 @@ func ExecuteAgentStep(
 	}
 
 	if step.Capture != "" {
-		if !headless {
-			emitAgentFailure(ctx, prefix, startTime, string(mode), step,
-				fmt.Sprintf("capture requires headless mode, but step %q resolved to %s (check agent profile)", step.ID, mode))
-			return OutcomeFailed, nil
-		}
 		ctx.CapturedVariables[step.Capture] = result.Stdout
 	}
 
@@ -253,7 +254,12 @@ func buildAdapterInput(
 	}
 
 	// Clear the one-shot flag after the first agent step consumes it.
-	ctx.WorkflowResumed = false
+	// Walk up the parent chain so child contexts (loop iterations,
+	// sub-workflows) that copied the flag at creation don't re-present it
+	// on subsequent iterations via a fresh child context.
+	for c := ctx; c != nil; c = c.ParentContext {
+		c.WorkflowResumed = false
+	}
 
 	return input
 }

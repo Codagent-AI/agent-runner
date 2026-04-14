@@ -1,7 +1,8 @@
 # agent-profiles Specification
 
 ## Purpose
-TBD - created by archiving change agent-profiles. Update Purpose after archive.
+
+Defines named, inheritable agent profiles that bundle CLI choice, default mode, model, effort, and system prompt into reusable units, so workflow steps reference a profile by name rather than re-declaring each attribute. Profiles support single-parent `extends` inheritance, per-step overrides for `mode`, `model`, and `cli`, and auto-generation of a default config with `interactive_base`, `headless_base`, `planner`, and `implementor` profiles when none exists.
 ## Requirements
 ### Requirement: Profile schema
 Each agent profile SHALL have a name (the YAML key) and MAY include: `default_mode` (interactive|headless), `cli` (claude|codex), `model` (string), `effort` (low|medium|high), `system_prompt` (string), and `extends` (string referencing another profile name).
