@@ -1,0 +1,53 @@
+name: simple-change
+description: "End-to-end change with inlined planning steps (no nested plan workflow)"
+
+params:
+  - name: change_name
+    required: true
+
+engine:
+  type: openspec
+  change_param: change_name
+
+steps:
+  - id: check-clean
+    # agent-validator detect: exit 0 = unvalidated changes present, exit 2 = clean (no changes)
+    # todo move to script, add check for git porcelain
+    command: "agent-validator detect; status=$?; if [ $status -eq 2 ]; then exit 0; elif [ $status -eq 0 ]; then echo 'Unvalidated changes detected. Run agent-validator before planning.' >&2; exit 1; else exit $status; fi"
+
+  - id: create
+    command: openspec new change "{{change_name}}"
+
+  - id: plan
+    agent: planner
+    prompt: |
+      Help the user plan the change "{{change_name}}".
+      You MUST use the codagent:simple-plan skill.
+
+  - id: validate
+    mode: headless
+    session: resume
+    prompt: |
+      Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports.
+      Keep running the command and fixing until it passes with no errors.
+
+  - id: commit-openspec
+    mode: headless
+    session: resume
+    prompt: |
+      Stage everything under openspec/changes/{{change_name}}/ and commit
+      with a clear message like "Add openspec documents for {{change_name}}".
+
+  - id: skip-validator
+    command: agent-validator skip
+
+  - id: implement-single-task
+    workflow: ../implement-task.yaml
+    params:
+      task_file: "openspec/changes/{{change_name}}/tasks.md"
+
+  - id: archive
+    command: openspec archive "{{change_name}}" --yes
+
+  - id: skip-validator-after-archive
+    command: agent-validator skip

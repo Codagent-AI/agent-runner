@@ -14,12 +14,16 @@ type NestingSegment struct {
 }
 
 // SubWorkflowChildState tracks child step progress for state persistence.
+//
+// For a loop step, Iteration carries the next iteration index to execute on
+// resume (semantics match NestedStepState.Iteration).
 type SubWorkflowChildState struct {
 	StepID            string                 `json:"stepId"`
 	SessionIDs        map[string]string      `json:"sessionIds"`
 	SessionProfiles   map[string]string      `json:"sessionProfiles,omitempty"`
 	CapturedVariables map[string]string      `json:"capturedVariables"`
 	Completed         bool                   `json:"completed,omitempty"`
+	Iteration         *int                   `json:"iteration,omitempty"`
 	Child             *SubWorkflowChildState `json:"child,omitempty"`
 }
 
@@ -169,6 +173,7 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		ProfileStore:        parent.ProfileStore,
 		AuditLogger:         parent.AuditLogger,
 		WorkflowResumed:     parent.WorkflowResumed,
+		FlushState:          parent.FlushState,
 	}
 }
 
@@ -229,5 +234,6 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		ProfileStore:        parent.ProfileStore,
 		AuditLogger:         parent.AuditLogger,
 		WorkflowResumed:     parent.WorkflowResumed,
+		FlushState:          parent.FlushState,
 	}
 }

@@ -7,12 +7,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/runs"
+	"github.com/codagent/agent-runner/internal/tuistyle"
 )
 
 type tab int
@@ -53,7 +53,6 @@ type Model struct {
 	termWidth    int
 	termHeight   int
 
-	selected *runs.RunInfo
 	quitting bool
 }
 
@@ -77,25 +76,17 @@ type allTabState struct {
 	selectedDir  string
 }
 
-type refreshMsg struct{}
-type pulseMsg struct{}
-
-func doRefresh() tea.Cmd {
-	return tea.Every(2*time.Second, func(t time.Time) tea.Msg {
-		return refreshMsg{}
-	})
+// ViewRunMsg signals the switcher to open the run view for a specific run.
+type ViewRunMsg struct {
+	SessionDir string
+	ProjectDir string
 }
 
-func doPulse() tea.Cmd {
-	return tea.Every(50*time.Millisecond, func(t time.Time) tea.Msg {
-		return pulseMsg{}
-	})
-}
+type refreshMsg = tuistyle.RefreshMsg
+type pulseMsg = tuistyle.PulseMsg
 
-// SelectedRun returns the run the user chose to resume, or nil.
-func (m *Model) SelectedRun() *runs.RunInfo {
-	return m.selected
-}
+var doRefresh = tuistyle.DoRefresh
+var doPulse = tuistyle.DoPulse
 
 // New creates a new Model.
 func New() (*Model, error) {
@@ -392,11 +383,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 	case tabCurrentDir:
 		if m.currentDirCursor < len(m.currentRuns) {
 			r := m.currentRuns[m.currentDirCursor]
-			if r.Status == runs.StatusInactive {
-				m.selected = &r
-				m.quitting = true
-				return m, tea.Quit
-			}
+			return m, viewRunCmd(r.SessionDir, m.projectDir)
 		}
 	case tabWorktrees:
 		if m.worktreeTab.subView == subViewPicker {
@@ -410,11 +397,8 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 			wt := m.selectedWorktree()
 			if wt != nil && m.worktreeTab.listCursor < len(wt.Runs) {
 				r := wt.Runs[m.worktreeTab.listCursor]
-				if r.Status == runs.StatusInactive {
-					m.selected = &r
-					m.quitting = true
-					return m, tea.Quit
-				}
+				projDir := filepath.Join(m.projectsRoot, wt.Encoded)
+				return m, viewRunCmd(r.SessionDir, projDir)
 			}
 		}
 	case tabAll:
@@ -429,15 +413,18 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 			d := m.selectedAllDir()
 			if d != nil && m.allTab.listCursor < len(d.Runs) {
 				r := d.Runs[m.allTab.listCursor]
-				if r.Status == runs.StatusInactive {
-					m.selected = &r
-					m.quitting = true
-					return m, tea.Quit
-				}
+				projDir := filepath.Join(m.projectsRoot, d.Encoded)
+				return m, viewRunCmd(r.SessionDir, projDir)
 			}
 		}
 	}
 	return m, nil
+}
+
+func viewRunCmd(sessionDir, projectDir string) tea.Cmd {
+	return func() tea.Msg {
+		return ViewRunMsg{SessionDir: sessionDir, ProjectDir: projectDir}
+	}
 }
 
 func (m *Model) handleEsc() {

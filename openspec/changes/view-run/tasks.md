@@ -1,0 +1,2 @@
+- [ ] Extract tuistyle package and build run-view data model (`tasks/data-model.md`)
+- [ ] Run-view TUI, --inspect CLI, and list-screen Enter handoff (`tasks/tui-cli.md`)

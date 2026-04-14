@@ -204,14 +204,23 @@ func recordChildProgress(childCtx *model.ExecutionContext, childStepID string, c
 		childCtx.LastSubWorkflowChild = nil
 	}
 
-	parent.LastSubWorkflowChild = &model.SubWorkflowChildState{
+	entry := &model.SubWorkflowChildState{
 		StepID:            childStepID,
 		SessionIDs:        copyMap(childCtx.SessionIDs),
 		SessionProfiles:   copyMap(childCtx.SessionProfiles),
 		CapturedVariables: copyMap(childCtx.CapturedVariables),
 		Completed:         completed,
-		Child:             nestedChild,
 	}
+	// When the deeper state already describes this same step (e.g. a loop step
+	// that has written its own iteration metadata into childCtx.LastSubWorkflowChild),
+	// promote its Iteration/Child so we do not produce a duplicated wrapper.
+	if nestedChild != nil && nestedChild.StepID == childStepID {
+		entry.Iteration = nestedChild.Iteration
+		entry.Child = nestedChild.Child
+	} else {
+		entry.Child = nestedChild
+	}
+	parent.LastSubWorkflowChild = entry
 }
 
 func applyResumeState(parentCtx, childCtx *model.ExecutionContext) (string, bool) {
@@ -230,7 +239,13 @@ func applyResumeState(parentCtx, childCtx *model.ExecutionContext) (string, bool
 	for k, v := range resumeChild.CapturedVariables {
 		childCtx.CapturedVariables[k] = v
 	}
-	if resumeChild.Child != nil {
+	if resumeChild.Iteration != nil {
+		// This entry describes a loop step that is being resumed mid-iteration.
+		// Keep the full entry on childCtx so the loop executor can read its
+		// Iteration (and eventually deeper body-step resume metadata) when the
+		// sub-workflow dispatches the loop step.
+		childCtx.ResumeChildState = resumeChild
+	} else if resumeChild.Child != nil {
 		childCtx.ResumeChildState = resumeChild.Child
 	}
 	return resumeChild.StepID, resumeChild.Completed

@@ -13,7 +13,7 @@ steps:
       require_matches: true
     steps:
       - id: implement-single-task
-        workflow: implement-task.yaml
+        workflow: ../implement-task.yaml
         params:
           task_file: "{{task_file}}"
 

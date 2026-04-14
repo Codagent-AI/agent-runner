@@ -1,0 +1,60 @@
+# Test that resume skips completed iterations of a for-each loop.
+#
+# The workflow has a 3-iteration loop. Iteration 0 succeeds (creates a file),
+# iteration 1 fails the first run (missing trigger), the rest are blocked.
+# After the trigger is supplied and we resume, iteration 0 must NOT re-run,
+# iteration 1 must re-run and succeed, and iteration 2 must run fresh.
+
+# Create initial matched files for the for-each glob.
+exec sh -c 'mkdir -p items && echo a > items/a.txt && echo b > items/b.txt && echo c > items/c.txt'
+
+# First run: iteration 0 creates marker-a (success), iteration 1 needs
+# trigger.txt which is absent, so it fails. Iteration 2 never runs.
+! exec agent-runner workflow
+stdout 'step "process" failed'
+
+# Verify iteration 0 ran once (counter = 1).
+exec cat counter-a.txt
+stdout '^1$'
+
+# Overwrite counter-a so we can detect if iteration 0 re-runs on resume.
+exec sh -c 'echo overwritten > counter-a.txt'
+
+# Create the trigger so iteration 1 succeeds next time.
+exec sh -c 'echo ok > trigger.txt'
+
+# Resume the run.
+exec sh -c 'agent-runner -resume "$(ls -d "$HOME"/.agent-runner/projects/*/runs/*/ | head -1 | xargs basename)"'
+
+# Iteration 0 must NOT have re-run — counter-a.txt still says overwritten.
+exec cat counter-a.txt
+stdout '^overwritten$'
+
+# Iteration 1 ran and succeeded — counter-b.txt has 1.
+exec cat counter-b.txt
+stdout '^1$'
+
+# Iteration 2 ran — counter-c.txt has 1.
+exec cat counter-c.txt
+stdout '^1$'
+
+-- workflows/workflow.yaml --
+name: e2e-loop-resume
+steps:
+  - id: process
+    loop:
+      over: "items/*.txt"
+      as: item
+    steps:
+      - id: process-item
+        command: |
+          name=$(basename "{{item}}" .txt)
+          # iteration 1 (item b) requires trigger.txt to exist
+          if [ "$name" = "b" ] && [ ! -f trigger.txt ]; then
+            exit 1
+          fi
+          count=0
+          if [ -f "counter-$name.txt" ]; then
+            count=$(cat "counter-$name.txt")
+          fi
+          echo $((count + 1)) > "counter-$name.txt"
