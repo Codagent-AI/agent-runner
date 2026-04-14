@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-
 func TestCanonicalName(t *testing.T) {
 	repo := "/repo"
 	wfRoot := "/repo/workflows"

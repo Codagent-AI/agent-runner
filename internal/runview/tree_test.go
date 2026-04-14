@@ -10,13 +10,13 @@ import (
 
 // loadWorkflowForTest loads a workflow YAML from the repo's workflows/ dir,
 // regardless of where the test binary runs from.
-func loadWorkflowForTest(t *testing.T, rel string) (model.Workflow, string) {
+func loadWorkflowForTest(t *testing.T, rel string) (wf model.Workflow, path string) {
 	t.Helper()
 	abs, err := filepath.Abs(filepath.Join("..", "..", "workflows", rel))
 	if err != nil {
 		t.Fatal(err)
 	}
-	wf, err := loader.LoadWorkflow(abs, loader.Options{})
+	wf, err = loader.LoadWorkflow(abs, loader.Options{})
 	if err != nil {
 		t.Fatalf("load %s: %v", rel, err)
 	}

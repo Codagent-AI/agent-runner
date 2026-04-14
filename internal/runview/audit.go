@@ -130,7 +130,8 @@ func (t *Tailer) Apply(r io.Reader, onEvent func(RawEvent)) (int, error) {
 		return 0, nil
 	}
 
-	combined := append(t.buffer, data...)
+	t.buffer = append(t.buffer, data...)
+	combined := t.buffer
 	t.buffer = nil
 
 	start := 0
@@ -192,7 +193,7 @@ func (f *FileTailer) ReadSince(sessionDir string) ([]RawEvent, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	if f.offset > 0 {
 		if _, err := file.Seek(f.offset, io.SeekStart); err != nil {
@@ -201,7 +202,7 @@ func (f *FileTailer) ReadSince(sessionDir string) ([]RawEvent, error) {
 	}
 
 	var events []RawEvent
-	consumed, err := f.Tailer.Apply(file, func(e RawEvent) {
+	consumed, err := f.Apply(file, func(e RawEvent) {
 		events = append(events, e)
 	})
 	f.offset += int64(consumed)
@@ -283,10 +284,12 @@ func (t *Tree) resolve(tokens []prefixToken, createIterations bool) *StepNode {
 		switch {
 		case tok.subName != "":
 			if err := t.ensureSubWorkflowLoaded(current); err != nil {
-				// Lazy-load failure leaves Children empty; resolution continues
-				// so the sub-workflow node itself stays targetable, but
-				// descending further will fail when there are no children.
-				_ = err
+				// Lazy-load failure: record on the node so the UI can display it;
+				// resolution stays here so the node itself remains targetable, but
+				// further descent will yield nil (no children).
+				if current.ErrorMessage == "" {
+					current.ErrorMessage = err.Error()
+				}
 			}
 			// Stay at the sub-workflow node — its children now hold the body.
 		case tok.iteration != nil:
@@ -351,6 +354,10 @@ func defaultLoadWorkflow(path string) (model.Workflow, error) {
 // resolveSubWorkflowPath turns a sub-workflow node's raw "workflow:" field
 // into an absolute path, joined against the containing workflow file's dir
 // (mirroring exec.resolveWorkflowPath for static tree construction).
+//
+// Security: the resolved path is checked against a trusted root derived from
+// the top-level workflow to prevent path-traversal attacks via malicious
+// "../../../etc/passwd" references in untrusted workflow YAML files.
 func (t *Tree) resolveSubWorkflowPath(n *StepNode) (string, error) {
 	if n == nil || n.StaticWorkflow == "" {
 		return "", errors.New("sub-workflow node has no workflow field")
@@ -362,13 +369,27 @@ func (t *Tree) resolveSubWorkflowPath(n *StepNode) (string, error) {
 	if dir == "" {
 		dir = parentWorkflowDir(n, t.WorkflowPath)
 	}
-	if filepath.IsAbs(n.StaticWorkflow) {
-		return filepath.Clean(n.StaticWorkflow), nil
+	var absPath string
+	switch {
+	case filepath.IsAbs(n.StaticWorkflow):
+		absPath = filepath.Clean(n.StaticWorkflow)
+	case dir == "":
+		absPath = filepath.Clean(n.StaticWorkflow)
+	default:
+		absPath = filepath.Clean(filepath.Join(dir, n.StaticWorkflow))
 	}
-	if dir == "" {
-		return filepath.Clean(n.StaticWorkflow), nil
+	// Enforce trusted root: the resolved path must not escape the parent of the
+	// top-level workflow's containing directory (i.e. the workflows/ root or
+	// the repo root for top-level workflows). This prevents a malicious workflow
+	// from forcing reads of arbitrary files outside the project tree.
+	if t.WorkflowPath != "" {
+		trustedRoot := filepath.Dir(filepath.Dir(filepath.Clean(t.WorkflowPath)))
+		rel, err := filepath.Rel(trustedRoot, absPath)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			return "", fmt.Errorf("sub-workflow path %q resolves outside trusted root %q", n.StaticWorkflow, trustedRoot)
+		}
 	}
-	return filepath.Clean(filepath.Join(dir, n.StaticWorkflow)), nil
+	return absPath, nil
 }
 
 // parentWorkflowDir walks up the tree to find the nearest ancestor whose
@@ -465,6 +486,19 @@ func applyStepEnd(n *StepNode, data map[string]any) {
 
 func applyIterationStart(n *StepNode, data map[string]any) {
 	if loopVar, ok := data["loop_var"].(map[string]any); ok {
+		// Prefer the statically-known binding name from the parent loop node
+		// to avoid non-deterministic map iteration when loop_var has >1 key.
+		key := ""
+		if n.Parent != nil {
+			key = n.Parent.StaticLoopAs
+		}
+		if key != "" {
+			if s, ok := loopVar[key].(string); ok {
+				n.BindingValue = s
+				return
+			}
+		}
+		// Fallback: single-entry maps are deterministic.
 		for _, v := range loopVar {
 			if s, ok := v.(string); ok {
 				n.BindingValue = s
@@ -582,11 +616,11 @@ func int64Field(data map[string]any, key string) (int64, bool) {
 	return 0, false
 }
 
-func boolField(data map[string]any, key string) (bool, bool) {
-	v, ok := data[key]
-	if !ok {
+func boolField(data map[string]any, key string) (val, ok bool) {
+	v, found := data[key]
+	if !found {
 		return false, false
 	}
-	b, ok := v.(bool)
-	return b, ok
+	val, ok = v.(bool)
+	return val, ok
 }

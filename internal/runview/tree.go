@@ -277,7 +277,7 @@ func ensureIteration(loop *StepNode, index int) *StepNode {
 
 // cloneTemplate deep-copies a static template subtree (used to seed iteration
 // children from a loop's Body). Runtime fields start empty.
-func cloneTemplate(src *StepNode, parent *StepNode) *StepNode {
+func cloneTemplate(src, parent *StepNode) *StepNode {
 	dst := &StepNode{
 		ID:                 src.ID,
 		Type:               src.Type,
