@@ -409,7 +409,7 @@ func (m *Model) renderHelp() string {
 	switch m.activeTab {
 	case tabCurrentDir:
 		if len(m.currentRuns) > 0 {
-			parts = append(parts, "↑↓ navigate", "enter resume", "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "↑↓ navigate", "enter view", "tab/c/w/a switch tab", "q quit")
 		} else {
 			parts = append(parts, "tab/c/w/a switch tab", "q quit")
 		}
@@ -417,13 +417,13 @@ func (m *Model) renderHelp() string {
 		if m.worktreeTab.subView == subViewPicker {
 			parts = append(parts, "↑↓ navigate", "enter view runs", "tab/c/w/a switch tab", "q quit")
 		} else {
-			parts = append(parts, "↑↓ navigate", "enter resume", "esc back", "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "↑↓ navigate", "enter view", "esc back", "tab/c/w/a switch tab", "q quit")
 		}
 	case tabAll:
 		if m.allTab.subView == subViewPicker {
 			parts = append(parts, "↑↓ navigate", "enter view runs", "tab/c/w/a switch tab", "q quit")
 		} else {
-			parts = append(parts, "↑↓ navigate", "enter resume", "esc back", "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "↑↓ navigate", "enter view", "esc back", "tab/c/w/a switch tab", "q quit")
 		}
 	}
 

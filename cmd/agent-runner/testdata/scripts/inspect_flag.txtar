@@ -1,0 +1,19 @@
+# --inspect with unknown run ID fails
+! exec agent-runner -inspect nonexistent-run
+stderr 'session not found: nonexistent-run'
+
+# --inspect with mutually exclusive --list fails
+! exec agent-runner -inspect foo -list
+stderr 'mutually exclusive'
+
+# --inspect with mutually exclusive --resume fails
+! exec agent-runner -inspect foo -resume
+stderr 'mutually exclusive'
+
+# --inspect with path traversal fails
+! exec agent-runner -inspect '../escape'
+stderr 'invalid run ID'
+
+# --inspect with slash fails
+! exec agent-runner -inspect 'foo/bar'
+stderr 'invalid run ID'

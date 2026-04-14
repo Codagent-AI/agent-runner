@@ -1,0 +1,193 @@
+package runview
+
+import (
+	"path/filepath"
+	"testing"
+
+	"github.com/codagent/agent-runner/internal/loader"
+	"github.com/codagent/agent-runner/internal/model"
+)
+
+// loadWorkflowForTest loads a workflow YAML from the repo's workflows/ dir,
+// regardless of where the test binary runs from.
+func loadWorkflowForTest(t *testing.T, rel string) (wf model.Workflow, path string) {
+	t.Helper()
+	abs, err := filepath.Abs(filepath.Join("..", "..", "workflows", rel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf, err = loader.LoadWorkflow(abs, loader.Options{})
+	if err != nil {
+		t.Fatalf("load %s: %v", rel, err)
+	}
+	return wf, abs
+}
+
+func TestBuildTree_ImplementChange(t *testing.T) {
+	wf, wfPath := loadWorkflowForTest(t, "openspec/implement-change.yaml")
+	tree := BuildTree(&wf, wfPath)
+
+	if got := tree.Root.ID; got != "implement-change" {
+		t.Errorf("root ID: want implement-change, got %q", got)
+	}
+	if tree.Root.Type != NodeRoot {
+		t.Errorf("root type: want NodeRoot, got %v", tree.Root.Type)
+	}
+	if got := len(tree.Root.Children); got != 4 {
+		t.Fatalf("root children: want 4, got %d", got)
+	}
+
+	loop := tree.Root.Children[0]
+	if loop.ID != "implement-tasks" || loop.Type != NodeLoop {
+		t.Errorf("want loop 'implement-tasks', got %q type=%v", loop.ID, loop.Type)
+	}
+	if loop.StaticLoopOver == "" || loop.StaticLoopAs != "task_file" {
+		t.Errorf("loop over/as mismatch: over=%q as=%q", loop.StaticLoopOver, loop.StaticLoopAs)
+	}
+	if !loop.AutoFlatten {
+		t.Errorf("loop with single sub-workflow body should have AutoFlatten")
+	}
+	if len(loop.Body) != 1 || loop.Body[0].Type != NodeSubWorkflow {
+		t.Fatalf("loop body must be a single sub-workflow, got %d items", len(loop.Body))
+	}
+	if loop.Body[0].ID != "implement-single-task" || loop.Body[0].StaticWorkflow != "../implement-task.yaml" {
+		t.Errorf("sub-workflow body mismatch: id=%q workflow=%q",
+			loop.Body[0].ID, loop.Body[0].StaticWorkflow)
+	}
+
+	archive := tree.Root.Children[1]
+	if archive.ID != "archive" || archive.Type != NodeShell {
+		t.Errorf("want archive shell, got id=%q type=%v", archive.ID, archive.Type)
+	}
+	if archive.StaticCommand == "" {
+		t.Errorf("expected static command on archive")
+	}
+
+	finalize := tree.Root.Children[3]
+	if finalize.ID != "finalize" {
+		t.Fatalf("want finalize at index 3, got %q", finalize.ID)
+	}
+	// Without explicit mode, default is interactive.
+	if finalize.Type != NodeInteractiveAgent {
+		t.Errorf("finalize default type: want NodeInteractiveAgent, got %v", finalize.Type)
+	}
+
+	// Every node starts pending.
+	for _, c := range tree.Root.Children {
+		if c.Status != StatusPending {
+			t.Errorf("child %q: want pending, got %v", c.ID, c.Status)
+		}
+	}
+}
+
+func TestBuildTree_ImplementTask(t *testing.T) {
+	wf, wfPath := loadWorkflowForTest(t, "implement-task.yaml")
+	tree := BuildTree(&wf, wfPath)
+
+	if tree.Root.ID != "implement-task" {
+		t.Errorf("root ID: got %q", tree.Root.ID)
+	}
+	if got := len(tree.Root.Children); got != 5 {
+		t.Fatalf("want 5 children, got %d", got)
+	}
+
+	implement := tree.Root.Children[0]
+	if implement.ID != "implement" || implement.Type != NodeInteractiveAgent {
+		t.Errorf("implement: id=%q type=%v", implement.ID, implement.Type)
+	}
+	if implement.StaticPrompt == "" {
+		t.Errorf("expected static prompt")
+	}
+	if implement.StaticAgent != "implementor" {
+		t.Errorf("agent: want implementor, got %q", implement.StaticAgent)
+	}
+
+	subwf := tree.Root.Children[1]
+	if subwf.ID != "run-validator" || subwf.Type != NodeSubWorkflow {
+		t.Errorf("run-validator: id=%q type=%v", subwf.ID, subwf.Type)
+	}
+	if subwf.SubLoaded {
+		t.Errorf("sub-workflow body should be lazy-loaded, not eager")
+	}
+	if len(subwf.Children) != 0 {
+		t.Errorf("sub-workflow children should start empty")
+	}
+
+	shell := tree.Root.Children[2]
+	if shell.ID != "check-clean" || shell.Type != NodeShell {
+		t.Errorf("check-clean: id=%q type=%v", shell.ID, shell.Type)
+	}
+}
+
+func TestEnsureIteration_CreatesAndSeedsBody(t *testing.T) {
+	wf, wfPath := loadWorkflowForTest(t, "openspec/implement-change.yaml")
+	tree := BuildTree(&wf, wfPath)
+	loop := tree.Root.Children[0]
+
+	iter := ensureIteration(loop, 0)
+	if iter == nil || iter.Type != NodeIteration {
+		t.Fatalf("ensureIteration returned bad node: %+v", iter)
+	}
+	if iter.IterationIndex != 0 {
+		t.Errorf("iter index: want 0, got %d", iter.IterationIndex)
+	}
+	if len(iter.Children) != 1 {
+		t.Fatalf("iter should have 1 child cloned from body, got %d", len(iter.Children))
+	}
+	if iter.FlattenTarget == nil {
+		t.Errorf("iteration of single-sub-workflow loop should have FlattenTarget set")
+	}
+	if iter.FlattenTarget != iter.Children[0] {
+		t.Errorf("FlattenTarget should point to iteration's sub-workflow child")
+	}
+
+	// Repeated call returns the same iteration.
+	again := ensureIteration(loop, 0)
+	if again != iter {
+		t.Errorf("ensureIteration should be idempotent; got new node")
+	}
+
+	iter2 := ensureIteration(loop, 1)
+	if iter2 == iter {
+		t.Errorf("different index should yield a different node")
+	}
+}
+
+func TestDrilldown_AutoFlatten(t *testing.T) {
+	wf, wfPath := loadWorkflowForTest(t, "openspec/implement-change.yaml")
+	tree := BuildTree(&wf, wfPath)
+	loop := tree.Root.Children[0]
+	iter := ensureIteration(loop, 2)
+
+	target := iter.Drilldown()
+	if target == iter {
+		t.Errorf("auto-flattened iteration should drilldown to FlattenTarget, not self")
+	}
+	if target != iter.Children[0] {
+		t.Errorf("drilldown target mismatch")
+	}
+}
+
+func TestDrilldown_NoFlattenOnShellBodyLoop(t *testing.T) {
+	maxN := 3
+	s := &model.Step{
+		ID: "counted",
+		Loop: &model.Loop{
+			Max: &maxN,
+		},
+		Steps: []model.Step{
+			{ID: "only-shell", Command: "echo hi"},
+		},
+	}
+	loop := buildStepNode(s, nil)
+	if loop.AutoFlatten {
+		t.Fatalf("loop whose body is a shell step must not auto-flatten")
+	}
+	iter := ensureIteration(loop, 0)
+	if iter.FlattenTarget != nil {
+		t.Errorf("iteration must not have FlattenTarget when loop body is a shell step")
+	}
+	if iter.Drilldown() != iter {
+		t.Errorf("drilldown should return self when no flatten target")
+	}
+}

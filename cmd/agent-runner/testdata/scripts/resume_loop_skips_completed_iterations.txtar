@@ -24,7 +24,7 @@ exec sh -c 'echo overwritten > counter-a.txt'
 exec sh -c 'echo ok > trigger.txt'
 
 # Resume the run.
-exec sh -c 'agent-runner -resume "$(ls -d .agent-runner/projects/*/runs/*/ | head -1 | xargs basename)"'
+exec sh -c 'agent-runner -resume "$(ls -d "$HOME"/.agent-runner/projects/*/runs/*/ | head -1 | xargs basename)"'
 
 # Iteration 0 must NOT have re-run — counter-a.txt still says overwritten.
 exec cat counter-a.txt
