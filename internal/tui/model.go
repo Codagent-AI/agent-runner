@@ -146,7 +146,9 @@ func (m *Model) loadData() {
 	m.currentRuns = currentRuns
 
 	m.worktreeTab.worktrees = ListWorktrees(m.projectsRoot)
-	m.allTab.dirs = listAllDirs(m.projectsRoot)
+	allDirs, allErrs := listAllDirs(m.projectsRoot)
+	m.allTab.dirs = allDirs
+	errs = append(errs, allErrs...)
 
 	if m.worktreeTab.subView == subViewRunList && m.worktreeTab.selectedDir != "" {
 		for i, wt := range m.worktreeTab.worktrees {
@@ -247,19 +249,24 @@ func reanchorDirCursor(dirs []DirEntry, key string, fallback int) int {
 	return clampCursor(fallback, len(dirs))
 }
 
-func listAllDirs(projectsRoot string) []DirEntry {
+func listAllDirs(projectsRoot string) (dirs []DirEntry, errs []string) {
 	entries, err := os.ReadDir(projectsRoot)
 	if err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, []string{fmt.Sprintf("projects root: %v", err)}
 	}
 
-	var dirs []DirEntry
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		projectDir := filepath.Join(projectsRoot, entry.Name())
-		runList, _ := runs.ListForDir(projectDir)
+		runList, listErr := runs.ListForDir(projectDir)
+		if listErr != nil {
+			errs = append(errs, fmt.Sprintf("dir %s: %v", entry.Name(), listErr))
+		}
 		path := runs.ReadProjectPath(projectDir)
 		dirs = append(dirs, DirEntry{
 			Path:    path,
@@ -275,7 +282,7 @@ func listAllDirs(projectsRoot string) []DirEntry {
 		}
 		return dirs[i].Path < dirs[j].Path
 	})
-	return dirs
+	return dirs, errs
 }
 
 func (m *Model) Init() tea.Cmd {

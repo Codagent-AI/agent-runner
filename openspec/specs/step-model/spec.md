@@ -24,7 +24,7 @@ A step MAY include a `model` field specifying which model the agent should use. 
 - **THEN** the runner fails with a validation error
 
 ### Requirement: Per-step CLI override
-A step MAY include a `cli` field specifying which CLI backend to use. When present, it SHALL override the cli from the resolved agent profile. When absent, the profile's cli is used. The `cli` field is only valid on agent steps, not shell steps.
+A step MAY include a `cli` field specifying which CLI backend to use. When present, it SHALL override the cli from the resolved agent profile. When absent, the profile's cli is used. If both the step and the resolved profile omit `cli`, the runner SHALL fall back to `claude`. The `cli` field is only valid on agent steps, not shell steps.
 
 #### Scenario: CLI specified overrides profile
 - **WHEN** an agent step has `agent: headless_base` (profile cli=claude) and `cli: codex`
