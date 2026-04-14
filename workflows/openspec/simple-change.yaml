@@ -49,5 +49,5 @@ steps:
   - id: archive
     command: openspec archive "{{change_name}}" --yes
 
-  - id: archive-verify
+  - id: skip-validator-after-archive
     command: agent-validator skip

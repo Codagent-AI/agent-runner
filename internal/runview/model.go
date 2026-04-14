@@ -252,7 +252,9 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case NodeSubWorkflow:
-		_ = m.tree.EnsureSubWorkflowLoaded(n)
+		if err := m.tree.EnsureSubWorkflowLoaded(n); err != nil && n.ErrorMessage == "" {
+			n.ErrorMessage = err.Error()
+		}
 		m.path = append(m.path, n)
 		m.cursor = 0
 		m.detailOffset = 0
@@ -261,7 +263,9 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 	case NodeIteration:
 		target := n.Drilldown()
 		if target != n && target.Type == NodeSubWorkflow {
-			_ = m.tree.EnsureSubWorkflowLoaded(target)
+			if err := m.tree.EnsureSubWorkflowLoaded(target); err != nil && target.ErrorMessage == "" {
+				target.ErrorMessage = err.Error()
+			}
 		}
 		m.path = append(m.path, n)
 		m.cursor = 0

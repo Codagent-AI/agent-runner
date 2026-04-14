@@ -90,9 +90,9 @@ No bubbletea, no lipgloss, no terminal-rendering code in this task. Data types m
 The data layer built in this task must satisfy the behavioral contract for step-list rendering (tree shape, statuses, iteration counters), drill-in (tree must expose sub-workflow children lazily, iteration children, and flatten targets), sub-workflow headers (resolved name + params must be accessible from the tree), and live refresh (tail must be incremental). Scenarios copied verbatim from `specs/view-run/spec.md`:
 
 ### Requirement: Step list rendering
-The run view SHALL render the current level's steps as a vertical list on the left. Each row SHALL display, in order: a status indicator, a type glyph, the step name, and (for loop steps) an iteration counter in the form `(N/M)`.
+The run view SHALL render the current level's steps as a vertical list on the left. Each row SHALL display, in order: a status indicator, the step name, and (for non-loop steps) the type glyph to the right of the name. Loop steps SHALL display an iteration counter in the form `(N/M)` after the name instead of a type glyph.
 
-Step types distinguished by glyph SHALL be: shell, headless agent, interactive agent, sub-workflow, and loop.
+Step types distinguished by glyph SHALL be: shell, headless agent, interactive agent, and sub-workflow. Loop steps are identified by their `(N/M)` iteration counter instead of a type glyph.
 
 Step statuses SHALL be: `pending`, `in-progress`, `success`, `failed`, `skipped`. The `in-progress` indicator SHALL blink only when a run is currently active; otherwise it renders static (covering steps that were aborted mid-execution and will resume on the next run). Loop "exhausted" outcomes SHALL render as `success`.
 
@@ -104,11 +104,11 @@ Status glyphs SHALL be: `●` running, `○` pending, `✓` success, `✗` faile
 
 #### Scenario: Loop step row shows iteration counter
 - **WHEN** a loop step with `max: 5` has completed 3 iterations
-- **THEN** the row shows the loop type glyph and `(3/5)`
+- **THEN** the row shows a status indicator, the step name, and `(3/5)` after the name with no type glyph
 
 #### Scenario: For-each loop row shows iteration counter
 - **WHEN** a for-each loop has resolved to 4 matches and completed 2 iterations
-- **THEN** the row shows the loop type glyph and `(2/4)`
+- **THEN** the row shows a status indicator, the step name, and `(2/4)` after the name with no type glyph
 
 #### Scenario: Active step blinks
 - **WHEN** a step is currently executing and the run is active

@@ -27,9 +27,20 @@ func truncateOutput(output string) truncatedOutput {
 	if total <= maxOutputLines && len(output) <= maxOutputBytes {
 		return truncatedOutput{Lines: lines, TotalLines: total}
 	}
-	shown := min(tailLines, total)
+	// Enforce the byte cap: keep only the last maxOutputBytes of the output,
+	// then split into lines, so that a few very large lines don't bypass truncation.
+	tail := output
+	if len(output) > maxOutputBytes {
+		tail = output[len(output)-maxOutputBytes:]
+		// Drop the first (likely partial) line after byte-slicing.
+		if idx := strings.IndexByte(tail, '\n'); idx >= 0 {
+			tail = tail[idx+1:]
+		}
+	}
+	tailLns := strings.Split(tail, "\n")
+	shown := min(tailLines, len(tailLns))
 	return truncatedOutput{
-		Lines:      lines[total-shown:],
+		Lines:      tailLns[len(tailLns)-shown:],
 		TotalLines: total,
 		Truncated:  true,
 	}

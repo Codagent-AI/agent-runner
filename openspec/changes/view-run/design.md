@@ -144,7 +144,7 @@ type StepNode struct {
 First entry to a run view: open `audit.log`, read end-to-end, parse every line, apply to the tree, record byte offset at EOF.
 
 On each 2 s refresh (**only while the run is active** — checked via `runlock.Check`):
-1. `os.Stat` → if mtime unchanged since last tick, skip.
+1. `os.Stat` → if file size equals the stored offset and no partial-line buffer is pending, skip (no new bytes).
 2. Seek to stored offset, read new bytes into a buffer concatenated with any partial line held over from last tick.
 3. Split by `\n`; every complete line is a JSON event; the remainder (no trailing `\n`) is buffered for next tick.
 4. Parse and apply each event as a tree mutation.

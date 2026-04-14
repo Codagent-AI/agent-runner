@@ -96,13 +96,14 @@ func FormatTime(t time.Time) string {
 		return ""
 	}
 	now := time.Now()
-	if t.Year() == now.Year() && t.YearDay() == now.YearDay() {
-		return t.Format("15:04") + " today"
+	local := t.In(now.Location())
+	if local.Year() == now.Year() && local.YearDay() == now.YearDay() {
+		return local.Format("15:04") + " today"
 	}
-	if t.Year() == now.Year() {
-		return t.Format("Jan 02")
+	if local.Year() == now.Year() {
+		return local.Format("Jan 02")
 	}
-	return t.Format("Jan 02 2006")
+	return local.Format("Jan 02 2006")
 }
 
 // LerpColor linearly interpolates between two hex color strings.
@@ -134,12 +135,17 @@ func Sanitize(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for _, r := range s {
-		if r == '\t' {
+		switch r {
+		case '\t':
 			b.WriteByte(' ')
+		case '\r':
 			continue
-		}
-		if unicode.IsPrint(r) && !unicode.Is(unicode.Co, r) {
-			b.WriteRune(r)
+		case '\n':
+			b.WriteByte('\n')
+		default:
+			if unicode.IsPrint(r) && !unicode.Is(unicode.Co, r) {
+				b.WriteRune(r)
+			}
 		}
 	}
 	return b.String()
