@@ -1,6 +1,7 @@
 package runview
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -505,16 +506,7 @@ func TestModel_PageUpDown(t *testing.T) {
 }
 
 func containsString(s, substr string) bool {
-	return len(s) > 0 && len(substr) > 0 && contains(s, substr)
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(s, substr)
 }
 
 func generateLargeOutput(lines int) string {

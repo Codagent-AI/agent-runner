@@ -40,6 +40,11 @@ func (m *Model) View() string {
 		b.WriteString(m.renderTwoColumn(children))
 	}
 
+	if m.loadErr != "" {
+		b.WriteString("\n  ")
+		b.WriteString(tuistyle.DimStyle.Render("Error: " + m.loadErr))
+	}
+
 	b.WriteString("\n\n")
 	b.WriteString(m.renderHelpBar())
 	b.WriteString("\n")
@@ -68,12 +73,13 @@ func (m *Model) renderTwoColumn(children []*StepNode) string {
 	detail := m.renderDetail(sel)
 	detailLines := strings.Split(detail, "\n")
 
-	if m.detailOffset > len(detailLines)-1 {
-		m.detailOffset = max(0, len(detailLines)-1)
+	offset := m.detailOffset
+	if offset > len(detailLines)-1 {
+		offset = max(0, len(detailLines)-1)
 	}
 	visibleDetail := detailLines
-	if m.detailOffset > 0 && m.detailOffset < len(detailLines) {
-		visibleDetail = detailLines[m.detailOffset:]
+	if offset > 0 && offset < len(detailLines) {
+		visibleDetail = detailLines[offset:]
 	}
 
 	bodyHeight := m.bodyHeight()

@@ -320,7 +320,7 @@ func resolveInspectSession(runID string) (sessionDir, projectDir string, err err
 type switcherMode int
 
 const (
-	showingList    switcherMode = iota
+	showingList switcherMode = iota
 	showingRunView
 )
 
@@ -330,6 +330,7 @@ type switcher struct {
 	mode    switcherMode
 
 	resumeSessionID string
+	viewErr         string
 }
 
 func (s *switcher) Init() tea.Cmd {
@@ -351,8 +352,10 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tui.ViewRunMsg:
 		rv, err := runview.New(msg.SessionDir, msg.ProjectDir, runview.FromList)
 		if err != nil {
+			s.viewErr = fmt.Sprintf("cannot open run: %v", err)
 			return s, nil
 		}
+		s.viewErr = ""
 		s.runview = rv
 		s.mode = showingRunView
 		return s, rv.Init()
@@ -373,12 +376,14 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch s.mode {
 	case showingList:
 		if s.list != nil {
-			_, cmd := s.list.Update(msg)
+			newModel, cmd := s.list.Update(msg)
+			s.list = newModel.(*tui.Model)
 			return s, cmd
 		}
 	case showingRunView:
 		if s.runview != nil {
-			_, cmd := s.runview.Update(msg)
+			newModel, cmd := s.runview.Update(msg)
+			s.runview = newModel.(*runview.Model)
 			return s, cmd
 		}
 	}
@@ -393,7 +398,11 @@ func (s *switcher) View() string {
 		}
 	default:
 		if s.list != nil {
-			return s.list.View()
+			v := s.list.View()
+			if s.viewErr != "" {
+				v += "\n  " + s.viewErr + "\n"
+			}
+			return v
 		}
 	}
 	return ""

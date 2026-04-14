@@ -25,17 +25,17 @@ type ExitMsg struct{}
 type Entered int
 
 const (
-	FromList    Entered = iota
+	FromList Entered = iota
 	FromInspect
 )
 
 // Model is the bubbletea model for the single-run detail view.
 type Model struct {
-	tree        *Tree
-	tailer      FileTailer
-	sessionDir  string
-	projectDir  string
-	entered     Entered
+	tree       *Tree
+	tailer     FileTailer
+	sessionDir string
+	projectDir string
+	entered    Entered
 
 	path         []*StepNode
 	cursor       int
@@ -48,6 +48,7 @@ type Model struct {
 	termWidth  int
 	termHeight int
 	showLegend bool
+	loadErr    string
 
 	resolverCfg ResolverConfig
 	startTime   time.Time
@@ -112,7 +113,12 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 
 	m.startTime = parseStartTimeFromID(filepath.Base(sessionDir))
 
-	events, _ := m.tailer.ReadSince(sessionDir)
+	// FileTailer zero value is safe: offset=0, buffer=nil. ReadSince returns
+	// (nil, nil) for missing/empty audit logs.
+	events, err := m.tailer.ReadSince(sessionDir)
+	if err != nil {
+		m.loadErr = "audit log: " + err.Error()
+	}
 	for _, e := range events {
 		tree.ApplyEvent(e)
 	}
@@ -160,9 +166,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.MouseMsg:
-		if msg.Button == tea.MouseButtonWheelUp {
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
 			m.scrollDetail(-3)
-		} else if msg.Button == tea.MouseButtonWheelDown {
+		case tea.MouseButtonWheelDown:
 			m.scrollDetail(3)
 		}
 
@@ -284,14 +291,19 @@ func (m *Model) handleLoadFull() {
 
 func (m *Model) refreshData() {
 	m.active = runlock.Check(m.sessionDir) == runlock.LockActive
-	events, _ := m.tailer.ReadSince(m.sessionDir)
+	events, err := m.tailer.ReadSince(m.sessionDir)
+	if err != nil {
+		m.loadErr = "refresh: " + err.Error()
+	} else {
+		m.loadErr = ""
+	}
 	for _, e := range events {
 		m.tree.ApplyEvent(e)
 	}
 }
 
-func emitBack() tea.Msg  { return BackMsg{} }
-func emitExit() tea.Msg  { return ExitMsg{} }
+func emitBack() tea.Msg { return BackMsg{} }
+func emitExit() tea.Msg { return ExitMsg{} }
 
 var timestampRe = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}`)
 
@@ -348,4 +360,3 @@ func absPath(p string) string {
 	}
 	return a
 }
-

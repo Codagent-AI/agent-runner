@@ -296,7 +296,7 @@ func (m *Model) renderOutputBlock(b *strings.Builder, n *StepNode, label, output
 
 	for _, line := range t.Lines {
 		b.WriteString("| ")
-		b.WriteString(line)
+		b.WriteString(tuistyle.Sanitize(line))
 		b.WriteString("\n")
 	}
 }
@@ -379,7 +379,7 @@ func detailLabel(b *strings.Builder, s string) {
 func renderWrapped(b *strings.Builder, text string) {
 	for _, line := range strings.Split(text, "\n") {
 		b.WriteString("| ")
-		b.WriteString(line)
+		b.WriteString(tuistyle.Sanitize(line))
 		b.WriteString("\n")
 	}
 }
