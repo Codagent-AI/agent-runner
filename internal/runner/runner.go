@@ -130,10 +130,13 @@ type runState struct {
 }
 
 // workflowNeedsAgentProfiles returns true if any step in the tree is an agent
-// step (has a Prompt or Agent field), meaning profile configuration is needed.
+// step (has a Prompt or Agent field) or delegates to a sub-workflow (Workflow
+// field set). Sub-workflows are assumed to potentially contain agent steps
+// since the referenced YAML isn't parsed here; loading profiles eagerly is
+// cheap and avoids silently falling back to an empty profile at dispatch time.
 func workflowNeedsAgentProfiles(steps []model.Step) bool {
 	for i := range steps {
-		if steps[i].Prompt != "" || steps[i].Agent != "" {
+		if steps[i].Prompt != "" || steps[i].Agent != "" || steps[i].Workflow != "" {
 			return true
 		}
 		if len(steps[i].Steps) > 0 && workflowNeedsAgentProfiles(steps[i].Steps) {
