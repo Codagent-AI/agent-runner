@@ -1,0 +1,351 @@
+package runview
+
+import (
+	"math"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/codagent/agent-runner/internal/loader"
+	"github.com/codagent/agent-runner/internal/runlock"
+	"github.com/codagent/agent-runner/internal/stateio"
+	"github.com/codagent/agent-runner/internal/tuistyle"
+)
+
+// Messages emitted by the runview Model to the parent switcher.
+type BackMsg struct{}
+type ResumeMsg struct{ SessionID string }
+type ExitMsg struct{}
+
+// Entered describes how the user reached the run view.
+type Entered int
+
+const (
+	FromList    Entered = iota
+	FromInspect
+)
+
+// Model is the bubbletea model for the single-run detail view.
+type Model struct {
+	tree        *Tree
+	tailer      FileTailer
+	sessionDir  string
+	projectDir  string
+	entered     Entered
+
+	path         []*StepNode
+	cursor       int
+	detailOffset int
+
+	loadedFull map[*StepNode]bool
+
+	active     bool
+	pulsePhase float64
+	termWidth  int
+	termHeight int
+	showLegend bool
+
+	resolverCfg ResolverConfig
+	startTime   time.Time
+}
+
+// New constructs a runview Model from a session directory.
+func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
+	workflowFile := ""
+
+	stateFile := filepath.Join(sessionDir, "state.json")
+	state, err := stateio.ReadState(stateFile)
+	if err == nil && state.WorkflowFile != "" {
+		workflowFile = state.WorkflowFile
+	}
+
+	if workflowFile == "" {
+		sessionID := filepath.Base(sessionDir)
+		name := parseWorkflowNameFromID(sessionID)
+		if name != "" {
+			if f := resolveWorkflowFile(name); f != "" {
+				workflowFile = f
+			}
+		}
+	}
+
+	var tree *Tree
+	if workflowFile != "" {
+		wf, loadErr := loader.LoadWorkflow(workflowFile, loader.Options{})
+		if loadErr == nil {
+			tree = BuildTree(&wf, absPath(workflowFile))
+		}
+	}
+	if tree == nil {
+		tree = &Tree{
+			Root: &StepNode{
+				ID:     filepath.Base(sessionDir),
+				Type:   NodeRoot,
+				Status: StatusPending,
+			},
+		}
+	}
+
+	m := &Model{
+		tree:       tree,
+		sessionDir: sessionDir,
+		projectDir: projectDir,
+		entered:    entered,
+		path:       []*StepNode{tree.Root},
+		loadedFull: make(map[*StepNode]bool),
+	}
+
+	m.active = runlock.Check(sessionDir) == runlock.LockActive
+
+	wfRoot, ok := DiscoverWorkflowsRoot(".")
+	if ok {
+		cwd, _ := os.Getwd()
+		m.resolverCfg = ResolverConfig{
+			WorkflowsRoot: wfRoot,
+			RepoRoot:      cwd,
+		}
+	}
+
+	m.startTime = parseStartTimeFromID(filepath.Base(sessionDir))
+
+	events, _ := m.tailer.ReadSince(sessionDir)
+	for _, e := range events {
+		tree.ApplyEvent(e)
+	}
+
+	return m, nil
+}
+
+func (m *Model) Init() tea.Cmd {
+	return tea.Batch(tuistyle.DoRefresh(), tuistyle.DoPulse())
+}
+
+func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.termWidth = msg.Width
+		m.termHeight = msg.Height
+
+	case tea.KeyMsg:
+		if m.showLegend {
+			switch msg.String() {
+			case "?", "esc":
+				m.showLegend = false
+			}
+			return m, nil
+		}
+		switch msg.String() {
+		case "q", "ctrl+c":
+			return m, emitExit
+		case "?":
+			m.showLegend = true
+		case "esc":
+			return m.handleEsc()
+		case "enter":
+			return m.handleEnter()
+		case "up", "k":
+			m.moveCursor(-1)
+		case "down", "j":
+			m.moveCursor(1)
+		case "pgup":
+			m.scrollDetail(-m.detailPageSize())
+		case "pgdown":
+			m.scrollDetail(m.detailPageSize())
+		case "g":
+			m.handleLoadFull()
+		}
+
+	case tea.MouseMsg:
+		if msg.Button == tea.MouseButtonWheelUp {
+			m.scrollDetail(-3)
+		} else if msg.Button == tea.MouseButtonWheelDown {
+			m.scrollDetail(3)
+		}
+
+	case tuistyle.RefreshMsg:
+		if m.active {
+			m.refreshData()
+		}
+		return m, tuistyle.DoRefresh()
+
+	case tuistyle.PulseMsg:
+		if m.active {
+			m.pulsePhase += (50.0 / 1000.0) * 2 * math.Pi
+		}
+		return m, tuistyle.DoPulse()
+	}
+	return m, nil
+}
+
+func (m *Model) moveCursor(delta int) {
+	children := m.currentChildren()
+	n := len(children)
+	if n == 0 {
+		return
+	}
+	m.cursor += delta
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+	if m.cursor >= n {
+		m.cursor = n - 1
+	}
+	m.detailOffset = 0
+}
+
+func (m *Model) scrollDetail(delta int) {
+	m.detailOffset += delta
+	if m.detailOffset < 0 {
+		m.detailOffset = 0
+	}
+}
+
+func (m *Model) detailPageSize() int {
+	if m.termHeight <= 6 {
+		return 10
+	}
+	return m.termHeight - 6
+}
+
+func (m *Model) handleEsc() (tea.Model, tea.Cmd) {
+	if len(m.path) > 1 {
+		leaving := m.path[len(m.path)-1]
+		m.path = m.path[:len(m.path)-1]
+		parent := m.currentContainer()
+		for i, c := range parent.Children {
+			if c == leaving {
+				m.cursor = i
+				break
+			}
+		}
+		m.detailOffset = 0
+		return m, nil
+	}
+	if m.entered == FromList {
+		return m, emitBack
+	}
+	return m, emitExit
+}
+
+func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
+	n := m.selectedNode()
+	if n == nil {
+		return m, nil
+	}
+
+	switch n.Type {
+	case NodeLoop:
+		m.path = append(m.path, n)
+		m.cursor = 0
+		m.detailOffset = 0
+		return m, nil
+
+	case NodeSubWorkflow:
+		_ = m.tree.EnsureSubWorkflowLoaded(n)
+		m.path = append(m.path, n)
+		m.cursor = 0
+		m.detailOffset = 0
+		return m, nil
+
+	case NodeIteration:
+		target := n.Drilldown()
+		if target != n && target.Type == NodeSubWorkflow {
+			_ = m.tree.EnsureSubWorkflowLoaded(target)
+		}
+		m.path = append(m.path, n)
+		m.cursor = 0
+		m.detailOffset = 0
+		return m, nil
+
+	case NodeHeadlessAgent, NodeInteractiveAgent:
+		if n.SessionID != "" {
+			return m, func() tea.Msg {
+				return ResumeMsg{SessionID: n.SessionID}
+			}
+		}
+	}
+
+	return m, nil
+}
+
+func (m *Model) handleLoadFull() {
+	n := m.selectedNode()
+	if n == nil {
+		return
+	}
+	if n.Type == NodeShell || n.Type == NodeHeadlessAgent {
+		m.loadedFull[n] = true
+	}
+}
+
+func (m *Model) refreshData() {
+	m.active = runlock.Check(m.sessionDir) == runlock.LockActive
+	events, _ := m.tailer.ReadSince(m.sessionDir)
+	for _, e := range events {
+		m.tree.ApplyEvent(e)
+	}
+}
+
+func emitBack() tea.Msg  { return BackMsg{} }
+func emitExit() tea.Msg  { return ExitMsg{} }
+
+var timestampRe = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}`)
+
+func parseWorkflowNameFromID(sessionID string) string {
+	loc := timestampRe.FindStringIndex(sessionID)
+	if loc == nil {
+		return sessionID
+	}
+	name := sessionID[:loc[0]]
+	return strings.TrimRight(name, "-")
+}
+
+func parseStartTimeFromID(sessionID string) time.Time {
+	loc := timestampRe.FindStringIndex(sessionID)
+	if loc == nil {
+		return time.Time{}
+	}
+	tsPart := sessionID[loc[0]:]
+	if len(tsPart) >= 19 {
+		ts := []byte(tsPart)
+		if ts[13] == '-' && ts[16] == '-' {
+			ts[13] = ':'
+			ts[16] = ':'
+		}
+		tsPart = string(ts)
+	}
+	if len(tsPart) > 19 && tsPart[19] == '-' {
+		withDot := tsPart[:19] + "." + tsPart[20:]
+		if t, err := time.Parse(time.RFC3339Nano, withDot); err == nil {
+			return t
+		}
+	}
+	if t, err := time.Parse(time.RFC3339, tsPart); err == nil {
+		return t
+	}
+	return time.Time{}
+}
+
+func resolveWorkflowFile(name string) string {
+	base := filepath.Join("workflows", strings.ReplaceAll(name, ":", string(os.PathSeparator)))
+	for _, ext := range []string{".yaml", ".yml"} {
+		p := base + ext
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+func absPath(p string) string {
+	a, err := filepath.Abs(p)
+	if err != nil {
+		return p
+	}
+	return a
+}
+

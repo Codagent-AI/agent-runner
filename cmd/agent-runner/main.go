@@ -22,7 +22,7 @@ import (
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runner"
-	"github.com/codagent/agent-runner/internal/runs"
+	"github.com/codagent/agent-runner/internal/runview"
 	"github.com/codagent/agent-runner/internal/tui"
 )
 
@@ -140,6 +140,7 @@ func run() int {
 	chdirFlag := flag.String("C", "", "Change to `directory` before doing anything")
 	resumeFlag := flag.Bool("resume", false, "Resume an interrupted workflow (optionally followed by session ID)")
 	listFlag := flag.Bool("list", false, "Launch the run list TUI")
+	inspectFlag := flag.String("inspect", "", "Launch the run view TUI for a specific `run-id`")
 	validateFlag := flag.Bool("validate", false, "Validate a workflow file without executing")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	vFlag := flag.Bool("v", false, "Print version and exit (shorthand)")
@@ -148,6 +149,7 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "Usage: agent-runner [flags] [workflow [params...]]\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		fmt.Fprintf(os.Stderr, "  -C <dir>\n\tChange to directory before doing anything\n")
+		fmt.Fprintf(os.Stderr, "  -inspect <run-id>\n\tLaunch the run view TUI for a specific run\n")
 		fmt.Fprintf(os.Stderr, "  -list\n\tLaunch the run list TUI\n")
 		fmt.Fprintf(os.Stderr, "  -resume [session-id]\n\tResume an interrupted workflow; launches TUI if no session ID given\n")
 		fmt.Fprintf(os.Stderr, "  -validate\n\tValidate a workflow file without executing\n")
@@ -173,8 +175,16 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "agent-runner: --validate and --resume are mutually exclusive")
 		return 1
 	}
+	if *inspectFlag != "" && (*listFlag || *resumeFlag) {
+		fmt.Fprintln(os.Stderr, "agent-runner: --inspect is mutually exclusive with --list and --resume")
+		return 1
+	}
 
 	args := flag.Args()
+
+	if *inspectFlag != "" {
+		return handleInspect(*inspectFlag)
+	}
 
 	if *listFlag {
 		return handleList()
@@ -230,6 +240,23 @@ func handleResume(sessionID string) int {
 	return 0
 }
 
+func handleInspect(runID string) int {
+	sessionDir, projectDir, err := resolveInspectSession(runID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+
+	rv, err := runview.New(sessionDir, projectDir, runview.FromInspect)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+
+	sw := &switcher{runview: rv, mode: showingRunView}
+	return runSwitcher(sw)
+}
+
 func handleList() int {
 	m, err := tui.New()
 	if err != nil {
@@ -237,44 +264,139 @@ func handleList() int {
 		return 1
 	}
 
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	sw := &switcher{list: m, mode: showingList}
+	return runSwitcher(sw)
+}
+
+func runSwitcher(sw *switcher) int {
+	p := tea.NewProgram(sw, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	result, err := p.Run()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
 	}
 
-	finalModel, ok := result.(*tui.Model)
+	final, ok := result.(*switcher)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "agent-runner: unexpected TUI model type %T\n", result)
-		return 1
+		return 0
 	}
-	if sel := finalModel.SelectedRun(); sel != nil {
-		return handleResumeSelectedRun(sel)
+	if final.resumeSessionID != "" {
+		return handleResume(final.resumeSessionID)
 	}
 	return 0
 }
 
-func handleResumeSelectedRun(sel *runs.RunInfo) int {
-	stateFile := filepath.Join(sel.SessionDir, "state.json")
-	if _, err := os.Stat(stateFile); err != nil {
-		fmt.Fprintf(os.Stderr, "agent-runner: session state not found: %s\n", stateFile)
-		return 1
+// resolveInspectSession resolves a run ID to its session and project
+// directories, using the same rules as --resume (cwd's project dir only).
+func resolveInspectSession(runID string) (sessionDir, projectDir string, err error) {
+	if strings.ContainsAny(runID, "/\\") || runID == ".." || strings.Contains(runID, "..") {
+		return "", "", fmt.Errorf("invalid run ID: %s", runID)
 	}
 
-	result, err := runner.ResumeWorkflow(stateFile, &runner.Options{
-		ProcessRunner: &realProcessRunner{},
-		GlobExpander:  &realGlobExpander{},
-		Log:           &realLogger{},
-	})
+	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-		return 1
+		return "", "", fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	if result != runner.ResultSuccess {
-		return 1
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", "", fmt.Errorf("cannot determine working directory: %w", err)
 	}
-	return 0
+
+	encoded := audit.EncodePath(cwd)
+	projectDir = filepath.Join(home, ".agent-runner", "projects", encoded)
+	sessionDir = filepath.Join(projectDir, "runs", runID)
+
+	if !strings.HasPrefix(filepath.Clean(sessionDir), filepath.Clean(projectDir)+string(os.PathSeparator)) {
+		return "", "", fmt.Errorf("invalid run ID: %s", runID)
+	}
+	if _, statErr := os.Stat(sessionDir); statErr != nil {
+		return "", "", fmt.Errorf("session not found: %s", runID)
+	}
+	return sessionDir, projectDir, nil
+}
+
+// switcher is the top-level bubbletea Model that routes between the list
+// and run-view sub-models.
+type switcherMode int
+
+const (
+	showingList    switcherMode = iota
+	showingRunView
+)
+
+type switcher struct {
+	list    *tui.Model
+	runview *runview.Model
+	mode    switcherMode
+
+	resumeSessionID string
+}
+
+func (s *switcher) Init() tea.Cmd {
+	switch s.mode {
+	case showingRunView:
+		return s.runview.Init()
+	default:
+		return s.list.Init()
+	}
+}
+
+func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if msg.String() == "q" || msg.String() == "ctrl+c" {
+			return s, tea.Quit
+		}
+
+	case tui.ViewRunMsg:
+		rv, err := runview.New(msg.SessionDir, msg.ProjectDir, runview.FromList)
+		if err != nil {
+			return s, nil
+		}
+		s.runview = rv
+		s.mode = showingRunView
+		return s, rv.Init()
+
+	case runview.BackMsg:
+		s.mode = showingList
+		s.runview = nil
+		return s, nil
+
+	case runview.ResumeMsg:
+		s.resumeSessionID = msg.SessionID
+		return s, tea.Quit
+
+	case runview.ExitMsg:
+		return s, tea.Quit
+	}
+
+	switch s.mode {
+	case showingList:
+		if s.list != nil {
+			_, cmd := s.list.Update(msg)
+			return s, cmd
+		}
+	case showingRunView:
+		if s.runview != nil {
+			_, cmd := s.runview.Update(msg)
+			return s, cmd
+		}
+	}
+	return s, nil
+}
+
+func (s *switcher) View() string {
+	switch s.mode {
+	case showingRunView:
+		if s.runview != nil {
+			return s.runview.View()
+		}
+	default:
+		if s.list != nil {
+			return s.list.View()
+		}
+	}
+	return ""
 }
 
 func resolveResumeStatePath(sessionID string) (string, error) {
