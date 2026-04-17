@@ -233,3 +233,32 @@ steps:
 		}
 	})
 }
+
+// Regression: sub-workflow state must preserve LastSessionStepID across
+// recordChildProgress / applyResumeState so that resumed session:resume steps
+// can look up their profile in SessionProfiles. Prior bug dropped the field,
+// causing "no profile found for session-originating step \"\"" on resume.
+func TestSubWorkflowState_PreservesLastSessionStepID(t *testing.T) {
+	parent := model.NewRootContext(&model.RootContextOptions{Params: map[string]string{}})
+	child := model.NewSubWorkflowContext(parent, &model.SubWorkflowContextOptions{StepID: "plan"})
+	child.SessionProfiles["proposal"] = "planner"
+	child.LastSessionStepID = "proposal"
+
+	recordChildProgress(child, "proposal", true)
+
+	entry := parent.LastSubWorkflowChild
+	if entry == nil {
+		t.Fatal("expected LastSubWorkflowChild to be set")
+	}
+	if entry.LastSessionStepID != "proposal" {
+		t.Fatalf("entry.LastSessionStepID = %q, want %q", entry.LastSessionStepID, "proposal")
+	}
+
+	parent.ResumeChildState = entry
+	resumedChild := model.NewSubWorkflowContext(parent, &model.SubWorkflowContextOptions{StepID: "plan"})
+	resumedChild.LastSessionStepID = ""
+	applyResumeState(parent, resumedChild)
+	if resumedChild.LastSessionStepID != "proposal" {
+		t.Fatalf("resumedChild.LastSessionStepID = %q, want %q", resumedChild.LastSessionStepID, "proposal")
+	}
+}

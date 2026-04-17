@@ -504,6 +504,7 @@ func toNestedStepState(child *model.SubWorkflowChildState) *model.NestedStepStat
 		SessionIDs:        copyMap(child.SessionIDs),
 		SessionProfiles:   copyMap(child.SessionProfiles),
 		CapturedVariables: copyMap(child.CapturedVariables),
+		LastSessionStepID: child.LastSessionStepID,
 		Completed:         child.Completed,
 		Iteration:         child.Iteration,
 		Child:             toNestedStepState(child.Child),
