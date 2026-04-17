@@ -1,5 +1,5 @@
 name: smoke-test
-description: "Exercises interactive→headless resume with capture+disallowedTools, then interactive resume"
+description: "Exercises interactive→headless resume with capture+disallowedTools, then interactive resume, then a fresh headless session"
 
 steps:
   - id: greet
@@ -25,3 +25,10 @@ steps:
     prompt: |
       You captured earlier: {{resume_reply}}
       Now ask the user how they are doing.
+
+  - id: headless-new-session
+    agent: interactive_base
+    session: new
+    mode: headless
+    prompt: |
+      In one short sentence, tell me something interesting.

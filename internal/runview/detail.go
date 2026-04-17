@@ -2,7 +2,11 @@ package runview
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
+	"unicode/utf8"
+
+	"github.com/mattn/go-runewidth"
 
 	"github.com/codagent/agent-runner/internal/tuistyle"
 )
@@ -13,7 +17,7 @@ func (m *Model) renderDetail(n *StepNode) string {
 	}
 	var b strings.Builder
 
-	b.WriteString(tuistyle.SelectedStyle.Render(n.ID))
+	b.WriteString(tuistyle.DetailHeaderStyle.Render(n.ID))
 	b.WriteString("\n\n")
 
 	switch n.Type {
@@ -43,23 +47,18 @@ func (m *Model) renderShellDetail(b *strings.Builder, n *StepNode) {
 		b.WriteString("\n")
 	}
 
+	renderCommonModifiers(b, n)
+
 	if n.Status == StatusPending {
-		if n.CaptureName != "" {
-			detailDim(b, "capture", n.CaptureName)
-		}
 		return
 	}
 
 	renderExitAndDuration(b, n)
 
-	if n.CaptureName != "" {
-		detailDim(b, "capture", n.CaptureName)
-	}
-
 	if n.ErrorMessage != "" {
 		b.WriteString("\n")
 		detailLabel(b, "error:")
-		renderWrapped(b, n.ErrorMessage)
+		m.renderWrapped(b, n.ErrorMessage)
 		return
 	}
 
@@ -89,9 +88,14 @@ func (m *Model) renderHeadlessDetail(b *strings.Builder, n *StepNode) {
 	if cli != "" {
 		detailDim(b, "cli", cli)
 	}
+	if n.StaticSession != "" {
+		detailDim(b, "session", string(n.StaticSession))
+	}
 	if n.SessionID != "" {
 		detailDim(b, "session id", n.SessionID)
 	}
+
+	renderCommonModifiers(b, n)
 
 	prompt := n.InterpolatedPrompt
 	if prompt == "" {
@@ -100,7 +104,7 @@ func (m *Model) renderHeadlessDetail(b *strings.Builder, n *StepNode) {
 	if prompt != "" {
 		b.WriteString("\n")
 		detailLabel(b, "prompt:")
-		renderWrapped(b, prompt)
+		m.renderWrapped(b, prompt)
 	}
 
 	if n.Status == StatusPending {
@@ -112,7 +116,7 @@ func (m *Model) renderHeadlessDetail(b *strings.Builder, n *StepNode) {
 	if n.ErrorMessage != "" {
 		b.WriteString("\n")
 		detailLabel(b, "error:")
-		renderWrapped(b, n.ErrorMessage)
+		m.renderWrapped(b, n.ErrorMessage)
 		return
 	}
 
@@ -120,8 +124,8 @@ func (m *Model) renderHeadlessDetail(b *strings.Builder, n *StepNode) {
 	m.renderOutputBlock(b, n, "stderr", n.Stderr)
 
 	if n.SessionID != "" {
-		b.WriteString("\n")
-		b.WriteString(accentStyle.Render("enter → resume session"))
+		b.WriteString("\n\n")
+		b.WriteString(tuistyle.AccentStyle.Render("enter → resume session"))
 	}
 }
 
@@ -147,9 +151,14 @@ func (m *Model) renderInteractiveDetail(b *strings.Builder, n *StepNode) {
 	if cli != "" {
 		detailDim(b, "cli", cli)
 	}
+	if n.StaticSession != "" {
+		detailDim(b, "session", string(n.StaticSession))
+	}
 	if n.SessionID != "" {
 		detailDim(b, "session id", n.SessionID)
 	}
+
+	renderCommonModifiers(b, n)
 
 	prompt := n.InterpolatedPrompt
 	if prompt == "" {
@@ -158,7 +167,7 @@ func (m *Model) renderInteractiveDetail(b *strings.Builder, n *StepNode) {
 	if prompt != "" {
 		b.WriteString("\n")
 		detailLabel(b, "prompt:")
-		renderWrapped(b, prompt)
+		m.renderWrapped(b, prompt)
 	}
 
 	if n.Status == StatusPending {
@@ -170,19 +179,19 @@ func (m *Model) renderInteractiveDetail(b *strings.Builder, n *StepNode) {
 	if n.ErrorMessage != "" {
 		b.WriteString("\n")
 		detailLabel(b, "error:")
-		renderWrapped(b, n.ErrorMessage)
+		m.renderWrapped(b, n.ErrorMessage)
 	}
 
 	if n.SessionID != "" {
-		b.WriteString("\n")
-		b.WriteString(accentStyle.Render("enter → resume session"))
+		b.WriteString("\n\n")
+		b.WriteString(tuistyle.AccentStyle.Render("enter → resume session"))
 	}
 }
 
 func (m *Model) renderSubWorkflowDetail(b *strings.Builder, n *StepNode) {
 	name := CanonicalName(n.StaticWorkflowPath, m.resolverCfg)
-	if name == "" && n.StaticWorkflow != "" {
-		name = n.StaticWorkflow
+	if name == "" {
+		name = bareWorkflowName(n.StaticWorkflow)
 	}
 	if name != "" {
 		detailDim(b, "workflow", name)
@@ -197,6 +206,8 @@ func (m *Model) renderSubWorkflowDetail(b *strings.Builder, n *StepNode) {
 			detailDim(b, k, v)
 		}
 	}
+
+	renderCommonModifiers(b, n)
 
 	if n.Status != StatusPending {
 		renderOutcomeAndDuration(b, n)
@@ -235,9 +246,14 @@ func (m *Model) renderLoopDetail(b *strings.Builder, n *StepNode) {
 	if total > 0 {
 		detailDim(b, "iterations", fmt.Sprintf("%d of %d", n.IterationsCompleted, total))
 	}
+	if n.StaticLoopRequireMatches != nil {
+		detailDim(b, "require_matches", boolWord(*n.StaticLoopRequireMatches))
+	}
 	if n.BreakTriggered {
 		detailDim(b, "break_triggered", "yes")
 	}
+
+	renderCommonModifiers(b, n)
 
 	if n.Status != StatusPending {
 		renderOutcomeAndDuration(b, n)
@@ -259,6 +275,39 @@ func (m *Model) renderIterationDetail(b *strings.Builder, n *StepNode) {
 	b.WriteString(tuistyle.DimStyle.Render("press enter to drill in →"))
 }
 
+// renderCommonModifiers emits any step-level YAML attributes that are shared
+// across step types and aren't already printed by the type-specific renderer:
+// capture, capture_stderr, continue_on_failure, skip_if, break_if, workdir.
+// Entries render as "name: value" dim lines, skipping fields that are unset
+// (empty string for strings; false for bools).
+func renderCommonModifiers(b *strings.Builder, n *StepNode) {
+	if n.CaptureName != "" {
+		detailDim(b, "capture", n.CaptureName)
+	}
+	if n.StaticCaptureStderr {
+		detailDim(b, "capture_stderr", "yes")
+	}
+	if n.StaticContinueOnFailure {
+		detailDim(b, "continue_on_failure", "yes")
+	}
+	if n.StaticSkipIf != "" {
+		detailDim(b, "skip_if", n.StaticSkipIf)
+	}
+	if n.StaticBreakIf != "" {
+		detailDim(b, "break_if", n.StaticBreakIf)
+	}
+	if n.StaticWorkdir != "" {
+		detailDim(b, "workdir", n.StaticWorkdir)
+	}
+}
+
+func boolWord(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
+}
+
 func (m *Model) loopTotal(n *StepNode) int {
 	if len(n.LoopMatches) > 0 {
 		return len(n.LoopMatches)
@@ -273,7 +322,7 @@ func (m *Model) renderOutputBlock(b *strings.Builder, n *StepNode, label, output
 	output = sanitizeUTF8(output)
 	if output == "" {
 		b.WriteString("\n")
-		b.WriteString(tuistyle.DimStyle.Render(label + ": (empty)"))
+		b.WriteString(tuistyle.LabelStyle.Render(label+": ") + tuistyle.DimStyle.Render("(empty)"))
 		return
 	}
 
@@ -305,21 +354,22 @@ func renderExitAndDuration(b *strings.Builder, n *StepNode) {
 	if n.ExitCode != nil || n.DurationMs != nil {
 		b.WriteString("\n")
 	}
+	failed := n.Status == StatusFailed || (n.ExitCode != nil && *n.ExitCode != 0)
 	if n.ExitCode != nil {
 		label := "exit"
 		val := fmt.Sprintf("%d", *n.ExitCode)
 		if *n.ExitCode != 0 {
-			b.WriteString(tuistyle.DimStyle.Render(label+": ") + tuistyle.StatusFailed.Render(val))
+			b.WriteString(tuistyle.LabelStyle.Render(label+": ") + tuistyle.StatusFailed.Render(val))
 		} else {
 			detailDim(b, label, val)
 		}
 		if n.DurationMs != nil {
 			b.WriteString("       ")
-			detailDim(b, "duration", formatDuration(*n.DurationMs))
+			detailDurationStyled(b, *n.DurationMs, failed)
 		}
 		b.WriteString("\n")
 	} else if n.DurationMs != nil {
-		detailDim(b, "duration", formatDuration(*n.DurationMs))
+		detailDurationStyled(b, *n.DurationMs, failed)
 		b.WriteString("\n")
 	}
 }
@@ -327,10 +377,22 @@ func renderExitAndDuration(b *strings.Builder, n *StepNode) {
 func renderOutcomeAndDuration(b *strings.Builder, n *StepNode) {
 	b.WriteString("\n")
 	outcome := statusLabel(n.Status)
-	detailDim(b, "outcome", outcome)
-	if n.DurationMs != nil {
-		detailDim(b, "duration", formatDuration(*n.DurationMs))
+	failed := n.Status == StatusFailed
+	if failed {
+		b.WriteString(tuistyle.LabelStyle.Render("outcome: ") + tuistyle.StatusFailed.Render(outcome))
+		b.WriteString("\n")
+	} else {
+		detailDim(b, "outcome", outcome)
 	}
+	if n.DurationMs != nil {
+		detailDurationStyled(b, *n.DurationMs, failed)
+		b.WriteString("\n")
+	}
+}
+
+func detailDurationStyled(b *strings.Builder, ms int64, _ bool) {
+	val := formatDuration(ms)
+	b.WriteString(tuistyle.LabelStyle.Render("duration: ") + tuistyle.NormalStyle.Render(val))
 }
 
 func statusLabel(s NodeStatus) string {
@@ -362,7 +424,7 @@ func formatDuration(ms int64) string {
 }
 
 func detailDim(b *strings.Builder, label, value string) {
-	b.WriteString(tuistyle.DimStyle.Render(label+": ") + tuistyle.NormalStyle.Render(value))
+	b.WriteString(tuistyle.LabelStyle.Render(label+": ") + tuistyle.NormalStyle.Render(value))
 	b.WriteString("\n")
 }
 
@@ -372,14 +434,110 @@ func detailLine(b *strings.Builder, s string) {
 }
 
 func detailLabel(b *strings.Builder, s string) {
-	b.WriteString(tuistyle.DimStyle.Render(s))
+	b.WriteString(tuistyle.SectionStyle.Render(s))
 	b.WriteString("\n")
 }
 
-func renderWrapped(b *strings.Builder, text string) {
-	for _, line := range strings.Split(text, "\n") {
-		b.WriteString("| ")
-		b.WriteString(tuistyle.Sanitize(line))
-		b.WriteString("\n")
+func (m *Model) renderWrapped(b *strings.Builder, text string) {
+	width := m.detailWidth
+	if width <= 0 {
+		width = 80
 	}
+	for _, line := range strings.Split(text, "\n") {
+		sanitized := tuistyle.Sanitize(line)
+		if sanitized == "" {
+			b.WriteString("\n")
+			continue
+		}
+		for _, wrapped := range wrapLine(sanitized, width) {
+			b.WriteString(tuistyle.NormalStyle.Render(wrapped))
+			b.WriteString("\n")
+		}
+	}
+}
+
+// wrapLine word-wraps s so each returned segment has visual width <= width.
+// Words longer than width are rune-split so they still fit.
+func wrapLine(s string, width int) []string {
+	if width <= 0 {
+		return []string{s}
+	}
+	if runewidth.StringWidth(s) <= width {
+		return []string{s}
+	}
+	words := strings.Fields(s)
+	if len(words) == 0 {
+		return []string{s}
+	}
+	var out []string
+	var cur strings.Builder
+	curW := 0
+	flush := func() {
+		if cur.Len() > 0 {
+			out = append(out, cur.String())
+			cur.Reset()
+			curW = 0
+		}
+	}
+	for _, w := range words {
+		ww := runewidth.StringWidth(w)
+		if ww > width {
+			flush()
+			remaining := w
+			for runewidth.StringWidth(remaining) > width {
+				chunk := runewidth.Truncate(remaining, width, "")
+				if chunk == "" {
+					// A single rune is wider than `width` (e.g. CJK/emoji on a
+					// very narrow pane). Force progress by emitting that one
+					// rune alone so the loop can terminate.
+					_, size := utf8.DecodeRuneInString(remaining)
+					if size == 0 {
+						break
+					}
+					chunk = remaining[:size]
+				}
+				out = append(out, chunk)
+				remaining = remaining[len(chunk):]
+			}
+			if remaining != "" {
+				cur.WriteString(remaining)
+				curW = runewidth.StringWidth(remaining)
+			}
+			continue
+		}
+		if curW == 0 {
+			cur.WriteString(w)
+			curW = ww
+			continue
+		}
+		if curW+1+ww > width {
+			flush()
+			cur.WriteString(w)
+			curW = ww
+			continue
+		}
+		cur.WriteByte(' ')
+		cur.WriteString(w)
+		curW += 1 + ww
+	}
+	flush()
+	if len(out) == 0 {
+		return []string{s}
+	}
+	return out
+}
+
+// bareWorkflowName strips directory segments and .yaml/.yml suffix from a raw
+// workflow reference so fallbacks display "implement-task" rather than
+// "workflows/implement-task.yaml".
+func bareWorkflowName(s string) string {
+	if s == "" {
+		return ""
+	}
+	base := filepath.Base(s)
+	ext := filepath.Ext(base)
+	if ext == ".yaml" || ext == ".yml" {
+		base = strings.TrimSuffix(base, ext)
+	}
+	return base
 }

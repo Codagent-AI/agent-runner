@@ -1,0 +1,13 @@
+# Test that a successful workflow preserves state.json with completed=true.
+exec agent-runner workflow
+exec find .agent-runner -name state.json
+stdout state\.json
+
+exec sh -c 'cat $(find .agent-runner -name state.json)'
+stdout '"completed": true'
+
+-- workflows/workflow.yaml --
+name: e2e-success
+steps:
+  - id: only
+    command: echo ok

@@ -163,15 +163,15 @@ Non-UTF8 bytes in shell stdout or stderr SHALL be rendered by replacing invalid 
 - **THEN** the detail pane renders the output with invalid sequences replaced by U+FFFD, leaving valid text intact
 
 ### Requirement: Resume action from run view
-Selecting the resume action on an agent step (headless or interactive) SHALL exit the TUI and relaunch agent-runner with `--resume <session-id>` for that step's session.
+Selecting the resume action on an agent step (headless or interactive) SHALL exit the TUI and exec the step's agent CLI with `--resume <session-id>`, resuming that agent's conversation directly. This is NOT the same as agent-runner's `--resume <run-id>` flag: the runview resume action targets the individual Claude/Codex/etc. session captured on the step, identified by the CLI's own session ID (e.g. `claude --resume <uuid>`), not an agent-runner workflow run.
 
 #### Scenario: Resume from headless agent step
 - **WHEN** the user triggers the resume action on a headless agent step with a known session ID
-- **THEN** the TUI exits and agent-runner is relaunched with `--resume <session-id>`
+- **THEN** the TUI exits and the step's agent CLI is exec'd with `--resume <session-id>` (e.g. `claude --resume <uuid>`)
 
 #### Scenario: Resume from interactive agent step
 - **WHEN** the user triggers the resume action on an interactive agent step with a known session ID
-- **THEN** the TUI exits and agent-runner is relaunched with `--resume <session-id>`
+- **THEN** the TUI exits and the step's agent CLI is exec'd with `--resume <session-id>` (e.g. `claude --resume <uuid>`)
 
 #### Scenario: Resume unavailable without session ID
 - **WHEN** an agent step has no resolved session ID (never started, or crashed before session creation)

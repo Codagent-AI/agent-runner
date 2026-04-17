@@ -17,7 +17,7 @@ The design reuses these; no changes to the runner/audit-log are required.
 - Correctness on active (live-updating), completed, failed, inactive, and pending runs.
 - Drill-in navigation through loops, loop iterations, and sub-workflows with breadcrumbs.
 - Scrollable per-step output with graceful handling of large buffers and non-UTF8 bytes.
-- Resume action on agent steps that re-enters the existing `--resume <session-id>` code path.
+- Resume action on agent steps that exec's the step's agent CLI with `--resume <session-id>` (e.g. `claude --resume <uuid>`), resuming the agent's own conversation — not agent-runner's workflow-run `--resume` flag.
 - `--inspect <id>` CLI flag for direct entry.
 
 **Non-Goals:**
@@ -73,10 +73,10 @@ type shell struct {
 Messages between sub-models and the shell:
 - `tui.ViewRunMsg{SessionDir, ProjectDir}` — list → shell: "user hit Enter on this run"
 - `runview.BackMsg` — runview → shell: "Esc at top level, go back to list"
-- `runview.ResumeMsg{SessionID}` — runview → shell: "relaunch --resume"
+- `runview.ResumeMsg{AgentCLI, SessionID}` — runview → shell: "exec `<AgentCLI> --resume <SessionID>`". Note: this is the **agent CLI's** own session ID (e.g. a Claude UUID), not an agent-runner run ID. `handleResume` resumes workflow runs; the runview resume action resumes a single agent conversation — different subsystems, different ID spaces.
 - `runview.ExitMsg` — runview → shell: "`q` — quit the whole program"
 
-On `ResumeMsg` or `ExitMsg`, the shell stores the relevant state and returns `tea.Quit`. After `Program.Run()` returns, `main.go` inspects the stored state: if `resumeSessionID` is set, it invokes the existing `handleResume(sessionID)` code path (no subprocess).
+On `ResumeMsg` or `ExitMsg`, the shell stores the relevant state and returns `tea.Quit`. After `Program.Run()` returns, `main.go` inspects the stored state: if a resume was requested, it exec's the step's agent CLI directly with `--resume <session-id>` (replacing the current process via `syscall.Exec` so the agent owns the terminal). This is NOT `handleResume`, which is for agent-runner workflow runs.
 
 List state (cursor, active tab, scroll offsets, drilled-in selection) is preserved across list→runview→list round-trips because the list sub-model is kept alive in the shell.
 
@@ -360,7 +360,7 @@ Mouse wheel scrolls the detail pane when the pointer is over it.
 
 **Byte-offset tailing of audit.log, polled only while active.** Alternative: full re-read on every tick. Chosen because audit logs grow unboundedly in long-running loops (the `implement-change` loop could emit thousands of events across iterations); the tail logic is ~50 lines and scales predictably. Inactive runs don't poll at all.
 
-**Resume = tea.Quit + existing `handleResume`.** Alternative: exec a subprocess. Chosen because `handleResume` already does the right thing from a clean process state; re-entering it from main avoids a new process and its setup overhead.
+**Resume = tea.Quit + `syscall.Exec` of the step's agent CLI with `--resume <session-id>`.** The runview's resume action resumes the agent's own conversation, not an agent-runner workflow run — so `handleResume` (which takes a run ID) is the wrong path despite the name overlap. Alternative: `os/exec.Cmd` and wait for the child. Chosen `syscall.Exec` so the agent CLI replaces the agent-runner process and inherits the terminal directly (interactive agents need a PTY they own).
 
 **`--inspect` scoped to cwd's project dir (mirrors `--resume`).** Alternative: scan all project dirs for a matching session ID. Chosen for consistency — `--resume` and `--inspect` find sessions the same way; cross-project inspection happens through the list TUI's Worktrees/All tabs.
 

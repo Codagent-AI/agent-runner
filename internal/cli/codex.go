@@ -20,27 +20,35 @@ type CodexAdapter struct{}
 //   - Fresh headless:     codex exec --json <prompt>
 //   - Resume interactive: codex resume --no-alt-screen <uuid> <prompt>
 //   - Resume headless:    codex exec resume <uuid> <prompt>
-//   - Model override:     appends -m <m>
+//   - Model override:     appends -m <m> (fresh sessions only)
+//
+// -m is intentionally omitted on resume: a Codex thread keeps the model it
+// was started with, so the profile's model is honored on fresh sessions
+// and inherited thereafter. In this adapter SessionID is set only when
+// resuming (fresh sessions discover the ID post-hoc), so SessionID != ""
+// is the resume signal.
 func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 	args := []string{"codex"}
 
+	resuming := input.SessionID != ""
+
 	if input.Headless {
 		args = append(args, "exec")
-		if input.SessionID != "" {
+		if resuming {
 			args = append(args, "resume", input.SessionID)
 		} else {
 			args = append(args, "--json")
 		}
 		args = append(args, "-a", "never")
 	} else {
-		if input.SessionID != "" {
+		if resuming {
 			args = append(args, "resume", "--no-alt-screen", input.SessionID)
 		} else {
 			args = append(args, "--no-alt-screen")
 		}
 	}
 
-	if input.Model != "" {
+	if input.Model != "" && !resuming {
 		args = append(args, "-m", input.Model)
 	}
 

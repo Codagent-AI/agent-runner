@@ -3,14 +3,19 @@ package runview
 import (
 	"fmt"
 	"math"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 
 	"github.com/codagent/agent-runner/internal/tuistyle"
 )
 
-var accentStyle = lipgloss.NewStyle().Foreground(tuistyle.AccentCyan)
+var (
+	shellGlyphStyle = lipgloss.NewStyle().Foreground(tuistyle.InactiveAmber)
+	subwfGlyphStyle = lipgloss.NewStyle().Foreground(tuistyle.AccentCyan)
+)
 
 func (m *Model) View() string {
 	if m.showLegend {
@@ -24,6 +29,9 @@ func (m *Model) View() string {
 	b.WriteString("\n\n")
 	b.WriteString(m.renderBreadcrumb())
 	b.WriteString("\n\n")
+
+	b.WriteString(m.renderRule())
+	b.WriteString("\n")
 
 	swHeader := m.renderSubWorkflowHeader()
 	if swHeader != "" {
@@ -45,15 +53,29 @@ func (m *Model) View() string {
 		b.WriteString(tuistyle.DimStyle.Render("Error: " + m.loadErr))
 	}
 
-	b.WriteString("\n\n")
+	b.WriteString("\n")
+	b.WriteString(m.renderRule())
+	b.WriteString("\n")
 	b.WriteString(m.renderHelpBar())
 	b.WriteString("\n")
 
 	return b.String()
 }
 
+func (m *Model) renderRule() string {
+	return tuistyle.RenderRule(m.termWidth)
+}
+
 func (m *Model) renderTwoColumn(children []*StepNode) string {
 	rows := m.buildStepRows(children)
+
+	// Cap the list column so one pathologically long row (e.g. an iteration
+	// binding value that happens to be a full file path) can't starve the
+	// detail pane. Prefer at most ~45% of the terminal for the list.
+	listCap := m.termWidth / 2
+	if listCap < 30 {
+		listCap = 30
+	}
 
 	maxRowWidth := 0
 	for _, r := range rows {
@@ -62,12 +84,23 @@ func (m *Model) renderTwoColumn(children []*StepNode) string {
 			maxRowWidth = w
 		}
 	}
+	if maxRowWidth > listCap {
+		maxRowWidth = listCap
+		for i, r := range rows {
+			if lipgloss.Width(r) > listCap {
+				rows[i] = runewidth.Truncate(tuistyle.Sanitize(r), listCap, "…")
+			}
+		}
+	}
 
 	listWidth := maxRowWidth + 4
-	detailWidth := m.termWidth - listWidth - 4
+	// Divider "│ " consumes 2 columns between the panes.
+	detailWidth := m.termWidth - listWidth - 2 - 4
 	if detailWidth < 20 {
 		detailWidth = 20
 	}
+	m.detailWidth = detailWidth
+	divider := tuistyle.DividerStyle.Render("│ ")
 
 	sel := m.selectedNode()
 	detail := m.renderDetail(sel)
@@ -100,11 +133,12 @@ func (m *Model) renderTwoColumn(children []*StepNode) string {
 
 		rightPart := ""
 		if i < len(visibleDetail) {
-			rightPart = tuistyle.FitCell(visibleDetail[i], detailWidth)
+			rightPart = fitDetailLine(visibleDetail[i], detailWidth)
 		}
 
 		b.WriteString(leftPart)
 		b.WriteString(strings.Repeat(" ", leftPad))
+		b.WriteString(divider)
 		b.WriteString(rightPart)
 		b.WriteString("\n")
 	}
@@ -129,6 +163,7 @@ func (m *Model) renderStepRow(n *StepNode, selected bool) string {
 	glyph := m.statusGlyph(n)
 	name := n.ID
 	suffix := ""
+	typeSuffix := ""
 
 	switch n.Type {
 	case NodeLoop:
@@ -139,13 +174,10 @@ func (m *Model) renderStepRow(n *StepNode, selected bool) string {
 	case NodeIteration:
 		name = fmt.Sprintf("iter %d", n.IterationIndex+1)
 		if n.BindingValue != "" {
-			name += "   " + n.BindingValue
+			name += "   " + filepath.Base(n.BindingValue)
 		}
 	default:
-		tg := typeGlyph(n.Type)
-		if tg != "" {
-			suffix = " " + tg
-		}
+		typeSuffix = typeGlyph(n.Type)
 	}
 
 	style := tuistyle.DimStyle
@@ -156,7 +188,11 @@ func (m *Model) renderStepRow(n *StepNode, selected bool) string {
 		style = tuistyle.StatusFailed
 	}
 
-	return prefix + glyph + "  " + style.Render(name+suffix)
+	out := prefix + glyph + "  " + style.Render(name+suffix)
+	if typeSuffix != "" {
+		out += " " + typeSuffix
+	}
+	return out
 }
 
 func (m *Model) statusGlyph(n *StepNode) string {
@@ -171,7 +207,7 @@ func (m *Model) statusGlyph(n *StepNode) string {
 	case StatusPending:
 		return tuistyle.StatusInactive.Render("○")
 	case StatusSuccess:
-		return tuistyle.StatusDone.Render("✓")
+		return tuistyle.StatusSuccess.Render("✓")
 	case StatusFailed:
 		return tuistyle.StatusFailed.Render("✗")
 	case StatusSkipped:
@@ -183,13 +219,13 @@ func (m *Model) statusGlyph(n *StepNode) string {
 func typeGlyph(t NodeType) string {
 	switch t {
 	case NodeShell:
-		return "$"
+		return shellGlyphStyle.Render("$")
 	case NodeHeadlessAgent:
-		return "⚙️"
+		return subwfGlyphStyle.Render("⚙")
 	case NodeInteractiveAgent:
-		return "💬"
+		return subwfGlyphStyle.Render("❯")
 	case NodeSubWorkflow:
-		return "↳"
+		return subwfGlyphStyle.Render("↳")
 	}
 	return ""
 }
@@ -241,11 +277,29 @@ func (m *Model) selectedNodeHasTruncatedOutput() bool {
 	return t.Truncated
 }
 
+// fitDetailLine fits one detail-pane line into width visible columns. If the
+// line already fits, it is returned unchanged (preserving any embedded ANSI
+// escapes). If it overflows, styling is stripped and the plain text is
+// truncated with an ellipsis — truncating the styled form risks cutting an
+// ANSI escape in half, which corrupts rendering for everything that follows.
+//
+// Trailing padding is not emitted: each row ends with a newline that resets
+// the terminal cursor to column 0, so column alignment is unaffected.
+func fitDetailLine(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= width {
+		return s
+	}
+	return runewidth.Truncate(tuistyle.Sanitize(s), width, "…")
+}
+
 func (m *Model) bodyHeight() int {
 	if m.termHeight == 0 {
 		return 20
 	}
-	chrome := 8
+	chrome := 10
 	if m.currentContainer() != nil && m.currentContainer().Type == NodeSubWorkflow {
 		chrome += 3
 	}
@@ -274,10 +328,10 @@ func (m *Model) renderLegend() string {
 	b.WriteString("\n  ")
 	b.WriteString(tuistyle.SelectedStyle.Render("Type Glyphs"))
 	b.WriteString("\n\n")
-	b.WriteString("  $   shell\n")
-	b.WriteString("  ⚙️  headless agent\n")
-	b.WriteString("  💬  interactive agent\n")
-	b.WriteString("  ↳   sub-workflow\n")
+	b.WriteString("  $  shell\n")
+	b.WriteString("  ⚙  headless agent\n")
+	b.WriteString("  ❯  interactive agent\n")
+	b.WriteString("  ↳  sub-workflow\n")
 
 	b.WriteString("\n\n  ")
 	b.WriteString(tuistyle.HelpStyle.Render("press ? or esc to dismiss"))

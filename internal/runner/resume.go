@@ -18,6 +18,13 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
 		return ResultFailed, err
 	}
 
+	if state.Completed {
+		if opts.Log != nil {
+			opts.Log.Println("agent-runner: workflow already completed")
+		}
+		return ResultSuccess, nil
+	}
+
 	workflow, err := loader.LoadWorkflow(state.WorkflowFile, loader.Options{})
 	if err != nil {
 		return ResultFailed, fmt.Errorf("cannot reload workflow: %w", err)

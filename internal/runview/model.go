@@ -2,7 +2,6 @@ package runview
 
 import (
 	"math"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -11,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/codagent/agent-runner/internal/loader"
+	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/stateio"
 	"github.com/codagent/agent-runner/internal/tuistyle"
@@ -18,7 +18,16 @@ import (
 
 // Messages emitted by the runview Model to the parent switcher.
 type BackMsg struct{}
-type ResumeMsg struct{ SessionID string }
+
+// ResumeMsg asks the shell to exit the TUI and exec the step's agent CLI
+// with `--resume <session-id>`, resuming that agent's own conversation.
+// AgentCLI is the binary name captured from the step's audit (e.g. "claude").
+// SessionID is the CLI's own session ID, NOT an agent-runner run ID.
+type ResumeMsg struct {
+	AgentCLI  string
+	SessionID string
+}
+
 type ExitMsg struct{}
 
 // Entered describes how the user reached the run view.
@@ -43,12 +52,13 @@ type Model struct {
 
 	loadedFull map[*StepNode]bool
 
-	active     bool
-	pulsePhase float64
-	termWidth  int
-	termHeight int
-	showLegend bool
-	loadErr    string
+	active      bool
+	pulsePhase  float64
+	termWidth   int
+	termHeight  int
+	detailWidth int
+	showLegend  bool
+	loadErr     string
 
 	resolverCfg ResolverConfig
 	startTime   time.Time
@@ -56,35 +66,34 @@ type Model struct {
 
 // New constructs a runview Model from a session directory.
 func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
-	workflowFile := ""
+	state, _ := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	resolved, _ := ResolveWorkflow(sessionDir, projectDir, &state)
 
-	stateFile := filepath.Join(sessionDir, "state.json")
-	state, err := stateio.ReadState(stateFile)
-	if err == nil && state.WorkflowFile != "" {
-		workflowFile = state.WorkflowFile
-	}
-
-	if workflowFile == "" {
-		sessionID := filepath.Base(sessionDir)
-		name := parseWorkflowNameFromID(sessionID)
-		if name != "" {
-			if f := resolveWorkflowFile(name); f != "" {
-				workflowFile = f
-			}
+	var (
+		tree    *Tree
+		loadErr string
+	)
+	if resolved.AbsPath != "" {
+		wf, err := loader.LoadWorkflow(resolved.AbsPath, loader.Options{})
+		if err != nil {
+			loadErr = "load workflow: " + err.Error()
+		} else {
+			tree = BuildTree(&wf, resolved.AbsPath)
 		}
-	}
-
-	var tree *Tree
-	if workflowFile != "" {
-		wf, loadErr := loader.LoadWorkflow(workflowFile, loader.Options{})
-		if loadErr == nil {
-			tree = BuildTree(&wf, absPath(workflowFile))
-		}
+	} else if state.WorkflowFile != "" || state.WorkflowName != "" {
+		loadErr = "workflow file not found (state: " + describeWorkflowHint(&state, sessionDir) + ")"
 	}
 	if tree == nil {
+		rootName := state.WorkflowName
+		if rootName == "" {
+			rootName = parseWorkflowNameFromID(filepath.Base(sessionDir))
+		}
+		if rootName == "" {
+			rootName = filepath.Base(sessionDir)
+		}
 		tree = &Tree{
 			Root: &StepNode{
-				ID:     filepath.Base(sessionDir),
+				ID:     rootName,
 				Type:   NodeRoot,
 				Status: StatusPending,
 			},
@@ -98,17 +107,14 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 		entered:    entered,
 		path:       []*StepNode{tree.Root},
 		loadedFull: make(map[*StepNode]bool),
+		loadErr:    loadErr,
 	}
 
 	m.active = runlock.Check(sessionDir) == runlock.LockActive
 
-	wfRoot, ok := DiscoverWorkflowsRoot(".")
-	if ok {
-		cwd, _ := os.Getwd()
-		m.resolverCfg = ResolverConfig{
-			WorkflowsRoot: wfRoot,
-			RepoRoot:      cwd,
-		}
+	m.resolverCfg = ResolverConfig{
+		WorkflowsRoot: resolved.WorkflowsRoot,
+		RepoRoot:      resolved.RepoRoot,
 	}
 
 	m.startTime = parseStartTimeFromID(filepath.Base(sessionDir))
@@ -117,13 +123,37 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	// (nil, nil) for missing/empty audit logs.
 	events, err := m.tailer.ReadSince(sessionDir)
 	if err != nil {
-		m.loadErr = "audit log: " + err.Error()
+		if m.loadErr != "" {
+			m.loadErr = m.loadErr + "; audit log: " + err.Error()
+		} else {
+			m.loadErr = "audit log: " + err.Error()
+		}
 	}
 	for _, e := range events {
 		tree.ApplyEvent(e)
 	}
 
 	return m, nil
+}
+
+// describeWorkflowHint returns a compact description of what the resolver
+// tried, used in the user-facing error when nothing matched.
+func describeWorkflowHint(state *model.RunState, sessionDir string) string {
+	var parts []string
+	if state.WorkflowFile != "" {
+		parts = append(parts, "file="+state.WorkflowFile)
+	}
+	name := state.WorkflowName
+	if name == "" {
+		name = parseWorkflowNameFromID(filepath.Base(sessionDir))
+	}
+	if name != "" {
+		parts = append(parts, "name="+name)
+	}
+	if len(parts) == 0 {
+		return "unknown"
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (m *Model) Init() tea.Cmd {
@@ -275,7 +305,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 	case NodeHeadlessAgent, NodeInteractiveAgent:
 		if n.SessionID != "" {
 			return m, func() tea.Msg {
-				return ResumeMsg{SessionID: n.SessionID}
+				return ResumeMsg{AgentCLI: n.AgentCLI, SessionID: n.SessionID}
 			}
 		}
 	}
@@ -344,23 +374,4 @@ func parseStartTimeFromID(sessionID string) time.Time {
 		return t
 	}
 	return time.Time{}
-}
-
-func resolveWorkflowFile(name string) string {
-	base := filepath.Join("workflows", strings.ReplaceAll(name, ":", string(os.PathSeparator)))
-	for _, ext := range []string{".yaml", ".yml"} {
-		p := base + ext
-		if _, err := os.Stat(p); err == nil {
-			return p
-		}
-	}
-	return ""
-}
-
-func absPath(p string) string {
-	a, err := filepath.Abs(p)
-	if err != nil {
-		return p
-	}
-	return a
 }

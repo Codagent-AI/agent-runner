@@ -381,10 +381,22 @@ func (t *Tree) resolveSubWorkflowPath(n *StepNode) (string, error) {
 	// Enforce trusted root: the resolved path must not escape the parent of the
 	// top-level workflow's containing directory (i.e. the workflows/ root or
 	// the repo root for top-level workflows). This prevents a malicious workflow
-	// from forcing reads of arbitrary files outside the project tree.
+	// from forcing reads of arbitrary files outside the project tree. We
+	// compare real (symlink-resolved) paths so a symlink inside the trusted
+	// root cannot be used to point outside of it.
 	if t.WorkflowPath != "" {
 		trustedRoot := filepath.Dir(filepath.Dir(filepath.Clean(t.WorkflowPath)))
-		rel, err := filepath.Rel(trustedRoot, absPath)
+		realTrusted, err := filepath.EvalSymlinks(trustedRoot)
+		if err != nil {
+			realTrusted = trustedRoot
+		}
+		realAbs, err := filepath.EvalSymlinks(absPath)
+		if err != nil {
+			// File may not exist yet; fall back to lexical comparison on the
+			// cleaned absolute path.
+			realAbs = absPath
+		}
+		rel, err := filepath.Rel(realTrusted, realAbs)
 		if err != nil || strings.HasPrefix(rel, "..") {
 			return "", fmt.Errorf("sub-workflow path %q resolves outside trusted root %q", n.StaticWorkflow, trustedRoot)
 		}
@@ -447,8 +459,45 @@ func applyStepStart(n *StepNode, data map[string]any) {
 		}
 		n.LoopMatches = strs
 	}
+	if n.Type == NodeLoop {
+		preCreateLoopIterations(n)
+	}
 	// For sub-workflow step_start we only see a context; workflow_name / path
 	// arrive on sub_workflow_start.
+}
+
+// maxPreCreatedIterations caps pre-allocation of placeholder iteration nodes
+// to bound memory/CPU if a workflow declares a pathologically large loop.
+// Any remaining iterations beyond this cap are still created on demand when
+// their iteration_start event arrives.
+const maxPreCreatedIterations = 10000
+
+// preCreateLoopIterations materializes an iteration node for every index the
+// loop is known to run, so pending iterations appear in the step list as soon
+// as the loop starts. For for-each loops each placeholder is seeded with its
+// binding value from LoopMatches; the status stays Pending until an
+// iteration_start event arrives and flips it to InProgress. The total is
+// clamped to maxPreCreatedIterations to prevent denial-of-service via a
+// crafted workflow file.
+func preCreateLoopIterations(loop *StepNode) {
+	total := 0
+	if len(loop.LoopMatches) > 0 {
+		total = len(loop.LoopMatches)
+	} else if loop.StaticLoopMax != nil {
+		total = *loop.StaticLoopMax
+	}
+	if total < 0 {
+		return
+	}
+	if total > maxPreCreatedIterations {
+		total = maxPreCreatedIterations
+	}
+	for i := 0; i < total; i++ {
+		iter := ensureIteration(loop, i)
+		if iter.BindingValue == "" && i < len(loop.LoopMatches) {
+			iter.BindingValue = loop.LoopMatches[i]
+		}
+	}
 }
 
 // applyStepEnd copies data from a step_end event onto a node.

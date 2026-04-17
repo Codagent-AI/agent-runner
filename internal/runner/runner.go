@@ -381,7 +381,9 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 
 	switch result {
 	case ResultSuccess:
-		stateio.DeleteState(rs.sessionDir)
+		if err := markStateCompleted(rs.sessionDir); err != nil {
+			rs.log.Printf("agent-runner: warning: could not mark state completed: %v\n", err)
+		}
 		rs.log.Println("agent-runner: workflow complete")
 	case ResultFailed:
 		rs.log.Printf("agent-runner: to resume: agent-runner --resume %s\n", rs.sessionID)
@@ -400,6 +402,19 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 		})
 		rs.auditLogger.Close()
 	}
+}
+
+// markStateCompleted reads the run's state.json, sets Completed=true, and
+// rewrites it so the TUI can continue to display the run's metadata after it
+// finishes. The state file is intentionally preserved rather than deleted.
+func markStateCompleted(sessionDir string) error {
+	statePath := filepath.Join(sessionDir, "state.json")
+	state, err := stateio.ReadState(statePath)
+	if err != nil {
+		return err
+	}
+	state.Completed = true
+	return stateio.WriteState(&state, sessionDir)
 }
 
 // RunWorkflow executes a workflow with the given parameters.

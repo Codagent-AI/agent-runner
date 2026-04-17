@@ -34,7 +34,11 @@ func (m *Model) renderBreadcrumb() string {
 		}
 	}
 
-	crumbStr := "← " + strings.Join(crumbs, "  /  ")
+	sep := tuistyle.AccentStyle.Render(tuistyle.BreadcrumbSeparator)
+	crumbStr := tuistyle.LabelStyle.Render("← " + crumbs[0])
+	for _, c := range crumbs[1:] {
+		crumbStr += sep + tuistyle.LabelStyle.Render(c)
+	}
 
 	startStr := tuistyle.FormatTime(m.startTime)
 	suffix := ""
@@ -43,7 +47,7 @@ func (m *Model) renderBreadcrumb() string {
 	}
 	suffix += "  ·  "
 
-	return "  " + tuistyle.NormalStyle.Render(crumbStr) +
+	return "  " + crumbStr +
 		tuistyle.DimStyle.Render(suffix) +
 		m.styledRunStatus()
 }
@@ -59,7 +63,7 @@ func (m *Model) styledRunStatus() string {
 	case StatusFailed:
 		return tuistyle.StatusFailed.Render("failed")
 	case StatusSuccess:
-		return tuistyle.StatusDone.Render("completed")
+		return tuistyle.StatusSuccess.Render("completed")
 	default:
 		return tuistyle.StatusInactive.Render("inactive")
 	}
@@ -99,8 +103,8 @@ func (m *Model) renderSubWorkflowHeader() string {
 	}
 
 	name := CanonicalName(container.StaticWorkflowPath, m.resolverCfg)
-	if name == "" && container.StaticWorkflow != "" {
-		name = container.StaticWorkflow
+	if name == "" {
+		name = bareWorkflowName(container.StaticWorkflow)
 	}
 	if name == "" {
 		name = container.ID
@@ -117,14 +121,18 @@ func (m *Model) renderSubWorkflowHeader() string {
 		}
 	}
 
+	bar := tuistyle.InsetBarStyle.Render("▍ ")
+
 	var b strings.Builder
 	b.WriteString("  ")
-	b.WriteString(tuistyle.DimStyle.Render("workflow: "))
+	b.WriteString(bar)
+	b.WriteString(tuistyle.SectionStyle.Render("workflow: "))
 	b.WriteString(tuistyle.NormalStyle.Render(name))
 	b.WriteString("\n")
 	if len(paramParts) > 0 {
 		b.WriteString("  ")
-		b.WriteString(tuistyle.DimStyle.Render("params:   "))
+		b.WriteString(bar)
+		b.WriteString(tuistyle.SectionStyle.Render("params:   "))
 		b.WriteString(tuistyle.NormalStyle.Render(strings.Join(paramParts, ", ")))
 		b.WriteString("\n")
 	}

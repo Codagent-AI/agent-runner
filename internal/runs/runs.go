@@ -75,27 +75,35 @@ func ListForDir(projectDir string) ([]RunInfo, error) {
 
 		// Determine status from lock and state file.
 		lockStatus := runlock.Check(sessionDir)
-		stateExists := fileExists(filepath.Join(sessionDir, "state.json"))
+		statePath := filepath.Join(sessionDir, "state.json")
+		stateExists := fileExists(statePath)
+
+		// Read workflow name and current step from state.json if available.
+		var state model.RunState
+		var stateLoaded bool
+		if stateExists {
+			s, readErr := stateio.ReadState(statePath)
+			if readErr == nil {
+				state = s
+				stateLoaded = true
+				info.WorkflowName = state.WorkflowName
+				info.CurrentStep = currentStepID(&state)
+				info.ChangeName = state.Params["change_name"]
+			}
+		}
 
 		switch {
 		case lockStatus == runlock.LockActive:
 			info.Status = StatusActive
+		case stateLoaded && state.Completed:
+			info.Status = StatusCompleted
+			info.CurrentStep = ""
 		case lockStatus == runlock.LockStale:
 			info.Status = StatusInactive
 		case stateExists:
 			info.Status = StatusInactive
 		default:
 			info.Status = StatusCompleted
-		}
-
-		// Read workflow name and current step from state.json if available.
-		if stateExists {
-			state, readErr := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
-			if readErr == nil {
-				info.WorkflowName = state.WorkflowName
-				info.CurrentStep = currentStepID(&state)
-				info.ChangeName = state.Params["change_name"]
-			}
 		}
 
 		// Fallback: parse workflow name from session ID.

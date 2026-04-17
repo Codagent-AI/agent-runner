@@ -10,11 +10,16 @@ type ClaudeAdapter struct{}
 //   - Fresh headless:     claude --session-id <uuid> -p <prompt>
 //   - Resume interactive: claude --resume <uuid> <prompt>
 //   - Resume headless:    claude --resume <uuid> -p <prompt>
-//   - Model override:     appends --model <m>
+//   - Model override:     appends --model <m> (fresh sessions only)
 //
 // --session-id is reserved for fresh sessions — Claude CLI rejects it when
 // the UUID already exists on disk ("Session ID ... is already in use").
 // --resume works for both interactive and headless continuations.
+//
+// --model is intentionally omitted on resume: a Claude session keeps the
+// model it was started with, and passing a different --model on resume
+// would be silently ignored at best or rejected at worst. The profile's
+// model is honored on fresh sessions and inherited thereafter.
 func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 	args := []string{"claude"}
 
@@ -26,7 +31,7 @@ func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 		}
 	}
 
-	if input.Model != "" {
+	if input.Model != "" && !input.Resume {
 		args = append(args, "--model", input.Model)
 	}
 
