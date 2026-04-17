@@ -18,7 +18,16 @@ import (
 
 // Messages emitted by the runview Model to the parent switcher.
 type BackMsg struct{}
-type ResumeMsg struct{ SessionID string }
+
+// ResumeMsg asks the shell to exit the TUI and exec the step's agent CLI
+// with `--resume <session-id>`, resuming that agent's own conversation.
+// AgentCLI is the binary name captured from the step's audit (e.g. "claude").
+// SessionID is the CLI's own session ID, NOT an agent-runner run ID.
+type ResumeMsg struct {
+	AgentCLI  string
+	SessionID string
+}
+
 type ExitMsg struct{}
 
 // Entered describes how the user reached the run view.
@@ -296,7 +305,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 	case NodeHeadlessAgent, NodeInteractiveAgent:
 		if n.SessionID != "" {
 			return m, func() tea.Msg {
-				return ResumeMsg{SessionID: n.SessionID}
+				return ResumeMsg{AgentCLI: n.AgentCLI, SessionID: n.SessionID}
 			}
 		}
 	}

@@ -38,6 +38,7 @@ func simpleTree() *Tree {
 		Status:      StatusInProgress,
 		Parent:      root,
 		StaticAgent: "implementor",
+		AgentCLI:    "claude",
 		SessionID:   "session-abc-123",
 	}
 	loop := &StepNode{
@@ -224,6 +225,9 @@ func TestModel_Enter_AgentStep_EmitsResumeMsg(t *testing.T) {
 	}
 	if resume.SessionID != "session-abc-123" {
 		t.Fatalf("session ID = %q, want %q", resume.SessionID, "session-abc-123")
+	}
+	if resume.AgentCLI != "claude" {
+		t.Fatalf("agent CLI = %q, want %q", resume.AgentCLI, "claude")
 	}
 }
 

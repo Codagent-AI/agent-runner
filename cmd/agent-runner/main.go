@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -281,7 +282,44 @@ func runSwitcher(sw *switcher) int {
 		return 0
 	}
 	if final.resumeSessionID != "" {
-		return handleResume(final.resumeSessionID)
+		return execAgentResume(final.resumeAgentCLI, final.resumeSessionID)
+	}
+	return 0
+}
+
+// allowedResumeCLIs bounds execAgentResume's `cli` argument. Resume metadata
+// originates from audit logs and workflow YAML — both attacker-influenceable
+// when inspecting runs from untrusted sources — and the value flows into
+// syscall.Exec with the full environment. The allowlist mirrors
+// internal/config.validCLI; keep them in sync when adding new agent CLIs.
+var allowedResumeCLIs = map[string]bool{
+	"claude": true,
+	"codex":  true,
+}
+
+// execAgentResume replaces the current process with `<cli> --resume <session-id>`
+// so the agent CLI inherits the terminal directly. This is the runview resume
+// path: it resumes an individual agent conversation, NOT an agent-runner
+// workflow run — despite both flags being spelled `--resume`, they live in
+// different subsystems with different ID spaces (agent CLI session UUID vs.
+// agent-runner run directory name).
+func execAgentResume(cli, sessionID string) int {
+	if cli == "" {
+		cli = "claude"
+	}
+	if strings.ContainsAny(cli, `/\`) || !allowedResumeCLIs[cli] {
+		fmt.Fprintf(os.Stderr, "agent-runner: refusing to resume: unsupported agent CLI %q\n", cli)
+		return 1
+	}
+	path, err := exec.LookPath(cli)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: cannot find agent CLI %q in PATH: %v\n", cli, err)
+		return 1
+	}
+	args := []string{cli, "--resume", sessionID}
+	if err := syscall.Exec(path, args, os.Environ()); err != nil { // #nosec G204 -- cli validated against allowlist above
+		fmt.Fprintf(os.Stderr, "agent-runner: exec %s --resume: %v\n", cli, err)
+		return 1
 	}
 	return 0
 }
@@ -332,6 +370,7 @@ type switcher struct {
 	termWidth  int
 	termHeight int
 
+	resumeAgentCLI  string
 	resumeSessionID string
 	viewErr         string
 }
@@ -383,6 +422,7 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return s, nil
 
 	case runview.ResumeMsg:
+		s.resumeAgentCLI = msg.AgentCLI
 		s.resumeSessionID = msg.SessionID
 		return s, tea.Quit
 
