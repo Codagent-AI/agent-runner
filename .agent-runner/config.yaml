@@ -2,14 +2,14 @@ profiles:
     headless_base:
         default_mode: headless
         cli: claude
-        model: opus
+        model: sonnet
         effort: high
     implementor:
         extends: headless_base
     interactive_base:
         default_mode: interactive
         cli: claude
-        model: sonnet
+        model: opus
         effort: high
     planner:
         extends: interactive_base
