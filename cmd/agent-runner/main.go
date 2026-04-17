@@ -24,8 +24,8 @@ import (
 	"github.com/codagent/agent-runner/internal/liverun"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
-	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/runlock"
+	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/runview"
 )
 

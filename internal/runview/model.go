@@ -429,7 +429,9 @@ func (m *Model) handleLoadFull() {
 // navigateToNode sets path and cursor so that target is the selected node.
 // It respects the auto-flatten rule: iteration nodes with FlattenTarget are
 // kept in the path while their FlattenTarget sub-workflow is skipped.
-// Sub-workflows in the path are lazy-loaded if necessary.
+// Sub-workflows in the path are lazy-loaded if necessary. If target is not
+// located in the resolved container's children, path and cursor are left
+// unchanged to avoid silently misaligning them.
 func (m *Model) navigateToNode(target *StepNode) {
 	if target == nil {
 		return
@@ -463,17 +465,33 @@ func (m *Model) navigateToNode(target *StepNode) {
 		}
 	}
 
+	// Resolve target's cursor index in the proposed container before
+	// mutating state — a miss would otherwise leave path out of sync with
+	// cursor. Temporarily swap in newPath to reuse currentChildren().
+	savedPath := m.path
 	m.path = newPath
-	m.detailOffset = 0
-
 	children := m.currentChildren()
+	cursor := -1
 	for i, c := range children {
 		if c == target {
-			m.cursor = i
-			return
+			cursor = i
+			break
 		}
 	}
-	m.cursor = 0
+	if cursor < 0 {
+		// Target not in visible children; revert and bail out.
+		m.path = savedPath
+		return
+	}
+
+	m.cursor = cursor
+	// Preserve tail-pin while following: resetting to 0 would jump the
+	// detail pane to the top until the next OutputChunkMsg re-pins it.
+	if m.tailFollow {
+		m.detailOffset = math.MaxInt32
+	} else {
+		m.detailOffset = 0
+	}
 }
 
 // findFailedLeaf returns the deepest non-container StepNode with StatusFailed,
