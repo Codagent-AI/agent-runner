@@ -54,7 +54,7 @@ func executeCountedLoop(
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), stepID)
 	startTime := time.Now()
 
-	resumeIter, _ := consumeLoopResume(ctx, stepID)
+	resumeIter, resumeBody, _ := consumeLoopResume(ctx, stepID)
 	if resumeIter > opts.ResumeFromIteration {
 		opts.ResumeFromIteration = resumeIter
 	}
@@ -81,6 +81,10 @@ func executeCountedLoop(
 			StepID:    stepID,
 			Iteration: i,
 		})
+		if i == resumeIter && resumeBody != nil {
+			iterCtx.ResumeChildState = resumeBody
+			resumeBody = nil
+		}
 
 		result, err := executeIterationWithAudit(steps, iterCtx, runner, glob, log)
 		if err != nil {
@@ -132,7 +136,7 @@ func executeForEachLoop(
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), stepID)
 	startTime := time.Now()
 
-	resumeIter, _ := consumeLoopResume(ctx, stepID)
+	resumeIter, resumeBody, _ := consumeLoopResume(ctx, stepID)
 	if resumeIter > opts.ResumeFromIteration {
 		opts.ResumeFromIteration = resumeIter
 	}
@@ -172,6 +176,10 @@ func executeForEachLoop(
 			Iteration: i,
 			LoopVar:   loopVar,
 		})
+		if i == resumeIter && resumeBody != nil {
+			iterCtx.ResumeChildState = resumeBody
+			resumeBody = nil
+		}
 
 		result, err := executeIterationWithAudit(steps, iterCtx, runner, globExp, log)
 		if err != nil {
@@ -242,14 +250,16 @@ func flushLoopState(ctx *model.ExecutionContext) {
 }
 
 // consumeLoopResume checks if the context carries resume state for this loop
-// step and, if so, extracts the iteration index and clears the pointer.
-func consumeLoopResume(ctx *model.ExecutionContext, loopStepID string) (int, bool) {
+// step and, if so, extracts the iteration index plus any deeper body-step
+// resume chain, then clears the pointer.
+func consumeLoopResume(ctx *model.ExecutionContext, loopStepID string) (int, *model.NestedStepState, bool) {
 	if ctx.ResumeChildState == nil || ctx.ResumeChildState.StepID != loopStepID || ctx.ResumeChildState.Iteration == nil {
-		return 0, false
+		return 0, nil, false
 	}
 	iter := *ctx.ResumeChildState.Iteration
+	body := ctx.ResumeChildState.Child
 	ctx.ResumeChildState = nil
-	return iter, true
+	return iter, body, true
 }
 
 func emitLoopEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, completed int, breakTriggered bool, outcome string) {
@@ -343,16 +353,60 @@ func executeIterationBody(
 	glob GlobExpander,
 	log Logger,
 ) (iterationResult, error) {
+	loopStepID, iteration := loopSegmentOf(iterCtx)
+
+	resumeBody, resolvedStartID, err := resolveIterationResume(iterCtx, steps)
+	if err != nil {
+		return iterationResult{failed: true}, err
+	}
+	if resumeBody != nil && resolvedStartID == "" {
+		// All body steps completed on the previous run; nothing to do.
+		return iterationResult{}, nil
+	}
+	reached := resolvedStartID == ""
+
+	var currentBodyStepID string
+	var currentBodyCompleted bool
+	restoreFlush := installIterationFlush(iterCtx, loopStepID, iteration, &currentBodyStepID, &currentBodyCompleted)
+	defer restoreFlush()
+
 	for i := range steps {
+		if !reached {
+			if steps[i].ID != resolvedStartID {
+				continue
+			}
+			reached = true
+			if resumeBody != nil {
+				applyIterationBodyResume(iterCtx, resumeBody)
+			}
+		}
+
+		currentBodyStepID = steps[i].ID
+		currentBodyCompleted = false
+
 		breadcrumb := textfmt.BuildBreadcrumb(nestingToFmt(iterCtx), steps[i].ID)
 		log.Println(textfmt.Separator())
 		log.Println(textfmt.StepHeading(i, len(steps), breadcrumb, steps[i].StepType(), false))
-		outcome, err := DispatchStep(&steps[i], iterCtx, runner, glob, log)
-		if err != nil {
-			return iterationResult{failed: true}, err
+
+		// Persist "body step i starting" so a mid-step crash leaves the
+		// current body step recorded even if no nested flush fires.
+		if iterCtx.FlushState != nil {
+			iterCtx.FlushState()
+		}
+
+		outcome, dispatchErr := DispatchStep(&steps[i], iterCtx, runner, glob, log)
+		if dispatchErr != nil {
+			persistIterationFailState(iterCtx, loopStepID, iteration, currentBodyStepID, false)
+			return iterationResult{failed: true}, dispatchErr
+		}
+
+		currentBodyCompleted = outcome != OutcomeFailed && outcome != OutcomeAborted
+		if iterCtx.FlushState != nil {
+			iterCtx.FlushState()
 		}
 
 		if outcome == OutcomeAborted {
+			persistIterationFailState(iterCtx, loopStepID, iteration, currentBodyStepID, currentBodyCompleted)
 			return iterationResult{aborted: true}, nil
 		}
 
@@ -364,8 +418,242 @@ func executeIterationBody(
 		iterCtx.LastStepOutcome = &o
 
 		if outcome == OutcomeFailed && !steps[i].ContinueOnFailure {
+			persistIterationFailState(iterCtx, loopStepID, iteration, currentBodyStepID, currentBodyCompleted)
 			return iterationResult{failed: true}, nil
 		}
 	}
 	return iterationResult{}, nil
+}
+
+// resolveIterationResume extracts any resume state from iterCtx and resolves
+// which body step to re-enter at. Returns a non-nil resumeBody when resume
+// state was present (even if all body steps were completed, in which case
+// resolvedStartID is ""). Returns an error if the persisted body step is
+// no longer present in the loop definition.
+func resolveIterationResume(iterCtx *model.ExecutionContext, steps []model.Step) (*model.NestedStepState, string, error) {
+	if iterCtx.ResumeChildState == nil {
+		return nil, "", nil
+	}
+	resumeBody := iterCtx.ResumeChildState
+	iterCtx.ResumeChildState = nil
+
+	if resumeBody.StepID == "" {
+		return resumeBody, "", nil
+	}
+	resolved, err := model.ResolveResumeStep(steps, resumeBody.StepID, resumeBody.Completed)
+	if err != nil {
+		return resumeBody, "", fmt.Errorf("resume body step %q not found in loop: %w", resumeBody.StepID, err)
+	}
+	if resolved.AllDone {
+		return resumeBody, "", nil
+	}
+	return resumeBody, resolved.StepID, nil
+}
+
+// installIterationFlush overrides iterCtx.FlushState so mid-body-step flushes
+// (triggered from within nested sub-workflows / loops) capture
+// iterCtx.LastSubWorkflowChild under an enclosing loop-step marker before the
+// root flush runs. The override is non-destructive: it builds a fresh chain
+// from a read-only snapshot of the context tree, temporarily installs it on
+// the outermost ancestor for the flush, then restores prior state. Returns a
+// restore function that should be deferred to reinstate the prior FlushState.
+//
+// Without this override, the root state.json write would see no iteration
+// context and collapse the child chain. A destructive walk-up would break
+// the subsequent recordChildProgress calls in executeChildSteps.
+func installIterationFlush(
+	iterCtx *model.ExecutionContext,
+	loopStepID string,
+	iteration *int,
+	currentBodyStepID *string,
+	currentBodyCompleted *bool,
+) func() {
+	outerFlush := iterCtx.FlushState
+	iterCtx.FlushState = func() {
+		root, chain := buildIterationFlushChain(iterCtx, loopStepID, iteration, *currentBodyStepID, *currentBodyCompleted)
+		if root == nil || chain == nil {
+			if outerFlush != nil {
+				outerFlush()
+			}
+			return
+		}
+		saved := root.LastSubWorkflowChild
+		root.LastSubWorkflowChild = chain
+		if outerFlush != nil {
+			outerFlush()
+		}
+		root.LastSubWorkflowChild = saved
+	}
+	return func() { iterCtx.FlushState = outerFlush }
+}
+
+// persistIterationFailState permanently updates iterCtx.ParentContext.LastSubWorkflowChild
+// to reflect the current body-step position at the moment the iteration is
+// exiting abnormally (failure or abort). Without this, the runner's post-step
+// writeStepState would see only the iteration-boundary marker (set by
+// recordLoopIterationProgress) and lose the body-step information needed for
+// mid-iteration resume. Relies on the existing recordChildProgress merge
+// branch to propagate this through any enclosing sub-workflow levels.
+func persistIterationFailState(iterCtx *model.ExecutionContext, loopStepID string, iteration *int, bodyStepID string, bodyCompleted bool) {
+	parent := iterCtx.ParentContext
+	if parent == nil || loopStepID == "" || iteration == nil {
+		return
+	}
+
+	deep := iterCtx.LastSubWorkflowChild
+	iterCtx.LastSubWorkflowChild = nil
+
+	var bodyEntry *model.NestedStepState
+	if bodyStepID != "" {
+		bodyEntry = &model.NestedStepState{
+			StepID:            bodyStepID,
+			SessionIDs:        copyMap(iterCtx.SessionIDs),
+			SessionProfiles:   copyMap(iterCtx.SessionProfiles),
+			CapturedVariables: copyMap(iterCtx.CapturedVariables),
+			LastSessionStepID: iterCtx.LastSessionStepID,
+			Completed:         bodyCompleted,
+		}
+		if deep != nil && deep.StepID == bodyStepID {
+			bodyEntry.Iteration = deep.Iteration
+			bodyEntry.Child = deep.Child
+		} else {
+			bodyEntry.Child = deep
+		}
+	} else if deep != nil {
+		bodyEntry = deep
+	}
+
+	iter := *iteration
+	parent.LastSubWorkflowChild = &model.NestedStepState{
+		StepID:            loopStepID,
+		SessionIDs:        copyMap(parent.SessionIDs),
+		SessionProfiles:   copyMap(parent.SessionProfiles),
+		CapturedVariables: copyMap(parent.CapturedVariables),
+		LastSessionStepID: parent.LastSessionStepID,
+		Iteration:         &iter,
+		Child:             bodyEntry,
+	}
+}
+
+// loopSegmentOf returns the loop step ID and iteration index from the
+// innermost iteration segment of iterCtx. Returns zero values if the
+// innermost segment is not a loop iteration.
+func loopSegmentOf(iterCtx *model.ExecutionContext) (loopStepID string, iteration *int) {
+	if len(iterCtx.NestingPath) == 0 {
+		return "", nil
+	}
+	seg := iterCtx.NestingPath[len(iterCtx.NestingPath)-1]
+	if seg.Iteration == nil {
+		return "", nil
+	}
+	iter := *seg.Iteration
+	return seg.StepID, &iter
+}
+
+// buildIterationFlushChain constructs, non-destructively, the full nested
+// state chain for a mid-iteration flush. It snapshots iterCtx and its
+// ancestors' NestingPath segments to produce a fresh *NestedStepState tree
+// rooted at the outermost ancestor (runner top-level context). The returned
+// root context's LastSubWorkflowChild should be temporarily replaced with
+// the returned chain for the duration of the outer flush.
+//
+// Returns (nil, nil) if the chain cannot be walked all the way up to a root
+// (no ParentContext) — e.g. because a context along the way has an empty
+// NestingPath. Installing a partially-built chain at a non-root level
+// would leave intermediate state inconsistent.
+func buildIterationFlushChain(
+	iterCtx *model.ExecutionContext,
+	loopStepID string,
+	iteration *int,
+	bodyStepID string,
+	bodyCompleted bool,
+) (root *model.ExecutionContext, chain *model.NestedStepState) {
+	deep := iterCtx.LastSubWorkflowChild
+
+	var bodyEntry *model.NestedStepState
+	if bodyStepID != "" {
+		bodyEntry = &model.NestedStepState{
+			StepID:            bodyStepID,
+			SessionIDs:        copyMap(iterCtx.SessionIDs),
+			SessionProfiles:   copyMap(iterCtx.SessionProfiles),
+			CapturedVariables: copyMap(iterCtx.CapturedVariables),
+			LastSessionStepID: iterCtx.LastSessionStepID,
+			Completed:         bodyCompleted,
+		}
+		if deep != nil && deep.StepID == bodyStepID {
+			bodyEntry.Iteration = deep.Iteration
+			bodyEntry.Child = deep.Child
+		} else {
+			bodyEntry.Child = deep
+		}
+	} else if deep != nil {
+		bodyEntry = deep
+	}
+
+	if loopStepID != "" && iteration != nil && iterCtx.ParentContext != nil {
+		parent := iterCtx.ParentContext
+		iter := *iteration
+		chain = &model.NestedStepState{
+			StepID:            loopStepID,
+			SessionIDs:        copyMap(parent.SessionIDs),
+			SessionProfiles:   copyMap(parent.SessionProfiles),
+			CapturedVariables: copyMap(parent.CapturedVariables),
+			LastSessionStepID: parent.LastSessionStepID,
+			Iteration:         &iter,
+			Child:             bodyEntry,
+		}
+	} else {
+		chain = bodyEntry
+	}
+
+	// Walk up from iterCtx.ParentContext through the context chain, wrapping
+	// chain under each NestingPath segment until we reach the root (no parent).
+	cur := iterCtx.ParentContext
+	for cur != nil && cur.ParentContext != nil {
+		if len(cur.NestingPath) == 0 {
+			return nil, nil
+		}
+		seg := cur.NestingPath[len(cur.NestingPath)-1]
+		if seg.StepID == "" {
+			return nil, nil
+		}
+		parent := cur.ParentContext
+		entry := &model.NestedStepState{
+			StepID:            seg.StepID,
+			SessionIDs:        copyMap(parent.SessionIDs),
+			SessionProfiles:   copyMap(parent.SessionProfiles),
+			CapturedVariables: copyMap(parent.CapturedVariables),
+			LastSessionStepID: parent.LastSessionStepID,
+			Child:             chain,
+		}
+		if seg.Iteration != nil {
+			iter := *seg.Iteration
+			entry.Iteration = &iter
+		}
+		chain = entry
+		cur = parent
+	}
+
+	return cur, chain
+}
+
+// applyIterationBodyResume restores persisted iteration-scoped state
+// (sessions, captured variables, deeper resume pointer) into iterCtx so
+// the body step re-enters with the same context it had at flush time.
+func applyIterationBodyResume(iterCtx *model.ExecutionContext, resumeBody *model.NestedStepState) {
+	for k, v := range resumeBody.SessionIDs {
+		iterCtx.SessionIDs[k] = v
+	}
+	for k, v := range resumeBody.SessionProfiles {
+		iterCtx.SessionProfiles[k] = v
+	}
+	for k, v := range resumeBody.CapturedVariables {
+		iterCtx.CapturedVariables[k] = v
+	}
+	if resumeBody.LastSessionStepID != "" {
+		iterCtx.LastSessionStepID = resumeBody.LastSessionStepID
+	}
+	if resumeBody.Child != nil {
+		iterCtx.ResumeChildState = resumeBody.Child
+	}
 }
