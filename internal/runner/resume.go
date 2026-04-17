@@ -123,6 +123,7 @@ func nestedToChildState(nested *model.NestedStepState) *model.SubWorkflowChildSt
 		SessionIDs:        copyMap(nested.SessionIDs),
 		SessionProfiles:   copyMap(nested.SessionProfiles),
 		CapturedVariables: copyMap(nested.CapturedVariables),
+		LastSessionStepID: nested.LastSessionStepID,
 		Completed:         nested.Completed,
 		Iteration:         nested.Iteration,
 		Child:             nestedToChildState(nested.Child),

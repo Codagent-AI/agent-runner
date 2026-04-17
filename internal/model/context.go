@@ -22,6 +22,7 @@ type SubWorkflowChildState struct {
 	SessionIDs        map[string]string      `json:"sessionIds"`
 	SessionProfiles   map[string]string      `json:"sessionProfiles,omitempty"`
 	CapturedVariables map[string]string      `json:"capturedVariables"`
+	LastSessionStepID string                 `json:"lastSessionStepId,omitempty"`
 	Completed         bool                   `json:"completed,omitempty"`
 	Iteration         *int                   `json:"iteration,omitempty"`
 	Child             *SubWorkflowChildState `json:"child,omitempty"`

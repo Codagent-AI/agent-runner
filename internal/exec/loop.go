@@ -212,6 +212,7 @@ func recordLoopIterationProgress(ctx *model.ExecutionContext, loopStepID string,
 		SessionIDs:        copyMap(ctx.SessionIDs),
 		SessionProfiles:   copyMap(ctx.SessionProfiles),
 		CapturedVariables: copyMap(ctx.CapturedVariables),
+		LastSessionStepID: ctx.LastSessionStepID,
 		Completed:         loopCompleted,
 		Iteration:         &iterCopy,
 	}

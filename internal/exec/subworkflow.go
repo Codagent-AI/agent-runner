@@ -209,6 +209,7 @@ func recordChildProgress(childCtx *model.ExecutionContext, childStepID string, c
 		SessionIDs:        copyMap(childCtx.SessionIDs),
 		SessionProfiles:   copyMap(childCtx.SessionProfiles),
 		CapturedVariables: copyMap(childCtx.CapturedVariables),
+		LastSessionStepID: childCtx.LastSessionStepID,
 		Completed:         completed,
 	}
 	// When the deeper state already describes this same step (e.g. a loop step
@@ -238,6 +239,9 @@ func applyResumeState(parentCtx, childCtx *model.ExecutionContext) (string, bool
 	}
 	for k, v := range resumeChild.CapturedVariables {
 		childCtx.CapturedVariables[k] = v
+	}
+	if resumeChild.LastSessionStepID != "" {
+		childCtx.LastSessionStepID = resumeChild.LastSessionStepID
 	}
 	if resumeChild.Iteration != nil {
 		// This entry describes a loop step that is being resumed mid-iteration.
