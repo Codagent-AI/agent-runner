@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 )
 
@@ -313,7 +314,10 @@ func TestApplyEvent_SubWorkflowLazyLoad(t *testing.T) {
 	if len(sub.Children) != 3 {
 		t.Errorf("want 3 sub-workflow children, got %d", len(sub.Children))
 	}
-	if sub.StaticWorkflowPath != "/tmp/implement-task.yaml" {
+	// ensureSubWorkflowLoaded set the absolute path before applySubWorkflowStart
+	// ran, so the event's workflow_path does not clobber it.
+	if !filepath.IsAbs(sub.StaticWorkflowPath) ||
+		!strings.HasSuffix(sub.StaticWorkflowPath, "workflows/implement-task.yaml") {
 		t.Errorf("workflow path: got %q", sub.StaticWorkflowPath)
 	}
 	if sub.InterpolatedParams["task_file"] != "tasks/01.md" {
@@ -344,6 +348,80 @@ func TestApplyEvent_SubWorkflowLazyLoad(t *testing.T) {
 	}
 	if impl.Type != NodeInteractiveAgent {
 		t.Errorf("mode should classify to interactive agent, got %v", impl.Type)
+	}
+}
+
+// TestApplyEvent_NestedSubWorkflowUnderLoop covers the case where an outer
+// sub-workflow is itself a child of the top-level workflow and contains a loop
+// whose body is a sub-workflow. The inner body must load so the TUI can show
+// its steps — the path walk used to fail because applySubWorkflowStart
+// clobbered the outer node's absolute StaticWorkflowPath with the relative
+// path from the event, corrupting the parent-dir resolution for descendants.
+func TestApplyEvent_NestedSubWorkflowUnderLoop(t *testing.T) {
+	// Top-level workflow: one sub-workflow step "implement" that points at
+	// implement-change.yaml.
+	wf, wfPath := loadWorkflowForTest(t, "openspec/change.yaml")
+	tree := BuildTree(&wf, wfPath)
+	tree.SubWorkflowLoader = func(path string) (model.Workflow, error) {
+		return loader.LoadWorkflow(path, loader.Options{IsSubWorkflow: true})
+	}
+
+	// Outer sub-workflow start (implement → implement-change.yaml). Audit
+	// events carry whatever path the executor used, which in practice is
+	// relative to the invocation CWD.
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[implement, sub:implement-change]",
+		Type:   "sub_workflow_start",
+		Data: map[string]any{
+			"workflow_name": "implement-change",
+			"workflow_path": "workflows/openspec/implement-change.yaml",
+		},
+	})
+	// Loop step_start pre-creates iteration placeholders.
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[implement, sub:implement-change, implement-tasks]",
+		Type:   "step_start",
+		Data: map[string]any{
+			"loop_type":        "for-each",
+			"resolved_matches": []any{"tasks/01.md"},
+		},
+	})
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[implement, sub:implement-change, implement-tasks:0]",
+		Type:   "iteration_start",
+		Data: map[string]any{
+			"iteration": float64(0),
+			"loop_var":  map[string]any{"task_file": "tasks/01.md"},
+		},
+	})
+	// Inner sub-workflow start (implement-single-task → ../implement-task.yaml).
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[implement, sub:implement-change, implement-tasks:0, implement-single-task, sub:implement-task]",
+		Type:   "sub_workflow_start",
+		Data: map[string]any{
+			"workflow_name": "implement-task",
+			"workflow_path": "workflows/implement-task.yaml",
+		},
+	})
+
+	implement := childByID(tree.Root, "implement")
+	if implement == nil || !implement.SubLoaded {
+		t.Fatalf("outer sub-workflow not loaded: %+v", implement)
+	}
+	loop := childByID(implement, "implement-tasks")
+	iter0 := findIteration(loop, 0)
+	if iter0 == nil || iter0.FlattenTarget == nil {
+		t.Fatalf("iter0 missing or no flatten target")
+	}
+	inner := iter0.FlattenTarget
+	if inner.Type != NodeSubWorkflow || inner.ID != "implement-single-task" {
+		t.Fatalf("flatten target wrong: id=%q type=%v", inner.ID, inner.Type)
+	}
+	if !inner.SubLoaded {
+		t.Errorf("inner sub-workflow body should be loaded; err=%q", inner.ErrorMessage)
+	}
+	if len(inner.Children) == 0 {
+		t.Errorf("inner sub-workflow has no children (bug: 'No steps to display')")
 	}
 }
 

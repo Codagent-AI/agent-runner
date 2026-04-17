@@ -567,8 +567,14 @@ func applyIterationEnd(n *StepNode, data map[string]any) {
 }
 
 func applySubWorkflowStart(n *StepNode, data map[string]any) {
-	if s, ok := stringField(data, "workflow_path"); ok && s != "" {
-		n.StaticWorkflowPath = s
+	// Only set StaticWorkflowPath if ensureSubWorkflowLoaded hasn't already done
+	// so: events emit the executor-side (possibly relative) path, while the
+	// lazy-load resolves an absolute path. Keeping the absolute one is necessary
+	// for descendants' parentWorkflowDir walk to produce an absolute dir.
+	if n.StaticWorkflowPath == "" {
+		if s, ok := stringField(data, "workflow_path"); ok && s != "" {
+			n.StaticWorkflowPath = s
+		}
 	}
 	// The context snapshot carries the resolved (interpolated) params — these
 	// are shown in the sub-workflow header. Extract a plain string map.
