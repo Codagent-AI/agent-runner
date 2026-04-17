@@ -146,6 +146,10 @@ func run() int {
 	validateFlag := flag.Bool("validate", false, "Validate a workflow file without executing")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	vFlag := flag.Bool("v", false, "Print version and exit (shorthand)")
+	// Undocumented: internal escape hatch for running without the TUI when
+	// the live view is broken. Equivalent to AGENT_RUNNER_NO_TUI=1. Works
+	// for both starting and resuming a workflow.
+	headlessFlag := flag.Bool("headless", false, "")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: agent-runner [flags] [workflow [params...]]\n\n")
@@ -159,6 +163,10 @@ func run() int {
 	}
 
 	flag.Parse()
+
+	if *headlessFlag {
+		_ = os.Setenv("AGENT_RUNNER_NO_TUI", "1")
+	}
 
 	if *chdirFlag != "" {
 		if err := os.Chdir(*chdirFlag); err != nil {
