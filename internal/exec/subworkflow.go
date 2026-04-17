@@ -198,13 +198,13 @@ func recordChildProgress(childCtx *model.ExecutionContext, childStepID string, c
 		return
 	}
 
-	var nestedChild *model.SubWorkflowChildState
+	var nestedChild *model.NestedStepState
 	if childCtx.LastSubWorkflowChild != nil {
 		nestedChild = childCtx.LastSubWorkflowChild
 		childCtx.LastSubWorkflowChild = nil
 	}
 
-	entry := &model.SubWorkflowChildState{
+	entry := &model.NestedStepState{
 		StepID:            childStepID,
 		SessionIDs:        copyMap(childCtx.SessionIDs),
 		SessionProfiles:   copyMap(childCtx.SessionProfiles),

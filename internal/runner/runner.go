@@ -40,7 +40,7 @@ type Options struct {
 	SessionProfiles   map[string]string
 	CapturedVariables map[string]string
 	LastSessionStepID string
-	ChildState        *model.SubWorkflowChildState
+	ChildState        *model.NestedStepState
 	ProcessRunner     exec.ProcessRunner
 	GlobExpander      exec.GlobExpander
 	Log               exec.Logger
@@ -460,11 +460,9 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 	switch {
 	case ctx.LastSubWorkflowChild != nil && ctx.LastSubWorkflowChild.StepID == step.ID:
 		iteration = ctx.LastSubWorkflowChild.Iteration
-		if ctx.LastSubWorkflowChild.Child != nil {
-			child = toNestedStepState(ctx.LastSubWorkflowChild.Child)
-		}
+		child = ctx.LastSubWorkflowChild.Child
 	case ctx.LastSubWorkflowChild != nil:
-		child = toNestedStepState(ctx.LastSubWorkflowChild)
+		child = ctx.LastSubWorkflowChild
 	case loopResult != nil && loopResult.LastIteration >= 0:
 		// Fallback: a loop step finished without writing iteration metadata
 		// through the new channel (e.g. the mechanism was skipped because the
@@ -493,22 +491,6 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 		WorkflowHash: workflowHash,
 	}
 	_ = stateio.WriteState(&state, stateDir)
-}
-
-func toNestedStepState(child *model.SubWorkflowChildState) *model.NestedStepState {
-	if child == nil {
-		return nil
-	}
-	return &model.NestedStepState{
-		StepID:            child.StepID,
-		SessionIDs:        copyMap(child.SessionIDs),
-		SessionProfiles:   copyMap(child.SessionProfiles),
-		CapturedVariables: copyMap(child.CapturedVariables),
-		LastSessionStepID: child.LastSessionStepID,
-		Completed:         child.Completed,
-		Iteration:         child.Iteration,
-		Child:             toNestedStepState(child.Child),
-	}
 }
 
 func contextSnapshot(ctx *model.ExecutionContext) map[string]any {

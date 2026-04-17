@@ -207,7 +207,7 @@ func executeForEachLoop(
 // Iteration onto the correct entry in the state chain.
 func recordLoopIterationProgress(ctx *model.ExecutionContext, loopStepID string, iteration int, loopCompleted bool) {
 	iterCopy := iteration
-	ctx.LastSubWorkflowChild = &model.SubWorkflowChildState{
+	ctx.LastSubWorkflowChild = &model.NestedStepState{
 		StepID:            loopStepID,
 		SessionIDs:        copyMap(ctx.SessionIDs),
 		SessionProfiles:   copyMap(ctx.SessionProfiles),

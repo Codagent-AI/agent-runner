@@ -13,21 +13,6 @@ type NestingSegment struct {
 	SubWorkflowName string            `json:"subWorkflowName,omitempty"`
 }
 
-// SubWorkflowChildState tracks child step progress for state persistence.
-//
-// For a loop step, Iteration carries the next iteration index to execute on
-// resume (semantics match NestedStepState.Iteration).
-type SubWorkflowChildState struct {
-	StepID            string                 `json:"stepId"`
-	SessionIDs        map[string]string      `json:"sessionIds"`
-	SessionProfiles   map[string]string      `json:"sessionProfiles,omitempty"`
-	CapturedVariables map[string]string      `json:"capturedVariables"`
-	LastSessionStepID string                 `json:"lastSessionStepId,omitempty"`
-	Completed         bool                   `json:"completed,omitempty"`
-	Iteration         *int                   `json:"iteration,omitempty"`
-	Child             *SubWorkflowChildState `json:"child,omitempty"`
-}
-
 // ExecutionContext carries state through workflow execution.
 type ExecutionContext struct {
 	Params            map[string]string
@@ -59,8 +44,8 @@ type ExecutionContext struct {
 	// AuditLogger writes structured audit events (audit.EventLogger).
 	AuditLogger audit.EventLogger
 
-	LastSubWorkflowChild *SubWorkflowChildState
-	ResumeChildState     *SubWorkflowChildState
+	LastSubWorkflowChild *NestedStepState
+	ResumeChildState     *NestedStepState
 	FlushState           func()
 
 	// WorkflowResumed is true when the workflow was started via --resume.
