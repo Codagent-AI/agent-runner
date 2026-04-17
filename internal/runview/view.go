@@ -201,7 +201,7 @@ func (m *Model) renderStepRow(n *StepNode, selected bool) string {
 func (m *Model) statusGlyph(n *StepNode) string {
 	switch n.Status {
 	case StatusInProgress:
-		if m.active && !n.Aborted {
+		if (m.active || m.running) && !n.Aborted {
 			t := (math.Sin(m.pulsePhase) + 1) / 2
 			c := tuistyle.LerpColor("#4ade80", "#2d8f57", t)
 			return lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Render("●")

@@ -376,11 +376,12 @@ func runStep(step *model.Step, rs *runState) (exec.StepOutcome, *exec.LoopResult
 func finalizeRun(rs *runState, result WorkflowResult) {
 	runlock.Delete(rs.sessionDir)
 
-	if result == ResultSuccess {
+	switch result {
+	case ResultSuccess:
 		if err := markStateCompleted(rs.sessionDir); err != nil {
 			rs.log.Printf("agent-runner: warning: could not mark state completed: %v\n", err)
 		}
-	} else if result == ResultFailed {
+	case ResultFailed:
 		rs.log.Printf("\nto resume: agent-runner --resume %s\n", rs.sessionID)
 	}
 

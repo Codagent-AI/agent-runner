@@ -1,6 +1,9 @@
 package liverun
 
 import (
+	"fmt"
+	"os"
+
 	tea "github.com/charmbracelet/bubbletea"
 
 	iexec "github.com/codagent/agent-runner/internal/exec"
@@ -22,7 +25,9 @@ func NewCoordinator(program *tea.Program, sessionDir string) *Coordinator {
 // BeforeInteractive releases the terminal for an interactive agent step.
 // Call this as SuspendHook just before launching the interactive subprocess.
 func (c *Coordinator) BeforeInteractive() {
-	c.program.ReleaseTerminal()
+	if err := c.program.ReleaseTerminal(); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: release terminal failed: %v\n", err)
+	}
 	c.send(SuspendedMsg{})
 }
 
@@ -30,9 +35,7 @@ func (c *Coordinator) BeforeInteractive() {
 // Call this as ResumeHook immediately after the interactive subprocess exits.
 func (c *Coordinator) AfterInteractive() {
 	if err := c.program.RestoreTerminal(); err != nil {
-		// Best-effort: if restore fails, the user sees a garbled terminal.
-		// Nothing we can do here; the TUI will still respond to keystrokes.
-		_ = err
+		fmt.Fprintf(os.Stderr, "agent-runner: restore terminal failed: %v\n", err)
 	}
 	c.send(ResumedMsg{})
 }
@@ -50,8 +53,11 @@ func (c *Coordinator) NotifyStepChange(auditPrefix string) {
 
 // send delivers msg to the TUI program. p.Send is non-blocking (channel with
 // a large buffer), so this call is safe from a runner goroutine.
+// Silently drops the message if program is nil (used in tests).
 func (c *Coordinator) send(msg tea.Msg) {
-	c.program.Send(msg)
+	if c.program != nil {
+		c.program.Send(msg)
+	}
 }
 
 // TUIProcessRunner wraps a base exec.ProcessRunner and tees all subprocess

@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/codagent/agent-runner/internal/liverun"
 )
 
 func newTestModel(tree *Tree, entered Entered) *Model {
@@ -506,6 +508,169 @@ func TestModel_PageUpDown(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
 	if m.detailOffset >= saved {
 		t.Fatal("pgup should decrease detail offset")
+	}
+}
+
+// ---- Live-run tests ----
+
+func liveTree() *Tree {
+	root := &StepNode{
+		ID:     "live-workflow",
+		Type:   NodeRoot,
+		Status: StatusInProgress,
+	}
+	shell := &StepNode{
+		ID:            "build",
+		Type:          NodeShell,
+		Status:        StatusInProgress,
+		Parent:        root,
+		StaticCommand: "make",
+	}
+	root.Children = []*StepNode{shell}
+	return &Tree{Root: root}
+}
+
+func newLiveModel() *Model {
+	tree := liveTree()
+	return &Model{
+		tree:       tree,
+		entered:    FromLiveRun,
+		path:       []*StepNode{tree.Root},
+		loadedFull: make(map[*StepNode]bool),
+		termWidth:  120,
+		termHeight: 40,
+		running:    true,
+	}
+}
+
+func TestModel_LiveRun_OutputChunk(t *testing.T) {
+	m := newLiveModel()
+	shell := m.tree.Root.Children[0]
+
+	// Audit prefix for a top-level step "build" is "[build]"
+	m.Update(liverun.OutputChunkMsg{StepPrefix: "[build]", Stream: "stdout", Bytes: []byte("hello\n")})
+	m.Update(liverun.OutputChunkMsg{StepPrefix: "[build]", Stream: "stdout", Bytes: []byte("world\n")})
+
+	if !containsString(shell.Stdout, "hello") {
+		t.Errorf("stdout missing 'hello': %q", shell.Stdout)
+	}
+	if !containsString(shell.Stdout, "world") {
+		t.Errorf("stdout missing 'world': %q", shell.Stdout)
+	}
+}
+
+func TestModel_LiveRun_ExecDone_Success(t *testing.T) {
+	m := newLiveModel()
+	if !m.running {
+		t.Fatal("expected running=true before ExecDoneMsg")
+	}
+
+	m.Update(liverun.ExecDoneMsg{Result: "success"})
+	if m.running {
+		t.Error("expected running=false after ExecDoneMsg")
+	}
+	if m.liveResult != "success" {
+		t.Errorf("liveResult = %q, want 'success'", m.liveResult)
+	}
+
+	// Breadcrumb should show "completed"
+	bc := m.renderBreadcrumb()
+	if !containsString(bc, "completed") {
+		t.Errorf("breadcrumb missing 'completed': %q", bc)
+	}
+}
+
+func TestModel_LiveRun_ExecDone_Failed(t *testing.T) {
+	m := newLiveModel()
+	m.Update(liverun.ExecDoneMsg{Result: "failed"})
+
+	if m.running {
+		t.Error("expected running=false after ExecDoneMsg")
+	}
+	bc := m.renderBreadcrumb()
+	if !containsString(bc, "failed") {
+		t.Errorf("breadcrumb missing 'failed': %q", bc)
+	}
+}
+
+func TestModel_LiveRun_QuitConfirm_Shown(t *testing.T) {
+	m := newLiveModel()
+
+	// q while running should open confirmation modal
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	m = m2.(*Model)
+	if !m.quitConfirming {
+		t.Fatal("expected quitConfirming=true after q mid-run")
+	}
+	// View should render the confirmation text
+	v := m.View()
+	if !containsString(v, "still running") {
+		t.Errorf("quit confirm view missing 'still running': %q", v)
+	}
+}
+
+func TestModel_LiveRun_QuitConfirm_CtrlC(t *testing.T) {
+	m := newLiveModel()
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = m2.(*Model)
+	if !m.quitConfirming {
+		t.Fatal("expected quitConfirming=true after Ctrl+C mid-run")
+	}
+}
+
+func TestModel_LiveRun_QuitConfirm_EscAtTopLevel(t *testing.T) {
+	m := newLiveModel()
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = m2.(*Model)
+	if !m.quitConfirming {
+		t.Fatal("expected quitConfirming=true after Esc at top level mid-run")
+	}
+}
+
+func TestModel_LiveRun_QuitConfirm_EscDrillOut(t *testing.T) {
+	m := newLiveModel()
+	// Drill into loop to leave top level
+	loop := &StepNode{ID: "tasks", Type: NodeLoop, Status: StatusInProgress, Parent: m.tree.Root}
+	m.tree.Root.Children = append(m.tree.Root.Children, loop)
+	m.path = append(m.path, loop)
+
+	// Esc while drilled in should drill out, not confirm
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = m2.(*Model)
+	if m.quitConfirming {
+		t.Error("Esc while drilled in should drill out, not open quit confirm")
+	}
+	if len(m.path) != 1 {
+		t.Errorf("path len = %d, want 1 after drill-out", len(m.path))
+	}
+}
+
+func TestModel_LiveRun_QuitConfirm_Decline(t *testing.T) {
+	m := newLiveModel()
+	m.quitConfirming = true
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	m = m2.(*Model)
+	if m.quitConfirming {
+		t.Error("expected quitConfirming=false after n")
+	}
+	if !m.running {
+		t.Error("expected running=true after declining quit")
+	}
+}
+
+func TestModel_LiveRun_QuitAfterDone_NoConfirm(t *testing.T) {
+	m := newLiveModel()
+	m.running = false
+	m.liveResult = "success"
+
+	// q after done should exit immediately (emit ExitMsg) without confirmation
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if m.quitConfirming {
+		t.Error("quitConfirming should not be set after run is done")
+	}
+	if cmd == nil {
+		t.Error("expected an exit command after q on completed run")
 	}
 }
 

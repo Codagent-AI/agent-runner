@@ -45,18 +45,24 @@ func (w *chunkWriter) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 
-	// (Re)start the idle timer.
+	// Cancel any pending timer and schedule a fresh one. Stop() may return
+	// false if the old timer already fired — its callback will race to
+	// acquire w.mu, find either our appended buffer (and flush it, harmless)
+	// or an empty buffer (and no-op). Creating a new timer each call avoids
+	// the time.Timer.Reset race in AfterFunc timers.
 	if w.timer != nil {
-		w.timer.Reset(chunkIdleFlush)
-	} else {
-		w.timer = time.AfterFunc(chunkIdleFlush, func() {
-			w.mu.Lock()
-			defer w.mu.Unlock()
-			w.flushLocked()
-		})
+		w.timer.Stop()
 	}
+	w.timer = time.AfterFunc(chunkIdleFlush, w.onIdle)
 
 	return len(p), nil
+}
+
+// onIdle is the AfterFunc callback for the idle timer.
+func (w *chunkWriter) onIdle() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.flushLocked()
 }
 
 // Flush sends any remaining buffered bytes and stops the idle timer. Safe to
@@ -64,16 +70,16 @@ func (w *chunkWriter) Write(p []byte) (int, error) {
 func (w *chunkWriter) Flush() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.timer != nil {
+		w.timer.Stop()
+		w.timer = nil
+	}
 	w.flushLocked()
 }
 
 func (w *chunkWriter) flushLocked() {
 	if len(w.buf) == 0 {
 		return
-	}
-	if w.timer != nil {
-		w.timer.Stop()
-		w.timer = nil
 	}
 	data := make([]byte, len(w.buf))
 	copy(data, w.buf)

@@ -2,6 +2,7 @@ package liverun
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -31,18 +32,22 @@ func (r *tuiProcessRunner) SetPrefix(prefix string) {
 	r.stepPrefix = prefix
 }
 
-// sanitizePrefix converts an audit-log prefix into a safe filesystem name:
-// '/' → "__", ':' → "_", whitespace → "_".
+// sanitizePrefix converts an audit-log prefix into a safe filesystem name.
+// Uses an allowlist: any character outside [A-Za-z0-9._-] is replaced with
+// '_'. This blocks path separators on every platform (including '\' on
+// Windows) and neutralizes '..' traversal by mapping '.' runs unchanged but
+// rejecting the substring at the containment check in openOutputFile.
 func sanitizePrefix(prefix string) string {
 	var b strings.Builder
 	for _, ch := range prefix {
 		switch {
-		case ch == '/':
-			b.WriteString("__")
-		case ch == ':' || ch == ' ' || ch == '\t':
-			b.WriteByte('_')
-		default:
+		case ch >= 'A' && ch <= 'Z',
+			ch >= 'a' && ch <= 'z',
+			ch >= '0' && ch <= '9',
+			ch == '.' || ch == '-':
 			b.WriteRune(ch)
+		default:
+			b.WriteByte('_')
 		}
 	}
 	return b.String()
@@ -59,9 +64,19 @@ func (r *tuiProcessRunner) openOutputFile(ext string) *os.File {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil
 	}
-	name := filepath.Join(dir, sanitizePrefix(r.stepPrefix)+"."+ext)
-	// #nosec G304 — prefix is sanitized; no path traversal possible
-	f, err := os.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
+	base := sanitizePrefix(r.stepPrefix)
+	// Defense in depth: reject any residual traversal tokens even after
+	// allowlist sanitization, and verify the resolved path stays under dir.
+	if base == "" || base == "." || base == ".." || strings.Contains(base, "..") {
+		return nil
+	}
+	name := filepath.Clean(filepath.Join(dir, base+"."+ext))
+	cleanDir := filepath.Clean(dir)
+	if !strings.HasPrefix(name, cleanDir+string(filepath.Separator)) {
+		return nil
+	}
+	// #nosec G304 — name is allowlist-sanitized and containment-checked above.
+	f, err := os.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return nil
 	}
@@ -75,14 +90,13 @@ func (r *tuiProcessRunner) openOutputFile(ext string) *os.File {
 //	       outputFile (raw bytes),
 //	       *bytes.Buffer (for ProcessResult.Stdout/Stderr),
 //	     )
-func (r *tuiProcessRunner) compositeWriter(stream, ext string, buf *bytes.Buffer) (io.Writer, func()) {
+func (r *tuiProcessRunner) compositeWriter(stream, ext string, buf *bytes.Buffer) (w io.Writer, cleanup func()) {
 	chunk := newChunkWriter(r.coord, r.stepPrefix, stream)
 	stripped := NewANSIStripper(chunk)
 
 	f := r.openOutputFile(ext)
 
-	var writers []io.Writer
-	writers = append(writers, stripped)
+	writers := []io.Writer{stripped}
 	if f != nil {
 		writers = append(writers, f)
 	}
@@ -90,14 +104,14 @@ func (r *tuiProcessRunner) compositeWriter(stream, ext string, buf *bytes.Buffer
 		writers = append(writers, buf)
 	}
 
-	cleanup := func() {
+	w = io.MultiWriter(writers...)
+	cleanup = func() {
 		chunk.Flush()
 		if f != nil {
 			_ = f.Close()
 		}
 	}
-
-	return io.MultiWriter(writers...), cleanup
+	return w, cleanup
 }
 
 // RunShell runs a shell command, streaming stdout and stderr to the TUI and
@@ -123,9 +137,9 @@ func (r *tuiProcessRunner) RunShell(cmd string, captureStdout bool, workdir stri
 	err := c.Run()
 	exitCode := 0
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitCode()
-			err = nil
 		} else {
 			return iexec.ProcessResult{}, err
 		}
@@ -166,9 +180,9 @@ func (r *tuiProcessRunner) RunAgent(args []string, captureStdout bool, workdir s
 	err := c.Run()
 	exitCode := 0
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitCode()
-			err = nil
 		} else {
 			return iexec.ProcessResult{}, err
 		}

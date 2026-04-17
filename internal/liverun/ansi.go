@@ -46,10 +46,8 @@ func (s *ANSIStripper) Write(p []byte) (int, error) {
 			if b == 0x1B { // ESC
 				flush(i)
 				s.state = ansiEscape
-			} else {
-				if start < 0 {
-					start = i
-				}
+			} else if start < 0 {
+				start = i
 			}
 
 		case ansiEscape:
