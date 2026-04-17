@@ -581,9 +581,9 @@ func (l *defaultLogger) Errorf(format string, args ...any) { fmt.Fprintf(os.Stde
 // workflow status instead of stdout.
 type DiscardLogger struct{}
 
-func (l *DiscardLogger) Println(_ ...any)               {}
-func (l *DiscardLogger) Printf(_ string, _ ...any)      {}
-func (l *DiscardLogger) Errorf(_ string, _ ...any)      {}
+func (l *DiscardLogger) Println(_ ...any)          {}
+func (l *DiscardLogger) Printf(_ string, _ ...any) {}
+func (l *DiscardLogger) Errorf(_ string, _ ...any) {}
 
 // writeMetaJSON writes a meta.json file to projectDir if it does not already exist.
 // Non-fatal: errors are silently ignored.

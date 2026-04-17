@@ -164,7 +164,6 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
-
 	t.Run("defaults to claude adapter", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew}

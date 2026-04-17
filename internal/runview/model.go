@@ -66,8 +66,8 @@ type Model struct {
 	startTime   time.Time
 
 	// Live-run fields (FromLiveRun mode only).
-	running        bool // true until ExecDoneMsg arrives
-	quitConfirming bool // quit-confirmation modal is visible
+	running        bool   // true until ExecDoneMsg arrives
+	quitConfirming bool   // quit-confirmation modal is visible
 	liveResult     string // set on ExecDoneMsg ("success"/"failed"/"stopped")
 }
 
@@ -200,49 +200,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// ---- Keyboard / mouse ----
 
 	case tea.KeyMsg:
-		if m.showLegend {
-			switch msg.String() {
-			case "?", "esc":
-				m.showLegend = false
-			}
-			return m, nil
-		}
-
-		// Quit-confirmation modal.
-		if m.quitConfirming {
-			switch msg.String() {
-			case "y", "Y":
-				return m, tea.Quit
-			case "n", "N", "esc":
-				m.quitConfirming = false
-			}
-			return m, nil
-		}
-
-		switch msg.String() {
-		case "q", "ctrl+c":
-			if m.running {
-				m.quitConfirming = true
-				return m, nil
-			}
-			return m, emitExit
-		case "?":
-			m.showLegend = true
-		case "esc":
-			return m.handleEsc()
-		case "enter":
-			return m.handleEnter()
-		case "up", "k":
-			m.moveCursor(-1)
-		case "down", "j":
-			m.moveCursor(1)
-		case "pgup":
-			m.scrollDetail(-m.detailPageSize())
-		case "pgdown":
-			m.scrollDetail(m.detailPageSize())
-		case "g":
-			m.handleLoadFull()
-		}
+		return m.handleKey(msg)
 
 	case tea.MouseMsg:
 		switch msg.Button {
@@ -263,6 +221,55 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pulsePhase += (50.0 / 1000.0) * 2 * math.Pi
 		}
 		return m, tuistyle.DoPulse()
+	}
+	return m, nil
+}
+
+// handleKey processes a key message. Extracted from Update to keep the main
+// message switch within funlen limits.
+func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.showLegend {
+		switch msg.String() {
+		case "?", "esc":
+			m.showLegend = false
+		}
+		return m, nil
+	}
+
+	// Quit-confirmation modal.
+	if m.quitConfirming {
+		switch msg.String() {
+		case "y", "Y":
+			return m, tea.Quit
+		case "n", "N", "esc":
+			m.quitConfirming = false
+		}
+		return m, nil
+	}
+
+	switch msg.String() {
+	case "q", "ctrl+c":
+		if m.running {
+			m.quitConfirming = true
+			return m, nil
+		}
+		return m, emitExit
+	case "?":
+		m.showLegend = true
+	case "esc":
+		return m.handleEsc()
+	case "enter":
+		return m.handleEnter()
+	case "up", "k":
+		m.moveCursor(-1)
+	case "down", "j":
+		m.moveCursor(1)
+	case "pgup":
+		m.scrollDetail(-m.detailPageSize())
+	case "pgdown":
+		m.scrollDetail(m.detailPageSize())
+	case "g":
+		m.handleLoadFull()
 	}
 	return m, nil
 }

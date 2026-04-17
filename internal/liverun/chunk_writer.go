@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	chunkMaxBytes  = 4 * 1024        // flush when buffer hits 4 KB
+	chunkMaxBytes  = 4 * 1024 // flush when buffer hits 4 KB
 	chunkIdleFlush = 50 * time.Millisecond
 )
 
