@@ -1,4 +1,4 @@
-package tui
+package listview
 
 import (
 	"fmt"
@@ -63,6 +63,7 @@ type worktreeTabState struct {
 	listCursor   int
 	listOffset   int
 	worktrees    []WorktreeEntry
+	repoName     string
 	selectedDir  string
 }
 
@@ -136,7 +137,7 @@ func (m *Model) loadData() {
 	}
 	m.currentRuns = currentRuns
 
-	m.worktreeTab.worktrees = ListWorktrees(m.projectsRoot)
+	m.worktreeTab.repoName, m.worktreeTab.worktrees = ListWorktrees(m.projectsRoot)
 	allDirs, allErrs := listAllDirs(m.projectsRoot)
 	m.allTab.dirs = allDirs
 	errs = append(errs, allErrs...)

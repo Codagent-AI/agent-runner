@@ -226,6 +226,19 @@ func TestApplyEvent_IterationStart_CreatesChildWithBinding(t *testing.T) {
 	if len(loop.LoopMatches) != 3 {
 		t.Errorf("loop matches: want 3, got %d", len(loop.LoopMatches))
 	}
+	// step_start pre-creates placeholder iterations for every known match so
+	// pending iterations are visible in the step list from the start.
+	if len(loop.Children) != 3 {
+		t.Fatalf("want 3 pre-created iterations after step_start, got %d", len(loop.Children))
+	}
+	for i, want := range []string{"tasks/01.md", "tasks/02.md", "tasks/03.md"} {
+		if loop.Children[i].BindingValue != want {
+			t.Errorf("iter %d binding: got %q, want %q", i, loop.Children[i].BindingValue, want)
+		}
+		if loop.Children[i].Status != StatusPending {
+			t.Errorf("iter %d status: want pending, got %v", i, loop.Children[i].Status)
+		}
+	}
 
 	tree.ApplyEvent(RawEvent{
 		Prefix: "[implement-tasks:0]",
@@ -235,8 +248,8 @@ func TestApplyEvent_IterationStart_CreatesChildWithBinding(t *testing.T) {
 			"loop_var":  map[string]any{"task_file": "tasks/01.md"},
 		},
 	})
-	if len(loop.Children) != 1 {
-		t.Fatalf("want 1 iteration child, got %d", len(loop.Children))
+	if len(loop.Children) != 3 {
+		t.Fatalf("iter count should stay 3 after iteration_start, got %d", len(loop.Children))
 	}
 	iter0 := loop.Children[0]
 	if iter0.IterationIndex != 0 {

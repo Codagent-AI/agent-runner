@@ -50,18 +50,25 @@ type StepNode struct {
 	Body []*StepNode
 
 	// Static fields (populated from workflow YAML).
-	StaticCommand      string
-	StaticPrompt       string
-	StaticAgent        string
-	StaticMode         model.StepMode
-	StaticCLI          string
-	StaticModel        string
-	StaticWorkflow     string // raw "workflow:" field value, e.g. "../implement-task.yaml"
-	StaticWorkflowPath string // resolved absolute path (set at lazy-load time for sub-workflows)
-	StaticLoopMax      *int
-	StaticLoopOver     string
-	StaticLoopAs       string
-	StaticParams       map[string]string // raw template strings from workflow YAML
+	StaticCommand            string
+	StaticPrompt             string
+	StaticAgent              string
+	StaticMode               model.StepMode
+	StaticCLI                string
+	StaticModel              string
+	StaticSession            model.SessionStrategy
+	StaticWorkflow           string // raw "workflow:" field value, e.g. "../implement-task.yaml"
+	StaticWorkflowPath       string // resolved absolute path (set at lazy-load time for sub-workflows)
+	StaticLoopMax            *int
+	StaticLoopOver           string
+	StaticLoopAs             string
+	StaticLoopRequireMatches *bool
+	StaticParams             map[string]string // raw template strings from workflow YAML
+	StaticSkipIf             string
+	StaticBreakIf            string
+	StaticWorkdir            string
+	StaticContinueOnFailure  bool
+	StaticCaptureStderr      bool
 
 	// Runtime fields (populated from audit events).
 	InterpolatedCommand string
@@ -141,9 +148,15 @@ func BuildTree(wf *model.Workflow, workflowPath string) *Tree {
 // sub-workflow bodies (the latter is left empty for lazy loading).
 func buildStepNode(s *model.Step, parent *StepNode) *StepNode {
 	n := &StepNode{
-		ID:     s.ID,
-		Parent: parent,
-		Status: StatusPending,
+		ID:                      s.ID,
+		Parent:                  parent,
+		Status:                  StatusPending,
+		StaticSession:           s.Session,
+		StaticSkipIf:            s.SkipIf,
+		StaticBreakIf:           s.BreakIf,
+		StaticWorkdir:           s.Workdir,
+		StaticContinueOnFailure: s.ContinueOnFailure,
+		StaticCaptureStderr:     s.CaptureStderr,
 	}
 	switch {
 	case s.Command != "":
@@ -158,6 +171,10 @@ func buildStepNode(s *model.Step, parent *StepNode) *StepNode {
 		}
 		n.StaticLoopOver = s.Loop.Over
 		n.StaticLoopAs = s.Loop.As
+		if s.Loop.RequireMatches != nil {
+			v := *s.Loop.RequireMatches
+			n.StaticLoopRequireMatches = &v
+		}
 		for i := range s.Steps {
 			n.Body = append(n.Body, buildStepNode(&s.Steps[i], n))
 		}
@@ -279,27 +296,37 @@ func ensureIteration(loop *StepNode, index int) *StepNode {
 // children from a loop's Body). Runtime fields start empty.
 func cloneTemplate(src, parent *StepNode) *StepNode {
 	dst := &StepNode{
-		ID:                 src.ID,
-		Type:               src.Type,
-		Status:             StatusPending,
-		Parent:             parent,
-		StaticCommand:      src.StaticCommand,
-		StaticPrompt:       src.StaticPrompt,
-		StaticAgent:        src.StaticAgent,
-		StaticMode:         src.StaticMode,
-		StaticCLI:          src.StaticCLI,
-		StaticModel:        src.StaticModel,
-		StaticWorkflow:     src.StaticWorkflow,
-		StaticWorkflowPath: src.StaticWorkflowPath,
-		StaticLoopOver:     src.StaticLoopOver,
-		StaticLoopAs:       src.StaticLoopAs,
-		StaticParams:       copyParams(src.StaticParams),
-		CaptureName:        src.CaptureName,
-		AutoFlatten:        src.AutoFlatten,
+		ID:                      src.ID,
+		Type:                    src.Type,
+		Status:                  StatusPending,
+		Parent:                  parent,
+		StaticCommand:           src.StaticCommand,
+		StaticPrompt:            src.StaticPrompt,
+		StaticAgent:             src.StaticAgent,
+		StaticMode:              src.StaticMode,
+		StaticCLI:               src.StaticCLI,
+		StaticModel:             src.StaticModel,
+		StaticSession:           src.StaticSession,
+		StaticWorkflow:          src.StaticWorkflow,
+		StaticWorkflowPath:      src.StaticWorkflowPath,
+		StaticLoopOver:          src.StaticLoopOver,
+		StaticLoopAs:            src.StaticLoopAs,
+		StaticParams:            copyParams(src.StaticParams),
+		StaticSkipIf:            src.StaticSkipIf,
+		StaticBreakIf:           src.StaticBreakIf,
+		StaticWorkdir:           src.StaticWorkdir,
+		StaticContinueOnFailure: src.StaticContinueOnFailure,
+		StaticCaptureStderr:     src.StaticCaptureStderr,
+		CaptureName:             src.CaptureName,
+		AutoFlatten:             src.AutoFlatten,
 	}
 	if src.StaticLoopMax != nil {
 		v := *src.StaticLoopMax
 		dst.StaticLoopMax = &v
+	}
+	if src.StaticLoopRequireMatches != nil {
+		v := *src.StaticLoopRequireMatches
+		dst.StaticLoopRequireMatches = &v
 	}
 	for _, c := range src.Body {
 		dst.Body = append(dst.Body, cloneTemplate(c, dst))

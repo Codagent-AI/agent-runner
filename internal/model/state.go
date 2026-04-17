@@ -63,6 +63,10 @@ type RunState struct {
 	CurrentStep  CurrentStep       `json:"currentStep"`
 	Params       map[string]string `json:"params"`
 	WorkflowHash string            `json:"workflowHash"`
+	// Completed is set to true when the workflow has finished successfully.
+	// The state file is preserved (not deleted) so the TUI can still display
+	// the run's metadata after completion.
+	Completed bool `json:"completed,omitempty"`
 }
 
 // ResolveResumeStepResult holds the outcome of resolving which step to resume from.

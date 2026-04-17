@@ -1,4 +1,4 @@
-package tui
+package listview
 
 import (
 	"math"
@@ -9,6 +9,7 @@ import (
 	"github.com/mattn/go-runewidth"
 
 	"github.com/codagent/agent-runner/internal/runs"
+	"github.com/codagent/agent-runner/internal/tuistyle"
 )
 
 func (m *Model) View() string {
@@ -23,20 +24,57 @@ func (m *Model) View() string {
 	b.WriteString("\n\n")
 	b.WriteString(m.renderTabs())
 	b.WriteString("\n\n")
+	b.WriteString(tuistyle.RenderRule(m.termWidth))
+	b.WriteString("\n\n")
 	b.WriteString(m.renderSubheader())
 	b.WriteString("\n\n")
-	b.WriteString(m.renderBody())
 
+	body := m.renderBody()
 	if m.loadErr != "" {
-		b.WriteString("\n")
-		b.WriteString("  " + dimStyle.Render("Error loading runs: "+sanitize(m.loadErr)))
+		body += "\n  " + dimStyle.Render("Error loading runs: "+sanitize(m.loadErr))
+	}
+	b.WriteString(body)
+
+	target := m.bodyHeight()
+	if target != 1<<30 {
+		bodyLines := countLines(body)
+		for i := bodyLines; i < target; i++ {
+			b.WriteString("\n")
+		}
 	}
 
-	b.WriteString("\n\n\n\n")
+	b.WriteString("\n")
+	b.WriteString(tuistyle.RenderRule(m.termWidth))
+	b.WriteString("\n")
 	b.WriteString(m.renderHelp())
 	b.WriteString("\n")
 
 	return b.String()
+}
+
+// countLines returns the number of rendered rows in s. Each '\n' closes a
+// row; a trailing unterminated line counts as one more row.
+func countLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	n := strings.Count(s, "\n")
+	if !strings.HasSuffix(s, "\n") {
+		n++
+	}
+	return n
+}
+
+// bodyHeight returns the vertical space reserved for the body region —
+// everything between the subheader blank and the bottom divider. Chrome
+// consists of: leading blank + header + blank + tabs + blank + rule +
+// blank + subheader + blank (above) and blank + rule + blank + help +
+// trailing blank (below) = 14 rows.
+func (m *Model) bodyHeight() int {
+	if m.termHeight == 0 {
+		return 1 << 30
+	}
+	return max(3, m.termHeight-14)
 }
 
 func (m *Model) renderTabs() string {
@@ -67,7 +105,13 @@ func (m *Model) renderSubheader() string {
 		if m.worktreeTab.subView == subViewRunList {
 			wt := m.selectedWorktree()
 			if wt != nil {
-				return "  " + dimStyle.Render("← Worktrees") + dimStyle.Render("  /  ") + normalStyle.Render(sanitize(wt.Name))
+				sep := tuistyle.AccentStyle.Render(tuistyle.BreadcrumbSeparator)
+				crumb := "  " + labelStyle.Render("← ")
+				if m.worktreeTab.repoName != "" {
+					crumb += labelStyle.Render(sanitize(m.worktreeTab.repoName)) + sep
+				}
+				crumb += labelStyle.Render("Worktrees") + sep + labelStyle.Render(sanitize(wt.Name))
+				return crumb
 			}
 		}
 		cwd, _ := os.Getwd()
@@ -76,7 +120,7 @@ func (m *Model) renderSubheader() string {
 		if m.allTab.subView == subViewRunList {
 			d := m.selectedAllDir()
 			if d != nil {
-				return "  " + dimStyle.Render("← All") + dimStyle.Render("  /  ") + normalStyle.Render(sanitize(shortenPath(d.Path)))
+				return "  " + labelStyle.Render("← All") + tuistyle.AccentStyle.Render(tuistyle.BreadcrumbSeparator) + labelStyle.Render(sanitize(shortenPath(d.Path)))
 			}
 		}
 		return "  " + pathStyle.Render("All project directories")
@@ -118,17 +162,17 @@ func (m *Model) renderBody() string {
 // Returns a very large value before the first WindowSizeMsg arrives so that
 // nothing is hidden on the initial render.
 func (m *Model) listMaxRows(hasHeader bool) int {
-	if m.termHeight == 0 {
-		return 1 << 30
+	rows := m.bodyHeight()
+	if rows == 1<<30 {
+		return rows
 	}
-	chrome := 12
 	if m.loadErr != "" {
-		chrome += 2
+		rows -= 2
 	}
 	if hasHeader {
-		chrome++
+		rows--
 	}
-	return max(3, m.termHeight-chrome)
+	return max(3, rows)
 }
 
 func (m *Model) renderEmpty() string {
@@ -145,25 +189,21 @@ const (
 )
 
 type runListCols struct {
-	hasName                        bool
-	wfMax, stepMax, nameMax, tsMax int
+	nameMax, wfMax, stepMax, tsMax int
 }
 
 func measureRunListCols(runList []runs.RunInfo) runListCols {
 	c := runListCols{
+		nameMax: runewidth.StringWidth(hdrChange),
 		wfMax:   runewidth.StringWidth(hdrWorkflow),
 		stepMax: runewidth.StringWidth(hdrStep),
 		tsMax:   runewidth.StringWidth(hdrUpdated),
 	}
 	for i := range runList {
-		if runList[i].ChangeName != "" {
-			c.hasName = true
-			c.nameMax = runewidth.StringWidth(hdrChange)
-			break
-		}
-	}
-	for i := range runList {
 		r := &runList[i]
+		if w := runewidth.StringWidth(sanitize(r.ChangeName)); w > c.nameMax {
+			c.nameMax = w
+		}
 		if w := runewidth.StringWidth(sanitize(r.WorkflowName)); w > c.wfMax {
 			c.wfMax = w
 		}
@@ -174,11 +214,6 @@ func measureRunListCols(runList []runs.RunInfo) runListCols {
 		if w := runewidth.StringWidth(sanitize(step)); w > c.stepMax {
 			c.stepMax = w
 		}
-		if c.hasName {
-			if w := runewidth.StringWidth(sanitize(r.ChangeName)); w > c.nameMax {
-				c.nameMax = w
-			}
-		}
 		if w := runewidth.StringWidth(formatTime(r.LastUpdate)); w > c.tsMax {
 			c.tsMax = w
 		}
@@ -186,39 +221,35 @@ func measureRunListCols(runList []runs.RunInfo) runListCols {
 	return c
 }
 
-// fitTo adjusts c.wfMax, c.stepMax, c.nameMax to fit in avail columns,
+// fitTo adjusts c.nameMax, c.wfMax, c.stepMax to fit in avail columns,
 // truncating workflow first, then change name, then step.
 func (c *runListCols) fitTo(avail int) {
-	if c.wfMax+c.stepMax+c.nameMax <= avail {
+	if c.nameMax+c.wfMax+c.stepMax <= avail {
 		return
 	}
-	newWf := max(avail-c.stepMax-c.nameMax, 8)
+	newWf := max(avail-c.nameMax-c.stepMax, 8)
 	if newWf < c.wfMax {
 		c.wfMax = newWf
 	}
-	if c.wfMax+c.stepMax+c.nameMax > avail && c.hasName {
+	if c.nameMax+c.wfMax+c.stepMax > avail {
 		newName := max(avail-c.wfMax-c.stepMax, 8)
 		if newName < c.nameMax {
 			c.nameMax = newName
 		}
 	}
-	if c.wfMax+c.stepMax+c.nameMax > avail {
-		c.stepMax = max(avail-c.wfMax-c.nameMax, 8)
+	if c.nameMax+c.wfMax+c.stepMax > avail {
+		c.stepMax = max(avail-c.nameMax-c.wfMax, 8)
 	}
 }
 
 func (m *Model) renderRunList(runList []runs.RunInfo, cursor int, offset *int) string {
 	c := measureRunListCols(runList)
 
-	// Layout overhead: "   " prefix(3) + "●" status(1) + "  " sep(2) + "  " sep(2) + "  " sep(2) = 10,
-	// plus "  " sep(2) before the change-name column when present.
-	overhead := 10
-	if c.hasName {
-		overhead += 2
-	}
+	// Layout overhead: "   " prefix(3) + "●" status(1) + four "  " separators(8) = 12.
+	const overhead = 12
 	avail := m.termWidth - overhead - c.tsMax
 	if m.termWidth == 0 {
-		avail = c.wfMax + c.stepMax + c.nameMax
+		avail = c.nameMax + c.wfMax + c.stepMax
 	}
 	c.fitTo(max(avail, 16))
 
@@ -237,12 +268,10 @@ func (m *Model) renderRunList(runList []runs.RunInfo, cursor int, offset *int) s
 func renderRunListHeader(c runListCols) string {
 	// Matches data-row prefix of "   " + status(1) + "  " = 6 cells.
 	h := "      " +
-		dimStyle.Render(fitCell(hdrWorkflow, c.wfMax)) + "  " +
-		dimStyle.Render(fitCell(hdrStep, c.stepMax))
-	if c.hasName {
-		h += "  " + dimStyle.Render(fitCell(hdrChange, c.nameMax))
-	}
-	return h + "  " + dimStyle.Render(hdrUpdated) + "\n"
+		columnHeader.Render(fitCell(hdrChange, c.nameMax)) + "  " +
+		columnHeader.Render(fitCell(hdrWorkflow, c.wfMax)) + "  " +
+		columnHeader.Render(fitCell(hdrStep, c.stepMax))
+	return h + "  " + columnHeader.Render(hdrUpdated) + "\n"
 }
 
 func (m *Model) renderRunListRow(r *runs.RunInfo, isSel bool, c runListCols) string {
@@ -262,11 +291,9 @@ func (m *Model) renderRunListRow(r *runs.RunInfo, isSel bool, c runListCols) str
 	}
 
 	line := m.renderStatusIcon(r.Status) + "  " +
+		style.Render(fitCell(sanitize(r.ChangeName), c.nameMax)) + "  " +
 		style.Render(fitCell(sanitize(r.WorkflowName), c.wfMax)) + "  " +
 		style.Render(fitCell(sanitize(step), c.stepMax))
-	if c.hasName {
-		line += "  " + style.Render(fitCell(sanitize(r.ChangeName), c.nameMax))
-	}
 	line += "  " + dimStyle.Render(formatTime(r.LastUpdate))
 	return prefix + line + "\n"
 }

@@ -19,11 +19,11 @@ import (
 	"github.com/codagent/agent-runner/internal/engine"
 	_ "github.com/codagent/agent-runner/internal/engine/openspec"
 	iexec "github.com/codagent/agent-runner/internal/exec"
+	"github.com/codagent/agent-runner/internal/listview"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/runview"
-	"github.com/codagent/agent-runner/internal/tui"
 )
 
 // version is set at build time via -ldflags "-X main.version=...".
@@ -258,7 +258,7 @@ func handleInspect(runID string) int {
 }
 
 func handleList() int {
-	m, err := tui.New()
+	m, err := listview.New()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
@@ -325,9 +325,12 @@ const (
 )
 
 type switcher struct {
-	list    *tui.Model
+	list    *listview.Model
 	runview *runview.Model
 	mode    switcherMode
+
+	termWidth  int
+	termHeight int
 
 	resumeSessionID string
 	viewErr         string
@@ -344,12 +347,19 @@ func (s *switcher) Init() tea.Cmd {
 
 func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		// Remember the last size so a newly-constructed sub-Model (runview
+		// created on ViewRunMsg) can be sized immediately instead of waiting
+		// for the next physical resize event.
+		s.termWidth = msg.Width
+		s.termHeight = msg.Height
+
 	case tea.KeyMsg:
 		if msg.String() == "q" || msg.String() == "ctrl+c" {
 			return s, tea.Quit
 		}
 
-	case tui.ViewRunMsg:
+	case listview.ViewRunMsg:
 		rv, err := runview.New(msg.SessionDir, msg.ProjectDir, runview.FromList)
 		if err != nil {
 			s.viewErr = fmt.Sprintf("cannot open run: %v", err)
@@ -358,7 +368,14 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.viewErr = ""
 		s.runview = rv
 		s.mode = showingRunView
-		return s, rv.Init()
+		cmds := []tea.Cmd{rv.Init()}
+		if s.termWidth > 0 && s.termHeight > 0 {
+			w, h := s.termWidth, s.termHeight
+			cmds = append(cmds, func() tea.Msg {
+				return tea.WindowSizeMsg{Width: w, Height: h}
+			})
+		}
+		return s, tea.Batch(cmds...)
 
 	case runview.BackMsg:
 		s.mode = showingList
@@ -377,7 +394,7 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case showingList:
 		if s.list != nil {
 			newModel, cmd := s.list.Update(msg)
-			s.list = newModel.(*tui.Model)
+			s.list = newModel.(*listview.Model)
 			return s, cmd
 		}
 	case showingRunView:

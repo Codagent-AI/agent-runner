@@ -1,4 +1,4 @@
-package tui
+package listview
 
 import (
 	"os/exec"
@@ -20,17 +20,20 @@ type WorktreeEntry struct {
 }
 
 // ListWorktrees discovers git worktrees and loads their runs.
-// Returns nil if not in a git repo or git is not available.
-func ListWorktrees(projectsRoot string) []WorktreeEntry {
+// Returns ("", nil) if not in a git repo or git is not available.
+// The returned repo name is the basename of the main worktree (git lists it first).
+func ListWorktrees(projectsRoot string) (string, []WorktreeEntry) {
 	out, err := exec.Command("git", "worktree", "list", "--porcelain").Output() // #nosec G204 -- fixed git command
 	if err != nil {
-		return nil
+		return "", nil
 	}
 
 	paths := parseWorktreePaths(string(out))
 	if len(paths) <= 1 {
-		return nil
+		return "", nil
 	}
+
+	repoName := filepath.Base(paths[0])
 
 	var entries []WorktreeEntry
 	for _, p := range paths {
@@ -53,7 +56,7 @@ func ListWorktrees(projectsRoot string) []WorktreeEntry {
 		return entries[i].Name < entries[j].Name
 	})
 
-	return entries
+	return repoName, entries
 }
 
 // mostRecentRun returns the LastUpdate of the first run (runs are sorted

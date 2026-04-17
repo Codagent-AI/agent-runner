@@ -8,6 +8,7 @@ import (
 
 	"github.com/codagent/agent-runner/internal/exec"
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/stateio"
 )
 
 type mockRunner struct {
@@ -324,7 +325,7 @@ func TestRunWorkflow(t *testing.T) {
 		}
 	})
 
-	t.Run("deletes state.json on success", func(t *testing.T) {
+	t.Run("marks state.json completed on success", func(t *testing.T) {
 		sessionDir := t.TempDir()
 		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}}}
 		w := model.Workflow{
@@ -343,8 +344,12 @@ func TestRunWorkflow(t *testing.T) {
 		}
 
 		stateFile := filepath.Join(sessionDir, "state.json")
-		if _, err := os.Stat(stateFile); !os.IsNotExist(err) {
-			t.Fatal("expected state.json to be deleted on success")
+		state, err := stateio.ReadState(stateFile)
+		if err != nil {
+			t.Fatalf("expected state.json to be preserved on success: %v", err)
+		}
+		if !state.Completed {
+			t.Fatal("expected state.Completed to be true after successful run")
 		}
 	})
 
