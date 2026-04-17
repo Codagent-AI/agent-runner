@@ -26,10 +26,12 @@ type tuiProcessRunner struct {
 	stepPrefix string // set via SetPrefix before each step
 }
 
-// SetPrefix updates the step prefix that labels output chunks and output files.
-// Called by exec/shell.go and exec/agent.go via a type assertion before each run.
+// SetPrefix updates the step prefix that labels output chunks and output files,
+// and notifies the TUI that a new step has become active. Called by exec/shell.go
+// and exec/agent.go via a type assertion before each run.
 func (r *tuiProcessRunner) SetPrefix(prefix string) {
 	r.stepPrefix = prefix
+	r.coord.NotifyStepChange(prefix)
 }
 
 // sanitizePrefix converts an audit-log prefix into a safe filesystem name.

@@ -301,8 +301,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // applyOutputChunk finds the step matching msg.StepPrefix and appends msg.Bytes
-// to its in-memory output buffer. The 2000-line / 256 KB tail-render threshold
-// defined in output.go governs what the detail pane shows.
+// to its in-memory output buffer, capping the stored string at the same
+// 2000-line / 256 KB limit used by the render path so that chatty steps do not
+// grow without bound in memory.
 func (m *Model) applyOutputChunk(msg liverun.OutputChunkMsg) {
 	node := m.tree.FindByPrefix(msg.StepPrefix)
 	if node == nil {
@@ -310,10 +311,36 @@ func (m *Model) applyOutputChunk(msg liverun.OutputChunkMsg) {
 	}
 	switch msg.Stream {
 	case "stdout":
-		node.Stdout += string(msg.Bytes)
+		node.Stdout = tailOutputCap(node.Stdout + string(msg.Bytes))
 	case "stderr":
-		node.Stderr += string(msg.Bytes)
+		node.Stderr = tailOutputCap(node.Stderr + string(msg.Bytes))
 	}
+}
+
+// tailOutputCap enforces the maxOutputLines / maxOutputBytes cap on a string,
+// keeping only the tail. This matches the limits in output.go so memory stays
+// bounded even for long-running chatty steps.
+func tailOutputCap(s string) string {
+	if len(s) <= maxOutputBytes && strings.Count(s, "\n") < maxOutputLines {
+		return s
+	}
+	// Byte cap: keep last maxOutputBytes, then drop any partial leading line.
+	if len(s) > maxOutputBytes {
+		s = s[len(s)-maxOutputBytes:]
+		if idx := strings.IndexByte(s, '\n'); idx >= 0 {
+			s = s[idx+1:]
+		}
+	}
+	// After byte-capping the string is much shorter; skip the expensive
+	// SplitAfter/Join allocation path when the line count is already within limit.
+	if strings.Count(s, "\n") <= maxOutputLines {
+		return s
+	}
+	lines := strings.SplitAfter(s, "\n")
+	if len(lines) > maxOutputLines {
+		lines = lines[len(lines)-maxOutputLines:]
+	}
+	return strings.Join(lines, "")
 }
 
 func (m *Model) moveCursor(delta int) {

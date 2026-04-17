@@ -34,15 +34,32 @@ func newChunkWriter(coord *Coordinator, stepPrefix, stream string) *chunkWriter 
 
 // Write buffers p and flushes when the buffer exceeds chunkMaxBytes or after
 // chunkIdleFlush has elapsed since the last write. Always returns len(p), nil.
+// Large writes are split into chunkMaxBytes-bounded chunks so that a single
+// subprocess write never produces an oversized OutputChunkMsg.
 func (w *chunkWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	w.buf = append(w.buf, p...)
+	n := len(p)
+	for len(p) > 0 {
+		if len(w.buf) >= chunkMaxBytes {
+			w.flushLocked()
+		}
+		take := min(len(p), chunkMaxBytes-len(w.buf))
+		if take <= 0 {
+			break
+		}
+		w.buf = append(w.buf, p[:take]...)
+		p = p[take:]
+	}
 
-	if len(w.buf) >= chunkMaxBytes {
-		w.flushLocked()
-		return len(p), nil
+	if len(w.buf) == 0 {
+		// Everything already flushed in the loop above; cancel any stale timer.
+		if w.timer != nil {
+			w.timer.Stop()
+			w.timer = nil
+		}
+		return n, nil
 	}
 
 	// Cancel any pending timer and schedule a fresh one. Stop() may return
@@ -55,7 +72,7 @@ func (w *chunkWriter) Write(p []byte) (int, error) {
 	}
 	w.timer = time.AfterFunc(chunkIdleFlush, w.onIdle)
 
-	return len(p), nil
+	return n, nil
 }
 
 // onIdle is the AfterFunc callback for the idle timer.

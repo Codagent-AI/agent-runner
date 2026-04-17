@@ -123,23 +123,35 @@ func TestChunkWriter_FlushClearsBuffer(t *testing.T) {
 }
 
 func TestChunkWriter_SizeFlush(t *testing.T) {
-	// Writing >= chunkMaxBytes should flush immediately (buf empty after Write returns).
+	// Writing more than chunkMaxBytes should flush complete chunks immediately.
+	// Any bytes that don't fill a complete chunk remain buffered.
 	cw := newChunkWriter(nullCoord(), "[step]", "stdout")
 	large := strings.Repeat("x", chunkMaxBytes+1)
 	_, _ = cw.Write([]byte(large))
 	cw.mu.Lock()
 	remaining := len(cw.buf)
 	cw.mu.Unlock()
-	if remaining != 0 {
-		t.Errorf("buf should be empty after size-triggered flush: len=%d", remaining)
+	// After writing chunkMaxBytes+1 bytes, exactly 1 byte remains buffered
+	// (the last byte that didn't fill a complete chunk).
+	if remaining >= chunkMaxBytes {
+		t.Errorf("buf should have been flushed below chunkMaxBytes: len=%d", remaining)
 	}
 }
 
 func TestChunkWriter_IdleFlush(t *testing.T) {
 	cw := newChunkWriter(nullCoord(), "[step]", "stdout")
 	_, _ = cw.Write([]byte("data"))
-	// Wait longer than the idle flush duration.
-	time.Sleep(chunkIdleFlush + 20*time.Millisecond)
+	// Poll until the buffer drains (idle timer fires) or the deadline expires.
+	deadline := time.Now().Add(5 * chunkIdleFlush)
+	for time.Now().Before(deadline) {
+		cw.mu.Lock()
+		remaining := len(cw.buf)
+		cw.mu.Unlock()
+		if remaining == 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	cw.mu.Lock()
 	remaining := len(cw.buf)
 	cw.mu.Unlock()

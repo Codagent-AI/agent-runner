@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -347,15 +348,18 @@ func runLiveTUI(h *runner.RunHandle) int {
 	p := tea.NewProgram(rv, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	coord := liverun.NewCoordinator(p, h.SessionDir)
 
+	resultCh := make(chan string, 1)
 	go func() {
-		var result string
+		result := string(runner.ResultFailed)
 		var runErr error
 		defer func() {
 			if rec := recover(); rec != nil {
 				coord.NotifyDone("failed", fmt.Errorf("panic: %v", rec))
+				resultCh <- "failed"
 				return
 			}
 			coord.NotifyDone(result, runErr)
+			resultCh <- result
 		}()
 
 		res := runner.ExecuteFromHandle(h, &runner.Options{
@@ -374,6 +378,9 @@ func runLiveTUI(h *runner.RunHandle) int {
 		return 1
 	}
 
+	if runResult := <-resultCh; runResult != "success" {
+		return 1
+	}
 	return 0
 }
 
@@ -649,9 +656,7 @@ func handleRun(args []string) int {
 	var eng engine.Engine
 	if workflow.Engine != nil {
 		engConfig := map[string]any{"type": workflow.Engine.Type}
-		for k, v := range workflow.Engine.Extras {
-			engConfig[k] = v
-		}
+		maps.Copy(engConfig, workflow.Engine.Extras)
 		eng, err = engine.Create(engConfig)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: create engine: %v\n", err)

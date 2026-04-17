@@ -18,5 +18,8 @@ func requireTTY() error {
 	if !isatty.IsTerminal(os.Stdout.Fd()) {
 		return errors.New("agent-runner: an interactive terminal is required; stdout is not a TTY")
 	}
+	if !isatty.IsTerminal(os.Stdin.Fd()) {
+		return errors.New("agent-runner: an interactive terminal is required; stdin is not a TTY")
+	}
 	return nil
 }

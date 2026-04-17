@@ -4,7 +4,7 @@
 The CLI SHALL provide two entry points to the run view: a `--inspect <run-id>` flag for direct entry, and an Enter action from the list TUI (covered by the `list-runs` delta). Direct entry SHALL require a full run ID (no prefix matching). When the target run's run-lock is held by another live process, `--inspect` SHALL reject the entry with an error and not launch the TUI.
 
 #### Scenario: --inspect launches run view
-- **WHEN** `agent-runner --inspect <run-id>` is invoked and the run exists
+- **WHEN** `agent-runner --inspect <run-id>` is invoked and the run exists and is not locked by another live process
 - **THEN** the run-view TUI launches for that run
 
 #### Scenario: --inspect with unknown run ID

@@ -172,7 +172,13 @@ steps:
 		})
 
 		step := model.Step{ID: "sub", Workflow: "child.yaml", Session: model.SessionNew}
-		ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, log)
+		outcome, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, log)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected success, got %q", outcome)
+		}
 
 		// Both child steps should have been dispatched.
 		if len(runner.calls) != 2 {
@@ -201,7 +207,13 @@ steps:
 		})
 
 		step := model.Step{ID: "sub", Workflow: "child.yaml", Session: model.SessionNew}
-		ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, log)
+		outcome, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, log)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected success, got %q", outcome)
+		}
 
 		// The runner should have been called exactly once (s1 ran, s2 was skipped).
 		if len(runner.calls) != 1 {

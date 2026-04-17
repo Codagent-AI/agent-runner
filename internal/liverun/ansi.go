@@ -57,11 +57,10 @@ func (s *ANSIStripper) Write(p []byte) (int, error) {
 			case ']':
 				s.state = ansiOSC
 			default:
-				// Unknown escape — discard the ESC, treat b as normal.
+				// Fe/Fs/Fp two-character escape sequences (e.g. ESC M, ESC =, ESC >,
+				// ESC 7, ESC 8) and single/intermediate forms (e.g. ESC ( B, ESC ( 0)
+				// are consumed in full: drop both the ESC and this byte.
 				s.state = ansiNormal
-				if start < 0 {
-					start = i
-				}
 			}
 
 		case ansiCSI:

@@ -1,6 +1,7 @@
 package runview
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -704,21 +705,26 @@ func newLiveModelWithFlags() *Model {
 }
 
 func TestModel_FromLiveRun_DefaultFlags(t *testing.T) {
-	tree := liveTree()
-	m := &Model{
-		tree:       tree,
-		entered:    FromLiveRun,
-		path:       []*StepNode{tree.Root},
-		loadedFull: make(map[*StepNode]bool),
-		running:    true,
-		autoFollow: true,
-		tailFollow: true,
+	sessionDir := t.TempDir()
+	// Write a minimal workflow file so the loader can build a tree.
+	wfPath := sessionDir + "/workflow.yaml"
+	wfContent := "name: live-workflow\nsteps:\n  - id: build\n    command: make\n"
+	if err := os.WriteFile(wfPath, []byte(wfContent), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+
+	m, err := New(sessionDir, "", FromLiveRun)
+	if err != nil {
+		t.Fatalf("New: %v", err)
 	}
 	if !m.autoFollow {
 		t.Error("autoFollow should be true in FromLiveRun")
 	}
 	if !m.tailFollow {
 		t.Error("tailFollow should be true in FromLiveRun")
+	}
+	if !m.running {
+		t.Error("running should be true in FromLiveRun")
 	}
 }
 

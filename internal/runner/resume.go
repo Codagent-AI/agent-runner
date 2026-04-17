@@ -2,6 +2,7 @@ package runner
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 
@@ -21,9 +22,6 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	}
 
 	if state.Completed {
-		if opts.Log != nil {
-			opts.Log.Println("agent-runner: workflow already completed")
-		}
 		return nil, fmt.Errorf("workflow already completed")
 	}
 
@@ -88,9 +86,7 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	var eng engine.Engine
 	if workflow.Engine != nil {
 		engConfig := map[string]any{"type": workflow.Engine.Type}
-		for k, v := range workflow.Engine.Extras {
-			engConfig[k] = v
-		}
+		maps.Copy(engConfig, workflow.Engine.Extras)
 		eng, err = engine.Create(engConfig)
 		if err != nil {
 			return nil, fmt.Errorf("create engine: %w", err)

@@ -114,7 +114,7 @@ subprocess stdout ──► composite writer ──┬── ANSI-strip → chun
 ```
 
 - **Channel delivery:** the strip-then-chunk path gives the TUI clean text it can safely render. Coalescing at 4 KB or 50 ms trades worst-case latency for message-channel health.
-- **Output files:** raw bytes (including ANSI) go to `<sessionDir>/output/<step-prefix>.out` / `.err`. The prefix is the audit log's event `prefix` string, filesystem-sanitized by replacing `/` with `__` and `:` with `_` (e.g., audit prefix `loop-b:2/step-c` → filename stem `loop-b_2__step-c`). Sanitization is total and deterministic; no path traversal is possible via crafted step IDs.
+- **Output files:** raw bytes (including ANSI) go to `<sessionDir>/output/<step-prefix>.out` / `.err`. The prefix is the audit log's event `prefix` string, filesystem-sanitized by replacing every character outside `[A-Za-z0-9._-]` with a single `_` (e.g., audit prefix `loop-b:2/step-c` → filename stem `loop-b_2_step-c`). Sanitization is total and deterministic; no path traversal is possible via crafted step IDs.
 - **ProcessResult contract (Go-level, unchanged):** the composite writer's buffered content still populates `ProcessResult.Stdout` / `Stderr` — existing callers of `ProcessRunner.RunShell` / `RunAgent` see the same return values.
 - **Audit event payload (widened):** `internal/exec/shell.go` previously only included `stdout` in `step_end` when the step used `capture:`. This change widens it to always include the 4 KB `truncateForAudit`-capped preview. The audit log gets a greppable summary; the output file holds the full content.
 
