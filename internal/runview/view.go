@@ -105,22 +105,23 @@ func (m *Model) renderTwoColumn(children []*StepNode) string {
 	m.detailWidth = detailWidth
 	divider := tuistyle.DividerStyle.Render("│ ")
 
+	bodyHeight := m.bodyHeight()
+	if bodyHeight <= 0 {
+		bodyHeight = 20
+	}
+
 	sel := m.selectedNode()
 	detail := m.renderDetail(sel)
 	detailLines := strings.Split(detail, "\n")
 
 	offset := m.detailOffset
-	if offset > len(detailLines)-1 {
-		offset = max(0, len(detailLines)-1)
+	maxOffset := max(0, len(detailLines)-bodyHeight)
+	if offset > maxOffset {
+		offset = maxOffset
 	}
 	visibleDetail := detailLines
 	if offset > 0 && offset < len(detailLines) {
 		visibleDetail = detailLines[offset:]
-	}
-
-	bodyHeight := m.bodyHeight()
-	if bodyHeight <= 0 {
-		bodyHeight = 20
 	}
 
 	var b strings.Builder
@@ -260,6 +261,13 @@ func (m *Model) renderHelpBar() string {
 		parts = append(parts, "g load full")
 	}
 
+	if m.running && !m.autoFollow {
+		parts = append(parts, "l live")
+	}
+	if !m.tailFollow {
+		parts = append(parts, "End tail")
+	}
+
 	parts = append(parts, "? legend", "esc back", "q quit")
 
 	return "  " + tuistyle.HelpStyle.Render(strings.Join(parts, "   "))
@@ -353,6 +361,12 @@ func (m *Model) renderLegend() string {
 	b.WriteString("  ⚙  headless agent\n")
 	b.WriteString("  ❯  interactive agent\n")
 	b.WriteString("  ↳  sub-workflow\n")
+
+	b.WriteString("\n  ")
+	b.WriteString(tuistyle.SelectedStyle.Render("Live Navigation"))
+	b.WriteString("\n\n")
+	b.WriteString("  l        jump to active step and resume auto-follow\n")
+	b.WriteString("  End / G  jump to output tail and resume tail-follow\n")
 
 	b.WriteString("\n\n  ")
 	b.WriteString(tuistyle.HelpStyle.Render("press ? or esc to dismiss"))

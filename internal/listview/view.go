@@ -46,6 +46,10 @@ func (m *Model) View() string {
 	b.WriteString("\n")
 	b.WriteString(tuistyle.RenderRule(m.termWidth))
 	b.WriteString("\n")
+	if m.errMsg != "" {
+		b.WriteString("  " + errStyle.Render(m.errMsg))
+		b.WriteString("\n")
+	}
 	b.WriteString(m.renderHelp())
 	b.WriteString("\n")
 

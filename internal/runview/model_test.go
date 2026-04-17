@@ -685,3 +685,424 @@ func generateLargeOutput(lines int) string {
 	}
 	return string(b)
 }
+
+// ---- autoFollow / tailFollow / navigateToNode / lockout tests ----
+
+func newLiveModelWithFlags() *Model {
+	tree := liveTree()
+	return &Model{
+		tree:       tree,
+		entered:    FromLiveRun,
+		path:       []*StepNode{tree.Root},
+		loadedFull: make(map[*StepNode]bool),
+		termWidth:  120,
+		termHeight: 40,
+		running:    true,
+		autoFollow: true,
+		tailFollow: true,
+	}
+}
+
+func TestModel_FromLiveRun_DefaultFlags(t *testing.T) {
+	tree := liveTree()
+	m := &Model{
+		tree:       tree,
+		entered:    FromLiveRun,
+		path:       []*StepNode{tree.Root},
+		loadedFull: make(map[*StepNode]bool),
+		running:    true,
+		autoFollow: true,
+		tailFollow: true,
+	}
+	if !m.autoFollow {
+		t.Error("autoFollow should be true in FromLiveRun")
+	}
+	if !m.tailFollow {
+		t.Error("tailFollow should be true in FromLiveRun")
+	}
+}
+
+func TestModel_FromList_DefaultFlags(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList)
+	if m.autoFollow {
+		t.Error("autoFollow should be false in FromList")
+	}
+	if m.tailFollow {
+		t.Error("tailFollow should be false in FromList")
+	}
+}
+
+func TestModel_NavigateToNode_TopLevel(t *testing.T) {
+	tree := simpleTree()
+	m := newTestModel(tree, FromList)
+
+	// Navigate to the third child (loop, index 2)
+	target := tree.Root.Children[2]
+	m.navigateToNode(target)
+
+	if len(m.path) != 1 {
+		t.Fatalf("path len = %d, want 1 for top-level node", len(m.path))
+	}
+	if m.cursor != 2 {
+		t.Fatalf("cursor = %d, want 2", m.cursor)
+	}
+}
+
+func TestModel_NavigateToNode_InsideIteration(t *testing.T) {
+	tree := simpleTree()
+	m := newTestModel(tree, FromList)
+
+	// iter1 (index 0 in loop.Children) has one child: iter1child
+	loop := tree.Root.Children[2] // NodeLoop
+	iter1 := loop.Children[0]     // NodeIteration (index 0)
+	target := iter1.Children[0]   // "run-task" shell step
+
+	m.navigateToNode(target)
+
+	// path should be [root, loop, iter1]
+	if len(m.path) != 3 {
+		t.Fatalf("path len = %d, want 3 for nested node", len(m.path))
+	}
+	if m.path[1] != loop {
+		t.Error("path[1] should be loop")
+	}
+	if m.path[2] != iter1 {
+		t.Error("path[2] should be iter1")
+	}
+	if m.cursor != 0 {
+		t.Fatalf("cursor = %d, want 0", m.cursor)
+	}
+}
+
+func TestModel_NavigateToNode_AutoFlatten(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	loop := &StepNode{ID: "my-loop", Type: NodeLoop, Status: StatusInProgress, Parent: root, AutoFlatten: true}
+	subwf := &StepNode{
+		ID: "impl", Type: NodeSubWorkflow, Status: StatusInProgress,
+		StaticWorkflowPath: "/repo/workflows/impl.yaml", SubLoaded: true,
+	}
+	subChild := &StepNode{ID: "step-a", Type: NodeShell, Status: StatusPending, Parent: subwf}
+	subwf.Children = []*StepNode{subChild}
+	iter := &StepNode{
+		ID: "my-loop", Type: NodeIteration, Status: StatusInProgress, Parent: loop,
+		IterationIndex: 0, FlattenTarget: subwf, Children: []*StepNode{subwf},
+	}
+	subwf.Parent = iter
+	loop.Children = []*StepNode{iter}
+	root.Children = []*StepNode{loop}
+	tree := &Tree{Root: root}
+	m := newTestModel(tree, FromList)
+
+	// Navigate to subChild (inside auto-flattened iter)
+	m.navigateToNode(subChild)
+
+	// path = [root, loop, iter] — subwf is NOT in the path (it's FlattenTarget)
+	if len(m.path) != 3 {
+		t.Fatalf("path len = %d, want 3", len(m.path))
+	}
+	if m.path[1] != loop {
+		t.Error("path[1] should be loop")
+	}
+	if m.path[2] != iter {
+		t.Error("path[2] should be iter (FlattenTarget skipped)")
+	}
+	if m.cursor != 0 {
+		t.Fatalf("cursor = %d, want 0", m.cursor)
+	}
+}
+
+func TestModel_StepStateMsg_AutoFollow_NavigatesCursor(t *testing.T) {
+	tree := simpleTree()
+	m := newLiveModelWithFlags()
+	m.tree = tree
+	m.path = []*StepNode{tree.Root}
+
+	// Simulate StepStateMsg for the second child (agent, index 1, ID "implement")
+	m.Update(liverun.StepStateMsg{ActiveStepPrefix: "[implement]"})
+
+	if m.cursor != 1 {
+		t.Fatalf("cursor = %d, want 1 after auto-follow StepStateMsg", m.cursor)
+	}
+	if m.activeStepPrefix != "[implement]" {
+		t.Fatalf("activeStepPrefix = %q, want [implement]", m.activeStepPrefix)
+	}
+}
+
+func TestModel_StepStateMsg_AutoFollowOff_NoNavigation(t *testing.T) {
+	tree := simpleTree()
+	m := newLiveModelWithFlags()
+	m.tree = tree
+	m.path = []*StepNode{tree.Root}
+	m.cursor = 0
+	m.autoFollow = false
+
+	m.Update(liverun.StepStateMsg{ActiveStepPrefix: "[implement]"})
+
+	// cursor should stay at 0 since autoFollow is off
+	if m.cursor != 0 {
+		t.Fatalf("cursor = %d, want 0 when autoFollow is disabled", m.cursor)
+	}
+}
+
+func TestModel_ManualNavigation_ClearsAutoFollow(t *testing.T) {
+	m := newLiveModelWithFlags()
+
+	for _, key := range []tea.Msg{
+		tea.KeyMsg{Type: tea.KeyUp},
+		tea.KeyMsg{Type: tea.KeyDown},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")},
+	} {
+		m.autoFollow = true
+		m.Update(key)
+		if m.autoFollow {
+			t.Errorf("key %v should clear autoFollow", key)
+		}
+	}
+}
+
+func TestModel_EnterEsc_ClearAutoFollow(t *testing.T) {
+	m := newLiveModelWithFlags()
+	// Add a loop to drill into to avoid the quit-confirm path on Esc at top level
+	loop := &StepNode{ID: "tasks", Type: NodeLoop, Parent: m.tree.Root}
+	m.tree.Root.Children = append(m.tree.Root.Children, loop)
+	m.cursor = len(m.tree.Root.Children) - 1 // select loop
+
+	// Enter should clear autoFollow
+	m.autoFollow = true
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.autoFollow {
+		t.Error("Enter should clear autoFollow")
+	}
+
+	// Esc should clear autoFollow
+	m.autoFollow = true
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.autoFollow {
+		t.Error("Esc should clear autoFollow")
+	}
+}
+
+func TestModel_LKey_ReengagesAutoFollow(t *testing.T) {
+	tree := simpleTree()
+	m := newLiveModelWithFlags()
+	m.tree = tree
+	m.path = []*StepNode{tree.Root}
+	m.autoFollow = false
+	m.activeStepPrefix = "[implement]" // agent step at index 1
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+
+	if !m.autoFollow {
+		t.Error("l key should re-engage autoFollow")
+	}
+	if m.cursor != 1 {
+		t.Fatalf("cursor = %d, want 1 after l key", m.cursor)
+	}
+}
+
+func TestModel_TailFollow_PinsOnOutputChunk(t *testing.T) {
+	tree := liveTree()
+	m := newLiveModelWithFlags()
+	m.tree = tree
+	m.path = []*StepNode{tree.Root}
+	m.cursor = 0 // shell step "build" is selected
+
+	// Send output chunk for the selected step
+	m.Update(liverun.OutputChunkMsg{StepPrefix: "[build]", Stream: "stdout", Bytes: []byte("line\n")})
+
+	// detailOffset should be pinned to a large value
+	if m.detailOffset <= 0 {
+		t.Errorf("detailOffset = %d, expected large value for tail-pin", m.detailOffset)
+	}
+}
+
+func TestModel_TailFollow_IgnoresOtherStep(t *testing.T) {
+	tree := simpleTree()
+	m := newLiveModelWithFlags()
+	m.tree = tree
+	m.path = []*StepNode{tree.Root}
+	m.cursor = 0 // "build" step selected
+
+	// Send output chunk for a DIFFERENT step ("implement", index 1)
+	m.Update(liverun.OutputChunkMsg{StepPrefix: "[implement]", Stream: "stdout", Bytes: []byte("line\n")})
+
+	// detailOffset should NOT be changed (still 0)
+	if m.detailOffset != 0 {
+		t.Errorf("detailOffset = %d, expected 0 (unselected step should not pin tail)", m.detailOffset)
+	}
+}
+
+func TestModel_PgUp_ClearsTailFollow(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.tailFollow = true
+	m.detailOffset = 50
+
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+
+	if m.tailFollow {
+		t.Error("PgUp should clear tailFollow")
+	}
+}
+
+func TestModel_EndKey_ReengagesTailFollow(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.tailFollow = false
+
+	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+
+	if !m.tailFollow {
+		t.Error("End key should re-engage tailFollow")
+	}
+	if m.detailOffset <= 0 {
+		t.Errorf("detailOffset = %d, expected large value after End", m.detailOffset)
+	}
+}
+
+func TestModel_GKey_ReengagesTailFollow(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.tailFollow = false
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("G")})
+
+	if !m.tailFollow {
+		t.Error("G key should re-engage tailFollow")
+	}
+	if m.detailOffset <= 0 {
+		t.Errorf("detailOffset = %d, expected large value after G", m.detailOffset)
+	}
+}
+
+func TestModel_MouseWheelUp_ClearsTailFollow(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.tailFollow = true
+
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp})
+
+	if m.tailFollow {
+		t.Error("mouse wheel up should clear tailFollow")
+	}
+}
+
+func TestModel_ExecDone_Failed_JumpsToFailedStep(t *testing.T) {
+	tree := simpleTree()
+	// Mark the first step (shell "build") as failed
+	tree.Root.Children[0].Status = StatusFailed
+
+	m := newLiveModelWithFlags()
+	m.tree = tree
+	m.path = []*StepNode{tree.Root}
+	m.cursor = 3 // start somewhere else
+
+	m.Update(liverun.ExecDoneMsg{Result: "failed"})
+
+	// Cursor should jump to the failed step (index 0, "build")
+	if m.cursor != 0 {
+		t.Fatalf("cursor = %d, want 0 (index of failed step)", m.cursor)
+	}
+}
+
+func TestModel_ExecDone_Failed_NoFailedStep_NoChange(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.cursor = 0
+
+	// No step has StatusFailed — navigateToNode should be a no-op
+	m.Update(liverun.ExecDoneMsg{Result: "failed"})
+
+	if m.cursor != 0 {
+		t.Fatalf("cursor changed to %d, want 0 (no failed step)", m.cursor)
+	}
+}
+
+func TestModel_HelpBar_ShowsLiveHint_WhenRunningAndAutoFollowOff(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = true
+	m.autoFollow = false
+
+	help := m.renderHelpBar()
+	if !containsString(help, "l live") {
+		t.Errorf("help bar missing 'l live' hint: %q", help)
+	}
+}
+
+func TestModel_HelpBar_HidesLiveHint_WhenAutoFollowOn(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = true
+	m.autoFollow = true
+
+	help := m.renderHelpBar()
+	if containsString(help, "l live") {
+		t.Errorf("help bar should not show 'l live' when autoFollow is on: %q", help)
+	}
+}
+
+func TestModel_HelpBar_ShowsEndHint_WhenTailFollowOff(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.tailFollow = false
+
+	help := m.renderHelpBar()
+	if !containsString(help, "End tail") {
+		t.Errorf("help bar missing 'End tail' hint: %q", help)
+	}
+}
+
+func TestModel_HelpBar_HidesEndHint_WhenTailFollowOn(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.tailFollow = true
+
+	help := m.renderHelpBar()
+	if containsString(help, "End tail") {
+		t.Errorf("help bar should not show 'End tail' when tailFollow is on: %q", help)
+	}
+}
+
+func TestModel_Legend_ContainsLiveNavKeys(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.showLegend = true
+
+	legend := m.View()
+	for _, want := range []string{"l", "End / G", "Live Navigation"} {
+		if !containsString(legend, want) {
+			t.Errorf("legend missing %q", want)
+		}
+	}
+}
+
+func TestFindFailedLeaf(t *testing.T) {
+	t.Run("finds failed shell step", func(t *testing.T) {
+		root := &StepNode{ID: "root", Type: NodeRoot}
+		shell := &StepNode{ID: "build", Type: NodeShell, Status: StatusFailed, Parent: root}
+		root.Children = []*StepNode{shell}
+
+		found := findFailedLeaf(root)
+		if found != shell {
+			t.Fatalf("expected %v, got %v", shell, found)
+		}
+	})
+
+	t.Run("returns nil when no failed step", func(t *testing.T) {
+		root := &StepNode{ID: "root", Type: NodeRoot}
+		shell := &StepNode{ID: "build", Type: NodeShell, Status: StatusSuccess, Parent: root}
+		root.Children = []*StepNode{shell}
+
+		found := findFailedLeaf(root)
+		if found != nil {
+			t.Fatalf("expected nil, got %v", found)
+		}
+	})
+
+	t.Run("finds deepest failed step in nested tree", func(t *testing.T) {
+		root := &StepNode{ID: "root", Type: NodeRoot, Status: StatusFailed}
+		loop := &StepNode{ID: "loop", Type: NodeLoop, Status: StatusFailed, Parent: root}
+		iter := &StepNode{ID: "loop", Type: NodeIteration, Status: StatusFailed, Parent: loop}
+		shell := &StepNode{ID: "step", Type: NodeShell, Status: StatusFailed, Parent: iter}
+		iter.Children = []*StepNode{shell}
+		loop.Children = []*StepNode{iter}
+		root.Children = []*StepNode{loop}
+
+		found := findFailedLeaf(root)
+		if found != shell {
+			t.Fatalf("expected deepest failed shell %v, got %v", shell, found)
+		}
+	})
+}

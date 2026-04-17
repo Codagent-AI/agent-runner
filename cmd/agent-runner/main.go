@@ -25,6 +25,7 @@ import (
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runner"
+	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/runview"
 )
 
@@ -282,6 +283,11 @@ func handleInspect(runID string) int {
 	sessionDir, projectDir, err := resolveInspectSession(runID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+
+	if runlock.CheckOwnedByOther(sessionDir, os.Getpid()) {
+		fmt.Fprintf(os.Stderr, "agent-runner: run %q is active in another process\n", runID)
 		return 1
 	}
 

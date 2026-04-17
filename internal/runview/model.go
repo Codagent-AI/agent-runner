@@ -66,9 +66,12 @@ type Model struct {
 	startTime   time.Time
 
 	// Live-run fields (FromLiveRun mode only).
-	running        bool   // true until ExecDoneMsg arrives
-	quitConfirming bool   // quit-confirmation modal is visible
-	liveResult     string // set on ExecDoneMsg ("success"/"failed"/"stopped")
+	running          bool   // true until ExecDoneMsg arrives
+	quitConfirming   bool   // quit-confirmation modal is visible
+	liveResult       string // set on ExecDoneMsg ("success"/"failed"/"stopped")
+	autoFollow       bool   // cursor tracks activeStep; enabled by default in FromLiveRun
+	tailFollow       bool   // detail pane viewport pinned to tail; enabled by default in FromLiveRun
+	activeStepPrefix string // last known active step prefix from StepStateMsg
 }
 
 // New constructs a runview Model from a session directory.
@@ -116,6 +119,8 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 		loadedFull: make(map[*StepNode]bool),
 		loadErr:    loadErr,
 		running:    entered == FromLiveRun,
+		autoFollow: entered == FromLiveRun,
+		tailFollow: entered == FromLiveRun,
 	}
 
 	if entered != FromLiveRun {
@@ -180,11 +185,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case liverun.OutputChunkMsg:
 		m.applyOutputChunk(msg)
+		if m.tailFollow && m.selectedNode() == m.tree.FindByPrefix(msg.StepPrefix) {
+			m.detailOffset = math.MaxInt32
+		}
 		return m, nil
 
 	case liverun.StepStateMsg:
-		// Bookkeeping only for now; auto-follow is out of scope for this task.
-		_ = msg.ActiveStepPrefix
+		m.activeStepPrefix = msg.ActiveStepPrefix
+		if m.autoFollow {
+			m.navigateToNode(m.tree.FindByPrefix(msg.ActiveStepPrefix))
+		}
 		return m, nil
 
 	case liverun.SuspendedMsg, liverun.ResumedMsg:
@@ -194,7 +204,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case liverun.ExecDoneMsg:
 		m.running = false
 		m.liveResult = msg.Result
-		// After completion behave identically to FromInspect.
+		if msg.Result == "failed" || msg.Result == "stopped" {
+			if failed := findFailedLeaf(m.tree.Root); failed != nil {
+				m.navigateToNode(failed)
+			}
+		}
 		return m, nil
 
 	// ---- Keyboard / mouse ----
@@ -205,6 +219,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		switch msg.Button {
 		case tea.MouseButtonWheelUp:
+			m.tailFollow = false
 			m.scrollDetail(-3)
 		case tea.MouseButtonWheelDown:
 			m.scrollDetail(3)
@@ -257,17 +272,28 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "?":
 		m.showLegend = true
 	case "esc":
+		m.autoFollow = false
 		return m.handleEsc()
 	case "enter":
+		m.autoFollow = false
 		return m.handleEnter()
 	case "up", "k":
+		m.autoFollow = false
 		m.moveCursor(-1)
 	case "down", "j":
+		m.autoFollow = false
 		m.moveCursor(1)
+	case "l":
+		m.autoFollow = true
+		m.navigateToNode(m.tree.FindByPrefix(m.activeStepPrefix))
 	case "pgup":
+		m.tailFollow = false
 		m.scrollDetail(-m.detailPageSize())
 	case "pgdown":
 		m.scrollDetail(m.detailPageSize())
+	case "end", "G":
+		m.tailFollow = true
+		m.detailOffset = math.MaxInt32
 	case "g":
 		m.handleLoadFull()
 	}
@@ -398,6 +424,73 @@ func (m *Model) handleLoadFull() {
 	if n.Type == NodeShell || n.Type == NodeHeadlessAgent {
 		m.loadedFull[n] = true
 	}
+}
+
+// navigateToNode sets path and cursor so that target is the selected node.
+// It respects the auto-flatten rule: iteration nodes with FlattenTarget are
+// kept in the path while their FlattenTarget sub-workflow is skipped.
+// Sub-workflows in the path are lazy-loaded if necessary.
+func (m *Model) navigateToNode(target *StepNode) {
+	if target == nil {
+		return
+	}
+	// Collect ancestors from target.Parent up to (but not including) root.
+	var ancestors []*StepNode
+	for n := target.Parent; n != nil && n != m.tree.Root; n = n.Parent {
+		ancestors = append(ancestors, n)
+	}
+	// Reverse so ancestors are in root-first order.
+	for i, j := 0, len(ancestors)-1; i < j; i, j = i+1, j-1 {
+		ancestors[i], ancestors[j] = ancestors[j], ancestors[i]
+	}
+
+	// Build the path, omitting FlattenTarget nodes (their parent iteration
+	// stays in the path and provides the container via Drilldown()).
+	newPath := []*StepNode{m.tree.Root}
+	for _, anc := range ancestors {
+		if p := anc.Parent; p != nil && p.Type == NodeIteration && p.FlattenTarget == anc {
+			continue
+		}
+		newPath = append(newPath, anc)
+	}
+
+	// Ensure any sub-workflows in the path are loaded.
+	for _, pathNode := range newPath[1:] {
+		if pathNode.Type == NodeSubWorkflow && !pathNode.SubLoaded {
+			if err := m.tree.EnsureSubWorkflowLoaded(pathNode); err != nil && pathNode.ErrorMessage == "" {
+				pathNode.ErrorMessage = err.Error()
+			}
+		}
+	}
+
+	m.path = newPath
+	m.detailOffset = 0
+
+	children := m.currentChildren()
+	for i, c := range children {
+		if c == target {
+			m.cursor = i
+			return
+		}
+	}
+	m.cursor = 0
+}
+
+// findFailedLeaf returns the deepest non-container StepNode with StatusFailed,
+// or nil if none exists.
+func findFailedLeaf(n *StepNode) *StepNode {
+	if n == nil {
+		return nil
+	}
+	for _, c := range n.Children {
+		if found := findFailedLeaf(c); found != nil {
+			return found
+		}
+	}
+	if n.Status == StatusFailed && !n.IsContainer() {
+		return n
+	}
+	return nil
 }
 
 func (m *Model) refreshData() {
