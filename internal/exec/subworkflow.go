@@ -231,18 +231,7 @@ func applyResumeState(parentCtx, childCtx *model.ExecutionContext) (string, bool
 		return "", false
 	}
 
-	for k, v := range resumeChild.SessionIDs {
-		childCtx.SessionIDs[k] = v
-	}
-	for k, v := range resumeChild.SessionProfiles {
-		childCtx.SessionProfiles[k] = v
-	}
-	for k, v := range resumeChild.CapturedVariables {
-		childCtx.CapturedVariables[k] = v
-	}
-	if resumeChild.LastSessionStepID != "" {
-		childCtx.LastSessionStepID = resumeChild.LastSessionStepID
-	}
+	restorePersistedSessions(childCtx, resumeChild)
 	if resumeChild.Iteration != nil {
 		// This entry describes a loop step that is being resumed mid-iteration.
 		// Keep the full entry on childCtx so the loop executor can read its
@@ -253,6 +242,24 @@ func applyResumeState(parentCtx, childCtx *model.ExecutionContext) (string, bool
 		childCtx.ResumeChildState = resumeChild.Child
 	}
 	return resumeChild.StepID, resumeChild.Completed
+}
+
+// restorePersistedSessions copies persisted session IDs, session profiles,
+// captured variables, and the last-session-step ID from src into ctx. Used
+// by both sub-workflow and loop-iteration resume paths.
+func restorePersistedSessions(ctx *model.ExecutionContext, src *model.NestedStepState) {
+	for k, v := range src.SessionIDs {
+		ctx.SessionIDs[k] = v
+	}
+	for k, v := range src.SessionProfiles {
+		ctx.SessionProfiles[k] = v
+	}
+	for k, v := range src.CapturedVariables {
+		ctx.CapturedVariables[k] = v
+	}
+	if src.LastSessionStepID != "" {
+		ctx.LastSessionStepID = src.LastSessionStepID
+	}
 }
 
 func buildNestingPrefix(nestingPath []model.NestingSegment) string {
