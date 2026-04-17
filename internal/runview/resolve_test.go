@@ -130,6 +130,18 @@ func TestResolveWorkflow_RelativeViaMetaJSON(t *testing.T) {
 	}
 }
 
+func TestReadMetaCwd_RejectsNonAbsolute(t *testing.T) {
+	// meta.json with a relative path would, if accepted, cause resolution
+	// to silently depend on the process cwd — contradicting the documented
+	// "true absolute path or nothing" invariant. readMetaCwd MUST reject it.
+	projectDir := t.TempDir()
+	writeMeta(t, projectDir, "relative/path")
+
+	if got := readMetaCwd(projectDir); got != "" {
+		t.Fatalf("readMetaCwd with relative path = %q, want %q", got, "")
+	}
+}
+
 func TestResolveWorkflow_RelativeViaProcessCwd(t *testing.T) {
 	s := scenarioA(t)
 	// No meta.json this time.

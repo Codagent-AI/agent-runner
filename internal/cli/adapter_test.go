@@ -120,7 +120,10 @@ func TestClaudeAdapter(t *testing.T) {
 		assertArgs(t, expected, args)
 	})
 
-	t.Run("resume headless with model override", func(t *testing.T) {
+	t.Run("resume drops model flag", func(t *testing.T) {
+		// A Claude session keeps the model it was started with; passing
+		// --model on resume would be at best ignored and at worst rejected,
+		// so the adapter must omit it even when Model is set on the input.
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:    "continue",
 			SessionID: "session-abc",
@@ -128,7 +131,7 @@ func TestClaudeAdapter(t *testing.T) {
 			Model:     "sonnet",
 			Headless:  true,
 		})
-		expected := []string{"claude", "--resume", "session-abc", "--model", "sonnet", "-p", "--", "continue"}
+		expected := []string{"claude", "--resume", "session-abc", "-p", "--", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -325,6 +328,19 @@ func TestCodexAdapter(t *testing.T) {
 			Headless: false,
 		})
 		expected := []string{"codex", "--no-alt-screen", "-m", "o3", "review"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("resume drops model flag", func(t *testing.T) {
+		// A Codex thread keeps the model it was started with, so -m is
+		// omitted when resuming even if Model is set on the input.
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:    "continue",
+			SessionID: "thread-abc",
+			Model:     "o3",
+			Headless:  true,
+		})
+		expected := []string{"codex", "exec", "resume", "thread-abc", "-a", "never", "continue"}
 		assertArgs(t, expected, args)
 	})
 

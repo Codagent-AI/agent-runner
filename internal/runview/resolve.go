@@ -104,7 +104,11 @@ func readMetaCwd(projectDir string) string {
 	if meta.Path == "" {
 		return ""
 	}
-	return filepath.Clean(meta.Path)
+	cleaned := filepath.Clean(meta.Path)
+	if !filepath.IsAbs(cleaned) {
+		return ""
+	}
+	return cleaned
 }
 
 // tryDirectFile attempts to resolve workflowFile as an absolute path or as a
