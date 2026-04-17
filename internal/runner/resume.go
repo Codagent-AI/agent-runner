@@ -11,23 +11,25 @@ import (
 	"github.com/codagent/agent-runner/internal/stateio"
 )
 
-// ResumeWorkflow resumes a workflow from a state file.
-func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error) {
+// PrepareResume loads the workflow state from stateFilePath, resolves the
+// resume step, and calls PrepareRun to initialize the session. Returns a
+// RunHandle that callers can pass to ExecuteFromHandle.
+func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	state, err := stateio.ReadState(stateFilePath)
 	if err != nil {
-		return ResultFailed, err
+		return nil, err
 	}
 
 	if state.Completed {
 		if opts.Log != nil {
 			opts.Log.Println("agent-runner: workflow already completed")
 		}
-		return ResultSuccess, nil
+		return nil, fmt.Errorf("workflow already completed")
 	}
 
 	workflow, err := loader.LoadWorkflow(state.WorkflowFile, loader.Options{})
 	if err != nil {
-		return ResultFailed, fmt.Errorf("cannot reload workflow: %w", err)
+		return nil, fmt.Errorf("cannot reload workflow: %w", err)
 	}
 
 	// Check workflow hash
@@ -60,9 +62,6 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
 		lastSessionStepID = nested.LastSessionStepID
 		completed = nested.Completed
 		if nested.Iteration != nil {
-			// Top-level loop step captured mid-iteration. Carry the iteration
-			// (and any deeper chain) through as ChildState so ExecuteLoopStep's
-			// consumeLoopResume can pick it up when the step is dispatched.
 			childState = &model.SubWorkflowChildState{
 				StepID:    nested.StepID,
 				Iteration: nested.Iteration,
@@ -78,10 +77,10 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
 	// Resolve which step to actually resume from — advance past completed steps.
 	resolved, err := model.ResolveResumeStep(workflow.Steps, fromStep, completed)
 	if err != nil {
-		return ResultFailed, fmt.Errorf("step %q no longer exists in workflow", fromStep)
+		return nil, fmt.Errorf("step %q no longer exists in workflow", fromStep)
 	}
 	if resolved.AllDone {
-		return ResultSuccess, nil
+		return nil, fmt.Errorf("workflow already completed")
 	}
 	fromStep = resolved.StepID
 
@@ -94,11 +93,11 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
 		}
 		eng, err = engine.Create(engConfig)
 		if err != nil {
-			return ResultFailed, fmt.Errorf("create engine: %w", err)
+			return nil, fmt.Errorf("create engine: %w", err)
 		}
 	}
 
-	return RunWorkflow(&workflow, state.Params, &Options{
+	resumeOpts := &Options{
 		From:              fromStep,
 		WorkflowFile:      state.WorkflowFile,
 		SessionDir:        filepath.Dir(stateFilePath),
@@ -111,7 +110,29 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
 		ProcessRunner:     opts.ProcessRunner,
 		GlobExpander:      opts.GlobExpander,
 		Log:               opts.Log,
-	})
+		SuspendHook:       opts.SuspendHook,
+		ResumeHook:        opts.ResumeHook,
+	}
+
+	return PrepareRun(&workflow, state.Params, resumeOpts)
+}
+
+// ResumeWorkflow resumes a workflow from a state file.
+// This is a thin wrapper around PrepareResume + ExecuteFromHandle; existing tests
+// and non-TUI callers use this unchanged signature.
+func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error) {
+	h, err := PrepareResume(stateFilePath, opts)
+	if err != nil {
+		// "already completed" is not an error for the caller
+		if err.Error() == "workflow already completed" {
+			if opts.Log != nil {
+				opts.Log.Println("agent-runner: workflow already completed")
+			}
+			return ResultSuccess, nil
+		}
+		return ResultFailed, err
+	}
+	return ExecuteFromHandle(h, opts), nil
 }
 
 func nestedToChildState(nested *model.NestedStepState) *model.SubWorkflowChildState {

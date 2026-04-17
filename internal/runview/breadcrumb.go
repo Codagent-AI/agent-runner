@@ -53,6 +53,21 @@ func (m *Model) renderBreadcrumb() string {
 }
 
 func (m *Model) styledRunStatus() string {
+	// Live-run mode: pulse while running, then show result.
+	if m.running {
+		t := (math.Sin(m.pulsePhase) + 1) / 2
+		c := tuistyle.LerpColor("#4ade80", "#2d8f57", t)
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Render("running")
+	}
+	if m.liveResult != "" {
+		switch m.liveResult {
+		case "failed", "stopped":
+			return tuistyle.StatusFailed.Render(m.liveResult)
+		default:
+			return tuistyle.StatusSuccess.Render("completed")
+		}
+	}
+	// Inspect / list mode: use the run-lock and root status.
 	if m.active {
 		t := (math.Sin(m.pulsePhase) + 1) / 2
 		c := tuistyle.LerpColor("#4ade80", "#2d8f57", t)

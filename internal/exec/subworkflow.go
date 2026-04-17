@@ -149,15 +149,8 @@ func executeChildSteps(
 		}
 
 		if flowctl.ShouldSkip(workflow.Steps[i].SkipIf, childCtx.LastStepOutcome) {
-			breadcrumb := textfmt.BuildBreadcrumb(nestingToFmt(childCtx), workflow.Steps[i].ID)
-			log.Println(textfmt.Separator())
-			log.Println(textfmt.StepHeading(i, len(workflow.Steps), breadcrumb, "", true))
 			continue
 		}
-
-		breadcrumb := textfmt.BuildBreadcrumb(nestingToFmt(childCtx), workflow.Steps[i].ID)
-		log.Println(textfmt.Separator())
-		log.Println(textfmt.StepHeading(i, len(workflow.Steps), breadcrumb, workflow.Steps[i].StepType(), false))
 
 		recordChildProgress(childCtx, workflow.Steps[i].ID, false)
 		if childCtx.ParentContext != nil && childCtx.ParentContext.FlushState != nil {

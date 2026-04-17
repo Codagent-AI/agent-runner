@@ -344,9 +344,6 @@ func executeIterationBody(
 	log Logger,
 ) (iterationResult, error) {
 	for i := range steps {
-		breadcrumb := textfmt.BuildBreadcrumb(nestingToFmt(iterCtx), steps[i].ID)
-		log.Println(textfmt.Separator())
-		log.Println(textfmt.StepHeading(i, len(steps), breadcrumb, steps[i].StepType(), false))
 		outcome, err := DispatchStep(&steps[i], iterCtx, runner, glob, log)
 		if err != nil {
 			return iterationResult{failed: true}, err

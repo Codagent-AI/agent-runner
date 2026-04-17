@@ -21,6 +21,9 @@ func (m *Model) View() string {
 	if m.showLegend {
 		return m.renderLegend()
 	}
+	if m.quitConfirming {
+		return m.renderQuitConfirm()
+	}
 
 	var b strings.Builder
 
@@ -308,6 +311,24 @@ func (m *Model) bodyHeight() int {
 		return 5
 	}
 	return h
+}
+
+func (m *Model) renderQuitConfirm() string {
+	var b strings.Builder
+	b.WriteString("\n\n  ")
+	b.WriteString(tuistyle.HeaderStyle.Render("Agent Runner"))
+	b.WriteString("\n\n")
+	b.WriteString("  ")
+	b.WriteString(tuistyle.DimStyle.Render("The workflow is still running. Quitting will orphan the"))
+	b.WriteString("\n  ")
+	b.WriteString(tuistyle.DimStyle.Render("active step — it will continue running in the background."))
+	b.WriteString("\n\n  ")
+	b.WriteString(tuistyle.NormalStyle.Render("Quit anyway?  "))
+	b.WriteString(tuistyle.SelectedStyle.Render("[y]es"))
+	b.WriteString(tuistyle.NormalStyle.Render("  "))
+	b.WriteString(tuistyle.SelectedStyle.Render("[n]o"))
+	b.WriteString("\n")
+	return b.String()
 }
 
 func (m *Model) renderLegend() string {

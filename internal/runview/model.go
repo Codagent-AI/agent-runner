@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/codagent/agent-runner/internal/liverun"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runlock"
@@ -34,8 +35,9 @@ type ExitMsg struct{}
 type Entered int
 
 const (
-	FromList Entered = iota
-	FromInspect
+	FromList    Entered = iota
+	FromInspect         // read-only post-run inspection
+	FromLiveRun         // live workflow execution (runner goroutine is active)
 )
 
 // Model is the bubbletea model for the single-run detail view.
@@ -62,6 +64,11 @@ type Model struct {
 
 	resolverCfg ResolverConfig
 	startTime   time.Time
+
+	// Live-run fields (FromLiveRun mode only).
+	running        bool // true until ExecDoneMsg arrives
+	quitConfirming bool // quit-confirmation modal is visible
+	liveResult     string // set on ExecDoneMsg ("success"/"failed"/"stopped")
 }
 
 // New constructs a runview Model from a session directory.
@@ -108,9 +115,12 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 		path:       []*StepNode{tree.Root},
 		loadedFull: make(map[*StepNode]bool),
 		loadErr:    loadErr,
+		running:    entered == FromLiveRun,
 	}
 
-	m.active = runlock.Check(sessionDir) == runlock.LockActive
+	if entered != FromLiveRun {
+		m.active = runlock.Check(sessionDir) == runlock.LockActive
+	}
 
 	m.resolverCfg = ResolverConfig{
 		WorkflowsRoot: resolved.WorkflowsRoot,
@@ -166,6 +176,29 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.termWidth = msg.Width
 		m.termHeight = msg.Height
 
+	// ---- Live-run messages ----
+
+	case liverun.OutputChunkMsg:
+		m.applyOutputChunk(msg)
+		return m, nil
+
+	case liverun.StepStateMsg:
+		// Bookkeeping only for now; auto-follow is out of scope for this task.
+		_ = msg.ActiveStepPrefix
+		return m, nil
+
+	case liverun.SuspendedMsg, liverun.ResumedMsg:
+		// Terminal handoff bookkeeping; no visual change needed.
+		return m, nil
+
+	case liverun.ExecDoneMsg:
+		m.running = false
+		m.liveResult = msg.Result
+		// After completion behave identically to FromInspect.
+		return m, nil
+
+	// ---- Keyboard / mouse ----
+
 	case tea.KeyMsg:
 		if m.showLegend {
 			switch msg.String() {
@@ -174,8 +207,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+
+		// Quit-confirmation modal.
+		if m.quitConfirming {
+			switch msg.String() {
+			case "y", "Y":
+				return m, tea.Quit
+			case "n", "N", "esc":
+				m.quitConfirming = false
+			}
+			return m, nil
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
+			if m.running {
+				m.quitConfirming = true
+				return m, nil
+			}
 			return m, emitExit
 		case "?":
 			m.showLegend = true
@@ -210,12 +259,28 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tuistyle.DoRefresh()
 
 	case tuistyle.PulseMsg:
-		if m.active {
+		if m.active || m.running {
 			m.pulsePhase += (50.0 / 1000.0) * 2 * math.Pi
 		}
 		return m, tuistyle.DoPulse()
 	}
 	return m, nil
+}
+
+// applyOutputChunk finds the step matching msg.StepPrefix and appends msg.Bytes
+// to its in-memory output buffer. The 2000-line / 256 KB tail-render threshold
+// defined in output.go governs what the detail pane shows.
+func (m *Model) applyOutputChunk(msg liverun.OutputChunkMsg) {
+	node := m.tree.FindByPrefix(msg.StepPrefix)
+	if node == nil {
+		return
+	}
+	switch msg.Stream {
+	case "stdout":
+		node.Stdout += string(msg.Bytes)
+	case "stderr":
+		node.Stderr += string(msg.Bytes)
+	}
 }
 
 func (m *Model) moveCursor(delta int) {
@@ -260,6 +325,11 @@ func (m *Model) handleEsc() (tea.Model, tea.Cmd) {
 			}
 		}
 		m.detailOffset = 0
+		return m, nil
+	}
+	// At top level: show quit-confirm while running, otherwise navigate back.
+	if m.running {
+		m.quitConfirming = true
 		return m, nil
 	}
 	if m.entered == FromList {

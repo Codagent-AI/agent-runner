@@ -1,7 +1,5 @@
 # Test that skip_if: previous_success skips a step when the prior step succeeded.
 exec agent-runner workflow
-stdout 'workflow complete'
-stdout 'second \[skipped\]'
 ! stdout 'skip me'
 
 -- workflows/workflow.yaml --
