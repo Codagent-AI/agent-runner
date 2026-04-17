@@ -55,6 +55,12 @@ steps:
       Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports.
       Keep running the command and fixing until it passes with no errors.
 
+      Then dry-run the delta apply: `openspec validate` does NOT verify that MODIFIED/REMOVED/RENAMED headers exist in the target main spec — that check only runs at archive time. For every delta file under `openspec/changes/{{change_name}}/specs/<capability>/spec.md`:
+      - Under `## MODIFIED Requirements` and `## REMOVED Requirements`: each `### Requirement: <name>` header MUST appear verbatim (whitespace-insensitive) in `openspec/specs/<capability>/spec.md`.
+      - Under `## RENAMED Requirements`: the FROM header MUST exist in the main spec.
+      - If the main spec does not yet exist, only `## ADDED Requirements` is valid.
+      For every mismatch, either correct the delta header to match the main spec, or restructure the delta (e.g. fold a REMOVED into a MODIFIED if the behavior is being rewritten rather than deleted). Do not proceed until every MODIFIED/REMOVED/RENAMED header resolves.
+
   - id: review
     mode: headless
     session: resume
@@ -68,6 +74,8 @@ steps:
     prompt: |
       Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports.
       Keep running the command and fixing until it passes with no errors.
+
+      Then repeat the delta-apply dry-run from the pre-review-validate step: for every `### Requirement:` header under `## MODIFIED`, `## REMOVED`, or `## RENAMED` (FROM) sections in `openspec/changes/{{change_name}}/specs/<capability>/spec.md`, confirm the exact header exists in `openspec/specs/<capability>/spec.md`. Fix any mismatches before proceeding.
 
   - id: commit-openspec
     mode: headless
