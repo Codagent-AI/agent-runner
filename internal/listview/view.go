@@ -46,10 +46,13 @@ func (m *Model) View() string {
 	b.WriteString("\n")
 	b.WriteString(tuistyle.RenderRule(m.termWidth))
 	b.WriteString("\n")
+	// Reserve one row for inline errors so the help bar's position is
+	// stable whether or not an error is currently showing; otherwise the
+	// help bar flickers down-then-up on every error-set/clear transition.
 	if m.errMsg != "" {
 		b.WriteString("  " + errStyle.Render(m.errMsg))
-		b.WriteString("\n")
 	}
+	b.WriteString("\n")
 	b.WriteString(m.renderHelp())
 	b.WriteString("\n")
 

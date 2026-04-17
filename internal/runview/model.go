@@ -204,7 +204,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case liverun.ExecDoneMsg:
 		m.running = false
 		m.liveResult = msg.Result
-		if msg.Result == "failed" || msg.Result == "stopped" {
+		if msg.Result == "failed" {
 			if failed := findFailedLeaf(m.tree.Root); failed != nil {
 				m.navigateToNode(failed)
 			}
