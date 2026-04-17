@@ -35,10 +35,12 @@ func (r *tuiProcessRunner) SetPrefix(prefix string) {
 }
 
 // sanitizePrefix converts an audit-log prefix into a safe filesystem name.
-// Uses an allowlist: any character outside [A-Za-z0-9._-] is replaced with
-// '_'. This blocks path separators on every platform (including '\' on
-// Windows) and neutralizes '..' traversal by mapping '.' runs unchanged but
-// rejecting the substring at the containment check in openOutputFile.
+// Maps '/' → "__" and ':' → "_" per the spec (so loop-b:2/step-c becomes
+// loop-b_2__step-c, distinguishing nesting from iteration suffixes). Any
+// other character outside the allowlist [A-Za-z0-9._-] is replaced with
+// a single '_'. Separator replacement blocks path traversal on every
+// platform (including '\' on Windows); the containment check in
+// openOutputFile rejects any residual '..' substring.
 func sanitizePrefix(prefix string) string {
 	var b strings.Builder
 	for _, ch := range prefix {
@@ -48,6 +50,8 @@ func sanitizePrefix(prefix string) string {
 			ch >= '0' && ch <= '9',
 			ch == '.' || ch == '-':
 			b.WriteRune(ch)
+		case ch == '/':
+			b.WriteString("__")
 		default:
 			b.WriteByte('_')
 		}

@@ -84,11 +84,23 @@ func TestSanitizePrefix_Simple(t *testing.T) {
 }
 
 func TestSanitizePrefix_SlashAndColon(t *testing.T) {
-	// '/' and ':' both become '_'
+	// Per spec: '/' → "__" (nesting), ':' → "_" (iteration).
 	got := sanitizePrefix("loop-b:2/step-c")
-	want := "loop-b_2_step-c"
+	want := "loop-b_2__step-c"
 	if got != want {
 		t.Errorf("sanitizePrefix = %q, want %q", got, want)
+	}
+}
+
+// TestSanitizePrefix_NestingVsIterationDisambiguation guards against the
+// collision where the nested step 'b' under loop 'a' (audit prefix "a/b")
+// would match iteration 'b' of loop 'a' (audit prefix "a:b") if both
+// separators mapped to the same replacement.
+func TestSanitizePrefix_NestingVsIterationDisambiguation(t *testing.T) {
+	nested := sanitizePrefix("a/b")
+	iter := sanitizePrefix("a:b")
+	if nested == iter {
+		t.Errorf("sanitizePrefix collision: %q == %q", nested, iter)
 	}
 }
 
