@@ -87,8 +87,8 @@ func TestBuildTree_ImplementTask(t *testing.T) {
 	if tree.Root.ID != "implement-task" {
 		t.Errorf("root ID: got %q", tree.Root.ID)
 	}
-	if got := len(tree.Root.Children); got != 5 {
-		t.Fatalf("want 5 children, got %d", got)
+	if got := len(tree.Root.Children); got != 6 {
+		t.Fatalf("want 6 children, got %d", got)
 	}
 
 	implement := tree.Root.Children[0]
@@ -102,7 +102,7 @@ func TestBuildTree_ImplementTask(t *testing.T) {
 		t.Errorf("agent: want implementor, got %q", implement.StaticAgent)
 	}
 
-	subwf := tree.Root.Children[1]
+	subwf := tree.Root.Children[2]
 	if subwf.ID != "run-validator" || subwf.Type != NodeSubWorkflow {
 		t.Errorf("run-validator: id=%q type=%v", subwf.ID, subwf.Type)
 	}
@@ -113,7 +113,7 @@ func TestBuildTree_ImplementTask(t *testing.T) {
 		t.Errorf("sub-workflow children should start empty")
 	}
 
-	shell := tree.Root.Children[2]
+	shell := tree.Root.Children[3]
 	if shell.ID != "check-clean" || shell.Type != NodeShell {
 		t.Errorf("check-clean: id=%q type=%v", shell.ID, shell.Type)
 	}
