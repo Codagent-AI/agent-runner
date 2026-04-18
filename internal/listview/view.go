@@ -75,13 +75,13 @@ func countLines(s string) int {
 // bodyHeight returns the vertical space reserved for the body region —
 // everything between the subheader blank and the bottom divider. Chrome
 // consists of: leading blank + header + blank + tabs + blank + rule +
-// blank + subheader + blank (above) and blank + rule + blank + help +
-// trailing blank (below) = 14 rows.
+// blank + subheader + blank (above) and blank + rule + reserved-error-row
+// + help + trailing blank (below) = 15 rows.
 func (m *Model) bodyHeight() int {
 	if m.termHeight == 0 {
 		return 1 << 30
 	}
-	return max(3, m.termHeight-14)
+	return max(3, m.termHeight-15)
 }
 
 func (m *Model) renderTabs() string {

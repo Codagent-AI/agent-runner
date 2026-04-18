@@ -4,11 +4,12 @@ import "io"
 
 // ANSI escape sequence states.
 const (
-	ansiNormal = iota
-	ansiEscape // saw ESC
-	ansiCSI    // saw ESC [; consuming CSI param/intermediate bytes until final
-	ansiOSC    // saw ESC ]; consuming until BEL or ESC \
-	ansiOSCEsc // ESC seen inside OSC (checking for \)
+	ansiNormal    = iota
+	ansiEscape    // saw ESC
+	ansiEscapeInt // saw ESC + intermediate byte (e.g. '(' or ')'); consuming one final byte
+	ansiCSI       // saw ESC [; consuming CSI param/intermediate bytes until final
+	ansiOSC       // saw ESC ]; consuming until BEL or ESC \
+	ansiOSCEsc    // ESC seen inside OSC (checking for \)
 )
 
 // ANSIStripper is an io.Writer that strips ANSI escape sequences from the
@@ -51,17 +52,25 @@ func (s *ANSIStripper) Write(p []byte) (int, error) {
 			}
 
 		case ansiEscape:
-			switch b {
-			case '[':
+			switch {
+			case b == '[':
 				s.state = ansiCSI
-			case ']':
+			case b == ']':
 				s.state = ansiOSC
+			case b >= 0x20 && b <= 0x2F:
+				// Intermediate byte (0x20-0x2F, e.g. '(' ')' '*' '+'). The next
+				// byte is the final byte of a three-char sequence like
+				// ESC ( B (charset designation) — consume it and return to normal.
+				s.state = ansiEscapeInt
 			default:
-				// Fe/Fs/Fp two-character escape sequences (e.g. ESC M, ESC =, ESC >,
-				// ESC 7, ESC 8) and single/intermediate forms (e.g. ESC ( B, ESC ( 0)
-				// are consumed in full: drop both the ESC and this byte.
+				// Fe/Fs/Fp two-character escape sequences (e.g. ESC M, ESC =,
+				// ESC >, ESC 7, ESC 8): drop both the ESC and this byte.
 				s.state = ansiNormal
 			}
+
+		case ansiEscapeInt:
+			// Consume exactly one final byte and return to normal.
+			s.state = ansiNormal
 
 		case ansiCSI:
 			// CSI final byte: 0x40–0x7E

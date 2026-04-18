@@ -422,6 +422,12 @@ func PrepareRun(workflow *model.Workflow, params map[string]string, opts *Option
 
 	startIndex, err := resolveStartIndex(workflow, opts.From)
 	if err != nil {
+		// initRunState already created the session dir, lock file, and audit
+		// logger — release them so a failed prepare doesn't leave a ghost run.
+		runlock.Delete(rs.sessionDir)
+		if rs.auditLogger != nil {
+			rs.auditLogger.Close()
+		}
 		return nil, err
 	}
 

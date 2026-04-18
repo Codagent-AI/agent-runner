@@ -196,9 +196,14 @@ func (r *tuiProcessRunner) RunAgent(args []string, captureStdout bool, workdir s
 		}
 	}
 
+	stdout := stdoutBuf.String()
+	if !captureStdout {
+		stdout = ""
+	}
+
 	return iexec.ProcessResult{
 		ExitCode: exitCode,
-		Stdout:   stdoutBuf.String(),
+		Stdout:   stdout,
 		Stderr:   stderrBuf.String(),
 	}, nil
 }

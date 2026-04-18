@@ -348,28 +348,27 @@ func runLiveTUI(h *runner.RunHandle) int {
 	p := tea.NewProgram(rv, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	coord := liverun.NewCoordinator(p, h.SessionDir)
 
-	resultCh := make(chan string, 1)
+	resultCh := make(chan runner.WorkflowResult, 1)
 	go func() {
-		result := string(runner.ResultFailed)
+		result := runner.ResultFailed
 		var runErr error
 		defer func() {
 			if rec := recover(); rec != nil {
-				coord.NotifyDone("failed", fmt.Errorf("panic: %v", rec))
-				resultCh <- "failed"
+				coord.NotifyDone(string(runner.ResultFailed), fmt.Errorf("panic: %v", rec))
+				resultCh <- runner.ResultFailed
 				return
 			}
-			coord.NotifyDone(result, runErr)
+			coord.NotifyDone(string(result), runErr)
 			resultCh <- result
 		}()
 
-		res := runner.ExecuteFromHandle(h, &runner.Options{
+		result = runner.ExecuteFromHandle(h, &runner.Options{
 			ProcessRunner: coord.TUIProcessRunner(&realProcessRunner{}),
 			GlobExpander:  &realGlobExpander{},
 			Log:           &runner.DiscardLogger{},
 			SuspendHook:   coord.BeforeInteractive,
 			ResumeHook:    coord.AfterInteractive,
 		})
-		result = string(res)
 	}()
 
 	_, err = p.Run()
@@ -378,8 +377,16 @@ func runLiveTUI(h *runner.RunHandle) int {
 		return 1
 	}
 
-	if runResult := <-resultCh; runResult != "success" {
-		return 1
+	// If the runner finished before the TUI exited, map its result to an exit
+	// code. If the user confirmed quit while the workflow was still running,
+	// resultCh has no value yet — keep the documented orphan-on-quit behavior
+	// and return 0 without blocking on the lingering goroutine.
+	select {
+	case runResult := <-resultCh:
+		if runResult != runner.ResultSuccess {
+			return 1
+		}
+	default:
 	}
 	return 0
 }

@@ -202,6 +202,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case liverun.ExecDoneMsg:
+		// Drain any outstanding audit events before deciding which step to
+		// focus. Step statuses reach the tree via audit.log (not OutputChunkMsg),
+		// so without this refresh findFailedLeaf can miss a step that finished
+		// just before ExecDoneMsg.
+		m.refreshData()
 		m.running = false
 		m.liveResult = msg.Result
 		if msg.Result == "failed" {
@@ -226,7 +231,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tuistyle.RefreshMsg:
-		if m.active {
+		// FromLiveRun leaves m.active=false because no runlock is held, but
+		// the in-process runner is still emitting audit events we need to
+		// pick up so step statuses stay current.
+		if m.active || m.running {
 			m.refreshData()
 		}
 		return m, tuistyle.DoRefresh()
