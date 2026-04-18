@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/runs"
 	"github.com/codagent/agent-runner/internal/tuistyle"
 )
@@ -49,6 +50,7 @@ type Model struct {
 	projectsRoot string
 	currentRuns  []runs.RunInfo
 	loadErr      string
+	errMsg       string
 	pulsePhase   float64
 	termWidth    int
 	termHeight   int
@@ -288,6 +290,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.termHeight = msg.Height
 
 	case tea.KeyMsg:
+		m.errMsg = "" // auto-clear inline error on any keypress
 		switch msg.String() {
 		case "ctrl+c", "q":
 			m.quitting = true
@@ -384,6 +387,10 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 	case tabCurrentDir:
 		if m.currentDirCursor < len(m.currentRuns) {
 			r := m.currentRuns[m.currentDirCursor]
+			if runlock.CheckOwnedByOther(r.SessionDir, os.Getpid()) {
+				m.errMsg = "run is active in another process"
+				return m, nil
+			}
 			return m, viewRunCmd(r.SessionDir, m.projectDir)
 		}
 	case tabWorktrees:
@@ -398,6 +405,10 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 			wt := m.selectedWorktree()
 			if wt != nil && m.worktreeTab.listCursor < len(wt.Runs) {
 				r := wt.Runs[m.worktreeTab.listCursor]
+				if runlock.CheckOwnedByOther(r.SessionDir, os.Getpid()) {
+					m.errMsg = "run is active in another process"
+					return m, nil
+				}
 				projDir := filepath.Join(m.projectsRoot, wt.Encoded)
 				return m, viewRunCmd(r.SessionDir, projDir)
 			}
@@ -414,6 +425,10 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 			d := m.selectedAllDir()
 			if d != nil && m.allTab.listCursor < len(d.Runs) {
 				r := d.Runs[m.allTab.listCursor]
+				if runlock.CheckOwnedByOther(r.SessionDir, os.Getpid()) {
+					m.errMsg = "run is active in another process"
+					return m, nil
+				}
 				projDir := filepath.Join(m.projectsRoot, d.Encoded)
 				return m, viewRunCmd(r.SessionDir, projDir)
 			}

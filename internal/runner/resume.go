@@ -1,7 +1,9 @@
 package runner
 
 import (
+	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 
@@ -11,23 +13,27 @@ import (
 	"github.com/codagent/agent-runner/internal/stateio"
 )
 
-// ResumeWorkflow resumes a workflow from a state file.
-func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error) {
+// ErrAlreadyCompleted is returned by PrepareResume and ResumeWorkflow when
+// the recorded state indicates the workflow finished on a previous run.
+// Callers use errors.Is to distinguish it from other setup errors.
+var ErrAlreadyCompleted = errors.New("workflow already completed")
+
+// PrepareResume loads the workflow state from stateFilePath, resolves the
+// resume step, and calls PrepareRun to initialize the session. Returns a
+// RunHandle that callers can pass to ExecuteFromHandle.
+func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	state, err := stateio.ReadState(stateFilePath)
 	if err != nil {
-		return ResultFailed, err
+		return nil, err
 	}
 
 	if state.Completed {
-		if opts.Log != nil {
-			opts.Log.Println("agent-runner: workflow already completed")
-		}
-		return ResultSuccess, nil
+		return nil, ErrAlreadyCompleted
 	}
 
 	workflow, err := loader.LoadWorkflow(state.WorkflowFile, loader.Options{})
 	if err != nil {
-		return ResultFailed, fmt.Errorf("cannot reload workflow: %w", err)
+		return nil, fmt.Errorf("cannot reload workflow: %w", err)
 	}
 
 	// Check workflow hash
@@ -47,7 +53,7 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
 	var sessionProfiles map[string]string
 	var capturedVars map[string]string
 	var lastSessionStepID string
-	var childState *model.SubWorkflowChildState
+	var childState *model.NestedStepState
 
 	var completed bool
 
@@ -63,13 +69,13 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
 			// Top-level loop step captured mid-iteration. Carry the iteration
 			// (and any deeper chain) through as ChildState so ExecuteLoopStep's
 			// consumeLoopResume can pick it up when the step is dispatched.
-			childState = &model.SubWorkflowChildState{
+			childState = &model.NestedStepState{
 				StepID:    nested.StepID,
 				Iteration: nested.Iteration,
-				Child:     nestedToChildState(nested.Child),
+				Child:     nested.Child,
 			}
 		} else if nested.Child != nil {
-			childState = nestedToChildState(nested.Child)
+			childState = nested.Child
 		}
 	} else {
 		fromStep = state.CurrentStep.StepID
@@ -78,10 +84,10 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
 	// Resolve which step to actually resume from — advance past completed steps.
 	resolved, err := model.ResolveResumeStep(workflow.Steps, fromStep, completed)
 	if err != nil {
-		return ResultFailed, fmt.Errorf("step %q no longer exists in workflow", fromStep)
+		return nil, fmt.Errorf("step %q no longer exists in workflow", fromStep)
 	}
 	if resolved.AllDone {
-		return ResultSuccess, nil
+		return nil, ErrAlreadyCompleted
 	}
 	fromStep = resolved.StepID
 
@@ -89,16 +95,14 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
 	var eng engine.Engine
 	if workflow.Engine != nil {
 		engConfig := map[string]any{"type": workflow.Engine.Type}
-		for k, v := range workflow.Engine.Extras {
-			engConfig[k] = v
-		}
+		maps.Copy(engConfig, workflow.Engine.Extras)
 		eng, err = engine.Create(engConfig)
 		if err != nil {
-			return ResultFailed, fmt.Errorf("create engine: %w", err)
+			return nil, fmt.Errorf("create engine: %w", err)
 		}
 	}
 
-	return RunWorkflow(&workflow, state.Params, &Options{
+	resumeOpts := &Options{
 		From:              fromStep,
 		WorkflowFile:      state.WorkflowFile,
 		SessionDir:        filepath.Dir(stateFilePath),
@@ -111,20 +115,27 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
 		ProcessRunner:     opts.ProcessRunner,
 		GlobExpander:      opts.GlobExpander,
 		Log:               opts.Log,
-	})
+		SuspendHook:       opts.SuspendHook,
+		ResumeHook:        opts.ResumeHook,
+	}
+
+	return PrepareRun(&workflow, state.Params, resumeOpts)
 }
 
-func nestedToChildState(nested *model.NestedStepState) *model.SubWorkflowChildState {
-	if nested == nil {
-		return nil
+// ResumeWorkflow resumes a workflow from a state file.
+// This is a thin wrapper around PrepareResume + ExecuteFromHandle; existing tests
+// and non-TUI callers use this unchanged signature.
+func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error) {
+	h, err := PrepareResume(stateFilePath, opts)
+	if err != nil {
+		// "already completed" is not an error for the caller
+		if errors.Is(err, ErrAlreadyCompleted) {
+			if opts.Log != nil {
+				opts.Log.Println("agent-runner: workflow already completed")
+			}
+			return ResultSuccess, nil
+		}
+		return ResultFailed, err
 	}
-	return &model.SubWorkflowChildState{
-		StepID:            nested.StepID,
-		SessionIDs:        copyMap(nested.SessionIDs),
-		SessionProfiles:   copyMap(nested.SessionProfiles),
-		CapturedVariables: copyMap(nested.CapturedVariables),
-		Completed:         nested.Completed,
-		Iteration:         nested.Iteration,
-		Child:             nestedToChildState(nested.Child),
-	}
+	return ExecuteFromHandle(h, opts), nil
 }

@@ -5,35 +5,23 @@ TBD - created by archiving change move-state-file. Update Purpose after archive.
 ## Requirements
 ### Requirement: Resume by session ID
 
-The CLI SHALL accept a `--resume` boolean flag and a `--session <id>` string flag. When `--resume` is passed with `--session <id>`, it SHALL resume the workflow execution from that session's saved state. When `--resume` is passed without `--session`, it SHALL resume the most recent session for the current project directory, determined by filesystem modification time of the state file. `--session` without `--resume` SHALL be an error.
+The CLI SHALL accept a `--resume` flag that optionally takes a session ID. When `--resume` is passed without a session ID, it SHALL launch the run list TUI. When `--resume <id>` is passed with a session ID, it SHALL resume workflow execution from that session's saved state.
 
 #### Scenario: Resume with explicit session ID
-- **WHEN** `--resume --session <id>` is passed and a session directory with that ID exists
+- **WHEN** `--resume <id>` is passed and a session with that ID exists
 - **THEN** the runner resumes workflow execution from that session's saved state
 
-#### Scenario: Resume most recent session
-- **WHEN** `--resume` is passed without `--session`
-- **THEN** the runner locates the most recently modified state file across all sessions for the current project directory and resumes from it
+#### Scenario: Resume without session ID launches TUI
+- **WHEN** `--resume` is passed without a session ID
+- **THEN** the run list TUI is launched
 
 #### Scenario: Resume with nonexistent session ID
-- **WHEN** `--resume --session <id>` is passed and no session directory matches
+- **WHEN** `--resume <id>` is passed and no session matches that ID
 - **THEN** the runner exits with an error indicating the session was not found
 
-#### Scenario: Resume with no previous sessions
-- **WHEN** `--resume` is passed without `--session` and no previous sessions exist for the project directory
-- **THEN** the runner exits with an error indicating no previous sessions were found
-
-#### Scenario: Session flag without resume
-- **WHEN** `--session <id>` is passed without `--resume`
-- **THEN** the runner exits with an error indicating `--session` requires `--resume`
-
-#### Scenario: Resume rejects positional arguments
-- **WHEN** `--resume` is passed alongside any positional arguments (workflow file or parameters)
-- **THEN** the runner exits with an error indicating that resume mode does not accept positional arguments
-
-#### Scenario: Resume without positional arguments
-- **WHEN** `--resume` is passed without any positional arguments
-- **THEN** the runner proceeds with resume using the workflow file stored in the saved state
+#### Scenario: Resume rejects extra positional arguments
+- **WHEN** `--resume` is passed with more than one positional argument
+- **THEN** the runner exits with an error indicating resume mode accepts at most one argument (the session ID)
 
 ### Requirement: Flatten CLI to single command
 
@@ -50,4 +38,3 @@ The `run`, `resume`, and `validate` subcommands SHALL be removed. The CLI SHALL 
 #### Scenario: Validate and resume are mutually exclusive
 - **WHEN** both `--validate` and `--resume` are passed
 - **THEN** the runner exits with an error indicating the flags are mutually exclusive
-

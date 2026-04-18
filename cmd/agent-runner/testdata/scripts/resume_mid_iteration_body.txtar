@@ -1,0 +1,68 @@
+# Test that resume enters a for-each iteration at the mid-body step that
+# failed rather than restarting the whole iteration from its first body step.
+#
+# Each iteration has 3 body steps: pass-a, fail-once, pass-b. fail-once only
+# fails on the first run for item "a" (gated by marker-a.txt). Iteration 0's
+# pass-a succeeds, fail-once fails, pass-b never runs. On resume, pass-a
+# for iter 0 MUST NOT re-run; fail-once for item "a" should see the marker
+# and succeed; pass-b for iter 0 runs; then iter 1 completes fully.
+
+exec sh -c 'mkdir -p items && echo a > items/a.txt && echo b > items/b.txt'
+
+# First run fails at iter 0's fail-once step.
+! exec agent-runner workflow
+stdout 'step "process" failed'
+
+# pass-a ran once in iter 0 (created its marker file).
+exec test -f ran-pass-a-a.txt
+
+# pass-b did NOT run (no file).
+! exec test -f ran-pass-b-a.txt
+
+# Iter 1 never started (no a-pass marker for item b).
+! exec test -f ran-pass-a-b.txt
+
+# Delete the iter-0 pass-a marker. If pass-a re-runs on resume, the file
+# will reappear.
+exec rm ran-pass-a-a.txt
+
+# Resume. Iter 0's fail-once should now see marker-a.txt and pass. Iter 1
+# has no fail gate, so the rest runs to completion.
+exec sh -c 'agent-runner -resume "$(ls -d "$HOME"/.agent-runner/projects/*/runs/*/ | head -1 | xargs basename)"'
+
+# CRITICAL: iter 0's pass-a must NOT have re-run — its marker stays absent.
+! exec test -f ran-pass-a-a.txt
+
+# Iter 0's pass-b ran post-resume.
+exec test -f ran-pass-b-a.txt
+
+# Iter 1 ran fully.
+exec test -f ran-pass-a-b.txt
+exec test -f ran-pass-b-b.txt
+
+-- workflows/workflow.yaml --
+name: e2e-mid-iteration-resume
+steps:
+  - id: process
+    loop:
+      over: "items/*.txt"
+      as: item
+    steps:
+      - id: pass-a
+        command: |
+          name=$(basename "{{item}}" .txt)
+          : > "ran-pass-a-$name.txt"
+      - id: fail-once
+        command: |
+          name=$(basename "{{item}}" .txt)
+          if [ "$name" != "a" ]; then
+            exit 0
+          fi
+          if [ ! -f marker-a.txt ]; then
+            : > marker-a.txt
+            exit 1
+          fi
+      - id: pass-b
+        command: |
+          name=$(basename "{{item}}" .txt)
+          : > "ran-pass-b-$name.txt"

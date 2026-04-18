@@ -336,3 +336,14 @@ func cloneTemplate(src, parent *StepNode) *StepNode {
 	// For shell/agent/sub-workflow steps, Body is empty, so nothing to copy.
 	return dst
 }
+
+// FindByPrefix locates the StepNode whose audit prefix matches prefix.
+// prefix is the full bracketed string produced by audit.BuildPrefix, e.g.
+// "[my-step]" or "[loop:0, sub:child, inner]". Returns nil if not found.
+func (t *Tree) FindByPrefix(prefix string) *StepNode {
+	tokens := parsePrefix(prefix)
+	if len(tokens) == 0 {
+		return nil
+	}
+	return t.resolve(tokens, false)
+}

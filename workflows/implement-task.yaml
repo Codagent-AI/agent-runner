@@ -15,6 +15,14 @@ steps:
       When you are done implementing, commit your changes with a clear,
       descriptive commit message. Then summarize to the user what you changed.
 
+  - id: simplify
+    session: resume
+    prompt: |
+      If the /simplify skill is available, run it focusing on code reuse and readability.
+      If it is not available, review your git diff for duplicated logic that should be
+      extracted into shared helpers, and readability issues like deep nesting, unclear
+      naming, or overly complex conditionals. Fix and commit anything clear-cut.
+
   - id: run-validator
     workflow: run-validator.yaml
 

@@ -149,15 +149,8 @@ func executeChildSteps(
 		}
 
 		if flowctl.ShouldSkip(workflow.Steps[i].SkipIf, childCtx.LastStepOutcome) {
-			breadcrumb := textfmt.BuildBreadcrumb(nestingToFmt(childCtx), workflow.Steps[i].ID)
-			log.Println(textfmt.Separator())
-			log.Println(textfmt.StepHeading(i, len(workflow.Steps), breadcrumb, "", true))
 			continue
 		}
-
-		breadcrumb := textfmt.BuildBreadcrumb(nestingToFmt(childCtx), workflow.Steps[i].ID)
-		log.Println(textfmt.Separator())
-		log.Println(textfmt.StepHeading(i, len(workflow.Steps), breadcrumb, workflow.Steps[i].StepType(), false))
 
 		recordChildProgress(childCtx, workflow.Steps[i].ID, false)
 		if childCtx.ParentContext != nil && childCtx.ParentContext.FlushState != nil {
@@ -198,17 +191,18 @@ func recordChildProgress(childCtx *model.ExecutionContext, childStepID string, c
 		return
 	}
 
-	var nestedChild *model.SubWorkflowChildState
+	var nestedChild *model.NestedStepState
 	if childCtx.LastSubWorkflowChild != nil {
 		nestedChild = childCtx.LastSubWorkflowChild
 		childCtx.LastSubWorkflowChild = nil
 	}
 
-	entry := &model.SubWorkflowChildState{
+	entry := &model.NestedStepState{
 		StepID:            childStepID,
 		SessionIDs:        copyMap(childCtx.SessionIDs),
 		SessionProfiles:   copyMap(childCtx.SessionProfiles),
 		CapturedVariables: copyMap(childCtx.CapturedVariables),
+		LastSessionStepID: childCtx.LastSessionStepID,
 		Completed:         completed,
 	}
 	// When the deeper state already describes this same step (e.g. a loop step
@@ -230,15 +224,7 @@ func applyResumeState(parentCtx, childCtx *model.ExecutionContext) (string, bool
 		return "", false
 	}
 
-	for k, v := range resumeChild.SessionIDs {
-		childCtx.SessionIDs[k] = v
-	}
-	for k, v := range resumeChild.SessionProfiles {
-		childCtx.SessionProfiles[k] = v
-	}
-	for k, v := range resumeChild.CapturedVariables {
-		childCtx.CapturedVariables[k] = v
-	}
+	restorePersistedSessions(childCtx, resumeChild)
 	if resumeChild.Iteration != nil {
 		// This entry describes a loop step that is being resumed mid-iteration.
 		// Keep the full entry on childCtx so the loop executor can read its
@@ -249,6 +235,24 @@ func applyResumeState(parentCtx, childCtx *model.ExecutionContext) (string, bool
 		childCtx.ResumeChildState = resumeChild.Child
 	}
 	return resumeChild.StepID, resumeChild.Completed
+}
+
+// restorePersistedSessions copies persisted session IDs, session profiles,
+// captured variables, and the last-session-step ID from src into ctx. Used
+// by both sub-workflow and loop-iteration resume paths.
+func restorePersistedSessions(ctx *model.ExecutionContext, src *model.NestedStepState) {
+	for k, v := range src.SessionIDs {
+		ctx.SessionIDs[k] = v
+	}
+	for k, v := range src.SessionProfiles {
+		ctx.SessionProfiles[k] = v
+	}
+	for k, v := range src.CapturedVariables {
+		ctx.CapturedVariables[k] = v
+	}
+	if src.LastSessionStepID != "" {
+		ctx.LastSessionStepID = src.LastSessionStepID
+	}
 }
 
 func buildNestingPrefix(nestingPath []model.NestingSegment) string {

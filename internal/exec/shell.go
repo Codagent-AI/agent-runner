@@ -38,18 +38,6 @@ func nestingToAudit(ctx *model.ExecutionContext) []audit.NestingInfo {
 	return result
 }
 
-func nestingToFmt(ctx *model.ExecutionContext) []textfmt.NestingInfo {
-	result := make([]textfmt.NestingInfo, len(ctx.NestingPath))
-	for i, seg := range ctx.NestingPath {
-		result[i] = textfmt.NestingInfo{
-			StepID:          seg.StepID,
-			Iteration:       seg.Iteration,
-			SubWorkflowName: seg.SubWorkflowName,
-		}
-	}
-	return result
-}
-
 func contextSnapshot(ctx *model.ExecutionContext) map[string]any {
 	params := make(map[string]any)
 	for k, v := range ctx.Params {
@@ -105,6 +93,11 @@ func ExecuteShellStep(
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 	startTime := time.Now()
 
+	// Set the step prefix on the process runner if it supports it (TUI mode).
+	if ps, ok := runner.(interface{ SetPrefix(string) }); ok {
+		ps.SetPrefix(prefix)
+	}
+
 	emitAudit(ctx, audit.Event{
 		Timestamp: startTime.UTC().Format(time.RFC3339),
 		Prefix:    prefix,
@@ -144,11 +137,9 @@ func ExecuteShellStep(
 	endData := map[string]any{
 		"exit_code":   result.ExitCode,
 		"stderr":      truncateForAudit(result.Stderr),
+		"stdout":      truncateForAudit(result.Stdout),
 		"outcome":     string(outcome),
 		"duration_ms": time.Since(startTime).Milliseconds(),
-	}
-	if useCapture {
-		endData["stdout"] = truncateForAudit(result.Stdout)
 	}
 
 	emitAudit(ctx, audit.Event{

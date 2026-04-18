@@ -55,6 +55,24 @@ func Check(sessionDir string) LockStatus {
 	return LockStale
 }
 
+// CheckOwnedByOther returns true iff the lock file exists, contains a live
+// PID, and that PID differs from selfPID. Absent, stale, unreadable, or
+// same-process locks all return false.
+func CheckOwnedByOther(sessionDir string, selfPID int) bool {
+	data, err := os.ReadFile(filepath.Join(sessionDir, lockFileName)) // #nosec G304
+	if err != nil {
+		return false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		return false
+	}
+	if pid == selfPID {
+		return false
+	}
+	return isProcessAlive(pid)
+}
+
 // isProcessAlive checks whether a process with the given PID is alive.
 func isProcessAlive(pid int) bool {
 	proc, err := os.FindProcess(pid)
