@@ -17,6 +17,11 @@ type NestedStepState struct {
 	SessionProfiles   map[string]string `json:"sessionProfiles,omitempty"`
 	CapturedVariables map[string]string `json:"capturedVariables"`
 	LastSessionStepID string            `json:"lastSessionStepId,omitempty"`
+	// NamedSessions and NamedSessionDecls are only meaningful at the root
+	// NestedStepState level (written by runner.writeStepState). Nested entries
+	// produced by sub-workflow and loop progress records leave these nil.
+	NamedSessions     map[string]string `json:"namedSessions,omitempty"`
+	NamedSessionDecls map[string]string `json:"namedSessionDecls,omitempty"`
 	Completed         bool              `json:"completed,omitempty"`
 	Iteration         *int              `json:"iteration,omitempty"`
 	Child             *NestedStepState  `json:"child"`

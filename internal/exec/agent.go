@@ -47,9 +47,16 @@ func resolveStepProfile(step *model.Step, ctx *model.ExecutionContext) (*config.
 	}
 
 	var profileName string
-	if step.Session == model.SessionNew {
+	switch {
+	case step.Session == model.SessionNew:
 		profileName = step.Agent
-	} else {
+	case model.IsNamedSession(step.Session):
+		// Named session: agent profile is pinned by the session declaration.
+		profileName = ctx.NamedSessionDecls[string(step.Session)]
+		if profileName == "" {
+			return nil, fmt.Errorf("no declaration found for named session %q", step.Session)
+		}
+	default:
 		// Resume/inherit: look up from session-originating step.
 		profileName = ctx.SessionProfiles[ctx.LastSessionStepID]
 		if profileName == "" {
@@ -155,13 +162,20 @@ func ExecuteAgentStep(
 		ctx.CapturedVariables[step.Capture] = result.Stdout
 	}
 
-	// For session:new steps, set LastSessionStepID before session discovery so
-	// it is always available for subsequent resume/inherit steps, even if
-	// discovery returns empty (e.g. Codex).
-	if step.Session == model.SessionNew {
+	// For session:new and named session steps, set LastSessionStepID before
+	// session discovery so it is always available for subsequent resume/inherit
+	// steps, even if discovery returns empty (e.g. Codex).
+	switch {
+	case step.Session == model.SessionNew:
 		ctx.LastSessionStepID = step.ID
 		if step.Agent != "" {
 			ctx.SessionProfiles[step.ID] = step.Agent
+		}
+	case model.IsNamedSession(step.Session):
+		ctx.LastSessionStepID = step.ID
+		name := string(step.Session)
+		if profileName := ctx.NamedSessionDecls[name]; profileName != "" {
+			ctx.SessionProfiles[step.ID] = profileName
 		}
 	}
 
@@ -338,17 +352,25 @@ func recordSessionOnSpawn(step *model.Step, ctx *model.ExecutionContext, session
 		return
 	}
 	ctx.SessionIDs[step.ID] = sessionID
-	switch step.Session {
-	case model.SessionNew:
+	switch {
+	case step.Session == model.SessionNew:
 		if step.Agent != "" {
 			ctx.SessionProfiles[step.ID] = step.Agent
 		}
 		ctx.LastSessionStepID = step.ID
-	case model.SessionResume, model.SessionInherit:
+	case step.Session == model.SessionResume || step.Session == model.SessionInherit:
 		if ctx.LastSessionStepID != "" {
 			if prev := ctx.SessionProfiles[ctx.LastSessionStepID]; prev != "" {
 				ctx.SessionProfiles[step.ID] = prev
 			}
+		}
+		ctx.LastSessionStepID = step.ID
+	case model.IsNamedSession(step.Session):
+		name := string(step.Session)
+		// Update the shared NamedSessions map so all contexts see the session ID.
+		ctx.NamedSessions[name] = sessionID
+		if profileName := ctx.NamedSessionDecls[name]; profileName != "" {
+			ctx.SessionProfiles[step.ID] = profileName
 		}
 		ctx.LastSessionStepID = step.ID
 	}
@@ -381,6 +403,12 @@ func discoverAndStoreSession(
 			if prev := ctx.SessionProfiles[ctx.LastSessionStepID]; prev != "" {
 				ctx.SessionProfiles[step.ID] = prev
 			}
+		}
+		// For named sessions, also update the shared NamedSessions map with
+		// the discovered ID (covers the Codex case where the ID is discovered
+		// post-execution rather than pre-generated).
+		if model.IsNamedSession(step.Session) {
+			ctx.NamedSessions[string(step.Session)] = discoveredID
 		}
 		ctx.LastSessionStepID = step.ID
 		log.Printf("  session: %s\n", discoveredID)
@@ -487,6 +515,10 @@ func resolveSessionID(step *model.Step, ctx *model.ExecutionContext) (string, er
 			return "", err
 		}
 		return id, nil
+	}
+	if model.IsNamedSession(step.Session) {
+		// Returns empty string when the session hasn't been created yet (first use).
+		return session.ResolveNamedSession(string(step.Session), ctx), nil
 	}
 	return "", nil
 }

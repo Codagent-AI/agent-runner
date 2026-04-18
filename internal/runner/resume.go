@@ -53,6 +53,8 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	var sessionProfiles map[string]string
 	var capturedVars map[string]string
 	var lastSessionStepID string
+	var namedSessions map[string]string
+	var namedSessionDecls map[string]string
 	var childState *model.NestedStepState
 
 	var completed bool
@@ -64,6 +66,8 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		sessionProfiles = nested.SessionProfiles
 		capturedVars = nested.CapturedVariables
 		lastSessionStepID = nested.LastSessionStepID
+		namedSessions = nested.NamedSessions
+		namedSessionDecls = nested.NamedSessionDecls
 		completed = nested.Completed
 		if nested.Iteration != nil {
 			// Top-level loop step captured mid-iteration. Carry the iteration
@@ -111,6 +115,8 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		SessionProfiles:   sessionProfiles,
 		CapturedVariables: capturedVars,
 		LastSessionStepID: lastSessionStepID,
+		NamedSessions:     namedSessions,
+		NamedSessionDecls: namedSessionDecls,
 		ChildState:        childState,
 		ProcessRunner:     opts.ProcessRunner,
 		GlobExpander:      opts.GlobExpander,

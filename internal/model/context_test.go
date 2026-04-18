@@ -266,6 +266,86 @@ func TestWorkflowResumedPropagation(t *testing.T) {
 	})
 }
 
+func TestNamedSessionSharing(t *testing.T) {
+	t.Run("sub-workflow context shares NamedSessions pointer with parent", func(t *testing.T) {
+		parent := NewRootContext(&RootContextOptions{
+			Params:       map[string]string{},
+			WorkflowFile: "parent.yaml",
+		})
+
+		child := NewSubWorkflowContext(parent, &SubWorkflowContextOptions{
+			StepID:       "sub",
+			Params:       map[string]string{},
+			WorkflowFile: "child.yaml",
+		})
+
+		// Writing in child is visible in parent (same pointer).
+		child.NamedSessions["planner"] = "session-xyz"
+		if parent.NamedSessions["planner"] != "session-xyz" {
+			t.Fatal("expected named session to be visible in parent context")
+		}
+	})
+
+	t.Run("loop iteration context shares NamedSessions pointer with parent", func(t *testing.T) {
+		parent := NewRootContext(&RootContextOptions{
+			Params:       map[string]string{},
+			WorkflowFile: "test.yaml",
+		})
+
+		iter := NewLoopIterationContext(parent, LoopIterationOptions{
+			StepID:    "loop",
+			Iteration: 0,
+		})
+
+		iter.NamedSessions["planner"] = "iter-session"
+		if parent.NamedSessions["planner"] != "iter-session" {
+			t.Fatal("expected named session to be visible in parent context after loop iteration write")
+		}
+	})
+
+	t.Run("NamedSessionDecls restored from options in root context", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{
+			Params:            map[string]string{},
+			WorkflowFile:      "test.yaml",
+			NamedSessionDecls: map[string]string{"planner": "planner-profile"},
+		})
+
+		if ctx.NamedSessionDecls["planner"] != "planner-profile" {
+			t.Fatalf("expected NamedSessionDecls to be restored, got %q", ctx.NamedSessionDecls["planner"])
+		}
+	})
+
+	t.Run("NamedSessions restored from options in root context", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{
+			Params:        map[string]string{},
+			WorkflowFile:  "test.yaml",
+			NamedSessions: map[string]string{"planner": "persisted-id"},
+		})
+
+		if ctx.NamedSessions["planner"] != "persisted-id" {
+			t.Fatalf("expected NamedSessions to be restored, got %q", ctx.NamedSessions["planner"])
+		}
+	})
+
+	t.Run("NamedSessionDecls shared between sub-workflow and parent", func(t *testing.T) {
+		parent := NewRootContext(&RootContextOptions{
+			Params:       map[string]string{},
+			WorkflowFile: "parent.yaml",
+		})
+
+		child := NewSubWorkflowContext(parent, &SubWorkflowContextOptions{
+			StepID:       "sub",
+			Params:       map[string]string{},
+			WorkflowFile: "child.yaml",
+		})
+
+		child.NamedSessionDecls["implementor"] = "impl-profile"
+		if parent.NamedSessionDecls["implementor"] != "impl-profile" {
+			t.Fatal("expected NamedSessionDecls to be shared with parent")
+		}
+	})
+}
+
 func TestSeedSessionPropagation(t *testing.T) {
 	t.Run("propagates _seed from parent to sub-workflow context", func(t *testing.T) {
 		parent := NewRootContext(&RootContextOptions{

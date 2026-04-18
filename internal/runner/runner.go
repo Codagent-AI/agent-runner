@@ -40,6 +40,9 @@ type Options struct {
 	CapturedVariables map[string]string
 	LastSessionStepID string
 	ChildState        *model.NestedStepState
+	// NamedSessions and NamedSessionDecls are restored from state on --resume.
+	NamedSessions     map[string]string
+	NamedSessionDecls map[string]string
 	ProcessRunner     exec.ProcessRunner
 	GlobExpander      exec.GlobExpander
 	Log               exec.Logger
@@ -222,6 +225,11 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		log = &defaultLogger{}
 	}
 
+	// Merge the root workflow's session declarations into NamedSessionDecls.
+	// On fresh runs this populates the map from scratch. On resume, previously
+	// persisted entries are already present; mergeSessionDecls handles drift.
+	exec.MergeSessionDecls(ctx, workflow.Sessions, log)
+
 	return &runState{
 		workflow:     *workflow,
 		ctx:          ctx,
@@ -264,6 +272,8 @@ func buildExecutionContext(workflow *model.Workflow, params map[string]string, o
 		SessionProfiles:     opts.SessionProfiles,
 		CapturedVariables:   opts.CapturedVariables,
 		AuditLogger:         auditEventLogger,
+		NamedSessions:       opts.NamedSessions,
+		NamedSessionDecls:   opts.NamedSessionDecls,
 	})
 	if opts.ChildState != nil {
 		ctx.ResumeChildState = opts.ChildState
@@ -527,6 +537,8 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 		SessionProfiles:   copyMap(ctx.SessionProfiles),
 		CapturedVariables: copyMap(ctx.CapturedVariables),
 		LastSessionStepID: ctx.LastSessionStepID,
+		NamedSessions:     copyMap(ctx.NamedSessions),
+		NamedSessionDecls: copyMap(ctx.NamedSessionDecls),
 		Completed:         completed,
 		Iteration:         iteration,
 		Child:             child,

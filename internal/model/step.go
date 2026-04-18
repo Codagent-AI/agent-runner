@@ -25,6 +25,23 @@ const (
 	SessionInherit SessionStrategy = "inherit"
 )
 
+// IsNamedSession reports whether s is a named session reference (not empty and
+// not one of the reserved strategy keywords new/resume/inherit).
+func IsNamedSession(s SessionStrategy) bool {
+	switch s {
+	case SessionNew, SessionResume, SessionInherit, "":
+		return false
+	default:
+		return true
+	}
+}
+
+// SessionDecl declares a named agent session for a workflow.
+type SessionDecl struct {
+	Name  string `yaml:"name" json:"name"`
+	Agent string `yaml:"agent" json:"agent"`
+}
+
 // Loop defines iteration behavior for a step.
 type Loop struct {
 	Max            *int   `yaml:"max,omitempty" json:"max,omitempty"`
@@ -173,22 +190,26 @@ func (s *Step) Validate(knownCLIs []string) error {
 }
 
 // validateAgentField checks that the agent field is used correctly:
-// required on session:new agent steps, forbidden on resume/inherit and shell steps.
-// Also rejects unknown session strategy values on agent steps.
+// required on session:new agent steps, forbidden on resume/inherit/named and shell steps.
+// Named session values (not new/resume/inherit) are accepted; agent: is forbidden on them.
 func (s *Step) validateAgentField(isAgent, isShell bool) error {
 	if isAgent {
-		switch s.Session {
-		case SessionNew:
+		switch {
+		case s.Session == SessionNew:
 			if s.Agent == "" {
 				return fmt.Errorf(`"agent" is required on agent steps with session "new"`)
 			}
-		case SessionResume, SessionInherit:
+		case s.Session == SessionResume || s.Session == SessionInherit:
 			if s.Agent != "" {
 				return fmt.Errorf(`"agent" cannot be specified on %s steps`, s.Session)
 			}
+		case IsNamedSession(s.Session):
+			if s.Agent != "" {
+				return fmt.Errorf(`"agent" cannot be specified on named session steps; it is pinned by the session declaration`)
+			}
 		default:
 			if s.Session != "" {
-				return fmt.Errorf(`invalid session strategy %q (must be new, resume, or inherit)`, s.Session)
+				return fmt.Errorf(`invalid session strategy %q (must be new, resume, inherit, or a declared session name)`, s.Session)
 			}
 		}
 	}
@@ -213,7 +234,7 @@ func (s *Step) validateCaptureFields(isAgent, isShell bool) error {
 			if s.Mode != "" && s.Mode != ModeHeadless {
 				return fmt.Errorf(`"capture" is only allowed on shell and headless steps`)
 			}
-			if s.Mode == "" && s.Agent == "" && s.Session != SessionResume && s.Session != SessionInherit {
+			if s.Mode == "" && s.Agent == "" && s.Session != SessionResume && s.Session != SessionInherit && !IsNamedSession(s.Session) {
 				return fmt.Errorf(`"capture" is only allowed on shell and headless steps`)
 			}
 		}
@@ -311,6 +332,7 @@ type Workflow struct {
 	Name        string        `yaml:"name" json:"name"`
 	Description string        `yaml:"description,omitempty" json:"description,omitempty"`
 	Params      []Param       `yaml:"params,omitempty" json:"params,omitempty"`
+	Sessions    []SessionDecl `yaml:"sessions,omitempty" json:"sessions,omitempty"`
 	Steps       []Step        `yaml:"steps" json:"steps"`
 	Engine      *EngineConfig `yaml:"engine,omitempty" json:"engine,omitempty"`
 }

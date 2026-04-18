@@ -25,6 +25,16 @@ type ExecutionContext struct {
 	// (Go maps are unordered, so we can't rely on insertion order).
 	LastSessionStepID string
 
+	// NamedSessions maps role name → session ID for named session references.
+	// Shared by reference across all contexts in the execution tree so writes
+	// from any child are immediately visible to parents and siblings.
+	NamedSessions map[string]string
+	// NamedSessionDecls maps role name → agent profile name, populated from
+	// workflow sessions: declarations. Also shared by reference. On fresh runs
+	// it is built from declarations; on --resume it is restored from persistence
+	// (preserving the original agent for drift detection).
+	NamedSessionDecls map[string]string
+
 	NestingPath   []NestingSegment
 	ParentContext *ExecutionContext
 
@@ -72,6 +82,8 @@ type RootContextOptions struct {
 	SessionProfiles     map[string]string
 	CapturedVariables   map[string]string
 	AuditLogger         audit.EventLogger
+	NamedSessions       map[string]string
+	NamedSessionDecls   map[string]string
 }
 
 // NewRootContext creates a top-level execution context.
@@ -96,6 +108,16 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		sessionProfiles[k] = v
 	}
 
+	namedSessions := make(map[string]string)
+	for k, v := range opts.NamedSessions {
+		namedSessions[k] = v
+	}
+
+	namedSessionDecls := make(map[string]string)
+	for k, v := range opts.NamedSessionDecls {
+		namedSessionDecls[k] = v
+	}
+
 	return &ExecutionContext{
 		Params:              params,
 		SessionIDs:          sessionIDs,
@@ -110,6 +132,8 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		EngineRef:           opts.EngineRef,
 		ProfileStore:        opts.ProfileStore,
 		AuditLogger:         opts.AuditLogger,
+		NamedSessions:       namedSessions,
+		NamedSessionDecls:   namedSessionDecls,
 	}
 }
 
@@ -169,6 +193,10 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		FlushState:          parent.FlushState,
 		SuspendHook:         parent.SuspendHook,
 		ResumeHook:          parent.ResumeHook,
+		// Named session maps are shared by reference so writes from any child
+		// are immediately visible to parents and sibling sub-workflows.
+		NamedSessions:     parent.NamedSessions,
+		NamedSessionDecls: parent.NamedSessionDecls,
 	}
 }
 
@@ -232,5 +260,9 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		FlushState:          parent.FlushState,
 		SuspendHook:         parent.SuspendHook,
 		ResumeHook:          parent.ResumeHook,
+		// Named session maps are shared by reference so writes from a child
+		// sub-workflow are immediately visible to the parent and later siblings.
+		NamedSessions:     parent.NamedSessions,
+		NamedSessionDecls: parent.NamedSessionDecls,
 	}
 }

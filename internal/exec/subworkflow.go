@@ -82,6 +82,11 @@ func ExecuteSubWorkflowStep(
 		EngineSet:       workflow.Engine != nil,
 	})
 
+	// Merge the sub-workflow's session declarations into the shared
+	// NamedSessionDecls map. Only add new names; if a name is already present
+	// with a different agent and a session already exists, warn (drift).
+	MergeSessionDecls(childCtx, workflow.Sessions, log)
+
 	startFromStepID, startCompleted := applyResumeState(parentCtx, childCtx)
 	childPrefix := buildNestingPrefix(childCtx.NestingPath)
 
@@ -325,6 +330,32 @@ func emitSubEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time,
 		Type:      audit.EventStepEnd,
 		Data:      data,
 	})
+}
+
+// MergeSessionDecls adds session declarations from a newly loaded (sub-)workflow
+// into the shared NamedSessionDecls map. Compatible duplicates (same name, same
+// agent) are silently merged. If a session already exists in NamedSessions and
+// the current declaration uses a different agent, a warning is emitted but the
+// original agent (used at session creation) is kept.
+func MergeSessionDecls(ctx *model.ExecutionContext, sessions []model.SessionDecl, log Logger) {
+	for _, decl := range sessions {
+		existing, present := ctx.NamedSessionDecls[decl.Name]
+		if !present {
+			ctx.NamedSessionDecls[decl.Name] = decl.Agent
+			continue
+		}
+		if existing == decl.Agent {
+			continue // compatible duplicate — no-op
+		}
+		// Incompatible: name declared in two places with different agents.
+		// If a live session already exists, warn and keep the original agent.
+		// If no session yet, the validator should have caught this; keep first-seen.
+		if ctx.NamedSessions[decl.Name] != "" {
+			log.Printf("warning: named session %q: declared agent changed from %q to %q; continuing with original agent\n",
+				decl.Name, existing, decl.Agent)
+		}
+		// Do not update — keep the original declaration's agent.
+	}
 }
 
 func copyMap(m map[string]string) map[string]string {
