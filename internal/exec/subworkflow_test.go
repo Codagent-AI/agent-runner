@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/model"
-	"github.com/codagent/agent-runner/internal/textfmt"
 )
 
 func TestExecuteSubWorkflowStep(t *testing.T) {
@@ -154,7 +153,7 @@ steps:
 		}
 	})
 
-	t.Run("prints step heading for child workflow steps", func(t *testing.T) {
+	t.Run("executes all child workflow steps", func(t *testing.T) {
 		dir := t.TempDir()
 		childYAML := `name: child
 steps:
@@ -173,34 +172,21 @@ steps:
 		})
 
 		step := model.Step{ID: "sub", Workflow: "child.yaml", Session: model.SessionNew}
-		ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, log)
+		outcome, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, log)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected success, got %q", outcome)
+		}
 
-		sep := textfmt.Separator()
-		sepCount := 0
-		heading1Found, heading2Found := false, false
-		for _, line := range log.lines {
-			if line == sep {
-				sepCount++
-			}
-			if strings.Contains(line, "━━ step 1/2:") && strings.Contains(line, "s1") {
-				heading1Found = true
-			}
-			if strings.Contains(line, "━━ step 2/2:") && strings.Contains(line, "s2") {
-				heading2Found = true
-			}
-		}
-		if sepCount < 2 {
-			t.Fatalf("expected at least 2 separators, got %d", sepCount)
-		}
-		if !heading1Found {
-			t.Fatal("expected heading for step s1 (1/2)")
-		}
-		if !heading2Found {
-			t.Fatal("expected heading for step s2 (2/2)")
+		// Both child steps should have been dispatched.
+		if len(runner.calls) != 2 {
+			t.Fatalf("expected both child steps to run; got %d call(s)", len(runner.calls))
 		}
 	})
 
-	t.Run("prints skipped heading for child steps with skip_if", func(t *testing.T) {
+	t.Run("skips child steps matching skip_if", func(t *testing.T) {
 		dir := t.TempDir()
 		childYAML := `name: child
 steps:
@@ -212,6 +198,7 @@ steps:
 `
 		os.WriteFile(filepath.Join(dir, "child.yaml"), []byte(childYAML), 0o644)
 
+		// Only one result needed because s2 is skipped after s1 succeeds.
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		log := &mockLogger{}
 		ctx := model.NewRootContext(&model.RootContextOptions{
@@ -220,16 +207,17 @@ steps:
 		})
 
 		step := model.Step{ID: "sub", Workflow: "child.yaml", Session: model.SessionNew}
-		ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, log)
-
-		skippedFound := false
-		for _, line := range log.lines {
-			if strings.Contains(line, "[skipped]") && strings.Contains(line, "s2") {
-				skippedFound = true
-			}
+		outcome, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, log)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
-		if !skippedFound {
-			t.Fatal("expected skipped heading for step s2")
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected success, got %q", outcome)
+		}
+
+		// The runner should have been called exactly once (s1 ran, s2 was skipped).
+		if len(runner.calls) != 1 {
+			t.Fatalf("expected s2 to be skipped; got %d call(s)", len(runner.calls))
 		}
 	})
 }

@@ -16,7 +16,6 @@ import (
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/stateio"
-	"github.com/codagent/agent-runner/internal/textfmt"
 )
 
 // WorkflowResult represents the final result of a workflow run.
@@ -44,6 +43,26 @@ type Options struct {
 	ProcessRunner     exec.ProcessRunner
 	GlobExpander      exec.GlobExpander
 	Log               exec.Logger
+
+	// SuspendHook is called just before an interactive agent step takes over
+	// the terminal (e.g. p.ReleaseTerminal in TUI mode). Nil = no-op.
+	SuspendHook func()
+	// ResumeHook is called immediately after an interactive agent step exits
+	// (e.g. p.RestoreTerminal in TUI mode). Nil = no-op.
+	ResumeHook func()
+}
+
+// RunHandle is returned by PrepareRun and PrepareResume. It holds all state
+// needed to call ExecuteFromHandle and exposes the session directory so callers
+// can construct the TUI before execution starts.
+type RunHandle struct {
+	rs         *runState
+	startIndex int
+
+	// SessionDir is the run's session directory (e.g. ~/.agent-runner/projects/.../runs/<id>).
+	SessionDir string
+	// ProjectDir is the parent of the runs/ directory.
+	ProjectDir string
 }
 
 func validateParams(workflow *model.Workflow, params map[string]string) error {
@@ -89,18 +108,6 @@ func nestingToAuditInfo(ctx *model.ExecutionContext) []audit.NestingInfo {
 	result := make([]audit.NestingInfo, len(ctx.NestingPath))
 	for i, seg := range ctx.NestingPath {
 		result[i] = audit.NestingInfo{
-			StepID:          seg.StepID,
-			Iteration:       seg.Iteration,
-			SubWorkflowName: seg.SubWorkflowName,
-		}
-	}
-	return result
-}
-
-func nestingToFmt(ctx *model.ExecutionContext) []textfmt.NestingInfo {
-	result := make([]textfmt.NestingInfo, len(ctx.NestingPath))
-	for i, seg := range ctx.NestingPath {
-		result[i] = textfmt.NestingInfo{
 			StepID:          seg.StepID,
 			Iteration:       seg.Iteration,
 			SubWorkflowName: seg.SubWorkflowName,
@@ -304,11 +311,6 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 			continue
 		}
 
-		stepType := step.StepType()
-		breadcrumb := textfmt.BuildBreadcrumb(nestingToFmt(rs.ctx), step.ID)
-		rs.log.Println(textfmt.Separator())
-		rs.log.Println(textfmt.StepHeading(i, len(rs.workflow.Steps), breadcrumb, stepType, false))
-
 		// Fresh chain for each top-level step; writeStepState intentionally
 		// does not clear it so the mid-step and post-step writes can share.
 		rs.ctx.LastSubWorkflowChild = nil
@@ -347,17 +349,12 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 
 		o := "success"
 		rs.ctx.LastStepOutcome = &o
-		rs.log.Printf("--- step %q complete ---\n\n", step.ID)
 	}
 
 	return ResultSuccess
 }
 
 func emitSkippedStep(rs *runState, step *model.Step, index int) {
-	breadcrumb := textfmt.BuildBreadcrumb(nestingToFmt(rs.ctx), step.ID)
-	rs.log.Println(textfmt.Separator())
-	rs.log.Println(textfmt.StepHeading(index, len(rs.workflow.Steps), breadcrumb, "", true))
-
 	prefix := audit.BuildPrefix(nestingToAuditInfo(rs.ctx), step.ID)
 	emitAudit(rs.ctx, audit.Event{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
@@ -390,11 +387,8 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 		if err := markStateCompleted(rs.sessionDir); err != nil {
 			rs.log.Printf("agent-runner: warning: could not mark state completed: %v\n", err)
 		}
-		rs.log.Println("agent-runner: workflow complete")
 	case ResultFailed:
-		rs.log.Printf("agent-runner: to resume: agent-runner --resume %s\n", rs.sessionID)
-	case ResultStopped:
-		// No action needed
+		rs.log.Printf("\nto resume: agent-runner --resume %s\n", rs.sessionID)
 	}
 
 	if rs.auditLogger != nil {
@@ -423,29 +417,78 @@ func markStateCompleted(sessionDir string) error {
 	return stateio.WriteState(&state, sessionDir)
 }
 
-// RunWorkflow executes a workflow with the given parameters.
-func RunWorkflow(
-	workflow *model.Workflow,
-	params map[string]string,
-	opts *Options,
-) (WorkflowResult, error) {
+// PrepareRun initializes the session directory, writes the lock file, opens
+// the audit logger, and emits run_start. Returns a RunHandle with SessionDir
+// exposed so callers can construct the TUI before execution starts.
+func PrepareRun(workflow *model.Workflow, params map[string]string, opts *Options) (*RunHandle, error) {
 	rs, err := initRunState(workflow, params, opts)
 	if err != nil {
-		return ResultFailed, err
+		return nil, err
 	}
 
 	startIndex, err := resolveStartIndex(workflow, opts.From)
 	if err != nil {
-		return ResultFailed, err
+		// initRunState already created the session dir, lock file, and audit
+		// logger — release them so a failed prepare doesn't leave a ghost run.
+		runlock.Delete(rs.sessionDir)
+		if rs.auditLogger != nil {
+			rs.auditLogger.Close()
+		}
+		return nil, err
 	}
 
 	emitRunStart(rs, opts)
 	rs.log.Printf("\nagent-runner: running workflow %q\n\n", workflow.Name)
 
-	result := executeSteps(rs, startIndex)
-	finalizeRun(rs, result)
+	projectDir := filepath.Dir(filepath.Dir(rs.sessionDir)) // parent of runs/
+	return &RunHandle{
+		rs:         rs,
+		startIndex: startIndex,
+		SessionDir: rs.sessionDir,
+		ProjectDir: projectDir,
+	}, nil
+}
 
-	return result, nil
+// ExecuteFromHandle runs executeSteps + finalizeRun on an already-prepared handle.
+// opts may override the process runner, logger, and suspend/resume hooks (e.g.
+// to inject TUI-aware implementations without touching PrepareRun's session setup).
+// Safe to call from a background goroutine.
+func ExecuteFromHandle(h *RunHandle, opts *Options) WorkflowResult {
+	if opts != nil {
+		if opts.ProcessRunner != nil {
+			h.rs.runner = opts.ProcessRunner
+		}
+		if opts.GlobExpander != nil {
+			h.rs.glob = opts.GlobExpander
+		}
+		if opts.Log != nil {
+			h.rs.log = opts.Log
+		}
+		if opts.SuspendHook != nil {
+			h.rs.ctx.SuspendHook = opts.SuspendHook
+		}
+		if opts.ResumeHook != nil {
+			h.rs.ctx.ResumeHook = opts.ResumeHook
+		}
+	}
+	result := executeSteps(h.rs, h.startIndex)
+	finalizeRun(h.rs, result)
+	return result
+}
+
+// RunWorkflow executes a workflow with the given parameters.
+// This is a thin wrapper around PrepareRun + ExecuteFromHandle; existing tests
+// and non-TUI callers use this unchanged signature.
+func RunWorkflow(
+	workflow *model.Workflow,
+	params map[string]string,
+	opts *Options,
+) (WorkflowResult, error) {
+	h, err := PrepareRun(workflow, params, opts)
+	if err != nil {
+		return ResultFailed, err
+	}
+	return ExecuteFromHandle(h, opts), nil
 }
 
 func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *model.Workflow, workflowHash, stateDir string, loopResult *exec.LoopResult, completed bool) {
@@ -527,6 +570,14 @@ type defaultLogger struct{}
 func (l *defaultLogger) Println(args ...any)               { fmt.Println(args...) }
 func (l *defaultLogger) Printf(format string, args ...any) { fmt.Printf(format, args...) }
 func (l *defaultLogger) Errorf(format string, args ...any) { fmt.Fprintf(os.Stderr, format, args...) }
+
+// DiscardLogger drops all log output. Used in TUI mode where the TUI surfaces
+// workflow status instead of stdout.
+type DiscardLogger struct{}
+
+func (l *DiscardLogger) Println(_ ...any)          {}
+func (l *DiscardLogger) Printf(_ string, _ ...any) {}
+func (l *DiscardLogger) Errorf(_ string, _ ...any) {}
 
 // writeMetaJSON writes a meta.json file to projectDir if it does not already exist.
 // Non-fatal: errors are silently ignored.

@@ -17,6 +17,7 @@ func TestScript(t *testing.T) {
 		Dir: "testdata/scripts",
 		Setup: func(env *testscript.Env) error {
 			env.Setenv("HOME", env.WorkDir)
+			env.Setenv("AGENT_RUNNER_NO_TUI", "1")
 			return nil
 		},
 	})

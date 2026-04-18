@@ -21,6 +21,9 @@ func (m *Model) View() string {
 	if m.showLegend {
 		return m.renderLegend()
 	}
+	if m.quitConfirming {
+		return m.renderQuitConfirm()
+	}
 
 	var b strings.Builder
 
@@ -102,22 +105,23 @@ func (m *Model) renderTwoColumn(children []*StepNode) string {
 	m.detailWidth = detailWidth
 	divider := tuistyle.DividerStyle.Render("│ ")
 
+	bodyHeight := m.bodyHeight()
+	if bodyHeight <= 0 {
+		bodyHeight = 20
+	}
+
 	sel := m.selectedNode()
 	detail := m.renderDetail(sel)
 	detailLines := strings.Split(detail, "\n")
 
 	offset := m.detailOffset
-	if offset > len(detailLines)-1 {
-		offset = max(0, len(detailLines)-1)
+	maxOffset := max(0, len(detailLines)-bodyHeight)
+	if offset > maxOffset {
+		offset = maxOffset
 	}
 	visibleDetail := detailLines
 	if offset > 0 && offset < len(detailLines) {
 		visibleDetail = detailLines[offset:]
-	}
-
-	bodyHeight := m.bodyHeight()
-	if bodyHeight <= 0 {
-		bodyHeight = 20
 	}
 
 	var b strings.Builder
@@ -198,7 +202,7 @@ func (m *Model) renderStepRow(n *StepNode, selected bool) string {
 func (m *Model) statusGlyph(n *StepNode) string {
 	switch n.Status {
 	case StatusInProgress:
-		if m.active && !n.Aborted {
+		if (m.active || m.running) && !n.Aborted {
 			t := (math.Sin(m.pulsePhase) + 1) / 2
 			c := tuistyle.LerpColor("#4ade80", "#2d8f57", t)
 			return lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Render("●")
@@ -257,6 +261,13 @@ func (m *Model) renderHelpBar() string {
 		parts = append(parts, "g load full")
 	}
 
+	if m.running && !m.autoFollow {
+		parts = append(parts, "l live")
+	}
+	if !m.tailFollow {
+		parts = append(parts, "End tail")
+	}
+
 	parts = append(parts, "? legend", "esc back", "q quit")
 
 	return "  " + tuistyle.HelpStyle.Render(strings.Join(parts, "   "))
@@ -310,6 +321,24 @@ func (m *Model) bodyHeight() int {
 	return h
 }
 
+func (m *Model) renderQuitConfirm() string {
+	var b strings.Builder
+	b.WriteString("\n\n  ")
+	b.WriteString(tuistyle.HeaderStyle.Render("Agent Runner"))
+	b.WriteString("\n\n")
+	b.WriteString("  ")
+	b.WriteString(tuistyle.DimStyle.Render("The workflow is still running. Quitting will close the TUI"))
+	b.WriteString("\n  ")
+	b.WriteString(tuistyle.DimStyle.Render("and wait for the current step to finish before exiting."))
+	b.WriteString("\n\n  ")
+	b.WriteString(tuistyle.NormalStyle.Render("Quit anyway?  "))
+	b.WriteString(tuistyle.SelectedStyle.Render("[y]es"))
+	b.WriteString(tuistyle.NormalStyle.Render("  "))
+	b.WriteString(tuistyle.SelectedStyle.Render("[n]o"))
+	b.WriteString("\n")
+	return b.String()
+}
+
 func (m *Model) renderLegend() string {
 	var b strings.Builder
 	b.WriteString("\n  ")
@@ -332,6 +361,12 @@ func (m *Model) renderLegend() string {
 	b.WriteString("  ⚙  headless agent\n")
 	b.WriteString("  ❯  interactive agent\n")
 	b.WriteString("  ↳  sub-workflow\n")
+
+	b.WriteString("\n  ")
+	b.WriteString(tuistyle.SelectedStyle.Render("Live Navigation"))
+	b.WriteString("\n\n")
+	b.WriteString("  l        jump to active step and resume auto-follow\n")
+	b.WriteString("  End / G  jump to output tail and resume tail-follow\n")
 
 	b.WriteString("\n\n  ")
 	b.WriteString(tuistyle.HelpStyle.Render("press ? or esc to dismiss"))

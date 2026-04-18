@@ -2,7 +2,6 @@ package exec
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -77,6 +76,13 @@ func resolveStepProfile(step *model.Step, ctx *model.ExecutionContext) (*config.
 	return resolved, nil
 }
 
+// prefixSetter is implemented by liverun.tuiProcessRunner. Type-asserting
+// against this interface lets exec functions set the step prefix before each
+// subprocess launch without importing the liverun package.
+type prefixSetter interface {
+	SetPrefix(string)
+}
+
 // ExecuteAgentStep runs an agent step using the resolved CLI adapter.
 func ExecuteAgentStep(
 	step *model.Step,
@@ -122,7 +128,11 @@ func ExecuteAgentStep(
 	args := adapter.BuildArgs(&input)
 
 	emitAgentStart(ctx, prefix, startTime, prompt, mode, step, sessionID, cliName, enrichment)
-	logAgentStep(log, mode, prompt)
+
+	// Set the step prefix on the process runner if it supports it (TUI mode).
+	if ps, ok := runner.(prefixSetter); ok {
+		ps.SetPrefix(prefix)
+	}
 
 	// Persist session bookkeeping BEFORE spawning the CLI so that if the runner
 	// is killed mid-step (ctrl-c, terminal hangup, crash) resume can reconnect
@@ -135,7 +145,7 @@ func ExecuteAgentStep(
 	recordSessionOnSpawn(step, ctx, sessionID)
 
 	spawnTime := time.Now()
-	outcome, result, runErr := runAgentProcess(runner, args, headless, step.Workdir, log)
+	outcome, result, runErr := runAgentProcess(runner, args, headless, step.Workdir, log, ctx.SuspendHook, ctx.ResumeHook)
 	if runErr != nil {
 		emitAgentEnd(ctx, prefix, startTime, "", OutcomeFailed)
 		return OutcomeFailed, runErr
@@ -274,7 +284,7 @@ func buildAdapterInput(
 	return input
 }
 
-func runAgentProcess(runner ProcessRunner, args []string, headless bool, workdir string, log Logger) (StepOutcome, ProcessResult, error) {
+func runAgentProcess(runner ProcessRunner, args []string, headless bool, workdir string, log Logger, suspendHook, resumeHook func()) (StepOutcome, ProcessResult, error) {
 	if headless {
 		// Capture stdout for headless runs so that adapters (e.g. Codex) can
 		// parse session IDs from the process output.
@@ -296,8 +306,14 @@ func runAgentProcess(runner ProcessRunner, args []string, headless bool, workdir
 		return OutcomeSuccess, result, nil
 	}
 
-	// Interactive: run inside a PTY with continue-trigger detection.
+	// Interactive: release the terminal if a hook is set, then run inside a PTY.
+	if suspendHook != nil {
+		suspendHook()
+	}
 	ptyResult, err := interactiveRunnerFn(args, pty.Options{Workdir: workdir})
+	if resumeHook != nil {
+		resumeHook()
+	}
 	if err != nil {
 		return OutcomeFailed, ProcessResult{}, err
 	}
@@ -409,18 +425,6 @@ func emitAgentEnd(ctx *model.ExecutionContext, prefix string, startTime time.Tim
 			"duration_ms":           time.Since(startTime).Milliseconds(),
 		},
 	})
-}
-
-func logAgentStep(log Logger, mode model.StepMode, prompt string) {
-	log.Printf("  mode: %s\n", mode)
-	if mode != model.ModeHeadless {
-		log.Println("  (exit to stop)")
-	}
-	if mode == model.ModeHeadless && os.Getenv("AGENT_RUNNER_SHOW_PROMPT") == "1" {
-		for line := range strings.SplitSeq(prompt, "\n") {
-			log.Printf("  %s\n", line)
-		}
-	}
 }
 
 // buildStepPrefix returns a preamble for interactive prompts that orients the

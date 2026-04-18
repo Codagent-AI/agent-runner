@@ -3,6 +3,7 @@ package runlock
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -284,6 +285,71 @@ func TestAcquire(t *testing.T) {
 		}
 		if _, err := os.Stat(freshTmp); err != nil {
 			t.Fatalf("expected recent tmp file preserved, got err=%v", err)
+		}
+	})
+}
+
+func TestCheckOwnedByOther(t *testing.T) {
+	t.Run("returns false when no lock file exists", func(t *testing.T) {
+		dir := t.TempDir()
+		if CheckOwnedByOther(dir, os.Getpid()) {
+			t.Fatal("expected false for missing lock file")
+		}
+	})
+
+	t.Run("returns false when lock belongs to self", func(t *testing.T) {
+		dir := t.TempDir()
+		Write(dir)
+		if CheckOwnedByOther(dir, os.Getpid()) {
+			t.Fatal("expected false when lock belongs to self")
+		}
+	})
+
+	t.Run("returns false when lock PID is dead", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "lock"), []byte("999999999\n"), 0o600)
+		if CheckOwnedByOther(dir, os.Getpid()) {
+			t.Fatal("expected false for dead PID")
+		}
+	})
+
+	t.Run("returns false for non-numeric content", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "lock"), []byte("not-a-pid\n"), 0o600)
+		if CheckOwnedByOther(dir, os.Getpid()) {
+			t.Fatal("expected false for non-numeric content")
+		}
+	})
+
+	t.Run("returns false for PID zero", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "lock"), []byte("0\n"), 0o600)
+		if CheckOwnedByOther(dir, os.Getpid()) {
+			t.Fatal("expected false for PID zero")
+		}
+	})
+
+	t.Run("returns true when lock belongs to another live process", func(t *testing.T) {
+		dir := t.TempDir()
+		cmd := exec.Command("sleep", "60")
+		if err := cmd.Start(); err != nil {
+			t.Skip("cannot start subprocess:", err)
+		}
+		defer cmd.Process.Kill()
+
+		pid := cmd.Process.Pid
+		os.WriteFile(filepath.Join(dir, "lock"), []byte(fmt.Sprintf("%d\n", pid)), 0o600)
+		if !CheckOwnedByOther(dir, os.Getpid()) {
+			t.Fatal("expected true when lock belongs to another live process")
+		}
+	})
+
+	t.Run("returns false when lock PID matches selfPID even if alive", func(t *testing.T) {
+		dir := t.TempDir()
+		// Write a PID matching selfPID — even though we're alive, it's our own lock.
+		os.WriteFile(filepath.Join(dir, "lock"), []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o600)
+		if CheckOwnedByOther(dir, os.Getpid()) {
+			t.Fatal("expected false when PID matches selfPID")
 		}
 	})
 }

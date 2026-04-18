@@ -1,7 +1,6 @@
 package exec
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/model"
@@ -219,7 +218,7 @@ func TestExecuteLoopStep(t *testing.T) {
 		}
 	})
 
-	t.Run("prints step heading for loop body steps", func(t *testing.T) {
+	t.Run("executes loop body steps for each iteration", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}, {ExitCode: 0}}}
 		log := &mockLogger{}
 		step := model.Step{
@@ -231,37 +230,9 @@ func TestExecuteLoopStep(t *testing.T) {
 		}
 		ExecuteLoopStep(&step, makeCtx(), runner, &mockGlob{}, log, LoopExecuteOptions{})
 
-		headingFound := false
-		for _, line := range log.lines {
-			if strings.Contains(line, "━━ step 1/1:") && strings.Contains(line, "work") {
-				headingFound = true
-			}
-		}
-		if !headingFound {
-			t.Fatal("expected step heading for loop body step 'work'")
-		}
-	})
-
-	t.Run("step heading includes loop nesting breadcrumb", func(t *testing.T) {
-		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		log := &mockLogger{}
-		step := model.Step{
-			ID: "task-loop", Session: model.SessionNew,
-			Loop: &model.Loop{Max: intPtr(1)},
-			Steps: []model.Step{
-				{ID: "implement", Command: "echo", Session: model.SessionNew},
-			},
-		}
-		ExecuteLoopStep(&step, makeCtx(), runner, &mockGlob{}, log, LoopExecuteOptions{})
-
-		breadcrumbFound := false
-		for _, line := range log.lines {
-			if strings.Contains(line, "task-loop > iteration 1 > implement") {
-				breadcrumbFound = true
-			}
-		}
-		if !breadcrumbFound {
-			t.Fatal("expected breadcrumb 'task-loop > iteration 1 > implement' in heading")
+		// Both iterations should have dispatched a shell step.
+		if len(runner.calls) != 2 {
+			t.Fatalf("expected 2 iterations to run; got %d call(s)", len(runner.calls))
 		}
 	})
 }
