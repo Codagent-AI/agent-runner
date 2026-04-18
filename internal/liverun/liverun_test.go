@@ -84,9 +84,9 @@ func TestSanitizePrefix_Simple(t *testing.T) {
 }
 
 func TestSanitizePrefix_SlashAndColon(t *testing.T) {
-	// Per spec: '/' → "__" (nesting), ':' → "_" (iteration).
+	// '/' → "--" (nesting), ':' → "_" (iteration), '_' passes through.
 	got := sanitizePrefix("loop-b:2/step-c")
-	want := "loop-b_2__step-c"
+	want := "loop-b_2--step-c"
 	if got != want {
 		t.Errorf("sanitizePrefix = %q, want %q", got, want)
 	}
@@ -101,6 +101,18 @@ func TestSanitizePrefix_NestingVsIterationDisambiguation(t *testing.T) {
 	iter := sanitizePrefix("a:b")
 	if nested == iter {
 		t.Errorf("sanitizePrefix collision: %q == %q", nested, iter)
+	}
+}
+
+// TestSanitizePrefix_UnderscoreInStepID verifies that step IDs containing
+// '_' do not collide with the nesting separator. Regression against the
+// earlier '__' nesting separator, where a prefix like "a__b/c" would
+// collide with "a/b__c" because both produced "a__b__c".
+func TestSanitizePrefix_UnderscoreInStepID(t *testing.T) {
+	nestedWithUnderscore := sanitizePrefix("a__b/c")
+	slashBetweenUnderscores := sanitizePrefix("a/b__c")
+	if nestedWithUnderscore == slashBetweenUnderscores {
+		t.Errorf("sanitizePrefix collision on '_' vs '/': %q == %q", nestedWithUnderscore, slashBetweenUnderscores)
 	}
 }
 

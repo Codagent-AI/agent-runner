@@ -114,7 +114,7 @@ subprocess stdout ──► composite writer ──┬── ANSI-strip → chun
 ```
 
 - **Channel delivery:** the strip-then-chunk path gives the TUI clean text it can safely render. Coalescing at 4 KB or 50 ms trades worst-case latency for message-channel health.
-- **Output files:** raw bytes (including ANSI) go to `<sessionDir>/output/<step-prefix>.out` / `.err`. The prefix is the audit log's event `prefix` string, filesystem-sanitized by replacing every character outside `[A-Za-z0-9._-]` with a single `_` (e.g., audit prefix `loop-b:2/step-c` → filename stem `loop-b_2_step-c`). Sanitization is total and deterministic; no path traversal is possible via crafted step IDs.
+- **Output files:** raw bytes (including ANSI) go to `<sessionDir>/output/<step-prefix>.out` / `.err`. The prefix is the audit log's event `prefix` string, filesystem-sanitized by replacing `/` with `--` (nesting), `:` with `_` (iteration), and any other character outside `[A-Za-z0-9._\-]` with a single `_` (e.g., audit prefix `loop-b:2/step-c` → filename stem `loop-b_2--step-c`). Sanitization is total and deterministic; no path traversal is possible via crafted step IDs.
 - **ProcessResult contract (Go-level, unchanged):** the composite writer's buffered content still populates `ProcessResult.Stdout` / `Stderr` — existing callers of `ProcessRunner.RunShell` / `RunAgent` see the same return values.
 - **Audit event payload (widened):** `internal/exec/shell.go` previously only included `stdout` in `step_end` when the step used `capture:`. This change widens it to always include the 4 KB `truncateForAudit`-capped preview. The audit log gets a greppable summary; the output file holds the full content.
 
@@ -243,7 +243,7 @@ No disk-format migrations. No audit schema break (additive). Rollback is a packa
 
 ## Resolved Design Decisions
 
-- **Output-file prefix format.** Mirror the audit log's event `prefix` field, sanitized for the filesystem by replacing `/` with `__` and `:` with `_`. Example: audit prefix `loop-b:2/step-c` → `output/loop-b_2__step-c.out`. Deterministic, one-to-one, reversible enough for debugging. Documented in the `TUIProcessRunner` section above.
+- **Output-file prefix format.** Mirror the audit log's event `prefix` field, sanitized for the filesystem by replacing `/` with `--` (nesting) and `:` with `_` (iteration). Underscores in step IDs pass through unchanged so they do not collide with the nesting separator. Example: audit prefix `loop-b:2/step-c` → `output/loop-b_2--step-c.out`. Deterministic, one-to-one, reversible enough for debugging. Documented in the `TUIProcessRunner` section above.
 - **Auto-follow on instantaneous multi-step completions.** When several `StepStateMsg` events arrive in the same render tick (batched skipped steps, rapid-fire short shells), auto-follow lands the cursor on the last-emitted active step; intermediate positions are not rendered. Acceptable because the user sees the tree update holistically on the next render.
 - **"Bytes dropped" banner persistence.** When a step's in-memory output buffer tail-truncates due to the 2000-line / 256 KB cap, the banner is persistent (not dismissible) for that step. The post-run `output/*.out` file holds the full content; the TUI's `g`-load-full path reads directly from the file when available. The banner escape-hatches users to the file.
 
