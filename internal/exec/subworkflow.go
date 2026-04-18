@@ -338,6 +338,9 @@ func emitSubEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time,
 // the current declaration uses a different agent, a warning is emitted but the
 // original agent (used at session creation) is kept.
 func MergeSessionDecls(ctx *model.ExecutionContext, sessions []model.SessionDecl, log Logger) {
+	if len(sessions) == 0 {
+		return
+	}
 	for _, decl := range sessions {
 		existing, present := ctx.NamedSessionDecls[decl.Name]
 		if !present {
@@ -345,16 +348,16 @@ func MergeSessionDecls(ctx *model.ExecutionContext, sessions []model.SessionDecl
 			continue
 		}
 		if existing == decl.Agent {
-			continue // compatible duplicate — no-op
+			continue
 		}
-		// Incompatible: name declared in two places with different agents.
-		// If a live session already exists, warn and keep the original agent.
-		// If no session yet, the validator should have caught this; keep first-seen.
+		// Name declared twice with different agents. If a live session already
+		// exists, the original agent is still bound to a running CLI session —
+		// warn and keep it. Otherwise first-seen wins (validator should have
+		// caught incompatible declarations earlier).
 		if ctx.NamedSessions[decl.Name] != "" {
 			log.Printf("warning: named session %q: declared agent changed from %q to %q; continuing with original agent\n",
 				decl.Name, existing, decl.Agent)
 		}
-		// Do not update — keep the original declaration's agent.
 	}
 }
 

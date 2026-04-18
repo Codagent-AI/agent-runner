@@ -37,12 +37,11 @@ func WorkflowConstraints(w *model.Workflow, opts Options) error {
 func validateSessionDeclarations(w *model.Workflow) (map[string]bool, error) {
 	declared := make(map[string]bool, len(w.Sessions))
 	for _, decl := range w.Sessions {
-		switch decl.Name {
-		case "new", "resume", "inherit":
-			return nil, fmt.Errorf("sessions: %q is a reserved session keyword and cannot be used as a session name", decl.Name)
-		}
 		if decl.Name == "" {
 			return nil, fmt.Errorf("sessions: each declaration must have a non-empty name")
+		}
+		if !model.IsNamedSession(model.SessionStrategy(decl.Name)) {
+			return nil, fmt.Errorf("sessions: %q is a reserved session keyword and cannot be used as a session name", decl.Name)
 		}
 		if decl.Agent == "" {
 			return nil, fmt.Errorf("sessions: declaration %q must specify an agent", decl.Name)
