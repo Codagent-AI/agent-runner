@@ -36,56 +36,11 @@ func ExecuteSubWorkflowStep(
 		Data:      map[string]any{"context": contextSnapshot(parentCtx)},
 	})
 
-	workflowPath, err := resolveWorkflowPath(step.Workflow, parentCtx)
+	workflow, workflowPath, childCtx, err := prepareSubWorkflow(step, parentCtx, log)
 	if err != nil {
 		emitSubEnd(parentCtx, prefix, startTime, "failed", err.Error())
 		return OutcomeFailed, err
 	}
-
-	workflow, err := loader.LoadWorkflow(workflowPath, loader.Options{IsSubWorkflow: true})
-	if err != nil {
-		emitSubEnd(parentCtx, prefix, startTime, "failed", err.Error())
-		return OutcomeFailed, err
-	}
-
-	resolvedParams, err := resolveParams(step.Params, parentCtx)
-	if err != nil {
-		emitSubEnd(parentCtx, prefix, startTime, "failed", err.Error())
-		return OutcomeFailed, err
-	}
-
-	if err := validateSubWorkflowParams(&workflow, resolvedParams); err != nil {
-		emitSubEnd(parentCtx, prefix, startTime, "failed", err.Error())
-		return OutcomeFailed, err
-	}
-
-	var childEngine interface{}
-	if workflow.Engine != nil {
-		engConfig := map[string]any{"type": workflow.Engine.Type}
-		for k, v := range workflow.Engine.Extras {
-			engConfig[k] = v
-		}
-		eng, err := engine.Create(engConfig)
-		if err != nil {
-			emitSubEnd(parentCtx, prefix, startTime, "failed", err.Error())
-			return OutcomeFailed, err
-		}
-		childEngine = eng
-	}
-
-	childCtx := model.NewSubWorkflowContext(parentCtx, &model.SubWorkflowContextOptions{
-		StepID:          step.ID,
-		Params:          resolvedParams,
-		WorkflowFile:    workflowPath,
-		SubWorkflowName: workflow.Name,
-		EngineRef:       childEngine,
-		EngineSet:       workflow.Engine != nil,
-	})
-
-	// Merge the sub-workflow's session declarations into the shared
-	// NamedSessionDecls map. Only add new names; if a name is already present
-	// with a different agent and a session already exists, warn (drift).
-	MergeSessionDecls(childCtx, workflow.Sessions, log)
 
 	startFromStepID, startCompleted := applyResumeState(parentCtx, childCtx)
 	childPrefix := buildNestingPrefix(childCtx.NestingPath)
@@ -118,6 +73,59 @@ func ExecuteSubWorkflowStep(
 
 	emitSubEnd(parentCtx, prefix, startTime, string(outcome), "")
 	return outcome, err
+}
+
+// prepareSubWorkflow resolves the sub-workflow path, loads it, validates its
+// params, constructs the child context, and merges its session declarations.
+// Extracted from ExecuteSubWorkflowStep to keep that function under the lint
+// length limit.
+func prepareSubWorkflow(step *model.Step, parentCtx *model.ExecutionContext, log Logger) (model.Workflow, string, *model.ExecutionContext, error) {
+	workflowPath, err := resolveWorkflowPath(step.Workflow, parentCtx)
+	if err != nil {
+		return model.Workflow{}, "", nil, err
+	}
+
+	workflow, err := loader.LoadWorkflow(workflowPath, loader.Options{IsSubWorkflow: true})
+	if err != nil {
+		return model.Workflow{}, "", nil, err
+	}
+
+	resolvedParams, err := resolveParams(step.Params, parentCtx)
+	if err != nil {
+		return model.Workflow{}, "", nil, err
+	}
+
+	if err := validateSubWorkflowParams(&workflow, resolvedParams); err != nil {
+		return model.Workflow{}, "", nil, err
+	}
+
+	var childEngine interface{}
+	if workflow.Engine != nil {
+		engConfig := map[string]any{"type": workflow.Engine.Type}
+		for k, v := range workflow.Engine.Extras {
+			engConfig[k] = v
+		}
+		eng, err := engine.Create(engConfig)
+		if err != nil {
+			return model.Workflow{}, "", nil, err
+		}
+		childEngine = eng
+	}
+
+	childCtx := model.NewSubWorkflowContext(parentCtx, &model.SubWorkflowContextOptions{
+		StepID:          step.ID,
+		Params:          resolvedParams,
+		WorkflowFile:    workflowPath,
+		SubWorkflowName: workflow.Name,
+		EngineRef:       childEngine,
+		EngineSet:       workflow.Engine != nil,
+	})
+
+	if err := MergeSessionDecls(childCtx, workflow.Sessions, log); err != nil {
+		return model.Workflow{}, "", nil, err
+	}
+
+	return workflow, workflowPath, childCtx, nil
 }
 
 func executeChildSteps(
@@ -334,12 +342,19 @@ func emitSubEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time,
 
 // MergeSessionDecls adds session declarations from a newly loaded (sub-)workflow
 // into the shared NamedSessionDecls map. Compatible duplicates (same name, same
-// agent) are silently merged. If a session already exists in NamedSessions and
-// the current declaration uses a different agent, a warning is emitted but the
-// original agent (used at session creation) is kept.
-func MergeSessionDecls(ctx *model.ExecutionContext, sessions []model.SessionDecl, log Logger) {
+// agent) are silently merged.
+//
+// When the same name is declared with different agents:
+//   - If a live session already exists, a warning is emitted and the original
+//     agent is kept (the CLI session was created under that agent; switching
+//     profiles mid-run would strand it).
+//   - If no live session exists, the conflict is unrecoverable and an error
+//     is returned. Cross-file composition validation (loader.ValidateComposition)
+//     should have caught this before runtime, so reaching here means validation
+//     was skipped.
+func MergeSessionDecls(ctx *model.ExecutionContext, sessions []model.SessionDecl, log Logger) error {
 	if len(sessions) == 0 {
-		return
+		return nil
 	}
 	for _, decl := range sessions {
 		existing, present := ctx.NamedSessionDecls[decl.Name]
@@ -350,15 +365,17 @@ func MergeSessionDecls(ctx *model.ExecutionContext, sessions []model.SessionDecl
 		if existing == decl.Agent {
 			continue
 		}
-		// Name declared twice with different agents. If a live session already
-		// exists, the original agent is still bound to a running CLI session —
-		// warn and keep it. Otherwise first-seen wins (validator should have
-		// caught incompatible declarations earlier).
 		if ctx.NamedSessions[decl.Name] != "" {
 			log.Printf("warning: named session %q: declared agent changed from %q to %q; continuing with original agent\n",
 				decl.Name, existing, decl.Agent)
+			continue
 		}
+		return fmt.Errorf(
+			"incompatible named session declaration %q: already declared with agent %q, cannot redeclare with agent %q",
+			decl.Name, existing, decl.Agent,
+		)
 	}
+	return nil
 }
 
 func copyMap(m map[string]string) map[string]string {

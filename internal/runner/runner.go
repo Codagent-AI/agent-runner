@@ -228,7 +228,9 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	// Merge the root workflow's session declarations into NamedSessionDecls.
 	// On fresh runs this populates the map from scratch. On resume, previously
 	// persisted entries are already present; mergeSessionDecls handles drift.
-	exec.MergeSessionDecls(ctx, workflow.Sessions, log)
+	if err := exec.MergeSessionDecls(ctx, workflow.Sessions, log); err != nil {
+		return nil, err
+	}
 
 	return &runState{
 		workflow:     *workflow,

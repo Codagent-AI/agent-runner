@@ -597,8 +597,7 @@ func resolveResumeStatePath(sessionID string) (string, error) {
 }
 
 func handleValidate(workflowFile string) int {
-	_, err := loader.LoadWorkflow(workflowFile, loader.Options{})
-	if err != nil {
+	if err := loader.ValidateComposition(workflowFile); err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
 	}
