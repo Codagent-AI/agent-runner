@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,8 +22,10 @@ import (
 	_ "github.com/codagent/agent-runner/internal/engine/openspec"
 	iexec "github.com/codagent/agent-runner/internal/exec"
 	"github.com/codagent/agent-runner/internal/listview"
+	"github.com/codagent/agent-runner/internal/liverun"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/runview"
 )
@@ -145,6 +148,10 @@ func run() int {
 	validateFlag := flag.Bool("validate", false, "Validate a workflow file without executing")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	vFlag := flag.Bool("v", false, "Print version and exit (shorthand)")
+	// Undocumented: internal escape hatch for running without the TUI when
+	// the live view is broken. Equivalent to AGENT_RUNNER_NO_TUI=1. Works
+	// for both starting and resuming a workflow.
+	headlessFlag := flag.Bool("headless", false, "")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: agent-runner [flags] [workflow [params...]]\n\n")
@@ -158,6 +165,10 @@ func run() int {
 	}
 
 	flag.Parse()
+
+	if *headlessFlag {
+		_ = os.Setenv("AGENT_RUNNER_NO_TUI", "1")
+	}
 
 	if *chdirFlag != "" {
 		if err := os.Chdir(*chdirFlag); err != nil {
@@ -220,31 +231,64 @@ func run() int {
 }
 
 func handleResume(sessionID string) int {
+	if err := requireTTY(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
 	stateFilePath, err := resolveResumeStatePath(sessionID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
 	}
 
-	result, err := runner.ResumeWorkflow(stateFilePath, &runner.Options{
+	if os.Getenv("AGENT_RUNNER_NO_TUI") == "1" {
+		result, runErr := runner.ResumeWorkflow(stateFilePath, &runner.Options{
+			ProcessRunner: &realProcessRunner{},
+			GlobExpander:  &realGlobExpander{},
+			Log:           &realLogger{},
+		})
+		if runErr != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", runErr)
+			return 1
+		}
+		if result != runner.ResultSuccess {
+			return 1
+		}
+		return 0
+	}
+
+	h, err := runner.PrepareResume(stateFilePath, &runner.Options{
 		ProcessRunner: &realProcessRunner{},
 		GlobExpander:  &realGlobExpander{},
-		Log:           &realLogger{},
+		Log:           &runner.DiscardLogger{},
 	})
 	if err != nil {
+		if errors.Is(err, runner.ErrAlreadyCompleted) {
+			fmt.Fprintln(os.Stderr, "agent-runner: workflow already completed")
+			return 0
+		}
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
 	}
-	if result != runner.ResultSuccess {
-		return 1
-	}
-	return 0
+
+	return runLiveTUI(h)
 }
 
 func handleInspect(runID string) int {
+	if err := requireTTY(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
 	sessionDir, projectDir, err := resolveInspectSession(runID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+
+	if runlock.CheckOwnedByOther(sessionDir, os.Getpid()) {
+		fmt.Fprintf(os.Stderr, "agent-runner: run %q is active in another process\n", runID)
 		return 1
 	}
 
@@ -259,6 +303,11 @@ func handleInspect(runID string) int {
 }
 
 func handleList() int {
+	if err := requireTTY(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
 	m, err := listview.New()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
@@ -283,6 +332,61 @@ func runSwitcher(sw *switcher) int {
 	}
 	if final.resumeSessionID != "" {
 		return execAgentResume(final.resumeAgentCLI, final.resumeSessionID)
+	}
+	return 0
+}
+
+// runLiveTUI starts the runview TUI in FromLiveRun mode with the workflow
+// running in a background goroutine. Returns the process exit code.
+func runLiveTUI(h *runner.RunHandle) int {
+	rv, err := runview.New(h.SessionDir, h.ProjectDir, runview.FromLiveRun)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+
+	p := tea.NewProgram(rv, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	coord := liverun.NewCoordinator(p, h.SessionDir)
+
+	resultCh := make(chan runner.WorkflowResult, 1)
+	go func() {
+		result := runner.ResultFailed
+		var runErr error
+		defer func() {
+			if rec := recover(); rec != nil {
+				coord.NotifyDone(string(runner.ResultFailed), fmt.Errorf("panic: %v", rec))
+				resultCh <- runner.ResultFailed
+				return
+			}
+			coord.NotifyDone(string(result), runErr)
+			resultCh <- result
+		}()
+
+		result = runner.ExecuteFromHandle(h, &runner.Options{
+			ProcessRunner: coord.TUIProcessRunner(&realProcessRunner{}),
+			GlobExpander:  &realGlobExpander{},
+			Log:           &runner.DiscardLogger{},
+			SuspendHook:   coord.BeforeInteractive,
+			ResumeHook:    coord.AfterInteractive,
+		})
+	}()
+
+	_, err = p.Run()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+
+	// If the runner finished before the TUI exited, map its result to an exit
+	// code. If the user confirmed quit while the workflow was still running,
+	// resultCh has no value yet — keep the documented orphan-on-quit behavior
+	// and return 0 without blocking on the lingering goroutine.
+	select {
+	case runResult := <-resultCh:
+		if runResult != runner.ResultSuccess {
+			return 1
+		}
+	default:
 	}
 	return 0
 }
@@ -532,6 +636,11 @@ func resolveWorkflowArg(arg string) (string, error) {
 }
 
 func handleRun(args []string) int {
+	if err := requireTTY(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
 	workflowFile := args[0]
 
 	workflow, err := loader.LoadWorkflow(workflowFile, loader.Options{})
@@ -554,9 +663,7 @@ func handleRun(args []string) int {
 	var eng engine.Engine
 	if workflow.Engine != nil {
 		engConfig := map[string]any{"type": workflow.Engine.Type}
-		for k, v := range workflow.Engine.Extras {
-			engConfig[k] = v
-		}
+		maps.Copy(engConfig, workflow.Engine.Extras)
 		eng, err = engine.Create(engConfig)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: create engine: %v\n", err)
@@ -564,21 +671,37 @@ func handleRun(args []string) int {
 		}
 	}
 
-	result, err := runner.RunWorkflow(&workflow, params, &runner.Options{
+	if os.Getenv("AGENT_RUNNER_NO_TUI") == "1" {
+		result, runErr := runner.RunWorkflow(&workflow, params, &runner.Options{
+			WorkflowFile:  workflowFile,
+			Engine:        eng,
+			ProcessRunner: &realProcessRunner{},
+			GlobExpander:  &realGlobExpander{},
+			Log:           &realLogger{},
+		})
+		if runErr != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", runErr)
+			return 1
+		}
+		if result != runner.ResultSuccess {
+			return 1
+		}
+		return 0
+	}
+
+	h, err := runner.PrepareRun(&workflow, params, &runner.Options{
 		WorkflowFile:  workflowFile,
 		Engine:        eng,
 		ProcessRunner: &realProcessRunner{},
 		GlobExpander:  &realGlobExpander{},
-		Log:           &realLogger{},
+		Log:           &runner.DiscardLogger{},
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
 	}
-	if result != runner.ResultSuccess {
-		return 1
-	}
-	return 0
+
+	return runLiveTUI(h)
 }
 
 // parseParams separates positional args from key=value pairs.

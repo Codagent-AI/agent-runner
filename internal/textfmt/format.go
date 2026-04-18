@@ -6,8 +6,6 @@ import (
 	"strings"
 )
 
-const separatorWidth = 60
-
 // NestingInfo holds the minimum info needed to build a breadcrumb.
 type NestingInfo struct {
 	StepID          string
@@ -31,18 +29,4 @@ func BuildBreadcrumb(nestingPath []NestingInfo, stepID string) string {
 
 	parts = append(parts, stepID)
 	return strings.Join(parts, " > ")
-}
-
-// Separator returns a fixed-width horizontal rule of ━ characters.
-func Separator() string {
-	return strings.Repeat("━", separatorWidth)
-}
-
-// StepHeading returns a formatted step heading string.
-func StepHeading(index, total int, breadcrumb, stepType string, skipped bool) string {
-	label := stepType
-	if skipped {
-		label = "skipped"
-	}
-	return fmt.Sprintf("━━ step %d/%d: %s [%s] ━━", index+1, total, breadcrumb, label)
 }

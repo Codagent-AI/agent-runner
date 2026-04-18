@@ -417,10 +417,6 @@ func executeIterationBody(
 		bodyStepID := steps[i].ID
 		setBody(bodyStepID, false)
 
-		breadcrumb := textfmt.BuildBreadcrumb(nestingToFmt(iterCtx), steps[i].ID)
-		log.Println(textfmt.Separator())
-		log.Println(textfmt.StepHeading(i, len(steps), breadcrumb, steps[i].StepType(), false))
-
 		outcome, dispatchErr := DispatchStep(&steps[i], iterCtx, runner, glob, log)
 		if dispatchErr != nil {
 			persistIterationFailState(iterCtx, loopStepID, iteration, bodyStepID, false)
@@ -507,6 +503,19 @@ func installIterationFlush(
 	iterCtx.FlushState = func() {
 		root, chain := buildIterationFlushChain(iterCtx, loopStepID, iteration, bodyStepID, bodyCompleted)
 		if root == nil || chain == nil {
+			// Defensive: reached only when an ancestor context has empty
+			// NestingPath or empty StepID, which should be unreachable under
+			// normal workflow execution. Emit an error event so a resume
+			// landing at the wrong position is debuggable rather than silent.
+			emitAudit(iterCtx, audit.Event{
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+				Type:      audit.EventError,
+				Data: map[string]any{
+					"error":      "iteration flush chain construction failed",
+					"loopStepId": loopStepID,
+					"bodyStepId": bodyStepID,
+				},
+			})
 			if outerFlush != nil {
 				outerFlush()
 			}

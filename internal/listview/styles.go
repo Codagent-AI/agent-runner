@@ -15,4 +15,5 @@ var (
 	pathStyle      = tuistyle.PathStyle
 	labelStyle     = tuistyle.LabelStyle
 	columnHeader   = tuistyle.ColumnHeader
+	errStyle       = tuistyle.StatusFailed
 )

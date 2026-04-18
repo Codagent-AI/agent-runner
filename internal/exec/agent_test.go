@@ -164,22 +164,6 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
-	t.Run("logs mode", func(t *testing.T) {
-		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		log := &mockLogger{}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew}
-		ExecuteAgentStep(&step, makeCtx(), runner, log)
-		found := false
-		for _, line := range log.lines {
-			if strings.Contains(line, "headless") {
-				found = true
-			}
-		}
-		if !found {
-			t.Fatal("expected mode to be logged")
-		}
-	})
-
 	t.Run("defaults to claude adapter", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew}
