@@ -37,6 +37,10 @@ docs/                 User guide, design docs
 - **`EngineRef` is `interface{}`**: Avoids circular import between model and engine packages; callers type-assert to `engine.Engine`
 - **`audit.EventLogger`**: Real interface (not empty) used for audit event emission
 
+## Workflow
+
+Always use test driven development when making code changes. When fixing bugs it is especially important to add a failing test that replicates the issue as the first step.
+
 ## Commands
 
 ```
