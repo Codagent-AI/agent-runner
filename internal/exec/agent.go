@@ -124,6 +124,16 @@ func ExecuteAgentStep(
 	emitAgentStart(ctx, prefix, startTime, prompt, mode, step, sessionID, cliName, enrichment)
 	logAgentStep(log, mode, prompt)
 
+	// Persist session bookkeeping BEFORE spawning the CLI so that if the runner
+	// is killed mid-step (ctrl-c, terminal hangup, crash) resume can reconnect
+	// to the session rather than orphan it. When the session ID is knowable at
+	// spawn — fresh Claude (pre-generated UUID), any resume (ID carried in) —
+	// we can persist it now. Fresh Codex sessions remain the exception since
+	// Codex assigns the ID internally and DiscoverSessionID only succeeds after
+	// the process has run; for those cases we fall back to the post-exit write
+	// below.
+	recordSessionOnSpawn(step, ctx, sessionID)
+
 	spawnTime := time.Now()
 	outcome, result, runErr := runAgentProcess(runner, args, headless, step.Workdir, log)
 	if runErr != nil {
@@ -301,6 +311,34 @@ func runAgentProcess(runner ProcessRunner, args []string, headless bool, workdir
 	// CLI exited without a continue trigger.
 	log.Printf("\n  CLI session exited. To resume this workflow, run:\n    agent-runner --resume\n\n")
 	return OutcomeAborted, result, nil
+}
+
+// recordSessionOnSpawn writes session bookkeeping to ctx and flushes state
+// before the agent process runs, so a kill mid-step does not orphan the
+// session. It is a no-op when sessionID is empty (Codex fresh sessions discover
+// the ID post-hoc).
+func recordSessionOnSpawn(step *model.Step, ctx *model.ExecutionContext, sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	ctx.SessionIDs[step.ID] = sessionID
+	switch step.Session {
+	case model.SessionNew:
+		if step.Agent != "" {
+			ctx.SessionProfiles[step.ID] = step.Agent
+		}
+		ctx.LastSessionStepID = step.ID
+	case model.SessionResume, model.SessionInherit:
+		if ctx.LastSessionStepID != "" {
+			if prev := ctx.SessionProfiles[ctx.LastSessionStepID]; prev != "" {
+				ctx.SessionProfiles[step.ID] = prev
+			}
+		}
+		ctx.LastSessionStepID = step.ID
+	}
+	if ctx.FlushState != nil {
+		ctx.FlushState()
+	}
 }
 
 func discoverAndStoreSession(

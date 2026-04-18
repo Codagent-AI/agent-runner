@@ -76,6 +76,51 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("persists session ID before CLI invocation so kill mid-step is resumable", func(t *testing.T) {
+		// Regression for the bug where a workflow runner killed mid-agent-step
+		// lost the session ID because it was only written after the CLI exited.
+		// The session ID must be flushed to state BEFORE the CLI process runs.
+		var (
+			sessionIDAtSpawn string
+			flushed          bool
+		)
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew}
+		ctx := makeCtx()
+		ctx.FlushState = func() {
+			flushed = true
+			sessionIDAtSpawn = ctx.SessionIDs[step.ID]
+		}
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if !flushed {
+			t.Fatal("expected FlushState to be called before the CLI runs")
+		}
+		if sessionIDAtSpawn == "" {
+			t.Fatal("expected session ID to be populated at flush time")
+		}
+		if sessionIDAtSpawn != ctx.SessionIDs["s"] {
+			t.Fatalf("expected pre-spawn session ID %q to equal final %q", sessionIDAtSpawn, ctx.SessionIDs["s"])
+		}
+	})
+
+	t.Run("persists resumed session ID before CLI invocation", func(t *testing.T) {
+		// When resuming, the session ID is known at spawn (carried in from
+		// prior state); it must be re-flushed so mid-step kills preserve it.
+		var flushedID string
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		step := model.Step{ID: "s2", Mode: model.ModeHeadless, Prompt: "continue", Session: model.SessionResume}
+		ctx := makeCtx()
+		ctx.SessionIDs["prev"] = "session-abc"
+		ctx.LastSessionStepID = "prev"
+		ctx.FlushState = func() {
+			flushedID = ctx.SessionIDs[step.ID]
+		}
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if flushedID != "session-abc" {
+			t.Fatalf("expected pre-spawn flush to record resumed session ID, got %q", flushedID)
+		}
+	})
+
 	t.Run("headless resume uses --resume flag", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		ctx := makeCtx()

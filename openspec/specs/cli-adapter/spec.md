@@ -73,3 +73,23 @@ After a CLI process exits, the adapter SHALL attempt to return a session ID. The
 - **WHEN** a CLI step completes but the adapter cannot determine the session ID
 - **THEN** the adapter returns empty and the runner logs a warning; future resume for this step is not possible
 
+### Requirement: Session ID persisted before CLI spawn when known
+
+When the session ID is known at spawn time — either because the runner pre-generated it (fresh Claude sessions) or because it was carried in from prior state (any resumed session) — the runner SHALL persist it into the execution context and flush the run state BEFORE spawning the CLI process. This ensures that if the runner is killed mid-step (ctrl-c, terminal hangup, crash) the session is recoverable on workflow resume rather than orphaned. When the session ID is not knowable until after the process has run (fresh Codex sessions), the runner MAY defer persistence to post-exit via the adapter's `DiscoverSessionID`.
+
+#### Scenario: Fresh Claude session persisted before spawn
+- **WHEN** a fresh Claude step is about to spawn the CLI process
+- **THEN** the pre-generated session ID is written to `ctx.SessionIDs[step.id]` and flushed to state before the process is invoked
+
+#### Scenario: Resumed session re-persisted before spawn
+- **WHEN** any resumed agent step is about to spawn the CLI process
+- **THEN** the carried-in session ID is written to `ctx.SessionIDs[step.id]` and flushed to state before the process is invoked
+
+#### Scenario: Runner killed mid-step recovers session on resume
+- **WHEN** a fresh Claude step has been spawned and the runner is killed before the CLI process exits
+- **THEN** the next `--resume` of that run sees the session ID already in state.json and reconnects to the existing CLI session rather than starting a new one
+
+#### Scenario: Fresh Codex session deferred to post-exit
+- **WHEN** a fresh Codex step spawns the CLI process and no pre-generated ID exists
+- **THEN** the runner does not pre-flush a session ID; post-exit discovery via `DiscoverSessionID` remains the sole persistence point
+

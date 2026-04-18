@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestWrite(t *testing.T) {
@@ -140,6 +142,148 @@ func TestCheck(t *testing.T) {
 		status := Check(dir)
 		if status != LockStale {
 			t.Fatalf("expected LockStale for unreadable lock, got %d", status)
+		}
+	})
+}
+
+func TestAcquire(t *testing.T) {
+	t.Run("acquires when no lock exists", func(t *testing.T) {
+		dir := t.TempDir()
+		activePID, err := Acquire(dir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if activePID != 0 {
+			t.Fatalf("expected activePID 0 (acquired), got %d", activePID)
+		}
+		data, readErr := os.ReadFile(filepath.Join(dir, "lock"))
+		if readErr != nil {
+			t.Fatalf("expected lock file to exist: %v", readErr)
+		}
+		gotPID, _ := strconv.Atoi(strings.TrimSpace(string(data)))
+		if gotPID != os.Getpid() {
+			t.Fatalf("expected lock to contain PID %d, got %d", os.Getpid(), gotPID)
+		}
+	})
+
+	t.Run("refuses when active lock held by another live PID", func(t *testing.T) {
+		dir := t.TempDir()
+		content := fmt.Sprintf("%d\n", os.Getpid())
+		if err := os.WriteFile(filepath.Join(dir, "lock"), []byte(content), 0o600); err != nil {
+			t.Fatalf("seed lock: %v", err)
+		}
+
+		activePID, err := Acquire(dir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if activePID != os.Getpid() {
+			t.Fatalf("expected activePID %d, got %d", os.Getpid(), activePID)
+		}
+	})
+
+	t.Run("replaces stale lock and acquires", func(t *testing.T) {
+		dir := t.TempDir()
+		// PID 999999999 is essentially guaranteed dead.
+		if err := os.WriteFile(filepath.Join(dir, "lock"), []byte("999999999\n"), 0o600); err != nil {
+			t.Fatalf("seed stale lock: %v", err)
+		}
+
+		activePID, err := Acquire(dir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if activePID != 0 {
+			t.Fatalf("expected activePID 0 (acquired), got %d", activePID)
+		}
+		data, _ := os.ReadFile(filepath.Join(dir, "lock"))
+		gotPID, _ := strconv.Atoi(strings.TrimSpace(string(data)))
+		if gotPID != os.Getpid() {
+			t.Fatalf("expected stale lock replaced with our PID %d, got %d", os.Getpid(), gotPID)
+		}
+	})
+
+	t.Run("atomicity: only one of two concurrent acquirers wins", func(t *testing.T) {
+		// Proves O_CREATE|O_EXCL semantics — the old check-then-write path
+		// let both callers observe "no active lock" and both succeed.
+		dir := t.TempDir()
+		const n = 16
+		winners := 0
+		losers := 0
+		errs := 0
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for range n {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				activePID, err := Acquire(dir)
+				mu.Lock()
+				defer mu.Unlock()
+				switch {
+				case err != nil:
+					errs++
+				case activePID == 0:
+					winners++
+				default:
+					losers++
+				}
+			}()
+		}
+		close(start)
+		wg.Wait()
+		if errs != 0 {
+			t.Fatalf("unexpected errors: %d", errs)
+		}
+		if winners != 1 {
+			t.Fatalf("expected exactly 1 winner, got %d (losers=%d)", winners, losers)
+		}
+	})
+
+	t.Run("returns error when lock path is unreadable directory", func(t *testing.T) {
+		dir := t.TempDir()
+		// Make "lock" a directory so both read and create fail deterministically.
+		if err := os.Mkdir(filepath.Join(dir, "lock"), 0o755); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+
+		activePID, err := Acquire(dir)
+		if err == nil {
+			t.Fatalf("expected error when lock path is a directory, got activePID=%d", activePID)
+		}
+		if activePID != 0 {
+			t.Fatalf("expected activePID 0 on error, got %d", activePID)
+		}
+	})
+
+	t.Run("sweeps stale lock-*.tmp files on acquire", func(t *testing.T) {
+		dir := t.TempDir()
+		staleTmp := filepath.Join(dir, "lock-abandoned.tmp")
+		if err := os.WriteFile(staleTmp, []byte("leftover\n"), 0o600); err != nil {
+			t.Fatalf("seed tmp: %v", err)
+		}
+		// Backdate to before the sweep cutoff.
+		old := time.Now().Add(-30 * time.Minute)
+		if err := os.Chtimes(staleTmp, old, old); err != nil {
+			t.Fatalf("chtimes: %v", err)
+		}
+		// Also seed a fresh one; the sweep must leave it alone.
+		freshTmp := filepath.Join(dir, "lock-fresh.tmp")
+		if err := os.WriteFile(freshTmp, []byte("active\n"), 0o600); err != nil {
+			t.Fatalf("seed fresh tmp: %v", err)
+		}
+
+		if _, err := Acquire(dir); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if _, err := os.Stat(staleTmp); !os.IsNotExist(err) {
+			t.Fatalf("expected stale tmp file to be swept, got stat err=%v", err)
+		}
+		if _, err := os.Stat(freshTmp); err != nil {
+			t.Fatalf("expected recent tmp file preserved, got err=%v", err)
 		}
 	})
 }

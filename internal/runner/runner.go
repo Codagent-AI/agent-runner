@@ -193,8 +193,14 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		return nil, fmt.Errorf("create session dir: %w", err)
 	}
 
-	if err := runlock.Write(sessionDir); err != nil {
-		fmt.Fprintf(os.Stderr, "agent-runner: warning: could not write lock file in %s: %v\n", sessionDir, err)
+	activePID, lockErr := runlock.Acquire(sessionDir)
+	switch {
+	case lockErr != nil:
+		// Genuine I/O error inspecting or writing the lock — refuse rather
+		// than risk a second runner racing the same state file.
+		return nil, fmt.Errorf("acquire run lock in %s: %w", sessionDir, lockErr)
+	case activePID > 0:
+		return nil, fmt.Errorf("run already in progress (PID %d) in %s; wait for it to finish or kill the process before resuming", activePID, sessionDir)
 	}
 
 	if opts.SessionDir == "" {

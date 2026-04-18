@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/exec"
@@ -434,6 +435,77 @@ func TestRunWorkflow(t *testing.T) {
 		lockFile := filepath.Join(sessionDir, "lock")
 		if _, err := os.Stat(lockFile); !os.IsNotExist(err) {
 			t.Fatal("expected lock file to be deleted after failed run")
+		}
+	})
+
+	t.Run("refuses to run when session dir has an active lock", func(t *testing.T) {
+		sessionDir := t.TempDir()
+		// Simulate an already-running runner by writing a lock file whose PID
+		// is this test process (guaranteed alive for the test duration).
+		lockFile := filepath.Join(sessionDir, "lock")
+		if err := os.WriteFile(lockFile, fmt.Appendf(nil, "%d\n", os.Getpid()), 0o600); err != nil {
+			t.Fatalf("failed to seed lock: %v", err)
+		}
+
+		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}}}
+		w := model.Workflow{
+			Name:  "test",
+			Steps: []model.Step{shellStep("s1", "echo hi")},
+		}
+		w.ApplyDefaults()
+		result, err := RunWorkflow(&w, map[string]string{}, &Options{
+			ProcessRunner: runner,
+			GlobExpander:  &mockGlob{},
+			Log:           &mockLog{},
+			SessionDir:    sessionDir,
+		})
+		if err == nil {
+			t.Fatal("expected error for active lock, got nil")
+		}
+		if !strings.Contains(err.Error(), "already in progress") {
+			t.Fatalf("expected 'already in progress' in error, got %q", err.Error())
+		}
+		if !strings.Contains(err.Error(), fmt.Sprintf("%d", os.Getpid())) {
+			t.Fatalf("expected PID %d in error, got %q", os.Getpid(), err.Error())
+		}
+		if result != ResultFailed {
+			t.Fatalf("expected ResultFailed, got %q", result)
+		}
+		if len(runner.calls) != 0 {
+			t.Fatalf("expected no steps to run, got calls: %v", runner.calls)
+		}
+		// Pre-existing lock must be untouched (still contains this PID).
+		data, _ := os.ReadFile(lockFile)
+		if !strings.Contains(string(data), fmt.Sprintf("%d", os.Getpid())) {
+			t.Fatalf("expected lock file preserved, got %q", string(data))
+		}
+	})
+
+	t.Run("proceeds when existing lock is stale", func(t *testing.T) {
+		sessionDir := t.TempDir()
+		lockFile := filepath.Join(sessionDir, "lock")
+		// PID 999999999 is essentially guaranteed to be dead.
+		if err := os.WriteFile(lockFile, []byte("999999999\n"), 0o600); err != nil {
+			t.Fatalf("failed to seed stale lock: %v", err)
+		}
+
+		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}}}
+		w := model.Workflow{
+			Name:  "test",
+			Steps: []model.Step{shellStep("s1", "echo hi")},
+		}
+		w.ApplyDefaults()
+		result, err := RunWorkflow(&w, map[string]string{}, &Options{
+			ProcessRunner: runner,
+			GlobExpander:  &mockGlob{},
+			Log:           &mockLog{},
+			SessionDir:    sessionDir,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != ResultSuccess {
+			t.Fatalf("expected success, got %q", result)
 		}
 	})
 }
