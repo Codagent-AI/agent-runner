@@ -1,0 +1,4 @@
+- [ ] Implement the change described by these files:
+  - [proposal.md](proposal.md)
+  - [specs/named-sessions/spec.md](specs/named-sessions/spec.md)
+  - [design.md](design.md)
