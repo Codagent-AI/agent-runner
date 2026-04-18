@@ -213,6 +213,22 @@ func TestModel_Q_EmitsExitMsg(t *testing.T) {
 	}
 }
 
+// In the live-run path runview.Model is the top-level bubbletea model (no
+// switcher wrap), so it must self-quit when it receives its own ExitMsg.
+// Without this, q-after-completion emits ExitMsg into the void and the TUI
+// appears frozen.
+func TestModel_ExitMsg_ReturnsQuit(t *testing.T) {
+	m := newTestModel(simpleTree(), FromLiveRun)
+
+	_, cmd := m.Update(ExitMsg{})
+	if cmd == nil {
+		t.Fatal("ExitMsg should produce a cmd that quits the program")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("expected tea.QuitMsg from cmd, got %T", cmd())
+	}
+}
+
 func TestModel_Enter_AgentStep_EmitsResumeMsg(t *testing.T) {
 	m := newTestModel(simpleTree(), FromList)
 	m.cursor = 1 // agent step with SessionID

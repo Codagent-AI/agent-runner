@@ -201,6 +201,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Terminal handoff bookkeeping; no visual change needed.
 		return m, nil
 
+	case ExitMsg:
+		// In the live-run path this Model is the top-level tea.Program model
+		// (no switcher wrap), so ExitMsg must be translated into tea.Quit here.
+		// When wrapped in the switcher (FromList / FromInspect paths), the
+		// switcher intercepts ExitMsg before delegation, so this branch is
+		// inert in that case.
+		return m, tea.Quit
+
 	case liverun.ExecDoneMsg:
 		// Drain any outstanding audit events before deciding which step to
 		// focus. Step statuses reach the tree via audit.log (not OutputChunkMsg),
