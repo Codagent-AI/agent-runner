@@ -279,9 +279,11 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleEnter()
 	case "up", "k":
 		m.autoFollow = false
+		m.tailFollow = false
 		m.moveCursor(-1)
 	case "down", "j":
 		m.autoFollow = false
+		m.tailFollow = false
 		m.moveCursor(1)
 	case "l":
 		m.autoFollow = true

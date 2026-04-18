@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -12,6 +13,11 @@ import (
 	"github.com/codagent/agent-runner/internal/stateio"
 )
 
+// ErrAlreadyCompleted is returned by PrepareResume and ResumeWorkflow when
+// the recorded state indicates the workflow finished on a previous run.
+// Callers use errors.Is to distinguish it from other setup errors.
+var ErrAlreadyCompleted = errors.New("workflow already completed")
+
 // PrepareResume loads the workflow state from stateFilePath, resolves the
 // resume step, and calls PrepareRun to initialize the session. Returns a
 // RunHandle that callers can pass to ExecuteFromHandle.
@@ -22,7 +28,7 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	}
 
 	if state.Completed {
-		return nil, fmt.Errorf("workflow already completed")
+		return nil, ErrAlreadyCompleted
 	}
 
 	workflow, err := loader.LoadWorkflow(state.WorkflowFile, loader.Options{})
@@ -81,7 +87,7 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		return nil, fmt.Errorf("step %q no longer exists in workflow", fromStep)
 	}
 	if resolved.AllDone {
-		return nil, fmt.Errorf("workflow already completed")
+		return nil, ErrAlreadyCompleted
 	}
 	fromStep = resolved.StepID
 
@@ -123,7 +129,7 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
 	h, err := PrepareResume(stateFilePath, opts)
 	if err != nil {
 		// "already completed" is not an error for the caller
-		if err.Error() == "workflow already completed" {
+		if errors.Is(err, ErrAlreadyCompleted) {
 			if opts.Log != nil {
 				opts.Log.Println("agent-runner: workflow already completed")
 			}

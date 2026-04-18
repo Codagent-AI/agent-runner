@@ -264,7 +264,7 @@ func handleResume(sessionID string) int {
 		Log:           &runner.DiscardLogger{},
 	})
 	if err != nil {
-		if err.Error() == "workflow already completed" {
+		if errors.Is(err, runner.ErrAlreadyCompleted) {
 			fmt.Fprintln(os.Stderr, "agent-runner: workflow already completed")
 			return 0
 		}
