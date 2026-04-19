@@ -54,10 +54,11 @@ steps:
     workflow: ../run-validator.yaml
 
   - id: archive
-    command: openspec archive "{{change_name}}" --yes
-
-  - id: archive-verify
-    command: agent-validator skip
+    command: |
+      openspec archive "{{change_name}}" --yes
+      git add openspec/changes
+      git commit -m "Archive openspec documents for {{change_name}}"
+      agent-validator skip
 
   - id: finalize
     agent: implementor
