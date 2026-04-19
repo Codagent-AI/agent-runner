@@ -5,6 +5,10 @@ params:
   - name: change_name
     required: true
 
+sessions:
+  - name: lead-agent
+    agent: planner
+
 steps:
   - id: implement-tasks
     loop:
@@ -17,6 +21,29 @@ steps:
         params:
           task_file: "{{task_file}}"
 
+  - id: review-assumptions
+    session: lead-agent
+    prompt: |
+      The implementor iterations for change "{{change_name}}" have completed.
+      Each iteration produced a session report (via codagent:session-report) listing
+      risky and notable assumptions plus any context gaps.
+
+      Session-report output for this run is persisted as one file per iteration at:
+
+          {{session_dir}}/output/*session-report*.out
+
+      The iteration index is embedded in each filename (e.g. `..._implement-tasks_0_...`).
+      Cross-reference the task file for each iteration against the `step_start` event in
+      `{{session_dir}}/audit.log` — audit.log carries event metadata only, not the
+      report text itself.
+
+      You MUST use the codagent:review-assumptions skill to audit those findings.
+      Apply high-confidence fixes directly, ask the user one question at a time for
+      ambiguous findings, and surface context gaps in your final summary.
+
+  - id: run-validator
+    workflow: run-validator.yaml
+
   - id: archive
     command: openspec archive "{{change_name}}" --yes
 
@@ -25,6 +52,7 @@ steps:
 
   - id: finalize
     agent: implementor
+    session: new
     prompt: |
       Help the user finalize the PR.
       You MUST use the codagent:finalize-pr skill.

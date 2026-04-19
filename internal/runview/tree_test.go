@@ -33,8 +33,8 @@ func TestBuildTree_ImplementChange(t *testing.T) {
 	if tree.Root.Type != NodeRoot {
 		t.Errorf("root type: want NodeRoot, got %v", tree.Root.Type)
 	}
-	if got := len(tree.Root.Children); got != 4 {
-		t.Fatalf("root children: want 4, got %d", got)
+	if got := len(tree.Root.Children); got != 6 {
+		t.Fatalf("root children: want 6, got %d", got)
 	}
 
 	loop := tree.Root.Children[0]
@@ -55,7 +55,17 @@ func TestBuildTree_ImplementChange(t *testing.T) {
 			loop.Body[0].ID, loop.Body[0].StaticWorkflow)
 	}
 
-	archive := tree.Root.Children[1]
+	review := tree.Root.Children[1]
+	if review.ID != "review-assumptions" {
+		t.Errorf("want review-assumptions at index 1, got %q", review.ID)
+	}
+
+	validator := tree.Root.Children[2]
+	if validator.ID != "run-validator" || validator.Type != NodeSubWorkflow {
+		t.Errorf("want run-validator sub-workflow at index 2, got id=%q type=%v", validator.ID, validator.Type)
+	}
+
+	archive := tree.Root.Children[3]
 	if archive.ID != "archive" || archive.Type != NodeShell {
 		t.Errorf("want archive shell, got id=%q type=%v", archive.ID, archive.Type)
 	}
@@ -63,9 +73,9 @@ func TestBuildTree_ImplementChange(t *testing.T) {
 		t.Errorf("expected static command on archive")
 	}
 
-	finalize := tree.Root.Children[3]
+	finalize := tree.Root.Children[5]
 	if finalize.ID != "finalize" {
-		t.Fatalf("want finalize at index 3, got %q", finalize.ID)
+		t.Fatalf("want finalize at index 5, got %q", finalize.ID)
 	}
 	// Without explicit mode, default is interactive.
 	if finalize.Type != NodeInteractiveAgent {

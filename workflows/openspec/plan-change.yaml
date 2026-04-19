@@ -9,6 +9,10 @@ engine:
   type: openspec
   change_param: change_name
 
+sessions:
+  - name: lead-agent
+    agent: planner
+
 steps:
   - id: check-clean
     # agent-validator detect: exit 0 = unvalidated changes present, exit 2 = clean (no changes)
@@ -19,7 +23,7 @@ steps:
     command: openspec new change "{{change_name}}"
 
   - id: proposal
-    agent: planner
+    session: lead-agent
     prompt: |
       Help the user write a change proposal.
       You MUST use the codagent:propose skill.

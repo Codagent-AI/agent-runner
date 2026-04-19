@@ -6,6 +6,9 @@ profiles:
         effort: high
     implementor:
         extends: headless_base
+    haiku_tester:
+        extends: headless_base
+        model: haiku
     interactive_base:
         default_mode: interactive
         cli: claude

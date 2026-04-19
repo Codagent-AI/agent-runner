@@ -1,34 +1,37 @@
 name: smoke-test
-description: "Exercises interactive→headless resume with capture+disallowedTools, then interactive resume, then a fresh headless session"
+description: "Manual smoke test for core step types (agent, shell, loop, capture, session resume, skip_if, break_if)"
+
+sessions:
+  - name: tester
+    agent: haiku_tester
 
 steps:
-  - id: greet
-    agent: interactive_base
-    prompt: |
-      Say hello briefly.
-      Once you've done that, continue to the next step.
+  - id: shell-capture
+    command: echo "smoke-test value"
+    capture: greeting
 
-  - id: headless-resume-capture
+  - id: agent-named
+    session: tester
+    prompt: "Reply with one short sentence echoing this value back to me: {{greeting}}"
+
+  - id: agent-resume
     session: resume
-    mode: headless
-    capture: resume_reply
-    prompt: |
-      In one short sentence, confirm you remember saying hello.
-    # Verifies the fix: headless resume of an interactive-originated session
-    # must go through `claude --resume <uuid> -p --disallowedTools ...`.
-    # Before the fix this failed with "Session ID X is already in use"
-    # (wrong flag) or was blocked from combining --disallowedTools with
-    # --resume.
+    prompt: "In one short sentence, what value did I just send you?"
 
-  - id: how-are-you
+  - id: shell-fail
+    command: exit 1
+    continue_on_failure: true
+
+  - id: agent-after-fail
     session: resume
-    prompt: |
-      You captured earlier: {{resume_reply}}
-      Now ask the user how they are doing.
+    mode: interactive
+    prompt: "The previous shell step failed on purpose. Acknowledge in one short sentence and then ask me if I'm done."
+    skip_if: previous_success
 
-  - id: headless-new-session
-    agent: interactive_base
-    session: new
-    mode: headless
-    prompt: |
-      In one short sentence, tell me something interesting.
+  - id: counted-loop
+    loop:
+      max: 3
+      as_index: i
+    steps:
+      - id: loop-body
+        command: echo "iteration {{i}}"
