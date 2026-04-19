@@ -1,31 +1,14 @@
 package runview
 
 import (
-	"path/filepath"
 	"testing"
 
-	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 )
 
-// loadWorkflowForTest loads a workflow YAML from the repo's workflows/ dir,
-// regardless of where the test binary runs from.
-func loadWorkflowForTest(t *testing.T, rel string) (wf model.Workflow, path string) {
-	t.Helper()
-	abs, err := filepath.Abs(filepath.Join("..", "..", "workflows", rel))
-	if err != nil {
-		t.Fatal(err)
-	}
-	wf, err = loader.LoadWorkflow(abs, loader.Options{})
-	if err != nil {
-		t.Fatalf("load %s: %v", rel, err)
-	}
-	return wf, abs
-}
-
 func TestBuildTree_ImplementChange(t *testing.T) {
-	wf, wfPath := loadWorkflowForTest(t, "openspec/implement-change.yaml")
-	tree := BuildTree(&wf, wfPath)
+	wf := fixtureImplementChange()
+	tree := BuildTree(&wf, fixturePath("openspec/implement-change.yaml"))
 
 	if got := tree.Root.ID; got != "implement-change" {
 		t.Errorf("root ID: want implement-change, got %q", got)
@@ -82,7 +65,6 @@ func TestBuildTree_ImplementChange(t *testing.T) {
 		t.Errorf("finalize default type: want NodeInteractiveAgent, got %v", finalize.Type)
 	}
 
-	// Every node starts pending.
 	for _, c := range tree.Root.Children {
 		if c.Status != StatusPending {
 			t.Errorf("child %q: want pending, got %v", c.ID, c.Status)
@@ -91,8 +73,8 @@ func TestBuildTree_ImplementChange(t *testing.T) {
 }
 
 func TestBuildTree_ImplementTask(t *testing.T) {
-	wf, wfPath := loadWorkflowForTest(t, "implement-task.yaml")
-	tree := BuildTree(&wf, wfPath)
+	wf := fixtureImplementTask()
+	tree := BuildTree(&wf, fixturePath("implement-task.yaml"))
 
 	if tree.Root.ID != "implement-task" {
 		t.Errorf("root ID: got %q", tree.Root.ID)
@@ -130,8 +112,8 @@ func TestBuildTree_ImplementTask(t *testing.T) {
 }
 
 func TestEnsureIteration_CreatesAndSeedsBody(t *testing.T) {
-	wf, wfPath := loadWorkflowForTest(t, "openspec/implement-change.yaml")
-	tree := BuildTree(&wf, wfPath)
+	wf := fixtureImplementChange()
+	tree := BuildTree(&wf, fixturePath("openspec/implement-change.yaml"))
 	loop := tree.Root.Children[0]
 
 	iter := ensureIteration(loop, 0)
@@ -164,8 +146,8 @@ func TestEnsureIteration_CreatesAndSeedsBody(t *testing.T) {
 }
 
 func TestDrilldown_AutoFlatten(t *testing.T) {
-	wf, wfPath := loadWorkflowForTest(t, "openspec/implement-change.yaml")
-	tree := BuildTree(&wf, wfPath)
+	wf := fixtureImplementChange()
+	tree := BuildTree(&wf, fixturePath("openspec/implement-change.yaml"))
 	loop := tree.Root.Children[0]
 	iter := ensureIteration(loop, 2)
 
