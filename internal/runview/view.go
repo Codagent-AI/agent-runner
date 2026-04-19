@@ -244,7 +244,7 @@ func (m *Model) renderHelpBar() string {
 	} else {
 		parts = append(parts, "↑↓ step")
 	}
-	parts = append(parts, "pgup/pgdn scroll")
+	parts = append(parts, "j/k scroll")
 
 	if sel != nil {
 		switch sel.Type {
@@ -268,7 +268,10 @@ func (m *Model) renderHelpBar() string {
 		parts = append(parts, "l live")
 	}
 	if !m.tailFollow {
-		parts = append(parts, "End tail")
+		parts = append(parts, "t tail")
+	}
+	if m.canResumeRun() {
+		parts = append(parts, "r resume")
 	}
 
 	parts = append(parts, "? legend")
@@ -375,8 +378,8 @@ func (m *Model) renderLegend() string {
 	b.WriteString("\n  ")
 	b.WriteString(tuistyle.SelectedStyle.Render("Live Navigation"))
 	b.WriteString("\n\n")
-	b.WriteString("  l        jump to active step and resume auto-follow\n")
-	b.WriteString("  End / G  jump to output tail and resume tail-follow\n")
+	b.WriteString("  l  jump to active step and resume auto-follow\n")
+	b.WriteString("  t  jump to output tail and resume tail-follow\n")
 
 	b.WriteString("\n\n  ")
 	b.WriteString(tuistyle.HelpStyle.Render("press ? or esc to dismiss"))

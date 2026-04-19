@@ -29,6 +29,13 @@ type ResumeMsg struct {
 	SessionID string
 }
 
+// ResumeRunMsg asks the shell to exit the TUI and exec `agent-runner --resume
+// <run-id>`, resuming the interrupted workflow run itself. RunID is the
+// agent-runner run ID (the session directory name), NOT an agent CLI session ID.
+type ResumeRunMsg struct {
+	RunID string
+}
+
 type ExitMsg struct{}
 
 // Entered describes how the user reached the run view.
@@ -291,6 +298,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// canResumeRun reports whether the `r` resume-run action is available.
+// True only when the run is inactive (interrupted, not active elsewhere, not
+// a just-finished live run, and not in a terminal completed/failed state).
+func (m *Model) canResumeRun() bool {
+	return m.sessionDir != "" &&
+		!m.running && !m.active && m.liveResult == "" &&
+		m.rootStatus() != StatusFailed && m.rootStatus() != StatusSuccess
+}
+
 // handleKey processes a key message. Extracted from Update to keep the main
 // message switch within funlen limits.
 func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -328,25 +344,28 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		m.autoFollow = false
 		return m.handleEnter()
-	case "up", "k":
+	case "up":
 		m.autoFollow = false
-		m.tailFollow = false
 		m.moveCursor(-1)
-	case "down", "j":
+	case "down":
 		m.autoFollow = false
-		m.tailFollow = false
 		m.moveCursor(1)
+	case "k":
+		m.tailFollow = false
+		m.scrollDetail(-1)
+	case "j":
+		m.scrollDetail(1)
 	case "l":
 		m.autoFollow = true
 		m.navigateToNode(m.tree.FindByPrefix(m.activeStepPrefix))
-	case "pgup":
-		m.tailFollow = false
-		m.scrollDetail(-m.detailPageSize())
-	case "pgdown":
-		m.scrollDetail(m.detailPageSize())
-	case "end", "G":
+	case "t":
 		m.tailFollow = true
 		m.detailOffset = math.MaxInt32
+	case "r":
+		if m.canResumeRun() {
+			runID := filepath.Base(m.sessionDir)
+			return m, func() tea.Msg { return ResumeRunMsg{RunID: runID} }
+		}
 	case "g":
 		m.handleLoadFull()
 	}
@@ -417,13 +436,6 @@ func (m *Model) scrollDetail(delta int) {
 	if m.detailOffset < 0 {
 		m.detailOffset = 0
 	}
-}
-
-func (m *Model) detailPageSize() int {
-	if m.termHeight <= 6 {
-		return 10
-	}
-	return m.termHeight - 6
 }
 
 func (m *Model) handleEsc() (tea.Model, tea.Cmd) {

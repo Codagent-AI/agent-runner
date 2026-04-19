@@ -80,7 +80,8 @@ func (m *Model) styledRunStatus() string {
 	case StatusSuccess:
 		return tuistyle.StatusSuccess.Render("completed")
 	default:
-		return tuistyle.StatusInactive.Render("inactive")
+		return tuistyle.StatusInactive.Render("inactive") +
+			tuistyle.DimStyle.Render(" (r to resume)")
 	}
 }
 

@@ -351,6 +351,9 @@ func runSwitcher(sw *switcher) int {
 	if final.resumeSessionID != "" {
 		return execAgentResume(final.resumeAgentCLI, final.resumeSessionID)
 	}
+	if final.resumeRunID != "" {
+		return execRunnerResume(final.resumeRunID)
+	}
 	return 0
 }
 
@@ -455,6 +458,23 @@ func execAgentResume(cli, sessionID string) int {
 	return 0
 }
 
+// execRunnerResume replaces the current process with `agent-runner --resume
+// <run-id>`, resuming an interrupted workflow run. Uses the current executable
+// path so it works even when agent-runner is not in PATH.
+func execRunnerResume(runID string) int {
+	self, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: cannot resolve executable path: %v\n", err)
+		return 1
+	}
+	args := []string{filepath.Base(self), "--resume", runID}
+	if err := syscall.Exec(self, args, os.Environ()); err != nil { // #nosec G204 -- self is our own os.Executable() path; runID is a pre-validated session directory name
+		fmt.Fprintf(os.Stderr, "agent-runner: exec --resume: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
 // resolveInspectSession resolves a run ID to its session and project
 // directories, using the same rules as --resume (cwd's project dir only).
 func resolveInspectSession(runID string) (sessionDir, projectDir string, err error) {
@@ -503,6 +523,7 @@ type switcher struct {
 
 	resumeAgentCLI  string
 	resumeSessionID string
+	resumeRunID     string
 	viewErr         string
 }
 
@@ -555,6 +576,10 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case runview.ResumeMsg:
 		s.resumeAgentCLI = msg.AgentCLI
 		s.resumeSessionID = msg.SessionID
+		return s, tea.Quit
+
+	case runview.ResumeRunMsg:
+		s.resumeRunID = msg.RunID
 		return s, tea.Quit
 
 	case runview.ExitMsg:
