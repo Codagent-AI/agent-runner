@@ -72,22 +72,22 @@ func TestBuildLogLines_SubWorkflowNested(t *testing.T) {
 	if len(ranges) < 2 {
 		t.Fatalf("expected at least 2 ranges, got %d", len(ranges))
 	}
-	// Parent range must span all lines including child.
+	// Parent range should cover only the parent's own block, not descendants.
 	parentRange := ranges[0]
 	if parentRange.node != sw {
 		t.Errorf("ranges[0] should be the sub-workflow node")
 	}
-	if parentRange.endLine != len(lines) {
-		t.Errorf("parent range should span to end of lines: end=%d totalLines=%d", parentRange.endLine, len(lines))
+	if parentRange.endLine >= len(lines) {
+		t.Errorf("parent range should stop before child lines: end=%d totalLines=%d", parentRange.endLine, len(lines))
 	}
 
-	// Child range must be nested within parent.
+	// Child range must start after the parent block and not overlap it.
 	childRange := ranges[1]
 	if childRange.node != child {
 		t.Errorf("ranges[1] should be the child node")
 	}
-	if childRange.startLine <= parentRange.startLine {
-		t.Errorf("child should start after parent header: child.start=%d parent.start=%d", childRange.startLine, parentRange.startLine)
+	if childRange.startLine < parentRange.endLine {
+		t.Errorf("child should start after parent block: child.start=%d parent.end=%d", childRange.startLine, parentRange.endLine)
 	}
 
 	// Child lines should be indented (indent=1 → 2 spaces prefix).
@@ -129,11 +129,11 @@ func TestBuildLogLines_LoopWithIterations(t *testing.T) {
 	if loopRange.node != loop {
 		t.Errorf("ranges[0] should be loop node")
 	}
-	// Both iterations should be nested inside loop's range.
+	// Both iterations should come after the loop block without overlapping it.
 	for i := 1; i < 3; i++ {
 		r := ranges[i]
-		if r.startLine < loopRange.startLine || r.endLine > loopRange.endLine {
-			t.Errorf("iteration range[%d] not inside loop range", i)
+		if r.startLine < loopRange.endLine {
+			t.Errorf("iteration range[%d] overlaps the loop header block", i)
 		}
 	}
 }

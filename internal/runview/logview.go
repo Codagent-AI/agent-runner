@@ -92,7 +92,6 @@ func buildLogLinesRecurse(
 			*lines = append(*lines, indent2+line)
 		}
 
-		rangeIdx := len(*ranges)
 		*ranges = append(*ranges, stepLineRange{node: child, startLine: startLine, endLine: len(*lines)})
 
 		// Recurse for container types (not ghost blocks).
@@ -113,8 +112,6 @@ func buildLogLinesRecurse(
 			}
 		}
 
-		// Update this node's endLine to span all descendants.
-		(*ranges)[rangeIdx].endLine = len(*lines)
 	}
 }
 

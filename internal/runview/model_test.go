@@ -1723,3 +1723,37 @@ func TestScrollSync_NestedWinner_MapsToAncestor(t *testing.T) {
 		t.Fatalf("cursor = %d, want 0 (loop is the top-level ancestor of child)", m.cursor)
 	}
 }
+
+func TestScrollSync_BuildLogLinesChildViewport_SelectsChildAncestor(t *testing.T) {
+	root := &StepNode{ID: "root", Type: NodeRoot}
+	loop := &StepNode{ID: "loop", Type: NodeLoop, Status: StatusInProgress, Parent: root}
+	iter := &StepNode{ID: "loop", Type: NodeIteration, Status: StatusInProgress, Parent: loop, IterationIndex: 0}
+	child := &StepNode{
+		ID:            "child-step",
+		Type:          NodeShell,
+		Status:        StatusSuccess,
+		Parent:        iter,
+		StaticCommand: "echo hi",
+		ExitCode:      intPtr(0),
+	}
+	iter.Children = []*StepNode{child}
+	loop.Children = []*StepNode{iter}
+	root.Children = []*StepNode{loop}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.rebuildRanges()
+	if len(m.stepRanges) != 3 {
+		t.Fatalf("expected 3 ranges, got %d", len(m.stepRanges))
+	}
+
+	childRange := m.stepRanges[2]
+	m.logOffset = childRange.startLine
+	m.syncSelectionToLog()
+
+	if m.cursor != 0 {
+		t.Fatalf("cursor = %d, want 0 (loop is current-level ancestor of child)", m.cursor)
+	}
+	if m.logAnchor.stepKey != child.ID {
+		t.Fatalf("logAnchor.stepKey = %q, want %q", m.logAnchor.stepKey, child.ID)
+	}
+}
