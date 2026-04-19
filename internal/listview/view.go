@@ -309,7 +309,7 @@ func (m *Model) renderStatusIcon(s runs.Status) string {
 		if tuistyle.BlinkOn(m.pulsePhase) {
 			return tuistyle.StatusSuccess.Render("●")
 		}
-		return tuistyle.BlinkOffStyle.Render("●")
+		return tuistyle.BlinkHidden("●")
 	case runs.StatusInactive:
 		return statusInactive.Render("○")
 	case runs.StatusCompleted:

@@ -1,13 +1,17 @@
 package runview
 
 import (
+	"math"
 	"os"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 
 	"github.com/codagent/agent-runner/internal/liverun"
+	"github.com/codagent/agent-runner/internal/tuistyle"
 )
 
 func newTestModel(tree *Tree, entered Entered) *Model {
@@ -247,6 +251,17 @@ func TestModel_Enter_AgentStep_EmitsResumeMsg(t *testing.T) {
 	}
 	if resume.AgentCLI != "claude" {
 		t.Fatalf("agent CLI = %q, want %q", resume.AgentCLI, "claude")
+	}
+}
+
+func TestModel_Enter_AgentStep_LiveRun_NoResume(t *testing.T) {
+	m := newTestModel(simpleTree(), FromLiveRun)
+	m.running = true
+	m.cursor = 1 // agent step with SessionID
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("enter on agent step during live run should be no-op (agent session is owned by the runner)")
 	}
 }
 
@@ -1369,6 +1384,146 @@ func TestModel_HeadlessDetail_LongLine_Wraps(t *testing.T) {
 	outLines := strings.Count(detail, "abcdef")
 	if outLines < 2 {
 		t.Errorf("expected multiple wrapped segments containing 'abcdef', got %d: %q", outLines, detail)
+	}
+}
+
+// TestModel_StatusGlyph_BlinkOffHidesDot verifies that the in-progress
+// indicator on an active step disappears during the off-half of the blink
+// cycle — rather than being recolored. Recoloring has proven fragile across
+// terminal themes (lipgloss's background detection can misresolve adaptive
+// whites to near-black inside bubbletea's alt-screen), so the off-phase
+// simply hides the glyph by emitting width-matched spaces.
+func TestModel_StatusGlyph_BlinkOffHidesDot(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = true
+
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	step := &StepNode{
+		ID:     "running-step",
+		Type:   NodeShell,
+		Status: StatusInProgress,
+		Parent: root,
+	}
+	root.Children = []*StepNode{step}
+	m.tree = &Tree{Root: root}
+	m.path = []*StepNode{root}
+
+	// On-phase (sin(0) = 0, which BlinkOn treats as on): a "●" must be present.
+	m.pulsePhase = 0
+	if on := m.statusGlyph(step); !strings.Contains(on, "●") {
+		t.Errorf("on-phase glyph should render '●', got %q", on)
+	}
+	// Off-phase (sin(3π/2) = -1): the "●" must NOT appear — rendered invisible.
+	m.pulsePhase = 1.5 * math.Pi
+	off := m.statusGlyph(step)
+	if strings.Contains(off, "●") {
+		t.Errorf("off-phase glyph should hide '●', got %q", off)
+	}
+	// Width must still be preserved so the step-list columns don't jump.
+	if lipgloss.Width(off) != lipgloss.Width("●") {
+		t.Errorf("off-phase width = %d, want %d (preserve column alignment)",
+			lipgloss.Width(off), lipgloss.Width("●"))
+	}
+}
+
+func TestModel_ShellDetail_LongStdout_Wraps_NoGutter(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = false
+
+	long := strings.Repeat("abcdef ", 30) // ~210 visual columns
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	shell := &StepNode{
+		ID:            "build",
+		Type:          NodeShell,
+		Status:        StatusSuccess,
+		Parent:        root,
+		StaticCommand: "echo hi",
+		Stdout:        long + "\n",
+		ExitCode:      intPtr(0),
+	}
+	root.Children = []*StepNode{shell}
+	m.tree = &Tree{Root: root}
+	m.path = []*StepNode{root}
+	m.cursor = 0
+	m.detailWidth = 40
+
+	detail := m.renderDetail(shell)
+	if strings.Contains(detail, "| ") {
+		t.Errorf("shell stdout should not use '| ' gutter: %q", detail)
+	}
+	if strings.Contains(detail, "…") {
+		t.Errorf("long shell stdout should wrap, not truncate: %q", detail)
+	}
+	if strings.Count(detail, "abcdef") < 2 {
+		t.Errorf("expected wrapped shell stdout segments containing 'abcdef', got: %q", detail)
+	}
+}
+
+func TestModel_ShellDetail_LongStderr_Wraps_NoGutter(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = false
+
+	long := strings.Repeat("abcdef ", 30)
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusFailed}
+	shell := &StepNode{
+		ID:            "check",
+		Type:          NodeShell,
+		Status:        StatusFailed,
+		Parent:        root,
+		StaticCommand: "agent-validator detect",
+		Stderr:        long + "\n",
+		ExitCode:      intPtr(1),
+	}
+	root.Children = []*StepNode{shell}
+	m.tree = &Tree{Root: root}
+	m.path = []*StepNode{root}
+	m.cursor = 0
+	m.detailWidth = 40
+
+	detail := m.renderDetail(shell)
+	if strings.Contains(detail, "| ") {
+		t.Errorf("shell stderr should not use '| ' gutter: %q", detail)
+	}
+	if strings.Contains(detail, "…") {
+		t.Errorf("long shell stderr should wrap, not truncate: %q", detail)
+	}
+	if strings.Count(detail, "abcdef") < 2 {
+		t.Errorf("expected wrapped shell stderr segments containing 'abcdef', got: %q", detail)
+	}
+}
+
+func TestModel_ShellDetail_LongCommand_Wraps(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = false
+
+	longCmd := "agent-validator detect; status=$?; if [ $status -eq 2 ]; then echo needs-validation; else echo ok; fi && exit $status"
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	shell := &StepNode{
+		ID:                  "check-clean",
+		Type:                NodeShell,
+		Status:              StatusSuccess,
+		Parent:              root,
+		InterpolatedCommand: longCmd,
+		ExitCode:            intPtr(0),
+	}
+	root.Children = []*StepNode{shell}
+	m.tree = &Tree{Root: root}
+	m.path = []*StepNode{root}
+	m.cursor = 0
+	m.detailWidth = 40
+
+	detail := m.renderDetail(shell)
+	// Every emitted line must fit within detailWidth so the downstream
+	// fitDetailLine does not need to truncate with an ellipsis.
+	for _, line := range strings.Split(detail, "\n") {
+		plain := tuistyle.Sanitize(line)
+		if runewidth.StringWidth(plain) > m.detailWidth {
+			t.Errorf("shell command line exceeds detailWidth=%d: width=%d line=%q",
+				m.detailWidth, runewidth.StringWidth(plain), plain)
+		}
+	}
+	if !strings.Contains(detail, "agent-validator") {
+		t.Errorf("detail missing expected command text: %q", detail)
 	}
 }
 

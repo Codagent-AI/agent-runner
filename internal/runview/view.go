@@ -205,7 +205,7 @@ func (m *Model) statusGlyph(n *StepNode) string {
 			if tuistyle.BlinkOn(m.pulsePhase) {
 				return tuistyle.StatusSuccess.Render("●")
 			}
-			return tuistyle.BlinkOffStyle.Render("●")
+			return tuistyle.BlinkHidden("●")
 		}
 		return tuistyle.StatusSuccess.Render("●")
 	case StatusPending:
