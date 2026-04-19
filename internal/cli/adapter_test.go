@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRegistry(t *testing.T) {
@@ -36,10 +40,20 @@ func TestRegistry(t *testing.T) {
 		}
 	})
 
+	t.Run("resolves known CLI copilot", func(t *testing.T) {
+		adapter, err := Get("copilot")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if adapter == nil {
+			t.Fatal("expected non-nil adapter")
+		}
+	})
+
 	t.Run("KnownCLIs returns all registered names", func(t *testing.T) {
 		names := KnownCLIs()
-		if len(names) < 2 {
-			t.Fatalf("expected at least 2 known CLIs, got %d", len(names))
+		if len(names) < 3 {
+			t.Fatalf("expected at least 3 known CLIs, got %d", len(names))
 		}
 		found := map[string]bool{}
 		for _, name := range names {
@@ -50,6 +64,9 @@ func TestRegistry(t *testing.T) {
 		}
 		if !found["codex"] {
 			t.Fatal("expected 'codex' in known CLIs")
+		}
+		if !found["copilot"] {
+			t.Fatal("expected 'copilot' in known CLIs")
 		}
 	})
 }
@@ -474,6 +491,232 @@ func TestCodexAdapter(t *testing.T) {
 		})
 		if id != "" {
 			t.Fatalf("expected empty string, got %q", id)
+		}
+	})
+}
+
+func TestCopilotAdapter(t *testing.T) {
+	adapter := &CopilotAdapter{}
+
+	t.Run("fresh headless copilot step", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "do something",
+			Headless: true,
+		})
+		expected := []string{"copilot", "-p", "do something", "--allow-all", "--autopilot", "-s"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("headless always includes --allow-all", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "do something",
+			Headless: true,
+		})
+		found := false
+		for _, a := range args {
+			if a == "--allow-all" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected --allow-all in args, got %v", args)
+		}
+	})
+
+	t.Run("fresh headless does not include --resume", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "do something",
+			Headless: true,
+		})
+		for _, a := range args {
+			if strings.HasPrefix(a, "--resume") {
+				t.Fatalf("did not expect --resume for fresh session, got %v", args)
+			}
+		}
+	})
+
+	t.Run("resume headless includes --resume flag", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:    "continue",
+			SessionID: "session-abc",
+			Resume:    true,
+			Headless:  true,
+		})
+		expected := []string{"copilot", "-p", "continue", "--allow-all", "--autopilot", "-s", "--resume=session-abc"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("resume drops model flag", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:    "continue",
+			SessionID: "session-abc",
+			Resume:    true,
+			Model:     "gpt-5.2",
+			Headless:  true,
+		})
+		for _, a := range args {
+			if a == "--model" {
+				t.Fatalf("did not expect --model on resume, got %v", args)
+			}
+		}
+	})
+
+	t.Run("model specified on fresh step", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "do something",
+			Model:    "gpt-5.2",
+			Headless: true,
+		})
+		expected := []string{"copilot", "-p", "do something", "--allow-all", "--autopilot", "-s", "--model", "gpt-5.2"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("model specified on resumed step is omitted", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:    "continue",
+			SessionID: "session-abc",
+			Resume:    true,
+			Model:     "gpt-5.2",
+			Headless:  true,
+		})
+		for _, a := range args {
+			if a == "--model" {
+				t.Fatalf("did not expect --model on resumed step, got %v", args)
+			}
+		}
+	})
+
+	t.Run("effort specified on fresh step", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "do something",
+			Effort:   "high",
+			Headless: true,
+		})
+		expected := []string{"copilot", "-p", "do something", "--allow-all", "--autopilot", "-s", "--reasoning-effort", "high"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("effort not specified omits flag", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "do something",
+			Headless: true,
+		})
+		for _, a := range args {
+			if a == "--reasoning-effort" {
+				t.Fatalf("did not expect --reasoning-effort when Effort is empty, got %v", args)
+			}
+		}
+	})
+
+	t.Run("resume drops reasoning-effort flag", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:    "continue",
+			SessionID: "session-abc",
+			Resume:    true,
+			Effort:    "high",
+			Headless:  true,
+		})
+		for _, a := range args {
+			if a == "--reasoning-effort" {
+				t.Fatalf("did not expect --reasoning-effort on resume, got %v", args)
+			}
+		}
+	})
+
+	t.Run("AskUserQuestion disallowed emits --no-ask-user", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:          "do something",
+			Headless:        true,
+			DisallowedTools: []string{"AskUserQuestion"},
+		})
+		expected := []string{"copilot", "-p", "do something", "--allow-all", "--autopilot", "-s", "--no-ask-user"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("no disallowed tools omits --no-ask-user", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "do something",
+			Headless: true,
+		})
+		for _, a := range args {
+			if a == "--no-ask-user" {
+				t.Fatalf("did not expect --no-ask-user when DisallowedTools is empty, got %v", args)
+			}
+		}
+	})
+
+	t.Run("does not support system prompt", func(t *testing.T) {
+		if adapter.SupportsSystemPrompt() {
+			t.Fatal("expected Copilot adapter to not support system prompt")
+		}
+	})
+
+	t.Run("discover session ID from filesystem", func(t *testing.T) {
+		sessionID := "test-session-abc123"
+		fakeHome := t.TempDir()
+		cwd := t.TempDir()
+
+		// Resolve symlinks so os.Getwd() and the workspace.yaml value agree on macOS.
+		canonCwd, err := filepath.EvalSymlinks(cwd)
+		if err != nil {
+			t.Fatalf("EvalSymlinks: %v", err)
+		}
+
+		origHome := os.Getenv("HOME")
+		origCwd, _ := os.Getwd()
+		t.Cleanup(func() {
+			os.Setenv("HOME", origHome)
+			_ = os.Chdir(origCwd)
+		})
+		os.Setenv("HOME", fakeHome)
+		if err := os.Chdir(canonCwd); err != nil {
+			t.Fatalf("failed to chdir: %v", err)
+		}
+
+		sessionStatePath := filepath.Join(fakeHome, ".copilot", "session-state", sessionID)
+		if err := os.MkdirAll(sessionStatePath, 0o700); err != nil {
+			t.Fatalf("failed to create session-state dir: %v", err)
+		}
+		workspace := fmt.Sprintf("id: %s\ncwd: %s\n", sessionID, canonCwd)
+		if err := os.WriteFile(filepath.Join(sessionStatePath, "workspace.yaml"), []byte(workspace), 0o600); err != nil {
+			t.Fatalf("failed to write workspace.yaml: %v", err)
+		}
+
+		id := adapter.DiscoverSessionID(DiscoverOptions{
+			SpawnTime: time.Now().Add(-time.Second),
+			Headless:  true,
+		})
+		if id != sessionID {
+			t.Fatalf("expected %q, got %q", sessionID, id)
+		}
+	})
+
+	t.Run("discover session ID returns empty when no matching session", func(t *testing.T) {
+		sessionDir := t.TempDir()
+		os.Setenv("HOME", sessionDir)
+		t.Cleanup(func() { os.Unsetenv("HOME") })
+
+		id := adapter.DiscoverSessionID(DiscoverOptions{
+			SpawnTime: time.Now(),
+			Headless:  true,
+		})
+		if id != "" {
+			t.Fatalf("expected empty string, got %q", id)
+		}
+	})
+
+	t.Run("interactive mode returns error via InteractiveRejector interface", func(t *testing.T) {
+		var a Adapter = adapter
+		r, ok := a.(InteractiveRejector)
+		if !ok {
+			t.Fatal("expected CopilotAdapter to implement InteractiveRejector")
+		}
+		err := r.InteractiveModeError()
+		if err == nil {
+			t.Fatal("expected error from InteractiveModeError")
+		}
+		if !strings.Contains(err.Error(), "interactive mode") || !strings.Contains(err.Error(), "copilot") {
+			t.Fatalf("expected error about interactive mode and copilot, got: %v", err)
 		}
 	})
 }

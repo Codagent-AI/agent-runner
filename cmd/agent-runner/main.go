@@ -350,7 +350,7 @@ func runSwitcher(sw *switcher) int {
 			return 0
 		}
 		if final.resumeRunID != "" {
-			return execRunnerResume(final.resumeRunID)
+			return execRunnerResume(final.resumeRunID, final.resumeRunProjectDir)
 		}
 		if final.resumeSessionID == "" {
 			return 0
@@ -490,8 +490,9 @@ func finalRunviewModel(final tea.Model, err error) (*runview.Model, error) {
 // syscall.Exec / exec.Command with the full environment. The allowlist mirrors
 // internal/config.validCLI; keep them in sync when adding new agent CLIs.
 var allowedResumeCLIs = map[string]bool{
-	"claude": true,
-	"codex":  true,
+	"claude":  true,
+	"codex":   true,
+	"copilot": true,
 }
 
 // resolveResumeCLI validates `cli` against the resume allowlist and resolves
@@ -536,8 +537,16 @@ func spawnAgentResume(cli, sessionID string) error {
 
 // execRunnerResume replaces the current process with `agent-runner --resume
 // <run-id>`, resuming an interrupted workflow run. Uses the current executable
-// path so it works even when agent-runner is not in PATH.
-func execRunnerResume(runID string) int {
+// path so it works even when agent-runner is not in PATH. If projectDir is
+// non-empty, the process chdirs there first so that resolveResumeStatePath
+// looks in the correct project tree when the run belongs to a different project.
+func execRunnerResume(runID, projectDir string) int {
+	if projectDir != "" {
+		if err := os.Chdir(projectDir); err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: chdir %s: %v\n", projectDir, err)
+			return 1
+		}
+	}
 	self, err := os.Executable()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: cannot resolve executable path: %v\n", err)
@@ -597,10 +606,11 @@ type switcher struct {
 	termWidth  int
 	termHeight int
 
-	resumeAgentCLI  string
-	resumeSessionID string
-	resumeRunID     string
-	viewErr         string
+	resumeAgentCLI      string
+	resumeSessionID     string
+	resumeRunID         string
+	resumeRunProjectDir string
+	viewErr             string
 }
 
 func (s *switcher) Init() tea.Cmd {
@@ -660,6 +670,7 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case listview.ResumeRunMsg:
 		s.resumeRunID = msg.RunID
+		s.resumeRunProjectDir = msg.ProjectDir
 		return s, tea.Quit
 
 	case runview.ExitMsg:

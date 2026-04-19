@@ -3,7 +3,7 @@ description: "Manual smoke test for core step types (agent, shell, loop, capture
 
 sessions:
   - name: tester
-    agent: haiku_tester
+    agent: implementor
 
 steps:
   - id: shell-capture

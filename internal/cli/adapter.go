@@ -41,10 +41,17 @@ type DiscoverOptions struct {
 	Headless      bool
 }
 
+// InteractiveRejector is an optional interface adapters may implement to refuse
+// interactive mode at runtime with a descriptive error.
+type InteractiveRejector interface {
+	InteractiveModeError() error
+}
+
 // registry holds the known CLI adapters, populated at init time.
 var registry = map[string]Adapter{
-	"claude": &ClaudeAdapter{},
-	"codex":  &CodexAdapter{},
+	"claude":  &ClaudeAdapter{},
+	"codex":   &CodexAdapter{},
+	"copilot": &CopilotAdapter{},
 }
 
 // Get returns the adapter for the given CLI name, or an error if unknown.

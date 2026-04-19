@@ -787,6 +787,22 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 		t.Fatalf("expected --append-system-prompt, got %v", args)
 	})
+
+	t.Run("copilot step in interactive mode fails at runtime", func(t *testing.T) {
+		runner := &mockRunner{}
+		step := model.Step{ID: "s", CLI: "copilot", Mode: model.ModeInteractive, Prompt: "do something", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeFailed {
+			t.Fatalf("expected OutcomeFailed for copilot interactive step, got %q", outcome)
+		}
+		// Runner should not have been invoked (failure before spawn)
+		if len(runner.calls) != 0 {
+			t.Fatalf("expected no CLI invocations, got %d", len(runner.calls))
+		}
+	})
 }
 
 func containsArg(args []string, target string) bool {
