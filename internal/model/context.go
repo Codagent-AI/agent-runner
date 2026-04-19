@@ -42,6 +42,12 @@ type ExecutionContext struct {
 	WorkflowName        string
 	WorkflowDescription string
 
+	// SessionDir is the absolute path of the run's session directory
+	// (e.g. ~/.agent-runner/projects/<encoded-cwd>/runs/<run-id>). Exposed to
+	// templates as {{session_dir}} via BuiltinVars so workflows can point
+	// agents at per-run output files.
+	SessionDir string
+
 	// EngineRef holds the workflow engine implementation (internal/engine.Engine).
 	// Stored as interface{} to avoid circular imports.
 	// Callers should type-assert to engine.Engine before use.
@@ -76,6 +82,7 @@ type RootContextOptions struct {
 	WorkflowFile        string
 	WorkflowName        string
 	WorkflowDescription string
+	SessionDir          string
 	EngineRef           interface{} // internal/engine.Engine
 	ProfileStore        interface{} // *config.Config
 	SessionIDs          map[string]string
@@ -129,12 +136,26 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		WorkflowFile:        opts.WorkflowFile,
 		WorkflowName:        opts.WorkflowName,
 		WorkflowDescription: opts.WorkflowDescription,
+		SessionDir:          opts.SessionDir,
 		EngineRef:           opts.EngineRef,
 		ProfileStore:        opts.ProfileStore,
 		AuditLogger:         opts.AuditLogger,
 		NamedSessions:       namedSessions,
 		NamedSessionDecls:   namedSessionDecls,
 	}
+}
+
+// BuiltinVars returns the map of runner-provided template variables that are
+// available in every interpolated string (prompts, commands, sub-workflow
+// params, loop patterns). Only non-empty values are included so tests that
+// construct contexts without a session dir do not accidentally expose an
+// empty {{session_dir}}.
+func (c *ExecutionContext) BuiltinVars() map[string]string {
+	vars := make(map[string]string)
+	if c.SessionDir != "" {
+		vars["session_dir"] = c.SessionDir
+	}
+	return vars
 }
 
 // LoopIterationOptions configures a new loop iteration context.
@@ -186,6 +207,7 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		WorkflowFile:        parent.WorkflowFile,
 		WorkflowName:        parent.WorkflowName,
 		WorkflowDescription: parent.WorkflowDescription,
+		SessionDir:          parent.SessionDir,
 		EngineRef:           parent.EngineRef,
 		ProfileStore:        parent.ProfileStore,
 		AuditLogger:         parent.AuditLogger,
@@ -253,6 +275,7 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		WorkflowFile:        opts.WorkflowFile,
 		WorkflowName:        parent.WorkflowName,
 		WorkflowDescription: parent.WorkflowDescription,
+		SessionDir:          parent.SessionDir,
 		EngineRef:           engineRef,
 		ProfileStore:        parent.ProfileStore,
 		AuditLogger:         parent.AuditLogger,

@@ -268,6 +268,7 @@ func buildExecutionContext(workflow *model.Workflow, params map[string]string, o
 		WorkflowFile:        opts.WorkflowFile,
 		WorkflowName:        workflow.Name,
 		WorkflowDescription: workflow.Description,
+		SessionDir:          sessionDir,
 		EngineRef:           engineRef,
 		ProfileStore:        profileStore,
 		SessionIDs:          opts.SessionIDs,

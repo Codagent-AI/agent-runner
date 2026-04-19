@@ -70,7 +70,7 @@ func ExecuteShellStep(
 		return OutcomeFailed, nil
 	}
 
-	command, err := textfmt.Interpolate(step.Command, ctx.Params, ctx.CapturedVariables)
+	command, err := textfmt.Interpolate(step.Command, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVars())
 	if err != nil {
 		prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 		emitAudit(ctx, audit.Event{

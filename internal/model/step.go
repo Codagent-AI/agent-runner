@@ -47,6 +47,7 @@ type Loop struct {
 	Max            *int   `yaml:"max,omitempty" json:"max,omitempty"`
 	Over           string `yaml:"over,omitempty" json:"over,omitempty"`
 	As             string `yaml:"as,omitempty" json:"as,omitempty"`
+	AsIndex        string `yaml:"as_index,omitempty" json:"as_index,omitempty"`
 	RequireMatches *bool  `yaml:"require_matches,omitempty" json:"require_matches,omitempty"`
 }
 
@@ -70,6 +71,10 @@ func (l *Loop) Validate() error {
 
 	if hasMax && *l.Max <= 0 {
 		return fmt.Errorf(`loop "max" must be a positive integer`)
+	}
+
+	if l.AsIndex != "" && l.AsIndex == l.As {
+		return fmt.Errorf(`loop "as_index" must differ from "as"`)
 	}
 
 	return nil

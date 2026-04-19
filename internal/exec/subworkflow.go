@@ -284,7 +284,7 @@ func buildNestingPrefix(nestingPath []model.NestingSegment) string {
 }
 
 func resolveWorkflowPath(workflowField string, ctx *model.ExecutionContext) (string, error) {
-	interpolated, err := textfmt.Interpolate(workflowField, ctx.Params, ctx.CapturedVariables)
+	interpolated, err := textfmt.Interpolate(workflowField, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVars())
 	if err != nil {
 		return "", err
 	}
@@ -301,7 +301,7 @@ func resolveParams(params map[string]string, ctx *model.ExecutionContext) (map[s
 	}
 	resolved := make(map[string]string, len(params))
 	for k, v := range params {
-		val, err := textfmt.Interpolate(v, ctx.Params, ctx.CapturedVariables)
+		val, err := textfmt.Interpolate(v, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVars())
 		if err != nil {
 			return nil, err
 		}

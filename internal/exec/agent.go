@@ -467,7 +467,7 @@ func buildStepPrefix(stepID string, ctx *model.ExecutionContext, workflowResumed
 }
 
 func buildAgentPrompt(step *model.Step, ctx *model.ExecutionContext) (prompt, enrichment string, err error) {
-	prompt, err = textfmt.Interpolate(step.Prompt, ctx.Params, ctx.CapturedVariables)
+	prompt, err = textfmt.Interpolate(step.Prompt, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVars())
 	if err != nil {
 		return "", "", err
 	}

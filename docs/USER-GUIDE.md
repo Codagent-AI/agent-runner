@@ -74,6 +74,18 @@ agent-runner review-pr 42
 
 Parameters are positional -- they map to the `params` array in order.
 
+### Built-in variables
+
+In addition to workflow-declared `params` and captured variables, the runner
+exposes a small set of built-in variables that every step can reference:
+
+| Variable         | Value                                                                                   |
+| ---------------- | --------------------------------------------------------------------------------------- |
+| `{{session_dir}}` | Absolute path of the current run's session directory (`~/.agent-runner/projects/<encoded-cwd>/runs/<run-id>/`). Useful for pointing agents at per-step output files under `<session_dir>/output/` or the run's `audit.log`. |
+
+Built-ins have the lowest interpolation precedence: a workflow `param` or
+captured variable with the same name shadows the built-in.
+
 ## Step modes
 
 ### Interactive
@@ -233,6 +245,32 @@ Iterate over a list of files matching a glob pattern:
 ```
 
 The `over` field accepts a glob pattern, expanded at runtime. Each match is bound to the variable named in `as`, available via `{{task_file}}` interpolation in nested steps. Each iteration gets a fresh context for session IDs and captured variables.
+
+### Exposing the iteration index
+
+Both counted and for-each loops can publish the zero-based iteration index as a
+template variable using `as_index`:
+
+```yaml
+- id: steps
+  loop:
+    max: 3
+    as_index: i
+  steps:
+    - id: log
+      command: echo "step {{i}}"
+```
+
+```yaml
+- id: per-task
+  loop:
+    over: "tasks/*.md"
+    as: task_file
+    as_index: i
+  steps:
+    - id: run
+      command: echo "{{i}}: {{task_file}}"
+```
 
 ### Loop early exit with break_if
 

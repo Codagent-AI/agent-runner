@@ -117,6 +117,45 @@ func TestCreateLoopIterationContext(t *testing.T) {
 	})
 }
 
+func TestSessionDirBuiltin(t *testing.T) {
+	t.Run("BuiltinVars exposes session_dir when set", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{
+			WorkflowFile: "test.yaml",
+			SessionDir:   "/tmp/runs/abc",
+		})
+		vars := ctx.BuiltinVars()
+		if vars["session_dir"] != "/tmp/runs/abc" {
+			t.Fatalf("expected session_dir='/tmp/runs/abc', got %q", vars["session_dir"])
+		}
+	})
+
+	t.Run("BuiltinVars omits session_dir when empty", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{WorkflowFile: "test.yaml"})
+		if _, ok := ctx.BuiltinVars()["session_dir"]; ok {
+			t.Fatal("expected session_dir to be omitted when empty")
+		}
+	})
+
+	t.Run("propagates through loop and sub-workflow contexts", func(t *testing.T) {
+		root := NewRootContext(&RootContextOptions{
+			WorkflowFile: "root.yaml",
+			SessionDir:   "/tmp/runs/xyz",
+		})
+		loop := NewLoopIterationContext(root, LoopIterationOptions{
+			StepID: "loop", Iteration: 0,
+		})
+		if loop.SessionDir != "/tmp/runs/xyz" {
+			t.Fatalf("loop ctx missing session dir: got %q", loop.SessionDir)
+		}
+		sub := NewSubWorkflowContext(root, &SubWorkflowContextOptions{
+			StepID: "call", WorkflowFile: "sub.yaml", SubWorkflowName: "sub",
+		})
+		if sub.SessionDir != "/tmp/runs/xyz" {
+			t.Fatalf("sub ctx missing session dir: got %q", sub.SessionDir)
+		}
+	})
+}
+
 func TestCreateRootContextWithAuditLogger(t *testing.T) {
 	t.Run("stores auditLogger when provided", func(t *testing.T) {
 		logger := &stubAuditLogger{}
