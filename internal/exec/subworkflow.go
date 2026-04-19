@@ -8,7 +8,6 @@ import (
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/engine"
-	"github.com/codagent/agent-runner/internal/flowctl"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/textfmt"
@@ -148,7 +147,11 @@ func executeChildSteps(
 			}
 		}
 
-		if flowctl.ShouldSkip(workflow.Steps[i].SkipIf, childCtx.LastStepOutcome) {
+		skip, skipErr := ShouldSkipStep(workflow.Steps[i].SkipIf, childCtx.LastStepOutcome, childCtx, runner)
+		if skipErr != nil {
+			return OutcomeFailed, fmt.Errorf("step %q skip_if evaluation failed: %w", workflow.Steps[i].ID, skipErr)
+		}
+		if skip {
 			continue
 		}
 

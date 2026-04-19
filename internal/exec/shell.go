@@ -1,13 +1,37 @@
 package exec
 
 import (
+	"fmt"
 	"time"
 	"unicode/utf8"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/flowctl"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/textfmt"
 )
+
+// ShouldSkipStep evaluates a step's skip_if condition. For "previous_success",
+// it returns true when the previous step in scope succeeded. For "sh:<cmd>",
+// it interpolates the command, runs it through the shell, and returns true
+// when the exit code is 0. An empty skip_if returns (false, nil).
+func ShouldSkipStep(skipIf string, lastOutcome *string, ctx *model.ExecutionContext, runner ProcessRunner) (bool, error) {
+	if skipIf == "" {
+		return false, nil
+	}
+	if cmd, ok := flowctl.ShellSkipCommand(skipIf); ok {
+		expanded, err := textfmt.Interpolate(cmd, ctx.Params, ctx.CapturedVariables)
+		if err != nil {
+			return false, fmt.Errorf("skip_if interpolation: %w", err)
+		}
+		result, runErr := runner.RunShell(expanded, false, "")
+		if runErr != nil {
+			return false, fmt.Errorf("skip_if shell: %w", runErr)
+		}
+		return result.ExitCode == 0, nil
+	}
+	return flowctl.ShouldSkip(skipIf, lastOutcome), nil
+}
 
 const maxAuditValueLen = 4096
 

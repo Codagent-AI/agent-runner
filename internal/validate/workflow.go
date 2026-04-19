@@ -4,6 +4,7 @@ package validate
 import (
 	"fmt"
 
+	"github.com/codagent/agent-runner/internal/flowctl"
 	"github.com/codagent/agent-runner/internal/model"
 )
 
@@ -47,7 +48,9 @@ func validateStepList(steps []model.Step, ctx stepContext) error {
 
 func validateSingleStep(step *model.Step, index int, ctx stepContext) error {
 	if step.SkipIf != "" && index == 0 {
-		return fmt.Errorf(`step %q: skip_if cannot be used on the first step in scope`, step.ID)
+		if _, isShell := flowctl.ShellSkipCommand(step.SkipIf); !isShell {
+			return fmt.Errorf(`step %q: skip_if cannot be used on the first step in scope`, step.ID)
+		}
 	}
 
 	if step.BreakIf != "" && !ctx.insideLoop {

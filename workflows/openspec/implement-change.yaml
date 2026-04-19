@@ -16,6 +16,7 @@ steps:
         workflow: ../implement-task.yaml
         params:
           task_file: "{{task_file}}"
+          run_session_report: "true"
 
   - id: archive
     command: openspec archive "{{change_name}}" --yes

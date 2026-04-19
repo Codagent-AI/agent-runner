@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/exec"
@@ -208,6 +209,94 @@ func TestRunWorkflow(t *testing.T) {
 		}
 		if len(runner.calls) != 1 {
 			t.Fatalf("expected 1 call (second skipped), got %d", len(runner.calls))
+		}
+	})
+
+	t.Run("skip_if sh: skips step when command exits 0", func(t *testing.T) {
+		// s1 runs, then the skip_if shell evaluator runs, then s2 is skipped.
+		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}, {ExitCode: 0}}}
+		w := model.Workflow{
+			Name: "test",
+			Steps: []model.Step{
+				shellStep("s1", "echo ok"),
+				{ID: "s2", Command: "echo skipped-body", Session: model.SessionNew, SkipIf: "sh: true"},
+			},
+		}
+		w.ApplyDefaults()
+		result, _ := RunWorkflow(&w, map[string]string{}, &Options{
+			ProcessRunner: runner,
+			GlobExpander:  &mockGlob{},
+			Log:           &mockLog{},
+			SessionDir:    t.TempDir(),
+		})
+		if result != ResultSuccess {
+			t.Fatalf("expected success, got %q", result)
+		}
+		// Expected calls: s1 body, skip_if evaluator (exit 0 → skip). s2 body not run.
+		if len(runner.calls) != 2 {
+			t.Fatalf("expected 2 calls (s1 + skip_if eval), got %d: %v", len(runner.calls), runner.calls)
+		}
+		for _, call := range runner.calls {
+			if strings.Contains(call[2], "skipped-body") {
+				t.Fatalf("s2 body should not have run: %v", call)
+			}
+		}
+	})
+
+	t.Run("skip_if sh: runs step when command exits non-zero", func(t *testing.T) {
+		// s1 runs (exit 0), skip_if evaluator (exit 1 → don't skip), s2 runs.
+		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}, {ExitCode: 1}, {ExitCode: 0}}}
+		w := model.Workflow{
+			Name: "test",
+			Steps: []model.Step{
+				shellStep("s1", "echo ok"),
+				{ID: "s2", Command: "echo s2-ran", Session: model.SessionNew, SkipIf: "sh: false"},
+			},
+		}
+		w.ApplyDefaults()
+		result, _ := RunWorkflow(&w, map[string]string{}, &Options{
+			ProcessRunner: runner,
+			GlobExpander:  &mockGlob{},
+			Log:           &mockLog{},
+			SessionDir:    t.TempDir(),
+		})
+		if result != ResultSuccess {
+			t.Fatalf("expected success, got %q", result)
+		}
+		if len(runner.calls) != 3 {
+			t.Fatalf("expected 3 calls (s1 + skip_if eval + s2), got %d: %v", len(runner.calls), runner.calls)
+		}
+	})
+
+	t.Run("skip_if sh: interpolates params", func(t *testing.T) {
+		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}, {ExitCode: 0}}}
+		w := model.Workflow{
+			Name:   "test",
+			Params: []model.Param{{Name: "flag"}},
+			Steps: []model.Step{
+				shellStep("s1", "echo ok"),
+				{ID: "s2", Command: "echo body", Session: model.SessionNew, SkipIf: `sh: test "{{flag}}" = "true"`},
+			},
+		}
+		w.ApplyDefaults()
+		result, _ := RunWorkflow(&w, map[string]string{"flag": "true"}, &Options{
+			ProcessRunner: runner,
+			GlobExpander:  &mockGlob{},
+			Log:           &mockLog{},
+			SessionDir:    t.TempDir(),
+		})
+		if result != ResultSuccess {
+			t.Fatalf("expected success, got %q", result)
+		}
+		// Verify the skip_if call carried the expanded param value.
+		foundInterp := false
+		for _, call := range runner.calls {
+			if strings.Contains(call[2], `test "true" = "true"`) {
+				foundInterp = true
+			}
+		}
+		if !foundInterp {
+			t.Fatalf("expected skip_if command to be interpolated with flag=true, got calls: %v", runner.calls)
 		}
 	})
 

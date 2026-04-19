@@ -201,6 +201,21 @@ func TestStepSchemaExtensions(t *testing.T) {
 		}
 	})
 
+	t.Run("accepts skip_if with sh: prefix", func(t *testing.T) {
+		s := Step{ID: "s", Command: "echo", Session: SessionNew, SkipIf: "sh: test -z foo"}
+		if err := s.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("rejects skip_if with empty sh: command", func(t *testing.T) {
+		s := Step{ID: "s", Command: "echo", Session: SessionNew, SkipIf: "sh:  "}
+		err := s.Validate(nil)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
 	t.Run("accepts break_if with value success", func(t *testing.T) {
 		s := Step{ID: "s", Command: "echo", Session: SessionNew, BreakIf: "success"}
 		if err := s.Validate(nil); err != nil {

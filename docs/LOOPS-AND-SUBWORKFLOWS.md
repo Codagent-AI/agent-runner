@@ -143,6 +143,8 @@ Normally a failed step stops the workflow. With `continue_on_failure: true`, the
 
 Skip this step if the previous step succeeded. Pairs with `continue_on_failure` to create conditional execution patterns.
 
+Also supports `skip_if: 'sh: <cmd>'`, which skips when the interpolated shell command exits 0. Unlike `previous_success`, the shell form is self-contained and works on the first step in a scope.
+
 ### break_if
 
 ```yaml

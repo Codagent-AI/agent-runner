@@ -160,7 +160,7 @@ steps:
 | `model` | no | Model override for agent steps. Passed through the CLI adapter. |
 | `capture` | no | Variable name to capture shell stdout into. Shell steps only. |
 | `continue_on_failure` | no | If `true`, workflow continues even if this step fails. |
-| `skip_if` | no | `previous_success` -- skip this step if the prior step succeeded. |
+| `skip_if` | no | `previous_success` (skip on prior success) or `sh: <cmd>` (skip when interpolated shell command exits 0). |
 | `break_if` | no | `success` or `failure` -- break out of enclosing loop on this condition. |
 | `loop` | no | `{ max: N }` for counted loops, `{ over: glob, as: var }` for for-each. |
 | `steps` | loop/group | Nested child steps (required for loops, optional for groups). |
