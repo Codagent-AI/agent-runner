@@ -2,6 +2,7 @@ package runview
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/codagent/agent-runner/internal/tuistyle"
@@ -55,7 +56,7 @@ func (m *Model) styledRunStatus() string {
 		if tuistyle.BlinkOn(m.pulsePhase) {
 			return tuistyle.StatusSuccess.Render("running")
 		}
-		return tuistyle.BlinkOffStyle.Render("running")
+		return tuistyle.BlinkHidden("running")
 	}
 	if m.liveResult != "" {
 		switch m.liveResult {
@@ -70,7 +71,7 @@ func (m *Model) styledRunStatus() string {
 		if tuistyle.BlinkOn(m.pulsePhase) {
 			return tuistyle.StatusSuccess.Render("active")
 		}
-		return tuistyle.BlinkOffStyle.Render("active")
+		return tuistyle.BlinkHidden("active")
 	}
 	status := m.rootStatus()
 	switch status {
@@ -79,7 +80,8 @@ func (m *Model) styledRunStatus() string {
 	case StatusSuccess:
 		return tuistyle.StatusSuccess.Render("completed")
 	default:
-		return tuistyle.StatusInactive.Render("inactive")
+		return tuistyle.StatusInactive.Render("inactive") +
+			tuistyle.DimStyle.Render(" (r to resume)")
 	}
 }
 
@@ -130,8 +132,13 @@ func (m *Model) renderSubWorkflowHeader() string {
 		params = container.StaticParams
 	}
 	if len(params) > 0 {
-		for k, v := range params {
-			paramParts = append(paramParts, k+" = "+v)
+		keys := make([]string, 0, len(params))
+		for k := range params {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			paramParts = append(paramParts, k+" = "+params[k])
 		}
 	}
 

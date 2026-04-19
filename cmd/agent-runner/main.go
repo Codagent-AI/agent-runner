@@ -265,14 +265,24 @@ func handleResume(sessionID string) int {
 	})
 	if err != nil {
 		if errors.Is(err, runner.ErrAlreadyCompleted) {
-			fmt.Fprintln(os.Stderr, "agent-runner: workflow already completed")
-			return 0
+			sessionDir, projectDir := resumeInspectPaths(stateFilePath)
+			return openInspectTUI(sessionID, sessionDir, projectDir)
 		}
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
 	}
 
 	return runLiveTUI(h)
+}
+
+// resumeInspectPaths maps a resume state-file path to the session and project
+// directories the run-view expects. The layout is
+// `<projectDir>/runs/<run-id>/state.json`, so sessionDir is the state file's
+// parent and projectDir is two levels above that.
+func resumeInspectPaths(stateFilePath string) (sessionDir, projectDir string) {
+	sessionDir = filepath.Dir(stateFilePath)
+	projectDir = filepath.Dir(filepath.Dir(sessionDir))
+	return
 }
 
 func handleInspect(runID string) int {
@@ -287,6 +297,14 @@ func handleInspect(runID string) int {
 		return 1
 	}
 
+	return openInspectTUI(runID, sessionDir, projectDir)
+}
+
+// openInspectTUI launches the run-view TUI in FromInspect mode for a session
+// that is not currently executing. Shared between --inspect and the
+// "completed" branch of --resume, since both open a read-only view of a
+// recorded run.
+func openInspectTUI(runID, sessionDir, projectDir string) int {
 	if runlock.CheckOwnedByOther(sessionDir, os.Getpid()) {
 		fmt.Fprintf(os.Stderr, "agent-runner: run %q is active in another process\n", runID)
 		return 1
@@ -332,6 +350,9 @@ func runSwitcher(sw *switcher) int {
 	}
 	if final.resumeSessionID != "" {
 		return execAgentResume(final.resumeAgentCLI, final.resumeSessionID)
+	}
+	if final.resumeRunID != "" {
+		return execRunnerResume(final.resumeRunID)
 	}
 	return 0
 }
@@ -496,6 +517,23 @@ func spawnAgentResume(cli, sessionID string) error {
 	return nil
 }
 
+// execRunnerResume replaces the current process with `agent-runner --resume
+// <run-id>`, resuming an interrupted workflow run. Uses the current executable
+// path so it works even when agent-runner is not in PATH.
+func execRunnerResume(runID string) int {
+	self, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: cannot resolve executable path: %v\n", err)
+		return 1
+	}
+	args := []string{filepath.Base(self), "--resume", runID}
+	if err := syscall.Exec(self, args, os.Environ()); err != nil { // #nosec G204 -- self is our own os.Executable() path; runID is a pre-validated session directory name
+		fmt.Fprintf(os.Stderr, "agent-runner: exec --resume: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
 // resolveInspectSession resolves a run ID to its session and project
 // directories, using the same rules as --resume (cwd's project dir only).
 func resolveInspectSession(runID string) (sessionDir, projectDir string, err error) {
@@ -544,6 +582,7 @@ type switcher struct {
 
 	resumeAgentCLI  string
 	resumeSessionID string
+	resumeRunID     string
 	viewErr         string
 }
 
@@ -596,6 +635,10 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case runview.ResumeMsg:
 		s.resumeAgentCLI = msg.AgentCLI
 		s.resumeSessionID = msg.SessionID
+		return s, tea.Quit
+
+	case runview.ResumeRunMsg:
+		s.resumeRunID = msg.RunID
 		return s, tea.Quit
 
 	case runview.ExitMsg:

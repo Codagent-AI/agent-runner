@@ -3,6 +3,7 @@ package runview
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -43,7 +44,7 @@ func (m *Model) renderShellDetail(b *strings.Builder, n *StepNode) {
 		cmd = n.StaticCommand
 	}
 	if cmd != "" {
-		detailLine(b, "$ "+cmd)
+		m.renderWrapped(b, "$ "+cmd)
 		b.WriteString("\n")
 	}
 
@@ -201,8 +202,13 @@ func (m *Model) renderSubWorkflowDetail(b *strings.Builder, n *StepNode) {
 		params = n.StaticParams
 	}
 	if len(params) > 0 {
-		for k, v := range params {
-			detailDim(b, k, v)
+		keys := make([]string, 0, len(params))
+		for k := range params {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			detailDim(b, k, params[k])
 		}
 	}
 
@@ -319,13 +325,11 @@ func (m *Model) loopTotal(n *StepNode) int {
 
 // renderAgentOutputBlock renders a headless agent step's output. Unlike a
 // shell step, the agent's output is its response to the user's prompt, so the
-// block is labeled "agent" (not "stdout"/"stderr") and the content is
-// word-wrapped across the detail pane without a leading "| " gutter. While
-// the step is still in-progress with no output yet, a spinner is shown so
-// the user can see the CLI is alive. When only one stream has content, the
-// label is bare "agent:"; when both do, sub-labels disambiguate stdout vs
-// stderr. An empty completed step falls back to "(empty)" for parity with
-// the shell renderer.
+// block is labeled "agent" (not "stdout"/"stderr"). While the step is still
+// in-progress with no output yet, a spinner is shown so the user can see the
+// CLI is alive. When only one stream has content, the label is bare "agent:";
+// when both do, sub-labels disambiguate stdout vs stderr. An empty completed
+// step falls back to "(empty)".
 func (m *Model) renderAgentOutputBlock(b *strings.Builder, n *StepNode) {
 	stdout := sanitizeUTF8(n.Stdout)
 	stderr := sanitizeUTF8(n.Stderr)
@@ -349,10 +353,10 @@ func (m *Model) renderAgentOutputBlock(b *strings.Builder, n *StepNode) {
 
 	if stdout != "" && stderr != "" {
 		detailLabel(b, "agent (stdout):")
-		m.renderAgentLines(b, n, stdout)
+		m.renderWrappedLines(b, n, stdout)
 		b.WriteString("\n")
 		detailLabel(b, "agent (stderr):")
-		m.renderAgentLines(b, n, stderr)
+		m.renderWrappedLines(b, n, stderr)
 		return
 	}
 
@@ -361,14 +365,15 @@ func (m *Model) renderAgentOutputBlock(b *strings.Builder, n *StepNode) {
 		text = stderr
 	}
 	detailLabel(b, "agent:")
-	m.renderAgentLines(b, n, text)
+	m.renderWrappedLines(b, n, text)
 }
 
-// renderAgentLines emits agent output lines word-wrapped to the detail
-// column, without the "| " gutter used for shell output. When the user has
-// not loaded the full output, the block is tail-truncated with the shared
-// truncateOutput helper and prefixed with a "(truncated…)" banner.
-func (m *Model) renderAgentLines(b *strings.Builder, n *StepNode, output string) {
+// renderWrappedLines emits `output` word-wrapped to the detail-pane width
+// with no "| " gutter. When the user has not loaded the full output, the
+// block is tail-truncated with the shared truncateOutput helper and prefixed
+// with a "(truncated…)" banner. Used by both shell stdout/stderr and agent
+// stdout/stderr.
+func (m *Model) renderWrappedLines(b *strings.Builder, n *StepNode, output string) {
 	fullLoaded := m.loadedFull[n]
 	var t truncatedOutput
 	if fullLoaded {
@@ -405,29 +410,9 @@ func (m *Model) renderOutputBlock(b *strings.Builder, n *StepNode, label, output
 		b.WriteString(tuistyle.LabelStyle.Render(label+": ") + tuistyle.DimStyle.Render("(empty)"))
 		return
 	}
-
-	fullLoaded := m.loadedFull[n]
-	var t truncatedOutput
-	if fullLoaded {
-		lines := strings.Split(output, "\n")
-		t = truncatedOutput{Lines: lines, TotalLines: len(lines)}
-	} else {
-		t = truncateOutput(output)
-	}
-
 	b.WriteString("\n")
 	detailLabel(b, label+":")
-
-	if banner := t.banner(); banner != "" {
-		b.WriteString(tuistyle.DimStyle.Render(banner))
-		b.WriteString("\n")
-	}
-
-	for _, line := range t.Lines {
-		b.WriteString("| ")
-		b.WriteString(tuistyle.Sanitize(line))
-		b.WriteString("\n")
-	}
+	m.renderWrappedLines(b, n, output)
 }
 
 func renderExitAndDuration(b *strings.Builder, n *StepNode) {
@@ -505,11 +490,6 @@ func formatDuration(ms int64) string {
 
 func detailDim(b *strings.Builder, label, value string) {
 	b.WriteString(tuistyle.LabelStyle.Render(label+": ") + tuistyle.NormalStyle.Render(value))
-	b.WriteString("\n")
-}
-
-func detailLine(b *strings.Builder, s string) {
-	b.WriteString(tuistyle.NormalStyle.Render(s))
 	b.WriteString("\n")
 }
 

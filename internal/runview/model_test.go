@@ -2,13 +2,17 @@ package runview
 
 import (
 	"errors"
+	"math"
 	"os"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 
 	"github.com/codagent/agent-runner/internal/liverun"
+	"github.com/codagent/agent-runner/internal/tuistyle"
 )
 
 func newTestModel(tree *Tree, entered Entered) *Model {
@@ -99,19 +103,295 @@ func TestModel_Navigation_UpDown(t *testing.T) {
 		t.Fatalf("initial cursor = %d, want 0", m.cursor)
 	}
 
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	if m.cursor != 1 {
-		t.Fatalf("after j: cursor = %d, want 1", m.cursor)
+		t.Fatalf("after down: cursor = %d, want 1", m.cursor)
 	}
 
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
 	if m.cursor != 0 {
-		t.Fatalf("after k: cursor = %d, want 0", m.cursor)
+		t.Fatalf("after up: cursor = %d, want 0", m.cursor)
 	}
 
 	m.Update(tea.KeyMsg{Type: tea.KeyUp})
 	if m.cursor != 0 {
 		t.Fatalf("after up at 0: cursor = %d, want 0", m.cursor)
+	}
+}
+
+// j and k scroll the detail pane; they must NOT move the cursor.
+func TestModel_JK_ScrollDetailPane(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList)
+	m.cursor = 1
+	initial := m.detailOffset
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	if m.cursor != 1 {
+		t.Fatalf("j moved cursor to %d, want 1", m.cursor)
+	}
+	if m.detailOffset <= initial {
+		t.Fatal("j should increase detailOffset")
+	}
+
+	scrolled := m.detailOffset
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	if m.cursor != 1 {
+		t.Fatalf("k moved cursor to %d, want 1", m.cursor)
+	}
+	if m.detailOffset >= scrolled {
+		t.Fatal("k should decrease detailOffset")
+	}
+}
+
+// PgUp and PgDown are no longer bound; they must be no-ops.
+func TestModel_PgUpPgDown_NoOp(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList)
+	m.detailOffset = 0
+
+	m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	if m.detailOffset != 0 {
+		t.Fatal("PgDown should not change detailOffset (unbound)")
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.detailOffset != 0 {
+		t.Fatal("PgUp should not change detailOffset (unbound)")
+	}
+}
+
+// t re-engages tail-follow; End and G are no longer bound.
+func TestModel_TKey_ReengagesTailFollow(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.tailFollow = false
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+
+	if !m.tailFollow {
+		t.Error("t key should re-engage tailFollow")
+	}
+	if m.detailOffset <= 0 {
+		t.Errorf("detailOffset = %d, expected large value after t", m.detailOffset)
+	}
+}
+
+func TestModel_EndKey_NoOp(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.tailFollow = false
+
+	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+
+	if m.tailFollow {
+		t.Error("End key should not re-engage tailFollow (unbound)")
+	}
+}
+
+func TestModel_GKey_NoOp(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.tailFollow = false
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("G")})
+
+	if m.tailFollow {
+		t.Error("G key should not re-engage tailFollow (unbound)")
+	}
+}
+
+func TestModel_K_ClearsTailFollow(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.tailFollow = true
+	m.detailOffset = 50
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+
+	if m.tailFollow {
+		t.Error("k should clear tailFollow")
+	}
+}
+
+// r on an inactive run emits ResumeRunMsg.
+func TestModel_R_InactiveRun_EmitsResumeRunMsg(t *testing.T) {
+	tree := simpleTree()
+	tree.Root.Status = StatusInProgress
+	m := newTestModel(tree, FromList)
+	m.sessionDir = "/runs/my-run-id"
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if cmd == nil {
+		t.Fatal("r on inactive run should produce a cmd")
+	}
+	msg := cmd()
+	rr, ok := msg.(ResumeRunMsg)
+	if !ok {
+		t.Fatalf("expected ResumeRunMsg, got %T", msg)
+	}
+	if rr.RunID != "my-run-id" {
+		t.Fatalf("RunID = %q, want %q", rr.RunID, "my-run-id")
+	}
+}
+
+// r works at any drill depth.
+func TestModel_R_WorksAtAnyDrillDepth(t *testing.T) {
+	tree := simpleTree()
+	tree.Root.Status = StatusInProgress
+	m := newTestModel(tree, FromList)
+	m.sessionDir = "/runs/my-run-id"
+
+	// Drill into loop (index 2).
+	m.cursor = 2
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if len(m.path) != 2 {
+		t.Fatalf("expected drilled path len 2, got %d", len(m.path))
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if cmd == nil {
+		t.Fatal("r at drill depth should produce a cmd")
+	}
+	msg := cmd()
+	if _, ok := msg.(ResumeRunMsg); !ok {
+		t.Fatalf("expected ResumeRunMsg at drill depth, got %T", msg)
+	}
+}
+
+// r is ignored while a workflow is running live.
+func TestModel_R_IgnoredWhileRunning(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = true
+	m.sessionDir = "/runs/my-run-id"
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if cmd != nil {
+		t.Fatalf("r while running should be no-op, got cmd %v", cmd)
+	}
+}
+
+// r is ignored on an active run (lock held by another process).
+func TestModel_R_IgnoredOnActiveRun(t *testing.T) {
+	tree := simpleTree()
+	m := newTestModel(tree, FromList)
+	m.sessionDir = "/runs/my-run-id"
+	m.active = true
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if cmd != nil {
+		t.Fatalf("r on active run should be no-op, got cmd %v", cmd)
+	}
+}
+
+// r is ignored on completed runs.
+func TestModel_R_IgnoredOnCompletedRun(t *testing.T) {
+	tree := simpleTree()
+	tree.Root.Status = StatusSuccess
+	m := newTestModel(tree, FromList)
+	m.sessionDir = "/runs/my-run-id"
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if cmd != nil {
+		t.Fatalf("r on completed run should be no-op, got cmd %v", cmd)
+	}
+}
+
+// r is ignored on failed runs.
+func TestModel_R_IgnoredOnFailedRun(t *testing.T) {
+	tree := simpleTree()
+	tree.Root.Status = StatusFailed
+	m := newTestModel(tree, FromList)
+	m.sessionDir = "/runs/my-run-id"
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if cmd != nil {
+		t.Fatalf("r on failed run should be no-op, got cmd %v", cmd)
+	}
+}
+
+// r is ignored when liveResult is set (just-finished live run, not inactive).
+func TestModel_R_IgnoredAfterLiveRunFinishes(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = false
+	m.liveResult = "success"
+	m.sessionDir = "/runs/my-run-id"
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if cmd != nil {
+		t.Fatalf("r after live run completes should be no-op, got cmd %v", cmd)
+	}
+}
+
+func TestModel_Breadcrumb_ShowsAffordance_WhenInactive(t *testing.T) {
+	tree := simpleTree()
+	tree.Root.Status = StatusInProgress
+	m := newTestModel(tree, FromList)
+
+	bc := m.renderBreadcrumb()
+	if !containsString(bc, "r to resume") {
+		t.Errorf("breadcrumb should show '(r to resume)' for inactive run: %q", bc)
+	}
+}
+
+func TestModel_Breadcrumb_HidesAffordance_WhenCompleted(t *testing.T) {
+	tree := simpleTree()
+	tree.Root.Status = StatusSuccess
+	m := newTestModel(tree, FromList)
+
+	bc := m.renderBreadcrumb()
+	if containsString(bc, "r to resume") {
+		t.Errorf("breadcrumb should not show '(r to resume)' for completed run: %q", bc)
+	}
+}
+
+func TestModel_Breadcrumb_HidesAffordance_WhenFailed(t *testing.T) {
+	tree := simpleTree()
+	tree.Root.Status = StatusFailed
+	m := newTestModel(tree, FromList)
+
+	bc := m.renderBreadcrumb()
+	if containsString(bc, "r to resume") {
+		t.Errorf("breadcrumb should not show '(r to resume)' for failed run: %q", bc)
+	}
+}
+
+func TestModel_Breadcrumb_HidesAffordance_WhenRunning(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = true
+
+	bc := m.renderBreadcrumb()
+	if containsString(bc, "r to resume") {
+		t.Errorf("breadcrumb should not show '(r to resume)' while running: %q", bc)
+	}
+}
+
+func TestModel_HelpBar_ShowsRBinding_WhenInactive(t *testing.T) {
+	tree := simpleTree()
+	tree.Root.Status = StatusInProgress
+	m := newTestModel(tree, FromList)
+	m.sessionDir = "/runs/my-run-id"
+
+	help := m.renderHelpBar()
+	if !containsString(help, "r resume") {
+		t.Errorf("help bar should show 'r resume' for inactive run: %q", help)
+	}
+}
+
+func TestModel_HelpBar_HidesRBinding_WhenCompleted(t *testing.T) {
+	tree := simpleTree()
+	tree.Root.Status = StatusSuccess
+	m := newTestModel(tree, FromList)
+
+	help := m.renderHelpBar()
+	if containsString(help, "r resume") {
+		t.Errorf("help bar should not show 'r resume' for completed run: %q", help)
+	}
+}
+
+func TestModel_HelpBar_ShowsJKScroll(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList)
+
+	help := m.renderHelpBar()
+	if !containsString(help, "j/k scroll") {
+		t.Errorf("help bar should show 'j/k scroll': %q", help)
+	}
+	if containsString(help, "pgup") || containsString(help, "pgdn") {
+		t.Errorf("help bar should not mention pgup/pgdn: %q", help)
 	}
 }
 
@@ -248,6 +528,17 @@ func TestModel_Enter_AgentStep_EmitsResumeMsg(t *testing.T) {
 	}
 	if resume.AgentCLI != "claude" {
 		t.Fatalf("agent CLI = %q, want %q", resume.AgentCLI, "claude")
+	}
+}
+
+func TestModel_Enter_AgentStep_LiveRun_NoResume(t *testing.T) {
+	m := newTestModel(simpleTree(), FromLiveRun)
+	m.running = true
+	m.cursor = 1 // agent step with SessionID
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("enter on agent step during live run should be no-op (agent session is owned by the runner)")
 	}
 }
 
@@ -513,21 +804,7 @@ func TestModel_LoadFull(t *testing.T) {
 	}
 }
 
-func TestModel_PageUpDown(t *testing.T) {
-	m := newTestModel(simpleTree(), FromList)
-	m.detailOffset = 0
-
-	m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
-	if m.detailOffset == 0 {
-		t.Fatal("pgdown should increase detail offset")
-	}
-
-	saved := m.detailOffset
-	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
-	if m.detailOffset >= saved {
-		t.Fatal("pgup should decrease detail offset")
-	}
-}
+// TestModel_PageUpDown is superseded by TestModel_PgUpPgDown_NoOp above.
 
 // ---- Live-run tests ----
 
@@ -870,16 +1147,32 @@ func TestModel_StepStateMsg_AutoFollowOff_NoNavigation(t *testing.T) {
 func TestModel_ManualNavigation_ClearsAutoFollow(t *testing.T) {
 	m := newLiveModelWithFlags()
 
+	// Only up/down cursor keys clear autoFollow; j/k scroll the detail pane
+	// and do not affect the cursor or autoFollow.
 	for _, key := range []tea.Msg{
 		tea.KeyMsg{Type: tea.KeyUp},
 		tea.KeyMsg{Type: tea.KeyDown},
-		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")},
-		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")},
 	} {
 		m.autoFollow = true
 		m.Update(key)
 		if m.autoFollow {
 			t.Errorf("key %v should clear autoFollow", key)
+		}
+	}
+}
+
+func TestModel_JK_DoNotClearAutoFollow(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.autoFollow = true
+
+	for _, key := range []tea.Msg{
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")},
+	} {
+		m.autoFollow = true
+		m.Update(key)
+		if !m.autoFollow {
+			t.Errorf("key %v should not clear autoFollow (it scrolls detail pane, not cursor)", key)
 		}
 	}
 }
@@ -956,45 +1249,9 @@ func TestModel_TailFollow_IgnoresOtherStep(t *testing.T) {
 	}
 }
 
-func TestModel_PgUp_ClearsTailFollow(t *testing.T) {
-	m := newLiveModelWithFlags()
-	m.tailFollow = true
-	m.detailOffset = 50
-
-	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
-
-	if m.tailFollow {
-		t.Error("PgUp should clear tailFollow")
-	}
-}
-
-func TestModel_EndKey_ReengagesTailFollow(t *testing.T) {
-	m := newLiveModelWithFlags()
-	m.tailFollow = false
-
-	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
-
-	if !m.tailFollow {
-		t.Error("End key should re-engage tailFollow")
-	}
-	if m.detailOffset <= 0 {
-		t.Errorf("detailOffset = %d, expected large value after End", m.detailOffset)
-	}
-}
-
-func TestModel_GKey_ReengagesTailFollow(t *testing.T) {
-	m := newLiveModelWithFlags()
-	m.tailFollow = false
-
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("G")})
-
-	if !m.tailFollow {
-		t.Error("G key should re-engage tailFollow")
-	}
-	if m.detailOffset <= 0 {
-		t.Errorf("detailOffset = %d, expected large value after G", m.detailOffset)
-	}
-}
+// TestModel_PgUp_ClearsTailFollow, TestModel_EndKey_ReengagesTailFollow, and
+// TestModel_GKey_ReengagesTailFollow are superseded by TestModel_K_ClearsTailFollow
+// and TestModel_TKey_ReengagesTailFollow / TestModel_EndKey_NoOp / TestModel_GKey_NoOp above.
 
 func TestModel_MouseWheelUp_ClearsTailFollow(t *testing.T) {
 	m := newLiveModelWithFlags()
@@ -1087,23 +1344,23 @@ func TestModel_HelpBar_HidesLiveHint_WhenAutoFollowOn(t *testing.T) {
 	}
 }
 
-func TestModel_HelpBar_ShowsEndHint_WhenTailFollowOff(t *testing.T) {
+func TestModel_HelpBar_ShowsTailHint_WhenTailFollowOff(t *testing.T) {
 	m := newLiveModelWithFlags()
 	m.tailFollow = false
 
 	help := m.renderHelpBar()
-	if !containsString(help, "End tail") {
-		t.Errorf("help bar missing 'End tail' hint: %q", help)
+	if !containsString(help, "t tail") {
+		t.Errorf("help bar missing 't tail' hint: %q", help)
 	}
 }
 
-func TestModel_HelpBar_HidesEndHint_WhenTailFollowOn(t *testing.T) {
+func TestModel_HelpBar_HidesTailHint_WhenTailFollowOn(t *testing.T) {
 	m := newLiveModelWithFlags()
 	m.tailFollow = true
 
 	help := m.renderHelpBar()
-	if containsString(help, "End tail") {
-		t.Errorf("help bar should not show 'End tail' when tailFollow is on: %q", help)
+	if containsString(help, "t tail") {
+		t.Errorf("help bar should not show 't tail' when tailFollow is on: %q", help)
 	}
 }
 
@@ -1112,9 +1369,14 @@ func TestModel_Legend_ContainsLiveNavKeys(t *testing.T) {
 	m.showLegend = true
 
 	legend := m.View()
-	for _, want := range []string{"l", "End / G", "Live Navigation"} {
+	for _, want := range []string{"l", "t", "Live Navigation"} {
 		if !containsString(legend, want) {
 			t.Errorf("legend missing %q", want)
+		}
+	}
+	for _, absent := range []string{"End", "G  jump"} {
+		if containsString(legend, absent) {
+			t.Errorf("legend should not mention %q (key removed)", absent)
 		}
 	}
 }
@@ -1451,6 +1713,146 @@ func TestNewForReentry_Enter_AgentStep_EmitsResumeMsg(t *testing.T) {
 	}
 	if resume.SessionID != "sess-reentry" {
 		t.Fatalf("session ID = %q, want %q", resume.SessionID, "sess-reentry")
+	}
+}
+
+// TestModel_StatusGlyph_BlinkOffHidesDot verifies that the in-progress
+// indicator on an active step disappears during the off-half of the blink
+// cycle — rather than being recolored. Recoloring has proven fragile across
+// terminal themes (lipgloss's background detection can misresolve adaptive
+// whites to near-black inside bubbletea's alt-screen), so the off-phase
+// simply hides the glyph by emitting width-matched spaces.
+func TestModel_StatusGlyph_BlinkOffHidesDot(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = true
+
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	step := &StepNode{
+		ID:     "running-step",
+		Type:   NodeShell,
+		Status: StatusInProgress,
+		Parent: root,
+	}
+	root.Children = []*StepNode{step}
+	m.tree = &Tree{Root: root}
+	m.path = []*StepNode{root}
+
+	// On-phase (sin(0) = 0, which BlinkOn treats as on): a "●" must be present.
+	m.pulsePhase = 0
+	if on := m.statusGlyph(step); !strings.Contains(on, "●") {
+		t.Errorf("on-phase glyph should render '●', got %q", on)
+	}
+	// Off-phase (sin(3π/2) = -1): the "●" must NOT appear — rendered invisible.
+	m.pulsePhase = 1.5 * math.Pi
+	off := m.statusGlyph(step)
+	if strings.Contains(off, "●") {
+		t.Errorf("off-phase glyph should hide '●', got %q", off)
+	}
+	// Width must still be preserved so the step-list columns don't jump.
+	if lipgloss.Width(off) != lipgloss.Width("●") {
+		t.Errorf("off-phase width = %d, want %d (preserve column alignment)",
+			lipgloss.Width(off), lipgloss.Width("●"))
+	}
+}
+
+func TestModel_ShellDetail_LongStdout_Wraps_NoGutter(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = false
+
+	long := strings.Repeat("abcdef ", 30) // ~210 visual columns
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	shell := &StepNode{
+		ID:            "build",
+		Type:          NodeShell,
+		Status:        StatusSuccess,
+		Parent:        root,
+		StaticCommand: "echo hi",
+		Stdout:        long + "\n",
+		ExitCode:      intPtr(0),
+	}
+	root.Children = []*StepNode{shell}
+	m.tree = &Tree{Root: root}
+	m.path = []*StepNode{root}
+	m.cursor = 0
+	m.detailWidth = 40
+
+	detail := m.renderDetail(shell)
+	if strings.Contains(detail, "| ") {
+		t.Errorf("shell stdout should not use '| ' gutter: %q", detail)
+	}
+	if strings.Contains(detail, "…") {
+		t.Errorf("long shell stdout should wrap, not truncate: %q", detail)
+	}
+	if strings.Count(detail, "abcdef") < 2 {
+		t.Errorf("expected wrapped shell stdout segments containing 'abcdef', got: %q", detail)
+	}
+}
+
+func TestModel_ShellDetail_LongStderr_Wraps_NoGutter(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = false
+
+	long := strings.Repeat("abcdef ", 30)
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusFailed}
+	shell := &StepNode{
+		ID:            "check",
+		Type:          NodeShell,
+		Status:        StatusFailed,
+		Parent:        root,
+		StaticCommand: "agent-validator detect",
+		Stderr:        long + "\n",
+		ExitCode:      intPtr(1),
+	}
+	root.Children = []*StepNode{shell}
+	m.tree = &Tree{Root: root}
+	m.path = []*StepNode{root}
+	m.cursor = 0
+	m.detailWidth = 40
+
+	detail := m.renderDetail(shell)
+	if strings.Contains(detail, "| ") {
+		t.Errorf("shell stderr should not use '| ' gutter: %q", detail)
+	}
+	if strings.Contains(detail, "…") {
+		t.Errorf("long shell stderr should wrap, not truncate: %q", detail)
+	}
+	if strings.Count(detail, "abcdef") < 2 {
+		t.Errorf("expected wrapped shell stderr segments containing 'abcdef', got: %q", detail)
+	}
+}
+
+func TestModel_ShellDetail_LongCommand_Wraps(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = false
+
+	longCmd := "agent-validator detect; status=$?; if [ $status -eq 2 ]; then echo needs-validation; else echo ok; fi && exit $status"
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	shell := &StepNode{
+		ID:                  "check-clean",
+		Type:                NodeShell,
+		Status:              StatusSuccess,
+		Parent:              root,
+		InterpolatedCommand: longCmd,
+		ExitCode:            intPtr(0),
+	}
+	root.Children = []*StepNode{shell}
+	m.tree = &Tree{Root: root}
+	m.path = []*StepNode{root}
+	m.cursor = 0
+	m.detailWidth = 40
+
+	detail := m.renderDetail(shell)
+	// Every emitted line must fit within detailWidth so the downstream
+	// fitDetailLine does not need to truncate with an ellipsis.
+	for _, line := range strings.Split(detail, "\n") {
+		plain := tuistyle.Sanitize(line)
+		if runewidth.StringWidth(plain) > m.detailWidth {
+			t.Errorf("shell command line exceeds detailWidth=%d: width=%d line=%q",
+				m.detailWidth, runewidth.StringWidth(plain), plain)
+		}
+	}
+	if !strings.Contains(detail, "agent-validator") {
+		t.Errorf("detail missing expected command text: %q", detail)
 	}
 }
 
