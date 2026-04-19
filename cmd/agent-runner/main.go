@@ -658,6 +658,10 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.resumeRunID = msg.RunID
 		return s, tea.Quit
 
+	case listview.ResumeRunMsg:
+		s.resumeRunID = msg.RunID
+		return s, tea.Quit
+
 	case runview.ExitMsg:
 		return s, tea.Quit
 	}
