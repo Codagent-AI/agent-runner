@@ -377,6 +377,15 @@ func runLiveTUI(h *runner.RunHandle) int {
 		return 1
 	}
 
+	// If the user pressed enter on a completed agent step, the TUI quit with
+	// resume metadata set on the Model. Wait for the runner goroutine so its
+	// lock is released before we hand the terminal to the agent CLI, then
+	// exec — this replaces the current process and does not return.
+	if sessionID := rv.ResumeSessionID(); sessionID != "" {
+		<-resultCh
+		return execAgentResume(rv.ResumeAgentCLI(), sessionID)
+	}
+
 	// If the runner finished before the TUI exited, map its result to an exit
 	// code. If the user confirmed quit while the workflow was still running,
 	// resultCh has no value yet — keep the documented orphan-on-quit behavior

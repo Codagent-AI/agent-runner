@@ -1,11 +1,9 @@
 package listview
 
 import (
-	"math"
 	"os"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
 	"github.com/codagent/agent-runner/internal/runs"
@@ -308,9 +306,10 @@ func (m *Model) renderRunListRow(r *runs.RunInfo, isSel bool, c runListCols) str
 func (m *Model) renderStatusIcon(s runs.Status) string {
 	switch s {
 	case runs.StatusActive:
-		t := (math.Sin(m.pulsePhase) + 1) / 2
-		c := lerpColor("#4ade80", "#2d8f57", t)
-		return lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Render("●")
+		if tuistyle.BlinkOn(m.pulsePhase) {
+			return tuistyle.StatusSuccess.Render("●")
+		}
+		return tuistyle.BlinkOffStyle.Render("●")
 	case runs.StatusInactive:
 		return statusInactive.Render("○")
 	case runs.StatusCompleted:

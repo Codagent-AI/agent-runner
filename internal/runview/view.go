@@ -2,7 +2,6 @@ package runview
 
 import (
 	"fmt"
-	"math"
 	"path/filepath"
 	"strings"
 
@@ -203,11 +202,12 @@ func (m *Model) statusGlyph(n *StepNode) string {
 	switch n.Status {
 	case StatusInProgress:
 		if (m.active || m.running) && !n.Aborted {
-			t := (math.Sin(m.pulsePhase) + 1) / 2
-			c := tuistyle.LerpColor("#4ade80", "#2d8f57", t)
-			return lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Render("●")
+			if tuistyle.BlinkOn(m.pulsePhase) {
+				return tuistyle.StatusSuccess.Render("●")
+			}
+			return tuistyle.BlinkOffStyle.Render("●")
 		}
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("#4ade80")).Render("●")
+		return tuistyle.StatusSuccess.Render("●")
 	case StatusPending:
 		return tuistyle.StatusInactive.Render("○")
 	case StatusSuccess:
@@ -251,7 +251,10 @@ func (m *Model) renderHelpBar() string {
 		case NodeLoop, NodeSubWorkflow, NodeIteration:
 			parts = append(parts, "enter drill")
 		case NodeHeadlessAgent, NodeInteractiveAgent:
-			if sel.SessionID != "" {
+			// Resume is only meaningful after the run has ended — while the
+			// workflow is live, the agent session is owned by the runner and
+			// cannot be attached to by the user.
+			if sel.SessionID != "" && !m.running {
 				parts = append(parts, "enter resume")
 			}
 		}
@@ -268,7 +271,14 @@ func (m *Model) renderHelpBar() string {
 		parts = append(parts, "End tail")
 	}
 
-	parts = append(parts, "? legend", "esc back", "q quit")
+	parts = append(parts, "? legend")
+	// "esc back" exits the runview; while a live workflow is running there's
+	// nothing to go back to (the live TUI is the top-level program) so hide
+	// the hint until the run completes.
+	if !m.running {
+		parts = append(parts, "esc back")
+	}
+	parts = append(parts, "q quit")
 
 	return "  " + tuistyle.HelpStyle.Render(strings.Join(parts, "   "))
 }

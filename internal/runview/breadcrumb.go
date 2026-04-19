@@ -2,10 +2,7 @@ package runview
 
 import (
 	"fmt"
-	"math"
 	"strings"
-
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/codagent/agent-runner/internal/tuistyle"
 )
@@ -53,11 +50,12 @@ func (m *Model) renderBreadcrumb() string {
 }
 
 func (m *Model) styledRunStatus() string {
-	// Live-run mode: pulse while running, then show result.
+	// Live-run mode: blink while running, then show result.
 	if m.running {
-		t := (math.Sin(m.pulsePhase) + 1) / 2
-		c := tuistyle.LerpColor("#4ade80", "#2d8f57", t)
-		return lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Render("running")
+		if tuistyle.BlinkOn(m.pulsePhase) {
+			return tuistyle.StatusSuccess.Render("running")
+		}
+		return tuistyle.BlinkOffStyle.Render("running")
 	}
 	if m.liveResult != "" {
 		switch m.liveResult {
@@ -69,9 +67,10 @@ func (m *Model) styledRunStatus() string {
 	}
 	// Inspect / list mode: use the run-lock and root status.
 	if m.active {
-		t := (math.Sin(m.pulsePhase) + 1) / 2
-		c := tuistyle.LerpColor("#4ade80", "#2d8f57", t)
-		return lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Render("active")
+		if tuistyle.BlinkOn(m.pulsePhase) {
+			return tuistyle.StatusSuccess.Render("active")
+		}
+		return tuistyle.BlinkOffStyle.Render("active")
 	}
 	status := m.rootStatus()
 	switch status {

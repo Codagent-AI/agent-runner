@@ -120,10 +120,9 @@ func (m *Model) renderHeadlessDetail(b *strings.Builder, n *StepNode) {
 		return
 	}
 
-	m.renderOutputBlock(b, n, "stdout", n.Stdout)
-	m.renderOutputBlock(b, n, "stderr", n.Stderr)
+	m.renderAgentOutputBlock(b, n)
 
-	if n.SessionID != "" {
+	if n.SessionID != "" && !m.running {
 		b.WriteString("\n\n")
 		b.WriteString(tuistyle.AccentStyle.Render("enter → resume session"))
 	}
@@ -182,7 +181,7 @@ func (m *Model) renderInteractiveDetail(b *strings.Builder, n *StepNode) {
 		m.renderWrapped(b, n.ErrorMessage)
 	}
 
-	if n.SessionID != "" {
+	if n.SessionID != "" && !m.running {
 		b.WriteString("\n\n")
 		b.WriteString(tuistyle.AccentStyle.Render("enter → resume session"))
 	}
@@ -316,6 +315,89 @@ func (m *Model) loopTotal(n *StepNode) int {
 		return *n.StaticLoopMax
 	}
 	return 0
+}
+
+// renderAgentOutputBlock renders a headless agent step's output. Unlike a
+// shell step, the agent's output is its response to the user's prompt, so the
+// block is labeled "agent" (not "stdout"/"stderr") and the content is
+// word-wrapped across the detail pane without a leading "| " gutter. While
+// the step is still in-progress with no output yet, a spinner is shown so
+// the user can see the CLI is alive. When only one stream has content, the
+// label is bare "agent:"; when both do, sub-labels disambiguate stdout vs
+// stderr. An empty completed step falls back to "(empty)" for parity with
+// the shell renderer.
+func (m *Model) renderAgentOutputBlock(b *strings.Builder, n *StepNode) {
+	stdout := sanitizeUTF8(n.Stdout)
+	stderr := sanitizeUTF8(n.Stderr)
+
+	b.WriteString("\n")
+
+	if stdout == "" && stderr == "" {
+		if n.Status == StatusInProgress {
+			// Label on its own row; the spinner art renders below so the
+			// full 3-line animation has room to breathe.
+			detailLabel(b, "agent:")
+			for _, line := range tuistyle.SpinnerFrame(m.pulsePhase) {
+				b.WriteString(tuistyle.AccentStyle.Render(line))
+				b.WriteString("\n")
+			}
+			return
+		}
+		b.WriteString(tuistyle.LabelStyle.Render("agent: ") + tuistyle.DimStyle.Render("(empty)"))
+		return
+	}
+
+	if stdout != "" && stderr != "" {
+		detailLabel(b, "agent (stdout):")
+		m.renderAgentLines(b, n, stdout, "stdout")
+		b.WriteString("\n")
+		detailLabel(b, "agent (stderr):")
+		m.renderAgentLines(b, n, stderr, "stderr")
+		return
+	}
+
+	text := stdout
+	stream := "stdout"
+	if text == "" {
+		text = stderr
+		stream = "stderr"
+	}
+	detailLabel(b, "agent:")
+	m.renderAgentLines(b, n, text, stream)
+}
+
+// renderAgentLines emits agent output lines word-wrapped to the detail
+// column, without the "| " gutter used for shell output. When the user has
+// not loaded the full output, the block is tail-truncated with the shared
+// truncateOutput helper and prefixed with a "(truncated…)" banner.
+func (m *Model) renderAgentLines(b *strings.Builder, n *StepNode, output, stream string) {
+	fullLoaded := m.loadedFull[n] && stream == "stdout"
+	var t truncatedOutput
+	if fullLoaded {
+		lines := strings.Split(output, "\n")
+		t = truncatedOutput{Lines: lines, TotalLines: len(lines)}
+	} else {
+		t = truncateOutput(output)
+	}
+	if banner := t.banner(); banner != "" {
+		b.WriteString(tuistyle.DimStyle.Render(banner))
+		b.WriteString("\n")
+	}
+	width := m.detailWidth
+	if width <= 0 {
+		width = 80
+	}
+	for _, line := range t.Lines {
+		sanitized := tuistyle.Sanitize(line)
+		if sanitized == "" {
+			b.WriteString("\n")
+			continue
+		}
+		for _, wrapped := range wrapLine(sanitized, width) {
+			b.WriteString(tuistyle.NormalStyle.Render(wrapped))
+			b.WriteString("\n")
+		}
+	}
 }
 
 func (m *Model) renderOutputBlock(b *strings.Builder, n *StepNode, label, output string) {

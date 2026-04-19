@@ -15,7 +15,6 @@ var (
 	adjustOffset = tuistyle.AdjustOffset
 	shortenPath  = tuistyle.ShortenPath
 	formatTime   = tuistyle.FormatTime
-	lerpColor    = tuistyle.LerpColor
 	sanitize     = tuistyle.Sanitize
 )
 

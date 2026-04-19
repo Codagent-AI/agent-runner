@@ -1036,6 +1036,34 @@ func TestModel_ExecDone_Failed_NoFailedStep_NoChange(t *testing.T) {
 	}
 }
 
+func TestModel_ExecDone_Success_JumpsToLastTopLevelStep(t *testing.T) {
+	// A live run can leave autoFollow stuck on an intermediate step whose
+	// audit prefix resolves to a tree node while later steps (e.g. loop
+	// iterations) arrive before their tree nodes are created by audit
+	// replay. On clean success the cursor should land on the final
+	// top-level step so the user sees the workflow's "end state" without
+	// having to navigate manually.
+	tree := simpleTree()
+	for _, c := range tree.Root.Children {
+		c.Status = StatusSuccess
+	}
+
+	m := newLiveModelWithFlags()
+	m.tree = tree
+	m.path = []*StepNode{tree.Root}
+	m.cursor = 1 // somewhere other than the last child
+
+	m.Update(liverun.ExecDoneMsg{Result: "success"})
+
+	want := len(tree.Root.Children) - 1
+	if m.cursor != want {
+		t.Fatalf("cursor = %d, want %d (last top-level step)", m.cursor, want)
+	}
+	if len(m.path) != 1 || m.path[0] != tree.Root {
+		t.Fatalf("path should remain at root, got %d segments", len(m.path))
+	}
+}
+
 func TestModel_HelpBar_ShowsLiveHint_WhenRunningAndAutoFollowOff(t *testing.T) {
 	m := newLiveModelWithFlags()
 	m.running = true
@@ -1087,6 +1115,260 @@ func TestModel_Legend_ContainsLiveNavKeys(t *testing.T) {
 		if !containsString(legend, want) {
 			t.Errorf("legend missing %q", want)
 		}
+	}
+}
+
+func TestModel_HelpBar_Live_HidesEscBackAndEnterResume(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = true
+
+	help := m.renderHelpBar()
+	if containsString(help, "esc back") {
+		t.Errorf("help bar should hide 'esc back' while running: %q", help)
+	}
+	if containsString(help, "enter resume") {
+		t.Errorf("help bar should hide 'enter resume' while running: %q", help)
+	}
+}
+
+func TestModel_HelpBar_Live_ShowsEscBackAndEnterResume_AfterExecDone(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = true
+
+	// Replace the default single-shell tree with one containing a completed
+	// agent step so renderHelpBar has a resume-able selection to advertise.
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	agent := &StepNode{
+		ID:        "implement",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusSuccess,
+		Parent:    root,
+		AgentCLI:  "claude",
+		SessionID: "sess-1",
+	}
+	root.Children = []*StepNode{agent}
+	m.tree = &Tree{Root: root}
+	m.path = []*StepNode{root}
+	m.cursor = 0
+
+	m.Update(liverun.ExecDoneMsg{Result: "success"})
+
+	help := m.renderHelpBar()
+	if !containsString(help, "esc back") {
+		t.Errorf("help bar should show 'esc back' after run completes: %q", help)
+	}
+	if !containsString(help, "enter resume") {
+		t.Errorf("help bar should show 'enter resume' after run completes: %q", help)
+	}
+}
+
+func TestModel_Detail_Live_HidesResumeHint_WhileRunning(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = true
+
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	agent := &StepNode{
+		ID:        "implement",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusInProgress,
+		Parent:    root,
+		AgentCLI:  "claude",
+		SessionID: "sess-1",
+	}
+	root.Children = []*StepNode{agent}
+	m.tree = &Tree{Root: root}
+	m.path = []*StepNode{root}
+	m.cursor = 0
+
+	detail := m.renderDetail(agent)
+	if containsString(detail, "resume session") {
+		t.Errorf("detail should hide 'resume session' hint while running: %q", detail)
+	}
+}
+
+func TestModel_Detail_Live_ShowsResumeHint_AfterCompletion(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = false
+
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	agent := &StepNode{
+		ID:        "implement",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusSuccess,
+		Parent:    root,
+		AgentCLI:  "claude",
+		SessionID: "sess-1",
+	}
+	root.Children = []*StepNode{agent}
+	m.tree = &Tree{Root: root}
+	m.path = []*StepNode{root}
+	m.cursor = 0
+
+	detail := m.renderDetail(agent)
+	if !containsString(detail, "resume session") {
+		t.Errorf("detail should show 'resume session' hint after run completes: %q", detail)
+	}
+}
+
+func TestModel_LiveRun_ResumeMsg_StoresInfoAndQuits(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = false
+
+	_, cmd := m.Update(ResumeMsg{AgentCLI: "claude", SessionID: "sess-xyz"})
+	if cmd == nil {
+		t.Fatal("ResumeMsg should produce a cmd that quits the program")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("expected tea.QuitMsg, got %T", cmd())
+	}
+	if m.ResumeAgentCLI() != "claude" || m.ResumeSessionID() != "sess-xyz" {
+		t.Fatalf("resume info not stored: cli=%q, session=%q", m.ResumeAgentCLI(), m.ResumeSessionID())
+	}
+}
+
+func TestModel_HeadlessDetail_NoOutput_WhileRunning_ShowsSpinner(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = true
+
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	agent := &StepNode{
+		ID:       "headless-new-session",
+		Type:     NodeHeadlessAgent,
+		Status:   StatusInProgress,
+		Parent:   root,
+		AgentCLI: "claude",
+	}
+	root.Children = []*StepNode{agent}
+	m.tree = &Tree{Root: root}
+	m.path = []*StepNode{root}
+	m.cursor = 0
+
+	detail := m.renderDetail(agent)
+	if containsString(detail, "stdout") {
+		t.Errorf("detail should not show 'stdout' label for headless agent: %q", detail)
+	}
+	if containsString(detail, "stderr") {
+		t.Errorf("detail should not show 'stderr' label for headless agent: %q", detail)
+	}
+	if !containsString(detail, "agent") {
+		t.Errorf("detail should show 'agent' label: %q", detail)
+	}
+	// The spinner is drawn as a 3-row × 2-dot grid using "●" for lit
+	// cells and spaces for empty cells — one character per dot so the
+	// animation is visible at normal font size.
+	if !strings.Contains(detail, "●") {
+		t.Errorf("detail should contain a spinner dot glyph: %q", detail)
+	}
+	if strings.Contains(detail, "\x1b#3") || strings.Contains(detail, "\x1b#4") {
+		t.Errorf("detail should not emit DECDHL escapes: %q", detail)
+	}
+	agentIdx := strings.Index(detail, "agent:")
+	spinnerIdx := strings.Index(detail, "●")
+	if agentIdx < 0 || spinnerIdx < 0 || spinnerIdx < agentIdx {
+		t.Fatalf("expected spinner to appear after 'agent:' label in: %q", detail)
+	}
+	if !strings.Contains(detail[agentIdx:spinnerIdx], "\n") {
+		t.Errorf("expected a newline between 'agent:' label and spinner: %q", detail)
+	}
+}
+
+func TestModel_HeadlessDetail_StdoutOnly_NoStreamLabel_NoGutter(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = false
+
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	agent := &StepNode{
+		ID:       "headless-new-session",
+		Type:     NodeHeadlessAgent,
+		Status:   StatusSuccess,
+		Parent:   root,
+		AgentCLI: "claude",
+		Stdout:   "Octopuses have three hearts.\n",
+	}
+	root.Children = []*StepNode{agent}
+	m.tree = &Tree{Root: root}
+	m.path = []*StepNode{root}
+	m.cursor = 0
+	m.detailWidth = 60
+
+	detail := m.renderDetail(agent)
+	if containsString(detail, "stdout") {
+		t.Errorf("detail should not label the single output stream as 'stdout': %q", detail)
+	}
+	if containsString(detail, "stderr") {
+		t.Errorf("detail should not show 'stderr' label: %q", detail)
+	}
+	if !containsString(detail, "agent") {
+		t.Errorf("detail should show 'agent' label: %q", detail)
+	}
+	if containsString(detail, "| Octopuses") {
+		t.Errorf("detail should not prefix agent output with '| ' gutter: %q", detail)
+	}
+	if !containsString(detail, "Octopuses have three hearts.") {
+		t.Errorf("detail missing expected output text: %q", detail)
+	}
+}
+
+func TestModel_HeadlessDetail_StdoutAndStderr_LabelsBoth(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = false
+
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	agent := &StepNode{
+		ID:       "headless",
+		Type:     NodeHeadlessAgent,
+		Status:   StatusSuccess,
+		Parent:   root,
+		AgentCLI: "claude",
+		Stdout:   "OUT-TEXT\n",
+		Stderr:   "ERR-TEXT\n",
+	}
+	root.Children = []*StepNode{agent}
+	m.tree = &Tree{Root: root}
+	m.path = []*StepNode{root}
+	m.cursor = 0
+	m.detailWidth = 60
+
+	detail := m.renderDetail(agent)
+	if !containsString(detail, "OUT-TEXT") || !containsString(detail, "ERR-TEXT") {
+		t.Fatalf("detail missing output or error: %q", detail)
+	}
+	// When both streams are present, a disambiguating label is required.
+	if !containsString(detail, "stdout") || !containsString(detail, "stderr") {
+		t.Errorf("detail should label both streams when both present: %q", detail)
+	}
+}
+
+func TestModel_HeadlessDetail_LongLine_Wraps(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = false
+
+	long := strings.Repeat("abcdef ", 30) // ~210 visual columns
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	agent := &StepNode{
+		ID:       "headless",
+		Type:     NodeHeadlessAgent,
+		Status:   StatusSuccess,
+		Parent:   root,
+		AgentCLI: "claude",
+		Stdout:   long + "\n",
+	}
+	root.Children = []*StepNode{agent}
+	m.tree = &Tree{Root: root}
+	m.path = []*StepNode{root}
+	m.cursor = 0
+	m.detailWidth = 40
+
+	detail := m.renderDetail(agent)
+	// Truncation-ellipsis indicates the old behavior; wrapping must not
+	// leave one overflowing line with a trailing ellipsis.
+	if strings.Contains(detail, "…") {
+		t.Errorf("long output should be wrapped, not truncated with ellipsis: %q", detail)
+	}
+	// Wrapping should split the text across multiple visual lines.
+	outLines := strings.Count(detail, "abcdef")
+	if outLines < 2 {
+		t.Errorf("expected multiple wrapped segments containing 'abcdef', got %d: %q", outLines, detail)
 	}
 }
 

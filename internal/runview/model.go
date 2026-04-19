@@ -72,7 +72,23 @@ type Model struct {
 	autoFollow       bool   // cursor tracks activeStep; enabled by default in FromLiveRun
 	tailFollow       bool   // detail pane viewport pinned to tail; enabled by default in FromLiveRun
 	activeStepPrefix string // last known active step prefix from StepStateMsg
+
+	// Resume-exec state. When the user selects an agent step after the live
+	// run completes, the Model is the top-level tea.Program — there's no
+	// switcher to intercept ResumeMsg — so we stash the info here and quit.
+	// The CLI wrapper reads it via ResumeAgentCLI/ResumeSessionID after
+	// p.Run() returns and execs the agent CLI.
+	resumeAgentCLI  string
+	resumeSessionID string
 }
+
+// ResumeAgentCLI returns the agent CLI name captured from a ResumeMsg in
+// live-run mode. Empty when no resume was requested.
+func (m *Model) ResumeAgentCLI() string { return m.resumeAgentCLI }
+
+// ResumeSessionID returns the agent CLI session ID captured from a ResumeMsg
+// in live-run mode. Empty when no resume was requested.
+func (m *Model) ResumeSessionID() string { return m.resumeSessionID }
 
 // New constructs a runview Model from a session directory.
 func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
@@ -201,6 +217,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Terminal handoff bookkeeping; no visual change needed.
 		return m, nil
 
+	case ResumeMsg:
+		// Top-level live-run model: no switcher intercepts this, so stash the
+		// info and quit. The CLI wrapper execs the agent CLI after p.Run()
+		// returns.
+		m.resumeAgentCLI = msg.AgentCLI
+		m.resumeSessionID = msg.SessionID
+		return m, tea.Quit
+
 	case ExitMsg:
 		// In the live-run path this Model is the top-level tea.Program model
 		// (no switcher wrap), so ExitMsg must be translated into tea.Quit here.
@@ -217,9 +241,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshData()
 		m.running = false
 		m.liveResult = msg.Result
-		if msg.Result == "failed" {
+		switch msg.Result {
+		case "failed":
 			if failed := findFailedLeaf(m.tree.Root); failed != nil {
 				m.navigateToNode(failed)
+			}
+		case "success":
+			// Land on the final top-level step so the user sees the
+			// workflow's end state. Loop iterations and other deep
+			// leaves emit StepStateMsg before their tree nodes exist
+			// (audit replay runs lazily), so cursor often gets stuck
+			// on the last step whose node was already in the tree —
+			// not the actual last step that ran.
+			if last := lastTopLevelChild(m.tree.Root); last != nil {
+				m.navigateToNode(last)
 			}
 		}
 		return m, nil
@@ -537,6 +572,16 @@ func (m *Model) navigateToNode(target *StepNode) {
 	} else {
 		m.detailOffset = 0
 	}
+}
+
+// lastTopLevelChild returns the final direct child of root, or nil when
+// root has no children. Used to park the cursor on the last workflow step
+// after a successful run.
+func lastTopLevelChild(root *StepNode) *StepNode {
+	if root == nil || len(root.Children) == 0 {
+		return nil
+	}
+	return root.Children[len(root.Children)-1]
 }
 
 // findFailedLeaf returns the deepest non-container StepNode with StatusFailed,

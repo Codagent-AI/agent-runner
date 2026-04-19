@@ -20,6 +20,15 @@ var (
 	FailedRed     = lipgloss.AdaptiveColor{Dark: "#f87171", Light: "#dc2626"}
 )
 
+// BlinkOffStyle is the "off" half of the in-progress blink. It intentionally
+// uses a non-adaptive bright white (ANSI color 15) rather than an
+// AdaptiveColor because lipgloss's background-color detection is unreliable
+// inside bubbletea's alt-screen — when it misdetects a dark terminal as
+// light, an adaptive "white" resolves to near-black (#111827) and the blink
+// off-phase appears invisible. Bright-white-15 is rendered as white by every
+// dark-themed terminal in practice and is still legible on light themes.
+var BlinkOffStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
+
 // Shared style instances.
 var (
 	HeaderStyle       = lipgloss.NewStyle().Foreground(AccentCyan).Bold(true)
