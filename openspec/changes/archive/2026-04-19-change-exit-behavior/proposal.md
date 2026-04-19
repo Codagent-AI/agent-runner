@@ -1,17 +1,17 @@
 ## Why
 
-When the user resumes an agent CLI session from the run view after a live workflow run, today's implementation exec-replaces the agent-runner process with the CLI. Typing `/exit` or `/quit` inside the resumed CLI therefore drops the user out of agent-runner entirely, even though they had just been interacting with the live-run's run view. The natural mental model is "I peeked into that session" — returning to the run view on CLI exit preserves that affordance.
+When the user resumes an agent CLI session from the run view, today's implementation exec-replaces the agent-runner process with the CLI. Typing `/exit` or `/quit` inside the resumed CLI therefore drops the user out of agent-runner entirely, even though they had just been interacting with a run-view TUI. The natural mental model is "I peeked into that session" — returning to the run view on CLI exit preserves that affordance.
 
 ## What Changes
 
-- Live-run run view: resume action SHALL spawn the agent CLI as a subprocess and re-enter the run view when the CLI exits.
+- Run view resume action SHALL spawn the agent CLI as a subprocess and re-enter the run view when the CLI exits, regardless of how the run view was reached (live-run completion, `--list`, or `--inspect`).
 - On re-entry, audit/state files SHALL be re-read so any new events written by the resumed CLI session appear.
-- `--list` / `--inspect` run view: resume action keeps the existing exec-replace behavior (agent-runner was invoked as a one-shot inspector; there is nothing meaningful to return to).
+- Re-entry SHALL preserve the original entry path so back-navigation (esc to the run list from a `--list` entry, etc.) still works.
 
 ## Capabilities
 
 ### Modified Capabilities
-- `view-run`: split the resume action into two variants based on entry path — spawn-and-return for live-run, exec-replace for snapshot inspection.
+- `view-run`: the resume action switches from exec-replace to spawn-and-reenter across all entry paths.
 
 ## Out of Scope
 
@@ -21,6 +21,6 @@ When the user resumes an agent CLI session from the run view after a live workfl
 
 ## Impact
 
-- `cmd/agent-runner/main.go`: `runLiveTUI` switches from `execAgentResume` (syscall.Exec) to a subprocess spawn that waits on CLI exit and then re-enters the TUI. `runSwitcher` continues to call `execAgentResume` unchanged.
-- `internal/runview/`: needs a reload entry point (re-read audit/state for the current run) invoked after subprocess exit.
+- `cmd/agent-runner/main.go`: both `runLiveTUI` and `runSwitcher` switch from `syscall.Exec` to a subprocess spawn that waits on CLI exit and then re-enters the TUI. The unused `execAgentResume` helper is removed; `spawnAgentResume` is the single resume mechanism.
+- `internal/runview/`: `NewForReentry` accepts the original entry mode so the rebuilt run view preserves it; getters (`SessionDir`, `ProjectDir`, `Entered`) are added so the switcher can rebuild itself without threading extra state through tea messages.
 - Terminal handoff: reuses the same release/reclaim pattern already used for interactive agent steps during live runs.

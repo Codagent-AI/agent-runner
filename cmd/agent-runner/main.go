@@ -337,24 +337,58 @@ func handleList() int {
 }
 
 func runSwitcher(sw *switcher) int {
-	p := tea.NewProgram(sw, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	result, err := p.Run()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-		return 1
-	}
+	for {
+		p := tea.NewProgram(sw, tea.WithAltScreen(), tea.WithMouseCellMotion())
+		result, err := p.Run()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+			return 1
+		}
 
-	final, ok := result.(*switcher)
-	if !ok {
-		return 0
+		final, ok := result.(*switcher)
+		if !ok {
+			return 0
+		}
+		if final.resumeRunID != "" {
+			return execRunnerResume(final.resumeRunID)
+		}
+		if final.resumeSessionID == "" {
+			return 0
+		}
+
+		spawnErr := spawnAgentResume(final.resumeAgentCLI, final.resumeSessionID)
+		sw, err = switcherForReentry(final, spawnErr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+			return 1
+		}
 	}
-	if final.resumeSessionID != "" {
-		return execAgentResume(final.resumeAgentCLI, final.resumeSessionID)
+}
+
+// switcherForReentry rebuilds a switcher around a fresh runview Model after a
+// resumed agent CLI subprocess has exited. The previous list model and the
+// runview's target (sessionDir/projectDir/entered) are preserved so esc still
+// navigates back to the list where applicable.
+func switcherForReentry(prev *switcher, spawnErr error) (*switcher, error) {
+	if prev.runview == nil {
+		return nil, fmt.Errorf("re-entry: no runview to rebuild")
 	}
-	if final.resumeRunID != "" {
-		return execRunnerResume(final.resumeRunID)
+	rv, err := runview.NewForReentry(
+		prev.runview.SessionDir(),
+		prev.runview.ProjectDir(),
+		prev.runview.Entered(),
+		spawnErr,
+	)
+	if err != nil {
+		return nil, err
 	}
-	return 0
+	return &switcher{
+		list:       prev.list,
+		runview:    rv,
+		mode:       showingRunView,
+		termWidth:  prev.termWidth,
+		termHeight: prev.termHeight,
+	}, nil
 }
 
 // runLiveTUI starts the runview TUI in FromLiveRun mode with the workflow
@@ -420,7 +454,7 @@ func runLiveTUI(h *runner.RunHandle) int {
 
 	for rv.ResumeSessionID() != "" {
 		spawnErr := spawnAgentResume(rv.ResumeAgentCLI(), rv.ResumeSessionID())
-		rv, err = runview.NewForReentry(h.SessionDir, h.ProjectDir, spawnErr)
+		rv, err = runview.NewForReentry(h.SessionDir, h.ProjectDir, runview.FromLiveRun, spawnErr)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 			return 1
@@ -478,29 +512,12 @@ func resolveResumeCLI(cli string) (resolvedCLI, path string, err error) {
 	return cli, path, nil
 }
 
-// execAgentResume replaces the current process with `<cli> --resume <session-id>`
-// so the agent CLI inherits the terminal directly. Used by the snapshot (--list /
-// --inspect) path where there is no run view to return to.
-func execAgentResume(cli, sessionID string) int {
-	resolved, path, err := resolveResumeCLI(cli)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-		return 1
-	}
-	args := []string{resolved, "--resume", sessionID}
-	if err := syscall.Exec(path, args, os.Environ()); err != nil { // #nosec G204 -- cli validated by resolveResumeCLI
-		fmt.Fprintf(os.Stderr, "agent-runner: exec %s --resume: %v\n", resolved, err)
-		return 1
-	}
-	return 0
-}
-
 // spawnAgentResume spawns `<cli> --resume <session-id>` as a subprocess and
-// waits for it to exit. Unlike execAgentResume it does not replace the current
-// process, so the caller can re-enter the run view after the CLI exits. A
-// non-zero CLI exit code is not treated as an error — the user may have typed
-// /exit or /quit. Only spawn failures (binary not found, permission error,
-// etc.) are returned as errors.
+// waits for it to exit. It does not replace the current process, so the
+// caller can re-enter the run view after the CLI exits. A non-zero CLI exit
+// code is not treated as an error — the user may have typed /exit or /quit.
+// Only spawn failures (binary not found, permission error, etc.) are
+// returned as errors.
 func spawnAgentResume(cli, sessionID string) error {
 	resolved, path, err := resolveResumeCLI(cli)
 	if err != nil {

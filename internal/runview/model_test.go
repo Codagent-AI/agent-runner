@@ -1639,7 +1639,7 @@ func TestModel_HeadlessDetail_LongLine_Wraps(t *testing.T) {
 
 func TestNewForReentry_HasCorrectState(t *testing.T) {
 	sessionDir := t.TempDir()
-	m, err := NewForReentry(sessionDir, "", nil)
+	m, err := NewForReentry(sessionDir, "", FromLiveRun, nil)
 	if err != nil {
 		t.Fatalf("NewForReentry: %v", err)
 	}
@@ -1657,9 +1657,28 @@ func TestNewForReentry_HasCorrectState(t *testing.T) {
 	}
 }
 
+func TestNewForReentry_PreservesProvidedEntered(t *testing.T) {
+	for _, entered := range []Entered{FromList, FromInspect, FromLiveRun} {
+		sessionDir := t.TempDir()
+		m, err := NewForReentry(sessionDir, "", entered, nil)
+		if err != nil {
+			t.Fatalf("NewForReentry(%d): %v", entered, err)
+		}
+		if m.entered != entered {
+			t.Errorf("entered = %d, want %d", m.entered, entered)
+		}
+		if m.Entered() != entered {
+			t.Errorf("Entered() = %d, want %d", m.Entered(), entered)
+		}
+		if m.SessionDir() != sessionDir {
+			t.Errorf("SessionDir() = %q, want %q", m.SessionDir(), sessionDir)
+		}
+	}
+}
+
 func TestNewForReentry_SpawnError_ShowsInView(t *testing.T) {
 	sessionDir := t.TempDir()
-	m, err := NewForReentry(sessionDir, "", errors.New("spawn failed: claude: not found in PATH"))
+	m, err := NewForReentry(sessionDir, "", FromLiveRun, errors.New("spawn failed: claude: not found in PATH"))
 	if err != nil {
 		t.Fatalf("NewForReentry: %v", err)
 	}
@@ -1673,7 +1692,7 @@ func TestNewForReentry_SpawnError_ShowsInView(t *testing.T) {
 
 func TestNewForReentry_NoSpawnError_NoNotice(t *testing.T) {
 	sessionDir := t.TempDir()
-	m, err := NewForReentry(sessionDir, "", nil)
+	m, err := NewForReentry(sessionDir, "", FromLiveRun, nil)
 	if err != nil {
 		t.Fatalf("NewForReentry: %v", err)
 	}
@@ -1684,7 +1703,7 @@ func TestNewForReentry_NoSpawnError_NoNotice(t *testing.T) {
 
 func TestNewForReentry_Enter_AgentStep_EmitsResumeMsg(t *testing.T) {
 	sessionDir := t.TempDir()
-	m, err := NewForReentry(sessionDir, "", nil)
+	m, err := NewForReentry(sessionDir, "", FromLiveRun, nil)
 	if err != nil {
 		t.Fatalf("NewForReentry: %v", err)
 	}
