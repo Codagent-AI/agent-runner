@@ -318,9 +318,9 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 	for i := startIndex; i < len(rs.workflow.Steps); i++ {
 		step := &rs.workflow.Steps[i]
 
-		skip, skipErr := exec.ShouldSkipStep(step.SkipIf, rs.ctx.LastStepOutcome, rs.ctx, rs.runner)
+		skip, skipErr := exec.ShouldSkipStep(step.SkipIf, rs.ctx.LastStepOutcome, rs.ctx)
 		if skipErr != nil {
-			rs.log.Printf("\nagent-runner: step %q skip_if error: %v\n", step.ID, skipErr)
+			rs.log.Printf("\nagent-runner: step %q skip_if evaluation failed: %v\n", step.ID, skipErr)
 			return ResultFailed
 		}
 		if skip {

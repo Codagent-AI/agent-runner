@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/exec"
@@ -213,8 +212,7 @@ func TestRunWorkflow(t *testing.T) {
 	})
 
 	t.Run("skip_if sh: skips step when command exits 0", func(t *testing.T) {
-		// s1 runs, then the skip_if shell evaluator runs, then s2 is skipped.
-		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}, {ExitCode: 0}}}
+		runner := &mockRunner{}
 		w := model.Workflow{
 			Name: "test",
 			Steps: []model.Step{
@@ -232,20 +230,14 @@ func TestRunWorkflow(t *testing.T) {
 		if result != ResultSuccess {
 			t.Fatalf("expected success, got %q", result)
 		}
-		// Expected calls: s1 body, skip_if evaluator (exit 0 → skip). s2 body not run.
-		if len(runner.calls) != 2 {
-			t.Fatalf("expected 2 calls (s1 + skip_if eval), got %d: %v", len(runner.calls), runner.calls)
-		}
-		for _, call := range runner.calls {
-			if strings.Contains(call[2], "skipped-body") {
-				t.Fatalf("s2 body should not have run: %v", call)
-			}
+		// The skip_if shell eval bypasses the mock runner, so only s1 is seen.
+		if len(runner.calls) != 1 {
+			t.Fatalf("expected 1 call (s1 only; s2 skipped), got %d: %v", len(runner.calls), runner.calls)
 		}
 	})
 
 	t.Run("skip_if sh: runs step when command exits non-zero", func(t *testing.T) {
-		// s1 runs (exit 0), skip_if evaluator (exit 1 → don't skip), s2 runs.
-		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}, {ExitCode: 1}, {ExitCode: 0}}}
+		runner := &mockRunner{}
 		w := model.Workflow{
 			Name: "test",
 			Steps: []model.Step{
@@ -263,19 +255,25 @@ func TestRunWorkflow(t *testing.T) {
 		if result != ResultSuccess {
 			t.Fatalf("expected success, got %q", result)
 		}
-		if len(runner.calls) != 3 {
-			t.Fatalf("expected 3 calls (s1 + skip_if eval + s2), got %d: %v", len(runner.calls), runner.calls)
+		if len(runner.calls) != 2 {
+			t.Fatalf("expected 2 calls (s1 + s2), got %d: %v", len(runner.calls), runner.calls)
 		}
 	})
 
 	t.Run("skip_if sh: interpolates params", func(t *testing.T) {
-		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}, {ExitCode: 0}}}
+		// Write a side-effect file iff the interpolated command actually ran,
+		// proving that {{flag}} was expanded before shell execution.
+		runner := &mockRunner{}
+		sentinel := filepath.Join(t.TempDir(), "sentinel")
 		w := model.Workflow{
 			Name:   "test",
 			Params: []model.Param{{Name: "flag"}},
 			Steps: []model.Step{
 				shellStep("s1", "echo ok"),
-				{ID: "s2", Command: "echo body", Session: model.SessionNew, SkipIf: `sh: test "{{flag}}" = "true"`},
+				{
+					ID: "s2", Command: "echo body", Session: model.SessionNew,
+					SkipIf: fmt.Sprintf(`sh: touch %q && test "{{flag}}" = "true"`, sentinel),
+				},
 			},
 		}
 		w.ApplyDefaults()
@@ -288,15 +286,12 @@ func TestRunWorkflow(t *testing.T) {
 		if result != ResultSuccess {
 			t.Fatalf("expected success, got %q", result)
 		}
-		// Verify the skip_if call carried the expanded param value.
-		foundInterp := false
-		for _, call := range runner.calls {
-			if strings.Contains(call[2], `test "true" = "true"`) {
-				foundInterp = true
-			}
+		if _, err := os.Stat(sentinel); err != nil {
+			t.Fatalf("expected skip_if shell to have run (sentinel missing): %v", err)
 		}
-		if !foundInterp {
-			t.Fatalf("expected skip_if command to be interpolated with flag=true, got calls: %v", runner.calls)
+		// flag="true" → test exits 0 → s2 skipped.
+		if len(runner.calls) != 1 {
+			t.Fatalf("expected 1 call (s2 skipped after param expansion), got %d: %v", len(runner.calls), runner.calls)
 		}
 	})
 
