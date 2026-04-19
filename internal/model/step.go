@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/codagent/agent-runner/internal/flowctl"
 )
 
 // StepMode defines how a step executes.
@@ -271,7 +273,7 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 	}
 
 	if s.SkipIf != "" && s.SkipIf != "previous_success" {
-		if cmd, ok := strings.CutPrefix(s.SkipIf, "sh:"); !ok || strings.TrimSpace(cmd) == "" {
+		if cmd, ok := flowctl.ShellSkipCommand(s.SkipIf); !ok || cmd == "" {
 			return fmt.Errorf(`invalid skip_if value: %q`, s.SkipIf)
 		}
 	}
