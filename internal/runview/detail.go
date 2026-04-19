@@ -47,8 +47,7 @@ func renderShellBlock(node *StepNode, indent, width int, loadedFull bool) []stri
 	lines = append(lines, blockExitAndDuration(node)...)
 
 	if node.ErrorMessage != "" {
-		lines = append(lines, "")
-		lines = append(lines, blockLabelStr("error:"))
+		lines = append(lines, "", blockLabelStr("error:"))
 		lines = append(lines, renderWrappedText(node.ErrorMessage, contentWidth)...)
 		return lines
 	}
@@ -105,8 +104,7 @@ func renderHeadlessBlock(node *StepNode, indent, width int, loadedFull bool, pul
 		prompt = node.StaticPrompt
 	}
 	if prompt != "" {
-		lines = append(lines, "")
-		lines = append(lines, blockLabelStr("prompt:"))
+		lines = append(lines, "", blockLabelStr("prompt:"))
 		lines = append(lines, renderWrappedText(prompt, contentWidth)...)
 	}
 
@@ -117,8 +115,7 @@ func renderHeadlessBlock(node *StepNode, indent, width int, loadedFull bool, pul
 	lines = append(lines, blockExitAndDuration(node)...)
 
 	if node.ErrorMessage != "" {
-		lines = append(lines, "")
-		lines = append(lines, blockLabelStr("error:"))
+		lines = append(lines, "", blockLabelStr("error:"))
 		lines = append(lines, renderWrappedText(node.ErrorMessage, contentWidth)...)
 		return lines
 	}
@@ -126,8 +123,7 @@ func renderHeadlessBlock(node *StepNode, indent, width int, loadedFull bool, pul
 	lines = append(lines, renderAgentOutput(node, contentWidth, loadedFull, pulsePhase)...)
 
 	if node.SessionID != "" && !running {
-		lines = append(lines, "")
-		lines = append(lines, tuistyle.AccentStyle.Render("enter → resume session"))
+		lines = append(lines, "", tuistyle.AccentStyle.Render("enter → resume session"))
 	}
 	return lines
 }
@@ -179,8 +175,7 @@ func renderInteractiveBlock(node *StepNode, indent, width int, running bool) []s
 		prompt = node.StaticPrompt
 	}
 	if prompt != "" {
-		lines = append(lines, "")
-		lines = append(lines, blockLabelStr("prompt:"))
+		lines = append(lines, "", blockLabelStr("prompt:"))
 		lines = append(lines, renderWrappedText(prompt, contentWidth)...)
 	}
 
@@ -191,14 +186,12 @@ func renderInteractiveBlock(node *StepNode, indent, width int, running bool) []s
 	lines = append(lines, blockOutcomeAndDuration(node)...)
 
 	if node.ErrorMessage != "" {
-		lines = append(lines, "")
-		lines = append(lines, blockLabelStr("error:"))
+		lines = append(lines, "", blockLabelStr("error:"))
 		lines = append(lines, renderWrappedText(node.ErrorMessage, contentWidth)...)
 	}
 
 	if node.SessionID != "" && !running {
-		lines = append(lines, "")
-		lines = append(lines, tuistyle.AccentStyle.Render("enter → resume session"))
+		lines = append(lines, "", tuistyle.AccentStyle.Render("enter → resume session"))
 	}
 	return lines
 }
@@ -301,9 +294,7 @@ func renderIterationBlock(node *StepNode, indent, width int) []string {
 	glyph := blockTypeGlyph(node.Type)
 	sep := renderSeparator(node.ID, glyph, indent, contentWidth)
 
-	var lines []string
-	lines = append(lines, sep)
-
+	lines := []string{sep}
 	lines = append(lines, blockDimStr("iteration", itNum(node.IterationIndex)))
 	if node.BindingValue != "" {
 		lines = append(lines, blockDimStr("value", node.BindingValue))
@@ -433,8 +424,7 @@ func renderAgentOutput(node *StepNode, contentWidth int, loadedFull bool, pulseP
 	if stdout != "" && stderr != "" {
 		lines = append(lines, blockLabelStr("agent (stdout):"))
 		lines = append(lines, renderWrappedOutputLines(stdout, contentWidth, loadedFull)...)
-		lines = append(lines, "")
-		lines = append(lines, blockLabelStr("agent (stderr):"))
+		lines = append(lines, "", blockLabelStr("agent (stderr):"))
 		lines = append(lines, renderWrappedOutputLines(stderr, contentWidth, loadedFull)...)
 		return lines
 	}

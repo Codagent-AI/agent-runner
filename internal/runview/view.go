@@ -74,36 +74,8 @@ func (m *Model) renderRule() string {
 
 func (m *Model) renderTwoColumn(children []*StepNode) string {
 	rows := m.buildStepRows(children)
+	listWidth, rightWidth := twoColumnPaneWidths(m.termWidth, rows)
 
-	// Cap the list column so one pathologically long row can't starve the
-	// log pane. Prefer at most ~45% of the terminal for the list.
-	listCap := m.termWidth / 2
-	if listCap < 30 {
-		listCap = 30
-	}
-
-	maxRowWidth := 0
-	for _, r := range rows {
-		w := lipgloss.Width(r)
-		if w > maxRowWidth {
-			maxRowWidth = w
-		}
-	}
-	if maxRowWidth > listCap {
-		maxRowWidth = listCap
-		for i, r := range rows {
-			if lipgloss.Width(r) > listCap {
-				rows[i] = runewidth.Truncate(tuistyle.Sanitize(r), listCap, "…")
-			}
-		}
-	}
-
-	listWidth := maxRowWidth + 4
-	// Divider "│ " consumes 2 columns between the panes.
-	rightWidth := m.termWidth - listWidth - 2 - 4
-	if rightWidth < 20 {
-		rightWidth = 20
-	}
 	divider := tuistyle.DividerStyle.Render("│ ")
 
 	bodyHeight := m.bodyHeight()
@@ -284,8 +256,7 @@ func (m *Model) renderHelpBar() string {
 		parts = append(parts, "l follow")
 	}
 
-	parts = append(parts, "? legend")
-	parts = append(parts, "q quit")
+	parts = append(parts, "? legend", "q quit")
 
 	return "  " + tuistyle.HelpStyle.Render(strings.Join(parts, "   "))
 }
@@ -301,8 +272,44 @@ func (m *Model) selectedNodeHasTruncatedOutput() bool {
 	if n.Type != NodeShell && n.Type != NodeHeadlessAgent {
 		return false
 	}
-	t := truncateOutput(n.Stdout)
-	return t.Truncated
+	return truncateOutput(n.Stdout).Truncated || truncateOutput(n.Stderr).Truncated
+}
+
+func twoColumnPaneWidths(termWidth int, rows []string) (listWidth, rightWidth int) {
+	if termWidth <= 0 {
+		return 4, 80
+	}
+
+	// Cap the list column so one pathologically long row can't starve the
+	// log pane. Prefer at most ~45% of the terminal for the list.
+	listCap := termWidth / 2
+	if listCap < 30 {
+		listCap = 30
+	}
+
+	maxRowWidth := 0
+	for _, r := range rows {
+		w := lipgloss.Width(r)
+		if w > maxRowWidth {
+			maxRowWidth = w
+		}
+	}
+	if maxRowWidth > listCap {
+		maxRowWidth = listCap
+		for i, r := range rows {
+			if lipgloss.Width(r) > listCap {
+				rows[i] = runewidth.Truncate(tuistyle.Sanitize(r), listCap, "…")
+			}
+		}
+	}
+
+	listWidth = maxRowWidth + 4
+	// Divider "│ " consumes 2 columns between the panes.
+	rightWidth = termWidth - listWidth - 2 - 4
+	if rightWidth < 20 {
+		rightWidth = 20
+	}
+	return listWidth, rightWidth
 }
 
 func (m *Model) bodyHeight() int {

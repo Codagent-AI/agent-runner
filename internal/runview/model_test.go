@@ -782,6 +782,19 @@ func TestModel_LoadFull(t *testing.T) {
 	}
 }
 
+func TestModel_SelectedNodeHasTruncatedOutput_StderrOnly(t *testing.T) {
+	tree := simpleTree()
+	tree.Root.Children[0].Stdout = ""
+	tree.Root.Children[0].Stderr = generateLargeOutput(3000)
+
+	m := newTestModel(tree, FromList)
+	m.cursor = 0
+
+	if !m.selectedNodeHasTruncatedOutput() {
+		t.Fatal("stderr-only truncated output should advertise the g key")
+	}
+}
+
 // ---- Live-run tests ----
 
 func liveTree() *Tree {
@@ -1120,6 +1133,20 @@ func TestModel_StepStateMsg_AutoFollow_NoDrillIn(t *testing.T) {
 	}
 }
 
+func TestModel_StepStateMsg_ActiveRunAutoScrollsLog(t *testing.T) {
+	tree := simpleTree()
+	m := newLiveModelWithFlags()
+	m.tree = tree
+	m.path = []*StepNode{tree.Root}
+	m.logOffset = 7
+
+	m.Update(liverun.StepStateMsg{ActiveStepPrefix: "[implement]"})
+
+	if m.logOffset != math.MaxInt32 {
+		t.Fatalf("logOffset = %d, want %d while live auto-scroll is active", m.logOffset, math.MaxInt32)
+	}
+}
+
 func TestModel_StepStateMsg_AutoFollowOff_NoNavigation(t *testing.T) {
 	tree := simpleTree()
 	m := newLiveModelWithFlags()
@@ -1151,6 +1178,44 @@ func TestModel_ManualNavigation_ClearsAutoFollow(t *testing.T) {
 		if m.autoFollow {
 			t.Errorf("key %v should clear autoFollow", key)
 		}
+	}
+}
+
+func TestModel_ArrowToPendingStep_RebuildsGhostRangeAndSyncsLog(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	done := &StepNode{
+		ID:            "setup",
+		Type:          NodeShell,
+		Status:        StatusSuccess,
+		Parent:        root,
+		StaticCommand: "echo setup",
+		ExitCode:      intPtr(0),
+	}
+	pending := &StepNode{
+		ID:            "deploy",
+		Type:          NodeShell,
+		Status:        StatusPending,
+		Parent:        root,
+		StaticCommand: "echo deploy",
+	}
+	root.Children = []*StepNode{done, pending}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.rebuildRanges()
+
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+
+	if m.cursor != 1 {
+		t.Fatalf("cursor = %d, want 1", m.cursor)
+	}
+	if len(m.stepRanges) != 2 {
+		t.Fatalf("expected ghost range to be added, got %d ranges", len(m.stepRanges))
+	}
+	if m.stepRanges[1].node != pending {
+		t.Fatalf("stepRanges[1] = %v, want pending node", m.stepRanges[1].node)
+	}
+	if m.logOffset != m.stepRanges[1].startLine {
+		t.Fatalf("logOffset = %d, want ghost startLine %d", m.logOffset, m.stepRanges[1].startLine)
 	}
 }
 

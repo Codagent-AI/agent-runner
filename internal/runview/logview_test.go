@@ -193,6 +193,36 @@ func TestBuildLogLines_GhostBlock(t *testing.T) {
 	}
 }
 
+func TestBuildLogLines_GhostSubWorkflow_ShowsResolvedPathAndRawParams(t *testing.T) {
+	cfg := ResolverConfig{WorkflowsRoot: "/repo/workflows", RepoRoot: "/repo"}
+	done := makeNode("setup", NodeShell, StatusSuccess)
+	pending := makeNode("verify", NodeSubWorkflow, StatusPending)
+	pending.StaticWorkflow = "openspec/verify.yaml"
+	pending.StaticWorkflowPath = "/repo/workflows/openspec/verify.yaml"
+	pending.StaticParams = map[string]string{"task_file": "{{task_file}}"}
+
+	lines, ranges := buildLogLines(
+		[]*StepNode{done, pending},
+		pending,
+		80,
+		make(map[string]bool),
+		0, false, cfg,
+	)
+
+	if len(ranges) != 2 {
+		t.Fatalf("expected 2 ranges (done + pending ghost), got %d", len(ranges))
+	}
+
+	ghostLines := lines[ranges[1].startLine:ranges[1].endLine]
+	joined := stripANSI(strings.Join(ghostLines, "\n"))
+	if !strings.Contains(joined, "workflow: openspec:verify") {
+		t.Fatalf("ghost block should show canonical workflow path, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "task_file: {{task_file}}") {
+		t.Fatalf("ghost block should show raw params, got:\n%s", joined)
+	}
+}
+
 // TestBuildLogLines_SeparatorDepth verifies that separators use heavier
 // characters at shallower nesting levels. Depth 0 uses "═", depth 1 uses "─".
 func TestBuildLogLines_SeparatorDepth(t *testing.T) {
@@ -226,6 +256,64 @@ func TestBuildLogLines_SeparatorDepth(t *testing.T) {
 	}
 	if !strings.Contains(innerSep, "─") {
 		t.Errorf("depth-1 separator should contain '─', got: %q", innerSep)
+	}
+}
+
+func TestBuildLogLines_DeepNesting_DecreasesSeparatorWeight(t *testing.T) {
+	level0 := makeNode("level0", NodeSubWorkflow, StatusInProgress)
+	level1 := makeNode("level1", NodeSubWorkflow, StatusInProgress)
+	level2 := makeNode("level2", NodeLoop, StatusInProgress)
+	level3 := makeNode("level3", NodeIteration, StatusInProgress)
+	leaf := makeNode("leaf", NodeShell, StatusSuccess)
+
+	level1.Parent = level0
+	level2.Parent = level1
+	level3.Parent = level2
+	leaf.Parent = level3
+
+	level0.Children = []*StepNode{level1}
+	level1.Children = []*StepNode{level2}
+	level2.Children = []*StepNode{level3}
+	level3.Children = []*StepNode{leaf}
+
+	lines, ranges := buildLogLines(
+		[]*StepNode{level0},
+		nil,
+		80,
+		make(map[string]bool),
+		0, false, noResolver,
+	)
+
+	if len(ranges) != 5 {
+		t.Fatalf("expected 5 ranges, got %d", len(ranges))
+	}
+
+	level0Sep := stripANSI(lines[ranges[0].startLine])
+	level1Sep := stripANSI(lines[ranges[1].startLine])
+	level2Sep := stripANSI(lines[ranges[2].startLine])
+	level3Sep := stripANSI(lines[ranges[3].startLine])
+	leafSep := stripANSI(lines[ranges[4].startLine])
+
+	if !strings.Contains(level0Sep, "═") {
+		t.Fatalf("depth 0 separator should contain ═, got %q", level0Sep)
+	}
+	if !strings.Contains(level1Sep, "─") || strings.Contains(level1Sep, "═") {
+		t.Fatalf("depth 1 separator should use ─ only, got %q", level1Sep)
+	}
+	if !strings.Contains(level2Sep, "─") || strings.Contains(level2Sep, "═") {
+		t.Fatalf("depth 2 separator should use lighter ─ only, got %q", level2Sep)
+	}
+	if !strings.Contains(level3Sep, "·") {
+		t.Fatalf("depth 3 separator should contain ·, got %q", level3Sep)
+	}
+	if !strings.Contains(leafSep, "·") {
+		t.Fatalf("depth 4 separator should contain ·, got %q", leafSep)
+	}
+
+	for i := 1; i < len(ranges); i++ {
+		if ranges[i-1].startLine >= ranges[i].startLine {
+			t.Fatalf("range %d should start after range %d", i, i-1)
+		}
 	}
 }
 

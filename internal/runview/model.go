@@ -230,39 +230,16 @@ func (m *Model) Init() tea.Cmd {
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.termWidth = msg.Width
-		m.termHeight = msg.Height
-		m.rebuildRanges()
-		// Re-resolve anchor so the same block stays in view after resize.
-		if m.logAnchor.stepKey != "" {
-			for _, r := range m.stepRanges {
-				if r.node.ID == m.logAnchor.stepKey {
-					newOffset := r.startLine + m.logAnchor.lineOffsetInBlock
-					if newOffset < 0 {
-						newOffset = 0
-					}
-					m.logOffset = newOffset
-					break
-				}
-			}
-		}
+		m.handleWindowSize(msg)
 
 	// ---- Live-run messages ----
 
 	case liverun.OutputChunkMsg:
-		m.applyOutputChunk(msg)
-		if m.active || m.running {
-			m.logOffset = math.MaxInt32
-		}
-		m.rebuildRanges()
+		m.handleOutputChunkMsg(msg)
 		return m, nil
 
 	case liverun.StepStateMsg:
-		m.activeStepPrefix = msg.ActiveStepPrefix
-		if m.autoFollow {
-			m.applyAutoFollowCursor()
-		}
-		m.rebuildRanges()
+		m.handleStepStateMsg(msg)
 		return m, nil
 
 	case liverun.SuspendedMsg, liverun.ResumedMsg:
@@ -286,30 +263,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case liverun.ExecDoneMsg:
-		// Drain any outstanding audit events before deciding which step to
-		// focus. Step statuses reach the tree via audit.log (not OutputChunkMsg),
-		// so without this refresh findFailedLeaf can miss a step that finished
-		// just before ExecDoneMsg.
-		m.refreshData()
-		m.running = false
-		m.liveResult = msg.Result
-		switch msg.Result {
-		case "failed":
-			if failed := findFailedLeaf(m.tree.Root); failed != nil {
-				m.navigateToNode(failed)
-			}
-		case "success":
-			// Land on the final top-level step so the user sees the
-			// workflow's end state. Loop iterations and other deep
-			// leaves emit StepStateMsg before their tree nodes exist
-			// (audit replay runs lazily), so cursor often gets stuck
-			// on the last step whose node was already in the tree —
-			// not the actual last step that ran.
-			if last := lastTopLevelChild(m.tree.Root); last != nil {
-				m.navigateToNode(last)
-			}
-		}
-		m.rebuildRanges()
+		m.handleExecDoneMsg(msg)
 		return m, nil
 
 	// ---- Keyboard / mouse ----
@@ -318,40 +272,119 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 
 	case tea.MouseMsg:
-		switch msg.Button {
-		case tea.MouseButtonWheelUp:
-			m.autoFollow = false
-			m.logOffset -= 3
-			if m.logOffset < 0 {
-				m.logOffset = 0
-			}
-			m.syncSelectionToLog()
-		case tea.MouseButtonWheelDown:
-			m.autoFollow = false
-			m.logOffset += 3
-			m.syncSelectionToLog()
-		}
+		m.handleMouse(msg)
 
 	case tuistyle.RefreshMsg:
-		// FromLiveRun leaves m.active=false because no runlock is held, but
-		// the in-process runner is still emitting audit events we need to
-		// pick up so step statuses stay current.
-		if m.active || m.running {
-			m.refreshData()
-			if m.active || m.running {
-				m.logOffset = math.MaxInt32
-			}
-			m.rebuildRanges()
-		}
-		return m, tuistyle.DoRefresh()
+		cmd := m.handleRefreshMsg()
+		return m, cmd
 
 	case tuistyle.PulseMsg:
-		if m.active || m.running {
-			m.pulsePhase += (50.0 / 1000.0) * 2 * math.Pi
-		}
-		return m, tuistyle.DoPulse()
+		cmd := m.handlePulseMsg()
+		return m, cmd
 	}
 	return m, nil
+}
+
+func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) {
+	m.termWidth = msg.Width
+	m.termHeight = msg.Height
+	lineCount := m.rebuildRanges()
+	// Re-resolve anchor so the same block stays in view after resize.
+	if m.logAnchor.stepKey != "" {
+		for _, r := range m.stepRanges {
+			if r.node.ID == m.logAnchor.stepKey {
+				newOffset := r.startLine + m.logAnchor.lineOffsetInBlock
+				if newOffset < 0 {
+					newOffset = 0
+				}
+				m.logOffset = newOffset
+				break
+			}
+		}
+	}
+	m.clampLogOffset(lineCount)
+}
+
+func (m *Model) handleOutputChunkMsg(msg liverun.OutputChunkMsg) {
+	m.applyOutputChunk(msg)
+	if m.active || m.running {
+		m.logOffset = math.MaxInt32
+	}
+	m.rebuildRanges()
+}
+
+func (m *Model) handleStepStateMsg(msg liverun.StepStateMsg) {
+	m.activeStepPrefix = msg.ActiveStepPrefix
+	if m.autoFollow {
+		m.applyAutoFollowCursor()
+	}
+	if m.active || m.running {
+		m.logOffset = math.MaxInt32
+	}
+	m.rebuildRanges()
+}
+
+func (m *Model) handleExecDoneMsg(msg liverun.ExecDoneMsg) {
+	// Drain any outstanding audit events before deciding which step to
+	// focus. Step statuses reach the tree via audit.log (not OutputChunkMsg),
+	// so without this refresh findFailedLeaf can miss a step that finished
+	// just before ExecDoneMsg.
+	m.refreshData()
+	m.running = false
+	m.liveResult = msg.Result
+	switch msg.Result {
+	case "failed":
+		if failed := findFailedLeaf(m.tree.Root); failed != nil {
+			m.navigateToNode(failed)
+		}
+	case "success":
+		// Land on the final top-level step so the user sees the workflow's
+		// end state. Loop iterations and other deep leaves emit StepStateMsg
+		// before their tree nodes exist (audit replay runs lazily), so cursor
+		// often gets stuck on the last step whose node was already in the tree
+		// — not the actual last step that ran.
+		if last := lastTopLevelChild(m.tree.Root); last != nil {
+			m.navigateToNode(last)
+		}
+	}
+	m.rebuildRanges()
+}
+
+func (m *Model) handleMouse(msg tea.MouseMsg) {
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		m.autoFollow = false
+		m.logOffset -= 3
+		if m.logOffset < 0 {
+			m.logOffset = 0
+		}
+		m.syncSelectionToLog()
+	case tea.MouseButtonWheelDown:
+		m.autoFollow = false
+		m.logOffset += 3
+		m.syncSelectionToLog()
+	}
+}
+
+func (m *Model) handleRefreshMsg() tea.Cmd {
+	// FromLiveRun leaves m.active=false because no runlock is held, but the
+	// in-process runner is still emitting audit events we need to pick up so
+	// step statuses stay current.
+	if m.active || m.running {
+		m.refreshData()
+		if m.active || m.running {
+			m.logOffset = math.MaxInt32
+		}
+		m.rebuildRanges()
+	}
+	return tuistyle.DoRefresh()
+}
+
+func (m *Model) handlePulseMsg() tea.Cmd {
+	if m.active || m.running {
+		m.pulsePhase += (50.0 / 1000.0) * 2 * math.Pi
+	}
+	return tuistyle.DoPulse()
 }
 
 // canResumeRun reports whether the `r` resume-run action is available.
@@ -403,13 +436,13 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up":
 		m.autoFollow = false
 		m.moveCursor(-1)
-		m.syncLogToSelection()
 		m.rebuildRanges()
+		m.syncLogToSelection()
 	case "down":
 		m.autoFollow = false
 		m.moveCursor(1)
-		m.syncLogToSelection()
 		m.rebuildRanges()
+		m.syncLogToSelection()
 	case "k":
 		m.autoFollow = false
 		m.logOffset--
@@ -492,8 +525,8 @@ func (m *Model) pendingSelected() *StepNode {
 
 // rebuildRanges recomputes m.stepRanges from the current tree state and
 // selection. Called after any mutation that changes log content or width.
-func (m *Model) rebuildRanges() {
-	_, ranges := buildLogLines(
+func (m *Model) rebuildRanges() int {
+	lines, ranges := buildLogLines(
 		m.currentChildren(),
 		m.pendingSelected(),
 		m.rightPaneWidth(),
@@ -503,24 +536,15 @@ func (m *Model) rebuildRanges() {
 		m.resolverCfg,
 	)
 	m.stepRanges = ranges
+	return len(lines)
 }
 
 // rightPaneWidth estimates the right-pane width for range computation.
 // Uses the same formula as renderTwoColumn but with a conservative list-
 // column estimate so ranges are close enough for scroll sync.
 func (m *Model) rightPaneWidth() int {
-	if m.termWidth <= 0 {
-		return 80
-	}
-	listWidth := m.termWidth / 2
-	if listWidth < 30 {
-		listWidth = 30
-	}
-	w := m.termWidth - listWidth - 10
-	if w < 20 {
-		return 20
-	}
-	return w
+	_, rightWidth := twoColumnPaneWidths(m.termWidth, m.buildStepRows(m.currentChildren()))
+	return rightWidth
 }
 
 // syncLogToSelection sets logOffset so the selected step's block is in view.
@@ -562,6 +586,16 @@ func (m *Model) syncSelectionToLog() {
 			stepKey:           winner.ID,
 			lineOffsetInBlock: m.logOffset - winnerStart,
 		}
+	}
+}
+
+func (m *Model) clampLogOffset(lineCount int) {
+	maxOffset := max(0, lineCount-m.bodyHeight())
+	if m.logOffset < 0 {
+		m.logOffset = 0
+	}
+	if m.logOffset > maxOffset {
+		m.logOffset = maxOffset
 	}
 }
 

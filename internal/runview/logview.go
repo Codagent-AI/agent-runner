@@ -70,7 +70,7 @@ func buildLogLinesRecurse(
 
 		var blockLines []string
 		if isGhost {
-			blockLines = renderGhostBlock(child, indent, bodyWidth)
+			blockLines = renderGhostBlock(child, indent, bodyWidth, resolverCfg)
 		} else {
 			switch child.Type {
 			case NodeShell:
@@ -159,7 +159,7 @@ func renderSeparator(name, glyph string, depth, contentWidth int) string {
 // renderGhostBlock renders a dim placeholder block for a pending step that is
 // currently selected. It shows only statically knowable fields (no runtime
 // data) with a dashed separator so it is visually distinct from real blocks.
-func renderGhostBlock(node *StepNode, indent, width int) []string {
+func renderGhostBlock(node *StepNode, indent, width int, resolverCfg ResolverConfig) []string {
 	contentWidth := width - 2*indent
 	if contentWidth <= 0 {
 		return nil
@@ -190,9 +190,11 @@ func renderGhostBlock(node *StepNode, indent, width int) []string {
 			}
 		}
 	case NodeSubWorkflow:
-		wfName := node.StaticWorkflow
+		wfName := CanonicalName(node.StaticWorkflowPath, resolverCfg)
 		if wfName != "" {
-			lines = append(lines, tuistyle.DimStyle.Render(blockDimStr("workflow", bareWorkflowName(wfName))))
+			lines = append(lines, tuistyle.DimStyle.Render(blockDimStr("workflow", wfName)))
+		} else if node.StaticWorkflow != "" {
+			lines = append(lines, tuistyle.DimStyle.Render(blockDimStr("workflow", node.StaticWorkflow)))
 		}
 		for _, l := range sortedParams(node.StaticParams) {
 			lines = append(lines, tuistyle.DimStyle.Render(l))
