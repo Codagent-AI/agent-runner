@@ -117,6 +117,43 @@ func TestModel_Navigation_UpDown(t *testing.T) {
 	}
 }
 
+func TestModel_Navigation_ExpansionRowsRemainReadOnly(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	setup := &StepNode{ID: "setup", Type: NodeShell, Status: StatusSuccess, Parent: root}
+	review := &StepNode{ID: "review", Type: NodeSubWorkflow, Status: StatusInProgress, Parent: root}
+	cleanup := &StepNode{ID: "cleanup", Type: NodeShell, Status: StatusPending, Parent: root}
+	root.Children = []*StepNode{setup, review, cleanup}
+
+	verify := &StepNode{ID: "verify", Type: NodeSubWorkflow, Status: StatusInProgress, Parent: review}
+	review.Children = []*StepNode{verify}
+	summarize := &StepNode{ID: "summarize", Type: NodeHeadlessAgent, Status: StatusInProgress, Parent: verify}
+	verify.Children = []*StepNode{summarize}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.cursor = 1
+
+	rows := m.buildStepRows(root.Children)
+	if len(rows) <= len(root.Children) {
+		t.Fatalf("expected expansion rows to be present, got %d rows for %d children", len(rows), len(root.Children))
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if m.cursor != 2 {
+		t.Fatalf("after down: cursor = %d, want 2", m.cursor)
+	}
+	if got := m.selectedNode(); got != cleanup {
+		t.Fatalf("after down: selected node = %v, want cleanup", got)
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.cursor != 1 {
+		t.Fatalf("after up: cursor = %d, want 1", m.cursor)
+	}
+	if got := m.selectedNode(); got != review {
+		t.Fatalf("after up: selected node = %v, want review", got)
+	}
+}
+
 // j and k scroll the log pane offset; with empty stepRanges the cursor stays put.
 func TestModel_JK_ScrollsLogPane(t *testing.T) {
 	m := newTestModel(simpleTree(), FromList)

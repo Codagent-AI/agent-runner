@@ -1,2 +1,2 @@
-- [ ] summarizer profile + left-pane step expansion (`tasks/summarizer-and-expansion.md`)
+- [x] summarizer profile + left-pane step expansion (`tasks/summarizer-and-expansion.md`)
 - [x] Continuous log pane (`tasks/continuous-log-pane.md`)

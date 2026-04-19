@@ -132,10 +132,13 @@ func (m *Model) renderTwoColumn(children []*StepNode) string {
 }
 
 func (m *Model) buildStepRows(children []*StepNode) []string {
-	rows := make([]string, len(children))
+	rows := make([]string, 0, len(children))
 	for i, n := range children {
 		isSel := i == m.cursor
-		rows[i] = m.renderStepRow(n, isSel)
+		rows = append(rows, m.renderStepRow(n, isSel))
+		if isSel {
+			rows = append(rows, m.buildExpansionRows(n)...)
+		}
 	}
 	return rows
 }
@@ -146,8 +149,55 @@ func (m *Model) renderStepRow(n *StepNode, selected bool) string {
 		prefix = tuistyle.CursorStyle.Render("▶") + "  "
 	}
 
-	glyph := m.statusGlyph(n)
-	name := n.ID
+	typeCol, label, glyph := m.stepRowParts(n)
+
+	style := tuistyle.DimStyle
+	if selected {
+		style = tuistyle.SelectedStyle
+	}
+	if n.Status == StatusFailed {
+		style = tuistyle.StatusFailed
+	}
+
+	return prefix + typeCol + style.Render(label) + "  " + glyph
+}
+
+func (m *Model) buildExpansionRows(selected *StepNode) []string {
+	rows := make([]string, 0)
+	for depth, current := 1, selected; ; depth++ {
+		current = expansionChild(current)
+		if current == nil {
+			return rows
+		}
+		rows = append(rows, m.renderExpansionRow(current, depth))
+	}
+}
+
+func expansionChild(parent *StepNode) *StepNode {
+	if parent == nil {
+		return nil
+	}
+
+	var fallback *StepNode
+	for _, child := range parent.Children {
+		if child.Status == StatusInProgress {
+			return child
+		}
+		if child.Status != StatusPending {
+			fallback = child
+		}
+	}
+	return fallback
+}
+
+func (m *Model) renderExpansionRow(n *StepNode, depth int) string {
+	typeCol, label, glyph := m.stepRowParts(n)
+	return strings.Repeat("  ", depth) + typeCol + tuistyle.DimStyle.Render(label) + "  " + glyph
+}
+
+func (m *Model) stepRowParts(n *StepNode) (typeCol, label, glyph string) {
+	glyph = m.statusGlyph(n)
+	label = n.ID
 	suffix := ""
 	typePrefix := ""
 
@@ -158,27 +208,20 @@ func (m *Model) renderStepRow(n *StepNode, selected bool) string {
 			suffix = fmt.Sprintf(" (%d/%d)", n.IterationsCompleted, total)
 		}
 	case NodeIteration:
-		name = fmt.Sprintf("iter %d", n.IterationIndex+1)
+		label = fmt.Sprintf("iter %d", n.IterationIndex+1)
 		if n.BindingValue != "" {
-			name += "   " + filepath.Base(n.BindingValue)
+			label += "   " + filepath.Base(n.BindingValue)
 		}
 	default:
 		typePrefix = typeGlyph(n.Type)
 	}
 
-	style := tuistyle.DimStyle
-	if selected {
-		style = tuistyle.SelectedStyle
-	}
-	if n.Status == StatusFailed {
-		style = tuistyle.StatusFailed
-	}
-
-	typeCol := "   "
+	typeCol = "   "
 	if typePrefix != "" {
 		typeCol = typePrefix + "  "
 	}
-	return prefix + typeCol + style.Render(name+suffix) + "  " + glyph
+
+	return typeCol, label + suffix, glyph
 }
 
 func (m *Model) statusGlyph(n *StepNode) string {
