@@ -139,6 +139,15 @@ func ExecuteAgentStep(
 		return OutcomeFailed, nil
 	}
 
+	if !headless {
+		if r, ok := adapter.(cli.InteractiveRejector); ok {
+			if modeErr := r.InteractiveModeError(); modeErr != nil {
+				emitAgentFailure(ctx, prefix, startTime, string(mode), step, modeErr.Error())
+				return OutcomeFailed, nil
+			}
+		}
+	}
+
 	input := buildAdapterInput(step, ctx, profile, adapter, prompt, enrichment, sessionID, isResume, headless)
 	args := adapter.BuildArgs(&input)
 
