@@ -490,8 +490,9 @@ func finalRunviewModel(final tea.Model, err error) (*runview.Model, error) {
 // syscall.Exec / exec.Command with the full environment. The allowlist mirrors
 // internal/config.validCLI; keep them in sync when adding new agent CLIs.
 var allowedResumeCLIs = map[string]bool{
-	"claude": true,
-	"codex":  true,
+	"claude":  true,
+	"codex":   true,
+	"copilot": true,
 }
 
 // resolveResumeCLI validates `cli` against the resume allowlist and resolves
