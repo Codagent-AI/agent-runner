@@ -16,6 +16,12 @@ var (
 	subwfGlyphStyle = lipgloss.NewStyle().Foreground(tuistyle.AccentCyan)
 )
 
+type renderedStepRow struct {
+	text       string
+	node       *StepNode
+	selectable bool
+}
+
 func (m *Model) View() string {
 	if m.showLegend {
 		return m.renderLegend()
@@ -73,7 +79,8 @@ func (m *Model) renderRule() string {
 }
 
 func (m *Model) renderTwoColumn(children []*StepNode) string {
-	rows := m.buildStepRows(children)
+	renderedRows := m.buildRenderedStepRows(children)
+	rows := rowTexts(renderedRows)
 	listWidth, rightWidth := twoColumnPaneWidths(m.termWidth, rows)
 
 	divider := tuistyle.DividerStyle.Render("│ ")
@@ -106,11 +113,18 @@ func (m *Model) renderTwoColumn(children []*StepNode) string {
 		visibleLines = logLines
 	}
 
+	selectedRow := renderedRowIndexForNode(renderedRows, m.selectedNode())
+	leftOffset := leftPaneOffset(selectedRow, len(renderedRows), bodyHeight)
+	visibleRows := rows
+	if leftOffset > 0 && leftOffset <= len(rows) {
+		visibleRows = rows[leftOffset:]
+	}
+
 	var b strings.Builder
 	for i := 0; i < bodyHeight; i++ {
 		leftPart := ""
-		if i < len(rows) {
-			leftPart = rows[i]
+		if i < len(visibleRows) {
+			leftPart = visibleRows[i]
 		}
 		leftPad := listWidth - lipgloss.Width(leftPart)
 		if leftPad < 0 {
@@ -132,10 +146,18 @@ func (m *Model) renderTwoColumn(children []*StepNode) string {
 }
 
 func (m *Model) buildStepRows(children []*StepNode) []string {
-	rows := make([]string, 0, len(children))
+	return rowTexts(m.buildRenderedStepRows(children))
+}
+
+func (m *Model) buildRenderedStepRows(children []*StepNode) []renderedStepRow {
+	rows := make([]renderedStepRow, 0, len(children))
 	for i, n := range children {
 		isSel := i == m.cursor
-		rows = append(rows, m.renderStepRow(n, isSel))
+		rows = append(rows, renderedStepRow{
+			text:       m.renderStepRow(n, isSel),
+			node:       n,
+			selectable: true,
+		})
 		if isSel {
 			rows = append(rows, m.buildExpansionRows(n)...)
 		}
@@ -162,14 +184,18 @@ func (m *Model) renderStepRow(n *StepNode, selected bool) string {
 	return prefix + typeCol + style.Render(label) + "  " + glyph
 }
 
-func (m *Model) buildExpansionRows(selected *StepNode) []string {
-	rows := make([]string, 0)
+func (m *Model) buildExpansionRows(selected *StepNode) []renderedStepRow {
+	rows := make([]renderedStepRow, 0)
 	for depth, current := 1, selected; ; depth++ {
 		current = expansionChild(current)
 		if current == nil {
 			return rows
 		}
-		rows = append(rows, m.renderExpansionRow(current, depth))
+		rows = append(rows, renderedStepRow{
+			text:       m.renderExpansionRow(current, depth),
+			node:       current,
+			selectable: false,
+		})
 	}
 }
 
@@ -193,6 +219,38 @@ func expansionChild(parent *StepNode) *StepNode {
 func (m *Model) renderExpansionRow(n *StepNode, depth int) string {
 	typeCol, label, glyph := m.stepRowParts(n)
 	return strings.Repeat("  ", depth) + typeCol + tuistyle.DimStyle.Render(label) + "  " + glyph
+}
+
+func rowTexts(rows []renderedStepRow) []string {
+	texts := make([]string, len(rows))
+	for i, row := range rows {
+		texts[i] = row.text
+	}
+	return texts
+}
+
+func renderedRowIndexForNode(rows []renderedStepRow, node *StepNode) int {
+	if node == nil {
+		return 0
+	}
+	for i, row := range rows {
+		if row.selectable && row.node == node {
+			return i
+		}
+	}
+	return 0
+}
+
+func leftPaneOffset(selectedRow, totalRows, bodyHeight int) int {
+	if bodyHeight <= 0 || totalRows <= bodyHeight || selectedRow < bodyHeight {
+		return 0
+	}
+	maxOffset := totalRows - bodyHeight
+	offset := selectedRow - bodyHeight + 1
+	if offset > maxOffset {
+		return maxOffset
+	}
+	return offset
 }
 
 func (m *Model) stepRowParts(n *StepNode) (typeCol, label, glyph string) {

@@ -179,3 +179,48 @@ func TestBuildStepRows_SelectedStepShowsRecursiveExpansion(t *testing.T) {
 		t.Fatalf("row 6 should be the final top-level sibling, got %q", plain[6])
 	}
 }
+
+func TestBuildRenderedStepRows_TracksRenderedIndexAfterExpansion(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	setup := &StepNode{ID: "setup", Type: NodeShell, Status: StatusSuccess, Parent: root}
+	review := &StepNode{ID: "review", Type: NodeSubWorkflow, Status: StatusInProgress, Parent: root}
+	cleanup := &StepNode{ID: "cleanup", Type: NodeShell, Status: StatusPending, Parent: root}
+	root.Children = []*StepNode{setup, review, cleanup}
+
+	loop := &StepNode{
+		ID:                  "fanout",
+		Type:                NodeLoop,
+		Status:              StatusInProgress,
+		Parent:              review,
+		IterationsCompleted: 1,
+		LoopMatches:         []string{"tasks/a.md", "tasks/b.md"},
+	}
+	review.Children = []*StepNode{loop}
+
+	iter := &StepNode{
+		ID:             "fanout",
+		Type:           NodeIteration,
+		Status:         StatusInProgress,
+		Parent:         loop,
+		IterationIndex: 1,
+		BindingValue:   "tasks/b.md",
+	}
+	loop.Children = []*StepNode{iter}
+
+	verify := &StepNode{ID: "verify", Type: NodeSubWorkflow, Status: StatusInProgress, Parent: iter}
+	iter.Children = []*StepNode{verify}
+
+	summarize := &StepNode{ID: "summarize", Type: NodeHeadlessAgent, Status: StatusInProgress, Parent: verify}
+	verify.Children = []*StepNode{summarize}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.cursor = 1
+
+	rendered := m.buildRenderedStepRows(root.Children)
+	if got := renderedRowIndexForNode(rendered, cleanup); got != 6 {
+		t.Fatalf("cleanup rendered row index = %d, want 6 after inserted expansion rows", got)
+	}
+	if got := leftPaneOffset(renderedRowIndexForNode(rendered, cleanup), len(rendered), 5); got != 2 {
+		t.Fatalf("left pane offset = %d, want 2 for a 5-line viewport", got)
+	}
+}
