@@ -371,7 +371,7 @@ func runLiveTUI(h *runner.RunHandle) int {
 		})
 	}()
 
-	_, err = p.Run()
+	rv, err = finalRunviewModel(p.Run())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
@@ -405,12 +405,28 @@ func runLiveTUI(h *runner.RunHandle) int {
 			return 1
 		}
 		p = tea.NewProgram(rv, tea.WithAltScreen(), tea.WithMouseCellMotion())
-		if _, err = p.Run(); err != nil {
+		rv, err = finalRunviewModel(p.Run())
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 			return 1
 		}
 	}
 	return 0
+}
+
+// finalRunviewModel extracts the terminal runview Model returned by tea.Program.Run.
+// Capturing the returned model (rather than relying on the pointer originally
+// passed in) keeps resume-state reads robust against future Update implementations
+// that return a fresh instance instead of the same pointer.
+func finalRunviewModel(final tea.Model, err error) (*runview.Model, error) {
+	if err != nil {
+		return nil, err
+	}
+	rv, ok := final.(*runview.Model)
+	if !ok {
+		return nil, fmt.Errorf("unexpected model type %T returned by tea.Program.Run", final)
+	}
+	return rv, nil
 }
 
 // allowedResumeCLIs bounds resume CLI arguments. Resume metadata originates
