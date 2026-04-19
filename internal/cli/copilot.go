@@ -64,19 +64,24 @@ func (a *CopilotAdapter) InteractiveModeError() error {
 }
 
 // discoverCopilotSession parses the sessionId from the first JSONL line with type "result".
+// Uses bufio.Reader.ReadBytes to avoid the fixed token limit of bufio.Scanner.
 func discoverCopilotSession(output string) string {
-	scanner := bufio.NewScanner(strings.NewReader(output))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		var event struct {
-			Type      string `json:"type"`
-			SessionID string `json:"sessionId"`
+	reader := bufio.NewReader(strings.NewReader(output))
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			var event struct {
+				Type      string `json:"type"`
+				SessionID string `json:"sessionId"`
+			}
+			if jsonErr := json.Unmarshal(line, &event); jsonErr == nil {
+				if event.Type == "result" && event.SessionID != "" {
+					return event.SessionID
+				}
+			}
 		}
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			continue
-		}
-		if event.Type == "result" && event.SessionID != "" {
-			return event.SessionID
+		if err != nil {
+			break
 		}
 	}
 	return ""
