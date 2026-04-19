@@ -1,6 +1,7 @@
 package runview
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -1376,7 +1377,7 @@ func TestModel_HeadlessDetail_LongLine_Wraps(t *testing.T) {
 
 func TestNewForReentry_HasCorrectState(t *testing.T) {
 	sessionDir := t.TempDir()
-	m, err := NewForReentry(sessionDir, "", "")
+	m, err := NewForReentry(sessionDir, "", nil)
 	if err != nil {
 		t.Fatalf("NewForReentry: %v", err)
 	}
@@ -1396,7 +1397,7 @@ func TestNewForReentry_HasCorrectState(t *testing.T) {
 
 func TestNewForReentry_SpawnError_ShowsInView(t *testing.T) {
 	sessionDir := t.TempDir()
-	m, err := NewForReentry(sessionDir, "", "spawn failed: claude: not found in PATH")
+	m, err := NewForReentry(sessionDir, "", errors.New("spawn failed: claude: not found in PATH"))
 	if err != nil {
 		t.Fatalf("NewForReentry: %v", err)
 	}
@@ -1410,7 +1411,7 @@ func TestNewForReentry_SpawnError_ShowsInView(t *testing.T) {
 
 func TestNewForReentry_NoSpawnError_NoNotice(t *testing.T) {
 	sessionDir := t.TempDir()
-	m, err := NewForReentry(sessionDir, "", "")
+	m, err := NewForReentry(sessionDir, "", nil)
 	if err != nil {
 		t.Fatalf("NewForReentry: %v", err)
 	}
@@ -1421,7 +1422,7 @@ func TestNewForReentry_NoSpawnError_NoNotice(t *testing.T) {
 
 func TestNewForReentry_Enter_AgentStep_EmitsResumeMsg(t *testing.T) {
 	sessionDir := t.TempDir()
-	m, err := NewForReentry(sessionDir, "", "")
+	m, err := NewForReentry(sessionDir, "", nil)
 	if err != nil {
 		t.Fatalf("NewForReentry: %v", err)
 	}

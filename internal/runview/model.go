@@ -170,9 +170,9 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 
 // NewForReentry creates a Model for re-entering the run view after a resumed
 // agent CLI subprocess has exited. It re-reads audit and state files from
-// sessionDir so any events produced by the resumed session appear. If
-// spawnErr is non-empty, the error is surfaced to the user in the view.
-func NewForReentry(sessionDir, projectDir, spawnErr string) (*Model, error) {
+// sessionDir so any events produced by the resumed session appear. A non-nil
+// spawnErr is surfaced to the user in the view.
+func NewForReentry(sessionDir, projectDir string, spawnErr error) (*Model, error) {
 	m, err := New(sessionDir, projectDir, FromLiveRun)
 	if err != nil {
 		return nil, err
@@ -180,8 +180,8 @@ func NewForReentry(sessionDir, projectDir, spawnErr string) (*Model, error) {
 	m.running = false
 	m.autoFollow = false
 	m.tailFollow = false
-	if spawnErr != "" {
-		m.notice = spawnErr
+	if spawnErr != nil {
+		m.notice = spawnErr.Error()
 	}
 	return m, nil
 }

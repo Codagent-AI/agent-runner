@@ -399,11 +399,7 @@ func runLiveTUI(h *runner.RunHandle) int {
 
 	for rv.ResumeSessionID() != "" {
 		spawnErr := spawnAgentResume(rv.ResumeAgentCLI(), rv.ResumeSessionID())
-		var errMsg string
-		if spawnErr != nil {
-			errMsg = spawnErr.Error()
-		}
-		rv, err = runview.NewForReentry(h.SessionDir, h.ProjectDir, errMsg)
+		rv, err = runview.NewForReentry(h.SessionDir, h.ProjectDir, spawnErr)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 			return 1
@@ -427,25 +423,36 @@ var allowedResumeCLIs = map[string]bool{
 	"codex":  true,
 }
 
-// execAgentResume replaces the current process with `<cli> --resume <session-id>`
-// so the agent CLI inherits the terminal directly. Used by the snapshot (--list /
-// --inspect) path where there is no run view to return to.
-func execAgentResume(cli, sessionID string) int {
+// resolveResumeCLI validates `cli` against the resume allowlist and resolves
+// it to an absolute path via PATH lookup. Callers must treat the returned path
+// as safe to pass to syscall.Exec / exec.Command even though the surrounding
+// arguments originate from audit logs.
+func resolveResumeCLI(cli string) (resolvedCLI, path string, err error) {
 	if cli == "" {
 		cli = "claude"
 	}
 	if strings.ContainsAny(cli, `/\`) || !allowedResumeCLIs[cli] {
-		fmt.Fprintf(os.Stderr, "agent-runner: refusing to resume: unsupported agent CLI %q\n", cli)
-		return 1
+		return cli, "", fmt.Errorf("refusing to resume: unsupported agent CLI %q", cli)
 	}
-	path, err := exec.LookPath(cli)
+	path, err = exec.LookPath(cli)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-runner: cannot find agent CLI %q in PATH: %v\n", cli, err)
+		return cli, "", fmt.Errorf("cannot find agent CLI %q in PATH: %w", cli, err)
+	}
+	return cli, path, nil
+}
+
+// execAgentResume replaces the current process with `<cli> --resume <session-id>`
+// so the agent CLI inherits the terminal directly. Used by the snapshot (--list /
+// --inspect) path where there is no run view to return to.
+func execAgentResume(cli, sessionID string) int {
+	resolved, path, err := resolveResumeCLI(cli)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
 	}
-	args := []string{cli, "--resume", sessionID}
-	if err := syscall.Exec(path, args, os.Environ()); err != nil { // #nosec G204 -- cli validated against allowlist above
-		fmt.Fprintf(os.Stderr, "agent-runner: exec %s --resume: %v\n", cli, err)
+	args := []string{resolved, "--resume", sessionID}
+	if err := syscall.Exec(path, args, os.Environ()); err != nil { // #nosec G204 -- cli validated by resolveResumeCLI
+		fmt.Fprintf(os.Stderr, "agent-runner: exec %s --resume: %v\n", resolved, err)
 		return 1
 	}
 	return 0
@@ -458,22 +465,16 @@ func execAgentResume(cli, sessionID string) int {
 // /exit or /quit. Only spawn failures (binary not found, permission error,
 // etc.) are returned as errors.
 func spawnAgentResume(cli, sessionID string) error {
-	if cli == "" {
-		cli = "claude"
-	}
-	if strings.ContainsAny(cli, `/\`) || !allowedResumeCLIs[cli] {
-		return fmt.Errorf("refusing to resume: unsupported agent CLI %q", cli)
-	}
-	path, err := exec.LookPath(cli)
+	resolved, path, err := resolveResumeCLI(cli)
 	if err != nil {
-		return fmt.Errorf("cannot find agent CLI %q in PATH: %w", cli, err)
+		return err
 	}
-	cmd := exec.Command(path, "--resume", sessionID) // #nosec G204 -- cli validated against allowlist above
+	cmd := exec.Command(path, "--resume", sessionID) // #nosec G204 -- cli validated by resolveResumeCLI
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("spawn %s --resume: %w", cli, err)
+		return fmt.Errorf("spawn %s --resume: %w", resolved, err)
 	}
 	_ = cmd.Wait() // non-zero exit is normal (user typed /exit or /quit)
 	return nil
