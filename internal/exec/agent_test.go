@@ -423,6 +423,21 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("headless succeeds when AskUserQuestion and error appear on separate lines", func(t *testing.T) {
+		// Regression: agent summarized work that mentioned AskUserQuestion on one line
+		// and an unrelated Error class name on another — naive combined-text check fires incorrectly.
+		stdout := "uses `--no-ask-user` when `AskUserQuestion` is disallowed\n`CopilotAdapter.InteractiveModeError()`: rejects interactive mode"
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: stdout}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "implement", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected success when AskUserQuestion and error appear on separate lines, got %q", outcome)
+		}
+	})
+
 	t.Run("interactive does not call RunAgent on ProcessRunner", func(t *testing.T) {
 		oldFn := interactiveRunnerFn
 		interactiveRunnerFn = func(_ []string, _ pty.Options) (pty.Result, error) {
