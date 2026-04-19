@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRegistry(t *testing.T) {
@@ -499,23 +503,23 @@ func TestCopilotAdapter(t *testing.T) {
 			Prompt:   "do something",
 			Headless: true,
 		})
-		expected := []string{"copilot", "-p", "do something", "--allow-all-tools", "--output-format", "json"}
+		expected := []string{"copilot", "-p", "do something", "--allow-all", "--autopilot", "-s"}
 		assertArgs(t, expected, args)
 	})
 
-	t.Run("headless always includes --allow-all-tools", func(t *testing.T) {
+	t.Run("headless always includes --allow-all", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:   "do something",
 			Headless: true,
 		})
 		found := false
 		for _, a := range args {
-			if a == "--allow-all-tools" {
+			if a == "--allow-all" {
 				found = true
 			}
 		}
 		if !found {
-			t.Fatalf("expected --allow-all-tools in args, got %v", args)
+			t.Fatalf("expected --allow-all in args, got %v", args)
 		}
 	})
 
@@ -538,7 +542,7 @@ func TestCopilotAdapter(t *testing.T) {
 			Resume:    true,
 			Headless:  true,
 		})
-		expected := []string{"copilot", "-p", "continue", "--allow-all-tools", "--output-format", "json", "--resume=session-abc"}
+		expected := []string{"copilot", "-p", "continue", "--allow-all", "--autopilot", "-s", "--resume=session-abc"}
 		assertArgs(t, expected, args)
 	})
 
@@ -563,7 +567,7 @@ func TestCopilotAdapter(t *testing.T) {
 			Model:    "gpt-5.2",
 			Headless: true,
 		})
-		expected := []string{"copilot", "-p", "do something", "--allow-all-tools", "--output-format", "json", "--model", "gpt-5.2"}
+		expected := []string{"copilot", "-p", "do something", "--allow-all", "--autopilot", "-s", "--model", "gpt-5.2"}
 		assertArgs(t, expected, args)
 	})
 
@@ -588,7 +592,7 @@ func TestCopilotAdapter(t *testing.T) {
 			Effort:   "high",
 			Headless: true,
 		})
-		expected := []string{"copilot", "-p", "do something", "--allow-all-tools", "--output-format", "json", "--reasoning-effort", "high"}
+		expected := []string{"copilot", "-p", "do something", "--allow-all", "--autopilot", "-s", "--reasoning-effort", "high"}
 		assertArgs(t, expected, args)
 	})
 
@@ -625,7 +629,7 @@ func TestCopilotAdapter(t *testing.T) {
 			Headless:        true,
 			DisallowedTools: []string{"AskUserQuestion"},
 		})
-		expected := []string{"copilot", "-p", "do something", "--allow-all-tools", "--output-format", "json", "--no-ask-user"}
+		expected := []string{"copilot", "-p", "do something", "--allow-all", "--autopilot", "-s", "--no-ask-user"}
 		assertArgs(t, expected, args)
 	})
 
@@ -647,61 +651,57 @@ func TestCopilotAdapter(t *testing.T) {
 		}
 	})
 
-	t.Run("discover session ID from result event", func(t *testing.T) {
-		output := `{"type":"message","content":"working"}
-{"type":"result","sessionId":"copilot-session-xyz","exitCode":0}`
-		id := adapter.DiscoverSessionID(DiscoverOptions{
-			ProcessOutput: output,
-			Headless:      true,
+	t.Run("discover session ID from filesystem", func(t *testing.T) {
+		sessionID := "test-session-abc123"
+		fakeHome := t.TempDir()
+		cwd := t.TempDir()
+
+		// Resolve symlinks so os.Getwd() and the workspace.yaml value agree on macOS.
+		canonCwd, err := filepath.EvalSymlinks(cwd)
+		if err != nil {
+			t.Fatalf("EvalSymlinks: %v", err)
+		}
+
+		origHome := os.Getenv("HOME")
+		origCwd, _ := os.Getwd()
+		t.Cleanup(func() {
+			os.Setenv("HOME", origHome)
+			_ = os.Chdir(origCwd)
 		})
-		if id != "copilot-session-xyz" {
-			t.Fatalf("expected 'copilot-session-xyz', got %q", id)
+		os.Setenv("HOME", fakeHome)
+		if err := os.Chdir(canonCwd); err != nil {
+			t.Fatalf("failed to chdir: %v", err)
+		}
+
+		sessionStatePath := filepath.Join(fakeHome, ".copilot", "session-state", sessionID)
+		if err := os.MkdirAll(sessionStatePath, 0o700); err != nil {
+			t.Fatalf("failed to create session-state dir: %v", err)
+		}
+		workspace := fmt.Sprintf("id: %s\ncwd: %s\n", sessionID, canonCwd)
+		if err := os.WriteFile(filepath.Join(sessionStatePath, "workspace.yaml"), []byte(workspace), 0o600); err != nil {
+			t.Fatalf("failed to write workspace.yaml: %v", err)
+		}
+
+		id := adapter.DiscoverSessionID(DiscoverOptions{
+			SpawnTime: time.Now().Add(-time.Second),
+			Headless:  true,
+		})
+		if id != sessionID {
+			t.Fatalf("expected %q, got %q", sessionID, id)
 		}
 	})
 
-	t.Run("discover session ID returns empty when no result event", func(t *testing.T) {
-		output := `{"type":"message","content":"working"}`
+	t.Run("discover session ID returns empty when no matching session", func(t *testing.T) {
+		sessionDir := t.TempDir()
+		os.Setenv("HOME", sessionDir)
+		t.Cleanup(func() { os.Unsetenv("HOME") })
+
 		id := adapter.DiscoverSessionID(DiscoverOptions{
-			ProcessOutput: output,
-			Headless:      true,
+			SpawnTime: time.Now(),
+			Headless:  true,
 		})
 		if id != "" {
 			t.Fatalf("expected empty string, got %q", id)
-		}
-	})
-
-	t.Run("discover session ID returns empty for empty output", func(t *testing.T) {
-		id := adapter.DiscoverSessionID(DiscoverOptions{
-			ProcessOutput: "",
-			Headless:      true,
-		})
-		if id != "" {
-			t.Fatalf("expected empty string, got %q", id)
-		}
-	})
-
-	t.Run("discover session ID succeeds when long line precedes result event", func(t *testing.T) {
-		// Default bufio.Scanner token limit is 64 KiB; use a line longer than that
-		// to verify the expanded buffer allows the result event to be found.
-		longLine := `{"type":"message","content":"` + strings.Repeat("x", 70000) + `"}`
-		output := longLine + "\n" + `{"type":"result","sessionId":"copilot-long-line-test","exitCode":0}`
-		id := adapter.DiscoverSessionID(DiscoverOptions{
-			ProcessOutput: output,
-			Headless:      true,
-		})
-		if id != "copilot-long-line-test" {
-			t.Fatalf("expected 'copilot-long-line-test', got %q", id)
-		}
-	})
-
-	t.Run("resumed session ID returned from result event", func(t *testing.T) {
-		output := `{"type":"result","sessionId":"copilot-session-xyz","exitCode":0}`
-		id := adapter.DiscoverSessionID(DiscoverOptions{
-			ProcessOutput: output,
-			Headless:      true,
-		})
-		if id != "copilot-session-xyz" {
-			t.Fatalf("expected 'copilot-session-xyz', got %q", id)
 		}
 	})
 
