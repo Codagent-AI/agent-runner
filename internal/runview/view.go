@@ -75,9 +75,8 @@ func (m *Model) renderRule() string {
 func (m *Model) renderTwoColumn(children []*StepNode) string {
 	rows := m.buildStepRows(children)
 
-	// Cap the list column so one pathologically long row (e.g. an iteration
-	// binding value that happens to be a full file path) can't starve the
-	// detail pane. Prefer at most ~45% of the terminal for the list.
+	// Cap the list column so one pathologically long row can't starve the
+	// log pane. Prefer at most ~45% of the terminal for the list.
 	listCap := m.termWidth / 2
 	if listCap < 30 {
 		listCap = 30
@@ -101,11 +100,10 @@ func (m *Model) renderTwoColumn(children []*StepNode) string {
 
 	listWidth := maxRowWidth + 4
 	// Divider "│ " consumes 2 columns between the panes.
-	detailWidth := m.termWidth - listWidth - 2 - 4
-	if detailWidth < 20 {
-		detailWidth = 20
+	rightWidth := m.termWidth - listWidth - 2 - 4
+	if rightWidth < 20 {
+		rightWidth = 20
 	}
-	m.detailWidth = detailWidth
 	divider := tuistyle.DividerStyle.Render("│ ")
 
 	bodyHeight := m.bodyHeight()
@@ -113,18 +111,27 @@ func (m *Model) renderTwoColumn(children []*StepNode) string {
 		bodyHeight = 20
 	}
 
-	sel := m.selectedNode()
-	detail := m.renderDetail(sel)
-	detailLines := strings.Split(detail, "\n")
+	// Build log lines for the right pane.
+	logLines, _ := buildLogLines(
+		children,
+		m.pendingSelected(),
+		rightWidth,
+		m.loadedFull,
+		m.pulsePhase,
+		m.running,
+		m.resolverCfg,
+	)
 
-	offset := m.detailOffset
-	maxOffset := max(0, len(detailLines)-bodyHeight)
+	maxOffset := max(0, len(logLines)-bodyHeight)
+	offset := m.logOffset
 	if offset > maxOffset {
 		offset = maxOffset
 	}
-	visibleDetail := detailLines
-	if offset > 0 && offset < len(detailLines) {
-		visibleDetail = detailLines[offset:]
+	var visibleLines []string
+	if offset > 0 && offset <= len(logLines) {
+		visibleLines = logLines[offset:]
+	} else {
+		visibleLines = logLines
 	}
 
 	var b strings.Builder
@@ -139,8 +146,8 @@ func (m *Model) renderTwoColumn(children []*StepNode) string {
 		}
 
 		rightPart := ""
-		if i < len(visibleDetail) {
-			rightPart = fitDetailLine(visibleDetail[i], detailWidth)
+		if i < len(visibleLines) {
+			rightPart = fitDetailLine(visibleLines[i], rightWidth)
 		}
 
 		b.WriteString(leftPart)
@@ -174,7 +181,7 @@ func (m *Model) renderStepRow(n *StepNode, selected bool) string {
 
 	switch n.Type {
 	case NodeLoop:
-		total := m.loopTotal(n)
+		total := loopTotal(n)
 		if total > 0 {
 			suffix = fmt.Sprintf(" (%d/%d)", n.IterationsCompleted, total)
 		}
@@ -255,36 +262,29 @@ func (m *Model) renderHelpBar() string {
 		case NodeLoop, NodeSubWorkflow, NodeIteration:
 			parts = append(parts, "enter drill")
 		case NodeHeadlessAgent, NodeInteractiveAgent:
-			// Resume is only meaningful after the run has ended — while the
-			// workflow is live, the agent session is owned by the runner and
-			// cannot be attached to by the user.
 			if sel.SessionID != "" && !m.running {
 				parts = append(parts, "enter resume")
 			}
 		}
 	}
 
-	if m.selectedNodeHasTruncatedOutput() {
-		parts = append(parts, "g load full")
+	if !m.running {
+		parts = append(parts, "esc back")
 	}
 
-	if m.running && !m.autoFollow {
-		parts = append(parts, "l live")
-	}
-	if !m.tailFollow {
-		parts = append(parts, "t tail")
-	}
 	if m.canResumeRun() {
 		parts = append(parts, "r resume")
 	}
 
-	parts = append(parts, "? legend")
-	// "esc back" exits the runview; while a live workflow is running there's
-	// nothing to go back to (the live TUI is the top-level program) so hide
-	// the hint until the run completes.
-	if !m.running {
-		parts = append(parts, "esc back")
+	if m.selectedNodeHasTruncatedOutput() {
+		parts = append(parts, "g full output")
 	}
+
+	if !m.autoFollow {
+		parts = append(parts, "l follow")
+	}
+
+	parts = append(parts, "? legend")
 	parts = append(parts, "q quit")
 
 	return "  " + tuistyle.HelpStyle.Render(strings.Join(parts, "   "))
@@ -295,7 +295,7 @@ func (m *Model) selectedNodeHasTruncatedOutput() bool {
 	if n == nil {
 		return false
 	}
-	if m.loadedFull[n] {
+	if m.loadedFull[n.ID] {
 		return false
 	}
 	if n.Type != NodeShell && n.Type != NodeHeadlessAgent {
@@ -303,24 +303,6 @@ func (m *Model) selectedNodeHasTruncatedOutput() bool {
 	}
 	t := truncateOutput(n.Stdout)
 	return t.Truncated
-}
-
-// fitDetailLine fits one detail-pane line into width visible columns. If the
-// line already fits, it is returned unchanged (preserving any embedded ANSI
-// escapes). If it overflows, styling is stripped and the plain text is
-// truncated with an ellipsis — truncating the styled form risks cutting an
-// ANSI escape in half, which corrupts rendering for everything that follows.
-//
-// Trailing padding is not emitted: each row ends with a newline that resets
-// the terminal cursor to column 0, so column alignment is unaffected.
-func fitDetailLine(s string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	if lipgloss.Width(s) <= width {
-		return s
-	}
-	return runewidth.Truncate(tuistyle.Sanitize(s), width, "…")
 }
 
 func (m *Model) bodyHeight() int {
@@ -383,7 +365,6 @@ func (m *Model) renderLegend() string {
 	b.WriteString(tuistyle.SelectedStyle.Render("Live Navigation"))
 	b.WriteString("\n\n")
 	b.WriteString("  l  jump to active step and resume auto-follow\n")
-	b.WriteString("  t  jump to output tail and resume tail-follow\n")
 
 	b.WriteString("\n\n  ")
 	b.WriteString(tuistyle.HelpStyle.Render("press ? or esc to dismiss"))
