@@ -297,7 +297,9 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 	}
 
 	if s.SkipIf != "" && s.SkipIf != "previous_success" {
-		return fmt.Errorf(`invalid skip_if value: %q`, s.SkipIf)
+		if cmd, ok := strings.CutPrefix(s.SkipIf, "sh:"); !ok || strings.TrimSpace(cmd) == "" {
+			return fmt.Errorf(`invalid skip_if value: %q`, s.SkipIf)
+		}
 	}
 
 	if s.BreakIf != "" && s.BreakIf != "success" && s.BreakIf != "failure" {

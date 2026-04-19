@@ -348,6 +348,17 @@ Skip a step based on the previous step's outcome:
 
 When `skip_if: previous_success` is set, the step is skipped if the previous step succeeded. This pairs with `continue_on_failure` to create conditional execution: run the fix step only when the validator fails.
 
+Alternatively, use `skip_if: 'sh: <command>'` to skip based on an arbitrary shell expression. The command is interpolated with `{{params}}` and captured vars, then run through `/bin/sh`. The step is skipped when the command exits 0.
+
+```yaml
+- id: session-report
+  session: resume
+  prompt: "Run the session-report skill."
+  skip_if: 'sh: test "{{run_session_report}}" != "true"'
+```
+
+Unlike `previous_success`, the shell form is self-contained and is allowed on the first step in a scope (workflow or loop body).
+
 ## Output capture
 
 Shell steps can capture their stdout into a named variable:

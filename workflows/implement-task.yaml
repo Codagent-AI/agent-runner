@@ -4,6 +4,9 @@ description: "Implement a single task: agent step then validator retry"
 params:
   - name: task_file
     required: true
+  - name: run_session_report
+    required: false
+    default: "false"
 
 steps:
   - id: implement
@@ -44,3 +47,4 @@ steps:
     session: resume
     prompt: |
       Run the codagent:session-report skill against the task file {{task_file}}.
+    skip_if: 'sh: test "{{run_session_report}}" != "true"'

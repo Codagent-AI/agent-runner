@@ -12,7 +12,6 @@ import (
 	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/engine"
 	"github.com/codagent/agent-runner/internal/exec"
-	"github.com/codagent/agent-runner/internal/flowctl"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/stateio"
@@ -319,7 +318,12 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 	for i := startIndex; i < len(rs.workflow.Steps); i++ {
 		step := &rs.workflow.Steps[i]
 
-		if flowctl.ShouldSkip(step.SkipIf, rs.ctx.LastStepOutcome) {
+		skip, skipErr := exec.ShouldSkipStep(step.SkipIf, rs.ctx.LastStepOutcome, rs.ctx, rs.runner)
+		if skipErr != nil {
+			rs.log.Printf("\nagent-runner: step %q skip_if error: %v\n", step.ID, skipErr)
+			return ResultFailed
+		}
+		if skip {
 			emitSkippedStep(rs, step, i)
 			continue
 		}
