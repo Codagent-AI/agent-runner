@@ -377,33 +377,50 @@ func runLiveTUI(h *runner.RunHandle) int {
 		return 1
 	}
 
-	// If the user pressed enter on a completed agent step, the TUI quit with
-	// resume metadata set on the Model. Wait for the runner goroutine so its
-	// lock is released before we hand the terminal to the agent CLI, then
-	// exec — this replaces the current process and does not return.
-	if sessionID := rv.ResumeSessionID(); sessionID != "" {
-		<-resultCh
-		return execAgentResume(rv.ResumeAgentCLI(), sessionID)
-	}
-
-	// If the runner finished before the TUI exited, map its result to an exit
+	// If the user did not request a resume, map the runner result to an exit
 	// code. If the user confirmed quit while the workflow was still running,
 	// resultCh has no value yet — keep the documented orphan-on-quit behavior
 	// and return 0 without blocking on the lingering goroutine.
-	select {
-	case runResult := <-resultCh:
-		if runResult != runner.ResultSuccess {
+	if rv.ResumeSessionID() == "" {
+		select {
+		case runResult := <-resultCh:
+			if runResult != runner.ResultSuccess {
+				return 1
+			}
+		default:
+		}
+		return 0
+	}
+
+	// The user pressed enter on a completed agent step. Wait for the runner
+	// goroutine so its run lock is released before handing the terminal to the
+	// agent CLI, then enter the spawn-and-reenter loop.
+	<-resultCh
+
+	for rv.ResumeSessionID() != "" {
+		spawnErr := spawnAgentResume(rv.ResumeAgentCLI(), rv.ResumeSessionID())
+		var errMsg string
+		if spawnErr != nil {
+			errMsg = spawnErr.Error()
+		}
+		rv, err = runview.NewForReentry(h.SessionDir, h.ProjectDir, errMsg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 			return 1
 		}
-	default:
+		p = tea.NewProgram(rv, tea.WithAltScreen(), tea.WithMouseCellMotion())
+		if _, err = p.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+			return 1
+		}
 	}
 	return 0
 }
 
-// allowedResumeCLIs bounds execAgentResume's `cli` argument. Resume metadata
-// originates from audit logs and workflow YAML — both attacker-influenceable
-// when inspecting runs from untrusted sources — and the value flows into
-// syscall.Exec with the full environment. The allowlist mirrors
+// allowedResumeCLIs bounds resume CLI arguments. Resume metadata originates
+// from audit logs and workflow YAML — both attacker-influenceable when
+// inspecting runs from untrusted sources — and the value flows into
+// syscall.Exec / exec.Command with the full environment. The allowlist mirrors
 // internal/config.validCLI; keep them in sync when adding new agent CLIs.
 var allowedResumeCLIs = map[string]bool{
 	"claude": true,
@@ -411,11 +428,8 @@ var allowedResumeCLIs = map[string]bool{
 }
 
 // execAgentResume replaces the current process with `<cli> --resume <session-id>`
-// so the agent CLI inherits the terminal directly. This is the runview resume
-// path: it resumes an individual agent conversation, NOT an agent-runner
-// workflow run — despite both flags being spelled `--resume`, they live in
-// different subsystems with different ID spaces (agent CLI session UUID vs.
-// agent-runner run directory name).
+// so the agent CLI inherits the terminal directly. Used by the snapshot (--list /
+// --inspect) path where there is no run view to return to.
 func execAgentResume(cli, sessionID string) int {
 	if cli == "" {
 		cli = "claude"
@@ -435,6 +449,34 @@ func execAgentResume(cli, sessionID string) int {
 		return 1
 	}
 	return 0
+}
+
+// spawnAgentResume spawns `<cli> --resume <session-id>` as a subprocess and
+// waits for it to exit. Unlike execAgentResume it does not replace the current
+// process, so the caller can re-enter the run view after the CLI exits. A
+// non-zero CLI exit code is not treated as an error — the user may have typed
+// /exit or /quit. Only spawn failures (binary not found, permission error,
+// etc.) are returned as errors.
+func spawnAgentResume(cli, sessionID string) error {
+	if cli == "" {
+		cli = "claude"
+	}
+	if strings.ContainsAny(cli, `/\`) || !allowedResumeCLIs[cli] {
+		return fmt.Errorf("refusing to resume: unsupported agent CLI %q", cli)
+	}
+	path, err := exec.LookPath(cli)
+	if err != nil {
+		return fmt.Errorf("cannot find agent CLI %q in PATH: %w", cli, err)
+	}
+	cmd := exec.Command(path, "--resume", sessionID) // #nosec G204 -- cli validated against allowlist above
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("spawn %s --resume: %w", cli, err)
+	}
+	_ = cmd.Wait() // non-zero exit is normal (user typed /exit or /quit)
+	return nil
 }
 
 // resolveInspectSession resolves a run ID to its session and project

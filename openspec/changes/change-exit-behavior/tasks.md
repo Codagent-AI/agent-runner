@@ -1,3 +1,3 @@
-- [ ] Implement the change described by these files:
+- [x] Implement the change described by these files:
   - [proposal.md](proposal.md)
   - [specs/view-run/spec.md](specs/view-run/spec.md)

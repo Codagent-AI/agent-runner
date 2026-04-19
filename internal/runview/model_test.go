@@ -1372,6 +1372,87 @@ func TestModel_HeadlessDetail_LongLine_Wraps(t *testing.T) {
 	}
 }
 
+// ---- NewForReentry tests ----
+
+func TestNewForReentry_HasCorrectState(t *testing.T) {
+	sessionDir := t.TempDir()
+	m, err := NewForReentry(sessionDir, "", "")
+	if err != nil {
+		t.Fatalf("NewForReentry: %v", err)
+	}
+	if m.running {
+		t.Error("running should be false in NewForReentry model")
+	}
+	if m.autoFollow {
+		t.Error("autoFollow should be false in NewForReentry model")
+	}
+	if m.tailFollow {
+		t.Error("tailFollow should be false in NewForReentry model")
+	}
+	if m.entered != FromLiveRun {
+		t.Errorf("entered = %d, want FromLiveRun (%d)", m.entered, FromLiveRun)
+	}
+}
+
+func TestNewForReentry_SpawnError_ShowsInView(t *testing.T) {
+	sessionDir := t.TempDir()
+	m, err := NewForReentry(sessionDir, "", "spawn failed: claude: not found in PATH")
+	if err != nil {
+		t.Fatalf("NewForReentry: %v", err)
+	}
+	m.termWidth = 120
+	m.termHeight = 40
+	v := m.View()
+	if !containsString(v, "not found") {
+		t.Errorf("view should surface spawn error; got: %q", v)
+	}
+}
+
+func TestNewForReentry_NoSpawnError_NoNotice(t *testing.T) {
+	sessionDir := t.TempDir()
+	m, err := NewForReentry(sessionDir, "", "")
+	if err != nil {
+		t.Fatalf("NewForReentry: %v", err)
+	}
+	if m.notice != "" {
+		t.Errorf("notice should be empty when no spawn error; got %q", m.notice)
+	}
+}
+
+func TestNewForReentry_Enter_AgentStep_EmitsResumeMsg(t *testing.T) {
+	sessionDir := t.TempDir()
+	m, err := NewForReentry(sessionDir, "", "")
+	if err != nil {
+		t.Fatalf("NewForReentry: %v", err)
+	}
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	agent := &StepNode{
+		ID:        "implement",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusSuccess,
+		Parent:    root,
+		AgentCLI:  "claude",
+		SessionID: "sess-reentry",
+	}
+	root.Children = []*StepNode{agent}
+	m.tree = &Tree{Root: root}
+	m.path = []*StepNode{root}
+	m.cursor = 0
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on agent step should produce a cmd")
+	}
+	msg := cmd()
+	resume, ok := msg.(ResumeMsg)
+	if !ok {
+		t.Fatalf("expected ResumeMsg, got %T", msg)
+	}
+	if resume.SessionID != "sess-reentry" {
+		t.Fatalf("session ID = %q, want %q", resume.SessionID, "sess-reentry")
+	}
+}
+
 func TestFindFailedLeaf(t *testing.T) {
 	t.Run("finds failed shell step", func(t *testing.T) {
 		root := &StepNode{ID: "root", Type: NodeRoot}

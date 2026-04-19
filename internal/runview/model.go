@@ -61,6 +61,7 @@ type Model struct {
 	detailWidth int
 	showLegend  bool
 	loadErr     string
+	notice      string // transient message shown below the step list (e.g. spawn error)
 
 	resolverCfg ResolverConfig
 	startTime   time.Time
@@ -164,6 +165,24 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 		tree.ApplyEvent(e)
 	}
 
+	return m, nil
+}
+
+// NewForReentry creates a Model for re-entering the run view after a resumed
+// agent CLI subprocess has exited. It re-reads audit and state files from
+// sessionDir so any events produced by the resumed session appear. If
+// spawnErr is non-empty, the error is surfaced to the user in the view.
+func NewForReentry(sessionDir, projectDir, spawnErr string) (*Model, error) {
+	m, err := New(sessionDir, projectDir, FromLiveRun)
+	if err != nil {
+		return nil, err
+	}
+	m.running = false
+	m.autoFollow = false
+	m.tailFollow = false
+	if spawnErr != "" {
+		m.notice = spawnErr
+	}
 	return m, nil
 }
 
