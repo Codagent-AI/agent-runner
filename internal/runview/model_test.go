@@ -1,6 +1,7 @@
 package runview
 
 import (
+	"errors"
 	"math"
 	"os"
 	"strings"
@@ -1631,6 +1632,106 @@ func TestModel_HeadlessDetail_LongLine_Wraps(t *testing.T) {
 	outLines := strings.Count(detail, "abcdef")
 	if outLines < 2 {
 		t.Errorf("expected multiple wrapped segments containing 'abcdef', got %d: %q", outLines, detail)
+	}
+}
+
+// ---- NewForReentry tests ----
+
+func TestNewForReentry_HasCorrectState(t *testing.T) {
+	sessionDir := t.TempDir()
+	m, err := NewForReentry(sessionDir, "", FromLiveRun, nil)
+	if err != nil {
+		t.Fatalf("NewForReentry: %v", err)
+	}
+	if m.running {
+		t.Error("running should be false in NewForReentry model")
+	}
+	if m.autoFollow {
+		t.Error("autoFollow should be false in NewForReentry model")
+	}
+	if m.tailFollow {
+		t.Error("tailFollow should be false in NewForReentry model")
+	}
+	if m.entered != FromLiveRun {
+		t.Errorf("entered = %d, want FromLiveRun (%d)", m.entered, FromLiveRun)
+	}
+}
+
+func TestNewForReentry_PreservesProvidedEntered(t *testing.T) {
+	for _, entered := range []Entered{FromList, FromInspect, FromLiveRun} {
+		sessionDir := t.TempDir()
+		m, err := NewForReentry(sessionDir, "", entered, nil)
+		if err != nil {
+			t.Fatalf("NewForReentry(%d): %v", entered, err)
+		}
+		if m.entered != entered {
+			t.Errorf("entered = %d, want %d", m.entered, entered)
+		}
+		if m.Entered() != entered {
+			t.Errorf("Entered() = %d, want %d", m.Entered(), entered)
+		}
+		if m.SessionDir() != sessionDir {
+			t.Errorf("SessionDir() = %q, want %q", m.SessionDir(), sessionDir)
+		}
+	}
+}
+
+func TestNewForReentry_SpawnError_ShowsInView(t *testing.T) {
+	sessionDir := t.TempDir()
+	m, err := NewForReentry(sessionDir, "", FromLiveRun, errors.New("spawn failed: claude: not found in PATH"))
+	if err != nil {
+		t.Fatalf("NewForReentry: %v", err)
+	}
+	m.termWidth = 120
+	m.termHeight = 40
+	v := m.View()
+	if !containsString(v, "not found") {
+		t.Errorf("view should surface spawn error; got: %q", v)
+	}
+}
+
+func TestNewForReentry_NoSpawnError_NoNotice(t *testing.T) {
+	sessionDir := t.TempDir()
+	m, err := NewForReentry(sessionDir, "", FromLiveRun, nil)
+	if err != nil {
+		t.Fatalf("NewForReentry: %v", err)
+	}
+	if m.notice != "" {
+		t.Errorf("notice should be empty when no spawn error; got %q", m.notice)
+	}
+}
+
+func TestNewForReentry_Enter_AgentStep_EmitsResumeMsg(t *testing.T) {
+	sessionDir := t.TempDir()
+	m, err := NewForReentry(sessionDir, "", FromLiveRun, nil)
+	if err != nil {
+		t.Fatalf("NewForReentry: %v", err)
+	}
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	agent := &StepNode{
+		ID:        "implement",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusSuccess,
+		Parent:    root,
+		AgentCLI:  "claude",
+		SessionID: "sess-reentry",
+	}
+	root.Children = []*StepNode{agent}
+	m.tree = &Tree{Root: root}
+	m.path = []*StepNode{root}
+	m.cursor = 0
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on agent step should produce a cmd")
+	}
+	msg := cmd()
+	resume, ok := msg.(ResumeMsg)
+	if !ok {
+		t.Fatalf("expected ResumeMsg, got %T", msg)
+	}
+	if resume.SessionID != "sess-reentry" {
+		t.Fatalf("session ID = %q, want %q", resume.SessionID, "sess-reentry")
 	}
 }
 

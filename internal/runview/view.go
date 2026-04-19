@@ -54,6 +54,10 @@ func (m *Model) View() string {
 		b.WriteString("\n  ")
 		b.WriteString(tuistyle.DimStyle.Render("Error: " + m.loadErr))
 	}
+	if m.notice != "" {
+		b.WriteString("\n  ")
+		b.WriteString(tuistyle.DimStyle.Render(m.notice))
+	}
 
 	b.WriteString("\n")
 	b.WriteString(m.renderRule())

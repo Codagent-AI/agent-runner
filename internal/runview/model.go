@@ -68,6 +68,7 @@ type Model struct {
 	detailWidth int
 	showLegend  bool
 	loadErr     string
+	notice      string // transient message shown below the step list (e.g. spawn error)
 
 	resolverCfg ResolverConfig
 	startTime   time.Time
@@ -96,6 +97,15 @@ func (m *Model) ResumeAgentCLI() string { return m.resumeAgentCLI }
 // ResumeSessionID returns the agent CLI session ID captured from a ResumeMsg
 // in live-run mode. Empty when no resume was requested.
 func (m *Model) ResumeSessionID() string { return m.resumeSessionID }
+
+// SessionDir returns the session directory the Model was constructed for.
+func (m *Model) SessionDir() string { return m.sessionDir }
+
+// ProjectDir returns the project directory the Model was constructed for.
+func (m *Model) ProjectDir() string { return m.projectDir }
+
+// Entered returns the entry path used to construct the Model.
+func (m *Model) Entered() Entered { return m.entered }
 
 // New constructs a runview Model from a session directory.
 func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
@@ -171,6 +181,26 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 		tree.ApplyEvent(e)
 	}
 
+	return m, nil
+}
+
+// NewForReentry creates a Model for re-entering the run view after a resumed
+// agent CLI subprocess has exited. It re-reads audit and state files from
+// sessionDir so any events produced by the resumed session appear. The
+// entered mode is preserved from the original entry path (FromLiveRun,
+// FromList, or FromInspect) so back-navigation still works. A non-nil
+// spawnErr is surfaced to the user in the view.
+func NewForReentry(sessionDir, projectDir string, entered Entered, spawnErr error) (*Model, error) {
+	m, err := New(sessionDir, projectDir, entered)
+	if err != nil {
+		return nil, err
+	}
+	m.running = false
+	m.autoFollow = false
+	m.tailFollow = false
+	if spawnErr != nil {
+		m.notice = spawnErr.Error()
+	}
 	return m, nil
 }
 
