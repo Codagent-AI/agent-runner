@@ -234,6 +234,49 @@ func TestValidation_InvalidEffort(t *testing.T) {
 	}
 }
 
+func TestValidation_InvalidCLI(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `profiles:
+  bad:
+    default_mode: headless
+    cli: unknown
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadOrGenerate(path)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "invalid cli") {
+		t.Fatalf("expected error about invalid cli, got: %v", err)
+	}
+}
+
+func TestValidation_CopilotCLIAccepted(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `profiles:
+  copilot_base:
+    default_mode: headless
+    cli: copilot
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadOrGenerate(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	p := cfg.Profiles["copilot_base"]
+	if p == nil || p.CLI != "copilot" {
+		t.Fatalf("expected copilot profile, got %+v", p)
+	}
+}
+
 func TestValidation_InvalidDefaultMode(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

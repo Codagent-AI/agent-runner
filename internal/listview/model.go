@@ -88,9 +88,12 @@ type ViewRunMsg struct {
 
 // ResumeRunMsg asks the shell to exit the TUI and exec `agent-runner --resume
 // <run-id>`, resuming an interrupted workflow run. RunID is the session
-// directory name (same semantics as runview.ResumeRunMsg).
+// directory name (same semantics as runview.ResumeRunMsg). ProjectDir is the
+// original cwd of the run's project; the caller must chdir there before
+// re-exec so that resolveResumeStatePath looks in the correct project tree.
 type ResumeRunMsg struct {
-	RunID string
+	RunID      string
+	ProjectDir string
 }
 
 type refreshMsg = tuistyle.RefreshMsg
@@ -461,7 +464,31 @@ func (m *Model) handleResumeRun() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	runID := r.SessionID
-	return m, func() tea.Msg { return ResumeRunMsg{RunID: runID} }
+	projectDir := m.cursorProjectDir()
+	return m, func() tea.Msg { return ResumeRunMsg{RunID: runID, ProjectDir: projectDir} }
+}
+
+// cursorProjectDir returns the original cwd (project directory) for the run
+// currently under the cursor. This is the directory the caller must be in for
+// resolveResumeStatePath to locate the run's state file.
+func (m *Model) cursorProjectDir() string {
+	switch m.activeTab {
+	case tabCurrentDir:
+		return m.cwd
+	case tabWorktrees:
+		if m.worktreeTab.subView == subViewRunList {
+			if wt := m.selectedWorktree(); wt != nil {
+				return wt.Path
+			}
+		}
+	case tabAll:
+		if m.allTab.subView == subViewRunList {
+			if d := m.selectedAllDir(); d != nil {
+				return d.Path
+			}
+		}
+	}
+	return ""
 }
 
 // cursorInactiveRun returns the run under the cursor when it is inactive,

@@ -44,9 +44,10 @@ func pressKey(m *Model, key string) (*Model, tea.Cmd) {
 	return newModel.(*Model), cmd
 }
 
-// r on inactive run emits ResumeRunMsg.
+// r on inactive run emits ResumeRunMsg with the model's cwd as ProjectDir.
 func TestListModel_R_InactiveRun_EmitsResumeRunMsg(t *testing.T) {
 	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.cwd = "/my/project"
 
 	_, cmd := pressKey(m, "r")
 	if cmd == nil {
@@ -60,6 +61,9 @@ func TestListModel_R_InactiveRun_EmitsResumeRunMsg(t *testing.T) {
 	want := "my-run-2026-04-19T10-00-00Z"
 	if rr.RunID != want {
 		t.Fatalf("RunID = %q, want %q", rr.RunID, want)
+	}
+	if rr.ProjectDir != "/my/project" {
+		t.Fatalf("ProjectDir = %q, want %q", rr.ProjectDir, "/my/project")
 	}
 }
 
@@ -96,7 +100,7 @@ func TestListModel_R_WorktreePickerIgnored(t *testing.T) {
 	}
 }
 
-// r on worktrees run-list with inactive run emits ResumeRunMsg.
+// r on worktrees run-list with inactive run emits ResumeRunMsg with the worktree path as ProjectDir.
 func TestListModel_R_WorktreeRunList_InactiveRun_EmitsResumeRunMsg(t *testing.T) {
 	r := inactiveRun()
 	m := newTestListModel(nil)
@@ -119,9 +123,12 @@ func TestListModel_R_WorktreeRunList_InactiveRun_EmitsResumeRunMsg(t *testing.T)
 	if rr.RunID != r.SessionID {
 		t.Fatalf("RunID = %q, want %q", rr.RunID, r.SessionID)
 	}
+	if rr.ProjectDir != "/repo" {
+		t.Fatalf("ProjectDir = %q, want %q", rr.ProjectDir, "/repo")
+	}
 }
 
-// r on all-tab run-list with inactive run emits ResumeRunMsg.
+// r on all-tab run-list with inactive run emits ResumeRunMsg with the dir's path as ProjectDir.
 func TestListModel_R_AllTabRunList_InactiveRun_EmitsResumeRunMsg(t *testing.T) {
 	r := inactiveRun()
 	m := newTestListModel(nil)
@@ -143,5 +150,8 @@ func TestListModel_R_AllTabRunList_InactiveRun_EmitsResumeRunMsg(t *testing.T) {
 	}
 	if rr.RunID != r.SessionID {
 		t.Fatalf("RunID = %q, want %q", rr.RunID, r.SessionID)
+	}
+	if rr.ProjectDir != "/some/path" {
+		t.Fatalf("ProjectDir = %q, want %q", rr.ProjectDir, "/some/path")
 	}
 }

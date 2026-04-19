@@ -6,11 +6,15 @@ Defines the CLI adapter abstraction for constructing CLI invocation args across 
 ## Requirements
 ### Requirement: CLI adapter registry
 
-The runner SHALL maintain a hard-coded registry of known CLI adapters. Each adapter SHALL be identified by a string key (e.g., `claude`, `codex`). The registry is compile-time — adding a new CLI requires a code change.
+The runner SHALL maintain a hard-coded registry of known CLI adapters. Each adapter SHALL be identified by a string key (e.g., `claude`, `codex`, `copilot`). The registry is compile-time — adding a new CLI requires a code change.
 
 #### Scenario: Known CLI resolved
 - **WHEN** a step specifies `cli: claude`
 - **THEN** the runner resolves the Claude adapter from the registry
+
+#### Scenario: Copilot CLI resolved
+- **WHEN** a step specifies `cli: copilot`
+- **THEN** the runner resolves the Copilot adapter from the registry
 
 #### Scenario: Unknown CLI requested
 - **WHEN** a step specifies a `cli` value not in the registry
@@ -18,7 +22,7 @@ The runner SHALL maintain a hard-coded registry of known CLI adapters. Each adap
 
 ### Requirement: Adapter system prompt capability
 
-Each adapter SHALL declare whether it supports native system prompt delivery. The Claude adapter SHALL declare support. The Codex adapter SHALL declare no support.
+Each adapter SHALL declare whether it supports native system prompt delivery. The Claude adapter SHALL declare support. The Codex adapter SHALL declare no support. The Copilot adapter SHALL declare no support.
 
 Adapters declare support via a `SupportsSystemPrompt() bool` method on the `Adapter` interface. The caller queries this before constructing `BuildArgsInput`, setting the `SystemPrompt` field only when the adapter supports it.
 
@@ -28,6 +32,10 @@ Adapters declare support via a `SupportsSystemPrompt() bool` method on the `Adap
 
 #### Scenario: Codex adapter declares no support
 - **WHEN** the runner queries the Codex adapter for system prompt capability
+- **THEN** the adapter indicates it does not support native system prompts
+
+#### Scenario: Copilot adapter declares no support
+- **WHEN** the runner queries the Copilot adapter for system prompt capability
 - **THEN** the adapter indicates it does not support native system prompts
 
 ### Requirement: Adapter arg construction
