@@ -1,0 +1,4 @@
+- [ ] Implement the change described by these files:
+  - [proposal.md](proposal.md)
+  - [specs/copilot-cli-support/spec.md](specs/copilot-cli-support/spec.md)
+  - [specs/cli-adapter/spec.md](specs/cli-adapter/spec.md)
