@@ -42,7 +42,7 @@ steps:
       ambiguous findings, and surface context gaps in your final summary.
 
   - id: run-validator
-    workflow: run-validator.yaml
+    workflow: ../run-validator.yaml
 
   - id: archive
     command: openspec archive "{{change_name}}" --yes
