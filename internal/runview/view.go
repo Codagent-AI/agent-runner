@@ -166,7 +166,7 @@ func (m *Model) renderStepRow(n *StepNode, selected bool) string {
 	glyph := m.statusGlyph(n)
 	name := n.ID
 	suffix := ""
-	typeSuffix := ""
+	typePrefix := ""
 
 	switch n.Type {
 	case NodeLoop:
@@ -180,7 +180,7 @@ func (m *Model) renderStepRow(n *StepNode, selected bool) string {
 			name += "   " + filepath.Base(n.BindingValue)
 		}
 	default:
-		typeSuffix = typeGlyph(n.Type)
+		typePrefix = typeGlyph(n.Type)
 	}
 
 	style := tuistyle.DimStyle
@@ -191,11 +191,11 @@ func (m *Model) renderStepRow(n *StepNode, selected bool) string {
 		style = tuistyle.StatusFailed
 	}
 
-	out := prefix + glyph + "  " + style.Render(name+suffix)
-	if typeSuffix != "" {
-		out += " " + typeSuffix
+	typeCol := "   "
+	if typePrefix != "" {
+		typeCol = typePrefix + "  "
 	}
-	return out
+	return prefix + typeCol + style.Render(name+suffix) + "  " + glyph
 }
 
 func (m *Model) statusGlyph(n *StepNode) string {
