@@ -151,11 +151,10 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 // construct contexts without a session dir do not accidentally expose an
 // empty {{session_dir}}.
 func (c *ExecutionContext) BuiltinVars() map[string]string {
-	vars := make(map[string]string)
-	if c.SessionDir != "" {
-		vars["session_dir"] = c.SessionDir
+	if c.SessionDir == "" {
+		return nil
 	}
-	return vars
+	return map[string]string{"session_dir": c.SessionDir}
 }
 
 // LoopIterationOptions configures a new loop iteration context.

@@ -349,29 +349,27 @@ func (m *Model) renderAgentOutputBlock(b *strings.Builder, n *StepNode) {
 
 	if stdout != "" && stderr != "" {
 		detailLabel(b, "agent (stdout):")
-		m.renderAgentLines(b, n, stdout, "stdout")
+		m.renderAgentLines(b, n, stdout)
 		b.WriteString("\n")
 		detailLabel(b, "agent (stderr):")
-		m.renderAgentLines(b, n, stderr, "stderr")
+		m.renderAgentLines(b, n, stderr)
 		return
 	}
 
 	text := stdout
-	stream := "stdout"
 	if text == "" {
 		text = stderr
-		stream = "stderr"
 	}
 	detailLabel(b, "agent:")
-	m.renderAgentLines(b, n, text, stream)
+	m.renderAgentLines(b, n, text)
 }
 
 // renderAgentLines emits agent output lines word-wrapped to the detail
 // column, without the "| " gutter used for shell output. When the user has
 // not loaded the full output, the block is tail-truncated with the shared
 // truncateOutput helper and prefixed with a "(truncated…)" banner.
-func (m *Model) renderAgentLines(b *strings.Builder, n *StepNode, output, stream string) {
-	fullLoaded := m.loadedFull[n] && stream == "stdout"
+func (m *Model) renderAgentLines(b *strings.Builder, n *StepNode, output string) {
+	fullLoaded := m.loadedFull[n]
 	var t truncatedOutput
 	if fullLoaded {
 		lines := strings.Split(output, "\n")
@@ -408,7 +406,7 @@ func (m *Model) renderOutputBlock(b *strings.Builder, n *StepNode, label, output
 		return
 	}
 
-	fullLoaded := m.loadedFull[n] && label == "stdout"
+	fullLoaded := m.loadedFull[n]
 	var t truncatedOutput
 	if fullLoaded {
 		lines := strings.Split(output, "\n")
