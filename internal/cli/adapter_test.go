@@ -680,6 +680,20 @@ func TestCopilotAdapter(t *testing.T) {
 		}
 	})
 
+	t.Run("discover session ID succeeds when long line precedes result event", func(t *testing.T) {
+		// Default bufio.Scanner token limit is 64 KiB; use a line longer than that
+		// to verify the expanded buffer allows the result event to be found.
+		longLine := `{"type":"message","content":"` + strings.Repeat("x", 70000) + `"}`
+		output := longLine + "\n" + `{"type":"result","sessionId":"copilot-long-line-test","exitCode":0}`
+		id := adapter.DiscoverSessionID(DiscoverOptions{
+			ProcessOutput: output,
+			Headless:      true,
+		})
+		if id != "copilot-long-line-test" {
+			t.Fatalf("expected 'copilot-long-line-test', got %q", id)
+		}
+	})
+
 	t.Run("resumed session ID returned from result event", func(t *testing.T) {
 		output := `{"type":"result","sessionId":"copilot-session-xyz","exitCode":0}`
 		id := adapter.DiscoverSessionID(DiscoverOptions{

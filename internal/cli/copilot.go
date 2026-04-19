@@ -66,6 +66,7 @@ func (a *CopilotAdapter) InteractiveModeError() error {
 // discoverCopilotSession parses the sessionId from the first JSONL line with type "result".
 func discoverCopilotSession(output string) string {
 	scanner := bufio.NewScanner(strings.NewReader(output))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		var event struct {
 			Type      string `json:"type"`
