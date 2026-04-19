@@ -56,7 +56,7 @@ steps:
   - id: archive
     command: |
       openspec archive "{{change_name}}" --yes
-      git add openspec/changes
+      git add openspec
       git commit -m "Archive openspec documents for {{change_name}}"
       agent-validator skip
 
