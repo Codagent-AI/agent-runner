@@ -312,12 +312,14 @@ func runAgentProcess(runner ProcessRunner, args []string, headless bool, workdir
 			return OutcomeFailed, result, nil
 		}
 		// Detect AskUserQuestion failures in headless mode — these indicate
-		// the agent could not complete the task autonomously. Use case-insensitive
-		// matching across both stdout and stderr to handle format variations.
-		combined := strings.ToLower(result.Stdout + "\n" + result.Stderr)
-		if strings.Contains(combined, "askuserquestion") && strings.Contains(combined, "error") {
-			log.Errorf("  headless session attempted interactive prompt (AskUserQuestion); treating as failure\n")
-			return OutcomeFailed, result, nil
+		// the agent could not complete the task autonomously. Check per-line so
+		// that natural-language summaries mentioning AskUserQuestion on one line
+		// and an unrelated Error class on another don't trigger a false positive.
+		for _, line := range strings.Split(strings.ToLower(result.Stdout+"\n"+result.Stderr), "\n") {
+			if strings.Contains(line, "askuserquestion") && strings.Contains(line, "error") {
+				log.Errorf("  headless session attempted interactive prompt (AskUserQuestion); treating as failure\n")
+				return OutcomeFailed, result, nil
+			}
 		}
 		return OutcomeSuccess, result, nil
 	}
