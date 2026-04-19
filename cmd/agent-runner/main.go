@@ -265,14 +265,24 @@ func handleResume(sessionID string) int {
 	})
 	if err != nil {
 		if errors.Is(err, runner.ErrAlreadyCompleted) {
-			fmt.Fprintln(os.Stderr, "agent-runner: workflow already completed")
-			return 0
+			sessionDir, projectDir := resumeInspectPaths(stateFilePath)
+			return openInspectTUI(sessionID, sessionDir, projectDir)
 		}
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
 	}
 
 	return runLiveTUI(h)
+}
+
+// resumeInspectPaths maps a resume state-file path to the session and project
+// directories the run-view expects. The layout is
+// `<projectDir>/runs/<run-id>/state.json`, so sessionDir is the state file's
+// parent and projectDir is two levels above that.
+func resumeInspectPaths(stateFilePath string) (sessionDir, projectDir string) {
+	sessionDir = filepath.Dir(stateFilePath)
+	projectDir = filepath.Dir(filepath.Dir(sessionDir))
+	return
 }
 
 func handleInspect(runID string) int {
@@ -287,6 +297,14 @@ func handleInspect(runID string) int {
 		return 1
 	}
 
+	return openInspectTUI(runID, sessionDir, projectDir)
+}
+
+// openInspectTUI launches the run-view TUI in FromInspect mode for a session
+// that is not currently executing. Shared between --inspect and the
+// "completed" branch of --resume, since both open a read-only view of a
+// recorded run.
+func openInspectTUI(runID, sessionDir, projectDir string) int {
 	if runlock.CheckOwnedByOther(sessionDir, os.Getpid()) {
 		fmt.Fprintf(os.Stderr, "agent-runner: run %q is active in another process\n", runID)
 		return 1
