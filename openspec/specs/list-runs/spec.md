@@ -24,3 +24,25 @@ When the target run's run-lock is held by another live process, the list TUI SHA
 #### Scenario: Enter proceeds past a stale lock
 - **WHEN** the user presses Enter on a run whose run-lock PID is dead
 - **THEN** the lock is treated as stale and the run view opens normally
+
+### Requirement: Resume inactive run from list
+
+Pressing `r` on an inactive run in a run list SHALL exit the TUI and exec `agent-runner --resume <run-id>` in-place (identical behavior to `r` in the run view). The help bar SHALL show `r resume` when the cursor is on an inactive run.
+
+`r` SHALL be ignored on active runs, completed runs, and on picker sub-views (worktree/all drill-in rows).
+
+#### Scenario: r on inactive run resumes the run
+- **WHEN** the user presses `r` on an inactive run in any tab's run list
+- **THEN** the TUI exits and `agent-runner --resume <run-id>` executes in-place
+
+#### Scenario: r on active run is ignored
+- **WHEN** the user presses `r` on an active run
+- **THEN** no action is taken
+
+#### Scenario: r on completed run is ignored
+- **WHEN** the user presses `r` on a completed run
+- **THEN** no action is taken
+
+#### Scenario: r on picker sub-view is ignored
+- **WHEN** the user presses `r` while on a worktree or all-tab picker (not a run list)
+- **THEN** no action is taken

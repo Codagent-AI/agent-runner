@@ -1,7 +1,6 @@
 package listview
 
 import (
-	"os"
 	"strings"
 
 	"github.com/mattn/go-runewidth"
@@ -10,6 +9,14 @@ import (
 	"github.com/codagent/agent-runner/internal/tuistyle"
 )
 
+// workflowDisplay returns the best display name for a run's workflow.
+func workflowDisplay(r *runs.RunInfo) string {
+	if r.Workflow.DisplayName != "" {
+		return r.Workflow.DisplayName
+	}
+	return r.WorkflowName
+}
+
 func (m *Model) View() string {
 	if m.quitting {
 		return ""
@@ -17,8 +24,8 @@ func (m *Model) View() string {
 
 	var b strings.Builder
 
-	b.WriteString("\n  ")
-	b.WriteString(headerStyle.Render("Agent Runner"))
+	b.WriteString("\n")
+	b.WriteString(m.renderHeader())
 	b.WriteString("\n\n")
 	b.WriteString(m.renderTabs())
 	b.WriteString("\n\n")
@@ -82,6 +89,23 @@ func (m *Model) bodyHeight() int {
 	return max(3, m.termHeight-15)
 }
 
+func (m *Model) renderHeader() string {
+	const prefix = "  "
+	const title = "Agent Runner"
+	left := prefix + headerStyle.Render(title)
+	if m.termWidth <= 0 {
+		return left
+	}
+	cwdText := sanitize(shortenPath(m.cwd))
+	leftW := len(prefix) + runewidth.StringWidth(title)
+	rightW := runewidth.StringWidth(cwdText)
+	if leftW+rightW+2 > m.termWidth {
+		return left
+	}
+	pad := m.termWidth - leftW - rightW
+	return left + strings.Repeat(" ", pad) + dimStyle.Render(cwdText)
+}
+
 func (m *Model) renderTabs() string {
 	var parts []string
 
@@ -104,8 +128,7 @@ func (m *Model) renderTabs() string {
 func (m *Model) renderSubheader() string {
 	switch m.activeTab {
 	case tabCurrentDir:
-		cwd, _ := os.Getwd()
-		return "  " + pathStyle.Render(sanitize(shortenPath(cwd)))
+		return "  " + pathStyle.Render(sanitize(shortenPath(m.cwd)))
 	case tabWorktrees:
 		if m.worktreeTab.subView == subViewRunList {
 			wt := m.selectedWorktree()
@@ -119,8 +142,7 @@ func (m *Model) renderSubheader() string {
 				return crumb
 			}
 		}
-		cwd, _ := os.Getwd()
-		return "  " + pathStyle.Render(sanitize(shortenPath(cwd))+"  (git repo)")
+		return "  " + pathStyle.Render(sanitize(shortenPath(m.cwd))+"  (git repo)")
 	case tabAll:
 		if m.allTab.subView == subViewRunList {
 			d := m.selectedAllDir()
@@ -209,7 +231,7 @@ func measureRunListCols(runList []runs.RunInfo) runListCols {
 		if w := runewidth.StringWidth(sanitize(r.ChangeName)); w > c.nameMax {
 			c.nameMax = w
 		}
-		if w := runewidth.StringWidth(sanitize(r.WorkflowName)); w > c.wfMax {
+		if w := runewidth.StringWidth(sanitize(workflowDisplay(r))); w > c.wfMax {
 			c.wfMax = w
 		}
 		step := r.CurrentStep
@@ -297,7 +319,7 @@ func (m *Model) renderRunListRow(r *runs.RunInfo, isSel bool, c runListCols) str
 
 	line := m.renderStatusIcon(r.Status) + "  " +
 		style.Render(fitCell(sanitize(r.ChangeName), c.nameMax)) + "  " +
-		style.Render(fitCell(sanitize(r.WorkflowName), c.wfMax)) + "  " +
+		style.Render(fitCell(sanitize(workflowDisplay(r)), c.wfMax)) + "  " +
 		style.Render(fitCell(sanitize(step), c.stepMax))
 	line += "  " + dimStyle.Render(formatTime(r.LastUpdate))
 	return prefix + line + "\n"
@@ -442,7 +464,11 @@ func (m *Model) renderHelp() string {
 	switch m.activeTab {
 	case tabCurrentDir:
 		if len(m.currentRuns) > 0 {
-			parts = append(parts, "↑↓ navigate", "enter view", "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "↑↓ navigate", "enter view")
+			if m.cursorInactiveRun() != nil {
+				parts = append(parts, "r resume")
+			}
+			parts = append(parts, "tab/c/w/a switch tab", "q quit")
 		} else {
 			parts = append(parts, "tab/c/w/a switch tab", "q quit")
 		}
@@ -450,13 +476,21 @@ func (m *Model) renderHelp() string {
 		if m.worktreeTab.subView == subViewPicker {
 			parts = append(parts, "↑↓ navigate", "enter view runs", "tab/c/w/a switch tab", "q quit")
 		} else {
-			parts = append(parts, "↑↓ navigate", "enter view", "esc back", "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "↑↓ navigate", "enter view")
+			if m.cursorInactiveRun() != nil {
+				parts = append(parts, "r resume")
+			}
+			parts = append(parts, "esc back", "tab/c/w/a switch tab", "q quit")
 		}
 	case tabAll:
 		if m.allTab.subView == subViewPicker {
 			parts = append(parts, "↑↓ navigate", "enter view runs", "tab/c/w/a switch tab", "q quit")
 		} else {
-			parts = append(parts, "↑↓ navigate", "enter view", "esc back", "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "↑↓ navigate", "enter view")
+			if m.cursorInactiveRun() != nil {
+				parts = append(parts, "r resume")
+			}
+			parts = append(parts, "esc back", "tab/c/w/a switch tab", "q quit")
 		}
 	}
 
