@@ -16,7 +16,7 @@ steps:
       Implement the task described in {{task_file}}.
 
       When you are done implementing, commit your changes with a clear,
-      descriptive commit message. Then summarize to the user what you changed.
+      descriptive commit message prefixed with [{{step_id}}]. Then summarize to the user what you changed.
 
   - id: run-validator
     workflow: run-validator.yaml
@@ -32,6 +32,7 @@ steps:
       Run git status and git diff to review them. Only stage and commit files
       that are related to this task and appropriate to check into git — ignore
       unrelated changes, generated artifacts, or files that should be gitignored.
+      Prefix the commit message with [{{step_id}}].
       Summarize which files you committed and which you left out, and why.
     skip_if: previous_success
 

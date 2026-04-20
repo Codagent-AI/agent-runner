@@ -79,7 +79,7 @@ func ExecuteSubWorkflowStep(
 // Extracted from ExecuteSubWorkflowStep to keep that function under the lint
 // length limit.
 func prepareSubWorkflow(step *model.Step, parentCtx *model.ExecutionContext, log Logger) (model.Workflow, string, *model.ExecutionContext, error) {
-	workflowPath, err := resolveWorkflowPath(step.Workflow, parentCtx)
+	workflowPath, err := resolveWorkflowPath(step.Workflow, parentCtx, step.ID)
 	if err != nil {
 		return model.Workflow{}, "", nil, err
 	}
@@ -89,7 +89,7 @@ func prepareSubWorkflow(step *model.Step, parentCtx *model.ExecutionContext, log
 		return model.Workflow{}, "", nil, err
 	}
 
-	resolvedParams, err := resolveParams(step.Params, parentCtx)
+	resolvedParams, err := resolveParams(step.Params, parentCtx, step.ID)
 	if err != nil {
 		return model.Workflow{}, "", nil, err
 	}
@@ -160,7 +160,7 @@ func executeChildSteps(
 			}
 		}
 
-		skip, skipErr := ShouldSkipStep(workflow.Steps[i].SkipIf, childCtx.LastStepOutcome, childCtx)
+		skip, skipErr := ShouldSkipStep(workflow.Steps[i].SkipIf, childCtx.LastStepOutcome, childCtx, workflow.Steps[i].ID)
 		if skipErr != nil {
 			return OutcomeFailed, fmt.Errorf("step %q skip_if evaluation failed: %w", workflow.Steps[i].ID, skipErr)
 		}
@@ -286,8 +286,8 @@ func buildNestingPrefix(nestingPath []model.NestingSegment) string {
 	return "[" + strings.Join(tokens, ", ") + "]"
 }
 
-func resolveWorkflowPath(workflowField string, ctx *model.ExecutionContext) (string, error) {
-	interpolated, err := textfmt.Interpolate(workflowField, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVars())
+func resolveWorkflowPath(workflowField string, ctx *model.ExecutionContext, stepID string) (string, error) {
+	interpolated, err := textfmt.Interpolate(workflowField, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
 	if err != nil {
 		return "", err
 	}
@@ -298,13 +298,13 @@ func resolveWorkflowPath(workflowField string, ctx *model.ExecutionContext) (str
 	return interpolated, nil
 }
 
-func resolveParams(params map[string]string, ctx *model.ExecutionContext) (map[string]string, error) {
+func resolveParams(params map[string]string, ctx *model.ExecutionContext, stepID string) (map[string]string, error) {
 	if params == nil {
 		return map[string]string{}, nil
 	}
 	resolved := make(map[string]string, len(params))
 	for k, v := range params {
-		val, err := textfmt.Interpolate(v, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVars())
+		val, err := textfmt.Interpolate(v, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
 		if err != nil {
 			return nil, err
 		}

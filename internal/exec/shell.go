@@ -36,12 +36,12 @@ var runSkipShell = func(cmd string) (int, error) {
 // The shell form runs directly via os/exec — bypassing ProcessRunner — so
 // evaluation output does not leak into the TUI live-run view or clobber the
 // surrounding step's output files.
-func ShouldSkipStep(skipIf string, lastOutcome *string, ctx *model.ExecutionContext) (bool, error) {
+func ShouldSkipStep(skipIf string, lastOutcome *string, ctx *model.ExecutionContext, stepID string) (bool, error) {
 	if skipIf == "" {
 		return false, nil
 	}
 	if cmd, ok := flowctl.ShellSkipCommand(skipIf); ok {
-		expanded, err := textfmt.Interpolate(cmd, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVars())
+		expanded, err := textfmt.Interpolate(cmd, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
 		if err != nil {
 			return false, fmt.Errorf("skip_if interpolation: %w", err)
 		}
@@ -115,7 +115,7 @@ func ExecuteShellStep(
 		return OutcomeFailed, nil
 	}
 
-	command, err := textfmt.Interpolate(step.Command, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVars())
+	command, err := textfmt.Interpolate(step.Command, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(step.ID))
 	if err != nil {
 		prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 		emitAudit(ctx, audit.Event{

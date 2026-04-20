@@ -130,7 +130,7 @@ func executeForEachLoop(
 	opts LoopExecuteOptions,
 	requireMatches *bool,
 ) (LoopResult, error) {
-	pattern, err := textfmt.Interpolate(overPattern, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVars())
+	pattern, err := textfmt.Interpolate(overPattern, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
 	if err != nil {
 		return LoopResult{Outcome: OutcomeFailed, LastIteration: -1}, err
 	}

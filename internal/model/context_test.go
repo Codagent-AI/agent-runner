@@ -117,6 +117,48 @@ func TestCreateLoopIterationContext(t *testing.T) {
 	})
 }
 
+func TestBuiltinVarsForStep(t *testing.T) {
+	t.Run("includes step_id when provided", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{
+			WorkflowFile: "test.yaml",
+			SessionDir:   "/tmp/runs/abc",
+		})
+		vars := ctx.BuiltinVarsForStep("my-step")
+		if vars["step_id"] != "my-step" {
+			t.Fatalf("expected step_id='my-step', got %q", vars["step_id"])
+		}
+		if vars["session_dir"] != "/tmp/runs/abc" {
+			t.Fatalf("expected session_dir='/tmp/runs/abc', got %q", vars["session_dir"])
+		}
+	})
+
+	t.Run("omits step_id when empty", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{WorkflowFile: "test.yaml", SessionDir: "/tmp/runs/abc"})
+		vars := ctx.BuiltinVarsForStep("")
+		if _, ok := vars["step_id"]; ok {
+			t.Fatal("expected step_id to be omitted when empty")
+		}
+	})
+
+	t.Run("returns nil when no builtins available", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{WorkflowFile: "test.yaml"})
+		if ctx.BuiltinVarsForStep("") != nil {
+			t.Fatal("expected nil when no builtins available")
+		}
+	})
+
+	t.Run("includes step_id without session_dir", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{WorkflowFile: "test.yaml"})
+		vars := ctx.BuiltinVarsForStep("lone-step")
+		if vars["step_id"] != "lone-step" {
+			t.Fatalf("expected step_id='lone-step', got %q", vars["step_id"])
+		}
+		if _, ok := vars["session_dir"]; ok {
+			t.Fatal("expected session_dir to be absent")
+		}
+	})
+}
+
 func TestSessionDirBuiltin(t *testing.T) {
 	t.Run("BuiltinVars exposes session_dir when set", func(t *testing.T) {
 		ctx := NewRootContext(&RootContextOptions{

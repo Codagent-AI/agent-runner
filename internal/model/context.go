@@ -151,10 +151,23 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 // construct contexts without a session dir do not accidentally expose an
 // empty {{session_dir}}.
 func (c *ExecutionContext) BuiltinVars() map[string]string {
-	if c.SessionDir == "" {
+	return c.BuiltinVarsForStep("")
+}
+
+// BuiltinVarsForStep returns the builtin template variables for the given step.
+// Extends BuiltinVars with {{step_id}} set to the provided step ID.
+func (c *ExecutionContext) BuiltinVarsForStep(stepID string) map[string]string {
+	m := make(map[string]string)
+	if c.SessionDir != "" {
+		m["session_dir"] = c.SessionDir
+	}
+	if stepID != "" {
+		m["step_id"] = stepID
+	}
+	if len(m) == 0 {
 		return nil
 	}
-	return map[string]string{"session_dir": c.SessionDir}
+	return m
 }
 
 // LoopIterationOptions configures a new loop iteration context.
