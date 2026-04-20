@@ -5,6 +5,10 @@ params:
   - name: change_name
     required: true
 
+sessions:
+  - name: lead-agent
+    agent: planner
+
 steps:
   - id: plan
     workflow: plan-change.yaml

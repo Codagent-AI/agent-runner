@@ -3,6 +3,7 @@ package runview
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -43,7 +44,7 @@ func (m *Model) renderShellDetail(b *strings.Builder, n *StepNode) {
 		cmd = n.StaticCommand
 	}
 	if cmd != "" {
-		detailLine(b, "$ "+cmd)
+		m.renderWrapped(b, "$ "+cmd)
 		b.WriteString("\n")
 	}
 
@@ -120,10 +121,9 @@ func (m *Model) renderHeadlessDetail(b *strings.Builder, n *StepNode) {
 		return
 	}
 
-	m.renderOutputBlock(b, n, "stdout", n.Stdout)
-	m.renderOutputBlock(b, n, "stderr", n.Stderr)
+	m.renderAgentOutputBlock(b, n)
 
-	if n.SessionID != "" {
+	if n.SessionID != "" && !m.running {
 		b.WriteString("\n\n")
 		b.WriteString(tuistyle.AccentStyle.Render("enter → resume session"))
 	}
@@ -182,7 +182,7 @@ func (m *Model) renderInteractiveDetail(b *strings.Builder, n *StepNode) {
 		m.renderWrapped(b, n.ErrorMessage)
 	}
 
-	if n.SessionID != "" {
+	if n.SessionID != "" && !m.running {
 		b.WriteString("\n\n")
 		b.WriteString(tuistyle.AccentStyle.Render("enter → resume session"))
 	}
@@ -202,8 +202,13 @@ func (m *Model) renderSubWorkflowDetail(b *strings.Builder, n *StepNode) {
 		params = n.StaticParams
 	}
 	if len(params) > 0 {
-		for k, v := range params {
-			detailDim(b, k, v)
+		keys := make([]string, 0, len(params))
+		for k := range params {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			detailDim(b, k, params[k])
 		}
 	}
 
@@ -318,15 +323,58 @@ func (m *Model) loopTotal(n *StepNode) int {
 	return 0
 }
 
-func (m *Model) renderOutputBlock(b *strings.Builder, n *StepNode, label, output string) {
-	output = sanitizeUTF8(output)
-	if output == "" {
-		b.WriteString("\n")
-		b.WriteString(tuistyle.LabelStyle.Render(label+": ") + tuistyle.DimStyle.Render("(empty)"))
+// renderAgentOutputBlock renders a headless agent step's output. Unlike a
+// shell step, the agent's output is its response to the user's prompt, so the
+// block is labeled "agent" (not "stdout"/"stderr"). While the step is still
+// in-progress with no output yet, a spinner is shown so the user can see the
+// CLI is alive. When only one stream has content, the label is bare "agent:";
+// when both do, sub-labels disambiguate stdout vs stderr. An empty completed
+// step falls back to "(empty)".
+func (m *Model) renderAgentOutputBlock(b *strings.Builder, n *StepNode) {
+	stdout := sanitizeUTF8(n.Stdout)
+	stderr := sanitizeUTF8(n.Stderr)
+
+	b.WriteString("\n")
+
+	if stdout == "" && stderr == "" {
+		if n.Status == StatusInProgress {
+			// Label on its own row; the spinner art renders below so the
+			// full 3-line animation has room to breathe.
+			detailLabel(b, "agent:")
+			for _, line := range tuistyle.SpinnerFrame(m.pulsePhase) {
+				b.WriteString(tuistyle.AccentStyle.Render(line))
+				b.WriteString("\n")
+			}
+			return
+		}
+		b.WriteString(tuistyle.LabelStyle.Render("agent: ") + tuistyle.DimStyle.Render("(empty)"))
 		return
 	}
 
-	fullLoaded := m.loadedFull[n] && label == "stdout"
+	if stdout != "" && stderr != "" {
+		detailLabel(b, "agent (stdout):")
+		m.renderWrappedLines(b, n, stdout)
+		b.WriteString("\n")
+		detailLabel(b, "agent (stderr):")
+		m.renderWrappedLines(b, n, stderr)
+		return
+	}
+
+	text := stdout
+	if text == "" {
+		text = stderr
+	}
+	detailLabel(b, "agent:")
+	m.renderWrappedLines(b, n, text)
+}
+
+// renderWrappedLines emits `output` word-wrapped to the detail-pane width
+// with no "| " gutter. When the user has not loaded the full output, the
+// block is tail-truncated with the shared truncateOutput helper and prefixed
+// with a "(truncated…)" banner. Used by both shell stdout/stderr and agent
+// stdout/stderr.
+func (m *Model) renderWrappedLines(b *strings.Builder, n *StepNode, output string) {
+	fullLoaded := m.loadedFull[n]
 	var t truncatedOutput
 	if fullLoaded {
 		lines := strings.Split(output, "\n")
@@ -334,20 +382,37 @@ func (m *Model) renderOutputBlock(b *strings.Builder, n *StepNode, label, output
 	} else {
 		t = truncateOutput(output)
 	}
-
-	b.WriteString("\n")
-	detailLabel(b, label+":")
-
 	if banner := t.banner(); banner != "" {
 		b.WriteString(tuistyle.DimStyle.Render(banner))
 		b.WriteString("\n")
 	}
-
-	for _, line := range t.Lines {
-		b.WriteString("| ")
-		b.WriteString(tuistyle.Sanitize(line))
-		b.WriteString("\n")
+	width := m.detailWidth
+	if width <= 0 {
+		width = 80
 	}
+	for _, line := range t.Lines {
+		sanitized := tuistyle.Sanitize(line)
+		if sanitized == "" {
+			b.WriteString("\n")
+			continue
+		}
+		for _, wrapped := range wrapLine(sanitized, width) {
+			b.WriteString(tuistyle.NormalStyle.Render(wrapped))
+			b.WriteString("\n")
+		}
+	}
+}
+
+func (m *Model) renderOutputBlock(b *strings.Builder, n *StepNode, label, output string) {
+	output = sanitizeUTF8(output)
+	if output == "" {
+		b.WriteString("\n")
+		b.WriteString(tuistyle.LabelStyle.Render(label+": ") + tuistyle.DimStyle.Render("(empty)"))
+		return
+	}
+	b.WriteString("\n")
+	detailLabel(b, label+":")
+	m.renderWrappedLines(b, n, output)
 }
 
 func renderExitAndDuration(b *strings.Builder, n *StepNode) {
@@ -425,11 +490,6 @@ func formatDuration(ms int64) string {
 
 func detailDim(b *strings.Builder, label, value string) {
 	b.WriteString(tuistyle.LabelStyle.Render(label+": ") + tuistyle.NormalStyle.Render(value))
-	b.WriteString("\n")
-}
-
-func detailLine(b *strings.Builder, s string) {
-	b.WriteString(tuistyle.NormalStyle.Render(s))
 	b.WriteString("\n")
 }
 

@@ -12,7 +12,6 @@ import (
 	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/engine"
 	"github.com/codagent/agent-runner/internal/exec"
-	"github.com/codagent/agent-runner/internal/flowctl"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/stateio"
@@ -40,6 +39,9 @@ type Options struct {
 	CapturedVariables map[string]string
 	LastSessionStepID string
 	ChildState        *model.NestedStepState
+	// NamedSessions and NamedSessionDecls are restored from state on --resume.
+	NamedSessions     map[string]string
+	NamedSessionDecls map[string]string
 	ProcessRunner     exec.ProcessRunner
 	GlobExpander      exec.GlobExpander
 	Log               exec.Logger
@@ -200,8 +202,14 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		return nil, fmt.Errorf("create session dir: %w", err)
 	}
 
-	if err := runlock.Write(sessionDir); err != nil {
-		fmt.Fprintf(os.Stderr, "agent-runner: warning: could not write lock file in %s: %v\n", sessionDir, err)
+	activePID, lockErr := runlock.Acquire(sessionDir)
+	switch {
+	case lockErr != nil:
+		// Genuine I/O error inspecting or writing the lock — refuse rather
+		// than risk a second runner racing the same state file.
+		return nil, fmt.Errorf("acquire run lock in %s: %w", sessionDir, lockErr)
+	case activePID > 0:
+		return nil, fmt.Errorf("run already in progress (PID %d) in %s; wait for it to finish or kill the process before resuming", activePID, sessionDir)
 	}
 
 	if opts.SessionDir == "" {
@@ -214,6 +222,13 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	log := opts.Log
 	if log == nil {
 		log = &defaultLogger{}
+	}
+
+	// Merge the root workflow's session declarations into NamedSessionDecls.
+	// On fresh runs this populates the map from scratch. On resume, previously
+	// persisted entries are already present; mergeSessionDecls handles drift.
+	if err := exec.MergeSessionDecls(ctx, workflow.Sessions, log); err != nil {
+		return nil, err
 	}
 
 	return &runState{
@@ -252,12 +267,15 @@ func buildExecutionContext(workflow *model.Workflow, params map[string]string, o
 		WorkflowFile:        opts.WorkflowFile,
 		WorkflowName:        workflow.Name,
 		WorkflowDescription: workflow.Description,
+		SessionDir:          sessionDir,
 		EngineRef:           engineRef,
 		ProfileStore:        profileStore,
 		SessionIDs:          opts.SessionIDs,
 		SessionProfiles:     opts.SessionProfiles,
 		CapturedVariables:   opts.CapturedVariables,
 		AuditLogger:         auditEventLogger,
+		NamedSessions:       opts.NamedSessions,
+		NamedSessionDecls:   opts.NamedSessionDecls,
 	})
 	if opts.ChildState != nil {
 		ctx.ResumeChildState = opts.ChildState
@@ -300,7 +318,12 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 	for i := startIndex; i < len(rs.workflow.Steps); i++ {
 		step := &rs.workflow.Steps[i]
 
-		if flowctl.ShouldSkip(step.SkipIf, rs.ctx.LastStepOutcome) {
+		skip, skipErr := exec.ShouldSkipStep(step.SkipIf, rs.ctx.LastStepOutcome, rs.ctx, step.ID)
+		if skipErr != nil {
+			rs.log.Printf("\nagent-runner: step %q skip_if evaluation failed: %v\n", step.ID, skipErr)
+			return ResultFailed
+		}
+		if skip {
 			emitSkippedStep(rs, step, i)
 			continue
 		}
@@ -521,6 +544,8 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 		SessionProfiles:   copyMap(ctx.SessionProfiles),
 		CapturedVariables: copyMap(ctx.CapturedVariables),
 		LastSessionStepID: ctx.LastSessionStepID,
+		NamedSessions:     copyMap(ctx.NamedSessions),
+		NamedSessionDecls: copyMap(ctx.NamedSessionDecls),
 		Completed:         completed,
 		Iteration:         iteration,
 		Child:             child,

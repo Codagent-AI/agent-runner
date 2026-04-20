@@ -8,9 +8,14 @@ import (
 var placeholderRe = regexp.MustCompile(`\{\{(\w+)\}\}`)
 
 // Interpolate replaces {{variable}} placeholders in a template string.
-// Captured variables take precedence over params when names collide.
-func Interpolate(template string, params, capturedVars map[string]string) (string, error) {
+// Precedence, lowest to highest: builtins, params, capturedVars.
+// Builtins are runner-provided values like session_dir that workflows can
+// reference without declaring them as params.
+func Interpolate(template string, params, capturedVars, builtins map[string]string) (string, error) {
 	merged := make(map[string]string)
+	for k, v := range builtins {
+		merged[k] = v
+	}
 	for k, v := range params {
 		merged[k] = v
 	}

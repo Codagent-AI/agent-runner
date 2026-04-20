@@ -28,6 +28,36 @@ func TestShouldSkip(t *testing.T) {
 			t.Fatal("expected false")
 		}
 	})
+
+	t.Run("returns false for sh: form (caller must evaluate)", func(t *testing.T) {
+		if ShouldSkip("sh: true", strPtr("success")) {
+			t.Fatal("expected false — shell form is not evaluated by ShouldSkip")
+		}
+	})
+}
+
+func TestShellSkipCommand(t *testing.T) {
+	t.Run("returns command with sh: prefix stripped and trimmed", func(t *testing.T) {
+		cmd, ok := ShellSkipCommand("sh: test foo = bar")
+		if !ok {
+			t.Fatal("expected ok")
+		}
+		if cmd != "test foo = bar" {
+			t.Fatalf("expected %q, got %q", "test foo = bar", cmd)
+		}
+	})
+
+	t.Run("returns not ok for previous_success", func(t *testing.T) {
+		if _, ok := ShellSkipCommand("previous_success"); ok {
+			t.Fatal("expected not ok")
+		}
+	})
+
+	t.Run("returns not ok for empty string", func(t *testing.T) {
+		if _, ok := ShellSkipCommand(""); ok {
+			t.Fatal("expected not ok")
+		}
+	})
 }
 
 func TestEvaluateBreakIf(t *testing.T) {

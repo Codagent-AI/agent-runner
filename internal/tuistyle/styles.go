@@ -20,6 +20,16 @@ var (
 	FailedRed     = lipgloss.AdaptiveColor{Dark: "#f87171", Light: "#dc2626"}
 )
 
+// BlinkHidden returns a blank string the same visual width as s: used as the
+// "off" half of the in-progress blink. Earlier attempts recolored the glyph
+// (AdaptiveColor white → resolves to near-black when lipgloss misdetects the
+// background inside bubbletea's alt-screen; ANSI-15 → remapped to a dark
+// color by some light-theme palettes). Hiding the glyph sidesteps all of
+// that — the blink becomes visible/invisible, not green/some-broken-color.
+func BlinkHidden(s string) string {
+	return strings.Repeat(" ", lipgloss.Width(s))
+}
+
 // Shared style instances.
 var (
 	HeaderStyle       = lipgloss.NewStyle().Foreground(AccentCyan).Bold(true)

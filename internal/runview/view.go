@@ -2,7 +2,6 @@ package runview
 
 import (
 	"fmt"
-	"math"
 	"path/filepath"
 	"strings"
 
@@ -54,6 +53,10 @@ func (m *Model) View() string {
 	if m.loadErr != "" {
 		b.WriteString("\n  ")
 		b.WriteString(tuistyle.DimStyle.Render("Error: " + m.loadErr))
+	}
+	if m.notice != "" {
+		b.WriteString("\n  ")
+		b.WriteString(tuistyle.DimStyle.Render(m.notice))
 	}
 
 	b.WriteString("\n")
@@ -167,7 +170,7 @@ func (m *Model) renderStepRow(n *StepNode, selected bool) string {
 	glyph := m.statusGlyph(n)
 	name := n.ID
 	suffix := ""
-	typeSuffix := ""
+	typePrefix := ""
 
 	switch n.Type {
 	case NodeLoop:
@@ -181,7 +184,7 @@ func (m *Model) renderStepRow(n *StepNode, selected bool) string {
 			name += "   " + filepath.Base(n.BindingValue)
 		}
 	default:
-		typeSuffix = typeGlyph(n.Type)
+		typePrefix = typeGlyph(n.Type)
 	}
 
 	style := tuistyle.DimStyle
@@ -192,22 +195,23 @@ func (m *Model) renderStepRow(n *StepNode, selected bool) string {
 		style = tuistyle.StatusFailed
 	}
 
-	out := prefix + glyph + "  " + style.Render(name+suffix)
-	if typeSuffix != "" {
-		out += " " + typeSuffix
+	typeCol := "   "
+	if typePrefix != "" {
+		typeCol = typePrefix + "  "
 	}
-	return out
+	return prefix + typeCol + style.Render(name+suffix) + "  " + glyph
 }
 
 func (m *Model) statusGlyph(n *StepNode) string {
 	switch n.Status {
 	case StatusInProgress:
 		if (m.active || m.running) && !n.Aborted {
-			t := (math.Sin(m.pulsePhase) + 1) / 2
-			c := tuistyle.LerpColor("#4ade80", "#2d8f57", t)
-			return lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Render("●")
+			if tuistyle.BlinkOn(m.pulsePhase) {
+				return tuistyle.StatusSuccess.Render("●")
+			}
+			return tuistyle.BlinkHidden("●")
 		}
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("#4ade80")).Render("●")
+		return tuistyle.StatusSuccess.Render("●")
 	case StatusPending:
 		return tuistyle.StatusInactive.Render("○")
 	case StatusSuccess:
@@ -244,14 +248,17 @@ func (m *Model) renderHelpBar() string {
 	} else {
 		parts = append(parts, "↑↓ step")
 	}
-	parts = append(parts, "pgup/pgdn scroll")
+	parts = append(parts, "j/k scroll")
 
 	if sel != nil {
 		switch sel.Type {
 		case NodeLoop, NodeSubWorkflow, NodeIteration:
 			parts = append(parts, "enter drill")
 		case NodeHeadlessAgent, NodeInteractiveAgent:
-			if sel.SessionID != "" {
+			// Resume is only meaningful after the run has ended — while the
+			// workflow is live, the agent session is owned by the runner and
+			// cannot be attached to by the user.
+			if sel.SessionID != "" && !m.running {
 				parts = append(parts, "enter resume")
 			}
 		}
@@ -265,10 +272,20 @@ func (m *Model) renderHelpBar() string {
 		parts = append(parts, "l live")
 	}
 	if !m.tailFollow {
-		parts = append(parts, "End tail")
+		parts = append(parts, "t tail")
+	}
+	if m.canResumeRun() {
+		parts = append(parts, "r resume")
 	}
 
-	parts = append(parts, "? legend", "esc back", "q quit")
+	parts = append(parts, "? legend")
+	// "esc back" exits the runview; while a live workflow is running there's
+	// nothing to go back to (the live TUI is the top-level program) so hide
+	// the hint until the run completes.
+	if !m.running {
+		parts = append(parts, "esc back")
+	}
+	parts = append(parts, "q quit")
 
 	return "  " + tuistyle.HelpStyle.Render(strings.Join(parts, "   "))
 }
@@ -365,8 +382,8 @@ func (m *Model) renderLegend() string {
 	b.WriteString("\n  ")
 	b.WriteString(tuistyle.SelectedStyle.Render("Live Navigation"))
 	b.WriteString("\n\n")
-	b.WriteString("  l        jump to active step and resume auto-follow\n")
-	b.WriteString("  End / G  jump to output tail and resume tail-follow\n")
+	b.WriteString("  l  jump to active step and resume auto-follow\n")
+	b.WriteString("  t  jump to output tail and resume tail-follow\n")
 
 	b.WriteString("\n\n  ")
 	b.WriteString(tuistyle.HelpStyle.Render("press ? or esc to dismiss"))

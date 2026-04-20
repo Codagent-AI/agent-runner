@@ -48,6 +48,7 @@ type Model struct {
 
 	projectDir   string
 	projectsRoot string
+	cwd          string
 	currentRuns  []runs.RunInfo
 	loadErr      string
 	errMsg       string
@@ -85,6 +86,16 @@ type ViewRunMsg struct {
 	ProjectDir string
 }
 
+// ResumeRunMsg asks the shell to exit the TUI and exec `agent-runner --resume
+// <run-id>`, resuming an interrupted workflow run. RunID is the session
+// directory name (same semantics as runview.ResumeRunMsg). ProjectDir is the
+// original cwd of the run's project; the caller must chdir there before
+// re-exec so that resolveResumeStatePath looks in the correct project tree.
+type ResumeRunMsg struct {
+	RunID      string
+	ProjectDir string
+}
+
 type refreshMsg = tuistyle.RefreshMsg
 type pulseMsg = tuistyle.PulseMsg
 
@@ -110,6 +121,7 @@ func New() (*Model, error) {
 	m := &Model{
 		projectDir:   projectDir,
 		projectsRoot: projectsRoot,
+		cwd:          cwd,
 	}
 	m.loadData()
 	return m, nil
@@ -317,6 +329,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			return m.handleEnter()
 
+		case "r":
+			return m.handleResumeRun()
+
 		case "esc":
 			m.handleEsc()
 		}
@@ -441,6 +456,74 @@ func viewRunCmd(sessionDir, projectDir string) tea.Cmd {
 	return func() tea.Msg {
 		return ViewRunMsg{SessionDir: sessionDir, ProjectDir: projectDir}
 	}
+}
+
+func (m *Model) handleResumeRun() (tea.Model, tea.Cmd) {
+	r := m.cursorInactiveRun()
+	if r == nil {
+		return m, nil
+	}
+	runID := r.SessionID
+	projectDir := m.cursorProjectDir()
+	return m, func() tea.Msg { return ResumeRunMsg{RunID: runID, ProjectDir: projectDir} }
+}
+
+// cursorProjectDir returns the original cwd (project directory) for the run
+// currently under the cursor. This is the directory the caller must be in for
+// resolveResumeStatePath to locate the run's state file.
+func (m *Model) cursorProjectDir() string {
+	switch m.activeTab {
+	case tabCurrentDir:
+		return m.cwd
+	case tabWorktrees:
+		if m.worktreeTab.subView == subViewRunList {
+			if wt := m.selectedWorktree(); wt != nil {
+				return wt.Path
+			}
+		}
+	case tabAll:
+		if m.allTab.subView == subViewRunList {
+			if d := m.selectedAllDir(); d != nil {
+				return d.Path
+			}
+		}
+	}
+	return ""
+}
+
+// cursorInactiveRun returns the run under the cursor when it is inactive,
+// or nil if the cursor is not on an inactive run or is on a picker sub-view.
+func (m *Model) cursorInactiveRun() *runs.RunInfo {
+	switch m.activeTab {
+	case tabCurrentDir:
+		if m.currentDirCursor < len(m.currentRuns) {
+			r := &m.currentRuns[m.currentDirCursor]
+			if r.Status == runs.StatusInactive {
+				return r
+			}
+		}
+	case tabWorktrees:
+		if m.worktreeTab.subView == subViewRunList {
+			wt := m.selectedWorktree()
+			if wt != nil && m.worktreeTab.listCursor < len(wt.Runs) {
+				r := &wt.Runs[m.worktreeTab.listCursor]
+				if r.Status == runs.StatusInactive {
+					return r
+				}
+			}
+		}
+	case tabAll:
+		if m.allTab.subView == subViewRunList {
+			d := m.selectedAllDir()
+			if d != nil && m.allTab.listCursor < len(d.Runs) {
+				r := &d.Runs[m.allTab.listCursor]
+				if r.Status == runs.StatusInactive {
+					return r
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (m *Model) handleEsc() {

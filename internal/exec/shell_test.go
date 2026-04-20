@@ -97,6 +97,22 @@ func TestExecuteShellStep(t *testing.T) {
 		}
 	})
 
+	t.Run("interpolates command with session_dir builtin", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		ctx := model.NewRootContext(&model.RootContextOptions{
+			WorkflowFile: "test.yaml",
+			SessionDir:   "/tmp/runs/abc",
+		})
+		step := model.Step{ID: "s", Command: "ls {{session_dir}}/output", Session: model.SessionNew}
+		ExecuteShellStep(&step, ctx, runner, &mockLogger{})
+		if len(runner.calls) == 0 {
+			t.Fatal("expected command to be called")
+		}
+		if runner.calls[0][2] != "ls /tmp/runs/abc/output" {
+			t.Fatalf("expected interpolated command, got %q", runner.calls[0][2])
+		}
+	})
+
 	t.Run("captures stdout to variable", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "captured-output"}}}
 		ctx := makeCtx()

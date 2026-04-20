@@ -2,6 +2,7 @@ package exec
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/codagent/agent-runner/internal/audit"
@@ -31,11 +32,11 @@ func ExecuteLoopStep(
 	loop := step.Loop
 
 	if loop.Over != "" && loop.As != "" {
-		return executeForEachLoop(step.ID, loop.Over, loop.As, step.Steps, ctx, runner, glob, log, opts, loop.RequireMatches)
+		return executeForEachLoop(step.ID, loop.Over, loop.As, loop.AsIndex, step.Steps, ctx, runner, glob, log, opts, loop.RequireMatches)
 	}
 
 	if loop.Max != nil {
-		return executeCountedLoop(step.ID, *loop.Max, step.Steps, ctx, runner, glob, log, opts)
+		return executeCountedLoop(step.ID, *loop.Max, loop.AsIndex, step.Steps, ctx, runner, glob, log, opts)
 	}
 
 	return LoopResult{Outcome: OutcomeFailed, LastIteration: -1}, nil
@@ -44,6 +45,7 @@ func ExecuteLoopStep(
 func executeCountedLoop(
 	stepID string,
 	maxIter int,
+	asIndex string,
 	steps []model.Step,
 	ctx *model.ExecutionContext,
 	runner ProcessRunner,
@@ -77,9 +79,14 @@ func executeCountedLoop(
 	for i := startIter; i < maxIter; i++ {
 		lastIter = i
 		recordLoopIterationProgress(ctx, stepID, i, false)
+		var loopVar map[string]string
+		if asIndex != "" {
+			loopVar = map[string]string{asIndex: strconv.Itoa(i)}
+		}
 		iterCtx := model.NewLoopIterationContext(ctx, model.LoopIterationOptions{
 			StepID:    stepID,
 			Iteration: i,
+			LoopVar:   loopVar,
 		})
 		if i == resumeIter && resumeBody != nil {
 			iterCtx.ResumeChildState = resumeBody
@@ -114,7 +121,7 @@ func executeCountedLoop(
 }
 
 func executeForEachLoop(
-	stepID, overPattern, asVar string,
+	stepID, overPattern, asVar, asIndex string,
 	steps []model.Step,
 	ctx *model.ExecutionContext,
 	runner ProcessRunner,
@@ -123,7 +130,7 @@ func executeForEachLoop(
 	opts LoopExecuteOptions,
 	requireMatches *bool,
 ) (LoopResult, error) {
-	pattern, err := textfmt.Interpolate(overPattern, ctx.Params, ctx.CapturedVariables)
+	pattern, err := textfmt.Interpolate(overPattern, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
 	if err != nil {
 		return LoopResult{Outcome: OutcomeFailed, LastIteration: -1}, err
 	}
@@ -170,6 +177,9 @@ func executeForEachLoop(
 	for i := startIter; i < len(matches); i++ {
 		lastIter = i
 		loopVar := map[string]string{asVar: matches[i]}
+		if asIndex != "" {
+			loopVar[asIndex] = strconv.Itoa(i)
+		}
 		recordLoopIterationProgress(ctx, stepID, i, false)
 		iterCtx := model.NewLoopIterationContext(ctx, model.LoopIterationOptions{
 			StepID:    stepID,

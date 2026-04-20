@@ -38,3 +38,15 @@ A lock file whose recorded PID is no longer alive SHALL be treated as stale. Sta
 #### Scenario: Active lock detected
 - **WHEN** a lock file exists in a session directory and the PID it contains is a live process
 - **THEN** the session is considered active
+
+### Requirement: Active lock refuses concurrent run
+
+When a run is started (fresh or resume) and the target session directory already has an active lock, the runner SHALL refuse to start and SHALL exit with an error that names the PID holding the lock. Stale locks SHALL be overwritten and the run SHALL proceed.
+
+#### Scenario: Resume refused while original run is active
+- **WHEN** `--resume <id>` is invoked against a session directory whose lock file contains a live PID
+- **THEN** the runner exits with an error identifying the PID (e.g., "run already in progress (PID 41247)") without executing any steps, and the existing lock file is preserved unchanged
+
+#### Scenario: Resume proceeds after stale lock
+- **WHEN** `--resume <id>` is invoked against a session directory whose lock file contains a dead PID
+- **THEN** the runner overwrites the stale lock with its own PID and resumes the workflow

@@ -2,6 +2,7 @@ package tuistyle
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"regexp"
 	"strings"
@@ -116,6 +117,46 @@ func LerpColor(hex1, hex2 string, t float64) string {
 	b := uint8(float64(b1) + t*(float64(b2)-float64(b1)))
 
 	return fmt.Sprintf("#%02x%02x%02x", r, g, b)
+}
+
+// spinnerFrames is the classic 10-frame rotating braille spinner rendered
+// at a larger scale: each frame occupies 3 rows × 2 dot-columns of real
+// terminal cells, where a lit dot is "●" and an empty dot is a space.
+// The lit dots trace clockwise around the border of a 3-row, 2-column
+// grid — the same motion as the U+280B..U+280F braille cells, just drawn
+// one character per dot so the animation is visible at normal font size.
+var spinnerFrames = [][]string{
+	{"● ●", "●  ", "   "}, // ⠋ dots 1,2,4
+	{"● ●", "  ●", "   "}, // ⠙ dots 1,4,5
+	{"● ●", "  ●", "  ●"}, // ⠹ dots 1,4,5,6
+	{"  ●", "  ●", "  ●"}, // ⠸ dots 4,5,6
+	{"  ●", "  ●", "● ●"}, // ⠼ dots 3,4,5,6
+	{"   ", "  ●", "● ●"}, // ⠴ dots 3,5,6
+	{"   ", "●  ", "● ●"}, // ⠦ dots 2,3,6
+	{"●  ", "●  ", "● ●"}, // ⠧ dots 1,2,3,6
+	{"●  ", "●  ", "●  "}, // ⠇ dots 1,2,3
+	{"● ●", "●  ", "●  "}, // ⠏ dots 1,2,3,4
+}
+
+// SpinnerFrame returns the three lines of the current spinner frame.
+// Each line is 3 columns wide and each frame is 3 lines tall, so callers
+// should print them on consecutive rows.
+func SpinnerFrame(phase float64) []string {
+	n := len(spinnerFrames)
+	idx := int(math.Floor(phase*1.5)) % n
+	if idx < 0 {
+		idx += n
+	}
+	return spinnerFrames[idx]
+}
+
+// BlinkOn returns true during the "on" half of each pulse cycle and false
+// during the "off" half. Callers pair this with conditional styling to
+// render a clear on/off blink — typically an accent color when on and the
+// terminal default foreground (no color) when off, which keeps the blink
+// visible regardless of the terminal's background theme.
+func BlinkOn(phase float64) bool {
+	return math.Sin(phase) >= 0
 }
 
 // ParseHex parses a #RRGGBB or RRGGBB hex color string into its components.

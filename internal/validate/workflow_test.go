@@ -143,3 +143,168 @@ func TestWorkflowConstraints(t *testing.T) {
 		}
 	})
 }
+
+func TestNamedSessionConstraints(t *testing.T) {
+	t.Run("accepts workflow with declared and referenced named session", func(t *testing.T) {
+		w := model.Workflow{
+			Name:     "test",
+			Sessions: []model.SessionDecl{{Name: "planner", Agent: "planner-profile"}},
+			Steps:    []model.Step{{ID: "s1", Prompt: "do it", Session: "planner"}},
+		}
+		if err := WorkflowConstraints(&w, Options{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("rejects reserved name 'new' in sessions block", func(t *testing.T) {
+		w := model.Workflow{
+			Name:     "test",
+			Sessions: []model.SessionDecl{{Name: "new", Agent: "planner-profile"}},
+			Steps:    []model.Step{shellStep("s1")},
+		}
+		err := WorkflowConstraints(&w, Options{})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "reserved") {
+			t.Fatalf("expected reserved keyword error, got: %v", err)
+		}
+	})
+
+	t.Run("rejects reserved name 'resume' in sessions block", func(t *testing.T) {
+		w := model.Workflow{
+			Name:     "test",
+			Sessions: []model.SessionDecl{{Name: "resume", Agent: "planner-profile"}},
+			Steps:    []model.Step{shellStep("s1")},
+		}
+		err := WorkflowConstraints(&w, Options{})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "reserved") {
+			t.Fatalf("expected reserved keyword error, got: %v", err)
+		}
+	})
+
+	t.Run("rejects reserved name 'inherit' in sessions block", func(t *testing.T) {
+		w := model.Workflow{
+			Name:     "test",
+			Sessions: []model.SessionDecl{{Name: "inherit", Agent: "planner-profile"}},
+			Steps:    []model.Step{shellStep("s1")},
+		}
+		err := WorkflowConstraints(&w, Options{})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "reserved") {
+			t.Fatalf("expected reserved keyword error, got: %v", err)
+		}
+	})
+
+	t.Run("rejects duplicate session name in sessions block", func(t *testing.T) {
+		w := model.Workflow{
+			Name: "test",
+			Sessions: []model.SessionDecl{
+				{Name: "planner", Agent: "planner-profile"},
+				{Name: "planner", Agent: "another-profile"},
+			},
+			Steps: []model.Step{shellStep("s1")},
+		}
+		err := WorkflowConstraints(&w, Options{})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "duplicate") {
+			t.Fatalf("expected duplicate error, got: %v", err)
+		}
+	})
+
+	t.Run("rejects step referencing undeclared named session", func(t *testing.T) {
+		w := model.Workflow{
+			Name:  "test",
+			Steps: []model.Step{{ID: "s1", Prompt: "do it", Session: "planner"}},
+		}
+		err := WorkflowConstraints(&w, Options{})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "not declared") {
+			t.Fatalf("expected not-declared error, got: %v", err)
+		}
+	})
+
+	t.Run("rejects step referencing session not in local sessions block", func(t *testing.T) {
+		w := model.Workflow{
+			Name:     "test",
+			Sessions: []model.SessionDecl{{Name: "implementor", Agent: "impl-profile"}},
+			Steps: []model.Step{
+				{ID: "s1", Prompt: "plan", Session: "planner"},
+			},
+		}
+		err := WorkflowConstraints(&w, Options{})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "not declared") {
+			t.Fatalf("expected not-declared error, got: %v", err)
+		}
+	})
+
+	t.Run("accepts multiple declared sessions with different names", func(t *testing.T) {
+		w := model.Workflow{
+			Name: "test",
+			Sessions: []model.SessionDecl{
+				{Name: "planner", Agent: "planner-profile"},
+				{Name: "implementor", Agent: "impl-profile"},
+			},
+			Steps: []model.Step{
+				{ID: "s1", Prompt: "plan", Session: "planner"},
+				{ID: "s2", Prompt: "impl", Session: "implementor"},
+			},
+		}
+		if err := WorkflowConstraints(&w, Options{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("named session step in loop body resolves against workflow declarations", func(t *testing.T) {
+		w := model.Workflow{
+			Name:     "test",
+			Sessions: []model.SessionDecl{{Name: "planner", Agent: "planner-profile"}},
+			Steps: []model.Step{{
+				ID: "loop", Session: model.SessionNew,
+				Loop: &model.Loop{Max: intPtr(3)},
+				Steps: []model.Step{
+					{ID: "body", Prompt: "do it", Session: "planner"},
+				},
+			}},
+		}
+		if err := WorkflowConstraints(&w, Options{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("rejects session declaration with empty name", func(t *testing.T) {
+		w := model.Workflow{
+			Name:     "test",
+			Sessions: []model.SessionDecl{{Name: "", Agent: "planner-profile"}},
+			Steps:    []model.Step{shellStep("s1")},
+		}
+		err := WorkflowConstraints(&w, Options{})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("rejects session declaration with empty agent", func(t *testing.T) {
+		w := model.Workflow{
+			Name:     "test",
+			Sessions: []model.SessionDecl{{Name: "planner", Agent: ""}},
+			Steps:    []model.Step{shellStep("s1")},
+		}
+		err := WorkflowConstraints(&w, Options{})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	})
+}

@@ -120,6 +120,68 @@ func TestResolveInheritSession(t *testing.T) {
 	})
 }
 
+func TestResolveNamedSession(t *testing.T) {
+	t.Run("returns session ID when named session exists", func(t *testing.T) {
+		ctx := model.NewRootContext(&model.RootContextOptions{
+			Params:        map[string]string{},
+			WorkflowFile:  "test.yaml",
+			NamedSessions: map[string]string{"planner": "session-abc"},
+		})
+
+		id := ResolveNamedSession("planner", ctx)
+		if id != "session-abc" {
+			t.Fatalf("expected 'session-abc', got %q", id)
+		}
+	})
+
+	t.Run("returns empty string when named session does not exist", func(t *testing.T) {
+		ctx := model.NewRootContext(&model.RootContextOptions{
+			Params:       map[string]string{},
+			WorkflowFile: "test.yaml",
+		})
+
+		id := ResolveNamedSession("planner", ctx)
+		if id != "" {
+			t.Fatalf("expected empty string, got %q", id)
+		}
+	})
+
+	t.Run("returns empty string for a different name", func(t *testing.T) {
+		ctx := model.NewRootContext(&model.RootContextOptions{
+			Params:        map[string]string{},
+			WorkflowFile:  "test.yaml",
+			NamedSessions: map[string]string{"planner": "session-abc"},
+		})
+
+		id := ResolveNamedSession("implementor", ctx)
+		if id != "" {
+			t.Fatalf("expected empty string for 'implementor', got %q", id)
+		}
+	})
+
+	t.Run("sees sessions written by child contexts (shared map)", func(t *testing.T) {
+		parent := model.NewRootContext(&model.RootContextOptions{
+			Params:       map[string]string{},
+			WorkflowFile: "parent.yaml",
+		})
+
+		child := model.NewSubWorkflowContext(parent, &model.SubWorkflowContextOptions{
+			StepID:       "sub",
+			Params:       map[string]string{},
+			WorkflowFile: "child.yaml",
+		})
+
+		// Child writes to the shared map.
+		child.NamedSessions["planner"] = "child-created-session"
+
+		// Parent can see it immediately (shared pointer).
+		id := ResolveNamedSession("planner", parent)
+		if id != "child-created-session" {
+			t.Fatalf("expected 'child-created-session' in parent context, got %q", id)
+		}
+	})
+}
+
 func TestResolveResumeSession(t *testing.T) {
 	t.Run("resumes session from same workflow file", func(t *testing.T) {
 		ctx := model.NewRootContext(&model.RootContextOptions{

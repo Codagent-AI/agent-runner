@@ -108,6 +108,45 @@ func TestExecuteLoopStep(t *testing.T) {
 		}
 	})
 
+	t.Run("counted loop exposes iteration index via as_index", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}, {ExitCode: 0}, {ExitCode: 0}}}
+		step := model.Step{
+			ID: "loop", Session: model.SessionNew,
+			Loop:  &model.Loop{Max: intPtr(3), AsIndex: "i"},
+			Steps: []model.Step{{ID: "a", Command: "echo iter {{i}}", Session: model.SessionNew}},
+		}
+		_, err := ExecuteLoopStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{}, LoopExecuteOptions{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := []string{"echo iter 0", "echo iter 1", "echo iter 2"}
+		for idx, call := range runner.calls {
+			if call[2] != want[idx] {
+				t.Fatalf("call %d: expected %q, got %q", idx, want[idx], call[2])
+			}
+		}
+	})
+
+	t.Run("for-each loop exposes iteration index via as_index", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}, {ExitCode: 0}}}
+		glob := &mockGlob{matches: []string{"a.go", "b.go"}}
+		step := model.Step{
+			ID: "loop", Session: model.SessionNew,
+			Loop:  &model.Loop{Over: "*.go", As: "file", AsIndex: "i"},
+			Steps: []model.Step{{ID: "p", Command: "echo {{i}}:{{file}}", Session: model.SessionNew}},
+		}
+		_, err := ExecuteLoopStep(&step, makeCtx(), runner, glob, &mockLogger{}, LoopExecuteOptions{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := []string{"echo 0:a.go", "echo 1:b.go"}
+		for idx, call := range runner.calls {
+			if call[2] != want[idx] {
+				t.Fatalf("call %d: expected %q, got %q", idx, want[idx], call[2])
+			}
+		}
+	})
+
 	t.Run("resume from iteration", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		step := model.Step{

@@ -6,9 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/codagent/agent-runner/internal/loader"
-	"github.com/codagent/agent-runner/internal/model"
 )
 
 func TestParseLine(t *testing.T) {
@@ -127,23 +124,14 @@ func TestParsePrefix(t *testing.T) {
 
 func iptr(v int) *int { return &v }
 
-// buildImplementChangeTree loads the real workflow and injects a fake sub-workflow
-// loader so tests don't need to read implement-task.yaml from disk.
+// buildImplementChangeTree builds an implement-change tree from an in-memory
+// fixture and wires up a fixture-backed SubWorkflowLoader so tests never read
+// the shipping workflows/ YAML.
 func buildImplementChangeTree(t *testing.T) *Tree {
 	t.Helper()
-	wf, wfPath := loadWorkflowForTest(t, "openspec/implement-change.yaml")
-	tree := BuildTree(&wf, wfPath)
-	tree.SubWorkflowLoader = func(path string) (model.Workflow, error) {
-		// The only sub-workflow referenced by implement-change is implement-task.yaml.
-		return model.Workflow{
-			Name: "implement-task",
-			Steps: []model.Step{
-				{ID: "implement", Agent: "implementor", Session: model.SessionNew, Prompt: "p"},
-				{ID: "run-validator", Workflow: "run-validator.yaml"},
-				{ID: "check-clean", Command: "test -z"},
-			},
-		}, nil
-	}
+	wf := fixtureImplementChange()
+	tree := BuildTree(&wf, fixturePath("openspec/implement-change.yaml"))
+	tree.SubWorkflowLoader = fixtureSubLoader()
 	return tree
 }
 
@@ -311,8 +299,9 @@ func TestApplyEvent_SubWorkflowLazyLoad(t *testing.T) {
 	if !sub.SubLoaded {
 		t.Fatalf("expected sub-workflow body lazy-loaded")
 	}
-	if len(sub.Children) != 3 {
-		t.Errorf("want 3 sub-workflow children, got %d", len(sub.Children))
+	if len(sub.Children) != len(fixtureImplementTask().Steps) {
+		t.Errorf("want %d sub-workflow children (from fixture), got %d",
+			len(fixtureImplementTask().Steps), len(sub.Children))
 	}
 	// ensureSubWorkflowLoaded set the absolute path before applySubWorkflowStart
 	// ran, so the event's workflow_path does not clobber it.
@@ -360,11 +349,9 @@ func TestApplyEvent_SubWorkflowLazyLoad(t *testing.T) {
 func TestApplyEvent_NestedSubWorkflowUnderLoop(t *testing.T) {
 	// Top-level workflow: one sub-workflow step "implement" that points at
 	// implement-change.yaml.
-	wf, wfPath := loadWorkflowForTest(t, "openspec/change.yaml")
-	tree := BuildTree(&wf, wfPath)
-	tree.SubWorkflowLoader = func(path string) (model.Workflow, error) {
-		return loader.LoadWorkflow(path, loader.Options{IsSubWorkflow: true})
-	}
+	wf := fixtureChange()
+	tree := BuildTree(&wf, fixturePath("openspec/change.yaml"))
+	tree.SubWorkflowLoader = fixtureSubLoader()
 
 	// Outer sub-workflow start (implement → implement-change.yaml). Audit
 	// events carry whatever path the executor used, which in practice is

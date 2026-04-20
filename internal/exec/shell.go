@@ -1,13 +1,58 @@
 package exec
 
 import (
+	"errors"
+	"fmt"
+	"os/exec"
 	"time"
 	"unicode/utf8"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/flowctl"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/textfmt"
 )
+
+// runSkipShell runs a skip_if shell expression and returns its exit code.
+// Overridden in tests to avoid spawning subprocesses.
+var runSkipShell = func(cmd string) (int, error) {
+	c := exec.Command("sh", "-c", cmd) // #nosec G204 -- skip_if command comes from workflow YAML
+	err := c.Run()
+	if err == nil {
+		return 0, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode(), nil
+	}
+	return -1, err
+}
+
+// ShouldSkipStep evaluates a step's skip_if condition. For "previous_success",
+// it returns true when the previous step in scope succeeded. For "sh:<cmd>",
+// it interpolates the command, runs it through the shell, and returns true
+// when the exit code is 0. An empty skip_if returns (false, nil).
+//
+// The shell form runs directly via os/exec — bypassing ProcessRunner — so
+// evaluation output does not leak into the TUI live-run view or clobber the
+// surrounding step's output files.
+func ShouldSkipStep(skipIf string, lastOutcome *string, ctx *model.ExecutionContext, stepID string) (bool, error) {
+	if skipIf == "" {
+		return false, nil
+	}
+	if cmd, ok := flowctl.ShellSkipCommand(skipIf); ok {
+		expanded, err := textfmt.Interpolate(cmd, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
+		if err != nil {
+			return false, fmt.Errorf("skip_if interpolation: %w", err)
+		}
+		exitCode, runErr := runSkipShell(expanded)
+		if runErr != nil {
+			return false, fmt.Errorf("skip_if shell: %w", runErr)
+		}
+		return exitCode == 0, nil
+	}
+	return flowctl.ShouldSkip(skipIf, lastOutcome), nil
+}
 
 const maxAuditValueLen = 4096
 
@@ -70,7 +115,7 @@ func ExecuteShellStep(
 		return OutcomeFailed, nil
 	}
 
-	command, err := textfmt.Interpolate(step.Command, ctx.Params, ctx.CapturedVariables)
+	command, err := textfmt.Interpolate(step.Command, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(step.ID))
 	if err != nil {
 		prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 		emitAudit(ctx, audit.Event{

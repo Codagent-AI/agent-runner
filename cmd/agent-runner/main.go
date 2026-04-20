@@ -265,14 +265,24 @@ func handleResume(sessionID string) int {
 	})
 	if err != nil {
 		if errors.Is(err, runner.ErrAlreadyCompleted) {
-			fmt.Fprintln(os.Stderr, "agent-runner: workflow already completed")
-			return 0
+			sessionDir, projectDir := resumeInspectPaths(stateFilePath)
+			return openInspectTUI(sessionID, sessionDir, projectDir)
 		}
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
 	}
 
 	return runLiveTUI(h)
+}
+
+// resumeInspectPaths maps a resume state-file path to the session and project
+// directories the run-view expects. The layout is
+// `<projectDir>/runs/<run-id>/state.json`, so sessionDir is the state file's
+// parent and projectDir is two levels above that.
+func resumeInspectPaths(stateFilePath string) (sessionDir, projectDir string) {
+	sessionDir = filepath.Dir(stateFilePath)
+	projectDir = filepath.Dir(filepath.Dir(sessionDir))
+	return
 }
 
 func handleInspect(runID string) int {
@@ -287,6 +297,14 @@ func handleInspect(runID string) int {
 		return 1
 	}
 
+	return openInspectTUI(runID, sessionDir, projectDir)
+}
+
+// openInspectTUI launches the run-view TUI in FromInspect mode for a session
+// that is not currently executing. Shared between --inspect and the
+// "completed" branch of --resume, since both open a read-only view of a
+// recorded run.
+func openInspectTUI(runID, sessionDir, projectDir string) int {
 	if runlock.CheckOwnedByOther(sessionDir, os.Getpid()) {
 		fmt.Fprintf(os.Stderr, "agent-runner: run %q is active in another process\n", runID)
 		return 1
@@ -319,21 +337,58 @@ func handleList() int {
 }
 
 func runSwitcher(sw *switcher) int {
-	p := tea.NewProgram(sw, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	result, err := p.Run()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-		return 1
-	}
+	for {
+		p := tea.NewProgram(sw, tea.WithAltScreen(), tea.WithMouseCellMotion())
+		result, err := p.Run()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+			return 1
+		}
 
-	final, ok := result.(*switcher)
-	if !ok {
-		return 0
+		final, ok := result.(*switcher)
+		if !ok {
+			return 0
+		}
+		if final.resumeRunID != "" {
+			return execRunnerResume(final.resumeRunID, final.resumeRunProjectDir)
+		}
+		if final.resumeSessionID == "" {
+			return 0
+		}
+
+		spawnErr := spawnAgentResume(final.resumeAgentCLI, final.resumeSessionID)
+		sw, err = switcherForReentry(final, spawnErr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+			return 1
+		}
 	}
-	if final.resumeSessionID != "" {
-		return execAgentResume(final.resumeAgentCLI, final.resumeSessionID)
+}
+
+// switcherForReentry rebuilds a switcher around a fresh runview Model after a
+// resumed agent CLI subprocess has exited. The previous list model and the
+// runview's target (sessionDir/projectDir/entered) are preserved so esc still
+// navigates back to the list where applicable.
+func switcherForReentry(prev *switcher, spawnErr error) (*switcher, error) {
+	if prev.runview == nil {
+		return nil, fmt.Errorf("re-entry: no runview to rebuild")
 	}
-	return 0
+	rv, err := runview.NewForReentry(
+		prev.runview.SessionDir(),
+		prev.runview.ProjectDir(),
+		prev.runview.Entered(),
+		spawnErr,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &switcher{
+		list:       prev.list,
+		runview:    rv,
+		mode:       showingRunView,
+		termWidth:  prev.termWidth,
+		termHeight: prev.termHeight,
+	}, nil
 }
 
 // runLiveTUI starts the runview TUI in FromLiveRun mode with the workflow
@@ -371,58 +426,135 @@ func runLiveTUI(h *runner.RunHandle) int {
 		})
 	}()
 
-	_, err = p.Run()
+	rv, err = finalRunviewModel(p.Run())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
 	}
 
-	// If the runner finished before the TUI exited, map its result to an exit
+	// If the user did not request a resume, map the runner result to an exit
 	// code. If the user confirmed quit while the workflow was still running,
 	// resultCh has no value yet — keep the documented orphan-on-quit behavior
 	// and return 0 without blocking on the lingering goroutine.
-	select {
-	case runResult := <-resultCh:
-		if runResult != runner.ResultSuccess {
+	if rv.ResumeSessionID() == "" {
+		select {
+		case runResult := <-resultCh:
+			if runResult != runner.ResultSuccess {
+				return 1
+			}
+		default:
+		}
+		return 0
+	}
+
+	// The user pressed enter on a completed agent step. Wait for the runner
+	// goroutine so its run lock is released before handing the terminal to the
+	// agent CLI, then enter the spawn-and-reenter loop.
+	<-resultCh
+
+	for rv.ResumeSessionID() != "" {
+		spawnErr := spawnAgentResume(rv.ResumeAgentCLI(), rv.ResumeSessionID())
+		rv, err = runview.NewForReentry(h.SessionDir, h.ProjectDir, runview.FromLiveRun, spawnErr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 			return 1
 		}
-	default:
+		p = tea.NewProgram(rv, tea.WithAltScreen(), tea.WithMouseCellMotion())
+		rv, err = finalRunviewModel(p.Run())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+			return 1
+		}
 	}
 	return 0
 }
 
-// allowedResumeCLIs bounds execAgentResume's `cli` argument. Resume metadata
-// originates from audit logs and workflow YAML — both attacker-influenceable
-// when inspecting runs from untrusted sources — and the value flows into
-// syscall.Exec with the full environment. The allowlist mirrors
-// internal/config.validCLI; keep them in sync when adding new agent CLIs.
-var allowedResumeCLIs = map[string]bool{
-	"claude": true,
-	"codex":  true,
+// finalRunviewModel extracts the terminal runview Model returned by tea.Program.Run.
+// Capturing the returned model (rather than relying on the pointer originally
+// passed in) keeps resume-state reads robust against future Update implementations
+// that return a fresh instance instead of the same pointer.
+func finalRunviewModel(final tea.Model, err error) (*runview.Model, error) {
+	if err != nil {
+		return nil, err
+	}
+	rv, ok := final.(*runview.Model)
+	if !ok {
+		return nil, fmt.Errorf("unexpected model type %T returned by tea.Program.Run", final)
+	}
+	return rv, nil
 }
 
-// execAgentResume replaces the current process with `<cli> --resume <session-id>`
-// so the agent CLI inherits the terminal directly. This is the runview resume
-// path: it resumes an individual agent conversation, NOT an agent-runner
-// workflow run — despite both flags being spelled `--resume`, they live in
-// different subsystems with different ID spaces (agent CLI session UUID vs.
-// agent-runner run directory name).
-func execAgentResume(cli, sessionID string) int {
+// allowedResumeCLIs bounds resume CLI arguments. Resume metadata originates
+// from audit logs and workflow YAML — both attacker-influenceable when
+// inspecting runs from untrusted sources — and the value flows into
+// syscall.Exec / exec.Command with the full environment. The allowlist mirrors
+// internal/config.validCLI; keep them in sync when adding new agent CLIs.
+var allowedResumeCLIs = map[string]bool{
+	"claude":  true,
+	"codex":   true,
+	"copilot": true,
+}
+
+// resolveResumeCLI validates `cli` against the resume allowlist and resolves
+// it to an absolute path via PATH lookup. Callers must treat the returned path
+// as safe to pass to syscall.Exec / exec.Command even though the surrounding
+// arguments originate from audit logs.
+func resolveResumeCLI(cli string) (resolvedCLI, path string, err error) {
 	if cli == "" {
 		cli = "claude"
 	}
 	if strings.ContainsAny(cli, `/\`) || !allowedResumeCLIs[cli] {
-		fmt.Fprintf(os.Stderr, "agent-runner: refusing to resume: unsupported agent CLI %q\n", cli)
-		return 1
+		return cli, "", fmt.Errorf("refusing to resume: unsupported agent CLI %q", cli)
 	}
-	path, err := exec.LookPath(cli)
+	path, err = exec.LookPath(cli)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-runner: cannot find agent CLI %q in PATH: %v\n", cli, err)
+		return cli, "", fmt.Errorf("cannot find agent CLI %q in PATH: %w", cli, err)
+	}
+	return cli, path, nil
+}
+
+// spawnAgentResume spawns `<cli> --resume <session-id>` as a subprocess and
+// waits for it to exit. It does not replace the current process, so the
+// caller can re-enter the run view after the CLI exits. A non-zero CLI exit
+// code is not treated as an error — the user may have typed /exit or /quit.
+// Only spawn failures (binary not found, permission error, etc.) are
+// returned as errors.
+func spawnAgentResume(cli, sessionID string) error {
+	resolved, path, err := resolveResumeCLI(cli)
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(path, "--resume", sessionID) // #nosec G204 -- cli validated by resolveResumeCLI
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("spawn %s --resume: %w", resolved, err)
+	}
+	_ = cmd.Wait() // non-zero exit is normal (user typed /exit or /quit)
+	return nil
+}
+
+// execRunnerResume replaces the current process with `agent-runner --resume
+// <run-id>`, resuming an interrupted workflow run. Uses the current executable
+// path so it works even when agent-runner is not in PATH. If projectDir is
+// non-empty, the process chdirs there first so that resolveResumeStatePath
+// looks in the correct project tree when the run belongs to a different project.
+func execRunnerResume(runID, projectDir string) int {
+	if projectDir != "" {
+		if err := os.Chdir(projectDir); err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: chdir %s: %v\n", projectDir, err)
+			return 1
+		}
+	}
+	self, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: cannot resolve executable path: %v\n", err)
 		return 1
 	}
-	args := []string{cli, "--resume", sessionID}
-	if err := syscall.Exec(path, args, os.Environ()); err != nil { // #nosec G204 -- cli validated against allowlist above
-		fmt.Fprintf(os.Stderr, "agent-runner: exec %s --resume: %v\n", cli, err)
+	args := []string{filepath.Base(self), "--resume", runID}
+	if err := syscall.Exec(self, args, os.Environ()); err != nil { // #nosec G204 -- self is our own os.Executable() path; runID is a pre-validated session directory name
+		fmt.Fprintf(os.Stderr, "agent-runner: exec --resume: %v\n", err)
 		return 1
 	}
 	return 0
@@ -474,9 +606,11 @@ type switcher struct {
 	termWidth  int
 	termHeight int
 
-	resumeAgentCLI  string
-	resumeSessionID string
-	viewErr         string
+	resumeAgentCLI      string
+	resumeSessionID     string
+	resumeRunID         string
+	resumeRunProjectDir string
+	viewErr             string
 }
 
 func (s *switcher) Init() tea.Cmd {
@@ -528,6 +662,15 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case runview.ResumeMsg:
 		s.resumeAgentCLI = msg.AgentCLI
 		s.resumeSessionID = msg.SessionID
+		return s, tea.Quit
+
+	case runview.ResumeRunMsg:
+		s.resumeRunID = msg.RunID
+		return s, tea.Quit
+
+	case listview.ResumeRunMsg:
+		s.resumeRunID = msg.RunID
+		s.resumeRunProjectDir = msg.ProjectDir
 		return s, tea.Quit
 
 	case runview.ExitMsg:
@@ -597,8 +740,7 @@ func resolveResumeStatePath(sessionID string) (string, error) {
 }
 
 func handleValidate(workflowFile string) int {
-	_, err := loader.LoadWorkflow(workflowFile, loader.Options{})
-	if err != nil {
+	if err := loader.ValidateComposition(workflowFile); err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
 	}

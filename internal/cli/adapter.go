@@ -26,7 +26,7 @@ type Adapter interface {
 	// DiscoverSessionID returns a session ID after the CLI process exits.
 	// For some adapters this is deterministic (e.g. a pre-generated UUID),
 	// for others it requires parsing output or scanning the filesystem.
-	DiscoverSessionID(opts DiscoverOptions) string
+	DiscoverSessionID(opts *DiscoverOptions) string
 
 	// SupportsSystemPrompt reports whether this adapter can deliver content
 	// as a native system prompt (e.g. via --append-system-prompt).
@@ -39,12 +39,20 @@ type DiscoverOptions struct {
 	PresetID      string // Pre-generated session ID (used by Claude adapter)
 	ProcessOutput string // Captured stdout/stderr from the CLI process (used by Codex headless)
 	Headless      bool
+	Workdir       string // Effective working directory of the CLI process (for Copilot filesystem discovery)
+}
+
+// InteractiveRejector is an optional interface adapters may implement to refuse
+// interactive mode at runtime with a descriptive error.
+type InteractiveRejector interface {
+	InteractiveModeError() error
 }
 
 // registry holds the known CLI adapters, populated at init time.
 var registry = map[string]Adapter{
-	"claude": &ClaudeAdapter{},
-	"codex":  &CodexAdapter{},
+	"claude":  &ClaudeAdapter{},
+	"codex":   &CodexAdapter{},
+	"copilot": &CopilotAdapter{},
 }
 
 // Get returns the adapter for the given CLI name, or an error if unknown.

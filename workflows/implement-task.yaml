@@ -4,6 +4,9 @@ description: "Implement a single task: agent step then validator retry"
 params:
   - name: task_file
     required: true
+  - name: run_session_report
+    required: false
+    default: "false"
 
 steps:
   - id: implement
@@ -13,15 +16,7 @@ steps:
       Implement the task described in {{task_file}}.
 
       When you are done implementing, commit your changes with a clear,
-      descriptive commit message. Then summarize to the user what you changed.
-
-  - id: simplify
-    session: resume
-    prompt: |
-      If the /simplify skill is available, run it focusing on code reuse and readability.
-      If it is not available, review your git diff for duplicated logic that should be
-      extracted into shared helpers, and readability issues like deep nesting, unclear
-      naming, or overly complex conditionals. Fix and commit anything clear-cut.
+      descriptive commit message prefixed with [{{step_id}}]. Then summarize to the user what you changed.
 
   - id: run-validator
     workflow: run-validator.yaml
@@ -37,6 +32,7 @@ steps:
       Run git status and git diff to review them. Only stage and commit files
       that are related to this task and appropriate to check into git — ignore
       unrelated changes, generated artifacts, or files that should be gitignored.
+      Prefix the commit message with [{{step_id}}].
       Summarize which files you committed and which you left out, and why.
     skip_if: previous_success
 
@@ -44,3 +40,4 @@ steps:
     session: resume
     prompt: |
       Run the codagent:session-report skill against the task file {{task_file}}.
+    skip_if: 'sh: test "{{run_session_report}}" != "true"'

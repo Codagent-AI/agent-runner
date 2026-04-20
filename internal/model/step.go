@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/codagent/agent-runner/internal/flowctl"
 )
 
 // StepMode defines how a step executes.
@@ -25,11 +27,29 @@ const (
 	SessionInherit SessionStrategy = "inherit"
 )
 
+// IsNamedSession reports whether s is a named session reference (not empty and
+// not one of the reserved strategy keywords new/resume/inherit).
+func IsNamedSession(s SessionStrategy) bool {
+	switch s {
+	case SessionNew, SessionResume, SessionInherit, "":
+		return false
+	default:
+		return true
+	}
+}
+
+// SessionDecl declares a named agent session for a workflow.
+type SessionDecl struct {
+	Name  string `yaml:"name" json:"name"`
+	Agent string `yaml:"agent" json:"agent"`
+}
+
 // Loop defines iteration behavior for a step.
 type Loop struct {
 	Max            *int   `yaml:"max,omitempty" json:"max,omitempty"`
 	Over           string `yaml:"over,omitempty" json:"over,omitempty"`
 	As             string `yaml:"as,omitempty" json:"as,omitempty"`
+	AsIndex        string `yaml:"as_index,omitempty" json:"as_index,omitempty"`
 	RequireMatches *bool  `yaml:"require_matches,omitempty" json:"require_matches,omitempty"`
 }
 
@@ -53,6 +73,10 @@ func (l *Loop) Validate() error {
 
 	if hasMax && *l.Max <= 0 {
 		return fmt.Errorf(`loop "max" must be a positive integer`)
+	}
+
+	if l.AsIndex != "" && l.AsIndex == l.As {
+		return fmt.Errorf(`loop "as_index" must differ from "as"`)
 	}
 
 	return nil
@@ -173,22 +197,26 @@ func (s *Step) Validate(knownCLIs []string) error {
 }
 
 // validateAgentField checks that the agent field is used correctly:
-// required on session:new agent steps, forbidden on resume/inherit and shell steps.
-// Also rejects unknown session strategy values on agent steps.
+// required on session:new agent steps, forbidden on resume/inherit/named and shell steps.
+// Named session values (not new/resume/inherit) are accepted; agent: is forbidden on them.
 func (s *Step) validateAgentField(isAgent, isShell bool) error {
 	if isAgent {
-		switch s.Session {
-		case SessionNew:
+		switch {
+		case s.Session == SessionNew:
 			if s.Agent == "" {
 				return fmt.Errorf(`"agent" is required on agent steps with session "new"`)
 			}
-		case SessionResume, SessionInherit:
+		case s.Session == SessionResume || s.Session == SessionInherit:
 			if s.Agent != "" {
 				return fmt.Errorf(`"agent" cannot be specified on %s steps`, s.Session)
 			}
+		case IsNamedSession(s.Session):
+			if s.Agent != "" {
+				return fmt.Errorf(`"agent" cannot be specified on named session steps; it is pinned by the session declaration`)
+			}
 		default:
 			if s.Session != "" {
-				return fmt.Errorf(`invalid session strategy %q (must be new, resume, or inherit)`, s.Session)
+				return fmt.Errorf(`invalid session strategy %q (must be new, resume, inherit, or a declared session name)`, s.Session)
 			}
 		}
 	}
@@ -213,7 +241,7 @@ func (s *Step) validateCaptureFields(isAgent, isShell bool) error {
 			if s.Mode != "" && s.Mode != ModeHeadless {
 				return fmt.Errorf(`"capture" is only allowed on shell and headless steps`)
 			}
-			if s.Mode == "" && s.Agent == "" && s.Session != SessionResume && s.Session != SessionInherit {
+			if s.Mode == "" && s.Agent == "" && s.Session != SessionResume && s.Session != SessionInherit && !IsNamedSession(s.Session) {
 				return fmt.Errorf(`"capture" is only allowed on shell and headless steps`)
 			}
 		}
@@ -271,7 +299,9 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 	}
 
 	if s.SkipIf != "" && s.SkipIf != "previous_success" {
-		return fmt.Errorf(`invalid skip_if value: %q`, s.SkipIf)
+		if cmd, ok := flowctl.ShellSkipCommand(s.SkipIf); !ok || cmd == "" {
+			return fmt.Errorf(`invalid skip_if value: %q`, s.SkipIf)
+		}
 	}
 
 	if s.BreakIf != "" && s.BreakIf != "success" && s.BreakIf != "failure" {
@@ -311,6 +341,7 @@ type Workflow struct {
 	Name        string        `yaml:"name" json:"name"`
 	Description string        `yaml:"description,omitempty" json:"description,omitempty"`
 	Params      []Param       `yaml:"params,omitempty" json:"params,omitempty"`
+	Sessions    []SessionDecl `yaml:"sessions,omitempty" json:"sessions,omitempty"`
 	Steps       []Step        `yaml:"steps" json:"steps"`
 	Engine      *EngineConfig `yaml:"engine,omitempty" json:"engine,omitempty"`
 }

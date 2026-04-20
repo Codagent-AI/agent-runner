@@ -29,6 +29,13 @@ type ResumeMsg struct {
 	SessionID string
 }
 
+// ResumeRunMsg asks the shell to exit the TUI and exec `agent-runner --resume
+// <run-id>`, resuming the interrupted workflow run itself. RunID is the
+// agent-runner run ID (the session directory name), NOT an agent CLI session ID.
+type ResumeRunMsg struct {
+	RunID string
+}
+
 type ExitMsg struct{}
 
 // Entered describes how the user reached the run view.
@@ -61,6 +68,7 @@ type Model struct {
 	detailWidth int
 	showLegend  bool
 	loadErr     string
+	notice      string // transient message shown below the step list (e.g. spawn error)
 
 	resolverCfg ResolverConfig
 	startTime   time.Time
@@ -72,7 +80,32 @@ type Model struct {
 	autoFollow       bool   // cursor tracks activeStep; enabled by default in FromLiveRun
 	tailFollow       bool   // detail pane viewport pinned to tail; enabled by default in FromLiveRun
 	activeStepPrefix string // last known active step prefix from StepStateMsg
+
+	// Resume-exec state. When the user selects an agent step after the live
+	// run completes, the Model is the top-level tea.Program — there's no
+	// switcher to intercept ResumeMsg — so we stash the info here and quit.
+	// The CLI wrapper reads it via ResumeAgentCLI/ResumeSessionID after
+	// p.Run() returns and execs the agent CLI.
+	resumeAgentCLI  string
+	resumeSessionID string
 }
+
+// ResumeAgentCLI returns the agent CLI name captured from a ResumeMsg in
+// live-run mode. Empty when no resume was requested.
+func (m *Model) ResumeAgentCLI() string { return m.resumeAgentCLI }
+
+// ResumeSessionID returns the agent CLI session ID captured from a ResumeMsg
+// in live-run mode. Empty when no resume was requested.
+func (m *Model) ResumeSessionID() string { return m.resumeSessionID }
+
+// SessionDir returns the session directory the Model was constructed for.
+func (m *Model) SessionDir() string { return m.sessionDir }
+
+// ProjectDir returns the project directory the Model was constructed for.
+func (m *Model) ProjectDir() string { return m.projectDir }
+
+// Entered returns the entry path used to construct the Model.
+func (m *Model) Entered() Entered { return m.entered }
 
 // New constructs a runview Model from a session directory.
 func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
@@ -151,6 +184,26 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	return m, nil
 }
 
+// NewForReentry creates a Model for re-entering the run view after a resumed
+// agent CLI subprocess has exited. It re-reads audit and state files from
+// sessionDir so any events produced by the resumed session appear. The
+// entered mode is preserved from the original entry path (FromLiveRun,
+// FromList, or FromInspect) so back-navigation still works. A non-nil
+// spawnErr is surfaced to the user in the view.
+func NewForReentry(sessionDir, projectDir string, entered Entered, spawnErr error) (*Model, error) {
+	m, err := New(sessionDir, projectDir, entered)
+	if err != nil {
+		return nil, err
+	}
+	m.running = false
+	m.autoFollow = false
+	m.tailFollow = false
+	if spawnErr != nil {
+		m.notice = spawnErr.Error()
+	}
+	return m, nil
+}
+
 // describeWorkflowHint returns a compact description of what the resolver
 // tried, used in the user-facing error when nothing matched.
 func describeWorkflowHint(state *model.RunState, sessionDir string) string {
@@ -201,6 +254,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Terminal handoff bookkeeping; no visual change needed.
 		return m, nil
 
+	case ResumeMsg:
+		// Top-level live-run model: no switcher intercepts this, so stash the
+		// info and quit. The CLI wrapper execs the agent CLI after p.Run()
+		// returns.
+		m.resumeAgentCLI = msg.AgentCLI
+		m.resumeSessionID = msg.SessionID
+		return m, tea.Quit
+
+	case ExitMsg:
+		// In the live-run path this Model is the top-level tea.Program model
+		// (no switcher wrap), so ExitMsg must be translated into tea.Quit here.
+		// When wrapped in the switcher (FromList / FromInspect paths), the
+		// switcher intercepts ExitMsg before delegation, so this branch is
+		// inert in that case.
+		return m, tea.Quit
+
 	case liverun.ExecDoneMsg:
 		// Drain any outstanding audit events before deciding which step to
 		// focus. Step statuses reach the tree via audit.log (not OutputChunkMsg),
@@ -209,9 +278,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshData()
 		m.running = false
 		m.liveResult = msg.Result
-		if msg.Result == "failed" {
+		switch msg.Result {
+		case "failed":
 			if failed := findFailedLeaf(m.tree.Root); failed != nil {
 				m.navigateToNode(failed)
+			}
+		case "success":
+			// Land on the final top-level step so the user sees the
+			// workflow's end state. Loop iterations and other deep
+			// leaves emit StepStateMsg before their tree nodes exist
+			// (audit replay runs lazily), so cursor often gets stuck
+			// on the last step whose node was already in the tree —
+			// not the actual last step that ran.
+			if last := lastTopLevelChild(m.tree.Root); last != nil {
+				m.navigateToNode(last)
 			}
 		}
 		return m, nil
@@ -246,6 +326,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tuistyle.DoPulse()
 	}
 	return m, nil
+}
+
+// canResumeRun reports whether the `r` resume-run action is available.
+// True only when the run is inactive (interrupted, not active elsewhere, not
+// a just-finished live run, and not in a terminal completed/failed state).
+func (m *Model) canResumeRun() bool {
+	return m.sessionDir != "" &&
+		!m.running && !m.active && m.liveResult == "" &&
+		m.rootStatus() != StatusFailed && m.rootStatus() != StatusSuccess
 }
 
 // handleKey processes a key message. Extracted from Update to keep the main
@@ -285,25 +374,28 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		m.autoFollow = false
 		return m.handleEnter()
-	case "up", "k":
+	case "up":
 		m.autoFollow = false
-		m.tailFollow = false
 		m.moveCursor(-1)
-	case "down", "j":
+	case "down":
 		m.autoFollow = false
-		m.tailFollow = false
 		m.moveCursor(1)
+	case "k":
+		m.tailFollow = false
+		m.scrollDetail(-1)
+	case "j":
+		m.scrollDetail(1)
 	case "l":
 		m.autoFollow = true
 		m.navigateToNode(m.tree.FindByPrefix(m.activeStepPrefix))
-	case "pgup":
-		m.tailFollow = false
-		m.scrollDetail(-m.detailPageSize())
-	case "pgdown":
-		m.scrollDetail(m.detailPageSize())
-	case "end", "G":
+	case "t":
 		m.tailFollow = true
 		m.detailOffset = math.MaxInt32
+	case "r":
+		if m.canResumeRun() {
+			runID := filepath.Base(m.sessionDir)
+			return m, func() tea.Msg { return ResumeRunMsg{RunID: runID} }
+		}
 	case "g":
 		m.handleLoadFull()
 	}
@@ -376,13 +468,6 @@ func (m *Model) scrollDetail(delta int) {
 	}
 }
 
-func (m *Model) detailPageSize() int {
-	if m.termHeight <= 6 {
-		return 10
-	}
-	return m.termHeight - 6
-}
-
 func (m *Model) handleEsc() (tea.Model, tea.Cmd) {
 	if len(m.path) > 1 {
 		leaving := m.path[len(m.path)-1]
@@ -443,7 +528,10 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case NodeHeadlessAgent, NodeInteractiveAgent:
-		if n.SessionID != "" {
+		// Resume is only meaningful after the run has ended — while the
+		// workflow is live, the agent session is owned by the runner and
+		// cannot be attached to by the user.
+		if n.SessionID != "" && !m.running {
 			return m, func() tea.Msg {
 				return ResumeMsg{AgentCLI: n.AgentCLI, SessionID: n.SessionID}
 			}
@@ -529,6 +617,16 @@ func (m *Model) navigateToNode(target *StepNode) {
 	} else {
 		m.detailOffset = 0
 	}
+}
+
+// lastTopLevelChild returns the final direct child of root, or nil when
+// root has no children. Used to park the cursor on the last workflow step
+// after a successful run.
+func lastTopLevelChild(root *StepNode) *StepNode {
+	if root == nil || len(root.Children) == 0 {
+		return nil
+	}
+	return root.Children[len(root.Children)-1]
 }
 
 // findFailedLeaf returns the deepest non-container StepNode with StatusFailed,

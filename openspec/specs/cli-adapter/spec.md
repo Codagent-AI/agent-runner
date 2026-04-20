@@ -6,11 +6,15 @@ Defines the CLI adapter abstraction for constructing CLI invocation args across 
 ## Requirements
 ### Requirement: CLI adapter registry
 
-The runner SHALL maintain a hard-coded registry of known CLI adapters. Each adapter SHALL be identified by a string key (e.g., `claude`, `codex`). The registry is compile-time — adding a new CLI requires a code change.
+The runner SHALL maintain a hard-coded registry of known CLI adapters. Each adapter SHALL be identified by a string key (e.g., `claude`, `codex`, `copilot`). The registry is compile-time — adding a new CLI requires a code change.
 
 #### Scenario: Known CLI resolved
 - **WHEN** a step specifies `cli: claude`
 - **THEN** the runner resolves the Claude adapter from the registry
+
+#### Scenario: Copilot CLI resolved
+- **WHEN** a step specifies `cli: copilot`
+- **THEN** the runner resolves the Copilot adapter from the registry
 
 #### Scenario: Unknown CLI requested
 - **WHEN** a step specifies a `cli` value not in the registry
@@ -18,7 +22,7 @@ The runner SHALL maintain a hard-coded registry of known CLI adapters. Each adap
 
 ### Requirement: Adapter system prompt capability
 
-Each adapter SHALL declare whether it supports native system prompt delivery. The Claude adapter SHALL declare support. The Codex adapter SHALL declare no support.
+Each adapter SHALL declare whether it supports native system prompt delivery. The Claude adapter SHALL declare support. The Codex adapter SHALL declare no support. The Copilot adapter SHALL declare no support.
 
 Adapters declare support via a `SupportsSystemPrompt() bool` method on the `Adapter` interface. The caller queries this before constructing `BuildArgsInput`, setting the `SystemPrompt` field only when the adapter supports it.
 
@@ -28,6 +32,10 @@ Adapters declare support via a `SupportsSystemPrompt() bool` method on the `Adap
 
 #### Scenario: Codex adapter declares no support
 - **WHEN** the runner queries the Codex adapter for system prompt capability
+- **THEN** the adapter indicates it does not support native system prompts
+
+#### Scenario: Copilot adapter declares no support
+- **WHEN** the runner queries the Copilot adapter for system prompt capability
 - **THEN** the adapter indicates it does not support native system prompts
 
 ### Requirement: Adapter arg construction
@@ -72,4 +80,24 @@ After a CLI process exits, the adapter SHALL attempt to return a session ID. The
 #### Scenario: Session ID unavailable
 - **WHEN** a CLI step completes but the adapter cannot determine the session ID
 - **THEN** the adapter returns empty and the runner logs a warning; future resume for this step is not possible
+
+### Requirement: Session ID persisted before CLI spawn when known
+
+When the session ID is known at spawn time — either because the runner pre-generated it (fresh Claude sessions) or because it was carried in from prior state (any resumed session) — the runner SHALL persist it into the execution context and flush the run state BEFORE spawning the CLI process. This ensures that if the runner is killed mid-step (ctrl-c, terminal hangup, crash) the session is recoverable on workflow resume rather than orphaned. When the session ID is not knowable until after the process has run (fresh Codex sessions), the runner MAY defer persistence to post-exit via the adapter's `DiscoverSessionID`.
+
+#### Scenario: Fresh Claude session persisted before spawn
+- **WHEN** a fresh Claude step is about to spawn the CLI process
+- **THEN** the pre-generated session ID is written to `ctx.SessionIDs[step.id]` and flushed to state before the process is invoked
+
+#### Scenario: Resumed session re-persisted before spawn
+- **WHEN** any resumed agent step is about to spawn the CLI process
+- **THEN** the carried-in session ID is written to `ctx.SessionIDs[step.id]` and flushed to state before the process is invoked
+
+#### Scenario: Runner killed mid-step recovers session on resume
+- **WHEN** a fresh Claude step has been spawned and the runner is killed before the CLI process exits
+- **THEN** the next `--resume` of that run sees the session ID already in state.json and reconnects to the existing CLI session rather than starting a new one
+
+#### Scenario: Fresh Codex session deferred to post-exit
+- **WHEN** a fresh Codex step spawns the CLI process and no pre-generated ID exists
+- **THEN** the runner does not pre-flush a session ID; post-exit discovery via `DiscoverSessionID` remains the sole persistence point
 

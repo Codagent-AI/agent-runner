@@ -68,6 +68,6 @@ func (a *ClaudeAdapter) SupportsSystemPrompt() bool {
 // DiscoverSessionID returns the pre-generated session ID.
 // The Claude adapter uses a deterministic approach: the runner generates a UUID
 // upfront and passes it via --session-id; the adapter returns this same UUID.
-func (a *ClaudeAdapter) DiscoverSessionID(opts DiscoverOptions) string {
+func (a *ClaudeAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
 	return opts.PresetID
 }

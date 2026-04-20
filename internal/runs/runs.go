@@ -28,8 +28,10 @@ const (
 type RunInfo struct {
 	SessionID    string
 	SessionDir   string
-	WorkflowName string
-	CurrentStep  string // empty when status is Completed
+	WorkflowFile string                   // raw workflow file path from state
+	Workflow     model.WorkflowDescriptor // descriptor with computed display name
+	WorkflowName string                   // bare YAML name field (fallback)
+	CurrentStep  string                   // empty when status is Completed
 	Status       Status
 	StartTime    time.Time
 	LastUpdate   time.Time // most recent activity (audit.log mtime)
@@ -60,6 +62,8 @@ func ListForDir(projectDir string) ([]RunInfo, error) {
 		return nil, err
 	}
 
+	originCwd := metaCwd(projectDir)
+
 	var results []RunInfo
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -87,6 +91,7 @@ func ListForDir(projectDir string) ([]RunInfo, error) {
 				state = s
 				stateLoaded = true
 				info.WorkflowName = state.WorkflowName
+				info.WorkflowFile = state.WorkflowFile
 				info.CurrentStep = currentStepID(&state)
 				info.ChangeName = state.Params["change_name"]
 			}
@@ -109,6 +114,12 @@ func ListForDir(projectDir string) ([]RunInfo, error) {
 		// Fallback: parse workflow name from session ID.
 		if info.WorkflowName == "" {
 			info.WorkflowName = parseWorkflowName(sessionID)
+		}
+
+		// Build workflow descriptor for display.
+		info.Workflow = buildDescriptor(info.WorkflowFile, originCwd)
+		if info.Workflow.DisplayName == "" {
+			info.Workflow.DisplayName = info.WorkflowName
 		}
 
 		// Parse start time from session ID.
@@ -239,4 +250,43 @@ func lastUpdateTime(sessionDir string, fallback time.Time) time.Time {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// metaCwd returns the original cwd stored in projectDir/meta.json, or "" if unavailable.
+func metaCwd(projectDir string) string {
+	data, err := os.ReadFile(filepath.Join(projectDir, "meta.json")) // #nosec G304
+	if err != nil {
+		return ""
+	}
+	var meta projectMeta
+	if json.Unmarshal(data, &meta) != nil || meta.Path == "" {
+		return ""
+	}
+	if !filepath.IsAbs(meta.Path) {
+		return ""
+	}
+	return filepath.Clean(meta.Path)
+}
+
+// buildDescriptor computes a WorkflowDescriptor from a workflow file path and
+// the origin cwd used to resolve relative paths.
+func buildDescriptor(workflowFile, originCwd string) model.WorkflowDescriptor {
+	if workflowFile == "" {
+		return model.WorkflowDescriptor{}
+	}
+	absPath := workflowFile
+	if !filepath.IsAbs(workflowFile) {
+		if originCwd == "" {
+			return model.WorkflowDescriptor{}
+		}
+		absPath = filepath.Clean(filepath.Join(originCwd, workflowFile))
+	}
+	wfRoot, ok := model.DiscoverWorkflowsRoot(absPath)
+	if !ok {
+		return model.WorkflowDescriptor{Path: absPath}
+	}
+	return model.NewWorkflowDescriptor(absPath, model.ResolverConfig{
+		WorkflowsRoot: wfRoot,
+		RepoRoot:      filepath.Dir(wfRoot),
+	})
 }
