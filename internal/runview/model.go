@@ -55,20 +55,22 @@ type Model struct {
 	projectDir string
 	entered    Entered
 
-	path         []*StepNode
-	cursor       int
-	detailOffset int
+	path      []*StepNode
+	cursor    int
+	logOffset int
 
-	loadedFull map[*StepNode]bool
+	loadedFull map[string]bool
 
-	active      bool
-	pulsePhase  float64
-	termWidth   int
-	termHeight  int
-	detailWidth int
-	showLegend  bool
-	loadErr     string
-	notice      string // transient message shown below the step list (e.g. spawn error)
+	stepRanges []stepLineRange
+	logAnchor  stepLineAnchor
+
+	active     bool
+	pulsePhase float64
+	termWidth  int
+	termHeight int
+	showLegend bool
+	loadErr    string
+	notice     string // transient message shown below the step list (e.g. spawn error)
 
 	resolverCfg ResolverConfig
 	startTime   time.Time
@@ -78,7 +80,6 @@ type Model struct {
 	quitConfirming   bool   // quit-confirmation modal is visible
 	liveResult       string // set on ExecDoneMsg ("success"/"failed"/"stopped")
 	autoFollow       bool   // cursor tracks activeStep; enabled by default in FromLiveRun
-	tailFollow       bool   // detail pane viewport pinned to tail; enabled by default in FromLiveRun
 	activeStepPrefix string // last known active step prefix from StepStateMsg
 
 	// Resume-exec state. When the user selects an agent step after the live
@@ -149,11 +150,10 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 		projectDir: projectDir,
 		entered:    entered,
 		path:       []*StepNode{tree.Root},
-		loadedFull: make(map[*StepNode]bool),
+		loadedFull: make(map[string]bool),
 		loadErr:    loadErr,
 		running:    entered == FromLiveRun,
 		autoFollow: entered == FromLiveRun,
-		tailFollow: entered == FromLiveRun,
 	}
 
 	if entered != FromLiveRun {
@@ -197,7 +197,6 @@ func NewForReentry(sessionDir, projectDir string, entered Entered, spawnErr erro
 	}
 	m.running = false
 	m.autoFollow = false
-	m.tailFollow = false
 	if spawnErr != nil {
 		m.notice = spawnErr.Error()
 	}
@@ -231,23 +230,16 @@ func (m *Model) Init() tea.Cmd {
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.termWidth = msg.Width
-		m.termHeight = msg.Height
+		m.handleWindowSize(msg)
 
 	// ---- Live-run messages ----
 
 	case liverun.OutputChunkMsg:
-		m.applyOutputChunk(msg)
-		if m.tailFollow && m.selectedNode() == m.tree.FindByPrefix(msg.StepPrefix) {
-			m.detailOffset = math.MaxInt32
-		}
+		m.handleOutputChunkMsg(msg)
 		return m, nil
 
 	case liverun.StepStateMsg:
-		m.activeStepPrefix = msg.ActiveStepPrefix
-		if m.autoFollow {
-			m.navigateToNode(m.tree.FindByPrefix(msg.ActiveStepPrefix))
-		}
+		m.handleStepStateMsg(msg)
 		return m, nil
 
 	case liverun.SuspendedMsg, liverun.ResumedMsg:
@@ -271,29 +263,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case liverun.ExecDoneMsg:
-		// Drain any outstanding audit events before deciding which step to
-		// focus. Step statuses reach the tree via audit.log (not OutputChunkMsg),
-		// so without this refresh findFailedLeaf can miss a step that finished
-		// just before ExecDoneMsg.
-		m.refreshData()
-		m.running = false
-		m.liveResult = msg.Result
-		switch msg.Result {
-		case "failed":
-			if failed := findFailedLeaf(m.tree.Root); failed != nil {
-				m.navigateToNode(failed)
-			}
-		case "success":
-			// Land on the final top-level step so the user sees the
-			// workflow's end state. Loop iterations and other deep
-			// leaves emit StepStateMsg before their tree nodes exist
-			// (audit replay runs lazily), so cursor often gets stuck
-			// on the last step whose node was already in the tree —
-			// not the actual last step that ran.
-			if last := lastTopLevelChild(m.tree.Root); last != nil {
-				m.navigateToNode(last)
-			}
-		}
+		m.handleExecDoneMsg(msg)
 		return m, nil
 
 	// ---- Keyboard / mouse ----
@@ -302,30 +272,117 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 
 	case tea.MouseMsg:
-		switch msg.Button {
-		case tea.MouseButtonWheelUp:
-			m.tailFollow = false
-			m.scrollDetail(-3)
-		case tea.MouseButtonWheelDown:
-			m.scrollDetail(3)
-		}
+		m.handleMouse(msg)
 
 	case tuistyle.RefreshMsg:
-		// FromLiveRun leaves m.active=false because no runlock is held, but
-		// the in-process runner is still emitting audit events we need to
-		// pick up so step statuses stay current.
-		if m.active || m.running {
-			m.refreshData()
-		}
-		return m, tuistyle.DoRefresh()
+		cmd := m.handleRefreshMsg()
+		return m, cmd
 
 	case tuistyle.PulseMsg:
-		if m.active || m.running {
-			m.pulsePhase += (50.0 / 1000.0) * 2 * math.Pi
-		}
-		return m, tuistyle.DoPulse()
+		cmd := m.handlePulseMsg()
+		return m, cmd
 	}
 	return m, nil
+}
+
+func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) {
+	m.termWidth = msg.Width
+	m.termHeight = msg.Height
+	lineCount := m.rebuildRanges()
+	// Re-resolve anchor so the same block stays in view after resize.
+	if m.logAnchor.stepKey != "" {
+		for _, r := range m.stepRanges {
+			if r.node.ID == m.logAnchor.stepKey {
+				newOffset := r.startLine + m.logAnchor.lineOffsetInBlock
+				if newOffset < 0 {
+					newOffset = 0
+				}
+				m.logOffset = newOffset
+				break
+			}
+		}
+	}
+	m.clampLogOffset(lineCount)
+}
+
+func (m *Model) handleOutputChunkMsg(msg liverun.OutputChunkMsg) {
+	m.applyOutputChunk(msg)
+	if m.active || m.running {
+		m.logOffset = math.MaxInt32
+	}
+	m.rebuildRanges()
+}
+
+func (m *Model) handleStepStateMsg(msg liverun.StepStateMsg) {
+	m.activeStepPrefix = msg.ActiveStepPrefix
+	if m.autoFollow {
+		m.applyAutoFollowCursor()
+	}
+	if m.active || m.running {
+		m.logOffset = math.MaxInt32
+	}
+	m.rebuildRanges()
+}
+
+func (m *Model) handleExecDoneMsg(msg liverun.ExecDoneMsg) {
+	// Drain any outstanding audit events before deciding which step to
+	// focus. Step statuses reach the tree via audit.log (not OutputChunkMsg),
+	// so without this refresh findFailedLeaf can miss a step that finished
+	// just before ExecDoneMsg.
+	m.refreshData()
+	m.running = false
+	m.liveResult = msg.Result
+	switch msg.Result {
+	case "failed":
+		if failed := findFailedLeaf(m.tree.Root); failed != nil {
+			m.navigateToNode(failed)
+		}
+	case "success":
+		// Land on the final top-level step so the user sees the workflow's
+		// end state. Loop iterations and other deep leaves emit StepStateMsg
+		// before their tree nodes exist (audit replay runs lazily), so cursor
+		// often gets stuck on the last step whose node was already in the tree
+		// — not the actual last step that ran.
+		if last := lastTopLevelChild(m.tree.Root); last != nil {
+			m.navigateToNode(last)
+		}
+	}
+	m.rebuildRanges()
+}
+
+func (m *Model) handleMouse(msg tea.MouseMsg) {
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		m.autoFollow = false
+		m.logOffset -= 3
+		if m.logOffset < 0 {
+			m.logOffset = 0
+		}
+		m.syncSelectionToLog()
+	case tea.MouseButtonWheelDown:
+		m.autoFollow = false
+		m.logOffset += 3
+		m.syncSelectionToLog()
+	}
+}
+
+func (m *Model) handleRefreshMsg() tea.Cmd {
+	// FromLiveRun leaves m.active=false because no runlock is held, but the
+	// in-process runner is still emitting audit events we need to pick up so
+	// step statuses stay current.
+	if m.active || m.running {
+		m.refreshData()
+		m.logOffset = math.MaxInt32
+		m.rebuildRanges()
+	}
+	return tuistyle.DoRefresh()
+}
+
+func (m *Model) handlePulseMsg() tea.Cmd {
+	if m.active || m.running {
+		m.pulsePhase += (50.0 / 1000.0) * 2 * math.Pi
+	}
+	return tuistyle.DoPulse()
 }
 
 // canResumeRun reports whether the `r` resume-run action is available.
@@ -377,20 +434,27 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up":
 		m.autoFollow = false
 		m.moveCursor(-1)
+		m.rebuildRanges()
+		m.syncLogToSelection()
 	case "down":
 		m.autoFollow = false
 		m.moveCursor(1)
+		m.rebuildRanges()
+		m.syncLogToSelection()
 	case "k":
-		m.tailFollow = false
-		m.scrollDetail(-1)
+		m.autoFollow = false
+		m.logOffset--
+		if m.logOffset < 0 {
+			m.logOffset = 0
+		}
+		m.syncSelectionToLog()
 	case "j":
-		m.scrollDetail(1)
+		m.autoFollow = false
+		m.logOffset++
+		m.syncSelectionToLog()
 	case "l":
 		m.autoFollow = true
-		m.navigateToNode(m.tree.FindByPrefix(m.activeStepPrefix))
-	case "t":
-		m.tailFollow = true
-		m.detailOffset = math.MaxInt32
+		m.applyAutoFollowCursor()
 	case "r":
 		if m.canResumeRun() {
 			runID := filepath.Base(m.sessionDir)
@@ -398,8 +462,139 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "g":
 		m.handleLoadFull()
+		m.rebuildRanges()
 	}
 	return m, nil
+}
+
+// applyAutoFollowCursor moves the cursor to the ancestor-at-current-level of
+// the currently active step. This is the new auto-follow logic that does NOT
+// drill into sub-workflows or loops.
+func (m *Model) applyAutoFollowCursor() {
+	active := m.tree.FindByPrefix(m.activeStepPrefix)
+	if active == nil {
+		return
+	}
+	target := m.ancestorAtCurrentLevel(active)
+	if target == nil {
+		return
+	}
+	if idx := m.indexOfChild(target); idx >= 0 {
+		m.cursor = idx
+	}
+}
+
+// ancestorAtCurrentLevel walks node.Parent until it finds a node whose parent
+// is m.currentContainer(), returning that node. Returns nil if not found.
+func (m *Model) ancestorAtCurrentLevel(node *StepNode) *StepNode {
+	if node == nil {
+		return nil
+	}
+	cc := m.currentContainer()
+	for n := node; n != nil; n = n.Parent {
+		if n.Parent == cc {
+			return n
+		}
+	}
+	return nil
+}
+
+// indexOfChild returns the index of node in m.currentChildren(), or -1.
+func (m *Model) indexOfChild(node *StepNode) int {
+	if node == nil {
+		return -1
+	}
+	for i, c := range m.currentChildren() {
+		if c == node {
+			return i
+		}
+	}
+	return -1
+}
+
+// pendingSelected returns the selected node if it is pending, else nil.
+func (m *Model) pendingSelected() *StepNode {
+	n := m.selectedNode()
+	if n != nil && n.Status == StatusPending {
+		return n
+	}
+	return nil
+}
+
+// rebuildRanges recomputes m.stepRanges from the current tree state and
+// selection. Called after any mutation that changes log content or width.
+func (m *Model) rebuildRanges() int {
+	lines, ranges := buildLogLines(
+		m.currentChildren(),
+		m.pendingSelected(),
+		m.rightPaneWidth(),
+		m.loadedFull,
+		m.pulsePhase,
+		m.running,
+		m.resolverCfg,
+	)
+	m.stepRanges = ranges
+	return len(lines)
+}
+
+// rightPaneWidth estimates the right-pane width for range computation.
+// Uses the same formula as renderTwoColumn but with a conservative list-
+// column estimate so ranges are close enough for scroll sync.
+func (m *Model) rightPaneWidth() int {
+	_, rightWidth := twoColumnPaneWidths(m.termWidth, m.buildStepRows(m.currentChildren()))
+	return rightWidth
+}
+
+// syncLogToSelection sets logOffset so the selected step's block is in view.
+func (m *Model) syncLogToSelection() {
+	children := m.currentChildren()
+	if m.cursor < 0 || m.cursor >= len(children) {
+		return
+	}
+	sel := children[m.cursor]
+	for _, r := range m.stepRanges {
+		if r.node == sel {
+			m.logOffset = r.startLine
+			m.logAnchor = stepLineAnchor{stepKey: sel.ID, lineOffsetInBlock: 0}
+			return
+		}
+	}
+}
+
+// syncSelectionToLog updates the step-list cursor to the latest started step
+// whose block overlaps the current log viewport.
+func (m *Model) syncSelectionToLog() {
+	bodyH := m.bodyHeight()
+	var winner *StepNode
+	winnerStart := 0
+	for _, r := range m.stepRanges {
+		if r.startLine < m.logOffset+bodyH && r.endLine > m.logOffset {
+			if winner == nil || r.startLine > winnerStart {
+				winner = r.node
+				winnerStart = r.startLine
+			}
+		}
+	}
+	if winner != nil {
+		target := m.ancestorAtCurrentLevel(winner)
+		if idx := m.indexOfChild(target); idx >= 0 {
+			m.cursor = idx
+		}
+		m.logAnchor = stepLineAnchor{
+			stepKey:           winner.ID,
+			lineOffsetInBlock: m.logOffset - winnerStart,
+		}
+	}
+}
+
+func (m *Model) clampLogOffset(lineCount int) {
+	maxOffset := max(0, lineCount-m.bodyHeight())
+	if m.logOffset < 0 {
+		m.logOffset = 0
+	}
+	if m.logOffset > maxOffset {
+		m.logOffset = maxOffset
+	}
 }
 
 // applyOutputChunk finds the step matching msg.StepPrefix and appends msg.Bytes
@@ -458,14 +653,6 @@ func (m *Model) moveCursor(delta int) {
 	if m.cursor >= n {
 		m.cursor = n - 1
 	}
-	m.detailOffset = 0
-}
-
-func (m *Model) scrollDetail(delta int) {
-	m.detailOffset += delta
-	if m.detailOffset < 0 {
-		m.detailOffset = 0
-	}
 }
 
 func (m *Model) handleEsc() (tea.Model, tea.Cmd) {
@@ -479,7 +666,8 @@ func (m *Model) handleEsc() (tea.Model, tea.Cmd) {
 				break
 			}
 		}
-		m.detailOffset = 0
+		m.logOffset = 0
+		m.rebuildRanges()
 		return m, nil
 	}
 	// At top level: show quit-confirm while running, otherwise navigate back.
@@ -503,7 +691,8 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 	case NodeLoop:
 		m.path = append(m.path, n)
 		m.cursor = 0
-		m.detailOffset = 0
+		m.logOffset = 0
+		m.rebuildRanges()
 		return m, nil
 
 	case NodeSubWorkflow:
@@ -512,7 +701,8 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		}
 		m.path = append(m.path, n)
 		m.cursor = 0
-		m.detailOffset = 0
+		m.logOffset = 0
+		m.rebuildRanges()
 		return m, nil
 
 	case NodeIteration:
@@ -524,7 +714,8 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		}
 		m.path = append(m.path, n)
 		m.cursor = 0
-		m.detailOffset = 0
+		m.logOffset = 0
+		m.rebuildRanges()
 		return m, nil
 
 	case NodeHeadlessAgent, NodeInteractiveAgent:
@@ -547,7 +738,7 @@ func (m *Model) handleLoadFull() {
 		return
 	}
 	if n.Type == NodeShell || n.Type == NodeHeadlessAgent {
-		m.loadedFull[n] = true
+		m.loadedFull[n.ID] = true
 	}
 }
 
@@ -610,13 +801,7 @@ func (m *Model) navigateToNode(target *StepNode) {
 	}
 
 	m.cursor = cursor
-	// Preserve tail-pin while following: resetting to 0 would jump the
-	// detail pane to the top until the next OutputChunkMsg re-pins it.
-	if m.tailFollow {
-		m.detailOffset = math.MaxInt32
-	} else {
-		m.detailOffset = 0
-	}
+	m.logOffset = 0
 }
 
 // lastTopLevelChild returns the final direct child of root, or nil when

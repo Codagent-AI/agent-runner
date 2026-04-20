@@ -226,6 +226,12 @@ func defaultConfig() *Config {
 			"implementor": {
 				Extends: "headless_base",
 			},
+			"summarizer": {
+				DefaultMode: "headless",
+				CLI:         "claude",
+				Model:       "haiku",
+				Effort:      "low",
+			},
 		},
 	}
 }

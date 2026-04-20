@@ -9,10 +9,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mattn/go-runewidth"
 
 	"github.com/codagent/agent-runner/internal/liverun"
-	"github.com/codagent/agent-runner/internal/tuistyle"
 )
 
 func newTestModel(tree *Tree, entered Entered) *Model {
@@ -20,7 +18,7 @@ func newTestModel(tree *Tree, entered Entered) *Model {
 		tree:       tree,
 		entered:    entered,
 		path:       []*StepNode{tree.Root},
-		loadedFull: make(map[*StepNode]bool),
+		loadedFull: make(map[string]bool),
 		termWidth:  120,
 		termHeight: 40,
 	}
@@ -119,92 +117,101 @@ func TestModel_Navigation_UpDown(t *testing.T) {
 	}
 }
 
-// j and k scroll the detail pane; they must NOT move the cursor.
-func TestModel_JK_ScrollDetailPane(t *testing.T) {
-	m := newTestModel(simpleTree(), FromList)
+func TestModel_Navigation_ExpansionRowsRemainReadOnly(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	setup := &StepNode{ID: "setup", Type: NodeShell, Status: StatusSuccess, Parent: root}
+	review := &StepNode{ID: "review", Type: NodeSubWorkflow, Status: StatusInProgress, Parent: root}
+	cleanup := &StepNode{ID: "cleanup", Type: NodeShell, Status: StatusPending, Parent: root}
+	root.Children = []*StepNode{setup, review, cleanup}
+
+	verify := &StepNode{ID: "verify", Type: NodeSubWorkflow, Status: StatusInProgress, Parent: review}
+	review.Children = []*StepNode{verify}
+	summarize := &StepNode{ID: "summarize", Type: NodeHeadlessAgent, Status: StatusInProgress, Parent: verify}
+	verify.Children = []*StepNode{summarize}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
 	m.cursor = 1
-	initial := m.detailOffset
 
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	if m.cursor != 1 {
-		t.Fatalf("j moved cursor to %d, want 1", m.cursor)
-	}
-	if m.detailOffset <= initial {
-		t.Fatal("j should increase detailOffset")
+	rows := m.buildStepRows(root.Children)
+	if len(rows) <= len(root.Children) {
+		t.Fatalf("expected expansion rows to be present, got %d rows for %d children", len(rows), len(root.Children))
 	}
 
-	scrolled := m.detailOffset
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
-	if m.cursor != 1 {
-		t.Fatalf("k moved cursor to %d, want 1", m.cursor)
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if m.cursor != 2 {
+		t.Fatalf("after down: cursor = %d, want 2", m.cursor)
 	}
-	if m.detailOffset >= scrolled {
-		t.Fatal("k should decrease detailOffset")
+	if got := m.selectedNode(); got != cleanup {
+		t.Fatalf("after down: selected node = %v, want cleanup", got)
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.cursor != 1 {
+		t.Fatalf("after up: cursor = %d, want 1", m.cursor)
+	}
+	if got := m.selectedNode(); got != review {
+		t.Fatalf("after up: selected node = %v, want review", got)
 	}
 }
 
-// PgUp and PgDown are no longer bound; they must be no-ops.
+// j and k scroll the log pane offset; with empty stepRanges the cursor stays put.
+func TestModel_JK_ScrollsLogPane(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList)
+	m.cursor = 1
+	initial := m.logOffset
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	if m.logOffset <= initial {
+		t.Fatal("j should increase logOffset")
+	}
+	// j clears autoFollow
+	if m.autoFollow {
+		t.Error("j should clear autoFollow")
+	}
+
+	scrolled := m.logOffset
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	if m.logOffset >= scrolled {
+		t.Fatal("k should decrease logOffset")
+	}
+	if m.autoFollow {
+		t.Error("k should clear autoFollow")
+	}
+}
+
+// PgUp and PgDown are not bound; they must be no-ops.
 func TestModel_PgUpPgDown_NoOp(t *testing.T) {
 	m := newTestModel(simpleTree(), FromList)
-	m.detailOffset = 0
+	m.logOffset = 0
 
 	m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
-	if m.detailOffset != 0 {
-		t.Fatal("PgDown should not change detailOffset (unbound)")
+	if m.logOffset != 0 {
+		t.Fatal("PgDown should not change logOffset (unbound)")
 	}
 
 	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
-	if m.detailOffset != 0 {
-		t.Fatal("PgUp should not change detailOffset (unbound)")
-	}
-}
-
-// t re-engages tail-follow; End and G are no longer bound.
-func TestModel_TKey_ReengagesTailFollow(t *testing.T) {
-	m := newLiveModelWithFlags()
-	m.tailFollow = false
-
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
-
-	if !m.tailFollow {
-		t.Error("t key should re-engage tailFollow")
-	}
-	if m.detailOffset <= 0 {
-		t.Errorf("detailOffset = %d, expected large value after t", m.detailOffset)
+	if m.logOffset != 0 {
+		t.Fatal("PgUp should not change logOffset (unbound)")
 	}
 }
 
 func TestModel_EndKey_NoOp(t *testing.T) {
 	m := newLiveModelWithFlags()
-	m.tailFollow = false
 
+	initial := m.logOffset
 	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
-
-	if m.tailFollow {
-		t.Error("End key should not re-engage tailFollow (unbound)")
+	if m.logOffset != initial {
+		t.Error("End key should be a no-op")
 	}
 }
 
 func TestModel_GKey_NoOp(t *testing.T) {
 	m := newLiveModelWithFlags()
-	m.tailFollow = false
+	initial := m.logOffset
 
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("G")})
-
-	if m.tailFollow {
-		t.Error("G key should not re-engage tailFollow (unbound)")
-	}
-}
-
-func TestModel_K_ClearsTailFollow(t *testing.T) {
-	m := newLiveModelWithFlags()
-	m.tailFollow = true
-	m.detailOffset = 50
-
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
-
-	if m.tailFollow {
-		t.Error("k should clear tailFollow")
+	if m.logOffset != initial {
+		t.Error("G key should be a no-op (not bound)")
 	}
 }
 
@@ -395,6 +402,16 @@ func TestModel_HelpBar_ShowsJKScroll(t *testing.T) {
 	}
 }
 
+// t key is removed; help bar must not mention "t tail".
+func TestModel_HelpBar_NoTailHint(t *testing.T) {
+	m := newLiveModelWithFlags()
+
+	help := m.renderHelpBar()
+	if containsString(help, "t tail") {
+		t.Errorf("help bar should not show 't tail' (key removed): %q", help)
+	}
+}
+
 func TestModel_DrillIntoLoop(t *testing.T) {
 	m := newTestModel(simpleTree(), FromList)
 
@@ -496,8 +513,6 @@ func TestModel_Q_EmitsExitMsg(t *testing.T) {
 
 // In the live-run path runview.Model is the top-level bubbletea model (no
 // switcher wrap), so it must self-quit when it receives its own ExitMsg.
-// Without this, q-after-completion emits ExitMsg into the void and the TUI
-// appears frozen.
 func TestModel_ExitMsg_ReturnsQuit(t *testing.T) {
 	m := newTestModel(simpleTree(), FromLiveRun)
 
@@ -794,17 +809,28 @@ func TestModel_LoadFull(t *testing.T) {
 	m := newTestModel(tree, FromList)
 	m.cursor = 0
 
-	if m.loadedFull[tree.Root.Children[0]] {
+	if m.loadedFull[tree.Root.Children[0].ID] {
 		t.Fatal("should not be loaded full initially")
 	}
 
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
-	if !m.loadedFull[tree.Root.Children[0]] {
+	if !m.loadedFull[tree.Root.Children[0].ID] {
 		t.Fatal("g should mark step as loaded full")
 	}
 }
 
-// TestModel_PageUpDown is superseded by TestModel_PgUpPgDown_NoOp above.
+func TestModel_SelectedNodeHasTruncatedOutput_StderrOnly(t *testing.T) {
+	tree := simpleTree()
+	tree.Root.Children[0].Stdout = ""
+	tree.Root.Children[0].Stderr = generateLargeOutput(3000)
+
+	m := newTestModel(tree, FromList)
+	m.cursor = 0
+
+	if !m.selectedNodeHasTruncatedOutput() {
+		t.Fatal("stderr-only truncated output should advertise the g key")
+	}
+}
 
 // ---- Live-run tests ----
 
@@ -831,7 +857,7 @@ func newLiveModel() *Model {
 		tree:       tree,
 		entered:    FromLiveRun,
 		path:       []*StepNode{tree.Root},
-		loadedFull: make(map[*StepNode]bool),
+		loadedFull: make(map[string]bool),
 		termWidth:  120,
 		termHeight: 40,
 		running:    true,
@@ -981,7 +1007,7 @@ func generateLargeOutput(lines int) string {
 	return string(b)
 }
 
-// ---- autoFollow / tailFollow / navigateToNode / lockout tests ----
+// ---- autoFollow / navigateToNode / lockout tests ----
 
 func newLiveModelWithFlags() *Model {
 	tree := liveTree()
@@ -989,12 +1015,11 @@ func newLiveModelWithFlags() *Model {
 		tree:       tree,
 		entered:    FromLiveRun,
 		path:       []*StepNode{tree.Root},
-		loadedFull: make(map[*StepNode]bool),
+		loadedFull: make(map[string]bool),
 		termWidth:  120,
 		termHeight: 40,
 		running:    true,
 		autoFollow: true,
-		tailFollow: true,
 	}
 }
 
@@ -1014,9 +1039,6 @@ func TestModel_FromLiveRun_DefaultFlags(t *testing.T) {
 	if !m.autoFollow {
 		t.Error("autoFollow should be true in FromLiveRun")
 	}
-	if !m.tailFollow {
-		t.Error("tailFollow should be true in FromLiveRun")
-	}
 	if !m.running {
 		t.Error("running should be true in FromLiveRun")
 	}
@@ -1026,9 +1048,6 @@ func TestModel_FromList_DefaultFlags(t *testing.T) {
 	m := newTestModel(simpleTree(), FromList)
 	if m.autoFollow {
 		t.Error("autoFollow should be false in FromList")
-	}
-	if m.tailFollow {
-		t.Error("tailFollow should be false in FromList")
 	}
 }
 
@@ -1128,6 +1147,43 @@ func TestModel_StepStateMsg_AutoFollow_NavigatesCursor(t *testing.T) {
 	}
 }
 
+// TestModel_StepStateMsg_AutoFollow_NoDrillIn verifies that when the active step
+// is nested inside a loop iteration, auto-follow moves the cursor to the
+// top-level ancestor (the loop) but does NOT drill into the loop.
+func TestModel_StepStateMsg_AutoFollow_NoDrillIn(t *testing.T) {
+	tree := simpleTree()
+	m := newLiveModelWithFlags()
+	m.tree = tree
+	m.path = []*StepNode{tree.Root}
+	m.cursor = 0
+
+	// The prefix [tasks:0, run-task] refers to run-task inside iter1 inside tasks loop.
+	m.Update(liverun.StepStateMsg{ActiveStepPrefix: "[tasks:0, run-task]"})
+
+	// cursor should be 2 (the loop "tasks" at index 2 in root.Children)
+	if m.cursor != 2 {
+		t.Fatalf("cursor = %d, want 2 (tasks loop index)", m.cursor)
+	}
+	// path must remain at root — no drill-in
+	if len(m.path) != 1 {
+		t.Fatalf("path len = %d, want 1 (no drill-in)", len(m.path))
+	}
+}
+
+func TestModel_StepStateMsg_ActiveRunAutoScrollsLog(t *testing.T) {
+	tree := simpleTree()
+	m := newLiveModelWithFlags()
+	m.tree = tree
+	m.path = []*StepNode{tree.Root}
+	m.logOffset = 7
+
+	m.Update(liverun.StepStateMsg{ActiveStepPrefix: "[implement]"})
+
+	if m.logOffset != math.MaxInt32 {
+		t.Fatalf("logOffset = %d, want %d while live auto-scroll is active", m.logOffset, math.MaxInt32)
+	}
+}
+
 func TestModel_StepStateMsg_AutoFollowOff_NoNavigation(t *testing.T) {
 	tree := simpleTree()
 	m := newLiveModelWithFlags()
@@ -1147,11 +1203,12 @@ func TestModel_StepStateMsg_AutoFollowOff_NoNavigation(t *testing.T) {
 func TestModel_ManualNavigation_ClearsAutoFollow(t *testing.T) {
 	m := newLiveModelWithFlags()
 
-	// Only up/down cursor keys clear autoFollow; j/k scroll the detail pane
-	// and do not affect the cursor or autoFollow.
+	// up/down arrow keys, j, and k all clear autoFollow.
 	for _, key := range []tea.Msg{
 		tea.KeyMsg{Type: tea.KeyUp},
 		tea.KeyMsg{Type: tea.KeyDown},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")},
 	} {
 		m.autoFollow = true
 		m.Update(key)
@@ -1161,19 +1218,41 @@ func TestModel_ManualNavigation_ClearsAutoFollow(t *testing.T) {
 	}
 }
 
-func TestModel_JK_DoNotClearAutoFollow(t *testing.T) {
-	m := newLiveModelWithFlags()
-	m.autoFollow = true
+func TestModel_ArrowToPendingStep_RebuildsGhostRangeAndSyncsLog(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	done := &StepNode{
+		ID:            "setup",
+		Type:          NodeShell,
+		Status:        StatusSuccess,
+		Parent:        root,
+		StaticCommand: "echo setup",
+		ExitCode:      intPtr(0),
+	}
+	pending := &StepNode{
+		ID:            "deploy",
+		Type:          NodeShell,
+		Status:        StatusPending,
+		Parent:        root,
+		StaticCommand: "echo deploy",
+	}
+	root.Children = []*StepNode{done, pending}
 
-	for _, key := range []tea.Msg{
-		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")},
-		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")},
-	} {
-		m.autoFollow = true
-		m.Update(key)
-		if !m.autoFollow {
-			t.Errorf("key %v should not clear autoFollow (it scrolls detail pane, not cursor)", key)
-		}
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.rebuildRanges()
+
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+
+	if m.cursor != 1 {
+		t.Fatalf("cursor = %d, want 1", m.cursor)
+	}
+	if len(m.stepRanges) != 2 {
+		t.Fatalf("expected ghost range to be added, got %d ranges", len(m.stepRanges))
+	}
+	if m.stepRanges[1].node != pending {
+		t.Fatalf("stepRanges[1] = %v, want pending node", m.stepRanges[1].node)
+	}
+	if m.logOffset != m.stepRanges[1].startLine {
+		t.Fatalf("logOffset = %d, want ghost startLine %d", m.logOffset, m.stepRanges[1].startLine)
 	}
 }
 
@@ -1217,50 +1296,50 @@ func TestModel_LKey_ReengagesAutoFollow(t *testing.T) {
 	}
 }
 
-func TestModel_TailFollow_PinsOnOutputChunk(t *testing.T) {
-	tree := liveTree()
-	m := newLiveModelWithFlags()
-	m.tree = tree
-	m.path = []*StepNode{tree.Root}
-	m.cursor = 0 // shell step "build" is selected
-
-	// Send output chunk for the selected step
-	m.Update(liverun.OutputChunkMsg{StepPrefix: "[build]", Stream: "stdout", Bytes: []byte("line\n")})
-
-	// detailOffset should be pinned to a large value
-	if m.detailOffset <= 0 {
-		t.Errorf("detailOffset = %d, expected large value for tail-pin", m.detailOffset)
-	}
-}
-
-func TestModel_TailFollow_IgnoresOtherStep(t *testing.T) {
+// TestModel_LKey_NoDrillIn verifies that pressing l re-engages auto-follow
+// at the current drill level without drilling into sub-workflows or loops.
+func TestModel_LKey_NoDrillIn(t *testing.T) {
 	tree := simpleTree()
 	m := newLiveModelWithFlags()
 	m.tree = tree
 	m.path = []*StepNode{tree.Root}
-	m.cursor = 0 // "build" step selected
+	m.autoFollow = false
+	// Active step is nested inside the tasks loop iteration
+	m.activeStepPrefix = "[tasks:0, run-task]"
 
-	// Send output chunk for a DIFFERENT step ("implement", index 1)
-	m.Update(liverun.OutputChunkMsg{StepPrefix: "[implement]", Stream: "stdout", Bytes: []byte("line\n")})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
 
-	// detailOffset should NOT be changed (still 0)
-	if m.detailOffset != 0 {
-		t.Errorf("detailOffset = %d, expected 0 (unselected step should not pin tail)", m.detailOffset)
+	if !m.autoFollow {
+		t.Error("l key should re-engage autoFollow")
+	}
+	// cursor should land on "tasks" (index 2), not drill in
+	if m.cursor != 2 {
+		t.Fatalf("cursor = %d, want 2 (tasks loop)", m.cursor)
+	}
+	if len(m.path) != 1 {
+		t.Fatalf("path len = %d, want 1 (no drill-in)", len(m.path))
 	}
 }
 
-// TestModel_PgUp_ClearsTailFollow, TestModel_EndKey_ReengagesTailFollow, and
-// TestModel_GKey_ReengagesTailFollow are superseded by TestModel_K_ClearsTailFollow
-// and TestModel_TKey_ReengagesTailFollow / TestModel_EndKey_NoOp / TestModel_GKey_NoOp above.
-
-func TestModel_MouseWheelUp_ClearsTailFollow(t *testing.T) {
+func TestModel_MouseWheelUp_ClearsAutoFollow(t *testing.T) {
 	m := newLiveModelWithFlags()
-	m.tailFollow = true
+	m.autoFollow = true
 
 	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp})
 
-	if m.tailFollow {
-		t.Error("mouse wheel up should clear tailFollow")
+	if m.autoFollow {
+		t.Error("mouse wheel up should clear autoFollow")
+	}
+}
+
+func TestModel_MouseWheelDown_ClearsAutoFollow(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.autoFollow = true
+
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown})
+
+	if m.autoFollow {
+		t.Error("mouse wheel down should clear autoFollow")
 	}
 }
 
@@ -1295,12 +1374,6 @@ func TestModel_ExecDone_Failed_NoFailedStep_NoChange(t *testing.T) {
 }
 
 func TestModel_ExecDone_Success_JumpsToLastTopLevelStep(t *testing.T) {
-	// A live run can leave autoFollow stuck on an intermediate step whose
-	// audit prefix resolves to a tree node while later steps (e.g. loop
-	// iterations) arrive before their tree nodes are created by audit
-	// replay. On clean success the cursor should land on the final
-	// top-level step so the user sees the workflow's "end state" without
-	// having to navigate manually.
 	tree := simpleTree()
 	for _, c := range tree.Root.Children {
 		c.Status = StatusSuccess
@@ -1322,14 +1395,14 @@ func TestModel_ExecDone_Success_JumpsToLastTopLevelStep(t *testing.T) {
 	}
 }
 
-func TestModel_HelpBar_ShowsLiveHint_WhenRunningAndAutoFollowOff(t *testing.T) {
+func TestModel_HelpBar_ShowsLiveHint_WhenAutoFollowOff(t *testing.T) {
 	m := newLiveModelWithFlags()
 	m.running = true
 	m.autoFollow = false
 
 	help := m.renderHelpBar()
-	if !containsString(help, "l live") {
-		t.Errorf("help bar missing 'l live' hint: %q", help)
+	if !containsString(help, "l follow") {
+		t.Errorf("help bar missing 'l follow' hint: %q", help)
 	}
 }
 
@@ -1339,28 +1412,8 @@ func TestModel_HelpBar_HidesLiveHint_WhenAutoFollowOn(t *testing.T) {
 	m.autoFollow = true
 
 	help := m.renderHelpBar()
-	if containsString(help, "l live") {
-		t.Errorf("help bar should not show 'l live' when autoFollow is on: %q", help)
-	}
-}
-
-func TestModel_HelpBar_ShowsTailHint_WhenTailFollowOff(t *testing.T) {
-	m := newLiveModelWithFlags()
-	m.tailFollow = false
-
-	help := m.renderHelpBar()
-	if !containsString(help, "t tail") {
-		t.Errorf("help bar missing 't tail' hint: %q", help)
-	}
-}
-
-func TestModel_HelpBar_HidesTailHint_WhenTailFollowOn(t *testing.T) {
-	m := newLiveModelWithFlags()
-	m.tailFollow = true
-
-	help := m.renderHelpBar()
-	if containsString(help, "t tail") {
-		t.Errorf("help bar should not show 't tail' when tailFollow is on: %q", help)
+	if containsString(help, "l follow") {
+		t.Errorf("help bar should not show 'l follow' when autoFollow is on: %q", help)
 	}
 }
 
@@ -1369,15 +1422,14 @@ func TestModel_Legend_ContainsLiveNavKeys(t *testing.T) {
 	m.showLegend = true
 
 	legend := m.View()
-	for _, want := range []string{"l", "t", "Live Navigation"} {
+	for _, want := range []string{"l", "Live Navigation"} {
 		if !containsString(legend, want) {
 			t.Errorf("legend missing %q", want)
 		}
 	}
-	for _, absent := range []string{"End", "G  jump"} {
-		if containsString(legend, absent) {
-			t.Errorf("legend should not mention %q (key removed)", absent)
-		}
+	// t key is removed from legend
+	if containsString(legend, "t  jump") || containsString(legend, "t tail") {
+		t.Errorf("legend should not mention removed 't' tail key")
 	}
 }
 
@@ -1425,54 +1477,6 @@ func TestModel_HelpBar_Live_ShowsEscBackAndEnterResume_AfterExecDone(t *testing.
 	}
 }
 
-func TestModel_Detail_Live_HidesResumeHint_WhileRunning(t *testing.T) {
-	m := newLiveModelWithFlags()
-	m.running = true
-
-	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
-	agent := &StepNode{
-		ID:        "implement",
-		Type:      NodeHeadlessAgent,
-		Status:    StatusInProgress,
-		Parent:    root,
-		AgentCLI:  "claude",
-		SessionID: "sess-1",
-	}
-	root.Children = []*StepNode{agent}
-	m.tree = &Tree{Root: root}
-	m.path = []*StepNode{root}
-	m.cursor = 0
-
-	detail := m.renderDetail(agent)
-	if containsString(detail, "resume session") {
-		t.Errorf("detail should hide 'resume session' hint while running: %q", detail)
-	}
-}
-
-func TestModel_Detail_Live_ShowsResumeHint_AfterCompletion(t *testing.T) {
-	m := newLiveModelWithFlags()
-	m.running = false
-
-	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
-	agent := &StepNode{
-		ID:        "implement",
-		Type:      NodeHeadlessAgent,
-		Status:    StatusSuccess,
-		Parent:    root,
-		AgentCLI:  "claude",
-		SessionID: "sess-1",
-	}
-	root.Children = []*StepNode{agent}
-	m.tree = &Tree{Root: root}
-	m.path = []*StepNode{root}
-	m.cursor = 0
-
-	detail := m.renderDetail(agent)
-	if !containsString(detail, "resume session") {
-		t.Errorf("detail should show 'resume session' hint after run completes: %q", detail)
-	}
-}
-
 func TestModel_LiveRun_ResumeMsg_StoresInfoAndQuits(t *testing.T) {
 	m := newLiveModelWithFlags()
 	m.running = false
@@ -1489,152 +1493,6 @@ func TestModel_LiveRun_ResumeMsg_StoresInfoAndQuits(t *testing.T) {
 	}
 }
 
-func TestModel_HeadlessDetail_NoOutput_WhileRunning_ShowsSpinner(t *testing.T) {
-	m := newLiveModelWithFlags()
-	m.running = true
-
-	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
-	agent := &StepNode{
-		ID:       "headless-new-session",
-		Type:     NodeHeadlessAgent,
-		Status:   StatusInProgress,
-		Parent:   root,
-		AgentCLI: "claude",
-	}
-	root.Children = []*StepNode{agent}
-	m.tree = &Tree{Root: root}
-	m.path = []*StepNode{root}
-	m.cursor = 0
-
-	detail := m.renderDetail(agent)
-	if containsString(detail, "stdout") {
-		t.Errorf("detail should not show 'stdout' label for headless agent: %q", detail)
-	}
-	if containsString(detail, "stderr") {
-		t.Errorf("detail should not show 'stderr' label for headless agent: %q", detail)
-	}
-	if !containsString(detail, "agent") {
-		t.Errorf("detail should show 'agent' label: %q", detail)
-	}
-	// The spinner is drawn as a 3-row × 2-dot grid using "●" for lit
-	// cells and spaces for empty cells — one character per dot so the
-	// animation is visible at normal font size.
-	if !strings.Contains(detail, "●") {
-		t.Errorf("detail should contain a spinner dot glyph: %q", detail)
-	}
-	if strings.Contains(detail, "\x1b#3") || strings.Contains(detail, "\x1b#4") {
-		t.Errorf("detail should not emit DECDHL escapes: %q", detail)
-	}
-	agentIdx := strings.Index(detail, "agent:")
-	spinnerIdx := strings.Index(detail, "●")
-	if agentIdx < 0 || spinnerIdx < 0 || spinnerIdx < agentIdx {
-		t.Fatalf("expected spinner to appear after 'agent:' label in: %q", detail)
-	}
-	if !strings.Contains(detail[agentIdx:spinnerIdx], "\n") {
-		t.Errorf("expected a newline between 'agent:' label and spinner: %q", detail)
-	}
-}
-
-func TestModel_HeadlessDetail_StdoutOnly_NoStreamLabel_NoGutter(t *testing.T) {
-	m := newLiveModelWithFlags()
-	m.running = false
-
-	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
-	agent := &StepNode{
-		ID:       "headless-new-session",
-		Type:     NodeHeadlessAgent,
-		Status:   StatusSuccess,
-		Parent:   root,
-		AgentCLI: "claude",
-		Stdout:   "Octopuses have three hearts.\n",
-	}
-	root.Children = []*StepNode{agent}
-	m.tree = &Tree{Root: root}
-	m.path = []*StepNode{root}
-	m.cursor = 0
-	m.detailWidth = 60
-
-	detail := m.renderDetail(agent)
-	if containsString(detail, "stdout") {
-		t.Errorf("detail should not label the single output stream as 'stdout': %q", detail)
-	}
-	if containsString(detail, "stderr") {
-		t.Errorf("detail should not show 'stderr' label: %q", detail)
-	}
-	if !containsString(detail, "agent") {
-		t.Errorf("detail should show 'agent' label: %q", detail)
-	}
-	if containsString(detail, "| Octopuses") {
-		t.Errorf("detail should not prefix agent output with '| ' gutter: %q", detail)
-	}
-	if !containsString(detail, "Octopuses have three hearts.") {
-		t.Errorf("detail missing expected output text: %q", detail)
-	}
-}
-
-func TestModel_HeadlessDetail_StdoutAndStderr_LabelsBoth(t *testing.T) {
-	m := newLiveModelWithFlags()
-	m.running = false
-
-	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
-	agent := &StepNode{
-		ID:       "headless",
-		Type:     NodeHeadlessAgent,
-		Status:   StatusSuccess,
-		Parent:   root,
-		AgentCLI: "claude",
-		Stdout:   "OUT-TEXT\n",
-		Stderr:   "ERR-TEXT\n",
-	}
-	root.Children = []*StepNode{agent}
-	m.tree = &Tree{Root: root}
-	m.path = []*StepNode{root}
-	m.cursor = 0
-	m.detailWidth = 60
-
-	detail := m.renderDetail(agent)
-	if !containsString(detail, "OUT-TEXT") || !containsString(detail, "ERR-TEXT") {
-		t.Fatalf("detail missing output or error: %q", detail)
-	}
-	// When both streams are present, a disambiguating label is required.
-	if !containsString(detail, "stdout") || !containsString(detail, "stderr") {
-		t.Errorf("detail should label both streams when both present: %q", detail)
-	}
-}
-
-func TestModel_HeadlessDetail_LongLine_Wraps(t *testing.T) {
-	m := newLiveModelWithFlags()
-	m.running = false
-
-	long := strings.Repeat("abcdef ", 30) // ~210 visual columns
-	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
-	agent := &StepNode{
-		ID:       "headless",
-		Type:     NodeHeadlessAgent,
-		Status:   StatusSuccess,
-		Parent:   root,
-		AgentCLI: "claude",
-		Stdout:   long + "\n",
-	}
-	root.Children = []*StepNode{agent}
-	m.tree = &Tree{Root: root}
-	m.path = []*StepNode{root}
-	m.cursor = 0
-	m.detailWidth = 40
-
-	detail := m.renderDetail(agent)
-	// Truncation-ellipsis indicates the old behavior; wrapping must not
-	// leave one overflowing line with a trailing ellipsis.
-	if strings.Contains(detail, "…") {
-		t.Errorf("long output should be wrapped, not truncated with ellipsis: %q", detail)
-	}
-	// Wrapping should split the text across multiple visual lines.
-	outLines := strings.Count(detail, "abcdef")
-	if outLines < 2 {
-		t.Errorf("expected multiple wrapped segments containing 'abcdef', got %d: %q", outLines, detail)
-	}
-}
-
 // ---- NewForReentry tests ----
 
 func TestNewForReentry_HasCorrectState(t *testing.T) {
@@ -1648,9 +1506,6 @@ func TestNewForReentry_HasCorrectState(t *testing.T) {
 	}
 	if m.autoFollow {
 		t.Error("autoFollow should be false in NewForReentry model")
-	}
-	if m.tailFollow {
-		t.Error("tailFollow should be false in NewForReentry model")
 	}
 	if m.entered != FromLiveRun {
 		t.Errorf("entered = %d, want FromLiveRun (%d)", m.entered, FromLiveRun)
@@ -1737,10 +1592,7 @@ func TestNewForReentry_Enter_AgentStep_EmitsResumeMsg(t *testing.T) {
 
 // TestModel_StatusGlyph_BlinkOffHidesDot verifies that the in-progress
 // indicator on an active step disappears during the off-half of the blink
-// cycle — rather than being recolored. Recoloring has proven fragile across
-// terminal themes (lipgloss's background detection can misresolve adaptive
-// whites to near-black inside bubbletea's alt-screen), so the off-phase
-// simply hides the glyph by emitting width-matched spaces.
+// cycle — rather than being recolored.
 func TestModel_StatusGlyph_BlinkOffHidesDot(t *testing.T) {
 	m := newLiveModelWithFlags()
 	m.running = true
@@ -1771,107 +1623,6 @@ func TestModel_StatusGlyph_BlinkOffHidesDot(t *testing.T) {
 	if lipgloss.Width(off) != lipgloss.Width("●") {
 		t.Errorf("off-phase width = %d, want %d (preserve column alignment)",
 			lipgloss.Width(off), lipgloss.Width("●"))
-	}
-}
-
-func TestModel_ShellDetail_LongStdout_Wraps_NoGutter(t *testing.T) {
-	m := newLiveModelWithFlags()
-	m.running = false
-
-	long := strings.Repeat("abcdef ", 30) // ~210 visual columns
-	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
-	shell := &StepNode{
-		ID:            "build",
-		Type:          NodeShell,
-		Status:        StatusSuccess,
-		Parent:        root,
-		StaticCommand: "echo hi",
-		Stdout:        long + "\n",
-		ExitCode:      intPtr(0),
-	}
-	root.Children = []*StepNode{shell}
-	m.tree = &Tree{Root: root}
-	m.path = []*StepNode{root}
-	m.cursor = 0
-	m.detailWidth = 40
-
-	detail := m.renderDetail(shell)
-	if strings.Contains(detail, "| ") {
-		t.Errorf("shell stdout should not use '| ' gutter: %q", detail)
-	}
-	if strings.Contains(detail, "…") {
-		t.Errorf("long shell stdout should wrap, not truncate: %q", detail)
-	}
-	if strings.Count(detail, "abcdef") < 2 {
-		t.Errorf("expected wrapped shell stdout segments containing 'abcdef', got: %q", detail)
-	}
-}
-
-func TestModel_ShellDetail_LongStderr_Wraps_NoGutter(t *testing.T) {
-	m := newLiveModelWithFlags()
-	m.running = false
-
-	long := strings.Repeat("abcdef ", 30)
-	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusFailed}
-	shell := &StepNode{
-		ID:            "check",
-		Type:          NodeShell,
-		Status:        StatusFailed,
-		Parent:        root,
-		StaticCommand: "agent-validator detect",
-		Stderr:        long + "\n",
-		ExitCode:      intPtr(1),
-	}
-	root.Children = []*StepNode{shell}
-	m.tree = &Tree{Root: root}
-	m.path = []*StepNode{root}
-	m.cursor = 0
-	m.detailWidth = 40
-
-	detail := m.renderDetail(shell)
-	if strings.Contains(detail, "| ") {
-		t.Errorf("shell stderr should not use '| ' gutter: %q", detail)
-	}
-	if strings.Contains(detail, "…") {
-		t.Errorf("long shell stderr should wrap, not truncate: %q", detail)
-	}
-	if strings.Count(detail, "abcdef") < 2 {
-		t.Errorf("expected wrapped shell stderr segments containing 'abcdef', got: %q", detail)
-	}
-}
-
-func TestModel_ShellDetail_LongCommand_Wraps(t *testing.T) {
-	m := newLiveModelWithFlags()
-	m.running = false
-
-	longCmd := "agent-validator detect; status=$?; if [ $status -eq 2 ]; then echo needs-validation; else echo ok; fi && exit $status"
-	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
-	shell := &StepNode{
-		ID:                  "check-clean",
-		Type:                NodeShell,
-		Status:              StatusSuccess,
-		Parent:              root,
-		InterpolatedCommand: longCmd,
-		ExitCode:            intPtr(0),
-	}
-	root.Children = []*StepNode{shell}
-	m.tree = &Tree{Root: root}
-	m.path = []*StepNode{root}
-	m.cursor = 0
-	m.detailWidth = 40
-
-	detail := m.renderDetail(shell)
-	// Every emitted line must fit within detailWidth so the downstream
-	// fitDetailLine does not need to truncate with an ellipsis.
-	for _, line := range strings.Split(detail, "\n") {
-		plain := tuistyle.Sanitize(line)
-		if runewidth.StringWidth(plain) > m.detailWidth {
-			t.Errorf("shell command line exceeds detailWidth=%d: width=%d line=%q",
-				m.detailWidth, runewidth.StringWidth(plain), plain)
-		}
-	}
-	if !strings.Contains(detail, "agent-validator") {
-		t.Errorf("detail missing expected command text: %q", detail)
 	}
 }
 
@@ -1912,4 +1663,134 @@ func TestFindFailedLeaf(t *testing.T) {
 			t.Fatalf("expected deepest failed shell %v, got %v", shell, found)
 		}
 	})
+}
+
+// ---- Scroll sync tests ----
+
+func makeRanges(nodes []*StepNode, lineSize int) []stepLineRange {
+	ranges := make([]stepLineRange, len(nodes))
+	for i, n := range nodes {
+		ranges[i] = stepLineRange{node: n, startLine: i * lineSize, endLine: (i + 1) * lineSize}
+	}
+	return ranges
+}
+
+func TestScrollSync_SyncLogToSelection_SetsOffset(t *testing.T) {
+	root := &StepNode{ID: "root", Type: NodeRoot}
+	steps := []*StepNode{
+		{ID: "a", Type: NodeShell, Status: StatusSuccess, Parent: root},
+		{ID: "b", Type: NodeShell, Status: StatusSuccess, Parent: root},
+		{ID: "c", Type: NodeShell, Status: StatusSuccess, Parent: root},
+	}
+	root.Children = steps
+	tree := &Tree{Root: root}
+	m := newTestModel(tree, FromList)
+	m.cursor = 1
+	// Set up stepRanges with 10 lines per step.
+	m.stepRanges = makeRanges(steps, 10)
+
+	m.syncLogToSelection()
+
+	// logOffset should jump to start of step "b" (index 1 → startLine=10)
+	if m.logOffset != 10 {
+		t.Fatalf("logOffset = %d, want 10", m.logOffset)
+	}
+	if m.logAnchor.stepKey != "b" {
+		t.Fatalf("logAnchor.stepKey = %q, want %q", m.logAnchor.stepKey, "b")
+	}
+}
+
+func TestScrollSync_SyncSelectionToLog_PicksLatestInViewport(t *testing.T) {
+	root := &StepNode{ID: "root", Type: NodeRoot}
+	steps := []*StepNode{
+		{ID: "a", Type: NodeShell, Status: StatusSuccess, Parent: root},
+		{ID: "b", Type: NodeShell, Status: StatusSuccess, Parent: root},
+		{ID: "c", Type: NodeShell, Status: StatusSuccess, Parent: root},
+	}
+	root.Children = steps
+	tree := &Tree{Root: root}
+	m := newTestModel(tree, FromList)
+	m.termHeight = 40 // bodyHeight ≈ 30
+	// logOffset = 5, bodyH ≈ 30 → viewport [5, 35)
+	// Step a: [0,10) — overlaps [5,35), startLine=0
+	// Step b: [10,20) — overlaps [5,35), startLine=10
+	// Step c: [20,30) — overlaps [5,35), startLine=20
+	// Winner = c (latest startLine)
+	m.stepRanges = makeRanges(steps, 10)
+	m.logOffset = 5
+
+	m.syncSelectionToLog()
+
+	if m.cursor != 2 {
+		t.Fatalf("cursor = %d, want 2 (step c has latest startLine in viewport)", m.cursor)
+	}
+}
+
+func TestScrollSync_NestedWinner_MapsToAncestor(t *testing.T) {
+	// Build a tree: root → loop → iter → child
+	root := &StepNode{ID: "root", Type: NodeRoot}
+	loop := &StepNode{ID: "loop", Type: NodeLoop, Status: StatusInProgress, Parent: root}
+	iter := &StepNode{ID: "loop", Type: NodeIteration, Status: StatusInProgress, Parent: loop}
+	child := &StepNode{ID: "child-step", Type: NodeShell, Status: StatusInProgress, Parent: iter}
+	iter.Children = []*StepNode{child}
+	loop.Children = []*StepNode{iter}
+	root.Children = []*StepNode{loop}
+	tree := &Tree{Root: root}
+
+	m := newTestModel(tree, FromList)
+	m.termHeight = 40
+
+	// stepRanges has entries for loop, iter, and child (as buildLogLines would produce).
+	m.stepRanges = []stepLineRange{
+		{node: loop, startLine: 0, endLine: 30},
+		{node: iter, startLine: 1, endLine: 25},
+		{node: child, startLine: 2, endLine: 20},
+	}
+	m.logOffset = 5
+
+	m.syncSelectionToLog()
+
+	// All three ranges overlap [5, 35). Winner is loop (startLine=0 < iter/child start lines).
+	// Wait, actually syncSelectionToLog picks the LATEST startLine in viewport.
+	// So winner should be child (startLine=2 > iter startLine=1 > loop startLine=0).
+	// ancestor-at-current-level(child): child.Parent=iter, iter.Parent=loop, loop.Parent=root
+	// root == m.currentContainer() → return loop
+	// So cursor should be 0 (loop at index 0 in root.Children).
+	if m.cursor != 0 {
+		t.Fatalf("cursor = %d, want 0 (loop is the top-level ancestor of child)", m.cursor)
+	}
+}
+
+func TestScrollSync_BuildLogLinesChildViewport_SelectsChildAncestor(t *testing.T) {
+	root := &StepNode{ID: "root", Type: NodeRoot}
+	loop := &StepNode{ID: "loop", Type: NodeLoop, Status: StatusInProgress, Parent: root}
+	iter := &StepNode{ID: "loop", Type: NodeIteration, Status: StatusInProgress, Parent: loop, IterationIndex: 0}
+	child := &StepNode{
+		ID:            "child-step",
+		Type:          NodeShell,
+		Status:        StatusSuccess,
+		Parent:        iter,
+		StaticCommand: "echo hi",
+		ExitCode:      intPtr(0),
+	}
+	iter.Children = []*StepNode{child}
+	loop.Children = []*StepNode{iter}
+	root.Children = []*StepNode{loop}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.rebuildRanges()
+	if len(m.stepRanges) != 3 {
+		t.Fatalf("expected 3 ranges, got %d", len(m.stepRanges))
+	}
+
+	childRange := m.stepRanges[2]
+	m.logOffset = childRange.startLine
+	m.syncSelectionToLog()
+
+	if m.cursor != 0 {
+		t.Fatalf("cursor = %d, want 0 (loop is current-level ancestor of child)", m.cursor)
+	}
+	if m.logAnchor.stepKey != child.ID {
+		t.Fatalf("logAnchor.stepKey = %q, want %q", m.logAnchor.stepKey, child.ID)
+	}
 }
