@@ -30,7 +30,9 @@ type stepLineAnchor struct {
 // Container children (sub-workflow, loop, iteration) have their started
 // children rendered inline beneath the parent header at indent+1.
 //
-// loadedFull is keyed by node.ID (not pointer) so it survives across rebuilds.
+// loadedFull is keyed by StepNode.NodeKey() so it is unique even when
+// multiple nodes share the same ID (e.g. iteration nodes) and survives
+// equivalent tree rebuilds.
 func buildLogLines(
 	children []*StepNode,
 	pendingSelected *StepNode,
@@ -74,9 +76,9 @@ func buildLogLinesRecurse(
 		} else {
 			switch child.Type {
 			case NodeShell:
-				blockLines = renderShellBlock(child, indent, bodyWidth, loadedFull[child.ID])
+				blockLines = renderShellBlock(child, indent, bodyWidth, loadedFull[child.NodeKey()])
 			case NodeHeadlessAgent:
-				blockLines = renderHeadlessBlock(child, indent, bodyWidth, loadedFull[child.ID], pulsePhase, running)
+				blockLines = renderHeadlessBlock(child, indent, bodyWidth, loadedFull[child.NodeKey()], pulsePhase, running)
 			case NodeInteractiveAgent:
 				blockLines = renderInteractiveBlock(child, indent, bodyWidth, running)
 			case NodeSubWorkflow:

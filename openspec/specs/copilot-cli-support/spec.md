@@ -1,19 +1,30 @@
 # copilot-cli-support Specification
 
 ## Purpose
-TBD - created by archiving change support-copilot-headless. Update Purpose after archive.
+
+Defines how the runner integrates with the GitHub Copilot CLI (`copilot`) as a headless agent backend.
+
 ## Requirements
+
 ### Requirement: Copilot headless invocation
 
-The Copilot adapter SHALL construct headless invocations using `copilot -p <prompt> --allow-all-tools --output-format json`. The `--allow-all-tools` flag is required because copilot refuses non-interactive execution without it. The `--output-format json` flag is required so that the runner can parse the session ID from stdout.
+The Copilot adapter SHALL construct headless invocations using:
+
+```
+copilot -p <prompt> --allow-all --autopilot -s [--model <m>] [--reasoning-effort <e>]
+```
+
+- `--allow-all` grants tool, file-path, and URL permissions required for autonomous operation.
+- `--autopilot` keeps the agent running until the task is complete.
+- `-s` suppresses interactive output, emitting only the agent response text.
 
 #### Scenario: Fresh headless Copilot step
 - **WHEN** the runner executes a headless step with `cli: copilot` and session strategy `new`
-- **THEN** the adapter returns args beginning with `copilot` and including `-p`, the prompt, `--allow-all-tools`, and `--output-format json`, and does not include `--resume`
+- **THEN** the adapter returns args beginning with `copilot` and including `-p`, the prompt, `--allow-all`, `--autopilot`, and `-s`, and does not include `--resume`
 
 #### Scenario: Headless flag required
 - **WHEN** the runner constructs args for a Copilot headless step
-- **THEN** the args include `--allow-all-tools` regardless of other options
+- **THEN** the args include `--allow-all` regardless of other options
 
 ### Requirement: Copilot session resume
 
@@ -57,19 +68,21 @@ When the runner passes `DisallowedTools` containing `"AskUserQuestion"`, the Cop
 
 ### Requirement: Copilot session ID discovery
 
-After a headless Copilot process exits, the adapter SHALL parse stdout as JSONL and return the `sessionId` field from the first line whose `type` is `"result"`. If no such line is found, the adapter SHALL return the empty string.
+After a headless Copilot process exits, the adapter SHALL discover the session ID by scanning `~/.copilot/session-state/` for the most recently modified session directory created after the process spawn time, matching on the working directory recorded in that session's `workspace.yaml`. If no matching session is found, the adapter SHALL return the empty string.
 
-#### Scenario: Session ID parsed from result event
-- **WHEN** a headless Copilot step completes with stdout containing a `{"type":"result","sessionId":"<id>",...}` JSONL line
-- **THEN** the adapter returns `<id>` from `DiscoverSessionID`
+The effective working directory used for matching SHALL be the working directory of the Copilot process (`opts.Workdir`); when that is not provided, the runner process's own working directory (`os.Getwd()`) is used as a fallback.
 
-#### Scenario: Result event missing
-- **WHEN** a headless Copilot step's stdout contains no `type:"result"` line (e.g., the process failed before emitting one)
+#### Scenario: Session ID discovered from filesystem
+- **WHEN** a headless Copilot step completes and a matching session directory exists in `~/.copilot/session-state/` with a `workspace.yaml` whose `cwd` equals the step's working directory
+- **THEN** the adapter returns the session directory name as the session ID
+
+#### Scenario: Session ID uses step workdir for matching
+- **WHEN** a step specifies `workdir` and the Copilot process ran in that directory
+- **THEN** the adapter matches the session using the step workdir, not the runner's own CWD
+
+#### Scenario: No matching session found
+- **WHEN** no session directory in `~/.copilot/session-state/` matches the working directory or was created after the spawn time
 - **THEN** the adapter returns the empty string
-
-#### Scenario: Resumed session ID unchanged
-- **WHEN** a headless Copilot step resumes session `<id>` and completes successfully
-- **THEN** the adapter returns `<id>` (the same session ID observed in the resumed `result` event)
 
 ### Requirement: Copilot interactive mode rejected at runtime
 
@@ -82,4 +95,3 @@ Interactive mode for Copilot is not supported in this release. When a step with 
 #### Scenario: Copilot interactive rejection does not block load
 - **WHEN** a workflow or profile declares `cli: copilot` with `default_mode: interactive`
 - **THEN** configuration and workflow loading succeed without error (the failure surfaces only when such a step is actually executed)
-

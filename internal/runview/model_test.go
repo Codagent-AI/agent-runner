@@ -809,13 +809,136 @@ func TestModel_LoadFull(t *testing.T) {
 	m := newTestModel(tree, FromList)
 	m.cursor = 0
 
-	if m.loadedFull[tree.Root.Children[0].ID] {
+	step := tree.Root.Children[0]
+	if m.loadedFull[step.NodeKey()] {
 		t.Fatal("should not be loaded full initially")
 	}
 
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
-	if !m.loadedFull[tree.Root.Children[0].ID] {
+	if !m.loadedFull[step.NodeKey()] {
 		t.Fatal("g should mark step as loaded full")
+	}
+}
+
+// TestModel_LoadFull_DoesNotCrossContaminateByID verifies that pressing g on one
+// step does not mark a different step with the same ID as loaded-full.
+// Iteration nodes reuse the loop ID (ensureIteration sets ID: loop.ID), so this
+// was a real bug when loadedFull was keyed by node.ID instead of *StepNode.
+func TestModel_LoadFull_DoesNotCrossContaminateByID(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	loop := &StepNode{ID: "tasks", Type: NodeLoop, Status: StatusInProgress, Parent: root}
+
+	// Two shell steps in different iterations but with the same ID — just like
+	// cloneTemplate produces when seeding iteration children from the loop body.
+	step0 := &StepNode{
+		ID:     "run", // same ID as step1
+		Type:   NodeShell,
+		Status: StatusSuccess,
+		Stdout: generateLargeOutput(3000),
+	}
+	step1 := &StepNode{
+		ID:     "run", // same ID as step0
+		Type:   NodeShell,
+		Status: StatusSuccess,
+	}
+	iter0 := &StepNode{ID: "tasks", Type: NodeIteration, Status: StatusSuccess, Parent: loop, IterationIndex: 0}
+	iter1 := &StepNode{ID: "tasks", Type: NodeIteration, Status: StatusSuccess, Parent: loop, IterationIndex: 1}
+	step0.Parent = iter0
+	step1.Parent = iter1
+	iter0.Children = []*StepNode{step0}
+	iter1.Children = []*StepNode{step1}
+	loop.Children = []*StepNode{iter0, iter1}
+	root.Children = []*StepNode{loop}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+
+	// Drill into the loop, then into iter0, select step0 and press g.
+	m.cursor = 0 // loop
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.cursor = 0 // iter0
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.cursor = 0 // step0
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+
+	if !m.loadedFull[step0.NodeKey()] {
+		t.Error("step0 should be marked loadedFull")
+	}
+	if m.loadedFull[step1.NodeKey()] {
+		t.Error("step1 should NOT be marked loadedFull (same ID, different pointer)")
+	}
+}
+
+func TestModel_LoadFull_PersistsAcrossEquivalentTreeRebuild(t *testing.T) {
+	build := func() (*Tree, *StepNode, *StepNode, *StepNode) {
+		root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+		loop := &StepNode{ID: "tasks", Type: NodeLoop, Status: StatusInProgress, Parent: root}
+		iter := &StepNode{ID: "tasks", Type: NodeIteration, Status: StatusSuccess, Parent: loop, IterationIndex: 0}
+		step := &StepNode{
+			ID:     "run",
+			Type:   NodeShell,
+			Status: StatusSuccess,
+			Parent: iter,
+			Stdout: generateLargeOutput(3000),
+		}
+		iter.Children = []*StepNode{step}
+		loop.Children = []*StepNode{iter}
+		root.Children = []*StepNode{loop}
+		return &Tree{Root: root}, loop, iter, step
+	}
+
+	tree1, _, _, step1 := build()
+	m := newTestModel(tree1, FromList)
+	m.cursor = 0
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.cursor = 0
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.cursor = 0
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+
+	if !m.loadedFull[step1.NodeKey()] {
+		t.Fatal("step should be marked loaded full before tree rebuild")
+	}
+
+	tree2, loop2, iter2, _ := build()
+	m.tree = tree2
+	m.path = []*StepNode{tree2.Root, loop2, iter2}
+	m.cursor = 0
+
+	if m.selectedNodeHasTruncatedOutput() {
+		t.Fatal("loaded-full state should survive an equivalent tree rebuild")
+	}
+}
+
+// TestModel_KScroll_AfterAutoScroll_IsEffective verifies that pressing k after
+// an auto-scroll (which sets logOffset to math.MaxInt32) produces a meaningful
+// decrease in logOffset — not just MaxInt32 − 1.
+func TestModel_KScroll_AfterAutoScroll_IsEffective(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	step := &StepNode{
+		ID:     "build",
+		Type:   NodeShell,
+		Status: StatusSuccess,
+		Parent: root,
+		Stdout: generateLargeOutput(100), // enough lines to make maxOffset > 0
+	}
+	root.Children = []*StepNode{step}
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.termHeight = 20 // small height so maxOffset > 0
+
+	// Simulate the auto-scroll sentinel (as set by handleOutputChunkMsg).
+	m.logOffset = math.MaxInt32
+	lineCount := m.rebuildRanges()
+	m.clampLogOffset(lineCount) // fix should ensure this runs in the real code path too
+
+	preK := m.logOffset
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+
+	if m.logOffset >= preK {
+		t.Fatalf("k did not decrease logOffset: before=%d after=%d", preK, m.logOffset)
+	}
+	// After fix the offset should be well below the MaxInt32 range.
+	if m.logOffset > 10_000 {
+		t.Fatalf("logOffset still huge after k (%d); MaxInt32 sentinel was not clamped", m.logOffset)
 	}
 }
 
@@ -1179,8 +1302,13 @@ func TestModel_StepStateMsg_ActiveRunAutoScrollsLog(t *testing.T) {
 
 	m.Update(liverun.StepStateMsg{ActiveStepPrefix: "[implement]"})
 
-	if m.logOffset != math.MaxInt32 {
-		t.Fatalf("logOffset = %d, want %d while live auto-scroll is active", m.logOffset, math.MaxInt32)
+	// After the fix, logOffset is clamped to [0, maxOffset] immediately after
+	// rebuild, so it should be well below the MaxInt32 sentinel value.
+	if m.logOffset == 7 {
+		t.Fatal("logOffset should have changed (auto-scroll should fire)")
+	}
+	if m.logOffset > 10_000 {
+		t.Fatalf("logOffset too large (%d); auto-scroll should clamp to real maxOffset", m.logOffset)
 	}
 }
 
@@ -1695,8 +1823,8 @@ func TestScrollSync_SyncLogToSelection_SetsOffset(t *testing.T) {
 	if m.logOffset != 10 {
 		t.Fatalf("logOffset = %d, want 10", m.logOffset)
 	}
-	if m.logAnchor.stepKey != "b" {
-		t.Fatalf("logAnchor.stepKey = %q, want %q", m.logAnchor.stepKey, "b")
+	if m.logAnchor.stepKey != steps[1].NodeKey() {
+		t.Fatalf("logAnchor.stepKey = %q, want %q", m.logAnchor.stepKey, steps[1].NodeKey())
 	}
 }
 
@@ -1790,7 +1918,65 @@ func TestScrollSync_BuildLogLinesChildViewport_SelectsChildAncestor(t *testing.T
 	if m.cursor != 0 {
 		t.Fatalf("cursor = %d, want 0 (loop is current-level ancestor of child)", m.cursor)
 	}
-	if m.logAnchor.stepKey != child.ID {
-		t.Fatalf("logAnchor.stepKey = %q, want %q", m.logAnchor.stepKey, child.ID)
+	if m.logAnchor.stepKey != child.NodeKey() {
+		t.Fatalf("logAnchor.stepKey = %q, want %q", m.logAnchor.stepKey, child.NodeKey())
+	}
+}
+
+func TestHandleWindowSize_ReanchorsAcrossEquivalentTreeRebuild(t *testing.T) {
+	build := func() (*Tree, []*StepNode) {
+		root := &StepNode{ID: "root", Type: NodeRoot, Status: StatusInProgress}
+		step0 := &StepNode{
+			ID:            "setup",
+			Type:          NodeShell,
+			Status:        StatusSuccess,
+			Parent:        root,
+			StaticCommand: "echo " + strings.Repeat("very-long-command ", 12),
+			Stdout:        generateLargeOutput(40),
+			ExitCode:      intPtr(0),
+		}
+		step1 := &StepNode{
+			ID:            "deploy",
+			Type:          NodeShell,
+			Status:        StatusSuccess,
+			Parent:        root,
+			StaticCommand: "echo done",
+			ExitCode:      intPtr(0),
+		}
+		root.Children = []*StepNode{step0, step1}
+		return &Tree{Root: root}, root.Children
+	}
+
+	tree1, steps1 := build()
+	m := newTestModel(tree1, FromList)
+	m.termWidth = 160
+	m.termHeight = 24
+	m.cursor = 1
+	m.rebuildRanges()
+	m.syncLogToSelection()
+
+	if m.logAnchor.stepKey != steps1[1].NodeKey() {
+		t.Fatalf("logAnchor.stepKey = %q, want %q before rebuild", m.logAnchor.stepKey, steps1[1].NodeKey())
+	}
+
+	tree2, steps2 := build()
+	m.tree = tree2
+	m.path = []*StepNode{tree2.Root}
+	m.cursor = 1
+
+	m.handleWindowSize(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	expected := -1
+	for _, r := range m.stepRanges {
+		if r.node.NodeKey() == steps2[1].NodeKey() {
+			expected = min(r.startLine, m.maxLogOffset())
+			break
+		}
+	}
+	if expected < 0 {
+		t.Fatal("expected to find rebuilt range for selected step")
+	}
+	if m.logOffset != expected {
+		t.Fatalf("logOffset = %d, want %d after re-anchoring rebuilt tree", m.logOffset, expected)
 	}
 }

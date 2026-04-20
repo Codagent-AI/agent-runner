@@ -364,7 +364,7 @@ func (m *Model) selectedNodeHasTruncatedOutput() bool {
 	if n == nil {
 		return false
 	}
-	if m.loadedFull[n.ID] {
+	if m.loadedFull[n.NodeKey()] {
 		return false
 	}
 	if n.Type != NodeShell && n.Type != NodeHeadlessAgent {

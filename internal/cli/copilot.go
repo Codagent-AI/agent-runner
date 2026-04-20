@@ -58,8 +58,8 @@ func (a *CopilotAdapter) SupportsSystemPrompt() bool {
 // DiscoverSessionID returns the session ID after a copilot process exits by
 // scanning ~/.copilot/session-state/ for the most recently modified directory
 // created after spawn time, matching on CWD from workspace.yaml.
-func (a *CopilotAdapter) DiscoverSessionID(opts DiscoverOptions) string {
-	return discoverCopilotSession(opts.SpawnTime)
+func (a *CopilotAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
+	return discoverCopilotSession(opts.SpawnTime, opts.Workdir)
 }
 
 // InteractiveModeError returns an error indicating interactive mode is not supported.
@@ -70,15 +70,19 @@ func (a *CopilotAdapter) InteractiveModeError() error {
 
 // discoverCopilotSession scans ~/.copilot/session-state/ for the most recently
 // modified session directory created after spawnTime, matching on CWD from workspace.yaml.
-func discoverCopilotSession(spawnTime time.Time) string {
+// workdir is the effective CWD of the Copilot process; when empty, os.Getwd() is used.
+func discoverCopilotSession(spawnTime time.Time, workdir string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
 
-	cwd, err := os.Getwd()
-	if err != nil {
-		return ""
+	cwd := workdir
+	if cwd == "" {
+		cwd, err = os.Getwd()
+		if err != nil {
+			return ""
+		}
 	}
 
 	sessionStateDir := filepath.Join(home, ".copilot", "session-state")

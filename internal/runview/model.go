@@ -58,6 +58,9 @@ type Model struct {
 	path      []*StepNode
 	cursor    int
 	logOffset int
+	// logLineCount is the total number of log lines from the last rebuildRanges call.
+	// It is used to compute maxLogOffset for clamping and scroll normalization.
+	logLineCount int
 
 	loadedFull map[string]bool
 
@@ -292,7 +295,7 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) {
 	// Re-resolve anchor so the same block stays in view after resize.
 	if m.logAnchor.stepKey != "" {
 		for _, r := range m.stepRanges {
-			if r.node.ID == m.logAnchor.stepKey {
+			if r.node.NodeKey() == m.logAnchor.stepKey {
 				newOffset := r.startLine + m.logAnchor.lineOffsetInBlock
 				if newOffset < 0 {
 					newOffset = 0
@@ -310,7 +313,8 @@ func (m *Model) handleOutputChunkMsg(msg liverun.OutputChunkMsg) {
 	if m.active || m.running {
 		m.logOffset = math.MaxInt32
 	}
-	m.rebuildRanges()
+	lineCount := m.rebuildRanges()
+	m.clampLogOffset(lineCount)
 }
 
 func (m *Model) handleStepStateMsg(msg liverun.StepStateMsg) {
@@ -321,7 +325,8 @@ func (m *Model) handleStepStateMsg(msg liverun.StepStateMsg) {
 	if m.active || m.running {
 		m.logOffset = math.MaxInt32
 	}
-	m.rebuildRanges()
+	lineCount := m.rebuildRanges()
+	m.clampLogOffset(lineCount)
 }
 
 func (m *Model) handleExecDoneMsg(msg liverun.ExecDoneMsg) {
@@ -354,6 +359,9 @@ func (m *Model) handleMouse(msg tea.MouseMsg) {
 	switch msg.Button {
 	case tea.MouseButtonWheelUp:
 		m.autoFollow = false
+		if m.logOffset > m.maxLogOffset() {
+			m.logOffset = m.maxLogOffset()
+		}
 		m.logOffset -= 3
 		if m.logOffset < 0 {
 			m.logOffset = 0
@@ -443,6 +451,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.syncLogToSelection()
 	case "k":
 		m.autoFollow = false
+		if m.logOffset > m.maxLogOffset() {
+			m.logOffset = m.maxLogOffset()
+		}
 		m.logOffset--
 		if m.logOffset < 0 {
 			m.logOffset = 0
@@ -534,7 +545,13 @@ func (m *Model) rebuildRanges() int {
 		m.resolverCfg,
 	)
 	m.stepRanges = ranges
+	m.logLineCount = len(lines)
 	return len(lines)
+}
+
+// maxLogOffset returns the maximum valid logOffset for the current log content.
+func (m *Model) maxLogOffset() int {
+	return max(0, m.logLineCount-m.bodyHeight())
 }
 
 // rightPaneWidth estimates the right-pane width for range computation.
@@ -555,7 +572,7 @@ func (m *Model) syncLogToSelection() {
 	for _, r := range m.stepRanges {
 		if r.node == sel {
 			m.logOffset = r.startLine
-			m.logAnchor = stepLineAnchor{stepKey: sel.ID, lineOffsetInBlock: 0}
+			m.logAnchor = stepLineAnchor{stepKey: sel.NodeKey(), lineOffsetInBlock: 0}
 			return
 		}
 	}
@@ -581,7 +598,7 @@ func (m *Model) syncSelectionToLog() {
 			m.cursor = idx
 		}
 		m.logAnchor = stepLineAnchor{
-			stepKey:           winner.ID,
+			stepKey:           winner.NodeKey(),
 			lineOffsetInBlock: m.logOffset - winnerStart,
 		}
 	}
@@ -738,7 +755,7 @@ func (m *Model) handleLoadFull() {
 		return
 	}
 	if n.Type == NodeShell || n.Type == NodeHeadlessAgent {
-		m.loadedFull[n.ID] = true
+		m.loadedFull[n.NodeKey()] = true
 	}
 }
 

@@ -387,11 +387,12 @@ func discoverAndStoreSession(
 	processOutput string,
 	log Logger,
 ) string {
-	discoveredID := adapter.DiscoverSessionID(cli.DiscoverOptions{
+	discoveredID := adapter.DiscoverSessionID(&cli.DiscoverOptions{
 		SpawnTime:     spawnTime,
 		PresetID:      presetID,
 		Headless:      headless,
 		ProcessOutput: processOutput,
+		Workdir:       step.Workdir,
 	})
 	if discoveredID != "" {
 		ctx.SessionIDs[step.ID] = discoveredID
