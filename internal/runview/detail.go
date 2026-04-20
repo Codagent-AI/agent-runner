@@ -322,7 +322,6 @@ func blockExitAndDuration(n *StepNode) []string {
 	}
 	var lines []string
 	lines = append(lines, "")
-	failed := n.Status == StatusFailed || (n.ExitCode != nil && *n.ExitCode != 0)
 	if n.ExitCode != nil {
 		label := "exit"
 		val := fmt.Sprintf("%d", *n.ExitCode)
@@ -333,11 +332,11 @@ func blockExitAndDuration(n *StepNode) []string {
 			exitLine = blockDimStr(label, val)
 		}
 		if n.DurationMs != nil {
-			exitLine += "       " + blockDurationStr(*n.DurationMs, failed)
+			exitLine += "       " + blockDurationStr(*n.DurationMs)
 		}
 		lines = append(lines, exitLine)
 	} else if n.DurationMs != nil {
-		lines = append(lines, blockDurationStr(*n.DurationMs, failed))
+		lines = append(lines, blockDurationStr(*n.DurationMs))
 	}
 	return lines
 }
@@ -346,19 +345,18 @@ func blockOutcomeAndDuration(n *StepNode) []string {
 	var lines []string
 	lines = append(lines, "")
 	outcome := statusLabel(n.Status)
-	failed := n.Status == StatusFailed
-	if failed {
+	if n.Status == StatusFailed {
 		lines = append(lines, tuistyle.LabelStyle.Render("outcome: ")+tuistyle.StatusFailed.Render(outcome))
 	} else {
 		lines = append(lines, blockDimStr("outcome", outcome))
 	}
 	if n.DurationMs != nil {
-		lines = append(lines, blockDurationStr(*n.DurationMs, failed))
+		lines = append(lines, blockDurationStr(*n.DurationMs))
 	}
 	return lines
 }
 
-func blockDurationStr(ms int64, _ bool) string {
+func blockDurationStr(ms int64) string {
 	return tuistyle.LabelStyle.Render("duration: ") + tuistyle.NormalStyle.Render(formatDuration(ms))
 }
 

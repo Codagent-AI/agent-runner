@@ -81,7 +81,7 @@ func (m *Model) renderRule() string {
 func (m *Model) renderTwoColumn(children []*StepNode) string {
 	renderedRows := m.buildRenderedStepRows(children)
 	rows := rowTexts(renderedRows)
-	listWidth, rightWidth := twoColumnPaneWidths(m.termWidth, rows)
+	listWidth, rightWidth, rows := twoColumnPaneWidths(m.termWidth, rows)
 
 	divider := tuistyle.DividerStyle.Render("│ ")
 
@@ -378,9 +378,9 @@ func (m *Model) selectedNodeHasTruncatedOutput() bool {
 	return truncateOutput(n.Stdout).Truncated || truncateOutput(n.Stderr).Truncated
 }
 
-func twoColumnPaneWidths(termWidth int, rows []string) (listWidth, rightWidth int) {
+func twoColumnPaneWidths(termWidth int, rows []string) (listWidth, rightWidth int, displayRows []string) {
 	if termWidth <= 0 {
-		return 4, 80
+		return 4, 80, rows
 	}
 
 	// Cap the list column so one pathologically long row can't starve the
@@ -397,11 +397,15 @@ func twoColumnPaneWidths(termWidth int, rows []string) (listWidth, rightWidth in
 			maxRowWidth = w
 		}
 	}
+	displayRows = rows
 	if maxRowWidth > listCap {
 		maxRowWidth = listCap
+		displayRows = make([]string, len(rows))
 		for i, r := range rows {
 			if lipgloss.Width(r) > listCap {
-				rows[i] = runewidth.Truncate(tuistyle.Sanitize(r), listCap, "…")
+				displayRows[i] = runewidth.Truncate(tuistyle.Sanitize(r), listCap, "…")
+			} else {
+				displayRows[i] = r
 			}
 		}
 	}
@@ -412,7 +416,7 @@ func twoColumnPaneWidths(termWidth int, rows []string) (listWidth, rightWidth in
 	if rightWidth < 20 {
 		rightWidth = 20
 	}
-	return listWidth, rightWidth
+	return listWidth, rightWidth, displayRows
 }
 
 func (m *Model) bodyHeight() int {
