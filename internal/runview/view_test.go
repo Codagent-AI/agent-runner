@@ -236,6 +236,41 @@ func TestBuildStepRows_SelectedLoopShowsIterationsWithoutBindingValues(t *testin
 	}
 }
 
+func TestBuildStepRows_SelectedAutoFlattenedIterationShowsSubWorkflowChildren(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	loop := &StepNode{ID: "fanout", Type: NodeLoop, Status: StatusInProgress, Parent: root, AutoFlatten: true}
+	subwf := &StepNode{
+		ID: "impl", Type: NodeSubWorkflow, Status: StatusInProgress,
+		StaticWorkflowPath: "/repo/workflows/impl.yaml", SubLoaded: true,
+	}
+	prepare := &StepNode{ID: "prepare", Type: NodeShell, Status: StatusSuccess, Parent: subwf}
+	summarize := &StepNode{ID: "summarize", Type: NodeHeadlessAgent, Status: StatusPending, Parent: subwf}
+	subwf.Children = []*StepNode{prepare, summarize}
+	iter := &StepNode{
+		ID: "fanout", Type: NodeIteration, Status: StatusInProgress, Parent: loop,
+		IterationIndex: 0, FlattenTarget: subwf, Children: []*StepNode{subwf},
+	}
+	subwf.Parent = iter
+	loop.Children = []*StepNode{iter}
+	root.Children = []*StepNode{loop}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.path = []*StepNode{root, loop}
+
+	rows := m.buildStepRows(loop.Children)
+	joined := stripANSI(strings.Join(rows, "\n"))
+
+	if !strings.Contains(joined, "prepare") {
+		t.Fatalf("iteration expansion should list auto-flattened sub-workflow's direct children, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "summarize") {
+		t.Fatalf("iteration expansion should list all direct children of auto-flattened target, got:\n%s", joined)
+	}
+	if strings.Contains(joined, "impl") {
+		t.Fatalf("iteration expansion must not surface the auto-flattened sub-workflow row, got:\n%s", joined)
+	}
+}
+
 func TestBuildStepRows_SelectedPendingSubWorkflowLoadsDirectChildren(t *testing.T) {
 	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusPending}
 	review := &StepNode{
