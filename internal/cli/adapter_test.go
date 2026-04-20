@@ -271,7 +271,7 @@ func TestClaudeAdapter(t *testing.T) {
 	})
 
 	t.Run("discover session ID returns preset", func(t *testing.T) {
-		id := adapter.DiscoverSessionID(DiscoverOptions{
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
 			PresetID: "preset-123",
 		})
 		if id != "preset-123" {
@@ -280,7 +280,7 @@ func TestClaudeAdapter(t *testing.T) {
 	})
 
 	t.Run("discover session ID returns empty when no preset", func(t *testing.T) {
-		id := adapter.DiscoverSessionID(DiscoverOptions{})
+		id := adapter.DiscoverSessionID(&DiscoverOptions{})
 		if id != "" {
 			t.Fatalf("expected empty string, got %q", id)
 		}
@@ -464,7 +464,7 @@ func TestCodexAdapter(t *testing.T) {
 	t.Run("discover headless session from JSONL", func(t *testing.T) {
 		output := `{"type":"thread.started","thread_id":"thread-xyz-123"}
 {"type":"message","content":"hello"}`
-		id := adapter.DiscoverSessionID(DiscoverOptions{
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
 			ProcessOutput: output,
 			Headless:      true,
 		})
@@ -475,7 +475,7 @@ func TestCodexAdapter(t *testing.T) {
 
 	t.Run("discover headless session returns empty for no thread.started", func(t *testing.T) {
 		output := `{"type":"message","content":"hello"}`
-		id := adapter.DiscoverSessionID(DiscoverOptions{
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
 			ProcessOutput: output,
 			Headless:      true,
 		})
@@ -485,7 +485,7 @@ func TestCodexAdapter(t *testing.T) {
 	})
 
 	t.Run("discover headless session returns empty for empty output", func(t *testing.T) {
-		id := adapter.DiscoverSessionID(DiscoverOptions{
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
 			ProcessOutput: "",
 			Headless:      true,
 		})
@@ -682,9 +682,43 @@ func TestCopilotAdapter(t *testing.T) {
 			t.Fatalf("failed to write workspace.yaml: %v", err)
 		}
 
-		id := adapter.DiscoverSessionID(DiscoverOptions{
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
 			SpawnTime: time.Now().Add(-time.Second),
 			Headless:  true,
+		})
+		if id != sessionID {
+			t.Fatalf("expected %q, got %q", sessionID, id)
+		}
+	})
+
+	t.Run("discover session ID uses Workdir when provided", func(t *testing.T) {
+		sessionID := "test-session-workdir"
+		fakeHome := t.TempDir()
+		workdir := t.TempDir()
+
+		canonWorkdir, err := filepath.EvalSymlinks(workdir)
+		if err != nil {
+			t.Fatalf("EvalSymlinks: %v", err)
+		}
+
+		origHome := os.Getenv("HOME")
+		t.Cleanup(func() { os.Setenv("HOME", origHome) })
+		os.Setenv("HOME", fakeHome)
+
+		sessionStatePath := filepath.Join(fakeHome, ".copilot", "session-state", sessionID)
+		if err := os.MkdirAll(sessionStatePath, 0o700); err != nil {
+			t.Fatalf("failed to create session-state dir: %v", err)
+		}
+		workspace := fmt.Sprintf("id: %s\ncwd: %s\n", sessionID, canonWorkdir)
+		if err := os.WriteFile(filepath.Join(sessionStatePath, "workspace.yaml"), []byte(workspace), 0o600); err != nil {
+			t.Fatalf("failed to write workspace.yaml: %v", err)
+		}
+
+		// Pass Workdir explicitly — no os.Chdir needed.
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			SpawnTime: time.Now().Add(-time.Second),
+			Headless:  true,
+			Workdir:   canonWorkdir,
 		})
 		if id != sessionID {
 			t.Fatalf("expected %q, got %q", sessionID, id)
@@ -696,7 +730,7 @@ func TestCopilotAdapter(t *testing.T) {
 		os.Setenv("HOME", sessionDir)
 		t.Cleanup(func() { os.Unsetenv("HOME") })
 
-		id := adapter.DiscoverSessionID(DiscoverOptions{
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
 			SpawnTime: time.Now(),
 			Headless:  true,
 		})

@@ -79,9 +79,10 @@ Parameters are positional -- they map to the `params` array in order.
 In addition to workflow-declared `params` and captured variables, the runner
 exposes a small set of built-in variables that every step can reference:
 
-| Variable         | Value                                                                                   |
-| ---------------- | --------------------------------------------------------------------------------------- |
+| Variable          | Value                                                                                   |
+| ----------------- | --------------------------------------------------------------------------------------- |
 | `{{session_dir}}` | Absolute path of the current run's session directory (`~/.agent-runner/projects/<encoded-cwd>/runs/<run-id>/`). Useful for pointing agents at per-step output files under `<session_dir>/output/` or the run's `audit.log`. |
+| `{{step_id}}`     | The current step's `id`. |
 
 Built-ins have the lowest interpolation precedence: a workflow `param` or
 captured variable with the same name shadows the built-in.
