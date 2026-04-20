@@ -43,6 +43,14 @@ Status glyphs SHALL be: `●` running, `○` pending, `✓` success, `✗` faile
 - **WHEN** a step with a name longer than 20 characters has a block rendered in the log
 - **THEN** the log block's separator displays the full untruncated step name
 
+## REMOVED Requirements
+
+### Requirement: Step list recursive expansion under selected step
+**Reason**: The recursive expansion introduced by `improve-live-view` rendered children at a negative indent and only surfaced the deepest active descendant, obscuring intermediate siblings. Replaced with a direct-children-only expansion that keeps siblings visible and indentation positive.
+**Migration**: No action required by callers. The sidebar expansion shape changes from "recurse to deepest active descendant" to "direct children only under selected container".
+
+## ADDED Requirements
+
 ### Requirement: Step list inline expansion of direct children under selected step
 The step list SHALL show an inline read-only expansion only under the currently selected step, and only when that step is a container (sub-workflow, loop, or iteration). Expansion SHALL list the container's **direct children only** — it SHALL NOT recurse further into grandchildren.
 
