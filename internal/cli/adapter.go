@@ -48,6 +48,16 @@ type InteractiveRejector interface {
 	InteractiveModeError() error
 }
 
+// SessionStore is an optional interface adapters may implement when the
+// existence of a persisted session ID can be verified (e.g. via a file on
+// disk). Used by the runner to decide whether to resume an existing session
+// or re-establish a fresh one with the same deterministic ID — for example
+// when a session:new step's ID was flushed to state before the CLI actually
+// created the session (pre-spawn crash).
+type SessionStore interface {
+	SessionExists(sessionID, workdir string) bool
+}
+
 // registry holds the known CLI adapters, populated at init time.
 var registry = map[string]Adapter{
 	"claude":  &ClaudeAdapter{},
