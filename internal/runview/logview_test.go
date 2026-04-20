@@ -14,7 +14,8 @@ func makeNode(id string, t NodeType, status NodeStatus) *StepNode {
 var noResolver ResolverConfig
 
 // TestBuildLogLines_FlatChildren verifies that two shell steps each produce at
-// least one line and their ranges are contiguous and non-overlapping.
+// least one line and their ranges remain non-overlapping even with an
+// inter-block spacer line between them.
 func TestBuildLogLines_FlatChildren(t *testing.T) {
 	step1 := makeNode("step1", NodeShell, StatusSuccess)
 	step2 := makeNode("step2", NodeShell, StatusSuccess)
@@ -40,8 +41,8 @@ func TestBuildLogLines_FlatChildren(t *testing.T) {
 	if r1.node != step2 {
 		t.Errorf("ranges[1].node mismatch")
 	}
-	if r0.endLine != r1.startLine {
-		t.Errorf("ranges not contiguous: r0.end=%d r1.start=%d", r0.endLine, r1.startLine)
+	if r0.endLine+1 != r1.startLine {
+		t.Errorf("expected one spacer line between ranges: r0.end=%d r1.start=%d", r0.endLine, r1.startLine)
 	}
 	if r0.startLine >= r0.endLine {
 		t.Errorf("range 0 has no lines: start=%d end=%d", r0.startLine, r0.endLine)
@@ -49,11 +50,11 @@ func TestBuildLogLines_FlatChildren(t *testing.T) {
 	if r1.startLine >= r1.endLine {
 		t.Errorf("range 1 has no lines: start=%d end=%d", r1.startLine, r1.endLine)
 	}
-	if got := stripANSI(lines[r1.startLine]); got != "" {
-		t.Fatalf("second block should start with an inter-block blank line, got %q", got)
+	if got := stripANSI(lines[r1.startLine-1]); got != "" {
+		t.Fatalf("line before second block should be the inter-block blank line, got %q", got)
 	}
-	if sep := stripANSI(lines[r1.startLine+1]); !strings.Contains(sep, "step2") {
-		t.Fatalf("second block separator should follow the blank line, got %q", sep)
+	if sep := stripANSI(lines[r1.startLine]); !strings.Contains(sep, "step2") {
+		t.Fatalf("second block should start at its separator, got %q", sep)
 	}
 }
 

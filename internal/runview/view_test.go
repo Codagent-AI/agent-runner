@@ -1,6 +1,7 @@
 package runview
 
 import (
+	"errors"
 	"regexp"
 	"strings"
 	"testing"
@@ -280,6 +281,41 @@ func TestBuildStepRows_SelectedPendingSubWorkflowLoadsDirectChildren(t *testing.
 		if !strings.Contains(joined, want) {
 			t.Fatalf("expected inline expansion to include %q, got:\n%s", want, joined)
 		}
+	}
+}
+
+func TestBuildStepRows_FailedPendingSubWorkflowExpansionDoesNotRetryEveryRender(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusPending}
+	review := &StepNode{
+		ID:             "review",
+		Type:           NodeSubWorkflow,
+		Status:         StatusPending,
+		Parent:         root,
+		StaticWorkflow: "review.yaml",
+	}
+	root.Children = []*StepNode{review}
+	loadCalls := 0
+	tree := &Tree{
+		Root:         root,
+		WorkflowPath: "/repo/workflows/root.yaml",
+		SubWorkflowLoader: func(path string) (model.Workflow, error) {
+			loadCalls++
+			return model.Workflow{}, errors.New("load failed")
+		},
+	}
+
+	m := newTestModel(tree, FromList)
+	first := m.buildStepRows(root.Children)
+	second := m.buildStepRows(root.Children)
+
+	if len(first) != 1 || len(second) != 1 {
+		t.Fatalf("failed inline expansion should leave only the selected row, got %d and %d rows", len(first), len(second))
+	}
+	if loadCalls != 1 {
+		t.Fatalf("failed pending sub-workflow load should be attempted once per selection until explicit retry, got %d calls", loadCalls)
+	}
+	if review.ErrorMessage != "load failed" {
+		t.Fatalf("expected cached load error, got %q", review.ErrorMessage)
 	}
 }
 

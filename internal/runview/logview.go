@@ -67,10 +67,10 @@ func buildLogLinesRecurse(
 		if isPending && !isGhost {
 			continue
 		}
-		startLine := len(*lines)
-		if startLine > 0 {
+		if len(*lines) > 0 {
 			*lines = append(*lines, "")
 		}
+		startLine := len(*lines)
 
 		var blockLines []string
 		if isGhost {

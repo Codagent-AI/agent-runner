@@ -201,7 +201,7 @@ func (m *Model) expansionChildren(selected *StepNode) []*StepNode {
 	if selected == nil || !selected.IsContainer() {
 		return nil
 	}
-	if selected.Type == NodeSubWorkflow && !selected.SubLoaded && len(selected.Children) == 0 {
+	if selected.Type == NodeSubWorkflow && !selected.SubLoaded && len(selected.Children) == 0 && selected.ErrorMessage == "" {
 		if err := m.tree.EnsureSubWorkflowLoaded(selected); err != nil {
 			if selected.ErrorMessage == "" {
 				selected.ErrorMessage = err.Error()
