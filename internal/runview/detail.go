@@ -93,6 +93,7 @@ func blockAgentHeader(node *StepNode, contentWidth int) []string {
 	if prompt == "" {
 		prompt = node.StaticPrompt
 	}
+	prompt = strings.TrimRight(prompt, "\r\n")
 	if prompt != "" {
 		lines = append(lines, "", blockLabelStr("prompt:"))
 		lines = append(lines, renderWrappedText(prompt, contentWidth)...)
@@ -525,9 +526,23 @@ func formatDuration(ms int64) string {
 	if secs < 60 {
 		return fmt.Sprintf("%.1fs", secs)
 	}
-	mins := int(secs) / 60
-	remainSecs := int(secs) % 60
-	return fmt.Sprintf("%dm%ds", mins, remainSecs)
+	totalSecs := int(secs)
+	if totalSecs < 3600 {
+		mins := totalSecs / 60
+		remainSecs := totalSecs % 60
+		return fmt.Sprintf("%dm %ds", mins, remainSecs)
+	}
+	hours := totalSecs / 3600
+	mins := (totalSecs % 3600) / 60
+	remainSecs := totalSecs % 60
+	parts := []string{fmt.Sprintf("%dh", hours)}
+	if mins > 0 || remainSecs > 0 {
+		parts = append(parts, fmt.Sprintf("%dm", mins))
+	}
+	if remainSecs > 0 {
+		parts = append(parts, fmt.Sprintf("%ds", remainSecs))
+	}
+	return strings.Join(parts, " ")
 }
 
 // fitDetailLine fits one log-pane line into width visible columns. If the
