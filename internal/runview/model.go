@@ -558,7 +558,7 @@ func (m *Model) maxLogOffset() int {
 // Uses the same formula as renderTwoColumn but with a conservative list-
 // column estimate so ranges are close enough for scroll sync.
 func (m *Model) rightPaneWidth() int {
-	_, rightWidth := twoColumnPaneWidths(m.termWidth, m.buildStepRows(m.currentChildren()))
+	_, rightWidth, _ := twoColumnPaneWidths(m.termWidth, m.buildStepRows(m.currentChildren()))
 	return rightWidth
 }
 

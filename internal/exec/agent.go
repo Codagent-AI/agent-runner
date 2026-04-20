@@ -233,9 +233,29 @@ func resolveAdapterAndSession(
 	}
 	isResume = sessionID != ""
 
+	// Re-entering a session:new step on workflow resume: the session ID was
+	// persisted by recordSessionOnSpawn before the prior run aborted. Reuse
+	// the persisted ID (instead of generating a fresh UUID and orphaning the
+	// original) — but only for adapters that can confirm whether the session
+	// actually got established on disk. When it did, attach via --resume;
+	// when it didn't (pre-spawn crash), re-pass the same deterministic ID as
+	// a preset so the CLI creates the session with that ID on this attempt.
+	// Adapters without cli.SessionStore retain the original fresh-session
+	// behavior to avoid resuming sessions whose existence can't be verified.
+	if !isResume && step.Session == model.SessionNew {
+		if persisted := ctx.SessionIDs[step.ID]; persisted != "" {
+			if store, ok := adapter.(cli.SessionStore); ok {
+				sessionID = persisted
+				isResume = store.SessionExists(persisted, step.Workdir)
+			}
+		}
+	}
+
 	// For fresh Claude sessions, generate a UUID upfront so the adapter can
-	// pass it via --session-id and DiscoverSessionID can return it.
-	if !isResume && cliName == "claude" {
+	// pass it via --session-id and DiscoverSessionID can return it. Skip
+	// generation when sessionID is already populated — e.g. a persisted
+	// session:new ID we're re-establishing after a pre-spawn crash.
+	if !isResume && sessionID == "" && cliName == "claude" {
 		sessionID = uuid.New().String()
 	}
 

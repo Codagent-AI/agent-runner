@@ -1,6 +1,8 @@
 package exec
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -100,6 +102,81 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 		if sessionIDAtSpawn != ctx.SessionIDs["s"] {
 			t.Fatalf("expected pre-spawn session ID %q to equal final %q", sessionIDAtSpawn, ctx.SessionIDs["s"])
+		}
+	})
+
+	t.Run("session:new step reuses persisted session ID on workflow resume", func(t *testing.T) {
+		// Regression: when a session:new step aborts mid-flight, its session ID
+		// is persisted in state. On --resume, the step is re-entered, but
+		// because step.Session == SessionNew the runner used to generate a
+		// fresh UUID — orphaning the original session and overwriting the
+		// persisted ID. Resume must reuse the existing ID instead.
+		const persistedID = "persisted-session-xyz"
+		withFakeClaudeSession(t, persistedID)
+
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		ctx := makeCtx()
+		ctx.WorkflowResumed = true
+		ctx.SessionIDs["plan"] = persistedID
+		ctx.LastSessionStepID = "plan"
+		ctx.SessionProfiles["plan"] = "planner"
+		step := model.Step{ID: "plan", Mode: model.ModeHeadless, Prompt: "keep planning", Session: model.SessionNew}
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+
+		if ctx.SessionIDs["plan"] != persistedID {
+			t.Fatalf("expected persisted session ID to be preserved, got %q (was %q)", ctx.SessionIDs["plan"], persistedID)
+		}
+
+		args := runner.calls[0]
+		foundResume := false
+		for i, a := range args {
+			if a == "--resume" && i+1 < len(args) && args[i+1] == persistedID {
+				foundResume = true
+			}
+		}
+		if !foundResume {
+			t.Fatalf("expected --resume %s to reuse persisted session, got %v", persistedID, args)
+		}
+		for _, a := range args {
+			if a == "--session-id" {
+				t.Fatalf("did not expect --session-id (would create a fresh session), got %v", args)
+			}
+		}
+	})
+
+	t.Run("session:new step re-establishes persisted ID when transcript missing", func(t *testing.T) {
+		// Edge case: if the prior run crashed after persisting the session ID
+		// but before Claude wrote its transcript, --resume would fail because
+		// no session exists on disk. The runner must pass the persisted ID
+		// via --session-id so the CLI recreates the session with the same
+		// deterministic UUID rather than generating a new one.
+		withFakeClaudeHome(t) // home exists, but no transcript file
+		const persistedID = "persisted-never-established"
+
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		ctx := makeCtx()
+		ctx.WorkflowResumed = true
+		ctx.SessionIDs["plan"] = persistedID
+		ctx.LastSessionStepID = "plan"
+		step := model.Step{ID: "plan", Mode: model.ModeHeadless, Prompt: "start", Session: model.SessionNew}
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+
+		if ctx.SessionIDs["plan"] != persistedID {
+			t.Fatalf("expected persisted session ID to be preserved, got %q (was %q)", ctx.SessionIDs["plan"], persistedID)
+		}
+
+		args := runner.calls[0]
+		foundSessionID := false
+		for i, a := range args {
+			if a == "--session-id" && i+1 < len(args) && args[i+1] == persistedID {
+				foundSessionID = true
+			}
+			if a == "--resume" {
+				t.Fatalf("did not expect --resume for a never-established session, got %v", args)
+			}
+		}
+		if !foundSessionID {
+			t.Fatalf("expected --session-id %s to re-establish with persisted ID, got %v", persistedID, args)
 		}
 	})
 
@@ -803,6 +880,42 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatalf("expected no CLI invocations, got %d", len(runner.calls))
 		}
 	})
+}
+
+// withFakeClaudeHome redirects $HOME to a test-scoped temp dir and returns
+// the encoded Claude projects directory for the current working directory.
+// The caller can then plant transcript files under the returned path to
+// simulate the presence or absence of a Claude session on disk.
+func withFakeClaudeHome(t *testing.T) string {
+	t.Helper()
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	replacer := strings.NewReplacer("/", "-", ".", "-", "_", "-")
+	encoded := replacer.Replace(abs)
+	projects := filepath.Join(tmp, ".claude", "projects", encoded)
+	if err := os.MkdirAll(projects, 0o755); err != nil {
+		t.Fatalf("mkdir projects: %v", err)
+	}
+	return projects
+}
+
+// withFakeClaudeSession sets up a fake Claude home and plants an empty
+// transcript for sessionID so that ClaudeAdapter.SessionExists reports true.
+func withFakeClaudeSession(t *testing.T, sessionID string) {
+	t.Helper()
+	projects := withFakeClaudeHome(t)
+	transcript := filepath.Join(projects, sessionID+".jsonl")
+	if err := os.WriteFile(transcript, nil, 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
 }
 
 func containsArg(args []string, target string) bool {

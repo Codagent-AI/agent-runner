@@ -14,7 +14,8 @@ func makeNode(id string, t NodeType, status NodeStatus) *StepNode {
 var noResolver ResolverConfig
 
 // TestBuildLogLines_FlatChildren verifies that two shell steps each produce at
-// least one line and their ranges are contiguous and non-overlapping.
+// least one line and their ranges remain non-overlapping even with an
+// inter-block spacer line between them.
 func TestBuildLogLines_FlatChildren(t *testing.T) {
 	step1 := makeNode("step1", NodeShell, StatusSuccess)
 	step2 := makeNode("step2", NodeShell, StatusSuccess)
@@ -40,14 +41,20 @@ func TestBuildLogLines_FlatChildren(t *testing.T) {
 	if r1.node != step2 {
 		t.Errorf("ranges[1].node mismatch")
 	}
-	if r0.endLine != r1.startLine {
-		t.Errorf("ranges not contiguous: r0.end=%d r1.start=%d", r0.endLine, r1.startLine)
+	if r0.endLine+1 != r1.startLine {
+		t.Errorf("expected one spacer line between ranges: r0.end=%d r1.start=%d", r0.endLine, r1.startLine)
 	}
 	if r0.startLine >= r0.endLine {
 		t.Errorf("range 0 has no lines: start=%d end=%d", r0.startLine, r0.endLine)
 	}
 	if r1.startLine >= r1.endLine {
 		t.Errorf("range 1 has no lines: start=%d end=%d", r1.startLine, r1.endLine)
+	}
+	if got := stripANSI(lines[r1.startLine-1]); got != "" {
+		t.Fatalf("line before second block should be the inter-block blank line, got %q", got)
+	}
+	if sep := stripANSI(lines[r1.startLine]); !strings.Contains(sep, "step2") {
+		t.Fatalf("second block should start at its separator, got %q", sep)
 	}
 }
 
@@ -187,7 +194,7 @@ func TestBuildLogLines_GhostBlock(t *testing.T) {
 	}
 
 	// Ghost separator uses "- " dashes, not "═" or "─".
-	ghostSep := stripANSI(lines[ghostRange.startLine])
+	ghostSep := firstNonBlankLine(lines, ghostRange)
 	if !strings.Contains(ghostSep, "- ") {
 		t.Errorf("ghost separator should contain '- ', got: %q", ghostSep)
 	}
@@ -244,13 +251,13 @@ func TestBuildLogLines_SeparatorDepth(t *testing.T) {
 	}
 
 	// Depth-0 separator for the sub-workflow.
-	outerSep := stripANSI(lines[ranges[0].startLine])
+	outerSep := firstNonBlankLine(lines, ranges[0])
 	if !strings.Contains(outerSep, "═") {
 		t.Errorf("depth-0 separator should contain '═', got: %q", outerSep)
 	}
 
 	// Depth-1 separator for the inner step.
-	innerSep := stripANSI(lines[ranges[1].startLine])
+	innerSep := firstNonBlankLine(lines, ranges[1])
 	if strings.Contains(innerSep, "═") {
 		t.Errorf("depth-1 separator should not contain '═', got: %q", innerSep)
 	}
@@ -288,11 +295,11 @@ func TestBuildLogLines_DeepNesting_DecreasesSeparatorWeight(t *testing.T) {
 		t.Fatalf("expected 5 ranges, got %d", len(ranges))
 	}
 
-	level0Sep := stripANSI(lines[ranges[0].startLine])
-	level1Sep := stripANSI(lines[ranges[1].startLine])
-	level2Sep := stripANSI(lines[ranges[2].startLine])
-	level3Sep := stripANSI(lines[ranges[3].startLine])
-	leafSep := stripANSI(lines[ranges[4].startLine])
+	level0Sep := firstNonBlankLine(lines, ranges[0])
+	level1Sep := firstNonBlankLine(lines, ranges[1])
+	level2Sep := firstNonBlankLine(lines, ranges[2])
+	level3Sep := firstNonBlankLine(lines, ranges[3])
+	leafSep := firstNonBlankLine(lines, ranges[4])
 
 	if !strings.Contains(level0Sep, "═") {
 		t.Fatalf("depth 0 separator should contain ═, got %q", level0Sep)
@@ -349,6 +356,53 @@ func TestBuildLogLines_LargeOutputTruncated(t *testing.T) {
 	}
 }
 
+func TestRenderHeadlessBlock_StripsTrailingPromptBlankBeforeDuration(t *testing.T) {
+	duration := int64(123000)
+	exitCode := 0
+	node := &StepNode{
+		ID:                 "summarize",
+		Type:               NodeHeadlessAgent,
+		Status:             StatusSuccess,
+		InterpolatedPrompt: "First line\nSecond line\n",
+		DurationMs:         &duration,
+		ExitCode:           &exitCode,
+	}
+
+	lines := renderHeadlessBlock(node, 0, 80, false, 0, false)
+	plain := make([]string, len(lines))
+	for i, line := range lines {
+		plain[i] = stripANSI(line)
+	}
+
+	durationIdx := -1
+	for i, line := range plain {
+		if strings.Contains(line, "duration: ") {
+			durationIdx = i
+			break
+		}
+	}
+	if durationIdx < 0 {
+		t.Fatalf("expected duration line in block, got:\n%s", strings.Join(plain, "\n"))
+	}
+
+	blankCount := 0
+	for i := durationIdx - 1; i >= 0 && plain[i] == ""; i-- {
+		blankCount++
+	}
+	if blankCount != 1 {
+		t.Fatalf("expected exactly one blank line before duration, got %d in:\n%s", blankCount, strings.Join(plain, "\n"))
+	}
+}
+
+func TestFormatDuration_InsertsSpacesBetweenUnits(t *testing.T) {
+	if got := formatDuration(123000); got != "2m 3s" {
+		t.Fatalf("formatDuration(123000) = %q, want %q", got, "2m 3s")
+	}
+	if got := formatDuration(61000); got != "1m 1s" {
+		t.Fatalf("formatDuration(61000) = %q, want %q", got, "1m 1s")
+	}
+}
+
 // stripANSI removes ANSI escape codes for plain-text assertions.
 func stripANSI(s string) string {
 	var b strings.Builder
@@ -367,4 +421,13 @@ func stripANSI(s string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+func firstNonBlankLine(lines []string, r stepLineRange) string {
+	for i := r.startLine; i < r.endLine; i++ {
+		if plain := stripANSI(lines[i]); plain != "" {
+			return plain
+		}
+	}
+	return ""
 }

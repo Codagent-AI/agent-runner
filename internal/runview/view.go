@@ -2,7 +2,6 @@ package runview
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -13,6 +12,7 @@ import (
 
 var (
 	shellGlyphStyle = lipgloss.NewStyle().Foreground(tuistyle.InactiveAmber)
+	loopGlyphStyle  = lipgloss.NewStyle().Foreground(tuistyle.AccentCyan)
 	subwfGlyphStyle = lipgloss.NewStyle().Foreground(tuistyle.AccentCyan)
 )
 
@@ -81,7 +81,7 @@ func (m *Model) renderRule() string {
 func (m *Model) renderTwoColumn(children []*StepNode) string {
 	renderedRows := m.buildRenderedStepRows(children)
 	rows := rowTexts(renderedRows)
-	listWidth, rightWidth := twoColumnPaneWidths(m.termWidth, rows)
+	listWidth, rightWidth, rows := twoColumnPaneWidths(m.termWidth, rows)
 
 	divider := tuistyle.DividerStyle.Render("│ ")
 
@@ -185,40 +185,37 @@ func (m *Model) renderStepRow(n *StepNode, selected bool) string {
 }
 
 func (m *Model) buildExpansionRows(selected *StepNode) []renderedStepRow {
-	rows := make([]renderedStepRow, 0)
-	for depth, current := 1, selected; ; depth++ {
-		current = expansionChild(current)
-		if current == nil {
-			return rows
-		}
+	children := m.expansionChildren(selected)
+	rows := make([]renderedStepRow, 0, len(children))
+	for _, current := range children {
 		rows = append(rows, renderedStepRow{
-			text:       m.renderExpansionRow(current, depth),
+			text:       m.renderExpansionRow(current, 1),
 			node:       current,
 			selectable: false,
 		})
 	}
+	return rows
 }
 
-func expansionChild(parent *StepNode) *StepNode {
-	if parent == nil {
+func (m *Model) expansionChildren(selected *StepNode) []*StepNode {
+	if selected == nil || !selected.IsContainer() {
 		return nil
 	}
-
-	var fallback *StepNode
-	for _, child := range parent.Children {
-		if child.Status == StatusInProgress {
-			return child
-		}
-		if child.Status != StatusPending {
-			fallback = child
+	target := selected.Drilldown()
+	if target.Type == NodeSubWorkflow && !target.SubLoaded && len(target.Children) == 0 && target.ErrorMessage == "" {
+		if err := m.tree.EnsureSubWorkflowLoaded(target); err != nil {
+			if target.ErrorMessage == "" {
+				target.ErrorMessage = err.Error()
+			}
+			return nil
 		}
 	}
-	return fallback
+	return target.Children
 }
 
 func (m *Model) renderExpansionRow(n *StepNode, depth int) string {
 	typeCol, label, glyph := m.stepRowParts(n)
-	return strings.Repeat("  ", depth) + typeCol + tuistyle.DimStyle.Render(label) + "  " + glyph
+	return "   " + strings.Repeat("  ", depth) + typeCol + tuistyle.DimStyle.Render(label) + "  " + glyph
 }
 
 func rowTexts(rows []renderedStepRow) []string {
@@ -261,25 +258,24 @@ func (m *Model) stepRowParts(n *StepNode) (typeCol, label, glyph string) {
 
 	switch n.Type {
 	case NodeLoop:
+		typePrefix = typeGlyph(n.Type)
 		total := loopTotal(n)
 		if total > 0 {
 			suffix = fmt.Sprintf(" (%d/%d)", n.IterationsCompleted, total)
 		}
 	case NodeIteration:
 		label = fmt.Sprintf("iter %d", n.IterationIndex+1)
-		if n.BindingValue != "" {
-			label += "   " + filepath.Base(n.BindingValue)
-		}
 	default:
 		typePrefix = typeGlyph(n.Type)
 	}
+	label = truncateSidebarName(label) + suffix
 
 	typeCol = "   "
 	if typePrefix != "" {
 		typeCol = typePrefix + "  "
 	}
 
-	return typeCol, label + suffix, glyph
+	return typeCol, label, glyph
 }
 
 func (m *Model) statusGlyph(n *StepNode) string {
@@ -309,10 +305,19 @@ func typeGlyph(t NodeType) string {
 	switch t {
 	case NodeShell:
 		return shellGlyphStyle.Render(raw)
+	case NodeLoop:
+		return loopGlyphStyle.Render(raw)
 	case NodeHeadlessAgent, NodeInteractiveAgent, NodeSubWorkflow:
 		return subwfGlyphStyle.Render(raw)
 	}
 	return ""
+}
+
+func truncateSidebarName(name string) string {
+	if runewidth.StringWidth(name) <= 20 {
+		return name
+	}
+	return runewidth.Truncate(name, 18, "…")
 }
 
 func (m *Model) renderHelpBar() string {
@@ -373,9 +378,9 @@ func (m *Model) selectedNodeHasTruncatedOutput() bool {
 	return truncateOutput(n.Stdout).Truncated || truncateOutput(n.Stderr).Truncated
 }
 
-func twoColumnPaneWidths(termWidth int, rows []string) (listWidth, rightWidth int) {
+func twoColumnPaneWidths(termWidth int, rows []string) (listWidth, rightWidth int, displayRows []string) {
 	if termWidth <= 0 {
-		return 4, 80
+		return 4, 80, rows
 	}
 
 	// Cap the list column so one pathologically long row can't starve the
@@ -392,11 +397,15 @@ func twoColumnPaneWidths(termWidth int, rows []string) (listWidth, rightWidth in
 			maxRowWidth = w
 		}
 	}
+	displayRows = rows
 	if maxRowWidth > listCap {
 		maxRowWidth = listCap
+		displayRows = make([]string, len(rows))
 		for i, r := range rows {
 			if lipgloss.Width(r) > listCap {
-				rows[i] = runewidth.Truncate(tuistyle.Sanitize(r), listCap, "…")
+				displayRows[i] = runewidth.Truncate(tuistyle.Sanitize(r), listCap, "…")
+			} else {
+				displayRows[i] = r
 			}
 		}
 	}
@@ -407,7 +416,7 @@ func twoColumnPaneWidths(termWidth int, rows []string) (listWidth, rightWidth in
 	if rightWidth < 20 {
 		rightWidth = 20
 	}
-	return listWidth, rightWidth
+	return listWidth, rightWidth, displayRows
 }
 
 func (m *Model) bodyHeight() int {
@@ -465,6 +474,7 @@ func (m *Model) renderLegend() string {
 	b.WriteString("  ⚙  headless agent\n")
 	b.WriteString("  ❯  interactive agent\n")
 	b.WriteString("  ↳  sub-workflow\n")
+	b.WriteString("  ↺  loop\n")
 
 	b.WriteString("\n  ")
 	b.WriteString(tuistyle.SelectedStyle.Render("Live Navigation"))
