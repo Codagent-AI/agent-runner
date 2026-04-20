@@ -24,6 +24,7 @@ steps:
 
   - id: review-assumptions
     session: lead-agent
+    mode: headless
     prompt: |
       The implementor iterations for change "{{change_name}}" have completed.
       Each iteration produced a session report (via codagent:session-report) listing
@@ -44,6 +45,7 @@ steps:
 
   - id: simplify
     session: lead-agent
+    mode: headless
     prompt: |
       If the /simplify skill is available, run it focusing on code reuse and readability.
       If it is not available, review your git diff for duplicated logic that should be
