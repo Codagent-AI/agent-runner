@@ -1,6 +1,7 @@
 package pty
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -195,14 +196,7 @@ func RunShellInteractive(command string, opts Options) (Result, error) {
 	<-outputDone
 	<-inputDone
 
-	exitCode := 0
-	if waitErr != nil {
-		if exitErr, ok := waitErr.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
-		}
-	}
-
-	return Result{ExitCode: exitCode}, nil
+	return shellResultFromWait(waitErr)
 }
 
 // startInPTY opens a PTY pair, wires the command's stdio to the slave device,
@@ -472,4 +466,17 @@ func buildEnv(extra []string) []string {
 		}
 	}
 	return append(env, "TERM="+defaultTerm)
+}
+
+func shellResultFromWait(waitErr error) (Result, error) {
+	if waitErr == nil {
+		return Result{ExitCode: 0}, nil
+	}
+
+	var exitErr *exec.ExitError
+	if errors.As(waitErr, &exitErr) {
+		return Result{ExitCode: exitErr.ExitCode()}, nil
+	}
+
+	return Result{}, fmt.Errorf("pty: wait failed: %w", waitErr)
 }
