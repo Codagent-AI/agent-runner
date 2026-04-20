@@ -4,6 +4,8 @@
 package runview
 
 import (
+	"strconv"
+
 	"github.com/codagent/agent-runner/internal/model"
 )
 
@@ -104,6 +106,39 @@ type StepNode struct {
 	// FlattenTarget (on iteration nodes): when set, drill-in should skip this
 	// iteration and enter FlattenTarget's children (the sub-workflow body).
 	FlattenTarget *StepNode
+}
+
+// NodeKey returns a stable key for a node based on its structural position in
+// the tree. Unlike ID, this disambiguates duplicate step IDs across iterations
+// and nested workflows, and unlike pointer identity it survives equivalent tree
+// rebuilds.
+func (n *StepNode) NodeKey() string {
+	if n == nil {
+		return ""
+	}
+	if n.Parent == nil {
+		return "root:" + n.ID
+	}
+	parentKey := n.Parent.NodeKey()
+	if n.Type == NodeIteration {
+		return parentKey + "/iter:" + strconv.Itoa(n.IterationIndex)
+	}
+	if idx := indexStepNode(n.Parent.Children, n); idx >= 0 {
+		return parentKey + "/child:" + strconv.Itoa(idx) + ":" + n.ID
+	}
+	if idx := indexStepNode(n.Parent.Body, n); idx >= 0 {
+		return parentKey + "/body:" + strconv.Itoa(idx) + ":" + n.ID
+	}
+	return parentKey + "/detached:" + n.ID
+}
+
+func indexStepNode(nodes []*StepNode, target *StepNode) int {
+	for i, node := range nodes {
+		if node == target {
+			return i
+		}
+	}
+	return -1
 }
 
 // Tree is the root container for a run-view tree.
