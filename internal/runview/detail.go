@@ -57,18 +57,10 @@ func renderShellBlock(node *StepNode, indent, width int, loadedFull bool) []stri
 	return lines
 }
 
-func renderHeadlessBlock(node *StepNode, indent, width int, loadedFull bool, pulsePhase float64, running bool) []string {
-	contentWidth := width - 2*indent
-	if contentWidth <= 0 {
-		return nil
-	}
-
-	glyph := blockTypeGlyph(node.Type)
-	sep := renderSeparator(node.ID, glyph, indent, contentWidth)
-
+// blockAgentHeader appends the shared agent metadata lines (profile, model,
+// cli, session, prompt) that are identical for headless and interactive blocks.
+func blockAgentHeader(node *StepNode, contentWidth int) []string {
 	var lines []string
-	lines = append(lines, sep)
-
 	profile := node.AgentProfile
 	if profile == "" {
 		profile = node.StaticAgent
@@ -96,9 +88,7 @@ func renderHeadlessBlock(node *StepNode, indent, width int, loadedFull bool, pul
 	if node.SessionID != "" {
 		lines = append(lines, blockDimStr("session id", node.SessionID))
 	}
-
 	lines = append(lines, blockCommonModifiers(node)...)
-
 	prompt := node.InterpolatedPrompt
 	if prompt == "" {
 		prompt = node.StaticPrompt
@@ -107,6 +97,17 @@ func renderHeadlessBlock(node *StepNode, indent, width int, loadedFull bool, pul
 		lines = append(lines, "", blockLabelStr("prompt:"))
 		lines = append(lines, renderWrappedText(prompt, contentWidth)...)
 	}
+	return lines
+}
+
+func renderHeadlessBlock(node *StepNode, indent, width int, loadedFull bool, pulsePhase float64, running bool) []string {
+	contentWidth := width - 2*indent
+	if contentWidth <= 0 {
+		return nil
+	}
+
+	lines := []string{renderSeparator(node.ID, blockTypeGlyph(node.Type), indent, contentWidth)}
+	lines = append(lines, blockAgentHeader(node, contentWidth)...)
 
 	if node.Status == StatusPending {
 		return lines
@@ -134,50 +135,8 @@ func renderInteractiveBlock(node *StepNode, indent, width int, running bool) []s
 		return nil
 	}
 
-	glyph := blockTypeGlyph(node.Type)
-	sep := renderSeparator(node.ID, glyph, indent, contentWidth)
-
-	var lines []string
-	lines = append(lines, sep)
-
-	profile := node.AgentProfile
-	if profile == "" {
-		profile = node.StaticAgent
-	}
-	if profile != "" {
-		lines = append(lines, blockDimStr("agent", profile))
-	}
-	mdl := node.AgentModel
-	if mdl == "" {
-		mdl = node.StaticModel
-	}
-	if mdl != "" {
-		lines = append(lines, blockDimStr("model", mdl))
-	}
-	cli := node.AgentCLI
-	if cli == "" {
-		cli = node.StaticCLI
-	}
-	if cli != "" {
-		lines = append(lines, blockDimStr("cli", cli))
-	}
-	if node.StaticSession != "" {
-		lines = append(lines, blockDimStr("session", string(node.StaticSession)))
-	}
-	if node.SessionID != "" {
-		lines = append(lines, blockDimStr("session id", node.SessionID))
-	}
-
-	lines = append(lines, blockCommonModifiers(node)...)
-
-	prompt := node.InterpolatedPrompt
-	if prompt == "" {
-		prompt = node.StaticPrompt
-	}
-	if prompt != "" {
-		lines = append(lines, "", blockLabelStr("prompt:"))
-		lines = append(lines, renderWrappedText(prompt, contentWidth)...)
-	}
+	lines := []string{renderSeparator(node.ID, blockTypeGlyph(node.Type), indent, contentWidth)}
+	lines = append(lines, blockAgentHeader(node, contentWidth)...)
 
 	if node.Status == StatusPending {
 		return lines

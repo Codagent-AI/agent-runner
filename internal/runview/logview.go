@@ -97,15 +97,10 @@ func buildLogLinesRecurse(
 		// Recurse for container types (not ghost blocks).
 		if !isGhost && child.IsContainer() {
 			var nested []*StepNode
-			switch child.Type {
-			case NodeSubWorkflow:
+			if child.Type == NodeIteration {
+				nested = child.Drilldown().Children
+			} else {
 				nested = child.Children
-			case NodeLoop:
-				nested = child.Children
-			case NodeIteration:
-				// Use Drilldown for auto-flattened iterations.
-				target := child.Drilldown()
-				nested = target.Children
 			}
 			if len(nested) > 0 {
 				buildLogLinesRecurse(nested, pendingSelected, bodyWidth, loadedFull, pulsePhase, running, resolverCfg, indent+1, lines, ranges)
@@ -218,10 +213,7 @@ func buildGhostSeparator(name, glyph string, contentWidth int) string {
 	if fillLen <= 0 {
 		return prefix + suffix
 	}
-	var fill strings.Builder
-	for fill.Len() < fillLen {
-		fill.WriteString(dashPat)
-	}
-	f := runewidth.Truncate(fill.String(), fillLen, "")
+	reps := (fillLen + len(dashPat) - 1) / len(dashPat)
+	f := runewidth.Truncate(strings.Repeat(dashPat, reps), fillLen, "")
 	return prefix + f + suffix
 }

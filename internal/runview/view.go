@@ -305,15 +305,12 @@ func (m *Model) statusGlyph(n *StepNode) string {
 }
 
 func typeGlyph(t NodeType) string {
+	raw := blockTypeGlyph(t)
 	switch t {
 	case NodeShell:
-		return shellGlyphStyle.Render("$")
-	case NodeHeadlessAgent:
-		return subwfGlyphStyle.Render("⚙")
-	case NodeInteractiveAgent:
-		return subwfGlyphStyle.Render("❯")
-	case NodeSubWorkflow:
-		return subwfGlyphStyle.Render("↳")
+		return shellGlyphStyle.Render(raw)
+	case NodeHeadlessAgent, NodeInteractiveAgent, NodeSubWorkflow:
+		return subwfGlyphStyle.Render(raw)
 	}
 	return ""
 }

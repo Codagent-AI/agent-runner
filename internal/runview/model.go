@@ -372,9 +372,7 @@ func (m *Model) handleRefreshMsg() tea.Cmd {
 	// step statuses stay current.
 	if m.active || m.running {
 		m.refreshData()
-		if m.active || m.running {
-			m.logOffset = math.MaxInt32
-		}
+		m.logOffset = math.MaxInt32
 		m.rebuildRanges()
 	}
 	return tuistyle.DoRefresh()
