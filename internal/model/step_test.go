@@ -140,6 +140,20 @@ func TestStepSchemaExtensions(t *testing.T) {
 		}
 	})
 
+	t.Run("accepts interactive mode on a shell step", func(t *testing.T) {
+		s := Step{ID: "s", Command: "read name", Session: SessionNew, Mode: ModeInteractive}
+		if err := s.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("accepts headless mode on a shell step", func(t *testing.T) {
+		s := Step{ID: "s", Command: "echo hi", Session: SessionNew, Mode: ModeHeadless}
+		if err := s.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
 	t.Run("accepts capture on a headless step", func(t *testing.T) {
 		s := Step{ID: "s", Agent: "headless_base", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, Capture: "output"}
 		if err := s.Validate(nil); err != nil {
@@ -162,6 +176,17 @@ func TestStepSchemaExtensions(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "capture") {
 			t.Fatalf("expected capture error, got: %v", err)
+		}
+	})
+
+	t.Run("rejects capture on an interactive shell step", func(t *testing.T) {
+		s := Step{ID: "s", Command: "read name", Session: SessionNew, Mode: ModeInteractive, Capture: "output"}
+		err := s.Validate(nil)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "capture") || !strings.Contains(err.Error(), "interactive") {
+			t.Fatalf("expected interactive capture error, got: %v", err)
 		}
 	})
 

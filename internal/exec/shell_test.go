@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/pty"
 )
 
 // --- Test helpers ---
@@ -203,6 +204,72 @@ func TestExecuteShellStep(t *testing.T) {
 		ExecuteShellStep(&step, ctx, runner, &mockLogger{})
 		if runner.calls[0][2] != "echo previous-value" {
 			t.Fatalf("expected interpolated command, got %q", runner.calls[0][2])
+		}
+	})
+
+	t.Run("interactive mode uses PTY shell runner with suspend and resume hooks", func(t *testing.T) {
+		oldFn := interactiveShellRunnerFn
+		var gotCommand string
+		var gotOpts pty.Options
+		interactiveShellRunnerFn = func(command string, opts pty.Options) (pty.Result, error) {
+			gotCommand = command
+			gotOpts = opts
+			return pty.Result{ExitCode: 0}, nil
+		}
+		defer func() { interactiveShellRunnerFn = oldFn }()
+
+		runner := &mockRunner{}
+		ctx := makeCtx()
+		var hooks []string
+		ctx.SuspendHook = func() { hooks = append(hooks, "suspend") }
+		ctx.ResumeHook = func() { hooks = append(hooks, "resume") }
+
+		step := model.Step{
+			ID:      "s",
+			Command: "read -p 'Name? ' name",
+			Session: model.SessionNew,
+			Mode:    model.ModeInteractive,
+			Workdir: "/tmp/project",
+		}
+		outcome, err := ExecuteShellStep(&step, ctx, runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected success, got %q", outcome)
+		}
+		if len(runner.calls) != 0 {
+			t.Fatalf("expected ProcessRunner.RunShell not to be used, got %v", runner.calls)
+		}
+		if gotCommand != "read -p 'Name? ' name" {
+			t.Fatalf("expected interactive shell command, got %q", gotCommand)
+		}
+		if gotOpts.Workdir != "/tmp/project" {
+			t.Fatalf("expected workdir to be forwarded, got %q", gotOpts.Workdir)
+		}
+		if strings.Join(hooks, ",") != "suspend,resume" {
+			t.Fatalf("expected suspend/resume hooks, got %v", hooks)
+		}
+	})
+
+	t.Run("interactive mode maps nonzero exit code to failed", func(t *testing.T) {
+		oldFn := interactiveShellRunnerFn
+		interactiveShellRunnerFn = func(_ string, _ pty.Options) (pty.Result, error) {
+			return pty.Result{ExitCode: 2}, nil
+		}
+		defer func() { interactiveShellRunnerFn = oldFn }()
+
+		runner := &mockRunner{}
+		step := model.Step{ID: "s", Command: "exit 2", Session: model.SessionNew, Mode: model.ModeInteractive}
+		outcome, err := ExecuteShellStep(&step, makeCtx(), runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeFailed {
+			t.Fatalf("expected failed, got %q", outcome)
+		}
+		if len(runner.calls) != 0 {
+			t.Fatalf("expected ProcessRunner.RunShell not to be used, got %v", runner.calls)
 		}
 	})
 }

@@ -229,6 +229,9 @@ func (s *Step) validateAgentField(isAgent, isShell bool) error {
 // validateCaptureFields checks capture and capture_stderr constraints.
 func (s *Step) validateCaptureFields(isAgent, isShell bool) error {
 	if s.Capture != "" {
+		if isShell && s.Mode == ModeInteractive {
+			return fmt.Errorf(`"capture" cannot be combined with "mode: interactive" on shell steps`)
+		}
 		switch {
 		case isShell:
 			// ok

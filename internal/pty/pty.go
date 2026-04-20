@@ -27,7 +27,7 @@ type Result struct {
 	ContinueTriggered bool
 }
 
-// Options configures the interactive PTY session.
+// Options configures an interactive PTY session.
 type Options struct {
 	Env     []string // additional environment variables
 	Workdir string   // working directory for the child process
@@ -142,6 +142,67 @@ func RunInteractive(args []string, opts Options) (Result, error) {
 		ExitCode:          exitCode,
 		ContinueTriggered: triggered,
 	}, nil
+}
+
+// RunShellInteractive executes a shell command in a pseudo-terminal with the
+// user's terminal attached. Unlike RunInteractive, it does not install
+// continue-trigger detection, sentinel scanning, or idle hints.
+func RunShellInteractive(command string, opts Options) (Result, error) {
+	if command == "" {
+		return Result{}, fmt.Errorf("pty: no command specified")
+	}
+
+	if !isTerminal(os.Stdin) {
+		return Result{}, fmt.Errorf("pty: stdin is not a terminal")
+	}
+
+	oldState, err := makeRaw(os.Stdin.Fd())
+	if err != nil {
+		return Result{}, fmt.Errorf("pty: failed to set raw mode: %w", err)
+	}
+	defer func() {
+		restoreTerminal(os.Stdin.Fd(), oldState)
+		restoreTerminalModes()
+	}()
+
+	cmd := exec.Command("sh", "-c", command) // #nosec G204 -- workflow shell command by design
+	ptmx, err := startInPTY(cmd, opts)
+	if err != nil {
+		return Result{}, err
+	}
+	defer func() { _ = ptmx.Close() }()
+
+	state := &ptyState{}
+
+	resizeCh := startResizeHandler(ptmx)
+	outputDone := make(chan struct{})
+	go func() {
+		defer close(outputDone)
+		forwardOutputRaw(ptmx)
+	}()
+
+	inputDone := make(chan struct{})
+	go func() {
+		defer close(inputDone)
+		processStdinRaw(ptmx, state)
+	}()
+
+	waitErr := cmd.Wait()
+	state.markDone()
+
+	signal.Stop(resizeCh)
+	close(resizeCh)
+	<-outputDone
+	<-inputDone
+
+	exitCode := 0
+	if waitErr != nil {
+		if exitErr, ok := waitErr.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		}
+	}
+
+	return Result{ExitCode: exitCode}, nil
 }
 
 // startInPTY opens a PTY pair, wires the command's stdio to the slave device,
@@ -295,6 +356,21 @@ func forwardOutput(ptmx *os.File, hint *idleHint, cmd *exec.Cmd, state *ptyState
 	}
 }
 
+func forwardOutputRaw(ptmx *os.File) {
+	buf := make([]byte, 4096)
+	for {
+		n, err := ptmx.Read(buf)
+		if n > 0 {
+			if werr := writeStdout(buf[:n]); werr != nil {
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
 // processStdin reads from stdin using poll-based I/O, processes input through
 // the escape-sequence-aware input processor, forwards bytes to the PTY, and
 // detects continue triggers. On trigger, it sends SIGTERM (then SIGKILL after
@@ -350,6 +426,38 @@ func processStdin(ptmx *os.File, cmd *exec.Cmd, hint *idleHint, state *ptyState,
 			}()
 			return
 		}
+	}
+}
+
+func processStdinRaw(ptmx *os.File, state *ptyState) {
+	fd := os.Stdin.Fd()
+	pollFds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}} // #nosec G115 -- fd fits int32
+	buf := make([]byte, 1024)
+
+	for {
+		if state.isDone() {
+			return
+		}
+
+		ready, pollErr := unix.Poll(pollFds, stdinPollMs)
+		if pollErr != nil {
+			if pollErr == unix.EINTR {
+				continue
+			}
+			return
+		}
+		if ready == 0 {
+			continue
+		}
+
+		n, readErr := unix.Read(int(fd), buf) // #nosec G115 -- fd fits int
+		if readErr != nil || n <= 0 {
+			return
+		}
+		if state.isDone() {
+			return
+		}
+		_, _ = ptmx.Write(buf[:n])
 	}
 }
 

@@ -46,11 +46,11 @@ type Options struct {
 	GlobExpander      exec.GlobExpander
 	Log               exec.Logger
 
-	// SuspendHook is called just before an interactive agent step takes over
-	// the terminal (e.g. p.ReleaseTerminal in TUI mode). Nil = no-op.
+	// SuspendHook is called just before an interactive step takes over the
+	// terminal (e.g. p.ReleaseTerminal in TUI mode). Nil = no-op.
 	SuspendHook func()
-	// ResumeHook is called immediately after an interactive agent step exits
-	// (e.g. p.RestoreTerminal in TUI mode). Nil = no-op.
+	// ResumeHook is called immediately after an interactive step exits (e.g.
+	// p.RestoreTerminal in TUI mode). Nil = no-op.
 	ResumeHook func()
 }
 

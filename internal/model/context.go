@@ -68,10 +68,10 @@ type ExecutionContext struct {
 	// It is consumed (cleared) after the first agent step uses it.
 	WorkflowResumed bool
 
-	// SuspendHook is called just before an interactive agent step takes over
-	// the terminal. Nil in non-TUI callers (tests, library use).
+	// SuspendHook is called just before an interactive step takes over the
+	// terminal. Nil in non-TUI callers (tests, library use).
 	SuspendHook func()
-	// ResumeHook is called immediately after an interactive agent step exits.
+	// ResumeHook is called immediately after an interactive step exits.
 	// Nil in non-TUI callers.
 	ResumeHook func()
 }

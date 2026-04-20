@@ -10,6 +10,7 @@ import (
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/flowctl"
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/pty"
 	"github.com/codagent/agent-runner/internal/textfmt"
 )
 
@@ -27,6 +28,10 @@ var runSkipShell = func(cmd string) (int, error) {
 	}
 	return -1, err
 }
+
+// interactiveShellRunnerFn runs an interactive shell step inside a PTY.
+// Defaults to pty.RunShellInteractive; replaced in tests.
+var interactiveShellRunnerFn = pty.RunShellInteractive
 
 // ShouldSkipStep evaluates a step's skip_if condition. For "previous_success",
 // it returns true when the previous step in scope succeeded. For "sh:<cmd>",
@@ -104,6 +109,56 @@ func emitAudit(ctx *model.ExecutionContext, event audit.Event) {
 	}
 }
 
+func emitShellInterpolationFailure(ctx *model.ExecutionContext, step *model.Step, err error) {
+	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
+	now := time.Now().UTC().Format(time.RFC3339)
+	emitAudit(ctx, audit.Event{
+		Timestamp: now,
+		Prefix:    prefix,
+		Type:      audit.EventStepStart,
+		Data:      map[string]any{"command": step.Command, "context": contextSnapshot(ctx)},
+	})
+	emitAudit(ctx, audit.Event{
+		Timestamp: now,
+		Prefix:    prefix,
+		Type:      audit.EventStepEnd,
+		Data:      map[string]any{"outcome": "failed", "error": err.Error(), "duration_ms": 0},
+	})
+}
+
+func runShellProcess(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, command string) (ProcessResult, bool, error) {
+	interactive := step.Mode == model.ModeInteractive
+	useCapture := step.Capture != "" && !interactive
+
+	if !interactive {
+		result, err := runner.RunShell(command, useCapture, step.Workdir)
+		return result, useCapture, err
+	}
+
+	if ctx.SuspendHook != nil {
+		ctx.SuspendHook()
+	}
+	ptyResult, err := interactiveShellRunnerFn(command, pty.Options{Workdir: step.Workdir})
+	if ctx.ResumeHook != nil {
+		ctx.ResumeHook()
+	}
+	if err != nil {
+		return ProcessResult{}, false, err
+	}
+	return ProcessResult{ExitCode: ptyResult.ExitCode}, false, nil
+}
+
+func captureShellOutput(step *model.Step, ctx *model.ExecutionContext, result ProcessResult) {
+	if step.Capture == "" {
+		return
+	}
+	captured := result.Stdout
+	if step.CaptureStderr && result.ExitCode != 0 && result.Stderr != "" {
+		captured = captured + "\n\nSTDERR:\n" + result.Stderr
+	}
+	ctx.CapturedVariables[step.Capture] = captured
+}
+
 // ExecuteShellStep runs a shell command step.
 func ExecuteShellStep(
 	step *model.Step,
@@ -117,19 +172,7 @@ func ExecuteShellStep(
 
 	command, err := textfmt.Interpolate(step.Command, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(step.ID))
 	if err != nil {
-		prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
-		emitAudit(ctx, audit.Event{
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-			Prefix:    prefix,
-			Type:      audit.EventStepStart,
-			Data:      map[string]any{"command": step.Command, "context": contextSnapshot(ctx)},
-		})
-		emitAudit(ctx, audit.Event{
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-			Prefix:    prefix,
-			Type:      audit.EventStepEnd,
-			Data:      map[string]any{"outcome": "failed", "error": err.Error(), "duration_ms": 0},
-		})
+		emitShellInterpolationFailure(ctx, step, err)
 		return OutcomeFailed, err
 	}
 
@@ -150,8 +193,7 @@ func ExecuteShellStep(
 		Data:      map[string]any{"command": truncateForAudit(command), "context": contextSnapshot(ctx)},
 	})
 
-	useCapture := step.Capture != ""
-	result, runErr := runner.RunShell(command, useCapture, step.Workdir)
+	result, useCapture, runErr := runShellProcess(step, ctx, runner, command)
 	if runErr != nil {
 		emitAudit(ctx, audit.Event{
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
@@ -167,11 +209,7 @@ func ExecuteShellStep(
 	}
 
 	if useCapture {
-		captured := result.Stdout
-		if step.CaptureStderr && result.ExitCode != 0 && result.Stderr != "" {
-			captured = captured + "\n\nSTDERR:\n" + result.Stderr
-		}
-		ctx.CapturedVariables[step.Capture] = captured
+		captureShellOutput(step, ctx, result)
 	}
 
 	outcome := OutcomeSuccess

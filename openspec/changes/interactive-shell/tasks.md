@@ -1,3 +1,3 @@
-- [ ] Implement the change described by these files:
+- [x] Implement the change described by these files:
   - [proposal.md](proposal.md)
   - [specs/interactive-shell-steps/spec.md](specs/interactive-shell-steps/spec.md)
