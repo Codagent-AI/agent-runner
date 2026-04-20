@@ -1,0 +1,13 @@
+name: change
+description: "End-to-end change: plan then implement (no openspec dependency)"
+
+sessions:
+  - name: lead-agent
+    agent: planner
+
+steps:
+  - id: plan
+    workflow: plan-change.yaml
+
+  - id: implement
+    workflow: implement-change.yaml

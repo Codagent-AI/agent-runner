@@ -1,0 +1,49 @@
+name: plan-change
+description: "Plan a change using codagent skills: propose, spec, design, task-plan, review"
+
+sessions:
+  - name: lead-agent
+    agent: planner
+
+steps:
+  - id: guard-clean-tree
+    # agent-validator detect: exit 0 = unvalidated changes present, exit 2 = clean (no changes)
+    command: |
+      agent-validator detect; status=$?; if [ $status -eq 0 ]; then echo 'Unvalidated changes detected. Run agent-validator before planning.' >&2; exit 1; elif [ $status -ne 2 ]; then exit $status; fi
+
+  - id: proposal
+    session: lead-agent
+    prompt: |
+      Help the user write a change proposal.
+      You MUST use the codagent:propose skill.
+
+      Before doing anything else, ask the user to describe what this change is about and what they want to accomplish.
+      Once the proposal document is written, continue to the next step.
+
+  - id: specs
+    session: resume
+    prompt: |
+      Help the user write the change spec.
+      You MUST use the codagent:spec skill.
+      Once all spec documents are written, continue to the next step.
+
+  - id: design
+    session: resume
+    prompt: |
+      Help the user design the change.
+      You MUST use the codagent:design skill.
+      Once the design document is written, continue to the next step.
+
+  - id: tasks
+    session: resume
+    prompt: |
+      Help the user plan tasks for the change.
+      You MUST use the codagent:plan-tasks skill.
+      Once all task documents are written, continue to the next step.
+
+  - id: review
+    mode: headless
+    session: resume
+    prompt: |
+      You MUST use a subagent to run the codagent:review-spec skill to review the change artifacts we just planned.
+      Then address issues the review subagent finds.
