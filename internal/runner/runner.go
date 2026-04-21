@@ -455,6 +455,23 @@ func PrepareRun(workflow *model.Workflow, params map[string]string, opts *Option
 		return nil, err
 	}
 
+	// Seed state.json before execution starts so callers that read the run's
+	// state concurrently (live run TUI, --inspect on a freshly-started run)
+	// can resolve the workflow file immediately instead of falling back to
+	// name-based discovery that does not know about .agent-runner/workflows/.
+	if err := stateio.WriteState(&model.RunState{
+		WorkflowFile: opts.WorkflowFile,
+		WorkflowName: workflow.Name,
+		Params:       rs.ctx.Params,
+		WorkflowHash: rs.workflowHash,
+	}, rs.sessionDir); err != nil {
+		runlock.Delete(rs.sessionDir)
+		if rs.auditLogger != nil {
+			rs.auditLogger.Close()
+		}
+		return nil, fmt.Errorf("seed initial state: %w", err)
+	}
+
 	emitRunStart(rs, opts)
 	rs.log.Printf("\nagent-runner: running workflow %q\n\n", workflow.Name)
 
