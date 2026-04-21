@@ -3,7 +3,7 @@
 exec agent-runner workflow test-change
 stdout 'engine loaded'
 
--- workflows/workflow.yaml --
+-- .agent-runner/workflows/workflow.yaml --
 name: engine-test
 params:
   - name: change_name
@@ -14,7 +14,7 @@ steps:
     params:
       change_name: "{{change_name}}"
 
--- workflows/child.yaml --
+-- .agent-runner/workflows/child.yaml --
 name: child-with-engine
 params:
   - name: change_name

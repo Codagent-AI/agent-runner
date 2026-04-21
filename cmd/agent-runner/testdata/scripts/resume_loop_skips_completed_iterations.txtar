@@ -38,7 +38,7 @@ stdout '^1$'
 exec cat counter-c.txt
 stdout '^1$'
 
--- workflows/workflow.yaml --
+-- .agent-runner/workflows/workflow.yaml --
 name: e2e-loop-resume
 steps:
   - id: process

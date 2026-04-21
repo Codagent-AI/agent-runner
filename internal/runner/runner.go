@@ -12,6 +12,7 @@ import (
 	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/engine"
 	"github.com/codagent/agent-runner/internal/exec"
+	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/stateio"
@@ -99,7 +100,7 @@ func computeHash(workflowFile string) string {
 	if workflowFile == "" {
 		return ""
 	}
-	data, err := os.ReadFile(workflowFile) // #nosec G304 -- workflow file is user-specified CLI input
+	data, err := loader.ReadWorkflowFile(workflowFile)
 	if err != nil {
 		return ""
 	}
@@ -452,6 +453,23 @@ func PrepareRun(workflow *model.Workflow, params map[string]string, opts *Option
 			rs.auditLogger.Close()
 		}
 		return nil, err
+	}
+
+	// Seed state.json before execution starts so callers that read the run's
+	// state concurrently (live run TUI, --inspect on a freshly-started run)
+	// can resolve the workflow file immediately instead of falling back to
+	// name-based discovery that does not know about .agent-runner/workflows/.
+	if err := stateio.WriteState(&model.RunState{
+		WorkflowFile: opts.WorkflowFile,
+		WorkflowName: workflow.Name,
+		Params:       rs.ctx.Params,
+		WorkflowHash: rs.workflowHash,
+	}, rs.sessionDir); err != nil {
+		runlock.Delete(rs.sessionDir)
+		if rs.auditLogger != nil {
+			rs.auditLogger.Close()
+		}
+		return nil, fmt.Errorf("seed initial state: %w", err)
 	}
 
 	emitRunStart(rs, opts)

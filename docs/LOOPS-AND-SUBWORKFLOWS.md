@@ -82,14 +82,14 @@ A step can invoke another workflow YAML file:
 
 ```yaml
 - id: implement-single-task
-  workflow: implement-task.yaml
+  workflow: ../core/implement-task.yaml
   params:
     task_file: "{{task_file}}"
 ```
 
 ### Path resolution
 
-The `workflow` path is resolved relative to the parent workflow's directory. If the parent workflow is at `workflows/flokay.yaml` and a step references `implement-task.yaml`, agent-runner resolves it relative to the directory containing `flokay.yaml`.
+The `workflow` path is resolved relative to the parent workflow's directory. If the parent workflow is at `workflows/openspec/implement-change.yaml` and a step references `../core/implement-task.yaml`, agent-runner resolves it relative to the directory containing `implement-change.yaml`.
 
 ### Parameter passing
 
@@ -110,7 +110,7 @@ Sub-workflows:
 Inside a sub-workflow, `session: inherit` crosses the sub-workflow boundary to find the parent's most recent session:
 
 ```yaml
-# In run-validator.yaml (a sub-workflow)
+# In workflows/core/run-validator.yaml (a sub-workflow)
 - id: fix-violations
   mode: headless
   session: inherit
@@ -198,12 +198,12 @@ steps:
       as: task_file
     steps:
       - id: implement-single-task
-        workflow: implement-task.yaml
+        workflow: ../core/implement-task.yaml
         params:
           task_file: "{{task_file}}"
 ```
 
-**workflows/implement-task.yaml** -- agent step then validator retry:
+**workflows/core/implement-task.yaml** -- agent step then validator retry:
 
 ```yaml
 name: implement-task
@@ -221,7 +221,7 @@ steps:
     workflow: run-validator.yaml
 ```
 
-**workflows/run-validator.yaml** -- counted retry loop with capture and flow control:
+**workflows/core/run-validator.yaml** -- counted retry loop with capture and flow control:
 
 ```yaml
 name: run-validator

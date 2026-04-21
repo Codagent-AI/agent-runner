@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"os"
 	"path/filepath"
 
 	"github.com/codagent/agent-runner/internal/engine"
@@ -37,7 +36,7 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	}
 
 	// Check workflow hash
-	content, readErr := os.ReadFile(state.WorkflowFile)
+	content, readErr := loader.ReadWorkflowFile(state.WorkflowFile)
 	if readErr == nil {
 		currentHash := stateio.ComputeWorkflowHash(string(content))
 		if currentHash != state.WorkflowHash {

@@ -250,3 +250,18 @@ func TestSubWorkflowState_PreservesLastSessionStepID(t *testing.T) {
 		t.Fatalf("resumedChild.LastSessionStepID = %q, want %q", resumedChild.LastSessionStepID, "proposal")
 	}
 }
+
+func TestResolveWorkflowPath_EmbeddedParentStaysEmbedded(t *testing.T) {
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		Params:       map[string]string{},
+		WorkflowFile: "builtin:spec-driven/change.yaml",
+	})
+
+	got, err := resolveWorkflowPath("plan-change.yaml", ctx, "plan")
+	if err != nil {
+		t.Fatalf("resolveWorkflowPath returned error: %v", err)
+	}
+	if got != "builtin:spec-driven/plan-change.yaml" {
+		t.Fatalf("resolveWorkflowPath = %q, want %q", got, "builtin:spec-driven/plan-change.yaml")
+	}
+}

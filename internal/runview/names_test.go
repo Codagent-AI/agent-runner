@@ -16,7 +16,7 @@ func TestCanonicalName(t *testing.T) {
 		in   string
 		want string
 	}{
-		{"bare name under workflows", "/repo/workflows/implement-task.yaml", "implement-task"},
+		{"namespaced core builtin under workflows", "/repo/workflows/core/implement-task.yaml", "core:implement-task"},
 		{"namespaced under workflows", "/repo/workflows/openspec/plan-change.yaml", "openspec:plan-change"},
 		{"namespaced yml extension", "/repo/workflows/openspec/implement-change.yml", "openspec:implement-change"},
 		{"deep subdir falls back to repo-rel", "/repo/workflows/a/b/c.yaml", "workflows/a/b/c.yaml"},

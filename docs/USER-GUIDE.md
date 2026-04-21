@@ -287,7 +287,7 @@ Execution continues with the next step after the loop.
 Complex patterns can be extracted into reusable workflow files:
 
 ```yaml
-# workflows/implement-task.yaml
+# .agent-runner/workflows/implement-task.yaml
 name: implement-task
 params:
   - name: task_file
@@ -507,7 +507,7 @@ The flokay workflow (`workflows/flokay.yaml`) orchestrates the full change lifec
 | `archive-verify` | shell | Skip validator for archive-only changes |
 | `finalize` | headless (resume) | Push PR, wait for CI, fix failures |
 
-The `implement` step invokes `implement-change.yaml`, which loops over task files and for each one invokes `implement-task.yaml`, which itself invokes `run-validator.yaml` for the verify-fix retry loop.
+The `implement` step invokes `implement-change.yaml`, which loops over task files and for each one invokes `../core/implement-task.yaml`, which itself invokes `run-validator.yaml` within the `core` builtin namespace for the verify-fix retry loop.
 
 Run it:
 

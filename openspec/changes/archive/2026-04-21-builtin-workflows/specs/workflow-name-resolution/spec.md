@@ -1,9 +1,5 @@
-# Capability: workflow-name-resolution
+## MODIFIED Requirements
 
-## Purpose
-
-Validates and resolves bare workflow names passed to the `run` command, rejecting file paths and extensions in favor of simple names that are resolved to files in the `workflows/` directory.
-## Requirements
 ### Requirement: Workflow name validation
 The `run` command SHALL validate the workflow argument against the pattern `^[a-zA-Z0-9_-]+(:[a-zA-Z0-9_-]+|(/[a-zA-Z0-9_-]+)+)?$`. The argument is either:
 - a bare name (e.g., `my-workflow`),
@@ -86,4 +82,3 @@ Both `.yaml` and `.yml` extensions SHALL be tried, in that order. If no matching
 - **WHEN** the user runs `agent-runner run my-workflow`
 - **AND** neither `.agent-runner/workflows/my-workflow.yaml` nor `.agent-runner/workflows/my-workflow.yml` exists
 - **THEN** the command fails with an error like "Workflow 'my-workflow' not found"
-

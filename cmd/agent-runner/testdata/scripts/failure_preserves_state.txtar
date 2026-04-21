@@ -4,7 +4,7 @@ stdout 'to resume: agent-runner --resume '
 exec find .agent-runner -name state.json
 stdout state\.json
 
--- workflows/workflow.yaml --
+-- .agent-runner/workflows/workflow.yaml --
 name: e2e-failure
 steps:
   - id: first

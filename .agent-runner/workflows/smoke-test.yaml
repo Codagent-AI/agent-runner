@@ -3,7 +3,7 @@ description: "Manual smoke test for core step types (agent, shell, loop, capture
 
 sessions:
   - name: tester
-    agent: implementor
+    agent: haiku_tester
 
 steps:
   - id: shell-capture
@@ -14,19 +14,15 @@ steps:
     session: tester
     prompt: "Reply with one short sentence echoing this value back to me: {{greeting}}"
 
-  - id: agent-resume
-    session: resume
-    prompt: "In one short sentence, what value did I just send you?"
+  - id: agent-steps
+    workflow: smoke-test-agent-steps.yaml
 
-  - id: shell-fail
-    command: exit 1
-    continue_on_failure: true
-
-  - id: agent-after-fail
-    session: resume
+  - id: interactive-shell
     mode: interactive
-    prompt: "The previous shell step failed on purpose. Acknowledge in one short sentence and then ask me if I'm done."
-    skip_if: previous_success
+    command: |
+      printf "What's your favorite color? "
+      read color
+      echo "Nice choice — $color it is."
 
   - id: counted-loop
     loop:

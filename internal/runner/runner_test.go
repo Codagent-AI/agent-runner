@@ -625,6 +625,41 @@ func TestWriteMetaJSON(t *testing.T) {
 	})
 }
 
+func TestPrepareRun_SeedsInitialState(t *testing.T) {
+	w := model.Workflow{
+		Name:  "my-workflow",
+		Steps: []model.Step{shellStep("s1", "echo hi")},
+	}
+	w.ApplyDefaults()
+
+	sessionDir := t.TempDir()
+	h, err := PrepareRun(&w, map[string]string{"k": "v"}, &Options{
+		WorkflowFile:  ".agent-runner/workflows/my-workflow.yaml",
+		ProcessRunner: &mockRunner{},
+		GlobExpander:  &mockGlob{},
+		Log:           &mockLog{},
+		SessionDir:    sessionDir,
+	})
+	if err != nil {
+		t.Fatalf("PrepareRun: %v", err)
+	}
+	defer finalizeRun(h.rs, ResultSuccess)
+
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatalf("state.json missing after PrepareRun: %v", err)
+	}
+	if state.WorkflowFile != ".agent-runner/workflows/my-workflow.yaml" {
+		t.Errorf("WorkflowFile = %q, want %q", state.WorkflowFile, ".agent-runner/workflows/my-workflow.yaml")
+	}
+	if state.WorkflowName != "my-workflow" {
+		t.Errorf("WorkflowName = %q, want %q", state.WorkflowName, "my-workflow")
+	}
+	if state.Params["k"] != "v" {
+		t.Errorf("Params = %v, want k=v", state.Params)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && findSubstring(s, substr)
 }

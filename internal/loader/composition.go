@@ -2,7 +2,6 @@ package loader
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/codagent/agent-runner/internal/model"
@@ -33,14 +32,11 @@ type sessionSource struct {
 }
 
 func walkComposition(w *model.Workflow, workflowFile string, decls map[string]sessionSource, visited map[string]bool) error {
-	abs, err := filepath.Abs(workflowFile)
-	if err != nil {
-		return err
-	}
-	if visited[abs] {
+	sourceID := SourceID(workflowFile)
+	if visited[sourceID] {
 		return nil
 	}
-	visited[abs] = true
+	visited[sourceID] = true
 
 	for _, decl := range w.Sessions {
 		existing, ok := decls[decl.Name]
@@ -63,7 +59,7 @@ func walkSubWorkflows(steps []model.Step, parentFile string, decls map[string]se
 	for i := range steps {
 		step := &steps[i]
 		if step.Workflow != "" && !strings.Contains(step.Workflow, "{{") {
-			subPath := filepath.Join(filepath.Dir(parentFile), step.Workflow)
+			subPath := ResolveRelativeWorkflowPath(parentFile, step.Workflow)
 			subWorkflow, err := LoadWorkflow(subPath, Options{IsSubWorkflow: true})
 			if err != nil {
 				return fmt.Errorf("loading sub-workflow %s: %w", subPath, err)

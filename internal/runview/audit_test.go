@@ -306,7 +306,7 @@ func TestApplyEvent_SubWorkflowLazyLoad(t *testing.T) {
 	// ensureSubWorkflowLoaded set the absolute path before applySubWorkflowStart
 	// ran, so the event's workflow_path does not clobber it.
 	if !filepath.IsAbs(sub.StaticWorkflowPath) ||
-		!strings.HasSuffix(sub.StaticWorkflowPath, "workflows/implement-task.yaml") {
+		!strings.HasSuffix(sub.StaticWorkflowPath, "workflows/core/implement-task.yaml") {
 		t.Errorf("workflow path: got %q", sub.StaticWorkflowPath)
 	}
 	if sub.InterpolatedParams["task_file"] != "tasks/01.md" {
@@ -381,13 +381,13 @@ func TestApplyEvent_NestedSubWorkflowUnderLoop(t *testing.T) {
 			"loop_var":  map[string]any{"task_file": "tasks/01.md"},
 		},
 	})
-	// Inner sub-workflow start (implement-single-task → ../implement-task.yaml).
+	// Inner sub-workflow start (implement-single-task → ../core/implement-task.yaml).
 	tree.ApplyEvent(RawEvent{
 		Prefix: "[implement, sub:implement-change, implement-tasks:0, implement-single-task, sub:implement-task]",
 		Type:   "sub_workflow_start",
 		Data: map[string]any{
 			"workflow_name": "implement-task",
-			"workflow_path": "workflows/implement-task.yaml",
+			"workflow_path": "workflows/core/implement-task.yaml",
 		},
 	})
 

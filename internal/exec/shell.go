@@ -145,7 +145,7 @@ func runShellProcess(step *model.Step, ctx *model.ExecutionContext, runner Proce
 	if err != nil {
 		return ProcessResult{}, false, err
 	}
-	return ProcessResult{ExitCode: ptyResult.ExitCode}, false, nil
+	return ProcessResult{ExitCode: ptyResult.ExitCode, Stdout: ptyResult.Stdout}, false, nil
 }
 
 func captureShellOutput(step *model.Step, ctx *model.ExecutionContext, result ProcessResult) {

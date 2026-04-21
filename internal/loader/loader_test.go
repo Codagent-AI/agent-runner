@@ -54,6 +54,16 @@ func TestLoadWorkflow(t *testing.T) {
 			t.Fatal("expected error")
 		}
 	})
+
+	t.Run("loads an embedded builtin workflow", func(t *testing.T) {
+		w, err := LoadWorkflow("builtin:core/finalize-pr.yaml", Options{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if w.Name != "finalize-pr" {
+			t.Fatalf("expected builtin workflow name finalize-pr, got %q", w.Name)
+		}
+	})
 }
 
 func TestInterpolateParams(t *testing.T) {
@@ -118,4 +128,18 @@ func TestInterpolateParams(t *testing.T) {
 			t.Fatalf("expected file XML tag in result, got: %q", result)
 		}
 	})
+}
+
+func TestValidateComposition_EmbeddedBuiltinUsesEmbeddedSubworkflow(t *testing.T) {
+	t.Chdir(t.TempDir())
+	writeWorkflow(t, filepath.Join(".agent-runner", "workflows"), "plan-change.yaml", `
+name: plan-change
+steps:
+  - id: local
+    command: not valid builtin syntax
+`)
+
+	if err := ValidateComposition("builtin:spec-driven/change.yaml"); err != nil {
+		t.Fatalf("expected embedded composition to resolve embedded sub-workflows, got %v", err)
+	}
 }
