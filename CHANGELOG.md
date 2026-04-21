@@ -1,5 +1,11 @@
 # agent-runner
 
+## 0.1.1
+
+### Patch Changes
+
+- [#21](https://github.com/Codagent-AI/agent-runner/pull/21) Resolve builtin workflows when running from any directory
+
 ## 0.1.0
 
 ### Minor Changes
