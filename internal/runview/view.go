@@ -237,7 +237,7 @@ func (m *Model) expansionChildren(selected *StepNode) []*StepNode {
 
 func (m *Model) renderExpansionRow(n *StepNode, depth int) string {
 	typeCol, label, glyph := m.stepRowParts(n)
-	return "   " + strings.Repeat("  ", max(depth-1, 0)) + typeCol + tuistyle.DimStyle.Render(label) + "  " + glyph
+	return "   " + strings.Repeat("  ", depth) + typeCol + tuistyle.DimStyle.Render(label) + "  " + glyph
 }
 
 func rowTexts(rows []renderedStepRow) []string {

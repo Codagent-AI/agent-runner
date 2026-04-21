@@ -364,7 +364,10 @@ func TestBuildStepRows_SelectedContainerWithoutActiveChildKeepsOwnIndicator(t *t
 	}
 }
 
-func TestBuildStepRows_SelectedLoopIterationAlignsWithParentLabel(t *testing.T) {
+// TestBuildStepRows_SelectedLoopIterationNestsUnderParent verifies iteration
+// expansion rows are visibly indented to the right of the selected parent
+// loop's label, so the step list conveys hierarchy.
+func TestBuildStepRows_SelectedLoopIterationNestsUnderParent(t *testing.T) {
 	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
 	loop := &StepNode{
 		ID:                  "fanout",
@@ -399,8 +402,51 @@ func TestBuildStepRows_SelectedLoopIterationAlignsWithParentLabel(t *testing.T) 
 	}
 	parentLabelWidth := lipgloss.Width(parentParts[0])
 	childLabelWidth := lipgloss.Width(childParts[0])
-	if childLabelWidth != parentLabelWidth {
-		t.Fatalf("iteration label should align one visible step in from the parent row, got parent=%d child=%d\nparent=%q\nchild=%q", parentLabelWidth, childLabelWidth, parent, child)
+	if childLabelWidth <= parentLabelWidth {
+		t.Fatalf("iteration label should be indented to the right of the parent label, got parent=%d child=%d\nparent=%q\nchild=%q", parentLabelWidth, childLabelWidth, parent, child)
+	}
+}
+
+// TestBuildStepRows_SelectedSubWorkflowNestsChildrenUnderParent verifies that
+// the inline expansion of a selected sub-workflow renders its direct children
+// visibly indented to the right of the parent row, so nesting is apparent.
+// Regression against a flat-render bug where the sub-workflow parent and its
+// child rows rendered at the same column.
+func TestBuildStepRows_SelectedSubWorkflowNestsChildrenUnderParent(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	parentSub := &StepNode{ID: "agent-steps", Type: NodeSubWorkflow, Status: StatusInProgress, Parent: root}
+	root.Children = []*StepNode{parentSub}
+
+	resume := &StepNode{ID: "agent-resume", Type: NodeHeadlessAgent, Status: StatusSuccess, Parent: parentSub}
+	shellFail := &StepNode{ID: "shell-fail", Type: NodeShell, Status: StatusFailed, Parent: parentSub}
+	agentAfter := &StepNode{ID: "agent-after-fail", Type: NodeHeadlessAgent, Status: StatusSuccess, Parent: parentSub}
+	parentSub.Children = []*StepNode{resume, shellFail, agentAfter}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.cursor = 0
+	rows := m.buildStepRows(root.Children)
+	if len(rows) != 4 {
+		t.Fatalf("expected parent row plus 3 expansion rows, got %d", len(rows))
+	}
+
+	parent := stripANSI(rows[0])
+	parentParts := strings.SplitN(parent, "agent-steps", 2)
+	if len(parentParts) != 2 {
+		t.Fatalf("parent row missing label: %q", parent)
+	}
+	parentLabelOffset := lipgloss.Width(parentParts[0])
+
+	for i, childID := range []string{"agent-resume", "shell-fail", "agent-after-fail"} {
+		child := stripANSI(rows[i+1])
+		childParts := strings.SplitN(child, childID, 2)
+		if len(childParts) != 2 {
+			t.Fatalf("child row %d missing label %q: %q", i, childID, child)
+		}
+		childLabelOffset := lipgloss.Width(childParts[0])
+		if childLabelOffset <= parentLabelOffset {
+			t.Fatalf("child %q should be indented past the parent label (parent offset=%d, child offset=%d)\nparent=%q\nchild=%q",
+				childID, parentLabelOffset, childLabelOffset, parent, child)
+		}
 	}
 }
 
