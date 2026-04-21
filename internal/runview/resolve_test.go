@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/model"
+	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
 // writeFile is a tiny t.Fatal-on-error helper used throughout the resolver
@@ -411,6 +412,59 @@ func TestResolveWorkflow_DiscoveryByName_AgentRunnerWorkflowsDir(t *testing.T) {
 	}
 	if got.AbsPath != filepath.Clean(wfPath) {
 		t.Fatalf("AbsPath = %q, want %q", got.AbsPath, wfPath)
+	}
+}
+
+func TestResolveWorkflow_BuiltinRef(t *testing.T) {
+	base := realPath(t, t.TempDir())
+	projectDir := filepath.Join(base, "projects", "encoded")
+	sessionDir := filepath.Join(projectDir, "runs", "change-2026-04-11T09-14-00-000000000Z")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// No meta.json, process cwd is unrelated — forces the resolver to
+	// recognise the builtin: prefix without any filesystem search.
+	chdirTo(t, realPath(t, t.TempDir()))
+
+	// Pick a builtin workflow that we know is embedded.
+	ref := builtinworkflows.Ref("openspec/change.yaml")
+
+	state := model.RunState{WorkflowFile: ref, WorkflowName: "change"}
+	got, ok := ResolveWorkflow(sessionDir, projectDir, &state)
+	if !ok {
+		t.Fatalf("expected ResolveWorkflow to succeed for builtin ref %q", ref)
+	}
+	if got.AbsPath != ref {
+		t.Fatalf("AbsPath = %q, want %q", got.AbsPath, ref)
+	}
+}
+
+func TestNew_BuiltinWorkflowShowsSteps(t *testing.T) {
+	base := realPath(t, t.TempDir())
+	projectDir := filepath.Join(base, "projects", "encoded")
+	sessionDir := filepath.Join(projectDir, "runs", "change-2026-04-11T09-14-00-000000000Z")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	ref := builtinworkflows.Ref("openspec/change.yaml")
+	state := model.RunState{WorkflowFile: ref, WorkflowName: "change"}
+	data, _ := json.Marshal(state)
+	writeFile(t, filepath.Join(sessionDir, "state.json"), string(data))
+	chdirTo(t, realPath(t, t.TempDir()))
+
+	m, err := New(sessionDir, projectDir, FromList)
+	if err != nil {
+		t.Fatalf("runview.New: %v", err)
+	}
+	if m.loadErr != "" {
+		t.Fatalf("unexpected load error: %s", m.loadErr)
+	}
+	if m.tree == nil || m.tree.Root == nil {
+		t.Fatal("expected a populated tree")
+	}
+	if len(m.tree.Root.Children) == 0 {
+		t.Fatal("expected steps in tree but got none (\"No steps to display\" bug)")
 	}
 }
 
