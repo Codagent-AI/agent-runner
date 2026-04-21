@@ -27,17 +27,25 @@ There are many YAML-based workflow engines (Argo, Kestra, Step Functions) and CL
 
 ## Install
 
+### Homebrew (macOS / Linux)
+
+```bash
+brew tap Codagent-AI/tap
+brew install agent-runner
+```
+
+### From source
+
 Requires [Go](https://golang.org) 1.23+.
 
 ```bash
-go build ./cmd/agent-runner
-./agent-runner -validate flokay
+go install github.com/codagent/agent-runner/cmd/agent-runner@latest
 ```
 
-Or use the Makefile:
+Or clone and build:
 
 ```bash
-make build       # compiles to agent-runner binary
+make build       # compiles to bin/agent-runner
 make test        # run tests
 make lint        # run golangci-lint
 ```
