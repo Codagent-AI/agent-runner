@@ -32,7 +32,8 @@ func (m *Model) View() string {
 
 	var b strings.Builder
 
-	b.WriteString("\n  ")
+	b.WriteString("\n")
+	b.WriteString(tuistyle.ScreenMargin)
 	b.WriteString(tuistyle.HeaderStyle.Render("Agent Runner"))
 	b.WriteString("\n\n")
 	b.WriteString(m.renderBreadcrumb())
@@ -49,7 +50,7 @@ func (m *Model) View() string {
 
 	children := m.currentChildren()
 	if len(children) == 0 {
-		b.WriteString("  ")
+		b.WriteString(tuistyle.ScreenMargin)
 		b.WriteString(tuistyle.DimStyle.Render("No steps to display."))
 		b.WriteString("\n")
 	} else {
@@ -57,11 +58,13 @@ func (m *Model) View() string {
 	}
 
 	if m.loadErr != "" {
-		b.WriteString("\n  ")
+		b.WriteString("\n")
+		b.WriteString(tuistyle.ScreenMargin)
 		b.WriteString(tuistyle.DimStyle.Render("Error: " + m.loadErr))
 	}
 	if m.notice != "" {
-		b.WriteString("\n  ")
+		b.WriteString("\n")
+		b.WriteString(tuistyle.ScreenMargin)
 		b.WriteString(tuistyle.DimStyle.Render(m.notice))
 	}
 
@@ -97,7 +100,7 @@ func (m *Model) renderTwoColumn(children []*StepNode) string {
 		rightWidth,
 		m.loadedFull,
 		m.pulsePhase,
-		m.running,
+		m.running || m.active,
 		m.resolverCfg,
 	)
 
@@ -215,7 +218,7 @@ func (m *Model) expansionChildren(selected *StepNode) []*StepNode {
 
 func (m *Model) renderExpansionRow(n *StepNode, depth int) string {
 	typeCol, label, glyph := m.stepRowParts(n)
-	return "   " + strings.Repeat("  ", depth) + typeCol + tuistyle.DimStyle.Render(label) + "  " + glyph
+	return "   " + strings.Repeat("  ", max(depth-1, 0)) + typeCol + tuistyle.DimStyle.Render(label) + "  " + glyph
 }
 
 func rowTexts(rows []renderedStepRow) []string {
@@ -361,7 +364,7 @@ func (m *Model) renderHelpBar() string {
 
 	parts = append(parts, "? legend", "q quit")
 
-	return "  " + tuistyle.HelpStyle.Render(strings.Join(parts, "   "))
+	return tuistyle.ScreenMargin + tuistyle.HelpStyle.Render(strings.Join(parts, "   "))
 }
 
 func (m *Model) selectedNodeHasTruncatedOutput() bool {
@@ -436,14 +439,17 @@ func (m *Model) bodyHeight() int {
 
 func (m *Model) renderQuitConfirm() string {
 	var b strings.Builder
-	b.WriteString("\n\n  ")
+	b.WriteString("\n\n")
+	b.WriteString(tuistyle.ScreenMargin)
 	b.WriteString(tuistyle.HeaderStyle.Render("Agent Runner"))
 	b.WriteString("\n\n")
-	b.WriteString("  ")
+	b.WriteString(tuistyle.ScreenMargin)
 	b.WriteString(tuistyle.DimStyle.Render("The workflow is still running. Quitting will close the TUI"))
-	b.WriteString("\n  ")
+	b.WriteString("\n")
+	b.WriteString(tuistyle.ScreenMargin)
 	b.WriteString(tuistyle.DimStyle.Render("and wait for the current step to finish before exiting."))
-	b.WriteString("\n\n  ")
+	b.WriteString("\n\n")
+	b.WriteString(tuistyle.ScreenMargin)
 	b.WriteString(tuistyle.NormalStyle.Render("Quit anyway?  "))
 	b.WriteString(tuistyle.SelectedStyle.Render("[y]es"))
 	b.WriteString(tuistyle.NormalStyle.Render("  "))
@@ -454,20 +460,22 @@ func (m *Model) renderQuitConfirm() string {
 
 func (m *Model) renderLegend() string {
 	var b strings.Builder
-	b.WriteString("\n  ")
+	b.WriteString("\n")
+	b.WriteString(tuistyle.ScreenMargin)
 	b.WriteString(tuistyle.HeaderStyle.Render("Legend"))
 	b.WriteString("\n\n")
 
-	b.WriteString("  ")
+	b.WriteString(tuistyle.ScreenMargin)
 	b.WriteString(tuistyle.SelectedStyle.Render("Status Glyphs"))
 	b.WriteString("\n\n")
-	b.WriteString("  ●  running\n")
-	b.WriteString("  ○  pending\n")
-	b.WriteString("  ✓  success\n")
-	b.WriteString("  ✗  failed\n")
-	b.WriteString("  ⇥  skipped\n")
+	b.WriteString(tuistyle.ScreenMargin + "●  running\n")
+	b.WriteString(tuistyle.ScreenMargin + "○  pending\n")
+	b.WriteString(tuistyle.ScreenMargin + "✓  success\n")
+	b.WriteString(tuistyle.ScreenMargin + "✗  failed\n")
+	b.WriteString(tuistyle.ScreenMargin + "⇥  skipped\n")
 
-	b.WriteString("\n  ")
+	b.WriteString("\n")
+	b.WriteString(tuistyle.ScreenMargin)
 	b.WriteString(tuistyle.SelectedStyle.Render("Type Glyphs"))
 	b.WriteString("\n\n")
 	b.WriteString("  $  shell\n")

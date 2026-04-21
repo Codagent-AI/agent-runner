@@ -151,7 +151,7 @@ func ExecuteAgentStep(
 	input := buildAdapterInput(step, ctx, profile, adapter, prompt, enrichment, sessionID, isResume, headless)
 	args := adapter.BuildArgs(&input)
 
-	emitAgentStart(ctx, prefix, startTime, prompt, mode, step, sessionID, cliName, enrichment)
+	emitAgentStart(ctx, prefix, startTime, prompt, mode, step, sessionID, cliName, profile.Model, enrichment)
 
 	// Set the step prefix on the process runner if it supports it (TUI mode).
 	if ps, ok := runner.(prefixSetter); ok {
@@ -438,7 +438,7 @@ func emitAgentStart(
 	prompt string,
 	mode model.StepMode,
 	step *model.Step,
-	sessionID, cliName, enrichment string,
+	sessionID, cliName, resolvedModel, enrichment string,
 ) {
 	emitAudit(ctx, audit.Event{
 		Timestamp: startTime.UTC().Format(time.RFC3339),
@@ -449,7 +449,7 @@ func emitAgentStart(
 			"mode":                string(mode),
 			"session_strategy":    string(step.Session),
 			"resolved_session_id": sessionID,
-			"model":               step.Model,
+			"model":               resolvedModel,
 			"cli":                 cliName,
 			"enrichment":          enrichment,
 			"context":             contextSnapshot(ctx),

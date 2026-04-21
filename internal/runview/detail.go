@@ -57,8 +57,8 @@ func renderShellBlock(node *StepNode, indent, width int, loadedFull bool) []stri
 	return lines
 }
 
-// blockAgentHeader appends the shared agent metadata lines (profile, model,
-// cli, session, prompt) that are identical for headless and interactive blocks.
+// blockAgentHeader appends the shared agent metadata lines (profile, cli,
+// model, session, prompt) that are identical for headless and interactive blocks.
 func blockAgentHeader(node *StepNode, contentWidth int) []string {
 	var lines []string
 	profile := node.AgentProfile
@@ -68,13 +68,6 @@ func blockAgentHeader(node *StepNode, contentWidth int) []string {
 	if profile != "" {
 		lines = append(lines, blockDimStr("agent", profile))
 	}
-	mdl := node.AgentModel
-	if mdl == "" {
-		mdl = node.StaticModel
-	}
-	if mdl != "" {
-		lines = append(lines, blockDimStr("model", mdl))
-	}
 	cli := node.AgentCLI
 	if cli == "" {
 		cli = node.StaticCLI
@@ -82,6 +75,14 @@ func blockAgentHeader(node *StepNode, contentWidth int) []string {
 	if cli != "" {
 		lines = append(lines, blockDimStr("cli", cli))
 	}
+	mdl := node.AgentModel
+	if mdl == "" {
+		mdl = node.StaticModel
+	}
+	if mdl == "" {
+		mdl = "(unknown)"
+	}
+	lines = append(lines, blockDimStr("model", mdl))
 	if node.StaticSession != "" {
 		lines = append(lines, blockDimStr("session", string(node.StaticSession)))
 	}
@@ -122,7 +123,7 @@ func renderHeadlessBlock(node *StepNode, indent, width int, loadedFull bool, pul
 		return lines
 	}
 
-	lines = append(lines, renderAgentOutput(node, contentWidth, loadedFull, pulsePhase)...)
+	lines = append(lines, renderAgentOutput(node, contentWidth, loadedFull, pulsePhase, running)...)
 
 	if node.SessionID != "" && !running {
 		lines = append(lines, "", tuistyle.AccentStyle.Render("enter → resume session"))
@@ -130,7 +131,7 @@ func renderHeadlessBlock(node *StepNode, indent, width int, loadedFull bool, pul
 	return lines
 }
 
-func renderInteractiveBlock(node *StepNode, indent, width int, running bool) []string {
+func renderInteractiveBlock(node *StepNode, indent, width int, pulsePhase float64, running bool) []string {
 	contentWidth := width - 2*indent
 	if contentWidth <= 0 {
 		return nil
@@ -148,6 +149,12 @@ func renderInteractiveBlock(node *StepNode, indent, width int, running bool) []s
 	if node.ErrorMessage != "" {
 		lines = append(lines, "", blockLabelStr("error:"))
 		lines = append(lines, renderWrappedText(node.ErrorMessage, contentWidth)...)
+	}
+	if node.Status == StatusInProgress && running && !node.Aborted {
+		lines = append(lines, "", blockLabelStr("agent:"))
+		for _, line := range tuistyle.SpinnerFrame(pulsePhase) {
+			lines = append(lines, tuistyle.AccentStyle.Render(line))
+		}
 	}
 
 	if node.SessionID != "" && !running {
@@ -360,15 +367,16 @@ func blockDurationStr(ms int64) string {
 	return tuistyle.LabelStyle.Render("duration: ") + tuistyle.NormalStyle.Render(formatDuration(ms))
 }
 
-func renderAgentOutput(node *StepNode, contentWidth int, loadedFull bool, pulsePhase float64) []string {
+func renderAgentOutput(node *StepNode, contentWidth int, loadedFull bool, pulsePhase float64, running bool) []string {
 	stdout := sanitizeUTF8(node.Stdout)
 	stderr := sanitizeUTF8(node.Stderr)
+	showProgress := node.Status == StatusInProgress && running && !node.Aborted
 
 	var lines []string
 	lines = append(lines, "")
 
 	if stdout == "" && stderr == "" {
-		if node.Status == StatusInProgress {
+		if showProgress {
 			lines = append(lines, blockLabelStr("agent:"))
 			for _, line := range tuistyle.SpinnerFrame(pulsePhase) {
 				lines = append(lines, tuistyle.AccentStyle.Render(line))
@@ -384,6 +392,9 @@ func renderAgentOutput(node *StepNode, contentWidth int, loadedFull bool, pulseP
 		lines = append(lines, renderWrappedOutputLines(stdout, contentWidth, loadedFull)...)
 		lines = append(lines, "", blockLabelStr("agent (stderr):"))
 		lines = append(lines, renderWrappedOutputLines(stderr, contentWidth, loadedFull)...)
+		if showProgress {
+			lines = append(lines, tuistyle.AccentStyle.Render(tuistyle.SpinnerGlyph(pulsePhase)))
+		}
 		return lines
 	}
 
@@ -393,6 +404,9 @@ func renderAgentOutput(node *StepNode, contentWidth int, loadedFull bool, pulseP
 	}
 	lines = append(lines, blockLabelStr("agent:"))
 	lines = append(lines, renderWrappedOutputLines(text, contentWidth, loadedFull)...)
+	if showProgress {
+		lines = append(lines, tuistyle.AccentStyle.Render(tuistyle.SpinnerGlyph(pulsePhase)))
+	}
 	return lines
 }
 

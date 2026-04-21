@@ -45,7 +45,7 @@ func (m *Model) renderBreadcrumb() string {
 	}
 	suffix += "  ·  "
 
-	return "  " + crumbStr +
+	return tuistyle.ScreenMargin + crumbStr +
 		tuistyle.DimStyle.Render(suffix) +
 		m.styledRunStatus()
 }
@@ -53,10 +53,7 @@ func (m *Model) renderBreadcrumb() string {
 func (m *Model) styledRunStatus() string {
 	// Live-run mode: blink while running, then show result.
 	if m.running {
-		if tuistyle.BlinkOn(m.pulsePhase) {
-			return tuistyle.StatusSuccess.Render("running")
-		}
-		return tuistyle.BlinkHidden("running")
+		return tuistyle.StatusSuccess.Render("running")
 	}
 	if m.liveResult != "" {
 		switch m.liveResult {
@@ -68,10 +65,7 @@ func (m *Model) styledRunStatus() string {
 	}
 	// Inspect / list mode: use the run-lock and root status.
 	if m.active {
-		if tuistyle.BlinkOn(m.pulsePhase) {
-			return tuistyle.StatusSuccess.Render("active")
-		}
-		return tuistyle.BlinkHidden("active")
+		return tuistyle.StatusSuccess.Render("active")
 	}
 	status := m.rootStatus()
 	switch status {
@@ -145,13 +139,13 @@ func (m *Model) renderSubWorkflowHeader() string {
 	bar := tuistyle.InsetBarStyle.Render("▍ ")
 
 	var b strings.Builder
-	b.WriteString("  ")
+	b.WriteString(tuistyle.ScreenMargin)
 	b.WriteString(bar)
 	b.WriteString(tuistyle.SectionStyle.Render("workflow: "))
 	b.WriteString(tuistyle.NormalStyle.Render(name))
 	b.WriteString("\n")
 	if len(paramParts) > 0 {
-		b.WriteString("  ")
+		b.WriteString(tuistyle.ScreenMargin)
 		b.WriteString(bar)
 		b.WriteString(tuistyle.SectionStyle.Render("params:   "))
 		b.WriteString(tuistyle.NormalStyle.Render(strings.Join(paramParts, ", ")))

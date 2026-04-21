@@ -236,6 +236,46 @@ func TestBuildStepRows_SelectedLoopShowsIterationsWithoutBindingValues(t *testin
 	}
 }
 
+func TestBuildStepRows_SelectedLoopIterationAlignsWithParentLabel(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	loop := &StepNode{
+		ID:                  "fanout",
+		Type:                NodeLoop,
+		Status:              StatusInProgress,
+		Parent:              root,
+		IterationsCompleted: 1,
+		LoopMatches:         []string{"tasks/a.md"},
+	}
+	root.Children = []*StepNode{loop}
+	iter := &StepNode{
+		ID:             "fanout",
+		Type:           NodeIteration,
+		Status:         StatusInProgress,
+		Parent:         loop,
+		IterationIndex: 0,
+	}
+	loop.Children = []*StepNode{iter}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	rows := m.buildStepRows(root.Children)
+	if len(rows) != 2 {
+		t.Fatalf("expected loop row plus 1 iteration row, got %d", len(rows))
+	}
+
+	parent := stripANSI(rows[0])
+	child := stripANSI(rows[1])
+	parentParts := strings.SplitN(parent, "fanout", 2)
+	childParts := strings.SplitN(child, "iter 1", 2)
+	if len(parentParts) != 2 || len(childParts) != 2 {
+		t.Fatalf("missing expected labels:\nparent=%q\nchild=%q", parent, child)
+	}
+	parentLabelWidth := lipgloss.Width(parentParts[0])
+	childLabelWidth := lipgloss.Width(childParts[0])
+	if childLabelWidth != parentLabelWidth {
+		t.Fatalf("iteration label should align one visible step in from the parent row, got parent=%d child=%d\nparent=%q\nchild=%q", parentLabelWidth, childLabelWidth, parent, child)
+	}
+}
+
 func TestBuildStepRows_SelectedAutoFlattenedIterationShowsSubWorkflowChildren(t *testing.T) {
 	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
 	loop := &StepNode{ID: "fanout", Type: NodeLoop, Status: StatusInProgress, Parent: root, AutoFlatten: true}

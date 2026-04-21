@@ -541,7 +541,7 @@ func (m *Model) rebuildRanges() int {
 		m.rightPaneWidth(),
 		m.loadedFull,
 		m.pulsePhase,
-		m.running,
+		m.running || m.active,
 		m.resolverCfg,
 	)
 	m.stepRanges = ranges

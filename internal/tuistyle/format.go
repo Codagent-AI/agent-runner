@@ -138,16 +138,26 @@ var spinnerFrames = [][]string{
 	{"● ●", "●  ", "●  "}, // ⠏ dots 1,2,3,4
 }
 
+var spinnerGlyphFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+func spinnerFrameIndex(phase float64, count int) int {
+	idx := int(math.Floor(phase*1.5)) % count
+	if idx < 0 {
+		idx += count
+	}
+	return idx
+}
+
 // SpinnerFrame returns the three lines of the current spinner frame.
 // Each line is 3 columns wide and each frame is 3 lines tall, so callers
 // should print them on consecutive rows.
 func SpinnerFrame(phase float64) []string {
-	n := len(spinnerFrames)
-	idx := int(math.Floor(phase*1.5)) % n
-	if idx < 0 {
-		idx += n
-	}
-	return spinnerFrames[idx]
+	return spinnerFrames[spinnerFrameIndex(phase, len(spinnerFrames))]
+}
+
+// SpinnerGlyph returns the single-cell braille spinner glyph for the current phase.
+func SpinnerGlyph(phase float64) string {
+	return spinnerGlyphFrames[spinnerFrameIndex(phase, len(spinnerGlyphFrames))]
 }
 
 // BlinkOn returns true during the "on" half of each pulse cycle and false

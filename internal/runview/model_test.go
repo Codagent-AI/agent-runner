@@ -367,6 +367,29 @@ func TestModel_Breadcrumb_HidesAffordance_WhenRunning(t *testing.T) {
 	}
 }
 
+func TestModel_Breadcrumb_RunningLabelDoesNotBlinkOff(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = true
+	m.pulsePhase = 1.5 * math.Pi
+
+	bc := stripANSI(m.renderBreadcrumb())
+	if !strings.Contains(bc, "running") {
+		t.Fatalf("breadcrumb should keep showing running while step-list dot blinks, got %q", bc)
+	}
+}
+
+func TestModel_Breadcrumb_ActiveLabelDoesNotBlinkOff(t *testing.T) {
+	tree := simpleTree()
+	m := newTestModel(tree, FromList)
+	m.active = true
+	m.pulsePhase = 1.5 * math.Pi
+
+	bc := stripANSI(m.renderBreadcrumb())
+	if !strings.Contains(bc, "active") {
+		t.Fatalf("breadcrumb should keep showing active while step-list dot blinks, got %q", bc)
+	}
+}
+
 func TestModel_HelpBar_ShowsRBinding_WhenInactive(t *testing.T) {
 	tree := simpleTree()
 	tree.Root.Status = StatusInProgress

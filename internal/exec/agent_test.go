@@ -6,9 +6,28 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/pty"
 )
+
+type recordingAuditLogger struct {
+	events []audit.Event
+}
+
+func (l *recordingAuditLogger) Emit(event audit.Event) {
+	l.events = append(l.events, event)
+}
+
+func findAuditEvent(events []audit.Event, typ audit.EventType) *audit.Event {
+	for i := range events {
+		if events[i].Type == typ {
+			return &events[i]
+		}
+	}
+	return nil
+}
 
 func TestExecuteAgentStep(t *testing.T) {
 	t.Run("returns success for exit code 0", func(t *testing.T) {
@@ -240,6 +259,63 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 		if ctx.LastSessionStepID != "specs" {
 			t.Fatalf("expected LastSessionStepID to be 'specs', got %q", ctx.LastSessionStepID)
+		}
+	})
+
+	t.Run("step_start audit model uses resolved profile default", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		auditLog := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		ctx.ProfileStore = &config.Config{
+			Profiles: map[string]*config.Profile{
+				"implementor": {
+					DefaultMode: "headless",
+					CLI:         "claude",
+					Model:       "sonnet",
+				},
+			},
+		}
+		step := model.Step{ID: "implement", Agent: "implementor", Prompt: "do it", Session: model.SessionNew}
+
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+
+		event := findAuditEvent(auditLog.events, audit.EventStepStart)
+		if event == nil {
+			t.Fatal("expected step_start audit event")
+		}
+		if got := event.Data["model"]; got != "sonnet" {
+			t.Fatalf("step_start model = %#v, want %q", got, "sonnet")
+		}
+	})
+
+	t.Run("step_start audit model for resumed session uses originating profile", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		auditLog := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		ctx.ProfileStore = &config.Config{
+			Profiles: map[string]*config.Profile{
+				"planner": {
+					DefaultMode: "headless",
+					CLI:         "claude",
+					Model:       "opus",
+				},
+			},
+		}
+		ctx.SessionIDs["proposal"] = "session-abc"
+		ctx.SessionProfiles["proposal"] = "planner"
+		ctx.LastSessionStepID = "proposal"
+		step := model.Step{ID: "specs", Prompt: "continue", Session: model.SessionResume}
+
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+
+		event := findAuditEvent(auditLog.events, audit.EventStepStart)
+		if event == nil {
+			t.Fatal("expected step_start audit event")
+		}
+		if got := event.Data["model"]; got != "opus" {
+			t.Fatalf("step_start model = %#v, want %q", got, "opus")
 		}
 	})
 

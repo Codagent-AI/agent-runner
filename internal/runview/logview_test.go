@@ -3,6 +3,8 @@ package runview
 import (
 	"strings"
 	"testing"
+
+	"github.com/codagent/agent-runner/internal/model"
 )
 
 // makeNode is a minimal StepNode factory for logview tests.
@@ -394,6 +396,68 @@ func TestRenderHeadlessBlock_StripsTrailingPromptBlankBeforeDuration(t *testing.
 	}
 }
 
+func TestRenderHeadlessBlock_HeaderOrderAndUnknownModelFallback(t *testing.T) {
+	node := &StepNode{
+		ID:                 "implement",
+		Type:               NodeHeadlessAgent,
+		Status:             StatusInProgress,
+		AgentProfile:       "implementor",
+		AgentCLI:           "claude",
+		StaticSession:      model.SessionResume,
+		SessionID:          "sess-123",
+		InterpolatedPrompt: "Do it",
+	}
+
+	lines := renderHeadlessBlock(node, 0, 80, false, 0, false)
+	plain := make([]string, len(lines))
+	for i, line := range lines {
+		plain[i] = stripANSI(line)
+	}
+
+	joined := strings.Join(plain, "\n")
+	if !strings.Contains(joined, "model: (unknown)") {
+		t.Fatalf("expected explicit unknown model fallback, got:\n%s", joined)
+	}
+
+	idxAgent := lineIndexContaining(plain, "agent: implementor")
+	idxCLI := lineIndexContaining(plain, "cli: claude")
+	idxModel := lineIndexContaining(plain, "model: (unknown)")
+	idxSession := lineIndexContaining(plain, "session: resume")
+	idxSessionID := lineIndexContaining(plain, "session id: sess-123")
+
+	if idxAgent < 0 || idxCLI < 0 || idxModel < 0 || idxSession < 0 || idxSessionID < 0 {
+		t.Fatalf("missing expected header lines:\n%s", joined)
+	}
+	if idxAgent >= idxCLI || idxCLI >= idxModel || idxModel >= idxSession || idxSession >= idxSessionID {
+		t.Fatalf("unexpected header order:\n%s", joined)
+	}
+}
+
+func TestRenderHeadlessBlock_ShowsSingleGlyphSpinnerBelowStreamingOutput(t *testing.T) {
+	node := &StepNode{
+		ID:         "implement",
+		Type:       NodeHeadlessAgent,
+		Status:     StatusInProgress,
+		AgentCLI:   "claude",
+		AgentModel: "sonnet",
+		Stdout:     "streaming output",
+	}
+
+	lines := renderHeadlessBlock(node, 0, 80, false, 0, true)
+	plain := make([]string, len(lines))
+	for i, line := range lines {
+		plain[i] = stripANSI(line)
+	}
+
+	joined := strings.Join(plain, "\n")
+	if !strings.Contains(joined, "streaming output") {
+		t.Fatalf("expected streamed output in block, got:\n%s", joined)
+	}
+	if got := lastNonBlankLine(plain); got != "⠋" {
+		t.Fatalf("last non-blank line = %q, want %q in:\n%s", got, "⠋", joined)
+	}
+}
+
 func TestFormatDuration_InsertsSpacesBetweenUnits(t *testing.T) {
 	if got := formatDuration(123000); got != "2m 3s" {
 		t.Fatalf("formatDuration(123000) = %q, want %q", got, "2m 3s")
@@ -430,4 +494,22 @@ func firstNonBlankLine(lines []string, r stepLineRange) string {
 		}
 	}
 	return ""
+}
+
+func lastNonBlankLine(lines []string) string {
+	for i := len(lines) - 1; i >= 0; i-- {
+		if lines[i] != "" {
+			return lines[i]
+		}
+	}
+	return ""
+}
+
+func lineIndexContaining(lines []string, needle string) int {
+	for i, line := range lines {
+		if strings.Contains(line, needle) {
+			return i
+		}
+	}
+	return -1
 }

@@ -82,7 +82,7 @@ func buildLogLinesRecurse(
 			case NodeHeadlessAgent:
 				blockLines = renderHeadlessBlock(child, indent, bodyWidth, loadedFull[child.NodeKey()], pulsePhase, running)
 			case NodeInteractiveAgent:
-				blockLines = renderInteractiveBlock(child, indent, bodyWidth, running)
+				blockLines = renderInteractiveBlock(child, indent, bodyWidth, pulsePhase, running)
 			case NodeSubWorkflow:
 				blockLines = renderSubWorkflowBlock(child, indent, bodyWidth, resolverCfg)
 			case NodeLoop:

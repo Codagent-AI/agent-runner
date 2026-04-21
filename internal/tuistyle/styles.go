@@ -59,13 +59,16 @@ var (
 // share the same color treatment.
 const BreadcrumbSeparator = " › "
 
+// ScreenMargin is the shared outer left margin for TUI chrome.
+const ScreenMargin = " "
+
 // RenderRule returns a horizontal divider line inset 2 columns from each
 // edge, sized to the given terminal width. Used by both TUI screens as the
 // separator above bottom-pinned help bars and below top chrome.
 func RenderRule(termWidth int) string {
 	w := termWidth
-	if w <= 4 {
+	if w <= 2 {
 		w = 60
 	}
-	return "  " + DividerStyle.Render(strings.Repeat("─", w-4))
+	return ScreenMargin + DividerStyle.Render(strings.Repeat("─", w-2))
 }

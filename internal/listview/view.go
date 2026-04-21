@@ -36,7 +36,7 @@ func (m *Model) View() string {
 
 	body := m.renderBody()
 	if m.loadErr != "" {
-		body += "\n  " + dimStyle.Render("Error loading runs: "+sanitize(m.loadErr))
+		body += "\n" + tuistyle.ScreenMargin + dimStyle.Render("Error loading runs: "+sanitize(m.loadErr))
 	}
 	b.WriteString(body)
 
@@ -55,7 +55,7 @@ func (m *Model) View() string {
 	// stable whether or not an error is currently showing; otherwise the
 	// help bar flickers down-then-up on every error-set/clear transition.
 	if m.errMsg != "" {
-		b.WriteString("  " + errStyle.Render(m.errMsg))
+		b.WriteString(tuistyle.ScreenMargin + errStyle.Render(m.errMsg))
 	}
 	b.WriteString("\n")
 	b.WriteString(m.renderHelp())
@@ -90,7 +90,7 @@ func (m *Model) bodyHeight() int {
 }
 
 func (m *Model) renderHeader() string {
-	const prefix = "  "
+	const prefix = tuistyle.ScreenMargin
 	const title = "Agent Runner"
 	left := prefix + headerStyle.Render(title)
 	if m.termWidth <= 0 {
@@ -122,19 +122,19 @@ func (m *Model) renderTabs() string {
 	}
 	parts = append(parts, renderTab("All", tabAll))
 
-	return "  " + strings.Join(parts, "    ")
+	return tuistyle.ScreenMargin + strings.Join(parts, "    ")
 }
 
 func (m *Model) renderSubheader() string {
 	switch m.activeTab {
 	case tabCurrentDir:
-		return "  " + pathStyle.Render(sanitize(shortenPath(m.cwd)))
+		return tuistyle.ScreenMargin + pathStyle.Render(sanitize(shortenPath(m.cwd)))
 	case tabWorktrees:
 		if m.worktreeTab.subView == subViewRunList {
 			wt := m.selectedWorktree()
 			if wt != nil {
 				sep := tuistyle.AccentStyle.Render(tuistyle.BreadcrumbSeparator)
-				crumb := "  " + labelStyle.Render("← ")
+				crumb := tuistyle.ScreenMargin + labelStyle.Render("← ")
 				if m.worktreeTab.repoName != "" {
 					crumb += labelStyle.Render(sanitize(m.worktreeTab.repoName)) + sep
 				}
@@ -142,15 +142,15 @@ func (m *Model) renderSubheader() string {
 				return crumb
 			}
 		}
-		return "  " + pathStyle.Render(sanitize(shortenPath(m.cwd))+"  (git repo)")
+		return tuistyle.ScreenMargin + pathStyle.Render(sanitize(shortenPath(m.cwd))+"  (git repo)")
 	case tabAll:
 		if m.allTab.subView == subViewRunList {
 			d := m.selectedAllDir()
 			if d != nil {
-				return "  " + labelStyle.Render("← All") + tuistyle.AccentStyle.Render(tuistyle.BreadcrumbSeparator) + labelStyle.Render(sanitize(shortenPath(d.Path)))
+				return tuistyle.ScreenMargin + labelStyle.Render("← All") + tuistyle.AccentStyle.Render(tuistyle.BreadcrumbSeparator) + labelStyle.Render(sanitize(shortenPath(d.Path)))
 			}
 		}
-		return "  " + pathStyle.Render("All project directories")
+		return tuistyle.ScreenMargin + pathStyle.Render("All project directories")
 	}
 	return ""
 }
@@ -494,5 +494,5 @@ func (m *Model) renderHelp() string {
 		}
 	}
 
-	return "  " + helpStyle.Render(strings.Join(parts, "   "))
+	return tuistyle.ScreenMargin + helpStyle.Render(strings.Join(parts, "   "))
 }

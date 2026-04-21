@@ -1,6 +1,7 @@
 package listview
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -153,5 +154,20 @@ func TestListModel_R_AllTabRunList_InactiveRun_EmitsResumeRunMsg(t *testing.T) {
 	}
 	if rr.ProjectDir != "/some/path" {
 		t.Fatalf("ProjectDir = %q, want %q", rr.ProjectDir, "/some/path")
+	}
+}
+
+func TestListView_UsesSingleScreenMargin(t *testing.T) {
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.cwd = "/repo/project"
+
+	header := sanitize(m.renderHeader())
+	if !strings.HasPrefix(header, " Agent Runner") || strings.HasPrefix(header, "  Agent Runner") {
+		t.Fatalf("header should use a single leading margin, got %q", header)
+	}
+
+	help := sanitize(m.renderHelp())
+	if !strings.HasPrefix(help, " ") || strings.HasPrefix(help, "  ") {
+		t.Fatalf("help bar should use a single leading margin, got %q", help)
 	}
 }

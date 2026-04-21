@@ -36,3 +36,23 @@ func TestBlinkHidden(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderRule_UsesSingleScreenMargin(t *testing.T) {
+	got := RenderRule(20)
+	if !strings.HasPrefix(got, ScreenMargin) || strings.HasPrefix(got, ScreenMargin+ScreenMargin) {
+		t.Fatalf("RenderRule should start with exactly one screen-margin prefix, got %q", got)
+	}
+	if lipgloss.Width(got) != 19 {
+		t.Fatalf("RenderRule width = %d, want %d", lipgloss.Width(got), 19)
+	}
+}
+
+func TestSpinnerGlyph_IsSingleCellBraille(t *testing.T) {
+	got := SpinnerGlyph(0)
+	if got != "⠋" {
+		t.Fatalf("SpinnerGlyph(0) = %q, want %q", got, "⠋")
+	}
+	if lipgloss.Width(got) != 1 {
+		t.Fatalf("SpinnerGlyph width = %d, want 1", lipgloss.Width(got))
+	}
+}
