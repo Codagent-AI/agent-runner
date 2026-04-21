@@ -5,9 +5,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/pty"
 )
+
+type mockAuditLogger struct {
+	events []audit.Event
+}
+
+func (m *mockAuditLogger) Emit(e audit.Event) { m.events = append(m.events, e) }
 
 // --- Test helpers ---
 
@@ -249,6 +256,38 @@ func TestExecuteShellStep(t *testing.T) {
 		}
 		if strings.Join(hooks, ",") != "suspend,resume" {
 			t.Fatalf("expected suspend/resume hooks, got %v", hooks)
+		}
+	})
+
+	t.Run("interactive mode surfaces PTY transcript as step stdout in audit log", func(t *testing.T) {
+		oldFn := interactiveShellRunnerFn
+		interactiveShellRunnerFn = func(_ string, _ pty.Options) (pty.Result, error) {
+			return pty.Result{ExitCode: 0, Stdout: "What's your favorite color? blue\nNice choice — blue it is.\n"}, nil
+		}
+		defer func() { interactiveShellRunnerFn = oldFn }()
+
+		recorder := &mockAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = recorder
+
+		step := model.Step{ID: "s", Command: "read -p 'color? ' c", Session: model.SessionNew, Mode: model.ModeInteractive}
+		if _, err := ExecuteShellStep(&step, ctx, &mockRunner{}, &mockLogger{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var end audit.Event
+		for _, ev := range recorder.events {
+			if ev.Type == audit.EventStepEnd {
+				end = ev
+			}
+		}
+		if end.Type != audit.EventStepEnd {
+			t.Fatalf("expected step_end event, got %+v", recorder.events)
+		}
+		got, _ := end.Data["stdout"].(string)
+		want := "What's your favorite color? blue\nNice choice — blue it is.\n"
+		if got != want {
+			t.Errorf("audit stdout = %q, want %q", got, want)
 		}
 	})
 

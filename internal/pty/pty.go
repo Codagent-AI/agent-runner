@@ -3,6 +3,7 @@ package pty
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -11,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	gopty "github.com/creack/pty"
 	"golang.org/x/sys/unix"
 )
@@ -26,6 +28,10 @@ const (
 type Result struct {
 	ExitCode          int
 	ContinueTriggered bool
+	// Stdout is a transcript of bytes the PTY emitted during the session, with
+	// ANSI escape sequences stripped. Populated for shell interactive sessions
+	// so callers can surface what scrolled past after the session ends.
+	Stdout string
 }
 
 // Options configures an interactive PTY session.
@@ -148,6 +154,12 @@ func RunInteractive(args []string, opts Options) (Result, error) {
 // RunShellInteractive executes a shell command in a pseudo-terminal with the
 // user's terminal attached. Unlike RunInteractive, it does not install
 // continue-trigger detection, sentinel scanning, or idle hints.
+//
+// The shell runs inside its own alt-screen buffer so the prompt renders on a
+// clean canvas, independent of whatever the suspended TUI (or any enclosing
+// parent process like a host CLI) last drew on the normal screen. Without
+// this, stale content from the parent terminal can interleave with the shell
+// prompt, making it appear as though input is broken.
 func RunShellInteractive(command string, opts Options) (Result, error) {
 	if command == "" {
 		return Result{}, fmt.Errorf("pty: no command specified")
@@ -161,7 +173,9 @@ func RunShellInteractive(command string, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("pty: failed to set raw mode: %w", err)
 	}
+	enterShellAltScreen()
 	defer func() {
+		exitShellAltScreen()
 		restoreTerminal(os.Stdin.Fd(), oldState)
 		restoreTerminalModes()
 	}()
@@ -174,12 +188,13 @@ func RunShellInteractive(command string, opts Options) (Result, error) {
 	defer func() { _ = ptmx.Close() }()
 
 	state := &ptyState{}
+	transcript := newTailBuffer(transcriptMaxBytes)
 
 	resizeCh := startResizeHandler(ptmx)
 	outputDone := make(chan struct{})
 	go func() {
 		defer close(outputDone)
-		forwardOutputRaw(ptmx)
+		forwardOutputRaw(ptmx, os.Stdout, transcript)
 	}()
 
 	inputDone := make(chan struct{})
@@ -196,7 +211,9 @@ func RunShellInteractive(command string, opts Options) (Result, error) {
 	<-outputDone
 	<-inputDone
 
-	return shellResultFromWait(waitErr)
+	result, err := shellResultFromWait(waitErr)
+	result.Stdout = stripTranscript(transcript.String())
+	return result, err
 }
 
 // startInPTY opens a PTY pair, wires the command's stdio to the slave device,
@@ -350,19 +367,85 @@ func forwardOutput(ptmx *os.File, hint *idleHint, cmd *exec.Cmd, state *ptyState
 	}
 }
 
-func forwardOutputRaw(ptmx *os.File) {
+// forwardOutputRaw copies PTY output to the user's stdout and, if provided,
+// tees a copy into transcript so the session's visible output can be replayed
+// after the shell exits. transcript may be nil when no recording is wanted.
+// Both sinks are written in full, retrying on short writes per the io.Writer
+// contract so no PTY bytes are silently dropped.
+func forwardOutputRaw(src io.Reader, stdout, transcript io.Writer) {
 	buf := make([]byte, 4096)
 	for {
-		n, err := ptmx.Read(buf)
+		n, err := src.Read(buf)
 		if n > 0 {
-			if werr := writeStdout(buf[:n]); werr != nil {
+			if werr := writeFull(stdout, buf[:n]); werr != nil {
 				return
+			}
+			if transcript != nil {
+				_ = writeFull(transcript, buf[:n])
 			}
 		}
 		if err != nil {
 			return
 		}
 	}
+}
+
+// writeFull writes all of p to w, looping on short writes. Returns the first
+// error encountered.
+func writeFull(w io.Writer, p []byte) error {
+	for len(p) > 0 {
+		n, err := w.Write(p)
+		if err != nil {
+			return err
+		}
+		p = p[n:]
+	}
+	return nil
+}
+
+// transcriptMaxBytes bounds the in-memory PTY transcript so long-running or
+// very noisy commands (`tail -f`, `yes`, verbose build logs) cannot exhaust
+// runner memory. When a session exceeds this, the tail is kept.
+const transcriptMaxBytes = 1 << 20 // 1 MiB
+
+// tailBuffer is a bounded writer that retains only the final cap bytes written
+// to it. A leading marker is prepended to the output when truncation has
+// occurred so readers can tell the transcript was trimmed.
+type tailBuffer struct {
+	buf       []byte
+	maxBytes  int
+	truncated bool
+}
+
+func newTailBuffer(maxBytes int) *tailBuffer {
+	return &tailBuffer{maxBytes: maxBytes}
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	if len(p) >= t.maxBytes {
+		t.truncated = true
+		t.buf = append(t.buf[:0], p[len(p)-t.maxBytes:]...)
+		return len(p), nil
+	}
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > t.maxBytes {
+		t.truncated = true
+		t.buf = t.buf[len(t.buf)-t.maxBytes:]
+	}
+	return len(p), nil
+}
+
+func (t *tailBuffer) String() string {
+	if t.truncated {
+		return "[...transcript truncated, showing tail...]\n" + string(t.buf)
+	}
+	return string(t.buf)
+}
+
+// stripTranscript removes ANSI escape sequences from raw PTY output so the
+// transcript is readable when rendered as plain text.
+func stripTranscript(s string) string {
+	return ansi.Strip(s)
 }
 
 // processStdin reads from stdin using poll-based I/O, processes input through
