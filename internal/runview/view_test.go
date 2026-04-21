@@ -274,6 +274,53 @@ func TestBuildStepRows_SelectedContainerWithActiveChildSuppressesOwnIndicator(t 
 	}
 }
 
+// TestBuildStepRows_SelectedLoopWithActiveIterationSuppressesOwnIndicator
+// verifies the same "only one in-progress indicator" rule applies when the
+// selected container is a loop whose active child is an iteration.
+func TestBuildStepRows_SelectedLoopWithActiveIterationSuppressesOwnIndicator(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	loop := &StepNode{
+		ID:                  "fanout",
+		Type:                NodeLoop,
+		Status:              StatusInProgress,
+		Parent:              root,
+		IterationsCompleted: 1,
+		LoopMatches:         []string{"a.md", "b.md"},
+	}
+	root.Children = []*StepNode{loop}
+	iter1 := &StepNode{
+		ID:             "fanout",
+		Type:           NodeIteration,
+		Status:         StatusSuccess,
+		Parent:         loop,
+		IterationIndex: 0,
+	}
+	iter2 := &StepNode{
+		ID:             "fanout",
+		Type:           NodeIteration,
+		Status:         StatusInProgress,
+		Parent:         loop,
+		IterationIndex: 1,
+	}
+	loop.Children = []*StepNode{iter1, iter2}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.cursor = 0
+	rows := m.buildStepRows(root.Children)
+	if len(rows) != 3 {
+		t.Fatalf("expected loop row plus 2 iteration expansion rows, got %d", len(rows))
+	}
+
+	parent := stripANSI(rows[0])
+	iter2Row := stripANSI(rows[2])
+	if strings.Contains(parent, "●") {
+		t.Fatalf("selected in-progress loop with active iteration should hide its own '●', got parent=%q", parent)
+	}
+	if !strings.Contains(iter2Row, "●") {
+		t.Fatalf("active iteration expansion row should show '●', got iter2=%q", iter2Row)
+	}
+}
+
 // TestBuildStepRows_SelectedContainerWithoutActiveChildKeepsOwnIndicator
 // verifies that when a selected container has no in-progress child among its
 // expansion rows, its own "●" indicator is rendered normally.
