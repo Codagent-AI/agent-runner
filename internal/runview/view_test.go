@@ -364,6 +364,52 @@ func TestBuildStepRows_SelectedContainerWithoutActiveChildKeepsOwnIndicator(t *t
 	}
 }
 
+// TestIterationRowRendersTypeGlyph verifies that iteration rows, like other
+// step types, carry a type glyph in the step list for visual consistency with
+// shell/agent/sub-workflow/loop rows.
+func TestIterationRowRendersTypeGlyph(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	loop := &StepNode{
+		ID:     "fanout",
+		Type:   NodeLoop,
+		Status: StatusInProgress,
+		Parent: root,
+	}
+	root.Children = []*StepNode{loop}
+	iter := &StepNode{
+		ID:             "fanout",
+		Type:           NodeIteration,
+		Status:         StatusInProgress,
+		Parent:         loop,
+		IterationIndex: 0,
+	}
+	loop.Children = []*StepNode{iter}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.cursor = 0
+	rows := m.buildStepRows(root.Children)
+	if len(rows) != 2 {
+		t.Fatalf("expected loop row plus 1 iteration expansion row, got %d", len(rows))
+	}
+	iterRow := stripANSI(rows[1])
+	if !strings.Contains(iterRow, "»") {
+		t.Fatalf("iteration row should include a type glyph (»), got %q", iterRow)
+	}
+}
+
+// TestLegendListsIterationGlyph ensures the legend overlay documents the
+// iteration type glyph alongside the other step-type glyphs.
+func TestLegendListsIterationGlyph(t *testing.T) {
+	m := newTestModel(&Tree{Root: &StepNode{ID: "wf", Type: NodeRoot}}, FromList)
+	legend := stripANSI(m.renderLegend())
+	if !strings.Contains(legend, "»") {
+		t.Fatalf("legend should include iteration type glyph, got:\n%s", legend)
+	}
+	if !strings.Contains(legend, "iteration") {
+		t.Fatalf("legend should label the iteration glyph, got:\n%s", legend)
+	}
+}
+
 // TestBuildStepRows_SelectedLoopIterationNestsUnderParent verifies iteration
 // expansion rows are visibly indented to the right of the selected parent
 // loop's label, so the step list conveys hierarchy.

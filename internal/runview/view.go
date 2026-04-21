@@ -286,6 +286,7 @@ func (m *Model) stepRowParts(n *StepNode) (typeCol, label, glyph string) {
 			suffix = fmt.Sprintf(" (%d/%d)", n.IterationsCompleted, total)
 		}
 	case NodeIteration:
+		typePrefix = typeGlyph(n.Type)
 		label = fmt.Sprintf("iter %d", n.IterationIndex+1)
 	default:
 		typePrefix = typeGlyph(n.Type)
@@ -327,7 +328,7 @@ func typeGlyph(t NodeType) string {
 	switch t {
 	case NodeShell:
 		return shellGlyphStyle.Render(raw)
-	case NodeLoop:
+	case NodeLoop, NodeIteration:
 		return loopGlyphStyle.Render(raw)
 	case NodeHeadlessAgent, NodeInteractiveAgent, NodeSubWorkflow:
 		return subwfGlyphStyle.Render(raw)
@@ -502,6 +503,7 @@ func (m *Model) renderLegend() string {
 	b.WriteString("  ❯  interactive agent\n")
 	b.WriteString("  ↳  sub-workflow\n")
 	b.WriteString("  ↺  loop\n")
+	b.WriteString("  »  iteration\n")
 
 	b.WriteString("\n  ")
 	b.WriteString(tuistyle.SelectedStyle.Render("Live Navigation"))

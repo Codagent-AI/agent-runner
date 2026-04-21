@@ -35,13 +35,13 @@ The run view SHALL render the current level's steps as a vertical list on the le
 
 If a step name exceeds 20 visual characters, the sidebar row SHALL truncate the displayed name to the first 17 characters followed by an ellipsis (`…`). Log block separators are unaffected by this truncation and continue to render the full name.
 
-Step types distinguished by glyph SHALL be: shell, headless agent, interactive agent, sub-workflow, and loop. Every step type SHALL have a type glyph.
+Step types distinguished by glyph SHALL be: shell, headless agent, interactive agent, sub-workflow, loop, and iteration. Every step type SHALL have a type glyph — including iteration rows, which render their own glyph so expansion rows under a selected loop line up with other typed rows rather than appearing offset from them.
 
 Step statuses SHALL be: `pending`, `in-progress`, `success`, `failed`, `skipped`. The `in-progress` indicator SHALL blink only when a run is currently active; otherwise it renders static (covering steps that were aborted mid-execution and will resume on the next run). Loop "exhausted" outcomes SHALL render as `success`.
 
 When a selected container step (sub-workflow, loop, or iteration) has inline expansion rows rendered beneath it AND at least one of those expansion rows is itself `in-progress`, the selected parent's status indicator SHALL be suppressed (rendered as blank whitespace preserving column alignment). This avoids presenting two simultaneous in-progress indicators for what is conceptually one active execution frontier; the expansion row for the actively running child carries the sole indicator. The step name, type glyph, and any counter on the parent row SHALL continue to render normally.
 
-Status glyphs SHALL be: `●` running, `○` pending, `✓` success, `✗` failed, `⇥` skipped. Type glyphs SHALL be: `$` shell, ⚙️ headless agent, 💬 interactive agent, ↳ sub-workflow, and a distinct glyph for loop (exact symbol is a design choice). Pulse cadence for the running indicator SHALL match the list TUI's 50 ms tick, lerping between the running and dim-running color tokens. Color palette additions (failed red) and reuses are specified in the design document.
+Status glyphs SHALL be: `●` running, `○` pending, `✓` success, `✗` failed, `⇥` skipped. Type glyphs SHALL be: `$` shell, ⚙️ headless agent, 💬 interactive agent, ↳ sub-workflow, and distinct glyphs for loop and iteration (exact symbols are design choices, but loop and iteration MAY share a color token to signal their relationship). Pulse cadence for the running indicator SHALL match the list TUI's 50 ms tick, lerping between the running and dim-running color tokens. Color palette additions (failed red) and reuses are specified in the design document.
 
 #### Scenario: Shell step row
 - **WHEN** a shell step is rendered in the step list
@@ -282,7 +282,7 @@ The run view SHALL provide a `?` key that toggles a modal legend overlay showing
 
 #### Scenario: Toggle legend overlay on
 - **WHEN** the user presses `?` and the legend is not visible
-- **THEN** a modal overlay appears showing status glyphs (`●` running, `○` pending, `✓` success, `✗` failed, `⇥` skipped) and type glyphs (`$` shell, ⚙️ headless agent, 💬 interactive agent, ↳ sub-workflow)
+- **THEN** a modal overlay appears showing status glyphs (`●` running, `○` pending, `✓` success, `✗` failed, `⇥` skipped) and type glyphs (`$` shell, ⚙️ headless agent, 💬 interactive agent, ↳ sub-workflow, the loop glyph, and the iteration glyph)
 
 #### Scenario: Toggle legend overlay off
 - **WHEN** the user presses `?` or Escape while the legend overlay is visible
