@@ -273,7 +273,7 @@ func TestRunWorkflow(t *testing.T) {
 				shellStep("s1", "echo ok"),
 				{
 					ID: "s2", Command: "echo body", Session: model.SessionNew,
-					SkipIf: fmt.Sprintf(`sh: touch %q && test "{{flag}}" = "true"`, sentinel),
+					SkipIf: fmt.Sprintf(`sh: touch %q && test {{flag}} = true`, sentinel),
 				},
 			},
 		}

@@ -2,6 +2,7 @@ package builtinworkflows
 
 import (
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path"
@@ -69,5 +70,5 @@ func ReadFile(workflowFile string) ([]byte, error) {
 }
 
 func isNotExist(err error) bool {
-	return err == nil || err == fs.ErrNotExist || strings.Contains(err.Error(), "file does not exist")
+	return errors.Is(err, fs.ErrNotExist)
 }

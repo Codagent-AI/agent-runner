@@ -96,9 +96,9 @@ func validateSingleStep(step *model.Step, index int, ctx stepContext, declared m
 		return fmt.Errorf(`step %q: session "inherit" is not allowed in a top-level workflow`, step.ID)
 	}
 
-	// Named session reference: must resolve to a declaration in this workflow.
-	// Cross-file references (to a root's declarations) are only valid when
-	// executed under the root; standalone validation requires local resolution.
+	// Named session reference: must be declared in this file's sessions block.
+	// At runtime a sub-workflow may inherit declarations from its parent, but
+	// standalone validation cannot see the parent's declarations.
 	if model.IsNamedSession(step.Session) && !declared[string(step.Session)] {
 		return fmt.Errorf(`step %q: session %q is not declared in this workflow's sessions block`, step.ID, step.Session)
 	}

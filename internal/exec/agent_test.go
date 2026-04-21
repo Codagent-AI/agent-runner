@@ -573,8 +573,8 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
-	t.Run("headless fails when AskUserQuestion error detected in output", func(t *testing.T) {
-		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "Tool error: AskUserQuestion error: not supported in headless mode"}}}
+	t.Run("headless fails when AskUserQuestion error detected in stderr", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stderr: "Tool error: AskUserQuestion error: not supported in headless mode"}}}
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "finalize", Session: model.SessionNew}
 		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if err != nil {
@@ -585,8 +585,8 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
-	t.Run("headless fails on case-variant AskUserQuestion error", func(t *testing.T) {
-		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "Error: askuserquestion not available"}}}
+	t.Run("headless fails on case-variant AskUserQuestion error in stderr", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stderr: "Error: askuserquestion not available"}}}
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "finalize", Session: model.SessionNew}
 		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if err != nil {
@@ -609,9 +609,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
-	t.Run("headless succeeds when AskUserQuestion and error appear on separate lines", func(t *testing.T) {
-		// Regression: agent summarized work that mentioned AskUserQuestion on one line
-		// and an unrelated Error class name on another — naive combined-text check fires incorrectly.
+	t.Run("headless succeeds when stdout mentions AskUserQuestion — only stderr is checked", func(t *testing.T) {
 		stdout := "uses `--no-ask-user` when `AskUserQuestion` is disallowed\n`CopilotAdapter.InteractiveModeError()`: rejects interactive mode"
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: stdout}}}
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "implement", Session: model.SessionNew}
@@ -620,7 +618,32 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if outcome != OutcomeSuccess {
-			t.Fatalf("expected success when AskUserQuestion and error appear on separate lines, got %q", outcome)
+			t.Fatalf("expected success when AskUserQuestion only appears in stdout, got %q", outcome)
+		}
+	})
+
+	t.Run("headless succeeds when natural language mentions AskUserQuestion and error on same line", func(t *testing.T) {
+		stdout := "I attempted to call AskUserQuestion, but the request encountered an error during validation, so I proceeded autonomously."
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: stdout}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "implement", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected success when natural language mentions both AskUserQuestion and error, got %q", outcome)
+		}
+	})
+
+	t.Run("headless fails when AskUserQuestion tool is disallowed", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stderr: "tool AskUserQuestion is not allowed"}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "finalize", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeFailed {
+			t.Fatalf("expected failed when AskUserQuestion is disallowed, got %q", outcome)
 		}
 	})
 

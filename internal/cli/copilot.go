@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -116,10 +117,17 @@ func discoverCopilotSession(spawnTime time.Time, workdir string) string {
 		return candidates[i].modTime.After(candidates[j].modTime)
 	})
 
+	var matched []string
 	for _, c := range candidates {
 		if matchesCopilotSessionCwd(filepath.Join(sessionStateDir, c.id), cwd) {
-			return c.id
+			matched = append(matched, c.id)
 		}
+	}
+	if len(matched) > 1 {
+		log.Printf("copilot: %d session candidates match cwd %s; using most recent — misattribution possible if concurrent sessions share this directory", len(matched), cwd)
+	}
+	if len(matched) > 0 {
+		return matched[0]
 	}
 
 	return ""
