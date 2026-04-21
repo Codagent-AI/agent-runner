@@ -20,7 +20,8 @@ steps:
   - id: interactive-shell
     mode: interactive
     command: |
-      read -p "What's your favorite color? " color
+      printf "What's your favorite color? "
+      read color
       echo "Nice choice — $color it is."
 
   - id: counted-loop
