@@ -8,3 +8,4 @@ agent-runner-state.json
 worktrees/
 .debug.log
 .debug.log.1
+.vscode-screenshots/
