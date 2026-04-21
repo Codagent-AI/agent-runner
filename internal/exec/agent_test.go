@@ -319,6 +319,39 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("step_start audit model uses step override when present", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		auditLog := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		ctx.ProfileStore = &config.Config{
+			Profiles: map[string]*config.Profile{
+				"implementor": {
+					DefaultMode: "headless",
+					CLI:         "claude",
+					Model:       "sonnet",
+				},
+			},
+		}
+		step := model.Step{
+			ID:      "implement",
+			Agent:   "implementor",
+			Model:   "opus",
+			Prompt:  "do it",
+			Session: model.SessionNew,
+		}
+
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+
+		event := findAuditEvent(auditLog.events, audit.EventStepStart)
+		if event == nil {
+			t.Fatal("expected step_start audit event")
+		}
+		if got := event.Data["model"]; got != "opus" {
+			t.Fatalf("step_start model = %#v, want %q", got, "opus")
+		}
+	})
+
 	t.Run("adds --model flag for model override", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew, Model: "opus"}

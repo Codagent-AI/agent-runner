@@ -150,8 +150,12 @@ func ExecuteAgentStep(
 
 	input := buildAdapterInput(step, ctx, profile, adapter, prompt, enrichment, sessionID, isResume, headless)
 	args := adapter.BuildArgs(&input)
+	resolvedModel := input.Model
+	if resolvedModel == "" && profile != nil {
+		resolvedModel = profile.Model
+	}
 
-	emitAgentStart(ctx, prefix, startTime, prompt, mode, step, sessionID, cliName, profile.Model, enrichment)
+	emitAgentStart(ctx, prefix, startTime, prompt, mode, step, sessionID, cliName, resolvedModel, enrichment)
 
 	// Set the step prefix on the process runner if it supports it (TUI mode).
 	if ps, ok := runner.(prefixSetter); ok {
