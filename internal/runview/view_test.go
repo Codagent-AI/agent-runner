@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/tuistyle"
@@ -680,5 +681,70 @@ func TestStepRowParts_TruncatesLongSidebarName(t *testing.T) {
 	})
 	if label != "abcdefghijklmnopq…" {
 		t.Fatalf("truncated label = %q, want %q", label, "abcdefghijklmnopq…")
+	}
+}
+
+// TestRenderStepRow_NonSelectedUsesDefaultTextColor verifies that step-list
+// rows are rendered in the default body text color rather than the dim grey
+// used for secondary UI elements.
+func TestRenderStepRow_NonSelectedUsesDefaultTextColor(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	step := &StepNode{ID: "build", Type: NodeShell, Status: StatusSuccess, Parent: root}
+	root.Children = []*StepNode{step}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	rendered := m.renderStepRow(step, false, false)
+
+	normalLabel := tuistyle.NormalStyle.Render("build")
+	dimLabel := tuistyle.DimStyle.Render("build")
+	if normalLabel == dimLabel {
+		t.Fatalf("test setup: NormalStyle and DimStyle produced identical output — color profile not forced")
+	}
+	if !strings.Contains(rendered, normalLabel) {
+		t.Errorf("expected non-selected label to use NormalStyle, got:\n%q", rendered)
+	}
+	if strings.Contains(rendered, dimLabel) {
+		t.Errorf("non-selected label should not use DimStyle, got:\n%q", rendered)
+	}
+}
+
+// TestRenderStepRow_SelectedIsGreenAndBold verifies the cursor-selected row
+// renders its label in green + bold to stand out from siblings.
+func TestRenderStepRow_SelectedIsGreenAndBold(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	step := &StepNode{ID: "build", Type: NodeShell, Status: StatusSuccess, Parent: root}
+	root.Children = []*StepNode{step}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	rendered := m.renderStepRow(step, true, false)
+
+	want := lipgloss.NewStyle().Foreground(tuistyle.SuccessGreen).Bold(true).Render("build")
+	if !strings.Contains(rendered, want) {
+		t.Errorf("expected selected label rendered green+bold (%q), got:\n%q", want, rendered)
+	}
+}
+
+// TestRenderExpansionRow_UsesDefaultTextColor verifies children surfaced
+// beneath a selected container are rendered in the default body text color.
+func TestRenderExpansionRow_UsesDefaultTextColor(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	child := &StepNode{ID: "prepare", Type: NodeShell, Status: StatusSuccess, Parent: root}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	rendered := m.renderExpansionRow(child, 1)
+
+	normalLabel := tuistyle.NormalStyle.Render("prepare")
+	dimLabel := tuistyle.DimStyle.Render("prepare")
+	if normalLabel == dimLabel {
+		t.Fatalf("test setup: NormalStyle and DimStyle produced identical output — color profile not forced")
+	}
+	if !strings.Contains(rendered, normalLabel) {
+		t.Errorf("expected expansion-row label to use NormalStyle, got:\n%q", rendered)
+	}
+	if strings.Contains(rendered, dimLabel) {
+		t.Errorf("expansion-row label should not use DimStyle, got:\n%q", rendered)
 	}
 }

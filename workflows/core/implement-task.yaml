@@ -9,7 +9,7 @@ params:
     default: "false"
 
 steps:
-  - id: implement
+  - id: generate-code
     agent: implementor
     session: new
     prompt: |
