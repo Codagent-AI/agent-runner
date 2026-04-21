@@ -73,6 +73,19 @@ func TestResolveWorkflowArg(t *testing.T) {
 		}
 	})
 
+	t.Run("namespaced local workflow path is ignored in favor of builtin namespace", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		writeTestFile(t, filepath.Join(".agent-runner", "workflows", "team", "deploy.yaml"), "name: test\nsteps:\n  - id: s\n    command: echo ok\n")
+
+		_, err := resolveWorkflowArg("team:deploy")
+		if err == nil {
+			t.Fatal("expected missing builtin to return an error")
+		}
+		if !strings.Contains(err.Error(), `workflow "team:deploy" not found`) {
+			t.Fatalf("expected workflow-not-found error, got %v", err)
+		}
+	})
+
 	t.Run("bare workflow does not fall back to builtins", func(t *testing.T) {
 		t.Chdir(t.TempDir())
 
