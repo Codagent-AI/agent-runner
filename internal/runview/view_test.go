@@ -236,6 +236,87 @@ func TestBuildStepRows_SelectedLoopShowsIterationsWithoutBindingValues(t *testin
 	}
 }
 
+// TestBuildStepRows_SelectedContainerWithActiveChildSuppressesOwnIndicator
+// verifies that when a selected container step (sub-workflow, loop, iteration)
+// has at least one in-progress child in its expansion rows, the parent's own
+// "●" indicator is suppressed so only one blinking indicator is rendered.
+func TestBuildStepRows_SelectedContainerWithActiveChildSuppressesOwnIndicator(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	review := &StepNode{ID: "review", Type: NodeSubWorkflow, Status: StatusInProgress, Parent: root}
+	root.Children = []*StepNode{review}
+	active := &StepNode{ID: "impl", Type: NodeHeadlessAgent, Status: StatusInProgress, Parent: review}
+	review.Children = []*StepNode{active}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.cursor = 0
+	rows := m.buildStepRows(root.Children)
+	if len(rows) != 2 {
+		t.Fatalf("expected selected sub-workflow row plus one expansion row, got %d", len(rows))
+	}
+
+	parent := stripANSI(rows[0])
+	child := stripANSI(rows[1])
+	if strings.Contains(parent, "●") {
+		t.Fatalf("selected in-progress container with active child should hide its own '●' indicator, got parent=%q", parent)
+	}
+	if !strings.Contains(child, "●") {
+		t.Fatalf("in-progress expansion child should show a '●' indicator, got child=%q", child)
+	}
+
+	// Column alignment must be preserved: the parent row's visible width must
+	// remain stable (as if the indicator were still there).
+	withActive := lipgloss.Width(rows[0])
+	active.Status = StatusPending
+	rowsNoActive := m.buildStepRows(root.Children)
+	withoutActive := lipgloss.Width(rowsNoActive[0])
+	if withActive != withoutActive {
+		t.Fatalf("parent row width should not change when indicator is suppressed: active=%d, pending=%d", withActive, withoutActive)
+	}
+}
+
+// TestBuildStepRows_SelectedContainerWithoutActiveChildKeepsOwnIndicator
+// verifies that when a selected container has no in-progress child among its
+// expansion rows, its own "●" indicator is rendered normally.
+func TestBuildStepRows_SelectedContainerWithoutActiveChildKeepsOwnIndicator(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	loop := &StepNode{
+		ID:                  "fanout",
+		Type:                NodeLoop,
+		Status:              StatusInProgress,
+		Parent:              root,
+		IterationsCompleted: 1,
+		LoopMatches:         []string{"a.md", "b.md"},
+	}
+	root.Children = []*StepNode{loop}
+	// No iteration currently in progress — prior one completed, next not started.
+	iter1 := &StepNode{
+		ID:             "fanout",
+		Type:           NodeIteration,
+		Status:         StatusSuccess,
+		Parent:         loop,
+		IterationIndex: 0,
+	}
+	iter2 := &StepNode{
+		ID:             "fanout",
+		Type:           NodeIteration,
+		Status:         StatusPending,
+		Parent:         loop,
+		IterationIndex: 1,
+	}
+	loop.Children = []*StepNode{iter1, iter2}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.cursor = 0
+	rows := m.buildStepRows(root.Children)
+	if len(rows) < 1 {
+		t.Fatalf("expected at least the parent row, got %d", len(rows))
+	}
+	parent := stripANSI(rows[0])
+	if !strings.Contains(parent, "●") {
+		t.Fatalf("selected in-progress container with no active child should still show its own '●', got parent=%q", parent)
+	}
+}
+
 func TestBuildStepRows_SelectedLoopIterationAlignsWithParentLabel(t *testing.T) {
 	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
 	loop := &StepNode{

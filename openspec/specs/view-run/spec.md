@@ -39,6 +39,8 @@ Step types distinguished by glyph SHALL be: shell, headless agent, interactive a
 
 Step statuses SHALL be: `pending`, `in-progress`, `success`, `failed`, `skipped`. The `in-progress` indicator SHALL blink only when a run is currently active; otherwise it renders static (covering steps that were aborted mid-execution and will resume on the next run). Loop "exhausted" outcomes SHALL render as `success`.
 
+When a selected container step (sub-workflow, loop, or iteration) has inline expansion rows rendered beneath it AND at least one of those expansion rows is itself `in-progress`, the selected parent's status indicator SHALL be suppressed (rendered as blank whitespace preserving column alignment). This avoids presenting two simultaneous in-progress indicators for what is conceptually one active execution frontier; the expansion row for the actively running child carries the sole indicator. The step name, type glyph, and any counter on the parent row SHALL continue to render normally.
+
 Status glyphs SHALL be: `●` running, `○` pending, `✓` success, `✗` failed, `⇥` skipped. Type glyphs SHALL be: `$` shell, ⚙️ headless agent, 💬 interactive agent, ↳ sub-workflow, and a distinct glyph for loop (exact symbol is a design choice). Pulse cadence for the running indicator SHALL match the list TUI's 50 ms tick, lerping between the running and dim-running color tokens. Color palette additions (failed red) and reuses are specified in the design document.
 
 #### Scenario: Shell step row
@@ -60,6 +62,14 @@ Status glyphs SHALL be: `●` running, `○` pending, `✓` success, `✗` faile
 #### Scenario: Aborted step does not blink when no run is active
 - **WHEN** a step was interrupted by an earlier run and no run is currently active
 - **THEN** the step's status indicator shows `in-progress` without blinking
+
+#### Scenario: Selected container with active child suppresses its own indicator
+- **WHEN** the selected step is a container (sub-workflow, loop, or iteration) that is itself `in-progress` and its inline expansion rows include at least one child whose status is also `in-progress`
+- **THEN** the parent row's status indicator is rendered as blank whitespace of the same column width as a status glyph, and only the active expansion child's row displays an `in-progress` indicator
+
+#### Scenario: Selected container with no active child keeps its indicator
+- **WHEN** the selected step is an `in-progress` container whose expansion rows contain no `in-progress` child (e.g. a loop between iterations, or one whose current iteration is pending)
+- **THEN** the parent row's `in-progress` status indicator renders normally (blinking during an active run)
 
 #### Scenario: Pending steps from workflow file before execution
 - **WHEN** the run has no audit entries yet but the workflow file is known

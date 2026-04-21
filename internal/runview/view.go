@@ -156,25 +156,44 @@ func (m *Model) buildRenderedStepRows(children []*StepNode) []renderedStepRow {
 	rows := make([]renderedStepRow, 0, len(children))
 	for i, n := range children {
 		isSel := i == m.cursor
+		suppressStatus := false
+		var expansion []renderedStepRow
+		if isSel {
+			expansion = m.buildExpansionRows(n)
+			suppressStatus = n.Status == StatusInProgress && expansionHasInProgressChild(expansion)
+		}
 		rows = append(rows, renderedStepRow{
-			text:       m.renderStepRow(n, isSel),
+			text:       m.renderStepRow(n, isSel, suppressStatus),
 			node:       n,
 			selectable: true,
 		})
-		if isSel {
-			rows = append(rows, m.buildExpansionRows(n)...)
-		}
+		rows = append(rows, expansion...)
 	}
 	return rows
 }
 
-func (m *Model) renderStepRow(n *StepNode, selected bool) string {
+// expansionHasInProgressChild reports whether any expansion row refers to a
+// node whose status is in-progress. Used to suppress the parent's own
+// status indicator so only one in-progress glyph renders at a time.
+func expansionHasInProgressChild(rows []renderedStepRow) bool {
+	for _, r := range rows {
+		if r.node != nil && r.node.Status == StatusInProgress {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Model) renderStepRow(n *StepNode, selected, suppressStatus bool) string {
 	prefix := "   "
 	if selected {
 		prefix = tuistyle.CursorStyle.Render("▶") + "  "
 	}
 
 	typeCol, label, glyph := m.stepRowParts(n)
+	if suppressStatus {
+		glyph = " "
+	}
 
 	style := tuistyle.DimStyle
 	if selected {
