@@ -149,26 +149,28 @@ func findWorkflowByName(name string, bases []string) (string, bool) {
 	}
 
 	for _, b := range bases {
-		wfRoot := filepath.Join(b, "workflows")
-		info, err := os.Stat(wfRoot)
-		if err != nil || !info.IsDir() {
-			continue
-		}
-
-		// Prefer an exact layout match:
-		//   bare  → workflows/<name>.yaml
-		//   ns:n  → workflows/<ns>/<n>.yaml
-		layout := strings.ReplaceAll(name, ":", string(os.PathSeparator))
-		for _, ext := range []string{".yaml", ".yml"} {
-			direct := filepath.Join(wfRoot, layout+ext)
-			if fileExists(direct) {
-				return direct, true
+		for _, rel := range []string{"workflows", filepath.Join(".agent-runner", "workflows")} {
+			wfRoot := filepath.Join(b, rel)
+			info, err := os.Stat(wfRoot)
+			if err != nil || !info.IsDir() {
+				continue
 			}
-		}
 
-		// Fall back to a recursive search for the bare filename.
-		if p := searchTree(wfRoot, bare); p != "" {
-			return p, true
+			// Prefer an exact layout match:
+			//   bare  → workflows/<name>.yaml
+			//   ns:n  → workflows/<ns>/<n>.yaml
+			layout := strings.ReplaceAll(name, ":", string(os.PathSeparator))
+			for _, ext := range []string{".yaml", ".yml"} {
+				direct := filepath.Join(wfRoot, layout+ext)
+				if fileExists(direct) {
+					return direct, true
+				}
+			}
+
+			// Fall back to a recursive search for the bare filename.
+			if p := searchTree(wfRoot, bare); p != "" {
+				return p, true
+			}
 		}
 	}
 	return "", false

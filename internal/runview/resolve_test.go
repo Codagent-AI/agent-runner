@@ -381,3 +381,68 @@ func TestResolveWorkflow_BacktracksFromStatePath(t *testing.T) {
 		t.Fatalf("RepoRoot = %q, want %q", got.RepoRoot, root)
 	}
 }
+
+func TestResolveWorkflow_DiscoveryByName_AgentRunnerWorkflowsDir(t *testing.T) {
+	base := realPath(t, t.TempDir())
+	root := filepath.Join(base, "repo")
+
+	// Workflow lives under .agent-runner/workflows/ (user-defined workflows).
+	wfPath := filepath.Join(root, ".agent-runner", "workflows", "smoke-test.yaml")
+	writeFile(t, wfPath, minimalWorkflowYAML)
+
+	projectDir := filepath.Join(base, "projects", "encoded")
+	sessionDir := filepath.Join(projectDir, "runs", "smoke-test-2026-04-11T09-14-00-000000000Z")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeMeta(t, projectDir, root)
+	chdirTo(t, t.TempDir())
+
+	// State records the .agent-runner/workflows/ relative path, but the
+	// process cwd is elsewhere so direct file resolution fails. The resolver
+	// must fall back to name-based discovery under .agent-runner/workflows/.
+	state := model.RunState{
+		WorkflowFile: ".agent-runner/workflows/smoke-test.yaml",
+		WorkflowName: "smoke-test",
+	}
+	got, ok := ResolveWorkflow(sessionDir, projectDir, &state)
+	if !ok {
+		t.Fatal("expected ResolveWorkflow to find workflow under .agent-runner/workflows/")
+	}
+	if got.AbsPath != filepath.Clean(wfPath) {
+		t.Fatalf("AbsPath = %q, want %q", got.AbsPath, wfPath)
+	}
+}
+
+func TestResolveWorkflow_DiscoveryByName_OldPathFallsBackToAgentRunnerDir(t *testing.T) {
+	base := realPath(t, t.TempDir())
+	root := filepath.Join(base, "repo")
+
+	// Workflow is now under .agent-runner/workflows/ but state has the old
+	// workflows/ relative path (from before the builtin workflows migration).
+	wfPath := filepath.Join(root, ".agent-runner", "workflows", "smoke-test.yaml")
+	writeFile(t, wfPath, minimalWorkflowYAML)
+
+	projectDir := filepath.Join(base, "projects", "encoded")
+	sessionDir := filepath.Join(projectDir, "runs", "smoke-test-2026-04-11T09-14-00-000000000Z")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeMeta(t, projectDir, root)
+	chdirTo(t, t.TempDir())
+
+	// Old-style state: file path points to workflows/smoke-test.yaml which
+	// no longer exists. Name-based discovery should find it under
+	// .agent-runner/workflows/.
+	state := model.RunState{
+		WorkflowFile: "workflows/smoke-test.yaml",
+		WorkflowName: "smoke-test",
+	}
+	got, ok := ResolveWorkflow(sessionDir, projectDir, &state)
+	if !ok {
+		t.Fatal("expected ResolveWorkflow to fall back to .agent-runner/workflows/ by name")
+	}
+	if got.AbsPath != filepath.Clean(wfPath) {
+		t.Fatalf("AbsPath = %q, want %q", got.AbsPath, wfPath)
+	}
+}
