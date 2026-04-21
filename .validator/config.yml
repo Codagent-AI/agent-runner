@@ -1,5 +1,11 @@
 cli:
+  default_preference:
+    - codex
+    - github-copilot
   adapters:
+    codex:
+      allow_tool_use: false
+      thinking_budget: low
     github-copilot:
       allow_tool_use: false
       thinking_budget: low
@@ -23,16 +29,11 @@ entry_points:
       - security-deps:
           command: govulncheck ./...
     reviews:
-      - code-quality:
-          builtin: code-quality
-          model: claude-sonnet-4.6
-      - security-and-errors:
-          builtin: security-and-errors
-          model: gpt-5.3-codex
+      - all-reviewers:
+          builtin: all-reviewers
       - task-compliance:
           builtin: task-compliance
           enabled: false # Opt-in: activate with `agent-validator run --enable-review task-compliance --context-file <task>`
-          model: claude-sonnet-4.6
 
   # Openspec: do not validate open or archived changes, ensure that live specs are 
   # valid even if modified manually (non-strict, allows warnings)

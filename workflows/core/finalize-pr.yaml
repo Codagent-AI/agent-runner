@@ -1,0 +1,41 @@
+name: finalize-pr
+description: "Push PR, wait for CI, fix failures, repeat until green (max 3 fix cycles)"
+
+sessions:
+  - name: lead-agent
+    agent: planner
+
+steps:
+  - id: push-pr
+    session: lead-agent
+    mode: headless
+    prompt: |
+      Invoke codagent:push-pr to commit, push, and create or update the pull request.
+      Prefix any commit messages with [{{step_id}}].
+
+  - id: ci-fix-loop
+    loop:
+      max: 3
+    steps:
+      - id: wait-ci
+        session: resume
+        mode: headless
+        continue_on_failure: true
+        break_if: success
+        prompt: |
+          Invoke codagent:wait-ci to poll CI status and gather review comments.
+
+      - id: fix-pr
+        session: resume
+        mode: headless
+        skip_if: previous_success
+        prompt: |
+          CI has failures or unresolved review comments. Invoke codagent:fix-pr to
+          address them. Prefix any commit messages with [{{step_id}}].
+
+  - id: verify-final
+    session: resume
+    mode: headless
+    prompt: |
+      Invoke codagent:wait-ci to verify the final fix cycle made CI green.
+      Report the final status to the user.

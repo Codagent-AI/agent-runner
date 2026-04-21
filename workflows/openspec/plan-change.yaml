@@ -9,17 +9,20 @@ engine:
   type: openspec
   change_param: change_name
 
+sessions:
+  - name: lead-agent
+    agent: planner
+
 steps:
-  - id: check-clean
+  - id: create
     # agent-validator detect: exit 0 = unvalidated changes present, exit 2 = clean (no changes)
     # todo move to script, add check for git porcelain
-    command: "agent-validator detect; status=$?; if [ $status -eq 2 ]; then exit 0; elif [ $status -eq 0 ]; then echo 'Unvalidated changes detected. Run agent-validator before planning.' >&2; exit 1; else exit $status; fi"
-
-  - id: create
-    command: openspec new change "{{change_name}}"
+    command: |
+      agent-validator detect; status=$?; if [ $status -eq 0 ]; then echo 'Unvalidated changes detected. Run agent-validator before planning.' >&2; exit 1; elif [ $status -ne 2 ]; then exit $status; fi
+      openspec new change "{{change_name}}"
 
   - id: proposal
-    agent: planner
+    session: lead-agent
     prompt: |
       Help the user write a change proposal.
       You MUST use the codagent:propose skill.
@@ -78,12 +81,7 @@ steps:
       Then repeat the delta-apply dry-run from the pre-review-validate step: for every `### Requirement:` header under `## MODIFIED`, `## REMOVED`, or `## RENAMED` (FROM) sections in `openspec/changes/{{change_name}}/specs/<capability>/spec.md`, confirm the exact header exists in `openspec/specs/<capability>/spec.md`. Fix any mismatches before proceeding.
 
   - id: commit-openspec
-    mode: headless
-    session: resume
-    prompt: |
-      Stage everything under openspec/changes/{{change_name}}/ and commit
-      with a clear message like "Add openspec documents for {{change_name}}".
-
-  - id: skip-validator
-    command: agent-validator skip
-
+    command: |
+      git add openspec/changes/{{change_name}}/
+      git commit -m "[{{step_id}}] Add openspec documents for {{change_name}}"
+      agent-validator skip

@@ -15,6 +15,7 @@ steps:
 
       - id: fix-violations
         session: inherit
+        mode: headless
         prompt: |
           The validator found failures. Fix them.
 
@@ -37,7 +38,7 @@ steps:
           full error context before attempting fixes.
 
           When you are done fixing, commit your changes with a clear,
-          descriptive commit message. Then summarize to the user what
+          descriptive commit message prefixed with [{{step_id}}]. Then summarize to the user what
           you fixed, what you skipped, and why.
 
           <validator-output>

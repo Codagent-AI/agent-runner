@@ -140,6 +140,20 @@ func TestStepSchemaExtensions(t *testing.T) {
 		}
 	})
 
+	t.Run("accepts interactive mode on a shell step", func(t *testing.T) {
+		s := Step{ID: "s", Command: "read name", Session: SessionNew, Mode: ModeInteractive}
+		if err := s.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("accepts headless mode on a shell step", func(t *testing.T) {
+		s := Step{ID: "s", Command: "echo hi", Session: SessionNew, Mode: ModeHeadless}
+		if err := s.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
 	t.Run("accepts capture on a headless step", func(t *testing.T) {
 		s := Step{ID: "s", Agent: "headless_base", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, Capture: "output"}
 		if err := s.Validate(nil); err != nil {
@@ -162,6 +176,17 @@ func TestStepSchemaExtensions(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "capture") {
 			t.Fatalf("expected capture error, got: %v", err)
+		}
+	})
+
+	t.Run("rejects capture on an interactive shell step", func(t *testing.T) {
+		s := Step{ID: "s", Command: "read name", Session: SessionNew, Mode: ModeInteractive, Capture: "output"}
+		err := s.Validate(nil)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "capture") || !strings.Contains(err.Error(), "interactive") {
+			t.Fatalf("expected interactive capture error, got: %v", err)
 		}
 	})
 
@@ -195,6 +220,21 @@ func TestStepSchemaExtensions(t *testing.T) {
 
 	t.Run("rejects skip_if with invalid value", func(t *testing.T) {
 		s := Step{ID: "s", Command: "echo", Session: SessionNew, SkipIf: "always"}
+		err := s.Validate(nil)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("accepts skip_if with sh: prefix", func(t *testing.T) {
+		s := Step{ID: "s", Command: "echo", Session: SessionNew, SkipIf: "sh: test -z foo"}
+		if err := s.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("rejects skip_if with empty sh: command", func(t *testing.T) {
+		s := Step{ID: "s", Command: "echo", Session: SessionNew, SkipIf: "sh:  "}
 		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
@@ -469,6 +509,99 @@ func TestWorkflowSchema(t *testing.T) {
 		w.ApplyDefaults()
 		if err := w.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestIsNamedSession(t *testing.T) {
+	t.Run("returns false for empty string", func(t *testing.T) {
+		if IsNamedSession("") {
+			t.Fatal("expected false for empty string")
+		}
+	})
+	t.Run("returns false for new", func(t *testing.T) {
+		if IsNamedSession(SessionNew) {
+			t.Fatal("expected false for 'new'")
+		}
+	})
+	t.Run("returns false for resume", func(t *testing.T) {
+		if IsNamedSession(SessionResume) {
+			t.Fatal("expected false for 'resume'")
+		}
+	})
+	t.Run("returns false for inherit", func(t *testing.T) {
+		if IsNamedSession(SessionInherit) {
+			t.Fatal("expected false for 'inherit'")
+		}
+	})
+	t.Run("returns true for a user-defined name", func(t *testing.T) {
+		if !IsNamedSession("planner") {
+			t.Fatal("expected true for 'planner'")
+		}
+	})
+	t.Run("returns true for another user-defined name", func(t *testing.T) {
+		if !IsNamedSession("implementor") {
+			t.Fatal("expected true for 'implementor'")
+		}
+	})
+}
+
+func TestNamedSessionStepValidation(t *testing.T) {
+	t.Run("accepts a named session step with prompt and no agent", func(t *testing.T) {
+		s := Step{ID: "s", Prompt: "do it", Session: "planner"}
+		if err := s.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("accepts capture on a named session step (profile may resolve headless)", func(t *testing.T) {
+		s := Step{ID: "s", Prompt: "do it", Session: "planner", Capture: "out"}
+		if err := s.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("rejects named session step with agent field", func(t *testing.T) {
+		s := Step{ID: "s", Prompt: "do it", Session: "planner", Agent: "some-agent"}
+		err := s.Validate(nil)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "agent") {
+			t.Fatalf("expected agent error, got: %v", err)
+		}
+	})
+
+	t.Run("workflow applies no session default to named session step", func(t *testing.T) {
+		w := Workflow{
+			Name: "test",
+			Steps: []Step{
+				{ID: "s1", Prompt: "plan", Session: "planner"},
+			},
+		}
+		w.ApplyDefaults()
+		if w.Steps[0].Session != "planner" {
+			t.Fatalf("expected session 'planner' unchanged, got %q", w.Steps[0].Session)
+		}
+	})
+}
+
+func TestWorkflowSessions(t *testing.T) {
+	t.Run("accepts workflow with sessions block", func(t *testing.T) {
+		w := Workflow{
+			Name:     "test",
+			Sessions: []SessionDecl{{Name: "planner", Agent: "planner-profile"}},
+			Steps:    []Step{{ID: "s1", Prompt: "do it", Session: "planner"}},
+		}
+		w.ApplyDefaults()
+		if err := w.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(w.Sessions) != 1 {
+			t.Fatal("expected 1 session declaration")
+		}
+		if w.Sessions[0].Name != "planner" || w.Sessions[0].Agent != "planner-profile" {
+			t.Fatal("session declaration not preserved")
 		}
 	})
 }

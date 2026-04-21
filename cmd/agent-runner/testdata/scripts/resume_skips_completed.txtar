@@ -31,7 +31,7 @@ stdout 'not-rerun'
 exec cat result.txt
 stdout 'step2-ok'
 
--- workflows/workflow.yaml --
+-- .agent-runner/workflows/workflow.yaml --
 name: e2e-resume
 steps:
   - id: create-marker

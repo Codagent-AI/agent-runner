@@ -21,9 +21,9 @@ func TestLoadOrGenerate_CreatesDefault(t *testing.T) {
 		t.Fatal("expected config file to be created")
 	}
 
-	// Should have four default profiles.
-	if len(cfg.Profiles) != 4 {
-		t.Fatalf("expected 4 profiles, got %d", len(cfg.Profiles))
+	// Should have five default profiles.
+	if len(cfg.Profiles) != 5 {
+		t.Fatalf("expected 5 profiles, got %d", len(cfg.Profiles))
 	}
 
 	// Verify interactive_base.
@@ -55,6 +55,18 @@ func TestLoadOrGenerate_CreatesDefault(t *testing.T) {
 	if im == nil || im.Extends != "headless_base" {
 		t.Fatalf("expected implementor to extend headless_base, got %+v", im)
 	}
+
+	// Verify summarizer is a standalone base profile.
+	sum := cfg.Profiles["summarizer"]
+	if sum == nil {
+		t.Fatal("expected summarizer profile")
+	}
+	if sum.Extends != "" {
+		t.Fatalf("expected summarizer to be standalone, got extends=%q", sum.Extends)
+	}
+	if sum.DefaultMode != "headless" || sum.CLI != "claude" || sum.Model != "haiku" || sum.Effort != "low" {
+		t.Fatalf("unexpected summarizer: %+v", sum)
+	}
 }
 
 func TestLoadOrGenerate_LoadsExisting(t *testing.T) {
@@ -80,6 +92,14 @@ func TestLoadOrGenerate_LoadsExisting(t *testing.T) {
 	p := cfg.Profiles["custom"]
 	if p == nil || p.DefaultMode != "headless" || p.CLI != "codex" || p.Model != "o3" {
 		t.Fatalf("unexpected profile: %+v", p)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading existing config: %v", err)
+	}
+	if string(got) != content {
+		t.Fatalf("expected existing config to remain untouched\n got: %q\nwant: %q", string(got), content)
 	}
 }
 
@@ -231,6 +251,49 @@ func TestValidation_InvalidEffort(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid effort") {
 		t.Fatalf("expected error about invalid effort, got: %v", err)
+	}
+}
+
+func TestValidation_InvalidCLI(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `profiles:
+  bad:
+    default_mode: headless
+    cli: unknown
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadOrGenerate(path)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "invalid cli") {
+		t.Fatalf("expected error about invalid cli, got: %v", err)
+	}
+}
+
+func TestValidation_CopilotCLIAccepted(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `profiles:
+  copilot_base:
+    default_mode: headless
+    cli: copilot
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadOrGenerate(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	p := cfg.Profiles["copilot_base"]
+	if p == nil || p.CLI != "copilot" {
+		t.Fatalf("expected copilot profile, got %+v", p)
 	}
 }
 
@@ -484,5 +547,14 @@ func TestResolve_DefaultConfigProfiles(t *testing.T) {
 	}
 	if rp.DefaultMode != "headless" || rp.CLI != "claude" || rp.Model != "opus" || rp.Effort != "high" {
 		t.Fatalf("unexpected implementor resolution: %+v", rp)
+	}
+
+	// Summarizer should resolve to its standalone low-cost defaults.
+	rp, err = cfg.Resolve("summarizer")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rp.DefaultMode != "headless" || rp.CLI != "claude" || rp.Model != "haiku" || rp.Effort != "low" {
+		t.Fatalf("unexpected summarizer resolution: %+v", rp)
 	}
 }

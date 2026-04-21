@@ -5,11 +5,15 @@ TBD - created by archiving change move-state-file. Update Purpose after archive.
 ## Requirements
 ### Requirement: Resume by session ID
 
-The CLI SHALL accept a `--resume` flag that optionally takes a session ID. When `--resume` is passed without a session ID, it SHALL launch the run list TUI. When `--resume <id>` is passed with a session ID, it SHALL resume workflow execution from that session's saved state.
+The CLI SHALL accept a `--resume` flag that optionally takes a session ID. When `--resume` is passed without a session ID, it SHALL launch the run list TUI. When `--resume <id>` is passed with a session ID for an unfinished run, it SHALL resume workflow execution from that session's saved state. When `--resume <id>` is passed with a session ID for a completed run, it SHALL open the run view for that session in inspect mode (the same read-only view as `--inspect <id>`) instead of resuming.
 
-#### Scenario: Resume with explicit session ID
-- **WHEN** `--resume <id>` is passed and a session with that ID exists
+#### Scenario: Resume with explicit session ID on an unfinished run
+- **WHEN** `--resume <id>` is passed and the matching session's saved state indicates the workflow is not yet complete
 - **THEN** the runner resumes workflow execution from that session's saved state
+
+#### Scenario: Resume with explicit session ID on a completed run opens run view
+- **WHEN** `--resume <id>` is passed and the matching session's saved state indicates the workflow has already completed (either because `completed` is true, or because no incomplete steps remain)
+- **THEN** the runner opens the run view for that session in inspect mode so the user can read its recorded output, and exits when the view is dismissed
 
 #### Scenario: Resume without session ID launches TUI
 - **WHEN** `--resume` is passed without a session ID

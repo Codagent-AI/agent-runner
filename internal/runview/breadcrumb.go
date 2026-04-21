@@ -2,10 +2,8 @@ package runview
 
 import (
 	"fmt"
-	"math"
+	"sort"
 	"strings"
-
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/codagent/agent-runner/internal/tuistyle"
 )
@@ -47,17 +45,15 @@ func (m *Model) renderBreadcrumb() string {
 	}
 	suffix += "  ·  "
 
-	return "  " + crumbStr +
+	return tuistyle.ScreenMargin + crumbStr +
 		tuistyle.DimStyle.Render(suffix) +
 		m.styledRunStatus()
 }
 
 func (m *Model) styledRunStatus() string {
-	// Live-run mode: pulse while running, then show result.
+	// Live-run mode: blink while running, then show result.
 	if m.running {
-		t := (math.Sin(m.pulsePhase) + 1) / 2
-		c := tuistyle.LerpColor("#4ade80", "#2d8f57", t)
-		return lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Render("running")
+		return tuistyle.StatusSuccess.Render("running")
 	}
 	if m.liveResult != "" {
 		switch m.liveResult {
@@ -69,9 +65,7 @@ func (m *Model) styledRunStatus() string {
 	}
 	// Inspect / list mode: use the run-lock and root status.
 	if m.active {
-		t := (math.Sin(m.pulsePhase) + 1) / 2
-		c := tuistyle.LerpColor("#4ade80", "#2d8f57", t)
-		return lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Render("active")
+		return tuistyle.StatusSuccess.Render("active")
 	}
 	status := m.rootStatus()
 	switch status {
@@ -80,7 +74,8 @@ func (m *Model) styledRunStatus() string {
 	case StatusSuccess:
 		return tuistyle.StatusSuccess.Render("completed")
 	default:
-		return tuistyle.StatusInactive.Render("inactive")
+		return tuistyle.StatusInactive.Render("inactive") +
+			tuistyle.DimStyle.Render(" (r to resume)")
 	}
 }
 
@@ -131,21 +126,26 @@ func (m *Model) renderSubWorkflowHeader() string {
 		params = container.StaticParams
 	}
 	if len(params) > 0 {
-		for k, v := range params {
-			paramParts = append(paramParts, k+" = "+v)
+		keys := make([]string, 0, len(params))
+		for k := range params {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			paramParts = append(paramParts, k+" = "+params[k])
 		}
 	}
 
 	bar := tuistyle.InsetBarStyle.Render("▍ ")
 
 	var b strings.Builder
-	b.WriteString("  ")
+	b.WriteString(tuistyle.ScreenMargin)
 	b.WriteString(bar)
 	b.WriteString(tuistyle.SectionStyle.Render("workflow: "))
 	b.WriteString(tuistyle.NormalStyle.Render(name))
 	b.WriteString("\n")
 	if len(paramParts) > 0 {
-		b.WriteString("  ")
+		b.WriteString(tuistyle.ScreenMargin)
 		b.WriteString(bar)
 		b.WriteString(tuistyle.SectionStyle.Render("params:   "))
 		b.WriteString(tuistyle.NormalStyle.Render(strings.Join(paramParts, ", ")))

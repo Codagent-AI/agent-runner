@@ -74,6 +74,19 @@ agent-runner review-pr 42
 
 Parameters are positional -- they map to the `params` array in order.
 
+### Built-in variables
+
+In addition to workflow-declared `params` and captured variables, the runner
+exposes a small set of built-in variables that every step can reference:
+
+| Variable          | Value                                                                                   |
+| ----------------- | --------------------------------------------------------------------------------------- |
+| `{{session_dir}}` | Absolute path of the current run's session directory (`~/.agent-runner/projects/<encoded-cwd>/runs/<run-id>/`). Useful for pointing agents at per-step output files under `<session_dir>/output/` or the run's `audit.log`. |
+| `{{step_id}}`     | The current step's `id`. |
+
+Built-ins have the lowest interpolation precedence: a workflow `param` or
+captured variable with the same name shadows the built-in.
+
 ## Step modes
 
 ### Interactive
@@ -234,6 +247,32 @@ Iterate over a list of files matching a glob pattern:
 
 The `over` field accepts a glob pattern, expanded at runtime. Each match is bound to the variable named in `as`, available via `{{task_file}}` interpolation in nested steps. Each iteration gets a fresh context for session IDs and captured variables.
 
+### Exposing the iteration index
+
+Both counted and for-each loops can publish the zero-based iteration index as a
+template variable using `as_index`:
+
+```yaml
+- id: steps
+  loop:
+    max: 3
+    as_index: i
+  steps:
+    - id: log
+      command: echo "step {{i}}"
+```
+
+```yaml
+- id: per-task
+  loop:
+    over: "tasks/*.md"
+    as: task_file
+    as_index: i
+  steps:
+    - id: run
+      command: echo "{{i}}: {{task_file}}"
+```
+
 ### Loop early exit with break_if
 
 `break_if` is evaluated after a step executes:
@@ -248,7 +287,7 @@ Execution continues with the next step after the loop.
 Complex patterns can be extracted into reusable workflow files:
 
 ```yaml
-# workflows/implement-task.yaml
+# .agent-runner/workflows/implement-task.yaml
 name: implement-task
 params:
   - name: task_file
@@ -309,6 +348,17 @@ Skip a step based on the previous step's outcome:
 ```
 
 When `skip_if: previous_success` is set, the step is skipped if the previous step succeeded. This pairs with `continue_on_failure` to create conditional execution: run the fix step only when the validator fails.
+
+Alternatively, use `skip_if: 'sh: <command>'` to skip based on an arbitrary shell expression. The command is interpolated with `{{params}}` and captured vars, then run through `/bin/sh`. The step is skipped when the command exits 0.
+
+```yaml
+- id: session-report
+  session: resume
+  prompt: "Run the session-report skill."
+  skip_if: 'sh: test "{{run_session_report}}" != "true"'
+```
+
+Unlike `previous_success`, the shell form is self-contained and is allowed on the first step in a scope (workflow or loop body).
 
 ## Output capture
 
@@ -457,7 +507,7 @@ The flokay workflow (`workflows/flokay.yaml`) orchestrates the full change lifec
 | `archive-verify` | shell | Skip validator for archive-only changes |
 | `finalize` | headless (resume) | Push PR, wait for CI, fix failures |
 
-The `implement` step invokes `implement-change.yaml`, which loops over task files and for each one invokes `implement-task.yaml`, which itself invokes `run-validator.yaml` for the verify-fix retry loop.
+The `implement` step invokes `implement-change.yaml`, which loops over task files and for each one invokes `../core/implement-task.yaml`, which itself invokes `run-validator.yaml` within the `core` builtin namespace for the verify-fix retry loop.
 
 Run it:
 

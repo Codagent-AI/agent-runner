@@ -2,8 +2,6 @@ package runview
 
 import (
 	"fmt"
-	"math"
-	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -13,9 +11,17 @@ import (
 )
 
 var (
-	shellGlyphStyle = lipgloss.NewStyle().Foreground(tuistyle.InactiveAmber)
-	subwfGlyphStyle = lipgloss.NewStyle().Foreground(tuistyle.AccentCyan)
+	shellGlyphStyle   = lipgloss.NewStyle().Foreground(tuistyle.InactiveAmber)
+	loopGlyphStyle    = lipgloss.NewStyle().Foreground(tuistyle.AccentCyan)
+	subwfGlyphStyle   = lipgloss.NewStyle().Foreground(tuistyle.AccentCyan)
+	selectedStepStyle = lipgloss.NewStyle().Foreground(tuistyle.SuccessGreen).Bold(true)
 )
+
+type renderedStepRow struct {
+	text       string
+	node       *StepNode
+	selectable bool
+}
 
 func (m *Model) View() string {
 	if m.showLegend {
@@ -27,7 +33,8 @@ func (m *Model) View() string {
 
 	var b strings.Builder
 
-	b.WriteString("\n  ")
+	b.WriteString("\n")
+	b.WriteString(tuistyle.ScreenMargin)
 	b.WriteString(tuistyle.HeaderStyle.Render("Agent Runner"))
 	b.WriteString("\n\n")
 	b.WriteString(m.renderBreadcrumb())
@@ -44,7 +51,7 @@ func (m *Model) View() string {
 
 	children := m.currentChildren()
 	if len(children) == 0 {
-		b.WriteString("  ")
+		b.WriteString(tuistyle.ScreenMargin)
 		b.WriteString(tuistyle.DimStyle.Render("No steps to display."))
 		b.WriteString("\n")
 	} else {
@@ -52,8 +59,14 @@ func (m *Model) View() string {
 	}
 
 	if m.loadErr != "" {
-		b.WriteString("\n  ")
+		b.WriteString("\n")
+		b.WriteString(tuistyle.ScreenMargin)
 		b.WriteString(tuistyle.DimStyle.Render("Error: " + m.loadErr))
+	}
+	if m.notice != "" {
+		b.WriteString("\n")
+		b.WriteString(tuistyle.ScreenMargin)
+		b.WriteString(tuistyle.DimStyle.Render(m.notice))
 	}
 
 	b.WriteString("\n")
@@ -70,39 +83,10 @@ func (m *Model) renderRule() string {
 }
 
 func (m *Model) renderTwoColumn(children []*StepNode) string {
-	rows := m.buildStepRows(children)
+	renderedRows := m.buildRenderedStepRows(children)
+	rows := rowTexts(renderedRows)
+	listWidth, rightWidth, rows := twoColumnPaneWidths(m.termWidth, rows)
 
-	// Cap the list column so one pathologically long row (e.g. an iteration
-	// binding value that happens to be a full file path) can't starve the
-	// detail pane. Prefer at most ~45% of the terminal for the list.
-	listCap := m.termWidth / 2
-	if listCap < 30 {
-		listCap = 30
-	}
-
-	maxRowWidth := 0
-	for _, r := range rows {
-		w := lipgloss.Width(r)
-		if w > maxRowWidth {
-			maxRowWidth = w
-		}
-	}
-	if maxRowWidth > listCap {
-		maxRowWidth = listCap
-		for i, r := range rows {
-			if lipgloss.Width(r) > listCap {
-				rows[i] = runewidth.Truncate(tuistyle.Sanitize(r), listCap, "…")
-			}
-		}
-	}
-
-	listWidth := maxRowWidth + 4
-	// Divider "│ " consumes 2 columns between the panes.
-	detailWidth := m.termWidth - listWidth - 2 - 4
-	if detailWidth < 20 {
-		detailWidth = 20
-	}
-	m.detailWidth = detailWidth
 	divider := tuistyle.DividerStyle.Render("│ ")
 
 	bodyHeight := m.bodyHeight()
@@ -110,25 +94,41 @@ func (m *Model) renderTwoColumn(children []*StepNode) string {
 		bodyHeight = 20
 	}
 
-	sel := m.selectedNode()
-	detail := m.renderDetail(sel)
-	detailLines := strings.Split(detail, "\n")
+	// Build log lines for the right pane.
+	logLines, _ := buildLogLines(
+		children,
+		m.pendingSelected(),
+		rightWidth,
+		m.loadedFull,
+		m.pulsePhase,
+		m.running || m.active,
+		m.resolverCfg,
+	)
 
-	offset := m.detailOffset
-	maxOffset := max(0, len(detailLines)-bodyHeight)
+	maxOffset := max(0, len(logLines)-bodyHeight)
+	offset := m.logOffset
 	if offset > maxOffset {
 		offset = maxOffset
 	}
-	visibleDetail := detailLines
-	if offset > 0 && offset < len(detailLines) {
-		visibleDetail = detailLines[offset:]
+	var visibleLines []string
+	if offset > 0 && offset <= len(logLines) {
+		visibleLines = logLines[offset:]
+	} else {
+		visibleLines = logLines
+	}
+
+	selectedRow := renderedRowIndexForNode(renderedRows, m.selectedNode())
+	leftOffset := leftPaneOffset(selectedRow, len(renderedRows), bodyHeight)
+	visibleRows := rows
+	if leftOffset > 0 && leftOffset <= len(rows) {
+		visibleRows = rows[leftOffset:]
 	}
 
 	var b strings.Builder
 	for i := 0; i < bodyHeight; i++ {
 		leftPart := ""
-		if i < len(rows) {
-			leftPart = rows[i]
+		if i < len(visibleRows) {
+			leftPart = visibleRows[i]
 		}
 		leftPad := listWidth - lipgloss.Width(leftPart)
 		if leftPad < 0 {
@@ -136,8 +136,8 @@ func (m *Model) renderTwoColumn(children []*StepNode) string {
 		}
 
 		rightPart := ""
-		if i < len(visibleDetail) {
-			rightPart = fitDetailLine(visibleDetail[i], detailWidth)
+		if i < len(visibleLines) {
+			rightPart = fitDetailLine(visibleLines[i], rightWidth)
 		}
 
 		b.WriteString(leftPart)
@@ -150,64 +150,168 @@ func (m *Model) renderTwoColumn(children []*StepNode) string {
 }
 
 func (m *Model) buildStepRows(children []*StepNode) []string {
-	rows := make([]string, len(children))
+	return rowTexts(m.buildRenderedStepRows(children))
+}
+
+func (m *Model) buildRenderedStepRows(children []*StepNode) []renderedStepRow {
+	rows := make([]renderedStepRow, 0, len(children))
 	for i, n := range children {
 		isSel := i == m.cursor
-		rows[i] = m.renderStepRow(n, isSel)
+		suppressStatus := false
+		var expansion []renderedStepRow
+		if isSel {
+			expansion = m.buildExpansionRows(n)
+			suppressStatus = n.Status == StatusInProgress && expansionHasInProgressChild(expansion)
+		}
+		rows = append(rows, renderedStepRow{
+			text:       m.renderStepRow(n, isSel, suppressStatus),
+			node:       n,
+			selectable: true,
+		})
+		rows = append(rows, expansion...)
 	}
 	return rows
 }
 
-func (m *Model) renderStepRow(n *StepNode, selected bool) string {
+// expansionHasInProgressChild reports whether any expansion row refers to a
+// node whose status is in-progress. Used to suppress the parent's own
+// status indicator so only one in-progress glyph renders at a time.
+func expansionHasInProgressChild(rows []renderedStepRow) bool {
+	for _, r := range rows {
+		if r.node != nil && r.node.Status == StatusInProgress {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Model) renderStepRow(n *StepNode, selected, suppressStatus bool) string {
 	prefix := "   "
 	if selected {
 		prefix = tuistyle.CursorStyle.Render("▶") + "  "
 	}
 
-	glyph := m.statusGlyph(n)
-	name := n.ID
-	suffix := ""
-	typeSuffix := ""
-
-	switch n.Type {
-	case NodeLoop:
-		total := m.loopTotal(n)
-		if total > 0 {
-			suffix = fmt.Sprintf(" (%d/%d)", n.IterationsCompleted, total)
-		}
-	case NodeIteration:
-		name = fmt.Sprintf("iter %d", n.IterationIndex+1)
-		if n.BindingValue != "" {
-			name += "   " + filepath.Base(n.BindingValue)
-		}
-	default:
-		typeSuffix = typeGlyph(n.Type)
+	typeCol, label, glyph := m.stepRowParts(n)
+	if suppressStatus {
+		glyph = " "
 	}
 
-	style := tuistyle.DimStyle
+	style := tuistyle.NormalStyle
 	if selected {
-		style = tuistyle.SelectedStyle
+		style = selectedStepStyle
 	}
 	if n.Status == StatusFailed {
 		style = tuistyle.StatusFailed
 	}
 
-	out := prefix + glyph + "  " + style.Render(name+suffix)
-	if typeSuffix != "" {
-		out += " " + typeSuffix
+	return prefix + typeCol + style.Render(label) + "  " + glyph
+}
+
+func (m *Model) buildExpansionRows(selected *StepNode) []renderedStepRow {
+	children := m.expansionChildren(selected)
+	rows := make([]renderedStepRow, 0, len(children))
+	for _, current := range children {
+		rows = append(rows, renderedStepRow{
+			text:       m.renderExpansionRow(current, 1),
+			node:       current,
+			selectable: false,
+		})
 	}
-	return out
+	return rows
+}
+
+func (m *Model) expansionChildren(selected *StepNode) []*StepNode {
+	if selected == nil || !selected.IsContainer() {
+		return nil
+	}
+	target := selected.Drilldown()
+	if target.Type == NodeSubWorkflow && !target.SubLoaded && len(target.Children) == 0 && target.ErrorMessage == "" {
+		if err := m.tree.EnsureSubWorkflowLoaded(target); err != nil {
+			if target.ErrorMessage == "" {
+				target.ErrorMessage = err.Error()
+			}
+			return nil
+		}
+	}
+	return target.Children
+}
+
+func (m *Model) renderExpansionRow(n *StepNode, depth int) string {
+	typeCol, label, glyph := m.stepRowParts(n)
+	return "   " + strings.Repeat("  ", depth) + typeCol + tuistyle.NormalStyle.Render(label) + "  " + glyph
+}
+
+func rowTexts(rows []renderedStepRow) []string {
+	texts := make([]string, len(rows))
+	for i, row := range rows {
+		texts[i] = row.text
+	}
+	return texts
+}
+
+func renderedRowIndexForNode(rows []renderedStepRow, node *StepNode) int {
+	if node == nil {
+		return 0
+	}
+	for i, row := range rows {
+		if row.selectable && row.node == node {
+			return i
+		}
+	}
+	return 0
+}
+
+func leftPaneOffset(selectedRow, totalRows, bodyHeight int) int {
+	if bodyHeight <= 0 || totalRows <= bodyHeight || selectedRow < bodyHeight {
+		return 0
+	}
+	maxOffset := totalRows - bodyHeight
+	offset := selectedRow - bodyHeight + 1
+	if offset > maxOffset {
+		return maxOffset
+	}
+	return offset
+}
+
+func (m *Model) stepRowParts(n *StepNode) (typeCol, label, glyph string) {
+	glyph = m.statusGlyph(n)
+	label = n.ID
+	suffix := ""
+	typePrefix := ""
+
+	switch n.Type {
+	case NodeLoop:
+		typePrefix = typeGlyph(n.Type)
+		total := loopTotal(n)
+		if total > 0 {
+			suffix = fmt.Sprintf(" (%d/%d)", n.IterationsCompleted, total)
+		}
+	case NodeIteration:
+		typePrefix = typeGlyph(n.Type)
+		label = fmt.Sprintf("iter %d", n.IterationIndex+1)
+	default:
+		typePrefix = typeGlyph(n.Type)
+	}
+	label = truncateSidebarName(label) + suffix
+
+	typeCol = "   "
+	if typePrefix != "" {
+		typeCol = typePrefix + "  "
+	}
+
+	return typeCol, label, glyph
 }
 
 func (m *Model) statusGlyph(n *StepNode) string {
 	switch n.Status {
 	case StatusInProgress:
 		if (m.active || m.running) && !n.Aborted {
-			t := (math.Sin(m.pulsePhase) + 1) / 2
-			c := tuistyle.LerpColor("#4ade80", "#2d8f57", t)
-			return lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Render("●")
+			if tuistyle.BlinkOn(m.pulsePhase) {
+				return tuistyle.StatusSuccess.Render("●")
+			}
+			return tuistyle.BlinkHidden("●")
 		}
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("#4ade80")).Render("●")
+		return tuistyle.StatusSuccess.Render("●")
 	case StatusPending:
 		return tuistyle.StatusInactive.Render("○")
 	case StatusSuccess:
@@ -221,17 +325,23 @@ func (m *Model) statusGlyph(n *StepNode) string {
 }
 
 func typeGlyph(t NodeType) string {
+	raw := blockTypeGlyph(t)
 	switch t {
 	case NodeShell:
-		return shellGlyphStyle.Render("$")
-	case NodeHeadlessAgent:
-		return subwfGlyphStyle.Render("⚙")
-	case NodeInteractiveAgent:
-		return subwfGlyphStyle.Render("❯")
-	case NodeSubWorkflow:
-		return subwfGlyphStyle.Render("↳")
+		return shellGlyphStyle.Render(raw)
+	case NodeLoop, NodeIteration:
+		return loopGlyphStyle.Render(raw)
+	case NodeHeadlessAgent, NodeInteractiveAgent, NodeSubWorkflow:
+		return subwfGlyphStyle.Render(raw)
 	}
 	return ""
+}
+
+func truncateSidebarName(name string) string {
+	if runewidth.StringWidth(name) <= 20 {
+		return name
+	}
+	return runewidth.Truncate(name, 18, "…")
 }
 
 func (m *Model) renderHelpBar() string {
@@ -244,33 +354,38 @@ func (m *Model) renderHelpBar() string {
 	} else {
 		parts = append(parts, "↑↓ step")
 	}
-	parts = append(parts, "pgup/pgdn scroll")
+	parts = append(parts, "j/k scroll")
 
 	if sel != nil {
 		switch sel.Type {
 		case NodeLoop, NodeSubWorkflow, NodeIteration:
 			parts = append(parts, "enter drill")
 		case NodeHeadlessAgent, NodeInteractiveAgent:
-			if sel.SessionID != "" {
+			if sel.SessionID != "" && !m.running {
 				parts = append(parts, "enter resume")
 			}
 		}
 	}
 
+	if !m.running {
+		parts = append(parts, "esc back")
+	}
+
+	if m.canResumeRun() {
+		parts = append(parts, "r resume")
+	}
+
 	if m.selectedNodeHasTruncatedOutput() {
-		parts = append(parts, "g load full")
+		parts = append(parts, "g full output")
 	}
 
-	if m.running && !m.autoFollow {
-		parts = append(parts, "l live")
-	}
-	if !m.tailFollow {
-		parts = append(parts, "End tail")
+	if !m.autoFollow {
+		parts = append(parts, "l follow")
 	}
 
-	parts = append(parts, "? legend", "esc back", "q quit")
+	parts = append(parts, "? legend", "q quit")
 
-	return "  " + tuistyle.HelpStyle.Render(strings.Join(parts, "   "))
+	return tuistyle.ScreenMargin + tuistyle.HelpStyle.Render(strings.Join(parts, "   "))
 }
 
 func (m *Model) selectedNodeHasTruncatedOutput() bool {
@@ -278,32 +393,54 @@ func (m *Model) selectedNodeHasTruncatedOutput() bool {
 	if n == nil {
 		return false
 	}
-	if m.loadedFull[n] {
+	if m.loadedFull[n.NodeKey()] {
 		return false
 	}
 	if n.Type != NodeShell && n.Type != NodeHeadlessAgent {
 		return false
 	}
-	t := truncateOutput(n.Stdout)
-	return t.Truncated
+	return truncateOutput(n.Stdout).Truncated || truncateOutput(n.Stderr).Truncated
 }
 
-// fitDetailLine fits one detail-pane line into width visible columns. If the
-// line already fits, it is returned unchanged (preserving any embedded ANSI
-// escapes). If it overflows, styling is stripped and the plain text is
-// truncated with an ellipsis — truncating the styled form risks cutting an
-// ANSI escape in half, which corrupts rendering for everything that follows.
-//
-// Trailing padding is not emitted: each row ends with a newline that resets
-// the terminal cursor to column 0, so column alignment is unaffected.
-func fitDetailLine(s string, width int) string {
-	if width <= 0 {
-		return ""
+func twoColumnPaneWidths(termWidth int, rows []string) (listWidth, rightWidth int, displayRows []string) {
+	if termWidth <= 0 {
+		return 4, 80, rows
 	}
-	if lipgloss.Width(s) <= width {
-		return s
+
+	// Cap the list column so one pathologically long row can't starve the
+	// log pane. Prefer at most ~45% of the terminal for the list.
+	listCap := termWidth / 2
+	if listCap < 30 {
+		listCap = 30
 	}
-	return runewidth.Truncate(tuistyle.Sanitize(s), width, "…")
+
+	maxRowWidth := 0
+	for _, r := range rows {
+		w := lipgloss.Width(r)
+		if w > maxRowWidth {
+			maxRowWidth = w
+		}
+	}
+	displayRows = rows
+	if maxRowWidth > listCap {
+		maxRowWidth = listCap
+		displayRows = make([]string, len(rows))
+		for i, r := range rows {
+			if lipgloss.Width(r) > listCap {
+				displayRows[i] = runewidth.Truncate(tuistyle.Sanitize(r), listCap, "…")
+			} else {
+				displayRows[i] = r
+			}
+		}
+	}
+
+	listWidth = maxRowWidth + 4
+	// Divider "│ " consumes 2 columns between the panes.
+	rightWidth = termWidth - listWidth - 2 - 4
+	if rightWidth < 20 {
+		rightWidth = 20
+	}
+	return listWidth, rightWidth, displayRows
 }
 
 func (m *Model) bodyHeight() int {
@@ -323,14 +460,17 @@ func (m *Model) bodyHeight() int {
 
 func (m *Model) renderQuitConfirm() string {
 	var b strings.Builder
-	b.WriteString("\n\n  ")
+	b.WriteString("\n\n")
+	b.WriteString(tuistyle.ScreenMargin)
 	b.WriteString(tuistyle.HeaderStyle.Render("Agent Runner"))
 	b.WriteString("\n\n")
-	b.WriteString("  ")
+	b.WriteString(tuistyle.ScreenMargin)
 	b.WriteString(tuistyle.DimStyle.Render("The workflow is still running. Quitting will close the TUI"))
-	b.WriteString("\n  ")
+	b.WriteString("\n")
+	b.WriteString(tuistyle.ScreenMargin)
 	b.WriteString(tuistyle.DimStyle.Render("and wait for the current step to finish before exiting."))
-	b.WriteString("\n\n  ")
+	b.WriteString("\n\n")
+	b.WriteString(tuistyle.ScreenMargin)
 	b.WriteString(tuistyle.NormalStyle.Render("Quit anyway?  "))
 	b.WriteString(tuistyle.SelectedStyle.Render("[y]es"))
 	b.WriteString(tuistyle.NormalStyle.Render("  "))
@@ -341,32 +481,35 @@ func (m *Model) renderQuitConfirm() string {
 
 func (m *Model) renderLegend() string {
 	var b strings.Builder
-	b.WriteString("\n  ")
+	b.WriteString("\n")
+	b.WriteString(tuistyle.ScreenMargin)
 	b.WriteString(tuistyle.HeaderStyle.Render("Legend"))
 	b.WriteString("\n\n")
 
-	b.WriteString("  ")
+	b.WriteString(tuistyle.ScreenMargin)
 	b.WriteString(tuistyle.SelectedStyle.Render("Status Glyphs"))
 	b.WriteString("\n\n")
-	b.WriteString("  ●  running\n")
-	b.WriteString("  ○  pending\n")
-	b.WriteString("  ✓  success\n")
-	b.WriteString("  ✗  failed\n")
-	b.WriteString("  ⇥  skipped\n")
+	b.WriteString(tuistyle.ScreenMargin + "●  running\n")
+	b.WriteString(tuistyle.ScreenMargin + "○  pending\n")
+	b.WriteString(tuistyle.ScreenMargin + "✓  success\n")
+	b.WriteString(tuistyle.ScreenMargin + "✗  failed\n")
+	b.WriteString(tuistyle.ScreenMargin + "⇥  skipped\n")
 
-	b.WriteString("\n  ")
+	b.WriteString("\n")
+	b.WriteString(tuistyle.ScreenMargin)
 	b.WriteString(tuistyle.SelectedStyle.Render("Type Glyphs"))
 	b.WriteString("\n\n")
 	b.WriteString("  $  shell\n")
 	b.WriteString("  ⚙  headless agent\n")
 	b.WriteString("  ❯  interactive agent\n")
 	b.WriteString("  ↳  sub-workflow\n")
+	b.WriteString("  ↺  loop\n")
+	b.WriteString("  »  iteration\n")
 
 	b.WriteString("\n  ")
 	b.WriteString(tuistyle.SelectedStyle.Render("Live Navigation"))
 	b.WriteString("\n\n")
-	b.WriteString("  l        jump to active step and resume auto-follow\n")
-	b.WriteString("  End / G  jump to output tail and resume tail-follow\n")
+	b.WriteString("  l  jump to active step and resume auto-follow\n")
 
 	b.WriteString("\n\n  ")
 	b.WriteString(tuistyle.HelpStyle.Render("press ? or esc to dismiss"))

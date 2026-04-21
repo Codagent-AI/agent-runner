@@ -38,6 +38,15 @@ func ResolveResumeSession(ctx *model.ExecutionContext) (string, error) {
 	return getMostRecentSessionID(ctx), nil
 }
 
+// ResolveNamedSession returns the persisted session ID for the given role name,
+// or empty string if the named session has not been created yet in this run.
+func ResolveNamedSession(name string, ctx *model.ExecutionContext) string {
+	if ctx.NamedSessions == nil {
+		return ""
+	}
+	return ctx.NamedSessions[name]
+}
+
 func getMostRecentSessionID(ctx *model.ExecutionContext) string {
 	if ctx.LastSessionStepID == "" {
 		return ""

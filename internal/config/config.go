@@ -51,8 +51,9 @@ var validDefaultMode = map[string]bool{
 }
 
 var validCLI = map[string]bool{
-	"claude": true,
-	"codex":  true,
+	"claude":  true,
+	"codex":   true,
+	"copilot": true,
 }
 
 // LoadOrGenerate loads the config file at path. If the file does not exist,
@@ -169,7 +170,7 @@ func (c *Config) validate() error {
 			return fmt.Errorf("profile %q: invalid effort %q (must be low, medium, or high)", name, p.Effort)
 		}
 		if p.CLI != "" && !validCLI[p.CLI] {
-			return fmt.Errorf("profile %q: invalid cli %q (must be claude or codex)", name, p.CLI)
+			return fmt.Errorf("profile %q: invalid cli %q (must be claude, codex, or copilot)", name, p.CLI)
 		}
 	}
 
@@ -224,6 +225,12 @@ func defaultConfig() *Config {
 			},
 			"implementor": {
 				Extends: "headless_base",
+			},
+			"summarizer": {
+				DefaultMode: "headless",
+				CLI:         "claude",
+				Model:       "haiku",
+				Effort:      "low",
 			},
 		},
 	}

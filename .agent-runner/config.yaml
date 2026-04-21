@@ -6,6 +6,11 @@ profiles:
         effort: high
     implementor:
         extends: headless_base
+        cli: copilot
+        model: gpt-5.4
+    haiku_tester:
+        extends: headless_base
+        model: haiku
     interactive_base:
         default_mode: interactive
         cli: claude

@@ -1,12 +1,33 @@
 package exec
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/pty"
 )
+
+type recordingAuditLogger struct {
+	events []audit.Event
+}
+
+func (l *recordingAuditLogger) Emit(event audit.Event) {
+	l.events = append(l.events, event)
+}
+
+func findAuditEvent(events []audit.Event, typ audit.EventType) *audit.Event {
+	for i := range events {
+		if events[i].Type == typ {
+			return &events[i]
+		}
+	}
+	return nil
+}
 
 func TestExecuteAgentStep(t *testing.T) {
 	t.Run("returns success for exit code 0", func(t *testing.T) {
@@ -76,6 +97,126 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("persists session ID before CLI invocation so kill mid-step is resumable", func(t *testing.T) {
+		// Regression for the bug where a workflow runner killed mid-agent-step
+		// lost the session ID because it was only written after the CLI exited.
+		// The session ID must be flushed to state BEFORE the CLI process runs.
+		var (
+			sessionIDAtSpawn string
+			flushed          bool
+		)
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew}
+		ctx := makeCtx()
+		ctx.FlushState = func() {
+			flushed = true
+			sessionIDAtSpawn = ctx.SessionIDs[step.ID]
+		}
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if !flushed {
+			t.Fatal("expected FlushState to be called before the CLI runs")
+		}
+		if sessionIDAtSpawn == "" {
+			t.Fatal("expected session ID to be populated at flush time")
+		}
+		if sessionIDAtSpawn != ctx.SessionIDs["s"] {
+			t.Fatalf("expected pre-spawn session ID %q to equal final %q", sessionIDAtSpawn, ctx.SessionIDs["s"])
+		}
+	})
+
+	t.Run("session:new step reuses persisted session ID on workflow resume", func(t *testing.T) {
+		// Regression: when a session:new step aborts mid-flight, its session ID
+		// is persisted in state. On --resume, the step is re-entered, but
+		// because step.Session == SessionNew the runner used to generate a
+		// fresh UUID — orphaning the original session and overwriting the
+		// persisted ID. Resume must reuse the existing ID instead.
+		const persistedID = "persisted-session-xyz"
+		withFakeClaudeSession(t, persistedID)
+
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		ctx := makeCtx()
+		ctx.WorkflowResumed = true
+		ctx.SessionIDs["plan"] = persistedID
+		ctx.LastSessionStepID = "plan"
+		ctx.SessionProfiles["plan"] = "planner"
+		step := model.Step{ID: "plan", Mode: model.ModeHeadless, Prompt: "keep planning", Session: model.SessionNew}
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+
+		if ctx.SessionIDs["plan"] != persistedID {
+			t.Fatalf("expected persisted session ID to be preserved, got %q (was %q)", ctx.SessionIDs["plan"], persistedID)
+		}
+
+		args := runner.calls[0]
+		foundResume := false
+		for i, a := range args {
+			if a == "--resume" && i+1 < len(args) && args[i+1] == persistedID {
+				foundResume = true
+			}
+		}
+		if !foundResume {
+			t.Fatalf("expected --resume %s to reuse persisted session, got %v", persistedID, args)
+		}
+		for _, a := range args {
+			if a == "--session-id" {
+				t.Fatalf("did not expect --session-id (would create a fresh session), got %v", args)
+			}
+		}
+	})
+
+	t.Run("session:new step re-establishes persisted ID when transcript missing", func(t *testing.T) {
+		// Edge case: if the prior run crashed after persisting the session ID
+		// but before Claude wrote its transcript, --resume would fail because
+		// no session exists on disk. The runner must pass the persisted ID
+		// via --session-id so the CLI recreates the session with the same
+		// deterministic UUID rather than generating a new one.
+		withFakeClaudeHome(t) // home exists, but no transcript file
+		const persistedID = "persisted-never-established"
+
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		ctx := makeCtx()
+		ctx.WorkflowResumed = true
+		ctx.SessionIDs["plan"] = persistedID
+		ctx.LastSessionStepID = "plan"
+		step := model.Step{ID: "plan", Mode: model.ModeHeadless, Prompt: "start", Session: model.SessionNew}
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+
+		if ctx.SessionIDs["plan"] != persistedID {
+			t.Fatalf("expected persisted session ID to be preserved, got %q (was %q)", ctx.SessionIDs["plan"], persistedID)
+		}
+
+		args := runner.calls[0]
+		foundSessionID := false
+		for i, a := range args {
+			if a == "--session-id" && i+1 < len(args) && args[i+1] == persistedID {
+				foundSessionID = true
+			}
+			if a == "--resume" {
+				t.Fatalf("did not expect --resume for a never-established session, got %v", args)
+			}
+		}
+		if !foundSessionID {
+			t.Fatalf("expected --session-id %s to re-establish with persisted ID, got %v", persistedID, args)
+		}
+	})
+
+	t.Run("persists resumed session ID before CLI invocation", func(t *testing.T) {
+		// When resuming, the session ID is known at spawn (carried in from
+		// prior state); it must be re-flushed so mid-step kills preserve it.
+		var flushedID string
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		step := model.Step{ID: "s2", Mode: model.ModeHeadless, Prompt: "continue", Session: model.SessionResume}
+		ctx := makeCtx()
+		ctx.SessionIDs["prev"] = "session-abc"
+		ctx.LastSessionStepID = "prev"
+		ctx.FlushState = func() {
+			flushedID = ctx.SessionIDs[step.ID]
+		}
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if flushedID != "session-abc" {
+			t.Fatalf("expected pre-spawn flush to record resumed session ID, got %q", flushedID)
+		}
+	})
+
 	t.Run("headless resume uses --resume flag", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		ctx := makeCtx()
@@ -118,6 +259,96 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 		if ctx.LastSessionStepID != "specs" {
 			t.Fatalf("expected LastSessionStepID to be 'specs', got %q", ctx.LastSessionStepID)
+		}
+	})
+
+	t.Run("step_start audit model uses resolved profile default", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		auditLog := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		ctx.ProfileStore = &config.Config{
+			Profiles: map[string]*config.Profile{
+				"implementor": {
+					DefaultMode: "headless",
+					CLI:         "claude",
+					Model:       "sonnet",
+				},
+			},
+		}
+		step := model.Step{ID: "implement", Agent: "implementor", Prompt: "do it", Session: model.SessionNew}
+
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+
+		event := findAuditEvent(auditLog.events, audit.EventStepStart)
+		if event == nil {
+			t.Fatal("expected step_start audit event")
+		}
+		if got := event.Data["model"]; got != "sonnet" {
+			t.Fatalf("step_start model = %#v, want %q", got, "sonnet")
+		}
+	})
+
+	t.Run("step_start audit model for resumed session uses originating profile", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		auditLog := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		ctx.ProfileStore = &config.Config{
+			Profiles: map[string]*config.Profile{
+				"planner": {
+					DefaultMode: "headless",
+					CLI:         "claude",
+					Model:       "opus",
+				},
+			},
+		}
+		ctx.SessionIDs["proposal"] = "session-abc"
+		ctx.SessionProfiles["proposal"] = "planner"
+		ctx.LastSessionStepID = "proposal"
+		step := model.Step{ID: "specs", Prompt: "continue", Session: model.SessionResume}
+
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+
+		event := findAuditEvent(auditLog.events, audit.EventStepStart)
+		if event == nil {
+			t.Fatal("expected step_start audit event")
+		}
+		if got := event.Data["model"]; got != "opus" {
+			t.Fatalf("step_start model = %#v, want %q", got, "opus")
+		}
+	})
+
+	t.Run("step_start audit model uses step override when present", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		auditLog := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		ctx.ProfileStore = &config.Config{
+			Profiles: map[string]*config.Profile{
+				"implementor": {
+					DefaultMode: "headless",
+					CLI:         "claude",
+					Model:       "sonnet",
+				},
+			},
+		}
+		step := model.Step{
+			ID:      "implement",
+			Agent:   "implementor",
+			Model:   "opus",
+			Prompt:  "do it",
+			Session: model.SessionNew,
+		}
+
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+
+		event := findAuditEvent(auditLog.events, audit.EventStepStart)
+		if event == nil {
+			t.Fatal("expected step_start audit event")
+		}
+		if got := event.Data["model"]; got != "opus" {
+			t.Fatalf("step_start model = %#v, want %q", got, "opus")
 		}
 	})
 
@@ -342,8 +573,8 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
-	t.Run("headless fails when AskUserQuestion error detected in output", func(t *testing.T) {
-		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "Tool error: AskUserQuestion error: not supported in headless mode"}}}
+	t.Run("headless fails when AskUserQuestion error detected in stderr", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stderr: "Tool error: AskUserQuestion error: not supported in headless mode"}}}
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "finalize", Session: model.SessionNew}
 		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if err != nil {
@@ -354,8 +585,8 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
-	t.Run("headless fails on case-variant AskUserQuestion error", func(t *testing.T) {
-		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "Error: askuserquestion not available"}}}
+	t.Run("headless fails on case-variant AskUserQuestion error in stderr", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stderr: "Error: askuserquestion not available"}}}
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "finalize", Session: model.SessionNew}
 		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if err != nil {
@@ -375,6 +606,44 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 		if outcome != OutcomeSuccess {
 			t.Fatalf("expected success when AskUserQuestion mentioned without error, got %q", outcome)
+		}
+	})
+
+	t.Run("headless succeeds when stdout mentions AskUserQuestion — only stderr is checked", func(t *testing.T) {
+		stdout := "uses `--no-ask-user` when `AskUserQuestion` is disallowed\n`CopilotAdapter.InteractiveModeError()`: rejects interactive mode"
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: stdout}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "implement", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected success when AskUserQuestion only appears in stdout, got %q", outcome)
+		}
+	})
+
+	t.Run("headless succeeds when natural language mentions AskUserQuestion and error on same line", func(t *testing.T) {
+		stdout := "I attempted to call AskUserQuestion, but the request encountered an error during validation, so I proceeded autonomously."
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: stdout}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "implement", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected success when natural language mentions both AskUserQuestion and error, got %q", outcome)
+		}
+	})
+
+	t.Run("headless fails when AskUserQuestion tool is disallowed", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stderr: "tool AskUserQuestion is not allowed"}}}
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "finalize", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeFailed {
+			t.Fatalf("expected failed when AskUserQuestion is disallowed, got %q", outcome)
 		}
 	})
 
@@ -727,6 +996,58 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 		t.Fatalf("expected --append-system-prompt, got %v", args)
 	})
+
+	t.Run("copilot step in interactive mode fails at runtime", func(t *testing.T) {
+		runner := &mockRunner{}
+		step := model.Step{ID: "s", CLI: "copilot", Mode: model.ModeInteractive, Prompt: "do something", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeFailed {
+			t.Fatalf("expected OutcomeFailed for copilot interactive step, got %q", outcome)
+		}
+		// Runner should not have been invoked (failure before spawn)
+		if len(runner.calls) != 0 {
+			t.Fatalf("expected no CLI invocations, got %d", len(runner.calls))
+		}
+	})
+}
+
+// withFakeClaudeHome redirects $HOME to a test-scoped temp dir and returns
+// the encoded Claude projects directory for the current working directory.
+// The caller can then plant transcript files under the returned path to
+// simulate the presence or absence of a Claude session on disk.
+func withFakeClaudeHome(t *testing.T) string {
+	t.Helper()
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	replacer := strings.NewReplacer("/", "-", ".", "-", "_", "-")
+	encoded := replacer.Replace(abs)
+	projects := filepath.Join(tmp, ".claude", "projects", encoded)
+	if err := os.MkdirAll(projects, 0o755); err != nil {
+		t.Fatalf("mkdir projects: %v", err)
+	}
+	return projects
+}
+
+// withFakeClaudeSession sets up a fake Claude home and plants an empty
+// transcript for sessionID so that ClaudeAdapter.SessionExists reports true.
+func withFakeClaudeSession(t *testing.T, sessionID string) {
+	t.Helper()
+	projects := withFakeClaudeHome(t)
+	transcript := filepath.Join(projects, sessionID+".jsonl")
+	if err := os.WriteFile(transcript, nil, 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
 }
 
 func containsArg(args []string, target string) bool {

@@ -3,6 +3,8 @@ package loader
 import (
 	"fmt"
 	"os"
+	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/validate"
+	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
 // Options controls workflow loading behavior.
@@ -20,7 +23,7 @@ type Options struct {
 
 // LoadWorkflow reads a YAML file and returns a validated Workflow.
 func LoadWorkflow(filePath string, opts Options) (model.Workflow, error) {
-	data, err := os.ReadFile(filePath) // #nosec G304 -- workflow file path is user-specified CLI input
+	data, err := ReadWorkflowFile(filePath)
 	if err != nil {
 		return model.Workflow{}, fmt.Errorf("cannot read workflow file: %w", err)
 	}
@@ -43,6 +46,38 @@ func LoadWorkflow(filePath string, opts Options) (model.Workflow, error) {
 	}
 
 	return w, nil
+}
+
+func ReadWorkflowFile(filePath string) ([]byte, error) {
+	if builtinworkflows.IsRef(filePath) {
+		return builtinworkflows.ReadFile(filePath)
+	}
+	return os.ReadFile(filePath) // #nosec G304 -- workflow file path is user-specified CLI input
+}
+
+func ResolveRelativeWorkflowPath(parentFile, workflowField string) string {
+	if parentFile == "" {
+		return workflowField
+	}
+	if builtinworkflows.IsRef(parentFile) {
+		relParent, err := builtinworkflows.RefPath(parentFile)
+		if err != nil {
+			return workflowField
+		}
+		return builtinworkflows.Ref(path.Join(path.Dir(relParent), workflowField))
+	}
+	return filepath.Join(filepath.Dir(parentFile), workflowField)
+}
+
+func SourceID(filePath string) string {
+	if builtinworkflows.IsRef(filePath) {
+		return filePath
+	}
+	abs, err := filepath.Abs(filePath)
+	if err != nil {
+		return filepath.Clean(filePath)
+	}
+	return abs
 }
 
 var filePlaceholderRe = regexp.MustCompile(`\{\{file:(\w+)\}\}`)

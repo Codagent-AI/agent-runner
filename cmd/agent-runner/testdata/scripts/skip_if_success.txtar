@@ -2,7 +2,7 @@
 exec agent-runner workflow
 ! stdout 'skip me'
 
--- workflows/workflow.yaml --
+-- .agent-runner/workflows/workflow.yaml --
 name: e2e-skip
 steps:
   - id: first

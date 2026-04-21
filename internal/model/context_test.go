@@ -117,6 +117,87 @@ func TestCreateLoopIterationContext(t *testing.T) {
 	})
 }
 
+func TestBuiltinVarsForStep(t *testing.T) {
+	t.Run("includes step_id when provided", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{
+			WorkflowFile: "test.yaml",
+			SessionDir:   "/tmp/runs/abc",
+		})
+		vars := ctx.BuiltinVarsForStep("my-step")
+		if vars["step_id"] != "my-step" {
+			t.Fatalf("expected step_id='my-step', got %q", vars["step_id"])
+		}
+		if vars["session_dir"] != "/tmp/runs/abc" {
+			t.Fatalf("expected session_dir='/tmp/runs/abc', got %q", vars["session_dir"])
+		}
+	})
+
+	t.Run("omits step_id when empty", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{WorkflowFile: "test.yaml", SessionDir: "/tmp/runs/abc"})
+		vars := ctx.BuiltinVarsForStep("")
+		if _, ok := vars["step_id"]; ok {
+			t.Fatal("expected step_id to be omitted when empty")
+		}
+	})
+
+	t.Run("returns nil when no builtins available", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{WorkflowFile: "test.yaml"})
+		if ctx.BuiltinVarsForStep("") != nil {
+			t.Fatal("expected nil when no builtins available")
+		}
+	})
+
+	t.Run("includes step_id without session_dir", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{WorkflowFile: "test.yaml"})
+		vars := ctx.BuiltinVarsForStep("lone-step")
+		if vars["step_id"] != "lone-step" {
+			t.Fatalf("expected step_id='lone-step', got %q", vars["step_id"])
+		}
+		if _, ok := vars["session_dir"]; ok {
+			t.Fatal("expected session_dir to be absent")
+		}
+	})
+}
+
+func TestSessionDirBuiltin(t *testing.T) {
+	t.Run("BuiltinVars exposes session_dir when set", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{
+			WorkflowFile: "test.yaml",
+			SessionDir:   "/tmp/runs/abc",
+		})
+		vars := ctx.BuiltinVars()
+		if vars["session_dir"] != "/tmp/runs/abc" {
+			t.Fatalf("expected session_dir='/tmp/runs/abc', got %q", vars["session_dir"])
+		}
+	})
+
+	t.Run("BuiltinVars omits session_dir when empty", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{WorkflowFile: "test.yaml"})
+		if _, ok := ctx.BuiltinVars()["session_dir"]; ok {
+			t.Fatal("expected session_dir to be omitted when empty")
+		}
+	})
+
+	t.Run("propagates through loop and sub-workflow contexts", func(t *testing.T) {
+		root := NewRootContext(&RootContextOptions{
+			WorkflowFile: "root.yaml",
+			SessionDir:   "/tmp/runs/xyz",
+		})
+		loop := NewLoopIterationContext(root, LoopIterationOptions{
+			StepID: "loop", Iteration: 0,
+		})
+		if loop.SessionDir != "/tmp/runs/xyz" {
+			t.Fatalf("loop ctx missing session dir: got %q", loop.SessionDir)
+		}
+		sub := NewSubWorkflowContext(root, &SubWorkflowContextOptions{
+			StepID: "call", WorkflowFile: "sub.yaml", SubWorkflowName: "sub",
+		})
+		if sub.SessionDir != "/tmp/runs/xyz" {
+			t.Fatalf("sub ctx missing session dir: got %q", sub.SessionDir)
+		}
+	})
+}
+
 func TestCreateRootContextWithAuditLogger(t *testing.T) {
 	t.Run("stores auditLogger when provided", func(t *testing.T) {
 		logger := &stubAuditLogger{}
@@ -262,6 +343,86 @@ func TestWorkflowResumedPropagation(t *testing.T) {
 
 		if !child.WorkflowResumed {
 			t.Fatal("expected WorkflowResumed propagated to sub-workflow context")
+		}
+	})
+}
+
+func TestNamedSessionSharing(t *testing.T) {
+	t.Run("sub-workflow context shares NamedSessions pointer with parent", func(t *testing.T) {
+		parent := NewRootContext(&RootContextOptions{
+			Params:       map[string]string{},
+			WorkflowFile: "parent.yaml",
+		})
+
+		child := NewSubWorkflowContext(parent, &SubWorkflowContextOptions{
+			StepID:       "sub",
+			Params:       map[string]string{},
+			WorkflowFile: "child.yaml",
+		})
+
+		// Writing in child is visible in parent (same pointer).
+		child.NamedSessions["planner"] = "session-xyz"
+		if parent.NamedSessions["planner"] != "session-xyz" {
+			t.Fatal("expected named session to be visible in parent context")
+		}
+	})
+
+	t.Run("loop iteration context shares NamedSessions pointer with parent", func(t *testing.T) {
+		parent := NewRootContext(&RootContextOptions{
+			Params:       map[string]string{},
+			WorkflowFile: "test.yaml",
+		})
+
+		iter := NewLoopIterationContext(parent, LoopIterationOptions{
+			StepID:    "loop",
+			Iteration: 0,
+		})
+
+		iter.NamedSessions["planner"] = "iter-session"
+		if parent.NamedSessions["planner"] != "iter-session" {
+			t.Fatal("expected named session to be visible in parent context after loop iteration write")
+		}
+	})
+
+	t.Run("NamedSessionDecls restored from options in root context", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{
+			Params:            map[string]string{},
+			WorkflowFile:      "test.yaml",
+			NamedSessionDecls: map[string]string{"planner": "planner-profile"},
+		})
+
+		if ctx.NamedSessionDecls["planner"] != "planner-profile" {
+			t.Fatalf("expected NamedSessionDecls to be restored, got %q", ctx.NamedSessionDecls["planner"])
+		}
+	})
+
+	t.Run("NamedSessions restored from options in root context", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{
+			Params:        map[string]string{},
+			WorkflowFile:  "test.yaml",
+			NamedSessions: map[string]string{"planner": "persisted-id"},
+		})
+
+		if ctx.NamedSessions["planner"] != "persisted-id" {
+			t.Fatalf("expected NamedSessions to be restored, got %q", ctx.NamedSessions["planner"])
+		}
+	})
+
+	t.Run("NamedSessionDecls shared between sub-workflow and parent", func(t *testing.T) {
+		parent := NewRootContext(&RootContextOptions{
+			Params:       map[string]string{},
+			WorkflowFile: "parent.yaml",
+		})
+
+		child := NewSubWorkflowContext(parent, &SubWorkflowContextOptions{
+			StepID:       "sub",
+			Params:       map[string]string{},
+			WorkflowFile: "child.yaml",
+		})
+
+		child.NamedSessionDecls["implementor"] = "impl-profile"
+		if parent.NamedSessionDecls["implementor"] != "impl-profile" {
+			t.Fatal("expected NamedSessionDecls to be shared with parent")
 		}
 	})
 }

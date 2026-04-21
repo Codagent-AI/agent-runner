@@ -31,6 +31,24 @@ const headlessPreamble = "You are running autonomously in headless mode with no 
 	"Do not say things like \"let me know\", \"ready when you are\", or \"shall I proceed\". " +
 	"Make decisions and complete the entire task.\n\n"
 
+// stepProfileName returns the agent profile name associated with the step's
+// session strategy: the step's Agent for session:new, the declared agent for
+// a named session, or the session-originating step's profile for resume/inherit.
+// Returns empty when the profile cannot be determined (e.g. no prior session).
+func stepProfileName(step *model.Step, ctx *model.ExecutionContext) string {
+	switch {
+	case step.Session == model.SessionNew:
+		return step.Agent
+	case model.IsNamedSession(step.Session):
+		return ctx.NamedSessionDecls[string(step.Session)]
+	default: // resume / inherit
+		if ctx.LastSessionStepID == "" {
+			return ""
+		}
+		return ctx.SessionProfiles[ctx.LastSessionStepID]
+	}
+}
+
 // resolveStepProfile resolves the agent profile for the given step.
 // For session:new steps, it resolves from step.Agent. For resume/inherit, it
 // looks up the profile name from the session-originating step.
@@ -46,15 +64,12 @@ func resolveStepProfile(step *model.Step, ctx *model.ExecutionContext) (*config.
 		}, nil
 	}
 
-	var profileName string
-	if step.Session == model.SessionNew {
-		profileName = step.Agent
-	} else {
-		// Resume/inherit: look up from session-originating step.
-		profileName = ctx.SessionProfiles[ctx.LastSessionStepID]
-		if profileName == "" {
-			return nil, fmt.Errorf("no profile found for session-originating step %q", ctx.LastSessionStepID)
+	profileName := stepProfileName(step, ctx)
+	if profileName == "" {
+		if model.IsNamedSession(step.Session) {
+			return nil, fmt.Errorf("no declaration found for named session %q", step.Session)
 		}
+		return nil, fmt.Errorf("no profile found for session-originating step %q", ctx.LastSessionStepID)
 	}
 
 	resolved, err := cfg.Resolve(profileName)
@@ -124,15 +139,38 @@ func ExecuteAgentStep(
 		return OutcomeFailed, nil
 	}
 
+	if !headless {
+		if r, ok := adapter.(cli.InteractiveRejector); ok {
+			if modeErr := r.InteractiveModeError(); modeErr != nil {
+				emitAgentFailure(ctx, prefix, startTime, string(mode), step, modeErr.Error())
+				return OutcomeFailed, nil
+			}
+		}
+	}
+
 	input := buildAdapterInput(step, ctx, profile, adapter, prompt, enrichment, sessionID, isResume, headless)
 	args := adapter.BuildArgs(&input)
+	resolvedModel := input.Model
+	if resolvedModel == "" && profile != nil {
+		resolvedModel = profile.Model
+	}
 
-	emitAgentStart(ctx, prefix, startTime, prompt, mode, step, sessionID, cliName, enrichment)
+	emitAgentStart(ctx, prefix, startTime, prompt, mode, step, sessionID, cliName, resolvedModel, enrichment)
 
 	// Set the step prefix on the process runner if it supports it (TUI mode).
 	if ps, ok := runner.(prefixSetter); ok {
 		ps.SetPrefix(prefix)
 	}
+
+	// Persist session bookkeeping BEFORE spawning the CLI so that if the runner
+	// is killed mid-step (ctrl-c, terminal hangup, crash) resume can reconnect
+	// to the session rather than orphan it. When the session ID is knowable at
+	// spawn — fresh Claude (pre-generated UUID), any resume (ID carried in) —
+	// we can persist it now. Fresh Codex sessions remain the exception since
+	// Codex assigns the ID internally and DiscoverSessionID only succeeds after
+	// the process has run; for those cases we fall back to the post-exit write
+	// below.
+	recordSessionOnSpawn(step, ctx, sessionID)
 
 	spawnTime := time.Now()
 	outcome, result, runErr := runAgentProcess(runner, args, headless, step.Workdir, log, ctx.SuspendHook, ctx.ResumeHook)
@@ -145,13 +183,14 @@ func ExecuteAgentStep(
 		ctx.CapturedVariables[step.Capture] = result.Stdout
 	}
 
-	// For session:new steps, set LastSessionStepID before session discovery so
-	// it is always available for subsequent resume/inherit steps, even if
-	// discovery returns empty (e.g. Codex).
-	if step.Session == model.SessionNew {
+	// For session-originating steps (new or named), advance LastSessionStepID
+	// and record the profile before discoverAndStoreSession runs, so a subsequent
+	// resume/inherit step can resolve the profile even when the CLI adapter
+	// discovers the session ID post-exit (e.g. Codex).
+	if step.Session == model.SessionNew || model.IsNamedSession(step.Session) {
 		ctx.LastSessionStepID = step.ID
-		if step.Agent != "" {
-			ctx.SessionProfiles[step.ID] = step.Agent
+		if profile := stepProfileName(step, ctx); profile != "" {
+			ctx.SessionProfiles[step.ID] = profile
 		}
 	}
 
@@ -198,9 +237,29 @@ func resolveAdapterAndSession(
 	}
 	isResume = sessionID != ""
 
+	// Re-entering a session:new step on workflow resume: the session ID was
+	// persisted by recordSessionOnSpawn before the prior run aborted. Reuse
+	// the persisted ID (instead of generating a fresh UUID and orphaning the
+	// original) — but only for adapters that can confirm whether the session
+	// actually got established on disk. When it did, attach via --resume;
+	// when it didn't (pre-spawn crash), re-pass the same deterministic ID as
+	// a preset so the CLI creates the session with that ID on this attempt.
+	// Adapters without cli.SessionStore retain the original fresh-session
+	// behavior to avoid resuming sessions whose existence can't be verified.
+	if !isResume && step.Session == model.SessionNew {
+		if persisted := ctx.SessionIDs[step.ID]; persisted != "" {
+			if store, ok := adapter.(cli.SessionStore); ok {
+				sessionID = persisted
+				isResume = store.SessionExists(persisted, step.Workdir)
+			}
+		}
+	}
+
 	// For fresh Claude sessions, generate a UUID upfront so the adapter can
-	// pass it via --session-id and DiscoverSessionID can return it.
-	if !isResume && cliName == "claude" {
+	// pass it via --session-id and DiscoverSessionID can return it. Skip
+	// generation when sessionID is already populated — e.g. a persisted
+	// session:new ID we're re-establishing after a pre-spawn crash.
+	if !isResume && sessionID == "" && cliName == "claude" {
 		sessionID = uuid.New().String()
 	}
 
@@ -286,12 +345,15 @@ func runAgentProcess(runner ProcessRunner, args []string, headless bool, workdir
 			return OutcomeFailed, result, nil
 		}
 		// Detect AskUserQuestion failures in headless mode — these indicate
-		// the agent could not complete the task autonomously. Use case-insensitive
-		// matching across both stdout and stderr to handle format variations.
-		combined := strings.ToLower(result.Stdout + "\n" + result.Stderr)
-		if strings.Contains(combined, "askuserquestion") && strings.Contains(combined, "error") {
-			log.Errorf("  headless session attempted interactive prompt (AskUserQuestion); treating as failure\n")
-			return OutcomeFailed, result, nil
+		// the agent could not complete the task autonomously. Only scan
+		// stderr: CLI tool-blocked errors go there, while stdout contains
+		// agent natural language that may mention AskUserQuestion without
+		// indicating an actual failure.
+		for _, line := range strings.Split(strings.ToLower(result.Stderr), "\n") {
+			if strings.Contains(line, "askuserquestion") && isToolDisallowedLine(line) {
+				log.Errorf("  headless session attempted interactive prompt (AskUserQuestion); treating as failure\n")
+				return OutcomeFailed, result, nil
+			}
 		}
 		return OutcomeSuccess, result, nil
 	}
@@ -319,6 +381,38 @@ func runAgentProcess(runner ProcessRunner, args []string, headless bool, workdir
 	return OutcomeAborted, result, nil
 }
 
+// isToolDisallowedLine returns true if a lowercased output line matches a
+// pattern indicating the CLI blocked AskUserQuestion (e.g. "not allowed",
+// "not available", "disallowed", "not permitted").
+func isToolDisallowedLine(line string) bool {
+	return strings.Contains(line, "not allowed") ||
+		strings.Contains(line, "not available") ||
+		strings.Contains(line, "not supported") ||
+		strings.Contains(line, "disallowed") ||
+		strings.Contains(line, "not permitted")
+}
+
+// recordSessionOnSpawn writes session bookkeeping to ctx and flushes state
+// before the agent process runs, so a kill mid-step does not orphan the
+// session. It is a no-op when sessionID is empty (Codex fresh sessions discover
+// the ID post-hoc).
+func recordSessionOnSpawn(step *model.Step, ctx *model.ExecutionContext, sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	ctx.SessionIDs[step.ID] = sessionID
+	if profile := stepProfileName(step, ctx); profile != "" {
+		ctx.SessionProfiles[step.ID] = profile
+	}
+	if model.IsNamedSession(step.Session) {
+		ctx.NamedSessions[string(step.Session)] = sessionID
+	}
+	ctx.LastSessionStepID = step.ID
+	if ctx.FlushState != nil {
+		ctx.FlushState()
+	}
+}
+
 func discoverAndStoreSession(
 	adapter cli.Adapter,
 	step *model.Step,
@@ -329,20 +423,23 @@ func discoverAndStoreSession(
 	processOutput string,
 	log Logger,
 ) string {
-	discoveredID := adapter.DiscoverSessionID(cli.DiscoverOptions{
+	discoveredID := adapter.DiscoverSessionID(&cli.DiscoverOptions{
 		SpawnTime:     spawnTime,
 		PresetID:      presetID,
 		Headless:      headless,
 		ProcessOutput: processOutput,
+		Workdir:       step.Workdir,
 	})
 	if discoveredID != "" {
 		ctx.SessionIDs[step.ID] = discoveredID
-		// Propagate the agent profile from the previous session-originating step
-		// so that resume after workflow restart can resolve the profile for this step.
-		if (step.Session == model.SessionResume || step.Session == model.SessionInherit) && ctx.LastSessionStepID != "" {
-			if prev := ctx.SessionProfiles[ctx.LastSessionStepID]; prev != "" {
-				ctx.SessionProfiles[step.ID] = prev
-			}
+		// stepProfileName reads from the pre-advance LastSessionStepID, so call
+		// it before advancing below. Propagates the profile so resume after
+		// workflow restart can resolve it for this step.
+		if profile := stepProfileName(step, ctx); profile != "" {
+			ctx.SessionProfiles[step.ID] = profile
+		}
+		if model.IsNamedSession(step.Session) {
+			ctx.NamedSessions[string(step.Session)] = discoveredID
 		}
 		ctx.LastSessionStepID = step.ID
 		log.Printf("  session: %s\n", discoveredID)
@@ -357,7 +454,7 @@ func emitAgentStart(
 	prompt string,
 	mode model.StepMode,
 	step *model.Step,
-	sessionID, cliName, enrichment string,
+	sessionID, cliName, resolvedModel, enrichment string,
 ) {
 	emitAudit(ctx, audit.Event{
 		Timestamp: startTime.UTC().Format(time.RFC3339),
@@ -368,7 +465,7 @@ func emitAgentStart(
 			"mode":                string(mode),
 			"session_strategy":    string(step.Session),
 			"resolved_session_id": sessionID,
-			"model":               step.Model,
+			"model":               resolvedModel,
 			"cli":                 cliName,
 			"enrichment":          enrichment,
 			"context":             contextSnapshot(ctx),
@@ -418,7 +515,7 @@ func buildStepPrefix(stepID string, ctx *model.ExecutionContext, workflowResumed
 }
 
 func buildAgentPrompt(step *model.Step, ctx *model.ExecutionContext) (prompt, enrichment string, err error) {
-	prompt, err = textfmt.Interpolate(step.Prompt, ctx.Params, ctx.CapturedVariables)
+	prompt, err = textfmt.Interpolate(step.Prompt, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(step.ID))
 	if err != nil {
 		return "", "", err
 	}
@@ -449,6 +546,10 @@ func resolveSessionID(step *model.Step, ctx *model.ExecutionContext) (string, er
 			return "", err
 		}
 		return id, nil
+	}
+	if model.IsNamedSession(step.Session) {
+		// Returns empty string when the session hasn't been created yet (first use).
+		return session.ResolveNamedSession(string(step.Session), ctx), nil
 	}
 	return "", nil
 }

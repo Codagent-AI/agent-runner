@@ -1,0 +1,22 @@
+name: simple-change
+description: "End-to-end change with inlined planning (no nested plan workflow, no openspec dependency)"
+
+sessions:
+  - name: lead-agent
+    agent: planner
+
+steps:
+  - id: guard-clean-tree
+    # agent-validator detect: exit 0 = unvalidated changes present, exit 2 = clean (no changes)
+    command: |
+      agent-validator detect; status=$?; if [ $status -eq 0 ]; then echo 'Unvalidated changes detected. Run agent-validator before planning.' >&2; exit 1; elif [ $status -ne 2 ]; then exit $status; fi
+
+  - id: plan
+    session: lead-agent
+    prompt: |
+      You MUST use the codagent:simple-plan skill to plan the change.
+
+  - id: implement
+    session: lead-agent
+    prompt: |
+      You MUST use the codagent:implement-change skill to implement the change you just planned.

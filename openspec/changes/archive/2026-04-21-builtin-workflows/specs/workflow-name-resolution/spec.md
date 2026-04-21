@@ -1,0 +1,84 @@
+## MODIFIED Requirements
+
+### Requirement: Workflow name validation
+The `run` command SHALL validate the workflow argument against the pattern `^[a-zA-Z0-9_-]+(:[a-zA-Z0-9_-]+|(/[a-zA-Z0-9_-]+)+)?$`. The argument is either:
+- a bare name (e.g., `my-workflow`),
+- a bare name with one or more path segments separated by `/` (e.g., `team/deploy`), or
+- a namespaced name (e.g., `core:finalize-pr`) where the portion before the colon names a builtin namespace.
+
+A name MUST NOT combine `/` and `:` in the same argument. A name MUST NOT contain `.` or any other character outside this set. Invalid arguments SHALL be rejected with an error indicating the workflow name is not valid.
+
+#### Scenario: Argument contains a file extension
+- **WHEN** the user runs `agent-runner run my-workflow.yaml`
+- **THEN** the command fails with an error that the workflow name is not valid
+
+#### Scenario: Bare name accepted
+- **WHEN** the user runs `agent-runner run my-workflow`
+- **THEN** the argument passes validation
+
+#### Scenario: Bare name with subdirectory path accepted
+- **WHEN** the user runs `agent-runner run team/deploy`
+- **THEN** the argument passes validation
+
+#### Scenario: Namespaced name accepted
+- **WHEN** the user runs `agent-runner run core:finalize-pr`
+- **THEN** the argument passes validation
+
+#### Scenario: Name mixing path and namespace rejected
+- **WHEN** the user runs `agent-runner run core:team/deploy`
+- **THEN** the command fails with an error that the workflow name is not valid
+
+#### Scenario: Leading slash rejected
+- **WHEN** the user runs `agent-runner run /team/deploy`
+- **THEN** the command fails with an error that the workflow name is not valid
+
+### Requirement: Workflow file resolution
+The `run` command SHALL resolve workflow arguments against two disjoint sources:
+
+1. **Namespaced names** (`<ns>:<name>`) SHALL resolve only against the embedded builtin workflow set, under the namespace `<ns>`. They SHALL NOT fall back to any on-disk location.
+2. **Bare names** (with or without `/` path segments) SHALL resolve only against the user's `.agent-runner/workflows/` directory in the current working directory. A name `a/b/c` SHALL resolve to `.agent-runner/workflows/a/b/c.yaml` (or `.yml`). A bare name SHALL NOT resolve against any builtin.
+
+Both `.yaml` and `.yml` extensions SHALL be tried, in that order. If no matching file or embedded entry is found, the command SHALL fail with a workflow-not-found error.
+
+#### Scenario: Resolve bare name to user YAML file
+- **WHEN** the user runs `agent-runner run my-workflow`
+- **AND** `.agent-runner/workflows/my-workflow.yaml` exists
+- **THEN** the workflow is loaded from `.agent-runner/workflows/my-workflow.yaml`
+
+#### Scenario: Resolve bare name to user YML file
+- **WHEN** the user runs `agent-runner run my-workflow`
+- **AND** `.agent-runner/workflows/my-workflow.yaml` does not exist
+- **AND** `.agent-runner/workflows/my-workflow.yml` exists
+- **THEN** the workflow is loaded from `.agent-runner/workflows/my-workflow.yml`
+
+#### Scenario: Resolve path-style name to nested user file
+- **WHEN** the user runs `agent-runner run team/deploy`
+- **AND** `.agent-runner/workflows/team/deploy.yaml` exists
+- **THEN** the workflow is loaded from `.agent-runner/workflows/team/deploy.yaml`
+
+#### Scenario: Resolve namespaced name to embedded builtin
+- **WHEN** the user runs `agent-runner run core:finalize-pr`
+- **THEN** the workflow is loaded from the embedded `core/finalize-pr` builtin
+
+#### Scenario: Namespaced name does not fall back to disk
+- **WHEN** the user runs `agent-runner run core:finalize-pr`
+- **AND** no such embedded builtin exists
+- **AND** a file `.agent-runner/workflows/core/finalize-pr.yaml` exists
+- **THEN** the command fails with a workflow-not-found error; the on-disk file is not used
+
+#### Scenario: Bare name does not fall back to builtins
+- **WHEN** the user runs `agent-runner run finalize-pr`
+- **AND** no `.agent-runner/workflows/finalize-pr.yaml` or `.yml` exists
+- **AND** the binary contains an embedded `core:finalize-pr` builtin
+- **THEN** the command fails with a workflow-not-found error; the builtin is not used
+
+#### Scenario: Top-level workflows directory ignored
+- **WHEN** the user runs `agent-runner run my-workflow`
+- **AND** `workflows/my-workflow.yaml` exists in the current working directory
+- **AND** no `.agent-runner/workflows/my-workflow.yaml` exists
+- **THEN** the command fails with a workflow-not-found error
+
+#### Scenario: Workflow not found
+- **WHEN** the user runs `agent-runner run my-workflow`
+- **AND** neither `.agent-runner/workflows/my-workflow.yaml` nor `.agent-runner/workflows/my-workflow.yml` exists
+- **THEN** the command fails with an error like "Workflow 'my-workflow' not found"

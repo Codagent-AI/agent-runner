@@ -68,7 +68,7 @@ func (a *CodexAdapter) SupportsSystemPrompt() bool {
 // DiscoverSessionID returns the session ID after a Codex process exits.
 // For headless mode, it parses the thread_id from the thread.started JSONL event.
 // For interactive mode, it scans ~/.codex/sessions/ for the most recent session file.
-func (a *CodexAdapter) DiscoverSessionID(opts DiscoverOptions) string {
+func (a *CodexAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
 	if opts.PresetID != "" {
 		return opts.PresetID
 	}

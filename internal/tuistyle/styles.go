@@ -20,6 +20,16 @@ var (
 	FailedRed     = lipgloss.AdaptiveColor{Dark: "#f87171", Light: "#dc2626"}
 )
 
+// BlinkHidden returns a blank string the same visual width as s: used as the
+// "off" half of the in-progress blink. Earlier attempts recolored the glyph
+// (AdaptiveColor white → resolves to near-black when lipgloss misdetects the
+// background inside bubbletea's alt-screen; ANSI-15 → remapped to a dark
+// color by some light-theme palettes). Hiding the glyph sidesteps all of
+// that — the blink becomes visible/invisible, not green/some-broken-color.
+func BlinkHidden(s string) string {
+	return strings.Repeat(" ", lipgloss.Width(s))
+}
+
 // Shared style instances.
 var (
 	HeaderStyle       = lipgloss.NewStyle().Foreground(AccentCyan).Bold(true)
@@ -49,13 +59,16 @@ var (
 // share the same color treatment.
 const BreadcrumbSeparator = " › "
 
-// RenderRule returns a horizontal divider line inset 2 columns from each
-// edge, sized to the given terminal width. Used by both TUI screens as the
+// ScreenMargin is the shared outer left margin for TUI chrome.
+const ScreenMargin = " "
+
+// RenderRule returns a horizontal divider with a 1-column left margin,
+// sized to the given terminal width. Used by both TUI screens as the
 // separator above bottom-pinned help bars and below top chrome.
 func RenderRule(termWidth int) string {
 	w := termWidth
-	if w <= 4 {
+	if w <= 2 {
 		w = 60
 	}
-	return "  " + DividerStyle.Render(strings.Repeat("─", w-4))
+	return ScreenMargin + DividerStyle.Render(strings.Repeat("─", w-2))
 }
