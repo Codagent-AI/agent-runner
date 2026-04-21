@@ -38,11 +38,11 @@ func fixtureImplementChange() model.Workflow {
 				ID:   "implement-tasks",
 				Loop: &model.Loop{Over: "tasks/*.md", As: "task_file"},
 				Steps: []model.Step{
-					{ID: "implement-single-task", Workflow: "../implement-task.yaml"},
+					{ID: "implement-single-task", Workflow: "../core/implement-task.yaml"},
 				},
 			},
 			{ID: "review-assumptions", Session: model.SessionResume, Prompt: "review"},
-			{ID: "run-validator", Workflow: "run-validator.yaml"},
+			{ID: "run-validator", Workflow: "../core/run-validator.yaml"},
 			{ID: "archive", Command: "echo archive"},
 			{ID: "archive-verify", Command: "echo verify"},
 			{ID: "finalize", Agent: "implementor", Session: model.SessionNew, Prompt: "finalize"},
@@ -50,7 +50,7 @@ func fixtureImplementChange() model.Workflow {
 	}
 }
 
-// fixtureImplementTask mirrors workflows/implement-task.yaml: an interactive
+// fixtureImplementTask mirrors workflows/core/implement-task.yaml: an interactive
 // agent, a resume agent, a sub-workflow, a shell step, another resume agent,
 // and a trailing shell step — six children by design.
 func fixtureImplementTask() model.Workflow {

@@ -24,7 +24,7 @@ steps:
       require_matches: true
     steps:
       - id: implement-single-task
-        workflow: ../implement-task.yaml
+        workflow: ../core/implement-task.yaml
         params:
           task_file: "{{task_file}}"
           run_session_report: "true"
@@ -60,7 +60,7 @@ steps:
       naming, or overly complex conditionals. Fix and commit anything clear-cut, prefixing commit messages with [{{step_id}}].
 
   - id: run-validator
-    workflow: ../run-validator.yaml
+    workflow: ../core/run-validator.yaml
 
   - id: finalize
-    workflow: ../finalize-pr.yaml
+    workflow: ../core/finalize-pr.yaml

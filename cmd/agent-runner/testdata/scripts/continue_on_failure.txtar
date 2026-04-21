@@ -2,7 +2,7 @@
 exec agent-runner workflow
 stdout ok
 
--- workflows/workflow.yaml --
+-- .agent-runner/workflows/workflow.yaml --
 name: e2e-continue
 steps:
   - id: failing-step

@@ -2,7 +2,6 @@ package exec
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -292,8 +291,7 @@ func resolveWorkflowPath(workflowField string, ctx *model.ExecutionContext, step
 		return "", err
 	}
 	if ctx.WorkflowFile != "" {
-		parentDir := filepath.Dir(ctx.WorkflowFile)
-		return filepath.Join(parentDir, interpolated), nil
+		return loader.ResolveRelativeWorkflowPath(ctx.WorkflowFile, interpolated), nil
 	}
 	return interpolated, nil
 }

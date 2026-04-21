@@ -40,7 +40,7 @@ exec test -f ran-pass-b-a.txt
 exec test -f ran-pass-a-b.txt
 exec test -f ran-pass-b-b.txt
 
--- workflows/workflow.yaml --
+-- .agent-runner/workflows/workflow.yaml --
 name: e2e-mid-iteration-resume
 steps:
   - id: process

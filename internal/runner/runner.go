@@ -12,6 +12,7 @@ import (
 	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/engine"
 	"github.com/codagent/agent-runner/internal/exec"
+	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/stateio"
@@ -99,7 +100,7 @@ func computeHash(workflowFile string) string {
 	if workflowFile == "" {
 		return ""
 	}
-	data, err := os.ReadFile(workflowFile) // #nosec G304 -- workflow file is user-specified CLI input
+	data, err := loader.ReadWorkflowFile(workflowFile)
 	if err != nil {
 		return ""
 	}

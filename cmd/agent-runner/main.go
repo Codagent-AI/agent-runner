@@ -28,6 +28,7 @@ import (
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/runview"
+	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
 // version is set at build time via -ldflags "-X main.version=...".
@@ -748,16 +749,16 @@ func handleValidate(workflowFile string) int {
 	return 0
 }
 
-// bareNamePattern matches valid workflow names. A name is either a bare
-// identifier (e.g., "myworkflow") or a namespaced name (e.g., "openspec:plan-change")
-// where the namespace corresponds to a subdirectory of workflows/.
-var bareNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+(:[a-zA-Z0-9_-]+)?$`)
+var workflowNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+(:[a-zA-Z0-9_-]+|(/[a-zA-Z0-9_-]+)+)?$`)
 
 func resolveWorkflowArg(arg string) (string, error) {
-	if !bareNamePattern.MatchString(arg) {
-		return "", fmt.Errorf("invalid workflow name %q: use bare name (e.g., 'myworkflow' or 'namespace:myworkflow', not 'myworkflow.yaml'); workflows are resolved from workflows/ directory", arg)
+	if !workflowNamePattern.MatchString(arg) {
+		return "", fmt.Errorf("invalid workflow name %q: use a bare name or path under .agent-runner/workflows/ (e.g., 'myworkflow' or 'team/deploy') or a builtin name like 'core:finalize-pr'", arg)
 	}
-	base := filepath.Join("workflows", strings.ReplaceAll(arg, ":", string(os.PathSeparator)))
+	if strings.Contains(arg, ":") {
+		return builtinworkflows.Resolve(arg)
+	}
+	base := filepath.Join(".agent-runner", "workflows", filepath.FromSlash(arg))
 	yamlPath := base + ".yaml"
 	if _, err := os.Stat(yamlPath); err == nil {
 		return yamlPath, nil
