@@ -1,0 +1,21 @@
+name: smoke-test-agent-steps
+description: "Agent interaction steps for smoke-test: resume, shell failure, and post-failure interaction"
+
+sessions:
+  - name: tester
+    agent: haiku_tester
+
+steps:
+  - id: agent-resume
+    session: tester
+    prompt: "In one short sentence, what value did I just send you?"
+
+  - id: shell-fail
+    command: exit 1
+    continue_on_failure: true
+
+  - id: agent-after-fail
+    session: resume
+    mode: interactive
+    prompt: "The previous shell step failed on purpose. Acknowledge in one short sentence and then ask me if I'm done."
+    skip_if: previous_success
