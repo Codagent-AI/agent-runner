@@ -13,6 +13,7 @@ import (
 
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
+	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
 // RawEvent is a parsed audit log line, decoupled from audit.Event so this
@@ -362,21 +363,18 @@ func (t *Tree) resolveSubWorkflowPath(n *StepNode) (string, error) {
 	if n == nil || n.StaticWorkflow == "" {
 		return "", errors.New("sub-workflow node has no workflow field")
 	}
-	dir := ""
+	parentPath := parentWorkflowPath(n, t.WorkflowPath)
 	if t.ParentDirOf != nil {
-		dir = t.ParentDirOf(n)
+		if d := t.ParentDirOf(n); d != "" {
+			parentPath = d + "/placeholder.yaml"
+		}
 	}
-	if dir == "" {
-		dir = parentWorkflowDir(n, t.WorkflowPath)
-	}
-	var absPath string
-	switch {
-	case filepath.IsAbs(n.StaticWorkflow):
-		absPath = filepath.Clean(n.StaticWorkflow)
-	case dir == "":
-		absPath = filepath.Clean(n.StaticWorkflow)
-	default:
-		absPath = filepath.Clean(filepath.Join(dir, n.StaticWorkflow))
+	absPath := loader.ResolveRelativeWorkflowPath(parentPath, n.StaticWorkflow)
+	// Builtin workflows are embedded in the binary — skip the filesystem
+	// security check since filepath.EvalSymlinks and filepath.Rel cannot
+	// operate on the synthetic "builtin:" prefix.
+	if builtinworkflows.IsRef(absPath) {
+		return absPath, nil
 	}
 	// Enforce trusted root: the resolved path must not escape the parent of the
 	// top-level workflow's containing directory (i.e. the workflows/ root or
@@ -404,18 +402,17 @@ func (t *Tree) resolveSubWorkflowPath(n *StepNode) (string, error) {
 	return absPath, nil
 }
 
-// parentWorkflowDir walks up the tree to find the nearest ancestor whose
-// StaticWorkflowPath is set (root or a loaded sub-workflow).
-func parentWorkflowDir(n *StepNode, fallback string) string {
+// parentWorkflowPath walks up the tree to find the nearest ancestor whose
+// StaticWorkflowPath is set (root or a loaded sub-workflow) and returns the
+// full path. Used by resolveSubWorkflowPath so loader.ResolveRelativeWorkflowPath
+// can apply builtin:-aware path joining.
+func parentWorkflowPath(n *StepNode, fallback string) string {
 	for p := n.Parent; p != nil; p = p.Parent {
 		if p.StaticWorkflowPath != "" {
-			return filepath.Dir(p.StaticWorkflowPath)
+			return p.StaticWorkflowPath
 		}
 	}
-	if fallback != "" {
-		return filepath.Dir(fallback)
-	}
-	return ""
+	return fallback
 }
 
 // applyStepStart copies data from a step_start event onto a node.
@@ -570,7 +567,7 @@ func applySubWorkflowStart(n *StepNode, data map[string]any) {
 	// Only set StaticWorkflowPath if ensureSubWorkflowLoaded hasn't already done
 	// so: events emit the executor-side (possibly relative) path, while the
 	// lazy-load resolves an absolute path. Keeping the absolute one is necessary
-	// for descendants' parentWorkflowDir walk to produce an absolute dir.
+	// for descendants' parentWorkflowPath walk to produce an absolute dir.
 	if n.StaticWorkflowPath == "" {
 		if s, ok := stringField(data, "workflow_path"); ok && s != "" {
 			n.StaticWorkflowPath = s

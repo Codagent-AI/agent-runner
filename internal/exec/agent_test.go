@@ -547,6 +547,32 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("strips trailing newlines from captured agent output", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "path/to/tasks/*.md\n"}}}
+		ctx := makeCtx()
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "find tasks", Session: model.SessionNew, Capture: "tasks_glob"}
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected success, got %q", outcome)
+		}
+		if ctx.CapturedVariables["tasks_glob"] != "path/to/tasks/*.md" {
+			t.Fatalf("expected trailing newline stripped, got %q", ctx.CapturedVariables["tasks_glob"])
+		}
+	})
+
+	t.Run("preserves leading whitespace in captured agent output", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "  indented output\n"}}}
+		ctx := makeCtx()
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "get output", Session: model.SessionNew, Capture: "result"}
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if ctx.CapturedVariables["result"] != "  indented output" {
+			t.Fatalf("expected leading whitespace preserved, got %q", ctx.CapturedVariables["result"])
+		}
+	})
+
 	t.Run("captures stdout on failed headless step with capture", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 1, Stdout: "review-failures"}}}
 		ctx := makeCtx()
