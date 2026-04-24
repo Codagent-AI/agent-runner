@@ -237,9 +237,11 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 		if n == nil {
 			return
 		}
-		if n.Status == StatusPending {
-			n.Status = StatusInProgress
-		}
+		// Always transition to in-progress — on resume, a step restarted after
+		// a prior failed/aborted/skipped/success outcome must lose its stale
+		// terminal status so the TUI renders the "running" indicator.
+		n.Status = StatusInProgress
+		n.Aborted = false
 		applyStepStart(n, e.Data)
 	case "step_end":
 		n := t.resolve(tokens, true)

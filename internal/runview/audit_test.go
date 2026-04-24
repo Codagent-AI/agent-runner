@@ -169,6 +169,45 @@ func TestApplyEvent_StepStartStepEnd(t *testing.T) {
 	}
 }
 
+// TestApplyEvent_StepStartAfterFailure covers resume-after-failure: when a
+// prior run's step_end set the node to StatusFailed, a subsequent step_start
+// for the same node must flip it back to StatusInProgress so the TUI renders
+// the blinking "running" indicator instead of the stale failure X. Same for
+// an aborted prior run: Aborted must be cleared so the indicator blinks.
+func TestApplyEvent_StepStartAfterFailure(t *testing.T) {
+	cases := []struct {
+		name    string
+		outcome string
+	}{
+		{"after failed", "failed"},
+		{"after aborted", "aborted"},
+		{"after success", "success"},
+		{"after skipped", "skipped"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tree := buildImplementChangeTree(t)
+			tree.ApplyEvent(RawEvent{
+				Prefix: "[archive]",
+				Type:   "step_end",
+				Data:   map[string]any{"outcome": c.outcome},
+			})
+			tree.ApplyEvent(RawEvent{
+				Prefix: "[archive]",
+				Type:   "step_start",
+				Data:   map[string]any{"command": "openspec archive view-run"},
+			})
+			arch := childByID(tree.Root, "archive")
+			if arch.Status != StatusInProgress {
+				t.Errorf("status after restart: want in-progress, got %v", arch.Status)
+			}
+			if arch.Aborted {
+				t.Errorf("Aborted flag should be cleared on restart, still true")
+			}
+		})
+	}
+}
+
 func TestApplyEvent_StatusMapping(t *testing.T) {
 	cases := []struct {
 		outcome string
