@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 )
 
@@ -66,6 +67,7 @@ func discoverCursorSessionID(output string) string {
 		}
 	}
 	if err := scanner.Err(); err != nil {
+		log.Printf("cursor: failed to scan cursor session output: %v", err)
 		return ""
 	}
 	return ""

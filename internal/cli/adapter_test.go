@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"bytes"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -899,6 +901,31 @@ func TestCursorAdapter(t *testing.T) {
 		})
 		if id != "chat-long" {
 			t.Fatalf("expected %q, got %q", "chat-long", id)
+		}
+	})
+
+	t.Run("discover session ID logs scanner failures", func(t *testing.T) {
+		var logBuf bytes.Buffer
+		origWriter := log.Writer()
+		origFlags := log.Flags()
+		log.SetOutput(&logBuf)
+		log.SetFlags(0)
+		t.Cleanup(func() {
+			log.SetOutput(origWriter)
+			log.SetFlags(origFlags)
+		})
+
+		output := `{"type":"assistant","payload":"` + strings.Repeat("x", 2*1024*1024) + `","session_id":"chat-too-long","message":{}}`
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			ProcessOutput: output,
+			Headless:      true,
+		})
+		if id != "" {
+			t.Fatalf("expected empty string on scanner failure, got %q", id)
+		}
+		logged := logBuf.String()
+		if !strings.Contains(logged, "failed to scan cursor session output") {
+			t.Fatalf("expected scanner failure log, got %q", logged)
 		}
 	})
 
