@@ -34,6 +34,8 @@ import (
 // version is set at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
+var userHomeDir = os.UserHomeDir
+
 // realProcessRunner implements exec.ProcessRunner using os/exec.
 type realProcessRunner struct{}
 
@@ -766,23 +768,22 @@ func resolveWorkflowArg(arg string) (string, error) {
 		return resolved, nil
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("determine home directory for global workflows: %w", err)
-	}
-	globalBase := filepath.Join(home, ".agent-runner", "workflows", filepath.FromSlash(arg))
-	globalPaths := []string{globalBase + ".yaml", globalBase + ".yml"}
-	if resolved, err := resolveWorkflowFile(globalPaths...); err != nil {
-		return "", err
-	} else if resolved != "" {
-		return resolved, nil
+	globalPaths := []string{}
+	if home, err := userHomeDir(); err == nil {
+		globalBase := filepath.Join(home, ".agent-runner", "workflows", filepath.FromSlash(arg))
+		globalPaths = []string{globalBase + ".yaml", globalBase + ".yml"}
+		if resolved, err := resolveWorkflowFile(globalPaths...); err != nil {
+			return "", err
+		} else if resolved != "" {
+			return resolved, nil
+		}
 	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
-		return "", fmt.Errorf("workflow %q not found (tried %s, %s, %s, and %s); failed to get cwd: %w", arg, localPaths[0], localPaths[1], globalPaths[0], globalPaths[1], err)
+		return "", fmt.Errorf("workflow %q not found (%s); failed to get cwd: %w", arg, triedWorkflowPaths(localPaths, globalPaths), err)
 	}
-	return "", fmt.Errorf("workflow %q not found in %s (tried %s, %s, %s, and %s)", arg, cwd, localPaths[0], localPaths[1], globalPaths[0], globalPaths[1])
+	return "", fmt.Errorf("workflow %q not found in %s (%s)", arg, cwd, triedWorkflowPaths(localPaths, globalPaths))
 }
 
 func resolveWorkflowFile(paths ...string) (string, error) {
@@ -794,6 +795,14 @@ func resolveWorkflowFile(paths ...string) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+func triedWorkflowPaths(groups ...[]string) string {
+	var paths []string
+	for _, group := range groups {
+		paths = append(paths, group...)
+	}
+	return "tried " + strings.Join(paths, ", ")
 }
 
 func handleRun(args []string) int {

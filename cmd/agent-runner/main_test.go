@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -198,6 +199,24 @@ func TestResolveWorkflowArg(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), `workflow "finalize-pr" not found`) {
 			t.Fatalf("expected workflow-not-found error, got %v", err)
+		}
+	})
+
+	t.Run("home directory lookup failure still returns workflow not found", func(t *testing.T) {
+		original := userHomeDir
+		userHomeDir = func() (string, error) { return "", fmt.Errorf("home unavailable") }
+		t.Cleanup(func() { userHomeDir = original })
+
+		t.Chdir(t.TempDir())
+		_, err := resolveWorkflowArg("my-workflow")
+		if err == nil {
+			t.Fatal("expected missing local workflow to return an error")
+		}
+		if !strings.Contains(err.Error(), `workflow "my-workflow" not found`) {
+			t.Fatalf("expected workflow-not-found error, got %v", err)
+		}
+		if strings.Contains(err.Error(), "home directory") {
+			t.Fatalf("expected home-directory failure to be hidden, got %v", err)
 		}
 	})
 

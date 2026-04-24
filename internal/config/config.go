@@ -57,20 +57,20 @@ var validCLI = map[string]bool{
 	"copilot": true,
 }
 
+var userHomeDir = os.UserHomeDir
+
 // LoadOrGenerate loads the config file at path. If the file does not exist,
 // it writes a default project-local config and returns the merged result of the
 // optional global config (~/.agent-runner/config.yaml) plus the project config.
 // Project profiles replace global profiles of the same name. After merging, all
 // profiles are validated as one set.
 func LoadOrGenerate(path string) (*Config, error) {
-	globalPath, err := globalConfigPath()
-	if err != nil {
-		return nil, err
-	}
-
-	globalCfg, err := loadOptional(globalPath)
-	if err != nil {
-		return nil, fmt.Errorf("loading global config %s: %w", globalPath, err)
+	var globalCfg *Config
+	if globalPath, err := globalConfigPath(); err == nil {
+		globalCfg, err = loadOptional(globalPath)
+		if err != nil {
+			return nil, fmt.Errorf("loading global config %s: %w", globalPath, err)
+		}
 	}
 
 	projectCfg, err := loadProjectOrGenerate(path)
@@ -86,7 +86,7 @@ func LoadOrGenerate(path string) (*Config, error) {
 }
 
 func globalConfigPath() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := userHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("determine home directory for global config: %w", err)
 	}

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,6 +67,26 @@ func TestLoadOrGenerate_CreatesDefault(t *testing.T) {
 	}
 	if sum.DefaultMode != "headless" || sum.CLI != "claude" || sum.Model != "haiku" || sum.Effort != "low" {
 		t.Fatalf("unexpected summarizer: %+v", sum)
+	}
+}
+
+func TestLoadOrGenerate_SkipsGlobalConfigWhenHomeDirUnavailable(t *testing.T) {
+	original := userHomeDir
+	userHomeDir = func() (string, error) { return "", fmt.Errorf("home unavailable") }
+	t.Cleanup(func() { userHomeDir = original })
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".agent-runner", "config.yaml")
+
+	cfg, err := LoadOrGenerate(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected project config to be generated, got %v", err)
+	}
+	if len(cfg.Profiles) != 5 {
+		t.Fatalf("expected default project profiles, got %d", len(cfg.Profiles))
 	}
 }
 
