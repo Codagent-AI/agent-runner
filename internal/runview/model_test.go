@@ -594,6 +594,315 @@ func TestModel_Enter_AgentStep_NoSessionID_NoOp(t *testing.T) {
 	}
 }
 
+func TestModel_Enter_AgentStep_InSubWorkflow_EmitsResumeMsg(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	subwf := &StepNode{
+		ID:             "impl",
+		Type:           NodeSubWorkflow,
+		Status:         StatusSuccess,
+		Parent:         root,
+		StaticWorkflow: "impl.yaml",
+		SubLoaded:      true,
+	}
+	agent := &StepNode{
+		ID:        "generate-code",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusSuccess,
+		Parent:    subwf,
+		AgentCLI:  "claude",
+		SessionID: "nested-session-1",
+	}
+	subwf.Children = []*StepNode{agent}
+	root.Children = []*StepNode{subwf}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	// Drill into the sub-workflow
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	// Now inside the sub-workflow; cursor should be on agent step
+	sel := m.selectedNode()
+	if sel == nil || sel.ID != "generate-code" {
+		t.Fatalf("expected selected node 'generate-code', got %v", sel)
+	}
+
+	// Press Enter on the nested agent step
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on nested agent step should produce a ResumeMsg cmd")
+	}
+	resume, ok := cmd().(ResumeMsg)
+	if !ok {
+		t.Fatalf("expected ResumeMsg, got %T", cmd())
+	}
+	if resume.SessionID != "nested-session-1" {
+		t.Fatalf("session ID = %q, want %q", resume.SessionID, "nested-session-1")
+	}
+}
+
+func TestModel_Enter_AgentStep_InSubWorkflow_HelpBar(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	subwf := &StepNode{
+		ID:             "impl",
+		Type:           NodeSubWorkflow,
+		Status:         StatusSuccess,
+		Parent:         root,
+		StaticWorkflow: "impl.yaml",
+		SubLoaded:      true,
+	}
+	agent := &StepNode{
+		ID:        "generate-code",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusSuccess,
+		Parent:    subwf,
+		AgentCLI:  "claude",
+		SessionID: "nested-session-1",
+	}
+	subwf.Children = []*StepNode{agent}
+	root.Children = []*StepNode{subwf}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	// Drill into the sub-workflow
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	help := m.renderHelpBar()
+	if !containsString(help, "enter resume") {
+		t.Errorf("help bar should show 'enter resume' for nested agent step: %q", help)
+	}
+}
+
+func TestModel_Enter_AgentStep_InSubWorkflow_DetailPane(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	subwf := &StepNode{
+		ID:             "impl",
+		Type:           NodeSubWorkflow,
+		Status:         StatusSuccess,
+		Parent:         root,
+		StaticWorkflow: "impl.yaml",
+		SubLoaded:      true,
+	}
+	agent := &StepNode{
+		ID:        "generate-code",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusSuccess,
+		Parent:    subwf,
+		AgentCLI:  "claude",
+		SessionID: "nested-session-1",
+	}
+	subwf.Children = []*StepNode{agent}
+	root.Children = []*StepNode{subwf}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	// Drill into the sub-workflow
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	view := m.View()
+	if !containsString(view, "resume session") {
+		t.Errorf("detail pane should show 'resume session' for nested agent step")
+	}
+}
+
+func TestModel_Enter_AgentStep_InSubWorkflow_LiveRunAfterCompletion(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	subwf := &StepNode{
+		ID:             "impl",
+		Type:           NodeSubWorkflow,
+		Status:         StatusSuccess,
+		Parent:         root,
+		StaticWorkflow: "impl.yaml",
+		SubLoaded:      true,
+	}
+	agent := &StepNode{
+		ID:        "generate-code",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusSuccess,
+		Parent:    subwf,
+		AgentCLI:  "claude",
+		SessionID: "nested-session-1",
+	}
+	subwf.Children = []*StepNode{agent}
+	root.Children = []*StepNode{subwf}
+
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.running = true
+
+	// Simulate run completion
+	m.Update(liverun.ExecDoneMsg{Result: "success"})
+
+	// Drill into the sub-workflow
+	m.cursor = 0 // subwf is the only child at root level
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	sel := m.selectedNode()
+	if sel == nil || sel.ID != "generate-code" {
+		t.Fatalf("expected selected node 'generate-code', got %v", sel)
+	}
+
+	// Press Enter on the nested agent step
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on nested agent step after live run completion should produce ResumeMsg")
+	}
+	resume, ok := cmd().(ResumeMsg)
+	if !ok {
+		t.Fatalf("expected ResumeMsg, got %T", cmd())
+	}
+	if resume.SessionID != "nested-session-1" {
+		t.Fatalf("session ID = %q, want %q", resume.SessionID, "nested-session-1")
+	}
+}
+
+func TestModel_Enter_CompletedAgentStep_InSubWorkflow_DuringLiveRun(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	subwf := &StepNode{
+		ID:             "impl",
+		Type:           NodeSubWorkflow,
+		Status:         StatusSuccess,
+		Parent:         root,
+		StaticWorkflow: "impl.yaml",
+		SubLoaded:      true,
+	}
+	agent := &StepNode{
+		ID:        "generate-code",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusSuccess,
+		Parent:    subwf,
+		AgentCLI:  "claude",
+		SessionID: "nested-session-1",
+	}
+	subwf.Children = []*StepNode{agent}
+	nextStep := &StepNode{
+		ID:     "finalize",
+		Type:   NodeShell,
+		Status: StatusInProgress,
+		Parent: root,
+	}
+	root.Children = []*StepNode{subwf, nextStep}
+
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.running = true
+
+	// Drill into the completed sub-workflow
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	sel := m.selectedNode()
+	if sel == nil || sel.ID != "generate-code" {
+		t.Fatalf("expected selected node 'generate-code', got %v", sel)
+	}
+
+	// Press Enter on the completed agent step — should allow resume
+	// because this step is done; the runner no longer owns this session.
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on completed agent step during live run should produce ResumeMsg " +
+			"(the agent session is no longer owned by the runner)")
+	}
+	resume, ok := cmd().(ResumeMsg)
+	if !ok {
+		t.Fatalf("expected ResumeMsg, got %T", cmd())
+	}
+	if resume.SessionID != "nested-session-1" {
+		t.Fatalf("session ID = %q, want %q", resume.SessionID, "nested-session-1")
+	}
+}
+
+func TestModel_Enter_CompletedAgentStep_DuringLiveRun_HelpBar(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	subwf := &StepNode{
+		ID:             "impl",
+		Type:           NodeSubWorkflow,
+		Status:         StatusSuccess,
+		Parent:         root,
+		StaticWorkflow: "impl.yaml",
+		SubLoaded:      true,
+	}
+	agent := &StepNode{
+		ID:        "generate-code",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusSuccess,
+		Parent:    subwf,
+		AgentCLI:  "claude",
+		SessionID: "nested-session-1",
+	}
+	subwf.Children = []*StepNode{agent}
+	nextStep := &StepNode{
+		ID:     "finalize",
+		Type:   NodeShell,
+		Status: StatusInProgress,
+		Parent: root,
+	}
+	root.Children = []*StepNode{subwf, nextStep}
+
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.running = true
+
+	// Drill into the completed sub-workflow
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	help := m.renderHelpBar()
+	if !containsString(help, "enter resume") {
+		t.Errorf("help bar should show 'enter resume' for completed agent step during live run: %q", help)
+	}
+}
+
+func TestModel_Enter_CompletedAgentStep_DuringLiveRun_DetailPane(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	subwf := &StepNode{
+		ID:             "impl",
+		Type:           NodeSubWorkflow,
+		Status:         StatusSuccess,
+		Parent:         root,
+		StaticWorkflow: "impl.yaml",
+		SubLoaded:      true,
+	}
+	agent := &StepNode{
+		ID:        "generate-code",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusSuccess,
+		Parent:    subwf,
+		AgentCLI:  "claude",
+		SessionID: "nested-session-1",
+	}
+	subwf.Children = []*StepNode{agent}
+	nextStep := &StepNode{
+		ID:     "finalize",
+		Type:   NodeShell,
+		Status: StatusInProgress,
+		Parent: root,
+	}
+	root.Children = []*StepNode{subwf, nextStep}
+
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.running = true
+	m.altScreen = true
+
+	// Drill into the completed sub-workflow
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	view := m.View()
+	if !containsString(view, "resume session") {
+		t.Errorf("detail pane should show 'resume session' for completed agent step during live run")
+	}
+}
+
+func TestModel_Enter_InProgressAgentStep_DuringLiveRun_NoResume(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	agent := &StepNode{
+		ID:        "implement",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusInProgress,
+		Parent:    root,
+		AgentCLI:  "claude",
+		SessionID: "session-in-progress",
+	}
+	root.Children = []*StepNode{agent}
+
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.running = true
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("enter on in-progress agent step during live run should be no-op " +
+			"(session is owned by the runner)")
+	}
+}
+
 func TestModel_Enter_ShellStep_NoOp(t *testing.T) {
 	m := newTestModel(simpleTree(), FromList)
 	m.cursor = 0 // shell step

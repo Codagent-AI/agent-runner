@@ -364,7 +364,7 @@ func (m *Model) renderHelpBar() string {
 		case NodeLoop, NodeSubWorkflow, NodeIteration:
 			parts = append(parts, "enter drill")
 		case NodeHeadlessAgent, NodeInteractiveAgent:
-			if sel.SessionID != "" && !m.running {
+			if sel.SessionID != "" && (!m.running || sel.Status == StatusSuccess || sel.Status == StatusFailed) {
 				parts = append(parts, "enter resume")
 			}
 		}

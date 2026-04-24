@@ -125,7 +125,7 @@ func renderHeadlessBlock(node *StepNode, indent, width int, loadedFull bool, pul
 
 	lines = append(lines, renderAgentOutput(node, contentWidth, loadedFull, pulsePhase, running)...)
 
-	if node.SessionID != "" && !running {
+	if node.SessionID != "" && (!running || node.Status == StatusSuccess || node.Status == StatusFailed) {
 		lines = append(lines, "", tuistyle.AccentStyle.Render("enter → resume session"))
 	}
 	return lines
@@ -157,7 +157,7 @@ func renderInteractiveBlock(node *StepNode, indent, width int, pulsePhase float6
 		}
 	}
 
-	if node.SessionID != "" && !running {
+	if node.SessionID != "" && (!running || node.Status == StatusSuccess || node.Status == StatusFailed) {
 		lines = append(lines, "", tuistyle.AccentStyle.Render("enter → resume session"))
 	}
 	return lines
