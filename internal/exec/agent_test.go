@@ -268,7 +268,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		ctx := makeCtx()
 		ctx.AuditLogger = auditLog
 		ctx.ProfileStore = &config.Config{
-			Profiles: map[string]*config.Profile{
+			ActiveAgents: map[string]*config.Agent{
 				"implementor": {
 					DefaultMode: "headless",
 					CLI:         "claude",
@@ -295,7 +295,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		ctx := makeCtx()
 		ctx.AuditLogger = auditLog
 		ctx.ProfileStore = &config.Config{
-			Profiles: map[string]*config.Profile{
+			ActiveAgents: map[string]*config.Agent{
 				"planner": {
 					DefaultMode: "headless",
 					CLI:         "claude",
@@ -325,7 +325,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		ctx := makeCtx()
 		ctx.AuditLogger = auditLog
 		ctx.ProfileStore = &config.Config{
-			Profiles: map[string]*config.Profile{
+			ActiveAgents: map[string]*config.Agent{
 				"implementor": {
 					DefaultMode: "headless",
 					CLI:         "claude",

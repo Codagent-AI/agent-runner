@@ -29,45 +29,57 @@ func TestLoadOrGenerate_CreatesDefault(t *testing.T) {
 		t.Fatal("expected config file to NOT be created on disk")
 	}
 
-	// Should have five default profiles.
-	if len(cfg.Profiles) != 5 {
-		t.Fatalf("expected 5 profiles, got %d", len(cfg.Profiles))
+	// Should have one profile set named "default".
+	if len(cfg.Profiles) != 1 {
+		t.Fatalf("expected 1 profile set, got %d", len(cfg.Profiles))
+	}
+	defaultSet := cfg.Profiles["default"]
+	if defaultSet == nil {
+		t.Fatal("expected 'default' profile set")
+	}
+	if len(defaultSet.Agents) != 5 {
+		t.Fatalf("expected 5 agents in default profile set, got %d", len(defaultSet.Agents))
+	}
+
+	// Active agents should have 5 entries.
+	if len(cfg.ActiveAgents) != 5 {
+		t.Fatalf("expected 5 active agents, got %d", len(cfg.ActiveAgents))
 	}
 
 	// Verify interactive_base.
-	ib := cfg.Profiles["interactive_base"]
+	ib := cfg.ActiveAgents["interactive_base"]
 	if ib == nil {
-		t.Fatal("expected interactive_base profile")
+		t.Fatal("expected interactive_base agent")
 	}
 	if ib.DefaultMode != "interactive" || ib.CLI != "claude" || ib.Model != "opus" || ib.Effort != "high" {
 		t.Fatalf("unexpected interactive_base: %+v", ib)
 	}
 
 	// Verify headless_base.
-	hb := cfg.Profiles["headless_base"]
+	hb := cfg.ActiveAgents["headless_base"]
 	if hb == nil {
-		t.Fatal("expected headless_base profile")
+		t.Fatal("expected headless_base agent")
 	}
-	if hb.DefaultMode != "headless" || hb.CLI != "claude" || hb.Model != "sonnet" || hb.Effort != "high" {
+	if hb.DefaultMode != "headless" || hb.CLI != "claude" || hb.Model != "opus" || hb.Effort != "high" {
 		t.Fatalf("unexpected headless_base: %+v", hb)
 	}
 
 	// Verify planner extends interactive_base.
-	pl := cfg.Profiles["planner"]
+	pl := cfg.ActiveAgents["planner"]
 	if pl == nil || pl.Extends != "interactive_base" {
 		t.Fatalf("expected planner to extend interactive_base, got %+v", pl)
 	}
 
 	// Verify implementor extends headless_base.
-	im := cfg.Profiles["implementor"]
+	im := cfg.ActiveAgents["implementor"]
 	if im == nil || im.Extends != "headless_base" {
 		t.Fatalf("expected implementor to extend headless_base, got %+v", im)
 	}
 
-	// Verify summarizer is a standalone base profile.
-	sum := cfg.Profiles["summarizer"]
+	// Verify summarizer.
+	sum := cfg.ActiveAgents["summarizer"]
 	if sum == nil {
-		t.Fatal("expected summarizer profile")
+		t.Fatal("expected summarizer agent")
 	}
 	if sum.Extends != "" {
 		t.Fatalf("expected summarizer to be standalone, got extends=%q", sum.Extends)
@@ -93,8 +105,8 @@ func TestLoadOrGenerate_SkipsGlobalConfigWhenHomeDirUnavailable(t *testing.T) {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("expected config file to NOT be created on disk")
 	}
-	if len(cfg.Profiles) != 5 {
-		t.Fatalf("expected default project profiles, got %d", len(cfg.Profiles))
+	if len(cfg.ActiveAgents) != 5 {
+		t.Fatalf("expected 5 default active agents, got %d", len(cfg.ActiveAgents))
 	}
 }
 
@@ -109,10 +121,12 @@ func TestLoadOrGenerate_LoadsExisting(t *testing.T) {
 	dir := filepath.Join(root, "repo")
 	path := filepath.Join(dir, "config.yaml")
 	content := `profiles:
-  custom:
-    default_mode: headless
-    cli: codex
-    model: o3
+  default:
+    agents:
+      custom:
+        default_mode: headless
+        cli: codex
+        model: o3
 `
 	writeConfigFile(t, path, content)
 
@@ -120,12 +134,12 @@ func TestLoadOrGenerate_LoadsExisting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(cfg.Profiles) != 1 {
-		t.Fatalf("expected 1 profile, got %d", len(cfg.Profiles))
+	if len(cfg.ActiveAgents) != 1 {
+		t.Fatalf("expected 1 active agent, got %d", len(cfg.ActiveAgents))
 	}
-	p := cfg.Profiles["custom"]
+	p := cfg.ActiveAgents["custom"]
 	if p == nil || p.DefaultMode != "headless" || p.CLI != "codex" || p.Model != "o3" {
-		t.Fatalf("unexpected profile: %+v", p)
+		t.Fatalf("unexpected agent: %+v", p)
 	}
 
 	got, err := os.ReadFile(path)
@@ -138,15 +152,18 @@ func TestLoadOrGenerate_LoadsExisting(t *testing.T) {
 }
 
 func TestLoadOrGenerate_AllFieldsSpecified(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	content := `profiles:
-  full:
-    default_mode: interactive
-    cli: claude
-    model: opus
-    effort: high
-    system_prompt: be helpful
+  default:
+    agents:
+      full:
+        default_mode: interactive
+        cli: claude
+        model: opus
+        effort: high
+        system_prompt: be helpful
 `
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
@@ -156,19 +173,22 @@ func TestLoadOrGenerate_AllFieldsSpecified(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	p := cfg.Profiles["full"]
+	p := cfg.ActiveAgents["full"]
 	if p.DefaultMode != "interactive" || p.CLI != "claude" || p.Model != "opus" || p.Effort != "high" || p.SystemPrompt != "be helpful" {
 		t.Fatalf("expected all fields loaded, got %+v", p)
 	}
 }
 
 func TestLoadOrGenerate_OptionalFieldsOmitted(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	content := `profiles:
-  minimal:
-    default_mode: headless
-    cli: claude
+  default:
+    agents:
+      minimal:
+        default_mode: headless
+        cli: claude
 `
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
@@ -178,20 +198,23 @@ func TestLoadOrGenerate_OptionalFieldsOmitted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	p := cfg.Profiles["minimal"]
+	p := cfg.ActiveAgents["minimal"]
 	if p.Model != "" || p.Effort != "" || p.SystemPrompt != "" {
 		t.Fatalf("expected optional fields to be empty, got %+v", p)
 	}
 }
 
 func TestLoadOrGenerate_UnrecognizedFieldIgnored(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	content := `profiles:
-  test:
-    default_mode: interactive
-    cli: claude
-    unknown_field: should be ignored
+  default:
+    agents:
+      test:
+        default_mode: interactive
+        cli: claude
+        unknown_field: should be ignored
 `
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
@@ -201,8 +224,8 @@ func TestLoadOrGenerate_UnrecognizedFieldIgnored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Profiles["test"] == nil {
-		t.Fatal("expected test profile to be loaded")
+	if cfg.ActiveAgents["test"] == nil {
+		t.Fatal("expected test agent to be loaded")
 	}
 }
 
@@ -216,23 +239,27 @@ func TestLoadOrGenerate_MergesGlobalAndProjectProfiles(t *testing.T) {
 	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
 
 	writeConfigFile(t, globalPath, `profiles:
-  headless_base:
-    default_mode: headless
-    cli: claude
-    model: sonnet
-  implementor:
-    extends: headless_base
-    model: opus
-    effort: high
-  global_only:
-    extends: headless_base
+  default:
+    agents:
+      headless_base:
+        default_mode: headless
+        cli: claude
+        model: sonnet
+      implementor:
+        extends: headless_base
+        model: opus
+        effort: high
+      global_only:
+        extends: headless_base
 `)
 	writeConfigFile(t, projectPath, `profiles:
-  implementor:
-    extends: headless_base
-    cli: copilot
-  project_only:
-    extends: headless_base
+  default:
+    agents:
+      implementor:
+        extends: headless_base
+        cli: copilot
+      project_only:
+        extends: headless_base
 `)
 
 	cfg, err := LoadOrGenerate(projectPath)
@@ -240,22 +267,22 @@ func TestLoadOrGenerate_MergesGlobalAndProjectProfiles(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if cfg.Profiles["global_only"] == nil {
-		t.Fatal("expected global-only profile in merged config")
+	if cfg.ActiveAgents["global_only"] == nil {
+		t.Fatal("expected global-only agent in merged config")
 	}
-	if cfg.Profiles["project_only"] == nil {
-		t.Fatal("expected project-only profile in merged config")
+	if cfg.ActiveAgents["project_only"] == nil {
+		t.Fatal("expected project-only agent in merged config")
 	}
 
-	implementor := cfg.Profiles["implementor"]
+	implementor := cfg.ActiveAgents["implementor"]
 	if implementor == nil {
-		t.Fatal("expected merged implementor profile")
+		t.Fatal("expected merged implementor agent")
 	}
 	if implementor.Extends != "headless_base" || implementor.CLI != "copilot" {
-		t.Fatalf("unexpected merged implementor profile: %+v", implementor)
+		t.Fatalf("unexpected merged implementor agent: %+v", implementor)
 	}
 	if implementor.Model != "" || implementor.Effort != "" {
-		t.Fatalf("expected project profile to replace global one without field merging, got %+v", implementor)
+		t.Fatalf("expected project agent to replace global one without field merging, got %+v", implementor)
 	}
 
 	rp, err := cfg.Resolve("project_only")
@@ -263,7 +290,7 @@ func TestLoadOrGenerate_MergesGlobalAndProjectProfiles(t *testing.T) {
 		t.Fatalf("unexpected resolve error: %v", err)
 	}
 	if rp.DefaultMode != "headless" || rp.CLI != "claude" || rp.Model != "sonnet" {
-		t.Fatalf("expected project profile to inherit from global base, got %+v", rp)
+		t.Fatalf("expected project agent to inherit from global base, got %+v", rp)
 	}
 }
 
@@ -277,14 +304,18 @@ func TestLoadOrGenerate_GlobalProfileCanExtendProjectProfile(t *testing.T) {
 	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
 
 	writeConfigFile(t, globalPath, `profiles:
-  summarizer:
-    extends: team_base
-    model: haiku
+  default:
+    agents:
+      summarizer:
+        extends: team_base
+        model: haiku
 `)
 	writeConfigFile(t, projectPath, `profiles:
-  team_base:
-    default_mode: interactive
-    cli: copilot
+  default:
+    agents:
+      team_base:
+        default_mode: interactive
+        cli: copilot
 `)
 
 	cfg, err := LoadOrGenerate(projectPath)
@@ -297,7 +328,7 @@ func TestLoadOrGenerate_GlobalProfileCanExtendProjectProfile(t *testing.T) {
 		t.Fatalf("unexpected resolve error: %v", err)
 	}
 	if rp.DefaultMode != "interactive" || rp.CLI != "copilot" || rp.Model != "haiku" {
-		t.Fatalf("unexpected resolved profile: %+v", rp)
+		t.Fatalf("unexpected resolved agent: %+v", rp)
 	}
 }
 
@@ -311,12 +342,16 @@ func TestLoadOrGenerate_DetectsCrossFileCycle(t *testing.T) {
 	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
 
 	writeConfigFile(t, globalPath, `profiles:
-  a:
-    extends: b
+  default:
+    agents:
+      a:
+        extends: b
 `)
 	writeConfigFile(t, projectPath, `profiles:
-  b:
-    extends: a
+  default:
+    agents:
+      b:
+        extends: a
 `)
 
 	_, err := LoadOrGenerate(projectPath)
@@ -363,8 +398,8 @@ func TestLoadOrGenerate_DoesNotCreateGlobalConfigWhenMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(cfg.Profiles) != 5 {
-		t.Fatalf("expected default project config, got %d profiles", len(cfg.Profiles))
+	if len(cfg.ActiveAgents) != 5 {
+		t.Fatalf("expected default project config, got %d active agents", len(cfg.ActiveAgents))
 	}
 
 	globalDir := filepath.Join(home, ".agent-runner")
@@ -383,9 +418,11 @@ func TestLoadOrGenerate_DefaultsAndMergesGlobalProfiles(t *testing.T) {
 	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
 
 	writeConfigFile(t, globalPath, `profiles:
-  global_only:
-    default_mode: headless
-    cli: copilot
+  default:
+    agents:
+      global_only:
+        default_mode: headless
+        cli: copilot
 `)
 
 	cfg, err := LoadOrGenerate(projectPath)
@@ -397,24 +434,406 @@ func TestLoadOrGenerate_DefaultsAndMergesGlobalProfiles(t *testing.T) {
 	if _, err := os.Stat(projectPath); !os.IsNotExist(err) {
 		t.Fatal("expected project config file to NOT be created on disk")
 	}
-	if cfg.Profiles["global_only"] == nil {
-		t.Fatal("expected global profile to be merged into default config")
+	if cfg.ActiveAgents["global_only"] == nil {
+		t.Fatal("expected global agent to be merged into default config")
 	}
-	if cfg.Profiles["planner"] == nil {
-		t.Fatal("expected default profiles to be present")
+	if cfg.ActiveAgents["planner"] == nil {
+		t.Fatal("expected default agents to be present")
 	}
 }
 
-func TestValidation_BaseProfileMissingDefaultMode(t *testing.T) {
+// --- Legacy flat shape rejection ---
+
+func TestLoadOrGenerate_RejectsLegacyFlatShapeProject(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	content := `profiles:
-  bad:
+	writeConfigFile(t, path, `profiles:
+  planner:
+    extends: interactive_base
+`)
+
+	_, err := LoadOrGenerate(path)
+	if err == nil {
+		t.Fatal("expected error for legacy flat shape")
+	}
+	if !strings.Contains(err.Error(), "restructure") {
+		t.Fatalf("expected restructure message, got: %v", err)
+	}
+}
+
+func TestLoadOrGenerate_RejectsLegacyFlatShapeGlobal(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repo := filepath.Join(root, "repo")
+	t.Setenv("HOME", home)
+
+	globalPath := filepath.Join(home, ".agent-runner", "config.yaml")
+	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
+
+	writeConfigFile(t, globalPath, `profiles:
+  headless_base:
+    default_mode: headless
     cli: claude
-`
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+`)
+
+	_, err := LoadOrGenerate(projectPath)
+	if err == nil {
+		t.Fatal("expected error for legacy flat shape in global config")
+	}
+	if !strings.Contains(err.Error(), "restructure") {
+		t.Fatalf("expected restructure message, got: %v", err)
+	}
+}
+
+func TestLoadOrGenerate_RejectsLegacyMixedShape(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeConfigFile(t, path, `profiles:
+  default:
+    agents:
+      planner:
+        default_mode: interactive
+        cli: claude
+  headless_base:
+    default_mode: headless
+    cli: claude
+`)
+
+	_, err := LoadOrGenerate(path)
+	if err == nil {
+		t.Fatal("expected error for mixed legacy/new shape")
+	}
+	if !strings.Contains(err.Error(), "restructure") {
+		t.Fatalf("expected restructure message, got: %v", err)
+	}
+}
+
+// --- active_profile selection ---
+
+func TestLoadOrGenerate_ActiveProfileSelects(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("HOME", home)
+
+	dir := filepath.Join(root, "repo")
+	path := filepath.Join(dir, "config.yaml")
+	writeConfigFile(t, path, `active_profile: copilot
+profiles:
+  default:
+    agents:
+      planner:
+        default_mode: interactive
+        cli: claude
+  copilot:
+    agents:
+      planner:
+        default_mode: headless
+        cli: copilot
+`)
+
+	cfg, err := LoadOrGenerate(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	p := cfg.ActiveAgents["planner"]
+	if p == nil {
+		t.Fatal("expected planner in active agents")
+	}
+	if p.CLI != "copilot" {
+		t.Fatalf("expected copilot profile's planner, got %+v", p)
+	}
+}
+
+func TestLoadOrGenerate_NoActiveProfileFallsToDefault(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeConfigFile(t, path, `profiles:
+  default:
+    agents:
+      planner:
+        default_mode: interactive
+        cli: claude
+`)
+
+	cfg, err := LoadOrGenerate(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ActiveAgents["planner"] == nil {
+		t.Fatal("expected planner in active agents from default profile set")
+	}
+}
+
+func TestLoadOrGenerate_NoActiveProfileNoDefault(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeConfigFile(t, path, `profiles:
+  copilot:
+    agents:
+      planner:
+        default_mode: interactive
+        cli: copilot
+`)
+
+	_, err := LoadOrGenerate(path)
+	if err == nil {
+		t.Fatal("expected error when no active_profile and no default set")
+	}
+	if !strings.Contains(err.Error(), "default") {
+		t.Fatalf("expected error about 'default', got: %v", err)
+	}
+}
+
+func TestLoadOrGenerate_ActiveProfileMissing(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeConfigFile(t, path, `active_profile: missing
+profiles:
+  default:
+    agents:
+      planner:
+        default_mode: interactive
+        cli: claude
+`)
+
+	_, err := LoadOrGenerate(path)
+	if err == nil {
+		t.Fatal("expected error for missing active profile set")
+	}
+	if !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("expected error naming the missing profile, got: %v", err)
+	}
+}
+
+func TestLoadOrGenerate_ActiveProfileInGlobalConfig(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repo := filepath.Join(root, "repo")
+	t.Setenv("HOME", home)
+
+	globalPath := filepath.Join(home, ".agent-runner", "config.yaml")
+	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
+
+	writeConfigFile(t, globalPath, `active_profile: default
+profiles:
+  default:
+    agents:
+      planner:
+        default_mode: interactive
+        cli: claude
+`)
+	writeConfigFile(t, projectPath, `profiles:
+  default:
+    agents:
+      planner:
+        default_mode: interactive
+        cli: claude
+`)
+
+	_, err := LoadOrGenerate(projectPath)
+	if err == nil {
+		t.Fatal("expected error for active_profile in global config")
+	}
+	if !strings.Contains(err.Error(), "active_profile") {
+		t.Fatalf("expected error about active_profile, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "global") {
+		t.Fatalf("expected error to mention global config, got: %v", err)
+	}
+}
+
+// --- Profile set merging ---
+
+func TestLoadOrGenerate_MergesDisjointProfileSets(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repo := filepath.Join(root, "repo")
+	t.Setenv("HOME", home)
+
+	globalPath := filepath.Join(home, ".agent-runner", "config.yaml")
+	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
+
+	writeConfigFile(t, globalPath, `profiles:
+  work:
+    agents:
+      planner:
+        default_mode: interactive
+        cli: claude
+`)
+	writeConfigFile(t, projectPath, `active_profile: personal
+profiles:
+  personal:
+    agents:
+      planner:
+        default_mode: headless
+        cli: codex
+`)
+
+	cfg, err := LoadOrGenerate(projectPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Profiles["work"] == nil {
+		t.Fatal("expected 'work' profile set from global")
+	}
+	if cfg.Profiles["personal"] == nil {
+		t.Fatal("expected 'personal' profile set from project")
+	}
+	// Active agents should come from personal.
+	if cfg.ActiveAgents["planner"] == nil || cfg.ActiveAgents["planner"].CLI != "codex" {
+		t.Fatalf("expected personal planner active, got %+v", cfg.ActiveAgents["planner"])
+	}
+}
+
+func TestLoadOrGenerate_MergesSameProfileSetDisjointAgents(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repo := filepath.Join(root, "repo")
+	t.Setenv("HOME", home)
+
+	globalPath := filepath.Join(home, ".agent-runner", "config.yaml")
+	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
+
+	writeConfigFile(t, globalPath, `profiles:
+  default:
+    agents:
+      planner:
+        default_mode: interactive
+        cli: claude
+`)
+	writeConfigFile(t, projectPath, `profiles:
+  default:
+    agents:
+      implementor:
+        default_mode: headless
+        cli: claude
+`)
+
+	cfg, err := LoadOrGenerate(projectPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ActiveAgents["planner"] == nil {
+		t.Fatal("expected planner from global in merged default set")
+	}
+	if cfg.ActiveAgents["implementor"] == nil {
+		t.Fatal("expected implementor from project in merged default set")
+	}
+}
+
+func TestLoadOrGenerate_MergesSameProfileSetOverlappingAgents(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repo := filepath.Join(root, "repo")
+	t.Setenv("HOME", home)
+
+	globalPath := filepath.Join(home, ".agent-runner", "config.yaml")
+	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
+
+	writeConfigFile(t, globalPath, `profiles:
+  default:
+    agents:
+      implementor:
+        default_mode: headless
+        cli: claude
+        model: opus
+`)
+	writeConfigFile(t, projectPath, `profiles:
+  default:
+    agents:
+      implementor:
+        default_mode: headless
+        cli: copilot
+`)
+
+	cfg, err := LoadOrGenerate(projectPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	im := cfg.ActiveAgents["implementor"]
+	if im == nil {
+		t.Fatal("expected implementor in active agents")
+	}
+	if im.CLI != "copilot" {
+		t.Fatalf("expected project version of implementor (copilot), got %+v", im)
+	}
+	if im.Model != "" {
+		t.Fatalf("expected no model (project version has none), got %q", im.Model)
+	}
+}
+
+func TestLoadOrGenerate_NonActiveProfileSetInvalidAgentBlocksLoad(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeConfigFile(t, path, `profiles:
+  default:
+    agents:
+      planner:
+        default_mode: interactive
+        cli: claude
+  copilot:
+    agents:
+      reviewer:
+        default_mode: headless
+        cli: copilot
+        effort: extreme
+`)
+
+	_, err := LoadOrGenerate(path)
+	if err == nil {
+		t.Fatal("expected validation error for invalid agent in non-active profile set")
+	}
+	if !strings.Contains(err.Error(), "effort") {
+		t.Fatalf("expected error about invalid effort, got: %v", err)
+	}
+}
+
+func TestLoadOrGenerate_ExtendsAcrossProfileSetsBoundary(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeConfigFile(t, path, `profiles:
+  default:
+    agents:
+      planner:
+        extends: cloud_base
+  copilot:
+    agents:
+      cloud_base:
+        default_mode: headless
+        cli: copilot
+`)
+
+	_, err := LoadOrGenerate(path)
+	if err == nil {
+		t.Fatal("expected error for cross-profile-set extends")
+	}
+	if !strings.Contains(err.Error(), "cloud_base") {
+		t.Fatalf("expected error naming missing parent, got: %v", err)
+	}
+}
+
+// --- Validation tests (new YAML format) ---
+
+func TestValidation_BaseAgentMissingDefaultMode(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeConfigFile(t, path, `profiles:
+  default:
+    agents:
+      bad:
+        cli: claude
+`)
 
 	_, err := LoadOrGenerate(path)
 	if err == nil {
@@ -425,16 +844,16 @@ func TestValidation_BaseProfileMissingDefaultMode(t *testing.T) {
 	}
 }
 
-func TestValidation_BaseProfileMissingCLI(t *testing.T) {
+func TestValidation_BaseAgentMissingCLI(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	content := `profiles:
-  bad:
-    default_mode: headless
-`
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeConfigFile(t, path, `profiles:
+  default:
+    agents:
+      bad:
+        default_mode: headless
+`)
 
 	_, err := LoadOrGenerate(path)
 	if err == nil {
@@ -445,19 +864,19 @@ func TestValidation_BaseProfileMissingCLI(t *testing.T) {
 	}
 }
 
-func TestValidation_ChildProfileOmitsFields(t *testing.T) {
+func TestValidation_ChildAgentOmitsFields(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	content := `profiles:
-  parent:
-    default_mode: interactive
-    cli: claude
-  child:
-    extends: parent
-`
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeConfigFile(t, path, `profiles:
+  default:
+    agents:
+      parent:
+        default_mode: interactive
+        cli: claude
+      child:
+        extends: parent
+`)
 
 	_, err := LoadOrGenerate(path)
 	if err != nil {
@@ -466,17 +885,17 @@ func TestValidation_ChildProfileOmitsFields(t *testing.T) {
 }
 
 func TestValidation_InvalidEffort(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	content := `profiles:
-  bad:
-    default_mode: interactive
-    cli: claude
-    effort: maximum
-`
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeConfigFile(t, path, `profiles:
+  default:
+    agents:
+      bad:
+        default_mode: interactive
+        cli: claude
+        effort: maximum
+`)
 
 	_, err := LoadOrGenerate(path)
 	if err == nil {
@@ -488,16 +907,16 @@ func TestValidation_InvalidEffort(t *testing.T) {
 }
 
 func TestValidation_InvalidCLI(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	content := `profiles:
-  bad:
-    default_mode: headless
-    cli: unknown
-`
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeConfigFile(t, path, `profiles:
+  default:
+    agents:
+      bad:
+        default_mode: headless
+        cli: unknown
+`)
 
 	_, err := LoadOrGenerate(path)
 	if err == nil {
@@ -509,38 +928,38 @@ func TestValidation_InvalidCLI(t *testing.T) {
 }
 
 func TestValidation_CopilotCLIAccepted(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	content := `profiles:
-  copilot_base:
-    default_mode: headless
-    cli: copilot
-`
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeConfigFile(t, path, `profiles:
+  default:
+    agents:
+      copilot_base:
+        default_mode: headless
+        cli: copilot
+`)
 
 	cfg, err := LoadOrGenerate(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	p := cfg.Profiles["copilot_base"]
+	p := cfg.ActiveAgents["copilot_base"]
 	if p == nil || p.CLI != "copilot" {
-		t.Fatalf("expected copilot profile, got %+v", p)
+		t.Fatalf("expected copilot agent, got %+v", p)
 	}
 }
 
 func TestValidation_InvalidDefaultMode(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	content := `profiles:
-  bad:
-    default_mode: auto
-    cli: claude
-`
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeConfigFile(t, path, `profiles:
+  default:
+    agents:
+      bad:
+        default_mode: auto
+        cli: claude
+`)
 
 	_, err := LoadOrGenerate(path)
 	if err == nil {
@@ -552,15 +971,15 @@ func TestValidation_InvalidDefaultMode(t *testing.T) {
 }
 
 func TestValidation_ExtendsNonexistent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	content := `profiles:
-  child:
-    extends: nonexistent
-`
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeConfigFile(t, path, `profiles:
+  default:
+    agents:
+      child:
+        extends: nonexistent
+`)
 
 	_, err := LoadOrGenerate(path)
 	if err == nil {
@@ -572,17 +991,17 @@ func TestValidation_ExtendsNonexistent(t *testing.T) {
 }
 
 func TestValidation_CycleDetected(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	content := `profiles:
-  a:
-    extends: b
-  b:
-    extends: a
-`
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeConfigFile(t, path, `profiles:
+  default:
+    agents:
+      a:
+        extends: b
+      b:
+        extends: a
+`)
 
 	_, err := LoadOrGenerate(path)
 	if err == nil {
@@ -593,26 +1012,28 @@ func TestValidation_CycleDetected(t *testing.T) {
 	}
 }
 
-func TestValidation_NilProfile(t *testing.T) {
+func TestValidation_NilAgent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	content := "profiles:\n  empty:\n"
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("profiles:\n  default:\n    agents:\n      empty:\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	_, err := LoadOrGenerate(path)
 	if err == nil {
-		t.Fatal("expected validation error for nil profile")
+		t.Fatal("expected validation error for nil agent")
 	}
 	if !strings.Contains(err.Error(), "must not be empty") {
 		t.Fatalf("expected 'must not be empty' error, got: %v", err)
 	}
 }
 
+// --- Resolve tests (new types) ---
+
 func TestResolve_ChildOverridesOneField(t *testing.T) {
 	cfg := &Config{
-		Profiles: map[string]*Profile{
+		ActiveAgents: map[string]*Agent{
 			"parent": {
 				DefaultMode:  "interactive",
 				CLI:          "claude",
@@ -650,7 +1071,7 @@ func TestResolve_ChildOverridesOneField(t *testing.T) {
 
 func TestResolve_EffortUnsetAfterMerge(t *testing.T) {
 	cfg := &Config{
-		Profiles: map[string]*Profile{
+		ActiveAgents: map[string]*Agent{
 			"parent": {
 				DefaultMode: "headless",
 				CLI:         "claude",
@@ -672,7 +1093,7 @@ func TestResolve_EffortUnsetAfterMerge(t *testing.T) {
 
 func TestResolve_SystemPromptInherited(t *testing.T) {
 	cfg := &Config{
-		Profiles: map[string]*Profile{
+		ActiveAgents: map[string]*Agent{
 			"parent": {
 				DefaultMode:  "interactive",
 				CLI:          "claude",
@@ -695,7 +1116,7 @@ func TestResolve_SystemPromptInherited(t *testing.T) {
 
 func TestResolve_MultiLevelInheritance(t *testing.T) {
 	cfg := &Config{
-		Profiles: map[string]*Profile{
+		ActiveAgents: map[string]*Agent{
 			"a": {
 				DefaultMode: "headless",
 				CLI:         "codex",
@@ -729,14 +1150,14 @@ func TestResolve_MultiLevelInheritance(t *testing.T) {
 	}
 }
 
-func TestResolve_ProfileNotFound(t *testing.T) {
+func TestResolve_AgentNotFound(t *testing.T) {
 	cfg := &Config{
-		Profiles: map[string]*Profile{},
+		ActiveAgents: map[string]*Agent{},
 	}
 
 	_, err := cfg.Resolve("missing")
 	if err == nil {
-		t.Fatal("expected error for missing profile")
+		t.Fatal("expected error for missing agent")
 	}
 	if !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected 'not found' error, got: %v", err)
@@ -744,9 +1165,8 @@ func TestResolve_ProfileNotFound(t *testing.T) {
 }
 
 func TestResolve_CycleInResolve(t *testing.T) {
-	// Build config directly (bypassing validate) to test Resolve's own cycle detection.
 	cfg := &Config{
-		Profiles: map[string]*Profile{
+		ActiveAgents: map[string]*Agent{
 			"a": {Extends: "b"},
 			"b": {Extends: "a"},
 		},
@@ -761,7 +1181,7 @@ func TestResolve_CycleInResolve(t *testing.T) {
 	}
 }
 
-func TestResolve_DefaultConfigProfiles(t *testing.T) {
+func TestResolve_DefaultConfigAgents(t *testing.T) {
 	cfg := defaultConfig()
 
 	// Planner should resolve to interactive_base values.
@@ -773,12 +1193,12 @@ func TestResolve_DefaultConfigProfiles(t *testing.T) {
 		t.Fatalf("unexpected planner resolution: %+v", rp)
 	}
 
-	// Implementor should resolve to headless_base values.
+	// Implementor should resolve to headless_base values (opus per spec).
 	rp, err = cfg.Resolve("implementor")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if rp.DefaultMode != "headless" || rp.CLI != "claude" || rp.Model != "sonnet" || rp.Effort != "high" {
+	if rp.DefaultMode != "headless" || rp.CLI != "claude" || rp.Model != "opus" || rp.Effort != "high" {
 		t.Fatalf("unexpected implementor resolution: %+v", rp)
 	}
 

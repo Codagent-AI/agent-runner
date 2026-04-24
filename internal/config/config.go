@@ -1,4 +1,4 @@
-// Package config loads, validates, and resolves agent profiles from
+// Package config loads, validates, and resolves agent configurations from
 // project-local and optional global config files.
 package config
 
@@ -12,10 +12,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Profile represents a named agent profile as declared in config YAML.
-// All fields are optional; a profile without Extends must supply at least
+// Agent represents a named agent as declared in config YAML.
+// All fields are optional; an agent without Extends must supply at least
 // DefaultMode and CLI.
-type Profile struct {
+type Agent struct {
 	DefaultMode  string `yaml:"default_mode,omitempty"`
 	CLI          string `yaml:"cli,omitempty"`
 	Model        string `yaml:"model,omitempty"`
@@ -24,10 +24,10 @@ type Profile struct {
 	Extends      string `yaml:"extends,omitempty"`
 }
 
-// ResolvedProfile is a fully-merged profile after walking the extends chain.
+// ResolvedAgent is a fully-merged agent after walking the extends chain.
 // DefaultMode and CLI are guaranteed populated. Model, Effort, and
 // SystemPrompt may be empty (meaning "not set").
-type ResolvedProfile struct {
+type ResolvedAgent struct {
 	DefaultMode  string
 	CLI          string
 	Model        string
@@ -35,50 +35,65 @@ type ResolvedProfile struct {
 	SystemPrompt string
 }
 
-// Config is the top-level configuration loaded from config YAML.
+// ProfileSet is a named collection of agents.
+type ProfileSet struct {
+	Agents map[string]*Agent `yaml:"agents"`
+}
+
+// Config is the top-level configuration after loading, merging, and active-profile
+// selection. ActiveAgents holds the agents for the selected profile set.
 type Config struct {
-	Profiles map[string]*Profile `yaml:"profiles"`
+	ActiveProfile string
+	Profiles      map[string]*ProfileSet
+	ActiveAgents  map[string]*Agent
 }
 
-var validEffort = map[string]bool{
-	"low":    true,
-	"medium": true,
-	"high":   true,
+// parsedFile is the internal representation of one loaded config file.
+type parsedFile struct {
+	ActiveProfile string
+	Profiles      map[string]*ProfileSet
 }
 
-var validDefaultMode = map[string]bool{
-	"interactive": true,
-	"headless":    true,
+// legacyAgentKeys are direct fields of the old flat agent bundle shape.
+// Their presence at the profile-set level indicates a legacy config.
+var legacyAgentKeys = map[string]bool{
+	"default_mode":  true,
+	"cli":           true,
+	"model":         true,
+	"effort":        true,
+	"system_prompt": true,
+	"extends":       true,
 }
 
-var validCLI = map[string]bool{
-	"claude":  true,
-	"codex":   true,
-	"copilot": true,
-}
+var validEffort = map[string]bool{"low": true, "medium": true, "high": true}
+var validDefaultMode = map[string]bool{"interactive": true, "headless": true}
+var validCLI = map[string]bool{"claude": true, "codex": true, "copilot": true}
 
 var userHomeDir = os.UserHomeDir
 
 // LoadOrGenerate loads the config file at path. If the file does not exist,
-// it writes a default project-local config and returns the merged result of the
-// optional global config (~/.agent-runner/config.yaml) plus the project config.
-// Project profiles replace global profiles of the same name. After merging, all
-// profiles are validated as one set.
+// it returns in-memory defaults (no file written). The optional global config
+// (~/.agent-runner/config.yaml) is merged first; project config takes
+// precedence. Legacy flat shapes are rejected with an actionable error.
 func LoadOrGenerate(path string) (*Config, error) {
-	var globalCfg *Config
+	var globalFile *parsedFile
 	if globalPath, err := globalConfigPath(); err == nil {
-		globalCfg, err = loadOptional(globalPath)
-		if err != nil {
-			return nil, fmt.Errorf("loading global config %s: %w", globalPath, err)
+		gf, gErr := loadFileOptional(globalPath, true)
+		if gErr != nil {
+			return nil, fmt.Errorf("loading global config %s: %w", globalPath, gErr)
 		}
+		globalFile = gf
 	}
 
-	projectCfg, err := loadProjectOrGenerate(path)
+	projectFile, err := loadProjectFileOrDefault(path)
 	if err != nil {
 		return nil, err
 	}
 
-	cfg := mergeConfigs(globalCfg, projectCfg)
+	cfg, err := buildConfig(globalFile, projectFile)
+	if err != nil {
+		return nil, err
+	}
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
@@ -93,7 +108,7 @@ func globalConfigPath() (string, error) {
 	return filepath.Join(home, ".agent-runner", "config.yaml"), nil
 }
 
-func loadOptional(path string) (*Config, error) {
+func loadFileOptional(path string, isGlobal bool) (*parsedFile, error) {
 	data, err := os.ReadFile(path) // #nosec G304 -- config path is from internal caller
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -101,52 +116,184 @@ func loadOptional(path string) (*Config, error) {
 		}
 		return nil, fmt.Errorf("reading config: %w", err)
 	}
-
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parsing config: %w", err)
-	}
-	return &cfg, nil
+	return parseConfigFile(data, path, isGlobal)
 }
 
-func loadProjectOrGenerate(path string) (*Config, error) {
+func loadProjectFileOrDefault(path string) (*parsedFile, error) {
 	data, err := os.ReadFile(path) // #nosec G304 -- config path is from internal caller
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("reading config: %w", err)
 		}
-		// Return defaults in-memory without writing to disk.
-		return defaultConfig(), nil
+		return defaultParsedFile(), nil
 	}
-
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parsing config: %w", err)
-	}
-	return &cfg, nil
+	return parseConfigFile(data, path, false)
 }
 
-func mergeConfigs(globalCfg, projectCfg *Config) *Config {
-	merged := &Config{Profiles: map[string]*Profile{}}
-	for _, cfg := range []*Config{globalCfg, projectCfg} {
-		if cfg == nil {
+func parseConfigFile(data []byte, path string, isGlobal bool) (*parsedFile, error) {
+	// First pass: detect legacy flat shape before any typed unmarshaling.
+	if err := checkLegacyShape(data, path); err != nil {
+		return nil, err
+	}
+
+	// Extract active_profile and enforce project-only rule.
+	var header struct {
+		ActiveProfile string `yaml:"active_profile"`
+	}
+	if err := yaml.Unmarshal(data, &header); err != nil {
+		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+	if isGlobal && header.ActiveProfile != "" {
+		return nil, fmt.Errorf("active_profile is not allowed in the global config")
+	}
+
+	// Second pass: parse into typed struct.
+	var raw struct {
+		Profiles map[string]*ProfileSet `yaml:"profiles"`
+	}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+
+	// Normalize nil ProfileSets (e.g. `profiles:\n  name:\n`).
+	for name, ps := range raw.Profiles {
+		if ps == nil {
+			raw.Profiles[name] = &ProfileSet{}
+		}
+	}
+
+	return &parsedFile{
+		ActiveProfile: header.ActiveProfile,
+		Profiles:      raw.Profiles,
+	}, nil
+}
+
+// checkLegacyShape inspects each profile-set value for legacy agent-bundle
+// fields. If found, it returns an error instructing the user to restructure.
+func checkLegacyShape(data []byte, path string) error {
+	var raw struct {
+		Profiles map[string]interface{} `yaml:"profiles"`
+	}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("parsing config: %w", err)
+	}
+	for name, value := range raw.Profiles {
+		if value == nil {
 			continue
 		}
-		for name, profile := range cfg.Profiles {
-			merged.Profiles[name] = profile
+		valueMap, ok := value.(map[string]interface{})
+		if !ok {
+			continue // not a mapping; typed parse will error later
+		}
+		if isLegacyAgentMap(valueMap) {
+			return fmt.Errorf(
+				"%s: entry %q looks like a legacy agent bundle; "+
+					"restructure it under profiles.<set_name>.agents.%s",
+				path, name, name,
+			)
+		}
+	}
+	return nil
+}
+
+// isLegacyAgentMap returns true when a profile-set value map has legacy
+// agent-bundle fields (default_mode, cli, model, etc.) but no "agents" key.
+func isLegacyAgentMap(m map[string]interface{}) bool {
+	if _, hasAgents := m["agents"]; hasAgents {
+		return false
+	}
+	for key := range m {
+		if legacyAgentKeys[key] {
+			return true
+		}
+	}
+	return false
+}
+
+// buildConfig merges global and project parsed files, selects the active profile
+// set, and returns a fully-populated Config.
+func buildConfig(global, project *parsedFile) (*Config, error) {
+	merged := mergeProfileSets(global, project)
+
+	var activeProfile string
+	if project != nil {
+		activeProfile = project.ActiveProfile
+	}
+
+	selectedName := activeProfile
+	if selectedName == "" {
+		selectedName = "default"
+	}
+
+	selectedSet, ok := merged[selectedName]
+	if !ok {
+		if activeProfile != "" {
+			return nil, fmt.Errorf("active_profile %q does not exist in the merged config", selectedName)
+		}
+		return nil, fmt.Errorf("no profile set named %q found; define a 'default' profile set or set active_profile explicitly", selectedName)
+	}
+
+	activeAgents := selectedSet.Agents
+	if activeAgents == nil {
+		activeAgents = map[string]*Agent{}
+	}
+
+	return &Config{
+		ActiveProfile: activeProfile,
+		Profiles:      merged,
+		ActiveAgents:  activeAgents,
+	}, nil
+}
+
+// mergeProfileSets combines profile sets from global and project files.
+// Profile sets with the same name have their agents maps merged (project wins).
+func mergeProfileSets(global, project *parsedFile) map[string]*ProfileSet {
+	result := map[string]*ProfileSet{}
+
+	if global != nil {
+		for name, ps := range global.Profiles {
+			result[name] = ps
+		}
+	}
+	if project == nil {
+		return result
+	}
+
+	for name, projectPS := range project.Profiles {
+		globalPS, exists := result[name]
+		if !exists {
+			result[name] = projectPS
+			continue
+		}
+		result[name] = mergeAgentMaps(globalPS, projectPS)
+	}
+	return result
+}
+
+// mergeAgentMaps merges two ProfileSets' agent maps. Project agents replace
+// global agents of the same name (no field-level merge).
+func mergeAgentMaps(global, project *ProfileSet) *ProfileSet {
+	merged := &ProfileSet{Agents: map[string]*Agent{}}
+	if global != nil {
+		for name, a := range global.Agents {
+			merged.Agents[name] = a
+		}
+	}
+	if project != nil {
+		for name, a := range project.Agents {
+			merged.Agents[name] = a
 		}
 	}
 	return merged
 }
 
-// Resolve walks the extends chain for the named profile and returns a
-// fully-merged ResolvedProfile. Child fields override parent fields.
-func (c *Config) Resolve(name string) (*ResolvedProfile, error) {
-	if _, ok := c.Profiles[name]; !ok {
-		return nil, fmt.Errorf("profile %q not found", name)
+// Resolve walks the extends chain for the named agent in the active profile set
+// and returns a fully-merged ResolvedAgent. Child fields override parent fields.
+func (c *Config) Resolve(name string) (*ResolvedAgent, error) {
+	if _, ok := c.ActiveAgents[name]; !ok {
+		return nil, fmt.Errorf("agent %q not found in active profile", name)
 	}
 
-	// Collect the chain from child → root.
 	var chain []string
 	visited := map[string]bool{}
 	cur := name
@@ -157,91 +304,92 @@ func (c *Config) Resolve(name string) (*ResolvedProfile, error) {
 		visited[cur] = true
 		chain = append(chain, cur)
 
-		p, ok := c.Profiles[cur]
+		a, ok := c.ActiveAgents[cur]
 		if !ok {
-			return nil, fmt.Errorf("profile %q (referenced by extends) not found", cur)
+			return nil, fmt.Errorf("agent %q (referenced by extends) not found in active profile", cur)
 		}
-		if p == nil {
-			return nil, fmt.Errorf("profile %q is nil", cur)
+		if a == nil {
+			return nil, fmt.Errorf("agent %q is nil", cur)
 		}
-		cur = p.Extends
+		cur = a.Extends
 	}
 
-	// Merge from root (last) to child (first) so child overrides parent.
-	rp := &ResolvedProfile{}
+	ra := &ResolvedAgent{}
 	for i := len(chain) - 1; i >= 0; i-- {
-		p := c.Profiles[chain[i]]
-		if p.DefaultMode != "" {
-			rp.DefaultMode = p.DefaultMode
+		a := c.ActiveAgents[chain[i]]
+		if a.DefaultMode != "" {
+			ra.DefaultMode = a.DefaultMode
 		}
-		if p.CLI != "" {
-			rp.CLI = p.CLI
+		if a.CLI != "" {
+			ra.CLI = a.CLI
 		}
-		if p.Model != "" {
-			rp.Model = p.Model
+		if a.Model != "" {
+			ra.Model = a.Model
 		}
-		if p.Effort != "" {
-			rp.Effort = p.Effort
+		if a.Effort != "" {
+			ra.Effort = a.Effort
 		}
-		if p.SystemPrompt != "" {
-			rp.SystemPrompt = p.SystemPrompt
+		if a.SystemPrompt != "" {
+			ra.SystemPrompt = a.SystemPrompt
 		}
 	}
-	return rp, nil
+	return ra, nil
 }
 
-// validate checks all profiles for completeness and correctness.
+// validate checks all agents in all profile sets for completeness and correctness.
 func (c *Config) validate() error {
-	if len(c.Profiles) == 0 {
-		return fmt.Errorf("config must define at least one profile")
-	}
-
-	for name, p := range c.Profiles {
-		if p == nil {
-			return fmt.Errorf("profile %q: must not be empty", name)
+	for setName, ps := range c.Profiles {
+		if ps == nil {
+			continue
 		}
-		// Check extends references exist.
-		if p.Extends != "" {
-			if _, ok := c.Profiles[p.Extends]; !ok {
-				return fmt.Errorf("profile %q: extends %q which does not exist", name, p.Extends)
-			}
-		}
-
-		// Base profile completeness.
-		if p.Extends == "" {
-			if p.DefaultMode == "" {
-				return fmt.Errorf("profile %q: base profile (no extends) must have default_mode", name)
-			}
-			if p.CLI == "" {
-				return fmt.Errorf("profile %q: base profile (no extends) must have cli", name)
-			}
-		}
-
-		// Field value validation.
-		if p.DefaultMode != "" && !validDefaultMode[p.DefaultMode] {
-			return fmt.Errorf("profile %q: invalid default_mode %q (must be interactive or headless)", name, p.DefaultMode)
-		}
-		if p.Effort != "" && !validEffort[p.Effort] {
-			return fmt.Errorf("profile %q: invalid effort %q (must be low, medium, or high)", name, p.Effort)
-		}
-		if p.CLI != "" && !validCLI[p.CLI] {
-			return fmt.Errorf("profile %q: invalid cli %q (must be claude, codex, or copilot)", name, p.CLI)
-		}
-	}
-
-	// Cycle detection across all profiles.
-	for name := range c.Profiles {
-		if err := c.detectCycle(name); err != nil {
+		if err := validateAgentMap(setName, ps.Agents); err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
-// detectCycle walks the extends chain from the given profile name and returns
+// validateAgentMap validates all agents in a single profile set's agents map.
+func validateAgentMap(setName string, agents map[string]*Agent) error {
+	for name, a := range agents {
+		if a == nil {
+			return fmt.Errorf("agent %q in profile set %q must not be empty", name, setName)
+		}
+		if a.Extends != "" {
+			if _, ok := agents[a.Extends]; !ok {
+				return fmt.Errorf("agent %q in profile set %q: extends %q which does not exist", name, setName, a.Extends)
+			}
+		}
+		if a.Extends == "" {
+			if a.DefaultMode == "" {
+				return fmt.Errorf("agent %q in profile set %q: base agent (no extends) must have default_mode", name, setName)
+			}
+			if a.CLI == "" {
+				return fmt.Errorf("agent %q in profile set %q: base agent (no extends) must have cli", name, setName)
+			}
+		}
+		if a.DefaultMode != "" && !validDefaultMode[a.DefaultMode] {
+			return fmt.Errorf("agent %q in profile set %q: invalid default_mode %q (must be interactive or headless)", name, setName, a.DefaultMode)
+		}
+		if a.Effort != "" && !validEffort[a.Effort] {
+			return fmt.Errorf("agent %q in profile set %q: invalid effort %q (must be low, medium, or high)", name, setName, a.Effort)
+		}
+		if a.CLI != "" && !validCLI[a.CLI] {
+			return fmt.Errorf("agent %q in profile set %q: invalid cli %q (must be claude, codex, or copilot)", name, setName, a.CLI)
+		}
+	}
+
+	for name := range agents {
+		if err := detectAgentCycle(agents, name); err != nil {
+			return fmt.Errorf("profile set %q: %w", setName, err)
+		}
+	}
+	return nil
+}
+
+// detectAgentCycle walks the extends chain from the given agent name and returns
 // an error if a cycle is found.
-func (c *Config) detectCycle(name string) error {
+func detectAgentCycle(agents map[string]*Agent, name string) error {
 	visited := map[string]bool{}
 	cur := name
 	var path []string
@@ -251,42 +399,35 @@ func (c *Config) detectCycle(name string) error {
 		}
 		visited[cur] = true
 		path = append(path, cur)
-		p := c.Profiles[cur]
-		if p == nil {
-			return fmt.Errorf("profile %q is nil", cur)
+		a := agents[cur]
+		if a == nil {
+			return fmt.Errorf("agent %q is nil", cur)
 		}
-		cur = p.Extends
+		cur = a.Extends
 	}
 	return nil
 }
 
-func defaultConfig() *Config {
-	return &Config{
-		Profiles: map[string]*Profile{
-			"interactive_base": {
-				DefaultMode: "interactive",
-				CLI:         "claude",
-				Model:       "opus",
-				Effort:      "high",
-			},
-			"headless_base": {
-				DefaultMode: "headless",
-				CLI:         "claude",
-				Model:       "sonnet",
-				Effort:      "high",
-			},
-			"planner": {
-				Extends: "interactive_base",
-			},
-			"implementor": {
-				Extends: "headless_base",
-			},
-			"summarizer": {
-				DefaultMode: "headless",
-				CLI:         "claude",
-				Model:       "haiku",
-				Effort:      "low",
-			},
+func defaultParsedFile() *parsedFile {
+	agents := map[string]*Agent{
+		"interactive_base": {DefaultMode: "interactive", CLI: "claude", Model: "opus", Effort: "high"},
+		"headless_base":    {DefaultMode: "headless", CLI: "claude", Model: "opus", Effort: "high"},
+		"planner":          {Extends: "interactive_base"},
+		"implementor":      {Extends: "headless_base"},
+		"summarizer":       {DefaultMode: "headless", CLI: "claude", Model: "haiku", Effort: "low"},
+	}
+	return &parsedFile{
+		Profiles: map[string]*ProfileSet{
+			"default": {Agents: agents},
 		},
+	}
+}
+
+func defaultConfig() *Config {
+	pf := defaultParsedFile()
+	agents := pf.Profiles["default"].Agents
+	return &Config{
+		Profiles:     pf.Profiles,
+		ActiveAgents: agents,
 	}
 }
