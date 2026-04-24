@@ -1,0 +1,4 @@
+- [ ] Implement the change described by these files:
+  - [proposal.md](proposal.md)
+  - [specs/agent-profiles/spec.md](specs/agent-profiles/spec.md)
+  - [specs/workflow-name-resolution/spec.md](specs/workflow-name-resolution/spec.md)
