@@ -1,0 +1,49 @@
+# End-to-end: active_profile selects which profile set's agents are used, and
+# the resolved agent's fields flow into the CLI adapter's invocation.
+#
+# Two profile sets are defined: `default` (model=opus) and `alt` (model=haiku).
+# active_profile=alt, so the workflow's `agent: planner` must resolve to the
+# haiku agent. A claude stub on PATH captures the args it was invoked with.
+
+chmod 755 bin/claude
+env PATH=$WORK/bin:$PATH
+env CLAUDE_STUB_LOG=$WORK/claude-args.log
+# Isolate HOME so the project config at ./.agent-runner/config.yaml isn't also
+# loaded as the global config (the default testscript HOME is $WORK).
+mkdir $WORK/home
+env HOME=$WORK/home
+
+exec agent-runner workflow
+
+grep 'model haiku' claude-args.log
+! grep 'model opus' claude-args.log
+
+-- bin/claude --
+#!/bin/sh
+# Stub `claude` for end-to-end tests. Records invocation args so the test can
+# assert which model/profile the runner chose, then exits cleanly so the step
+# completes without needing a real Claude CLI.
+echo "$@" >> "$CLAUDE_STUB_LOG"
+
+-- .agent-runner/config.yaml --
+active_profile: alt
+profiles:
+  default:
+    agents:
+      planner:
+        default_mode: headless
+        cli: claude
+        model: opus
+  alt:
+    agents:
+      planner:
+        default_mode: headless
+        cli: claude
+        model: haiku
+
+-- .agent-runner/workflows/workflow.yaml --
+name: multi-profile-active
+steps:
+  - id: run-planner
+    agent: planner
+    prompt: hello
