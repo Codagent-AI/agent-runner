@@ -245,9 +245,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleStepStateMsg(msg)
 		return m, nil
 
-	case liverun.SuspendedMsg, liverun.ResumedMsg:
-		// Terminal handoff bookkeeping; no visual change needed.
+	case liverun.SuspendedMsg:
 		return m, nil
+
+	case liverun.ResumedMsg:
+		// BubbleTea's RestoreTerminal does not re-enable mouse mode after
+		// ReleaseTerminal disables it, so we re-enable it explicitly.
+		return m, tea.EnableMouseCellMotion
 
 	case ResumeMsg:
 		// Top-level live-run model: no switcher intercepts this, so stash the

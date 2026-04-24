@@ -2,6 +2,7 @@ package runview
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"strings"
@@ -1491,6 +1492,44 @@ func TestModel_MouseWheelDown_ClearsAutoFollow(t *testing.T) {
 
 	if m.autoFollow {
 		t.Error("mouse wheel down should clear autoFollow")
+	}
+}
+
+func TestModel_MouseWheelDown_ChangesLogOffset(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList)
+	m.logLineCount = 100
+	initial := m.logOffset
+
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown})
+	if m.logOffset <= initial {
+		t.Fatalf("mouse wheel down should increase logOffset: got %d, want > %d", m.logOffset, initial)
+	}
+}
+
+func TestModel_MouseWheelUp_ChangesLogOffset(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList)
+	m.logLineCount = 100
+	m.logOffset = 10
+
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp})
+	if m.logOffset >= 10 {
+		t.Fatalf("mouse wheel up should decrease logOffset: got %d, want < 10", m.logOffset)
+	}
+}
+
+func TestModel_ResumedMsg_ReEnablesMouse(t *testing.T) {
+	m := newLiveModelWithFlags()
+	_, cmd := m.Update(liverun.ResumedMsg{})
+	if cmd == nil {
+		t.Fatal("ResumedMsg should return a command to re-enable mouse")
+	}
+	msg := cmd()
+	if _, ok := msg.(tea.MouseMsg); ok {
+		t.Fatal("expected enableMouseCellMotionMsg, not MouseMsg")
+	}
+	got := fmt.Sprintf("%T", msg)
+	if got != "tea.enableMouseCellMotionMsg" {
+		t.Fatalf("ResumedMsg should return EnableMouseCellMotion cmd, got %s", got)
 	}
 }
 
