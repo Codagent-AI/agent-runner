@@ -116,7 +116,7 @@ func (m *Model) renderTabs() string {
 		return dimTabStyle.Render("○ " + label)
 	}
 
-	parts = append(parts, renderTab("Current Dir", tabCurrentDir))
+	parts = append(parts, renderTab("New", tabNew), renderTab("Current Dir", tabCurrentDir))
 	if m.worktreeTab.worktrees != nil {
 		parts = append(parts, renderTab("Worktrees", tabWorktrees))
 	}
@@ -127,6 +127,8 @@ func (m *Model) renderTabs() string {
 
 func (m *Model) renderSubheader() string {
 	switch m.activeTab {
+	case tabNew:
+		return tuistyle.ScreenMargin + pathStyle.Render("Browse and search workflow definitions")
 	case tabCurrentDir:
 		return tuistyle.ScreenMargin + pathStyle.Render(sanitize(shortenPath(m.cwd)))
 	case tabWorktrees:
@@ -157,6 +159,8 @@ func (m *Model) renderSubheader() string {
 
 func (m *Model) renderBody() string {
 	switch m.activeTab {
+	case tabNew:
+		return m.renderNewTab()
 	case tabCurrentDir:
 		if len(m.currentRuns) == 0 {
 			return m.renderEmpty()
@@ -462,35 +466,37 @@ func (m *Model) renderHelp() string {
 	var parts []string
 
 	switch m.activeTab {
+	case tabNew:
+		parts = append(parts, "↑↓ navigate", "enter view", "r start run", "n/c/w/a switch tab", "q quit")
 	case tabCurrentDir:
 		if len(m.currentRuns) > 0 {
 			parts = append(parts, "↑↓ navigate", "enter view")
 			if m.cursorInactiveRun() != nil {
 				parts = append(parts, "r resume")
 			}
-			parts = append(parts, "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "n/c/w/a switch tab", "q quit")
 		} else {
-			parts = append(parts, "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "n/c/w/a switch tab", "q quit")
 		}
 	case tabWorktrees:
 		if m.worktreeTab.subView == subViewPicker {
-			parts = append(parts, "↑↓ navigate", "enter view runs", "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "↑↓ navigate", "enter view runs", "n/c/w/a switch tab", "q quit")
 		} else {
 			parts = append(parts, "↑↓ navigate", "enter view")
 			if m.cursorInactiveRun() != nil {
 				parts = append(parts, "r resume")
 			}
-			parts = append(parts, "esc back", "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "esc back", "n/c/w/a switch tab", "q quit")
 		}
 	case tabAll:
 		if m.allTab.subView == subViewPicker {
-			parts = append(parts, "↑↓ navigate", "enter view runs", "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "↑↓ navigate", "enter view runs", "n/c/w/a switch tab", "q quit")
 		} else {
 			parts = append(parts, "↑↓ navigate", "enter view")
 			if m.cursorInactiveRun() != nil {
 				parts = append(parts, "r resume")
 			}
-			parts = append(parts, "esc back", "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "esc back", "n/c/w/a switch tab", "q quit")
 		}
 	}
 

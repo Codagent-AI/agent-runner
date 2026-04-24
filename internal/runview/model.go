@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/liverun"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
@@ -42,9 +43,10 @@ type ExitMsg struct{}
 type Entered int
 
 const (
-	FromList    Entered = iota
-	FromInspect         // read-only post-run inspection
-	FromLiveRun         // live workflow execution (runner goroutine is active)
+	FromList       Entered = iota
+	FromInspect            // read-only post-run inspection
+	FromLiveRun            // live workflow execution (runner goroutine is active)
+	FromDefinition         // viewing a workflow definition with no run instance
 )
 
 // Model is the bubbletea model for the single-run detail view.
@@ -75,8 +77,9 @@ type Model struct {
 	loadErr    string
 	notice     string // transient message shown below the step list (e.g. spawn error)
 
-	resolverCfg ResolverConfig
-	startTime   time.Time
+	resolverCfg   ResolverConfig
+	startTime     time.Time
+	workflowEntry discovery.WorkflowEntry // set when entered == FromDefinition
 
 	// Live-run fields (FromLiveRun mode only).
 	running          bool   // true until ExecDoneMsg arrives
@@ -118,7 +121,15 @@ func (m *Model) ProjectDir() string { return m.projectDir }
 func (m *Model) Entered() Entered { return m.entered }
 
 // New constructs a runview Model from a session directory.
+// For FromDefinition mode, sessionDir carries the workflow file path rather than
+// a real session directory; audit log loading and run-lock checks are skipped.
 func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
+	// FromDefinition: load workflow directly from the file path in sessionDir.
+	if entered == FromDefinition {
+		e := discovery.WorkflowEntry{SourcePath: sessionDir}
+		return newForDefinition(sessionDir, projectDir, &e)
+	}
+
 	state, _ := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
 	resolved, _ := ResolveWorkflow(sessionDir, projectDir, &state)
 
@@ -192,6 +203,72 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	}
 
 	return m, nil
+}
+
+// NewForDefinition constructs a runview Model for inspecting a workflow definition
+// without an associated run instance. The workflow file is loaded directly.
+func NewForDefinition(entry *discovery.WorkflowEntry, projectDir string) (*Model, error) {
+	return newForDefinition(entry.SourcePath, projectDir, entry)
+}
+
+func newForDefinition(sourcePath, projectDir string, entry *discovery.WorkflowEntry) (*Model, error) {
+	var (
+		tree    *Tree
+		loadErr string
+	)
+
+	wf, err := loader.LoadWorkflow(sourcePath, loader.Options{})
+	if err != nil {
+		loadErr = "load workflow: " + err.Error()
+	} else {
+		tree = BuildTree(&wf, sourcePath)
+	}
+
+	// Use the canonical name from the entry, or derive from the source path.
+	rootName := entry.CanonicalName
+	if rootName == "" {
+		rootName = deriveCanonicalFromPath(sourcePath)
+	}
+
+	if tree == nil {
+		tree = &Tree{
+			Root: &StepNode{
+				ID:     rootName,
+				Type:   NodeRoot,
+				Status: StatusPending,
+			},
+		}
+	} else if rootName != "" {
+		tree.Root.ID = rootName
+	}
+
+	m := &Model{
+		tree:          tree,
+		sessionDir:    sourcePath,
+		projectDir:    projectDir,
+		entered:       FromDefinition,
+		path:          []*StepNode{tree.Root},
+		loadedFull:    make(map[string]bool),
+		loadErr:       loadErr,
+		altScreen:     true,
+		workflowEntry: *entry,
+	}
+	return m, nil
+}
+
+// deriveCanonicalFromPath produces a display name from a workflow source path
+// when no canonical name is available (e.g. builtin:core/finalize-pr.yaml → core:finalize-pr).
+func deriveCanonicalFromPath(sourcePath string) string {
+	if rel, ok := strings.CutPrefix(sourcePath, "builtin:"); ok {
+		rel = strings.TrimSuffix(rel, filepath.Ext(rel))
+		parts := strings.SplitN(filepath.ToSlash(rel), "/", 2)
+		if len(parts) == 2 {
+			return parts[0] + ":" + parts[1]
+		}
+		return rel
+	}
+	base := filepath.Base(sourcePath)
+	return strings.TrimSuffix(base, filepath.Ext(base))
 }
 
 // NewForReentry creates a Model for re-entering the run view after a resumed
@@ -340,11 +417,7 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) {
 	if m.logAnchor.stepKey != "" {
 		for _, r := range m.stepRanges {
 			if r.node.NodeKey() == m.logAnchor.stepKey {
-				newOffset := r.startLine + m.logAnchor.lineOffsetInBlock
-				if newOffset < 0 {
-					newOffset = 0
-				}
-				m.logOffset = newOffset
+				m.logOffset = max(0, r.startLine+m.logAnchor.lineOffsetInBlock)
 				break
 			}
 		}
@@ -399,6 +472,17 @@ func (m *Model) handleExecDoneMsg(msg liverun.ExecDoneMsg) {
 	m.rebuildRanges()
 }
 
+func (m *Model) scrollLogUp() {
+	if m.logOffset > m.maxLogOffset() {
+		m.logOffset = m.maxLogOffset()
+	}
+	m.logOffset--
+	if m.logOffset < 0 {
+		m.logOffset = 0
+	}
+	m.syncSelectionToLog()
+}
+
 func (m *Model) handleMouse(msg tea.MouseMsg) {
 	switch msg.Button {
 	case tea.MouseButtonWheelUp:
@@ -440,8 +524,10 @@ func (m *Model) handlePulseMsg() tea.Cmd {
 // canResumeRun reports whether the `r` resume-run action is available.
 // True only when the run is inactive (interrupted, not active elsewhere, not
 // a just-finished live run, and not in a terminal completed/failed state).
+// Always false in FromDefinition mode (r emits StartRunMsg instead).
 func (m *Model) canResumeRun() bool {
-	return m.sessionDir != "" &&
+	return m.entered != FromDefinition &&
+		m.sessionDir != "" &&
 		!m.running && !m.active && m.liveResult == "" &&
 		m.rootStatus() != StatusFailed && m.rootStatus() != StatusSuccess
 }
@@ -495,14 +581,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.syncLogToSelection()
 	case "k":
 		m.autoFollow = false
-		if m.logOffset > m.maxLogOffset() {
-			m.logOffset = m.maxLogOffset()
-		}
-		m.logOffset--
-		if m.logOffset < 0 {
-			m.logOffset = 0
-		}
-		m.syncSelectionToLog()
+		m.scrollLogUp()
 	case "j":
 		m.autoFollow = false
 		m.logOffset++
@@ -511,6 +590,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.autoFollow = true
 		m.applyAutoFollowCursor()
 	case "r":
+		if m.entered == FromDefinition {
+			entry := m.workflowEntry
+			return m, func() tea.Msg { return discovery.StartRunMsg{Entry: entry} }
+		}
 		if m.canResumeRun() {
 			runID := filepath.Base(m.sessionDir)
 			return m, func() tea.Msg { return ResumeRunMsg{RunID: runID} }
@@ -736,7 +819,7 @@ func (m *Model) handleEsc() (tea.Model, tea.Cmd) {
 		m.quitConfirming = true
 		return m, nil
 	}
-	if m.entered == FromList {
+	if m.entered == FromList || m.entered == FromDefinition {
 		return m, emitBack
 	}
 	return m, emitExit

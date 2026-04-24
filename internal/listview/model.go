@@ -11,18 +11,44 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/runs"
 	"github.com/codagent/agent-runner/internal/tuistyle"
+	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
 type tab int
 
 const (
-	tabCurrentDir tab = iota
+	tabNew tab = iota // must be first; bare invocation lands here
+	tabCurrentDir
 	tabWorktrees
 	tabAll
 )
+
+// InitialTab is an exported type for selecting the starting tab via WithInitialTab.
+type InitialTab int
+
+const (
+	InitialTabNew        InitialTab = InitialTab(tabNew)
+	InitialTabCurrentDir InitialTab = InitialTab(tabCurrentDir)
+)
+
+// WithInitialTab returns an option that sets the starting tab for New().
+func WithInitialTab(t InitialTab) func(*Model) {
+	return func(m *Model) { m.activeTab = tab(t) }
+}
+
+// newTabState holds all state for the "new" tab (workflow browser + search).
+type newTabState struct {
+	workflows     []discovery.WorkflowEntry
+	filtered      []int // indices into workflows (-1 = blank-line separator)
+	cursor        int   // index into filtered of the selected row
+	offset        int   // scroll offset
+	searchText    string
+	searchFocused bool // true when search box has focus
+}
 
 type subView int
 
@@ -41,6 +67,7 @@ type DirEntry struct {
 // Model is the bubbletea model for the run list TUI.
 type Model struct {
 	activeTab        tab
+	newTab           newTabState
 	worktreeTab      worktreeTabState
 	allTab           allTabState
 	currentDirCursor int
@@ -102,8 +129,9 @@ type pulseMsg = tuistyle.PulseMsg
 var doRefresh = tuistyle.DoRefresh
 var doPulse = tuistyle.DoPulse
 
-// New creates a new Model.
-func New() (*Model, error) {
+// New creates a new Model. Functional options (e.g. WithInitialTab) may be
+// passed to override defaults. The default starting tab is tabNew.
+func New(opts ...func(*Model)) (*Model, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("cannot determine home directory: %w", err)
@@ -117,12 +145,23 @@ func New() (*Model, error) {
 	projectsRoot := filepath.Join(home, ".agent-runner", "projects")
 	encoded := audit.EncodePath(cwd)
 	projectDir := filepath.Join(projectsRoot, encoded)
+	userWorkflowsDir := filepath.Join(home, ".agent-runner", "workflows")
+
+	workflows := discovery.Enumerate(builtinworkflows.FS, cwd, userWorkflowsDir)
 
 	m := &Model{
+		activeTab:    tabNew,
 		projectDir:   projectDir,
 		projectsRoot: projectsRoot,
 		cwd:          cwd,
 	}
+	m.newTab.workflows = workflows
+	m.newTab.filtered = buildFilteredRows(workflows, "")
+
+	for _, opt := range opts {
+		opt(m)
+	}
+
 	m.loadData()
 	return m, nil
 }
@@ -303,6 +342,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		m.errMsg = "" // auto-clear inline error on any keypress
+
+		// When the new tab is active and the search box has focus, most keys
+		// go to the filter text. Global quit and tab-switching still work.
+		if m.activeTab == tabNew && m.newTab.searchFocused {
+			return m.handleSearchKey(msg)
+		}
+
 		switch msg.String() {
 		case "ctrl+c", "q":
 			m.quitting = true
@@ -312,6 +358,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.nextTab()
 		case "shift+tab":
 			m.prevTab()
+		case "n":
+			m.activeTab = tabNew
 		case "c":
 			m.activeTab = tabCurrentDir
 		case "w":
@@ -350,30 +398,39 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) nextTab() {
 	if m.worktreeTab.worktrees != nil {
-		m.activeTab = (m.activeTab + 1) % 3
+		m.activeTab = (m.activeTab + 1) % 4
 	} else {
-		if m.activeTab == tabCurrentDir {
-			m.activeTab = tabAll
-		} else {
+		// Cycle: tabNew → tabCurrentDir → tabAll → tabNew
+		switch m.activeTab {
+		case tabNew:
 			m.activeTab = tabCurrentDir
+		case tabCurrentDir:
+			m.activeTab = tabAll
+		default:
+			m.activeTab = tabNew
 		}
 	}
 }
 
 func (m *Model) prevTab() {
 	if m.worktreeTab.worktrees != nil {
-		m.activeTab = (m.activeTab + 2) % 3
+		m.activeTab = (m.activeTab + 3) % 4
 	} else {
-		if m.activeTab == tabCurrentDir {
+		switch m.activeTab {
+		case tabNew:
 			m.activeTab = tabAll
-		} else {
+		case tabAll:
 			m.activeTab = tabCurrentDir
+		default:
+			m.activeTab = tabNew
 		}
 	}
 }
 
 func (m *Model) moveCursor(delta int) {
 	switch m.activeTab {
+	case tabNew:
+		m.moveNewTabCursor(delta)
 	case tabCurrentDir:
 		m.currentDirCursor = clampCursor(m.currentDirCursor+delta, len(m.currentRuns))
 	case tabWorktrees:
@@ -397,8 +454,51 @@ func (m *Model) moveCursor(delta int) {
 	}
 }
 
+// moveNewTabCursor navigates the new tab's cursor, skipping blank-line separators.
+// Moving up from the first item focuses the search box.
+// Moving down from the search box moves to the first selectable item.
+func (m *Model) moveNewTabCursor(delta int) {
+	if m.newTab.searchFocused {
+		if delta > 0 {
+			m.newTab.searchFocused = false
+			m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
+		}
+		return
+	}
+
+	filtered := m.newTab.filtered
+	if len(filtered) == 0 {
+		return
+	}
+
+	// Moving up from the first selectable row focuses the search box.
+	if delta < 0 {
+		first := firstSelectableRow(filtered)
+		if m.newTab.cursor <= first {
+			m.newTab.searchFocused = true
+			return
+		}
+	}
+
+	// Advance and skip separators.
+	pos := m.newTab.cursor + delta
+	for pos >= 0 && pos < len(filtered) && filtered[pos] == -1 {
+		if delta > 0 {
+			pos++
+		} else {
+			pos--
+		}
+	}
+	if pos >= 0 && pos < len(filtered) && filtered[pos] != -1 {
+		m.newTab.cursor = pos
+	}
+}
+
 func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 	switch m.activeTab {
+	case tabNew:
+		cmd := m.newTabEnterCmd()
+		return m, cmd
 	case tabCurrentDir:
 		if m.currentDirCursor < len(m.currentRuns) {
 			r := m.currentRuns[m.currentDirCursor]
@@ -459,6 +559,10 @@ func viewRunCmd(sessionDir, projectDir string) tea.Cmd {
 }
 
 func (m *Model) handleResumeRun() (tea.Model, tea.Cmd) {
+	if m.activeTab == tabNew {
+		cmd := m.newTabStartRunCmd()
+		return m, cmd
+	}
 	r := m.cursorInactiveRun()
 	if r == nil {
 		return m, nil

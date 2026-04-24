@@ -18,6 +18,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/engine"
 	_ "github.com/codagent/agent-runner/internal/engine/openspec"
 	iexec "github.com/codagent/agent-runner/internal/exec"
@@ -217,7 +218,7 @@ func run() int {
 	}
 
 	if len(args) < 1 {
-		return handleList()
+		return handleListBare()
 	}
 
 	workflowFile, err := resolveWorkflowArg(args[0])
@@ -323,13 +324,23 @@ func openInspectTUI(runID, sessionDir, projectDir string) int {
 	return runSwitcher(sw)
 }
 
+// handleListBare opens the list TUI starting on the "new" tab (bare invocation).
+func handleListBare() int {
+	return handleListWithTab(listview.InitialTabNew)
+}
+
+// handleList opens the list TUI starting on the current-dir tab (--list / --resume no-arg).
 func handleList() int {
+	return handleListWithTab(listview.InitialTabCurrentDir)
+}
+
+func handleListWithTab(initialTab listview.InitialTab) int {
 	if err := requireTTY(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 
-	m, err := listview.New()
+	m, err := listview.New(listview.WithInitialTab(initialTab))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
@@ -657,6 +668,29 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		}
 		return s, tea.Batch(cmds...)
+
+	case discovery.ViewDefinitionMsg:
+		rv, err := runview.NewForDefinition(&msg.Entry, "")
+		if err != nil {
+			s.viewErr = fmt.Sprintf("cannot open definition: %v", err)
+			return s, nil
+		}
+		s.viewErr = ""
+		s.runview = rv
+		s.mode = showingRunView
+		cmds := []tea.Cmd{rv.Init()}
+		if s.termWidth > 0 && s.termHeight > 0 {
+			w, h := s.termWidth, s.termHeight
+			cmds = append(cmds, func() tea.Msg {
+				return tea.WindowSizeMsg{Width: w, Height: h}
+			})
+		}
+		return s, tea.Batch(cmds...)
+
+	case discovery.StartRunMsg:
+		// Handled in subsequent task (param form / exec-self).
+		// For now, return to list so the emitted message is not silently swallowed.
+		return s, nil
 
 	case runview.BackMsg:
 		s.mode = showingList
