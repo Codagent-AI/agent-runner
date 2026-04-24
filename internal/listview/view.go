@@ -468,29 +468,29 @@ func (m *Model) renderHelp() string {
 			if m.cursorInactiveRun() != nil {
 				parts = append(parts, "r resume")
 			}
-			parts = append(parts, "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "←→/tab switch tab", "q quit")
 		} else {
-			parts = append(parts, "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "←→/tab switch tab", "q quit")
 		}
 	case tabWorktrees:
 		if m.worktreeTab.subView == subViewPicker {
-			parts = append(parts, "↑↓ navigate", "enter view runs", "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "↑↓ navigate", "enter view runs", "←→/tab switch tab", "q quit")
 		} else {
 			parts = append(parts, "↑↓ navigate", "enter view")
 			if m.cursorInactiveRun() != nil {
 				parts = append(parts, "r resume")
 			}
-			parts = append(parts, "esc back", "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "esc back", "←→/tab switch tab", "q quit")
 		}
 	case tabAll:
 		if m.allTab.subView == subViewPicker {
-			parts = append(parts, "↑↓ navigate", "enter view runs", "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "↑↓ navigate", "enter view runs", "←→/tab switch tab", "q quit")
 		} else {
 			parts = append(parts, "↑↓ navigate", "enter view")
 			if m.cursorInactiveRun() != nil {
 				parts = append(parts, "r resume")
 			}
-			parts = append(parts, "esc back", "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "esc back", "←→/tab switch tab", "q quit")
 		}
 	}
 

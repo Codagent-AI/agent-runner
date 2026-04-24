@@ -308,9 +308,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 
-		case "tab":
+		case "tab", "right":
 			m.nextTab()
-		case "shift+tab":
+		case "shift+tab", "left":
 			m.prevTab()
 		case "c":
 			m.activeTab = tabCurrentDir
