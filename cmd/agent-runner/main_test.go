@@ -36,6 +36,40 @@ func TestResolveWorkflowArg(t *testing.T) {
 		}
 	})
 
+	t.Run("falls back to global yaml for bare user workflow", func(t *testing.T) {
+		repo := t.TempDir()
+		home := filepath.Join(t.TempDir(), "home")
+		t.Setenv("HOME", home)
+		t.Chdir(repo)
+		writeTestFile(t, filepath.Join(home, ".agent-runner", "workflows", "my-workflow.yaml"), "name: test\nsteps:\n  - id: s\n    command: echo ok\n")
+
+		got, err := resolveWorkflowArg("my-workflow")
+		if err != nil {
+			t.Fatalf("resolveWorkflowArg returned error: %v", err)
+		}
+		want := filepath.Join(home, ".agent-runner", "workflows", "my-workflow.yaml")
+		if got != want {
+			t.Fatalf("resolveWorkflowArg = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("falls back to global yml for bare user workflow", func(t *testing.T) {
+		repo := t.TempDir()
+		home := filepath.Join(t.TempDir(), "home")
+		t.Setenv("HOME", home)
+		t.Chdir(repo)
+		writeTestFile(t, filepath.Join(home, ".agent-runner", "workflows", "my-workflow.yml"), "name: test\nsteps:\n  - id: s\n    command: echo ok\n")
+
+		got, err := resolveWorkflowArg("my-workflow")
+		if err != nil {
+			t.Fatalf("resolveWorkflowArg returned error: %v", err)
+		}
+		want := filepath.Join(home, ".agent-runner", "workflows", "my-workflow.yml")
+		if got != want {
+			t.Fatalf("resolveWorkflowArg = %q, want %q", got, want)
+		}
+	})
+
 	t.Run("resolves nested bare user workflow", func(t *testing.T) {
 		t.Chdir(t.TempDir())
 		writeTestFile(t, filepath.Join(".agent-runner", "workflows", "team", "deploy.yaml"), "name: test\nsteps:\n  - id: s\n    command: echo ok\n")
@@ -45,6 +79,23 @@ func TestResolveWorkflowArg(t *testing.T) {
 			t.Fatalf("resolveWorkflowArg returned error: %v", err)
 		}
 		want := filepath.Join(".agent-runner", "workflows", "team", "deploy.yaml")
+		if got != want {
+			t.Fatalf("resolveWorkflowArg = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("falls back to nested global workflow", func(t *testing.T) {
+		repo := t.TempDir()
+		home := filepath.Join(t.TempDir(), "home")
+		t.Setenv("HOME", home)
+		t.Chdir(repo)
+		writeTestFile(t, filepath.Join(home, ".agent-runner", "workflows", "team", "deploy.yaml"), "name: test\nsteps:\n  - id: s\n    command: echo ok\n")
+
+		got, err := resolveWorkflowArg("team/deploy")
+		if err != nil {
+			t.Fatalf("resolveWorkflowArg returned error: %v", err)
+		}
+		want := filepath.Join(home, ".agent-runner", "workflows", "team", "deploy.yaml")
 		if got != want {
 			t.Fatalf("resolveWorkflowArg = %q, want %q", got, want)
 		}
@@ -83,6 +134,58 @@ func TestResolveWorkflowArg(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), `workflow "team:deploy" not found`) {
 			t.Fatalf("expected workflow-not-found error, got %v", err)
+		}
+	})
+
+	t.Run("namespaced workflow does not fall back to global directory", func(t *testing.T) {
+		repo := t.TempDir()
+		home := filepath.Join(t.TempDir(), "home")
+		t.Setenv("HOME", home)
+		t.Chdir(repo)
+		writeTestFile(t, filepath.Join(home, ".agent-runner", "workflows", "missing", "workflow.yaml"), "name: test\nsteps:\n  - id: s\n    command: echo ok\n")
+
+		_, err := resolveWorkflowArg("missing:workflow")
+		if err == nil {
+			t.Fatal("expected missing builtin to return an error")
+		}
+		if !strings.Contains(err.Error(), `workflow "missing:workflow" not found`) {
+			t.Fatalf("expected workflow-not-found error, got %v", err)
+		}
+	})
+
+	t.Run("project workflow shadows global workflow with same name", func(t *testing.T) {
+		repo := t.TempDir()
+		home := filepath.Join(t.TempDir(), "home")
+		t.Setenv("HOME", home)
+		t.Chdir(repo)
+		writeTestFile(t, filepath.Join(".agent-runner", "workflows", "my-workflow.yaml"), "name: local\nsteps:\n  - id: s\n    command: echo ok\n")
+		writeTestFile(t, filepath.Join(home, ".agent-runner", "workflows", "my-workflow.yaml"), "name: global\nsteps:\n  - id: s\n    command: echo ok\n")
+
+		got, err := resolveWorkflowArg("my-workflow")
+		if err != nil {
+			t.Fatalf("resolveWorkflowArg returned error: %v", err)
+		}
+		want := filepath.Join(".agent-runner", "workflows", "my-workflow.yaml")
+		if got != want {
+			t.Fatalf("resolveWorkflowArg = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("project nested workflow shadows global workflow with same path", func(t *testing.T) {
+		repo := t.TempDir()
+		home := filepath.Join(t.TempDir(), "home")
+		t.Setenv("HOME", home)
+		t.Chdir(repo)
+		writeTestFile(t, filepath.Join(".agent-runner", "workflows", "team", "deploy.yaml"), "name: local\nsteps:\n  - id: s\n    command: echo ok\n")
+		writeTestFile(t, filepath.Join(home, ".agent-runner", "workflows", "team", "deploy.yaml"), "name: global\nsteps:\n  - id: s\n    command: echo ok\n")
+
+		got, err := resolveWorkflowArg("team/deploy")
+		if err != nil {
+			t.Fatalf("resolveWorkflowArg returned error: %v", err)
+		}
+		want := filepath.Join(".agent-runner", "workflows", "team", "deploy.yaml")
+		if got != want {
+			t.Fatalf("resolveWorkflowArg = %q, want %q", got, want)
 		}
 	})
 

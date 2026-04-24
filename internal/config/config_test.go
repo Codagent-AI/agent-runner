@@ -172,6 +172,204 @@ func TestLoadOrGenerate_UnrecognizedFieldIgnored(t *testing.T) {
 	}
 }
 
+func TestLoadOrGenerate_MergesGlobalAndProjectProfiles(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repo := filepath.Join(root, "repo")
+	t.Setenv("HOME", home)
+
+	globalPath := filepath.Join(home, ".agent-runner", "config.yaml")
+	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
+
+	writeConfigFile(t, globalPath, `profiles:
+  headless_base:
+    default_mode: headless
+    cli: claude
+    model: sonnet
+  implementor:
+    extends: headless_base
+    model: opus
+    effort: high
+  global_only:
+    extends: headless_base
+`)
+	writeConfigFile(t, projectPath, `profiles:
+  implementor:
+    extends: headless_base
+    cli: copilot
+  project_only:
+    extends: headless_base
+`)
+
+	cfg, err := LoadOrGenerate(projectPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Profiles["global_only"] == nil {
+		t.Fatal("expected global-only profile in merged config")
+	}
+	if cfg.Profiles["project_only"] == nil {
+		t.Fatal("expected project-only profile in merged config")
+	}
+
+	implementor := cfg.Profiles["implementor"]
+	if implementor == nil {
+		t.Fatal("expected merged implementor profile")
+	}
+	if implementor.Extends != "headless_base" || implementor.CLI != "copilot" {
+		t.Fatalf("unexpected merged implementor profile: %+v", implementor)
+	}
+	if implementor.Model != "" || implementor.Effort != "" {
+		t.Fatalf("expected project profile to replace global one without field merging, got %+v", implementor)
+	}
+
+	rp, err := cfg.Resolve("project_only")
+	if err != nil {
+		t.Fatalf("unexpected resolve error: %v", err)
+	}
+	if rp.DefaultMode != "headless" || rp.CLI != "claude" || rp.Model != "sonnet" {
+		t.Fatalf("expected project profile to inherit from global base, got %+v", rp)
+	}
+}
+
+func TestLoadOrGenerate_GlobalProfileCanExtendProjectProfile(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repo := filepath.Join(root, "repo")
+	t.Setenv("HOME", home)
+
+	globalPath := filepath.Join(home, ".agent-runner", "config.yaml")
+	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
+
+	writeConfigFile(t, globalPath, `profiles:
+  summarizer:
+    extends: team_base
+    model: haiku
+`)
+	writeConfigFile(t, projectPath, `profiles:
+  team_base:
+    default_mode: interactive
+    cli: copilot
+`)
+
+	cfg, err := LoadOrGenerate(projectPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rp, err := cfg.Resolve("summarizer")
+	if err != nil {
+		t.Fatalf("unexpected resolve error: %v", err)
+	}
+	if rp.DefaultMode != "interactive" || rp.CLI != "copilot" || rp.Model != "haiku" {
+		t.Fatalf("unexpected resolved profile: %+v", rp)
+	}
+}
+
+func TestLoadOrGenerate_DetectsCrossFileCycle(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repo := filepath.Join(root, "repo")
+	t.Setenv("HOME", home)
+
+	globalPath := filepath.Join(home, ".agent-runner", "config.yaml")
+	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
+
+	writeConfigFile(t, globalPath, `profiles:
+  a:
+    extends: b
+`)
+	writeConfigFile(t, projectPath, `profiles:
+  b:
+    extends: a
+`)
+
+	_, err := LoadOrGenerate(projectPath)
+	if err == nil {
+		t.Fatal("expected cycle error")
+	}
+	if !strings.Contains(err.Error(), "cycle") {
+		t.Fatalf("expected cycle error, got: %v", err)
+	}
+}
+
+func TestLoadOrGenerate_GlobalInvalidYAMLIncludesPath(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repo := filepath.Join(root, "repo")
+	t.Setenv("HOME", home)
+
+	globalPath := filepath.Join(home, ".agent-runner", "config.yaml")
+	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
+
+	writeConfigFile(t, globalPath, "profiles:\n  bad: [\n")
+
+	_, err := LoadOrGenerate(projectPath)
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+	if !strings.Contains(err.Error(), globalPath) {
+		t.Fatalf("expected error to mention global path %q, got %v", globalPath, err)
+	}
+	if !strings.Contains(err.Error(), "parsing config") {
+		t.Fatalf("expected parse error, got: %v", err)
+	}
+}
+
+func TestLoadOrGenerate_DoesNotCreateGlobalConfigWhenMissing(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repo := filepath.Join(root, "repo")
+	t.Setenv("HOME", home)
+
+	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
+
+	cfg, err := LoadOrGenerate(projectPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Profiles) != 5 {
+		t.Fatalf("expected default project config, got %d profiles", len(cfg.Profiles))
+	}
+
+	globalDir := filepath.Join(home, ".agent-runner")
+	if _, err := os.Stat(globalDir); !os.IsNotExist(err) {
+		t.Fatalf("expected no global config directory to be created, stat err = %v", err)
+	}
+}
+
+func TestLoadOrGenerate_GeneratesProjectConfigAndMergesGlobalProfiles(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repo := filepath.Join(root, "repo")
+	t.Setenv("HOME", home)
+
+	globalPath := filepath.Join(home, ".agent-runner", "config.yaml")
+	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
+
+	writeConfigFile(t, globalPath, `profiles:
+  global_only:
+    default_mode: headless
+    cli: copilot
+`)
+
+	cfg, err := LoadOrGenerate(projectPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, err := os.Stat(projectPath); err != nil {
+		t.Fatalf("expected project config to be generated, got stat error %v", err)
+	}
+	if cfg.Profiles["global_only"] == nil {
+		t.Fatal("expected global profile to be merged into generated project config")
+	}
+	if cfg.Profiles["planner"] == nil {
+		t.Fatal("expected generated default project profiles to be present")
+	}
+}
+
 func TestValidation_BaseProfileMissingDefaultMode(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -556,5 +754,15 @@ func TestResolve_DefaultConfigProfiles(t *testing.T) {
 	}
 	if rp.DefaultMode != "headless" || rp.CLI != "claude" || rp.Model != "haiku" || rp.Effort != "low" {
 		t.Fatalf("unexpected summarizer resolution: %+v", rp)
+	}
+}
+
+func writeConfigFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
 	}
 }

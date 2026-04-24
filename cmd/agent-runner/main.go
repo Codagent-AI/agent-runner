@@ -758,24 +758,42 @@ func resolveWorkflowArg(arg string) (string, error) {
 	if strings.Contains(arg, ":") {
 		return builtinworkflows.Resolve(arg)
 	}
-	base := filepath.Join(".agent-runner", "workflows", filepath.FromSlash(arg))
-	yamlPath := base + ".yaml"
-	if _, err := os.Stat(yamlPath); err == nil {
-		return yamlPath, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("stat %s: %w", yamlPath, err)
+	localBase := filepath.Join(".agent-runner", "workflows", filepath.FromSlash(arg))
+	localPaths := []string{localBase + ".yaml", localBase + ".yml"}
+	if resolved, err := resolveWorkflowFile(localPaths...); err != nil {
+		return "", err
+	} else if resolved != "" {
+		return resolved, nil
 	}
-	ymlPath := base + ".yml"
-	if _, err := os.Stat(ymlPath); err == nil {
-		return ymlPath, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("stat %s: %w", ymlPath, err)
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("determine home directory for global workflows: %w", err)
 	}
+	globalBase := filepath.Join(home, ".agent-runner", "workflows", filepath.FromSlash(arg))
+	globalPaths := []string{globalBase + ".yaml", globalBase + ".yml"}
+	if resolved, err := resolveWorkflowFile(globalPaths...); err != nil {
+		return "", err
+	} else if resolved != "" {
+		return resolved, nil
+	}
+
 	cwd, err := os.Getwd()
 	if err != nil {
-		return "", fmt.Errorf("workflow %q not found (tried %s and %s); failed to get cwd: %w", arg, yamlPath, ymlPath, err)
+		return "", fmt.Errorf("workflow %q not found (tried %s, %s, %s, and %s); failed to get cwd: %w", arg, localPaths[0], localPaths[1], globalPaths[0], globalPaths[1], err)
 	}
-	return "", fmt.Errorf("workflow %q not found in %s (tried %s and %s)", arg, cwd, yamlPath, ymlPath)
+	return "", fmt.Errorf("workflow %q not found in %s (tried %s, %s, %s, and %s)", arg, cwd, localPaths[0], localPaths[1], globalPaths[0], globalPaths[1])
+}
+
+func resolveWorkflowFile(paths ...string) (string, error) {
+	for _, path := range paths {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("stat %s: %w", path, err)
+		}
+	}
+	return "", nil
 }
 
 func handleRun(args []string) int {

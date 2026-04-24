@@ -1,8 +1,9 @@
 // Package config loads, validates, and resolves agent profiles from
-// .agent-runner/config.yaml.
+// project-local and optional global config files.
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,7 +35,7 @@ type ResolvedProfile struct {
 	SystemPrompt string
 }
 
-// Config is the top-level configuration loaded from .agent-runner/config.yaml.
+// Config is the top-level configuration loaded from config YAML.
 type Config struct {
 	Profiles map[string]*Profile `yaml:"profiles"`
 }
@@ -57,15 +58,63 @@ var validCLI = map[string]bool{
 }
 
 // LoadOrGenerate loads the config file at path. If the file does not exist,
-// it writes a default config and returns that. After loading, all profiles
-// are validated.
+// it writes a default project-local config and returns the merged result of the
+// optional global config (~/.agent-runner/config.yaml) plus the project config.
+// Project profiles replace global profiles of the same name. After merging, all
+// profiles are validated as one set.
 func LoadOrGenerate(path string) (*Config, error) {
+	globalPath, err := globalConfigPath()
+	if err != nil {
+		return nil, err
+	}
+
+	globalCfg, err := loadOptional(globalPath)
+	if err != nil {
+		return nil, fmt.Errorf("loading global config %s: %w", globalPath, err)
+	}
+
+	projectCfg, err := loadProjectOrGenerate(path)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg := mergeConfigs(globalCfg, projectCfg)
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func globalConfigPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("determine home directory for global config: %w", err)
+	}
+	return filepath.Join(home, ".agent-runner", "config.yaml"), nil
+}
+
+func loadOptional(path string) (*Config, error) {
 	data, err := os.ReadFile(path) // #nosec G304 -- config path is from internal caller
 	if err != nil {
-		if !os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading config: %w", err)
+	}
+
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+	return &cfg, nil
+}
+
+func loadProjectOrGenerate(path string) (*Config, error) {
+	data, err := os.ReadFile(path) // #nosec G304 -- config path is from internal caller
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("reading config: %w", err)
 		}
-		// File does not exist — generate default.
 		cfg := defaultConfig()
 		if writeErr := writeDefault(path, cfg); writeErr != nil {
 			return nil, fmt.Errorf("generating default config: %w", writeErr)
@@ -77,11 +126,20 @@ func LoadOrGenerate(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
-
-	if err := cfg.validate(); err != nil {
-		return nil, err
-	}
 	return &cfg, nil
+}
+
+func mergeConfigs(globalCfg, projectCfg *Config) *Config {
+	merged := &Config{Profiles: map[string]*Profile{}}
+	for _, cfg := range []*Config{globalCfg, projectCfg} {
+		if cfg == nil {
+			continue
+		}
+		for name, profile := range cfg.Profiles {
+			merged.Profiles[name] = profile
+		}
+	}
+	return merged
 }
 
 // Resolve walks the extends chain for the named profile and returns a
