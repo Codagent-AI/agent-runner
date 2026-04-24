@@ -26,7 +26,7 @@ func runTests(m *testing.M) int {
 	return m.Run()
 }
 
-func TestLoadOrGenerate_CreatesDefault(t *testing.T) {
+func TestLoad_MissingProjectFileDoesNotWriteDefaults(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	if err := os.MkdirAll(home, 0o755); err != nil {
@@ -37,7 +37,7 @@ func TestLoadOrGenerate_CreatesDefault(t *testing.T) {
 	dir := filepath.Join(root, "repo")
 	path := filepath.Join(dir, ".agent-runner", "config.yaml")
 
-	cfg, err := LoadOrGenerate(path)
+	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestLoadOrGenerate_CreatesDefault(t *testing.T) {
 	}
 }
 
-func TestLoadOrGenerate_SkipsGlobalConfigWhenHomeDirUnavailable(t *testing.T) {
+func TestLoad_SkipsGlobalConfigWhenHomeDirUnavailable(t *testing.T) {
 	original := userHomeDir
 	userHomeDir = func() (string, error) { return "", fmt.Errorf("home unavailable") }
 	t.Cleanup(func() { userHomeDir = original })
@@ -115,7 +115,7 @@ func TestLoadOrGenerate_SkipsGlobalConfigWhenHomeDirUnavailable(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".agent-runner", "config.yaml")
 
-	cfg, err := LoadOrGenerate(path)
+	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestLoadOrGenerate_SkipsGlobalConfigWhenHomeDirUnavailable(t *testing.T) {
 	}
 }
 
-func TestLoadOrGenerate_LoadsExisting(t *testing.T) {
+func TestLoad_LoadsExisting(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	if err := os.MkdirAll(home, 0o755); err != nil {
@@ -148,7 +148,7 @@ func TestLoadOrGenerate_LoadsExisting(t *testing.T) {
 `
 	writeConfigFile(t, path, content)
 
-	cfg, err := LoadOrGenerate(path)
+	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestLoadOrGenerate_LoadsExisting(t *testing.T) {
 	}
 }
 
-func TestLoadOrGenerate_AllFieldsSpecified(t *testing.T) {
+func TestLoad_AllFieldsSpecified(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -188,7 +188,7 @@ func TestLoadOrGenerate_AllFieldsSpecified(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg, err := LoadOrGenerate(path)
+	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestLoadOrGenerate_AllFieldsSpecified(t *testing.T) {
 	}
 }
 
-func TestLoadOrGenerate_OptionalFieldsOmitted(t *testing.T) {
+func TestLoad_OptionalFieldsOmitted(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -213,7 +213,7 @@ func TestLoadOrGenerate_OptionalFieldsOmitted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg, err := LoadOrGenerate(path)
+	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestLoadOrGenerate_OptionalFieldsOmitted(t *testing.T) {
 	}
 }
 
-func TestLoadOrGenerate_UnrecognizedFieldIgnored(t *testing.T) {
+func TestLoad_UnrecognizedFieldIgnored(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -239,7 +239,7 @@ func TestLoadOrGenerate_UnrecognizedFieldIgnored(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg, err := LoadOrGenerate(path)
+	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestLoadOrGenerate_UnrecognizedFieldIgnored(t *testing.T) {
 	}
 }
 
-func TestLoadOrGenerate_MergesGlobalAndProjectProfiles(t *testing.T) {
+func TestLoad_MergesGlobalAndProjectProfiles(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	repo := filepath.Join(root, "repo")
@@ -281,7 +281,7 @@ func TestLoadOrGenerate_MergesGlobalAndProjectProfiles(t *testing.T) {
         extends: headless_base
 `)
 
-	cfg, err := LoadOrGenerate(projectPath)
+	cfg, err := Load(projectPath)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -313,7 +313,7 @@ func TestLoadOrGenerate_MergesGlobalAndProjectProfiles(t *testing.T) {
 	}
 }
 
-func TestLoadOrGenerate_GlobalProfileCanExtendProjectProfile(t *testing.T) {
+func TestLoad_GlobalProfileCanExtendProjectProfile(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	repo := filepath.Join(root, "repo")
@@ -337,7 +337,7 @@ func TestLoadOrGenerate_GlobalProfileCanExtendProjectProfile(t *testing.T) {
         cli: copilot
 `)
 
-	cfg, err := LoadOrGenerate(projectPath)
+	cfg, err := Load(projectPath)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -351,7 +351,7 @@ func TestLoadOrGenerate_GlobalProfileCanExtendProjectProfile(t *testing.T) {
 	}
 }
 
-func TestLoadOrGenerate_DetectsCrossFileCycle(t *testing.T) {
+func TestLoad_DetectsCrossFileCycle(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	repo := filepath.Join(root, "repo")
@@ -373,7 +373,7 @@ func TestLoadOrGenerate_DetectsCrossFileCycle(t *testing.T) {
         extends: a
 `)
 
-	_, err := LoadOrGenerate(projectPath)
+	_, err := Load(projectPath)
 	if err == nil {
 		t.Fatal("expected cycle error")
 	}
@@ -382,7 +382,7 @@ func TestLoadOrGenerate_DetectsCrossFileCycle(t *testing.T) {
 	}
 }
 
-func TestLoadOrGenerate_GlobalInvalidYAMLIncludesPath(t *testing.T) {
+func TestLoad_GlobalInvalidYAMLIncludesPath(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	repo := filepath.Join(root, "repo")
@@ -393,7 +393,7 @@ func TestLoadOrGenerate_GlobalInvalidYAMLIncludesPath(t *testing.T) {
 
 	writeConfigFile(t, globalPath, "profiles:\n  bad: [\n")
 
-	_, err := LoadOrGenerate(projectPath)
+	_, err := Load(projectPath)
 	if err == nil {
 		t.Fatal("expected parse error")
 	}
@@ -405,7 +405,7 @@ func TestLoadOrGenerate_GlobalInvalidYAMLIncludesPath(t *testing.T) {
 	}
 }
 
-func TestLoadOrGenerate_DoesNotCreateGlobalConfigWhenMissing(t *testing.T) {
+func TestLoad_DoesNotCreateGlobalConfigWhenMissing(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	repo := filepath.Join(root, "repo")
@@ -413,7 +413,7 @@ func TestLoadOrGenerate_DoesNotCreateGlobalConfigWhenMissing(t *testing.T) {
 
 	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
 
-	cfg, err := LoadOrGenerate(projectPath)
+	cfg, err := Load(projectPath)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -427,7 +427,7 @@ func TestLoadOrGenerate_DoesNotCreateGlobalConfigWhenMissing(t *testing.T) {
 	}
 }
 
-func TestLoadOrGenerate_GlobalOverridesDefaultAgent(t *testing.T) {
+func TestLoad_GlobalOverridesDefaultAgent(t *testing.T) {
 	// Regression: with no project config on disk, built-in defaults must not
 	// stomp a global agent that shares a name. Previously the default
 	// implementor (which only extends headless_base) replaced the global
@@ -450,7 +450,7 @@ func TestLoadOrGenerate_GlobalOverridesDefaultAgent(t *testing.T) {
         model: gpt-5.4
 `)
 
-	cfg, err := LoadOrGenerate(projectPath)
+	cfg, err := Load(projectPath)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -472,7 +472,7 @@ func TestLoadOrGenerate_GlobalOverridesDefaultAgent(t *testing.T) {
 	}
 }
 
-func TestLoadOrGenerate_ProjectExistsStillIncludesDefaultAgents(t *testing.T) {
+func TestLoad_ProjectExistsStillIncludesDefaultAgents(t *testing.T) {
 	// When a project config defines only a custom agent, the built-in
 	// defaults (planner, implementor, etc.) must still be available so that
 	// shipped workflows referencing those agents continue to work.
@@ -491,7 +491,7 @@ func TestLoadOrGenerate_ProjectExistsStillIncludesDefaultAgents(t *testing.T) {
         model: o3
 `)
 
-	cfg, err := LoadOrGenerate(path)
+	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -510,7 +510,7 @@ func TestLoadOrGenerate_ProjectExistsStillIncludesDefaultAgents(t *testing.T) {
 	}
 }
 
-func TestLoadOrGenerate_DefaultsAndMergesGlobalProfiles(t *testing.T) {
+func TestLoad_DefaultsAndMergesGlobalProfiles(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	repo := filepath.Join(root, "repo")
@@ -527,7 +527,7 @@ func TestLoadOrGenerate_DefaultsAndMergesGlobalProfiles(t *testing.T) {
         cli: copilot
 `)
 
-	cfg, err := LoadOrGenerate(projectPath)
+	cfg, err := Load(projectPath)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -546,7 +546,7 @@ func TestLoadOrGenerate_DefaultsAndMergesGlobalProfiles(t *testing.T) {
 
 // --- Legacy flat shape rejection ---
 
-func TestLoadOrGenerate_RejectsLegacyFlatShapeProject(t *testing.T) {
+func TestLoad_RejectsLegacyFlatShapeProject(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -556,7 +556,7 @@ func TestLoadOrGenerate_RejectsLegacyFlatShapeProject(t *testing.T) {
     cli: claude
 `)
 
-	_, err := LoadOrGenerate(path)
+	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for legacy flat shape")
 	}
@@ -565,7 +565,7 @@ func TestLoadOrGenerate_RejectsLegacyFlatShapeProject(t *testing.T) {
 	}
 }
 
-func TestLoadOrGenerate_RejectsLegacyFlatShapeGlobal(t *testing.T) {
+func TestLoad_RejectsLegacyFlatShapeGlobal(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	repo := filepath.Join(root, "repo")
@@ -580,7 +580,7 @@ func TestLoadOrGenerate_RejectsLegacyFlatShapeGlobal(t *testing.T) {
     cli: claude
 `)
 
-	_, err := LoadOrGenerate(projectPath)
+	_, err := Load(projectPath)
 	if err == nil {
 		t.Fatal("expected error for legacy flat shape in global config")
 	}
@@ -589,7 +589,7 @@ func TestLoadOrGenerate_RejectsLegacyFlatShapeGlobal(t *testing.T) {
 	}
 }
 
-func TestLoadOrGenerate_RejectsLegacyMixedShape(t *testing.T) {
+func TestLoad_RejectsLegacyMixedShape(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -604,7 +604,7 @@ func TestLoadOrGenerate_RejectsLegacyMixedShape(t *testing.T) {
     cli: claude
 `)
 
-	_, err := LoadOrGenerate(path)
+	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for mixed legacy/new shape")
 	}
@@ -615,7 +615,7 @@ func TestLoadOrGenerate_RejectsLegacyMixedShape(t *testing.T) {
 
 // --- active_profile selection ---
 
-func TestLoadOrGenerate_ActiveProfileSelects(t *testing.T) {
+func TestLoad_ActiveProfileSelects(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	if err := os.MkdirAll(home, 0o755); err != nil {
@@ -639,7 +639,7 @@ profiles:
         cli: copilot
 `)
 
-	cfg, err := LoadOrGenerate(path)
+	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -652,7 +652,7 @@ profiles:
 	}
 }
 
-func TestLoadOrGenerate_NoActiveProfileFallsToDefault(t *testing.T) {
+func TestLoad_NoActiveProfileFallsToDefault(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -664,7 +664,7 @@ func TestLoadOrGenerate_NoActiveProfileFallsToDefault(t *testing.T) {
         cli: claude
 `)
 
-	cfg, err := LoadOrGenerate(path)
+	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -673,7 +673,7 @@ func TestLoadOrGenerate_NoActiveProfileFallsToDefault(t *testing.T) {
 	}
 }
 
-func TestLoadOrGenerate_ActiveProfileMissing(t *testing.T) {
+func TestLoad_ActiveProfileMissing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -686,7 +686,7 @@ profiles:
         cli: claude
 `)
 
-	_, err := LoadOrGenerate(path)
+	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for missing active profile set")
 	}
@@ -695,7 +695,7 @@ profiles:
 	}
 }
 
-func TestLoadOrGenerate_ActiveProfileInGlobalConfig(t *testing.T) {
+func TestLoad_ActiveProfileInGlobalConfig(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	repo := filepath.Join(root, "repo")
@@ -720,7 +720,7 @@ profiles:
         cli: claude
 `)
 
-	_, err := LoadOrGenerate(projectPath)
+	_, err := Load(projectPath)
 	if err == nil {
 		t.Fatal("expected error for active_profile in global config")
 	}
@@ -734,7 +734,7 @@ profiles:
 
 // --- Profile set merging ---
 
-func TestLoadOrGenerate_MergesDisjointProfileSets(t *testing.T) {
+func TestLoad_MergesDisjointProfileSets(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	repo := filepath.Join(root, "repo")
@@ -759,7 +759,7 @@ profiles:
         cli: codex
 `)
 
-	cfg, err := LoadOrGenerate(projectPath)
+	cfg, err := Load(projectPath)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -775,7 +775,7 @@ profiles:
 	}
 }
 
-func TestLoadOrGenerate_MergesSameProfileSetDisjointAgents(t *testing.T) {
+func TestLoad_MergesSameProfileSetDisjointAgents(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	repo := filepath.Join(root, "repo")
@@ -799,7 +799,7 @@ func TestLoadOrGenerate_MergesSameProfileSetDisjointAgents(t *testing.T) {
         cli: claude
 `)
 
-	cfg, err := LoadOrGenerate(projectPath)
+	cfg, err := Load(projectPath)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -811,7 +811,7 @@ func TestLoadOrGenerate_MergesSameProfileSetDisjointAgents(t *testing.T) {
 	}
 }
 
-func TestLoadOrGenerate_MergesSameProfileSetOverlappingAgents(t *testing.T) {
+func TestLoad_MergesSameProfileSetOverlappingAgents(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	repo := filepath.Join(root, "repo")
@@ -836,7 +836,7 @@ func TestLoadOrGenerate_MergesSameProfileSetOverlappingAgents(t *testing.T) {
         cli: copilot
 `)
 
-	cfg, err := LoadOrGenerate(projectPath)
+	cfg, err := Load(projectPath)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -852,7 +852,7 @@ func TestLoadOrGenerate_MergesSameProfileSetOverlappingAgents(t *testing.T) {
 	}
 }
 
-func TestLoadOrGenerate_ProfileSetExtendsInheritsAgentsAndSupportsAgentLevelExtends(t *testing.T) {
+func TestLoad_ProfileSetExtendsInheritsAgentsAndSupportsAgentLevelExtends(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	repo := filepath.Join(root, "repo")
@@ -882,7 +882,7 @@ profiles:
         cli: copilot
 `)
 
-	cfg, err := LoadOrGenerate(projectPath)
+	cfg, err := Load(projectPath)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -906,7 +906,7 @@ profiles:
 	}
 }
 
-func TestLoadOrGenerate_ProfileSetExtendsOverrideReplacesParentAgentWholly(t *testing.T) {
+func TestLoad_ProfileSetExtendsOverrideReplacesParentAgentWholly(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -929,7 +929,7 @@ profiles:
         cli: copilot
 `)
 
-	cfg, err := LoadOrGenerate(path)
+	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -946,7 +946,7 @@ profiles:
 	}
 }
 
-func TestLoadOrGenerate_ProfileSetExtendsProjectWinsOverGlobal(t *testing.T) {
+func TestLoad_ProfileSetExtendsProjectWinsOverGlobal(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	repo := filepath.Join(root, "repo")
@@ -978,7 +978,7 @@ profiles:
     extends: base_b
 `)
 
-	cfg, err := LoadOrGenerate(projectPath)
+	cfg, err := Load(projectPath)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -992,7 +992,7 @@ profiles:
 	}
 }
 
-func TestLoadOrGenerate_ProfileSetExtendsMergeThenExtendAcrossGlobalAndProject(t *testing.T) {
+func TestLoad_ProfileSetExtendsMergeThenExtendAcrossGlobalAndProject(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	repo := filepath.Join(root, "repo")
@@ -1022,7 +1022,7 @@ profiles:
         extends: headless_base
 `)
 
-	cfg, err := LoadOrGenerate(projectPath)
+	cfg, err := Load(projectPath)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1038,7 +1038,7 @@ profiles:
 	}
 }
 
-func TestLoadOrGenerate_ProfileSetExtendsMultiLevelChain(t *testing.T) {
+func TestLoad_ProfileSetExtendsMultiLevelChain(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -1062,7 +1062,7 @@ profiles:
         extends: headless_base
 `)
 
-	cfg, err := LoadOrGenerate(path)
+	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1078,7 +1078,7 @@ profiles:
 	}
 }
 
-func TestLoadOrGenerate_NonActiveProfileSetInheritedInvalidAgentBlocksLoad(t *testing.T) {
+func TestLoad_NonActiveProfileSetInheritedInvalidAgentBlocksLoad(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -1102,7 +1102,7 @@ func TestLoadOrGenerate_NonActiveProfileSetInheritedInvalidAgentBlocksLoad(t *te
         cli: claude
 `)
 
-	_, err := LoadOrGenerate(path)
+	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected validation error for inherited invalid agent in non-active profile set")
 	}
@@ -1111,7 +1111,7 @@ func TestLoadOrGenerate_NonActiveProfileSetInheritedInvalidAgentBlocksLoad(t *te
 	}
 }
 
-func TestLoadOrGenerate_ProfileSetExtendsMissingParent(t *testing.T) {
+func TestLoad_ProfileSetExtendsMissingParent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -1125,7 +1125,7 @@ profiles:
         cli: claude
 `)
 
-	_, err := LoadOrGenerate(path)
+	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected missing parent error")
 	}
@@ -1134,7 +1134,7 @@ profiles:
 	}
 }
 
-func TestLoadOrGenerate_ProfileSetExtendsRejectsNonString(t *testing.T) {
+func TestLoad_ProfileSetExtendsRejectsNonString(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -1149,7 +1149,7 @@ func TestLoadOrGenerate_ProfileSetExtendsRejectsNonString(t *testing.T) {
         cli: claude
 `)
 
-	_, err := LoadOrGenerate(path)
+	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected extends type error")
 	}
@@ -1158,7 +1158,7 @@ func TestLoadOrGenerate_ProfileSetExtendsRejectsNonString(t *testing.T) {
 	}
 }
 
-func TestLoadOrGenerate_ProfileSetExtendsCycles(t *testing.T) {
+func TestLoad_ProfileSetExtendsCycles(t *testing.T) {
 	testCases := []struct {
 		name    string
 		content string
@@ -1227,7 +1227,7 @@ func TestLoadOrGenerate_ProfileSetExtendsCycles(t *testing.T) {
 			path := filepath.Join(dir, "config.yaml")
 			writeConfigFile(t, path, tc.content)
 
-			_, err := LoadOrGenerate(path)
+			_, err := Load(path)
 			if err == nil {
 				t.Fatal("expected cycle error")
 			}
@@ -1240,7 +1240,7 @@ func TestLoadOrGenerate_ProfileSetExtendsCycles(t *testing.T) {
 	}
 }
 
-func TestLoadOrGenerate_NonActiveProfileSetInvalidAgentBlocksLoad(t *testing.T) {
+func TestLoad_NonActiveProfileSetInvalidAgentBlocksLoad(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -1258,7 +1258,7 @@ func TestLoadOrGenerate_NonActiveProfileSetInvalidAgentBlocksLoad(t *testing.T) 
         effort: extreme
 `)
 
-	_, err := LoadOrGenerate(path)
+	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected validation error for invalid agent in non-active profile set")
 	}
@@ -1267,7 +1267,7 @@ func TestLoadOrGenerate_NonActiveProfileSetInvalidAgentBlocksLoad(t *testing.T) 
 	}
 }
 
-func TestLoadOrGenerate_AgentLevelExtendsCannotReachUnrelatedProfileSet(t *testing.T) {
+func TestLoad_AgentLevelExtendsCannotReachUnrelatedProfileSet(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -1284,7 +1284,7 @@ profiles:
         extends: planner
 `)
 
-	_, err := LoadOrGenerate(path)
+	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for agent-level extends across unrelated profile sets")
 	}
@@ -1306,7 +1306,7 @@ func TestValidation_BaseAgentMissingDefaultMode(t *testing.T) {
         cli: claude
 `)
 
-	_, err := LoadOrGenerate(path)
+	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -1326,7 +1326,7 @@ func TestValidation_BaseAgentMissingCLI(t *testing.T) {
         default_mode: headless
 `)
 
-	_, err := LoadOrGenerate(path)
+	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -1349,7 +1349,7 @@ func TestValidation_ChildAgentOmitsFields(t *testing.T) {
         extends: parent
 `)
 
-	_, err := LoadOrGenerate(path)
+	_, err := Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1368,7 +1368,7 @@ func TestValidation_InvalidEffort(t *testing.T) {
         effort: maximum
 `)
 
-	_, err := LoadOrGenerate(path)
+	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -1389,7 +1389,7 @@ func TestValidation_InvalidCLI(t *testing.T) {
         cli: unknown
 `)
 
-	_, err := LoadOrGenerate(path)
+	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -1410,7 +1410,7 @@ func TestValidation_CopilotCLIAccepted(t *testing.T) {
         cli: copilot
 `)
 
-	cfg, err := LoadOrGenerate(path)
+	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1432,7 +1432,7 @@ func TestValidation_InvalidDefaultMode(t *testing.T) {
         cli: claude
 `)
 
-	_, err := LoadOrGenerate(path)
+	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -1452,7 +1452,7 @@ func TestValidation_ExtendsNonexistent(t *testing.T) {
         extends: nonexistent
 `)
 
-	_, err := LoadOrGenerate(path)
+	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -1474,7 +1474,7 @@ func TestValidation_CycleDetected(t *testing.T) {
         extends: a
 `)
 
-	_, err := LoadOrGenerate(path)
+	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -1491,7 +1491,7 @@ func TestValidation_NilAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := LoadOrGenerate(path)
+	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected validation error for nil agent")
 	}
@@ -1655,7 +1655,7 @@ func TestResolve_CycleInResolve(t *testing.T) {
 func TestResolve_DefaultConfigAgents(t *testing.T) {
 	// Loading with no project or global file yields the built-in defaults only.
 	t.Setenv("HOME", t.TempDir())
-	cfg, err := LoadOrGenerate(filepath.Join(t.TempDir(), "nonexistent.yaml"))
+	cfg, err := Load(filepath.Join(t.TempDir(), "nonexistent.yaml"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

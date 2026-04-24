@@ -168,7 +168,7 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 
 	// Load agent profiles if not already provided and the workflow has agent steps.
 	if opts.ProfileStore == nil && workflowNeedsAgentProfiles(workflow.Steps) {
-		cfg, err := config.LoadOrGenerate(".agent-runner/config.yaml")
+		cfg, err := config.Load(".agent-runner/config.yaml")
 		if err != nil {
 			return nil, fmt.Errorf("loading agent profiles: %w", err)
 		}
