@@ -4,13 +4,14 @@ package discovery
 import (
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 
-	"gopkg.in/yaml.v3"
-
+	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
+	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
 // Scope identifies where a workflow was found.
@@ -33,9 +34,11 @@ type WorkflowEntry struct {
 	ParseError    string // non-empty if the file could not be loaded or parsed
 }
 
-type workflowHeader struct {
-	Description string        `yaml:"description"`
-	Params      []model.Param `yaml:"params"`
+type workflowCandidate struct {
+	canonicalName string
+	namespace     string
+	sourcePath    string
+	extPriority   int
 }
 
 // StartRunMsg is a bubbletea message emitted when the user requests to start
@@ -59,36 +62,52 @@ type ViewDefinitionMsg struct {
 // projectDir and userWorkflowsDir may be empty to skip that source.
 // Results are ordered: project, user, builtin (builtins sorted by namespace then name).
 func Enumerate(builtinFS fs.FS, projectDir, userWorkflowsDir string) []WorkflowEntry {
-	var entries []WorkflowEntry
-
+	var projectEntries []WorkflowEntry
 	if projectDir != "" {
-		projWFDir := filepath.Join(projectDir, ".agent-runner", "workflows")
-		entries = append(entries, enumerateLocalDir(projWFDir, ScopeProject)...)
+		projectEntries = enumerateLocalDir(filepath.Join(projectDir, ".agent-runner", "workflows"), ScopeProject)
 	}
 
+	var userEntries []WorkflowEntry
 	if userWorkflowsDir != "" {
-		entries = append(entries, enumerateLocalDir(userWorkflowsDir, ScopeUser)...)
+		userEntries = enumerateLocalDir(userWorkflowsDir, ScopeUser)
 	}
 
-	if builtinFS != nil {
-		entries = append(entries, enumerateBuiltinFS(builtinFS)...)
+	builtinEntries := enumerateBuiltinFS(builtinFS)
+
+	if len(projectEntries) != 0 && len(userEntries) != 0 {
+		shadowed := make(map[string]struct{}, len(projectEntries))
+		for _, entry := range projectEntries {
+			shadowed[entry.CanonicalName] = struct{}{}
+		}
+
+		filtered := userEntries[:0]
+		for _, entry := range userEntries {
+			if _, ok := shadowed[entry.CanonicalName]; ok {
+				continue
+			}
+			filtered = append(filtered, entry)
+		}
+		userEntries = filtered
 	}
 
+	entries := make([]WorkflowEntry, 0, len(projectEntries)+len(userEntries)+len(builtinEntries))
+	entries = append(entries, projectEntries...)
+	entries = append(entries, userEntries...)
+	entries = append(entries, builtinEntries...)
 	return entries
 }
 
-// enumerateLocalDir walks dir and returns a WorkflowEntry for each .yaml/.yml file.
-// The canonical name is the relative path from dir with the extension stripped,
-// using "/" as separator (e.g. "deploy" or "team/deploy").
+// enumerateLocalDir walks dir and returns a WorkflowEntry for each canonical
+// workflow name, preferring .yaml over .yml when both exist.
 func enumerateLocalDir(dir string, scope Scope) []WorkflowEntry {
 	info, err := os.Stat(dir)
 	if err != nil || !info.IsDir() {
 		return nil
 	}
 
-	var entries []WorkflowEntry
-	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+	candidates := make(map[string]workflowCandidate)
+	_ = filepath.WalkDir(dir, func(filePath string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() {
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(d.Name()))
@@ -96,103 +115,158 @@ func enumerateLocalDir(dir string, scope Scope) []WorkflowEntry {
 			return nil
 		}
 
-		rel, relErr := filepath.Rel(dir, path)
-		if relErr != nil {
+		rel, err := filepath.Rel(dir, filePath)
+		if err != nil {
 			return nil
 		}
-		rel = filepath.ToSlash(rel)
-		name := stripExt(rel)
-
-		entry := WorkflowEntry{
-			CanonicalName: name,
-			SourcePath:    path,
-			Scope:         scope,
+		canonicalName := stripExt(filepath.ToSlash(rel))
+		candidate := workflowCandidate{
+			canonicalName: canonicalName,
+			sourcePath:    filePath,
+			extPriority:   extensionPriority(ext),
 		}
-
-		data, readErr := os.ReadFile(path) // #nosec G304 G122 -- path is from a controlled workflow directory walk
-		if readErr != nil {
-			entry.ParseError = readErr.Error()
-		} else {
-			var h workflowHeader
-			if yamlErr := yaml.Unmarshal(data, &h); yamlErr != nil {
-				entry.ParseError = yamlErr.Error()
-			} else {
-				entry.Description = h.Description
-				entry.Params = h.Params
-			}
-		}
-
-		entries = append(entries, entry)
+		recordCandidate(candidates, candidate)
 		return nil
 	})
 
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].CanonicalName < entries[j].CanonicalName
+	return loadLocalEntries(scope, candidates)
+}
+
+// enumerateBuiltinFS walks the embedded FS and returns entries for all canonical
+// builtin workflow names, preferring .yaml over .yml when both exist.
+func enumerateBuiltinFS(fsys fs.FS) []WorkflowEntry {
+	if fsys == nil {
+		return nil
+	}
+
+	candidates := make(map[string]workflowCandidate)
+	_ = fs.WalkDir(fsys, ".", func(relPath string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() {
+			return nil
+		}
+		ext := strings.ToLower(path.Ext(relPath))
+		if ext != ".yaml" && ext != ".yml" {
+			return nil
+		}
+
+		canonicalName, namespace := builtinCanonical(relPath)
+		candidate := workflowCandidate{
+			canonicalName: canonicalName,
+			namespace:     namespace,
+			sourcePath:    builtinworkflows.Ref(relPath),
+			extPriority:   extensionPriority(ext),
+		}
+		recordCandidate(candidates, candidate)
+		return nil
 	})
+
+	return loadBuiltinEntries(fsys, candidates)
+}
+
+func loadLocalEntries(scope Scope, candidates map[string]workflowCandidate) []WorkflowEntry {
+	names := make([]string, 0, len(candidates))
+	for name := range candidates {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	entries := make([]WorkflowEntry, 0, len(names))
+	for _, name := range names {
+		candidate := candidates[name]
+		entry := WorkflowEntry{
+			CanonicalName: candidate.canonicalName,
+			Scope:         scope,
+			SourcePath:    candidate.sourcePath,
+		}
+
+		workflow, err := loader.LoadWorkflow(candidate.sourcePath, loader.Options{})
+		if err != nil {
+			entry.ParseError = err.Error()
+		} else {
+			entry.Description = workflow.Description
+			entry.Params = workflow.Params
+		}
+
+		entries = append(entries, entry)
+	}
+
 	return entries
 }
 
-// enumerateBuiltinFS walks the embedded FS and returns entries for all .yaml/.yml files.
-// The canonical name follows namespace:name format (one level of subdirectory).
-// Files at the root (no subdirectory) use just the name.
-// Entries are sorted by namespace then name.
-func enumerateBuiltinFS(fsys fs.FS) []WorkflowEntry {
-	var entries []WorkflowEntry
-
-	_ = fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
+func loadBuiltinEntries(fsys fs.FS, candidates map[string]workflowCandidate) []WorkflowEntry {
+	ordered := make([]workflowCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		ordered = append(ordered, candidate)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].namespace != ordered[j].namespace {
+			return ordered[i].namespace < ordered[j].namespace
 		}
-		ext := strings.ToLower(filepath.Ext(d.Name()))
-		if ext != ".yaml" && ext != ".yml" {
-			return nil
-		}
+		return ordered[i].canonicalName < ordered[j].canonicalName
+	})
 
-		name, ns := builtinCanonical(path)
+	entries := make([]WorkflowEntry, 0, len(ordered))
+	for _, candidate := range ordered {
 		entry := WorkflowEntry{
-			CanonicalName: name,
-			SourcePath:    "builtin:" + path,
-			Namespace:     ns,
+			CanonicalName: candidate.canonicalName,
+			Namespace:     candidate.namespace,
 			Scope:         ScopeBuiltin,
+			SourcePath:    candidate.sourcePath,
 		}
 
-		data, readErr := fs.ReadFile(fsys, path)
-		if readErr != nil {
-			entry.ParseError = readErr.Error()
+		relPath, err := builtinworkflows.RefPath(candidate.sourcePath)
+		if err != nil {
+			entry.ParseError = err.Error()
+			entries = append(entries, entry)
+			continue
+		}
+
+		data, err := fs.ReadFile(fsys, relPath)
+		if err != nil {
+			entry.ParseError = err.Error()
+			entries = append(entries, entry)
+			continue
+		}
+
+		workflow, err := loader.ParseWorkflow(data, loader.Options{})
+		if err != nil {
+			entry.ParseError = err.Error()
 		} else {
-			var h workflowHeader
-			if yamlErr := yaml.Unmarshal(data, &h); yamlErr != nil {
-				entry.ParseError = yamlErr.Error()
-			} else {
-				entry.Description = h.Description
-				entry.Params = h.Params
-			}
+			entry.Description = workflow.Description
+			entry.Params = workflow.Params
 		}
 
 		entries = append(entries, entry)
-		return nil
-	})
+	}
 
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].Namespace != entries[j].Namespace {
-			return entries[i].Namespace < entries[j].Namespace
-		}
-		return entries[i].CanonicalName < entries[j].CanonicalName
-	})
 	return entries
+}
+
+func recordCandidate(candidates map[string]workflowCandidate, candidate workflowCandidate) {
+	existing, ok := candidates[candidate.canonicalName]
+	if !ok || candidate.extPriority < existing.extPriority || (candidate.extPriority == existing.extPriority && candidate.sourcePath < existing.sourcePath) {
+		candidates[candidate.canonicalName] = candidate
+	}
+}
+
+func extensionPriority(ext string) int {
+	if strings.EqualFold(ext, ".yaml") {
+		return 0
+	}
+	return 1
 }
 
 // builtinCanonical converts a path like "core/finalize-pr.yaml" to
 // canonical name "core:finalize-pr" and namespace "core".
-func builtinCanonical(path string) (name, ns string) {
-	path = filepath.ToSlash(path)
-	parts := strings.SplitN(path, "/", 2)
+func builtinCanonical(relPath string) (name, namespace string) {
+	relPath = path.Clean(filepath.ToSlash(relPath))
+	parts := strings.SplitN(relPath, "/", 2)
 	if len(parts) == 1 {
 		return stripExt(parts[0]), ""
 	}
-	ns = parts[0]
+	namespace = parts[0]
 	base := stripExt(parts[1])
-	return ns + ":" + base, ns
+	return namespace + ":" + base, namespace
 }
 
 func stripExt(name string) string {
