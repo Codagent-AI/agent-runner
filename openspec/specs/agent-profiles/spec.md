@@ -152,7 +152,7 @@ When a step does not specify a `session` field, the runner SHALL apply defaults:
 - **THEN** the runner uses `session: new`, not the default of resume
 
 ### Requirement: Profile resolution
-The runner SHALL resolve an agent name to a fully-merged agent definition by walking the `extends` chain within the active profile set's `agents:` map and merging fields (child overrides parent). The resolved agent provides default_mode, cli, and optionally model, effort, and system_prompt to the executor. `extends` references SHALL be resolved only against agents within the same active profile set; extending agents in non-active profile sets is not supported.
+The runner SHALL resolve an agent name to a fully-merged agent definition by walking the `extends` chain within the active profile set's effective `agents:` map (that is, the map produced after profile-set `extends` resolution — see the `config-profiles` capability) and merging fields (child overrides parent). The resolved agent provides default_mode, cli, and optionally model, effort, and system_prompt to the executor. Agent-level `extends` references SHALL be resolved against that same effective agents map, which may include agents inherited from a parent profile set. Agent-level `extends` SHALL NOT cross into unrelated profile sets — only agents visible in the containing set's effective map (whether defined locally or inherited via profile-set `extends`) are reachable.
 
 #### Scenario: Effort unset after full merge
 - **WHEN** an agent is resolved and `effort` is unset in both the child and all ancestors
@@ -174,9 +174,13 @@ The runner SHALL resolve an agent name to a fully-merged agent definition by wal
 - **WHEN** in the active profile set, agent C extends B which extends A, and C sets effort, B sets model, A sets default_mode and cli
 - **THEN** the resolved agent has A's default_mode and cli, B's model, and C's effort
 
-#### Scenario: Extends references agent in another profile set
-- **WHEN** the active profile is `default`, which contains agent `planner` with `extends: cloud_base`, but `cloud_base` is defined only in a different profile set `copilot`
-- **THEN** config loading fails with an error indicating `cloud_base` does not exist (the active profile's agents map is the only search scope for `extends`)
+#### Scenario: Agent-level extends reaches an inherited agent
+- **WHEN** the active profile set `copilot` declares `extends: team_base`, `team_base` defines `headless_base`, and `copilot` defines `implementor` with `extends: headless_base`
+- **THEN** resolving `implementor` succeeds and inherits fields from `team_base`'s `headless_base`
+
+#### Scenario: Agent-level extends cannot reach an unrelated profile set
+- **WHEN** the active profile set `copilot` does not declare `extends`, and an agent in `copilot` specifies `extends: planner` where `planner` is defined only in an unrelated profile set
+- **THEN** config loading fails with an error indicating the parent agent does not exist in the active profile's effective agents map
 
 ### Requirement: Global config file location
 
