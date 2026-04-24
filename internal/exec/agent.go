@@ -53,11 +53,11 @@ func stepProfileName(step *model.Step, ctx *model.ExecutionContext) string {
 // For session:new steps, it resolves from step.Agent. For resume/inherit, it
 // looks up the profile name from the session-originating step.
 // Step-level overrides (Mode, Model, CLI) are applied on top of the profile.
-func resolveStepProfile(step *model.Step, ctx *model.ExecutionContext) (*config.ResolvedProfile, error) {
+func resolveStepProfile(step *model.Step, ctx *model.ExecutionContext) (*config.ResolvedAgent, error) {
 	cfg, _ := ctx.ProfileStore.(*config.Config)
 	if cfg == nil {
 		// No profile store — return a minimal profile using step-level values.
-		return &config.ResolvedProfile{
+		return &config.ResolvedAgent{
 			DefaultMode: string(step.Mode),
 			CLI:         step.CLI,
 			Model:       step.Model,
@@ -206,7 +206,7 @@ func ExecuteAgentStep(
 
 // resolveModeFromProfile returns the effective mode, preferring the step-level
 // override, then the profile's DefaultMode, falling back to interactive.
-func resolveModeFromProfile(step *model.Step, profile *config.ResolvedProfile) model.StepMode {
+func resolveModeFromProfile(step *model.Step, profile *config.ResolvedAgent) model.StepMode {
 	if step.Mode != "" {
 		return step.Mode
 	}
@@ -220,7 +220,7 @@ func resolveModeFromProfile(step *model.Step, profile *config.ResolvedProfile) m
 // whether the session is a resume (vs. fresh). For fresh Claude sessions, a
 // new UUID is generated so the runner knows the session ID deterministically.
 func resolveAdapterAndSession(
-	step *model.Step, ctx *model.ExecutionContext, profile *config.ResolvedProfile,
+	step *model.Step, ctx *model.ExecutionContext, profile *config.ResolvedAgent,
 ) (adapter cli.Adapter, cliName, sessionID string, isResume bool, err error) {
 	cliName = step.CLI
 	if cliName == "" && profile != nil && profile.CLI != "" {
@@ -273,7 +273,7 @@ func resolveAdapterAndSession(
 func buildAdapterInput(
 	step *model.Step,
 	ctx *model.ExecutionContext,
-	profile *config.ResolvedProfile,
+	profile *config.ResolvedAgent,
 	adapter cli.Adapter,
 	prompt, enrichment, sessionID string,
 	isResume, headless bool,

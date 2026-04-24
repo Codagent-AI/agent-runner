@@ -1,0 +1,5 @@
+- [ ] Implement the change described by these files:
+  - [proposal.md](proposal.md)
+  - [specs/config-profiles/spec.md](specs/config-profiles/spec.md)
+  - [specs/agent-profiles/spec.md](specs/agent-profiles/spec.md)
+  - [design.md](design.md)
