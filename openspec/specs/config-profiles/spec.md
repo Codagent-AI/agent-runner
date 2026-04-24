@@ -45,15 +45,15 @@ A project config MAY include a top-level `active_profile: <name>` field that sel
 - **THEN** config loading fails with an error naming the missing profile
 
 ### Requirement: Active profile fallback to default
-When the project config does not specify `active_profile`, the runner SHALL use the profile set literally named `default`. If no profile set named `default` exists in the merged config, config loading SHALL fail with an error instructing the user to either define a `default` profile set or set `active_profile` explicitly.
+When the project config does not specify `active_profile`, the runner SHALL use the profile set literally named `default`. The built-in defaults always provide a `default` profile set as a base layer beneath the global and project configs, so the runner SHALL always find a `default` set (either from defaults alone or merged with user-supplied overrides).
 
 #### Scenario: No active_profile, default exists
 - **WHEN** the project config does not set `active_profile` and a `default` profile set is defined (via global or project)
 - **THEN** the runner uses the `default` profile set for agent resolution
 
-#### Scenario: No active_profile, no default
-- **WHEN** the project config does not set `active_profile` and no profile set named `default` exists
-- **THEN** config loading fails with an error indicating either `default` must be defined or `active_profile` must be set
+#### Scenario: No active_profile, no user-defined default
+- **WHEN** the project config does not set `active_profile` and neither the project nor global file defines a `default` profile set
+- **THEN** the runner uses the built-in defaults' `default` profile set for agent resolution
 
 ### Requirement: active_profile is project-only
 The `active_profile` field SHALL only be honored in the project-local config file (`.agent-runner/config.yaml`). Setting `active_profile` in the global config file (`~/.agent-runner/config.yaml`) SHALL cause config loading to fail with an error indicating that `active_profile` is not allowed in the global config.
