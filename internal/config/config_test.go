@@ -9,7 +9,14 @@ import (
 )
 
 func TestLoadOrGenerate_CreatesDefault(t *testing.T) {
-	dir := t.TempDir()
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+
+	dir := filepath.Join(root, "repo")
 	path := filepath.Join(dir, ".agent-runner", "config.yaml")
 
 	cfg, err := LoadOrGenerate(path)
@@ -17,9 +24,9 @@ func TestLoadOrGenerate_CreatesDefault(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// File should have been created.
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		t.Fatal("expected config file to be created")
+	// File should NOT be created on disk.
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("expected config file to NOT be created on disk")
 	}
 
 	// Should have five default profiles.
@@ -82,8 +89,9 @@ func TestLoadOrGenerate_SkipsGlobalConfigWhenHomeDirUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("expected project config to be generated, got %v", err)
+	// File should NOT be created on disk.
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected config file to NOT be created on disk")
 	}
 	if len(cfg.Profiles) != 5 {
 		t.Fatalf("expected default project profiles, got %d", len(cfg.Profiles))
@@ -91,7 +99,14 @@ func TestLoadOrGenerate_SkipsGlobalConfigWhenHomeDirUnavailable(t *testing.T) {
 }
 
 func TestLoadOrGenerate_LoadsExisting(t *testing.T) {
-	dir := t.TempDir()
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+
+	dir := filepath.Join(root, "repo")
 	path := filepath.Join(dir, "config.yaml")
 	content := `profiles:
   custom:
@@ -99,9 +114,7 @@ func TestLoadOrGenerate_LoadsExisting(t *testing.T) {
     cli: codex
     model: o3
 `
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeConfigFile(t, path, content)
 
 	cfg, err := LoadOrGenerate(path)
 	if err != nil {
@@ -360,7 +373,7 @@ func TestLoadOrGenerate_DoesNotCreateGlobalConfigWhenMissing(t *testing.T) {
 	}
 }
 
-func TestLoadOrGenerate_GeneratesProjectConfigAndMergesGlobalProfiles(t *testing.T) {
+func TestLoadOrGenerate_DefaultsAndMergesGlobalProfiles(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	repo := filepath.Join(root, "repo")
@@ -380,14 +393,15 @@ func TestLoadOrGenerate_GeneratesProjectConfigAndMergesGlobalProfiles(t *testing
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if _, err := os.Stat(projectPath); err != nil {
-		t.Fatalf("expected project config to be generated, got stat error %v", err)
+	// File should NOT be created on disk.
+	if _, err := os.Stat(projectPath); !os.IsNotExist(err) {
+		t.Fatal("expected project config file to NOT be created on disk")
 	}
 	if cfg.Profiles["global_only"] == nil {
-		t.Fatal("expected global profile to be merged into generated project config")
+		t.Fatal("expected global profile to be merged into default config")
 	}
 	if cfg.Profiles["planner"] == nil {
-		t.Fatal("expected generated default project profiles to be present")
+		t.Fatal("expected default profiles to be present")
 	}
 }
 

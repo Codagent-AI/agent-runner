@@ -115,11 +115,8 @@ func loadProjectOrGenerate(path string) (*Config, error) {
 		if !errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("reading config: %w", err)
 		}
-		cfg := defaultConfig()
-		if writeErr := writeDefault(path, cfg); writeErr != nil {
-			return nil, fmt.Errorf("generating default config: %w", writeErr)
-		}
-		return cfg, nil
+		// Return defaults in-memory without writing to disk.
+		return defaultConfig(), nil
 	}
 
 	var cfg Config
@@ -294,13 +291,3 @@ func defaultConfig() *Config {
 	}
 }
 
-func writeDefault(path string, cfg *Config) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return err
-	}
-	data, err := yaml.Marshal(cfg)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o600)
-}
