@@ -2,6 +2,7 @@ package listview
 
 import (
 	"strings"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -317,21 +318,21 @@ func (m *Model) renderNewTabRow(entry *discovery.WorkflowEntry, isSel bool, maxW
 
 // highlightMatch returns the name string with the first occurrence of the search
 // substring highlighted in AccentCyan, or plain if no match or empty filter.
-// Uses rune-level indexing so multi-byte Unicode sequences are never split.
+// Matching is case-insensitive via Unicode simple case-folding, working entirely
+// in original-rune positions so no transformation can change index alignment.
 func highlightMatch(name, filter string, selected bool) string {
 	if filter == "" {
 		return name
 	}
 	nr := []rune(name)
-	lnr := []rune(strings.ToLower(name))
-	lfr := []rune(strings.ToLower(filter))
-	idx := runeIndex(lnr, lfr)
+	fr := []rune(filter)
+	idx := runeIndexFold(nr, fr)
 	if idx < 0 {
 		return name
 	}
 	before := string(nr[:idx])
-	match := string(nr[idx : idx+len(lfr)])
-	after := string(nr[idx+len(lfr):])
+	match := string(nr[idx : idx+len(fr)])
+	after := string(nr[idx+len(fr):])
 
 	baseStyle := tuistyle.NormalStyle
 	if selected {
@@ -340,12 +341,18 @@ func highlightMatch(name, filter string, selected bool) string {
 	return baseStyle.Render(before) + tuistyle.AccentStyle.Render(match) + baseStyle.Render(after)
 }
 
-// runeIndex returns the rune index of needle in haystack, or -1.
-func runeIndex(haystack, needle []rune) int {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
+// runeIndexFold returns the rune index of the first occurrence of needle in
+// haystack using Unicode simple case-folding for comparison, or -1.
+// Indices refer to positions in haystack, never the lowercased form.
+func runeIndexFold(haystack, needle []rune) int {
+	nl := len(needle)
+	if nl == 0 {
+		return 0
+	}
+	for i := 0; i+nl <= len(haystack); i++ {
 		match := true
-		for j, r := range needle {
-			if haystack[i+j] != r {
+		for j := range needle {
+			if !runeEqualFold(haystack[i+j], needle[j]) {
 				match = false
 				break
 			}
@@ -355,6 +362,19 @@ func runeIndex(haystack, needle []rune) int {
 		}
 	}
 	return -1
+}
+
+// runeEqualFold reports whether a and b are equal under Unicode simple case folding.
+func runeEqualFold(a, b rune) bool {
+	if a == b {
+		return true
+	}
+	for r := unicode.SimpleFold(a); r != a; r = unicode.SimpleFold(r) {
+		if r == b {
+			return true
+		}
+	}
+	return false
 }
 
 func visibleLen(s string) int {

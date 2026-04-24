@@ -388,6 +388,38 @@ func TestHighlightMatch_Empty(t *testing.T) {
 	}
 }
 
+// TestHighlightMatch_CaseInsensitive verifies SimpleFold-based matching works for
+// ordinary ASCII case differences.
+func TestHighlightMatch_CaseInsensitive(t *testing.T) {
+	name := "core:Deploy"
+	filter := "deploy"
+	result := highlightMatch(name, filter, false)
+	if !strings.Contains(result, "Deploy") {
+		t.Errorf("highlightMatch(%q, %q) should render the original casing: %q", name, filter, result)
+	}
+}
+
+// TestRuneEqualFold verifies case-folding comparison for key Unicode characters.
+func TestRuneEqualFold(t *testing.T) {
+	cases := []struct {
+		a, b rune
+		want bool
+	}{
+		{'a', 'A', true},
+		{'a', 'a', true},
+		{'A', 'A', true},
+		{'K', 'k', true},
+		{'k', 'K', true},
+		{'a', 'b', false},
+	}
+	for _, tc := range cases {
+		got := runeEqualFold(tc.a, tc.b)
+		if got != tc.want {
+			t.Errorf("runeEqualFold(%c, %c) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
 // TestBuildFilteredRows_MultipleNamespaces verifies namespace sub-groups separated by blank lines.
 func TestBuildFilteredRows_MultipleNamespaces(t *testing.T) {
 	entries := []discovery.WorkflowEntry{
