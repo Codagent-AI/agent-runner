@@ -1,17 +1,17 @@
 package listview
 
 import (
+	"strconv"
 	"strings"
 	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 
 	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/tuistyle"
 )
-
-func lipglossWidth(s string) int { return lipgloss.Width(s) }
 
 // handleSearchKey processes a key event when the new tab search box has focus.
 // Returns the updated model and a command.
@@ -236,10 +236,7 @@ func (m *Model) renderNewTabSearch() string {
 
 	left := tuistyle.ScreenMargin + searchIcon + searchContent
 	if m.termWidth > 0 {
-		// Use lipgloss-aware width measurement to handle ANSI sequences.
-		leftW := lipglossWidth(left)
-		rightW := lipglossWidth(countLabel)
-		pad := m.termWidth - leftW - rightW
+		pad := m.termWidth - lipgloss.Width(left) - lipgloss.Width(countLabel)
 		if pad > 0 {
 			return left + strings.Repeat(" ", pad) + countLabel
 		}
@@ -251,29 +248,7 @@ func formatCount(n int) string {
 	if n == 1 {
 		return "(1 workflow)"
 	}
-	return "(" + itoa(n) + " workflows)"
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	pos := len(buf)
-	for n > 0 {
-		pos--
-		buf[pos] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		pos--
-		buf[pos] = '-'
-	}
-	return string(buf[pos:])
+	return "(" + strconv.Itoa(n) + " workflows)"
 }
 
 // renderNewTabRow renders a single workflow row.
@@ -306,7 +281,7 @@ func (m *Model) renderNewTabRow(entry *discovery.WorkflowEntry, isSel bool, maxW
 	}
 
 	if entry.Description != "" {
-		descAvail := avail - visibleLen(entry.CanonicalName) - 1
+		descAvail := avail - runewidth.StringWidth(entry.CanonicalName) - 1
 		if descAvail > 3 {
 			desc := fitCell(entry.Description, descAvail)
 			descPart = " " + dimStyle.Render(desc)
@@ -375,8 +350,4 @@ func runeEqualFold(a, b rune) bool {
 		}
 	}
 	return false
-}
-
-func visibleLen(s string) int {
-	return len(s) // simple approximation for ASCII names
 }

@@ -139,7 +139,7 @@ func (m *Model) View() string {
 
 	b.WriteString("\n")
 	b.WriteString(tuistyle.ScreenMargin)
-	b.WriteString(strings.Repeat(" ", maxInt(0, labelWidth+4)))
+	b.WriteString(strings.Repeat(" ", max(0, labelWidth+4)))
 	b.WriteString(m.renderStartButton())
 	b.WriteString("\n\n")
 	b.WriteString(tuistyle.ScreenMargin + tuistyle.HelpStyle.Render("tab/shift+tab navigate  enter start  esc cancel"))
@@ -242,7 +242,7 @@ func (m *Model) renderInput(index, width int) string {
 	}
 
 	content := input.View()
-	padding := maxInt(0, width-lipgloss.Width(content))
+	padding := max(0, width-lipgloss.Width(content))
 	return borderStyle.Render("│") + content + strings.Repeat(" ", padding) + borderStyle.Render("│")
 }
 
@@ -268,11 +268,4 @@ func (m *Model) inputWidth(labelWidth int) int {
 		return 60
 	}
 	return available
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

@@ -135,8 +135,7 @@ func (m *Model) Entered() Entered { return m.entered }
 func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	// FromDefinition: load workflow directly from the file path in sessionDir.
 	if entered == FromDefinition {
-		e := discovery.WorkflowEntry{SourcePath: sessionDir}
-		return newForDefinition(sessionDir, projectDir, &e)
+		return NewForDefinition(&discovery.WorkflowEntry{SourcePath: sessionDir}, projectDir)
 	}
 
 	state, _ := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
@@ -217,10 +216,7 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 // NewForDefinition constructs a runview Model for inspecting a workflow definition
 // without an associated run instance. The workflow file is loaded directly.
 func NewForDefinition(entry *discovery.WorkflowEntry, projectDir string) (*Model, error) {
-	return newForDefinition(entry.SourcePath, projectDir, entry)
-}
-
-func newForDefinition(sourcePath, projectDir string, entry *discovery.WorkflowEntry) (*Model, error) {
+	sourcePath := entry.SourcePath
 	var (
 		tree    *Tree
 		loadErr string
@@ -233,7 +229,6 @@ func newForDefinition(sourcePath, projectDir string, entry *discovery.WorkflowEn
 		tree = BuildTree(&wf, sourcePath)
 	}
 
-	// Use the canonical name from the entry, or derive from the source path.
 	rootName := entry.CanonicalName
 	if rootName == "" {
 		rootName = deriveCanonicalFromPath(sourcePath)
