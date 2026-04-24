@@ -374,7 +374,9 @@ func (m *Model) renderHelpBar() string {
 		parts = append(parts, "esc back")
 	}
 
-	if m.canResumeRun() {
+	if m.entered == FromDefinition {
+		parts = append(parts, "r start run")
+	} else if m.canResumeRun() {
 		parts = append(parts, "r resume")
 	}
 

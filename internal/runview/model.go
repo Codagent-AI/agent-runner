@@ -37,6 +37,10 @@ type ResumeRunMsg struct {
 	RunID string
 }
 
+// ResumeListMsg asks the shell to exit the current TUI flow and exec
+// `agent-runner --resume`, which opens the list TUI on the current-dir tab.
+type ResumeListMsg struct{}
+
 type ExitMsg struct{}
 
 // Entered describes how the user reached the run view.
@@ -95,6 +99,7 @@ type Model struct {
 	// p.Run() returns and execs the agent CLI.
 	resumeAgentCLI  string
 	resumeSessionID string
+	resumeToList    bool
 
 	// Alt-screen management. When the program starts without tea.WithAltScreen
 	// (FromLiveRun mode), alt-screen entry is deferred so a fast non-interactive
@@ -110,6 +115,10 @@ func (m *Model) ResumeAgentCLI() string { return m.resumeAgentCLI }
 // ResumeSessionID returns the agent CLI session ID captured from a ResumeMsg
 // in live-run mode. Empty when no resume was requested.
 func (m *Model) ResumeSessionID() string { return m.resumeSessionID }
+
+// ResumeToList reports whether the user requested to leave the run view and
+// exec back into the list TUI.
+func (m *Model) ResumeToList() bool { return m.resumeToList }
 
 // SessionDir returns the session directory the Model was constructed for.
 func (m *Model) SessionDir() string { return m.sessionDir }
@@ -376,6 +385,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// returns.
 		m.resumeAgentCLI = msg.AgentCLI
 		m.resumeSessionID = msg.SessionID
+		return m, tea.Quit
+
+	case ResumeListMsg:
+		m.resumeToList = true
 		return m, tea.Quit
 
 	case ExitMsg:
@@ -819,6 +832,9 @@ func (m *Model) handleEsc() (tea.Model, tea.Cmd) {
 		m.quitConfirming = true
 		return m, nil
 	}
+	if m.shouldResumeListOnEsc() {
+		return m, func() tea.Msg { return ResumeListMsg{} }
+	}
 	if m.entered == FromList || m.entered == FromDefinition {
 		return m, emitBack
 	}
@@ -990,6 +1006,29 @@ func (m *Model) refreshData() {
 
 func emitBack() tea.Msg { return BackMsg{} }
 func emitExit() tea.Msg { return ExitMsg{} }
+
+func (m *Model) shouldResumeListOnEsc() bool {
+	if m.entered == FromInspect || m.entered == FromDefinition {
+		return false
+	}
+	if m.liveResult == "success" || m.liveResult == "failed" {
+		return true
+	}
+	if m.active {
+		return false
+	}
+	if status := m.rootStatus(); status == StatusSuccess || status == StatusFailed {
+		return true
+	}
+	if m.sessionDir == "" {
+		return false
+	}
+	state, err := stateio.ReadState(filepath.Join(m.sessionDir, "state.json"))
+	if err != nil {
+		return false
+	}
+	return state.Completed
+}
 
 var timestampRe = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}`)
 

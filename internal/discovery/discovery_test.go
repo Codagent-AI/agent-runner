@@ -243,6 +243,74 @@ func TestWorkflowEntry_SourcePath(t *testing.T) {
 	}
 }
 
+// TestEnumerate_Params_Populated verifies that Params are extracted from workflow YAML.
+func TestEnumerate_Params_Populated(t *testing.T) {
+	yaml := []byte(`name: my-workflow
+description: A workflow with params
+params:
+  - name: task_file
+    required: true
+  - name: branch
+    required: false
+    default: main
+  - name: tag
+steps:
+  - id: step1
+    command: echo hello
+`)
+	builtinFS := fstest.MapFS{
+		"core/my-workflow.yaml": {Data: yaml},
+	}
+	entries := discovery.Enumerate(builtinFS, "", "")
+
+	var entry *discovery.WorkflowEntry
+	for i := range entries {
+		if entries[i].CanonicalName == "core:my-workflow" {
+			entry = &entries[i]
+			break
+		}
+	}
+	if entry == nil {
+		t.Fatal("core:my-workflow not found")
+	}
+	if len(entry.Params) != 3 {
+		t.Fatalf("expected 3 params, got %d", len(entry.Params))
+	}
+	if entry.Params[0].Name != "task_file" {
+		t.Errorf("params[0].Name = %q, want %q", entry.Params[0].Name, "task_file")
+	}
+	if entry.Params[0].Required == nil || !*entry.Params[0].Required {
+		t.Errorf("params[0].Required should be true")
+	}
+	if entry.Params[1].Name != "branch" {
+		t.Errorf("params[1].Name = %q, want %q", entry.Params[1].Name, "branch")
+	}
+	if entry.Params[1].Default != "main" {
+		t.Errorf("params[1].Default = %q, want %q", entry.Params[1].Default, "main")
+	}
+	// params[2] has no required/default — nil required (defaults to required=true in app logic)
+	if entry.Params[2].Name != "tag" {
+		t.Errorf("params[2].Name = %q, want %q", entry.Params[2].Name, "tag")
+	}
+}
+
+// TestEnumerate_Params_EmptyWhenNone verifies Params is nil/empty when workflow has no params.
+func TestEnumerate_Params_EmptyWhenNone(t *testing.T) {
+	builtinFS := fstest.MapFS{
+		"core/nodesc.yaml": {Data: workflowYAML("")},
+	}
+	entries := discovery.Enumerate(builtinFS, "", "")
+	for _, e := range entries {
+		if e.CanonicalName == "core:nodesc" {
+			if len(e.Params) != 0 {
+				t.Errorf("expected no params, got %d", len(e.Params))
+			}
+			return
+		}
+	}
+	t.Error("core:nodesc not found")
+}
+
 // Helpers.
 func mkdirAll(path string) error {
 	return os.MkdirAll(path, 0o755)

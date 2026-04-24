@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/codagent/agent-runner/internal/model"
 )
 
 // Scope identifies where a workflow was found.
@@ -22,16 +24,18 @@ const (
 
 // WorkflowEntry describes a discovered workflow definition.
 type WorkflowEntry struct {
-	CanonicalName string // e.g. "core:finalize-pr" or "deploy"
-	Description   string // from the workflow YAML description field
-	SourcePath    string // file path for search matching
-	Namespace     string // builtin namespace (e.g. "core"), empty for project/user
+	CanonicalName string        // e.g. "core:finalize-pr" or "deploy"
+	Description   string        // from the workflow YAML description field
+	Params        []model.Param // declared parameters, in order
+	SourcePath    string        // file path for search matching
+	Namespace     string        // builtin namespace (e.g. "core"), empty for project/user
 	Scope         Scope
 	ParseError    string // non-empty if the file could not be loaded or parsed
 }
 
 type workflowHeader struct {
-	Description string `yaml:"description"`
+	Description string        `yaml:"description"`
+	Params      []model.Param `yaml:"params"`
 }
 
 // StartRunMsg is a bubbletea message emitted when the user requests to start
@@ -114,6 +118,7 @@ func enumerateLocalDir(dir string, scope Scope) []WorkflowEntry {
 				entry.ParseError = yamlErr.Error()
 			} else {
 				entry.Description = h.Description
+				entry.Params = h.Params
 			}
 		}
 
@@ -160,6 +165,7 @@ func enumerateBuiltinFS(fsys fs.FS) []WorkflowEntry {
 				entry.ParseError = yamlErr.Error()
 			} else {
 				entry.Description = h.Description
+				entry.Params = h.Params
 			}
 		}
 

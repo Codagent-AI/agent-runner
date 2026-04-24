@@ -26,6 +26,7 @@ import (
 	"github.com/codagent/agent-runner/internal/liverun"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/paramform"
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/runview"
@@ -36,6 +37,8 @@ import (
 var version = "dev"
 
 var userHomeDir = os.UserHomeDir
+var currentExecutable = os.Executable
+var execProcess = syscall.Exec
 
 // realProcessRunner implements exec.ProcessRunner using os/exec.
 type realProcessRunner struct{}
@@ -367,7 +370,10 @@ func runSwitcher(sw *switcher) int {
 			return execRunnerResume(final.resumeRunID, final.resumeRunProjectDir)
 		}
 		if final.startRunEntry != nil {
-			return execStartRun(final.startRunEntry)
+			return execStartRun(final.startRunEntry, final.startRunParams)
+		}
+		if final.resumeListProjectDir != "" {
+			return execRunnerResume("", final.resumeListProjectDir)
 		}
 		if final.resumeSessionID == "" {
 			return 0
@@ -455,6 +461,10 @@ func runLiveTUI(h *runner.RunHandle) int {
 	// resultCh has no value yet — keep the documented orphan-on-quit behavior
 	// and return 0 without blocking on the lingering goroutine.
 	if rv.ResumeSessionID() == "" {
+		if rv.ResumeToList() {
+			<-resultCh
+			return execRunnerResume("", h.ProjectDir)
+		}
 		select {
 		case runResult := <-resultCh:
 			if runResult != runner.ResultSuccess {
@@ -483,6 +493,9 @@ func runLiveTUI(h *runner.RunHandle) int {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 			return 1
 		}
+		if rv.ResumeToList() {
+			return execRunnerResume("", h.ProjectDir)
+		}
 	}
 	return 0
 }
@@ -500,6 +513,20 @@ func finalRunviewModel(final tea.Model, err error) (*runview.Model, error) {
 		return nil, fmt.Errorf("unexpected model type %T returned by tea.Program.Run", final)
 	}
 	return rv, nil
+}
+
+func execSelf(args ...string) int {
+	self, err := currentExecutable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: cannot resolve executable path: %v\n", err)
+		return 1
+	}
+	execArgs := append([]string{filepath.Base(self)}, args...)
+	if err := execProcess(self, execArgs, os.Environ()); err != nil { // #nosec G204 -- self is our own os.Executable() path; args are validated workflow names / run IDs
+		fmt.Fprintf(os.Stderr, "agent-runner: exec %s: %v\n", strings.Join(args, " "), err)
+		return 1
+	}
+	return 0
 }
 
 // allowedResumeCLIs bounds resume CLI arguments. Resume metadata originates
@@ -565,35 +592,44 @@ func execRunnerResume(runID, projectDir string) int {
 			return 1
 		}
 	}
-	self, err := os.Executable()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-runner: cannot resolve executable path: %v\n", err)
-		return 1
+	args := []string{"--resume"}
+	if runID != "" {
+		args = append(args, runID)
 	}
-	args := []string{filepath.Base(self), "--resume", runID}
-	if err := syscall.Exec(self, args, os.Environ()); err != nil { // #nosec G204 -- self is our own os.Executable() path; runID is a pre-validated session directory name
-		fmt.Fprintf(os.Stderr, "agent-runner: exec --resume: %v\n", err)
-		return 1
-	}
-	return 0
+	return execSelf(args...)
 }
 
-// execStartRun resolves the workflow file from a discovered entry and
-// executes handleRun. Builtin entries are resolved via their canonical name;
-// project/user entries use SourcePath directly.
-func execStartRun(entry *discovery.WorkflowEntry) int {
-	var workflowFile string
-	if entry.Scope == discovery.ScopeBuiltin {
-		var err error
-		workflowFile, err = builtinworkflows.Resolve(entry.CanonicalName)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "agent-runner: resolve builtin %q: %v\n", entry.CanonicalName, err)
-			return 1
-		}
-	} else {
-		workflowFile = entry.SourcePath
+// execStartRun replaces the current process with `agent-runner run <workflow>`
+// using the workflow's canonical name and ordered key=value params.
+func execStartRun(entry *discovery.WorkflowEntry, values map[string]string) int {
+	if entry == nil || entry.CanonicalName == "" {
+		fmt.Fprintln(os.Stderr, "agent-runner: cannot start run: missing workflow name")
+		return 1
 	}
-	return handleRun([]string{workflowFile})
+
+	args := []string{"run", entry.CanonicalName}
+	seen := make(map[string]bool, len(entry.Params))
+	for _, param := range entry.Params {
+		value, ok := values[param.Name]
+		if !ok {
+			continue
+		}
+		args = append(args, param.Name+"="+value)
+		seen[param.Name] = true
+	}
+
+	var extraKeys []string
+	for key := range values {
+		if !seen[key] {
+			extraKeys = append(extraKeys, key)
+		}
+	}
+	sort.Strings(extraKeys)
+	for _, key := range extraKeys {
+		args = append(args, key+"="+values[key])
+	}
+
+	return execSelf(args...)
 }
 
 // resolveInspectSession resolves a run ID to its session and project
@@ -632,28 +668,38 @@ type switcherMode int
 const (
 	showingList switcherMode = iota
 	showingRunView
+	showingParamForm
 )
 
 type switcher struct {
-	list    *listview.Model
-	runview *runview.Model
-	mode    switcherMode
+	list       *listview.Model
+	runview    *runview.Model
+	paramform  *paramform.Model
+	mode       switcherMode
+	returnMode switcherMode
 
 	termWidth  int
 	termHeight int
 
-	resumeAgentCLI      string
-	resumeSessionID     string
-	resumeRunID         string
-	resumeRunProjectDir string
-	startRunEntry       *discovery.WorkflowEntry
-	viewErr             string
+	resumeAgentCLI       string
+	resumeSessionID      string
+	resumeRunID          string
+	resumeRunProjectDir  string
+	resumeListProjectDir string
+	startRunEntry        *discovery.WorkflowEntry
+	startRunParams       map[string]string
+	viewErr              string
 }
 
 func (s *switcher) Init() tea.Cmd {
 	switch s.mode {
 	case showingRunView:
 		return s.runview.Init()
+	case showingParamForm:
+		if s.paramform != nil {
+			return s.paramform.Init()
+		}
+		return nil
 	default:
 		return s.list.Init()
 	}
@@ -712,7 +758,25 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case discovery.StartRunMsg:
 		entry := msg.Entry
 		s.startRunEntry = &entry
+		s.startRunParams = nil
+		if len(entry.Params) == 0 {
+			return s, tea.Quit
+		}
+		s.returnMode = s.mode
+		s.paramform = paramform.New(&entry).WithWidth(s.termWidth)
+		s.mode = showingParamForm
+		return s, nil
+
+	case paramform.SubmittedMsg:
+		if s.startRunEntry == nil {
+			return s, nil
+		}
+		s.startRunParams = map[string]string(msg)
 		return s, tea.Quit
+
+	case paramform.CancelledMsg:
+		s.mode = s.returnMode
+		return s, nil
 
 	case runview.BackMsg:
 		s.mode = showingList
@@ -726,6 +790,12 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case runview.ResumeRunMsg:
 		s.resumeRunID = msg.RunID
+		return s, tea.Quit
+
+	case runview.ResumeListMsg:
+		if s.runview != nil {
+			s.resumeListProjectDir = s.runview.ProjectDir()
+		}
 		return s, tea.Quit
 
 	case listview.ResumeRunMsg:
@@ -750,6 +820,12 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.runview = newModel.(*runview.Model)
 			return s, cmd
 		}
+	case showingParamForm:
+		if s.paramform != nil {
+			newModel, cmd := s.paramform.Update(msg)
+			s.paramform = newModel.(*paramform.Model)
+			return s, cmd
+		}
 	}
 	return s, nil
 }
@@ -760,6 +836,11 @@ func (s *switcher) View() string {
 		if s.runview != nil {
 			return s.runview.View()
 		}
+	case showingParamForm:
+		if s.paramform != nil {
+			return s.paramform.View()
+		}
+		return ""
 	default:
 		if s.list != nil {
 			v := s.list.View()
