@@ -497,6 +497,7 @@ var allowedResumeCLIs = map[string]bool{
 	"claude":  true,
 	"codex":   true,
 	"copilot": true,
+	"cursor":  true,
 }
 
 // resolveResumeCLI validates `cli` against the resume allowlist and resolves

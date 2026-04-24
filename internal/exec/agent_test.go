@@ -1048,6 +1048,32 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatalf("expected no CLI invocations, got %d", len(runner.calls))
 		}
 	})
+
+	t.Run("cursor step in interactive mode fails at runtime", func(t *testing.T) {
+		runner := &mockRunner{}
+		auditLog := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		step := model.Step{ID: "s", CLI: "cursor", Mode: model.ModeInteractive, Prompt: "do something", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeFailed {
+			t.Fatalf("expected OutcomeFailed for cursor interactive step, got %q", outcome)
+		}
+		if len(runner.calls) != 0 {
+			t.Fatalf("expected no CLI invocations, got %d", len(runner.calls))
+		}
+		end := findAuditEvent(auditLog.events, audit.EventStepEnd)
+		if end == nil {
+			t.Fatal("expected step end audit event")
+		}
+		errMsg, _ := end.Data["error"].(string)
+		if !strings.Contains(errMsg, "interactive mode") || !strings.Contains(errMsg, "cursor") {
+			t.Fatalf("expected interactive cursor error message, got %q", errMsg)
+		}
+	})
 }
 
 // withFakeClaudeHome redirects $HOME to a test-scoped temp dir and returns

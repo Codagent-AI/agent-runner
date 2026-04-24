@@ -63,6 +63,7 @@ var registry = map[string]Adapter{
 	"claude":  &ClaudeAdapter{},
 	"codex":   &CodexAdapter{},
 	"copilot": &CopilotAdapter{},
+	"cursor":  &CursorAdapter{},
 }
 
 // Get returns the adapter for the given CLI name, or an error if unknown.
