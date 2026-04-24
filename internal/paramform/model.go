@@ -57,7 +57,7 @@ func New(entry *discovery.WorkflowEntry) *Model {
 	}
 }
 
-// WithWidth returns a copy of the model sized for the given terminal width.
+// WithWidth sets the terminal width on the model and returns it for chaining.
 func (m *Model) WithWidth(width int) *Model {
 	m.width = width
 	return m

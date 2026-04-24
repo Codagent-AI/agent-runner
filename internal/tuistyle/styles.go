@@ -54,6 +54,9 @@ var (
 	PathStyle         = lipgloss.NewStyle().Foreground(DimText)
 )
 
+// GroupColors cycles through the three primary TUI colors for visual grouping.
+var GroupColors = []lipgloss.AdaptiveColor{AccentCyan, InactiveAmber, SuccessGreen}
+
 // BreadcrumbSeparator is the canonical separator glyph between breadcrumb
 // segments on every TUI screen. Render with AccentStyle so both screens
 // share the same color treatment.

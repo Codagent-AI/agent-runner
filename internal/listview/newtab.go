@@ -110,6 +110,20 @@ func matchesFilter(e *discovery.WorkflowEntry, lowerFilter string) bool {
 		strings.Contains(strings.ToLower(e.SourcePath), lowerFilter)
 }
 
+// computeGroupIndices returns a group index for each position in filtered,
+// incrementing at each blank-line separator.
+func computeGroupIndices(filtered []int) []int {
+	groups := make([]int, len(filtered))
+	g := 0
+	for i, idx := range filtered {
+		if idx == -1 {
+			g++
+		}
+		groups[i] = g
+	}
+	return groups
+}
+
 // firstSelectableRow returns the index of the first non-separator row in filtered,
 // or 0 if there are none.
 func firstSelectableRow(filtered []int) int {
@@ -196,6 +210,8 @@ func (m *Model) renderNewTab() string {
 		maxWidth = 80
 	}
 
+	groupIndices := computeGroupIndices(filtered)
+
 	maxRows := m.listMaxRows(false)
 	// Adjust offset so cursor stays in view.
 	m.newTab.offset = adjustOffset(m.newTab.cursor, m.newTab.offset, maxRows, len(filtered))
@@ -209,7 +225,8 @@ func (m *Model) renderNewTab() string {
 		}
 		entry := &workflows[idx]
 		isSel := i == m.newTab.cursor && !m.newTab.searchFocused
-		b.WriteString(m.renderNewTabRow(entry, isSel, maxWidth))
+		groupColor := tuistyle.GroupColors[groupIndices[i]%len(tuistyle.GroupColors)]
+		b.WriteString(m.renderNewTabRow(entry, isSel, maxWidth, groupColor))
 	}
 	return b.String()
 }
@@ -217,15 +234,20 @@ func (m *Model) renderNewTab() string {
 // renderNewTabSearch renders the search box line.
 func (m *Model) renderNewTabSearch() string {
 	const searchIcon = "🔍 "
-	placeholder := dimStyle.Render("Search...")
 	var searchContent string
 	if m.newTab.searchText == "" {
-		searchContent = placeholder
+		searchContent = dimStyle.Render("Search...")
 	} else {
 		searchContent = tuistyle.NormalStyle.Render(m.newTab.searchText)
 	}
 
-	// Count label (right-aligned).
+	var prefix string
+	if m.newTab.searchFocused {
+		prefix = tuistyle.ScreenMargin + cursorStyle.Render("▶") + " "
+	} else {
+		prefix = tuistyle.ScreenMargin + "  "
+	}
+
 	count := 0
 	for _, idx := range m.newTab.filtered {
 		if idx >= 0 {
@@ -234,11 +256,11 @@ func (m *Model) renderNewTabSearch() string {
 	}
 	countLabel := dimStyle.Render(formatCount(count))
 
-	left := tuistyle.ScreenMargin + searchIcon + searchContent
+	left := prefix + searchIcon + searchContent
 	if m.termWidth > 0 {
-		pad := m.termWidth - lipgloss.Width(left) - lipgloss.Width(countLabel)
-		if pad > 0 {
-			return left + strings.Repeat(" ", pad) + countLabel
+		gap := m.termWidth - lipgloss.Width(left) - lipgloss.Width(countLabel)
+		if gap > 0 {
+			return left + strings.Repeat(" ", gap) + countLabel
 		}
 	}
 	return left + "  " + countLabel
@@ -252,50 +274,59 @@ func formatCount(n int) string {
 }
 
 // renderNewTabRow renders a single workflow row.
-func (m *Model) renderNewTabRow(entry *discovery.WorkflowEntry, isSel bool, maxWidth int) string {
-	const cursorGlyph = "›"
-	const margin = "  " // 2-space indent for non-cursor rows
-
+func (m *Model) renderNewTabRow(entry *discovery.WorkflowEntry, isSel bool, maxWidth int, groupColor lipgloss.AdaptiveColor) string {
 	var prefix string
 	if isSel {
-		prefix = tuistyle.ScreenMargin + tuistyle.AccentStyle.Render(cursorGlyph) + " "
+		prefix = tuistyle.ScreenMargin + cursorStyle.Render("▶") + " "
 	} else {
-		prefix = tuistyle.ScreenMargin + " " + margin
+		prefix = tuistyle.ScreenMargin + "  "
 	}
-
-	// Visible prefix width: screen margin (1) + glyph/space (1) + space (1) = 3.
-	const prefixWidth = 3
+	prefixWidth := lipgloss.Width(prefix)
 	avail := max(10, maxWidth-prefixWidth)
 
 	if entry.ParseError != "" {
-		nameStyle := tuistyle.StatusFailed
-		errPart := " " + fitCell(entry.ParseError, avail-len(entry.CanonicalName)-1)
-		return prefix + nameStyle.Render(entry.CanonicalName) + nameStyle.Render(errPart) + "\n"
+		errNameStyle := tuistyle.StatusFailed
+		nameWidth := lipgloss.Width(entry.CanonicalName)
+		errPart := " " + fitCell(entry.ParseError, avail-nameWidth-1)
+		return prefix + errNameStyle.Render(entry.CanonicalName) + errNameStyle.Render(errPart) + "\n"
 	}
 
 	var namePart, descPart string
 	if isSel {
-		namePart = tuistyle.SelectedStyle.Bold(true).Render(highlightMatch(entry.CanonicalName, m.newTab.searchText, true))
+		namePart = lipgloss.NewStyle().Foreground(groupColor).Bold(true).Render(highlightMatch(entry.CanonicalName, m.newTab.searchText, true, groupColor))
 	} else {
-		namePart = tuistyle.NormalStyle.Render(highlightMatch(entry.CanonicalName, m.newTab.searchText, false))
+		namePart = renderColoredName(entry, m.newTab.searchText, groupColor)
 	}
 
 	if entry.Description != "" {
 		descAvail := avail - runewidth.StringWidth(entry.CanonicalName) - 1
 		if descAvail > 3 {
 			desc := fitCell(entry.Description, descAvail)
-			descPart = " " + dimStyle.Render(desc)
+			descStyle := dimStyle
+			if isSel {
+				descStyle = selectedStyle
+			}
+			descPart = " " + descStyle.Render(desc)
 		}
 	}
 
 	return prefix + namePart + descPart + "\n"
 }
 
+// renderColoredName renders a non-selected workflow name in the group color.
+func renderColoredName(entry *discovery.WorkflowEntry, searchText string, color lipgloss.AdaptiveColor) string {
+	name := entry.CanonicalName
+	if searchText != "" {
+		return highlightMatch(name, searchText, false, color)
+	}
+	return lipgloss.NewStyle().Foreground(color).Render(name)
+}
+
 // highlightMatch returns the name string with the first occurrence of the search
-// substring highlighted in AccentCyan, or plain if no match or empty filter.
+// substring underlined, using groupColor as the base color for non-selected rows.
 // Matching is case-insensitive via Unicode simple case-folding, working entirely
 // in original-rune positions so no transformation can change index alignment.
-func highlightMatch(name, filter string, selected bool) string {
+func highlightMatch(name, filter string, selected bool, groupColor lipgloss.AdaptiveColor) string {
 	if filter == "" {
 		return name
 	}
@@ -309,11 +340,12 @@ func highlightMatch(name, filter string, selected bool) string {
 	match := string(nr[idx : idx+len(fr)])
 	after := string(nr[idx+len(fr):])
 
-	baseStyle := tuistyle.NormalStyle
+	baseStyle := lipgloss.NewStyle().Foreground(groupColor)
 	if selected {
-		baseStyle = tuistyle.SelectedStyle.Bold(true)
+		baseStyle = baseStyle.Bold(true)
 	}
-	return baseStyle.Render(before) + tuistyle.AccentStyle.Render(match) + baseStyle.Render(after)
+	matchStyle := baseStyle.Underline(true)
+	return baseStyle.Render(before) + matchStyle.Render(match) + baseStyle.Render(after)
 }
 
 // runeIndexFold returns the rune index of the first occurrence of needle in

@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Tab navigation includes new tab
-The list TUI's tab bar SHALL include a fourth tab labeled "new", activated by pressing `n`. The tab order SHALL be: new (`n`), current-dir (`c`), worktrees (`w`), all (`a`). The new tab's content is a workflow list (from the `workflow-discovery` capability), not a run list. Existing tab keybindings and behavior are unchanged.
+The list TUI's tab bar SHALL include a fourth tab labeled "new", activated by pressing `n`. The tab order SHALL be: new (`n`), current-dir (`c`), worktrees (`w`), all (`a`). Tabs can also be cycled with `←`/`→` arrow keys and `Tab`/`Shift+Tab`. The new tab's content is a workflow list (from the `workflow-discovery` capability), not a run list. Existing tab keybindings and behavior are unchanged.
 
 #### Scenario: n switches to new tab
 - **WHEN** the user presses `n` from any tab
@@ -67,7 +67,7 @@ On the "new" tab, the following keybindings SHALL apply:
 - `r` on a workflow row SHALL initiate starting a run — transitioning to the param form if the workflow has parameters, or launching the run directly if it has none.
 - `Enter` and `r` SHALL be ignored on malformed workflow rows.
 - The help bar SHALL show `enter view` and `r start run` when on the new tab.
-- Existing global keybindings (`q` quit, `↑`/`↓` navigate, tab switching) remain unchanged.
+- Existing global keybindings (`q` quit, `↑`/`↓` navigate, `←`/`→`/`n`/`c`/`w`/`a` switch tab) remain unchanged.
 
 #### Scenario: Enter opens workflow definition view
 - **WHEN** the user presses Enter on a valid workflow row in the new tab

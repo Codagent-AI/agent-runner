@@ -632,6 +632,12 @@ func (m *Model) cursorInactiveRun() *runs.RunInfo {
 
 func (m *Model) handleEsc() {
 	switch m.activeTab {
+	case tabNew:
+		if m.newTab.searchText != "" {
+			m.newTab.searchText = ""
+			m.newTab.filtered = buildFilteredRows(m.newTab.workflows, "")
+			m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
+		}
 	case tabWorktrees:
 		if m.worktreeTab.subView == subViewRunList {
 			m.worktreeTab.subView = subViewPicker

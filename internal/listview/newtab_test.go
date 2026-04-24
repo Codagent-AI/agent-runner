@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/codagent/agent-runner/internal/discovery"
+	"github.com/codagent/agent-runner/internal/tuistyle"
 )
 
 func keyMsg(key string) tea.KeyMsg {
@@ -367,7 +368,7 @@ func TestHighlightMatch_MultiByte(t *testing.T) {
 	// so the byte index of "x" in lower (1) != its byte index in name (3).
 	name := "Kxyz" // KELVIN SIGN + xyz
 	filter := "x"
-	result := highlightMatch(name, filter, false)
+	result := highlightMatch(name, filter, false, tuistyle.AccentCyan)
 	// The suffix after the match must start with the rune immediately after the
 	// matched x, i.e. "yz". With byte-slicing the wrong position is used and
 	// the result would be garbled (missing "x" and misaligning "yz").
@@ -382,7 +383,7 @@ func TestHighlightMatch_MultiByte(t *testing.T) {
 // TestHighlightMatch_Empty verifies highlightMatch returns name unchanged when filter is empty.
 func TestHighlightMatch_Empty(t *testing.T) {
 	name := "core:deploy"
-	result := highlightMatch(name, "", false)
+	result := highlightMatch(name, "", false, tuistyle.AccentCyan)
 	if result != name {
 		t.Errorf("highlightMatch(%q, %q) = %q, want %q", name, "", result, name)
 	}
@@ -393,7 +394,7 @@ func TestHighlightMatch_Empty(t *testing.T) {
 func TestHighlightMatch_CaseInsensitive(t *testing.T) {
 	name := "core:Deploy"
 	filter := "deploy"
-	result := highlightMatch(name, filter, false)
+	result := highlightMatch(name, filter, false, tuistyle.AccentCyan)
 	if !strings.Contains(result, "Deploy") {
 		t.Errorf("highlightMatch(%q, %q) should render the original casing: %q", name, filter, result)
 	}
