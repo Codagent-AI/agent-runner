@@ -315,7 +315,7 @@ func describeWorkflowHint(state *model.RunState, sessionDir string) string {
 // If an interactive step starts within this window, alt-screen is suppressed
 // entirely — avoiding the flash that would otherwise occur when the TUI
 // briefly appears and then immediately releases the terminal.
-const altScreenDelay = 200 * time.Millisecond
+const altScreenDelay = 1000 * time.Millisecond
 
 type deferredAltScreenMsg struct{}
 

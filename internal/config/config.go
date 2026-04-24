@@ -5,6 +5,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,11 +60,13 @@ var validCLI = map[string]bool{
 
 var userHomeDir = os.UserHomeDir
 
-// LoadOrGenerate loads the config file at path. If the file does not exist,
-// it writes a default project-local config and returns the merged result of the
-// optional global config (~/.agent-runner/config.yaml) plus the project config.
-// Project profiles replace global profiles of the same name. After merging, all
-// profiles are validated as one set.
+// LoadOrGenerate loads configuration by layering three sources: built-in
+// defaults, an optional global config at ~/.agent-runner/config.yaml, and an
+// optional project config at path. Layers are applied in that order, so global
+// profiles override defaults and project profiles override both. A profile
+// name present in a higher layer replaces the lower-layer profile wholesale —
+// individual fields are not merged. After layering, all profiles are
+// validated as one set.
 func LoadOrGenerate(path string) (*Config, error) {
 	var globalCfg *Config
 	if globalPath, err := globalConfigPath(); err == nil {
@@ -73,12 +76,12 @@ func LoadOrGenerate(path string) (*Config, error) {
 		}
 	}
 
-	projectCfg, err := loadProjectOrGenerate(path)
+	projectCfg, err := loadOptional(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("loading project config %s: %w", path, err)
 	}
 
-	cfg := mergeConfigs(globalCfg, projectCfg)
+	cfg := mergeConfigs(defaultConfig(), globalCfg, projectCfg)
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
@@ -109,32 +112,15 @@ func loadOptional(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-func loadProjectOrGenerate(path string) (*Config, error) {
-	data, err := os.ReadFile(path) // #nosec G304 -- config path is from internal caller
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("reading config: %w", err)
-		}
-		// Return defaults in-memory without writing to disk.
-		return defaultConfig(), nil
-	}
-
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parsing config: %w", err)
-	}
-	return &cfg, nil
-}
-
-func mergeConfigs(globalCfg, projectCfg *Config) *Config {
+// mergeConfigs layers configs left-to-right: later configs override earlier
+// ones by profile name. nil configs are skipped.
+func mergeConfigs(cfgs ...*Config) *Config {
 	merged := &Config{Profiles: map[string]*Profile{}}
-	for _, cfg := range []*Config{globalCfg, projectCfg} {
+	for _, cfg := range cfgs {
 		if cfg == nil {
 			continue
 		}
-		for name, profile := range cfg.Profiles {
-			merged.Profiles[name] = profile
-		}
+		maps.Copy(merged.Profiles, cfg.Profiles)
 	}
 	return merged
 }
