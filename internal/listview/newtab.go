@@ -30,7 +30,8 @@ func (m *Model) handleSearchKey(msg tea.KeyMsg) (*Model, tea.Cmd) {
 		m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
 	case "backspace":
 		if m.newTab.searchText != "" {
-			m.newTab.searchText = m.newTab.searchText[:len(m.newTab.searchText)-1]
+			r := []rune(m.newTab.searchText)
+			m.newTab.searchText = string(r[:len(r)-1])
 			m.updateSearchFilter()
 		}
 	case "down", "j", "enter":
@@ -316,25 +317,44 @@ func (m *Model) renderNewTabRow(entry *discovery.WorkflowEntry, isSel bool, maxW
 
 // highlightMatch returns the name string with the first occurrence of the search
 // substring highlighted in AccentCyan, or plain if no match or empty filter.
+// Uses rune-level indexing so multi-byte Unicode sequences are never split.
 func highlightMatch(name, filter string, selected bool) string {
 	if filter == "" {
 		return name
 	}
-	lower := strings.ToLower(name)
-	lowerFilter := strings.ToLower(filter)
-	idx := strings.Index(lower, lowerFilter)
+	nr := []rune(name)
+	lnr := []rune(strings.ToLower(name))
+	lfr := []rune(strings.ToLower(filter))
+	idx := runeIndex(lnr, lfr)
 	if idx < 0 {
 		return name
 	}
-	before := name[:idx]
-	match := name[idx : idx+len(filter)]
-	after := name[idx+len(filter):]
+	before := string(nr[:idx])
+	match := string(nr[idx : idx+len(lfr)])
+	after := string(nr[idx+len(lfr):])
 
 	baseStyle := tuistyle.NormalStyle
 	if selected {
 		baseStyle = tuistyle.SelectedStyle.Bold(true)
 	}
 	return baseStyle.Render(before) + tuistyle.AccentStyle.Render(match) + baseStyle.Render(after)
+}
+
+// runeIndex returns the rune index of needle in haystack, or -1.
+func runeIndex(haystack, needle []rune) int {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		match := true
+		for j, r := range needle {
+			if haystack[i+j] != r {
+				match = false
+				break
+			}
+		}
+		if match {
+			return i
+		}
+	}
+	return -1
 }
 
 func visibleLen(s string) int {

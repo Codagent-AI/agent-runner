@@ -366,6 +366,9 @@ func runSwitcher(sw *switcher) int {
 		if final.resumeRunID != "" {
 			return execRunnerResume(final.resumeRunID, final.resumeRunProjectDir)
 		}
+		if final.startRunEntry != nil {
+			return execStartRun(final.startRunEntry)
+		}
 		if final.resumeSessionID == "" {
 			return 0
 		}
@@ -575,6 +578,24 @@ func execRunnerResume(runID, projectDir string) int {
 	return 0
 }
 
+// execStartRun resolves the workflow file from a discovered entry and
+// executes handleRun. Builtin entries are resolved via their canonical name;
+// project/user entries use SourcePath directly.
+func execStartRun(entry *discovery.WorkflowEntry) int {
+	var workflowFile string
+	if entry.Scope == discovery.ScopeBuiltin {
+		var err error
+		workflowFile, err = builtinworkflows.Resolve(entry.CanonicalName)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: resolve builtin %q: %v\n", entry.CanonicalName, err)
+			return 1
+		}
+	} else {
+		workflowFile = entry.SourcePath
+	}
+	return handleRun([]string{workflowFile})
+}
+
 // resolveInspectSession resolves a run ID to its session and project
 // directories, using the same rules as --resume (cwd's project dir only).
 func resolveInspectSession(runID string) (sessionDir, projectDir string, err error) {
@@ -625,6 +646,7 @@ type switcher struct {
 	resumeSessionID     string
 	resumeRunID         string
 	resumeRunProjectDir string
+	startRunEntry       *discovery.WorkflowEntry
 	viewErr             string
 }
 
@@ -688,9 +710,9 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return s, tea.Batch(cmds...)
 
 	case discovery.StartRunMsg:
-		// Handled in subsequent task (param form / exec-self).
-		// For now, return to list so the emitted message is not silently swallowed.
-		return s, nil
+		entry := msg.Entry
+		s.startRunEntry = &entry
+		return s, tea.Quit
 
 	case runview.BackMsg:
 		s.mode = showingList

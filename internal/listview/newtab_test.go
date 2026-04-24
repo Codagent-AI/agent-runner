@@ -3,9 +3,23 @@ package listview
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/codagent/agent-runner/internal/discovery"
 )
+
+func keyMsg(key string) tea.KeyMsg {
+	switch key {
+	case "backspace":
+		return tea.KeyMsg{Type: tea.KeyBackspace}
+	case "esc":
+		return tea.KeyMsg{Type: tea.KeyEsc}
+	default:
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
+	}
+}
 
 // helpers
 
@@ -324,6 +338,53 @@ func TestNewTab_HelpBar_ShowsNewTabBindings(t *testing.T) {
 	}
 	if !strings.Contains(help, "start run") {
 		t.Errorf("help bar should contain 'start run', got: %q", help)
+	}
+}
+
+// TestBackspace_MultiByte verifies backspace removes a full rune, not just one byte.
+func TestBackspace_MultiByte(t *testing.T) {
+	m := newTabModel(nil)
+	m.newTab.searchFocused = true
+	// "café" ends with é (U+00E9, 2 bytes in UTF-8).
+	m.newTab.searchText = "café"
+	m.updateSearchFilter()
+
+	// Simulate a single backspace.
+	m, _ = m.handleSearchKey(keyMsg("backspace"))
+
+	if m.newTab.searchText != "caf" {
+		t.Errorf("after backspace on 'café', searchText = %q, want %q", m.newTab.searchText, "caf")
+	}
+}
+
+// TestHighlightMatch_MultiByte verifies that highlightMatch correctly slices at
+// rune boundaries. U+212A (KELVIN SIGN, 3 UTF-8 bytes) lowercases to ASCII k
+// (1 byte), shifting all subsequent byte offsets in the lowercased string
+// relative to the original. Byte-level slicing would yield wrong content; rune-
+// level slicing must be used.
+func TestHighlightMatch_MultiByte(t *testing.T) {
+	// KELVIN SIGN (K) precedes "xyz". After ToLower it becomes 1-byte k,
+	// so the byte index of "x" in lower (1) != its byte index in name (3).
+	name := "Kxyz" // KELVIN SIGN + xyz
+	filter := "x"
+	result := highlightMatch(name, filter, false)
+	// The suffix after the match must start with the rune immediately after the
+	// matched x, i.e. "yz". With byte-slicing the wrong position is used and
+	// the result would be garbled (missing "x" and misaligning "yz").
+	if !strings.Contains(result, "yz") {
+		t.Errorf("highlightMatch(%q, %q) result missing 'yz': %q", name, filter, result)
+	}
+	if !utf8.ValidString(result) {
+		t.Errorf("highlightMatch(%q, %q) produced invalid UTF-8: %q", name, filter, result)
+	}
+}
+
+// TestHighlightMatch_Empty verifies highlightMatch returns name unchanged when filter is empty.
+func TestHighlightMatch_Empty(t *testing.T) {
+	name := "core:deploy"
+	result := highlightMatch(name, "", false)
+	if result != name {
+		t.Errorf("highlightMatch(%q, %q) = %q, want %q", name, "", result, name)
 	}
 }
 

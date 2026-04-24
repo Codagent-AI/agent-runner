@@ -105,7 +105,7 @@ func enumerateLocalDir(dir string, scope Scope) []WorkflowEntry {
 			Scope:         scope,
 		}
 
-		data, readErr := os.ReadFile(path) // #nosec G304 -- path is from a controlled workflow directory walk
+		data, readErr := os.ReadFile(path) // #nosec G304 G122 -- path is from a controlled workflow directory walk
 		if readErr != nil {
 			entry.ParseError = readErr.Error()
 		} else {
