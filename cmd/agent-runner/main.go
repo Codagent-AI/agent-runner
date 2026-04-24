@@ -369,7 +369,7 @@ func runSwitcher(sw *switcher) int {
 		if final.resumeRunID != "" {
 			return execRunnerResume(final.resumeRunID, final.resumeRunProjectDir)
 		}
-		if final.startRunEntry != nil {
+		if final.startRunReady && final.startRunEntry != nil {
 			return execStartRun(final.startRunEntry, final.startRunParams)
 		}
 		if final.resumeListProjectDir != "" {
@@ -688,6 +688,7 @@ type switcher struct {
 	resumeListProjectDir string
 	startRunEntry        *discovery.WorkflowEntry
 	startRunParams       map[string]string
+	startRunReady        bool
 	viewErr              string
 }
 
@@ -759,7 +760,9 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		entry := msg.Entry
 		s.startRunEntry = &entry
 		s.startRunParams = nil
+		s.startRunReady = false
 		if len(entry.Params) == 0 {
+			s.startRunReady = true
 			return s, tea.Quit
 		}
 		s.returnMode = s.mode
@@ -772,9 +775,14 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return s, nil
 		}
 		s.startRunParams = map[string]string(msg)
+		s.startRunReady = true
 		return s, tea.Quit
 
 	case paramform.CancelledMsg:
+		s.startRunEntry = nil
+		s.startRunParams = nil
+		s.startRunReady = false
+		s.paramform = nil
 		s.mode = s.returnMode
 		return s, nil
 

@@ -124,6 +124,15 @@ func TestSwitcher_StartRunWithParams_ShowsParamFormAndCancelRestoresList(t *test
 	if sw.mode != showingList {
 		t.Fatalf("mode after cancel = %v, want showingList", sw.mode)
 	}
+	if sw.startRunEntry != nil {
+		t.Fatalf("startRunEntry = %#v, want nil after cancel", sw.startRunEntry)
+	}
+	if sw.startRunParams != nil {
+		t.Fatalf("startRunParams = %#v, want nil after cancel", sw.startRunParams)
+	}
+	if sw.startRunReady {
+		t.Fatal("startRunReady should be false after cancel")
+	}
 }
 
 func TestSwitcher_SubmittedParamForm_QueuesRunLaunchAndQuits(t *testing.T) {
@@ -153,5 +162,8 @@ func TestSwitcher_SubmittedParamForm_QueuesRunLaunchAndQuits(t *testing.T) {
 	}
 	if got := sw.startRunParams["task_file"]; got != "tasks/param-form-run-launch.md" {
 		t.Fatalf("startRunParams[task_file] = %q, want %q", got, "tasks/param-form-run-launch.md")
+	}
+	if !sw.startRunReady {
+		t.Fatal("startRunReady should be true after submit")
 	}
 }
