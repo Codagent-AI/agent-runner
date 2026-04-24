@@ -24,6 +24,9 @@ type renderedStepRow struct {
 }
 
 func (m *Model) View() string {
+	if !m.altScreen {
+		return ""
+	}
 	if m.showLegend {
 		return m.renderLegend()
 	}

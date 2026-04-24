@@ -53,6 +53,11 @@ type Options struct {
 	// ResumeHook is called immediately after an interactive step exits (e.g.
 	// p.RestoreTerminal in TUI mode). Nil = no-op.
 	ResumeHook func()
+
+	// PrepareStepHook is called before each leaf step begins. The boolean
+	// argument is true when the step will be interactive. Used by the TUI
+	// coordinator to manage terminal state transitions without flicker.
+	PrepareStepHook func(interactive bool)
 }
 
 // RunHandle is returned by PrepareRun and PrepareResume. It holds all state
@@ -504,6 +509,9 @@ func ExecuteFromHandle(h *RunHandle, opts *Options) WorkflowResult {
 		}
 		if opts.ResumeHook != nil {
 			h.rs.ctx.ResumeHook = opts.ResumeHook
+		}
+		if opts.PrepareStepHook != nil {
+			h.rs.ctx.PrepareStepHook = opts.PrepareStepHook
 		}
 	}
 	result := executeSteps(h.rs, h.startIndex)

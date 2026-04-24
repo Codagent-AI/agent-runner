@@ -122,6 +122,7 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		Log:               opts.Log,
 		SuspendHook:       opts.SuspendHook,
 		ResumeHook:        opts.ResumeHook,
+		PrepareStepHook:   opts.PrepareStepHook,
 	}
 
 	return PrepareRun(&workflow, state.Params, resumeOpts)

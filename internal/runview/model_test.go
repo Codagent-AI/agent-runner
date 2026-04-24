@@ -22,6 +22,7 @@ func newTestModel(tree *Tree, entered Entered) *Model {
 		loadedFull: make(map[string]bool),
 		termWidth:  120,
 		termHeight: 40,
+		altScreen:  entered != FromLiveRun,
 	}
 }
 
@@ -1008,6 +1009,7 @@ func newLiveModel() *Model {
 		termWidth:  120,
 		termHeight: 40,
 		running:    true,
+		altScreen:  true,
 	}
 }
 
@@ -1167,6 +1169,7 @@ func newLiveModelWithFlags() *Model {
 		termHeight: 40,
 		running:    true,
 		autoFollow: true,
+		altScreen:  true,
 	}
 }
 
@@ -2040,5 +2043,96 @@ func TestHandleWindowSize_ReanchorsAcrossEquivalentTreeRebuild(t *testing.T) {
 	}
 	if m.logOffset != expected {
 		t.Fatalf("logOffset = %d, want %d after re-anchoring rebuilt tree", m.logOffset, expected)
+	}
+}
+
+// ---- Deferred alt-screen tests ----
+
+func TestLiveRun_ViewEmptyBeforeAltScreen(t *testing.T) {
+	m := newTestModel(simpleTree(), FromLiveRun)
+	// FromLiveRun starts with altScreen=false
+	if m.altScreen {
+		t.Fatal("expected altScreen=false for FromLiveRun")
+	}
+	if got := m.View(); got != "" {
+		t.Fatalf("expected empty view before alt-screen, got %q", got)
+	}
+}
+
+func TestNonLiveRun_AltScreenImmediate(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList)
+	if !m.altScreen {
+		t.Fatal("expected altScreen=true for FromList")
+	}
+	if got := m.View(); got == "" {
+		t.Fatal("expected non-empty view for FromList")
+	}
+}
+
+func TestDeferredAltScreen_EntersOnTimer(t *testing.T) {
+	m := newTestModel(simpleTree(), FromLiveRun)
+	m.termWidth = 120
+	m.termHeight = 40
+
+	updated, cmd := m.Update(deferredAltScreenMsg{})
+	m = updated.(*Model)
+
+	if !m.altScreen {
+		t.Fatal("expected altScreen=true after deferred timer")
+	}
+	// cmd should include EnterAltScreen
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd")
+	}
+}
+
+func TestDeferredAltScreen_SuppressedBySuspend(t *testing.T) {
+	m := newTestModel(simpleTree(), FromLiveRun)
+
+	// SuspendedMsg arrives before the timer
+	updated, _ := m.Update(liverun.SuspendedMsg{})
+	m = updated.(*Model)
+
+	if !m.suppressAltScreen {
+		t.Fatal("expected suppressAltScreen=true after SuspendedMsg")
+	}
+
+	// Timer fires — should be suppressed
+	updated, cmd := m.Update(deferredAltScreenMsg{})
+	m = updated.(*Model)
+
+	if m.altScreen {
+		t.Fatal("expected altScreen to remain false after suppressed timer")
+	}
+	if cmd != nil {
+		t.Fatal("expected nil cmd when timer is suppressed")
+	}
+}
+
+func TestShowTUIMsg_EntersAltScreen(t *testing.T) {
+	m := newTestModel(simpleTree(), FromLiveRun)
+	m.suppressAltScreen = true // was previously suppressed
+
+	updated, cmd := m.Update(liverun.ShowTUIMsg{})
+	m = updated.(*Model)
+
+	if !m.altScreen {
+		t.Fatal("expected altScreen=true after ShowTUIMsg")
+	}
+	if m.suppressAltScreen {
+		t.Fatal("expected suppressAltScreen cleared by ShowTUIMsg")
+	}
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd for EnterAltScreen")
+	}
+}
+
+func TestShowTUIMsg_NoOpWhenAlreadyInAltScreen(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList) // altScreen=true already
+
+	_, cmd := m.Update(liverun.ShowTUIMsg{})
+
+	if cmd != nil {
+		t.Fatal("expected nil cmd when already in alt-screen")
 	}
 }

@@ -403,7 +403,7 @@ func runLiveTUI(h *runner.RunHandle) int {
 		return 1
 	}
 
-	p := tea.NewProgram(rv, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(rv, tea.WithMouseCellMotion())
 	coord := liverun.NewCoordinator(p, h.SessionDir)
 
 	resultCh := make(chan runner.WorkflowResult, 1)
@@ -421,11 +421,12 @@ func runLiveTUI(h *runner.RunHandle) int {
 		}()
 
 		result = runner.ExecuteFromHandle(h, &runner.Options{
-			ProcessRunner: coord.TUIProcessRunner(&realProcessRunner{}),
-			GlobExpander:  &realGlobExpander{},
-			Log:           &runner.DiscardLogger{},
-			SuspendHook:   coord.BeforeInteractive,
-			ResumeHook:    coord.AfterInteractive,
+			ProcessRunner:   coord.TUIProcessRunner(&realProcessRunner{}),
+			GlobExpander:    &realGlobExpander{},
+			Log:             &runner.DiscardLogger{},
+			SuspendHook:     coord.BeforeInteractive,
+			ResumeHook:      coord.AfterInteractive,
+			PrepareStepHook: coord.PrepareForStep,
 		})
 	}()
 

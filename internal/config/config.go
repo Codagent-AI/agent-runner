@@ -290,4 +290,3 @@ func defaultConfig() *Config {
 		},
 	}
 }
-

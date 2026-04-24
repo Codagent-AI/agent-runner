@@ -92,6 +92,12 @@ type Model struct {
 	// p.Run() returns and execs the agent CLI.
 	resumeAgentCLI  string
 	resumeSessionID string
+
+	// Alt-screen management. When the program starts without tea.WithAltScreen
+	// (FromLiveRun mode), alt-screen entry is deferred so a fast non-interactive
+	// step followed by an interactive step does not flash the TUI.
+	altScreen         bool // true once alt-screen has been entered
+	suppressAltScreen bool // set when SuspendedMsg arrives before the deferred timer
 }
 
 // ResumeAgentCLI returns the agent CLI name captured from a ResumeMsg in
@@ -157,6 +163,7 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 		loadErr:    loadErr,
 		running:    entered == FromLiveRun,
 		autoFollow: entered == FromLiveRun,
+		altScreen:  entered != FromLiveRun,
 	}
 
 	if entered != FromLiveRun {
@@ -200,6 +207,7 @@ func NewForReentry(sessionDir, projectDir string, entered Entered, spawnErr erro
 	}
 	m.running = false
 	m.autoFollow = false
+	m.altScreen = true
 	if spawnErr != nil {
 		m.notice = spawnErr.Error()
 	}
@@ -226,8 +234,22 @@ func describeWorkflowHint(state *model.RunState, sessionDir string) string {
 	return strings.Join(parts, ", ")
 }
 
+// altScreenDelay is how long the live-run TUI waits before entering alt-screen.
+// If an interactive step starts within this window, alt-screen is suppressed
+// entirely — avoiding the flash that would otherwise occur when the TUI
+// briefly appears and then immediately releases the terminal.
+const altScreenDelay = 200 * time.Millisecond
+
+type deferredAltScreenMsg struct{}
+
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(tuistyle.DoRefresh(), tuistyle.DoPulse())
+	cmds := []tea.Cmd{tuistyle.DoRefresh(), tuistyle.DoPulse()}
+	if m.entered == FromLiveRun && !m.altScreen {
+		cmds = append(cmds, tea.Tick(altScreenDelay, func(time.Time) tea.Msg {
+			return deferredAltScreenMsg{}
+		}))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -245,7 +267,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleStepStateMsg(msg)
 		return m, nil
 
+	case deferredAltScreenMsg:
+		if !m.altScreen && !m.suppressAltScreen {
+			m.altScreen = true
+			return m, tea.Batch(tea.EnterAltScreen, tea.EnableMouseCellMotion)
+		}
+		return m, nil
+
+	case liverun.ShowTUIMsg:
+		if !m.altScreen {
+			m.altScreen = true
+			m.suppressAltScreen = false
+			return m, tea.Batch(tea.EnterAltScreen, tea.EnableMouseCellMotion)
+		}
+		return m, nil
+
 	case liverun.SuspendedMsg:
+		if !m.altScreen {
+			m.suppressAltScreen = true
+		}
 		return m, nil
 
 	case liverun.ResumedMsg:
