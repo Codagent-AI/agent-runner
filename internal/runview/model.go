@@ -780,10 +780,10 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case NodeHeadlessAgent, NodeInteractiveAgent:
-		// Resume is only meaningful after the run has ended — while the
-		// workflow is live, the agent session is owned by the runner and
-		// cannot be attached to by the user.
-		if n.SessionID != "" && !m.running {
+		// Resume when the run has ended, or when this specific step has
+		// completed (the runner no longer owns the session even if the
+		// workflow is still executing subsequent steps).
+		if n.SessionID != "" && (!m.running || n.Status == StatusSuccess || n.Status == StatusFailed) {
 			return m, func() tea.Msg {
 				return ResumeMsg{AgentCLI: n.AgentCLI, SessionID: n.SessionID}
 			}
