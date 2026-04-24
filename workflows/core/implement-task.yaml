@@ -14,7 +14,7 @@ steps:
     session: new
     prompt: |
       Implement the task described in {{task_file}}.
-
+      You MUST use the codagent:implement-with-tdd skill.
       When you are done implementing, commit your changes with a clear,
       descriptive commit message prefixed with [{{step_id}}]. Then summarize to the user what you changed.
 

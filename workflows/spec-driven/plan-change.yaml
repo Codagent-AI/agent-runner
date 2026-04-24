@@ -15,9 +15,8 @@ steps:
     session: lead-agent
     prompt: |
       Help the user write a change proposal.
-      You MUST use the codagent:propose skill.
-
-      Before doing anything else, ask the user to describe what this change is about and what they want to accomplish.
+      First, ask the user what the change is about. DO NOT attempt to guess.
+      Then, you MUST use the codagent:propose skill.
       Once the proposal document is written, continue to the next step.
 
   - id: specs

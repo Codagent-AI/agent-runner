@@ -20,8 +20,9 @@ steps:
   - id: plan
     agent: planner
     prompt: |
-      Help the user plan the change "{{change_name}}".
-      You MUST use the codagent:simple-plan skill.
+      Help the user plan the change.
+      First, ask the user what the change is about. DO NOT attempt to guess.
+      Then, you MUST use the codagent:simple-plan skill.
 
   - id: validate
     mode: headless
