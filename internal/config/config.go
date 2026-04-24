@@ -71,10 +71,13 @@ var validCLI = map[string]bool{"claude": true, "codex": true, "copilot": true}
 
 var userHomeDir = os.UserHomeDir
 
-// LoadOrGenerate loads the config file at path. If the file does not exist,
-// it returns in-memory defaults (no file written). The optional global config
-// (~/.agent-runner/config.yaml) is merged first; project config takes
-// precedence. Legacy flat shapes are rejected with an actionable error.
+// LoadOrGenerate loads configuration by layering three sources: built-in
+// defaults, an optional global config at ~/.agent-runner/config.yaml, and an
+// optional project config at path. Layers are applied defaults → global →
+// project, so global can override defaults and project can override both.
+// Within a profile set, an agent whose name appears in a higher layer
+// replaces the lower-layer agent wholesale (no field-level merge). Legacy
+// flat shapes are rejected with an actionable error.
 func LoadOrGenerate(path string) (*Config, error) {
 	var globalFile *parsedFile
 	if globalPath, err := globalConfigPath(); err == nil {
@@ -85,12 +88,12 @@ func LoadOrGenerate(path string) (*Config, error) {
 		globalFile = gf
 	}
 
-	projectFile, err := loadProjectFileOrDefault(path)
+	projectFile, err := loadFileOptional(path, false)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("loading project config %s: %w", path, err)
 	}
 
-	cfg, err := buildConfig(globalFile, projectFile)
+	cfg, err := buildConfig(defaultParsedFile(), globalFile, projectFile)
 	if err != nil {
 		return nil, err
 	}
@@ -117,17 +120,6 @@ func loadFileOptional(path string, isGlobal bool) (*parsedFile, error) {
 		return nil, fmt.Errorf("reading config: %w", err)
 	}
 	return parseConfigFile(data, path, isGlobal)
-}
-
-func loadProjectFileOrDefault(path string) (*parsedFile, error) {
-	data, err := os.ReadFile(path) // #nosec G304 -- config path is from internal caller
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("reading config: %w", err)
-		}
-		return defaultParsedFile(), nil
-	}
-	return parseConfigFile(data, path, false)
 }
 
 func parseConfigFile(data []byte, path string, isGlobal bool) (*parsedFile, error) {
@@ -210,10 +202,12 @@ func isLegacyAgentMap(m map[string]interface{}) bool {
 	return false
 }
 
-// buildConfig merges global and project parsed files, selects the active profile
-// set, and returns a fully-populated Config.
-func buildConfig(global, project *parsedFile) (*Config, error) {
-	merged := mergeProfileSets(global, project)
+// buildConfig layers the given parsed files (defaults → global → project),
+// selects the active profile set from the project layer, and returns a
+// fully-populated Config. nil layers are skipped. active_profile is read
+// only from the last layer (project).
+func buildConfig(defaults, global, project *parsedFile) (*Config, error) {
+	merged := mergeProfileSets(defaults, global, project)
 
 	var activeProfile string
 	if project != nil {
@@ -245,46 +239,30 @@ func buildConfig(global, project *parsedFile) (*Config, error) {
 	}, nil
 }
 
-// mergeProfileSets combines profile sets from global and project files.
-// Profile sets with the same name have their agents maps merged (project wins).
-func mergeProfileSets(global, project *parsedFile) map[string]*ProfileSet {
+// mergeProfileSets layers parsed files. For each profile set name, agents from
+// later layers override agents of the same name from earlier layers. Profile
+// set names appearing in only one layer pass through.
+func mergeProfileSets(layers ...*parsedFile) map[string]*ProfileSet {
 	result := map[string]*ProfileSet{}
-
-	if global != nil {
-		for name, ps := range global.Profiles {
-			result[name] = ps
-		}
-	}
-	if project == nil {
-		return result
-	}
-
-	for name, projectPS := range project.Profiles {
-		globalPS, exists := result[name]
-		if !exists {
-			result[name] = projectPS
+	for _, layer := range layers {
+		if layer == nil {
 			continue
 		}
-		result[name] = mergeAgentMaps(globalPS, projectPS)
+		for name, ps := range layer.Profiles {
+			existing, ok := result[name]
+			if !ok {
+				existing = &ProfileSet{Agents: map[string]*Agent{}}
+				result[name] = existing
+			}
+			if ps == nil {
+				continue
+			}
+			for agentName, agent := range ps.Agents {
+				existing.Agents[agentName] = agent
+			}
+		}
 	}
 	return result
-}
-
-// mergeAgentMaps merges two ProfileSets' agent maps. Project agents replace
-// global agents of the same name (no field-level merge).
-func mergeAgentMaps(global, project *ProfileSet) *ProfileSet {
-	merged := &ProfileSet{Agents: map[string]*Agent{}}
-	if global != nil {
-		for name, a := range global.Agents {
-			merged.Agents[name] = a
-		}
-	}
-	if project != nil {
-		for name, a := range project.Agents {
-			merged.Agents[name] = a
-		}
-	}
-	return merged
 }
 
 // Resolve walks the extends chain for the named agent in the active profile set
@@ -420,14 +398,5 @@ func defaultParsedFile() *parsedFile {
 		Profiles: map[string]*ProfileSet{
 			"default": {Agents: agents},
 		},
-	}
-}
-
-func defaultConfig() *Config {
-	pf := defaultParsedFile()
-	agents := pf.Profiles["default"].Agents
-	return &Config{
-		Profiles:     pf.Profiles,
-		ActiveAgents: agents,
 	}
 }

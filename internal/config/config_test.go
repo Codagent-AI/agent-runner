@@ -8,6 +8,24 @@ import (
 	"testing"
 )
 
+// TestMain isolates HOME so tests don't read the developer's real
+// ~/.agent-runner/config.yaml. Individual tests that exercise global-config
+// behavior override HOME themselves via t.Setenv.
+func TestMain(m *testing.M) {
+	os.Exit(runTests(m))
+}
+
+func runTests(m *testing.M) int {
+	sandbox, err := os.MkdirTemp("", "agent-runner-config-test-home-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "creating sandbox HOME: %v\n", err)
+		return 1
+	}
+	defer os.RemoveAll(sandbox)
+	_ = os.Setenv("HOME", sandbox)
+	return m.Run()
+}
+
 func TestLoadOrGenerate_CreatesDefault(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
@@ -134,8 +152,9 @@ func TestLoadOrGenerate_LoadsExisting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(cfg.ActiveAgents) != 1 {
-		t.Fatalf("expected 1 active agent, got %d", len(cfg.ActiveAgents))
+	// Built-in defaults (5 agents) layer under the project's 1 custom agent.
+	if len(cfg.ActiveAgents) != 6 {
+		t.Fatalf("expected 6 active agents (5 defaults + 1 custom), got %d", len(cfg.ActiveAgents))
 	}
 	p := cfg.ActiveAgents["custom"]
 	if p == nil || p.DefaultMode != "headless" || p.CLI != "codex" || p.Model != "o3" {
@@ -408,6 +427,89 @@ func TestLoadOrGenerate_DoesNotCreateGlobalConfigWhenMissing(t *testing.T) {
 	}
 }
 
+func TestLoadOrGenerate_GlobalOverridesDefaultAgent(t *testing.T) {
+	// Regression: with no project config on disk, built-in defaults must not
+	// stomp a global agent that shares a name. Previously the default
+	// implementor (which only extends headless_base) replaced the global
+	// implementor, so users with a global `implementor: cli: copilot` still
+	// got claude/sonnet.
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repo := filepath.Join(root, "repo")
+	t.Setenv("HOME", home)
+
+	globalPath := filepath.Join(home, ".agent-runner", "config.yaml")
+	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
+
+	writeConfigFile(t, globalPath, `profiles:
+  default:
+    agents:
+      implementor:
+        extends: headless_base
+        cli: copilot
+        model: gpt-5.4
+`)
+
+	cfg, err := LoadOrGenerate(projectPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rp, err := cfg.Resolve("implementor")
+	if err != nil {
+		t.Fatalf("unexpected resolve error: %v", err)
+	}
+	if rp.CLI != "copilot" {
+		t.Fatalf("expected global implementor.cli=copilot to override default, got %q", rp.CLI)
+	}
+	if rp.Model != "gpt-5.4" {
+		t.Fatalf("expected global implementor.model=gpt-5.4 to override default, got %q", rp.Model)
+	}
+	// default_mode and effort are inherited from the default headless_base,
+	// proving defaults remain available as a fallback base layer.
+	if rp.DefaultMode != "headless" {
+		t.Fatalf("expected default_mode headless from default headless_base, got %q", rp.DefaultMode)
+	}
+}
+
+func TestLoadOrGenerate_ProjectExistsStillIncludesDefaultAgents(t *testing.T) {
+	// When a project config defines only a custom agent, the built-in
+	// defaults (planner, implementor, etc.) must still be available so that
+	// shipped workflows referencing those agents continue to work.
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	t.Setenv("HOME", home)
+
+	repo := filepath.Join(root, "repo")
+	path := filepath.Join(repo, ".agent-runner", "config.yaml")
+	writeConfigFile(t, path, `profiles:
+  default:
+    agents:
+      custom:
+        default_mode: headless
+        cli: codex
+        model: o3
+`)
+
+	cfg, err := LoadOrGenerate(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	defaultSet := cfg.Profiles["default"]
+	if defaultSet == nil {
+		t.Fatal("expected default profile set to be present")
+	}
+	if defaultSet.Agents["custom"] == nil {
+		t.Fatal("expected project-defined custom agent to be present")
+	}
+	for _, name := range []string{"planner", "implementor", "headless_base", "interactive_base", "summarizer"} {
+		if defaultSet.Agents[name] == nil {
+			t.Fatalf("expected default agent %q to remain available alongside project config", name)
+		}
+	}
+}
+
 func TestLoadOrGenerate_DefaultsAndMergesGlobalProfiles(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
@@ -567,27 +669,6 @@ func TestLoadOrGenerate_NoActiveProfileFallsToDefault(t *testing.T) {
 	}
 	if cfg.ActiveAgents["planner"] == nil {
 		t.Fatal("expected planner in active agents from default profile set")
-	}
-}
-
-func TestLoadOrGenerate_NoActiveProfileNoDefault(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	writeConfigFile(t, path, `profiles:
-  copilot:
-    agents:
-      planner:
-        default_mode: interactive
-        cli: copilot
-`)
-
-	_, err := LoadOrGenerate(path)
-	if err == nil {
-		t.Fatal("expected error when no active_profile and no default set")
-	}
-	if !strings.Contains(err.Error(), "default") {
-		t.Fatalf("expected error about 'default', got: %v", err)
 	}
 }
 
@@ -1182,7 +1263,12 @@ func TestResolve_CycleInResolve(t *testing.T) {
 }
 
 func TestResolve_DefaultConfigAgents(t *testing.T) {
-	cfg := defaultConfig()
+	// Loading with no project or global file yields the built-in defaults only.
+	t.Setenv("HOME", t.TempDir())
+	cfg, err := LoadOrGenerate(filepath.Join(t.TempDir(), "nonexistent.yaml"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// Planner should resolve to interactive_base values.
 	rp, err := cfg.Resolve("planner")
