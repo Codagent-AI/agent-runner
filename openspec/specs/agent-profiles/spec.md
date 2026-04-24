@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Defines named, inheritable agent profiles that bundle CLI choice, default mode, model, effort, and system prompt into reusable units, so workflow steps reference a profile by name rather than re-declaring each attribute. Profiles support single-parent `extends` inheritance, per-step overrides for `mode`, `model`, and `cli`, and auto-generation of a default config with `interactive_base`, `headless_base`, `planner`, and `implementor` profiles when none exists.
+Defines named, inheritable agent profiles that bundle CLI choice, default mode, model, effort, and system prompt into reusable units, so workflow steps reference a profile by name rather than re-declaring each attribute. Profiles support single-parent `extends` inheritance and per-step overrides for `mode`, `model`, and `cli`. When no config files are present, the runner uses a built-in default profile set in memory and SHALL NOT write any config file to disk.
 ## Requirements
 ### Requirement: Profile schema
 Each agent profile SHALL have a name (the YAML key) and MAY include: `default_mode` (interactive|headless), `cli` (claude|codex), `model` (string), `effort` (low|medium|high), `system_prompt` (string), and `extends` (string referencing another profile name).
@@ -57,37 +57,26 @@ A profile MAY specify `extends: <parent_name>`. The child inherits all fields fr
 - **WHEN** a profile specifies `extends: nonexistent`
 - **THEN** config loading fails with an error indicating the parent profile does not exist
 
-### Requirement: Config file auto-generation
-When `.agent-runner/config.yaml` does not exist, the runner SHALL generate it with a single profile set named `default` containing five agents:
+### Requirement: Built-in default profile set
+The runner SHALL provide an in-memory default profile set named `default` as the bottom layer of config resolution. The default set contains five agents:
 - `interactive_base`: default_mode=interactive, cli=claude, model=opus, effort=high
 - `headless_base`: default_mode=headless, cli=claude, model=opus, effort=high
 - `planner`: extends interactive_base (no overrides)
 - `implementor`: extends headless_base (no overrides)
 - `summarizer`: default_mode=headless, cli=claude, model=haiku, effort=low
 
-The generated file SHALL use the new nested shape:
+The runner SHALL NOT create `.agent-runner/config.yaml` (or any config file) automatically. The defaults exist only as an in-memory layer beneath any global and project configs the user has chosen to create.
 
-```yaml
-profiles:
-  default:
-    agents:
-      interactive_base: { default_mode: interactive, cli: claude, model: opus, effort: high }
-      headless_base:    { default_mode: headless,    cli: claude, model: opus, effort: high }
-      planner:          { extends: interactive_base }
-      implementor:      { extends: headless_base }
-      summarizer:       { default_mode: headless, cli: claude, model: haiku, effort: low }
-```
-
-#### Scenario: Config file missing on startup
+#### Scenario: Project config missing on startup
 - **WHEN** the runner starts and `.agent-runner/config.yaml` does not exist
-- **THEN** the runner creates the file with the five default agents nested under `profiles.default.agents` and proceeds normally
+- **THEN** the runner uses the built-in defaults in memory and SHALL NOT create the file or its parent directory
 
-#### Scenario: Config file already exists
+#### Scenario: Project config already exists
 - **WHEN** the runner starts and `.agent-runner/config.yaml` exists
 - **THEN** the runner loads and uses it as-is without modifying it
 
 #### Scenario: Summarizer agent resolves to claude + haiku
-- **WHEN** a workflow step references `agent: summarizer` and the generated config is unchanged (so the active profile is `default`)
+- **WHEN** a workflow step references `agent: summarizer` with no project or global overrides (so the active profile is `default`)
 - **THEN** the resolved agent has default_mode=headless, cli=claude, model=haiku, effort=low
 
 ### Requirement: Step agent attribute
@@ -188,7 +177,7 @@ The runner SHALL load a global agent config from `~/.agent-runner/config.yaml` (
 
 #### Scenario: Global config absent
 - **WHEN** the runner starts and `~/.agent-runner/config.yaml` does not exist
-- **THEN** the runner proceeds using only the project-local config (auto-generating it if also absent, per existing behavior)
+- **THEN** the runner proceeds using the project-local config if present, otherwise the built-in defaults, and SHALL NOT create either file
 
 #### Scenario: Global config present, project config present
 - **WHEN** both `~/.agent-runner/config.yaml` and `.agent-runner/config.yaml` exist
@@ -196,18 +185,22 @@ The runner SHALL load a global agent config from `~/.agent-runner/config.yaml` (
 
 #### Scenario: Global config present, project config absent
 - **WHEN** `~/.agent-runner/config.yaml` exists and `.agent-runner/config.yaml` does not exist
-- **THEN** the runner generates the project-local config (per existing auto-generation behavior), loads the global file, and proceeds with the merged profile set
+- **THEN** the runner loads the global file, layers it over the built-in defaults in memory, and SHALL NOT create the project-local config
 
 #### Scenario: Global config invalid YAML
 - **WHEN** `~/.agent-runner/config.yaml` exists but contains invalid YAML
 - **THEN** config loading fails with an error indicating the global file path and the parse error
 
-### Requirement: Global config is not auto-generated
+### Requirement: Config files are never auto-generated
 
-The runner SHALL NOT create `~/.agent-runner/config.yaml` automatically. Users who want a global config create the file manually. (A future change will add an opt-in setup flow that may populate this file.)
+The runner SHALL NOT create `~/.agent-runner/config.yaml` or `.agent-runner/config.yaml` automatically. Users who want either file create it manually; missing files are treated as empty layers over the built-in defaults.
 
 #### Scenario: Global file missing on startup
 - **WHEN** the runner starts and `~/.agent-runner/config.yaml` does not exist
+- **THEN** the runner SHALL NOT create that file or its parent directory
+
+#### Scenario: Project file missing on startup
+- **WHEN** the runner starts and `.agent-runner/config.yaml` does not exist
 - **THEN** the runner SHALL NOT create that file or its parent directory
 
 ### Requirement: Profile merge precedence

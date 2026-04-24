@@ -72,14 +72,15 @@ var validCLI = map[string]bool{"claude": true, "codex": true, "copilot": true}
 
 var userHomeDir = os.UserHomeDir
 
-// LoadOrGenerate loads configuration by layering three sources: built-in
-// defaults, an optional global config at ~/.agent-runner/config.yaml, and an
-// optional project config at path. Layers are applied defaults → global →
-// project, so global can override defaults and project can override both.
-// Within a profile set, an agent whose name appears in a higher layer
-// replaces the lower-layer agent wholesale (no field-level merge). Legacy
-// flat shapes are rejected with an actionable error.
-func LoadOrGenerate(path string) (*Config, error) {
+// Load returns a configuration by layering three sources: built-in defaults,
+// an optional global config at ~/.agent-runner/config.yaml, and an optional
+// project config at path. Missing files are treated as empty layers; Load
+// SHALL NOT create either file on disk. Layers are applied
+// defaults → global → project, so global can override defaults and project
+// can override both. Within a profile set, an agent whose name appears in a
+// higher layer replaces the lower-layer agent wholesale (no field-level
+// merge). Legacy flat shapes are rejected with an actionable error.
+func Load(path string) (*Config, error) {
 	var globalFile *parsedFile
 	if globalPath, err := globalConfigPath(); err == nil {
 		gf, gErr := loadFileOptional(globalPath, true)
