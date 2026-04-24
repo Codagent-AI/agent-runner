@@ -553,6 +553,7 @@ func TestLoadOrGenerate_RejectsLegacyFlatShapeProject(t *testing.T) {
 	writeConfigFile(t, path, `profiles:
   planner:
     extends: interactive_base
+    cli: claude
 `)
 
 	_, err := LoadOrGenerate(path)
@@ -851,6 +852,394 @@ func TestLoadOrGenerate_MergesSameProfileSetOverlappingAgents(t *testing.T) {
 	}
 }
 
+func TestLoadOrGenerate_ProfileSetExtendsInheritsAgentsAndSupportsAgentLevelExtends(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repo := filepath.Join(root, "repo")
+	t.Setenv("HOME", home)
+
+	globalPath := filepath.Join(home, ".agent-runner", "config.yaml")
+	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
+
+	writeConfigFile(t, globalPath, `profiles:
+  team_base:
+    agents:
+      headless_base:
+        default_mode: headless
+        cli: claude
+        model: sonnet
+      planner:
+        default_mode: interactive
+        cli: claude
+`)
+	writeConfigFile(t, projectPath, `active_profile: copilot
+profiles:
+  copilot:
+    extends: team_base
+    agents:
+      implementor:
+        extends: headless_base
+        cli: copilot
+`)
+
+	cfg, err := LoadOrGenerate(projectPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.ActiveAgents["headless_base"] == nil {
+		t.Fatal("expected inherited headless_base in active profile")
+	}
+	if cfg.ActiveAgents["planner"] == nil {
+		t.Fatal("expected inherited planner in active profile")
+	}
+	if cfg.ActiveAgents["implementor"] == nil {
+		t.Fatal("expected local implementor in active profile")
+	}
+
+	rp, err := cfg.Resolve("implementor")
+	if err != nil {
+		t.Fatalf("unexpected resolve error: %v", err)
+	}
+	if rp.DefaultMode != "headless" || rp.CLI != "copilot" || rp.Model != "sonnet" {
+		t.Fatalf("unexpected resolved implementor: %+v", rp)
+	}
+}
+
+func TestLoadOrGenerate_ProfileSetExtendsOverrideReplacesParentAgentWholly(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeConfigFile(t, path, `active_profile: child
+profiles:
+  parent:
+    agents:
+      headless_base:
+        default_mode: headless
+        cli: claude
+      implementor:
+        default_mode: headless
+        cli: claude
+        model: opus
+  child:
+    extends: parent
+    agents:
+      implementor:
+        extends: headless_base
+        cli: copilot
+`)
+
+	cfg, err := LoadOrGenerate(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	im := cfg.ActiveAgents["implementor"]
+	if im == nil {
+		t.Fatal("expected implementor in active agents")
+	}
+	if im.Extends != "headless_base" || im.CLI != "copilot" {
+		t.Fatalf("unexpected active implementor: %+v", im)
+	}
+	if im.DefaultMode != "" || im.Model != "" {
+		t.Fatalf("expected child agent to replace parent wholesale, got %+v", im)
+	}
+}
+
+func TestLoadOrGenerate_ProfileSetExtendsProjectWinsOverGlobal(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repo := filepath.Join(root, "repo")
+	t.Setenv("HOME", home)
+
+	globalPath := filepath.Join(home, ".agent-runner", "config.yaml")
+	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
+
+	writeConfigFile(t, globalPath, `profiles:
+  base_a:
+    agents:
+      headless_base:
+        default_mode: headless
+        cli: claude
+  base_b:
+    agents:
+      headless_base:
+        default_mode: headless
+        cli: copilot
+  copilot:
+    extends: base_a
+    agents:
+      implementor:
+        extends: headless_base
+`)
+	writeConfigFile(t, projectPath, `active_profile: copilot
+profiles:
+  copilot:
+    extends: base_b
+`)
+
+	cfg, err := LoadOrGenerate(projectPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rp, err := cfg.Resolve("implementor")
+	if err != nil {
+		t.Fatalf("unexpected resolve error: %v", err)
+	}
+	if rp.CLI != "copilot" {
+		t.Fatalf("expected project extends parent to win, got %+v", rp)
+	}
+}
+
+func TestLoadOrGenerate_ProfileSetExtendsMergeThenExtendAcrossGlobalAndProject(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repo := filepath.Join(root, "repo")
+	t.Setenv("HOME", home)
+
+	globalPath := filepath.Join(home, ".agent-runner", "config.yaml")
+	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
+
+	writeConfigFile(t, globalPath, `profiles:
+  team_base:
+    agents:
+      headless_base:
+        default_mode: headless
+        cli: claude
+  copilot:
+    agents:
+      planner:
+        default_mode: interactive
+        cli: claude
+`)
+	writeConfigFile(t, projectPath, `active_profile: copilot
+profiles:
+  copilot:
+    extends: team_base
+    agents:
+      implementor:
+        extends: headless_base
+`)
+
+	cfg, err := LoadOrGenerate(projectPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.ActiveAgents["headless_base"] == nil {
+		t.Fatal("expected inherited headless_base in active agents")
+	}
+	if cfg.ActiveAgents["planner"] == nil {
+		t.Fatal("expected merged global planner in active agents")
+	}
+	if cfg.ActiveAgents["implementor"] == nil {
+		t.Fatal("expected project implementor in active agents")
+	}
+}
+
+func TestLoadOrGenerate_ProfileSetExtendsMultiLevelChain(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeConfigFile(t, path, `active_profile: a
+profiles:
+  c:
+    agents:
+      headless_base:
+        default_mode: headless
+        cli: claude
+  b:
+    extends: c
+    agents:
+      planner:
+        default_mode: interactive
+        cli: claude
+  a:
+    extends: b
+    agents:
+      implementor:
+        extends: headless_base
+`)
+
+	cfg, err := LoadOrGenerate(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.ActiveAgents["headless_base"] == nil {
+		t.Fatal("expected headless_base inherited through chain")
+	}
+	if cfg.ActiveAgents["planner"] == nil {
+		t.Fatal("expected planner inherited through chain")
+	}
+	if cfg.ActiveAgents["implementor"] == nil {
+		t.Fatal("expected implementor in active agents")
+	}
+}
+
+func TestLoadOrGenerate_NonActiveProfileSetInheritedInvalidAgentBlocksLoad(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeConfigFile(t, path, `profiles:
+  shared:
+    agents:
+      reviewer:
+        default_mode: headless
+        cli: copilot
+        effort: extreme
+  default:
+    agents:
+      planner:
+        default_mode: interactive
+        cli: claude
+  copilot:
+    extends: shared
+    agents:
+      implementor:
+        default_mode: headless
+        cli: claude
+`)
+
+	_, err := LoadOrGenerate(path)
+	if err == nil {
+		t.Fatal("expected validation error for inherited invalid agent in non-active profile set")
+	}
+	if !strings.Contains(err.Error(), "reviewer") || !strings.Contains(err.Error(), "effort") {
+		t.Fatalf("expected inherited invalid agent error, got: %v", err)
+	}
+}
+
+func TestLoadOrGenerate_ProfileSetExtendsMissingParent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeConfigFile(t, path, `active_profile: copilot
+profiles:
+  copilot:
+    extends: missing
+    agents:
+      implementor:
+        default_mode: headless
+        cli: claude
+`)
+
+	_, err := LoadOrGenerate(path)
+	if err == nil {
+		t.Fatal("expected missing parent error")
+	}
+	if !strings.Contains(err.Error(), `profile set "copilot"`) || !strings.Contains(err.Error(), `"missing"`) {
+		t.Fatalf("expected missing profile set parent in error, got: %v", err)
+	}
+}
+
+func TestLoadOrGenerate_ProfileSetExtendsRejectsNonString(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeConfigFile(t, path, `profiles:
+  copilot:
+    extends:
+      - base_a
+      - base_b
+    agents:
+      implementor:
+        default_mode: headless
+        cli: claude
+`)
+
+	_, err := LoadOrGenerate(path)
+	if err == nil {
+		t.Fatal("expected extends type error")
+	}
+	if !strings.Contains(err.Error(), "extends") || !strings.Contains(err.Error(), "single profile set name") {
+		t.Fatalf("expected extends type error, got: %v", err)
+	}
+}
+
+func TestLoadOrGenerate_ProfileSetExtendsCycles(t *testing.T) {
+	testCases := []struct {
+		name    string
+		content string
+		want    []string
+	}{
+		{
+			name: "direct cycle",
+			content: `profiles:
+  a:
+    extends: b
+    agents:
+      planner:
+        default_mode: interactive
+        cli: claude
+  b:
+    extends: a
+    agents:
+      implementor:
+        default_mode: headless
+        cli: claude
+`,
+			want: []string{"cycle", "a", "b"},
+		},
+		{
+			name: "self reference",
+			content: `profiles:
+  a:
+    extends: a
+    agents:
+      planner:
+        default_mode: interactive
+        cli: claude
+`,
+			want: []string{"cycle", "a"},
+		},
+		{
+			name: "indirect cycle",
+			content: `profiles:
+  a:
+    extends: b
+    agents:
+      planner:
+        default_mode: interactive
+        cli: claude
+  b:
+    extends: c
+    agents:
+      implementor:
+        default_mode: headless
+        cli: claude
+  c:
+    extends: a
+    agents:
+      reviewer:
+        default_mode: headless
+        cli: copilot
+`,
+			want: []string{"cycle", "a", "b", "c"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.yaml")
+			writeConfigFile(t, path, tc.content)
+
+			_, err := LoadOrGenerate(path)
+			if err == nil {
+				t.Fatal("expected cycle error")
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("expected error to contain %q, got: %v", want, err)
+				}
+			}
+		})
+	}
+}
+
 func TestLoadOrGenerate_NonActiveProfileSetInvalidAgentBlocksLoad(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
@@ -878,27 +1267,28 @@ func TestLoadOrGenerate_NonActiveProfileSetInvalidAgentBlocksLoad(t *testing.T) 
 	}
 }
 
-func TestLoadOrGenerate_ExtendsAcrossProfileSetsBoundary(t *testing.T) {
+func TestLoadOrGenerate_AgentLevelExtendsCannotReachUnrelatedProfileSet(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	writeConfigFile(t, path, `profiles:
+	writeConfigFile(t, path, `active_profile: copilot
+profiles:
   default:
     agents:
       planner:
-        extends: cloud_base
+        default_mode: interactive
+        cli: claude
   copilot:
     agents:
-      cloud_base:
-        default_mode: headless
-        cli: copilot
+      implementor:
+        extends: planner
 `)
 
 	_, err := LoadOrGenerate(path)
 	if err == nil {
-		t.Fatal("expected error for cross-profile-set extends")
+		t.Fatal("expected error for agent-level extends across unrelated profile sets")
 	}
-	if !strings.Contains(err.Error(), "cloud_base") {
+	if !strings.Contains(err.Error(), "planner") {
 		t.Fatalf("expected error naming missing parent, got: %v", err)
 	}
 }

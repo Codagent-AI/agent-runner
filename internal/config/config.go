@@ -35,9 +35,11 @@ type ResolvedAgent struct {
 	SystemPrompt string
 }
 
-// ProfileSet is a named collection of agents.
+// ProfileSet is a named collection of agents, optionally inheriting from
+// another profile set.
 type ProfileSet struct {
-	Agents map[string]*Agent `yaml:"agents"`
+	Extends string            `yaml:"extends,omitempty"`
+	Agents  map[string]*Agent `yaml:"agents"`
 }
 
 // Config is the top-level configuration after loading, merging, and active-profile
@@ -62,7 +64,6 @@ var legacyAgentKeys = map[string]bool{
 	"model":         true,
 	"effort":        true,
 	"system_prompt": true,
-	"extends":       true,
 }
 
 var validEffort = map[string]bool{"low": true, "medium": true, "high": true}
@@ -177,12 +178,24 @@ func checkLegacyShape(data []byte, path string) error {
 		if !ok {
 			continue // not a mapping; typed parse will error later
 		}
+		if err := validateProfileSetShape(path, name, valueMap); err != nil {
+			return err
+		}
 		if isLegacyAgentMap(valueMap) {
 			return fmt.Errorf(
 				"%s: entry %q looks like a legacy agent bundle; "+
 					"restructure it under profiles.<set_name>.agents.%s",
 				path, name, name,
 			)
+		}
+	}
+	return nil
+}
+
+func validateProfileSetShape(path, name string, m map[string]interface{}) error {
+	if extends, ok := m["extends"]; ok && extends != nil {
+		if _, ok := extends.(string); !ok {
+			return fmt.Errorf("%s: profile set %q: extends must be a single profile set name", path, name)
 		}
 	}
 	return nil
@@ -208,6 +221,10 @@ func isLegacyAgentMap(m map[string]interface{}) bool {
 // only from the last layer (project).
 func buildConfig(defaults, global, project *parsedFile) (*Config, error) {
 	merged := mergeProfileSets(defaults, global, project)
+	resolved, err := resolveProfileSetExtends(merged)
+	if err != nil {
+		return nil, err
+	}
 
 	var activeProfile string
 	if project != nil {
@@ -219,7 +236,7 @@ func buildConfig(defaults, global, project *parsedFile) (*Config, error) {
 		selectedName = "default"
 	}
 
-	selectedSet, ok := merged[selectedName]
+	selectedSet, ok := resolved[selectedName]
 	if !ok {
 		if activeProfile != "" {
 			return nil, fmt.Errorf("active_profile %q does not exist in the merged config", selectedName)
@@ -234,7 +251,7 @@ func buildConfig(defaults, global, project *parsedFile) (*Config, error) {
 
 	return &Config{
 		ActiveProfile: activeProfile,
-		Profiles:      merged,
+		Profiles:      resolved,
 		ActiveAgents:  activeAgents,
 	}, nil
 }
@@ -257,12 +274,79 @@ func mergeProfileSets(layers ...*parsedFile) map[string]*ProfileSet {
 			if ps == nil {
 				continue
 			}
+			if ps.Extends != "" {
+				existing.Extends = ps.Extends
+			}
 			for agentName, agent := range ps.Agents {
 				existing.Agents[agentName] = agent
 			}
 		}
 	}
 	return result
+}
+
+func resolveProfileSetExtends(profileSets map[string]*ProfileSet) (map[string]*ProfileSet, error) {
+	resolved := make(map[string]*ProfileSet, len(profileSets))
+
+	var resolveOne func(name string, path []string) (*ProfileSet, error)
+	resolveOne = func(name string, path []string) (*ProfileSet, error) {
+		if ps, ok := resolved[name]; ok {
+			return ps, nil
+		}
+
+		if cycleStart := pathIndex(path, name); cycleStart >= 0 {
+			cycle := append(append([]string{}, path[cycleStart:]...), name)
+			return nil, fmt.Errorf("cycle in profile set extends chain: %s", strings.Join(cycle, " -> "))
+		}
+
+		ps, ok := profileSets[name]
+		if !ok {
+			return nil, fmt.Errorf("profile set %q does not exist", name)
+		}
+
+		path = append(path, name)
+		effectiveAgents := map[string]*Agent{}
+		if ps.Extends != "" {
+			parent, ok := profileSets[ps.Extends]
+			if !ok || parent == nil {
+				return nil, fmt.Errorf("profile set %q: extends %q which does not exist", name, ps.Extends)
+			}
+			parentResolved, err := resolveOne(ps.Extends, path)
+			if err != nil {
+				return nil, err
+			}
+			for agentName, agent := range parentResolved.Agents {
+				effectiveAgents[agentName] = agent
+			}
+		}
+		for agentName, agent := range ps.Agents {
+			effectiveAgents[agentName] = agent
+		}
+
+		resolvedPS := &ProfileSet{
+			Extends: ps.Extends,
+			Agents:  effectiveAgents,
+		}
+		resolved[name] = resolvedPS
+		return resolvedPS, nil
+	}
+
+	for name := range profileSets {
+		if _, err := resolveOne(name, nil); err != nil {
+			return nil, err
+		}
+	}
+
+	return resolved, nil
+}
+
+func pathIndex(path []string, target string) int {
+	for i, name := range path {
+		if name == target {
+			return i
+		}
+	}
+	return -1
 }
 
 // Resolve walks the extends chain for the named agent in the active profile set
