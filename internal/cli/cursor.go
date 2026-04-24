@@ -53,6 +53,7 @@ func (a *CursorAdapter) InteractiveModeError() error {
 
 func discoverCursorSessionID(output string) string {
 	scanner := bufio.NewScanner(strings.NewReader(output))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		var event struct {
 			SessionID string `json:"session_id"`
@@ -63,6 +64,9 @@ func discoverCursorSessionID(output string) string {
 		if event.SessionID != "" {
 			return event.SessionID
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		return ""
 	}
 	return ""
 }

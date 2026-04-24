@@ -891,6 +891,17 @@ func TestCursorAdapter(t *testing.T) {
 		}
 	})
 
+	t.Run("discover session ID from long JSON line", func(t *testing.T) {
+		output := `{"type":"assistant","payload":"` + strings.Repeat("x", 70*1024) + `","session_id":"chat-long","message":{}}`
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			ProcessOutput: output,
+			Headless:      true,
+		})
+		if id != "chat-long" {
+			t.Fatalf("expected %q, got %q", "chat-long", id)
+		}
+	})
+
 	t.Run("discover session ID returns empty when no event has session_id", func(t *testing.T) {
 		output := `{"type":"assistant","message":{}}`
 		id := adapter.DiscoverSessionID(&DiscoverOptions{
