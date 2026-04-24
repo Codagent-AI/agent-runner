@@ -180,7 +180,10 @@ func ExecuteAgentStep(
 	}
 
 	if step.Capture != "" {
-		ctx.CapturedVariables[step.Capture] = strings.TrimRight(result.Stdout, "\r\n")
+		captured := result.Stdout
+		captured = strings.TrimSuffix(captured, "\r\n")
+		captured = strings.TrimSuffix(captured, "\n")
+		ctx.CapturedVariables[step.Capture] = captured
 	}
 
 	// For session-originating steps (new or named), advance LastSessionStepID

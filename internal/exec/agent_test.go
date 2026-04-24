@@ -563,6 +563,16 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("preserves multiple trailing newlines except final one", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "value\n\n"}}}
+		ctx := makeCtx()
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "get output", Session: model.SessionNew, Capture: "result"}
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if ctx.CapturedVariables["result"] != "value\n" {
+			t.Fatalf("expected one trailing newline preserved, got %q", ctx.CapturedVariables["result"])
+		}
+	})
+
 	t.Run("preserves leading whitespace in captured agent output", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "  indented output\n"}}}
 		ctx := makeCtx()

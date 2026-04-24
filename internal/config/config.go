@@ -217,7 +217,7 @@ func defaultConfig() *Config {
 			"headless_base": {
 				DefaultMode: "headless",
 				CLI:         "claude",
-				Model:       "opus",
+				Model:       "sonnet",
 				Effort:      "high",
 			},
 			"planner": {

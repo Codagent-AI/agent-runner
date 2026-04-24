@@ -40,7 +40,7 @@ func TestLoadOrGenerate_CreatesDefault(t *testing.T) {
 	if hb == nil {
 		t.Fatal("expected headless_base profile")
 	}
-	if hb.DefaultMode != "headless" || hb.CLI != "claude" || hb.Model != "opus" || hb.Effort != "high" {
+	if hb.DefaultMode != "headless" || hb.CLI != "claude" || hb.Model != "sonnet" || hb.Effort != "high" {
 		t.Fatalf("unexpected headless_base: %+v", hb)
 	}
 
@@ -545,7 +545,7 @@ func TestResolve_DefaultConfigProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if rp.DefaultMode != "headless" || rp.CLI != "claude" || rp.Model != "opus" || rp.Effort != "high" {
+	if rp.DefaultMode != "headless" || rp.CLI != "claude" || rp.Model != "sonnet" || rp.Effort != "high" {
 		t.Fatalf("unexpected implementor resolution: %+v", rp)
 	}
 

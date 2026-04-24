@@ -22,6 +22,10 @@ func TestCanonicalName(t *testing.T) {
 		{"deep subdir falls back to repo-rel", "/repo/workflows/a/b/c.yaml", "workflows/a/b/c.yaml"},
 		{"outside workflows falls back to repo-rel", "/repo/external/other.yaml", "external/other.yaml"},
 		{"outside repo returns abs path", "/elsewhere/thing.yaml", "../elsewhere/thing.yaml"},
+		{"builtin namespaced yaml", "builtin:spec-driven/change.yaml", "spec-driven:change"},
+		{"builtin namespaced yml", "builtin:core/implement-task.yml", "core:implement-task"},
+		{"builtin top-level", "builtin:simple.yaml", "simple"},
+		{"builtin deep path", "builtin:a/b/c.yaml", "a/b/c"},
 	}
 
 	for _, c := range cases {
