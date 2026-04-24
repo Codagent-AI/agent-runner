@@ -348,11 +348,12 @@ func runAgentProcess(runner ProcessRunner, args []string, headless bool, workdir
 			return OutcomeFailed, result, nil
 		}
 		// Detect AskUserQuestion failures in headless mode — these indicate
-		// the agent could not complete the task autonomously. Check per-line so
-		// that natural-language summaries mentioning AskUserQuestion on one line
-		// and an unrelated Error class on another don't trigger a false positive.
-		for _, line := range strings.Split(strings.ToLower(result.Stdout+"\n"+result.Stderr), "\n") {
-			if strings.Contains(line, "askuserquestion") && strings.Contains(line, "error") {
+		// the agent could not complete the task autonomously. Only scan
+		// stderr: CLI tool-blocked errors go there, while stdout contains
+		// agent natural language that may mention AskUserQuestion without
+		// indicating an actual failure.
+		for _, line := range strings.Split(strings.ToLower(result.Stderr), "\n") {
+			if strings.Contains(line, "askuserquestion") && isToolDisallowedLine(line) {
 				log.Errorf("  headless session attempted interactive prompt (AskUserQuestion); treating as failure\n")
 				return OutcomeFailed, result, nil
 			}
@@ -381,6 +382,17 @@ func runAgentProcess(runner ProcessRunner, args []string, headless bool, workdir
 	// CLI exited without a continue trigger.
 	log.Printf("\n  CLI session exited. To resume this workflow, run:\n    agent-runner --resume\n\n")
 	return OutcomeAborted, result, nil
+}
+
+// isToolDisallowedLine returns true if a lowercased output line matches a
+// pattern indicating the CLI blocked AskUserQuestion (e.g. "not allowed",
+// "not available", "disallowed", "not permitted").
+func isToolDisallowedLine(line string) bool {
+	return strings.Contains(line, "not allowed") ||
+		strings.Contains(line, "not available") ||
+		strings.Contains(line, "not supported") ||
+		strings.Contains(line, "disallowed") ||
+		strings.Contains(line, "not permitted")
 }
 
 // recordSessionOnSpawn writes session bookkeeping to ctx and flushes state

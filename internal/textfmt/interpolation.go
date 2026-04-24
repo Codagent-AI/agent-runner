@@ -3,6 +3,7 @@ package textfmt
 import (
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 var placeholderRe = regexp.MustCompile(`\{\{(\w+)\}\}`)
@@ -38,4 +39,28 @@ func Interpolate(template string, params, capturedVars, builtins map[string]stri
 		return "", errFound
 	}
 	return result, nil
+}
+
+// ShellQuote wraps s in single quotes with proper escaping so it is safe
+// for interpolation into a shell command string.
+func ShellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+// InterpolateShellSafe performs the same substitution as Interpolate but
+// shell-quotes every substituted value, preventing injection when the
+// result is passed to sh -c.
+func InterpolateShellSafe(template string, params, capturedVars, builtins map[string]string) (string, error) {
+	return Interpolate(template, shellQuoteMap(params), shellQuoteMap(capturedVars), shellQuoteMap(builtins))
+}
+
+func shellQuoteMap(m map[string]string) map[string]string {
+	if m == nil {
+		return nil
+	}
+	quoted := make(map[string]string, len(m))
+	for k, v := range m {
+		quoted[k] = ShellQuote(v)
+	}
+	return quoted
 }

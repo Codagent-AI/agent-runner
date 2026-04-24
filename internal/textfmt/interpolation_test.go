@@ -109,3 +109,59 @@ func TestInterpolate(t *testing.T) {
 		}
 	})
 }
+
+func TestShellQuote(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"hello", "'hello'"},
+		{"hello world", "'hello world'"},
+		{"it's", "'it'\\''s'"},
+		{"foo; rm -rf /", "'foo; rm -rf /'"},
+		{"$(whoami)", "'$(whoami)'"},
+		{"`id`", "'`id`'"},
+		{"a\"b", "'a\"b'"},
+		{"", "''"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := ShellQuote(tt.input)
+			if got != tt.want {
+				t.Errorf("ShellQuote(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInterpolateShellSafe(t *testing.T) {
+	t.Run("quotes param values for shell safety", func(t *testing.T) {
+		result, err := InterpolateShellSafe("test -f {{filename}}",
+			map[string]string{"filename": "foo; rm -rf /"},
+			nil, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(result, "'foo; rm -rf /'") {
+			t.Fatalf("expected shell-quoted value, got %q", result)
+		}
+	})
+
+	t.Run("quotes builtin values for shell safety", func(t *testing.T) {
+		result, err := InterpolateShellSafe("ls {{session_dir}}/output",
+			nil, nil, map[string]string{"session_dir": "/tmp/runs/abc"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != "ls '/tmp/runs/abc'/output" {
+			t.Fatalf("expected shell-quoted builtin, got %q", result)
+		}
+	})
+
+	t.Run("returns error for undefined variable", func(t *testing.T) {
+		_, err := InterpolateShellSafe("{{missing}}", nil, nil, nil)
+		if err == nil {
+			t.Fatal("expected error for undefined variable")
+		}
+	})
+}

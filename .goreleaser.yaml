@@ -1,0 +1,30 @@
+version: 2
+
+builds:
+  - main: ./cmd/agent-runner
+    binary: agent-runner
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+brews:
+  - repository:
+      owner: Codagent-AI
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/Codagent-AI/agent-runner
+    description: CLI workflow orchestrator for AI agents
+    license: MIT
+    install: |
+      bin.install "agent-runner"
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/agent-runner --version")

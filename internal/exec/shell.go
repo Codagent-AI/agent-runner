@@ -46,7 +46,7 @@ func ShouldSkipStep(skipIf string, lastOutcome *string, ctx *model.ExecutionCont
 		return false, nil
 	}
 	if cmd, ok := flowctl.ShellSkipCommand(skipIf); ok {
-		expanded, err := textfmt.Interpolate(cmd, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
+		expanded, err := textfmt.InterpolateShellSafe(cmd, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
 		if err != nil {
 			return false, fmt.Errorf("skip_if interpolation: %w", err)
 		}
