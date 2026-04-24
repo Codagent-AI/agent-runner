@@ -94,7 +94,7 @@ On the "new" tab, the following keybindings SHALL apply:
 - **THEN** the help bar shows `enter view` and `r start run`
 
 ### Requirement: New tab search filter
-The "new" tab SHALL include a search box above the workflow list. Focus SHALL default to the first list item (not the search box). Pressing `↑` from the first list item SHALL move focus to the search box. Pressing `↓` or `Enter` from the search box SHALL move focus back to the list. When the search box has focus, printable keystrokes go to filter text; when the list has focus, action keybindings (`r`, `Enter`, etc.) work normally.
+The "new" tab SHALL include a search box above the workflow list. Focus SHALL default to the search box. Pressing `↓` or `Enter` from the search box SHALL move focus to the first list item. Pressing `↑` from the first list item SHALL move focus back to the search box. When the search box has focus, printable keystrokes go to filter text; when the list has focus, action keybindings (`r`, `Enter`, etc.) work normally.
 
 The filter SHALL match against the workflow's canonical name or source path (substring match, case-insensitive). The first occurrence of the search substring in the displayed name SHALL be highlighted in the accent color. A count label showing the number of matching workflows SHALL be displayed right-aligned next to the search box.
 
@@ -128,9 +128,9 @@ Groups with no matching workflows SHALL be collapsed entirely (blank-line separa
 - **WHEN** the user clears all text in the search box
 - **THEN** all workflows are shown with original grouping restored
 
-#### Scenario: Escape from search box clears filter and returns focus to list
+#### Scenario: Escape from search box clears filter and keeps focus
 - **WHEN** the search box has focus and the user presses Escape
-- **THEN** the filter text is cleared, all workflows are shown, and focus returns to the first list item
+- **THEN** the filter text is cleared, all workflows are shown, and focus remains in the search box
 
 #### Scenario: Search with zero results
 - **WHEN** the filter text matches no workflows in any scope

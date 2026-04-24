@@ -157,6 +157,7 @@ func New(opts ...func(*Model)) (*Model, error) {
 	}
 	m.newTab.workflows = workflows
 	m.newTab.filtered = buildFilteredRows(workflows, "")
+	m.newTab.searchFocused = true
 
 	for _, opt := range opts {
 		opt(m)
@@ -637,6 +638,7 @@ func (m *Model) handleEsc() {
 			m.newTab.searchText = ""
 			m.newTab.filtered = buildFilteredRows(m.newTab.workflows, "")
 			m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
+			m.newTab.searchFocused = true
 		}
 	case tabWorktrees:
 		if m.worktreeTab.subView == subViewRunList {

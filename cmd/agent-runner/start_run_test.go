@@ -56,7 +56,6 @@ func TestExecStartRun_ExecsSelfWithCanonicalNameAndOrderedParams(t *testing.T) {
 
 	wantArgs := []string{
 		filepath.Base("/tmp/agent-runner"),
-		"run",
 		"core:finalize-pr",
 		"task_file=tasks/param-form-run-launch.md",
 		"branch=main",

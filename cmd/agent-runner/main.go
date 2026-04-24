@@ -607,7 +607,7 @@ func execStartRun(entry *discovery.WorkflowEntry, values map[string]string) int 
 		return 1
 	}
 
-	args := []string{"run", entry.CanonicalName}
+	args := []string{entry.CanonicalName}
 	seen := make(map[string]bool, len(entry.Params))
 	for _, param := range entry.Params {
 		value, ok := values[param.Name]

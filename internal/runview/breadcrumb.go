@@ -74,8 +74,12 @@ func (m *Model) styledRunStatus() string {
 	case StatusSuccess:
 		return tuistyle.StatusSuccess.Render("completed")
 	default:
+		hint := " (r to resume)"
+		if m.entered == FromDefinition {
+			hint = " (r to start run)"
+		}
 		return tuistyle.StatusInactive.Render("inactive") +
-			tuistyle.DimStyle.Render(" (r to resume)")
+			tuistyle.DimStyle.Render(hint)
 	}
 }
 

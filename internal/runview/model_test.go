@@ -337,6 +337,20 @@ func TestModel_Breadcrumb_ShowsAffordance_WhenInactive(t *testing.T) {
 	}
 }
 
+func TestModel_Breadcrumb_ShowsStartRun_WhenFromDefinition(t *testing.T) {
+	tree := simpleTree()
+	tree.Root.Status = StatusInProgress
+	m := newTestModel(tree, FromDefinition)
+
+	bc := m.renderBreadcrumb()
+	if !containsString(bc, "r to start run") {
+		t.Errorf("breadcrumb should show '(r to start run)' for definition view: %q", bc)
+	}
+	if containsString(bc, "r to resume") {
+		t.Errorf("breadcrumb should not show '(r to resume)' for definition view: %q", bc)
+	}
+}
+
 func TestModel_Breadcrumb_HidesAffordance_WhenCompleted(t *testing.T) {
 	tree := simpleTree()
 	tree.Root.Status = StatusSuccess

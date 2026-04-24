@@ -115,23 +115,42 @@ func (m *Model) View() string {
 		}
 	}
 	inputWidth := m.inputWidth(labelWidth)
+	inputOffset := labelWidth + 6 // cursor(2) + label + " "(1) + marker(1) + " "(1)
 
 	for i, param := range m.entry.Params {
-		label := lipgloss.NewStyle().Width(labelWidth).Align(lipgloss.Right).Render(param.Name)
+		isFocused := i == m.focused
+
+		var cursor string
+		if isFocused {
+			cursor = tuistyle.CursorStyle.Render("▶") + " "
+		} else {
+			cursor = "  "
+		}
+
+		labelStyle := lipgloss.NewStyle().Width(labelWidth).Align(lipgloss.Right)
+		if isFocused {
+			labelStyle = labelStyle.Foreground(tuistyle.AccentCyan).Bold(true)
+		} else {
+			labelStyle = labelStyle.Foreground(tuistyle.BodyText)
+		}
+		label := labelStyle.Render(param.Name)
+
 		marker := " "
 		if param.IsRequired() {
 			marker = tuistyle.StatusFailed.Render("*")
 		}
+
 		b.WriteString(tuistyle.ScreenMargin)
+		b.WriteString(cursor)
 		b.WriteString(label)
 		b.WriteString(" ")
 		b.WriteString(marker)
 		b.WriteString(" ")
-		b.WriteString(m.renderInput(i, inputWidth))
+		b.WriteString(m.renderInput(i, inputWidth, inputOffset))
 		b.WriteString("\n")
 		if m.errors[i] != "" {
 			b.WriteString(tuistyle.ScreenMargin)
-			b.WriteString(strings.Repeat(" ", labelWidth+4))
+			b.WriteString(strings.Repeat(" ", labelWidth+6))
 			b.WriteString(tuistyle.StatusFailed.Render(m.errors[i]))
 			b.WriteString("\n")
 		}
@@ -232,26 +251,27 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	return m, func() tea.Msg { return SubmittedMsg(values) }
 }
 
-func (m *Model) renderInput(index, width int) string {
+func (m *Model) renderInput(index, width, offset int) string {
 	input := m.inputs[index]
 	input.Width = width
 
-	borderStyle := tuistyle.DimStyle
-	if index == m.focused {
-		borderStyle = tuistyle.AccentStyle
-	}
-
 	content := input.View()
 	padding := max(0, width-lipgloss.Width(content))
-	return borderStyle.Render("│") + content + strings.Repeat(" ", padding) + borderStyle.Render("│")
+
+	underStyle := tuistyle.DimStyle
+	if index == m.focused {
+		underStyle = tuistyle.AccentStyle
+	}
+	return content + strings.Repeat(" ", padding) + "\n" +
+		tuistyle.ScreenMargin + strings.Repeat(" ", offset) +
+		underStyle.Render(strings.Repeat("─", width))
 }
 
 func (m *Model) renderStartButton() string {
-	style := tuistyle.AccentStyle
 	if m.focused == -1 {
-		style = style.Bold(true)
+		return tuistyle.CursorStyle.Render("▶") + " " + tuistyle.AccentStyle.Bold(true).Render("‹ Start ›")
 	}
-	return style.Render("‹ Start ›")
+	return "  " + tuistyle.DimStyle.Render("‹ Start ›")
 }
 
 func (m *Model) inputWidth(labelWidth int) int {
@@ -260,7 +280,7 @@ func (m *Model) inputWidth(labelWidth int) int {
 		width = 80
 	}
 
-	available := width - labelWidth - 10
+	available := width - labelWidth - 8
 	if available < 20 {
 		return 20
 	}

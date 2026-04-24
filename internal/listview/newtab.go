@@ -26,7 +26,6 @@ func (m *Model) handleSearchKey(msg tea.KeyMsg) (*Model, tea.Cmd) {
 		m.prevTab()
 	case "esc":
 		m.newTab.searchText = ""
-		m.newTab.searchFocused = false
 		m.newTab.filtered = buildFilteredRows(m.newTab.workflows, "")
 		m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
 	case "backspace":
