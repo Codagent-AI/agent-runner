@@ -24,6 +24,9 @@ type renderedStepRow struct {
 }
 
 func (m *Model) View() string {
+	if !m.altScreen {
+		return ""
+	}
 	if m.showLegend {
 		return m.renderLegend()
 	}
@@ -361,7 +364,7 @@ func (m *Model) renderHelpBar() string {
 		case NodeLoop, NodeSubWorkflow, NodeIteration:
 			parts = append(parts, "enter drill")
 		case NodeHeadlessAgent, NodeInteractiveAgent:
-			if sel.SessionID != "" && !m.running {
+			if sel.SessionID != "" && (!m.running || sel.Status == StatusSuccess || sel.Status == StatusFailed) {
 				parts = append(parts, "enter resume")
 			}
 		}
@@ -371,7 +374,9 @@ func (m *Model) renderHelpBar() string {
 		parts = append(parts, "esc back")
 	}
 
-	if m.canResumeRun() {
+	if m.entered == FromDefinition {
+		parts = append(parts, "r start run")
+	} else if m.canResumeRun() {
 		parts = append(parts, "r resume")
 	}
 

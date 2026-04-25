@@ -28,6 +28,11 @@ func LoadWorkflow(filePath string, opts Options) (model.Workflow, error) {
 		return model.Workflow{}, fmt.Errorf("cannot read workflow file: %w", err)
 	}
 
+	return ParseWorkflow(data, opts)
+}
+
+// ParseWorkflow parses workflow YAML bytes and returns a validated Workflow.
+func ParseWorkflow(data []byte, opts Options) (model.Workflow, error) {
 	var w model.Workflow
 	if err := yaml.Unmarshal(data, &w); err != nil {
 		return model.Workflow{}, fmt.Errorf("invalid YAML: %w", err)

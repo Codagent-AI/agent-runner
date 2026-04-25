@@ -116,7 +116,7 @@ func (m *Model) renderTabs() string {
 		return dimTabStyle.Render("○ " + label)
 	}
 
-	parts = append(parts, renderTab("Current Dir", tabCurrentDir))
+	parts = append(parts, renderTab("New", tabNew), renderTab("Current Dir", tabCurrentDir))
 	if m.worktreeTab.worktrees != nil {
 		parts = append(parts, renderTab("Worktrees", tabWorktrees))
 	}
@@ -127,6 +127,8 @@ func (m *Model) renderTabs() string {
 
 func (m *Model) renderSubheader() string {
 	switch m.activeTab {
+	case tabNew:
+		return tuistyle.ScreenMargin + pathStyle.Render("Browse and search workflow definitions")
 	case tabCurrentDir:
 		return tuistyle.ScreenMargin + pathStyle.Render(sanitize(shortenPath(m.cwd)))
 	case tabWorktrees:
@@ -157,6 +159,8 @@ func (m *Model) renderSubheader() string {
 
 func (m *Model) renderBody() string {
 	switch m.activeTab {
+	case tabNew:
+		return m.renderNewTab()
 	case tabCurrentDir:
 		if len(m.currentRuns) == 0 {
 			return m.renderEmpty()
@@ -249,19 +253,19 @@ func measureRunListCols(runList []runs.RunInfo) runListCols {
 }
 
 // fitTo adjusts c.nameMax, c.wfMax, c.stepMax to fit in avail columns,
-// truncating workflow first, then change name, then step.
+// truncating change name first, then workflow, then step.
 func (c *runListCols) fitTo(avail int) {
 	if c.nameMax+c.wfMax+c.stepMax <= avail {
 		return
 	}
-	newWf := max(avail-c.nameMax-c.stepMax, 8)
-	if newWf < c.wfMax {
-		c.wfMax = newWf
+	newName := max(avail-c.wfMax-c.stepMax, 8)
+	if newName < c.nameMax {
+		c.nameMax = newName
 	}
 	if c.nameMax+c.wfMax+c.stepMax > avail {
-		newName := max(avail-c.wfMax-c.stepMax, 8)
-		if newName < c.nameMax {
-			c.nameMax = newName
+		newWf := max(avail-c.nameMax-c.stepMax, 8)
+		if newWf < c.wfMax {
+			c.wfMax = newWf
 		}
 	}
 	if c.nameMax+c.wfMax+c.stepMax > avail {
@@ -295,8 +299,8 @@ func (m *Model) renderRunList(runList []runs.RunInfo, cursor int, offset *int) s
 func renderRunListHeader(c runListCols) string {
 	// Matches data-row prefix of "   " + status(1) + "  " = 6 cells.
 	h := "      " +
-		columnHeader.Render(fitCell(hdrChange, c.nameMax)) + "  " +
 		columnHeader.Render(fitCell(hdrWorkflow, c.wfMax)) + "  " +
+		columnHeader.Render(fitCell(hdrChange, c.nameMax)) + "  " +
 		columnHeader.Render(fitCell(hdrStep, c.stepMax))
 	return h + "  " + columnHeader.Render(hdrUpdated) + "\n"
 }
@@ -317,9 +321,11 @@ func (m *Model) renderRunListRow(r *runs.RunInfo, isSel bool, c runListCols) str
 		style = selectedStyle
 	}
 
+	wfStyle := style.Bold(true)
+
 	line := m.renderStatusIcon(r.Status) + "  " +
+		wfStyle.Render(fitCell(sanitize(workflowDisplay(r)), c.wfMax)) + "  " +
 		style.Render(fitCell(sanitize(r.ChangeName), c.nameMax)) + "  " +
-		style.Render(fitCell(sanitize(workflowDisplay(r)), c.wfMax)) + "  " +
 		style.Render(fitCell(sanitize(step), c.stepMax))
 	line += "  " + dimStyle.Render(formatTime(r.LastUpdate))
 	return prefix + line + "\n"
@@ -462,35 +468,37 @@ func (m *Model) renderHelp() string {
 	var parts []string
 
 	switch m.activeTab {
+	case tabNew:
+		parts = append(parts, "↑↓ navigate", "enter view", "r start run", "←→/n/c/w/a tab", "q quit")
 	case tabCurrentDir:
 		if len(m.currentRuns) > 0 {
 			parts = append(parts, "↑↓ navigate", "enter view")
 			if m.cursorInactiveRun() != nil {
 				parts = append(parts, "r resume")
 			}
-			parts = append(parts, "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "←→/n/c/w/a tab", "q quit")
 		} else {
-			parts = append(parts, "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "←→/n/c/w/a tab", "q quit")
 		}
 	case tabWorktrees:
 		if m.worktreeTab.subView == subViewPicker {
-			parts = append(parts, "↑↓ navigate", "enter view runs", "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "↑↓ navigate", "enter view runs", "←→/n/c/w/a tab", "q quit")
 		} else {
 			parts = append(parts, "↑↓ navigate", "enter view")
 			if m.cursorInactiveRun() != nil {
 				parts = append(parts, "r resume")
 			}
-			parts = append(parts, "esc back", "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "esc back", "←→/n/c/w/a tab", "q quit")
 		}
 	case tabAll:
 		if m.allTab.subView == subViewPicker {
-			parts = append(parts, "↑↓ navigate", "enter view runs", "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "↑↓ navigate", "enter view runs", "←→/n/c/w/a tab", "q quit")
 		} else {
 			parts = append(parts, "↑↓ navigate", "enter view")
 			if m.cursorInactiveRun() != nil {
 				parts = append(parts, "r resume")
 			}
-			parts = append(parts, "esc back", "tab/c/w/a switch tab", "q quit")
+			parts = append(parts, "esc back", "←→/n/c/w/a tab", "q quit")
 		}
 	}
 

@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/liverun"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
@@ -36,15 +37,20 @@ type ResumeRunMsg struct {
 	RunID string
 }
 
+// ResumeListMsg asks the shell to exit the current TUI flow and exec
+// `agent-runner --resume`, which opens the list TUI on the current-dir tab.
+type ResumeListMsg struct{}
+
 type ExitMsg struct{}
 
 // Entered describes how the user reached the run view.
 type Entered int
 
 const (
-	FromList    Entered = iota
-	FromInspect         // read-only post-run inspection
-	FromLiveRun         // live workflow execution (runner goroutine is active)
+	FromList       Entered = iota
+	FromInspect            // read-only post-run inspection
+	FromLiveRun            // live workflow execution (runner goroutine is active)
+	FromDefinition         // viewing a workflow definition with no run instance
 )
 
 // Model is the bubbletea model for the single-run detail view.
@@ -75,8 +81,9 @@ type Model struct {
 	loadErr    string
 	notice     string // transient message shown below the step list (e.g. spawn error)
 
-	resolverCfg ResolverConfig
-	startTime   time.Time
+	resolverCfg   ResolverConfig
+	startTime     time.Time
+	workflowEntry discovery.WorkflowEntry // set when entered == FromDefinition
 
 	// Live-run fields (FromLiveRun mode only).
 	running          bool   // true until ExecDoneMsg arrives
@@ -92,6 +99,13 @@ type Model struct {
 	// p.Run() returns and execs the agent CLI.
 	resumeAgentCLI  string
 	resumeSessionID string
+	resumeToList    bool
+
+	// Alt-screen management. When the program starts without tea.WithAltScreen
+	// (FromLiveRun mode), alt-screen entry is deferred so a fast non-interactive
+	// step followed by an interactive step does not flash the TUI.
+	altScreen         bool // true once alt-screen has been entered
+	suppressAltScreen bool // set when SuspendedMsg arrives before the deferred timer
 }
 
 // ResumeAgentCLI returns the agent CLI name captured from a ResumeMsg in
@@ -101,6 +115,10 @@ func (m *Model) ResumeAgentCLI() string { return m.resumeAgentCLI }
 // ResumeSessionID returns the agent CLI session ID captured from a ResumeMsg
 // in live-run mode. Empty when no resume was requested.
 func (m *Model) ResumeSessionID() string { return m.resumeSessionID }
+
+// ResumeToList reports whether the user requested to leave the run view and
+// exec back into the list TUI.
+func (m *Model) ResumeToList() bool { return m.resumeToList }
 
 // SessionDir returns the session directory the Model was constructed for.
 func (m *Model) SessionDir() string { return m.sessionDir }
@@ -112,7 +130,14 @@ func (m *Model) ProjectDir() string { return m.projectDir }
 func (m *Model) Entered() Entered { return m.entered }
 
 // New constructs a runview Model from a session directory.
+// For FromDefinition mode, sessionDir carries the workflow file path rather than
+// a real session directory; audit log loading and run-lock checks are skipped.
 func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
+	// FromDefinition: load workflow directly from the file path in sessionDir.
+	if entered == FromDefinition {
+		return NewForDefinition(&discovery.WorkflowEntry{SourcePath: sessionDir}, projectDir)
+	}
+
 	state, _ := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
 	resolved, _ := ResolveWorkflow(sessionDir, projectDir, &state)
 
@@ -157,6 +182,7 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 		loadErr:    loadErr,
 		running:    entered == FromLiveRun,
 		autoFollow: entered == FromLiveRun,
+		altScreen:  entered != FromLiveRun,
 	}
 
 	if entered != FromLiveRun {
@@ -187,6 +213,68 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	return m, nil
 }
 
+// NewForDefinition constructs a runview Model for inspecting a workflow definition
+// without an associated run instance. The workflow file is loaded directly.
+func NewForDefinition(entry *discovery.WorkflowEntry, projectDir string) (*Model, error) {
+	sourcePath := entry.SourcePath
+	var (
+		tree    *Tree
+		loadErr string
+	)
+
+	wf, err := loader.LoadWorkflow(sourcePath, loader.Options{})
+	if err != nil {
+		loadErr = "load workflow: " + err.Error()
+	} else {
+		tree = BuildTree(&wf, sourcePath)
+	}
+
+	rootName := entry.CanonicalName
+	if rootName == "" {
+		rootName = deriveCanonicalFromPath(sourcePath)
+	}
+
+	if tree == nil {
+		tree = &Tree{
+			Root: &StepNode{
+				ID:     rootName,
+				Type:   NodeRoot,
+				Status: StatusPending,
+			},
+		}
+	} else if rootName != "" {
+		tree.Root.ID = rootName
+	}
+
+	m := &Model{
+		tree:          tree,
+		sessionDir:    sourcePath,
+		projectDir:    projectDir,
+		entered:       FromDefinition,
+		path:          []*StepNode{tree.Root},
+		loadedFull:    make(map[string]bool),
+		loadErr:       loadErr,
+		altScreen:     true,
+		workflowEntry: *entry,
+	}
+	return m, nil
+}
+
+// deriveCanonicalFromPath produces a display name from a workflow source path
+// when no canonical name is available (e.g. builtin:core/finalize-pr.yaml → core:finalize-pr).
+func deriveCanonicalFromPath(sourcePath string) string {
+	if rel, ok := strings.CutPrefix(sourcePath, "builtin:"); ok {
+		rel = strings.TrimSuffix(rel, filepath.Ext(rel))
+		parts := strings.SplitN(filepath.ToSlash(rel), "/", 2)
+		if len(parts) == 2 {
+			return parts[0] + ":" + parts[1]
+		}
+		return rel
+	}
+	base := filepath.Base(sourcePath)
+	return strings.TrimSuffix(base, filepath.Ext(base))
+}
+
 // NewForReentry creates a Model for re-entering the run view after a resumed
 // agent CLI subprocess has exited. It re-reads audit and state files from
 // sessionDir so any events produced by the resumed session appear. The
@@ -200,6 +288,7 @@ func NewForReentry(sessionDir, projectDir string, entered Entered, spawnErr erro
 	}
 	m.running = false
 	m.autoFollow = false
+	m.altScreen = true
 	if spawnErr != nil {
 		m.notice = spawnErr.Error()
 	}
@@ -226,8 +315,22 @@ func describeWorkflowHint(state *model.RunState, sessionDir string) string {
 	return strings.Join(parts, ", ")
 }
 
+// altScreenDelay is how long the live-run TUI waits before entering alt-screen.
+// If an interactive step starts within this window, alt-screen is suppressed
+// entirely — avoiding the flash that would otherwise occur when the TUI
+// briefly appears and then immediately releases the terminal.
+const altScreenDelay = 1000 * time.Millisecond
+
+type deferredAltScreenMsg struct{}
+
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(tuistyle.DoRefresh(), tuistyle.DoPulse())
+	cmds := []tea.Cmd{tuistyle.DoRefresh(), tuistyle.DoPulse()}
+	if m.entered == FromLiveRun && !m.altScreen {
+		cmds = append(cmds, tea.Tick(altScreenDelay, func(time.Time) tea.Msg {
+			return deferredAltScreenMsg{}
+		}))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -245,9 +348,31 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleStepStateMsg(msg)
 		return m, nil
 
-	case liverun.SuspendedMsg, liverun.ResumedMsg:
-		// Terminal handoff bookkeeping; no visual change needed.
+	case deferredAltScreenMsg:
+		if !m.altScreen && !m.suppressAltScreen {
+			m.altScreen = true
+			return m, tea.Batch(tea.EnterAltScreen, tea.EnableMouseCellMotion)
+		}
 		return m, nil
+
+	case liverun.ShowTUIMsg:
+		if !m.altScreen {
+			m.altScreen = true
+			m.suppressAltScreen = false
+			return m, tea.Batch(tea.EnterAltScreen, tea.EnableMouseCellMotion)
+		}
+		return m, nil
+
+	case liverun.SuspendedMsg:
+		if !m.altScreen {
+			m.suppressAltScreen = true
+		}
+		return m, nil
+
+	case liverun.ResumedMsg:
+		// BubbleTea's RestoreTerminal does not re-enable mouse mode after
+		// ReleaseTerminal disables it, so we re-enable it explicitly.
+		return m, tea.EnableMouseCellMotion
 
 	case ResumeMsg:
 		// Top-level live-run model: no switcher intercepts this, so stash the
@@ -255,6 +380,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// returns.
 		m.resumeAgentCLI = msg.AgentCLI
 		m.resumeSessionID = msg.SessionID
+		return m, tea.Quit
+
+	case ResumeListMsg:
+		m.resumeToList = true
 		return m, tea.Quit
 
 	case ExitMsg:
@@ -296,11 +425,7 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) {
 	if m.logAnchor.stepKey != "" {
 		for _, r := range m.stepRanges {
 			if r.node.NodeKey() == m.logAnchor.stepKey {
-				newOffset := r.startLine + m.logAnchor.lineOffsetInBlock
-				if newOffset < 0 {
-					newOffset = 0
-				}
-				m.logOffset = newOffset
+				m.logOffset = max(0, r.startLine+m.logAnchor.lineOffsetInBlock)
 				break
 			}
 		}
@@ -355,6 +480,17 @@ func (m *Model) handleExecDoneMsg(msg liverun.ExecDoneMsg) {
 	m.rebuildRanges()
 }
 
+func (m *Model) scrollLogUp() {
+	if m.logOffset > m.maxLogOffset() {
+		m.logOffset = m.maxLogOffset()
+	}
+	m.logOffset--
+	if m.logOffset < 0 {
+		m.logOffset = 0
+	}
+	m.syncSelectionToLog()
+}
+
 func (m *Model) handleMouse(msg tea.MouseMsg) {
 	switch msg.Button {
 	case tea.MouseButtonWheelUp:
@@ -396,8 +532,10 @@ func (m *Model) handlePulseMsg() tea.Cmd {
 // canResumeRun reports whether the `r` resume-run action is available.
 // True only when the run is inactive (interrupted, not active elsewhere, not
 // a just-finished live run, and not in a terminal completed/failed state).
+// Always false in FromDefinition mode (r emits StartRunMsg instead).
 func (m *Model) canResumeRun() bool {
-	return m.sessionDir != "" &&
+	return m.entered != FromDefinition &&
+		m.sessionDir != "" &&
 		!m.running && !m.active && m.liveResult == "" &&
 		m.rootStatus() != StatusFailed && m.rootStatus() != StatusSuccess
 }
@@ -440,25 +578,14 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.autoFollow = false
 		return m.handleEnter()
 	case "up":
-		m.autoFollow = false
-		m.moveCursor(-1)
-		m.rebuildRanges()
-		m.syncLogToSelection()
+		cmd := m.handleStepNavigation(-1)
+		return m, cmd
 	case "down":
-		m.autoFollow = false
-		m.moveCursor(1)
-		m.rebuildRanges()
-		m.syncLogToSelection()
+		cmd := m.handleStepNavigation(1)
+		return m, cmd
 	case "k":
 		m.autoFollow = false
-		if m.logOffset > m.maxLogOffset() {
-			m.logOffset = m.maxLogOffset()
-		}
-		m.logOffset--
-		if m.logOffset < 0 {
-			m.logOffset = 0
-		}
-		m.syncSelectionToLog()
+		m.scrollLogUp()
 	case "j":
 		m.autoFollow = false
 		m.logOffset++
@@ -467,6 +594,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.autoFollow = true
 		m.applyAutoFollowCursor()
 	case "r":
+		if m.entered == FromDefinition {
+			entry := m.workflowEntry
+			return m, func() tea.Msg { return discovery.StartRunMsg{Entry: entry} }
+		}
 		if m.canResumeRun() {
 			runID := filepath.Base(m.sessionDir)
 			return m, func() tea.Msg { return ResumeRunMsg{RunID: runID} }
@@ -476,6 +607,14 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.rebuildRanges()
 	}
 	return m, nil
+}
+
+func (m *Model) handleStepNavigation(delta int) tea.Cmd {
+	m.autoFollow = false
+	m.moveCursor(delta)
+	m.rebuildRanges()
+	m.syncLogToSelection()
+	return tea.ClearScreen
 }
 
 // applyAutoFollowCursor moves the cursor to the ancestor-at-current-level of
@@ -692,7 +831,10 @@ func (m *Model) handleEsc() (tea.Model, tea.Cmd) {
 		m.quitConfirming = true
 		return m, nil
 	}
-	if m.entered == FromList {
+	if m.shouldResumeListOnEsc() {
+		return m, func() tea.Msg { return ResumeListMsg{} }
+	}
+	if m.entered == FromList || m.entered == FromDefinition {
 		return m, emitBack
 	}
 	return m, emitExit
@@ -736,10 +878,10 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case NodeHeadlessAgent, NodeInteractiveAgent:
-		// Resume is only meaningful after the run has ended — while the
-		// workflow is live, the agent session is owned by the runner and
-		// cannot be attached to by the user.
-		if n.SessionID != "" && !m.running {
+		// Resume when the run has ended, or when this specific step has
+		// completed (the runner no longer owns the session even if the
+		// workflow is still executing subsequent steps).
+		if n.SessionID != "" && (!m.running || n.Status == StatusSuccess || n.Status == StatusFailed) {
 			return m, func() tea.Msg {
 				return ResumeMsg{AgentCLI: n.AgentCLI, SessionID: n.SessionID}
 			}
@@ -863,6 +1005,29 @@ func (m *Model) refreshData() {
 
 func emitBack() tea.Msg { return BackMsg{} }
 func emitExit() tea.Msg { return ExitMsg{} }
+
+func (m *Model) shouldResumeListOnEsc() bool {
+	if m.entered == FromInspect || m.entered == FromDefinition {
+		return false
+	}
+	if m.liveResult == "success" || m.liveResult == "failed" {
+		return true
+	}
+	if m.active {
+		return false
+	}
+	if status := m.rootStatus(); status == StatusSuccess || status == StatusFailed {
+		return true
+	}
+	if m.sessionDir == "" {
+		return false
+	}
+	state, err := stateio.ReadState(filepath.Join(m.sessionDir, "state.json"))
+	if err != nil {
+		return false
+	}
+	return state.Completed
+}
 
 var timestampRe = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}`)
 

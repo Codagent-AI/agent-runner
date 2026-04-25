@@ -21,6 +21,11 @@ type SuspendedMsg struct{}
 // ResumedMsg is sent when the TUI reclaims the terminal after an interactive step.
 type ResumedMsg struct{}
 
+// ShowTUIMsg asks the TUI to enter alt-screen for the first time. Sent when
+// transitioning from suspended (interactive) to active (non-interactive) and
+// alt-screen has not yet been requested.
+type ShowTUIMsg struct{}
+
 // ExecDoneMsg is sent when the runner goroutine finishes (success, failure, or panic).
 type ExecDoneMsg struct {
 	Result string // "success", "failed", or "stopped"

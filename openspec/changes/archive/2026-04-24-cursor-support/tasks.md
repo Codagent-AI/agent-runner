@@ -1,0 +1,4 @@
+- [ ] Implement the change described by these files:
+  - [proposal.md](proposal.md)
+  - [specs/cursor-cli-support/spec.md](specs/cursor-cli-support/spec.md)
+  - [design.md](design.md)

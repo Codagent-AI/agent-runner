@@ -2,6 +2,7 @@ package exec
 
 import (
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -53,11 +54,11 @@ func stepProfileName(step *model.Step, ctx *model.ExecutionContext) string {
 // For session:new steps, it resolves from step.Agent. For resume/inherit, it
 // looks up the profile name from the session-originating step.
 // Step-level overrides (Mode, Model, CLI) are applied on top of the profile.
-func resolveStepProfile(step *model.Step, ctx *model.ExecutionContext) (*config.ResolvedProfile, error) {
+func resolveStepProfile(step *model.Step, ctx *model.ExecutionContext) (*config.ResolvedAgent, error) {
 	cfg, _ := ctx.ProfileStore.(*config.Config)
 	if cfg == nil {
 		// No profile store — return a minimal profile using step-level values.
-		return &config.ResolvedProfile{
+		return &config.ResolvedAgent{
 			DefaultMode: string(step.Mode),
 			CLI:         step.CLI,
 			Model:       step.Model,
@@ -96,6 +97,13 @@ func resolveStepProfile(step *model.Step, ctx *model.ExecutionContext) (*config.
 // subprocess launch without importing the liverun package.
 type prefixSetter interface {
 	SetPrefix(string)
+}
+
+// stdoutWrapperSetter is implemented by liverun.tuiProcessRunner. When set,
+// the process runner wraps the TUI stdout writer so adapters that produce
+// structured output (e.g. JSONL) can filter it before display.
+type stdoutWrapperSetter interface {
+	SetStdoutWrapper(func(w io.Writer) io.Writer)
 }
 
 // ExecuteAgentStep runs an agent step using the resolved CLI adapter.
@@ -162,6 +170,15 @@ func ExecuteAgentStep(
 		ps.SetPrefix(prefix)
 	}
 
+	// If the adapter wraps stdout (e.g. cursor stream-json → plain text), tell
+	// the process runner so the TUI displays filtered output.
+	if sw, ok := adapter.(cli.StdoutWrapper); ok {
+		if ws, ok2 := runner.(stdoutWrapperSetter); ok2 {
+			ws.SetStdoutWrapper(sw.WrapStdout)
+			defer ws.SetStdoutWrapper(nil) // clear after step
+		}
+	}
+
 	// Persist session bookkeeping BEFORE spawning the CLI so that if the runner
 	// is killed mid-step (ctrl-c, terminal hangup, crash) resume can reconnect
 	// to the session rather than orphan it. When the session ID is knowable at
@@ -175,12 +192,21 @@ func ExecuteAgentStep(
 	spawnTime := time.Now()
 	outcome, result, runErr := runAgentProcess(runner, args, headless, step.Workdir, log, ctx.SuspendHook, ctx.ResumeHook)
 	if runErr != nil {
-		emitAgentEnd(ctx, prefix, startTime, "", OutcomeFailed)
+		emitAgentEnd(ctx, prefix, startTime, "", OutcomeFailed, "", result.Stderr)
 		return OutcomeFailed, runErr
 	}
 
+	// When the adapter produces structured output (e.g. JSONL), extract the
+	// plain-text response for capture variables and TUI display.
+	filteredStdout := result.Stdout
+	if f, ok := adapter.(cli.OutputFilter); ok {
+		filteredStdout = f.FilterOutput(result.Stdout)
+	}
+
 	if step.Capture != "" {
-		ctx.CapturedVariables[step.Capture] = result.Stdout
+		captured := strings.TrimSuffix(filteredStdout, "\r\n")
+		captured = strings.TrimSuffix(captured, "\n")
+		ctx.CapturedVariables[step.Capture] = captured
 	}
 
 	// For session-originating steps (new or named), advance LastSessionStepID
@@ -196,14 +222,25 @@ func ExecuteAgentStep(
 
 	discoveredID := discoverAndStoreSession(adapter, step, ctx, spawnTime, sessionID, headless, result.Stdout, log)
 
-	emitAgentEnd(ctx, prefix, startTime, discoveredID, outcome)
+	emitAgentEnd(ctx, prefix, startTime, discoveredID, outcome, filteredStdout, result.Stderr)
 
 	return outcome, nil
 }
 
-// resolveModeFromProfile returns the effective mode, preferring the step-level
-// override, then the profile's DefaultMode, falling back to interactive.
-func resolveModeFromProfile(step *model.Step, profile *config.ResolvedProfile) model.StepMode {
+// ResolveAgentStepMode returns the effective mode for an agent step, accounting
+// for the step-level override and the profile's DefaultMode.
+func ResolveAgentStepMode(step *model.Step, ctx *model.ExecutionContext) model.StepMode {
+	profile, err := resolveStepProfile(step, ctx)
+	if err != nil {
+		if step.Mode != "" {
+			return step.Mode
+		}
+		return model.ModeInteractive
+	}
+	return resolveModeFromProfile(step, profile)
+}
+
+func resolveModeFromProfile(step *model.Step, profile *config.ResolvedAgent) model.StepMode {
 	if step.Mode != "" {
 		return step.Mode
 	}
@@ -217,7 +254,7 @@ func resolveModeFromProfile(step *model.Step, profile *config.ResolvedProfile) m
 // whether the session is a resume (vs. fresh). For fresh Claude sessions, a
 // new UUID is generated so the runner knows the session ID deterministically.
 func resolveAdapterAndSession(
-	step *model.Step, ctx *model.ExecutionContext, profile *config.ResolvedProfile,
+	step *model.Step, ctx *model.ExecutionContext, profile *config.ResolvedAgent,
 ) (adapter cli.Adapter, cliName, sessionID string, isResume bool, err error) {
 	cliName = step.CLI
 	if cliName == "" && profile != nil && profile.CLI != "" {
@@ -270,7 +307,7 @@ func resolveAdapterAndSession(
 func buildAdapterInput(
 	step *model.Step,
 	ctx *model.ExecutionContext,
-	profile *config.ResolvedProfile,
+	profile *config.ResolvedAgent,
 	adapter cli.Adapter,
 	prompt, enrichment, sessionID string,
 	isResume, headless bool,
@@ -284,7 +321,9 @@ func buildAdapterInput(
 		fullPrompt = fullPrompt + "\n\n" + enrichment
 	}
 	if headless {
-		fullPrompt = headlessPreamble + fullPrompt
+		if !isResume {
+			fullPrompt = headlessPreamble + fullPrompt
+		}
 	} else {
 		fullPrompt = buildStepPrefix(step.ID, ctx, ctx.WorkflowResumed, isResume) + fullPrompt + completionInstruction
 	}
@@ -473,16 +512,23 @@ func emitAgentStart(
 	})
 }
 
-func emitAgentEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, discoveredID string, outcome StepOutcome) {
+func emitAgentEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, discoveredID string, outcome StepOutcome, stdout, stderr string) {
+	data := map[string]any{
+		"discovered_session_id": discoveredID,
+		"outcome":               string(outcome),
+		"duration_ms":           time.Since(startTime).Milliseconds(),
+	}
+	if stdout != "" {
+		data["stdout"] = stdout
+	}
+	if stderr != "" {
+		data["stderr"] = stderr
+	}
 	emitAudit(ctx, audit.Event{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Prefix:    prefix,
 		Type:      audit.EventStepEnd,
-		Data: map[string]any{
-			"discovered_session_id": discoveredID,
-			"outcome":               string(outcome),
-			"duration_ms":           time.Since(startTime).Milliseconds(),
-		},
+		Data:      data,
 	})
 }
 

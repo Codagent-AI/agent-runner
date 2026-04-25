@@ -20,6 +20,7 @@ brews:
   - repository:
       owner: Codagent-AI
       name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/Codagent-AI/agent-runner
     description: CLI workflow orchestrator for AI agents
     license: MIT

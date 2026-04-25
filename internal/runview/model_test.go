@@ -2,6 +2,7 @@ package runview
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"strings"
@@ -21,6 +22,7 @@ func newTestModel(tree *Tree, entered Entered) *Model {
 		loadedFull: make(map[string]bool),
 		termWidth:  120,
 		termHeight: 40,
+		altScreen:  entered != FromLiveRun,
 	}
 }
 
@@ -114,6 +116,26 @@ func TestModel_Navigation_UpDown(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyUp})
 	if m.cursor != 0 {
 		t.Fatalf("after up at 0: cursor = %d, want 0", m.cursor)
+	}
+}
+
+func TestModel_Navigation_UpDownClearsScreen(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if cmd == nil {
+		t.Fatal("expected down navigation to request a screen clear")
+	}
+	if msg := cmd(); msg == nil {
+		t.Fatal("expected clear-screen command to emit a message")
+	}
+
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if cmd == nil {
+		t.Fatal("expected up navigation to request a screen clear")
+	}
+	if msg := cmd(); msg == nil {
+		t.Fatal("expected clear-screen command to emit a message")
 	}
 }
 
@@ -332,6 +354,20 @@ func TestModel_Breadcrumb_ShowsAffordance_WhenInactive(t *testing.T) {
 	bc := m.renderBreadcrumb()
 	if !containsString(bc, "r to resume") {
 		t.Errorf("breadcrumb should show '(r to resume)' for inactive run: %q", bc)
+	}
+}
+
+func TestModel_Breadcrumb_ShowsStartRun_WhenFromDefinition(t *testing.T) {
+	tree := simpleTree()
+	tree.Root.Status = StatusInProgress
+	m := newTestModel(tree, FromDefinition)
+
+	bc := m.renderBreadcrumb()
+	if !containsString(bc, "r to start run") {
+		t.Errorf("breadcrumb should show '(r to start run)' for definition view: %q", bc)
+	}
+	if containsString(bc, "r to resume") {
+		t.Errorf("breadcrumb should not show '(r to resume)' for definition view: %q", bc)
 	}
 }
 
@@ -589,6 +625,315 @@ func TestModel_Enter_AgentStep_NoSessionID_NoOp(t *testing.T) {
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd != nil {
 		t.Fatal("enter on agent step without session ID should be no-op")
+	}
+}
+
+func TestModel_Enter_AgentStep_InSubWorkflow_EmitsResumeMsg(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	subwf := &StepNode{
+		ID:             "impl",
+		Type:           NodeSubWorkflow,
+		Status:         StatusSuccess,
+		Parent:         root,
+		StaticWorkflow: "impl.yaml",
+		SubLoaded:      true,
+	}
+	agent := &StepNode{
+		ID:        "generate-code",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusSuccess,
+		Parent:    subwf,
+		AgentCLI:  "claude",
+		SessionID: "nested-session-1",
+	}
+	subwf.Children = []*StepNode{agent}
+	root.Children = []*StepNode{subwf}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	// Drill into the sub-workflow
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	// Now inside the sub-workflow; cursor should be on agent step
+	sel := m.selectedNode()
+	if sel == nil || sel.ID != "generate-code" {
+		t.Fatalf("expected selected node 'generate-code', got %v", sel)
+	}
+
+	// Press Enter on the nested agent step
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on nested agent step should produce a ResumeMsg cmd")
+	}
+	resume, ok := cmd().(ResumeMsg)
+	if !ok {
+		t.Fatalf("expected ResumeMsg, got %T", cmd())
+	}
+	if resume.SessionID != "nested-session-1" {
+		t.Fatalf("session ID = %q, want %q", resume.SessionID, "nested-session-1")
+	}
+}
+
+func TestModel_Enter_AgentStep_InSubWorkflow_HelpBar(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	subwf := &StepNode{
+		ID:             "impl",
+		Type:           NodeSubWorkflow,
+		Status:         StatusSuccess,
+		Parent:         root,
+		StaticWorkflow: "impl.yaml",
+		SubLoaded:      true,
+	}
+	agent := &StepNode{
+		ID:        "generate-code",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusSuccess,
+		Parent:    subwf,
+		AgentCLI:  "claude",
+		SessionID: "nested-session-1",
+	}
+	subwf.Children = []*StepNode{agent}
+	root.Children = []*StepNode{subwf}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	// Drill into the sub-workflow
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	help := m.renderHelpBar()
+	if !containsString(help, "enter resume") {
+		t.Errorf("help bar should show 'enter resume' for nested agent step: %q", help)
+	}
+}
+
+func TestModel_Enter_AgentStep_InSubWorkflow_DetailPane(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	subwf := &StepNode{
+		ID:             "impl",
+		Type:           NodeSubWorkflow,
+		Status:         StatusSuccess,
+		Parent:         root,
+		StaticWorkflow: "impl.yaml",
+		SubLoaded:      true,
+	}
+	agent := &StepNode{
+		ID:        "generate-code",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusSuccess,
+		Parent:    subwf,
+		AgentCLI:  "claude",
+		SessionID: "nested-session-1",
+	}
+	subwf.Children = []*StepNode{agent}
+	root.Children = []*StepNode{subwf}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	// Drill into the sub-workflow
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	view := m.View()
+	if !containsString(view, "resume session") {
+		t.Errorf("detail pane should show 'resume session' for nested agent step")
+	}
+}
+
+func TestModel_Enter_AgentStep_InSubWorkflow_LiveRunAfterCompletion(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	subwf := &StepNode{
+		ID:             "impl",
+		Type:           NodeSubWorkflow,
+		Status:         StatusSuccess,
+		Parent:         root,
+		StaticWorkflow: "impl.yaml",
+		SubLoaded:      true,
+	}
+	agent := &StepNode{
+		ID:        "generate-code",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusSuccess,
+		Parent:    subwf,
+		AgentCLI:  "claude",
+		SessionID: "nested-session-1",
+	}
+	subwf.Children = []*StepNode{agent}
+	root.Children = []*StepNode{subwf}
+
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.running = true
+
+	// Simulate run completion
+	m.Update(liverun.ExecDoneMsg{Result: "success"})
+
+	// Drill into the sub-workflow
+	m.cursor = 0 // subwf is the only child at root level
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	sel := m.selectedNode()
+	if sel == nil || sel.ID != "generate-code" {
+		t.Fatalf("expected selected node 'generate-code', got %v", sel)
+	}
+
+	// Press Enter on the nested agent step
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on nested agent step after live run completion should produce ResumeMsg")
+	}
+	resume, ok := cmd().(ResumeMsg)
+	if !ok {
+		t.Fatalf("expected ResumeMsg, got %T", cmd())
+	}
+	if resume.SessionID != "nested-session-1" {
+		t.Fatalf("session ID = %q, want %q", resume.SessionID, "nested-session-1")
+	}
+}
+
+func TestModel_Enter_CompletedAgentStep_InSubWorkflow_DuringLiveRun(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	subwf := &StepNode{
+		ID:             "impl",
+		Type:           NodeSubWorkflow,
+		Status:         StatusSuccess,
+		Parent:         root,
+		StaticWorkflow: "impl.yaml",
+		SubLoaded:      true,
+	}
+	agent := &StepNode{
+		ID:        "generate-code",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusSuccess,
+		Parent:    subwf,
+		AgentCLI:  "claude",
+		SessionID: "nested-session-1",
+	}
+	subwf.Children = []*StepNode{agent}
+	nextStep := &StepNode{
+		ID:     "finalize",
+		Type:   NodeShell,
+		Status: StatusInProgress,
+		Parent: root,
+	}
+	root.Children = []*StepNode{subwf, nextStep}
+
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.running = true
+
+	// Drill into the completed sub-workflow
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	sel := m.selectedNode()
+	if sel == nil || sel.ID != "generate-code" {
+		t.Fatalf("expected selected node 'generate-code', got %v", sel)
+	}
+
+	// Press Enter on the completed agent step — should allow resume
+	// because this step is done; the runner no longer owns this session.
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on completed agent step during live run should produce ResumeMsg " +
+			"(the agent session is no longer owned by the runner)")
+	}
+	resume, ok := cmd().(ResumeMsg)
+	if !ok {
+		t.Fatalf("expected ResumeMsg, got %T", cmd())
+	}
+	if resume.SessionID != "nested-session-1" {
+		t.Fatalf("session ID = %q, want %q", resume.SessionID, "nested-session-1")
+	}
+}
+
+func TestModel_Enter_CompletedAgentStep_DuringLiveRun_HelpBar(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	subwf := &StepNode{
+		ID:             "impl",
+		Type:           NodeSubWorkflow,
+		Status:         StatusSuccess,
+		Parent:         root,
+		StaticWorkflow: "impl.yaml",
+		SubLoaded:      true,
+	}
+	agent := &StepNode{
+		ID:        "generate-code",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusSuccess,
+		Parent:    subwf,
+		AgentCLI:  "claude",
+		SessionID: "nested-session-1",
+	}
+	subwf.Children = []*StepNode{agent}
+	nextStep := &StepNode{
+		ID:     "finalize",
+		Type:   NodeShell,
+		Status: StatusInProgress,
+		Parent: root,
+	}
+	root.Children = []*StepNode{subwf, nextStep}
+
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.running = true
+
+	// Drill into the completed sub-workflow
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	help := m.renderHelpBar()
+	if !containsString(help, "enter resume") {
+		t.Errorf("help bar should show 'enter resume' for completed agent step during live run: %q", help)
+	}
+}
+
+func TestModel_Enter_CompletedAgentStep_DuringLiveRun_DetailPane(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	subwf := &StepNode{
+		ID:             "impl",
+		Type:           NodeSubWorkflow,
+		Status:         StatusSuccess,
+		Parent:         root,
+		StaticWorkflow: "impl.yaml",
+		SubLoaded:      true,
+	}
+	agent := &StepNode{
+		ID:        "generate-code",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusSuccess,
+		Parent:    subwf,
+		AgentCLI:  "claude",
+		SessionID: "nested-session-1",
+	}
+	subwf.Children = []*StepNode{agent}
+	nextStep := &StepNode{
+		ID:     "finalize",
+		Type:   NodeShell,
+		Status: StatusInProgress,
+		Parent: root,
+	}
+	root.Children = []*StepNode{subwf, nextStep}
+
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.running = true
+	m.altScreen = true
+
+	// Drill into the completed sub-workflow
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	view := m.View()
+	if !containsString(view, "resume session") {
+		t.Errorf("detail pane should show 'resume session' for completed agent step during live run")
+	}
+}
+
+func TestModel_Enter_InProgressAgentStep_DuringLiveRun_NoResume(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	agent := &StepNode{
+		ID:        "implement",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusInProgress,
+		Parent:    root,
+		AgentCLI:  "claude",
+		SessionID: "session-in-progress",
+	}
+	root.Children = []*StepNode{agent}
+
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.running = true
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("enter on in-progress agent step during live run should be no-op " +
+			"(session is owned by the runner)")
 	}
 }
 
@@ -1007,6 +1352,7 @@ func newLiveModel() *Model {
 		termWidth:  120,
 		termHeight: 40,
 		running:    true,
+		altScreen:  true,
 	}
 }
 
@@ -1166,6 +1512,7 @@ func newLiveModelWithFlags() *Model {
 		termHeight: 40,
 		running:    true,
 		autoFollow: true,
+		altScreen:  true,
 	}
 }
 
@@ -1491,6 +1838,44 @@ func TestModel_MouseWheelDown_ClearsAutoFollow(t *testing.T) {
 
 	if m.autoFollow {
 		t.Error("mouse wheel down should clear autoFollow")
+	}
+}
+
+func TestModel_MouseWheelDown_ChangesLogOffset(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList)
+	m.logLineCount = 100
+	initial := m.logOffset
+
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown})
+	if m.logOffset <= initial {
+		t.Fatalf("mouse wheel down should increase logOffset: got %d, want > %d", m.logOffset, initial)
+	}
+}
+
+func TestModel_MouseWheelUp_ChangesLogOffset(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList)
+	m.logLineCount = 100
+	m.logOffset = 10
+
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp})
+	if m.logOffset >= 10 {
+		t.Fatalf("mouse wheel up should decrease logOffset: got %d, want < 10", m.logOffset)
+	}
+}
+
+func TestModel_ResumedMsg_ReEnablesMouse(t *testing.T) {
+	m := newLiveModelWithFlags()
+	_, cmd := m.Update(liverun.ResumedMsg{})
+	if cmd == nil {
+		t.Fatal("ResumedMsg should return a command to re-enable mouse")
+	}
+	msg := cmd()
+	if _, ok := msg.(tea.MouseMsg); ok {
+		t.Fatal("expected enableMouseCellMotionMsg, not MouseMsg")
+	}
+	got := fmt.Sprintf("%T", msg)
+	if got != "tea.enableMouseCellMotionMsg" {
+		t.Fatalf("ResumedMsg should return EnableMouseCellMotion cmd, got %s", got)
 	}
 }
 
@@ -2001,5 +2386,96 @@ func TestHandleWindowSize_ReanchorsAcrossEquivalentTreeRebuild(t *testing.T) {
 	}
 	if m.logOffset != expected {
 		t.Fatalf("logOffset = %d, want %d after re-anchoring rebuilt tree", m.logOffset, expected)
+	}
+}
+
+// ---- Deferred alt-screen tests ----
+
+func TestLiveRun_ViewEmptyBeforeAltScreen(t *testing.T) {
+	m := newTestModel(simpleTree(), FromLiveRun)
+	// FromLiveRun starts with altScreen=false
+	if m.altScreen {
+		t.Fatal("expected altScreen=false for FromLiveRun")
+	}
+	if got := m.View(); got != "" {
+		t.Fatalf("expected empty view before alt-screen, got %q", got)
+	}
+}
+
+func TestNonLiveRun_AltScreenImmediate(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList)
+	if !m.altScreen {
+		t.Fatal("expected altScreen=true for FromList")
+	}
+	if got := m.View(); got == "" {
+		t.Fatal("expected non-empty view for FromList")
+	}
+}
+
+func TestDeferredAltScreen_EntersOnTimer(t *testing.T) {
+	m := newTestModel(simpleTree(), FromLiveRun)
+	m.termWidth = 120
+	m.termHeight = 40
+
+	updated, cmd := m.Update(deferredAltScreenMsg{})
+	m = updated.(*Model)
+
+	if !m.altScreen {
+		t.Fatal("expected altScreen=true after deferred timer")
+	}
+	// cmd should include EnterAltScreen
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd")
+	}
+}
+
+func TestDeferredAltScreen_SuppressedBySuspend(t *testing.T) {
+	m := newTestModel(simpleTree(), FromLiveRun)
+
+	// SuspendedMsg arrives before the timer
+	updated, _ := m.Update(liverun.SuspendedMsg{})
+	m = updated.(*Model)
+
+	if !m.suppressAltScreen {
+		t.Fatal("expected suppressAltScreen=true after SuspendedMsg")
+	}
+
+	// Timer fires — should be suppressed
+	updated, cmd := m.Update(deferredAltScreenMsg{})
+	m = updated.(*Model)
+
+	if m.altScreen {
+		t.Fatal("expected altScreen to remain false after suppressed timer")
+	}
+	if cmd != nil {
+		t.Fatal("expected nil cmd when timer is suppressed")
+	}
+}
+
+func TestShowTUIMsg_EntersAltScreen(t *testing.T) {
+	m := newTestModel(simpleTree(), FromLiveRun)
+	m.suppressAltScreen = true // was previously suppressed
+
+	updated, cmd := m.Update(liverun.ShowTUIMsg{})
+	m = updated.(*Model)
+
+	if !m.altScreen {
+		t.Fatal("expected altScreen=true after ShowTUIMsg")
+	}
+	if m.suppressAltScreen {
+		t.Fatal("expected suppressAltScreen cleared by ShowTUIMsg")
+	}
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd for EnterAltScreen")
+	}
+}
+
+func TestShowTUIMsg_NoOpWhenAlreadyInAltScreen(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList) // altScreen=true already
+
+	_, cmd := m.Update(liverun.ShowTUIMsg{})
+
+	if cmd != nil {
+		t.Fatal("expected nil cmd when already in alt-screen")
 	}
 }

@@ -18,6 +18,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/engine"
 	_ "github.com/codagent/agent-runner/internal/engine/openspec"
 	iexec "github.com/codagent/agent-runner/internal/exec"
@@ -25,6 +26,7 @@ import (
 	"github.com/codagent/agent-runner/internal/liverun"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/paramform"
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/runview"
@@ -33,6 +35,10 @@ import (
 
 // version is set at build time via -ldflags "-X main.version=...".
 var version = "dev"
+
+var userHomeDir = os.UserHomeDir
+var currentExecutable = os.Executable
+var execProcess = syscall.Exec
 
 // realProcessRunner implements exec.ProcessRunner using os/exec.
 type realProcessRunner struct{}
@@ -215,7 +221,7 @@ func run() int {
 	}
 
 	if len(args) < 1 {
-		return handleList()
+		return handleListBare()
 	}
 
 	workflowFile, err := resolveWorkflowArg(args[0])
@@ -321,13 +327,23 @@ func openInspectTUI(runID, sessionDir, projectDir string) int {
 	return runSwitcher(sw)
 }
 
+// handleListBare opens the list TUI starting on the "new" tab (bare invocation).
+func handleListBare() int {
+	return handleListWithTab(listview.InitialTabNew)
+}
+
+// handleList opens the list TUI starting on the current-dir tab (--list / --resume no-arg).
 func handleList() int {
+	return handleListWithTab(listview.InitialTabCurrentDir)
+}
+
+func handleListWithTab(initialTab listview.InitialTab) int {
 	if err := requireTTY(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 
-	m, err := listview.New()
+	m, err := listview.New(listview.WithInitialTab(initialTab))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
@@ -352,6 +368,12 @@ func runSwitcher(sw *switcher) int {
 		}
 		if final.resumeRunID != "" {
 			return execRunnerResume(final.resumeRunID, final.resumeRunProjectDir)
+		}
+		if final.startRunReady && final.startRunEntry != nil {
+			return execStartRun(final.startRunEntry, final.startRunParams)
+		}
+		if final.resumeListProjectDir != "" {
+			return execRunnerResume("", final.resumeListProjectDir)
 		}
 		if final.resumeSessionID == "" {
 			return 0
@@ -401,7 +423,7 @@ func runLiveTUI(h *runner.RunHandle) int {
 		return 1
 	}
 
-	p := tea.NewProgram(rv, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(rv, tea.WithMouseCellMotion())
 	coord := liverun.NewCoordinator(p, h.SessionDir)
 
 	resultCh := make(chan runner.WorkflowResult, 1)
@@ -419,11 +441,12 @@ func runLiveTUI(h *runner.RunHandle) int {
 		}()
 
 		result = runner.ExecuteFromHandle(h, &runner.Options{
-			ProcessRunner: coord.TUIProcessRunner(&realProcessRunner{}),
-			GlobExpander:  &realGlobExpander{},
-			Log:           &runner.DiscardLogger{},
-			SuspendHook:   coord.BeforeInteractive,
-			ResumeHook:    coord.AfterInteractive,
+			ProcessRunner:   coord.TUIProcessRunner(&realProcessRunner{}),
+			GlobExpander:    &realGlobExpander{},
+			Log:             &runner.DiscardLogger{},
+			SuspendHook:     coord.BeforeInteractive,
+			ResumeHook:      coord.AfterInteractive,
+			PrepareStepHook: coord.PrepareForStep,
 		})
 	}()
 
@@ -438,6 +461,10 @@ func runLiveTUI(h *runner.RunHandle) int {
 	// resultCh has no value yet — keep the documented orphan-on-quit behavior
 	// and return 0 without blocking on the lingering goroutine.
 	if rv.ResumeSessionID() == "" {
+		if rv.ResumeToList() {
+			<-resultCh
+			return execRunnerResume("", h.ProjectDir)
+		}
 		select {
 		case runResult := <-resultCh:
 			if runResult != runner.ResultSuccess {
@@ -466,6 +493,9 @@ func runLiveTUI(h *runner.RunHandle) int {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 			return 1
 		}
+		if rv.ResumeToList() {
+			return execRunnerResume("", h.ProjectDir)
+		}
 	}
 	return 0
 }
@@ -485,6 +515,20 @@ func finalRunviewModel(final tea.Model, err error) (*runview.Model, error) {
 	return rv, nil
 }
 
+func execSelf(args ...string) int {
+	self, err := currentExecutable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: cannot resolve executable path: %v\n", err)
+		return 1
+	}
+	execArgs := append([]string{filepath.Base(self)}, args...)
+	if err := execProcess(self, execArgs, os.Environ()); err != nil { // #nosec G204 -- self is our own os.Executable() path; args are validated workflow names / run IDs
+		fmt.Fprintf(os.Stderr, "agent-runner: exec %s: %v\n", strings.Join(args, " "), err)
+		return 1
+	}
+	return 0
+}
+
 // allowedResumeCLIs bounds resume CLI arguments. Resume metadata originates
 // from audit logs and workflow YAML — both attacker-influenceable when
 // inspecting runs from untrusted sources — and the value flows into
@@ -494,6 +538,7 @@ var allowedResumeCLIs = map[string]bool{
 	"claude":  true,
 	"codex":   true,
 	"copilot": true,
+	"cursor":  true,
 }
 
 // resolveResumeCLI validates `cli` against the resume allowlist and resolves
@@ -548,17 +593,44 @@ func execRunnerResume(runID, projectDir string) int {
 			return 1
 		}
 	}
-	self, err := os.Executable()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-runner: cannot resolve executable path: %v\n", err)
+	args := []string{"--resume"}
+	if runID != "" {
+		args = append(args, runID)
+	}
+	return execSelf(args...)
+}
+
+// execStartRun replaces the current process with `agent-runner run <workflow>`
+// using the workflow's canonical name and ordered key=value params.
+func execStartRun(entry *discovery.WorkflowEntry, values map[string]string) int {
+	if entry == nil || entry.CanonicalName == "" {
+		fmt.Fprintln(os.Stderr, "agent-runner: cannot start run: missing workflow name")
 		return 1
 	}
-	args := []string{filepath.Base(self), "--resume", runID}
-	if err := syscall.Exec(self, args, os.Environ()); err != nil { // #nosec G204 -- self is our own os.Executable() path; runID is a pre-validated session directory name
-		fmt.Fprintf(os.Stderr, "agent-runner: exec --resume: %v\n", err)
-		return 1
+
+	args := []string{entry.CanonicalName}
+	seen := make(map[string]bool, len(entry.Params))
+	for _, param := range entry.Params {
+		value, ok := values[param.Name]
+		if !ok {
+			continue
+		}
+		args = append(args, param.Name+"="+value)
+		seen[param.Name] = true
 	}
-	return 0
+
+	var extraKeys []string
+	for key := range values {
+		if !seen[key] {
+			extraKeys = append(extraKeys, key)
+		}
+	}
+	sort.Strings(extraKeys)
+	for _, key := range extraKeys {
+		args = append(args, key+"="+values[key])
+	}
+
+	return execSelf(args...)
 }
 
 // resolveInspectSession resolves a run ID to its session and project
@@ -597,27 +669,39 @@ type switcherMode int
 const (
 	showingList switcherMode = iota
 	showingRunView
+	showingParamForm
 )
 
 type switcher struct {
-	list    *listview.Model
-	runview *runview.Model
-	mode    switcherMode
+	list       *listview.Model
+	runview    *runview.Model
+	paramform  *paramform.Model
+	mode       switcherMode
+	returnMode switcherMode
 
 	termWidth  int
 	termHeight int
 
-	resumeAgentCLI      string
-	resumeSessionID     string
-	resumeRunID         string
-	resumeRunProjectDir string
-	viewErr             string
+	resumeAgentCLI       string
+	resumeSessionID      string
+	resumeRunID          string
+	resumeRunProjectDir  string
+	resumeListProjectDir string
+	startRunEntry        *discovery.WorkflowEntry
+	startRunParams       map[string]string
+	startRunReady        bool
+	viewErr              string
 }
 
 func (s *switcher) Init() tea.Cmd {
 	switch s.mode {
 	case showingRunView:
 		return s.runview.Init()
+	case showingParamForm:
+		if s.paramform != nil {
+			return s.paramform.Init()
+		}
+		return nil
 	default:
 		return s.list.Init()
 	}
@@ -655,6 +739,54 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return s, tea.Batch(cmds...)
 
+	case discovery.ViewDefinitionMsg:
+		rv, err := runview.NewForDefinition(&msg.Entry, "")
+		if err != nil {
+			s.viewErr = fmt.Sprintf("cannot open definition: %v", err)
+			return s, nil
+		}
+		s.viewErr = ""
+		s.runview = rv
+		s.mode = showingRunView
+		cmds := []tea.Cmd{rv.Init()}
+		if s.termWidth > 0 && s.termHeight > 0 {
+			w, h := s.termWidth, s.termHeight
+			cmds = append(cmds, func() tea.Msg {
+				return tea.WindowSizeMsg{Width: w, Height: h}
+			})
+		}
+		return s, tea.Batch(cmds...)
+
+	case discovery.StartRunMsg:
+		entry := msg.Entry
+		s.startRunEntry = &entry
+		s.startRunParams = nil
+		s.startRunReady = false
+		if len(entry.Params) == 0 {
+			s.startRunReady = true
+			return s, tea.Quit
+		}
+		s.returnMode = s.mode
+		s.paramform = paramform.New(&entry).WithWidth(s.termWidth)
+		s.mode = showingParamForm
+		return s, nil
+
+	case paramform.SubmittedMsg:
+		if s.startRunEntry == nil {
+			return s, nil
+		}
+		s.startRunParams = map[string]string(msg)
+		s.startRunReady = true
+		return s, tea.Quit
+
+	case paramform.CancelledMsg:
+		s.startRunEntry = nil
+		s.startRunParams = nil
+		s.startRunReady = false
+		s.paramform = nil
+		s.mode = s.returnMode
+		return s, nil
+
 	case runview.BackMsg:
 		s.mode = showingList
 		s.runview = nil
@@ -667,6 +799,12 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case runview.ResumeRunMsg:
 		s.resumeRunID = msg.RunID
+		return s, tea.Quit
+
+	case runview.ResumeListMsg:
+		if s.runview != nil {
+			s.resumeListProjectDir = s.runview.ProjectDir()
+		}
 		return s, tea.Quit
 
 	case listview.ResumeRunMsg:
@@ -691,6 +829,12 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.runview = newModel.(*runview.Model)
 			return s, cmd
 		}
+	case showingParamForm:
+		if s.paramform != nil {
+			newModel, cmd := s.paramform.Update(msg)
+			s.paramform = newModel.(*paramform.Model)
+			return s, cmd
+		}
 	}
 	return s, nil
 }
@@ -701,6 +845,11 @@ func (s *switcher) View() string {
 		if s.runview != nil {
 			return s.runview.View()
 		}
+	case showingParamForm:
+		if s.paramform != nil {
+			return s.paramform.View()
+		}
+		return ""
 	default:
 		if s.list != nil {
 			v := s.list.View()
@@ -758,24 +907,55 @@ func resolveWorkflowArg(arg string) (string, error) {
 	if strings.Contains(arg, ":") {
 		return builtinworkflows.Resolve(arg)
 	}
-	base := filepath.Join(".agent-runner", "workflows", filepath.FromSlash(arg))
-	yamlPath := base + ".yaml"
-	if _, err := os.Stat(yamlPath); err == nil {
-		return yamlPath, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("stat %s: %w", yamlPath, err)
+	localBase := filepath.Join(".agent-runner", "workflows", filepath.FromSlash(arg))
+	localPaths := []string{localBase + ".yaml", localBase + ".yml"}
+	if resolved, err := resolveWorkflowFile(localPaths...); err != nil {
+		return "", err
+	} else if resolved != "" {
+		return resolved, nil
 	}
-	ymlPath := base + ".yml"
-	if _, err := os.Stat(ymlPath); err == nil {
-		return ymlPath, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("stat %s: %w", ymlPath, err)
+
+	globalPaths := []string{}
+	var homeErr error
+	if home, err := userHomeDir(); err == nil {
+		globalBase := filepath.Join(home, ".agent-runner", "workflows", filepath.FromSlash(arg))
+		globalPaths = []string{globalBase + ".yaml", globalBase + ".yml"}
+		if resolved, err := resolveWorkflowFile(globalPaths...); err != nil {
+			return "", err
+		} else if resolved != "" {
+			return resolved, nil
+		}
+	} else {
+		homeErr = err
 	}
+
 	cwd, err := os.Getwd()
 	if err != nil {
-		return "", fmt.Errorf("workflow %q not found (tried %s and %s); failed to get cwd: %w", arg, yamlPath, ymlPath, err)
+		return "", fmt.Errorf("workflow %q not found (%s); failed to get cwd: %w", arg, triedWorkflowPaths(localPaths, globalPaths), err)
 	}
-	return "", fmt.Errorf("workflow %q not found in %s (tried %s and %s)", arg, cwd, yamlPath, ymlPath)
+	if homeErr != nil {
+		return "", fmt.Errorf("workflow %q not found in %s (%s; home dir lookup failed: %v)", arg, cwd, triedWorkflowPaths(localPaths, globalPaths), homeErr)
+	}
+	return "", fmt.Errorf("workflow %q not found in %s (%s)", arg, cwd, triedWorkflowPaths(localPaths, globalPaths))
+}
+
+func resolveWorkflowFile(paths ...string) (string, error) {
+	for _, path := range paths {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("stat %s: %w", path, err)
+		}
+	}
+	return "", nil
+}
+
+func triedWorkflowPaths(groups ...[]string) string {
+	var paths []string
+	for _, group := range groups {
+		paths = append(paths, group...)
+	}
+	return "tried " + strings.Join(paths, ", ")
 }
 
 func handleRun(args []string) int {

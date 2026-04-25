@@ -74,6 +74,12 @@ type ExecutionContext struct {
 	// ResumeHook is called immediately after an interactive step exits.
 	// Nil in non-TUI callers.
 	ResumeHook func()
+
+	// PrepareStepHook is called before each leaf step begins. The boolean
+	// argument is true when the step will be interactive. Used by the TUI
+	// coordinator to defer or suppress terminal restore between consecutive
+	// interactive steps.
+	PrepareStepHook func(interactive bool)
 }
 
 // RootContextOptions configures a new root execution context.
@@ -227,6 +233,7 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		FlushState:          parent.FlushState,
 		SuspendHook:         parent.SuspendHook,
 		ResumeHook:          parent.ResumeHook,
+		PrepareStepHook:     parent.PrepareStepHook,
 		// Named session maps are shared by reference so writes from any child
 		// are immediately visible to parents and sibling sub-workflows.
 		NamedSessions:     parent.NamedSessions,
@@ -295,6 +302,7 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		FlushState:          parent.FlushState,
 		SuspendHook:         parent.SuspendHook,
 		ResumeHook:          parent.ResumeHook,
+		PrepareStepHook:     parent.PrepareStepHook,
 		// Named session maps are shared by reference so writes from a child
 		// sub-workflow are immediately visible to the parent and later siblings.
 		NamedSessions:     parent.NamedSessions,

@@ -2,10 +2,13 @@ package runview
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/codagent/agent-runner/internal/model"
 )
 
 func TestParseLine(t *testing.T) {
@@ -163,6 +166,45 @@ func TestApplyEvent_StepStartStepEnd(t *testing.T) {
 	}
 	if archive.DurationMs == nil || *archive.DurationMs != 2400 {
 		t.Errorf("duration not recorded: %v", archive.DurationMs)
+	}
+}
+
+// TestApplyEvent_StepStartAfterFailure covers resume-after-failure: when a
+// prior run's step_end set the node to StatusFailed, a subsequent step_start
+// for the same node must flip it back to StatusInProgress so the TUI renders
+// the blinking "running" indicator instead of the stale failure X. Same for
+// an aborted prior run: Aborted must be cleared so the indicator blinks.
+func TestApplyEvent_StepStartAfterFailure(t *testing.T) {
+	cases := []struct {
+		name    string
+		outcome string
+	}{
+		{"after failed", "failed"},
+		{"after aborted", "aborted"},
+		{"after success", "success"},
+		{"after skipped", "skipped"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tree := buildImplementChangeTree(t)
+			tree.ApplyEvent(RawEvent{
+				Prefix: "[archive]",
+				Type:   "step_end",
+				Data:   map[string]any{"outcome": c.outcome},
+			})
+			tree.ApplyEvent(RawEvent{
+				Prefix: "[archive]",
+				Type:   "step_start",
+				Data:   map[string]any{"command": "openspec archive view-run"},
+			})
+			arch := childByID(tree.Root, "archive")
+			if arch.Status != StatusInProgress {
+				t.Errorf("status after restart: want in-progress, got %v", arch.Status)
+			}
+			if arch.Aborted {
+				t.Errorf("Aborted flag should be cleared on restart, still true")
+			}
+		})
 	}
 }
 
@@ -404,6 +446,78 @@ func TestApplyEvent_NestedSubWorkflowUnderLoop(t *testing.T) {
 	if inner.Type != NodeSubWorkflow || inner.ID != "implement-single-task" {
 		t.Fatalf("flatten target wrong: id=%q type=%v", inner.ID, inner.Type)
 	}
+	if !inner.SubLoaded {
+		t.Errorf("inner sub-workflow body should be loaded; err=%q", inner.ErrorMessage)
+	}
+	if len(inner.Children) == 0 {
+		t.Errorf("inner sub-workflow has no children (bug: 'No steps to display')")
+	}
+}
+
+func TestApplyEvent_NestedSubWorkflowUnderLoop_BuiltinPaths(t *testing.T) {
+	wf := fixtureChange()
+	tree := BuildTree(&wf, "builtin:spec-driven/change.yaml")
+	// Use a loader that requires the builtin: prefix (like the real loader),
+	// unlike fixtureSubLoader which matches by basename only.
+	tree.SubWorkflowLoader = func(path string) (model.Workflow, error) {
+		if !strings.HasPrefix(path, "builtin:") {
+			return model.Workflow{}, fmt.Errorf("expected builtin: prefix, got %q", path)
+		}
+		base := filepath.Base(path)
+		switch base {
+		case "implement-change.yaml":
+			return fixtureImplementChange(), nil
+		case "implement-task.yaml":
+			return fixtureImplementTask(), nil
+		case "plan-change.yaml":
+			return fixturePlanChange(), nil
+		}
+		return model.Workflow{}, fmt.Errorf("no fixture for %s", path)
+	}
+
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[implement, sub:implement-change]",
+		Type:   "sub_workflow_start",
+		Data: map[string]any{
+			"workflow_name": "implement-change",
+			"workflow_path": "builtin:spec-driven/implement-change.yaml",
+		},
+	})
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[implement, sub:implement-change, implement-tasks]",
+		Type:   "step_start",
+		Data: map[string]any{
+			"loop_type":        "for-each",
+			"resolved_matches": []any{"tasks/01.md"},
+		},
+	})
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[implement, sub:implement-change, implement-tasks:0]",
+		Type:   "iteration_start",
+		Data: map[string]any{
+			"iteration": float64(0),
+			"loop_var":  map[string]any{"task_file": "tasks/01.md"},
+		},
+	})
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[implement, sub:implement-change, implement-tasks:0, implement-single-task, sub:implement-task]",
+		Type:   "sub_workflow_start",
+		Data: map[string]any{
+			"workflow_name": "implement-task",
+			"workflow_path": "builtin:core/implement-task.yaml",
+		},
+	})
+
+	implement := childByID(tree.Root, "implement")
+	if implement == nil || !implement.SubLoaded {
+		t.Fatalf("outer sub-workflow not loaded: %+v", implement)
+	}
+	loop := childByID(implement, "implement-tasks")
+	iter0 := findIteration(loop, 0)
+	if iter0 == nil || iter0.FlattenTarget == nil {
+		t.Fatalf("iter0 missing or no flatten target")
+	}
+	inner := iter0.FlattenTarget
 	if !inner.SubLoaded {
 		t.Errorf("inner sub-workflow body should be loaded; err=%q", inner.ErrorMessage)
 	}

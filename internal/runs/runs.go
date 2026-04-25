@@ -274,6 +274,9 @@ func buildDescriptor(workflowFile, originCwd string) model.WorkflowDescriptor {
 	if workflowFile == "" {
 		return model.WorkflowDescriptor{}
 	}
+	if strings.HasPrefix(workflowFile, "builtin:") {
+		return model.NewWorkflowDescriptor(workflowFile, model.ResolverConfig{})
+	}
 	absPath := workflowFile
 	if !filepath.IsAbs(workflowFile) {
 		if originCwd == "" {

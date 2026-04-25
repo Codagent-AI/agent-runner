@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Defines named, inheritable agent profiles that bundle CLI choice, default mode, model, effort, and system prompt into reusable units, so workflow steps reference a profile by name rather than re-declaring each attribute. Profiles support single-parent `extends` inheritance, per-step overrides for `mode`, `model`, and `cli`, and auto-generation of a default config with `interactive_base`, `headless_base`, `planner`, and `implementor` profiles when none exists.
+Defines named, inheritable agent profiles that bundle CLI choice, default mode, model, effort, and system prompt into reusable units, so workflow steps reference a profile by name rather than re-declaring each attribute. Profiles support single-parent `extends` inheritance and per-step overrides for `mode`, `model`, and `cli`. When no config files are present, the runner uses a built-in default profile set in memory and SHALL NOT write any config file to disk.
 ## Requirements
 ### Requirement: Profile schema
 Each agent profile SHALL have a name (the YAML key) and MAY include: `default_mode` (interactive|headless), `cli` (claude|codex), `model` (string), `effort` (low|medium|high), `system_prompt` (string), and `extends` (string referencing another profile name).
@@ -57,25 +57,27 @@ A profile MAY specify `extends: <parent_name>`. The child inherits all fields fr
 - **WHEN** a profile specifies `extends: nonexistent`
 - **THEN** config loading fails with an error indicating the parent profile does not exist
 
-### Requirement: Config file auto-generation
-When `.agent-runner/config.yaml` does not exist, the runner SHALL generate it with five default profiles:
+### Requirement: Built-in default profile set
+The runner SHALL provide an in-memory default profile set named `default` as the bottom layer of config resolution. The default set contains five agents:
 - `interactive_base`: default_mode=interactive, cli=claude, model=opus, effort=high
 - `headless_base`: default_mode=headless, cli=claude, model=opus, effort=high
 - `planner`: extends interactive_base (no overrides)
 - `implementor`: extends headless_base (no overrides)
 - `summarizer`: default_mode=headless, cli=claude, model=haiku, effort=low
 
-#### Scenario: Config file missing on startup
-- **WHEN** the runner starts and `.agent-runner/config.yaml` does not exist
-- **THEN** the runner creates the file with the five default profiles and proceeds normally
+The runner SHALL NOT create `.agent-runner/config.yaml` (or any config file) automatically. The defaults exist only as an in-memory layer beneath any global and project configs the user has chosen to create.
 
-#### Scenario: Config file already exists
+#### Scenario: Project config missing on startup
+- **WHEN** the runner starts and `.agent-runner/config.yaml` does not exist
+- **THEN** the runner uses the built-in defaults in memory and SHALL NOT create the file or its parent directory
+
+#### Scenario: Project config already exists
 - **WHEN** the runner starts and `.agent-runner/config.yaml` exists
 - **THEN** the runner loads and uses it as-is without modifying it
 
-#### Scenario: Summarizer profile resolves to claude + haiku
-- **WHEN** a workflow step references `agent: summarizer` and the generated config is unchanged
-- **THEN** the resolved profile has default_mode=headless, cli=claude, model=haiku, effort=low
+#### Scenario: Summarizer agent resolves to claude + haiku
+- **WHEN** a workflow step references `agent: summarizer` with no project or global overrides (so the active profile is `default`)
+- **THEN** the resolved agent has default_mode=headless, cli=claude, model=haiku, effort=low
 
 ### Requirement: Step agent attribute
 An agent step SHALL specify an `agent` field naming a profile when its session strategy is `new`. When the session strategy is `resume` or `inherit`, the `agent` field SHALL NOT be specified; the step inherits the profile from the session-originating step. Shell steps SHALL NOT have an `agent` field.
@@ -139,25 +141,110 @@ When a step does not specify a `session` field, the runner SHALL apply defaults:
 - **THEN** the runner uses `session: new`, not the default of resume
 
 ### Requirement: Profile resolution
-The runner SHALL resolve a profile name to a fully-merged profile by walking the `extends` chain and merging fields (child overrides parent). The resolved profile provides default_mode, cli, and optionally model, effort, and system_prompt to the executor.
+The runner SHALL resolve an agent name to a fully-merged agent definition by walking the `extends` chain within the active profile set's effective `agents:` map (that is, the map produced after profile-set `extends` resolution — see the `config-profiles` capability) and merging fields (child overrides parent). The resolved agent provides default_mode, cli, and optionally model, effort, and system_prompt to the executor. Agent-level `extends` references SHALL be resolved against that same effective agents map, which may include agents inherited from a parent profile set. Agent-level `extends` SHALL NOT cross into unrelated profile sets — only agents visible in the containing set's effective map (whether defined locally or inherited via profile-set `extends`) are reachable.
 
 #### Scenario: Effort unset after full merge
-- **WHEN** a profile is resolved and `effort` is unset in both child and all ancestors
+- **WHEN** an agent is resolved and `effort` is unset in both the child and all ancestors
 - **THEN** the runner does not pass an effort parameter to the CLI adapter
 
-#### Scenario: System prompt set in resolved profile
-- **WHEN** a profile is resolved and `system_prompt` is set
+#### Scenario: System prompt set in resolved agent
+- **WHEN** an agent is resolved and `system_prompt` is set
 - **THEN** the runner prepends it to the fullPrompt string (before the step prompt and engine enrichment), which is then routed through the existing delivery mechanism unchanged
 
 #### Scenario: System prompt combined with engine enrichment
-- **WHEN** a profile has `system_prompt` set and the engine provides enrichment for the step
-- **THEN** the full prompt is ordered as: [profile system_prompt] [step prompt] [engine enrichment]
+- **WHEN** an agent has `system_prompt` set and the engine provides enrichment for the step
+- **THEN** the full prompt is ordered as: [agent system_prompt] [step prompt] [engine enrichment]
 
-#### Scenario: Profile lookup failure on resume
-- **WHEN** a resume or inherit step attempts to resolve its inherited profile and no session-originating profile is found (e.g., no prior agentic step in the session chain)
-- **THEN** the runner SHALL treat the step as failed with an error indicating no profile could be resolved
+#### Scenario: Agent lookup failure on resume
+- **WHEN** a resume or inherit step attempts to resolve its inherited agent and no session-originating agent is found (e.g., no prior agentic step in the session chain)
+- **THEN** the runner SHALL treat the step as failed with an error indicating no agent could be resolved
 
-#### Scenario: Multi-level inheritance
-- **WHEN** profile C extends B which extends A, and C sets effort, B sets model, A sets default_mode and cli
-- **THEN** the resolved profile has A's default_mode and cli, B's model, and C's effort
+#### Scenario: Multi-level inheritance within active profile
+- **WHEN** in the active profile set, agent C extends B which extends A, and C sets effort, B sets model, A sets default_mode and cli
+- **THEN** the resolved agent has A's default_mode and cli, B's model, and C's effort
+
+#### Scenario: Agent-level extends reaches an inherited agent
+- **WHEN** the active profile set `copilot` declares `extends: team_base`, `team_base` defines `headless_base`, and `copilot` defines `implementor` with `extends: headless_base`
+- **THEN** resolving `implementor` succeeds and inherits fields from `team_base`'s `headless_base`
+
+#### Scenario: Agent-level extends cannot reach an unrelated profile set
+- **WHEN** the active profile set `copilot` does not declare `extends`, and an agent in `copilot` specifies `extends: planner` where `planner` is defined only in an unrelated profile set
+- **THEN** config loading fails with an error indicating the parent agent does not exist in the active profile's effective agents map
+
+### Requirement: Global config file location
+
+The runner SHALL load a global agent config from `~/.agent-runner/config.yaml` (where `~` is the invoking user's home directory) when that file exists, in addition to the project-local `.agent-runner/config.yaml`. The global file is optional; the runner SHALL NOT fail if it is absent.
+
+#### Scenario: Global config absent
+- **WHEN** the runner starts and `~/.agent-runner/config.yaml` does not exist
+- **THEN** the runner proceeds using the project-local config if present, otherwise the built-in defaults, and SHALL NOT create either file
+
+#### Scenario: Global config present, project config present
+- **WHEN** both `~/.agent-runner/config.yaml` and `.agent-runner/config.yaml` exist
+- **THEN** the runner loads both files and proceeds with the merged profile set
+
+#### Scenario: Global config present, project config absent
+- **WHEN** `~/.agent-runner/config.yaml` exists and `.agent-runner/config.yaml` does not exist
+- **THEN** the runner loads the global file, layers it over the built-in defaults in memory, and SHALL NOT create the project-local config
+
+#### Scenario: Global config invalid YAML
+- **WHEN** `~/.agent-runner/config.yaml` exists but contains invalid YAML
+- **THEN** config loading fails with an error indicating the global file path and the parse error
+
+### Requirement: Config files are never auto-generated
+
+The runner SHALL NOT create `~/.agent-runner/config.yaml` or `.agent-runner/config.yaml` automatically. Users who want either file create it manually; missing files are treated as empty layers over the built-in defaults.
+
+#### Scenario: Global file missing on startup
+- **WHEN** the runner starts and `~/.agent-runner/config.yaml` does not exist
+- **THEN** the runner SHALL NOT create that file or its parent directory
+
+#### Scenario: Project file missing on startup
+- **WHEN** the runner starts and `.agent-runner/config.yaml` does not exist
+- **THEN** the runner SHALL NOT create that file or its parent directory
+
+### Requirement: Profile merge precedence
+
+When both a global and a project config are loaded, the runner SHALL merge them as described in the `config-profiles` capability (same-named profile sets merge their `agents:` maps). Within a single merged profile set, agents SHALL follow the precedence rule below:
+
+- Agents whose names appear in only one file are included as-is.
+- For an agent name that appears in both files (within the same profile set name), the project agent entirely replaces the global agent of the same name. Field-level merging across files SHALL NOT occur; the project agent's full body (including its `extends`, or absence thereof) is what survives the merge.
+
+Validation (base-agent completeness, allowed values, cycle detection) SHALL run against the merged set of agents in every profile set, not only the active one.
+
+#### Scenario: Disjoint agent names in the same profile set
+- **WHEN** both files define a `default` profile set; the global file's `default.agents` contains `headless_base` and the project file's `default.agents` contains `implementor`
+- **THEN** the merged `default.agents` contains both agents
+
+#### Scenario: Same agent name in both files within the same profile set
+- **WHEN** both files define a `default` profile set containing an agent named `implementor`, the global one with `extends: headless_base` and `model: opus`, and the project one with `extends: headless_base` and `cli: copilot` (no `model`)
+- **THEN** the merged `default.agents.implementor` is exactly the project version (`extends: headless_base`, `cli: copilot`, no `model`); the global `model: opus` SHALL NOT be inherited
+
+#### Scenario: Project agent drops a field present in global
+- **WHEN** within the same profile set, the global `implementor` sets `effort: high` and the project `implementor` omits `effort`
+- **THEN** the merged `implementor` has no `effort` (no field-level fallback to the global file)
+
+### Requirement: Cross-file extends resolution
+
+Within a single profile set (after global/project merging), an agent MAY specify `extends: <name>` where `<name>` is an agent defined in that profile set in either file. The runner SHALL resolve `extends` against the merged agents map of the containing profile set. Cycle detection and missing-parent detection SHALL operate on that merged map. `extends` SHALL NOT cross profile set boundaries.
+
+#### Scenario: Project agent extends global agent in same profile set
+- **WHEN** the global file's `default.agents` defines `headless_base` and the project file's `default.agents` defines `implementor` with `extends: headless_base`
+- **THEN** resolving `implementor` succeeds and inherits `default_mode`, `cli`, `model`, etc. from the global `headless_base`
+
+#### Scenario: Global agent extends project agent in same profile set
+- **WHEN** the project file's `default.agents` defines a base agent `team_base` (with `default_mode` and `cli`) and the global file's `default.agents` defines `summarizer` with `extends: team_base`
+- **THEN** resolving `summarizer` succeeds and inherits from the project's `team_base`
+
+#### Scenario: Cross-file extends references unknown agent
+- **WHEN** an agent in the active profile set specifies `extends: missing` and no agent named `missing` exists in that profile set in either file
+- **THEN** config loading fails with an error indicating the parent agent does not exist
+
+#### Scenario: Cross-file inheritance cycle
+- **WHEN** within the same profile set, the global file defines `a` with `extends: b` and the project file defines `b` with `extends: a`
+- **THEN** config loading fails with an error indicating a cycle in the extends chain
+
+#### Scenario: Project agent shadows then extends the original global name
+- **WHEN** within the same profile set, the global file defines `headless_base` and the project file defines `headless_base` with `extends: headless_base`
+- **THEN** config loading fails with a cycle error (the project agent's `extends` resolves to itself in the merged set)
 

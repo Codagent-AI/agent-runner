@@ -20,8 +20,9 @@ steps:
   - id: plan
     agent: planner
     prompt: |
-      Help the user plan the change "{{change_name}}".
-      You MUST use the codagent:simple-plan skill.
+      Help the user plan the change.
+      First, ask the user what the change is about. DO NOT attempt to guess.
+      Then, you MUST use the codagent:simple-plan skill.
 
   - id: validate
     mode: headless
@@ -33,7 +34,7 @@ steps:
   - id: commit-openspec
     command: |
       git add openspec/changes/{{change_name}}/
-      git commit -m "[{{step_id}}] Add openspec documents for {{change_name}}"
+      git commit -m "[{{step_id}}] chore: add openspec documents for {{change_name}}"
       agent-validator skip
 
   - id: implement-single-task
@@ -45,5 +46,5 @@ steps:
     command: |
       openspec archive "{{change_name}}" --yes
       git add openspec
-      git commit -m "[{{step_id}}] Archive openspec documents for {{change_name}}"
+      git commit -m "[{{step_id}}] chore: archive openspec documents for {{change_name}}"
       agent-validator skip

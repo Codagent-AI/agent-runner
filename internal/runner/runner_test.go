@@ -296,6 +296,35 @@ func TestRunWorkflow(t *testing.T) {
 		}
 	})
 
+	t.Run("skip_if sh: does not double-quote when template omits quotes", func(t *testing.T) {
+		runner := &mockRunner{}
+		w := model.Workflow{
+			Name:   "test",
+			Params: []model.Param{{Name: "flag"}},
+			Steps: []model.Step{
+				shellStep("s1", "echo ok"),
+				{
+					ID: "s2", Command: "echo should-run", Session: model.SessionNew,
+					SkipIf: "sh: test {{flag}} != true",
+				},
+			},
+		}
+		w.ApplyDefaults()
+		result, _ := RunWorkflow(&w, map[string]string{"flag": "true"}, &Options{
+			ProcessRunner: runner,
+			GlobExpander:  &mockGlob{},
+			Log:           &mockLog{},
+			SessionDir:    t.TempDir(),
+		})
+		if result != ResultSuccess {
+			t.Fatalf("expected success, got %q", result)
+		}
+		// flag="true" and compare != "true" → test exits 1 → s2 NOT skipped.
+		if len(runner.calls) != 2 {
+			t.Fatalf("expected 2 calls (s2 not skipped), got %d: %v", len(runner.calls), runner.calls)
+		}
+	})
+
 	t.Run("validates required params", func(t *testing.T) {
 		w := model.Workflow{
 			Name:   "test",

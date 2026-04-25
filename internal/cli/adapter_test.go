@@ -1,7 +1,11 @@
 package cli
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,10 +54,20 @@ func TestRegistry(t *testing.T) {
 		}
 	})
 
+	t.Run("resolves known CLI cursor", func(t *testing.T) {
+		adapter, err := Get("cursor")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if adapter == nil {
+			t.Fatal("expected non-nil adapter")
+		}
+	})
+
 	t.Run("KnownCLIs returns all registered names", func(t *testing.T) {
 		names := KnownCLIs()
-		if len(names) < 3 {
-			t.Fatalf("expected at least 3 known CLIs, got %d", len(names))
+		if len(names) < 4 {
+			t.Fatalf("expected at least 4 known CLIs, got %d", len(names))
 		}
 		found := map[string]bool{}
 		for _, name := range names {
@@ -67,6 +81,9 @@ func TestRegistry(t *testing.T) {
 		}
 		if !found["copilot"] {
 			t.Fatal("expected 'copilot' in known CLIs")
+		}
+		if !found["cursor"] {
+			t.Fatal("expected 'cursor' in known CLIs")
 		}
 	})
 }
@@ -753,6 +770,344 @@ func TestCopilotAdapter(t *testing.T) {
 			t.Fatalf("expected error about interactive mode and copilot, got: %v", err)
 		}
 	})
+}
+
+func TestCursorAdapter(t *testing.T) {
+	adapter := &CursorAdapter{}
+
+	t.Run("fresh headless cursor step", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "do something",
+			Headless: true,
+		})
+		expected := []string{"agent", "-p", "--output-format", "stream-json", "--force", "--trust", "do something"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("fresh headless does not include --resume", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "do something",
+			Headless: true,
+		})
+		for _, a := range args {
+			if strings.HasPrefix(a, "--resume") {
+				t.Fatalf("did not expect --resume for fresh cursor session, got %v", args)
+			}
+		}
+	})
+
+	t.Run("resume headless includes cursor autonomy flags", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:    "continue",
+			SessionID: "chat-abc",
+			Resume:    true,
+			Headless:  true,
+		})
+		expected := []string{"agent", "-p", "--output-format", "stream-json", "--force", "--trust", "--resume=chat-abc", "continue"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("model specified on fresh cursor step", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "do something",
+			Model:    "gpt-5.3-codex",
+			Headless: true,
+		})
+		expected := []string{"agent", "-p", "--output-format", "stream-json", "--force", "--trust", "--model", "gpt-5.3-codex", "do something"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("model specified on resumed cursor step is omitted", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:    "continue",
+			SessionID: "chat-abc",
+			Resume:    true,
+			Model:     "gpt-5.3-codex",
+			Headless:  true,
+		})
+		for _, a := range args {
+			if a == "--model" {
+				t.Fatalf("did not expect --model on resumed cursor step, got %v", args)
+			}
+		}
+	})
+
+	t.Run("effort level is ignored", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "do something",
+			Effort:   "high",
+			Headless: true,
+		})
+		for _, a := range args {
+			if a == "--reasoning-effort" || a == "--effort" {
+				t.Fatalf("did not expect any effort flag for cursor, got %v", args)
+			}
+		}
+	})
+
+	t.Run("disallowed tools do not affect args", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:          "do something",
+			Headless:        true,
+			DisallowedTools: []string{"AskUserQuestion"},
+		})
+		expected := []string{"agent", "-p", "--output-format", "stream-json", "--force", "--trust", "do something"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("does not support system prompt", func(t *testing.T) {
+		if adapter.SupportsSystemPrompt() {
+			t.Fatal("expected Cursor adapter to not support system prompt")
+		}
+	})
+
+	t.Run("system prompt is ignored by adapter", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:       "do something",
+			SystemPrompt: "should be ignored",
+			Headless:     true,
+		})
+		expected := []string{"agent", "-p", "--output-format", "stream-json", "--force", "--trust", "do something"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("discover session ID from stream-json init event", func(t *testing.T) {
+		output := `{"type":"system","subtype":"init","session_id":"chat-abc-123","model":"composer-1.5","cwd":"/tmp","permissionMode":"default"}`
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			ProcessOutput: output,
+			Headless:      true,
+		})
+		if id != "chat-abc-123" {
+			t.Fatalf("expected %q, got %q", "chat-abc-123", id)
+		}
+	})
+
+	t.Run("discover session ID from later event when earlier lines lack it", func(t *testing.T) {
+		output := "not json\n\n" +
+			`{"type":"assistant","message":{}}` + "\n" +
+			`{"type":"assistant","session_id":"chat-xyz","message":{}}` + "\n"
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			ProcessOutput: output,
+			Headless:      true,
+		})
+		if id != "chat-xyz" {
+			t.Fatalf("expected %q, got %q", "chat-xyz", id)
+		}
+	})
+
+	t.Run("discover session ID from long JSON line", func(t *testing.T) {
+		output := `{"type":"assistant","payload":"` + strings.Repeat("x", 70*1024) + `","session_id":"chat-long","message":{}}`
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			ProcessOutput: output,
+			Headless:      true,
+		})
+		if id != "chat-long" {
+			t.Fatalf("expected %q, got %q", "chat-long", id)
+		}
+	})
+
+	t.Run("discover session ID logs scanner failures", func(t *testing.T) {
+		var logBuf bytes.Buffer
+		origWriter := log.Writer()
+		origFlags := log.Flags()
+		log.SetOutput(&logBuf)
+		log.SetFlags(0)
+		t.Cleanup(func() {
+			log.SetOutput(origWriter)
+			log.SetFlags(origFlags)
+		})
+
+		output := `{"type":"assistant","payload":"` + strings.Repeat("x", 2*1024*1024) + `","session_id":"chat-too-long","message":{}}`
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			ProcessOutput: output,
+			Headless:      true,
+		})
+		if id != "" {
+			t.Fatalf("expected empty string on scanner failure, got %q", id)
+		}
+		logged := logBuf.String()
+		if !strings.Contains(logged, "failed to scan cursor session output") {
+			t.Fatalf("expected scanner failure log, got %q", logged)
+		}
+	})
+
+	t.Run("discover session ID returns empty when no event has session_id", func(t *testing.T) {
+		output := `{"type":"assistant","message":{}}`
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			ProcessOutput: output,
+			Headless:      true,
+		})
+		if id != "" {
+			t.Fatalf("expected empty string, got %q", id)
+		}
+	})
+
+	t.Run("discover session ID returns empty for empty output", func(t *testing.T) {
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			ProcessOutput: "",
+			Headless:      true,
+		})
+		if id != "" {
+			t.Fatalf("expected empty string, got %q", id)
+		}
+	})
+
+	t.Run("interactive mode returns error via InteractiveRejector interface", func(t *testing.T) {
+		var a Adapter = adapter
+		r, ok := a.(InteractiveRejector)
+		if !ok {
+			t.Fatal("expected CursorAdapter to implement InteractiveRejector")
+		}
+		err := r.InteractiveModeError()
+		if err == nil {
+			t.Fatal("expected error from InteractiveModeError")
+		}
+		if !strings.Contains(err.Error(), "interactive mode") || !strings.Contains(err.Error(), "cursor") {
+			t.Fatalf("expected error about interactive mode and cursor, got: %v", err)
+		}
+	})
+
+	t.Run("implements OutputFilter interface", func(t *testing.T) {
+		var a Adapter = adapter
+		if _, ok := a.(OutputFilter); !ok {
+			t.Fatal("expected CursorAdapter to implement OutputFilter")
+		}
+	})
+
+	t.Run("FilterOutput extracts result text from stream-json", func(t *testing.T) {
+		output := `{"type":"system","subtype":"init","session_id":"abc","model":"composer-1.5","cwd":"/tmp","permissionMode":"default"}` + "\n" +
+			`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]},"session_id":"abc"}` + "\n" +
+			`{"type":"result","subtype":"success","result":"The answer is 42","session_id":"abc","is_error":false}` + "\n"
+		got := adapter.FilterOutput(output)
+		if got != "The answer is 42" {
+			t.Fatalf("expected %q, got %q", "The answer is 42", got)
+		}
+	})
+
+	t.Run("FilterOutput returns empty when no result event", func(t *testing.T) {
+		output := `{"type":"system","subtype":"init","session_id":"abc"}` + "\n" +
+			`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]},"session_id":"abc"}` + "\n"
+		got := adapter.FilterOutput(output)
+		if got != "" {
+			t.Fatalf("expected empty string, got %q", got)
+		}
+	})
+
+	t.Run("FilterOutput returns empty for empty output", func(t *testing.T) {
+		got := adapter.FilterOutput("")
+		if got != "" {
+			t.Fatalf("expected empty string, got %q", got)
+		}
+	})
+
+	t.Run("FilterOutput handles result with empty string", func(t *testing.T) {
+		output := `{"type":"result","subtype":"success","result":"","session_id":"abc","is_error":false}` + "\n"
+		got := adapter.FilterOutput(output)
+		if got != "" {
+			t.Fatalf("expected empty string for empty result, got %q", got)
+		}
+	})
+
+	t.Run("WrapStdout filters stream-json to plain text", func(t *testing.T) {
+		var buf bytes.Buffer
+		w := adapter.WrapStdout(&buf)
+
+		input := `{"type":"system","subtype":"init","session_id":"abc","model":"composer-1.5"}` + "\n" +
+			`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]},"session_id":"abc"}` + "\n" +
+			`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"The answer"}]},"session_id":"abc"}` + "\n" +
+			`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"The answer is 42"}]},"session_id":"abc"}` + "\n" +
+			`{"type":"result","subtype":"success","result":"The answer is 42","session_id":"abc","is_error":false}` + "\n"
+
+		_, err := w.Write([]byte(input))
+		if err != nil {
+			t.Fatalf("unexpected write error: %v", err)
+		}
+		if buf.String() != "The answer is 42" {
+			t.Fatalf("expected %q, got %q", "The answer is 42", buf.String())
+		}
+	})
+
+	t.Run("WrapStdout produces no output for non-assistant events", func(t *testing.T) {
+		var buf bytes.Buffer
+		w := adapter.WrapStdout(&buf)
+
+		input := `{"type":"system","subtype":"init","session_id":"abc"}` + "\n" +
+			`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]},"session_id":"abc"}` + "\n"
+
+		_, _ = w.Write([]byte(input))
+		if buf.String() != "" {
+			t.Fatalf("expected empty output, got %q", buf.String())
+		}
+	})
+
+	t.Run("WrapStdout handles chunked writes", func(t *testing.T) {
+		var buf bytes.Buffer
+		w := adapter.WrapStdout(&buf)
+
+		line := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello world"}]},"session_id":"abc"}` + "\n"
+		// Write in two chunks, splitting mid-line
+		mid := len(line) / 2
+		_, _ = w.Write([]byte(line[:mid]))
+		_, _ = w.Write([]byte(line[mid:]))
+		if buf.String() != "hello world" {
+			t.Fatalf("expected %q, got %q", "hello world", buf.String())
+		}
+	})
+
+	t.Run("WrapStdout flushes final unterminated line on close", func(t *testing.T) {
+		var buf bytes.Buffer
+		w := adapter.WrapStdout(&buf)
+
+		line := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"final answer"}]},"session_id":"abc"}`
+		_, _ = w.Write([]byte(line))
+		closer, ok := w.(io.Closer)
+		if !ok {
+			t.Fatal("expected stdout wrapper to implement io.Closer")
+		}
+		if err := closer.Close(); err != nil {
+			t.Fatalf("unexpected close error: %v", err)
+		}
+		if buf.String() != "final answer" {
+			t.Fatalf("expected %q, got %q", "final answer", buf.String())
+		}
+	})
+
+	t.Run("WrapStdout returns downstream write errors", func(t *testing.T) {
+		writeErr := errors.New("write failed")
+		w := adapter.WrapStdout(errorWriter{err: writeErr})
+
+		line := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]},"session_id":"abc"}` + "\n"
+		n, err := w.Write([]byte(line))
+		if !errors.Is(err, writeErr) {
+			t.Fatalf("expected write error %v, got %v", writeErr, err)
+		}
+		if n != len(line) {
+			t.Fatalf("Write returned n=%d, want %d", n, len(line))
+		}
+		if _, err := w.Write([]byte(line)); !errors.Is(err, writeErr) {
+			t.Fatalf("expected stored write error on subsequent Write, got %v", err)
+		}
+	})
+
+	t.Run("WrapStdout returns close errors from final line flush", func(t *testing.T) {
+		writeErr := errors.New("close write failed")
+		w := adapter.WrapStdout(errorWriter{err: writeErr})
+
+		line := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]},"session_id":"abc"}`
+		_, _ = w.Write([]byte(line))
+		closer := w.(io.Closer)
+		if err := closer.Close(); !errors.Is(err, writeErr) {
+			t.Fatalf("expected close error %v, got %v", writeErr, err)
+		}
+	})
+}
+
+type errorWriter struct {
+	err error
+}
+
+func (w errorWriter) Write([]byte) (int, error) {
+	return 0, w.err
 }
 
 func assertArgs(t *testing.T, expected, actual []string) {

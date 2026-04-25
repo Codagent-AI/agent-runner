@@ -14,9 +14,23 @@ steps:
   - id: plan
     session: lead-agent
     prompt: |
-      You MUST use the codagent:simple-plan skill to plan the change.
+      Help the user plan the change.
+      First, ask the user what the change is about. DO NOT attempt to guess.
+      Then, you MUST use the codagent:simple-plan skill.
+
+  - id: locate-task
+    session: lead-agent
+    mode: headless
+    capture: task_file
+    prompt: |
+      You just planned a simple change that produced a single task file.
+      Output the path to that task file on a single line with NO other text,
+      NO markdown fences, and NO explanation.
+
+      Example valid output: some/path/tasks/001-do-the-thing.md
 
   - id: implement
-    session: lead-agent
-    prompt: |
-      You MUST use the codagent:implement-change skill to implement the change you just planned.
+    workflow: ../core/implement-task.yaml
+    params:
+      task_file: "{{task_file}}"
+      run_session_report: "true"

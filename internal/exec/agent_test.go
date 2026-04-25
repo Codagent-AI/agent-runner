@@ -268,7 +268,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		ctx := makeCtx()
 		ctx.AuditLogger = auditLog
 		ctx.ProfileStore = &config.Config{
-			Profiles: map[string]*config.Profile{
+			ActiveAgents: map[string]*config.Agent{
 				"implementor": {
 					DefaultMode: "headless",
 					CLI:         "claude",
@@ -295,7 +295,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		ctx := makeCtx()
 		ctx.AuditLogger = auditLog
 		ctx.ProfileStore = &config.Config{
-			Profiles: map[string]*config.Profile{
+			ActiveAgents: map[string]*config.Agent{
 				"planner": {
 					DefaultMode: "headless",
 					CLI:         "claude",
@@ -325,7 +325,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		ctx := makeCtx()
 		ctx.AuditLogger = auditLog
 		ctx.ProfileStore = &config.Config{
-			Profiles: map[string]*config.Profile{
+			ActiveAgents: map[string]*config.Agent{
 				"implementor": {
 					DefaultMode: "headless",
 					CLI:         "claude",
@@ -547,6 +547,42 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("strips trailing newlines from captured agent output", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "path/to/tasks/*.md\n"}}}
+		ctx := makeCtx()
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "find tasks", Session: model.SessionNew, Capture: "tasks_glob"}
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected success, got %q", outcome)
+		}
+		if ctx.CapturedVariables["tasks_glob"] != "path/to/tasks/*.md" {
+			t.Fatalf("expected trailing newline stripped, got %q", ctx.CapturedVariables["tasks_glob"])
+		}
+	})
+
+	t.Run("preserves multiple trailing newlines except final one", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "value\n\n"}}}
+		ctx := makeCtx()
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "get output", Session: model.SessionNew, Capture: "result"}
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if ctx.CapturedVariables["result"] != "value\n" {
+			t.Fatalf("expected one trailing newline preserved, got %q", ctx.CapturedVariables["result"])
+		}
+	})
+
+	t.Run("preserves leading whitespace in captured agent output", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "  indented output\n"}}}
+		ctx := makeCtx()
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "get output", Session: model.SessionNew, Capture: "result"}
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if ctx.CapturedVariables["result"] != "  indented output" {
+			t.Fatalf("expected leading whitespace preserved, got %q", ctx.CapturedVariables["result"])
+		}
+	})
+
 	t.Run("captures stdout on failed headless step with capture", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 1, Stdout: "review-failures"}}}
 		ctx := makeCtx()
@@ -560,6 +596,25 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 		if ctx.CapturedVariables["review_result"] != "review-failures" {
 			t.Fatalf("expected captured output on failure, got %q", ctx.CapturedVariables["review_result"])
+		}
+	})
+
+	t.Run("capture with OutputFilter adapter extracts filtered text", func(t *testing.T) {
+		streamJSON := `{"type":"system","subtype":"init","session_id":"abc","model":"composer-1.5","cwd":"/tmp"}` + "\n" +
+			`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]},"session_id":"abc"}` + "\n" +
+			`{"type":"result","subtype":"success","result":"filtered response","session_id":"abc","is_error":false}` + "\n"
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: streamJSON}}}
+		ctx := makeCtx()
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "echo test", Session: model.SessionNew, CLI: "cursor", Capture: "result"}
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected success, got %q", outcome)
+		}
+		if ctx.CapturedVariables["result"] != "filtered response" {
+			t.Fatalf("expected filtered response, got %q", ctx.CapturedVariables["result"])
 		}
 	})
 
@@ -780,6 +835,28 @@ func TestExecuteAgentStep(t *testing.T) {
 		lastArg := runner.calls[0][len(runner.calls[0])-1]
 		if !strings.Contains(lastArg, "autonomously in headless mode") {
 			t.Fatalf("expected headless preamble in prompt, got %q", lastArg)
+		}
+	})
+
+	t.Run("headless resume prompt omits autonomy preamble", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		ctx := makeCtx()
+		ctx.SessionIDs["prev"] = "session-abc"
+		ctx.LastSessionStepID = "prev"
+		step := model.Step{
+			ID:      "s",
+			Mode:    model.ModeHeadless,
+			CLI:     "cursor",
+			Prompt:  "what value did I just send you?",
+			Session: model.SessionResume,
+		}
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		lastArg := runner.calls[0][len(runner.calls[0])-1]
+		if strings.Contains(lastArg, "autonomously in headless mode") {
+			t.Fatalf("did not expect headless preamble on resumed prompt, got %q", lastArg)
+		}
+		if lastArg != step.Prompt {
+			t.Fatalf("expected resumed prompt %q, got %q", step.Prompt, lastArg)
 		}
 	})
 
@@ -1010,6 +1087,32 @@ func TestExecuteAgentStep(t *testing.T) {
 		// Runner should not have been invoked (failure before spawn)
 		if len(runner.calls) != 0 {
 			t.Fatalf("expected no CLI invocations, got %d", len(runner.calls))
+		}
+	})
+
+	t.Run("cursor step in interactive mode fails at runtime", func(t *testing.T) {
+		runner := &mockRunner{}
+		auditLog := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		step := model.Step{ID: "s", CLI: "cursor", Mode: model.ModeInteractive, Prompt: "do something", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeFailed {
+			t.Fatalf("expected OutcomeFailed for cursor interactive step, got %q", outcome)
+		}
+		if len(runner.calls) != 0 {
+			t.Fatalf("expected no CLI invocations, got %d", len(runner.calls))
+		}
+		end := findAuditEvent(auditLog.events, audit.EventStepEnd)
+		if end == nil {
+			t.Fatal("expected step end audit event")
+		}
+		errMsg, _ := end.Data["error"].(string)
+		if !strings.Contains(errMsg, "interactive mode") || !strings.Contains(errMsg, "cursor") {
+			t.Fatalf("expected interactive cursor error message, got %q", errMsg)
 		}
 	})
 }

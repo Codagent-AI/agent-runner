@@ -29,10 +29,17 @@ func DispatchStep(
 	}
 
 	if step.Command != "" {
+		if ctx.PrepareStepHook != nil {
+			ctx.PrepareStepHook(step.Mode == model.ModeInteractive)
+		}
 		return ExecuteShellStep(step, ctx, runner, log)
 	}
 
 	if step.Agent != "" || step.Prompt != "" {
+		if ctx.PrepareStepHook != nil {
+			mode := ResolveAgentStepMode(step, ctx)
+			ctx.PrepareStepHook(mode == model.ModeInteractive)
+		}
 		return ExecuteAgentStep(step, ctx, runner, log)
 	}
 

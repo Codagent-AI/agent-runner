@@ -305,6 +305,25 @@ func TestParseWorkflowName(t *testing.T) {
 	}
 }
 
+func TestBuildDescriptor_Builtin(t *testing.T) {
+	tests := []struct {
+		workflowFile string
+		wantDisplay  string
+	}{
+		{"builtin:openspec/change.yaml", "openspec:change"},
+		{"builtin:core/finalize-pr.yaml", "core:finalize-pr"},
+		{"builtin:smoke-test.yaml", "smoke-test"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.workflowFile, func(t *testing.T) {
+			desc := buildDescriptor(tt.workflowFile, "")
+			if desc.DisplayName != tt.wantDisplay {
+				t.Fatalf("buildDescriptor(%q).DisplayName = %q, want %q", tt.workflowFile, desc.DisplayName, tt.wantDisplay)
+			}
+		})
+	}
+}
+
 func TestParseStartTime(t *testing.T) {
 	t.Run("parses RFC3339Nano session ID", func(t *testing.T) {
 		got := parseStartTime("deploy-2026-04-11T09-14-00-000000000Z")

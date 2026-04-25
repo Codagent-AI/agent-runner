@@ -38,6 +38,11 @@ func CanonicalName(resolvedPath string, cfg ResolverConfig) string {
 	if resolvedPath == "" {
 		return ""
 	}
+
+	if after, ok := strings.CutPrefix(resolvedPath, "builtin:"); ok {
+		return canonicalFromRelPath(after)
+	}
+
 	clean := filepath.Clean(resolvedPath)
 
 	if cfg.WorkflowsRoot != "" {
@@ -52,6 +57,19 @@ func CanonicalName(resolvedPath string, cfg ResolverConfig) string {
 		}
 	}
 	return clean
+}
+
+func canonicalFromRelPath(rel string) string {
+	rel = strings.TrimSuffix(rel, filepath.Ext(rel))
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	switch len(parts) {
+	case 1:
+		return parts[0]
+	case 2:
+		return parts[0] + ":" + parts[1]
+	default:
+		return filepath.ToSlash(rel)
+	}
 }
 
 func canonicalFromWorkflowsRoot(clean, root string) (string, bool) {
