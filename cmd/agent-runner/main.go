@@ -85,7 +85,6 @@ func (r *realProcessRunner) RunShell(cmd string, captureStdout bool, workdir str
 
 func (r *realProcessRunner) RunAgent(args []string, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
 	c := exec.Command(args[0], args[1:]...) // #nosec G204 -- CLI runner launches agent processes by design
-	c.Stdin = os.Stdin
 	c.Stderr = os.Stderr
 	if workdir != "" {
 		c.Dir = filepath.Clean(workdir) // #nosec G304 -- workdir is from user-authored workflow YAML

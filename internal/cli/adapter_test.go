@@ -312,7 +312,7 @@ func TestCodexAdapter(t *testing.T) {
 			Prompt:   "do something",
 			Headless: true,
 		})
-		expected := []string{"codex", "exec", "--json", "-a", "never", "do something"}
+		expected := []string{"codex", "-a", "never", "exec", "--json", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -331,7 +331,7 @@ func TestCodexAdapter(t *testing.T) {
 			SessionID: "thread-abc",
 			Headless:  true,
 		})
-		expected := []string{"codex", "exec", "resume", "thread-abc", "-a", "never", "continue"}
+		expected := []string{"codex", "-a", "never", "exec", "resume", "thread-abc", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -351,7 +351,7 @@ func TestCodexAdapter(t *testing.T) {
 			Model:    "o3",
 			Headless: true,
 		})
-		expected := []string{"codex", "exec", "--json", "-a", "never", "-m", "o3", "do something"}
+		expected := []string{"codex", "-a", "never", "exec", "--json", "-m", "o3", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -374,26 +374,26 @@ func TestCodexAdapter(t *testing.T) {
 			Model:     "o3",
 			Headless:  true,
 		})
-		expected := []string{"codex", "exec", "resume", "thread-abc", "-a", "never", "continue"}
+		expected := []string{"codex", "-a", "never", "exec", "resume", "thread-abc", "continue"}
 		assertArgs(t, expected, args)
 	})
 
-	t.Run("effort level specified headless", func(t *testing.T) {
+	t.Run("effort level ignored headless", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:   "do something",
 			Effort:   "medium",
 			Headless: true,
 		})
-		expected := []string{"codex", "exec", "--json", "-a", "never", "--effort", "medium", "do something"}
+		expected := []string{"codex", "-a", "never", "exec", "--json", "do something"}
 		assertArgs(t, expected, args)
 	})
 
-	t.Run("effort level specified interactive", func(t *testing.T) {
+	t.Run("effort level ignored interactive", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt: "review",
 			Effort: "high",
 		})
-		expected := []string{"codex", "--no-alt-screen", "--effort", "high", "review"}
+		expected := []string{"codex", "--no-alt-screen", "review"}
 		assertArgs(t, expected, args)
 	})
 
@@ -421,7 +421,7 @@ func TestCodexAdapter(t *testing.T) {
 			SystemPrompt: "should be ignored",
 			Headless:     true,
 		})
-		expected := []string{"codex", "exec", "--json", "-a", "never", "do something"}
+		expected := []string{"codex", "-a", "never", "exec", "--json", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -508,6 +508,106 @@ func TestCodexAdapter(t *testing.T) {
 		})
 		if id != "" {
 			t.Fatalf("expected empty string, got %q", id)
+		}
+	})
+
+	t.Run("implements OutputFilter interface", func(t *testing.T) {
+		var a Adapter = adapter
+		if _, ok := a.(OutputFilter); !ok {
+			t.Fatal("expected CodexAdapter to implement OutputFilter")
+		}
+	})
+
+	t.Run("FilterOutput extracts agent message text from JSONL", func(t *testing.T) {
+		output := `{"type":"thread.started","thread_id":"019dc6a3-68a4-7751-8c3a-43c3c84a24ba"}` + "\n" +
+			`{"type":"turn.started"}` + "\n" +
+			`{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"codex headless smoke ok."}}` + "\n" +
+			`{"type":"turn.completed","usage":{"input_tokens":2521,"cached_input_tokens":2432,"output_tokens":3,"reasoning_output_tokens":19}}` + "\n"
+		got := adapter.FilterOutput(output)
+		if got != "codex headless smoke ok." {
+			t.Fatalf("expected filtered Codex response, got %q", got)
+		}
+	})
+
+	t.Run("FilterOutput extracts codex error events", func(t *testing.T) {
+		output := `{"type":"thread.started","thread_id":"019dc6bc-d6c4-7a13-bd75-6aab9fd8b457"}` + "\n" +
+			`{"type":"turn.started"}` + "\n" +
+			`{"type":"error","message":"You've hit your usage limit."}` + "\n" +
+			`{"type":"turn.failed","error":{"message":"You've hit your usage limit."}}` + "\n"
+		got := adapter.FilterOutput(output)
+		if got != "You've hit your usage limit." {
+			t.Fatalf("expected filtered Codex error, got %q", got)
+		}
+	})
+
+	t.Run("WrapStdout filters JSONL to plain text", func(t *testing.T) {
+		var buf bytes.Buffer
+		w := adapter.WrapStdout(&buf)
+		input := `{"type":"thread.started","thread_id":"019dc6a3-68a4-7751-8c3a-43c3c84a24ba"}` + "\n" +
+			`{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"codex headless smoke ok."}}` + "\n" +
+			`{"type":"turn.completed","usage":{"input_tokens":2521}}` + "\n"
+		if _, err := w.Write([]byte(input)); err != nil {
+			t.Fatalf("unexpected write error: %v", err)
+		}
+		if got := buf.String(); got != "codex headless smoke ok." {
+			t.Fatalf("expected filtered Codex response, got %q", got)
+		}
+	})
+
+	t.Run("implements StderrWrapper interface", func(t *testing.T) {
+		var a Adapter = adapter
+		if _, ok := a.(StderrWrapper); !ok {
+			t.Fatal("expected CodexAdapter to implement StderrWrapper")
+		}
+	})
+
+	t.Run("WrapStderr suppresses rollout recording warning", func(t *testing.T) {
+		var buf bytes.Buffer
+		w := adapter.WrapStderr(&buf)
+		input := "debug: kept\n" +
+			"Reading additional input from stdin...\n" +
+			"2026-04-25T21:54:58.585861Z ERROR codex_core::session: failed to record rollout items: thread 019dc6a3-68a4-7751-8c3a-43c3c84a24ba not found\n" +
+			"fatal: kept\n"
+		if _, err := w.Write([]byte(input)); err != nil {
+			t.Fatalf("unexpected write error: %v", err)
+		}
+		if got := buf.String(); got != "debug: kept\nfatal: kept\n" {
+			t.Fatalf("expected rollout warning filtered from live stderr, got %q", got)
+		}
+	})
+
+	t.Run("rollout recording error is ignored after completed headless turn", func(t *testing.T) {
+		stdout := `{"type":"turn.completed","usage":{"input_tokens":2521}}` + "\n"
+		stderr := "Reading additional input from stdin...\n2026-04-25T21:54:58.585861Z ERROR codex_core::session: failed to record rollout items: thread 019dc6a3-68a4-7751-8c3a-43c3c84a24ba not found"
+		exitCode, filteredStderr := adapter.FilterHeadlessResult(1, stdout, stderr)
+		if exitCode != 0 {
+			t.Fatalf("expected exit code normalized to 0, got %d", exitCode)
+		}
+		if filteredStderr != "" {
+			t.Fatalf("expected stderr to be filtered, got %q", filteredStderr)
+		}
+	})
+
+	t.Run("ignored diagnostics do not hide failure without completed turn", func(t *testing.T) {
+		stderr := "Reading additional input from stdin...\ncodex_core::session: failed to record rollout items: thread 019dc6a3-68a4-7751-8c3a-43c3c84a24ba not found"
+		exitCode, filteredStderr := adapter.FilterHeadlessResult(1, "", stderr)
+		if exitCode != 1 {
+			t.Fatalf("expected exit code to remain 1, got %d", exitCode)
+		}
+		if filteredStderr != "" {
+			t.Fatalf("expected ignored stderr diagnostics to be filtered, got %q", filteredStderr)
+		}
+	})
+
+	t.Run("rollout recording error does not hide unrelated stderr", func(t *testing.T) {
+		stdout := `{"type":"turn.completed","usage":{"input_tokens":2521}}` + "\n"
+		stderr := "codex_core::session: failed to record rollout items: thread missing not found\nfatal: unrelated"
+		exitCode, filteredStderr := adapter.FilterHeadlessResult(1, stdout, stderr)
+		if exitCode != 1 {
+			t.Fatalf("expected exit code to remain 1 with unrelated stderr, got %d", exitCode)
+		}
+		if filteredStderr != "fatal: unrelated" {
+			t.Fatalf("expected unrelated stderr to remain, got %q", filteredStderr)
 		}
 	})
 }

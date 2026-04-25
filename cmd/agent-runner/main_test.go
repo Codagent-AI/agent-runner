@@ -248,6 +248,33 @@ func TestResolveWorkflowArg(t *testing.T) {
 	})
 }
 
+func TestRealProcessRunner_RunAgentDoesNotInheritStdin(t *testing.T) {
+	oldStdin := os.Stdin
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	if _, err := w.WriteString("leaked\n"); err != nil {
+		t.Fatalf("write pipe: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+	os.Stdin = r
+	defer func() {
+		os.Stdin = oldStdin
+		_ = r.Close()
+	}()
+
+	result, err := (&realProcessRunner{}).RunAgent([]string{"sh", "-c", `if read x; then printf "read:%s" "$x"; else printf "eof"; fi`}, true, "")
+	if err != nil {
+		t.Fatalf("RunAgent returned error: %v", err)
+	}
+	if result.Stdout != "eof" {
+		t.Fatalf("RunAgent inherited stdin, stdout = %q", result.Stdout)
+	}
+}
+
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

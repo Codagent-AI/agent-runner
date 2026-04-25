@@ -25,12 +25,19 @@ type tuiProcessRunner struct {
 	coord         *Coordinator
 	stepPrefix    string // set via SetPrefix before each step
 	stdoutWrapper func(w io.Writer) io.Writer
+	stderrWrapper func(w io.Writer) io.Writer
 }
 
 // SetStdoutWrapper sets a function that wraps the TUI stdout writer. When set,
 // the wrapper filters structured output (e.g. JSONL) before display.
 func (r *tuiProcessRunner) SetStdoutWrapper(fn func(w io.Writer) io.Writer) {
 	r.stdoutWrapper = fn
+}
+
+// SetStderrWrapper sets a function that wraps the TUI stderr writer. When set,
+// the wrapper filters known diagnostics before display.
+func (r *tuiProcessRunner) SetStderrWrapper(fn func(w io.Writer) io.Writer) {
+	r.stderrWrapper = fn
 }
 
 // SetPrefix updates the step prefix that labels output chunks and output files,
@@ -101,23 +108,28 @@ func (r *tuiProcessRunner) openOutputFile(ext string) *os.File {
 // compositeWriter builds the three-way tee:
 //
 //	raw → io.MultiWriter(
-//	       ANSIStripper → [stdoutWrapper?] → chunkWriter → p.Send(OutputChunkMsg),
+//	       ANSIStripper → [stream wrapper?] → chunkWriter → p.Send(OutputChunkMsg),
 //	       outputFile (raw bytes),
 //	       *bytes.Buffer (for ProcessResult.Stdout/Stderr),
 //	     )
 //
-// When stdoutWrapper is set and stream is "stdout", the wrapper is inserted
-// between the ANSI stripper and the chunk writer so adapters that produce
-// structured output can filter it before display.
+// When a stream wrapper is set, it is inserted between the ANSI stripper and
+// the chunk writer so adapters can filter output before display.
 func (r *tuiProcessRunner) compositeWriter(stream, ext string, buf *bytes.Buffer) (w io.Writer, cleanup func()) {
 	chunk := newChunkWriter(r.coord, r.stepPrefix, stream)
 
 	var tuiTarget io.Writer = chunk
-	var wrapperCloser io.Closer
+	var wrapperClosers []io.Closer
 	if stream == "stdout" && r.stdoutWrapper != nil {
 		tuiTarget = r.stdoutWrapper(chunk)
 		if c, ok := tuiTarget.(io.Closer); ok {
-			wrapperCloser = c
+			wrapperClosers = append(wrapperClosers, c)
+		}
+	}
+	if stream == "stderr" && r.stderrWrapper != nil {
+		tuiTarget = r.stderrWrapper(chunk)
+		if c, ok := tuiTarget.(io.Closer); ok {
+			wrapperClosers = append(wrapperClosers, c)
 		}
 	}
 	stripped := NewANSIStripper(tuiTarget)
@@ -134,8 +146,8 @@ func (r *tuiProcessRunner) compositeWriter(stream, ext string, buf *bytes.Buffer
 
 	w = io.MultiWriter(writers...)
 	cleanup = func() {
-		if wrapperCloser != nil {
-			_ = wrapperCloser.Close()
+		for _, c := range wrapperClosers {
+			_ = c.Close()
 		}
 		chunk.Flush()
 		if f != nil {
@@ -193,7 +205,6 @@ func (r *tuiProcessRunner) RunShell(cmd string, captureStdout bool, workdir stri
 // go through pty.RunInteractive).
 func (r *tuiProcessRunner) RunAgent(args []string, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
 	c := exec.Command(args[0], args[1:]...) // #nosec G204
-	c.Stdin = os.Stdin
 	if workdir != "" {
 		c.Dir = filepath.Clean(workdir) // #nosec G304
 	}

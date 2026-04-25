@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,9 +18,9 @@ type CodexAdapter struct{}
 //
 // Patterns:
 //   - Fresh interactive:  codex --no-alt-screen <prompt>
-//   - Fresh headless:     codex exec --json <prompt>
+//   - Fresh headless:     codex -a never exec --json <prompt>
 //   - Resume interactive: codex resume --no-alt-screen <uuid> <prompt>
-//   - Resume headless:    codex exec resume <uuid> <prompt>
+//   - Resume headless:    codex -a never exec resume <uuid> <prompt>
 //   - Model override:     appends -m <m> (fresh sessions only)
 //
 // -m is intentionally omitted on resume: a Codex thread keeps the model it
@@ -33,13 +34,12 @@ func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 	resuming := input.SessionID != ""
 
 	if input.Headless {
-		args = append(args, "exec")
+		args = append(args, "-a", "never", "exec")
 		if resuming {
 			args = append(args, "resume", input.SessionID)
 		} else {
 			args = append(args, "--json")
 		}
-		args = append(args, "-a", "never")
 	} else {
 		if resuming {
 			args = append(args, "resume", "--no-alt-screen", input.SessionID)
@@ -52,10 +52,6 @@ func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 		args = append(args, "-m", input.Model)
 	}
 
-	if input.Effort != "" {
-		args = append(args, "--effort", input.Effort)
-	}
-
 	args = append(args, input.Prompt)
 	return args
 }
@@ -63,6 +59,33 @@ func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 // SupportsSystemPrompt returns false — Codex CLI has no native system prompt flag.
 func (a *CodexAdapter) SupportsSystemPrompt() bool {
 	return false
+}
+
+// FilterOutput extracts the final assistant text from Codex JSONL output.
+func (a *CodexAdapter) FilterOutput(stdout string) string {
+	return extractCodexAgentMessages(stdout)
+}
+
+// WrapStdout parses Codex JSONL and forwards only assistant text to the TUI.
+func (a *CodexAdapter) WrapStdout(downstream io.Writer) io.Writer {
+	return &codexStreamFilter{downstream: downstream}
+}
+
+// WrapStderr suppresses Codex's persistent-exec rollout bookkeeping warning
+// from live display. The post-run result filter still decides whether the
+// process failed based on exit status, stdout, and raw stderr.
+func (a *CodexAdapter) WrapStderr(downstream io.Writer) io.Writer {
+	return &codexStderrFilter{downstream: downstream}
+}
+
+// FilterHeadlessResult suppresses a known Codex bookkeeping error emitted
+// after a completed turn. Other non-zero exits and stderr are preserved.
+func (a *CodexAdapter) FilterHeadlessResult(exitCode int, stdout, stderr string) (filteredExitCode int, filteredStderr string) {
+	filteredStderr = filterCodexRolloutStderr(stderr)
+	if exitCode != 0 && codexTurnCompleted(stdout) && strings.TrimSpace(filteredStderr) == "" {
+		return 0, ""
+	}
+	return exitCode, filteredStderr
 }
 
 // DiscoverSessionID returns the session ID after a Codex process exits.
@@ -95,6 +118,241 @@ func discoverCodexHeadlessSession(output string) string {
 		}
 	}
 	return ""
+}
+
+type codexStreamFilter struct {
+	downstream io.Writer
+	buf        []byte
+	err        error
+	wrote      bool
+	lastText   string
+}
+
+func (f *codexStreamFilter) Write(p []byte) (int, error) {
+	if f.err != nil {
+		return 0, f.err
+	}
+	n := len(p)
+	f.buf = append(f.buf, p...)
+	for {
+		idx := indexByte(f.buf, '\n')
+		if idx < 0 {
+			break
+		}
+		line := f.buf[:idx]
+		f.buf = f.buf[idx+1:]
+		if err := f.processLine(line); err != nil {
+			return n, err
+		}
+	}
+	return n, nil
+}
+
+func (f *codexStreamFilter) Close() error {
+	if f.err != nil {
+		return f.err
+	}
+	if len(f.buf) > 0 {
+		if err := f.processLine(f.buf); err != nil {
+			return err
+		}
+		f.buf = nil
+	}
+	return nil
+}
+
+func (f *codexStreamFilter) processLine(line []byte) error {
+	text := codexDisplayText(line)
+	if text == "" {
+		return nil
+	}
+	if text == f.lastText {
+		return nil
+	}
+	if f.wrote {
+		if err := f.writeDownstream([]byte("\n")); err != nil {
+			return err
+		}
+	}
+	if err := f.writeDownstream([]byte(text)); err != nil {
+		return err
+	}
+	f.wrote = true
+	f.lastText = text
+	return nil
+}
+
+func (f *codexStreamFilter) writeDownstream(p []byte) error {
+	n, err := f.downstream.Write(p)
+	if err == nil && n < len(p) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		f.err = err
+	}
+	return err
+}
+
+type codexStderrFilter struct {
+	downstream     io.Writer
+	buf            []byte
+	err            error
+	skippedRollout bool
+}
+
+func (f *codexStderrFilter) Write(p []byte) (int, error) {
+	if f.err != nil {
+		return 0, f.err
+	}
+	n := len(p)
+	f.buf = append(f.buf, p...)
+	for {
+		idx := indexByte(f.buf, '\n')
+		if idx < 0 {
+			break
+		}
+		line := f.buf[:idx]
+		f.buf = f.buf[idx+1:]
+		if err := f.processLine(line, true); err != nil {
+			return n, err
+		}
+	}
+	return n, nil
+}
+
+func (f *codexStderrFilter) Close() error {
+	if f.err != nil {
+		return f.err
+	}
+	if len(f.buf) > 0 {
+		if err := f.processLine(f.buf, false); err != nil {
+			return err
+		}
+		f.buf = nil
+	}
+	return nil
+}
+
+func (f *codexStderrFilter) processLine(line []byte, addNewline bool) error {
+	if isCodexIgnoredStderrLine(string(line), &f.skippedRollout) {
+		return nil
+	}
+	out := line
+	if addNewline {
+		out = append(append([]byte(nil), line...), '\n')
+	}
+	return f.writeDownstream(out)
+}
+
+func (f *codexStderrFilter) writeDownstream(p []byte) error {
+	n, err := f.downstream.Write(p)
+	if err == nil && n < len(p) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		f.err = err
+	}
+	return err
+}
+
+func extractCodexAgentMessages(output string) string {
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	var messages []string
+	for scanner.Scan() {
+		if text := codexDisplayText(scanner.Bytes()); text != "" {
+			if len(messages) > 0 && messages[len(messages)-1] == text {
+				continue
+			}
+			messages = append(messages, text)
+		}
+	}
+	return strings.Join(messages, "\n")
+}
+
+func codexDisplayText(line []byte) string {
+	var event struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+		Item    *struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"item"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(line, &event); err != nil {
+		return ""
+	}
+	if event.Type == "item.completed" && event.Item != nil && event.Item.Type == "agent_message" {
+		return event.Item.Text
+	}
+	if event.Type == "error" {
+		return event.Message
+	}
+	if event.Type == "turn.failed" && event.Error != nil {
+		return event.Error.Message
+	}
+	return ""
+}
+
+func codexTurnCompleted(output string) bool {
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		var event struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			continue
+		}
+		if event.Type == "turn.completed" {
+			return true
+		}
+	}
+	return false
+}
+
+func filterCodexRolloutStderr(stderr string) string {
+	scanner := bufio.NewScanner(strings.NewReader(stderr))
+	var lines []string
+	skippedRollout := false
+	for scanner.Scan() {
+		line := scanner.Text()
+		if isCodexIgnoredStderrLine(line, &skippedRollout) {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func isCodexIgnoredStderrLine(line string, skippedRollout *bool) bool {
+	lower := strings.ToLower(line)
+	if strings.TrimSpace(lower) == "reading additional input from stdin..." {
+		*skippedRollout = false
+		return true
+	}
+	if strings.Contains(lower, "failed to record rollout items") {
+		*skippedRollout = true
+		return true
+	}
+	if *skippedRollout && strings.HasPrefix(strings.TrimSpace(lower), "thread ") && strings.HasSuffix(strings.TrimSpace(lower), " not found") {
+		*skippedRollout = false
+		return true
+	}
+	*skippedRollout = false
+	return false
+}
+
+func indexByte(b []byte, c byte) int {
+	for i, v := range b {
+		if v == c {
+			return i
+		}
+	}
+	return -1
 }
 
 // discoverCodexInteractiveSession scans ~/.codex/sessions/YYYY/MM/DD/ for the

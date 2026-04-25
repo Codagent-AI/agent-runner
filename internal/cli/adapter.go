@@ -50,12 +50,26 @@ type OutputFilter interface {
 	FilterOutput(stdout string) string
 }
 
+// HeadlessResultFilter is an optional interface adapters may implement when a
+// CLI can report a non-zero exit after a completed headless turn for a known
+// non-fatal bookkeeping error.
+type HeadlessResultFilter interface {
+	FilterHeadlessResult(exitCode int, stdout, stderr string) (filteredExitCode int, filteredStderr string)
+}
+
 // StdoutWrapper is an optional interface adapters may implement to wrap the
 // stdout io.Writer used by the process runner. This allows adapters that
 // produce structured output (e.g. JSONL) to filter bytes in-flight so the
 // TUI displays only the plain-text response.
 type StdoutWrapper interface {
 	WrapStdout(downstream io.Writer) io.Writer
+}
+
+// StderrWrapper is an optional interface adapters may implement to wrap the
+// stderr io.Writer used for live TUI display. Raw stderr remains available to
+// process capture and output files; this only filters what the user sees live.
+type StderrWrapper interface {
+	WrapStderr(downstream io.Writer) io.Writer
 }
 
 // InteractiveRejector is an optional interface adapters may implement to refuse

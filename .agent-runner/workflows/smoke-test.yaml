@@ -2,19 +2,43 @@ name: smoke-test
 description: "Manual smoke test for core step types (agent, shell, loop, capture, session resume, skip_if, break_if)"
 
 sessions:
-  - name: tester
-    agent: haiku_tester
+  - name: claude-headless
+    agent: claude_headless_smoke
+  - name: codex-headless
+    agent: codex_headless_smoke
+  - name: copilot-headless
+    agent: copilot_headless_smoke
+  - name: cursor-headless
+    agent: cursor_headless_smoke
+  - name: codex-interactive
+    agent: codex_interactive_smoke
 
 steps:
   - id: shell-capture
     command: echo "smoke-test value"
     capture: greeting
 
-  - id: agent-named
-    session: tester
+  - id: claude-named
+    session: claude-headless
     prompt: "Reply with one short sentence echoing this value back to me: {{greeting}}"
 
-  - id: agent-steps
+  - id: codex-headless
+    session: codex-headless
+    prompt: "Reply with exactly this short sentence: codex headless smoke ok."
+
+  - id: copilot-headless
+    session: copilot-headless
+    prompt: "Reply with exactly this short sentence: copilot headless smoke ok."
+
+  - id: cursor-headless
+    session: cursor-headless
+    prompt: "Reply with exactly this short sentence: cursor headless smoke ok."
+
+  - id: codex-interactive
+    session: codex-interactive
+    prompt: "Reply with exactly this short sentence: codex interactive smoke ready. Then wait for me to continue."
+
+  - id: claude-agent-steps
     workflow: smoke-test-agent-steps.yaml
 
   - id: interactive-shell
