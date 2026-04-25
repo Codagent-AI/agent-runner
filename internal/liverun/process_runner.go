@@ -21,9 +21,16 @@ type PrefixSetter interface {
 
 // tuiProcessRunner implements exec.ProcessRunner with TUI streaming.
 type tuiProcessRunner struct {
-	base       iexec.ProcessRunner
-	coord      *Coordinator
-	stepPrefix string // set via SetPrefix before each step
+	base          iexec.ProcessRunner
+	coord         *Coordinator
+	stepPrefix    string // set via SetPrefix before each step
+	stdoutWrapper func(w io.Writer) io.Writer
+}
+
+// SetStdoutWrapper sets a function that wraps the TUI stdout writer. When set,
+// the wrapper filters structured output (e.g. JSONL) before display.
+func (r *tuiProcessRunner) SetStdoutWrapper(fn func(w io.Writer) io.Writer) {
+	r.stdoutWrapper = fn
 }
 
 // SetPrefix updates the step prefix that labels output chunks and output files,
@@ -94,13 +101,26 @@ func (r *tuiProcessRunner) openOutputFile(ext string) *os.File {
 // compositeWriter builds the three-way tee:
 //
 //	raw → io.MultiWriter(
-//	       ANSIStripper → chunkWriter → p.Send(OutputChunkMsg),
+//	       ANSIStripper → [stdoutWrapper?] → chunkWriter → p.Send(OutputChunkMsg),
 //	       outputFile (raw bytes),
 //	       *bytes.Buffer (for ProcessResult.Stdout/Stderr),
 //	     )
+//
+// When stdoutWrapper is set and stream is "stdout", the wrapper is inserted
+// between the ANSI stripper and the chunk writer so adapters that produce
+// structured output can filter it before display.
 func (r *tuiProcessRunner) compositeWriter(stream, ext string, buf *bytes.Buffer) (w io.Writer, cleanup func()) {
 	chunk := newChunkWriter(r.coord, r.stepPrefix, stream)
-	stripped := NewANSIStripper(chunk)
+
+	var tuiTarget io.Writer = chunk
+	var wrapperCloser io.Closer
+	if stream == "stdout" && r.stdoutWrapper != nil {
+		tuiTarget = r.stdoutWrapper(chunk)
+		if c, ok := tuiTarget.(io.Closer); ok {
+			wrapperCloser = c
+		}
+	}
+	stripped := NewANSIStripper(tuiTarget)
 
 	f := r.openOutputFile(ext)
 
@@ -114,6 +134,9 @@ func (r *tuiProcessRunner) compositeWriter(stream, ext string, buf *bytes.Buffer
 
 	w = io.MultiWriter(writers...)
 	cleanup = func() {
+		if wrapperCloser != nil {
+			_ = wrapperCloser.Close()
+		}
 		chunk.Flush()
 		if f != nil {
 			_ = f.Close()

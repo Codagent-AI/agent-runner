@@ -3,6 +3,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"time"
 )
 
@@ -40,6 +41,21 @@ type DiscoverOptions struct {
 	ProcessOutput string // Captured stdout/stderr from the CLI process (used by Codex headless)
 	Headless      bool
 	Workdir       string // Effective working directory of the CLI process (for Copilot filesystem discovery)
+}
+
+// OutputFilter is an optional interface adapters may implement when the CLI
+// produces structured output (e.g. JSONL) and the runner needs to extract
+// the plain-text response for capture variables and display.
+type OutputFilter interface {
+	FilterOutput(stdout string) string
+}
+
+// StdoutWrapper is an optional interface adapters may implement to wrap the
+// stdout io.Writer used by the process runner. This allows adapters that
+// produce structured output (e.g. JSONL) to filter bytes in-flight so the
+// TUI displays only the plain-text response.
+type StdoutWrapper interface {
+	WrapStdout(downstream io.Writer) io.Writer
 }
 
 // InteractiveRejector is an optional interface adapters may implement to refuse

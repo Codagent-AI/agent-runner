@@ -2,6 +2,7 @@ package exec
 
 import (
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -98,6 +99,13 @@ type prefixSetter interface {
 	SetPrefix(string)
 }
 
+// stdoutWrapperSetter is implemented by liverun.tuiProcessRunner. When set,
+// the process runner wraps the TUI stdout writer so adapters that produce
+// structured output (e.g. JSONL) can filter it before display.
+type stdoutWrapperSetter interface {
+	SetStdoutWrapper(func(w io.Writer) io.Writer)
+}
+
 // ExecuteAgentStep runs an agent step using the resolved CLI adapter.
 func ExecuteAgentStep(
 	step *model.Step,
@@ -162,6 +170,15 @@ func ExecuteAgentStep(
 		ps.SetPrefix(prefix)
 	}
 
+	// If the adapter wraps stdout (e.g. cursor stream-json → plain text), tell
+	// the process runner so the TUI displays filtered output.
+	if sw, ok := adapter.(cli.StdoutWrapper); ok {
+		if ws, ok2 := runner.(stdoutWrapperSetter); ok2 {
+			ws.SetStdoutWrapper(sw.WrapStdout)
+			defer ws.SetStdoutWrapper(nil) // clear after step
+		}
+	}
+
 	// Persist session bookkeeping BEFORE spawning the CLI so that if the runner
 	// is killed mid-step (ctrl-c, terminal hangup, crash) resume can reconnect
 	// to the session rather than orphan it. When the session ID is knowable at
@@ -175,13 +192,19 @@ func ExecuteAgentStep(
 	spawnTime := time.Now()
 	outcome, result, runErr := runAgentProcess(runner, args, headless, step.Workdir, log, ctx.SuspendHook, ctx.ResumeHook)
 	if runErr != nil {
-		emitAgentEnd(ctx, prefix, startTime, "", OutcomeFailed)
+		emitAgentEnd(ctx, prefix, startTime, "", OutcomeFailed, "", result.Stderr)
 		return OutcomeFailed, runErr
 	}
 
+	// When the adapter produces structured output (e.g. JSONL), extract the
+	// plain-text response for capture variables and TUI display.
+	filteredStdout := result.Stdout
+	if f, ok := adapter.(cli.OutputFilter); ok {
+		filteredStdout = f.FilterOutput(result.Stdout)
+	}
+
 	if step.Capture != "" {
-		captured := result.Stdout
-		captured = strings.TrimSuffix(captured, "\r\n")
+		captured := strings.TrimSuffix(filteredStdout, "\r\n")
 		captured = strings.TrimSuffix(captured, "\n")
 		ctx.CapturedVariables[step.Capture] = captured
 	}
@@ -199,7 +222,7 @@ func ExecuteAgentStep(
 
 	discoveredID := discoverAndStoreSession(adapter, step, ctx, spawnTime, sessionID, headless, result.Stdout, log)
 
-	emitAgentEnd(ctx, prefix, startTime, discoveredID, outcome)
+	emitAgentEnd(ctx, prefix, startTime, discoveredID, outcome, filteredStdout, result.Stderr)
 
 	return outcome, nil
 }
@@ -287,7 +310,9 @@ func buildAdapterInput(
 		fullPrompt = fullPrompt + "\n\n" + enrichment
 	}
 	if headless {
-		fullPrompt = headlessPreamble + fullPrompt
+		if !isResume {
+			fullPrompt = headlessPreamble + fullPrompt
+		}
 	} else {
 		fullPrompt = buildStepPrefix(step.ID, ctx, ctx.WorkflowResumed, isResume) + fullPrompt + completionInstruction
 	}
@@ -476,16 +501,23 @@ func emitAgentStart(
 	})
 }
 
-func emitAgentEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, discoveredID string, outcome StepOutcome) {
+func emitAgentEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, discoveredID string, outcome StepOutcome, stdout, stderr string) {
+	data := map[string]any{
+		"discovered_session_id": discoveredID,
+		"outcome":               string(outcome),
+		"duration_ms":           time.Since(startTime).Milliseconds(),
+	}
+	if stdout != "" {
+		data["stdout"] = stdout
+	}
+	if stderr != "" {
+		data["stderr"] = stderr
+	}
 	emitAudit(ctx, audit.Event{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Prefix:    prefix,
 		Type:      audit.EventStepEnd,
-		Data: map[string]any{
-			"discovered_session_id": discoveredID,
-			"outcome":               string(outcome),
-			"duration_ms":           time.Since(startTime).Milliseconds(),
-		},
+		Data:      data,
 	})
 }
 

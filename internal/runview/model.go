@@ -484,15 +484,11 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.autoFollow = false
 		return m.handleEnter()
 	case "up":
-		m.autoFollow = false
-		m.moveCursor(-1)
-		m.rebuildRanges()
-		m.syncLogToSelection()
+		cmd := m.handleStepNavigation(-1)
+		return m, cmd
 	case "down":
-		m.autoFollow = false
-		m.moveCursor(1)
-		m.rebuildRanges()
-		m.syncLogToSelection()
+		cmd := m.handleStepNavigation(1)
+		return m, cmd
 	case "k":
 		m.autoFollow = false
 		if m.logOffset > m.maxLogOffset() {
@@ -520,6 +516,14 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.rebuildRanges()
 	}
 	return m, nil
+}
+
+func (m *Model) handleStepNavigation(delta int) tea.Cmd {
+	m.autoFollow = false
+	m.moveCursor(delta)
+	m.rebuildRanges()
+	m.syncLogToSelection()
+	return tea.ClearScreen
 }
 
 // applyAutoFollowCursor moves the cursor to the ancestor-at-current-level of

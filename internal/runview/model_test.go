@@ -119,6 +119,26 @@ func TestModel_Navigation_UpDown(t *testing.T) {
 	}
 }
 
+func TestModel_Navigation_UpDownClearsScreen(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if cmd == nil {
+		t.Fatal("expected down navigation to request a screen clear")
+	}
+	if msg := cmd(); msg == nil {
+		t.Fatal("expected clear-screen command to emit a message")
+	}
+
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if cmd == nil {
+		t.Fatal("expected up navigation to request a screen clear")
+	}
+	if msg := cmd(); msg == nil {
+		t.Fatal("expected clear-screen command to emit a message")
+	}
+}
+
 func TestModel_Navigation_ExpansionRowsRemainReadOnly(t *testing.T) {
 	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
 	setup := &StepNode{ID: "setup", Type: NodeShell, Status: StatusSuccess, Parent: root}

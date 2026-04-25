@@ -599,6 +599,25 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("capture with OutputFilter adapter extracts filtered text", func(t *testing.T) {
+		streamJSON := `{"type":"system","subtype":"init","session_id":"abc","model":"composer-1.5","cwd":"/tmp"}` + "\n" +
+			`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]},"session_id":"abc"}` + "\n" +
+			`{"type":"result","subtype":"success","result":"filtered response","session_id":"abc","is_error":false}` + "\n"
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: streamJSON}}}
+		ctx := makeCtx()
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "echo test", Session: model.SessionNew, CLI: "cursor", Capture: "result"}
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected success, got %q", outcome)
+		}
+		if ctx.CapturedVariables["result"] != "filtered response" {
+			t.Fatalf("expected filtered response, got %q", ctx.CapturedVariables["result"])
+		}
+	})
+
 	t.Run("does not capture on headless step without capture field", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "some-output"}}}
 		ctx := makeCtx()
@@ -816,6 +835,28 @@ func TestExecuteAgentStep(t *testing.T) {
 		lastArg := runner.calls[0][len(runner.calls[0])-1]
 		if !strings.Contains(lastArg, "autonomously in headless mode") {
 			t.Fatalf("expected headless preamble in prompt, got %q", lastArg)
+		}
+	})
+
+	t.Run("headless resume prompt omits autonomy preamble", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		ctx := makeCtx()
+		ctx.SessionIDs["prev"] = "session-abc"
+		ctx.LastSessionStepID = "prev"
+		step := model.Step{
+			ID:      "s",
+			Mode:    model.ModeHeadless,
+			CLI:     "cursor",
+			Prompt:  "what value did I just send you?",
+			Session: model.SessionResume,
+		}
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		lastArg := runner.calls[0][len(runner.calls[0])-1]
+		if strings.Contains(lastArg, "autonomously in headless mode") {
+			t.Fatalf("did not expect headless preamble on resumed prompt, got %q", lastArg)
+		}
+		if lastArg != step.Prompt {
+			t.Fatalf("expected resumed prompt %q, got %q", step.Prompt, lastArg)
 		}
 	})
 
