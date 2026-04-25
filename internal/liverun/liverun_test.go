@@ -2,10 +2,61 @@ package liverun
 
 import (
 	"bytes"
+	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	iexec "github.com/codagent/agent-runner/internal/exec"
 )
+
+type captureProgram struct {
+	mu   sync.Mutex
+	msgs []tea.Msg
+}
+
+func (p *captureProgram) ReleaseTerminal() error { return nil }
+func (p *captureProgram) RestoreTerminal() error { return nil }
+func (p *captureProgram) Send(msg tea.Msg) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.msgs = append(p.msgs, msg)
+}
+
+func (p *captureProgram) messages() []tea.Msg {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]tea.Msg, len(p.msgs))
+	copy(out, p.msgs)
+	return out
+}
+
+type closeFlushWriter struct {
+	downstream io.Writer
+	buf        bytes.Buffer
+}
+
+func (w *closeFlushWriter) Write(p []byte) (int, error) {
+	return w.buf.Write(p)
+}
+
+func (w *closeFlushWriter) Close() error {
+	_, err := w.downstream.Write(w.buf.Bytes())
+	return err
+}
+
+type unusedRunner struct{}
+
+func (unusedRunner) RunShell(string, bool, string) (iexec.ProcessResult, error) {
+	return iexec.ProcessResult{}, nil
+}
+
+func (unusedRunner) RunAgent([]string, bool, string) (iexec.ProcessResult, error) {
+	return iexec.ProcessResult{}, nil
+}
 
 // ---- ANSI stripper tests ----
 
@@ -143,6 +194,29 @@ func TestChunkWriter_FlushClearsBuffer(t *testing.T) {
 	cw.Flush()
 	if len(cw.buf) != 0 {
 		t.Errorf("buf not empty after Flush: len=%d", len(cw.buf))
+	}
+}
+
+func TestCompositeWriter_ClosesStdoutWrapperBeforeChunkFlush(t *testing.T) {
+	program := &captureProgram{}
+	runner := NewCoordinator(program, "").TUIProcessRunner(unusedRunner{}).(*tuiProcessRunner)
+	runner.SetPrefix("[step]")
+	runner.SetStdoutWrapper(func(w io.Writer) io.Writer {
+		return &closeFlushWriter{downstream: w}
+	})
+
+	w, cleanup := runner.compositeWriter("stdout", "out", nil)
+	_, _ = w.Write([]byte("hello"))
+	cleanup()
+
+	var got string
+	for _, msg := range program.messages() {
+		if chunk, ok := msg.(OutputChunkMsg); ok {
+			got += string(chunk.Bytes)
+		}
+	}
+	if got != "hello" {
+		t.Fatalf("streamed stdout = %q, want %q", got, "hello")
 	}
 }
 

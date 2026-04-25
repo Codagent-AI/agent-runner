@@ -36,6 +36,17 @@ func TestSpawnAgentResume_CLINotInPATH_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestSpawnAgentResume_CursorAllowedByAllowlist(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	err := spawnAgentResume("cursor", "sess")
+	if err == nil {
+		t.Fatal("expected error when cursor not in PATH")
+	}
+	if strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("expected cursor to be allowed and fail on PATH lookup instead, got: %v", err)
+	}
+}
+
 // TestResumeInspectPaths verifies that a resume state-file path (the caller
 // for -resume) maps cleanly to the session and project directories that the
 // run-view expects when a completed workflow is opened for inspection.

@@ -68,7 +68,7 @@ var legacyAgentKeys = map[string]bool{
 
 var validEffort = map[string]bool{"low": true, "medium": true, "high": true}
 var validDefaultMode = map[string]bool{"interactive": true, "headless": true}
-var validCLI = map[string]bool{"claude": true, "codex": true, "copilot": true}
+var validCLI = map[string]bool{"claude": true, "codex": true, "copilot": true, "cursor": true}
 
 var userHomeDir = os.UserHomeDir
 
@@ -438,7 +438,7 @@ func validateAgentMap(setName string, agents map[string]*Agent) error {
 			return fmt.Errorf("agent %q in profile set %q: invalid effort %q (must be low, medium, or high)", name, setName, a.Effort)
 		}
 		if a.CLI != "" && !validCLI[a.CLI] {
-			return fmt.Errorf("agent %q in profile set %q: invalid cli %q (must be claude, codex, or copilot)", name, setName, a.CLI)
+			return fmt.Errorf("agent %q in profile set %q: invalid cli %q (must be claude, codex, copilot, or cursor)", name, setName, a.CLI)
 		}
 	}
 

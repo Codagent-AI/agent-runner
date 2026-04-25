@@ -1396,6 +1396,9 @@ func TestValidation_InvalidCLI(t *testing.T) {
 	if !strings.Contains(err.Error(), "invalid cli") {
 		t.Fatalf("expected error about invalid cli, got: %v", err)
 	}
+	if !strings.Contains(err.Error(), "cursor") {
+		t.Fatalf("expected invalid cli error to mention cursor, got: %v", err)
+	}
 }
 
 func TestValidation_CopilotCLIAccepted(t *testing.T) {
@@ -1417,6 +1420,28 @@ func TestValidation_CopilotCLIAccepted(t *testing.T) {
 	p := cfg.ActiveAgents["copilot_base"]
 	if p == nil || p.CLI != "copilot" {
 		t.Fatalf("expected copilot agent, got %+v", p)
+	}
+}
+
+func TestValidation_CursorCLIAccepted(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeConfigFile(t, path, `profiles:
+  default:
+    agents:
+      cursor_base:
+        default_mode: interactive
+        cli: cursor
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	p := cfg.ActiveAgents["cursor_base"]
+	if p == nil || p.CLI != "cursor" || p.DefaultMode != "interactive" {
+		t.Fatalf("expected interactive cursor agent, got %+v", p)
 	}
 }
 
