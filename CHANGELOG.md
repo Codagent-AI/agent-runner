@@ -1,5 +1,11 @@
 # agent-runner
 
+## 0.2.0
+
+### Minor Changes
+
+- [#23](https://github.com/Codagent-AI/agent-runner/pull/23) Cursor support, start-run TUI, multi-profile config, and polish
+
 ## 0.1.1
 
 ### Patch Changes
