@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/codagent/agent-runner/internal/model"
+	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
 // ResolvedWorkflow is the output of ResolveWorkflow: the absolute path to
@@ -54,6 +55,15 @@ func ResolveWorkflow(sessionDir, projectDir string, state *model.RunState) (Reso
 	}
 
 	out := ResolvedWorkflow{OriginCwd: origin}
+
+	// (0) — builtin workflow embedded in the binary; no filesystem lookup needed.
+	if builtinworkflows.IsRef(state.WorkflowFile) {
+		if _, err := builtinworkflows.ReadFile(state.WorkflowFile); err == nil {
+			out.AbsPath = state.WorkflowFile
+			out.WorkflowsRoot, out.RepoRoot = rootsFromBases(bases)
+			return out, true
+		}
+	}
 
 	// (1)/(2)/(3) — direct path resolution from state.WorkflowFile.
 	if p, ok := tryDirectFile(state.WorkflowFile, bases); ok {
