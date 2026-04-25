@@ -57,7 +57,7 @@ steps:
       If the /simplify skill is available, run it focusing on code reuse and readability.
       If it is not available, review your git diff for duplicated logic that should be
       extracted into shared helpers, and readability issues like deep nesting, unclear
-      naming, or overly complex conditionals. Fix and commit anything clear-cut, prefixing commit messages with [{{step_id}}].
+      naming, or overly complex conditionals. Fix and commit anything clear-cut, following the project's commit message conventions and prepending [{{step_id}}].
 
   - id: run-validator
     workflow: ../core/run-validator.yaml

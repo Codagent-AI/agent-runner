@@ -11,7 +11,7 @@ steps:
     mode: headless
     prompt: |
       Invoke codagent:push-pr to commit, push, and create or update the pull request.
-      Prefix any commit messages with [{{step_id}}].
+      Follow the project's commit message conventions and prepend [{{step_id}}].
 
   - id: ci-fix-loop
     loop:
@@ -31,7 +31,7 @@ steps:
         skip_if: previous_success
         prompt: |
           CI has failures or unresolved review comments. Invoke codagent:fix-pr to
-          address them. Prefix any commit messages with [{{step_id}}].
+          address them. Follow the project's commit message conventions and prepend [{{step_id}}].
 
   - id: verify-final
     session: resume

@@ -37,8 +37,8 @@ steps:
           insufficient and validator_logs/.debug.log exists, read it for
           full error context before attempting fixes.
 
-          When you are done fixing, commit your changes with a clear,
-          descriptive commit message prefixed with [{{step_id}}]. Then summarize to the user what
+          When you are done fixing, commit your changes following the project's
+          commit message conventions and prepend [{{step_id}}]. Then summarize to the user what
           you fixed, what you skipped, and why.
 
           <validator-output>

@@ -82,5 +82,5 @@ steps:
   - id: commit-openspec
     command: |
       git add openspec/changes/{{change_name}}/
-      git commit -m "[{{step_id}}] Add openspec documents for {{change_name}}"
+      git commit -m "[{{step_id}}] chore: add openspec documents for {{change_name}}"
       agent-validator skip
