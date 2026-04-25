@@ -1,52 +1,72 @@
 # Agent Runner
 
-CLI workflow orchestrator for AI agents, written in Go. Runs multi-step workflows by spawning separate agent sessions per step.
+Agent Runner is a Go CLI workflow orchestrator for AI agents. It runs multi-step workflows by spawning separate agent sessions per step, keeping orchestration deterministic and outside the agent.
 
-> **Pre-release**: This project is under active development. No backwards compatibility guarantees are made at this time.
+This project is pre-release and under active development. Prefer clear, well-tested changes over preserving accidental compatibility.
 
-## Directory structure
+## Project Map
 
+- `cmd/agent-runner/`: CLI entry point and command wiring
+- `internal/model/`: core workflow, step, state, and execution-context types
+- `internal/loader/`: workflow YAML loading, composition, and interpolation setup
+- `internal/runner/`: workflow execution and resume loop
+- `internal/exec/`: step executors for agent, shell, loop, group, dispatch, and sub-workflow steps
+- `internal/engine/`: pluggable workflow lifecycle hooks, including the OpenSpec engine
+- `internal/cli/`: adapters for agent CLIs such as Claude, Codex, Cursor, and Copilot
+- `internal/session/`: session resolution for `new`, `resume`, and `inherit`
+- `internal/flowctl/`: `skip_if` and `break_if` behavior
+- `internal/textfmt/`: interpolation and output formatting helpers
+- `internal/runview/`, `internal/listview/`, `internal/liverun/`, `internal/pty/`, `internal/tuistyle/`: terminal UI and PTY behavior
+- `internal/config/`, `internal/discovery/`, `internal/stateio/`, `internal/audit/`, `internal/validate/`: supporting runtime services
+- `workflows/`: built-in workflow YAML files embedded into the binary
+- `openspec/specs/`: current behavioral specs; archived changes under `openspec/changes/archive/` are historical
+- `testdata/`: workflow fixtures used by tests
+- `docs/`: user and development documentation
+
+## Development Workflow
+
+- Use test-driven development for code changes. For bug fixes, add a failing test that reproduces the bug before changing production code.
+- Keep tests next to the source package. Use local stubs and small fakes instead of adding a mocking framework.
+- Prefer `google/go-cmp` for structured comparisons in tests.
+- Run targeted tests while iterating, then broader checks before finishing.
+- Format Go code with `goimports` through `make fmt`.
+- Use the Go version declared in `go.mod`.
+
+## Common Commands
+
+```bash
+make build          # go build -o bin/agent-runner ./cmd/agent-runner
+make test           # go test ./...
+make lint           # golangci-lint run ./...
+make fmt            # goimports -w .
+./dev.sh <args>     # run the CLI from source; passes flags through safely
 ```
-cmd/
-  agent-runner/       CLI entry point (Cobra)
-  pty-poc/            PTY proof of concept (creack/pty)
-internal/
-  model/              Core types: Step, Workflow, ExecutionContext, RunState
-  loader/             YAML loading, parameter interpolation
-  runner/             Workflow execution loop, resume logic
-  exec/               Step executors: agent, shell, loop, sub-workflow, dispatch
-  engine/             Engine interface, registry, openspec implementation
-  session/            Session resolution (new, resume, inherit)
-  flowctl/            Flow control: skip_if, break_if
-  textfmt/            String interpolation, formatting
-  stateio/            State file read/write
-  audit/              Structured audit logging
-  validate/           Workflow constraint validation
-openspec/             OpenSpec artifact files
-workflows/            Workflow YAML definitions
-testdata/             Test fixture files
-docs/                 User guide, design docs
+
+For focused test runs:
+
+```bash
+go test ./internal/runner -run TestName
+go test ./internal/exec -run TestName -v
 ```
 
-## Key patterns
+## Architecture Notes
 
-- **Interfaces for testability**: `exec.ProcessRunner`, `exec.GlobExpander`, `exec.Logger` — tests use stubs, no mocking framework
-- **All executors in one package**: `internal/exec/` holds agent, shell, loop, sub-workflow executors together to avoid circular imports
-- **`Param.Required` uses `*bool`**: nil defaults to required (matching original TS behavior where `Required` defaults to `true`)
-- **`LastSessionStepID`**: Solves Go map ordering — tracks the most recent session key since Go maps are unordered
-- **`EngineRef` is `interface{}`**: Avoids circular import between model and engine packages; callers type-assert to `engine.Engine`
-- **`audit.EventLogger`**: Real interface (not empty) used for audit event emission
+- Keep all step executor implementations in `internal/exec/` to avoid circular imports.
+- Keep model types independent from engine and executor packages. Higher layers can adapt or type-assert as needed.
+- Built-in workflows are embedded from `workflows/`; changing YAML there changes what ships in the binary.
+- `Param.Required` is a `*bool`; `nil` means required by default.
+- Audit logging uses the real `audit.EventLogger` interface. Do not replace it with empty interfaces.
 
-## Workflow
+## Commit Messages
 
-Always use test driven development when making code changes. When fixing bugs it is especially important to add a failing test that replicates the issue as the first step.
+Use `type: lowercase description`.
 
-## Commands
+Allowed types: `fix`, `feat`, `chore`, `refactor`, `test`, `docs`.
 
-```
-make build          # compile binary
-make test           # run tests
-make lint           # golangci-lint (strict)
-make fmt            # goimports
-go run ./cmd/agent-runner [run|validate|resume]
-```
+Do not use scopes, ticket prefixes, or capitalized descriptions.
+
+Examples:
+
+- `fix: stop writing config to project dir`
+- `feat: add param-form run launch flow`
+- `refactor: extract session resolution into helper`
