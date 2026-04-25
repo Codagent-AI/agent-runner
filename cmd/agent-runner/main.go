@@ -916,6 +916,7 @@ func resolveWorkflowArg(arg string) (string, error) {
 	}
 
 	globalPaths := []string{}
+	var homeErr error
 	if home, err := userHomeDir(); err == nil {
 		globalBase := filepath.Join(home, ".agent-runner", "workflows", filepath.FromSlash(arg))
 		globalPaths = []string{globalBase + ".yaml", globalBase + ".yml"}
@@ -924,11 +925,16 @@ func resolveWorkflowArg(arg string) (string, error) {
 		} else if resolved != "" {
 			return resolved, nil
 		}
+	} else {
+		homeErr = err
 	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", fmt.Errorf("workflow %q not found (%s); failed to get cwd: %w", arg, triedWorkflowPaths(localPaths, globalPaths), err)
+	}
+	if homeErr != nil {
+		return "", fmt.Errorf("workflow %q not found in %s (%s; home dir lookup failed: %v)", arg, cwd, triedWorkflowPaths(localPaths, globalPaths), homeErr)
 	}
 	return "", fmt.Errorf("workflow %q not found in %s (%s)", arg, cwd, triedWorkflowPaths(localPaths, globalPaths))
 }

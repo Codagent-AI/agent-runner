@@ -128,12 +128,13 @@ func (f *cursorStreamFilter) processLine(line []byte) error {
 		if event.Message == nil {
 			return nil
 		}
-		var text string
+		var textBuilder strings.Builder
 		for _, c := range event.Message.Content {
 			if c.Type == "text" {
-				text = c.Text
+				textBuilder.WriteString(c.Text)
 			}
 		}
+		text := textBuilder.String()
 		if len(text) > f.lastLen {
 			if err := f.writeDownstream([]byte(text[f.lastLen:])); err != nil {
 				return err
@@ -141,6 +142,7 @@ func (f *cursorStreamFilter) processLine(line []byte) error {
 			f.lastLen = len(text)
 		}
 	case "result":
+		// Cursor's result is a superset of the final assistant text; lastLen avoids re-sending.
 		if event.Result != "" && len(event.Result) > f.lastLen {
 			if err := f.writeDownstream([]byte(event.Result[f.lastLen:])); err != nil {
 				return err

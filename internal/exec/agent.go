@@ -227,8 +227,19 @@ func ExecuteAgentStep(
 	return outcome, nil
 }
 
-// resolveModeFromProfile returns the effective mode, preferring the step-level
-// override, then the profile's DefaultMode, falling back to interactive.
+// ResolveAgentStepMode returns the effective mode for an agent step, accounting
+// for the step-level override and the profile's DefaultMode.
+func ResolveAgentStepMode(step *model.Step, ctx *model.ExecutionContext) model.StepMode {
+	profile, err := resolveStepProfile(step, ctx)
+	if err != nil {
+		if step.Mode != "" {
+			return step.Mode
+		}
+		return model.ModeInteractive
+	}
+	return resolveModeFromProfile(step, profile)
+}
+
 func resolveModeFromProfile(step *model.Step, profile *config.ResolvedAgent) model.StepMode {
 	if step.Mode != "" {
 		return step.Mode

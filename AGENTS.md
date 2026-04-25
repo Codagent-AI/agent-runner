@@ -65,8 +65,11 @@ Allowed types: `fix`, `feat`, `chore`, `refactor`, `test`, `docs`.
 
 Do not use scopes, ticket prefixes, or capitalized descriptions.
 
+Workflow-driven commits (created by a workflow step) may prepend `[<step_id>]` before `type: description` for traceability; this is the only allowed prefix.
+
 Examples:
 
 - `fix: stop writing config to project dir`
 - `feat: add param-form run launch flow`
 - `refactor: extract session resolution into helper`
+- `[archive] chore: archive openspec documents for add-foo`

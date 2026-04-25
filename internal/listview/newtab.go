@@ -17,12 +17,12 @@ import (
 // Returns the updated model and a command.
 func (m *Model) handleSearchKey(msg tea.KeyMsg) (*Model, tea.Cmd) {
 	switch msg.String() {
-	case "ctrl+c", "q":
+	case "ctrl+c":
 		m.quitting = true
 		return m, tea.Quit
-	case "tab":
+	case "tab", "right":
 		m.nextTab()
-	case "shift+tab":
+	case "shift+tab", "left":
 		m.prevTab()
 	case "esc":
 		m.newTab.searchText = ""
@@ -34,7 +34,7 @@ func (m *Model) handleSearchKey(msg tea.KeyMsg) (*Model, tea.Cmd) {
 			m.newTab.searchText = string(r[:len(r)-1])
 			m.updateSearchFilter()
 		}
-	case "down", "j", "enter":
+	case "down", "enter":
 		m.newTab.searchFocused = false
 		m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
 	default:

@@ -115,7 +115,7 @@ func (m *Model) View() string {
 		}
 	}
 	inputWidth := m.inputWidth(labelWidth)
-	inputOffset := labelWidth + 6 // cursor(2) + label + " "(1) + marker(1) + " "(1)
+	inputOffset := labelWidth + 5 // cursor(2) + label + " "(1) + marker(1) + " "(1)
 
 	for i, param := range m.entry.Params {
 		isFocused := i == m.focused
@@ -150,7 +150,7 @@ func (m *Model) View() string {
 		b.WriteString("\n")
 		if m.errors[i] != "" {
 			b.WriteString(tuistyle.ScreenMargin)
-			b.WriteString(strings.Repeat(" ", labelWidth+6))
+			b.WriteString(strings.Repeat(" ", labelWidth+5))
 			b.WriteString(tuistyle.StatusFailed.Render(m.errors[i]))
 			b.WriteString("\n")
 		}
