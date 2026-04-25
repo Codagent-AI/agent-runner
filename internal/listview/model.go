@@ -157,7 +157,7 @@ func New(opts ...func(*Model)) (*Model, error) {
 	}
 	m.newTab.workflows = workflows
 	m.newTab.filtered = buildFilteredRows(workflows, "")
-	m.newTab.searchFocused = true
+	m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
 
 	for _, opt := range opts {
 		opt(m)
