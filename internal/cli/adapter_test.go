@@ -598,6 +598,22 @@ func TestCodexAdapter(t *testing.T) {
 		}
 	})
 
+	t.Run("WrapStderr preserves apply_patch verification diagnostics", func(t *testing.T) {
+		var buf bytes.Buffer
+		w := adapter.WrapStderr(&buf)
+		input := "debug: kept\n" +
+			"2026-04-26T01:38:46.042347Z ERROR codex_core::tools::router: error=apply_patch verification failed: Failed to find expected lines in /repo/src/core/run-executor-helpers.ts:\n" +
+			"  effectiveBaseBranch: string;\n" +
+			"}\n" +
+			"fatal: kept\n"
+		if _, err := w.Write([]byte(input)); err != nil {
+			t.Fatalf("unexpected write error: %v", err)
+		}
+		if got := buf.String(); got != input {
+			t.Fatalf("expected apply_patch diagnostic to remain in live stderr, got %q", got)
+		}
+	})
+
 	t.Run("rollout recording error is ignored after completed headless turn", func(t *testing.T) {
 		stdout := `{"type":"turn.completed","usage":{"input_tokens":2521}}` + "\n"
 		stderr := "Reading additional input from stdin...\n2026-04-25T21:54:58.585861Z ERROR codex_core::session: failed to record rollout items: thread 019dc6a3-68a4-7751-8c3a-43c3c84a24ba not found"
@@ -607,6 +623,34 @@ func TestCodexAdapter(t *testing.T) {
 		}
 		if filteredStderr != "" {
 			t.Fatalf("expected stderr to be filtered, got %q", filteredStderr)
+		}
+	})
+
+	t.Run("apply_patch verification diagnostic is ignored after successful headless turn", func(t *testing.T) {
+		stdout := `{"type":"turn.completed","usage":{"input_tokens":2521}}` + "\n"
+		stderr := "2026-04-26T01:38:46.042347Z ERROR codex_core::tools::router: error=apply_patch verification failed: Failed to find expected lines in /repo/src/core/run-executor-helpers.ts:\n" +
+			"  effectiveBaseBranch: string;\n" +
+			"}"
+		exitCode, filteredStderr := adapter.FilterHeadlessResult(0, stdout, stderr)
+		if exitCode != 0 {
+			t.Fatalf("expected exit code to remain 0, got %d", exitCode)
+		}
+		if filteredStderr != "" {
+			t.Fatalf("expected apply_patch diagnostic to be filtered, got %q", filteredStderr)
+		}
+	})
+
+	t.Run("apply_patch verification diagnostic is preserved when headless turn fails", func(t *testing.T) {
+		stdout := `{"type":"turn.failed","error":{"message":"failed"}}` + "\n"
+		stderr := "2026-04-26T01:38:46.042347Z ERROR codex_core::tools::router: error=apply_patch verification failed: Failed to find expected lines in /repo/src/core/run-executor-helpers.ts:\n" +
+			"  effectiveBaseBranch: string;\n" +
+			"}"
+		exitCode, filteredStderr := adapter.FilterHeadlessResult(1, stdout, stderr)
+		if exitCode != 1 {
+			t.Fatalf("expected exit code to remain 1, got %d", exitCode)
+		}
+		if filteredStderr != stderr {
+			t.Fatalf("expected apply_patch diagnostic to remain on failure, got %q", filteredStderr)
 		}
 	})
 

@@ -85,11 +85,12 @@ func (a *CodexAdapter) WrapStderr(downstream io.Writer) io.Writer {
 	return &codexStderrFilter{downstream: downstream}
 }
 
-// FilterHeadlessResult suppresses a known Codex bookkeeping error emitted
+// FilterHeadlessResult suppresses known non-fatal Codex diagnostics emitted
 // after a completed turn. Other non-zero exits and stderr are preserved.
 func (a *CodexAdapter) FilterHeadlessResult(exitCode int, stdout, stderr string) (filteredExitCode int, filteredStderr string) {
-	filteredStderr = filterCodexRolloutStderr(stderr)
-	if exitCode != 0 && codexTurnCompleted(stdout) && strings.TrimSpace(filteredStderr) == "" {
+	turnCompleted := codexTurnCompleted(stdout)
+	filteredStderr = filterCodexStderr(stderr, exitCode == 0 || turnCompleted)
+	if exitCode != 0 && turnCompleted && strings.TrimSpace(filteredStderr) == "" {
 		return 0, ""
 	}
 	return exitCode, filteredStderr
@@ -201,10 +202,10 @@ func (f *codexStreamFilter) writeDownstream(p []byte) error {
 }
 
 type codexStderrFilter struct {
-	downstream     io.Writer
-	buf            []byte
-	err            error
-	skippedRollout bool
+	downstream io.Writer
+	buf        []byte
+	err        error
+	state      codexIgnoredStderrState
 }
 
 func (f *codexStderrFilter) Write(p []byte) (int, error) {
@@ -241,7 +242,7 @@ func (f *codexStderrFilter) Close() error {
 }
 
 func (f *codexStderrFilter) processLine(line []byte, addNewline bool) error {
-	if isCodexIgnoredStderrLine(string(line), &f.skippedRollout) {
+	if isCodexIgnoredStderrLine(string(line), &f.state) {
 		return nil
 	}
 	out := line
@@ -321,13 +322,13 @@ func codexTurnCompleted(output string) bool {
 	return false
 }
 
-func filterCodexRolloutStderr(stderr string) string {
+func filterCodexStderr(stderr string, suppressApplyPatch bool) string {
 	scanner := bufio.NewScanner(strings.NewReader(stderr))
 	var lines []string
-	skippedRollout := false
+	state := codexIgnoredStderrState{suppressApplyPatch: suppressApplyPatch}
 	for scanner.Scan() {
 		line := scanner.Text()
-		if isCodexIgnoredStderrLine(line, &skippedRollout) {
+		if isCodexIgnoredStderrLine(line, &state) {
 			continue
 		}
 		lines = append(lines, line)
@@ -335,21 +336,44 @@ func filterCodexRolloutStderr(stderr string) string {
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
-func isCodexIgnoredStderrLine(line string, skippedRollout *bool) bool {
+type codexIgnoredStderrState struct {
+	skippedRollout     bool
+	skippedApplyPatch  bool
+	suppressApplyPatch bool
+}
+
+// TODO: If more recoverable Codex diagnostics need filtering, replace this
+// ad hoc state machine with named rules that declare start matching,
+// continuation matching, and when the diagnostic may be suppressed.
+func isCodexIgnoredStderrLine(line string, state *codexIgnoredStderrState) bool {
 	lower := strings.ToLower(line)
+	trimmed := strings.TrimSpace(lower)
+	if state.skippedApplyPatch {
+		rawTrimmed := strings.TrimSpace(line)
+		if rawTrimmed == "" || rawTrimmed == "}" || strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
+			return true
+		}
+		state.skippedApplyPatch = false
+	}
 	if strings.TrimSpace(lower) == "reading additional input from stdin..." {
-		*skippedRollout = false
+		state.skippedRollout = false
 		return true
 	}
 	if strings.Contains(lower, "failed to record rollout items") {
-		*skippedRollout = true
+		state.skippedRollout = true
 		return true
 	}
-	if *skippedRollout && strings.HasPrefix(strings.TrimSpace(lower), "thread ") && strings.HasSuffix(strings.TrimSpace(lower), " not found") {
-		*skippedRollout = false
+	if state.skippedRollout && strings.HasPrefix(trimmed, "thread ") && strings.HasSuffix(trimmed, " not found") {
+		state.skippedRollout = false
 		return true
 	}
-	*skippedRollout = false
+	if state.suppressApplyPatch &&
+		strings.Contains(lower, "codex_core::tools::router") &&
+		strings.Contains(lower, "apply_patch verification failed") {
+		state.skippedApplyPatch = true
+		return true
+	}
+	state.skippedRollout = false
 	return false
 }
 
