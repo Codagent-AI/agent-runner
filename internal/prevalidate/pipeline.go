@@ -107,7 +107,8 @@ func Pipeline(rootPath string, boundParams map[string]string, mode Mode, opts Op
 		opts:         opts,
 		cfg:          cfg,
 		layerFiles:   layers,
-		visited:      map[string]bool{},
+		completed:    map[string]bool{},
+		stack:        map[string]bool{},
 		sessionDecls: map[string]string{},
 		triples:      map[probeKey]probeSource{},
 	}
@@ -146,7 +147,8 @@ type walkState struct {
 	cfg          *config.Config
 	layerFiles   []string
 	result       Result
-	visited      map[string]bool
+	completed    map[string]bool
+	stack        map[string]bool
 	sessionDecls map[string]string
 	triples      map[probeKey]probeSource
 }
@@ -170,10 +172,15 @@ type probeSource struct {
 
 func (s *walkState) walkFile(path string, params map[string]string, isSub bool, parentOrigin *agentOrigin) error {
 	sourceID := loader.SourceID(path)
-	if s.visited[sourceID] {
+	if s.stack[sourceID] {
 		return nil
 	}
-	s.visited[sourceID] = true
+	visitKey := sourceID + "\x00" + stableParamKey(params)
+	if s.completed[visitKey] {
+		return nil
+	}
+	s.stack[sourceID] = true
+	defer delete(s.stack, sourceID)
 
 	workflow, err := loader.LoadWorkflow(path, loader.Options{IsSubWorkflow: isSub})
 	if err != nil {
@@ -196,7 +203,29 @@ func (s *walkState) walkFile(path string, params map[string]string, isSub bool, 
 	visibleParams := bindParamDefaults(workflow.Params, params)
 	paramNames := workflowParamNames(workflow.Params)
 	_, err = s.walkSteps(path, workflow.Steps, visibleParams, paramNames, map[string]bool{}, nil, parentOrigin)
-	return err
+	if err != nil {
+		return err
+	}
+	s.completed[visitKey] = true
+	return nil
+}
+
+func stableParamKey(params map[string]string) string {
+	if len(params) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(params))
+	for key := range params {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+
+	var b strings.Builder
+	for _, key := range keys {
+		value := params[key]
+		fmt.Fprintf(&b, "%d:%s=%d:%s;", len(key), key, len(value), value)
+	}
+	return b.String()
 }
 
 func createEngine(path string, workflow *model.Workflow) error {

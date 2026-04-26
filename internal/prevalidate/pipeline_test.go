@@ -35,6 +35,45 @@ steps:
 	}
 }
 
+func TestPipelineRewalksSameSubWorkflowWithDifferentParams(t *testing.T) {
+	dir := t.TempDir()
+	writeWorkflow(t, dir, "good.yaml", `
+name: good
+steps:
+  - id: ok
+    command: echo ok
+`)
+	writeWorkflow(t, dir, "switch.yaml", `
+name: switch
+params:
+  - name: target
+steps:
+  - id: call-target
+    workflow: "{{target}}.yaml"
+`)
+	root := writeWorkflow(t, dir, "root.yaml", `
+name: root
+steps:
+  - id: first
+    workflow: switch.yaml
+    params:
+      target: good
+  - id: second
+    workflow: switch.yaml
+    params:
+      target: missing
+`)
+
+	opts, _, _ := fakeOptions(t, &config.Config{})
+	_, err := Pipeline(root, nil, Strict, opts)
+	if err == nil {
+		t.Fatal("expected second parameter set to validate and fail")
+	}
+	if !strings.Contains(err.Error(), "missing.yaml") {
+		t.Fatalf("expected missing nested workflow error, got: %v", err)
+	}
+}
+
 func TestPipelineRejectsCapturedWorkflowPath(t *testing.T) {
 	dir := t.TempDir()
 	root := writeWorkflow(t, dir, "root.yaml", `
