@@ -19,6 +19,22 @@ steps:
       Then, you MUST use the codagent:propose skill.
       Once the proposal document is written, continue to the next step.
 
+  - id: locate-proposal
+    session: lead-agent
+    mode: headless
+    capture: proposal_dir
+    prompt: |
+      You just wrote a proposal. Output the directory containing the
+      proposal document on a single line with NO other text, NO markdown
+      fences, and NO explanation.
+
+      Example valid output: specs/changes/my-change
+
+  - id: proposal-review
+    workflow: ../core/review-proposal.yaml
+    params:
+      proposal_dir: "{{proposal_dir}}"
+
   - id: specs
     session: resume
     prompt: |
