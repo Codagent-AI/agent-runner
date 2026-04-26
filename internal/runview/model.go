@@ -540,6 +540,10 @@ func (m *Model) canResumeRun() bool {
 		m.rootStatus() != StatusFailed && m.rootStatus() != StatusSuccess
 }
 
+func (m *Model) canResumeAgentSession(n *StepNode) bool {
+	return n != nil && n.SessionID != "" && !m.running && !m.active
+}
+
 // handleKey processes a key message. Extracted from Update to keep the main
 // message switch within funlen limits.
 func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -878,10 +882,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case NodeHeadlessAgent, NodeInteractiveAgent:
-		// Resume when the run has ended, or when this specific step has
-		// completed (the runner no longer owns the session even if the
-		// workflow is still executing subsequent steps).
-		if n.SessionID != "" && (!m.running || n.Status == StatusSuccess || n.Status == StatusFailed) {
+		if m.canResumeAgentSession(n) {
 			return m, func() tea.Msg {
 				return ResumeMsg{AgentCLI: n.AgentCLI, SessionID: n.SessionID}
 			}

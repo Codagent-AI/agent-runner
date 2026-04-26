@@ -102,7 +102,7 @@ func blockAgentHeader(node *StepNode, contentWidth int) []string {
 	return lines
 }
 
-func renderHeadlessBlock(node *StepNode, indent, width int, loadedFull bool, pulsePhase float64, running bool) []string {
+func renderHeadlessBlock(node *StepNode, indent, width int, loadedFull bool, pulsePhase float64, runActive bool) []string {
 	contentWidth := width - 2*indent
 	if contentWidth <= 0 {
 		return nil
@@ -123,15 +123,15 @@ func renderHeadlessBlock(node *StepNode, indent, width int, loadedFull bool, pul
 		return lines
 	}
 
-	lines = append(lines, renderAgentOutput(node, contentWidth, loadedFull, pulsePhase, running)...)
+	lines = append(lines, renderAgentOutput(node, contentWidth, loadedFull, pulsePhase, runActive)...)
 
-	if node.SessionID != "" && (!running || node.Status == StatusSuccess || node.Status == StatusFailed) {
+	if node.SessionID != "" && !runActive {
 		lines = append(lines, "", tuistyle.AccentStyle.Render("enter → resume session"))
 	}
 	return lines
 }
 
-func renderInteractiveBlock(node *StepNode, indent, width int, pulsePhase float64, running bool) []string {
+func renderInteractiveBlock(node *StepNode, indent, width int, pulsePhase float64, runActive bool) []string {
 	contentWidth := width - 2*indent
 	if contentWidth <= 0 {
 		return nil
@@ -150,14 +150,14 @@ func renderInteractiveBlock(node *StepNode, indent, width int, pulsePhase float6
 		lines = append(lines, "", blockLabelStr("error:"))
 		lines = append(lines, renderWrappedText(node.ErrorMessage, contentWidth)...)
 	}
-	if node.Status == StatusInProgress && running && !node.Aborted {
+	if node.Status == StatusInProgress && runActive && !node.Aborted {
 		lines = append(lines, "", blockLabelStr("agent:"))
 		for _, line := range tuistyle.SpinnerFrame(pulsePhase) {
 			lines = append(lines, tuistyle.AccentStyle.Render(line))
 		}
 	}
 
-	if node.SessionID != "" && (!running || node.Status == StatusSuccess || node.Status == StatusFailed) {
+	if node.SessionID != "" && !runActive {
 		lines = append(lines, "", tuistyle.AccentStyle.Render("enter → resume session"))
 	}
 	return lines
