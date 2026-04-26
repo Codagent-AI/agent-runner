@@ -378,22 +378,44 @@ func TestCodexAdapter(t *testing.T) {
 		assertArgs(t, expected, args)
 	})
 
-	t.Run("effort level ignored headless", func(t *testing.T) {
+	t.Run("resume headless keeps effort config", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:    "continue",
+			SessionID: "thread-abc",
+			Effort:    "low",
+			Headless:  true,
+		})
+		expected := []string{"codex", "-a", "never", "exec", "resume", "-c", `model_reasoning_effort="low"`, "thread-abc", "continue"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("effort level specified headless", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:   "do something",
 			Effort:   "medium",
 			Headless: true,
 		})
-		expected := []string{"codex", "-a", "never", "exec", "--json", "do something"}
+		expected := []string{"codex", "-a", "never", "exec", "--json", "-c", `model_reasoning_effort="medium"`, "do something"}
 		assertArgs(t, expected, args)
 	})
 
-	t.Run("effort level ignored interactive", func(t *testing.T) {
+	t.Run("effort level specified interactive", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt: "review",
 			Effort: "high",
 		})
-		expected := []string{"codex", "--no-alt-screen", "review"}
+		expected := []string{"codex", "--no-alt-screen", "-c", `model_reasoning_effort="high"`, "review"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("resume interactive keeps effort config", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:    "continue review",
+			SessionID: "thread-abc",
+			Effort:    "medium",
+			Headless:  false,
+		})
+		expected := []string{"codex", "resume", "--no-alt-screen", "-c", `model_reasoning_effort="medium"`, "thread-abc", "continue review"}
 		assertArgs(t, expected, args)
 	})
 

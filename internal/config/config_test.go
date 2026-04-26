@@ -1377,6 +1377,25 @@ func TestValidation_InvalidEffort(t *testing.T) {
 	}
 }
 
+func TestValidation_XHighEffort(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeConfigFile(t, path, `profiles:
+  default:
+    agents:
+      reviewer:
+        default_mode: interactive
+        cli: claude
+        effort: xhigh
+`)
+
+	_, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestValidation_InvalidCLI(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()

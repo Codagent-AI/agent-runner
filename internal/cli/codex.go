@@ -22,6 +22,7 @@ type CodexAdapter struct{}
 //   - Resume interactive: codex resume --no-alt-screen <uuid> <prompt>
 //   - Resume headless:    codex -a never exec resume <uuid> <prompt>
 //   - Model override:     appends -m <m> (fresh sessions only)
+//   - Effort override:    appends -c model_reasoning_effort="<effort>"
 //
 // -m is intentionally omitted on resume: a Codex thread keeps the model it
 // was started with, so the profile's model is honored on fresh sessions
@@ -36,13 +37,13 @@ func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 	if input.Headless {
 		args = append(args, "-a", "never", "exec")
 		if resuming {
-			args = append(args, "resume", input.SessionID)
+			args = append(args, "resume")
 		} else {
 			args = append(args, "--json")
 		}
 	} else {
 		if resuming {
-			args = append(args, "resume", "--no-alt-screen", input.SessionID)
+			args = append(args, "resume", "--no-alt-screen")
 		} else {
 			args = append(args, "--no-alt-screen")
 		}
@@ -51,7 +52,13 @@ func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 	if input.Model != "" && !resuming {
 		args = append(args, "-m", input.Model)
 	}
+	if input.Effort != "" {
+		args = append(args, "-c", `model_reasoning_effort="`+input.Effort+`"`)
+	}
 
+	if resuming {
+		args = append(args, input.SessionID)
+	}
 	args = append(args, input.Prompt)
 	return args
 }

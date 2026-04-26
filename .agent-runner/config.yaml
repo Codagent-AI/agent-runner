@@ -11,6 +11,7 @@ profiles:
         extends: headless_base
         cli: codex
         model: gpt-5.4-mini
+        effort: low
       copilot_headless_smoke:
         extends: headless_base
         cli: copilot
@@ -25,3 +26,4 @@ profiles:
         extends: interactive_base
         cli: codex
         model: gpt-5.4-mini
+        effort: low
