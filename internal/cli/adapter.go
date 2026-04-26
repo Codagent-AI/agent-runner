@@ -32,6 +32,36 @@ type Adapter interface {
 	// SupportsSystemPrompt reports whether this adapter can deliver content
 	// as a native system prompt (e.g. via --append-system-prompt).
 	SupportsSystemPrompt() bool
+
+	// ProbeModel performs the lightest available acceptance check for a
+	// model/effort pair without spawning an agent invocation.
+	ProbeModel(model, effort string) (ProbeStrength, error)
+}
+
+// ProbeStrength describes how strongly ProbeModel verified a model/effort
+// pair.
+type ProbeStrength int
+
+const (
+	// BinaryOnly means only the CLI binary was confirmed present.
+	BinaryOnly ProbeStrength = iota
+	// SyntaxOnly means adapter-side syntax was checked, without consulting the CLI.
+	SyntaxOnly
+	// Verified means the underlying CLI accepted the pair through a probe surface.
+	Verified
+)
+
+func (s ProbeStrength) String() string {
+	switch s {
+	case BinaryOnly:
+		return "BinaryOnly"
+	case SyntaxOnly:
+		return "SyntaxOnly"
+	case Verified:
+		return "Verified"
+	default:
+		return fmt.Sprintf("ProbeStrength(%d)", int(s))
+	}
 }
 
 // DiscoverOptions provides context for session ID discovery after a CLI process exits.

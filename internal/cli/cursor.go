@@ -39,6 +39,10 @@ func (a *CursorAdapter) SupportsSystemPrompt() bool {
 	return false
 }
 
+func (a *CursorAdapter) ProbeModel(model, effort string) (ProbeStrength, error) {
+	return BinaryOnly, nil
+}
+
 // DiscoverSessionID returns the session ID after a Cursor process exits by
 // parsing stream-json output for the first event containing a session_id field.
 func (a *CursorAdapter) DiscoverSessionID(opts *DiscoverOptions) string {

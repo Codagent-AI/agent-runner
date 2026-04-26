@@ -56,6 +56,10 @@ func (a *CopilotAdapter) SupportsSystemPrompt() bool {
 	return false
 }
 
+func (a *CopilotAdapter) ProbeModel(model, effort string) (ProbeStrength, error) {
+	return BinaryOnly, nil
+}
+
 // DiscoverSessionID returns the session ID after a copilot process exits by
 // scanning ~/.copilot/session-state/ for the most recently modified directory
 // created after spawn time, matching on CWD from workspace.yaml.

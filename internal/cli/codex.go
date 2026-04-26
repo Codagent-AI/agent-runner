@@ -68,6 +68,10 @@ func (a *CodexAdapter) SupportsSystemPrompt() bool {
 	return false
 }
 
+func (a *CodexAdapter) ProbeModel(model, effort string) (ProbeStrength, error) {
+	return BinaryOnly, nil
+}
+
 // FilterOutput extracts the final assistant text from Codex JSONL output.
 func (a *CodexAdapter) FilterOutput(stdout string) string {
 	return extractCodexAgentMessages(stdout)

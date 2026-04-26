@@ -248,6 +248,38 @@ func TestResolveWorkflowArg(t *testing.T) {
 	})
 }
 
+func TestResolveValidateWorkflowArgAcceptsExistingYAMLPath(t *testing.T) {
+	t.Chdir(t.TempDir())
+	path := filepath.Join("workflows", "custom.yaml")
+	writeTestFile(t, path, "name: custom\nsteps:\n  - id: s\n    command: echo ok\n")
+
+	got, err := resolveValidateWorkflowArg(path)
+	if err != nil {
+		t.Fatalf("resolveValidateWorkflowArg returned error: %v", err)
+	}
+	if got != path {
+		t.Fatalf("resolveValidateWorkflowArg = %q, want %q", got, path)
+	}
+}
+
+func TestHandleValidateArgsBindsOptionalParamsForYAMLPath(t *testing.T) {
+	t.Chdir(t.TempDir())
+	writeTestFile(t, filepath.Join("workflows", "green.yaml"), "name: green\nsteps:\n  - id: s\n    command: echo ok\n")
+	root := filepath.Join("workflows", "root.yaml")
+	writeTestFile(t, root, `
+name: root
+params:
+  - name: flavor
+steps:
+  - id: call
+    workflow: "{{flavor}}.yaml"
+`)
+
+	if code := handleValidateArgs([]string{root, "flavor=green"}); code != 0 {
+		t.Fatalf("handleValidateArgs returned %d, want 0", code)
+	}
+}
+
 func TestRealProcessRunner_RunAgentDoesNotInheritStdin(t *testing.T) {
 	oldStdin := os.Stdin
 	r, w, err := os.Pipe()
