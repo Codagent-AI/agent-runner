@@ -52,9 +52,9 @@ func TestDispatchStep(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// Loop exhausts after 1 iteration, which maps to success
-		if outcome != OutcomeSuccess {
-			t.Fatalf("expected success (exhausted), got %q", outcome)
+		// Counted loop exhaustion fails unless a break condition succeeds.
+		if outcome != OutcomeFailed {
+			t.Fatalf("expected failed (exhausted), got %q", outcome)
 		}
 	})
 

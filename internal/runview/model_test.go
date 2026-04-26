@@ -1867,6 +1867,28 @@ func TestModel_MouseWheelUp_ChangesLogOffset(t *testing.T) {
 	}
 }
 
+func TestModel_LiveRun_OutputChunk_DoesNotTailWhenAutoFollowOff(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.termHeight = 10
+	shell := m.tree.Root.Children[0]
+	shell.Stdout = generateLargeOutput(100)
+	lineCount := m.rebuildRanges()
+	m.clampLogOffset(lineCount)
+	m.logOffset = m.maxLogOffset()
+
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp})
+	if m.autoFollow {
+		t.Fatal("test setup: mouse wheel up should clear autoFollow")
+	}
+	scrolledOffset := m.logOffset
+
+	m.Update(liverun.OutputChunkMsg{StepPrefix: "[build]", Stream: "stdout", Bytes: []byte("new output\n")})
+
+	if m.logOffset != scrolledOffset {
+		t.Fatalf("output chunk should not tail when autoFollow is off: before=%d after=%d", scrolledOffset, m.logOffset)
+	}
+}
+
 func TestModel_ResumedMsg_ReEnablesMouse(t *testing.T) {
 	m := newLiveModelWithFlags()
 	_, cmd := m.Update(liverun.ResumedMsg{})
