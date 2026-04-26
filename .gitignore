@@ -4,6 +4,7 @@ bin/
 coverage.html
 .claude/worktrees/
 validator_logs/
+.validator/cache/
 agent-runner-state.json
 worktrees/
 .debug.log
