@@ -1144,23 +1144,53 @@ func TestExecuteAgentStep(t *testing.T) {
 		t.Fatalf("expected --append-system-prompt, got %v", args)
 	})
 
-	t.Run("copilot step in interactive mode fails at runtime", func(t *testing.T) {
+	t.Run("copilot step in interactive mode spawns CLI", func(t *testing.T) {
+		var ptyCalls [][]string
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
+			ptyCalls = append(ptyCalls, args)
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
 		runner := &mockRunner{}
 		step := model.Step{ID: "s", CLI: "copilot", Mode: model.ModeInteractive, Prompt: "do something", Session: model.SessionNew}
 		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if outcome != OutcomeFailed {
-			t.Fatalf("expected OutcomeFailed for copilot interactive step, got %q", outcome)
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected OutcomeSuccess for copilot interactive step, got %q", outcome)
 		}
-		// Runner should not have been invoked (failure before spawn)
 		if len(runner.calls) != 0 {
 			t.Fatalf("expected no CLI invocations, got %d", len(runner.calls))
 		}
+		if len(ptyCalls) != 1 {
+			t.Fatalf("expected one PTY invocation, got %d", len(ptyCalls))
+		}
+		args := ptyCalls[0]
+		if args[0] != "copilot" {
+			t.Fatalf("expected copilot command, got %v", args)
+		}
+		if !containsArg(args, "-i") {
+			t.Fatalf("expected -i for copilot interactive prompt, got %v", args)
+		}
+		for _, disallowed := range []string{"--allow-all", "--autopilot", "-s", "-p", "--no-ask-user"} {
+			if containsArg(args, disallowed) {
+				t.Fatalf("did not expect %s in copilot interactive args, got %v", disallowed, args)
+			}
+		}
 	})
 
-	t.Run("cursor step in interactive mode fails at runtime", func(t *testing.T) {
+	t.Run("cursor step in interactive mode spawns CLI", func(t *testing.T) {
+		var ptyCalls [][]string
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
+			ptyCalls = append(ptyCalls, args)
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
 		runner := &mockRunner{}
 		auditLog := &recordingAuditLogger{}
 		ctx := makeCtx()
@@ -1170,19 +1200,30 @@ func TestExecuteAgentStep(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if outcome != OutcomeFailed {
-			t.Fatalf("expected OutcomeFailed for cursor interactive step, got %q", outcome)
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected OutcomeSuccess for cursor interactive step, got %q", outcome)
 		}
 		if len(runner.calls) != 0 {
 			t.Fatalf("expected no CLI invocations, got %d", len(runner.calls))
+		}
+		if len(ptyCalls) != 1 {
+			t.Fatalf("expected one PTY invocation, got %d", len(ptyCalls))
+		}
+		args := ptyCalls[0]
+		if args[0] != "agent" {
+			t.Fatalf("expected cursor agent command, got %v", args)
+		}
+		for _, disallowed := range []string{"-p", "--output-format", "stream-json", "--trust", "--force"} {
+			if containsArg(args, disallowed) {
+				t.Fatalf("did not expect %s in cursor interactive args, got %v", disallowed, args)
+			}
 		}
 		end := findAuditEvent(auditLog.events, audit.EventStepEnd)
 		if end == nil {
 			t.Fatal("expected step end audit event")
 		}
-		errMsg, _ := end.Data["error"].(string)
-		if !strings.Contains(errMsg, "interactive mode") || !strings.Contains(errMsg, "cursor") {
-			t.Fatalf("expected interactive cursor error message, got %q", errMsg)
+		if got := end.Data["outcome"]; got != string(OutcomeSuccess) {
+			t.Fatalf("expected successful step end audit event, got %v", end.Data)
 		}
 	})
 }

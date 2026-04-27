@@ -3,26 +3,36 @@ package cli
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 )
 
 // CursorAdapter constructs invocation args for the Cursor agent CLI.
 type CursorAdapter struct{}
 
-// BuildArgs constructs Cursor CLI args for headless mode.
+// BuildArgs constructs Cursor CLI args.
 //
 // Patterns:
-//   - Fresh headless:  agent -p --output-format stream-json --force --trust [--model <m>] <prompt>
-//   - Resume headless: agent -p --output-format stream-json --force --trust --resume=<id> <prompt>
+//   - Fresh headless:      agent -p --output-format stream-json --force --trust [--model <m>] <prompt>
+//   - Resume headless:     agent -p --output-format stream-json --force --trust --resume=<id> <prompt>
+//   - Fresh interactive:   agent [--model <m>] <prompt>
+//   - Resume interactive:  agent --resume=<id> <prompt>
 //
 // Cursor has no native system-prompt, effort, or disallowed-tools flags. Those
-// inputs are intentionally ignored here. --model is omitted on resume because a
-// resumed Cursor chat keeps the model it was started with.
+// inputs are intentionally ignored here. Interactive mode omits headless-only
+// output/trust flags and --force because a human supervises permissions at the
+// terminal. --model is omitted on resume because a resumed Cursor chat keeps the
+// model it was started with.
 func (a *CursorAdapter) BuildArgs(input *BuildArgsInput) []string {
-	args := []string{"agent", "-p", "--output-format", "stream-json", "--force", "--trust"}
+	args := []string{"agent"}
+	if input.Headless {
+		args = append(args, "-p", "--output-format", "stream-json", "--force", "--trust")
+	}
 
 	if input.Resume && input.SessionID != "" {
 		args = append(args, "--resume="+input.SessionID)
@@ -43,18 +53,17 @@ func (a *CursorAdapter) ProbeModel(model, effort string) (ProbeStrength, error) 
 	return BinaryOnly, nil
 }
 
-// DiscoverSessionID returns the session ID after a Cursor process exits by
-// parsing stream-json output for the first event containing a session_id field.
+// DiscoverSessionID returns the session ID after a Cursor process exits.
+// Headless mode parses stream-json output for the first event containing a
+// session_id field. Interactive mode scans Cursor's chat store by mtime.
 func (a *CursorAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
 	if opts.PresetID != "" {
 		return opts.PresetID
 	}
+	if !opts.Headless {
+		return discoverCursorInteractiveSession(opts.SpawnTime)
+	}
 	return discoverCursorSessionID(opts.ProcessOutput)
-}
-
-// InteractiveModeError returns an error indicating interactive mode is not supported.
-func (a *CursorAdapter) InteractiveModeError() error {
-	return fmt.Errorf("interactive mode is not supported for the cursor CLI")
 }
 
 // FilterOutput extracts the plain-text response from cursor's stream-json
@@ -214,4 +223,50 @@ func discoverCursorSessionID(output string) string {
 		return ""
 	}
 	return ""
+}
+
+// discoverCursorInteractiveSession scans ~/.cursor/chats/*/<chat-uuid>/store.db
+// files and returns the chat UUID for the newest file modified after spawnTime.
+func discoverCursorInteractiveSession(spawnTime time.Time) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+
+	chatsDir := filepath.Join(home, ".cursor", "chats")
+	type candidate struct {
+		id      string
+		modTime time.Time
+	}
+	var candidates []candidate
+
+	_ = filepath.WalkDir(chatsDir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil || entry.IsDir() || filepath.Base(path) != "store.db" {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil
+		}
+		if info.ModTime().Before(spawnTime) {
+			return nil
+		}
+		candidates = append(candidates, candidate{
+			id:      filepath.Base(filepath.Dir(path)),
+			modTime: info.ModTime(),
+		})
+		return nil
+	})
+
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].modTime.After(candidates[j].modTime)
+	})
+
+	if len(candidates) > 1 {
+		log.Printf("cursor: %d interactive chat candidates modified after spawn; using most recent — misattribution possible if concurrent sessions share this host", len(candidates))
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
+	return candidates[0].id
 }
