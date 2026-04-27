@@ -2,15 +2,10 @@ package cli
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"io"
 	"log"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
-	"time"
 )
 
 // CursorAdapter constructs invocation args for the Cursor agent CLI.
@@ -56,13 +51,14 @@ func (a *CursorAdapter) ProbeModel(model, effort string) (ProbeStrength, error) 
 
 // DiscoverSessionID returns the session ID after a Cursor process exits.
 // Headless mode parses stream-json output for the first event containing a
-// session_id field. Interactive mode scans Cursor's chat store by mtime.
+// session_id field. Interactive mode has no verified session ID channel, so it
+// declines to persist a filesystem-guessed chat ID.
 func (a *CursorAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
 	if opts.PresetID != "" {
 		return opts.PresetID
 	}
 	if !opts.Headless {
-		return discoverCursorInteractiveSession(opts.SpawnTime, opts.Workdir)
+		return ""
 	}
 	return discoverCursorSessionID(opts.ProcessOutput)
 }
@@ -224,82 +220,4 @@ func discoverCursorSessionID(output string) string {
 		return ""
 	}
 	return ""
-}
-
-// discoverCursorInteractiveSession scans ~/.cursor/chats/*/<chat-uuid>/store.db
-// files and returns the chat UUID when exactly one post-spawn store matches the
-// effective workdir. If the evidence is ambiguous, it declines to persist a
-// session ID rather than risking a resume into an unrelated chat.
-func discoverCursorInteractiveSession(spawnTime time.Time, workdir string) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	cwd := workdir
-	if cwd == "" {
-		cwd, err = os.Getwd()
-		if err != nil {
-			return ""
-		}
-	}
-
-	chatsDir := filepath.Join(home, ".cursor", "chats")
-	type candidate struct {
-		id      string
-		modTime time.Time
-	}
-	var candidates []candidate
-
-	_ = filepath.WalkDir(chatsDir, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil || entry.IsDir() || filepath.Base(path) != "store.db" {
-			return nil
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return nil
-		}
-		if info.ModTime().Before(spawnTime) {
-			return nil
-		}
-		if !matchesCursorStoreWorkdir(path, cwd) {
-			return nil
-		}
-		candidates = append(candidates, candidate{
-			id:      filepath.Base(filepath.Dir(path)),
-			modTime: info.ModTime(),
-		})
-		return nil
-	})
-
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].modTime.After(candidates[j].modTime)
-	})
-
-	if len(candidates) > 1 {
-		log.Printf("cursor: %d interactive chat candidates match workdir %s; session ID is ambiguous and will not be persisted", len(candidates), cwd)
-		return ""
-	}
-	if len(candidates) == 0 {
-		return ""
-	}
-	return candidates[0].id
-}
-
-func matchesCursorStoreWorkdir(storeDBPath, workdir string) bool {
-	data, err := os.ReadFile(storeDBPath) // #nosec G304 -- scanning known Cursor chat store path
-	if err != nil {
-		return false
-	}
-
-	canonWorkdir := canonicalize(workdir)
-	markers := [][]byte{
-		[]byte("Workspace Path: " + workdir),
-		[]byte("Workspace Path: " + canonWorkdir),
-	}
-	for _, marker := range markers {
-		if bytes.Contains(data, marker) {
-			return true
-		}
-	}
-	return false
 }

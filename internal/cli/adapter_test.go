@@ -1200,7 +1200,7 @@ func TestCursorAdapter(t *testing.T) {
 		}
 	})
 
-	t.Run("discover interactive session ID from cursor chats filesystem", func(t *testing.T) {
+	t.Run("discover interactive session ID returns empty even when cursor chat matches workdir", func(t *testing.T) {
 		fakeHome := t.TempDir()
 		t.Setenv("HOME", fakeHome)
 
@@ -1219,8 +1219,8 @@ func TestCursorAdapter(t *testing.T) {
 			Headless:  false,
 			Workdir:   workdir,
 		})
-		if id != matchingID {
-			t.Fatalf("expected matching post-spawn chat %q, got %q", matchingID, id)
+		if id != "" {
+			t.Fatalf("expected empty string without verified Cursor session provenance, got %q", id)
 		}
 	})
 
