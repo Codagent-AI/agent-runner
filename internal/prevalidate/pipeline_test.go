@@ -189,6 +189,50 @@ steps:
 	}
 }
 
+func TestPipelineProbesAdapterExecutableName(t *testing.T) {
+	dir := t.TempDir()
+	root := writeWorkflow(t, dir, "root.yaml", `
+name: root
+steps:
+  - id: ask
+    agent: implementor
+    prompt: start
+`)
+	cfg := &config.Config{
+		ActiveAgents: map[string]*config.Agent{
+			"implementor": {DefaultMode: "headless", CLI: "cursor", Model: "auto", Effort: "low"},
+		},
+	}
+
+	lookups := map[string]int{}
+	opts := Options{
+		LoadConfig: func() (*config.Config, []string, error) {
+			return cfg, nil, nil
+		},
+		LookPath: func(name string) (string, error) {
+			lookups[name]++
+			return "/bin/" + name, nil
+		},
+		Adapter: func(name string) (cli.Adapter, error) {
+			if name != "cursor" {
+				t.Fatalf("adapter name = %q, want cursor", name)
+			}
+			return &cli.CursorAdapter{}, nil
+		},
+	}
+
+	if _, err := Pipeline(root, nil, Strict, opts); err != nil {
+		t.Fatalf("Pipeline returned error: %v", err)
+	}
+
+	if got := lookups["agent"]; got != 1 {
+		t.Fatalf("LookPath(agent) calls = %d, want 1", got)
+	}
+	if got := lookups["cursor"]; got != 0 {
+		t.Fatalf("LookPath(cursor) calls = %d, want 0", got)
+	}
+}
+
 func fakeOptions(t *testing.T, cfg *config.Config) (Options, map[string]int, *recordingProbeRegistry) {
 	t.Helper()
 	probes := &recordingProbeRegistry{}

@@ -614,7 +614,7 @@ func builtinNamesMap() map[string]string {
 }
 
 func (s *walkState) probeTriples() error {
-	seenCLI := map[string]error{}
+	seenExecutable := map[string]error{}
 	keys := make([]probeKey, 0, len(s.triples))
 	for key := range s.triples {
 		keys = append(keys, key)
@@ -624,16 +624,17 @@ func (s *walkState) probeTriples() error {
 	})
 	for _, key := range keys {
 		src := s.triples[key]
-		if _, ok := seenCLI[key.cli]; !ok {
-			_, err := s.opts.LookPath(key.cli)
-			seenCLI[key.cli] = err
-			if err != nil {
-				return probeError(key, src, cli.BinaryOnly, fmt.Errorf("binary not found: %w", err))
-			}
-		}
 		adapter, err := s.opts.Adapter(key.cli)
 		if err != nil {
 			return probeError(key, src, cli.BinaryOnly, err)
+		}
+		executable := cli.ExecutableName(key.cli, adapter)
+		if _, ok := seenExecutable[executable]; !ok {
+			_, err := s.opts.LookPath(executable)
+			seenExecutable[executable] = err
+			if err != nil {
+				return probeError(key, src, cli.BinaryOnly, fmt.Errorf("binary not found: %w", err))
+			}
 		}
 		strength, err := adapter.ProbeModel(key.model, key.effort)
 		s.result.ProbeResults = append(s.result.ProbeResults, ProbeResult{

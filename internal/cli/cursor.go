@@ -12,6 +12,12 @@ import (
 // CursorAdapter constructs invocation args for the Cursor agent CLI.
 type CursorAdapter struct{}
 
+// ExecutableName returns the Cursor agent CLI binary name. The adapter remains
+// registered as "cursor" because that is the workflow-facing backend name.
+func (a *CursorAdapter) ExecutableName() string {
+	return "agent"
+}
+
 // BuildArgs constructs Cursor CLI args for headless mode.
 //
 // Patterns:

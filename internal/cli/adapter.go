@@ -108,6 +108,22 @@ type InteractiveRejector interface {
 	InteractiveModeError() error
 }
 
+// ExecutableNamer is implemented by adapters whose logical CLI name differs
+// from the binary that should be launched or probed on PATH.
+type ExecutableNamer interface {
+	ExecutableName() string
+}
+
+// ExecutableName returns the binary name used to launch an adapter.
+func ExecutableName(logicalName string, adapter Adapter) string {
+	if e, ok := adapter.(ExecutableNamer); ok {
+		if name := e.ExecutableName(); name != "" {
+			return name
+		}
+	}
+	return logicalName
+}
+
 // SessionStore is an optional interface adapters may implement when the
 // existence of a persisted session ID can be verified (e.g. via a file on
 // disk). Used by the runner to decide whether to resume an existing session

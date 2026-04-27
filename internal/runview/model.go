@@ -59,6 +59,7 @@ type Model struct {
 	tailer     FileTailer
 	sessionDir string
 	projectDir string
+	originCwd  string
 	entered    Entered
 
 	path      []*StepNode
@@ -176,6 +177,7 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 		tree:       tree,
 		sessionDir: sessionDir,
 		projectDir: projectDir,
+		originCwd:  resolved.OriginCwd,
 		entered:    entered,
 		path:       []*StepNode{tree.Root},
 		loadedFull: make(map[string]bool),
@@ -253,6 +255,7 @@ func NewForDefinition(entry *discovery.WorkflowEntry, projectDir string) (*Model
 		tree:          tree,
 		sessionDir:    sourcePath,
 		projectDir:    projectDir,
+		originCwd:     projectDir,
 		entered:       FromDefinition,
 		path:          []*StepNode{tree.Root},
 		loadedFull:    make(map[string]bool),
