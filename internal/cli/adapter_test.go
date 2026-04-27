@@ -331,7 +331,7 @@ func TestCodexAdapter(t *testing.T) {
 			SessionID: "thread-abc",
 			Headless:  true,
 		})
-		expected := []string{"codex", "-a", "never", "exec", "resume", "thread-abc", "continue"}
+		expected := []string{"codex", "-a", "never", "exec", "resume", "--json", "thread-abc", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -374,7 +374,7 @@ func TestCodexAdapter(t *testing.T) {
 			Model:     "o3",
 			Headless:  true,
 		})
-		expected := []string{"codex", "-a", "never", "exec", "resume", "thread-abc", "continue"}
+		expected := []string{"codex", "-a", "never", "exec", "resume", "--json", "thread-abc", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -385,7 +385,7 @@ func TestCodexAdapter(t *testing.T) {
 			Effort:    "low",
 			Headless:  true,
 		})
-		expected := []string{"codex", "-a", "never", "exec", "resume", "-c", `model_reasoning_effort="low"`, "thread-abc", "continue"}
+		expected := []string{"codex", "-a", "never", "exec", "resume", "--json", "-c", `model_reasoning_effort="low"`, "thread-abc", "continue"}
 		assertArgs(t, expected, args)
 	})
 

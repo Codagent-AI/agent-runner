@@ -20,7 +20,7 @@ type CodexAdapter struct{}
 //   - Fresh interactive:  codex --no-alt-screen <prompt>
 //   - Fresh headless:     codex -a never exec --json <prompt>
 //   - Resume interactive: codex resume --no-alt-screen <uuid> <prompt>
-//   - Resume headless:    codex -a never exec resume <uuid> <prompt>
+//   - Resume headless:    codex -a never exec resume --json <uuid> <prompt>
 //   - Model override:     appends -m <m> (fresh sessions only)
 //   - Effort override:    appends -c model_reasoning_effort="<effort>"
 //
@@ -37,7 +37,7 @@ func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 	if input.Headless {
 		args = append(args, "-a", "never", "exec")
 		if resuming {
-			args = append(args, "resume")
+			args = append(args, "resume", "--json")
 		} else {
 			args = append(args, "--json")
 		}
