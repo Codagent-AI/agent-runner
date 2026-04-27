@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -423,6 +424,44 @@ func TestModel_Breadcrumb_ActiveLabelDoesNotBlinkOff(t *testing.T) {
 	bc := stripANSI(m.renderBreadcrumb())
 	if !strings.Contains(bc, "active") {
 		t.Fatalf("breadcrumb should keep showing active while step-list dot blinks, got %q", bc)
+	}
+}
+
+func TestFormatLiveElapsed(t *testing.T) {
+	start := time.Date(2026, 4, 27, 20, 48, 0, 0, time.UTC)
+	now := start.Add(18*time.Minute + 40*time.Second)
+
+	if got := formatLiveElapsed(start, now); got != "elapsed 18m 40s" {
+		t.Fatalf("formatLiveElapsed() = %q, want %q", got, "elapsed 18m 40s")
+	}
+}
+
+func TestModel_Breadcrumb_RunningShowsElapsedInsteadOfStarted(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = true
+	m.startTime = time.Now().Add(-(18*time.Minute + 40*time.Second))
+
+	bc := stripANSI(m.renderBreadcrumb())
+	if !strings.Contains(bc, "elapsed 18m") {
+		t.Fatalf("breadcrumb should show live elapsed time while running, got %q", bc)
+	}
+	if strings.Contains(bc, "started") {
+		t.Fatalf("breadcrumb should not show started time while running, got %q", bc)
+	}
+}
+
+func TestModel_Breadcrumb_ActiveShowsElapsedInsteadOfStarted(t *testing.T) {
+	tree := simpleTree()
+	m := newTestModel(tree, FromList)
+	m.active = true
+	m.startTime = time.Now().Add(-(2*time.Minute + 3*time.Second))
+
+	bc := stripANSI(m.renderBreadcrumb())
+	if !strings.Contains(bc, "elapsed 2m") {
+		t.Fatalf("breadcrumb should show live elapsed time while active, got %q", bc)
+	}
+	if strings.Contains(bc, "started") {
+		t.Fatalf("breadcrumb should not show started time while active, got %q", bc)
 	}
 }
 
