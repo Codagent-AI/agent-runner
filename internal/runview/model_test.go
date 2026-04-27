@@ -616,6 +616,18 @@ func TestModel_Enter_AgentStep_LiveRun_NoResume(t *testing.T) {
 	}
 }
 
+func TestModel_Enter_AgentStep_ActiveRun_NoResume(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList)
+	m.active = true
+	m.tree.Root.Children[1].Status = StatusSuccess
+	m.cursor = 1 // agent step with SessionID
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("enter on agent step in active run should be no-op")
+	}
+}
+
 func TestModel_Enter_AgentStep_NoSessionID_NoOp(t *testing.T) {
 	m := newTestModel(simpleTree(), FromList)
 	// Modify agent to have no session ID
@@ -783,7 +795,7 @@ func TestModel_Enter_AgentStep_InSubWorkflow_LiveRunAfterCompletion(t *testing.T
 	}
 }
 
-func TestModel_Enter_CompletedAgentStep_InSubWorkflow_DuringLiveRun(t *testing.T) {
+func TestModel_Enter_CompletedAgentStep_InSubWorkflow_DuringLiveRun_NoResume(t *testing.T) {
 	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
 	subwf := &StepNode{
 		ID:             "impl",
@@ -820,19 +832,11 @@ func TestModel_Enter_CompletedAgentStep_InSubWorkflow_DuringLiveRun(t *testing.T
 		t.Fatalf("expected selected node 'generate-code', got %v", sel)
 	}
 
-	// Press Enter on the completed agent step — should allow resume
-	// because this step is done; the runner no longer owns this session.
+	// Press Enter on the completed agent step. Even though this step is done,
+	// the live runner still owns the workflow terminal/session boundary.
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("enter on completed agent step during live run should produce ResumeMsg " +
-			"(the agent session is no longer owned by the runner)")
-	}
-	resume, ok := cmd().(ResumeMsg)
-	if !ok {
-		t.Fatalf("expected ResumeMsg, got %T", cmd())
-	}
-	if resume.SessionID != "nested-session-1" {
-		t.Fatalf("session ID = %q, want %q", resume.SessionID, "nested-session-1")
+	if cmd != nil {
+		t.Fatal("enter on completed agent step during live run should be no-op")
 	}
 }
 
@@ -870,8 +874,8 @@ func TestModel_Enter_CompletedAgentStep_DuringLiveRun_HelpBar(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
 	help := m.renderHelpBar()
-	if !containsString(help, "enter resume") {
-		t.Errorf("help bar should show 'enter resume' for completed agent step during live run: %q", help)
+	if containsString(help, "enter resume") {
+		t.Errorf("help bar should hide 'enter resume' for completed agent step during live run: %q", help)
 	}
 }
 
@@ -910,8 +914,8 @@ func TestModel_Enter_CompletedAgentStep_DuringLiveRun_DetailPane(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
 	view := m.View()
-	if !containsString(view, "resume session") {
-		t.Errorf("detail pane should show 'resume session' for completed agent step during live run")
+	if containsString(view, "resume session") {
+		t.Errorf("detail pane should hide 'resume session' for completed agent step during live run")
 	}
 }
 
@@ -1860,6 +1864,28 @@ func TestModel_MouseWheelUp_ChangesLogOffset(t *testing.T) {
 	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp})
 	if m.logOffset >= 10 {
 		t.Fatalf("mouse wheel up should decrease logOffset: got %d, want < 10", m.logOffset)
+	}
+}
+
+func TestModel_LiveRun_OutputChunk_DoesNotTailWhenAutoFollowOff(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.termHeight = 10
+	shell := m.tree.Root.Children[0]
+	shell.Stdout = generateLargeOutput(100)
+	lineCount := m.rebuildRanges()
+	m.clampLogOffset(lineCount)
+	m.logOffset = m.maxLogOffset()
+
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp})
+	if m.autoFollow {
+		t.Fatal("test setup: mouse wheel up should clear autoFollow")
+	}
+	scrolledOffset := m.logOffset
+
+	m.Update(liverun.OutputChunkMsg{StepPrefix: "[build]", Stream: "stdout", Bytes: []byte("new output\n")})
+
+	if m.logOffset != scrolledOffset {
+		t.Fatalf("output chunk should not tail when autoFollow is off: before=%d after=%d", scrolledOffset, m.logOffset)
 	}
 }
 

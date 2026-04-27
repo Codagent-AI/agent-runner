@@ -164,23 +164,18 @@ func executeChildSteps(
 			return OutcomeFailed, fmt.Errorf("step %q skip_if evaluation failed: %w", workflow.Steps[i].ID, skipErr)
 		}
 		if skip {
+			skipChildStep(childCtx, &workflow.Steps[i])
 			continue
 		}
 
-		recordChildProgress(childCtx, workflow.Steps[i].ID, false)
-		if childCtx.ParentContext != nil && childCtx.ParentContext.FlushState != nil {
-			childCtx.ParentContext.FlushState()
-		}
+		updateChildProgress(childCtx, workflow.Steps[i].ID, false)
 
 		outcome, err := DispatchStep(&workflow.Steps[i], childCtx, runner, glob, log)
 		if err != nil {
 			return OutcomeFailed, err
 		}
 		completed := outcome != OutcomeFailed && outcome != OutcomeAborted
-		recordChildProgress(childCtx, workflow.Steps[i].ID, completed)
-		if childCtx.ParentContext != nil && childCtx.ParentContext.FlushState != nil {
-			childCtx.ParentContext.FlushState()
-		}
+		updateChildProgress(childCtx, workflow.Steps[i].ID, completed)
 
 		if outcome == OutcomeAborted {
 			return OutcomeAborted, nil
@@ -198,6 +193,43 @@ func executeChildSteps(
 		return OutcomeFailed, fmt.Errorf("resume step %q not found in sub-workflow", resolvedStartID)
 	}
 	return OutcomeSuccess, nil
+}
+
+func skipChildStep(childCtx *model.ExecutionContext, step *model.Step) {
+	updateChildProgress(childCtx, step.ID, true)
+	emitSkippedChildStep(childCtx, step)
+}
+
+func updateChildProgress(childCtx *model.ExecutionContext, childStepID string, completed bool) {
+	recordChildProgress(childCtx, childStepID, completed)
+	flushChildProgress(childCtx)
+}
+
+func flushChildProgress(childCtx *model.ExecutionContext) {
+	if childCtx.ParentContext != nil && childCtx.ParentContext.FlushState != nil {
+		childCtx.ParentContext.FlushState()
+	}
+}
+
+func emitSkippedChildStep(childCtx *model.ExecutionContext, step *model.Step) {
+	prefix := audit.BuildPrefix(nestingToAudit(childCtx), step.ID)
+	now := time.Now().UTC().Format(time.RFC3339)
+	emitAudit(childCtx, audit.Event{
+		Timestamp: now,
+		Prefix:    prefix,
+		Type:      audit.EventStepStart,
+		Data:      map[string]any{"context": contextSnapshot(childCtx)},
+	})
+	emitAudit(childCtx, audit.Event{
+		Timestamp: now,
+		Prefix:    prefix,
+		Type:      audit.EventStepEnd,
+		Data: map[string]any{
+			"outcome":     "skipped",
+			"skip_if":     step.SkipIf,
+			"duration_ms": 0,
+		},
+	})
 }
 
 func recordChildProgress(childCtx *model.ExecutionContext, childStepID string, completed bool) {

@@ -187,6 +187,9 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 
 	if entered != FromLiveRun {
 		m.active = runlock.Check(sessionDir) == runlock.LockActive
+		if m.active {
+			m.autoFollow = true
+		}
 	}
 
 	m.resolverCfg = ResolverConfig{
@@ -435,7 +438,7 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) {
 
 func (m *Model) handleOutputChunkMsg(msg liverun.OutputChunkMsg) {
 	m.applyOutputChunk(msg)
-	if m.active || m.running {
+	if (m.active || m.running) && m.autoFollow {
 		m.logOffset = math.MaxInt32
 	}
 	lineCount := m.rebuildRanges()
@@ -447,7 +450,7 @@ func (m *Model) handleStepStateMsg(msg liverun.StepStateMsg) {
 	if m.autoFollow {
 		m.applyAutoFollowCursor()
 	}
-	if m.active || m.running {
+	if (m.active || m.running) && m.autoFollow {
 		m.logOffset = math.MaxInt32
 	}
 	lineCount := m.rebuildRanges()
@@ -516,7 +519,9 @@ func (m *Model) handleRefreshMsg() tea.Cmd {
 	// step statuses stay current.
 	if m.active || m.running {
 		m.refreshData()
-		m.logOffset = math.MaxInt32
+		if m.autoFollow {
+			m.logOffset = math.MaxInt32
+		}
 		m.rebuildRanges()
 	}
 	return tuistyle.DoRefresh()
@@ -538,6 +543,10 @@ func (m *Model) canResumeRun() bool {
 		m.sessionDir != "" &&
 		!m.running && !m.active && m.liveResult == "" &&
 		m.rootStatus() != StatusFailed && m.rootStatus() != StatusSuccess
+}
+
+func (m *Model) canResumeAgentSession(n *StepNode) bool {
+	return n != nil && n.SessionID != "" && !m.running && !m.active
 }
 
 // handleKey processes a key message. Extracted from Update to keep the main
@@ -878,10 +887,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case NodeHeadlessAgent, NodeInteractiveAgent:
-		// Resume when the run has ended, or when this specific step has
-		// completed (the runner no longer owns the session even if the
-		// workflow is still executing subsequent steps).
-		if n.SessionID != "" && (!m.running || n.Status == StatusSuccess || n.Status == StatusFailed) {
+		if m.canResumeAgentSession(n) {
 			return m, func() tea.Msg {
 				return ResumeMsg{AgentCLI: n.AgentCLI, SessionID: n.SessionID}
 			}

@@ -433,6 +433,34 @@ func TestRenderHeadlessBlock_HeaderOrderAndUnknownModelFallback(t *testing.T) {
 	}
 }
 
+func TestRenderAgentBlocks_HideResumeHintWhenRunActive(t *testing.T) {
+	headless := &StepNode{
+		ID:        "implement",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusSuccess,
+		SessionID: "sess-123",
+	}
+	interactive := &StepNode{
+		ID:        "review",
+		Type:      NodeInteractiveAgent,
+		Status:    StatusSuccess,
+		SessionID: "sess-456",
+	}
+
+	for name, lines := range map[string][]string{
+		"headless":    renderHeadlessBlock(headless, 0, 80, false, 0, true),
+		"interactive": renderInteractiveBlock(interactive, 0, 80, 0, true),
+	} {
+		var plain []string
+		for _, line := range lines {
+			plain = append(plain, stripANSI(line))
+		}
+		if joined := strings.Join(plain, "\n"); strings.Contains(joined, "resume session") {
+			t.Fatalf("%s block should hide resume hint while run is active:\n%s", name, joined)
+		}
+	}
+}
+
 func TestRenderHeadlessBlock_ShowsSingleGlyphSpinnerBelowStreamingOutput(t *testing.T) {
 	node := &StepNode{
 		ID:         "implement",

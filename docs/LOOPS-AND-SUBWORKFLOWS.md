@@ -232,7 +232,7 @@ steps:
     steps:
       - id: run-validator
         mode: shell
-        command: agent-validator run --enable-review task-compliance
+        command: agent-validator run --report
         capture: validator_output
         continue_on_failure: true
         break_if: success

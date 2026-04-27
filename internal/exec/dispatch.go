@@ -52,7 +52,7 @@ func MapLoopOutcomeForRunner(outcome StepOutcome) StepOutcome {
 }
 
 func mapLoopOutcome(outcome StepOutcome) StepOutcome {
-	if outcome == OutcomeSuccess || outcome == OutcomeExhausted {
+	if outcome == OutcomeSuccess {
 		return OutcomeSuccess
 	}
 	if outcome == OutcomeAborted {
