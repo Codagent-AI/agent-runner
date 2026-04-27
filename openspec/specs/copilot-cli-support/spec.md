@@ -3,9 +3,7 @@
 ## Purpose
 
 Defines how the runner integrates with the GitHub Copilot CLI (`copilot`) as a headless agent backend.
-
 ## Requirements
-
 ### Requirement: Copilot headless invocation
 
 The Copilot adapter SHALL construct headless invocations using:
@@ -84,14 +82,3 @@ The effective working directory used for matching SHALL be the working directory
 - **WHEN** no session directory in `~/.copilot/session-state/` matches the working directory or was created after the spawn time
 - **THEN** the adapter returns the empty string
 
-### Requirement: Copilot interactive mode rejected at runtime
-
-Interactive mode for Copilot is not supported in this release. When a step with `cli: copilot` is invoked in interactive mode (headless=false), the runner SHALL fail the step at runtime with an error message indicating that copilot interactive mode is not supported.
-
-#### Scenario: Interactive Copilot step fails at runtime
-- **WHEN** an agent step resolves to `cli: copilot` and `mode: interactive`
-- **THEN** the runner marks the step as failed and emits an error message stating that interactive mode is not supported for the copilot CLI
-
-#### Scenario: Copilot interactive rejection does not block load
-- **WHEN** a workflow or profile declares `cli: copilot` with `default_mode: interactive`
-- **THEN** configuration and workflow loading succeed without error (the failure surfaces only when such a step is actually executed)
