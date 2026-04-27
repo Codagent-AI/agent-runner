@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"io"
 	"log"
@@ -61,7 +62,7 @@ func (a *CursorAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
 		return opts.PresetID
 	}
 	if !opts.Headless {
-		return discoverCursorInteractiveSession(opts.SpawnTime)
+		return discoverCursorInteractiveSession(opts.SpawnTime, opts.Workdir)
 	}
 	return discoverCursorSessionID(opts.ProcessOutput)
 }
@@ -226,11 +227,20 @@ func discoverCursorSessionID(output string) string {
 }
 
 // discoverCursorInteractiveSession scans ~/.cursor/chats/*/<chat-uuid>/store.db
-// files and returns the chat UUID for the newest file modified after spawnTime.
-func discoverCursorInteractiveSession(spawnTime time.Time) string {
+// files and returns the chat UUID when exactly one post-spawn store matches the
+// effective workdir. If the evidence is ambiguous, it declines to persist a
+// session ID rather than risking a resume into an unrelated chat.
+func discoverCursorInteractiveSession(spawnTime time.Time, workdir string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
+	}
+	cwd := workdir
+	if cwd == "" {
+		cwd, err = os.Getwd()
+		if err != nil {
+			return ""
+		}
 	}
 
 	chatsDir := filepath.Join(home, ".cursor", "chats")
@@ -251,6 +261,9 @@ func discoverCursorInteractiveSession(spawnTime time.Time) string {
 		if info.ModTime().Before(spawnTime) {
 			return nil
 		}
+		if !matchesCursorStoreWorkdir(path, cwd) {
+			return nil
+		}
 		candidates = append(candidates, candidate{
 			id:      filepath.Base(filepath.Dir(path)),
 			modTime: info.ModTime(),
@@ -263,10 +276,30 @@ func discoverCursorInteractiveSession(spawnTime time.Time) string {
 	})
 
 	if len(candidates) > 1 {
-		log.Printf("cursor: %d interactive chat candidates modified after spawn; using most recent — misattribution possible if concurrent sessions share this host", len(candidates))
+		log.Printf("cursor: %d interactive chat candidates match workdir %s; session ID is ambiguous and will not be persisted", len(candidates), cwd)
+		return ""
 	}
 	if len(candidates) == 0 {
 		return ""
 	}
 	return candidates[0].id
+}
+
+func matchesCursorStoreWorkdir(storeDBPath, workdir string) bool {
+	data, err := os.ReadFile(storeDBPath) // #nosec G304 -- scanning known Cursor chat store path
+	if err != nil {
+		return false
+	}
+
+	canonWorkdir := canonicalize(workdir)
+	markers := [][]byte{
+		[]byte("Workspace Path: " + workdir),
+		[]byte("Workspace Path: " + canonWorkdir),
+	}
+	for _, marker := range markers {
+		if bytes.Contains(data, marker) {
+			return true
+		}
+	}
+	return false
 }

@@ -1205,33 +1205,55 @@ func TestCursorAdapter(t *testing.T) {
 		t.Setenv("HOME", fakeHome)
 
 		spawnTime := time.Now().Add(-10 * time.Second)
-		oldID := "11111111-1111-1111-1111-111111111111"
-		newID := "22222222-2222-2222-2222-222222222222"
+		wrongWorkspaceID := "11111111-1111-1111-1111-111111111111"
+		matchingID := "22222222-2222-2222-2222-222222222222"
 		beforeID := "33333333-3333-3333-3333-333333333333"
-		writeCursorStoreDB(t, fakeHome, "workspace-a", oldID, time.Now().Add(-5*time.Second))
-		writeCursorStoreDB(t, fakeHome, "workspace-b", newID, time.Now().Add(-1*time.Second))
-		writeCursorStoreDB(t, fakeHome, "workspace-c", beforeID, spawnTime.Add(-time.Second))
+		workdir := t.TempDir()
+		otherWorkdir := t.TempDir()
+		writeCursorStoreDB(t, fakeHome, "workspace-a", wrongWorkspaceID, time.Now().Add(-1*time.Second), otherWorkdir)
+		writeCursorStoreDB(t, fakeHome, "workspace-b", matchingID, time.Now().Add(-5*time.Second), workdir)
+		writeCursorStoreDB(t, fakeHome, "workspace-c", beforeID, spawnTime.Add(-time.Second), workdir)
 
 		id := adapter.DiscoverSessionID(&DiscoverOptions{
 			SpawnTime: spawnTime,
 			Headless:  false,
+			Workdir:   workdir,
 		})
-		if id != newID {
-			t.Fatalf("expected newest post-spawn chat %q, got %q", newID, id)
+		if id != matchingID {
+			t.Fatalf("expected matching post-spawn chat %q, got %q", matchingID, id)
 		}
 	})
 
 	t.Run("discover interactive session ID returns empty when no cursor chats match", func(t *testing.T) {
 		fakeHome := t.TempDir()
 		t.Setenv("HOME", fakeHome)
-		writeCursorStoreDB(t, fakeHome, "workspace-a", "11111111-1111-1111-1111-111111111111", time.Now().Add(-10*time.Second))
+		writeCursorStoreDB(t, fakeHome, "workspace-a", "11111111-1111-1111-1111-111111111111", time.Now().Add(-10*time.Second), t.TempDir())
 
 		id := adapter.DiscoverSessionID(&DiscoverOptions{
 			SpawnTime: time.Now(),
 			Headless:  false,
+			Workdir:   t.TempDir(),
 		})
 		if id != "" {
 			t.Fatalf("expected empty string, got %q", id)
+		}
+	})
+
+	t.Run("discover interactive session ID returns empty when cursor chats are ambiguous", func(t *testing.T) {
+		fakeHome := t.TempDir()
+		t.Setenv("HOME", fakeHome)
+		workdir := t.TempDir()
+		spawnTime := time.Now().Add(-10 * time.Second)
+		writeCursorStoreDB(t, fakeHome, "workspace-a", "11111111-1111-1111-1111-111111111111", time.Now().Add(-2*time.Second), workdir)
+		writeCursorStoreDB(t, fakeHome, "workspace-b", "22222222-2222-2222-2222-222222222222", time.Now().Add(-1*time.Second), workdir)
+
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			SpawnTime: spawnTime,
+			Headless:  false,
+			Workdir:   workdir,
+		})
+		if id != "" {
+			t.Fatalf("expected empty string for ambiguous cursor chats, got %q", id)
 		}
 	})
 
@@ -1406,13 +1428,14 @@ func containsString(values []string, target string) bool {
 	return false
 }
 
-func writeCursorStoreDB(t *testing.T, home, workspaceHash, chatID string, modTime time.Time) {
+func writeCursorStoreDB(t *testing.T, home, workspaceHash, chatID string, modTime time.Time, workdir string) {
 	t.Helper()
 	path := filepath.Join(home, ".cursor", "chats", workspaceHash, chatID, "store.db")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("mkdir cursor chat dir: %v", err)
 	}
-	if err := os.WriteFile(path, nil, 0o600); err != nil {
+	content := []byte("Workspace Path: " + workdir + "\n")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatalf("write cursor store.db: %v", err)
 	}
 	if err := os.Chtimes(path, modTime, modTime); err != nil {
