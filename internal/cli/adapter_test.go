@@ -64,10 +64,20 @@ func TestRegistry(t *testing.T) {
 		}
 	})
 
+	t.Run("resolves known CLI opencode", func(t *testing.T) {
+		adapter, err := Get("opencode")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if adapter == nil {
+			t.Fatal("expected non-nil adapter")
+		}
+	})
+
 	t.Run("KnownCLIs returns all registered names", func(t *testing.T) {
 		names := KnownCLIs()
-		if len(names) < 4 {
-			t.Fatalf("expected at least 4 known CLIs, got %d", len(names))
+		if len(names) < 5 {
+			t.Fatalf("expected at least 5 known CLIs, got %d", len(names))
 		}
 		found := map[string]bool{}
 		for _, name := range names {
@@ -84,6 +94,9 @@ func TestRegistry(t *testing.T) {
 		}
 		if !found["cursor"] {
 			t.Fatal("expected 'cursor' in known CLIs")
+		}
+		if !found["opencode"] {
+			t.Fatal("expected 'opencode' in known CLIs")
 		}
 	})
 }

@@ -1,0 +1,238 @@
+package cli
+
+import (
+	"bufio"
+	"encoding/json"
+	"io"
+	"log"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+)
+
+// OpenCodeAdapter constructs invocation args for the OpenCode CLI.
+type OpenCodeAdapter struct{}
+
+// BuildArgs constructs OpenCode CLI args.
+//
+// Patterns:
+//   - Fresh headless:      opencode run --format json --dangerously-skip-permissions [--model <m>] [--variant <e>] <prompt>
+//   - Resume headless:     opencode run --format json --dangerously-skip-permissions -s <id> <prompt>
+//   - Fresh interactive:   opencode --prompt <prompt> [--model <m>]
+//   - Resume interactive:  opencode --prompt <prompt> -s <id>
+//
+// OpenCode has no native system-prompt or disallowed-tools flags. --variant
+// and --dangerously-skip-permissions are run-only, so interactive mode omits
+// them. --model and --variant are omitted on resume because a resumed session
+// keeps the settings it was started with.
+func (a *OpenCodeAdapter) BuildArgs(input *BuildArgsInput) []string {
+	var args []string
+	if input.Headless {
+		args = []string{"opencode", "run", "--format", "json", "--dangerously-skip-permissions"}
+	} else {
+		args = []string{"opencode", "--prompt", input.Prompt}
+	}
+
+	resuming := input.Resume && input.SessionID != ""
+	if resuming {
+		args = append(args, "-s", input.SessionID)
+	} else if input.Model != "" {
+		args = append(args, "--model", input.Model)
+	}
+
+	if input.Headless && !resuming && input.Effort != "" {
+		args = append(args, "--variant", input.Effort)
+	}
+
+	if input.Headless {
+		args = append(args, input.Prompt)
+	}
+	return args
+}
+
+// SupportsSystemPrompt returns false because OpenCode has no native system prompt flag.
+func (a *OpenCodeAdapter) SupportsSystemPrompt() bool {
+	return false
+}
+
+func (a *OpenCodeAdapter) ProbeModel(model, effort string) (ProbeStrength, error) {
+	return BinaryOnly, nil
+}
+
+// DiscoverSessionID returns the session ID after an OpenCode process exits.
+// Headless mode parses the first JSONL event with a non-empty sessionID field.
+// Interactive mode scans OpenCode's session_diff directory for the newest
+// post-spawn ses_*.json file.
+func (a *OpenCodeAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
+	if opts.Headless {
+		return discoverOpenCodeHeadlessSession(opts.ProcessOutput)
+	}
+	return discoverOpenCodeInteractiveSession(opts.SpawnTime)
+}
+
+// FilterOutput extracts assistant text from OpenCode run --format json output.
+func (a *OpenCodeAdapter) FilterOutput(stdout string) string {
+	return extractOpenCodeText(stdout)
+}
+
+// WrapStdout parses OpenCode JSONL and forwards only assistant text to the TUI.
+func (a *OpenCodeAdapter) WrapStdout(downstream io.Writer) io.Writer {
+	return &openCodeStreamFilter{downstream: downstream}
+}
+
+func discoverOpenCodeHeadlessSession(output string) string {
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		var event struct {
+			SessionID string `json:"sessionID"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			continue
+		}
+		if event.SessionID != "" {
+			return event.SessionID
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("opencode: failed to scan opencode session output: %v", err)
+	}
+	return ""
+}
+
+func discoverOpenCodeInteractiveSession(spawnTime time.Time) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+
+	pattern := filepath.Join(home, ".local", "share", "opencode", "storage", "session_diff", "ses_*.json")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return ""
+	}
+
+	type candidate struct {
+		id      string
+		modTime time.Time
+	}
+	var candidates []candidate
+	for _, path := range matches {
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() || info.ModTime().Before(spawnTime) {
+			continue
+		}
+		base := filepath.Base(path)
+		candidates = append(candidates, candidate{
+			id:      strings.TrimSuffix(base, ".json"),
+			modTime: info.ModTime(),
+		})
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].modTime.After(candidates[j].modTime)
+	})
+
+	if len(candidates) > 1 {
+		log.Printf("opencode: %d session candidates match spawn time; using most recent — misattribution possible if concurrent sessions started together", len(candidates))
+	}
+	if len(candidates) > 0 {
+		return candidates[0].id
+	}
+	return ""
+}
+
+func extractOpenCodeText(output string) string {
+	reader := bufio.NewReader(strings.NewReader(output))
+	var text strings.Builder
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			text.WriteString(openCodeTextFromLine(line))
+		}
+		if err != nil {
+			if err != io.EOF {
+				log.Printf("opencode: failed to read opencode output: %v", err)
+			}
+			break
+		}
+	}
+	return text.String()
+}
+
+func openCodeTextFromLine(line []byte) string {
+	var event struct {
+		Type string `json:"type"`
+		Part *struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"part"`
+	}
+	if err := json.Unmarshal(line, &event); err != nil {
+		return ""
+	}
+	if event.Type != "text" || event.Part == nil || event.Part.Type != "text" {
+		return ""
+	}
+	return event.Part.Text
+}
+
+type openCodeStreamFilter struct {
+	downstream io.Writer
+	buf        []byte
+	err        error
+}
+
+func (f *openCodeStreamFilter) Write(p []byte) (int, error) {
+	if f.err != nil {
+		return 0, f.err
+	}
+	n := len(p)
+	f.buf = append(f.buf, p...)
+	for {
+		idx := indexByte(f.buf, '\n')
+		if idx < 0 {
+			break
+		}
+		line := f.buf[:idx]
+		f.buf = f.buf[idx+1:]
+		if err := f.processLine(line); err != nil {
+			return n, err
+		}
+	}
+	return n, nil
+}
+
+func (f *openCodeStreamFilter) Close() error {
+	if f.err != nil {
+		return f.err
+	}
+	if len(f.buf) > 0 {
+		if err := f.processLine(f.buf); err != nil {
+			return err
+		}
+		f.buf = nil
+	}
+	return nil
+}
+
+func (f *openCodeStreamFilter) processLine(line []byte) error {
+	text := openCodeTextFromLine(line)
+	if text == "" {
+		return nil
+	}
+	return f.writeDownstream([]byte(text))
+}
+
+func (f *openCodeStreamFilter) writeDownstream(p []byte) error {
+	n, err := f.downstream.Write(p)
+	if err == nil && n < len(p) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		f.err = err
+	}
+	return err
+}

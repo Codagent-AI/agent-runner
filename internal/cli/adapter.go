@@ -120,10 +120,11 @@ type SessionStore interface {
 
 // registry holds the known CLI adapters, populated at init time.
 var registry = map[string]Adapter{
-	"claude":  &ClaudeAdapter{},
-	"codex":   &CodexAdapter{},
-	"copilot": &CopilotAdapter{},
-	"cursor":  &CursorAdapter{},
+	"claude":   &ClaudeAdapter{},
+	"codex":    &CodexAdapter{},
+	"copilot":  &CopilotAdapter{},
+	"cursor":   &CursorAdapter{},
+	"opencode": &OpenCodeAdapter{},
 }
 
 // Get returns the adapter for the given CLI name, or an error if unknown.
