@@ -41,6 +41,12 @@ entry_points:
       - openspec-validate:
           command: openspec validate --specs --no-interactive
 
+  # internal/cli: opt-in focused check for CLI adapter changes
+  - path: internal/cli
+    checks:
+      - cli-test:
+          command: GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off GOCACHE="$PWD/.validator/cache/go-build" GOPATH="$PWD/.validator/cache/go" GOMODCACHE="$PWD/.validator/cache/go/pkg/mod" go test ./internal/cli
+
 # -------------------------------------------------------------------
 # All settings below are optional. Uncomment and change as needed.
 # -------------------------------------------------------------------
