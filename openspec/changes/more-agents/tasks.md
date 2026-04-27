@@ -1,0 +1,2 @@
+- [ ] Enable interactive mode for Copilot and Cursor (`tasks/copilot-cursor-interactive.md`)
+- [ ] Add OpenCode adapter (`tasks/opencode-adapter.md`)
