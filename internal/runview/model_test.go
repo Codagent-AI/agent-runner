@@ -2505,3 +2505,74 @@ func TestShowTUIMsg_NoOpWhenAlreadyInAltScreen(t *testing.T) {
 		t.Fatal("expected nil cmd when already in alt-screen")
 	}
 }
+
+// TestSuspendedMsg_PopsDrillInWhenActiveOutside reproduces the disorientation
+// bug where a user drilled into a sub-workflow stayed pinned to it after the
+// sub-workflow completed and the parent workflow advanced into an interactive
+// step elsewhere. On SuspendedMsg, when the active step lives outside the
+// drilled container, the path pops back to root and autoFollow re-enables, so
+// the resumed TUI shows the running step.
+func TestSuspendedMsg_PopsDrillInWhenActiveOutside(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	stepA := &StepNode{ID: "stepA", Type: NodeShell, Status: StatusSuccess, Parent: root}
+	subwf := &StepNode{ID: "subwf", Type: NodeSubWorkflow, Status: StatusSuccess, Parent: root, SubLoaded: true}
+	stepB := &StepNode{ID: "stepB", Type: NodeShell, Status: StatusSuccess, Parent: subwf}
+	subwf.Children = []*StepNode{stepB}
+	stepC := &StepNode{ID: "stepC", Type: NodeInteractiveAgent, Status: StatusInProgress, Parent: root}
+	root.Children = []*StepNode{stepA, subwf, stepC}
+
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.running = true
+	m.path = []*StepNode{root, subwf}
+	m.cursor = 0
+	m.autoFollow = false
+	m.activeStepPrefix = "[stepC]"
+
+	m.Update(liverun.SuspendedMsg{})
+
+	if len(m.path) != 1 {
+		t.Fatalf("path len = %d, want 1 (popped back to root)", len(m.path))
+	}
+	if !m.autoFollow {
+		t.Fatal("autoFollow should be re-enabled on suspend")
+	}
+	if m.cursor != 2 {
+		t.Fatalf("cursor = %d, want 2 (stepC index)", m.cursor)
+	}
+}
+
+// TestSuspendedMsg_KeepsDrillInWhenActiveInside verifies the looser policy:
+// if the active step lives inside the drilled container, the drill-in is
+// preserved (autoFollow re-enables and the cursor follows within the
+// container).
+func TestSuspendedMsg_KeepsDrillInWhenActiveInside(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	stepA := &StepNode{ID: "stepA", Type: NodeShell, Status: StatusSuccess, Parent: root}
+	subwf := &StepNode{ID: "subwf", Type: NodeSubWorkflow, Status: StatusInProgress, Parent: root, SubLoaded: true}
+	stepB1 := &StepNode{ID: "stepB1", Type: NodeShell, Status: StatusSuccess, Parent: subwf}
+	stepB2 := &StepNode{ID: "stepB2", Type: NodeInteractiveAgent, Status: StatusInProgress, Parent: subwf}
+	subwf.Children = []*StepNode{stepB1, stepB2}
+	root.Children = []*StepNode{stepA, subwf}
+
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.running = true
+	m.path = []*StepNode{root, subwf}
+	m.cursor = 0
+	m.autoFollow = false
+	m.activeStepPrefix = "[subwf, stepB2]"
+
+	m.Update(liverun.SuspendedMsg{})
+
+	if len(m.path) != 2 {
+		t.Fatalf("path len = %d, want 2 (drill-in preserved when active is inside)", len(m.path))
+	}
+	if m.path[1] != subwf {
+		t.Fatal("path[1] should still be subwf")
+	}
+	if !m.autoFollow {
+		t.Fatal("autoFollow should be re-enabled on suspend")
+	}
+	if m.cursor != 1 {
+		t.Fatalf("cursor = %d, want 1 (stepB2 index inside subwf)", m.cursor)
+	}
+}
