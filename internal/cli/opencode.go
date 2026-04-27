@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"io"
 	"log"
@@ -52,7 +53,6 @@ func (a *OpenCodeAdapter) BuildArgs(input *BuildArgsInput) []string {
 	return args
 }
 
-// SupportsSystemPrompt returns false because OpenCode has no native system prompt flag.
 func (a *OpenCodeAdapter) SupportsSystemPrompt() bool {
 	return false
 }
@@ -61,10 +61,6 @@ func (a *OpenCodeAdapter) ProbeModel(model, effort string) (ProbeStrength, error
 	return BinaryOnly, nil
 }
 
-// DiscoverSessionID returns the session ID after an OpenCode process exits.
-// Headless mode parses the first JSONL event with a non-empty sessionID field.
-// Interactive mode scans OpenCode's session_diff directory for the newest
-// post-spawn ses_*.json file.
 func (a *OpenCodeAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
 	if opts.Headless {
 		return discoverOpenCodeHeadlessSession(opts.ProcessOutput)
@@ -72,12 +68,10 @@ func (a *OpenCodeAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
 	return discoverOpenCodeInteractiveSession(opts.SpawnTime)
 }
 
-// FilterOutput extracts assistant text from OpenCode run --format json output.
 func (a *OpenCodeAdapter) FilterOutput(stdout string) string {
 	return extractOpenCodeText(stdout)
 }
 
-// WrapStdout parses OpenCode JSONL and forwards only assistant text to the TUI.
 func (a *OpenCodeAdapter) WrapStdout(downstream io.Writer) io.Writer {
 	return &openCodeStreamFilter{downstream: downstream}
 }
@@ -192,7 +186,7 @@ func (f *openCodeStreamFilter) Write(p []byte) (int, error) {
 	n := len(p)
 	f.buf = append(f.buf, p...)
 	for {
-		idx := indexByte(f.buf, '\n')
+		idx := bytes.IndexByte(f.buf, '\n')
 		if idx < 0 {
 			break
 		}

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"io"
 	"os"
@@ -147,7 +148,7 @@ func (f *codexStreamFilter) Write(p []byte) (int, error) {
 	n := len(p)
 	f.buf = append(f.buf, p...)
 	for {
-		idx := indexByte(f.buf, '\n')
+		idx := bytes.IndexByte(f.buf, '\n')
 		if idx < 0 {
 			break
 		}
@@ -219,7 +220,7 @@ func (f *codexStderrFilter) Write(p []byte) (int, error) {
 	n := len(p)
 	f.buf = append(f.buf, p...)
 	for {
-		idx := indexByte(f.buf, '\n')
+		idx := bytes.IndexByte(f.buf, '\n')
 		if idx < 0 {
 			break
 		}
@@ -379,15 +380,6 @@ func isCodexIgnoredStderrLine(line string, state *codexIgnoredStderrState) bool 
 	}
 	state.skippedRollout = false
 	return false
-}
-
-func indexByte(b []byte, c byte) int {
-	for i, v := range b {
-		if v == c {
-			return i
-		}
-	}
-	return -1
 }
 
 // discoverCodexInteractiveSession scans ~/.codex/sessions/YYYY/MM/DD/ for the

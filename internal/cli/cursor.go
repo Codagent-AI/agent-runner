@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"io"
 	"log"
@@ -92,7 +93,7 @@ func (f *cursorStreamFilter) Write(p []byte) (int, error) {
 	f.buf = append(f.buf, p...)
 
 	for {
-		idx := indexOf(f.buf, '\n')
+		idx := bytes.IndexByte(f.buf, '\n')
 		if idx < 0 {
 			break
 		}
@@ -172,15 +173,6 @@ func (f *cursorStreamFilter) writeDownstream(p []byte) error {
 		f.err = err
 	}
 	return err
-}
-
-func indexOf(b []byte, c byte) int {
-	for i, v := range b {
-		if v == c {
-			return i
-		}
-	}
-	return -1
 }
 
 func extractCursorResult(output string) string {
