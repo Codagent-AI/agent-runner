@@ -80,7 +80,7 @@ func (a *CodexAdapter) FilterOutput(stdout string) string {
 
 // WrapStdout parses Codex JSONL and forwards only assistant text to the TUI.
 func (a *CodexAdapter) WrapStdout(downstream io.Writer) io.Writer {
-	return &codexStreamFilter{downstream: downstream}
+	return newCodexStreamFilter(downstream)
 }
 
 // WrapStderr suppresses Codex's persistent-exec rollout bookkeeping warning
@@ -134,52 +134,21 @@ func discoverCodexHeadlessSession(output string) string {
 }
 
 type codexStreamFilter struct {
-	downstream io.Writer
-	buf        []byte
-	err        error
-	wrote      bool
-	lastText   string
+	lineBufferedWriter
+	wrote    bool
+	lastText string
 }
 
-func (f *codexStreamFilter) Write(p []byte) (int, error) {
-	if f.err != nil {
-		return 0, f.err
-	}
-	n := len(p)
-	f.buf = append(f.buf, p...)
-	for {
-		idx := bytes.IndexByte(f.buf, '\n')
-		if idx < 0 {
-			break
-		}
-		line := f.buf[:idx]
-		f.buf = f.buf[idx+1:]
-		if err := f.processLine(line); err != nil {
-			return n, err
-		}
-	}
-	return n, nil
-}
-
-func (f *codexStreamFilter) Close() error {
-	if f.err != nil {
-		return f.err
-	}
-	if len(f.buf) > 0 {
-		if err := f.processLine(f.buf); err != nil {
-			return err
-		}
-		f.buf = nil
-	}
-	return nil
+func newCodexStreamFilter(d io.Writer) *codexStreamFilter {
+	f := &codexStreamFilter{}
+	f.downstream = d
+	f.onLine = f.processLine
+	return f
 }
 
 func (f *codexStreamFilter) processLine(line []byte) error {
 	text := codexDisplayText(line)
-	if text == "" {
-		return nil
-	}
-	if text == f.lastText {
+	if text == "" || text == f.lastText {
 		return nil
 	}
 	if f.wrote {
@@ -193,17 +162,6 @@ func (f *codexStreamFilter) processLine(line []byte) error {
 	f.wrote = true
 	f.lastText = text
 	return nil
-}
-
-func (f *codexStreamFilter) writeDownstream(p []byte) error {
-	n, err := f.downstream.Write(p)
-	if err == nil && n < len(p) {
-		err = io.ErrShortWrite
-	}
-	if err != nil {
-		f.err = err
-	}
-	return err
 }
 
 type codexStderrFilter struct {

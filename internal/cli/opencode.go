@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"io"
 	"log"
@@ -73,7 +72,7 @@ func (a *OpenCodeAdapter) FilterOutput(stdout string) string {
 }
 
 func (a *OpenCodeAdapter) WrapStdout(downstream io.Writer) io.Writer {
-	return &openCodeStreamFilter{downstream: downstream}
+	return newOpenCodeStreamFilter(downstream)
 }
 
 func discoverOpenCodeHeadlessSession(output string) string {
@@ -174,42 +173,14 @@ func openCodeTextFromLine(line []byte) string {
 }
 
 type openCodeStreamFilter struct {
-	downstream io.Writer
-	buf        []byte
-	err        error
+	lineBufferedWriter
 }
 
-func (f *openCodeStreamFilter) Write(p []byte) (int, error) {
-	if f.err != nil {
-		return 0, f.err
-	}
-	n := len(p)
-	f.buf = append(f.buf, p...)
-	for {
-		idx := bytes.IndexByte(f.buf, '\n')
-		if idx < 0 {
-			break
-		}
-		line := f.buf[:idx]
-		f.buf = f.buf[idx+1:]
-		if err := f.processLine(line); err != nil {
-			return n, err
-		}
-	}
-	return n, nil
-}
-
-func (f *openCodeStreamFilter) Close() error {
-	if f.err != nil {
-		return f.err
-	}
-	if len(f.buf) > 0 {
-		if err := f.processLine(f.buf); err != nil {
-			return err
-		}
-		f.buf = nil
-	}
-	return nil
+func newOpenCodeStreamFilter(d io.Writer) *openCodeStreamFilter {
+	f := &openCodeStreamFilter{}
+	f.downstream = d
+	f.onLine = f.processLine
+	return f
 }
 
 func (f *openCodeStreamFilter) processLine(line []byte) error {
@@ -218,15 +189,4 @@ func (f *openCodeStreamFilter) processLine(line []byte) error {
 		return nil
 	}
 	return f.writeDownstream([]byte(text))
-}
-
-func (f *openCodeStreamFilter) writeDownstream(p []byte) error {
-	n, err := f.downstream.Write(p)
-	if err == nil && n < len(p) {
-		err = io.ErrShortWrite
-	}
-	if err != nil {
-		f.err = err
-	}
-	return err
 }

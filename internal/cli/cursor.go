@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"io"
 	"log"
@@ -73,50 +72,19 @@ func (a *CursorAdapter) FilterOutput(stdout string) string {
 // WrapStdout returns a writer that parses cursor stream-json lines and
 // forwards only assistant text content to downstream.
 func (a *CursorAdapter) WrapStdout(downstream io.Writer) io.Writer {
-	return &cursorStreamFilter{downstream: downstream}
+	return newCursorStreamFilter(downstream)
 }
 
-// cursorStreamFilter is a line-buffering io.Writer that parses cursor
-// stream-json JSONL and writes only assistant text to the downstream writer.
 type cursorStreamFilter struct {
-	downstream io.Writer
-	buf        []byte
-	lastLen    int // length of text written so far from flush events
-	err        error
+	lineBufferedWriter
+	lastLen int // length of text written so far from flush events
 }
 
-func (f *cursorStreamFilter) Write(p []byte) (int, error) {
-	if f.err != nil {
-		return 0, f.err
-	}
-	n := len(p)
-	f.buf = append(f.buf, p...)
-
-	for {
-		idx := bytes.IndexByte(f.buf, '\n')
-		if idx < 0 {
-			break
-		}
-		line := f.buf[:idx]
-		f.buf = f.buf[idx+1:]
-		if err := f.processLine(line); err != nil {
-			return n, err
-		}
-	}
-	return n, nil
-}
-
-func (f *cursorStreamFilter) Close() error {
-	if f.err != nil {
-		return f.err
-	}
-	if len(f.buf) > 0 {
-		if err := f.processLine(f.buf); err != nil {
-			return err
-		}
-		f.buf = nil
-	}
-	return nil
+func newCursorStreamFilter(d io.Writer) *cursorStreamFilter {
+	f := &cursorStreamFilter{}
+	f.downstream = d
+	f.onLine = f.processLine
+	return f
 }
 
 func (f *cursorStreamFilter) processLine(line []byte) error {
