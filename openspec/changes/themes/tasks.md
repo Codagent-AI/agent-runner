@@ -1,0 +1,5 @@
+- [ ] Implement the change described by these files:
+  - [proposal.md](proposal.md)
+  - [specs/user-settings-file/spec.md](specs/user-settings-file/spec.md)
+  - [specs/tui-theme/spec.md](specs/tui-theme/spec.md)
+  - [design.md](design.md)
