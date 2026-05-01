@@ -1,5 +1,11 @@
 # agent-runner
 
+## 0.3.1
+
+### Patch Changes
+
+- Publish `agent-runner` as a Homebrew cask and install `agent-validator` as a Homebrew dependency.
+
 ## 0.3.0
 
 ### Minor Changes
