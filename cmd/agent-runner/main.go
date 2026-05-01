@@ -16,6 +16,7 @@ import (
 	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/discovery"
@@ -31,6 +32,8 @@ import (
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/runview"
+	"github.com/codagent/agent-runner/internal/themeprompt"
+	"github.com/codagent/agent-runner/internal/usersettings"
 	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
@@ -40,6 +43,20 @@ var version = "dev"
 var userHomeDir = os.UserHomeDir
 var currentExecutable = os.Executable
 var execProcess = syscall.Exec
+
+type themeDeps struct {
+	load   func() (usersettings.Settings, error)
+	prompt func() (usersettings.Theme, bool, error)
+	save   func(usersettings.Settings) error
+	apply  func(usersettings.Theme)
+}
+
+var defaultThemeDeps = themeDeps{
+	load:   usersettings.Load,
+	prompt: themeprompt.Prompt,
+	save:   usersettings.Save,
+	apply:  applyTheme,
+}
 
 // realProcessRunner implements exec.ProcessRunner using os/exec.
 type realProcessRunner struct{}
@@ -201,6 +218,10 @@ func run() int {
 
 	args := flag.Args()
 
+	if *validateFlag {
+		return handleValidateArgs(args)
+	}
+
 	if *inspectFlag != "" {
 		return handleInspect(*inspectFlag)
 	}
@@ -222,10 +243,6 @@ func run() int {
 
 	if len(args) < 1 {
 		return handleListBare()
-	}
-
-	if *validateFlag {
-		return handleValidateArgs(args)
 	}
 
 	workflowFile, err := resolveWorkflowArg(args[0])
@@ -265,6 +282,10 @@ func handleResume(sessionID string) int {
 		return 0
 	}
 
+	if code := ensureThemeForTUI(defaultThemeDeps); code != 0 {
+		return code
+	}
+
 	h, err := runner.PrepareResume(stateFilePath, &runner.Options{
 		ProcessRunner: &realProcessRunner{},
 		GlobExpander:  &realGlobExpander{},
@@ -293,15 +314,19 @@ func resumeInspectPaths(stateFilePath string) (sessionDir, projectDir string) {
 }
 
 func handleInspect(runID string) int {
+	sessionDir, projectDir, err := resolveInspectSession(runID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+
 	if err := requireTTY(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 
-	sessionDir, projectDir, err := resolveInspectSession(runID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-		return 1
+	if code := ensureThemeForTUI(defaultThemeDeps); code != 0 {
+		return code
 	}
 
 	return openInspectTUI(runID, sessionDir, projectDir)
@@ -341,6 +366,10 @@ func handleListWithTab(initialTab listview.InitialTab) int {
 	if err := requireTTY(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
+	}
+
+	if code := ensureThemeForTUI(defaultThemeDeps); code != 0 {
+		return code
 	}
 
 	m, err := listview.New(listview.WithInitialTab(initialTab))
@@ -1054,6 +1083,10 @@ func handleRun(args []string) int {
 		return 0
 	}
 
+	if code := ensureThemeForTUI(defaultThemeDeps); code != 0 {
+		return code
+	}
+
 	h, err := runner.PrepareRun(&workflow, params, &runner.Options{
 		WorkflowFile:  workflowFile,
 		Engine:        eng,
@@ -1067,6 +1100,37 @@ func handleRun(args []string) int {
 	}
 
 	return runLiveTUI(h)
+}
+
+func ensureThemeForTUI(deps themeDeps) int {
+	settings, err := deps.load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+
+	if settings.Theme == "" {
+		theme, ok, err := deps.prompt()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+			return 1
+		}
+		if !ok {
+			return 1
+		}
+		settings.Theme = theme
+		if err := deps.save(settings); err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: failed to save settings: %v\n", err)
+			return 1
+		}
+	}
+
+	deps.apply(settings.Theme)
+	return 0
+}
+
+func applyTheme(theme usersettings.Theme) {
+	lipgloss.SetHasDarkBackground(theme == usersettings.ThemeDark)
 }
 
 // parseParams separates positional args from key=value pairs.
