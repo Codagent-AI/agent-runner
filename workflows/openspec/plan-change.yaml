@@ -29,6 +29,11 @@ steps:
       Then, you MUST use the codagent:propose skill.
       Once the proposal document is written, continue to the next step.
 
+  - id: proposal-review
+    workflow: ../core/review-proposal.yaml
+    params:
+      proposal_dir: "openspec/changes/{{change_name}}"
+
   - id: specs
     session: resume
     prompt: |

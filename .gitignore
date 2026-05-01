@@ -3,7 +3,9 @@ bin/
 *.out
 coverage.html
 .claude/worktrees/
+.claude/scheduled_tasks.lock
 validator_logs/
+.validator/cache/
 agent-runner-state.json
 worktrees/
 .debug.log

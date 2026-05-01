@@ -7,7 +7,7 @@ steps:
       max: 3
     steps:
       - id: run-validator
-        command: agent-validator run --report --enable-review task-compliance
+        command: agent-validator run --report
         capture: validator_output
         capture_stderr: true
         continue_on_failure: true

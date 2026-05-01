@@ -1,0 +1,48 @@
+name: smoke-test-headless
+description: "Manual smoke test for headless agent adapters"
+
+params:
+  - name: smoke_dir
+    default: /tmp
+
+sessions:
+  - name: claude-headless
+    agent: claude_headless_smoke
+  - name: codex-headless
+    agent: codex_headless_smoke
+  - name: copilot-headless
+    agent: copilot_headless_smoke
+  - name: cursor-headless
+    agent: cursor_headless_smoke
+  - name: opencode-headless
+    agent: opencode_headless_smoke
+
+steps:
+  - id: shell-capture
+    command: echo "smoke-test value"
+    capture: greeting
+
+  - id: claude-headless
+    session: claude-headless
+    mode: headless
+    prompt: "Create this exact file: {{smoke_dir}}/{{step_id}}.txt and write this exact value into it: {{greeting}}. Then reply with exactly this line: smoke-test value: {{greeting}}"
+
+  - id: codex-headless
+    session: codex-headless
+    mode: headless
+    prompt: "Create this exact file: {{smoke_dir}}/{{step_id}}.txt and write this exact value into it: {{greeting}}. Then reply with exactly this line: smoke-test value: {{greeting}}"
+
+  - id: copilot-headless
+    session: copilot-headless
+    mode: headless
+    prompt: "Create this exact file: {{smoke_dir}}/{{step_id}}.txt and write this exact value into it: {{greeting}}. Then reply with exactly this line: smoke-test value: {{greeting}}"
+
+  - id: cursor-headless
+    session: cursor-headless
+    mode: headless
+    prompt: "Create this exact file: {{smoke_dir}}/{{step_id}}.txt and write this exact value into it: {{greeting}}. Then reply with exactly this line: smoke-test value: {{greeting}}"
+
+  - id: opencode-headless
+    session: opencode-headless
+    mode: headless
+    prompt: "Create this exact file: {{smoke_dir}}/{{step_id}}.txt and write this exact value into it: {{greeting}}. Then reply with exactly this line: smoke-test value: {{greeting}}"

@@ -3,7 +3,6 @@ package cli
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"strings"
@@ -12,17 +11,30 @@ import (
 // CursorAdapter constructs invocation args for the Cursor agent CLI.
 type CursorAdapter struct{}
 
-// BuildArgs constructs Cursor CLI args for headless mode.
+// ExecutableName returns the Cursor agent CLI binary name. The adapter remains
+// registered as "cursor" because that is the workflow-facing backend name.
+func (a *CursorAdapter) ExecutableName() string {
+	return "agent"
+}
+
+// BuildArgs constructs Cursor CLI args.
 //
 // Patterns:
-//   - Fresh headless:  agent -p --output-format stream-json --force --trust [--model <m>] <prompt>
-//   - Resume headless: agent -p --output-format stream-json --force --trust --resume=<id> <prompt>
+//   - Fresh headless:      agent -p --output-format stream-json --force --trust [--model <m>] <prompt>
+//   - Resume headless:     agent -p --output-format stream-json --force --trust --resume=<id> <prompt>
+//   - Fresh interactive:   agent [--model <m>] <prompt>
+//   - Resume interactive:  agent --resume=<id> <prompt>
 //
 // Cursor has no native system-prompt, effort, or disallowed-tools flags. Those
-// inputs are intentionally ignored here. --model is omitted on resume because a
-// resumed Cursor chat keeps the model it was started with.
+// inputs are intentionally ignored here. Interactive mode omits headless-only
+// output/trust flags and --force because a human supervises permissions at the
+// terminal. --model is omitted on resume because a resumed Cursor chat keeps the
+// model it was started with.
 func (a *CursorAdapter) BuildArgs(input *BuildArgsInput) []string {
-	args := []string{"agent", "-p", "--output-format", "stream-json", "--force", "--trust"}
+	args := []string{"agent"}
+	if input.Headless {
+		args = append(args, "-p", "--output-format", "stream-json", "--force", "--trust")
+	}
 
 	if input.Resume && input.SessionID != "" {
 		args = append(args, "--resume="+input.SessionID)
@@ -39,18 +51,22 @@ func (a *CursorAdapter) SupportsSystemPrompt() bool {
 	return false
 }
 
-// DiscoverSessionID returns the session ID after a Cursor process exits by
-// parsing stream-json output for the first event containing a session_id field.
+func (a *CursorAdapter) ProbeModel(model, effort string) (ProbeStrength, error) {
+	return BinaryOnly, nil
+}
+
+// DiscoverSessionID returns the session ID after a Cursor process exits.
+// Headless mode parses stream-json output for the first event containing a
+// session_id field. Interactive mode has no verified session ID channel, so it
+// declines to persist a filesystem-guessed chat ID.
 func (a *CursorAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
 	if opts.PresetID != "" {
 		return opts.PresetID
 	}
+	if !opts.Headless {
+		return ""
+	}
 	return discoverCursorSessionID(opts.ProcessOutput)
-}
-
-// InteractiveModeError returns an error indicating interactive mode is not supported.
-func (a *CursorAdapter) InteractiveModeError() error {
-	return fmt.Errorf("interactive mode is not supported for the cursor CLI")
 }
 
 // FilterOutput extracts the plain-text response from cursor's stream-json
@@ -62,50 +78,19 @@ func (a *CursorAdapter) FilterOutput(stdout string) string {
 // WrapStdout returns a writer that parses cursor stream-json lines and
 // forwards only assistant text content to downstream.
 func (a *CursorAdapter) WrapStdout(downstream io.Writer) io.Writer {
-	return &cursorStreamFilter{downstream: downstream}
+	return newCursorStreamFilter(downstream)
 }
 
-// cursorStreamFilter is a line-buffering io.Writer that parses cursor
-// stream-json JSONL and writes only assistant text to the downstream writer.
 type cursorStreamFilter struct {
-	downstream io.Writer
-	buf        []byte
-	lastLen    int // length of text written so far from flush events
-	err        error
+	lineBufferedWriter
+	lastLen int // length of text written so far from flush events
 }
 
-func (f *cursorStreamFilter) Write(p []byte) (int, error) {
-	if f.err != nil {
-		return 0, f.err
-	}
-	n := len(p)
-	f.buf = append(f.buf, p...)
-
-	for {
-		idx := indexOf(f.buf, '\n')
-		if idx < 0 {
-			break
-		}
-		line := f.buf[:idx]
-		f.buf = f.buf[idx+1:]
-		if err := f.processLine(line); err != nil {
-			return n, err
-		}
-	}
-	return n, nil
-}
-
-func (f *cursorStreamFilter) Close() error {
-	if f.err != nil {
-		return f.err
-	}
-	if len(f.buf) > 0 {
-		if err := f.processLine(f.buf); err != nil {
-			return err
-		}
-		f.buf = nil
-	}
-	return nil
+func newCursorStreamFilter(d io.Writer) *cursorStreamFilter {
+	f := &cursorStreamFilter{}
+	f.downstream = d
+	f.onLine = f.processLine
+	return f
 }
 
 func (f *cursorStreamFilter) processLine(line []byte) error {
@@ -162,15 +147,6 @@ func (f *cursorStreamFilter) writeDownstream(p []byte) error {
 		f.err = err
 	}
 	return err
-}
-
-func indexOf(b []byte, c byte) int {
-	for i, v := range b {
-		if v == c {
-			return i
-		}
-	}
-	return -1
 }
 
 func extractCursorResult(output string) string {

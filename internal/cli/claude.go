@@ -71,6 +71,10 @@ func (a *ClaudeAdapter) SupportsSystemPrompt() bool {
 	return true
 }
 
+func (a *ClaudeAdapter) ProbeModel(model, effort string) (ProbeStrength, error) {
+	return BinaryOnly, nil
+}
+
 // DiscoverSessionID returns the pre-generated session ID.
 // The Claude adapter uses a deterministic approach: the runner generates a UUID
 // upfront and passes it via --session-id; the adapter returns this same UUID.

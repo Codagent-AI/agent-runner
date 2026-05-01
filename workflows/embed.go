@@ -69,6 +69,27 @@ func ReadFile(workflowFile string) ([]byte, error) {
 	return data, nil
 }
 
+func List() ([]string, error) {
+	var refs []string
+	err := fs.WalkDir(FS, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		ext := path.Ext(p)
+		if ext == ".yaml" || ext == ".yml" {
+			refs = append(refs, Ref(p))
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return refs, nil
+}
+
 func isNotExist(err error) bool {
 	return errors.Is(err, fs.ErrNotExist)
 }

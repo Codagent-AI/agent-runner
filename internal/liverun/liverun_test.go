@@ -3,6 +3,7 @@ package liverun
 import (
 	"bytes"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -217,6 +218,57 @@ func TestCompositeWriter_ClosesStdoutWrapperBeforeChunkFlush(t *testing.T) {
 	}
 	if got != "hello" {
 		t.Fatalf("streamed stdout = %q, want %q", got, "hello")
+	}
+}
+
+func TestCompositeWriter_AppliesStderrWrapperBeforeChunkFlush(t *testing.T) {
+	program := &captureProgram{}
+	runner := NewCoordinator(program, "").TUIProcessRunner(unusedRunner{}).(*tuiProcessRunner)
+	runner.SetPrefix("[step]")
+	runner.SetStderrWrapper(func(w io.Writer) io.Writer {
+		return &closeFlushWriter{downstream: w}
+	})
+
+	w, cleanup := runner.compositeWriter("stderr", "err", nil)
+	_, _ = w.Write([]byte("warning"))
+	cleanup()
+
+	var got string
+	for _, msg := range program.messages() {
+		if chunk, ok := msg.(OutputChunkMsg); ok {
+			got += string(chunk.Bytes)
+		}
+	}
+	if got != "warning" {
+		t.Fatalf("streamed stderr = %q, want %q", got, "warning")
+	}
+}
+
+func TestTUIProcessRunner_RunAgentDoesNotInheritStdin(t *testing.T) {
+	oldStdin := os.Stdin
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	if _, err := w.WriteString("leaked\n"); err != nil {
+		t.Fatalf("write pipe: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+	os.Stdin = r
+	defer func() {
+		os.Stdin = oldStdin
+		_ = r.Close()
+	}()
+
+	runner := NewCoordinator(&captureProgram{}, "").TUIProcessRunner(unusedRunner{}).(*tuiProcessRunner)
+	result, err := runner.RunAgent([]string{"sh", "-c", `if read x; then printf "read:%s" "$x"; else printf "eof"; fi`}, true, "")
+	if err != nil {
+		t.Fatalf("RunAgent returned error: %v", err)
+	}
+	if result.Stdout != "eof" {
+		t.Fatalf("RunAgent inherited stdin, stdout = %q", result.Stdout)
 	}
 }
 

@@ -27,6 +27,7 @@ import (
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/paramform"
+	"github.com/codagent/agent-runner/internal/prevalidate"
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/runview"
@@ -85,7 +86,6 @@ func (r *realProcessRunner) RunShell(cmd string, captureStdout bool, workdir str
 
 func (r *realProcessRunner) RunAgent(args []string, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
 	c := exec.Command(args[0], args[1:]...) // #nosec G204 -- CLI runner launches agent processes by design
-	c.Stdin = os.Stdin
 	c.Stderr = os.Stderr
 	if workdir != "" {
 		c.Dir = filepath.Clean(workdir) // #nosec G304 -- workdir is from user-authored workflow YAML
@@ -224,14 +224,14 @@ func run() int {
 		return handleListBare()
 	}
 
+	if *validateFlag {
+		return handleValidateArgs(args)
+	}
+
 	workflowFile, err := resolveWorkflowArg(args[0])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
-	}
-
-	if *validateFlag {
-		return handleValidate(workflowFile)
 	}
 
 	return handleRun(append([]string{workflowFile}, args[1:]...))
@@ -889,13 +889,48 @@ func resolveResumeStatePath(sessionID string) (string, error) {
 	return stateFile, nil
 }
 
-func handleValidate(workflowFile string) int {
-	if err := loader.ValidateComposition(workflowFile); err != nil {
+func handleValidateArgs(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "agent-runner: --validate requires a workflow name or YAML file path")
+		return 1
+	}
+	workflowFile, err := resolveValidateWorkflowArg(args[0])
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
 	}
+	positional, keyed, err := parseParams(args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+	if len(positional) > 0 {
+		fmt.Fprintln(os.Stderr, "agent-runner: --validate parameters must use key=value syntax")
+		return 1
+	}
+	result, err := prevalidate.Pipeline(workflowFile, keyed, prevalidate.Lenient, prevalidate.Options{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+	for i := range result.DeferredWarnings {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", result.DeferredWarnings[i])
+	}
 	fmt.Println("workflow is valid")
 	return 0
+}
+
+func resolveValidateWorkflowArg(arg string) (string, error) {
+	ext := strings.ToLower(filepath.Ext(arg))
+	if (ext == ".yaml" || ext == ".yml") && fileExists(arg) {
+		return arg, nil
+	}
+	return resolveWorkflowArg(arg)
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 var workflowNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+(:[a-zA-Z0-9_-]+|(/[a-zA-Z0-9_-]+)+)?$`)
@@ -959,11 +994,6 @@ func triedWorkflowPaths(groups ...[]string) string {
 }
 
 func handleRun(args []string) int {
-	if err := requireTTY(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-
 	workflowFile := args[0]
 
 	workflow, err := loader.LoadWorkflow(workflowFile, loader.Options{})
@@ -980,6 +1010,18 @@ func handleRun(args []string) int {
 	params, err := matchParams(&workflow, positional, keyed)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+
+	if !builtinworkflows.IsRef(workflowFile) {
+		if _, err := prevalidate.Pipeline(workflowFile, params, prevalidate.Strict, prevalidate.Options{}); err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+			return 1
+		}
+	}
+
+	if err := requireTTY(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 

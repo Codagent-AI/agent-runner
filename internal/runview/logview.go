@@ -39,10 +39,10 @@ func buildLogLines(
 	bodyWidth int,
 	loadedFull map[string]bool,
 	pulsePhase float64,
-	running bool,
+	runActive bool,
 	resolverCfg ResolverConfig,
 ) (lines []string, ranges []stepLineRange) {
-	buildLogLinesRecurse(children, pendingSelected, bodyWidth, loadedFull, pulsePhase, running, resolverCfg, 0, &lines, &ranges)
+	buildLogLinesRecurse(children, pendingSelected, bodyWidth, loadedFull, pulsePhase, runActive, resolverCfg, 0, &lines, &ranges)
 	return
 }
 
@@ -52,7 +52,7 @@ func buildLogLinesRecurse(
 	bodyWidth int,
 	loadedFull map[string]bool,
 	pulsePhase float64,
-	running bool,
+	runActive bool,
 	resolverCfg ResolverConfig,
 	indent int,
 	lines *[]string,
@@ -80,9 +80,9 @@ func buildLogLinesRecurse(
 			case NodeShell:
 				blockLines = renderShellBlock(child, indent, bodyWidth, loadedFull[child.NodeKey()])
 			case NodeHeadlessAgent:
-				blockLines = renderHeadlessBlock(child, indent, bodyWidth, loadedFull[child.NodeKey()], pulsePhase, running)
+				blockLines = renderHeadlessBlock(child, indent, bodyWidth, loadedFull[child.NodeKey()], pulsePhase, runActive)
 			case NodeInteractiveAgent:
-				blockLines = renderInteractiveBlock(child, indent, bodyWidth, pulsePhase, running)
+				blockLines = renderInteractiveBlock(child, indent, bodyWidth, pulsePhase, runActive)
 			case NodeSubWorkflow:
 				blockLines = renderSubWorkflowBlock(child, indent, bodyWidth, resolverCfg)
 			case NodeLoop:
@@ -107,7 +107,7 @@ func buildLogLinesRecurse(
 				nested = child.Children
 			}
 			if len(nested) > 0 {
-				buildLogLinesRecurse(nested, pendingSelected, bodyWidth, loadedFull, pulsePhase, running, resolverCfg, indent+1, lines, ranges)
+				buildLogLinesRecurse(nested, pendingSelected, bodyWidth, loadedFull, pulsePhase, runActive, resolverCfg, indent+1, lines, ranges)
 			}
 		}
 

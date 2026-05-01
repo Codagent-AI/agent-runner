@@ -59,6 +59,7 @@ type Model struct {
 	tailer     FileTailer
 	sessionDir string
 	projectDir string
+	originCwd  string
 	entered    Entered
 
 	path      []*StepNode
@@ -176,6 +177,7 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 		tree:       tree,
 		sessionDir: sessionDir,
 		projectDir: projectDir,
+		originCwd:  resolved.OriginCwd,
 		entered:    entered,
 		path:       []*StepNode{tree.Root},
 		loadedFull: make(map[string]bool),
@@ -187,6 +189,9 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 
 	if entered != FromLiveRun {
 		m.active = runlock.Check(sessionDir) == runlock.LockActive
+		if m.active {
+			m.autoFollow = true
+		}
 	}
 
 	m.resolverCfg = ResolverConfig{
@@ -250,6 +255,7 @@ func NewForDefinition(entry *discovery.WorkflowEntry, projectDir string) (*Model
 		tree:          tree,
 		sessionDir:    sourcePath,
 		projectDir:    projectDir,
+		originCwd:     projectDir,
 		entered:       FromDefinition,
 		path:          []*StepNode{tree.Root},
 		loadedFull:    make(map[string]bool),
@@ -364,6 +370,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case liverun.SuspendedMsg:
+		// Re-enter follow mode whenever a step transitions into interactive:
+		// the user can't see the run view during the PTY hand-off, so by the
+		// time the TUI restores they should be tracking the live step instead
+		// of pinned to wherever they previously drilled in.
+		m.autoFollow = true
+		if len(m.path) > 1 && m.activeStepPrefix != "" {
+			if active := m.tree.FindByPrefix(m.activeStepPrefix); active != nil {
+				if m.ancestorAtCurrentLevel(active) == nil {
+					m.path = m.path[:1]
+					m.cursor = 0
+					m.logOffset = 0
+				}
+			}
+		}
+		m.applyAutoFollowCursor()
+		m.rebuildRanges()
 		if !m.altScreen {
 			m.suppressAltScreen = true
 		}
@@ -435,7 +457,7 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) {
 
 func (m *Model) handleOutputChunkMsg(msg liverun.OutputChunkMsg) {
 	m.applyOutputChunk(msg)
-	if m.active || m.running {
+	if (m.active || m.running) && m.autoFollow {
 		m.logOffset = math.MaxInt32
 	}
 	lineCount := m.rebuildRanges()
@@ -447,7 +469,7 @@ func (m *Model) handleStepStateMsg(msg liverun.StepStateMsg) {
 	if m.autoFollow {
 		m.applyAutoFollowCursor()
 	}
-	if m.active || m.running {
+	if (m.active || m.running) && m.autoFollow {
 		m.logOffset = math.MaxInt32
 	}
 	lineCount := m.rebuildRanges()
@@ -516,7 +538,9 @@ func (m *Model) handleRefreshMsg() tea.Cmd {
 	// step statuses stay current.
 	if m.active || m.running {
 		m.refreshData()
-		m.logOffset = math.MaxInt32
+		if m.autoFollow {
+			m.logOffset = math.MaxInt32
+		}
 		m.rebuildRanges()
 	}
 	return tuistyle.DoRefresh()
@@ -538,6 +562,10 @@ func (m *Model) canResumeRun() bool {
 		m.sessionDir != "" &&
 		!m.running && !m.active && m.liveResult == "" &&
 		m.rootStatus() != StatusFailed && m.rootStatus() != StatusSuccess
+}
+
+func (m *Model) canResumeAgentSession(n *StepNode) bool {
+	return n != nil && n.SessionID != "" && !m.running && !m.active
 }
 
 // handleKey processes a key message. Extracted from Update to keep the main
@@ -878,10 +906,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case NodeHeadlessAgent, NodeInteractiveAgent:
-		// Resume when the run has ended, or when this specific step has
-		// completed (the runner no longer owns the session even if the
-		// workflow is still executing subsequent steps).
-		if n.SessionID != "" && (!m.running || n.Status == StatusSuccess || n.Status == StatusFailed) {
+		if m.canResumeAgentSession(n) {
 			return m, func() tea.Msg {
 				return ResumeMsg{AgentCLI: n.AgentCLI, SessionID: n.SessionID}
 			}

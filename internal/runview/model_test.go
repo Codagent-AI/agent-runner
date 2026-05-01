@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -426,6 +427,44 @@ func TestModel_Breadcrumb_ActiveLabelDoesNotBlinkOff(t *testing.T) {
 	}
 }
 
+func TestFormatLiveElapsed(t *testing.T) {
+	start := time.Date(2026, 4, 27, 20, 48, 0, 0, time.UTC)
+	now := start.Add(18*time.Minute + 40*time.Second)
+
+	if got := formatLiveElapsed(start, now); got != "elapsed 18m 40s" {
+		t.Fatalf("formatLiveElapsed() = %q, want %q", got, "elapsed 18m 40s")
+	}
+}
+
+func TestModel_Breadcrumb_RunningShowsElapsedInsteadOfStarted(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = true
+	m.startTime = time.Now().Add(-(18*time.Minute + 40*time.Second))
+
+	bc := stripANSI(m.renderBreadcrumb())
+	if !strings.Contains(bc, "elapsed 18m") {
+		t.Fatalf("breadcrumb should show live elapsed time while running, got %q", bc)
+	}
+	if strings.Contains(bc, "started") {
+		t.Fatalf("breadcrumb should not show started time while running, got %q", bc)
+	}
+}
+
+func TestModel_Breadcrumb_ActiveShowsElapsedInsteadOfStarted(t *testing.T) {
+	tree := simpleTree()
+	m := newTestModel(tree, FromList)
+	m.active = true
+	m.startTime = time.Now().Add(-(2*time.Minute + 3*time.Second))
+
+	bc := stripANSI(m.renderBreadcrumb())
+	if !strings.Contains(bc, "elapsed 2m") {
+		t.Fatalf("breadcrumb should show live elapsed time while active, got %q", bc)
+	}
+	if strings.Contains(bc, "started") {
+		t.Fatalf("breadcrumb should not show started time while active, got %q", bc)
+	}
+}
+
 func TestModel_HelpBar_ShowsRBinding_WhenInactive(t *testing.T) {
 	tree := simpleTree()
 	tree.Root.Status = StatusInProgress
@@ -616,6 +655,18 @@ func TestModel_Enter_AgentStep_LiveRun_NoResume(t *testing.T) {
 	}
 }
 
+func TestModel_Enter_AgentStep_ActiveRun_NoResume(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList)
+	m.active = true
+	m.tree.Root.Children[1].Status = StatusSuccess
+	m.cursor = 1 // agent step with SessionID
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("enter on agent step in active run should be no-op")
+	}
+}
+
 func TestModel_Enter_AgentStep_NoSessionID_NoOp(t *testing.T) {
 	m := newTestModel(simpleTree(), FromList)
 	// Modify agent to have no session ID
@@ -783,7 +834,7 @@ func TestModel_Enter_AgentStep_InSubWorkflow_LiveRunAfterCompletion(t *testing.T
 	}
 }
 
-func TestModel_Enter_CompletedAgentStep_InSubWorkflow_DuringLiveRun(t *testing.T) {
+func TestModel_Enter_CompletedAgentStep_InSubWorkflow_DuringLiveRun_NoResume(t *testing.T) {
 	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
 	subwf := &StepNode{
 		ID:             "impl",
@@ -820,19 +871,11 @@ func TestModel_Enter_CompletedAgentStep_InSubWorkflow_DuringLiveRun(t *testing.T
 		t.Fatalf("expected selected node 'generate-code', got %v", sel)
 	}
 
-	// Press Enter on the completed agent step — should allow resume
-	// because this step is done; the runner no longer owns this session.
+	// Press Enter on the completed agent step. Even though this step is done,
+	// the live runner still owns the workflow terminal/session boundary.
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("enter on completed agent step during live run should produce ResumeMsg " +
-			"(the agent session is no longer owned by the runner)")
-	}
-	resume, ok := cmd().(ResumeMsg)
-	if !ok {
-		t.Fatalf("expected ResumeMsg, got %T", cmd())
-	}
-	if resume.SessionID != "nested-session-1" {
-		t.Fatalf("session ID = %q, want %q", resume.SessionID, "nested-session-1")
+	if cmd != nil {
+		t.Fatal("enter on completed agent step during live run should be no-op")
 	}
 }
 
@@ -870,8 +913,8 @@ func TestModel_Enter_CompletedAgentStep_DuringLiveRun_HelpBar(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
 	help := m.renderHelpBar()
-	if !containsString(help, "enter resume") {
-		t.Errorf("help bar should show 'enter resume' for completed agent step during live run: %q", help)
+	if containsString(help, "enter resume") {
+		t.Errorf("help bar should hide 'enter resume' for completed agent step during live run: %q", help)
 	}
 }
 
@@ -910,8 +953,8 @@ func TestModel_Enter_CompletedAgentStep_DuringLiveRun_DetailPane(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
 	view := m.View()
-	if !containsString(view, "resume session") {
-		t.Errorf("detail pane should show 'resume session' for completed agent step during live run")
+	if containsString(view, "resume session") {
+		t.Errorf("detail pane should hide 'resume session' for completed agent step during live run")
 	}
 }
 
@@ -1863,6 +1906,28 @@ func TestModel_MouseWheelUp_ChangesLogOffset(t *testing.T) {
 	}
 }
 
+func TestModel_LiveRun_OutputChunk_DoesNotTailWhenAutoFollowOff(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.termHeight = 10
+	shell := m.tree.Root.Children[0]
+	shell.Stdout = generateLargeOutput(100)
+	lineCount := m.rebuildRanges()
+	m.clampLogOffset(lineCount)
+	m.logOffset = m.maxLogOffset()
+
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp})
+	if m.autoFollow {
+		t.Fatal("test setup: mouse wheel up should clear autoFollow")
+	}
+	scrolledOffset := m.logOffset
+
+	m.Update(liverun.OutputChunkMsg{StepPrefix: "[build]", Stream: "stdout", Bytes: []byte("new output\n")})
+
+	if m.logOffset != scrolledOffset {
+		t.Fatalf("output chunk should not tail when autoFollow is off: before=%d after=%d", scrolledOffset, m.logOffset)
+	}
+}
+
 func TestModel_ResumedMsg_ReEnablesMouse(t *testing.T) {
 	m := newLiveModelWithFlags()
 	_, cmd := m.Update(liverun.ResumedMsg{})
@@ -2477,5 +2542,76 @@ func TestShowTUIMsg_NoOpWhenAlreadyInAltScreen(t *testing.T) {
 
 	if cmd != nil {
 		t.Fatal("expected nil cmd when already in alt-screen")
+	}
+}
+
+// TestSuspendedMsg_PopsDrillInWhenActiveOutside reproduces the disorientation
+// bug where a user drilled into a sub-workflow stayed pinned to it after the
+// sub-workflow completed and the parent workflow advanced into an interactive
+// step elsewhere. On SuspendedMsg, when the active step lives outside the
+// drilled container, the path pops back to root and autoFollow re-enables, so
+// the resumed TUI shows the running step.
+func TestSuspendedMsg_PopsDrillInWhenActiveOutside(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	stepA := &StepNode{ID: "stepA", Type: NodeShell, Status: StatusSuccess, Parent: root}
+	subwf := &StepNode{ID: "subwf", Type: NodeSubWorkflow, Status: StatusSuccess, Parent: root, SubLoaded: true}
+	stepB := &StepNode{ID: "stepB", Type: NodeShell, Status: StatusSuccess, Parent: subwf}
+	subwf.Children = []*StepNode{stepB}
+	stepC := &StepNode{ID: "stepC", Type: NodeInteractiveAgent, Status: StatusInProgress, Parent: root}
+	root.Children = []*StepNode{stepA, subwf, stepC}
+
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.running = true
+	m.path = []*StepNode{root, subwf}
+	m.cursor = 0
+	m.autoFollow = false
+	m.activeStepPrefix = "[stepC]"
+
+	m.Update(liverun.SuspendedMsg{})
+
+	if len(m.path) != 1 {
+		t.Fatalf("path len = %d, want 1 (popped back to root)", len(m.path))
+	}
+	if !m.autoFollow {
+		t.Fatal("autoFollow should be re-enabled on suspend")
+	}
+	if m.cursor != 2 {
+		t.Fatalf("cursor = %d, want 2 (stepC index)", m.cursor)
+	}
+}
+
+// TestSuspendedMsg_KeepsDrillInWhenActiveInside verifies the looser policy:
+// if the active step lives inside the drilled container, the drill-in is
+// preserved (autoFollow re-enables and the cursor follows within the
+// container).
+func TestSuspendedMsg_KeepsDrillInWhenActiveInside(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	stepA := &StepNode{ID: "stepA", Type: NodeShell, Status: StatusSuccess, Parent: root}
+	subwf := &StepNode{ID: "subwf", Type: NodeSubWorkflow, Status: StatusInProgress, Parent: root, SubLoaded: true}
+	stepB1 := &StepNode{ID: "stepB1", Type: NodeShell, Status: StatusSuccess, Parent: subwf}
+	stepB2 := &StepNode{ID: "stepB2", Type: NodeInteractiveAgent, Status: StatusInProgress, Parent: subwf}
+	subwf.Children = []*StepNode{stepB1, stepB2}
+	root.Children = []*StepNode{stepA, subwf}
+
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.running = true
+	m.path = []*StepNode{root, subwf}
+	m.cursor = 0
+	m.autoFollow = false
+	m.activeStepPrefix = "[subwf, stepB2]"
+
+	m.Update(liverun.SuspendedMsg{})
+
+	if len(m.path) != 2 {
+		t.Fatalf("path len = %d, want 2 (drill-in preserved when active is inside)", len(m.path))
+	}
+	if m.path[1] != subwf {
+		t.Fatal("path[1] should still be subwf")
+	}
+	if !m.autoFollow {
+		t.Fatal("autoFollow should be re-enabled on suspend")
+	}
+	if m.cursor != 1 {
+		t.Fatalf("cursor = %d, want 1 (stepB2 index inside subwf)", m.cursor)
 	}
 }

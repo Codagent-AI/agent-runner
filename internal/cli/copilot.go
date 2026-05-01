@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -15,19 +14,28 @@ import (
 // CopilotAdapter constructs invocation args for the GitHub Copilot CLI.
 type CopilotAdapter struct{}
 
-// BuildArgs constructs Copilot CLI args for headless mode.
+// BuildArgs constructs Copilot CLI args.
 //
 // Patterns:
-//   - Fresh headless:  copilot -p <prompt> --allow-all --autopilot -s [--model <m>] [--reasoning-effort <e>]
-//   - Resume headless: copilot -p <prompt> --allow-all --autopilot -s --resume=<id>
+//   - Fresh headless:      copilot -p <prompt> --allow-all --autopilot -s [--model <m>] [--reasoning-effort <e>]
+//   - Resume headless:     copilot -p <prompt> --allow-all --autopilot -s --resume=<id>
+//   - Fresh interactive:   copilot -i <prompt> [--model <m>] [--reasoning-effort <e>]
+//   - Resume interactive:  copilot -i <prompt> --resume=<id>
 //
 // --allow-all grants tool, file-path, and URL permissions required for autonomous
 // operation. --autopilot keeps the agent running until the task is complete.
 // -s outputs only the agent response text, matching Claude's plain-text output.
+// Interactive mode omits those autonomy/headless flags because a human supervises
+// permissions at the terminal.
 // --model and --reasoning-effort are omitted on resume: a resumed copilot thread
 // keeps the model and effort it was started with.
 func (a *CopilotAdapter) BuildArgs(input *BuildArgsInput) []string {
-	args := []string{"copilot", "-p", input.Prompt, "--allow-all", "--autopilot", "-s"}
+	args := []string{"copilot"}
+	if input.Headless {
+		args = append(args, "-p", input.Prompt, "--allow-all", "--autopilot", "-s")
+	} else {
+		args = append(args, "-i", input.Prompt)
+	}
 
 	resuming := input.Resume
 
@@ -44,7 +52,7 @@ func (a *CopilotAdapter) BuildArgs(input *BuildArgsInput) []string {
 		args = append(args, "--resume="+input.SessionID)
 	}
 
-	if slices.Contains(input.DisallowedTools, "AskUserQuestion") {
+	if input.Headless && slices.Contains(input.DisallowedTools, "AskUserQuestion") {
 		args = append(args, "--no-ask-user")
 	}
 
@@ -56,17 +64,15 @@ func (a *CopilotAdapter) SupportsSystemPrompt() bool {
 	return false
 }
 
+func (a *CopilotAdapter) ProbeModel(model, effort string) (ProbeStrength, error) {
+	return BinaryOnly, nil
+}
+
 // DiscoverSessionID returns the session ID after a copilot process exits by
 // scanning ~/.copilot/session-state/ for the most recently modified directory
 // created after spawn time, matching on CWD from workspace.yaml.
 func (a *CopilotAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
 	return discoverCopilotSession(opts.SpawnTime, opts.Workdir)
-}
-
-// InteractiveModeError returns an error indicating interactive mode is not supported.
-// This implements the optional cli.InteractiveRejector interface.
-func (a *CopilotAdapter) InteractiveModeError() error {
-	return fmt.Errorf("interactive mode is not supported for the copilot CLI")
 }
 
 // discoverCopilotSession scans ~/.copilot/session-state/ for the most recently

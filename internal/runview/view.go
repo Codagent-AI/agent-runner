@@ -37,8 +37,7 @@ func (m *Model) View() string {
 	var b strings.Builder
 
 	b.WriteString("\n")
-	b.WriteString(tuistyle.ScreenMargin)
-	b.WriteString(tuistyle.HeaderStyle.Render("Agent Runner"))
+	b.WriteString(m.renderHeader())
 	b.WriteString("\n\n")
 	b.WriteString(m.renderBreadcrumb())
 	b.WriteString("\n\n")
@@ -79,6 +78,24 @@ func (m *Model) View() string {
 	b.WriteString("\n")
 
 	return b.String()
+}
+
+func (m *Model) renderHeader() string {
+	const prefix = tuistyle.ScreenMargin
+	const title = "Agent Runner"
+	left := prefix + tuistyle.HeaderStyle.Render(title)
+	if m.termWidth <= 0 || m.originCwd == "" {
+		return left
+	}
+
+	cwdText := tuistyle.Sanitize(tuistyle.ShortenPath(m.originCwd))
+	leftW := len(prefix) + runewidth.StringWidth(title)
+	rightW := runewidth.StringWidth(cwdText)
+	if leftW+rightW+2 > m.termWidth {
+		return left
+	}
+	pad := m.termWidth - leftW - rightW
+	return left + strings.Repeat(" ", pad) + tuistyle.PathStyle.Render(cwdText)
 }
 
 func (m *Model) renderRule() string {
@@ -310,10 +327,26 @@ func (m *Model) statusGlyph(n *StepNode) string {
 	case StatusInProgress:
 		if (m.active || m.running) && !n.Aborted {
 			if tuistyle.BlinkOn(m.pulsePhase) {
-				return tuistyle.StatusSuccess.Render("●")
+				return styledStatusGlyph(StatusInProgress)
 			}
 			return tuistyle.BlinkHidden("●")
 		}
+		return styledStatusGlyph(StatusInProgress)
+	case StatusPending:
+		return styledStatusGlyph(StatusPending)
+	case StatusSuccess:
+		return styledStatusGlyph(StatusSuccess)
+	case StatusFailed:
+		return styledStatusGlyph(StatusFailed)
+	case StatusSkipped:
+		return styledStatusGlyph(StatusSkipped)
+	}
+	return " "
+}
+
+func styledStatusGlyph(status NodeStatus) string {
+	switch status {
+	case StatusInProgress:
 		return tuistyle.StatusSuccess.Render("●")
 	case StatusPending:
 		return tuistyle.StatusInactive.Render("○")
@@ -364,7 +397,7 @@ func (m *Model) renderHelpBar() string {
 		case NodeLoop, NodeSubWorkflow, NodeIteration:
 			parts = append(parts, "enter drill")
 		case NodeHeadlessAgent, NodeInteractiveAgent:
-			if sel.SessionID != "" && (!m.running || sel.Status == StatusSuccess || sel.Status == StatusFailed) {
+			if m.canResumeAgentSession(sel) {
 				parts = append(parts, "enter resume")
 			}
 		}
@@ -494,22 +527,22 @@ func (m *Model) renderLegend() string {
 	b.WriteString(tuistyle.ScreenMargin)
 	b.WriteString(tuistyle.SelectedStyle.Render("Status Glyphs"))
 	b.WriteString("\n\n")
-	b.WriteString(tuistyle.ScreenMargin + "●  running\n")
-	b.WriteString(tuistyle.ScreenMargin + "○  pending\n")
-	b.WriteString(tuistyle.ScreenMargin + "✓  success\n")
-	b.WriteString(tuistyle.ScreenMargin + "✗  failed\n")
-	b.WriteString(tuistyle.ScreenMargin + "⇥  skipped\n")
+	b.WriteString(tuistyle.ScreenMargin + styledStatusGlyph(StatusInProgress) + "  running\n")
+	b.WriteString(tuistyle.ScreenMargin + styledStatusGlyph(StatusPending) + "  pending\n")
+	b.WriteString(tuistyle.ScreenMargin + styledStatusGlyph(StatusSuccess) + "  success\n")
+	b.WriteString(tuistyle.ScreenMargin + styledStatusGlyph(StatusFailed) + "  failed\n")
+	b.WriteString(tuistyle.ScreenMargin + styledStatusGlyph(StatusSkipped) + "  skipped\n")
 
 	b.WriteString("\n")
 	b.WriteString(tuistyle.ScreenMargin)
 	b.WriteString(tuistyle.SelectedStyle.Render("Type Glyphs"))
 	b.WriteString("\n\n")
-	b.WriteString("  $  shell\n")
-	b.WriteString("  ⚙  headless agent\n")
-	b.WriteString("  ❯  interactive agent\n")
-	b.WriteString("  ↳  sub-workflow\n")
-	b.WriteString("  ↺  loop\n")
-	b.WriteString("  »  iteration\n")
+	b.WriteString("  " + typeGlyph(NodeShell) + "  shell\n")
+	b.WriteString("  " + typeGlyph(NodeHeadlessAgent) + "  headless agent\n")
+	b.WriteString("  " + typeGlyph(NodeInteractiveAgent) + "  interactive agent\n")
+	b.WriteString("  " + typeGlyph(NodeSubWorkflow) + "  sub-workflow\n")
+	b.WriteString("  " + typeGlyph(NodeLoop) + "  loop\n")
+	b.WriteString("  " + typeGlyph(NodeIteration) + "  iteration\n")
 
 	b.WriteString("\n  ")
 	b.WriteString(tuistyle.SelectedStyle.Render("Live Navigation"))

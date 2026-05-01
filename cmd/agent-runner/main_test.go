@@ -248,6 +248,65 @@ func TestResolveWorkflowArg(t *testing.T) {
 	})
 }
 
+func TestResolveValidateWorkflowArgAcceptsExistingYAMLPath(t *testing.T) {
+	t.Chdir(t.TempDir())
+	path := filepath.Join("workflows", "custom.yaml")
+	writeTestFile(t, path, "name: custom\nsteps:\n  - id: s\n    command: echo ok\n")
+
+	got, err := resolveValidateWorkflowArg(path)
+	if err != nil {
+		t.Fatalf("resolveValidateWorkflowArg returned error: %v", err)
+	}
+	if got != path {
+		t.Fatalf("resolveValidateWorkflowArg = %q, want %q", got, path)
+	}
+}
+
+func TestHandleValidateArgsBindsOptionalParamsForYAMLPath(t *testing.T) {
+	t.Chdir(t.TempDir())
+	writeTestFile(t, filepath.Join("workflows", "green.yaml"), "name: green\nsteps:\n  - id: s\n    command: echo ok\n")
+	root := filepath.Join("workflows", "root.yaml")
+	writeTestFile(t, root, `
+name: root
+params:
+  - name: flavor
+steps:
+  - id: call
+    workflow: "{{flavor}}.yaml"
+`)
+
+	if code := handleValidateArgs([]string{root, "flavor=green"}); code != 0 {
+		t.Fatalf("handleValidateArgs returned %d, want 0", code)
+	}
+}
+
+func TestRealProcessRunner_RunAgentDoesNotInheritStdin(t *testing.T) {
+	oldStdin := os.Stdin
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	if _, err := w.WriteString("leaked\n"); err != nil {
+		t.Fatalf("write pipe: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+	os.Stdin = r
+	defer func() {
+		os.Stdin = oldStdin
+		_ = r.Close()
+	}()
+
+	result, err := (&realProcessRunner{}).RunAgent([]string{"sh", "-c", `if read x; then printf "read:%s" "$x"; else printf "eof"; fi`}, true, "")
+	if err != nil {
+		t.Fatalf("RunAgent returned error: %v", err)
+	}
+	if result.Stdout != "eof" {
+		t.Fatalf("RunAgent inherited stdin, stdout = %q", result.Stdout)
+	}
+}
+
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

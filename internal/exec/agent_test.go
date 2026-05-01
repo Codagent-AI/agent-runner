@@ -444,7 +444,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew, CLI: "codex"}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		args := runner.calls[0]
-		if len(args) < 2 || args[1] != "exec" {
+		if !containsArg(args, "exec") {
 			t.Fatalf("expected 'exec' subcommand for codex headless, got %v", args)
 		}
 	})
@@ -615,6 +615,76 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 		if ctx.CapturedVariables["result"] != "filtered response" {
 			t.Fatalf("expected filtered response, got %q", ctx.CapturedVariables["result"])
+		}
+	})
+
+	t.Run("codex headless rollout recording error after completed turn succeeds", func(t *testing.T) {
+		stdout := `{"type":"thread.started","thread_id":"019dc6a3-68a4-7751-8c3a-43c3c84a24ba"}` + "\n" +
+			`{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"codex headless smoke ok."}}` + "\n" +
+			`{"type":"turn.completed","usage":{"input_tokens":2521}}` + "\n"
+		stderr := "2026-04-25T21:54:58.585861Z ERROR codex_core::session: failed to record rollout items: thread 019dc6a3-68a4-7751-8c3a-43c3c84a24ba not found"
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 1, Stdout: stdout, Stderr: stderr}}}
+		auditLogger := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLogger
+		cfg := &config.Config{ActiveAgents: map[string]*config.Agent{
+			"codex-test": {CLI: "codex", DefaultMode: "headless"},
+		}}
+		ctx.ProfileStore = cfg
+		step := model.Step{ID: "codex-headless", Agent: "codex-test", Prompt: "reply", Session: model.SessionNew, Capture: "result"}
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected success, got %q", outcome)
+		}
+		if ctx.CapturedVariables["result"] != "codex headless smoke ok." {
+			t.Fatalf("expected filtered codex output captured, got %q", ctx.CapturedVariables["result"])
+		}
+		end := findAuditEvent(auditLogger.events, audit.EventStepEnd)
+		if end == nil {
+			t.Fatal("expected step_end audit event")
+		}
+		if got, _ := end.Data["stdout"].(string); got != "codex headless smoke ok." {
+			t.Fatalf("expected filtered stdout in audit, got %q", got)
+		}
+		if _, ok := end.Data["stderr"]; ok {
+			t.Fatalf("expected rollout stderr to be filtered from audit, got %v", end.Data["stderr"])
+		}
+	})
+
+	t.Run("codex headless turn failure surfaces JSON error and hides diagnostics", func(t *testing.T) {
+		stdout := `{"type":"thread.started","thread_id":"019dc6bc-d6c4-7a13-bd75-6aab9fd8b457"}` + "\n" +
+			`{"type":"turn.started"}` + "\n" +
+			`{"type":"error","message":"You've hit your usage limit."}` + "\n" +
+			`{"type":"turn.failed","error":{"message":"You've hit your usage limit."}}` + "\n"
+		stderr := "Reading additional input from stdin...\n2026-04-25T22:22:40.578939Z ERROR codex_core::session: failed to record rollout items: thread 019dc6bc-d6c4-7a13-bd75-6aab9fd8b457 not found"
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 1, Stdout: stdout, Stderr: stderr}}}
+		auditLogger := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLogger
+		cfg := &config.Config{ActiveAgents: map[string]*config.Agent{
+			"codex-test": {CLI: "codex", DefaultMode: "headless"},
+		}}
+		ctx.ProfileStore = cfg
+		step := model.Step{ID: "codex-headless", Agent: "codex-test", Prompt: "reply", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeFailed {
+			t.Fatalf("expected failed, got %q", outcome)
+		}
+		end := findAuditEvent(auditLogger.events, audit.EventStepEnd)
+		if end == nil {
+			t.Fatal("expected step_end audit event")
+		}
+		if got, _ := end.Data["stdout"].(string); got != "You've hit your usage limit." {
+			t.Fatalf("expected filtered codex error in audit stdout, got %q", got)
+		}
+		if _, ok := end.Data["stderr"]; ok {
+			t.Fatalf("expected ignored stderr diagnostics to be filtered from audit, got %v", end.Data["stderr"])
 		}
 	})
 
@@ -1074,23 +1144,53 @@ func TestExecuteAgentStep(t *testing.T) {
 		t.Fatalf("expected --append-system-prompt, got %v", args)
 	})
 
-	t.Run("copilot step in interactive mode fails at runtime", func(t *testing.T) {
+	t.Run("copilot step in interactive mode spawns CLI", func(t *testing.T) {
+		var ptyCalls [][]string
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
+			ptyCalls = append(ptyCalls, args)
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
 		runner := &mockRunner{}
 		step := model.Step{ID: "s", CLI: "copilot", Mode: model.ModeInteractive, Prompt: "do something", Session: model.SessionNew}
 		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if outcome != OutcomeFailed {
-			t.Fatalf("expected OutcomeFailed for copilot interactive step, got %q", outcome)
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected OutcomeSuccess for copilot interactive step, got %q", outcome)
 		}
-		// Runner should not have been invoked (failure before spawn)
 		if len(runner.calls) != 0 {
 			t.Fatalf("expected no CLI invocations, got %d", len(runner.calls))
 		}
+		if len(ptyCalls) != 1 {
+			t.Fatalf("expected one PTY invocation, got %d", len(ptyCalls))
+		}
+		args := ptyCalls[0]
+		if args[0] != "copilot" {
+			t.Fatalf("expected copilot command, got %v", args)
+		}
+		if !containsArg(args, "-i") {
+			t.Fatalf("expected -i for copilot interactive prompt, got %v", args)
+		}
+		for _, disallowed := range []string{"--allow-all", "--autopilot", "-s", "-p", "--no-ask-user"} {
+			if containsArg(args, disallowed) {
+				t.Fatalf("did not expect %s in copilot interactive args, got %v", disallowed, args)
+			}
+		}
 	})
 
-	t.Run("cursor step in interactive mode fails at runtime", func(t *testing.T) {
+	t.Run("cursor step in interactive mode spawns CLI", func(t *testing.T) {
+		var ptyCalls [][]string
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
+			ptyCalls = append(ptyCalls, args)
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
 		runner := &mockRunner{}
 		auditLog := &recordingAuditLogger{}
 		ctx := makeCtx()
@@ -1100,19 +1200,30 @@ func TestExecuteAgentStep(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if outcome != OutcomeFailed {
-			t.Fatalf("expected OutcomeFailed for cursor interactive step, got %q", outcome)
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected OutcomeSuccess for cursor interactive step, got %q", outcome)
 		}
 		if len(runner.calls) != 0 {
 			t.Fatalf("expected no CLI invocations, got %d", len(runner.calls))
+		}
+		if len(ptyCalls) != 1 {
+			t.Fatalf("expected one PTY invocation, got %d", len(ptyCalls))
+		}
+		args := ptyCalls[0]
+		if args[0] != "agent" {
+			t.Fatalf("expected cursor agent command, got %v", args)
+		}
+		for _, disallowed := range []string{"-p", "--output-format", "stream-json", "--trust", "--force"} {
+			if containsArg(args, disallowed) {
+				t.Fatalf("did not expect %s in cursor interactive args, got %v", disallowed, args)
+			}
 		}
 		end := findAuditEvent(auditLog.events, audit.EventStepEnd)
 		if end == nil {
 			t.Fatal("expected step end audit event")
 		}
-		errMsg, _ := end.Data["error"].(string)
-		if !strings.Contains(errMsg, "interactive mode") || !strings.Contains(errMsg, "cursor") {
-			t.Fatalf("expected interactive cursor error message, got %q", errMsg)
+		if got := end.Data["outcome"]; got != string(OutcomeSuccess) {
+			t.Fatalf("expected successful step end audit event, got %v", end.Data)
 		}
 	})
 }

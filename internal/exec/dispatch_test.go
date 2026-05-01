@@ -52,9 +52,30 @@ func TestDispatchStep(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// Loop exhausts after 1 iteration, which maps to success
 		if outcome != OutcomeSuccess {
-			t.Fatalf("expected success (exhausted), got %q", outcome)
+			t.Fatalf("expected success, got %q", outcome)
+		}
+	})
+
+	t.Run("dispatches exhausted retry loop as failed", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 1}}}
+		step := model.Step{
+			ID: "l", Session: model.SessionNew,
+			Loop: &model.Loop{Max: intPtr(1)},
+			Steps: []model.Step{
+				{
+					ID: "a", Command: "false", Session: model.SessionNew,
+					ContinueOnFailure: true,
+					BreakIf:           "success",
+				},
+			},
+		}
+		outcome, err := DispatchStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeFailed {
+			t.Fatalf("expected failed, got %q", outcome)
 		}
 	})
 

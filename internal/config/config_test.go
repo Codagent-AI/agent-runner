@@ -1377,6 +1377,25 @@ func TestValidation_InvalidEffort(t *testing.T) {
 	}
 }
 
+func TestValidation_XHighEffort(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeConfigFile(t, path, `profiles:
+  default:
+    agents:
+      reviewer:
+        default_mode: interactive
+        cli: claude
+        effort: xhigh
+`)
+
+	_, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestValidation_InvalidCLI(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
@@ -1398,6 +1417,9 @@ func TestValidation_InvalidCLI(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "cursor") {
 		t.Fatalf("expected invalid cli error to mention cursor, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "opencode") {
+		t.Fatalf("expected invalid cli error to mention opencode, got: %v", err)
 	}
 }
 
@@ -1442,6 +1464,28 @@ func TestValidation_CursorCLIAccepted(t *testing.T) {
 	p := cfg.ActiveAgents["cursor_base"]
 	if p == nil || p.CLI != "cursor" || p.DefaultMode != "interactive" {
 		t.Fatalf("expected interactive cursor agent, got %+v", p)
+	}
+}
+
+func TestValidation_OpenCodeCLIAccepted(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeConfigFile(t, path, `profiles:
+  default:
+    agents:
+      opencode_base:
+        default_mode: headless
+        cli: opencode
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	p := cfg.ActiveAgents["opencode_base"]
+	if p == nil || p.CLI != "opencode" || p.DefaultMode != "headless" {
+		t.Fatalf("expected headless opencode agent, got %+v", p)
 	}
 }
 

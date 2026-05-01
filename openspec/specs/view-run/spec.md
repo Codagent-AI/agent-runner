@@ -240,6 +240,11 @@ When the spawned CLI exits (for any reason, including the user typing `/exit` or
 - **WHEN** an agent step has no resolved session ID (never started, or crashed before session creation)
 - **THEN** the resume action is not available for that step
 
+#### Scenario: Resume unavailable while run is active
+- **WHEN** the viewed run is active (either the live-run TUI is still executing the workflow or the run lock is active)
+- **AND** the selected agent step already has a resolved session ID
+- **THEN** the resume action is not available, and pressing Enter on that agent step does nothing
+
 #### Scenario: Spawn failure
 - **WHEN** the user triggers the resume action and the agent CLI cannot be spawned (e.g. binary not found on PATH)
 - **THEN** agent-runner does not exit; it returns to the run view and surfaces the spawn error to the user
@@ -516,4 +521,3 @@ When the step transitions out of `in-progress` (to `success`, `failed`, `skipped
 #### Scenario: Spinner absent for aborted step without active run
 - **WHEN** an agent step was interrupted by an earlier run and no run is currently active
 - **THEN** the log block shows no animated progress indicator (matching the step-list rule that `in-progress` does not blink outside an active run)
-

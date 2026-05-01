@@ -106,6 +106,13 @@ type stdoutWrapperSetter interface {
 	SetStdoutWrapper(func(w io.Writer) io.Writer)
 }
 
+// stderrWrapperSetter is implemented by liverun.tuiProcessRunner. When set,
+// the process runner wraps the TUI stderr writer so adapters can filter known
+// non-actionable diagnostics before display.
+type stderrWrapperSetter interface {
+	SetStderrWrapper(func(w io.Writer) io.Writer)
+}
+
 // ExecuteAgentStep runs an agent step using the resolved CLI adapter.
 func ExecuteAgentStep(
 	step *model.Step,
@@ -170,14 +177,8 @@ func ExecuteAgentStep(
 		ps.SetPrefix(prefix)
 	}
 
-	// If the adapter wraps stdout (e.g. cursor stream-json → plain text), tell
-	// the process runner so the TUI displays filtered output.
-	if sw, ok := adapter.(cli.StdoutWrapper); ok {
-		if ws, ok2 := runner.(stdoutWrapperSetter); ok2 {
-			ws.SetStdoutWrapper(sw.WrapStdout)
-			defer ws.SetStdoutWrapper(nil) // clear after step
-		}
-	}
+	cleanupOutputWrappers := configureAgentOutputWrappers(adapter, runner)
+	defer cleanupOutputWrappers()
 
 	// Persist session bookkeeping BEFORE spawning the CLI so that if the runner
 	// is killed mid-step (ctrl-c, terminal hangup, crash) resume can reconnect
@@ -190,7 +191,7 @@ func ExecuteAgentStep(
 	recordSessionOnSpawn(step, ctx, sessionID)
 
 	spawnTime := time.Now()
-	outcome, result, runErr := runAgentProcess(runner, args, headless, step.Workdir, log, ctx.SuspendHook, ctx.ResumeHook)
+	outcome, result, runErr := runAgentProcess(runner, adapter, args, headless, step.Workdir, log, ctx.SuspendHook, ctx.ResumeHook)
 	if runErr != nil {
 		emitAgentEnd(ctx, prefix, startTime, "", OutcomeFailed, "", result.Stderr)
 		return OutcomeFailed, runErr
@@ -225,6 +226,27 @@ func ExecuteAgentStep(
 	emitAgentEnd(ctx, prefix, startTime, discoveredID, outcome, filteredStdout, result.Stderr)
 
 	return outcome, nil
+}
+
+func configureAgentOutputWrappers(adapter cli.Adapter, runner ProcessRunner) func() {
+	var cleanups []func()
+	if sw, ok := adapter.(cli.StdoutWrapper); ok {
+		if ws, ok2 := runner.(stdoutWrapperSetter); ok2 {
+			ws.SetStdoutWrapper(sw.WrapStdout)
+			cleanups = append(cleanups, func() { ws.SetStdoutWrapper(nil) })
+		}
+	}
+	if sw, ok := adapter.(cli.StderrWrapper); ok {
+		if ws, ok2 := runner.(stderrWrapperSetter); ok2 {
+			ws.SetStderrWrapper(sw.WrapStderr)
+			cleanups = append(cleanups, func() { ws.SetStderrWrapper(nil) })
+		}
+	}
+	return func() {
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			cleanups[i]()
+		}
+	}
 }
 
 // ResolveAgentStepMode returns the effective mode for an agent step, accounting
@@ -372,13 +394,16 @@ func buildAdapterInput(
 	return input
 }
 
-func runAgentProcess(runner ProcessRunner, args []string, headless bool, workdir string, log Logger, suspendHook, resumeHook func()) (StepOutcome, ProcessResult, error) {
+func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, headless bool, workdir string, log Logger, suspendHook, resumeHook func()) (StepOutcome, ProcessResult, error) {
 	if headless {
 		// Capture stdout for headless runs so that adapters (e.g. Codex) can
 		// parse session IDs from the process output.
 		result, runErr := runner.RunAgent(args, true, workdir)
 		if runErr != nil {
 			return OutcomeFailed, result, runErr
+		}
+		if f, ok := adapter.(cli.HeadlessResultFilter); ok {
+			result.ExitCode, result.Stderr = f.FilterHeadlessResult(result.ExitCode, result.Stdout, result.Stderr)
 		}
 		if result.ExitCode != 0 {
 			return OutcomeFailed, result, nil

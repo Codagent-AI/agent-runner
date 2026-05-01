@@ -2,6 +2,8 @@ package runview
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -408,6 +410,73 @@ func TestLegendListsIterationGlyph(t *testing.T) {
 	}
 	if !strings.Contains(legend, "iteration") {
 		t.Fatalf("legend should label the iteration glyph, got:\n%s", legend)
+	}
+}
+
+func TestRenderLegend_StatusGlyphsUseRunScreenColors(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	m := newTestModel(&Tree{Root: &StepNode{ID: "wf", Type: NodeRoot}}, FromList)
+
+	legend := m.renderLegend()
+	wants := []string{
+		tuistyle.StatusSuccess.Render("●") + "  running",
+		tuistyle.StatusInactive.Render("○") + "  pending",
+		tuistyle.StatusSuccess.Render("✓") + "  success",
+		tuistyle.StatusFailed.Render("✗") + "  failed",
+		tuistyle.StatusDone.Render("⇥") + "  skipped",
+	}
+	for _, want := range wants {
+		if !strings.Contains(legend, want) {
+			t.Errorf("legend should contain styled status glyph %q, got:\n%q", want, legend)
+		}
+	}
+}
+
+func TestRenderLegend_TypeGlyphsUseRunScreenColors(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	m := newTestModel(&Tree{Root: &StepNode{ID: "wf", Type: NodeRoot}}, FromList)
+
+	legend := m.renderLegend()
+	wants := []string{
+		typeGlyph(NodeShell) + "  shell",
+		typeGlyph(NodeHeadlessAgent) + "  headless agent",
+		typeGlyph(NodeInteractiveAgent) + "  interactive agent",
+		typeGlyph(NodeSubWorkflow) + "  sub-workflow",
+		typeGlyph(NodeLoop) + "  loop",
+		typeGlyph(NodeIteration) + "  iteration",
+	}
+	for _, want := range wants {
+		if !strings.Contains(legend, want) {
+			t.Errorf("legend should contain styled type glyph %q, got:\n%q", want, legend)
+		}
+	}
+}
+
+func TestView_HeaderShowsOriginCwdShortened(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	projectDir := filepath.Join(t.TempDir(), "projects", "encoded")
+	sessionDir := filepath.Join(projectDir, "runs", "wf-2026-04-26T12-00-00Z")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	originCwd := filepath.Join(home, "src", "agent-runner")
+	writeMeta(t, projectDir, originCwd)
+
+	m, err := New(sessionDir, projectDir, FromList)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	m.termWidth = 100
+	m.termHeight = 30
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "~/src/agent-runner") {
+		t.Fatalf("run view header should show shortened origin cwd, got:\n%s", view)
+	}
+	if strings.Contains(view, projectDir) {
+		t.Fatalf("run view should not show internal project dir %q, got:\n%s", projectDir, view)
 	}
 }
 

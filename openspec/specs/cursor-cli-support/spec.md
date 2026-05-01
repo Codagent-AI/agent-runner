@@ -98,20 +98,6 @@ The adapter SHALL NOT depend on any specific `type` or `subtype` value — any e
 - **WHEN** the captured stdout is empty
 - **THEN** the adapter returns the empty string
 
-### Requirement: Cursor interactive mode rejected at runtime
-
-Interactive mode for Cursor is not supported in this release. When a step with `cli: cursor` is invoked in interactive mode (headless=false), the runner SHALL fail the step at runtime with an error message indicating that cursor interactive mode is not supported.
-
-The adapter SHALL implement the `cli.InteractiveRejector` interface; its `InteractiveModeError()` return value SHALL mention both "interactive mode" and "cursor".
-
-#### Scenario: Interactive Cursor step fails at runtime
-- **WHEN** an agent step resolves to `cli: cursor` and `mode: interactive`
-- **THEN** the runner marks the step as failed and emits an error message stating that interactive mode is not supported for the cursor CLI
-
-#### Scenario: Cursor interactive rejection does not block load
-- **WHEN** a workflow or profile declares `cli: cursor` with `default_mode: interactive`
-- **THEN** configuration and workflow loading succeed without error (the failure surfaces only when such a step is actually executed)
-
 ### Requirement: Cursor registered as a known CLI
 
 The adapter registry SHALL expose `cursor` as a resolvable adapter name, and the configuration validator SHALL accept `cli: cursor` in agent-profile and workflow configs.

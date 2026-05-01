@@ -1,0 +1,51 @@
+active_profile: smoke_test
+profiles:
+  smoke_test:
+    extends: default
+    agents:
+      claude_headless_smoke:
+        extends: headless_base
+        model: haiku
+        effort: low
+      claude_interactive_smoke:
+        extends: interactive_base
+        model: haiku
+        effort: low
+      codex_headless_smoke:
+        extends: headless_base
+        cli: codex
+        model: gpt-5.4-mini
+        effort: low
+      copilot_headless_smoke:
+        extends: headless_base
+        cli: copilot
+        model: gpt-5.4-mini
+        effort: low
+      cursor_headless_smoke:
+        extends: headless_base
+        cli: cursor
+        model: auto
+        effort: low
+      opencode_headless_smoke:
+        extends: headless_base
+        cli: opencode
+        effort: low
+      codex_interactive_smoke:
+        extends: interactive_base
+        cli: codex
+        model: gpt-5.4-mini
+        effort: low
+      copilot_interactive_smoke:
+        extends: interactive_base
+        cli: copilot
+        model: gpt-5.4-mini
+        effort: low
+      cursor_interactive_smoke:
+        extends: interactive_base
+        cli: cursor
+        model: auto
+        effort: low
+      opencode_interactive_smoke:
+        extends: interactive_base
+        cli: opencode
+        effort: low

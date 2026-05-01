@@ -188,6 +188,74 @@ func TestRunWorkflow(t *testing.T) {
 		}
 	})
 
+	t.Run("counted loop exhaustion succeeds workflow", func(t *testing.T) {
+		maxIterations := 1
+		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}}}
+		w := model.Workflow{
+			Name: "test",
+			Steps: []model.Step{
+				{
+					ID:      "retry",
+					Session: model.SessionNew,
+					Loop:    &model.Loop{Max: &maxIterations},
+					Steps: []model.Step{
+						{ID: "always-pass", Command: "true", Session: model.SessionNew},
+					},
+				},
+				shellStep("reached", "echo reached"),
+			},
+		}
+		w.ApplyDefaults()
+		result, _ := RunWorkflow(&w, map[string]string{}, &Options{
+			ProcessRunner: runner,
+			GlobExpander:  &mockGlob{},
+			Log:           &mockLog{},
+			SessionDir:    t.TempDir(),
+		})
+		if result != ResultSuccess {
+			t.Fatalf("expected success after loop exhaustion, got %q", result)
+		}
+		if len(runner.calls) != 2 {
+			t.Fatalf("expected loop body and following step to run, got %d calls", len(runner.calls))
+		}
+	})
+
+	t.Run("counted retry loop exhaustion fails workflow", func(t *testing.T) {
+		maxIterations := 1
+		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 1}}}
+		w := model.Workflow{
+			Name: "test",
+			Steps: []model.Step{
+				{
+					ID:      "retry",
+					Session: model.SessionNew,
+					Loop:    &model.Loop{Max: &maxIterations},
+					Steps: []model.Step{
+						{
+							ID: "always-fail", Command: "false", Session: model.SessionNew,
+							ContinueOnFailure: true,
+							BreakIf:           "success",
+						},
+					},
+				},
+				shellStep("never-reached", "echo never"),
+			},
+		}
+		w.ApplyDefaults()
+		result, _ := RunWorkflow(&w, map[string]string{}, &Options{
+			ProcessRunner: runner,
+			GlobExpander:  &mockGlob{},
+			Log:           &mockLog{},
+			SessionDir:    t.TempDir(),
+		})
+		if result != ResultFailed {
+			t.Fatalf("expected failed after retry loop exhaustion, got %q", result)
+		}
+		if len(runner.calls) != 1 {
+			t.Fatalf("expected only the loop body to run, got %d calls", len(runner.calls))
+		}
+	})
+
 	t.Run("skip_if previous_success skips step", func(t *testing.T) {
 		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}}}
 		w := model.Workflow{
