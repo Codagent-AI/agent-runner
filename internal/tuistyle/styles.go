@@ -11,11 +11,11 @@ import (
 // Adaptive colors used across TUI screens.
 var (
 	InactiveAmber = lipgloss.AdaptiveColor{Dark: "#f0a830", Light: "#b45309"}
-	CompletedGray = lipgloss.AdaptiveColor{Dark: "#4b5a6e", Light: "#9ca3af"}
+	CompletedGray = lipgloss.AdaptiveColor{Dark: "#8b949e", Light: "#6b7280"}
 	AccentCyan    = lipgloss.AdaptiveColor{Dark: "#5ce0d8", Light: "#0891b2"}
 	SuccessGreen  = lipgloss.AdaptiveColor{Dark: "#4ade80", Light: "#16a34a"}
 	BodyText      = lipgloss.AdaptiveColor{Dark: "#c9d1d9", Light: "#1f2937"}
-	DimText       = lipgloss.AdaptiveColor{Dark: "#4b5a6e", Light: "#9ca3af"}
+	DimText       = lipgloss.AdaptiveColor{Dark: "#8b949e", Light: "#6b7280"}
 	SelectedText  = lipgloss.AdaptiveColor{Dark: "#ffffff", Light: "#111827"}
 	FailedRed     = lipgloss.AdaptiveColor{Dark: "#f87171", Light: "#dc2626"}
 )

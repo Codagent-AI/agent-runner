@@ -7,7 +7,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/codagent/agent-runner/internal/tuistyle"
 	"github.com/codagent/agent-runner/internal/usersettings"
 )
 
@@ -60,20 +59,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// View intentionally avoids theme-dependent colors. The whole reason this
+// modal exists is that terminal background detection is unreliable, so any
+// foreground color we pick risks rendering invisibly on the user's actual
+// background. Instead: bold for the header, terminal default foreground for
+// labels, and reverse video for the selected option (swaps fg/bg, so it is
+// visible regardless of which way detection went).
 func (m model) View() string {
+	headerStyle := lipgloss.NewStyle().Bold(true)
+	selectedStyle := lipgloss.NewStyle().Reverse(true).Bold(true)
+	plainStyle := lipgloss.NewStyle()
+
 	option := func(theme usersettings.Theme, label string) string {
-		prefix := "  "
-		style := tuistyle.NormalStyle
 		if m.selected == theme {
-			prefix = "> "
-			style = tuistyle.SelectedStyle.Bold(true)
+			return selectedStyle.Render("> " + label)
 		}
-		return style.Render(prefix + label)
+		return plainStyle.Render("  " + label)
 	}
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
-		tuistyle.HeaderStyle.Render("Choose TUI theme"),
+		headerStyle.Render("Choose TUI theme"),
 		"",
 		option(usersettings.ThemeLight, "Light"),
 		option(usersettings.ThemeDark, "Dark"),
@@ -81,7 +87,6 @@ func (m model) View() string {
 
 	card := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(tuistyle.AccentCyan).
 		Padding(1, 2).
 		Render(content)
 
