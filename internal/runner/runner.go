@@ -396,7 +396,7 @@ func emitSkippedStep(rs *runState, step *model.Step, index int) {
 func runStep(step *model.Step, rs *runState) (exec.StepOutcome, *exec.LoopResult, error) {
 	if step.Loop != nil && len(step.Steps) > 0 {
 		lr, err := exec.ExecuteLoopStep(step, rs.ctx, rs.runner, rs.glob, rs.log, exec.LoopExecuteOptions{})
-		return exec.MapLoopOutcomeForRunner(lr.Outcome), &lr, err
+		return exec.MapLoopOutcomeForRunner(step, lr.Outcome), &lr, err
 	}
 	outcome, err := exec.DispatchStep(step, rs.ctx, rs.runner, rs.glob, rs.log)
 	return outcome, nil, err

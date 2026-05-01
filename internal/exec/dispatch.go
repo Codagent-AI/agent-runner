@@ -17,7 +17,7 @@ func DispatchStep(
 		if err != nil {
 			return OutcomeFailed, err
 		}
-		return mapLoopOutcome(result.Outcome), nil
+		return mapLoopOutcome(step, result.Outcome), nil
 	}
 
 	if step.Workflow != "" {
@@ -47,18 +47,30 @@ func DispatchStep(
 }
 
 // MapLoopOutcomeForRunner maps loop outcomes for the runner's step dispatch.
-func MapLoopOutcomeForRunner(outcome StepOutcome) StepOutcome {
-	return mapLoopOutcome(outcome)
+func MapLoopOutcomeForRunner(step *model.Step, outcome StepOutcome) StepOutcome {
+	return mapLoopOutcome(step, outcome)
 }
 
-func mapLoopOutcome(outcome StepOutcome) StepOutcome {
+func mapLoopOutcome(step *model.Step, outcome StepOutcome) StepOutcome {
 	if outcome == OutcomeSuccess {
+		return OutcomeSuccess
+	}
+	if outcome == OutcomeExhausted && !hasBreakCondition(step.Steps) {
 		return OutcomeSuccess
 	}
 	if outcome == OutcomeAborted {
 		return OutcomeAborted
 	}
 	return OutcomeFailed
+}
+
+func hasBreakCondition(steps []model.Step) bool {
+	for i := range steps {
+		if steps[i].BreakIf != "" || hasBreakCondition(steps[i].Steps) {
+			return true
+		}
+	}
+	return false
 }
 
 func executeGroupStep(

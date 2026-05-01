@@ -59,6 +59,7 @@ type Model struct {
 	tailer     FileTailer
 	sessionDir string
 	projectDir string
+	originCwd  string
 	entered    Entered
 
 	path      []*StepNode
@@ -176,6 +177,7 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 		tree:       tree,
 		sessionDir: sessionDir,
 		projectDir: projectDir,
+		originCwd:  resolved.OriginCwd,
 		entered:    entered,
 		path:       []*StepNode{tree.Root},
 		loadedFull: make(map[string]bool),
@@ -253,6 +255,7 @@ func NewForDefinition(entry *discovery.WorkflowEntry, projectDir string) (*Model
 		tree:          tree,
 		sessionDir:    sourcePath,
 		projectDir:    projectDir,
+		originCwd:     projectDir,
 		entered:       FromDefinition,
 		path:          []*StepNode{tree.Root},
 		loadedFull:    make(map[string]bool),
@@ -367,6 +370,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case liverun.SuspendedMsg:
+		// Re-enter follow mode whenever a step transitions into interactive:
+		// the user can't see the run view during the PTY hand-off, so by the
+		// time the TUI restores they should be tracking the live step instead
+		// of pinned to wherever they previously drilled in.
+		m.autoFollow = true
+		if len(m.path) > 1 && m.activeStepPrefix != "" {
+			if active := m.tree.FindByPrefix(m.activeStepPrefix); active != nil {
+				if m.ancestorAtCurrentLevel(active) == nil {
+					m.path = m.path[:1]
+					m.cursor = 0
+					m.logOffset = 0
+				}
+			}
+		}
+		m.applyAutoFollowCursor()
+		m.rebuildRanges()
 		if !m.altScreen {
 			m.suppressAltScreen = true
 		}

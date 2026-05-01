@@ -25,7 +25,8 @@ This project is pre-release and under active development. Prefer clear, well-tes
 
 ## Development Workflow
 
-- Use test-driven development for code changes. For bug fixes, add a failing test that reproduces the bug before changing production code.
+- Use test-driven development for substantive behavior changes. For bug fixes, add a failing test that reproduces the bug before changing production code.
+- Tests are not required for trivial changes such as styling-only tweaks, copy edits, comments, or other cases where a focused unit test would not exercise meaningful behavior.
 - Keep tests next to the source package. Use local stubs and small fakes instead of adding a mocking framework.
 - Prefer `google/go-cmp` for structured comparisons in tests.
 - Run targeted tests while iterating, then broader checks before finishing.

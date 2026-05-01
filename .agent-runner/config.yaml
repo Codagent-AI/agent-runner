@@ -7,6 +7,10 @@ profiles:
         extends: headless_base
         model: haiku
         effort: low
+      claude_interactive_smoke:
+        extends: interactive_base
+        model: haiku
+        effort: low
       codex_headless_smoke:
         extends: headless_base
         cli: codex
@@ -21,6 +25,10 @@ profiles:
         extends: headless_base
         cli: cursor
         model: auto
+        effort: low
+      opencode_headless_smoke:
+        extends: headless_base
+        cli: opencode
         effort: low
       codex_interactive_smoke:
         extends: interactive_base

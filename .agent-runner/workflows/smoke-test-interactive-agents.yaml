@@ -1,0 +1,19 @@
+name: smoke-test-interactive-agents
+description: "Manual smoke test for interactive agent adapters"
+
+sessions:
+  - name: claude-interactive
+    agent: claude_interactive_smoke
+  - name: codex-interactive
+    agent: codex_interactive_smoke
+
+steps:
+  - id: claude-interactive
+    session: claude-interactive
+    mode: interactive
+    prompt: "Reply with exactly this short sentence: claude interactive smoke ready. Then wait for me to continue."
+
+  - id: codex-interactive
+    session: codex-interactive
+    mode: interactive
+    prompt: "Reply with exactly this short sentence: codex interactive smoke ready. Then wait for me to continue."
