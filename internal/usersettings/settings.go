@@ -43,7 +43,17 @@ func Load() (Settings, error) {
 		return Settings{}, err
 	}
 
-	body, err := os.ReadFile(path)
+	dir := filepath.Dir(path)
+	settingsRoot, err := os.OpenRoot(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return Settings{}, nil
+		}
+		return Settings{}, err
+	}
+	defer func() { _ = settingsRoot.Close() }()
+
+	body, err := settingsRoot.ReadFile(filepath.Base(path))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return Settings{}, nil
@@ -59,14 +69,14 @@ func Load() (Settings, error) {
 		return Settings{}, nil
 	}
 
-	root := doc.Content[0]
-	if root.Kind != yaml.MappingNode {
+	yamlRoot := doc.Content[0]
+	if yamlRoot.Kind != yaml.MappingNode {
 		return Settings{}, nil
 	}
 
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		key := root.Content[i]
-		value := root.Content[i+1]
+	for i := 0; i+1 < len(yamlRoot.Content); i += 2 {
+		key := yamlRoot.Content[i]
+		value := yamlRoot.Content[i+1]
 		if key.Value != "theme" || value.Kind != yaml.ScalarNode {
 			continue
 		}
@@ -90,6 +100,7 @@ func Save(settings Settings) error {
 	}
 
 	dir := filepath.Dir(path)
+	// #nosec G301 -- the user-settings spec requires ~/.agent-runner to be 0755.
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create settings directory %s: %w", dir, err)
 	}
