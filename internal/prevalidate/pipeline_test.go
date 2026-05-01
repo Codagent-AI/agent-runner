@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/config"
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestPipelineResolvesParamBoundSubWorkflow(t *testing.T) {
@@ -184,8 +184,8 @@ steps:
 		t.Fatalf("LookPath(claude) calls = %d, want 1", got)
 	}
 	want := []string{"claude|opus|high", "claude|sonnet|high"}
-	if !reflect.DeepEqual(probes.calls, want) {
-		t.Fatalf("probe calls = %#v, want %#v", probes.calls, want)
+	if diff := cmp.Diff(want, probes.calls); diff != "" {
+		t.Fatalf("probe calls mismatch (-want +got):\n%s", diff)
 	}
 }
 
