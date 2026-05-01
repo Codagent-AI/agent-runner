@@ -336,6 +336,11 @@ func isCodexIgnoredStderrLine(line string, state *codexIgnoredStderrState) bool 
 		state.skippedApplyPatch = true
 		return true
 	}
+	// Reset skippedRollout on any non-matching line. The rollout error often
+	// arrives as a single self-contained line ("...failed to record rollout
+	// items: thread <uuid> not found"), which leaves skippedRollout=true even
+	// though there is no continuation to suppress; clearing here keeps a
+	// stale flag from accidentally swallowing an unrelated future line.
 	state.skippedRollout = false
 	return false
 }

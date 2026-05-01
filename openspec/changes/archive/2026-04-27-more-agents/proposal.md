@@ -21,9 +21,9 @@ The behavioral contract for "all CLIs work in both modes" is cross-cutting and l
 
 ## Technical Approach
 
-The `cli.Adapter` abstraction in `internal/cli/adapter.go` was built for this — adding a backend or a mode is a localized change. No runner, executor, or workflow code needs to change beyond the adapter layer and the config validator.
+The `cli.Adapter` abstraction in `internal/cli/adapter.go` was built for this — adding a backend or a mode is a localized change. The bulk of the work is in the adapter layer and the config validator, with a small executor touchpoint in `internal/exec/agent.go` to make `AskUserQuestion` headless-only.
 
-```
+```text
                         ┌───────────────────────────────┐
                         │   internal/exec/agent.go      │
                         │   (mode-agnostic dispatch)    │

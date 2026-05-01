@@ -189,6 +189,63 @@ steps:
 	}
 }
 
+func TestPipelineRewalksSubWorkflowForEachInheritedOrigin(t *testing.T) {
+	dir := t.TempDir()
+	writeWorkflow(t, dir, "child.yaml", `
+name: child
+steps:
+  - id: inherited
+    prompt: continue
+    session: inherit
+    model: opus
+`)
+	root := writeWorkflow(t, dir, "root.yaml", `
+name: root
+steps:
+  - id: origin-a
+    agent: implementor-a
+    session: new
+    prompt: start
+  - id: call-a
+    workflow: child.yaml
+  - id: origin-b
+    agent: implementor-b
+    session: new
+    prompt: start
+  - id: call-b
+    workflow: child.yaml
+`)
+	cfg := &config.Config{
+		ActiveProfile: "default",
+		Profiles: map[string]*config.ProfileSet{
+			"default": {Agents: map[string]*config.Agent{
+				"implementor-a": {DefaultMode: "headless", CLI: "claude", Model: "haiku", Effort: "high"},
+				"implementor-b": {DefaultMode: "headless", CLI: "claude", Model: "sonnet", Effort: "medium"},
+			}},
+		},
+		ActiveAgents: map[string]*config.Agent{
+			"implementor-a": {DefaultMode: "headless", CLI: "claude", Model: "haiku", Effort: "high"},
+			"implementor-b": {DefaultMode: "headless", CLI: "claude", Model: "sonnet", Effort: "medium"},
+		},
+	}
+	opts, _, probes := fakeOptions(t, cfg)
+
+	if _, err := Pipeline(root, nil, Strict, opts); err != nil {
+		t.Fatalf("Pipeline returned error: %v", err)
+	}
+
+	// probeTriples sorts triples alphabetically by "cli|model|effort" before invoking ProbeModel.
+	want := []string{
+		"claude|haiku|high",    // origin-a
+		"claude|opus|high",     // child inherited from origin-a (model override)
+		"claude|opus|medium",   // child inherited from origin-b — must not be memoized away
+		"claude|sonnet|medium", // origin-b
+	}
+	if diff := cmp.Diff(want, probes.calls); diff != "" {
+		t.Fatalf("probe calls mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestPipelineProbesAdapterExecutableName(t *testing.T) {
 	dir := t.TempDir()
 	root := writeWorkflow(t, dir, "root.yaml", `
