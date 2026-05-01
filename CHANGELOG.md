@@ -1,5 +1,11 @@
 # agent-runner
 
+## 0.3.0
+
+### Minor Changes
+
+- [#24](https://github.com/Codagent-AI/agent-runner/pull/24) Add interactive copilot/cursor and opencode adapter
+
 ## 0.2.0
 
 ### Minor Changes
