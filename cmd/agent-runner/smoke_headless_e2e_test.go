@@ -18,6 +18,9 @@ import (
 )
 
 func TestSmokeTestHeadlessWorkflowE2E(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake CLI stubs are POSIX shell scripts")
+	}
 	repoRoot := findRepoRoot(t)
 	tmp := t.TempDir()
 	home := filepath.Join(tmp, "home")

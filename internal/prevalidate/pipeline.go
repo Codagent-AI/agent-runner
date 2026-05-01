@@ -176,7 +176,11 @@ func (s *walkState) walkFile(path string, params map[string]string, isSub bool, 
 	if s.stack[sourceID] {
 		return nil
 	}
-	visitKey := sourceID + "\x00" + stableParamKey(params)
+	parentKey := ""
+	if parentOrigin != nil {
+		parentKey = parentOrigin.profile + "\x00" + parentOrigin.triple.cli + "\x00" + parentOrigin.triple.model + "\x00" + parentOrigin.triple.effort
+	}
+	visitKey := sourceID + "\x00" + stableParamKey(params) + "\x00" + parentKey
 	if s.completed[visitKey] {
 		return nil
 	}

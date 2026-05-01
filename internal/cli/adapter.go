@@ -33,6 +33,7 @@ func (f *lineBufferedWriter) Write(p []byte) (int, error) {
 		line := f.buf[:idx]
 		f.buf = f.buf[idx+1:]
 		if err := f.onLine(line); err != nil {
+			f.err = err
 			return n, err
 		}
 	}
@@ -45,6 +46,7 @@ func (f *lineBufferedWriter) Close() error {
 	}
 	if len(f.buf) > 0 {
 		if err := f.onLine(f.buf); err != nil {
+			f.err = err
 			return err
 		}
 		f.buf = nil

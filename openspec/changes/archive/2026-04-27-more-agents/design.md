@@ -27,7 +27,7 @@ This design fills in the architectural decisions: exact CLI flags per adapter pe
 
 ### Architecture (no interface changes)
 
-```
+```text
                 ┌───────────────────────────────┐
                 │   internal/exec/agent.go      │
                 │   (mode-agnostic dispatch)    │
@@ -124,7 +124,7 @@ Verified against `--help` output for each binary: none of `copilot`, `agent` (cu
 
 2. **Copilot prompt delivery in interactive: `-i <prompt>` not stdin.** `copilot --help` documents `-i, --interactive <prompt>` for exactly this purpose ("Start interactive mode and automatically execute this prompt"). No need for stdin plumbing.
 
-3. **Cursor session-ID discovery in interactive: filesystem mtime scan, not `agent create-chat` pre-generation.** Considered using `agent create-chat` to mint a UUID up front and pass it via `--resume` (Claude's pattern). Rejected for now because `create-chat` doesn't take a `--workspace` flag in `--help`, so the chat may be created in the wrong workspace context. Reconsider as a fallback if mtime scans prove unreliable.
+3. **Cursor session-ID discovery in interactive: decline to guess (return empty).** Considered a filesystem mtime scan of `~/.cursor/chats/*/<chat-uuid>/store.db` and `agent create-chat` pre-generation; both were rejected. The mtime scan has no workspace provenance (workspace-hash subdir is opaque), and `create-chat` lacks a `--workspace` flag. Interactive discovery returns `""`, so `session: resume` against a Cursor agent starts fresh.
 
 4. **OpenCode subcommand split is honored at the adapter level.** `opencode run` for headless, default `opencode` for interactive. The adapter's `BuildArgs` switches on `input.Headless` to choose the subcommand. This is the only adapter whose mode toggle is a subcommand, not a flag.
 
