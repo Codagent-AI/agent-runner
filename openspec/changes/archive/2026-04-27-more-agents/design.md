@@ -94,7 +94,7 @@ OpenCode uses a subcommand split: headless invokes `opencode run`, interactive i
 |----------------------------|---------------------------------------------------------------------------------------------------|
 | Copilot — both modes       | Existing filesystem scan: `~/.copilot/session-state/<id>/workspace.yaml` matched on CWD + spawn time. Mode-agnostic; no new code. |
 | Cursor headless            | Existing JSONL parse of `session_id` from `--output-format stream-json`. Unchanged.               |
-| Cursor interactive (NEW)   | Filesystem scan of `~/.cursor/chats/*/<chat-uuid>/store.db` by mtime, filtered by spawn time, newest match. Workspace-hash subdir derivation is opaque; design accepts "scan all workspace dirs" as the simplest approach. |
+| Cursor interactive (NEW)   | No verified session-ID channel; adapter declines to guess and returns `""`. Subsequent `session: resume` against a Cursor agent therefore starts fresh. (Original design proposed a filesystem scan of `~/.cursor/chats/*/<chat-uuid>/store.db`; dropped during implementation review.) |
 | OpenCode headless (NEW)    | Parse `sessionID` field from `opencode run --format json` JSONL events. Verified live: every event carries `"sessionID":"ses_..."`. |
 | OpenCode interactive (NEW) | Filesystem scan of `~/.local/share/opencode/storage/session_diff/ses_*.json` by mtime, filtered by spawn time, newest match. |
 

@@ -159,27 +159,14 @@ func TestOpenCodeAdapter(t *testing.T) {
 		}
 	})
 
-	t.Run("discover headless session ID logs scanner failures", func(t *testing.T) {
-		var logBuf bytes.Buffer
-		origWriter := log.Writer()
-		origFlags := log.Flags()
-		log.SetOutput(&logBuf)
-		log.SetFlags(0)
-		t.Cleanup(func() {
-			log.SetOutput(origWriter)
-			log.SetFlags(origFlags)
-		})
-
-		output := `{"type":"text","payload":"` + strings.Repeat("x", 2*1024*1024) + `","sessionID":"ses_too_long"}`
+	t.Run("discover headless session ID handles large jsonl lines", func(t *testing.T) {
+		output := `{"type":"text","payload":"` + strings.Repeat("x", 2*1024*1024) + `","sessionID":"ses_large"}`
 		id := adapter.DiscoverSessionID(&DiscoverOptions{
 			ProcessOutput: output,
 			Headless:      true,
 		})
-		if id != "" {
-			t.Fatalf("expected empty string on scanner failure, got %q", id)
-		}
-		if !strings.Contains(logBuf.String(), "failed to scan opencode session output") {
-			t.Fatalf("expected scanner failure log, got %q", logBuf.String())
+		if id != "ses_large" {
+			t.Fatalf("expected %q, got %q", "ses_large", id)
 		}
 	})
 

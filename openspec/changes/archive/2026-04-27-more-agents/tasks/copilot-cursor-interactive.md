@@ -58,16 +58,9 @@ Drop `--allow-all` and `--autopilot` in interactive (no permission loosening; us
 
 ### Cursor interactive session-ID discovery
 
-Cursor stores chats at `~/.cursor/chats/<workspace-hash>/<chat-uuid>/store.db`. Implement an interactive-mode discovery helper in `internal/cli/cursor.go` that:
+Cursor has no verified interactive session-ID channel — the `~/.cursor/chats/<workspace-hash>/<chat-uuid>/store.db` layout exposes no provenance to match a chat to the spawned process. The adapter therefore declines to guess: `CursorAdapter.DiscoverSessionID` returns `""` for interactive mode, and subsequent `session: resume` steps against a Cursor agent are treated as fresh.
 
-- Walks `~/.cursor/chats/*/<chat-uuid>/store.db` files
-- Filters out files whose mtime is before `opts.SpawnTime`
-- Returns the chat-uuid (the directory name containing `store.db`) of the newest matching file
-- Returns `""` when no candidates remain
-
-Use the existing `discoverCopilotSession` in `internal/cli/copilot.go` as the pattern (mtime + spawn-time filter + ambiguity warning). Workspace-hash derivation is opaque, so scan all workspace dirs rather than computing the hash. Ambiguity is acceptable; log a warning when multiple post-spawn candidates match (matches the Copilot pattern).
-
-Wire the new helper into `CursorAdapter.DiscoverSessionID`: keep the existing JSONL parse for headless, route to the filesystem scan for interactive.
+(The original design proposed a filesystem scan modeled on `discoverCopilotSession`. Implementation review concluded the misattribution risk outweighed the resume convenience and dropped the scan; the JSONL parse is kept for headless.)
 
 ### `SupportsSystemPrompt()` stances
 
@@ -83,7 +76,7 @@ No change. Copilot and Cursor already return `false`; design verified neither CL
 
 - `internal/cli/adapter_test.go`: remove test cases asserting that Copilot/Cursor implement `cli.InteractiveRejector` and that `InteractiveModeError()` returns the expected messages. Add tests for the new interactive arg-construction patterns covering: fresh interactive (no resume flag), resumed interactive (no model flag), model on fresh, prompt delivery via `-i` for Copilot and positional for Cursor, absence of permission flags in interactive args.
 - `internal/exec/agent_test.go`: update or remove scenarios that asserted Copilot/Cursor interactive steps fail at runtime. The check itself still exists for future use; just remove the Copilot/Cursor expectations.
-- Add a Cursor interactive session-ID discovery test using a temp directory simulating `~/.cursor/chats/*/<uuid>/store.db` layout, asserting newest-after-spawn-time wins and no-match returns empty.
+- Confirm `CursorAdapter.DiscoverSessionID` returns `""` in interactive mode (no filesystem scan).
 
 ## Spec
 
@@ -136,7 +129,7 @@ The existing `Cursor interactive mode rejected at runtime` requirement in `opens
 ## Done When
 
 - `internal/cli/copilot.go` produces interactive args matching the table above; `InteractiveModeError()` is gone.
-- `internal/cli/cursor.go` produces interactive args matching the table above; `InteractiveModeError()` is gone; `DiscoverSessionID` returns the right chat-uuid for interactive sessions via filesystem scan.
+- `internal/cli/cursor.go` produces interactive args matching the table above; `InteractiveModeError()` is gone; `DiscoverSessionID` returns `""` for interactive mode (no filesystem scan).
 - All scenarios above pass in tests.
 - `make test` and `make lint` pass.
 - A locally constructed interactive step with `cli: copilot` and `cli: cursor` runs without producing an "interactive mode not supported" error.

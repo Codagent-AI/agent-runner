@@ -233,6 +233,54 @@ steps:
 	}
 }
 
+func TestValidationErrorReportsProbeStrengthForProbeFailures(t *testing.T) {
+	t.Run("probe error includes strength tag", func(t *testing.T) {
+		err := probeError(probeKey{cli: "claude", model: "haiku", effort: "low"},
+			probeSource{file: "wf.yaml", stepID: "ask", agent: "implementor"},
+			cli.BinaryOnly, fmt.Errorf("binary not found"))
+		msg := err.Error()
+		if !strings.Contains(msg, "probe_strength=BinaryOnly") {
+			t.Fatalf("expected probe_strength tag in probe error, got %q", msg)
+		}
+	})
+
+	t.Run("non-probe error omits strength tag", func(t *testing.T) {
+		err := ValidationError{File: "wf.yaml", StepID: "loop", Message: "loop requires at least one body step"}
+		msg := err.Error()
+		if strings.Contains(msg, "probe_strength") {
+			t.Fatalf("expected no probe_strength tag in non-probe error, got %q", msg)
+		}
+	})
+}
+
+func TestValidationErrorRejectsInvalidLoopAsIndex(t *testing.T) {
+	dir := t.TempDir()
+	root := writeWorkflow(t, dir, "root.yaml", `
+name: root
+steps:
+  - id: bad-loop
+    loop:
+      max: 2
+      as_index: 1bad
+    steps:
+      - id: body
+        command: echo hi
+`)
+	cfg := &config.Config{}
+	opts := Options{
+		LoadConfig: func() (*config.Config, []string, error) { return cfg, nil, nil },
+		LookPath:   func(string) (string, error) { return "", nil },
+		Adapter:    func(string) (cli.Adapter, error) { return nil, fmt.Errorf("unused") },
+	}
+	_, err := Pipeline(root, nil, Strict, opts)
+	if err == nil {
+		t.Fatal("expected validation error for invalid as_index, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid loop binding name") || !strings.Contains(err.Error(), "as_index") {
+		t.Fatalf("expected as_index validation error, got %q", err.Error())
+	}
+}
+
 func fakeOptions(t *testing.T, cfg *config.Config) (Options, map[string]int, *recordingProbeRegistry) {
 	t.Helper()
 	probes := &recordingProbeRegistry{}

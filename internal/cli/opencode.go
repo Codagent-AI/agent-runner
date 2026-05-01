@@ -76,23 +76,24 @@ func (a *OpenCodeAdapter) WrapStdout(downstream io.Writer) io.Writer {
 }
 
 func discoverOpenCodeHeadlessSession(output string) string {
-	scanner := bufio.NewScanner(strings.NewReader(output))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		var event struct {
-			SessionID string `json:"sessionID"`
+	reader := bufio.NewReader(strings.NewReader(output))
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			var event struct {
+				SessionID string `json:"sessionID"`
+			}
+			if jsonErr := json.Unmarshal(line, &event); jsonErr == nil && event.SessionID != "" {
+				return event.SessionID
+			}
 		}
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			continue
-		}
-		if event.SessionID != "" {
-			return event.SessionID
+		if err != nil {
+			if err != io.EOF {
+				log.Printf("opencode: failed to read opencode session output: %v", err)
+			}
+			return ""
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		log.Printf("opencode: failed to scan opencode session output: %v", err)
-	}
-	return ""
 }
 
 func discoverOpenCodeInteractiveSession(spawnTime time.Time) string {
