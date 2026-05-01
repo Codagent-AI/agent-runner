@@ -170,21 +170,20 @@ func TestOpenCodeAdapter(t *testing.T) {
 		}
 	})
 
-	t.Run("discover interactive session ID from newest post-spawn session diff", func(t *testing.T) {
+	t.Run("discover interactive session ID from single post-spawn session diff", func(t *testing.T) {
 		fakeHome := t.TempDir()
 		t.Setenv("HOME", fakeHome)
 		spawnTime := time.Now().Add(-10 * time.Second)
 
 		writeOpenCodeSessionDiff(t, fakeHome, "ses_old", spawnTime.Add(-time.Second))
-		writeOpenCodeSessionDiff(t, fakeHome, "ses_newer", time.Now().Add(-time.Second))
-		writeOpenCodeSessionDiff(t, fakeHome, "ses_older", time.Now().Add(-2*time.Second))
+		writeOpenCodeSessionDiff(t, fakeHome, "ses_new", time.Now().Add(-time.Second))
 
 		id := adapter.DiscoverSessionID(&DiscoverOptions{
 			SpawnTime: spawnTime,
 			Headless:  false,
 		})
-		if id != "ses_newer" {
-			t.Fatalf("expected %q, got %q", "ses_newer", id)
+		if id != "ses_new" {
+			t.Fatalf("expected %q, got %q", "ses_new", id)
 		}
 	})
 
@@ -208,7 +207,7 @@ func TestOpenCodeAdapter(t *testing.T) {
 		}
 	})
 
-	t.Run("discover interactive session ID logs ambiguity", func(t *testing.T) {
+	t.Run("discover interactive session ID refuses ambiguous candidates", func(t *testing.T) {
 		var logBuf bytes.Buffer
 		origWriter := log.Writer()
 		origFlags := log.Flags()
@@ -229,8 +228,8 @@ func TestOpenCodeAdapter(t *testing.T) {
 			SpawnTime: spawnTime,
 			Headless:  false,
 		})
-		if id != "ses_two" {
-			t.Fatalf("expected newest session, got %q", id)
+		if id != "" {
+			t.Fatalf("expected empty session for ambiguous candidates, got %q", id)
 		}
 		if !strings.Contains(logBuf.String(), "opencode: 2 session candidates") {
 			t.Fatalf("expected ambiguity log, got %q", logBuf.String())

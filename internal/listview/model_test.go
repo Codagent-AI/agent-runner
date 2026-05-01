@@ -45,6 +45,95 @@ func pressKey(m *Model, key string) (*Model, tea.Cmd) {
 	return newModel.(*Model), cmd
 }
 
+type testRefreshMsg struct{}
+type testPulseMsg struct{}
+
+func installTestTickerCmds(t *testing.T) {
+	t.Helper()
+	oldRefresh := doRefresh
+	oldPulse := doPulse
+	doRefresh = func() tea.Cmd {
+		return func() tea.Msg { return testRefreshMsg{} }
+	}
+	doPulse = func() tea.Cmd {
+		return func() tea.Msg { return testPulseMsg{} }
+	}
+	t.Cleanup(func() {
+		doRefresh = oldRefresh
+		doPulse = oldPulse
+	})
+}
+
+func collectCmdMessages(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		msgs := make([]tea.Msg, 0, len(batch))
+		for _, batchCmd := range batch {
+			if batchCmd != nil {
+				msgs = append(msgs, batchCmd())
+			}
+		}
+		return msgs
+	}
+	return []tea.Msg{msg}
+}
+
+func countMessagesOfType[T any](msgs []tea.Msg) int {
+	count := 0
+	for _, msg := range msgs {
+		if _, ok := msg.(T); ok {
+			count++
+		}
+	}
+	return count
+}
+
+func TestListModel_Init_SkipsPulseWhenVisibleRunsAreIdle(t *testing.T) {
+	installTestTickerCmds(t)
+	m := newTestListModel([]runs.RunInfo{inactiveRun(), completedRun()})
+
+	msgs := collectCmdMessages(m.Init())
+
+	if got := countMessagesOfType[testRefreshMsg](msgs); got != 1 {
+		t.Fatalf("refresh commands = %d, want 1", got)
+	}
+	if got := countMessagesOfType[testPulseMsg](msgs); got != 0 {
+		t.Fatalf("pulse commands = %d, want 0", got)
+	}
+}
+
+func TestListModel_Init_SchedulesPulseWhenVisibleRunIsActive(t *testing.T) {
+	installTestTickerCmds(t)
+	m := newTestListModel([]runs.RunInfo{activeRun()})
+
+	msgs := collectCmdMessages(m.Init())
+
+	if got := countMessagesOfType[testRefreshMsg](msgs); got != 1 {
+		t.Fatalf("refresh commands = %d, want 1", got)
+	}
+	if got := countMessagesOfType[testPulseMsg](msgs); got != 1 {
+		t.Fatalf("pulse commands = %d, want 1", got)
+	}
+}
+
+func TestListModel_PulseMsg_IdleVisibleRunsDoesNotRescheduleOrAdvance(t *testing.T) {
+	installTestTickerCmds(t)
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.pulsePhase = 1.25
+
+	_, cmd := m.Update(pulseMsg{})
+
+	if cmd != nil {
+		t.Fatal("idle list view should ignore stale pulse messages without rescheduling")
+	}
+	if m.pulsePhase != 1.25 {
+		t.Fatalf("pulsePhase = %v, want 1.25", m.pulsePhase)
+	}
+}
+
 // r on inactive run emits ResumeRunMsg with the model's cwd as ProjectDir.
 func TestListModel_R_InactiveRun_EmitsResumeRunMsg(t *testing.T) {
 	m := newTestListModel([]runs.RunInfo{inactiveRun()})

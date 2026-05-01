@@ -130,9 +130,10 @@ func discoverOpenCodeInteractiveSession(spawnTime time.Time) string {
 	})
 
 	if len(candidates) > 1 {
-		log.Printf("opencode: %d session candidates match spawn time; using most recent — misattribution possible if concurrent sessions started together", len(candidates))
+		log.Printf("opencode: %d session candidates match spawn time; refusing to guess", len(candidates))
+		return ""
 	}
-	if len(candidates) > 0 {
+	if len(candidates) == 1 {
 		return candidates[0].id
 	}
 	return ""
