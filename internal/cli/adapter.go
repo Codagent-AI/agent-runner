@@ -2,10 +2,68 @@
 package cli
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"time"
 )
+
+// lineBufferedWriter is an io.WriteCloser that buffers input until a newline,
+// then dispatches each newline-terminated line to onLine. Adapters use it to
+// transform JSONL streams without re-implementing the buffer/scan/short-write
+// bookkeeping. The trailing partial line (if any) is flushed on Close.
+type lineBufferedWriter struct {
+	downstream io.Writer
+	onLine     func(line []byte) error
+	buf        []byte
+	err        error
+}
+
+func (f *lineBufferedWriter) Write(p []byte) (int, error) {
+	if f.err != nil {
+		return 0, f.err
+	}
+	n := len(p)
+	f.buf = append(f.buf, p...)
+	for {
+		idx := bytes.IndexByte(f.buf, '\n')
+		if idx < 0 {
+			break
+		}
+		line := f.buf[:idx]
+		f.buf = f.buf[idx+1:]
+		if err := f.onLine(line); err != nil {
+			f.err = err
+			return n, err
+		}
+	}
+	return n, nil
+}
+
+func (f *lineBufferedWriter) Close() error {
+	if f.err != nil {
+		return f.err
+	}
+	if len(f.buf) > 0 {
+		if err := f.onLine(f.buf); err != nil {
+			f.err = err
+			return err
+		}
+		f.buf = nil
+	}
+	return nil
+}
+
+func (f *lineBufferedWriter) writeDownstream(p []byte) error {
+	n, err := f.downstream.Write(p)
+	if err == nil && n < len(p) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		f.err = err
+	}
+	return err
+}
 
 // BuildArgsInput provides the parameters needed to construct CLI invocation args.
 type BuildArgsInput struct {
@@ -136,10 +194,11 @@ type SessionStore interface {
 
 // registry holds the known CLI adapters, populated at init time.
 var registry = map[string]Adapter{
-	"claude":  &ClaudeAdapter{},
-	"codex":   &CodexAdapter{},
-	"copilot": &CopilotAdapter{},
-	"cursor":  &CursorAdapter{},
+	"claude":   &ClaudeAdapter{},
+	"codex":    &CodexAdapter{},
+	"copilot":  &CopilotAdapter{},
+	"cursor":   &CursorAdapter{},
+	"opencode": &OpenCodeAdapter{},
 }
 
 // Get returns the adapter for the given CLI name, or an error if unknown.

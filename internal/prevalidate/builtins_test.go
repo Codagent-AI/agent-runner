@@ -16,6 +16,9 @@ func TestAllBuiltinsPreValidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list builtins: %v", err)
 	}
+	if len(refs) == 0 {
+		t.Fatal("expected at least one builtin workflow ref")
+	}
 	for _, ref := range refs {
 		t.Run(ref, func(t *testing.T) {
 			_, err := Pipeline(ref, nil, Lenient, Options{

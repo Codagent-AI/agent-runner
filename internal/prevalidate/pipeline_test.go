@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/config"
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestPipelineResolvesParamBoundSubWorkflow(t *testing.T) {
@@ -184,8 +184,65 @@ steps:
 		t.Fatalf("LookPath(claude) calls = %d, want 1", got)
 	}
 	want := []string{"claude|opus|high", "claude|sonnet|high"}
-	if !reflect.DeepEqual(probes.calls, want) {
-		t.Fatalf("probe calls = %#v, want %#v", probes.calls, want)
+	if diff := cmp.Diff(want, probes.calls); diff != "" {
+		t.Fatalf("probe calls mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPipelineRewalksSubWorkflowForEachInheritedOrigin(t *testing.T) {
+	dir := t.TempDir()
+	writeWorkflow(t, dir, "child.yaml", `
+name: child
+steps:
+  - id: inherited
+    prompt: continue
+    session: inherit
+    model: opus
+`)
+	root := writeWorkflow(t, dir, "root.yaml", `
+name: root
+steps:
+  - id: origin-a
+    agent: implementor-a
+    session: new
+    prompt: start
+  - id: call-a
+    workflow: child.yaml
+  - id: origin-b
+    agent: implementor-b
+    session: new
+    prompt: start
+  - id: call-b
+    workflow: child.yaml
+`)
+	cfg := &config.Config{
+		ActiveProfile: "default",
+		Profiles: map[string]*config.ProfileSet{
+			"default": {Agents: map[string]*config.Agent{
+				"implementor-a": {DefaultMode: "headless", CLI: "claude", Model: "haiku", Effort: "high"},
+				"implementor-b": {DefaultMode: "headless", CLI: "claude", Model: "sonnet", Effort: "medium"},
+			}},
+		},
+		ActiveAgents: map[string]*config.Agent{
+			"implementor-a": {DefaultMode: "headless", CLI: "claude", Model: "haiku", Effort: "high"},
+			"implementor-b": {DefaultMode: "headless", CLI: "claude", Model: "sonnet", Effort: "medium"},
+		},
+	}
+	opts, _, probes := fakeOptions(t, cfg)
+
+	if _, err := Pipeline(root, nil, Strict, opts); err != nil {
+		t.Fatalf("Pipeline returned error: %v", err)
+	}
+
+	// probeTriples sorts triples alphabetically by "cli|model|effort" before invoking ProbeModel.
+	want := []string{
+		"claude|haiku|high",    // origin-a
+		"claude|opus|high",     // child inherited from origin-a (model override)
+		"claude|opus|medium",   // child inherited from origin-b — must not be memoized away
+		"claude|sonnet|medium", // origin-b
+	}
+	if diff := cmp.Diff(want, probes.calls); diff != "" {
+		t.Fatalf("probe calls mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -230,6 +287,54 @@ steps:
 	}
 	if got := lookups["cursor"]; got != 0 {
 		t.Fatalf("LookPath(cursor) calls = %d, want 0", got)
+	}
+}
+
+func TestValidationErrorReportsProbeStrengthForProbeFailures(t *testing.T) {
+	t.Run("probe error includes strength tag", func(t *testing.T) {
+		err := probeError(probeKey{cli: "claude", model: "haiku", effort: "low"},
+			probeSource{file: "wf.yaml", stepID: "ask", agent: "implementor"},
+			cli.BinaryOnly, fmt.Errorf("binary not found"))
+		msg := err.Error()
+		if !strings.Contains(msg, "probe_strength=BinaryOnly") {
+			t.Fatalf("expected probe_strength tag in probe error, got %q", msg)
+		}
+	})
+
+	t.Run("non-probe error omits strength tag", func(t *testing.T) {
+		err := ValidationError{File: "wf.yaml", StepID: "loop", Message: "loop requires at least one body step"}
+		msg := err.Error()
+		if strings.Contains(msg, "probe_strength") {
+			t.Fatalf("expected no probe_strength tag in non-probe error, got %q", msg)
+		}
+	})
+}
+
+func TestValidationErrorRejectsInvalidLoopAsIndex(t *testing.T) {
+	dir := t.TempDir()
+	root := writeWorkflow(t, dir, "root.yaml", `
+name: root
+steps:
+  - id: bad-loop
+    loop:
+      max: 2
+      as_index: 1bad
+    steps:
+      - id: body
+        command: echo hi
+`)
+	cfg := &config.Config{}
+	opts := Options{
+		LoadConfig: func() (*config.Config, []string, error) { return cfg, nil, nil },
+		LookPath:   func(string) (string, error) { return "", nil },
+		Adapter:    func(string) (cli.Adapter, error) { return nil, fmt.Errorf("unused") },
+	}
+	_, err := Pipeline(root, nil, Strict, opts)
+	if err == nil {
+		t.Fatal("expected validation error for invalid as_index, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid loop binding name") || !strings.Contains(err.Error(), "as_index") {
+		t.Fatalf("expected as_index validation error, got %q", err.Error())
 	}
 }
 

@@ -64,10 +64,20 @@ func TestRegistry(t *testing.T) {
 		}
 	})
 
+	t.Run("resolves known CLI opencode", func(t *testing.T) {
+		adapter, err := Get("opencode")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if adapter == nil {
+			t.Fatal("expected non-nil adapter")
+		}
+	})
+
 	t.Run("KnownCLIs returns all registered names", func(t *testing.T) {
 		names := KnownCLIs()
-		if len(names) < 4 {
-			t.Fatalf("expected at least 4 known CLIs, got %d", len(names))
+		if len(names) < 5 {
+			t.Fatalf("expected at least 5 known CLIs, got %d", len(names))
 		}
 		found := map[string]bool{}
 		for _, name := range names {
@@ -84,6 +94,9 @@ func TestRegistry(t *testing.T) {
 		}
 		if !found["cursor"] {
 			t.Fatal("expected 'cursor' in known CLIs")
+		}
+		if !found["opencode"] {
+			t.Fatal("expected 'opencode' in known CLIs")
 		}
 	})
 }
@@ -331,7 +344,7 @@ func TestCodexAdapter(t *testing.T) {
 			SessionID: "thread-abc",
 			Headless:  true,
 		})
-		expected := []string{"codex", "-a", "never", "exec", "resume", "thread-abc", "continue"}
+		expected := []string{"codex", "-a", "never", "exec", "resume", "--json", "thread-abc", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -374,7 +387,7 @@ func TestCodexAdapter(t *testing.T) {
 			Model:     "o3",
 			Headless:  true,
 		})
-		expected := []string{"codex", "-a", "never", "exec", "resume", "thread-abc", "continue"}
+		expected := []string{"codex", "-a", "never", "exec", "resume", "--json", "thread-abc", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -385,7 +398,7 @@ func TestCodexAdapter(t *testing.T) {
 			Effort:    "low",
 			Headless:  true,
 		})
-		expected := []string{"codex", "-a", "never", "exec", "resume", "-c", `model_reasoning_effort="low"`, "thread-abc", "continue"}
+		expected := []string{"codex", "-a", "never", "exec", "resume", "--json", "-c", `model_reasoning_effort="low"`, "thread-abc", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -690,6 +703,52 @@ func TestCopilotAdapter(t *testing.T) {
 		assertArgs(t, expected, args)
 	})
 
+	t.Run("fresh interactive copilot step uses interactive prompt flag", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "review code",
+			Headless: false,
+		})
+		expected := []string{"copilot", "-i", "review code"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("fresh interactive copilot step includes model and effort", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "review code",
+			Model:    "gpt-5.2",
+			Effort:   "high",
+			Headless: false,
+		})
+		expected := []string{"copilot", "-i", "review code", "--model", "gpt-5.2", "--reasoning-effort", "high"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("resume interactive copilot step includes resume and omits model", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:    "continue",
+			SessionID: "session-abc",
+			Resume:    true,
+			Model:     "gpt-5.2",
+			Effort:    "high",
+			Headless:  false,
+		})
+		expected := []string{"copilot", "-i", "continue", "--resume=session-abc"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("interactive copilot step omits permission and headless flags", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:          "review code",
+			Headless:        false,
+			DisallowedTools: []string{"AskUserQuestion"},
+		})
+		for _, disallowed := range []string{"--allow-all", "--autopilot", "-s", "-p", "--no-ask-user"} {
+			if containsString(args, disallowed) {
+				t.Fatalf("did not expect %s in interactive args, got %v", disallowed, args)
+			}
+		}
+	})
+
 	t.Run("headless always includes --allow-all", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:   "do something",
@@ -922,18 +981,10 @@ func TestCopilotAdapter(t *testing.T) {
 		}
 	})
 
-	t.Run("interactive mode returns error via InteractiveRejector interface", func(t *testing.T) {
+	t.Run("does not implement InteractiveRejector", func(t *testing.T) {
 		var a Adapter = adapter
-		r, ok := a.(InteractiveRejector)
-		if !ok {
-			t.Fatal("expected CopilotAdapter to implement InteractiveRejector")
-		}
-		err := r.InteractiveModeError()
-		if err == nil {
-			t.Fatal("expected error from InteractiveModeError")
-		}
-		if !strings.Contains(err.Error(), "interactive mode") || !strings.Contains(err.Error(), "copilot") {
-			t.Fatalf("expected error about interactive mode and copilot, got: %v", err)
+		if _, ok := a.(InteractiveRejector); ok {
+			t.Fatal("did not expect CopilotAdapter to implement InteractiveRejector")
 		}
 	})
 }
@@ -948,6 +999,50 @@ func TestCursorAdapter(t *testing.T) {
 		})
 		expected := []string{"agent", "-p", "--output-format", "stream-json", "--force", "--trust", "do something"}
 		assertArgs(t, expected, args)
+	})
+
+	t.Run("fresh interactive cursor step uses positional prompt", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "review code",
+			Headless: false,
+		})
+		expected := []string{"agent", "review code"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("fresh interactive cursor step includes model", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:   "review code",
+			Model:    "gpt-5.3-codex",
+			Headless: false,
+		})
+		expected := []string{"agent", "--model", "gpt-5.3-codex", "review code"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("resume interactive cursor step includes resume and omits model", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:    "continue",
+			SessionID: "chat-abc",
+			Resume:    true,
+			Model:     "gpt-5.3-codex",
+			Headless:  false,
+		})
+		expected := []string{"agent", "--resume=chat-abc", "continue"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("interactive cursor step omits permission and headless flags", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:          "review code",
+			Headless:        false,
+			DisallowedTools: []string{"AskUserQuestion"},
+		})
+		for _, disallowed := range []string{"-p", "--output-format", "stream-json", "--trust", "--force"} {
+			if containsString(args, disallowed) {
+				t.Fatalf("did not expect %s in interactive args, got %v", disallowed, args)
+			}
+		}
 	})
 
 	t.Run("fresh headless does not include --resume", func(t *testing.T) {
@@ -1118,18 +1213,67 @@ func TestCursorAdapter(t *testing.T) {
 		}
 	})
 
-	t.Run("interactive mode returns error via InteractiveRejector interface", func(t *testing.T) {
+	t.Run("discover interactive session ID returns empty even when cursor chat matches workdir", func(t *testing.T) {
+		fakeHome := t.TempDir()
+		t.Setenv("HOME", fakeHome)
+
+		spawnTime := time.Now().Add(-10 * time.Second)
+		wrongWorkspaceID := "11111111-1111-1111-1111-111111111111"
+		matchingID := "22222222-2222-2222-2222-222222222222"
+		beforeID := "33333333-3333-3333-3333-333333333333"
+		workdir := t.TempDir()
+		otherWorkdir := t.TempDir()
+		writeCursorStoreDB(t, fakeHome, "workspace-a", wrongWorkspaceID, time.Now().Add(-1*time.Second), otherWorkdir)
+		writeCursorStoreDB(t, fakeHome, "workspace-b", matchingID, time.Now().Add(-5*time.Second), workdir)
+		writeCursorStoreDB(t, fakeHome, "workspace-c", beforeID, spawnTime.Add(-time.Second), workdir)
+
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			SpawnTime: spawnTime,
+			Headless:  false,
+			Workdir:   workdir,
+		})
+		if id != "" {
+			t.Fatalf("expected empty string without verified Cursor session provenance, got %q", id)
+		}
+	})
+
+	t.Run("discover interactive session ID returns empty when no cursor chats match", func(t *testing.T) {
+		fakeHome := t.TempDir()
+		t.Setenv("HOME", fakeHome)
+		writeCursorStoreDB(t, fakeHome, "workspace-a", "11111111-1111-1111-1111-111111111111", time.Now().Add(-10*time.Second), t.TempDir())
+
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			SpawnTime: time.Now(),
+			Headless:  false,
+			Workdir:   t.TempDir(),
+		})
+		if id != "" {
+			t.Fatalf("expected empty string, got %q", id)
+		}
+	})
+
+	t.Run("discover interactive session ID returns empty when cursor chats are ambiguous", func(t *testing.T) {
+		fakeHome := t.TempDir()
+		t.Setenv("HOME", fakeHome)
+		workdir := t.TempDir()
+		spawnTime := time.Now().Add(-10 * time.Second)
+		writeCursorStoreDB(t, fakeHome, "workspace-a", "11111111-1111-1111-1111-111111111111", time.Now().Add(-2*time.Second), workdir)
+		writeCursorStoreDB(t, fakeHome, "workspace-b", "22222222-2222-2222-2222-222222222222", time.Now().Add(-1*time.Second), workdir)
+
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			SpawnTime: spawnTime,
+			Headless:  false,
+			Workdir:   workdir,
+		})
+		if id != "" {
+			t.Fatalf("expected empty string for ambiguous cursor chats, got %q", id)
+		}
+	})
+
+	t.Run("does not implement InteractiveRejector", func(t *testing.T) {
 		var a Adapter = adapter
-		r, ok := a.(InteractiveRejector)
-		if !ok {
-			t.Fatal("expected CursorAdapter to implement InteractiveRejector")
-		}
-		err := r.InteractiveModeError()
-		if err == nil {
-			t.Fatal("expected error from InteractiveModeError")
-		}
-		if !strings.Contains(err.Error(), "interactive mode") || !strings.Contains(err.Error(), "cursor") {
-			t.Fatalf("expected error about interactive mode and cursor, got: %v", err)
+		if _, ok := a.(InteractiveRejector); ok {
+			t.Fatal("did not expect CursorAdapter to implement InteractiveRejector")
 		}
 	})
 
@@ -1285,5 +1429,29 @@ func assertArgs(t *testing.T, expected, actual []string) {
 		if expected[i] != actual[i] {
 			t.Fatalf("arg[%d]: expected %q, got %q (full: %v)", i, expected[i], actual[i], actual)
 		}
+	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func writeCursorStoreDB(t *testing.T, home, workspaceHash, chatID string, modTime time.Time, workdir string) {
+	t.Helper()
+	path := filepath.Join(home, ".cursor", "chats", workspaceHash, chatID, "store.db")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir cursor chat dir: %v", err)
+	}
+	content := []byte("Workspace Path: " + workdir + "\n")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("write cursor store.db: %v", err)
+	}
+	if err := os.Chtimes(path, modTime, modTime); err != nil {
+		t.Fatalf("chtimes cursor store.db: %v", err)
 	}
 }

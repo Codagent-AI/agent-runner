@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"io"
 	"os"
@@ -20,7 +21,7 @@ type CodexAdapter struct{}
 //   - Fresh interactive:  codex --no-alt-screen <prompt>
 //   - Fresh headless:     codex -a never exec --json <prompt>
 //   - Resume interactive: codex resume --no-alt-screen <uuid> <prompt>
-//   - Resume headless:    codex -a never exec resume <uuid> <prompt>
+//   - Resume headless:    codex -a never exec resume --json <uuid> <prompt>
 //   - Model override:     appends -m <m> (fresh sessions only)
 //   - Effort override:    appends -c model_reasoning_effort="<effort>"
 //
@@ -37,7 +38,7 @@ func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 	if input.Headless {
 		args = append(args, "-a", "never", "exec")
 		if resuming {
-			args = append(args, "resume")
+			args = append(args, "resume", "--json")
 		} else {
 			args = append(args, "--json")
 		}
@@ -79,7 +80,7 @@ func (a *CodexAdapter) FilterOutput(stdout string) string {
 
 // WrapStdout parses Codex JSONL and forwards only assistant text to the TUI.
 func (a *CodexAdapter) WrapStdout(downstream io.Writer) io.Writer {
-	return &codexStreamFilter{downstream: downstream}
+	return newCodexStreamFilter(downstream)
 }
 
 // WrapStderr suppresses Codex's persistent-exec rollout bookkeeping warning
@@ -133,52 +134,21 @@ func discoverCodexHeadlessSession(output string) string {
 }
 
 type codexStreamFilter struct {
-	downstream io.Writer
-	buf        []byte
-	err        error
-	wrote      bool
-	lastText   string
+	lineBufferedWriter
+	wrote    bool
+	lastText string
 }
 
-func (f *codexStreamFilter) Write(p []byte) (int, error) {
-	if f.err != nil {
-		return 0, f.err
-	}
-	n := len(p)
-	f.buf = append(f.buf, p...)
-	for {
-		idx := indexByte(f.buf, '\n')
-		if idx < 0 {
-			break
-		}
-		line := f.buf[:idx]
-		f.buf = f.buf[idx+1:]
-		if err := f.processLine(line); err != nil {
-			return n, err
-		}
-	}
-	return n, nil
-}
-
-func (f *codexStreamFilter) Close() error {
-	if f.err != nil {
-		return f.err
-	}
-	if len(f.buf) > 0 {
-		if err := f.processLine(f.buf); err != nil {
-			return err
-		}
-		f.buf = nil
-	}
-	return nil
+func newCodexStreamFilter(d io.Writer) *codexStreamFilter {
+	f := &codexStreamFilter{}
+	f.downstream = d
+	f.onLine = f.processLine
+	return f
 }
 
 func (f *codexStreamFilter) processLine(line []byte) error {
 	text := codexDisplayText(line)
-	if text == "" {
-		return nil
-	}
-	if text == f.lastText {
+	if text == "" || text == f.lastText {
 		return nil
 	}
 	if f.wrote {
@@ -192,17 +162,6 @@ func (f *codexStreamFilter) processLine(line []byte) error {
 	f.wrote = true
 	f.lastText = text
 	return nil
-}
-
-func (f *codexStreamFilter) writeDownstream(p []byte) error {
-	n, err := f.downstream.Write(p)
-	if err == nil && n < len(p) {
-		err = io.ErrShortWrite
-	}
-	if err != nil {
-		f.err = err
-	}
-	return err
 }
 
 type codexStderrFilter struct {
@@ -219,7 +178,7 @@ func (f *codexStderrFilter) Write(p []byte) (int, error) {
 	n := len(p)
 	f.buf = append(f.buf, p...)
 	for {
-		idx := indexByte(f.buf, '\n')
+		idx := bytes.IndexByte(f.buf, '\n')
 		if idx < 0 {
 			break
 		}
@@ -377,17 +336,13 @@ func isCodexIgnoredStderrLine(line string, state *codexIgnoredStderrState) bool 
 		state.skippedApplyPatch = true
 		return true
 	}
+	// Reset skippedRollout on any non-matching line. The rollout error often
+	// arrives as a single self-contained line ("...failed to record rollout
+	// items: thread <uuid> not found"), which leaves skippedRollout=true even
+	// though there is no continuation to suppress; clearing here keeps a
+	// stale flag from accidentally swallowing an unrelated future line.
 	state.skippedRollout = false
 	return false
-}
-
-func indexByte(b []byte, c byte) int {
-	for i, v := range b {
-		if v == c {
-			return i
-		}
-	}
-	return -1
 }
 
 // discoverCodexInteractiveSession scans ~/.codex/sessions/YYYY/MM/DD/ for the

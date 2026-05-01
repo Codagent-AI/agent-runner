@@ -53,6 +53,7 @@ type ValidationError struct {
 	Value         string
 	Allowed       []string
 	ProbeStrength cli.ProbeStrength
+	IsProbe       bool
 	Deferred      bool
 	Message       string
 }
@@ -89,7 +90,7 @@ func (e ValidationError) Error() string {
 	if len(e.LayerFiles) > 0 {
 		appendField("layers", strings.Join(e.LayerFiles, ","))
 	}
-	if e.ProbeStrength.String() != "BinaryOnly" || e.Message == "" {
+	if e.IsProbe {
 		appendField("probe_strength", e.ProbeStrength.String())
 	}
 	return b.String()
@@ -175,7 +176,11 @@ func (s *walkState) walkFile(path string, params map[string]string, isSub bool, 
 	if s.stack[sourceID] {
 		return nil
 	}
-	visitKey := sourceID + "\x00" + stableParamKey(params)
+	parentKey := ""
+	if parentOrigin != nil {
+		parentKey = parentOrigin.profile + "\x00" + parentOrigin.triple.cli + "\x00" + parentOrigin.triple.model + "\x00" + parentOrigin.triple.effort
+	}
+	visitKey := sourceID + "\x00" + stableParamKey(params) + "\x00" + parentKey
 	if s.completed[visitKey] {
 		return nil
 	}
@@ -429,6 +434,9 @@ func validateLoop(path string, step *model.Step) error {
 	if step.Loop.As != "" && !identRe.MatchString(step.Loop.As) {
 		return ValidationError{File: path, StepID: step.ID, Field: "as", Value: step.Loop.As, Message: "invalid loop binding name"}
 	}
+	if step.Loop.AsIndex != "" && !identRe.MatchString(step.Loop.AsIndex) {
+		return ValidationError{File: path, StepID: step.ID, Field: "as_index", Value: step.Loop.AsIndex, Message: "invalid loop binding name"}
+	}
 	return nil
 }
 
@@ -655,6 +663,7 @@ func probeError(key probeKey, src probeSource, strength cli.ProbeStrength, err e
 		Field:         "model/effort",
 		Value:         key.model + "/" + key.effort,
 		ProbeStrength: strength,
+		IsProbe:       true,
 		Message:       err.Error(),
 	}
 }

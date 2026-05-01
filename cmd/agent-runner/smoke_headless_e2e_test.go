@@ -18,6 +18,9 @@ import (
 )
 
 func TestSmokeTestHeadlessWorkflowE2E(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake CLI stubs are POSIX shell scripts")
+	}
 	repoRoot := findRepoRoot(t)
 	tmp := t.TempDir()
 	home := filepath.Join(tmp, "home")
@@ -165,6 +168,10 @@ case "$name" in
   agent)
     printf '{"session_id":"cursor-smoke-session"}\n'
     printf '{"type":"result","result":"smoke-test value: %s"}\n' "$value"
+    ;;
+  opencode)
+    printf '{"sessionID":"opencode-smoke-session"}\n'
+    printf '{"type":"text","part":{"type":"text","text":"smoke-test value: %s"}}\n' "$value"
     ;;
   *)
     echo "unexpected fake CLI name: $name" >&2

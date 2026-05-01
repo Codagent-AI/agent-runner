@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/codagent/agent-runner/internal/liverun"
+	"github.com/codagent/agent-runner/internal/tuistyle"
 )
 
 func newTestModel(tree *Tree, entered Entered) *Model {
@@ -120,23 +121,53 @@ func TestModel_Navigation_UpDown(t *testing.T) {
 	}
 }
 
-func TestModel_Navigation_UpDownClearsScreen(t *testing.T) {
+func TestModel_Navigation_UpDownDoesNotClearScreen(t *testing.T) {
 	m := newTestModel(simpleTree(), FromList)
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyDown})
-	if cmd == nil {
-		t.Fatal("expected down navigation to request a screen clear")
-	}
-	if msg := cmd(); msg == nil {
-		t.Fatal("expected clear-screen command to emit a message")
+	if cmd != nil {
+		t.Fatal("down navigation should redraw through Bubble Tea diffing without requesting a screen clear")
 	}
 
 	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyUp})
-	if cmd == nil {
-		t.Fatal("expected up navigation to request a screen clear")
+	if cmd != nil {
+		t.Fatal("up navigation should redraw through Bubble Tea diffing without requesting a screen clear")
 	}
-	if msg := cmd(); msg == nil {
-		t.Fatal("expected clear-screen command to emit a message")
+}
+
+func TestModel_Init_InactiveRunDoesNotSchedulePollingOrPulse(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList)
+	m.active = false
+	m.running = false
+
+	if cmd := m.Init(); cmd != nil {
+		t.Fatal("inactive run view should not schedule refresh or pulse timers")
+	}
+}
+
+func TestModel_Update_InactiveRefreshDoesNotReschedule(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList)
+	m.active = false
+	m.running = false
+
+	_, cmd := m.Update(tuistyle.RefreshMsg{})
+	if cmd != nil {
+		t.Fatal("inactive run view should ignore stale refresh messages without rescheduling")
+	}
+}
+
+func TestModel_Update_InactivePulseDoesNotRescheduleOrAdvance(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList)
+	m.active = false
+	m.running = false
+	m.pulsePhase = 1.25
+
+	_, cmd := m.Update(tuistyle.PulseMsg{})
+	if cmd != nil {
+		t.Fatal("inactive run view should ignore stale pulse messages without rescheduling")
+	}
+	if m.pulsePhase != 1.25 {
+		t.Fatalf("pulsePhase = %v, want 1.25", m.pulsePhase)
 	}
 }
 

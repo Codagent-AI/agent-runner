@@ -26,8 +26,26 @@ profiles:
         cli: cursor
         model: auto
         effort: low
+      opencode_headless_smoke:
+        extends: headless_base
+        cli: opencode
+        effort: low
       codex_interactive_smoke:
         extends: interactive_base
         cli: codex
         model: gpt-5.4-mini
+        effort: low
+      copilot_interactive_smoke:
+        extends: interactive_base
+        cli: copilot
+        model: gpt-5.4-mini
+        effort: low
+      cursor_interactive_smoke:
+        extends: interactive_base
+        cli: cursor
+        model: auto
+        effort: low
+      opencode_interactive_smoke:
+        extends: interactive_base
+        cli: opencode
         effort: low
