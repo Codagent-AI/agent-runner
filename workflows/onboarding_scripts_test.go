@@ -27,6 +27,18 @@ Run /login first.
 	}
 }
 
+func TestOnboardingCountListOmitsTrailingNewline(t *testing.T) {
+	cmd := exec.Command("sh", filepath.Join("onboarding", "count-list.sh"))
+	cmd.Stdin = strings.NewReader(`{"items":[]}`)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("count-list failed: %v\n%s", err, out)
+	}
+	if got := string(out); got != "0" {
+		t.Fatalf("count-list output = %q, want %q", got, "0")
+	}
+}
+
 func runModelsForCLIWithClaudeOutput(t *testing.T, claudeOutput string) string {
 	t.Helper()
 

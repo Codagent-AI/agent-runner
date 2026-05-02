@@ -1,3 +1,3 @@
 #!/bin/bash
 set -euo pipefail
-jq -r '.items | length' </dev/stdin
+jq -rj '.items | length' </dev/stdin

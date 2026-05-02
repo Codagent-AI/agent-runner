@@ -1,6 +1,9 @@
 package exec
 
 import (
+	"time"
+
+	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/model"
 )
 
@@ -25,7 +28,7 @@ func DispatchStep(
 	}
 
 	if len(step.Steps) > 0 {
-		return executeGroupStep(step.Steps, ctx, runner, glob, log)
+		return executeGroupStep(step, step.Steps, ctx, runner, glob, log)
 	}
 
 	if step.Command != "" {
@@ -88,25 +91,33 @@ func hasBreakCondition(steps []model.Step) bool {
 }
 
 func executeGroupStep(
+	step *model.Step,
 	steps []model.Step,
 	ctx *model.ExecutionContext,
 	runner ProcessRunner,
 	glob GlobExpander,
 	log Logger,
 ) (StepOutcome, error) {
+	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
+	startTime := time.Now()
+	emitStepStart(ctx, prefix, startTime, nil)
 	for i := range steps {
 		outcome, err := DispatchStep(&steps[i], ctx, runner, glob, log)
 		if err != nil {
+			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), map[string]any{"error": err.Error()})
 			return OutcomeFailed, err
 		}
 		if outcome == OutcomeAborted {
+			emitStepEnd(ctx, prefix, startTime, string(OutcomeAborted), nil)
 			return OutcomeAborted, nil
 		}
 		o := string(outcome)
 		ctx.LastStepOutcome = &o
 		if outcome == OutcomeFailed && !steps[i].ContinueOnFailure {
+			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), nil)
 			return OutcomeFailed, nil
 		}
 	}
+	emitStepEnd(ctx, prefix, startTime, string(OutcomeSuccess), nil)
 	return OutcomeSuccess, nil
 }

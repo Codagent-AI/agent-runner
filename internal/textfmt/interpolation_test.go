@@ -169,6 +169,20 @@ func TestInterpolateShellSafe(t *testing.T) {
 	})
 }
 
+func TestInterpolateShellSafeTypedPreservesCapturedWhitespace(t *testing.T) {
+	captures := map[string]model.CapturedValue{
+		"value": model.NewCapturedString("  padded\n"),
+	}
+
+	result, err := InterpolateShellSafeTyped("printf %s {{value}}", nil, captures, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "printf %s '  padded\n'" {
+		t.Fatalf("InterpolateShellSafeTyped() = %q", result)
+	}
+}
+
 func TestInterpolateTyped(t *testing.T) {
 	captures := map[string]model.CapturedValue{
 		"profile": {Kind: model.CaptureMap, Map: map[string]string{"adapter": "claude", "model": "opus"}},

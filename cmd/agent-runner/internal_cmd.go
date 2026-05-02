@@ -190,12 +190,23 @@ func yamlScalar(value string) *yaml.Node {
 
 func writeAtomic0600(path string, payload []byte) error {
 	dir := filepath.Dir(path)
-	// #nosec G301 -- onboarding spec requires the parent directory to be 0755.
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create parent directory %s: %w", dir, err)
-	}
-	if err := os.Chmod(dir, 0o755); err != nil {
-		return fmt.Errorf("chmod parent directory %s: %w", dir, err)
+	info, err := os.Stat(dir)
+	switch {
+	case err == nil:
+		if !info.IsDir() {
+			return fmt.Errorf("parent path %s is not a directory", dir)
+		}
+	case os.IsNotExist(err):
+		// #nosec G301 -- onboarding spec requires newly-created config dirs to be shareable/traversable.
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create parent directory %s: %w", dir, err)
+		}
+		// #nosec G302 -- only normalizes a newly-created config directory.
+		if err := os.Chmod(dir, 0o755); err != nil {
+			return fmt.Errorf("chmod parent directory %s: %w", dir, err)
+		}
+	default:
+		return fmt.Errorf("stat parent directory %s: %w", dir, err)
 	}
 	tmp, err := os.CreateTemp(dir, ".agent-runner-*.tmp")
 	if err != nil {

@@ -190,6 +190,29 @@ func TestWriteProfileCommandRoundTripCreates0600File(t *testing.T) {
 	}
 }
 
+func TestWriteProfileCommandDoesNotRelaxExistingParentDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), ".agent-runner")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("create parent dir: %v", err)
+	}
+	target := filepath.Join(dir, "config.yaml")
+	stdin := strings.NewReader(`{"interactive_cli":"claude","headless_cli":"codex","target_path":` + quoteJSON(target) + `}`)
+	var stderr bytes.Buffer
+
+	code := handleInternalWithIO([]string{"write-profile"}, stdin, &stderr)
+	if code != 0 {
+		t.Fatalf("handleInternalWithIO() = %d, stderr: %s", code, stderr.String())
+	}
+
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat parent dir: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("target dir mode = %v, want preserved 0700", got)
+	}
+}
+
 func quoteJSON(s string) string {
 	return `"` + strings.ReplaceAll(s, `\`, `\\`) + `"`
 }
