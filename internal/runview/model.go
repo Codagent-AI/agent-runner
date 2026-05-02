@@ -550,7 +550,8 @@ func (m *Model) handleRefreshMsg() tea.Cmd {
 	if m.autoFollow {
 		m.logOffset = math.MaxInt32
 	}
-	m.rebuildRanges()
+	lineCount := m.rebuildRanges()
+	m.clampLogOffset(lineCount)
 	if !m.hasLiveUpdates() {
 		return nil
 	}
