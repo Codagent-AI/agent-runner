@@ -40,10 +40,12 @@ func buildUIRequest(step *model.Step, ctx *model.ExecutionContext) (model.UIStep
 	if err != nil {
 		return model.UIStepRequest{}, err
 	}
+	title = textfmt.StripANSI(title)
 	body, err := textfmt.InterpolateTyped(step.Body, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(step.ID))
 	if err != nil {
 		return model.UIStepRequest{}, err
 	}
+	body = textfmt.StripANSI(body)
 	inputs := make([]model.UIInput, len(step.Inputs))
 	for i, input := range step.Inputs {
 		inputs[i] = input
@@ -53,6 +55,9 @@ func buildUIRequest(step *model.Step, ctx *model.ExecutionContext) (model.UIStep
 		}
 		if len(options) == 0 {
 			return model.UIStepRequest{}, fmt.Errorf("no options available for %s", input.ID)
+		}
+		for j := range options {
+			options[j] = textfmt.StripANSI(options[j])
 		}
 		inputs[i].Options = options
 	}
