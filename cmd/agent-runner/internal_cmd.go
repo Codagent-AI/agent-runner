@@ -194,6 +194,9 @@ func writeAtomic0600(path string, payload []byte) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create parent directory %s: %w", dir, err)
 	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		return fmt.Errorf("chmod parent directory %s: %w", dir, err)
+	}
 	tmp, err := os.CreateTemp(dir, ".agent-runner-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create temporary file in %s: %w", dir, err)
