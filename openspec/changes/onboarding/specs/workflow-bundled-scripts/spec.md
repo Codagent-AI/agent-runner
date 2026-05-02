@@ -69,23 +69,19 @@ When the containing workflow is part of the embedded builtin set, the runner SHA
 
 ### Requirement: Execution mechanism and lifecycle
 
-The runner SHALL execute the script directly via its shebang (or platform-equivalent execution path). Embedded scripts SHALL be materialized to a temporary file with mode `0o700` in the OS temp directory before execution; user-authored scripts execute from disk in place. The runner SHALL clean up materialized temp files on workflow completion, on failure, and on signal-driven termination (SIGINT, SIGTERM).
+The runner SHALL execute the script directly via its shebang (or platform-equivalent execution path). Embedded scripts SHALL be materialized to the run's session directory under `bundled/<namespace>/` with mode `0o700` before execution; user-authored scripts execute from disk in place. The materialized files persist for the lifetime of the run session (surviving crash and resume). On resume, if the bundled directory is missing, the runner SHALL re-materialize from the embedded FS before executing further steps.
 
 #### Scenario: Embedded script materialized with restrictive permissions
 - **WHEN** an embedded script is about to execute
-- **THEN** the runner writes it to a temp file with mode `0o700` and exec's that path
+- **THEN** the runner writes it to `sessionDir/bundled/<namespace>/<script>` with mode `0o700` and exec's that path
 
-#### Scenario: Temp file removed after successful run
-- **WHEN** an embedded script executes and the workflow completes
-- **THEN** the temp file no longer exists on disk
+#### Scenario: Materialized scripts persist across resume
+- **WHEN** the runner resumes a workflow that uses embedded scripts and the bundled directory exists
+- **THEN** the scripts are already available at their materialized paths and the runner does not re-write them
 
-#### Scenario: Temp file removed after script failure
-- **WHEN** an embedded script exits non-zero
-- **THEN** the temp file is removed before the runner records the step failure
-
-#### Scenario: Temp file removed on signal
-- **WHEN** the runner receives SIGINT while an embedded script is executing
-- **THEN** the temp file is removed before process exit
+#### Scenario: Re-materialization on missing bundled directory
+- **WHEN** the runner resumes a workflow that uses embedded scripts and the bundled directory is missing (e.g., manually deleted)
+- **THEN** the runner re-materializes the scripts from the embedded FS before continuing execution
 
 ### Requirement: Working directory
 

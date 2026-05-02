@@ -1,6 +1,6 @@
 ## MODIFIED Requirements
 
-### Requirement: Stdout capture (broadened from shell-only)
+### Requirement: Shell stdout capture
 
 A shell, script, or `mode: ui` step MAY have a `capture` field. When set, the runner SHALL capture the step's output into a named variable available to subsequent steps via `{{var_name}}` interpolation (or `{{var_name.field}}` for map-typed captures).
 
@@ -8,7 +8,7 @@ A shell, script, or `mode: ui` step MAY have a `capture` field. When set, the ru
 - **Script steps**: capture stdout per the rules in `workflow-bundled-scripts` — string by default; `capture_format: json` produces a typed list-of-strings or map-of-strings.
 - **UI steps**: capture per the rules in `ui-step` — a map keyed by input id when `inputs` are declared; rejected when no inputs are declared.
 
-The `capture` field SHALL fail at load time on agent steps (interactive or headless).
+The `capture` field SHALL fail at load time on interactive agent steps. Headless agent steps MAY use `capture` (preserving existing behavior).
 
 #### Scenario: Shell capture stores stdout as string
 - **WHEN** a shell step has `capture: validator_output` and produces stdout `tests passed`
@@ -26,9 +26,13 @@ The `capture` field SHALL fail at load time on agent steps (interactive or headl
 - **WHEN** a step references `{{validator_output}}` but no prior step captured into that variable
 - **THEN** the runner fails with a descriptive error naming the undefined variable
 
-#### Scenario: Capture on agent step rejected
-- **WHEN** an agent step (interactive or headless) has a `capture` field
-- **THEN** the runner fails at load time with a validation error indicating that `capture` is not valid on agent steps
+#### Scenario: Capture on interactive agent step rejected
+- **WHEN** an interactive agent step has a `capture` field
+- **THEN** the runner fails at load time with a validation error indicating that `capture` is not valid on interactive agent steps
+
+#### Scenario: Capture on headless agent step accepted
+- **WHEN** a headless agent step has `capture: agent_output`
+- **THEN** validation succeeds; the captured value is a string (stdout of the agent process)
 
 #### Scenario: Capture on script step accepted
 - **WHEN** a script step declares `capture: out`

@@ -14,15 +14,19 @@ The editor SHALL write exactly four agent entries under `profiles.default.agents
 
 ### Requirement: User chooses CLI and model for each base agent
 
-The editor SHALL prompt the user to choose a CLI adapter and a model for `interactive_base`, and separately for `headless_base`. CLI options SHALL be drawn at runtime from the bundled adapter-detection script's output (the list of CLIs available on the host's `$PATH`). Model options SHALL be drawn from a curated per-adapter list bundled with the editor; the user SHALL only see models valid for the CLI they just chose.
+The editor SHALL prompt the user to choose a CLI adapter and a model for `interactive_base`, and separately for `headless_base`. CLI options SHALL be drawn at runtime from the bundled adapter-detection script's output (the list of CLIs available on the host's `$PATH`). Model options SHALL be discovered at runtime by querying the chosen CLI adapter for available models. When the CLI does not support model listing (the discovery script returns an empty list), the model selection step SHALL be skipped and the model field SHALL be written as empty (meaning "adapter default").
 
 #### Scenario: CLI options reflect detected adapters
 - **WHEN** the host has `claude` and `codex` on `$PATH` but not `cursor`
 - **THEN** the CLI selection screens for both `interactive_base` and `headless_base` present `claude` and `codex` as the only options
 
 #### Scenario: Model options reflect chosen CLI
-- **WHEN** the user picks `cli: claude` for interactive_base
-- **THEN** the next screen presents only the curated model list for `claude`, not models specific to other CLIs
+- **WHEN** the user picks `cli: claude` for interactive_base and the model discovery script returns `["opus", "sonnet", "haiku"]`
+- **THEN** the next screen presents only those discovered models
+
+#### Scenario: Model discovery returns empty
+- **WHEN** the user picks a CLI adapter whose model discovery returns an empty list
+- **THEN** the model selection step is skipped and the model field is written as empty
 
 #### Scenario: No detected adapters
 - **WHEN** adapter detection returns an empty list

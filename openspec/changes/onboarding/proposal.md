@@ -79,7 +79,7 @@ The change adds two new step primitives (`mode: ui` and `script:`) and reuses ev
 
 - Phases 3–7: step-types demo, guided real workflow, validator setup, validation run, advanced + help screens, tutorial agent, help agent.
 - Listview / main-menu integration for onboarding (replay UI, "continue onboarding" entry). `agent-runner run onboarding:welcome` is the only re-entry path until that lands.
-- Runtime model discovery (querying an adapter for its supported models). Phase 2 uses a static curated list per adapter.
+- Full model-catalog integration (paginated model lists, model metadata). Phase 2 queries adapters for their model list at runtime but does not support pagination or model details beyond the name.
 - Multi-profile-per-session and `extends` editing in the UI editor. One editor session writes one profile.
 - Step-internal branching on `mode: ui` actions beyond what `skip_if` / `break_if` already supports.
 - Secrets in UI inputs (no redaction in this version).
