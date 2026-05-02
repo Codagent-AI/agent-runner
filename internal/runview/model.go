@@ -364,16 +364,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case deferredAltScreenMsg:
-		if !m.altScreen && !m.suppressAltScreen {
-			m.altScreen = true
-			return m, tea.Batch(tea.EnterAltScreen, tea.EnableMouseCellMotion)
-		}
-		return m, nil
+		cmd := m.handleDeferredAltScreen()
+		return m, cmd
 
 	case copyNoticeExpiredMsg:
-		if msg.seq == m.copyNoticeSeq && m.notice == "copied selected step detail" {
-			m.notice = ""
-		}
+		m.handleCopyNoticeExpired(msg)
 		return m, nil
 
 	case liverun.ShowTUIMsg:
@@ -654,9 +649,24 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.handleLoadFull()
 		m.rebuildRanges()
 	case "c":
-		return m, m.handleCopySelectedDetail()
+		cmd := m.handleCopySelectedDetail()
+		return m, cmd
 	}
 	return m, nil
+}
+
+func (m *Model) handleDeferredAltScreen() tea.Cmd {
+	if !m.altScreen && !m.suppressAltScreen {
+		m.altScreen = true
+		return tea.Batch(tea.EnterAltScreen, tea.EnableMouseCellMotion)
+	}
+	return nil
+}
+
+func (m *Model) handleCopyNoticeExpired(msg copyNoticeExpiredMsg) {
+	if msg.seq == m.copyNoticeSeq && m.notice == "copied selected step detail" {
+		m.notice = ""
+	}
 }
 
 func (m *Model) handleCopySelectedDetail() tea.Cmd {
