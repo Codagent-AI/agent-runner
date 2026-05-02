@@ -31,7 +31,7 @@ There are many YAML-based workflow engines (Argo, Kestra, Step Functions) and CL
 
 ```bash
 brew tap Codagent-AI/tap
-brew install agent-runner
+brew install --cask agent-runner
 ```
 
 ### From source
