@@ -17,6 +17,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-isatty"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/discovery"
@@ -138,6 +139,42 @@ func (r *realProcessRunner) RunAgent(args []string, captureStdout bool, workdir 
 	return iexec.ProcessResult{ExitCode: exitCode}, nil
 }
 
+func (r *realProcessRunner) RunScript(path string, stdin []byte, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
+	c := exec.Command(path) // #nosec G204 -- workflow script path is validated by executor
+	c.Stdin = bytes.NewReader(stdin)
+	if workdir != "" {
+		c.Dir = filepath.Clean(workdir) // #nosec G304
+	}
+
+	var stderrBuf bytes.Buffer
+	if captureStdout {
+		c.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
+		out, err := c.Output()
+		exitCode := 0
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+			} else {
+				return iexec.ProcessResult{}, err
+			}
+		}
+		return iexec.ProcessResult{ExitCode: exitCode, Stdout: strings.TrimSpace(string(out)), Stderr: strings.TrimSpace(stderrBuf.String())}, nil
+	}
+
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	err := c.Run()
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			return iexec.ProcessResult{}, err
+		}
+	}
+	return iexec.ProcessResult{ExitCode: exitCode}, nil
+}
+
 // realGlobExpander implements exec.GlobExpander using filepath.Glob.
 type realGlobExpander struct{}
 
@@ -165,6 +202,10 @@ func main() {
 }
 
 func run() int {
+	if len(os.Args) > 1 && os.Args[1] == "internal" {
+		return handleInternal(os.Args[2:])
+	}
+
 	chdirFlag := flag.String("C", "", "Change to `directory` before doing anything")
 	resumeFlag := flag.Bool("resume", false, "Resume an interrupted workflow (optionally followed by session ID)")
 	listFlag := flag.Bool("list", false, "Launch the run list TUI")
@@ -369,6 +410,9 @@ func handleListWithTab(initialTab listview.InitialTab) int {
 	}
 
 	if code := ensureThemeForTUI(defaultThemeDeps); code != 0 {
+		return code
+	}
+	if code := ensureOnboardingForTUI(defaultOnboardingDeps); code != 0 {
 		return code
 	}
 
@@ -1131,6 +1175,42 @@ func ensureThemeForTUI(deps themeDeps) int {
 
 func applyTheme(theme usersettings.Theme) {
 	lipgloss.SetHasDarkBackground(theme == usersettings.ThemeDark)
+}
+
+type onboardingDeps struct {
+	load        func() (usersettings.Settings, error)
+	isStdinTTY  func() bool
+	isStdoutTTY func() bool
+	runWorkflow func(ref string) int
+}
+
+var defaultOnboardingDeps = onboardingDeps{
+	load:        usersettings.Load,
+	isStdinTTY:  func() bool { return isatty.IsTerminal(os.Stdin.Fd()) },
+	isStdoutTTY: func() bool { return isatty.IsTerminal(os.Stdout.Fd()) },
+	runWorkflow: func(ref string) int {
+		return handleRun([]string{ref})
+	},
+}
+
+func ensureOnboardingForTUI(deps onboardingDeps) int {
+	settings, err := deps.load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+	if settings.Onboarding.CompletedAt != "" || settings.Onboarding.Dismissed != "" {
+		return 0
+	}
+	if !deps.isStdinTTY() || !deps.isStdoutTTY() {
+		return 0
+	}
+	ref, err := builtinworkflows.Resolve("onboarding:welcome")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+	return deps.runWorkflow(ref)
 }
 
 // parseParams separates positional args from key=value pairs.

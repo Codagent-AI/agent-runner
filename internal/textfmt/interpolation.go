@@ -1,12 +1,13 @@
 package textfmt
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
 )
 
-var placeholderRe = regexp.MustCompile(`\{\{(\w+)\}\}`)
+var placeholderRe = regexp.MustCompile(`\{\{(\w+(?:\.\w+)?)\}\}`)
 
 // Interpolate replaces {{variable}} placeholders in a template string.
 // Precedence, lowest to highest: builtins, params, capturedVars.
@@ -28,6 +29,18 @@ func Interpolate(template string, params, capturedVars, builtins map[string]stri
 	result := placeholderRe.ReplaceAllStringFunc(template, func(match string) string {
 		key := placeholderRe.FindStringSubmatch(match)[1]
 		value, ok := merged[key]
+		if !ok && strings.Contains(key, ".") {
+			parts := strings.SplitN(key, ".", 2)
+			raw, rawOK := capturedVars[parts[0]]
+			if rawOK {
+				var fields map[string]string
+				if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+					errFound = fmt.Errorf("variable {{%s}} is not a map capture", parts[0])
+					return match
+				}
+				value, ok = fields[parts[1]]
+			}
+		}
 		if !ok {
 			errFound = fmt.Errorf("undefined variable: {{%s}}", key)
 			return match

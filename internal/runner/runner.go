@@ -58,6 +58,8 @@ type Options struct {
 	// argument is true when the step will be interactive. Used by the TUI
 	// coordinator to manage terminal state transitions without flicker.
 	PrepareStepHook func(interactive bool)
+
+	UIStepHandler func(model.UIStepRequest) (model.UIStepResult, error)
 }
 
 // RunHandle is returned by PrepareRun and PrepareResume. It holds all state
@@ -282,6 +284,7 @@ func buildExecutionContext(workflow *model.Workflow, params map[string]string, o
 		AuditLogger:         auditEventLogger,
 		NamedSessions:       opts.NamedSessions,
 		NamedSessionDecls:   opts.NamedSessionDecls,
+		UIStepHandler:       opts.UIStepHandler,
 	})
 	if opts.ChildState != nil {
 		ctx.ResumeChildState = opts.ChildState
@@ -512,6 +515,9 @@ func ExecuteFromHandle(h *RunHandle, opts *Options) WorkflowResult {
 		}
 		if opts.PrepareStepHook != nil {
 			h.rs.ctx.PrepareStepHook = opts.PrepareStepHook
+		}
+		if opts.UIStepHandler != nil {
+			h.rs.ctx.UIStepHandler = opts.UIStepHandler
 		}
 	}
 	result := executeSteps(h.rs, h.startIndex)

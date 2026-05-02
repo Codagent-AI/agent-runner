@@ -35,6 +35,20 @@ func DispatchStep(
 		return ExecuteShellStep(step, ctx, runner, log)
 	}
 
+	if step.Script != "" {
+		if ctx.PrepareStepHook != nil {
+			ctx.PrepareStepHook(false)
+		}
+		return ExecuteScriptStep(step, ctx, runner, log)
+	}
+
+	if step.Mode == model.ModeUI {
+		if ctx.PrepareStepHook != nil {
+			ctx.PrepareStepHook(true)
+		}
+		return ExecuteUIStep(step, ctx, log)
+	}
+
 	if step.Agent != "" || step.Prompt != "" {
 		if ctx.PrepareStepHook != nil {
 			mode := ResolveAgentStepMode(step, ctx)

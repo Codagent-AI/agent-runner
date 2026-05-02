@@ -241,3 +241,37 @@ func (r *tuiProcessRunner) RunAgent(args []string, captureStdout bool, workdir s
 		Stderr:   stderrBuf.String(),
 	}, nil
 }
+
+func (r *tuiProcessRunner) RunScript(path string, stdin []byte, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
+	c := exec.Command(path) // #nosec G204
+	c.Stdin = bytes.NewReader(stdin)
+	if workdir != "" {
+		c.Dir = filepath.Clean(workdir) // #nosec G304
+	}
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	stdoutW, stdoutCleanup := r.compositeWriter("stdout", "out", &stdoutBuf)
+	stderrW, stderrCleanup := r.compositeWriter("stderr", "err", &stderrBuf)
+	defer stdoutCleanup()
+	defer stderrCleanup()
+
+	c.Stdout = stdoutW
+	c.Stderr = stderrW
+
+	err := c.Run()
+	exitCode := 0
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		} else {
+			return iexec.ProcessResult{}, err
+		}
+	}
+
+	stdout := strings.TrimSpace(stdoutBuf.String())
+	if !captureStdout {
+		stdout = ""
+	}
+	return iexec.ProcessResult{ExitCode: exitCode, Stdout: stdout, Stderr: strings.TrimSpace(stderrBuf.String())}, nil
+}

@@ -80,6 +80,8 @@ type ExecutionContext struct {
 	// coordinator to defer or suppress terminal restore between consecutive
 	// interactive steps.
 	PrepareStepHook func(interactive bool)
+
+	UIStepHandler func(UIStepRequest) (UIStepResult, error)
 }
 
 // RootContextOptions configures a new root execution context.
@@ -97,6 +99,7 @@ type RootContextOptions struct {
 	AuditLogger         audit.EventLogger
 	NamedSessions       map[string]string
 	NamedSessionDecls   map[string]string
+	UIStepHandler       func(UIStepRequest) (UIStepResult, error)
 }
 
 // NewRootContext creates a top-level execution context.
@@ -148,6 +151,7 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		AuditLogger:         opts.AuditLogger,
 		NamedSessions:       namedSessions,
 		NamedSessionDecls:   namedSessionDecls,
+		UIStepHandler:       opts.UIStepHandler,
 	}
 }
 
@@ -234,6 +238,7 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		SuspendHook:         parent.SuspendHook,
 		ResumeHook:          parent.ResumeHook,
 		PrepareStepHook:     parent.PrepareStepHook,
+		UIStepHandler:       parent.UIStepHandler,
 		// Named session maps are shared by reference so writes from any child
 		// are immediately visible to parents and sibling sub-workflows.
 		NamedSessions:     parent.NamedSessions,
@@ -303,6 +308,7 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		SuspendHook:         parent.SuspendHook,
 		ResumeHook:          parent.ResumeHook,
 		PrepareStepHook:     parent.PrepareStepHook,
+		UIStepHandler:       parent.UIStepHandler,
 		// Named session maps are shared by reference so writes from a child
 		// sub-workflow are immediately visible to the parent and later siblings.
 		NamedSessions:     parent.NamedSessions,
