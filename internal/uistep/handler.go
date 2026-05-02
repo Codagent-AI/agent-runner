@@ -183,11 +183,12 @@ func (m *uiModel) View() string {
 	for idx, input := range m.req.Inputs {
 		fmt.Fprintf(&b, "%s:\n", inputPromptStyle.Render(input.Prompt))
 		for i, opt := range input.Options {
-			if idx == m.focus && i == m.selections[idx] {
+			switch {
+			case idx == m.focus && i == m.selections[idx]:
 				fmt.Fprintf(&b, "  ▶ %s\n", opt)
-			} else if i == m.selections[idx] {
+			case i == m.selections[idx]:
 				fmt.Fprintf(&b, "  • %s\n", opt)
-			} else {
+			default:
 				fmt.Fprintf(&b, "    %s\n", opt)
 			}
 		}

@@ -514,10 +514,6 @@ type liveTUIOptions struct {
 	quitOnDone bool
 }
 
-func runLiveTUI(h *runner.RunHandle) int {
-	return runLiveTUIWithOptions(h, liveTUIOptions{})
-}
-
 func runLiveTUIWithOptions(h *runner.RunHandle, opts liveTUIOptions) int {
 	rv, err := runview.New(h.SessionDir, h.ProjectDir, runview.FromLiveRun)
 	if err != nil {
@@ -1293,7 +1289,8 @@ func findIncompleteOnboardingRun() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for _, info := range infos {
+	for i := range infos {
+		info := &infos[i]
 		if info.Status == runs.StatusCompleted {
 			continue
 		}
