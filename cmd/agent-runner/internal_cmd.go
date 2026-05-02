@@ -104,10 +104,22 @@ func writeProfile(payload *writeProfilePayload) error {
 }
 
 func mergeProfileAgents(doc *yaml.Node, payload *writeProfilePayload) error {
-	root := documentMapping(doc)
-	profiles := ensureMapping(root, "profiles")
-	def := ensureMapping(profiles, "default")
-	agents := ensureMapping(def, "agents")
+	root, err := documentMapping(doc)
+	if err != nil {
+		return err
+	}
+	profiles, err := ensureMapping(root, "profiles", "profiles")
+	if err != nil {
+		return err
+	}
+	def, err := ensureMapping(profiles, "default", "profiles.default")
+	if err != nil {
+		return err
+	}
+	agents, err := ensureMapping(def, "agents", "profiles.default.agents")
+	if err != nil {
+		return err
+	}
 
 	setMapping(agents, "interactive_base", map[string]string{
 		"default_mode": "interactive",
@@ -124,28 +136,34 @@ func mergeProfileAgents(doc *yaml.Node, payload *writeProfilePayload) error {
 	return nil
 }
 
-func documentMapping(doc *yaml.Node) *yaml.Node {
-	if doc.Kind != yaml.DocumentNode {
+func documentMapping(doc *yaml.Node) (*yaml.Node, error) {
+	if doc.Kind == 0 {
 		doc.Kind = yaml.DocumentNode
 	}
-	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+	if doc.Kind != yaml.DocumentNode {
+		return nil, fmt.Errorf("config root must be a mapping")
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind == 0 {
 		doc.Content = []*yaml.Node{{Kind: yaml.MappingNode}}
 	}
-	return doc.Content[0]
+	if doc.Content[0].Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("config root must be a mapping")
+	}
+	return doc.Content[0], nil
 }
 
-func ensureMapping(root *yaml.Node, key string) *yaml.Node {
+func ensureMapping(root *yaml.Node, key, path string) (*yaml.Node, error) {
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		if root.Content[i].Value == key {
 			if root.Content[i+1].Kind != yaml.MappingNode {
-				root.Content[i+1] = &yaml.Node{Kind: yaml.MappingNode}
+				return nil, fmt.Errorf("%s must be a mapping", path)
 			}
-			return root.Content[i+1]
+			return root.Content[i+1], nil
 		}
 	}
 	value := &yaml.Node{Kind: yaml.MappingNode}
 	root.Content = append(root.Content, yamlScalar(key), value)
-	return value
+	return value, nil
 }
 
 func setMapping(root *yaml.Node, key string, values map[string]string) {

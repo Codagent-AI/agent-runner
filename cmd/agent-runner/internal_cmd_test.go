@@ -98,6 +98,64 @@ other_top_level: true
 	}
 }
 
+func TestMergeProfileAgentsRejectsNonMappingDocumentRoot(t *testing.T) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte("- not\n- a\n- mapping\n"), &doc); err != nil {
+		t.Fatalf("unmarshal input: %v", err)
+	}
+
+	err := mergeProfileAgents(&doc, &writeProfilePayload{
+		InteractiveCLI: "claude",
+		HeadlessCLI:    "codex",
+		TargetPath:     "ignored.yaml",
+	})
+	if err == nil || !strings.Contains(err.Error(), "config root must be a mapping") {
+		t.Fatalf("mergeProfileAgents() error = %v, want config root mapping error", err)
+	}
+}
+
+func TestMergeProfileAgentsRejectsNonMappingProfilePath(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr string
+	}{
+		{
+			name:    "profiles",
+			input:   "profiles: disabled\n",
+			wantErr: "profiles must be a mapping",
+		},
+		{
+			name:    "default",
+			input:   "profiles:\n  default: []\n",
+			wantErr: "profiles.default must be a mapping",
+		},
+		{
+			name:    "agents",
+			input:   "profiles:\n  default:\n    agents: false\n",
+			wantErr: "profiles.default.agents must be a mapping",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var doc yaml.Node
+			if err := yaml.Unmarshal([]byte(tt.input), &doc); err != nil {
+				t.Fatalf("unmarshal input: %v", err)
+			}
+
+			err := mergeProfileAgents(&doc, &writeProfilePayload{
+				InteractiveCLI: "claude",
+				HeadlessCLI:    "codex",
+				TargetPath:     "ignored.yaml",
+			})
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("mergeProfileAgents() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestWriteProfileCommandRoundTripCreates0600File(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "home", ".agent-runner", "config.yaml")
 	stdin := strings.NewReader(`{"interactive_cli":"claude","interactive_model":"opus","headless_cli":"codex","headless_model":"gpt-5","target_path":` + quoteJSON(target) + `}`)
