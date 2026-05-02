@@ -269,6 +269,60 @@ func TestModel_GKey_NoOp(t *testing.T) {
 	}
 }
 
+func TestModel_C_CopiesSelectedStepDetail(t *testing.T) {
+	tree := simpleTree()
+	tree.Root.Children[0].Stdout = "build ok\nnext line"
+	m := newTestModel(tree, FromList)
+	m.cursor = 0
+
+	var copied string
+	oldWrite := writeClipboard
+	writeClipboard = func(text string) error {
+		copied = text
+		return nil
+	}
+	defer func() { writeClipboard = oldWrite }()
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	if cmd != nil {
+		t.Fatalf("copy should not emit a command, got %v", cmd)
+	}
+
+	if copied == "" {
+		t.Fatal("expected selected step detail to be copied")
+	}
+	for _, want := range []string{"build", "$ go build ./...", "stdout:", "build ok", "next line"} {
+		if !strings.Contains(copied, want) {
+			t.Fatalf("copied detail missing %q:\n%s", want, copied)
+		}
+	}
+	if strings.Contains(copied, "\x1b[") {
+		t.Fatalf("copied detail should be plain text, got ANSI escape in %q", copied)
+	}
+	if m.notice != "copied selected step detail" {
+		t.Fatalf("notice = %q, want copy success notice", m.notice)
+	}
+	if help := m.renderHelpBar(); !strings.Contains(help, "c copy") {
+		t.Fatalf("help bar should advertise copy key, got %q", help)
+	}
+}
+
+func TestModel_C_ShowsNoticeWhenClipboardWriteFails(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList)
+
+	oldWrite := writeClipboard
+	writeClipboard = func(string) error {
+		return errors.New("clipboard unavailable")
+	}
+	defer func() { writeClipboard = oldWrite }()
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+
+	if !strings.Contains(m.notice, "copy failed: clipboard unavailable") {
+		t.Fatalf("notice = %q, want clipboard failure notice", m.notice)
+	}
+}
+
 // r on an inactive run emits ResumeRunMsg.
 func TestModel_R_InactiveRun_EmitsResumeRunMsg(t *testing.T) {
 	tree := simpleTree()

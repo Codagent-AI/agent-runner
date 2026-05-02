@@ -417,6 +417,8 @@ func (m *Model) renderHelpBar() string {
 		parts = append(parts, "g full output")
 	}
 
+	parts = append(parts, "c copy")
+
 	if !m.autoFollow {
 		parts = append(parts, "l follow")
 	}

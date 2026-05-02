@@ -645,8 +645,53 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "g":
 		m.handleLoadFull()
 		m.rebuildRanges()
+	case "c":
+		m.handleCopySelectedDetail()
 	}
 	return m, nil
+}
+
+func (m *Model) handleCopySelectedDetail() {
+	text := m.selectedStepDetailText()
+	if text == "" {
+		m.notice = "copy failed: no selected step detail"
+		return
+	}
+	if err := writeClipboard(text); err != nil {
+		m.notice = "copy failed: " + err.Error()
+		return
+	}
+	m.notice = "copied selected step detail"
+}
+
+func (m *Model) selectedStepDetailText() string {
+	selected := m.selectedNode()
+	if selected == nil {
+		return ""
+	}
+	lines, ranges := buildLogLines(
+		m.currentChildren(),
+		m.pendingSelected(),
+		m.rightPaneWidth(),
+		m.loadedFull,
+		m.pulsePhase,
+		m.running || m.active,
+		m.resolverCfg,
+	)
+	for _, r := range ranges {
+		if r.node == selected {
+			return plainTextLines(lines[r.startLine:r.endLine])
+		}
+	}
+	return ""
+}
+
+func plainTextLines(lines []string) string {
+	plain := make([]string, 0, len(lines))
+	for _, line := range lines {
+		plain = append(plain, tuistyle.Sanitize(line))
+	}
+	return strings.TrimRight(strings.Join(plain, "\n"), "\n")
 }
 
 func (m *Model) handleStepNavigation(delta int) tea.Cmd {

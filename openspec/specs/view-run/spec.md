@@ -208,6 +208,18 @@ Shell stdout or stderr exceeding 2000 lines or 256 KB (whichever comes first) SH
 - **WHEN** the user presses the load-full key while viewing a truncated output
 - **THEN** the detail pane loads and displays the full output
 
+### Requirement: Copy selected step detail
+The run view SHALL provide a `c` keybinding that copies the currently selected step's rendered detail block to the system clipboard as plain text with terminal styling removed. The copied text SHALL match the same detail content the run view renders for that step at the current drill-in level, including the current lazy-loading state for large output. On successful copy, the run view SHALL show a transient notice indicating that the selected step detail was copied. If the clipboard write fails, the run view SHALL show a transient notice naming the failure.
+
+#### Scenario: Copy selected step detail
+- **WHEN** the user presses `c` while a step is selected in the run view
+- **THEN** the selected step's detail block is copied to the clipboard as plain text
+- **AND** the help bar advertises `c copy`
+
+#### Scenario: Copy clipboard failure
+- **WHEN** the user presses `c` and the clipboard write fails
+- **THEN** the run view remains open and displays a transient copy failure notice
+
 ### Requirement: Non-UTF8 output handling
 Non-UTF8 bytes in shell stdout or stderr SHALL be rendered by replacing invalid byte sequences with the Unicode replacement character (U+FFFD) before display.
 
