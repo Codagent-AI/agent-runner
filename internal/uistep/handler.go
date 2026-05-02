@@ -11,6 +11,8 @@ import (
 	"github.com/codagent/agent-runner/internal/model"
 )
 
+var titleStyle = lipgloss.NewStyle().Bold(true)
+
 func NewHandler(suspend, resume func()) func(model.UIStepRequest) (model.UIStepResult, error) {
 	return func(req model.UIStepRequest) (model.UIStepResult, error) {
 		if suspend != nil {
@@ -33,26 +35,23 @@ func NewHandler(suspend, resume func()) func(model.UIStepRequest) (model.UIStepR
 }
 
 type uiModel struct {
-	req       model.UIStepRequest
-	cursor    int
-	phase     phase
-	inputs    []int
-	result    model.UIStepResult
-	width     int
-	height    int
+	req    model.UIStepRequest
+	cursor int
+	phase  phase
+	inputs []int
+	result model.UIStepResult
 }
 
 type phase int
 
 const (
-	phaseActions phase = iota
-	phaseInputs
+	phaseInputs phase = iota
+	phaseActions
 )
 
 func newModel(req model.UIStepRequest) uiModel {
 	m := uiModel{
 		req:    req,
-		phase:  phaseInputs,
 		inputs: make([]int, len(req.Inputs)),
 	}
 	if len(req.Inputs) == 0 {
@@ -79,9 +78,6 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			return m.handleSelect()
 		}
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
 	}
 	return m, nil
 }
@@ -135,7 +131,6 @@ func (m uiModel) handleSelect() (tea.Model, tea.Cmd) {
 func (m uiModel) View() string {
 	var b strings.Builder
 
-	titleStyle := lipgloss.NewStyle().Bold(true)
 	b.WriteString(titleStyle.Render(m.req.Title))
 	b.WriteString("\n\n")
 
