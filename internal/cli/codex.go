@@ -19,9 +19,9 @@ type CodexAdapter struct{}
 //
 // Patterns:
 //   - Fresh interactive:  codex --no-alt-screen <prompt>
-//   - Fresh headless:     codex -a never exec --json <prompt>
+//   - Fresh headless:     codex --dangerously-bypass-approvals-and-sandbox exec --json <prompt>
 //   - Resume interactive: codex resume --no-alt-screen <uuid> <prompt>
-//   - Resume headless:    codex -a never exec resume --json <uuid> <prompt>
+//   - Resume headless:    codex --dangerously-bypass-approvals-and-sandbox exec resume --json <uuid> <prompt>
 //   - Model override:     appends -m <m> (fresh sessions only)
 //   - Effort override:    appends -c model_reasoning_effort="<effort>"
 //
@@ -36,7 +36,7 @@ func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 	resuming := input.SessionID != ""
 
 	if input.Headless {
-		args = append(args, "-a", "never", "exec")
+		args = append(args, "--dangerously-bypass-approvals-and-sandbox", "exec")
 		if resuming {
 			args = append(args, "resume", "--json")
 		} else {

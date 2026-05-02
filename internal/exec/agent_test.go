@@ -1004,23 +1004,23 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
-	t.Run("headless codex includes -a never", func(t *testing.T) {
+	t.Run("headless codex includes sandbox bypass", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew, CLI: "codex"}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		args := runner.calls[0]
-		foundApproval := false
-		for i, a := range args {
-			if a == "-a" && i+1 < len(args) && args[i+1] == "never" {
-				foundApproval = true
+		foundBypass := false
+		for _, a := range args {
+			if a == "--dangerously-bypass-approvals-and-sandbox" {
+				foundBypass = true
 			}
 		}
-		if !foundApproval {
-			t.Fatalf("expected -a never for headless codex, got %v", args)
+		if !foundBypass {
+			t.Fatalf("expected sandbox bypass for headless codex, got %v", args)
 		}
 	})
 
-	t.Run("interactive codex does not include -a never", func(t *testing.T) {
+	t.Run("interactive codex does not include permission bypass flags", func(t *testing.T) {
 		var ptyCalls [][]string
 		oldFn := interactiveRunnerFn
 		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
@@ -1035,6 +1035,9 @@ func TestExecuteAgentStep(t *testing.T) {
 		for i, a := range ptyCalls[0] {
 			if a == "-a" && i+1 < len(ptyCalls[0]) && ptyCalls[0][i+1] == "never" {
 				t.Fatalf("did not expect -a never for interactive codex, got %v", ptyCalls[0])
+			}
+			if a == "--dangerously-bypass-approvals-and-sandbox" {
+				t.Fatalf("did not expect sandbox bypass for interactive codex, got %v", ptyCalls[0])
 			}
 		}
 	})
