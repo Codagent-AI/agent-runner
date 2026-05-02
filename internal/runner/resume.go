@@ -50,7 +50,7 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	var fromStep string
 	var sessionIDs map[string]string
 	var sessionProfiles map[string]string
-	var capturedVars map[string]string
+	var capturedVars map[string]model.CapturedValue
 	var lastSessionStepID string
 	var namedSessions map[string]string
 	var namedSessionDecls map[string]string
@@ -123,6 +123,7 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		SuspendHook:       opts.SuspendHook,
 		ResumeHook:        opts.ResumeHook,
 		PrepareStepHook:   opts.PrepareStepHook,
+		UIStepHandler:     opts.UIStepHandler,
 	}
 
 	return PrepareRun(&workflow, state.Params, resumeOpts)

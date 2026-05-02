@@ -18,7 +18,15 @@ const (
 )
 
 type Settings struct {
-	Theme Theme
+	Theme      Theme
+	Onboarding OnboardingSettings
+
+	raw string
+}
+
+type OnboardingSettings struct {
+	CompletedAt string `yaml:"completed_at,omitempty"`
+	Dismissed   string `yaml:"dismissed,omitempty"`
 }
 
 var (
@@ -74,23 +82,37 @@ func Load() (Settings, error) {
 		return Settings{}, nil
 	}
 
+	settings := Settings{raw: string(body)}
 	for i := 0; i+1 < len(yamlRoot.Content); i += 2 {
 		key := yamlRoot.Content[i]
 		value := yamlRoot.Content[i+1]
-		if key.Value != "theme" || value.Kind != yaml.ScalarNode {
+		if key.Value == "theme" && value.Kind == yaml.ScalarNode {
+			switch Theme(value.Value) {
+			case ThemeLight:
+				settings.Theme = ThemeLight
+			case ThemeDark:
+				settings.Theme = ThemeDark
+			}
 			continue
 		}
-		switch Theme(value.Value) {
-		case ThemeLight:
-			return Settings{Theme: ThemeLight}, nil
-		case ThemeDark:
-			return Settings{Theme: ThemeDark}, nil
-		default:
-			return Settings{}, nil
+		if key.Value == "onboarding" && value.Kind == yaml.MappingNode {
+			for j := 0; j+1 < len(value.Content); j += 2 {
+				k := value.Content[j]
+				v := value.Content[j+1]
+				if v.Kind != yaml.ScalarNode {
+					continue
+				}
+				switch k.Value {
+				case "completed_at":
+					settings.Onboarding.CompletedAt = v.Value
+				case "dismissed":
+					settings.Onboarding.Dismissed = v.Value
+				}
+			}
 		}
 	}
 
-	return Settings{}, nil
+	return settings, nil
 }
 
 func Save(settings Settings) error {
@@ -122,7 +144,11 @@ func Save(settings Settings) error {
 		return fmt.Errorf("chmod temporary settings file %s: %w", tmpName, err)
 	}
 
-	payload := []byte(fmt.Sprintf("theme: %s\n", settings.Theme))
+	payload, err := marshalSettings(settings)
+	if err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("marshal settings: %w", err)
+	}
 	if err := writePayload(tmp, payload); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("write temporary settings file %s: %w", tmpName, err)
@@ -136,4 +162,88 @@ func Save(settings Settings) error {
 
 	cleanup = false
 	return nil
+}
+
+func marshalSettings(settings Settings) ([]byte, error) {
+	root := &yaml.Node{Kind: yaml.MappingNode}
+	if settings.raw != "" {
+		var doc yaml.Node
+		if err := yaml.Unmarshal([]byte(settings.raw), &doc); err == nil && len(doc.Content) > 0 && doc.Content[0].Kind == yaml.MappingNode {
+			root = doc.Content[0]
+		}
+	}
+
+	if settings.Theme != "" {
+		setScalar(root, "theme", string(settings.Theme))
+	} else {
+		removeKey(root, "theme")
+	}
+
+	if settings.Onboarding.CompletedAt != "" || settings.Onboarding.Dismissed != "" {
+		onboarding := mappingValue(root, "onboarding")
+		if settings.Onboarding.CompletedAt != "" {
+			setTimestampScalar(onboarding, "completed_at", settings.Onboarding.CompletedAt)
+		} else {
+			removeKey(onboarding, "completed_at")
+		}
+		if settings.Onboarding.Dismissed != "" {
+			setTimestampScalar(onboarding, "dismissed", settings.Onboarding.Dismissed)
+		} else {
+			removeKey(onboarding, "dismissed")
+		}
+	} else {
+		removeKey(root, "onboarding")
+	}
+
+	var doc yaml.Node
+	doc.Kind = yaml.DocumentNode
+	doc.Content = []*yaml.Node{root}
+	return yaml.Marshal(&doc)
+}
+
+func mappingValue(root *yaml.Node, key string) *yaml.Node {
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == key {
+			if root.Content[i+1].Kind != yaml.MappingNode {
+				root.Content[i+1] = &yaml.Node{Kind: yaml.MappingNode}
+			}
+			return root.Content[i+1]
+		}
+	}
+	value := &yaml.Node{Kind: yaml.MappingNode}
+	root.Content = append(root.Content, scalarNode(key), value)
+	return value
+}
+
+func setScalar(root *yaml.Node, key, value string) {
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == key {
+			root.Content[i+1] = scalarNode(value)
+			return
+		}
+	}
+	root.Content = append(root.Content, scalarNode(key), scalarNode(value))
+}
+
+func setTimestampScalar(root *yaml.Node, key, value string) {
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == key {
+			root.Content[i+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!timestamp", Value: value}
+			return
+		}
+	}
+	root.Content = append(root.Content, scalarNode(key), &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!timestamp", Value: value})
+}
+
+func removeKey(root *yaml.Node, key string) {
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == key {
+			root.Content = append(root.Content[:i], root.Content[i+2:]...)
+			return
+		}
+	}
+}
+
+func scalarNode(value string) *yaml.Node {
+	return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
 }

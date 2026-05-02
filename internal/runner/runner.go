@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/stateio"
+	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
 // WorkflowResult represents the final result of a workflow run.
@@ -37,7 +39,7 @@ type Options struct {
 	ProfileStore      *config.Config
 	SessionIDs        map[string]string
 	SessionProfiles   map[string]string
-	CapturedVariables map[string]string
+	CapturedVariables map[string]model.CapturedValue
 	LastSessionStepID string
 	ChildState        *model.NestedStepState
 	// NamedSessions and NamedSessionDecls are restored from state on --resume.
@@ -58,6 +60,8 @@ type Options struct {
 	// argument is true when the step will be interactive. Used by the TUI
 	// coordinator to manage terminal state transitions without flicker.
 	PrepareStepHook func(interactive bool)
+
+	UIStepHandler func(model.UIStepRequest) (model.UIStepResult, error)
 }
 
 // RunHandle is returned by PrepareRun and PrepareResume. It holds all state
@@ -207,6 +211,9 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	if err := os.MkdirAll(sessionDir, 0o750); err != nil {
 		return nil, fmt.Errorf("create session dir: %w", err)
 	}
+	if err := materializeBundledAssets(sessionDir, opts.WorkflowFile); err != nil {
+		return nil, err
+	}
 
 	activePID, lockErr := runlock.Acquire(sessionDir)
 	switch {
@@ -282,6 +289,7 @@ func buildExecutionContext(workflow *model.Workflow, params map[string]string, o
 		AuditLogger:         auditEventLogger,
 		NamedSessions:       opts.NamedSessions,
 		NamedSessionDecls:   opts.NamedSessionDecls,
+		UIStepHandler:       opts.UIStepHandler,
 	})
 	if opts.ChildState != nil {
 		ctx.ResumeChildState = opts.ChildState
@@ -305,7 +313,7 @@ func emitRunStart(rs *runState, opts *Options) {
 		"workflow_hash": rs.workflowHash,
 		"context": map[string]any{
 			"params":            rs.ctx.Params,
-			"capturedVariables": rs.ctx.CapturedVariables,
+			"capturedVariables": capturedAuditMap(rs.ctx.CapturedVariables),
 			"sessionIds":        rs.ctx.SessionIDs,
 		},
 	}
@@ -513,6 +521,9 @@ func ExecuteFromHandle(h *RunHandle, opts *Options) WorkflowResult {
 		if opts.PrepareStepHook != nil {
 			h.rs.ctx.PrepareStepHook = opts.PrepareStepHook
 		}
+		if opts.UIStepHandler != nil {
+			h.rs.ctx.UIStepHandler = opts.UIStepHandler
+		}
 	}
 	result := executeSteps(h.rs, h.startIndex)
 	finalizeRun(h.rs, result)
@@ -568,7 +579,7 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 		StepID:            step.ID,
 		SessionIDs:        copyMap(ctx.SessionIDs),
 		SessionProfiles:   copyMap(ctx.SessionProfiles),
-		CapturedVariables: copyMap(ctx.CapturedVariables),
+		CapturedVariables: copyCapturedMap(ctx.CapturedVariables),
 		LastSessionStepID: ctx.LastSessionStepID,
 		NamedSessions:     copyMap(ctx.NamedSessions),
 		NamedSessionDecls: copyMap(ctx.NamedSessionDecls),
@@ -594,7 +605,7 @@ func contextSnapshot(ctx *model.ExecutionContext) map[string]any {
 	}
 	captured := make(map[string]any)
 	for k, v := range ctx.CapturedVariables {
-		captured[k] = v
+		captured[k] = v.AuditValue()
 	}
 	return map[string]any{
 		"params":            params,
@@ -608,6 +619,66 @@ func copyMap(m map[string]string) map[string]string {
 		result[k] = v
 	}
 	return result
+}
+
+func copyCapturedMap(m map[string]model.CapturedValue) map[string]model.CapturedValue {
+	result := make(map[string]model.CapturedValue, len(m))
+	for k, v := range m {
+		result[k] = v
+	}
+	return result
+}
+
+func capturedAuditMap(m map[string]model.CapturedValue) map[string]any {
+	result := make(map[string]any, len(m))
+	for k, v := range m {
+		result[k] = v.AuditValue()
+	}
+	return result
+}
+
+func materializeBundledAssets(sessionDir, workflowFile string) error {
+	if !builtinworkflows.IsRef(workflowFile) {
+		return nil
+	}
+	rel, err := builtinworkflows.RefPath(workflowFile)
+	if err != nil {
+		return err
+	}
+	namespace, _, ok := strings.Cut(rel, "/")
+	if !ok || namespace == "" {
+		return fmt.Errorf("builtin workflow has no namespace: %s", rel)
+	}
+	root := filepath.Join(sessionDir, "bundled", namespace)
+	marker := filepath.Join(root, ".complete")
+	if _, err := os.Stat(marker); err == nil {
+		return nil
+	}
+	assets, err := builtinworkflows.ListAssets(namespace)
+	if err != nil {
+		return err
+	}
+	for _, asset := range assets {
+		data, err := builtinworkflows.ReadAsset(path.Join(namespace, asset))
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(root, filepath.FromSlash(asset))
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return fmt.Errorf("create bundled asset directory: %w", err)
+		}
+		mode := os.FileMode(0o600)
+		if strings.HasSuffix(asset, ".sh") {
+			mode = 0o700
+		}
+		if err := os.WriteFile(target, data, mode); err != nil {
+			return fmt.Errorf("write bundled asset %s: %w", target, err)
+		}
+	}
+	if err := os.WriteFile(marker, nil, 0o600); err != nil {
+		return fmt.Errorf("write bundled asset completion marker: %w", err)
+	}
+	return nil
 }
 
 type defaultLogger struct{}

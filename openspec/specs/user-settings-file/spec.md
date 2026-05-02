@@ -1,7 +1,7 @@
 # user-settings-file Specification
 
 ## Purpose
-TBD - created by archiving change themes. Update Purpose after archive.
+Define the per-user settings file at `~/.agent-runner/settings.yaml` — its location, format, atomic write semantics, parent directory creation, and error surfacing contract.
 ## Requirements
 ### Requirement: Settings file location
 Agent Runner SHALL read and write user settings to a single file at `~/.agent-runner/settings.yaml`. The file is per-user and global (not per-project, not per-workflow). It SHALL be independent of `~/.agent-runner/config.yaml` — neither file references the other and they have separate schemas, separate loaders, and separate validation. The file MAY be absent on a fresh installation; absence is not an error.

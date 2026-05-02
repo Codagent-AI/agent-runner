@@ -307,6 +307,22 @@ func TestRealProcessRunner_RunAgentDoesNotInheritStdin(t *testing.T) {
 	}
 }
 
+func TestRealProcessRunner_RunScriptPreservesCapturedStdout(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "script.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '  value\\n\\n'\n"), 0o700); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	result, err := (&realProcessRunner{}).RunScript(script, nil, true, "")
+	if err != nil {
+		t.Fatalf("RunScript returned error: %v", err)
+	}
+	if result.Stdout != "  value\n\n" {
+		t.Fatalf("stdout = %q, want preserved bytes", result.Stdout)
+	}
+}
+
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

@@ -12,6 +12,8 @@ import (
 
 var (
 	shellGlyphStyle   = lipgloss.NewStyle().Foreground(tuistyle.InactiveAmber)
+	scriptGlyphStyle  = lipgloss.NewStyle().Foreground(tuistyle.InactiveAmber)
+	uiGlyphStyle      = lipgloss.NewStyle().Foreground(tuistyle.AccentMagenta)
 	loopGlyphStyle    = lipgloss.NewStyle().Foreground(tuistyle.AccentCyan)
 	subwfGlyphStyle   = lipgloss.NewStyle().Foreground(tuistyle.AccentCyan)
 	selectedStepStyle = lipgloss.NewStyle().Foreground(tuistyle.SuccessGreen).Bold(true)
@@ -365,6 +367,10 @@ func typeGlyph(t NodeType) string {
 	switch t {
 	case NodeShell:
 		return shellGlyphStyle.Render(raw)
+	case NodeScript:
+		return scriptGlyphStyle.Render(raw)
+	case NodeUI:
+		return uiGlyphStyle.Render(raw)
 	case NodeLoop, NodeIteration:
 		return loopGlyphStyle.Render(raw)
 	case NodeHeadlessAgent, NodeInteractiveAgent, NodeSubWorkflow:
@@ -540,6 +546,8 @@ func (m *Model) renderLegend() string {
 	b.WriteString(tuistyle.SelectedStyle.Render("Type Glyphs"))
 	b.WriteString("\n\n")
 	b.WriteString("  " + typeGlyph(NodeShell) + "  shell\n")
+	b.WriteString("  " + typeGlyph(NodeScript) + "  script\n")
+	b.WriteString("  " + typeGlyph(NodeUI) + "  ui\n")
 	b.WriteString("  " + typeGlyph(NodeHeadlessAgent) + "  headless agent\n")
 	b.WriteString("  " + typeGlyph(NodeInteractiveAgent) + "  interactive agent\n")
 	b.WriteString("  " + typeGlyph(NodeSubWorkflow) + "  sub-workflow\n")

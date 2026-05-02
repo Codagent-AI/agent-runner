@@ -22,6 +22,7 @@ type ProcessResult struct {
 type ProcessRunner interface {
 	RunShell(cmd string, captureStdout bool, workdir string) (ProcessResult, error)
 	RunAgent(args []string, captureStdout bool, workdir string) (ProcessResult, error)
+	RunScript(path string, stdin []byte, captureStdout bool, workdir string) (ProcessResult, error)
 }
 
 // GlobExpander abstracts file globbing for testability.

@@ -3,6 +3,9 @@ package textfmt
 import (
 	"strings"
 	"testing"
+
+	"github.com/codagent/agent-runner/internal/model"
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestInterpolate(t *testing.T) {
@@ -164,4 +167,58 @@ func TestInterpolateShellSafe(t *testing.T) {
 			t.Fatal("expected error for undefined variable")
 		}
 	})
+}
+
+func TestInterpolateTyped(t *testing.T) {
+	captures := map[string]model.CapturedValue{
+		"profile": {Kind: model.CaptureMap, Map: map[string]string{"adapter": "claude", "model": "opus"}},
+		"out":     {Kind: model.CaptureString, Str: "hello"},
+		"choices": {Kind: model.CaptureList, List: []string{"claude", "codex"}},
+	}
+
+	t.Run("resolves map field access", func(t *testing.T) {
+		got, err := InterpolateTyped("adapter={{profile.adapter}}", nil, captures, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "adapter=claude" {
+			t.Fatalf("got %q", got)
+		}
+	})
+
+	t.Run("rejects whole map in string context", func(t *testing.T) {
+		_, err := InterpolateTyped("profile={{profile}}", nil, captures, nil)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "map capture {{profile}} cannot be interpolated in a string context") ||
+			!strings.Contains(err.Error(), "{{profile.<field>}}") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("rejects field access on string capture", func(t *testing.T) {
+		_, err := InterpolateTyped("{{out.field}}", nil, captures, nil)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "field access requires map-typed capture: {{out.field}}") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestResolveTypedValue(t *testing.T) {
+	captures := map[string]model.CapturedValue{
+		"choices": {Kind: model.CaptureList, List: []string{"claude", "codex"}},
+	}
+
+	got, err := ResolveTypedValue("{{choices}}", captures)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := model.CapturedValue{Kind: model.CaptureList, List: []string{"claude", "codex"}}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("typed value mismatch (-want +got):\n%s", diff)
+	}
 }
