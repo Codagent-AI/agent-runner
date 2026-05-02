@@ -44,6 +44,16 @@ func (m *mockRunner) RunAgent(args []string, _ bool, _ string) (ProcessResult, e
 	return r, nil
 }
 
+func (m *mockRunner) RunScript(path string, stdin []byte, capture bool, workdir string) (ProcessResult, error) {
+	m.calls = append(m.calls, []string{path, string(stdin), workdir})
+	if m.idx >= len(m.results) {
+		return runScriptProcess(path, stdin, capture, workdir)
+	}
+	r := m.results[m.idx]
+	m.idx++
+	return r, nil
+}
+
 type mockLogger struct {
 	lines []string
 }
@@ -126,7 +136,7 @@ func TestExecuteShellStep(t *testing.T) {
 		ctx := makeCtx()
 		step := model.Step{ID: "s", Command: "echo hi", Session: model.SessionNew, Capture: "output"}
 		ExecuteShellStep(&step, ctx, runner, &mockLogger{})
-		if ctx.CapturedVariables["output"] != "captured-output" {
+		if ctx.CapturedVariables["output"].Str != "captured-output" {
 			t.Fatalf("expected captured output, got %q", ctx.CapturedVariables["output"])
 		}
 	})
@@ -136,7 +146,7 @@ func TestExecuteShellStep(t *testing.T) {
 		ctx := makeCtx()
 		step := model.Step{ID: "s", Command: "validator run", Session: model.SessionNew, Capture: "output", CaptureStderr: true}
 		ExecuteShellStep(&step, ctx, runner, &mockLogger{})
-		captured := ctx.CapturedVariables["output"]
+		captured := ctx.CapturedVariables["output"].Str
 		if !strings.Contains(captured, "Status: error") {
 			t.Fatalf("expected stdout in capture, got %q", captured)
 		}
@@ -150,7 +160,7 @@ func TestExecuteShellStep(t *testing.T) {
 		ctx := makeCtx()
 		step := model.Step{ID: "s", Command: "validator run", Session: model.SessionNew, Capture: "output"}
 		ExecuteShellStep(&step, ctx, runner, &mockLogger{})
-		captured := ctx.CapturedVariables["output"]
+		captured := ctx.CapturedVariables["output"].Str
 		if strings.Contains(captured, "secret-token") {
 			t.Fatalf("stderr should not be captured without capture_stderr, got %q", captured)
 		}
@@ -161,7 +171,7 @@ func TestExecuteShellStep(t *testing.T) {
 		ctx := makeCtx()
 		step := model.Step{ID: "s", Command: "echo ok", Session: model.SessionNew, Capture: "output", CaptureStderr: true}
 		ExecuteShellStep(&step, ctx, runner, &mockLogger{})
-		if ctx.CapturedVariables["output"] != "ok" {
+		if ctx.CapturedVariables["output"].Str != "ok" {
 			t.Fatalf("expected only stdout on success, got %q", ctx.CapturedVariables["output"])
 		}
 	})
@@ -206,7 +216,7 @@ func TestExecuteShellStep(t *testing.T) {
 	t.Run("interpolates with captured variables", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		ctx := makeCtx()
-		ctx.CapturedVariables["prev"] = "previous-value"
+		ctx.CapturedVariables["prev"] = model.NewCapturedString("previous-value")
 		step := model.Step{ID: "s", Command: "echo {{prev}}", Session: model.SessionNew}
 		ExecuteShellStep(&step, ctx, runner, &mockLogger{})
 		if runner.calls[0][2] != "echo previous-value" {

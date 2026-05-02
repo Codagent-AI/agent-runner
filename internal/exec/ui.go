@@ -2,7 +2,6 @@ package exec
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -21,7 +20,7 @@ func ExecuteUIStep(step *model.Step, ctx *model.ExecutionContext, log Logger) (S
 	if ctx.UIStepHandler != nil {
 		result, err = ctx.UIStepHandler(request)
 	} else {
-		result, err = promptUIStep(&request, ctx)
+		return OutcomeFailed, fmt.Errorf("UI steps require a TTY")
 	}
 	if err != nil {
 		return OutcomeFailed, err
@@ -30,25 +29,21 @@ func ExecuteUIStep(step *model.Step, ctx *model.ExecutionContext, log Logger) (S
 		return OutcomeAborted, nil
 	}
 	if step.OutcomeCapture != "" {
-		ctx.CapturedVariables[step.OutcomeCapture] = result.Outcome
+		ctx.CapturedVariables[step.OutcomeCapture] = model.NewCapturedString(result.Outcome)
 	}
 	if step.Capture != "" {
-		payload, err := json.Marshal(result.Inputs)
-		if err != nil {
-			return OutcomeFailed, err
-		}
-		ctx.CapturedVariables[step.Capture] = string(payload)
+		ctx.CapturedVariables[step.Capture] = model.NewCapturedMap(result.Inputs)
 	}
 	log.Printf("  ui outcome: %s\n", result.Outcome)
 	return OutcomeSuccess, nil
 }
 
 func buildUIRequest(step *model.Step, ctx *model.ExecutionContext) (model.UIStepRequest, error) {
-	title, err := textfmt.Interpolate(step.Title, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(step.ID))
+	title, err := textfmt.InterpolateTyped(step.Title, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(step.ID))
 	if err != nil {
 		return model.UIStepRequest{}, err
 	}
-	body, err := textfmt.Interpolate(step.Body, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(step.ID))
+	body, err := textfmt.InterpolateTyped(step.Body, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(step.ID))
 	if err != nil {
 		return model.UIStepRequest{}, err
 	}
@@ -69,19 +64,17 @@ func buildUIRequest(step *model.Step, ctx *model.ExecutionContext) (model.UIStep
 
 func resolveUIOptions(options []string, ctx *model.ExecutionContext) ([]string, error) {
 	if len(options) == 1 && strings.HasPrefix(options[0], "{{") && strings.HasSuffix(options[0], "}}") {
-		key := strings.TrimSuffix(strings.TrimPrefix(options[0], "{{"), "}}")
-		raw, ok := ctx.CapturedVariables[key]
-		if ok {
-			var values []string
-			if err := json.Unmarshal([]byte(raw), &values); err != nil {
-				return nil, fmt.Errorf("capture {{%s}} is not a string array", key)
+		raw, err := textfmt.ResolveTypedValue(options[0], ctx.CapturedVariables)
+		if err == nil {
+			if raw.Kind != model.CaptureList {
+				return nil, fmt.Errorf("single-select options must resolve to a list of strings")
 			}
-			return values, nil
+			return append([]string(nil), raw.List...), nil
 		}
 	}
 	resolved := make([]string, len(options))
 	for i, option := range options {
-		value, err := textfmt.Interpolate(option, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVars())
+		value, err := textfmt.InterpolateTyped(option, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVars())
 		if err != nil {
 			return nil, err
 		}

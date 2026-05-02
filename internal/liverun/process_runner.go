@@ -245,6 +245,7 @@ func (r *tuiProcessRunner) RunAgent(args []string, captureStdout bool, workdir s
 func (r *tuiProcessRunner) RunScript(path string, stdin []byte, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
 	c := exec.Command(path) // #nosec G204
 	c.Stdin = bytes.NewReader(stdin)
+	c.Env = append(os.Environ(), "AGENT_RUNNER_BUNDLE_DIR="+scriptBundleDir(path))
 	if workdir != "" {
 		c.Dir = filepath.Clean(workdir) // #nosec G304
 	}
@@ -269,9 +270,22 @@ func (r *tuiProcessRunner) RunScript(path string, stdin []byte, captureStdout bo
 		}
 	}
 
-	stdout := strings.TrimSpace(stdoutBuf.String())
+	stdout := stdoutBuf.String()
 	if !captureStdout {
 		stdout = ""
 	}
-	return iexec.ProcessResult{ExitCode: exitCode, Stdout: stdout, Stderr: strings.TrimSpace(stderrBuf.String())}, nil
+	return iexec.ProcessResult{ExitCode: exitCode, Stdout: stdout, Stderr: stderrBuf.String()}, nil
+}
+
+func scriptBundleDir(scriptPath string) string {
+	clean := filepath.Clean(scriptPath)
+	sep := string(filepath.Separator)
+	marker := sep + "bundled" + sep
+	if idx := strings.Index(clean, marker); idx >= 0 {
+		rest := clean[idx+len(marker):]
+		if namespace, _, ok := strings.Cut(rest, sep); ok && namespace != "" {
+			return clean[:idx+len(marker)+len(namespace)]
+		}
+	}
+	return filepath.Dir(clean)
 }

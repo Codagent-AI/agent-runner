@@ -142,14 +142,16 @@ func (r *realProcessRunner) RunAgent(args []string, captureStdout bool, workdir 
 func (r *realProcessRunner) RunScript(path string, stdin []byte, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
 	c := exec.Command(path) // #nosec G204 -- workflow script path is validated by executor
 	c.Stdin = bytes.NewReader(stdin)
+	c.Env = append(os.Environ(), "AGENT_RUNNER_BUNDLE_DIR="+scriptBundleDir(path))
 	if workdir != "" {
 		c.Dir = filepath.Clean(workdir) // #nosec G304
 	}
 
-	var stderrBuf bytes.Buffer
+	var stdoutBuf, stderrBuf bytes.Buffer
 	if captureStdout {
+		c.Stdout = io.MultiWriter(os.Stdout, &stdoutBuf)
 		c.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
-		out, err := c.Output()
+		err := c.Run()
 		exitCode := 0
 		if err != nil {
 			if exitErr, ok := err.(*exec.ExitError); ok {
@@ -158,7 +160,7 @@ func (r *realProcessRunner) RunScript(path string, stdin []byte, captureStdout b
 				return iexec.ProcessResult{}, err
 			}
 		}
-		return iexec.ProcessResult{ExitCode: exitCode, Stdout: strings.TrimSpace(string(out)), Stderr: strings.TrimSpace(stderrBuf.String())}, nil
+		return iexec.ProcessResult{ExitCode: exitCode, Stdout: stdoutBuf.String(), Stderr: stderrBuf.String()}, nil
 	}
 
 	c.Stdout = os.Stdout
@@ -173,6 +175,19 @@ func (r *realProcessRunner) RunScript(path string, stdin []byte, captureStdout b
 		}
 	}
 	return iexec.ProcessResult{ExitCode: exitCode}, nil
+}
+
+func scriptBundleDir(scriptPath string) string {
+	clean := filepath.Clean(scriptPath)
+	sep := string(filepath.Separator)
+	marker := sep + "bundled" + sep
+	if idx := strings.Index(clean, marker); idx >= 0 {
+		rest := clean[idx+len(marker):]
+		if namespace, _, ok := strings.Cut(rest, sep); ok && namespace != "" {
+			return clean[:idx+len(marker)+len(namespace)]
+		}
+	}
+	return filepath.Dir(clean)
 }
 
 // realGlobExpander implements exec.GlobExpander using filepath.Glob.

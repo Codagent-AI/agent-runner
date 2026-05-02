@@ -12,11 +12,11 @@ import (
 // to N+1. When the loop finishes, Iteration equals the total count and
 // Completed is true.
 type NestedStepState struct {
-	StepID            string            `json:"stepId"`
-	SessionIDs        map[string]string `json:"sessionIds"`
-	SessionProfiles   map[string]string `json:"sessionProfiles,omitempty"`
-	CapturedVariables map[string]string `json:"capturedVariables"`
-	LastSessionStepID string            `json:"lastSessionStepId,omitempty"`
+	StepID            string                   `json:"stepId"`
+	SessionIDs        map[string]string        `json:"sessionIds"`
+	SessionProfiles   map[string]string        `json:"sessionProfiles,omitempty"`
+	CapturedVariables map[string]CapturedValue `json:"capturedVariables"`
+	LastSessionStepID string                   `json:"lastSessionStepId,omitempty"`
 	// NamedSessions and NamedSessionDecls are only meaningful at the root
 	// NestedStepState level (written by runner.writeStepState). Nested entries
 	// produced by sub-workflow and loop progress records leave these nil.

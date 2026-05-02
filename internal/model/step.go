@@ -2,11 +2,16 @@ package model
 
 import (
 	"fmt"
+	"path"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
 	"github.com/codagent/agent-runner/internal/flowctl"
 )
+
+var identifierRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 // StepMode defines how a step executes.
 type StepMode string
@@ -217,6 +222,12 @@ func validateCLIName(cliValue string, knownCLIs []string) error {
 // knownCLIs is the list of registered CLI adapter names; if nil, CLI name
 // validation is skipped (useful for tests that don't care about CLI names).
 func (s *Step) Validate(knownCLIs []string) error {
+	if s.Mode == ModeUI {
+		if err := s.validateUIExclusiveFields(); err != nil {
+			return err
+		}
+	}
+
 	if !hasExactlyOneStepType(s) {
 		return fmt.Errorf(`step must have exactly one of: command, script, mode: ui, prompt/mode, loop+steps, workflow, or steps (group)`)
 	}
@@ -237,6 +248,26 @@ func (s *Step) Validate(knownCLIs []string) error {
 		}
 	}
 
+	return nil
+}
+
+func (s *Step) validateUIExclusiveFields() error {
+	switch {
+	case s.Agent != "":
+		return fmt.Errorf(`"agent" is not valid on ui steps`)
+	case s.Command != "":
+		return fmt.Errorf(`"command" is not valid on ui steps`)
+	case s.Prompt != "":
+		return fmt.Errorf(`"prompt" is not valid on ui steps`)
+	case s.Session != "":
+		return fmt.Errorf(`"session" is not valid on ui steps`)
+	case s.Workflow != "":
+		return fmt.Errorf(`"workflow" is not valid on ui steps`)
+	case s.Loop != nil:
+		return fmt.Errorf(`"loop" is not valid on ui steps`)
+	case len(s.Steps) > 0:
+		return fmt.Errorf(`"steps" is not valid on ui steps`)
+	}
 	return nil
 }
 
@@ -325,17 +356,31 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 	}
 
 	if s.Model != "" {
-		if err := validateAgentOnlyField("model", isAgent); err != nil {
-			return err
+		switch {
+		case isUI:
+			return fmt.Errorf(`"model" is not valid on ui steps`)
+		case isScript:
+			return fmt.Errorf(`"model" is not valid on script steps`)
+		default:
+			if err := validateAgentOnlyField("model", isAgent); err != nil {
+				return err
+			}
 		}
 	}
 
 	if s.CLI != "" {
-		if err := validateAgentOnlyField("cli", isAgent); err != nil {
-			return err
-		}
-		if err := validateCLIName(s.CLI, knownCLIs); err != nil {
-			return err
+		switch {
+		case isUI:
+			return fmt.Errorf(`"cli" is not valid on ui steps`)
+		case isScript:
+			return fmt.Errorf(`"cli" is not valid on script steps`)
+		default:
+			if err := validateAgentOnlyField("cli", isAgent); err != nil {
+				return err
+			}
+			if err := validateCLIName(s.CLI, knownCLIs); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -376,14 +421,48 @@ func (s *Step) validateScriptFields(isScript bool) error {
 	if s.ScriptInputs != nil && !isScript {
 		return fmt.Errorf(`"script_inputs" is only allowed on script steps`)
 	}
+	if !isScript {
+		if s.CaptureFormat != "" {
+			return fmt.Errorf(`"capture_format" requires a script step with "capture"`)
+		}
+		return nil
+	}
+	if s.Mode != "" {
+		return fmt.Errorf(`"mode" is not valid on script steps`)
+	}
+	if s.Session != "" {
+		return fmt.Errorf(`"session" is not valid on script steps`)
+	}
+	if err := validateScriptPath(s.Script); err != nil {
+		return err
+	}
 	if s.CaptureFormat == "" {
 		return nil
 	}
-	if !isScript || s.Capture == "" {
+	if s.Capture == "" {
 		return fmt.Errorf(`"capture_format" requires a script step with "capture"`)
 	}
 	if s.CaptureFormat != "text" && s.CaptureFormat != "json" {
 		return fmt.Errorf(`invalid capture_format: %q`, s.CaptureFormat)
+	}
+	return nil
+}
+
+func validateScriptPath(script string) error {
+	if strings.Contains(script, "{{") || strings.Contains(script, "}}") {
+		return fmt.Errorf(`"script" must be a static path`)
+	}
+	clean := path.Clean(script)
+	if clean == "." {
+		return fmt.Errorf(`"script" path is required`)
+	}
+	if path.IsAbs(clean) || filepath.IsAbs(clean) {
+		return fmt.Errorf(`absolute script paths are not allowed`)
+	}
+	for _, part := range strings.Split(clean, "/") {
+		if part == ".." {
+			return fmt.Errorf(`script path traversal is not allowed`)
+		}
 	}
 	return nil
 }
@@ -404,17 +483,60 @@ func (s *Step) validateUIFields(isUI bool) error {
 	if len(s.Actions) == 0 {
 		return fmt.Errorf(`"actions" is required on ui steps`)
 	}
+	if s.Capture != "" && len(s.Inputs) == 0 {
+		return fmt.Errorf(`"capture" requires "inputs" on ui steps`)
+	}
+	if s.Capture != "" && s.Capture == s.OutcomeCapture {
+		return fmt.Errorf(`"capture" and "outcome_capture" must name distinct variables`)
+	}
+
+	outcomes := make(map[string]struct{}, len(s.Actions))
 	for i, action := range s.Actions {
 		if action.Label == "" || action.Outcome == "" {
 			return fmt.Errorf(`actions[%d] requires label and outcome`, i)
 		}
+		if strings.Contains(action.Outcome, "{{") || strings.Contains(action.Outcome, "}}") {
+			return fmt.Errorf(`actions[%d].outcome must be static identifiers`, i)
+		}
+		if !identifierRe.MatchString(action.Outcome) {
+			return fmt.Errorf(`actions[%d].outcome must match ^[a-z][a-z0-9_]*$`, i)
+		}
+		if _, exists := outcomes[action.Outcome]; exists {
+			return fmt.Errorf(`duplicate outcome %q`, action.Outcome)
+		}
+		outcomes[action.Outcome] = struct{}{}
 	}
+
+	inputs := make(map[string]struct{}, len(s.Inputs))
 	for i, input := range s.Inputs {
-		if input.Kind != "single-select" || input.ID == "" || input.Prompt == "" {
-			return fmt.Errorf(`inputs[%d] requires kind single-select, id, and prompt`, i)
+		if input.Kind != "single_select" && input.Kind != "single-select" {
+			return fmt.Errorf(`inputs[%d]: only single_select inputs are supported`, i)
+		}
+		if input.ID == "" {
+			return fmt.Errorf(`inputs[%d].id is required`, i)
+		}
+		if !identifierRe.MatchString(input.ID) {
+			return fmt.Errorf(`inputs[%d].id must match ^[a-z][a-z0-9_]*$`, i)
+		}
+		if _, exists := inputs[input.ID]; exists {
+			return fmt.Errorf(`duplicate input id %q`, input.ID)
+		}
+		inputs[input.ID] = struct{}{}
+		if input.Prompt == "" {
+			return fmt.Errorf(`inputs[%d].prompt is required`, i)
+		}
+		if len(input.Options) == 0 {
+			return fmt.Errorf(`inputs[%d].options is required`, i)
+		}
+		if input.Default != "" && !isDynamicOptions(input.Options) && !slices.Contains(input.Options, input.Default) {
+			return fmt.Errorf(`inputs[%d].default is not among declared options`, i)
 		}
 	}
 	return nil
+}
+
+func isDynamicOptions(options []string) bool {
+	return len(options) == 1 && strings.HasPrefix(options[0], "{{") && strings.HasSuffix(options[0], "}}")
 }
 
 // Param defines a workflow parameter.

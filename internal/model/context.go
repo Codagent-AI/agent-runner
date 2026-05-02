@@ -18,7 +18,7 @@ type ExecutionContext struct {
 	Params            map[string]string
 	SessionIDs        map[string]string
 	SessionProfiles   map[string]string // maps session-originating step ID → profile name
-	CapturedVariables map[string]string
+	CapturedVariables map[string]CapturedValue
 	LastStepOutcome   *string // nil, "success", or "failed"
 
 	// LastSessionStepID tracks the most recently stored session key
@@ -95,7 +95,7 @@ type RootContextOptions struct {
 	ProfileStore        interface{} // *config.Config
 	SessionIDs          map[string]string
 	SessionProfiles     map[string]string
-	CapturedVariables   map[string]string
+	CapturedVariables   map[string]CapturedValue
 	AuditLogger         audit.EventLogger
 	NamedSessions       map[string]string
 	NamedSessionDecls   map[string]string
@@ -114,7 +114,7 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		sessionIDs[k] = v
 	}
 
-	capturedVars := make(map[string]string)
+	capturedVars := make(map[string]CapturedValue)
 	for k, v := range opts.CapturedVariables {
 		capturedVars[k] = v
 	}
@@ -221,7 +221,7 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		Params:              params,
 		SessionIDs:          sessionIDs,
 		SessionProfiles:     sessionProfiles,
-		CapturedVariables:   make(map[string]string),
+		CapturedVariables:   make(map[string]CapturedValue),
 		LastStepOutcome:     nil,
 		LastSessionStepID:   parent.LastSessionStepID,
 		NestingPath:         nestingPath,
@@ -291,7 +291,7 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		Params:              params,
 		SessionIDs:          sessionIDs,
 		SessionProfiles:     sessionProfiles,
-		CapturedVariables:   make(map[string]string),
+		CapturedVariables:   make(map[string]CapturedValue),
 		LastStepOutcome:     nil,
 		LastSessionStepID:   parent.LastSessionStepID,
 		NestingPath:         nestingPath,

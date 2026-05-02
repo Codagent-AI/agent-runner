@@ -51,11 +51,11 @@ func TestCreateRootContext(t *testing.T) {
 		ctx := NewRootContext(&RootContextOptions{
 			Params:            map[string]string{},
 			WorkflowFile:      "test.yaml",
-			CapturedVariables: map[string]string{"output": "result"},
+			CapturedVariables: map[string]CapturedValue{"output": NewCapturedString("result")},
 		})
 
-		if ctx.CapturedVariables["output"] != "result" {
-			t.Fatalf("expected capturedVar 'output'='result', got %q", ctx.CapturedVariables["output"])
+		if diff := cmp.Diff(NewCapturedString("result"), ctx.CapturedVariables["output"]); diff != "" {
+			t.Fatalf("capturedVar mismatch (-want +got):\n%s", diff)
 		}
 	})
 }

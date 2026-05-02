@@ -50,7 +50,7 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	var fromStep string
 	var sessionIDs map[string]string
 	var sessionProfiles map[string]string
-	var capturedVars map[string]string
+	var capturedVars map[string]model.CapturedValue
 	var lastSessionStepID string
 	var namedSessions map[string]string
 	var namedSessionDecls map[string]string

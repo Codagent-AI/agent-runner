@@ -9,15 +9,12 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/textfmt"
 	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
-
-type scriptRunner interface {
-	RunScript(path string, stdin []byte, captureStdout bool, workdir string) (ProcessResult, error)
-}
 
 func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, log Logger) (StepOutcome, error) {
 	scriptPath, err := resolveScriptPath(step.Script, ctx)
@@ -31,11 +28,7 @@ func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner Pro
 
 	log.Printf("  script: %s\n", step.Script)
 	var result ProcessResult
-	if sr, ok := runner.(scriptRunner); ok {
-		result, err = sr.RunScript(scriptPath, stdin, step.Capture != "", step.Workdir)
-	} else {
-		result, err = runScriptProcess(scriptPath, stdin, step.Capture != "", step.Workdir)
-	}
+	result, err = runner.RunScript(scriptPath, stdin, step.Capture != "", step.Workdir)
 	if err != nil {
 		return OutcomeFailed, err
 	}
@@ -71,7 +64,21 @@ func resolveScriptPath(script string, ctx *model.ExecutionContext) (string, erro
 		}
 		return materializeAsset(ctx.SessionDir, namespace, clean)
 	}
-	return filepath.Join(filepath.Dir(ctx.WorkflowFile), filepath.FromSlash(clean)), nil
+	baseDir := filepath.Dir(ctx.WorkflowFile)
+	scriptPath := filepath.Join(baseDir, filepath.FromSlash(clean))
+	resolved, err := filepath.EvalSymlinks(scriptPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve script path: %w", err)
+	}
+	baseResolved, err := filepath.EvalSymlinks(baseDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve workflow directory: %w", err)
+	}
+	rel, err := filepath.Rel(baseResolved, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("script must resolve inside workflow directory")
+	}
+	return resolved, nil
 }
 
 func materializeAsset(sessionDir, namespace, relAsset string) (string, error) {
@@ -97,9 +104,15 @@ func buildScriptInput(step *model.Step, ctx *model.ExecutionContext) ([]byte, er
 	if len(step.ScriptInputs) == 0 {
 		return nil, nil
 	}
-	input := make(map[string]string, len(step.ScriptInputs))
+	input := make(map[string]any, len(step.ScriptInputs))
 	for k, v := range step.ScriptInputs {
-		resolved, err := textfmt.Interpolate(v, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(step.ID))
+		if isWholeInterpolation(v) {
+			if typed, err := textfmt.ResolveTypedValue(v, ctx.CapturedVariables); err == nil {
+				input[k] = typed.AuditValue()
+				continue
+			}
+		}
+		resolved, err := textfmt.InterpolateTyped(v, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(step.ID))
 		if err != nil {
 			return nil, fmt.Errorf("script_inputs.%s: %w", k, err)
 		}
@@ -108,18 +121,21 @@ func buildScriptInput(step *model.Step, ctx *model.ExecutionContext) ([]byte, er
 	return json.Marshal(input)
 }
 
-func captureScriptOutput(format, stdout string) (string, error) {
-	out := strings.TrimSpace(stdout)
+func captureScriptOutput(format, stdout string) (model.CapturedValue, error) {
 	if format == "" || format == "text" {
-		return out, nil
+		return model.NewCapturedString(stdout), nil
 	}
+	out := strings.TrimSpace(stdout)
 	if len(out) > 1024*1024 {
-		return "", fmt.Errorf("script json capture exceeds 1 MiB")
+		return model.CapturedValue{}, fmt.Errorf("script json capture exceeds 1 MiB")
+	}
+	if !utf8.ValidString(out) {
+		return model.CapturedValue{}, fmt.Errorf("script json capture stdout was not valid UTF-8")
 	}
 	var v any
 	dec := json.NewDecoder(strings.NewReader(out))
 	if err := dec.Decode(&v); err != nil {
-		return "", fmt.Errorf("script json capture: %w", err)
+		return model.CapturedValue{}, fmt.Errorf("script json capture: %w", err)
 	}
 	switch x := v.(type) {
 	case []any:
@@ -127,26 +143,28 @@ func captureScriptOutput(format, stdout string) (string, error) {
 		for i, item := range x {
 			s, ok := item.(string)
 			if !ok {
-				return "", fmt.Errorf("script json capture array contains non-string at index %d", i)
+				return model.CapturedValue{}, fmt.Errorf("script json capture array contains non-string at index %d", i)
 			}
 			values[i] = s
 		}
-		compact, _ := json.Marshal(values)
-		return string(compact), nil
+		return model.NewCapturedList(values), nil
 	case map[string]any:
 		values := make(map[string]string, len(x))
 		for k, item := range x {
 			s, ok := item.(string)
 			if !ok {
-				return "", fmt.Errorf("script json capture object field %q is not a string", k)
+				return model.CapturedValue{}, fmt.Errorf("script json capture object field %q is not a string", k)
 			}
 			values[k] = s
 		}
-		compact, _ := json.Marshal(values)
-		return string(compact), nil
+		return model.NewCapturedMap(values), nil
 	default:
-		return "", fmt.Errorf("script json capture must be an array of strings or object of strings")
+		return model.CapturedValue{}, fmt.Errorf("script json capture must be an array of strings or object of strings")
 	}
+}
+
+func isWholeInterpolation(s string) bool {
+	return strings.HasPrefix(s, "{{") && strings.HasSuffix(s, "}}") && len(strings.TrimSpace(s)) == len(s)
 }
 
 func runScriptProcess(scriptPath string, stdin []byte, captureStdout bool, workdir string) (ProcessResult, error) {

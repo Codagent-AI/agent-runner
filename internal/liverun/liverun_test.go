@@ -59,6 +59,10 @@ func (unusedRunner) RunAgent([]string, bool, string) (iexec.ProcessResult, error
 	return iexec.ProcessResult{}, nil
 }
 
+func (unusedRunner) RunScript(string, []byte, bool, string) (iexec.ProcessResult, error) {
+	return iexec.ProcessResult{}, nil
+}
+
 // ---- ANSI stripper tests ----
 
 func strip(input string) string {

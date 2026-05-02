@@ -318,7 +318,7 @@ func buildNestingPrefix(nestingPath []model.NestingSegment) string {
 }
 
 func resolveWorkflowPath(workflowField string, ctx *model.ExecutionContext, stepID string) (string, error) {
-	interpolated, err := textfmt.Interpolate(workflowField, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
+	interpolated, err := textfmt.InterpolateTyped(workflowField, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
 	if err != nil {
 		return "", err
 	}
@@ -334,7 +334,7 @@ func resolveParams(params map[string]string, ctx *model.ExecutionContext, stepID
 	}
 	resolved := make(map[string]string, len(params))
 	for k, v := range params {
-		val, err := textfmt.Interpolate(v, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
+		val, err := textfmt.InterpolateTyped(v, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
 		if err != nil {
 			return nil, err
 		}
@@ -411,8 +411,8 @@ func MergeSessionDecls(ctx *model.ExecutionContext, sessions []model.SessionDecl
 	return nil
 }
 
-func copyMap(m map[string]string) map[string]string {
-	result := make(map[string]string, len(m))
+func copyMap[K comparable, V any](m map[K]V) map[K]V {
+	result := make(map[K]V, len(m))
 	for k, v := range m {
 		result[k] = v
 	}
