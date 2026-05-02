@@ -1,7 +1,7 @@
 # onboarding-workflow Specification
 
 ## Purpose
-TBD - created by archiving change onboarding. Update Purpose after archive.
+Define the first-run onboarding experience that guides new users through initial agent profile setup via a dispatcher-triggered embedded workflow with welcome, dismiss, and setup-continuation flows.
 ## Requirements
 ### Requirement: Embedded onboarding namespace contents
 

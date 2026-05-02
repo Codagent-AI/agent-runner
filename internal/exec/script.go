@@ -1,11 +1,9 @@
 package exec
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
@@ -133,8 +131,7 @@ func captureScriptOutput(format, stdout string) (model.CapturedValue, error) {
 		return model.CapturedValue{}, fmt.Errorf("script json capture stdout was not valid UTF-8")
 	}
 	var v any
-	dec := json.NewDecoder(strings.NewReader(out))
-	if err := dec.Decode(&v); err != nil {
+	if err := json.Unmarshal([]byte(out), &v); err != nil {
 		return model.CapturedValue{}, fmt.Errorf("script json capture: %w", err)
 	}
 	switch x := v.(type) {
@@ -165,29 +162,4 @@ func captureScriptOutput(format, stdout string) (model.CapturedValue, error) {
 
 func isWholeInterpolation(s string) bool {
 	return strings.HasPrefix(s, "{{") && strings.HasSuffix(s, "}}") && len(strings.TrimSpace(s)) == len(s)
-}
-
-func runScriptProcess(scriptPath string, stdin []byte, captureStdout bool, workdir string) (ProcessResult, error) {
-	c := exec.Command(scriptPath) // #nosec G204 -- workflow script path is validated and resolved.
-	c.Stdin = bytes.NewReader(stdin)
-	if workdir != "" {
-		c.Dir = filepath.Clean(workdir) // #nosec G304
-	}
-	var stdout, stderr bytes.Buffer
-	c.Stdout = &stdout
-	c.Stderr = &stderr
-	err := c.Run()
-	exitCode := 0
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
-		} else {
-			return ProcessResult{}, err
-		}
-	}
-	out := stdout.String()
-	if !captureStdout {
-		out = ""
-	}
-	return ProcessResult{ExitCode: exitCode, Stdout: out, Stderr: stderr.String()}, nil
 }

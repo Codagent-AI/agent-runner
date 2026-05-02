@@ -459,11 +459,14 @@ func validateScriptPath(script string) error {
 	if strings.Contains(script, "{{") || strings.Contains(script, "}}") {
 		return fmt.Errorf(`"script" must be a static path`)
 	}
-	clean := path.Clean(script)
+	// Normalize backslashes to forward slashes before validation to prevent
+	// bypass via paths like "..\outside\evil.sh".
+	normalized := strings.ReplaceAll(script, `\`, "/")
+	clean := path.Clean(normalized)
 	if clean == "." {
 		return fmt.Errorf(`"script" path is required`)
 	}
-	if path.IsAbs(clean) || filepath.IsAbs(clean) {
+	if path.IsAbs(clean) || filepath.IsAbs(script) {
 		return fmt.Errorf(`absolute script paths are not allowed`)
 	}
 	for _, part := range strings.Split(clean, "/") {

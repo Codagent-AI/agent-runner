@@ -47,7 +47,7 @@ func (m *mockRunner) RunAgent(args []string, _ bool, _ string) (ProcessResult, e
 func (m *mockRunner) RunScript(path string, stdin []byte, capture bool, workdir string) (ProcessResult, error) {
 	m.calls = append(m.calls, []string{path, string(stdin), workdir})
 	if m.idx >= len(m.results) {
-		return runScriptProcess(path, stdin, capture, workdir)
+		return ProcessResult{ExitCode: 0}, nil
 	}
 	r := m.results[m.idx]
 	m.idx++

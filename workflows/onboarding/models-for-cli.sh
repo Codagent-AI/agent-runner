@@ -7,10 +7,10 @@ adapter=$(printf '%s' "$payload" | sed -n 's/.*"adapter"[[:space:]]*:[[:space:]]
 case "$adapter" in
   claude)
     if command -v claude >/dev/null 2>&1; then
-      if claude models list >/dev/null 2>&1; then
-        claude models list 2>/dev/null | awk 'NF { gsub(/"/, "\\\""); printf "%s\"%s\"", sep, $1; sep="," } END { print "" }' | sed 's/^/[/' | sed 's/$/]/'
+      models_output=$(claude models list 2>/dev/null) && [ -n "$models_output" ] && {
+        printf '%s' "$models_output" | awk 'NF { gsub(/"/, "\\\""); printf "%s\"%s\"", sep, $1; sep="," } END { print "" }' | sed 's/^/[/' | sed 's/$/]/'
         exit 0
-      fi
+      }
     fi
     ;;
 esac

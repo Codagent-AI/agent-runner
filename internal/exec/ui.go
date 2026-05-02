@@ -23,7 +23,7 @@ func ExecuteUIStep(step *model.Step, ctx *model.ExecutionContext, log Logger) (S
 		return OutcomeFailed, err
 	}
 	if result.Canceled {
-		return OutcomeAborted, nil
+		return OutcomeFailed, nil
 	}
 	if step.OutcomeCapture != "" {
 		ctx.CapturedVariables[step.OutcomeCapture] = model.NewCapturedString(result.Outcome)
@@ -49,6 +49,11 @@ func buildUIRequest(step *model.Step, ctx *model.ExecutionContext) (model.UIStep
 	inputs := make([]model.UIInput, len(step.Inputs))
 	for i, input := range step.Inputs {
 		inputs[i] = input
+		prompt, err := textfmt.InterpolateTyped(input.Prompt, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(step.ID))
+		if err != nil {
+			return model.UIStepRequest{}, fmt.Errorf("inputs[%d].prompt: %w", i, err)
+		}
+		inputs[i].Prompt = textfmt.StripANSI(prompt)
 		options, err := resolveUIOptions(input.Options, ctx)
 		if err != nil {
 			return model.UIStepRequest{}, fmt.Errorf("inputs[%d].options: %w", i, err)
@@ -61,7 +66,15 @@ func buildUIRequest(step *model.Step, ctx *model.ExecutionContext) (model.UIStep
 		}
 		inputs[i].Options = options
 	}
-	return model.UIStepRequest{StepID: step.ID, Title: title, Body: body, Actions: step.Actions, Inputs: inputs}, nil
+	actions := make([]model.UIAction, len(step.Actions))
+	for i, action := range step.Actions {
+		label, err := textfmt.InterpolateTyped(action.Label, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(step.ID))
+		if err != nil {
+			return model.UIStepRequest{}, fmt.Errorf("actions[%d].label: %w", i, err)
+		}
+		actions[i] = model.UIAction{Label: textfmt.StripANSI(label), Outcome: action.Outcome}
+	}
+	return model.UIStepRequest{StepID: step.ID, Title: title, Body: body, Actions: actions, Inputs: inputs}, nil
 }
 
 func resolveUIOptions(options []string, ctx *model.ExecutionContext) ([]string, error) {

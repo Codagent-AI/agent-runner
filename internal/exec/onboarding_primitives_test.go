@@ -18,7 +18,8 @@ func TestExecuteScriptStepCapturesJSONArrayAsTypedList(t *testing.T) {
 
 	ctx := model.NewRootContext(&model.RootContextOptions{WorkflowFile: filepath.Join(dir, "workflow.yaml")})
 	step := model.Step{ID: "detect", Script: "emit.sh", Capture: "detected", CaptureFormat: "json"}
-	outcome, err := ExecuteScriptStep(&step, ctx, &mockRunner{}, &mockLogger{})
+	runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "[\"claude\",\"codex\"]\n"}}}
+	outcome, err := ExecuteScriptStep(&step, ctx, runner, &mockLogger{})
 	if err != nil {
 		t.Fatalf("ExecuteScriptStep() returned error: %v", err)
 	}

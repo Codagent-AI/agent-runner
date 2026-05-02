@@ -1,7 +1,7 @@
 # workflow-bundled-scripts Specification
 
 ## Purpose
-TBD - created by archiving change onboarding. Update Purpose after archive.
+Define the `script:` step type that executes bundled or on-disk scripts within workflows, with path traversal protection, typed JSON capture, declared stdin inputs, and deterministic materialization of embedded scripts into session directories.
 ## Requirements
 ### Requirement: Script step shape and field rules
 

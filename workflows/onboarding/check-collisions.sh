@@ -12,7 +12,7 @@ fi
 first=1
 printf '['
 for name in interactive_base headless_base planner implementor; do
-  if grep -Eq "^[[:space:]]+${name}:[[:space:]]*$" "$target_path" 2>/dev/null; then
+  if sed -n '/^[[:space:]]*agents:[[:space:]]*$/,/^[^[:space:]]/p' "$target_path" 2>/dev/null | grep -Eq "^[[:space:]]+${name}:[[:space:]]*$"; then
     if [ "$first" -eq 0 ]; then
       printf ','
     fi

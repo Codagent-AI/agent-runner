@@ -543,7 +543,7 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatalf("expected success, got %q", outcome)
 		}
 		if ctx.CapturedVariables["review_result"].Str != "review-output" {
-			t.Fatalf("expected captured output, got %q", ctx.CapturedVariables["review_result"])
+			t.Fatalf("expected captured output, got %q", ctx.CapturedVariables["review_result"].Str)
 		}
 	})
 
@@ -559,7 +559,7 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatalf("expected success, got %q", outcome)
 		}
 		if ctx.CapturedVariables["tasks_glob"].Str != "path/to/tasks/*.md" {
-			t.Fatalf("expected trailing newline stripped, got %q", ctx.CapturedVariables["tasks_glob"])
+			t.Fatalf("expected trailing newline stripped, got %q", ctx.CapturedVariables["tasks_glob"].Str)
 		}
 	})
 
@@ -569,7 +569,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "get output", Session: model.SessionNew, Capture: "result"}
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 		if ctx.CapturedVariables["result"].Str != "value\n" {
-			t.Fatalf("expected one trailing newline preserved, got %q", ctx.CapturedVariables["result"])
+			t.Fatalf("expected one trailing newline preserved, got %q", ctx.CapturedVariables["result"].Str)
 		}
 	})
 
@@ -579,7 +579,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "get output", Session: model.SessionNew, Capture: "result"}
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 		if ctx.CapturedVariables["result"].Str != "  indented output" {
-			t.Fatalf("expected leading whitespace preserved, got %q", ctx.CapturedVariables["result"])
+			t.Fatalf("expected leading whitespace preserved, got %q", ctx.CapturedVariables["result"].Str)
 		}
 	})
 
@@ -595,7 +595,7 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatalf("expected failed, got %q", outcome)
 		}
 		if ctx.CapturedVariables["review_result"].Str != "review-failures" {
-			t.Fatalf("expected captured output on failure, got %q", ctx.CapturedVariables["review_result"])
+			t.Fatalf("expected captured output on failure, got %q", ctx.CapturedVariables["review_result"].Str)
 		}
 	})
 
@@ -614,7 +614,7 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatalf("expected success, got %q", outcome)
 		}
 		if ctx.CapturedVariables["result"].Str != "filtered response" {
-			t.Fatalf("expected filtered response, got %q", ctx.CapturedVariables["result"])
+			t.Fatalf("expected filtered response, got %q", ctx.CapturedVariables["result"].Str)
 		}
 	})
 
@@ -640,7 +640,7 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatalf("expected success, got %q", outcome)
 		}
 		if ctx.CapturedVariables["result"].Str != "codex headless smoke ok." {
-			t.Fatalf("expected filtered codex output captured, got %q", ctx.CapturedVariables["result"])
+			t.Fatalf("expected filtered codex output captured, got %q", ctx.CapturedVariables["result"].Str)
 		}
 		end := findAuditEvent(auditLogger.events, audit.EventStepEnd)
 		if end == nil {

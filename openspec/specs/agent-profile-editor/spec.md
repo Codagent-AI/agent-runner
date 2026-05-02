@@ -1,7 +1,7 @@
 # agent-profile-editor Specification
 
 ## Purpose
-TBD - created by archiving change onboarding. Update Purpose after archive.
+Define the interactive agent profile editor that guides users through choosing CLI adapters, models, and scope to produce the standard four-agent profile shape, writing results atomically via a tested internal Go subcommand.
 ## Requirements
 ### Requirement: Editor produces a fixed four-agent shape
 

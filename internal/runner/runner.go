@@ -650,10 +650,9 @@ func materializeBundledAssets(sessionDir, workflowFile string) error {
 		return fmt.Errorf("builtin workflow has no namespace: %s", rel)
 	}
 	root := filepath.Join(sessionDir, "bundled", namespace)
-	if _, err := os.Stat(root); err == nil {
+	marker := filepath.Join(root, ".complete")
+	if _, err := os.Stat(marker); err == nil {
 		return nil
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("stat bundled assets: %w", err)
 	}
 	assets, err := builtinworkflows.ListAssets(namespace)
 	if err != nil {
@@ -675,6 +674,9 @@ func materializeBundledAssets(sessionDir, workflowFile string) error {
 		if err := os.WriteFile(target, data, mode); err != nil {
 			return fmt.Errorf("write bundled asset %s: %w", target, err)
 		}
+	}
+	if err := os.WriteFile(marker, nil, 0o600); err != nil {
+		return fmt.Errorf("write bundled asset completion marker: %w", err)
 	}
 	return nil
 }

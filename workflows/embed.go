@@ -70,7 +70,7 @@ func ReadFile(workflowFile string) ([]byte, error) {
 }
 
 func ListAssets(namespace string) ([]string, error) {
-	if namespace == "" || namespace == "." || strings.Contains(namespace, "/") || strings.Contains(namespace, `\`) {
+	if namespace == "" || namespace == "." || namespace == ".." || strings.Contains(namespace, "/") || strings.Contains(namespace, `\`) {
 		return nil, fmt.Errorf("invalid builtin workflow namespace: %s", namespace)
 	}
 	var assets []string
@@ -100,7 +100,7 @@ func ListAssets(namespace string) ([]string, error) {
 
 func ReadAsset(assetPath string) ([]byte, error) {
 	clean := path.Clean(assetPath)
-	if clean == "." || strings.HasPrefix(clean, "../") || path.IsAbs(clean) {
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || path.IsAbs(clean) {
 		return nil, fmt.Errorf("invalid builtin asset path: %s", assetPath)
 	}
 	ext := path.Ext(clean)

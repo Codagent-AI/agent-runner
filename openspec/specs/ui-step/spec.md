@@ -1,7 +1,7 @@
 # ui-step Specification
 
 ## Purpose
-TBD - created by archiving change onboarding. Update Purpose after archive.
+Define the `mode: ui` step primitive that renders interactive TUI screens within workflows, allowing users to make selections, confirm actions, and provide input through a structured terminal interface.
 ## Requirements
 ### Requirement: Mode "ui" step shape
 
