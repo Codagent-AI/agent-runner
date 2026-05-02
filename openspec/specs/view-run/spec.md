@@ -209,12 +209,16 @@ Shell stdout or stderr exceeding 2000 lines or 256 KB (whichever comes first) SH
 - **THEN** the detail pane loads and displays the full output
 
 ### Requirement: Copy selected step detail
-The run view SHALL provide a `c` keybinding that copies the currently selected step's rendered detail block to the system clipboard as plain text with terminal styling removed. The copied text SHALL match the same detail content the run view renders for that step at the current drill-in level, including the current lazy-loading state for large output. On successful copy, the run view SHALL show a transient notice indicating that the selected step detail was copied. If the clipboard write fails, the run view SHALL show a transient notice naming the failure.
+The run view SHALL provide a `c` keybinding that copies the current directory, current breadcrumb, and currently selected step's rendered detail block to the system clipboard as plain text with terminal styling removed. The copied step detail SHALL match the same detail content the run view renders for that step at the current drill-in level, including the current lazy-loading state for large output. On successful copy, the run view SHALL show a transient notice indicating that the selected step detail was copied, then clear that notice after 2 seconds if it has not been replaced by another notice. If the clipboard write fails, the run view SHALL show a transient notice naming the failure.
 
 #### Scenario: Copy selected step detail
 - **WHEN** the user presses `c` while a step is selected in the run view
-- **THEN** the selected step's detail block is copied to the clipboard as plain text
+- **THEN** the current directory, current breadcrumb, and selected step's detail block are copied to the clipboard as plain text
 - **AND** the help bar advertises `c copy`
+
+#### Scenario: Copy success notice clears
+- **WHEN** a copy succeeds and the copy success notice is still visible 2 seconds later
+- **THEN** the copy success notice is cleared
 
 #### Scenario: Copy clipboard failure
 - **WHEN** the user presses `c` and the clipboard write fails

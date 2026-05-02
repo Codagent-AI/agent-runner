@@ -274,6 +274,7 @@ func TestModel_C_CopiesSelectedStepDetail(t *testing.T) {
 	tree.Root.Children[0].Stdout = "build ok\nnext line"
 	m := newTestModel(tree, FromList)
 	m.cursor = 0
+	m.originCwd = "/repo/project"
 
 	var copied string
 	oldWrite := writeClipboard
@@ -284,14 +285,14 @@ func TestModel_C_CopiesSelectedStepDetail(t *testing.T) {
 	defer func() { writeClipboard = oldWrite }()
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
-	if cmd != nil {
-		t.Fatalf("copy should not emit a command, got %v", cmd)
+	if cmd == nil {
+		t.Fatal("copy should schedule success notice clearing")
 	}
 
 	if copied == "" {
 		t.Fatal("expected selected step detail to be copied")
 	}
-	for _, want := range []string{"build", "$ go build ./...", "stdout:", "build ok", "next line"} {
+	for _, want := range []string{"directory: /repo/project", "breadcrumb:", "test-workflow", "build", "$ go build ./...", "stdout:", "build ok", "next line"} {
 		if !strings.Contains(copied, want) {
 			t.Fatalf("copied detail missing %q:\n%s", want, copied)
 		}
@@ -307,6 +308,28 @@ func TestModel_C_CopiesSelectedStepDetail(t *testing.T) {
 	}
 }
 
+func TestModel_CopyNoticeExpiresOnlyWhenStillCurrent(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList)
+	m.notice = "copied selected step detail"
+	m.copyNoticeSeq = 2
+
+	m.Update(copyNoticeExpiredMsg{seq: 1})
+	if m.notice != "copied selected step detail" {
+		t.Fatalf("notice = %q, want stale copy success notice preserved", m.notice)
+	}
+
+	m.Update(copyNoticeExpiredMsg{seq: 2})
+	if m.notice != "" {
+		t.Fatalf("notice = %q, want cleared copy success notice", m.notice)
+	}
+
+	m.notice = "copy failed: clipboard unavailable"
+	m.Update(copyNoticeExpiredMsg{seq: 2})
+	if m.notice != "copy failed: clipboard unavailable" {
+		t.Fatalf("notice = %q, want unrelated notice preserved", m.notice)
+	}
+}
+
 func TestModel_C_ShowsNoticeWhenClipboardWriteFails(t *testing.T) {
 	m := newTestModel(simpleTree(), FromList)
 
@@ -316,7 +339,10 @@ func TestModel_C_ShowsNoticeWhenClipboardWriteFails(t *testing.T) {
 	}
 	defer func() { writeClipboard = oldWrite }()
 
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	if cmd != nil {
+		t.Fatalf("failed copy should not schedule success notice clearing, got %v", cmd)
+	}
 
 	if !strings.Contains(m.notice, "copy failed: clipboard unavailable") {
 		t.Fatalf("notice = %q, want clipboard failure notice", m.notice)

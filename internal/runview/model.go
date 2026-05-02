@@ -92,6 +92,7 @@ type Model struct {
 	liveResult       string // set on ExecDoneMsg ("success"/"failed"/"stopped")
 	autoFollow       bool   // cursor tracks activeStep; enabled by default in FromLiveRun
 	activeStepPrefix string // last known active step prefix from StepStateMsg
+	copyNoticeSeq    int    // increments on successful copy so stale clear timers are ignored
 
 	// Resume-exec state. When the user selects an agent step after the live
 	// run completes, the Model is the top-level tea.Program — there's no
@@ -328,6 +329,7 @@ func describeWorkflowHint(state *model.RunState, sessionDir string) string {
 const altScreenDelay = 1000 * time.Millisecond
 
 type deferredAltScreenMsg struct{}
+type copyNoticeExpiredMsg struct{ seq int }
 
 func (m *Model) Init() tea.Cmd {
 	var cmds []tea.Cmd
@@ -365,6 +367,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.altScreen && !m.suppressAltScreen {
 			m.altScreen = true
 			return m, tea.Batch(tea.EnterAltScreen, tea.EnableMouseCellMotion)
+		}
+		return m, nil
+
+	case copyNoticeExpiredMsg:
+		if msg.seq == m.copyNoticeSeq && m.notice == "copied selected step detail" {
+			m.notice = ""
 		}
 		return m, nil
 
@@ -646,22 +654,27 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.handleLoadFull()
 		m.rebuildRanges()
 	case "c":
-		m.handleCopySelectedDetail()
+		return m, m.handleCopySelectedDetail()
 	}
 	return m, nil
 }
 
-func (m *Model) handleCopySelectedDetail() {
+func (m *Model) handleCopySelectedDetail() tea.Cmd {
 	text := m.selectedStepDetailText()
 	if text == "" {
 		m.notice = "copy failed: no selected step detail"
-		return
+		return nil
 	}
 	if err := writeClipboard(text); err != nil {
 		m.notice = "copy failed: " + err.Error()
-		return
+		return nil
 	}
 	m.notice = "copied selected step detail"
+	m.copyNoticeSeq++
+	seq := m.copyNoticeSeq
+	return tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+		return copyNoticeExpiredMsg{seq: seq}
+	})
 }
 
 func (m *Model) selectedStepDetailText() string {
@@ -680,10 +693,34 @@ func (m *Model) selectedStepDetailText() string {
 	)
 	for _, r := range ranges {
 		if r.node == selected {
-			return plainTextLines(lines[r.startLine:r.endLine])
+			return m.copyTextWithContext(plainTextLines(lines[r.startLine:r.endLine]))
 		}
 	}
 	return ""
+}
+
+func (m *Model) copyTextWithContext(detail string) string {
+	var parts []string
+	if dir := m.copyDirectory(); dir != "" {
+		parts = append(parts, "directory: "+dir)
+	}
+	if breadcrumb := strings.TrimSpace(tuistyle.Sanitize(m.renderBreadcrumb())); breadcrumb != "" {
+		parts = append(parts, "breadcrumb: "+breadcrumb)
+	}
+	if detail != "" {
+		if len(parts) > 0 {
+			parts = append(parts, "")
+		}
+		parts = append(parts, detail)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func (m *Model) copyDirectory() string {
+	if m.originCwd != "" {
+		return m.originCwd
+	}
+	return m.projectDir
 }
 
 func plainTextLines(lines []string) string {
