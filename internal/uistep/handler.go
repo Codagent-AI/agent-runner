@@ -15,6 +15,9 @@ var titleStyle = lipgloss.NewStyle().Bold(true)
 
 func NewHandler(suspend, resume func()) func(model.UIStepRequest) (model.UIStepResult, error) {
 	return func(req model.UIStepRequest) (model.UIStepResult, error) {
+		if len(req.Actions) == 0 {
+			return model.UIStepResult{}, fmt.Errorf("ui step %s has no actions", req.StepID)
+		}
 		if suspend != nil {
 			suspend()
 		}
@@ -23,19 +26,19 @@ func NewHandler(suspend, resume func()) func(model.UIStepRequest) (model.UIStepR
 				resume()
 			}
 		}()
-		m := newModel(req)
+		m := newModel(&req)
 		p := tea.NewProgram(m)
 		final, err := p.Run()
 		if err != nil {
 			return model.UIStepResult{}, err
 		}
-		fm := final.(uiModel)
+		fm := final.(*uiModel)
 		return fm.result, nil
 	}
 }
 
 type uiModel struct {
-	req    model.UIStepRequest
+	req    *model.UIStepRequest
 	cursor int
 	phase  phase
 	inputs []int
@@ -49,8 +52,8 @@ const (
 	phaseActions
 )
 
-func newModel(req model.UIStepRequest) uiModel {
-	m := uiModel{
+func newModel(req *model.UIStepRequest) *uiModel {
+	m := &uiModel{
 		req:    req,
 		inputs: make([]int, len(req.Inputs)),
 	}
@@ -60,11 +63,10 @@ func newModel(req model.UIStepRequest) uiModel {
 	return m
 }
 
-func (m uiModel) Init() tea.Cmd { return nil }
+func (m *uiModel) Init() tea.Cmd { return nil }
 
-func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
+func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if msg, ok := msg.(tea.KeyMsg); ok {
 		switch msg.String() {
 		case "ctrl+c":
 			m.result = model.UIStepResult{Canceled: true}
@@ -82,7 +84,7 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m uiModel) maxCursor() int {
+func (m *uiModel) maxCursor() int {
 	switch m.phase {
 	case phaseInputs:
 		return len(m.req.Inputs[m.currentInput()].Options) - 1
@@ -92,7 +94,7 @@ func (m uiModel) maxCursor() int {
 	return 0
 }
 
-func (m uiModel) currentInput() int {
+func (m *uiModel) currentInput() int {
 	for i := range m.inputs {
 		if m.inputs[i] == 0 {
 			return i
@@ -101,7 +103,7 @@ func (m uiModel) currentInput() int {
 	return len(m.inputs) - 1
 }
 
-func (m uiModel) handleSelect() (tea.Model, tea.Cmd) {
+func (m *uiModel) handleSelect() (tea.Model, tea.Cmd) {
 	switch m.phase {
 	case phaseInputs:
 		idx := m.currentInput()
@@ -128,7 +130,7 @@ func (m uiModel) handleSelect() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m uiModel) View() string {
+func (m *uiModel) View() string {
 	var b strings.Builder
 
 	b.WriteString(titleStyle.Render(m.req.Title))
