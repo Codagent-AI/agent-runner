@@ -1,0 +1,6 @@
+- [ ] Implement the change described by these files:
+  - [proposal.md](proposal.md)
+  - [specs/onboarding-workflow/spec.md](specs/onboarding-workflow/spec.md)
+  - [specs/ui-step/spec.md](specs/ui-step/spec.md)
+  - [specs/live-run-view/spec.md](specs/live-run-view/spec.md)
+  - [design.md](design.md)
