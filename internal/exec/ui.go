@@ -1,10 +1,7 @@
 package exec
 
 import (
-	"bufio"
 	"fmt"
-	"os"
-	"strconv"
 	"strings"
 
 	"github.com/codagent/agent-runner/internal/model"
@@ -81,59 +78,4 @@ func resolveUIOptions(options []string, ctx *model.ExecutionContext) ([]string, 
 		resolved[i] = value
 	}
 	return resolved, nil
-}
-
-func promptUIStep(request *model.UIStepRequest, ctx *model.ExecutionContext) (model.UIStepResult, error) {
-	if ctx.SuspendHook != nil {
-		ctx.SuspendHook()
-		defer func() {
-			if ctx.ResumeHook != nil {
-				ctx.ResumeHook()
-			}
-		}()
-	}
-	reader := bufio.NewReader(os.Stdin)
-	_, _ = fmt.Fprintln(os.Stdout, request.Title)
-	if request.Body != "" {
-		_, _ = fmt.Fprintln(os.Stdout)
-		_, _ = fmt.Fprintln(os.Stdout, request.Body)
-	}
-	inputs := make(map[string]string)
-	for _, input := range request.Inputs {
-		value, err := promptChoice(reader, input.Prompt, input.Options)
-		if err != nil {
-			return model.UIStepResult{}, err
-		}
-		inputs[input.ID] = value
-	}
-	actionLabels := make([]string, len(request.Actions))
-	for i, action := range request.Actions {
-		actionLabels[i] = action.Label
-	}
-	chosen, err := promptChoice(reader, "Action", actionLabels)
-	if err != nil {
-		return model.UIStepResult{}, err
-	}
-	for i, label := range actionLabels {
-		if chosen == label {
-			return model.UIStepResult{Outcome: request.Actions[i].Outcome, Inputs: inputs}, nil
-		}
-	}
-	return model.UIStepResult{}, fmt.Errorf("invalid action")
-}
-
-func promptChoice(reader *bufio.Reader, prompt string, options []string) (string, error) {
-	for i, option := range options {
-		_, _ = fmt.Fprintf(os.Stdout, "  %d. %s\n", i+1, option)
-	}
-	_, _ = fmt.Fprintf(os.Stdout, "%s [1-%d]: ", prompt, len(options))
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return "", err
-	}
-	n, err := strconv.Atoi(strings.TrimSpace(line))
-	if err != nil || n < 1 || n > len(options) {
-		return "", fmt.Errorf("invalid selection")
-	}
-	return options[n-1], nil
 }

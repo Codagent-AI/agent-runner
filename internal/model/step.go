@@ -355,33 +355,8 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 		return fmt.Errorf(`"workdir" is only allowed on shell, script, and agent steps`)
 	}
 
-	if s.Model != "" {
-		switch {
-		case isUI:
-			return fmt.Errorf(`"model" is not valid on ui steps`)
-		case isScript:
-			return fmt.Errorf(`"model" is not valid on script steps`)
-		default:
-			if err := validateAgentOnlyField("model", isAgent); err != nil {
-				return err
-			}
-		}
-	}
-
-	if s.CLI != "" {
-		switch {
-		case isUI:
-			return fmt.Errorf(`"cli" is not valid on ui steps`)
-		case isScript:
-			return fmt.Errorf(`"cli" is not valid on script steps`)
-		default:
-			if err := validateAgentOnlyField("cli", isAgent); err != nil {
-				return err
-			}
-			if err := validateCLIName(s.CLI, knownCLIs); err != nil {
-				return err
-			}
-		}
+	if err := s.validateAgentAdapterFields(knownCLIs, isAgent, isScript, isUI); err != nil {
+		return err
 	}
 
 	if s.Loop != nil && len(s.Steps) == 0 {
@@ -415,6 +390,38 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 	}
 
 	return nil
+}
+
+func (s *Step) validateAgentAdapterFields(knownCLIs []string, isAgent, isScript, isUI bool) error {
+	if err := validateModelField(s.Model, isAgent, isScript, isUI); err != nil {
+		return err
+	}
+	if s.CLI == "" {
+		return nil
+	}
+	if isUI {
+		return fmt.Errorf(`"cli" is not valid on ui steps`)
+	}
+	if isScript {
+		return fmt.Errorf(`"cli" is not valid on script steps`)
+	}
+	if err := validateAgentOnlyField("cli", isAgent); err != nil {
+		return err
+	}
+	return validateCLIName(s.CLI, knownCLIs)
+}
+
+func validateModelField(modelValue string, isAgent, isScript, isUI bool) error {
+	if modelValue == "" {
+		return nil
+	}
+	if isUI {
+		return fmt.Errorf(`"model" is not valid on ui steps`)
+	}
+	if isScript {
+		return fmt.Errorf(`"model" is not valid on script steps`)
+	}
+	return validateAgentOnlyField("model", isAgent)
 }
 
 func (s *Step) validateScriptFields(isScript bool) error {
@@ -490,47 +497,71 @@ func (s *Step) validateUIFields(isUI bool) error {
 		return fmt.Errorf(`"capture" and "outcome_capture" must name distinct variables`)
 	}
 
-	outcomes := make(map[string]struct{}, len(s.Actions))
-	for i, action := range s.Actions {
-		if action.Label == "" || action.Outcome == "" {
-			return fmt.Errorf(`actions[%d] requires label and outcome`, i)
-		}
-		if strings.Contains(action.Outcome, "{{") || strings.Contains(action.Outcome, "}}") {
-			return fmt.Errorf(`actions[%d].outcome must be static identifiers`, i)
-		}
-		if !identifierRe.MatchString(action.Outcome) {
-			return fmt.Errorf(`actions[%d].outcome must match ^[a-z][a-z0-9_]*$`, i)
-		}
-		if _, exists := outcomes[action.Outcome]; exists {
-			return fmt.Errorf(`duplicate outcome %q`, action.Outcome)
-		}
-		outcomes[action.Outcome] = struct{}{}
+	if err := validateUIActions(s.Actions); err != nil {
+		return err
 	}
+	return validateUIInputs(s.Inputs)
+}
 
-	inputs := make(map[string]struct{}, len(s.Inputs))
-	for i, input := range s.Inputs {
-		if input.Kind != "single_select" && input.Kind != "single-select" {
-			return fmt.Errorf(`inputs[%d]: only single_select inputs are supported`, i)
+func validateUIActions(actions []UIAction) error {
+	outcomes := make(map[string]struct{}, len(actions))
+	for i, action := range actions {
+		if err := validateUIAction(i, action, outcomes); err != nil {
+			return err
 		}
-		if input.ID == "" {
-			return fmt.Errorf(`inputs[%d].id is required`, i)
+	}
+	return nil
+}
+
+func validateUIAction(i int, action UIAction, outcomes map[string]struct{}) error {
+	if action.Label == "" || action.Outcome == "" {
+		return fmt.Errorf(`actions[%d] requires label and outcome`, i)
+	}
+	if strings.Contains(action.Outcome, "{{") || strings.Contains(action.Outcome, "}}") {
+		return fmt.Errorf(`actions[%d].outcome must be static identifiers`, i)
+	}
+	if !identifierRe.MatchString(action.Outcome) {
+		return fmt.Errorf(`actions[%d].outcome must match ^[a-z][a-z0-9_]*$`, i)
+	}
+	if _, exists := outcomes[action.Outcome]; exists {
+		return fmt.Errorf(`duplicate outcome %q`, action.Outcome)
+	}
+	outcomes[action.Outcome] = struct{}{}
+	return nil
+}
+
+func validateUIInputs(inputs []UIInput) error {
+	seen := make(map[string]struct{}, len(inputs))
+	for i := range inputs {
+		if err := validateUIInput(i, &inputs[i], seen); err != nil {
+			return err
 		}
-		if !identifierRe.MatchString(input.ID) {
-			return fmt.Errorf(`inputs[%d].id must match ^[a-z][a-z0-9_]*$`, i)
-		}
-		if _, exists := inputs[input.ID]; exists {
-			return fmt.Errorf(`duplicate input id %q`, input.ID)
-		}
-		inputs[input.ID] = struct{}{}
-		if input.Prompt == "" {
-			return fmt.Errorf(`inputs[%d].prompt is required`, i)
-		}
-		if len(input.Options) == 0 {
-			return fmt.Errorf(`inputs[%d].options is required`, i)
-		}
-		if input.Default != "" && !isDynamicOptions(input.Options) && !slices.Contains(input.Options, input.Default) {
-			return fmt.Errorf(`inputs[%d].default is not among declared options`, i)
-		}
+	}
+	return nil
+}
+
+func validateUIInput(i int, input *UIInput, seen map[string]struct{}) error {
+	if input.Kind != "single_select" && input.Kind != "single-select" {
+		return fmt.Errorf(`inputs[%d]: only single_select inputs are supported`, i)
+	}
+	if input.ID == "" {
+		return fmt.Errorf(`inputs[%d].id is required`, i)
+	}
+	if !identifierRe.MatchString(input.ID) {
+		return fmt.Errorf(`inputs[%d].id must match ^[a-z][a-z0-9_]*$`, i)
+	}
+	if _, exists := seen[input.ID]; exists {
+		return fmt.Errorf(`duplicate input id %q`, input.ID)
+	}
+	seen[input.ID] = struct{}{}
+	if input.Prompt == "" {
+		return fmt.Errorf(`inputs[%d].prompt is required`, i)
+	}
+	if len(input.Options) == 0 {
+		return fmt.Errorf(`inputs[%d].options is required`, i)
+	}
+	if input.Default != "" && !isDynamicOptions(input.Options) && !slices.Contains(input.Options, input.Default) {
+		return fmt.Errorf(`inputs[%d].default is not among declared options`, i)
 	}
 	return nil
 }
