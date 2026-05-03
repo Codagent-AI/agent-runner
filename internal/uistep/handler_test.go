@@ -15,10 +15,16 @@ func TestUIModelRendersInputsAndActionsTogether(t *testing.T) {
 
 	view := tuistyle.Sanitize(m.View())
 
-	for _, want := range []string{"CLI adapter", "claude", "codex", "Continue"} {
+	for _, want := range []string{"CLI adapter", "claude", "codex"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("View() missing %q:\n%s", want, view)
 		}
+	}
+	if strings.Contains(view, "Continue") {
+		t.Fatalf("simple picker should not render a Continue button:\n%s", view)
+	}
+	if strings.Contains(view, "Option") || strings.Contains(view, "Select") {
+		t.Fatalf("View() should not render keyboard hints inline:\n%s", view)
 	}
 }
 
@@ -32,7 +38,7 @@ func TestNewHandlerNilRequestReturnsError(t *testing.T) {
 }
 
 func TestUIModelArrowKeysKeepInputFocusedAndTabFocusesAction(t *testing.T) {
-	m := newModel(adapterRequest())
+	m := newModel(cancelableAdapterRequest())
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = next.(*uiModel)
@@ -46,6 +52,19 @@ func TestUIModelArrowKeysKeepInputFocusedAndTabFocusesAction(t *testing.T) {
 	view = tuistyle.Sanitize(m.View())
 	if !strings.Contains(view, "[ Continue ]") {
 		t.Fatalf("focused action should render as a button, got:\n%s", view)
+	}
+}
+
+func TestUIModelHelpPartsReflectFocus(t *testing.T) {
+	m := newModel(cancelableAdapterRequest())
+	if got := strings.Join(m.HelpParts(), " "); !strings.Contains(got, "↑↓ option") || strings.Contains(got, "←→ action") {
+		t.Fatalf("input help should show option controls only, got %q", got)
+	}
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = next.(*uiModel)
+	if got := strings.Join(m.HelpParts(), " "); strings.Contains(got, "↑↓ option") || !strings.Contains(got, "←→ action") {
+		t.Fatalf("action help should show action controls and omit option controls, got %q", got)
 	}
 }
 
@@ -95,6 +114,28 @@ func TestUIModelEnterOnFocusedActionFiresOutcomeWithHighlightedInput(t *testing.
 	}
 }
 
+func TestUIModelEnterOnSimplePickerSubmitsImmediately(t *testing.T) {
+	m := newModel(adapterRequest())
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(*uiModel)
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(*uiModel)
+
+	if cmd == nil {
+		t.Fatal("expected enter on simple picker to submit")
+	}
+	if !m.done {
+		t.Fatal("expected simple picker to be done")
+	}
+	if m.result.Outcome != "continue" {
+		t.Fatalf("outcome = %q, want continue", m.result.Outcome)
+	}
+	if got := m.result.Inputs["cli"]; got != "codex" {
+		t.Fatalf("input cli = %q, want codex", got)
+	}
+}
+
 func adapterRequest() *model.UIStepRequest {
 	return &model.UIStepRequest{
 		StepID: "pick-cli",
@@ -108,4 +149,13 @@ func adapterRequest() *model.UIStepRequest {
 		}},
 		Actions: []model.UIAction{{Label: "Continue", Outcome: "continue"}},
 	}
+}
+
+func cancelableAdapterRequest() *model.UIStepRequest {
+	req := adapterRequest()
+	req.Actions = []model.UIAction{
+		{Label: "Continue", Outcome: "continue"},
+		{Label: "Cancel", Outcome: "cancel"},
+	}
+	return req
 }

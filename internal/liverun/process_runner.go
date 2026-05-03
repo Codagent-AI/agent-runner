@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	iexec "github.com/codagent/agent-runner/internal/exec"
 )
@@ -26,6 +28,10 @@ type tuiProcessRunner struct {
 	stepPrefix    string // set via SetPrefix before each step
 	stdoutWrapper func(w io.Writer) io.Writer
 	stderrWrapper func(w io.Writer) io.Writer
+
+	mu                sync.Mutex
+	delayedStepPrefix string
+	delayedStepTimer  *time.Timer
 }
 
 // SetStdoutWrapper sets a function that wraps the TUI stdout writer. When set,
@@ -44,8 +50,38 @@ func (r *tuiProcessRunner) SetStderrWrapper(fn func(w io.Writer) io.Writer) {
 // and notifies the TUI that a new step has become active. Called by exec/shell.go
 // and exec/agent.go via a type assertion before each run.
 func (r *tuiProcessRunner) SetPrefix(prefix string) {
+	r.mu.Lock()
+	r.cancelDelayedStepLocked()
 	r.stepPrefix = prefix
+	r.mu.Unlock()
 	r.coord.NotifyStepChange(prefix)
+}
+
+func (r *tuiProcessRunner) SetScriptPrefix(prefix string, delay time.Duration) {
+	r.mu.Lock()
+	r.cancelDelayedStepLocked()
+	r.stepPrefix = prefix
+	r.delayedStepPrefix = prefix
+	r.delayedStepTimer = time.AfterFunc(delay, func() {
+		r.mu.Lock()
+		if r.delayedStepPrefix != prefix {
+			r.mu.Unlock()
+			return
+		}
+		r.delayedStepPrefix = ""
+		r.delayedStepTimer = nil
+		r.mu.Unlock()
+		r.coord.NotifyStepChange(prefix)
+	})
+	r.mu.Unlock()
+}
+
+func (r *tuiProcessRunner) cancelDelayedStepLocked() {
+	if r.delayedStepTimer != nil {
+		r.delayedStepTimer.Stop()
+		r.delayedStepTimer = nil
+	}
+	r.delayedStepPrefix = ""
 }
 
 // sanitizePrefix converts an audit-log prefix into a safe filesystem name.
@@ -243,6 +279,12 @@ func (r *tuiProcessRunner) RunAgent(args []string, captureStdout bool, workdir s
 }
 
 func (r *tuiProcessRunner) RunScript(path string, stdin []byte, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
+	defer func() {
+		r.mu.Lock()
+		r.cancelDelayedStepLocked()
+		r.mu.Unlock()
+	}()
+
 	c := exec.Command(path) // #nosec G204
 	c.Stdin = bytes.NewReader(stdin)
 	c.Env = append(os.Environ(), "AGENT_RUNNER_BUNDLE_DIR="+scriptBundleDir(path))

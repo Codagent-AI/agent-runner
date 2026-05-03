@@ -16,6 +16,8 @@ import (
 	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
+const scriptStepRevealDelay = 2 * time.Second
+
 func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, log Logger) (StepOutcome, error) {
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 	startTime := time.Now()
@@ -33,7 +35,12 @@ func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner Pro
 	}
 
 	log.Printf("  script: %s\n", step.Script)
-	if ps, ok := runner.(interface{ SetPrefix(string) }); ok {
+	switch ps := runner.(type) {
+	case interface {
+		SetScriptPrefix(string, time.Duration)
+	}:
+		ps.SetScriptPrefix(prefix, scriptStepRevealDelay)
+	case interface{ SetPrefix(string) }:
 		ps.SetPrefix(prefix)
 	}
 	var result ProcessResult

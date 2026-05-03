@@ -124,8 +124,40 @@ func (m *Model) Result() model.UIStepResult {
 	return m.result
 }
 
+func (m *Model) HelpParts() []string {
+	var parts []string
+	if _, ok := m.focusedInputIndex(); ok {
+		parts = append(parts, "↑↓ option")
+		if m.elementCount() > 1 {
+			parts = append(parts, "tab focus")
+		}
+		if m.isSimplePicker() {
+			parts = append(parts, "enter select")
+		} else {
+			parts = append(parts, "enter next")
+		}
+	} else if _, ok := m.focusedActionIndex(); ok {
+		if len(m.req.Actions) > 1 {
+			parts = append(parts, "←→ action")
+		}
+		if m.elementCount() > 1 {
+			parts = append(parts, "tab focus")
+		}
+		parts = append(parts, "enter select")
+	}
+	parts = append(parts, "esc cancel")
+	return parts
+}
+
 func (m *Model) elementCount() int {
+	if m.isSimplePicker() {
+		return len(m.req.Inputs)
+	}
 	return len(m.req.Inputs) + len(m.req.Actions)
+}
+
+func (m *Model) isSimplePicker() bool {
+	return len(m.req.Inputs) == 1 && len(m.req.Actions) == 1 && m.req.Actions[0].Outcome == "continue"
 }
 
 func (m *Model) focusedInputIndex() (int, bool) {
@@ -174,6 +206,14 @@ func (m *Model) moveActionFocus(delta int) {
 
 func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 	if _, ok := m.focusedInputIndex(); ok {
+		if m.isSimplePicker() {
+			m.result = model.UIStepResult{
+				Outcome: m.req.Actions[0].Outcome,
+				Inputs:  m.selectedInputs(),
+			}
+			m.done = true
+			return m, tea.Quit
+		}
 		m.moveFocus(1)
 		return m, nil
 	}
@@ -232,22 +272,23 @@ func (m *Model) View() string {
 		b.WriteString("\n")
 	}
 
-	for i, action := range m.req.Actions {
-		label := "[ " + action.Label + " ]"
-		if i > 0 {
-			b.WriteString("  ")
+	if !m.isSimplePicker() {
+		for i, action := range m.req.Actions {
+			label := "[ " + action.Label + " ]"
+			if i > 0 {
+				b.WriteString("  ")
+			}
+			if len(m.req.Inputs)+i == m.focus {
+				b.WriteString(focusedButtonStyle.Render(label))
+			} else {
+				b.WriteString(buttonStyle.Render(label))
+			}
 		}
-		if len(m.req.Inputs)+i == m.focus {
-			b.WriteString(focusedButtonStyle.Render(label))
-		} else {
-			b.WriteString(buttonStyle.Render(label))
-		}
-	}
 
-	if len(m.req.Actions) > 0 {
-		b.WriteString("\n")
+		if len(m.req.Actions) > 0 {
+			b.WriteString("\n")
+		}
 	}
-	b.WriteString("\n←→ Action  ↑↓ Option  Tab Focus  Enter Select")
 	return b.String()
 }
 

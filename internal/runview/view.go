@@ -333,6 +333,9 @@ func (m *Model) stepRowParts(n *StepNode) (typeCol, label, glyph string) {
 func (m *Model) statusGlyph(n *StepNode) string {
 	switch n.Status {
 	case StatusInProgress:
+		if n.Type == NodeUI {
+			return styledStatusGlyph(StatusInProgress)
+		}
 		if (m.active || m.running) && !n.Aborted {
 			if tuistyle.BlinkOn(m.pulsePhase) {
 				return styledStatusGlyph(StatusInProgress)
@@ -393,6 +396,10 @@ func truncateSidebarName(name string) string {
 }
 
 func (m *Model) renderHelpBar() string {
+	if m.liveUI != nil {
+		return tuistyle.ScreenMargin + tuistyle.HelpStyle.Render(strings.Join(m.liveUI.HelpParts(), "   "))
+	}
+
 	sel := m.selectedNode()
 	var parts []string
 

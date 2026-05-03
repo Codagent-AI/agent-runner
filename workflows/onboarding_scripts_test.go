@@ -27,6 +27,20 @@ Run /login first.
 	}
 }
 
+func TestOnboardingModelsForCLIParsesCodexCatalog(t *testing.T) {
+	got := runModelsForCLIWithFakeBinary(t, "codex", `#!/bin/sh
+if [ "$1" = debug ] && [ "$2" = models ]; then
+  printf '%s\n' '{"models":[{"slug":"gpt-5.5","visibility":"list"},{"slug":"hidden-model","visibility":"hidden"},{"slug":"gpt-5.4","visibility":"list"}]}'
+  exit 0
+fi
+exit 1
+`, `{"adapter":"codex"}`)
+	want := `["gpt-5.5","gpt-5.4"]`
+	if got != want {
+		t.Fatalf("models-for-cli output = %s, want %s", got, want)
+	}
+}
+
 func TestOnboardingCountListOmitsTrailingNewline(t *testing.T) {
 	cmd := exec.Command("sh", filepath.Join("onboarding", "count-list.sh"))
 	cmd.Stdin = strings.NewReader(`{"items":[]}`)
@@ -42,15 +56,20 @@ func TestOnboardingCountListOmitsTrailingNewline(t *testing.T) {
 func runModelsForCLIWithClaudeOutput(t *testing.T, claudeOutput string) string {
 	t.Helper()
 
+	return runModelsForCLIWithFakeBinary(t, "claude", "#!/bin/sh\nprintf '%s' "+shellSingleQuote(claudeOutput)+"\n", `{"adapter":"claude"}`)
+}
+
+func runModelsForCLIWithFakeBinary(t *testing.T, name, script, stdin string) string {
+	t.Helper()
+
 	binDir := t.TempDir()
-	claudePath := filepath.Join(binDir, "claude")
-	script := "#!/bin/sh\nprintf '%s' " + shellSingleQuote(claudeOutput) + "\n"
-	if err := os.WriteFile(claudePath, []byte(script), 0o700); err != nil {
-		t.Fatalf("write fake claude: %v", err)
+	binPath := filepath.Join(binDir, name)
+	if err := os.WriteFile(binPath, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake %s: %v", name, err)
 	}
 
 	cmd := exec.Command("sh", filepath.Join("onboarding", "models-for-cli.sh"))
-	cmd.Stdin = strings.NewReader(`{"adapter":"claude"}`)
+	cmd.Stdin = strings.NewReader(stdin)
 	cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	out, err := cmd.CombinedOutput()
 	if err != nil {

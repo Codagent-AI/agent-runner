@@ -4,6 +4,30 @@ set -eu
 payload=$(cat)
 adapter=$(printf '%s' "$payload" | sed -n 's/.*"adapter"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
 
+emit_lines_as_json_array() {
+  awk '
+    function clean(s) {
+      gsub(/^[[:space:]]+/, "", s)
+      gsub(/[[:space:]]+$/, "", s)
+      return s
+    }
+    function emit(s) {
+      gsub(/\\/, "\\\\", s)
+      gsub(/"/, "\\\"", s)
+      printf "%s\"%s\"", sep, s
+      sep=","
+    }
+    BEGIN { printf "[" }
+    {
+      candidate = clean($0)
+      if (candidate != "" && !seen[candidate]++) {
+        emit(candidate)
+      }
+    }
+    END { print "]" }
+  '
+}
+
 case "$adapter" in
   claude)
     if command -v claude >/dev/null 2>&1; then
@@ -34,6 +58,39 @@ case "$adapter" in
           BEGIN { printf "[" }
           END { print "]" }
         '
+        exit 0
+      }
+    fi
+    ;;
+  codex)
+    if command -v codex >/dev/null 2>&1; then
+      models_output=$(codex debug models 2>/dev/null) && [ -n "$models_output" ] && {
+        printf '%s' "$models_output" | sed 's/"slug":"/\
+/g' | awk '
+          function emit(s) {
+            gsub(/\\/, "\\\\", s)
+            gsub(/"/, "\\\"", s)
+            printf "%s\"%s\"", sep, s
+            sep=","
+          }
+          BEGIN { printf "[" }
+          NR > 1 {
+            slug = $0
+            sub(/".*/, "", slug)
+            if (slug != "" && $0 ~ /"visibility":"list"/ && !seen[slug]++) {
+              emit(slug)
+            }
+          }
+          END { print "]" }
+        '
+        exit 0
+      }
+    fi
+    ;;
+  opencode)
+    if command -v opencode >/dev/null 2>&1; then
+      models_output=$(opencode models 2>/dev/null) && [ -n "$models_output" ] && {
+        printf '%s' "$models_output" | emit_lines_as_json_array
         exit 0
       }
     fi

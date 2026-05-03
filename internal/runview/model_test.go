@@ -2338,6 +2338,34 @@ func TestModel_StatusGlyph_BlinkOffHidesDot(t *testing.T) {
 	}
 }
 
+func TestModel_StatusGlyph_UIInProgressDoesNotBlink(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = true
+
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	step := &StepNode{
+		ID:     "pick-scope",
+		Type:   NodeUI,
+		Status: StatusInProgress,
+		Parent: root,
+	}
+	root.Children = []*StepNode{step}
+	m.tree = &Tree{Root: root}
+	m.path = []*StepNode{root}
+
+	m.pulsePhase = 0
+	on := m.statusGlyph(step)
+	m.pulsePhase = 1.5 * math.Pi
+	off := m.statusGlyph(step)
+
+	if !strings.Contains(on, "●") || !strings.Contains(off, "●") {
+		t.Fatalf("ui in-progress glyph should stay visible, got on=%q off=%q", on, off)
+	}
+	if on != off {
+		t.Fatalf("ui in-progress glyph should not blink, got on=%q off=%q", on, off)
+	}
+}
+
 func TestFindFailedLeaf(t *testing.T) {
 	t.Run("finds failed shell step", func(t *testing.T) {
 		root := &StepNode{ID: "root", Type: NodeRoot}

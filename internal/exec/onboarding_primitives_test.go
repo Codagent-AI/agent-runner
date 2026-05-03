@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/model"
@@ -62,6 +63,51 @@ func TestExecuteScriptStepEmitsAuditEvents(t *testing.T) {
 	if end == nil || end.Prefix != "[detect]" || end.Data["outcome"] != "success" {
 		t.Fatalf("expected successful detect step_end, got %+v", recorder.events)
 	}
+}
+
+func TestExecuteScriptStepUsesDelayedPrefixForTUIRunners(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "models.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf ok\n"), 0o700); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	ctx := model.NewRootContext(&model.RootContextOptions{WorkflowFile: filepath.Join(dir, "workflow.yaml")})
+	step := model.Step{ID: "models", Script: "models.sh"}
+	runner := &scriptPrefixRunner{mockRunner: mockRunner{results: []ProcessResult{{ExitCode: 0}}}}
+
+	outcome, err := ExecuteScriptStep(&step, ctx, runner, &mockLogger{})
+	if err != nil {
+		t.Fatalf("ExecuteScriptStep() returned error: %v", err)
+	}
+	if outcome != OutcomeSuccess {
+		t.Fatalf("outcome = %s, want success", outcome)
+	}
+	if runner.immediatePrefix != "" {
+		t.Fatalf("script step should not use immediate prefix notification, got %q", runner.immediatePrefix)
+	}
+	if runner.delayedPrefix != "[models]" {
+		t.Fatalf("delayedPrefix = %q, want [models]", runner.delayedPrefix)
+	}
+	if runner.delay < 2*time.Second {
+		t.Fatalf("delay = %s, want at least 2s", runner.delay)
+	}
+}
+
+type scriptPrefixRunner struct {
+	mockRunner
+	immediatePrefix string
+	delayedPrefix   string
+	delay           time.Duration
+}
+
+func (r *scriptPrefixRunner) SetPrefix(prefix string) {
+	r.immediatePrefix = prefix
+}
+
+func (r *scriptPrefixRunner) SetScriptPrefix(prefix string, delay time.Duration) {
+	r.delayedPrefix = prefix
+	r.delay = delay
 }
 
 func TestExecuteUIStepExpandsTypedListOptionsAndCapturesTypedMap(t *testing.T) {

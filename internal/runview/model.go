@@ -219,6 +219,9 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	for _, e := range events {
 		tree.ApplyEvent(e)
 	}
+	if m.autoFollow {
+		m.applyAutoFollowToInProgress()
+	}
 
 	return m, nil
 }
@@ -439,6 +442,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) handleUIRequestMsg(msg *liverun.UIRequestMsg) (tea.Model, tea.Cmd) {
 	m.liveUI = uistep.NewModel(&msg.Request)
 	m.liveUIReply = msg.Reply
+	m.autoFollow = true
+	m.refreshData()
+	m.applyAutoFollowToInProgress()
+	m.rebuildRanges()
 	return m.handleShowTUIMsg()
 }
 
@@ -799,6 +806,17 @@ func (m *Model) applyAutoFollowCursor() {
 	if active == nil {
 		return
 	}
+	m.applyAutoFollowToNode(active)
+}
+
+func (m *Model) applyAutoFollowToInProgress() {
+	m.applyAutoFollowToNode(deepestInProgressNode(m.tree.Root))
+}
+
+func (m *Model) applyAutoFollowToNode(active *StepNode) {
+	if active == nil {
+		return
+	}
 	target := m.ancestorAtCurrentLevel(active)
 	if target == nil {
 		return
@@ -834,6 +852,25 @@ func (m *Model) indexOfChild(node *StepNode) int {
 		}
 	}
 	return -1
+}
+
+func deepestInProgressNode(n *StepNode) *StepNode {
+	if n == nil {
+		return nil
+	}
+	var found *StepNode
+	for _, child := range n.Children {
+		if candidate := deepestInProgressNode(child); candidate != nil {
+			found = candidate
+		}
+	}
+	if found != nil {
+		return found
+	}
+	if n.Parent != nil && n.Status == StatusInProgress {
+		return n
+	}
+	return nil
 }
 
 // pendingSelected returns the selected node if it is pending, else nil.
