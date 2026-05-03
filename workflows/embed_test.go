@@ -1,6 +1,10 @@
 package builtinworkflows
 
-import "testing"
+import (
+	"testing"
+
+	"gopkg.in/yaml.v3"
+)
 
 func TestOnboardingWorkflowsResolveAndAssetsList(t *testing.T) {
 	welcome, err := Resolve("onboarding:welcome")
@@ -40,5 +44,44 @@ func TestOnboardingWorkflowsResolveAndAssetsList(t *testing.T) {
 		if len(body) == 0 {
 			t.Fatalf("asset %s is empty", want)
 		}
+	}
+}
+
+func TestOpenSpecPlanningWorkflowsUseSharedCreateScript(t *testing.T) {
+	for _, ref := range []string{"builtin:openspec/plan-change.yaml", "builtin:openspec/simple-change.yaml"} {
+		t.Run(ref, func(t *testing.T) {
+			data, err := ReadFile(ref)
+			if err != nil {
+				t.Fatalf("read %s: %v", ref, err)
+			}
+
+			var workflow struct {
+				Steps []struct {
+					ID           string            `yaml:"id"`
+					Command      string            `yaml:"command"`
+					Script       string            `yaml:"script"`
+					ScriptInputs map[string]string `yaml:"script_inputs"`
+				} `yaml:"steps"`
+			}
+			if err := yaml.Unmarshal(data, &workflow); err != nil {
+				t.Fatalf("parse %s: %v", ref, err)
+			}
+			if len(workflow.Steps) == 0 {
+				t.Fatalf("%s has no steps", ref)
+			}
+			create := workflow.Steps[0]
+			if create.ID != "create" {
+				t.Fatalf("first step id = %q, want create", create.ID)
+			}
+			if create.Script != "create-change.sh" {
+				t.Fatalf("create script = %q, want create-change.sh", create.Script)
+			}
+			if create.Command != "" {
+				t.Fatalf("create should not duplicate shell command, got %q", create.Command)
+			}
+			if got := create.ScriptInputs["change_name"]; got != "{{change_name}}" {
+				t.Fatalf("script input change_name = %q, want {{change_name}}", got)
+			}
+		})
 	}
 }
