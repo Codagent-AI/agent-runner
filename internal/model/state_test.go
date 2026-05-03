@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -43,11 +44,11 @@ func TestCurrentStepMarshal(t *testing.T) {
 				Nested: &NestedStepState{
 					StepID:            "outer",
 					SessionIDs:        map[string]string{"s1": "abc"},
-					CapturedVariables: map[string]string{"out": "val"},
+					CapturedVariables: map[string]CapturedValue{"out": {Kind: CaptureString, Str: "val"}},
 					Child: &NestedStepState{
 						StepID:            "inner",
 						SessionIDs:        map[string]string{},
-						CapturedVariables: map[string]string{},
+						CapturedVariables: map[string]CapturedValue{},
 						Child:             nil,
 					},
 				},
@@ -99,7 +100,7 @@ func TestCurrentStepMarshal(t *testing.T) {
 				Nested: &NestedStepState{
 					StepID:            "loop1",
 					SessionIDs:        map[string]string{"step1": "s1"},
-					CapturedVariables: map[string]string{"output": "hello"},
+					CapturedVariables: map[string]CapturedValue{"output": {Kind: CaptureString, Str: "hello"}},
 					Child:             nil,
 				},
 			},
@@ -115,4 +116,63 @@ func TestCurrentStepMarshal(t *testing.T) {
 			t.Fatalf("round-trip mismatch:\n%s", diff)
 		}
 	})
+}
+
+func TestNestedStepStateCapturedVariablesUseTypedEnvelope(t *testing.T) {
+	original := RunState{
+		WorkflowFile: "w.yaml",
+		WorkflowName: "w",
+		CurrentStep: CurrentStep{
+			Nested: &NestedStepState{
+				StepID:     "detect",
+				SessionIDs: map[string]string{},
+				CapturedVariables: map[string]CapturedValue{
+					"text": {Kind: CaptureString, Str: "hello"},
+					"list": {Kind: CaptureList, List: []string{"claude", "codex"}},
+					"map":  {Kind: CaptureMap, Map: map[string]string{"adapter": "claude"}},
+				},
+			},
+		},
+		Params:       map[string]string{},
+		WorkflowHash: "hash",
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	wantFragments := []string{
+		`"text":{"kind":"string","value":"hello"}`,
+		`"list":{"kind":"list","value":["claude","codex"]}`,
+		`"map":{"kind":"map","value":{"adapter":"claude"}}`,
+	}
+	for _, fragment := range wantFragments {
+		if !strings.Contains(string(data), fragment) {
+			t.Fatalf("encoded state missing %s in %s", fragment, data)
+		}
+	}
+
+	var restored RunState
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if diff := cmp.Diff(original, restored); diff != "" {
+		t.Fatalf("round-trip mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestNestedStepStateReadsLegacyStringCaptures(t *testing.T) {
+	raw := `{"workflowFile":"w.yaml","workflowName":"w","currentStep":{"stepId":"s","sessionIds":{},"capturedVariables":{"out":"legacy"}},"params":{},"workflowHash":"hash"}`
+
+	var state RunState
+	if err := json.Unmarshal([]byte(raw), &state); err != nil {
+		t.Fatalf("unmarshal legacy: %v", err)
+	}
+
+	got := state.CurrentStep.Nested.CapturedVariables["out"]
+	want := CapturedValue{Kind: CaptureString, Str: "legacy"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("legacy capture mismatch (-want +got):\n%s", diff)
+	}
 }

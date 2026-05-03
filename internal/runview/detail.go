@@ -272,12 +272,33 @@ func renderIterationBlock(node *StepNode, indent, width int) []string {
 	return lines
 }
 
+func renderUIBlock(node *StepNode, indent, width int) []string {
+	contentWidth := width - 2*indent
+	if contentWidth <= 0 {
+		return nil
+	}
+
+	glyph := blockTypeGlyph(node.Type)
+	sep := renderSeparator(node.ID, glyph, indent, contentWidth)
+	lines := []string{sep}
+	lines = append(lines, blockDimStr("mode", "ui"))
+	lines = append(lines, blockCommonModifiers(node)...)
+	if node.Status != StatusPending {
+		lines = append(lines, blockOutcomeAndDuration(node)...)
+	}
+	return lines
+}
+
 // ---- Helper builders ---------------------------------------------------------
 
 func blockTypeGlyph(t NodeType) string {
 	switch t {
 	case NodeShell:
 		return "$"
+	case NodeScript:
+		return "❯"
+	case NodeUI:
+		return "▣"
 	case NodeHeadlessAgent:
 		return "⚙"
 	case NodeInteractiveAgent:

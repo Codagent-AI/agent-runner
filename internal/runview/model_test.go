@@ -269,6 +269,86 @@ func TestModel_GKey_NoOp(t *testing.T) {
 	}
 }
 
+func TestModel_C_CopiesSelectedStepDetail(t *testing.T) {
+	tree := simpleTree()
+	tree.Root.Children[0].Stdout = "build ok\nnext line"
+	m := newTestModel(tree, FromList)
+	m.cursor = 0
+	m.originCwd = "/repo/project"
+
+	var copied string
+	oldWrite := writeClipboard
+	writeClipboard = func(text string) error {
+		copied = text
+		return nil
+	}
+	defer func() { writeClipboard = oldWrite }()
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	if cmd == nil {
+		t.Fatal("copy should schedule success notice clearing")
+	}
+
+	if copied == "" {
+		t.Fatal("expected selected step detail to be copied")
+	}
+	for _, want := range []string{"directory: /repo/project", "breadcrumb:", "test-workflow", "build", "$ go build ./...", "stdout:", "build ok", "next line"} {
+		if !strings.Contains(copied, want) {
+			t.Fatalf("copied detail missing %q:\n%s", want, copied)
+		}
+	}
+	if strings.Contains(copied, "\x1b[") {
+		t.Fatalf("copied detail should be plain text, got ANSI escape in %q", copied)
+	}
+	if m.notice != "copied selected step detail" {
+		t.Fatalf("notice = %q, want copy success notice", m.notice)
+	}
+	if help := m.renderHelpBar(); !strings.Contains(help, "c copy") {
+		t.Fatalf("help bar should advertise copy key, got %q", help)
+	}
+}
+
+func TestModel_CopyNoticeExpiresOnlyWhenStillCurrent(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList)
+	m.notice = "copied selected step detail"
+	m.copyNoticeSeq = 2
+
+	m.Update(copyNoticeExpiredMsg{seq: 1})
+	if m.notice != "copied selected step detail" {
+		t.Fatalf("notice = %q, want stale copy success notice preserved", m.notice)
+	}
+
+	m.Update(copyNoticeExpiredMsg{seq: 2})
+	if m.notice != "" {
+		t.Fatalf("notice = %q, want cleared copy success notice", m.notice)
+	}
+
+	m.notice = "copy failed: clipboard unavailable"
+	m.Update(copyNoticeExpiredMsg{seq: 2})
+	if m.notice != "copy failed: clipboard unavailable" {
+		t.Fatalf("notice = %q, want unrelated notice preserved", m.notice)
+	}
+}
+
+func TestModel_C_ShowsNoticeWhenClipboardWriteFails(t *testing.T) {
+	m := newTestModel(simpleTree(), FromList)
+
+	oldWrite := writeClipboard
+	writeClipboard = func(string) error {
+		return errors.New("clipboard unavailable")
+	}
+	defer func() { writeClipboard = oldWrite }()
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	if cmd != nil {
+		t.Fatalf("failed copy should not schedule success notice clearing, got %v", cmd)
+	}
+
+	if !strings.Contains(m.notice, "copy failed: clipboard unavailable") {
+		t.Fatalf("notice = %q, want clipboard failure notice", m.notice)
+	}
+}
+
 // r on an inactive run emits ResumeRunMsg.
 func TestModel_R_InactiveRun_EmitsResumeRunMsg(t *testing.T) {
 	tree := simpleTree()
@@ -2255,6 +2335,34 @@ func TestModel_StatusGlyph_BlinkOffHidesDot(t *testing.T) {
 	if lipgloss.Width(off) != lipgloss.Width("●") {
 		t.Errorf("off-phase width = %d, want %d (preserve column alignment)",
 			lipgloss.Width(off), lipgloss.Width("●"))
+	}
+}
+
+func TestModel_StatusGlyph_UIInProgressDoesNotBlink(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = true
+
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	step := &StepNode{
+		ID:     "pick-scope",
+		Type:   NodeUI,
+		Status: StatusInProgress,
+		Parent: root,
+	}
+	root.Children = []*StepNode{step}
+	m.tree = &Tree{Root: root}
+	m.path = []*StepNode{root}
+
+	m.pulsePhase = 0
+	on := m.statusGlyph(step)
+	m.pulsePhase = 1.5 * math.Pi
+	off := m.statusGlyph(step)
+
+	if !strings.Contains(on, "●") || !strings.Contains(off, "●") {
+		t.Fatalf("ui in-progress glyph should stay visible, got on=%q off=%q", on, off)
+	}
+	if on != off {
+		t.Fatalf("ui in-progress glyph should not blink, got on=%q off=%q", on, off)
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-isatty"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/discovery"
@@ -31,6 +32,7 @@ import (
 	"github.com/codagent/agent-runner/internal/prevalidate"
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/runner"
+	"github.com/codagent/agent-runner/internal/runs"
 	"github.com/codagent/agent-runner/internal/runview"
 	"github.com/codagent/agent-runner/internal/themeprompt"
 	"github.com/codagent/agent-runner/internal/usersettings"
@@ -138,6 +140,57 @@ func (r *realProcessRunner) RunAgent(args []string, captureStdout bool, workdir 
 	return iexec.ProcessResult{ExitCode: exitCode}, nil
 }
 
+func (r *realProcessRunner) RunScript(path string, stdin []byte, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
+	c := exec.Command(path) // #nosec G204 -- workflow script path is validated by executor
+	c.Stdin = bytes.NewReader(stdin)
+	c.Env = append(os.Environ(), "AGENT_RUNNER_BUNDLE_DIR="+scriptBundleDir(path))
+	if workdir != "" {
+		c.Dir = filepath.Clean(workdir) // #nosec G304
+	}
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	if captureStdout {
+		c.Stdout = io.MultiWriter(os.Stdout, &stdoutBuf)
+		c.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
+		err := c.Run()
+		exitCode := 0
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+			} else {
+				return iexec.ProcessResult{}, err
+			}
+		}
+		return iexec.ProcessResult{ExitCode: exitCode, Stdout: stdoutBuf.String(), Stderr: stderrBuf.String()}, nil
+	}
+
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	err := c.Run()
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			return iexec.ProcessResult{}, err
+		}
+	}
+	return iexec.ProcessResult{ExitCode: exitCode}, nil
+}
+
+func scriptBundleDir(scriptPath string) string {
+	clean := filepath.Clean(scriptPath)
+	sep := string(filepath.Separator)
+	marker := sep + "bundled" + sep
+	if idx := strings.Index(clean, marker); idx >= 0 {
+		rest := clean[idx+len(marker):]
+		if namespace, _, ok := strings.Cut(rest, sep); ok && namespace != "" {
+			return clean[:idx+len(marker)+len(namespace)]
+		}
+	}
+	return filepath.Dir(clean)
+}
+
 // realGlobExpander implements exec.GlobExpander using filepath.Glob.
 type realGlobExpander struct{}
 
@@ -165,6 +218,10 @@ func main() {
 }
 
 func run() int {
+	if len(os.Args) > 1 && os.Args[1] == "internal" {
+		return handleInternal(os.Args[2:])
+	}
+
 	chdirFlag := flag.String("C", "", "Change to `directory` before doing anything")
 	resumeFlag := flag.Bool("resume", false, "Resume an interrupted workflow (optionally followed by session ID)")
 	listFlag := flag.Bool("list", false, "Launch the run list TUI")
@@ -255,6 +312,10 @@ func run() int {
 }
 
 func handleResume(sessionID string) int {
+	return handleResumeWithOptions(sessionID, liveTUIOptions{})
+}
+
+func handleResumeWithOptions(sessionID string, liveOpts liveTUIOptions) int {
 	if err := requireTTY(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -300,7 +361,7 @@ func handleResume(sessionID string) int {
 		return 1
 	}
 
-	return runLiveTUI(h)
+	return runLiveTUIWithOptions(h, liveOpts)
 }
 
 // resumeInspectPaths maps a resume state-file path to the session and project
@@ -369,6 +430,9 @@ func handleListWithTab(initialTab listview.InitialTab) int {
 	}
 
 	if code := ensureThemeForTUI(defaultThemeDeps); code != 0 {
+		return code
+	}
+	if code := ensureOnboardingForTUI(defaultOnboardingDeps); code != 0 {
 		return code
 	}
 
@@ -445,7 +509,11 @@ func switcherForReentry(prev *switcher, spawnErr error) (*switcher, error) {
 
 // runLiveTUI starts the runview TUI in FromLiveRun mode with the workflow
 // running in a background goroutine. Returns the process exit code.
-func runLiveTUI(h *runner.RunHandle) int {
+type liveTUIOptions struct {
+	quitOnDone bool
+}
+
+func runLiveTUIWithOptions(h *runner.RunHandle, opts liveTUIOptions) int {
 	rv, err := runview.New(h.SessionDir, h.ProjectDir, runview.FromLiveRun)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
@@ -467,6 +535,9 @@ func runLiveTUI(h *runner.RunHandle) int {
 			}
 			coord.NotifyDone(string(result), runErr)
 			resultCh <- result
+			if opts.quitOnDone {
+				p.Send(runview.ExitMsg{})
+			}
 		}()
 
 		result = runner.ExecuteFromHandle(h, &runner.Options{
@@ -476,6 +547,7 @@ func runLiveTUI(h *runner.RunHandle) int {
 			SuspendHook:     coord.BeforeInteractive,
 			ResumeHook:      coord.AfterInteractive,
 			PrepareStepHook: coord.PrepareForStep,
+			UIStepHandler:   coord.HandleUIStep,
 		})
 	}()
 
@@ -493,6 +565,18 @@ func runLiveTUI(h *runner.RunHandle) int {
 		if rv.ResumeToList() {
 			<-resultCh
 			return execRunnerResume("", h.ProjectDir)
+		}
+		if opts.quitOnDone {
+			select {
+			case runResult := <-resultCh:
+				if runResult != runner.ResultSuccess {
+					return 1
+				}
+			default:
+				// User quit before the dispatcher-launched workflow reached a
+				// terminal state; preserve the normal live-run orphan behavior.
+			}
+			return 0
 		}
 		select {
 		case runResult := <-resultCh:
@@ -1023,6 +1107,10 @@ func triedWorkflowPaths(groups ...[]string) string {
 }
 
 func handleRun(args []string) int {
+	return handleRunWithOptions(args, liveTUIOptions{})
+}
+
+func handleRunWithOptions(args []string, liveOpts liveTUIOptions) int {
 	workflowFile := args[0]
 
 	workflow, err := loader.LoadWorkflow(workflowFile, loader.Options{})
@@ -1099,7 +1187,7 @@ func handleRun(args []string) int {
 		return 1
 	}
 
-	return runLiveTUI(h)
+	return runLiveTUIWithOptions(h, liveOpts)
 }
 
 func ensureThemeForTUI(deps themeDeps) int {
@@ -1131,6 +1219,85 @@ func ensureThemeForTUI(deps themeDeps) int {
 
 func applyTheme(theme usersettings.Theme) {
 	lipgloss.SetHasDarkBackground(theme == usersettings.ThemeDark)
+}
+
+type onboardingDeps struct {
+	load                    func() (usersettings.Settings, error)
+	isStdinTTY              func() bool
+	isStdoutTTY             func() bool
+	incompleteOnboardingRun func() (string, error)
+	resumeRun               func(runID string) int
+	runWorkflow             func(ref string) int
+}
+
+var defaultOnboardingDeps = onboardingDeps{
+	load:                    usersettings.Load,
+	isStdinTTY:              func() bool { return isatty.IsTerminal(os.Stdin.Fd()) },
+	isStdoutTTY:             func() bool { return isatty.IsTerminal(os.Stdout.Fd()) },
+	incompleteOnboardingRun: findIncompleteOnboardingRun,
+	resumeRun: func(runID string) int {
+		return handleResumeWithOptions(runID, liveTUIOptions{quitOnDone: true})
+	},
+	runWorkflow: func(ref string) int {
+		return handleRunWithOptions([]string{ref}, liveTUIOptions{quitOnDone: true})
+	},
+}
+
+func ensureOnboardingForTUI(deps onboardingDeps) int {
+	settings, err := deps.load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+	if settings.Onboarding.CompletedAt != "" || settings.Onboarding.Dismissed != "" {
+		return 0
+	}
+	if !deps.isStdinTTY() || !deps.isStdoutTTY() {
+		return 0
+	}
+	if deps.incompleteOnboardingRun != nil {
+		runID, err := deps.incompleteOnboardingRun()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+			return 1
+		}
+		if runID != "" {
+			return deps.resumeRun(runID)
+		}
+	}
+	ref, err := builtinworkflows.Resolve("onboarding:welcome")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+	return deps.runWorkflow(ref)
+}
+
+func findIncompleteOnboardingRun() (string, error) {
+	home, err := userHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine working directory: %w", err)
+	}
+
+	projectDir := filepath.Join(home, ".agent-runner", "projects", audit.EncodePath(cwd))
+	infos, err := runs.ListForDir(projectDir)
+	if err != nil {
+		return "", err
+	}
+	for i := range infos {
+		info := &infos[i]
+		if info.Status == runs.StatusCompleted {
+			continue
+		}
+		if info.WorkflowName == "onboarding-welcome" || info.WorkflowFile == "builtin:onboarding/welcome.yaml" {
+			return info.SessionID, nil
+		}
+	}
+	return "", nil
 }
 
 // parseParams separates positional args from key=value pairs.

@@ -21,6 +21,8 @@ const (
 	NodeLoop
 	NodeSubWorkflow
 	NodeIteration
+	NodeScript
+	NodeUI
 )
 
 // NodeStatus is the visual status of a StepNode.
@@ -197,6 +199,14 @@ func buildStepNode(s *model.Step, parent *StepNode) *StepNode {
 	case s.Command != "":
 		n.Type = NodeShell
 		n.StaticCommand = s.Command
+		n.CaptureName = s.Capture
+	case s.Script != "":
+		n.Type = NodeScript
+		n.StaticCommand = s.Script
+		n.CaptureName = s.Capture
+	case s.Mode == model.ModeUI:
+		n.Type = NodeUI
+		n.StaticMode = s.Mode
 		n.CaptureName = s.Capture
 	case s.Loop != nil && len(s.Steps) > 0:
 		n.Type = NodeLoop

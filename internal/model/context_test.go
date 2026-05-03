@@ -51,11 +51,11 @@ func TestCreateRootContext(t *testing.T) {
 		ctx := NewRootContext(&RootContextOptions{
 			Params:            map[string]string{},
 			WorkflowFile:      "test.yaml",
-			CapturedVariables: map[string]string{"output": "result"},
+			CapturedVariables: map[string]CapturedValue{"output": NewCapturedString("result")},
 		})
 
-		if ctx.CapturedVariables["output"] != "result" {
-			t.Fatalf("expected capturedVar 'output'='result', got %q", ctx.CapturedVariables["output"])
+		if diff := cmp.Diff(NewCapturedString("result"), ctx.CapturedVariables["output"]); diff != "" {
+			t.Fatalf("capturedVar mismatch (-want +got):\n%s", diff)
 		}
 	})
 }
@@ -113,6 +113,25 @@ func TestCreateLoopIterationContext(t *testing.T) {
 		}
 		if len(parent.NestingPath) != origNestingLen {
 			t.Fatal("parent nestingPath mutated")
+		}
+	})
+
+	t.Run("inherits captured variables from parent", func(t *testing.T) {
+		parent := NewRootContext(&RootContextOptions{
+			Params:       map[string]string{"base": "/src"},
+			WorkflowFile: "test.yaml",
+			CapturedVariables: map[string]CapturedValue{
+				"review_feedback": NewCapturedString("looks good"),
+			},
+		})
+
+		child := NewLoopIterationContext(parent, LoopIterationOptions{
+			StepID:    "discussion",
+			Iteration: 0,
+		})
+
+		if diff := cmp.Diff(NewCapturedString("looks good"), child.CapturedVariables["review_feedback"]); diff != "" {
+			t.Fatalf("captured variable mismatch (-want +got):\n%s", diff)
 		}
 	})
 }

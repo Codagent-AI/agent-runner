@@ -27,12 +27,7 @@ func ExecuteSubWorkflowStep(
 	prefix := audit.BuildPrefix(nestingToAudit(parentCtx), step.ID)
 	startTime := time.Now()
 
-	emitAudit(parentCtx, audit.Event{
-		Timestamp: startTime.UTC().Format(time.RFC3339),
-		Prefix:    prefix,
-		Type:      audit.EventStepStart,
-		Data:      map[string]any{"context": contextSnapshot(parentCtx)},
-	})
+	emitStepStart(parentCtx, prefix, startTime, nil)
 
 	workflow, workflowPath, childCtx, err := prepareSubWorkflow(step, parentCtx, log)
 	if err != nil {
@@ -181,8 +176,7 @@ func executeChildSteps(
 			return OutcomeAborted, nil
 		}
 
-		o := string(outcome)
-		childCtx.LastStepOutcome = &o
+		recordLastStepOutcome(childCtx, outcome)
 
 		if outcome == OutcomeFailed && !workflow.Steps[i].ContinueOnFailure {
 			return OutcomeFailed, nil
@@ -213,23 +207,9 @@ func flushChildProgress(childCtx *model.ExecutionContext) {
 
 func emitSkippedChildStep(childCtx *model.ExecutionContext, step *model.Step) {
 	prefix := audit.BuildPrefix(nestingToAudit(childCtx), step.ID)
-	now := time.Now().UTC().Format(time.RFC3339)
-	emitAudit(childCtx, audit.Event{
-		Timestamp: now,
-		Prefix:    prefix,
-		Type:      audit.EventStepStart,
-		Data:      map[string]any{"context": contextSnapshot(childCtx)},
-	})
-	emitAudit(childCtx, audit.Event{
-		Timestamp: now,
-		Prefix:    prefix,
-		Type:      audit.EventStepEnd,
-		Data: map[string]any{
-			"outcome":     "skipped",
-			"skip_if":     step.SkipIf,
-			"duration_ms": 0,
-		},
-	})
+	startTime := time.Now()
+	emitStepStart(childCtx, prefix, startTime, nil)
+	emitStepEnd(childCtx, prefix, startTime, string(OutcomeSkipped), map[string]any{"skip_if": step.SkipIf})
 }
 
 func recordChildProgress(childCtx *model.ExecutionContext, childStepID string, completed bool) {
@@ -318,7 +298,7 @@ func buildNestingPrefix(nestingPath []model.NestingSegment) string {
 }
 
 func resolveWorkflowPath(workflowField string, ctx *model.ExecutionContext, stepID string) (string, error) {
-	interpolated, err := textfmt.Interpolate(workflowField, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
+	interpolated, err := textfmt.InterpolateTyped(workflowField, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
 	if err != nil {
 		return "", err
 	}
@@ -334,7 +314,7 @@ func resolveParams(params map[string]string, ctx *model.ExecutionContext, stepID
 	}
 	resolved := make(map[string]string, len(params))
 	for k, v := range params {
-		val, err := textfmt.Interpolate(v, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
+		val, err := textfmt.InterpolateTyped(v, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
 		if err != nil {
 			return nil, err
 		}
@@ -358,19 +338,11 @@ func validateSubWorkflowParams(workflow *model.Workflow, resolvedParams map[stri
 }
 
 func emitSubEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, outcome, errMsg string) {
-	data := map[string]any{
-		"outcome":     outcome,
-		"duration_ms": time.Since(startTime).Milliseconds(),
-	}
+	data := map[string]any{}
 	if errMsg != "" {
 		data["error"] = errMsg
 	}
-	emitAudit(ctx, audit.Event{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		Prefix:    prefix,
-		Type:      audit.EventStepEnd,
-		Data:      data,
-	})
+	emitStepEnd(ctx, prefix, startTime, outcome, data)
 }
 
 // MergeSessionDecls adds session declarations from a newly loaded (sub-)workflow
@@ -411,8 +383,8 @@ func MergeSessionDecls(ctx *model.ExecutionContext, sessions []model.SessionDecl
 	return nil
 }
 
-func copyMap(m map[string]string) map[string]string {
-	result := make(map[string]string, len(m))
+func copyMap[K comparable, V any](m map[K]V) map[K]V {
+	result := make(map[K]V, len(m))
 	for k, v := range m {
 		result[k] = v
 	}

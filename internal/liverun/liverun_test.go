@@ -59,6 +59,10 @@ func (unusedRunner) RunAgent([]string, bool, string) (iexec.ProcessResult, error
 	return iexec.ProcessResult{}, nil
 }
 
+func (unusedRunner) RunScript(string, []byte, bool, string) (iexec.ProcessResult, error) {
+	return iexec.ProcessResult{}, nil
+}
+
 // ---- ANSI stripper tests ----
 
 func strip(input string) string {
@@ -242,6 +246,53 @@ func TestCompositeWriter_AppliesStderrWrapperBeforeChunkFlush(t *testing.T) {
 	if got != "warning" {
 		t.Fatalf("streamed stderr = %q, want %q", got, "warning")
 	}
+}
+
+func TestTUIProcessRunner_SetScriptPrefixDelaysStepState(t *testing.T) {
+	program := &captureProgram{}
+	runner := NewCoordinator(program, "").TUIProcessRunner(unusedRunner{}).(*tuiProcessRunner)
+
+	runner.SetScriptPrefix("[script]", 50*time.Millisecond)
+	if hasStepState(program.messages(), "[script]") {
+		t.Fatal("script step state should not be sent immediately")
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if hasStepState(program.messages(), "[script]") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("script step state was not sent after delay")
+}
+
+func TestTUIProcessRunner_RunScriptCancelsDelayedStepState(t *testing.T) {
+	dir := t.TempDir()
+	script := dir + "/quick.sh"
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf ok\n"), 0o700); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	program := &captureProgram{}
+	runner := NewCoordinator(program, "").TUIProcessRunner(unusedRunner{}).(*tuiProcessRunner)
+	runner.SetScriptPrefix("[script]", time.Hour)
+	if _, err := runner.RunScript(script, nil, true, ""); err != nil {
+		t.Fatalf("RunScript returned error: %v", err)
+	}
+
+	if hasStepState(program.messages(), "[script]") {
+		t.Fatal("quick script should cancel delayed step state")
+	}
+}
+
+func hasStepState(messages []tea.Msg, prefix string) bool {
+	for _, msg := range messages {
+		if state, ok := msg.(StepStateMsg); ok && state.ActiveStepPrefix == prefix {
+			return true
+		}
+	}
+	return false
 }
 
 func TestTUIProcessRunner_RunAgentDoesNotInheritStdin(t *testing.T) {

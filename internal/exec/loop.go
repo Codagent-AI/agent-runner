@@ -61,15 +61,9 @@ func executeCountedLoop(
 		opts.ResumeFromIteration = resumeIter
 	}
 
-	emitAudit(ctx, audit.Event{
-		Timestamp: startTime.UTC().Format(time.RFC3339),
-		Prefix:    prefix,
-		Type:      audit.EventStepStart,
-		Data: map[string]any{
-			"loop_type": "counted",
-			"max":       maxIter,
-			"context":   contextSnapshot(ctx),
-		},
+	emitStepStart(ctx, prefix, startTime, map[string]any{
+		"loop_type": "counted",
+		"max":       maxIter,
 	})
 
 	startIter := opts.ResumeFromIteration
@@ -98,6 +92,7 @@ func executeCountedLoop(
 			emitLoopEnd(ctx, prefix, startTime, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, err
 		}
+		mergeIterationCaptures(ctx, iterCtx)
 		completed++
 
 		if result.aborted {
@@ -130,7 +125,7 @@ func executeForEachLoop(
 	opts LoopExecuteOptions,
 	requireMatches *bool,
 ) (LoopResult, error) {
-	pattern, err := textfmt.Interpolate(overPattern, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
+	pattern, err := textfmt.InterpolateTyped(overPattern, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
 	if err != nil {
 		return LoopResult{Outcome: OutcomeFailed, LastIteration: -1}, err
 	}
@@ -148,16 +143,10 @@ func executeForEachLoop(
 		opts.ResumeFromIteration = resumeIter
 	}
 
-	emitAudit(ctx, audit.Event{
-		Timestamp: startTime.UTC().Format(time.RFC3339),
-		Prefix:    prefix,
-		Type:      audit.EventStepStart,
-		Data: map[string]any{
-			"loop_type":        "for-each",
-			"glob_pattern":     pattern,
-			"resolved_matches": matches,
-			"context":          contextSnapshot(ctx),
-		},
+	emitStepStart(ctx, prefix, startTime, map[string]any{
+		"loop_type":        "for-each",
+		"glob_pattern":     pattern,
+		"resolved_matches": matches,
 	})
 
 	if len(matches) == 0 {
@@ -196,6 +185,7 @@ func executeForEachLoop(
 			emitLoopEnd(ctx, prefix, startTime, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, err
 		}
+		mergeIterationCaptures(ctx, iterCtx)
 		completed++
 
 		if result.aborted {
@@ -242,6 +232,12 @@ func newLoopStepMarker(src *model.ExecutionContext, loopStepID string, iteration
 		LastSessionStepID: src.LastSessionStepID,
 		Iteration:         &iter,
 		Child:             child,
+	}
+}
+
+func mergeIterationCaptures(parent, iterCtx *model.ExecutionContext) {
+	for k, v := range iterCtx.CapturedVariables {
+		parent.CapturedVariables[k] = v
 	}
 }
 
@@ -308,16 +304,9 @@ func consumeLoopResume(ctx *model.ExecutionContext, loopStepID string) (int, *mo
 }
 
 func emitLoopEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, completed int, breakTriggered bool, outcome string) {
-	emitAudit(ctx, audit.Event{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		Prefix:    prefix,
-		Type:      audit.EventStepEnd,
-		Data: map[string]any{
-			"iterations_completed": completed,
-			"break_triggered":      breakTriggered,
-			"outcome":              outcome,
-			"duration_ms":          time.Since(startTime).Milliseconds(),
-		},
+	emitStepEnd(ctx, prefix, startTime, outcome, map[string]any{
+		"iterations_completed": completed,
+		"break_triggered":      breakTriggered,
 	})
 }
 
@@ -425,6 +414,22 @@ func executeIterationBody(
 		}
 
 		bodyStepID := steps[i].ID
+
+		skip, skipErr := ShouldSkipStep(steps[i].SkipIf, iterCtx.LastStepOutcome, iterCtx, bodyStepID)
+		if skipErr != nil {
+			persistIterationFailState(iterCtx, loopStepID, iteration, bodyStepID, false)
+			return iterationResult{failed: true}, fmt.Errorf("step %q skip_if evaluation failed: %w", bodyStepID, skipErr)
+		}
+		if skip {
+			setBody(bodyStepID, true)
+			emitSkippedChildStep(iterCtx, &steps[i])
+			recordLastStepOutcome(iterCtx, OutcomeSkipped)
+			if iterCtx.FlushState != nil {
+				iterCtx.FlushState()
+			}
+			continue
+		}
+
 		setBody(bodyStepID, false)
 
 		outcome, dispatchErr := DispatchStep(&steps[i], iterCtx, runner, glob, log)
@@ -448,8 +453,7 @@ func executeIterationBody(
 			return iterationResult{breakTriggered: true}, nil
 		}
 
-		o := string(outcome)
-		iterCtx.LastStepOutcome = &o
+		recordLastStepOutcome(iterCtx, outcome)
 
 		if outcome == OutcomeFailed && !steps[i].ContinueOnFailure {
 			persistIterationFailState(iterCtx, loopStepID, iteration, bodyStepID, bodyCompleted)

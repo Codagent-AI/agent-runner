@@ -16,6 +16,7 @@ import (
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/stateio"
 	"github.com/codagent/agent-runner/internal/tuistyle"
+	"github.com/codagent/agent-runner/internal/uistep"
 )
 
 // Messages emitted by the runview Model to the parent switcher.
@@ -92,6 +93,7 @@ type Model struct {
 	liveResult       string // set on ExecDoneMsg ("success"/"failed"/"stopped")
 	autoFollow       bool   // cursor tracks activeStep; enabled by default in FromLiveRun
 	activeStepPrefix string // last known active step prefix from StepStateMsg
+	copyNoticeSeq    int    // increments on successful copy so stale clear timers are ignored
 
 	// Resume-exec state. When the user selects an agent step after the live
 	// run completes, the Model is the top-level tea.Program — there's no
@@ -107,6 +109,9 @@ type Model struct {
 	// step followed by an interactive step does not flash the TUI.
 	altScreen         bool // true once alt-screen has been entered
 	suppressAltScreen bool // set when SuspendedMsg arrives before the deferred timer
+
+	liveUI      *uistep.Model
+	liveUIReply chan<- model.UIStepResult
 }
 
 // ResumeAgentCLI returns the agent CLI name captured from a ResumeMsg in
@@ -213,6 +218,9 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	}
 	for _, e := range events {
 		tree.ApplyEvent(e)
+	}
+	if m.autoFollow {
+		m.applyAutoFollowToInProgress()
 	}
 
 	return m, nil
@@ -328,6 +336,7 @@ func describeWorkflowHint(state *model.RunState, sessionDir string) string {
 const altScreenDelay = 1000 * time.Millisecond
 
 type deferredAltScreenMsg struct{}
+type copyNoticeExpiredMsg struct{ seq int }
 
 func (m *Model) Init() tea.Cmd {
 	var cmds []tea.Cmd
@@ -361,41 +370,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleStepStateMsg(msg)
 		return m, nil
 
+	case *liverun.UIRequestMsg:
+		return m.handleUIRequestMsg(msg)
+
 	case deferredAltScreenMsg:
-		if !m.altScreen && !m.suppressAltScreen {
-			m.altScreen = true
-			return m, tea.Batch(tea.EnterAltScreen, tea.EnableMouseCellMotion)
-		}
+		cmd := m.handleDeferredAltScreen()
+		return m, cmd
+
+	case copyNoticeExpiredMsg:
+		m.handleCopyNoticeExpired(msg)
 		return m, nil
 
 	case liverun.ShowTUIMsg:
-		if !m.altScreen {
-			m.altScreen = true
-			m.suppressAltScreen = false
-			return m, tea.Batch(tea.EnterAltScreen, tea.EnableMouseCellMotion)
-		}
-		return m, nil
+		return m.handleShowTUIMsg()
 
 	case liverun.SuspendedMsg:
-		// Re-enter follow mode whenever a step transitions into interactive:
-		// the user can't see the run view during the PTY hand-off, so by the
-		// time the TUI restores they should be tracking the live step instead
-		// of pinned to wherever they previously drilled in.
-		m.autoFollow = true
-		if len(m.path) > 1 && m.activeStepPrefix != "" {
-			if active := m.tree.FindByPrefix(m.activeStepPrefix); active != nil {
-				if m.ancestorAtCurrentLevel(active) == nil {
-					m.path = m.path[:1]
-					m.cursor = 0
-					m.logOffset = 0
-				}
-			}
-		}
-		m.applyAutoFollowCursor()
-		m.rebuildRanges()
-		if !m.altScreen {
-			m.suppressAltScreen = true
-		}
+		m.handleSuspendedMsg()
 		return m, nil
 
 	case liverun.ResumedMsg:
@@ -430,6 +420,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// ---- Keyboard / mouse ----
 
 	case tea.KeyMsg:
+		if m.liveUI != nil {
+			return m.handleLiveUIKey(msg)
+		}
 		return m.handleKey(msg)
 
 	case tea.MouseMsg:
@@ -442,6 +435,64 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tuistyle.PulseMsg:
 		cmd := m.handlePulseMsg()
 		return m, cmd
+	}
+	return m, nil
+}
+
+func (m *Model) handleUIRequestMsg(msg *liverun.UIRequestMsg) (tea.Model, tea.Cmd) {
+	m.liveUI = uistep.NewModel(&msg.Request)
+	m.liveUIReply = msg.Reply
+	m.autoFollow = true
+	m.refreshData()
+	m.applyAutoFollowToInProgress()
+	m.rebuildRanges()
+	return m.handleShowTUIMsg()
+}
+
+func (m *Model) handleShowTUIMsg() (tea.Model, tea.Cmd) {
+	if !m.altScreen {
+		m.altScreen = true
+		m.suppressAltScreen = false
+		return m, tea.Batch(tea.EnterAltScreen, tea.EnableMouseCellMotion)
+	}
+	return m, nil
+}
+
+func (m *Model) handleSuspendedMsg() {
+	// Re-enter follow mode whenever a step transitions into interactive: the
+	// user can't see the run view during the PTY hand-off, so by the time the
+	// TUI restores they should be tracking the live step instead of pinned to
+	// wherever they previously drilled in.
+	m.autoFollow = true
+	if len(m.path) > 1 && m.activeStepPrefix != "" {
+		if active := m.tree.FindByPrefix(m.activeStepPrefix); active != nil {
+			if m.ancestorAtCurrentLevel(active) == nil {
+				m.path = m.path[:1]
+				m.cursor = 0
+				m.logOffset = 0
+			}
+		}
+	}
+	m.applyAutoFollowCursor()
+	m.rebuildRanges()
+	if !m.altScreen {
+		m.suppressAltScreen = true
+	}
+}
+
+func (m *Model) handleLiveUIKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	next, _ := m.liveUI.Update(msg)
+	if updated, ok := next.(*uistep.Model); ok {
+		m.liveUI = updated
+	}
+	if m.liveUI != nil && m.liveUI.Done() {
+		result := m.liveUI.Result()
+		reply := m.liveUIReply
+		m.liveUI = nil
+		m.liveUIReply = nil
+		if reply != nil {
+			reply <- result
+		}
 	}
 	return m, nil
 }
@@ -550,7 +601,8 @@ func (m *Model) handleRefreshMsg() tea.Cmd {
 	if m.autoFollow {
 		m.logOffset = math.MaxInt32
 	}
-	m.rebuildRanges()
+	lineCount := m.rebuildRanges()
+	m.clampLogOffset(lineCount)
 	if !m.hasLiveUpdates() {
 		return nil
 	}
@@ -645,8 +697,97 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "g":
 		m.handleLoadFull()
 		m.rebuildRanges()
+	case "c":
+		cmd := m.handleCopySelectedDetail()
+		return m, cmd
 	}
 	return m, nil
+}
+
+func (m *Model) handleDeferredAltScreen() tea.Cmd {
+	if !m.altScreen && !m.suppressAltScreen {
+		m.altScreen = true
+		return tea.Batch(tea.EnterAltScreen, tea.EnableMouseCellMotion)
+	}
+	return nil
+}
+
+func (m *Model) handleCopyNoticeExpired(msg copyNoticeExpiredMsg) {
+	if msg.seq == m.copyNoticeSeq && m.notice == "copied selected step detail" {
+		m.notice = ""
+	}
+}
+
+func (m *Model) handleCopySelectedDetail() tea.Cmd {
+	text := m.selectedStepDetailText()
+	if text == "" {
+		m.notice = "copy failed: no selected step detail"
+		return nil
+	}
+	if err := writeClipboard(text); err != nil {
+		m.notice = "copy failed: " + err.Error()
+		return nil
+	}
+	m.notice = "copied selected step detail"
+	m.copyNoticeSeq++
+	seq := m.copyNoticeSeq
+	return tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+		return copyNoticeExpiredMsg{seq: seq}
+	})
+}
+
+func (m *Model) selectedStepDetailText() string {
+	selected := m.selectedNode()
+	if selected == nil {
+		return ""
+	}
+	lines, ranges := buildLogLines(
+		m.currentChildren(),
+		m.pendingSelected(),
+		m.rightPaneWidth(),
+		m.loadedFull,
+		m.pulsePhase,
+		m.running || m.active,
+		m.resolverCfg,
+	)
+	for _, r := range ranges {
+		if r.node == selected {
+			return m.copyTextWithContext(plainTextLines(lines[r.startLine:r.endLine]))
+		}
+	}
+	return ""
+}
+
+func (m *Model) copyTextWithContext(detail string) string {
+	var parts []string
+	if dir := m.copyDirectory(); dir != "" {
+		parts = append(parts, "directory: "+dir)
+	}
+	if breadcrumb := strings.TrimSpace(tuistyle.Sanitize(m.renderBreadcrumb())); breadcrumb != "" {
+		parts = append(parts, "breadcrumb: "+breadcrumb)
+	}
+	if detail != "" {
+		if len(parts) > 0 {
+			parts = append(parts, "")
+		}
+		parts = append(parts, detail)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func (m *Model) copyDirectory() string {
+	if m.originCwd != "" {
+		return m.originCwd
+	}
+	return m.projectDir
+}
+
+func plainTextLines(lines []string) string {
+	plain := make([]string, 0, len(lines))
+	for _, line := range lines {
+		plain = append(plain, tuistyle.Sanitize(line))
+	}
+	return strings.TrimRight(strings.Join(plain, "\n"), "\n")
 }
 
 func (m *Model) handleStepNavigation(delta int) tea.Cmd {
@@ -662,6 +803,17 @@ func (m *Model) handleStepNavigation(delta int) tea.Cmd {
 // drill into sub-workflows or loops.
 func (m *Model) applyAutoFollowCursor() {
 	active := m.tree.FindByPrefix(m.activeStepPrefix)
+	if active == nil {
+		return
+	}
+	m.applyAutoFollowToNode(active)
+}
+
+func (m *Model) applyAutoFollowToInProgress() {
+	m.applyAutoFollowToNode(deepestInProgressNode(m.tree.Root))
+}
+
+func (m *Model) applyAutoFollowToNode(active *StepNode) {
 	if active == nil {
 		return
 	}
@@ -700,6 +852,25 @@ func (m *Model) indexOfChild(node *StepNode) int {
 		}
 	}
 	return -1
+}
+
+func deepestInProgressNode(n *StepNode) *StepNode {
+	if n == nil {
+		return nil
+	}
+	var found *StepNode
+	for _, child := range n.Children {
+		if candidate := deepestInProgressNode(child); candidate != nil {
+			found = candidate
+		}
+	}
+	if found != nil {
+		return found
+	}
+	if n.Parent != nil && n.Status == StatusInProgress {
+		return n
+	}
+	return nil
 }
 
 // pendingSelected returns the selected node if it is pending, else nil.

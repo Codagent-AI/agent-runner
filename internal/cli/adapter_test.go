@@ -325,7 +325,7 @@ func TestCodexAdapter(t *testing.T) {
 			Prompt:   "do something",
 			Headless: true,
 		})
-		expected := []string{"codex", "-a", "never", "exec", "--json", "do something"}
+		expected := []string{"codex", "--dangerously-bypass-approvals-and-sandbox", "exec", "--json", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -344,7 +344,7 @@ func TestCodexAdapter(t *testing.T) {
 			SessionID: "thread-abc",
 			Headless:  true,
 		})
-		expected := []string{"codex", "-a", "never", "exec", "resume", "--json", "thread-abc", "continue"}
+		expected := []string{"codex", "--dangerously-bypass-approvals-and-sandbox", "exec", "resume", "--json", "thread-abc", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -364,7 +364,7 @@ func TestCodexAdapter(t *testing.T) {
 			Model:    "o3",
 			Headless: true,
 		})
-		expected := []string{"codex", "-a", "never", "exec", "--json", "-m", "o3", "do something"}
+		expected := []string{"codex", "--dangerously-bypass-approvals-and-sandbox", "exec", "--json", "-m", "o3", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -387,7 +387,7 @@ func TestCodexAdapter(t *testing.T) {
 			Model:     "o3",
 			Headless:  true,
 		})
-		expected := []string{"codex", "-a", "never", "exec", "resume", "--json", "thread-abc", "continue"}
+		expected := []string{"codex", "--dangerously-bypass-approvals-and-sandbox", "exec", "resume", "--json", "thread-abc", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -398,7 +398,7 @@ func TestCodexAdapter(t *testing.T) {
 			Effort:    "low",
 			Headless:  true,
 		})
-		expected := []string{"codex", "-a", "never", "exec", "resume", "--json", "-c", `model_reasoning_effort="low"`, "thread-abc", "continue"}
+		expected := []string{"codex", "--dangerously-bypass-approvals-and-sandbox", "exec", "resume", "--json", "-c", `model_reasoning_effort="low"`, "thread-abc", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -408,7 +408,7 @@ func TestCodexAdapter(t *testing.T) {
 			Effort:   "medium",
 			Headless: true,
 		})
-		expected := []string{"codex", "-a", "never", "exec", "--json", "-c", `model_reasoning_effort="medium"`, "do something"}
+		expected := []string{"codex", "--dangerously-bypass-approvals-and-sandbox", "exec", "--json", "-c", `model_reasoning_effort="medium"`, "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -456,7 +456,7 @@ func TestCodexAdapter(t *testing.T) {
 			SystemPrompt: "should be ignored",
 			Headless:     true,
 		})
-		expected := []string{"codex", "-a", "never", "exec", "--json", "do something"}
+		expected := []string{"codex", "--dangerously-bypass-approvals-and-sandbox", "exec", "--json", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -488,7 +488,7 @@ func TestCodexAdapter(t *testing.T) {
 		}
 	})
 
-	t.Run("interactive does not include -a never", func(t *testing.T) {
+	t.Run("interactive does not include permission bypass flags", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:   "review",
 			Headless: false,
@@ -496,6 +496,9 @@ func TestCodexAdapter(t *testing.T) {
 		for i, a := range args {
 			if a == "-a" && i+1 < len(args) && args[i+1] == "never" {
 				t.Fatalf("did not expect -a never for interactive mode, got %v", args)
+			}
+			if a == "--dangerously-bypass-approvals-and-sandbox" {
+				t.Fatalf("did not expect sandbox bypass for interactive mode, got %v", args)
 			}
 		}
 	})
@@ -543,6 +546,19 @@ func TestCodexAdapter(t *testing.T) {
 		})
 		if id != "" {
 			t.Fatalf("expected empty string, got %q", id)
+		}
+	})
+
+	t.Run("matches interactive session cwd from payload metadata", func(t *testing.T) {
+		sessionFile := filepath.Join(t.TempDir(), "session.jsonl")
+		cwd := "/repo/worktree"
+		data := `{"type":"session_meta","payload":{"id":"session-abc","cwd":"/repo/worktree"}}` + "\n"
+		if err := os.WriteFile(sessionFile, []byte(data), 0o600); err != nil {
+			t.Fatalf("write session fixture: %v", err)
+		}
+
+		if !matchesSessionCwd(sessionFile, cwd) {
+			t.Fatal("expected session_meta payload cwd to match")
 		}
 	})
 

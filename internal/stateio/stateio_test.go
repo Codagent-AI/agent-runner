@@ -79,7 +79,7 @@ func TestWriteAndReadState(t *testing.T) {
 				Nested: &model.NestedStepState{
 					StepID:            "outer",
 					SessionIDs:        map[string]string{"s1": "abc"},
-					CapturedVariables: map[string]string{"out": "val"},
+					CapturedVariables: map[string]model.CapturedValue{"out": model.NewCapturedString("val")},
 					Child:             nil,
 				},
 			},

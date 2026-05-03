@@ -542,8 +542,8 @@ func TestExecuteAgentStep(t *testing.T) {
 		if outcome != OutcomeSuccess {
 			t.Fatalf("expected success, got %q", outcome)
 		}
-		if ctx.CapturedVariables["review_result"] != "review-output" {
-			t.Fatalf("expected captured output, got %q", ctx.CapturedVariables["review_result"])
+		if ctx.CapturedVariables["review_result"].Str != "review-output" {
+			t.Fatalf("expected captured output, got %q", ctx.CapturedVariables["review_result"].Str)
 		}
 	})
 
@@ -558,8 +558,8 @@ func TestExecuteAgentStep(t *testing.T) {
 		if outcome != OutcomeSuccess {
 			t.Fatalf("expected success, got %q", outcome)
 		}
-		if ctx.CapturedVariables["tasks_glob"] != "path/to/tasks/*.md" {
-			t.Fatalf("expected trailing newline stripped, got %q", ctx.CapturedVariables["tasks_glob"])
+		if ctx.CapturedVariables["tasks_glob"].Str != "path/to/tasks/*.md" {
+			t.Fatalf("expected trailing newline stripped, got %q", ctx.CapturedVariables["tasks_glob"].Str)
 		}
 	})
 
@@ -568,8 +568,8 @@ func TestExecuteAgentStep(t *testing.T) {
 		ctx := makeCtx()
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "get output", Session: model.SessionNew, Capture: "result"}
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
-		if ctx.CapturedVariables["result"] != "value\n" {
-			t.Fatalf("expected one trailing newline preserved, got %q", ctx.CapturedVariables["result"])
+		if ctx.CapturedVariables["result"].Str != "value\n" {
+			t.Fatalf("expected one trailing newline preserved, got %q", ctx.CapturedVariables["result"].Str)
 		}
 	})
 
@@ -578,8 +578,8 @@ func TestExecuteAgentStep(t *testing.T) {
 		ctx := makeCtx()
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "get output", Session: model.SessionNew, Capture: "result"}
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
-		if ctx.CapturedVariables["result"] != "  indented output" {
-			t.Fatalf("expected leading whitespace preserved, got %q", ctx.CapturedVariables["result"])
+		if ctx.CapturedVariables["result"].Str != "  indented output" {
+			t.Fatalf("expected leading whitespace preserved, got %q", ctx.CapturedVariables["result"].Str)
 		}
 	})
 
@@ -594,8 +594,8 @@ func TestExecuteAgentStep(t *testing.T) {
 		if outcome != OutcomeFailed {
 			t.Fatalf("expected failed, got %q", outcome)
 		}
-		if ctx.CapturedVariables["review_result"] != "review-failures" {
-			t.Fatalf("expected captured output on failure, got %q", ctx.CapturedVariables["review_result"])
+		if ctx.CapturedVariables["review_result"].Str != "review-failures" {
+			t.Fatalf("expected captured output on failure, got %q", ctx.CapturedVariables["review_result"].Str)
 		}
 	})
 
@@ -613,8 +613,8 @@ func TestExecuteAgentStep(t *testing.T) {
 		if outcome != OutcomeSuccess {
 			t.Fatalf("expected success, got %q", outcome)
 		}
-		if ctx.CapturedVariables["result"] != "filtered response" {
-			t.Fatalf("expected filtered response, got %q", ctx.CapturedVariables["result"])
+		if ctx.CapturedVariables["result"].Str != "filtered response" {
+			t.Fatalf("expected filtered response, got %q", ctx.CapturedVariables["result"].Str)
 		}
 	})
 
@@ -639,8 +639,8 @@ func TestExecuteAgentStep(t *testing.T) {
 		if outcome != OutcomeSuccess {
 			t.Fatalf("expected success, got %q", outcome)
 		}
-		if ctx.CapturedVariables["result"] != "codex headless smoke ok." {
-			t.Fatalf("expected filtered codex output captured, got %q", ctx.CapturedVariables["result"])
+		if ctx.CapturedVariables["result"].Str != "codex headless smoke ok." {
+			t.Fatalf("expected filtered codex output captured, got %q", ctx.CapturedVariables["result"].Str)
 		}
 		end := findAuditEvent(auditLogger.events, audit.EventStepEnd)
 		if end == nil {
@@ -833,8 +833,14 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatalf("expected prompt in positional arg for codex without enrichment, got %q", lastArg)
 		}
 		// Interactive steps include the completion instruction appended to the prompt.
-		if !strings.Contains(lastArg, "signal-continuation") {
+		if !strings.Contains(lastArg, "AGENT_RUNNER_") || !strings.Contains(lastArg, "CONTINUE") {
 			t.Fatalf("expected completion instruction in codex interactive prompt, got %q", lastArg)
+		}
+		if strings.Contains(lastArg, "AGENT_RUNNER_CONTINUE") {
+			t.Fatalf("completion instruction must not include the exact text sentinel, got %q", lastArg)
+		}
+		if strings.Contains(lastArg, "AGENT_RUNNER_TTY") || strings.Contains(lastArg, "printf") {
+			t.Fatalf("completion instruction should not require shell command approval, got %q", lastArg)
 		}
 	})
 
@@ -884,16 +890,23 @@ func TestExecuteAgentStep(t *testing.T) {
 		// For Claude interactive, the completion instruction goes into --append-system-prompt.
 		args := capturedArgs[0]
 		for i, a := range args {
-			if a == "--append-system-prompt" && i+1 < len(args) {
-				sysPrompt := args[i+1]
-				if !strings.Contains(sysPrompt, "signal-continuation") {
-					t.Fatalf("expected completion instruction in system prompt, got %q", sysPrompt)
-				}
-				if !strings.Contains(sysPrompt, "you or the user") {
-					t.Fatalf("expected 'you or the user' wording in completion instruction, got %q", sysPrompt)
-				}
-				return
+			if a != "--append-system-prompt" || i+1 >= len(args) {
+				continue
 			}
+			sysPrompt := args[i+1]
+			if !strings.Contains(sysPrompt, "AGENT_RUNNER_") || !strings.Contains(sysPrompt, "CONTINUE") {
+				t.Fatalf("expected completion instruction in system prompt, got %q", sysPrompt)
+			}
+			if strings.Contains(sysPrompt, "AGENT_RUNNER_CONTINUE") {
+				t.Fatalf("completion instruction must not include the exact text sentinel, got %q", sysPrompt)
+			}
+			if strings.Contains(sysPrompt, "AGENT_RUNNER_TTY") || strings.Contains(sysPrompt, "printf") {
+				t.Fatalf("completion instruction should not require shell command approval, got %q", sysPrompt)
+			}
+			if !strings.Contains(sysPrompt, "you or the user") {
+				t.Fatalf("expected 'you or the user' wording in completion instruction, got %q", sysPrompt)
+			}
+			return
 		}
 		t.Fatalf("expected --append-system-prompt with completion instruction, got %v", args)
 	})
@@ -1004,23 +1017,23 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
-	t.Run("headless codex includes -a never", func(t *testing.T) {
+	t.Run("headless codex includes sandbox bypass", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew, CLI: "codex"}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		args := runner.calls[0]
-		foundApproval := false
-		for i, a := range args {
-			if a == "-a" && i+1 < len(args) && args[i+1] == "never" {
-				foundApproval = true
+		foundBypass := false
+		for _, a := range args {
+			if a == "--dangerously-bypass-approvals-and-sandbox" {
+				foundBypass = true
 			}
 		}
-		if !foundApproval {
-			t.Fatalf("expected -a never for headless codex, got %v", args)
+		if !foundBypass {
+			t.Fatalf("expected sandbox bypass for headless codex, got %v", args)
 		}
 	})
 
-	t.Run("interactive codex does not include -a never", func(t *testing.T) {
+	t.Run("interactive codex does not include permission bypass flags", func(t *testing.T) {
 		var ptyCalls [][]string
 		oldFn := interactiveRunnerFn
 		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
@@ -1036,6 +1049,9 @@ func TestExecuteAgentStep(t *testing.T) {
 			if a == "-a" && i+1 < len(ptyCalls[0]) && ptyCalls[0][i+1] == "never" {
 				t.Fatalf("did not expect -a never for interactive codex, got %v", ptyCalls[0])
 			}
+			if a == "--dangerously-bypass-approvals-and-sandbox" {
+				t.Fatalf("did not expect sandbox bypass for interactive codex, got %v", ptyCalls[0])
+			}
 		}
 	})
 
@@ -1047,7 +1063,7 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatal("expected command to be called")
 		}
 		lastArg := runner.calls[0][len(runner.calls[0])-1]
-		if strings.Contains(lastArg, "signal-continuation") {
+		if strings.Contains(lastArg, "signal-continuation") || strings.Contains(lastArg, "AGENT_RUNNER_") {
 			t.Fatalf("expected no completion instruction in headless prompt, got %q", lastArg)
 		}
 	})

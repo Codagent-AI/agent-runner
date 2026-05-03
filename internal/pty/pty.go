@@ -19,7 +19,7 @@ import (
 
 const (
 	defaultTerm = "xterm-256color"
-	hintDelay   = 800 * time.Millisecond
+	hintDelay   = 3 * time.Second
 	killTimeout = 3 * time.Second
 	stdinPollMs = 100 // poll timeout in ms for cancellable stdin reads
 )
@@ -297,10 +297,10 @@ func beginTermination(cmd *exec.Cmd, state *ptyState, hint *idleHint, exitCh cha
 }
 
 // forwardOutput reads from the PTY master and writes to stdout, managing the
-// idle hint timer. It detects the sentinel OSC sequence in the output stream;
-// on detection, the sentinel is stripped and the continue + termination
-// protocol is triggered (SIGTERM then SIGKILL after killTimeout), mirroring
-// the logic in processStdin. Returns when the PTY master is closed or errors.
+// idle hint timer. It detects continuation sentinels in the output stream; on
+// detection, the sentinel is stripped and the continue + termination protocol
+// is triggered (SIGTERM then SIGKILL after killTimeout), mirroring the logic
+// in processStdin. Returns when the PTY master is closed or errors.
 // flushToStdout drains any buffered bytes from the output processor to stdout,
 // returning any write error so callers can handle it.
 func flushToStdout(proc *outputProcessor) error {

@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	iexec "github.com/codagent/agent-runner/internal/exec"
+	"github.com/codagent/agent-runner/internal/model"
 )
 
 // terminalProgram is the subset of *tea.Program used by Coordinator. Exists
@@ -115,6 +116,17 @@ func (c *Coordinator) NotifyDone(result string, err error) {
 // NotifyStepChange signals the TUI that a new step has become active.
 func (c *Coordinator) NotifyStepChange(auditPrefix string) {
 	c.send(StepStateMsg{ActiveStepPrefix: auditPrefix})
+}
+
+// HandleUIStep renders a UI step through the live-run TUI and waits for the
+// selected outcome.
+func (c *Coordinator) HandleUIStep(req *model.UIStepRequest) (model.UIStepResult, error) {
+	if req == nil {
+		return model.UIStepResult{}, fmt.Errorf("ui step request is nil")
+	}
+	reply := make(chan model.UIStepResult, 1)
+	c.send(&UIRequestMsg{Request: *req, Reply: reply})
+	return <-reply, nil
 }
 
 // send delivers msg to the TUI program. p.Send is non-blocking (channel with

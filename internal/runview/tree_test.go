@@ -111,6 +111,41 @@ func TestBuildTree_ImplementTask(t *testing.T) {
 	}
 }
 
+func TestBuildTreeClassifiesScriptAndUISteps(t *testing.T) {
+	wf := &model.Workflow{
+		Name: "onboarding",
+		Steps: []model.Step{
+			{ID: "detect", Script: "detect-adapters.sh"},
+			{
+				ID:      "pick",
+				Mode:    model.ModeUI,
+				Title:   "Pick",
+				Actions: []model.UIAction{{Label: "Continue", Outcome: "continue"}},
+			},
+		},
+	}
+
+	tree := BuildTree(wf, "workflow.yaml")
+	script := tree.Root.Children[0]
+	ui := tree.Root.Children[1]
+
+	if script.Type == NodeRoot {
+		t.Fatalf("script step type = NodeRoot, want a concrete script type")
+	}
+	if ui.Type == NodeRoot {
+		t.Fatalf("ui step type = NodeRoot, want a concrete ui type")
+	}
+	if typeGlyph(script.Type) == "" {
+		t.Fatal("script type glyph is empty")
+	}
+	if typeGlyph(ui.Type) == "" {
+		t.Fatal("ui type glyph is empty")
+	}
+	if typeGlyph(ui.Type) == typeGlyph(script.Type) {
+		t.Fatal("ui and script glyphs should be visually distinct")
+	}
+}
+
 func TestEnsureIteration_CreatesAndSeedsBody(t *testing.T) {
 	wf := fixtureImplementChange()
 	tree := BuildTree(&wf, fixturePath("openspec/implement-change.yaml"))

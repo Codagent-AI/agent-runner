@@ -2,11 +2,12 @@ package main
 
 import (
 	"errors"
-	"reflect"
 	"syscall"
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"github.com/codagent/agent-runner/internal/usersettings"
 )
@@ -34,11 +35,11 @@ func TestEnsureThemeForTUIPromptsSavesAndAppliesWhenUnset(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("ensureThemeForTUI() = %d, want 0", code)
 	}
-	if !reflect.DeepEqual(saved, []usersettings.Settings{{Theme: usersettings.ThemeDark}}) {
-		t.Fatalf("saved = %#v, want dark settings", saved)
+	if diff := cmp.Diff([]usersettings.Settings{{Theme: usersettings.ThemeDark}}, saved, cmpopts.IgnoreUnexported(usersettings.Settings{})); diff != "" {
+		t.Fatalf("saved mismatch (-want +got):\n%s", diff)
 	}
-	if !reflect.DeepEqual(applied, []usersettings.Theme{usersettings.ThemeDark}) {
-		t.Fatalf("applied = %#v, want dark once", applied)
+	if diff := cmp.Diff([]usersettings.Theme{usersettings.ThemeDark}, applied); diff != "" {
+		t.Fatalf("applied mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -73,8 +74,8 @@ func TestEnsureThemeForTUIUsesPersistedThemeWithoutPrompting(t *testing.T) {
 	if saved {
 		t.Fatal("save was called for persisted theme")
 	}
-	if !reflect.DeepEqual(applied, []usersettings.Theme{usersettings.ThemeLight}) {
-		t.Fatalf("applied = %#v, want light once", applied)
+	if diff := cmp.Diff([]usersettings.Theme{usersettings.ThemeLight}, applied); diff != "" {
+		t.Fatalf("applied mismatch (-want +got):\n%s", diff)
 	}
 }
 

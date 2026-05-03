@@ -38,6 +38,16 @@ func (m *mockRunner) RunAgent(args []string, _ bool, _ string) (exec.ProcessResu
 	return r, nil
 }
 
+func (m *mockRunner) RunScript(path string, stdin []byte, _ bool, _ string) (exec.ProcessResult, error) {
+	m.calls = append(m.calls, []string{path, string(stdin)})
+	if m.idx >= len(m.results) {
+		return exec.ProcessResult{ExitCode: 0}, nil
+	}
+	r := m.results[m.idx]
+	m.idx++
+	return r, nil
+}
+
 // lockProbeRunner is a mockRunner variant that records whether the lock file
 // exists at the moment RunShell/RunAgent is invoked (i.e. while the step is
 // "executing"). This proves the lock was written before the step runs,
@@ -76,6 +86,19 @@ func (m *lockProbeRunner) RunAgent(args []string, _ bool, _ string) (exec.Proces
 	return r, nil
 }
 
+func (m *lockProbeRunner) RunScript(path string, stdin []byte, _ bool, _ string) (exec.ProcessResult, error) {
+	m.calls = append(m.calls, []string{path, string(stdin)})
+	if _, err := os.Stat(m.lockPath); err == nil && m.observed != nil {
+		*m.observed = true
+	}
+	if m.idx >= len(m.results) {
+		return exec.ProcessResult{ExitCode: 0}, nil
+	}
+	r := m.results[m.idx]
+	m.idx++
+	return r, nil
+}
+
 type mockGlob struct{ matches []string }
 
 func (g *mockGlob) Expand(_ string) ([]string, error) { return g.matches, nil }
@@ -92,6 +115,19 @@ func (l *mockLog) Errorf(format string, args ...any) {
 
 func shellStep(id, cmd string) model.Step {
 	return model.Step{ID: id, Command: cmd, Session: model.SessionNew}
+}
+
+func TestMaterializeBundledAssetsCreatesMarkerForNamespaceWithoutAssets(t *testing.T) {
+	sessionDir := t.TempDir()
+
+	if err := materializeBundledAssets(sessionDir, "builtin:openspec/change.yaml"); err != nil {
+		t.Fatalf("materialize bundled assets: %v", err)
+	}
+
+	marker := filepath.Join(sessionDir, "bundled", "openspec", ".complete")
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("stat marker: %v", err)
+	}
 }
 
 func TestRunWorkflow(t *testing.T) {

@@ -46,7 +46,7 @@ func ShouldSkipStep(skipIf string, lastOutcome *string, ctx *model.ExecutionCont
 		return false, nil
 	}
 	if cmd, ok := flowctl.ShellSkipCommand(skipIf); ok {
-		expanded, err := textfmt.InterpolateShellSafe(cmd, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
+		expanded, err := textfmt.InterpolateShellSafeTyped(cmd, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
 		if err != nil {
 			return false, fmt.Errorf("skip_if interpolation: %w", err)
 		}
@@ -95,7 +95,7 @@ func contextSnapshot(ctx *model.ExecutionContext) map[string]any {
 	}
 	captured := make(map[string]any)
 	for k, v := range ctx.CapturedVariables {
-		captured[k] = v
+		captured[k] = v.AuditValue()
 	}
 	return map[string]any{
 		"params":            params,
@@ -111,19 +111,9 @@ func emitAudit(ctx *model.ExecutionContext, event audit.Event) {
 
 func emitShellInterpolationFailure(ctx *model.ExecutionContext, step *model.Step, err error) {
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
-	now := time.Now().UTC().Format(time.RFC3339)
-	emitAudit(ctx, audit.Event{
-		Timestamp: now,
-		Prefix:    prefix,
-		Type:      audit.EventStepStart,
-		Data:      map[string]any{"command": step.Command, "context": contextSnapshot(ctx)},
-	})
-	emitAudit(ctx, audit.Event{
-		Timestamp: now,
-		Prefix:    prefix,
-		Type:      audit.EventStepEnd,
-		Data:      map[string]any{"outcome": "failed", "error": err.Error(), "duration_ms": 0},
-	})
+	startTime := time.Now()
+	emitStepStart(ctx, prefix, startTime, map[string]any{"command": step.Command})
+	emitStepEnd(ctx, prefix, startTime, "failed", map[string]any{"error": err.Error()})
 }
 
 func runShellProcess(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, command string) (ProcessResult, bool, error) {
@@ -156,7 +146,7 @@ func captureShellOutput(step *model.Step, ctx *model.ExecutionContext, result Pr
 	if step.CaptureStderr && result.ExitCode != 0 && result.Stderr != "" {
 		captured = captured + "\n\nSTDERR:\n" + result.Stderr
 	}
-	ctx.CapturedVariables[step.Capture] = captured
+	ctx.CapturedVariables[step.Capture] = model.NewCapturedString(captured)
 }
 
 // ExecuteShellStep runs a shell command step.
@@ -170,7 +160,7 @@ func ExecuteShellStep(
 		return OutcomeFailed, nil
 	}
 
-	command, err := textfmt.Interpolate(step.Command, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(step.ID))
+	command, err := textfmt.InterpolateTyped(step.Command, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(step.ID))
 	if err != nil {
 		emitShellInterpolationFailure(ctx, step, err)
 		return OutcomeFailed, err
@@ -186,25 +176,11 @@ func ExecuteShellStep(
 		ps.SetPrefix(prefix)
 	}
 
-	emitAudit(ctx, audit.Event{
-		Timestamp: startTime.UTC().Format(time.RFC3339),
-		Prefix:    prefix,
-		Type:      audit.EventStepStart,
-		Data:      map[string]any{"command": truncateForAudit(command), "context": contextSnapshot(ctx)},
-	})
+	emitStepStart(ctx, prefix, startTime, map[string]any{"command": truncateForAudit(command)})
 
 	result, useCapture, runErr := runShellProcess(step, ctx, runner, command)
 	if runErr != nil {
-		emitAudit(ctx, audit.Event{
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-			Prefix:    prefix,
-			Type:      audit.EventStepEnd,
-			Data: map[string]any{
-				"outcome":     "failed",
-				"error":       runErr.Error(),
-				"duration_ms": time.Since(startTime).Milliseconds(),
-			},
-		})
+		emitStepEnd(ctx, prefix, startTime, "failed", map[string]any{"error": runErr.Error()})
 		return OutcomeFailed, runErr
 	}
 
@@ -218,19 +194,12 @@ func ExecuteShellStep(
 	}
 
 	endData := map[string]any{
-		"exit_code":   result.ExitCode,
-		"stderr":      truncateForAudit(result.Stderr),
-		"stdout":      truncateForAudit(result.Stdout),
-		"outcome":     string(outcome),
-		"duration_ms": time.Since(startTime).Milliseconds(),
+		"exit_code": result.ExitCode,
+		"stderr":    truncateForAudit(result.Stderr),
+		"stdout":    truncateForAudit(result.Stdout),
 	}
 
-	emitAudit(ctx, audit.Event{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		Prefix:    prefix,
-		Type:      audit.EventStepEnd,
-		Data:      endData,
-	})
+	emitStepEnd(ctx, prefix, startTime, string(outcome), endData)
 
 	return outcome, nil
 }

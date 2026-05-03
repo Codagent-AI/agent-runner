@@ -18,7 +18,7 @@ type ExecutionContext struct {
 	Params            map[string]string
 	SessionIDs        map[string]string
 	SessionProfiles   map[string]string // maps session-originating step ID → profile name
-	CapturedVariables map[string]string
+	CapturedVariables map[string]CapturedValue
 	LastStepOutcome   *string // nil, "success", or "failed"
 
 	// LastSessionStepID tracks the most recently stored session key
@@ -80,6 +80,8 @@ type ExecutionContext struct {
 	// coordinator to defer or suppress terminal restore between consecutive
 	// interactive steps.
 	PrepareStepHook func(interactive bool)
+
+	UIStepHandler func(*UIStepRequest) (UIStepResult, error)
 }
 
 // RootContextOptions configures a new root execution context.
@@ -93,10 +95,11 @@ type RootContextOptions struct {
 	ProfileStore        interface{} // *config.Config
 	SessionIDs          map[string]string
 	SessionProfiles     map[string]string
-	CapturedVariables   map[string]string
+	CapturedVariables   map[string]CapturedValue
 	AuditLogger         audit.EventLogger
 	NamedSessions       map[string]string
 	NamedSessionDecls   map[string]string
+	UIStepHandler       func(*UIStepRequest) (UIStepResult, error)
 }
 
 // NewRootContext creates a top-level execution context.
@@ -111,7 +114,7 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		sessionIDs[k] = v
 	}
 
-	capturedVars := make(map[string]string)
+	capturedVars := make(map[string]CapturedValue)
 	for k, v := range opts.CapturedVariables {
 		capturedVars[k] = v
 	}
@@ -148,6 +151,7 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		AuditLogger:         opts.AuditLogger,
 		NamedSessions:       namedSessions,
 		NamedSessionDecls:   namedSessionDecls,
+		UIStepHandler:       opts.UIStepHandler,
 	}
 }
 
@@ -213,11 +217,16 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		sessionProfiles[k] = v
 	}
 
+	capturedVars := make(map[string]CapturedValue)
+	for k, v := range parent.CapturedVariables {
+		capturedVars[k] = v
+	}
+
 	return &ExecutionContext{
 		Params:              params,
 		SessionIDs:          sessionIDs,
 		SessionProfiles:     sessionProfiles,
-		CapturedVariables:   make(map[string]string),
+		CapturedVariables:   capturedVars,
 		LastStepOutcome:     nil,
 		LastSessionStepID:   parent.LastSessionStepID,
 		NestingPath:         nestingPath,
@@ -234,6 +243,7 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		SuspendHook:         parent.SuspendHook,
 		ResumeHook:          parent.ResumeHook,
 		PrepareStepHook:     parent.PrepareStepHook,
+		UIStepHandler:       parent.UIStepHandler,
 		// Named session maps are shared by reference so writes from any child
 		// are immediately visible to parents and sibling sub-workflows.
 		NamedSessions:     parent.NamedSessions,
@@ -286,7 +296,7 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		Params:              params,
 		SessionIDs:          sessionIDs,
 		SessionProfiles:     sessionProfiles,
-		CapturedVariables:   make(map[string]string),
+		CapturedVariables:   make(map[string]CapturedValue),
 		LastStepOutcome:     nil,
 		LastSessionStepID:   parent.LastSessionStepID,
 		NestingPath:         nestingPath,
@@ -303,6 +313,7 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		SuspendHook:         parent.SuspendHook,
 		ResumeHook:          parent.ResumeHook,
 		PrepareStepHook:     parent.PrepareStepHook,
+		UIStepHandler:       parent.UIStepHandler,
 		// Named session maps are shared by reference so writes from a child
 		// sub-workflow are immediately visible to the parent and later siblings.
 		NamedSessions:     parent.NamedSessions,
