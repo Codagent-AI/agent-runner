@@ -47,6 +47,66 @@ func TestExecuteLoopStep(t *testing.T) {
 		}
 	})
 
+	t.Run("counted loop respects body skip_if previous_success", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		step := model.Step{
+			ID: "loop", Session: model.SessionNew,
+			Loop: &model.Loop{Max: intPtr(1)},
+			Steps: []model.Step{
+				{ID: "a", Command: "echo a", Session: model.SessionNew},
+				{ID: "b", Command: "echo b", Session: model.SessionNew, SkipIf: "previous_success"},
+			},
+		}
+
+		result, err := ExecuteLoopStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{}, LoopExecuteOptions{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Outcome != OutcomeExhausted {
+			t.Fatalf("expected exhausted, got %q", result.Outcome)
+		}
+		if len(runner.calls) != 1 {
+			t.Fatalf("expected skipped body step to avoid dispatch; got %d call(s)", len(runner.calls))
+		}
+		if runner.calls[0][2] != "echo a" {
+			t.Fatalf("expected first command %q, got %q", "echo a", runner.calls[0][2])
+		}
+	})
+
+	t.Run("counted loop carries captured variables to next iteration", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{
+			{ExitCode: 0}, {ExitCode: 0, Stdout: "next-0"},
+			{ExitCode: 0}, {ExitCode: 0, Stdout: "next-1"},
+		}}
+		ctx := makeCtx()
+		ctx.CapturedVariables["message"] = model.NewCapturedString("initial")
+		step := model.Step{
+			ID: "loop", Session: model.SessionNew,
+			Loop: &model.Loop{Max: intPtr(2), AsIndex: "i"},
+			Steps: []model.Step{
+				{ID: "use", Command: "echo {{message}}", Session: model.SessionNew},
+				{ID: "capture", Command: "echo next-{{i}}", Session: model.SessionNew, Capture: "message"},
+			},
+		}
+
+		result, err := ExecuteLoopStep(&step, ctx, runner, &mockGlob{}, &mockLogger{}, LoopExecuteOptions{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Outcome != OutcomeExhausted {
+			t.Fatalf("expected exhausted, got %q", result.Outcome)
+		}
+		if runner.calls[0][2] != "echo initial" {
+			t.Fatalf("expected first iteration to use initial capture, got %q", runner.calls[0][2])
+		}
+		if runner.calls[2][2] != "echo next-0" {
+			t.Fatalf("expected second iteration to use previous capture, got %q", runner.calls[2][2])
+		}
+		if ctx.CapturedVariables["message"].Str != "next-1" {
+			t.Fatalf("expected parent capture to hold final value, got %q", ctx.CapturedVariables["message"].Str)
+		}
+	})
+
 	t.Run("counted loop stops on failure", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 1}}}
 		step := model.Step{

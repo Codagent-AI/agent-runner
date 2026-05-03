@@ -115,6 +115,25 @@ func TestCreateLoopIterationContext(t *testing.T) {
 			t.Fatal("parent nestingPath mutated")
 		}
 	})
+
+	t.Run("inherits captured variables from parent", func(t *testing.T) {
+		parent := NewRootContext(&RootContextOptions{
+			Params:       map[string]string{"base": "/src"},
+			WorkflowFile: "test.yaml",
+			CapturedVariables: map[string]CapturedValue{
+				"review_feedback": NewCapturedString("looks good"),
+			},
+		})
+
+		child := NewLoopIterationContext(parent, LoopIterationOptions{
+			StepID:    "discussion",
+			Iteration: 0,
+		})
+
+		if diff := cmp.Diff(NewCapturedString("looks good"), child.CapturedVariables["review_feedback"]); diff != "" {
+			t.Fatalf("captured variable mismatch (-want +got):\n%s", diff)
+		}
+	})
 }
 
 func TestBuiltinVarsForStep(t *testing.T) {
