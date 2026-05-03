@@ -1,0 +1,102 @@
+name: onboarding-step-types-demo
+description: Demonstrates Agent Runner workflow step types during onboarding.
+steps:
+  - id: intro-ui
+    mode: ui
+    title: Workflow Step Types
+    body: |
+      This demo is itself a workflow. It begins with a UI step: a rendered screen with actions that can capture the user's choice and move the run forward.
+
+      The next screens demonstrate interactive agents, headless agents, shell commands, and captured values.
+    actions:
+      - label: Continue
+        outcome: continue
+
+  - id: explain-interactive
+    mode: ui
+    title: Interactive Agent Step
+    body: |
+      The next step starts an interactive planner agent. Interactive steps are useful when the workflow needs a short conversation or a human decision before continuing.
+
+      Ask a lightweight Agent Runner question, then continue the workflow when the exchange is complete.
+    actions:
+      - label: Continue
+        outcome: continue
+
+  - id: interactive-qa
+    agent: planner
+    mode: interactive
+    session: new
+    prompt: |
+      You are demonstrating an Agent Runner interactive step during onboarding.
+
+      Explain that the user can advance the workflow to the next step through the normal continue control after this short exchange. Answer lightweight Agent Runner questions using the packaged documentation at {{session_dir}}/bundled/onboarding/docs/.
+
+      Keep the exchange brief. When the user's question has been answered or they indicate they are ready, complete the step so the workflow can continue.
+
+      Do not write files, modify configuration, start services, install dependencies, or change project state.
+
+  - id: explain-headless
+    mode: ui
+    title: Headless Agent Step
+    body: |
+      The next step starts a headless implementor agent. Headless steps are useful when the workflow can give an agent a bounded task and wait for the result without live interaction.
+
+      This demonstration asks for a harmless explanation only.
+    actions:
+      - label: Continue
+        outcome: continue
+
+  - id: headless-demo
+    agent: implementor
+    mode: headless
+    session: new
+    prompt: |
+      You are demonstrating an Agent Runner headless step during onboarding.
+
+      Return a concise explanation of when a workflow should use a headless agent step instead of an interactive agent step.
+
+      Do not write files, modify configuration, run shell commands, start services, install dependencies, call external services, or change project state.
+
+  - id: explain-shell
+    mode: ui
+    title: Shell Step And Capture
+    body: |
+      The next step runs a shell command. Shell steps are useful for deterministic local commands, checks, and small data-producing operations.
+
+      This command prints a fixed value and captures it into the workflow as shell_capture.
+    actions:
+      - label: Continue
+        outcome: continue
+
+  - id: shell-capture
+    command: printf '%s\n' agent-runner-demo-capture
+    capture: shell_capture
+
+  - id: summary
+    mode: ui
+    title: Step Types Demo Complete
+    body: |
+      The shell step captured this value:
+
+      {{shell_capture}}
+
+      This shows how one workflow step can produce data that a later UI step interpolates. The demo used UI, interactive agent, headless agent, shell, and capture behavior without changing project files or settings.
+    actions:
+      - label: Continue
+        outcome: continue
+      - label: Learn more
+        outcome: learn_more
+    outcome_capture: summary_action
+
+  - id: learn-more-qa
+    agent: planner
+    mode: interactive
+    session: new
+    prompt: |
+      You are providing one additional Agent Runner Q&A exchange after the onboarding step types summary.
+
+      Use the packaged documentation at {{session_dir}}/bundled/onboarding/docs/ for reference. Answer one or two lightweight Agent Runner questions, then complete the step so the demo workflow can finish.
+
+      Do not write files, modify configuration, start services, install dependencies, or change project state.
+    skip_if: 'sh: [ "{{summary_action}}" != "learn_more" ]'

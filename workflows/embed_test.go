@@ -21,12 +21,19 @@ func TestOnboardingWorkflowsResolveAndAssetsList(t *testing.T) {
 	if setup != "builtin:onboarding/setup-agent-profile.yaml" {
 		t.Fatalf("setup ref = %q", setup)
 	}
+	demo, err := Resolve("onboarding:step-types-demo")
+	if err != nil {
+		t.Fatalf("Resolve(onboarding:step-types-demo) returned error: %v", err)
+	}
+	if demo != "builtin:onboarding/step-types-demo.yaml" {
+		t.Fatalf("demo ref = %q", demo)
+	}
 
 	assets, err := ListAssets("onboarding")
 	if err != nil {
 		t.Fatalf("ListAssets(onboarding) returned error: %v", err)
 	}
-	for _, want := range []string{"detect-adapters.sh", "models-for-cli.sh", "check-collisions.sh", "write-profile.sh"} {
+	for _, want := range []string{"detect-adapters.sh", "models-for-cli.sh", "check-collisions.sh", "write-profile.sh", "docs/agent-runner-basics.md"} {
 		found := false
 		for _, got := range assets {
 			if got == want {
