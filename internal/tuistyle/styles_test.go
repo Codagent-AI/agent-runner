@@ -1,6 +1,7 @@
 package tuistyle
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -45,6 +46,47 @@ func TestRenderRule_UsesSingleScreenMargin(t *testing.T) {
 	if lipgloss.Width(got) != 19 {
 		t.Fatalf("RenderRule width = %d, want %d", lipgloss.Width(got), 19)
 	}
+}
+
+func TestSecondaryTextColorsHaveReadableContrast(t *testing.T) {
+	const (
+		darkTerminalBackground  = "#111827"
+		lightTerminalBackground = "#ffffff"
+		minReadableContrast     = 4.5
+	)
+	tokens := map[string]lipgloss.AdaptiveColor{
+		"CompletedGray": CompletedGray,
+		"DimText":       DimText,
+	}
+
+	for name, token := range tokens {
+		if got := contrastRatio(token.Dark, darkTerminalBackground); got < minReadableContrast {
+			t.Errorf("%s dark contrast = %.2f, want >= %.1f", name, got, minReadableContrast)
+		}
+		if got := contrastRatio(token.Light, lightTerminalBackground); got < minReadableContrast {
+			t.Errorf("%s light contrast = %.2f, want >= %.1f", name, got, minReadableContrast)
+		}
+	}
+}
+
+func contrastRatio(foreground, background string) float64 {
+	frontLum := relativeLuminance(foreground)
+	backLum := relativeLuminance(background)
+	light, dark := math.Max(frontLum, backLum), math.Min(frontLum, backLum)
+	return (light + 0.05) / (dark + 0.05)
+}
+
+func relativeLuminance(hex string) float64 {
+	r, g, b := ParseHex(hex)
+	return 0.2126*linearRGB(r) + 0.7152*linearRGB(g) + 0.0722*linearRGB(b)
+}
+
+func linearRGB(component uint8) float64 {
+	channel := float64(component) / 255
+	if channel <= 0.03928 {
+		return channel / 12.92
+	}
+	return math.Pow((channel+0.055)/1.055, 2.4)
 }
 
 func TestSpinnerGlyph_IsSingleCellBraille(t *testing.T) {

@@ -46,7 +46,7 @@ func ShouldSkipStep(skipIf string, lastOutcome *string, ctx *model.ExecutionCont
 		return false, nil
 	}
 	if cmd, ok := flowctl.ShellSkipCommand(skipIf); ok {
-		expanded, err := textfmt.InterpolateShellSafe(cmd, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
+		expanded, err := textfmt.InterpolateShellSafeTyped(cmd, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
 		if err != nil {
 			return false, fmt.Errorf("skip_if interpolation: %w", err)
 		}
@@ -95,7 +95,7 @@ func contextSnapshot(ctx *model.ExecutionContext) map[string]any {
 	}
 	captured := make(map[string]any)
 	for k, v := range ctx.CapturedVariables {
-		captured[k] = v
+		captured[k] = v.AuditValue()
 	}
 	return map[string]any{
 		"params":            params,
@@ -156,7 +156,7 @@ func captureShellOutput(step *model.Step, ctx *model.ExecutionContext, result Pr
 	if step.CaptureStderr && result.ExitCode != 0 && result.Stderr != "" {
 		captured = captured + "\n\nSTDERR:\n" + result.Stderr
 	}
-	ctx.CapturedVariables[step.Capture] = captured
+	ctx.CapturedVariables[step.Capture] = model.NewCapturedString(captured)
 }
 
 // ExecuteShellStep runs a shell command step.
@@ -170,7 +170,7 @@ func ExecuteShellStep(
 		return OutcomeFailed, nil
 	}
 
-	command, err := textfmt.Interpolate(step.Command, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(step.ID))
+	command, err := textfmt.InterpolateTyped(step.Command, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(step.ID))
 	if err != nil {
 		emitShellInterpolationFailure(ctx, step, err)
 		return OutcomeFailed, err

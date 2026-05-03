@@ -368,6 +368,103 @@ func TestStepSchemaExtensions(t *testing.T) {
 	})
 }
 
+func TestStepSchemaOnboardingPrimitives(t *testing.T) {
+	validUI := func() Step {
+		return Step{
+			ID:      "pick",
+			Mode:    ModeUI,
+			Title:   "Pick",
+			Actions: []UIAction{{Label: "Continue", Outcome: "continue"}},
+		}
+	}
+
+	t.Run("accepts ui step with action", func(t *testing.T) {
+		s := validUI()
+		if err := s.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("rejects agent fields on ui step", func(t *testing.T) {
+		for field, s := range map[string]Step{
+			"agent":   func() Step { s := validUI(); s.Agent = "planner"; return s }(),
+			"command": func() Step { s := validUI(); s.Command = "echo hi"; return s }(),
+			"prompt":  func() Step { s := validUI(); s.Prompt = "hi"; return s }(),
+			"session": func() Step { s := validUI(); s.Session = SessionNew; return s }(),
+		} {
+			err := s.Validate(nil)
+			if err == nil || !strings.Contains(err.Error(), "ui steps") {
+				t.Fatalf("%s: expected ui field error, got %v", field, err)
+			}
+		}
+	})
+
+	t.Run("rejects duplicate ui action outcomes", func(t *testing.T) {
+		s := validUI()
+		s.Actions = append(s.Actions, UIAction{Label: "Again", Outcome: "continue"})
+		err := s.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "duplicate outcome") {
+			t.Fatalf("expected duplicate outcome error, got %v", err)
+		}
+	})
+
+	t.Run("rejects interpolated ui action outcome", func(t *testing.T) {
+		s := validUI()
+		s.Actions[0].Outcome = "{{choice}}"
+		err := s.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "static identifiers") {
+			t.Fatalf("expected static identifier error, got %v", err)
+		}
+	})
+
+	t.Run("accepts ui capture only with inputs", func(t *testing.T) {
+		s := validUI()
+		s.Capture = "profile"
+		err := s.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "capture") || !strings.Contains(err.Error(), "inputs") {
+			t.Fatalf("expected capture requires inputs error, got %v", err)
+		}
+		s.Inputs = []UIInput{{Kind: "single_select", ID: "adapter", Prompt: "Adapter", Options: []string{"claude"}}}
+		if err := s.Validate(nil); err != nil {
+			t.Fatalf("unexpected error after adding inputs: %v", err)
+		}
+	})
+
+	t.Run("rejects duplicate ui input ids", func(t *testing.T) {
+		s := validUI()
+		s.Inputs = []UIInput{
+			{Kind: "single_select", ID: "adapter", Prompt: "Adapter", Options: []string{"claude"}},
+			{Kind: "single_select", ID: "adapter", Prompt: "Again", Options: []string{"codex"}},
+		}
+		err := s.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "duplicate input id") {
+			t.Fatalf("expected duplicate input id error, got %v", err)
+		}
+	})
+
+	t.Run("rejects unsafe script path", func(t *testing.T) {
+		for _, script := range []string{"/tmp/x.sh", "../x.sh", "{{choice}}.sh"} {
+			s := Step{ID: "script", Script: script}
+			err := s.Validate(nil)
+			if err == nil {
+				t.Fatalf("expected error for script %q", script)
+			}
+		}
+	})
+
+	t.Run("rejects model and cli on script steps", func(t *testing.T) {
+		for _, s := range []Step{
+			{ID: "script", Script: "detect.sh", Model: "opus"},
+			{ID: "script", Script: "detect.sh", CLI: "codex"},
+		} {
+			err := s.Validate(nil)
+			if err == nil || !strings.Contains(err.Error(), "script steps") {
+				t.Fatalf("expected script field error, got %v", err)
+			}
+		}
+	})
+}
+
 func TestParamSchema(t *testing.T) {
 	t.Run("parses a required param", func(t *testing.T) {
 		p := Param{Name: "file"}

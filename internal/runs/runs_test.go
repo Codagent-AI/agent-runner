@@ -186,11 +186,11 @@ func TestListForDir(t *testing.T) {
 					Nested: &model.NestedStepState{
 						StepID:            "outer",
 						SessionIDs:        map[string]string{},
-						CapturedVariables: map[string]string{},
+						CapturedVariables: map[string]model.CapturedValue{},
 						Child: &model.NestedStepState{
 							StepID:            "inner",
 							SessionIDs:        map[string]string{},
-							CapturedVariables: map[string]string{},
+							CapturedVariables: map[string]model.CapturedValue{},
 						},
 					},
 				},

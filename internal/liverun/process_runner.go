@@ -241,3 +241,51 @@ func (r *tuiProcessRunner) RunAgent(args []string, captureStdout bool, workdir s
 		Stderr:   stderrBuf.String(),
 	}, nil
 }
+
+func (r *tuiProcessRunner) RunScript(path string, stdin []byte, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
+	c := exec.Command(path) // #nosec G204
+	c.Stdin = bytes.NewReader(stdin)
+	c.Env = append(os.Environ(), "AGENT_RUNNER_BUNDLE_DIR="+scriptBundleDir(path))
+	if workdir != "" {
+		c.Dir = filepath.Clean(workdir) // #nosec G304
+	}
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	stdoutW, stdoutCleanup := r.compositeWriter("stdout", "out", &stdoutBuf)
+	stderrW, stderrCleanup := r.compositeWriter("stderr", "err", &stderrBuf)
+	defer stdoutCleanup()
+	defer stderrCleanup()
+
+	c.Stdout = stdoutW
+	c.Stderr = stderrW
+
+	err := c.Run()
+	exitCode := 0
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		} else {
+			return iexec.ProcessResult{}, err
+		}
+	}
+
+	stdout := stdoutBuf.String()
+	if !captureStdout {
+		stdout = ""
+	}
+	return iexec.ProcessResult{ExitCode: exitCode, Stdout: stdout, Stderr: stderrBuf.String()}, nil
+}
+
+func scriptBundleDir(scriptPath string) string {
+	clean := filepath.Clean(scriptPath)
+	sep := string(filepath.Separator)
+	marker := sep + "bundled" + sep
+	if idx := strings.Index(clean, marker); idx >= 0 {
+		rest := clean[idx+len(marker):]
+		if namespace, _, ok := strings.Cut(rest, sep); ok && namespace != "" {
+			return clean[:idx+len(marker)+len(namespace)]
+		}
+	}
+	return filepath.Dir(clean)
+}

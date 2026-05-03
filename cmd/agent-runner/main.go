@@ -16,6 +16,8 @@ import (
 	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-isatty"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/discovery"
@@ -31,6 +33,9 @@ import (
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/runview"
+	"github.com/codagent/agent-runner/internal/themeprompt"
+	"github.com/codagent/agent-runner/internal/uistep"
+	"github.com/codagent/agent-runner/internal/usersettings"
 	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
@@ -40,6 +45,20 @@ var version = "dev"
 var userHomeDir = os.UserHomeDir
 var currentExecutable = os.Executable
 var execProcess = syscall.Exec
+
+type themeDeps struct {
+	load   func() (usersettings.Settings, error)
+	prompt func() (usersettings.Theme, bool, error)
+	save   func(usersettings.Settings) error
+	apply  func(usersettings.Theme)
+}
+
+var defaultThemeDeps = themeDeps{
+	load:   usersettings.Load,
+	prompt: themeprompt.Prompt,
+	save:   usersettings.Save,
+	apply:  applyTheme,
+}
 
 // realProcessRunner implements exec.ProcessRunner using os/exec.
 type realProcessRunner struct{}
@@ -121,6 +140,57 @@ func (r *realProcessRunner) RunAgent(args []string, captureStdout bool, workdir 
 	return iexec.ProcessResult{ExitCode: exitCode}, nil
 }
 
+func (r *realProcessRunner) RunScript(path string, stdin []byte, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
+	c := exec.Command(path) // #nosec G204 -- workflow script path is validated by executor
+	c.Stdin = bytes.NewReader(stdin)
+	c.Env = append(os.Environ(), "AGENT_RUNNER_BUNDLE_DIR="+scriptBundleDir(path))
+	if workdir != "" {
+		c.Dir = filepath.Clean(workdir) // #nosec G304
+	}
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	if captureStdout {
+		c.Stdout = io.MultiWriter(os.Stdout, &stdoutBuf)
+		c.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
+		err := c.Run()
+		exitCode := 0
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+			} else {
+				return iexec.ProcessResult{}, err
+			}
+		}
+		return iexec.ProcessResult{ExitCode: exitCode, Stdout: stdoutBuf.String(), Stderr: stderrBuf.String()}, nil
+	}
+
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	err := c.Run()
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			return iexec.ProcessResult{}, err
+		}
+	}
+	return iexec.ProcessResult{ExitCode: exitCode}, nil
+}
+
+func scriptBundleDir(scriptPath string) string {
+	clean := filepath.Clean(scriptPath)
+	sep := string(filepath.Separator)
+	marker := sep + "bundled" + sep
+	if idx := strings.Index(clean, marker); idx >= 0 {
+		rest := clean[idx+len(marker):]
+		if namespace, _, ok := strings.Cut(rest, sep); ok && namespace != "" {
+			return clean[:idx+len(marker)+len(namespace)]
+		}
+	}
+	return filepath.Dir(clean)
+}
+
 // realGlobExpander implements exec.GlobExpander using filepath.Glob.
 type realGlobExpander struct{}
 
@@ -148,6 +218,10 @@ func main() {
 }
 
 func run() int {
+	if len(os.Args) > 1 && os.Args[1] == "internal" {
+		return handleInternal(os.Args[2:])
+	}
+
 	chdirFlag := flag.String("C", "", "Change to `directory` before doing anything")
 	resumeFlag := flag.Bool("resume", false, "Resume an interrupted workflow (optionally followed by session ID)")
 	listFlag := flag.Bool("list", false, "Launch the run list TUI")
@@ -201,6 +275,10 @@ func run() int {
 
 	args := flag.Args()
 
+	if *validateFlag {
+		return handleValidateArgs(args)
+	}
+
 	if *inspectFlag != "" {
 		return handleInspect(*inspectFlag)
 	}
@@ -222,10 +300,6 @@ func run() int {
 
 	if len(args) < 1 {
 		return handleListBare()
-	}
-
-	if *validateFlag {
-		return handleValidateArgs(args)
 	}
 
 	workflowFile, err := resolveWorkflowArg(args[0])
@@ -265,6 +339,10 @@ func handleResume(sessionID string) int {
 		return 0
 	}
 
+	if code := ensureThemeForTUI(defaultThemeDeps); code != 0 {
+		return code
+	}
+
 	h, err := runner.PrepareResume(stateFilePath, &runner.Options{
 		ProcessRunner: &realProcessRunner{},
 		GlobExpander:  &realGlobExpander{},
@@ -293,15 +371,19 @@ func resumeInspectPaths(stateFilePath string) (sessionDir, projectDir string) {
 }
 
 func handleInspect(runID string) int {
+	sessionDir, projectDir, err := resolveInspectSession(runID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+
 	if err := requireTTY(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 
-	sessionDir, projectDir, err := resolveInspectSession(runID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-		return 1
+	if code := ensureThemeForTUI(defaultThemeDeps); code != 0 {
+		return code
 	}
 
 	return openInspectTUI(runID, sessionDir, projectDir)
@@ -341,6 +423,13 @@ func handleListWithTab(initialTab listview.InitialTab) int {
 	if err := requireTTY(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
+	}
+
+	if code := ensureThemeForTUI(defaultThemeDeps); code != 0 {
+		return code
+	}
+	if code := ensureOnboardingForTUI(defaultOnboardingDeps); code != 0 {
+		return code
 	}
 
 	m, err := listview.New(listview.WithInitialTab(initialTab))
@@ -447,6 +536,7 @@ func runLiveTUI(h *runner.RunHandle) int {
 			SuspendHook:     coord.BeforeInteractive,
 			ResumeHook:      coord.AfterInteractive,
 			PrepareStepHook: coord.PrepareForStep,
+			UIStepHandler:   uistep.NewHandler(coord.BeforeInteractive, coord.AfterInteractive),
 		})
 	}()
 
@@ -1054,6 +1144,10 @@ func handleRun(args []string) int {
 		return 0
 	}
 
+	if code := ensureThemeForTUI(defaultThemeDeps); code != 0 {
+		return code
+	}
+
 	h, err := runner.PrepareRun(&workflow, params, &runner.Options{
 		WorkflowFile:  workflowFile,
 		Engine:        eng,
@@ -1067,6 +1161,73 @@ func handleRun(args []string) int {
 	}
 
 	return runLiveTUI(h)
+}
+
+func ensureThemeForTUI(deps themeDeps) int {
+	settings, err := deps.load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+
+	if settings.Theme == "" {
+		theme, ok, err := deps.prompt()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+			return 1
+		}
+		if !ok {
+			return 1
+		}
+		settings.Theme = theme
+		if err := deps.save(settings); err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: failed to save settings: %v\n", err)
+			return 1
+		}
+	}
+
+	deps.apply(settings.Theme)
+	return 0
+}
+
+func applyTheme(theme usersettings.Theme) {
+	lipgloss.SetHasDarkBackground(theme == usersettings.ThemeDark)
+}
+
+type onboardingDeps struct {
+	load        func() (usersettings.Settings, error)
+	isStdinTTY  func() bool
+	isStdoutTTY func() bool
+	runWorkflow func(ref string) int
+}
+
+var defaultOnboardingDeps = onboardingDeps{
+	load:        usersettings.Load,
+	isStdinTTY:  func() bool { return isatty.IsTerminal(os.Stdin.Fd()) },
+	isStdoutTTY: func() bool { return isatty.IsTerminal(os.Stdout.Fd()) },
+	runWorkflow: func(ref string) int {
+		return handleRun([]string{ref})
+	},
+}
+
+func ensureOnboardingForTUI(deps onboardingDeps) int {
+	settings, err := deps.load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+	if settings.Onboarding.CompletedAt != "" || settings.Onboarding.Dismissed != "" {
+		return 0
+	}
+	if !deps.isStdinTTY() || !deps.isStdoutTTY() {
+		return 0
+	}
+	ref, err := builtinworkflows.Resolve("onboarding:welcome")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+	return deps.runWorkflow(ref)
 }
 
 // parseParams separates positional args from key=value pairs.

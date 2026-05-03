@@ -2,11 +2,16 @@ package model
 
 import (
 	"fmt"
+	"path"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
 	"github.com/codagent/agent-runner/internal/flowctl"
 )
+
+var identifierRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 // StepMode defines how a step executes.
 type StepMode string
@@ -15,6 +20,7 @@ type StepMode string
 const (
 	ModeInteractive StepMode = "interactive"
 	ModeHeadless    StepMode = "headless"
+	ModeUI          StepMode = "ui"
 )
 
 // SessionStrategy defines how an agent session is managed.
@@ -53,6 +59,33 @@ type Loop struct {
 	RequireMatches *bool  `yaml:"require_matches,omitempty" json:"require_matches,omitempty"`
 }
 
+type UIAction struct {
+	Label   string `yaml:"label" json:"label"`
+	Outcome string `yaml:"outcome" json:"outcome"`
+}
+
+type UIInput struct {
+	Kind    string   `yaml:"kind" json:"kind"`
+	ID      string   `yaml:"id" json:"id"`
+	Prompt  string   `yaml:"prompt" json:"prompt"`
+	Options []string `yaml:"options,omitempty" json:"options,omitempty"`
+	Default string   `yaml:"default,omitempty" json:"default,omitempty"`
+}
+
+type UIStepRequest struct {
+	StepID  string
+	Title   string
+	Body    string
+	Actions []UIAction
+	Inputs  []UIInput
+}
+
+type UIStepResult struct {
+	Outcome  string
+	Inputs   map[string]string
+	Canceled bool
+}
+
 // Validate checks that a Loop has valid field combinations.
 func (l *Loop) Validate() error {
 	hasMax := l.Max != nil
@@ -87,6 +120,9 @@ type Step struct {
 	ID                string            `yaml:"id" json:"id"`
 	Prompt            string            `yaml:"prompt,omitempty" json:"prompt,omitempty"`
 	Command           string            `yaml:"command,omitempty" json:"command,omitempty"`
+	Script            string            `yaml:"script,omitempty" json:"script,omitempty"`
+	ScriptInputs      map[string]string `yaml:"script_inputs,omitempty" json:"script_inputs,omitempty"`
+	CaptureFormat     string            `yaml:"capture_format,omitempty" json:"capture_format,omitempty"`
 	Agent             string            `yaml:"agent,omitempty" json:"agent,omitempty"`
 	Mode              StepMode          `yaml:"mode,omitempty" json:"mode,omitempty"`
 	Session           SessionStrategy   `yaml:"session,omitempty" json:"session,omitempty"`
@@ -102,6 +138,11 @@ type Step struct {
 	Loop              *Loop             `yaml:"loop,omitempty" json:"loop,omitempty"`
 	Params            map[string]string `yaml:"params,omitempty" json:"params,omitempty"`
 	Steps             []Step            `yaml:"steps,omitempty" json:"steps,omitempty"`
+	Title             string            `yaml:"title,omitempty" json:"title,omitempty"`
+	Body              string            `yaml:"body,omitempty" json:"body,omitempty"`
+	Actions           []UIAction        `yaml:"actions,omitempty" json:"actions,omitempty"`
+	Inputs            []UIInput         `yaml:"inputs,omitempty" json:"inputs,omitempty"`
+	OutcomeCapture    string            `yaml:"outcome_capture,omitempty" json:"outcome_capture,omitempty"`
 }
 
 // ApplyDefaults sets default values for fields that were not specified.
@@ -114,6 +155,12 @@ func (s *Step) ApplyDefaults() {
 func (s *Step) StepType() string {
 	if s.Command != "" {
 		return "shell"
+	}
+	if s.Script != "" {
+		return "script"
+	}
+	if s.Mode == ModeUI {
+		return "ui"
 	}
 	if s.Prompt != "" || s.Agent != "" {
 		return "agent"
@@ -132,13 +179,15 @@ func (s *Step) StepType() string {
 
 func hasExactlyOneStepType(s *Step) bool {
 	isShell := s.Command != ""
+	isScript := s.Script != ""
+	isUI := s.Mode == ModeUI
 	isAgent := s.Prompt != "" || s.Agent != ""
 	isLoop := s.Loop != nil && len(s.Steps) > 0
 	isSubWorkflow := s.Workflow != ""
 	isGroup := s.Loop == nil && len(s.Steps) > 0
 
 	count := 0
-	for _, b := range []bool{isShell, isAgent, isLoop, isSubWorkflow, isGroup} {
+	for _, b := range []bool{isShell, isScript, isUI, isAgent, isLoop, isSubWorkflow, isGroup} {
 		if b {
 			count++
 		}
@@ -173,8 +222,14 @@ func validateCLIName(cliValue string, knownCLIs []string) error {
 // knownCLIs is the list of registered CLI adapter names; if nil, CLI name
 // validation is skipped (useful for tests that don't care about CLI names).
 func (s *Step) Validate(knownCLIs []string) error {
+	if s.Mode == ModeUI {
+		if err := s.validateUIExclusiveFields(); err != nil {
+			return err
+		}
+	}
+
 	if !hasExactlyOneStepType(s) {
-		return fmt.Errorf(`step must have exactly one of: command, prompt/mode, loop+steps, workflow, or steps (group)`)
+		return fmt.Errorf(`step must have exactly one of: command, script, mode: ui, prompt/mode, loop+steps, workflow, or steps (group)`)
 	}
 
 	if err := s.validateFieldConstraints(knownCLIs); err != nil {
@@ -193,6 +248,26 @@ func (s *Step) Validate(knownCLIs []string) error {
 		}
 	}
 
+	return nil
+}
+
+func (s *Step) validateUIExclusiveFields() error {
+	switch {
+	case s.Agent != "":
+		return fmt.Errorf(`"agent" is not valid on ui steps`)
+	case s.Command != "":
+		return fmt.Errorf(`"command" is not valid on ui steps`)
+	case s.Prompt != "":
+		return fmt.Errorf(`"prompt" is not valid on ui steps`)
+	case s.Session != "":
+		return fmt.Errorf(`"session" is not valid on ui steps`)
+	case s.Workflow != "":
+		return fmt.Errorf(`"workflow" is not valid on ui steps`)
+	case s.Loop != nil:
+		return fmt.Errorf(`"loop" is not valid on ui steps`)
+	case len(s.Steps) > 0:
+		return fmt.Errorf(`"steps" is not valid on ui steps`)
+	}
 	return nil
 }
 
@@ -233,19 +308,19 @@ func (s *Step) validateCaptureFields(isAgent, isShell bool) error {
 			return fmt.Errorf(`"capture" cannot be combined with "mode: interactive" on shell steps`)
 		}
 		switch {
-		case isShell:
+		case isShell, s.Script != "", s.Mode == ModeUI:
 			// ok
 		case !isAgent:
-			return fmt.Errorf(`"capture" is only allowed on shell and headless steps`)
+			return fmt.Errorf(`"capture" is only allowed on shell, script, ui, and headless steps`)
 		default:
 			// When mode is explicit, validate it directly. When mode is unset and
 			// a profile is configured (s.Agent), the profile's default_mode may
 			// resolve to headless at execution time — defer the check.
 			if s.Mode != "" && s.Mode != ModeHeadless {
-				return fmt.Errorf(`"capture" is only allowed on shell and headless steps`)
+				return fmt.Errorf(`"capture" is only allowed on shell, script, ui, and headless steps`)
 			}
 			if s.Mode == "" && s.Agent == "" && s.Session != SessionResume && s.Session != SessionInherit && !IsNamedSession(s.Session) {
-				return fmt.Errorf(`"capture" is only allowed on shell and headless steps`)
+				return fmt.Errorf(`"capture" is only allowed on shell, script, ui, and headless steps`)
 			}
 		}
 	}
@@ -261,6 +336,8 @@ func (s *Step) validateCaptureFields(isAgent, isShell bool) error {
 func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 	isAgent := s.isAgentContext()
 	isShell := s.Command != ""
+	isScript := s.Script != ""
+	isUI := s.Mode == ModeUI
 
 	if isAgent && s.Prompt == "" {
 		return fmt.Errorf(`agent steps require "prompt"`)
@@ -274,23 +351,12 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 		return err
 	}
 
-	if s.Workdir != "" && !isShell && !isAgent {
-		return fmt.Errorf(`"workdir" is only allowed on shell and agent steps`)
+	if s.Workdir != "" && !isShell && !isAgent && !isScript {
+		return fmt.Errorf(`"workdir" is only allowed on shell, script, and agent steps`)
 	}
 
-	if s.Model != "" {
-		if err := validateAgentOnlyField("model", isAgent); err != nil {
-			return err
-		}
-	}
-
-	if s.CLI != "" {
-		if err := validateAgentOnlyField("cli", isAgent); err != nil {
-			return err
-		}
-		if err := validateCLIName(s.CLI, knownCLIs); err != nil {
-			return err
-		}
+	if err := s.validateAgentAdapterFields(knownCLIs, isAgent, isScript, isUI); err != nil {
+		return err
 	}
 
 	if s.Loop != nil && len(s.Steps) == 0 {
@@ -299,6 +365,14 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 
 	if s.Params != nil && s.Workflow == "" {
 		return fmt.Errorf(`"params" is only allowed on sub-workflow steps`)
+	}
+
+	if err := s.validateScriptFields(isScript); err != nil {
+		return err
+	}
+
+	if err := s.validateUIFields(isUI); err != nil {
+		return err
 	}
 
 	if s.SkipIf != "" && s.SkipIf != "previous_success" {
@@ -311,11 +385,192 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 		return fmt.Errorf(`invalid break_if value: %q`, s.BreakIf)
 	}
 
-	if s.Mode != "" && s.Mode != ModeInteractive && s.Mode != ModeHeadless {
+	if s.Mode != "" && s.Mode != ModeInteractive && s.Mode != ModeHeadless && s.Mode != ModeUI {
 		return fmt.Errorf(`invalid mode: %q`, s.Mode)
 	}
 
 	return nil
+}
+
+func (s *Step) validateAgentAdapterFields(knownCLIs []string, isAgent, isScript, isUI bool) error {
+	if err := validateModelField(s.Model, isAgent, isScript, isUI); err != nil {
+		return err
+	}
+	if s.CLI == "" {
+		return nil
+	}
+	if isUI {
+		return fmt.Errorf(`"cli" is not valid on ui steps`)
+	}
+	if isScript {
+		return fmt.Errorf(`"cli" is not valid on script steps`)
+	}
+	if err := validateAgentOnlyField("cli", isAgent); err != nil {
+		return err
+	}
+	return validateCLIName(s.CLI, knownCLIs)
+}
+
+func validateModelField(modelValue string, isAgent, isScript, isUI bool) error {
+	if modelValue == "" {
+		return nil
+	}
+	if isUI {
+		return fmt.Errorf(`"model" is not valid on ui steps`)
+	}
+	if isScript {
+		return fmt.Errorf(`"model" is not valid on script steps`)
+	}
+	return validateAgentOnlyField("model", isAgent)
+}
+
+func (s *Step) validateScriptFields(isScript bool) error {
+	if s.ScriptInputs != nil && !isScript {
+		return fmt.Errorf(`"script_inputs" is only allowed on script steps`)
+	}
+	if !isScript {
+		if s.CaptureFormat != "" {
+			return fmt.Errorf(`"capture_format" requires a script step with "capture"`)
+		}
+		return nil
+	}
+	if s.Mode != "" {
+		return fmt.Errorf(`"mode" is not valid on script steps`)
+	}
+	if s.Session != "" {
+		return fmt.Errorf(`"session" is not valid on script steps`)
+	}
+	if err := validateScriptPath(s.Script); err != nil {
+		return err
+	}
+	if s.CaptureFormat == "" {
+		return nil
+	}
+	if s.Capture == "" {
+		return fmt.Errorf(`"capture_format" requires a script step with "capture"`)
+	}
+	if s.CaptureFormat != "text" && s.CaptureFormat != "json" {
+		return fmt.Errorf(`invalid capture_format: %q`, s.CaptureFormat)
+	}
+	return nil
+}
+
+func validateScriptPath(script string) error {
+	if strings.Contains(script, "{{") || strings.Contains(script, "}}") {
+		return fmt.Errorf(`"script" must be a static path`)
+	}
+	// Normalize backslashes to forward slashes before validation to prevent
+	// bypass via paths like "..\outside\evil.sh".
+	normalized := strings.ReplaceAll(script, `\`, "/")
+	clean := path.Clean(normalized)
+	if clean == "." {
+		return fmt.Errorf(`"script" path is required`)
+	}
+	if path.IsAbs(clean) || filepath.IsAbs(script) {
+		return fmt.Errorf(`absolute script paths are not allowed`)
+	}
+	for _, part := range strings.Split(clean, "/") {
+		if part == ".." {
+			return fmt.Errorf(`script path traversal is not allowed`)
+		}
+	}
+	return nil
+}
+
+func (s *Step) validateUIFields(isUI bool) error {
+	if s.OutcomeCapture != "" && !isUI {
+		return fmt.Errorf(`"outcome_capture" is only allowed on ui steps`)
+	}
+	if !isUI {
+		if s.Title != "" || s.Body != "" || len(s.Actions) > 0 || len(s.Inputs) > 0 {
+			return fmt.Errorf(`ui fields are only allowed on ui steps`)
+		}
+		return nil
+	}
+	if s.Title == "" {
+		return fmt.Errorf(`"title" is required on ui steps`)
+	}
+	if len(s.Actions) == 0 {
+		return fmt.Errorf(`"actions" is required on ui steps`)
+	}
+	if s.Capture != "" && len(s.Inputs) == 0 {
+		return fmt.Errorf(`"capture" requires "inputs" on ui steps`)
+	}
+	if s.Capture != "" && s.Capture == s.OutcomeCapture {
+		return fmt.Errorf(`"capture" and "outcome_capture" must name distinct variables`)
+	}
+
+	if err := validateUIActions(s.Actions); err != nil {
+		return err
+	}
+	return validateUIInputs(s.Inputs)
+}
+
+func validateUIActions(actions []UIAction) error {
+	outcomes := make(map[string]struct{}, len(actions))
+	for i, action := range actions {
+		if err := validateUIAction(i, action, outcomes); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateUIAction(i int, action UIAction, outcomes map[string]struct{}) error {
+	if action.Label == "" || action.Outcome == "" {
+		return fmt.Errorf(`actions[%d] requires label and outcome`, i)
+	}
+	if strings.Contains(action.Outcome, "{{") || strings.Contains(action.Outcome, "}}") {
+		return fmt.Errorf(`actions[%d].outcome must be static identifiers`, i)
+	}
+	if !identifierRe.MatchString(action.Outcome) {
+		return fmt.Errorf(`actions[%d].outcome must match ^[a-z][a-z0-9_]*$`, i)
+	}
+	if _, exists := outcomes[action.Outcome]; exists {
+		return fmt.Errorf(`duplicate outcome %q`, action.Outcome)
+	}
+	outcomes[action.Outcome] = struct{}{}
+	return nil
+}
+
+func validateUIInputs(inputs []UIInput) error {
+	seen := make(map[string]struct{}, len(inputs))
+	for i := range inputs {
+		if err := validateUIInput(i, &inputs[i], seen); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateUIInput(i int, input *UIInput, seen map[string]struct{}) error {
+	if input.Kind != "single_select" && input.Kind != "single-select" {
+		return fmt.Errorf(`inputs[%d]: only single_select inputs are supported`, i)
+	}
+	if input.ID == "" {
+		return fmt.Errorf(`inputs[%d].id is required`, i)
+	}
+	if !identifierRe.MatchString(input.ID) {
+		return fmt.Errorf(`inputs[%d].id must match ^[a-z][a-z0-9_]*$`, i)
+	}
+	if _, exists := seen[input.ID]; exists {
+		return fmt.Errorf(`duplicate input id %q`, input.ID)
+	}
+	seen[input.ID] = struct{}{}
+	if input.Prompt == "" {
+		return fmt.Errorf(`inputs[%d].prompt is required`, i)
+	}
+	if len(input.Options) == 0 {
+		return fmt.Errorf(`inputs[%d].options is required`, i)
+	}
+	if input.Default != "" && !isDynamicOptions(input.Options) && !slices.Contains(input.Options, input.Default) {
+		return fmt.Errorf(`inputs[%d].default is not among declared options`, i)
+	}
+	return nil
+}
+
+func isDynamicOptions(options []string) bool {
+	return len(options) == 1 && strings.HasPrefix(options[0], "{{") && strings.HasSuffix(options[0], "}}")
 }
 
 // Param defines a workflow parameter.

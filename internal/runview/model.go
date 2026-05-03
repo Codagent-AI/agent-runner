@@ -330,13 +330,20 @@ const altScreenDelay = 1000 * time.Millisecond
 type deferredAltScreenMsg struct{}
 
 func (m *Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{tuistyle.DoRefresh(), tuistyle.DoPulse()}
+	var cmds []tea.Cmd
+	if m.hasLiveUpdates() {
+		cmds = append(cmds, tuistyle.DoRefresh(), tuistyle.DoPulse())
+	}
 	if m.entered == FromLiveRun && !m.altScreen {
 		cmds = append(cmds, tea.Tick(altScreenDelay, func(time.Time) tea.Msg {
 			return deferredAltScreenMsg{}
 		}))
 	}
 	return tea.Batch(cmds...)
+}
+
+func (m *Model) hasLiveUpdates() bool {
+	return m.active || m.running
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -536,20 +543,26 @@ func (m *Model) handleRefreshMsg() tea.Cmd {
 	// FromLiveRun leaves m.active=false because no runlock is held, but the
 	// in-process runner is still emitting audit events we need to pick up so
 	// step statuses stay current.
-	if m.active || m.running {
-		m.refreshData()
-		if m.autoFollow {
-			m.logOffset = math.MaxInt32
-		}
-		m.rebuildRanges()
+	if !m.hasLiveUpdates() {
+		return nil
+	}
+	m.refreshData()
+	if m.autoFollow {
+		m.logOffset = math.MaxInt32
+	}
+	lineCount := m.rebuildRanges()
+	m.clampLogOffset(lineCount)
+	if !m.hasLiveUpdates() {
+		return nil
 	}
 	return tuistyle.DoRefresh()
 }
 
 func (m *Model) handlePulseMsg() tea.Cmd {
-	if m.active || m.running {
-		m.pulsePhase += (50.0 / 1000.0) * 2 * math.Pi
+	if !m.hasLiveUpdates() {
+		return nil
 	}
+	m.pulsePhase += (50.0 / 1000.0) * 2 * math.Pi
 	return tuistyle.DoPulse()
 }
 
@@ -642,7 +655,7 @@ func (m *Model) handleStepNavigation(delta int) tea.Cmd {
 	m.moveCursor(delta)
 	m.rebuildRanges()
 	m.syncLogToSelection()
-	return tea.ClearScreen
+	return nil
 }
 
 // applyAutoFollowCursor moves the cursor to the ancestor-at-current-level of

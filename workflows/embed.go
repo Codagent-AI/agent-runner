@@ -69,6 +69,47 @@ func ReadFile(workflowFile string) ([]byte, error) {
 	return data, nil
 }
 
+func ListAssets(namespace string) ([]string, error) {
+	if namespace == "" || namespace == "." || namespace == ".." || strings.Contains(namespace, "/") || strings.Contains(namespace, `\`) {
+		return nil, fmt.Errorf("invalid builtin workflow namespace: %s", namespace)
+	}
+	var assets []string
+	err := fs.WalkDir(FS, namespace, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return fmt.Errorf("workflow namespace %q not found", namespace)
+			}
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		ext := path.Ext(p)
+		if ext == ".yaml" || ext == ".yml" {
+			return nil
+		}
+		rel := strings.TrimPrefix(strings.TrimPrefix(p, namespace), "/")
+		assets = append(assets, rel)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return assets, nil
+}
+
+func ReadAsset(assetPath string) ([]byte, error) {
+	clean := path.Clean(assetPath)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || path.IsAbs(clean) {
+		return nil, fmt.Errorf("invalid builtin asset path: %s", assetPath)
+	}
+	ext := path.Ext(clean)
+	if ext == ".yaml" || ext == ".yml" {
+		return nil, fmt.Errorf("builtin asset path is a workflow: %s", assetPath)
+	}
+	return FS.ReadFile(clean)
+}
+
 func List() ([]string, error) {
 	var refs []string
 	err := fs.WalkDir(FS, ".", func(p string, d fs.DirEntry, err error) error {

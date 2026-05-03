@@ -73,15 +73,16 @@ type Model struct {
 	currentDirCursor int
 	currentDirOffset int
 
-	projectDir   string
-	projectsRoot string
-	cwd          string
-	currentRuns  []runs.RunInfo
-	loadErr      string
-	errMsg       string
-	pulsePhase   float64
-	termWidth    int
-	termHeight   int
+	projectDir     string
+	projectsRoot   string
+	cwd            string
+	currentRuns    []runs.RunInfo
+	loadErr        string
+	errMsg         string
+	pulsePhase     float64
+	pulseScheduled bool
+	termWidth      int
+	termHeight     int
 
 	quitting bool
 }
@@ -332,7 +333,7 @@ func listAllDirs(projectsRoot string) (dirs []DirEntry, errs []string) {
 }
 
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(doRefresh(), doPulse())
+	return tea.Batch(doRefresh(), m.schedulePulseIfNeeded())
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -384,17 +385,61 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			m.handleEsc()
 		}
+		cmd := m.schedulePulseIfNeeded()
+		return m, cmd
 
 	case refreshMsg:
 		m.loadData()
-		return m, doRefresh()
+		return m, tea.Batch(doRefresh(), m.schedulePulseIfNeeded())
 
 	case pulseMsg:
+		m.pulseScheduled = false
+		if !m.visibleRunListHasActiveRun() {
+			return m, nil
+		}
 		m.pulsePhase += (50.0 / 1000.0) * 2 * math.Pi
-		return m, doPulse()
+		cmd := m.schedulePulseIfNeeded()
+		return m, cmd
 	}
 
 	return m, nil
+}
+
+func (m *Model) schedulePulseIfNeeded() tea.Cmd {
+	if m.pulseScheduled || !m.visibleRunListHasActiveRun() {
+		return nil
+	}
+	m.pulseScheduled = true
+	return doPulse()
+}
+
+func (m *Model) visibleRunListHasActiveRun() bool {
+	switch m.activeTab {
+	case tabCurrentDir:
+		return runListHasActiveRun(m.currentRuns)
+	case tabWorktrees:
+		if m.worktreeTab.subView == subViewRunList {
+			if wt := m.selectedWorktree(); wt != nil {
+				return runListHasActiveRun(wt.Runs)
+			}
+		}
+	case tabAll:
+		if m.allTab.subView == subViewRunList {
+			if d := m.selectedAllDir(); d != nil {
+				return runListHasActiveRun(d.Runs)
+			}
+		}
+	}
+	return false
+}
+
+func runListHasActiveRun(runList []runs.RunInfo) bool {
+	for i := range runList {
+		if runList[i].Status == runs.StatusActive {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Model) nextTab() {

@@ -1,0 +1,30 @@
+name: onboarding-welcome
+description: First-run onboarding for Agent Runner.
+steps:
+  - id: welcome
+    mode: ui
+    title: Welcome to Agent Runner
+    body: |
+      Agent Runner orchestrates multi-step AI workflows by managing sessions, prompts, and tool access across CLI adapters.
+
+      This setup will help you choose adapters, select models, and write an initial agent profile config.
+    actions:
+      - label: Continue
+        outcome: continue
+      - label: Not now
+        outcome: not_now
+      - label: Dismiss
+        outcome: dismiss
+    outcome_capture: user_action
+
+  - id: set-dismissed
+    command: agent-runner internal write-setting onboarding.dismissed "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    skip_if: 'sh: [ "{{user_action}}" != "dismiss" ]'
+
+  - id: setup
+    workflow: setup-agent-profile.yaml
+    skip_if: 'sh: [ "{{user_action}}" != "continue" ]'
+
+  - id: set-completed
+    command: agent-runner internal write-setting onboarding.completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    skip_if: 'sh: [ "{{user_action}}" != "continue" ]'
