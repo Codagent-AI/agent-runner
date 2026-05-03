@@ -150,7 +150,7 @@ func TestDispatchStepEmitsAuditEnvelopeForEveryStepType(t *testing.T) {
 			name: "ui",
 			step: model.Step{ID: "ui", Mode: model.ModeUI, Title: "Pick", Actions: []model.UIAction{{Label: "Continue", Outcome: "continue"}}},
 			setup: func(ctx *model.ExecutionContext) {
-				ctx.UIStepHandler = func(model.UIStepRequest) (model.UIStepResult, error) {
+				ctx.UIStepHandler = func(*model.UIStepRequest) (model.UIStepResult, error) {
 					return model.UIStepResult{Outcome: "continue"}, nil
 				}
 			},
@@ -275,6 +275,25 @@ func TestDispatchStep_PrepareStepHook(t *testing.T) {
 		DispatchStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
 		if len(called) != 1 || called[0] != true {
 			t.Fatalf("expected hook called with true, got %v", called)
+		}
+	})
+
+	t.Run("ui step calls hook with false", func(t *testing.T) {
+		var called []bool
+		ctx := makeCtx()
+		ctx.PrepareStepHook = func(interactive bool) { called = append(called, interactive) }
+		ctx.UIStepHandler = func(*model.UIStepRequest) (model.UIStepResult, error) {
+			return model.UIStepResult{Outcome: "continue"}, nil
+		}
+		step := model.Step{
+			ID:      "welcome",
+			Mode:    model.ModeUI,
+			Title:   "Welcome",
+			Actions: []model.UIAction{{Label: "Continue", Outcome: "continue"}},
+		}
+		DispatchStep(&step, ctx, &mockRunner{}, &mockGlob{}, &mockLogger{})
+		if len(called) != 1 || called[0] != false {
+			t.Fatalf("expected hook called with false, got %v", called)
 		}
 	})
 

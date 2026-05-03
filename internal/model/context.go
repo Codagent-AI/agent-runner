@@ -81,7 +81,7 @@ type ExecutionContext struct {
 	// interactive steps.
 	PrepareStepHook func(interactive bool)
 
-	UIStepHandler func(UIStepRequest) (UIStepResult, error)
+	UIStepHandler func(*UIStepRequest) (UIStepResult, error)
 }
 
 // RootContextOptions configures a new root execution context.
@@ -99,7 +99,7 @@ type RootContextOptions struct {
 	AuditLogger         audit.EventLogger
 	NamedSessions       map[string]string
 	NamedSessionDecls   map[string]string
-	UIStepHandler       func(UIStepRequest) (UIStepResult, error)
+	UIStepHandler       func(*UIStepRequest) (UIStepResult, error)
 }
 
 // NewRootContext creates a top-level execution context.

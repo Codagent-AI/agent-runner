@@ -35,7 +35,6 @@ import (
 	"github.com/codagent/agent-runner/internal/runs"
 	"github.com/codagent/agent-runner/internal/runview"
 	"github.com/codagent/agent-runner/internal/themeprompt"
-	"github.com/codagent/agent-runner/internal/uistep"
 	"github.com/codagent/agent-runner/internal/usersettings"
 	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
@@ -548,7 +547,7 @@ func runLiveTUIWithOptions(h *runner.RunHandle, opts liveTUIOptions) int {
 			SuspendHook:     coord.BeforeInteractive,
 			ResumeHook:      coord.AfterInteractive,
 			PrepareStepHook: coord.PrepareForStep,
-			UIStepHandler:   uistep.NewHandler(coord.BeforeInteractive, coord.AfterInteractive),
+			UIStepHandler:   coord.HandleUIStep,
 		})
 	}()
 

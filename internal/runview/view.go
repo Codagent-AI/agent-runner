@@ -117,15 +117,21 @@ func (m *Model) renderTwoColumn(children []*StepNode) string {
 	}
 
 	// Build log lines for the right pane.
-	logLines, _ := buildLogLines(
-		children,
-		m.pendingSelected(),
-		rightWidth,
-		m.loadedFull,
-		m.pulsePhase,
-		m.running || m.active,
-		m.resolverCfg,
-	)
+	var logLines []string
+	if m.liveUI != nil {
+		m.liveUI.SetWidth(rightWidth)
+		logLines = strings.Split(m.liveUI.View(), "\n")
+	} else {
+		logLines, _ = buildLogLines(
+			children,
+			m.pendingSelected(),
+			rightWidth,
+			m.loadedFull,
+			m.pulsePhase,
+			m.running || m.active,
+			m.resolverCfg,
+		)
+	}
 
 	maxOffset := max(0, len(logLines)-bodyHeight)
 	offset := m.logOffset

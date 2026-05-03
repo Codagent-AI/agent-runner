@@ -16,6 +16,7 @@ import (
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/stateio"
 	"github.com/codagent/agent-runner/internal/tuistyle"
+	"github.com/codagent/agent-runner/internal/uistep"
 )
 
 // Messages emitted by the runview Model to the parent switcher.
@@ -108,6 +109,9 @@ type Model struct {
 	// step followed by an interactive step does not flash the TUI.
 	altScreen         bool // true once alt-screen has been entered
 	suppressAltScreen bool // set when SuspendedMsg arrives before the deferred timer
+
+	liveUI      *uistep.Model
+	liveUIReply chan<- model.UIStepResult
 }
 
 // ResumeAgentCLI returns the agent CLI name captured from a ResumeMsg in
@@ -363,6 +367,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleStepStateMsg(msg)
 		return m, nil
 
+	case *liverun.UIRequestMsg:
+		return m.handleUIRequestMsg(msg)
+
 	case deferredAltScreenMsg:
 		cmd := m.handleDeferredAltScreen()
 		return m, cmd
@@ -372,33 +379,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case liverun.ShowTUIMsg:
-		if !m.altScreen {
-			m.altScreen = true
-			m.suppressAltScreen = false
-			return m, tea.Batch(tea.EnterAltScreen, tea.EnableMouseCellMotion)
-		}
-		return m, nil
+		return m.handleShowTUIMsg()
 
 	case liverun.SuspendedMsg:
-		// Re-enter follow mode whenever a step transitions into interactive:
-		// the user can't see the run view during the PTY hand-off, so by the
-		// time the TUI restores they should be tracking the live step instead
-		// of pinned to wherever they previously drilled in.
-		m.autoFollow = true
-		if len(m.path) > 1 && m.activeStepPrefix != "" {
-			if active := m.tree.FindByPrefix(m.activeStepPrefix); active != nil {
-				if m.ancestorAtCurrentLevel(active) == nil {
-					m.path = m.path[:1]
-					m.cursor = 0
-					m.logOffset = 0
-				}
-			}
-		}
-		m.applyAutoFollowCursor()
-		m.rebuildRanges()
-		if !m.altScreen {
-			m.suppressAltScreen = true
-		}
+		m.handleSuspendedMsg()
 		return m, nil
 
 	case liverun.ResumedMsg:
@@ -433,6 +417,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// ---- Keyboard / mouse ----
 
 	case tea.KeyMsg:
+		if m.liveUI != nil {
+			return m.handleLiveUIKey(msg)
+		}
 		return m.handleKey(msg)
 
 	case tea.MouseMsg:
@@ -445,6 +432,60 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tuistyle.PulseMsg:
 		cmd := m.handlePulseMsg()
 		return m, cmd
+	}
+	return m, nil
+}
+
+func (m *Model) handleUIRequestMsg(msg *liverun.UIRequestMsg) (tea.Model, tea.Cmd) {
+	m.liveUI = uistep.NewModel(&msg.Request)
+	m.liveUIReply = msg.Reply
+	return m.handleShowTUIMsg()
+}
+
+func (m *Model) handleShowTUIMsg() (tea.Model, tea.Cmd) {
+	if !m.altScreen {
+		m.altScreen = true
+		m.suppressAltScreen = false
+		return m, tea.Batch(tea.EnterAltScreen, tea.EnableMouseCellMotion)
+	}
+	return m, nil
+}
+
+func (m *Model) handleSuspendedMsg() {
+	// Re-enter follow mode whenever a step transitions into interactive: the
+	// user can't see the run view during the PTY hand-off, so by the time the
+	// TUI restores they should be tracking the live step instead of pinned to
+	// wherever they previously drilled in.
+	m.autoFollow = true
+	if len(m.path) > 1 && m.activeStepPrefix != "" {
+		if active := m.tree.FindByPrefix(m.activeStepPrefix); active != nil {
+			if m.ancestorAtCurrentLevel(active) == nil {
+				m.path = m.path[:1]
+				m.cursor = 0
+				m.logOffset = 0
+			}
+		}
+	}
+	m.applyAutoFollowCursor()
+	m.rebuildRanges()
+	if !m.altScreen {
+		m.suppressAltScreen = true
+	}
+}
+
+func (m *Model) handleLiveUIKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	next, _ := m.liveUI.Update(msg)
+	if updated, ok := next.(*uistep.Model); ok {
+		m.liveUI = updated
+	}
+	if m.liveUI != nil && m.liveUI.Done() {
+		result := m.liveUI.Result()
+		reply := m.liveUIReply
+		m.liveUI = nil
+		m.liveUIReply = nil
+		if reply != nil {
+			reply <- result
+		}
 	}
 	return m, nil
 }

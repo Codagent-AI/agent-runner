@@ -1,6 +1,7 @@
 package liverun
 
 import (
+	"strings"
 	"sync"
 	"testing"
 
@@ -72,6 +73,15 @@ func (m *mockProgram) clearMsgs() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.msgs = nil
+}
+
+func TestHandleUIStep_NilRequestReturnsError(t *testing.T) {
+	c := NewCoordinator(&mockProgram{}, "")
+
+	_, err := c.HandleUIStep(nil)
+	if err == nil || !strings.Contains(err.Error(), "ui step request is nil") {
+		t.Fatalf("expected nil request error, got %v", err)
+	}
 }
 
 func TestBeforeInteractive_ReleasesTerminal(t *testing.T) {

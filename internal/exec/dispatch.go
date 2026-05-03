@@ -47,7 +47,7 @@ func DispatchStep(
 
 	if step.Mode == model.ModeUI {
 		if ctx.PrepareStepHook != nil {
-			ctx.PrepareStepHook(true)
+			ctx.PrepareStepHook(false)
 		}
 		return ExecuteUIStep(step, ctx, log)
 	}

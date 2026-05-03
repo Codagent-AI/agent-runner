@@ -22,6 +22,15 @@ func TestUIModelRendersInputsAndActionsTogether(t *testing.T) {
 	}
 }
 
+func TestNewHandlerNilRequestReturnsError(t *testing.T) {
+	handler := NewHandler(nil, nil)
+
+	_, err := handler(nil)
+	if err == nil || !strings.Contains(err.Error(), "ui step request is nil") {
+		t.Fatalf("expected nil request error, got %v", err)
+	}
+}
+
 func TestUIModelArrowKeysKeepInputFocusedAndTabFocusesAction(t *testing.T) {
 	m := newModel(adapterRequest())
 
@@ -37,6 +46,34 @@ func TestUIModelArrowKeysKeepInputFocusedAndTabFocusesAction(t *testing.T) {
 	view = tuistyle.Sanitize(m.View())
 	if !strings.Contains(view, "[ Continue ]") {
 		t.Fatalf("focused action should render as a button, got:\n%s", view)
+	}
+}
+
+func TestUIModelActionsRenderHorizontallyAndLeftRightMovesFocus(t *testing.T) {
+	m := newModel(&model.UIStepRequest{
+		StepID: "welcome",
+		Title:  "Welcome",
+		Actions: []model.UIAction{
+			{Label: "Continue", Outcome: "continue"},
+			{Label: "Not now", Outcome: "not_now"},
+			{Label: "Dismiss", Outcome: "dismiss"},
+		},
+	})
+
+	view := tuistyle.Sanitize(m.View())
+	if !strings.Contains(view, "[ Continue ]  [ Not now ]  [ Dismiss ]") {
+		t.Fatalf("actions should render on one row, got:\n%s", view)
+	}
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m = next.(*uiModel)
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(*uiModel)
+	if cmd == nil {
+		t.Fatal("expected enter on focused action to quit")
+	}
+	if m.result.Outcome != "not_now" {
+		t.Fatalf("outcome = %q, want not_now", m.result.Outcome)
 	}
 }
 

@@ -1,4 +1,4 @@
-- [ ] Implement the change described by these files:
+- [x] Implement the change described by these files:
   - [proposal.md](proposal.md)
   - [specs/onboarding-workflow/spec.md](specs/onboarding-workflow/spec.md)
   - [specs/ui-step/spec.md](specs/ui-step/spec.md)

@@ -22,7 +22,7 @@ func ExecuteUIStep(step *model.Step, ctx *model.ExecutionContext, log Logger) (S
 	}
 	var result model.UIStepResult
 	if ctx.UIStepHandler != nil {
-		result, err = ctx.UIStepHandler(request)
+		result, err = ctx.UIStepHandler(&request)
 	} else {
 		err := fmt.Errorf("UI steps require a TTY")
 		emitUIEnd(ctx, prefix, startTime, "failed", "", err)

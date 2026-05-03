@@ -61,7 +61,7 @@ type Options struct {
 	// coordinator to manage terminal state transitions without flicker.
 	PrepareStepHook func(interactive bool)
 
-	UIStepHandler func(model.UIStepRequest) (model.UIStepResult, error)
+	UIStepHandler func(*model.UIStepRequest) (model.UIStepResult, error)
 }
 
 // RunHandle is returned by PrepareRun and PrepareResume. It holds all state

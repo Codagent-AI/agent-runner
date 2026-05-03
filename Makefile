@@ -1,4 +1,4 @@
-.PHONY: test lint build fmt test-verbose test-cover test-e2e-smoke
+.PHONY: test lint build fmt fmt-check test-verbose test-cover test-e2e-smoke
 
 build:
 	go build -o bin/agent-runner ./cmd/agent-runner
@@ -20,4 +20,7 @@ lint:
 	golangci-lint run ./...
 
 fmt:
-	goimports -w .
+	goimports -w $(shell git ls-files '*.go')
+
+fmt-check:
+	test -z "$$(goimports -l $$(git ls-files '*.go'))"

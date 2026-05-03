@@ -15,12 +15,15 @@ var (
 	titleStyle         = tuistyle.SectionStyle
 	bodyStyle          = tuistyle.NormalStyle
 	inputPromptStyle   = tuistyle.LabelStyle
-	focusedButtonStyle = lipgloss.NewStyle().Foreground(tuistyle.SelectedText).Background(tuistyle.AccentCyan).Padding(0, 1)
-	buttonStyle        = lipgloss.NewStyle().Foreground(tuistyle.BodyText).Padding(0, 1)
+	focusedButtonStyle = lipgloss.NewStyle().Foreground(tuistyle.SelectedText).Background(tuistyle.AccentCyan)
+	buttonStyle        = lipgloss.NewStyle().Foreground(tuistyle.BodyText)
 )
 
-func NewHandler(suspend, resume func()) func(model.UIStepRequest) (model.UIStepResult, error) {
-	return func(req model.UIStepRequest) (model.UIStepResult, error) {
+func NewHandler(suspend, resume func()) func(*model.UIStepRequest) (model.UIStepResult, error) {
+	return func(req *model.UIStepRequest) (model.UIStepResult, error) {
+		if req == nil {
+			return model.UIStepResult{}, fmt.Errorf("ui step request is nil")
+		}
 		if len(req.Actions) == 0 {
 			return model.UIStepResult{}, fmt.Errorf("ui step %s has no actions", req.StepID)
 		}
@@ -32,26 +35,33 @@ func NewHandler(suspend, resume func()) func(model.UIStepRequest) (model.UIStepR
 				resume()
 			}
 		}()
-		m := newModel(&req)
+		m := newModel(req)
 		p := tea.NewProgram(m)
 		final, err := p.Run()
 		if err != nil {
 			return model.UIStepResult{}, err
 		}
-		fm := final.(*uiModel)
-		return fm.result, nil
+		fm := final.(*Model)
+		return fm.Result(), nil
 	}
 }
 
-type uiModel struct {
+type uiModel = Model
+
+type Model struct {
 	req        *model.UIStepRequest
 	focus      int
 	selections []int
 	width      int
 	result     model.UIStepResult
+	done       bool
 }
 
-func newModel(req *model.UIStepRequest) *uiModel {
+func NewModel(req *model.UIStepRequest) *Model {
+	return newModel(req)
+}
+
+func newModel(req *model.UIStepRequest) *Model {
 	selections := make([]int, len(req.Inputs))
 	for i, input := range req.Inputs {
 		if input.Default == "" {
@@ -64,16 +74,16 @@ func newModel(req *model.UIStepRequest) *uiModel {
 			}
 		}
 	}
-	return &uiModel{
+	return &Model{
 		req:        req,
 		selections: selections,
 		width:      80,
 	}
 }
 
-func (m *uiModel) Init() tea.Cmd { return nil }
+func (m *Model) Init() tea.Cmd { return nil }
 
-func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -81,11 +91,16 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c", "esc":
 			m.result = model.UIStepResult{Canceled: true}
+			m.done = true
 			return m, tea.Quit
 		case "up", "k":
 			m.moveSelection(-1)
 		case "down", "j":
 			m.moveSelection(1)
+		case "left", "h":
+			m.moveActionFocus(-1)
+		case "right", "l":
+			m.moveActionFocus(1)
 		case "tab":
 			m.moveFocus(1)
 		case "shift+tab":
@@ -97,18 +112,30 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *uiModel) elementCount() int {
+func (m *Model) SetWidth(width int) {
+	m.width = width
+}
+
+func (m *Model) Done() bool {
+	return m.done
+}
+
+func (m *Model) Result() model.UIStepResult {
+	return m.result
+}
+
+func (m *Model) elementCount() int {
 	return len(m.req.Inputs) + len(m.req.Actions)
 }
 
-func (m *uiModel) focusedInputIndex() (int, bool) {
+func (m *Model) focusedInputIndex() (int, bool) {
 	if m.focus >= 0 && m.focus < len(m.req.Inputs) {
 		return m.focus, true
 	}
 	return 0, false
 }
 
-func (m *uiModel) focusedActionIndex() (int, bool) {
+func (m *Model) focusedActionIndex() (int, bool) {
 	idx := m.focus - len(m.req.Inputs)
 	if idx >= 0 && idx < len(m.req.Actions) {
 		return idx, true
@@ -116,7 +143,7 @@ func (m *uiModel) focusedActionIndex() (int, bool) {
 	return 0, false
 }
 
-func (m *uiModel) moveSelection(delta int) {
+func (m *Model) moveSelection(delta int) {
 	idx, ok := m.focusedInputIndex()
 	if !ok {
 		return
@@ -128,7 +155,7 @@ func (m *uiModel) moveSelection(delta int) {
 	m.selections[idx] = clamp(m.selections[idx]+delta, 0, options-1)
 }
 
-func (m *uiModel) moveFocus(delta int) {
+func (m *Model) moveFocus(delta int) {
 	count := m.elementCount()
 	if count == 0 {
 		return
@@ -136,7 +163,16 @@ func (m *uiModel) moveFocus(delta int) {
 	m.focus = (m.focus + delta + count) % count
 }
 
-func (m *uiModel) handleEnter() (tea.Model, tea.Cmd) {
+func (m *Model) moveActionFocus(delta int) {
+	idx, ok := m.focusedActionIndex()
+	if !ok || len(m.req.Actions) == 0 {
+		return
+	}
+	next := (idx + delta + len(m.req.Actions)) % len(m.req.Actions)
+	m.focus = len(m.req.Inputs) + next
+}
+
+func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 	if _, ok := m.focusedInputIndex(); ok {
 		m.moveFocus(1)
 		return m, nil
@@ -150,10 +186,11 @@ func (m *uiModel) handleEnter() (tea.Model, tea.Cmd) {
 		Outcome: action.Outcome,
 		Inputs:  m.selectedInputs(),
 	}
+	m.done = true
 	return m, tea.Quit
 }
 
-func (m *uiModel) selectedInputs() map[string]string {
+func (m *Model) selectedInputs() map[string]string {
 	inputMap := make(map[string]string, len(m.req.Inputs))
 	for i, input := range m.req.Inputs {
 		if len(input.Options) == 0 {
@@ -165,7 +202,7 @@ func (m *uiModel) selectedInputs() map[string]string {
 	return inputMap
 }
 
-func (m *uiModel) View() string {
+func (m *Model) View() string {
 	var b strings.Builder
 	contentWidth := m.width - 4
 	if contentWidth <= 0 {
@@ -197,14 +234,20 @@ func (m *uiModel) View() string {
 
 	for i, action := range m.req.Actions {
 		label := "[ " + action.Label + " ]"
+		if i > 0 {
+			b.WriteString("  ")
+		}
 		if len(m.req.Inputs)+i == m.focus {
-			fmt.Fprintf(&b, "  %s\n", focusedButtonStyle.Render(label))
+			b.WriteString(focusedButtonStyle.Render(label))
 		} else {
-			fmt.Fprintf(&b, "  %s\n", buttonStyle.Render(label))
+			b.WriteString(buttonStyle.Render(label))
 		}
 	}
 
-	b.WriteString("\n↑↓ Navigate  Tab Focus  Enter Select")
+	if len(m.req.Actions) > 0 {
+		b.WriteString("\n")
+	}
+	b.WriteString("\n←→ Action  ↑↓ Option  Tab Focus  Enter Select")
 	return b.String()
 }
 

@@ -67,7 +67,7 @@ func TestExecuteScriptStepEmitsAuditEvents(t *testing.T) {
 func TestExecuteUIStepExpandsTypedListOptionsAndCapturesTypedMap(t *testing.T) {
 	ctx := model.NewRootContext(&model.RootContextOptions{WorkflowFile: "workflow.yaml"})
 	ctx.CapturedVariables["detected"] = model.CapturedValue{Kind: model.CaptureList, List: []string{"claude", "codex"}}
-	ctx.UIStepHandler = func(req model.UIStepRequest) (model.UIStepResult, error) {
+	ctx.UIStepHandler = func(req *model.UIStepRequest) (model.UIStepResult, error) {
 		if len(req.Inputs) != 1 || len(req.Inputs[0].Options) != 2 || req.Inputs[0].Options[1] != "codex" {
 			t.Fatalf("resolved inputs = %#v", req.Inputs)
 		}
@@ -107,7 +107,7 @@ func TestExecuteUIStepEmitsAuditEvents(t *testing.T) {
 	recorder := &mockAuditLogger{}
 	ctx := model.NewRootContext(&model.RootContextOptions{WorkflowFile: "workflow.yaml"})
 	ctx.AuditLogger = recorder
-	ctx.UIStepHandler = func(req model.UIStepRequest) (model.UIStepResult, error) {
+	ctx.UIStepHandler = func(req *model.UIStepRequest) (model.UIStepResult, error) {
 		return model.UIStepResult{Outcome: "continue"}, nil
 	}
 
