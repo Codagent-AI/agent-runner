@@ -405,14 +405,17 @@ func matchesSessionCwd(sessionFile, cwd string) bool {
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		var meta struct {
-			Type string `json:"type"`
-			Cwd  string `json:"cwd"`
+			Type    string `json:"type"`
+			Cwd     string `json:"cwd"`
+			Payload struct {
+				Cwd string `json:"cwd"`
+			} `json:"payload"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &meta); err != nil {
 			continue
 		}
 		if meta.Type == "session_meta" {
-			return meta.Cwd == cwd
+			return meta.Cwd == cwd || meta.Payload.Cwd == cwd
 		}
 	}
 	return false

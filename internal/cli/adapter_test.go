@@ -549,6 +549,19 @@ func TestCodexAdapter(t *testing.T) {
 		}
 	})
 
+	t.Run("matches interactive session cwd from payload metadata", func(t *testing.T) {
+		sessionFile := filepath.Join(t.TempDir(), "session.jsonl")
+		cwd := "/repo/worktree"
+		data := `{"type":"session_meta","payload":{"id":"session-abc","cwd":"/repo/worktree"}}` + "\n"
+		if err := os.WriteFile(sessionFile, []byte(data), 0o600); err != nil {
+			t.Fatalf("write session fixture: %v", err)
+		}
+
+		if !matchesSessionCwd(sessionFile, cwd) {
+			t.Fatal("expected session_meta payload cwd to match")
+		}
+	})
+
 	t.Run("implements OutputFilter interface", func(t *testing.T) {
 		var a Adapter = adapter
 		if _, ok := a.(OutputFilter); !ok {
