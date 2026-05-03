@@ -1,8 +1,11 @@
 package exec
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/model"
 )
 
@@ -114,6 +117,115 @@ func TestDispatchStep(t *testing.T) {
 			t.Fatalf("expected 1 call (stopped after failure), got %d", len(runner.calls))
 		}
 	})
+}
+
+func TestDispatchStepEmitsAuditEnvelopeForEveryStepType(t *testing.T) {
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "ok.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nprintf ok\n"), 0o700); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	childPath := filepath.Join(dir, "child.yaml")
+	if err := os.WriteFile(childPath, []byte("name: child\nsteps:\n  - id: child-step\n    command: echo child\n"), 0o600); err != nil {
+		t.Fatalf("write child workflow: %v", err)
+	}
+
+	cases := []struct {
+		name    string
+		step    model.Step
+		results []ProcessResult
+		setup   func(*model.ExecutionContext)
+	}{
+		{
+			name:    "shell",
+			step:    model.Step{ID: "shell", Command: "echo hi", Session: model.SessionNew},
+			results: []ProcessResult{{ExitCode: 0}},
+		},
+		{
+			name:    "script",
+			step:    model.Step{ID: "script", Script: "ok.sh", Capture: "out"},
+			results: []ProcessResult{{ExitCode: 0, Stdout: "ok"}},
+		},
+		{
+			name: "ui",
+			step: model.Step{ID: "ui", Mode: model.ModeUI, Title: "Pick", Actions: []model.UIAction{{Label: "Continue", Outcome: "continue"}}},
+			setup: func(ctx *model.ExecutionContext) {
+				ctx.UIStepHandler = func(model.UIStepRequest) (model.UIStepResult, error) {
+					return model.UIStepResult{Outcome: "continue"}, nil
+				}
+			},
+		},
+		{
+			name:    "agent",
+			step:    model.Step{ID: "agent", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew},
+			results: []ProcessResult{{ExitCode: 0}},
+		},
+		{
+			name: "loop",
+			step: model.Step{
+				ID: "loop", Loop: &model.Loop{Max: intPtr(1)}, Steps: []model.Step{
+					{ID: "body", Command: "echo body", Session: model.SessionNew},
+				},
+			},
+			results: []ProcessResult{{ExitCode: 0}},
+		},
+		{
+			name: "group",
+			step: model.Step{
+				ID: "group", Steps: []model.Step{
+					{ID: "child", Command: "echo child", Session: model.SessionNew},
+				},
+			},
+			results: []ProcessResult{{ExitCode: 0}},
+		},
+		{
+			name:    "sub-workflow",
+			step:    model.Step{ID: "sub", Workflow: "child.yaml"},
+			results: []ProcessResult{{ExitCode: 0}},
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := &mockAuditLogger{}
+			ctx := model.NewRootContext(&model.RootContextOptions{
+				Params:       map[string]string{},
+				WorkflowFile: filepath.Join(dir, "parent.yaml"),
+			})
+			ctx.AuditLogger = recorder
+			if tt.setup != nil {
+				tt.setup(ctx)
+			}
+
+			outcome, err := DispatchStep(&tt.step, ctx, &mockRunner{results: tt.results}, &mockGlob{}, &mockLogger{})
+			if err != nil {
+				t.Fatalf("DispatchStep() error = %v", err)
+			}
+			if outcome != OutcomeSuccess {
+				t.Fatalf("DispatchStep() outcome = %s, want success", outcome)
+			}
+			assertStepAuditEnvelope(t, recorder.events, "["+tt.step.ID+"]")
+		})
+	}
+}
+
+func assertStepAuditEnvelope(t *testing.T, events []audit.Event, prefix string) {
+	t.Helper()
+	var start, end bool
+	for _, ev := range events {
+		if ev.Prefix != prefix {
+			continue
+		}
+		switch ev.Type {
+		case audit.EventStepStart:
+			start = true
+		case audit.EventStepEnd:
+			end = true
+		}
+	}
+	if !start || !end {
+		t.Fatalf("missing audit envelope for %s: start=%v end=%v events=%+v", prefix, start, end, events)
+	}
 }
 
 func TestDispatchStep_PrepareStepHook(t *testing.T) {

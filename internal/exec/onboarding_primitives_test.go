@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/google/go-cmp/cmp"
 )
@@ -30,6 +31,36 @@ func TestExecuteScriptStepCapturesJSONArrayAsTypedList(t *testing.T) {
 	want := model.CapturedValue{Kind: model.CaptureList, List: []string{"claude", "codex"}}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Fatalf("captured mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestExecuteScriptStepEmitsAuditEvents(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "emit.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf ok\n"), 0o700); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	recorder := &mockAuditLogger{}
+	ctx := model.NewRootContext(&model.RootContextOptions{WorkflowFile: filepath.Join(dir, "workflow.yaml")})
+	ctx.AuditLogger = recorder
+	step := model.Step{ID: "detect", Script: "emit.sh", Capture: "detected"}
+	runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "ok"}}}
+
+	outcome, err := ExecuteScriptStep(&step, ctx, runner, &mockLogger{})
+	if err != nil {
+		t.Fatalf("ExecuteScriptStep() returned error: %v", err)
+	}
+	if outcome != OutcomeSuccess {
+		t.Fatalf("outcome = %s, want success", outcome)
+	}
+	start := findAuditEvent(recorder.events, audit.EventStepStart)
+	if start == nil || start.Prefix != "[detect]" {
+		t.Fatalf("expected detect step_start, got %+v", recorder.events)
+	}
+	end := findAuditEvent(recorder.events, audit.EventStepEnd)
+	if end == nil || end.Prefix != "[detect]" || end.Data["outcome"] != "success" {
+		t.Fatalf("expected successful detect step_end, got %+v", recorder.events)
 	}
 }
 
@@ -69,5 +100,37 @@ func TestExecuteUIStepExpandsTypedListOptionsAndCapturesTypedMap(t *testing.T) {
 	}
 	if got, want := ctx.CapturedVariables["action"], (model.CapturedValue{Kind: model.CaptureString, Str: "continue"}); !cmp.Equal(want, got) {
 		t.Fatalf("action capture mismatch (-want +got):\n%s", cmp.Diff(want, got))
+	}
+}
+
+func TestExecuteUIStepEmitsAuditEvents(t *testing.T) {
+	recorder := &mockAuditLogger{}
+	ctx := model.NewRootContext(&model.RootContextOptions{WorkflowFile: "workflow.yaml"})
+	ctx.AuditLogger = recorder
+	ctx.UIStepHandler = func(req model.UIStepRequest) (model.UIStepResult, error) {
+		return model.UIStepResult{Outcome: "continue"}, nil
+	}
+
+	step := model.Step{
+		ID:             "pick",
+		Mode:           model.ModeUI,
+		Title:          "Pick",
+		Actions:        []model.UIAction{{Label: "Continue", Outcome: "continue"}},
+		OutcomeCapture: "action",
+	}
+	outcome, err := ExecuteUIStep(&step, ctx, &mockLogger{})
+	if err != nil {
+		t.Fatalf("ExecuteUIStep() returned error: %v", err)
+	}
+	if outcome != OutcomeSuccess {
+		t.Fatalf("outcome = %s, want success", outcome)
+	}
+	start := findAuditEvent(recorder.events, audit.EventStepStart)
+	if start == nil || start.Prefix != "[pick]" {
+		t.Fatalf("expected pick step_start, got %+v", recorder.events)
+	}
+	end := findAuditEvent(recorder.events, audit.EventStepEnd)
+	if end == nil || end.Prefix != "[pick]" || end.Data["outcome"] != "success" {
+		t.Fatalf("expected successful pick step_end, got %+v", recorder.events)
 	}
 }

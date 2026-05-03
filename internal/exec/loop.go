@@ -61,15 +61,9 @@ func executeCountedLoop(
 		opts.ResumeFromIteration = resumeIter
 	}
 
-	emitAudit(ctx, audit.Event{
-		Timestamp: startTime.UTC().Format(time.RFC3339),
-		Prefix:    prefix,
-		Type:      audit.EventStepStart,
-		Data: map[string]any{
-			"loop_type": "counted",
-			"max":       maxIter,
-			"context":   contextSnapshot(ctx),
-		},
+	emitStepStart(ctx, prefix, startTime, map[string]any{
+		"loop_type": "counted",
+		"max":       maxIter,
 	})
 
 	startIter := opts.ResumeFromIteration
@@ -148,16 +142,10 @@ func executeForEachLoop(
 		opts.ResumeFromIteration = resumeIter
 	}
 
-	emitAudit(ctx, audit.Event{
-		Timestamp: startTime.UTC().Format(time.RFC3339),
-		Prefix:    prefix,
-		Type:      audit.EventStepStart,
-		Data: map[string]any{
-			"loop_type":        "for-each",
-			"glob_pattern":     pattern,
-			"resolved_matches": matches,
-			"context":          contextSnapshot(ctx),
-		},
+	emitStepStart(ctx, prefix, startTime, map[string]any{
+		"loop_type":        "for-each",
+		"glob_pattern":     pattern,
+		"resolved_matches": matches,
 	})
 
 	if len(matches) == 0 {
@@ -308,16 +296,9 @@ func consumeLoopResume(ctx *model.ExecutionContext, loopStepID string) (int, *mo
 }
 
 func emitLoopEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, completed int, breakTriggered bool, outcome string) {
-	emitAudit(ctx, audit.Event{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		Prefix:    prefix,
-		Type:      audit.EventStepEnd,
-		Data: map[string]any{
-			"iterations_completed": completed,
-			"break_triggered":      breakTriggered,
-			"outcome":              outcome,
-			"duration_ms":          time.Since(startTime).Milliseconds(),
-		},
+	emitStepEnd(ctx, prefix, startTime, outcome, map[string]any{
+		"iterations_completed": completed,
+		"break_triggered":      breakTriggered,
 	})
 }
 
