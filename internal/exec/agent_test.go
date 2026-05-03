@@ -833,8 +833,14 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatalf("expected prompt in positional arg for codex without enrichment, got %q", lastArg)
 		}
 		// Interactive steps include the completion instruction appended to the prompt.
-		if !strings.Contains(lastArg, "signal-continuation") {
+		if !strings.Contains(lastArg, "AGENT_RUNNER_") || !strings.Contains(lastArg, "CONTINUE") {
 			t.Fatalf("expected completion instruction in codex interactive prompt, got %q", lastArg)
+		}
+		if strings.Contains(lastArg, "AGENT_RUNNER_CONTINUE") {
+			t.Fatalf("completion instruction must not include the exact text sentinel, got %q", lastArg)
+		}
+		if strings.Contains(lastArg, "AGENT_RUNNER_TTY") || strings.Contains(lastArg, "printf") {
+			t.Fatalf("completion instruction should not require shell command approval, got %q", lastArg)
 		}
 	})
 
@@ -884,16 +890,23 @@ func TestExecuteAgentStep(t *testing.T) {
 		// For Claude interactive, the completion instruction goes into --append-system-prompt.
 		args := capturedArgs[0]
 		for i, a := range args {
-			if a == "--append-system-prompt" && i+1 < len(args) {
-				sysPrompt := args[i+1]
-				if !strings.Contains(sysPrompt, "signal-continuation") {
-					t.Fatalf("expected completion instruction in system prompt, got %q", sysPrompt)
-				}
-				if !strings.Contains(sysPrompt, "you or the user") {
-					t.Fatalf("expected 'you or the user' wording in completion instruction, got %q", sysPrompt)
-				}
-				return
+			if a != "--append-system-prompt" || i+1 >= len(args) {
+				continue
 			}
+			sysPrompt := args[i+1]
+			if !strings.Contains(sysPrompt, "AGENT_RUNNER_") || !strings.Contains(sysPrompt, "CONTINUE") {
+				t.Fatalf("expected completion instruction in system prompt, got %q", sysPrompt)
+			}
+			if strings.Contains(sysPrompt, "AGENT_RUNNER_CONTINUE") {
+				t.Fatalf("completion instruction must not include the exact text sentinel, got %q", sysPrompt)
+			}
+			if strings.Contains(sysPrompt, "AGENT_RUNNER_TTY") || strings.Contains(sysPrompt, "printf") {
+				t.Fatalf("completion instruction should not require shell command approval, got %q", sysPrompt)
+			}
+			if !strings.Contains(sysPrompt, "you or the user") {
+				t.Fatalf("expected 'you or the user' wording in completion instruction, got %q", sysPrompt)
+			}
+			return
 		}
 		t.Fatalf("expected --append-system-prompt with completion instruction, got %v", args)
 	})
@@ -1050,7 +1063,7 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatal("expected command to be called")
 		}
 		lastArg := runner.calls[0][len(runner.calls[0])-1]
-		if strings.Contains(lastArg, "signal-continuation") {
+		if strings.Contains(lastArg, "signal-continuation") || strings.Contains(lastArg, "AGENT_RUNNER_") {
 			t.Fatalf("expected no completion instruction in headless prompt, got %q", lastArg)
 		}
 	})

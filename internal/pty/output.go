@@ -1,7 +1,10 @@
 package pty
 
+import "strings"
+
 const (
 	sentinelPayload = "999;signal-continuation"
+	textSentinel    = "AGENT_RUNNER_CONTINUE"
 
 	// maxEscBuf caps the escape/OSC buffer to prevent unbounded memory growth
 	// when the PTY stream contains an unterminated OSC sequence (e.g., a
@@ -15,17 +18,21 @@ const (
 // start of a string terminator (ST = \x1b\).
 const outOSCSawEsc = 10
 
-// outputProcessor tracks ANSI escape sequence state and detects the sentinel
-// OSC sequence \x1b]999;signal-continuation\x07 in the output stream.
+// outputProcessor tracks ANSI escape sequence state and detects continuation
+// sentinels in the output stream. The OSC sentinel is kept for compatibility;
+// the text sentinel is the default prompt path because it does not require the
+// hosted agent CLI to run a shell command.
 //
-// The sentinel is stripped from output (never forwarded to the terminal).
-// All other bytes, including non-matching OSC sequences, are forwarded as-is.
-// State persists across process() calls so sentinels split across PTY read
-// chunk boundaries are detected correctly.
+// Sentinels are stripped from output (never forwarded to the terminal). All
+// other bytes, including non-matching OSC sequences, are forwarded as-is. State
+// persists across process() calls so sentinels split across PTY read chunk
+// boundaries are detected correctly.
 type outputProcessor struct {
 	escState   int
 	escBuf     []byte // bytes accumulated for the current escape sequence
 	oscPayload []byte // OSC payload bytes (between \x1b] and BEL/ST)
+	textBuf    []byte // possible prefix of textSentinel in normal output
+	textOnLine bool   // normal text has been seen since the last line break
 }
 
 // outputResult holds the outcome of processing an output chunk.
@@ -34,8 +41,8 @@ type outputResult struct {
 	triggered bool   // true if the sentinel was detected
 }
 
-// process processes a chunk of output bytes, detecting and stripping the
-// sentinel OSC sequence. Returns the bytes to forward and whether the sentinel
+// process processes a chunk of output bytes, detecting and stripping
+// continuation sentinels. Returns the bytes to forward and whether a sentinel
 // was detected. Processing continues after sentinel detection so that bytes
 // surrounding the sentinel in the same chunk are forwarded normally.
 func (p *outputProcessor) process(chunk []byte) outputResult {
@@ -118,14 +125,67 @@ func (p *outputProcessor) process(chunk []byte) outputResult {
 
 		// escNone: normal byte.
 		if b == 0x1b {
+			fwd = p.flushText(fwd)
 			p.escBuf = append(p.escBuf[:0], b)
 			p.escState = escSawEsc
 		} else {
-			fwd = append(fwd, b)
+			var textTriggered bool
+			fwd, textTriggered = p.processTextByte(b, fwd)
+			if textTriggered {
+				triggered = true
+			}
 		}
 	}
 
 	return outputResult{forward: fwd, triggered: triggered}
+}
+
+func (p *outputProcessor) processTextByte(b byte, fwd []byte) ([]byte, bool) {
+	if len(p.textBuf) == 0 {
+		if !p.textOnLine && b == textSentinel[0] {
+			p.textBuf = append(p.textBuf, b)
+			return fwd, false
+		}
+		fwd = append(fwd, b)
+		p.textOnLine = !isLineTerminator(b)
+		return fwd, false
+	}
+
+	if isLineTerminator(b) {
+		if string(p.textBuf) == textSentinel {
+			p.textBuf = p.textBuf[:0]
+			p.textOnLine = false
+			return fwd, true
+		}
+		fwd = append(fwd, p.textBuf...)
+		fwd = append(fwd, b)
+		p.textBuf = p.textBuf[:0]
+		p.textOnLine = false
+		return fwd, false
+	}
+
+	p.textBuf = append(p.textBuf, b)
+	if !strings.HasPrefix(textSentinel, string(p.textBuf)) {
+		fwd = append(fwd, p.textBuf...)
+		p.textBuf = p.textBuf[:0]
+		p.textOnLine = true
+		return fwd, false
+	}
+	return fwd, false
+}
+
+func (p *outputProcessor) flushText(fwd []byte) []byte {
+	if len(p.textBuf) == 0 {
+		return fwd
+	}
+	fwd = append(fwd, p.textBuf...)
+	p.textOnLine = true
+	p.textBuf = p.textBuf[:0]
+	return fwd
+}
+
+func isLineTerminator(b byte) bool {
+	return b == '\n' || b == '\r'
 }
 
 // flushIfOverflow checks whether escBuf exceeds maxEscBuf. If so, it appends
@@ -145,12 +205,17 @@ func (p *outputProcessor) flushIfOverflow(fwd []byte) []byte {
 // flush returns any bytes buffered in a partial escape sequence as normal
 // output. Call this when the process exits to avoid dropping partial sequences.
 func (p *outputProcessor) flush() []byte {
-	if len(p.escBuf) == 0 {
+	if len(p.escBuf) == 0 && len(p.textBuf) == 0 {
 		return nil
 	}
 	out := append([]byte(nil), p.escBuf...)
+	out = append(out, p.textBuf...)
 	p.escBuf = p.escBuf[:0]
 	p.oscPayload = p.oscPayload[:0]
+	p.textBuf = p.textBuf[:0]
+	if len(out) > 0 {
+		p.textOnLine = true
+	}
 	p.escState = escNone
 	return out
 }
