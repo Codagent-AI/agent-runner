@@ -217,11 +217,16 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		sessionProfiles[k] = v
 	}
 
+	capturedVars := make(map[string]CapturedValue)
+	for k, v := range parent.CapturedVariables {
+		capturedVars[k] = v
+	}
+
 	return &ExecutionContext{
 		Params:              params,
 		SessionIDs:          sessionIDs,
 		SessionProfiles:     sessionProfiles,
-		CapturedVariables:   make(map[string]CapturedValue),
+		CapturedVariables:   capturedVars,
 		LastStepOutcome:     nil,
 		LastSessionStepID:   parent.LastSessionStepID,
 		NestingPath:         nestingPath,

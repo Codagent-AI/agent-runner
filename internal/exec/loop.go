@@ -92,6 +92,7 @@ func executeCountedLoop(
 			emitLoopEnd(ctx, prefix, startTime, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, err
 		}
+		mergeIterationCaptures(ctx, iterCtx)
 		completed++
 
 		if result.aborted {
@@ -184,6 +185,7 @@ func executeForEachLoop(
 			emitLoopEnd(ctx, prefix, startTime, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, err
 		}
+		mergeIterationCaptures(ctx, iterCtx)
 		completed++
 
 		if result.aborted {
@@ -230,6 +232,12 @@ func newLoopStepMarker(src *model.ExecutionContext, loopStepID string, iteration
 		LastSessionStepID: src.LastSessionStepID,
 		Iteration:         &iter,
 		Child:             child,
+	}
+}
+
+func mergeIterationCaptures(parent, iterCtx *model.ExecutionContext) {
+	for k, v := range iterCtx.CapturedVariables {
+		parent.CapturedVariables[k] = v
 	}
 }
 
@@ -406,6 +414,21 @@ func executeIterationBody(
 		}
 
 		bodyStepID := steps[i].ID
+
+		skip, skipErr := ShouldSkipStep(steps[i].SkipIf, iterCtx.LastStepOutcome, iterCtx, bodyStepID)
+		if skipErr != nil {
+			persistIterationFailState(iterCtx, loopStepID, iteration, bodyStepID, false)
+			return iterationResult{failed: true}, fmt.Errorf("step %q skip_if evaluation failed: %w", bodyStepID, skipErr)
+		}
+		if skip {
+			setBody(bodyStepID, true)
+			emitSkippedChildStep(iterCtx, &steps[i])
+			if iterCtx.FlushState != nil {
+				iterCtx.FlushState()
+			}
+			continue
+		}
+
 		setBody(bodyStepID, false)
 
 		outcome, dispatchErr := DispatchStep(&steps[i], iterCtx, runner, glob, log)
