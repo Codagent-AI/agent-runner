@@ -658,6 +658,9 @@ func materializeBundledAssets(sessionDir, workflowFile string) error {
 	if err != nil {
 		return err
 	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return fmt.Errorf("create bundled asset root: %w", err)
+	}
 	for _, asset := range assets {
 		data, err := builtinworkflows.ReadAsset(path.Join(namespace, asset))
 		if err != nil {
