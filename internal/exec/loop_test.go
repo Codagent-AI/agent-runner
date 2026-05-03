@@ -73,6 +73,33 @@ func TestExecuteLoopStep(t *testing.T) {
 		}
 	})
 
+	t.Run("counted loop skipped body step updates previous outcome", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}, {ExitCode: 0}}}
+		step := model.Step{
+			ID: "loop", Session: model.SessionNew,
+			Loop: &model.Loop{Max: intPtr(1)},
+			Steps: []model.Step{
+				{ID: "a", Command: "echo a", Session: model.SessionNew},
+				{ID: "b", Command: "echo b", Session: model.SessionNew, SkipIf: "previous_success"},
+				{ID: "c", Command: "echo c", Session: model.SessionNew, SkipIf: "previous_success"},
+			},
+		}
+
+		result, err := ExecuteLoopStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{}, LoopExecuteOptions{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Outcome != OutcomeExhausted {
+			t.Fatalf("expected exhausted, got %q", result.Outcome)
+		}
+		if len(runner.calls) != 2 {
+			t.Fatalf("expected c to run after b was skipped; got %d call(s)", len(runner.calls))
+		}
+		if runner.calls[0][2] != "echo a" || runner.calls[1][2] != "echo c" {
+			t.Fatalf("expected commands [echo a echo c], got %#v", runner.calls)
+		}
+	})
+
 	t.Run("counted loop carries captured variables to next iteration", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{
 			{ExitCode: 0}, {ExitCode: 0, Stdout: "next-0"},

@@ -423,6 +423,8 @@ func executeIterationBody(
 		if skip {
 			setBody(bodyStepID, true)
 			emitSkippedChildStep(iterCtx, &steps[i])
+			o := "skipped"
+			iterCtx.LastStepOutcome = &o
 			if iterCtx.FlushState != nil {
 				iterCtx.FlushState()
 			}
