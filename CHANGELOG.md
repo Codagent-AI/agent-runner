@@ -1,5 +1,11 @@
 # agent-runner
 
+## 0.4.0
+
+### Minor Changes
+
+- [#25](https://github.com/Codagent-AI/agent-runner/pull/25) Add onboarding workflow with UI and script step primitives
+
 ## 0.3.1
 
 ### Patch Changes
