@@ -1,7 +1,7 @@
 package builtinworkflows
 
 import (
-	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -23,11 +23,8 @@ func TestStepTypesDemoWorkflowShape(t *testing.T) {
 		"summary",
 		"learn-more-qa",
 	}
-	var gotIDs []string
-	for i := range wf.Steps {
-		gotIDs = append(gotIDs, wf.Steps[i].ID)
-	}
-	if !reflect.DeepEqual(gotIDs, wantIDs) {
+	gotIDs := stepIDs(wf.Steps)
+	if !slices.Equal(gotIDs, wantIDs) {
 		t.Fatalf("step IDs = %#v, want %#v", gotIDs, wantIDs)
 	}
 
@@ -55,7 +52,7 @@ func TestStepTypesDemoWorkflowShape(t *testing.T) {
 		t.Fatalf("summary outcome_capture = %q, want summary_action", summary.OutcomeCapture)
 	}
 	gotOutcomes := outcomes(summary.Actions)
-	if !reflect.DeepEqual(gotOutcomes, []string{"continue", "learn_more"}) {
+	if !slices.Equal(gotOutcomes, []string{"continue", "learn_more"}) {
 		t.Fatalf("summary outcomes = %#v, want continue/learn_more", gotOutcomes)
 	}
 
@@ -111,11 +108,8 @@ func TestWelcomeRunsStepTypesDemoBeforeCompletion(t *testing.T) {
 	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/welcome.yaml")
 
 	wantIDs := []string{"welcome", "set-dismissed", "setup", "step-types-demo", "set-completed"}
-	var gotIDs []string
-	for i := range wf.Steps {
-		gotIDs = append(gotIDs, wf.Steps[i].ID)
-	}
-	if !reflect.DeepEqual(gotIDs, wantIDs) {
+	gotIDs := stepIDs(wf.Steps)
+	if !slices.Equal(gotIDs, wantIDs) {
 		t.Fatalf("welcome step IDs = %#v, want %#v", gotIDs, wantIDs)
 	}
 
@@ -190,4 +184,12 @@ func outcomes(actions []model.UIAction) []string {
 		out = append(out, action.Outcome)
 	}
 	return out
+}
+
+func stepIDs(steps []model.Step) []string {
+	var ids []string
+	for i := range steps {
+		ids = append(ids, steps[i].ID)
+	}
+	return ids
 }

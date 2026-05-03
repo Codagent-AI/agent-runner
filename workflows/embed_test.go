@@ -1,6 +1,7 @@
 package builtinworkflows
 
 import (
+	"slices"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -34,14 +35,7 @@ func TestOnboardingWorkflowsResolveAndAssetsList(t *testing.T) {
 		t.Fatalf("ListAssets(onboarding) returned error: %v", err)
 	}
 	for _, want := range []string{"detect-adapters.sh", "models-for-cli.sh", "check-collisions.sh", "write-profile.sh", "docs/agent-runner-basics.md"} {
-		found := false
-		for _, got := range assets {
-			if got == want {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !slices.Contains(assets, want) {
 			t.Fatalf("asset %q not found in %v", want, assets)
 		}
 		body, err := ReadAsset("onboarding/" + want)

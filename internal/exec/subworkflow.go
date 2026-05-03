@@ -176,8 +176,7 @@ func executeChildSteps(
 			return OutcomeAborted, nil
 		}
 
-		o := string(outcome)
-		childCtx.LastStepOutcome = &o
+		recordLastStepOutcome(childCtx, outcome)
 
 		if outcome == OutcomeFailed && !workflow.Steps[i].ContinueOnFailure {
 			return OutcomeFailed, nil
@@ -210,7 +209,7 @@ func emitSkippedChildStep(childCtx *model.ExecutionContext, step *model.Step) {
 	prefix := audit.BuildPrefix(nestingToAudit(childCtx), step.ID)
 	startTime := time.Now()
 	emitStepStart(childCtx, prefix, startTime, nil)
-	emitStepEnd(childCtx, prefix, startTime, "skipped", map[string]any{"skip_if": step.SkipIf})
+	emitStepEnd(childCtx, prefix, startTime, string(OutcomeSkipped), map[string]any{"skip_if": step.SkipIf})
 }
 
 func recordChildProgress(childCtx *model.ExecutionContext, childStepID string, completed bool) {
