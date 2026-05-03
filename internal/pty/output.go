@@ -1,6 +1,6 @@
 package pty
 
-import "strings"
+import "bytes"
 
 const (
 	sentinelPayload = "999;signal-continuation"
@@ -141,18 +141,8 @@ func (p *outputProcessor) process(chunk []byte) outputResult {
 }
 
 func (p *outputProcessor) processTextByte(b byte, fwd []byte) ([]byte, bool) {
-	if len(p.textBuf) == 0 {
-		if !p.textOnLine && b == textSentinel[0] {
-			p.textBuf = append(p.textBuf, b)
-			return fwd, false
-		}
-		fwd = append(fwd, b)
-		p.textOnLine = !isLineTerminator(b)
-		return fwd, false
-	}
-
 	if isLineTerminator(b) {
-		if string(p.textBuf) == textSentinel {
+		if isTextMarkerLine(p.textBuf) {
 			p.textBuf = p.textBuf[:0]
 			p.textOnLine = false
 			return fwd, true
@@ -165,7 +155,7 @@ func (p *outputProcessor) processTextByte(b byte, fwd []byte) ([]byte, bool) {
 	}
 
 	p.textBuf = append(p.textBuf, b)
-	if !strings.HasPrefix(textSentinel, string(p.textBuf)) {
+	if p.textOnLine || !isTextMarkerLinePrefix(p.textBuf) {
 		fwd = append(fwd, p.textBuf...)
 		p.textBuf = p.textBuf[:0]
 		p.textOnLine = true
@@ -186,6 +176,33 @@ func (p *outputProcessor) flushText(fwd []byte) []byte {
 
 func isLineTerminator(b byte) bool {
 	return b == '\n' || b == '\r'
+}
+
+func isTextMarkerLine(buf []byte) bool {
+	line := bytes.TrimSpace(buf)
+	if bytes.Equal(line, []byte(textSentinel)) {
+		return true
+	}
+	if rest, ok := bytes.CutPrefix(line, []byte("•")); ok {
+		return bytes.Equal(bytes.TrimSpace(rest), []byte(textSentinel))
+	}
+	return false
+}
+
+func isTextMarkerLinePrefix(buf []byte) bool {
+	line := bytes.TrimLeft(buf, " \t")
+	if len(line) == 0 {
+		return true
+	}
+	for _, marker := range [][]byte{
+		[]byte(textSentinel),
+		[]byte("• " + textSentinel),
+	} {
+		if bytes.HasPrefix(marker, line) {
+			return true
+		}
+	}
+	return false
 }
 
 // flushIfOverflow checks whether escBuf exceeds maxEscBuf. If so, it appends

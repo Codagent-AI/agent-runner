@@ -52,6 +52,18 @@ func TestOutputProcessor(t *testing.T) {
 		}
 	})
 
+	t.Run("detects codex bullet text sentinel line and strips it", func(t *testing.T) {
+		p := &outputProcessor{}
+		input := "before\n• " + textSentinel + "\nafter"
+		r := p.process([]byte(input))
+		if !r.triggered {
+			t.Fatal("expected trigger")
+		}
+		if string(r.forward) != "before\nafter" {
+			t.Fatalf("expected %q, got %q", "before\nafter", string(r.forward))
+		}
+	})
+
 	t.Run("does not trigger on embedded text sentinel", func(t *testing.T) {
 		p := &outputProcessor{}
 		input := "before" + textSentinel + "after"
