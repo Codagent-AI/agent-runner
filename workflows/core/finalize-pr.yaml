@@ -20,10 +20,23 @@ steps:
       - id: wait-ci
         session: resume
         mode: headless
+        capture: ci_report
         continue_on_failure: true
-        break_if: success
         prompt: |
           Invoke codagent:wait-ci to poll CI status and gather review comments.
+
+      - id: ci-status-gate
+        script: ci-status-gate.sh
+        script_inputs:
+          report: "{{ci_report}}"
+        continue_on_failure: true
+        break_if: success
+
+      - id: ci-fix-needed-gate
+        script: ci-fix-needed-gate.sh
+        script_inputs:
+          report: "{{ci_report}}"
+        continue_on_failure: true
 
       - id: fix-pr
         session: resume
