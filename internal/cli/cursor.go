@@ -2,10 +2,15 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
 // CursorAdapter constructs invocation args for the Cursor agent CLI.
@@ -57,14 +62,14 @@ func (a *CursorAdapter) ProbeModel(model, effort string) (ProbeStrength, error) 
 
 // DiscoverSessionID returns the session ID after a Cursor process exits.
 // Headless mode parses stream-json output for the first event containing a
-// session_id field. Interactive mode has no verified session ID channel, so it
-// declines to persist a filesystem-guessed chat ID.
+// session_id field. Interactive mode scans Cursor's local chat store for a
+// single chat written after spawn for the current workspace.
 func (a *CursorAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
 	if opts.PresetID != "" {
 		return opts.PresetID
 	}
 	if !opts.Headless {
-		return ""
+		return discoverCursorInteractiveSession(opts.SpawnTime, opts.Workdir)
 	}
 	return discoverCursorSessionID(opts.ProcessOutput)
 }
@@ -186,4 +191,44 @@ func discoverCursorSessionID(output string) string {
 		return ""
 	}
 	return ""
+}
+
+func discoverCursorInteractiveSession(spawnTime time.Time, workdir string) string {
+	if workdir == "" {
+		return ""
+	}
+	root := filepath.Join(os.Getenv("HOME"), ".cursor", "chats")
+	rootDir, err := os.OpenRoot(root)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = rootDir.Close() }()
+	rootFS := rootDir.FS()
+
+	workspaceNeedle := []byte("Workspace Path: " + workdir)
+	var matches []string
+	if err := fs.WalkDir(rootFS, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || d.Name() != "store.db" {
+			return nil
+		}
+		info, statErr := fs.Stat(rootFS, path)
+		if statErr != nil || info.ModTime().Before(spawnTime) {
+			return nil
+		}
+		data, readErr := fs.ReadFile(rootFS, path)
+		if readErr != nil || !bytes.Contains(data, workspaceNeedle) {
+			return nil
+		}
+		chatID := filepath.Base(filepath.Dir(path))
+		if chatID != "" {
+			matches = append(matches, chatID)
+		}
+		return nil
+	}); err != nil {
+		return ""
+	}
+	if len(matches) != 1 {
+		return ""
+	}
+	return matches[0]
 }

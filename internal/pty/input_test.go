@@ -116,6 +116,35 @@ func TestInputProcessor(t *testing.T) {
 		}
 	})
 
+	t.Run("drops SGR mouse input sequences", func(t *testing.T) {
+		p := &inputProcessor{}
+		r := p.process([]byte("\x1b[<0;31;58M\x1b[<0;31;58m"))
+		if r.triggered {
+			t.Fatal("unexpected trigger inside mouse input")
+		}
+		if len(r.forward) != 0 {
+			t.Fatalf("expected mouse input dropped, got %q", string(r.forward))
+		}
+	})
+
+	t.Run("drops split SGR mouse input sequence", func(t *testing.T) {
+		p := &inputProcessor{}
+		r1 := p.process([]byte("\x1b[<0;31"))
+		if r1.triggered {
+			t.Fatal("unexpected trigger inside partial mouse input")
+		}
+		if len(r1.forward) != 0 {
+			t.Fatalf("expected partial mouse input buffered, got %q", string(r1.forward))
+		}
+		r2 := p.process([]byte(";58M"))
+		if r2.triggered {
+			t.Fatal("unexpected trigger inside mouse input")
+		}
+		if len(r2.forward) != 0 {
+			t.Fatalf("expected split mouse input dropped, got %q", string(r2.forward))
+		}
+	})
+
 	t.Run("does not trigger on Ctrl-] byte inside CSI", func(t *testing.T) {
 		p := &inputProcessor{}
 		// 0x1d is below the CSI final byte range (0x40-0x7e), so it stays

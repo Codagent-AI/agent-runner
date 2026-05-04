@@ -411,7 +411,7 @@ func continueMarkerForMode(headless bool) string {
 
 func completionInstruction(marker string) string {
 	suffix := strings.TrimPrefix(marker, continuationMarkerPrefix)
-	return "\n\nWhen you or the user determine this step is complete, continue to the next step by replying with one line containing only the continuation marker formed by joining `" + continuationMarkerPrefix + "` and `" + suffix + "` with no separator. Do not run a shell command, use a tool, wrap it in a code block, or add any other commentary."
+	return "\n\nWhen you or the user determine this step is complete, continue to the next step by replying with one line containing only the current continuation marker. Construct that line by writing these pieces in this exact order with no spaces or separators: `AGENT`, `_RUNNER`, `_CONTINUE_`, and `" + suffix + "`. The line must start with `AGENT` and end with `" + suffix + "`. Do not run a shell command, use a tool, wrap it in a code block, or add any other commentary."
 }
 
 func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, headless bool, workdir, debugLabel, continueMarker string, log Logger, suspendHook, resumeHook func()) (StepOutcome, ProcessResult, error) {

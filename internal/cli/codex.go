@@ -22,14 +22,13 @@ type CodexAdapter struct{}
 //   - Fresh headless:     codex --dangerously-bypass-approvals-and-sandbox exec --json <prompt>
 //   - Resume interactive: codex resume --no-alt-screen <uuid> <prompt>
 //   - Resume headless:    codex --dangerously-bypass-approvals-and-sandbox exec resume --json <uuid> <prompt>
-//   - Model override:     appends -m <m> (fresh sessions only)
+//   - Model override:     appends -m <m>
 //   - Effort override:    appends -c model_reasoning_effort="<effort>"
 //
-// -m is intentionally omitted on resume: a Codex thread keeps the model it
-// was started with, so the profile's model is honored on fresh sessions
-// and inherited thereafter. In this adapter SessionID is set only when
-// resuming (fresh sessions discover the ID post-hoc), so SessionID != ""
-// is the resume signal.
+// -m is passed on resume as well as fresh sessions. Codex warns and resumes
+// with its current default model when the flag is omitted, even if the thread
+// was recorded with a different model. Passing the resolved model preserves
+// the model selected by the workflow/profile across session resume.
 func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 	args := []string{"codex"}
 
@@ -51,7 +50,7 @@ func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 		}
 	}
 
-	if input.Model != "" && !resuming {
+	if input.Model != "" {
 		args = append(args, "-m", input.Model)
 	}
 	if input.Effort != "" {

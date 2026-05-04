@@ -1294,8 +1294,15 @@ func assertContinueMarkerInstruction(t *testing.T, prompt, marker string) {
 	if suffix == "" {
 		t.Fatalf("expected marker suffix, got %q", marker)
 	}
-	if !strings.Contains(prompt, continuationMarkerPrefix) || !strings.Contains(prompt, suffix) {
-		t.Fatalf("expected dynamic text marker instruction in prompt, marker %q prompt %q", marker, prompt)
+	for _, part := range []string{"`AGENT`", "`_RUNNER`", "`_CONTINUE_`", "`" + suffix + "`"} {
+		if !strings.Contains(prompt, part) {
+			t.Fatalf("expected dynamic text marker instruction part %q in prompt, marker %q prompt %q", part, marker, prompt)
+		}
+	}
+	for _, phrase := range []string{"in this exact order", "no spaces or separators", "must start with `AGENT`", "end with `" + suffix + "`"} {
+		if !strings.Contains(prompt, phrase) {
+			t.Fatalf("expected marker assembly guidance %q in prompt, got %q", phrase, prompt)
+		}
 	}
 	if strings.Contains(prompt, marker) {
 		t.Fatalf("completion instruction must not include the exact marker contiguously, got %q", prompt)

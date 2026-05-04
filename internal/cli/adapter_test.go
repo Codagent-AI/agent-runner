@@ -388,16 +388,27 @@ func TestCodexAdapter(t *testing.T) {
 		assertArgs(t, expected, args)
 	})
 
-	t.Run("resume drops model flag", func(t *testing.T) {
-		// A Codex thread keeps the model it was started with, so -m is
-		// omitted when resuming even if Model is set on the input.
+	t.Run("resume keeps model flag", func(t *testing.T) {
+		// Codex resumes with its current default model when -m is omitted, so
+		// keep the workflow/profile model on resume to avoid model drift.
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:    "continue",
 			SessionID: "thread-abc",
 			Model:     "o3",
 			Headless:  true,
 		})
-		expected := []string{"codex", "--dangerously-bypass-approvals-and-sandbox", "exec", "resume", "--json", "thread-abc", "continue"}
+		expected := []string{"codex", "--dangerously-bypass-approvals-and-sandbox", "exec", "resume", "--json", "-m", "o3", "thread-abc", "continue"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("resume interactive keeps model flag", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:    "continue review",
+			SessionID: "thread-abc",
+			Model:     "gpt-5.4-mini",
+			Headless:  false,
+		})
+		expected := []string{"codex", "resume", "--no-alt-screen", "-m", "gpt-5.4-mini", "thread-abc", "continue review"}
 		assertArgs(t, expected, args)
 	})
 
@@ -1289,7 +1300,7 @@ func TestCursorAdapter(t *testing.T) {
 		}
 	})
 
-	t.Run("discover interactive session ID returns empty even when cursor chat matches workdir", func(t *testing.T) {
+	t.Run("discover interactive session ID returns matching chat after spawn", func(t *testing.T) {
 		fakeHome := t.TempDir()
 		t.Setenv("HOME", fakeHome)
 
@@ -1308,8 +1319,8 @@ func TestCursorAdapter(t *testing.T) {
 			Headless:  false,
 			Workdir:   workdir,
 		})
-		if id != "" {
-			t.Fatalf("expected empty string without verified Cursor session provenance, got %q", id)
+		if id != matchingID {
+			t.Fatalf("expected matching cursor chat %q, got %q", matchingID, id)
 		}
 	})
 
