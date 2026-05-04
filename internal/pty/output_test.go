@@ -113,6 +113,27 @@ func TestOutputProcessor(t *testing.T) {
 		}
 	})
 
+	t.Run("detects text sentinel at process exit without newline", func(t *testing.T) {
+		p := &outputProcessor{}
+		r := p.process([]byte(textSentinel))
+		if r.triggered {
+			t.Fatal("unexpected trigger before process exit")
+		}
+		if len(r.forward) != 0 {
+			t.Fatalf("expected no forwarded bytes (buffered), got %q", string(r.forward))
+		}
+		finished := p.finish()
+		if !finished.triggered {
+			t.Fatal("expected trigger at process exit")
+		}
+		if len(finished.forward) != 0 {
+			t.Fatalf("expected marker stripped at process exit, got %q", string(finished.forward))
+		}
+		if flushed := p.flush(); len(flushed) != 0 {
+			t.Fatalf("expected no buffered output after marker trigger, got %q", string(flushed))
+		}
+	})
+
 	t.Run("sentinel detection across chunk boundaries", func(t *testing.T) {
 		p := &outputProcessor{}
 		// Split the sentinel in the middle of the payload.

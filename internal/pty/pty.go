@@ -356,6 +356,16 @@ func forwardOutput(ptmx *os.File, hint *idleHint, cmd *exec.Cmd, state *ptyState
 		}
 		if err != nil {
 			if !sentinelTriggered {
+				result := proc.finish()
+				if len(result.forward) > 0 {
+					if werr := writeStdout(result.forward); werr != nil {
+						hint.cancel()
+						return
+					}
+				}
+				if result.triggered {
+					_ = beginTermination(cmd, state, hint, exitCh)
+				}
 				if ferr := flushToStdout(proc); ferr != nil {
 					hint.cancel()
 					return

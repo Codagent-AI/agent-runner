@@ -2,10 +2,10 @@ package main
 
 import (
 	"errors"
-	"reflect"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/usersettings"
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestEnsureOnboardingForTUIFiresOnlyForFreshTTY(t *testing.T) {
@@ -29,8 +29,8 @@ func TestEnsureOnboardingForTUIFiresOnlyForFreshTTY(t *testing.T) {
 	if code != 7 {
 		t.Fatalf("ensureOnboardingForTUI() = %d, want workflow exit code 7", code)
 	}
-	if !reflect.DeepEqual(launched, []string{"builtin:onboarding/welcome.yaml"}) {
-		t.Fatalf("launched = %#v", launched)
+	if diff := cmp.Diff([]string{"builtin:onboarding/welcome.yaml"}, launched); diff != "" {
+		t.Fatalf("launched mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -56,8 +56,8 @@ func TestEnsureOnboardingForTUIResumesMostRecentIncompleteRun(t *testing.T) {
 	if code != 9 {
 		t.Fatalf("ensureOnboardingForTUI() = %d, want resume exit code 9", code)
 	}
-	if !reflect.DeepEqual(resumed, []string{"onboarding-welcome-2026-05-02T12-00-00Z"}) {
-		t.Fatalf("resumed = %#v", resumed)
+	if diff := cmp.Diff([]string{"onboarding-welcome-2026-05-02T12-00-00Z"}, resumed); diff != "" {
+		t.Fatalf("resumed mismatch (-want +got):\n%s", diff)
 	}
 }
 

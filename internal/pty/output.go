@@ -174,6 +174,19 @@ func (p *outputProcessor) flushText(fwd []byte) []byte {
 	return fwd
 }
 
+func (p *outputProcessor) finish() outputResult {
+	if len(p.escBuf) == 0 && len(p.textBuf) == 0 {
+		return outputResult{}
+	}
+	if len(p.escBuf) == 0 && isTextMarkerLine(p.textBuf) {
+		p.textBuf = p.textBuf[:0]
+		p.textOnLine = false
+		p.escState = escNone
+		return outputResult{triggered: true}
+	}
+	return outputResult{forward: p.flush()}
+}
+
 func isLineTerminator(b byte) bool {
 	return b == '\n' || b == '\r'
 }

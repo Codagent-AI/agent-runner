@@ -99,4 +99,4 @@ steps:
       Use the packaged documentation at {{session_dir}}/bundled/onboarding/docs/ for reference. Answer one or two lightweight Agent Runner questions, then complete the step so the demo workflow can finish.
 
       Do not write files, modify configuration, start services, install dependencies, or change project state.
-    skip_if: 'sh: [ "{{summary_action}}" != "learn_more" ]'
+    skip_if: 'sh: [ "x{{summary_action}}" != "xlearn_more" ]'

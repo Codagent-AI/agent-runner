@@ -1,3 +1,5 @@
-#!/bin/bash
-set -euo pipefail
-jq -rj '.items | length' </dev/stdin
+#!/bin/sh
+set -eu
+
+: "${AGENT_RUNNER_BIN:=agent-runner}"
+"$AGENT_RUNNER_BIN" internal json-list-count items

@@ -58,7 +58,7 @@ func TestStepTypesDemoWorkflowShape(t *testing.T) {
 
 	learnMore := wf.Steps[8]
 	assertAgentStep(t, &learnMore, "planner", model.ModeInteractive)
-	if learnMore.SkipIf != `sh: [ "{{summary_action}}" != "learn_more" ]` {
+	if learnMore.SkipIf != `sh: [ "x{{summary_action}}" != "xlearn_more" ]` {
 		t.Fatalf("learn-more-qa skip_if = %q", learnMore.SkipIf)
 	}
 }

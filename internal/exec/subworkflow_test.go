@@ -392,6 +392,49 @@ func TestOnboardingWelcomeSkipIfActions(t *testing.T) {
 	}
 }
 
+func TestOnboardingStepTypesDemoLearnMoreSkipIfActions(t *testing.T) {
+	workflow, err := loader.LoadWorkflow("builtin:onboarding/step-types-demo.yaml", loader.Options{IsSubWorkflow: true})
+	if err != nil {
+		t.Fatalf("LoadWorkflow: %v", err)
+	}
+
+	steps := map[string]model.Step{}
+	for _, step := range workflow.Steps {
+		steps[step.ID] = step
+	}
+	learnMore, ok := steps["learn-more-qa"]
+	if !ok {
+		t.Fatal("step \"learn-more-qa\" not found")
+	}
+
+	tests := []struct {
+		name    string
+		action  string
+		wantRun bool
+	}{
+		{name: "continue skips learn more", action: "continue", wantRun: false},
+		{name: "learn more runs qa", action: "learn_more", wantRun: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := model.NewRootContext(&model.RootContextOptions{
+				Params:       map[string]string{},
+				WorkflowFile: "builtin:onboarding/step-types-demo.yaml",
+			})
+			ctx.CapturedVariables["summary_action"] = model.NewCapturedString(tt.action)
+
+			skip, err := ShouldSkipStep(learnMore.SkipIf, nil, ctx, learnMore.ID)
+			if err != nil {
+				t.Fatalf("ShouldSkipStep(%s): %v", learnMore.ID, err)
+			}
+			if gotRun := !skip; gotRun != tt.wantRun {
+				t.Fatalf("learn-more-qa runs with summary_action=%q = %v, want %v", tt.action, gotRun, tt.wantRun)
+			}
+		})
+	}
+}
+
 func TestOnboardingSetupSkipIfActions(t *testing.T) {
 	workflow, err := loader.LoadWorkflow("builtin:onboarding/setup-agent-profile.yaml", loader.Options{IsSubWorkflow: true})
 	if err != nil {
