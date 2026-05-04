@@ -4,7 +4,7 @@ cli:
     - github-copilot
   adapters:
     codex:
-      model: gpt-5.5
+      model: gpt-5.3-codex
       allow_tool_use: false
       thinking_budget: low
     github-copilot:
@@ -78,7 +78,7 @@ entry_points:
 
 # Debug log — persistent debug logging to .debug.log
 debug_log:
-  enabled: false
+  enabled: true
   max_size_mb: 10               # Max size before rotation to .debug.log.1
 
 # Structured logging via LogTape
