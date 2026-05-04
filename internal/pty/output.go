@@ -249,9 +249,11 @@ func (p *outputProcessor) finish() outputResult {
 	if len(p.escBuf) == 0 && len(p.textBuf) == 0 {
 		return outputResult{}
 	}
-	if len(p.escBuf) == 0 && isTextMarkerLine(p.textBuf) {
+	if len(p.escBuf) == 0 && isTextMarkerComplete(p.textBuf) {
 		p.textBuf = p.textBuf[:0]
-		p.textOnLine = false
+		p.textStartBoundary = false
+		p.textSawVisible = false
+		p.textPrevBoundary = true
 		p.escState = escNone
 		return outputResult{triggered: true}
 	}
