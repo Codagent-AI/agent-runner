@@ -1256,7 +1256,6 @@ var defaultFirstRunDeps = firstRunDeps{
 	runWorkflow: func(ref string) int {
 		return handleRunWithOptions([]string{ref}, liveTUIOptions{quitOnDone: true})
 	},
-	continueAfterNativeSetupError: true,
 }
 
 func ensureFirstRunForTUI(deps firstRunDeps) int {

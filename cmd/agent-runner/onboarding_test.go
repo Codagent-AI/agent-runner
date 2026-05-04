@@ -166,6 +166,12 @@ func TestEnsureFirstRunForTUISetupErrorFailsWhenNonFatalModeDisabled(t *testing.
 	}
 }
 
+func TestDefaultFirstRunDepsReportsNativeSetupErrors(t *testing.T) {
+	if defaultFirstRunDeps.continueAfterNativeSetupError {
+		t.Fatal("default first-run setup should return non-zero for native setup execution errors")
+	}
+}
+
 func TestEnsureFirstRunForTUILoadErrorFails(t *testing.T) {
 	code := ensureFirstRunForTUI(firstRunDeps{
 		load:        func() (usersettings.Settings, error) { return usersettings.Settings{}, errors.New("boom") },
