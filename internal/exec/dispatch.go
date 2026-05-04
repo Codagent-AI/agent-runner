@@ -111,8 +111,7 @@ func executeGroupStep(
 			emitStepEnd(ctx, prefix, startTime, string(OutcomeAborted), nil)
 			return OutcomeAborted, nil
 		}
-		o := string(outcome)
-		ctx.LastStepOutcome = &o
+		recordLastStepOutcome(ctx, outcome)
 		if outcome == OutcomeFailed && !steps[i].ContinueOnFailure {
 			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), nil)
 			return OutcomeFailed, nil

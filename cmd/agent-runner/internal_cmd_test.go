@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"gopkg.in/yaml.v3"
 )
 
@@ -211,6 +212,33 @@ func TestWriteProfileCommandDoesNotRelaxExistingParentDirectory(t *testing.T) {
 	if got := info.Mode().Perm(); got != 0o700 {
 		t.Fatalf("target dir mode = %v, want preserved 0700", got)
 	}
+}
+
+func TestInternalJSONHelpersDecodeValidJSON(t *testing.T) {
+	t.Run("string field", func(t *testing.T) {
+		got, err := decodeJSONStringField(strings.NewReader(`{
+			"value": "gpt-5.4 \"stable\""
+		}`), "value")
+		if err != nil {
+			t.Fatalf("decodeJSONStringField() returned error: %v", err)
+		}
+		if got != `gpt-5.4 "stable"` {
+			t.Fatalf("decodeJSONStringField() = %q", got)
+		}
+	})
+
+	t.Run("list field", func(t *testing.T) {
+		got, err := decodeJSONStringListField(strings.NewReader(`{
+			"items": ["planner, implementor", "codex"]
+		}`), "items")
+		if err != nil {
+			t.Fatalf("decodeJSONStringListField() returned error: %v", err)
+		}
+		want := []string{"planner, implementor", "codex"}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Fatalf("decodeJSONStringListField() mismatch (-want +got):\n%s", diff)
+		}
+	})
 }
 
 func quoteJSON(s string) string {

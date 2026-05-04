@@ -307,6 +307,34 @@ func TestCreateSubWorkflowContext(t *testing.T) {
 			t.Fatal("expected auditLogger inherited from parent")
 		}
 	})
+
+	t.Run("inherits captured variables without sharing writes", func(t *testing.T) {
+		parent := NewRootContext(&RootContextOptions{
+			Params:       map[string]string{},
+			WorkflowFile: "parent.yaml",
+			CapturedVariables: map[string]CapturedValue{
+				"summary_action": NewCapturedString("learn_more"),
+			},
+		})
+
+		child := NewSubWorkflowContext(parent, &SubWorkflowContextOptions{
+			StepID:       "call-sub",
+			Params:       map[string]string{},
+			WorkflowFile: "child.yaml",
+		})
+
+		if diff := cmp.Diff(NewCapturedString("learn_more"), child.CapturedVariables["summary_action"]); diff != "" {
+			t.Fatalf("captured variable mismatch (-want +got):\n%s", diff)
+		}
+		child.CapturedVariables["summary_action"] = NewCapturedString("continue")
+		child.CapturedVariables["child_only"] = NewCapturedString("value")
+		if diff := cmp.Diff(NewCapturedString("learn_more"), parent.CapturedVariables["summary_action"]); diff != "" {
+			t.Fatalf("parent captured variable mutated (-want +got):\n%s", diff)
+		}
+		if _, ok := parent.CapturedVariables["child_only"]; ok {
+			t.Fatal("child capture write should not mutate parent")
+		}
+	})
 }
 
 func TestLoopIterationContextAuditLogger(t *testing.T) {

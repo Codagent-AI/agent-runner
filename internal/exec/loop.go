@@ -423,6 +423,7 @@ func executeIterationBody(
 		if skip {
 			setBody(bodyStepID, true)
 			emitSkippedChildStep(iterCtx, &steps[i])
+			recordLastStepOutcome(iterCtx, OutcomeSkipped)
 			if iterCtx.FlushState != nil {
 				iterCtx.FlushState()
 			}
@@ -452,8 +453,7 @@ func executeIterationBody(
 			return iterationResult{breakTriggered: true}, nil
 		}
 
-		o := string(outcome)
-		iterCtx.LastStepOutcome = &o
+		recordLastStepOutcome(iterCtx, outcome)
 
 		if outcome == OutcomeFailed && !steps[i].ContinueOnFailure {
 			persistIterationFailState(iterCtx, loopStepID, iteration, bodyStepID, bodyCompleted)

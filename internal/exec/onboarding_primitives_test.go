@@ -180,3 +180,30 @@ func TestExecuteUIStepEmitsAuditEvents(t *testing.T) {
 		t.Fatalf("expected successful pick step_end, got %+v", recorder.events)
 	}
 }
+
+func TestExecuteUIStepCanceledReturnsAborted(t *testing.T) {
+	recorder := &mockAuditLogger{}
+	ctx := model.NewRootContext(&model.RootContextOptions{WorkflowFile: "workflow.yaml"})
+	ctx.AuditLogger = recorder
+	ctx.UIStepHandler = func(req *model.UIStepRequest) (model.UIStepResult, error) {
+		return model.UIStepResult{Canceled: true}, nil
+	}
+
+	step := model.Step{
+		ID:      "pick",
+		Mode:    model.ModeUI,
+		Title:   "Pick",
+		Actions: []model.UIAction{{Label: "Continue", Outcome: "continue"}},
+	}
+	outcome, err := ExecuteUIStep(&step, ctx, &mockLogger{})
+	if err != nil {
+		t.Fatalf("ExecuteUIStep() returned error: %v", err)
+	}
+	if outcome != OutcomeAborted {
+		t.Fatalf("outcome = %s, want aborted", outcome)
+	}
+	end := findAuditEvent(recorder.events, audit.EventStepEnd)
+	if end == nil || end.Prefix != "[pick]" || end.Data["outcome"] != string(OutcomeAborted) {
+		t.Fatalf("expected aborted pick step_end, got %+v", recorder.events)
+	}
+}

@@ -33,8 +33,8 @@ func ExecuteUIStep(step *model.Step, ctx *model.ExecutionContext, log Logger) (S
 		return OutcomeFailed, err
 	}
 	if result.Canceled {
-		emitUIEnd(ctx, prefix, startTime, "failed", result.Outcome, nil)
-		return OutcomeFailed, nil
+		emitUIEnd(ctx, prefix, startTime, string(OutcomeAborted), result.Outcome, nil)
+		return OutcomeAborted, nil
 	}
 	if step.OutcomeCapture != "" {
 		ctx.CapturedVariables[step.OutcomeCapture] = model.NewCapturedString(result.Outcome)
