@@ -49,6 +49,19 @@ func TestOnboardingWorkflowsResolveAndAssetsList(t *testing.T) {
 			t.Fatalf("asset %s is empty", want)
 		}
 	}
+	for _, removed := range []string{
+		"check-collisions.sh",
+		"count-list.sh",
+		"detect-adapters.sh",
+		"echo-value.sh",
+		"format-list.sh",
+		"models-for-cli.sh",
+		"write-profile.sh",
+	} {
+		if slices.Contains(assets, removed) {
+			t.Fatalf("removed setup asset %q still embedded in onboarding namespace assets %v", removed, assets)
+		}
+	}
 }
 
 func TestOpenSpecPlanningWorkflowsUseSharedCreateScript(t *testing.T) {
