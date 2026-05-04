@@ -169,6 +169,35 @@ func TestInterpolateShellSafe(t *testing.T) {
 	})
 }
 
+func TestInterpolateShellSafeTypedPreservesCapturedWhitespace(t *testing.T) {
+	captures := map[string]model.CapturedValue{
+		"value": model.NewCapturedString("  padded\n"),
+	}
+
+	result, err := InterpolateShellSafeTyped("printf %s {{value}}", nil, captures, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "printf %s '  padded\n'" {
+		t.Fatalf("InterpolateShellSafeTyped() = %q", result)
+	}
+}
+
+func TestInterpolateShellSafeTypedEscapesDoubleQuotedPlaceholders(t *testing.T) {
+	captures := map[string]model.CapturedValue{
+		"value": model.NewCapturedString(`learn more "$(rm -rf /)"`),
+	}
+
+	result, err := InterpolateShellSafeTyped(`test "x{{value}}" != "xlearn_more"`, nil, captures, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := `test "xlearn more \"\$(rm -rf /)\"" != "xlearn_more"`
+	if result != want {
+		t.Fatalf("InterpolateShellSafeTyped() = %q, want %q", result, want)
+	}
+}
+
 func TestInterpolateTyped(t *testing.T) {
 	captures := map[string]model.CapturedValue{
 		"profile": {Kind: model.CaptureMap, Map: map[string]string{"adapter": "claude", "model": "opus"}},

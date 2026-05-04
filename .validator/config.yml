@@ -20,13 +20,13 @@ entry_points:
       - openspec
     checks:
       - build:
-          command: GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off GOCACHE="$PWD/.validator/cache/go-build" GOPATH="$PWD/.validator/cache/go" GOMODCACHE="$PWD/.validator/cache/go/pkg/mod" go build ./...
+          command: ./.validator/go-offline.sh go build ./...
       - lint:
-          command: GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off GOCACHE="$PWD/.validator/cache/go-build" GOPATH="$PWD/.validator/cache/go" GOMODCACHE="$PWD/.validator/cache/go/pkg/mod" golangci-lint run ./...
+          command: ./.validator/go-offline.sh golangci-lint run ./...
       - test:
-          command: GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off GOCACHE="$PWD/.validator/cache/go-build" GOPATH="$PWD/.validator/cache/go" GOMODCACHE="$PWD/.validator/cache/go/pkg/mod" go test ./...
+          command: ./.validator/go-offline.sh go test ./...
       - security-code:
-          command: GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off GOCACHE="$PWD/.validator/cache/go-build" GOPATH="$PWD/.validator/cache/go" GOMODCACHE="$PWD/.validator/cache/go/pkg/mod" gosec -exclude-dir=.claude -exclude-dir=.validator -exclude-dir=worktrees ./...
+          command: ./.validator/go-offline.sh gosec -exclude-dir=.claude -exclude-dir=.validator -exclude-dir=worktrees ./...
     reviews:
       - all-reviewers:
           builtin: all-reviewers
@@ -45,7 +45,7 @@ entry_points:
   - path: internal/cli
     checks:
       - cli-test:
-          command: GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off GOCACHE="$PWD/../../.validator/cache/go-build" GOPATH="$PWD/../../.validator/cache/go" GOMODCACHE="$PWD/../../.validator/cache/go/pkg/mod" go test .
+          command: ../../.validator/go-offline.sh go test .
 
 # -------------------------------------------------------------------
 # All settings below are optional. Uncomment and change as needed.

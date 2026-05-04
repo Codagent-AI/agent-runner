@@ -126,4 +126,3 @@ A single editor session SHALL produce one set of writes. The editor SHALL NOT lo
 #### Scenario: User wants to revise after confirming
 - **WHEN** the user has reached the confirmation screen and wants to change a previous choice
 - **THEN** the only path is to cancel the current session and re-run the editor; the session does not offer a "back" navigation
-

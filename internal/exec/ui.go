@@ -3,27 +3,38 @@ package exec
 import (
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/textfmt"
 )
 
 func ExecuteUIStep(step *model.Step, ctx *model.ExecutionContext, log Logger) (StepOutcome, error) {
+	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
+	startTime := time.Now()
+	emitStepStart(ctx, prefix, startTime, map[string]any{"title": step.Title})
+
 	request, err := buildUIRequest(step, ctx)
 	if err != nil {
+		emitUIEnd(ctx, prefix, startTime, "failed", "", err)
 		return OutcomeFailed, err
 	}
 	var result model.UIStepResult
 	if ctx.UIStepHandler != nil {
-		result, err = ctx.UIStepHandler(request)
+		result, err = ctx.UIStepHandler(&request)
 	} else {
-		return OutcomeFailed, fmt.Errorf("UI steps require a TTY")
+		err := fmt.Errorf("UI steps require a TTY")
+		emitUIEnd(ctx, prefix, startTime, "failed", "", err)
+		return OutcomeFailed, err
 	}
 	if err != nil {
+		emitUIEnd(ctx, prefix, startTime, "failed", "", err)
 		return OutcomeFailed, err
 	}
 	if result.Canceled {
-		return OutcomeFailed, nil
+		emitUIEnd(ctx, prefix, startTime, string(OutcomeAborted), result.Outcome, nil)
+		return OutcomeAborted, nil
 	}
 	if step.OutcomeCapture != "" {
 		ctx.CapturedVariables[step.OutcomeCapture] = model.NewCapturedString(result.Outcome)
@@ -32,7 +43,19 @@ func ExecuteUIStep(step *model.Step, ctx *model.ExecutionContext, log Logger) (S
 		ctx.CapturedVariables[step.Capture] = model.NewCapturedMap(result.Inputs)
 	}
 	log.Printf("  ui outcome: %s\n", result.Outcome)
+	emitUIEnd(ctx, prefix, startTime, "success", result.Outcome, nil)
 	return OutcomeSuccess, nil
+}
+
+func emitUIEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, outcome, uiOutcome string, err error) {
+	data := map[string]any{}
+	if uiOutcome != "" {
+		data["ui_outcome"] = uiOutcome
+	}
+	if err != nil {
+		data["error"] = err.Error()
+	}
+	emitStepEnd(ctx, prefix, startTime, outcome, data)
 }
 
 func buildUIRequest(step *model.Step, ctx *model.ExecutionContext) (model.UIStepRequest, error) {

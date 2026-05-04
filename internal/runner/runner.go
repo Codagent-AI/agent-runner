@@ -61,7 +61,7 @@ type Options struct {
 	// coordinator to manage terminal state transitions without flicker.
 	PrepareStepHook func(interactive bool)
 
-	UIStepHandler func(model.UIStepRequest) (model.UIStepResult, error)
+	UIStepHandler func(*model.UIStepRequest) (model.UIStepResult, error)
 }
 
 // RunHandle is returned by PrepareRun and PrepareResume. It holds all state
@@ -657,6 +657,9 @@ func materializeBundledAssets(sessionDir, workflowFile string) error {
 	assets, err := builtinworkflows.ListAssets(namespace)
 	if err != nil {
 		return err
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return fmt.Errorf("create bundled asset root: %w", err)
 	}
 	for _, asset := range assets {
 		data, err := builtinworkflows.ReadAsset(path.Join(namespace, asset))

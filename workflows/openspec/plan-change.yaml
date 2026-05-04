@@ -15,11 +15,9 @@ sessions:
 
 steps:
   - id: create
-    # agent-validator detect: exit 0 = unvalidated changes present, exit 2 = clean (no changes)
-    # todo move to script, add check for git porcelain
-    command: |
-      agent-validator detect; status=$?; if [ $status -eq 0 ]; then echo 'Unvalidated changes detected. Run agent-validator before planning.' >&2; exit 1; elif [ $status -ne 2 ]; then exit $status; fi
-      openspec new change "{{change_name}}"
+    script: create-change.sh
+    script_inputs:
+      change_name: "{{change_name}}"
 
   - id: proposal
     session: lead-agent

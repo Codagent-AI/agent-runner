@@ -12,11 +12,14 @@ import (
 // idleHint renders a continue-trigger hint bar at the bottom of the terminal
 // after a period of PTY silence.
 type idleHint struct {
-	delay time.Duration
-	timer *time.Timer
-	shown bool
-	mu    sync.Mutex
+	delay         time.Duration
+	timer         *time.Timer
+	shown         bool
+	suppressUntil time.Time
+	mu            sync.Mutex
 }
+
+const hintSuppressAfterClear = 20 * time.Second
 
 func newIdleHint(delay time.Duration) *idleHint {
 	return &idleHint{delay: delay}
@@ -27,6 +30,10 @@ func (h *idleHint) reset() {
 	defer h.mu.Unlock()
 	if h.timer != nil {
 		h.timer.Stop()
+		h.timer = nil
+	}
+	if time.Now().Before(h.suppressUntil) {
+		return
 	}
 	h.timer = time.AfterFunc(h.delay, h.draw)
 }
@@ -44,6 +51,13 @@ func (h *idleHint) clearIfShown() {
 	h.mu.Lock()
 	wasShown := h.shown
 	h.shown = false
+	if wasShown {
+		h.suppressUntil = time.Now().Add(hintSuppressAfterClear)
+		if h.timer != nil {
+			h.timer.Stop()
+			h.timer = nil
+		}
+	}
 	h.mu.Unlock()
 
 	if wasShown {
@@ -71,7 +85,8 @@ func (h *idleHint) draw() {
 		hint = hint[:cols]
 	}
 
-	// Save cursor, move to bottom row, dim+reverse bar, restore cursor.
-	_, _ = fmt.Fprintf(os.Stdout, "\x1b7\x1b[%d;1H\x1b[2;7m%-*s\x1b[0m\x1b8", size.Rows, cols, hint)
+	// Save cursor, move to bottom row, draw bright white text on a dark bar,
+	// restore cursor.
+	_, _ = fmt.Fprintf(os.Stdout, "\x1b7\x1b[%d;1H\x1b[1;97;40m%-*s\x1b[0m\x1b8", size.Rows, cols, hint)
 	h.shown = true
 }

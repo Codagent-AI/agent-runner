@@ -115,6 +115,25 @@ func TestCreateLoopIterationContext(t *testing.T) {
 			t.Fatal("parent nestingPath mutated")
 		}
 	})
+
+	t.Run("inherits captured variables from parent", func(t *testing.T) {
+		parent := NewRootContext(&RootContextOptions{
+			Params:       map[string]string{"base": "/src"},
+			WorkflowFile: "test.yaml",
+			CapturedVariables: map[string]CapturedValue{
+				"review_feedback": NewCapturedString("looks good"),
+			},
+		})
+
+		child := NewLoopIterationContext(parent, LoopIterationOptions{
+			StepID:    "discussion",
+			Iteration: 0,
+		})
+
+		if diff := cmp.Diff(NewCapturedString("looks good"), child.CapturedVariables["review_feedback"]); diff != "" {
+			t.Fatalf("captured variable mismatch (-want +got):\n%s", diff)
+		}
+	})
 }
 
 func TestBuiltinVarsForStep(t *testing.T) {
@@ -286,6 +305,34 @@ func TestCreateSubWorkflowContext(t *testing.T) {
 
 		if child.AuditLogger != logger {
 			t.Fatal("expected auditLogger inherited from parent")
+		}
+	})
+
+	t.Run("inherits captured variables without sharing writes", func(t *testing.T) {
+		parent := NewRootContext(&RootContextOptions{
+			Params:       map[string]string{},
+			WorkflowFile: "parent.yaml",
+			CapturedVariables: map[string]CapturedValue{
+				"summary_action": NewCapturedString("learn_more"),
+			},
+		})
+
+		child := NewSubWorkflowContext(parent, &SubWorkflowContextOptions{
+			StepID:       "call-sub",
+			Params:       map[string]string{},
+			WorkflowFile: "child.yaml",
+		})
+
+		if diff := cmp.Diff(NewCapturedString("learn_more"), child.CapturedVariables["summary_action"]); diff != "" {
+			t.Fatalf("captured variable mismatch (-want +got):\n%s", diff)
+		}
+		child.CapturedVariables["summary_action"] = NewCapturedString("continue")
+		child.CapturedVariables["child_only"] = NewCapturedString("value")
+		if diff := cmp.Diff(NewCapturedString("learn_more"), parent.CapturedVariables["summary_action"]); diff != "" {
+			t.Fatalf("parent captured variable mutated (-want +got):\n%s", diff)
+		}
+		if _, ok := parent.CapturedVariables["child_only"]; ok {
+			t.Fatal("child capture write should not mutate parent")
 		}
 	})
 }

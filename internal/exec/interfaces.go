@@ -9,6 +9,7 @@ const (
 	OutcomeFailed    StepOutcome = "failed"
 	OutcomeAborted   StepOutcome = "aborted"
 	OutcomeExhausted StepOutcome = "exhausted"
+	OutcomeSkipped   StepOutcome = "skipped"
 )
 
 // ProcessResult holds the outcome of a spawned process.

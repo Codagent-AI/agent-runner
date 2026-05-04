@@ -7,40 +7,75 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf8"
 
+	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/textfmt"
 	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
+const scriptStepRevealDelay = 2 * time.Second
+
 func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, log Logger) (StepOutcome, error) {
+	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
+	startTime := time.Now()
+	emitStepStart(ctx, prefix, startTime, map[string]any{"script": step.Script})
+
 	scriptPath, err := resolveScriptPath(step.Script, ctx)
 	if err != nil {
+		emitScriptEnd(ctx, prefix, startTime, "failed", nil, err)
 		return OutcomeFailed, err
 	}
 	stdin, err := buildScriptInput(step, ctx)
 	if err != nil {
+		emitScriptEnd(ctx, prefix, startTime, "failed", nil, err)
 		return OutcomeFailed, err
 	}
 
 	log.Printf("  script: %s\n", step.Script)
+	switch ps := runner.(type) {
+	case interface {
+		SetScriptPrefix(string, time.Duration)
+	}:
+		ps.SetScriptPrefix(prefix, scriptStepRevealDelay)
+	case interface{ SetPrefix(string) }:
+		ps.SetPrefix(prefix)
+	}
 	var result ProcessResult
 	result, err = runner.RunScript(scriptPath, stdin, step.Capture != "", step.Workdir)
 	if err != nil {
+		emitScriptEnd(ctx, prefix, startTime, "failed", nil, err)
 		return OutcomeFailed, err
 	}
 	if result.ExitCode != 0 {
+		emitScriptEnd(ctx, prefix, startTime, "failed", &result, nil)
 		return OutcomeFailed, nil
 	}
 	if step.Capture != "" {
 		captured, err := captureScriptOutput(step.CaptureFormat, result.Stdout)
 		if err != nil {
+			emitScriptEnd(ctx, prefix, startTime, "failed", &result, err)
 			return OutcomeFailed, err
 		}
 		ctx.CapturedVariables[step.Capture] = captured
 	}
+	emitScriptEnd(ctx, prefix, startTime, "success", &result, nil)
 	return OutcomeSuccess, nil
+}
+
+func emitScriptEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, outcome string, result *ProcessResult, err error) {
+	data := map[string]any{}
+	if result != nil {
+		data["exit_code"] = result.ExitCode
+		data["stdout"] = truncateForAudit(result.Stdout)
+		data["stderr"] = truncateForAudit(result.Stderr)
+	}
+	if err != nil {
+		data["error"] = err.Error()
+	}
+	emitStepEnd(ctx, prefix, startTime, outcome, data)
 }
 
 func resolveScriptPath(script string, ctx *model.ExecutionContext) (string, error) {

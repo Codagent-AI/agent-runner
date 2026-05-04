@@ -19,12 +19,16 @@ steps:
 
   - id: set-dismissed
     command: agent-runner internal write-setting onboarding.dismissed "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    skip_if: 'sh: [ "{{user_action}}" != "dismiss" ]'
+    skip_if: 'sh: [ {{user_action}} != dismiss ]'
 
   - id: setup
     workflow: setup-agent-profile.yaml
-    skip_if: 'sh: [ "{{user_action}}" != "continue" ]'
+    skip_if: 'sh: [ {{user_action}} != continue ]'
+
+  - id: step-types-demo
+    workflow: step-types-demo.yaml
+    skip_if: 'sh: [ {{user_action}} != continue ]'
 
   - id: set-completed
     command: agent-runner internal write-setting onboarding.completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    skip_if: 'sh: [ "{{user_action}}" != "continue" ]'
+    skip_if: 'sh: [ {{user_action}} != continue ]'

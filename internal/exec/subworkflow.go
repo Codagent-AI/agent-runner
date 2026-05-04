@@ -27,12 +27,7 @@ func ExecuteSubWorkflowStep(
 	prefix := audit.BuildPrefix(nestingToAudit(parentCtx), step.ID)
 	startTime := time.Now()
 
-	emitAudit(parentCtx, audit.Event{
-		Timestamp: startTime.UTC().Format(time.RFC3339),
-		Prefix:    prefix,
-		Type:      audit.EventStepStart,
-		Data:      map[string]any{"context": contextSnapshot(parentCtx)},
-	})
+	emitStepStart(parentCtx, prefix, startTime, nil)
 
 	workflow, workflowPath, childCtx, err := prepareSubWorkflow(step, parentCtx, log)
 	if err != nil {
@@ -181,8 +176,7 @@ func executeChildSteps(
 			return OutcomeAborted, nil
 		}
 
-		o := string(outcome)
-		childCtx.LastStepOutcome = &o
+		recordLastStepOutcome(childCtx, outcome)
 
 		if outcome == OutcomeFailed && !workflow.Steps[i].ContinueOnFailure {
 			return OutcomeFailed, nil
@@ -213,23 +207,9 @@ func flushChildProgress(childCtx *model.ExecutionContext) {
 
 func emitSkippedChildStep(childCtx *model.ExecutionContext, step *model.Step) {
 	prefix := audit.BuildPrefix(nestingToAudit(childCtx), step.ID)
-	now := time.Now().UTC().Format(time.RFC3339)
-	emitAudit(childCtx, audit.Event{
-		Timestamp: now,
-		Prefix:    prefix,
-		Type:      audit.EventStepStart,
-		Data:      map[string]any{"context": contextSnapshot(childCtx)},
-	})
-	emitAudit(childCtx, audit.Event{
-		Timestamp: now,
-		Prefix:    prefix,
-		Type:      audit.EventStepEnd,
-		Data: map[string]any{
-			"outcome":     "skipped",
-			"skip_if":     step.SkipIf,
-			"duration_ms": 0,
-		},
-	})
+	startTime := time.Now()
+	emitStepStart(childCtx, prefix, startTime, nil)
+	emitStepEnd(childCtx, prefix, startTime, string(OutcomeSkipped), map[string]any{"skip_if": step.SkipIf})
 }
 
 func recordChildProgress(childCtx *model.ExecutionContext, childStepID string, completed bool) {
@@ -358,19 +338,11 @@ func validateSubWorkflowParams(workflow *model.Workflow, resolvedParams map[stri
 }
 
 func emitSubEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, outcome, errMsg string) {
-	data := map[string]any{
-		"outcome":     outcome,
-		"duration_ms": time.Since(startTime).Milliseconds(),
-	}
+	data := map[string]any{}
 	if errMsg != "" {
 		data["error"] = errMsg
 	}
-	emitAudit(ctx, audit.Event{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		Prefix:    prefix,
-		Type:      audit.EventStepEnd,
-		Data:      data,
-	})
+	emitStepEnd(ctx, prefix, startTime, outcome, data)
 }
 
 // MergeSessionDecls adds session declarations from a newly loaded (sub-)workflow

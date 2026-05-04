@@ -544,7 +544,7 @@ func validateUIInputs(inputs []UIInput) error {
 }
 
 func validateUIInput(i int, input *UIInput, seen map[string]struct{}) error {
-	if input.Kind != "single_select" && input.Kind != "single-select" {
+	if input.Kind != "single_select" {
 		return fmt.Errorf(`inputs[%d]: only single_select inputs are supported`, i)
 	}
 	if input.ID == "" {

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/codagent/agent-runner/internal/usersettings"
 	"gopkg.in/yaml.v3"
@@ -54,10 +55,78 @@ func handleInternalWithIO(args []string, stdin io.Reader, stderr io.Writer) int 
 			return 1
 		}
 		return 0
+	case "json-value":
+		if len(args) != 2 {
+			_, _ = fmt.Fprintln(stderr, "agent-runner: internal json-value requires key")
+			return 1
+		}
+		value, err := decodeJSONStringField(stdin, args[1])
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "agent-runner: %v\n", err)
+			return 1
+		}
+		_, _ = fmt.Fprint(os.Stdout, value)
+		return 0
+	case "json-list-count":
+		if len(args) != 2 {
+			_, _ = fmt.Fprintln(stderr, "agent-runner: internal json-list-count requires key")
+			return 1
+		}
+		values, err := decodeJSONStringListField(stdin, args[1])
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "agent-runner: %v\n", err)
+			return 1
+		}
+		_, _ = fmt.Fprint(os.Stdout, len(values))
+		return 0
+	case "json-list-join":
+		if len(args) != 2 {
+			_, _ = fmt.Fprintln(stderr, "agent-runner: internal json-list-join requires key")
+			return 1
+		}
+		values, err := decodeJSONStringListField(stdin, args[1])
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "agent-runner: %v\n", err)
+			return 1
+		}
+		_, _ = fmt.Fprint(os.Stdout, strings.Join(values, ", "))
+		return 0
 	default:
 		_, _ = fmt.Fprintf(stderr, "agent-runner: unknown internal command %q\n", args[0])
 		return 1
 	}
+}
+
+func decodeJSONStringField(r io.Reader, key string) (string, error) {
+	var fields map[string]json.RawMessage
+	if err := json.NewDecoder(r).Decode(&fields); err != nil {
+		return "", fmt.Errorf("decode json input: %w", err)
+	}
+	raw, ok := fields[key]
+	if !ok {
+		return "", fmt.Errorf("json input missing %s", key)
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", fmt.Errorf("json field %s must be a string: %w", key, err)
+	}
+	return value, nil
+}
+
+func decodeJSONStringListField(r io.Reader, key string) ([]string, error) {
+	var fields map[string]json.RawMessage
+	if err := json.NewDecoder(r).Decode(&fields); err != nil {
+		return nil, fmt.Errorf("decode json input: %w", err)
+	}
+	raw, ok := fields[key]
+	if !ok {
+		return nil, fmt.Errorf("json input missing %s", key)
+	}
+	var values []string
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return nil, fmt.Errorf("json field %s must be an array of strings: %w", key, err)
+	}
+	return values, nil
 }
 
 func decodeWriteProfilePayload(r io.Reader, payload *writeProfilePayload) error {
@@ -190,9 +259,23 @@ func yamlScalar(value string) *yaml.Node {
 
 func writeAtomic0600(path string, payload []byte) error {
 	dir := filepath.Dir(path)
-	// #nosec G301 -- onboarding spec requires the parent directory to be 0755.
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create parent directory %s: %w", dir, err)
+	info, err := os.Stat(dir)
+	switch {
+	case err == nil:
+		if !info.IsDir() {
+			return fmt.Errorf("parent path %s is not a directory", dir)
+		}
+	case os.IsNotExist(err):
+		// #nosec G301 -- onboarding spec requires newly-created config dirs to be shareable/traversable.
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create parent directory %s: %w", dir, err)
+		}
+		// #nosec G302 -- only normalizes a newly-created config directory.
+		if err := os.Chmod(dir, 0o755); err != nil {
+			return fmt.Errorf("chmod parent directory %s: %w", dir, err)
+		}
+	default:
+		return fmt.Errorf("stat parent directory %s: %w", dir, err)
 	}
 	tmp, err := os.CreateTemp(dir, ".agent-runner-*.tmp")
 	if err != nil {

@@ -13,6 +13,7 @@ var (
 	InactiveAmber = lipgloss.AdaptiveColor{Dark: "#f0a830", Light: "#b45309"}
 	CompletedGray = lipgloss.AdaptiveColor{Dark: "#8b949e", Light: "#6b7280"}
 	AccentCyan    = lipgloss.AdaptiveColor{Dark: "#5ce0d8", Light: "#0891b2"}
+	AccentMagenta = lipgloss.AdaptiveColor{Dark: "#e879f9", Light: "#c026d3"}
 	SuccessGreen  = lipgloss.AdaptiveColor{Dark: "#4ade80", Light: "#16a34a"}
 	BodyText      = lipgloss.AdaptiveColor{Dark: "#c9d1d9", Light: "#1f2937"}
 	DimText       = lipgloss.AdaptiveColor{Dark: "#8b949e", Light: "#6b7280"}

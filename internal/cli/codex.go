@@ -19,9 +19,9 @@ type CodexAdapter struct{}
 //
 // Patterns:
 //   - Fresh interactive:  codex --no-alt-screen <prompt>
-//   - Fresh headless:     codex -a never exec --json <prompt>
+//   - Fresh headless:     codex --dangerously-bypass-approvals-and-sandbox exec --json <prompt>
 //   - Resume interactive: codex resume --no-alt-screen <uuid> <prompt>
-//   - Resume headless:    codex -a never exec resume --json <uuid> <prompt>
+//   - Resume headless:    codex --dangerously-bypass-approvals-and-sandbox exec resume --json <uuid> <prompt>
 //   - Model override:     appends -m <m> (fresh sessions only)
 //   - Effort override:    appends -c model_reasoning_effort="<effort>"
 //
@@ -36,7 +36,7 @@ func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 	resuming := input.SessionID != ""
 
 	if input.Headless {
-		args = append(args, "-a", "never", "exec")
+		args = append(args, "--dangerously-bypass-approvals-and-sandbox", "exec")
 		if resuming {
 			args = append(args, "resume", "--json")
 		} else {
@@ -405,14 +405,17 @@ func matchesSessionCwd(sessionFile, cwd string) bool {
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		var meta struct {
-			Type string `json:"type"`
-			Cwd  string `json:"cwd"`
+			Type    string `json:"type"`
+			Cwd     string `json:"cwd"`
+			Payload struct {
+				Cwd string `json:"cwd"`
+			} `json:"payload"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &meta); err != nil {
 			continue
 		}
 		if meta.Type == "session_meta" {
-			return meta.Cwd == cwd
+			return meta.Cwd == cwd || meta.Payload.Cwd == cwd
 		}
 	}
 	return false

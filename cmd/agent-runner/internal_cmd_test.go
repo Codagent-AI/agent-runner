@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"gopkg.in/yaml.v3"
 )
 
@@ -188,6 +189,56 @@ func TestWriteProfileCommandRoundTripCreates0600File(t *testing.T) {
 	if !strings.Contains(string(body), "interactive_base:") || !strings.Contains(string(body), "implementor:") {
 		t.Fatalf("written config missing expected agents:\n%s", body)
 	}
+}
+
+func TestWriteProfileCommandDoesNotRelaxExistingParentDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), ".agent-runner")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("create parent dir: %v", err)
+	}
+	target := filepath.Join(dir, "config.yaml")
+	stdin := strings.NewReader(`{"interactive_cli":"claude","headless_cli":"codex","target_path":` + quoteJSON(target) + `}`)
+	var stderr bytes.Buffer
+
+	code := handleInternalWithIO([]string{"write-profile"}, stdin, &stderr)
+	if code != 0 {
+		t.Fatalf("handleInternalWithIO() = %d, stderr: %s", code, stderr.String())
+	}
+
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat parent dir: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("target dir mode = %v, want preserved 0700", got)
+	}
+}
+
+func TestInternalJSONHelpersDecodeValidJSON(t *testing.T) {
+	t.Run("string field", func(t *testing.T) {
+		got, err := decodeJSONStringField(strings.NewReader(`{
+			"value": "gpt-5.4 \"stable\""
+		}`), "value")
+		if err != nil {
+			t.Fatalf("decodeJSONStringField() returned error: %v", err)
+		}
+		if got != `gpt-5.4 "stable"` {
+			t.Fatalf("decodeJSONStringField() = %q", got)
+		}
+	})
+
+	t.Run("list field", func(t *testing.T) {
+		got, err := decodeJSONStringListField(strings.NewReader(`{
+			"items": ["planner, implementor", "codex"]
+		}`), "items")
+		if err != nil {
+			t.Fatalf("decodeJSONStringListField() returned error: %v", err)
+		}
+		want := []string{"planner, implementor", "codex"}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Fatalf("decodeJSONStringListField() mismatch (-want +got):\n%s", diff)
+		}
+	})
 }
 
 func quoteJSON(s string) string {

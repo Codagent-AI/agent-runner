@@ -1,3 +1,5 @@
-#!/bin/bash
-set -euo pipefail
-jq -rj '.value' </dev/stdin
+#!/bin/sh
+set -eu
+
+: "${AGENT_RUNNER_BIN:=agent-runner}"
+"$AGENT_RUNNER_BIN" internal json-value value

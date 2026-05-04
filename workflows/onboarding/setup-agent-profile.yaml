@@ -11,7 +11,7 @@ steps:
     title: Interactive Agent - CLI Adapter
     body: Choose the CLI adapter for planning and conversation tasks.
     inputs:
-      - kind: single-select
+      - kind: single_select
         id: cli
         prompt: CLI adapter
         options: ["{{detected_adapters}}"]
@@ -38,7 +38,7 @@ steps:
     title: Interactive Agent - Model
     body: Choose the model for {{interactive_choices.cli}}.
     inputs:
-      - kind: single-select
+      - kind: single_select
         id: model
         prompt: Model
         options: ["{{interactive_models}}"]
@@ -46,19 +46,19 @@ steps:
       - label: Continue
         outcome: continue
     capture: interactive_model_choice
-    skip_if: 'sh: [ "{{interactive_model_count}}" = "0" ]'
+    skip_if: 'sh: [ {{interactive_model_count}} = 0 ]'
 
   - id: interactive-model-value
     script: echo-value.sh
     script_inputs:
       value: "{{interactive_model_choice.model}}"
     capture: interactive_model
-    skip_if: 'sh: [ "{{interactive_model_count}}" = "0" ]'
+    skip_if: 'sh: [ {{interactive_model_count}} = 0 ]'
 
   - id: interactive-model-default
     command: printf ''
     capture: interactive_model
-    skip_if: 'sh: [ "{{interactive_model_count}}" != "0" ]'
+    skip_if: 'sh: [ {{interactive_model_count}} != 0 ]'
 
   - id: detect-adapters-hl
     script: detect-adapters.sh
@@ -70,7 +70,7 @@ steps:
     title: Headless Agent - CLI Adapter
     body: Choose the CLI adapter for unattended implementation tasks.
     inputs:
-      - kind: single-select
+      - kind: single_select
         id: cli
         prompt: CLI adapter
         options: ["{{detected_adapters_hl}}"]
@@ -97,7 +97,7 @@ steps:
     title: Headless Agent - Model
     body: Choose the model for {{headless_choices.cli}}.
     inputs:
-      - kind: single-select
+      - kind: single_select
         id: model
         prompt: Model
         options: ["{{headless_models}}"]
@@ -105,26 +105,26 @@ steps:
       - label: Continue
         outcome: continue
     capture: headless_model_choice
-    skip_if: 'sh: [ "{{headless_model_count}}" = "0" ]'
+    skip_if: 'sh: [ {{headless_model_count}} = 0 ]'
 
   - id: headless-model-value
     script: echo-value.sh
     script_inputs:
       value: "{{headless_model_choice.model}}"
     capture: headless_model
-    skip_if: 'sh: [ "{{headless_model_count}}" = "0" ]'
+    skip_if: 'sh: [ {{headless_model_count}} = 0 ]'
 
   - id: headless-model-default
     command: printf ''
     capture: headless_model
-    skip_if: 'sh: [ "{{headless_model_count}}" != "0" ]'
+    skip_if: 'sh: [ {{headless_model_count}} != 0 ]'
 
   - id: pick-scope
     mode: ui
     title: Config Scope
     body: Choose where the profile should be saved.
     inputs:
-      - kind: single-select
+      - kind: single_select
         id: scope
         prompt: Scope
         options: ["global", "project"]
@@ -153,14 +153,14 @@ steps:
   - id: overwrite-default
     command: printf overwrite
     capture: overwrite_action
-    skip_if: 'sh: [ "{{collision_count}}" != "0" ]'
+    skip_if: 'sh: [ {{collision_count}} != 0 ]'
 
   - id: format-collisions
     script: format-list.sh
     script_inputs:
       items: "{{collisions}}"
     capture: collisions_text
-    skip_if: 'sh: [ "{{collision_count}}" = "0" ]'
+    skip_if: 'sh: [ {{collision_count}} = 0 ]'
 
   - id: confirm-overwrite
     mode: ui
@@ -172,11 +172,11 @@ steps:
       - label: Cancel
         outcome: cancel
     outcome_capture: overwrite_action
-    skip_if: 'sh: [ "{{collision_count}}" = "0" ]'
+    skip_if: 'sh: [ {{collision_count}} = 0 ]'
 
   - id: fail-overwrite-cancel
     command: exit 1
-    skip_if: 'sh: [ "{{overwrite_action}}" != "cancel" ]'
+    skip_if: 'sh: [ {{overwrite_action}} != cancel ]'
 
   - id: confirm
     mode: ui
@@ -194,11 +194,11 @@ steps:
       - label: Cancel
         outcome: cancel
     outcome_capture: confirm_action
-    skip_if: 'sh: [ "{{overwrite_action}}" = "cancel" ]'
+    skip_if: 'sh: [ {{overwrite_action}} = cancel ]'
 
   - id: fail-confirm-cancel
     command: exit 1
-    skip_if: 'sh: [ "{{confirm_action}}" != "cancel" ]'
+    skip_if: 'sh: [ {{confirm_action}} != cancel ]'
 
   - id: write-profile
     script: write-profile.sh
@@ -208,4 +208,4 @@ steps:
       headless_cli: "{{headless_choices.cli}}"
       headless_model: "{{headless_model}}"
       target_path: "{{target_path}}"
-    skip_if: 'sh: [ "{{confirm_action}}" != "confirm" ]'
+    skip_if: 'sh: [ {{confirm_action}} != confirm ]'

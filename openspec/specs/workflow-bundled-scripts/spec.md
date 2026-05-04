@@ -181,4 +181,3 @@ The runner SHALL tee the script's stdout to the terminal in real time regardless
 #### Scenario: Tee with capture_format=json
 - **WHEN** a script writes a JSON document to stdout with `capture: out` and `capture_format: json`
 - **THEN** the raw JSON text appears on the terminal in real time, and after exit the captured value is the parsed JSON
-

@@ -117,6 +117,19 @@ func shellStep(id, cmd string) model.Step {
 	return model.Step{ID: id, Command: cmd, Session: model.SessionNew}
 }
 
+func TestMaterializeBundledAssetsCreatesMarkerForNamespaceWithoutAssets(t *testing.T) {
+	sessionDir := t.TempDir()
+
+	if err := materializeBundledAssets(sessionDir, "builtin:openspec/change.yaml"); err != nil {
+		t.Fatalf("materialize bundled assets: %v", err)
+	}
+
+	marker := filepath.Join(sessionDir, "bundled", "openspec", ".complete")
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("stat marker: %v", err)
+	}
+}
+
 func TestRunWorkflow(t *testing.T) {
 	t.Run("runs single step workflow", func(t *testing.T) {
 		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}}}

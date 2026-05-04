@@ -1,5 +1,7 @@
 package liverun
 
+import "github.com/codagent/agent-runner/internal/model"
+
 // OutputChunkMsg delivers a batch of subprocess output bytes to the TUI.
 // Bytes have had ANSI escape sequences stripped for clean rendering.
 // StepPrefix matches the audit-log event prefix for the step.
@@ -25,6 +27,13 @@ type ResumedMsg struct{}
 // transitioning from suspended (interactive) to active (non-interactive) and
 // alt-screen has not yet been requested.
 type ShowTUIMsg struct{}
+
+// UIRequestMsg asks the live run view to render a mode: ui step inside the
+// existing run-view chrome and reply when the user chooses an outcome.
+type UIRequestMsg struct {
+	Request model.UIStepRequest
+	Reply   chan<- model.UIStepResult
+}
 
 // ExecDoneMsg is sent when the runner goroutine finishes (success, failure, or panic).
 type ExecDoneMsg struct {

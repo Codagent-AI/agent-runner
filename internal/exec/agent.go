@@ -23,8 +23,8 @@ import (
 var interactiveRunnerFn = pty.RunInteractive
 
 // completionInstruction is appended to the prompt for interactive agent steps
-// so the agent knows how to signal step completion via the stdout sentinel.
-const completionInstruction = "\n\nWhen you or the user determine this step is complete, continue to the next step by running the following command without any additional commentary:\nprintf '\\x1b]999;signal-continuation\\x07' > \"$AGENT_RUNNER_TTY\""
+// so the agent knows how to signal step completion via the PTY output scanner.
+const completionInstruction = "\n\nWhen you or the user determine this step is complete, continue to the next step by replying with one line containing only the continuation marker formed by joining `AGENT_RUNNER_` and `CONTINUE` with no separator. Do not run a shell command, use a tool, wrap it in a code block, or add any other commentary."
 
 // headlessPreamble is prepended to headless prompts to reinforce autonomous behavior.
 const headlessPreamble = "You are running autonomously in headless mode with no human in the loop. " +
@@ -520,28 +520,20 @@ func emitAgentStart(
 	step *model.Step,
 	sessionID, cliName, resolvedModel, enrichment string,
 ) {
-	emitAudit(ctx, audit.Event{
-		Timestamp: startTime.UTC().Format(time.RFC3339),
-		Prefix:    prefix,
-		Type:      audit.EventStepStart,
-		Data: map[string]any{
-			"prompt":              prompt,
-			"mode":                string(mode),
-			"session_strategy":    string(step.Session),
-			"resolved_session_id": sessionID,
-			"model":               resolvedModel,
-			"cli":                 cliName,
-			"enrichment":          enrichment,
-			"context":             contextSnapshot(ctx),
-		},
+	emitStepStart(ctx, prefix, startTime, map[string]any{
+		"prompt":              prompt,
+		"mode":                string(mode),
+		"session_strategy":    string(step.Session),
+		"resolved_session_id": sessionID,
+		"model":               resolvedModel,
+		"cli":                 cliName,
+		"enrichment":          enrichment,
 	})
 }
 
 func emitAgentEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, discoveredID string, outcome StepOutcome, stdout, stderr string) {
 	data := map[string]any{
 		"discovered_session_id": discoveredID,
-		"outcome":               string(outcome),
-		"duration_ms":           time.Since(startTime).Milliseconds(),
 	}
 	if stdout != "" {
 		data["stdout"] = stdout
@@ -549,12 +541,7 @@ func emitAgentEnd(ctx *model.ExecutionContext, prefix string, startTime time.Tim
 	if stderr != "" {
 		data["stderr"] = stderr
 	}
-	emitAudit(ctx, audit.Event{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		Prefix:    prefix,
-		Type:      audit.EventStepEnd,
-		Data:      data,
-	})
+	emitStepEnd(ctx, prefix, startTime, string(outcome), data)
 }
 
 // buildStepPrefix returns a preamble for interactive prompts that orients the
@@ -626,24 +613,9 @@ func resolveSessionID(step *model.Step, ctx *model.ExecutionContext) (string, er
 }
 
 func emitAgentFailure(ctx *model.ExecutionContext, prefix string, startTime time.Time, mode string, step *model.Step, errMsg string) {
-	emitAudit(ctx, audit.Event{
-		Timestamp: startTime.UTC().Format(time.RFC3339),
-		Prefix:    prefix,
-		Type:      audit.EventStepStart,
-		Data: map[string]any{
-			"mode":             mode,
-			"session_strategy": string(step.Session),
-			"context":          contextSnapshot(ctx),
-		},
+	emitStepStart(ctx, prefix, startTime, map[string]any{
+		"mode":             mode,
+		"session_strategy": string(step.Session),
 	})
-	emitAudit(ctx, audit.Event{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		Prefix:    prefix,
-		Type:      audit.EventStepEnd,
-		Data: map[string]any{
-			"outcome":     "failed",
-			"error":       errMsg,
-			"duration_ms": time.Since(startTime).Milliseconds(),
-		},
-	})
+	emitStepEnd(ctx, prefix, startTime, "failed", map[string]any{"error": errMsg})
 }

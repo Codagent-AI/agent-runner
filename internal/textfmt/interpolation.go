@@ -66,7 +66,9 @@ func ShellQuote(s string) string {
 // shell-quotes every substituted value, preventing injection when the
 // result is passed to sh -c.
 func InterpolateShellSafe(template string, params, capturedVars, builtins map[string]string) (string, error) {
-	return Interpolate(template, shellQuoteMap(params), shellQuoteMap(capturedVars), shellQuoteMap(builtins))
+	return interpolateShellSafe(template, func(key string) (string, error) {
+		return resolveLegacyStringValue(key, params, capturedVars, builtins)
+	})
 }
 
 func InterpolateTyped(template string, params map[string]string, capturedVars map[string]model.CapturedValue, builtins map[string]string) (string, error) {
@@ -103,20 +105,117 @@ func ResolveTypedValue(expr string, capturedVars map[string]model.CapturedValue)
 }
 
 func InterpolateShellSafeTyped(template string, params map[string]string, capturedVars map[string]model.CapturedValue, builtins map[string]string) (string, error) {
-	var errFound error
-	result := placeholderRe.ReplaceAllStringFunc(template, func(match string) string {
-		key := placeholderRe.FindStringSubmatch(match)[1]
-		value, err := resolveStringValue(key, params, capturedVars, builtins)
-		if err != nil {
-			errFound = err
-			return match
-		}
-		return ShellQuote(value)
+	return interpolateShellSafe(template, func(key string) (string, error) {
+		return resolveStringValue(key, params, capturedVars, builtins)
 	})
-	if errFound != nil {
-		return "", errFound
+}
+
+func interpolateShellSafe(template string, resolve func(string) (string, error)) (string, error) {
+	matches := placeholderRe.FindAllStringSubmatchIndex(template, -1)
+	if len(matches) == 0 {
+		return template, nil
 	}
-	return result, nil
+
+	var out strings.Builder
+	out.Grow(len(template))
+	last := 0
+	for _, match := range matches {
+		out.WriteString(template[last:match[0]])
+		key := template[match[2]:match[3]]
+		value, err := resolve(key)
+		if err != nil {
+			return "", err
+		}
+		switch shellQuoteContext(template[:match[0]]) {
+		case shellContextDouble:
+			out.WriteString(escapeDoubleQuotedShell(value))
+		case shellContextSingle:
+			return "", fmt.Errorf("cannot safely interpolate {{%s}} inside single quotes", key)
+		default:
+			out.WriteString(ShellQuote(value))
+		}
+		last = match[1]
+	}
+	out.WriteString(template[last:])
+	return out.String(), nil
+}
+
+type shellContext int
+
+const (
+	shellContextBare shellContext = iota
+	shellContextSingle
+	shellContextDouble
+)
+
+func shellQuoteContext(prefix string) shellContext {
+	state := shellContextBare
+	for i := 0; i < len(prefix); i++ {
+		switch state {
+		case shellContextBare:
+			switch prefix[i] {
+			case '\'':
+				state = shellContextSingle
+			case '"':
+				state = shellContextDouble
+			case '\\':
+				i++
+			}
+		case shellContextSingle:
+			if prefix[i] == '\'' {
+				state = shellContextBare
+			}
+		case shellContextDouble:
+			switch prefix[i] {
+			case '"':
+				state = shellContextBare
+			case '\\':
+				if i+1 < len(prefix) && strings.ContainsRune("$`\"\\\n", rune(prefix[i+1])) {
+					i++
+				}
+			}
+		}
+	}
+	return state
+}
+
+func escapeDoubleQuotedShell(s string) string {
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		`$`, `\$`,
+		"`", "\\`",
+		`"`, `\"`,
+	)
+	return replacer.Replace(s)
+}
+
+func resolveLegacyStringValue(key string, params, capturedVars, builtins map[string]string) (string, error) {
+	if value, ok := capturedVars[key]; ok {
+		return value, nil
+	}
+	if value, ok := params[key]; ok {
+		return value, nil
+	}
+	if value, ok := builtins[key]; ok {
+		return value, nil
+	}
+	if strings.Contains(key, ".") {
+		parts := strings.SplitN(key, ".", 2)
+		raw, ok := capturedVars[parts[0]]
+		if !ok {
+			return "", fmt.Errorf("undefined variable: {{%s}}", key)
+		}
+		var fields map[string]string
+		if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+			return "", fmt.Errorf("variable {{%s}} is not a map capture", parts[0])
+		}
+		value, ok := fields[parts[1]]
+		if !ok {
+			return "", fmt.Errorf("undefined field: {{%s}}", key)
+		}
+		return value, nil
+	}
+	return "", fmt.Errorf("undefined variable: {{%s}}", key)
 }
 
 func resolveStringValue(key string, params map[string]string, capturedVars map[string]model.CapturedValue, builtins map[string]string) (string, error) {
@@ -154,15 +253,4 @@ func resolveStringValue(key string, params map[string]string, capturedVars map[s
 		return value, nil
 	}
 	return "", fmt.Errorf("undefined variable: {{%s}}", key)
-}
-
-func shellQuoteMap(m map[string]string) map[string]string {
-	if m == nil {
-		return nil
-	}
-	quoted := make(map[string]string, len(m))
-	for k, v := range m {
-		quoted[k] = ShellQuote(v)
-	}
-	return quoted
 }

@@ -2,10 +2,10 @@ package main
 
 import (
 	"errors"
-	"reflect"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/usersettings"
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestEnsureOnboardingForTUIFiresOnlyForFreshTTY(t *testing.T) {
@@ -16,6 +16,10 @@ func TestEnsureOnboardingForTUIFiresOnlyForFreshTTY(t *testing.T) {
 		},
 		isStdinTTY:  func() bool { return true },
 		isStdoutTTY: func() bool { return true },
+		resumeRun: func(string) int {
+			t.Fatal("resumeRun should not be called")
+			return 0
+		},
 		runWorkflow: func(ref string) int {
 			launched = append(launched, ref)
 			return 7
@@ -25,8 +29,35 @@ func TestEnsureOnboardingForTUIFiresOnlyForFreshTTY(t *testing.T) {
 	if code != 7 {
 		t.Fatalf("ensureOnboardingForTUI() = %d, want workflow exit code 7", code)
 	}
-	if !reflect.DeepEqual(launched, []string{"builtin:onboarding/welcome.yaml"}) {
-		t.Fatalf("launched = %#v", launched)
+	if diff := cmp.Diff([]string{"builtin:onboarding/welcome.yaml"}, launched); diff != "" {
+		t.Fatalf("launched mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestEnsureOnboardingForTUIResumesMostRecentIncompleteRun(t *testing.T) {
+	var resumed []string
+	code := ensureOnboardingForTUI(onboardingDeps{
+		load:        func() (usersettings.Settings, error) { return usersettings.Settings{}, nil },
+		isStdinTTY:  func() bool { return true },
+		isStdoutTTY: func() bool { return true },
+		incompleteOnboardingRun: func() (string, error) {
+			return "onboarding-welcome-2026-05-02T12-00-00Z", nil
+		},
+		resumeRun: func(runID string) int {
+			resumed = append(resumed, runID)
+			return 9
+		},
+		runWorkflow: func(string) int {
+			t.Fatal("runWorkflow should not be called when an incomplete run exists")
+			return 0
+		},
+	})
+
+	if code != 9 {
+		t.Fatalf("ensureOnboardingForTUI() = %d, want resume exit code 9", code)
+	}
+	if diff := cmp.Diff([]string{"onboarding-welcome-2026-05-02T12-00-00Z"}, resumed); diff != "" {
+		t.Fatalf("resumed mismatch (-want +got):\n%s", diff)
 	}
 }
 

@@ -81,7 +81,7 @@ type ExecutionContext struct {
 	// interactive steps.
 	PrepareStepHook func(interactive bool)
 
-	UIStepHandler func(UIStepRequest) (UIStepResult, error)
+	UIStepHandler func(*UIStepRequest) (UIStepResult, error)
 }
 
 // RootContextOptions configures a new root execution context.
@@ -99,7 +99,7 @@ type RootContextOptions struct {
 	AuditLogger         audit.EventLogger
 	NamedSessions       map[string]string
 	NamedSessionDecls   map[string]string
-	UIStepHandler       func(UIStepRequest) (UIStepResult, error)
+	UIStepHandler       func(*UIStepRequest) (UIStepResult, error)
 }
 
 // NewRootContext creates a top-level execution context.
@@ -217,11 +217,16 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		sessionProfiles[k] = v
 	}
 
+	capturedVars := make(map[string]CapturedValue)
+	for k, v := range parent.CapturedVariables {
+		capturedVars[k] = v
+	}
+
 	return &ExecutionContext{
 		Params:              params,
 		SessionIDs:          sessionIDs,
 		SessionProfiles:     sessionProfiles,
-		CapturedVariables:   make(map[string]CapturedValue),
+		CapturedVariables:   capturedVars,
 		LastStepOutcome:     nil,
 		LastSessionStepID:   parent.LastSessionStepID,
 		NestingPath:         nestingPath,
@@ -287,11 +292,16 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		sessionProfiles[k] = v
 	}
 
+	capturedVars := make(map[string]CapturedValue)
+	for k, v := range parent.CapturedVariables {
+		capturedVars[k] = v
+	}
+
 	return &ExecutionContext{
 		Params:              params,
 		SessionIDs:          sessionIDs,
 		SessionProfiles:     sessionProfiles,
-		CapturedVariables:   make(map[string]CapturedValue),
+		CapturedVariables:   capturedVars,
 		LastStepOutcome:     nil,
 		LastSessionStepID:   parent.LastSessionStepID,
 		NestingPath:         nestingPath,

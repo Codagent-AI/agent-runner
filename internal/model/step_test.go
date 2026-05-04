@@ -430,6 +430,15 @@ func TestStepSchemaOnboardingPrimitives(t *testing.T) {
 		}
 	})
 
+	t.Run("rejects hyphenated single select kind", func(t *testing.T) {
+		s := validUI()
+		s.Inputs = []UIInput{{Kind: "single-select", ID: "adapter", Prompt: "Adapter", Options: []string{"claude"}}}
+		err := s.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), "single_select") {
+			t.Fatalf("expected single_select kind error, got %v", err)
+		}
+	})
+
 	t.Run("rejects duplicate ui input ids", func(t *testing.T) {
 		s := validUI()
 		s.Inputs = []UIInput{

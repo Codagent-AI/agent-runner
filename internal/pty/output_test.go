@@ -40,6 +40,100 @@ func TestOutputProcessor(t *testing.T) {
 		}
 	})
 
+	t.Run("detects text sentinel line and strips it", func(t *testing.T) {
+		p := &outputProcessor{}
+		input := "before\n" + textSentinel + "\nafter"
+		r := p.process([]byte(input))
+		if !r.triggered {
+			t.Fatal("expected trigger")
+		}
+		if string(r.forward) != "before\nafter" {
+			t.Fatalf("expected %q, got %q", "before\nafter", string(r.forward))
+		}
+	})
+
+	t.Run("detects codex bullet text sentinel line and strips it", func(t *testing.T) {
+		p := &outputProcessor{}
+		input := "before\n• " + textSentinel + "\nafter"
+		r := p.process([]byte(input))
+		if !r.triggered {
+			t.Fatal("expected trigger")
+		}
+		if string(r.forward) != "before\nafter" {
+			t.Fatalf("expected %q, got %q", "before\nafter", string(r.forward))
+		}
+	})
+
+	t.Run("does not trigger on embedded text sentinel", func(t *testing.T) {
+		p := &outputProcessor{}
+		input := "before" + textSentinel + "after"
+		r := p.process([]byte(input))
+		if r.triggered {
+			t.Fatal("unexpected trigger")
+		}
+		if string(r.forward) != input {
+			t.Fatalf("expected %q, got %q", input, string(r.forward))
+		}
+	})
+
+	t.Run("text sentinel detection across chunk boundaries", func(t *testing.T) {
+		p := &outputProcessor{}
+		input := textSentinel + "\n"
+		half := len(input) / 2
+		r1 := p.process([]byte(input[:half]))
+		if r1.triggered {
+			t.Fatal("unexpected trigger on first half")
+		}
+		if len(r1.forward) != 0 {
+			t.Fatalf("expected no forwarded bytes on first half, got %q", string(r1.forward))
+		}
+
+		r2 := p.process([]byte(input[half:]))
+		if !r2.triggered {
+			t.Fatal("expected trigger after second half")
+		}
+		if len(r2.forward) != 0 {
+			t.Fatalf("expected no forwarded bytes on second half, got %q", string(r2.forward))
+		}
+	})
+
+	t.Run("incomplete text sentinel at process exit is flushed", func(t *testing.T) {
+		p := &outputProcessor{}
+		partial := textSentinel[:10]
+		r := p.process([]byte(partial))
+		if r.triggered {
+			t.Fatal("unexpected trigger on partial sentinel")
+		}
+		if len(r.forward) != 0 {
+			t.Fatalf("expected no forwarded bytes (buffered), got %q", string(r.forward))
+		}
+		flushed := p.flush()
+		if string(flushed) != partial {
+			t.Fatalf("expected flushed %q, got %q", partial, string(flushed))
+		}
+	})
+
+	t.Run("detects text sentinel at process exit without newline", func(t *testing.T) {
+		p := &outputProcessor{}
+		r := p.process([]byte(textSentinel))
+		if r.triggered {
+			t.Fatal("unexpected trigger before process exit")
+		}
+		if len(r.forward) != 0 {
+			t.Fatalf("expected no forwarded bytes (buffered), got %q", string(r.forward))
+		}
+		finished := p.finish()
+		if !finished.triggered {
+			t.Fatal("expected trigger at process exit")
+		}
+		if len(finished.forward) != 0 {
+			t.Fatalf("expected marker stripped at process exit, got %q", string(finished.forward))
+		}
+		if flushed := p.flush(); len(flushed) != 0 {
+			t.Fatalf("expected no buffered output after marker trigger, got %q", string(flushed))
+		}
+	})
+
 	t.Run("sentinel detection across chunk boundaries", func(t *testing.T) {
 		p := &outputProcessor{}
 		// Split the sentinel in the middle of the payload.
