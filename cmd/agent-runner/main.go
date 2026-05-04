@@ -327,6 +327,10 @@ func handleResumeWithOptions(sessionID string, liveOpts liveTUIOptions) int {
 		return 1
 	}
 
+	return handleResumeStatePathWithOptions(stateFilePath, sessionID, liveOpts)
+}
+
+func handleResumeStatePathWithOptions(stateFilePath, sessionID string, liveOpts liveTUIOptions) int {
 	if os.Getenv("AGENT_RUNNER_NO_TUI") == "1" {
 		result, runErr := runner.ResumeWorkflow(stateFilePath, &runner.Options{
 			ProcessRunner: &realProcessRunner{},
@@ -1235,8 +1239,9 @@ var defaultOnboardingDeps = onboardingDeps{
 	isStdinTTY:              func() bool { return isatty.IsTerminal(os.Stdin.Fd()) },
 	isStdoutTTY:             func() bool { return isatty.IsTerminal(os.Stdout.Fd()) },
 	incompleteOnboardingRun: findIncompleteOnboardingRun,
-	resumeRun: func(runID string) int {
-		return handleResumeWithOptions(runID, liveTUIOptions{quitOnDone: true})
+	resumeRun: func(statePath string) int {
+		runID := filepath.Base(filepath.Dir(statePath))
+		return handleResumeStatePathWithOptions(statePath, runID, liveTUIOptions{quitOnDone: true})
 	},
 	runWorkflow: func(ref string) int {
 		return handleRunWithOptions([]string{ref}, liveTUIOptions{quitOnDone: true})
@@ -1256,13 +1261,13 @@ func ensureOnboardingForTUI(deps onboardingDeps) int {
 		return 0
 	}
 	if deps.incompleteOnboardingRun != nil {
-		runID, err := deps.incompleteOnboardingRun()
+		statePath, err := deps.incompleteOnboardingRun()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 			return 1
 		}
-		if runID != "" {
-			return deps.resumeRun(runID)
+		if statePath != "" {
+			return deps.resumeRun(statePath)
 		}
 	}
 	ref, err := builtinworkflows.Resolve("onboarding:welcome")
@@ -1278,26 +1283,47 @@ func findIncompleteOnboardingRun() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("cannot determine working directory: %w", err)
-	}
 
-	projectDir := filepath.Join(home, ".agent-runner", "projects", audit.EncodePath(cwd))
-	infos, err := runs.ListForDir(projectDir)
+	projectsDir := filepath.Join(home, ".agent-runner", "projects")
+	entries, err := os.ReadDir(projectsDir)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
 		return "", err
 	}
-	for i := range infos {
-		info := &infos[i]
-		if info.Status == runs.StatusCompleted {
+
+	var candidates []runs.RunInfo
+	for _, entry := range entries {
+		if !entry.IsDir() {
 			continue
 		}
-		if info.WorkflowName == "onboarding-welcome" || info.WorkflowFile == "builtin:onboarding/welcome.yaml" {
-			return info.SessionID, nil
+		projectDir := filepath.Join(projectsDir, entry.Name())
+		infos, listErr := runs.ListForDir(projectDir)
+		if listErr != nil {
+			continue
+		}
+		for i := range infos {
+			info := infos[i]
+			if info.Status == runs.StatusCompleted {
+				continue
+			}
+			if info.WorkflowName == "onboarding-welcome" || info.WorkflowFile == "builtin:onboarding/welcome.yaml" {
+				candidates = append(candidates, info)
+			}
 		}
 	}
-	return "", nil
+
+	if len(candidates) == 0 {
+		return "", nil
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].LastUpdate.Equal(candidates[j].LastUpdate) {
+			return candidates[i].StartTime.After(candidates[j].StartTime)
+		}
+		return candidates[i].LastUpdate.After(candidates[j].LastUpdate)
+	})
+	return filepath.Join(candidates[0].SessionDir, "state.json"), nil
 }
 
 // parseParams separates positional args from key=value pairs.

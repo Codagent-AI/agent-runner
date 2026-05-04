@@ -2,8 +2,13 @@ package main
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/stateio"
 	"github.com/codagent/agent-runner/internal/usersettings"
 	"github.com/google/go-cmp/cmp"
 )
@@ -41,10 +46,10 @@ func TestEnsureOnboardingForTUIResumesMostRecentIncompleteRun(t *testing.T) {
 		isStdinTTY:  func() bool { return true },
 		isStdoutTTY: func() bool { return true },
 		incompleteOnboardingRun: func() (string, error) {
-			return "onboarding-welcome-2026-05-02T12-00-00Z", nil
+			return "/tmp/onboarding/state.json", nil
 		},
-		resumeRun: func(runID string) int {
-			resumed = append(resumed, runID)
+		resumeRun: func(statePath string) int {
+			resumed = append(resumed, statePath)
 			return 9
 		},
 		runWorkflow: func(string) int {
@@ -56,8 +61,53 @@ func TestEnsureOnboardingForTUIResumesMostRecentIncompleteRun(t *testing.T) {
 	if code != 9 {
 		t.Fatalf("ensureOnboardingForTUI() = %d, want resume exit code 9", code)
 	}
-	if diff := cmp.Diff([]string{"onboarding-welcome-2026-05-02T12-00-00Z"}, resumed); diff != "" {
+	if diff := cmp.Diff([]string{"/tmp/onboarding/state.json"}, resumed); diff != "" {
 		t.Fatalf("resumed mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestFindIncompleteOnboardingRunScansAllProjects(t *testing.T) {
+	home := t.TempDir()
+	originalHome := userHomeDir
+	userHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHomeDir = originalHome })
+
+	currentProject := t.TempDir()
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(currentProject); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(originalWD) })
+
+	oldState := writeOnboardingState(t, home, "current-project", "onboarding-welcome-2026-05-02T12-00-00Z", false)
+	wantState := writeOnboardingState(t, home, "other-project", "onboarding-welcome-2026-05-03T12-00-00Z", false)
+	_ = writeOnboardingState(t, home, "newer-completed-project", "onboarding-welcome-2026-05-04T12-00-00Z", true)
+	badRunsPath := filepath.Join(home, ".agent-runner", "projects", "aaa-bad-project", "runs")
+	if err := os.MkdirAll(filepath.Dir(badRunsPath), 0o755); err != nil {
+		t.Fatalf("create bad project dir: %v", err)
+	}
+	if err := os.WriteFile(badRunsPath, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("write bad runs path: %v", err)
+	}
+
+	oldTime := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	newTime := time.Date(2026, 5, 3, 12, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(oldState, oldTime, oldTime); err != nil {
+		t.Fatalf("Chtimes old state: %v", err)
+	}
+	if err := os.Chtimes(wantState, newTime, newTime); err != nil {
+		t.Fatalf("Chtimes want state: %v", err)
+	}
+
+	got, err := findIncompleteOnboardingRun()
+	if err != nil {
+		t.Fatalf("findIncompleteOnboardingRun() returned error: %v", err)
+	}
+	if got != wantState {
+		t.Fatalf("findIncompleteOnboardingRun() = %q, want %q", got, wantState)
 	}
 }
 
@@ -109,4 +159,27 @@ func TestEnsureOnboardingForTUILoadErrorFails(t *testing.T) {
 	if code == 0 {
 		t.Fatal("ensureOnboardingForTUI() = 0, want non-zero")
 	}
+}
+
+func writeOnboardingState(t *testing.T, home, projectName, sessionID string, completed bool) string {
+	t.Helper()
+
+	sessionDir := filepath.Join(home, ".agent-runner", "projects", projectName, "runs", sessionID)
+	state := model.RunState{
+		WorkflowFile: "builtin:onboarding/welcome.yaml",
+		WorkflowName: "onboarding-welcome",
+		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+			StepID:            "welcome",
+			SessionIDs:        map[string]string{},
+			CapturedVariables: map[string]model.CapturedValue{},
+			Child:             nil,
+		}},
+		Params:       map[string]string{},
+		WorkflowHash: "test",
+		Completed:    completed,
+	}
+	if err := stateio.WriteState(&state, sessionDir); err != nil {
+		t.Fatalf("WriteState: %v", err)
+	}
+	return filepath.Join(sessionDir, "state.json")
 }
