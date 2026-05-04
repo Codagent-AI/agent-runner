@@ -19,9 +19,14 @@ const (
 
 type Settings struct {
 	Theme      Theme
+	Setup      SetupSettings
 	Onboarding OnboardingSettings
 
 	raw string
+}
+
+type SetupSettings struct {
+	CompletedAt string `yaml:"completed_at,omitempty"`
 }
 
 type OnboardingSettings struct {
@@ -94,6 +99,18 @@ func Load() (Settings, error) {
 				settings.Theme = ThemeDark
 			}
 			continue
+		}
+		if key.Value == "setup" && value.Kind == yaml.MappingNode {
+			for j := 0; j+1 < len(value.Content); j += 2 {
+				k := value.Content[j]
+				v := value.Content[j+1]
+				if v.Kind != yaml.ScalarNode {
+					continue
+				}
+				if k.Value == "completed_at" {
+					settings.Setup.CompletedAt = v.Value
+				}
+			}
 		}
 		if key.Value == "onboarding" && value.Kind == yaml.MappingNode {
 			for j := 0; j+1 < len(value.Content); j += 2 {
@@ -177,6 +194,14 @@ func marshalSettings(settings Settings) ([]byte, error) {
 		setScalar(root, "theme", string(settings.Theme))
 	} else {
 		removeKey(root, "theme")
+	}
+
+	if settings.Setup.CompletedAt != "" {
+		setup := mappingValue(root, "setup")
+		setTimestampScalar(setup, "completed_at", settings.Setup.CompletedAt)
+		removeKey(setup, "dismissed")
+	} else {
+		removeKey(root, "setup")
 	}
 
 	if settings.Onboarding.CompletedAt != "" || settings.Onboarding.Dismissed != "" {

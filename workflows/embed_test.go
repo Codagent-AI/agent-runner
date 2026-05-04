@@ -13,19 +13,12 @@ import (
 )
 
 func TestOnboardingWorkflowsResolveAndAssetsList(t *testing.T) {
-	welcome, err := Resolve("onboarding:welcome")
+	onboarding, err := Resolve("onboarding:onboarding")
 	if err != nil {
-		t.Fatalf("Resolve(onboarding:welcome) returned error: %v", err)
+		t.Fatalf("Resolve(onboarding:onboarding) returned error: %v", err)
 	}
-	if welcome != "builtin:onboarding/welcome.yaml" {
-		t.Fatalf("welcome ref = %q", welcome)
-	}
-	setup, err := Resolve("onboarding:setup-agent-profile")
-	if err != nil {
-		t.Fatalf("Resolve(onboarding:setup-agent-profile) returned error: %v", err)
-	}
-	if setup != "builtin:onboarding/setup-agent-profile.yaml" {
-		t.Fatalf("setup ref = %q", setup)
+	if onboarding != "builtin:onboarding/onboarding.yaml" {
+		t.Fatalf("onboarding ref = %q", onboarding)
 	}
 	demo, err := Resolve("onboarding:step-types-demo")
 	if err != nil {
@@ -39,7 +32,12 @@ func TestOnboardingWorkflowsResolveAndAssetsList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAssets(onboarding) returned error: %v", err)
 	}
-	for _, want := range []string{"detect-adapters.sh", "models-for-cli.sh", "check-collisions.sh", "write-profile.sh", "docs/agent-runner-basics.md"} {
+	for _, removed := range []string{"onboarding:welcome", "onboarding:setup-agent-profile"} {
+		if ref, err := Resolve(removed); err == nil {
+			t.Fatalf("Resolve(%s) = %q, want not found", removed, ref)
+		}
+	}
+	for _, want := range []string{"docs/agent-runner-basics.md"} {
 		if !slices.Contains(assets, want) {
 			t.Fatalf("asset %q not found in %v", want, assets)
 		}

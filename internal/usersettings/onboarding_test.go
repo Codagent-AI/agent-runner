@@ -7,10 +7,10 @@ import (
 	"testing"
 )
 
-func TestLoadAndSaveOnboardingPreservesUnknownKeys(t *testing.T) {
+func TestLoadAndSaveSetupAndOnboardingPreserveUnknownKeys(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeSettingsFile(t, home, "experimental_foo: 7\ntheme: dark\nonboarding:\n  completed_at: 2026-05-01T00:00:00Z\n  dismissed: 2026-05-02T00:00:00Z\n")
+	writeSettingsFile(t, home, "experimental_foo: 7\ntheme: dark\nsetup:\n  completed_at: 2026-05-03T00:00:00Z\n  dismissed: 2026-05-04T00:00:00Z\nonboarding:\n  completed_at: 2026-05-01T00:00:00Z\n  dismissed: 2026-05-02T00:00:00Z\n")
 
 	settings, err := Load()
 	if err != nil {
@@ -22,6 +22,9 @@ func TestLoadAndSaveOnboardingPreservesUnknownKeys(t *testing.T) {
 	if settings.Onboarding.CompletedAt != "2026-05-01T00:00:00Z" || settings.Onboarding.Dismissed != "2026-05-02T00:00:00Z" {
 		t.Fatalf("Onboarding = %#v", settings.Onboarding)
 	}
+	if settings.Setup.CompletedAt != "2026-05-03T00:00:00Z" {
+		t.Fatalf("Setup = %#v, want completed_at only", settings.Setup)
+	}
 
 	settings.Onboarding.Dismissed = "2026-05-03T00:00:00Z"
 	if err := Save(settings); err != nil {
@@ -32,7 +35,7 @@ func TestLoadAndSaveOnboardingPreservesUnknownKeys(t *testing.T) {
 		t.Fatalf("read settings: %v", err)
 	}
 	text := string(body)
-	for _, want := range []string{"experimental_foo: 7", "theme: dark", "completed_at: 2026-05-01T00:00:00Z", "dismissed: 2026-05-03T00:00:00Z"} {
+	for _, want := range []string{"experimental_foo: 7", "theme: dark", "setup:", "completed_at: 2026-05-03T00:00:00Z", "onboarding:", "completed_at: 2026-05-01T00:00:00Z", "dismissed: 2026-05-03T00:00:00Z"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("settings body missing %q:\n%s", want, text)
 		}

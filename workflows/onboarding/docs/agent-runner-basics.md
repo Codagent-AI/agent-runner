@@ -13,4 +13,4 @@ Common step types:
 
 Captured values can be interpolated later with `{{name}}`. Built-in onboarding workflows use this to pass choices and command output between steps without writing project files.
 
-Onboarding is available as `agent-runner run onboarding:welcome`. The setup phase creates agent profiles, and the step-types demo shows how workflow primitives compose into an end-to-end run.
+The optional demo is available as `agent-runner run onboarding:onboarding`. Native first-run setup creates agent profiles before the demo, and the demo shows how workflow primitives compose into an end-to-end run.

@@ -104,20 +104,29 @@ func TestStepTypesDemoPromptsUsePackagedDocsAndStayNonDestructive(t *testing.T) 
 	}
 }
 
-func TestWelcomeRunsStepTypesDemoBeforeCompletion(t *testing.T) {
-	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/welcome.yaml")
+func TestOnboardingRunsStepTypesDemoBeforeCompletion(t *testing.T) {
+	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/onboarding.yaml")
 
-	wantIDs := []string{"welcome", "set-dismissed", "setup", "step-types-demo", "set-completed"}
+	wantIDs := []string{"intro", "set-dismissed", "step-types-demo", "set-completed"}
 	gotIDs := stepIDs(wf.Steps)
 	if !slices.Equal(gotIDs, wantIDs) {
-		t.Fatalf("welcome step IDs = %#v, want %#v", gotIDs, wantIDs)
+		t.Fatalf("onboarding step IDs = %#v, want %#v", gotIDs, wantIDs)
+	}
+
+	intro := stepByID(t, &wf, "intro")
+	gotOutcomes := outcomes(intro.Actions)
+	if !slices.Equal(gotOutcomes, []string{"continue", "not_now", "dismiss"}) {
+		t.Fatalf("intro outcomes = %#v, want continue/not_now/dismiss", gotOutcomes)
+	}
+	if strings.Contains(strings.ToLower(intro.Body), "setup") {
+		t.Fatalf("intro body still presents as setup:\n%s", intro.Body)
 	}
 
 	demo := stepByID(t, &wf, "step-types-demo")
 	if demo.Workflow != "step-types-demo.yaml" {
 		t.Fatalf("step-types-demo workflow = %q", demo.Workflow)
 	}
-	if demo.SkipIf != `sh: [ {{user_action}} != continue ]` {
+	if demo.SkipIf != `sh: [ {{demo_action}} != continue ]` {
 		t.Fatalf("step-types-demo skip_if = %q", demo.SkipIf)
 	}
 
