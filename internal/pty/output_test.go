@@ -64,6 +64,116 @@ func TestOutputProcessor(t *testing.T) {
 		}
 	})
 
+	t.Run("detects styled codex text sentinel line and strips it", func(t *testing.T) {
+		p := &outputProcessor{}
+		input := "before\n\x1b[2m• \x1b[22m" + textSentinel + "\x1b[39m\x1b[49m\x1b[0m\x1b[r" + "after"
+		r := p.process([]byte(input))
+		if !r.triggered {
+			t.Fatal("expected trigger")
+		}
+		if string(r.forward) != "before\n\x1b[2m\x1b[22m\x1b[39m\x1b[49m\x1b[0m\x1b[rafter" {
+			t.Fatalf("expected %q, got %q", "before\n\x1b[2m\x1b[22m\x1b[39m\x1b[49m\x1b[0m\x1b[rafter", string(r.forward))
+		}
+	})
+
+	t.Run("detects text sentinel before terminal control sequence", func(t *testing.T) {
+		p := &outputProcessor{}
+		input := "before\n" + textSentinel + "\x1b[2Kafter"
+		r := p.process([]byte(input))
+		if !r.triggered {
+			t.Fatal("expected trigger")
+		}
+		if string(r.forward) != "before\n\x1b[2Kafter" {
+			t.Fatalf("expected %q, got %q", "before\n\x1b[2Kafter", string(r.forward))
+		}
+	})
+
+	t.Run("detects text sentinel with trailing spaces before terminal control sequence", func(t *testing.T) {
+		p := &outputProcessor{}
+		input := "before\n" + textSentinel + "  \x1b[2Kafter"
+		r := p.process([]byte(input))
+		if !r.triggered {
+			t.Fatal("expected trigger")
+		}
+		if string(r.forward) != "before\n\x1b[2Kafter" {
+			t.Fatalf("expected %q, got %q", "before\n\x1b[2Kafter", string(r.forward))
+		}
+	})
+
+	t.Run("detects text sentinel after adapter prompt prefix", func(t *testing.T) {
+		p := &outputProcessor{}
+		input := "before\nassistant> " + textSentinel + "\nafter"
+		r := p.process([]byte(input))
+		if !r.triggered {
+			t.Fatal("expected trigger")
+		}
+		if string(r.forward) != "before\nassistant> after" {
+			t.Fatalf("expected %q, got %q", "before\nassistant> after", string(r.forward))
+		}
+	})
+
+	t.Run("detects text sentinel after cursor-painted prompt prefix", func(t *testing.T) {
+		p := &outputProcessor{}
+		input := "\x1b[12;1H> " + textSentinel + "\x1b[0m"
+		r := p.process([]byte(input))
+		if !r.triggered {
+			t.Fatal("expected trigger")
+		}
+		if string(r.forward) != "\x1b[12;1H> \x1b[0m" {
+			t.Fatalf("expected %q, got %q", "\x1b[12;1H> \x1b[0m", string(r.forward))
+		}
+	})
+
+	t.Run("detects opencode split marker after cursor positioning", func(t *testing.T) {
+		p := &outputProcessor{}
+
+		r0 := p.process([]byte("Build"))
+		if r0.triggered {
+			t.Fatal("unexpected trigger before marker")
+		}
+		if string(r0.forward) != "Build" {
+			t.Fatalf("expected %q, got %q", "Build", string(r0.forward))
+		}
+
+		first := "\x1b[30;6H\x1b[38;2;26;26;26mAGENT\x1b[0m\x1b[65;6H"
+		r1 := p.process([]byte(first))
+		if r1.triggered {
+			t.Fatal("unexpected trigger on first marker chunk")
+		}
+		expectedFirst := "\x1b[30;6H\x1b[38;2;26;26;26m\x1b[0m\x1b[65;6H"
+		if string(r1.forward) != expectedFirst {
+			t.Fatalf("expected %q, got %q", expectedFirst, string(r1.forward))
+		}
+
+		second := "\x1b[30;11H\x1b[38;2;26;26;26m_RUNNER_CONTINUE\x1b[0m"
+		r2 := p.process([]byte(second))
+		if !r2.triggered {
+			t.Fatal("expected trigger after second marker chunk")
+		}
+		expectedSecond := "\x1b[30;11H\x1b[38;2;26;26;26m\x1b[0m"
+		if string(r2.forward) != expectedSecond {
+			t.Fatalf("expected %q, got %q", expectedSecond, string(r2.forward))
+		}
+	})
+
+	t.Run("does not treat styling as a text boundary", func(t *testing.T) {
+		p := &outputProcessor{}
+
+		r0 := p.process([]byte("Build"))
+		if r0.triggered {
+			t.Fatal("unexpected trigger before styled text")
+		}
+
+		input := "\x1b[38;2;26;26;26m" + textSentinel + "\n"
+		r := p.process([]byte(input))
+		if r.triggered {
+			t.Fatal("unexpected trigger after style-only sequence")
+		}
+		if string(r.forward) != input {
+			t.Fatalf("expected %q, got %q", input, string(r.forward))
+		}
+	})
+
 	t.Run("does not trigger on embedded text sentinel", func(t *testing.T) {
 		p := &outputProcessor{}
 		input := "before" + textSentinel + "after"

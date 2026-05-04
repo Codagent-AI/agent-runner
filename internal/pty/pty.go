@@ -36,8 +36,9 @@ type Result struct {
 
 // Options configures an interactive PTY session.
 type Options struct {
-	Env     []string // additional environment variables
-	Workdir string   // working directory for the child process
+	Env        []string // additional environment variables
+	Workdir    string   // working directory for the child process
+	DebugLabel string   // optional human-readable context for PTY debug logs
 }
 
 // ptyState holds shared mutable state for a PTY session.
@@ -113,7 +114,7 @@ func RunInteractive(args []string, opts Options) (Result, error) {
 	outputDone := make(chan struct{})
 	go func() {
 		defer close(outputDone)
-		forwardOutput(ptmx, hint, cmd, state, exitCh)
+		forwardOutput(ptmx, hint, cmd, state, exitCh, opts.DebugLabel)
 	}()
 
 	// Read stdin, process input, forward to PTY, detect continue triggers.
@@ -334,29 +335,39 @@ func forwardChunk(result outputResult, proc *outputProcessor, hint *idleHint, se
 	return false, nil
 }
 
-func forwardOutput(ptmx *os.File, hint *idleHint, cmd *exec.Cmd, state *ptyState, exitCh chan struct{}) {
+func forwardOutput(ptmx *os.File, hint *idleHint, cmd *exec.Cmd, state *ptyState, exitCh chan struct{}, debugLabel string) {
 	proc := &outputProcessor{}
+	debugLog := openPTYDebugLogger(debugLabel)
+	defer debugLog.close()
 	buf := make([]byte, 4096)
 	sentinelTriggered := false
 	for {
 		n, err := ptmx.Read(buf)
 		if n > 0 {
+			debugLog.logChunk("pty_output_raw", buf[:n])
 			result := proc.process(buf[:n])
+			debugLog.logResult(result)
+			debugLog.logMarkerNearMiss(buf[:n], result, proc)
 			triggered, werr := forwardChunk(result, proc, hint, sentinelTriggered)
 			if werr != nil {
+				debugLog.logf("stdout write error: %v", werr)
 				hint.cancel()
 				return
 			}
 			if triggered {
+				debugLog.logf("continue trigger detected from PTY output")
 				sentinelTriggered = true
 				if !beginTermination(cmd, state, hint, exitCh) {
+					debugLog.logf("continue trigger ignored because session is already done")
 					return
 				}
 			}
 		}
 		if err != nil {
+			debugLog.logf("pty output read ended: %v", err)
 			if !sentinelTriggered {
 				if ferr := flushToStdout(proc); ferr != nil {
+					debugLog.logf("flush error: %v", ferr)
 					hint.cancel()
 					return
 				}

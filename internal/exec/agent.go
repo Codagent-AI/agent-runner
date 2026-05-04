@@ -191,7 +191,9 @@ func ExecuteAgentStep(
 	recordSessionOnSpawn(step, ctx, sessionID)
 
 	spawnTime := time.Now()
-	outcome, result, runErr := runAgentProcess(runner, adapter, args, headless, step.Workdir, log, ctx.SuspendHook, ctx.ResumeHook)
+	debugLabel := fmt.Sprintf("workflow=%s step=%s cli=%s model=%s session=%s resume=%t",
+		ctx.WorkflowName, step.ID, cliName, resolvedModel, sessionID, isResume)
+	outcome, result, runErr := runAgentProcess(runner, adapter, args, headless, step.Workdir, debugLabel, log, ctx.SuspendHook, ctx.ResumeHook)
 	if runErr != nil {
 		emitAgentEnd(ctx, prefix, startTime, "", OutcomeFailed, "", result.Stderr)
 		return OutcomeFailed, runErr
@@ -394,7 +396,7 @@ func buildAdapterInput(
 	return input
 }
 
-func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, headless bool, workdir string, log Logger, suspendHook, resumeHook func()) (StepOutcome, ProcessResult, error) {
+func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, headless bool, workdir, debugLabel string, log Logger, suspendHook, resumeHook func()) (StepOutcome, ProcessResult, error) {
 	if headless {
 		// Capture stdout for headless runs so that adapters (e.g. Codex) can
 		// parse session IDs from the process output.
@@ -426,7 +428,7 @@ func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, h
 	if suspendHook != nil {
 		suspendHook()
 	}
-	ptyResult, err := interactiveRunnerFn(args, pty.Options{Workdir: workdir})
+	ptyResult, err := interactiveRunnerFn(args, pty.Options{Workdir: workdir, DebugLabel: debugLabel})
 	if resumeHook != nil {
 		resumeHook()
 	}
