@@ -137,6 +137,7 @@ func TestEnsureFirstRunForTUISetupErrorGoesHome(t *testing.T) {
 		runNativeSetup: func() (nativeSetupResult, error) {
 			return nativeSetupFailed, errors.New("write failed")
 		},
+		continueAfterNativeSetupError: true,
 		runWorkflow: func(string) int {
 			t.Fatal("runWorkflow should not be called")
 			return 0
@@ -144,6 +145,24 @@ func TestEnsureFirstRunForTUISetupErrorGoesHome(t *testing.T) {
 	})
 	if code != 0 {
 		t.Fatalf("ensureFirstRunForTUI() = %d, want 0 so list TUI can start", code)
+	}
+}
+
+func TestEnsureFirstRunForTUISetupErrorFailsWhenNonFatalModeDisabled(t *testing.T) {
+	code := ensureFirstRunForTUI(firstRunDeps{
+		load:        func() (usersettings.Settings, error) { return usersettings.Settings{}, nil },
+		isStdinTTY:  func() bool { return true },
+		isStdoutTTY: func() bool { return true },
+		runNativeSetup: func() (nativeSetupResult, error) {
+			return nativeSetupFailed, errors.New("write failed")
+		},
+		runWorkflow: func(string) int {
+			t.Fatal("runWorkflow should not be called")
+			return 0
+		},
+	})
+	if code == 0 {
+		t.Fatal("ensureFirstRunForTUI() = 0, want non-zero")
 	}
 }
 

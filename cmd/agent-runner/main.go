@@ -1230,11 +1230,12 @@ const (
 )
 
 type firstRunDeps struct {
-	load           func() (usersettings.Settings, error)
-	isStdinTTY     func() bool
-	isStdoutTTY    func() bool
-	runNativeSetup func() (nativeSetupResult, error)
-	runWorkflow    func(ref string) int
+	load                          func() (usersettings.Settings, error)
+	isStdinTTY                    func() bool
+	isStdoutTTY                   func() bool
+	runNativeSetup                func() (nativeSetupResult, error)
+	continueAfterNativeSetupError bool
+	runWorkflow                   func(ref string) int
 }
 
 var defaultFirstRunDeps = firstRunDeps{
@@ -1255,6 +1256,7 @@ var defaultFirstRunDeps = firstRunDeps{
 	runWorkflow: func(ref string) int {
 		return handleRunWithOptions([]string{ref}, liveTUIOptions{quitOnDone: true})
 	},
+	continueAfterNativeSetupError: true,
 }
 
 func ensureFirstRunForTUI(deps firstRunDeps) int {
@@ -1271,6 +1273,9 @@ func ensureFirstRunForTUI(deps firstRunDeps) int {
 		result, err := deps.runNativeSetup()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+			if !deps.continueAfterNativeSetupError {
+				return 1
+			}
 			return 0
 		}
 		if result != nativeSetupCompleted {
