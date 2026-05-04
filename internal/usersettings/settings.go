@@ -101,11 +101,17 @@ func Load() (Settings, error) {
 func parseSettingPair(settings *Settings, key, value *yaml.Node) {
 	switch key.Value {
 	case "theme":
-		settings.Theme = parseTheme(value)
+		if theme := parseTheme(value); theme != "" {
+			settings.Theme = theme
+		}
 	case "setup":
-		settings.Setup = parseSetup(value)
+		if setup, ok := parseSetup(value); ok {
+			settings.Setup = setup
+		}
 	case "onboarding":
-		settings.Onboarding = parseOnboarding(value)
+		if onboarding, ok := parseOnboarding(value); ok {
+			settings.Onboarding = onboarding
+		}
 	}
 }
 
@@ -123,10 +129,10 @@ func parseTheme(value *yaml.Node) Theme {
 	}
 }
 
-func parseSetup(value *yaml.Node) SetupSettings {
+func parseSetup(value *yaml.Node) (SetupSettings, bool) {
 	var setup SetupSettings
 	if value.Kind != yaml.MappingNode {
-		return setup
+		return setup, false
 	}
 	for j := 0; j+1 < len(value.Content); j += 2 {
 		k := value.Content[j]
@@ -135,13 +141,13 @@ func parseSetup(value *yaml.Node) SetupSettings {
 			setup.CompletedAt = v.Value
 		}
 	}
-	return setup
+	return setup, true
 }
 
-func parseOnboarding(value *yaml.Node) OnboardingSettings {
+func parseOnboarding(value *yaml.Node) (OnboardingSettings, bool) {
 	var onboarding OnboardingSettings
 	if value.Kind != yaml.MappingNode {
-		return onboarding
+		return onboarding, false
 	}
 	for j := 0; j+1 < len(value.Content); j += 2 {
 		k := value.Content[j]
@@ -156,7 +162,7 @@ func parseOnboarding(value *yaml.Node) OnboardingSettings {
 			onboarding.Dismissed = v.Value
 		}
 	}
-	return onboarding
+	return onboarding, true
 }
 
 func Save(settings Settings) error {

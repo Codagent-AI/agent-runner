@@ -41,3 +41,32 @@ func TestLoadAndSaveSetupAndOnboardingPreserveUnknownKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadInvalidDuplicateSettingsDoNotEraseEarlierValidValues(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeSettingsFile(t, home, `theme: dark
+theme: [light]
+setup:
+  completed_at: 2026-05-03T00:00:00Z
+setup: later-invalid
+onboarding:
+  completed_at: 2026-05-01T00:00:00Z
+  dismissed: 2026-05-02T00:00:00Z
+onboarding: later-invalid
+`)
+
+	settings, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if settings.Theme != ThemeDark {
+		t.Fatalf("Theme = %q, want dark", settings.Theme)
+	}
+	if settings.Setup.CompletedAt != "2026-05-03T00:00:00Z" {
+		t.Fatalf("Setup = %#v", settings.Setup)
+	}
+	if settings.Onboarding.CompletedAt != "2026-05-01T00:00:00Z" || settings.Onboarding.Dismissed != "2026-05-02T00:00:00Z" {
+		t.Fatalf("Onboarding = %#v", settings.Onboarding)
+	}
+}
