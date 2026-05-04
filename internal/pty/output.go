@@ -19,15 +19,15 @@ const (
 const outOSCSawEsc = 10
 
 // outputProcessor tracks ANSI escape sequence state and detects continuation
-// sentinels in the output stream. The OSC sentinel is kept for compatibility;
-// the text sentinel is the default prompt path because it does not require the
-// hosted agent CLI to run a shell command.
+// sentinels in the output stream.
 //
 // Sentinels are stripped from output (never forwarded to the terminal). All
 // other bytes, including non-matching OSC sequences, are forwarded as-is. State
 // persists across process() calls so sentinels split across PTY read chunk
 // boundaries are detected correctly.
 type outputProcessor struct {
+	allowTextSentinel bool
+
 	escState          int
 	escBuf            []byte // bytes accumulated for the current escape sequence
 	oscPayload        []byte // OSC payload bytes (between \x1b] and BEL/ST)
@@ -164,12 +164,22 @@ func (p *outputProcessor) processNormalByte(b byte, fwd *[]byte) bool {
 	if b == 0x1b {
 		return p.startEscape(fwd)
 	}
+	if !p.allowTextSentinel {
+		*fwd = append(*fwd, b)
+		return false
+	}
 	var textTriggered bool
 	*fwd, textTriggered = p.processTextByte(b, *fwd)
 	return textTriggered
 }
 
 func (p *outputProcessor) startEscape(fwd *[]byte) bool {
+	if !p.allowTextSentinel {
+		p.escBuf = append(p.escBuf[:0], 0x1b)
+		p.escState = escSawEsc
+		return false
+	}
+
 	triggered := false
 	switch {
 	case isTextMarkerComplete(p.textBuf):

@@ -832,15 +832,11 @@ func TestExecuteAgentStep(t *testing.T) {
 		if !strings.Contains(lastArg, "review code") {
 			t.Fatalf("expected prompt in positional arg for codex without enrichment, got %q", lastArg)
 		}
-		// Interactive steps include the completion instruction appended to the prompt.
-		if !strings.Contains(lastArg, "AGENT_RUNNER_") || !strings.Contains(lastArg, "CONTINUE") {
-			t.Fatalf("expected completion instruction in codex interactive prompt, got %q", lastArg)
-		}
-		if strings.Contains(lastArg, "AGENT_RUNNER_CONTINUE") {
-			t.Fatalf("completion instruction must not include the exact text sentinel, got %q", lastArg)
-		}
-		if strings.Contains(lastArg, "AGENT_RUNNER_TTY") || strings.Contains(lastArg, "printf") {
-			t.Fatalf("completion instruction should not require shell command approval, got %q", lastArg)
+		// Interactive steps include the non-replayable PTY completion instruction appended to the prompt.
+		if !strings.Contains(lastArg, "signal-continuation") ||
+			!strings.Contains(lastArg, "AGENT_RUNNER_TTY") ||
+			!strings.Contains(lastArg, "printf") {
+			t.Fatalf("expected PTY completion instruction in codex interactive prompt, got %q", lastArg)
 		}
 	})
 
@@ -894,14 +890,10 @@ func TestExecuteAgentStep(t *testing.T) {
 				continue
 			}
 			sysPrompt := args[i+1]
-			if !strings.Contains(sysPrompt, "AGENT_RUNNER_") || !strings.Contains(sysPrompt, "CONTINUE") {
-				t.Fatalf("expected completion instruction in system prompt, got %q", sysPrompt)
-			}
-			if strings.Contains(sysPrompt, "AGENT_RUNNER_CONTINUE") {
-				t.Fatalf("completion instruction must not include the exact text sentinel, got %q", sysPrompt)
-			}
-			if strings.Contains(sysPrompt, "AGENT_RUNNER_TTY") || strings.Contains(sysPrompt, "printf") {
-				t.Fatalf("completion instruction should not require shell command approval, got %q", sysPrompt)
+			if !strings.Contains(sysPrompt, "signal-continuation") ||
+				!strings.Contains(sysPrompt, "AGENT_RUNNER_TTY") ||
+				!strings.Contains(sysPrompt, "printf") {
+				t.Fatalf("expected PTY completion instruction in system prompt, got %q", sysPrompt)
 			}
 			if !strings.Contains(sysPrompt, "you or the user") {
 				t.Fatalf("expected 'you or the user' wording in completion instruction, got %q", sysPrompt)

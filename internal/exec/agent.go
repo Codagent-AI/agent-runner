@@ -24,7 +24,7 @@ var interactiveRunnerFn = pty.RunInteractive
 
 // completionInstruction is appended to the prompt for interactive agent steps
 // so the agent knows how to signal step completion via the PTY output scanner.
-const completionInstruction = "\n\nWhen you or the user determine this step is complete, continue to the next step by replying with one line containing only the continuation marker formed by joining `AGENT_RUNNER_` and `CONTINUE` with no separator. Do not run a shell command, use a tool, wrap it in a code block, or add any other commentary."
+const completionInstruction = "\n\nWhen you or the user determine this step is complete, continue to the next step by running the following command without any additional commentary:\nprintf '\\x1b]999;signal-continuation\\x07' > \"$AGENT_RUNNER_TTY\""
 
 // headlessPreamble is prepended to headless prompts to reinforce autonomous behavior.
 const headlessPreamble = "You are running autonomously in headless mode with no human in the loop. " +
