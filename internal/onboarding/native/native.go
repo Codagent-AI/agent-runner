@@ -108,6 +108,13 @@ const (
 	stageDone
 )
 
+var (
+	continueOptions  = []string{"Continue"}
+	scopeOptions     = []string{"global", "project"}
+	confirmOptions   = []string{"Confirm", "Cancel"}
+	overwriteOptions = []string{"Overwrite", "Cancel"}
+)
+
 type Model struct {
 	deps             Deps
 	stage            stage
@@ -129,7 +136,7 @@ type Model struct {
 
 func NewModel(deps *Deps) *Model {
 	deps = fillDefaults(deps)
-	return &Model{deps: *deps, stage: stageWelcome, width: 80, options: []string{"Continue"}}
+	return &Model{deps: *deps, stage: stageWelcome, width: 80, options: continueOptions}
 }
 
 func fillDefaults(deps *Deps) *Deps {
@@ -226,13 +233,13 @@ func (m *Model) enter() bool {
 		return m.loadModels(stageHeadlessModel, selected)
 	case stageHeadlessModel:
 		m.headlessModel = selected
-		m.setStage(stageScope, []string{"global", "project"})
+		m.setStage(stageScope, scopeOptions)
 	case stageScope:
 		m.scope = selected
 		if err := m.resolveTarget(); err != nil {
 			return m.fail(err)
 		}
-		m.setStage(stageConfirm, []string{"Confirm", "Cancel"})
+		m.setStage(stageConfirm, confirmOptions)
 	case stageConfirm:
 		if selected == "Cancel" {
 			m.cancel()
@@ -244,7 +251,7 @@ func (m *Model) enter() bool {
 		}
 		m.collisions = collisions
 		if len(collisions) > 0 {
-			m.setStage(stageOverwrite, []string{"Overwrite", "Cancel"})
+			m.setStage(stageOverwrite, overwriteOptions)
 			return false
 		}
 		return m.write()
@@ -277,17 +284,21 @@ func (m *Model) loadModels(next stage, adapter string) bool {
 		models = nil
 	}
 	if len(models) == 0 {
-		if next == stageInteractiveModel {
-			m.interactiveModel = ""
-			m.setStage(stageHeadlessCLI, m.adapters)
-			return false
-		}
-		m.headlessModel = ""
-		m.setStage(stageScope, []string{"global", "project"})
+		m.skipModelSelection(next)
 		return false
 	}
 	m.setStage(next, models)
 	return false
+}
+
+func (m *Model) skipModelSelection(next stage) {
+	if next == stageInteractiveModel {
+		m.interactiveModel = ""
+		m.setStage(stageHeadlessCLI, m.adapters)
+		return
+	}
+	m.headlessModel = ""
+	m.setStage(stageScope, scopeOptions)
 }
 
 func (m *Model) resolveTarget() error {

@@ -1266,7 +1266,8 @@ func ensureFirstRunForTUI(deps firstRunDeps) int {
 	if !deps.isStdinTTY() || !deps.isStdoutTTY() {
 		return 0
 	}
-	if settings.Setup.CompletedAt == "" {
+	setupCompleted := settings.Setup.CompletedAt != ""
+	if !setupCompleted {
 		result, err := deps.runNativeSetup()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
@@ -1275,9 +1276,9 @@ func ensureFirstRunForTUI(deps firstRunDeps) int {
 		if result != nativeSetupCompleted {
 			return 0
 		}
-		settings.Setup.CompletedAt = "completed"
+		setupCompleted = true
 	}
-	if settings.Setup.CompletedAt == "" || settings.Onboarding.CompletedAt != "" || settings.Onboarding.Dismissed != "" {
+	if !setupCompleted || settings.Onboarding.CompletedAt != "" || settings.Onboarding.Dismissed != "" {
 		return 0
 	}
 	ref, err := builtinworkflows.Resolve("onboarding:onboarding")
