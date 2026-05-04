@@ -1270,7 +1270,7 @@ func ensureFirstRunForTUI(deps firstRunDeps) int {
 		result, err := deps.runNativeSetup()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-			return 1
+			return 0
 		}
 		if result != nativeSetupCompleted {
 			return 0

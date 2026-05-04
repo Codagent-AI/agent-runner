@@ -153,21 +153,44 @@ func TestWriteFailureReturnsFailedWithoutRecordingSetup(t *testing.T) {
 	}
 }
 
-func TestModelDiscoveryErrorFailsSetup(t *testing.T) {
+func TestModelDiscoveryErrorUsesAdapterDefault(t *testing.T) {
+	var wrote []profilewrite.Request
+	var saved bool
+	var discoveryCalls int
 	m := NewModel(&Deps{
 		Detector: AdapterDetectorFunc(func() ([]string, error) { return []string{"claude"}, nil }),
 		Models: ModelDiscovererFunc(func(string) ([]string, error) {
+			discoveryCalls++
 			return nil, errors.New("permission denied")
 		}),
+		Profiles: ProfileWriterFunc(func(req *profilewrite.Request) error {
+			wrote = append(wrote, *req)
+			return nil
+		}),
+		Settings: SettingsStoreFunc(func(func(usersettings.Settings) usersettings.Settings) error {
+			saved = true
+			return nil
+		}),
+		HomeDir: func() (string, error) { return "/home/me", nil },
+		Cwd:     func() (string, error) { return "/work/project", nil },
 	})
 
-	sendKeys(t, m, "enter", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter")
 
-	if m.Result() != ResultFailed {
-		t.Fatalf("Result() = %v, want failed", m.Result())
+	if m.Result() != ResultCompleted {
+		t.Fatalf("Result() = %v, want completed; err=%v view=\n%s", m.Result(), m.Err(), m.View())
 	}
-	if m.Err() == nil || !strings.Contains(m.Err().Error(), "discover models for claude") {
-		t.Fatalf("Err() = %v, want discovery context", m.Err())
+	if discoveryCalls != 2 {
+		t.Fatalf("discoveryCalls = %d, want 2", discoveryCalls)
+	}
+	if len(wrote) != 1 {
+		t.Fatalf("profile writes = %d, want 1", len(wrote))
+	}
+	if wrote[0].InteractiveModel != "" || wrote[0].HeadlessModel != "" {
+		t.Fatalf("write request models = interactive %q headless %q, want adapter defaults", wrote[0].InteractiveModel, wrote[0].HeadlessModel)
+	}
+	if !saved {
+		t.Fatal("settings were not saved after setup completion")
 	}
 }
 

@@ -129,7 +129,7 @@ func TestEnsureFirstRunForTUICancelledSetupDoesNotStartDemo(t *testing.T) {
 	}
 }
 
-func TestEnsureFirstRunForTUISetupErrorFails(t *testing.T) {
+func TestEnsureFirstRunForTUISetupErrorGoesHome(t *testing.T) {
 	code := ensureFirstRunForTUI(firstRunDeps{
 		load:        func() (usersettings.Settings, error) { return usersettings.Settings{}, nil },
 		isStdinTTY:  func() bool { return true },
@@ -142,8 +142,8 @@ func TestEnsureFirstRunForTUISetupErrorFails(t *testing.T) {
 			return 0
 		},
 	})
-	if code == 0 {
-		t.Fatal("ensureFirstRunForTUI() = 0, want non-zero")
+	if code != 0 {
+		t.Fatalf("ensureFirstRunForTUI() = %d, want 0 so list TUI can start", code)
 	}
 }
 

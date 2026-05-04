@@ -274,7 +274,7 @@ func (m *Model) loadAdapters() bool {
 func (m *Model) loadModels(next stage, adapter string) bool {
 	models, err := m.deps.Models.ModelsFor(adapter)
 	if err != nil {
-		return m.fail(fmt.Errorf("discover models for %s: %w", adapter, err))
+		models = nil
 	}
 	if len(models) == 0 {
 		if next == stageInteractiveModel {

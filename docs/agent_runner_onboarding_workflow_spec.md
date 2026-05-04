@@ -2,11 +2,12 @@
 
 ## 1. Overview
 
-The onboarding experience is implemented as a **first-class Agent Runner workflow**.
+The onboarding experience is split between mandatory native setup and a
+first-class Agent Runner workflow demo.
 
 It serves two purposes:
-1. Teach users how Agent Runner works
-2. Guide them through completing a real task in their own project
+1. Configure the agent profiles Agent Runner needs before the main TUI opens
+2. Teach users how Agent Runner works through an optional workflow demo
 
 Key principle:
 > We use Agent Runner to teach Agent Runner
@@ -16,16 +17,19 @@ Key principle:
 ## 2. Entry & Lifecycle
 
 ### 2.1 First Run Behavior
-- Automatically triggers onboarding workflow on first launch
-- Uses standard workflow state persistence (no special system needed)
+- Native setup runs before the bare/list TUI when setup has not completed
+- Successful setup records `settings.setup.completed_at`
+- After setup succeeds, Agent Runner starts the optional onboarding workflow
+  when it has not been completed or dismissed
 
 ### 2.2 Resume Behavior
-- Progress is persisted via normal workflow state
-- User resumes exactly where they left off
+- Native setup is not started before direct resume handling
+- The optional onboarding workflow uses normal workflow state persistence
 
 ### 2.3 Access After First Run
 - Onboarding is accessible via:
-  - Main menu / tab ("Onboarding")
+  - `agent-runner run onboarding:onboarding`
+  - Future main menu / tab ("Onboarding")
 - If incomplete:
   - Show "Continue onboarding"
 - If complete:
@@ -77,7 +81,6 @@ mode: ui
 ```
 onboarding/
   ├── intro
-  ├── setup
   ├── step-types-demo
   ├── guided-workflow
   ├── validator-setup
@@ -85,7 +88,8 @@ onboarding/
   ├── advanced
 ```
 
-Each phase is a **sub-workflow**.
+Setup is native TUI functionality, not a workflow phase. Each remaining phase
+can be a **sub-workflow**.
 
 ---
 
@@ -110,11 +114,11 @@ Each phase is a **sub-workflow**.
 
 ---
 
-### Phase 2: Setup (Agent Profiles)
+### Native Setup: Agent Profiles
 
 **Goal:** configure agents before any execution
 
-**Type:** interactive UI + config editor
+**Type:** native TUI + config editor
 
 **Requirements:**
 - Detect:
@@ -132,12 +136,9 @@ Each phase is a **sub-workflow**.
 - New UI-based config editor
 - Writes config file
 
-**Future:**
-- Same UI accessible from main menu
-
 ---
 
-### Phase 3: Step Types Demo
+### Phase 2: Step Types Demo
 
 **Goal:** teach primitives without real work
 
@@ -161,7 +162,7 @@ Walk through each step type:
 
 ---
 
-### Phase 4: Guided Real Workflow
+### Phase 3: Guided Real Workflow
 
 **Goal:** run a real workflow with explanation
 
@@ -205,7 +206,7 @@ A **separate agent session** used for:
 
 ---
 
-### Phase 5: Agent Validator Setup
+### Phase 4: Agent Validator Setup
 
 **Goal:** introduce validation without overwhelming early
 
@@ -224,7 +225,7 @@ User configures:
 
 ---
 
-### Phase 6: Validation Run
+### Phase 5: Validation Run
 
 **Goal:** close the loop
 
@@ -237,7 +238,7 @@ User sees:
 
 ---
 
-### Phase 7: Advanced + Help
+### Phase 6: Advanced + Help
 
 **Goal:** expand understanding + provide ongoing support
 
