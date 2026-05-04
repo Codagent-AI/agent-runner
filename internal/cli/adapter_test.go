@@ -358,6 +358,16 @@ func TestCodexAdapter(t *testing.T) {
 		assertArgs(t, expected, args)
 	})
 
+	t.Run("resume interactive normalizes legacy rollout session IDs", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:    "continue review",
+			SessionID: "rollout-2026-05-03T22-18-42-019df0c7-daf4-7120-b587-0731815d36cb",
+			Headless:  false,
+		})
+		expected := []string{"codex", "resume", "--no-alt-screen", "019df0c7-daf4-7120-b587-0731815d36cb", "continue review"}
+		assertArgs(t, expected, args)
+	})
+
 	t.Run("model override headless", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:   "do something",
@@ -528,6 +538,18 @@ func TestCodexAdapter(t *testing.T) {
 		}
 	})
 
+	t.Run("discover headless session prefers JSONL over preset", func(t *testing.T) {
+		output := `{"type":"thread.started","thread_id":"019df0cd-7acc-7813-9c4e-180741b19f5f"}`
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			ProcessOutput: output,
+			PresetID:      "rollout-2026-05-03T22-18-42-019df0c7-daf4-7120-b587-0731815d36cb",
+			Headless:      true,
+		})
+		if id != "019df0cd-7acc-7813-9c4e-180741b19f5f" {
+			t.Fatalf("expected JSONL thread id, got %q", id)
+		}
+	})
+
 	t.Run("discover headless session returns empty for no thread.started", func(t *testing.T) {
 		output := `{"type":"message","content":"hello"}`
 		id := adapter.DiscoverSessionID(&DiscoverOptions{
@@ -559,6 +581,44 @@ func TestCodexAdapter(t *testing.T) {
 
 		if !matchesSessionCwd(sessionFile, cwd) {
 			t.Fatal("expected session_meta payload cwd to match")
+		}
+	})
+
+	t.Run("discover interactive session returns session_meta id", func(t *testing.T) {
+		fakeHome := t.TempDir()
+		cwd := t.TempDir()
+		canonCwd, err := filepath.EvalSymlinks(cwd)
+		if err != nil {
+			t.Fatalf("EvalSymlinks: %v", err)
+		}
+
+		origHome := os.Getenv("HOME")
+		origCwd, _ := os.Getwd()
+		t.Cleanup(func() {
+			os.Setenv("HOME", origHome)
+			_ = os.Chdir(origCwd)
+		})
+		os.Setenv("HOME", fakeHome)
+		if err := os.Chdir(canonCwd); err != nil {
+			t.Fatalf("chdir: %v", err)
+		}
+
+		sessionDir := filepath.Join(fakeHome, ".codex", "sessions", "2026", "05", "03")
+		if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+			t.Fatalf("mkdir session dir: %v", err)
+		}
+		sessionFile := filepath.Join(sessionDir, "rollout-2026-05-03T22-18-42-019df0c7-daf4-7120-b587-0731815d36cb.jsonl")
+		data := fmt.Sprintf(`{"type":"session_meta","payload":{"id":"019df0c7-daf4-7120-b587-0731815d36cb","cwd":%q}}`, canonCwd) + "\n"
+		if err := os.WriteFile(sessionFile, []byte(data), 0o600); err != nil {
+			t.Fatalf("write session fixture: %v", err)
+		}
+
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			SpawnTime: time.Now().Add(-time.Second),
+			Headless:  false,
+		})
+		if id != "019df0c7-daf4-7120-b587-0731815d36cb" {
+			t.Fatalf("expected session_meta id, got %q", id)
 		}
 	})
 
