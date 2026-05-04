@@ -1,5 +1,11 @@
 # agent-runner
 
+## 0.5.0
+
+### Minor Changes
+
+- [#26](https://github.com/Codagent-AI/agent-runner/pull/26) Add onboarding step types demo
+
 ## 0.4.0
 
 ### Minor Changes
