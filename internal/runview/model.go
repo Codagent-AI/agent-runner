@@ -632,6 +632,45 @@ func (m *Model) canResumeAgentSession(n *StepNode) bool {
 	return n != nil && n.SessionID != "" && !m.running && !m.active
 }
 
+func isAgentNode(n *StepNode) bool {
+	return n != nil && (n.Type == NodeHeadlessAgent || n.Type == NodeInteractiveAgent)
+}
+
+func (m *Model) resumeAgentTargetForSelection() *StepNode {
+	if m.rootStatus() != StatusSuccess {
+		return nil
+	}
+	selected := m.selectedNode()
+	if isAgentNode(selected) && m.canResumeAgentSession(selected) {
+		return selected
+	}
+
+	scope := m.currentContainer()
+	if selected != nil && selected.Type == NodeSubWorkflow {
+		scope = selected.Drilldown()
+	}
+	return m.lastResumableAgentInWorkflow(scope)
+}
+
+func (m *Model) lastResumableAgentInWorkflow(scope *StepNode) *StepNode {
+	if scope == nil {
+		return nil
+	}
+	if isAgentNode(scope) && m.canResumeAgentSession(scope) {
+		return scope
+	}
+	for i := len(scope.Children) - 1; i >= 0; i-- {
+		child := scope.Children[i]
+		if child.Type == NodeSubWorkflow {
+			continue
+		}
+		if found := m.lastResumableAgentInWorkflow(child); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
 // handleKey processes a key message. Extracted from Update to keep the main
 // message switch within funlen limits.
 func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -693,6 +732,11 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.canResumeRun() {
 			runID := filepath.Base(m.sessionDir)
 			return m, func() tea.Msg { return ResumeRunMsg{RunID: runID} }
+		}
+		if target := m.resumeAgentTargetForSelection(); target != nil {
+			return m, func() tea.Msg {
+				return ResumeMsg{AgentCLI: target.AgentCLI, SessionID: target.SessionID}
+			}
 		}
 	case "g":
 		m.handleLoadFull()
@@ -1104,7 +1148,7 @@ func (m *Model) handleLoadFull() {
 	if n == nil {
 		return
 	}
-	if n.Type == NodeShell || n.Type == NodeHeadlessAgent {
+	if n.Type == NodeShell || n.Type == NodeScript || n.Type == NodeHeadlessAgent {
 		m.loadedFull[n.NodeKey()] = true
 	}
 }

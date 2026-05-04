@@ -115,7 +115,7 @@ func TestBuildTreeClassifiesScriptAndUISteps(t *testing.T) {
 	wf := &model.Workflow{
 		Name: "onboarding",
 		Steps: []model.Step{
-			{ID: "detect", Script: "detect-adapters.sh"},
+			{ID: "detect", Script: "detect-adapters.sh", Capture: "detected"},
 			{
 				ID:      "pick",
 				Mode:    model.ModeUI,
@@ -129,8 +129,14 @@ func TestBuildTreeClassifiesScriptAndUISteps(t *testing.T) {
 	script := tree.Root.Children[0]
 	ui := tree.Root.Children[1]
 
-	if script.Type == NodeRoot {
-		t.Fatalf("script step type = NodeRoot, want a concrete script type")
+	if script.Type != NodeScript {
+		t.Fatalf("script step type = %v, want NodeScript", script.Type)
+	}
+	if script.StaticScript != "detect-adapters.sh" {
+		t.Fatalf("script StaticScript = %q, want detect-adapters.sh", script.StaticScript)
+	}
+	if script.CaptureName != "detected" {
+		t.Fatalf("script CaptureName = %q, want detected", script.CaptureName)
 	}
 	if ui.Type == NodeRoot {
 		t.Fatalf("ui step type = NodeRoot, want a concrete ui type")

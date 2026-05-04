@@ -55,6 +55,7 @@ type StepNode struct {
 
 	// Static fields (populated from workflow YAML).
 	StaticCommand            string
+	StaticScript             string
 	StaticPrompt             string
 	StaticAgent              string
 	StaticMode               model.StepMode
@@ -202,12 +203,11 @@ func buildStepNode(s *model.Step, parent *StepNode) *StepNode {
 		n.CaptureName = s.Capture
 	case s.Script != "":
 		n.Type = NodeScript
-		n.StaticCommand = s.Script
+		n.StaticScript = s.Script
 		n.CaptureName = s.Capture
 	case s.Mode == model.ModeUI:
 		n.Type = NodeUI
 		n.StaticMode = s.Mode
-		n.CaptureName = s.Capture
 	case s.Loop != nil && len(s.Steps) > 0:
 		n.Type = NodeLoop
 		if s.Loop.Max != nil {

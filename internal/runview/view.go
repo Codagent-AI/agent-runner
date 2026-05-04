@@ -428,7 +428,7 @@ func (m *Model) renderHelpBar() string {
 
 	if m.entered == FromDefinition {
 		parts = append(parts, "r start run")
-	} else if m.canResumeRun() {
+	} else if m.canResumeRun() || m.resumeAgentTargetForSelection() != nil {
 		parts = append(parts, "r resume")
 	}
 
@@ -455,7 +455,7 @@ func (m *Model) selectedNodeHasTruncatedOutput() bool {
 	if m.loadedFull[n.NodeKey()] {
 		return false
 	}
-	if n.Type != NodeShell && n.Type != NodeHeadlessAgent {
+	if n.Type != NodeShell && n.Type != NodeScript && n.Type != NodeHeadlessAgent {
 		return false
 	}
 	return truncateOutput(n.Stdout).Truncated || truncateOutput(n.Stderr).Truncated

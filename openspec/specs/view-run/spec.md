@@ -236,6 +236,8 @@ Selecting the resume action on an agent step (headless or interactive) SHALL spa
 
 When the spawned CLI exits (for any reason, including the user typing `/exit` or `/quit`), agent-runner SHALL re-enter the run view for the same run, re-reading audit and state files so events produced by the resumed session appear. Re-entry preserves the original entry path so back-navigation (e.g. esc to the run list) still works. This behavior applies regardless of how the run view was reached (live-run completion, `--list`, or `--inspect`).
 
+For completed runs, the `r` key SHALL also trigger agent-session resume. If the selected step is a resumable agent step, `r` SHALL resume that selected agent step. If any other step type is selected, `r` SHALL resume the last resumable agent step in the selected workflow. When the selected step is a sub-workflow, "selected workflow" means that sub-workflow; otherwise it means the workflow currently shown in the run view. This `r` behavior is only available when the run is completed and inactive; it SHALL NOT override the `r` workflow-run resume action for interrupted inactive runs.
+
 #### Scenario: Resume from headless agent step
 - **WHEN** the user triggers the resume action on a headless agent step with a known session ID
 - **THEN** the step's agent CLI is spawned as a subprocess with `--resume <session-id>` (e.g. `claude --resume <uuid>`) and the terminal is handed to it
@@ -260,6 +262,23 @@ When the spawned CLI exits (for any reason, including the user typing `/exit` or
 - **WHEN** the viewed run is active (either the live-run TUI is still executing the workflow or the run lock is active)
 - **AND** the selected agent step already has a resolved session ID
 - **THEN** the resume action is not available, and pressing Enter on that agent step does nothing
+
+#### Scenario: r resumes selected agent on completed run
+- **WHEN** the run's status is `completed`, the run is inactive, and the selected step is a resumable headless or interactive agent step
+- **THEN** pressing `r` spawns that step's agent CLI with `--resume <session-id>`
+
+#### Scenario: r resumes last agent for non-agent selection on completed run
+- **WHEN** the run's status is `completed`, the run is inactive, and the selected step is not a resumable agent step
+- **AND** the workflow currently shown in the run view has a resumable agent step
+- **THEN** pressing `r` spawns the last resumable agent step's CLI with `--resume <session-id>`
+
+#### Scenario: r scopes fallback to selected sub-workflow
+- **WHEN** the run's status is `completed`, the run is inactive, and the selected step is a sub-workflow with a resumable agent step inside it
+- **THEN** pressing `r` spawns the last resumable agent step inside that selected sub-workflow
+
+#### Scenario: r unavailable on completed run without an agent session
+- **WHEN** the run's status is `completed`, the run is inactive, and the selected workflow has no resumable agent session
+- **THEN** pressing `r` does nothing
 
 #### Scenario: Spawn failure
 - **WHEN** the user triggers the resume action and the agent CLI cannot be spawned (e.g. binary not found on PATH)
@@ -361,7 +380,7 @@ While active and auto-follow is engaged (auto-follow is engaged by default on en
 
 The run view SHALL provide an `r` keyboard action that resumes the agent-runner workflow run itself (distinct from the existing Enter-triggered agent-CLI session resume). The action SHALL be available at any drill depth. It SHALL be gated on the run's status being `inactive` AND the run view not currently executing a workflow live (i.e., the live-run-view `running` state is false). When triggered, the TUI SHALL exit cleanly and the current process SHALL exec `agent-runner --resume <run-id>`, replacing itself (the same in-place-exec pattern used for agent-CLI session resume on Enter).
 
-When the gate is satisfied, the top-level breadcrumb SHALL render a `(r to resume)` affordance adjacent to the `inactive` status token, and the help bar SHALL include an entry for the `r` binding. When the gate is not satisfied, neither the breadcrumb affordance nor the help-bar entry SHALL appear.
+When the gate is satisfied, the top-level breadcrumb SHALL render a `(r to resume)` affordance adjacent to the `inactive` status token, and the help bar SHALL include an entry for the `r` binding. When the gate is not satisfied, the breadcrumb affordance SHALL NOT appear. The help bar SHALL still include the `r` binding when the completed-run agent-session resume behavior is available.
 
 #### Scenario: r on inactive run resumes via agent-runner --resume
 - **WHEN** the run's status is `inactive`, the TUI is not running a workflow live, and the user presses `r`
@@ -377,10 +396,6 @@ When the gate is satisfied, the top-level breadcrumb SHALL render a `(r to resum
 
 #### Scenario: r is ignored on active run opened from list
 - **WHEN** the run's status is `active` (opened from the list TUI) and the user presses `r`
-- **THEN** nothing happens
-
-#### Scenario: r is ignored on completed run
-- **WHEN** the run's status is `completed` and the user presses `r`
 - **THEN** nothing happens
 
 #### Scenario: r is ignored on failed run
@@ -399,8 +414,13 @@ When the gate is satisfied, the top-level breadcrumb SHALL render a `(r to resum
 - **WHEN** the resume-run gate is satisfied
 - **THEN** the help bar includes an entry for the `r` binding
 
+#### Scenario: Help bar lists r binding for completed agent resume
+- **WHEN** the run's status is `completed`, the run is inactive, and pressing `r` would resume an agent session
+- **THEN** the help bar includes an entry for the `r` binding
+
 #### Scenario: Help bar omits r binding when unavailable
 - **WHEN** the resume-run gate is not satisfied (status is not `inactive`, or the TUI is running live)
+- **AND** the completed-run agent-session resume behavior is not available
 - **THEN** the help bar does not include the `r` entry
 
 ### Requirement: Pending steps hidden from log

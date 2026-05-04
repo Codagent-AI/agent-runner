@@ -77,10 +77,12 @@ func buildLogLinesRecurse(
 			blockLines = renderGhostBlock(child, indent, bodyWidth, resolverCfg)
 		} else {
 			switch child.Type {
-			case NodeShell, NodeScript:
+			case NodeShell:
 				blockLines = renderShellBlock(child, indent, bodyWidth, loadedFull[child.NodeKey()])
 			case NodeUI:
 				blockLines = renderUIBlock(child, indent, bodyWidth)
+			case NodeScript:
+				blockLines = renderScriptBlock(child, indent, bodyWidth, loadedFull[child.NodeKey()])
 			case NodeHeadlessAgent:
 				blockLines = renderHeadlessBlock(child, indent, bodyWidth, loadedFull[child.NodeKey()], pulsePhase, runActive)
 			case NodeInteractiveAgent:
@@ -170,7 +172,7 @@ func renderGhostBlock(node *StepNode, indent, width int, resolverCfg ResolverCon
 	lines = append(lines, tuistyle.DimStyle.Render(sep))
 
 	switch node.Type {
-	case NodeShell, NodeScript:
+	case NodeShell:
 		cmd := node.StaticCommand
 		if cmd != "" {
 			for _, l := range renderWrappedText("$ "+cmd, contentWidth) {
@@ -179,6 +181,12 @@ func renderGhostBlock(node *StepNode, indent, width int, resolverCfg ResolverCon
 		}
 	case NodeUI:
 		lines = append(lines, tuistyle.DimStyle.Render(blockDimStr("mode", "ui")))
+	case NodeScript:
+		if node.StaticScript != "" {
+			for _, l := range renderWrappedText("# "+node.StaticScript, contentWidth) {
+				lines = append(lines, tuistyle.DimStyle.Render(l))
+			}
+		}
 	case NodeHeadlessAgent, NodeInteractiveAgent:
 		if node.StaticAgent != "" {
 			lines = append(lines, tuistyle.DimStyle.Render(blockDimStr("agent", node.StaticAgent)))
