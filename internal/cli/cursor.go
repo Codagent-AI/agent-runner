@@ -16,6 +16,8 @@ import (
 // CursorAdapter constructs invocation args for the Cursor agent CLI.
 type CursorAdapter struct{}
 
+const maxCursorStoreDBSize = 64 * 1024 * 1024
+
 // ExecutableName returns the Cursor agent CLI binary name. The adapter remains
 // registered as "cursor" because that is the workflow-facing backend name.
 func (a *CursorAdapter) ExecutableName() string {
@@ -195,9 +197,23 @@ func discoverCursorSessionID(output string) string {
 
 func discoverCursorInteractiveSession(spawnTime time.Time, workdir string) string {
 	if workdir == "" {
+		var err error
+		workdir, err = os.Getwd()
+		if err != nil {
+			return ""
+		}
+	}
+	absWorkdir, err := filepath.Abs(workdir)
+	if err != nil {
 		return ""
 	}
-	root := filepath.Join(os.Getenv("HOME"), ".cursor", "chats")
+	workdir = filepath.Clean(absWorkdir)
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil || homeDir == "" {
+		return ""
+	}
+	root := filepath.Join(homeDir, ".cursor", "chats")
 	rootDir, err := os.OpenRoot(root)
 	if err != nil {
 		return ""
@@ -212,16 +228,19 @@ func discoverCursorInteractiveSession(spawnTime time.Time, workdir string) strin
 			return nil
 		}
 		info, statErr := fs.Stat(rootFS, path)
-		if statErr != nil || info.ModTime().Before(spawnTime) {
+		if statErr != nil || info.ModTime().Before(spawnTime) || info.Size() > maxCursorStoreDBSize {
 			return nil
 		}
-		data, readErr := fs.ReadFile(rootFS, path)
-		if readErr != nil || !bytes.Contains(data, workspaceNeedle) {
+		found, readErr := cursorStoreContains(rootFS, path, workspaceNeedle)
+		if readErr != nil || !found {
 			return nil
 		}
 		chatID := filepath.Base(filepath.Dir(path))
 		if chatID != "" {
 			matches = append(matches, chatID)
+			if len(matches) > 1 {
+				return fs.SkipAll
+			}
 		}
 		return nil
 	}); err != nil {
@@ -231,4 +250,40 @@ func discoverCursorInteractiveSession(spawnTime time.Time, workdir string) strin
 		return ""
 	}
 	return matches[0]
+}
+
+func cursorStoreContains(rootFS fs.FS, path string, needle []byte) (bool, error) {
+	file, err := rootFS.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = file.Close() }()
+	return readerContains(file, needle)
+}
+
+func readerContains(r io.Reader, needle []byte) (bool, error) {
+	if len(needle) == 0 {
+		return true, nil
+	}
+	buf := make([]byte, 32*1024)
+	carry := make([]byte, 0, len(needle)-1)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			window := make([]byte, len(carry)+n)
+			copy(window, carry)
+			copy(window[len(carry):], buf[:n])
+			if bytes.Contains(window, needle) {
+				return true, nil
+			}
+			keep := min(len(needle)-1, len(window))
+			carry = append(carry[:0], window[len(window)-keep:]...)
+		}
+		if err == io.EOF {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+	}
 }

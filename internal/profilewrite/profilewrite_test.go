@@ -3,10 +3,10 @@ package profilewrite
 import (
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"gopkg.in/yaml.v3"
 )
 
@@ -45,7 +45,12 @@ other_top_level: true
 		t.Fatalf("Write() returned error: %v", err)
 	}
 
-	var got map[string]any
+	var got struct {
+		Profiles map[string]struct {
+			Agents map[string]map[string]any `yaml:"agents"`
+		} `yaml:"profiles"`
+		OtherTopLevel bool `yaml:"other_top_level"`
+	}
 	body, err := os.ReadFile(target)
 	if err != nil {
 		t.Fatalf("read target: %v", err)
@@ -53,22 +58,20 @@ other_top_level: true
 	if err := yaml.Unmarshal(body, &got); err != nil {
 		t.Fatalf("unmarshal target: %v", err)
 	}
-	defaultAgents := got["profiles"].(map[string]any)["default"].(map[string]any)["agents"].(map[string]any)
+	defaultAgents := got.Profiles["default"].Agents
 	for _, want := range []string{"interactive_base", "headless_base", "planner", "implementor", "team_implementor", "summarizer"} {
 		if _, ok := defaultAgents[want]; !ok {
 			t.Fatalf("default agents missing %q in %#v", want, defaultAgents)
 		}
 	}
-	if got["profiles"].(map[string]any)["team"] == nil || got["other_top_level"] != true {
+	if _, ok := got.Profiles["team"]; !ok || !got.OtherTopLevel {
 		t.Fatalf("existing config was not preserved: %#v", got)
 	}
-	planner := defaultAgents["planner"].(map[string]any)
-	if len(planner) != 1 || planner["extends"] != "interactive_base" {
-		t.Fatalf("planner = %#v", planner)
+	if diff := cmp.Diff(map[string]any{"extends": "interactive_base"}, defaultAgents["planner"]); diff != "" {
+		t.Fatalf("planner mismatch (-want +got):\n%s", diff)
 	}
-	implementor := defaultAgents["implementor"].(map[string]any)
-	if len(implementor) != 1 || implementor["extends"] != "headless_base" {
-		t.Fatalf("implementor = %#v", implementor)
+	if diff := cmp.Diff(map[string]any{"extends": "headless_base"}, defaultAgents["implementor"]); diff != "" {
+		t.Fatalf("implementor mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -118,8 +121,8 @@ profiles:
 		t.Fatalf("Collisions() returned error: %v", err)
 	}
 	want := []string{"implementor", "planner"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("Collisions() = %v, want %v", got, want)
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("Collisions() mismatch (-want +got):\n%s", diff)
 	}
 }
 

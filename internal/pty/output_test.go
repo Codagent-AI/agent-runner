@@ -145,6 +145,30 @@ func TestOutputProcessor(t *testing.T) {
 		}
 	})
 
+	t.Run("does not trigger text sentinel before punctuation", func(t *testing.T) {
+		p := textOutputProcessor()
+		input := "before\n" + textSentinel + ".\nafter"
+		r := p.process([]byte(input))
+		if r.triggered {
+			t.Fatal("unexpected trigger before punctuation")
+		}
+		if string(r.forward) != input {
+			t.Fatalf("expected %q, got %q", input, string(r.forward))
+		}
+	})
+
+	t.Run("does not trigger backtick-wrapped text sentinel", func(t *testing.T) {
+		p := textOutputProcessor()
+		input := "before\n`" + textSentinel + "`\nafter"
+		r := p.process([]byte(input))
+		if r.triggered {
+			t.Fatal("unexpected trigger on backtick-wrapped marker")
+		}
+		if string(r.forward) != input {
+			t.Fatalf("expected %q, got %q", input, string(r.forward))
+		}
+	})
+
 	t.Run("detects text sentinel after adapter prompt prefix", func(t *testing.T) {
 		p := textOutputProcessor()
 		input := "before\nassistant> " + textSentinel + "\nafter"

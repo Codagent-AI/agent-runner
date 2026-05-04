@@ -119,6 +119,7 @@ func TestBuildTreeClassifiesScriptAndUISteps(t *testing.T) {
 			{
 				ID:      "pick",
 				Mode:    model.ModeUI,
+				Capture: "choice",
 				Title:   "Pick",
 				Actions: []model.UIAction{{Label: "Continue", Outcome: "continue"}},
 			},
@@ -140,6 +141,9 @@ func TestBuildTreeClassifiesScriptAndUISteps(t *testing.T) {
 	}
 	if ui.Type == NodeRoot {
 		t.Fatalf("ui step type = NodeRoot, want a concrete ui type")
+	}
+	if ui.CaptureName != "choice" {
+		t.Fatalf("ui CaptureName = %q, want choice", ui.CaptureName)
 	}
 	if typeGlyph(script.Type) == "" {
 		t.Fatal("script type glyph is empty")
@@ -222,5 +226,30 @@ func TestDrilldown_NoFlattenOnShellBodyLoop(t *testing.T) {
 	}
 	if iter.Drilldown() != iter {
 		t.Errorf("drilldown should return self when no flatten target")
+	}
+}
+
+func TestEnsureIterationClonesScriptTemplateMetadata(t *testing.T) {
+	loop := buildStepNode(&model.Step{
+		ID: "items",
+		Loop: &model.Loop{
+			Over: "items/*",
+			As:   "item",
+		},
+		Steps: []model.Step{
+			{ID: "detect", Script: "detect-adapters.sh", Capture: "detected"},
+		},
+	}, nil)
+
+	iter := ensureIteration(loop, 0)
+	if len(iter.Children) != 1 {
+		t.Fatalf("iteration children = %d, want 1", len(iter.Children))
+	}
+	script := iter.Children[0]
+	if script.StaticScript != "detect-adapters.sh" {
+		t.Fatalf("script StaticScript = %q, want detect-adapters.sh", script.StaticScript)
+	}
+	if script.CaptureName != "detected" {
+		t.Fatalf("script CaptureName = %q, want detected", script.CaptureName)
 	}
 }

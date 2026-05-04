@@ -6,7 +6,19 @@ payload=$(cat)
 if command -v jq >/dev/null 2>&1; then
   report=$(printf '%s' "$payload" | jq -r '.report // ""')
 else
-  report=$(printf '%s' "$payload" | sed -n 's/.*"report"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+  report=$(PAYLOAD="$payload" python3 - <<'PY'
+import json
+import os
+import sys
+
+try:
+    parsed = json.loads(os.environ["PAYLOAD"])
+except json.JSONDecodeError as exc:
+    print(f"ci-fix-needed-gate: invalid JSON input: {exc}", file=sys.stderr)
+    sys.exit(2)
+print(parsed.get("report") or "", end="")
+PY
+)
 fi
 
 status=$(

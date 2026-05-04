@@ -208,6 +208,7 @@ func buildStepNode(s *model.Step, parent *StepNode) *StepNode {
 	case s.Mode == model.ModeUI:
 		n.Type = NodeUI
 		n.StaticMode = s.Mode
+		n.CaptureName = s.Capture
 	case s.Loop != nil && len(s.Steps) > 0:
 		n.Type = NodeLoop
 		if s.Loop.Max != nil {
@@ -346,6 +347,7 @@ func cloneTemplate(src, parent *StepNode) *StepNode {
 		Status:                  StatusPending,
 		Parent:                  parent,
 		StaticCommand:           src.StaticCommand,
+		StaticScript:            src.StaticScript,
 		StaticPrompt:            src.StaticPrompt,
 		StaticAgent:             src.StaticAgent,
 		StaticMode:              src.StaticMode,

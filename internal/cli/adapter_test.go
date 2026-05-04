@@ -1324,6 +1324,25 @@ func TestCursorAdapter(t *testing.T) {
 		}
 	})
 
+	t.Run("discover interactive session ID falls back to current directory", func(t *testing.T) {
+		fakeHome := t.TempDir()
+		t.Setenv("HOME", fakeHome)
+
+		workdir := t.TempDir()
+		t.Chdir(workdir)
+		spawnTime := time.Now().Add(-10 * time.Second)
+		matchingID := "44444444-4444-4444-4444-444444444444"
+		writeCursorStoreDB(t, fakeHome, "workspace-cwd", matchingID, time.Now().Add(-1*time.Second), filepath.Clean(workdir))
+
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			SpawnTime: spawnTime,
+			Headless:  false,
+		})
+		if id != matchingID {
+			t.Fatalf("expected matching cursor chat %q, got %q", matchingID, id)
+		}
+	})
+
 	t.Run("discover interactive session ID returns empty when no cursor chats match", func(t *testing.T) {
 		fakeHome := t.TempDir()
 		t.Setenv("HOME", fakeHome)
@@ -1354,6 +1373,42 @@ func TestCursorAdapter(t *testing.T) {
 		})
 		if id != "" {
 			t.Fatalf("expected empty string for ambiguous cursor chats, got %q", id)
+		}
+	})
+
+	t.Run("discover interactive session ID skips oversized cursor stores", func(t *testing.T) {
+		fakeHome := t.TempDir()
+		t.Setenv("HOME", fakeHome)
+		workdir := t.TempDir()
+		spawnTime := time.Now().Add(-10 * time.Second)
+		matchingID := "55555555-5555-5555-5555-555555555555"
+		writeCursorStoreDB(t, fakeHome, "workspace-large", matchingID, time.Now().Add(-1*time.Second), workdir)
+		path := filepath.Join(fakeHome, ".cursor", "chats", "workspace-large", matchingID, "store.db")
+		if err := os.Truncate(path, maxCursorStoreDBSize+1); err != nil {
+			t.Fatalf("truncate cursor store.db: %v", err)
+		}
+
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			SpawnTime: spawnTime,
+			Headless:  false,
+			Workdir:   workdir,
+		})
+		if id != "" {
+			t.Fatalf("expected empty string for oversized cursor store, got %q", id)
+		}
+	})
+
+	t.Run("cursor store streaming search finds workspace across chunk boundary", func(t *testing.T) {
+		needle := []byte("Workspace Path: /tmp/project")
+		prefix := bytes.Repeat([]byte("x"), 32*1024-len("Workspace Path: /tmp"))
+		prefix = append(prefix, needle...)
+
+		found, err := readerContains(bytes.NewReader(prefix), needle)
+		if err != nil {
+			t.Fatalf("readerContains returned error: %v", err)
+		}
+		if !found {
+			t.Fatal("expected streaming search to find workspace path across chunk boundary")
 		}
 	})
 

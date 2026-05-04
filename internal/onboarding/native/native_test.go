@@ -1,12 +1,16 @@
 package native
 
 import (
+	"context"
 	"errors"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"github.com/codagent/agent-runner/internal/profilewrite"
 	"github.com/codagent/agent-runner/internal/usersettings"
@@ -60,14 +64,22 @@ func TestModelCompletesSetupAndRecordsTimestampAfterWrite(t *testing.T) {
 	if len(wrote) != 1 {
 		t.Fatalf("profile writes = %d, want 1", len(wrote))
 	}
-	if wrote[0].TargetPath != "/home/me/.agent-runner/config.yaml" {
-		t.Fatalf("TargetPath = %q", wrote[0].TargetPath)
+	wantWrite := profilewrite.Request{
+		TargetPath:       "/home/me/.agent-runner/config.yaml",
+		InteractiveCLI:   "claude",
+		InteractiveModel: "opus",
+		HeadlessCLI:      "claude",
+		HeadlessModel:    "opus",
 	}
-	if wrote[0].InteractiveCLI != "claude" || wrote[0].InteractiveModel != "opus" || wrote[0].HeadlessCLI != "claude" || wrote[0].HeadlessModel != "opus" {
-		t.Fatalf("write request = %#v", wrote[0])
+	if diff := cmp.Diff(wantWrite, wrote[0]); diff != "" {
+		t.Fatalf("write request mismatch (-want +got):\n%s", diff)
 	}
-	if len(saved) != 1 || saved[0].Setup.CompletedAt != "2026-05-04T12:00:00Z" || saved[0].Onboarding.CompletedAt != "2026-05-01T00:00:00Z" {
-		t.Fatalf("saved settings = %#v", saved)
+	wantSaved := []usersettings.Settings{{
+		Setup:      usersettings.SetupSettings{CompletedAt: "2026-05-04T12:00:00Z"},
+		Onboarding: usersettings.OnboardingSettings{CompletedAt: "2026-05-01T00:00:00Z"},
+	}}
+	if diff := cmp.Diff(wantSaved, saved, cmpopts.IgnoreUnexported(usersettings.Settings{})); diff != "" {
+		t.Fatalf("saved settings mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -96,6 +108,9 @@ func TestCancelBeforeWriteLeavesSetupIncomplete(t *testing.T) {
 	}
 	if saved || wrote {
 		t.Fatalf("saved=%v wrote=%v, want no side effects", saved, wrote)
+	}
+	if view := m.View(); !strings.Contains(view, "Setup Cancelled") {
+		t.Fatalf("cancelled setup view missing Setup Cancelled:\n%s", view)
 	}
 }
 
@@ -208,6 +223,27 @@ func TestParseModelOutputMatchesSupportedAdapters(t *testing.T) {
 	opencode := parseModelOutput("opencode", "anthropic/claude-sonnet-4-5\nopenai/gpt-5.2\nanthropic/claude-sonnet-4-5\n")
 	if len(opencode) != 2 || opencode[0] != "anthropic/claude-sonnet-4-5" || opencode[1] != "openai/gpt-5.2" {
 		t.Fatalf("opencode models = %v", opencode)
+	}
+}
+
+func TestSubprocessModelsTimeoutReturnsError(t *testing.T) {
+	origTimeout := subprocessModelTimeout
+	origCommandContext := modelCommandContext
+	subprocessModelTimeout = 20 * time.Millisecond
+	modelCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sh", "-c", "sleep 10")
+	}
+	t.Cleanup(func() {
+		subprocessModelTimeout = origTimeout
+		modelCommandContext = origCommandContext
+	})
+
+	_, err := SubprocessModels{}.ModelsFor("claude")
+	if err == nil {
+		t.Fatal("ModelsFor() error = nil, want timeout error")
+	}
+	if !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("ModelsFor() error = %v, want context deadline exceeded", err)
 	}
 }
 

@@ -661,9 +661,6 @@ func (m *Model) lastResumableAgentInWorkflow(scope *StepNode) *StepNode {
 	}
 	for i := len(scope.Children) - 1; i >= 0; i-- {
 		child := scope.Children[i]
-		if child.Type == NodeSubWorkflow {
-			continue
-		}
 		if found := m.lastResumableAgentInWorkflow(child); found != nil {
 			return found
 		}

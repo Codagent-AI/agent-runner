@@ -27,6 +27,7 @@ const outOSCSawEsc = 10
 // boundaries are detected correctly.
 type outputProcessor struct {
 	textSentinel string
+	markerForms  [][]byte
 
 	escState          int
 	escBuf            []byte // bytes accumulated for the current escape sequence
@@ -340,7 +341,7 @@ func (p *outputProcessor) textMarkerTriggerSuffix(buf []byte, startBoundary bool
 		if len(trimmed) == 0 {
 			return nil, false
 		}
-		if isTextMarkerBoundaryByte(trimmed[0]) {
+		if isTextMarkerTerminatorByte(trimmed[0]) {
 			return trimmed, true
 		}
 	}
@@ -351,14 +352,21 @@ func (p *outputProcessor) textMarkerForms() [][]byte {
 	if p.textSentinel == "" {
 		return nil
 	}
-	return [][]byte{
-		[]byte(p.textSentinel),
-		[]byte("• " + p.textSentinel),
+	if p.markerForms == nil {
+		p.markerForms = [][]byte{
+			[]byte(p.textSentinel),
+			[]byte("• " + p.textSentinel),
+		}
 	}
+	return p.markerForms
 }
 
 func isTextMarkerBoundaryByte(b byte) bool {
 	return b != '_' && (b < '0' || b > '9') && (b < 'A' || b > 'Z') && (b < 'a' || b > 'z')
+}
+
+func isTextMarkerTerminatorByte(b byte) bool {
+	return isLineTerminator(b) || b == 0x1b
 }
 
 // flushIfOverflow checks whether escBuf exceeds maxEscBuf. If so, it appends

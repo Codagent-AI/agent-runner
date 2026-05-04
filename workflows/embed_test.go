@@ -281,4 +281,30 @@ func TestCoreCIFixNeededGateScript(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("python fallback parses escaped JSON report without jq", func(t *testing.T) {
+		pythonPath, err := exec.LookPath("python3")
+		if err != nil {
+			t.Skip("python3 not available")
+		}
+		binDir := t.TempDir()
+		if err := os.Symlink(pythonPath, filepath.Join(binDir, "python3")); err != nil {
+			t.Fatalf("symlink python3: %v", err)
+		}
+
+		cmd := exec.Command("sh", scriptPath)
+		cmd.Env = append(os.Environ(), "PATH="+binDir+":/usr/bin:/bin")
+		cmd.Stdin = strings.NewReader(`{"report":"intro \"quoted\"\n## CI Status: comments\n"}`)
+		err = cmd.Run()
+		if err == nil {
+			t.Fatal("fallback script exit code = 0, want fix-needed failure")
+		}
+		exitErr, ok := err.(*exec.ExitError)
+		if !ok {
+			t.Fatalf("run script: %v", err)
+		}
+		if exitErr.ExitCode() != 1 {
+			t.Fatalf("exit code = %d, want 1", exitErr.ExitCode())
+		}
+	})
 }

@@ -2,6 +2,7 @@
 package native
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -392,10 +393,14 @@ func (m *Model) View() string {
 		title = "Existing Agent Profiles"
 		body = "These entries already exist and will be replaced: " + strings.Join(m.collisions, ", ")
 	case stageDone:
-		if m.err != nil {
+		switch {
+		case m.result == ResultCancelled:
+			title = "Setup Cancelled"
+			body = ""
+		case m.err != nil:
 			title = "Setup Failed"
 			body = m.err.Error()
-		} else {
+		default:
 			title = "Setup Complete"
 			body = ""
 		}
@@ -440,6 +445,11 @@ func (PathDetector) DetectAdapters() ([]string, error) {
 
 type SubprocessModels struct{}
 
+var (
+	subprocessModelTimeout = 5 * time.Second
+	modelCommandContext    = exec.CommandContext
+)
+
 func (SubprocessModels) ModelsFor(adapter string) ([]string, error) {
 	var args []string
 	switch adapter {
@@ -452,8 +462,13 @@ func (SubprocessModels) ModelsFor(adapter string) ([]string, error) {
 	default:
 		return nil, nil
 	}
-	out, err := exec.Command(adapter, args...).Output() // #nosec G204 -- adapter is selected from supported CLI names.
+	ctx, cancel := context.WithTimeout(context.Background(), subprocessModelTimeout)
+	defer cancel()
+	out, err := modelCommandContext(ctx, adapter, args...).Output() // #nosec G204 -- adapter is selected from supported CLI names.
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("discover %s models: %w", adapter, ctx.Err())
+		}
 		return nil, nil
 	}
 	return parseModelOutput(adapter, string(out)), nil

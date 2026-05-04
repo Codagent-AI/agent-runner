@@ -1239,9 +1239,10 @@ type firstRunDeps struct {
 }
 
 var defaultFirstRunDeps = firstRunDeps{
-	load:        usersettings.Load,
-	isStdinTTY:  func() bool { return isatty.IsTerminal(os.Stdin.Fd()) },
-	isStdoutTTY: func() bool { return isatty.IsTerminal(os.Stdout.Fd()) },
+	load:                          usersettings.Load,
+	isStdinTTY:                    func() bool { return isatty.IsTerminal(os.Stdin.Fd()) },
+	isStdoutTTY:                   func() bool { return isatty.IsTerminal(os.Stdout.Fd()) },
+	continueAfterNativeSetupError: true,
 	runNativeSetup: func() (nativeSetupResult, error) {
 		result, err := nativesetup.Run(&nativesetup.Deps{})
 		switch result {

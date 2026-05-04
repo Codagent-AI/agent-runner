@@ -208,6 +208,25 @@ func TestInputProcessor(t *testing.T) {
 		}
 	})
 
+	t.Run("buffers split ST inside string sequence", func(t *testing.T) {
+		p := &inputProcessor{}
+		r1 := p.process([]byte("\x1bPq\x1b"))
+		if r1.triggered {
+			t.Fatal("unexpected trigger inside DCS")
+		}
+		if string(r1.forward) != "\x1bPq" {
+			t.Fatalf("expected DCS prefix without lone ESC, got %q", string(r1.forward))
+		}
+
+		r2 := p.process([]byte("\\"))
+		if r2.triggered {
+			t.Fatal("unexpected trigger inside split ST")
+		}
+		if string(r2.forward) != "\x1b\\" {
+			t.Fatalf("expected split ST forwarded, got %q", string(r2.forward))
+		}
+	})
+
 	t.Run("escape state persists across chunks", func(t *testing.T) {
 		p := &inputProcessor{}
 		// Send start of CSI in one chunk

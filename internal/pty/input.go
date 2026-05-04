@@ -10,10 +10,11 @@ import "strings"
 //   - APC  (\x1b_)  — same termination as OSC
 //   - SOS  (\x1bX)  — same termination as OSC
 const (
-	escNone        = iota
-	escSawEsc      // saw 0x1b, waiting for next byte
-	escInCSI       // inside CSI, waiting for final byte (0x40-0x7e)
-	escInStringSeq // inside OSC/DCS/PM/APC/SOS, waiting for BEL or ST
+	escNone         = iota
+	escSawEsc       // saw 0x1b, waiting for next byte
+	escInCSI        // inside CSI, waiting for final byte (0x40-0x7e)
+	escInStringSeq  // inside OSC/DCS/PM/APC/SOS, waiting for BEL or ST
+	escStringSawEsc // inside a string sequence after ESC, waiting for ST final byte
 )
 
 // inputProcessor tracks ANSI escape sequence state and detects continue
@@ -123,9 +124,16 @@ func (p *inputProcessor) processEscapeByte(b byte) []byte {
 		case 0x07: // BEL terminates
 			p.escState = escNone
 		case 0x1b: // start of ST (\x1b\)
-			p.escState = escSawEsc
+			p.escState = escStringSawEsc
+			return nil
 		}
 		return []byte{b}
+	case escStringSawEsc:
+		p.escState = escInStringSeq
+		if b == '\\' {
+			p.escState = escNone
+		}
+		return []byte{0x1b, b}
 	default:
 		return nil
 	}

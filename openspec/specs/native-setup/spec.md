@@ -1,7 +1,7 @@
 # native-setup Specification
 
 ## Purpose
-TBD - created by archiving change onboarding-native. Update Purpose after archive.
+Define the native first-run setup flow that writes required agent profiles before optionally handing off to the onboarding demo.
 ## Requirements
 ### Requirement: Native setup trigger condition
 
@@ -90,4 +90,3 @@ After native setup reaches a terminal state, the runner SHALL continue to the ap
 #### Scenario: Cancelled setup goes home
 - **WHEN** native setup is cancelled or fails
 - **THEN** the runner proceeds to the normal home TUI without marking setup complete
-

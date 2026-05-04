@@ -1,7 +1,7 @@
 # onboarding-workflow Specification
 
 ## Purpose
-Define the first-run onboarding experience that guides new users through initial agent profile setup via a dispatcher-triggered embedded workflow with welcome, dismiss, and setup-continuation flows.
+Define the optional dispatcher-triggered `onboarding:onboarding` demo that runs after native setup and records `continue`, `not_now`, or `dismiss` outcomes.
 ## Requirements
 ### Requirement: Embedded onboarding namespace contents
 
@@ -253,4 +253,3 @@ The first step of `onboarding:onboarding` SHALL be a `mode: ui` informational sc
 #### Scenario: Dismiss records demo dismissal
 - **WHEN** the user selects the dismiss action
 - **THEN** `settings.onboarding.dismissed` is written with the current RFC3339 timestamp
-

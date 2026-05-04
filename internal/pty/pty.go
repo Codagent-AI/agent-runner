@@ -352,7 +352,7 @@ func forwardOutput(ptmx *os.File, hint *idleHint, cmd *exec.Cmd, state *ptyState
 			triggered, werr := forwardChunk(result, proc, hint, sentinelTriggered)
 			if werr != nil {
 				debugLog.logf("stdout write error: %v", werr)
-				hint.cancel()
+				abortPTYSession(ptmx, cmd, state, hint)
 				return
 			}
 			if triggered {
@@ -370,7 +370,8 @@ func forwardOutput(ptmx *os.File, hint *idleHint, cmd *exec.Cmd, state *ptyState
 				result := proc.finish()
 				if len(result.forward) > 0 {
 					if werr := writeStdout(result.forward); werr != nil {
-						hint.cancel()
+						debugLog.logf("stdout write error: %v", werr)
+						abortPTYSession(ptmx, cmd, state, hint)
 						return
 					}
 				}
@@ -379,13 +380,22 @@ func forwardOutput(ptmx *os.File, hint *idleHint, cmd *exec.Cmd, state *ptyState
 				}
 				if ferr := flushToStdout(proc); ferr != nil {
 					debugLog.logf("flush error: %v", ferr)
-					hint.cancel()
+					abortPTYSession(ptmx, cmd, state, hint)
 					return
 				}
 				hint.cancel()
 			}
 			return
 		}
+	}
+}
+
+func abortPTYSession(ptmx *os.File, cmd *exec.Cmd, state *ptyState, hint *idleHint) {
+	state.markDone()
+	hint.cancel()
+	_ = ptmx.Close()
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
 	}
 }
 
