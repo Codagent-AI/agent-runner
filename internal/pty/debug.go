@@ -58,7 +58,10 @@ func (l *ptyDebugLogger) logMarkerNearMiss(raw []byte, result outputResult, proc
 	if l == nil || l.file == nil || result.triggered {
 		return
 	}
-	marker := []byte(textSentinel)
+	if proc == nil || proc.textSentinel == "" {
+		return
+	}
+	marker := []byte(proc.textSentinel)
 	if !bytes.Contains(raw, marker) && !bytes.Contains(result.forward, marker) {
 		return
 	}

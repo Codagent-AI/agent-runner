@@ -26,7 +26,7 @@ const outOSCSawEsc = 10
 // persists across process() calls so sentinels split across PTY read chunk
 // boundaries are detected correctly.
 type outputProcessor struct {
-	allowTextSentinel bool
+	textSentinel string
 
 	escState          int
 	escBuf            []byte // bytes accumulated for the current escape sequence
@@ -164,7 +164,7 @@ func (p *outputProcessor) processNormalByte(b byte, fwd *[]byte) bool {
 	if b == 0x1b {
 		return p.startEscape(fwd)
 	}
-	if !p.allowTextSentinel {
+	if p.textSentinel == "" {
 		*fwd = append(*fwd, b)
 		return false
 	}
@@ -174,7 +174,7 @@ func (p *outputProcessor) processNormalByte(b byte, fwd *[]byte) bool {
 }
 
 func (p *outputProcessor) startEscape(fwd *[]byte) bool {
-	if !p.allowTextSentinel {
+	if p.textSentinel == "" {
 		p.escBuf = append(p.escBuf[:0], 0x1b)
 		p.escState = escSawEsc
 		return false
@@ -182,13 +182,13 @@ func (p *outputProcessor) startEscape(fwd *[]byte) bool {
 
 	triggered := false
 	switch {
-	case isTextMarkerComplete(p.textBuf):
+	case p.isTextMarkerComplete(p.textBuf):
 		p.textBuf = p.textBuf[:0]
 		p.textStartBoundary = false
 		p.textSawVisible = false
 		p.textPrevBoundary = true
 		triggered = true
-	case len(p.textBuf) == 0 || isTextMarkerPrefix(p.textBuf, p.textStartBoundary):
+	case len(p.textBuf) == 0 || p.isTextMarkerPrefix(p.textBuf, p.textStartBoundary):
 		// Keep a potential marker buffered across styling/cursor sequences.
 	default:
 		*fwd = p.flushText(*fwd)
@@ -200,7 +200,7 @@ func (p *outputProcessor) startEscape(fwd *[]byte) bool {
 
 func (p *outputProcessor) processTextByte(b byte, fwd []byte) ([]byte, bool) {
 	if isLineTerminator(b) {
-		if isTextMarkerComplete(p.textBuf) {
+		if p.isTextMarkerComplete(p.textBuf) {
 			p.textBuf = p.textBuf[:0]
 			p.textStartBoundary = false
 			p.textSawVisible = false
@@ -220,7 +220,7 @@ func (p *outputProcessor) processTextByte(b byte, fwd []byte) ([]byte, bool) {
 	p.textBuf = append(p.textBuf, b)
 
 	for len(p.textBuf) > 0 {
-		if suffix, ok := textMarkerTriggerSuffix(p.textBuf, p.textStartBoundary); ok {
+		if suffix, ok := p.textMarkerTriggerSuffix(p.textBuf, p.textStartBoundary); ok {
 			p.textBuf = p.textBuf[:0]
 			p.textStartBoundary = false
 			if len(suffix) > 0 {
@@ -232,7 +232,7 @@ func (p *outputProcessor) processTextByte(b byte, fwd []byte) ([]byte, bool) {
 			}
 			return fwd, true
 		}
-		if isTextMarkerPrefix(p.textBuf, p.textStartBoundary) {
+		if p.isTextMarkerPrefix(p.textBuf, p.textStartBoundary) {
 			return fwd, false
 		}
 
@@ -259,7 +259,7 @@ func (p *outputProcessor) finish() outputResult {
 	if len(p.escBuf) == 0 && len(p.textBuf) == 0 {
 		return outputResult{}
 	}
-	if len(p.escBuf) == 0 && isTextMarkerComplete(p.textBuf) {
+	if len(p.escBuf) == 0 && p.isTextMarkerComplete(p.textBuf) {
 		p.textBuf = p.textBuf[:0]
 		p.textStartBoundary = false
 		p.textSawVisible = false
@@ -300,8 +300,8 @@ func csiStartsTextCell(final byte) bool {
 	}
 }
 
-func isTextMarkerComplete(buf []byte) bool {
-	for _, marker := range textMarkerForms() {
+func (p *outputProcessor) isTextMarkerComplete(buf []byte) bool {
+	for _, marker := range p.textMarkerForms() {
 		if bytes.HasPrefix(buf, marker) {
 			return len(bytes.Trim(buf[len(marker):], " \t")) == 0
 		}
@@ -309,14 +309,14 @@ func isTextMarkerComplete(buf []byte) bool {
 	return false
 }
 
-func isTextMarkerPrefix(buf []byte, startBoundary bool) bool {
+func (p *outputProcessor) isTextMarkerPrefix(buf []byte, startBoundary bool) bool {
 	if len(buf) == 0 {
 		return true
 	}
 	if !startBoundary {
 		return false
 	}
-	for _, marker := range textMarkerForms() {
+	for _, marker := range p.textMarkerForms() {
 		if bytes.HasPrefix(marker, buf) {
 			return true
 		}
@@ -327,11 +327,11 @@ func isTextMarkerPrefix(buf []byte, startBoundary bool) bool {
 	return false
 }
 
-func textMarkerTriggerSuffix(buf []byte, startBoundary bool) ([]byte, bool) {
+func (p *outputProcessor) textMarkerTriggerSuffix(buf []byte, startBoundary bool) ([]byte, bool) {
 	if !startBoundary {
 		return nil, false
 	}
-	for _, marker := range textMarkerForms() {
+	for _, marker := range p.textMarkerForms() {
 		if !bytes.HasPrefix(buf, marker) {
 			continue
 		}
@@ -347,10 +347,13 @@ func textMarkerTriggerSuffix(buf []byte, startBoundary bool) ([]byte, bool) {
 	return nil, false
 }
 
-func textMarkerForms() [][]byte {
+func (p *outputProcessor) textMarkerForms() [][]byte {
+	if p.textSentinel == "" {
+		return nil
+	}
 	return [][]byte{
-		[]byte(textSentinel),
-		[]byte("• " + textSentinel),
+		[]byte(p.textSentinel),
+		[]byte("• " + p.textSentinel),
 	}
 }
 

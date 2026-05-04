@@ -12,7 +12,7 @@ Interactive agent steps SHALL be executed inside a pseudo-terminal. The runner c
 
 ### Requirement: Continue triggers
 
-The PTY layer SHALL intercept continue triggers from two sources: user input (`/next` typed on a line followed by Enter, or a keyboard shortcut) and agent output (a designated sentinel). When any trigger is detected, the runner signals the CLI to terminate and advances to the next workflow step.
+The PTY layer SHALL intercept continue triggers from two sources: user input (`/next` typed on a line followed by Enter, or a keyboard shortcut) and agent output (the designated sentinel for the current interactive step attempt). When any trigger is detected, the runner signals the CLI to terminate and advances to the next workflow step.
 
 #### Scenario: /next typed
 - **WHEN** the user types `/next` and presses Enter during an interactive step

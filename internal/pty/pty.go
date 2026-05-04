@@ -36,9 +36,10 @@ type Result struct {
 
 // Options configures an interactive PTY session.
 type Options struct {
-	Env        []string // additional environment variables
-	Workdir    string   // working directory for the child process
-	DebugLabel string   // optional human-readable context for PTY debug logs
+	Env            []string // additional environment variables
+	Workdir        string   // working directory for the child process
+	DebugLabel     string   // optional human-readable context for PTY debug logs
+	ContinueMarker string   // optional plain-text continuation marker accepted from PTY output
 }
 
 // ptyState holds shared mutable state for a PTY session.
@@ -114,7 +115,7 @@ func RunInteractive(args []string, opts Options) (Result, error) {
 	outputDone := make(chan struct{})
 	go func() {
 		defer close(outputDone)
-		forwardOutput(ptmx, hint, cmd, state, exitCh, opts.DebugLabel)
+		forwardOutput(ptmx, hint, cmd, state, exitCh, opts.DebugLabel, opts.ContinueMarker)
 	}()
 
 	// Read stdin, process input, forward to PTY, detect continue triggers.
@@ -335,8 +336,8 @@ func forwardChunk(result outputResult, proc *outputProcessor, hint *idleHint, se
 	return false, nil
 }
 
-func forwardOutput(ptmx *os.File, hint *idleHint, cmd *exec.Cmd, state *ptyState, exitCh chan struct{}, debugLabel string) {
-	proc := &outputProcessor{}
+func forwardOutput(ptmx *os.File, hint *idleHint, cmd *exec.Cmd, state *ptyState, exitCh chan struct{}, debugLabel, continueMarker string) {
+	proc := &outputProcessor{textSentinel: continueMarker}
 	debugLog := openPTYDebugLogger(debugLabel)
 	defer debugLog.close()
 	buf := make([]byte, 4096)

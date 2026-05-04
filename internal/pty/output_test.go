@@ -5,7 +5,7 @@ import "testing"
 const sentinel = "\x1b]999;signal-continuation\x07"
 
 func textOutputProcessor() *outputProcessor {
-	return &outputProcessor{allowTextSentinel: true}
+	return &outputProcessor{textSentinel: textSentinel}
 }
 
 func TestOutputProcessor(t *testing.T) {
@@ -72,6 +72,28 @@ func TestOutputProcessor(t *testing.T) {
 		}
 		if string(r.forward) != "before\nafter" {
 			t.Fatalf("expected %q, got %q", "before\nafter", string(r.forward))
+		}
+	})
+
+	t.Run("detects only configured text sentinel", func(t *testing.T) {
+		current := textSentinel + "_current"
+		stale := textSentinel + "_stale"
+		p := &outputProcessor{textSentinel: current}
+
+		old := p.process([]byte("before\n" + stale + "\nafter\n"))
+		if old.triggered {
+			t.Fatal("unexpected trigger on stale text marker")
+		}
+		if string(old.forward) != "before\n"+stale+"\nafter\n" {
+			t.Fatalf("expected stale marker forwarded, got %q", string(old.forward))
+		}
+
+		next := p.process([]byte(current + "\n"))
+		if !next.triggered {
+			t.Fatal("expected trigger on configured text marker")
+		}
+		if len(next.forward) != 0 {
+			t.Fatalf("expected configured marker stripped, got %q", string(next.forward))
 		}
 	})
 

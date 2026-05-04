@@ -54,7 +54,7 @@ func TestPTYDebugLogger(t *testing.T) {
 		if l == nil {
 			t.Fatal("expected debug logger")
 		}
-		proc := &outputProcessor{textBuf: []byte("AGENT_RUNNER"), textStartBoundary: true, textSawVisible: true}
+		proc := &outputProcessor{textSentinel: textSentinel, textBuf: []byte("AGENT_RUNNER"), textStartBoundary: true, textSawVisible: true}
 		raw := []byte("prefix " + textSentinel + " suffix")
 		result := outputResult{forward: raw}
 		l.logMarkerNearMiss(raw, result, proc)
