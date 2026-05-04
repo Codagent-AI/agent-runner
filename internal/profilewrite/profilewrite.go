@@ -21,7 +21,7 @@ type Request struct {
 
 var managedAgents = []string{"headless_base", "implementor", "interactive_base", "planner"}
 
-func Write(req Request) error {
+func Write(req *Request) error {
 	if err := validate(req); err != nil {
 		return err
 	}
@@ -80,7 +80,7 @@ func Collisions(path string) ([]string, error) {
 	return collisions, nil
 }
 
-func Merge(doc *yaml.Node, req Request) error {
+func Merge(doc *yaml.Node, req *Request) error {
 	if err := validate(req); err != nil {
 		return err
 	}
@@ -116,7 +116,10 @@ func Merge(doc *yaml.Node, req Request) error {
 	return nil
 }
 
-func validate(req Request) error {
+func validate(req *Request) error {
+	if req == nil {
+		return fmt.Errorf("write-profile payload is nil")
+	}
 	if req.InteractiveCLI == "" {
 		return fmt.Errorf("write-profile payload missing interactive_cli")
 	}

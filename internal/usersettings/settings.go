@@ -22,7 +22,7 @@ type Settings struct {
 	Setup      SetupSettings
 	Onboarding OnboardingSettings
 
-	raw string
+	raw *string
 }
 
 type SetupSettings struct {
@@ -87,49 +87,76 @@ func Load() (Settings, error) {
 		return Settings{}, nil
 	}
 
-	settings := Settings{raw: string(body)}
+	raw := string(body)
+	settings := Settings{raw: &raw}
 	for i := 0; i+1 < len(yamlRoot.Content); i += 2 {
 		key := yamlRoot.Content[i]
 		value := yamlRoot.Content[i+1]
-		if key.Value == "theme" && value.Kind == yaml.ScalarNode {
-			switch Theme(value.Value) {
-			case ThemeLight:
-				settings.Theme = ThemeLight
-			case ThemeDark:
-				settings.Theme = ThemeDark
-			}
-			continue
-		}
-		if key.Value == "setup" && value.Kind == yaml.MappingNode {
-			for j := 0; j+1 < len(value.Content); j += 2 {
-				k := value.Content[j]
-				v := value.Content[j+1]
-				if v.Kind != yaml.ScalarNode {
-					continue
-				}
-				if k.Value == "completed_at" {
-					settings.Setup.CompletedAt = v.Value
-				}
-			}
-		}
-		if key.Value == "onboarding" && value.Kind == yaml.MappingNode {
-			for j := 0; j+1 < len(value.Content); j += 2 {
-				k := value.Content[j]
-				v := value.Content[j+1]
-				if v.Kind != yaml.ScalarNode {
-					continue
-				}
-				switch k.Value {
-				case "completed_at":
-					settings.Onboarding.CompletedAt = v.Value
-				case "dismissed":
-					settings.Onboarding.Dismissed = v.Value
-				}
-			}
-		}
+		parseSettingPair(&settings, key, value)
 	}
 
 	return settings, nil
+}
+
+func parseSettingPair(settings *Settings, key, value *yaml.Node) {
+	switch key.Value {
+	case "theme":
+		settings.Theme = parseTheme(value)
+	case "setup":
+		settings.Setup = parseSetup(value)
+	case "onboarding":
+		settings.Onboarding = parseOnboarding(value)
+	}
+}
+
+func parseTheme(value *yaml.Node) Theme {
+	if value.Kind != yaml.ScalarNode {
+		return ""
+	}
+	switch Theme(value.Value) {
+	case ThemeLight:
+		return ThemeLight
+	case ThemeDark:
+		return ThemeDark
+	default:
+		return ""
+	}
+}
+
+func parseSetup(value *yaml.Node) SetupSettings {
+	var setup SetupSettings
+	if value.Kind != yaml.MappingNode {
+		return setup
+	}
+	for j := 0; j+1 < len(value.Content); j += 2 {
+		k := value.Content[j]
+		v := value.Content[j+1]
+		if k.Value == "completed_at" && v.Kind == yaml.ScalarNode {
+			setup.CompletedAt = v.Value
+		}
+	}
+	return setup
+}
+
+func parseOnboarding(value *yaml.Node) OnboardingSettings {
+	var onboarding OnboardingSettings
+	if value.Kind != yaml.MappingNode {
+		return onboarding
+	}
+	for j := 0; j+1 < len(value.Content); j += 2 {
+		k := value.Content[j]
+		v := value.Content[j+1]
+		if v.Kind != yaml.ScalarNode {
+			continue
+		}
+		switch k.Value {
+		case "completed_at":
+			onboarding.CompletedAt = v.Value
+		case "dismissed":
+			onboarding.Dismissed = v.Value
+		}
+	}
+	return onboarding
 }
 
 func Save(settings Settings) error {
@@ -183,9 +210,9 @@ func Save(settings Settings) error {
 
 func marshalSettings(settings Settings) ([]byte, error) {
 	root := &yaml.Node{Kind: yaml.MappingNode}
-	if settings.raw != "" {
+	if settings.raw != nil {
 		var doc yaml.Node
-		if err := yaml.Unmarshal([]byte(settings.raw), &doc); err == nil && len(doc.Content) > 0 && doc.Content[0].Kind == yaml.MappingNode {
+		if err := yaml.Unmarshal([]byte(*settings.raw), &doc); err == nil && len(doc.Content) > 0 && doc.Content[0].Kind == yaml.MappingNode {
 			root = doc.Content[0]
 		}
 	}

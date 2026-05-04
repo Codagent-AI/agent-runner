@@ -129,6 +129,24 @@ func TestEnsureFirstRunForTUICancelledSetupDoesNotStartDemo(t *testing.T) {
 	}
 }
 
+func TestEnsureFirstRunForTUISetupErrorFails(t *testing.T) {
+	code := ensureFirstRunForTUI(firstRunDeps{
+		load:        func() (usersettings.Settings, error) { return usersettings.Settings{}, nil },
+		isStdinTTY:  func() bool { return true },
+		isStdoutTTY: func() bool { return true },
+		runNativeSetup: func() (nativeSetupResult, error) {
+			return nativeSetupFailed, errors.New("write failed")
+		},
+		runWorkflow: func(string) int {
+			t.Fatal("runWorkflow should not be called")
+			return 0
+		},
+	})
+	if code == 0 {
+		t.Fatal("ensureFirstRunForTUI() = 0, want non-zero")
+	}
+}
+
 func TestEnsureFirstRunForTUILoadErrorFails(t *testing.T) {
 	code := ensureFirstRunForTUI(firstRunDeps{
 		load:        func() (usersettings.Settings, error) { return usersettings.Settings{}, errors.New("boom") },

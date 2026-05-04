@@ -148,7 +148,7 @@ func decodeWriteProfilePayload(r io.Reader, payload *writeProfilePayload) error 
 }
 
 func writeProfile(payload *writeProfilePayload) error {
-	return profilewrite.Write(profilewrite.Request{
+	return profilewrite.Write(&profilewrite.Request{
 		InteractiveCLI:   payload.InteractiveCLI,
 		InteractiveModel: payload.InteractiveModel,
 		HeadlessCLI:      payload.HeadlessCLI,
@@ -158,7 +158,7 @@ func writeProfile(payload *writeProfilePayload) error {
 }
 
 func mergeProfileAgents(doc *yaml.Node, payload *writeProfilePayload) error {
-	return profilewrite.Merge(doc, profilewrite.Request{
+	return profilewrite.Merge(doc, &profilewrite.Request{
 		InteractiveCLI:   payload.InteractiveCLI,
 		InteractiveModel: payload.InteractiveModel,
 		HeadlessCLI:      payload.HeadlessCLI,

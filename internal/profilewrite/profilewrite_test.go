@@ -34,7 +34,7 @@ other_top_level: true
 		t.Fatalf("write existing config: %v", err)
 	}
 
-	err := Write(Request{
+	err := Write(&Request{
 		TargetPath:       target,
 		InteractiveCLI:   "claude",
 		InteractiveModel: "opus",
@@ -75,7 +75,7 @@ other_top_level: true
 func TestWriteCreatesParentAnd0600File(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "home", ".agent-runner", "config.yaml")
 
-	err := Write(Request{
+	err := Write(&Request{
 		TargetPath:     target,
 		InteractiveCLI: "claude",
 		HeadlessCLI:    "codex",
@@ -130,7 +130,7 @@ func TestWriteLeavesOriginalOnFailure(t *testing.T) {
 		t.Fatalf("write original: %v", err)
 	}
 
-	err := Write(Request{TargetPath: target, InteractiveCLI: "claude"})
+	err := Write(&Request{TargetPath: target, InteractiveCLI: "claude"})
 	if err == nil || !strings.Contains(err.Error(), "headless_cli") {
 		t.Fatalf("Write() error = %v, want validation error", err)
 	}

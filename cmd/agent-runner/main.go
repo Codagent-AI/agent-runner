@@ -1242,7 +1242,7 @@ var defaultFirstRunDeps = firstRunDeps{
 	isStdinTTY:  func() bool { return isatty.IsTerminal(os.Stdin.Fd()) },
 	isStdoutTTY: func() bool { return isatty.IsTerminal(os.Stdout.Fd()) },
 	runNativeSetup: func() (nativeSetupResult, error) {
-		result, err := nativesetup.Run(nativesetup.Deps{})
+		result, err := nativesetup.Run(&nativesetup.Deps{})
 		switch result {
 		case nativesetup.ResultCompleted:
 			return nativeSetupCompleted, err
@@ -1270,7 +1270,7 @@ func ensureFirstRunForTUI(deps firstRunDeps) int {
 		result, err := deps.runNativeSetup()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-			return 0
+			return 1
 		}
 		if result != nativeSetupCompleted {
 			return 0

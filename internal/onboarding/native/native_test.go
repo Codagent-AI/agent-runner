@@ -2,7 +2,6 @@ package native
 
 import (
 	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +13,7 @@ import (
 )
 
 func TestWelcomeSurfaceHasNoSkipDismissOrNotNow(t *testing.T) {
-	m := NewModel(Deps{})
+	m := NewModel(&Deps{})
 	view := strings.ToLower(m.View())
 	for _, forbidden := range []string{"skip", "dismiss", "not now", "not-now"} {
 		if strings.Contains(view, forbidden) {
@@ -42,8 +41,8 @@ func TestModelCompletesSetupAndRecordsTimestampAfterWrite(t *testing.T) {
 			saved = append(saved, mutator(usersettings.Settings{Onboarding: usersettings.OnboardingSettings{CompletedAt: "2026-05-01T00:00:00Z"}}))
 			return nil
 		}),
-		Profiles: ProfileWriterFunc(func(req profilewrite.Request) error {
-			wrote = append(wrote, req)
+		Profiles: ProfileWriterFunc(func(req *profilewrite.Request) error {
+			wrote = append(wrote, *req)
 			return nil
 		}),
 		Collisions: CollisionDetectorFunc(func(string) ([]string, error) { return nil, nil }),
@@ -51,7 +50,7 @@ func TestModelCompletesSetupAndRecordsTimestampAfterWrite(t *testing.T) {
 		HomeDir:    func() (string, error) { return "/home/me", nil },
 		Cwd:        func() (string, error) { return "/work/project", nil },
 	}
-	m := NewModel(deps)
+	m := NewModel(&deps)
 
 	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter")
 
@@ -61,7 +60,7 @@ func TestModelCompletesSetupAndRecordsTimestampAfterWrite(t *testing.T) {
 	if len(wrote) != 1 {
 		t.Fatalf("profile writes = %d, want 1", len(wrote))
 	}
-	if wrote[0].TargetPath != filepath.Join("/home/me", ".agent-runner", "config.yaml") {
+	if wrote[0].TargetPath != "/home/me/.agent-runner/config.yaml" {
 		t.Fatalf("TargetPath = %q", wrote[0].TargetPath)
 	}
 	if wrote[0].InteractiveCLI != "claude" || wrote[0].InteractiveModel != "opus" || wrote[0].HeadlessCLI != "claude" || wrote[0].HeadlessModel != "opus" {
@@ -75,14 +74,14 @@ func TestModelCompletesSetupAndRecordsTimestampAfterWrite(t *testing.T) {
 func TestCancelBeforeWriteLeavesSetupIncomplete(t *testing.T) {
 	saved := false
 	wrote := false
-	m := NewModel(Deps{
+	m := NewModel(&Deps{
 		Detector: AdapterDetectorFunc(func() ([]string, error) { return []string{"claude"}, nil }),
 		Models:   ModelDiscovererFunc(func(string) ([]string, error) { return nil, nil }),
 		Settings: SettingsStoreFunc(func(func(usersettings.Settings) usersettings.Settings) error {
 			saved = true
 			return nil
 		}),
-		Profiles: ProfileWriterFunc(func(profilewrite.Request) error {
+		Profiles: ProfileWriterFunc(func(*profilewrite.Request) error {
 			wrote = true
 			return nil
 		}),
@@ -102,11 +101,11 @@ func TestCancelBeforeWriteLeavesSetupIncomplete(t *testing.T) {
 
 func TestOverwriteConfirmationCanCancelBeforeWrite(t *testing.T) {
 	wrote := false
-	m := NewModel(Deps{
+	m := NewModel(&Deps{
 		Detector:   AdapterDetectorFunc(func() ([]string, error) { return []string{"claude"}, nil }),
 		Models:     ModelDiscovererFunc(func(string) ([]string, error) { return nil, nil }),
 		Collisions: CollisionDetectorFunc(func(string) ([]string, error) { return []string{"planner"}, nil }),
-		Profiles: ProfileWriterFunc(func(profilewrite.Request) error {
+		Profiles: ProfileWriterFunc(func(*profilewrite.Request) error {
 			wrote = true
 			return nil
 		}),
@@ -127,10 +126,10 @@ func TestOverwriteConfirmationCanCancelBeforeWrite(t *testing.T) {
 
 func TestWriteFailureReturnsFailedWithoutRecordingSetup(t *testing.T) {
 	saved := false
-	m := NewModel(Deps{
+	m := NewModel(&Deps{
 		Detector: AdapterDetectorFunc(func() ([]string, error) { return []string{"claude"}, nil }),
 		Models:   ModelDiscovererFunc(func(string) ([]string, error) { return nil, nil }),
-		Profiles: ProfileWriterFunc(func(profilewrite.Request) error {
+		Profiles: ProfileWriterFunc(func(*profilewrite.Request) error {
 			return errors.New("disk full")
 		}),
 		Settings: SettingsStoreFunc(func(func(usersettings.Settings) usersettings.Settings) error {
@@ -151,6 +150,24 @@ func TestWriteFailureReturnsFailedWithoutRecordingSetup(t *testing.T) {
 	}
 	if saved {
 		t.Fatal("settings were saved after profile write failure")
+	}
+}
+
+func TestModelDiscoveryErrorFailsSetup(t *testing.T) {
+	m := NewModel(&Deps{
+		Detector: AdapterDetectorFunc(func() ([]string, error) { return []string{"claude"}, nil }),
+		Models: ModelDiscovererFunc(func(string) ([]string, error) {
+			return nil, errors.New("permission denied")
+		}),
+	})
+
+	sendKeys(t, m, "enter", "enter")
+
+	if m.Result() != ResultFailed {
+		t.Fatalf("Result() = %v, want failed", m.Result())
+	}
+	if m.Err() == nil || !strings.Contains(m.Err().Error(), "discover models for claude") {
+		t.Fatalf("Err() = %v, want discovery context", m.Err())
 	}
 }
 

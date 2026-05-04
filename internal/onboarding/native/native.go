@@ -45,12 +45,12 @@ type ModelDiscovererFunc func(string) ([]string, error)
 func (f ModelDiscovererFunc) ModelsFor(adapter string) ([]string, error) { return f(adapter) }
 
 type ProfileWriter interface {
-	WriteProfile(profilewrite.Request) error
+	WriteProfile(*profilewrite.Request) error
 }
 
-type ProfileWriterFunc func(profilewrite.Request) error
+type ProfileWriterFunc func(*profilewrite.Request) error
 
-func (f ProfileWriterFunc) WriteProfile(req profilewrite.Request) error { return f(req) }
+func (f ProfileWriterFunc) WriteProfile(req *profilewrite.Request) error { return f(req) }
 
 type CollisionDetector interface {
 	Collisions(path string) ([]string, error)
@@ -81,7 +81,7 @@ type Deps struct {
 	Cwd        func() (string, error)
 }
 
-func Run(deps Deps) (Result, error) {
+func Run(deps *Deps) (Result, error) {
 	m := NewModel(deps)
 	final, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 	if err != nil {
@@ -109,31 +109,33 @@ const (
 )
 
 type Model struct {
-	deps              Deps
-	stage             stage
-	focus             int
-	options           []string
-	adapters          []string
-	interactiveCLI    string
-	interactiveModel  string
-	headlessCLI       string
-	headlessModel     string
-	scope             string
-	targetPath        string
-	collisions        []string
-	width             int
-	result            Result
-	err               error
-	terminal          bool
-	loadedFirstChoice bool
+	deps             Deps
+	stage            stage
+	focus            int
+	options          []string
+	adapters         []string
+	interactiveCLI   string
+	interactiveModel string
+	headlessCLI      string
+	headlessModel    string
+	scope            string
+	targetPath       string
+	collisions       []string
+	width            int
+	result           Result
+	err              error
+	terminal         bool
 }
 
-func NewModel(deps Deps) *Model {
+func NewModel(deps *Deps) *Model {
 	deps = fillDefaults(deps)
-	return &Model{deps: deps, stage: stageWelcome, width: 80, options: []string{"Continue"}}
+	return &Model{deps: *deps, stage: stageWelcome, width: 80, options: []string{"Continue"}}
 }
 
-func fillDefaults(deps Deps) Deps {
+func fillDefaults(deps *Deps) *Deps {
+	if deps == nil {
+		deps = &Deps{}
+	}
 	if deps.Detector == nil {
 		deps.Detector = PathDetector{}
 	}
@@ -272,7 +274,7 @@ func (m *Model) loadAdapters() bool {
 func (m *Model) loadModels(next stage, adapter string) bool {
 	models, err := m.deps.Models.ModelsFor(adapter)
 	if err != nil {
-		models = nil
+		return m.fail(fmt.Errorf("discover models for %s: %w", adapter, err))
 	}
 	if len(models) == 0 {
 		if next == stageInteractiveModel {
@@ -309,7 +311,7 @@ func (m *Model) resolveTarget() error {
 }
 
 func (m *Model) write() bool {
-	err := m.deps.Profiles.WriteProfile(profilewrite.Request{
+	err := m.deps.Profiles.WriteProfile(&profilewrite.Request{
 		TargetPath:       m.targetPath,
 		InteractiveCLI:   m.interactiveCLI,
 		InteractiveModel: m.interactiveModel,
