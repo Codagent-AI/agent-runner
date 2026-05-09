@@ -115,10 +115,11 @@ func TestBuildTreeClassifiesScriptAndUISteps(t *testing.T) {
 	wf := &model.Workflow{
 		Name: "onboarding",
 		Steps: []model.Step{
-			{ID: "detect", Script: "detect-adapters.sh"},
+			{ID: "detect", Script: "detect-adapters.sh", Capture: "detected"},
 			{
 				ID:      "pick",
 				Mode:    model.ModeUI,
+				Capture: "choice",
 				Title:   "Pick",
 				Actions: []model.UIAction{{Label: "Continue", Outcome: "continue"}},
 			},
@@ -129,11 +130,20 @@ func TestBuildTreeClassifiesScriptAndUISteps(t *testing.T) {
 	script := tree.Root.Children[0]
 	ui := tree.Root.Children[1]
 
-	if script.Type == NodeRoot {
-		t.Fatalf("script step type = NodeRoot, want a concrete script type")
+	if script.Type != NodeScript {
+		t.Fatalf("script step type = %v, want NodeScript", script.Type)
+	}
+	if script.StaticScript != "detect-adapters.sh" {
+		t.Fatalf("script StaticScript = %q, want detect-adapters.sh", script.StaticScript)
+	}
+	if script.CaptureName != "detected" {
+		t.Fatalf("script CaptureName = %q, want detected", script.CaptureName)
 	}
 	if ui.Type == NodeRoot {
 		t.Fatalf("ui step type = NodeRoot, want a concrete ui type")
+	}
+	if ui.CaptureName != "choice" {
+		t.Fatalf("ui CaptureName = %q, want choice", ui.CaptureName)
 	}
 	if typeGlyph(script.Type) == "" {
 		t.Fatal("script type glyph is empty")
@@ -216,5 +226,30 @@ func TestDrilldown_NoFlattenOnShellBodyLoop(t *testing.T) {
 	}
 	if iter.Drilldown() != iter {
 		t.Errorf("drilldown should return self when no flatten target")
+	}
+}
+
+func TestEnsureIterationClonesScriptTemplateMetadata(t *testing.T) {
+	loop := buildStepNode(&model.Step{
+		ID: "items",
+		Loop: &model.Loop{
+			Over: "items/*",
+			As:   "item",
+		},
+		Steps: []model.Step{
+			{ID: "detect", Script: "detect-adapters.sh", Capture: "detected"},
+		},
+	}, nil)
+
+	iter := ensureIteration(loop, 0)
+	if len(iter.Children) != 1 {
+		t.Fatalf("iteration children = %d, want 1", len(iter.Children))
+	}
+	script := iter.Children[0]
+	if script.StaticScript != "detect-adapters.sh" {
+		t.Fatalf("script StaticScript = %q, want detect-adapters.sh", script.StaticScript)
+	}
+	if script.CaptureName != "detected" {
+		t.Fatalf("script CaptureName = %q, want detected", script.CaptureName)
 	}
 }

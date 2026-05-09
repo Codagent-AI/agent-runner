@@ -54,6 +54,9 @@ steps:
     prompt: |
       Help the user plan tasks for the change.
       You MUST use the codagent:plan-tasks skill.
+      You MUST create detailed task files under {{proposal_dir}}/tasks/*.md.
+      You MUST also create {{proposal_dir}}/tasks.md as an index that links to those task files.
+      The implement workflow requires at least one matching tasks/*.md file.
       Once all task documents are written, continue to the next step.
 
   - id: review

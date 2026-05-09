@@ -439,6 +439,7 @@ func TestRenderLegend_TypeGlyphsUseRunScreenColors(t *testing.T) {
 	legend := m.renderLegend()
 	wants := []string{
 		typeGlyph(NodeShell) + "  shell",
+		typeGlyph(NodeScript) + "  script",
 		typeGlyph(NodeHeadlessAgent) + "  headless agent",
 		typeGlyph(NodeInteractiveAgent) + "  interactive agent",
 		typeGlyph(NodeSubWorkflow) + "  sub-workflow",
@@ -449,6 +450,18 @@ func TestRenderLegend_TypeGlyphsUseRunScreenColors(t *testing.T) {
 		if !strings.Contains(legend, want) {
 			t.Errorf("legend should contain styled type glyph %q, got:\n%q", want, legend)
 		}
+	}
+}
+
+func TestTypeGlyph_ScriptDiffersFromInteractiveAgent(t *testing.T) {
+	script := tuistyle.Sanitize(typeGlyph(NodeScript))
+	interactive := tuistyle.Sanitize(typeGlyph(NodeInteractiveAgent))
+
+	if script == interactive {
+		t.Fatalf("script glyph = interactive glyph = %q", script)
+	}
+	if script != "#" {
+		t.Fatalf("script glyph = %q, want #", script)
 	}
 }
 

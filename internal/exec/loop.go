@@ -414,7 +414,6 @@ func executeIterationBody(
 		}
 
 		bodyStepID := steps[i].ID
-
 		skip, skipErr := ShouldSkipStep(steps[i].SkipIf, iterCtx.LastStepOutcome, iterCtx, bodyStepID)
 		if skipErr != nil {
 			persistIterationFailState(iterCtx, loopStepID, iteration, bodyStepID, false)

@@ -358,6 +358,16 @@ func TestCodexAdapter(t *testing.T) {
 		assertArgs(t, expected, args)
 	})
 
+	t.Run("resume interactive normalizes legacy rollout session IDs", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:    "continue review",
+			SessionID: "rollout-2026-05-03T22-18-42-019df0c7-daf4-7120-b587-0731815d36cb",
+			Headless:  false,
+		})
+		expected := []string{"codex", "resume", "--no-alt-screen", "019df0c7-daf4-7120-b587-0731815d36cb", "continue review"}
+		assertArgs(t, expected, args)
+	})
+
 	t.Run("model override headless", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:   "do something",
@@ -378,16 +388,27 @@ func TestCodexAdapter(t *testing.T) {
 		assertArgs(t, expected, args)
 	})
 
-	t.Run("resume drops model flag", func(t *testing.T) {
-		// A Codex thread keeps the model it was started with, so -m is
-		// omitted when resuming even if Model is set on the input.
+	t.Run("resume keeps model flag", func(t *testing.T) {
+		// Codex resumes with its current default model when -m is omitted, so
+		// keep the workflow/profile model on resume to avoid model drift.
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:    "continue",
 			SessionID: "thread-abc",
 			Model:     "o3",
 			Headless:  true,
 		})
-		expected := []string{"codex", "--dangerously-bypass-approvals-and-sandbox", "exec", "resume", "--json", "thread-abc", "continue"}
+		expected := []string{"codex", "--dangerously-bypass-approvals-and-sandbox", "exec", "resume", "--json", "-m", "o3", "thread-abc", "continue"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("resume interactive keeps model flag", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:    "continue review",
+			SessionID: "thread-abc",
+			Model:     "gpt-5.4-mini",
+			Headless:  false,
+		})
+		expected := []string{"codex", "resume", "--no-alt-screen", "-m", "gpt-5.4-mini", "thread-abc", "continue review"}
 		assertArgs(t, expected, args)
 	})
 
@@ -528,6 +549,18 @@ func TestCodexAdapter(t *testing.T) {
 		}
 	})
 
+	t.Run("discover headless session prefers JSONL over preset", func(t *testing.T) {
+		output := `{"type":"thread.started","thread_id":"019df0cd-7acc-7813-9c4e-180741b19f5f"}`
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			ProcessOutput: output,
+			PresetID:      "rollout-2026-05-03T22-18-42-019df0c7-daf4-7120-b587-0731815d36cb",
+			Headless:      true,
+		})
+		if id != "019df0cd-7acc-7813-9c4e-180741b19f5f" {
+			t.Fatalf("expected JSONL thread id, got %q", id)
+		}
+	})
+
 	t.Run("discover headless session returns empty for no thread.started", func(t *testing.T) {
 		output := `{"type":"message","content":"hello"}`
 		id := adapter.DiscoverSessionID(&DiscoverOptions{
@@ -559,6 +592,44 @@ func TestCodexAdapter(t *testing.T) {
 
 		if !matchesSessionCwd(sessionFile, cwd) {
 			t.Fatal("expected session_meta payload cwd to match")
+		}
+	})
+
+	t.Run("discover interactive session returns session_meta id", func(t *testing.T) {
+		fakeHome := t.TempDir()
+		cwd := t.TempDir()
+		canonCwd, err := filepath.EvalSymlinks(cwd)
+		if err != nil {
+			t.Fatalf("EvalSymlinks: %v", err)
+		}
+
+		origHome := os.Getenv("HOME")
+		origCwd, _ := os.Getwd()
+		t.Cleanup(func() {
+			os.Setenv("HOME", origHome)
+			_ = os.Chdir(origCwd)
+		})
+		os.Setenv("HOME", fakeHome)
+		if err := os.Chdir(canonCwd); err != nil {
+			t.Fatalf("chdir: %v", err)
+		}
+
+		sessionDir := filepath.Join(fakeHome, ".codex", "sessions", "2026", "05", "03")
+		if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+			t.Fatalf("mkdir session dir: %v", err)
+		}
+		sessionFile := filepath.Join(sessionDir, "rollout-2026-05-03T22-18-42-019df0c7-daf4-7120-b587-0731815d36cb.jsonl")
+		data := fmt.Sprintf(`{"type":"session_meta","payload":{"id":"019df0c7-daf4-7120-b587-0731815d36cb","cwd":%q}}`, canonCwd) + "\n"
+		if err := os.WriteFile(sessionFile, []byte(data), 0o600); err != nil {
+			t.Fatalf("write session fixture: %v", err)
+		}
+
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			SpawnTime: time.Now().Add(-time.Second),
+			Headless:  false,
+		})
+		if id != "019df0c7-daf4-7120-b587-0731815d36cb" {
+			t.Fatalf("expected session_meta id, got %q", id)
 		}
 	})
 
@@ -1229,7 +1300,7 @@ func TestCursorAdapter(t *testing.T) {
 		}
 	})
 
-	t.Run("discover interactive session ID returns empty even when cursor chat matches workdir", func(t *testing.T) {
+	t.Run("discover interactive session ID returns matching chat after spawn", func(t *testing.T) {
 		fakeHome := t.TempDir()
 		t.Setenv("HOME", fakeHome)
 
@@ -1248,8 +1319,27 @@ func TestCursorAdapter(t *testing.T) {
 			Headless:  false,
 			Workdir:   workdir,
 		})
-		if id != "" {
-			t.Fatalf("expected empty string without verified Cursor session provenance, got %q", id)
+		if id != matchingID {
+			t.Fatalf("expected matching cursor chat %q, got %q", matchingID, id)
+		}
+	})
+
+	t.Run("discover interactive session ID falls back to current directory", func(t *testing.T) {
+		fakeHome := t.TempDir()
+		t.Setenv("HOME", fakeHome)
+
+		workdir := t.TempDir()
+		t.Chdir(workdir)
+		spawnTime := time.Now().Add(-10 * time.Second)
+		matchingID := "44444444-4444-4444-4444-444444444444"
+		writeCursorStoreDB(t, fakeHome, "workspace-cwd", matchingID, time.Now().Add(-1*time.Second), filepath.Clean(workdir))
+
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			SpawnTime: spawnTime,
+			Headless:  false,
+		})
+		if id != matchingID {
+			t.Fatalf("expected matching cursor chat %q, got %q", matchingID, id)
 		}
 	})
 
@@ -1283,6 +1373,42 @@ func TestCursorAdapter(t *testing.T) {
 		})
 		if id != "" {
 			t.Fatalf("expected empty string for ambiguous cursor chats, got %q", id)
+		}
+	})
+
+	t.Run("discover interactive session ID skips oversized cursor stores", func(t *testing.T) {
+		fakeHome := t.TempDir()
+		t.Setenv("HOME", fakeHome)
+		workdir := t.TempDir()
+		spawnTime := time.Now().Add(-10 * time.Second)
+		matchingID := "55555555-5555-5555-5555-555555555555"
+		writeCursorStoreDB(t, fakeHome, "workspace-large", matchingID, time.Now().Add(-1*time.Second), workdir)
+		path := filepath.Join(fakeHome, ".cursor", "chats", "workspace-large", matchingID, "store.db")
+		if err := os.Truncate(path, maxCursorStoreDBSize+1); err != nil {
+			t.Fatalf("truncate cursor store.db: %v", err)
+		}
+
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			SpawnTime: spawnTime,
+			Headless:  false,
+			Workdir:   workdir,
+		})
+		if id != "" {
+			t.Fatalf("expected empty string for oversized cursor store, got %q", id)
+		}
+	})
+
+	t.Run("cursor store streaming search finds workspace across chunk boundary", func(t *testing.T) {
+		needle := []byte("Workspace Path: /tmp/project")
+		prefix := bytes.Repeat([]byte("x"), 32*1024-len("Workspace Path: /tmp"))
+		prefix = append(prefix, needle...)
+
+		found, err := readerContains(bytes.NewReader(prefix), needle)
+		if err != nil {
+			t.Fatalf("readerContains returned error: %v", err)
+		}
+		if !found {
+			t.Fatal("expected streaming search to find workspace path across chunk boundary")
 		}
 	})
 

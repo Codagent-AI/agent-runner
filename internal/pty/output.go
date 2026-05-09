@@ -19,20 +19,23 @@ const (
 const outOSCSawEsc = 10
 
 // outputProcessor tracks ANSI escape sequence state and detects continuation
-// sentinels in the output stream. The OSC sentinel is kept for compatibility;
-// the text sentinel is the default prompt path because it does not require the
-// hosted agent CLI to run a shell command.
+// sentinels in the output stream.
 //
 // Sentinels are stripped from output (never forwarded to the terminal). All
 // other bytes, including non-matching OSC sequences, are forwarded as-is. State
 // persists across process() calls so sentinels split across PTY read chunk
 // boundaries are detected correctly.
 type outputProcessor struct {
-	escState   int
-	escBuf     []byte // bytes accumulated for the current escape sequence
-	oscPayload []byte // OSC payload bytes (between \x1b] and BEL/ST)
-	textBuf    []byte // possible prefix of textSentinel in normal output
-	textOnLine bool   // normal text has been seen since the last line break
+	textSentinel string
+	markerForms  [][]byte
+
+	escState          int
+	escBuf            []byte // bytes accumulated for the current escape sequence
+	oscPayload        []byte // OSC payload bytes (between \x1b] and BEL/ST)
+	textBuf           []byte // possible prefix of a text continuation marker in normal output
+	textStartBoundary bool   // textBuf started at a visible token boundary
+	textSawVisible    bool   // normal visible text has been seen since the last line break
+	textPrevBoundary  bool   // the previous normal visible byte was a token boundary
 }
 
 // outputResult holds the outcome of processing an output chunk.
@@ -52,114 +55,192 @@ func (p *outputProcessor) process(chunk []byte) outputResult {
 	for _, b := range chunk {
 		switch p.escState {
 		case escSawEsc:
-			p.escBuf = append(p.escBuf, b)
-			switch b {
-			case ']':
-				p.escState = escInStringSeq
-				p.oscPayload = p.oscPayload[:0]
-			case '[':
-				p.escState = escInCSI
-			default:
-				// Simple two-byte escape or unrecognised — flush and reset.
-				fwd = append(fwd, p.escBuf...)
-				p.escBuf = p.escBuf[:0]
-				p.escState = escNone
-			}
+			p.processEscByte(b, &fwd)
 			continue
 
 		case escInCSI:
-			p.escBuf = append(p.escBuf, b)
-			if b >= 0x40 && b <= 0x7e { // final byte
-				fwd = append(fwd, p.escBuf...)
-				p.escBuf = p.escBuf[:0]
-				p.escState = escNone
-			}
+			p.processCSIByte(b, &fwd)
 			continue
 
 		case escInStringSeq:
-			switch b {
-			case 0x07: // BEL terminates OSC
-				if string(p.oscPayload) == sentinelPayload {
-					// Sentinel matched — strip (don't forward), signal trigger.
-					p.escBuf = p.escBuf[:0]
-					p.oscPayload = p.oscPayload[:0]
-					p.escState = escNone
-					triggered = true
-				} else {
-					// Non-matching OSC — flush the buffered bytes.
-					p.escBuf = append(p.escBuf, b)
-					fwd = append(fwd, p.escBuf...)
-					p.escBuf = p.escBuf[:0]
-					p.oscPayload = p.oscPayload[:0]
-					p.escState = escNone
-				}
-			case 0x1b: // potential start of ST (\x1b\)
-				p.escBuf = append(p.escBuf, b)
-				fwd = p.flushIfOverflow(fwd)
-				if p.escState == escInStringSeq { // not flushed
-					p.escState = outOSCSawEsc
-				}
-			default:
-				p.escBuf = append(p.escBuf, b)
-				p.oscPayload = append(p.oscPayload, b)
-				fwd = p.flushIfOverflow(fwd)
+			if p.processStringSeqByte(b, &fwd) {
+				triggered = true
 			}
 			continue
 
 		case outOSCSawEsc:
-			p.escBuf = append(p.escBuf, b)
-			if b == '\\' {
-				// ST terminator — flush (our sentinel uses BEL, not ST).
-				fwd = append(fwd, p.escBuf...)
-				p.escBuf = p.escBuf[:0]
-				p.oscPayload = p.oscPayload[:0]
-				p.escState = escNone
-			} else {
-				// Not ST — treat the buffered \x1b and this byte as OSC payload.
-				p.oscPayload = append(p.oscPayload, 0x1b, b)
-				p.escState = escInStringSeq
-				fwd = p.flushIfOverflow(fwd)
-			}
+			p.processOSCSawEscByte(b, &fwd)
 			continue
 		}
 
-		// escNone: normal byte.
-		if b == 0x1b {
-			fwd = p.flushText(fwd)
-			p.escBuf = append(p.escBuf[:0], b)
-			p.escState = escSawEsc
-		} else {
-			var textTriggered bool
-			fwd, textTriggered = p.processTextByte(b, fwd)
-			if textTriggered {
-				triggered = true
-			}
+		if p.processNormalByte(b, &fwd) {
+			triggered = true
 		}
 	}
 
 	return outputResult{forward: fwd, triggered: triggered}
 }
 
+func (p *outputProcessor) processEscByte(b byte, fwd *[]byte) {
+	p.escBuf = append(p.escBuf, b)
+	switch b {
+	case ']':
+		p.escState = escInStringSeq
+		p.oscPayload = p.oscPayload[:0]
+	case '[':
+		p.escState = escInCSI
+	default:
+		// Simple two-byte escape or unrecognised — flush and reset.
+		*fwd = append(*fwd, p.escBuf...)
+		p.escBuf = p.escBuf[:0]
+		p.escState = escNone
+	}
+}
+
+func (p *outputProcessor) processCSIByte(b byte, fwd *[]byte) {
+	p.escBuf = append(p.escBuf, b)
+	if b < 0x40 || b > 0x7e {
+		return
+	}
+	*fwd = append(*fwd, p.escBuf...)
+	if len(p.textBuf) == 0 && csiStartsTextCell(b) {
+		p.markTextBoundary()
+	}
+	p.escBuf = p.escBuf[:0]
+	p.escState = escNone
+}
+
+func (p *outputProcessor) processStringSeqByte(b byte, fwd *[]byte) bool {
+	switch b {
+	case 0x07: // BEL terminates OSC
+		return p.finishOSCSequence(fwd)
+	case 0x1b: // potential start of ST (\x1b\)
+		p.escBuf = append(p.escBuf, b)
+		*fwd = p.flushIfOverflow(*fwd)
+		if p.escState == escInStringSeq { // not flushed
+			p.escState = outOSCSawEsc
+		}
+	default:
+		p.escBuf = append(p.escBuf, b)
+		p.oscPayload = append(p.oscPayload, b)
+		*fwd = p.flushIfOverflow(*fwd)
+	}
+	return false
+}
+
+func (p *outputProcessor) finishOSCSequence(fwd *[]byte) bool {
+	if string(p.oscPayload) == sentinelPayload {
+		// Sentinel matched — strip (don't forward), signal trigger.
+		p.escBuf = p.escBuf[:0]
+		p.oscPayload = p.oscPayload[:0]
+		p.escState = escNone
+		return true
+	}
+	// Non-matching OSC — flush the buffered bytes.
+	p.escBuf = append(p.escBuf, 0x07)
+	*fwd = append(*fwd, p.escBuf...)
+	p.escBuf = p.escBuf[:0]
+	p.oscPayload = p.oscPayload[:0]
+	p.escState = escNone
+	return false
+}
+
+func (p *outputProcessor) processOSCSawEscByte(b byte, fwd *[]byte) {
+	p.escBuf = append(p.escBuf, b)
+	if b == '\\' {
+		// ST terminator — flush (our sentinel uses BEL, not ST).
+		*fwd = append(*fwd, p.escBuf...)
+		p.escBuf = p.escBuf[:0]
+		p.oscPayload = p.oscPayload[:0]
+		p.escState = escNone
+		return
+	}
+	// Not ST — treat the buffered \x1b and this byte as OSC payload.
+	p.oscPayload = append(p.oscPayload, 0x1b, b)
+	p.escState = escInStringSeq
+	*fwd = p.flushIfOverflow(*fwd)
+}
+
+func (p *outputProcessor) processNormalByte(b byte, fwd *[]byte) bool {
+	if b == 0x1b {
+		return p.startEscape(fwd)
+	}
+	if p.textSentinel == "" {
+		*fwd = append(*fwd, b)
+		return false
+	}
+	var textTriggered bool
+	*fwd, textTriggered = p.processTextByte(b, *fwd)
+	return textTriggered
+}
+
+func (p *outputProcessor) startEscape(fwd *[]byte) bool {
+	if p.textSentinel == "" {
+		p.escBuf = append(p.escBuf[:0], 0x1b)
+		p.escState = escSawEsc
+		return false
+	}
+
+	triggered := false
+	switch {
+	case p.isTextMarkerComplete(p.textBuf):
+		p.textBuf = p.textBuf[:0]
+		p.textStartBoundary = false
+		p.textSawVisible = false
+		p.textPrevBoundary = true
+		triggered = true
+	case len(p.textBuf) == 0 || p.isTextMarkerPrefix(p.textBuf, p.textStartBoundary):
+		// Keep a potential marker buffered across styling/cursor sequences.
+	default:
+		*fwd = p.flushText(*fwd)
+	}
+	p.escBuf = append(p.escBuf[:0], 0x1b)
+	p.escState = escSawEsc
+	return triggered
+}
+
 func (p *outputProcessor) processTextByte(b byte, fwd []byte) ([]byte, bool) {
 	if isLineTerminator(b) {
-		if isTextMarkerLine(p.textBuf) {
+		if p.isTextMarkerComplete(p.textBuf) {
 			p.textBuf = p.textBuf[:0]
-			p.textOnLine = false
+			p.textStartBoundary = false
+			p.textSawVisible = false
+			p.textPrevBoundary = true
 			return fwd, true
 		}
-		fwd = append(fwd, p.textBuf...)
+		fwd = p.flushText(fwd)
 		fwd = append(fwd, b)
-		p.textBuf = p.textBuf[:0]
-		p.textOnLine = false
+		p.textSawVisible = false
+		p.textPrevBoundary = true
 		return fwd, false
 	}
 
+	if len(p.textBuf) == 0 {
+		p.textStartBoundary = !p.textSawVisible || p.textPrevBoundary
+	}
 	p.textBuf = append(p.textBuf, b)
-	if p.textOnLine || !isTextMarkerLinePrefix(p.textBuf) {
-		fwd = append(fwd, p.textBuf...)
-		p.textBuf = p.textBuf[:0]
-		p.textOnLine = true
-		return fwd, false
+
+	for len(p.textBuf) > 0 {
+		if suffix, ok := p.textMarkerTriggerSuffix(p.textBuf, p.textStartBoundary); ok {
+			p.textBuf = p.textBuf[:0]
+			p.textStartBoundary = false
+			if len(suffix) > 0 {
+				fwd = append(fwd, suffix...)
+				p.recordVisibleBytes(suffix)
+			} else {
+				p.textSawVisible = false
+				p.textPrevBoundary = true
+			}
+			return fwd, true
+		}
+		if p.isTextMarkerPrefix(p.textBuf, p.textStartBoundary) {
+			return fwd, false
+		}
+
+		fwd = append(fwd, p.textBuf[0])
+		p.recordVisibleByte(p.textBuf[0])
+		p.textBuf = p.textBuf[1:]
+		p.textStartBoundary = p.textPrevBoundary
 	}
 	return fwd, false
 }
@@ -169,8 +250,9 @@ func (p *outputProcessor) flushText(fwd []byte) []byte {
 		return fwd
 	}
 	fwd = append(fwd, p.textBuf...)
-	p.textOnLine = true
+	p.recordVisibleBytes(p.textBuf)
 	p.textBuf = p.textBuf[:0]
+	p.textStartBoundary = false
 	return fwd
 }
 
@@ -178,9 +260,11 @@ func (p *outputProcessor) finish() outputResult {
 	if len(p.escBuf) == 0 && len(p.textBuf) == 0 {
 		return outputResult{}
 	}
-	if len(p.escBuf) == 0 && isTextMarkerLine(p.textBuf) {
+	if len(p.escBuf) == 0 && p.isTextMarkerComplete(p.textBuf) {
 		p.textBuf = p.textBuf[:0]
-		p.textOnLine = false
+		p.textStartBoundary = false
+		p.textSawVisible = false
+		p.textPrevBoundary = true
 		p.escState = escNone
 		return outputResult{triggered: true}
 	}
@@ -191,31 +275,98 @@ func isLineTerminator(b byte) bool {
 	return b == '\n' || b == '\r'
 }
 
-func isTextMarkerLine(buf []byte) bool {
-	line := bytes.TrimSpace(buf)
-	if bytes.Equal(line, []byte(textSentinel)) {
-		return true
+func (p *outputProcessor) recordVisibleBytes(buf []byte) {
+	for _, b := range buf {
+		p.recordVisibleByte(b)
 	}
-	if rest, ok := bytes.CutPrefix(line, []byte("•")); ok {
-		return bytes.Equal(bytes.TrimSpace(rest), []byte(textSentinel))
+}
+
+func (p *outputProcessor) recordVisibleByte(b byte) {
+	p.textSawVisible = true
+	p.textPrevBoundary = isTextMarkerBoundaryByte(b)
+}
+
+func (p *outputProcessor) markTextBoundary() {
+	p.textSawVisible = false
+	p.textPrevBoundary = true
+	p.textStartBoundary = false
+}
+
+func csiStartsTextCell(final byte) bool {
+	switch final {
+	case 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'f':
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *outputProcessor) isTextMarkerComplete(buf []byte) bool {
+	for _, marker := range p.textMarkerForms() {
+		if bytes.HasPrefix(buf, marker) {
+			return len(bytes.Trim(buf[len(marker):], " \t")) == 0
+		}
 	}
 	return false
 }
 
-func isTextMarkerLinePrefix(buf []byte) bool {
-	line := bytes.TrimLeft(buf, " \t")
-	if len(line) == 0 {
+func (p *outputProcessor) isTextMarkerPrefix(buf []byte, startBoundary bool) bool {
+	if len(buf) == 0 {
 		return true
 	}
-	for _, marker := range [][]byte{
-		[]byte(textSentinel),
-		[]byte("• " + textSentinel),
-	} {
-		if bytes.HasPrefix(marker, line) {
+	if !startBoundary {
+		return false
+	}
+	for _, marker := range p.textMarkerForms() {
+		if bytes.HasPrefix(marker, buf) {
 			return true
+		}
+		if bytes.HasPrefix(buf, marker) {
+			return len(bytes.Trim(buf[len(marker):], " \t")) == 0
 		}
 	}
 	return false
+}
+
+func (p *outputProcessor) textMarkerTriggerSuffix(buf []byte, startBoundary bool) ([]byte, bool) {
+	if !startBoundary {
+		return nil, false
+	}
+	for _, marker := range p.textMarkerForms() {
+		if !bytes.HasPrefix(buf, marker) {
+			continue
+		}
+		rest := buf[len(marker):]
+		trimmed := bytes.TrimLeft(rest, " \t")
+		if len(trimmed) == 0 {
+			return nil, false
+		}
+		if isTextMarkerTerminatorByte(trimmed[0]) {
+			return trimmed, true
+		}
+	}
+	return nil, false
+}
+
+func (p *outputProcessor) textMarkerForms() [][]byte {
+	if p.textSentinel == "" {
+		return nil
+	}
+	if p.markerForms == nil {
+		p.markerForms = [][]byte{
+			[]byte(p.textSentinel),
+			[]byte("• " + p.textSentinel),
+		}
+	}
+	return p.markerForms
+}
+
+func isTextMarkerBoundaryByte(b byte) bool {
+	return b != '_' && (b < '0' || b > '9') && (b < 'A' || b > 'Z') && (b < 'a' || b > 'z')
+}
+
+func isTextMarkerTerminatorByte(b byte) bool {
+	return isLineTerminator(b) || b == 0x1b
 }
 
 // flushIfOverflow checks whether escBuf exceeds maxEscBuf. If so, it appends
@@ -243,8 +394,9 @@ func (p *outputProcessor) flush() []byte {
 	p.escBuf = p.escBuf[:0]
 	p.oscPayload = p.oscPayload[:0]
 	p.textBuf = p.textBuf[:0]
+	p.textStartBoundary = false
 	if len(out) > 0 {
-		p.textOnLine = true
+		p.recordVisibleBytes(out)
 	}
 	p.escState = escNone
 	return out

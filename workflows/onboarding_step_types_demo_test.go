@@ -1,11 +1,11 @@
 package builtinworkflows
 
 import (
-	"slices"
 	"strings"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/google/go-cmp/cmp"
 	"gopkg.in/yaml.v3"
 )
 
@@ -24,8 +24,8 @@ func TestStepTypesDemoWorkflowShape(t *testing.T) {
 		"learn-more-qa",
 	}
 	gotIDs := stepIDs(wf.Steps)
-	if !slices.Equal(gotIDs, wantIDs) {
-		t.Fatalf("step IDs = %#v, want %#v", gotIDs, wantIDs)
+	if diff := cmp.Diff(wantIDs, gotIDs); diff != "" {
+		t.Fatalf("step IDs mismatch (-want +got):\n%s", diff)
 	}
 
 	assertUIStep(t, &wf.Steps[0], "UI")
@@ -52,8 +52,8 @@ func TestStepTypesDemoWorkflowShape(t *testing.T) {
 		t.Fatalf("summary outcome_capture = %q, want summary_action", summary.OutcomeCapture)
 	}
 	gotOutcomes := outcomes(summary.Actions)
-	if !slices.Equal(gotOutcomes, []string{"continue", "learn_more"}) {
-		t.Fatalf("summary outcomes = %#v, want continue/learn_more", gotOutcomes)
+	if diff := cmp.Diff([]string{"continue", "learn_more"}, gotOutcomes); diff != "" {
+		t.Fatalf("summary outcomes mismatch (-want +got):\n%s", diff)
 	}
 
 	learnMore := wf.Steps[8]
@@ -104,20 +104,29 @@ func TestStepTypesDemoPromptsUsePackagedDocsAndStayNonDestructive(t *testing.T) 
 	}
 }
 
-func TestWelcomeRunsStepTypesDemoBeforeCompletion(t *testing.T) {
-	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/welcome.yaml")
+func TestOnboardingRunsStepTypesDemoBeforeCompletion(t *testing.T) {
+	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/onboarding.yaml")
 
-	wantIDs := []string{"welcome", "set-dismissed", "setup", "step-types-demo", "set-completed"}
+	wantIDs := []string{"intro", "set-dismissed", "step-types-demo", "set-completed"}
 	gotIDs := stepIDs(wf.Steps)
-	if !slices.Equal(gotIDs, wantIDs) {
-		t.Fatalf("welcome step IDs = %#v, want %#v", gotIDs, wantIDs)
+	if diff := cmp.Diff(wantIDs, gotIDs); diff != "" {
+		t.Fatalf("onboarding step IDs mismatch (-want +got):\n%s", diff)
+	}
+
+	intro := stepByID(t, &wf, "intro")
+	gotOutcomes := outcomes(intro.Actions)
+	if diff := cmp.Diff([]string{"continue", "not_now", "dismiss"}, gotOutcomes); diff != "" {
+		t.Fatalf("intro outcomes mismatch (-want +got):\n%s", diff)
+	}
+	if strings.Contains(strings.ToLower(intro.Body), "setup") {
+		t.Fatalf("intro body still presents as setup:\n%s", intro.Body)
 	}
 
 	demo := stepByID(t, &wf, "step-types-demo")
 	if demo.Workflow != "step-types-demo.yaml" {
 		t.Fatalf("step-types-demo workflow = %q", demo.Workflow)
 	}
-	if demo.SkipIf != `sh: [ {{user_action}} != continue ]` {
+	if demo.SkipIf != `sh: [ {{demo_action}} != continue ]` {
 		t.Fatalf("step-types-demo skip_if = %q", demo.SkipIf)
 	}
 

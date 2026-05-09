@@ -22,9 +22,9 @@ import (
 // Defaults to pty.RunInteractive; replaced in tests.
 var interactiveRunnerFn = pty.RunInteractive
 
-// completionInstruction is appended to the prompt for interactive agent steps
-// so the agent knows how to signal step completion via the PTY output scanner.
-const completionInstruction = "\n\nWhen you or the user determine this step is complete, continue to the next step by replying with one line containing only the continuation marker formed by joining `AGENT_RUNNER_` and `CONTINUE` with no separator. Do not run a shell command, use a tool, wrap it in a code block, or add any other commentary."
+// continuationMarkerPrefix begins the per-step text marker used by interactive
+// agents to signal completion through the PTY output scanner.
+const continuationMarkerPrefix = "AGENT_RUNNER_CONTINUE_"
 
 // headlessPreamble is prepended to headless prompts to reinforce autonomous behavior.
 const headlessPreamble = "You are running autonomously in headless mode with no human in the loop. " +
@@ -163,7 +163,8 @@ func ExecuteAgentStep(
 		}
 	}
 
-	input := buildAdapterInput(step, ctx, profile, adapter, prompt, enrichment, sessionID, isResume, headless)
+	continueMarker := continueMarkerForMode(headless)
+	input := buildAdapterInput(step, ctx, profile, adapter, prompt, enrichment, sessionID, isResume, headless, continueMarker)
 	args := adapter.BuildArgs(&input)
 	resolvedModel := input.Model
 	if resolvedModel == "" && profile != nil {
@@ -191,7 +192,9 @@ func ExecuteAgentStep(
 	recordSessionOnSpawn(step, ctx, sessionID)
 
 	spawnTime := time.Now()
-	outcome, result, runErr := runAgentProcess(runner, adapter, args, headless, step.Workdir, log, ctx.SuspendHook, ctx.ResumeHook)
+	debugLabel := fmt.Sprintf("workflow=%s step=%s cli=%s model=%s session=%s resume=%t",
+		ctx.WorkflowName, step.ID, cliName, resolvedModel, sessionID, isResume)
+	outcome, result, runErr := runAgentProcess(runner, adapter, args, headless, step.Workdir, debugLabel, continueMarker, log, ctx.SuspendHook, ctx.ResumeHook)
 	if runErr != nil {
 		emitAgentEnd(ctx, prefix, startTime, "", OutcomeFailed, "", result.Stderr)
 		return OutcomeFailed, runErr
@@ -333,6 +336,7 @@ func buildAdapterInput(
 	adapter cli.Adapter,
 	prompt, enrichment, sessionID string,
 	isResume, headless bool,
+	continueMarker string,
 ) cli.BuildArgsInput {
 	// Build the full prompt: [system_prompt] [step prompt] [engine enrichment]
 	fullPrompt := prompt
@@ -347,7 +351,7 @@ func buildAdapterInput(
 			fullPrompt = headlessPreamble + fullPrompt
 		}
 	} else {
-		fullPrompt = buildStepPrefix(step.ID, ctx, ctx.WorkflowResumed, isResume) + fullPrompt + completionInstruction
+		fullPrompt = buildStepPrefix(step.ID, ctx, ctx.WorkflowResumed, isResume) + fullPrompt + completionInstruction(continueMarker)
 	}
 
 	input := cli.BuildArgsInput{
@@ -394,7 +398,23 @@ func buildAdapterInput(
 	return input
 }
 
-func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, headless bool, workdir string, log Logger, suspendHook, resumeHook func()) (StepOutcome, ProcessResult, error) {
+func newContinueMarker() string {
+	return continuationMarkerPrefix + strings.ReplaceAll(uuid.New().String(), "-", "")
+}
+
+func continueMarkerForMode(headless bool) string {
+	if headless {
+		return ""
+	}
+	return newContinueMarker()
+}
+
+func completionInstruction(marker string) string {
+	suffix := strings.TrimPrefix(marker, continuationMarkerPrefix)
+	return "\n\nWhen you or the user determine this step is complete, continue to the next step by replying with one line containing only the current continuation marker. Construct that line by writing these pieces in this exact order with no spaces or separators: `AGENT`, `_RUNNER`, `_CONTINUE_`, and `" + suffix + "`. The line must start with `AGENT` and end with `" + suffix + "`. Do not run a shell command, use a tool, wrap it in a code block, or add any other commentary."
+}
+
+func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, headless bool, workdir, debugLabel, continueMarker string, log Logger, suspendHook, resumeHook func()) (StepOutcome, ProcessResult, error) {
 	if headless {
 		// Capture stdout for headless runs so that adapters (e.g. Codex) can
 		// parse session IDs from the process output.
@@ -426,7 +446,7 @@ func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, h
 	if suspendHook != nil {
 		suspendHook()
 	}
-	ptyResult, err := interactiveRunnerFn(args, pty.Options{Workdir: workdir})
+	ptyResult, err := interactiveRunnerFn(args, pty.Options{Workdir: workdir, DebugLabel: debugLabel, ContinueMarker: continueMarker})
 	if resumeHook != nil {
 		resumeHook()
 	}

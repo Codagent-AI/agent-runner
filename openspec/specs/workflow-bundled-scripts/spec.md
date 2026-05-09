@@ -59,11 +59,11 @@ The runner SHALL resolve `script:` paths relative to the workflow YAML's contain
 When the containing workflow is part of the embedded builtin set, the runner SHALL resolve `script:` references only against the embedded namespace and SHALL NOT fall back to user-authored workflows under `.agent-runner/workflows/`. When the containing workflow is loaded from disk, the runner SHALL read the script from disk relative to the workflow file's directory.
 
 #### Scenario: Embedded script resolves within embedded namespace
-- **WHEN** the embedded workflow `onboarding:setup-agent-profile` declares `script: detect-adapters.sh`
-- **THEN** the runner reads the script from the embedded `onboarding/detect-adapters.sh` and executes it
+- **WHEN** an embedded workflow in the `onboarding` namespace declares `script: helper.sh`
+- **THEN** the runner reads the script from the embedded `onboarding/helper.sh` and executes it
 
 #### Scenario: Embedded script does not fall back to user directory
-- **WHEN** the embedded workflow `onboarding:setup-agent-profile` declares `script: detect-adapters.sh` and a file `.agent-runner/workflows/onboarding/detect-adapters.sh` exists on the user's disk
+- **WHEN** an embedded workflow in the `onboarding` namespace declares `script: helper.sh` and a file `.agent-runner/workflows/onboarding/helper.sh` exists on the user's disk
 - **THEN** the runner uses the embedded script, not the user file
 
 #### Scenario: On-disk workflow reads script from disk
@@ -181,3 +181,4 @@ The runner SHALL tee the script's stdout to the terminal in real time regardless
 #### Scenario: Tee with capture_format=json
 - **WHEN** a script writes a JSON document to stdout with `capture: out` and `capture_format: json`
 - **THEN** the raw JSON text appears on the terminal in real time, and after exit the captured value is the parsed JSON
+

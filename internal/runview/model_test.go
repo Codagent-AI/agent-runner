@@ -419,22 +419,174 @@ func TestModel_R_IgnoredOnActiveRun(t *testing.T) {
 	}
 }
 
-// r is ignored on completed runs.
-func TestModel_R_IgnoredOnCompletedRun(t *testing.T) {
+func TestModel_R_CompletedRun_SelectedAgent_EmitsResumeMsg(t *testing.T) {
 	tree := simpleTree()
 	tree.Root.Status = StatusSuccess
+	tree.Root.Children[1].Status = StatusSuccess
 	m := newTestModel(tree, FromList)
 	m.sessionDir = "/runs/my-run-id"
+	m.cursor = 1
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
-	if cmd != nil {
-		t.Fatalf("r on completed run should be no-op, got cmd %v", cmd)
+	if cmd == nil {
+		t.Fatal("r on selected agent in completed run should produce a cmd")
+	}
+	msg := cmd()
+	resume, ok := msg.(ResumeMsg)
+	if !ok {
+		t.Fatalf("expected ResumeMsg, got %T", msg)
+	}
+	if resume.SessionID != "session-abc-123" {
+		t.Fatalf("SessionID = %q, want session-abc-123", resume.SessionID)
 	}
 }
 
-// r is ignored on failed runs.
-func TestModel_R_IgnoredOnFailedRun(t *testing.T) {
-	tree := simpleTree()
+func TestModel_R_CompletedRun_NonAgent_ResumesLastAgentInCurrentWorkflow(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	firstAgent := &StepNode{
+		ID:        "proposal",
+		Type:      NodeInteractiveAgent,
+		Status:    StatusSuccess,
+		Parent:    root,
+		AgentCLI:  "claude",
+		SessionID: "session-first",
+	}
+	shell := &StepNode{ID: "archive", Type: NodeShell, Status: StatusSuccess, Parent: root}
+	lastAgent := &StepNode{
+		ID:        "design",
+		Type:      NodeInteractiveAgent,
+		Status:    StatusSuccess,
+		Parent:    root,
+		AgentCLI:  "codex",
+		SessionID: "session-last",
+	}
+	root.Children = []*StepNode{firstAgent, shell, lastAgent}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.cursor = 1
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if cmd == nil {
+		t.Fatal("r on non-agent in completed run should produce a cmd")
+	}
+	msg := cmd()
+	resume, ok := msg.(ResumeMsg)
+	if !ok {
+		t.Fatalf("expected ResumeMsg, got %T", msg)
+	}
+	if resume.SessionID != "session-last" {
+		t.Fatalf("SessionID = %q, want session-last", resume.SessionID)
+	}
+	if resume.AgentCLI != "codex" {
+		t.Fatalf("AgentCLI = %q, want codex", resume.AgentCLI)
+	}
+}
+
+func TestModel_R_CompletedRun_NonAgent_ResumesLastAgentInsideSubWorkflow(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	rootAgent := &StepNode{
+		ID:        "proposal",
+		Type:      NodeInteractiveAgent,
+		Status:    StatusSuccess,
+		Parent:    root,
+		AgentCLI:  "claude",
+		SessionID: "session-root",
+	}
+	subwf := &StepNode{ID: "review-flow", Type: NodeSubWorkflow, Status: StatusSuccess, Parent: root, SubLoaded: true}
+	nestedAgent := &StepNode{
+		ID:        "review",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusSuccess,
+		Parent:    subwf,
+		AgentCLI:  "codex",
+		SessionID: "session-subworkflow",
+	}
+	subwf.Children = []*StepNode{nestedAgent}
+	shell := &StepNode{ID: "archive", Type: NodeShell, Status: StatusSuccess, Parent: root}
+	root.Children = []*StepNode{rootAgent, subwf, shell}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.cursor = 2
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if cmd == nil {
+		t.Fatal("r on non-agent in completed run should produce a cmd")
+	}
+	msg := cmd()
+	resume, ok := msg.(ResumeMsg)
+	if !ok {
+		t.Fatalf("expected ResumeMsg, got %T", msg)
+	}
+	if resume.SessionID != "session-subworkflow" {
+		t.Fatalf("SessionID = %q, want session-subworkflow", resume.SessionID)
+	}
+	if resume.AgentCLI != "codex" {
+		t.Fatalf("AgentCLI = %q, want codex", resume.AgentCLI)
+	}
+}
+
+func TestModel_R_CompletedRun_SelectedSubWorkflow_ResumesLastAgentInSelectedWorkflow(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	rootAgent := &StepNode{
+		ID:        "root-agent",
+		Type:      NodeInteractiveAgent,
+		Status:    StatusSuccess,
+		Parent:    root,
+		AgentCLI:  "claude",
+		SessionID: "session-root",
+	}
+	subwf := &StepNode{
+		ID:        "review-flow",
+		Type:      NodeSubWorkflow,
+		Status:    StatusSuccess,
+		Parent:    root,
+		SubLoaded: true,
+	}
+	nestedShell := &StepNode{ID: "precheck", Type: NodeShell, Status: StatusSuccess, Parent: subwf}
+	nestedAgent := &StepNode{
+		ID:        "review",
+		Type:      NodeHeadlessAgent,
+		Status:    StatusSuccess,
+		Parent:    subwf,
+		AgentCLI:  "codex",
+		SessionID: "session-nested",
+	}
+	subwf.Children = []*StepNode{nestedShell, nestedAgent}
+	root.Children = []*StepNode{rootAgent, subwf}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.cursor = 1
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if cmd == nil {
+		t.Fatal("r on selected sub-workflow in completed run should produce a cmd")
+	}
+	msg := cmd()
+	resume, ok := msg.(ResumeMsg)
+	if !ok {
+		t.Fatalf("expected ResumeMsg, got %T", msg)
+	}
+	if resume.SessionID != "session-nested" {
+		t.Fatalf("SessionID = %q, want session-nested", resume.SessionID)
+	}
+}
+
+func TestModel_R_CompletedRun_NoAgentSession_NoOp(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	root.Children = []*StepNode{{ID: "archive", Type: NodeShell, Status: StatusSuccess, Parent: root}}
+	m := newTestModel(&Tree{Root: root}, FromList)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if cmd != nil {
+		t.Fatalf("r on completed run with no agent session should be no-op, got cmd %v", cmd)
+	}
+}
+
+// r is ignored on failed runs with no resumable agent session.
+func TestModel_R_IgnoredOnFailedRunWithNoAgentSession(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusFailed}
+	root.Children = []*StepNode{{ID: "archive", Type: NodeShell, Status: StatusFailed, Parent: root}}
+	tree := &Tree{Root: root}
 	tree.Root.Status = StatusFailed
 	m := newTestModel(tree, FromList)
 	m.sessionDir = "/runs/my-run-id"
@@ -588,14 +740,25 @@ func TestModel_HelpBar_ShowsRBinding_WhenInactive(t *testing.T) {
 	}
 }
 
-func TestModel_HelpBar_HidesRBinding_WhenCompleted(t *testing.T) {
+func TestModel_HelpBar_ShowsRBinding_WhenCompletedRunHasAgentSession(t *testing.T) {
 	tree := simpleTree()
 	tree.Root.Status = StatusSuccess
 	m := newTestModel(tree, FromList)
 
 	help := m.renderHelpBar()
+	if !containsString(help, "r resume") {
+		t.Errorf("help bar should show 'r resume' for completed run with agent session: %q", help)
+	}
+}
+
+func TestModel_HelpBar_HidesRBinding_WhenCompletedRunHasNoAgentSession(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusSuccess}
+	root.Children = []*StepNode{{ID: "archive", Type: NodeShell, Status: StatusSuccess, Parent: root}}
+	m := newTestModel(&Tree{Root: root}, FromList)
+
+	help := m.renderHelpBar()
 	if containsString(help, "r resume") {
-		t.Errorf("help bar should not show 'r resume' for completed run: %q", help)
+		t.Errorf("help bar should not show 'r resume' for completed run with no agent session: %q", help)
 	}
 }
 
@@ -825,9 +988,10 @@ func TestModel_Enter_AgentStep_InSubWorkflow_EmitsResumeMsg(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("enter on nested agent step should produce a ResumeMsg cmd")
 	}
-	resume, ok := cmd().(ResumeMsg)
+	msg := cmd()
+	resume, ok := msg.(ResumeMsg)
 	if !ok {
-		t.Fatalf("expected ResumeMsg, got %T", cmd())
+		t.Fatalf("expected ResumeMsg, got %T", msg)
 	}
 	if resume.SessionID != "nested-session-1" {
 		t.Fatalf("session ID = %q, want %q", resume.SessionID, "nested-session-1")
@@ -936,9 +1100,10 @@ func TestModel_Enter_AgentStep_InSubWorkflow_LiveRunAfterCompletion(t *testing.T
 	if cmd == nil {
 		t.Fatal("enter on nested agent step after live run completion should produce ResumeMsg")
 	}
-	resume, ok := cmd().(ResumeMsg)
+	msg := cmd()
+	resume, ok := msg.(ResumeMsg)
 	if !ok {
-		t.Fatalf("expected ResumeMsg, got %T", cmd())
+		t.Fatalf("expected ResumeMsg, got %T", msg)
 	}
 	if resume.SessionID != "nested-session-1" {
 		t.Fatalf("session ID = %q, want %q", resume.SessionID, "nested-session-1")

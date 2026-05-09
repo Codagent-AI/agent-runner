@@ -319,8 +319,8 @@ func TestResolveWorkflowPath_EmbeddedParentStaysEmbedded(t *testing.T) {
 	}
 }
 
-func TestOnboardingWelcomeSkipIfActions(t *testing.T) {
-	workflow, err := loader.LoadWorkflow("builtin:onboarding/welcome.yaml", loader.Options{})
+func TestOnboardingDemoSkipIfActions(t *testing.T) {
+	workflow, err := loader.LoadWorkflow("builtin:onboarding/onboarding.yaml", loader.Options{})
 	if err != nil {
 		t.Fatalf("LoadWorkflow: %v", err)
 	}
@@ -336,11 +336,10 @@ func TestOnboardingWelcomeSkipIfActions(t *testing.T) {
 		wantSkipped map[string]bool
 	}{
 		{
-			name:   "continue enters setup and completion",
+			name:   "continue runs demo and completion",
 			action: "continue",
 			wantSkipped: map[string]bool{
 				"set-dismissed":   true,
-				"setup":           false,
 				"step-types-demo": false,
 				"set-completed":   false,
 			},
@@ -350,7 +349,6 @@ func TestOnboardingWelcomeSkipIfActions(t *testing.T) {
 			action: "dismiss",
 			wantSkipped: map[string]bool{
 				"set-dismissed":   false,
-				"setup":           true,
 				"step-types-demo": true,
 				"set-completed":   true,
 			},
@@ -360,7 +358,6 @@ func TestOnboardingWelcomeSkipIfActions(t *testing.T) {
 			action: "not_now",
 			wantSkipped: map[string]bool{
 				"set-dismissed":   true,
-				"setup":           true,
 				"step-types-demo": true,
 				"set-completed":   true,
 			},
@@ -371,9 +368,9 @@ func TestOnboardingWelcomeSkipIfActions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := model.NewRootContext(&model.RootContextOptions{
 				Params:       map[string]string{},
-				WorkflowFile: "builtin:onboarding/welcome.yaml",
+				WorkflowFile: "builtin:onboarding/onboarding.yaml",
 			})
-			ctx.CapturedVariables["user_action"] = model.NewCapturedString(tt.action)
+			ctx.CapturedVariables["demo_action"] = model.NewCapturedString(tt.action)
 
 			for stepID, want := range tt.wantSkipped {
 				step, ok := steps[stepID]
@@ -385,7 +382,7 @@ func TestOnboardingWelcomeSkipIfActions(t *testing.T) {
 					t.Fatalf("ShouldSkipStep(%s): %v", stepID, err)
 				}
 				if got != want {
-					t.Fatalf("ShouldSkipStep(%s) with user_action=%q = %v, want %v", stepID, tt.action, got, want)
+					t.Fatalf("ShouldSkipStep(%s) with demo_action=%q = %v, want %v", stepID, tt.action, got, want)
 				}
 			}
 		})
@@ -430,85 +427,6 @@ func TestOnboardingStepTypesDemoLearnMoreSkipIfActions(t *testing.T) {
 			}
 			if gotRun := !skip; gotRun != tt.wantRun {
 				t.Fatalf("learn-more-qa runs with summary_action=%q = %v, want %v", tt.action, gotRun, tt.wantRun)
-			}
-		})
-	}
-}
-
-func TestOnboardingSetupSkipIfActions(t *testing.T) {
-	workflow, err := loader.LoadWorkflow("builtin:onboarding/setup-agent-profile.yaml", loader.Options{IsSubWorkflow: true})
-	if err != nil {
-		t.Fatalf("LoadWorkflow: %v", err)
-	}
-
-	steps := map[string]model.Step{}
-	for _, step := range workflow.Steps {
-		steps[step.ID] = step
-	}
-
-	tests := []struct {
-		name        string
-		captures    map[string]string
-		wantSkipped map[string]bool
-	}{
-		{
-			name:     "zero interactive models uses empty default",
-			captures: map[string]string{"interactive_model_count": "0"},
-			wantSkipped: map[string]bool{
-				"pick-interactive-model":    true,
-				"interactive-model-value":   true,
-				"interactive-model-default": false,
-			},
-		},
-		{
-			name:     "available interactive models asks for model",
-			captures: map[string]string{"interactive_model_count": "1"},
-			wantSkipped: map[string]bool{
-				"pick-interactive-model":    false,
-				"interactive-model-value":   false,
-				"interactive-model-default": true,
-			},
-		},
-		{
-			name:     "overwrite cancel fails before confirm",
-			captures: map[string]string{"overwrite_action": "cancel"},
-			wantSkipped: map[string]bool{
-				"fail-overwrite-cancel": false,
-				"confirm":               true,
-			},
-		},
-		{
-			name:     "confirm writes profile",
-			captures: map[string]string{"confirm_action": "confirm"},
-			wantSkipped: map[string]bool{
-				"fail-confirm-cancel": true,
-				"write-profile":       false,
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := model.NewRootContext(&model.RootContextOptions{
-				Params:       map[string]string{},
-				WorkflowFile: "builtin:onboarding/setup-agent-profile.yaml",
-			})
-			for name, value := range tt.captures {
-				ctx.CapturedVariables[name] = model.NewCapturedString(value)
-			}
-
-			for stepID, want := range tt.wantSkipped {
-				step, ok := steps[stepID]
-				if !ok {
-					t.Fatalf("step %q not found", stepID)
-				}
-				got, err := ShouldSkipStep(step.SkipIf, nil, ctx, step.ID)
-				if err != nil {
-					t.Fatalf("ShouldSkipStep(%s): %v", stepID, err)
-				}
-				if got != want {
-					t.Fatalf("ShouldSkipStep(%s) with captures=%v = %v, want %v", stepID, tt.captures, got, want)
-				}
 			}
 		})
 	}

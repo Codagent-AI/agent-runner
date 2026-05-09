@@ -1,204 +1,110 @@
 # onboarding-workflow Specification
 
 ## Purpose
-Define the first-run onboarding experience that guides new users through initial agent profile setup via a dispatcher-triggered embedded workflow with welcome, dismiss, and setup-continuation flows.
+Define the optional dispatcher-triggered `onboarding:onboarding` demo that runs after native setup and records `continue`, `not_now`, or `dismiss` outcomes.
 ## Requirements
 ### Requirement: Embedded onboarding namespace contents
 
 The `onboarding` builtin workflow namespace SHALL contain at minimum:
-- `welcome` — the top-level workflow entered by the first-run dispatcher and by direct invocation;
-- `setup-agent-profile` — the sub-workflow used by Phase 2 (agent-profile editor);
-- `step-types-demo` — the sub-workflow used by Phase 3 to demonstrate UI, interactive agent, headless agent, shell, and capture behavior;
-- the bundled scripts and packaged documentation these workflows reference, including adapter detection, model-list-for-cli, profile-writer scripts, and onboarding documentation needed by the Q&A agent.
+- `onboarding` - the top-level demo workflow started after successful native setup and by direct invocation;
+- `step-types-demo` - the workflow used to demonstrate UI, interactive agent, headless agent, shell, and capture behavior;
+- the packaged documentation needed by the Q&A agent.
 
-#### Scenario: Welcome workflow resolves
-- **WHEN** the user runs `agent-runner run onboarding:welcome`
+The onboarding namespace SHALL NOT own first-run setup or setup completion tracking. It SHALL own onboarding demo defer and dismissal behavior.
+
+#### Scenario: Onboarding demo workflow resolves
+- **WHEN** the user runs `agent-runner run onboarding:onboarding`
 - **THEN** the workflow loads from the embedded namespace and starts executing
-
-#### Scenario: Setup sub-workflow resolves within the namespace
-- **WHEN** `onboarding:welcome` references `workflow: setup-agent-profile.yaml`
-- **THEN** the sub-workflow loads from the embedded `onboarding/setup-agent-profile.yaml` and SHALL NOT fall back to user-authored workflows
 
 #### Scenario: Step types demo workflow resolves
 - **WHEN** the user runs `agent-runner run onboarding:step-types-demo`
 - **THEN** the workflow loads from the embedded namespace and starts executing
 
-#### Scenario: Step types demo sub-workflow resolves within the namespace
-- **WHEN** `onboarding:welcome` references `workflow: step-types-demo.yaml`
-- **THEN** the sub-workflow loads from the embedded `onboarding/step-types-demo.yaml` and SHALL NOT fall back to user-authored workflows
+#### Scenario: Welcome workflow is not the demo entry
+- **WHEN** the user runs `agent-runner run onboarding:welcome`
+- **THEN** the runner fails with a workflow-not-found error
+
+#### Scenario: Setup workflow is not an onboarding workflow
+- **WHEN** the user runs `agent-runner run onboarding:setup-agent-profile`
+- **THEN** the runner fails with a workflow-not-found error
 
 ### Requirement: First-run dispatcher trigger condition
 
-Before entering any interactive TUI (listview, live-run, run-view, resume-TUI), the runner SHALL evaluate the dispatcher condition. The condition SHALL fire (offer onboarding) when ALL of the following hold:
+Before entering the bare/list TUI entry point, the runner SHALL evaluate native setup before onboarding demo dispatch. The onboarding demo dispatcher SHALL fire when all of the following hold:
+- `settings.setup.completed_at` is set;
 - `settings.onboarding.completed_at` is unset;
 - `settings.onboarding.dismissed` is unset;
 - both stdin and stdout are TTYs.
 
-When any condition is false, the runner SHALL proceed to its normal entry point without modifying settings.
+When any condition is false, the runner SHALL proceed to its normal entry point without modifying onboarding settings.
 
-#### Scenario: Fresh first run with TTY fires
-- **WHEN** the user runs `agent-runner` with no command on a TTY, and `settings.onboarding.completed_at` and `settings.onboarding.dismissed` are both unset
-- **THEN** the dispatcher fires and launches `onboarding:welcome`
+#### Scenario: Setup runs before onboarding demo
+- **WHEN** setup settings and onboarding settings are unset
+- **THEN** the runner opens native setup before any onboarding demo workflow
 
-#### Scenario: Already completed does not fire
-- **WHEN** the user runs `agent-runner` with `settings.onboarding.completed_at` set
-- **THEN** the dispatcher does not fire and the runner proceeds to its normal entry point
+#### Scenario: Completed setup starts demo
+- **WHEN** `settings.setup.completed_at` is set and `settings.onboarding.completed_at` and `settings.onboarding.dismissed` are unset
+- **THEN** the dispatcher launches `onboarding:onboarding`
 
-#### Scenario: Already dismissed does not fire
-- **WHEN** the user runs `agent-runner` with `settings.onboarding.dismissed` set
-- **THEN** the dispatcher does not fire
+#### Scenario: Completed onboarding demo does not fire
+- **WHEN** `settings.onboarding.completed_at` is set
+- **THEN** the onboarding demo dispatcher does not fire and the runner proceeds to its normal entry point
+
+#### Scenario: Dismissed onboarding demo does not fire
+- **WHEN** `settings.onboarding.dismissed` is set
+- **THEN** the onboarding demo dispatcher does not fire
 
 #### Scenario: Non-TTY does not fire
-- **WHEN** the user runs `agent-runner` from a CI job where stdout is a pipe, and onboarding settings are unset
-- **THEN** the dispatcher does not fire and SHALL NOT modify settings (no auto-dismissal)
+- **WHEN** the runner starts with stdin or stdout connected to a pipe
+- **THEN** the onboarding demo dispatcher does not fire and SHALL NOT modify settings
 
 #### Scenario: Non-TUI command does not fire
 - **WHEN** the user runs `agent-runner -version` or `agent-runner run my-workflow`
-- **THEN** the dispatcher does not fire even when conditions would otherwise be satisfied
+- **THEN** the onboarding demo dispatcher does not fire even when conditions would otherwise be satisfied
 
-### Requirement: Dispatcher launches `onboarding:welcome` via the normal workflow path
-
-When the dispatcher condition fires, the runner SHALL launch the embedded `onboarding:welcome` workflow using the standard workflow loader, runner, state, and audit machinery. The dispatcher SHALL NOT bypass the workflow loader or the runner; it SHALL NOT introduce a parallel execution path.
-
-#### Scenario: Dispatcher uses standard machinery
-- **WHEN** the dispatcher fires
-- **THEN** `onboarding:welcome` runs through the same loader / runner / audit pipeline as any other invocation, and a normal run record is produced
-
-### Requirement: Welcome screen actions
-
-The first step of `onboarding:welcome` SHALL be a `mode: ui` informational screen with exactly three actions: `continue`, `not_now`, and `dismiss`.
-
-#### Scenario: Welcome offers three actions
-- **WHEN** the welcome screen renders
-- **THEN** the user sees actions labelled to indicate continue, not-now, and dismiss; the underlying outcomes are exactly `continue`, `not_now`, `dismiss`
-
-### Requirement: Dismiss action records dismissal and exits
-
-When the user selects the `dismiss` action, the workflow SHALL set `settings.onboarding.dismissed` to the current RFC3339 timestamp via the existing `usersettings` atomic-write path. After the write, the workflow SHALL exit successfully without proceeding to setup.
-
-#### Scenario: Dismiss writes timestamp
-- **WHEN** the user selects `dismiss` on the welcome screen
-- **THEN** `~/.agent-runner/settings.yaml` is written atomically with `onboarding.dismissed: <RFC3339 timestamp>` and the workflow exits successfully
-
-#### Scenario: Dismiss does not run setup
-- **WHEN** the user selects `dismiss`
-- **THEN** the setup sub-workflow does not run; no config files are read or written
-
-### Requirement: Not-now action exits without modifying settings
-
-When the user selects the `not_now` action, the workflow SHALL exit successfully without writing to settings or running setup. The dispatcher SHALL fire again on the next TUI entry.
-
-#### Scenario: Not-now leaves settings unchanged
-- **WHEN** the user selects `not_now`
-- **THEN** no settings keys are written and the workflow exits successfully
-
-#### Scenario: Not-now does not suppress future prompts
-- **WHEN** the user selects `not_now` and re-runs `agent-runner` later on a TTY
-- **THEN** the dispatcher fires again
+#### Scenario: Resume does not fire
+- **WHEN** the user runs `agent-runner --resume <id>`
+- **THEN** the onboarding demo dispatcher does not fire even when conditions would otherwise be satisfied
 
 ### Requirement: Continue action invokes setup
 
-When the user selects the `continue` action, the workflow SHALL invoke `setup-agent-profile.yaml` as a sub-workflow. After setup succeeds, the workflow SHALL invoke `step-types-demo.yaml` as a sub-workflow. The setup sub-workflow runs the agent-profile-editor flow defined by the `agent-profile-editor` capability. The step types demo sub-workflow orients the user to core workflow step primitives.
+The onboarding demo workflow SHALL NOT invoke setup. Setup is native TUI functionality that runs before the onboarding demo. When the user selects the continue action in `onboarding:onboarding`, the workflow SHALL invoke the `step-types-demo` workflow or otherwise run the step-types demo sequence.
 
-#### Scenario: Continue runs setup
-- **WHEN** the user selects `continue`
-- **THEN** `setup-agent-profile.yaml` runs as a sub-workflow
+#### Scenario: Demo skips setup
+- **WHEN** the user selects continue in `onboarding:onboarding`
+- **THEN** it does not invoke `setup-agent-profile.yaml`
 
-#### Scenario: Demo runs after successful setup
-- **WHEN** the user selects `continue` and `setup-agent-profile.yaml` completes successfully
-- **THEN** `step-types-demo.yaml` runs as the next sub-workflow
+#### Scenario: Demo runs step types
+- **WHEN** the user selects continue in `onboarding:onboarding`
+- **THEN** it runs the step-types demo workflow sequence
 
 ### Requirement: Successful completion records `completed_at`
 
-When the `continue` path reaches the end of `onboarding:welcome` successfully, the workflow SHALL set `settings.onboarding.completed_at` to the current RFC3339 timestamp via the existing `usersettings` atomic-write path. Successful completion is determined by the normal success/failure result of the workflow steps on the selected path.
+When the continue path of `onboarding:onboarding` completes successfully, the runner SHALL set `settings.onboarding.completed_at` to the current RFC3339 timestamp via the existing user settings atomic-write path. Successful onboarding demo completion SHALL NOT write setup completion settings.
 
-#### Scenario: Successful continue path writes completed_at
-- **WHEN** the user runs through welcome, selects `continue`, and the selected onboarding path reaches its end successfully
-- **THEN** `settings.onboarding.completed_at` is written and the workflow exits successfully
+#### Scenario: Demo completion records onboarding completion
+- **WHEN** `onboarding:onboarding` completes its continue path successfully
+- **THEN** `settings.onboarding.completed_at` is written
 
-### Requirement: Cancellation or failure inside setup leaves settings unchanged
-
-When the setup sub-workflow fails or the user cancels (e.g., presses Cancel on a confirmation screen, or Ctrl-C interrupts a step), `onboarding:welcome` SHALL NOT modify settings. The dispatcher SHALL fire again on the next TUI entry.
-
-#### Scenario: Cancel at confirmation does not record completion
-- **WHEN** the user reaches the editor's confirmation screen and selects cancel
-- **THEN** `settings.onboarding.completed_at` is not written and `settings.onboarding.dismissed` is not written
-
-#### Scenario: Re-prompted after cancellation
-- **WHEN** the user cancels mid-setup and later runs `agent-runner` on a TTY
-- **THEN** the dispatcher fires again and offers the welcome screen
+#### Scenario: Demo completion does not write setup completion
+- **WHEN** `onboarding:onboarding` completes successfully
+- **THEN** `settings.setup.completed_at` is not modified
 
 ### Requirement: Re-entry by direct invocation
 
-The user MAY re-run onboarding at any time via `agent-runner run onboarding:welcome`. The workflow SHALL execute regardless of the current state of `settings.onboarding.completed_at` or `settings.onboarding.dismissed`. The same actions, behaviors, and settings writes SHALL apply as on a dispatcher-triggered run.
+The user MAY re-run the onboarding demo at any time via `agent-runner run onboarding:onboarding`. The workflow SHALL execute regardless of the current state of `settings.onboarding.completed_at`, `settings.onboarding.dismissed`, or `settings.setup.completed_at`. Direct invocation of `onboarding:onboarding` SHALL use the standard direct-run post-run behavior.
 
-#### Scenario: Run after completion
-- **WHEN** the user runs `agent-runner run onboarding:welcome` with `settings.onboarding.completed_at` already set
-- **THEN** the workflow executes normally; the user can choose continue, not_now, or dismiss
+#### Scenario: Run after demo completion
+- **WHEN** the user runs `agent-runner run onboarding:onboarding` with `settings.onboarding.completed_at` already set
+- **THEN** the workflow executes normally
 
-#### Scenario: Re-running after dismissal
-- **WHEN** the user runs `agent-runner run onboarding:welcome` after previously dismissing
-- **THEN** the workflow executes normally; selecting `continue` proceeds to setup despite the existing `dismissed` timestamp
+#### Scenario: Run after demo dismissal
+- **WHEN** the user runs `agent-runner run onboarding:onboarding` with `settings.onboarding.dismissed` already set
+- **THEN** the workflow executes normally
 
-### Requirement: Resume via standard machinery
-
-Onboarding workflows SHALL participate in the standard resume-by-session-id and resume-TUI mechanisms without special-casing. A user who exits mid-flow (network drop, Ctrl-C, terminal close) MAY resume via the same commands and TUI as for any other workflow.
-
-#### Scenario: Resume after mid-flow exit
-- **WHEN** the user starts onboarding, completes the welcome screen and the adapter-detection step, then closes the terminal; later they run `agent-runner -resume`
-- **THEN** the resume TUI lists the onboarding session and resumption picks up at the next pending step
-
-### Requirement: No bespoke onboarding state
-
-Onboarding SHALL be implemented entirely with existing workflow primitives (`mode: ui`, agent steps, shell steps, `script:`, sub-workflow, captures, settings writes via `agent-runner internal` subcommands, and packaged workflow assets). The runner SHALL NOT introduce an onboarding-specific state file or runtime path beyond the dispatcher trigger described above.
-
-#### Scenario: No onboarding-only state file
-- **WHEN** an onboarding session runs
-- **THEN** workflow state is recorded in the standard run-state location with no additional onboarding-specific file
-
-### Requirement: Dispatcher resumes incomplete prior onboarding runs
-
-When the dispatcher condition fires and a prior `onboarding:welcome` run exists in a non-terminal state (i.e., the workflow was started but did not reach success, dismiss, or fatal failure), the dispatcher SHALL resume that run via the standard resume machinery rather than starting a new run. Only when there is no incomplete prior run SHALL the dispatcher start a fresh `onboarding:welcome`.
-
-The dispatcher SHALL detect incomplete runs by inspecting the standard run-state location for runs whose workflow id is `onboarding:welcome` and whose state is not terminal. If multiple incomplete runs exist (an unexpected state), the dispatcher SHALL resume the most recent and SHALL NOT start a new run.
-
-#### Scenario: Resume after Ctrl-C mid-flow
-- **WHEN** the user starts onboarding via the dispatcher, advances past the welcome screen and the adapter-detection step, presses Ctrl-C to exit, and then re-runs `agent-runner` on a TTY with onboarding settings still unset
-- **THEN** the dispatcher SHALL fire and SHALL resume the existing run at the next pending step rather than re-rendering the welcome screen
-
-#### Scenario: No incomplete run starts a fresh one
-- **WHEN** the dispatcher fires and there is no `onboarding:welcome` run in a non-terminal state
-- **THEN** the dispatcher SHALL start a fresh `onboarding:welcome` run
-
-#### Scenario: Multiple incomplete runs resume the most recent
-- **WHEN** the dispatcher fires and two `onboarding:welcome` runs exist in non-terminal states
-- **THEN** the dispatcher SHALL resume the most recent run and SHALL NOT start a new run
-
-### Requirement: Post-onboarding handoff to the home screen
-
-When a dispatcher-launched `onboarding:welcome` run reaches a terminal state — successful `continue` path completion, `dismiss`, `not_now`, cancellation, or failure — the runner SHALL transition to its normal entry point for the bare `agent-runner` invocation: the list-runs ("home") TUI. The runner SHALL NOT leave the user on the post-completion run view of the onboarding run.
-
-This handoff applies only to the dispatcher-launched path. Direct invocation via `agent-runner run onboarding:welcome` SHALL retain its current post-run behavior (the user remains on the run-view per the standard `view-run` rules) so that scripted or explicit invocations are not surprised by an entry-point switch.
-
-#### Scenario: Dismiss returns to home
-- **WHEN** the dispatcher launches onboarding and the user selects `dismiss` on the welcome screen
-- **THEN** after the dismissal timestamp is written, the runner SHALL transition to the list-runs TUI
-
-#### Scenario: Not-now returns to home
-- **WHEN** the dispatcher launches onboarding and the user selects `not_now` on the welcome screen
-- **THEN** the runner SHALL transition to the list-runs TUI without writing settings
-
-#### Scenario: Successful continue path returns to home
-- **WHEN** the dispatcher launches onboarding, the user selects `continue`, and the selected onboarding path reaches its end successfully
-- **THEN** after `completed_at` is written, the runner SHALL transition to the list-runs TUI
-
-#### Scenario: Setup cancellation returns to home
-- **WHEN** the dispatcher launches onboarding, the user selects `continue`, and the user cancels at the editor's confirmation screen
-- **THEN** the runner SHALL transition to the list-runs TUI without writing settings (dispatcher will fire again on next entry per existing rules)
-
-#### Scenario: Direct invocation does not switch entry points
-- **WHEN** the user runs `agent-runner run onboarding:welcome` directly and the workflow reaches a terminal state
-- **THEN** the runner SHALL behave per the existing `view-run` rules (remain on the run view) and SHALL NOT auto-transition to the list-runs TUI
+#### Scenario: Run without setup completion
+- **WHEN** the user runs `agent-runner run onboarding:onboarding` with `settings.setup.completed_at` unset
+- **THEN** the workflow executes normally
 
 ### Requirement: Step types demo instructional flow
 
@@ -314,17 +220,36 @@ The `step-types-demo` onboarding workflow SHALL NOT create, modify, or delete us
 
 ### Requirement: Step types demo failure leaves onboarding incomplete
 
-When the `step-types-demo` sub-workflow fails or is cancelled before completing, `onboarding:welcome` SHALL NOT write `settings.onboarding.completed_at` or `settings.onboarding.dismissed`. Dispatcher-launched terminal failure or cancellation SHALL use the existing post-onboarding handoff behavior. Direct invocation SHALL use the standard direct-run post-run behavior.
+When `onboarding:onboarding` or `onboarding:step-types-demo` fails or is cancelled before completing the continue path, the runner SHALL NOT write `settings.onboarding.completed_at`. Native setup completion settings SHALL remain unchanged.
 
 #### Scenario: Demo failure does not write onboarding settings
-- **WHEN** the user selects `continue`, `setup-agent-profile.yaml` completes successfully, and `step-types-demo.yaml` fails before completion
-- **THEN** `settings.onboarding.completed_at` is not written and `settings.onboarding.dismissed` is not written
+- **WHEN** `onboarding:onboarding` starts and the step-types demo fails before completion
+- **THEN** `settings.onboarding.completed_at` is not written
 
-#### Scenario: Dispatcher-launched demo failure returns to home
-- **WHEN** the dispatcher launches onboarding, the user selects `continue`, setup completes successfully, and `step-types-demo.yaml` reaches a terminal failure or cancellation
-- **THEN** the runner SHALL transition to the list-runs TUI without writing onboarding settings
+#### Scenario: Demo failure does not change setup state
+- **WHEN** `onboarding:onboarding` fails after native setup completed
+- **THEN** `settings.setup.completed_at` remains unchanged
 
 #### Scenario: Direct invocation with demo failure keeps standard post-run behavior
-- **WHEN** the user runs `agent-runner run onboarding:welcome` directly, selects `continue`, setup completes successfully, and `step-types-demo.yaml` reaches a terminal failure or cancellation
-- **THEN** the runner SHALL behave per the existing `view-run` rules and SHALL NOT auto-transition to the list-runs TUI
+- **WHEN** the user runs `agent-runner run onboarding:onboarding` directly and the demo reaches a terminal failure or cancellation
+- **THEN** the runner SHALL behave per the existing direct-run view rules and SHALL NOT auto-transition to the list-runs TUI
 
+### Requirement: Onboarding demo intro actions
+
+The first step of `onboarding:onboarding` SHALL be a `mode: ui` informational screen that introduces the onboarding demo and offers exactly three outcomes: continue to the demo, defer the demo until later, and dismiss the demo. The step SHALL NOT be named or presented as the setup welcome screen.
+
+#### Scenario: Intro offers three actions
+- **WHEN** `onboarding:onboarding` starts
+- **THEN** the first step offers actions whose outcomes are exactly `continue`, `not_now`, and `dismiss`
+
+#### Scenario: Intro is not setup welcome
+- **WHEN** the onboarding demo intro renders
+- **THEN** the copy describes the optional workflow demo rather than mandatory setup
+
+#### Scenario: Not-now leaves demo eligible
+- **WHEN** the user selects the not-now action
+- **THEN** no onboarding completion or dismissal setting is written
+
+#### Scenario: Dismiss records demo dismissal
+- **WHEN** the user selects the dismiss action
+- **THEN** `settings.onboarding.dismissed` is written with the current RFC3339 timestamp

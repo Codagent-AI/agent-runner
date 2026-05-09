@@ -147,6 +147,28 @@ func TestExecuteLoopStep(t *testing.T) {
 		}
 	})
 
+	t.Run("skips body steps matching skip_if", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		step := model.Step{
+			ID: "loop", Session: model.SessionNew,
+			Loop: &model.Loop{Max: intPtr(1)},
+			Steps: []model.Step{
+				{ID: "a", Command: "true", Session: model.SessionNew},
+				{ID: "b", Command: "echo b", Session: model.SessionNew, SkipIf: "previous_success"},
+			},
+		}
+		result, err := ExecuteLoopStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{}, LoopExecuteOptions{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Outcome != OutcomeExhausted {
+			t.Fatalf("expected exhausted, got %q", result.Outcome)
+		}
+		if len(runner.calls) != 1 {
+			t.Fatalf("expected only first body step to run, got %d calls: %#v", len(runner.calls), runner.calls)
+		}
+	})
+
 	t.Run("for-each loop iterates over matches", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}, {ExitCode: 0}}}
 		glob := &mockGlob{matches: []string{"a.go", "b.go"}}

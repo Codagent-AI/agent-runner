@@ -44,33 +44,41 @@ The builtin set SHALL include a `core` namespace containing general-purpose work
 
 ### Requirement: Onboarding namespace embedded
 
-The builtin set SHALL include an `onboarding` namespace alongside the existing `core`, `openspec`, and `spec-driven` namespaces. The `onboarding` namespace SHALL contain at minimum `welcome` (the top-level workflow invoked by the first-run dispatcher and by direct invocation) and `setup-agent-profile` (the sub-workflow used by Phase 2). Additional sub-workflows or bundled assets MAY be present.
+The builtin set SHALL include an `onboarding` namespace alongside the existing `core`, `openspec`, and `spec-driven` namespaces. The `onboarding` namespace SHALL contain at minimum `onboarding` as the top-level demo workflow and `step-types-demo` as the workflow step demonstration. The namespace SHALL NOT expose `welcome` or `setup-agent-profile` workflows because first-run setup is native TUI functionality.
 
-#### Scenario: Onboarding workflows invoked by namespace
-- **WHEN** the user runs `agent-runner run onboarding:welcome`
+#### Scenario: Onboarding demo workflow invoked by namespace
+- **WHEN** the user runs `agent-runner run onboarding:onboarding`
 - **THEN** the workflow loads from the embedded `onboarding` namespace and executes
 
-#### Scenario: Setup sub-workflow exists
-- **WHEN** the embedded `onboarding:welcome` references `workflow: setup-agent-profile.yaml`
-- **THEN** the sub-workflow loads from the embedded `onboarding/setup-agent-profile.yaml`
+#### Scenario: Step types demo workflow exists
+- **WHEN** the user runs `agent-runner run onboarding:step-types-demo`
+- **THEN** the workflow loads from the embedded `onboarding` namespace and executes
+
+#### Scenario: Welcome workflow not exposed
+- **WHEN** the user runs `agent-runner run onboarding:welcome`
+- **THEN** the runner fails with a workflow-not-found error
+
+#### Scenario: Setup workflow not exposed
+- **WHEN** the user runs `agent-runner run onboarding:setup-agent-profile`
+- **THEN** the runner fails with a workflow-not-found error
 
 ### Requirement: Non-YAML files embedded as bundled assets
 
-Files in a namespace subdirectory whose names do not end in `.yaml` (e.g., `.sh` scripts and other data files referenced by workflows) SHALL be embedded as bundled assets and accessible at runtime via the relative paths declared by `script:` step fields. The embed mechanism SHALL preserve file mode bits relevant to execution (such as the executable bit) where the host filesystem records them. Asset path resolution SHALL stay within the namespace; the runner SHALL NOT fall back to user-authored workflows under `.agent-runner/workflows/` when an embedded workflow references a bundled asset.
+Files in a namespace subdirectory whose names do not end in `.yaml` SHALL be embedded as bundled assets and accessible at runtime via the relative paths declared by supported builtin workflow references. The embed mechanism SHALL preserve file mode bits relevant to execution where the host filesystem records them. Asset path resolution SHALL stay within the namespace; the runner SHALL NOT fall back to user-authored workflows under `.agent-runner/workflows/` when an embedded workflow references a bundled asset.
 
-#### Scenario: Embedded script asset accessible
-- **WHEN** the embedded workflow `onboarding:setup-agent-profile` declares `script: detect-adapters.sh` and the file `onboarding/detect-adapters.sh` exists in the embedded set
-- **THEN** the runner resolves and executes that bundled asset at runtime
+#### Scenario: Embedded onboarding docs accessible
+- **WHEN** the embedded onboarding demo references packaged documentation for Q&A
+- **THEN** the documentation files are embedded and accessible at runtime
 
 #### Scenario: Embedded asset does not fall back to user directory
-- **WHEN** the embedded workflow `onboarding:setup-agent-profile` declares `script: detect-adapters.sh` and a file `.agent-runner/workflows/onboarding/detect-adapters.sh` also exists on the user's disk
-- **THEN** the embedded asset is used; the user file is not consulted
+- **WHEN** an embedded onboarding workflow references a bundled asset and a user-authored file with the same relative path exists
+- **THEN** the embedded asset is used and the user file is not consulted
 
 #### Scenario: Bundled JSON data file embedded
-- **WHEN** a namespace subdirectory contains a non-YAML data file (e.g., `models.json`) referenced by a bundled script
+- **WHEN** a namespace subdirectory contains a non-YAML data file referenced by a bundled workflow or asset
 - **THEN** the file is embedded and accessible at runtime via its relative path within the namespace
 
 #### Scenario: Top-level non-YAML files not exposed
-- **WHEN** the repository's `workflows/` directory contains a non-YAML file at the top level (not inside a namespace subdirectory)
+- **WHEN** the repository's `workflows/` directory contains a non-YAML file at the top level
 - **THEN** that file is not exposed as a bundled asset under any namespace
 

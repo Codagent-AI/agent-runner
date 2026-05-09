@@ -10,10 +10,11 @@ import "strings"
 //   - APC  (\x1b_)  — same termination as OSC
 //   - SOS  (\x1bX)  — same termination as OSC
 const (
-	escNone        = iota
-	escSawEsc      // saw 0x1b, waiting for next byte
-	escInCSI       // inside CSI, waiting for final byte (0x40-0x7e)
-	escInStringSeq // inside OSC/DCS/PM/APC/SOS, waiting for BEL or ST
+	escNone         = iota
+	escSawEsc       // saw 0x1b, waiting for next byte
+	escInCSI        // inside CSI, waiting for final byte (0x40-0x7e)
+	escInStringSeq  // inside OSC/DCS/PM/APC/SOS, waiting for BEL or ST
+	escStringSawEsc // inside a string sequence after ESC, waiting for ST final byte
 )
 
 // inputProcessor tracks ANSI escape sequence state and detects continue
@@ -21,6 +22,7 @@ const (
 type inputProcessor struct {
 	lineBuffer []byte
 	escState   int
+	escBuf     []byte
 }
 
 // processResult holds the outcome of processing an input chunk.
@@ -48,39 +50,15 @@ func (p *inputProcessor) process(chunk []byte) processResult {
 	for _, b := range chunk {
 		// Escape sequence state machine — consume full sequences without
 		// touching lineBuffer.
-		switch p.escState {
-		case escSawEsc:
-			switch b {
-			case '[':
-				p.escState = escInCSI
-			case ']', 'P', '^', '_', 'X': // OSC, DCS, PM, APC, SOS
-				p.escState = escInStringSeq
-			default:
-				p.escState = escNone // simple two-byte escape
-			}
-			buf = append(buf, b)
-			continue
-		case escInCSI:
-			if b >= 0x40 && b <= 0x7e { // final byte
-				p.escState = escNone
-			}
-			buf = append(buf, b)
-			continue
-		case escInStringSeq:
-			switch b {
-			case 0x07: // BEL terminates
-				p.escState = escNone
-			case 0x1b: // start of ST (\x1b\)
-				p.escState = escSawEsc
-			}
-			buf = append(buf, b)
+		if p.escState != escNone {
+			buf = append(buf, p.processEscapeByte(b)...)
 			continue
 		}
 
 		// Start of a new escape sequence.
 		if b == 0x1b {
 			p.escState = escSawEsc
-			buf = append(buf, b)
+			p.escBuf = append(p.escBuf[:0], b)
 			continue
 		}
 
@@ -111,4 +89,60 @@ func (p *inputProcessor) process(chunk []byte) processResult {
 	}
 
 	return processResult{forward: buf}
+}
+
+func (p *inputProcessor) processEscapeByte(b byte) []byte {
+	switch p.escState {
+	case escSawEsc:
+		p.escBuf = append(p.escBuf, b)
+		switch b {
+		case '[':
+			p.escState = escInCSI
+			return nil
+		case ']', 'P', '^', '_', 'X': // OSC, DCS, PM, APC, SOS
+			p.escState = escInStringSeq
+		default:
+			p.escState = escNone // simple two-byte escape
+		}
+		out := append([]byte(nil), p.escBuf...)
+		p.escBuf = p.escBuf[:0]
+		return out
+	case escInCSI:
+		p.escBuf = append(p.escBuf, b)
+		if b < 0x40 || b > 0x7e {
+			return nil
+		}
+		out := []byte(nil)
+		if !isSGRMouseInput(p.escBuf) {
+			out = append(out, p.escBuf...)
+		}
+		p.escBuf = p.escBuf[:0]
+		p.escState = escNone
+		return out
+	case escInStringSeq:
+		switch b {
+		case 0x07: // BEL terminates
+			p.escState = escNone
+		case 0x1b: // start of ST (\x1b\)
+			p.escState = escStringSawEsc
+			return nil
+		}
+		return []byte{b}
+	case escStringSawEsc:
+		p.escState = escInStringSeq
+		if b == '\\' {
+			p.escState = escNone
+		}
+		return []byte{0x1b, b}
+	default:
+		return nil
+	}
+}
+
+func isSGRMouseInput(seq []byte) bool {
+	if len(seq) < 6 {
+		return false
+	}
+	final := seq[len(seq)-1]
+	return seq[0] == 0x1b && seq[1] == '[' && seq[2] == '<' && (final == 'M' || final == 'm')
 }

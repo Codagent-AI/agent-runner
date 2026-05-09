@@ -57,6 +57,42 @@ func renderShellBlock(node *StepNode, indent, width int, loadedFull bool) []stri
 	return lines
 }
 
+func renderScriptBlock(node *StepNode, indent, width int, loadedFull bool) []string {
+	contentWidth := width - 2*indent
+	if contentWidth <= 0 {
+		return nil
+	}
+
+	glyph := blockTypeGlyph(node.Type)
+	sep := renderSeparator(node.ID, glyph, indent, contentWidth)
+
+	var lines []string
+	lines = append(lines, sep)
+
+	if node.StaticScript != "" {
+		lines = append(lines, renderWrappedText("# "+node.StaticScript, contentWidth)...)
+		lines = append(lines, "")
+	}
+
+	lines = append(lines, blockCommonModifiers(node)...)
+
+	if node.Status == StatusPending {
+		return lines
+	}
+
+	lines = append(lines, blockExitAndDuration(node)...)
+
+	if node.ErrorMessage != "" {
+		lines = append(lines, "", blockLabelStr("error:"))
+		lines = append(lines, renderWrappedText(node.ErrorMessage, contentWidth)...)
+		return lines
+	}
+
+	lines = append(lines, renderOutputSection("stdout", node.Stdout, contentWidth, loadedFull)...)
+	lines = append(lines, renderOutputSection("stderr", node.Stderr, contentWidth, loadedFull)...)
+	return lines
+}
+
 // blockAgentHeader appends the shared agent metadata lines (profile, cli,
 // model, session, prompt) that are identical for headless and interactive blocks.
 func blockAgentHeader(node *StepNode, contentWidth int) []string {
@@ -296,7 +332,7 @@ func blockTypeGlyph(t NodeType) string {
 	case NodeShell:
 		return "$"
 	case NodeScript:
-		return "❯"
+		return "#"
 	case NodeUI:
 		return "▣"
 	case NodeHeadlessAgent:

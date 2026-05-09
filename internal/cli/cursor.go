@@ -2,14 +2,21 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
 // CursorAdapter constructs invocation args for the Cursor agent CLI.
 type CursorAdapter struct{}
+
+const maxCursorStoreDBSize = 64 * 1024 * 1024
 
 // ExecutableName returns the Cursor agent CLI binary name. The adapter remains
 // registered as "cursor" because that is the workflow-facing backend name.
@@ -57,14 +64,14 @@ func (a *CursorAdapter) ProbeModel(model, effort string) (ProbeStrength, error) 
 
 // DiscoverSessionID returns the session ID after a Cursor process exits.
 // Headless mode parses stream-json output for the first event containing a
-// session_id field. Interactive mode has no verified session ID channel, so it
-// declines to persist a filesystem-guessed chat ID.
+// session_id field. Interactive mode scans Cursor's local chat store for a
+// single chat written after spawn for the current workspace.
 func (a *CursorAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
 	if opts.PresetID != "" {
 		return opts.PresetID
 	}
 	if !opts.Headless {
-		return ""
+		return discoverCursorInteractiveSession(opts.SpawnTime, opts.Workdir)
 	}
 	return discoverCursorSessionID(opts.ProcessOutput)
 }
@@ -186,4 +193,97 @@ func discoverCursorSessionID(output string) string {
 		return ""
 	}
 	return ""
+}
+
+func discoverCursorInteractiveSession(spawnTime time.Time, workdir string) string {
+	if workdir == "" {
+		var err error
+		workdir, err = os.Getwd()
+		if err != nil {
+			return ""
+		}
+	}
+	absWorkdir, err := filepath.Abs(workdir)
+	if err != nil {
+		return ""
+	}
+	workdir = filepath.Clean(absWorkdir)
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil || homeDir == "" {
+		return ""
+	}
+	root := filepath.Join(homeDir, ".cursor", "chats")
+	rootDir, err := os.OpenRoot(root)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = rootDir.Close() }()
+	rootFS := rootDir.FS()
+
+	workspaceNeedle := []byte("Workspace Path: " + workdir)
+	var matches []string
+	if err := fs.WalkDir(rootFS, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || d.Name() != "store.db" {
+			return nil
+		}
+		info, statErr := fs.Stat(rootFS, path)
+		if statErr != nil || info.ModTime().Before(spawnTime) || info.Size() > maxCursorStoreDBSize {
+			return nil
+		}
+		found, readErr := cursorStoreContains(rootFS, path, workspaceNeedle)
+		if readErr != nil || !found {
+			return nil
+		}
+		chatID := filepath.Base(filepath.Dir(path))
+		if chatID != "" {
+			matches = append(matches, chatID)
+			if len(matches) > 1 {
+				return fs.SkipAll
+			}
+		}
+		return nil
+	}); err != nil {
+		return ""
+	}
+	if len(matches) != 1 {
+		return ""
+	}
+	return matches[0]
+}
+
+func cursorStoreContains(rootFS fs.FS, path string, needle []byte) (bool, error) {
+	file, err := rootFS.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = file.Close() }()
+	return readerContains(file, needle)
+}
+
+func readerContains(r io.Reader, needle []byte) (bool, error) {
+	if len(needle) == 0 {
+		return true, nil
+	}
+	buf := make([]byte, 32*1024)
+	carry := make([]byte, 0, len(needle)-1)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			window := make([]byte, len(carry)+n)
+			copy(window, carry)
+			copy(window[len(carry):], buf[:n])
+			if bytes.Contains(window, needle) {
+				return true, nil
+			}
+			keep := min(len(needle)-1, len(window))
+			carry = append(carry[:0], window[len(window)-keep:]...)
+		}
+		if err == io.EOF {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+	}
 }

@@ -22,18 +22,18 @@ type CodexAdapter struct{}
 //   - Fresh headless:     codex --dangerously-bypass-approvals-and-sandbox exec --json <prompt>
 //   - Resume interactive: codex resume --no-alt-screen <uuid> <prompt>
 //   - Resume headless:    codex --dangerously-bypass-approvals-and-sandbox exec resume --json <uuid> <prompt>
-//   - Model override:     appends -m <m> (fresh sessions only)
+//   - Model override:     appends -m <m>
 //   - Effort override:    appends -c model_reasoning_effort="<effort>"
 //
-// -m is intentionally omitted on resume: a Codex thread keeps the model it
-// was started with, so the profile's model is honored on fresh sessions
-// and inherited thereafter. In this adapter SessionID is set only when
-// resuming (fresh sessions discover the ID post-hoc), so SessionID != ""
-// is the resume signal.
+// -m is passed on resume as well as fresh sessions. Codex warns and resumes
+// with its current default model when the flag is omitted, even if the thread
+// was recorded with a different model. Passing the resolved model preserves
+// the model selected by the workflow/profile across session resume.
 func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 	args := []string{"codex"}
 
-	resuming := input.SessionID != ""
+	sessionID := normalizeCodexSessionID(input.SessionID)
+	resuming := sessionID != ""
 
 	if input.Headless {
 		args = append(args, "--dangerously-bypass-approvals-and-sandbox", "exec")
@@ -50,7 +50,7 @@ func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 		}
 	}
 
-	if input.Model != "" && !resuming {
+	if input.Model != "" {
 		args = append(args, "-m", input.Model)
 	}
 	if input.Effort != "" {
@@ -58,7 +58,7 @@ func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 	}
 
 	if resuming {
-		args = append(args, input.SessionID)
+		args = append(args, sessionID)
 	}
 	args = append(args, input.Prompt)
 	return args
@@ -105,11 +105,14 @@ func (a *CodexAdapter) FilterHeadlessResult(exitCode int, stdout, stderr string)
 // For headless mode, it parses the thread_id from the thread.started JSONL event.
 // For interactive mode, it scans ~/.codex/sessions/ for the most recent session file.
 func (a *CodexAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
-	if opts.PresetID != "" {
-		return opts.PresetID
-	}
 	if opts.Headless {
-		return discoverCodexHeadlessSession(opts.ProcessOutput)
+		if id := discoverCodexHeadlessSession(opts.ProcessOutput); id != "" {
+			return id
+		}
+		return normalizeCodexSessionID(opts.PresetID)
+	}
+	if opts.PresetID != "" {
+		return normalizeCodexSessionID(opts.PresetID)
 	}
 	return discoverCodexInteractiveSession(opts.SpawnTime)
 }
@@ -385,11 +388,72 @@ func discoverCodexInteractiveSession(spawnTime time.Time) string {
 
 	for _, c := range candidates {
 		if matchesSessionCwd(c.path, cwd) {
-			base := filepath.Base(c.path)
-			return strings.TrimSuffix(base, ".jsonl")
+			if id := codexSessionID(c.path); id != "" {
+				return id
+			}
+			return normalizeCodexSessionID(strings.TrimSuffix(filepath.Base(c.path), ".jsonl"))
 		}
 	}
 
+	return ""
+}
+
+func normalizeCodexSessionID(id string) string {
+	if !strings.HasPrefix(id, "rollout-") || len(id) < 36 {
+		return id
+	}
+	suffix := id[len(id)-36:]
+	if looksLikeUUID(suffix) {
+		return suffix
+	}
+	return id
+}
+
+func looksLikeUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, r := range s {
+		switch i {
+		case 8, 13, 18, 23:
+			if r != '-' {
+				return false
+			}
+		default:
+			if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func codexSessionID(sessionFile string) string {
+	f, err := os.Open(sessionFile) // #nosec G304 -- scanning known Codex session directory
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = f.Close() }()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		var meta struct {
+			Type    string `json:"type"`
+			ID      string `json:"id"`
+			Payload struct {
+				ID string `json:"id"`
+			} `json:"payload"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &meta); err != nil {
+			continue
+		}
+		if meta.Type == "session_meta" {
+			if meta.Payload.ID != "" {
+				return meta.Payload.ID
+			}
+			return meta.ID
+		}
+	}
 	return ""
 }
 

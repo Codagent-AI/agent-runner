@@ -814,9 +814,11 @@ func TestExecuteAgentStep(t *testing.T) {
 
 	t.Run("interactive codex without enrichment passes prompt positionally", func(t *testing.T) {
 		var ptyCalls [][]string
+		var ptyOpts []pty.Options
 		oldFn := interactiveRunnerFn
-		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
+		interactiveRunnerFn = func(args []string, opts pty.Options) (pty.Result, error) {
 			ptyCalls = append(ptyCalls, args)
+			ptyOpts = append(ptyOpts, opts)
 			return pty.Result{ContinueTriggered: true}, nil
 		}
 		defer func() { interactiveRunnerFn = oldFn }()
@@ -832,16 +834,10 @@ func TestExecuteAgentStep(t *testing.T) {
 		if !strings.Contains(lastArg, "review code") {
 			t.Fatalf("expected prompt in positional arg for codex without enrichment, got %q", lastArg)
 		}
-		// Interactive steps include the completion instruction appended to the prompt.
-		if !strings.Contains(lastArg, "AGENT_RUNNER_") || !strings.Contains(lastArg, "CONTINUE") {
-			t.Fatalf("expected completion instruction in codex interactive prompt, got %q", lastArg)
+		if len(ptyOpts) == 0 {
+			t.Fatal("expected PTY options to be captured")
 		}
-		if strings.Contains(lastArg, "AGENT_RUNNER_CONTINUE") {
-			t.Fatalf("completion instruction must not include the exact text sentinel, got %q", lastArg)
-		}
-		if strings.Contains(lastArg, "AGENT_RUNNER_TTY") || strings.Contains(lastArg, "printf") {
-			t.Fatalf("completion instruction should not require shell command approval, got %q", lastArg)
-		}
+		assertContinueMarkerInstruction(t, lastArg, ptyOpts[0].ContinueMarker)
 	})
 
 	t.Run("headless mode passes prompt as positional arg without wrapping", func(t *testing.T) {
@@ -874,9 +870,11 @@ func TestExecuteAgentStep(t *testing.T) {
 
 	t.Run("interactive step prompt includes completion instruction", func(t *testing.T) {
 		var capturedArgs [][]string
+		var capturedOpts []pty.Options
 		oldFn := interactiveRunnerFn
-		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
+		interactiveRunnerFn = func(args []string, opts pty.Options) (pty.Result, error) {
 			capturedArgs = append(capturedArgs, args)
+			capturedOpts = append(capturedOpts, opts)
 			return pty.Result{ContinueTriggered: true}, nil
 		}
 		defer func() { interactiveRunnerFn = oldFn }()
@@ -887,6 +885,9 @@ func TestExecuteAgentStep(t *testing.T) {
 		if len(capturedArgs) == 0 {
 			t.Fatal("expected PTY to be called")
 		}
+		if len(capturedOpts) == 0 {
+			t.Fatal("expected PTY options to be captured")
+		}
 		// For Claude interactive, the completion instruction goes into --append-system-prompt.
 		args := capturedArgs[0]
 		for i, a := range args {
@@ -894,15 +895,7 @@ func TestExecuteAgentStep(t *testing.T) {
 				continue
 			}
 			sysPrompt := args[i+1]
-			if !strings.Contains(sysPrompt, "AGENT_RUNNER_") || !strings.Contains(sysPrompt, "CONTINUE") {
-				t.Fatalf("expected completion instruction in system prompt, got %q", sysPrompt)
-			}
-			if strings.Contains(sysPrompt, "AGENT_RUNNER_CONTINUE") {
-				t.Fatalf("completion instruction must not include the exact text sentinel, got %q", sysPrompt)
-			}
-			if strings.Contains(sysPrompt, "AGENT_RUNNER_TTY") || strings.Contains(sysPrompt, "printf") {
-				t.Fatalf("completion instruction should not require shell command approval, got %q", sysPrompt)
-			}
+			assertContinueMarkerInstruction(t, sysPrompt, capturedOpts[0].ContinueMarker)
 			if !strings.Contains(sysPrompt, "you or the user") {
 				t.Fatalf("expected 'you or the user' wording in completion instruction, got %q", sysPrompt)
 			}
@@ -1287,4 +1280,36 @@ func containsArg(args []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func assertContinueMarkerInstruction(t *testing.T, prompt, marker string) {
+	t.Helper()
+	if marker == "" {
+		t.Fatal("expected interactive PTY continue marker")
+	}
+	if !strings.HasPrefix(marker, continuationMarkerPrefix) {
+		t.Fatalf("expected marker prefix %q, got %q", continuationMarkerPrefix, marker)
+	}
+	suffix := strings.TrimPrefix(marker, continuationMarkerPrefix)
+	if suffix == "" {
+		t.Fatalf("expected marker suffix, got %q", marker)
+	}
+	for _, part := range []string{"`AGENT`", "`_RUNNER`", "`_CONTINUE_`", "`" + suffix + "`"} {
+		if !strings.Contains(prompt, part) {
+			t.Fatalf("expected dynamic text marker instruction part %q in prompt, marker %q prompt %q", part, marker, prompt)
+		}
+	}
+	for _, phrase := range []string{"in this exact order", "no spaces or separators", "must start with `AGENT`", "end with `" + suffix + "`"} {
+		if !strings.Contains(prompt, phrase) {
+			t.Fatalf("expected marker assembly guidance %q in prompt, got %q", phrase, prompt)
+		}
+	}
+	if strings.Contains(prompt, marker) {
+		t.Fatalf("completion instruction must not include the exact marker contiguously, got %q", prompt)
+	}
+	for _, disallowed := range []string{"signal-continuation", "AGENT_RUNNER_TTY", "printf"} {
+		if strings.Contains(prompt, disallowed) {
+			t.Fatalf("completion instruction should use hosted-CLI text marker, got %q", prompt)
+		}
+	}
 }

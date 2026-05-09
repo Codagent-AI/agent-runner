@@ -28,11 +28,11 @@ import (
 	"github.com/codagent/agent-runner/internal/liverun"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
+	nativesetup "github.com/codagent/agent-runner/internal/onboarding/native"
 	"github.com/codagent/agent-runner/internal/paramform"
 	"github.com/codagent/agent-runner/internal/prevalidate"
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/runner"
-	"github.com/codagent/agent-runner/internal/runs"
 	"github.com/codagent/agent-runner/internal/runview"
 	"github.com/codagent/agent-runner/internal/themeprompt"
 	"github.com/codagent/agent-runner/internal/usersettings"
@@ -432,7 +432,7 @@ func handleListWithTab(initialTab listview.InitialTab) int {
 	if code := ensureThemeForTUI(defaultThemeDeps); code != 0 {
 		return code
 	}
-	if code := ensureOnboardingForTUI(defaultOnboardingDeps); code != 0 {
+	if code := ensureFirstRunForTUI(defaultFirstRunDeps); code != 0 {
 		return code
 	}
 
@@ -1221,83 +1221,77 @@ func applyTheme(theme usersettings.Theme) {
 	lipgloss.SetHasDarkBackground(theme == usersettings.ThemeDark)
 }
 
-type onboardingDeps struct {
-	load                    func() (usersettings.Settings, error)
-	isStdinTTY              func() bool
-	isStdoutTTY             func() bool
-	incompleteOnboardingRun func() (string, error)
-	resumeRun               func(runID string) int
-	runWorkflow             func(ref string) int
+type nativeSetupResult int
+
+const (
+	nativeSetupCompleted nativeSetupResult = iota
+	nativeSetupCancelled
+	nativeSetupFailed
+)
+
+type firstRunDeps struct {
+	load                          func() (usersettings.Settings, error)
+	isStdinTTY                    func() bool
+	isStdoutTTY                   func() bool
+	runNativeSetup                func() (nativeSetupResult, error)
+	continueAfterNativeSetupError bool
+	runWorkflow                   func(ref string) int
 }
 
-var defaultOnboardingDeps = onboardingDeps{
-	load:                    usersettings.Load,
-	isStdinTTY:              func() bool { return isatty.IsTerminal(os.Stdin.Fd()) },
-	isStdoutTTY:             func() bool { return isatty.IsTerminal(os.Stdout.Fd()) },
-	incompleteOnboardingRun: findIncompleteOnboardingRun,
-	resumeRun: func(runID string) int {
-		return handleResumeWithOptions(runID, liveTUIOptions{quitOnDone: true})
+var defaultFirstRunDeps = firstRunDeps{
+	load:                          usersettings.Load,
+	isStdinTTY:                    func() bool { return isatty.IsTerminal(os.Stdin.Fd()) },
+	isStdoutTTY:                   func() bool { return isatty.IsTerminal(os.Stdout.Fd()) },
+	continueAfterNativeSetupError: true,
+	runNativeSetup: func() (nativeSetupResult, error) {
+		result, err := nativesetup.Run(&nativesetup.Deps{})
+		switch result {
+		case nativesetup.ResultCompleted:
+			return nativeSetupCompleted, err
+		case nativesetup.ResultFailed:
+			return nativeSetupFailed, err
+		default:
+			return nativeSetupCancelled, err
+		}
 	},
 	runWorkflow: func(ref string) int {
 		return handleRunWithOptions([]string{ref}, liveTUIOptions{quitOnDone: true})
 	},
 }
 
-func ensureOnboardingForTUI(deps onboardingDeps) int {
+func ensureFirstRunForTUI(deps firstRunDeps) int {
 	settings, err := deps.load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
 	}
-	if settings.Onboarding.CompletedAt != "" || settings.Onboarding.Dismissed != "" {
-		return 0
-	}
 	if !deps.isStdinTTY() || !deps.isStdoutTTY() {
 		return 0
 	}
-	if deps.incompleteOnboardingRun != nil {
-		runID, err := deps.incompleteOnboardingRun()
+	setupCompleted := settings.Setup.CompletedAt != ""
+	if !setupCompleted {
+		result, err := deps.runNativeSetup()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-			return 1
+			if !deps.continueAfterNativeSetupError {
+				return 1
+			}
+			return 0
 		}
-		if runID != "" {
-			return deps.resumeRun(runID)
+		if result != nativeSetupCompleted {
+			return 0
 		}
+		setupCompleted = true
 	}
-	ref, err := builtinworkflows.Resolve("onboarding:welcome")
+	if !setupCompleted || settings.Onboarding.CompletedAt != "" || settings.Onboarding.Dismissed != "" {
+		return 0
+	}
+	ref, err := builtinworkflows.Resolve("onboarding:onboarding")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
 	}
 	return deps.runWorkflow(ref)
-}
-
-func findIncompleteOnboardingRun() (string, error) {
-	home, err := userHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("cannot determine home directory: %w", err)
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("cannot determine working directory: %w", err)
-	}
-
-	projectDir := filepath.Join(home, ".agent-runner", "projects", audit.EncodePath(cwd))
-	infos, err := runs.ListForDir(projectDir)
-	if err != nil {
-		return "", err
-	}
-	for i := range infos {
-		info := &infos[i]
-		if info.Status == runs.StatusCompleted {
-			continue
-		}
-		if info.WorkflowName == "onboarding-welcome" || info.WorkflowFile == "builtin:onboarding/welcome.yaml" {
-			return info.SessionID, nil
-		}
-	}
-	return "", nil
 }
 
 // parseParams separates positional args from key=value pairs.

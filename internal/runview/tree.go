@@ -55,6 +55,7 @@ type StepNode struct {
 
 	// Static fields (populated from workflow YAML).
 	StaticCommand            string
+	StaticScript             string
 	StaticPrompt             string
 	StaticAgent              string
 	StaticMode               model.StepMode
@@ -202,7 +203,7 @@ func buildStepNode(s *model.Step, parent *StepNode) *StepNode {
 		n.CaptureName = s.Capture
 	case s.Script != "":
 		n.Type = NodeScript
-		n.StaticCommand = s.Script
+		n.StaticScript = s.Script
 		n.CaptureName = s.Capture
 	case s.Mode == model.ModeUI:
 		n.Type = NodeUI
@@ -346,6 +347,7 @@ func cloneTemplate(src, parent *StepNode) *StepNode {
 		Status:                  StatusPending,
 		Parent:                  parent,
 		StaticCommand:           src.StaticCommand,
+		StaticScript:            src.StaticScript,
 		StaticPrompt:            src.StaticPrompt,
 		StaticAgent:             src.StaticAgent,
 		StaticMode:              src.StaticMode,
