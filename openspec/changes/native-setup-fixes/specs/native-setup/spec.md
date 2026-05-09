@@ -20,6 +20,8 @@ Native setup SHALL NOT present a welcome or intro screen. When the native setup 
 
 After native setup writes the profile configuration and records `settings.setup.completed_at`, the native setup TUI SHALL present a demo prompt screen with exactly three actions: Continue, Not now, and Dismiss.
 
+The demo prompt actions SHALL render as a horizontal button row rather than as the setup TUI's vertical option list. The Continue button SHALL be left-aligned, the Dismiss button SHALL be right-aligned, and intermediate buttons SHALL be distributed between them when terminal width allows. Left and Right keys SHALL change the focused demo prompt button. Enter SHALL activate the focused button.
+
 - **Continue** SHALL cause native setup to return a result indicating the onboarding demo should run. The caller SHALL then launch `onboarding:onboarding`.
 - **Not now** SHALL leave `settings.onboarding.completed_at` and `settings.onboarding.dismissed` unset. Native setup SHALL return normally without launching the demo.
 - **Dismiss** SHALL write `settings.onboarding.dismissed` with the current RFC3339 timestamp via the settings atomic-write path. Native setup SHALL return normally without launching the demo.
@@ -30,7 +32,13 @@ When native setup completes but onboarding demo completion or dismissal is alrea
 
 #### Scenario: Demo prompt appears after successful write
 - **WHEN** native setup writes the profile configuration and records setup.completed_at successfully
-- **THEN** the native setup TUI shows the demo prompt with Continue, Not now, and Dismiss actions
+- **THEN** the native setup TUI shows the demo prompt with Continue, Not now, and Dismiss actions as horizontal buttons
+
+#### Scenario: Demo prompt buttons support horizontal navigation
+- **WHEN** the demo prompt is visible
+- **AND** the user presses Left or Right
+- **THEN** focus moves between the Continue, Not now, and Dismiss buttons
+- **AND** Enter activates the focused button
 
 #### Scenario: Continue launches onboarding demo
 - **WHEN** the user selects Continue on the demo prompt

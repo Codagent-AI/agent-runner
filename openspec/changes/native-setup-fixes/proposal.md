@@ -10,8 +10,10 @@ The native setup feature shipped with several UX issues (no explanatory copy, ug
 - Move the onboarding demo prompt (Continue / Not now / Dismiss) into native setup as a post-write screen
 - Add a startup trigger to re-show the demo prompt when setup is complete but onboarding is neither completed nor dismissed
 - Fix codex model discovery: `parseCodexModels` does not handle the `{"models": [...]}` wrapper format returned by `codex debug models`
+- Use Claude Code's model aliases directly (`opus`, then `sonnet`) because the installed Claude CLI accepts aliases but does not expose model listing
+- Mark `claude` as the recommended/default planner CLI and `codex` as the recommended/default implementor CLI when available
 - Fix setup.completed_at persistence: the setting is not persisted after completing the full setup flow
-- UX overhaul: welcoming explanatory copy on every screen, centered layout (with top-left fallback for small terminals), smooth scroll-up transitions using harmonica
+- UX overhaul: welcoming explanatory copy on every screen, centered readable panel layout (with top-left fallback for small terminals), explicit default-model screens, smooth tick-driven scroll-up transitions
 
 ## Capabilities
 

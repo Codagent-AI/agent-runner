@@ -18,21 +18,41 @@ The editor SHALL write exactly two agent entries under `profiles.default.agents`
 
 ### Requirement: User chooses CLI and model for planner and implementor
 
-The native setup profile editor SHALL prompt the user to choose a CLI adapter and a model for the planner agent (interactive), and separately for the implementor agent (headless). CLI options SHALL be drawn at runtime from the existing adapter detection behavior. Model options SHALL be discovered at runtime by querying the chosen CLI adapter for available models. When the CLI does not support model listing or model discovery returns an empty list, the model selection step SHALL be skipped and the model field SHALL be omitted from the written entry.
+The native setup profile editor SHALL prompt the user to choose a CLI adapter and a model for the planner agent (interactive), and separately for the implementor agent (headless). CLI options SHALL be drawn at runtime from the existing adapter detection behavior. Model options SHALL be discovered at runtime by querying the chosen CLI adapter for available models where the adapter exposes model listing. When the CLI does not support model listing or model discovery returns an empty list, the editor SHALL show an explicit default-model screen with a Continue action; after Continue, the model field SHALL be omitted from the written entry.
 
 The model discovery for `codex` SHALL parse the `{"models": [...]}` JSON envelope returned by `codex debug models`, extracting models from the `models` array field. Each model entry with `"visibility": "list"` SHALL be included; entries with other visibility values SHALL be excluded.
+
+The `claude` CLI SHALL use the known Claude Code model aliases `opus` and `sonnet`, in that order, because the installed Claude Code CLI accepts model aliases but does not expose a model-listing command.
+
+Model discovery SHALL run asynchronously after the user selects a CLI. The TUI SHALL animate directly to the corresponding model screen, show a loading indicator on that model screen while discovery is running, and update the same screen with options or the default-model Continue action when discovery completes. The TUI SHALL NOT animate to a separate "discovering models" screen.
 
 #### Scenario: CLI options reflect detected adapters
 - **WHEN** the host has `claude` and `codex` on `$PATH` but not `cursor`
 - **THEN** the native setup CLI selection screens for both planner and implementor present `claude` and `codex` as the only options
 
+#### Scenario: Planner CLI recommends Claude
+- **WHEN** the host has `claude` and `codex` on `$PATH`
+- **THEN** the planner CLI selection screen marks `claude` as recommended and defaults focus to `claude`
+
+#### Scenario: Implementor CLI recommends Codex
+- **WHEN** the host has `claude` and `codex` on `$PATH`
+- **THEN** the implementor CLI selection screen marks `codex` as recommended and defaults focus to `codex`
+
+#### Scenario: Claude aliases are ordered by recommendation
+- **WHEN** the user picks `cli: claude`
+- **THEN** the model selection screen presents `opus` before `sonnet`
+
 #### Scenario: Model options reflect chosen CLI
-- **WHEN** the user picks `cli: claude` for planner and model discovery returns `["opus", "sonnet", "haiku"]`
+- **WHEN** the user picks `cli: codex` and model discovery returns `["gpt-5.5", "gpt-5.4"]`
 - **THEN** the native setup model selection screen presents only those discovered models
+
+#### Scenario: Model discovery loads on model screen
+- **WHEN** the user selects a CLI and model discovery is still running
+- **THEN** native setup shows the corresponding model screen with a loading indicator rather than a separate discovery screen
 
 #### Scenario: Model discovery returns empty
 - **WHEN** the user picks a CLI adapter whose model discovery returns an empty list
-- **THEN** the model selection step is skipped and the model field is omitted from the written entry
+- **THEN** native setup shows a default-model screen explaining that Agent Runner will use the CLI default and omit the model field after the user continues
 
 #### Scenario: No detected adapters
 - **WHEN** adapter detection returns an empty list

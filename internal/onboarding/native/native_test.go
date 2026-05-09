@@ -11,8 +11,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/mattn/go-runewidth"
 
 	"github.com/codagent/agent-runner/internal/profilewrite"
+	"github.com/codagent/agent-runner/internal/tuistyle"
 	"github.com/codagent/agent-runner/internal/usersettings"
 )
 
@@ -97,8 +99,7 @@ func TestSetupCompletesAndShowsDemoPrompt(t *testing.T) {
 		TargetPath:       "/home/me/.agent-runner/config.yaml",
 		InteractiveCLI:   "claude",
 		InteractiveModel: "opus",
-		HeadlessCLI:      "claude",
-		HeadlessModel:    "opus",
+		HeadlessCLI:      "codex",
 	}
 	if diff := cmp.Diff(wantWrite, wrote[0]); diff != "" {
 		t.Fatalf("write request mismatch (-want +got):\n%s", diff)
@@ -112,11 +113,13 @@ func TestSetupCompletesAndShowsDemoPrompt(t *testing.T) {
 	}
 }
 
-// With model discovery returning nil (skip both models):
-// Enter 1: interactive CLI → skip model → headless CLI
-// Enter 2: headless CLI → skip model → scope
-// Enter 3: scope → write → demo prompt
-// Enter 4: Continue
+// With model discovery returning nil:
+// Enter 1: interactive CLI → default planner model notice
+// Enter 2: Continue → headless CLI
+// Enter 3: headless CLI → default implementor model notice
+// Enter 4: Continue → scope
+// Enter 5: scope → write → demo prompt
+// Enter 6: Continue
 func TestDemoPromptContinueReturnsResultDemo(t *testing.T) {
 	m := NewModel(&Deps{
 		Detector:   AdapterDetectorFunc(func() ([]string, error) { return []string{"claude"}, nil }),
@@ -128,18 +131,16 @@ func TestDemoPromptContinueReturnsResultDemo(t *testing.T) {
 		Cwd:        func() (string, error) { return "/work/project", nil },
 	})
 
-	sendKeys(t, m, "enter", "enter", "enter", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter")
 
 	if m.Result() != ResultDemo {
 		t.Fatalf("Result() = %v, want ResultDemo; view=\n%s", m.Result(), m.View())
 	}
 }
 
-// Enter 1: CLI → skip model → headless CLI
-// Enter 2: headless CLI → skip model → scope
-// Enter 3: scope → write → demo prompt
+// Enter 1-5: CLI/default/headless/default/scope → demo prompt
 // Down: focus "Not now"
-// Enter 4: Not now
+// Enter 6: Not now
 func TestDemoPromptNotNowReturnsCompleted(t *testing.T) {
 	m := NewModel(&Deps{
 		Detector:   AdapterDetectorFunc(func() ([]string, error) { return []string{"claude"}, nil }),
@@ -151,16 +152,16 @@ func TestDemoPromptNotNowReturnsCompleted(t *testing.T) {
 		Cwd:        func() (string, error) { return "/work/project", nil },
 	})
 
-	sendKeys(t, m, "enter", "enter", "enter", "down", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "down", "enter")
 
 	if m.Result() != ResultCompleted {
 		t.Fatalf("Result() = %v, want ResultCompleted", m.Result())
 	}
 }
 
-// Enter 1-3: get to demo prompt
+// Enter 1-5: get to demo prompt
 // Down twice: focus "Dismiss"
-// Enter 4: Dismiss
+// Enter 6: Dismiss
 func TestDemoPromptDismissWritesDismissedSetting(t *testing.T) {
 	var saved []usersettings.Settings
 	m := NewModel(&Deps{
@@ -177,7 +178,7 @@ func TestDemoPromptDismissWritesDismissedSetting(t *testing.T) {
 		Cwd:     func() (string, error) { return "/work/project", nil },
 	})
 
-	sendKeys(t, m, "enter", "enter", "enter", "down", "down", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "down", "down", "enter")
 
 	if m.Result() != ResultCompleted {
 		t.Fatalf("Result() = %v, want ResultCompleted", m.Result())
@@ -205,8 +206,8 @@ func TestDemoPromptSkippedWhenOnboardingAlreadyCompleted(t *testing.T) {
 		OnboardingCompleted: true,
 	})
 
-	// CLI → skip model → headless CLI → skip model → scope → write → done (no demo prompt)
-	sendKeys(t, m, "enter", "enter", "enter")
+	// CLI → default model → headless CLI → default model → scope → write → done (no demo prompt)
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter")
 
 	if m.Result() != ResultCompleted {
 		t.Fatalf("Result() = %v, want ResultCompleted; view=\n%s", m.Result(), m.View())
@@ -244,11 +245,9 @@ func TestCancelBeforeWriteLeavesSetupIncomplete(t *testing.T) {
 	}
 }
 
-// Enter 1: CLI → skip model → headless CLI
-// Enter 2: headless CLI → skip model → scope
-// Enter 3: scope → collision check → overwrite screen
+// Enter 1-5: CLI/default/headless/default/scope → overwrite screen
 // Down: focus "Cancel"
-// Enter 4: Cancel
+// Enter 6: Cancel
 func TestOverwriteConfirmationCanCancelBeforeWrite(t *testing.T) {
 	wrote := false
 	m := NewModel(&Deps{
@@ -264,7 +263,7 @@ func TestOverwriteConfirmationCanCancelBeforeWrite(t *testing.T) {
 		Cwd:      func() (string, error) { return "/work/project", nil },
 	})
 
-	sendKeys(t, m, "enter", "enter", "enter", "down", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "down", "enter")
 
 	if m.Result() != ResultCancelled {
 		t.Fatalf("Result() = %v, want cancelled; view=\n%s", m.Result(), m.View())
@@ -274,9 +273,7 @@ func TestOverwriteConfirmationCanCancelBeforeWrite(t *testing.T) {
 	}
 }
 
-// Enter 1: CLI → skip model → headless CLI
-// Enter 2: headless CLI → skip model → scope
-// Enter 3: scope → write fails
+// Enter 1-5: CLI/default/headless/default/scope → write fails
 func TestWriteFailureReturnsFailedWithoutRecordingSetup(t *testing.T) {
 	saved := false
 	m := NewModel(&Deps{
@@ -293,7 +290,7 @@ func TestWriteFailureReturnsFailedWithoutRecordingSetup(t *testing.T) {
 		Cwd:     func() (string, error) { return "/work/project", nil },
 	})
 
-	sendKeys(t, m, "enter", "enter", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter")
 
 	if m.Result() != ResultFailed {
 		t.Fatalf("Result() = %v, want failed; view=\n%s", m.Result(), m.View())
@@ -306,11 +303,9 @@ func TestWriteFailureReturnsFailedWithoutRecordingSetup(t *testing.T) {
 	}
 }
 
-// Enter 1: CLI → skip model (error) → headless CLI
-// Enter 2: headless CLI → skip model (error) → scope
-// Enter 3: scope → write → demo prompt
+// Enter 1-5: CLI/default/headless/default/scope → demo prompt
 // Down: Not now
-// Enter 4: Not now
+// Enter 6: Not now
 func TestModelDiscoveryErrorUsesAdapterDefault(t *testing.T) {
 	var wrote []profilewrite.Request
 	var discoveryCalls int
@@ -327,7 +322,7 @@ func TestModelDiscoveryErrorUsesAdapterDefault(t *testing.T) {
 		Cwd:        func() (string, error) { return "/work/project", nil },
 	})
 
-	sendKeys(t, m, "enter", "enter", "enter", "down", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "down", "enter")
 
 	if m.Result() != ResultCompleted {
 		t.Fatalf("Result() = %v, want completed; err=%v view=\n%s", m.Result(), m.Err(), m.View())
@@ -340,6 +335,26 @@ func TestModelDiscoveryErrorUsesAdapterDefault(t *testing.T) {
 	}
 	if wrote[0].InteractiveModel != "" || wrote[0].HeadlessModel != "" {
 		t.Fatalf("write request models = interactive %q headless %q, want adapter defaults", wrote[0].InteractiveModel, wrote[0].HeadlessModel)
+	}
+}
+
+func TestEmptyModelDiscoveryRequiresContinue(t *testing.T) {
+	m := NewModel(&Deps{
+		Detector: AdapterDetectorFunc(func() ([]string, error) { return []string{"claude"}, nil }),
+		Models:   ModelDiscovererFunc(func(string) ([]string, error) { return nil, nil }),
+	})
+
+	sendKey(t, m, "enter")
+
+	view := tuistyle.Sanitize(m.renderPanel())
+	if !strings.Contains(view, "No selectable models were found for claude") {
+		t.Fatalf("expected default-model notice after empty discovery:\n%s", view)
+	}
+	if !strings.Contains(view, "▶ Continue") {
+		t.Fatalf("expected explicit Continue action after empty discovery:\n%s", view)
+	}
+	if m.stage != stageInteractiveModelDefault {
+		t.Fatalf("stage = %v, want stageInteractiveModelDefault", m.stage)
 	}
 }
 
@@ -384,6 +399,26 @@ func TestParseCodexModelsHandlesEnvelopeFormat(t *testing.T) {
 	}
 }
 
+func TestSubprocessModelsReturnsClaudeAliasesWithoutSubprocess(t *testing.T) {
+	origCommandContext := modelCommandContext
+	modelCommandContext = func(context.Context, string, ...string) *exec.Cmd {
+		t.Fatal("claude model discovery should not spawn a subprocess")
+		return nil
+	}
+	t.Cleanup(func() {
+		modelCommandContext = origCommandContext
+	})
+
+	models, err := SubprocessModels{}.ModelsFor("claude")
+	if err != nil {
+		t.Fatalf("ModelsFor() error = %v", err)
+	}
+	want := []string{"opus", "sonnet"}
+	if diff := cmp.Diff(want, models); diff != "" {
+		t.Fatalf("claude models mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestSubprocessModelsTimeoutReturnsError(t *testing.T) {
 	origTimeout := subprocessModelTimeout
 	origCommandContext := modelCommandContext
@@ -396,7 +431,7 @@ func TestSubprocessModelsTimeoutReturnsError(t *testing.T) {
 		modelCommandContext = origCommandContext
 	})
 
-	_, err := SubprocessModels{}.ModelsFor("claude")
+	_, err := SubprocessModels{}.ModelsFor("opencode")
 	if err == nil {
 		t.Fatal("ModelsFor() error = nil, want timeout error")
 	}
@@ -439,6 +474,251 @@ func TestViewFallsBackToTopLeftInSmallTerminal(t *testing.T) {
 	}
 }
 
+func TestSetupPanelUsesReadableWidthInLargeTerminal(t *testing.T) {
+	m := NewModel(&Deps{
+		Detector: AdapterDetectorFunc(func() ([]string, error) { return []string{"claude", "codex", "copilot"}, nil }),
+		Models:   ModelDiscovererFunc(func(string) ([]string, error) { return nil, nil }),
+	})
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	panel := tuistyle.Sanitize(m.renderPanel())
+	if got, want := maxLineWidth(panel), setupPanelWidth(120); got > want {
+		t.Fatalf("panel width = %d, want <= %d:\n%s", got, want, panel)
+	}
+	if strings.Contains(panel, "Welcome. Agent Runner uses a planner for interactive work and an implementor for unattended implementation tasks.") {
+		t.Fatalf("first paragraph should wrap inside the setup panel:\n%s", panel)
+	}
+
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	if got, want := maxLineWidth(tuistyle.Sanitize(m.renderPanel())), 80; got > want {
+		t.Fatalf("80-column panel width = %d, want <= %d", got, want)
+	}
+}
+
+func TestWrappedCopyAvoidsShortOrphanWords(t *testing.T) {
+	m := NewDemoPromptModel(&Deps{
+		Settings: SettingsStoreFunc(func(func(usersettings.Settings) usersettings.Settings) error { return nil }),
+	})
+
+	panel := tuistyle.Sanitize(m.renderPanel())
+	for _, line := range strings.Split(panel, "\n") {
+		switch strings.TrimSpace(line) {
+		case "UI", "data":
+			t.Fatalf("wrapped copy should not orphan short words on their own line:\n%s", panel)
+		}
+	}
+	if !strings.Contains(panel, "through UI") {
+		t.Fatalf("wrapped copy should keep short word UI with neighboring text:\n%s", panel)
+	}
+}
+
+func TestDemoPromptRendersHorizontalButtons(t *testing.T) {
+	m := NewDemoPromptModel(&Deps{
+		Settings: SettingsStoreFunc(func(func(usersettings.Settings) usersettings.Settings) error { return nil }),
+	})
+
+	panel := tuistyle.Sanitize(m.renderPanel())
+	buttonLine := lineContaining(strings.Split(panel, "\n"), "[ Continue ]")
+	if buttonLine < 0 {
+		t.Fatalf("demo prompt should render Continue as a button:\n%s", panel)
+	}
+	line := strings.Split(panel, "\n")[buttonLine]
+	for _, want := range []string{"[ Continue ]", "[ Not now ]", "[ Dismiss ]"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("expected all demo actions on one button row, missing %q:\n%s", want, panel)
+		}
+	}
+	if strings.Contains(panel, "▶ Continue") || strings.Contains(panel, "\n  Not now") || strings.Contains(panel, "\n  Dismiss") {
+		t.Fatalf("demo prompt should not render the actions as a vertical option list:\n%s", panel)
+	}
+}
+
+func TestNativeSetupShowsWizardProgress(t *testing.T) {
+	m := NewModel(&Deps{
+		Detector: AdapterDetectorFunc(func() ([]string, error) { return []string{"claude"}, nil }),
+		Models:   ModelDiscovererFunc(func(string) ([]string, error) { return nil, nil }),
+	})
+
+	panel := tuistyle.Sanitize(m.renderPanel())
+	if !strings.Contains(panel, "Step 1 of 6") {
+		t.Fatalf("first setup screen should show wizard progress:\n%s", panel)
+	}
+	lines := strings.Split(panel, "\n")
+	progressLine := lineContaining(lines, "Step 1 of 6")
+	titleLine := lineContaining(lines, "Set Up Agent Runner")
+	if progressLine < 0 || titleLine < 0 || progressLine >= titleLine {
+		t.Fatalf("wizard progress should appear above the screen heading:\n%s", panel)
+	}
+	if leadingColumns(lines[progressLine], "Step 1 of 6") <= leadingColumns(lines[titleLine], "Set Up Agent Runner") {
+		t.Fatalf("wizard progress should be centered above the left-aligned heading:\n%s", panel)
+	}
+
+	sendKey(t, m, "enter")
+	panel = tuistyle.Sanitize(m.renderPanel())
+	if !strings.Contains(panel, "Step 2 of 6") {
+		t.Fatalf("model default screen should be setup step 2:\n%s", panel)
+	}
+}
+
+func TestOverwriteScreenAddsWizardProgressStep(t *testing.T) {
+	m := NewModel(&Deps{
+		Detector:   AdapterDetectorFunc(func() ([]string, error) { return []string{"claude"}, nil }),
+		Models:     ModelDiscovererFunc(func(string) ([]string, error) { return nil, nil }),
+		Collisions: CollisionDetectorFunc(func(string) ([]string, error) { return []string{"planner"}, nil }),
+		Profiles:   ProfileWriterFunc(func(*profilewrite.Request) error { return nil }),
+		Settings:   SettingsStoreFunc(func(func(usersettings.Settings) usersettings.Settings) error { return nil }),
+		HomeDir:    func() (string, error) { return "/home/me", nil },
+		Cwd:        func() (string, error) { return "/work/project", nil },
+	})
+
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter")
+	panel := tuistyle.Sanitize(m.renderPanel())
+	if !strings.Contains(panel, "Step 6 of 7") {
+		t.Fatalf("overwrite screen should add a wizard progress step:\n%s", panel)
+	}
+
+	sendKey(t, m, "enter")
+	panel = tuistyle.Sanitize(m.renderPanel())
+	if !strings.Contains(panel, "Step 7 of 7") {
+		t.Fatalf("demo prompt after overwrite should be final wizard step:\n%s", panel)
+	}
+}
+
+func TestDemoOnlyPromptDoesNotShowSetupProgress(t *testing.T) {
+	m := NewDemoPromptModel(&Deps{
+		Settings: SettingsStoreFunc(func(func(usersettings.Settings) usersettings.Settings) error { return nil }),
+	})
+
+	panel := tuistyle.Sanitize(m.renderPanel())
+	if strings.Contains(panel, "Step ") {
+		t.Fatalf("demo-only prompt should not show native setup progress:\n%s", panel)
+	}
+}
+
+func TestDemoPromptLeftRightChangesSelection(t *testing.T) {
+	m := NewDemoPromptModel(&Deps{
+		Settings: SettingsStoreFunc(func(func(usersettings.Settings) usersettings.Settings) error { return nil }),
+	})
+
+	if got := m.options[m.focus]; got != "Continue" {
+		t.Fatalf("initial demo prompt focus = %q, want Continue", got)
+	}
+	sendKey(t, m, "right")
+	if got := m.options[m.focus]; got != "Not now" {
+		t.Fatalf("focus after right = %q, want Not now", got)
+	}
+	sendKey(t, m, "right")
+	if got := m.options[m.focus]; got != "Dismiss" {
+		t.Fatalf("focus after second right = %q, want Dismiss", got)
+	}
+	sendKey(t, m, "left")
+	if got := m.options[m.focus]; got != "Not now" {
+		t.Fatalf("focus after left = %q, want Not now", got)
+	}
+}
+
+func TestSetupPanelKeepsOptionsNearPrompt(t *testing.T) {
+	m := NewModel(&Deps{
+		Detector: AdapterDetectorFunc(func() ([]string, error) { return []string{"claude", "codex"}, nil }),
+		Models:   ModelDiscovererFunc(func(string) ([]string, error) { return nil, nil }),
+	})
+
+	lines := strings.Split(tuistyle.Sanitize(m.renderPanel()), "\n")
+	promptLine := lineContaining(lines, "Choose the CLI for the planner agent.")
+	optionLine := lineContaining(lines, "claude")
+	if promptLine < 0 || optionLine < 0 {
+		t.Fatalf("promptLine=%d optionLine=%d lines:\n%s", promptLine, optionLine, strings.Join(lines, "\n"))
+	}
+	if optionLine-promptLine > 3 {
+		t.Fatalf("first option is too far from prompt: prompt line %d option line %d\n%s", promptLine, optionLine, strings.Join(lines, "\n"))
+	}
+}
+
+func TestPlannerCLIRecommendsAndDefaultsToClaude(t *testing.T) {
+	m := NewModel(&Deps{
+		Detector: AdapterDetectorFunc(func() ([]string, error) { return []string{"codex", "claude"}, nil }),
+		Models:   ModelDiscovererFunc(func(string) ([]string, error) { return nil, nil }),
+	})
+
+	panel := tuistyle.Sanitize(m.renderPanel())
+	if !strings.Contains(panel, "▶ claude (recommended)") {
+		t.Fatalf("planner CLI should default to recommended claude:\n%s", panel)
+	}
+	if got := m.options[m.focus]; got != "claude" {
+		t.Fatalf("focused planner CLI = %q, want claude", got)
+	}
+}
+
+func TestImplementorCLIRecommendsAndDefaultsToCodex(t *testing.T) {
+	m := NewModel(&Deps{
+		Detector: AdapterDetectorFunc(func() ([]string, error) { return []string{"claude", "codex"}, nil }),
+		Models:   ModelDiscovererFunc(func(string) ([]string, error) { return []string{"opus"}, nil }),
+	})
+
+	sendKeys(t, m, "enter", "enter")
+
+	panel := tuistyle.Sanitize(m.renderPanel())
+	if !strings.Contains(panel, "▶ codex (recommended)") {
+		t.Fatalf("implementor CLI should default to recommended codex:\n%s", panel)
+	}
+	if got := m.options[m.focus]; got != "codex" {
+		t.Fatalf("focused implementor CLI = %q, want codex", got)
+	}
+}
+
+func TestPlannerModelScreenDoesNotRepeatPlannerAgentLabel(t *testing.T) {
+	m := NewModel(&Deps{
+		Detector: AdapterDetectorFunc(func() ([]string, error) { return []string{"codex"}, nil }),
+		Models:   ModelDiscovererFunc(func(string) ([]string, error) { return []string{"gpt-5.5"}, nil }),
+	})
+
+	sendKey(t, m, "enter")
+
+	panel := tuistyle.Sanitize(m.renderPanel())
+	if strings.Contains(panel, "Planner agent") {
+		t.Fatalf("planner model screen should not repeat planner agent label:\n%s", panel)
+	}
+}
+
+func TestTransitionShowsOutgoingAndIncomingPanels(t *testing.T) {
+	m := NewModel(&Deps{
+		Detector: AdapterDetectorFunc(func() ([]string, error) { return []string{"codex"}, nil }),
+		Models:   ModelDiscovererFunc(func(string) ([]string, error) { return []string{"gpt-5.5"}, nil }),
+	})
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	sendKeyRaw(t, m, "enter")
+	m.animFrame = 5
+
+	view := tuistyle.Sanitize(m.View())
+	if !strings.Contains(view, "Welcome. Agent Runner uses a planner") {
+		t.Fatalf("transition should keep outgoing panel visible while it moves up:\n%s", view)
+	}
+	if !strings.Contains(view, "╭") {
+		t.Fatalf("transition should show incoming panel moving up from below:\n%s", view)
+	}
+}
+
+func TestModelDiscoveryLoadingUsesModelScreen(t *testing.T) {
+	m := NewModel(&Deps{
+		Detector: AdapterDetectorFunc(func() ([]string, error) { return []string{"codex"}, nil }),
+		Models:   ModelDiscovererFunc(func(string) ([]string, error) { return []string{"gpt-5.5"}, nil }),
+	})
+
+	_ = sendKeyRaw(t, m, "enter")
+
+	panel := tuistyle.Sanitize(m.renderPanel())
+	if !strings.Contains(panel, "Planner Model") {
+		t.Fatalf("loading should render the planner model screen:\n%s", panel)
+	}
+	if !strings.Contains(panel, "Checking available models for codex.") {
+		t.Fatalf("loading should show model discovery status:\n%s", panel)
+	}
+	if strings.Contains(panel, "Discovering Planner Models") {
+		t.Fatalf("loading should not use a separate discovering screen:\n%s", panel)
+	}
+}
+
 func TestFirstScreenIncludesWelcomeLanguage(t *testing.T) {
 	m := NewModel(&Deps{
 		Detector: AdapterDetectorFunc(func() ([]string, error) { return []string{"claude"}, nil }),
@@ -450,6 +730,31 @@ func TestFirstScreenIncludesWelcomeLanguage(t *testing.T) {
 	}
 }
 
+func maxLineWidth(s string) int {
+	maxWidth := 0
+	for _, line := range strings.Split(s, "\n") {
+		maxWidth = max(maxWidth, runewidth.StringWidth(line))
+	}
+	return maxWidth
+}
+
+func lineContaining(lines []string, needle string) int {
+	for i, line := range lines {
+		if strings.Contains(line, needle) {
+			return i
+		}
+	}
+	return -1
+}
+
+func leadingColumns(line, needle string) int {
+	idx := strings.Index(line, needle)
+	if idx < 0 {
+		return -1
+	}
+	return runewidth.StringWidth(line[:idx])
+}
+
 func sendKeys(t *testing.T, m *Model, keys ...string) {
 	t.Helper()
 	for _, key := range keys {
@@ -458,6 +763,13 @@ func sendKeys(t *testing.T, m *Model, keys ...string) {
 }
 
 func sendKey(t *testing.T, m *Model, key string) {
+	t.Helper()
+	cmd := sendKeyRaw(t, m, key)
+	runTestCmd(t, m, cmd)
+	settleAnimation(m)
+}
+
+func sendKeyRaw(t *testing.T, m *Model, key string) tea.Cmd {
 	t.Helper()
 	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
 	switch key {
@@ -474,8 +786,49 @@ func sendKey(t *testing.T, m *Model, key string) {
 	case "esc":
 		msg = tea.KeyMsg{Type: tea.KeyEscape}
 	}
-	next, _ := m.Update(msg)
+	next, cmd := m.Update(msg)
 	if updated, ok := next.(*Model); ok {
 		_ = updated
+	}
+	return cmd
+}
+
+func runTestCmd(t *testing.T, m *Model, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		return
+	}
+	msg := cmd()
+	switch msg := msg.(type) {
+	case nil:
+		return
+	case animTick:
+		return
+	case loadingTick:
+		return
+	case tea.BatchMsg:
+		for _, batched := range msg {
+			runTestCmd(t, m, batched)
+		}
+	default:
+		next, nextCmd := m.Update(msg)
+		if updated, ok := next.(*Model); ok {
+			_ = updated
+		}
+		runTestCmd(t, m, nextCmd)
+	}
+}
+
+func settleAnimation(m *Model) {
+	m.animFrame = 0
+	m.animDone = true
+	m.prevView = ""
+	if m.pending != nil {
+		pending := *m.pending
+		m.pending = nil
+		_ = m.applyModelsLoaded(pending)
+		m.animFrame = 0
+		m.animDone = true
+		m.prevView = ""
 	}
 }
