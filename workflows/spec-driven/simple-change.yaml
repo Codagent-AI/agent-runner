@@ -29,8 +29,30 @@ steps:
 
       Example valid output: some/path/tasks/001-do-the-thing.md
 
-  - id: implement
-    workflow: ../core/implement-task.yaml
-    params:
-      task_file: "{{task_file}}"
-      run_session_report: "true"
+  - id: generate-code
+    session: lead-agent
+    mode: headless
+    prompt: |
+      Implement the task described in {{task_file}}.
+      You MUST use the codagent:implement-with-tdd skill.
+      When you are done implementing, commit your changes following the project's
+      commit message conventions and prepend [{{step_id}}]. Then summarize to the user what you changed.
+
+  - id: run-validator
+    workflow: ../core/run-validator.yaml
+
+  - id: check-clean
+    command: test -z "$(git status --porcelain)"
+    continue_on_failure: true
+
+  - id: commit-leftovers-if-needed
+    session: lead-agent
+    mode: headless
+    prompt: |
+      There are uncommitted changes leftover after implementing the task described in {{task_file}}.
+      Run git status and git diff to review them. Only stage and commit files
+      that are related to this task and appropriate to check into git — ignore
+      unrelated changes, generated artifacts, or files that should be gitignored.
+      Follow the project's commit message conventions and prepend [{{step_id}}].
+      Summarize which files you committed and which you left out, and why.
+    skip_if: previous_success
