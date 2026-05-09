@@ -216,8 +216,23 @@ func renderGhostBlock(node *StepNode, indent, width int, resolverCfg ResolverCon
 	case NodeIteration:
 		lines = append(lines, tuistyle.DimStyle.Render(blockDimStr("iteration", itNum(node.IterationIndex))))
 	}
+	if failedAncestor(node) != nil {
+		lines = append(lines,
+			tuistyle.DimStyle.Render(blockDimStr("status", "not started")),
+			tuistyle.DimStyle.Render("an earlier workflow step failed before this step could run"),
+		)
+	}
 
 	return lines
+}
+
+func failedAncestor(node *StepNode) *StepNode {
+	for current := node.Parent; current != nil; current = current.Parent {
+		if current.Status == StatusFailed {
+			return current
+		}
+	}
+	return nil
 }
 
 func buildGhostSeparator(name, glyph string, contentWidth int) string {

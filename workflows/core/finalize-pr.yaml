@@ -24,6 +24,8 @@ steps:
         continue_on_failure: true
         prompt: |
           Invoke codagent:wait-ci to poll CI status and gather review comments.
+          Treat top-level bot summaries, rate-limit notices, and already-resolved reports as informational.
+          Report comments only when actionable unresolved review feedback remains.
 
       - id: ci-status-gate
         script: ci-status-gate.sh
@@ -51,4 +53,6 @@ steps:
     mode: headless
     prompt: |
       Invoke codagent:wait-ci to verify the final fix cycle made CI green.
+      Treat top-level bot summaries, rate-limit notices, and already-resolved reports as informational.
+      Report comments only when actionable unresolved review feedback remains.
       Report the final status to the user.

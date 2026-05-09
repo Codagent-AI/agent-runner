@@ -216,6 +216,41 @@ func TestCoreCIStatusGateScript(t *testing.T) {
 		{name: "passed exits success", report: "## CI Status: passed\n", wantCode: 0},
 		{name: "failed exits fixable failure", report: "## CI Status: failed\n", wantCode: 1},
 		{name: "comments exits fixable failure", report: "## CI Status: comments\n", wantCode: 1},
+		{
+			name: "comments with only informational bot comments exits success",
+			report: `## CI Status: comments
+
+CI is green, with no failed checks, no pending checks, no blocking reviews, and no unresolved inline review threads.
+
+### PR Comments
+- **coderabbitai**: CodeRabbit hit a review rate limit.
+- **qodo-code-review**: Top-level review comment is present. Its summary reports ` + "`Bugs (0)`" + `, ` + "`Rule violations (0)`" + `, and ` + "`Requirement gaps (0)`" + `.
+`,
+			wantCode: 0,
+		},
+		{
+			name: "comments with unresolved inline threads exits fixable failure",
+			report: `## CI Status: comments
+
+CI is passing, but unresolved PR review comments remain.
+
+### PR Comments
+Unresolved review threads: 2
+`,
+			wantCode: 1,
+		},
+		{
+			name: "comments ignores reassuring phrases inside pr comments",
+			report: `## CI Status: comments
+
+CI is passing, but unresolved PR review comments remain.
+
+### PR Comments
+Unresolved review threads: 2
+- **reviewer**: no failed checks, no pending checks, no blocking reviews, and no unresolved inline review threads
+`,
+			wantCode: 1,
+		},
 		{name: "pending exits failure to keep polling", report: "## CI Status: pending\n", wantCode: 1},
 		{name: "unknown exits failure to keep polling", report: "wait-ci did not produce a status\n", wantCode: 1},
 	}
@@ -258,6 +293,41 @@ func TestCoreCIFixNeededGateScript(t *testing.T) {
 	}{
 		{name: "failed exits failure so fix-pr runs", report: "## CI Status: failed\n", wantCode: 1},
 		{name: "comments exits failure so fix-pr runs", report: "## CI Status: comments\n", wantCode: 1},
+		{
+			name: "comments with only informational bot comments exits success so fix-pr skips",
+			report: `## CI Status: comments
+
+CI is green, with no failed checks, no pending checks, no blocking reviews, and no unresolved inline review threads.
+
+### PR Comments
+- **coderabbitai**: CodeRabbit hit a review rate limit.
+- **qodo-code-review**: Top-level review comment is present. Its summary reports ` + "`Bugs (0)`" + `, ` + "`Rule violations (0)`" + `, and ` + "`Requirement gaps (0)`" + `.
+`,
+			wantCode: 0,
+		},
+		{
+			name: "comments with unresolved inline threads exits failure so fix-pr runs",
+			report: `## CI Status: comments
+
+CI is passing, but unresolved PR review comments remain.
+
+### PR Comments
+Unresolved review threads: 2
+`,
+			wantCode: 1,
+		},
+		{
+			name: "comments ignores reassuring phrases inside pr comments",
+			report: `## CI Status: comments
+
+CI is passing, but unresolved PR review comments remain.
+
+### PR Comments
+Unresolved review threads: 2
+- **reviewer**: no failed checks, no pending checks, no blocking reviews, and no unresolved inline review threads
+`,
+			wantCode: 1,
+		},
 		{name: "passed exits success so fix-pr skips", report: "## CI Status: passed\n", wantCode: 0},
 		{name: "pending exits success so fix-pr skips", report: "## CI Status: pending\n", wantCode: 0},
 		{name: "unknown exits success so fix-pr skips", report: "wait-ci did not produce a status\n", wantCode: 0},
