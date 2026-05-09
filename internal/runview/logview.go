@@ -216,14 +216,43 @@ func renderGhostBlock(node *StepNode, indent, width int, resolverCfg ResolverCon
 	case NodeIteration:
 		lines = append(lines, tuistyle.DimStyle.Render(blockDimStr("iteration", itNum(node.IterationIndex))))
 	}
-	if failedAncestor(node) != nil {
+	if blocker := blockingNode(node); blocker != nil {
 		lines = append(lines,
 			tuistyle.DimStyle.Render(blockDimStr("status", "not started")),
-			tuistyle.DimStyle.Render("an earlier workflow step failed before this step could run"),
+			tuistyle.DimStyle.Render("blocked by "+blocker.ID+": "+blockerOutcome(blocker)),
 		)
 	}
 
 	return lines
+}
+
+func blockingNode(node *StepNode) *StepNode {
+	if node == nil || node.Parent == nil {
+		return nil
+	}
+	for i, sibling := range node.Parent.Children {
+		if sibling != node {
+			continue
+		}
+		for j := i - 1; j >= 0; j-- {
+			candidate := node.Parent.Children[j]
+			if candidate.Status == StatusFailed || candidate.Outcome == "exhausted" {
+				return candidate
+			}
+		}
+		break
+	}
+	return failedAncestor(node)
+}
+
+func blockerOutcome(node *StepNode) string {
+	if node == nil {
+		return "failed"
+	}
+	if node.Outcome != "" {
+		return node.Outcome
+	}
+	return statusLabel(node.Status)
 }
 
 func failedAncestor(node *StepNode) *StepNode {

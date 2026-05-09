@@ -1,5 +1,11 @@
 # agent-runner
 
+## 0.6.0
+
+### Minor Changes
+
+- [#28](https://github.com/Codagent-AI/agent-runner/pull/28) Add native onboarding setup
+
 ## 0.5.0
 
 ### Minor Changes

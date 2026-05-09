@@ -64,11 +64,14 @@ func TestBuildLogLines_PendingSelectedUnderFailedParentShowsNotStarted(t *testin
 	root := makeNode("wf", NodeRoot, StatusFailed)
 	parent := makeNode("finalize", NodeSubWorkflow, StatusFailed)
 	parent.Parent = root
+	loop := makeNode("ci-fix-loop", NodeLoop, StatusSuccess)
+	loop.Parent = parent
+	loop.Outcome = "exhausted"
 	pending := makeNode("verify-final", NodeHeadlessAgent, StatusPending)
 	pending.Parent = parent
 	pending.StaticAgent = "planner"
 	pending.StaticPrompt = "Invoke codagent:wait-ci."
-	parent.Children = []*StepNode{pending}
+	parent.Children = []*StepNode{loop, pending}
 	root.Children = []*StepNode{parent}
 
 	lines, _ := buildLogLines(
@@ -82,8 +85,8 @@ func TestBuildLogLines_PendingSelectedUnderFailedParentShowsNotStarted(t *testin
 	if !strings.Contains(joined, "status: not started") {
 		t.Fatalf("pending block should identify not-started status, got:\n%s", joined)
 	}
-	if !strings.Contains(joined, "an earlier workflow step failed before this step could run") {
-		t.Fatalf("pending block should explain why it did not start, got:\n%s", joined)
+	if !strings.Contains(joined, "blocked by ci-fix-loop: exhausted") {
+		t.Fatalf("pending block should explain the blocking step, got:\n%s", joined)
 	}
 }
 
