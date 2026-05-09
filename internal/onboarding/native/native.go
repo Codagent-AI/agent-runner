@@ -171,9 +171,7 @@ func NewModel(deps *Deps) *Model {
 		spring:   harmonica.NewSpring(harmonica.FPS(60), 8.0, 0.8),
 		animDone: true,
 	}
-	if !m.loadAdapters() {
-		// adapters loaded, stage is now stageInteractiveCLI
-	}
+	m.loadAdapters()
 	return m
 }
 
@@ -245,7 +243,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.animDone = true
 			return m, nil
 		}
-		return m, m.tickAnim()
+		cmd := m.tickAnim()
+		return m, cmd
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "esc":
@@ -260,7 +259,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			if !m.animDone {
-				return m, m.tickAnim()
+				cmd := m.tickAnim()
+				return m, cmd
 			}
 		}
 	}
@@ -352,10 +352,12 @@ func (m *Model) handleDemoPrompt(selected string) bool {
 		return true
 	case "Dismiss":
 		stamp := m.deps.Clock().UTC().Format(time.RFC3339)
-		_ = m.deps.Settings.Update(func(settings usersettings.Settings) usersettings.Settings {
+		if err := m.deps.Settings.Update(func(settings usersettings.Settings) usersettings.Settings {
 			settings.Onboarding.Dismissed = stamp
 			return settings
-		})
+		}); err != nil {
+			return m.fail(err)
+		}
 		m.result = ResultCompleted
 		m.terminal = true
 		m.stage = stageDone
