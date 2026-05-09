@@ -1227,13 +1227,15 @@ const (
 	nativeSetupCompleted nativeSetupResult = iota
 	nativeSetupCancelled
 	nativeSetupFailed
+	nativeSetupDemo
 )
 
 type firstRunDeps struct {
 	load                          func() (usersettings.Settings, error)
 	isStdinTTY                    func() bool
 	isStdoutTTY                   func() bool
-	runNativeSetup                func() (nativeSetupResult, error)
+	runNativeSetup                func(onboardingCompleted bool) (nativeSetupResult, error)
+	runDemoPrompt                 func() (nativeSetupResult, error)
 	continueAfterNativeSetupError bool
 	runWorkflow                   func(ref string) int
 }
@@ -1243,20 +1245,30 @@ var defaultFirstRunDeps = firstRunDeps{
 	isStdinTTY:                    func() bool { return isatty.IsTerminal(os.Stdin.Fd()) },
 	isStdoutTTY:                   func() bool { return isatty.IsTerminal(os.Stdout.Fd()) },
 	continueAfterNativeSetupError: true,
-	runNativeSetup: func() (nativeSetupResult, error) {
-		result, err := nativesetup.Run(&nativesetup.Deps{})
-		switch result {
-		case nativesetup.ResultCompleted:
-			return nativeSetupCompleted, err
-		case nativesetup.ResultFailed:
-			return nativeSetupFailed, err
-		default:
-			return nativeSetupCancelled, err
-		}
+	runNativeSetup: func(onboardingCompleted bool) (nativeSetupResult, error) {
+		result, err := nativesetup.Run(&nativesetup.Deps{OnboardingCompleted: onboardingCompleted})
+		return mapSetupResult(result), err
+	},
+	runDemoPrompt: func() (nativeSetupResult, error) {
+		result, err := nativesetup.RunDemoPrompt(&nativesetup.Deps{})
+		return mapSetupResult(result), err
 	},
 	runWorkflow: func(ref string) int {
 		return handleRunWithOptions([]string{ref}, liveTUIOptions{quitOnDone: true})
 	},
+}
+
+func mapSetupResult(result nativesetup.Result) nativeSetupResult {
+	switch result {
+	case nativesetup.ResultCompleted:
+		return nativeSetupCompleted
+	case nativesetup.ResultDemo:
+		return nativeSetupDemo
+	case nativesetup.ResultFailed:
+		return nativeSetupFailed
+	default:
+		return nativeSetupCancelled
+	}
 }
 
 func ensureFirstRunForTUI(deps firstRunDeps) int {
@@ -1268,9 +1280,11 @@ func ensureFirstRunForTUI(deps firstRunDeps) int {
 	if !deps.isStdinTTY() || !deps.isStdoutTTY() {
 		return 0
 	}
-	setupCompleted := settings.Setup.CompletedAt != ""
-	if !setupCompleted {
-		result, err := deps.runNativeSetup()
+
+	onboardingDone := settings.Onboarding.CompletedAt != "" || settings.Onboarding.Dismissed != ""
+
+	if settings.Setup.CompletedAt == "" {
+		result, err := deps.runNativeSetup(onboardingDone)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 			if !deps.continueAfterNativeSetupError {
@@ -1278,14 +1292,26 @@ func ensureFirstRunForTUI(deps firstRunDeps) int {
 			}
 			return 0
 		}
-		if result != nativeSetupCompleted {
-			return 0
+		if result == nativeSetupDemo {
+			return launchOnboardingDemo(deps)
 		}
-		setupCompleted = true
-	}
-	if !setupCompleted || settings.Onboarding.CompletedAt != "" || settings.Onboarding.Dismissed != "" {
 		return 0
 	}
+
+	if !onboardingDone {
+		result, err := deps.runDemoPrompt()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+			return 0
+		}
+		if result == nativeSetupDemo {
+			return launchOnboardingDemo(deps)
+		}
+	}
+	return 0
+}
+
+func launchOnboardingDemo(deps firstRunDeps) int {
 	ref, err := builtinworkflows.Resolve("onboarding:onboarding")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)

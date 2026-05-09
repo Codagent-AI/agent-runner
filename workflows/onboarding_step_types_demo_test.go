@@ -107,27 +107,15 @@ func TestStepTypesDemoPromptsUsePackagedDocsAndStayNonDestructive(t *testing.T) 
 func TestOnboardingRunsStepTypesDemoBeforeCompletion(t *testing.T) {
 	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/onboarding.yaml")
 
-	wantIDs := []string{"intro", "set-dismissed", "step-types-demo", "set-completed"}
+	wantIDs := []string{"step-types-demo", "set-completed"}
 	gotIDs := stepIDs(wf.Steps)
 	if diff := cmp.Diff(wantIDs, gotIDs); diff != "" {
 		t.Fatalf("onboarding step IDs mismatch (-want +got):\n%s", diff)
 	}
 
-	intro := stepByID(t, &wf, "intro")
-	gotOutcomes := outcomes(intro.Actions)
-	if diff := cmp.Diff([]string{"continue", "not_now", "dismiss"}, gotOutcomes); diff != "" {
-		t.Fatalf("intro outcomes mismatch (-want +got):\n%s", diff)
-	}
-	if strings.Contains(strings.ToLower(intro.Body), "setup") {
-		t.Fatalf("intro body still presents as setup:\n%s", intro.Body)
-	}
-
 	demo := stepByID(t, &wf, "step-types-demo")
 	if demo.Workflow != "step-types-demo.yaml" {
 		t.Fatalf("step-types-demo workflow = %q", demo.Workflow)
-	}
-	if demo.SkipIf != `sh: [ {{demo_action}} != continue ]` {
-		t.Fatalf("step-types-demo skip_if = %q", demo.SkipIf)
 	}
 
 	completed := stepByID(t, &wf, "set-completed")

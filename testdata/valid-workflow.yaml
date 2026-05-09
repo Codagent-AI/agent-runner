@@ -10,6 +10,6 @@ steps:
   - id: setup
     command: echo "setting up {{project}}"
   - id: deploy
-    agent: headless_base
+    agent: implementor
     mode: headless
     prompt: "Deploy {{project}} to {{env}}"

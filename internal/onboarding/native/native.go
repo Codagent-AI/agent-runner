@@ -14,6 +14,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/harmonica"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/codagent/agent-runner/internal/profilewrite"
@@ -27,6 +28,7 @@ const (
 	ResultCompleted Result = iota
 	ResultCancelled
 	ResultFailed
+	ResultDemo
 )
 
 type AdapterDetector interface {
@@ -72,14 +74,15 @@ func (f SettingsStoreFunc) Update(mutator func(usersettings.Settings) usersettin
 }
 
 type Deps struct {
-	Detector   AdapterDetector
-	Models     ModelDiscoverer
-	Profiles   ProfileWriter
-	Collisions CollisionDetector
-	Settings   SettingsStore
-	Clock      func() time.Time
-	HomeDir    func() (string, error)
-	Cwd        func() (string, error)
+	Detector            AdapterDetector
+	Models              ModelDiscoverer
+	Profiles            ProfileWriter
+	Collisions          CollisionDetector
+	Settings            SettingsStore
+	Clock               func() time.Time
+	HomeDir             func() (string, error)
+	Cwd                 func() (string, error)
+	OnboardingCompleted bool
 }
 
 func Run(deps *Deps) (Result, error) {
@@ -95,26 +98,44 @@ func Run(deps *Deps) (Result, error) {
 	return fm.Result(), fm.Err()
 }
 
+func RunDemoPrompt(deps *Deps) (Result, error) {
+	m := NewDemoPromptModel(deps)
+	final, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
+	if err != nil {
+		return ResultFailed, err
+	}
+	fm, ok := final.(*Model)
+	if !ok {
+		return ResultFailed, fmt.Errorf("unexpected setup model %T", final)
+	}
+	return fm.Result(), fm.Err()
+}
+
 type stage int
 
 const (
-	stageWelcome stage = iota
-	stageInteractiveCLI
+	stageInteractiveCLI stage = iota
 	stageInteractiveModel
 	stageHeadlessCLI
 	stageHeadlessModel
 	stageScope
-	stageConfirm
 	stageOverwrite
+	stageDemoPrompt
 	stageDone
 )
 
 var (
-	continueOptions  = []string{"Continue"}
-	scopeOptions     = []string{"global", "project"}
-	confirmOptions   = []string{"Confirm", "Cancel"}
-	overwriteOptions = []string{"Overwrite", "Cancel"}
+	scopeOptions      = []string{"global", "project"}
+	overwriteOptions  = []string{"Overwrite", "Cancel"}
+	demoPromptOptions = []string{"Continue", "Not now", "Dismiss"}
 )
+
+const (
+	minCenterWidth  = 80
+	minCenterHeight = 24
+)
+
+type animTick struct{}
 
 type Model struct {
 	deps             Deps
@@ -130,14 +151,43 @@ type Model struct {
 	targetPath       string
 	collisions       []string
 	width            int
+	height           int
 	result           Result
 	err              error
 	terminal         bool
+
+	spring   harmonica.Spring
+	yOffset  float64
+	yVel     float64
+	animDone bool
 }
 
 func NewModel(deps *Deps) *Model {
 	deps = fillDefaults(deps)
-	return &Model{deps: *deps, stage: stageWelcome, width: 80, options: continueOptions}
+	m := &Model{
+		deps:     *deps,
+		width:    80,
+		height:   24,
+		spring:   harmonica.NewSpring(harmonica.FPS(60), 8.0, 0.8),
+		animDone: true,
+	}
+	if !m.loadAdapters() {
+		// adapters loaded, stage is now stageInteractiveCLI
+	}
+	return m
+}
+
+func NewDemoPromptModel(deps *Deps) *Model {
+	deps = fillDefaults(deps)
+	m := &Model{
+		deps:     *deps,
+		width:    80,
+		height:   24,
+		spring:   harmonica.NewSpring(harmonica.FPS(60), 8.0, 0.8),
+		animDone: true,
+	}
+	m.setStage(stageDemoPrompt, demoPromptOptions)
+	return m
 }
 
 func fillDefaults(deps *Deps) *Deps {
@@ -183,22 +233,50 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+		m.height = msg.Height
+	case animTick:
+		if m.animDone {
+			return m, nil
+		}
+		m.yOffset, m.yVel = m.spring.Update(m.yOffset, m.yVel, 0)
+		if m.yOffset < 0.5 && m.yOffset > -0.5 {
+			m.yOffset = 0
+			m.yVel = 0
+			m.animDone = true
+			return m, nil
+		}
+		return m, m.tickAnim()
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "esc":
 			m.cancel()
 			return m, tea.Quit
-		case "up", "k", "left", "h":
+		case "up", "k":
 			m.move(-1)
-		case "down", "j", "right", "l", "tab":
+		case "down", "j", "tab":
 			m.move(1)
 		case "enter":
 			if m.enter() {
 				return m, tea.Quit
 			}
+			if !m.animDone {
+				return m, m.tickAnim()
+			}
 		}
 	}
 	return m, nil
+}
+
+func (m *Model) tickAnim() tea.Cmd {
+	return tea.Tick(time.Second/60, func(time.Time) tea.Msg {
+		return animTick{}
+	})
+}
+
+func (m *Model) startAnim() {
+	m.yOffset = float64(m.height)
+	m.yVel = 0
+	m.animDone = false
 }
 
 func (m *Model) Result() Result { return m.result }
@@ -221,30 +299,22 @@ func (m *Model) enter() bool {
 		selected = m.options[m.focus]
 	}
 	switch m.stage {
-	case stageWelcome:
-		return m.loadAdapters()
 	case stageInteractiveCLI:
 		m.interactiveCLI = selected
 		return m.loadModels(stageInteractiveModel, selected)
 	case stageInteractiveModel:
 		m.interactiveModel = selected
-		m.setStage(stageHeadlessCLI, m.adapters)
+		m.setStageAnimated(stageHeadlessCLI, m.adapters)
 	case stageHeadlessCLI:
 		m.headlessCLI = selected
 		return m.loadModels(stageHeadlessModel, selected)
 	case stageHeadlessModel:
 		m.headlessModel = selected
-		m.setStage(stageScope, scopeOptions)
+		m.setStageAnimated(stageScope, scopeOptions)
 	case stageScope:
 		m.scope = selected
 		if err := m.resolveTarget(); err != nil {
 			return m.fail(err)
-		}
-		m.setStage(stageConfirm, confirmOptions)
-	case stageConfirm:
-		if selected == "Cancel" {
-			m.cancel()
-			return true
 		}
 		collisions, err := m.deps.Collisions.Collisions(m.targetPath)
 		if err != nil {
@@ -252,7 +322,7 @@ func (m *Model) enter() bool {
 		}
 		m.collisions = collisions
 		if len(collisions) > 0 {
-			m.setStage(stageOverwrite, overwriteOptions)
+			m.setStageAnimated(stageOverwrite, overwriteOptions)
 			return false
 		}
 		return m.write()
@@ -262,6 +332,34 @@ func (m *Model) enter() bool {
 			return true
 		}
 		return m.write()
+	case stageDemoPrompt:
+		return m.handleDemoPrompt(selected)
+	}
+	return false
+}
+
+func (m *Model) handleDemoPrompt(selected string) bool {
+	switch selected {
+	case "Continue":
+		m.result = ResultDemo
+		m.terminal = true
+		m.stage = stageDone
+		return true
+	case "Not now":
+		m.result = ResultCompleted
+		m.terminal = true
+		m.stage = stageDone
+		return true
+	case "Dismiss":
+		stamp := m.deps.Clock().UTC().Format(time.RFC3339)
+		_ = m.deps.Settings.Update(func(settings usersettings.Settings) usersettings.Settings {
+			settings.Onboarding.Dismissed = stamp
+			return settings
+		})
+		m.result = ResultCompleted
+		m.terminal = true
+		m.stage = stageDone
+		return true
 	}
 	return false
 }
@@ -288,18 +386,18 @@ func (m *Model) loadModels(next stage, adapter string) bool {
 		m.skipModelSelection(next)
 		return false
 	}
-	m.setStage(next, models)
+	m.setStageAnimated(next, models)
 	return false
 }
 
 func (m *Model) skipModelSelection(next stage) {
 	if next == stageInteractiveModel {
 		m.interactiveModel = ""
-		m.setStage(stageHeadlessCLI, m.adapters)
+		m.setStageAnimated(stageHeadlessCLI, m.adapters)
 		return
 	}
 	m.headlessModel = ""
-	m.setStage(stageScope, scopeOptions)
+	m.setStageAnimated(stageScope, scopeOptions)
 }
 
 func (m *Model) resolveTarget() error {
@@ -340,16 +438,27 @@ func (m *Model) write() bool {
 	}); err != nil {
 		return m.fail(err)
 	}
-	m.result = ResultCompleted
-	m.terminal = true
-	m.stage = stageDone
-	return true
+
+	if m.deps.OnboardingCompleted {
+		m.result = ResultCompleted
+		m.terminal = true
+		m.stage = stageDone
+		return true
+	}
+
+	m.setStageAnimated(stageDemoPrompt, demoPromptOptions)
+	return false
 }
 
 func (m *Model) setStage(next stage, options []string) {
 	m.stage = next
 	m.options = append([]string(nil), options...)
 	m.focus = 0
+}
+
+func (m *Model) setStageAnimated(next stage, options []string) {
+	m.setStage(next, options)
+	m.startAnim()
 }
 
 func (m *Model) cancel() {
@@ -367,44 +476,9 @@ func (m *Model) fail(err error) bool {
 }
 
 func (m *Model) View() string {
+	title, body := m.screenContent()
+
 	var b strings.Builder
-	title := "Set Up Agent Runner"
-	body := "Choose the agent CLIs and models Agent Runner should use."
-	switch m.stage {
-	case stageInteractiveCLI:
-		title = "Interactive Agent CLI"
-		body = "Choose the CLI adapter for planning and conversational work."
-	case stageInteractiveModel:
-		title = "Interactive Agent Model"
-		body = "Choose the model for " + m.interactiveCLI + "."
-	case stageHeadlessCLI:
-		title = "Headless Agent CLI"
-		body = "Choose the CLI adapter for unattended implementation work."
-	case stageHeadlessModel:
-		title = "Headless Agent Model"
-		body = "Choose the model for " + m.headlessCLI + "."
-	case stageScope:
-		title = "Config Scope"
-		body = "Choose where to write the profile configuration."
-	case stageConfirm:
-		title = "Confirm Agent Profile"
-		body = fmt.Sprintf("Write profiles to %s\n\ninteractive_base: %s / %s\nheadless_base: %s / %s\nplanner: extends interactive_base\nimplementor: extends headless_base", m.targetPath, m.interactiveCLI, defaultModelText(m.interactiveModel), m.headlessCLI, defaultModelText(m.headlessModel))
-	case stageOverwrite:
-		title = "Existing Agent Profiles"
-		body = "These entries already exist and will be replaced: " + strings.Join(m.collisions, ", ")
-	case stageDone:
-		switch {
-		case m.result == ResultCancelled:
-			title = "Setup Cancelled"
-			body = ""
-		case m.err != nil:
-			title = "Setup Failed"
-			body = m.err.Error()
-		default:
-			title = "Setup Complete"
-			body = ""
-		}
-	}
 	b.WriteString(tuistyle.SectionStyle.Render(title))
 	b.WriteString("\n\n")
 	if body != "" {
@@ -421,14 +495,57 @@ func (m *Model) View() string {
 		b.WriteString(style.Render(prefix + option))
 		b.WriteByte('\n')
 	}
-	return b.String()
+
+	content := b.String()
+
+	if m.width >= minCenterWidth && m.height >= minCenterHeight {
+		yOff := int(m.yOffset)
+		content = lipgloss.Place(m.width, m.height+yOff, lipgloss.Center, lipgloss.Center, content)
+	}
+
+	return content
 }
 
-func defaultModelText(model string) string {
-	if model == "" {
-		return "adapter default"
+func (m *Model) screenContent() (title, body string) {
+	switch m.stage {
+	case stageInteractiveCLI:
+		title = "Set Up Agent Runner"
+		body = "Welcome! Let's configure the agent CLIs and models that Agent Runner will use.\n\nFirst, choose a CLI for the planner agent. The planner handles interactive work like planning, conversations, and decisions that need your input."
+	case stageInteractiveModel:
+		title = "Planner Model"
+		body = "Choose the model for the planner agent (" + m.interactiveCLI + "). This model will be used for interactive planning and conversational steps in your workflows."
+	case stageHeadlessCLI:
+		title = "Implementor CLI"
+		body = "Now choose a CLI for the implementor agent. The implementor handles headless tasks like code generation and implementation work that runs without interaction."
+	case stageHeadlessModel:
+		title = "Implementor Model"
+		body = "Choose the model for the implementor agent (" + m.headlessCLI + "). This model will be used for unattended implementation steps in your workflows."
+	case stageScope:
+		title = "Config Scope"
+		body = "Choose where to save your agent configuration.\n\nGlobal writes to ~/.agent-runner/config.yaml and applies everywhere. Project writes to .agent-runner/config.yaml in your current directory and applies only to this project."
+	case stageOverwrite:
+		title = "Existing Agent Profiles"
+		body = "These entries already exist and will be replaced: " + strings.Join(m.collisions, ", ")
+	case stageDemoPrompt:
+		title = "Agent Runner Workflow Demo"
+		body = "Agent Runner includes a short interactive demo that walks you through the different workflow step types — UI prompts, interactive agents, headless agents, shell commands, and data capture.\n\nIt takes about two minutes and runs real workflow steps so you can see how everything works together."
+	case stageDone:
+		switch {
+		case m.result == ResultCancelled:
+			title = "Setup Cancelled"
+			body = ""
+		case m.err != nil:
+			title = "Setup Failed"
+			body = m.err.Error()
+		default:
+			title = "Setup Complete"
+			body = ""
+		}
+	default:
+		title = "Set Up Agent Runner"
+		body = ""
 	}
-	return model
+	return title, body
 }
 
 type PathDetector struct{}
@@ -506,7 +623,12 @@ func parseCodexModels(out string) []string {
 		Visibility string `json:"visibility"`
 	}
 	var entries []entry
-	if err := json.Unmarshal([]byte(out), &entries); err != nil {
+	var envelope struct {
+		Models []entry `json:"models"`
+	}
+	if err := json.Unmarshal([]byte(out), &envelope); err == nil && len(envelope.Models) > 0 {
+		entries = envelope.Models
+	} else if err := json.Unmarshal([]byte(out), &entries); err != nil {
 		var one entry
 		dec := json.NewDecoder(strings.NewReader("[" + strings.Trim(out, " \n,") + "]"))
 		if err := dec.Decode(&entries); err != nil {

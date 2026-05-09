@@ -11,7 +11,7 @@ steps:
     capture: greeting
 
   - id: claude-headless
-    agent: headless_base
+    agent: implementor
     session: new
     mode: headless
     cli: claude
@@ -19,7 +19,7 @@ steps:
     prompt: "Create this exact file: {{smoke_dir}}/{{step_id}}.txt and write this exact value into it: {{greeting}}. Then reply with exactly this line: smoke-test value: {{greeting}}"
 
   - id: codex-headless
-    agent: headless_base
+    agent: implementor
     session: new
     mode: headless
     cli: codex
@@ -27,7 +27,7 @@ steps:
     prompt: "Create this exact file: {{smoke_dir}}/{{step_id}}.txt and write this exact value into it: {{greeting}}. Then reply with exactly this line: smoke-test value: {{greeting}}"
 
   - id: copilot-headless
-    agent: headless_base
+    agent: implementor
     session: new
     mode: headless
     cli: copilot
@@ -35,7 +35,7 @@ steps:
     prompt: "Create this exact file: {{smoke_dir}}/{{step_id}}.txt and write this exact value into it: {{greeting}}. Then reply with exactly this line: smoke-test value: {{greeting}}"
 
   - id: cursor-headless
-    agent: headless_base
+    agent: implementor
     session: new
     mode: headless
     cli: cursor
@@ -43,7 +43,7 @@ steps:
     prompt: "Create this exact file: {{smoke_dir}}/{{step_id}}.txt and write this exact value into it: {{greeting}}. Then reply with exactly this line: smoke-test value: {{greeting}}"
 
   - id: opencode-headless
-    agent: headless_base
+    agent: implementor
     session: new
     mode: headless
     cli: opencode
