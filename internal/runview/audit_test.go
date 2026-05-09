@@ -204,6 +204,9 @@ func TestApplyEvent_StepStartAfterFailure(t *testing.T) {
 			if arch.Aborted {
 				t.Errorf("Aborted flag should be cleared on restart, still true")
 			}
+			if arch.Outcome != "" {
+				t.Errorf("Outcome should be cleared on restart, got %q", arch.Outcome)
+			}
 		})
 	}
 }
@@ -234,6 +237,9 @@ func TestApplyEvent_StatusMapping(t *testing.T) {
 			}
 			if arch.Aborted != c.aborted {
 				t.Errorf("outcome %s: want aborted=%v got %v", c.outcome, c.aborted, arch.Aborted)
+			}
+			if arch.Outcome != c.outcome {
+				t.Errorf("outcome %s: raw outcome = %q", c.outcome, arch.Outcome)
 			}
 		})
 	}

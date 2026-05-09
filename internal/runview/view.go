@@ -42,6 +42,10 @@ func (m *Model) View() string {
 	b.WriteString(m.renderHeader())
 	b.WriteString("\n\n")
 	b.WriteString(m.renderBreadcrumb())
+	if reason := m.renderFailureReason(); reason != "" {
+		b.WriteString("\n")
+		b.WriteString(reason)
+	}
 	b.WriteString("\n\n")
 
 	b.WriteString(m.renderRule())
@@ -102,6 +106,17 @@ func (m *Model) renderHeader() string {
 
 func (m *Model) renderRule() string {
 	return tuistyle.RenderRule(m.termWidth)
+}
+
+func (m *Model) renderFailureReason() string {
+	if m.rootStatus() != StatusFailed {
+		return ""
+	}
+	reason := failureReason(m.tree.Root)
+	if reason == "" {
+		reason = "workflow failed"
+	}
+	return tuistyle.ScreenMargin + tuistyle.StatusFailed.Render("reason: "+reason)
 }
 
 func (m *Model) renderTwoColumn(children []*StepNode) string {

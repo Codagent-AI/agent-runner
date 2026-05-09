@@ -94,6 +94,7 @@ type StepNode struct {
 	BreakTriggered      bool
 	ErrorMessage        string
 	Aborted             bool // aborted mid-execution; UI suppresses blink when no run is active
+	Outcome             string
 
 	// Iteration-only fields (set when the node is an iteration child of a loop).
 	IterationIndex int    // 0-based internal; UI renders as IterationIndex+1
