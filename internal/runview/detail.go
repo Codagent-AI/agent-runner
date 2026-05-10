@@ -284,9 +284,6 @@ func renderLoopBlock(node *StepNode, indent, width int) []string {
 
 	if node.Status != StatusPending {
 		lines = append(lines, blockOutcomeAndDuration(node)...)
-		if node.Outcome == "exhausted" && !node.BreakTriggered {
-			lines = append(lines, tuistyle.DimStyle.Render("max iterations reached without a passing break condition"))
-		}
 	}
 	return lines
 }
@@ -412,9 +409,6 @@ func blockOutcomeAndDuration(n *StepNode) []string {
 	var lines []string
 	lines = append(lines, "")
 	outcome := statusLabel(n.Status)
-	if n.Outcome != "" {
-		outcome = n.Outcome
-	}
 	if n.Status == StatusFailed {
 		lines = append(lines, tuistyle.LabelStyle.Render("outcome: ")+tuistyle.StatusFailed.Render(outcome))
 	} else {

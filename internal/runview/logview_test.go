@@ -60,53 +60,6 @@ func TestBuildLogLines_FlatChildren(t *testing.T) {
 	}
 }
 
-func TestBuildLogLines_PendingSelectedUnderFailedParentShowsNotStarted(t *testing.T) {
-	root := makeNode("wf", NodeRoot, StatusFailed)
-	parent := makeNode("finalize", NodeSubWorkflow, StatusFailed)
-	parent.Parent = root
-	loop := makeNode("ci-fix-loop", NodeLoop, StatusSuccess)
-	loop.Parent = parent
-	loop.Outcome = "exhausted"
-	pending := makeNode("verify-final", NodeHeadlessAgent, StatusPending)
-	pending.Parent = parent
-	pending.StaticAgent = "planner"
-	pending.StaticPrompt = "Invoke codagent:wait-ci."
-	parent.Children = []*StepNode{loop, pending}
-	root.Children = []*StepNode{parent}
-
-	lines, _ := buildLogLines(
-		[]*StepNode{pending},
-		pending,
-		80,
-		make(map[string]bool),
-		0, false, noResolver,
-	)
-	joined := stripANSI(strings.Join(lines, "\n"))
-	if !strings.Contains(joined, "status: not started") {
-		t.Fatalf("pending block should identify not-started status, got:\n%s", joined)
-	}
-	if !strings.Contains(joined, "blocked by ci-fix-loop: exhausted") {
-		t.Fatalf("pending block should explain the blocking step, got:\n%s", joined)
-	}
-}
-
-func TestRenderLoopBlock_ExhaustedShowsRawOutcome(t *testing.T) {
-	loopMax := 3
-	loop := makeNode("ci-fix-loop", NodeLoop, StatusSuccess)
-	loop.StaticLoopMax = &loopMax
-	loop.IterationsCompleted = 3
-	loop.Outcome = "exhausted"
-
-	lines := renderLoopBlock(loop, 0, 80)
-	joined := stripANSI(strings.Join(lines, "\n"))
-	if !strings.Contains(joined, "outcome: exhausted") {
-		t.Fatalf("loop block should show exhausted outcome, got:\n%s", joined)
-	}
-	if !strings.Contains(joined, "max iterations reached without a passing break condition") {
-		t.Fatalf("loop block should explain exhausted loop, got:\n%s", joined)
-	}
-}
-
 // TestBuildLogLines_SubWorkflowNested verifies that a sub-workflow's started
 // children are rendered inline under the parent block, and that ranges include
 // both the parent and child nodes.

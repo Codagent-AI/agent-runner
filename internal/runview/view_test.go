@@ -38,6 +38,51 @@ func TestFitDetailLine_PreservesANSIWhenFitting(t *testing.T) {
 	}
 }
 
+func TestView_FailedRunShowsFailureReasonBelowBreadcrumb(t *testing.T) {
+	root := &StepNode{ID: "finalize-pr", Type: NodeRoot, Status: StatusFailed}
+	push := &StepNode{ID: "push-pr", Type: NodeHeadlessAgent, Status: StatusSuccess, Parent: root}
+	loop := &StepNode{
+		ID:                  "ci-fix-loop",
+		Type:                NodeLoop,
+		Status:              StatusSuccess,
+		Parent:              root,
+		Outcome:             "exhausted",
+		IterationsCompleted: 3,
+		StaticLoopMax:       intPtr(3),
+	}
+	verify := &StepNode{
+		ID:           "verify-final",
+		Type:         NodeHeadlessAgent,
+		Status:       StatusPending,
+		Parent:       root,
+		StaticPrompt: "Invoke codagent:wait-ci to verify the final fix cycle made CI green.\nReport the final status to the user.",
+	}
+	root.Children = []*StepNode{push, loop, verify}
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.cursor = 2
+	m.termWidth = 125
+	m.termHeight = 30
+	m.rebuildRanges()
+	m.syncLogToSelection()
+
+	view := tuistyle.Sanitize(m.View())
+	reasonIdx := strings.Index(view, "reason: ci-fix-loop exhausted after 3 of 3 iterations without reaching a passing break condition")
+	if reasonIdx < 0 {
+		t.Fatalf("view should show failed-run reason, got:\n%s", view)
+	}
+	breadcrumbIdx := strings.Index(view, "← finalize-pr")
+	if breadcrumbIdx < 0 {
+		t.Fatalf("view should show breadcrumb, got:\n%s", view)
+	}
+	ruleIdx := strings.Index(view, "─")
+	if ruleIdx < 0 {
+		t.Fatalf("view should show rule, got:\n%s", view)
+	}
+	if reasonIdx < breadcrumbIdx || reasonIdx > ruleIdx {
+		t.Fatalf("failure reason should appear between breadcrumb and first rule, got:\n%s", view)
+	}
+}
+
 // TestFitDetailLine_TruncatesWithoutManglingEscape verifies that when a line
 // genuinely overflows, the truncation does not split an ANSI escape
 // sequence mid-stream (which would bleed styles into later output).
