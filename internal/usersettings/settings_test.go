@@ -210,6 +210,37 @@ func TestSaveRenameErrorIdentifiesSettingsPathAndUnderlyingError(t *testing.T) {
 	}
 }
 
+func TestSaveSetupCompletedAtPersistsWhenOnboardingAlreadySet(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeSettingsFile(t, home, "theme: light\nonboarding:\n  completed_at: 2026-05-04T04:25:43Z\n")
+
+	settings, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	settings.Setup.CompletedAt = "2026-05-08T12:00:00Z"
+
+	if err := Save(settings); err != nil {
+		t.Fatalf("Save() returned error: %v", err)
+	}
+
+	reloaded, err := Load()
+	if err != nil {
+		t.Fatalf("Reload() returned error: %v", err)
+	}
+	if reloaded.Setup.CompletedAt != "2026-05-08T12:00:00Z" {
+		t.Fatalf("Setup.CompletedAt = %q, want 2026-05-08T12:00:00Z", reloaded.Setup.CompletedAt)
+	}
+	if reloaded.Onboarding.CompletedAt != "2026-05-04T04:25:43Z" {
+		t.Fatalf("Onboarding.CompletedAt = %q, want 2026-05-04T04:25:43Z", reloaded.Onboarding.CompletedAt)
+	}
+	if reloaded.Theme != ThemeLight {
+		t.Fatalf("Theme = %q, want light", reloaded.Theme)
+	}
+}
+
 func writeSettingsFile(t *testing.T, home, body string) {
 	t.Helper()
 	path := filepath.Join(home, ".agent-runner", "settings.yaml")

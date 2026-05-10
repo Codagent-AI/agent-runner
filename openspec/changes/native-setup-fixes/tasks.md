@@ -1,0 +1,7 @@
+- [ ] Implement the change described by these files:
+  - [proposal.md](proposal.md)
+  - [design.md](design.md)
+  - [specs/native-setup/spec.md](specs/native-setup/spec.md)
+  - [specs/agent-profile-editor/spec.md](specs/agent-profile-editor/spec.md)
+  - [specs/onboarding-workflow/spec.md](specs/onboarding-workflow/spec.md)
+  - [specs/native-setup-ux/spec.md](specs/native-setup-ux/spec.md)
