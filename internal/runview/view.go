@@ -133,7 +133,7 @@ func (m *Model) renderTwoColumn(children []*StepNode) string {
 
 	// Build log lines for the right pane.
 	var logLines []string
-	if m.liveUI != nil {
+	if m.liveUIVisible() {
 		m.liveUI.SetWidth(rightWidth)
 		logLines = strings.Split(m.liveUI.View(), "\n")
 	} else {
@@ -411,8 +411,18 @@ func truncateSidebarName(name string) string {
 }
 
 func (m *Model) renderHelpBar() string {
-	if m.liveUI != nil {
-		parts := append([]string{"↑↓ step"}, m.liveUI.HelpParts()...)
+	if m.liveUIVisible() {
+		parts := []string{"↑↓ step", "j/k scroll"}
+		if sel := m.selectedNode(); sel != nil && (sel.Type == NodeLoop || sel.Type == NodeSubWorkflow || sel.Type == NodeIteration) {
+			parts = append(parts, "d drill down")
+		}
+		for _, part := range m.liveUI.HelpParts() {
+			if part == "↑↓ option" {
+				part = "←→ option"
+			}
+			parts = append(parts, part)
+		}
+		parts = append(parts, "q quit")
 		return tuistyle.ScreenMargin + tuistyle.HelpStyle.Render(strings.Join(parts, "   "))
 	}
 

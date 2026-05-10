@@ -96,9 +96,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "down", "j":
 			m.moveSelection(1)
 		case "left", "h":
-			m.moveActionFocus(-1)
+			m.moveHorizontalFocus(-1)
 		case "right", "l":
-			m.moveActionFocus(1)
+			m.moveHorizontalFocus(1)
 		case "tab":
 			m.moveFocus(1)
 		case "shift+tab":
@@ -200,6 +200,14 @@ func (m *Model) moveActionFocus(delta int) {
 	}
 	next := (idx + delta + len(m.req.Actions)) % len(m.req.Actions)
 	m.focus = len(m.req.Inputs) + next
+}
+
+func (m *Model) moveHorizontalFocus(delta int) {
+	if _, ok := m.focusedInputIndex(); ok {
+		m.moveSelection(delta)
+		return
+	}
+	m.moveActionFocus(delta)
 }
 
 func (m *Model) handleEnter() (tea.Model, tea.Cmd) {

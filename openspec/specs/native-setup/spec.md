@@ -79,6 +79,14 @@ After native setup reaches a terminal state, the runner SHALL continue to the ap
 - **WHEN** native setup completes successfully and `settings.onboarding.completed_at` and `settings.onboarding.dismissed` are unset
 - **THEN** the runner starts `onboarding:onboarding`
 
+#### Scenario: Completed onboarding demo returns home
+- **WHEN** the onboarding demo workflow exits successfully without an explicit app-quit request
+- **THEN** the runner proceeds to the normal TUI entry point
+
+#### Scenario: Quitting onboarding demo exits app
+- **WHEN** the user explicitly quits the onboarding demo workflow with `q`, `Ctrl+C`, or confirmed top-level Escape
+- **THEN** the runner exits the app instead of proceeding to the normal TUI entry point
+
 #### Scenario: Completed onboarding demo is not repeated
 - **WHEN** native setup completes successfully and `settings.onboarding.completed_at` is already set
 - **THEN** the runner proceeds to the normal TUI entry point without starting `onboarding:onboarding`

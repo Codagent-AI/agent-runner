@@ -432,8 +432,8 @@ func handleListWithTab(initialTab listview.InitialTab) int {
 	if code := ensureThemeForTUI(defaultThemeDeps); code != 0 {
 		return code
 	}
-	if code := ensureFirstRunForTUI(defaultFirstRunDeps); code != 0 {
-		return code
+	if result := ensureFirstRunForTUI(defaultFirstRunDeps); !result.continueToList {
+		return result.exitCode
 	}
 
 	m, err := listview.New(listview.WithInitialTab(initialTab))
@@ -514,10 +514,19 @@ type liveTUIOptions struct {
 }
 
 func runLiveTUIWithOptions(h *runner.RunHandle, opts liveTUIOptions) int {
+	return runLiveTUIWithResult(h, opts).exitCode
+}
+
+type liveTUIResult struct {
+	exitCode      int
+	exitRequested bool
+}
+
+func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResult {
 	rv, err := runview.New(h.SessionDir, h.ProjectDir, runview.FromLiveRun)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-		return 1
+		return liveTUIResult{exitCode: 1}
 	}
 
 	p := tea.NewProgram(rv, tea.WithMouseCellMotion())
@@ -554,38 +563,15 @@ func runLiveTUIWithOptions(h *runner.RunHandle, opts liveTUIOptions) int {
 	rv, err = finalRunviewModel(p.Run())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-		return 1
+		return liveTUIResult{exitCode: 1}
 	}
 
 	// If the user did not request a resume, map the runner result to an exit
 	// code. If the user confirmed quit while the workflow was still running,
 	// resultCh has no value yet — keep the documented orphan-on-quit behavior
 	// and return 0 without blocking on the lingering goroutine.
-	if rv.ResumeSessionID() == "" {
-		if rv.ResumeToList() {
-			<-resultCh
-			return execRunnerResume("", h.ProjectDir)
-		}
-		if opts.quitOnDone {
-			select {
-			case runResult := <-resultCh:
-				if runResult != runner.ResultSuccess {
-					return 1
-				}
-			default:
-				// User quit before the dispatcher-launched workflow reached a
-				// terminal state; preserve the normal live-run orphan behavior.
-			}
-			return 0
-		}
-		select {
-		case runResult := <-resultCh:
-			if runResult != runner.ResultSuccess {
-				return 1
-			}
-		default:
-		}
-		return 0
+	if result, ok := terminalLiveTUIResult(rv, resultCh, h.ProjectDir, opts); ok {
+		return result
 	}
 
 	// The user pressed enter on a completed agent step. Wait for the runner
@@ -598,19 +584,63 @@ func runLiveTUIWithOptions(h *runner.RunHandle, opts liveTUIOptions) int {
 		rv, err = runview.NewForReentry(h.SessionDir, h.ProjectDir, runview.FromLiveRun, spawnErr)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-			return 1
+			return liveTUIResult{exitCode: 1}
 		}
 		p = tea.NewProgram(rv, tea.WithAltScreen(), tea.WithMouseCellMotion())
 		rv, err = finalRunviewModel(p.Run())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-			return 1
+			return liveTUIResult{exitCode: 1}
+		}
+		if rv.ExitRequested() {
+			return liveTUIResult{exitRequested: true}
 		}
 		if rv.ResumeToList() {
-			return execRunnerResume("", h.ProjectDir)
+			return liveTUIResult{exitCode: execRunnerResume("", h.ProjectDir)}
 		}
 	}
-	return 0
+	return liveTUIResult{}
+}
+
+func terminalLiveTUIResult(rv *runview.Model, resultCh <-chan runner.WorkflowResult, projectDir string, opts liveTUIOptions) (liveTUIResult, bool) {
+	if rv.ResumeSessionID() != "" {
+		return liveTUIResult{}, false
+	}
+	if rv.ExitRequested() {
+		return liveTUIResult{exitRequested: true}, true
+	}
+	if rv.ResumeToList() {
+		<-resultCh
+		return liveTUIResult{exitCode: execRunnerResume("", projectDir)}, true
+	}
+	if opts.quitOnDone {
+		return dispatcherLiveTUIResult(resultCh), true
+	}
+	return completedLiveTUIResult(resultCh), true
+}
+
+func dispatcherLiveTUIResult(resultCh <-chan runner.WorkflowResult) liveTUIResult {
+	select {
+	case runResult := <-resultCh:
+		if runResult != runner.ResultSuccess {
+			return liveTUIResult{exitCode: 1}
+		}
+	default:
+		// User quit before the dispatcher-launched workflow reached a terminal
+		// state; preserve the normal live-run orphan behavior.
+	}
+	return liveTUIResult{}
+}
+
+func completedLiveTUIResult(resultCh <-chan runner.WorkflowResult) liveTUIResult {
+	select {
+	case runResult := <-resultCh:
+		if runResult != runner.ResultSuccess {
+			return liveTUIResult{exitCode: 1}
+		}
+	default:
+	}
+	return liveTUIResult{}
 }
 
 // finalRunviewModel extracts the terminal runview Model returned by tea.Program.Run.
@@ -1111,35 +1141,39 @@ func handleRun(args []string) int {
 }
 
 func handleRunWithOptions(args []string, liveOpts liveTUIOptions) int {
+	return handleRunWithResult(args, liveOpts).exitCode
+}
+
+func handleRunWithResult(args []string, liveOpts liveTUIOptions) liveTUIResult {
 	workflowFile := args[0]
 
 	workflow, err := loader.LoadWorkflow(workflowFile, loader.Options{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: load workflow: %v\n", err)
-		return 1
+		return liveTUIResult{exitCode: 1}
 	}
 
 	positional, keyed, err := parseParams(args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-		return 1
+		return liveTUIResult{exitCode: 1}
 	}
 	params, err := matchParams(&workflow, positional, keyed)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-		return 1
+		return liveTUIResult{exitCode: 1}
 	}
 
 	if !builtinworkflows.IsRef(workflowFile) {
 		if _, err := prevalidate.Pipeline(workflowFile, params, prevalidate.Strict, prevalidate.Options{}); err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-			return 1
+			return liveTUIResult{exitCode: 1}
 		}
 	}
 
 	if err := requireTTY(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		return 1
+		return liveTUIResult{exitCode: 1}
 	}
 
 	var eng engine.Engine
@@ -1149,7 +1183,7 @@ func handleRunWithOptions(args []string, liveOpts liveTUIOptions) int {
 		eng, err = engine.Create(engConfig)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: create engine: %v\n", err)
-			return 1
+			return liveTUIResult{exitCode: 1}
 		}
 	}
 
@@ -1163,16 +1197,16 @@ func handleRunWithOptions(args []string, liveOpts liveTUIOptions) int {
 		})
 		if runErr != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", runErr)
-			return 1
+			return liveTUIResult{exitCode: 1}
 		}
 		if result != runner.ResultSuccess {
-			return 1
+			return liveTUIResult{exitCode: 1}
 		}
-		return 0
+		return liveTUIResult{}
 	}
 
 	if code := ensureThemeForTUI(defaultThemeDeps); code != 0 {
-		return code
+		return liveTUIResult{exitCode: code}
 	}
 
 	h, err := runner.PrepareRun(&workflow, params, &runner.Options{
@@ -1184,10 +1218,10 @@ func handleRunWithOptions(args []string, liveOpts liveTUIOptions) int {
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-		return 1
+		return liveTUIResult{exitCode: 1}
 	}
 
-	return runLiveTUIWithOptions(h, liveOpts)
+	return runLiveTUIWithResult(h, liveOpts)
 }
 
 func ensureThemeForTUI(deps themeDeps) int {
@@ -1237,7 +1271,25 @@ type firstRunDeps struct {
 	runNativeSetup                func(onboardingCompleted bool) (nativeSetupResult, error)
 	runDemoPrompt                 func() (nativeSetupResult, error)
 	continueAfterNativeSetupError bool
-	runWorkflow                   func(ref string) int
+	runWorkflow                   func(ref string) firstRunWorkflowResult
+}
+
+type firstRunResult struct {
+	exitCode       int
+	continueToList bool
+}
+
+type firstRunWorkflowResult struct {
+	exitCode      int
+	exitRequested bool
+}
+
+func continueToList() firstRunResult {
+	return firstRunResult{continueToList: true}
+}
+
+func exitFirstRun(code int) firstRunResult {
+	return firstRunResult{exitCode: code}
 }
 
 var defaultFirstRunDeps = firstRunDeps{
@@ -1253,8 +1305,9 @@ var defaultFirstRunDeps = firstRunDeps{
 		result, err := nativesetup.RunDemoPrompt(&nativesetup.Deps{})
 		return mapSetupResult(result), err
 	},
-	runWorkflow: func(ref string) int {
-		return handleRunWithOptions([]string{ref}, liveTUIOptions{quitOnDone: true})
+	runWorkflow: func(ref string) firstRunWorkflowResult {
+		result := handleRunWithResult([]string{ref}, liveTUIOptions{quitOnDone: true})
+		return firstRunWorkflowResult(result)
 	},
 }
 
@@ -1271,14 +1324,14 @@ func mapSetupResult(result nativesetup.Result) nativeSetupResult {
 	}
 }
 
-func ensureFirstRunForTUI(deps firstRunDeps) int {
+func ensureFirstRunForTUI(deps firstRunDeps) firstRunResult {
 	settings, err := deps.load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-		return 1
+		return exitFirstRun(1)
 	}
 	if !deps.isStdinTTY() || !deps.isStdoutTTY() {
-		return 0
+		return continueToList()
 	}
 
 	onboardingDone := settings.Onboarding.CompletedAt != "" || settings.Onboarding.Dismissed != ""
@@ -1288,36 +1341,40 @@ func ensureFirstRunForTUI(deps firstRunDeps) int {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 			if !deps.continueAfterNativeSetupError {
-				return 1
+				return exitFirstRun(1)
 			}
-			return 0
+			return continueToList()
 		}
 		if result == nativeSetupDemo {
 			return launchOnboardingDemo(deps)
 		}
-		return 0
+		return continueToList()
 	}
 
 	if !onboardingDone {
 		result, err := deps.runDemoPrompt()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-			return 0
+			return continueToList()
 		}
 		if result == nativeSetupDemo {
 			return launchOnboardingDemo(deps)
 		}
 	}
-	return 0
+	return continueToList()
 }
 
-func launchOnboardingDemo(deps firstRunDeps) int {
+func launchOnboardingDemo(deps firstRunDeps) firstRunResult {
 	ref, err := builtinworkflows.Resolve("onboarding:onboarding")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-		return 1
+		return exitFirstRun(1)
 	}
-	return deps.runWorkflow(ref)
+	result := deps.runWorkflow(ref)
+	if result.exitRequested || result.exitCode != 0 {
+		return exitFirstRun(result.exitCode)
+	}
+	return continueToList()
 }
 
 // parseParams separates positional args from key=value pairs.

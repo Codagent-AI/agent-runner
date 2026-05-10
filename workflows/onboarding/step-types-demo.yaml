@@ -3,11 +3,19 @@ description: Demonstrates Agent Runner workflow step types during onboarding.
 steps:
   - id: intro-ui
     mode: ui
-    title: Workflow Step Types
+    title: Live Workflow Demo
     body: |
-      This demo is itself a workflow. It begins with a UI step: a rendered screen with actions that can capture the user's choice and move the run forward.
+      (Press j to scroll down if needed.)
 
-      The next screens demonstrate interactive agents, headless agents, shell commands, and captured values.
+      Agent Runner is a workflow tool for agentic coding. A workflow is a series of steps.
+
+      This demo is an actual Agent Runner workflow. You can see its steps in the step list. The demo workflow is a sub-workflow of the top-level onboarding workflow.
+
+      Take a moment to explore it now. Use ↑/↓ to move through steps and d to drill down into sub-workflows.
+
+      The top section shows the header and breadcrumb. The step list shows the workflow structure. The detail pane shows information for the selected step; right now it is showing this UI step. The help bar at the bottom lists the active keyboard shortcuts.
+
+      This demo will show UI steps, interactive agents, headless agents, shell commands, and captured values.
     actions:
       - label: Continue
         outcome: continue

@@ -863,8 +863,12 @@ func TestModel_Esc_AtTop_FromInspect_EmitsExitMsg(t *testing.T) {
 		t.Fatal("esc at top level should produce a cmd")
 	}
 	msg := cmd()
-	if _, ok := msg.(ExitMsg); !ok {
+	exitMsg, ok := msg.(ExitMsg)
+	if !ok {
 		t.Fatalf("expected ExitMsg, got %T", msg)
+	}
+	if !exitMsg.UserRequested {
+		t.Fatal("esc from inspect should emit a user-requested ExitMsg")
 	}
 }
 
@@ -878,8 +882,15 @@ func TestModel_Q_EmitsExitMsg(t *testing.T) {
 		t.Fatal("q should produce a cmd")
 	}
 	msg := cmd()
-	if _, ok := msg.(ExitMsg); !ok {
+	exitMsg, ok := msg.(ExitMsg)
+	if !ok {
 		t.Fatalf("expected ExitMsg, got %T", msg)
+	}
+	if !exitMsg.UserRequested {
+		t.Fatal("q should emit a user-requested ExitMsg")
+	}
+	if !m.ExitRequested() {
+		t.Fatal("q should mark exit requested")
 	}
 }
 
@@ -894,6 +905,26 @@ func TestModel_ExitMsg_ReturnsQuit(t *testing.T) {
 	}
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Fatalf("expected tea.QuitMsg from cmd, got %T", cmd())
+	}
+}
+
+func TestModel_UserRequestedExitMsgMarksExitRequested(t *testing.T) {
+	m := newTestModel(simpleTree(), FromLiveRun)
+
+	m2, _ := m.Update(ExitMsg{UserRequested: true})
+	m = m2.(*Model)
+	if !m.ExitRequested() {
+		t.Fatal("user-requested ExitMsg should mark exit requested")
+	}
+}
+
+func TestModel_AutomaticExitMsgDoesNotMarkExitRequested(t *testing.T) {
+	m := newTestModel(simpleTree(), FromLiveRun)
+
+	m2, _ := m.Update(ExitMsg{})
+	m = m2.(*Model)
+	if m.ExitRequested() {
+		t.Fatal("automatic ExitMsg should not mark exit requested")
 	}
 }
 
@@ -1791,6 +1822,20 @@ func TestModel_LiveRun_QuitConfirm_Decline(t *testing.T) {
 	}
 }
 
+func TestModel_LiveRun_QuitConfirm_AcceptMarksExitRequested(t *testing.T) {
+	m := newLiveModel()
+	m.quitConfirming = true
+
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	m = m2.(*Model)
+	if cmd == nil {
+		t.Fatal("expected accepted quit confirmation to quit")
+	}
+	if !m.ExitRequested() {
+		t.Fatal("accepted quit confirmation should mark exit requested")
+	}
+}
+
 func TestModel_LiveRun_QuitAfterDone_NoConfirm(t *testing.T) {
 	m := newLiveModel()
 	m.running = false
@@ -1803,6 +1848,9 @@ func TestModel_LiveRun_QuitAfterDone_NoConfirm(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Error("expected an exit command after q on completed run")
+	}
+	if !m.ExitRequested() {
+		t.Error("q after done should mark exit requested")
 	}
 }
 

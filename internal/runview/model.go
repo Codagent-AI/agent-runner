@@ -42,7 +42,9 @@ type ResumeRunMsg struct {
 // `agent-runner --resume`, which opens the list TUI on the current-dir tab.
 type ResumeListMsg struct{}
 
-type ExitMsg struct{}
+type ExitMsg struct {
+	UserRequested bool
+}
 
 // Entered describes how the user reached the run view.
 type Entered int
@@ -103,6 +105,7 @@ type Model struct {
 	resumeAgentCLI  string
 	resumeSessionID string
 	resumeToList    bool
+	exitRequested   bool
 
 	// Alt-screen management. When the program starts without tea.WithAltScreen
 	// (FromLiveRun mode), alt-screen entry is deferred so a fast non-interactive
@@ -110,8 +113,9 @@ type Model struct {
 	altScreen         bool // true once alt-screen has been entered
 	suppressAltScreen bool // set when SuspendedMsg arrives before the deferred timer
 
-	liveUI      *uistep.Model
-	liveUIReply chan<- model.UIStepResult
+	liveUI       *uistep.Model
+	liveUIStepID string
+	liveUIReply  chan<- model.UIStepResult
 }
 
 // ResumeAgentCLI returns the agent CLI name captured from a ResumeMsg in
@@ -125,6 +129,9 @@ func (m *Model) ResumeSessionID() string { return m.resumeSessionID }
 // ResumeToList reports whether the user requested to leave the run view and
 // exec back into the list TUI.
 func (m *Model) ResumeToList() bool { return m.resumeToList }
+
+// ExitRequested reports whether the user explicitly requested application exit.
+func (m *Model) ExitRequested() bool { return m.exitRequested }
 
 // SessionDir returns the session directory the Model was constructed for.
 func (m *Model) SessionDir() string { return m.sessionDir }
@@ -411,6 +418,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// When wrapped in the switcher (FromList / FromInspect paths), the
 		// switcher intercepts ExitMsg before delegation, so this branch is
 		// inert in that case.
+		if msg.UserRequested {
+			m.exitRequested = true
+		}
 		return m, tea.Quit
 
 	case liverun.ExecDoneMsg:
@@ -420,7 +430,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// ---- Keyboard / mouse ----
 
 	case tea.KeyMsg:
-		if m.liveUI != nil {
+		if m.quitConfirming {
+			return m.handleKey(msg)
+		}
+		if m.liveUI != nil && m.liveUIVisible() {
 			return m.handleLiveUIKey(msg)
 		}
 		return m.handleKey(msg)
@@ -441,6 +454,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) handleUIRequestMsg(msg *liverun.UIRequestMsg) (tea.Model, tea.Cmd) {
 	m.liveUI = uistep.NewModel(&msg.Request)
+	m.liveUIStepID = msg.Request.StepID
 	m.liveUIReply = msg.Reply
 	m.autoFollow = true
 	m.refreshData()
@@ -484,6 +498,17 @@ func (m *Model) handleLiveUIKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "up", "down":
 		return m.handleKey(msg)
+	case "d":
+		m.autoFollow = false
+		return m.handleEnter()
+	case "k":
+		m.scrollLiveUI(-1)
+		return m, nil
+	case "j":
+		m.scrollLiveUI(1)
+		return m, nil
+	case "q":
+		return m.handleKey(msg)
 	}
 
 	next, _ := m.liveUI.Update(msg)
@@ -494,12 +519,38 @@ func (m *Model) handleLiveUIKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		result := m.liveUI.Result()
 		reply := m.liveUIReply
 		m.liveUI = nil
+		m.liveUIStepID = ""
 		m.liveUIReply = nil
 		if reply != nil {
 			reply <- result
 		}
 	}
 	return m, nil
+}
+
+func (m *Model) scrollLiveUI(delta int) {
+	m.logOffset += delta
+	if m.logOffset < 0 {
+		m.logOffset = 0
+	}
+}
+
+func (m *Model) liveUIVisible() bool {
+	if m.liveUI == nil {
+		return false
+	}
+	active := m.liveUINode()
+	if active == nil {
+		return true
+	}
+	return m.selectedNode() == m.ancestorAtCurrentLevel(active)
+}
+
+func (m *Model) liveUINode() *StepNode {
+	if m.liveUIStepID == "" {
+		return nil
+	}
+	return findDeepestInProgressUI(m.tree.Root, m.liveUIStepID)
 }
 
 func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) {
@@ -688,6 +739,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.quitConfirming {
 		switch msg.String() {
 		case "y", "Y":
+			m.exitRequested = true
 			return m, tea.Quit
 		case "n", "N", "esc":
 			m.quitConfirming = false
@@ -701,6 +753,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.quitConfirming = true
 			return m, nil
 		}
+		m.exitRequested = true
 		return m, emitExit
 	case "?":
 		m.showLegend = true
@@ -914,6 +967,25 @@ func deepestInProgressNode(n *StepNode) *StepNode {
 		return found
 	}
 	if n.Parent != nil && n.Status == StatusInProgress {
+		return n
+	}
+	return nil
+}
+
+func findDeepestInProgressUI(n *StepNode, stepID string) *StepNode {
+	if n == nil {
+		return nil
+	}
+	var found *StepNode
+	for _, child := range n.Children {
+		if candidate := findDeepestInProgressUI(child, stepID); candidate != nil {
+			found = candidate
+		}
+	}
+	if found != nil {
+		return found
+	}
+	if n.ID == stepID && n.Type == NodeUI && n.Status == StatusInProgress {
 		return n
 	}
 	return nil
@@ -1258,7 +1330,7 @@ func (m *Model) refreshData() {
 }
 
 func emitBack() tea.Msg { return BackMsg{} }
-func emitExit() tea.Msg { return ExitMsg{} }
+func emitExit() tea.Msg { return ExitMsg{UserRequested: true} }
 
 func (m *Model) shouldResumeListOnEsc() bool {
 	if m.entered == FromInspect || m.entered == FromDefinition {
