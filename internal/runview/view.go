@@ -412,7 +412,8 @@ func truncateSidebarName(name string) string {
 
 func (m *Model) renderHelpBar() string {
 	if m.liveUI != nil {
-		return tuistyle.ScreenMargin + tuistyle.HelpStyle.Render(strings.Join(m.liveUI.HelpParts(), "   "))
+		parts := append([]string{"↑↓ step"}, m.liveUI.HelpParts()...)
+		return tuistyle.ScreenMargin + tuistyle.HelpStyle.Render(strings.Join(parts, "   "))
 	}
 
 	sel := m.selectedNode()

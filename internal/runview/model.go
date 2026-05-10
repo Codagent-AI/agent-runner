@@ -481,6 +481,11 @@ func (m *Model) handleSuspendedMsg() {
 }
 
 func (m *Model) handleLiveUIKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up", "down":
+		return m.handleKey(msg)
+	}
+
 	next, _ := m.liveUI.Update(msg)
 	if updated, ok := next.(*uistep.Model); ok {
 		m.liveUI = updated

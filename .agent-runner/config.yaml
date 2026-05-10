@@ -4,48 +4,52 @@ profiles:
     extends: default
     agents:
       claude_headless_smoke:
-        extends: headless_base
+        default_mode: headless
+        cli: claude
         model: haiku
         effort: low
       claude_interactive_smoke:
-        extends: interactive_base
+        default_mode: interactive
+        cli: claude
         model: haiku
         effort: low
       codex_headless_smoke:
-        extends: headless_base
+        default_mode: headless
         cli: codex
         model: gpt-5.4-mini
         effort: low
       copilot_headless_smoke:
-        extends: headless_base
+        default_mode: headless
         cli: copilot
         model: gpt-5.4-mini
         effort: low
       cursor_headless_smoke:
-        extends: headless_base
+        default_mode: headless
         cli: cursor
         model: auto
         effort: low
       opencode_headless_smoke:
-        extends: headless_base
+        default_mode: headless
         cli: opencode
+        model: anthropic/claude-sonnet-4
         effort: low
       codex_interactive_smoke:
-        extends: interactive_base
+        default_mode: interactive
         cli: codex
         model: gpt-5.4-mini
         effort: low
       copilot_interactive_smoke:
-        extends: interactive_base
+        default_mode: interactive
         cli: copilot
         model: gpt-5.4-mini
         effort: low
       cursor_interactive_smoke:
-        extends: interactive_base
+        default_mode: interactive
         cli: cursor
         model: auto
         effort: low
       opencode_interactive_smoke:
-        extends: interactive_base
+        default_mode: interactive
         cli: opencode
+        model: anthropic/claude-sonnet-4
         effort: low
