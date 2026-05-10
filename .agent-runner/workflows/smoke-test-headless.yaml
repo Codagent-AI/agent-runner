@@ -11,41 +11,26 @@ steps:
     capture: greeting
 
   - id: claude-headless
-    agent: implementor
+    agent: claude_headless_smoke
     session: new
-    mode: headless
-    cli: claude
-    model: haiku
     prompt: "Create this exact file: {{smoke_dir}}/{{step_id}}.txt and write this exact value into it: {{greeting}}. Then reply with exactly this line: smoke-test value: {{greeting}}"
 
   - id: codex-headless
-    agent: implementor
+    agent: codex_headless_smoke
     session: new
-    mode: headless
-    cli: codex
-    model: gpt-5.4-mini
     prompt: "Create this exact file: {{smoke_dir}}/{{step_id}}.txt and write this exact value into it: {{greeting}}. Then reply with exactly this line: smoke-test value: {{greeting}}"
 
   - id: copilot-headless
-    agent: implementor
+    agent: copilot_headless_smoke
     session: new
-    mode: headless
-    cli: copilot
-    model: gpt-5.4-mini
     prompt: "Create this exact file: {{smoke_dir}}/{{step_id}}.txt and write this exact value into it: {{greeting}}. Then reply with exactly this line: smoke-test value: {{greeting}}"
 
   - id: cursor-headless
-    agent: implementor
+    agent: cursor_headless_smoke
     session: new
-    mode: headless
-    cli: cursor
-    model: auto
     prompt: "Create this exact file: {{smoke_dir}}/{{step_id}}.txt and write this exact value into it: {{greeting}}. Then reply with exactly this line: smoke-test value: {{greeting}}"
 
   - id: opencode-headless
-    agent: implementor
+    agent: opencode_headless_smoke
     session: new
-    mode: headless
-    cli: opencode
-    model: anthropic/claude-sonnet-4
     prompt: "Create this exact file: {{smoke_dir}}/{{step_id}}.txt and write this exact value into it: {{greeting}}. Then reply with exactly this line: smoke-test value: {{greeting}}"

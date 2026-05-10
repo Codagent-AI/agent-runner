@@ -23,7 +23,8 @@ if [ ! -d "$project_modcache/cache/download" ] &&
   if command -v rsync >/dev/null 2>&1; then
     rsync -a -- "$default_modcache/cache/download/" "$project_modcache/cache/download/"
   else
-    cp -R "$default_modcache/cache/download" "$project_modcache/cache/download"
+    mkdir -p "$project_modcache/cache/download"
+    cp -R "$default_modcache/cache/download/." "$project_modcache/cache/download/"
   fi
 fi
 

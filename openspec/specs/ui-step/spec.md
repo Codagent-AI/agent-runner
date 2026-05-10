@@ -236,3 +236,17 @@ A UI step with `actions` and no `inputs` SHALL render its actions as the only in
 #### Scenario: Step with actions and no inputs renders unchanged
 - **WHEN** a UI step declares actions but no inputs (e.g., the welcome screen)
 - **THEN** the rendered screen SHALL present the actions as the only interactive elements and existing welcome-screen behavior SHALL be preserved
+
+### Requirement: Live run-view step navigation remains available during UI steps
+
+When a `mode: ui` step is rendered inside the live run view, arrow-up and arrow-down SHALL continue to use the run view's existing step-list navigation. The UI step SHALL remain pending while the selected run-view step changes. Keys that operate the UI form itself, including Tab/Shift-Tab, arrow-left/arrow-right, Enter, and Esc, SHALL continue to be handled by the UI step.
+
+Standalone UI-step rendering outside the live run view MAY keep using arrow-up and arrow-down for single-select inputs.
+
+#### Scenario: Arrow keys navigate steps during live UI
+- **WHEN** the live run view is displaying a pending UI step and another step is selectable in the current step list
+- **THEN** pressing arrow-down or arrow-up changes the selected run-view step without resolving or canceling the UI step
+
+#### Scenario: UI action keys still resolve the pending UI step
+- **WHEN** the live run view is displaying a pending UI step with actions
+- **THEN** arrow-left/arrow-right and Enter continue to move action focus and resolve the UI step outcome

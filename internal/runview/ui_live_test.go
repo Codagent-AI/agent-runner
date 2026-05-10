@@ -43,8 +43,11 @@ func TestLiveUIRequestRendersInsideRunViewChromeAndReturnsAction(t *testing.T) {
 	if !strings.Contains(view, "[ Continue ]  [ Not now ]  [ Dismiss ]") {
 		t.Fatalf("actions should render inside the detail pane on one row:\n%s", view)
 	}
-	if strings.Contains(view, "↑↓ step") || strings.Contains(view, "q quit") {
-		t.Fatalf("run view should not show step-list shortcuts while live UI has focus:\n%s", view)
+	if !strings.Contains(view, "↑↓ step") {
+		t.Fatalf("run view should show step navigation while live UI is visible:\n%s", view)
+	}
+	if strings.Contains(view, "q quit") {
+		t.Fatalf("run view should not show unrelated run-view shortcuts while live UI has focus:\n%s", view)
 	}
 	if !strings.Contains(view, "←→ action") || !strings.Contains(view, "enter select") || !strings.Contains(view, "esc cancel") {
 		t.Fatalf("run view should show live UI shortcuts in the footer:\n%s", view)
@@ -102,5 +105,40 @@ func TestLiveUIRequestAutoFollowsInProgressTopLevelStep(t *testing.T) {
 	}
 	if got := m.selectedNode(); got != setup {
 		t.Fatalf("selected node = %v, want setup", got)
+	}
+}
+
+func TestLiveUIRequestKeepsStepNavigationKeysActive(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusInProgress}
+	pick := &StepNode{ID: "pick-scope", Type: NodeUI, Status: StatusInProgress, Parent: root}
+	build := &StepNode{ID: "build", Type: NodeShell, Status: StatusPending, Parent: root}
+	root.Children = []*StepNode{pick, build}
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.altScreen = true
+
+	reply := make(chan model.UIStepResult, 1)
+	updated, _ := m.Update(&liverun.UIRequestMsg{
+		Request: model.UIStepRequest{
+			StepID:  "pick-scope",
+			Title:   "Pick Scope",
+			Actions: []model.UIAction{{Label: "Continue", Outcome: "continue"}},
+		},
+		Reply: reply,
+	})
+	m = updated.(*Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(*Model)
+
+	if got := m.selectedNode(); got != build {
+		t.Fatalf("selected node = %v, want build", got)
+	}
+	if m.liveUI == nil {
+		t.Fatal("live UI should remain pending after step navigation")
+	}
+	select {
+	case got := <-reply:
+		t.Fatalf("UI step resolved unexpectedly: %+v", got)
+	default:
 	}
 }
