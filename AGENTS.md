@@ -33,6 +33,7 @@ This project is pre-release and under active development. Prefer clear, well-tes
 - Run targeted tests while iterating, then broader checks before finishing.
 - Format Go code with `goimports` through `make fmt`.
 - Use the Go version declared in `go.mod`.
+- When creating git worktrees for this repository, create them under `./worktrees`.
 
 ## Common Commands
 
