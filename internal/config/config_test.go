@@ -55,43 +55,31 @@ func TestLoad_MissingProjectFileDoesNotWriteDefaults(t *testing.T) {
 	if defaultSet == nil {
 		t.Fatal("expected 'default' profile set")
 	}
-	if len(defaultSet.Agents) != 5 {
-		t.Fatalf("expected 5 agents in default profile set, got %d", len(defaultSet.Agents))
+	if len(defaultSet.Agents) != 3 {
+		t.Fatalf("expected 3 agents in default profile set, got %d", len(defaultSet.Agents))
 	}
 
-	// Active agents should have 5 entries.
-	if len(cfg.ActiveAgents) != 5 {
-		t.Fatalf("expected 5 active agents, got %d", len(cfg.ActiveAgents))
+	// Active agents should have 3 entries.
+	if len(cfg.ActiveAgents) != 3 {
+		t.Fatalf("expected 3 active agents, got %d", len(cfg.ActiveAgents))
 	}
 
-	// Verify interactive_base.
-	ib := cfg.ActiveAgents["interactive_base"]
-	if ib == nil {
-		t.Fatal("expected interactive_base agent")
-	}
-	if ib.DefaultMode != "interactive" || ib.CLI != "claude" || ib.Model != "opus" || ib.Effort != "high" {
-		t.Fatalf("unexpected interactive_base: %+v", ib)
-	}
-
-	// Verify headless_base.
-	hb := cfg.ActiveAgents["headless_base"]
-	if hb == nil {
-		t.Fatal("expected headless_base agent")
-	}
-	if hb.DefaultMode != "headless" || hb.CLI != "claude" || hb.Model != "opus" || hb.Effort != "high" {
-		t.Fatalf("unexpected headless_base: %+v", hb)
-	}
-
-	// Verify planner extends interactive_base.
+	// Verify planner is a standalone interactive agent.
 	pl := cfg.ActiveAgents["planner"]
-	if pl == nil || pl.Extends != "interactive_base" {
-		t.Fatalf("expected planner to extend interactive_base, got %+v", pl)
+	if pl == nil {
+		t.Fatal("expected planner agent")
+	}
+	if pl.DefaultMode != "interactive" || pl.CLI != "claude" || pl.Model != "opus" || pl.Effort != "high" {
+		t.Fatalf("unexpected planner: %+v", pl)
 	}
 
-	// Verify implementor extends headless_base.
+	// Verify implementor is a standalone headless agent.
 	im := cfg.ActiveAgents["implementor"]
-	if im == nil || im.Extends != "headless_base" {
-		t.Fatalf("expected implementor to extend headless_base, got %+v", im)
+	if im == nil {
+		t.Fatal("expected implementor agent")
+	}
+	if im.DefaultMode != "headless" || im.CLI != "claude" || im.Model != "opus" || im.Effort != "high" {
+		t.Fatalf("unexpected implementor: %+v", im)
 	}
 
 	// Verify summarizer.
@@ -123,8 +111,8 @@ func TestLoad_SkipsGlobalConfigWhenHomeDirUnavailable(t *testing.T) {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("expected config file to NOT be created on disk")
 	}
-	if len(cfg.ActiveAgents) != 5 {
-		t.Fatalf("expected 5 default active agents, got %d", len(cfg.ActiveAgents))
+	if len(cfg.ActiveAgents) != 3 {
+		t.Fatalf("expected 3 default active agents, got %d", len(cfg.ActiveAgents))
 	}
 }
 
@@ -152,9 +140,9 @@ func TestLoad_LoadsExisting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Built-in defaults (5 agents) layer under the project's 1 custom agent.
-	if len(cfg.ActiveAgents) != 6 {
-		t.Fatalf("expected 6 active agents (5 defaults + 1 custom), got %d", len(cfg.ActiveAgents))
+	// Built-in defaults (3 agents) layer under the project's 1 custom agent.
+	if len(cfg.ActiveAgents) != 4 {
+		t.Fatalf("expected 4 active agents (3 defaults + 1 custom), got %d", len(cfg.ActiveAgents))
 	}
 	p := cfg.ActiveAgents["custom"]
 	if p == nil || p.DefaultMode != "headless" || p.CLI != "codex" || p.Model != "o3" {
@@ -417,7 +405,7 @@ func TestLoad_DoesNotCreateGlobalConfigWhenMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(cfg.ActiveAgents) != 5 {
+	if len(cfg.ActiveAgents) != 3 {
 		t.Fatalf("expected default project config, got %d active agents", len(cfg.ActiveAgents))
 	}
 
@@ -430,9 +418,8 @@ func TestLoad_DoesNotCreateGlobalConfigWhenMissing(t *testing.T) {
 func TestLoad_GlobalOverridesDefaultAgent(t *testing.T) {
 	// Regression: with no project config on disk, built-in defaults must not
 	// stomp a global agent that shares a name. Previously the default
-	// implementor (which only extends headless_base) replaced the global
-	// implementor, so users with a global `implementor: cli: copilot` still
-	// got claude/sonnet.
+	// implementor replaced the global implementor, so users with a global
+	// `implementor: cli: copilot` still got claude.
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	repo := filepath.Join(root, "repo")
@@ -445,7 +432,7 @@ func TestLoad_GlobalOverridesDefaultAgent(t *testing.T) {
   default:
     agents:
       implementor:
-        extends: headless_base
+        default_mode: headless
         cli: copilot
         model: gpt-5.4
 `)
@@ -465,10 +452,9 @@ func TestLoad_GlobalOverridesDefaultAgent(t *testing.T) {
 	if rp.Model != "gpt-5.4" {
 		t.Fatalf("expected global implementor.model=gpt-5.4 to override default, got %q", rp.Model)
 	}
-	// default_mode and effort are inherited from the default headless_base,
-	// proving defaults remain available as a fallback base layer.
+	// default_mode is set directly on the global implementor.
 	if rp.DefaultMode != "headless" {
-		t.Fatalf("expected default_mode headless from default headless_base, got %q", rp.DefaultMode)
+		t.Fatalf("expected default_mode headless from global implementor, got %q", rp.DefaultMode)
 	}
 }
 
@@ -503,7 +489,7 @@ func TestLoad_ProjectExistsStillIncludesDefaultAgents(t *testing.T) {
 	if defaultSet.Agents["custom"] == nil {
 		t.Fatal("expected project-defined custom agent to be present")
 	}
-	for _, name := range []string{"planner", "implementor", "headless_base", "interactive_base", "summarizer"} {
+	for _, name := range []string{"planner", "implementor", "summarizer"} {
 		if defaultSet.Agents[name] == nil {
 			t.Fatalf("expected default agent %q to remain available alongside project config", name)
 		}

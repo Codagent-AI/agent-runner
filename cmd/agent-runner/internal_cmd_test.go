@@ -78,24 +78,21 @@ other_top_level: true
 		t.Fatal("merge wrote unexpected summarizer agent")
 	}
 
-	interactive := defaultAgents["interactive_base"].(map[string]any)
-	if interactive["default_mode"] != "interactive" || interactive["cli"] != "claude" || interactive["model"] != "opus" {
-		t.Fatalf("interactive_base = %#v", interactive)
-	}
-	headless := defaultAgents["headless_base"].(map[string]any)
-	if headless["default_mode"] != "headless" || headless["cli"] != "codex" {
-		t.Fatalf("headless_base = %#v", headless)
-	}
-	if _, ok := headless["model"]; ok {
-		t.Fatalf("headless_base included empty model: %#v", headless)
-	}
 	planner := defaultAgents["planner"].(map[string]any)
-	if len(planner) != 1 || planner["extends"] != "interactive_base" {
+	if planner["default_mode"] != "interactive" || planner["cli"] != "claude" || planner["model"] != "opus" {
 		t.Fatalf("planner = %#v", planner)
 	}
 	implementor := defaultAgents["implementor"].(map[string]any)
-	if len(implementor) != 1 || implementor["extends"] != "headless_base" {
+	if implementor["default_mode"] != "headless" || implementor["cli"] != "codex" {
 		t.Fatalf("implementor = %#v", implementor)
+	}
+	if _, ok := implementor["model"]; ok {
+		t.Fatalf("implementor included empty model: %#v", implementor)
+	}
+	for _, absent := range []string{"interactive_base", "headless_base"} {
+		if _, ok := defaultAgents[absent]; ok {
+			t.Fatalf("merge should not write %q", absent)
+		}
 	}
 }
 
@@ -186,7 +183,7 @@ func TestWriteProfileCommandRoundTripCreates0600File(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read target: %v", err)
 	}
-	if !strings.Contains(string(body), "interactive_base:") || !strings.Contains(string(body), "implementor:") {
+	if !strings.Contains(string(body), "planner:") || !strings.Contains(string(body), "implementor:") {
 		t.Fatalf("written config missing expected agents:\n%s", body)
 	}
 }

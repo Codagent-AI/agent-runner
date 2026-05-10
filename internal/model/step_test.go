@@ -19,7 +19,7 @@ func TestStepSchema(t *testing.T) {
 	})
 
 	t.Run("accepts a valid agent step with prompt and agent", func(t *testing.T) {
-		s := Step{ID: "review", Agent: "interactive_base", Mode: ModeInteractive, Prompt: "Review code", Session: SessionNew}
+		s := Step{ID: "review", Agent: "planner", Mode: ModeInteractive, Prompt: "Review code", Session: SessionNew}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -37,7 +37,7 @@ func TestStepSchema(t *testing.T) {
 			Name: "test",
 			Steps: []Step{
 				{ID: "s1", Command: "echo hi"},
-				{ID: "s2", Agent: "headless_base", Prompt: "do it"},
+				{ID: "s2", Agent: "implementor", Prompt: "do it"},
 				{ID: "s3", Prompt: "continue"},
 			},
 		}
@@ -59,7 +59,7 @@ func TestStepSchema(t *testing.T) {
 	})
 
 	t.Run("rejects agent step without prompt", func(t *testing.T) {
-		s := Step{ID: "bad", Agent: "headless_base", Session: SessionNew}
+		s := Step{ID: "bad", Agent: "implementor", Session: SessionNew}
 		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
@@ -67,7 +67,7 @@ func TestStepSchema(t *testing.T) {
 	})
 
 	t.Run("rejects invalid mode", func(t *testing.T) {
-		s := Step{ID: "bad", Mode: "invalid", Prompt: "hi", Agent: "headless_base", Session: SessionNew}
+		s := Step{ID: "bad", Mode: "invalid", Prompt: "hi", Agent: "implementor", Session: SessionNew}
 		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
@@ -78,7 +78,7 @@ func TestStepSchema(t *testing.T) {
 	})
 
 	t.Run("rejects mode shell as invalid", func(t *testing.T) {
-		s := Step{ID: "bad", Mode: "shell", Prompt: "hi", Agent: "headless_base", Session: SessionNew}
+		s := Step{ID: "bad", Mode: "shell", Prompt: "hi", Agent: "implementor", Session: SessionNew}
 		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
@@ -114,7 +114,7 @@ func TestStepSchema(t *testing.T) {
 	})
 
 	t.Run("rejects workflow step with prompt", func(t *testing.T) {
-		s := Step{ID: "bad", Workflow: "child.yaml", Prompt: "hi", Agent: "headless_base", Session: SessionNew}
+		s := Step{ID: "bad", Workflow: "child.yaml", Prompt: "hi", Agent: "implementor", Session: SessionNew}
 		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
@@ -155,7 +155,7 @@ func TestStepSchemaExtensions(t *testing.T) {
 	})
 
 	t.Run("accepts capture on a headless step", func(t *testing.T) {
-		s := Step{ID: "s", Agent: "headless_base", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, Capture: "output"}
+		s := Step{ID: "s", Agent: "implementor", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, Capture: "output"}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -169,7 +169,7 @@ func TestStepSchemaExtensions(t *testing.T) {
 	})
 
 	t.Run("rejects capture on an interactive step", func(t *testing.T) {
-		s := Step{ID: "s", Agent: "interactive_base", Mode: ModeInteractive, Prompt: "p", Session: SessionNew, Capture: "output"}
+		s := Step{ID: "s", Agent: "planner", Mode: ModeInteractive, Prompt: "p", Session: SessionNew, Capture: "output"}
 		err := s.Validate(nil)
 		if err == nil {
 			t.Fatal("expected error")
@@ -256,7 +256,7 @@ func TestStepSchemaExtensions(t *testing.T) {
 	})
 
 	t.Run("accepts model on an agent step", func(t *testing.T) {
-		s := Step{ID: "s", Agent: "headless_base", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, Model: "opus"}
+		s := Step{ID: "s", Agent: "implementor", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, Model: "opus"}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -716,14 +716,14 @@ func TestCLIValidation(t *testing.T) {
 	knownCLIs := []string{"claude", "codex"}
 
 	t.Run("accepts cli on an agent step", func(t *testing.T) {
-		s := Step{ID: "s", Agent: "headless_base", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, CLI: "codex"}
+		s := Step{ID: "s", Agent: "implementor", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, CLI: "codex"}
 		if err := s.Validate(knownCLIs); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("accepts cli on an interactive step", func(t *testing.T) {
-		s := Step{ID: "s", Agent: "interactive_base", Mode: ModeInteractive, Prompt: "p", Session: SessionNew, CLI: "claude"}
+		s := Step{ID: "s", Agent: "planner", Mode: ModeInteractive, Prompt: "p", Session: SessionNew, CLI: "claude"}
 		if err := s.Validate(knownCLIs); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -741,7 +741,7 @@ func TestCLIValidation(t *testing.T) {
 	})
 
 	t.Run("rejects unknown cli value", func(t *testing.T) {
-		s := Step{ID: "s", Agent: "headless_base", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, CLI: "unknown-cli"}
+		s := Step{ID: "s", Agent: "implementor", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, CLI: "unknown-cli"}
 		err := s.Validate(knownCLIs)
 		if err == nil {
 			t.Fatal("expected error")
@@ -752,14 +752,14 @@ func TestCLIValidation(t *testing.T) {
 	})
 
 	t.Run("skips cli name validation when knownCLIs is nil", func(t *testing.T) {
-		s := Step{ID: "s", Agent: "headless_base", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, CLI: "anything"}
+		s := Step{ID: "s", Agent: "implementor", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, CLI: "anything"}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("accepts step with no cli field", func(t *testing.T) {
-		s := Step{ID: "s", Agent: "headless_base", Mode: ModeHeadless, Prompt: "p", Session: SessionNew}
+		s := Step{ID: "s", Agent: "implementor", Mode: ModeHeadless, Prompt: "p", Session: SessionNew}
 		if err := s.Validate(knownCLIs); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

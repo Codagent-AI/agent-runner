@@ -1,6 +1,7 @@
 package listview
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -339,6 +340,21 @@ func TestNewTab_HelpBar_ShowsNewTabBindings(t *testing.T) {
 	}
 	if !strings.Contains(help, "start run") {
 		t.Errorf("help bar should contain 'start run', got: %q", help)
+	}
+}
+
+func TestNewTab_ViewFitsTerminalHeight(t *testing.T) {
+	entries := make([]discovery.WorkflowEntry, 40)
+	for i := range entries {
+		entries[i] = validEntry("core:workflow-" + strconv.Itoa(i))
+	}
+	m := newTabModel(entries)
+	m.termWidth = 120
+	m.termHeight = 24
+
+	view := m.View()
+	if got := countLines(view); got > m.termHeight {
+		t.Fatalf("new tab view rendered %d rows, want at most %d", got, m.termHeight)
 	}
 }
 

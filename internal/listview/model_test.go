@@ -260,3 +260,101 @@ func TestListView_UsesSingleScreenMargin(t *testing.T) {
 		t.Fatalf("help bar should use a single leading margin, got %q", help)
 	}
 }
+
+func TestListView_RenderSubheaderExplainsTopLevelTabs(t *testing.T) {
+	tests := []struct {
+		name string
+		m    *Model
+		want string
+	}{
+		{
+			name: "new",
+			m: &Model{
+				activeTab: tabNew,
+			},
+			want: "Browse and search workflow definitions. Press r to start a new run.",
+		},
+		{
+			name: "current dir",
+			m: &Model{
+				activeTab: tabCurrentDir,
+				cwd:       "/repo/project",
+			},
+			want: "All runs for /repo/project. Press enter to view a run.",
+		},
+		{
+			name: "worktrees",
+			m: &Model{
+				activeTab: tabWorktrees,
+				cwd:       "/repo/project",
+				worktreeTab: worktreeTabState{
+					repoName: "agent-runner",
+				},
+			},
+			want: "All worktrees for agent-runner. Press enter to view runs.",
+		},
+		{
+			name: "all",
+			m: &Model{
+				activeTab: tabAll,
+			},
+			want: "All directories with runs. Press enter to view runs.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitize(tt.m.renderSubheader())
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("subheader = %q, want to contain %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestListView_RenderSubheaderExplainsRunListDrilldowns(t *testing.T) {
+	tests := []struct {
+		name string
+		m    *Model
+		want string
+	}{
+		{
+			name: "worktree runs",
+			m: &Model{
+				activeTab: tabWorktrees,
+				worktreeTab: worktreeTabState{
+					subView:     subViewRunList,
+					repoName:    "agent-runner",
+					selectedDir: "/repo/wt",
+					worktrees: []WorktreeEntry{
+						{Name: "feature", Path: "/repo/wt"},
+					},
+				},
+			},
+			want: "All runs for agent-runner › feature. Press enter to view a run.",
+		},
+		{
+			name: "all directory runs",
+			m: &Model{
+				activeTab: tabAll,
+				allTab: allTabState{
+					subView:     subViewRunList,
+					selectedDir: "encoded",
+					dirs: []DirEntry{
+						{Path: "/repo/project", Encoded: "encoded"},
+					},
+				},
+			},
+			want: "All runs for /repo/project. Press enter to view a run.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitize(tt.m.renderSubheader())
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("subheader = %q, want to contain %q", got, tt.want)
+			}
+		})
+	}
+}

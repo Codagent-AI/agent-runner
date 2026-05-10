@@ -3,7 +3,7 @@ description: "Manual smoke test for interactive agent adapters"
 
 steps:
   - id: claude-interactive
-    agent: interactive_base
+    agent: planner
     session: new
     mode: interactive
     cli: claude
@@ -18,7 +18,7 @@ steps:
     prompt: "Confirm you remember saying claude interactive smoke ready, then reply with exactly this short sentence: claude interactive resume ready. Then wait for me to continue."
 
   - id: codex-interactive
-    agent: interactive_base
+    agent: planner
     session: new
     mode: interactive
     cli: codex
@@ -33,7 +33,7 @@ steps:
     prompt: "Confirm you remember saying codex interactive smoke ready, then reply with exactly this short sentence: codex interactive resume ready. Then wait for me to continue."
 
   - id: copilot-interactive
-    agent: interactive_base
+    agent: planner
     session: new
     mode: interactive
     cli: copilot
@@ -48,7 +48,7 @@ steps:
     prompt: "Confirm you remember saying copilot interactive smoke ready, then reply with exactly this short sentence: copilot interactive resume ready. Then wait for me to continue."
 
   - id: cursor-interactive
-    agent: interactive_base
+    agent: planner
     session: new
     mode: interactive
     cli: cursor
@@ -63,7 +63,7 @@ steps:
     prompt: "Confirm you remember saying cursor interactive smoke ready, then reply with exactly this short sentence: cursor interactive resume ready. Then wait for me to continue."
 
   - id: opencode-interactive
-    agent: interactive_base
+    agent: planner
     session: new
     mode: interactive
     cli: opencode

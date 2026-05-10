@@ -10,7 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestWriteMergesFourAgentShapeAndPreservesExistingConfig(t *testing.T) {
+func TestWriteMergesTwoAgentShapeAndPreservesExistingConfig(t *testing.T) {
 	target := filepath.Join(t.TempDir(), ".agent-runner", "config.yaml")
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		t.Fatalf("mkdir target dir: %v", err)
@@ -59,18 +59,23 @@ other_top_level: true
 		t.Fatalf("unmarshal target: %v", err)
 	}
 	defaultAgents := got.Profiles["default"].Agents
-	for _, want := range []string{"interactive_base", "headless_base", "planner", "implementor", "team_implementor", "summarizer"} {
+	for _, want := range []string{"planner", "implementor", "team_implementor", "summarizer"} {
 		if _, ok := defaultAgents[want]; !ok {
 			t.Fatalf("default agents missing %q in %#v", want, defaultAgents)
+		}
+	}
+	for _, absent := range []string{"interactive_base", "headless_base"} {
+		if _, ok := defaultAgents[absent]; ok {
+			t.Fatalf("default agents should not contain %q", absent)
 		}
 	}
 	if _, ok := got.Profiles["team"]; !ok || !got.OtherTopLevel {
 		t.Fatalf("existing config was not preserved: %#v", got)
 	}
-	if diff := cmp.Diff(map[string]any{"extends": "interactive_base"}, defaultAgents["planner"]); diff != "" {
+	if diff := cmp.Diff(map[string]any{"default_mode": "interactive", "cli": "claude", "model": "opus"}, defaultAgents["planner"]); diff != "" {
 		t.Fatalf("planner mismatch (-want +got):\n%s", diff)
 	}
-	if diff := cmp.Diff(map[string]any{"extends": "headless_base"}, defaultAgents["implementor"]); diff != "" {
+	if diff := cmp.Diff(map[string]any{"default_mode": "headless", "cli": "codex", "model": "gpt-5"}, defaultAgents["implementor"]); diff != "" {
 		t.Fatalf("implementor mismatch (-want +got):\n%s", diff)
 	}
 }

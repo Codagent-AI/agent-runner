@@ -473,11 +473,9 @@ func detectAgentCycle(agents map[string]*Agent, name string) error {
 
 func defaultParsedFile() *parsedFile {
 	agents := map[string]*Agent{
-		"interactive_base": {DefaultMode: "interactive", CLI: "claude", Model: "opus", Effort: "high"},
-		"headless_base":    {DefaultMode: "headless", CLI: "claude", Model: "opus", Effort: "high"},
-		"planner":          {Extends: "interactive_base"},
-		"implementor":      {Extends: "headless_base"},
-		"summarizer":       {DefaultMode: "headless", CLI: "claude", Model: "haiku", Effort: "low"},
+		"planner":     {DefaultMode: "interactive", CLI: "claude", Model: "opus", Effort: "high"},
+		"implementor": {DefaultMode: "headless", CLI: "claude", Model: "opus", Effort: "high"},
+		"summarizer":  {DefaultMode: "headless", CLI: "claude", Model: "haiku", Effort: "low"},
 	}
 	return &parsedFile{
 		Profiles: map[string]*ProfileSet{

@@ -48,6 +48,26 @@ func TestRenderRule_UsesSingleScreenMargin(t *testing.T) {
 	}
 }
 
+func TestRenderButtonRow_DistributesButtonsWithinWidth(t *testing.T) {
+	got := Sanitize(RenderButtonRow([]string{"Continue", "Not now", "Dismiss"}, 0, 70))
+	if !strings.Contains(got, "[ Continue ]") || !strings.Contains(got, "[ Not now ]") || !strings.Contains(got, "[ Dismiss ]") {
+		t.Fatalf("button row missing labels: %q", got)
+	}
+	if lipgloss.Width(got) >= 70 {
+		t.Fatalf("button row width = %d, want spare room under width 70: %q", lipgloss.Width(got), got)
+	}
+}
+
+func TestRenderStepIndicator(t *testing.T) {
+	got := Sanitize(RenderStepIndicator(2, 6, 70))
+	if !strings.Contains(got, "Step 2 of 6") {
+		t.Fatalf("step indicator missing label: %q", got)
+	}
+	if lipgloss.Width(got) > 70 {
+		t.Fatalf("step indicator width = %d, want <= 70: %q", lipgloss.Width(got), got)
+	}
+}
+
 func TestSecondaryTextColorsHaveReadableContrast(t *testing.T) {
 	const (
 		darkTerminalBackground  = "#111827"

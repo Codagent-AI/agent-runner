@@ -6,15 +6,13 @@ func failureReason(root *StepNode) string {
 	if root == nil {
 		return ""
 	}
-	exhausted := findExhaustedLoop(root)
-	failed := findFailedCause(root)
-	if failed != nil && failed != root && failed != exhausted {
+	if failed := findConcreteFailedCause(root); failed != nil {
 		return failedReason(failed)
 	}
-	if exhausted != nil {
+	if exhausted := findExhaustedLoop(root); exhausted != nil {
 		return exhaustedLoopReason(exhausted)
 	}
-	if failed != nil {
+	if failed := findFailedCause(root); failed != nil {
 		return failedReason(failed)
 	}
 	return ""
@@ -62,6 +60,24 @@ func findFailedCause(root *StepNode) *StepNode {
 		}
 	}
 	if root.Status == StatusFailed {
+		return root
+	}
+	return nil
+}
+
+func findConcreteFailedCause(root *StepNode) *StepNode {
+	if root == nil {
+		return nil
+	}
+	for i := len(root.Children) - 1; i >= 0; i-- {
+		if found := findConcreteFailedCause(root.Children[i]); found != nil {
+			return found
+		}
+	}
+	if root.Status != StatusFailed {
+		return nil
+	}
+	if root.ErrorMessage != "" || root.ExitCode != nil || len(root.Children) == 0 {
 		return root
 	}
 	return nil

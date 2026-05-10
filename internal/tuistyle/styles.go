@@ -48,11 +48,19 @@ var (
 	SectionStyle      = lipgloss.NewStyle().Foreground(SuccessGreen).Bold(true)
 	ColumnHeader      = lipgloss.NewStyle().Foreground(AccentCyan).Underline(true)
 	AccentStyle       = lipgloss.NewStyle().Foreground(AccentCyan)
+	ButtonStyle       = lipgloss.NewStyle().Foreground(BodyText)
+	FocusedButton     = lipgloss.NewStyle().Foreground(SelectedText).Background(AccentCyan)
+	FocusedOption     = lipgloss.NewStyle().Foreground(AccentCyan).Bold(true)
 	DividerStyle      = lipgloss.NewStyle().Foreground(DimText)
 	DetailHeaderStyle = lipgloss.NewStyle().Foreground(AccentCyan).Bold(true).Underline(true)
 	InsetBarStyle     = lipgloss.NewStyle().Foreground(SuccessGreen)
 	HelpStyle         = lipgloss.NewStyle().Foreground(DimText)
 	PathStyle         = lipgloss.NewStyle().Foreground(DimText)
+)
+
+const (
+	FocusedSelectorPrefix  = "▶"
+	SelectedSelectorPrefix = "•"
 )
 
 // GroupColors cycles through the three primary TUI colors for visual grouping.

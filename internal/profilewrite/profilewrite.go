@@ -1,4 +1,4 @@
-// Package profilewrite owns the shared four-agent profile writer used by
+// Package profilewrite owns the shared two-agent profile writer used by
 // native setup and the internal write-profile command.
 package profilewrite
 
@@ -19,7 +19,7 @@ type Request struct {
 	TargetPath       string
 }
 
-var managedAgents = []string{"headless_base", "implementor", "interactive_base", "planner"}
+var managedAgents = []string{"implementor", "planner"}
 
 func Write(req *Request) error {
 	if err := validate(req); err != nil {
@@ -101,18 +101,16 @@ func Merge(doc *yaml.Node, req *Request) error {
 		return err
 	}
 
-	setMapping(agents, "interactive_base", map[string]string{
+	setMapping(agents, "planner", map[string]string{
 		"default_mode": "interactive",
 		"cli":          req.InteractiveCLI,
 		"model":        req.InteractiveModel,
 	})
-	setMapping(agents, "headless_base", map[string]string{
+	setMapping(agents, "implementor", map[string]string{
 		"default_mode": "headless",
 		"cli":          req.HeadlessCLI,
 		"model":        req.HeadlessModel,
 	})
-	setMapping(agents, "planner", map[string]string{"extends": "interactive_base"})
-	setMapping(agents, "implementor", map[string]string{"extends": "headless_base"})
 	return nil
 }
 
