@@ -20,7 +20,6 @@ The native setup feature shipped with several UX issues (no explanatory copy, ug
 ### Modified Capabilities
 - `native-setup`: Remove welcome and confirm screens, integrate demo prompt, add re-show trigger, fix persistence bug
 - `agent-profile-editor`: Remove _base agents, write planner/implementor directly, fix codex model discovery
-- `onboarding-workflow`: Remove intro and set-dismissed steps from workflow; demo prompt ownership moves to native setup
 
 ### New Capabilities
 - `native-setup-ux`: Centered layout with animation, explanatory copy on each screen
@@ -43,10 +42,9 @@ The native setup feature shipped with several UX issues (no explanatory copy, ug
 - `internal/usersettings/` — investigate/fix persistence bug
 - `cmd/agent-runner/main.go` — add demo-prompt re-show trigger in `ensureFirstRunForTUI`
 - `cmd/agent-runner/internal_cmd_test.go` — update profile shape assertions
-- `workflows/onboarding/onboarding.yaml` — remove intro and set-dismissed steps
+- `workflows/onboarding/onboarding.yaml` — config-only adjustment to align with native demo prompt ownership
 - `openspec/specs/native-setup/spec.md` — update requirements
 - `openspec/specs/agent-profile-editor/spec.md` — update four-agent → two-agent
-- `openspec/specs/onboarding-workflow/spec.md` — remove intro ownership
 - `openspec/specs/agent-profiles/spec.md` — update _base references
 - `openspec/specs/config-profiles/spec.md` — update _base scenario names
 - `testdata/valid-workflow.yaml` — update agent reference

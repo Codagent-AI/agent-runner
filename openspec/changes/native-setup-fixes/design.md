@@ -177,28 +177,15 @@ Use `lipgloss.Place()` for the centering — it handles both axes.
 
 Native setup renders compact wizard progress (`Step N of X` plus a short bar) centered above the title. Planner model loading and default fallback share the same step number, as do implementor model loading and fallback. The overwrite confirmation increases the total only when it appears. Demo-prompt-only re-show mode does not render setup progress.
 
-### Onboarding workflow simplification
+### Onboarding workflow boundary
 
-`workflows/onboarding/onboarding.yaml` becomes:
-
-```yaml
-name: onboarding-onboarding
-description: Optional Agent Runner workflow demo.
-steps:
-  - id: step-types-demo
-    workflow: step-types-demo.yaml
-
-  - id: set-completed
-    command: agent-runner internal write-setting onboarding.completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-```
-
-No intro step, no `set-dismissed` step, no `demo_action` capture, no `skip_if` conditionals.
+Native setup owns the first-run demo prompt and the decision to launch or skip the demo. The onboarding workflow remains normal workflow configuration, so this change does not define its internal step sequence in OpenSpec artifacts.
 
 ## Decisions
 
 1. **Two agents, not four.** The `extends` indirection added complexity without value for the default setup. Users who want inheritance can still use `extends` manually. Built-in defaults and the editor both write `planner`/`implementor` directly.
 
-2. **Demo prompt in native setup, not in the workflow.** The workflow engine doesn't have access to the settings store to handle dismiss/not-now semantics correctly. The native Go TUI does. The workflow becomes a thin demo runner.
+2. **Demo prompt in native setup, not in the workflow spec.** The workflow engine doesn't have access to the settings store to handle dismiss/not-now semantics correctly. The native Go TUI does. The workflow YAML can evolve as normal built-in workflow configuration.
 
 3. **Tick-driven animation over spring physics.** Bubble Tea ticks keep the transition deterministic and easy to reason about: each frame scrolls both panels upward by a terminal-row increment.
 
