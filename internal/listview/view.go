@@ -128,31 +128,33 @@ func (m *Model) renderTabs() string {
 func (m *Model) renderSubheader() string {
 	switch m.activeTab {
 	case tabNew:
-		return tuistyle.ScreenMargin + pathStyle.Render("Browse and search workflow definitions")
+		return tuistyle.ScreenMargin + pathStyle.Render("Browse and search workflow definitions. Press r to start a new run.")
 	case tabCurrentDir:
-		return tuistyle.ScreenMargin + pathStyle.Render(sanitize(shortenPath(m.cwd)))
+		return tuistyle.ScreenMargin + pathStyle.Render("All runs for "+sanitize(shortenPath(m.cwd))+". Press enter to view a run.")
 	case tabWorktrees:
 		if m.worktreeTab.subView == subViewRunList {
 			wt := m.selectedWorktree()
 			if wt != nil {
-				sep := tuistyle.AccentStyle.Render(tuistyle.BreadcrumbSeparator)
-				crumb := tuistyle.ScreenMargin + labelStyle.Render("← ")
+				target := sanitize(wt.Name)
 				if m.worktreeTab.repoName != "" {
-					crumb += labelStyle.Render(sanitize(m.worktreeTab.repoName)) + sep
+					target = sanitize(m.worktreeTab.repoName) + tuistyle.BreadcrumbSeparator + target
 				}
-				crumb += labelStyle.Render("Worktrees") + sep + labelStyle.Render(sanitize(wt.Name))
-				return crumb
+				return tuistyle.ScreenMargin + labelStyle.Render("All runs for "+target+". Press enter to view a run.")
 			}
 		}
-		return tuistyle.ScreenMargin + pathStyle.Render(sanitize(shortenPath(m.cwd))+"  (git repo)")
+		target := sanitize(shortenPath(m.cwd))
+		if m.worktreeTab.repoName != "" {
+			target = sanitize(m.worktreeTab.repoName)
+		}
+		return tuistyle.ScreenMargin + pathStyle.Render("All worktrees for "+target+". Press enter to view runs.")
 	case tabAll:
 		if m.allTab.subView == subViewRunList {
 			d := m.selectedAllDir()
 			if d != nil {
-				return tuistyle.ScreenMargin + labelStyle.Render("← All") + tuistyle.AccentStyle.Render(tuistyle.BreadcrumbSeparator) + labelStyle.Render(sanitize(shortenPath(d.Path)))
+				return tuistyle.ScreenMargin + labelStyle.Render("All runs for "+sanitize(shortenPath(d.Path))+". Press enter to view a run.")
 			}
 		}
-		return tuistyle.ScreenMargin + pathStyle.Render("All project directories")
+		return tuistyle.ScreenMargin + pathStyle.Render("All directories with runs. Press enter to view runs.")
 	}
 	return ""
 }

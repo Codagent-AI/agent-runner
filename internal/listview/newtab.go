@@ -211,7 +211,9 @@ func (m *Model) renderNewTab() string {
 
 	groupIndices := computeGroupIndices(filtered)
 
-	maxRows := m.listMaxRows(false)
+	// The new tab body includes the search row and a blank separator before the
+	// workflow rows, so leave those rows out of the scrollable list budget.
+	maxRows := max(1, m.listMaxRows(false)-2)
 	// Adjust offset so cursor stays in view.
 	m.newTab.offset = adjustOffset(m.newTab.cursor, m.newTab.offset, maxRows, len(filtered))
 	end := min(m.newTab.offset+maxRows, len(filtered))
