@@ -185,6 +185,9 @@ func TestGuidedWorkflowShape(t *testing.T) {
 	if !strings.Contains(stepByID(t, &wf, "plan").Prompt, "First, ask the user what the change is about. DO NOT attempt to guess.") {
 		t.Fatalf("plan prompt missing explicit first-question instruction:\n%s", stepByID(t, &wf, "plan").Prompt)
 	}
+	if !strings.Contains(stepByID(t, &wf, "plan").Prompt, "Do not refuse larger tasks solely because they are larger") {
+		t.Fatalf("plan prompt should suggest small tasks without enforcing scope:\n%s", stepByID(t, &wf, "plan").Prompt)
+	}
 	locate := stepByID(t, &wf, "locate-task")
 	assertNamedAgentStep(t, locate, "planning-session", model.ModeHeadless)
 	if locate.Capture != "task_file" {

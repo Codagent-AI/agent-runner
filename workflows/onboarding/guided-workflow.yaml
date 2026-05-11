@@ -81,11 +81,12 @@ steps:
     session: planning-session
     mode: interactive
     prompt: |
-      Help the user plan a small real task for this project.
+      Help the user plan a real task for this project.
 
       First, ask the user what the change is about. DO NOT attempt to guess.
       Suggest small examples if helpful: fix a typo, add a log line, rename a
-      variable, or make another tightly scoped change.
+      variable, or make another tightly scoped change. These examples are
+      suggestions only. Do not refuse larger tasks solely because they are larger.
 
       You MUST use the codagent:simple-plan skill. Write all generated planning
       artifacts under {{plan_dir}} instead of the project directory. Once the
