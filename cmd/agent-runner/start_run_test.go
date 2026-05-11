@@ -13,6 +13,7 @@ import (
 	"github.com/codagent/agent-runner/internal/model"
 	nativesetup "github.com/codagent/agent-runner/internal/onboarding/native"
 	"github.com/codagent/agent-runner/internal/paramform"
+	"github.com/codagent/agent-runner/internal/runview"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
 
@@ -194,6 +195,36 @@ func TestOnboardingDemoPromptFlowWindowSizeDoesNotCompletePrompt(t *testing.T) {
 	}
 	if m.termWidth != 100 || m.termHeight != 40 {
 		t.Fatalf("stored size = %dx%d, want 100x40", m.termWidth, m.termHeight)
+	}
+}
+
+func TestOnboardingDemoPromptFlowConfirmedLiveRunQuitExitsApp(t *testing.T) {
+	sessionDir := writeRunState(t, t.TempDir(), "onboarding-run", "builtin:onboarding/onboarding.yaml", false)
+	rv, err := runview.New(sessionDir, "", runview.FromLiveRun)
+	if err != nil {
+		t.Fatalf("new runview: %v", err)
+	}
+	m := &onboardingDemoPromptFlow{
+		run:  rv,
+		mode: onboardingDemoRunMode,
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	m = updated.(*onboardingDemoPromptFlow)
+	if cmd != nil {
+		t.Fatalf("q should only open quit confirmation, got cmd %T", cmd())
+	}
+
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	m = updated.(*onboardingDemoPromptFlow)
+	if cmd == nil {
+		t.Fatal("confirming quit should produce a quit cmd")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("expected tea.QuitMsg, got %T", cmd())
+	}
+	if !m.exitRequested {
+		t.Fatal("confirmed live-run quit should mark the wrapper as exit-requested")
 	}
 }
 
