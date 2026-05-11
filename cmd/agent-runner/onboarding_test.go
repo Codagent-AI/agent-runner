@@ -8,28 +8,29 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-func TestEnsureFirstRunForTUIRunsNativeSetupBeforeOnboardingDemo(t *testing.T) {
+func TestEnsureFirstRunForTUIRunsNativeSetupThenDemo(t *testing.T) {
 	var setupRuns int
 	var launched []string
-	code := ensureFirstRunForTUI(firstRunDeps{
+	result := ensureFirstRunForTUI(firstRunDeps{
 		load: func() (usersettings.Settings, error) {
 			return usersettings.Settings{}, nil
 		},
 		isStdinTTY:  func() bool { return true },
 		isStdoutTTY: func() bool { return true },
-		runNativeSetup: func() (nativeSetupResult, error) {
+		runNativeSetup: func(onboardingCompleted bool) (nativeSetupResult, error) {
 			setupRuns++
-			return nativeSetupCompleted, nil
+			if onboardingCompleted {
+				t.Fatal("onboardingCompleted should be false for fresh setup")
+			}
+			return nativeSetupDemo, nil
 		},
-		runWorkflow: func(ref string) int {
+		runWorkflow: func(ref string) firstRunWorkflowResult {
 			launched = append(launched, ref)
-			return 7
+			return firstRunWorkflowResult{exitCode: 7}
 		},
 	})
 
-	if code != 7 {
-		t.Fatalf("ensureOnboardingForTUI() = %d, want workflow exit code 7", code)
-	}
+	requireFirstRunExit(t, result, 7)
 	if setupRuns != 1 {
 		t.Fatalf("setupRuns = %d, want 1", setupRuns)
 	}
@@ -38,30 +39,49 @@ func TestEnsureFirstRunForTUIRunsNativeSetupBeforeOnboardingDemo(t *testing.T) {
 	}
 }
 
-func TestEnsureFirstRunForTUIStartsDemoWhenSetupAlreadyCompleted(t *testing.T) {
+func TestEnsureFirstRunForTUIShowsDemoPromptWhenSetupAlreadyCompleted(t *testing.T) {
 	var launched []string
-	code := ensureFirstRunForTUI(firstRunDeps{
+	result := ensureFirstRunForTUI(firstRunDeps{
 		load: func() (usersettings.Settings, error) {
 			return usersettings.Settings{Setup: usersettings.SetupSettings{CompletedAt: "2026-05-04T00:00:00Z"}}, nil
 		},
 		isStdinTTY:  func() bool { return true },
 		isStdoutTTY: func() bool { return true },
-		runNativeSetup: func() (nativeSetupResult, error) {
-			t.Fatal("runNativeSetup should not be called")
+		runNativeSetup: func(bool) (nativeSetupResult, error) {
+			t.Fatal("runNativeSetup should not be called when setup is complete")
 			return nativeSetupCancelled, nil
 		},
-		runWorkflow: func(ref string) int {
+		runDemoPrompt: func() (nativeSetupResult, error) {
+			return nativeSetupDemo, nil
+		},
+		runWorkflow: func(ref string) firstRunWorkflowResult {
 			launched = append(launched, ref)
-			return 9
+			return firstRunWorkflowResult{exitCode: 9}
 		},
 	})
 
-	if code != 9 {
-		t.Fatalf("ensureFirstRunForTUI() = %d, want workflow exit code 9", code)
-	}
+	requireFirstRunExit(t, result, 9)
 	if diff := cmp.Diff([]string{"builtin:onboarding/onboarding.yaml"}, launched); diff != "" {
 		t.Fatalf("launched mismatch (-want +got):\n%s", diff)
 	}
+}
+
+func TestEnsureFirstRunForTUIQuitDuringDemoExitsApp(t *testing.T) {
+	result := ensureFirstRunForTUI(firstRunDeps{
+		load: func() (usersettings.Settings, error) {
+			return usersettings.Settings{Setup: usersettings.SetupSettings{CompletedAt: "2026-05-04T00:00:00Z"}}, nil
+		},
+		isStdinTTY:  func() bool { return true },
+		isStdoutTTY: func() bool { return true },
+		runDemoPrompt: func() (nativeSetupResult, error) {
+			return nativeSetupDemo, nil
+		},
+		runWorkflow: func(string) firstRunWorkflowResult {
+			return firstRunWorkflowResult{exitRequested: true}
+		},
+	})
+
+	requireFirstRunExit(t, result, 0)
 }
 
 func TestEnsureFirstRunForTUISkipsWhenCompletedDismissedOrNonTTY(t *testing.T) {
@@ -81,22 +101,24 @@ func TestEnsureFirstRunForTUISkipsWhenCompletedDismissedOrNonTTY(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			launched := false
 			setupRan := false
-			code := ensureFirstRunForTUI(firstRunDeps{
+			result := ensureFirstRunForTUI(firstRunDeps{
 				load:        func() (usersettings.Settings, error) { return tt.settings, nil },
 				isStdinTTY:  func() bool { return tt.stdinTTY },
 				isStdoutTTY: func() bool { return tt.stdoutTTY },
-				runNativeSetup: func() (nativeSetupResult, error) {
+				runNativeSetup: func(bool) (nativeSetupResult, error) {
 					setupRan = true
 					return nativeSetupCompleted, nil
 				},
-				runWorkflow: func(string) int {
+				runDemoPrompt: func() (nativeSetupResult, error) {
 					launched = true
-					return 0
+					return nativeSetupCompleted, nil
+				},
+				runWorkflow: func(string) firstRunWorkflowResult {
+					launched = true
+					return firstRunWorkflowResult{}
 				},
 			})
-			if code != 0 {
-				t.Fatalf("ensureFirstRunForTUI() = %d, want 0", code)
-			}
+			requireFirstRunContinue(t, result)
 			if launched != tt.wantLaunch {
 				t.Fatalf("launched = %v, want %v", launched, tt.wantLaunch)
 			}
@@ -109,61 +131,55 @@ func TestEnsureFirstRunForTUISkipsWhenCompletedDismissedOrNonTTY(t *testing.T) {
 
 func TestEnsureFirstRunForTUICancelledSetupDoesNotStartDemo(t *testing.T) {
 	var launched bool
-	code := ensureFirstRunForTUI(firstRunDeps{
+	result := ensureFirstRunForTUI(firstRunDeps{
 		load:        func() (usersettings.Settings, error) { return usersettings.Settings{}, nil },
 		isStdinTTY:  func() bool { return true },
 		isStdoutTTY: func() bool { return true },
-		runNativeSetup: func() (nativeSetupResult, error) {
+		runNativeSetup: func(bool) (nativeSetupResult, error) {
 			return nativeSetupCancelled, nil
 		},
-		runWorkflow: func(string) int {
+		runWorkflow: func(string) firstRunWorkflowResult {
 			launched = true
-			return 0
+			return firstRunWorkflowResult{}
 		},
 	})
-	if code != 0 {
-		t.Fatalf("ensureFirstRunForTUI() = %d, want 0", code)
-	}
+	requireFirstRunContinue(t, result)
 	if launched {
 		t.Fatal("onboarding demo launched after cancelled setup")
 	}
 }
 
 func TestEnsureFirstRunForTUISetupErrorGoesHome(t *testing.T) {
-	code := ensureFirstRunForTUI(firstRunDeps{
+	result := ensureFirstRunForTUI(firstRunDeps{
 		load:        func() (usersettings.Settings, error) { return usersettings.Settings{}, nil },
 		isStdinTTY:  func() bool { return true },
 		isStdoutTTY: func() bool { return true },
-		runNativeSetup: func() (nativeSetupResult, error) {
+		runNativeSetup: func(bool) (nativeSetupResult, error) {
 			return nativeSetupFailed, errors.New("write failed")
 		},
 		continueAfterNativeSetupError: true,
-		runWorkflow: func(string) int {
+		runWorkflow: func(string) firstRunWorkflowResult {
 			t.Fatal("runWorkflow should not be called")
-			return 0
+			return firstRunWorkflowResult{}
 		},
 	})
-	if code != 0 {
-		t.Fatalf("ensureFirstRunForTUI() = %d, want 0 so list TUI can start", code)
-	}
+	requireFirstRunContinue(t, result)
 }
 
 func TestEnsureFirstRunForTUISetupErrorFailsWhenNonFatalModeDisabled(t *testing.T) {
-	code := ensureFirstRunForTUI(firstRunDeps{
+	result := ensureFirstRunForTUI(firstRunDeps{
 		load:        func() (usersettings.Settings, error) { return usersettings.Settings{}, nil },
 		isStdinTTY:  func() bool { return true },
 		isStdoutTTY: func() bool { return true },
-		runNativeSetup: func() (nativeSetupResult, error) {
+		runNativeSetup: func(bool) (nativeSetupResult, error) {
 			return nativeSetupFailed, errors.New("write failed")
 		},
-		runWorkflow: func(string) int {
+		runWorkflow: func(string) firstRunWorkflowResult {
 			t.Fatal("runWorkflow should not be called")
-			return 0
+			return firstRunWorkflowResult{}
 		},
 	})
-	if code == 0 {
-		t.Fatal("ensureFirstRunForTUI() = 0, want non-zero")
-	}
+	requireFirstRunExit(t, result, 1)
 }
 
 func TestDefaultFirstRunDepsReportsNativeSetupErrors(t *testing.T) {
@@ -173,16 +189,53 @@ func TestDefaultFirstRunDepsReportsNativeSetupErrors(t *testing.T) {
 }
 
 func TestEnsureFirstRunForTUILoadErrorFails(t *testing.T) {
-	code := ensureFirstRunForTUI(firstRunDeps{
+	result := ensureFirstRunForTUI(firstRunDeps{
 		load:        func() (usersettings.Settings, error) { return usersettings.Settings{}, errors.New("boom") },
 		isStdinTTY:  func() bool { return true },
 		isStdoutTTY: func() bool { return true },
-		runWorkflow: func(string) int {
+		runWorkflow: func(string) firstRunWorkflowResult {
 			t.Fatal("runWorkflow should not be called")
-			return 0
+			return firstRunWorkflowResult{}
 		},
 	})
-	if code == 0 {
-		t.Fatal("ensureFirstRunForTUI() = 0, want non-zero")
+	requireFirstRunExit(t, result, 1)
+}
+
+func TestDemoPromptNotNowOnReShowDoesNotLaunchWorkflow(t *testing.T) {
+	var launched bool
+	result := ensureFirstRunForTUI(firstRunDeps{
+		load: func() (usersettings.Settings, error) {
+			return usersettings.Settings{Setup: usersettings.SetupSettings{CompletedAt: "2026-05-04T00:00:00Z"}}, nil
+		},
+		isStdinTTY:  func() bool { return true },
+		isStdoutTTY: func() bool { return true },
+		runDemoPrompt: func() (nativeSetupResult, error) {
+			return nativeSetupCompleted, nil
+		},
+		runWorkflow: func(string) firstRunWorkflowResult {
+			launched = true
+			return firstRunWorkflowResult{}
+		},
+	})
+	requireFirstRunContinue(t, result)
+	if launched {
+		t.Fatal("workflow launched after Not now on re-show")
+	}
+}
+
+func requireFirstRunContinue(t *testing.T, result firstRunResult) {
+	t.Helper()
+	if !result.continueToList {
+		t.Fatalf("ensureFirstRunForTUI() exits with %d, want continue to list", result.exitCode)
+	}
+}
+
+func requireFirstRunExit(t *testing.T, result firstRunResult, wantCode int) {
+	t.Helper()
+	if result.continueToList {
+		t.Fatalf("ensureFirstRunForTUI() continues to list, want exit code %d", wantCode)
+	}
+	if result.exitCode != wantCode {
+		t.Fatalf("ensureFirstRunForTUI() exits with %d, want %d", result.exitCode, wantCode)
 	}
 }

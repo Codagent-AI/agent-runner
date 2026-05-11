@@ -35,10 +35,33 @@ steps:
       git commit -m "[{{step_id}}] chore: add openspec documents for {{change_name}}"
       agent-validator skip
 
-  - id: implement-single-task
-    workflow: ../core/implement-task.yaml
-    params:
-      task_file: "openspec/changes/{{change_name}}/tasks.md"
+  - id: generate-code
+    session: resume
+    mode: headless
+    prompt: |
+      Implement the task described in openspec/changes/{{change_name}}/tasks.md.
+      You MUST use the codagent:implement-with-tdd skill.
+      When you are done implementing, commit your changes following the project's
+      commit message conventions and prepend [{{step_id}}]. Then summarize to the user what you changed.
+
+  - id: run-validator
+    workflow: ../core/run-validator.yaml
+
+  - id: check-clean
+    command: test -z "$(git status --porcelain)"
+    continue_on_failure: true
+
+  - id: commit-leftovers-if-needed
+    session: resume
+    mode: headless
+    prompt: |
+      There are uncommitted changes leftover after implementing the task described in openspec/changes/{{change_name}}/tasks.md.
+      Run git status and git diff to review them. Only stage and commit files
+      that are related to this task and appropriate to check into git — ignore
+      unrelated changes, generated artifacts, or files that should be gitignored.
+      Follow the project's commit message conventions and prepend [{{step_id}}].
+      Summarize which files you committed and which you left out, and why.
+    skip_if: previous_success
 
   - id: archive
     command: |

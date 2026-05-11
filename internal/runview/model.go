@@ -42,7 +42,9 @@ type ResumeRunMsg struct {
 // `agent-runner --resume`, which opens the list TUI on the current-dir tab.
 type ResumeListMsg struct{}
 
-type ExitMsg struct{}
+type ExitMsg struct {
+	UserRequested bool
+}
 
 // Entered describes how the user reached the run view.
 type Entered int
@@ -103,6 +105,7 @@ type Model struct {
 	resumeAgentCLI  string
 	resumeSessionID string
 	resumeToList    bool
+	exitRequested   bool
 
 	// Alt-screen management. When the program starts without tea.WithAltScreen
 	// (FromLiveRun mode), alt-screen entry is deferred so a fast non-interactive
@@ -110,8 +113,9 @@ type Model struct {
 	altScreen         bool // true once alt-screen has been entered
 	suppressAltScreen bool // set when SuspendedMsg arrives before the deferred timer
 
-	liveUI      *uistep.Model
-	liveUIReply chan<- model.UIStepResult
+	liveUI       *uistep.Model
+	liveUIStepID string
+	liveUIReply  chan<- model.UIStepResult
 }
 
 // ResumeAgentCLI returns the agent CLI name captured from a ResumeMsg in
@@ -126,6 +130,9 @@ func (m *Model) ResumeSessionID() string { return m.resumeSessionID }
 // exec back into the list TUI.
 func (m *Model) ResumeToList() bool { return m.resumeToList }
 
+// ExitRequested reports whether the user explicitly requested application exit.
+func (m *Model) ExitRequested() bool { return m.exitRequested }
+
 // SessionDir returns the session directory the Model was constructed for.
 func (m *Model) SessionDir() string { return m.sessionDir }
 
@@ -134,6 +141,14 @@ func (m *Model) ProjectDir() string { return m.projectDir }
 
 // Entered returns the entry path used to construct the Model.
 func (m *Model) Entered() Entered { return m.entered }
+
+// StartInAltScreen marks the model as already entering alt-screen before the
+// live-run program starts. This is used for TUI-to-live-run handoffs where the
+// caller wants to avoid exposing the underlying terminal between screens.
+func (m *Model) StartInAltScreen() {
+	m.altScreen = true
+	m.suppressAltScreen = false
+}
 
 // New constructs a runview Model from a session directory.
 // For FromDefinition mode, sessionDir carries the workflow file path rather than
@@ -411,6 +426,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// When wrapped in the switcher (FromList / FromInspect paths), the
 		// switcher intercepts ExitMsg before delegation, so this branch is
 		// inert in that case.
+		if msg.UserRequested {
+			m.exitRequested = true
+		}
 		return m, tea.Quit
 
 	case liverun.ExecDoneMsg:
@@ -420,7 +438,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// ---- Keyboard / mouse ----
 
 	case tea.KeyMsg:
-		if m.liveUI != nil {
+		if m.quitConfirming {
+			return m.handleKey(msg)
+		}
+		if m.liveUI != nil && m.liveUIVisible() {
 			return m.handleLiveUIKey(msg)
 		}
 		return m.handleKey(msg)
@@ -441,6 +462,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) handleUIRequestMsg(msg *liverun.UIRequestMsg) (tea.Model, tea.Cmd) {
 	m.liveUI = uistep.NewModel(&msg.Request)
+	m.liveUIStepID = msg.Request.StepID
 	m.liveUIReply = msg.Reply
 	m.autoFollow = true
 	m.refreshData()
@@ -481,6 +503,27 @@ func (m *Model) handleSuspendedMsg() {
 }
 
 func (m *Model) handleLiveUIKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up", "down":
+		return m.handleKey(msg)
+	case "d":
+		m.autoFollow = false
+		return m.handleEnter()
+	case "k":
+		m.scrollLiveUI(-1)
+		return m, nil
+	case "j":
+		m.scrollLiveUI(1)
+		return m, nil
+	case "q":
+		return m.handleKey(msg)
+	case "esc":
+		return m.handleKey(msg)
+	case "l":
+		m.followLiveUI()
+		return m, nil
+	}
+
 	next, _ := m.liveUI.Update(msg)
 	if updated, ok := next.(*uistep.Model); ok {
 		m.liveUI = updated
@@ -489,12 +532,48 @@ func (m *Model) handleLiveUIKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		result := m.liveUI.Result()
 		reply := m.liveUIReply
 		m.liveUI = nil
+		m.liveUIStepID = ""
 		m.liveUIReply = nil
 		if reply != nil {
 			reply <- result
 		}
 	}
 	return m, nil
+}
+
+func (m *Model) scrollLiveUI(delta int) {
+	m.autoFollow = false
+	m.logOffset += delta
+	if m.logOffset < 0 {
+		m.logOffset = 0
+	}
+}
+
+func (m *Model) liveUIVisible() bool {
+	if m.liveUI == nil {
+		return false
+	}
+	active := m.liveUINode()
+	if active == nil {
+		return true
+	}
+	return m.selectedNode() == m.ancestorAtCurrentLevel(active)
+}
+
+func (m *Model) liveUINode() *StepNode {
+	if m.liveUIStepID == "" {
+		return nil
+	}
+	return findDeepestInProgressUI(m.tree.Root, m.liveUIStepID)
+}
+
+func (m *Model) followLiveUI() {
+	active := m.liveUINode()
+	if active == nil {
+		return
+	}
+	m.autoFollow = true
+	m.navigateToNode(active)
 }
 
 func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) {
@@ -515,7 +594,7 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) {
 
 func (m *Model) handleOutputChunkMsg(msg liverun.OutputChunkMsg) {
 	m.applyOutputChunk(msg)
-	if (m.active || m.running) && m.autoFollow {
+	if (m.active || m.running) && m.autoFollow && !m.liveUIVisible() {
 		m.logOffset = math.MaxInt32
 	}
 	lineCount := m.rebuildRanges()
@@ -527,7 +606,7 @@ func (m *Model) handleStepStateMsg(msg liverun.StepStateMsg) {
 	if m.autoFollow {
 		m.applyAutoFollowCursor()
 	}
-	if (m.active || m.running) && m.autoFollow {
+	if (m.active || m.running) && m.autoFollow && !m.liveUIVisible() {
 		m.logOffset = math.MaxInt32
 	}
 	lineCount := m.rebuildRanges()
@@ -598,7 +677,7 @@ func (m *Model) handleRefreshMsg() tea.Cmd {
 		return nil
 	}
 	m.refreshData()
-	if m.autoFollow {
+	if m.autoFollow && !m.liveUIVisible() {
 		m.logOffset = math.MaxInt32
 	}
 	lineCount := m.rebuildRanges()
@@ -683,6 +762,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.quitConfirming {
 		switch msg.String() {
 		case "y", "Y":
+			m.exitRequested = true
 			return m, tea.Quit
 		case "n", "N", "esc":
 			m.quitConfirming = false
@@ -696,6 +776,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.quitConfirming = true
 			return m, nil
 		}
+		m.exitRequested = true
 		return m, emitExit
 	case "?":
 		m.showLegend = true
@@ -719,28 +800,37 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.logOffset++
 		m.syncSelectionToLog()
 	case "l":
+		if m.liveUI != nil {
+			m.followLiveUI()
+			return m, nil
+		}
 		m.autoFollow = true
 		m.applyAutoFollowCursor()
 	case "r":
-		if m.entered == FromDefinition {
-			entry := m.workflowEntry
-			return m, func() tea.Msg { return discovery.StartRunMsg{Entry: entry} }
-		}
-		if m.canResumeRun() {
-			runID := filepath.Base(m.sessionDir)
-			return m, func() tea.Msg { return ResumeRunMsg{RunID: runID} }
-		}
-		if target := m.resumeAgentTargetForSelection(); target != nil {
-			return m, func() tea.Msg {
-				return ResumeMsg{AgentCLI: target.AgentCLI, SessionID: target.SessionID}
-			}
-		}
+		return m.handleResumeKey()
 	case "g":
 		m.handleLoadFull()
 		m.rebuildRanges()
 	case "c":
 		cmd := m.handleCopySelectedDetail()
 		return m, cmd
+	}
+	return m, nil
+}
+
+func (m *Model) handleResumeKey() (tea.Model, tea.Cmd) {
+	if m.entered == FromDefinition {
+		entry := m.workflowEntry
+		return m, func() tea.Msg { return discovery.StartRunMsg{Entry: entry} }
+	}
+	if m.canResumeRun() {
+		runID := filepath.Base(m.sessionDir)
+		return m, func() tea.Msg { return ResumeRunMsg{RunID: runID} }
+	}
+	if target := m.resumeAgentTargetForSelection(); target != nil {
+		return m, func() tea.Msg {
+			return ResumeMsg{AgentCLI: target.AgentCLI, SessionID: target.SessionID}
+		}
 	}
 	return m, nil
 }
@@ -914,6 +1004,25 @@ func deepestInProgressNode(n *StepNode) *StepNode {
 	return nil
 }
 
+func findDeepestInProgressUI(n *StepNode, stepID string) *StepNode {
+	if n == nil {
+		return nil
+	}
+	var found *StepNode
+	for _, child := range n.Children {
+		if candidate := findDeepestInProgressUI(child, stepID); candidate != nil {
+			found = candidate
+		}
+	}
+	if found != nil {
+		return found
+	}
+	if n.ID == stepID && n.Type == NodeUI && n.Status == StatusInProgress {
+		return n
+	}
+	return nil
+}
+
 // pendingSelected returns the selected node if it is pending, else nil.
 func (m *Model) pendingSelected() *StepNode {
 	n := m.selectedNode()
@@ -940,9 +1049,18 @@ func (m *Model) rebuildRanges() int {
 	return len(lines)
 }
 
-// maxLogOffset returns the maximum valid logOffset for the current log content.
+// maxLogOffset returns the maximum valid offset for the currently visible
+// right-pane content.
 func (m *Model) maxLogOffset() int {
-	return max(0, m.logLineCount-m.bodyHeight())
+	return max(0, m.rightPaneLineCount(m.logLineCount)-m.bodyHeight())
+}
+
+func (m *Model) rightPaneLineCount(fallback int) int {
+	if !m.liveUIVisible() {
+		return fallback
+	}
+	m.liveUI.SetWidth(m.rightPaneWidth())
+	return len(strings.Split(m.liveUI.View(), "\n"))
 }
 
 // rightPaneWidth estimates the right-pane width for range computation.
@@ -996,6 +1114,7 @@ func (m *Model) syncSelectionToLog() {
 }
 
 func (m *Model) clampLogOffset(lineCount int) {
+	lineCount = m.rightPaneLineCount(lineCount)
 	maxOffset := max(0, lineCount-m.bodyHeight())
 	if m.logOffset < 0 {
 		m.logOffset = 0
@@ -1253,7 +1372,7 @@ func (m *Model) refreshData() {
 }
 
 func emitBack() tea.Msg { return BackMsg{} }
-func emitExit() tea.Msg { return ExitMsg{} }
+func emitExit() tea.Msg { return ExitMsg{UserRequested: true} }
 
 func (m *Model) shouldResumeListOnEsc() bool {
 	if m.entered == FromInspect || m.entered == FromDefinition {

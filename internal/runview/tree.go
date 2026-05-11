@@ -83,6 +83,7 @@ type StepNode struct {
 	DurationMs          *int64
 	Stdout              string
 	Stderr              string
+	Outcome             string
 	CaptureName         string
 	AgentProfile        string
 	AgentModel          string

@@ -27,11 +27,13 @@ This project is pre-release and under active development. Prefer clear, well-tes
 
 - Use test-driven development for substantive behavior changes. For bug fixes, add a failing test that reproduces the bug before changing production code.
 - Tests are not required for trivial changes such as styling-only tweaks, copy edits, comments, or other cases where a focused unit test would not exercise meaningful behavior.
+- Do not use TDD for changes that only edit workflow YAML files; workflows are configuration, and focused tests are not expected for configuration-only edits.
 - Keep tests next to the source package. Use local stubs and small fakes instead of adding a mocking framework.
 - Prefer `google/go-cmp` for structured comparisons in tests.
 - Run targeted tests while iterating, then broader checks before finishing.
 - Format Go code with `goimports` through `make fmt`.
 - Use the Go version declared in `go.mod`.
+- When creating git worktrees for this repository, create them under `./worktrees`.
 
 ## Common Commands
 

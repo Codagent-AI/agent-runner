@@ -3,76 +3,46 @@ description: "Manual smoke test for interactive agent adapters"
 
 steps:
   - id: claude-interactive
-    agent: interactive_base
+    agent: claude_interactive_smoke
     session: new
-    mode: interactive
-    cli: claude
-    model: haiku
     prompt: "Reply with exactly this short sentence: claude interactive smoke ready. Then wait for me to continue."
 
   - id: claude-interactive-resume
     session: resume
-    mode: interactive
-    cli: claude
-    model: haiku
     prompt: "Confirm you remember saying claude interactive smoke ready, then reply with exactly this short sentence: claude interactive resume ready. Then wait for me to continue."
 
   - id: codex-interactive
-    agent: interactive_base
+    agent: codex_interactive_smoke
     session: new
-    mode: interactive
-    cli: codex
-    model: gpt-5.4-mini
     prompt: "Reply with exactly this short sentence: codex interactive smoke ready. Then wait for me to continue."
 
   - id: codex-interactive-resume
     session: resume
-    mode: interactive
-    cli: codex
-    model: gpt-5.4-mini
     prompt: "Confirm you remember saying codex interactive smoke ready, then reply with exactly this short sentence: codex interactive resume ready. Then wait for me to continue."
 
   - id: copilot-interactive
-    agent: interactive_base
+    agent: copilot_interactive_smoke
     session: new
-    mode: interactive
-    cli: copilot
-    model: gpt-5.4-mini
     prompt: "Reply with exactly this short sentence: copilot interactive smoke ready. Then wait for me to continue."
 
   - id: copilot-interactive-resume
     session: resume
-    mode: interactive
-    cli: copilot
-    model: gpt-5.4-mini
     prompt: "Confirm you remember saying copilot interactive smoke ready, then reply with exactly this short sentence: copilot interactive resume ready. Then wait for me to continue."
 
   - id: cursor-interactive
-    agent: interactive_base
+    agent: cursor_interactive_smoke
     session: new
-    mode: interactive
-    cli: cursor
-    model: auto
     prompt: "Reply with exactly this short sentence: cursor interactive smoke ready. Then wait for me to continue."
 
   - id: cursor-interactive-resume
     session: resume
-    mode: interactive
-    cli: cursor
-    model: auto
     prompt: "Confirm you remember saying cursor interactive smoke ready, then reply with exactly this short sentence: cursor interactive resume ready. Then wait for me to continue."
 
   - id: opencode-interactive
-    agent: interactive_base
+    agent: opencode_interactive_smoke
     session: new
-    mode: interactive
-    cli: opencode
-    model: anthropic/claude-sonnet-4
     prompt: "Reply with exactly this short sentence: opencode interactive smoke ready. Then wait for me to continue."
 
   - id: opencode-interactive-resume
     session: resume
-    mode: interactive
-    cli: opencode
-    model: anthropic/claude-sonnet-4
     prompt: "Confirm you remember saying opencode interactive smoke ready, then reply with exactly this short sentence: opencode interactive resume ready. Then wait for me to continue."

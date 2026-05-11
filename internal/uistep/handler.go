@@ -12,11 +12,9 @@ import (
 )
 
 var (
-	titleStyle         = tuistyle.SectionStyle
-	bodyStyle          = tuistyle.NormalStyle
-	inputPromptStyle   = tuistyle.LabelStyle
-	focusedButtonStyle = lipgloss.NewStyle().Foreground(tuistyle.SelectedText).Background(tuistyle.AccentCyan)
-	buttonStyle        = lipgloss.NewStyle().Foreground(tuistyle.BodyText)
+	titleStyle       = tuistyle.SectionStyle
+	bodyStyle        = tuistyle.NormalStyle
+	inputPromptStyle = tuistyle.LabelStyle
 )
 
 func NewHandler(suspend, resume func()) func(*model.UIStepRequest) (model.UIStepResult, error) {
@@ -98,9 +96,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "down", "j":
 			m.moveSelection(1)
 		case "left", "h":
-			m.moveActionFocus(-1)
+			m.moveHorizontalFocus(-1)
 		case "right", "l":
-			m.moveActionFocus(1)
+			m.moveHorizontalFocus(1)
 		case "tab":
 			m.moveFocus(1)
 		case "shift+tab":
@@ -204,6 +202,14 @@ func (m *Model) moveActionFocus(delta int) {
 	m.focus = len(m.req.Inputs) + next
 }
 
+func (m *Model) moveHorizontalFocus(delta int) {
+	if _, ok := m.focusedInputIndex(); ok {
+		m.moveSelection(delta)
+		return
+	}
+	m.moveActionFocus(delta)
+}
+
 func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 	if _, ok := m.focusedInputIndex(); ok {
 		if m.isSimplePicker() {
@@ -262,9 +268,9 @@ func (m *Model) View() string {
 		for i, opt := range input.Options {
 			switch {
 			case idx == m.focus && i == m.selections[idx]:
-				fmt.Fprintf(&b, "  ▶ %s\n", opt)
+				fmt.Fprintf(&b, "  %s %s\n", tuistyle.FocusedSelectorPrefix, opt)
 			case i == m.selections[idx]:
-				fmt.Fprintf(&b, "  • %s\n", opt)
+				fmt.Fprintf(&b, "  %s %s\n", tuistyle.SelectedSelectorPrefix, opt)
 			default:
 				fmt.Fprintf(&b, "    %s\n", opt)
 			}
@@ -273,17 +279,11 @@ func (m *Model) View() string {
 	}
 
 	if !m.isSimplePicker() {
+		labels := make([]string, len(m.req.Actions))
 		for i, action := range m.req.Actions {
-			label := "[ " + action.Label + " ]"
-			if i > 0 {
-				b.WriteString("  ")
-			}
-			if len(m.req.Inputs)+i == m.focus {
-				b.WriteString(focusedButtonStyle.Render(label))
-			} else {
-				b.WriteString(buttonStyle.Render(label))
-			}
+			labels[i] = action.Label
 		}
+		b.WriteString(tuistyle.RenderButtonRow(labels, m.focus-len(m.req.Inputs), 0))
 
 		if len(m.req.Actions) > 0 {
 			b.WriteString("\n")

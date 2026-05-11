@@ -55,6 +55,24 @@ func TestUIModelArrowKeysKeepInputFocusedAndTabFocusesAction(t *testing.T) {
 	}
 }
 
+func TestUIModelLeftRightMoveFocusedInputSelection(t *testing.T) {
+	m := newModel(cancelableAdapterRequest())
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m = next.(*uiModel)
+	view := tuistyle.Sanitize(m.View())
+	if !strings.Contains(view, "▶ codex") {
+		t.Fatalf("input highlight should move to codex after right, got:\n%s", view)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	m = next.(*uiModel)
+	view = tuistyle.Sanitize(m.View())
+	if !strings.Contains(view, "▶ claude") {
+		t.Fatalf("input highlight should move to claude after left, got:\n%s", view)
+	}
+}
+
 func TestUIModelHelpPartsReflectFocus(t *testing.T) {
 	m := newModel(cancelableAdapterRequest())
 	if got := strings.Join(m.HelpParts(), " "); !strings.Contains(got, "↑↓ option") || strings.Contains(got, "←→ action") {

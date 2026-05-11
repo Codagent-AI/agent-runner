@@ -13,14 +13,19 @@ project_modcache="$validator_cache/go/pkg/mod"
 
 mkdir -p "$validator_cache/go-build" "$validator_cache/go" "$project_modcache"
 
-modcache="$project_modcache"
 default_modcache="$(GOTOOLCHAIN=local go env GOMODCACHE 2>/dev/null || true)"
 
 if [ ! -d "$project_modcache/cache/download" ] &&
   [ -n "$default_modcache" ] &&
   [ "$default_modcache" != "$project_modcache" ] &&
   [ -d "$default_modcache/cache/download" ]; then
-  modcache="$default_modcache"
+  mkdir -p "$project_modcache/cache"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a -- "$default_modcache/cache/download/" "$project_modcache/cache/download/"
+  else
+    mkdir -p "$project_modcache/cache/download"
+    cp -R "$default_modcache/cache/download/." "$project_modcache/cache/download/"
+  fi
 fi
 
 export GOTOOLCHAIN=local
@@ -28,6 +33,6 @@ export GOPROXY=off
 export GOSUMDB=off
 export GOCACHE="$validator_cache/go-build"
 export GOPATH="$validator_cache/go"
-export GOMODCACHE="$modcache"
+export GOMODCACHE="$project_modcache"
 
 exec "$@"

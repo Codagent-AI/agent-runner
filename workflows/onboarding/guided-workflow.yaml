@@ -1,0 +1,165 @@
+name: onboarding-guided-workflow
+description: Guides the user through planning, tutoring, and headless implementation during onboarding.
+
+sessions:
+  - name: planning-session
+    agent: planner
+  - name: tutor-session
+    agent: planner
+  - name: impl-session
+    agent: implementor
+
+steps:
+  - id: intro-ui
+    mode: ui
+    title: Guided Workflow
+    body: |
+      This phase uses Agent Runner on a real task in this directory.
+
+      You will plan a real task with an interactive planning agent, review the
+      plan with a tutorial agent, and then watch an implementor run the task
+      headlessly.
+
+      Keep the task small if you want the walkthrough to stay quick: fix a typo,
+      add a log line, rename a variable, or make another scoped change.
+    actions:
+      - label: Continue
+        outcome: continue
+
+  - id: capture-cwd
+    command: pwd
+    capture: cwd
+
+  - id: confirm-cwd
+    mode: ui
+    title: Confirm Directory
+    body: |
+      Agent Runner is currently running in:
+
+      {{cwd}}
+
+      The planning and implementation steps will operate from this directory.
+      If this is the wrong project, press Esc to abort now.
+    actions:
+      - label: Continue
+        outcome: continue
+
+  - id: check-git-clean
+    command: git status --porcelain 2>&1; true
+    capture: git_status
+
+  - id: warn-dirty
+    mode: ui
+    title: Working Tree Has Changes
+    body: |
+      Git reported existing working tree output:
+
+      {{git_status}}
+
+      The implementor may add more changes. Review carefully before committing.
+    actions:
+      - label: Continue
+        outcome: continue
+    skip_if: 'sh: [ -z "{{git_status}}" ]'
+
+  - id: create-plan-dir
+    command: mktemp -d
+    capture: plan_dir
+
+  - id: explain-plan
+    mode: ui
+    title: Planning Step
+    body: |
+      The next step opens an interactive planner. The planner will ask what
+      change you want, help keep it scoped, and write planning artifacts outside
+      the project at {{plan_dir}}.
+    actions:
+      - label: Continue
+        outcome: continue
+
+  - id: plan
+    session: planning-session
+    mode: interactive
+    prompt: |
+      Help the user plan a real task for this project.
+
+      First, ask the user what the change is about. DO NOT attempt to guess.
+      Suggest small examples if helpful: fix a typo, add a log line, rename a
+      variable, or make another tightly scoped change. These examples are
+      suggestions only. Do not refuse larger tasks solely because they are larger.
+
+      You MUST use the codagent:simple-plan skill. Write all generated planning
+      artifacts under {{plan_dir}} instead of the project directory. Once the
+      task file has been written, complete the step so onboarding can continue.
+
+  - id: locate-task
+    session: planning-session
+    mode: headless
+    capture: task_file
+    prompt: |
+      Emit the path to the task file produced during planning on a single line.
+      Return no other text, no markdown fences, and no explanation.
+
+      Example valid output: {{plan_dir}}/tasks/001-do-the-thing.md
+
+  - id: validate-plan
+    command: test -f "{{task_file}}"
+
+  - id: explain-tutor
+    mode: ui
+    title: Tutorial Step
+    body: |
+      The next step opens a separate tutorial agent session. It will review the
+      plan, answer questions in context, and preview how the headless implementor
+      will execute the task.
+    actions:
+      - label: Continue
+        outcome: continue
+
+  - id: tutor
+    session: tutor-session
+    mode: interactive
+    prompt: |
+      You are tutoring the user during Agent Runner onboarding.
+
+      Read and reference the task file at {{task_file}}. Contextualize your
+      guidance to that plan, for example: "I see you made a plan to ...".
+      Explain what will happen when a headless implementor executes it next.
+
+      Use the packaged documentation at {{session_dir}}/bundled/onboarding/docs/
+      for general Agent Runner Q&A. Answer questions about workflows, step
+      types, sessions, validation, and related concepts.
+
+      When the user's questions are answered, complete the step so onboarding
+      can continue.
+
+  - id: explain-impl
+    mode: ui
+    title: Headless Implementation
+    body: |
+      The next step gives the planned task to an implementor agent running
+      headlessly. The workflow will advance when that agent finishes.
+    actions:
+      - label: Continue
+        outcome: continue
+
+  - id: implement
+    session: impl-session
+    mode: headless
+    prompt: |
+      Implement the task described in {{task_file}}.
+
+      You MUST use the codagent:implement-with-tdd skill.
+      Do not commit changes. Leave the working tree for the user to review.
+      When implementation and verification are complete, summarize what changed.
+
+  - id: summary
+    mode: ui
+    title: Guided Workflow Complete
+    body: |
+      The headless implementor finished.
+
+      Run `git diff` to review the changes, then commit if you are satisfied.
+    actions:
+      - label: Continue
+        outcome: continue

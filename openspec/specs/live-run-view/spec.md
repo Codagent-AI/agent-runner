@@ -159,7 +159,7 @@ While output is streaming into the selected step's detail pane, the viewport SHA
 
 ### Requirement: Quit during live run requires confirmation
 
-While the workflow is running, pressing `q`, `Ctrl+C`, or Escape at the top level SHALL prompt the user for confirmation before quitting. The confirmation prompt SHALL explicitly state that the active subprocess will be orphaned (continue running in the background) if the user proceeds. Confirming SHALL exit the TUI without killing the active subprocess. Declining SHALL dismiss the prompt and leave the workflow running. After the workflow has finished, `q`, `Ctrl+C`, and Escape-at-top-level SHALL exit immediately without confirmation. The confirmation does not fire while the TUI is suspended for an interactive agent step, because during that window keystrokes are received by the agent, not the TUI.
+While the workflow is running, pressing `q`, `Ctrl+C`, or Escape at the top level SHALL prompt the user for confirmation before quitting. The confirmation prompt SHALL explicitly state that the active subprocess will be orphaned (continue running in the background) if the user proceeds. Confirming SHALL exit the app without killing the active subprocess. Declining SHALL dismiss the prompt and leave the workflow running. After the workflow has finished, `q` and `Ctrl+C` SHALL exit the app immediately without confirmation; Escape at the top level SHALL follow the run-view exit behavior specified by the `view-run` capability. The confirmation does not fire while the TUI is suspended for an interactive agent step, because during that window keystrokes are received by the agent, not the TUI.
 
 #### Scenario: Confirmation requested on q mid-run
 - **WHEN** the user presses `q` while the workflow is running and the TUI is not suspended for an interactive step
@@ -177,9 +177,9 @@ While the workflow is running, pressing `q`, `Ctrl+C`, or Escape at the top leve
 - **WHEN** the user presses Escape while drilled into a sub-workflow, loop, or iteration (not at the top level) and the workflow is running
 - **THEN** the view drills out one level as specified by the `view-run` capability; no confirmation is displayed
 
-#### Scenario: Confirmation accepted exits TUI and orphans subprocess
+#### Scenario: Confirmation accepted exits app and orphans subprocess
 - **WHEN** the user confirms quit
-- **THEN** the TUI exits; any currently-running subprocess (shell command or headless agent) is not killed and continues executing in the background
+- **THEN** the app exits; any currently-running subprocess (shell command or headless agent) is not killed and continues executing in the background
 
 #### Scenario: Confirmation declined keeps running
 - **WHEN** the user declines quit
@@ -190,8 +190,12 @@ While the workflow is running, pressing `q`, `Ctrl+C`, or Escape at the top leve
 - **THEN** the keystroke is delivered to the agent process (not the TUI); no confirmation is displayed by agent-runner
 
 #### Scenario: No confirmation after completion
-- **WHEN** the workflow has finished and the user presses `q`, `Ctrl+C`, or Escape at the top level
-- **THEN** the TUI exits immediately
+- **WHEN** the workflow has finished and the user presses `q` or `Ctrl+C`
+- **THEN** the app exits immediately
+
+#### Scenario: Escape after completion follows run-view exit behavior
+- **WHEN** the workflow has finished and the user presses Escape at the top level
+- **THEN** the view follows the top-level Escape behavior specified by the `view-run` capability
 
 ### Requirement: UI steps render inside the live-run-view chrome
 
@@ -222,4 +226,3 @@ The existing top-level keybindings of the live-run-view (`q`, `Ctrl+C`, Escape) 
 #### Scenario: UI step input does not trigger chrome quit
 - **WHEN** focus is on a UI step's input or action and the user presses Enter, arrow, or Tab keys
 - **THEN** those keystrokes SHALL be consumed by the UI step and SHALL NOT trigger the live-run-view's top-level quit confirmation
-

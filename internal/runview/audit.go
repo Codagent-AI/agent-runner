@@ -242,6 +242,7 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 		// terminal status so the TUI renders the "running" indicator.
 		n.Status = StatusInProgress
 		n.Aborted = false
+		n.Outcome = ""
 		applyStepStart(n, e.Data)
 	case "step_end":
 		n := t.resolve(tokens, true)
@@ -255,6 +256,8 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 			return
 		}
 		n.Status = StatusInProgress
+		n.Outcome = ""
+		n.Aborted = false
 		applyIterationStart(n, e.Data)
 	case "iteration_end":
 		n := t.resolve(tokens, true)
@@ -605,6 +608,9 @@ func applySubWorkflowEnd(n *StepNode, data map[string]any) {
 // step as still-running (without a blink, when no run is active). Outcomes
 // arrive only on end events, so absence means nothing happens here.
 func applyOutcome(n *StepNode, outcome string) {
+	if outcome != "" {
+		n.Outcome = outcome
+	}
 	switch outcome {
 	case "success", "exhausted":
 		n.Status = StatusSuccess

@@ -382,6 +382,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			return m.handleResumeRun()
 
+		case "?":
+			return m.handleHelpRun()
+
 		case "esc":
 			m.handleEsc()
 		}
@@ -616,6 +619,28 @@ func (m *Model) handleResumeRun() (tea.Model, tea.Cmd) {
 	runID := r.SessionID
 	projectDir := m.cursorProjectDir()
 	return m, func() tea.Msg { return ResumeRunMsg{RunID: runID, ProjectDir: projectDir} }
+}
+
+func (m *Model) handleHelpRun() (tea.Model, tea.Cmd) {
+	const canonicalName = "onboarding:help"
+	for _, e := range m.newTab.workflows {
+		if e.CanonicalName == canonicalName {
+			entry := e
+			return m, func() tea.Msg { return discovery.StartRunMsg{Entry: entry} }
+		}
+	}
+	ref, err := builtinworkflows.Resolve(canonicalName)
+	if err != nil {
+		m.errMsg = fmt.Sprintf("cannot start help workflow: %v", err)
+		return m, nil
+	}
+	entry := discovery.WorkflowEntry{
+		CanonicalName: canonicalName,
+		SourcePath:    ref,
+		Namespace:     "onboarding",
+		Scope:         discovery.ScopeBuiltin,
+	}
+	return m, func() tea.Msg { return discovery.StartRunMsg{Entry: entry} }
 }
 
 // cursorProjectDir returns the original cwd (project directory) for the run

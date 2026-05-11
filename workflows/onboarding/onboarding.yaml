@@ -1,28 +1,17 @@
 name: onboarding-onboarding
 description: Optional Agent Runner workflow demo.
 steps:
-  - id: intro
-    mode: ui
-    title: Agent Runner Workflow Demo
-    body: |
-      See how Agent Runner combines UI prompts, agent steps, shell commands, captures, and sub-workflows in a real run.
-    actions:
-      - label: Continue
-        outcome: continue
-      - label: Not now
-        outcome: not_now
-      - label: Dismiss
-        outcome: dismiss
-    outcome_capture: demo_action
-
-  - id: set-dismissed
-    command: agent-runner internal write-setting onboarding.dismissed "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    skip_if: 'sh: [ {{demo_action}} != dismiss ]'
-
   - id: step-types-demo
     workflow: step-types-demo.yaml
-    skip_if: 'sh: [ {{demo_action}} != continue ]'
+
+  - id: guided-workflow
+    workflow: guided-workflow.yaml
+
+  - id: validator
+    workflow: validator.yaml
+
+  - id: advanced
+    workflow: advanced.yaml
 
   - id: set-completed
     command: agent-runner internal write-setting onboarding.completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    skip_if: 'sh: [ {{demo_action}} != continue ]'

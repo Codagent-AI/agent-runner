@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/runs"
 )
 
@@ -246,6 +247,36 @@ func TestListModel_R_AllTabRunList_InactiveRun_EmitsResumeRunMsg(t *testing.T) {
 	}
 }
 
+func TestListModel_QuestionMark_EmitsHelpStartRunMsg(t *testing.T) {
+	m := newTestListModel(nil)
+	m.activeTab = tabCurrentDir
+	m.newTab.workflows = []discovery.WorkflowEntry{
+		{CanonicalName: "onboarding:help", SourcePath: "builtin:onboarding/help.yaml", Namespace: "onboarding", Scope: discovery.ScopeBuiltin},
+	}
+
+	_, cmd := pressKey(m, "?")
+	if cmd == nil {
+		t.Fatal("? should produce a cmd")
+	}
+	msg := cmd()
+	start, ok := msg.(discovery.StartRunMsg)
+	if !ok {
+		t.Fatalf("expected discovery.StartRunMsg, got %T", msg)
+	}
+	if start.Entry.CanonicalName != "onboarding:help" {
+		t.Fatalf("CanonicalName = %q, want onboarding:help", start.Entry.CanonicalName)
+	}
+	if start.Entry.SourcePath != "builtin:onboarding/help.yaml" {
+		t.Fatalf("SourcePath = %q, want builtin:onboarding/help.yaml", start.Entry.SourcePath)
+	}
+	if start.Entry.Scope != discovery.ScopeBuiltin {
+		t.Fatalf("Scope = %v, want ScopeBuiltin", start.Entry.Scope)
+	}
+	if start.Entry.Namespace != "onboarding" {
+		t.Fatalf("Namespace = %q, want onboarding", start.Entry.Namespace)
+	}
+}
+
 func TestListView_UsesSingleScreenMargin(t *testing.T) {
 	m := newTestListModel([]runs.RunInfo{inactiveRun()})
 	m.cwd = "/repo/project"
@@ -258,5 +289,103 @@ func TestListView_UsesSingleScreenMargin(t *testing.T) {
 	help := sanitize(m.renderHelp())
 	if !strings.HasPrefix(help, " ") || strings.HasPrefix(help, "  ") {
 		t.Fatalf("help bar should use a single leading margin, got %q", help)
+	}
+}
+
+func TestListView_RenderSubheaderExplainsTopLevelTabs(t *testing.T) {
+	tests := []struct {
+		name string
+		m    *Model
+		want string
+	}{
+		{
+			name: "new",
+			m: &Model{
+				activeTab: tabNew,
+			},
+			want: "Browse and search workflow definitions. Press r to start a new run.",
+		},
+		{
+			name: "current dir",
+			m: &Model{
+				activeTab: tabCurrentDir,
+				cwd:       "/repo/project",
+			},
+			want: "All runs for /repo/project. Press enter to view a run.",
+		},
+		{
+			name: "worktrees",
+			m: &Model{
+				activeTab: tabWorktrees,
+				cwd:       "/repo/project",
+				worktreeTab: worktreeTabState{
+					repoName: "agent-runner",
+				},
+			},
+			want: "All worktrees for agent-runner. Press enter to view runs.",
+		},
+		{
+			name: "all",
+			m: &Model{
+				activeTab: tabAll,
+			},
+			want: "All directories with runs. Press enter to view runs.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitize(tt.m.renderSubheader())
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("subheader = %q, want to contain %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestListView_RenderSubheaderExplainsRunListDrilldowns(t *testing.T) {
+	tests := []struct {
+		name string
+		m    *Model
+		want string
+	}{
+		{
+			name: "worktree runs",
+			m: &Model{
+				activeTab: tabWorktrees,
+				worktreeTab: worktreeTabState{
+					subView:     subViewRunList,
+					repoName:    "agent-runner",
+					selectedDir: "/repo/wt",
+					worktrees: []WorktreeEntry{
+						{Name: "feature", Path: "/repo/wt"},
+					},
+				},
+			},
+			want: "All runs for agent-runner › feature. Press enter to view a run.",
+		},
+		{
+			name: "all directory runs",
+			m: &Model{
+				activeTab: tabAll,
+				allTab: allTabState{
+					subView:     subViewRunList,
+					selectedDir: "encoded",
+					dirs: []DirEntry{
+						{Path: "/repo/project", Encoded: "encoded"},
+					},
+				},
+			},
+			want: "All runs for /repo/project. Press enter to view a run.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitize(tt.m.renderSubheader())
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("subheader = %q, want to contain %q", got, tt.want)
+			}
+		})
 	}
 }

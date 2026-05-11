@@ -172,9 +172,20 @@ func Save(settings Settings) error {
 	}
 
 	dir := filepath.Dir(path)
+	_, statErr := os.Stat(dir)
+	dirMissing := errors.Is(statErr, os.ErrNotExist)
+	if statErr != nil && !dirMissing {
+		return fmt.Errorf("stat settings directory %s: %w", dir, statErr)
+	}
 	// #nosec G301 -- the user-settings spec requires ~/.agent-runner to be 0755.
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create settings directory %s: %w", dir, err)
+	}
+	if dirMissing {
+		// #nosec G302 -- the user-settings spec requires newly-created ~/.agent-runner to be 0755.
+		if err := os.Chmod(dir, 0o755); err != nil {
+			return fmt.Errorf("chmod settings directory %s: %w", dir, err)
+		}
 	}
 
 	tmp, err := os.CreateTemp(dir, "settings-*.yaml.tmp")
