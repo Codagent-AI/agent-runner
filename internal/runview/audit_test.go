@@ -138,6 +138,44 @@ func buildImplementChangeTree(t *testing.T) *Tree {
 	return tree
 }
 
+func TestFilterAuditEventsForWorkflowState_DropsFutureEventsFromOldWorkflowHash(t *testing.T) {
+	wf := model.Workflow{
+		Name: "onboarding",
+		Steps: []model.Step{
+			{ID: "step-types-demo", Workflow: "step-types-demo.yaml"},
+			{ID: "guided-workflow", Workflow: "guided-workflow.yaml"},
+			{ID: "validator", Workflow: "validator.yaml"},
+			{ID: "advanced", Workflow: "advanced.yaml"},
+			{ID: "set-completed", Command: "agent-runner internal write-setting onboarding.completed_at now"},
+		},
+	}
+	tree := BuildTree(&wf, fixturePath("onboarding/onboarding.yaml"))
+	events := []RawEvent{
+		{Type: "run_start", Data: map[string]any{"workflow_hash": "old"}},
+		{Prefix: "[step-types-demo]", Type: "step_start", Data: map[string]any{}},
+		{Prefix: "[step-types-demo]", Type: "step_end", Data: map[string]any{"outcome": "success"}},
+		{Prefix: "[set-completed]", Type: "step_start", Data: map[string]any{"command": "agent-runner internal write-setting onboarding.completed_at now"}},
+		{Prefix: "[set-completed]", Type: "step_end", Data: map[string]any{"outcome": "success", "exit_code": float64(0)}},
+		{Type: "run_end", Data: map[string]any{"outcome": "success"}},
+		{Type: "run_start", Data: map[string]any{"workflow_hash": "new"}},
+		{Prefix: "[guided-workflow]", Type: "step_start", Data: map[string]any{}},
+	}
+
+	for _, event := range filterAuditEventsForWorkflowState(events, "new", tree.Root, "guided-workflow") {
+		tree.ApplyEvent(event)
+	}
+
+	if got := childByID(tree.Root, "step-types-demo").Status; got != StatusSuccess {
+		t.Fatalf("completed step before resume point should be retained, got %v", got)
+	}
+	if got := childByID(tree.Root, "guided-workflow").Status; got != StatusInProgress {
+		t.Fatalf("current step from matching hash should be retained, got %v", got)
+	}
+	if got := childByID(tree.Root, "set-completed").Status; got != StatusPending {
+		t.Fatalf("future step from old workflow hash should be ignored, got %v", got)
+	}
+}
+
 func TestApplyEvent_StepStartStepEnd(t *testing.T) {
 	tree := buildImplementChangeTree(t)
 	tree.ApplyEvent(RawEvent{

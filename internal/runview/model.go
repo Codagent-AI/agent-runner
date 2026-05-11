@@ -231,6 +231,7 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 			m.loadErr = "audit log: " + err.Error()
 		}
 	}
+	events = filterAuditEventsForWorkflowState(events, state.WorkflowHash, tree.Root, currentStepID(&state))
 	for _, e := range events {
 		tree.ApplyEvent(e)
 	}
@@ -239,6 +240,16 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	}
 
 	return m, nil
+}
+
+func currentStepID(state *model.RunState) string {
+	if state == nil {
+		return ""
+	}
+	if state.CurrentStep.Nested != nil {
+		return state.CurrentStep.Nested.StepID
+	}
+	return state.CurrentStep.StepID
 }
 
 // NewForDefinition constructs a runview Model for inspecting a workflow definition

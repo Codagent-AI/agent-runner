@@ -210,6 +210,54 @@ func (f *FileTailer) ReadSince(sessionDir string) ([]RawEvent, error) {
 	return events, err
 }
 
+func filterAuditEventsForWorkflowState(events []RawEvent, workflowHash string, root *StepNode, currentStepID string) []RawEvent {
+	if workflowHash == "" || len(events) == 0 {
+		return events
+	}
+
+	currentIndex := childIndexByID(root, currentStepID)
+	segmentMatches := true
+	filtered := make([]RawEvent, 0, len(events))
+	for _, event := range events {
+		if event.Type == "run_start" {
+			hash, _ := stringField(event.Data, "workflow_hash")
+			segmentMatches = hash == "" || hash == workflowHash
+			if segmentMatches {
+				filtered = append(filtered, event)
+			}
+			continue
+		}
+		if segmentMatches || eventIsBeforeCurrentTopLevelStep(event, root, currentIndex) {
+			filtered = append(filtered, event)
+		}
+	}
+	return filtered
+}
+
+func eventIsBeforeCurrentTopLevelStep(event RawEvent, root *StepNode, currentIndex int) bool {
+	if currentIndex <= 0 {
+		return false
+	}
+	tokens := parsePrefix(event.Prefix)
+	if len(tokens) == 0 || tokens[0].stepID == "" {
+		return false
+	}
+	idx := childIndexByID(root, tokens[0].stepID)
+	return idx >= 0 && idx < currentIndex
+}
+
+func childIndexByID(root *StepNode, id string) int {
+	if root == nil || id == "" {
+		return -1
+	}
+	for i, child := range root.Children {
+		if child.ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
 // ApplyEvent mutates the tree according to a single audit event.
 // Unknown event types and unresolved prefixes are silently ignored so a
 // malformed log doesn't poison the tree.
