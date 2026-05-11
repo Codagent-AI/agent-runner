@@ -31,9 +31,9 @@ func TestStepTypesDemoWorkflowShape(t *testing.T) {
 
 	assertUIStep(t, &wf.Steps[0], "UI")
 	assertUIStep(t, &wf.Steps[1], "interactive")
-	assertAgentStep(t, &wf.Steps[2], "planner", model.ModeInteractive)
+	assertAgentStep(t, &wf.Steps[2], "planner", "", model.ModeInteractive)
 	assertUIStep(t, &wf.Steps[3], "headless")
-	assertAgentStep(t, &wf.Steps[4], "implementor", model.ModeHeadless)
+	assertAgentStep(t, &wf.Steps[4], "implementor", "", model.ModeHeadless)
 	assertUIStep(t, &wf.Steps[5], "Headless")
 	assertUIStep(t, &wf.Steps[6], "shell")
 
@@ -59,7 +59,7 @@ func TestStepTypesDemoWorkflowShape(t *testing.T) {
 	}
 
 	learnMore := wf.Steps[9]
-	assertAgentStep(t, &learnMore, "planner", model.ModeInteractive)
+	assertAgentStep(t, &learnMore, "planner", "", model.ModeInteractive)
 	if learnMore.SkipIf != `sh: [ "x{{summary_action}}" != "xlearn_more" ]` {
 		t.Fatalf("learn-more-qa skip_if = %q", learnMore.SkipIf)
 	}
@@ -181,7 +181,7 @@ func TestGuidedWorkflowShape(t *testing.T) {
 	if stepByID(t, &wf, "create-plan-dir").Capture != "plan_dir" {
 		t.Fatal("create-plan-dir should capture plan_dir")
 	}
-	assertNamedAgentStep(t, stepByID(t, &wf, "plan"), "planning-session", model.ModeInteractive)
+	assertAgentStep(t, stepByID(t, &wf, "plan"), "", "planning-session", model.ModeInteractive)
 	if !strings.Contains(stepByID(t, &wf, "plan").Prompt, "First, ask the user what the change is about. DO NOT attempt to guess.") {
 		t.Fatalf("plan prompt missing explicit first-question instruction:\n%s", stepByID(t, &wf, "plan").Prompt)
 	}
@@ -189,19 +189,19 @@ func TestGuidedWorkflowShape(t *testing.T) {
 		t.Fatalf("plan prompt should suggest small tasks without enforcing scope:\n%s", stepByID(t, &wf, "plan").Prompt)
 	}
 	locate := stepByID(t, &wf, "locate-task")
-	assertNamedAgentStep(t, locate, "planning-session", model.ModeHeadless)
+	assertAgentStep(t, locate, "", "planning-session", model.ModeHeadless)
 	if locate.Capture != "task_file" {
 		t.Fatalf("locate-task capture = %q, want task_file", locate.Capture)
 	}
 	if !strings.Contains(stepByID(t, &wf, "validate-plan").Command, `test -f "{{task_file}}"`) {
 		t.Fatalf("validate-plan command = %q", stepByID(t, &wf, "validate-plan").Command)
 	}
-	assertNamedAgentStep(t, stepByID(t, &wf, "tutor"), "tutor-session", model.ModeInteractive)
+	assertAgentStep(t, stepByID(t, &wf, "tutor"), "", "tutor-session", model.ModeInteractive)
 	if !strings.Contains(stepByID(t, &wf, "tutor").Prompt, "{{session_dir}}/bundled/onboarding/docs/") {
 		t.Fatalf("tutor prompt missing docs reference:\n%s", stepByID(t, &wf, "tutor").Prompt)
 	}
 	impl := stepByID(t, &wf, "implement")
-	assertNamedAgentStep(t, impl, "impl-session", model.ModeHeadless)
+	assertAgentStep(t, impl, "", "impl-session", model.ModeHeadless)
 	for _, want := range []string{"{{task_file}}", "codagent:implement-with-tdd", "Do not commit"} {
 		if !strings.Contains(impl.Prompt, want) {
 			t.Fatalf("implement prompt missing %q:\n%s", want, impl.Prompt)
@@ -237,11 +237,11 @@ func TestValidatorWorkflowShape(t *testing.T) {
 		t.Fatalf("init command = %q, want agent-validator init", stepByID(t, &wf, "init").Command)
 	}
 	setup := stepByID(t, &wf, "setup")
-	assertNamedAgentStep(t, setup, "validator-setup-session", model.ModeInteractive)
+	assertAgentStep(t, setup, "", "validator-setup-session", model.ModeInteractive)
 	if !strings.Contains(setup.Prompt, "agent-validator:validator-setup") {
 		t.Fatalf("setup prompt missing validator setup skill:\n%s", setup.Prompt)
 	}
-	assertNamedAgentStep(t, stepByID(t, &wf, "prepare-fix-context"), "impl-session", model.ModeHeadless)
+	assertAgentStep(t, stepByID(t, &wf, "prepare-fix-context"), "", "impl-session", model.ModeHeadless)
 	runValidator := stepByID(t, &wf, "run-validator")
 	if runValidator.StepType() != "sub-workflow" || runValidator.Workflow != "../core/run-validator.yaml" {
 		t.Fatalf("run-validator = type %q workflow %q, want sub-workflow ../core/run-validator.yaml", runValidator.StepType(), runValidator.Workflow)
@@ -293,10 +293,7 @@ func TestHelpWorkflowShape(t *testing.T) {
 	}
 
 	helpAgent := stepByID(t, &wf, "help-agent")
-	assertAgentStep(t, helpAgent, "", model.ModeInteractive)
-	if helpAgent.Session != "help-session" {
-		t.Fatalf("help-agent session = %q, want help-session", helpAgent.Session)
-	}
+	assertAgentStep(t, helpAgent, "", "help-session", model.ModeInteractive)
 	for _, want := range []string{
 		"{{session_dir}}/bundled/onboarding/docs/",
 		"Agent Runner concepts",
@@ -349,25 +346,15 @@ func assertUIStep(t *testing.T, step *model.Step, bodyContains string) {
 	}
 }
 
-func assertAgentStep(t *testing.T, step *model.Step, agent string, mode model.StepMode) {
+func assertAgentStep(t *testing.T, step *model.Step, agent string, session string, mode model.StepMode) {
 	t.Helper()
 	if step.StepType() != "agent" {
 		t.Fatalf("%s type = %q, want agent", step.ID, step.StepType())
 	}
-	if step.Agent != agent {
+	if agent != "" && step.Agent != agent {
 		t.Fatalf("%s agent = %q, want %q", step.ID, step.Agent, agent)
 	}
-	if step.Mode != mode {
-		t.Fatalf("%s mode = %q, want %q", step.ID, step.Mode, mode)
-	}
-}
-
-func assertNamedAgentStep(t *testing.T, step *model.Step, session string, mode model.StepMode) {
-	t.Helper()
-	if step.StepType() != "agent" {
-		t.Fatalf("%s type = %q, want agent", step.ID, step.StepType())
-	}
-	if step.Session != model.SessionStrategy(session) {
+	if session != "" && step.Session != model.SessionStrategy(session) {
 		t.Fatalf("%s session = %q, want %q", step.ID, step.Session, session)
 	}
 	if step.Mode != mode {

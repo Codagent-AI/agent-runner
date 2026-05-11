@@ -623,20 +623,14 @@ func (m *Model) handleResumeRun() (tea.Model, tea.Cmd) {
 
 func (m *Model) handleHelpRun() (tea.Model, tea.Cmd) {
 	const canonicalName = "onboarding:help"
-	ref, err := builtinworkflows.Resolve(canonicalName)
-	if err != nil {
-		m.errMsg = fmt.Sprintf("cannot start help workflow: %v", err)
-		return m, nil
+	for _, e := range m.newTab.workflows {
+		if e.CanonicalName == canonicalName {
+			entry := e
+			return m, func() tea.Msg { return discovery.StartRunMsg{Entry: entry} }
+		}
 	}
-	entry := discovery.WorkflowEntry{
-		CanonicalName: canonicalName,
-		SourcePath:    ref,
-		Namespace:     "onboarding",
-		Scope:         discovery.ScopeBuiltin,
-	}
-	return m, func() tea.Msg {
-		return discovery.StartRunMsg{Entry: entry}
-	}
+	m.errMsg = fmt.Sprintf("cannot start help workflow: %q not found", canonicalName)
+	return m, nil
 }
 
 // cursorProjectDir returns the original cwd (project directory) for the run

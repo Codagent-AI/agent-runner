@@ -250,6 +250,9 @@ func TestListModel_R_AllTabRunList_InactiveRun_EmitsResumeRunMsg(t *testing.T) {
 func TestListModel_QuestionMark_EmitsHelpStartRunMsg(t *testing.T) {
 	m := newTestListModel(nil)
 	m.activeTab = tabCurrentDir
+	m.newTab.workflows = []discovery.WorkflowEntry{
+		{CanonicalName: "onboarding:help", SourcePath: "builtin:onboarding/help.yaml", Namespace: "onboarding", Scope: discovery.ScopeBuiltin},
+	}
 
 	_, cmd := pressKey(m, "?")
 	if cmd == nil {
