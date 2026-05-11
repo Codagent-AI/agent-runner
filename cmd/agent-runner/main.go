@@ -1713,6 +1713,9 @@ func (m *onboardingDemoPromptFlow) updateRun(msg tea.Msg) (tea.Model, tea.Cmd) {
 	next, cmd := m.run.Update(msg)
 	if rv, ok := next.(*runview.Model); ok {
 		m.run = rv
+		if rv.ExitRequested() {
+			m.exitRequested = true
+		}
 	}
 	return m, cmd
 }
