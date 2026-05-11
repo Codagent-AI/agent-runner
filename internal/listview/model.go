@@ -40,6 +40,11 @@ func WithInitialTab(t InitialTab) func(*Model) {
 	return func(m *Model) { m.activeTab = tab(t) }
 }
 
+// WithVersion returns an option that sets the build version displayed in the header.
+func WithVersion(version string) func(*Model) {
+	return func(m *Model) { m.version = version }
+}
+
 // newTabState holds all state for the "new" tab (workflow browser + search).
 type newTabState struct {
 	workflows     []discovery.WorkflowEntry
@@ -76,6 +81,7 @@ type Model struct {
 	projectDir     string
 	projectsRoot   string
 	cwd            string
+	version        string
 	currentRuns    []runs.RunInfo
 	loadErr        string
 	errMsg         string

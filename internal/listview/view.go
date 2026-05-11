@@ -91,7 +91,10 @@ func (m *Model) bodyHeight() int {
 
 func (m *Model) renderHeader() string {
 	const prefix = tuistyle.ScreenMargin
-	const title = "Agent Runner"
+	title := "Agent Runner"
+	if m.version != "" {
+		title += " v" + m.version
+	}
 	left := prefix + headerStyle.Render(title)
 	if m.termWidth <= 0 {
 		return left

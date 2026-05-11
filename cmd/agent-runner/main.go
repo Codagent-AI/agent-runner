@@ -441,7 +441,7 @@ func handleListWithTab(initialTab listview.InitialTab) int {
 		return result.exitCode
 	}
 
-	m, err := listview.New(listview.WithInitialTab(initialTab))
+	m, err := listview.New(listview.WithInitialTab(initialTab), listview.WithVersion(version))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1

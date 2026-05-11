@@ -292,6 +292,43 @@ func TestListView_UsesSingleScreenMargin(t *testing.T) {
 	}
 }
 
+func TestListView_RenderHeaderDisplaysVersionAndCWD(t *testing.T) {
+	m := newTestListModel(nil)
+	m.cwd = "/repo/project"
+	m.termWidth = 60
+	WithVersion("0.7.0")(m)
+
+	header := sanitize(m.renderHeader())
+	if !strings.HasPrefix(header, " Agent Runner v0.7.0") {
+		t.Fatalf("header = %q, want title followed by version", header)
+	}
+	if !strings.Contains(header, "/repo/project") {
+		t.Fatalf("header = %q, want cwd indicator", header)
+	}
+}
+
+func TestListView_RenderHeaderDisplaysDevVersion(t *testing.T) {
+	m := newTestListModel(nil)
+	WithVersion("dev")(m)
+
+	header := sanitize(m.renderHeader())
+	if !strings.HasPrefix(header, " Agent Runner vdev") {
+		t.Fatalf("header = %q, want dev version", header)
+	}
+}
+
+func TestListView_RenderHeaderDropsCWDButKeepsVersionWhenNarrow(t *testing.T) {
+	m := newTestListModel(nil)
+	m.cwd = "/repo/project"
+	m.termWidth = len(" Agent Runner v0.7.0") + 2
+	WithVersion("0.7.0")(m)
+
+	header := sanitize(m.renderHeader())
+	if header != " Agent Runner v0.7.0" {
+		t.Fatalf("header = %q, want only title and version", header)
+	}
+}
+
 func TestListView_RenderSubheaderExplainsTopLevelTabs(t *testing.T) {
 	tests := []struct {
 		name string
