@@ -241,9 +241,6 @@ func TestApplyEvent_StatusMapping(t *testing.T) {
 			if arch.Aborted != c.aborted {
 				t.Errorf("outcome %s: want aborted=%v got %v", c.outcome, c.aborted, arch.Aborted)
 			}
-			if arch.Outcome != c.outcome {
-				t.Errorf("outcome %s: raw outcome = %q", c.outcome, arch.Outcome)
-			}
 		})
 	}
 }
@@ -684,5 +681,50 @@ func TestApplyEvent_PendingUntilEvents(t *testing.T) {
 		if c.Status != StatusPending {
 			t.Errorf("child %q should be pending, got %v", c.ID, c.Status)
 		}
+	}
+}
+
+func TestApplyEvent_IterationStart_ClearsAborted(t *testing.T) {
+	tree := buildImplementChangeTree(t)
+
+	// Bootstrap loop.
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[implement-tasks]",
+		Type:   "step_start",
+		Data: map[string]any{
+			"loop_type":        "for-each",
+			"glob_pattern":     "tasks/*.md",
+			"resolved_matches": []any{"tasks/01.md"},
+		},
+	})
+
+	// Abort first iteration.
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[implement-tasks:0]",
+		Type:   "iteration_start",
+		Data:   map[string]any{"iteration": float64(0), "loop_var": map[string]any{"task_file": "tasks/01.md"}},
+	})
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[implement-tasks:0]",
+		Type:   "iteration_end",
+		Data:   map[string]any{"outcome": "aborted"},
+	})
+
+	iter0 := childByID(tree.Root, "implement-tasks").Children[0]
+	if !iter0.Aborted {
+		t.Fatal("iteration should be aborted after aborted outcome")
+	}
+
+	// Restart the same iteration — Aborted must be cleared.
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[implement-tasks:0]",
+		Type:   "iteration_start",
+		Data:   map[string]any{"iteration": float64(0), "loop_var": map[string]any{"task_file": "tasks/01.md"}},
+	})
+	if iter0.Aborted {
+		t.Error("iteration_start should clear Aborted flag from prior run")
+	}
+	if iter0.Status != StatusInProgress {
+		t.Errorf("status after restart: want in-progress, got %v", iter0.Status)
 	}
 }

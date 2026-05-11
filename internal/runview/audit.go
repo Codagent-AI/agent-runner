@@ -257,6 +257,7 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 		}
 		n.Status = StatusInProgress
 		n.Outcome = ""
+		n.Aborted = false
 		applyIterationStart(n, e.Data)
 	case "iteration_end":
 		n := t.resolve(tokens, true)

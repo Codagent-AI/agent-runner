@@ -3,11 +3,11 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/model"
@@ -67,8 +67,8 @@ func TestExecStartRun_ExecsSelfWithCanonicalNameAndOrderedParams(t *testing.T) {
 		"branch=main",
 		"tag=",
 	}
-	if !reflect.DeepEqual(gotArgs, wantArgs) {
-		t.Fatalf("exec args = %#v, want %#v", gotArgs, wantArgs)
+	if diff := cmp.Diff(wantArgs, gotArgs); diff != "" {
+		t.Fatalf("exec args mismatch (-want +got):\n%s", diff)
 	}
 	if !envContains(gotEnv, liveRunImmediateAltScreenEnv+"=1") {
 		t.Fatalf("exec env missing %s=1", liveRunImmediateAltScreenEnv)
@@ -99,8 +99,8 @@ func TestExecRunnerResume_EmptyRunIDOmitExtraArg(t *testing.T) {
 	}
 
 	wantArgs := []string{filepath.Base("/tmp/agent-runner"), "--resume"}
-	if !reflect.DeepEqual(gotArgs, wantArgs) {
-		t.Fatalf("exec args = %#v, want %#v", gotArgs, wantArgs)
+	if diff := cmp.Diff(wantArgs, gotArgs); diff != "" {
+		t.Fatalf("exec args mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -130,8 +130,8 @@ func TestExecRunnerResume_RunIDRequestsImmediateAltScreen(t *testing.T) {
 	}
 
 	wantArgs := []string{filepath.Base("/tmp/agent-runner"), "--resume", "run-123"}
-	if !reflect.DeepEqual(gotArgs, wantArgs) {
-		t.Fatalf("exec args = %#v, want %#v", gotArgs, wantArgs)
+	if diff := cmp.Diff(wantArgs, gotArgs); diff != "" {
+		t.Fatalf("exec args mismatch (-want +got):\n%s", diff)
 	}
 	if !envContains(gotEnv, liveRunImmediateAltScreenEnv+"=1") {
 		t.Fatalf("exec env missing %s=1", liveRunImmediateAltScreenEnv)
