@@ -346,7 +346,7 @@ func assertUIStep(t *testing.T, step *model.Step, bodyContains string) {
 	}
 }
 
-func assertAgentStep(t *testing.T, step *model.Step, agent string, session string, mode model.StepMode) {
+func assertAgentStep(t *testing.T, step *model.Step, agent, session string, mode model.StepMode) {
 	t.Helper()
 	if step.StepType() != "agent" {
 		t.Fatalf("%s type = %q, want agent", step.ID, step.StepType())
