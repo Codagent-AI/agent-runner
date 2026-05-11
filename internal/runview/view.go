@@ -133,7 +133,7 @@ func (m *Model) renderTwoColumn(children []*StepNode) string {
 
 	// Build log lines for the right pane.
 	var logLines []string
-	if m.liveUI != nil {
+	if m.liveUIVisible() {
 		m.liveUI.SetWidth(rightWidth)
 		logLines = strings.Split(m.liveUI.View(), "\n")
 	} else {
@@ -411,8 +411,29 @@ func truncateSidebarName(name string) string {
 }
 
 func (m *Model) renderHelpBar() string {
-	if m.liveUI != nil {
-		parts := append([]string{"↑↓ step"}, m.liveUI.HelpParts()...)
+	if m.liveUIVisible() {
+		parts := []string{"↑↓ step", "j/k scroll"}
+		if sel := m.selectedNode(); sel != nil && (sel.Type == NodeLoop || sel.Type == NodeSubWorkflow || sel.Type == NodeIteration) {
+			parts = append(parts, "d drill down")
+		}
+		for _, part := range m.liveUI.HelpParts() {
+			if part == "↑↓ option" {
+				part = "←→ option"
+			}
+			if part == "esc cancel" {
+				continue
+			}
+			parts = append(parts, part)
+		}
+		if len(m.path) > 1 {
+			parts = append(parts, "esc back")
+		} else {
+			parts = append(parts, "esc quit")
+		}
+		if !m.autoFollow {
+			parts = append(parts, "l follow")
+		}
+		parts = append(parts, "q quit")
 		return tuistyle.ScreenMargin + tuistyle.HelpStyle.Render(strings.Join(parts, "   "))
 	}
 
@@ -523,14 +544,27 @@ func (m *Model) bodyHeight() int {
 		return 20
 	}
 	chrome := 10
-	if m.currentContainer() != nil && m.currentContainer().Type == NodeSubWorkflow {
-		chrome += 3
-	}
+	chrome += m.subWorkflowHeaderChromeLines()
 	h := m.termHeight - chrome
 	if h < 5 {
 		return 5
 	}
 	return h
+}
+
+func (m *Model) subWorkflowHeaderChromeLines() int {
+	container := m.currentContainer()
+	if container == nil || container.Type != NodeSubWorkflow {
+		return 0
+	}
+	params := container.InterpolatedParams
+	if params == nil {
+		params = container.StaticParams
+	}
+	if len(params) > 0 {
+		return 3
+	}
+	return 2
 }
 
 func (m *Model) renderQuitConfirm() string {

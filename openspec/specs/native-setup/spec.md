@@ -73,11 +73,29 @@ Native setup SHALL NOT persist partially completed wizard progress. If setup is 
 
 ### Requirement: Native setup handoff to onboarding demo
 
-After native setup reaches a terminal state, the runner SHALL continue to the appropriate next application surface. A successful setup SHALL start `onboarding:onboarding` when onboarding demo completion or dismissal has not been recorded. Cancellation, interruption, or failure SHALL transition to the normal TUI entry point without starting the demo.
+After native setup reaches a terminal state, the runner SHALL continue to the appropriate next application surface. A successful setup SHALL start or resume `onboarding:onboarding` when onboarding demo completion or dismissal has not been recorded. First-run onboarding demo run state SHALL be stored in a user-global onboarding run scope rather than under the current project's run history. Cancellation, interruption, or failure SHALL transition to the normal TUI entry point without starting the demo.
 
 #### Scenario: Successful setup starts onboarding demo
 - **WHEN** native setup completes successfully and `settings.onboarding.completed_at` and `settings.onboarding.dismissed` are unset
 - **THEN** the runner starts `onboarding:onboarding`
+
+#### Scenario: Interrupted onboarding demo resumes
+- **WHEN** `settings.onboarding.completed_at` and `settings.onboarding.dismissed` are unset
+- **AND** the user-global onboarding run scope has an incomplete persisted `onboarding:onboarding` run
+- **THEN** the runner resumes the most recently updated incomplete onboarding run instead of starting a new onboarding run
+
+#### Scenario: Onboarding resume is independent of current directory
+- **WHEN** first-run onboarding starts from one working directory and exits before completion
+- **AND** Agent Runner later starts from a different working directory with `settings.onboarding.completed_at` and `settings.onboarding.dismissed` unset
+- **THEN** onboarding resumes from the incomplete user-global onboarding run
+
+#### Scenario: Completed onboarding demo returns home
+- **WHEN** the onboarding demo workflow exits successfully without an explicit app-quit request
+- **THEN** the runner proceeds to the normal TUI entry point
+
+#### Scenario: Quitting onboarding demo exits app
+- **WHEN** the user explicitly quits the onboarding demo workflow with `q`, `Ctrl+C`, or confirmed top-level Escape
+- **THEN** the runner exits the app instead of proceeding to the normal TUI entry point
 
 #### Scenario: Completed onboarding demo is not repeated
 - **WHEN** native setup completes successfully and `settings.onboarding.completed_at` is already set

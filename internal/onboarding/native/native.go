@@ -361,6 +361,8 @@ func (m *Model) Result() Result { return m.result }
 
 func (m *Model) Err() error { return m.err }
 
+func (m *Model) Done() bool { return m.terminal }
+
 func (m *Model) move(delta int) {
 	if len(m.options) <= 1 {
 		return
