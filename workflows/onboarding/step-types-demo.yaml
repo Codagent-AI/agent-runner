@@ -5,17 +5,23 @@ steps:
     mode: ui
     title: Live Workflow Demo
     body: |
-      (Press j to scroll down if needed.)
+      You're looking at a live Agent Runner workflow. The left pane lists its
+      steps; the right pane (here) shows detail for the selected step.
 
-      Agent Runner is a workflow tool for agentic coding. A workflow is a series of steps.
+      Try navigating now:
+        ↑/↓  move between steps
+        d    drill into a sub-workflow
+        j/k  scroll this pane
+        ←/→  move between buttons
+        enter  select a button
 
-      This demo is an actual Agent Runner workflow. You can see its steps in the step list. The demo workflow is a sub-workflow of the top-level onboarding workflow.
+      Each step has a type. This demo walks through the main ones:
+        UI       — static content with actions (like this step)
+        Agent    — interactive or headless AI sessions
+        Shell    — deterministic local commands
+        Capture  — saves a value for later steps to reference
 
-      Take a moment to explore it now. Use ↑/↓ to move through steps and d to drill down into sub-workflows.
-
-      The top section shows the header and breadcrumb. The step list shows the workflow structure. The detail pane shows information for the selected step; right now it is showing this UI step. The help bar at the bottom lists the active keyboard shortcuts.
-
-      This demo will show UI steps, interactive agents, headless agents, shell commands, and captured values.
+      Press Continue to start.
     actions:
       - label: Continue
         outcome: continue
@@ -24,9 +30,15 @@ steps:
     mode: ui
     title: Interactive Agent Step
     body: |
-      The next step starts an interactive planner agent. Interactive steps are useful when the workflow needs a short conversation or a human decision before continuing.
+      Interactive steps open a live agent session where you and the agent collaborate before the workflow moves on.
 
-      Ask a lightweight Agent Runner question, then continue the workflow when the exchange is complete.
+      Example: a planning step that opens an interactive session so you can discuss and shape the plan together before moving to a headless implementation step.
+
+      The next step opens a short interactive session. Ask it anything
+      about Agent Runner. When you're done, continue in any of these ways:
+        - Tell the agent to continue
+        - Type /next
+        - Press Ctrl-]
     actions:
       - label: Continue
         outcome: continue
@@ -48,9 +60,11 @@ steps:
     mode: ui
     title: Headless Agent Step
     body: |
-      The next step starts a headless implementor agent. Headless steps are useful when the workflow can give an agent a bounded task and wait for the result without live interaction.
+      Headless steps give an agent a task and run it to completion without interaction. The workflow advances automatically when the agent finishes.
 
-      This demonstration asks for a harmless explanation only.
+      Example: an implementation step that takes a task file and writes the code while you watch progress stream to the terminal.
+
+      The next step runs a short headless task. Watch the output, then the workflow will continue on its own.
     actions:
       - label: Continue
         outcome: continue
@@ -66,13 +80,22 @@ steps:
 
       Do not write files, modify configuration, run shell commands, start services, install dependencies, call external services, or change project state.
 
+  - id: review-headless
+    mode: ui
+    title: Headless Step Complete
+    body: |
+      The headless step ran and the workflow moved on automatically. Drill into this sub-workflow and then use the arrows to select the headless step and see what the agent wrote. Then press l to come back to this screen.
+    actions:
+      - label: Continue
+        outcome: continue
+
   - id: explain-shell
     mode: ui
     title: Shell Step And Capture
     body: |
-      The next step runs a shell command. Shell steps are useful for deterministic local commands, checks, and small data-producing operations.
+      Shell steps run a local command directly — no agent involved. They're useful for deterministic operations like git commits, validation checks, or scaffolding.
 
-      This command prints a fixed value and captures it into the workflow as shell_capture.
+      Shell steps can also capture their output into a workflow variable that later steps reference. The next step runs a command and captures its output as shell_capture.
     actions:
       - label: Continue
         outcome: continue
@@ -85,11 +108,11 @@ steps:
     mode: ui
     title: Step Types Demo Complete
     body: |
-      The shell step captured this value:
+      The shell step captured this value: {{shell_capture}}
 
-      {{shell_capture}}
+      This step is reading that captured value using interpolation — {{shell_capture}} in the workflow YAML was replaced with the shell step's output. This is how steps pass data forward.
 
-      This shows how one workflow step can produce data that a later UI step interpolates. The demo used UI, interactive agent, headless agent, shell, and capture behavior without changing project files or settings.
+      That covers the main step types: UI, interactive agent, headless agent, shell, and capture.
     actions:
       - label: Continue
         outcome: continue

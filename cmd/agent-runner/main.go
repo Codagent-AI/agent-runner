@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -34,6 +35,7 @@ import (
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/runview"
+	"github.com/codagent/agent-runner/internal/stateio"
 	"github.com/codagent/agent-runner/internal/themeprompt"
 	"github.com/codagent/agent-runner/internal/usersettings"
 	builtinworkflows "github.com/codagent/agent-runner/workflows"
@@ -45,6 +47,8 @@ var version = "dev"
 var userHomeDir = os.UserHomeDir
 var currentExecutable = os.Executable
 var execProcess = syscall.Exec
+
+const liveRunImmediateAltScreenEnv = "AGENT_RUNNER_LIVE_RUN_IMMEDIATE_ALT_SCREEN"
 
 type themeDeps struct {
 	load   func() (usersettings.Settings, error)
@@ -316,6 +320,7 @@ func handleResume(sessionID string) int {
 }
 
 func handleResumeWithOptions(sessionID string, liveOpts liveTUIOptions) int {
+	liveOpts = liveOpts.withEnv()
 	if err := requireTTY(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -510,7 +515,15 @@ func switcherForReentry(prev *switcher, spawnErr error) (*switcher, error) {
 // runLiveTUI starts the runview TUI in FromLiveRun mode with the workflow
 // running in a background goroutine. Returns the process exit code.
 type liveTUIOptions struct {
-	quitOnDone bool
+	quitOnDone       bool
+	startInAltScreen bool
+}
+
+func (opts liveTUIOptions) withEnv() liveTUIOptions {
+	if os.Getenv(liveRunImmediateAltScreenEnv) == "1" {
+		opts.startInAltScreen = true
+	}
+	return opts
 }
 
 func runLiveTUIWithOptions(h *runner.RunHandle, opts liveTUIOptions) int {
@@ -529,7 +542,12 @@ func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResul
 		return liveTUIResult{exitCode: 1}
 	}
 
-	p := tea.NewProgram(rv, tea.WithMouseCellMotion())
+	programOptions := []tea.ProgramOption{tea.WithMouseCellMotion()}
+	if opts.startInAltScreen {
+		rv.StartInAltScreen()
+		programOptions = append(programOptions, tea.WithAltScreen())
+	}
+	p := tea.NewProgram(rv, programOptions...)
 	coord := liverun.NewCoordinator(p, h.SessionDir)
 
 	resultCh := make(chan runner.WorkflowResult, 1)
@@ -659,17 +677,45 @@ func finalRunviewModel(final tea.Model, err error) (*runview.Model, error) {
 }
 
 func execSelf(args ...string) int {
+	return execSelfWithEnv(nil, args...)
+}
+
+func execSelfWithEnv(extraEnv []string, args ...string) int {
 	self, err := currentExecutable()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: cannot resolve executable path: %v\n", err)
 		return 1
 	}
 	execArgs := append([]string{filepath.Base(self)}, args...)
-	if err := execProcess(self, execArgs, os.Environ()); err != nil { // #nosec G204 -- self is our own os.Executable() path; args are validated workflow names / run IDs
+	env := envWithOverrides(os.Environ(), extraEnv...)
+	if err := execProcess(self, execArgs, env); err != nil { // #nosec G204 -- self is our own os.Executable() path; args are validated workflow names / run IDs
 		fmt.Fprintf(os.Stderr, "agent-runner: exec %s: %v\n", strings.Join(args, " "), err)
 		return 1
 	}
 	return 0
+}
+
+func envWithOverrides(base []string, overrides ...string) []string {
+	if len(overrides) == 0 {
+		return base
+	}
+	remove := make(map[string]bool, len(overrides))
+	for _, item := range overrides {
+		key, _, ok := strings.Cut(item, "=")
+		if ok {
+			remove[key] = true
+		}
+	}
+	out := make([]string, 0, len(base)+len(overrides))
+	for _, item := range base {
+		key, _, ok := strings.Cut(item, "=")
+		if ok && remove[key] {
+			continue
+		}
+		out = append(out, item)
+	}
+	out = append(out, overrides...)
+	return out
 }
 
 // allowedResumeCLIs bounds resume CLI arguments. Resume metadata originates
@@ -739,6 +785,7 @@ func execRunnerResume(runID, projectDir string) int {
 	args := []string{"--resume"}
 	if runID != "" {
 		args = append(args, runID)
+		return execSelfWithEnv([]string{liveRunImmediateAltScreenEnv + "=1"}, args...)
 	}
 	return execSelf(args...)
 }
@@ -773,7 +820,7 @@ func execStartRun(entry *discovery.WorkflowEntry, values map[string]string) int 
 		args = append(args, key+"="+values[key])
 	}
 
-	return execSelf(args...)
+	return execSelfWithEnv([]string{liveRunImmediateAltScreenEnv + "=1"}, args...)
 }
 
 // resolveInspectSession resolves a run ID to its session and project
@@ -1145,6 +1192,7 @@ func handleRunWithOptions(args []string, liveOpts liveTUIOptions) int {
 }
 
 func handleRunWithResult(args []string, liveOpts liveTUIOptions) liveTUIResult {
+	liveOpts = liveOpts.withEnv()
 	workflowFile := args[0]
 
 	workflow, err := loader.LoadWorkflow(workflowFile, loader.Options{})
@@ -1270,6 +1318,7 @@ type firstRunDeps struct {
 	isStdoutTTY                   func() bool
 	runNativeSetup                func(onboardingCompleted bool) (nativeSetupResult, error)
 	runDemoPrompt                 func() (nativeSetupResult, error)
+	runDemoPromptFlow             func() firstRunResult
 	continueAfterNativeSetupError bool
 	runWorkflow                   func(ref string) firstRunWorkflowResult
 }
@@ -1305,8 +1354,9 @@ var defaultFirstRunDeps = firstRunDeps{
 		result, err := nativesetup.RunDemoPrompt(&nativesetup.Deps{})
 		return mapSetupResult(result), err
 	},
+	runDemoPromptFlow: runOnboardingDemoPromptFlow,
 	runWorkflow: func(ref string) firstRunWorkflowResult {
-		result := handleRunWithResult([]string{ref}, liveTUIOptions{quitOnDone: true})
+		result := handleRunWithResult([]string{ref}, liveTUIOptions{quitOnDone: true, startInAltScreen: true})
 		return firstRunWorkflowResult(result)
 	},
 }
@@ -1352,6 +1402,9 @@ func ensureFirstRunForTUI(deps firstRunDeps) firstRunResult {
 	}
 
 	if !onboardingDone {
+		if deps.runDemoPromptFlow != nil {
+			return deps.runDemoPromptFlow()
+		}
 		result, err := deps.runDemoPrompt()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
@@ -1375,6 +1428,303 @@ func launchOnboardingDemo(deps firstRunDeps) firstRunResult {
 		return exitFirstRun(result.exitCode)
 	}
 	return continueToList()
+}
+
+type onboardingDemoPromptFlowMode int
+
+const (
+	onboardingDemoPromptMode onboardingDemoPromptFlowMode = iota
+	onboardingDemoRunMode
+)
+
+type onboardingDemoPromptFlow struct {
+	prompt *nativesetup.Model
+	run    *runview.Model
+	handle *runner.RunHandle
+	ref    string
+	opts   liveTUIOptions
+
+	program *tea.Program
+	mode    onboardingDemoPromptFlowMode
+
+	resultCh      chan runner.WorkflowResult
+	exitCode      int
+	exitRequested bool
+	started       bool
+	termWidth     int
+	termHeight    int
+}
+
+func runOnboardingDemoPromptFlow() firstRunResult {
+	ref, err := builtinworkflows.Resolve("onboarding:onboarding")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return exitFirstRun(1)
+	}
+	m := &onboardingDemoPromptFlow{
+		prompt: nativesetup.NewDemoPromptModel(&nativesetup.Deps{}),
+		ref:    ref,
+		opts:   liveTUIOptions{quitOnDone: true, startInAltScreen: true},
+	}
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	m.program = p
+	final, err := p.Run()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return exitFirstRun(1)
+	}
+	fm, ok := final.(*onboardingDemoPromptFlow)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "agent-runner: unexpected onboarding demo model %T\n", final)
+		return exitFirstRun(1)
+	}
+	if fm.exitRequested || fm.exitCode != 0 {
+		return exitFirstRun(fm.exitCode)
+	}
+	return continueToList()
+}
+
+func prepareBuiltinOnboardingRun(ref string) (handle *runner.RunHandle, exitCode int) {
+	if statePath, ok, err := findLatestIncompleteOnboardingRunState(ref); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: find onboarding run: %v\n", err)
+		return nil, 1
+	} else if ok {
+		h, err := runner.PrepareResume(statePath, &runner.Options{
+			ProcessRunner: &realProcessRunner{},
+			GlobExpander:  &realGlobExpander{},
+			Log:           &runner.DiscardLogger{},
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+			return nil, 1
+		}
+		return h, 0
+	}
+
+	workflow, err := loader.LoadWorkflow(ref, loader.Options{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: load workflow: %v\n", err)
+		return nil, 1
+	}
+	sessionDir, err := newOnboardingSessionDir(workflow.Name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: prepare onboarding run: %v\n", err)
+		return nil, 1
+	}
+	h, err := runner.PrepareRun(&workflow, nil, &runner.Options{
+		WorkflowFile:  ref,
+		SessionDir:    sessionDir,
+		ProcessRunner: &realProcessRunner{},
+		GlobExpander:  &realGlobExpander{},
+		Log:           &runner.DiscardLogger{},
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return nil, 1
+	}
+	return h, 0
+}
+
+func findLatestIncompleteOnboardingRunState(ref string) (statePath string, ok bool, err error) {
+	runsDir, err := onboardingRunsDir()
+	if err != nil {
+		return "", false, err
+	}
+	entries, err := os.ReadDir(runsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("read runs dir: %w", err)
+	}
+
+	type candidate struct {
+		statePath string
+		sessionID string
+		modUnix   int64
+	}
+	candidates := make([]candidate, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		statePath := filepath.Join(runsDir, entry.Name(), "state.json")
+		info, err := os.Stat(statePath)
+		if err != nil {
+			continue
+		}
+		state, err := stateio.ReadState(statePath)
+		if err != nil {
+			continue
+		}
+		if state.WorkflowFile != ref || state.Completed {
+			continue
+		}
+		candidates = append(candidates, candidate{
+			statePath: statePath,
+			sessionID: entry.Name(),
+			modUnix:   info.ModTime().UnixNano(),
+		})
+	}
+	if len(candidates) == 0 {
+		return "", false, nil
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].modUnix == candidates[j].modUnix {
+			return candidates[i].sessionID > candidates[j].sessionID
+		}
+		return candidates[i].modUnix > candidates[j].modUnix
+	})
+	return candidates[0].statePath, true, nil
+}
+
+func newOnboardingSessionDir(workflowName string) (string, error) {
+	runsDir, err := onboardingRunsDir()
+	if err != nil {
+		return "", err
+	}
+	safeName := audit.SanitizeWorkflowName(workflowName)
+	timestamp := strings.NewReplacer(":", "-", ".", "-").Replace(time.Now().UTC().Format(time.RFC3339Nano))
+	return filepath.Join(runsDir, safeName+"-"+timestamp), nil
+}
+
+func onboardingRunsDir() (string, error) {
+	home, err := userHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
+	return filepath.Join(home, ".agent-runner", "onboarding", "runs"), nil
+}
+
+func (m *onboardingDemoPromptFlow) Init() tea.Cmd {
+	return m.prompt.Init()
+}
+
+func (m *onboardingDemoPromptFlow) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if size, ok := msg.(tea.WindowSizeMsg); ok {
+		m.termWidth = size.Width
+		m.termHeight = size.Height
+	}
+	switch msg := msg.(type) {
+	case runview.ExitMsg:
+		if msg.UserRequested {
+			m.exitRequested = true
+		}
+		return m, tea.Quit
+	case runview.ResumeMsg:
+		m.exitRequested = true
+		return m, tea.Quit
+	case runview.ResumeListMsg:
+		return m, tea.Quit
+	}
+
+	if m.mode == onboardingDemoRunMode {
+		return m.updateRun(msg)
+	}
+	return m.updatePrompt(msg)
+}
+
+func (m *onboardingDemoPromptFlow) updatePrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.prompt.Update(msg)
+	if prompt, ok := next.(*nativesetup.Model); ok {
+		m.prompt = prompt
+	}
+	if !m.prompt.Done() {
+		return m, cmd
+	}
+	switch m.prompt.Result() {
+	case nativesetup.ResultDemo:
+		return m.startRun()
+	case nativesetup.ResultFailed:
+		m.exitCode = 1
+		return m, tea.Quit
+	case nativesetup.ResultCompleted, nativesetup.ResultCancelled:
+		return m, tea.Quit
+	default:
+		return m, cmd
+	}
+}
+
+func (m *onboardingDemoPromptFlow) startRun() (tea.Model, tea.Cmd) {
+	handle, exitCode := prepareBuiltinOnboardingRun(m.ref)
+	if exitCode != 0 {
+		m.exitCode = exitCode
+		return m, tea.Quit
+	}
+	m.handle = handle
+	rv, err := runview.New(m.handle.SessionDir, m.handle.ProjectDir, runview.FromLiveRun)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		m.exitCode = 1
+		return m, tea.Quit
+	}
+	rv.StartInAltScreen()
+	m.run = rv
+	m.mode = onboardingDemoRunMode
+	m.resultCh = make(chan runner.WorkflowResult, 1)
+	m.startRunner()
+	cmds := []tea.Cmd{rv.Init()}
+	if m.termWidth > 0 && m.termHeight > 0 {
+		w, h := m.termWidth, m.termHeight
+		cmds = append(cmds, func() tea.Msg {
+			return tea.WindowSizeMsg{Width: w, Height: h}
+		})
+	}
+	return m, tea.Batch(cmds...)
+}
+
+func (m *onboardingDemoPromptFlow) startRunner() {
+	if m.started {
+		return
+	}
+	m.started = true
+	coord := liverun.NewCoordinator(m.program, m.handle.SessionDir)
+	go func() {
+		result := runner.ResultFailed
+		var runErr error
+		defer func() {
+			if rec := recover(); rec != nil {
+				coord.NotifyDone(string(runner.ResultFailed), fmt.Errorf("panic: %v", rec))
+				m.resultCh <- runner.ResultFailed
+				return
+			}
+			coord.NotifyDone(string(result), runErr)
+			m.resultCh <- result
+			if m.opts.quitOnDone {
+				m.program.Send(runview.ExitMsg{})
+			}
+		}()
+		result = runner.ExecuteFromHandle(m.handle, &runner.Options{
+			ProcessRunner:   coord.TUIProcessRunner(&realProcessRunner{}),
+			GlobExpander:    &realGlobExpander{},
+			Log:             &runner.DiscardLogger{},
+			SuspendHook:     coord.BeforeInteractive,
+			ResumeHook:      coord.AfterInteractive,
+			PrepareStepHook: coord.PrepareForStep,
+			UIStepHandler:   coord.HandleUIStep,
+		})
+	}()
+}
+
+func (m *onboardingDemoPromptFlow) updateRun(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.run == nil {
+		return m, nil
+	}
+	next, cmd := m.run.Update(msg)
+	if rv, ok := next.(*runview.Model); ok {
+		m.run = rv
+	}
+	return m, cmd
+}
+
+func (m *onboardingDemoPromptFlow) View() string {
+	if m.mode == onboardingDemoRunMode {
+		if m.run == nil {
+			return ""
+		}
+		return m.run.View()
+	}
+	return m.prompt.View()
 }
 
 // parseParams separates positional args from key=value pairs.

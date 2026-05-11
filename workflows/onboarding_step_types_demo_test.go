@@ -18,6 +18,7 @@ func TestStepTypesDemoWorkflowShape(t *testing.T) {
 		"interactive-qa",
 		"explain-headless",
 		"headless-demo",
+		"review-headless",
 		"explain-shell",
 		"shell-capture",
 		"summary",
@@ -33,9 +34,10 @@ func TestStepTypesDemoWorkflowShape(t *testing.T) {
 	assertAgentStep(t, &wf.Steps[2], "planner", model.ModeInteractive)
 	assertUIStep(t, &wf.Steps[3], "headless")
 	assertAgentStep(t, &wf.Steps[4], "implementor", model.ModeHeadless)
-	assertUIStep(t, &wf.Steps[5], "shell")
+	assertUIStep(t, &wf.Steps[5], "Headless")
+	assertUIStep(t, &wf.Steps[6], "shell")
 
-	shellCapture := wf.Steps[6]
+	shellCapture := wf.Steps[7]
 	if shellCapture.StepType() != "shell" {
 		t.Fatalf("shell-capture type = %q, want shell", shellCapture.StepType())
 	}
@@ -46,7 +48,7 @@ func TestStepTypesDemoWorkflowShape(t *testing.T) {
 		t.Fatalf("shell-capture command does not emit deterministic demo value: %q", shellCapture.Command)
 	}
 
-	summary := wf.Steps[7]
+	summary := wf.Steps[8]
 	assertUIStep(t, &summary, "shell_capture")
 	if summary.OutcomeCapture != "summary_action" {
 		t.Fatalf("summary outcome_capture = %q, want summary_action", summary.OutcomeCapture)
@@ -56,7 +58,7 @@ func TestStepTypesDemoWorkflowShape(t *testing.T) {
 		t.Fatalf("summary outcomes mismatch (-want +got):\n%s", diff)
 	}
 
-	learnMore := wf.Steps[8]
+	learnMore := wf.Steps[9]
 	assertAgentStep(t, &learnMore, "planner", model.ModeInteractive)
 	if learnMore.SkipIf != `sh: [ "x{{summary_action}}" != "xlearn_more" ]` {
 		t.Fatalf("learn-more-qa skip_if = %q", learnMore.SkipIf)

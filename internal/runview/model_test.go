@@ -1471,6 +1471,33 @@ func TestModel_SubWorkflowHeader(t *testing.T) {
 	}
 }
 
+func TestModel_BodyHeightMatchesSubWorkflowHeaderLines(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	subwf := &StepNode{
+		ID:             "verify",
+		Type:           NodeSubWorkflow,
+		Status:         StatusInProgress,
+		Parent:         root,
+		StaticWorkflow: "verify.yaml",
+		SubLoaded:      true,
+	}
+	subwf.Children = []*StepNode{{ID: "check", Type: NodeShell, Status: StatusPending, Parent: subwf}}
+	root.Children = []*StepNode{subwf}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.termHeight = 30
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if got, want := m.bodyHeight(), 18; got != want {
+		t.Fatalf("bodyHeight without params = %d, want %d", got, want)
+	}
+
+	subwf.InterpolatedParams = map[string]string{"task_file": "task.md"}
+	if got, want := m.bodyHeight(), 17; got != want {
+		t.Fatalf("bodyHeight with params = %d, want %d", got, want)
+	}
+}
+
 func TestOutput_SanitizeUTF8(t *testing.T) {
 	valid := "hello world"
 	if got := sanitizeUTF8(valid); got != valid {

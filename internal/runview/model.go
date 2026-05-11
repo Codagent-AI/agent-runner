@@ -142,6 +142,14 @@ func (m *Model) ProjectDir() string { return m.projectDir }
 // Entered returns the entry path used to construct the Model.
 func (m *Model) Entered() Entered { return m.entered }
 
+// StartInAltScreen marks the model as already entering alt-screen before the
+// live-run program starts. This is used for TUI-to-live-run handoffs where the
+// caller wants to avoid exposing the underlying terminal between screens.
+func (m *Model) StartInAltScreen() {
+	m.altScreen = true
+	m.suppressAltScreen = false
+}
+
 // New constructs a runview Model from a session directory.
 // For FromDefinition mode, sessionDir carries the workflow file path rather than
 // a real session directory; audit log loading and run-lock checks are skipped.
@@ -509,6 +517,11 @@ func (m *Model) handleLiveUIKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "q":
 		return m.handleKey(msg)
+	case "esc":
+		return m.handleKey(msg)
+	case "l":
+		m.followLiveUI()
+		return m, nil
 	}
 
 	next, _ := m.liveUI.Update(msg)
@@ -529,6 +542,7 @@ func (m *Model) handleLiveUIKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) scrollLiveUI(delta int) {
+	m.autoFollow = false
 	m.logOffset += delta
 	if m.logOffset < 0 {
 		m.logOffset = 0
@@ -553,6 +567,15 @@ func (m *Model) liveUINode() *StepNode {
 	return findDeepestInProgressUI(m.tree.Root, m.liveUIStepID)
 }
 
+func (m *Model) followLiveUI() {
+	active := m.liveUINode()
+	if active == nil {
+		return
+	}
+	m.autoFollow = true
+	m.navigateToNode(active)
+}
+
 func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) {
 	m.termWidth = msg.Width
 	m.termHeight = msg.Height
@@ -571,7 +594,7 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) {
 
 func (m *Model) handleOutputChunkMsg(msg liverun.OutputChunkMsg) {
 	m.applyOutputChunk(msg)
-	if (m.active || m.running) && m.autoFollow {
+	if (m.active || m.running) && m.autoFollow && !m.liveUIVisible() {
 		m.logOffset = math.MaxInt32
 	}
 	lineCount := m.rebuildRanges()
@@ -583,7 +606,7 @@ func (m *Model) handleStepStateMsg(msg liverun.StepStateMsg) {
 	if m.autoFollow {
 		m.applyAutoFollowCursor()
 	}
-	if (m.active || m.running) && m.autoFollow {
+	if (m.active || m.running) && m.autoFollow && !m.liveUIVisible() {
 		m.logOffset = math.MaxInt32
 	}
 	lineCount := m.rebuildRanges()
@@ -654,7 +677,7 @@ func (m *Model) handleRefreshMsg() tea.Cmd {
 		return nil
 	}
 	m.refreshData()
-	if m.autoFollow {
+	if m.autoFollow && !m.liveUIVisible() {
 		m.logOffset = math.MaxInt32
 	}
 	lineCount := m.rebuildRanges()
@@ -777,28 +800,37 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.logOffset++
 		m.syncSelectionToLog()
 	case "l":
+		if m.liveUI != nil {
+			m.followLiveUI()
+			return m, nil
+		}
 		m.autoFollow = true
 		m.applyAutoFollowCursor()
 	case "r":
-		if m.entered == FromDefinition {
-			entry := m.workflowEntry
-			return m, func() tea.Msg { return discovery.StartRunMsg{Entry: entry} }
-		}
-		if m.canResumeRun() {
-			runID := filepath.Base(m.sessionDir)
-			return m, func() tea.Msg { return ResumeRunMsg{RunID: runID} }
-		}
-		if target := m.resumeAgentTargetForSelection(); target != nil {
-			return m, func() tea.Msg {
-				return ResumeMsg{AgentCLI: target.AgentCLI, SessionID: target.SessionID}
-			}
-		}
+		return m.handleResumeKey()
 	case "g":
 		m.handleLoadFull()
 		m.rebuildRanges()
 	case "c":
 		cmd := m.handleCopySelectedDetail()
 		return m, cmd
+	}
+	return m, nil
+}
+
+func (m *Model) handleResumeKey() (tea.Model, tea.Cmd) {
+	if m.entered == FromDefinition {
+		entry := m.workflowEntry
+		return m, func() tea.Msg { return discovery.StartRunMsg{Entry: entry} }
+	}
+	if m.canResumeRun() {
+		runID := filepath.Base(m.sessionDir)
+		return m, func() tea.Msg { return ResumeRunMsg{RunID: runID} }
+	}
+	if target := m.resumeAgentTargetForSelection(); target != nil {
+		return m, func() tea.Msg {
+			return ResumeMsg{AgentCLI: target.AgentCLI, SessionID: target.SessionID}
+		}
 	}
 	return m, nil
 }
@@ -1017,9 +1049,18 @@ func (m *Model) rebuildRanges() int {
 	return len(lines)
 }
 
-// maxLogOffset returns the maximum valid logOffset for the current log content.
+// maxLogOffset returns the maximum valid offset for the currently visible
+// right-pane content.
 func (m *Model) maxLogOffset() int {
-	return max(0, m.logLineCount-m.bodyHeight())
+	return max(0, m.rightPaneLineCount(m.logLineCount)-m.bodyHeight())
+}
+
+func (m *Model) rightPaneLineCount(fallback int) int {
+	if !m.liveUIVisible() {
+		return fallback
+	}
+	m.liveUI.SetWidth(m.rightPaneWidth())
+	return len(strings.Split(m.liveUI.View(), "\n"))
 }
 
 // rightPaneWidth estimates the right-pane width for range computation.
@@ -1073,6 +1114,7 @@ func (m *Model) syncSelectionToLog() {
 }
 
 func (m *Model) clampLogOffset(lineCount int) {
+	lineCount = m.rightPaneLineCount(lineCount)
 	maxOffset := max(0, lineCount-m.bodyHeight())
 	if m.logOffset < 0 {
 		m.logOffset = 0

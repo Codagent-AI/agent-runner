@@ -241,7 +241,7 @@ A UI step with `actions` and no `inputs` SHALL render its actions as the only in
 
 When a `mode: ui` step is rendered inside the live run view, the UI step SHALL NOT behave as a modal that blocks the run view's existing step navigation. The user SHALL be able to move the selected step away from the active UI step while the UI step remains pending. When the selected step is not the active UI step, the run view SHALL render normal details for the selected step and route navigation keys through the run-view key handler.
 
-When the selected step is the active UI step, keys that operate the UI form itself, including Tab/Shift-Tab, arrow-left/arrow-right, Enter, and Esc, SHALL continue to be handled by the UI step. The live run view SHALL provide `d` ("drill down") as a separate shortcut to drill into a selected loop, sub-workflow, or iteration while the UI step is active. The live run view SHALL use the existing run-view scroll shortcuts, `j` and `k`, for UI content that exceeds the detail pane height. The run-view quit shortcut `q` SHALL remain available while a UI step is active. Live UI single-select inputs SHALL use arrow-left/arrow-right for option navigation because arrow-up/arrow-down are owned by step navigation. Standalone UI-step rendering outside the live run view MAY keep using arrow-up and arrow-down for single-select inputs.
+When the selected step is the active UI step, keys that operate the UI form itself, including Tab/Shift-Tab, arrow-left/arrow-right, and Enter, SHALL continue to be handled by the UI step. Escape SHALL be handled by the live run view while a UI step is embedded there: Escape drills out one level when drilled into a sub-workflow, loop, or iteration, and otherwise follows the live run view's top-level Escape behavior. The live run view SHALL provide `d` ("drill down") as a separate shortcut to drill into a selected loop, sub-workflow, or iteration while the UI step is active. The live run view SHALL use the existing run-view scroll shortcuts, `j` and `k`, for UI content that exceeds the detail pane height. The live run view's jump-to-live shortcut `l` SHALL remain available while a UI step is active; pressing `l` SHALL navigate back to the active UI step, drilling in or out as needed, and re-engage auto-follow without resolving the UI step. The run-view quit shortcut `q` SHALL remain available while a UI step is active. Live UI single-select inputs SHALL use arrow-left/arrow-right for option navigation because arrow-up/arrow-down are owned by step navigation. Standalone UI-step rendering outside the live run view MAY keep using arrow-up and arrow-down for single-select inputs.
 
 #### Scenario: Step navigation leaves UI step pending
 - **WHEN** the live run view is displaying a pending UI step and another step is selectable in the current step list
@@ -258,10 +258,21 @@ When the selected step is the active UI step, keys that operate the UI form itse
 - **AND** the user presses `d`
 - **THEN** the run view drills into the selected container and the UI step remains pending
 
+#### Scenario: Escape drills out during active UI step
+- **WHEN** the live run view is drilled into a sub-workflow, loop, or iteration and the active UI step is visible
+- **AND** the user presses Escape
+- **THEN** the run view drills out one level and the UI step remains pending
+
 #### Scenario: Existing run-view scroll keys scroll overflowing UI content
 - **WHEN** the live run view selection is on a pending UI step whose content exceeds the detail pane height
 - **AND** the user presses `j` or `k`
 - **THEN** the visible UI content scrolls without changing the selected step or resolving the UI step
+
+#### Scenario: Follow shortcut returns to active UI step
+- **WHEN** a UI step is pending in the live run view and auto-follow is paused
+- **AND** the user has navigated or drilled away from that UI step
+- **AND** the user presses `l`
+- **THEN** the run view navigates back to the active UI step, drilling in or out as needed, re-engages auto-follow, and leaves the UI step pending
 
 #### Scenario: Quit shortcut remains available during active UI step
 - **WHEN** the live run view selection is on a pending UI step

@@ -49,8 +49,14 @@ func TestLiveUIRequestRendersInsideRunViewChromeAndReturnsAction(t *testing.T) {
 	if !strings.Contains(view, "q quit") {
 		t.Fatalf("run view should keep quit shortcut visible while live UI has focus:\n%s", view)
 	}
-	if !strings.Contains(view, "←→ action") || !strings.Contains(view, "enter select") || !strings.Contains(view, "esc cancel") {
+	if !strings.Contains(view, "←→ action") || !strings.Contains(view, "enter select") {
 		t.Fatalf("run view should show live UI shortcuts in the footer:\n%s", view)
+	}
+	if strings.Contains(view, "esc cancel") {
+		t.Fatalf("live run view should not advertise esc cancel:\n%s", view)
+	}
+	if !strings.Contains(view, "esc quit") {
+		t.Fatalf("top-level live run view should advertise esc quit:\n%s", view)
 	}
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
@@ -188,6 +194,52 @@ func TestLiveUIRequestJKKeysScrollText(t *testing.T) {
 	}
 }
 
+func TestLiveUIRequestManualScrollSurvivesRefresh(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusInProgress}
+	pick := &StepNode{ID: "intro-ui", Type: NodeUI, Status: StatusInProgress, Parent: root}
+	root.Children = []*StepNode{pick}
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.altScreen = true
+	m.running = true
+	m.termHeight = 12
+
+	body := strings.Join([]string{
+		"line 01",
+		"line 02",
+		"line 03",
+		"line 04",
+		"line 05",
+		"line 06",
+		"line 07",
+		"line 08",
+		"line 09",
+		"line 10",
+	}, "\n")
+	updated, _ := m.Update(&liverun.UIRequestMsg{
+		Request: model.UIStepRequest{
+			StepID:  "intro-ui",
+			Title:   "Intro",
+			Body:    body,
+			Actions: []model.UIAction{{Label: "Continue", Outcome: "continue"}},
+		},
+		Reply: make(chan model.UIStepResult, 1),
+	})
+	m = updated.(*Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m = updated.(*Model)
+	scrolled := m.logOffset
+	if scrolled == 0 {
+		t.Fatal("j should scroll the live UI before refresh")
+	}
+
+	m.handleRefreshMsg()
+
+	if m.logOffset != scrolled {
+		t.Fatalf("refresh should preserve manual live UI scroll: before=%d after=%d", scrolled, m.logOffset)
+	}
+}
+
 func TestLiveUIRequestQUsesRunViewQuitConfirmation(t *testing.T) {
 	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusInProgress}
 	pick := &StepNode{ID: "intro-ui", Type: NodeUI, Status: StatusInProgress, Parent: root}
@@ -223,6 +275,51 @@ func TestLiveUIRequestQUsesRunViewQuitConfirmation(t *testing.T) {
 	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
 	if cmd == nil {
 		t.Fatal("y should confirm quit while live UI is active")
+	}
+}
+
+func TestLiveUIRequestEscUsesRunViewQuitConfirmationAtTopLevel(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusInProgress}
+	pick := &StepNode{ID: "intro-ui", Type: NodeUI, Status: StatusInProgress, Parent: root}
+	root.Children = []*StepNode{pick}
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.altScreen = true
+	m.running = true
+
+	reply := make(chan model.UIStepResult, 1)
+	updated, _ := m.Update(&liverun.UIRequestMsg{
+		Request: model.UIStepRequest{
+			StepID:  "intro-ui",
+			Title:   "Intro",
+			Actions: []model.UIAction{{Label: "Continue", Outcome: "continue"}},
+		},
+		Reply: reply,
+	})
+	m = updated.(*Model)
+
+	view := tuistyle.Sanitize(m.View())
+	if strings.Contains(view, "esc cancel") {
+		t.Fatalf("live UI help should not advertise esc cancel inside run view:\n%s", view)
+	}
+	if !strings.Contains(view, "esc quit") {
+		t.Fatalf("top-level live UI help should advertise esc quit:\n%s", view)
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(*Model)
+	if cmd != nil {
+		t.Fatal("esc should show quit confirmation before quitting")
+	}
+	if !m.quitConfirming {
+		t.Fatal("esc should enter quit confirmation while live UI is active at top level")
+	}
+	if m.liveUI == nil {
+		t.Fatal("esc should not resolve the live UI step")
+	}
+	select {
+	case got := <-reply:
+		t.Fatalf("esc should not resolve UI step, got %+v", got)
+	default:
 	}
 }
 
@@ -362,5 +459,132 @@ func TestNestedLiveUIRequestUsesRunViewNavigationOutsideActiveAncestor(t *testin
 	case got := <-reply:
 		t.Fatalf("UI step resolved unexpectedly: %+v", got)
 	default:
+	}
+}
+
+func TestNestedLiveUIRequestEscDrillsOutWhenVisible(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusInProgress}
+	setup := &StepNode{ID: "setup", Type: NodeSubWorkflow, Status: StatusInProgress, Parent: root}
+	pick := &StepNode{ID: "pick-scope", Type: NodeUI, Status: StatusInProgress, Parent: setup}
+	afterPick := &StepNode{ID: "after-pick", Type: NodeShell, Status: StatusPending, Parent: setup}
+	setup.Children = []*StepNode{pick, afterPick}
+	root.Children = []*StepNode{setup}
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.altScreen = true
+
+	reply := make(chan model.UIStepResult, 1)
+	updated, _ := m.Update(&liverun.UIRequestMsg{
+		Request: model.UIStepRequest{
+			StepID:  "pick-scope",
+			Title:   "Pick Scope",
+			Actions: []model.UIAction{{Label: "Continue", Outcome: "continue"}},
+		},
+		Reply: reply,
+	})
+	m = updated.(*Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	m = updated.(*Model)
+	if got := m.currentContainer(); got != setup {
+		t.Fatalf("d should drill into setup, got %v", got)
+	}
+	view := tuistyle.Sanitize(m.View())
+	if !strings.Contains(view, "esc back") {
+		t.Fatalf("drilled live UI help should show esc back:\n%s", view)
+	}
+	if strings.Contains(view, "esc cancel") {
+		t.Fatalf("drilled live UI help should not show esc cancel:\n%s", view)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(*Model)
+	if got := m.currentContainer(); got != root {
+		t.Fatalf("esc should drill out to root, got %v", got)
+	}
+	if m.liveUI == nil {
+		t.Fatal("esc drill-out should leave live UI pending")
+	}
+	select {
+	case got := <-reply:
+		t.Fatalf("esc drill-out should not resolve UI step, got %+v", got)
+	default:
+	}
+}
+
+func TestLiveUIRequestLFollowReturnsToActiveUIAcrossDrillDepth(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusInProgress}
+	setup := &StepNode{ID: "setup", Type: NodeSubWorkflow, Status: StatusInProgress, Parent: root}
+	other := &StepNode{ID: "other", Type: NodeSubWorkflow, Status: StatusPending, Parent: root}
+	pick := &StepNode{ID: "pick-scope", Type: NodeUI, Status: StatusInProgress, Parent: setup}
+	afterPick := &StepNode{ID: "after-pick", Type: NodeShell, Status: StatusPending, Parent: setup}
+	otherChild := &StepNode{ID: "other-child", Type: NodeShell, Status: StatusPending, Parent: other}
+	setup.Children = []*StepNode{pick, afterPick}
+	other.Children = []*StepNode{otherChild}
+	root.Children = []*StepNode{setup, other}
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.altScreen = true
+
+	updated, _ := m.Update(&liverun.UIRequestMsg{
+		Request: model.UIStepRequest{
+			StepID:  "pick-scope",
+			Title:   "Pick Scope",
+			Actions: []model.UIAction{{Label: "Continue", Outcome: "continue"}},
+		},
+		Reply: make(chan model.UIStepResult, 1),
+	})
+	m = updated.(*Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(*Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(*Model)
+	if got := m.currentContainer(); got != other {
+		t.Fatalf("test setup should drill into other workflow, got %v", got)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	m = updated.(*Model)
+
+	if got := m.selectedNode(); got != pick {
+		t.Fatalf("l should select active UI step, got %v", got)
+	}
+	if got := m.currentContainer(); got != setup {
+		t.Fatalf("l should drill to active UI parent, got %v", got)
+	}
+	if !m.autoFollow {
+		t.Fatal("l should re-enable auto-follow")
+	}
+	if view := tuistyle.Sanitize(m.View()); !strings.Contains(view, "Pick Scope") {
+		t.Fatalf("l should show active live UI again:\n%s", view)
+	}
+}
+
+func TestLiveUIRequestLFollowWorksWhileUIVisible(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusInProgress}
+	pick := &StepNode{ID: "pick-scope", Type: NodeUI, Status: StatusInProgress, Parent: root}
+	root.Children = []*StepNode{pick}
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.altScreen = true
+	m.autoFollow = false
+
+	updated, _ := m.Update(&liverun.UIRequestMsg{
+		Request: model.UIStepRequest{
+			StepID:  "pick-scope",
+			Title:   "Pick Scope",
+			Actions: []model.UIAction{{Label: "Continue", Outcome: "continue"}},
+		},
+		Reply: make(chan model.UIStepResult, 1),
+	})
+	m = updated.(*Model)
+	m.autoFollow = false
+
+	if view := tuistyle.Sanitize(m.View()); !strings.Contains(view, "l follow") {
+		t.Fatalf("live UI help should show l follow when auto-follow is off:\n%s", view)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	m = updated.(*Model)
+	if !m.autoFollow {
+		t.Fatal("l should re-enable auto-follow while live UI is visible")
 	}
 }
