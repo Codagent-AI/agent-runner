@@ -1,5 +1,11 @@
 # agent-runner
 
+## 0.7.0
+
+### Minor Changes
+
+- [#30](https://github.com/Codagent-AI/agent-runner/pull/30) Add onboarding phases 3-6 (guided workflow, validator, advanced, help agent)
+
 ## 0.6.0
 
 ### Minor Changes
