@@ -25,7 +25,7 @@ else
     }
   fi
 
-  if ! git merge origin/main --no-edit --quiet 2>/dev/null; then
+  if ! git merge-tree --write-tree HEAD origin/main >/dev/null 2>&1; then
     jq -n '{"error": "merge_conflict", "message": "Merge conflicts when merging origin/main. Resolve conflicts first."}'
     exit 1
   fi

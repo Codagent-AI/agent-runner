@@ -62,6 +62,33 @@ func TestReleaseInfoOnBranchIncludesCurrentBranchPR(t *testing.T) {
 	}
 }
 
+func TestReleaseInfoOnBranchDoesNotMergeOriginMain(t *testing.T) {
+	repo := newReleaseScriptRepo(t)
+	runGit(t, repo.workdir, "switch", "-c", "feature/release-skill")
+	mustWriteFile(t, filepath.Join(repo.workdir, "branch.txt"), "branch change\n")
+	runGit(t, repo.workdir, "add", "branch.txt")
+	runGit(t, repo.workdir, "commit", "-m", "feat: branch work")
+	before := strings.TrimSpace(string(runGitOutput(t, repo.workdir, "rev-parse", "HEAD")))
+
+	runGit(t, repo.workdir, "switch", "main")
+	mustWriteFile(t, filepath.Join(repo.workdir, "main.txt"), "main change\n")
+	runGit(t, repo.workdir, "add", "main.txt")
+	runGit(t, repo.workdir, "commit", "-m", "fix: main work")
+	runGit(t, repo.workdir, "push", "origin", "main")
+	runGit(t, repo.workdir, "switch", "feature/release-skill")
+
+	writeFakeReleaseGH(t, repo.binDir, `[
+		{"number":31,"title":"fix: merged fix","mergedAt":"2026-05-01T00:00:00Z","labels":[]}
+	]`, `{"number":35,"title":"feat: release current branch","labels":[]}`)
+
+	runReleaseScript(t, repo, releaseInfoScript(t))
+
+	after := strings.TrimSpace(string(runGitOutput(t, repo.workdir, "rev-parse", "HEAD")))
+	if after != before {
+		t.Fatalf("release-info changed HEAD from %s to %s", before, after)
+	}
+}
+
 func TestCreateReleasePROnMainCreatesReleaseBranch(t *testing.T) {
 	repo := newReleaseScriptRepo(t)
 	changelog := filepath.Join(repo.workdir, "release-changelog.md")
@@ -82,6 +109,24 @@ func TestCreateReleasePROnMainCreatesReleaseBranch(t *testing.T) {
 	log := string(runGitOutput(t, repo.workdir, "log", "-1", "--format=%s"))
 	if strings.TrimSpace(log) != "chore: release v0.8.0" {
 		t.Fatalf("commit subject = %q", log)
+	}
+}
+
+func TestCreateReleasePROnBranchWithoutUpstreamPushesAndReturnsPR(t *testing.T) {
+	repo := newReleaseScriptRepo(t)
+	runGit(t, repo.workdir, "switch", "-c", "feature/release-skill")
+	changelog := filepath.Join(repo.workdir, "release-changelog.md")
+	mustWriteFile(t, changelog, "## 0.8.0\n\n### Minor Changes\n\n- [#35](https://github.com/Codagent-AI/agent-runner/pull/35) Add release skill\n")
+	writeFakeReleaseGH(t, repo.binDir, "[]", `{"number":35,"title":"feat: release current branch","labels":[]}`)
+
+	out := runReleaseScript(t, repo, createReleasePRScript(t), "0.8.0", changelog)
+
+	if got := strings.TrimSpace(string(out)); got != "https://github.com/Codagent-AI/agent-runner/pull/99" {
+		t.Fatalf("script output = %q, want PR URL", got)
+	}
+	upstream := strings.TrimSpace(string(runGitOutput(t, repo.workdir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")))
+	if upstream != "origin/feature/release-skill" {
+		t.Fatalf("upstream = %q, want origin/feature/release-skill", upstream)
 	}
 }
 

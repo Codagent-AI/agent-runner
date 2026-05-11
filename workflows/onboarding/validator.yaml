@@ -4,6 +4,8 @@ description: Demonstrates Agent Validator setup and the validation feedback loop
 sessions:
   - name: validator-setup-session
     agent: planner
+  - name: tutor-session
+    agent: planner
   - name: impl-session
     agent: implementor
 
@@ -37,12 +39,39 @@ steps:
     mode: ui
     title: Validation Run
     body: |
-      Agent Validator will now run on the changes produced during the guided
-      workflow. If it finds fixable failures, Agent Runner can hand that context
-      back to the implementor session.
+      Agent Runner will first ask the tutorial agent to intentionally introduce
+      a small defect in the code produced by the guided workflow, then Agent
+      Validator will run on the result. If validation finds fixable failures,
+      Agent Runner can hand that context back to the implementor session.
     actions:
       - label: Continue
         outcome: continue
+
+  - id: break-it
+    session: tutor-session
+    mode: headless
+    prompt: |
+      You are the onboarding "break it" step.
+
+      Use the same tutorial-agent context from the guided workflow. First,
+      identify the code that was implemented by the previous guided workflow.
+      Inspect `git status --short` and `git diff`; if the working tree is clean,
+      inspect the previous commit with `git show --stat --name-only HEAD` and
+      `git show HEAD`.
+
+      Intentionally introduce one or two small, reversible bugs only in that
+      previously implemented code. Do not modify unrelated files just because
+      they would be easier to break. Inspect `.validator/config.yml` and choose
+      defects that the configured validator checks or reviews should catch on
+      the next run.
+
+      Prefer defects that deterministic checks can catch, such as a compile
+      failure, test failure, lint failure, or clearly wrong assertion. If this
+      project only has review gates configured, introduce a clear behavioral bug
+      in code touched during onboarding so review should flag it.
+
+      Keep the change scoped and non-destructive. Do not delete unrelated files.
+      Do not commit. When done, summarize the injected defect(s) briefly.
 
   - id: prepare-fix-context
     session: impl-session
@@ -54,11 +83,35 @@ steps:
   - id: run-validator
     workflow: ../core/run-validator.yaml
 
+  - id: review-validator-status
+    session: tutor-session
+    mode: interactive
+    prompt: |
+      You are tutoring the user during Agent Runner onboarding.
+
+      Start by using the agent-validator:validator-status skill to report what
+      happened in the validator run, including whether the intentional break was
+      caught and whether the implementor fixed it.
+
+      Verify the current code state yourself. Inspect the working tree, compare
+      against the code that existed before your break-it step, and confirm
+      whether the intentional bug(s) you introduced were fixed. Also report
+      whether Agent Validator found and fixed any additional issues beyond the
+      intentional bug(s).
+
+      If the user asks follow-up questions about validator behavior, failures,
+      logs, skipped items, or why something passed or failed, use the
+      agent-validator:validator-help skill before answering.
+
+      Use the packaged documentation at {{session_dir}}/bundled/onboarding/docs/
+      for general Agent Runner Q&A. When the user's questions are answered,
+      complete the step so onboarding can continue.
+
   - id: summary-ui
     mode: ui
     title: Validation Feedback Loop
     body: |
-      Validation is complete.
+      Validation review is complete.
 
       The feedback-loop pattern is: implement a change, validate it, route any
       failures back to the implementor, and repeat until checks and reviews pass.

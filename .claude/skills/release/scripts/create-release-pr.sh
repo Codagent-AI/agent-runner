@@ -62,6 +62,10 @@ When merged, the release workflow will publish the explicit version in \`VERSION
 EOF
 )"
 else
-  git push -q
+  if git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+    git push -q
+  else
+    git push -q -u origin "$CURRENT_BRANCH"
+  fi
   gh pr view "$CURRENT_BRANCH" --repo "$REPO" --json url --jq .url
 fi

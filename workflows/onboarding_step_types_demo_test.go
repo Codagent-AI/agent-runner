@@ -214,6 +214,7 @@ func TestValidatorWorkflowShape(t *testing.T) {
 
 	wantSessions := map[string]string{
 		"validator-setup-session": "planner",
+		"tutor-session":           "planner",
 		"impl-session":            "implementor",
 	}
 	assertSessions(t, wf.Sessions, wantSessions)
@@ -223,8 +224,10 @@ func TestValidatorWorkflowShape(t *testing.T) {
 		"init",
 		"setup",
 		"explain-validation",
+		"break-it",
 		"prepare-fix-context",
 		"run-validator",
+		"review-validator-status",
 		"summary-ui",
 	}
 	gotIDs := stepIDs(wf.Steps)
@@ -241,10 +244,24 @@ func TestValidatorWorkflowShape(t *testing.T) {
 	if !strings.Contains(setup.Prompt, "agent-validator:validator-setup") {
 		t.Fatalf("setup prompt missing validator setup skill:\n%s", setup.Prompt)
 	}
+	breakIt := stepByID(t, &wf, "break-it")
+	assertAgentStep(t, breakIt, "", "tutor-session", model.ModeHeadless)
+	for _, want := range []string{"previous guided workflow", "git status --short", "git diff", "git show", "previously implemented code", ".validator/config.yml", "Do not commit"} {
+		if !strings.Contains(breakIt.Prompt, want) {
+			t.Fatalf("break-it prompt missing %q:\n%s", want, breakIt.Prompt)
+		}
+	}
 	assertAgentStep(t, stepByID(t, &wf, "prepare-fix-context"), "", "impl-session", model.ModeHeadless)
 	runValidator := stepByID(t, &wf, "run-validator")
 	if runValidator.StepType() != "sub-workflow" || runValidator.Workflow != "../core/run-validator.yaml" {
 		t.Fatalf("run-validator = type %q workflow %q, want sub-workflow ../core/run-validator.yaml", runValidator.StepType(), runValidator.Workflow)
+	}
+	review := stepByID(t, &wf, "review-validator-status")
+	assertAgentStep(t, review, "", "tutor-session", model.ModeInteractive)
+	for _, want := range []string{"agent-validator:validator-status", "intentional bug", "additional issues", "agent-validator:validator-help", "{{session_dir}}/bundled/onboarding/docs/"} {
+		if !strings.Contains(review.Prompt, want) {
+			t.Fatalf("review-validator-status prompt missing %q:\n%s", want, review.Prompt)
+		}
 	}
 	assertUIStep(t, stepByID(t, &wf, "summary-ui"), "feedback-loop")
 }
