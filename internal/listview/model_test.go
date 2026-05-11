@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/runs"
 )
 
@@ -243,6 +244,33 @@ func TestListModel_R_AllTabRunList_InactiveRun_EmitsResumeRunMsg(t *testing.T) {
 	}
 	if rr.ProjectDir != "/some/path" {
 		t.Fatalf("ProjectDir = %q, want %q", rr.ProjectDir, "/some/path")
+	}
+}
+
+func TestListModel_QuestionMark_EmitsHelpStartRunMsg(t *testing.T) {
+	m := newTestListModel(nil)
+	m.activeTab = tabCurrentDir
+
+	_, cmd := pressKey(m, "?")
+	if cmd == nil {
+		t.Fatal("? should produce a cmd")
+	}
+	msg := cmd()
+	start, ok := msg.(discovery.StartRunMsg)
+	if !ok {
+		t.Fatalf("expected discovery.StartRunMsg, got %T", msg)
+	}
+	if start.Entry.CanonicalName != "onboarding:help" {
+		t.Fatalf("CanonicalName = %q, want onboarding:help", start.Entry.CanonicalName)
+	}
+	if start.Entry.SourcePath != "builtin:onboarding/help.yaml" {
+		t.Fatalf("SourcePath = %q, want builtin:onboarding/help.yaml", start.Entry.SourcePath)
+	}
+	if start.Entry.Scope != discovery.ScopeBuiltin {
+		t.Fatalf("Scope = %v, want ScopeBuiltin", start.Entry.Scope)
+	}
+	if start.Entry.Namespace != "onboarding" {
+		t.Fatalf("Namespace = %q, want onboarding", start.Entry.Namespace)
 	}
 }
 

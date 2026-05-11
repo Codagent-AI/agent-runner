@@ -7,7 +7,14 @@ import (
 )
 
 func TestEmbeddedOnboardingWorkflowsLoad(t *testing.T) {
-	for _, name := range []string{"onboarding:onboarding", "onboarding:step-types-demo"} {
+	for _, name := range []string{
+		"onboarding:onboarding",
+		"onboarding:step-types-demo",
+		"onboarding:guided-workflow",
+		"onboarding:validator",
+		"onboarding:advanced",
+		"onboarding:help",
+	} {
 		t.Run(name, func(t *testing.T) {
 			ref, err := builtinworkflows.Resolve(name)
 			if err != nil {

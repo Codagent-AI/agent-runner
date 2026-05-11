@@ -27,6 +27,34 @@ func TestOnboardingWorkflowsResolveAndAssetsList(t *testing.T) {
 	if demo != "builtin:onboarding/step-types-demo.yaml" {
 		t.Fatalf("demo ref = %q", demo)
 	}
+	guided, err := Resolve("onboarding:guided-workflow")
+	if err != nil {
+		t.Fatalf("Resolve(onboarding:guided-workflow) returned error: %v", err)
+	}
+	if guided != "builtin:onboarding/guided-workflow.yaml" {
+		t.Fatalf("guided ref = %q", guided)
+	}
+	validator, err := Resolve("onboarding:validator")
+	if err != nil {
+		t.Fatalf("Resolve(onboarding:validator) returned error: %v", err)
+	}
+	if validator != "builtin:onboarding/validator.yaml" {
+		t.Fatalf("validator ref = %q", validator)
+	}
+	advanced, err := Resolve("onboarding:advanced")
+	if err != nil {
+		t.Fatalf("Resolve(onboarding:advanced) returned error: %v", err)
+	}
+	if advanced != "builtin:onboarding/advanced.yaml" {
+		t.Fatalf("advanced ref = %q", advanced)
+	}
+	help, err := Resolve("onboarding:help")
+	if err != nil {
+		t.Fatalf("Resolve(onboarding:help) returned error: %v", err)
+	}
+	if help != "builtin:onboarding/help.yaml" {
+		t.Fatalf("help ref = %q", help)
+	}
 
 	assets, err := ListAssets("onboarding")
 	if err != nil {

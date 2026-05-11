@@ -109,20 +109,202 @@ func TestStepTypesDemoPromptsUsePackagedDocsAndStayNonDestructive(t *testing.T) 
 func TestOnboardingRunsStepTypesDemoBeforeCompletion(t *testing.T) {
 	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/onboarding.yaml")
 
-	wantIDs := []string{"step-types-demo", "set-completed"}
+	wantIDs := []string{"step-types-demo", "guided-workflow", "validator", "advanced", "set-completed"}
 	gotIDs := stepIDs(wf.Steps)
 	if diff := cmp.Diff(wantIDs, gotIDs); diff != "" {
 		t.Fatalf("onboarding step IDs mismatch (-want +got):\n%s", diff)
 	}
 
-	demo := stepByID(t, &wf, "step-types-demo")
-	if demo.Workflow != "step-types-demo.yaml" {
-		t.Fatalf("step-types-demo workflow = %q", demo.Workflow)
+	wantWorkflows := map[string]string{
+		"step-types-demo": "step-types-demo.yaml",
+		"guided-workflow": "guided-workflow.yaml",
+		"validator":       "validator.yaml",
+		"advanced":        "advanced.yaml",
+	}
+	for id, want := range wantWorkflows {
+		step := stepByID(t, &wf, id)
+		if step.Workflow != want {
+			t.Fatalf("%s workflow = %q, want %q", id, step.Workflow, want)
+		}
 	}
 
 	completed := stepByID(t, &wf, "set-completed")
 	if !strings.Contains(completed.Command, "onboarding.completed_at") {
 		t.Fatalf("set-completed command = %q", completed.Command)
+	}
+}
+
+func TestGuidedWorkflowShape(t *testing.T) {
+	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/guided-workflow.yaml")
+
+	wantSessions := map[string]string{
+		"planning-session": "planner",
+		"tutor-session":    "planner",
+		"impl-session":     "implementor",
+	}
+	assertSessions(t, wf.Sessions, wantSessions)
+
+	wantIDs := []string{
+		"intro-ui",
+		"capture-cwd",
+		"confirm-cwd",
+		"check-git-clean",
+		"warn-dirty",
+		"create-plan-dir",
+		"explain-plan",
+		"plan",
+		"locate-task",
+		"validate-plan",
+		"explain-tutor",
+		"tutor",
+		"explain-impl",
+		"implement",
+		"summary",
+	}
+	gotIDs := stepIDs(wf.Steps)
+	if diff := cmp.Diff(wantIDs, gotIDs); diff != "" {
+		t.Fatalf("guided workflow step IDs mismatch (-want +got):\n%s", diff)
+	}
+
+	assertUIStep(t, stepByID(t, &wf, "intro-ui"), "plan a real task")
+	if stepByID(t, &wf, "capture-cwd").Capture != "cwd" {
+		t.Fatal("capture-cwd should capture cwd")
+	}
+	assertUIStep(t, stepByID(t, &wf, "confirm-cwd"), "{{cwd}}")
+	gitStatus := stepByID(t, &wf, "check-git-clean")
+	if gitStatus.Capture != "git_status" || !strings.Contains(gitStatus.Command, "git status --porcelain") || !strings.Contains(gitStatus.Command, "true") {
+		t.Fatalf("check-git-clean command/capture mismatch: %#v", gitStatus)
+	}
+	if stepByID(t, &wf, "warn-dirty").SkipIf != `sh: [ -z "{{git_status}}" ]` {
+		t.Fatalf("warn-dirty skip_if = %q", stepByID(t, &wf, "warn-dirty").SkipIf)
+	}
+	if stepByID(t, &wf, "create-plan-dir").Capture != "plan_dir" {
+		t.Fatal("create-plan-dir should capture plan_dir")
+	}
+	assertNamedAgentStep(t, stepByID(t, &wf, "plan"), "planning-session", model.ModeInteractive)
+	if !strings.Contains(stepByID(t, &wf, "plan").Prompt, "First, ask the user what the change is about. DO NOT attempt to guess.") {
+		t.Fatalf("plan prompt missing explicit first-question instruction:\n%s", stepByID(t, &wf, "plan").Prompt)
+	}
+	locate := stepByID(t, &wf, "locate-task")
+	assertNamedAgentStep(t, locate, "planning-session", model.ModeHeadless)
+	if locate.Capture != "task_file" {
+		t.Fatalf("locate-task capture = %q, want task_file", locate.Capture)
+	}
+	if !strings.Contains(stepByID(t, &wf, "validate-plan").Command, `test -f "{{task_file}}"`) {
+		t.Fatalf("validate-plan command = %q", stepByID(t, &wf, "validate-plan").Command)
+	}
+	assertNamedAgentStep(t, stepByID(t, &wf, "tutor"), "tutor-session", model.ModeInteractive)
+	if !strings.Contains(stepByID(t, &wf, "tutor").Prompt, "{{session_dir}}/bundled/onboarding/docs/") {
+		t.Fatalf("tutor prompt missing docs reference:\n%s", stepByID(t, &wf, "tutor").Prompt)
+	}
+	impl := stepByID(t, &wf, "implement")
+	assertNamedAgentStep(t, impl, "impl-session", model.ModeHeadless)
+	for _, want := range []string{"{{task_file}}", "codagent:implement-with-tdd", "Do not commit"} {
+		if !strings.Contains(impl.Prompt, want) {
+			t.Fatalf("implement prompt missing %q:\n%s", want, impl.Prompt)
+		}
+	}
+}
+
+func TestValidatorWorkflowShape(t *testing.T) {
+	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/validator.yaml")
+
+	wantSessions := map[string]string{
+		"validator-setup-session": "planner",
+		"impl-session":            "implementor",
+	}
+	assertSessions(t, wf.Sessions, wantSessions)
+
+	wantIDs := []string{
+		"intro-ui",
+		"init",
+		"setup",
+		"explain-validation",
+		"prepare-fix-context",
+		"run-validator",
+		"summary-ui",
+	}
+	gotIDs := stepIDs(wf.Steps)
+	if diff := cmp.Diff(wantIDs, gotIDs); diff != "" {
+		t.Fatalf("validator workflow step IDs mismatch (-want +got):\n%s", diff)
+	}
+
+	assertUIStep(t, stepByID(t, &wf, "intro-ui"), "Agent Validator")
+	if stepByID(t, &wf, "init").Command != "agent-validator init" {
+		t.Fatalf("init command = %q, want agent-validator init", stepByID(t, &wf, "init").Command)
+	}
+	setup := stepByID(t, &wf, "setup")
+	assertNamedAgentStep(t, setup, "validator-setup-session", model.ModeInteractive)
+	if !strings.Contains(setup.Prompt, "agent-validator:validator-setup") {
+		t.Fatalf("setup prompt missing validator setup skill:\n%s", setup.Prompt)
+	}
+	assertNamedAgentStep(t, stepByID(t, &wf, "prepare-fix-context"), "impl-session", model.ModeHeadless)
+	runValidator := stepByID(t, &wf, "run-validator")
+	if runValidator.StepType() != "sub-workflow" || runValidator.Workflow != "../core/run-validator.yaml" {
+		t.Fatalf("run-validator = type %q workflow %q, want sub-workflow ../core/run-validator.yaml", runValidator.StepType(), runValidator.Workflow)
+	}
+	assertUIStep(t, stepByID(t, &wf, "summary-ui"), "feedback-loop")
+}
+
+func TestAdvancedWorkflowShape(t *testing.T) {
+	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/advanced.yaml")
+
+	wantIDs := []string{"concepts-ui", "help"}
+	gotIDs := stepIDs(wf.Steps)
+	if diff := cmp.Diff(wantIDs, gotIDs); diff != "" {
+		t.Fatalf("advanced step IDs mismatch (-want +got):\n%s", diff)
+	}
+
+	concepts := stepByID(t, &wf, "concepts-ui")
+	assertUIStep(t, concepts, "workflows")
+	for _, want := range []string{"sessions", "new", "resume", "inherit", "loops", "validator loops", "sub-workflows"} {
+		if !strings.Contains(strings.ToLower(concepts.Body), want) {
+			t.Fatalf("concepts-ui body missing %q:\n%s", want, concepts.Body)
+		}
+	}
+
+	help := stepByID(t, &wf, "help")
+	if help.StepType() != "sub-workflow" {
+		t.Fatalf("help type = %q, want sub-workflow", help.StepType())
+	}
+	if help.Workflow != "help.yaml" {
+		t.Fatalf("help workflow = %q, want help.yaml", help.Workflow)
+	}
+}
+
+func TestHelpWorkflowShape(t *testing.T) {
+	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/help.yaml")
+
+	if len(wf.Sessions) != 1 {
+		t.Fatalf("sessions len = %d, want 1", len(wf.Sessions))
+	}
+	session := wf.Sessions[0]
+	if session.Name != "help-session" || session.Agent != "planner" {
+		t.Fatalf("session = %#v, want help-session/planner", session)
+	}
+
+	wantIDs := []string{"help-agent"}
+	gotIDs := stepIDs(wf.Steps)
+	if diff := cmp.Diff(wantIDs, gotIDs); diff != "" {
+		t.Fatalf("help step IDs mismatch (-want +got):\n%s", diff)
+	}
+
+	helpAgent := stepByID(t, &wf, "help-agent")
+	assertAgentStep(t, helpAgent, "", model.ModeInteractive)
+	if helpAgent.Session != "help-session" {
+		t.Fatalf("help-agent session = %q, want help-session", helpAgent.Session)
+	}
+	for _, want := range []string{
+		"{{session_dir}}/bundled/onboarding/docs/",
+		"Agent Runner concepts",
+		"workflows",
+		"step types",
+		"sessions",
+		"validation",
+	} {
+		if !strings.Contains(helpAgent.Prompt, want) {
+			t.Fatalf("help-agent prompt missing %q:\n%s", want, helpAgent.Prompt)
+		}
 	}
 }
 
@@ -174,6 +356,33 @@ func assertAgentStep(t *testing.T, step *model.Step, agent string, mode model.St
 	}
 	if step.Mode != mode {
 		t.Fatalf("%s mode = %q, want %q", step.ID, step.Mode, mode)
+	}
+}
+
+func assertNamedAgentStep(t *testing.T, step *model.Step, session string, mode model.StepMode) {
+	t.Helper()
+	if step.StepType() != "agent" {
+		t.Fatalf("%s type = %q, want agent", step.ID, step.StepType())
+	}
+	if step.Session != model.SessionStrategy(session) {
+		t.Fatalf("%s session = %q, want %q", step.ID, step.Session, session)
+	}
+	if step.Mode != mode {
+		t.Fatalf("%s mode = %q, want %q", step.ID, step.Mode, mode)
+	}
+}
+
+func assertSessions(t *testing.T, got []model.SessionDecl, want map[string]string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("sessions len = %d, want %d: %#v", len(got), len(want), got)
+	}
+	gotMap := make(map[string]string, len(got))
+	for _, session := range got {
+		gotMap[session.Name] = session.Agent
+	}
+	if diff := cmp.Diff(want, gotMap); diff != "" {
+		t.Fatalf("sessions mismatch (-want +got):\n%s", diff)
 	}
 }
 

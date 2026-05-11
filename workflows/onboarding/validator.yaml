@@ -1,0 +1,69 @@
+name: onboarding-validator
+description: Demonstrates Agent Validator setup and the validation feedback loop during onboarding.
+
+sessions:
+  - name: validator-setup-session
+    agent: planner
+  - name: impl-session
+    agent: implementor
+
+steps:
+  - id: intro-ui
+    mode: ui
+    title: Agent Validator
+    body: |
+      Agent Validator checks implementation work with deterministic commands and
+      AI review passes. In this phase you will configure it, run it against the
+      changes from the guided workflow, and see how validation feedback can be
+      routed back into implementation.
+    actions:
+      - label: Continue
+        outcome: continue
+
+  - id: init
+    command: agent-validator init
+
+  - id: setup
+    session: validator-setup-session
+    mode: interactive
+    prompt: |
+      Help the user configure Agent Validator for this project.
+
+      You MUST use the agent-validator:validator-setup skill to configure
+      checks and reviews. Explain the choices briefly, keep the setup practical,
+      and complete the step once the validator configuration is ready.
+
+  - id: explain-validation
+    mode: ui
+    title: Validation Run
+    body: |
+      Agent Validator will now run on the changes produced during the guided
+      workflow. If it finds fixable failures, Agent Runner can hand that context
+      back to the implementor session.
+    actions:
+      - label: Continue
+        outcome: continue
+
+  - id: prepare-fix-context
+    session: impl-session
+    mode: headless
+    prompt: |
+      Briefly acknowledge you are ready to fix any validation failures found next.
+      Output a single line with no other text: Ready
+
+  - id: run-validator
+    workflow: ../core/run-validator.yaml
+
+  - id: summary-ui
+    mode: ui
+    title: Validation Feedback Loop
+    body: |
+      Validation is complete.
+
+      The feedback-loop pattern is: implement a change, validate it, route any
+      failures back to the implementor, and repeat until checks and reviews pass.
+      This keeps reliability work inside the workflow instead of relying on a
+      manual handoff.
+    actions:
+      - label: Continue
+        outcome: continue

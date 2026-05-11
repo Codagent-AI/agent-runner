@@ -1,0 +1,32 @@
+name: onboarding-advanced
+description: Introduces advanced Agent Runner concepts and opens the help agent.
+
+steps:
+  - id: concepts-ui
+    mode: ui
+    title: Advanced Concepts
+    body: |
+      Agent Runner workflows are ordered YAML definitions that compose UI,
+      agent, shell, capture, loop, group, and sub-workflow steps.
+
+      Sessions control agent continuity:
+        new      starts a fresh agent session
+        resume   continues the previous compatible session
+        inherit  uses the most recent session from the parent context
+
+      Named sessions let workflows keep multiple conversations alive at once,
+      such as separate planning, tutoring, implementation, and help sessions.
+
+      Loops repeat step groups over data or until a condition is met. Validator loops
+      use this pattern to run checks, hand failures to an implementor, and
+      try again with bounded retries.
+
+      Sub-workflows keep larger flows readable by calling another workflow file.
+      The onboarding chain you just ran is a top-level workflow made from
+      focused sub-workflows.
+    actions:
+      - label: Continue
+        outcome: continue
+
+  - id: help
+    workflow: help.yaml
