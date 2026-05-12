@@ -13,6 +13,7 @@ import (
 	"github.com/codagent/agent-runner/internal/model"
 	nativesetup "github.com/codagent/agent-runner/internal/onboarding/native"
 	"github.com/codagent/agent-runner/internal/paramform"
+	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/runview"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
@@ -287,6 +288,40 @@ func TestFindLatestIncompleteOnboardingRunStateMissingRunsDir(t *testing.T) {
 	}
 }
 
+func TestPrepareBuiltinOnboardingRunStartsFromRequestedTopLevelStep(t *testing.T) {
+	originalHome := userHomeDir
+	home := t.TempDir()
+	userHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHomeDir = originalHome })
+
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repo, 0o750); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	t.Chdir(repo)
+
+	ref := "builtin:onboarding/onboarding.yaml"
+	runsDir := filepath.Join(home, ".agent-runner", "onboarding", "runs")
+	writeRunState(t, runsDir, "onboarding-onboarding-2026-05-10T10-00-00Z", ref, false)
+
+	handle, exitCode := prepareBuiltinOnboardingRun(ref, "validator")
+	if exitCode != 0 {
+		t.Fatalf("prepareBuiltinOnboardingRun exit = %d, want 0", exitCode)
+	}
+	t.Cleanup(func() { runlock.Delete(handle.SessionDir) })
+
+	if strings.Contains(handle.SessionDir, "2026-05-10T10-00-00Z") {
+		t.Fatalf("session dir = %q, reused incomplete run despite explicit start step", handle.SessionDir)
+	}
+
+	event := readFirstAuditLine(t, filepath.Join(handle.SessionDir, "audit.log"))
+	for _, want := range []string{` run_start `, `"resumed":true`, `"resume_from":"validator"`} {
+		if !strings.Contains(event, want) {
+			t.Fatalf("run_start event = %q, want to contain %q", event, want)
+		}
+	}
+}
+
 func TestNewOnboardingSessionDirUsesGlobalOnboardingScope(t *testing.T) {
 	originalHome := userHomeDir
 	home := t.TempDir()
@@ -307,6 +342,19 @@ func TestNewOnboardingSessionDirUsesGlobalOnboardingScope(t *testing.T) {
 	if !strings.HasPrefix(got, wantPrefix) {
 		t.Fatalf("session dir = %q, want prefix %q", got, wantPrefix)
 	}
+}
+
+func readFirstAuditLine(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	line, _, ok := strings.Cut(string(data), "\n")
+	if !ok {
+		t.Fatalf("audit log has no newline-delimited event: %q", data)
+	}
+	return line
 }
 
 func envContains(env []string, want string) bool {

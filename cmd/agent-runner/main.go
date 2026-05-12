@@ -231,6 +231,8 @@ func run() int {
 	listFlag := flag.Bool("list", false, "Launch the run list TUI")
 	inspectFlag := flag.String("inspect", "", "Launch the run view TUI for a specific `run-id`")
 	validateFlag := flag.Bool("validate", false, "Validate a workflow file without executing")
+	resetOnboardingFlag := flag.Bool("reset-onboarding", false, "Clear onboarding settings, project validator state, and saved onboarding runs before launching")
+	onboardingFromFlag := flag.String("onboarding-from", "", "Start the built-in onboarding workflow from top-level `step-id`")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	vFlag := flag.Bool("v", false, "Print version and exit (shorthand)")
 	// Undocumented: internal escape hatch for running without the TUI when
@@ -245,6 +247,8 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "  -inspect <run-id>\n\tLaunch the run view TUI for a specific run\n")
 		fmt.Fprintf(os.Stderr, "  -list\n\tLaunch the run list TUI\n")
 		fmt.Fprintf(os.Stderr, "  -resume [session-id]\n\tResume an interrupted workflow; launches TUI if no session ID given\n")
+		fmt.Fprintf(os.Stderr, "  -reset-onboarding\n\tClear onboarding settings, project .validator/, and saved onboarding runs before launching\n")
+		fmt.Fprintf(os.Stderr, "  -onboarding-from <step-id>\n\tStart the built-in onboarding workflow from a top-level step\n")
 		fmt.Fprintf(os.Stderr, "  -validate\n\tValidate a workflow file without executing\n")
 		fmt.Fprintf(os.Stderr, "  -v, -version\n\tPrint version and exit\n")
 	}
@@ -272,6 +276,14 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "agent-runner: --validate and --resume are mutually exclusive")
 		return 1
 	}
+	if *resetOnboardingFlag && (*validateFlag || *resumeFlag || *inspectFlag != "") {
+		fmt.Fprintln(os.Stderr, "agent-runner: --reset-onboarding is mutually exclusive with --validate, --resume, and --inspect")
+		return 1
+	}
+	if *onboardingFromFlag != "" && (*validateFlag || *resumeFlag || *inspectFlag != "") {
+		fmt.Fprintln(os.Stderr, "agent-runner: --onboarding-from is mutually exclusive with --validate, --resume, and --inspect")
+		return 1
+	}
 	if *inspectFlag != "" && (*listFlag || *resumeFlag) {
 		fmt.Fprintln(os.Stderr, "agent-runner: --inspect is mutually exclusive with --list and --resume")
 		return 1
@@ -279,19 +291,44 @@ func run() int {
 
 	args := flag.Args()
 
-	if *validateFlag {
+	if *resetOnboardingFlag {
+		if err := resetOnboardingState(); err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: reset onboarding: %v\n", err)
+			return 1
+		}
+	}
+
+	return dispatchRunCommand(args, commandFlags{
+		validate:       *validateFlag,
+		inspect:        *inspectFlag,
+		list:           *listFlag,
+		resume:         *resumeFlag,
+		onboardingFrom: strings.TrimSpace(*onboardingFromFlag),
+	})
+}
+
+type commandFlags struct {
+	validate       bool
+	inspect        string
+	list           bool
+	resume         bool
+	onboardingFrom string
+}
+
+func dispatchRunCommand(args []string, opts commandFlags) int {
+	if opts.validate {
 		return handleValidateArgs(args)
 	}
 
-	if *inspectFlag != "" {
-		return handleInspect(*inspectFlag)
+	if opts.inspect != "" {
+		return handleInspect(opts.inspect)
 	}
 
-	if *listFlag {
-		return handleList()
+	if opts.list {
+		return handleListWithDeps(listview.InitialTabCurrentDir, firstRunDepsWithOnboardingFrom(opts.onboardingFrom))
 	}
 
-	if *resumeFlag {
+	if opts.resume {
 		if len(args) > 1 {
 			fmt.Fprintln(os.Stderr, "agent-runner: --resume accepts at most one argument (the session ID)")
 			return 1
@@ -303,7 +340,15 @@ func run() int {
 	}
 
 	if len(args) < 1 {
-		return handleListBare()
+		if opts.onboardingFrom != "" {
+			ref, err := builtinworkflows.Resolve("onboarding:onboarding")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+				return 1
+			}
+			return handleRunWithRunOptions([]string{ref}, runCommandOptions{from: opts.onboardingFrom}).exitCode
+		}
+		return handleListWithDeps(listview.InitialTabNew, defaultFirstRunDeps)
 	}
 
 	workflowFile, err := resolveWorkflowArg(args[0])
@@ -311,8 +356,12 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
 	}
+	if opts.onboardingFrom != "" && !isTopLevelOnboardingWorkflow(workflowFile) {
+		fmt.Fprintln(os.Stderr, "agent-runner: --onboarding-from can only be used with onboarding:onboarding")
+		return 1
+	}
 
-	return handleRun(append([]string{workflowFile}, args[1:]...))
+	return handleRunWithRunOptions(append([]string{workflowFile}, args[1:]...), runCommandOptions{from: opts.onboardingFrom}).exitCode
 }
 
 func handleResume(sessionID string) int {
@@ -418,17 +467,16 @@ func openInspectTUI(runID, sessionDir, projectDir string) int {
 	return runSwitcher(sw)
 }
 
-// handleListBare opens the list TUI starting on the "new" tab (bare invocation).
-func handleListBare() int {
-	return handleListWithTab(listview.InitialTabNew)
-}
-
 // handleList opens the list TUI starting on the current-dir tab (--list / --resume no-arg).
 func handleList() int {
 	return handleListWithTab(listview.InitialTabCurrentDir)
 }
 
 func handleListWithTab(initialTab listview.InitialTab) int {
+	return handleListWithDeps(initialTab, defaultFirstRunDeps)
+}
+
+func handleListWithDeps(initialTab listview.InitialTab, firstRun firstRunDeps) int {
 	if err := requireTTY(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -437,7 +485,7 @@ func handleListWithTab(initialTab listview.InitialTab) int {
 	if code := ensureThemeForTUI(defaultThemeDeps); code != 0 {
 		return code
 	}
-	if result := ensureFirstRunForTUI(defaultFirstRunDeps); !result.continueToList {
+	if result := ensureFirstRunForTUI(firstRun); !result.continueToList {
 		return result.exitCode
 	}
 
@@ -1183,16 +1231,17 @@ func triedWorkflowPaths(groups ...[]string) string {
 	return "tried " + strings.Join(paths, ", ")
 }
 
-func handleRun(args []string) int {
-	return handleRunWithOptions(args, liveTUIOptions{})
-}
-
-func handleRunWithOptions(args []string, liveOpts liveTUIOptions) int {
-	return handleRunWithResult(args, liveOpts).exitCode
-}
-
 func handleRunWithResult(args []string, liveOpts liveTUIOptions) liveTUIResult {
-	liveOpts = liveOpts.withEnv()
+	return handleRunWithRunOptions(args, runCommandOptions{liveOpts: liveOpts})
+}
+
+type runCommandOptions struct {
+	liveOpts liveTUIOptions
+	from     string
+}
+
+func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIResult {
+	liveOpts := runOpts.liveOpts.withEnv()
 	workflowFile := args[0]
 
 	workflow, err := loader.LoadWorkflow(workflowFile, loader.Options{})
@@ -1238,6 +1287,7 @@ func handleRunWithResult(args []string, liveOpts liveTUIOptions) liveTUIResult {
 	if os.Getenv("AGENT_RUNNER_NO_TUI") == "1" {
 		result, runErr := runner.RunWorkflow(&workflow, params, &runner.Options{
 			WorkflowFile:  workflowFile,
+			From:          runOpts.from,
 			Engine:        eng,
 			ProcessRunner: &realProcessRunner{},
 			GlobExpander:  &realGlobExpander{},
@@ -1259,6 +1309,7 @@ func handleRunWithResult(args []string, liveOpts liveTUIOptions) liveTUIResult {
 
 	h, err := runner.PrepareRun(&workflow, params, &runner.Options{
 		WorkflowFile:  workflowFile,
+		From:          runOpts.from,
 		Engine:        eng,
 		ProcessRunner: &realProcessRunner{},
 		GlobExpander:  &realGlobExpander{},
@@ -1361,6 +1412,25 @@ var defaultFirstRunDeps = firstRunDeps{
 	},
 }
 
+func firstRunDepsWithOnboardingFrom(from string) firstRunDeps {
+	from = strings.TrimSpace(from)
+	if from == "" {
+		return defaultFirstRunDeps
+	}
+	deps := defaultFirstRunDeps
+	deps.runDemoPromptFlow = func() firstRunResult {
+		return runOnboardingDemoPromptFlowFrom(from)
+	}
+	deps.runWorkflow = func(ref string) firstRunWorkflowResult {
+		result := handleRunWithRunOptions([]string{ref}, runCommandOptions{
+			liveOpts: liveTUIOptions{quitOnDone: true, startInAltScreen: true},
+			from:     from,
+		})
+		return firstRunWorkflowResult(result)
+	}
+	return deps
+}
+
 func mapSetupResult(result nativesetup.Result) nativeSetupResult {
 	switch result {
 	case nativesetup.ResultCompleted:
@@ -1442,6 +1512,7 @@ type onboardingDemoPromptFlow struct {
 	run    *runview.Model
 	handle *runner.RunHandle
 	ref    string
+	from   string
 	opts   liveTUIOptions
 
 	program *tea.Program
@@ -1456,6 +1527,10 @@ type onboardingDemoPromptFlow struct {
 }
 
 func runOnboardingDemoPromptFlow() firstRunResult {
+	return runOnboardingDemoPromptFlowFrom("")
+}
+
+func runOnboardingDemoPromptFlowFrom(from string) firstRunResult {
 	ref, err := builtinworkflows.Resolve("onboarding:onboarding")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
@@ -1464,6 +1539,7 @@ func runOnboardingDemoPromptFlow() firstRunResult {
 	m := &onboardingDemoPromptFlow{
 		prompt: nativesetup.NewDemoPromptModel(&nativesetup.Deps{}),
 		ref:    ref,
+		from:   strings.TrimSpace(from),
 		opts:   liveTUIOptions{quitOnDone: true, startInAltScreen: true},
 	}
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
@@ -1484,21 +1560,24 @@ func runOnboardingDemoPromptFlow() firstRunResult {
 	return continueToList()
 }
 
-func prepareBuiltinOnboardingRun(ref string) (handle *runner.RunHandle, exitCode int) {
-	if statePath, ok, err := findLatestIncompleteOnboardingRunState(ref); err != nil {
-		fmt.Fprintf(os.Stderr, "agent-runner: find onboarding run: %v\n", err)
-		return nil, 1
-	} else if ok {
-		h, err := runner.PrepareResume(statePath, &runner.Options{
-			ProcessRunner: &realProcessRunner{},
-			GlobExpander:  &realGlobExpander{},
-			Log:           &runner.DiscardLogger{},
-		})
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+func prepareBuiltinOnboardingRun(ref, from string) (handle *runner.RunHandle, exitCode int) {
+	from = strings.TrimSpace(from)
+	if from == "" {
+		if statePath, ok, err := findLatestIncompleteOnboardingRunState(ref); err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: find onboarding run: %v\n", err)
 			return nil, 1
+		} else if ok {
+			h, err := runner.PrepareResume(statePath, &runner.Options{
+				ProcessRunner: &realProcessRunner{},
+				GlobExpander:  &realGlobExpander{},
+				Log:           &runner.DiscardLogger{},
+			})
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+				return nil, 1
+			}
+			return h, 0
 		}
-		return h, 0
 	}
 
 	workflow, err := loader.LoadWorkflow(ref, loader.Options{})
@@ -1513,6 +1592,7 @@ func prepareBuiltinOnboardingRun(ref string) (handle *runner.RunHandle, exitCode
 	}
 	h, err := runner.PrepareRun(&workflow, nil, &runner.Options{
 		WorkflowFile:  ref,
+		From:          from,
 		SessionDir:    sessionDir,
 		ProcessRunner: &realProcessRunner{},
 		GlobExpander:  &realGlobExpander{},
@@ -1596,6 +1676,39 @@ func onboardingRunsDir() (string, error) {
 	return filepath.Join(home, ".agent-runner", "onboarding", "runs"), nil
 }
 
+func resetOnboardingState() error {
+	settings, err := usersettings.Load()
+	if err != nil {
+		return fmt.Errorf("load settings: %w", err)
+	}
+	settings.Onboarding = usersettings.OnboardingSettings{}
+	if err := usersettings.Save(settings); err != nil {
+		return fmt.Errorf("save settings: %w", err)
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get cwd: %w", err)
+	}
+	if err := os.RemoveAll(filepath.Join(cwd, ".validator")); err != nil {
+		return fmt.Errorf("remove project .validator: %w", err)
+	}
+
+	runsDir, err := onboardingRunsDir()
+	if err != nil {
+		return err
+	}
+	if err := os.RemoveAll(runsDir); err != nil {
+		return fmt.Errorf("remove onboarding runs: %w", err)
+	}
+	return nil
+}
+
+func isTopLevelOnboardingWorkflow(workflowFile string) bool {
+	ref, err := builtinworkflows.Resolve("onboarding:onboarding")
+	return err == nil && workflowFile == ref
+}
+
 func (m *onboardingDemoPromptFlow) Init() tea.Cmd {
 	return m.prompt.Init()
 }
@@ -1646,7 +1759,7 @@ func (m *onboardingDemoPromptFlow) updatePrompt(msg tea.Msg) (tea.Model, tea.Cmd
 }
 
 func (m *onboardingDemoPromptFlow) startRun() (tea.Model, tea.Cmd) {
-	handle, exitCode := prepareBuiltinOnboardingRun(m.ref)
+	handle, exitCode := prepareBuiltinOnboardingRun(m.ref, m.from)
 	if exitCode != 0 {
 		m.exitCode = exitCode
 		return m, tea.Quit
