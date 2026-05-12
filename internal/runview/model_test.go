@@ -692,10 +692,34 @@ func TestModel_Breadcrumb_ActiveLabelDoesNotBlinkOff(t *testing.T) {
 
 func TestFormatLiveElapsed(t *testing.T) {
 	start := time.Date(2026, 4, 27, 20, 48, 0, 0, time.UTC)
-	now := start.Add(18*time.Minute + 40*time.Second)
+	tests := []struct {
+		name string
+		now  time.Time
+		want string
+	}{
+		{
+			name: "minutes and seconds",
+			now:  start.Add(18*time.Minute + 40*time.Second),
+			want: "elapsed 18m 40s",
+		},
+		{
+			name: "whole seconds under one minute",
+			now:  start.Add(3*time.Second + 500*time.Millisecond),
+			want: "elapsed 3s",
+		},
+		{
+			name: "subsecond elapsed",
+			now:  start.Add(500 * time.Millisecond),
+			want: "elapsed 0s",
+		},
+	}
 
-	if got := formatLiveElapsed(start, now); got != "elapsed 18m 40s" {
-		t.Fatalf("formatLiveElapsed() = %q, want %q", got, "elapsed 18m 40s")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatLiveElapsed(start, tt.now); got != tt.want {
+				t.Fatalf("formatLiveElapsed() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

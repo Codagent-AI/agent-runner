@@ -95,7 +95,33 @@ func formatLiveElapsed(start, now time.Time) string {
 	if elapsed < 0 {
 		elapsed = 0
 	}
-	return "elapsed " + formatDuration(elapsed.Milliseconds())
+	return "elapsed " + formatElapsedSeconds(elapsed)
+}
+
+func formatElapsedSeconds(elapsed time.Duration) string {
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	totalSecs := int(elapsed / time.Second)
+	if totalSecs < 60 {
+		return fmt.Sprintf("%ds", totalSecs)
+	}
+	if totalSecs < 3600 {
+		mins := totalSecs / 60
+		remainSecs := totalSecs % 60
+		return fmt.Sprintf("%dm %ds", mins, remainSecs)
+	}
+	hours := totalSecs / 3600
+	mins := (totalSecs % 3600) / 60
+	remainSecs := totalSecs % 60
+	parts := []string{fmt.Sprintf("%dh", hours)}
+	if mins > 0 || remainSecs > 0 {
+		parts = append(parts, fmt.Sprintf("%dm", mins))
+	}
+	if remainSecs > 0 {
+		parts = append(parts, fmt.Sprintf("%ds", remainSecs))
+	}
+	return strings.Join(parts, " ")
 }
 
 func (m *Model) rootStatus() NodeStatus {

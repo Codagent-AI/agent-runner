@@ -24,6 +24,7 @@ steps:
 
   - id: init
     command: agent-validator init
+    mode: interactive
 
   - id: setup
     session: validator-setup-session
