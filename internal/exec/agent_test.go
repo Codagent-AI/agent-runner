@@ -199,6 +199,40 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("named session re-establishes persisted ID when transcript missing on same step", func(t *testing.T) {
+		withFakeClaudeHome(t) // home exists, but no transcript file
+		const persistedID = "persisted-named-never-established"
+		const sessionName = "validator-setup-session"
+
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		ctx := makeCtx()
+		ctx.WorkflowResumed = true
+		ctx.NamedSessions[sessionName] = persistedID
+		ctx.NamedSessionDecls[sessionName] = "planner"
+		ctx.SessionIDs["setup"] = persistedID
+		ctx.LastSessionStepID = "setup"
+		step := model.Step{ID: "setup", Mode: model.ModeHeadless, Prompt: "start", Session: model.SessionStrategy(sessionName)}
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+
+		if ctx.NamedSessions[sessionName] != persistedID {
+			t.Fatalf("expected named session ID to be preserved, got %q (was %q)", ctx.NamedSessions[sessionName], persistedID)
+		}
+
+		args := runner.calls[0]
+		foundSessionID := false
+		for i, a := range args {
+			if a == "--session-id" && i+1 < len(args) && args[i+1] == persistedID {
+				foundSessionID = true
+			}
+			if a == "--resume" {
+				t.Fatalf("did not expect --resume for a never-established named session, got %v", args)
+			}
+		}
+		if !foundSessionID {
+			t.Fatalf("expected --session-id %s to re-establish named session with persisted ID, got %v", persistedID, args)
+		}
+	})
+
 	t.Run("persists resumed session ID before CLI invocation", func(t *testing.T) {
 		// When resuming, the session ID is known at spawn (carried in from
 		// prior state); it must be re-flushed so mid-step kills preserve it.

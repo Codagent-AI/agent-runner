@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"os/exec"
@@ -1690,7 +1691,7 @@ func resetOnboardingState() error {
 	if err != nil {
 		return fmt.Errorf("get cwd: %w", err)
 	}
-	if err := os.RemoveAll(filepath.Join(cwd, ".validator")); err != nil {
+	if err := removeAllWritable(filepath.Join(cwd, ".validator")); err != nil {
 		return fmt.Errorf("remove project .validator: %w", err)
 	}
 
@@ -1698,10 +1699,65 @@ func resetOnboardingState() error {
 	if err != nil {
 		return err
 	}
-	if err := os.RemoveAll(runsDir); err != nil {
+	if err := removeAllWritable(runsDir); err != nil {
 		return fmt.Errorf("remove onboarding runs: %w", err)
 	}
 	return nil
+}
+
+func removeAllWritable(path string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&fs.ModeSymlink != 0 {
+		return os.Remove(path)
+	}
+	if !info.IsDir() {
+		if err := os.Chmod(path, info.Mode().Perm()|0o600); err != nil {
+			return err
+		}
+		return os.Remove(path)
+	}
+
+	root, err := os.OpenRoot(path)
+	if err != nil {
+		return err
+	}
+
+	err = fs.WalkDir(root.FS(), ".", func(name string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if os.IsNotExist(walkErr) {
+				return nil
+			}
+			return walkErr
+		}
+		if entry.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+
+		mode := info.Mode().Perm()
+		if entry.IsDir() {
+			return root.Chmod(name, mode|0o700)
+		}
+		return root.Chmod(name, mode|0o600)
+	})
+	if err != nil {
+		_ = root.Close()
+		return err
+	}
+	if err := root.Close(); err != nil {
+		return err
+	}
+	return os.RemoveAll(path)
 }
 
 func isTopLevelOnboardingWorkflow(workflowFile string) bool {

@@ -317,6 +317,19 @@ func resolveAdapterAndSession(
 		}
 	}
 
+	// Named sessions can hit the same pre-spawn abort case as session:new:
+	// recordSessionOnSpawn flushes NamedSessions before the CLI has necessarily
+	// created its transcript. If we are re-entering that same step and the
+	// adapter can prove the transcript is absent, pass the persisted ID as a
+	// fresh session ID instead of resuming a conversation that does not exist.
+	if isResume && model.IsNamedSession(step.Session) {
+		if persisted := ctx.SessionIDs[step.ID]; persisted != "" && persisted == sessionID {
+			if store, ok := adapter.(cli.SessionStore); ok && !store.SessionExists(persisted, step.Workdir) {
+				isResume = false
+			}
+		}
+	}
+
 	// For fresh Claude sessions, generate a UUID upfront so the adapter can
 	// pass it via --session-id and DiscoverSessionID can return it. Skip
 	// generation when sessionID is already populated — e.g. a persisted

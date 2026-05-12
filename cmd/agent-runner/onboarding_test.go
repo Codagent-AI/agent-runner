@@ -249,6 +249,38 @@ func TestResetOnboardingStateClearsSettingsProjectValidatorAndRuns(t *testing.T)
 	}
 }
 
+func TestResetOnboardingStateRemovesReadOnlyValidatorCache(t *testing.T) {
+	originalHome := userHomeDir
+	home := t.TempDir()
+	userHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHomeDir = originalHome })
+	t.Setenv("HOME", home)
+
+	repo := filepath.Join(t.TempDir(), "repo")
+	moduleDir := filepath.Join(repo, ".validator", "cache", "go", "pkg", "mod", "gopkg.in", "yaml.v3@v3.0.1")
+	if err := os.MkdirAll(moduleDir, 0o755); err != nil {
+		t.Fatalf("mkdir module cache: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(moduleDir, "decode_test.go"), []byte("package yaml\n"), 0o444); err != nil {
+		t.Fatalf("write read-only module file: %v", err)
+	}
+	if err := os.Chmod(moduleDir, 0o555); err != nil {
+		t.Fatalf("chmod module cache: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(moduleDir, 0o755)
+	})
+	t.Chdir(repo)
+
+	if err := resetOnboardingState(); err != nil {
+		t.Fatalf("resetOnboardingState: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(repo, ".validator")); !os.IsNotExist(err) {
+		t.Fatalf(".validator stat err = %v, want not exist", err)
+	}
+}
+
 func TestEnsureFirstRunForTUILoadErrorFails(t *testing.T) {
 	result := ensureFirstRunForTUI(firstRunDeps{
 		load:        func() (usersettings.Settings, error) { return usersettings.Settings{}, errors.New("boom") },
