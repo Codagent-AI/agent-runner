@@ -18,6 +18,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
+	"github.com/codagent/agent-runner/internal/agentplugin"
+	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/profilewrite"
 	"github.com/codagent/agent-runner/internal/tuistyle"
 	"github.com/codagent/agent-runner/internal/usersettings"
@@ -74,12 +76,20 @@ func (f SettingsStoreFunc) Update(mutator func(usersettings.Settings) usersettin
 	return f(mutator)
 }
 
+type PluginInstaller interface {
+	Resolve(clis []string, scope string) (*agentplugin.Plan, error)
+	DryRun(plan *agentplugin.Plan) (*agentplugin.Preview, error)
+	Install(plan *agentplugin.Plan) (*agentplugin.Result, error)
+}
+
 type Deps struct {
 	Detector            AdapterDetector
 	Models              ModelDiscoverer
 	Profiles            ProfileWriter
 	Collisions          CollisionDetector
 	Settings            SettingsStore
+	Plugin              PluginInstaller
+	EnumCLIs            func(globalPath, projectPath string) ([]string, error)
 	Clock               func() time.Time
 	HomeDir             func() (string, error)
 	Cwd                 func() (string, error)
@@ -123,15 +133,17 @@ const (
 	stageHeadlessModel
 	stageScope
 	stageOverwrite
+	stagePluginPreview
 	stageDemoPrompt
 	stageDone
 )
 
 var (
-	scopeOptions      = []string{"global", "project"}
-	overwriteOptions  = []string{"Overwrite", "Cancel"}
-	demoPromptOptions = []string{"Continue", "Not now", "Dismiss"}
-	continueOptions   = []string{"Continue"}
+	scopeOptions         = []string{"global", "project"}
+	overwriteOptions     = []string{"Overwrite", "Cancel"}
+	pluginConfirmOptions = []string{"Install", "Cancel"}
+	demoPromptOptions    = []string{"Continue", "Not now", "Dismiss"}
+	continueOptions      = []string{"Continue"}
 )
 
 const (
@@ -154,6 +166,16 @@ type modelsLoadedMsg struct {
 	err    error
 }
 
+type pluginDryRunMsg struct {
+	preview *agentplugin.Preview
+	err     error
+}
+
+type pluginInstallMsg struct {
+	result *agentplugin.Result
+	err    error
+}
+
 type Model struct {
 	deps             Deps
 	stage            stage
@@ -173,6 +195,10 @@ type Model struct {
 	err              error
 	terminal         bool
 	demoOnly         bool
+
+	pluginPlan    *agentplugin.Plan
+	pluginPreview *agentplugin.Preview
+	pluginResult  *agentplugin.Result
 
 	animDone  bool
 	animFrame int
@@ -242,6 +268,9 @@ func fillDefaults(deps *Deps) *Deps {
 	if deps.Cwd == nil {
 		deps.Cwd = os.Getwd
 	}
+	if deps.EnumCLIs == nil {
+		deps.EnumCLIs = config.EnumerateCLIs
+	}
 	return deps
 }
 
@@ -285,38 +314,61 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmd := m.applyModelsLoaded(msg)
 		return m, cmd
-	case tea.KeyMsg:
-		key := msg.String()
-		if !m.animDone && key != "ctrl+c" && key != "esc" {
-			return m, nil
-		}
-		if m.modelsLoading && key != "ctrl+c" && key != "esc" {
-			return m, nil
-		}
-		switch key {
-		case "ctrl+c", "esc":
-			m.cancel()
+	case pluginDryRunMsg:
+		if msg.err != nil {
+			m.fail(msg.err)
 			return m, tea.Quit
-		case "up", "k":
-			m.move(-1)
-		case "down", "j", "tab":
-			m.move(1)
-		case "left", "h":
-			m.move(-1)
-		case "right", "l":
-			m.move(1)
-		case "enter":
-			done, cmd := m.enter()
-			if done {
-				return m, tea.Quit
-			}
-			if cmd != nil {
-				return m, cmd
-			}
-			if !m.animDone {
-				cmd := m.tickAnim()
-				return m, cmd
-			}
+		}
+		m.pluginPreview = msg.preview
+		m.setStage(stagePluginPreview, pluginConfirmOptions)
+		return m, nil
+	case pluginInstallMsg:
+		m.pluginResult = msg.result
+		done, cmd := m.complete()
+		if done {
+			return m, tea.Quit
+		}
+		if cmd != nil {
+			return m, cmd
+		}
+		return m, nil
+	case tea.KeyMsg:
+		return m.handleKeyMsg(msg)
+	}
+	return m, nil
+}
+
+func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	if !m.animDone && key != "ctrl+c" && key != "esc" {
+		return m, nil
+	}
+	if m.modelsLoading && key != "ctrl+c" && key != "esc" {
+		return m, nil
+	}
+	switch key {
+	case "ctrl+c", "esc":
+		m.cancel()
+		return m, tea.Quit
+	case "up", "k":
+		m.move(-1)
+	case "down", "j", "tab":
+		m.move(1)
+	case "left", "h":
+		m.move(-1)
+	case "right", "l":
+		m.move(1)
+	case "enter":
+		done, cmd := m.enter()
+		if done {
+			return m, tea.Quit
+		}
+		if cmd != nil {
+			return m, cmd
+		}
+		if !m.animDone {
+			cmd := m.tickAnim()
+			return m, cmd
 		}
 	}
 	return m, nil
@@ -415,13 +467,19 @@ func (m *Model) enter() (bool, tea.Cmd) {
 			m.setStageAnimated(stageOverwrite, overwriteOptions)
 			return false, nil
 		}
-		return m.write(), nil
+		return m.write()
 	case stageOverwrite:
 		if selected == "Cancel" {
 			m.cancel()
 			return true, nil
 		}
-		return m.write(), nil
+		return m.write()
+	case stagePluginPreview:
+		if selected == "Cancel" {
+			m.cancel()
+			return true, nil
+		}
+		return false, m.runPluginInstall()
 	case stageDemoPrompt:
 		return m.handleDemoPrompt(selected), nil
 	}
@@ -502,7 +560,7 @@ func (m *Model) resolveTarget() error {
 	return nil
 }
 
-func (m *Model) write() bool {
+func (m *Model) write() (bool, tea.Cmd) {
 	err := m.deps.Profiles.WriteProfile(&profilewrite.Request{
 		TargetPath:       m.targetPath,
 		InteractiveCLI:   m.interactiveCLI,
@@ -511,25 +569,79 @@ func (m *Model) write() bool {
 		HeadlessModel:    m.headlessModel,
 	})
 	if err != nil {
-		return m.fail(err)
+		return m.fail(err), nil
 	}
+
+	if m.deps.Plugin == nil {
+		return m.complete()
+	}
+
+	clis, err := m.enumerateCLIs()
+	if err != nil {
+		return m.fail(err), nil
+	}
+	plan, err := m.deps.Plugin.Resolve(clis, m.scope)
+	if err != nil {
+		return m.fail(err), nil
+	}
+	if plan == nil {
+		return m.complete()
+	}
+
+	m.pluginPlan = plan
+	m.setStageAnimated(stagePluginPreview, nil)
+	return false, m.runPluginDryRun()
+}
+
+func (m *Model) complete() (bool, tea.Cmd) {
 	stamp := m.deps.Clock().UTC().Format(time.RFC3339)
 	if err := m.deps.Settings.Update(func(settings usersettings.Settings) usersettings.Settings {
 		settings.Setup.CompletedAt = stamp
 		return settings
 	}); err != nil {
-		return m.fail(err)
+		return m.fail(err), nil
 	}
 
 	if m.deps.OnboardingCompleted {
 		m.result = ResultCompleted
 		m.terminal = true
 		m.stage = stageDone
-		return true
+		return true, nil
 	}
 
 	m.setStageAnimated(stageDemoPrompt, demoPromptOptions)
-	return false
+	return false, nil
+}
+
+func (m *Model) enumerateCLIs() ([]string, error) {
+	home, err := m.deps.HomeDir()
+	if err != nil {
+		return nil, err
+	}
+	globalPath := filepath.Join(home, ".agent-runner", "config.yaml")
+	cwd, err := m.deps.Cwd()
+	if err != nil {
+		return nil, err
+	}
+	projectPath := filepath.Join(cwd, ".agent-runner", "config.yaml")
+	return m.deps.EnumCLIs(globalPath, projectPath)
+}
+
+func (m *Model) runPluginDryRun() tea.Cmd {
+	return func() tea.Msg {
+		preview, err := m.deps.Plugin.DryRun(m.pluginPlan)
+		return pluginDryRunMsg{preview: preview, err: err}
+	}
+}
+
+func (m *Model) runPluginInstall() tea.Cmd {
+	return func() tea.Msg {
+		result, err := m.deps.Plugin.Install(m.pluginPlan)
+		if err != nil {
+			return pluginInstallMsg{err: err}
+		}
+		return pluginInstallMsg{result: result}
+	}
 }
 
 func (m *Model) setStage(next stage, options []string) {
@@ -720,8 +832,13 @@ func (m *Model) setupProgress() (current, total int, ok bool) {
 		return 0, 0, false
 	}
 	total = 6
-	if m.stage == stageOverwrite || len(m.collisions) > 0 {
-		total = 7
+	hasOverwrite := m.stage == stageOverwrite || len(m.collisions) > 0
+	hasPlugin := m.deps.Plugin != nil
+	if hasOverwrite {
+		total++
+	}
+	if hasPlugin {
+		total++
 	}
 
 	switch m.stage {
@@ -737,6 +854,12 @@ func (m *Model) setupProgress() (current, total int, ok bool) {
 		return 5, total, true
 	case stageOverwrite:
 		return 6, total, true
+	case stagePluginPreview:
+		step := 6
+		if hasOverwrite {
+			step = 7
+		}
+		return step, total, true
 	case stageDemoPrompt:
 		return total, total, true
 	default:
@@ -904,6 +1027,17 @@ func (m *Model) screenContent() (title, body, prompt string) {
 		title = "Existing Agent Profiles"
 		body = "These entries already exist and will be replaced: " + strings.Join(m.collisions, ", ")
 		prompt = "Overwrite the existing entries?"
+	case stagePluginPreview:
+		title = "Install Agent Skills"
+		if m.pluginPreview == nil {
+			body = "Preparing skill installation..."
+		} else {
+			body = m.pluginPreview.Output
+			if m.pluginResult != nil && m.pluginResult.Warning != "" {
+				body += "\n\nWarning: " + m.pluginResult.Warning
+			}
+			prompt = "Install skills for your configured CLIs?"
+		}
 	case stageDemoPrompt:
 		title = "Agent Runner Workflow Demo"
 		body = "Agent Runner includes a short interactive demo that walks through UI prompts, interactive agents, headless agents, shell commands, and data capture. It takes about two minutes and runs real workflow steps."
