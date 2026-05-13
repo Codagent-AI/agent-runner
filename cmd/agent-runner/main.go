@@ -79,11 +79,19 @@ func agentRunnerCommandEnv() []string {
 }
 
 func ensureAgentRunnerExecutableEnv() {
-	self, err := currentExecutable()
-	if err != nil || self == "" {
+	if os.Getenv(agentRunnerExecutableEnv) != "" {
 		return
 	}
-	_ = os.Setenv(agentRunnerExecutableEnv, self)
+	if self, err := currentExecutable(); err == nil && self != "" {
+		_ = os.Setenv(agentRunnerExecutableEnv, self)
+		return
+	}
+	if len(os.Args) == 0 {
+		return
+	}
+	if self, err := exec.LookPath(os.Args[0]); err == nil && self != "" {
+		_ = os.Setenv(agentRunnerExecutableEnv, self)
+	}
 }
 
 func (r *realProcessRunner) RunShell(cmd string, captureStdout bool, workdir string) (iexec.ProcessResult, error) {

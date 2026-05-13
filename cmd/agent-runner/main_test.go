@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -339,6 +340,47 @@ func TestEnsureAgentRunnerExecutableEnvSetsParentEnvironment(t *testing.T) {
 
 	if got := os.Getenv(agentRunnerExecutableEnv); got != "/tmp/source-build/agent-runner" {
 		t.Fatalf("%s = %q, want current executable", agentRunnerExecutableEnv, got)
+	}
+}
+
+func TestEnsureAgentRunnerExecutableEnvPreservesExistingValue(t *testing.T) {
+	originalExecutable := currentExecutable
+	t.Cleanup(func() {
+		currentExecutable = originalExecutable
+	})
+	t.Setenv(agentRunnerExecutableEnv, "/already/set/agent-runner")
+	currentExecutable = func() (string, error) {
+		return "/tmp/source-build/agent-runner", nil
+	}
+
+	ensureAgentRunnerExecutableEnv()
+
+	if got := os.Getenv(agentRunnerExecutableEnv); got != "/already/set/agent-runner" {
+		t.Fatalf("%s = %q, want existing value preserved", agentRunnerExecutableEnv, got)
+	}
+}
+
+func TestEnsureAgentRunnerExecutableEnvFallsBackToArgv0(t *testing.T) {
+	originalExecutable := currentExecutable
+	originalArgs := os.Args
+	t.Cleanup(func() {
+		currentExecutable = originalExecutable
+		os.Args = originalArgs
+	})
+	t.Setenv(agentRunnerExecutableEnv, "")
+	currentExecutable = func() (string, error) {
+		return "", errors.New("unavailable")
+	}
+	path := filepath.Join(t.TempDir(), "agent-runner")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatalf("write fallback executable: %v", err)
+	}
+	os.Args = []string{path}
+
+	ensureAgentRunnerExecutableEnv()
+
+	if got := os.Getenv(agentRunnerExecutableEnv); got != path {
+		t.Fatalf("%s = %q, want argv[0] fallback", agentRunnerExecutableEnv, got)
 	}
 }
 
