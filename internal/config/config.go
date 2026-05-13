@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -103,6 +104,63 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// ConfiguredCLIs returns the sorted union of explicit cli fields from all agent
+// definitions in the optional global and project config files. Built-in default
+// agents are used only to validate inheritance and active-profile consistency;
+// their CLI values are not included in the returned set.
+func ConfiguredCLIs(path string) ([]string, error) {
+	var globalFile *parsedFile
+	if globalPath, err := globalConfigPath(); err == nil {
+		gf, gErr := loadFileOptional(globalPath, true)
+		if gErr != nil {
+			return nil, fmt.Errorf("loading global config %s: %w", globalPath, gErr)
+		}
+		globalFile = gf
+	} else {
+		return nil, err
+	}
+
+	projectFile, err := loadFileOptional(path, false)
+	if err != nil {
+		return nil, fmt.Errorf("loading project config %s: %w", path, err)
+	}
+
+	cfg, err := buildConfig(defaultParsedFile(), globalFile, projectFile)
+	if err != nil {
+		return nil, err
+	}
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+
+	seen := map[string]bool{}
+	collectConfiguredCLIs(seen, globalFile)
+	collectConfiguredCLIs(seen, projectFile)
+
+	values := make([]string, 0, len(seen))
+	for cli := range seen {
+		values = append(values, cli)
+	}
+	sort.Strings(values)
+	return values, nil
+}
+
+func collectConfiguredCLIs(seen map[string]bool, file *parsedFile) {
+	if file == nil {
+		return
+	}
+	for _, ps := range file.Profiles {
+		if ps == nil {
+			continue
+		}
+		for _, agent := range ps.Agents {
+			if agent != nil && agent.CLI != "" {
+				seen[agent.CLI] = true
+			}
+		}
+	}
 }
 
 func globalConfigPath() (string, error) {

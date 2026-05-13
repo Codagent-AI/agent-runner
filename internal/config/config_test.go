@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -298,6 +299,65 @@ func TestLoad_MergesGlobalAndProjectProfiles(t *testing.T) {
 	}
 	if rp.DefaultMode != "headless" || rp.CLI != "claude" || rp.Model != "sonnet" {
 		t.Fatalf("expected project agent to inherit from global base, got %+v", rp)
+	}
+}
+
+func TestConfiguredCLIs_UsesExplicitGlobalAndProjectAgentDefinitions(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repo := filepath.Join(root, "repo")
+	t.Setenv("HOME", home)
+
+	globalPath := filepath.Join(home, ".agent-runner", "config.yaml")
+	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
+
+	writeConfigFile(t, globalPath, `profiles:
+  default:
+    agents:
+      shared:
+        default_mode: headless
+        cli: claude
+      global_only:
+        default_mode: headless
+        cli: codex
+  other:
+    agents:
+      other_agent:
+        default_mode: interactive
+        cli: cursor
+`)
+	writeConfigFile(t, projectPath, `profiles:
+  default:
+    agents:
+      project_only:
+        default_mode: headless
+        cli: copilot
+      inherits:
+        extends: shared
+`)
+
+	got, err := ConfiguredCLIs(projectPath)
+	if err != nil {
+		t.Fatalf("ConfiguredCLIs() returned error: %v", err)
+	}
+	want := []string{"claude", "codex", "copilot", "cursor"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("ConfiguredCLIs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestConfiguredCLIs_DoesNotIncludeBuiltInDefaultsWhenConfigsAreMissing(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repo := filepath.Join(root, "repo")
+	t.Setenv("HOME", home)
+
+	got, err := ConfiguredCLIs(filepath.Join(repo, ".agent-runner", "config.yaml"))
+	if err != nil {
+		t.Fatalf("ConfiguredCLIs() returned error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("ConfiguredCLIs() = %#v, want empty", got)
 	}
 }
 

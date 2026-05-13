@@ -236,8 +236,8 @@ func TestValidatorWorkflowShape(t *testing.T) {
 	}
 
 	assertUIStep(t, stepByID(t, &wf, "intro-ui"), "Agent Validator")
-	if stepByID(t, &wf, "init").Command != "agent-validator init" {
-		t.Fatalf("init command = %q, want agent-validator init", stepByID(t, &wf, "init").Command)
+	if stepByID(t, &wf, "init").Command != "agent-runner internal validator-init" {
+		t.Fatalf("init command = %q, want agent-runner internal validator-init", stepByID(t, &wf, "init").Command)
 	}
 	setup := stepByID(t, &wf, "setup")
 	assertAgentStep(t, setup, "", "validator-setup-session", model.ModeInteractive)

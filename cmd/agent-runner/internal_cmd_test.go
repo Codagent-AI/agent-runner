@@ -211,6 +211,90 @@ func TestWriteProfileCommandDoesNotRelaxExistingParentDirectory(t *testing.T) {
 	}
 }
 
+func TestConfiguredAgentCLIsJoinsExplicitConfigValues(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repo := filepath.Join(root, "repo")
+	t.Setenv("HOME", home)
+
+	writeFileForInternalTest(t, filepath.Join(home, ".agent-runner", "config.yaml"), `profiles:
+  default:
+    agents:
+      planner:
+        default_mode: interactive
+        cli: claude
+      reviewer:
+        default_mode: headless
+        cli: codex
+`)
+	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
+	writeFileForInternalTest(t, projectPath, `profiles:
+  default:
+    agents:
+      implementor:
+        default_mode: headless
+        cli: copilot
+      inherited:
+        extends: planner
+`)
+
+	got, err := configuredAgentCLIs(projectPath)
+	if err != nil {
+		t.Fatalf("configuredAgentCLIs() returned error: %v", err)
+	}
+	if got != "claude,codex,copilot" {
+		t.Fatalf("configuredAgentCLIs() = %q, want claude,codex,copilot", got)
+	}
+}
+
+func TestValidatorInitArgsUsesConfiguredCLIs(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repo := filepath.Join(root, "repo")
+	t.Setenv("HOME", home)
+
+	writeFileForInternalTest(t, filepath.Join(home, ".agent-runner", "config.yaml"), `profiles:
+  default:
+    agents:
+      planner:
+        default_mode: interactive
+        cli: claude
+`)
+	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
+	writeFileForInternalTest(t, projectPath, `profiles:
+  default:
+    agents:
+      implementor:
+        default_mode: headless
+        cli: codex
+`)
+
+	got, err := validatorInitArgs(projectPath)
+	if err != nil {
+		t.Fatalf("validatorInitArgs() returned error: %v", err)
+	}
+	want := []string{"init", "--agents", "claude,codex"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("validatorInitArgs() mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestValidatorInitArgsOmitsAgentsWhenNoExplicitConfigCLIs(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repo := filepath.Join(root, "repo")
+	t.Setenv("HOME", home)
+
+	got, err := validatorInitArgs(filepath.Join(repo, ".agent-runner", "config.yaml"))
+	if err != nil {
+		t.Fatalf("validatorInitArgs() returned error: %v", err)
+	}
+	want := []string{"init"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("validatorInitArgs() mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestInternalJSONHelpersDecodeValidJSON(t *testing.T) {
 	t.Run("string field", func(t *testing.T) {
 		got, err := decodeJSONStringField(strings.NewReader(`{
@@ -240,4 +324,14 @@ func TestInternalJSONHelpersDecodeValidJSON(t *testing.T) {
 
 func quoteJSON(s string) string {
 	return `"` + strings.ReplaceAll(s, `\`, `\\`) + `"`
+}
+
+func writeFileForInternalTest(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
 }
