@@ -43,6 +43,9 @@ type Result struct {
 }
 
 func Resolve(req *Request) (*Plan, error) {
+	if req == nil {
+		return nil, fmt.Errorf("nil request")
+	}
 	if len(req.CLIs) == 0 {
 		return nil, nil
 	}

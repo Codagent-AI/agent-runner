@@ -262,6 +262,33 @@ func TestPluginNilSkipsInstallStep(t *testing.T) {
 	}
 }
 
+func TestPluginInstallErrorFailsSetup(t *testing.T) {
+	saved := false
+	plugin := &fakePluginInstaller{
+		dryRunOutput: "preview",
+		installErr:   errors.New("command execution failed"),
+	}
+	deps := pluginDeps(plugin)
+	deps.Settings = SettingsStoreFunc(func(func(usersettings.Settings) usersettings.Settings) error {
+		saved = true
+		return nil
+	})
+	m := NewModel(&deps)
+
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter")
+	sendKeys(t, m, "enter") // confirm install
+
+	if m.Result() != ResultFailed {
+		t.Fatalf("Result() = %v, want ResultFailed for install error", m.Result())
+	}
+	if m.Err() == nil || !strings.Contains(m.Err().Error(), "command execution failed") {
+		t.Fatalf("Err() = %v, want command execution failed", m.Err())
+	}
+	if saved {
+		t.Fatal("settings should not be saved after install error")
+	}
+}
+
 func TestPluginEnumCLIsPassedToResolve(t *testing.T) {
 	plugin := &fakePluginInstaller{dryRunOutput: "preview"}
 	deps := pluginDeps(plugin)

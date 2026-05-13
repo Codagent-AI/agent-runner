@@ -60,6 +60,13 @@ func TestResolve_ReturnsBinaryMissingWhenNotOnPATH(t *testing.T) {
 	}
 }
 
+func TestResolve_NilRequestReturnsError(t *testing.T) {
+	_, err := Resolve(nil)
+	if err == nil {
+		t.Fatal("Resolve(nil) error = nil, want error")
+	}
+}
+
 func TestResolve_EmptyCLIsReturnsNilPlan(t *testing.T) {
 	orig := lookPath
 	lookPath = func(string) (string, error) { return "/usr/local/bin/agent-plugin", nil }

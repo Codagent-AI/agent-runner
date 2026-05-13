@@ -323,6 +323,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setStage(stagePluginPreview, pluginConfirmOptions)
 		return m, nil
 	case pluginInstallMsg:
+		if msg.err != nil {
+			m.fail(msg.err)
+			return m, tea.Quit
+		}
 		m.pluginResult = msg.result
 		done, cmd := m.complete()
 		if done {
