@@ -307,6 +307,41 @@ func TestRealProcessRunner_RunAgentDoesNotInheritStdin(t *testing.T) {
 	}
 }
 
+func TestRealProcessRunner_RunShellExposesCurrentExecutable(t *testing.T) {
+	originalExecutable := currentExecutable
+	t.Cleanup(func() {
+		currentExecutable = originalExecutable
+	})
+	currentExecutable = func() (string, error) {
+		return "/tmp/source-build/agent-runner", nil
+	}
+
+	result, err := (&realProcessRunner{}).RunShell(`printf %s "$AGENT_RUNNER_EXECUTABLE"`, true, "")
+	if err != nil {
+		t.Fatalf("RunShell returned error: %v", err)
+	}
+	if result.Stdout != "/tmp/source-build/agent-runner" {
+		t.Fatalf("AGENT_RUNNER_EXECUTABLE = %q, want current executable", result.Stdout)
+	}
+}
+
+func TestEnsureAgentRunnerExecutableEnvSetsParentEnvironment(t *testing.T) {
+	originalExecutable := currentExecutable
+	t.Cleanup(func() {
+		currentExecutable = originalExecutable
+	})
+	t.Setenv(agentRunnerExecutableEnv, "")
+	currentExecutable = func() (string, error) {
+		return "/tmp/source-build/agent-runner", nil
+	}
+
+	ensureAgentRunnerExecutableEnv()
+
+	if got := os.Getenv(agentRunnerExecutableEnv); got != "/tmp/source-build/agent-runner" {
+		t.Fatalf("%s = %q, want current executable", agentRunnerExecutableEnv, got)
+	}
+}
+
 func TestRealProcessRunner_RunScriptPreservesCapturedStdout(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "script.sh")

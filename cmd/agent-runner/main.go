@@ -50,6 +50,7 @@ var currentExecutable = os.Executable
 var execProcess = syscall.Exec
 
 const liveRunImmediateAltScreenEnv = "AGENT_RUNNER_LIVE_RUN_IMMEDIATE_ALT_SCREEN"
+const agentRunnerExecutableEnv = "AGENT_RUNNER_EXECUTABLE"
 
 type themeDeps struct {
 	load   func() (usersettings.Settings, error)
@@ -68,9 +69,27 @@ var defaultThemeDeps = themeDeps{
 // realProcessRunner implements exec.ProcessRunner using os/exec.
 type realProcessRunner struct{}
 
+func agentRunnerCommandEnv() []string {
+	env := os.Environ()
+	self, err := currentExecutable()
+	if err != nil || self == "" {
+		return env
+	}
+	return append(env, agentRunnerExecutableEnv+"="+self)
+}
+
+func ensureAgentRunnerExecutableEnv() {
+	self, err := currentExecutable()
+	if err != nil || self == "" {
+		return
+	}
+	_ = os.Setenv(agentRunnerExecutableEnv, self)
+}
+
 func (r *realProcessRunner) RunShell(cmd string, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
 	c := exec.Command("sh", "-c", cmd) // #nosec G204 -- CLI runner executes user-defined shell commands by design
 	c.Stdin = os.Stdin
+	c.Env = agentRunnerCommandEnv()
 	if workdir != "" {
 		c.Dir = filepath.Clean(workdir) // #nosec G304 -- workdir is from user-authored workflow YAML
 	}
@@ -111,6 +130,7 @@ func (r *realProcessRunner) RunShell(cmd string, captureStdout bool, workdir str
 func (r *realProcessRunner) RunAgent(args []string, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
 	c := exec.Command(args[0], args[1:]...) // #nosec G204 -- CLI runner launches agent processes by design
 	c.Stderr = os.Stderr
+	c.Env = agentRunnerCommandEnv()
 	if workdir != "" {
 		c.Dir = filepath.Clean(workdir) // #nosec G304 -- workdir is from user-authored workflow YAML
 	}
@@ -148,7 +168,7 @@ func (r *realProcessRunner) RunAgent(args []string, captureStdout bool, workdir 
 func (r *realProcessRunner) RunScript(path string, stdin []byte, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
 	c := exec.Command(path) // #nosec G204 -- workflow script path is validated by executor
 	c.Stdin = bytes.NewReader(stdin)
-	c.Env = append(os.Environ(), "AGENT_RUNNER_BUNDLE_DIR="+scriptBundleDir(path))
+	c.Env = append(agentRunnerCommandEnv(), "AGENT_RUNNER_BUNDLE_DIR="+scriptBundleDir(path))
 	if workdir != "" {
 		c.Dir = filepath.Clean(workdir) // #nosec G304
 	}
@@ -223,6 +243,8 @@ func main() {
 }
 
 func run() int {
+	ensureAgentRunnerExecutableEnv()
+
 	if len(os.Args) > 1 && os.Args[1] == "internal" {
 		return handleInternal(os.Args[2:])
 	}

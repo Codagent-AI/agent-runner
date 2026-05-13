@@ -23,7 +23,7 @@ steps:
         outcome: continue
 
   - id: init
-    command: agent-runner internal validator-init
+    command: '"$AGENT_RUNNER_EXECUTABLE" internal validator-init'
     mode: interactive
 
   - id: setup
