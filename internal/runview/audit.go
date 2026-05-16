@@ -266,9 +266,10 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 
 	switch e.Type {
 	case "run_start":
-		if t.Root.Status == StatusPending {
-			t.Root.Status = StatusInProgress
-		}
+		t.Root.Status = StatusInProgress
+		t.Root.Aborted = false
+		t.Root.Outcome = ""
+		t.Root.ErrorMessage = ""
 	case "run_end":
 		outcome, _ := stringField(e.Data, "outcome")
 		applyOutcome(t.Root, outcome)

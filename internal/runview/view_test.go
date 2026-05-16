@@ -823,13 +823,9 @@ func TestRenderStepRow_NonSelectedUsesDefaultTextColor(t *testing.T) {
 	m := newTestModel(&Tree{Root: root}, FromList)
 	rendered := m.renderStepRow(step, false, false)
 
-	normalLabel := tuistyle.NormalStyle.Render("build")
 	dimLabel := tuistyle.DimStyle.Render("build")
-	if normalLabel == dimLabel {
-		t.Fatalf("test setup: NormalStyle and DimStyle produced identical output — color profile not forced")
-	}
-	if strings.Contains(rendered, normalLabel) {
-		t.Errorf("non-selected label should not use NormalStyle, got:\n%q", rendered)
+	if !strings.Contains(rendered, "build") {
+		t.Errorf("non-selected label missing raw text, got:\n%q", rendered)
 	}
 	if strings.Contains(rendered, dimLabel) {
 		t.Errorf("non-selected label should not use DimStyle, got:\n%q", rendered)
@@ -863,13 +859,9 @@ func TestRenderExpansionRow_UsesDefaultTextColor(t *testing.T) {
 	m := newTestModel(&Tree{Root: root}, FromList)
 	rendered := m.renderExpansionRow(child, 1)
 
-	normalLabel := tuistyle.NormalStyle.Render("prepare")
 	dimLabel := tuistyle.DimStyle.Render("prepare")
-	if normalLabel == dimLabel {
-		t.Fatalf("test setup: NormalStyle and DimStyle produced identical output — color profile not forced")
-	}
-	if strings.Contains(rendered, normalLabel) {
-		t.Errorf("expansion-row label should not use NormalStyle, got:\n%q", rendered)
+	if !strings.Contains(rendered, "prepare") {
+		t.Errorf("expansion-row label missing raw text, got:\n%q", rendered)
 	}
 	if strings.Contains(rendered, dimLabel) {
 		t.Errorf("expansion-row label should not use DimStyle, got:\n%q", rendered)

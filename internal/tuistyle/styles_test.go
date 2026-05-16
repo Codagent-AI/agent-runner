@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 // TestBlinkHidden verifies that BlinkHidden returns a blank string of the
@@ -55,6 +56,18 @@ func TestRenderButtonRow_DistributesButtonsWithinWidth(t *testing.T) {
 	}
 	if lipgloss.Width(got) >= 70 {
 		t.Fatalf("button row width = %d, want spare room under width 70: %q", lipgloss.Width(got), got)
+	}
+}
+
+func TestRenderButton_UsesTerminalDefaultForUnfocusedButtons(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	lipgloss.SetHasDarkBackground(false)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+
+	got := RenderButton("Learn more", false)
+	want := lipgloss.NewStyle().Render("[ Learn more ]")
+	if got != want {
+		t.Fatalf("unfocused button style mismatch:\ngot  %q\nwant %q", got, want)
 	}
 }
 

@@ -160,7 +160,7 @@ const (
 )
 
 var (
-	setupBodyTextStyle         = lipgloss.NewStyle()
+	setupBodyStyle             = lipgloss.NewStyle()
 	setupTitleStyle            = tuistyle.LabelStyle.Bold(true)
 	setupOptionStyle           = lipgloss.NewStyle()
 	setupFocusedOptionStyle    = tuistyle.LabelStyle.Bold(true)
@@ -750,7 +750,7 @@ func (m *Model) renderPanel() string {
 	b.WriteString(setupTitleStyle.Render(title))
 	b.WriteString("\n\n")
 	if body != "" {
-		b.WriteString(renderWrapped(body, textWidth, setupBodyTextStyle.Render))
+		b.WriteString(renderWrapped(body, textWidth, setupBodyStyle.Render))
 		b.WriteString("\n\n")
 	}
 	if prompt != "" {

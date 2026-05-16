@@ -56,6 +56,20 @@ steps:
 
       Do not write files, modify configuration, start services, install dependencies, or change project state.
 
+  - id: back-in-workflow
+    mode: ui
+    title: Back In The Workflow
+    body: |
+      That was an interactive agent step. It took over the screen while you
+      and the agent exchanged messages.
+
+      When the step finished, Agent Runner brought you back here. Depending
+      on what comes next in the workflow, the next step might open another
+      interactive agent session or it might come back to this TUI — like right now.
+    actions:
+      - label: Continue
+        outcome: continue
+
   - id: explain-headless
     mode: ui
     title: Headless Agent Step

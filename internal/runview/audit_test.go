@@ -249,6 +249,32 @@ func TestApplyEvent_StepStartAfterFailure(t *testing.T) {
 	}
 }
 
+func TestApplyEvent_RunStartAfterFailureClearsRootFailure(t *testing.T) {
+	tree := buildImplementChangeTree(t)
+	tree.ApplyEvent(RawEvent{
+		Type: "run_end",
+		Data: map[string]any{"outcome": "failed"},
+	})
+	if tree.Root.Status != StatusFailed {
+		t.Fatalf("precondition: root status = %v, want failed", tree.Root.Status)
+	}
+
+	tree.ApplyEvent(RawEvent{
+		Type: "run_start",
+		Data: map[string]any{},
+	})
+
+	if tree.Root.Status != StatusInProgress {
+		t.Fatalf("root status after restart = %v, want in-progress", tree.Root.Status)
+	}
+	if tree.Root.Outcome != "" {
+		t.Fatalf("root outcome after restart = %q, want cleared", tree.Root.Outcome)
+	}
+	if tree.Root.Aborted {
+		t.Fatal("root aborted flag should be cleared on restart")
+	}
+}
+
 func TestApplyEvent_StatusMapping(t *testing.T) {
 	cases := []struct {
 		outcome string
