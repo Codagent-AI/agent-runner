@@ -10,15 +10,16 @@ import (
 
 // Adaptive colors used across TUI screens.
 var (
-	InactiveAmber = lipgloss.AdaptiveColor{Dark: "#f0a830", Light: "#b45309"}
-	CompletedGray = lipgloss.AdaptiveColor{Dark: "#8b949e", Light: "#6b7280"}
-	AccentCyan    = lipgloss.AdaptiveColor{Dark: "#5ce0d8", Light: "#0891b2"}
-	AccentMagenta = lipgloss.AdaptiveColor{Dark: "#e879f9", Light: "#c026d3"}
-	SuccessGreen  = lipgloss.AdaptiveColor{Dark: "#16a34a", Light: "#166534"}
-	BodyText      = lipgloss.AdaptiveColor{Dark: "#c9d1d9", Light: "#1f2937"}
-	DimText       = lipgloss.AdaptiveColor{Dark: "#8b949e", Light: "#525252"}
-	SelectedText  = lipgloss.AdaptiveColor{Dark: "#ffffff", Light: "#111827"}
-	FailedRed     = lipgloss.AdaptiveColor{Dark: "#f87171", Light: "#dc2626"}
+	InactiveAmber      = lipgloss.AdaptiveColor{Dark: "#f0a830", Light: "#b45309"}
+	CompletedGray      = lipgloss.AdaptiveColor{Dark: "#8b949e", Light: "#6b7280"}
+	AccentCyan         = lipgloss.AdaptiveColor{Dark: "#5ce0d8", Light: "#0891b2"}
+	AccentMagenta      = lipgloss.AdaptiveColor{Dark: "#e879f9", Light: "#c026d3"}
+	SuccessGreen       = lipgloss.AdaptiveColor{Dark: "#4ade80", Light: "#15803d"}
+	BodyText           = lipgloss.AdaptiveColor{Dark: "#c9d1d9", Light: "#1f2937"}
+	DimText            = lipgloss.AdaptiveColor{Dark: "#b3b3b3", Light: "#525252"}
+	SelectedText       = lipgloss.AdaptiveColor{Dark: "#ffffff", Light: "#111827"}
+	ButtonOnAccentText = lipgloss.AdaptiveColor{Dark: "#111827", Light: "#111827"}
+	FailedRed          = lipgloss.AdaptiveColor{Dark: "#f87171", Light: "#dc2626"}
 )
 
 // BlinkHidden returns a blank string the same visual width as s: used as the
@@ -49,7 +50,7 @@ var (
 	ColumnHeader      = lipgloss.NewStyle().Foreground(AccentCyan).Underline(true)
 	AccentStyle       = lipgloss.NewStyle().Foreground(AccentCyan)
 	ButtonStyle       = lipgloss.NewStyle().Foreground(BodyText)
-	FocusedButton     = lipgloss.NewStyle().Foreground(SelectedText).Background(AccentCyan)
+	FocusedButton     = lipgloss.NewStyle().Foreground(ButtonOnAccentText).Background(AccentCyan)
 	FocusedOption     = lipgloss.NewStyle().Foreground(AccentCyan).Bold(true)
 	DividerStyle      = lipgloss.NewStyle().Foreground(DimText)
 	DetailHeaderStyle = lipgloss.NewStyle().Foreground(AccentCyan).Bold(true).Underline(true)

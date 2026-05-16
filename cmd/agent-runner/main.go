@@ -20,6 +20,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-isatty"
+	"github.com/muesli/termenv"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/discovery"
@@ -1383,6 +1384,7 @@ func ensureThemeForTUI(deps themeDeps) int {
 }
 
 func applyTheme(theme usersettings.Theme) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
 	lipgloss.SetHasDarkBackground(theme == usersettings.ThemeDark)
 }
 

@@ -89,6 +89,16 @@ func TestSecondaryTextColorsHaveReadableContrast(t *testing.T) {
 	}
 }
 
+func TestFocusedButtonTextContrastsWithAccentBackground(t *testing.T) {
+	const minReadableContrast = 4.5
+	if got := contrastRatio(ButtonOnAccentText.Dark, AccentCyan.Dark); got < minReadableContrast {
+		t.Errorf("focused button dark contrast = %.2f, want >= %.1f", got, minReadableContrast)
+	}
+	if got := contrastRatio(ButtonOnAccentText.Light, AccentCyan.Light); got < minReadableContrast {
+		t.Errorf("focused button light contrast = %.2f, want >= %.1f", got, minReadableContrast)
+	}
+}
+
 func contrastRatio(foreground, background string) float64 {
 	frontLum := relativeLuminance(foreground)
 	backLum := relativeLuminance(background)
