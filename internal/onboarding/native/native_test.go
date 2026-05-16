@@ -680,7 +680,7 @@ func TestPlannerModelScreenDoesNotRepeatPlannerAgentLabel(t *testing.T) {
 	}
 }
 
-func TestTransitionShowsOutgoingAndIncomingPanels(t *testing.T) {
+func TestTransitionDimsInIncomingPanelWithoutOutgoingScroll(t *testing.T) {
 	m := NewModel(&Deps{
 		Detector: AdapterDetectorFunc(func() ([]string, error) { return []string{"codex"}, nil }),
 		Models:   ModelDiscovererFunc(func(string) ([]string, error) { return []string{"gpt-5.5"}, nil }),
@@ -688,14 +688,17 @@ func TestTransitionShowsOutgoingAndIncomingPanels(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	sendKeyRaw(t, m, "enter")
-	m.animFrame = 5
+	m.animFrame = 1
 
 	view := tuistyle.Sanitize(m.View())
-	if !strings.Contains(view, "Welcome. Agent Runner uses a planner") {
-		t.Fatalf("transition should keep outgoing panel visible while it moves up:\n%s", view)
+	if strings.Contains(view, "Welcome. Agent Runner uses a planner") {
+		t.Fatalf("transition should not keep outgoing panel visible:\n%s", view)
 	}
-	if !strings.Contains(view, "╭") {
-		t.Fatalf("transition should show incoming panel moving up from below:\n%s", view)
+	if !strings.Contains(view, "Planner Model") {
+		t.Fatalf("transition should show incoming panel immediately:\n%s", view)
+	}
+	if !strings.Contains(view, "Preparing next step") {
+		t.Fatalf("transition should show a wait indicator:\n%s", view)
 	}
 }
 

@@ -133,6 +133,7 @@ const (
 	stageHeadlessModel
 	stageScope
 	stageOverwrite
+	stagePluginIntro
 	stagePluginPreview
 	stageDemoPrompt
 	stageDone
@@ -141,7 +142,7 @@ const (
 var (
 	scopeOptions         = []string{"global", "project"}
 	overwriteOptions     = []string{"Overwrite", "Cancel"}
-	pluginConfirmOptions = []string{"Install", "Cancel"}
+	pluginConfirmOptions = []string{"Install"}
 	demoPromptOptions    = []string{"Continue", "Not now", "Dismiss"}
 	continueOptions      = []string{"Continue"}
 )
@@ -153,8 +154,14 @@ const (
 	minPanelWidth   = 44
 	panelFrameWidth = 6
 	textWrapInset   = 4
-	animFrames      = 12
+	animFrames      = 6
 	animFrameTime   = time.Second / 60
+)
+
+var (
+	setupBodyTextStyle         = lipgloss.NewStyle()
+	setupTransitionStyle       = lipgloss.NewStyle().Faint(true)
+	setupTransitionStatusStyle = tuistyle.DimStyle
 )
 
 type animTick struct{}
@@ -319,6 +326,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.fail(msg.err)
 			return m, tea.Quit
 		}
+		m.clearAnimation()
 		m.pluginPreview = msg.preview
 		m.setStage(stagePluginPreview, pluginConfirmOptions)
 		return m, nil
@@ -333,6 +341,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		if cmd != nil {
+			return m, cmd
+		}
+		if !m.animDone {
+			cmd := m.tickAnim()
 			return m, cmd
 		}
 		return m, nil
@@ -395,6 +407,12 @@ func (m *Model) startAnim() {
 	m.animDone = false
 }
 
+func (m *Model) clearAnimation() {
+	m.animFrame = 0
+	m.animDone = true
+	m.prevView = ""
+}
+
 func (m *Model) discoverModels(next stage, adapter string) tea.Cmd {
 	return func() tea.Msg {
 		models, err := m.deps.Models.ModelsFor(adapter)
@@ -453,10 +471,10 @@ func (m *Model) enter() (bool, tea.Cmd) {
 		return false, tea.Batch(m.tickAnim(), m.tickLoading(), m.discoverModels(stageHeadlessModel, selected))
 	case stageHeadlessModel:
 		m.headlessModel = selected
-		m.setStageAnimated(stageScope, scopeOptions)
+		m.setStageAfterModelSelection()
 	case stageHeadlessModelDefault:
 		m.headlessModel = ""
-		m.setStageAnimated(stageScope, scopeOptions)
+		m.setStageAfterModelSelection()
 	case stageScope:
 		m.scope = selected
 		if err := m.resolveTarget(); err != nil {
@@ -478,11 +496,9 @@ func (m *Model) enter() (bool, tea.Cmd) {
 			return true, nil
 		}
 		return m.write()
+	case stagePluginIntro:
+		m.setStageAnimated(stageScope, scopeOptions)
 	case stagePluginPreview:
-		if selected == "Cancel" {
-			m.cancel()
-			return true, nil
-		}
 		return false, m.runPluginInstall()
 	case stageDemoPrompt:
 		return m.handleDemoPrompt(selected), nil
@@ -597,6 +613,14 @@ func (m *Model) write() (bool, tea.Cmd) {
 	return false, m.runPluginDryRun()
 }
 
+func (m *Model) setStageAfterModelSelection() {
+	if m.deps.Plugin != nil {
+		m.setStageAnimated(stagePluginIntro, continueOptions)
+		return
+	}
+	m.setStageAnimated(stageScope, scopeOptions)
+}
+
 func (m *Model) complete() (bool, tea.Cmd) {
 	stamp := m.deps.Clock().UTC().Format(time.RFC3339)
 	if err := m.deps.Settings.Update(func(settings usersettings.Settings) usersettings.Settings {
@@ -655,7 +679,6 @@ func (m *Model) setStage(next stage, options []string) {
 }
 
 func (m *Model) setStageAnimated(next stage, options []string) {
-	m.prevView = m.renderPanel()
 	m.setStage(next, options)
 	m.startAnim()
 }
@@ -678,8 +701,8 @@ func (m *Model) View() string {
 	content := m.renderPanel()
 
 	if m.width >= minCenterWidth && m.height >= minCenterHeight {
-		if !m.animDone && m.prevView != "" {
-			return renderTransition(m.width, m.height, m.prevView, content, transitionScrollRows(m.height, m.animFrame))
+		if !m.animDone {
+			content = renderSetupTransition(content, m.animFrame)
 		}
 		content = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 	}
@@ -700,7 +723,7 @@ func (m *Model) renderPanel() string {
 	b.WriteString(tuistyle.SectionStyle.Render(title))
 	b.WriteString("\n\n")
 	if body != "" {
-		b.WriteString(renderWrapped(body, textWidth, tuistyle.NormalStyle.Render))
+		b.WriteString(renderWrapped(body, textWidth, setupBodyTextStyle.Render))
 		b.WriteString("\n\n")
 	}
 	if prompt != "" {
@@ -722,55 +745,19 @@ func (m *Model) renderPanel() string {
 		Render(b.String())
 }
 
-func renderTransition(width, height int, outgoing, incoming string, offset int) string {
-	canvas := make([]string, height)
-	for i := range canvas {
-		canvas[i] = strings.Repeat(" ", width)
+func renderSetupTransition(content string, frame int) string {
+	content += "\n" + setupTransitionStatusStyle.Render(tuistyle.SpinnerGlyph(float64(frame))+" Preparing next step...")
+	if frame <= animFrames/2 {
+		return setupTransitionStyle.Render(content)
 	}
-
-	outX, outY := centeredPosition(width, height, outgoing)
-	inX, inY := centeredPosition(width, height, incoming)
-	drawBlock(canvas, width, outgoing, outX, outY-offset)
-	drawBlock(canvas, width, incoming, inX, inY+height-offset)
-	return strings.Join(canvas, "\n")
+	return content
 }
 
-func transitionScrollRows(height, tick int) int {
-	if height <= 0 || tick <= 0 {
-		return 0
+func modelSelectionPrompt(loading bool, phase float64, cliName, readyPrompt string) string {
+	if loading {
+		return tuistyle.SpinnerGlyph(phase) + " Checking available models for " + cliName + "."
 	}
-	if tick >= animFrames {
-		return height
-	}
-	return (height * tick) / animFrames
-}
-
-func centeredPosition(width, height int, content string) (x, y int) {
-	lines := strings.Split(content, "\n")
-	blockWidth := 0
-	for _, line := range lines {
-		blockWidth = max(blockWidth, runewidth.StringWidth(tuistyle.Sanitize(line)))
-	}
-	x = max(0, (width-blockWidth)/2)
-	y = max(0, (height-len(lines))/2)
-	return x, y
-}
-
-func drawBlock(canvas []string, width int, content string, x, y int) {
-	for i, line := range strings.Split(content, "\n") {
-		row := y + i
-		if row < 0 || row >= len(canvas) {
-			continue
-		}
-		canvas[row] = padLine(line, width, x)
-	}
-}
-
-func padLine(line string, width, left int) string {
-	left = max(0, min(left, width))
-	visible := runewidth.StringWidth(tuistyle.Sanitize(line))
-	right := max(0, width-left-visible)
-	return strings.Repeat(" ", left) + line + strings.Repeat(" ", right)
+	return readyPrompt
 }
 
 func setupPanelWidth(termWidth int) int {
@@ -842,7 +829,7 @@ func (m *Model) setupProgress() (current, total int, ok bool) {
 		total++
 	}
 	if hasPlugin {
-		total++
+		total += 2
 	}
 
 	switch m.stage {
@@ -854,14 +841,24 @@ func (m *Model) setupProgress() (current, total int, ok bool) {
 		return 3, total, true
 	case stageHeadlessModelDefault, stageHeadlessModel:
 		return 4, total, true
-	case stageScope:
+	case stagePluginIntro:
 		return 5, total, true
+	case stageScope:
+		step := 5
+		if hasPlugin {
+			step = 6
+		}
+		return step, total, true
 	case stageOverwrite:
-		return 6, total, true
-	case stagePluginPreview:
 		step := 6
-		if hasOverwrite {
+		if hasPlugin {
 			step = 7
+		}
+		return step, total, true
+	case stagePluginPreview:
+		step := 7
+		if hasOverwrite {
+			step = 8
 		}
 		return step, total, true
 	case stageDemoPrompt:
@@ -1002,11 +999,7 @@ func (m *Model) screenContent() (title, body, prompt string) {
 	case stageInteractiveModel:
 		title = "Planner Model"
 		body = "The planner handles conversations, planning, and decisions that need your input. Pick the model that " + m.interactiveCLI + " should use for those interactive workflow steps."
-		if m.modelsLoading {
-			prompt = tuistyle.SpinnerGlyph(m.loadingPhase) + " Checking available models for " + m.interactiveCLI + "."
-		} else {
-			prompt = "Choose the planner model."
-		}
+		prompt = modelSelectionPrompt(m.modelsLoading, m.loadingPhase, m.interactiveCLI, "Choose the planner model.")
 	case stageHeadlessCLI:
 		title = "Implementor CLI"
 		body = "The implementor runs headless tasks such as code generation, edits, and validation follow-ups. This CLI is used when Agent Runner needs work to continue without an interactive session."
@@ -1018,19 +1011,19 @@ func (m *Model) screenContent() (title, body, prompt string) {
 	case stageHeadlessModel:
 		title = "Implementor Model"
 		body = "The implementor model is used for unattended implementation steps in your workflows. Pick the model that " + m.headlessCLI + " should use for that work."
-		if m.modelsLoading {
-			prompt = tuistyle.SpinnerGlyph(m.loadingPhase) + " Checking available models for " + m.headlessCLI + "."
-		} else {
-			prompt = "Choose the implementor model."
-		}
+		prompt = modelSelectionPrompt(m.modelsLoading, m.loadingPhase, m.headlessCLI, "Choose the implementor model.")
 	case stageScope:
 		title = "Config Scope"
-		body = "Choose where to save this profile. Global applies everywhere from ~/.agent-runner/config.yaml. Project applies only in the current repository via .agent-runner/config.yaml."
-		prompt = "Where should Agent Runner save the profile?"
+		body = "Choose where to save this profile and install agent skills. Global applies everywhere from ~/.agent-runner/config.yaml. Project applies only in the current repository via .agent-runner/config.yaml."
+		prompt = "Where should Agent Runner save the profile and install skills?"
 	case stageOverwrite:
 		title = "Existing Agent Profiles"
 		body = "These entries already exist and will be replaced: " + strings.Join(m.collisions, ", ")
 		prompt = "Overwrite the existing entries?"
+	case stagePluginIntro:
+		title = "Agent Skills"
+		body = "Agent Runner uses skills from https://github.com/Codagent-AI/agent-skills. These skills provide focused workflows for spec-driven development, from evaluating ideas and writing specs to planning right-sized tasks and implementing changes with TDD.\n\nThey also connect implementation work to Agent Validator quality gates and PR/CI follow-up skills, so agents can validate changes, fix failures, and shepherd work through review. Next you will select where Agent Runner installs these skills."
+		prompt = "Continue to skill location."
 	case stagePluginPreview:
 		title = "Install Agent Skills"
 		if m.pluginPreview == nil {
