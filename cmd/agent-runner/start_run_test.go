@@ -199,6 +199,71 @@ func TestOnboardingDemoPromptFlowWindowSizeDoesNotCompletePrompt(t *testing.T) {
 	}
 }
 
+func TestOnboardingDemoPromptFlowContinueShowsPreparingState(t *testing.T) {
+	m := &onboardingDemoPromptFlow{
+		prompt: nativesetup.NewDemoPromptModel(&nativesetup.Deps{}),
+		ref:    "builtin:onboarding/onboarding.yaml",
+		opts:   liveTUIOptions{quitOnDone: true, startInAltScreen: true},
+	}
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m = updated.(*onboardingDemoPromptFlow)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(*onboardingDemoPromptFlow)
+
+	if cmd == nil {
+		t.Fatal("Continue should start preparing the onboarding demo")
+	}
+	if !m.preparingRun {
+		t.Fatal("Continue should enter preparing state while demo run is prepared")
+	}
+	view := m.View()
+	if !strings.Contains(view, "Preparing Onboarding Demo") {
+		t.Fatalf("view missing preparing title:\n%s", view)
+	}
+	if !strings.Contains(view, "This can take a moment") {
+		t.Fatalf("view missing wait guidance:\n%s", view)
+	}
+}
+
+func TestOnboardingDemoLaunchFlowStartsInPreparingState(t *testing.T) {
+	m := &onboardingDemoPromptFlow{
+		ref:          "builtin:onboarding/onboarding.yaml",
+		opts:         liveTUIOptions{quitOnDone: true, startInAltScreen: true},
+		preparingRun: true,
+	}
+
+	cmd := m.Init()
+	if cmd == nil {
+		t.Fatal("launch flow should start preparation commands immediately")
+	}
+	view := m.View()
+	if !strings.Contains(view, "Preparing Onboarding Demo") {
+		t.Fatalf("view missing preparing title:\n%s", view)
+	}
+}
+
+func TestOnboardingDemoLaunchFlowViewHandlesFailedPreparation(t *testing.T) {
+	m := &onboardingDemoPromptFlow{
+		ref:          "builtin:onboarding/onboarding.yaml",
+		opts:         liveTUIOptions{quitOnDone: true, startInAltScreen: true},
+		preparingRun: true,
+	}
+
+	updated, cmd := m.Update(onboardingDemoPrepareMsg{exitCode: 1})
+	m = updated.(*onboardingDemoPromptFlow)
+
+	if cmd == nil {
+		t.Fatal("failed preparation should quit")
+	}
+	if m.exitCode != 1 {
+		t.Fatalf("exitCode = %d, want 1", m.exitCode)
+	}
+	if got := m.View(); got != "" {
+		t.Fatalf("failed preparation without prompt should render empty view, got %q", got)
+	}
+}
+
 func TestOnboardingDemoPromptFlowConfirmedLiveRunQuitExitsApp(t *testing.T) {
 	sessionDir := writeRunState(t, t.TempDir(), "onboarding-run", "builtin:onboarding/onboarding.yaml", false)
 	rv, err := runview.New(sessionDir, "", runview.FromLiveRun)

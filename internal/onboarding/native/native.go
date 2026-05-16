@@ -32,6 +32,7 @@ const (
 	ResultCancelled
 	ResultFailed
 	ResultDemo
+	ResultExitRequested
 )
 
 type AdapterDetector interface {
@@ -160,6 +161,9 @@ const (
 
 var (
 	setupBodyTextStyle         = lipgloss.NewStyle()
+	setupTitleStyle            = tuistyle.LabelStyle.Bold(true)
+	setupOptionStyle           = lipgloss.NewStyle()
+	setupFocusedOptionStyle    = tuistyle.LabelStyle.Bold(true)
 	setupTransitionStyle       = lipgloss.NewStyle().Faint(true)
 	setupTransitionStatusStyle = tuistyle.DimStyle
 )
@@ -203,9 +207,10 @@ type Model struct {
 	terminal         bool
 	demoOnly         bool
 
-	pluginPlan    *agentplugin.Plan
-	pluginPreview *agentplugin.Preview
-	pluginResult  *agentplugin.Result
+	pluginPlan       *agentplugin.Plan
+	pluginPreview    *agentplugin.Preview
+	pluginResult     *agentplugin.Result
+	pluginInstalling bool
 
 	animDone  bool
 	animFrame int
@@ -308,7 +313,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := m.tickAnim()
 		return m, cmd
 	case loadingTick:
-		if !m.modelsLoading {
+		if !m.modelsLoading && !m.pluginInstalling {
 			return m, nil
 		}
 		m.loadingPhase++
@@ -331,6 +336,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setStage(stagePluginPreview, pluginConfirmOptions)
 		return m, nil
 	case pluginInstallMsg:
+		m.pluginInstalling = false
+		m.loadingPhase = 0
 		if msg.err != nil {
 			m.fail(msg.err)
 			return m, tea.Quit
@@ -362,8 +369,14 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.modelsLoading && key != "ctrl+c" && key != "esc" {
 		return m, nil
 	}
+	if m.pluginInstalling && key != "ctrl+c" && key != "esc" {
+		return m, nil
+	}
 	switch key {
-	case "ctrl+c", "esc":
+	case "ctrl+c":
+		m.exitRequested()
+		return m, tea.Quit
+	case "esc":
 		m.cancel()
 		return m, tea.Quit
 	case "up", "k":
@@ -499,7 +512,8 @@ func (m *Model) enter() (bool, tea.Cmd) {
 	case stagePluginIntro:
 		m.setStageAnimated(stageScope, scopeOptions)
 	case stagePluginPreview:
-		return false, m.runPluginInstall()
+		m.startPluginInstallLoading()
+		return false, tea.Batch(m.tickLoading(), m.runPluginInstall())
 	case stageDemoPrompt:
 		return m.handleDemoPrompt(selected), nil
 	}
@@ -558,6 +572,13 @@ func (m *Model) skipModelSelection(next stage) {
 func (m *Model) startModelLoading() {
 	m.modelsLoading = true
 	m.loadingPhase = 0
+}
+
+func (m *Model) startPluginInstallLoading() {
+	m.pluginInstalling = true
+	m.loadingPhase = 0
+	m.options = nil
+	m.focus = 0
 }
 
 func (m *Model) resolveTarget() error {
@@ -689,6 +710,12 @@ func (m *Model) cancel() {
 	m.stage = stageDone
 }
 
+func (m *Model) exitRequested() {
+	m.result = ResultExitRequested
+	m.terminal = true
+	m.stage = stageDone
+}
+
 func (m *Model) fail(err error) bool {
 	m.err = err
 	m.result = ResultFailed
@@ -720,7 +747,7 @@ func (m *Model) renderPanel() string {
 		b.WriteString(lipgloss.PlaceHorizontal(contentWidth, lipgloss.Center, progress))
 		b.WriteString("\n\n")
 	}
-	b.WriteString(tuistyle.SectionStyle.Render(title))
+	b.WriteString(setupTitleStyle.Render(title))
 	b.WriteString("\n\n")
 	if body != "" {
 		b.WriteString(renderWrapped(body, textWidth, setupBodyTextStyle.Render))
@@ -792,10 +819,10 @@ func (m *Model) renderOptions(width, textWidth int) string {
 	for i, option := range m.options {
 		label := m.optionLabel(option)
 		prefix := "  "
-		style := tuistyle.NormalStyle
+		style := setupOptionStyle
 		if i == m.focus {
 			prefix = tuistyle.FocusedSelectorPrefix + " "
-			style = tuistyle.FocusedOption
+			style = setupFocusedOptionStyle
 		}
 		lines := wrapTextLine(prefix+label, textWidth)
 		for _, line := range lines {
@@ -1026,36 +1053,46 @@ func (m *Model) screenContent() (title, body, prompt string) {
 		prompt = "Continue to skill location."
 	case stagePluginPreview:
 		title = "Install Agent Skills"
-		if m.pluginPreview == nil {
-			body = "Preparing skill installation..."
-		} else {
-			body = m.pluginPreview.Output
-			if m.pluginResult != nil && m.pluginResult.Warning != "" {
-				body += "\n\nWarning: " + m.pluginResult.Warning
-			}
-			prompt = "Install skills for your configured CLIs?"
-		}
+		body, prompt = m.pluginPreviewContent()
 	case stageDemoPrompt:
 		title = "Agent Runner Workflow Demo"
 		body = "Agent Runner includes a short interactive demo that walks through UI prompts, interactive agents, headless agents, shell commands, and data capture. It takes about two minutes and runs real workflow steps."
 		prompt = "Run the demo now?"
 	case stageDone:
-		switch {
-		case m.result == ResultCancelled:
-			title = "Setup Cancelled"
-			body = ""
-		case m.err != nil:
-			title = "Setup Failed"
-			body = m.err.Error()
-		default:
-			title = "Setup Complete"
-			body = ""
-		}
+		title, body = m.doneContent()
 	default:
 		title = "Set Up Agent Runner"
 		body = ""
 	}
 	return title, body, prompt
+}
+
+func (m *Model) doneContent() (title, body string) {
+	switch {
+	case m.result == ResultCancelled:
+		return "Setup Cancelled", ""
+	case m.result == ResultExitRequested:
+		return "Setup Interrupted", ""
+	case m.err != nil:
+		return "Setup Failed", m.err.Error()
+	default:
+		return "Setup Complete", ""
+	}
+}
+
+func (m *Model) pluginPreviewContent() (body, prompt string) {
+	switch {
+	case m.pluginInstalling:
+		return tuistyle.SpinnerGlyph(m.loadingPhase) + " Installing agent skills.\n\nThis can take a moment.", ""
+	case m.pluginPreview == nil:
+		return "Preparing skill installation...", ""
+	default:
+		body = m.pluginPreview.Output
+		if m.pluginResult != nil && m.pluginResult.Warning != "" {
+			body += "\n\nWarning: " + m.pluginResult.Warning
+		}
+		return body, "Install skills for your configured CLIs?"
+	}
 }
 
 type PathDetector struct{}

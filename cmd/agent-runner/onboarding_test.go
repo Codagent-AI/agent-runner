@@ -41,6 +41,33 @@ func TestEnsureFirstRunForTUIRunsNativeSetupThenDemo(t *testing.T) {
 	}
 }
 
+func TestEnsureFirstRunForTUIRunsDemoLaunchFlowAfterNativeSetup(t *testing.T) {
+	var launched bool
+	result := ensureFirstRunForTUI(firstRunDeps{
+		load: func() (usersettings.Settings, error) {
+			return usersettings.Settings{}, nil
+		},
+		isStdinTTY:  func() bool { return true },
+		isStdoutTTY: func() bool { return true },
+		runNativeSetup: func(bool) (nativeSetupResult, error) {
+			return nativeSetupDemo, nil
+		},
+		runDemoLaunchFlow: func() firstRunResult {
+			launched = true
+			return exitFirstRun(5)
+		},
+		runWorkflow: func(string) firstRunWorkflowResult {
+			t.Fatal("runWorkflow should not be called when launch flow is configured")
+			return firstRunWorkflowResult{}
+		},
+	})
+
+	requireFirstRunExit(t, result, 5)
+	if !launched {
+		t.Fatal("demo launch flow was not used")
+	}
+}
+
 func TestEnsureFirstRunForTUIShowsDemoPromptWhenSetupAlreadyCompleted(t *testing.T) {
 	var launched []string
 	result := ensureFirstRunForTUI(firstRunDeps{
@@ -148,6 +175,26 @@ func TestEnsureFirstRunForTUICancelledSetupDoesNotStartDemo(t *testing.T) {
 	requireFirstRunContinue(t, result)
 	if launched {
 		t.Fatal("onboarding demo launched after cancelled setup")
+	}
+}
+
+func TestEnsureFirstRunForTUIInterruptedSetupExitsApp(t *testing.T) {
+	var launched bool
+	result := ensureFirstRunForTUI(firstRunDeps{
+		load:        func() (usersettings.Settings, error) { return usersettings.Settings{}, nil },
+		isStdinTTY:  func() bool { return true },
+		isStdoutTTY: func() bool { return true },
+		runNativeSetup: func(bool) (nativeSetupResult, error) {
+			return nativeSetupExitRequested, nil
+		},
+		runWorkflow: func(string) firstRunWorkflowResult {
+			launched = true
+			return firstRunWorkflowResult{}
+		},
+	})
+	requireFirstRunExit(t, result, 0)
+	if launched {
+		t.Fatal("onboarding demo launched after interrupted setup")
 	}
 }
 

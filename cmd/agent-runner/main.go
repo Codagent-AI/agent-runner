@@ -38,6 +38,7 @@ import (
 	"github.com/codagent/agent-runner/internal/runview"
 	"github.com/codagent/agent-runner/internal/stateio"
 	"github.com/codagent/agent-runner/internal/themeprompt"
+	"github.com/codagent/agent-runner/internal/tuistyle"
 	"github.com/codagent/agent-runner/internal/usersettings"
 	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
@@ -1392,6 +1393,7 @@ const (
 	nativeSetupCancelled
 	nativeSetupFailed
 	nativeSetupDemo
+	nativeSetupExitRequested
 )
 
 type firstRunDeps struct {
@@ -1401,6 +1403,7 @@ type firstRunDeps struct {
 	runNativeSetup                func(onboardingCompleted bool) (nativeSetupResult, error)
 	runDemoPrompt                 func() (nativeSetupResult, error)
 	runDemoPromptFlow             func() firstRunResult
+	runDemoLaunchFlow             func() firstRunResult
 	continueAfterNativeSetupError bool
 	runWorkflow                   func(ref string) firstRunWorkflowResult
 }
@@ -1440,6 +1443,7 @@ var defaultFirstRunDeps = firstRunDeps{
 		return mapSetupResult(result), err
 	},
 	runDemoPromptFlow: runOnboardingDemoPromptFlow,
+	runDemoLaunchFlow: runOnboardingDemoLaunchFlow,
 	runWorkflow: func(ref string) firstRunWorkflowResult {
 		result := handleRunWithResult([]string{ref}, liveTUIOptions{quitOnDone: true, startInAltScreen: true})
 		return firstRunWorkflowResult(result)
@@ -1454,6 +1458,9 @@ func firstRunDepsWithOnboardingFrom(from string) firstRunDeps {
 	deps := defaultFirstRunDeps
 	deps.runDemoPromptFlow = func() firstRunResult {
 		return runOnboardingDemoPromptFlowFrom(from)
+	}
+	deps.runDemoLaunchFlow = func() firstRunResult {
+		return runOnboardingDemoLaunchFlowFrom(from)
 	}
 	deps.runWorkflow = func(ref string) firstRunWorkflowResult {
 		result := handleRunWithRunOptions([]string{ref}, runCommandOptions{
@@ -1473,6 +1480,8 @@ func mapSetupResult(result nativesetup.Result) nativeSetupResult {
 		return nativeSetupDemo
 	case nativesetup.ResultFailed:
 		return nativeSetupFailed
+	case nativesetup.ResultExitRequested:
+		return nativeSetupExitRequested
 	default:
 		return nativeSetupCancelled
 	}
@@ -1502,6 +1511,9 @@ func ensureFirstRunForTUI(deps firstRunDeps) firstRunResult {
 		if result == nativeSetupDemo {
 			return launchOnboardingDemo(deps)
 		}
+		if result == nativeSetupExitRequested {
+			return exitFirstRun(0)
+		}
 		return continueToList()
 	}
 
@@ -1517,11 +1529,17 @@ func ensureFirstRunForTUI(deps firstRunDeps) firstRunResult {
 		if result == nativeSetupDemo {
 			return launchOnboardingDemo(deps)
 		}
+		if result == nativeSetupExitRequested {
+			return exitFirstRun(0)
+		}
 	}
 	return continueToList()
 }
 
 func launchOnboardingDemo(deps firstRunDeps) firstRunResult {
+	if deps.runDemoLaunchFlow != nil {
+		return deps.runDemoLaunchFlow()
+	}
 	ref, err := builtinworkflows.Resolve("onboarding:onboarding")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
@@ -1556,25 +1574,49 @@ type onboardingDemoPromptFlow struct {
 	exitCode      int
 	exitRequested bool
 	started       bool
+	preparingRun  bool
+	loadingPhase  float64
 	termWidth     int
 	termHeight    int
 }
+
+type onboardingDemoPrepareMsg struct {
+	handle   *runner.RunHandle
+	exitCode int
+}
+
+type onboardingDemoLoadingTick struct{}
 
 func runOnboardingDemoPromptFlow() firstRunResult {
 	return runOnboardingDemoPromptFlowFrom("")
 }
 
+func runOnboardingDemoLaunchFlow() firstRunResult {
+	return runOnboardingDemoLaunchFlowFrom("")
+}
+
 func runOnboardingDemoPromptFlowFrom(from string) firstRunResult {
+	return runOnboardingDemoFlowFrom(from, false)
+}
+
+func runOnboardingDemoLaunchFlowFrom(from string) firstRunResult {
+	return runOnboardingDemoFlowFrom(from, true)
+}
+
+func runOnboardingDemoFlowFrom(from string, preparing bool) firstRunResult {
 	ref, err := builtinworkflows.Resolve("onboarding:onboarding")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return exitFirstRun(1)
 	}
 	m := &onboardingDemoPromptFlow{
-		prompt: nativesetup.NewDemoPromptModel(&nativesetup.Deps{}),
-		ref:    ref,
-		from:   strings.TrimSpace(from),
-		opts:   liveTUIOptions{quitOnDone: true, startInAltScreen: true},
+		ref:          ref,
+		from:         strings.TrimSpace(from),
+		opts:         liveTUIOptions{quitOnDone: true, startInAltScreen: true},
+		preparingRun: preparing,
+	}
+	if !preparing {
+		m.prompt = nativesetup.NewDemoPromptModel(&nativesetup.Deps{})
 	}
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	m.program = p
@@ -1799,6 +1841,12 @@ func isTopLevelOnboardingWorkflow(workflowFile string) bool {
 }
 
 func (m *onboardingDemoPromptFlow) Init() tea.Cmd {
+	if m.preparingRun {
+		return tea.Batch(m.tickOnboardingDemoLoading(), m.prepareOnboardingDemoRun())
+	}
+	if m.prompt == nil {
+		return nil
+	}
 	return m.prompt.Init()
 }
 
@@ -1818,6 +1866,21 @@ func (m *onboardingDemoPromptFlow) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case runview.ResumeListMsg:
 		return m, tea.Quit
+	case onboardingDemoLoadingTick:
+		if !m.preparingRun {
+			return m, nil
+		}
+		m.loadingPhase++
+		cmd := m.tickOnboardingDemoLoading()
+		return m, cmd
+	case onboardingDemoPrepareMsg:
+		m.preparingRun = false
+		m.loadingPhase = 0
+		if msg.exitCode != 0 {
+			m.exitCode = msg.exitCode
+			return m, tea.Quit
+		}
+		return m.startPreparedRun(msg.handle)
 	}
 
 	if m.mode == onboardingDemoRunMode {
@@ -1827,6 +1890,9 @@ func (m *onboardingDemoPromptFlow) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *onboardingDemoPromptFlow) updatePrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.prompt == nil {
+		return m, nil
+	}
 	next, cmd := m.prompt.Update(msg)
 	if prompt, ok := next.(*nativesetup.Model); ok {
 		m.prompt = prompt
@@ -1836,9 +1902,14 @@ func (m *onboardingDemoPromptFlow) updatePrompt(msg tea.Msg) (tea.Model, tea.Cmd
 	}
 	switch m.prompt.Result() {
 	case nativesetup.ResultDemo:
-		return m.startRun()
+		m.preparingRun = true
+		m.loadingPhase = 0
+		return m, tea.Batch(m.tickOnboardingDemoLoading(), m.prepareOnboardingDemoRun())
 	case nativesetup.ResultFailed:
 		m.exitCode = 1
+		return m, tea.Quit
+	case nativesetup.ResultExitRequested:
+		m.exitRequested = true
 		return m, tea.Quit
 	case nativesetup.ResultCompleted, nativesetup.ResultCancelled:
 		return m, tea.Quit
@@ -1847,12 +1918,22 @@ func (m *onboardingDemoPromptFlow) updatePrompt(msg tea.Msg) (tea.Model, tea.Cmd
 	}
 }
 
-func (m *onboardingDemoPromptFlow) startRun() (tea.Model, tea.Cmd) {
-	handle, exitCode := prepareBuiltinOnboardingRun(m.ref, m.from)
-	if exitCode != 0 {
-		m.exitCode = exitCode
-		return m, tea.Quit
+func (m *onboardingDemoPromptFlow) tickOnboardingDemoLoading() tea.Cmd {
+	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg {
+		return onboardingDemoLoadingTick{}
+	})
+}
+
+func (m *onboardingDemoPromptFlow) prepareOnboardingDemoRun() tea.Cmd {
+	ref := m.ref
+	from := m.from
+	return func() tea.Msg {
+		handle, exitCode := prepareBuiltinOnboardingRun(ref, from)
+		return onboardingDemoPrepareMsg{handle: handle, exitCode: exitCode}
 	}
+}
+
+func (m *onboardingDemoPromptFlow) startPreparedRun(handle *runner.RunHandle) (tea.Model, tea.Cmd) {
 	m.handle = handle
 	rv, err := runview.New(m.handle.SessionDir, m.handle.ProjectDir, runview.FromLiveRun)
 	if err != nil {
@@ -1929,7 +2010,23 @@ func (m *onboardingDemoPromptFlow) View() string {
 		}
 		return m.run.View()
 	}
+	if m.preparingRun {
+		return renderOnboardingDemoPreparing(m.termWidth, m.termHeight, m.loadingPhase)
+	}
+	if m.prompt == nil {
+		return ""
+	}
 	return m.prompt.View()
+}
+
+func renderOnboardingDemoPreparing(width, height int, phase float64) string {
+	content := tuistyle.LabelStyle.Bold(true).Render("Preparing Onboarding Demo") +
+		"\n\n" +
+		tuistyle.DimStyle.Render(tuistyle.SpinnerGlyph(phase)+" Setting up the demo workflow. This can take a moment.")
+	if width >= 40 && height >= 8 {
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, content)
+	}
+	return content
 }
 
 // parseParams separates positional args from key=value pairs.

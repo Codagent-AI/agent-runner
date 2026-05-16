@@ -245,6 +245,40 @@ func TestCancelBeforeWriteLeavesSetupIncomplete(t *testing.T) {
 	}
 }
 
+func TestCtrlCBeforeWriteRequestsExit(t *testing.T) {
+	saved := false
+	wrote := false
+	m := NewModel(&Deps{
+		Detector: AdapterDetectorFunc(func() ([]string, error) { return []string{"claude"}, nil }),
+		Models:   ModelDiscovererFunc(func(string) ([]string, error) { return nil, nil }),
+		Settings: SettingsStoreFunc(func(func(usersettings.Settings) usersettings.Settings) error {
+			saved = true
+			return nil
+		}),
+		Profiles: ProfileWriterFunc(func(*profilewrite.Request) error {
+			wrote = true
+			return nil
+		}),
+		HomeDir: func() (string, error) { return "/home/me", nil },
+		Cwd:     func() (string, error) { return "/work/project", nil },
+	})
+
+	cmd := sendKeyRaw(t, m, "ctrl+c")
+
+	if m.Result() != ResultExitRequested {
+		t.Fatalf("Result() = %v, want exit requested", m.Result())
+	}
+	if cmd == nil {
+		t.Fatal("ctrl+c should quit setup")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("expected tea.QuitMsg, got %T", cmd())
+	}
+	if saved || wrote {
+		t.Fatalf("saved=%v wrote=%v, want no side effects", saved, wrote)
+	}
+}
+
 // Enter 1-5: CLI/default/headless/default/scope → overwrite screen
 // Down: focus "Cancel"
 // Enter 6: Cancel
@@ -788,6 +822,8 @@ func sendKeyRaw(t *testing.T, m *Model, key string) tea.Cmd {
 		msg = tea.KeyMsg{Type: tea.KeyUp}
 	case "esc":
 		msg = tea.KeyMsg{Type: tea.KeyEscape}
+	case "ctrl+c":
+		msg = tea.KeyMsg{Type: tea.KeyCtrlC}
 	}
 	next, cmd := m.Update(msg)
 	if updated, ok := next.(*Model); ok {

@@ -215,6 +215,31 @@ func TestPluginPreviewIsMandatoryAndDownEnterStillInstalls(t *testing.T) {
 	}
 }
 
+func TestPluginInstallShowsWaitingStateWhileCommandRuns(t *testing.T) {
+	plugin := &fakePluginInstaller{dryRunOutput: "preview"}
+	deps := pluginDeps(plugin)
+	m := NewModel(&deps)
+
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter")
+
+	if m.stage != stagePluginPreview {
+		t.Fatalf("stage = %v, want stagePluginPreview", m.stage)
+	}
+
+	cmd := sendKeyRaw(t, m, "enter")
+	if cmd == nil {
+		t.Fatal("confirming install should start plugin install command")
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "Installing agent skills") {
+		t.Fatalf("expected installing wait message while command runs:\n%s", view)
+	}
+	if !strings.Contains(view, "This can take a moment") {
+		t.Fatalf("expected wait guidance while command runs:\n%s", view)
+	}
+}
+
 func TestPluginInstallWarningStillWritesCompletedAt(t *testing.T) {
 	var saved []usersettings.Settings
 	plugin := &fakePluginInstaller{

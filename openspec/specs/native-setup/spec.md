@@ -33,7 +33,7 @@ When any condition is false, the runner SHALL proceed to its normal entry point 
 
 ### Requirement: Native setup is mandatory
 
-The native setup TUI SHALL begin with a setup surface that offers progression into profile setup. It SHALL NOT offer skip, not-now, or dismiss actions. A user who cancels or interrupts setup leaves setup incomplete, and native setup SHALL be offered again on the next eligible launch.
+The native setup TUI SHALL begin with a setup surface that offers progression into profile setup. It SHALL NOT offer skip, not-now, or dismiss actions. A user who cancels setup leaves setup incomplete, and native setup SHALL be offered again on the next eligible launch. Ctrl+C SHALL be treated as a global app-exit request, not as navigation to the normal home TUI.
 
 #### Scenario: Continue enters setup
 - **WHEN** the user chooses the continue action
@@ -79,7 +79,7 @@ Native setup SHALL NOT persist partially completed wizard progress. If setup is 
 
 ### Requirement: Native setup handoff to onboarding demo
 
-After native setup reaches a terminal state, the runner SHALL continue to the appropriate next application surface. A successful setup SHALL start or resume `onboarding:onboarding` when onboarding demo completion or dismissal has not been recorded. First-run onboarding demo run state SHALL be stored in a user-global onboarding run scope rather than under the current project's run history. Cancellation, interruption, or failure SHALL transition to the normal TUI entry point without starting the demo.
+After native setup reaches a terminal state, the runner SHALL continue to the appropriate next application surface. A successful setup SHALL start or resume `onboarding:onboarding` when onboarding demo completion or dismissal has not been recorded. First-run onboarding demo run state SHALL be stored in a user-global onboarding run scope rather than under the current project's run history. Cancellation or failure SHALL transition to the normal TUI entry point without starting the demo. Ctrl+C during native setup SHALL exit the app instead of proceeding to the normal TUI entry point.
 
 #### Scenario: Successful setup starts onboarding demo
 - **WHEN** native setup completes successfully and `settings.onboarding.completed_at` and `settings.onboarding.dismissed` are unset
@@ -114,6 +114,10 @@ After native setup reaches a terminal state, the runner SHALL continue to the ap
 #### Scenario: Cancelled setup goes home
 - **WHEN** native setup is cancelled or fails
 - **THEN** the runner proceeds to the normal home TUI without marking setup complete
+
+#### Scenario: Ctrl+C during setup exits app
+- **WHEN** the user presses Ctrl+C during native setup
+- **THEN** the runner exits the app without marking setup complete and without proceeding to the normal home TUI
 
 ### Requirement: Skill installation during native setup
 
@@ -164,4 +168,3 @@ If `agent-plugin` is not installed on the system PATH, native setup SHALL treat 
 #### Scenario: Total install failure does not block completion
 - **WHEN** the real `agent-plugin add` invocation reports a failure for every CLI in the derived list
 - **THEN** the runner SHALL surface the warnings, SHALL continue past the skill installation step, and SHALL write `settings.setup.completed_at`
-
