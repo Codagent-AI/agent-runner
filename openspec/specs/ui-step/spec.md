@@ -179,10 +179,10 @@ When `mode: ui` executes in an environment where stdin or stdout is not a TTY, t
 
 ### Requirement: User cancellation
 
-If the user cancels the screen (e.g., by pressing Ctrl-C or otherwise terminating the input loop) before selecting an action, the step SHALL fail with a cancellation error. The runner SHALL NOT silently skip the step or treat cancellation as any specific named outcome.
+If the UI step input loop is terminated before the user selects an action, the step SHALL fail with a cancellation error. The runner SHALL NOT silently skip the step or treat cancellation as any specific named outcome. When UI steps are rendered inside the live-run-view, Ctrl+C is reserved as the global app-exit key and follows the live-run-view quit behavior instead of cancelling the UI step.
 
-#### Scenario: Ctrl-C during UI step
-- **WHEN** the user presses Ctrl-C while a UI step is awaiting action selection
+#### Scenario: UI step input loop terminates before selection
+- **WHEN** a UI step input loop terminates before the user selects an action
 - **THEN** the step fails with a cancellation error and the workflow handles the failure per its existing error-handling rules (e.g., `continue_on_failure`)
 
 ### Requirement: Loop nesting

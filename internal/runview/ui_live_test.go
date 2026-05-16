@@ -278,6 +278,51 @@ func TestLiveUIRequestQUsesRunViewQuitConfirmation(t *testing.T) {
 	}
 }
 
+func TestLiveUIRequestCtrlCUsesRunViewQuitConfirmation(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusInProgress}
+	pick := &StepNode{ID: "intro-ui", Type: NodeUI, Status: StatusInProgress, Parent: root}
+	root.Children = []*StepNode{pick}
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.altScreen = true
+	m.running = true
+
+	reply := make(chan model.UIStepResult, 1)
+	updated, _ := m.Update(&liverun.UIRequestMsg{
+		Request: model.UIStepRequest{
+			StepID:  "intro-ui",
+			Title:   "Intro",
+			Actions: []model.UIAction{{Label: "Continue", Outcome: "continue"}},
+		},
+		Reply: reply,
+	})
+	m = updated.(*Model)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = updated.(*Model)
+	if cmd != nil {
+		t.Fatal("ctrl+c should show quit confirmation before quitting a running live run")
+	}
+	if !m.quitConfirming {
+		t.Fatal("ctrl+c should enter quit confirmation while live UI is active")
+	}
+	if m.liveUI == nil {
+		t.Fatal("ctrl+c should not cancel the live UI step")
+	}
+	select {
+	case got := <-reply:
+		t.Fatalf("ctrl+c should not resolve UI step, got %+v", got)
+	default:
+	}
+
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if cmd == nil {
+		t.Fatal("y should confirm ctrl+c quit while live UI is active")
+	}
+	if !m.ExitRequested() {
+		t.Fatal("confirmed ctrl+c quit should mark exit requested")
+	}
+}
+
 func TestLiveUIRequestEscUsesRunViewQuitConfirmationAtTopLevel(t *testing.T) {
 	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusInProgress}
 	pick := &StepNode{ID: "intro-ui", Type: NodeUI, Status: StatusInProgress, Parent: root}

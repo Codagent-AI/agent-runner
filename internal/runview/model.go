@@ -526,7 +526,7 @@ func (m *Model) handleLiveUIKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "j":
 		m.scrollLiveUI(1)
 		return m, nil
-	case "q":
+	case "q", "ctrl+c":
 		return m.handleKey(msg)
 	case "esc":
 		return m.handleKey(msg)

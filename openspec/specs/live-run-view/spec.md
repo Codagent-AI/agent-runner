@@ -209,7 +209,7 @@ The runner SHALL NOT render the UI step as a standalone full-screen overlay that
 
 While the UI step is awaiting input, the chrome's status indicators (active-step glyph, breadcrumb, sidebar) SHALL reflect the current state — the active step appears as the in-progress step in the sidebar, and prior steps render with their final status.
 
-The existing top-level keybindings of the live-run-view (`q`, `Ctrl+C`, Escape) continue to apply outside the UI step's input area; keystrokes routed to the UI step (selection arrows, Tab, Enter on a focused element, etc.) are consumed by the UI step and do not trigger top-level chrome actions.
+The existing top-level keybindings of the live-run-view (`q`, `Ctrl+C`, Escape) continue to apply while a UI step is focused. Ctrl+C SHALL always route to the live-run-view quit behavior and SHALL NOT cancel or resolve the UI step. Keystrokes routed to the UI step (selection arrows, Tab, Enter on a focused element, etc.) are consumed by the UI step and do not trigger top-level chrome actions.
 
 #### Scenario: Workflow name and sidebar visible during a UI step
 - **WHEN** the active step is `mode: ui` and the live-run-view is on screen
@@ -218,6 +218,11 @@ The existing top-level keybindings of the live-run-view (`q`, `Ctrl+C`, Escape) 
 #### Scenario: UI step body wraps within the content area
 - **WHEN** a UI step's body text is longer than the chrome's content-area width
 - **THEN** the body SHALL wrap within that width rather than being truncated or extending past the chrome
+
+#### Scenario: Ctrl+C during focused UI step uses run-view quit behavior
+- **WHEN** the workflow is running, a UI step is focused, and the user presses Ctrl+C
+- **THEN** the live-run-view shows the same quit confirmation used for Ctrl+C elsewhere in a running workflow
+- **AND** the UI step remains unresolved while the confirmation is open
 
 #### Scenario: Sidebar reflects the active UI step
 - **WHEN** the active step is a `mode: ui` step partway through a workflow
