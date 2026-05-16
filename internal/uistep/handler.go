@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
 	"github.com/codagent/agent-runner/internal/model"
@@ -14,7 +15,7 @@ import (
 
 var (
 	titleStyle       = tuistyle.SectionStyle
-	bodyStyle        = tuistyle.NormalStyle
+	bodyStyle        = lipgloss.NewStyle()
 	inputPromptStyle = tuistyle.LabelStyle
 )
 

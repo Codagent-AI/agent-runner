@@ -57,26 +57,26 @@ func (m *Model) renderBreadcrumb() string {
 func (m *Model) styledRunStatus() string {
 	// Live-run mode: blink while running, then show result.
 	if m.running {
-		return tuistyle.StatusSuccess.Bold(true).Render("running")
+		return tuistyle.StatusSuccess.Render("running")
 	}
 	if m.liveResult != "" {
 		switch m.liveResult {
 		case "failed", "stopped":
 			return tuistyle.StatusFailed.Bold(true).Render(m.liveResult)
 		default:
-			return tuistyle.StatusSuccess.Bold(true).Render("completed")
+			return tuistyle.StatusSuccess.Render("completed")
 		}
 	}
 	// Inspect / list mode: use the run-lock and root status.
 	if m.active {
-		return tuistyle.StatusSuccess.Bold(true).Render("active")
+		return tuistyle.StatusSuccess.Render("active")
 	}
 	status := m.rootStatus()
 	switch status {
 	case StatusFailed:
 		return tuistyle.StatusFailed.Bold(true).Render("failed")
 	case StatusSuccess:
-		return tuistyle.StatusSuccess.Bold(true).Render("completed")
+		return tuistyle.StatusSuccess.Render("completed")
 	default:
 		hint := " (r to resume)"
 		if m.entered == FromDefinition {
