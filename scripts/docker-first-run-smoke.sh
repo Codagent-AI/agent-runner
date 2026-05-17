@@ -10,6 +10,8 @@ INSTALL_FROM="${INSTALL_FROM:-brew}"
 INSTALL_AGENT_CLIS="${INSTALL_AGENT_CLIS:-1}"
 INSTALL_PROJECT_DEPS="${INSTALL_PROJECT_DEPS:-1}"
 LAUNCH_AGENT_RUNNER="${LAUNCH_AGENT_RUNNER:-0}"
+SMOKE_GIT_USER_NAME="${SMOKE_GIT_USER_NAME:-Agent Runner Smoke}"
+SMOKE_GIT_USER_EMAIL="${SMOKE_GIT_USER_EMAIL:-agent-runner-smoke@example.local}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 RUNNER_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
@@ -45,6 +47,10 @@ Environment:
   INSTALL_PROJECT_DEPS  Run npm ci/install in the cloned project when possible.
                         Default: 1
   LAUNCH_AGENT_RUNNER   Launch agent-runner after setup. Default: 0
+  SMOKE_GIT_USER_NAME   Repo-local Git author name for smoke commits.
+                        Default: Agent Runner Smoke
+  SMOKE_GIT_USER_EMAIL  Repo-local Git author email for smoke commits.
+                        Default: agent-runner-smoke@example.local
 
 Examples:
   scripts/docker-first-run-smoke.sh
@@ -87,6 +93,8 @@ docker_args=(
   -e "INSTALL_AGENT_CLIS=$INSTALL_AGENT_CLIS"
   -e "INSTALL_PROJECT_DEPS=$INSTALL_PROJECT_DEPS"
   -e "LAUNCH_AGENT_RUNNER=$LAUNCH_AGENT_RUNNER"
+  -e "SMOKE_GIT_USER_NAME=$SMOKE_GIT_USER_NAME"
+  -e "SMOKE_GIT_USER_EMAIL=$SMOKE_GIT_USER_EMAIL"
 )
 
 if [[ -t 0 && -t 1 ]]; then
@@ -141,6 +149,11 @@ docker run "${docker_args[@]}" \
         --exclude ./coverage.html \
         -C "$src" \
         -cf - . | tar -C "$dest" -xf -
+    }
+
+    configure_smoke_git_author() {
+      git config user.name "$SMOKE_GIT_USER_NAME"
+      git config user.email "$SMOKE_GIT_USER_EMAIL"
     }
 
     install_agent_runner_from_local_source() {
@@ -212,13 +225,17 @@ docker run "${docker_args[@]}" \
       mkdir -p "$PROJECT_DIR"
       cd "$PROJECT_DIR"
       git init
-      printf "# Agent Runner first-run smoke\n" > README.md
-      git add README.md
-      git commit -m "chore: initial smoke project" >/dev/null 2>&1 || true
       cd "$WORKDIR"
     fi
 
     cd "$PROJECT_DIR"
+    configure_smoke_git_author
+
+    if [[ -z "$REPO" && ! -f README.md ]]; then
+      printf "# Agent Runner first-run smoke\n" > README.md
+      git add README.md
+      git commit -m "chore: initial smoke project"
+    fi
 
     if [[ "$INSTALL_PROJECT_DEPS" == "1" && -f package.json ]]; then
       echo
