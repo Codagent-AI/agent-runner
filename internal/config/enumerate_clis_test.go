@@ -21,7 +21,7 @@ profiles:
         default_mode: interactive
         cli: claude
       implementor:
-        default_mode: headless
+        default_mode: autonomous
         cli: codex
 `), 0o600)
 
@@ -30,7 +30,7 @@ profiles:
   default:
     agents:
       reviewer:
-        default_mode: headless
+        default_mode: autonomous
         cli: copilot
 `), 0o600)
 
@@ -56,12 +56,12 @@ profiles:
         default_mode: interactive
         cli: claude
       implementor:
-        default_mode: headless
+        default_mode: autonomous
         cli: claude
   other:
     agents:
       worker:
-        default_mode: headless
+        default_mode: autonomous
         cli: claude
 `), 0o600)
 

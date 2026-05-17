@@ -23,7 +23,7 @@ Repeat up to N times:
       break_if: success
 
     - id: fix
-      mode: headless
+      mode: autonomous
       session: resume
       prompt: |
         Fix these issues:
@@ -44,7 +44,7 @@ Iterate over files matching a glob pattern:
     as: task_file
   steps:
     - id: implement
-      mode: headless
+      mode: autonomous
       session: new
       prompt: "Implement {{task_file}}"
 ```
@@ -112,7 +112,7 @@ Inside a sub-workflow, `session: inherit` crosses the sub-workflow boundary to f
 ```yaml
 # In workflows/core/run-validator.yaml (a sub-workflow)
 - id: fix-violations
-  mode: headless
+  mode: autonomous
   session: inherit
   prompt: "Fix the validator violations..."
 ```
@@ -136,7 +136,7 @@ Normally a failed step stops the workflow. With `continue_on_failure: true`, the
 
 ```yaml
 - id: fix
-  mode: headless
+  mode: autonomous
   skip_if: previous_success
   prompt: "Fix the issues..."
 ```
@@ -213,7 +213,7 @@ params:
 
 steps:
   - id: implement
-    mode: headless
+    mode: autonomous
     session: new
     prompt: "Implement the task described in {{task_file}}."
 
@@ -238,7 +238,7 @@ steps:
         break_if: success
 
       - id: fix-violations
-        mode: headless
+        mode: autonomous
         session: inherit
         prompt: |
           The validator found violations. Fix them:

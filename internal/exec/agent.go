@@ -34,7 +34,7 @@ var isStdinTerminal = func() bool {
 const continuationMarkerPrefix = "AGENT_RUNNER_CONTINUE_"
 
 // autonomyPreamble is prepended to autonomous prompts to reinforce autonomous behavior.
-const autonomyPreamble = "You are running autonomously in headless mode with no human in the loop. " +
+const autonomyPreamble = "You are running autonomously with no human in the loop. " +
 	"Do not stop to ask for confirmation or clarification. " +
 	"Do not say things like \"let me know\", \"ready when you are\", or \"shall I proceed\". " +
 	"Make decisions and complete the entire task.\n\n"
@@ -156,13 +156,12 @@ func ExecuteAgentStep(
 	}
 
 	invocationContext = resolveInvocationContext(mode, ctx, cliName, log)
-	headless := invocationContext.IsHeadless()
 	if errMsg := captureInvocationError(step, invocationContext); errMsg != "" {
 		emitAgentFailure(ctx, prefix, startTime, string(mode), step, errMsg)
 		return OutcomeFailed, nil
 	}
 
-	if !headless {
+	if !invocationContext.IsHeadless() {
 		if r, ok := adapter.(cli.InteractiveRejector); ok {
 			if modeErr := r.InteractiveModeError(); modeErr != nil {
 				emitAgentFailure(ctx, prefix, startTime, string(mode), step, modeErr.Error())
@@ -202,7 +201,7 @@ func ExecuteAgentStep(
 	spawnTime := time.Now()
 	debugLabel := fmt.Sprintf("workflow=%s step=%s cli=%s model=%s session=%s resume=%t",
 		ctx.WorkflowName, step.ID, cliName, resolvedModel, sessionID, isResume)
-	outcome, result, runErr := runAgentProcess(runner, adapter, args, headless, step.Workdir, debugLabel, continueMarker, log, ctx.SuspendHook, ctx.ResumeHook)
+	outcome, result, runErr := runAgentProcess(runner, adapter, args, invocationContext, step.Workdir, debugLabel, continueMarker, log, ctx.SuspendHook, ctx.ResumeHook)
 	if runErr != nil {
 		emitAgentEnd(ctx, prefix, startTime, "", OutcomeFailed, "", result.Stderr)
 		return OutcomeFailed, runErr
@@ -232,7 +231,7 @@ func ExecuteAgentStep(
 		}
 	}
 
-	discoveredID := discoverAndStoreSession(adapter, step, ctx, spawnTime, sessionID, headless, result.Stdout, log)
+	discoveredID := discoverAndStoreSession(adapter, step, ctx, spawnTime, sessionID, invocationContext.IsHeadless(), result.Stdout, log)
 
 	emitAgentEnd(ctx, prefix, startTime, discoveredID, outcome, filteredStdout, result.Stderr)
 
@@ -240,7 +239,7 @@ func ExecuteAgentStep(
 }
 
 func resolveInvocationContext(mode model.StepMode, ctx *model.ExecutionContext, cliName string, log Logger) cli.InvocationContext {
-	if mode != model.ModeHeadless {
+	if mode != model.ModeAutonomous {
 		return cli.ContextInteractive
 	}
 
@@ -306,6 +305,27 @@ func ResolveAgentStepMode(step *model.Step, ctx *model.ExecutionContext) model.S
 		return model.ModeInteractive
 	}
 	return resolveModeFromProfile(step, profile)
+}
+
+// ResolveAgentInvocationContext returns the effective adapter invocation context
+// for an agent step after profile and backend settings are applied.
+func ResolveAgentInvocationContext(step *model.Step, ctx *model.ExecutionContext) cli.InvocationContext {
+	profile, err := resolveStepProfile(step, ctx)
+	if err != nil {
+		if step.Mode == model.ModeAutonomous {
+			return cli.ContextAutonomousHeadless
+		}
+		return cli.ContextInteractive
+	}
+	mode := resolveModeFromProfile(step, profile)
+	cliName := step.CLI
+	if cliName == "" && profile.CLI != "" {
+		cliName = profile.CLI
+	}
+	if cliName == "" {
+		cliName = "claude"
+	}
+	return resolveInvocationContext(mode, ctx, cliName, nil)
 }
 
 func resolveModeFromProfile(step *model.Step, profile *config.ResolvedAgent) model.StepMode {
@@ -419,12 +439,11 @@ func buildAdapterInput(
 		Resume:    isResume,
 		Model:     profile.Model,
 		Effort:    profile.Effort,
-		Headless:  invocationContext.IsHeadless(),
 		Context:   invocationContext,
 	}
 
-	// Block AskUserQuestion in headless mode so the agent cannot stall
-	// waiting for input. Applies to fresh and resumed headless sessions alike.
+	// Block AskUserQuestion in autonomous mode so the agent cannot stall
+	// waiting for input. Applies to fresh and resumed autonomous sessions alike.
 	if invocationContext.IsAutonomous() {
 		input.DisallowedTools = []string{"AskUserQuestion"}
 	}
@@ -475,8 +494,8 @@ func completionInstruction(marker string) string {
 	return "\n\nWhen you or the user determine this step is complete, continue to the next step by replying with one line containing only the current continuation marker. Construct that line by writing these pieces in this exact order with no spaces or separators: `AGENT`, `_RUNNER`, `_CONTINUE_`, and `" + suffix + "`. The line must start with `AGENT` and end with `" + suffix + "`. Do not run a shell command, use a tool, wrap it in a code block, or add any other commentary."
 }
 
-func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, headless bool, workdir, debugLabel, continueMarker string, log Logger, suspendHook, resumeHook func()) (StepOutcome, ProcessResult, error) {
-	if headless {
+func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, context cli.InvocationContext, workdir, debugLabel, continueMarker string, log Logger, suspendHook, resumeHook func()) (StepOutcome, ProcessResult, error) {
+	if context.IsHeadless() {
 		// Capture stdout for headless runs so that adapters (e.g. Codex) can
 		// parse session IDs from the process output.
 		result, runErr := runner.RunAgent(args, true, workdir)
@@ -489,14 +508,14 @@ func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, h
 		if result.ExitCode != 0 {
 			return OutcomeFailed, result, nil
 		}
-		// Detect AskUserQuestion failures in headless mode — these indicate
+		// Detect AskUserQuestion failures in autonomous mode — these indicate
 		// the agent could not complete the task autonomously. Only scan
 		// stderr: CLI tool-blocked errors go there, while stdout contains
 		// agent natural language that may mention AskUserQuestion without
 		// indicating an actual failure.
 		for _, line := range strings.Split(strings.ToLower(result.Stderr), "\n") {
 			if strings.Contains(line, "askuserquestion") && isToolDisallowedLine(line) {
-				log.Errorf("  headless session attempted interactive prompt (AskUserQuestion); treating as failure\n")
+				log.Errorf("  autonomous session attempted interactive prompt (AskUserQuestion); treating as failure\n")
 				return OutcomeFailed, result, nil
 			}
 		}

@@ -9,20 +9,20 @@ Defines how the runner integrates with the GitHub Copilot CLI (`copilot`) as a h
 The Copilot adapter SHALL construct headless invocations using:
 
 ```
-copilot -p <prompt> --allow-all --autopilot -s [--model <m>] [--reasoning-effort <e>]
+copilot -p <prompt> --allow-tool=write --autopilot -s [--model <m>] [--reasoning-effort <e>]
 ```
 
-- `--allow-all` grants tool, file-path, and URL permissions required for autonomous operation.
+- `--allow-tool=write` grants the write permission required for autonomous workspace edits.
 - `--autopilot` keeps the agent running until the task is complete.
 - `-s` suppresses interactive output, emitting only the agent response text.
 
 #### Scenario: Fresh headless Copilot step
 - **WHEN** the runner executes a headless step with `cli: copilot` and session strategy `new`
-- **THEN** the adapter returns args beginning with `copilot` and including `-p`, the prompt, `--allow-all`, `--autopilot`, and `-s`, and does not include `--resume`
+- **THEN** the adapter returns args beginning with `copilot` and including `-p`, the prompt, `--allow-tool=write`, `--autopilot`, and `-s`, and does not include `--resume`
 
 #### Scenario: Headless flag required
 - **WHEN** the runner constructs args for a Copilot headless step
-- **THEN** the args include `--allow-all` regardless of other options
+- **THEN** the args include `--allow-tool=write` regardless of other options
 
 ### Requirement: Copilot session resume
 
@@ -81,4 +81,3 @@ The effective working directory used for matching SHALL be the working directory
 #### Scenario: No matching session found
 - **WHEN** no session directory in `~/.copilot/session-state/` matches the working directory or was created after the spawn time
 - **THEN** the adapter returns the empty string
-

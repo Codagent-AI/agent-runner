@@ -26,7 +26,7 @@ func TestStepSchema(t *testing.T) {
 	})
 
 	t.Run("accepts a headless agent step with resume", func(t *testing.T) {
-		s := Step{ID: "impl", Mode: ModeHeadless, Prompt: "Implement", Session: SessionResume}
+		s := Step{ID: "impl", Mode: ModeAutonomous, Prompt: "Implement", Session: SessionResume}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -127,7 +127,7 @@ func TestStepSchema(t *testing.T) {
 
 func TestStepSchemaExtensions(t *testing.T) {
 	t.Run("accepts inherit as a session strategy", func(t *testing.T) {
-		s := Step{ID: "s", Mode: ModeHeadless, Prompt: "p", Session: SessionInherit}
+		s := Step{ID: "s", Mode: ModeAutonomous, Prompt: "p", Session: SessionInherit}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -147,15 +147,15 @@ func TestStepSchemaExtensions(t *testing.T) {
 		}
 	})
 
-	t.Run("accepts headless mode on a shell step", func(t *testing.T) {
-		s := Step{ID: "s", Command: "echo hi", Session: SessionNew, Mode: ModeHeadless}
+	t.Run("accepts autonomous mode on a shell step", func(t *testing.T) {
+		s := Step{ID: "s", Command: "echo hi", Session: SessionNew, Mode: ModeAutonomous}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
-	t.Run("accepts capture on a headless step", func(t *testing.T) {
-		s := Step{ID: "s", Agent: "implementor", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, Capture: "output"}
+	t.Run("accepts capture on a autonomous step", func(t *testing.T) {
+		s := Step{ID: "s", Agent: "implementor", Mode: ModeAutonomous, Prompt: "p", Session: SessionNew, Capture: "output"}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -256,7 +256,7 @@ func TestStepSchemaExtensions(t *testing.T) {
 	})
 
 	t.Run("accepts model on an agent step", func(t *testing.T) {
-		s := Step{ID: "s", Agent: "implementor", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, Model: "opus"}
+		s := Step{ID: "s", Agent: "implementor", Mode: ModeAutonomous, Prompt: "p", Session: SessionNew, Model: "opus"}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -716,7 +716,7 @@ func TestCLIValidation(t *testing.T) {
 	knownCLIs := []string{"claude", "codex"}
 
 	t.Run("accepts cli on an agent step", func(t *testing.T) {
-		s := Step{ID: "s", Agent: "implementor", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, CLI: "codex"}
+		s := Step{ID: "s", Agent: "implementor", Mode: ModeAutonomous, Prompt: "p", Session: SessionNew, CLI: "codex"}
 		if err := s.Validate(knownCLIs); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -741,7 +741,7 @@ func TestCLIValidation(t *testing.T) {
 	})
 
 	t.Run("rejects unknown cli value", func(t *testing.T) {
-		s := Step{ID: "s", Agent: "implementor", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, CLI: "unknown-cli"}
+		s := Step{ID: "s", Agent: "implementor", Mode: ModeAutonomous, Prompt: "p", Session: SessionNew, CLI: "unknown-cli"}
 		err := s.Validate(knownCLIs)
 		if err == nil {
 			t.Fatal("expected error")
@@ -752,14 +752,14 @@ func TestCLIValidation(t *testing.T) {
 	})
 
 	t.Run("skips cli name validation when knownCLIs is nil", func(t *testing.T) {
-		s := Step{ID: "s", Agent: "implementor", Mode: ModeHeadless, Prompt: "p", Session: SessionNew, CLI: "anything"}
+		s := Step{ID: "s", Agent: "implementor", Mode: ModeAutonomous, Prompt: "p", Session: SessionNew, CLI: "anything"}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("accepts step with no cli field", func(t *testing.T) {
-		s := Step{ID: "s", Agent: "implementor", Mode: ModeHeadless, Prompt: "p", Session: SessionNew}
+		s := Step{ID: "s", Agent: "implementor", Mode: ModeAutonomous, Prompt: "p", Session: SessionNew}
 		if err := s.Validate(knownCLIs); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

@@ -21,7 +21,7 @@ Key current architecture:
 **Non-Goals:**
 - Changing the default autonomous backend away from headless (future consideration)
 - Adding new CLI adapters
-- Backward compatibility for `mode: headless` in workflow YAML (pre-release, clean break)
+- Backward compatibility for `mode: autonomous` in workflow YAML (pre-release, clean break)
 
 ## Approach
 
@@ -114,5 +114,5 @@ In `internal/exec/agent.go`, after resolving the step mode to `ModeAutonomous`, 
 
 - **Permission flag breakage** — Tighter permission flags may cause adapters to stall on operations they could previously auto-approve. → Mitigation: flags were manually tested. Tests will verify exact flag sets per adapter.
 - **Interactive autonomous is new territory** — Running an agent interactively with autonomy instructions is untested in production. → Mitigation: default backend is `headless`, users opt in. The continuation mechanism already works for interactive steps.
-- **No migration for `mode: headless`** — Users with custom workflow YAML get a validation error. → Mitigation: pre-release project, clear error message.
+- **No migration for `mode: autonomous`** — Users with custom workflow YAML get a validation error. → Mitigation: pre-release project, clear error message.
 - **Setup vs runtime default mismatch** — Setup pre-selects `interactive-claude` but the runtime default is `headless`. Users who complete setup get `interactive-claude`; users who skip setup get `headless`. → This is intentional: setup users made an informed choice; non-setup users (CI, Docker) should get the safe default.

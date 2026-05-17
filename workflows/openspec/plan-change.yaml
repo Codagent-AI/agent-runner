@@ -45,7 +45,7 @@ steps:
       Help the user plan tasks for the change. You MUST use the codagent:plan-tasks skill. You MUST create detailed task files under openspec/changes/{{change_name}}/tasks/*.md. You MUST also create openspec/changes/{{change_name}}/tasks.md as an index that links to those task files. The implement workflow requires at least one matching tasks/*.md file. Once all task documents are written, continue to the next step.
 
   - id: pre-review-validate
-    mode: headless
+    mode: autonomous
     session: resume
     prompt: |
       Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports. Keep running the command and fixing until it passes with no errors.
@@ -57,13 +57,13 @@ steps:
       For every mismatch, either correct the delta header to match the main spec, or restructure the delta (e.g. fold a REMOVED into a MODIFIED if the behavior is being rewritten rather than deleted). Do not proceed until every MODIFIED/REMOVED/RENAMED header resolves.
 
   - id: review
-    mode: headless
+    mode: autonomous
     session: resume
     prompt: |
       You MUST use a subagent to run the codagent:review-spec skill to review the change artifacts at openspec/changes/{{change_name}}. Then address issues the review subagent finds.
 
   - id: post-review-validate
-    mode: headless
+    mode: autonomous
     session: resume
     prompt: |
       Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports. Keep running the command and fixing until it passes with no errors.

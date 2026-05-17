@@ -479,7 +479,7 @@ func applyStepStart(n *StepNode, data map[string]any) {
 	}
 	if mode, ok := stringField(data, "mode"); ok {
 		switch model.StepMode(mode) {
-		case model.ModeHeadless:
+		case model.ModeAutonomous:
 			n.Type = NodeHeadlessAgent
 		case model.ModeInteractive:
 			n.Type = NodeInteractiveAgent

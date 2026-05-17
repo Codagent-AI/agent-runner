@@ -299,6 +299,7 @@ func TestFindLatestIncompleteOnboardingRunState(t *testing.T) {
 	home := t.TempDir()
 	userHomeDir = func() (string, error) { return home, nil }
 	t.Cleanup(func() { userHomeDir = originalHome })
+	t.Setenv("HOME", home)
 
 	startCwd := filepath.Join(t.TempDir(), "start")
 	resumeCwd := filepath.Join(t.TempDir(), "resume")
@@ -337,6 +338,7 @@ func TestFindLatestIncompleteOnboardingRunStateRepairsEmptyCurrentStepToFirstSte
 	home := t.TempDir()
 	userHomeDir = func() (string, error) { return home, nil }
 	t.Cleanup(func() { userHomeDir = originalHome })
+	t.Setenv("HOME", home)
 
 	repo := filepath.Join(t.TempDir(), "repo")
 	if err := os.MkdirAll(repo, 0o750); err != nil {
@@ -381,6 +383,7 @@ func TestFindLatestIncompleteOnboardingRunStateRepairsEmptyCurrentStepFromAudit(
 	home := t.TempDir()
 	userHomeDir = func() (string, error) { return home, nil }
 	t.Cleanup(func() { userHomeDir = originalHome })
+	t.Setenv("HOME", home)
 
 	repo := filepath.Join(t.TempDir(), "repo")
 	if err := os.MkdirAll(repo, 0o750); err != nil {
@@ -450,6 +453,7 @@ func TestPrepareBuiltinOnboardingRunStartsFromRequestedTopLevelStep(t *testing.T
 	home := t.TempDir()
 	userHomeDir = func() (string, error) { return home, nil }
 	t.Cleanup(func() { userHomeDir = originalHome })
+	t.Setenv("HOME", home)
 
 	repo := filepath.Join(t.TempDir(), "repo")
 	if err := os.MkdirAll(repo, 0o750); err != nil {

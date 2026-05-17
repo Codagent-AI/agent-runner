@@ -16,7 +16,7 @@ steps:
 
       Each step has a type. This demo walks through the main ones:
         UI       — static content with actions (like this step)
-        Agent    — interactive or headless AI sessions
+        Agent    — interactive or autonomous AI sessions
         Shell    — deterministic local commands
         Capture  — saves a value for later steps to reference
 
@@ -31,7 +31,7 @@ steps:
     body: |
       Interactive steps open a live agent session where you and the agent collaborate before the workflow moves on.
 
-      Example: a planning step that opens an interactive session so you can discuss and shape the plan together before moving to a headless implementation step.
+      Example: a planning step that opens an interactive session so you can discuss and shape the plan together before moving to a autonomous implementation step.
 
       The next step opens a short interactive session. Ask it anything about Agent Runner. When you're done, continue in any of these ways:
         - Tell the agent to continue
@@ -65,35 +65,35 @@ steps:
       - label: Continue
         outcome: continue
 
-  - id: explain-headless
+  - id: explain-autonomous
     mode: ui
-    title: Headless Agent Step
+    title: Autonomous Agent Step
     body: |
-      Headless steps give an agent a task and run it to completion without interaction. The workflow advances automatically when the agent finishes.
+      Autonomous steps give an agent a task and run it to completion without interaction. The workflow advances automatically when the agent finishes.
 
       Example: an implementation step that takes a task file and writes the code while you watch progress stream to the terminal.
 
-      The next step runs a short headless task. Watch the output, then the workflow will continue on its own.
+      The next step runs a short autonomous task. Watch the output, then the workflow will continue on its own.
     actions:
       - label: Continue
         outcome: continue
 
-  - id: headless-demo
+  - id: autonomous-demo
     agent: implementor
-    mode: headless
+    mode: autonomous
     session: new
     prompt: |
-      You are demonstrating an Agent Runner headless step during onboarding.
+      You are demonstrating an Agent Runner autonomous step during onboarding.
 
-      Return a concise explanation of when a workflow should use a headless agent step instead of an interactive agent step.
+      Return a concise explanation of when a workflow should use an autonomous agent step instead of an interactive agent step.
 
       Do not write files, modify configuration, run shell commands, start services, install dependencies, call external services, or change project state.
 
-  - id: review-headless
+  - id: review-autonomous
     mode: ui
-    title: Headless Step Complete
+    title: Autonomous Step Complete
     body: |
-      The headless step ran and the workflow moved on automatically. Drill into this sub-workflow and then use the arrows to select the headless step and see what the agent wrote. Then press l to come back to this screen.
+      The autonomous step ran and the workflow moved on automatically. Drill into this sub-workflow and then use the arrows to select the autonomous step and see what the agent wrote. Then press l to come back to this screen.
     actions:
       - label: Continue
         outcome: continue
@@ -121,7 +121,7 @@ steps:
 
       This step is reading that captured value using interpolation — {{shell_capture}} in the workflow YAML was replaced with the shell step's output. This is how steps pass data forward.
 
-      That covers the main step types: UI, interactive agent, headless agent, shell, and capture.
+      That covers the main step types: UI, interactive agent, autonomous agent, shell, and capture.
     actions:
       - label: Continue
         outcome: continue

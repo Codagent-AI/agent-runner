@@ -83,13 +83,13 @@ other_top_level: true
 		t.Fatalf("planner = %#v", planner)
 	}
 	implementor := defaultAgents["implementor"].(map[string]any)
-	if implementor["default_mode"] != "headless" || implementor["cli"] != "codex" {
+	if implementor["default_mode"] != "autonomous" || implementor["cli"] != "codex" {
 		t.Fatalf("implementor = %#v", implementor)
 	}
 	if _, ok := implementor["model"]; ok {
 		t.Fatalf("implementor included empty model: %#v", implementor)
 	}
-	for _, absent := range []string{"interactive_base", "headless_base"} {
+	for _, absent := range []string{"interactive_base", "autonomous_base"} {
 		if _, ok := defaultAgents[absent]; ok {
 			t.Fatalf("merge should not write %q", absent)
 		}
@@ -224,7 +224,7 @@ func TestConfiguredAgentCLIsJoinsExplicitConfigValues(t *testing.T) {
         default_mode: interactive
         cli: claude
       reviewer:
-        default_mode: headless
+        default_mode: autonomous
         cli: codex
 `)
 	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
@@ -232,7 +232,7 @@ func TestConfiguredAgentCLIsJoinsExplicitConfigValues(t *testing.T) {
   default:
     agents:
       implementor:
-        default_mode: headless
+        default_mode: autonomous
         cli: copilot
       inherited:
         extends: planner
@@ -265,7 +265,7 @@ func TestValidatorInitArgsIgnoresConfiguredCLIs(t *testing.T) {
   default:
     agents:
       implementor:
-        default_mode: headless
+        default_mode: autonomous
         cli: codex
 `)
 

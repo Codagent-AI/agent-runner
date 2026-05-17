@@ -24,7 +24,7 @@ steps:
 
   - id: review-assumptions
     session: lead-agent
-    mode: headless
+    mode: autonomous
     prompt: |
       The implementor iterations for change "{{change_name}}" have completed. Each iteration produced a session report (via codagent:session-report) listing risky and notable assumptions plus any context gaps.
 
@@ -38,7 +38,7 @@ steps:
 
   - id: simplify
     session: lead-agent
-    mode: headless
+    mode: autonomous
     prompt: |
       If the /simplify skill is available, run it focusing on code reuse and readability. If it is not available, review your git diff for duplicated logic that should be extracted into shared helpers, and readability issues like deep nesting, unclear naming, or overly complex conditionals. Fix and commit anything clear-cut, following the project's commit message conventions and prepending [{{step_id}}].
 

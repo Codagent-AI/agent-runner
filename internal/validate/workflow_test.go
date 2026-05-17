@@ -96,7 +96,7 @@ func TestWorkflowConstraints(t *testing.T) {
 		w := model.Workflow{
 			Name: "test",
 			Steps: []model.Step{
-				{ID: "s1", Mode: model.ModeHeadless, Prompt: "p", Session: model.SessionInherit},
+				{ID: "s1", Mode: model.ModeAutonomous, Prompt: "p", Session: model.SessionInherit},
 			},
 		}
 		err := WorkflowConstraints(&w, Options{})
@@ -115,7 +115,7 @@ func TestWorkflowConstraints(t *testing.T) {
 				ID: "loop", Session: model.SessionNew,
 				Loop: &model.Loop{Max: intPtr(3)},
 				Steps: []model.Step{
-					{ID: "s1", Mode: model.ModeHeadless, Prompt: "p", Session: model.SessionInherit},
+					{ID: "s1", Mode: model.ModeAutonomous, Prompt: "p", Session: model.SessionInherit},
 				},
 			}},
 		}

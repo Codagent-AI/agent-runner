@@ -73,7 +73,6 @@ type BuildArgsInput struct {
 	Resume          bool   // True when resuming an existing session, false for fresh sessions
 	Model           string
 	Effort          string // Effort level (low, medium, high, xhigh) — empty means unset
-	Headless        bool
 	Context         InvocationContext
 	DisallowedTools []string // Tool names to block (e.g. "AskUserQuestion"); adapter translates to CLI flags where supported
 }
@@ -87,11 +86,11 @@ const (
 )
 
 func (c InvocationContext) IsInteractive() bool {
-	return c == ContextInteractive || c == ContextAutonomousInteractive
+	return c == ContextInteractive
 }
 
 func (c InvocationContext) IsAutonomous() bool {
-	return c == ContextAutonomousHeadless || c == ContextAutonomousInteractive
+	return c != ContextInteractive
 }
 
 func (c InvocationContext) IsHeadless() bool {
@@ -101,9 +100,6 @@ func (c InvocationContext) IsHeadless() bool {
 func (input *BuildArgsInput) InvocationContext() InvocationContext {
 	if input.Context != "" {
 		return input.Context
-	}
-	if input.Headless {
-		return ContextAutonomousHeadless
 	}
 	return ContextInteractive
 }

@@ -56,30 +56,30 @@ func TestLoad_MissingProjectFileDoesNotWriteDefaults(t *testing.T) {
 	if defaultSet == nil {
 		t.Fatal("expected 'default' profile set")
 	}
-	if len(defaultSet.Agents) != 3 {
-		t.Fatalf("expected 3 agents in default profile set, got %d", len(defaultSet.Agents))
+	if len(defaultSet.Agents) != 5 {
+		t.Fatalf("expected 5 agents in default profile set, got %d", len(defaultSet.Agents))
 	}
 
-	// Active agents should have 3 entries.
-	if len(cfg.ActiveAgents) != 3 {
-		t.Fatalf("expected 3 active agents, got %d", len(cfg.ActiveAgents))
+	// Active agents should have 5 entries.
+	if len(cfg.ActiveAgents) != 5 {
+		t.Fatalf("expected 5 active agents, got %d", len(cfg.ActiveAgents))
 	}
 
-	// Verify planner is a standalone interactive agent.
+	// Verify planner inherits the interactive base profile.
 	pl := cfg.ActiveAgents["planner"]
 	if pl == nil {
 		t.Fatal("expected planner agent")
 	}
-	if pl.DefaultMode != "interactive" || pl.CLI != "claude" || pl.Model != "opus" || pl.Effort != "high" {
+	if pl.Extends != "interactive_base" {
 		t.Fatalf("unexpected planner: %+v", pl)
 	}
 
-	// Verify implementor is a standalone headless agent.
+	// Verify implementor inherits the autonomous base profile.
 	im := cfg.ActiveAgents["implementor"]
 	if im == nil {
 		t.Fatal("expected implementor agent")
 	}
-	if im.DefaultMode != "headless" || im.CLI != "claude" || im.Model != "opus" || im.Effort != "high" {
+	if im.Extends != "autonomous_base" {
 		t.Fatalf("unexpected implementor: %+v", im)
 	}
 
@@ -91,7 +91,7 @@ func TestLoad_MissingProjectFileDoesNotWriteDefaults(t *testing.T) {
 	if sum.Extends != "" {
 		t.Fatalf("expected summarizer to be standalone, got extends=%q", sum.Extends)
 	}
-	if sum.DefaultMode != "headless" || sum.CLI != "claude" || sum.Model != "haiku" || sum.Effort != "low" {
+	if sum.DefaultMode != "autonomous" || sum.CLI != "claude" || sum.Model != "haiku" || sum.Effort != "low" {
 		t.Fatalf("unexpected summarizer: %+v", sum)
 	}
 }
@@ -112,8 +112,8 @@ func TestLoad_SkipsGlobalConfigWhenHomeDirUnavailable(t *testing.T) {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("expected config file to NOT be created on disk")
 	}
-	if len(cfg.ActiveAgents) != 3 {
-		t.Fatalf("expected 3 default active agents, got %d", len(cfg.ActiveAgents))
+	if len(cfg.ActiveAgents) != 5 {
+		t.Fatalf("expected 5 default active agents, got %d", len(cfg.ActiveAgents))
 	}
 }
 
@@ -131,7 +131,7 @@ func TestLoad_LoadsExisting(t *testing.T) {
   default:
     agents:
       custom:
-        default_mode: headless
+        default_mode: autonomous
         cli: codex
         model: o3
 `
@@ -141,12 +141,12 @@ func TestLoad_LoadsExisting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Built-in defaults (3 agents) layer under the project's 1 custom agent.
-	if len(cfg.ActiveAgents) != 4 {
-		t.Fatalf("expected 4 active agents (3 defaults + 1 custom), got %d", len(cfg.ActiveAgents))
+	// Built-in defaults (5 agents) layer under the project's 1 custom agent.
+	if len(cfg.ActiveAgents) != 6 {
+		t.Fatalf("expected 6 active agents (5 defaults + 1 custom), got %d", len(cfg.ActiveAgents))
 	}
 	p := cfg.ActiveAgents["custom"]
-	if p == nil || p.DefaultMode != "headless" || p.CLI != "codex" || p.Model != "o3" {
+	if p == nil || p.DefaultMode != "autonomous" || p.CLI != "codex" || p.Model != "o3" {
 		t.Fatalf("unexpected agent: %+v", p)
 	}
 
@@ -195,7 +195,7 @@ func TestLoad_OptionalFieldsOmitted(t *testing.T) {
   default:
     agents:
       minimal:
-        default_mode: headless
+        default_mode: autonomous
         cli: claude
 `
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -249,25 +249,25 @@ func TestLoad_MergesGlobalAndProjectProfiles(t *testing.T) {
 	writeConfigFile(t, globalPath, `profiles:
   default:
     agents:
-      headless_base:
-        default_mode: headless
+      autonomous_base:
+        default_mode: autonomous
         cli: claude
         model: sonnet
       implementor:
-        extends: headless_base
+        extends: autonomous_base
         model: opus
         effort: high
       global_only:
-        extends: headless_base
+        extends: autonomous_base
 `)
 	writeConfigFile(t, projectPath, `profiles:
   default:
     agents:
       implementor:
-        extends: headless_base
+        extends: autonomous_base
         cli: copilot
       project_only:
-        extends: headless_base
+        extends: autonomous_base
 `)
 
 	cfg, err := Load(projectPath)
@@ -286,7 +286,7 @@ func TestLoad_MergesGlobalAndProjectProfiles(t *testing.T) {
 	if implementor == nil {
 		t.Fatal("expected merged implementor agent")
 	}
-	if implementor.Extends != "headless_base" || implementor.CLI != "copilot" {
+	if implementor.Extends != "autonomous_base" || implementor.CLI != "copilot" {
 		t.Fatalf("unexpected merged implementor agent: %+v", implementor)
 	}
 	if implementor.Model != "" || implementor.Effort != "" {
@@ -297,7 +297,7 @@ func TestLoad_MergesGlobalAndProjectProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected resolve error: %v", err)
 	}
-	if rp.DefaultMode != "headless" || rp.CLI != "claude" || rp.Model != "sonnet" {
+	if rp.DefaultMode != "autonomous" || rp.CLI != "claude" || rp.Model != "sonnet" {
 		t.Fatalf("expected project agent to inherit from global base, got %+v", rp)
 	}
 }
@@ -315,10 +315,10 @@ func TestConfiguredCLIs_UsesExplicitGlobalAndProjectAgentDefinitions(t *testing.
   default:
     agents:
       shared:
-        default_mode: headless
+        default_mode: autonomous
         cli: claude
       global_only:
-        default_mode: headless
+        default_mode: autonomous
         cli: codex
   other:
     agents:
@@ -330,7 +330,7 @@ func TestConfiguredCLIs_UsesExplicitGlobalAndProjectAgentDefinitions(t *testing.
   default:
     agents:
       project_only:
-        default_mode: headless
+        default_mode: autonomous
         cli: copilot
       inherits:
         extends: shared
@@ -465,7 +465,7 @@ func TestLoad_DoesNotCreateGlobalConfigWhenMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(cfg.ActiveAgents) != 3 {
+	if len(cfg.ActiveAgents) != 5 {
 		t.Fatalf("expected default project config, got %d active agents", len(cfg.ActiveAgents))
 	}
 
@@ -492,7 +492,7 @@ func TestLoad_GlobalOverridesDefaultAgent(t *testing.T) {
   default:
     agents:
       implementor:
-        default_mode: headless
+        default_mode: autonomous
         cli: copilot
         model: gpt-5.4
 `)
@@ -513,8 +513,8 @@ func TestLoad_GlobalOverridesDefaultAgent(t *testing.T) {
 		t.Fatalf("expected global implementor.model=gpt-5.4 to override default, got %q", rp.Model)
 	}
 	// default_mode is set directly on the global implementor.
-	if rp.DefaultMode != "headless" {
-		t.Fatalf("expected default_mode headless from global implementor, got %q", rp.DefaultMode)
+	if rp.DefaultMode != "autonomous" {
+		t.Fatalf("expected default_mode autonomous from global implementor, got %q", rp.DefaultMode)
 	}
 }
 
@@ -532,7 +532,7 @@ func TestLoad_ProjectExistsStillIncludesDefaultAgents(t *testing.T) {
   default:
     agents:
       custom:
-        default_mode: headless
+        default_mode: autonomous
         cli: codex
         model: o3
 `)
@@ -569,7 +569,7 @@ func TestLoad_DefaultsAndMergesGlobalProfiles(t *testing.T) {
   default:
     agents:
       global_only:
-        default_mode: headless
+        default_mode: autonomous
         cli: copilot
 `)
 
@@ -621,8 +621,8 @@ func TestLoad_RejectsLegacyFlatShapeGlobal(t *testing.T) {
 	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
 
 	writeConfigFile(t, globalPath, `profiles:
-  headless_base:
-    default_mode: headless
+  autonomous_base:
+    default_mode: autonomous
     cli: claude
 `)
 
@@ -645,8 +645,8 @@ func TestLoad_RejectsLegacyMixedShape(t *testing.T) {
       planner:
         default_mode: interactive
         cli: claude
-  headless_base:
-    default_mode: headless
+  autonomous_base:
+    default_mode: autonomous
     cli: claude
 `)
 
@@ -681,7 +681,7 @@ profiles:
   copilot:
     agents:
       planner:
-        default_mode: headless
+        default_mode: autonomous
         cli: copilot
 `)
 
@@ -801,7 +801,7 @@ profiles:
   personal:
     agents:
       planner:
-        default_mode: headless
+        default_mode: autonomous
         cli: codex
 `)
 
@@ -841,7 +841,7 @@ func TestLoad_MergesSameProfileSetDisjointAgents(t *testing.T) {
   default:
     agents:
       implementor:
-        default_mode: headless
+        default_mode: autonomous
         cli: claude
 `)
 
@@ -870,7 +870,7 @@ func TestLoad_MergesSameProfileSetOverlappingAgents(t *testing.T) {
   default:
     agents:
       implementor:
-        default_mode: headless
+        default_mode: autonomous
         cli: claude
         model: opus
 `)
@@ -878,7 +878,7 @@ func TestLoad_MergesSameProfileSetOverlappingAgents(t *testing.T) {
   default:
     agents:
       implementor:
-        default_mode: headless
+        default_mode: autonomous
         cli: copilot
 `)
 
@@ -910,8 +910,8 @@ func TestLoad_ProfileSetExtendsInheritsAgentsAndSupportsAgentLevelExtends(t *tes
 	writeConfigFile(t, globalPath, `profiles:
   team_base:
     agents:
-      headless_base:
-        default_mode: headless
+      autonomous_base:
+        default_mode: autonomous
         cli: claude
         model: sonnet
       planner:
@@ -924,7 +924,7 @@ profiles:
     extends: team_base
     agents:
       implementor:
-        extends: headless_base
+        extends: autonomous_base
         cli: copilot
 `)
 
@@ -933,8 +933,8 @@ profiles:
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if cfg.ActiveAgents["headless_base"] == nil {
-		t.Fatal("expected inherited headless_base in active profile")
+	if cfg.ActiveAgents["autonomous_base"] == nil {
+		t.Fatal("expected inherited autonomous_base in active profile")
 	}
 	if cfg.ActiveAgents["planner"] == nil {
 		t.Fatal("expected inherited planner in active profile")
@@ -947,7 +947,7 @@ profiles:
 	if err != nil {
 		t.Fatalf("unexpected resolve error: %v", err)
 	}
-	if rp.DefaultMode != "headless" || rp.CLI != "copilot" || rp.Model != "sonnet" {
+	if rp.DefaultMode != "autonomous" || rp.CLI != "copilot" || rp.Model != "sonnet" {
 		t.Fatalf("unexpected resolved implementor: %+v", rp)
 	}
 }
@@ -960,18 +960,18 @@ func TestLoad_ProfileSetExtendsOverrideReplacesParentAgentWholly(t *testing.T) {
 profiles:
   parent:
     agents:
-      headless_base:
-        default_mode: headless
+      autonomous_base:
+        default_mode: autonomous
         cli: claude
       implementor:
-        default_mode: headless
+        default_mode: autonomous
         cli: claude
         model: opus
   child:
     extends: parent
     agents:
       implementor:
-        extends: headless_base
+        extends: autonomous_base
         cli: copilot
 `)
 
@@ -984,7 +984,7 @@ profiles:
 	if im == nil {
 		t.Fatal("expected implementor in active agents")
 	}
-	if im.Extends != "headless_base" || im.CLI != "copilot" {
+	if im.Extends != "autonomous_base" || im.CLI != "copilot" {
 		t.Fatalf("unexpected active implementor: %+v", im)
 	}
 	if im.DefaultMode != "" || im.Model != "" {
@@ -1004,19 +1004,19 @@ func TestLoad_ProfileSetExtendsProjectWinsOverGlobal(t *testing.T) {
 	writeConfigFile(t, globalPath, `profiles:
   base_a:
     agents:
-      headless_base:
-        default_mode: headless
+      autonomous_base:
+        default_mode: autonomous
         cli: claude
   base_b:
     agents:
-      headless_base:
-        default_mode: headless
+      autonomous_base:
+        default_mode: autonomous
         cli: copilot
   copilot:
     extends: base_a
     agents:
       implementor:
-        extends: headless_base
+        extends: autonomous_base
 `)
 	writeConfigFile(t, projectPath, `active_profile: copilot
 profiles:
@@ -1050,8 +1050,8 @@ func TestLoad_ProfileSetExtendsMergeThenExtendAcrossGlobalAndProject(t *testing.
 	writeConfigFile(t, globalPath, `profiles:
   team_base:
     agents:
-      headless_base:
-        default_mode: headless
+      autonomous_base:
+        default_mode: autonomous
         cli: claude
   copilot:
     agents:
@@ -1065,7 +1065,7 @@ profiles:
     extends: team_base
     agents:
       implementor:
-        extends: headless_base
+        extends: autonomous_base
 `)
 
 	cfg, err := Load(projectPath)
@@ -1073,8 +1073,8 @@ profiles:
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if cfg.ActiveAgents["headless_base"] == nil {
-		t.Fatal("expected inherited headless_base in active agents")
+	if cfg.ActiveAgents["autonomous_base"] == nil {
+		t.Fatal("expected inherited autonomous_base in active agents")
 	}
 	if cfg.ActiveAgents["planner"] == nil {
 		t.Fatal("expected merged global planner in active agents")
@@ -1092,8 +1092,8 @@ func TestLoad_ProfileSetExtendsMultiLevelChain(t *testing.T) {
 profiles:
   c:
     agents:
-      headless_base:
-        default_mode: headless
+      autonomous_base:
+        default_mode: autonomous
         cli: claude
   b:
     extends: c
@@ -1105,7 +1105,7 @@ profiles:
     extends: b
     agents:
       implementor:
-        extends: headless_base
+        extends: autonomous_base
 `)
 
 	cfg, err := Load(path)
@@ -1113,8 +1113,8 @@ profiles:
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if cfg.ActiveAgents["headless_base"] == nil {
-		t.Fatal("expected headless_base inherited through chain")
+	if cfg.ActiveAgents["autonomous_base"] == nil {
+		t.Fatal("expected autonomous_base inherited through chain")
 	}
 	if cfg.ActiveAgents["planner"] == nil {
 		t.Fatal("expected planner inherited through chain")
@@ -1132,7 +1132,7 @@ func TestLoad_NonActiveProfileSetInheritedInvalidAgentBlocksLoad(t *testing.T) {
   shared:
     agents:
       reviewer:
-        default_mode: headless
+        default_mode: autonomous
         cli: copilot
         effort: extreme
   default:
@@ -1144,7 +1144,7 @@ func TestLoad_NonActiveProfileSetInheritedInvalidAgentBlocksLoad(t *testing.T) {
     extends: shared
     agents:
       implementor:
-        default_mode: headless
+        default_mode: autonomous
         cli: claude
 `)
 
@@ -1167,7 +1167,7 @@ profiles:
     extends: missing
     agents:
       implementor:
-        default_mode: headless
+        default_mode: autonomous
         cli: claude
 `)
 
@@ -1191,7 +1191,7 @@ func TestLoad_ProfileSetExtendsRejectsNonString(t *testing.T) {
       - base_b
     agents:
       implementor:
-        default_mode: headless
+        default_mode: autonomous
         cli: claude
 `)
 
@@ -1223,7 +1223,7 @@ func TestLoad_ProfileSetExtendsCycles(t *testing.T) {
     extends: a
     agents:
       implementor:
-        default_mode: headless
+        default_mode: autonomous
         cli: claude
 `,
 			want: []string{"cycle", "a", "b"},
@@ -1253,13 +1253,13 @@ func TestLoad_ProfileSetExtendsCycles(t *testing.T) {
     extends: c
     agents:
       implementor:
-        default_mode: headless
+        default_mode: autonomous
         cli: claude
   c:
     extends: a
     agents:
       reviewer:
-        default_mode: headless
+        default_mode: autonomous
         cli: copilot
 `,
 			want: []string{"cycle", "a", "b", "c"},
@@ -1299,7 +1299,7 @@ func TestLoad_NonActiveProfileSetInvalidAgentBlocksLoad(t *testing.T) {
   copilot:
     agents:
       reviewer:
-        default_mode: headless
+        default_mode: autonomous
         cli: copilot
         effort: extreme
 `)
@@ -1369,7 +1369,7 @@ func TestValidation_BaseAgentMissingCLI(t *testing.T) {
   default:
     agents:
       bad:
-        default_mode: headless
+        default_mode: autonomous
 `)
 
 	_, err := Load(path)
@@ -1450,7 +1450,7 @@ func TestValidation_InvalidCLI(t *testing.T) {
   default:
     agents:
       bad:
-        default_mode: headless
+        default_mode: autonomous
         cli: unknown
 `)
 
@@ -1477,7 +1477,7 @@ func TestValidation_CopilotCLIAccepted(t *testing.T) {
   default:
     agents:
       copilot_base:
-        default_mode: headless
+        default_mode: autonomous
         cli: copilot
 `)
 
@@ -1521,7 +1521,7 @@ func TestValidation_OpenCodeCLIAccepted(t *testing.T) {
   default:
     agents:
       opencode_base:
-        default_mode: headless
+        default_mode: autonomous
         cli: opencode
 `)
 
@@ -1530,8 +1530,8 @@ func TestValidation_OpenCodeCLIAccepted(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	p := cfg.ActiveAgents["opencode_base"]
-	if p == nil || p.CLI != "opencode" || p.DefaultMode != "headless" {
-		t.Fatalf("expected headless opencode agent, got %+v", p)
+	if p == nil || p.CLI != "opencode" || p.DefaultMode != "autonomous" {
+		t.Fatalf("expected autonomous opencode agent, got %+v", p)
 	}
 }
 
@@ -1659,7 +1659,7 @@ func TestResolve_EffortUnsetAfterMerge(t *testing.T) {
 	cfg := &Config{
 		ActiveAgents: map[string]*Agent{
 			"parent": {
-				DefaultMode: "headless",
+				DefaultMode: "autonomous",
 				CLI:         "claude",
 			},
 			"child": {
@@ -1704,7 +1704,7 @@ func TestResolve_MultiLevelInheritance(t *testing.T) {
 	cfg := &Config{
 		ActiveAgents: map[string]*Agent{
 			"a": {
-				DefaultMode: "headless",
+				DefaultMode: "autonomous",
 				CLI:         "codex",
 			},
 			"b": {
@@ -1722,7 +1722,7 @@ func TestResolve_MultiLevelInheritance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if rp.DefaultMode != "headless" {
+	if rp.DefaultMode != "autonomous" {
 		t.Fatalf("expected default_mode from A, got %q", rp.DefaultMode)
 	}
 	if rp.CLI != "codex" {
@@ -1784,12 +1784,12 @@ func TestResolve_DefaultConfigAgents(t *testing.T) {
 		t.Fatalf("unexpected planner resolution: %+v", rp)
 	}
 
-	// Implementor should resolve to headless_base values (opus per spec).
+	// Implementor should resolve to autonomous_base values (opus per spec).
 	rp, err = cfg.Resolve("implementor")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if rp.DefaultMode != "headless" || rp.CLI != "claude" || rp.Model != "opus" || rp.Effort != "high" {
+	if rp.DefaultMode != "autonomous" || rp.CLI != "claude" || rp.Model != "opus" || rp.Effort != "high" {
 		t.Fatalf("unexpected implementor resolution: %+v", rp)
 	}
 
@@ -1798,7 +1798,7 @@ func TestResolve_DefaultConfigAgents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if rp.DefaultMode != "headless" || rp.CLI != "claude" || rp.Model != "haiku" || rp.Effort != "low" {
+	if rp.DefaultMode != "autonomous" || rp.CLI != "claude" || rp.Model != "haiku" || rp.Effort != "low" {
 		t.Fatalf("unexpected summarizer resolution: %+v", rp)
 	}
 }

@@ -14,7 +14,7 @@ sessions:
 steps:
   - id: initial-review
     session: reviewer-agent
-    mode: headless
+    mode: autonomous
     capture: review_feedback
     prompt: |
       You MUST use the codagent:review-spec skill to review the proposal at {{proposal_dir}}.
@@ -25,7 +25,7 @@ steps:
     steps:
       - id: lead-respond
         session: lead-agent
-        mode: headless
+        mode: autonomous
         capture: lead_response
         prompt: |
           A reviewer has examined the proposal for change "{{proposal_dir}}".
@@ -57,7 +57,7 @@ steps:
 
       - id: reviewer-reply
         session: reviewer-agent
-        mode: headless
+        mode: autonomous
         capture: review_feedback
         skip_if: previous_success
         prompt: |
@@ -78,7 +78,7 @@ steps:
 
   - id: present-outcome
     session: lead-agent
-    mode: headless
+    mode: autonomous
     prompt: |
       The proposal review for change "{{proposal_dir}}" is complete.
 

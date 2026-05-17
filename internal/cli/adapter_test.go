@@ -108,9 +108,9 @@ func TestClaudeAdapter(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:    "do something",
 			SessionID: "uuid-123",
-			Headless:  true,
+			Context:   ContextAutonomousHeadless,
 		})
-		expected := []string{"claude", "--session-id", "uuid-123", "-p", "--", "do something"}
+		expected := []string{"claude", "--session-id", "uuid-123", "--permission-mode", "acceptEdits", "-p", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -118,7 +118,7 @@ func TestClaudeAdapter(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:    "review code",
 			SessionID: "uuid-456",
-			Headless:  false,
+			Context:   ContextInteractive,
 		})
 		expected := []string{"claude", "--session-id", "uuid-456", "--", "review code"}
 		assertArgs(t, expected, args)
@@ -126,10 +126,10 @@ func TestClaudeAdapter(t *testing.T) {
 
 	t.Run("fresh headless without session-id", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Headless: true,
+			Prompt:  "do something",
+			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"claude", "-p", "--", "do something"}
+		expected := []string{"claude", "--permission-mode", "acceptEdits", "-p", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -138,11 +138,11 @@ func TestClaudeAdapter(t *testing.T) {
 			Prompt:    "continue",
 			SessionID: "session-abc",
 			Resume:    true,
-			Headless:  true,
+			Context:   ContextAutonomousHeadless,
 		})
 		// --session-id is reserved for fresh sessions — Claude CLI rejects it
 		// for existing session IDs. Use --resume for headless continuations too.
-		expected := []string{"claude", "--resume", "session-abc", "-p", "--", "continue"}
+		expected := []string{"claude", "--resume", "session-abc", "--permission-mode", "acceptEdits", "-p", "--", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -151,7 +151,7 @@ func TestClaudeAdapter(t *testing.T) {
 			Prompt:    "continue review",
 			SessionID: "session-abc",
 			Resume:    true,
-			Headless:  false,
+			Context:   ContextInteractive,
 		})
 		expected := []string{"claude", "--resume", "session-abc", "--", "continue review"}
 		assertArgs(t, expected, args)
@@ -159,11 +159,11 @@ func TestClaudeAdapter(t *testing.T) {
 
 	t.Run("model override", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Model:    "opus",
-			Headless: true,
+			Prompt:  "do something",
+			Model:   "opus",
+			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"claude", "--model", "opus", "-p", "--", "do something"}
+		expected := []string{"claude", "--model", "opus", "--permission-mode", "acceptEdits", "-p", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -176,9 +176,9 @@ func TestClaudeAdapter(t *testing.T) {
 			SessionID: "session-abc",
 			Resume:    true,
 			Model:     "sonnet",
-			Headless:  true,
+			Context:   ContextAutonomousHeadless,
 		})
-		expected := []string{"claude", "--resume", "session-abc", "-p", "--", "continue"}
+		expected := []string{"claude", "--resume", "session-abc", "--permission-mode", "acceptEdits", "-p", "--", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -187,29 +187,29 @@ func TestClaudeAdapter(t *testing.T) {
 			Prompt:          "continue",
 			SessionID:       "session-abc",
 			Resume:          true,
-			Headless:        true,
+			Context:         ContextAutonomousHeadless,
 			DisallowedTools: []string{"AskUserQuestion"},
 		})
 		// --disallowedTools is compatible with --resume; both flags coexist on
-		// headless resume steps.
-		expected := []string{"claude", "--resume", "session-abc", "-p", "--disallowedTools", "AskUserQuestion", "--", "continue"}
+		// autonomous resume steps.
+		expected := []string{"claude", "--resume", "session-abc", "--permission-mode", "acceptEdits", "-p", "--disallowedTools", "AskUserQuestion", "--", "continue"}
 		assertArgs(t, expected, args)
 	})
 
 	t.Run("effort level specified", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Effort:   "high",
-			Headless: true,
+			Prompt:  "do something",
+			Effort:  "high",
+			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"claude", "--effort", "high", "-p", "--", "do something"}
+		expected := []string{"claude", "--effort", "high", "--permission-mode", "acceptEdits", "-p", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
 	t.Run("effort level not specified", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Headless: true,
+			Prompt:  "do something",
+			Context: ContextAutonomousHeadless,
 		})
 		for _, a := range args {
 			if a == "--effort" {
@@ -220,12 +220,12 @@ func TestClaudeAdapter(t *testing.T) {
 
 	t.Run("effort with model", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Model:    "opus",
-			Effort:   "low",
-			Headless: true,
+			Prompt:  "do something",
+			Model:   "opus",
+			Effort:  "low",
+			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"claude", "--model", "opus", "--effort", "low", "-p", "--", "do something"}
+		expected := []string{"claude", "--model", "opus", "--effort", "low", "--permission-mode", "acceptEdits", "-p", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -239,47 +239,47 @@ func TestClaudeAdapter(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			SystemPrompt: "you are helpful",
 			SessionID:    "uuid-789",
-			Headless:     false,
+			Context:      ContextInteractive,
 		})
 		expected := []string{"claude", "--session-id", "uuid-789", "--append-system-prompt", "you are helpful"}
 		assertArgs(t, expected, args)
 	})
 
-	t.Run("system prompt with headless prompt emits both", func(t *testing.T) {
+	t.Run("system prompt with autonomous prompt emits both", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:       "do something",
 			SystemPrompt: "extra context",
 			SessionID:    "uuid-abc",
-			Headless:     true,
+			Context:      ContextAutonomousHeadless,
 		})
-		expected := []string{"claude", "--session-id", "uuid-abc", "-p", "--append-system-prompt", "extra context", "--", "do something"}
+		expected := []string{"claude", "--session-id", "uuid-abc", "--permission-mode", "acceptEdits", "-p", "--append-system-prompt", "extra context", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
 	t.Run("disallowed tools emits --disallowedTools flags", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:          "do something",
-			Headless:        true,
+			Context:         ContextAutonomousHeadless,
 			DisallowedTools: []string{"AskUserQuestion"},
 		})
-		expected := []string{"claude", "-p", "--disallowedTools", "AskUserQuestion", "--", "do something"}
+		expected := []string{"claude", "--permission-mode", "acceptEdits", "-p", "--disallowedTools", "AskUserQuestion", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
 	t.Run("multiple disallowed tools", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:          "do something",
-			Headless:        true,
+			Context:         ContextAutonomousHeadless,
 			DisallowedTools: []string{"AskUserQuestion", "WebSearch"},
 		})
-		expected := []string{"claude", "-p", "--disallowedTools", "AskUserQuestion", "--disallowedTools", "WebSearch", "--", "do something"}
+		expected := []string{"claude", "--permission-mode", "acceptEdits", "-p", "--disallowedTools", "AskUserQuestion", "--disallowedTools", "WebSearch", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
 	t.Run("no disallowed tools omits flag", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Headless: true,
+			Prompt:  "do something",
+			Context: ContextAutonomousHeadless,
 		})
 		for _, a := range args {
 			if a == "--disallowedTools" {
@@ -290,8 +290,8 @@ func TestClaudeAdapter(t *testing.T) {
 
 	t.Run("no system prompt omits flag", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Headless: true,
+			Prompt:  "do something",
+			Context: ContextAutonomousHeadless,
 		})
 		for _, a := range args {
 			if a == "--append-system-prompt" {
@@ -322,17 +322,17 @@ func TestCodexAdapter(t *testing.T) {
 
 	t.Run("fresh headless", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Headless: true,
+			Prompt:  "do something",
+			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"codex", "--dangerously-bypass-approvals-and-sandbox", "exec", "--json", "do something"}
+		expected := []string{"codex", "--sandbox", "workspace-write", "exec", "--json", "do something"}
 		assertArgs(t, expected, args)
 	})
 
 	t.Run("fresh interactive", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "review code",
-			Headless: false,
+			Prompt:  "review code",
+			Context: ContextInteractive,
 		})
 		expected := []string{"codex", "--no-alt-screen", "review code"}
 		assertArgs(t, expected, args)
@@ -342,9 +342,9 @@ func TestCodexAdapter(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:    "continue",
 			SessionID: "thread-abc",
-			Headless:  true,
+			Context:   ContextAutonomousHeadless,
 		})
-		expected := []string{"codex", "--dangerously-bypass-approvals-and-sandbox", "exec", "resume", "--json", "thread-abc", "continue"}
+		expected := []string{"codex", "--sandbox", "workspace-write", "exec", "resume", "--json", "thread-abc", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -352,7 +352,7 @@ func TestCodexAdapter(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:    "continue review",
 			SessionID: "thread-abc",
-			Headless:  false,
+			Context:   ContextInteractive,
 		})
 		expected := []string{"codex", "resume", "--no-alt-screen", "thread-abc", "continue review"}
 		assertArgs(t, expected, args)
@@ -362,7 +362,7 @@ func TestCodexAdapter(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:    "continue review",
 			SessionID: "rollout-2026-05-03T22-18-42-019df0c7-daf4-7120-b587-0731815d36cb",
-			Headless:  false,
+			Context:   ContextInteractive,
 		})
 		expected := []string{"codex", "resume", "--no-alt-screen", "019df0c7-daf4-7120-b587-0731815d36cb", "continue review"}
 		assertArgs(t, expected, args)
@@ -370,19 +370,19 @@ func TestCodexAdapter(t *testing.T) {
 
 	t.Run("model override headless", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Model:    "o3",
-			Headless: true,
+			Prompt:  "do something",
+			Model:   "o3",
+			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"codex", "--dangerously-bypass-approvals-and-sandbox", "exec", "--json", "-m", "o3", "do something"}
+		expected := []string{"codex", "--sandbox", "workspace-write", "exec", "--json", "-m", "o3", "do something"}
 		assertArgs(t, expected, args)
 	})
 
 	t.Run("model override interactive", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "review",
-			Model:    "o3",
-			Headless: false,
+			Prompt:  "review",
+			Model:   "o3",
+			Context: ContextInteractive,
 		})
 		expected := []string{"codex", "--no-alt-screen", "-m", "o3", "review"}
 		assertArgs(t, expected, args)
@@ -395,9 +395,9 @@ func TestCodexAdapter(t *testing.T) {
 			Prompt:    "continue",
 			SessionID: "thread-abc",
 			Model:     "o3",
-			Headless:  true,
+			Context:   ContextAutonomousHeadless,
 		})
-		expected := []string{"codex", "--dangerously-bypass-approvals-and-sandbox", "exec", "resume", "--json", "-m", "o3", "thread-abc", "continue"}
+		expected := []string{"codex", "--sandbox", "workspace-write", "exec", "resume", "--json", "-m", "o3", "thread-abc", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -406,7 +406,7 @@ func TestCodexAdapter(t *testing.T) {
 			Prompt:    "continue review",
 			SessionID: "thread-abc",
 			Model:     "gpt-5.4-mini",
-			Headless:  false,
+			Context:   ContextInteractive,
 		})
 		expected := []string{"codex", "resume", "--no-alt-screen", "-m", "gpt-5.4-mini", "thread-abc", "continue review"}
 		assertArgs(t, expected, args)
@@ -417,19 +417,19 @@ func TestCodexAdapter(t *testing.T) {
 			Prompt:    "continue",
 			SessionID: "thread-abc",
 			Effort:    "low",
-			Headless:  true,
+			Context:   ContextAutonomousHeadless,
 		})
-		expected := []string{"codex", "--dangerously-bypass-approvals-and-sandbox", "exec", "resume", "--json", "-c", `model_reasoning_effort="low"`, "thread-abc", "continue"}
+		expected := []string{"codex", "--sandbox", "workspace-write", "exec", "resume", "--json", "-c", `model_reasoning_effort="low"`, "thread-abc", "continue"}
 		assertArgs(t, expected, args)
 	})
 
 	t.Run("effort level specified headless", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Effort:   "medium",
-			Headless: true,
+			Prompt:  "do something",
+			Effort:  "medium",
+			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"codex", "--dangerously-bypass-approvals-and-sandbox", "exec", "--json", "-c", `model_reasoning_effort="medium"`, "do something"}
+		expected := []string{"codex", "--sandbox", "workspace-write", "exec", "--json", "-c", `model_reasoning_effort="medium"`, "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -447,7 +447,7 @@ func TestCodexAdapter(t *testing.T) {
 			Prompt:    "continue review",
 			SessionID: "thread-abc",
 			Effort:    "medium",
-			Headless:  false,
+			Context:   ContextInteractive,
 		})
 		expected := []string{"codex", "resume", "--no-alt-screen", "-c", `model_reasoning_effort="medium"`, "thread-abc", "continue review"}
 		assertArgs(t, expected, args)
@@ -455,8 +455,8 @@ func TestCodexAdapter(t *testing.T) {
 
 	t.Run("effort level not specified", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Headless: true,
+			Prompt:  "do something",
+			Context: ContextAutonomousHeadless,
 		})
 		for _, a := range args {
 			if a == "--effort" {
@@ -475,16 +475,16 @@ func TestCodexAdapter(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:       "do something",
 			SystemPrompt: "should be ignored",
-			Headless:     true,
+			Context:      ContextAutonomousHeadless,
 		})
-		expected := []string{"codex", "--dangerously-bypass-approvals-and-sandbox", "exec", "--json", "do something"}
+		expected := []string{"codex", "--sandbox", "workspace-write", "exec", "--json", "do something"}
 		assertArgs(t, expected, args)
 	})
 
 	t.Run("interactive always includes --no-alt-screen", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "review",
-			Headless: false,
+			Prompt:  "review",
+			Context: ContextInteractive,
 		})
 		found := false
 		for _, a := range args {
@@ -499,20 +499,20 @@ func TestCodexAdapter(t *testing.T) {
 
 	t.Run("headless does not include --no-alt-screen", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Headless: true,
+			Prompt:  "do something",
+			Context: ContextAutonomousHeadless,
 		})
 		for _, a := range args {
 			if a == "--no-alt-screen" {
-				t.Fatalf("did not expect --no-alt-screen for headless mode, got %v", args)
+				t.Fatalf("did not expect --no-alt-screen for autonomous mode, got %v", args)
 			}
 		}
 	})
 
 	t.Run("interactive does not include permission bypass flags", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "review",
-			Headless: false,
+			Prompt:  "review",
+			Context: ContextInteractive,
 		})
 		for i, a := range args {
 			if a == "-a" && i+1 < len(args) && args[i+1] == "never" {
@@ -527,7 +527,7 @@ func TestCodexAdapter(t *testing.T) {
 	t.Run("codex ignores DisallowedTools", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:          "do something",
-			Headless:        true,
+			Context:         ContextAutonomousHeadless,
 			DisallowedTools: []string{"AskUserQuestion"},
 		})
 		for _, a := range args {
@@ -783,17 +783,17 @@ func TestCopilotAdapter(t *testing.T) {
 
 	t.Run("fresh headless copilot step", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Headless: true,
+			Prompt:  "do something",
+			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"copilot", "-p", "do something", "--allow-all", "--autopilot", "-s"}
+		expected := []string{"copilot", "-p", "do something", "--allow-tool=write", "--autopilot", "-s"}
 		assertArgs(t, expected, args)
 	})
 
 	t.Run("fresh interactive copilot step uses interactive prompt flag", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "review code",
-			Headless: false,
+			Prompt:  "review code",
+			Context: ContextInteractive,
 		})
 		expected := []string{"copilot", "-i", "review code"}
 		assertArgs(t, expected, args)
@@ -801,10 +801,10 @@ func TestCopilotAdapter(t *testing.T) {
 
 	t.Run("fresh interactive copilot step includes model and effort", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "review code",
-			Model:    "gpt-5.2",
-			Effort:   "high",
-			Headless: false,
+			Prompt:  "review code",
+			Model:   "gpt-5.2",
+			Effort:  "high",
+			Context: ContextInteractive,
 		})
 		expected := []string{"copilot", "-i", "review code", "--model", "gpt-5.2", "--reasoning-effort", "high"}
 		assertArgs(t, expected, args)
@@ -817,7 +817,7 @@ func TestCopilotAdapter(t *testing.T) {
 			Resume:    true,
 			Model:     "gpt-5.2",
 			Effort:    "high",
-			Headless:  false,
+			Context:   ContextInteractive,
 		})
 		expected := []string{"copilot", "-i", "continue", "--resume=session-abc"}
 		assertArgs(t, expected, args)
@@ -826,36 +826,36 @@ func TestCopilotAdapter(t *testing.T) {
 	t.Run("interactive copilot step omits permission and headless flags", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:          "review code",
-			Headless:        false,
+			Context:         ContextInteractive,
 			DisallowedTools: []string{"AskUserQuestion"},
 		})
-		for _, disallowed := range []string{"--allow-all", "--autopilot", "-s", "-p", "--no-ask-user"} {
+		for _, disallowed := range []string{"--allow-tool=write", "--autopilot", "-s", "-p", "--no-ask-user"} {
 			if containsString(args, disallowed) {
 				t.Fatalf("did not expect %s in interactive args, got %v", disallowed, args)
 			}
 		}
 	})
 
-	t.Run("headless always includes --allow-all", func(t *testing.T) {
+	t.Run("autonomous headless includes write permission", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Headless: true,
+			Prompt:  "do something",
+			Context: ContextAutonomousHeadless,
 		})
 		found := false
 		for _, a := range args {
-			if a == "--allow-all" {
+			if a == "--allow-tool=write" {
 				found = true
 			}
 		}
 		if !found {
-			t.Fatalf("expected --allow-all in args, got %v", args)
+			t.Fatalf("expected --allow-tool=write in args, got %v", args)
 		}
 	})
 
 	t.Run("fresh headless does not include --resume", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Headless: true,
+			Prompt:  "do something",
+			Context: ContextAutonomousHeadless,
 		})
 		for _, a := range args {
 			if strings.HasPrefix(a, "--resume") {
@@ -869,9 +869,9 @@ func TestCopilotAdapter(t *testing.T) {
 			Prompt:    "continue",
 			SessionID: "session-abc",
 			Resume:    true,
-			Headless:  true,
+			Context:   ContextAutonomousHeadless,
 		})
-		expected := []string{"copilot", "-p", "continue", "--allow-all", "--autopilot", "-s", "--resume=session-abc"}
+		expected := []string{"copilot", "-p", "continue", "--allow-tool=write", "--autopilot", "-s", "--resume=session-abc"}
 		assertArgs(t, expected, args)
 	})
 
@@ -881,7 +881,7 @@ func TestCopilotAdapter(t *testing.T) {
 			SessionID: "session-abc",
 			Resume:    true,
 			Model:     "gpt-5.2",
-			Headless:  true,
+			Context:   ContextAutonomousHeadless,
 		})
 		for _, a := range args {
 			if a == "--model" {
@@ -892,11 +892,11 @@ func TestCopilotAdapter(t *testing.T) {
 
 	t.Run("model specified on fresh step", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Model:    "gpt-5.2",
-			Headless: true,
+			Prompt:  "do something",
+			Model:   "gpt-5.2",
+			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"copilot", "-p", "do something", "--allow-all", "--autopilot", "-s", "--model", "gpt-5.2"}
+		expected := []string{"copilot", "-p", "do something", "--allow-tool=write", "--autopilot", "-s", "--model", "gpt-5.2"}
 		assertArgs(t, expected, args)
 	})
 
@@ -906,7 +906,7 @@ func TestCopilotAdapter(t *testing.T) {
 			SessionID: "session-abc",
 			Resume:    true,
 			Model:     "gpt-5.2",
-			Headless:  true,
+			Context:   ContextAutonomousHeadless,
 		})
 		for _, a := range args {
 			if a == "--model" {
@@ -917,18 +917,18 @@ func TestCopilotAdapter(t *testing.T) {
 
 	t.Run("effort specified on fresh step", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Effort:   "high",
-			Headless: true,
+			Prompt:  "do something",
+			Effort:  "high",
+			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"copilot", "-p", "do something", "--allow-all", "--autopilot", "-s", "--reasoning-effort", "high"}
+		expected := []string{"copilot", "-p", "do something", "--allow-tool=write", "--autopilot", "-s", "--reasoning-effort", "high"}
 		assertArgs(t, expected, args)
 	})
 
 	t.Run("effort not specified omits flag", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Headless: true,
+			Prompt:  "do something",
+			Context: ContextAutonomousHeadless,
 		})
 		for _, a := range args {
 			if a == "--reasoning-effort" {
@@ -943,7 +943,7 @@ func TestCopilotAdapter(t *testing.T) {
 			SessionID: "session-abc",
 			Resume:    true,
 			Effort:    "high",
-			Headless:  true,
+			Context:   ContextAutonomousHeadless,
 		})
 		for _, a := range args {
 			if a == "--reasoning-effort" {
@@ -955,17 +955,17 @@ func TestCopilotAdapter(t *testing.T) {
 	t.Run("AskUserQuestion disallowed emits --no-ask-user", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:          "do something",
-			Headless:        true,
+			Context:         ContextAutonomousHeadless,
 			DisallowedTools: []string{"AskUserQuestion"},
 		})
-		expected := []string{"copilot", "-p", "do something", "--allow-all", "--autopilot", "-s", "--no-ask-user"}
+		expected := []string{"copilot", "-p", "do something", "--allow-tool=write", "--autopilot", "-s", "--no-ask-user"}
 		assertArgs(t, expected, args)
 	})
 
 	t.Run("no disallowed tools omits --no-ask-user", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Headless: true,
+			Prompt:  "do something",
+			Context: ContextAutonomousHeadless,
 		})
 		for _, a := range args {
 			if a == "--no-ask-user" {
@@ -1081,17 +1081,17 @@ func TestCursorAdapter(t *testing.T) {
 
 	t.Run("fresh headless cursor step", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Headless: true,
+			Prompt:  "do something",
+			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"agent", "-p", "--output-format", "stream-json", "--force", "--trust", "do something"}
+		expected := []string{"agent", "-p", "--output-format", "stream-json", "--trust", "do something"}
 		assertArgs(t, expected, args)
 	})
 
 	t.Run("fresh interactive cursor step uses positional prompt", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "review code",
-			Headless: false,
+			Prompt:  "review code",
+			Context: ContextInteractive,
 		})
 		expected := []string{"agent", "review code"}
 		assertArgs(t, expected, args)
@@ -1099,9 +1099,9 @@ func TestCursorAdapter(t *testing.T) {
 
 	t.Run("fresh interactive cursor step includes model", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "review code",
-			Model:    "gpt-5.3-codex",
-			Headless: false,
+			Prompt:  "review code",
+			Model:   "gpt-5.3-codex",
+			Context: ContextInteractive,
 		})
 		expected := []string{"agent", "--model", "gpt-5.3-codex", "review code"}
 		assertArgs(t, expected, args)
@@ -1113,7 +1113,7 @@ func TestCursorAdapter(t *testing.T) {
 			SessionID: "chat-abc",
 			Resume:    true,
 			Model:     "gpt-5.3-codex",
-			Headless:  false,
+			Context:   ContextInteractive,
 		})
 		expected := []string{"agent", "--resume=chat-abc", "continue"}
 		assertArgs(t, expected, args)
@@ -1122,7 +1122,7 @@ func TestCursorAdapter(t *testing.T) {
 	t.Run("interactive cursor step omits permission and headless flags", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:          "review code",
-			Headless:        false,
+			Context:         ContextInteractive,
 			DisallowedTools: []string{"AskUserQuestion"},
 		})
 		for _, disallowed := range []string{"-p", "--output-format", "stream-json", "--trust", "--force"} {
@@ -1134,8 +1134,8 @@ func TestCursorAdapter(t *testing.T) {
 
 	t.Run("fresh headless does not include --resume", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Headless: true,
+			Prompt:  "do something",
+			Context: ContextAutonomousHeadless,
 		})
 		for _, a := range args {
 			if strings.HasPrefix(a, "--resume") {
@@ -1149,19 +1149,19 @@ func TestCursorAdapter(t *testing.T) {
 			Prompt:    "continue",
 			SessionID: "chat-abc",
 			Resume:    true,
-			Headless:  true,
+			Context:   ContextAutonomousHeadless,
 		})
-		expected := []string{"agent", "-p", "--output-format", "stream-json", "--force", "--trust", "--resume=chat-abc", "continue"}
+		expected := []string{"agent", "-p", "--output-format", "stream-json", "--trust", "--resume=chat-abc", "continue"}
 		assertArgs(t, expected, args)
 	})
 
 	t.Run("model specified on fresh cursor step", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Model:    "gpt-5.3-codex",
-			Headless: true,
+			Prompt:  "do something",
+			Model:   "gpt-5.3-codex",
+			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"agent", "-p", "--output-format", "stream-json", "--force", "--trust", "--model", "gpt-5.3-codex", "do something"}
+		expected := []string{"agent", "-p", "--output-format", "stream-json", "--trust", "--model", "gpt-5.3-codex", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -1171,7 +1171,7 @@ func TestCursorAdapter(t *testing.T) {
 			SessionID: "chat-abc",
 			Resume:    true,
 			Model:     "gpt-5.3-codex",
-			Headless:  true,
+			Context:   ContextAutonomousHeadless,
 		})
 		for _, a := range args {
 			if a == "--model" {
@@ -1182,9 +1182,9 @@ func TestCursorAdapter(t *testing.T) {
 
 	t.Run("effort level is ignored", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Effort:   "high",
-			Headless: true,
+			Prompt:  "do something",
+			Effort:  "high",
+			Context: ContextAutonomousHeadless,
 		})
 		for _, a := range args {
 			if a == "--reasoning-effort" || a == "--effort" {
@@ -1196,10 +1196,10 @@ func TestCursorAdapter(t *testing.T) {
 	t.Run("disallowed tools do not affect args", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:          "do something",
-			Headless:        true,
+			Context:         ContextAutonomousHeadless,
 			DisallowedTools: []string{"AskUserQuestion"},
 		})
-		expected := []string{"agent", "-p", "--output-format", "stream-json", "--force", "--trust", "do something"}
+		expected := []string{"agent", "-p", "--output-format", "stream-json", "--trust", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -1213,9 +1213,9 @@ func TestCursorAdapter(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:       "do something",
 			SystemPrompt: "should be ignored",
-			Headless:     true,
+			Context:      ContextAutonomousHeadless,
 		})
-		expected := []string{"agent", "-p", "--output-format", "stream-json", "--force", "--trust", "do something"}
+		expected := []string{"agent", "-p", "--output-format", "stream-json", "--trust", "do something"}
 		assertArgs(t, expected, args)
 	})
 

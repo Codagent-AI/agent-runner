@@ -15,7 +15,7 @@ steps:
 
       - id: fix-violations
         session: inherit
-        mode: headless
+        mode: autonomous
         prompt: |
           The validator found failures. Fix them.
 

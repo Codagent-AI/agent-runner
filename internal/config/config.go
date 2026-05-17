@@ -67,7 +67,7 @@ var legacyAgentKeys = map[string]bool{
 }
 
 var validEffort = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true}
-var validDefaultMode = map[string]bool{"interactive": true, "headless": true}
+var validDefaultMode = map[string]bool{"interactive": true, "autonomous": true}
 var validCLI = map[string]bool{"claude": true, "codex": true, "copilot": true, "cursor": true, "opencode": true}
 
 var userHomeDir = os.UserHomeDir
@@ -432,7 +432,7 @@ func validateAgentMap(setName string, agents map[string]*Agent) error {
 			}
 		}
 		if a.DefaultMode != "" && !validDefaultMode[a.DefaultMode] {
-			return fmt.Errorf("agent %q in profile set %q: invalid default_mode %q (must be interactive or headless)", name, setName, a.DefaultMode)
+			return fmt.Errorf("agent %q in profile set %q: invalid default_mode %q (must be interactive or autonomous)", name, setName, a.DefaultMode)
 		}
 		if a.Effort != "" && !validEffort[a.Effort] {
 			return fmt.Errorf("agent %q in profile set %q: invalid effort %q (must be low, medium, high, or xhigh)", name, setName, a.Effort)
@@ -473,9 +473,11 @@ func detectAgentCycle(agents map[string]*Agent, name string) error {
 
 func defaultParsedFile() *parsedFile {
 	agents := map[string]*Agent{
-		"planner":     {DefaultMode: "interactive", CLI: "claude", Model: "opus", Effort: "high"},
-		"implementor": {DefaultMode: "headless", CLI: "claude", Model: "opus", Effort: "high"},
-		"summarizer":  {DefaultMode: "headless", CLI: "claude", Model: "haiku", Effort: "low"},
+		"interactive_base": {DefaultMode: "interactive", CLI: "claude", Model: "opus", Effort: "high"},
+		"autonomous_base":  {DefaultMode: "autonomous", CLI: "claude", Model: "opus", Effort: "high"},
+		"planner":          {Extends: "interactive_base"},
+		"implementor":      {Extends: "autonomous_base"},
+		"summarizer":       {DefaultMode: "autonomous", CLI: "claude", Model: "haiku", Effort: "low"},
 	}
 	return &parsedFile{
 		Profiles: map[string]*ProfileSet{

@@ -265,6 +265,7 @@ func TestResolveValidateWorkflowArgAcceptsExistingYAMLPath(t *testing.T) {
 
 func TestHandleValidateArgsBindsOptionalParamsForYAMLPath(t *testing.T) {
 	t.Chdir(t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	writeTestFile(t, filepath.Join("workflows", "green.yaml"), "name: green\nsteps:\n  - id: s\n    command: echo ok\n")
 	root := filepath.Join("workflows", "root.yaml")
 	writeTestFile(t, root, `

@@ -18,7 +18,7 @@ steps:
 
   - id: locate-task
     session: lead-agent
-    mode: headless
+    mode: autonomous
     capture: task_file
     prompt: |
       You just planned a simple change that produced a single task file. Output the path to that task file on a single line with NO other text, NO markdown fences, and NO explanation.
@@ -28,7 +28,7 @@ steps:
   - id: generate-code
     agent: implementor
     session: new
-    mode: headless
+    mode: autonomous
     prompt: |
       Implement the task described in {{task_file}}. You MUST use the codagent:implement-with-tdd skill. When you are done implementing, commit your changes following the project's commit message conventions and prepend [{{step_id}}]. Then summarize to the user what you changed.
 
@@ -41,7 +41,7 @@ steps:
 
   - id: commit-leftovers-if-needed
     session: resume
-    mode: headless
+    mode: autonomous
     prompt: |
       There are uncommitted changes leftover after implementing the task described in {{task_file}}. Run git status and git diff to review them. Only stage and commit files that are related to this task and appropriate to check into git — ignore unrelated changes, generated artifacts, or files that should be gitignored. Follow the project's commit message conventions and prepend [{{step_id}}]. Summarize which files you committed and which you left out, and why.
     skip_if: previous_success

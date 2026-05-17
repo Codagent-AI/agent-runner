@@ -42,7 +42,7 @@ steps:
 
   - id: break-it
     session: impl-session
-    mode: headless
+    mode: autonomous
     prompt: |
       You are the onboarding "break it" step.
 
@@ -56,7 +56,7 @@ steps:
 
   - id: prepare-fix-context
     session: impl-session
-    mode: headless
+    mode: autonomous
     prompt: |
       Briefly acknowledge you are ready to fix any validation failures found next. Output a single line with no other text: Ready
 

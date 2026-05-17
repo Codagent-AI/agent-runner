@@ -63,8 +63,8 @@ func TestOpenSpecEngine(t *testing.T) {
 		w := model.Workflow{
 			Name: "test",
 			Steps: []model.Step{
-				{ID: "proposal", Mode: model.ModeHeadless, Prompt: "p", Session: model.SessionNew},
-				{ID: "design", Mode: model.ModeHeadless, Prompt: "p", Session: model.SessionNew},
+				{ID: "proposal", Mode: model.ModeAutonomous, Prompt: "p", Session: model.SessionNew},
+				{ID: "design", Mode: model.ModeAutonomous, Prompt: "p", Session: model.SessionNew},
 			},
 		}
 		err := eng.ValidateWorkflow(&w, map[string]string{"change_name": "my-change"}, "")
@@ -86,7 +86,7 @@ func TestOpenSpecEngine(t *testing.T) {
 		w := model.Workflow{
 			Name: "test",
 			Steps: []model.Step{
-				{ID: "proposal", Mode: model.ModeHeadless, Prompt: "p", Session: model.SessionNew},
+				{ID: "proposal", Mode: model.ModeAutonomous, Prompt: "p", Session: model.SessionNew},
 			},
 		}
 		err := eng.ValidateWorkflow(&w, map[string]string{"change_name": "my-change"}, "")

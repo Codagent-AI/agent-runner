@@ -826,6 +826,7 @@ func TestPrepareRun_SeedsInitialState(t *testing.T) {
 }
 
 func TestPrepareRun_SeedsResumeState(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	w := model.Workflow{
 		Name: "my-workflow",
 		Steps: []model.Step{

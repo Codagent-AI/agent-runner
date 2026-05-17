@@ -6,7 +6,7 @@ Common step types:
 
 - UI steps (`mode: ui`) show a title, body, and actions. They can capture an action outcome for later steps.
 - Interactive agent steps (`mode: interactive`) open an agent session that can converse with the user before the workflow continues.
-- Headless agent steps (`mode: headless`) give an agent a bounded task and wait for the result without live interaction.
+- Autonomous agent steps (`mode: autonomous`) give an agent a bounded task and wait for the result without live interaction.
 - Shell steps (`command:`) run deterministic local commands and can capture stdout into workflow variables.
 - Script steps (`script:`) run packaged scripts that ship with a built-in workflow.
 - Sub-workflow steps (`workflow:`) call another workflow, including embedded workflows from the same namespace.

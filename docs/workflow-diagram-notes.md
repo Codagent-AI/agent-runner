@@ -53,4 +53,4 @@ The grid container forces the two columns to sit side by side regardless of root
 - Added `idea_file` optional param
 - `proposal` step now interpolates `{{file:idea_file}}`
 - `implement` step replaced with `workflow: implement-change.yaml` + `params`
-- `design` and `tasks` separated as headless steps
+- `design` and `tasks` separated as autonomous steps

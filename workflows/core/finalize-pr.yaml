@@ -8,7 +8,7 @@ sessions:
 steps:
   - id: push-pr
     session: lead-agent
-    mode: headless
+    mode: autonomous
     prompt: |
       Invoke codagent:push-pr to commit, push, and create or update the pull request. Follow the project's commit message conventions and prepend [{{step_id}}].
 
@@ -18,7 +18,7 @@ steps:
     steps:
       - id: wait-ci
         session: resume
-        mode: headless
+        mode: autonomous
         capture: ci_report
         continue_on_failure: true
         prompt: |
@@ -39,13 +39,13 @@ steps:
 
       - id: fix-pr
         session: resume
-        mode: headless
+        mode: autonomous
         skip_if: previous_success
         prompt: |
           CI has failures or unresolved review comments. Invoke codagent:fix-pr to address them. Follow the project's commit message conventions and prepend [{{step_id}}].
 
   - id: verify-final
     session: resume
-    mode: headless
+    mode: autonomous
     prompt: |
       Invoke codagent:wait-ci to verify the final fix cycle made CI green. Treat top-level bot summaries, rate-limit notices, and already-resolved reports as informational. Report comments only when actionable unresolved review feedback remains. Report the final status to the user.

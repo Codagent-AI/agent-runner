@@ -17,13 +17,13 @@ type CopilotAdapter struct{}
 // BuildArgs constructs Copilot CLI args.
 //
 // Patterns:
-//   - Fresh headless:      copilot -p <prompt> --allow-all --autopilot -s [--model <m>] [--reasoning-effort <e>]
-//   - Resume headless:     copilot -p <prompt> --allow-all --autopilot -s --resume=<id>
+//   - Fresh headless:      copilot -p <prompt> --allow-tool=write --autopilot -s [--model <m>] [--reasoning-effort <e>]
+//   - Resume headless:     copilot -p <prompt> --allow-tool=write --autopilot -s --resume=<id>
 //   - Fresh interactive:   copilot -i <prompt> [--model <m>] [--reasoning-effort <e>]
 //   - Resume interactive:  copilot -i <prompt> --resume=<id>
 //
-// --allow-all grants tool, file-path, and URL permissions required for autonomous
-// operation. --autopilot keeps the agent running until the task is complete.
+// --allow-tool=write grants the least permission needed for autonomous
+// workspace edits. --autopilot keeps the agent running until the task is complete.
 // -s outputs only the agent response text, matching Claude's plain-text output.
 // Interactive mode omits those autonomy/headless flags because a human supervises
 // permissions at the terminal.
@@ -33,12 +33,12 @@ func (a *CopilotAdapter) BuildArgs(input *BuildArgsInput) []string {
 	args := []string{"copilot"}
 	context := input.InvocationContext()
 	if context.IsHeadless() {
-		args = append(args, "-p", input.Prompt, "--allow-all", "--autopilot", "-s")
+		args = append(args, "-p", input.Prompt, "--allow-tool=write", "--autopilot", "-s")
 	} else {
 		args = append(args, "-i", input.Prompt)
-		if context == ContextAutonomousInteractive {
-			args = append(args, "--autopilot")
-		}
+	}
+	if context == ContextAutonomousInteractive {
+		args = append(args, "--allow-tool=write", "--autopilot")
 	}
 
 	resuming := input.Resume

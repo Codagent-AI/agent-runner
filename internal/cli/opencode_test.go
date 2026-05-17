@@ -17,17 +17,17 @@ func TestOpenCodeAdapter(t *testing.T) {
 
 	t.Run("fresh headless opencode step", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Headless: true,
+			Prompt:  "do something",
+			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"opencode", "run", "--format", "json", "--dangerously-skip-permissions", "do something"}
+		expected := []string{"opencode", "run", "--format", "json", "do something"}
 		assertArgs(t, expected, args)
 	})
 
 	t.Run("fresh interactive opencode step uses prompt flag", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "review code",
-			Headless: false,
+			Prompt:  "review code",
+			Context: ContextInteractive,
 		})
 		expected := []string{"opencode", "--prompt", "review code"}
 		assertArgs(t, expected, args)
@@ -35,21 +35,21 @@ func TestOpenCodeAdapter(t *testing.T) {
 
 	t.Run("fresh headless includes model and variant", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "do something",
-			Model:    "anthropic/claude-opus-4",
-			Effort:   "max",
-			Headless: true,
+			Prompt:  "do something",
+			Model:   "anthropic/claude-opus-4",
+			Effort:  "max",
+			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"opencode", "run", "--format", "json", "--dangerously-skip-permissions", "--model", "anthropic/claude-opus-4", "--variant", "max", "do something"}
+		expected := []string{"opencode", "run", "--format", "json", "--model", "anthropic/claude-opus-4", "--variant", "max", "do something"}
 		assertArgs(t, expected, args)
 	})
 
 	t.Run("fresh interactive includes model and drops variant", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
-			Prompt:   "review code",
-			Model:    "anthropic/claude-sonnet-4",
-			Effort:   "high",
-			Headless: false,
+			Prompt:  "review code",
+			Model:   "anthropic/claude-sonnet-4",
+			Effort:  "high",
+			Context: ContextInteractive,
 		})
 		expected := []string{"opencode", "--prompt", "review code", "--model", "anthropic/claude-sonnet-4"}
 		assertArgs(t, expected, args)
@@ -65,9 +65,9 @@ func TestOpenCodeAdapter(t *testing.T) {
 			Resume:    true,
 			Model:     "anthropic/claude-opus-4",
 			Effort:    "max",
-			Headless:  true,
+			Context:   ContextAutonomousHeadless,
 		})
-		expected := []string{"opencode", "run", "--format", "json", "--dangerously-skip-permissions", "-s", "ses_abc123", "continue"}
+		expected := []string{"opencode", "run", "--format", "json", "-s", "ses_abc123", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -78,7 +78,7 @@ func TestOpenCodeAdapter(t *testing.T) {
 			Resume:    true,
 			Model:     "anthropic/claude-opus-4",
 			Effort:    "max",
-			Headless:  false,
+			Context:   ContextInteractive,
 		})
 		expected := []string{"opencode", "--prompt", "continue review", "-s", "ses_def456"}
 		assertArgs(t, expected, args)
@@ -87,10 +87,10 @@ func TestOpenCodeAdapter(t *testing.T) {
 	t.Run("interactive omits permission and headless-only flags", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:          "review code",
-			Headless:        false,
+			Context:         ContextInteractive,
 			DisallowedTools: []string{"AskUserQuestion"},
 		})
-		for _, disallowed := range []string{"run", "--format", "json", "--dangerously-skip-permissions", "--variant"} {
+		for _, disallowed := range []string{"run", "--format", "json", "--variant"} {
 			if containsString(args, disallowed) {
 				t.Fatalf("did not expect %s in interactive args, got %v", disallowed, args)
 			}
@@ -100,10 +100,10 @@ func TestOpenCodeAdapter(t *testing.T) {
 	t.Run("disallowed tools do not affect args", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:          "do something",
-			Headless:        true,
+			Context:         ContextAutonomousHeadless,
 			DisallowedTools: []string{"AskUserQuestion"},
 		})
-		expected := []string{"opencode", "run", "--format", "json", "--dangerously-skip-permissions", "do something"}
+		expected := []string{"opencode", "run", "--format", "json", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -117,9 +117,9 @@ func TestOpenCodeAdapter(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:       "do something",
 			SystemPrompt: "should be ignored",
-			Headless:     true,
+			Context:      ContextAutonomousHeadless,
 		})
-		expected := []string{"opencode", "run", "--format", "json", "--dangerously-skip-permissions", "do something"}
+		expected := []string{"opencode", "run", "--format", "json", "do something"}
 		assertArgs(t, expected, args)
 	})
 
