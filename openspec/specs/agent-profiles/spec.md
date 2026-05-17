@@ -5,7 +5,7 @@
 Defines named, inheritable agent profiles that bundle CLI choice, default mode, model, effort, and system prompt into reusable units, so workflow steps reference a profile by name rather than re-declaring each attribute. Profiles support single-parent `extends` inheritance and per-step overrides for `mode`, `model`, and `cli`. When no config files are present, the runner uses a built-in default profile set in memory and SHALL NOT write any config file to disk.
 ## Requirements
 ### Requirement: Profile schema
-Each agent profile SHALL have a name (the YAML key) and MAY include: `default_mode` (interactive|headless), `cli` (claude|codex), `model` (string), `effort` (low|medium|high), `system_prompt` (string), and `extends` (string referencing another profile name).
+Each agent profile SHALL have a name (the YAML key) and MAY include: `default_mode` (interactive|autonomous), `cli` (claude|codex), `model` (string), `effort` (low|medium|high), `system_prompt` (string), and `extends` (string referencing another profile name).
 
 #### Scenario: All fields specified
 - **WHEN** a profile specifies default_mode, cli, model, effort, system_prompt
@@ -24,7 +24,7 @@ Each agent profile SHALL have a name (the YAML key) and MAY include: `default_mo
 - **THEN** config loading SHALL fail with a validation error indicating the invalid effort value
 
 #### Scenario: Invalid default_mode value
-- **WHEN** a profile specifies a default_mode value not in (interactive, headless)
+- **WHEN** a profile specifies a default_mode value not in (interactive, autonomous)
 - **THEN** config loading SHALL fail with a validation error indicating the invalid default_mode value
 
 ### Requirement: Base profile completeness
@@ -60,10 +60,10 @@ A profile MAY specify `extends: <parent_name>`. The child inherits all fields fr
 ### Requirement: Built-in default profile set
 The runner SHALL provide an in-memory default profile set named `default` as the bottom layer of config resolution. The default set contains five agents:
 - `interactive_base`: default_mode=interactive, cli=claude, model=opus, effort=high
-- `headless_base`: default_mode=headless, cli=claude, model=opus, effort=high
+- `autonomous_base`: default_mode=autonomous, cli=claude, model=opus, effort=high
 - `planner`: extends interactive_base (no overrides)
-- `implementor`: extends headless_base (no overrides)
-- `summarizer`: default_mode=headless, cli=claude, model=haiku, effort=low
+- `implementor`: extends autonomous_base (no overrides)
+- `summarizer`: default_mode=autonomous, cli=claude, model=haiku, effort=low
 
 The runner SHALL NOT create `.agent-runner/config.yaml` (or any config file) automatically. The defaults exist only as an in-memory layer beneath any global and project configs the user has chosen to create.
 
@@ -77,7 +77,7 @@ The runner SHALL NOT create `.agent-runner/config.yaml` (or any config file) aut
 
 #### Scenario: Summarizer agent resolves to claude + haiku
 - **WHEN** a workflow step references `agent: summarizer` with no project or global overrides (so the active profile is `default`)
-- **THEN** the resolved agent has default_mode=headless, cli=claude, model=haiku, effort=low
+- **THEN** the resolved agent has default_mode=autonomous, cli=claude, model=haiku, effort=low
 
 ### Requirement: Step agent attribute
 An agent step SHALL specify an `agent` field naming a profile when its session strategy is `new`. When the session strategy is `resume` or `inherit`, the `agent` field SHALL NOT be specified; the step inherits the profile from the session-originating step. Shell steps SHALL NOT have an `agent` field.
@@ -111,19 +111,19 @@ An agent step SHALL specify an `agent` field naming a profile when its session s
 - **THEN** validation fails with an error indicating agent is not valid on shell steps
 
 ### Requirement: Step mode override
-An agent step MAY include a `mode` field (interactive|headless) to override the resolved profile's `default_mode` for that step. When omitted, the runner SHALL use the profile's `default_mode`.
+An agent step MAY include a `mode` field (interactive|autonomous) to override the resolved profile's `default_mode` for that step. When omitted, the runner SHALL use the profile's `default_mode`.
 
 #### Scenario: Mode override on resume step
-- **WHEN** an agent step has `session: resume` and `mode: headless`, and the inherited profile has `default_mode: interactive`
-- **THEN** the runner executes the step in headless mode
+- **WHEN** an agent step has `session: resume` and `mode: autonomous`, and the inherited profile has `default_mode: interactive`
+- **THEN** the runner executes the step in autonomous mode
 
 #### Scenario: No mode override
 - **WHEN** an agent step does not specify `mode`
 - **THEN** the runner uses the resolved profile's `default_mode`
 
 #### Scenario: Mode override on new session step
-- **WHEN** an agent step has `session: new`, `agent: interactive_base`, and `mode: headless`
-- **THEN** the runner executes the step in headless mode, overriding the profile's default
+- **WHEN** an agent step has `session: new`, `agent: interactive_base`, and `mode: autonomous`
+- **THEN** the runner executes the step in autonomous mode, overriding the profile's default
 
 ### Requirement: Session strategy defaults
 When a step does not specify a `session` field, the runner SHALL apply defaults: the first agentic step (one with a `prompt` field) in a workflow defaults to `session: new`; all subsequent agentic steps default to `session: resume`.
@@ -164,8 +164,8 @@ The runner SHALL resolve an agent name to a fully-merged agent definition by wal
 - **THEN** the resolved agent has A's default_mode and cli, B's model, and C's effort
 
 #### Scenario: Agent-level extends reaches an inherited agent
-- **WHEN** the active profile set `copilot` declares `extends: team_base`, `team_base` defines `headless_base`, and `copilot` defines `implementor` with `extends: headless_base`
-- **THEN** resolving `implementor` succeeds and inherits fields from `team_base`'s `headless_base`
+- **WHEN** the active profile set `copilot` declares `extends: team_base`, `team_base` defines `autonomous_base`, and `copilot` defines `implementor` with `extends: autonomous_base`
+- **THEN** resolving `implementor` succeeds and inherits fields from `team_base`'s `autonomous_base`
 
 #### Scenario: Agent-level extends cannot reach an unrelated profile set
 - **WHEN** the active profile set `copilot` does not declare `extends`, and an agent in `copilot` specifies `extends: planner` where `planner` is defined only in an unrelated profile set
@@ -213,12 +213,12 @@ When both a global and a project config are loaded, the runner SHALL merge them 
 Validation (base-agent completeness, allowed values, cycle detection) SHALL run against the merged set of agents in every profile set, not only the active one.
 
 #### Scenario: Disjoint agent names in the same profile set
-- **WHEN** both files define a `default` profile set; the global file's `default.agents` contains `headless_base` and the project file's `default.agents` contains `implementor`
+- **WHEN** both files define a `default` profile set; the global file's `default.agents` contains `autonomous_base` and the project file's `default.agents` contains `implementor`
 - **THEN** the merged `default.agents` contains both agents
 
 #### Scenario: Same agent name in both files within the same profile set
-- **WHEN** both files define a `default` profile set containing an agent named `implementor`, the global one with `extends: headless_base` and `model: opus`, and the project one with `extends: headless_base` and `cli: copilot` (no `model`)
-- **THEN** the merged `default.agents.implementor` is exactly the project version (`extends: headless_base`, `cli: copilot`, no `model`); the global `model: opus` SHALL NOT be inherited
+- **WHEN** both files define a `default` profile set containing an agent named `implementor`, the global one with `extends: autonomous_base` and `model: opus`, and the project one with `extends: autonomous_base` and `cli: copilot` (no `model`)
+- **THEN** the merged `default.agents.implementor` is exactly the project version (`extends: autonomous_base`, `cli: copilot`, no `model`); the global `model: opus` SHALL NOT be inherited
 
 #### Scenario: Project agent drops a field present in global
 - **WHEN** within the same profile set, the global `implementor` sets `effort: high` and the project `implementor` omits `effort`
@@ -229,8 +229,8 @@ Validation (base-agent completeness, allowed values, cycle detection) SHALL run 
 Within a single profile set (after global/project merging), an agent MAY specify `extends: <name>` where `<name>` is an agent defined in that profile set in either file. The runner SHALL resolve `extends` against the merged agents map of the containing profile set. Cycle detection and missing-parent detection SHALL operate on that merged map. `extends` SHALL NOT cross profile set boundaries.
 
 #### Scenario: Project agent extends global agent in same profile set
-- **WHEN** the global file's `default.agents` defines `headless_base` and the project file's `default.agents` defines `implementor` with `extends: headless_base`
-- **THEN** resolving `implementor` succeeds and inherits `default_mode`, `cli`, `model`, etc. from the global `headless_base`
+- **WHEN** the global file's `default.agents` defines `autonomous_base` and the project file's `default.agents` defines `implementor` with `extends: autonomous_base`
+- **THEN** resolving `implementor` succeeds and inherits `default_mode`, `cli`, `model`, etc. from the global `autonomous_base`
 
 #### Scenario: Global agent extends project agent in same profile set
 - **WHEN** the project file's `default.agents` defines a base agent `team_base` (with `default_mode` and `cli`) and the global file's `default.agents` defines `summarizer` with `extends: team_base`
@@ -245,6 +245,6 @@ Within a single profile set (after global/project merging), an agent MAY specify
 - **THEN** config loading fails with an error indicating a cycle in the extends chain
 
 #### Scenario: Project agent shadows then extends the original global name
-- **WHEN** within the same profile set, the global file defines `headless_base` and the project file defines `headless_base` with `extends: headless_base`
+- **WHEN** within the same profile set, the global file defines `autonomous_base` and the project file defines `autonomous_base` with `extends: autonomous_base`
 - **THEN** config loading fails with a cycle error (the project agent's `extends` resolves to itself in the merged set)
 

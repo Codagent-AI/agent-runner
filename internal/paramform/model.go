@@ -130,8 +130,6 @@ func (m *Model) View() string {
 		labelStyle := lipgloss.NewStyle().Width(labelWidth).Align(lipgloss.Right)
 		if isFocused {
 			labelStyle = labelStyle.Foreground(tuistyle.AccentCyan).Bold(true)
-		} else {
-			labelStyle = labelStyle.Foreground(tuistyle.BodyText)
 		}
 		label := labelStyle.Render(param.Name)
 

@@ -29,6 +29,7 @@ homebrew_casks:
       - agent-runner
     dependencies:
       - formula: agent-validator
+      - formula: agent-plugin
     hooks:
       post:
         install: |

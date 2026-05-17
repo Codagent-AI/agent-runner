@@ -29,12 +29,12 @@ Steps in order:
 6. **create-plan-dir** — `command: mktemp -d`, capture → `plan_dir`. Creates a temp directory outside the project for plan artifacts.
 7. **explain-plan** — `mode: ui`. Explains the interactive planning step.
 8. **plan** — `session: planning-session`, `mode: interactive`. Prompt instructs the agent to use `codagent:simple-plan` and write all artifacts to `{{plan_dir}}`. Suggests small-task examples (fix a typo, add a log line, rename a variable) but does not enforce scope. Tells the agent: "First, ask the user what the change is about. DO NOT attempt to guess."
-9. **locate-task** — `session: planning-session`, `mode: headless`. Prompt: emit the path to the produced task file on a single line with no other text. Capture → `task_file`.
+9. **locate-task** — `session: planning-session`, `mode: autonomous`. Prompt: emit the path to the produced task file on a single line with no other text. Capture → `task_file`.
 10. **validate-plan** — `command: test -f "{{task_file}}"`. Fails and stops the workflow if the task file does not exist.
 11. **explain-tutor** — `mode: ui`. Explains the tutorial agent: a separate session that will review the plan and answer questions.
 12. **tutor** — `session: tutor-session`, `mode: interactive`. Prompt includes `{{task_file}}` so the tutor can read and reference the plan. Tells the tutor to provide guidance contextualized to the plan (e.g., "I see you made a plan to X") and preview that a headless implementor will execute it next. References bundled docs at `{{session_dir}}/bundled/onboarding/docs/` for general AR Q&A.
 13. **explain-impl** — `mode: ui`. Explains headless implementation: an implementor agent will now execute the plan autonomously.
-14. **implement** — `session: impl-session`, `mode: headless`. Prompt references `{{task_file}}` and instructs the agent to use `codagent:implement-with-tdd`. The prompt must explicitly tell the agent NOT to commit changes.
+14. **implement** — `session: impl-session`, `mode: autonomous`. Prompt references `{{task_file}}` and instructs the agent to use `codagent:implement-with-tdd`. The prompt must explicitly tell the agent NOT to commit changes.
 15. **summary** — `mode: ui`. Body instructs the user: "Run `git diff` to review the changes, then commit if you are satisfied."
 
 ### validator.yaml (Phases 4+5)
@@ -49,7 +49,7 @@ Steps in order:
 2. **init** — `command: agent-validator init`. Creates `.validator/config.yml`.
 3. **setup** — `session: validator-setup-session`, `mode: interactive`. Prompt instructs the agent to use `agent-validator:validator-setup` to configure checks and reviews.
 4. **explain-validation** — `mode: ui`. Explains the validator will now run on the changes from Phase 3.
-5. **prepare-fix-context** — `session: impl-session`, `mode: headless`. Brief prompt: "Briefly acknowledge you are ready to fix any validation failures found next. Output a single line with no other text: Ready". Purpose: make `impl-session` the most recent session in this workflow's context so `run-validator.yaml`'s `session: inherit` finds it when crossing the sub-workflow boundary.
+5. **prepare-fix-context** — `session: impl-session`, `mode: autonomous`. Brief prompt: "Briefly acknowledge you are ready to fix any validation failures found next. Output a single line with no other text: Ready". Purpose: make `impl-session` the most recent session in this workflow's context so `run-validator.yaml`'s `session: inherit` finds it when crossing the sub-workflow boundary.
 6. **run-validator** — `workflow: ../core/run-validator.yaml`. This is the existing retry loop (max 3 iterations). Do NOT duplicate or modify `run-validator.yaml`. Reference it as-is.
 7. **summary-ui** — `mode: ui`. Explains what happened during validation and the feedback-loop concept: how iterating between validation and fixes creates reliability.
 

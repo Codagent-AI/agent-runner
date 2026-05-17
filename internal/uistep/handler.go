@@ -3,9 +3,11 @@ package uistep
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/tuistyle"
@@ -13,7 +15,7 @@ import (
 
 var (
 	titleStyle       = tuistyle.SectionStyle
-	bodyStyle        = tuistyle.NormalStyle
+	bodyStyle        = lipgloss.NewStyle()
 	inputPromptStyle = tuistyle.LabelStyle
 )
 
@@ -250,16 +252,16 @@ func (m *Model) selectedInputs() map[string]string {
 
 func (m *Model) View() string {
 	var b strings.Builder
-	contentWidth := m.width - 4
+	contentWidth := m.width
 	if contentWidth <= 0 {
-		contentWidth = 76
+		contentWidth = 80
 	}
 
 	b.WriteString(titleStyle.Render(m.req.Title))
 	b.WriteString("\n\n")
 
 	if m.req.Body != "" {
-		b.WriteString(lipgloss.NewStyle().Width(contentWidth).Render(bodyStyle.Render(m.req.Body)))
+		b.WriteString(renderBody(m.req.Body, contentWidth))
 		b.WriteString("\n\n")
 	}
 
@@ -290,6 +292,142 @@ func (m *Model) View() string {
 		}
 	}
 	return b.String()
+}
+
+func renderBody(text string, width int) string {
+	var lines []string
+	for _, block := range bodyBlocks(text) {
+		if block.text == "" {
+			lines = append(lines, "")
+			continue
+		}
+		if block.hard && runewidth.StringWidth(block.text) <= width {
+			lines = append(lines, bodyStyle.Render(block.text))
+			continue
+		}
+		for _, wrapped := range wrapBodyLine(strings.TrimSpace(block.text), width) {
+			lines = append(lines, bodyStyle.Render(wrapped))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+type bodyBlock struct {
+	text string
+	hard bool
+}
+
+func bodyBlocks(text string) []bodyBlock {
+	var blocks []bodyBlock
+	var current []string
+	flush := func() {
+		if len(current) == 0 {
+			return
+		}
+		blocks = append(blocks, bodyBlock{text: strings.Join(current, " ")})
+		current = nil
+	}
+
+	for _, raw := range strings.Split(text, "\n") {
+		line := tuistyle.Sanitize(raw)
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			flush()
+			if len(blocks) == 0 || blocks[len(blocks)-1].text != "" {
+				blocks = append(blocks, bodyBlock{})
+			}
+			continue
+		}
+		if isHardBodyLine(line) {
+			flush()
+			blocks = append(blocks, bodyBlock{text: strings.TrimRight(line, " \t"), hard: true})
+			continue
+		}
+		current = append(current, strings.Join(strings.Fields(trimmed), " "))
+	}
+	flush()
+	if len(blocks) > 0 && blocks[len(blocks)-1].text == "" {
+		blocks = blocks[:len(blocks)-1]
+	}
+	return blocks
+}
+
+func isHardBodyLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return strings.HasPrefix(line, " ") ||
+		strings.HasPrefix(line, "\t") ||
+		strings.HasPrefix(trimmed, "- ")
+}
+
+func wrapBodyLine(s string, width int) []string {
+	if width <= 0 || runewidth.StringWidth(s) <= width {
+		return []string{s}
+	}
+	words := strings.Fields(s)
+	if len(words) == 0 {
+		return []string{s}
+	}
+	var out []string
+	var cur []string
+	curW := 0
+	flush := func() {
+		if len(cur) == 0 {
+			return
+		}
+		out = append(out, strings.Join(cur, " "))
+		cur = nil
+		curW = 0
+	}
+	for _, word := range words {
+		wordW := runewidth.StringWidth(word)
+		if wordW > width {
+			flush()
+			remaining := word
+			for runewidth.StringWidth(remaining) > width {
+				chunk := runewidth.Truncate(remaining, width, "")
+				if chunk == "" {
+					_, size := utf8.DecodeRuneInString(remaining)
+					if size == 0 {
+						break
+					}
+					chunk = remaining[:size]
+				}
+				out = append(out, chunk)
+				remaining = remaining[len(chunk):]
+			}
+			if remaining != "" {
+				cur = []string{remaining}
+				curW = runewidth.StringWidth(remaining)
+			}
+			continue
+		}
+		if curW == 0 {
+			cur = []string{word}
+			curW = wordW
+			continue
+		}
+		if curW+1+wordW > width {
+			if wordW <= 4 && len(cur) > 1 {
+				last := cur[len(cur)-1]
+				cur = cur[:len(cur)-1]
+				flush()
+				cur = []string{last, word}
+				curW = runewidth.StringWidth(last) + 1 + wordW
+			} else {
+				flush()
+				cur = []string{word}
+				curW = wordW
+			}
+			continue
+		}
+		cur = append(cur, word)
+		curW += 1 + wordW
+	}
+	flush()
+	if len(out) == 0 {
+		return []string{s}
+	}
+	return out
 }
 
 func clamp(v, lo, hi int) int {

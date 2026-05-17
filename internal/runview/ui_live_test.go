@@ -114,6 +114,47 @@ func TestLiveUIRequestAutoFollowsInProgressTopLevelStep(t *testing.T) {
 	}
 }
 
+func TestLiveUIRequestLeavesCompletedDrillInForSiblingSubWorkflow(t *testing.T) {
+	root := &StepNode{ID: "onboarding", Type: NodeRoot, Status: StatusInProgress}
+	guided := &StepNode{ID: "guided-workflow", Type: NodeSubWorkflow, Status: StatusSuccess, Parent: root, SubLoaded: true}
+	final := &StepNode{ID: "summary", Type: NodeUI, Status: StatusSuccess, Parent: guided}
+	guided.Children = []*StepNode{final}
+	validator := &StepNode{ID: "validator", Type: NodeSubWorkflow, Status: StatusInProgress, Parent: root, SubLoaded: true}
+	intro := &StepNode{ID: "intro-ui", Type: NodeUI, Status: StatusInProgress, Parent: validator}
+	validator.Children = []*StepNode{intro}
+	root.Children = []*StepNode{guided, validator}
+
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.running = true
+	m.path = []*StepNode{root, guided}
+	m.cursor = 0
+	m.autoFollow = false
+
+	reply := make(chan model.UIStepResult, 1)
+	updated, _ := m.Update(&liverun.UIRequestMsg{
+		Request: model.UIStepRequest{
+			StepID:  "intro-ui",
+			Title:   "Agent Validator",
+			Actions: []model.UIAction{{Label: "Continue", Outcome: "continue"}},
+		},
+		Reply: reply,
+	})
+	m = updated.(*Model)
+
+	if !m.autoFollow {
+		t.Fatal("live UI request should re-enable auto-follow")
+	}
+	if len(m.path) != 1 || m.path[0] != root {
+		t.Fatalf("path should return to root for sibling sub-workflow, got %d segments", len(m.path))
+	}
+	if got := m.selectedNode(); got != validator {
+		t.Fatalf("selected node = %v, want validator sub-workflow", got)
+	}
+	if !m.liveUIVisible() {
+		t.Fatal("live UI should be visible after following sibling sub-workflow")
+	}
+}
+
 func TestLiveUIRequestUsesRunViewSpecificInputHelp(t *testing.T) {
 	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusInProgress}
 	pick := &StepNode{ID: "pick-scope", Type: NodeUI, Status: StatusInProgress, Parent: root}
@@ -275,6 +316,49 @@ func TestLiveUIRequestQUsesRunViewQuitConfirmation(t *testing.T) {
 	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
 	if cmd == nil {
 		t.Fatal("y should confirm quit while live UI is active")
+	}
+}
+
+func TestLiveUIRequestCtrlCExitsImmediately(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusInProgress}
+	pick := &StepNode{ID: "intro-ui", Type: NodeUI, Status: StatusInProgress, Parent: root}
+	root.Children = []*StepNode{pick}
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.altScreen = true
+	m.running = true
+
+	reply := make(chan model.UIStepResult, 1)
+	updated, _ := m.Update(&liverun.UIRequestMsg{
+		Request: model.UIStepRequest{
+			StepID:  "intro-ui",
+			Title:   "Intro",
+			Actions: []model.UIAction{{Label: "Continue", Outcome: "continue"}},
+		},
+		Reply: reply,
+	})
+	m = updated.(*Model)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = updated.(*Model)
+	if cmd == nil {
+		t.Fatal("ctrl+c should quit immediately while live UI is active")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("expected ctrl+c command to quit, got %T", cmd())
+	}
+	if m.quitConfirming {
+		t.Fatal("ctrl+c should not enter quit confirmation while live UI is active")
+	}
+	if !m.ExitRequested() {
+		t.Fatal("ctrl+c should mark exit requested")
+	}
+	if m.liveUI == nil {
+		t.Fatal("ctrl+c should not cancel the live UI step")
+	}
+	select {
+	case got := <-reply:
+		t.Fatalf("ctrl+c should not resolve UI step, got %+v", got)
+	default:
 	}
 }
 

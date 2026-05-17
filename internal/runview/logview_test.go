@@ -495,6 +495,12 @@ func TestFormatDuration_InsertsSpacesBetweenUnits(t *testing.T) {
 	}
 }
 
+func TestFormatDuration_KeepsFractionalSecondsForShortDurations(t *testing.T) {
+	if got := formatDuration(1500); got != "1.5s" {
+		t.Fatalf("formatDuration(1500) = %q, want %q", got, "1.5s")
+	}
+}
+
 // stripANSI removes ANSI escape codes for plain-text assertions.
 func stripANSI(s string) string {
 	var b strings.Builder

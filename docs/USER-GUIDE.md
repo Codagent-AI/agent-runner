@@ -30,11 +30,11 @@ description: "A simple two-step workflow"
 
 steps:
   - id: greet
-    mode: headless
+    mode: autonomous
     prompt: "Say hello and list the files in the current directory."
 
   - id: summarize
-    mode: headless
+    mode: autonomous
     session: resume
     prompt: "Summarize what you found."
 ```
@@ -95,13 +95,13 @@ The agent runs in full interactive mode. You collaborate with it in your termina
 
 If you exit the session, agent-runner treats the step as complete and moves on. The state file persists so you can resume later if the workflow is interrupted.
 
-### Headless
+### Autonomous
 
 The agent runs non-interactively (`claude -p`). Its output streams to your terminal so you can watch progress. When the agent finishes, agent-runner automatically advances.
 
-Use headless for steps that don't need human interaction -- task generation, code review, implementation, etc.
+Use autonomous for steps that don't need human interaction -- task generation, code review, implementation, etc.
 
-Pressing ctrl-c during a headless step kills the agent subprocess and exits agent-runner. The state file preserves the interrupted step so you can resume later.
+Pressing ctrl-c during an autonomous step kills the agent subprocess and exits agent-runner. The state file preserves the interrupted step so you can resume later.
 
 ### Shell
 
@@ -120,7 +120,7 @@ Shell steps fail the workflow on non-zero exit codes.
 
 ```yaml
 - id: design
-  mode: headless
+  mode: autonomous
   session: new
   prompt: "Design the architecture..."
 ```
@@ -151,7 +151,7 @@ Continues the most recent session within the current workflow. The agent has ful
 ```yaml
 # Inside a sub-workflow
 - id: fix
-  mode: headless
+  mode: autonomous
   session: inherit
   prompt: "Fix the issues found by the validator."
 ```
@@ -169,17 +169,17 @@ Agent steps can specify which CLI backend to use via the `cli` field:
 
 ```yaml
 - id: implement
-  mode: headless
+  mode: autonomous
   cli: codex
   model: o3
   prompt: "Implement the feature."
 
 - id: review
-  mode: headless
+  mode: autonomous
   prompt: "Review the implementation."
 ```
 
-When `cli` is set, agent-runner uses the corresponding CLI adapter for arg construction and session discovery. When absent, `claude` is used by default. Currently supported values: `claude`, `codex`. The `cli` field is only valid on agent steps (headless or interactive), not shell steps.
+When `cli` is set, agent-runner uses the corresponding CLI adapter for arg construction and session discovery. When absent, `claude` is used by default. Currently supported values: `claude`, `codex`. The `cli` field is only valid on agent steps (autonomous or interactive), not shell steps.
 
 ## Per-step model override
 
@@ -187,17 +187,17 @@ Agent steps can specify which model the agent should use:
 
 ```yaml
 - id: quick-check
-  mode: headless
+  mode: autonomous
   model: sonnet
   prompt: "Do a quick syntax check on the files."
 
 - id: deep-review
-  mode: headless
+  mode: autonomous
   model: opus
   prompt: "Do a thorough code review."
 ```
 
-When `model` is set, agent-runner passes it through the CLI adapter (e.g., `--model <value>` for Claude, `-m <value>` for Codex). When absent, the CLI uses its default model. The `model` field is only valid on agent steps (headless or interactive), not shell steps.
+When `model` is set, agent-runner passes it through the CLI adapter (e.g., `--model <value>` for Claude, `-m <value>` for Codex). When absent, the CLI uses its default model. The `model` field is only valid on agent steps (autonomous or interactive), not shell steps.
 
 ## Loops
 
@@ -218,7 +218,7 @@ Repeat a group of steps up to N times:
       break_if: success
 
     - id: fix
-      mode: headless
+      mode: autonomous
       session: new
       prompt: |
         The validator found issues:
@@ -240,7 +240,7 @@ Iterate over a list of files matching a glob pattern:
     as: task_file
   steps:
     - id: implement
-      mode: headless
+      mode: autonomous
       session: new
       prompt: "Implement {{task_file}}"
 ```
@@ -295,7 +295,7 @@ params:
 
 steps:
   - id: implement
-    mode: headless
+    mode: autonomous
     session: new
     prompt: "Implement the task described in {{task_file}}."
 
@@ -341,7 +341,7 @@ Skip a step based on the previous step's outcome:
 
 ```yaml
 - id: fix
-  mode: headless
+  mode: autonomous
   session: resume
   prompt: "Fix the issues..."
   skip_if: previous_success
@@ -372,7 +372,7 @@ Shell steps can capture their stdout into a named variable:
   continue_on_failure: true
 
 - id: fix
-  mode: headless
+  mode: autonomous
   prompt: |
     Fix these issues:
     {{validator_output}}
@@ -499,13 +499,13 @@ The flokay workflow (`workflows/flokay.yaml`) orchestrates the full change lifec
 | `proposal` | interactive | Collaboratively write the proposal |
 | `specs` | interactive (resume) | Write specs based on the proposal |
 | `design` | interactive | Design the architecture |
-| `tasks` | headless | Generate implementation tasks |
-| `review` | headless (resume) | Run validator review |
+| `tasks` | autonomous | Generate implementation tasks |
+| `review` | autonomous (resume) | Run validator review |
 | `implement` | sub-workflow | Loops over task files, implements each with validator retry |
-| `verify` | headless | Verify implementation with validator |
-| `archive` | headless (resume) | Archive the change, sync specs |
+| `verify` | autonomous | Verify implementation with validator |
+| `archive` | autonomous (resume) | Archive the change, sync specs |
 | `archive-verify` | shell | Skip validator for archive-only changes |
-| `finalize` | headless (resume) | Push PR, wait for CI, fix failures |
+| `finalize` | autonomous (resume) | Push PR, wait for CI, fix failures |
 
 The `implement` step invokes `implement-change.yaml`, which loops over task files and for each one invokes `../core/implement-task.yaml`, which itself invokes `run-validator.yaml` within the `core` builtin namespace for the verify-fix retry loop.
 

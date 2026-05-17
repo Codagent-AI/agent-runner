@@ -1,10 +1,12 @@
 package runview
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/codagent/agent-runner/internal/liverun"
+	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/tuistyle"
 )
 
@@ -692,10 +695,34 @@ func TestModel_Breadcrumb_ActiveLabelDoesNotBlinkOff(t *testing.T) {
 
 func TestFormatLiveElapsed(t *testing.T) {
 	start := time.Date(2026, 4, 27, 20, 48, 0, 0, time.UTC)
-	now := start.Add(18*time.Minute + 40*time.Second)
+	tests := []struct {
+		name string
+		now  time.Time
+		want string
+	}{
+		{
+			name: "minutes and seconds",
+			now:  start.Add(18*time.Minute + 40*time.Second),
+			want: "elapsed 18m 40s",
+		},
+		{
+			name: "whole seconds under one minute",
+			now:  start.Add(3*time.Second + 500*time.Millisecond),
+			want: "elapsed 3s",
+		},
+		{
+			name: "subsecond elapsed",
+			now:  start.Add(500 * time.Millisecond),
+			want: "elapsed 0s",
+		},
+	}
 
-	if got := formatLiveElapsed(start, now); got != "elapsed 18m 40s" {
-		t.Fatalf("formatLiveElapsed() = %q, want %q", got, "elapsed 18m 40s")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatLiveElapsed(start, tt.now); got != tt.want {
+				t.Fatalf("formatLiveElapsed() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -1801,10 +1828,19 @@ func TestModel_LiveRun_QuitConfirm_Shown(t *testing.T) {
 
 func TestModel_LiveRun_QuitConfirm_CtrlC(t *testing.T) {
 	m := newLiveModel()
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	m = m2.(*Model)
-	if !m.quitConfirming {
-		t.Fatal("expected quitConfirming=true after Ctrl+C mid-run")
+	if m.quitConfirming {
+		t.Fatal("Ctrl+C should exit immediately without opening quit confirmation")
+	}
+	if cmd == nil {
+		t.Fatal("Ctrl+C should return a quit command")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("expected Ctrl+C command to quit, got %T", cmd())
+	}
+	if !m.ExitRequested() {
+		t.Fatal("Ctrl+C should mark exit requested")
 	}
 }
 
@@ -1860,6 +1896,40 @@ func TestModel_LiveRun_QuitConfirm_AcceptMarksExitRequested(t *testing.T) {
 	}
 	if !m.ExitRequested() {
 		t.Fatal("accepted quit confirmation should mark exit requested")
+	}
+}
+
+func TestModel_LiveRun_CtrlCExitsFromQuitConfirmation(t *testing.T) {
+	m := newLiveModel()
+	m.quitConfirming = true
+
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = m2.(*Model)
+	if cmd == nil {
+		t.Fatal("Ctrl+C should quit while confirmation is open")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("expected Ctrl+C command to quit, got %T", cmd())
+	}
+	if !m.ExitRequested() {
+		t.Fatal("Ctrl+C should mark exit requested while confirmation is open")
+	}
+}
+
+func TestModel_CtrlCExitsFromLegend(t *testing.T) {
+	m := newLiveModel()
+	m.showLegend = true
+
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = m2.(*Model)
+	if cmd == nil {
+		t.Fatal("Ctrl+C should quit while legend is open")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("expected Ctrl+C command to quit, got %T", cmd())
+	}
+	if !m.ExitRequested() {
+		t.Fatal("Ctrl+C should mark exit requested while legend is open")
 	}
 }
 
@@ -1935,6 +2005,110 @@ func TestModel_FromList_DefaultFlags(t *testing.T) {
 	m := newTestModel(simpleTree(), FromList)
 	if m.autoFollow {
 		t.Error("autoFollow should be false in FromList")
+	}
+}
+
+func TestModel_NewRewoundStateFocusesPersistedCurrentStep(t *testing.T) {
+	dir := t.TempDir()
+	topPath := filepath.Join(dir, "onboarding.yaml")
+	guidedPath := filepath.Join(dir, "guided-workflow.yaml")
+	validatorPath := filepath.Join(dir, "validator.yaml")
+	writeFile(t, topPath, `name: onboarding-onboarding
+steps:
+  - id: step-types-demo
+    command: echo demo
+  - id: guided-workflow
+    workflow: guided-workflow.yaml
+  - id: validator
+    workflow: validator.yaml
+  - id: advanced
+    command: echo advanced
+`)
+	writeFile(t, guidedPath, `name: onboarding-guided-workflow
+steps:
+  - id: implement
+    command: echo implement
+  - id: summary
+    mode: ui
+    title: Summary
+    body: Done
+    actions:
+      - label: Continue
+        outcome: continue
+`)
+	writeFile(t, validatorPath, `name: onboarding-validator
+steps:
+  - id: review-validator-status
+    mode: ui
+    title: Validator
+    body: Review
+    actions:
+      - label: Continue
+        outcome: continue
+`)
+
+	sessionDir := filepath.Join(dir, "run")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatalf("mkdir session: %v", err)
+	}
+	state := model.RunState{
+		WorkflowFile: topPath,
+		WorkflowName: "onboarding-onboarding",
+		WorkflowHash: "hash-1",
+		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+			StepID:            "guided-workflow",
+			SessionIDs:        map[string]string{},
+			CapturedVariables: map[string]model.CapturedValue{},
+			Child: &model.NestedStepState{
+				StepID:            "summary",
+				SessionIDs:        map[string]string{},
+				CapturedVariables: map[string]model.CapturedValue{},
+			},
+		}},
+		Params: map[string]string{},
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("marshal state: %v", err)
+	}
+	writeFile(t, filepath.Join(sessionDir, "state.json"), string(data))
+	writeFile(t, filepath.Join(sessionDir, "audit.log"), strings.Join([]string{
+		`2026-05-17T00:00:00Z run_start {"workflow_hash":"hash-1"}`,
+		`2026-05-17T00:00:01Z [step-types-demo] step_start {}`,
+		`2026-05-17T00:00:02Z [step-types-demo] step_end {"outcome":"success"}`,
+		`2026-05-17T00:00:03Z [guided-workflow] step_start {}`,
+		`2026-05-17T00:00:04Z [guided-workflow, sub:onboarding-guided-workflow, implement] step_start {}`,
+		`2026-05-17T00:00:05Z [guided-workflow, sub:onboarding-guided-workflow, implement] step_end {"outcome":"success"}`,
+		`2026-05-17T00:00:06Z [guided-workflow, sub:onboarding-guided-workflow, summary] step_start {}`,
+		`2026-05-17T00:00:07Z [guided-workflow, sub:onboarding-guided-workflow, summary] step_end {"outcome":"success"}`,
+		`2026-05-17T00:00:08Z [guided-workflow] sub_workflow_end {"outcome":"success"}`,
+		`2026-05-17T00:00:09Z [validator] step_start {}`,
+		`2026-05-17T00:00:10Z [validator, sub:onboarding-validator, review-validator-status] step_start {}`,
+		"",
+	}, "\n"))
+
+	m, err := New(sessionDir, "", FromLiveRun)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	selected := m.selectedNode()
+	if selected == nil || selected.ID != "guided-workflow" {
+		t.Fatalf("selected node = %#v, want guided-workflow", selected)
+	}
+	guided := childByID(m.tree.Root, "guided-workflow")
+	if guided.Status != StatusInProgress {
+		t.Fatalf("guided-workflow status = %v, want in-progress", guided.Status)
+	}
+	if !guided.SubLoaded {
+		t.Fatal("guided-workflow should be loaded so its current child can be shown")
+	}
+	summary := childByID(guided, "summary")
+	if summary == nil || summary.Status != StatusInProgress {
+		t.Fatalf("summary = %#v, want in-progress", summary)
+	}
+	validator := childByID(m.tree.Root, "validator")
+	if validator.Status != StatusPending {
+		t.Fatalf("validator status = %v, want pending after state rewind", validator.Status)
 	}
 }
 
@@ -2074,6 +2248,52 @@ func TestModel_StepStateMsg_ActiveRunAutoScrollsLog(t *testing.T) {
 	if m.logOffset > 10_000 {
 		t.Fatalf("logOffset too large (%d); auto-scroll should clamp to real maxOffset", m.logOffset)
 	}
+}
+
+func TestModel_StepStateMsg_AutoFollowScrollsDetailToActiveSelection(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
+	runValidator := &StepNode{
+		ID:                  "run-validator",
+		Type:                NodeSubWorkflow,
+		Status:              StatusInProgress,
+		Parent:              root,
+		StaticWorkflow:      "run-validator.yaml",
+		StaticWorkflowPath:  "/fixtures/workflows/core/run-validator.yaml",
+		InterpolatedCommand: "agent-validator run --report",
+	}
+	review := &StepNode{
+		ID:                 "review-validator-status",
+		Type:               NodeInteractiveAgent,
+		Status:             StatusInProgress,
+		Parent:             root,
+		StaticAgent:        "planner",
+		AgentCLI:           "claude",
+		SessionID:          "review-session",
+		InterpolatedPrompt: strings.Repeat("review prompt line\n", 40),
+	}
+	root.Children = []*StepNode{runValidator, review}
+
+	m := newLiveModelWithFlags()
+	m.tree = &Tree{Root: root}
+	m.path = []*StepNode{root}
+	m.termHeight = 15
+	m.cursor = 1
+	m.logOffset = 0
+
+	m.Update(liverun.StepStateMsg{ActiveStepPrefix: "[run-validator]"})
+
+	if selected := m.selectedNode(); selected != runValidator {
+		t.Fatalf("selected node = %#v, want run-validator", selected)
+	}
+	for _, r := range m.stepRanges {
+		if r.node == runValidator {
+			if m.logOffset != r.startLine {
+				t.Fatalf("logOffset = %d, want active run-validator startLine %d", m.logOffset, r.startLine)
+			}
+			return
+		}
+	}
+	t.Fatal("missing run-validator detail range")
 }
 
 func TestModel_StepStateMsg_AutoFollowOff_NoNavigation(t *testing.T) {

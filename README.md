@@ -8,12 +8,12 @@ Agents are good at execution, bad at orchestration. When given a complex multi-s
 
 ## Why not use an existing workflow tool?
 
-There are many YAML-based workflow engines (Argo, Kestra, Step Functions) and CLI task runners (Taskfile, Just, Make). The cloud/server orchestrators have rich control flow but can't run local CLI processes. The CLI task runners can run shell commands but collapse into bash scripts the moment you need loop-until with multi-step bodies, mid-pipeline output capture, or conditional branching. None of them have the concepts that agent orchestration requires: session management across steps, interactive/headless mode switching, prompt-based agent steps, or signal-based advancement. Agent Runner borrows proven workflow primitives (for-each, loop-until, sub-workflows, output capture) from these systems and adds a purpose-built runtime for orchestrating stateful conversational agents. See [docs/WHY-AGENT-RUNNER.md](docs/WHY-AGENT-RUNNER.md) for the full comparison.
+There are many YAML-based workflow engines (Argo, Kestra, Step Functions) and CLI task runners (Taskfile, Just, Make). The cloud/server orchestrators have rich control flow but can't run local CLI processes. The CLI task runners can run shell commands but collapse into bash scripts the moment you need loop-until with multi-step bodies, mid-pipeline output capture, or conditional branching. None of them have the concepts that agent orchestration requires: session management across steps, interactive/autonomous mode switching, prompt-based agent steps, or signal-based advancement. Agent Runner borrows proven workflow primitives (for-each, loop-until, sub-workflows, output capture) from these systems and adds a purpose-built runtime for orchestrating stateful conversational agents. See [docs/WHY-AGENT-RUNNER.md](docs/WHY-AGENT-RUNNER.md) for the full comparison.
 
 ## Features
 
 - **Multi-CLI support**: invoke Claude, Codex, or other agent backends through a uniform adapter interface
-- **Three step modes**: interactive (collaborative), headless (autonomous), shell (CLI commands)
+- **Three step modes**: interactive (collaborative), autonomous (unattended), shell (CLI commands)
 - **Session management**: `new`, `resume`, or `inherit` sessions across steps and sub-workflows
 - **Loops**: counted loops (`loop: { max: N }`) and for-each loops (`loop: { over, as }`) with `break_if` conditions
 - **Sub-workflows**: compose workflows from reusable workflow files with parameter passing
@@ -73,7 +73,7 @@ Agent Runner reads a YAML workflow file and executes steps sequentially. Each st
 | Type | What happens | Use case |
 |------|-------------|----------|
 | **interactive** | Agent runs with full stdin. User works with it, types `/continue` to advance. | Collaborative steps (proposal, specs, design) |
-| **headless** | Agent runs with `-p` flag. Output streams to terminal. Auto-advances on exit. | Autonomous steps (tasks, review, implementation) |
+| **autonomous** | Agent runs with `-p` flag. Output streams to terminal. Auto-advances on exit. | Autonomous steps (tasks, review, implementation) |
 | **shell** | Runs a shell command directly, no agent. | CLI operations (`openspec new`, `git commit`) |
 | **loop** | Repeats child steps (counted or for-each). | Iterating over tasks, retry loops |
 | **sub-workflow** | Invokes another workflow file. | Reusable workflow composition |
@@ -83,11 +83,11 @@ agent-runner (harness)
   |
   +-- step 1: shell        -> sh -c "openspec new change my-feature"
   +-- step 2: interactive  -> claude "Write the proposal..."
-  +-- step 3: headless     -> claude -p "Generate specs..."
+  +-- step 3: autonomous     -> claude -p "Generate specs..."
   +-- step 4: loop (per-task)
-  |     +-- step 4a: headless  -> claude -p "Implement {{task_file}}"
+  |     +-- step 4a: autonomous  -> claude -p "Implement {{task_file}}"
   |     +-- step 4b: sub-workflow -> workflows/core/run-validator.yaml
-  +-- step 5: headless     -> claude -p "Finalize..."
+  +-- step 5: autonomous     -> claude -p "Finalize..."
 ```
 
 ### Session management
@@ -143,13 +143,13 @@ steps:
       change_name: "{{change_name}}"
 
   - id: verify
-    mode: headless
+    mode: autonomous
     session: new
     model: sonnet
     prompt: "Verify the implementation"
 
   - id: codex-review
-    mode: headless
+    mode: autonomous
     cli: codex
     model: o3
     prompt: "Review the implementation"
@@ -160,7 +160,7 @@ steps:
 | Field | Required | Description |
 |-------|----------|-------------|
 | `id` | yes | Unique step identifier. Used for `--from`, state tracking, and engine matching. |
-| `mode` | agent/shell | `interactive`, `headless`, or `shell` |
+| `mode` | agent/shell | `interactive`, `autonomous`, or `shell` |
 | `prompt` | agent steps | Prompt passed to the agent. Supports `{{param}}` interpolation. |
 | `command` | shell steps | Shell command to execute. Supports `{{param}}` interpolation. |
 | `session` | no | `new` (default), `resume`, or `inherit`. Only applies to agent steps. |

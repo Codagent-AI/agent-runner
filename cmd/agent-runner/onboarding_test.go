@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/usersettings"
@@ -36,6 +38,33 @@ func TestEnsureFirstRunForTUIRunsNativeSetupThenDemo(t *testing.T) {
 	}
 	if diff := cmp.Diff([]string{"builtin:onboarding/onboarding.yaml"}, launched); diff != "" {
 		t.Fatalf("launched mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestEnsureFirstRunForTUIRunsDemoLaunchFlowAfterNativeSetup(t *testing.T) {
+	var launched bool
+	result := ensureFirstRunForTUI(firstRunDeps{
+		load: func() (usersettings.Settings, error) {
+			return usersettings.Settings{}, nil
+		},
+		isStdinTTY:  func() bool { return true },
+		isStdoutTTY: func() bool { return true },
+		runNativeSetup: func(bool) (nativeSetupResult, error) {
+			return nativeSetupDemo, nil
+		},
+		runDemoLaunchFlow: func() firstRunResult {
+			launched = true
+			return exitFirstRun(5)
+		},
+		runWorkflow: func(string) firstRunWorkflowResult {
+			t.Fatal("runWorkflow should not be called when launch flow is configured")
+			return firstRunWorkflowResult{}
+		},
+	})
+
+	requireFirstRunExit(t, result, 5)
+	if !launched {
+		t.Fatal("demo launch flow was not used")
 	}
 }
 
@@ -149,6 +178,26 @@ func TestEnsureFirstRunForTUICancelledSetupDoesNotStartDemo(t *testing.T) {
 	}
 }
 
+func TestEnsureFirstRunForTUIInterruptedSetupExitsApp(t *testing.T) {
+	var launched bool
+	result := ensureFirstRunForTUI(firstRunDeps{
+		load:        func() (usersettings.Settings, error) { return usersettings.Settings{}, nil },
+		isStdinTTY:  func() bool { return true },
+		isStdoutTTY: func() bool { return true },
+		runNativeSetup: func(bool) (nativeSetupResult, error) {
+			return nativeSetupExitRequested, nil
+		},
+		runWorkflow: func(string) firstRunWorkflowResult {
+			launched = true
+			return firstRunWorkflowResult{}
+		},
+	})
+	requireFirstRunExit(t, result, 0)
+	if launched {
+		t.Fatal("onboarding demo launched after interrupted setup")
+	}
+}
+
 func TestEnsureFirstRunForTUISetupErrorGoesHome(t *testing.T) {
 	result := ensureFirstRunForTUI(firstRunDeps{
 		load:        func() (usersettings.Settings, error) { return usersettings.Settings{}, nil },
@@ -185,6 +234,97 @@ func TestEnsureFirstRunForTUISetupErrorFailsWhenNonFatalModeDisabled(t *testing.
 func TestDefaultFirstRunDepsReportsNativeSetupErrors(t *testing.T) {
 	if !defaultFirstRunDeps.continueAfterNativeSetupError {
 		t.Fatal("default first-run setup should continue to the normal TUI after native setup errors")
+	}
+}
+
+func TestResetOnboardingStateClearsSettingsProjectValidatorAndRuns(t *testing.T) {
+	originalHome := userHomeDir
+	home := t.TempDir()
+	userHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHomeDir = originalHome })
+	t.Setenv("HOME", home)
+
+	repo := filepath.Join(t.TempDir(), "repo")
+	validatorDir := filepath.Join(repo, ".validator")
+	if err := os.MkdirAll(validatorDir, 0o750); err != nil {
+		t.Fatalf("mkdir validator dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(validatorDir, "config.yml"), []byte("checks: []\n"), 0o600); err != nil {
+		t.Fatalf("write validator config: %v", err)
+	}
+	t.Chdir(repo)
+
+	settings := usersettings.Settings{
+		Theme: usersettings.ThemeDark,
+		Setup: usersettings.SetupSettings{CompletedAt: "2026-05-04T00:00:00Z"},
+		Onboarding: usersettings.OnboardingSettings{
+			CompletedAt: "2026-05-05T00:00:00Z",
+			Dismissed:   "2026-05-06T00:00:00Z",
+		},
+	}
+	if err := usersettings.Save(settings); err != nil {
+		t.Fatalf("save settings: %v", err)
+	}
+
+	runsDir := filepath.Join(home, ".agent-runner", "onboarding", "runs")
+	if err := os.MkdirAll(filepath.Join(runsDir, "run-1"), 0o750); err != nil {
+		t.Fatalf("mkdir onboarding run: %v", err)
+	}
+
+	if err := resetOnboardingState(); err != nil {
+		t.Fatalf("resetOnboardingState: %v", err)
+	}
+
+	got, err := usersettings.Load()
+	if err != nil {
+		t.Fatalf("load settings: %v", err)
+	}
+	if got.Theme != usersettings.ThemeDark {
+		t.Fatalf("theme = %q, want preserved dark", got.Theme)
+	}
+	if got.Setup.CompletedAt != "2026-05-04T00:00:00Z" {
+		t.Fatalf("setup.completed_at = %q, want preserved", got.Setup.CompletedAt)
+	}
+	if got.Onboarding.CompletedAt != "" || got.Onboarding.Dismissed != "" {
+		t.Fatalf("onboarding settings = %#v, want cleared", got.Onboarding)
+	}
+	if _, err := os.Stat(validatorDir); !os.IsNotExist(err) {
+		t.Fatalf(".validator stat err = %v, want not exist", err)
+	}
+	if _, err := os.Stat(runsDir); !os.IsNotExist(err) {
+		t.Fatalf("onboarding runs stat err = %v, want not exist", err)
+	}
+}
+
+func TestResetOnboardingStateRemovesReadOnlyValidatorCache(t *testing.T) {
+	originalHome := userHomeDir
+	home := t.TempDir()
+	userHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHomeDir = originalHome })
+	t.Setenv("HOME", home)
+
+	repo := filepath.Join(t.TempDir(), "repo")
+	moduleDir := filepath.Join(repo, ".validator", "cache", "go", "pkg", "mod", "gopkg.in", "yaml.v3@v3.0.1")
+	if err := os.MkdirAll(moduleDir, 0o755); err != nil {
+		t.Fatalf("mkdir module cache: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(moduleDir, "decode_test.go"), []byte("package yaml\n"), 0o444); err != nil {
+		t.Fatalf("write read-only module file: %v", err)
+	}
+	if err := os.Chmod(moduleDir, 0o555); err != nil {
+		t.Fatalf("chmod module cache: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(moduleDir, 0o755)
+	})
+	t.Chdir(repo)
+
+	if err := resetOnboardingState(); err != nil {
+		t.Fatalf("resetOnboardingState: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(repo, ".validator")); !os.IsNotExist(err) {
+		t.Fatalf(".validator stat err = %v, want not exist", err)
 	}
 }
 

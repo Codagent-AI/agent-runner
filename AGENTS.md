@@ -4,6 +4,10 @@ Agent Runner is a Go CLI workflow orchestrator for AI agents. It runs multi-step
 
 This project is pre-release and under active development. Prefer clear, well-tested changes over preserving accidental compatibility.
 
+## Workspace Context
+
+For broader Codagent workspace context, see [../AGENTS.md](../AGENTS.md). Read it when the user mentions another Codagent repo or project.
+
 ## Project Map
 
 - `cmd/agent-runner/`: CLI entry point and command wiring
@@ -27,6 +31,7 @@ This project is pre-release and under active development. Prefer clear, well-tes
 
 - Use test-driven development for substantive behavior changes. For bug fixes, add a failing test that reproduces the bug before changing production code.
 - Tests are not required for trivial changes such as styling-only tweaks, copy edits, comments, or other cases where a focused unit test would not exercise meaningful behavior.
+- Do not use TDD for purely stylistic changes such as colors, spacing, typography, borders, or other visual presentation tweaks that do not change behavior.
 - Do not use TDD for changes that only edit workflow YAML files; workflows are configuration, and focused tests are not expected for configuration-only edits.
 - Keep tests next to the source package. Use local stubs and small fakes instead of adding a mocking framework.
 - Prefer `google/go-cmp` for structured comparisons in tests.

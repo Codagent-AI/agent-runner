@@ -32,7 +32,7 @@ func findAuditEvent(events []audit.Event, typ audit.EventType) *audit.Event {
 func TestExecuteAgentStep(t *testing.T) {
 	t.Run("returns success for exit code 0", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do something", Session: model.SessionNew}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do something", Session: model.SessionNew}
 		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -44,7 +44,7 @@ func TestExecuteAgentStep(t *testing.T) {
 
 	t.Run("returns failed for non-zero exit code", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 1}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do something", Session: model.SessionNew}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do something", Session: model.SessionNew}
 		outcome, _ := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if outcome != OutcomeFailed {
 			t.Fatalf("expected failed, got %q", outcome)
@@ -53,16 +53,16 @@ func TestExecuteAgentStep(t *testing.T) {
 
 	t.Run("returns failed for empty prompt", func(t *testing.T) {
 		runner := &mockRunner{}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "", Session: model.SessionNew}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "", Session: model.SessionNew}
 		outcome, _ := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if outcome != OutcomeFailed {
 			t.Fatalf("expected failed, got %q", outcome)
 		}
 	})
 
-	t.Run("builds correct claude args for headless mode", func(t *testing.T) {
+	t.Run("builds correct claude args for autonomous mode", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "implement feature", Session: model.SessionNew}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "implement feature", Session: model.SessionNew}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if len(runner.calls) == 0 {
 			t.Fatal("expected command to be called")
@@ -73,9 +73,9 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 		// Should have -p flag for headless
 		if !containsArg(args, "-p") {
-			t.Fatal("expected -p flag for headless mode")
+			t.Fatal("expected -p flag for autonomous mode")
 		}
-		// Last arg should contain the prompt (with headless preamble prepended)
+		// Last arg should contain the prompt (with autonomy preamble prepended)
 		lastArg := args[len(args)-1]
 		if !strings.Contains(lastArg, "implement feature") {
 			t.Fatalf("expected prompt in last arg, got %q", lastArg)
@@ -84,7 +84,7 @@ func TestExecuteAgentStep(t *testing.T) {
 
 	t.Run("fresh claude step uses --session-id with generated UUID", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do it", Session: model.SessionNew}
 		ctx := makeCtx()
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 		args := runner.calls[0]
@@ -106,7 +106,7 @@ func TestExecuteAgentStep(t *testing.T) {
 			flushed          bool
 		)
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do it", Session: model.SessionNew}
 		ctx := makeCtx()
 		ctx.FlushState = func() {
 			flushed = true
@@ -139,7 +139,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		ctx.SessionIDs["plan"] = persistedID
 		ctx.LastSessionStepID = "plan"
 		ctx.SessionProfiles["plan"] = "planner"
-		step := model.Step{ID: "plan", Mode: model.ModeHeadless, Prompt: "keep planning", Session: model.SessionNew}
+		step := model.Step{ID: "plan", Mode: model.ModeAutonomous, Prompt: "keep planning", Session: model.SessionNew}
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 
 		if ctx.SessionIDs["plan"] != persistedID {
@@ -177,7 +177,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		ctx.WorkflowResumed = true
 		ctx.SessionIDs["plan"] = persistedID
 		ctx.LastSessionStepID = "plan"
-		step := model.Step{ID: "plan", Mode: model.ModeHeadless, Prompt: "start", Session: model.SessionNew}
+		step := model.Step{ID: "plan", Mode: model.ModeAutonomous, Prompt: "start", Session: model.SessionNew}
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 
 		if ctx.SessionIDs["plan"] != persistedID {
@@ -199,12 +199,46 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("named session re-establishes persisted ID when transcript missing on same step", func(t *testing.T) {
+		withFakeClaudeHome(t) // home exists, but no transcript file
+		const persistedID = "persisted-named-never-established"
+		const sessionName = "validator-setup-session"
+
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		ctx := makeCtx()
+		ctx.WorkflowResumed = true
+		ctx.NamedSessions[sessionName] = persistedID
+		ctx.NamedSessionDecls[sessionName] = "planner"
+		ctx.SessionIDs["setup"] = persistedID
+		ctx.LastSessionStepID = "setup"
+		step := model.Step{ID: "setup", Mode: model.ModeAutonomous, Prompt: "start", Session: model.SessionStrategy(sessionName)}
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+
+		if ctx.NamedSessions[sessionName] != persistedID {
+			t.Fatalf("expected named session ID to be preserved, got %q (was %q)", ctx.NamedSessions[sessionName], persistedID)
+		}
+
+		args := runner.calls[0]
+		foundSessionID := false
+		for i, a := range args {
+			if a == "--session-id" && i+1 < len(args) && args[i+1] == persistedID {
+				foundSessionID = true
+			}
+			if a == "--resume" {
+				t.Fatalf("did not expect --resume for a never-established named session, got %v", args)
+			}
+		}
+		if !foundSessionID {
+			t.Fatalf("expected --session-id %s to re-establish named session with persisted ID, got %v", persistedID, args)
+		}
+	})
+
 	t.Run("persists resumed session ID before CLI invocation", func(t *testing.T) {
 		// When resuming, the session ID is known at spawn (carried in from
 		// prior state); it must be re-flushed so mid-step kills preserve it.
 		var flushedID string
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		step := model.Step{ID: "s2", Mode: model.ModeHeadless, Prompt: "continue", Session: model.SessionResume}
+		step := model.Step{ID: "s2", Mode: model.ModeAutonomous, Prompt: "continue", Session: model.SessionResume}
 		ctx := makeCtx()
 		ctx.SessionIDs["prev"] = "session-abc"
 		ctx.LastSessionStepID = "prev"
@@ -217,15 +251,15 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
-	t.Run("headless resume uses --resume flag", func(t *testing.T) {
+	t.Run("autonomous resume uses --resume flag", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		ctx := makeCtx()
 		ctx.SessionIDs["prev"] = "session-abc"
 		ctx.LastSessionStepID = "prev"
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "continue", Session: model.SessionResume}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "continue", Session: model.SessionResume}
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 		args := runner.calls[0]
-		// Headless resume uses --resume because --session-id is rejected by
+		// Autonomous resume uses --resume because --session-id is rejected by
 		// Claude CLI when the UUID already exists on disk.
 		foundResume := false
 		for i, a := range args {
@@ -238,7 +272,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 		for _, a := range args {
 			if a == "--session-id" {
-				t.Fatalf("expected no --session-id for headless resume, got %v", args)
+				t.Fatalf("expected no --session-id for autonomous resume, got %v", args)
 			}
 		}
 	})
@@ -249,7 +283,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		ctx.SessionIDs["proposal"] = "session-abc"
 		ctx.SessionProfiles["proposal"] = "planner"
 		ctx.LastSessionStepID = "proposal"
-		step := model.Step{ID: "specs", Mode: model.ModeHeadless, Prompt: "write specs", Session: model.SessionResume}
+		step := model.Step{ID: "specs", Mode: model.ModeAutonomous, Prompt: "write specs", Session: model.SessionResume}
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 		// After the resume step runs and discovers a session, it should
 		// propagate the profile so that a subsequent workflow resume can
@@ -270,7 +304,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		ctx.ProfileStore = &config.Config{
 			ActiveAgents: map[string]*config.Agent{
 				"implementor": {
-					DefaultMode: "headless",
+					DefaultMode: "autonomous",
 					CLI:         "claude",
 					Model:       "sonnet",
 				},
@@ -297,7 +331,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		ctx.ProfileStore = &config.Config{
 			ActiveAgents: map[string]*config.Agent{
 				"planner": {
-					DefaultMode: "headless",
+					DefaultMode: "autonomous",
 					CLI:         "claude",
 					Model:       "opus",
 				},
@@ -327,7 +361,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		ctx.ProfileStore = &config.Config{
 			ActiveAgents: map[string]*config.Agent{
 				"implementor": {
-					DefaultMode: "headless",
+					DefaultMode: "autonomous",
 					CLI:         "claude",
 					Model:       "sonnet",
 				},
@@ -354,7 +388,7 @@ func TestExecuteAgentStep(t *testing.T) {
 
 	t.Run("adds --model flag for model override", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew, Model: "opus"}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do it", Session: model.SessionNew, Model: "opus"}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		args := runner.calls[0]
 		foundModel := false
@@ -374,7 +408,7 @@ func TestExecuteAgentStep(t *testing.T) {
 			Params:       map[string]string{"task": "build"},
 			WorkflowFile: "test.yaml",
 		})
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "Do {{task}}", Session: model.SessionNew}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "Do {{task}}", Session: model.SessionNew}
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 		args := runner.calls[0]
 		lastArg := args[len(args)-1]
@@ -385,7 +419,7 @@ func TestExecuteAgentStep(t *testing.T) {
 
 	t.Run("handles undefined variable gracefully", func(t *testing.T) {
 		runner := &mockRunner{}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "{{missing}}", Session: model.SessionNew}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "{{missing}}", Session: model.SessionNew}
 		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -397,7 +431,7 @@ func TestExecuteAgentStep(t *testing.T) {
 
 	t.Run("defaults to claude adapter", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do it", Session: model.SessionNew}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if len(runner.calls) == 0 {
 			t.Fatal("expected command to be called")
@@ -409,7 +443,7 @@ func TestExecuteAgentStep(t *testing.T) {
 
 	t.Run("uses codex adapter when cli is codex", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew, CLI: "codex"}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do it", Session: model.SessionNew, CLI: "codex"}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if len(runner.calls) == 0 {
 			t.Fatal("expected command to be called")
@@ -441,7 +475,7 @@ func TestExecuteAgentStep(t *testing.T) {
 
 	t.Run("codex headless uses exec subcommand", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew, CLI: "codex"}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do it", Session: model.SessionNew, CLI: "codex"}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		args := runner.calls[0]
 		if !containsArg(args, "exec") {
@@ -471,7 +505,7 @@ func TestExecuteAgentStep(t *testing.T) {
 
 	t.Run("codex model uses -m flag", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew, CLI: "codex", Model: "o3"}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do it", Session: model.SessionNew, CLI: "codex", Model: "o3"}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		args := runner.calls[0]
 		foundModel := false
@@ -531,10 +565,10 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
-	t.Run("captures stdout on headless step with capture", func(t *testing.T) {
+	t.Run("captures stdout on autonomous step with capture", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "review-output"}}}
 		ctx := makeCtx()
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "review", Session: model.SessionNew, Capture: "review_result"}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "review", Session: model.SessionNew, Capture: "review_result"}
 		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -550,7 +584,7 @@ func TestExecuteAgentStep(t *testing.T) {
 	t.Run("strips trailing newlines from captured agent output", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "path/to/tasks/*.md\n"}}}
 		ctx := makeCtx()
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "find tasks", Session: model.SessionNew, Capture: "tasks_glob"}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "find tasks", Session: model.SessionNew, Capture: "tasks_glob"}
 		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -566,7 +600,7 @@ func TestExecuteAgentStep(t *testing.T) {
 	t.Run("preserves multiple trailing newlines except final one", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "value\n\n"}}}
 		ctx := makeCtx()
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "get output", Session: model.SessionNew, Capture: "result"}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "get output", Session: model.SessionNew, Capture: "result"}
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 		if ctx.CapturedVariables["result"].Str != "value\n" {
 			t.Fatalf("expected one trailing newline preserved, got %q", ctx.CapturedVariables["result"].Str)
@@ -576,17 +610,17 @@ func TestExecuteAgentStep(t *testing.T) {
 	t.Run("preserves leading whitespace in captured agent output", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "  indented output\n"}}}
 		ctx := makeCtx()
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "get output", Session: model.SessionNew, Capture: "result"}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "get output", Session: model.SessionNew, Capture: "result"}
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 		if ctx.CapturedVariables["result"].Str != "  indented output" {
 			t.Fatalf("expected leading whitespace preserved, got %q", ctx.CapturedVariables["result"].Str)
 		}
 	})
 
-	t.Run("captures stdout on failed headless step with capture", func(t *testing.T) {
+	t.Run("captures stdout on failed autonomous step with capture", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 1, Stdout: "review-failures"}}}
 		ctx := makeCtx()
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "review", Session: model.SessionNew, Capture: "review_result"}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "review", Session: model.SessionNew, Capture: "review_result"}
 		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -605,7 +639,7 @@ func TestExecuteAgentStep(t *testing.T) {
 			`{"type":"result","subtype":"success","result":"filtered response","session_id":"abc","is_error":false}` + "\n"
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: streamJSON}}}
 		ctx := makeCtx()
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "echo test", Session: model.SessionNew, CLI: "cursor", Capture: "result"}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "echo test", Session: model.SessionNew, CLI: "cursor", Capture: "result"}
 		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -628,7 +662,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		ctx := makeCtx()
 		ctx.AuditLogger = auditLogger
 		cfg := &config.Config{ActiveAgents: map[string]*config.Agent{
-			"codex-test": {CLI: "codex", DefaultMode: "headless"},
+			"codex-test": {CLI: "codex", DefaultMode: "autonomous"},
 		}}
 		ctx.ProfileStore = cfg
 		step := model.Step{ID: "codex-headless", Agent: "codex-test", Prompt: "reply", Session: model.SessionNew, Capture: "result"}
@@ -665,7 +699,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		ctx := makeCtx()
 		ctx.AuditLogger = auditLogger
 		cfg := &config.Config{ActiveAgents: map[string]*config.Agent{
-			"codex-test": {CLI: "codex", DefaultMode: "headless"},
+			"codex-test": {CLI: "codex", DefaultMode: "autonomous"},
 		}}
 		ctx.ProfileStore = cfg
 		step := model.Step{ID: "codex-headless", Agent: "codex-test", Prompt: "reply", Session: model.SessionNew}
@@ -688,10 +722,10 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
-	t.Run("does not capture on headless step without capture field", func(t *testing.T) {
+	t.Run("does not capture on autonomous step without capture field", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "some-output"}}}
 		ctx := makeCtx()
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do it", Session: model.SessionNew}
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 		if _, ok := ctx.CapturedVariables["output"]; ok {
 			t.Fatal("expected no captured variable when capture field is empty")
@@ -699,8 +733,8 @@ func TestExecuteAgentStep(t *testing.T) {
 	})
 
 	t.Run("headless fails when AskUserQuestion error detected in stderr", func(t *testing.T) {
-		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stderr: "Tool error: AskUserQuestion error: not supported in headless mode"}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "finalize", Session: model.SessionNew}
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stderr: "Tool error: AskUserQuestion error: not supported in autonomous mode"}}}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "finalize", Session: model.SessionNew}
 		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -712,7 +746,7 @@ func TestExecuteAgentStep(t *testing.T) {
 
 	t.Run("headless fails on case-variant AskUserQuestion error in stderr", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stderr: "Error: askuserquestion not available"}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "finalize", Session: model.SessionNew}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "finalize", Session: model.SessionNew}
 		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -724,7 +758,7 @@ func TestExecuteAgentStep(t *testing.T) {
 
 	t.Run("headless succeeds when output mentions AskUserQuestion without error", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "I considered using AskUserQuestion but proceeded instead"}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do it", Session: model.SessionNew}
 		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -737,7 +771,7 @@ func TestExecuteAgentStep(t *testing.T) {
 	t.Run("headless succeeds when stdout mentions AskUserQuestion — only stderr is checked", func(t *testing.T) {
 		stdout := "uses `--no-ask-user` when `AskUserQuestion` is disallowed\n`CopilotAdapter.InteractiveModeError()`: rejects interactive mode"
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: stdout}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "implement", Session: model.SessionNew}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "implement", Session: model.SessionNew}
 		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -750,7 +784,7 @@ func TestExecuteAgentStep(t *testing.T) {
 	t.Run("headless succeeds when natural language mentions AskUserQuestion and error on same line", func(t *testing.T) {
 		stdout := "I attempted to call AskUserQuestion, but the request encountered an error during validation, so I proceeded autonomously."
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: stdout}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "implement", Session: model.SessionNew}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "implement", Session: model.SessionNew}
 		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -762,7 +796,7 @@ func TestExecuteAgentStep(t *testing.T) {
 
 	t.Run("headless fails when AskUserQuestion tool is disallowed", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stderr: "tool AskUserQuestion is not allowed"}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "finalize", Session: model.SessionNew}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "finalize", Session: model.SessionNew}
 		outcome, err := ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -840,31 +874,31 @@ func TestExecuteAgentStep(t *testing.T) {
 		assertContinueMarkerInstruction(t, lastArg, ptyOpts[0].ContinueMarker)
 	})
 
-	t.Run("headless mode passes prompt as positional arg without wrapping", func(t *testing.T) {
+	t.Run("autonomous mode passes prompt as positional arg without wrapping", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "implement feature", Session: model.SessionNew}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "implement feature", Session: model.SessionNew}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		args := runner.calls[0]
 		lastArg := args[len(args)-1]
 		if !strings.Contains(lastArg, "implement feature") {
-			t.Fatalf("expected prompt in headless positional arg, got %q", lastArg)
+			t.Fatalf("expected prompt in autonomous positional arg, got %q", lastArg)
 		}
 		if containsArg(args, "--append-system-prompt") {
-			t.Fatalf("did not expect --append-system-prompt for headless mode, got %v", args)
+			t.Fatalf("did not expect --append-system-prompt for autonomous mode, got %v", args)
 		}
 	})
 
-	t.Run("headless codex passes prompt without XML wrapping", func(t *testing.T) {
+	t.Run("autonomous codex passes prompt without XML wrapping", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "implement feature", Session: model.SessionNew, CLI: "codex"}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "implement feature", Session: model.SessionNew, CLI: "codex"}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		args := runner.calls[0]
 		lastArg := args[len(args)-1]
 		if !strings.Contains(lastArg, "implement feature") {
-			t.Fatalf("expected prompt in headless codex positional arg, got %q", lastArg)
+			t.Fatalf("expected prompt in autonomous codex positional arg, got %q", lastArg)
 		}
 		if strings.Contains(lastArg, "<system>") {
-			t.Fatalf("did not expect XML wrapping for headless mode, got %q", lastArg)
+			t.Fatalf("did not expect XML wrapping for autonomous mode, got %q", lastArg)
 		}
 	})
 
@@ -904,32 +938,32 @@ func TestExecuteAgentStep(t *testing.T) {
 		t.Fatalf("expected --append-system-prompt with completion instruction, got %v", args)
 	})
 
-	t.Run("headless prompt includes autonomy preamble", func(t *testing.T) {
+	t.Run("autonomous prompt includes autonomy preamble", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do the task", Session: model.SessionNew}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do the task", Session: model.SessionNew}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		lastArg := runner.calls[0][len(runner.calls[0])-1]
-		if !strings.Contains(lastArg, "autonomously in headless mode") {
-			t.Fatalf("expected headless preamble in prompt, got %q", lastArg)
+		if !strings.Contains(lastArg, "running autonomously") {
+			t.Fatalf("expected autonomy preamble in prompt, got %q", lastArg)
 		}
 	})
 
-	t.Run("headless resume prompt omits autonomy preamble", func(t *testing.T) {
+	t.Run("autonomous resume prompt omits autonomy preamble", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		ctx := makeCtx()
 		ctx.SessionIDs["prev"] = "session-abc"
 		ctx.LastSessionStepID = "prev"
 		step := model.Step{
 			ID:      "s",
-			Mode:    model.ModeHeadless,
+			Mode:    model.ModeAutonomous,
 			CLI:     "cursor",
 			Prompt:  "what value did I just send you?",
 			Session: model.SessionResume,
 		}
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 		lastArg := runner.calls[0][len(runner.calls[0])-1]
-		if strings.Contains(lastArg, "autonomously in headless mode") {
-			t.Fatalf("did not expect headless preamble on resumed prompt, got %q", lastArg)
+		if strings.Contains(lastArg, "running autonomously") {
+			t.Fatalf("did not expect autonomy preamble on resumed prompt, got %q", lastArg)
 		}
 		if lastArg != step.Prompt {
 			t.Fatalf("expected resumed prompt %q, got %q", step.Prompt, lastArg)
@@ -950,15 +984,15 @@ func TestExecuteAgentStep(t *testing.T) {
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		args := ptyCalls[0]
 		for _, a := range args {
-			if strings.Contains(a, "autonomously in headless mode") {
-				t.Fatalf("did not expect headless preamble in interactive prompt, got %q", a)
+			if strings.Contains(a, "running autonomously") {
+				t.Fatalf("did not expect autonomy preamble in interactive prompt, got %q", a)
 			}
 		}
 	})
 
-	t.Run("headless claude includes --disallowedTools AskUserQuestion", func(t *testing.T) {
+	t.Run("autonomous claude includes --disallowedTools AskUserQuestion", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do it", Session: model.SessionNew}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		args := runner.calls[0]
 		foundDisallowed := false
@@ -968,16 +1002,16 @@ func TestExecuteAgentStep(t *testing.T) {
 			}
 		}
 		if !foundDisallowed {
-			t.Fatalf("expected --disallowedTools AskUserQuestion for headless claude, got %v", args)
+			t.Fatalf("expected --disallowedTools AskUserQuestion for autonomous claude, got %v", args)
 		}
 	})
 
-	t.Run("headless resume includes --disallowedTools", func(t *testing.T) {
+	t.Run("autonomous resume includes --disallowedTools", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		ctx := makeCtx()
 		ctx.SessionIDs["prev"] = "session-abc"
 		ctx.LastSessionStepID = "prev"
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "continue", Session: model.SessionResume}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "continue", Session: model.SessionResume}
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 		args := runner.calls[0]
 		foundDisallowed := false
@@ -987,7 +1021,7 @@ func TestExecuteAgentStep(t *testing.T) {
 			}
 		}
 		if !foundDisallowed {
-			t.Fatalf("expected --disallowedTools AskUserQuestion on headless resume, got %v", args)
+			t.Fatalf("expected --disallowedTools AskUserQuestion on autonomous resume, got %v", args)
 		}
 	})
 
@@ -1010,19 +1044,22 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
-	t.Run("headless codex includes sandbox bypass", func(t *testing.T) {
+	t.Run("autonomous codex uses workspace write sandbox", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew, CLI: "codex"}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do it", Session: model.SessionNew, CLI: "codex"}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		args := runner.calls[0]
-		foundBypass := false
+		foundSandbox := false
 		for _, a := range args {
 			if a == "--dangerously-bypass-approvals-and-sandbox" {
-				foundBypass = true
+				t.Fatalf("did not expect sandbox bypass for autonomous codex, got %v", args)
+			}
+			if a == "--sandbox" {
+				foundSandbox = true
 			}
 		}
-		if !foundBypass {
-			t.Fatalf("expected sandbox bypass for headless codex, got %v", args)
+		if !foundSandbox || !containsArg(args, "workspace-write") {
+			t.Fatalf("expected workspace write sandbox for autonomous codex, got %v", args)
 		}
 	})
 
@@ -1048,16 +1085,172 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
-	t.Run("headless step prompt does not include completion instruction", func(t *testing.T) {
+	t.Run("autonomous step prompt does not include completion instruction", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do the task", Session: model.SessionNew}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do the task", Session: model.SessionNew}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if len(runner.calls) == 0 {
 			t.Fatal("expected command to be called")
 		}
 		lastArg := runner.calls[0][len(runner.calls[0])-1]
 		if strings.Contains(lastArg, "signal-continuation") || strings.Contains(lastArg, "AGENT_RUNNER_") {
-			t.Fatalf("expected no completion instruction in headless prompt, got %q", lastArg)
+			t.Fatalf("expected no completion instruction in autonomous prompt, got %q", lastArg)
+		}
+	})
+
+	t.Run("autonomous backend interactive uses interactive invocation when TTY is available", func(t *testing.T) {
+		var ptyCalls [][]string
+		var ptyOpts []pty.Options
+		oldRunner := interactiveRunnerFn
+		interactiveRunnerFn = func(args []string, opts pty.Options) (pty.Result, error) {
+			ptyCalls = append(ptyCalls, args)
+			ptyOpts = append(ptyOpts, opts)
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		oldTTY := isStdinTerminal
+		isStdinTerminal = func() bool { return true }
+		defer func() {
+			interactiveRunnerFn = oldRunner
+			isStdinTerminal = oldTTY
+		}()
+
+		runner := &mockRunner{}
+		ctx := makeCtx()
+		ctx.AutonomousBackend = "interactive"
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "implement feature", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("outcome = %q, want success", outcome)
+		}
+		if len(runner.calls) != 0 {
+			t.Fatalf("expected no headless RunAgent calls, got %d", len(runner.calls))
+		}
+		if len(ptyCalls) != 1 || len(ptyOpts) != 1 {
+			t.Fatalf("expected one interactive PTY call, got calls=%d opts=%d", len(ptyCalls), len(ptyOpts))
+		}
+		for _, arg := range ptyCalls[0] {
+			if strings.Contains(arg, "autonomously") {
+				assertContinueMarkerInstruction(t, arg, ptyOpts[0].ContinueMarker)
+				return
+			}
+		}
+		t.Fatalf("expected autonomy instructions in interactive invocation args, got %v", ptyCalls[0])
+	})
+
+	t.Run("capture fails when autonomous backend resolves to interactive invocation", func(t *testing.T) {
+		var ptyCalls int
+		oldRunner := interactiveRunnerFn
+		interactiveRunnerFn = func(_ []string, _ pty.Options) (pty.Result, error) {
+			ptyCalls++
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		oldTTY := isStdinTerminal
+		isStdinTerminal = func() bool { return true }
+		defer func() {
+			interactiveRunnerFn = oldRunner
+			isStdinTerminal = oldTTY
+		}()
+
+		runner := &mockRunner{}
+		ctx := makeCtx()
+		ctx.AutonomousBackend = "interactive"
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "implement feature", Session: model.SessionNew, Capture: "out"}
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeFailed {
+			t.Fatalf("outcome = %q, want failed", outcome)
+		}
+		if ptyCalls != 0 {
+			t.Fatalf("expected no interactive invocation when capture cannot be honored, got %d", ptyCalls)
+		}
+		if len(runner.calls) != 0 {
+			t.Fatalf("expected no headless invocation after validation failure, got %d", len(runner.calls))
+		}
+		if _, ok := ctx.CapturedVariables["out"]; ok {
+			t.Fatal("did not expect capture variable after validation failure")
+		}
+	})
+
+	t.Run("autonomous backend interactive falls back to headless without TTY", func(t *testing.T) {
+		oldTTY := isStdinTerminal
+		isStdinTerminal = func() bool { return false }
+		defer func() { isStdinTerminal = oldTTY }()
+
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		log := &mockLogger{}
+		ctx := makeCtx()
+		ctx.AutonomousBackend = "interactive"
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "implement feature", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, log)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("outcome = %q, want success", outcome)
+		}
+		if len(runner.calls) != 1 {
+			t.Fatalf("expected one headless RunAgent call, got %d", len(runner.calls))
+		}
+		if !containsArg(runner.calls[0], "-p") {
+			t.Fatalf("expected fallback to autonomous claude args, got %v", runner.calls[0])
+		}
+		if !strings.Contains(strings.Join(log.lines, "\n"), "falling back to headless") {
+			t.Fatalf("expected fallback warning, got log lines %v", log.lines)
+		}
+	})
+
+	t.Run("interactive claude backend stays headless for non-claude adapter", func(t *testing.T) {
+		oldTTY := isStdinTerminal
+		isStdinTerminal = func() bool { return true }
+		defer func() { isStdinTerminal = oldTTY }()
+
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		ctx := makeCtx()
+		ctx.AutonomousBackend = "interactive-claude"
+		step := model.Step{ID: "s", CLI: "codex", Mode: model.ModeAutonomous, Prompt: "implement feature", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("outcome = %q, want success", outcome)
+		}
+		if len(runner.calls) != 1 {
+			t.Fatalf("expected autonomous codex RunAgent call, got %d", len(runner.calls))
+		}
+		if !containsArg(runner.calls[0], "exec") {
+			t.Fatalf("expected codex exec headless args, got %v", runner.calls[0])
+		}
+	})
+
+	t.Run("interactive mode ignores autonomous backend", func(t *testing.T) {
+		var ptyCalls [][]string
+		oldRunner := interactiveRunnerFn
+		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
+			ptyCalls = append(ptyCalls, args)
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		oldTTY := isStdinTerminal
+		isStdinTerminal = func() bool { return true }
+		defer func() {
+			interactiveRunnerFn = oldRunner
+			isStdinTerminal = oldTTY
+		}()
+
+		runner := &mockRunner{}
+		ctx := makeCtx()
+		ctx.AutonomousBackend = "interactive"
+		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review code", Session: model.SessionNew}
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		for _, arg := range ptyCalls[0] {
+			if strings.Contains(arg, "autonomously") {
+				t.Fatalf("did not expect autonomy instructions for plain interactive step, got %q", arg)
+			}
 		}
 	})
 

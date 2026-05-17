@@ -8,12 +8,10 @@ sessions:
 steps:
   - id: locate-tasks
     session: lead-agent
-    mode: headless
+    mode: autonomous
     capture: tasks_glob
     prompt: |
-      You are about to implement a planned change. Output the task-file glob
-      pattern for that change on a single line with NO other text, NO markdown
-      fences, and NO explanation. The glob must expand to one file per task.
+      You are about to implement a planned change. Output the task-file glob pattern for that change on a single line with NO other text, NO markdown fences, and NO explanation. The glob must expand to one file per task.
 
       Example valid output: some/path/tasks/*.md
 
@@ -31,33 +29,23 @@ steps:
 
   - id: review-assumptions
     session: lead-agent
-    mode: headless
+    mode: autonomous
     prompt: |
-      The implementor iterations have completed.
-      Each iteration produced a session report (via codagent:session-report) listing
-      risky and notable assumptions plus any context gaps.
+      The implementor iterations have completed. Each iteration produced a session report (via codagent:session-report) listing risky and notable assumptions plus any context gaps.
 
       Session-report output for this run is persisted as one file per iteration at:
 
           {{session_dir}}/output/*session-report*.out
 
-      The iteration index is embedded in each filename (e.g. `..._implement-tasks_0_...`).
-      Cross-reference the task file for each iteration against the `step_start` event in
-      `{{session_dir}}/audit.log` — audit.log carries event metadata only, not the
-      report text itself.
+      The iteration index is embedded in each filename (e.g. `..._implement-tasks_0_...`). Cross-reference the task file for each iteration against the `step_start` event in `{{session_dir}}/audit.log` — audit.log carries event metadata only, not the report text itself.
 
-      You MUST use the codagent:review-assumptions skill to audit those findings.
-      Apply high-confidence fixes directly, ask the user one question at a time for
-      ambiguous findings, and surface context gaps in your final summary.
+      You MUST use the codagent:review-assumptions skill to audit those findings. Apply high-confidence fixes directly, ask the user one question at a time for ambiguous findings, and surface context gaps in your final summary.
 
   - id: simplify
     session: lead-agent
-    mode: headless
+    mode: autonomous
     prompt: |
-      If the /simplify skill is available, run it focusing on code reuse and readability.
-      If it is not available, review your git diff for duplicated logic that should be
-      extracted into shared helpers, and readability issues like deep nesting, unclear
-      naming, or overly complex conditionals. Fix and commit anything clear-cut, following the project's commit message conventions and prepending [{{step_id}}].
+      If the /simplify skill is available, run it focusing on code reuse and readability. If it is not available, review your git diff for duplicated logic that should be extracted into shared helpers, and readability issues like deep nesting, unclear naming, or overly complex conditionals. Fix and commit anything clear-cut, following the project's commit message conventions and prepending [{{step_id}}].
 
   - id: run-validator
     workflow: ../core/run-validator.yaml

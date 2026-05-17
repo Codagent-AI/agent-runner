@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 // TestBlinkHidden verifies that BlinkHidden returns a blank string of the
@@ -58,6 +59,18 @@ func TestRenderButtonRow_DistributesButtonsWithinWidth(t *testing.T) {
 	}
 }
 
+func TestRenderButton_UsesTerminalDefaultForUnfocusedButtons(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	lipgloss.SetHasDarkBackground(false)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+
+	got := RenderButton("Learn more", false)
+	want := lipgloss.NewStyle().Render("[ Learn more ]")
+	if got != want {
+		t.Fatalf("unfocused button style mismatch:\ngot  %q\nwant %q", got, want)
+	}
+}
+
 func TestRenderStepIndicator(t *testing.T) {
 	got := Sanitize(RenderStepIndicator(2, 6, 70))
 	if !strings.Contains(got, "Step 2 of 6") {
@@ -86,6 +99,16 @@ func TestSecondaryTextColorsHaveReadableContrast(t *testing.T) {
 		if got := contrastRatio(token.Light, lightTerminalBackground); got < minReadableContrast {
 			t.Errorf("%s light contrast = %.2f, want >= %.1f", name, got, minReadableContrast)
 		}
+	}
+}
+
+func TestFocusedButtonTextContrastsWithAccentBackground(t *testing.T) {
+	const minReadableContrast = 4.5
+	if got := contrastRatio(ButtonOnAccentText.Dark, AccentCyan.Dark); got < minReadableContrast {
+		t.Errorf("focused button dark contrast = %.2f, want >= %.1f", got, minReadableContrast)
+	}
+	if got := contrastRatio(ButtonOnAccentText.Light, AccentCyan.Light); got < minReadableContrast {
+		t.Errorf("focused button light contrast = %.2f, want >= %.1f", got, minReadableContrast)
 	}
 }
 

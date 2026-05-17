@@ -54,8 +54,8 @@ func DispatchStep(
 
 	if step.Agent != "" || step.Prompt != "" {
 		if ctx.PrepareStepHook != nil {
-			mode := ResolveAgentStepMode(step, ctx)
-			ctx.PrepareStepHook(mode == model.ModeInteractive)
+			invocationContext := ResolveAgentInvocationContext(step, ctx)
+			ctx.PrepareStepHook(invocationContext.IsInteractive())
 		}
 		return ExecuteAgentStep(step, ctx, runner, log)
 	}

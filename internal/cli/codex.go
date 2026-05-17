@@ -19,9 +19,9 @@ type CodexAdapter struct{}
 //
 // Patterns:
 //   - Fresh interactive:  codex --no-alt-screen <prompt>
-//   - Fresh headless:     codex --dangerously-bypass-approvals-and-sandbox exec --json <prompt>
+//   - Fresh headless:     codex --sandbox workspace-write exec --json <prompt>
 //   - Resume interactive: codex resume --no-alt-screen <uuid> <prompt>
-//   - Resume headless:    codex --dangerously-bypass-approvals-and-sandbox exec resume --json <uuid> <prompt>
+//   - Resume headless:    codex --sandbox workspace-write exec resume --json <uuid> <prompt>
 //   - Model override:     appends -m <m>
 //   - Effort override:    appends -c model_reasoning_effort="<effort>"
 //
@@ -31,12 +31,17 @@ type CodexAdapter struct{}
 // the model selected by the workflow/profile across session resume.
 func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 	args := []string{"codex"}
+	context := input.InvocationContext()
 
 	sessionID := normalizeCodexSessionID(input.SessionID)
 	resuming := sessionID != ""
 
-	if input.Headless {
-		args = append(args, "--dangerously-bypass-approvals-and-sandbox", "exec")
+	if context.IsAutonomous() {
+		args = append(args, "--sandbox", "workspace-write")
+	}
+
+	if context.IsHeadless() {
+		args = append(args, "exec")
 		if resuming {
 			args = append(args, "resume", "--json")
 		} else {

@@ -114,6 +114,60 @@ func TestUIModelActionsRenderHorizontallyAndLeftRightMovesFocus(t *testing.T) {
 	}
 }
 
+func TestUIModelBodyWrapsSoftLineBreaksAsParagraphs(t *testing.T) {
+	m := newModel(&model.UIStepRequest{
+		StepID: "explain-tutor",
+		Title:  "Tutorial Step",
+		Body: "The next step opens a separate tutorial agent session. It will review the\n" +
+			"plan, answer questions in context, and preview how the headless implementor\n" +
+			"will execute the task.",
+		Actions: []model.UIAction{{Label: "Continue", Outcome: "continue"}},
+	})
+	m.SetWidth(76)
+
+	view := tuistyle.Sanitize(m.View())
+	lines := strings.Split(view, "\n")
+	for _, line := range lines {
+		if line == "review the" || line == "implementor" {
+			t.Fatalf("body should not orphan YAML source-line tails as standalone wrapped lines:\n%s", view)
+		}
+		if strings.HasSuffix(line, "   ") {
+			t.Fatalf("body lines should not be padded by a width box:\n%q\n\n%s", line, view)
+		}
+	}
+	if !strings.Contains(view, "implementor will") {
+		t.Fatalf("soft line break should keep adjacent words together when wrapping, got:\n%s", view)
+	}
+}
+
+func TestUIModelBodyPreservesIndentedHardLines(t *testing.T) {
+	m := newModel(&model.UIStepRequest{
+		StepID: "intro-ui",
+		Title:  "Live Workflow Demo",
+		Body: "Try navigating now:\n" +
+			"  ↑/↓  move between steps\n" +
+			"  d    drill into a sub-workflow\n" +
+			"  j/k  scroll this pane",
+		Actions: []model.UIAction{{Label: "Continue", Outcome: "continue"}},
+	})
+	m.SetWidth(90)
+
+	view := tuistyle.Sanitize(m.View())
+	for _, want := range []string{
+		"Try navigating now:",
+		"  ↑/↓  move between steps",
+		"  d    drill into a sub-workflow",
+		"  j/k  scroll this pane",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("body should preserve indented hard line %q, got:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Try navigating now: ↑/↓") {
+		t.Fatalf("body should not flatten indented help text into prose, got:\n%s", view)
+	}
+}
+
 func TestUIModelEnterOnFocusedActionFiresOutcomeWithHighlightedInput(t *testing.T) {
 	m := newModel(adapterRequest())
 	m.Update(tea.KeyMsg{Type: tea.KeyDown})

@@ -4,6 +4,8 @@ description: Demonstrates Agent Validator setup and the validation feedback loop
 sessions:
   - name: validator-setup-session
     agent: planner
+  - name: tutor-session
+    agent: planner
   - name: impl-session
     agent: implementor
 
@@ -12,16 +14,43 @@ steps:
     mode: ui
     title: Agent Validator
     body: |
-      Agent Validator checks implementation work with deterministic commands and
-      AI review passes. In this phase you will configure it, run it against the
-      changes from the guided workflow, and see how validation feedback can be
-      routed back into implementation.
+      Agent Validator checks implementation work with deterministic commands and AI review passes. In this phase Agent Runner will temporarily stash the guided workflow changes, configure validation against the current project baseline, restore the changes, and then run validation on them.
     actions:
       - label: Continue
         outcome: continue
 
+  - id: stash-guided-changes
+    command: |
+      set -eu
+      message="agent-runner onboarding guided changes"
+
+      if [ -z "$(git status --porcelain)" ]; then
+        echo "No working tree changes to stash."
+        exit 0
+      fi
+
+      git stash push -u -m "$message"
+
+      if [ -n "$(git status --porcelain)" ]; then
+        echo "Working tree is still dirty after stashing:" >&2
+        git status --short >&2
+        exit 1
+      fi
+
+      latest="$(git stash list --format='%gd %s' | sed -n '1p')"
+      case "$latest" in
+        *"$message"*)
+          echo "Stashed guided changes: $latest"
+          ;;
+        *)
+          echo "Expected newest stash to be named '$message', got: $latest" >&2
+          exit 1
+          ;;
+      esac
+
   - id: init
-    command: agent-validator init
+    command: '"$AGENT_RUNNER_EXECUTABLE" internal validator-init'
+    mode: interactive
 
   - id: setup
     session: validator-setup-session
@@ -29,41 +58,85 @@ steps:
     prompt: |
       Help the user configure Agent Validator for this project.
 
-      You MUST use the agent-validator:validator-setup skill to configure
-      checks and reviews. Explain the choices briefly, keep the setup practical,
-      and complete the step once the validator configuration is ready.
+      You MUST use the agent-validator:validator-setup skill to configure checks and reviews. Explain the choices briefly, keep the setup practical, and complete the step once the validator configuration is ready.
+
+  - id: restore-guided-changes
+    command: |
+      set -eu
+      message="agent-runner onboarding guided changes"
+      stash_ref="$(git stash list --format='%gd %s' | awk -v msg="$message" 'index($0, msg) { print $1; exit }')"
+
+      if [ -z "$stash_ref" ]; then
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "No onboarding stash found; working tree already has changes."
+        else
+          echo "No onboarding stash found; no guided changes to restore."
+        fi
+        exit 0
+      fi
+
+      git stash pop "$stash_ref"
+      echo "Restored guided changes from $stash_ref."
+      git status --short
+      git diff --stat
 
   - id: explain-validation
     mode: ui
     title: Validation Run
     body: |
-      Agent Validator will now run on the changes produced during the guided
-      workflow. If it finds fixable failures, Agent Runner can hand that context
-      back to the implementor session.
+      Agent Runner will first ask the tutor agent to intentionally introduce a small defect in the code produced by the guided workflow, then Agent Validator will run on the result. If validation finds fixable failures, Agent Runner can hand that context back to the implementor session.
     actions:
       - label: Continue
         outcome: continue
 
+  - id: break-it
+    session: tutor-session
+    mode: autonomous
+    prompt: |
+      You are the onboarding "break it" step.
+
+      Use the same tutorial-agent context from the guided workflow. First, identify the code that was implemented by the previous guided workflow. Inspect `git status --short` and `git diff`; if the working tree is clean, inspect the previous commit with `git show --stat --name-only HEAD` and `git show HEAD`.
+
+      Intentionally introduce one or two small, reversible bugs only in that previously implemented code. Do not modify unrelated files just because they would be easier to break. Inspect `.validator/config.yml` and choose defects that the configured validator checks or reviews should catch on the next run.
+
+      Prefer defects that deterministic checks can catch, such as a compile failure, test failure, lint failure, or clearly wrong assertion. If this project only has review gates configured, introduce a clear behavioral bug in code touched during onboarding so review should flag it.
+
+      Keep the change scoped and non-destructive. Do not delete unrelated files. Do not commit. When done, summarize the injected defect(s) briefly.
+
   - id: prepare-fix-context
     session: impl-session
-    mode: headless
+    mode: autonomous
     prompt: |
-      Briefly acknowledge you are ready to fix any validation failures found next.
-      Output a single line with no other text: Ready
+      Briefly acknowledge you are ready to fix any validation failures found next. Output a single line with no other text: Ready
 
   - id: run-validator
     workflow: ../core/run-validator.yaml
+
+  - id: review-validator-status
+    session: tutor-session
+    mode: interactive
+    prompt: |
+      You are tutoring the user during Agent Runner onboarding.
+
+      Start by using the agent-validator:validator-status skill to report what happened in the validator run, including whether the intentional break was caught and whether the implementor fixed it.
+
+      Verify the current code state yourself. Inspect the working tree, compare against the code that existed before your break-it step, and confirm whether the intentional bug(s) you introduced were fixed.
+
+      Inspect the validator log artifacts yourself. Read the relevant `validator_logs/*.json` review result files, especially files named like `review_*.json`, and identify which reviewer gates ran, whether each reviewer reported violations, what issues they caught, and whether those issues were fixed, skipped, or absent in the final validator status. Do not infer that reviews passed merely because JSON or log files exist.
+
+      Also report whether Agent Validator found and fixed any additional issues beyond the intentional bug(s).
+
+      If the user asks follow-up questions about validator behavior, failures, logs, skipped items, or why something passed or failed, use the agent-validator:validator-help skill before answering.
+
+      Use the packaged documentation at {{session_dir}}/bundled/onboarding/docs/ for general Agent Runner Q&A. When the user's questions are answered, complete the step so onboarding can continue.
 
   - id: summary-ui
     mode: ui
     title: Validation Feedback Loop
     body: |
-      Validation is complete.
+      Validation review is complete.
 
-      The feedback-loop pattern is: implement a change, validate it, route any
-      failures back to the implementor, and repeat until checks and reviews pass.
-      This keeps reliability work inside the workflow instead of relying on a
-      manual handoff.
+      The feedback-loop pattern is: implement a change, validate it, route any failures back to the implementor, and repeat until checks and reviews pass. This keeps reliability work inside the workflow instead of relying on a manual handoff.
     actions:
       - label: Continue
         outcome: continue

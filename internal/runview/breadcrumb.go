@@ -57,26 +57,26 @@ func (m *Model) renderBreadcrumb() string {
 func (m *Model) styledRunStatus() string {
 	// Live-run mode: blink while running, then show result.
 	if m.running {
-		return tuistyle.StatusSuccess.Bold(true).Render("running")
+		return tuistyle.StatusSuccess.Render("running")
 	}
 	if m.liveResult != "" {
 		switch m.liveResult {
 		case "failed", "stopped":
 			return tuistyle.StatusFailed.Bold(true).Render(m.liveResult)
 		default:
-			return tuistyle.StatusSuccess.Bold(true).Render("completed")
+			return tuistyle.StatusSuccess.Render("completed")
 		}
 	}
 	// Inspect / list mode: use the run-lock and root status.
 	if m.active {
-		return tuistyle.StatusSuccess.Bold(true).Render("active")
+		return tuistyle.StatusSuccess.Render("active")
 	}
 	status := m.rootStatus()
 	switch status {
 	case StatusFailed:
 		return tuistyle.StatusFailed.Bold(true).Render("failed")
 	case StatusSuccess:
-		return tuistyle.StatusSuccess.Bold(true).Render("completed")
+		return tuistyle.StatusSuccess.Render("completed")
 	default:
 		hint := " (r to resume)"
 		if m.entered == FromDefinition {
@@ -95,7 +95,33 @@ func formatLiveElapsed(start, now time.Time) string {
 	if elapsed < 0 {
 		elapsed = 0
 	}
-	return "elapsed " + formatDuration(elapsed.Milliseconds())
+	return "elapsed " + formatElapsedSeconds(elapsed)
+}
+
+func formatElapsedSeconds(elapsed time.Duration) string {
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	totalSecs := int(elapsed / time.Second)
+	if totalSecs < 60 {
+		return fmt.Sprintf("%ds", totalSecs)
+	}
+	if totalSecs < 3600 {
+		mins := totalSecs / 60
+		remainSecs := totalSecs % 60
+		return fmt.Sprintf("%dm %ds", mins, remainSecs)
+	}
+	hours := totalSecs / 3600
+	mins := (totalSecs % 3600) / 60
+	remainSecs := totalSecs % 60
+	parts := []string{fmt.Sprintf("%dh", hours)}
+	if mins > 0 || remainSecs > 0 {
+		parts = append(parts, fmt.Sprintf("%dm", mins))
+	}
+	if remainSecs > 0 {
+		parts = append(parts, fmt.Sprintf("%ds", remainSecs))
+	}
+	return strings.Join(parts, " ")
 }
 
 func (m *Model) rootStatus() NodeStatus {

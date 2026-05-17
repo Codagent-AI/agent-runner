@@ -64,7 +64,7 @@ other_top_level: true
 			t.Fatalf("default agents missing %q in %#v", want, defaultAgents)
 		}
 	}
-	for _, absent := range []string{"interactive_base", "headless_base"} {
+	for _, absent := range []string{"interactive_base", "autonomous_base"} {
 		if _, ok := defaultAgents[absent]; ok {
 			t.Fatalf("default agents should not contain %q", absent)
 		}
@@ -75,7 +75,7 @@ other_top_level: true
 	if diff := cmp.Diff(map[string]any{"default_mode": "interactive", "cli": "claude", "model": "opus"}, defaultAgents["planner"]); diff != "" {
 		t.Fatalf("planner mismatch (-want +got):\n%s", diff)
 	}
-	if diff := cmp.Diff(map[string]any{"default_mode": "headless", "cli": "codex", "model": "gpt-5"}, defaultAgents["implementor"]); diff != "" {
+	if diff := cmp.Diff(map[string]any{"default_mode": "autonomous", "cli": "codex", "model": "gpt-5"}, defaultAgents["implementor"]); diff != "" {
 		t.Fatalf("implementor mismatch (-want +got):\n%s", diff)
 	}
 }
