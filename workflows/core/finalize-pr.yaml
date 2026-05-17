@@ -10,8 +10,7 @@ steps:
     session: lead-agent
     mode: headless
     prompt: |
-      Invoke codagent:push-pr to commit, push, and create or update the pull request.
-      Follow the project's commit message conventions and prepend [{{step_id}}].
+      Invoke codagent:push-pr to commit, push, and create or update the pull request. Follow the project's commit message conventions and prepend [{{step_id}}].
 
   - id: ci-fix-loop
     loop:
@@ -23,9 +22,7 @@ steps:
         capture: ci_report
         continue_on_failure: true
         prompt: |
-          Invoke codagent:wait-ci to poll CI status and gather review comments.
-          Treat top-level bot summaries, rate-limit notices, and already-resolved reports as informational.
-          Report comments only when actionable unresolved review feedback remains.
+          Invoke codagent:wait-ci to poll CI status and gather review comments. Treat top-level bot summaries, rate-limit notices, and already-resolved reports as informational. Report comments only when actionable unresolved review feedback remains.
 
       - id: ci-status-gate
         script: ci-status-gate.sh
@@ -45,14 +42,10 @@ steps:
         mode: headless
         skip_if: previous_success
         prompt: |
-          CI has failures or unresolved review comments. Invoke codagent:fix-pr to
-          address them. Follow the project's commit message conventions and prepend [{{step_id}}].
+          CI has failures or unresolved review comments. Invoke codagent:fix-pr to address them. Follow the project's commit message conventions and prepend [{{step_id}}].
 
   - id: verify-final
     session: resume
     mode: headless
     prompt: |
-      Invoke codagent:wait-ci to verify the final fix cycle made CI green.
-      Treat top-level bot summaries, rate-limit notices, and already-resolved reports as informational.
-      Report comments only when actionable unresolved review feedback remains.
-      Report the final status to the user.
+      Invoke codagent:wait-ci to verify the final fix cycle made CI green. Treat top-level bot summaries, rate-limit notices, and already-resolved reports as informational. Report comments only when actionable unresolved review feedback remains. Report the final status to the user.

@@ -22,10 +22,7 @@ steps:
   - id: proposal
     session: lead-agent
     prompt: |
-      Help the user write a change proposal.
-      First, ask the user what the change is about. DO NOT attempt to guess.
-      Then, you MUST use the codagent:propose skill.
-      Once the proposal document is written, continue to the next step.
+      Help the user write a change proposal. First, ask the user what the change is about. DO NOT attempt to guess. Then, you MUST use the codagent:propose skill. Once the proposal document is written, continue to the next step.
 
   - id: proposal-review
     workflow: ../core/review-proposal.yaml
@@ -35,33 +32,23 @@ steps:
   - id: specs
     session: resume
     prompt: |
-      Help the user write the change spec.
-      You MUST use the codagent:spec skill.
-      Once all spec documents are written, continue to the next step.
+      Help the user write the change spec. You MUST use the codagent:spec skill. Once all spec documents are written, continue to the next step.
 
   - id: design
     session: resume
     prompt: |
-      Help the user design the change.
-      You MUST use the codagent:design skill.
-      Once the design document is written, continue to the next step.
+      Help the user design the change. You MUST use the codagent:design skill. Once the design document is written, continue to the next step.
 
   - id: tasks
     session: resume
     prompt: |
-      Help the user plan tasks for the change.
-      You MUST use the codagent:plan-tasks skill.
-      You MUST create detailed task files under openspec/changes/{{change_name}}/tasks/*.md.
-      You MUST also create openspec/changes/{{change_name}}/tasks.md as an index that links to those task files.
-      The implement workflow requires at least one matching tasks/*.md file.
-      Once all task documents are written, continue to the next step.
+      Help the user plan tasks for the change. You MUST use the codagent:plan-tasks skill. You MUST create detailed task files under openspec/changes/{{change_name}}/tasks/*.md. You MUST also create openspec/changes/{{change_name}}/tasks.md as an index that links to those task files. The implement workflow requires at least one matching tasks/*.md file. Once all task documents are written, continue to the next step.
 
   - id: pre-review-validate
     mode: headless
     session: resume
     prompt: |
-      Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports.
-      Keep running the command and fixing until it passes with no errors.
+      Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports. Keep running the command and fixing until it passes with no errors.
 
       Then dry-run the delta apply: `openspec validate` does NOT verify that MODIFIED/REMOVED/RENAMED headers exist in the target main spec — that check only runs at archive time. For every delta file under `openspec/changes/{{change_name}}/specs/<capability>/spec.md`:
       - Under `## MODIFIED Requirements` and `## REMOVED Requirements`: each `### Requirement: <name>` header MUST appear verbatim (whitespace-insensitive) in `openspec/specs/<capability>/spec.md`.
@@ -73,15 +60,13 @@ steps:
     mode: headless
     session: resume
     prompt: |
-      You MUST use a subagent to run the codagent:review-spec skill to review the change artifacts at openspec/changes/{{change_name}}.
-      Then address issues the review subagent finds.
+      You MUST use a subagent to run the codagent:review-spec skill to review the change artifacts at openspec/changes/{{change_name}}. Then address issues the review subagent finds.
 
   - id: post-review-validate
     mode: headless
     session: resume
     prompt: |
-      Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports.
-      Keep running the command and fixing until it passes with no errors.
+      Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports. Keep running the command and fixing until it passes with no errors.
 
       Then repeat the delta-apply dry-run from the pre-review-validate step: for every `### Requirement:` header under `## MODIFIED`, `## REMOVED`, or `## RENAMED` (FROM) sections in `openspec/changes/{{change_name}}/specs/<capability>/spec.md`, confirm the exact header exists in `openspec/specs/<capability>/spec.md`. Fix any mismatches before proceeding.
 

@@ -14,18 +14,14 @@ steps:
   - id: plan
     session: lead-agent
     prompt: |
-      Help the user plan the change.
-      First, ask the user what the change is about. DO NOT attempt to guess.
-      Then, you MUST use the codagent:simple-plan skill.
+      Help the user plan the change. First, ask the user what the change is about. DO NOT attempt to guess. Then, you MUST use the codagent:simple-plan skill.
 
   - id: locate-task
     session: lead-agent
     mode: headless
     capture: task_file
     prompt: |
-      You just planned a simple change that produced a single task file.
-      Output the path to that task file on a single line with NO other text,
-      NO markdown fences, and NO explanation.
+      You just planned a simple change that produced a single task file. Output the path to that task file on a single line with NO other text, NO markdown fences, and NO explanation.
 
       Example valid output: some/path/tasks/001-do-the-thing.md
 
@@ -33,10 +29,7 @@ steps:
     session: lead-agent
     mode: headless
     prompt: |
-      Implement the task described in {{task_file}}.
-      You MUST use the codagent:implement-with-tdd skill.
-      When you are done implementing, commit your changes following the project's
-      commit message conventions and prepend [{{step_id}}]. Then summarize to the user what you changed.
+      Implement the task described in {{task_file}}. You MUST use the codagent:implement-with-tdd skill. When you are done implementing, commit your changes following the project's commit message conventions and prepend [{{step_id}}]. Then summarize to the user what you changed.
 
   - id: run-validator
     workflow: ../core/run-validator.yaml
@@ -49,10 +42,5 @@ steps:
     session: lead-agent
     mode: headless
     prompt: |
-      There are uncommitted changes leftover after implementing the task described in {{task_file}}.
-      Run git status and git diff to review them. Only stage and commit files
-      that are related to this task and appropriate to check into git — ignore
-      unrelated changes, generated artifacts, or files that should be gitignored.
-      Follow the project's commit message conventions and prepend [{{step_id}}].
-      Summarize which files you committed and which you left out, and why.
+      There are uncommitted changes leftover after implementing the task described in {{task_file}}. Run git status and git diff to review them. Only stage and commit files that are related to this task and appropriate to check into git — ignore unrelated changes, generated artifacts, or files that should be gitignored. Follow the project's commit message conventions and prepend [{{step_id}}]. Summarize which files you committed and which you left out, and why.
     skip_if: previous_success

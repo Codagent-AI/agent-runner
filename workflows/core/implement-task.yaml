@@ -13,10 +13,7 @@ steps:
     agent: implementor
     session: new
     prompt: |
-      Implement the task described in {{task_file}}.
-      You MUST use the codagent:implement-with-tdd skill.
-      When you are done implementing, commit your changes following the project's
-      commit message conventions and prepend [{{step_id}}]. Then summarize to the user what you changed.
+      Implement the task described in {{task_file}}. You MUST use the codagent:implement-with-tdd skill. When you are done implementing, commit your changes following the project's commit message conventions and prepend [{{step_id}}]. Then summarize to the user what you changed.
 
   - id: run-validator
     workflow: run-validator.yaml
@@ -28,12 +25,7 @@ steps:
   - id: commit-leftovers-if-needed
     session: resume
     prompt: |
-      There are uncommitted changes leftover after implementing the task described in {{task_file}}.
-      Run git status and git diff to review them. Only stage and commit files
-      that are related to this task and appropriate to check into git — ignore
-      unrelated changes, generated artifacts, or files that should be gitignored.
-      Follow the project's commit message conventions and prepend [{{step_id}}].
-      Summarize which files you committed and which you left out, and why.
+      There are uncommitted changes leftover after implementing the task described in {{task_file}}. Run git status and git diff to review them. Only stage and commit files that are related to this task and appropriate to check into git — ignore unrelated changes, generated artifacts, or files that should be gitignored. Follow the project's commit message conventions and prepend [{{step_id}}]. Summarize which files you committed and which you left out, and why.
     skip_if: previous_success
 
   - id: session-report

@@ -18,16 +18,13 @@ steps:
   - id: plan
     agent: planner
     prompt: |
-      Help the user plan the change.
-      First, ask the user what the change is about. DO NOT attempt to guess.
-      Then, you MUST use the codagent:simple-plan skill.
+      Help the user plan the change. First, ask the user what the change is about. DO NOT attempt to guess. Then, you MUST use the codagent:simple-plan skill.
 
   - id: validate
     mode: headless
     session: resume
     prompt: |
-      Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports.
-      Keep running the command and fixing until it passes with no errors.
+      Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports. Keep running the command and fixing until it passes with no errors.
 
   - id: commit-openspec
     command: |
@@ -39,10 +36,7 @@ steps:
     session: resume
     mode: headless
     prompt: |
-      Implement the task described in openspec/changes/{{change_name}}/tasks.md.
-      You MUST use the codagent:implement-with-tdd skill.
-      When you are done implementing, commit your changes following the project's
-      commit message conventions and prepend [{{step_id}}]. Then summarize to the user what you changed.
+      Implement the task described in openspec/changes/{{change_name}}/tasks.md. You MUST use the codagent:implement-with-tdd skill. When you are done implementing, commit your changes following the project's commit message conventions and prepend [{{step_id}}]. Then summarize to the user what you changed.
 
   - id: run-validator
     workflow: ../core/run-validator.yaml
@@ -55,12 +49,7 @@ steps:
     session: resume
     mode: headless
     prompt: |
-      There are uncommitted changes leftover after implementing the task described in openspec/changes/{{change_name}}/tasks.md.
-      Run git status and git diff to review them. Only stage and commit files
-      that are related to this task and appropriate to check into git — ignore
-      unrelated changes, generated artifacts, or files that should be gitignored.
-      Follow the project's commit message conventions and prepend [{{step_id}}].
-      Summarize which files you committed and which you left out, and why.
+      There are uncommitted changes leftover after implementing the task described in openspec/changes/{{change_name}}/tasks.md. Run git status and git diff to review them. Only stage and commit files that are related to this task and appropriate to check into git — ignore unrelated changes, generated artifacts, or files that should be gitignored. Follow the project's commit message conventions and prepend [{{step_id}}]. Summarize which files you committed and which you left out, and why.
     skip_if: previous_success
 
   - id: archive
