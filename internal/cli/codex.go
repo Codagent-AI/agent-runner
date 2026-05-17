@@ -31,11 +31,12 @@ type CodexAdapter struct{}
 // the model selected by the workflow/profile across session resume.
 func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 	args := []string{"codex"}
+	context := input.InvocationContext()
 
 	sessionID := normalizeCodexSessionID(input.SessionID)
 	resuming := sessionID != ""
 
-	if input.Headless {
+	if context.IsHeadless() {
 		args = append(args, "--dangerously-bypass-approvals-and-sandbox", "exec")
 		if resuming {
 			args = append(args, "resume", "--json")

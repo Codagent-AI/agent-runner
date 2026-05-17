@@ -81,6 +81,82 @@ func TestLoadThemeValues(t *testing.T) {
 	}
 }
 
+func TestLoadAutonomousBackendValues(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		want    AutonomousBackend
+		wantErr string
+	}{
+		{name: "interactive claude", body: "autonomous_backend: interactive-claude\n", want: BackendInteractiveClaude},
+		{name: "interactive", body: "autonomous_backend: interactive\n", want: BackendInteractive},
+		{name: "headless", body: "autonomous_backend: headless\n", want: BackendHeadless},
+		{name: "missing defaults headless", body: "theme: dark\n", want: BackendHeadless},
+		{name: "invalid rejected", body: "autonomous_backend: magic\n", wantErr: `invalid autonomous_backend "magic"`},
+		{name: "sequence rejected", body: "autonomous_backend: [headless]\n", wantErr: "invalid autonomous_backend"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			writeSettingsFile(t, home, tt.body)
+
+			got, err := Load()
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatal("Load() returned nil error, want validation error")
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Load() error = %v, want containing %q", err, tt.wantErr)
+				}
+				for _, valid := range []string{"headless", "interactive", "interactive-claude"} {
+					if !strings.Contains(err.Error(), valid) {
+						t.Fatalf("Load() error = %v, want valid option %q", err, valid)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() returned error: %v", err)
+			}
+			if got.AutonomousBackend != tt.want {
+				t.Fatalf("Load().AutonomousBackend = %q, want %q", got.AutonomousBackend, tt.want)
+			}
+		})
+	}
+}
+
+func TestSavePreservesAutonomousBackendOnUnrelatedWrite(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeSettingsFile(t, home, "autonomous_backend: interactive\ntheme: light\nexperimental_foo: 7\n")
+
+	settings, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	settings.Theme = ThemeDark
+	if err := Save(settings); err != nil {
+		t.Fatalf("Save() returned error: %v", err)
+	}
+
+	reloaded, err := Load()
+	if err != nil {
+		t.Fatalf("Reload() returned error: %v", err)
+	}
+	if reloaded.AutonomousBackend != BackendInteractive {
+		t.Fatalf("AutonomousBackend = %q, want interactive", reloaded.AutonomousBackend)
+	}
+	body, err := os.ReadFile(filepath.Join(home, ".agent-runner", "settings.yaml"))
+	if err != nil {
+		t.Fatalf("ReadFile(settings) returned error: %v", err)
+	}
+	if !strings.Contains(string(body), "experimental_foo: 7") {
+		t.Fatalf("settings body lost unrelated key:\n%s", body)
+	}
+}
+
 func TestSaveCreatesParentAndWritesMode0600(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

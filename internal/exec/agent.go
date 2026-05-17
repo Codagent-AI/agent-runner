@@ -3,10 +3,12 @@ package exec
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mattn/go-isatty"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
@@ -16,18 +18,23 @@ import (
 	"github.com/codagent/agent-runner/internal/pty"
 	"github.com/codagent/agent-runner/internal/session"
 	"github.com/codagent/agent-runner/internal/textfmt"
+	"github.com/codagent/agent-runner/internal/usersettings"
 )
 
 // interactiveRunnerFn runs an interactive agent step inside a PTY.
 // Defaults to pty.RunInteractive; replaced in tests.
 var interactiveRunnerFn = pty.RunInteractive
 
+var isStdinTerminal = func() bool {
+	return isatty.IsTerminal(os.Stdin.Fd())
+}
+
 // continuationMarkerPrefix begins the per-step text marker used by interactive
 // agents to signal completion through the PTY output scanner.
 const continuationMarkerPrefix = "AGENT_RUNNER_CONTINUE_"
 
-// headlessPreamble is prepended to headless prompts to reinforce autonomous behavior.
-const headlessPreamble = "You are running autonomously in headless mode with no human in the loop. " +
+// autonomyPreamble is prepended to autonomous prompts to reinforce autonomous behavior.
+const autonomyPreamble = "You are running autonomously in headless mode with no human in the loop. " +
 	"Do not stop to ask for confirmation or clarification. " +
 	"Do not say things like \"let me know\", \"ready when you are\", or \"shall I proceed\". " +
 	"Make decisions and complete the entire task.\n\n"
@@ -114,6 +121,8 @@ type stderrWrapperSetter interface {
 }
 
 // ExecuteAgentStep runs an agent step using the resolved CLI adapter.
+//
+//nolint:funlen // This orchestrates one step's lifecycle; helpers own the sub-decisions.
 func ExecuteAgentStep(
 	step *model.Step,
 	ctx *model.ExecutionContext,
@@ -134,11 +143,11 @@ func ExecuteAgentStep(
 	}
 
 	mode := resolveModeFromProfile(step, profile)
-	headless := mode == model.ModeHeadless
+	invocationContext := cli.ContextInteractive
 
-	if step.Capture != "" && !headless {
+	if errMsg := captureModeError(step, mode); errMsg != "" {
 		emitAgentFailure(ctx, prefix, startTime, string(mode), step,
-			fmt.Sprintf("capture requires headless mode, but step %q resolved to %s (check agent profile)", step.ID, mode))
+			errMsg)
 		return OutcomeFailed, nil
 	}
 
@@ -154,6 +163,9 @@ func ExecuteAgentStep(
 		return OutcomeFailed, nil
 	}
 
+	invocationContext = resolveInvocationContext(mode, ctx, cliName, log)
+	headless := invocationContext.IsHeadless()
+
 	if !headless {
 		if r, ok := adapter.(cli.InteractiveRejector); ok {
 			if modeErr := r.InteractiveModeError(); modeErr != nil {
@@ -163,8 +175,8 @@ func ExecuteAgentStep(
 		}
 	}
 
-	continueMarker := continueMarkerForMode(headless)
-	input := buildAdapterInput(step, ctx, profile, adapter, prompt, enrichment, sessionID, isResume, headless, continueMarker)
+	continueMarker := continueMarkerForContext(invocationContext)
+	input := buildAdapterInput(step, ctx, profile, adapter, prompt, enrichment, sessionID, isResume, invocationContext, continueMarker)
 	args := adapter.BuildArgs(&input)
 	resolvedModel := input.Model
 	if resolvedModel == "" && profile != nil {
@@ -229,6 +241,41 @@ func ExecuteAgentStep(
 	emitAgentEnd(ctx, prefix, startTime, discoveredID, outcome, filteredStdout, result.Stderr)
 
 	return outcome, nil
+}
+
+func resolveInvocationContext(mode model.StepMode, ctx *model.ExecutionContext, cliName string, log Logger) cli.InvocationContext {
+	if mode != model.ModeHeadless {
+		return cli.ContextInteractive
+	}
+
+	wantsInteractive := false
+	switch usersettings.AutonomousBackend(ctx.AutonomousBackend) {
+	case usersettings.BackendInteractive:
+		wantsInteractive = true
+	case usersettings.BackendInteractiveClaude:
+		wantsInteractive = cliName == "claude"
+	case usersettings.BackendHeadless, "":
+		wantsInteractive = false
+	default:
+		wantsInteractive = false
+	}
+	if !wantsInteractive {
+		return cli.ContextAutonomousHeadless
+	}
+	if isStdinTerminal() {
+		return cli.ContextAutonomousInteractive
+	}
+	if log != nil {
+		log.Errorf("  autonomous backend requested interactive mode for %s, but stdin is not a TTY; falling back to headless\n", cliName)
+	}
+	return cli.ContextAutonomousHeadless
+}
+
+func captureModeError(step *model.Step, mode model.StepMode) string {
+	if step.Capture == "" || mode == model.ModeHeadless {
+		return ""
+	}
+	return fmt.Sprintf("capture requires headless mode, but step %q resolved to %s (check agent profile)", step.ID, mode)
 }
 
 func configureAgentOutputWrappers(adapter cli.Adapter, runner ProcessRunner) func() {
@@ -348,7 +395,8 @@ func buildAdapterInput(
 	profile *config.ResolvedAgent,
 	adapter cli.Adapter,
 	prompt, enrichment, sessionID string,
-	isResume, headless bool,
+	isResume bool,
+	invocationContext cli.InvocationContext,
 	continueMarker string,
 ) cli.BuildArgsInput {
 	// Build the full prompt: [system_prompt] [step prompt] [engine enrichment]
@@ -359,9 +407,12 @@ func buildAdapterInput(
 	if enrichment != "" {
 		fullPrompt = fullPrompt + "\n\n" + enrichment
 	}
-	if headless {
+	if invocationContext.IsAutonomous() {
 		if !isResume {
-			fullPrompt = headlessPreamble + fullPrompt
+			fullPrompt = autonomyPreamble + fullPrompt
+		}
+		if invocationContext == cli.ContextAutonomousInteractive {
+			fullPrompt += completionInstruction(continueMarker)
 		}
 	} else {
 		fullPrompt = buildStepPrefix(step.ID, ctx, ctx.WorkflowResumed, isResume) + fullPrompt + completionInstruction(continueMarker)
@@ -372,17 +423,18 @@ func buildAdapterInput(
 		Resume:    isResume,
 		Model:     profile.Model,
 		Effort:    profile.Effort,
-		Headless:  headless,
+		Headless:  invocationContext.IsHeadless(),
+		Context:   invocationContext,
 	}
 
 	// Block AskUserQuestion in headless mode so the agent cannot stall
 	// waiting for input. Applies to fresh and resumed headless sessions alike.
-	if headless {
+	if invocationContext.IsAutonomous() {
 		input.DisallowedTools = []string{"AskUserQuestion"}
 	}
 
 	switch {
-	case headless:
+	case invocationContext.IsHeadless():
 		input.Prompt = fullPrompt
 	case adapter.SupportsSystemPrompt():
 		input.SystemPrompt = fullPrompt
@@ -415,8 +467,8 @@ func newContinueMarker() string {
 	return continuationMarkerPrefix + strings.ReplaceAll(uuid.New().String(), "-", "")
 }
 
-func continueMarkerForMode(headless bool) string {
-	if headless {
+func continueMarkerForContext(context cli.InvocationContext) string {
+	if context.IsHeadless() {
 		return ""
 	}
 	return newContinueMarker()

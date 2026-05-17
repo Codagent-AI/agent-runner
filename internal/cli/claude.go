@@ -28,6 +28,7 @@ type ClaudeAdapter struct{}
 // model is honored on fresh sessions and inherited thereafter.
 func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 	args := []string{"claude"}
+	context := input.InvocationContext()
 
 	if input.SessionID != "" {
 		if input.Resume {
@@ -45,7 +46,7 @@ func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 		args = append(args, "--effort", input.Effort)
 	}
 
-	if input.Headless {
+	if context.IsHeadless() {
 		args = append(args, "-p")
 	}
 

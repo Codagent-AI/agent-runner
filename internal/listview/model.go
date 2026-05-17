@@ -384,6 +384,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+//nolint:gocritic // Bubble Tea messages are passed by value throughout this model.
 func (m *Model) handleSettingsSaved(msg settingseditor.SavedMsg) (tea.Model, tea.Cmd) {
 	m.settingsEditor = nil
 	m.applyUserTheme(msg.Settings.Theme)
@@ -494,6 +495,7 @@ func (m *Model) loadUserSettings() (usersettings.Settings, error) {
 	return usersettings.Load()
 }
 
+//nolint:gocritic // Matches settingseditor.WithSave, which persists a complete settings value.
 func (m *Model) saveUserSettings(settings usersettings.Settings) error {
 	if m.saveSettings != nil {
 		return m.saveSettings(settings)

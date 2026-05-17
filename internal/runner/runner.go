@@ -17,6 +17,7 @@ import (
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/stateio"
+	"github.com/codagent/agent-runner/internal/usersettings"
 	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
@@ -230,7 +231,14 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		writeMetaJSON(projectDir, cwd)
 	}
 
-	auditLogger, ctx := buildExecutionContext(workflow, params, opts, sessionDir)
+	auditLogger, ctx, err := buildExecutionContext(workflow, params, opts, sessionDir)
+	if err != nil {
+		runlock.Delete(sessionDir)
+		if auditLogger != nil {
+			auditLogger.Close()
+		}
+		return nil, err
+	}
 
 	log := opts.Log
 	if log == nil {
@@ -258,7 +266,7 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	}, nil
 }
 
-func buildExecutionContext(workflow *model.Workflow, params map[string]string, opts *Options, sessionDir string) (*audit.Logger, *model.ExecutionContext) {
+func buildExecutionContext(workflow *model.Workflow, params map[string]string, opts *Options, sessionDir string) (*audit.Logger, *model.ExecutionContext, error) {
 	var engineRef interface{}
 	if opts.Engine != nil {
 		engineRef = opts.Engine
@@ -275,11 +283,17 @@ func buildExecutionContext(workflow *model.Workflow, params map[string]string, o
 		profileStore = opts.ProfileStore
 	}
 
+	settings, err := usersettings.Load()
+	if err != nil {
+		return auditLogger, nil, err
+	}
+
 	ctx := model.NewRootContext(&model.RootContextOptions{
 		Params:              params,
 		WorkflowFile:        opts.WorkflowFile,
 		WorkflowName:        workflow.Name,
 		WorkflowDescription: workflow.Description,
+		AutonomousBackend:   string(settings.AutonomousBackend),
 		SessionDir:          sessionDir,
 		EngineRef:           engineRef,
 		ProfileStore:        profileStore,
@@ -300,7 +314,7 @@ func buildExecutionContext(workflow *model.Workflow, params map[string]string, o
 	if opts.From != "" {
 		ctx.WorkflowResumed = true
 	}
-	return auditLogger, ctx
+	return auditLogger, ctx, nil
 }
 
 func emitRunStart(rs *runState, opts *Options) {

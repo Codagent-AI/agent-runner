@@ -39,7 +39,8 @@ func (a *CursorAdapter) ExecutableName() string {
 // model it was started with.
 func (a *CursorAdapter) BuildArgs(input *BuildArgsInput) []string {
 	args := []string{"agent"}
-	if input.Headless {
+	context := input.InvocationContext()
+	if context.IsHeadless() {
 		args = append(args, "-p", "--output-format", "stream-json", "--force", "--trust")
 	}
 

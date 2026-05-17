@@ -130,6 +130,32 @@ func TestMaterializeBundledAssetsCreatesMarkerForNamespaceWithoutAssets(t *testi
 	}
 }
 
+func TestPrepareRunPopulatesAutonomousBackendFromUserSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	settingsPath := filepath.Join(home, ".agent-runner", "settings.yaml")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("mkdir settings dir: %v", err)
+	}
+	if err := os.WriteFile(settingsPath, []byte("autonomous_backend: interactive-claude\n"), 0o600); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	w := model.Workflow{Name: "test", Steps: []model.Step{shellStep("s", "echo hi")}}
+	h, err := PrepareRun(&w, nil, &Options{
+		ProcessRunner: &mockRunner{},
+		Log:           &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareRun() returned error: %v", err)
+	}
+	defer finalizeRun(h.rs, ResultSuccess)
+
+	if got := h.rs.ctx.AutonomousBackend; got != "interactive-claude" {
+		t.Fatalf("ctx.AutonomousBackend = %q, want interactive-claude", got)
+	}
+}
+
 func TestRunWorkflow(t *testing.T) {
 	t.Run("runs single step workflow", func(t *testing.T) {
 		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}}}

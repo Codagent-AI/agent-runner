@@ -29,7 +29,8 @@ type OpenCodeAdapter struct{}
 // keeps the settings it was started with.
 func (a *OpenCodeAdapter) BuildArgs(input *BuildArgsInput) []string {
 	var args []string
-	if input.Headless {
+	context := input.InvocationContext()
+	if context.IsHeadless() {
 		args = []string{"opencode", "run", "--format", "json", "--dangerously-skip-permissions"}
 	} else {
 		args = []string{"opencode", "--prompt", input.Prompt}
@@ -42,11 +43,11 @@ func (a *OpenCodeAdapter) BuildArgs(input *BuildArgsInput) []string {
 		args = append(args, "--model", input.Model)
 	}
 
-	if input.Headless && !resuming && input.Effort != "" {
+	if context.IsHeadless() && !resuming && input.Effort != "" {
 		args = append(args, "--variant", input.Effort)
 	}
 
-	if input.Headless {
+	if context.IsHeadless() {
 		args = append(args, input.Prompt)
 	}
 	return args

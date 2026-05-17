@@ -57,9 +57,10 @@ func TestAdapterDetectionFailureIsFirstSurface(t *testing.T) {
 // With models for claude returning ["opus"] and codex returning nil:
 // Enter 1: interactive CLI (claude) → model screen
 // Enter 2: interactive model (opus) → headless CLI
-// Enter 3: headless CLI (claude) → model screen
-// Enter 4: headless model (opus) → scope
-// Enter 5: scope (global) → write → demo prompt
+// Enter 3: headless CLI (codex) → autonomous backend
+// Enter 4: autonomous backend (interactive-claude) → default headless model notice
+// Enter 5: continue → scope
+// Enter 6: scope (global) → write → demo prompt
 func TestSetupCompletesAndShowsDemoPrompt(t *testing.T) {
 	var wrote []profilewrite.Request
 	var saved []usersettings.Settings
@@ -85,7 +86,7 @@ func TestSetupCompletesAndShowsDemoPrompt(t *testing.T) {
 	}
 	m := NewModel(&deps)
 
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter")
 
 	view := m.View()
 	if !strings.Contains(view, "Continue") || !strings.Contains(view, "Not now") || !strings.Contains(view, "Dismiss") {
@@ -106,10 +107,89 @@ func TestSetupCompletesAndShowsDemoPrompt(t *testing.T) {
 	}
 
 	wantSaved := []usersettings.Settings{{
-		Setup: usersettings.SetupSettings{CompletedAt: "2026-05-04T12:00:00Z"},
+		AutonomousBackend: usersettings.BackendInteractiveClaude,
+		Setup:             usersettings.SetupSettings{CompletedAt: "2026-05-04T12:00:00Z"},
 	}}
 	if diff := cmp.Diff(wantSaved, saved, cmpopts.IgnoreUnexported(usersettings.Settings{})); diff != "" {
 		t.Fatalf("saved settings mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestAutonomousBackendScreenAppearsAfterImplementorCLI(t *testing.T) {
+	m := NewModel(&Deps{
+		Detector: AdapterDetectorFunc(func() ([]string, error) { return []string{"claude", "codex"}, nil }),
+		Models:   ModelDiscovererFunc(func(string) ([]string, error) { return nil, nil }),
+		Settings: SettingsStoreFunc(func(func(usersettings.Settings) usersettings.Settings) error {
+			return nil
+		}),
+	})
+
+	sendKeys(t, m, "enter", "enter", "enter")
+
+	view := m.View()
+	for _, want := range []string{
+		"Autonomous Backend",
+		"Headless",
+		"Interactive",
+		"Interactive for Claude",
+		"non-interactive print mode",
+		"interactive session with autonomy instructions",
+		"Claude only",
+		"Interactive for Claude -",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("autonomous backend screen missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestAutonomousBackendSelectionPersistsOnSetupCompletion(t *testing.T) {
+	var saved []usersettings.Settings
+	m := NewModel(&Deps{
+		Detector:   AdapterDetectorFunc(func() ([]string, error) { return []string{"claude"}, nil }),
+		Models:     ModelDiscovererFunc(func(string) ([]string, error) { return nil, nil }),
+		Profiles:   ProfileWriterFunc(func(*profilewrite.Request) error { return nil }),
+		Collisions: CollisionDetectorFunc(func(string) ([]string, error) { return nil, nil }),
+		Settings: SettingsStoreFunc(func(mutator func(usersettings.Settings) usersettings.Settings) error {
+			saved = append(saved, mutator(usersettings.Settings{}))
+			return nil
+		}),
+		Clock:   func() time.Time { return time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC) },
+		HomeDir: func() (string, error) { return "/home/me", nil },
+		Cwd:     func() (string, error) { return "/work/project", nil },
+	})
+
+	sendKeys(t, m, "enter", "enter", "enter", "up", "enter", "enter", "enter")
+
+	if len(saved) != 1 {
+		t.Fatalf("settings saves = %d, want 1", len(saved))
+	}
+	if saved[0].AutonomousBackend != usersettings.BackendInteractive {
+		t.Fatalf("AutonomousBackend = %q, want interactive", saved[0].AutonomousBackend)
+	}
+	if saved[0].Setup.CompletedAt != "2026-05-04T12:00:00Z" {
+		t.Fatalf("Setup.CompletedAt = %q, want timestamp", saved[0].Setup.CompletedAt)
+	}
+}
+
+func TestCancelledSetupDoesNotPersistAutonomousBackend(t *testing.T) {
+	saved := false
+	m := NewModel(&Deps{
+		Detector: AdapterDetectorFunc(func() ([]string, error) { return []string{"claude"}, nil }),
+		Models:   ModelDiscovererFunc(func(string) ([]string, error) { return nil, nil }),
+		Settings: SettingsStoreFunc(func(func(usersettings.Settings) usersettings.Settings) error {
+			saved = true
+			return nil
+		}),
+	})
+
+	sendKeys(t, m, "enter", "enter", "enter", "esc")
+
+	if m.Result() != ResultCancelled {
+		t.Fatalf("Result() = %v, want cancelled", m.Result())
+	}
+	if saved {
+		t.Fatal("settings were saved after setup cancellation")
 	}
 }
 
@@ -131,7 +211,7 @@ func TestDemoPromptContinueReturnsResultDemo(t *testing.T) {
 		Cwd:        func() (string, error) { return "/work/project", nil },
 	})
 
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter")
 
 	if m.Result() != ResultDemo {
 		t.Fatalf("Result() = %v, want ResultDemo; view=\n%s", m.Result(), m.View())
@@ -152,7 +232,7 @@ func TestDemoPromptNotNowReturnsCompleted(t *testing.T) {
 		Cwd:        func() (string, error) { return "/work/project", nil },
 	})
 
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "down", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "down", "enter")
 
 	if m.Result() != ResultCompleted {
 		t.Fatalf("Result() = %v, want ResultCompleted", m.Result())
@@ -178,7 +258,7 @@ func TestDemoPromptDismissWritesDismissedSetting(t *testing.T) {
 		Cwd:     func() (string, error) { return "/work/project", nil },
 	})
 
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "down", "down", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "down", "down", "enter")
 
 	if m.Result() != ResultCompleted {
 		t.Fatalf("Result() = %v, want ResultCompleted", m.Result())
@@ -207,7 +287,7 @@ func TestDemoPromptSkippedWhenOnboardingAlreadyCompleted(t *testing.T) {
 	})
 
 	// CLI → default model → headless CLI → default model → scope → write → done (no demo prompt)
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter")
 
 	if m.Result() != ResultCompleted {
 		t.Fatalf("Result() = %v, want ResultCompleted; view=\n%s", m.Result(), m.View())
@@ -297,7 +377,7 @@ func TestOverwriteConfirmationCanCancelBeforeWrite(t *testing.T) {
 		Cwd:      func() (string, error) { return "/work/project", nil },
 	})
 
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "down", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "down", "enter")
 
 	if m.Result() != ResultCancelled {
 		t.Fatalf("Result() = %v, want cancelled; view=\n%s", m.Result(), m.View())
@@ -324,7 +404,7 @@ func TestWriteFailureReturnsFailedWithoutRecordingSetup(t *testing.T) {
 		Cwd:     func() (string, error) { return "/work/project", nil },
 	})
 
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter")
 
 	if m.Result() != ResultFailed {
 		t.Fatalf("Result() = %v, want failed; view=\n%s", m.Result(), m.View())
@@ -356,7 +436,7 @@ func TestModelDiscoveryErrorUsesAdapterDefault(t *testing.T) {
 		Cwd:        func() (string, error) { return "/work/project", nil },
 	})
 
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "down", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "down", "enter")
 
 	if m.Result() != ResultCompleted {
 		t.Fatalf("Result() = %v, want completed; err=%v view=\n%s", m.Result(), m.Err(), m.View())
@@ -574,22 +654,22 @@ func TestNativeSetupShowsWizardProgress(t *testing.T) {
 	})
 
 	panel := tuistyle.Sanitize(m.renderPanel())
-	if !strings.Contains(panel, "Step 1 of 6") {
+	if !strings.Contains(panel, "Step 1 of 7") {
 		t.Fatalf("first setup screen should show wizard progress:\n%s", panel)
 	}
 	lines := strings.Split(panel, "\n")
-	progressLine := lineContaining(lines, "Step 1 of 6")
+	progressLine := lineContaining(lines, "Step 1 of 7")
 	titleLine := lineContaining(lines, "Set Up Agent Runner")
 	if progressLine < 0 || titleLine < 0 || progressLine >= titleLine {
 		t.Fatalf("wizard progress should appear above the screen heading:\n%s", panel)
 	}
-	if leadingColumns(lines[progressLine], "Step 1 of 6") <= leadingColumns(lines[titleLine], "Set Up Agent Runner") {
+	if leadingColumns(lines[progressLine], "Step 1 of 7") <= leadingColumns(lines[titleLine], "Set Up Agent Runner") {
 		t.Fatalf("wizard progress should be centered above the left-aligned heading:\n%s", panel)
 	}
 
 	sendKey(t, m, "enter")
 	panel = tuistyle.Sanitize(m.renderPanel())
-	if !strings.Contains(panel, "Step 2 of 6") {
+	if !strings.Contains(panel, "Step 2 of 7") {
 		t.Fatalf("model default screen should be setup step 2:\n%s", panel)
 	}
 }
@@ -605,15 +685,15 @@ func TestOverwriteScreenAddsWizardProgressStep(t *testing.T) {
 		Cwd:        func() (string, error) { return "/work/project", nil },
 	})
 
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter")
 	panel := tuistyle.Sanitize(m.renderPanel())
-	if !strings.Contains(panel, "Step 6 of 7") {
+	if !strings.Contains(panel, "Step 7 of 8") {
 		t.Fatalf("overwrite screen should add a wizard progress step:\n%s", panel)
 	}
 
 	sendKey(t, m, "enter")
 	panel = tuistyle.Sanitize(m.renderPanel())
-	if !strings.Contains(panel, "Step 7 of 7") {
+	if !strings.Contains(panel, "Step 8 of 8") {
 		t.Fatalf("demo prompt after overwrite should be final wizard step:\n%s", panel)
 	}
 }

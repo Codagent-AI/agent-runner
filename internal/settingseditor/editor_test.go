@@ -10,9 +10,10 @@ import (
 	"github.com/codagent/agent-runner/internal/usersettings"
 )
 
-func TestEditorRendersOnlyEditableThemeSetting(t *testing.T) {
+func TestEditorRendersEditableSettingsOnly(t *testing.T) {
 	m := New(usersettings.Settings{
-		Theme: usersettings.ThemeDark,
+		Theme:             usersettings.ThemeDark,
+		AutonomousBackend: usersettings.BackendInteractiveClaude,
 		Setup: usersettings.SetupSettings{
 			CompletedAt: "2026-05-17T10:00:00Z",
 		},
@@ -23,7 +24,7 @@ func TestEditorRendersOnlyEditableThemeSetting(t *testing.T) {
 	})
 
 	view := m.View()
-	for _, want := range []string{"Theme", "Light", "Dark"} {
+	for _, want := range []string{"Theme", "Light", "Dark", "Autonomous Backend", "Headless", "Interactive", "Interactive for Claude"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("View() missing %q:\n%s", want, view)
 		}
@@ -59,31 +60,61 @@ func TestEditorPreselectsPersistedTheme(t *testing.T) {
 	}
 }
 
-func TestEditorKeysMoveThemeOption(t *testing.T) {
+func TestEditorPreselectsPersistedAutonomousBackend(t *testing.T) {
 	tests := []struct {
-		name  string
-		start usersettings.Theme
-		key   tea.KeyMsg
-		want  usersettings.Theme
+		name    string
+		backend usersettings.AutonomousBackend
+		want    usersettings.AutonomousBackend
+		label   string
 	}{
-		{name: "up moves dark to light", start: usersettings.ThemeDark, key: tea.KeyMsg{Type: tea.KeyUp}, want: usersettings.ThemeLight},
-		{name: "left moves dark to light", start: usersettings.ThemeDark, key: tea.KeyMsg{Type: tea.KeyLeft}, want: usersettings.ThemeLight},
-		{name: "tab moves dark to light", start: usersettings.ThemeDark, key: tea.KeyMsg{Type: tea.KeyTab}, want: usersettings.ThemeLight},
-		{name: "down moves light to dark", start: usersettings.ThemeLight, key: tea.KeyMsg{Type: tea.KeyDown}, want: usersettings.ThemeDark},
-		{name: "right moves light to dark", start: usersettings.ThemeLight, key: tea.KeyMsg{Type: tea.KeyRight}, want: usersettings.ThemeDark},
-		{name: "shift tab moves light to dark", start: usersettings.ThemeLight, key: tea.KeyMsg{Type: tea.KeyShiftTab}, want: usersettings.ThemeDark},
+		{name: "interactive claude", backend: usersettings.BackendInteractiveClaude, want: usersettings.BackendInteractiveClaude, label: "Interactive for Claude"},
+		{name: "interactive", backend: usersettings.BackendInteractive, want: usersettings.BackendInteractive, label: "Interactive"},
+		{name: "headless", backend: usersettings.BackendHeadless, want: usersettings.BackendHeadless, label: "Headless"},
+		{name: "absent defaults headless", backend: "", want: usersettings.BackendHeadless, label: "Headless"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := New(usersettings.Settings{Theme: tt.start})
+			m := New(usersettings.Settings{Theme: usersettings.ThemeLight, AutonomousBackend: tt.backend})
+			if got := m.SelectedAutonomousBackend(); got != tt.want {
+				t.Fatalf("SelectedAutonomousBackend() = %q, want %q", got, tt.want)
+			}
+			if !strings.Contains(m.View(), "> "+tt.label) {
+				t.Fatalf("View() does not mark %q selected:\n%s", tt.label, m.View())
+			}
+		})
+	}
+}
+
+func TestEditorKeysMoveAcrossSettingsOptions(t *testing.T) {
+	tests := []struct {
+		name        string
+		settings    usersettings.Settings
+		key         tea.KeyMsg
+		wantTheme   usersettings.Theme
+		wantBackend usersettings.AutonomousBackend
+	}{
+		{name: "down moves dark to headless", settings: usersettings.Settings{Theme: usersettings.ThemeDark}, key: tea.KeyMsg{Type: tea.KeyDown}, wantTheme: usersettings.ThemeDark, wantBackend: usersettings.BackendHeadless},
+		{name: "tab moves dark to headless", settings: usersettings.Settings{Theme: usersettings.ThemeDark}, key: tea.KeyMsg{Type: tea.KeyTab}, wantTheme: usersettings.ThemeDark, wantBackend: usersettings.BackendHeadless},
+		{name: "down wraps last to light", settings: usersettings.Settings{Theme: usersettings.ThemeLight, AutonomousBackend: usersettings.BackendInteractiveClaude}, key: tea.KeyMsg{Type: tea.KeyDown}, wantTheme: usersettings.ThemeLight, wantBackend: usersettings.BackendInteractiveClaude},
+		{name: "up wraps light to interactive claude", settings: usersettings.Settings{Theme: usersettings.ThemeLight}, key: tea.KeyMsg{Type: tea.KeyUp}, wantTheme: usersettings.ThemeLight, wantBackend: usersettings.BackendInteractiveClaude},
+		{name: "right moves light to dark", settings: usersettings.Settings{Theme: usersettings.ThemeLight}, key: tea.KeyMsg{Type: tea.KeyRight}, wantTheme: usersettings.ThemeDark, wantBackend: usersettings.BackendHeadless},
+		{name: "shift tab moves headless to dark", settings: usersettings.Settings{Theme: usersettings.ThemeDark, AutonomousBackend: usersettings.BackendHeadless}, key: tea.KeyMsg{Type: tea.KeyShiftTab}, wantTheme: usersettings.ThemeDark, wantBackend: usersettings.BackendHeadless},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := New(tt.settings)
 			next, cmd := m.Update(tt.key)
 			m = next.(*Model)
 			if cmd != nil {
 				t.Fatal("movement key should not produce a command")
 			}
-			if got := m.SelectedTheme(); got != tt.want {
-				t.Fatalf("SelectedTheme() = %q, want %q", got, tt.want)
+			if got := m.SelectedTheme(); got != tt.wantTheme {
+				t.Fatalf("SelectedTheme() = %q, want %q", got, tt.wantTheme)
+			}
+			if got := m.SelectedAutonomousBackend(); got != tt.wantBackend {
+				t.Fatalf("SelectedAutonomousBackend() = %q, want %q", got, tt.wantBackend)
 			}
 		})
 	}
@@ -93,16 +124,24 @@ func TestEditorSavePersistsVisibleSettingsAndEmitsSaved(t *testing.T) {
 	var saved usersettings.Settings
 	m := New(
 		usersettings.Settings{
-			Theme: usersettings.ThemeLight,
-			Setup: usersettings.SetupSettings{CompletedAt: "2026-05-17T10:00:00Z"},
+			Theme:             usersettings.ThemeLight,
+			AutonomousBackend: usersettings.BackendHeadless,
+			Setup:             usersettings.SetupSettings{CompletedAt: "2026-05-17T10:00:00Z"},
 		},
 		WithSave(func(settings usersettings.Settings) error {
 			saved = settings
 			return nil
 		}),
 	)
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
-	m = next.(*Model)
+	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyRight},
+		{Type: tea.KeyDown},
+		{Type: tea.KeyDown},
+		{Type: tea.KeyDown},
+	} {
+		next, _ := m.Update(key)
+		m = next.(*Model)
+	}
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(*Model)
@@ -113,14 +152,17 @@ func TestEditorSavePersistsVisibleSettingsAndEmitsSaved(t *testing.T) {
 	if saved.Theme != usersettings.ThemeDark {
 		t.Fatalf("saved Theme = %q, want dark", saved.Theme)
 	}
+	if saved.AutonomousBackend != usersettings.BackendInteractiveClaude {
+		t.Fatalf("saved AutonomousBackend = %q, want interactive-claude", saved.AutonomousBackend)
+	}
 	if saved.Setup.CompletedAt != "2026-05-17T10:00:00Z" {
 		t.Fatalf("saved setup completed_at = %q, want preserved timestamp", saved.Setup.CompletedAt)
 	}
 	msg := cmd()
 	if got, ok := msg.(SavedMsg); !ok {
 		t.Fatalf("command emitted %T, want SavedMsg", msg)
-	} else if got.Settings.Theme != usersettings.ThemeDark {
-		t.Fatalf("SavedMsg theme = %q, want dark", got.Settings.Theme)
+	} else if got.Settings.Theme != usersettings.ThemeDark || got.Settings.AutonomousBackend != usersettings.BackendInteractiveClaude {
+		t.Fatalf("SavedMsg settings = %#v, want dark + interactive-claude", got.Settings)
 	}
 	if strings.Contains(m.View(), "failed") {
 		t.Fatalf("View() should not show save error after successful save:\n%s", m.View())
@@ -148,6 +190,9 @@ func TestEditorSaveFailureStaysOpenAndShowsPath(t *testing.T) {
 	}
 	if got := m.SelectedTheme(); got != usersettings.ThemeDark {
 		t.Fatalf("SelectedTheme() = %q, want unsaved dark cursor to remain", got)
+	}
+	if got := m.SelectedAutonomousBackend(); got != usersettings.BackendHeadless {
+		t.Fatalf("SelectedAutonomousBackend() = %q, want unsaved headless cursor to remain", got)
 	}
 	view := m.View()
 	for _, want := range []string{"/home/me/.agent-runner/settings.yaml", "permission denied"} {

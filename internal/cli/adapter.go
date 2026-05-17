@@ -74,7 +74,38 @@ type BuildArgsInput struct {
 	Model           string
 	Effort          string // Effort level (low, medium, high, xhigh) — empty means unset
 	Headless        bool
+	Context         InvocationContext
 	DisallowedTools []string // Tool names to block (e.g. "AskUserQuestion"); adapter translates to CLI flags where supported
+}
+
+type InvocationContext string
+
+const (
+	ContextInteractive           InvocationContext = "interactive"
+	ContextAutonomousHeadless    InvocationContext = "autonomous-headless"
+	ContextAutonomousInteractive InvocationContext = "autonomous-interactive"
+)
+
+func (c InvocationContext) IsInteractive() bool {
+	return c == ContextInteractive || c == ContextAutonomousInteractive
+}
+
+func (c InvocationContext) IsAutonomous() bool {
+	return c == ContextAutonomousHeadless || c == ContextAutonomousInteractive
+}
+
+func (c InvocationContext) IsHeadless() bool {
+	return c == ContextAutonomousHeadless
+}
+
+func (input *BuildArgsInput) InvocationContext() InvocationContext {
+	if input.Context != "" {
+		return input.Context
+	}
+	if input.Headless {
+		return ContextAutonomousHeadless
+	}
+	return ContextInteractive
 }
 
 // Adapter abstracts CLI invocation for a specific agent backend.

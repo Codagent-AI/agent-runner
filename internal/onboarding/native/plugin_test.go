@@ -78,7 +78,7 @@ func TestPluginInstallRunsBetweenProfileWriteAndCompletion(t *testing.T) {
 	m := NewModel(&deps)
 
 	// Walk to plugin intro.
-	sendKeys(t, m, "enter", "enter", "enter", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter")
 
 	if m.stage != stagePluginIntro {
 		t.Fatalf("stage = %v, want stagePluginIntro", m.stage)
@@ -105,7 +105,8 @@ func TestPluginInstallRunsBetweenProfileWriteAndCompletion(t *testing.T) {
 	}
 
 	wantSaved := []usersettings.Settings{{
-		Setup: usersettings.SetupSettings{CompletedAt: "2026-05-13T12:00:00Z"},
+		AutonomousBackend: usersettings.BackendInteractiveClaude,
+		Setup:             usersettings.SetupSettings{CompletedAt: "2026-05-13T12:00:00Z"},
 	}}
 	if diff := cmp.Diff(wantSaved, saved, cmpopts.IgnoreUnexported(usersettings.Settings{})); diff != "" {
 		t.Fatalf("saved settings mismatch (-want +got):\n%s", diff)
@@ -117,7 +118,7 @@ func TestPluginInstallCompletionStartsDemoPromptTransition(t *testing.T) {
 	deps := pluginDeps(plugin)
 	m := NewModel(&deps)
 
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter")
 
 	if m.stage != stagePluginPreview {
 		t.Fatalf("stage = %v, want stagePluginPreview", m.stage)
@@ -147,7 +148,7 @@ func TestPluginIntroExplainsSkillsBeforeInstallPreview(t *testing.T) {
 	deps := pluginDeps(plugin)
 	m := NewModel(&deps)
 
-	sendKeys(t, m, "enter", "enter", "enter", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter")
 
 	if m.stage != stagePluginIntro {
 		t.Fatalf("stage = %v, want stagePluginIntro", m.stage)
@@ -174,7 +175,7 @@ func TestPluginMissingBinaryFailsSetup(t *testing.T) {
 	deps := pluginDeps(plugin)
 	m := NewModel(&deps)
 
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter")
 
 	if m.Result() != ResultFailed {
 		t.Fatalf("Result() = %v, want ResultFailed", m.Result())
@@ -195,7 +196,7 @@ func TestPluginPreviewIsMandatoryAndDownEnterStillInstalls(t *testing.T) {
 	m := NewModel(&deps)
 
 	// Walk to plugin intro, then scope, then preview.
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter")
 
 	if m.stage != stagePluginPreview {
 		t.Fatalf("stage = %v, want stagePluginPreview", m.stage)
@@ -220,7 +221,7 @@ func TestPluginInstallShowsWaitingStateWhileCommandRuns(t *testing.T) {
 	deps := pluginDeps(plugin)
 	m := NewModel(&deps)
 
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter")
 
 	if m.stage != stagePluginPreview {
 		t.Fatalf("stage = %v, want stagePluginPreview", m.stage)
@@ -254,7 +255,7 @@ func TestPluginInstallWarningStillWritesCompletedAt(t *testing.T) {
 	})
 	m := NewModel(&deps)
 
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter")
 	sendKeys(t, m, "enter") // confirm install
 
 	if m.Result() == ResultFailed {
@@ -275,7 +276,7 @@ func TestPluginScopeMatchesSetupScope(t *testing.T) {
 	m := NewModel(&deps)
 
 	// Walk through: CLI → default model → headless → default model → scope (default is "global")
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter")
 
 	if plugin.resolveScope != "global" {
 		t.Fatalf("resolve scope = %q, want global", plugin.resolveScope)
@@ -288,7 +289,7 @@ func TestPluginScopeProjectPassesProject(t *testing.T) {
 	m := NewModel(&deps)
 
 	// Walk to scope, select "project" (second option)
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "down", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "down", "enter")
 
 	if plugin.resolveScope != "project" {
 		t.Fatalf("resolve scope = %q, want project", plugin.resolveScope)
@@ -300,7 +301,7 @@ func TestPluginDryRunFailureFailsSetup(t *testing.T) {
 	deps := pluginDeps(plugin)
 	m := NewModel(&deps)
 
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter")
 
 	if m.Result() != ResultFailed {
 		t.Fatalf("Result() = %v, want ResultFailed for dry-run failure", m.Result())
@@ -312,7 +313,7 @@ func TestPluginPreviewShowsDryRunOutput(t *testing.T) {
 	deps := pluginDeps(plugin)
 	m := NewModel(&deps)
 
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter")
 
 	view := m.View()
 	if !strings.Contains(view, "Would install agent-skills") {
@@ -331,7 +332,7 @@ func TestPluginPreviewRendersAfterAsyncDryRunWithoutSettledAnimation(t *testing.
 	deps := pluginDeps(plugin)
 	m := NewModel(&deps)
 
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter")
 	cmd := sendKeyRaw(t, m, "enter")
 	runTestCmd(t, m, cmd)
 
@@ -368,7 +369,7 @@ func TestPluginNilSkipsInstallStep(t *testing.T) {
 	}
 	m := NewModel(&deps)
 
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter")
 
 	view := m.View()
 	if !strings.Contains(view, "Continue") || !strings.Contains(view, "Not now") {
@@ -392,7 +393,7 @@ func TestPluginInstallErrorFailsSetup(t *testing.T) {
 	})
 	m := NewModel(&deps)
 
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter")
 	sendKeys(t, m, "enter") // confirm install
 
 	if m.Result() != ResultFailed {
@@ -414,7 +415,7 @@ func TestPluginEnumCLIsPassedToResolve(t *testing.T) {
 	}
 	m := NewModel(&deps)
 
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter")
+	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter")
 
 	want := []string{"claude", "codex", "copilot"}
 	if diff := cmp.Diff(want, plugin.resolveCLIs); diff != "" {

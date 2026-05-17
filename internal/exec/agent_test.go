@@ -1095,6 +1095,126 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("autonomous backend interactive uses interactive invocation when TTY is available", func(t *testing.T) {
+		var ptyCalls [][]string
+		var ptyOpts []pty.Options
+		oldRunner := interactiveRunnerFn
+		interactiveRunnerFn = func(args []string, opts pty.Options) (pty.Result, error) {
+			ptyCalls = append(ptyCalls, args)
+			ptyOpts = append(ptyOpts, opts)
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		oldTTY := isStdinTerminal
+		isStdinTerminal = func() bool { return true }
+		defer func() {
+			interactiveRunnerFn = oldRunner
+			isStdinTerminal = oldTTY
+		}()
+
+		runner := &mockRunner{}
+		ctx := makeCtx()
+		ctx.AutonomousBackend = "interactive"
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "implement feature", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("outcome = %q, want success", outcome)
+		}
+		if len(runner.calls) != 0 {
+			t.Fatalf("expected no headless RunAgent calls, got %d", len(runner.calls))
+		}
+		if len(ptyCalls) != 1 || len(ptyOpts) != 1 {
+			t.Fatalf("expected one interactive PTY call, got calls=%d opts=%d", len(ptyCalls), len(ptyOpts))
+		}
+		for _, arg := range ptyCalls[0] {
+			if strings.Contains(arg, "autonomously") {
+				assertContinueMarkerInstruction(t, arg, ptyOpts[0].ContinueMarker)
+				return
+			}
+		}
+		t.Fatalf("expected autonomy instructions in interactive invocation args, got %v", ptyCalls[0])
+	})
+
+	t.Run("autonomous backend interactive falls back to headless without TTY", func(t *testing.T) {
+		oldTTY := isStdinTerminal
+		isStdinTerminal = func() bool { return false }
+		defer func() { isStdinTerminal = oldTTY }()
+
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		log := &mockLogger{}
+		ctx := makeCtx()
+		ctx.AutonomousBackend = "interactive"
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "implement feature", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, log)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("outcome = %q, want success", outcome)
+		}
+		if len(runner.calls) != 1 {
+			t.Fatalf("expected one headless RunAgent call, got %d", len(runner.calls))
+		}
+		if !containsArg(runner.calls[0], "-p") {
+			t.Fatalf("expected fallback to headless claude args, got %v", runner.calls[0])
+		}
+		if !strings.Contains(strings.Join(log.lines, "\n"), "falling back to headless") {
+			t.Fatalf("expected fallback warning, got log lines %v", log.lines)
+		}
+	})
+
+	t.Run("interactive claude backend stays headless for non-claude adapter", func(t *testing.T) {
+		oldTTY := isStdinTerminal
+		isStdinTerminal = func() bool { return true }
+		defer func() { isStdinTerminal = oldTTY }()
+
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		ctx := makeCtx()
+		ctx.AutonomousBackend = "interactive-claude"
+		step := model.Step{ID: "s", CLI: "codex", Mode: model.ModeHeadless, Prompt: "implement feature", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("outcome = %q, want success", outcome)
+		}
+		if len(runner.calls) != 1 {
+			t.Fatalf("expected headless codex RunAgent call, got %d", len(runner.calls))
+		}
+		if !containsArg(runner.calls[0], "exec") {
+			t.Fatalf("expected codex exec headless args, got %v", runner.calls[0])
+		}
+	})
+
+	t.Run("interactive mode ignores autonomous backend", func(t *testing.T) {
+		var ptyCalls [][]string
+		oldRunner := interactiveRunnerFn
+		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
+			ptyCalls = append(ptyCalls, args)
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		oldTTY := isStdinTerminal
+		isStdinTerminal = func() bool { return true }
+		defer func() {
+			interactiveRunnerFn = oldRunner
+			isStdinTerminal = oldTTY
+		}()
+
+		runner := &mockRunner{}
+		ctx := makeCtx()
+		ctx.AutonomousBackend = "interactive"
+		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review code", Session: model.SessionNew}
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		for _, arg := range ptyCalls[0] {
+			if strings.Contains(arg, "autonomously") {
+				t.Fatalf("did not expect autonomy instructions for plain interactive step, got %q", arg)
+			}
+		}
+	})
+
 	t.Run("interactive step includes step prefix with step ID", func(t *testing.T) {
 		var capturedArgs [][]string
 		oldFn := interactiveRunnerFn

@@ -31,10 +31,14 @@ type CopilotAdapter struct{}
 // keeps the model and effort it was started with.
 func (a *CopilotAdapter) BuildArgs(input *BuildArgsInput) []string {
 	args := []string{"copilot"}
-	if input.Headless {
+	context := input.InvocationContext()
+	if context.IsHeadless() {
 		args = append(args, "-p", input.Prompt, "--allow-all", "--autopilot", "-s")
 	} else {
 		args = append(args, "-i", input.Prompt)
+		if context == ContextAutonomousInteractive {
+			args = append(args, "--autopilot")
+		}
 	}
 
 	resuming := input.Resume
@@ -52,7 +56,7 @@ func (a *CopilotAdapter) BuildArgs(input *BuildArgsInput) []string {
 		args = append(args, "--resume="+input.SessionID)
 	}
 
-	if input.Headless && slices.Contains(input.DisallowedTools, "AskUserQuestion") {
+	if context.IsAutonomous() && slices.Contains(input.DisallowedTools, "AskUserQuestion") {
 		args = append(args, "--no-ask-user")
 	}
 

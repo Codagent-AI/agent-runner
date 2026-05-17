@@ -130,6 +130,7 @@ const (
 	stageInteractiveModelDefault
 	stageInteractiveModel
 	stageHeadlessCLI
+	stageAutonomousBackend
 	stageHeadlessModelDefault
 	stageHeadlessModel
 	stageScope
@@ -147,6 +148,14 @@ var (
 	demoPromptOptions    = []string{"Continue", "Not now", "Dismiss"}
 	continueOptions      = []string{"Continue"}
 )
+
+func autonomousBackendOptions() []string {
+	return []string{
+		string(usersettings.BackendHeadless),
+		string(usersettings.BackendInteractive),
+		string(usersettings.BackendInteractiveClaude),
+	}
+}
 
 const (
 	minCenterWidth  = 80
@@ -188,24 +197,25 @@ type pluginInstallMsg struct {
 }
 
 type Model struct {
-	deps             Deps
-	stage            stage
-	focus            int
-	options          []string
-	adapters         []string
-	interactiveCLI   string
-	interactiveModel string
-	headlessCLI      string
-	headlessModel    string
-	scope            string
-	targetPath       string
-	collisions       []string
-	width            int
-	height           int
-	result           Result
-	err              error
-	terminal         bool
-	demoOnly         bool
+	deps              Deps
+	stage             stage
+	focus             int
+	options           []string
+	adapters          []string
+	interactiveCLI    string
+	interactiveModel  string
+	headlessCLI       string
+	headlessModel     string
+	autonomousBackend usersettings.AutonomousBackend
+	scope             string
+	targetPath        string
+	collisions        []string
+	width             int
+	height            int
+	result            Result
+	err               error
+	terminal          bool
+	demoOnly          bool
 
 	pluginPlan       *agentplugin.Plan
 	pluginPreview    *agentplugin.Preview
@@ -479,9 +489,12 @@ func (m *Model) enter() (bool, tea.Cmd) {
 		m.setStageAnimated(stageHeadlessCLI, m.adapters)
 	case stageHeadlessCLI:
 		m.headlessCLI = selected
+		m.setStageAnimated(stageAutonomousBackend, autonomousBackendOptions())
+	case stageAutonomousBackend:
+		m.autonomousBackend = usersettings.AutonomousBackend(selected)
 		m.startModelLoading()
 		m.setStageAnimated(stageHeadlessModel, nil)
-		return false, tea.Batch(m.tickAnim(), m.tickLoading(), m.discoverModels(stageHeadlessModel, selected))
+		return false, tea.Batch(m.tickAnim(), m.tickLoading(), m.discoverModels(stageHeadlessModel, m.headlessCLI))
 	case stageHeadlessModel:
 		m.headlessModel = selected
 		m.setStageAfterModelSelection()
@@ -645,6 +658,7 @@ func (m *Model) setStageAfterModelSelection() {
 func (m *Model) complete() (bool, tea.Cmd) {
 	stamp := m.deps.Clock().UTC().Format(time.RFC3339)
 	if err := m.deps.Settings.Update(func(settings usersettings.Settings) usersettings.Settings {
+		settings.AutonomousBackend = m.autonomousBackend
 		settings.Setup.CompletedAt = stamp
 		return settings
 	}); err != nil {
@@ -865,7 +879,7 @@ func (m *Model) setupProgress() (current, total int, ok bool) {
 	if m.demoOnly {
 		return 0, 0, false
 	}
-	total = 6
+	total = 7
 	hasOverwrite := m.stage == stageOverwrite || len(m.collisions) > 0
 	hasPlugin := m.deps.Plugin != nil
 	if hasOverwrite {
@@ -882,26 +896,28 @@ func (m *Model) setupProgress() (current, total int, ok bool) {
 		return 2, total, true
 	case stageHeadlessCLI:
 		return 3, total, true
-	case stageHeadlessModelDefault, stageHeadlessModel:
+	case stageAutonomousBackend:
 		return 4, total, true
-	case stagePluginIntro:
+	case stageHeadlessModelDefault, stageHeadlessModel:
 		return 5, total, true
+	case stagePluginIntro:
+		return 6, total, true
 	case stageScope:
-		step := 5
-		if hasPlugin {
-			step = 6
-		}
-		return step, total, true
-	case stageOverwrite:
 		step := 6
 		if hasPlugin {
 			step = 7
 		}
 		return step, total, true
-	case stagePluginPreview:
+	case stageOverwrite:
 		step := 7
-		if hasOverwrite {
+		if hasPlugin {
 			step = 8
+		}
+		return step, total, true
+	case stagePluginPreview:
+		step := 8
+		if hasOverwrite {
+			step = 9
 		}
 		return step, total, true
 	case stageDemoPrompt:
@@ -918,6 +934,8 @@ func (m *Model) defaultFocus(next stage, options []string) int {
 		preferred = "claude"
 	case stageHeadlessCLI:
 		preferred = "codex"
+	case stageAutonomousBackend:
+		preferred = string(usersettings.BackendInteractiveClaude)
 	default:
 		return 0
 	}
@@ -941,6 +959,15 @@ func (m *Model) optionLabel(option string) string {
 		}
 		if option == "codex" {
 			return option + " (recommended)"
+		}
+	case stageAutonomousBackend:
+		switch usersettings.AutonomousBackend(option) {
+		case usersettings.BackendHeadless:
+			return "Headless - Runs the agent in non-interactive print mode (default, uses API billing for Claude)"
+		case usersettings.BackendInteractive:
+			return "Interactive - Runs the agent in an interactive session with autonomy instructions"
+		case usersettings.BackendInteractiveClaude:
+			return "Interactive for Claude - Uses interactive mode for Claude only; other CLIs use headless (recommended, avoids API billing)"
 		}
 	}
 	return option
@@ -1050,6 +1077,10 @@ func (m *Model) screenContent() (title, body, prompt string) {
 		title = "Implementor CLI"
 		body = "The implementor runs headless tasks such as code generation, edits, and validation follow-ups. This CLI is used when Agent Runner needs work to continue without an interactive session."
 		prompt = "Choose the CLI for the implementor agent."
+	case stageAutonomousBackend:
+		title = "Autonomous Backend"
+		body = "Choose how autonomous agent steps are launched. This controls whether Agent Runner uses non-interactive print mode or an interactive session with autonomy instructions."
+		prompt = "Choose the backend for autonomous steps."
 	case stageHeadlessModelDefault:
 		title = "Implementor Model"
 		body = "No selectable models were found for " + m.headlessCLI + ". Agent Runner will use the CLI default and leave the model field unset."

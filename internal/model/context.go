@@ -41,6 +41,7 @@ type ExecutionContext struct {
 	WorkflowFile        string
 	WorkflowName        string
 	WorkflowDescription string
+	AutonomousBackend   string
 
 	// SessionDir is the absolute path of the run's session directory
 	// (e.g. ~/.agent-runner/projects/<encoded-cwd>/runs/<run-id>). Exposed to
@@ -90,6 +91,7 @@ type RootContextOptions struct {
 	WorkflowFile        string
 	WorkflowName        string
 	WorkflowDescription string
+	AutonomousBackend   string
 	SessionDir          string
 	EngineRef           interface{} // internal/engine.Engine
 	ProfileStore        interface{} // *config.Config
@@ -145,6 +147,7 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		WorkflowFile:        opts.WorkflowFile,
 		WorkflowName:        opts.WorkflowName,
 		WorkflowDescription: opts.WorkflowDescription,
+		AutonomousBackend:   opts.AutonomousBackend,
 		SessionDir:          opts.SessionDir,
 		EngineRef:           opts.EngineRef,
 		ProfileStore:        opts.ProfileStore,
@@ -234,6 +237,7 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		WorkflowFile:        parent.WorkflowFile,
 		WorkflowName:        parent.WorkflowName,
 		WorkflowDescription: parent.WorkflowDescription,
+		AutonomousBackend:   parent.AutonomousBackend,
 		SessionDir:          parent.SessionDir,
 		EngineRef:           parent.EngineRef,
 		ProfileStore:        parent.ProfileStore,
@@ -309,6 +313,7 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		WorkflowFile:        opts.WorkflowFile,
 		WorkflowName:        parent.WorkflowName,
 		WorkflowDescription: parent.WorkflowDescription,
+		AutonomousBackend:   parent.AutonomousBackend,
 		SessionDir:          parent.SessionDir,
 		EngineRef:           engineRef,
 		ProfileStore:        parent.ProfileStore,
