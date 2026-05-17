@@ -204,7 +204,7 @@ func TestGuidedWorkflowShape(t *testing.T) {
 	}
 	impl := stepByID(t, &wf, "implement")
 	assertAgentStep(t, impl, "", "impl-session", model.ModeHeadless)
-	for _, want := range []string{"{{task_file}}", "codagent:implement-with-tdd", "Do not commit"} {
+	for _, want := range []string{"{{task_file}}", "codagent:implement-with-tdd", "git add", "including newly added files", "do not commit"} {
 		if !strings.Contains(impl.Prompt, want) {
 			t.Fatalf("implement prompt missing %q:\n%s", want, impl.Prompt)
 		}
@@ -270,8 +270,8 @@ func TestValidatorWorkflowShape(t *testing.T) {
 		}
 	}
 	breakIt := stepByID(t, &wf, "break-it")
-	assertAgentStep(t, breakIt, "", "impl-session", model.ModeHeadless)
-	for _, want := range []string{"same implementor-agent context", "previous guided workflow", "git status --short", "git diff", "git show", "previously implemented code", ".validator/config.yml", "Do not commit"} {
+	assertAgentStep(t, breakIt, "", "tutor-session", model.ModeHeadless)
+	for _, want := range []string{"same tutorial-agent context", "previous guided workflow", "git status --short", "git diff", "git show", "previously implemented code", ".validator/config.yml", "Do not commit"} {
 		if !strings.Contains(breakIt.Prompt, want) {
 			t.Fatalf("break-it prompt missing %q:\n%s", want, breakIt.Prompt)
 		}
@@ -283,7 +283,7 @@ func TestValidatorWorkflowShape(t *testing.T) {
 	}
 	review := stepByID(t, &wf, "review-validator-status")
 	assertAgentStep(t, review, "", "tutor-session", model.ModeInteractive)
-	for _, want := range []string{"agent-validator:validator-status", "intentional bug", "additional issues", "agent-validator:validator-help", "{{session_dir}}/bundled/onboarding/docs/"} {
+	for _, want := range []string{"agent-validator:validator-status", "intentional bug", "validator_logs/*.json", "review_*.json", "reviewer reported violations", "fixed, skipped, or absent", "Do not infer that reviews passed merely because JSON or log files exist", "additional issues", "agent-validator:validator-help", "{{session_dir}}/bundled/onboarding/docs/"} {
 		if !strings.Contains(review.Prompt, want) {
 			t.Fatalf("review-validator-status prompt missing %q:\n%s", want, review.Prompt)
 		}

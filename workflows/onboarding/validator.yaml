@@ -84,18 +84,18 @@ steps:
     mode: ui
     title: Validation Run
     body: |
-      Agent Runner will first ask the implementor agent to intentionally introduce a small defect in the code produced by the guided workflow, then Agent Validator will run on the result. If validation finds fixable failures, Agent Runner can hand that context back to the implementor session.
+      Agent Runner will first ask the tutor agent to intentionally introduce a small defect in the code produced by the guided workflow, then Agent Validator will run on the result. If validation finds fixable failures, Agent Runner can hand that context back to the implementor session.
     actions:
       - label: Continue
         outcome: continue
 
   - id: break-it
-    session: impl-session
+    session: tutor-session
     mode: headless
     prompt: |
       You are the onboarding "break it" step.
 
-      Use the same implementor-agent context from the guided workflow. First, identify the code that was implemented by the previous guided workflow. Inspect `git status --short` and `git diff`; if the working tree is clean, inspect the previous commit with `git show --stat --name-only HEAD` and `git show HEAD`.
+      Use the same tutorial-agent context from the guided workflow. First, identify the code that was implemented by the previous guided workflow. Inspect `git status --short` and `git diff`; if the working tree is clean, inspect the previous commit with `git show --stat --name-only HEAD` and `git show HEAD`.
 
       Intentionally introduce one or two small, reversible bugs only in that previously implemented code. Do not modify unrelated files just because they would be easier to break. Inspect `.validator/config.yml` and choose defects that the configured validator checks or reviews should catch on the next run.
 
@@ -120,7 +120,11 @@ steps:
 
       Start by using the agent-validator:validator-status skill to report what happened in the validator run, including whether the intentional break was caught and whether the implementor fixed it.
 
-      Verify the current code state yourself. Inspect the working tree, compare against the code that existed before your break-it step, and confirm whether the intentional bug(s) you introduced were fixed. Also report whether Agent Validator found and fixed any additional issues beyond the intentional bug(s).
+      Verify the current code state yourself. Inspect the working tree, compare against the code that existed before your break-it step, and confirm whether the intentional bug(s) you introduced were fixed.
+
+      Inspect the validator log artifacts yourself. Read the relevant `validator_logs/*.json` review result files, especially files named like `review_*.json`, and identify which reviewer gates ran, whether each reviewer reported violations, what issues they caught, and whether those issues were fixed, skipped, or absent in the final validator status. Do not infer that reviews passed merely because JSON or log files exist.
+
+      Also report whether Agent Validator found and fixed any additional issues beyond the intentional bug(s).
 
       If the user asks follow-up questions about validator behavior, failures, logs, skipped items, or why something passed or failed, use the agent-validator:validator-help skill before answering.
 
