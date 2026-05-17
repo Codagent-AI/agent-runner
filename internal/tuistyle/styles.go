@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 )
 
 // Adaptive colors used across TUI screens.
@@ -57,6 +58,10 @@ var (
 	InsetBarStyle     = lipgloss.NewStyle().Foreground(SuccessGreen)
 	HelpStyle         = lipgloss.NewStyle().Foreground(DimText)
 	PathStyle         = lipgloss.NewStyle().Foreground(DimText)
+	OverlayBox        = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(DimText).
+				Padding(1, 2)
 )
 
 const (
@@ -84,4 +89,83 @@ func RenderRule(termWidth int) string {
 		w = 60
 	}
 	return ScreenMargin + DividerStyle.Render(strings.Repeat("─", w-2))
+}
+
+// RenderOverlay centers overlay on top of base while preserving base content
+// around the overlay. The base is sanitized before line surgery so ANSI escape
+// sequences are not split in the middle of a styled cell.
+func RenderOverlay(base, overlay string, width, height int) string {
+	if base == "" || overlay == "" {
+		return base + overlay
+	}
+	if width <= 0 || height <= 0 {
+		return base + "\n" + overlay
+	}
+
+	baseLines := strings.Split(strings.TrimRight(Sanitize(base), "\n"), "\n")
+	for len(baseLines) < height {
+		baseLines = append(baseLines, "")
+	}
+	overlayLines := strings.Split(strings.TrimRight(overlay, "\n"), "\n")
+	overlayWidth := 0
+	for _, line := range overlayLines {
+		overlayWidth = max(overlayWidth, lipgloss.Width(line))
+	}
+	top := max(0, (height-len(overlayLines))/2)
+	left := max(0, (width-overlayWidth)/2)
+
+	for i, overlayLine := range overlayLines {
+		row := top + i
+		if row >= len(baseLines) {
+			break
+		}
+		baseLines[row] = overlayLineAt(baseLines[row], overlayLine, left, width)
+	}
+	return strings.Join(baseLines, "\n") + "\n"
+}
+
+func overlayLineAt(base, overlay string, left, width int) string {
+	prefix := visiblePrefix(base, left)
+	used := runewidth.StringWidth(prefix) + lipgloss.Width(overlay)
+	suffixStart := max(left+lipgloss.Width(overlay), 0)
+	suffix := visibleSuffix(base, suffixStart)
+	if used+runewidth.StringWidth(suffix) > width {
+		suffix = ""
+	}
+	return prefix + overlay + suffix
+}
+
+func visiblePrefix(s string, cols int) string {
+	if cols <= 0 {
+		return ""
+	}
+	w := 0
+	var b strings.Builder
+	for _, r := range s {
+		rw := runewidth.RuneWidth(r)
+		if w+rw > cols {
+			break
+		}
+		b.WriteRune(r)
+		w += rw
+	}
+	if w < cols {
+		b.WriteString(strings.Repeat(" ", cols-w))
+	}
+	return b.String()
+}
+
+func visibleSuffix(s string, start int) string {
+	if start <= 0 {
+		return s
+	}
+	w := 0
+	for i, r := range s {
+		rw := runewidth.RuneWidth(r)
+		if w >= start {
+			return s[i:]
+		}
+		w += rw
+	}
+	return ""
 }

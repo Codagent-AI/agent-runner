@@ -1,4 +1,4 @@
-- [ ] Implement the change described by these files:
+- [x] Implement the change described by these files:
   - [proposal.md](proposal.md)
   - [specs/user-settings-editor/spec.md](specs/user-settings-editor/spec.md)
   - [specs/tui-theme/spec.md](specs/tui-theme/spec.md)

@@ -1,6 +1,7 @@
 package listview
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -8,6 +9,8 @@ import (
 
 	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/runs"
+	"github.com/codagent/agent-runner/internal/settingseditor"
+	"github.com/codagent/agent-runner/internal/usersettings"
 )
 
 func newTestListModel(runList []runs.RunInfo) *Model {
@@ -43,6 +46,11 @@ func completedRun() runs.RunInfo {
 
 func pressKey(m *Model, key string) (*Model, tea.Cmd) {
 	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+	return newModel.(*Model), cmd
+}
+
+func pressSpecialKey(m *Model, key tea.KeyType) (*Model, tea.Cmd) {
+	newModel, cmd := m.Update(tea.KeyMsg{Type: key})
 	return newModel.(*Model), cmd
 }
 
@@ -422,6 +430,319 @@ func TestListView_RenderSubheaderExplainsRunListDrilldowns(t *testing.T) {
 			got := sanitize(tt.m.renderSubheader())
 			if !strings.Contains(got, tt.want) {
 				t.Fatalf("subheader = %q, want to contain %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestListModel_S_OpensSettingsEditorOnRunList(t *testing.T) {
+	m := newTestListModel([]runs.RunInfo{inactiveRun(), activeRun(), completedRun()})
+	m.currentDirCursor = 2
+	m.currentDirOffset = 1
+	m.loadSettings = func() (usersettings.Settings, error) {
+		return usersettings.Settings{Theme: usersettings.ThemeDark}, nil
+	}
+
+	m, cmd := pressKey(m, "s")
+
+	if cmd != nil {
+		t.Fatal("opening settings should not produce a command")
+	}
+	if m.settingsEditor == nil {
+		t.Fatal("settings editor was not opened")
+	}
+	if got := m.settingsEditor.SelectedTheme(); got != usersettings.ThemeDark {
+		t.Fatalf("editor selected theme = %q, want dark", got)
+	}
+	if m.activeTab != tabCurrentDir || m.currentDirCursor != 2 || m.currentDirOffset != 1 {
+		t.Fatalf("list state changed after opening editor: tab=%v cursor=%d offset=%d", m.activeTab, m.currentDirCursor, m.currentDirOffset)
+	}
+}
+
+func TestListModel_S_IgnoredOnPickerSubViews(t *testing.T) {
+	tests := []struct {
+		name string
+		m    *Model
+	}{
+		{
+			name: "worktrees picker",
+			m: &Model{
+				activeTab: tabWorktrees,
+				worktreeTab: worktreeTabState{
+					subView:   subViewPicker,
+					worktrees: []WorktreeEntry{{Name: "main", Path: "/repo"}},
+				},
+			},
+		},
+		{
+			name: "all picker",
+			m: &Model{
+				activeTab: tabAll,
+				allTab: allTabState{
+					subView: subViewPicker,
+					dirs:    []DirEntry{{Path: "/repo", Encoded: "repo"}},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			loaded := false
+			tt.m.loadSettings = func() (usersettings.Settings, error) {
+				loaded = true
+				return usersettings.Settings{Theme: usersettings.ThemeDark}, nil
+			}
+
+			next, cmd := pressKey(tt.m, "s")
+
+			if cmd != nil {
+				t.Fatal("s on picker should not produce a command")
+			}
+			if loaded {
+				t.Fatal("s on picker should not load settings")
+			}
+			if next.settingsEditor != nil {
+				t.Fatal("s on picker opened settings editor")
+			}
+		})
+	}
+}
+
+func TestListModel_SettingsEditorSwallowsListKeys(t *testing.T) {
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.loadSettings = func() (usersettings.Settings, error) {
+		return usersettings.Settings{Theme: usersettings.ThemeDark}, nil
+	}
+	m, _ = pressKey(m, "s")
+
+	for _, key := range []string{"r", "n", "c", "?", "q"} {
+		next, cmd := pressKey(m, key)
+		m = next
+		if cmd != nil {
+			t.Fatalf("%q produced a command while editor is open", key)
+		}
+		if m.activeTab != tabCurrentDir {
+			t.Fatalf("%q changed active tab to %v while editor is open", key, m.activeTab)
+		}
+		if m.quitting {
+			t.Fatalf("%q quit while editor is open", key)
+		}
+		if m.settingsEditor == nil {
+			t.Fatalf("%q closed the editor unexpectedly", key)
+		}
+	}
+}
+
+func TestListModel_SettingsEditorSaveAppliesThemeClosesAndForcesRender(t *testing.T) {
+	var saved []usersettings.Settings
+	var applied []usersettings.Theme
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.termWidth = 100
+	m.termHeight = 30
+	m.loadSettings = func() (usersettings.Settings, error) {
+		return usersettings.Settings{Theme: usersettings.ThemeLight}, nil
+	}
+	m.saveSettings = func(settings usersettings.Settings) error {
+		saved = append(saved, settings)
+		return nil
+	}
+	m.applyTheme = func(theme usersettings.Theme) {
+		applied = append(applied, theme)
+	}
+	m, _ = pressKey(m, "s")
+	m, _ = pressSpecialKey(m, tea.KeyRight)
+
+	m, cmd := pressSpecialKey(m, tea.KeyEnter)
+	if cmd == nil {
+		t.Fatal("enter in settings editor should emit a save command")
+	}
+	msg := cmd()
+	if _, ok := msg.(settingseditor.SavedMsg); !ok {
+		t.Fatalf("editor command emitted %T, want settingseditor.SavedMsg", msg)
+	}
+
+	next, rerender := m.Update(msg)
+	m = next.(*Model)
+
+	if m.settingsEditor != nil {
+		t.Fatal("saved settings editor should close")
+	}
+	if len(saved) != 1 || saved[0].Theme != usersettings.ThemeDark {
+		t.Fatalf("saved settings = %#v, want one dark save", saved)
+	}
+	if len(applied) != 1 || applied[0] != usersettings.ThemeDark {
+		t.Fatalf("applied themes = %#v, want [dark]", applied)
+	}
+	if rerender == nil {
+		t.Fatal("saved settings should force a render command")
+	}
+	if got, ok := rerender().(tea.WindowSizeMsg); !ok {
+		t.Fatalf("rerender command emitted %T, want tea.WindowSizeMsg", rerender())
+	} else if got.Width != 100 || got.Height != 30 {
+		t.Fatalf("rerender size = %dx%d, want 100x30", got.Width, got.Height)
+	}
+}
+
+func TestListModel_SettingsEditorCancelClosesWithoutSavingOrApplying(t *testing.T) {
+	saved := false
+	applied := false
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.loadSettings = func() (usersettings.Settings, error) {
+		return usersettings.Settings{Theme: usersettings.ThemeLight}, nil
+	}
+	m.saveSettings = func(usersettings.Settings) error {
+		saved = true
+		return nil
+	}
+	m.applyTheme = func(usersettings.Theme) {
+		applied = true
+	}
+	m, _ = pressKey(m, "s")
+	m, _ = pressSpecialKey(m, tea.KeyRight)
+
+	m, cmd := pressSpecialKey(m, tea.KeyEsc)
+	if cmd == nil {
+		t.Fatal("esc in settings editor should emit a cancel command")
+	}
+	next, closeCmd := m.Update(cmd())
+	m = next.(*Model)
+
+	if closeCmd != nil {
+		t.Fatal("cancel should not force render")
+	}
+	if m.settingsEditor != nil {
+		t.Fatal("cancelled settings editor should close")
+	}
+	if saved {
+		t.Fatal("cancel should not save")
+	}
+	if applied {
+		t.Fatal("cancel should not apply theme")
+	}
+}
+
+func TestListModel_SettingsEditorSaveFailureStaysOpenAndDoesNotApply(t *testing.T) {
+	applied := false
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.loadSettings = func() (usersettings.Settings, error) {
+		return usersettings.Settings{Theme: usersettings.ThemeLight}, nil
+	}
+	m.saveSettings = func(usersettings.Settings) error {
+		return errors.New("permission denied")
+	}
+	m.settingsPath = func() (string, error) {
+		return "/tmp/settings.yaml", nil
+	}
+	m.applyTheme = func(usersettings.Theme) {
+		applied = true
+	}
+	m, _ = pressKey(m, "s")
+	m, _ = pressSpecialKey(m, tea.KeyRight)
+
+	m, cmd := pressSpecialKey(m, tea.KeyEnter)
+
+	if cmd != nil {
+		t.Fatal("failed editor save should not emit completion command")
+	}
+	if m.settingsEditor == nil {
+		t.Fatal("editor should stay open on save failure")
+	}
+	if applied {
+		t.Fatal("failed save should not apply theme")
+	}
+	view := m.View()
+	if !strings.Contains(view, "/tmp/settings.yaml") || !strings.Contains(view, "permission denied") {
+		t.Fatalf("View() missing save failure details:\n%s", view)
+	}
+}
+
+func TestListModel_SettingsEditorCtrlCStillQuits(t *testing.T) {
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.loadSettings = func() (usersettings.Settings, error) {
+		return usersettings.Settings{Theme: usersettings.ThemeDark}, nil
+	}
+	m, _ = pressKey(m, "s")
+
+	m, cmd := pressSpecialKey(m, tea.KeyCtrlC)
+
+	if !m.quitting {
+		t.Fatal("ctrl+c should mark list as quitting even with editor open")
+	}
+	if cmd == nil {
+		t.Fatal("ctrl+c should return tea.Quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("ctrl+c command = %T, want tea.QuitMsg", cmd())
+	}
+}
+
+func TestListView_SettingsOverlayKeepsUnderlyingListVisible(t *testing.T) {
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.cwd = "/repo/project"
+	m.termWidth = 100
+	m.termHeight = 30
+	m.settingsEditor = settingseditor.New(usersettings.Settings{Theme: usersettings.ThemeDark})
+
+	view := sanitize(m.View())
+
+	for _, want := range []string{"Agent Runner", "Current Dir", "implement", "Theme", "Light", "Dark"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("View() missing %q with settings editor open:\n%s", want, view)
+		}
+	}
+}
+
+func TestListView_HelpAdvertisesSettingsOnRunLists(t *testing.T) {
+	tests := []struct {
+		name string
+		m    *Model
+	}{
+		{name: "new", m: &Model{activeTab: tabNew}},
+		{name: "current dir empty", m: newTestListModel(nil)},
+		{name: "current dir with runs", m: newTestListModel([]runs.RunInfo{inactiveRun()})},
+		{
+			name: "worktree run list",
+			m: &Model{
+				activeTab: tabWorktrees,
+				worktreeTab: worktreeTabState{
+					subView:     subViewRunList,
+					selectedDir: "/repo",
+					worktrees:   []WorktreeEntry{{Path: "/repo", Runs: []runs.RunInfo{inactiveRun()}}},
+				},
+			},
+		},
+		{
+			name: "all run list",
+			m: &Model{
+				activeTab: tabAll,
+				allTab: allTabState{
+					subView:     subViewRunList,
+					selectedDir: "repo",
+					dirs:        []DirEntry{{Encoded: "repo", Runs: []runs.RunInfo{inactiveRun()}}},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sanitize(tt.m.renderHelp()); !strings.Contains(got, "s settings") {
+				t.Fatalf("help = %q, want s settings", got)
+			}
+		})
+	}
+
+	for _, tt := range []struct {
+		name string
+		m    *Model
+	}{
+		{name: "worktree picker", m: &Model{activeTab: tabWorktrees, worktreeTab: worktreeTabState{subView: subViewPicker, worktrees: []WorktreeEntry{{Path: "/repo"}}}}},
+		{name: "all picker", m: &Model{activeTab: tabAll, allTab: allTabState{subView: subViewPicker, dirs: []DirEntry{{Encoded: "repo"}}}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sanitize(tt.m.renderHelp()); strings.Contains(got, "s settings") {
+				t.Fatalf("help = %q, did not expect s settings", got)
 			}
 		})
 	}
