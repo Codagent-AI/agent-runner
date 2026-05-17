@@ -728,10 +728,7 @@ func (m *Model) View() string {
 	content := m.renderPanel()
 
 	if m.width >= minCenterWidth && m.height >= minCenterHeight {
-		if !m.animDone {
-			content = renderSetupTransition(content, m.animFrame)
-		}
-		content = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
+		content = renderCenteredSetup(content, m.width, m.height, m.animDone, m.animFrame)
 	}
 
 	return content
@@ -772,12 +769,31 @@ func (m *Model) renderPanel() string {
 		Render(b.String())
 }
 
-func renderSetupTransition(content string, frame int) string {
-	content += "\n" + setupTransitionStatusStyle.Render(tuistyle.SpinnerGlyph(float64(frame))+" Preparing next step...")
-	if frame <= animFrames/2 {
-		return setupTransitionStyle.Render(content)
+func renderCenteredSetup(content string, width, height int, animDone bool, frame int) string {
+	renderedContent := content
+	if !animDone && frame <= animFrames/2 {
+		renderedContent = setupTransitionStyle.Render(renderedContent)
 	}
-	return content
+	rendered := lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, renderedContent)
+	if animDone {
+		return rendered
+	}
+
+	lines := strings.Split(rendered, "\n")
+	panelHeight := lipgloss.Height(renderedContent)
+	panelWidth := lipgloss.Width(renderedContent)
+	panelTop := max((height-panelHeight)/2, 0)
+	panelLeft := max((width-panelWidth)/2, 0)
+	statusRow := panelTop + panelHeight
+	if statusRow >= len(lines) {
+		return rendered
+	}
+	lines[statusRow] = strings.Repeat(" ", panelLeft) + renderSetupTransitionStatus(frame)
+	return strings.Join(lines, "\n")
+}
+
+func renderSetupTransitionStatus(frame int) string {
+	return setupTransitionStatusStyle.Render(tuistyle.SpinnerGlyph(float64(frame)) + " Preparing next step...")
 }
 
 func modelSelectionPrompt(loading bool, phase float64, cliName, readyPrompt string) string {
