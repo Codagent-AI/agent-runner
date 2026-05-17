@@ -9,12 +9,16 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/runs"
+	"github.com/codagent/agent-runner/internal/settingseditor"
 	"github.com/codagent/agent-runner/internal/tuistyle"
+	"github.com/codagent/agent-runner/internal/usersettings"
 	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
@@ -89,6 +93,12 @@ type Model struct {
 	pulseScheduled bool
 	termWidth      int
 	termHeight     int
+	settingsEditor *settingseditor.Model
+
+	loadSettings func() (usersettings.Settings, error)
+	saveSettings func(usersettings.Settings) error
+	settingsPath func() (string, error)
+	applyTheme   func(usersettings.Theme)
 
 	quitting bool
 }
@@ -344,58 +354,18 @@ func (m *Model) Init() tea.Cmd {
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case settingseditor.SavedMsg:
+		return m.handleSettingsSaved(msg)
+
+	case settingseditor.CancelledMsg:
+		m.settingsEditor = nil
+		return m, nil
+
 	case tea.WindowSizeMsg:
-		m.termWidth = msg.Width
-		m.termHeight = msg.Height
+		m.handleWindowSize(msg)
 
 	case tea.KeyMsg:
-		m.errMsg = "" // auto-clear inline error on any keypress
-
-		// When the new tab is active and the search box has focus, most keys
-		// go to the filter text. Global quit and tab-switching still work.
-		if m.activeTab == tabNew && m.newTab.searchFocused {
-			return m.handleSearchKey(msg)
-		}
-
-		switch msg.String() {
-		case "ctrl+c", "q":
-			m.quitting = true
-			return m, tea.Quit
-
-		case "tab", "right":
-			m.nextTab()
-		case "shift+tab", "left":
-			m.prevTab()
-		case "n":
-			m.activeTab = tabNew
-		case "c":
-			m.activeTab = tabCurrentDir
-		case "w":
-			if m.worktreeTab.worktrees != nil {
-				m.activeTab = tabWorktrees
-			}
-		case "a":
-			m.activeTab = tabAll
-
-		case "up", "k":
-			m.moveCursor(-1)
-		case "down", "j":
-			m.moveCursor(1)
-
-		case "enter":
-			return m.handleEnter()
-
-		case "r":
-			return m.handleResumeRun()
-
-		case "?":
-			return m.handleHelpRun()
-
-		case "esc":
-			m.handleEsc()
-		}
-		cmd := m.schedulePulseIfNeeded()
-		return m, cmd
+		return m.handleKey(msg)
 
 	case refreshMsg:
 		m.loadData()
@@ -412,6 +382,146 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m *Model) handleSettingsSaved(msg settingseditor.SavedMsg) (tea.Model, tea.Cmd) {
+	m.settingsEditor = nil
+	m.applyUserTheme(msg.Settings.Theme)
+	cmd := m.forceRerender()
+	return m, cmd
+}
+
+func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) {
+	m.termWidth = msg.Width
+	m.termHeight = msg.Height
+	if m.settingsEditor != nil {
+		next, _ := m.settingsEditor.Update(msg)
+		m.settingsEditor = next.(*settingseditor.Model)
+	}
+}
+
+func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.errMsg = "" // auto-clear inline error on any keypress
+
+	if msg.String() == "ctrl+c" {
+		m.quitting = true
+		return m, tea.Quit
+	}
+	if m.settingsEditor != nil {
+		next, cmd := m.settingsEditor.Update(msg)
+		m.settingsEditor = next.(*settingseditor.Model)
+		return m, cmd
+	}
+
+	if m.activeTab == tabNew && m.newTab.searchFocused {
+		return m.handleSearchKey(msg)
+	}
+	return m.handleListKey(msg)
+}
+
+func (m *Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q":
+		m.quitting = true
+		return m, tea.Quit
+	case "tab", "right":
+		m.nextTab()
+	case "shift+tab", "left":
+		m.prevTab()
+	case "n":
+		m.activeTab = tabNew
+	case "c":
+		m.activeTab = tabCurrentDir
+	case "w":
+		if m.worktreeTab.worktrees != nil {
+			m.activeTab = tabWorktrees
+		}
+	case "a":
+		m.activeTab = tabAll
+	case "up", "k":
+		m.moveCursor(-1)
+	case "down", "j":
+		m.moveCursor(1)
+	case "enter":
+		return m.handleEnter()
+	case "r":
+		return m.handleResumeRun()
+	case "s":
+		m.openSettingsEditor()
+		return m, nil
+	case "?":
+		return m.handleHelpRun()
+	case "esc":
+		m.handleEsc()
+	}
+	cmd := m.schedulePulseIfNeeded()
+	return m, cmd
+}
+
+func (m *Model) openSettingsEditor() {
+	if !m.settingsShortcutEnabled() {
+		return
+	}
+	settings, err := m.loadUserSettings()
+	if err != nil {
+		m.errMsg = fmt.Sprintf("cannot open settings: %v", err)
+		return
+	}
+	m.settingsEditor = settingseditor.New(
+		settings,
+		settingseditor.WithSave(m.saveUserSettings),
+		settingseditor.WithPath(m.userSettingsPath),
+	)
+}
+
+func (m *Model) settingsShortcutEnabled() bool {
+	switch m.activeTab {
+	case tabNew, tabCurrentDir:
+		return true
+	case tabWorktrees:
+		return m.worktreeTab.subView == subViewRunList
+	case tabAll:
+		return m.allTab.subView == subViewRunList
+	default:
+		return false
+	}
+}
+
+func (m *Model) loadUserSettings() (usersettings.Settings, error) {
+	if m.loadSettings != nil {
+		return m.loadSettings()
+	}
+	return usersettings.Load()
+}
+
+func (m *Model) saveUserSettings(settings usersettings.Settings) error {
+	if m.saveSettings != nil {
+		return m.saveSettings(settings)
+	}
+	return usersettings.Save(settings)
+}
+
+func (m *Model) userSettingsPath() (string, error) {
+	if m.settingsPath != nil {
+		return m.settingsPath()
+	}
+	return usersettings.Path()
+}
+
+func (m *Model) applyUserTheme(theme usersettings.Theme) {
+	if m.applyTheme != nil {
+		m.applyTheme(theme)
+		return
+	}
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	lipgloss.SetHasDarkBackground(theme == usersettings.ThemeDark)
+}
+
+func (m *Model) forceRerender() tea.Cmd {
+	width, height := m.termWidth, m.termHeight
+	return func() tea.Msg {
+		return tea.WindowSizeMsg{Width: width, Height: height}
+	}
 }
 
 func (m *Model) schedulePulseIfNeeded() tea.Cmd {

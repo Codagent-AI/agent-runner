@@ -21,7 +21,14 @@ func (m *Model) View() string {
 	if m.quitting {
 		return ""
 	}
+	view := m.viewBase()
+	if m.settingsEditor != nil {
+		return tuistyle.RenderOverlay(view, m.settingsEditor.View(), m.termWidth, m.termHeight)
+	}
+	return view
+}
 
+func (m *Model) viewBase() string {
 	var b strings.Builder
 
 	b.WriteString("\n")
@@ -474,15 +481,25 @@ func (m *Model) renderHelp() string {
 
 	switch m.activeTab {
 	case tabNew:
-		parts = append(parts, "↑↓ navigate", "enter view", "r start run", "←→/n/c/w/a tab", "q quit")
+		parts = append(parts, "↑↓ navigate", "enter view", "r start run")
+		if m.settingsShortcutEnabled() && !m.newTab.searchFocused {
+			parts = append(parts, "s settings")
+		}
+		parts = append(parts, "←→/n/c/w/a tab", "q quit")
 	case tabCurrentDir:
 		if len(m.currentRuns) > 0 {
 			parts = append(parts, "↑↓ navigate", "enter view")
 			if m.cursorInactiveRun() != nil {
 				parts = append(parts, "r resume")
 			}
+			if m.settingsShortcutEnabled() {
+				parts = append(parts, "s settings")
+			}
 			parts = append(parts, "←→/n/c/w/a tab", "q quit")
 		} else {
+			if m.settingsShortcutEnabled() {
+				parts = append(parts, "s settings")
+			}
 			parts = append(parts, "←→/n/c/w/a tab", "q quit")
 		}
 	case tabWorktrees:
@@ -493,6 +510,9 @@ func (m *Model) renderHelp() string {
 			if m.cursorInactiveRun() != nil {
 				parts = append(parts, "r resume")
 			}
+			if m.settingsShortcutEnabled() {
+				parts = append(parts, "s settings")
+			}
 			parts = append(parts, "esc back", "←→/n/c/w/a tab", "q quit")
 		}
 	case tabAll:
@@ -502,6 +522,9 @@ func (m *Model) renderHelp() string {
 			parts = append(parts, "↑↓ navigate", "enter view")
 			if m.cursorInactiveRun() != nil {
 				parts = append(parts, "r resume")
+			}
+			if m.settingsShortcutEnabled() {
+				parts = append(parts, "s settings")
 			}
 			parts = append(parts, "esc back", "←→/n/c/w/a tab", "q quit")
 		}
