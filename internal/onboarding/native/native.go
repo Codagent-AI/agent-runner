@@ -920,6 +920,9 @@ func (m *Model) optionLabel(option string) string {
 			return option + " (recommended)"
 		}
 	case stageHeadlessCLI:
+		if option == "claude" {
+			return option + " (programmatic use may be billed at API rates)"
+		}
 		if option == "codex" {
 			return option + " (recommended)"
 		}

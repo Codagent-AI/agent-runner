@@ -43,6 +43,14 @@ The native setup TUI SHALL begin with a setup surface that offers progression in
 - **WHEN** native setup renders its first surface
 - **THEN** no skip, not-now, or dismiss action is available
 
+### Requirement: Native setup implementor CLI billing disclosure
+
+The native setup implementor CLI selection SHALL disclose Claude programmatic usage billing next to the Claude option. The disclosure SHALL appear before the user confirms the implementor CLI choice so users can choose the default implementor backend with that cost context visible.
+
+#### Scenario: Claude implementor option shows programmatic billing disclosure
+- **WHEN** native setup renders the implementor CLI selection and `claude` is an available option
+- **THEN** the `claude` option includes a visible programmatic credits/API-rate billing disclosure
+
 ### Requirement: Native setup completion tracking
 
 The runner SHALL write `settings.setup.completed_at` only after the native setup flow successfully finishes all required setup actions, including writing the selected profile configuration and running the skill installation step described in `Skill installation during native setup`.

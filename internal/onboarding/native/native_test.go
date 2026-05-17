@@ -700,6 +700,20 @@ func TestImplementorCLIRecommendsAndDefaultsToCodex(t *testing.T) {
 	}
 }
 
+func TestImplementorCLIShowsClaudeProgrammaticBillingDisclaimer(t *testing.T) {
+	m := NewModel(&Deps{
+		Detector: AdapterDetectorFunc(func() ([]string, error) { return []string{"claude", "codex"}, nil }),
+		Models:   ModelDiscovererFunc(func(string) ([]string, error) { return []string{"opus"}, nil }),
+	})
+
+	sendKeys(t, m, "enter", "enter")
+
+	panel := tuistyle.Sanitize(m.renderPanel())
+	if !strings.Contains(panel, "claude (programmatic use may be billed at API rates)") {
+		t.Fatalf("implementor CLI should warn about Claude programmatic billing:\n%s", panel)
+	}
+}
+
 func TestPlannerModelScreenDoesNotRepeatPlannerAgentLabel(t *testing.T) {
 	m := NewModel(&Deps{
 		Detector: AdapterDetectorFunc(func() ([]string, error) { return []string{"codex"}, nil }),
