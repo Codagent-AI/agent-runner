@@ -247,7 +247,7 @@ func TestConfiguredAgentCLIsJoinsExplicitConfigValues(t *testing.T) {
 	}
 }
 
-func TestValidatorInitArgsUsesConfiguredCLIs(t *testing.T) {
+func TestValidatorInitArgsIgnoresConfiguredCLIs(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	repo := filepath.Join(root, "repo")
@@ -273,7 +273,7 @@ func TestValidatorInitArgsUsesConfiguredCLIs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("validatorInitArgs() returned error: %v", err)
 	}
-	want := []string{"init", "--agents", "claude,codex"}
+	want := []string{"init"}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Fatalf("validatorInitArgs() mismatch (-want +got):\n%s", diff)
 	}

@@ -131,15 +131,8 @@ func configuredAgentCLIs(projectConfigPath string) (string, error) {
 }
 
 func validatorInitArgs(projectConfigPath string) ([]string, error) {
-	values, err := agentconfig.ConfiguredCLIs(projectConfigPath)
-	if err != nil {
-		return nil, err
-	}
-	args := []string{"init"}
-	if len(values) > 0 {
-		args = append(args, "--agents", strings.Join(values, ","))
-	}
-	return args, nil
+	_ = projectConfigPath
+	return []string{"init"}, nil
 }
 
 func runValidatorInit(projectConfigPath string) error {
