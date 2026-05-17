@@ -786,7 +786,7 @@ func TestCopilotAdapter(t *testing.T) {
 			Prompt:  "do something",
 			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"copilot", "-p", "do something", "--allow-tool=write", "--autopilot", "-s"}
+		expected := []string{"copilot", "-p", "do something", "-s", "--allow-tool=write", "--autopilot"}
 		assertArgs(t, expected, args)
 	})
 
@@ -871,7 +871,7 @@ func TestCopilotAdapter(t *testing.T) {
 			Resume:    true,
 			Context:   ContextAutonomousHeadless,
 		})
-		expected := []string{"copilot", "-p", "continue", "--allow-tool=write", "--autopilot", "-s", "--resume=session-abc"}
+		expected := []string{"copilot", "-p", "continue", "-s", "--allow-tool=write", "--autopilot", "--resume=session-abc"}
 		assertArgs(t, expected, args)
 	})
 
@@ -896,7 +896,7 @@ func TestCopilotAdapter(t *testing.T) {
 			Model:   "gpt-5.2",
 			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"copilot", "-p", "do something", "--allow-tool=write", "--autopilot", "-s", "--model", "gpt-5.2"}
+		expected := []string{"copilot", "-p", "do something", "-s", "--allow-tool=write", "--autopilot", "--model", "gpt-5.2"}
 		assertArgs(t, expected, args)
 	})
 
@@ -921,7 +921,7 @@ func TestCopilotAdapter(t *testing.T) {
 			Effort:  "high",
 			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"copilot", "-p", "do something", "--allow-tool=write", "--autopilot", "-s", "--reasoning-effort", "high"}
+		expected := []string{"copilot", "-p", "do something", "-s", "--allow-tool=write", "--autopilot", "--reasoning-effort", "high"}
 		assertArgs(t, expected, args)
 	})
 
@@ -958,7 +958,7 @@ func TestCopilotAdapter(t *testing.T) {
 			Context:         ContextAutonomousHeadless,
 			DisallowedTools: []string{"AskUserQuestion"},
 		})
-		expected := []string{"copilot", "-p", "do something", "--allow-tool=write", "--autopilot", "-s", "--no-ask-user"}
+		expected := []string{"copilot", "-p", "do something", "-s", "--allow-tool=write", "--autopilot", "--no-ask-user"}
 		assertArgs(t, expected, args)
 	})
 

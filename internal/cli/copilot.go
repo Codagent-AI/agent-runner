@@ -17,8 +17,8 @@ type CopilotAdapter struct{}
 // BuildArgs constructs Copilot CLI args.
 //
 // Patterns:
-//   - Fresh headless:      copilot -p <prompt> --allow-tool=write --autopilot -s [--model <m>] [--reasoning-effort <e>]
-//   - Resume headless:     copilot -p <prompt> --allow-tool=write --autopilot -s --resume=<id>
+//   - Fresh headless:      copilot -p <prompt> -s --allow-tool=write --autopilot [--model <m>] [--reasoning-effort <e>]
+//   - Resume headless:     copilot -p <prompt> -s --allow-tool=write --autopilot --resume=<id>
 //   - Fresh interactive:   copilot -i <prompt> [--model <m>] [--reasoning-effort <e>]
 //   - Resume interactive:  copilot -i <prompt> --resume=<id>
 //
@@ -33,11 +33,11 @@ func (a *CopilotAdapter) BuildArgs(input *BuildArgsInput) []string {
 	args := []string{"copilot"}
 	context := input.InvocationContext()
 	if context.IsHeadless() {
-		args = append(args, "-p", input.Prompt, "--allow-tool=write", "--autopilot", "-s")
+		args = append(args, "-p", input.Prompt, "-s")
 	} else {
 		args = append(args, "-i", input.Prompt)
 	}
-	if context == ContextAutonomousInteractive {
+	if context.IsAutonomous() {
 		args = append(args, "--allow-tool=write", "--autopilot")
 	}
 

@@ -141,7 +141,6 @@ func ExecuteAgentStep(
 	}
 
 	mode := resolveModeFromProfile(step, profile)
-	invocationContext := cli.ContextInteractive
 
 	prompt, enrichment, err := buildAgentPrompt(step, ctx)
 	if err != nil {
@@ -155,7 +154,7 @@ func ExecuteAgentStep(
 		return OutcomeFailed, nil
 	}
 
-	invocationContext = resolveInvocationContext(mode, ctx, cliName, log)
+	invocationContext := resolveInvocationContext(mode, ctx, cliName, log)
 	if errMsg := captureInvocationError(step, invocationContext); errMsg != "" {
 		emitAgentFailure(ctx, prefix, startTime, string(mode), step, errMsg)
 		return OutcomeFailed, nil
@@ -243,16 +242,12 @@ func resolveInvocationContext(mode model.StepMode, ctx *model.ExecutionContext, 
 		return cli.ContextInteractive
 	}
 
-	wantsInteractive := false
+	var wantsInteractive bool
 	switch usersettings.AutonomousBackend(ctx.AutonomousBackend) {
 	case usersettings.BackendInteractive:
 		wantsInteractive = true
 	case usersettings.BackendInteractiveClaude:
 		wantsInteractive = cliName == "claude"
-	case usersettings.BackendHeadless, "":
-		wantsInteractive = false
-	default:
-		wantsInteractive = false
 	}
 	if !wantsInteractive {
 		return cli.ContextAutonomousHeadless
@@ -294,19 +289,6 @@ func configureAgentOutputWrappers(adapter cli.Adapter, runner ProcessRunner) fun
 	}
 }
 
-// ResolveAgentStepMode returns the effective mode for an agent step, accounting
-// for the step-level override and the profile's DefaultMode.
-func ResolveAgentStepMode(step *model.Step, ctx *model.ExecutionContext) model.StepMode {
-	profile, err := resolveStepProfile(step, ctx)
-	if err != nil {
-		if step.Mode != "" {
-			return step.Mode
-		}
-		return model.ModeInteractive
-	}
-	return resolveModeFromProfile(step, profile)
-}
-
 // ResolveAgentInvocationContext returns the effective adapter invocation context
 // for an agent step after profile and backend settings are applied.
 func ResolveAgentInvocationContext(step *model.Step, ctx *model.ExecutionContext) cli.InvocationContext {
@@ -318,14 +300,18 @@ func ResolveAgentInvocationContext(step *model.Step, ctx *model.ExecutionContext
 		return cli.ContextInteractive
 	}
 	mode := resolveModeFromProfile(step, profile)
-	cliName := step.CLI
-	if cliName == "" && profile.CLI != "" {
-		cliName = profile.CLI
-	}
-	if cliName == "" {
-		cliName = "claude"
-	}
+	cliName := resolveCLIName(step, profile)
 	return resolveInvocationContext(mode, ctx, cliName, nil)
+}
+
+func resolveCLIName(step *model.Step, profile *config.ResolvedAgent) string {
+	if step.CLI != "" {
+		return step.CLI
+	}
+	if profile != nil && profile.CLI != "" {
+		return profile.CLI
+	}
+	return "claude"
 }
 
 func resolveModeFromProfile(step *model.Step, profile *config.ResolvedAgent) model.StepMode {
@@ -344,13 +330,7 @@ func resolveModeFromProfile(step *model.Step, profile *config.ResolvedAgent) mod
 func resolveAdapterAndSession(
 	step *model.Step, ctx *model.ExecutionContext, profile *config.ResolvedAgent,
 ) (adapter cli.Adapter, cliName, sessionID string, isResume bool, err error) {
-	cliName = step.CLI
-	if cliName == "" && profile != nil && profile.CLI != "" {
-		cliName = profile.CLI
-	}
-	if cliName == "" {
-		cliName = "claude"
-	}
+	cliName = resolveCLIName(step, profile)
 	adapter, err = cli.Get(cliName)
 	if err != nil {
 		return nil, cliName, "", false, err
