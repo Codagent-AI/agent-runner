@@ -227,7 +227,14 @@ func filterAuditEventsForWorkflowState(events []RawEvent, workflowHash string, r
 			}
 			continue
 		}
-		if segmentMatches || eventIsBeforeCurrentTopLevelStep(event, root, currentIndex) {
+		if segmentMatches {
+			if currentIndex >= 0 && (event.Type == "run_end" || eventIsAfterCurrentTopLevelStep(event, root, currentIndex)) {
+				continue
+			}
+			filtered = append(filtered, event)
+			continue
+		}
+		if eventIsBeforeCurrentTopLevelStep(event, root, currentIndex) {
 			filtered = append(filtered, event)
 		}
 	}
@@ -244,6 +251,15 @@ func eventIsBeforeCurrentTopLevelStep(event RawEvent, root *StepNode, currentInd
 	}
 	idx := childIndexByID(root, tokens[0].stepID)
 	return idx >= 0 && idx < currentIndex
+}
+
+func eventIsAfterCurrentTopLevelStep(event RawEvent, root *StepNode, currentIndex int) bool {
+	tokens := parsePrefix(event.Prefix)
+	if len(tokens) == 0 || tokens[0].stepID == "" {
+		return false
+	}
+	idx := childIndexByID(root, tokens[0].stepID)
+	return idx > currentIndex
 }
 
 func childIndexByID(root *StepNode, id string) int {

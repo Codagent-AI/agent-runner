@@ -204,10 +204,13 @@ func TestGuidedWorkflowShape(t *testing.T) {
 	}
 	impl := stepByID(t, &wf, "implement")
 	assertAgentStep(t, impl, "", "impl-session", model.ModeAutonomous)
-	for _, want := range []string{"{{task_file}}", "codagent:implement-with-tdd", "Do not commit"} {
+	for _, want := range []string{"{{task_file}}", "codagent:implement-with-tdd", "git add", "including newly added files", "do not commit"} {
 		if !strings.Contains(impl.Prompt, want) {
 			t.Fatalf("implement prompt missing %q:\n%s", want, impl.Prompt)
 		}
+	}
+	if !strings.Contains(stepByID(t, &wf, "summary").Body, "do not commit yet") {
+		t.Fatalf("summary should tell the user not to commit yet:\n%s", stepByID(t, &wf, "summary").Body)
 	}
 }
 
@@ -223,8 +226,10 @@ func TestValidatorWorkflowShape(t *testing.T) {
 
 	wantIDs := []string{
 		"intro-ui",
+		"stash-guided-changes",
 		"init",
 		"setup",
+		"restore-guided-changes",
 		"explain-validation",
 		"break-it",
 		"prepare-fix-context",
@@ -238,6 +243,15 @@ func TestValidatorWorkflowShape(t *testing.T) {
 	}
 
 	assertUIStep(t, stepByID(t, &wf, "intro-ui"), "Agent Validator")
+	stash := stepByID(t, &wf, "stash-guided-changes")
+	if stash.StepType() != "shell" {
+		t.Fatalf("stash-guided-changes type = %q, want shell", stash.StepType())
+	}
+	for _, want := range []string{"git status --porcelain", "git stash push -u", "agent-runner onboarding guided changes", "git status --short"} {
+		if !strings.Contains(stash.Command, want) {
+			t.Fatalf("stash-guided-changes command missing %q:\n%s", want, stash.Command)
+		}
+	}
 	if stepByID(t, &wf, "init").Command != `"$AGENT_RUNNER_EXECUTABLE" internal validator-init` {
 		t.Fatalf("init command = %q, want current executable validator init", stepByID(t, &wf, "init").Command)
 	}
@@ -246,9 +260,18 @@ func TestValidatorWorkflowShape(t *testing.T) {
 	if !strings.Contains(setup.Prompt, "agent-validator:validator-setup") {
 		t.Fatalf("setup prompt missing validator setup skill:\n%s", setup.Prompt)
 	}
+	restore := stepByID(t, &wf, "restore-guided-changes")
+	if restore.StepType() != "shell" {
+		t.Fatalf("restore-guided-changes type = %q, want shell", restore.StepType())
+	}
+	for _, want := range []string{"git stash list", "git stash pop", "agent-runner onboarding guided changes", "git status --porcelain", "git status --short", "git diff --stat"} {
+		if !strings.Contains(restore.Command, want) {
+			t.Fatalf("restore-guided-changes command missing %q:\n%s", want, restore.Command)
+		}
+	}
 	breakIt := stepByID(t, &wf, "break-it")
-	assertAgentStep(t, breakIt, "", "impl-session", model.ModeAutonomous)
-	for _, want := range []string{"same implementor-agent context", "previous guided workflow", "git status --short", "git diff", "git show", "previously implemented code", ".validator/config.yml", "Do not commit"} {
+	assertAgentStep(t, breakIt, "", "tutor-session", model.ModeAutonomous)
+	for _, want := range []string{"same tutorial-agent context", "previous guided workflow", "git status --short", "git diff", "git show", "previously implemented code", ".validator/config.yml", "Do not commit"} {
 		if !strings.Contains(breakIt.Prompt, want) {
 			t.Fatalf("break-it prompt missing %q:\n%s", want, breakIt.Prompt)
 		}
@@ -260,7 +283,7 @@ func TestValidatorWorkflowShape(t *testing.T) {
 	}
 	review := stepByID(t, &wf, "review-validator-status")
 	assertAgentStep(t, review, "", "tutor-session", model.ModeInteractive)
-	for _, want := range []string{"agent-validator:validator-status", "intentional bug", "additional issues", "agent-validator:validator-help", "{{session_dir}}/bundled/onboarding/docs/"} {
+	for _, want := range []string{"agent-validator:validator-status", "intentional bug", "validator_logs/*.json", "review_*.json", "reviewer reported violations", "fixed, skipped, or absent", "Do not infer that reviews passed merely because JSON or log files exist", "additional issues", "agent-validator:validator-help", "{{session_dir}}/bundled/onboarding/docs/"} {
 		if !strings.Contains(review.Prompt, want) {
 			t.Fatalf("review-validator-status prompt missing %q:\n%s", want, review.Prompt)
 		}

@@ -129,7 +129,7 @@ steps:
     prompt: |
       Implement the task described in {{task_file}}.
 
-      You MUST use the codagent:implement-with-tdd skill. Do not commit changes. Leave the working tree for the user to review. When implementation and verification are complete, summarize what changed.
+      You MUST use the codagent:implement-with-tdd skill. Stage all implementation changes with `git add`, including newly added files, but do not commit changes. Leave the staged working tree for the user to review. When implementation and verification are complete, summarize what changed.
 
   - id: summary
     mode: ui
@@ -137,7 +137,7 @@ steps:
     body: |
       The autonomous implementor finished.
 
-      Run `git diff` to review the changes, then commit if you are satisfied.
+      Run `git diff` to review the changes if you want, but do not commit yet. The next onboarding phase will configure Agent Validator first, then validate these uncommitted changes.
     actions:
       - label: Continue
         outcome: continue

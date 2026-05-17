@@ -16,6 +16,8 @@ Use this skill to replace the `agent-runner` binary inside an already-running Do
    docker ps --format '{{.ID}} {{.Image}} {{.Names}}'
    ```
 
+   In Codex sessions, Docker commands such as `docker ps`, `docker exec`, and `docker cp` may require sandbox escalation/approval.
+
    Prefer the single running `homebrew/brew` smoke container when present. If multiple plausible containers are running, ask which one to patch.
 
 2. Determine the container CPU architecture.
@@ -30,6 +32,12 @@ Use this skill to replace the `agent-runner` binary inside an already-running Do
 
    ```bash
    GOOS=linux GOARCH=<arch> go build -o bin/agent-runner-linux-<arch> ./cmd/agent-runner
+   ```
+
+   If the default build cannot write the host Go cache, use a sandbox-friendly cache path:
+
+   ```bash
+   GOCACHE=/private/tmp/agent-runner-go-build GOOS=linux GOARCH=<arch> go build -o bin/agent-runner-linux-<arch> ./cmd/agent-runner
    ```
 
    Do not copy the host macOS binary into the container. It will fail with `Exec format error`.
