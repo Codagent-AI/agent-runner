@@ -4,6 +4,10 @@ Agent Runner is a Go CLI workflow orchestrator for AI agents. It runs multi-step
 
 This project is pre-release and under active development. Prefer clear, well-tested changes over preserving accidental compatibility.
 
+## Workspace Context
+
+For broader Codagent workspace context, see [../AGENTS.md](../AGENTS.md). Read it when the user mentions another Codagent repo or project.
+
 ## Project Map
 
 - `cmd/agent-runner/`: CLI entry point and command wiring
