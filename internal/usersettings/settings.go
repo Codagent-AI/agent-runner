@@ -97,7 +97,7 @@ func Load() (Settings, error) {
 	}
 
 	raw := string(body)
-	settings := Settings{AutonomousBackend: BackendHeadless, raw: &raw}
+	settings := Settings{raw: &raw}
 	for i := 0; i+1 < len(yamlRoot.Content); i += 2 {
 		key := yamlRoot.Content[i]
 		value := yamlRoot.Content[i+1]

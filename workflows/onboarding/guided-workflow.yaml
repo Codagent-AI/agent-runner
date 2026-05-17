@@ -108,7 +108,7 @@ steps:
     prompt: |
       You are tutoring the user during Agent Runner onboarding.
 
-      Read and reference the task file at {{task_file}}. Contextualize your guidance to that plan, for example: "I see you made a plan to ...". Explain what will happen when a autonomous implementor executes it next.
+      Read and reference the task file at {{task_file}}. Contextualize your guidance to that plan, for example: "I see you made a plan to ...". Explain what will happen when an autonomous implementor executes it next.
 
       Use the packaged documentation at {{session_dir}}/bundled/onboarding/docs/ for general Agent Runner Q&A. Answer questions about workflows, step types, sessions, validation, and related concepts.
 

@@ -386,6 +386,9 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 	}
 
 	if s.Mode != "" && s.Mode != ModeInteractive && s.Mode != ModeAutonomous && s.Mode != ModeUI {
+		if s.Mode == "headless" {
+			return fmt.Errorf(`invalid mode: %q (renamed to %q)`, s.Mode, ModeAutonomous)
+		}
 		return fmt.Errorf(`invalid mode: %q`, s.Mode)
 	}
 

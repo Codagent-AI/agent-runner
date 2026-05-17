@@ -31,7 +31,7 @@ steps:
     body: |
       Interactive steps open a live agent session where you and the agent collaborate before the workflow moves on.
 
-      Example: a planning step that opens an interactive session so you can discuss and shape the plan together before moving to a autonomous implementation step.
+      Example: a planning step that opens an interactive session so you can discuss and shape the plan together before moving to an autonomous implementation step.
 
       The next step opens a short interactive session. Ask it anything about Agent Runner. When you're done, continue in any of these ways:
         - Tell the agent to continue

@@ -13,7 +13,7 @@ func TestEnumerateCLIs_MergesUserAndProjectConfigs(t *testing.T) {
 	globalPath := filepath.Join(dir, "global.yaml")
 	projectPath := filepath.Join(dir, "project.yaml")
 
-	os.WriteFile(globalPath, []byte(`
+	if err := os.WriteFile(globalPath, []byte(`
 profiles:
   default:
     agents:
@@ -23,16 +23,20 @@ profiles:
       implementor:
         default_mode: autonomous
         cli: codex
-`), 0o600)
+`), 0o600); err != nil {
+		t.Fatalf("WriteFile(global): %v", err)
+	}
 
-	os.WriteFile(projectPath, []byte(`
+	if err := os.WriteFile(projectPath, []byte(`
 profiles:
   default:
     agents:
       reviewer:
         default_mode: autonomous
         cli: copilot
-`), 0o600)
+`), 0o600); err != nil {
+		t.Fatalf("WriteFile(project): %v", err)
+	}
 
 	got, err := EnumerateCLIs(globalPath, projectPath)
 	if err != nil {
@@ -48,7 +52,7 @@ func TestEnumerateCLIs_DeduplicatesAcrossProfiles(t *testing.T) {
 	dir := t.TempDir()
 	globalPath := filepath.Join(dir, "global.yaml")
 
-	os.WriteFile(globalPath, []byte(`
+	if err := os.WriteFile(globalPath, []byte(`
 profiles:
   default:
     agents:
@@ -63,7 +67,9 @@ profiles:
       worker:
         default_mode: autonomous
         cli: claude
-`), 0o600)
+`), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	got, err := EnumerateCLIs(globalPath, "")
 	if err != nil {
@@ -89,7 +95,7 @@ func TestEnumerateCLIs_SkipsEmptyCLIValues(t *testing.T) {
 	dir := t.TempDir()
 	globalPath := filepath.Join(dir, "global.yaml")
 
-	os.WriteFile(globalPath, []byte(`
+	if err := os.WriteFile(globalPath, []byte(`
 profiles:
   default:
     agents:
@@ -98,7 +104,9 @@ profiles:
         cli: claude
       overlay:
         extends: planner
-`), 0o600)
+`), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	got, err := EnumerateCLIs(globalPath, "")
 	if err != nil {
@@ -114,7 +122,7 @@ func TestEnumerateCLIs_ScansCLIsFromAllProfiles(t *testing.T) {
 	dir := t.TempDir()
 	globalPath := filepath.Join(dir, "global.yaml")
 
-	os.WriteFile(globalPath, []byte(`
+	if err := os.WriteFile(globalPath, []byte(`
 profiles:
   default:
     agents:
@@ -131,7 +139,9 @@ profiles:
       planner:
         default_mode: interactive
         cli: copilot
-`), 0o600)
+`), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	got, err := EnumerateCLIs(globalPath, "")
 	if err != nil {

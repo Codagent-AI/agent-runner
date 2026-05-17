@@ -77,6 +77,17 @@ func TestStepSchema(t *testing.T) {
 		}
 	})
 
+	t.Run("rejects headless with migration hint", func(t *testing.T) {
+		s := Step{ID: "bad", Mode: "headless", Prompt: "hi", Agent: "implementor", Session: SessionNew}
+		err := s.Validate(nil)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "renamed to") {
+			t.Fatalf("expected migration hint, got: %v", err)
+		}
+	})
+
 	t.Run("rejects mode shell as invalid", func(t *testing.T) {
 		s := Step{ID: "bad", Mode: "shell", Prompt: "hi", Agent: "implementor", Session: SessionNew}
 		err := s.Validate(nil)
@@ -154,7 +165,7 @@ func TestStepSchemaExtensions(t *testing.T) {
 		}
 	})
 
-	t.Run("accepts capture on a autonomous step", func(t *testing.T) {
+	t.Run("accepts capture on an autonomous step", func(t *testing.T) {
 		s := Step{ID: "s", Agent: "implementor", Mode: ModeAutonomous, Prompt: "p", Session: SessionNew, Capture: "output"}
 		if err := s.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)

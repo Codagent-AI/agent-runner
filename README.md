@@ -13,7 +13,7 @@ There are many YAML-based workflow engines (Argo, Kestra, Step Functions) and CL
 ## Features
 
 - **Multi-CLI support**: invoke Claude, Codex, or other agent backends through a uniform adapter interface
-- **Three step modes**: interactive (collaborative), autonomous (autonomous), shell (CLI commands)
+- **Three step modes**: interactive (collaborative), autonomous (unattended), shell (CLI commands)
 - **Session management**: `new`, `resume`, or `inherit` sessions across steps and sub-workflows
 - **Loops**: counted loops (`loop: { max: N }`) and for-each loops (`loop: { over, as }`) with `break_if` conditions
 - **Sub-workflows**: compose workflows from reusable workflow files with parameter passing

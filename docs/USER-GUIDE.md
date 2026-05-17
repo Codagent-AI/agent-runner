@@ -101,7 +101,7 @@ The agent runs non-interactively (`claude -p`). Its output streams to your termi
 
 Use autonomous for steps that don't need human interaction -- task generation, code review, implementation, etc.
 
-Pressing ctrl-c during a autonomous step kills the agent subprocess and exits agent-runner. The state file preserves the interrupted step so you can resume later.
+Pressing ctrl-c during an autonomous step kills the agent subprocess and exits agent-runner. The state file preserves the interrupted step so you can resume later.
 
 ### Shell
 

@@ -91,7 +91,7 @@ func TestLoadAutonomousBackendValues(t *testing.T) {
 		{name: "interactive claude", body: "autonomous_backend: interactive-claude\n", want: BackendInteractiveClaude},
 		{name: "interactive", body: "autonomous_backend: interactive\n", want: BackendInteractive},
 		{name: "headless", body: "autonomous_backend: headless\n", want: BackendHeadless},
-		{name: "missing defaults headless", body: "theme: dark\n", want: BackendHeadless},
+		{name: "missing defaults empty", body: "theme: dark\n", want: ""},
 		{name: "invalid rejected", body: "autonomous_backend: magic\n", wantErr: `invalid autonomous_backend "magic"`},
 		{name: "sequence rejected", body: "autonomous_backend: [headless]\n", wantErr: "invalid autonomous_backend"},
 	}
