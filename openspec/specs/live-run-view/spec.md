@@ -157,17 +157,17 @@ While output is streaming into the selected step's detail pane, the viewport SHA
 - **WHEN** the user presses `End` or uppercase `G`
 - **THEN** nothing happens (neither key is bound to tail-follow or any other action)
 
-### Requirement: Quit during live run requires confirmation
+### Requirement: Quit during live run
 
-While the workflow is running, pressing `q`, `Ctrl+C`, or Escape at the top level SHALL prompt the user for confirmation before quitting. The confirmation prompt SHALL explicitly state that the active subprocess will be orphaned (continue running in the background) if the user proceeds. Confirming SHALL exit the app without killing the active subprocess. Declining SHALL dismiss the prompt and leave the workflow running. After the workflow has finished, `q` and `Ctrl+C` SHALL exit the app immediately without confirmation; Escape at the top level SHALL follow the run-view exit behavior specified by the `view-run` capability. The confirmation does not fire while the TUI is suspended for an interactive agent step, because during that window keystrokes are received by the agent, not the TUI.
+While the workflow is running, pressing `q` or Escape at the top level SHALL prompt the user for confirmation before quitting. The confirmation prompt SHALL explicitly state that the active subprocess will be orphaned (continue running in the background) if the user proceeds. Confirming SHALL exit the app without killing the active subprocess. Declining SHALL dismiss the prompt and leave the workflow running. Ctrl+C SHALL exit the app immediately in every live-run-view state, including while confirmation prompts, overlays, or focused UI steps are visible. After the workflow has finished, `q` and `Ctrl+C` SHALL exit the app immediately without confirmation; Escape at the top level SHALL follow the run-view exit behavior specified by the `view-run` capability. The confirmation does not fire while the TUI is suspended for an interactive agent step, because during that window keystrokes are received by the agent, not the TUI.
 
 #### Scenario: Confirmation requested on q mid-run
 - **WHEN** the user presses `q` while the workflow is running and the TUI is not suspended for an interactive step
 - **THEN** a confirmation prompt is displayed stating that the active subprocess will be orphaned on confirm; the workflow continues while the prompt is open
 
-#### Scenario: Confirmation requested on Ctrl+C mid-run
+#### Scenario: Ctrl+C exits immediately mid-run
 - **WHEN** the user presses `Ctrl+C` while the workflow is running and the TUI is not suspended for an interactive step
-- **THEN** the same confirmation prompt as for `q` is displayed; the workflow continues while the prompt is open
+- **THEN** the app exits immediately without displaying a confirmation prompt
 
 #### Scenario: Confirmation requested on Escape at top level mid-run
 - **WHEN** the user presses Escape at the top level of the run view while the workflow is running
@@ -209,7 +209,7 @@ The runner SHALL NOT render the UI step as a standalone full-screen overlay that
 
 While the UI step is awaiting input, the chrome's status indicators (active-step glyph, breadcrumb, sidebar) SHALL reflect the current state — the active step appears as the in-progress step in the sidebar, and prior steps render with their final status.
 
-The existing top-level keybindings of the live-run-view (`q`, `Ctrl+C`, Escape) continue to apply while a UI step is focused. Ctrl+C SHALL always route to the live-run-view quit behavior and SHALL NOT cancel or resolve the UI step. Keystrokes routed to the UI step (selection arrows, Tab, Enter on a focused element, etc.) are consumed by the UI step and do not trigger top-level chrome actions.
+The existing top-level keybindings of the live-run-view (`q`, `Ctrl+C`, Escape) continue to apply while a UI step is focused. Ctrl+C SHALL always exit the app immediately and SHALL NOT cancel or resolve the UI step. Keystrokes routed to the UI step (selection arrows, Tab, Enter on a focused element, etc.) are consumed by the UI step and do not trigger top-level chrome actions.
 
 #### Scenario: Workflow name and sidebar visible during a UI step
 - **WHEN** the active step is `mode: ui` and the live-run-view is on screen
@@ -219,14 +219,19 @@ The existing top-level keybindings of the live-run-view (`q`, `Ctrl+C`, Escape) 
 - **WHEN** a UI step's body text is longer than the chrome's content-area width
 - **THEN** the body SHALL wrap within that width rather than being truncated or extending past the chrome
 
-#### Scenario: Ctrl+C during focused UI step uses run-view quit behavior
+#### Scenario: Ctrl+C during focused UI step exits immediately
 - **WHEN** the workflow is running, a UI step is focused, and the user presses Ctrl+C
-- **THEN** the live-run-view shows the same quit confirmation used for Ctrl+C elsewhere in a running workflow
-- **AND** the UI step remains unresolved while the confirmation is open
+- **THEN** the app exits immediately without displaying a confirmation prompt
+- **AND** the UI step remains unresolved
 
 #### Scenario: Sidebar reflects the active UI step
 - **WHEN** the active step is a `mode: ui` step partway through a workflow
 - **THEN** the sidebar SHALL highlight that step as the active step and SHALL show prior steps with their final status
+
+#### Scenario: UI step in sibling sub-workflow leaves stale drill-in
+- **WHEN** the live-run-view is drilled into a completed sub-workflow and the workflow advances to a `mode: ui` step in a sibling sub-workflow
+- **THEN** the view SHALL leave the completed sub-workflow drill-in and select the sibling sub-workflow containing the active UI step
+- **AND** the UI step content SHALL be visible without requiring the user to press the jump-to-live key
 
 #### Scenario: UI step input does not trigger chrome quit
 - **WHEN** focus is on a UI step's input or action and the user presses Enter, arrow, or Tab keys

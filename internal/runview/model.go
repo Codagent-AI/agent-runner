@@ -761,6 +761,11 @@ func (m *Model) lastResumableAgentInWorkflow(scope *StepNode) *StepNode {
 // handleKey processes a key message. Extracted from Update to keep the main
 // message switch within funlen limits.
 func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "ctrl+c" {
+		m.exitRequested = true
+		return m, tea.Quit
+	}
+
 	if m.showLegend {
 		switch msg.String() {
 		case "?", "esc":
@@ -782,7 +787,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
-	case "q", "ctrl+c":
+	case "q":
 		if m.running {
 			m.quitConfirming = true
 			return m, nil
@@ -960,6 +965,12 @@ func (m *Model) applyAutoFollowToNode(active *StepNode) {
 		return
 	}
 	target := m.ancestorAtCurrentLevel(active)
+	if target == nil && len(m.path) > 1 {
+		m.path = m.path[:1]
+		m.cursor = 0
+		m.logOffset = 0
+		target = m.ancestorAtCurrentLevel(active)
+	}
 	if target == nil {
 		return
 	}

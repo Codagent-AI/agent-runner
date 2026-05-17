@@ -1825,10 +1825,19 @@ func TestModel_LiveRun_QuitConfirm_Shown(t *testing.T) {
 
 func TestModel_LiveRun_QuitConfirm_CtrlC(t *testing.T) {
 	m := newLiveModel()
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	m = m2.(*Model)
-	if !m.quitConfirming {
-		t.Fatal("expected quitConfirming=true after Ctrl+C mid-run")
+	if m.quitConfirming {
+		t.Fatal("Ctrl+C should exit immediately without opening quit confirmation")
+	}
+	if cmd == nil {
+		t.Fatal("Ctrl+C should return a quit command")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("expected Ctrl+C command to quit, got %T", cmd())
+	}
+	if !m.ExitRequested() {
+		t.Fatal("Ctrl+C should mark exit requested")
 	}
 }
 
@@ -1884,6 +1893,40 @@ func TestModel_LiveRun_QuitConfirm_AcceptMarksExitRequested(t *testing.T) {
 	}
 	if !m.ExitRequested() {
 		t.Fatal("accepted quit confirmation should mark exit requested")
+	}
+}
+
+func TestModel_LiveRun_CtrlCExitsFromQuitConfirmation(t *testing.T) {
+	m := newLiveModel()
+	m.quitConfirming = true
+
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = m2.(*Model)
+	if cmd == nil {
+		t.Fatal("Ctrl+C should quit while confirmation is open")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("expected Ctrl+C command to quit, got %T", cmd())
+	}
+	if !m.ExitRequested() {
+		t.Fatal("Ctrl+C should mark exit requested while confirmation is open")
+	}
+}
+
+func TestModel_CtrlCExitsFromLegend(t *testing.T) {
+	m := newLiveModel()
+	m.showLegend = true
+
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = m2.(*Model)
+	if cmd == nil {
+		t.Fatal("Ctrl+C should quit while legend is open")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("expected Ctrl+C command to quit, got %T", cmd())
+	}
+	if !m.ExitRequested() {
+		t.Fatal("Ctrl+C should mark exit requested while legend is open")
 	}
 }
 
