@@ -61,7 +61,7 @@ var (
 	OverlayBox        = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(DimText).
-				Padding(1, 2)
+				Padding(2, 4)
 )
 
 const (
