@@ -137,7 +137,7 @@ steps:
     body: |
       The headless implementor finished.
 
-      Run `git diff` to review the changes, then commit if you are satisfied.
+      Run `git diff` to review the changes if you want, but do not commit yet. The next onboarding phase will configure Agent Validator first, then validate these uncommitted changes.
     actions:
       - label: Continue
         outcome: continue

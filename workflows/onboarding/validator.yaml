@@ -14,10 +14,39 @@ steps:
     mode: ui
     title: Agent Validator
     body: |
-      Agent Validator checks implementation work with deterministic commands and AI review passes. In this phase you will configure it, run it against the changes from the guided workflow, and see how validation feedback can be routed back into implementation.
+      Agent Validator checks implementation work with deterministic commands and AI review passes. In this phase Agent Runner will temporarily stash the guided workflow changes, configure validation against the current project baseline, restore the changes, and then run validation on them.
     actions:
       - label: Continue
         outcome: continue
+
+  - id: stash-guided-changes
+    command: |
+      set -eu
+      message="agent-runner onboarding guided changes"
+
+      if [ -z "$(git status --porcelain)" ]; then
+        echo "No working tree changes to stash."
+        exit 0
+      fi
+
+      git stash push -u -m "$message"
+
+      if [ -n "$(git status --porcelain)" ]; then
+        echo "Working tree is still dirty after stashing:" >&2
+        git status --short >&2
+        exit 1
+      fi
+
+      latest="$(git stash list --format='%gd %s' | sed -n '1p')"
+      case "$latest" in
+        *"$message"*)
+          echo "Stashed guided changes: $latest"
+          ;;
+        *)
+          echo "Expected newest stash to be named '$message', got: $latest" >&2
+          exit 1
+          ;;
+      esac
 
   - id: init
     command: '"$AGENT_RUNNER_EXECUTABLE" internal validator-init'
@@ -30,6 +59,26 @@ steps:
       Help the user configure Agent Validator for this project.
 
       You MUST use the agent-validator:validator-setup skill to configure checks and reviews. Explain the choices briefly, keep the setup practical, and complete the step once the validator configuration is ready.
+
+  - id: restore-guided-changes
+    command: |
+      set -eu
+      message="agent-runner onboarding guided changes"
+      stash_ref="$(git stash list --format='%gd %s' | awk -v msg="$message" 'index($0, msg) { print $1; exit }')"
+
+      if [ -z "$stash_ref" ]; then
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "No onboarding stash found; working tree already has changes."
+        else
+          echo "No onboarding stash found; no guided changes to restore."
+        fi
+        exit 0
+      fi
+
+      git stash pop "$stash_ref"
+      echo "Restored guided changes from $stash_ref."
+      git status --short
+      git diff --stat
 
   - id: explain-validation
     mode: ui

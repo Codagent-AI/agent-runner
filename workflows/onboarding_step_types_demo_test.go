@@ -209,6 +209,9 @@ func TestGuidedWorkflowShape(t *testing.T) {
 			t.Fatalf("implement prompt missing %q:\n%s", want, impl.Prompt)
 		}
 	}
+	if !strings.Contains(stepByID(t, &wf, "summary").Body, "do not commit yet") {
+		t.Fatalf("summary should tell the user not to commit yet:\n%s", stepByID(t, &wf, "summary").Body)
+	}
 }
 
 func TestValidatorWorkflowShape(t *testing.T) {
@@ -223,8 +226,10 @@ func TestValidatorWorkflowShape(t *testing.T) {
 
 	wantIDs := []string{
 		"intro-ui",
+		"stash-guided-changes",
 		"init",
 		"setup",
+		"restore-guided-changes",
 		"explain-validation",
 		"break-it",
 		"prepare-fix-context",
@@ -238,6 +243,15 @@ func TestValidatorWorkflowShape(t *testing.T) {
 	}
 
 	assertUIStep(t, stepByID(t, &wf, "intro-ui"), "Agent Validator")
+	stash := stepByID(t, &wf, "stash-guided-changes")
+	if stash.StepType() != "shell" {
+		t.Fatalf("stash-guided-changes type = %q, want shell", stash.StepType())
+	}
+	for _, want := range []string{"git status --porcelain", "git stash push -u", "agent-runner onboarding guided changes", "git status --short"} {
+		if !strings.Contains(stash.Command, want) {
+			t.Fatalf("stash-guided-changes command missing %q:\n%s", want, stash.Command)
+		}
+	}
 	if stepByID(t, &wf, "init").Command != `"$AGENT_RUNNER_EXECUTABLE" internal validator-init` {
 		t.Fatalf("init command = %q, want current executable validator init", stepByID(t, &wf, "init").Command)
 	}
@@ -245,6 +259,15 @@ func TestValidatorWorkflowShape(t *testing.T) {
 	assertAgentStep(t, setup, "", "validator-setup-session", model.ModeInteractive)
 	if !strings.Contains(setup.Prompt, "agent-validator:validator-setup") {
 		t.Fatalf("setup prompt missing validator setup skill:\n%s", setup.Prompt)
+	}
+	restore := stepByID(t, &wf, "restore-guided-changes")
+	if restore.StepType() != "shell" {
+		t.Fatalf("restore-guided-changes type = %q, want shell", restore.StepType())
+	}
+	for _, want := range []string{"git stash list", "git stash pop", "agent-runner onboarding guided changes", "git status --porcelain", "git status --short", "git diff --stat"} {
+		if !strings.Contains(restore.Command, want) {
+			t.Fatalf("restore-guided-changes command missing %q:\n%s", want, restore.Command)
+		}
 	}
 	breakIt := stepByID(t, &wf, "break-it")
 	assertAgentStep(t, breakIt, "", "impl-session", model.ModeHeadless)
