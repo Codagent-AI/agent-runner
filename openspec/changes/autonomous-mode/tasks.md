@@ -1,0 +1,2 @@
+- [ ] Rename headless to autonomous + adapter permission alignment (`tasks/rename-and-adapter-alignment.md`)
+- [ ] Autonomous backend setting + editor + routing + setup (`tasks/autonomous-backend-setting.md`)

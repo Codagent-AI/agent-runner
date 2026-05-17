@@ -16,7 +16,7 @@ Rename the user-facing mode concept: `mode: headless` becomes `mode: autonomous`
 
 The two valid mode values become `interactive` and `autonomous`. The word "headless" is retired as a mode name but retained as an `autonomous_backend` value, where it describes the invocation mechanism (print/exec mode, no TTY) rather than the user-facing concept.
 
-`mode: headless` and `default_mode: headless` in workflow YAML and profile config are accepted as aliases for `autonomous` with a deprecation warning logged at load time. This gives existing users a migration path instead of a hard break.
+`mode: headless` and `default_mode: headless` in workflow YAML and profile config are no longer accepted — config loading rejects them with a validation error. The project is pre-release; breaking changes are acceptable.
 
 ### Autonomous backend setting
 
@@ -51,15 +51,17 @@ Adapter-specific autonomy flags are also passed in interactive autonomous mode w
 ## Capabilities
 
 ### Modified Capabilities
-- `agent-profiles`: Profile schema changes `default_mode` values from `interactive|headless` to `interactive|autonomous`. Built-in default profiles update accordingly (`headless_base` keeps its name but its `default_mode` becomes `autonomous`).
+- `agent-profiles`: Profile schema changes `default_mode` values from `interactive|headless` to `interactive|autonomous`. Built-in default profiles update accordingly (`headless_base` renamed to `autonomous_base`).
 - `user-settings-file`: Add `autonomous_backend` as a recognized top-level key with values `headless`, `interactive`, or `interactive-claude`.
 - `user-settings-editor`: Add an "Autonomous Backend" field to the settings modal with the three options above.
+- `cli-adapter`: Rename `Headless bool` in `BuildArgsInput` to an `InvocationContext` type with three values; update permission and mode coverage requirements to three invocation contexts.
+- `native-setup`: Add autonomous backend selection step after implementor CLI choice, with `interactive-claude` pre-selected.
 
 ## Out of Scope
 
 - Re-defaulting built-in profiles away from Claude.
 - Automatic TTY detection as the *sole* mechanism — the setting is explicit, with TTY detection only as a fallback when interactive is selected but unavailable.
-- Renaming profile names like `headless_base` — the profile name is a user-facing identifier, not a mode value.
+- Adding new CLI adapters.
 
 ## Impact
 
@@ -81,5 +83,5 @@ Adapter-specific autonomy flags are also passed in interactive autonomous mode w
 - `openspec/specs/user-settings-file/spec.md` — add `autonomous_backend` key
 - `openspec/specs/user-settings-editor/spec.md` — add autonomous backend field to editor
 - `workflows/*.yaml` — rename `mode: headless` to `mode: autonomous` in built-in workflows
-- **DEPRECATION** for users who reference `mode: headless` in workflow YAML or `default_mode: headless` in config — accepted as aliases with a warning; will be removed in a future release
+- **BREAKING** for users who reference `mode: headless` in workflow YAML or `default_mode: headless` in config — no longer accepted
 - **BREAKING** for users who depend on the current nuclear bypass permission behavior
