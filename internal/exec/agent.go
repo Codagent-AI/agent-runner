@@ -121,8 +121,6 @@ type stderrWrapperSetter interface {
 }
 
 // ExecuteAgentStep runs an agent step using the resolved CLI adapter.
-//
-//nolint:funlen // This orchestrates one step's lifecycle; helpers own the sub-decisions.
 func ExecuteAgentStep(
 	step *model.Step,
 	ctx *model.ExecutionContext,
@@ -145,12 +143,6 @@ func ExecuteAgentStep(
 	mode := resolveModeFromProfile(step, profile)
 	invocationContext := cli.ContextInteractive
 
-	if errMsg := captureModeError(step, mode); errMsg != "" {
-		emitAgentFailure(ctx, prefix, startTime, string(mode), step,
-			errMsg)
-		return OutcomeFailed, nil
-	}
-
 	prompt, enrichment, err := buildAgentPrompt(step, ctx)
 	if err != nil {
 		emitAgentFailure(ctx, prefix, startTime, string(mode), step, err.Error())
@@ -165,6 +157,10 @@ func ExecuteAgentStep(
 
 	invocationContext = resolveInvocationContext(mode, ctx, cliName, log)
 	headless := invocationContext.IsHeadless()
+	if errMsg := captureInvocationError(step, invocationContext); errMsg != "" {
+		emitAgentFailure(ctx, prefix, startTime, string(mode), step, errMsg)
+		return OutcomeFailed, nil
+	}
 
 	if !headless {
 		if r, ok := adapter.(cli.InteractiveRejector); ok {
@@ -271,11 +267,11 @@ func resolveInvocationContext(mode model.StepMode, ctx *model.ExecutionContext, 
 	return cli.ContextAutonomousHeadless
 }
 
-func captureModeError(step *model.Step, mode model.StepMode) string {
-	if step.Capture == "" || mode == model.ModeHeadless {
+func captureInvocationError(step *model.Step, invocationContext cli.InvocationContext) string {
+	if step.Capture == "" || invocationContext.IsHeadless() {
 		return ""
 	}
-	return fmt.Sprintf("capture requires headless mode, but step %q resolved to %s (check agent profile)", step.ID, mode)
+	return fmt.Sprintf("capture requires headless execution, but step %q resolved to %s", step.ID, invocationContext)
 }
 
 func configureAgentOutputWrappers(adapter cli.Adapter, runner ProcessRunner) func() {

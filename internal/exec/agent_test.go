@@ -1137,6 +1137,42 @@ func TestExecuteAgentStep(t *testing.T) {
 		t.Fatalf("expected autonomy instructions in interactive invocation args, got %v", ptyCalls[0])
 	})
 
+	t.Run("capture fails when autonomous backend resolves to interactive invocation", func(t *testing.T) {
+		var ptyCalls int
+		oldRunner := interactiveRunnerFn
+		interactiveRunnerFn = func(_ []string, _ pty.Options) (pty.Result, error) {
+			ptyCalls++
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		oldTTY := isStdinTerminal
+		isStdinTerminal = func() bool { return true }
+		defer func() {
+			interactiveRunnerFn = oldRunner
+			isStdinTerminal = oldTTY
+		}()
+
+		runner := &mockRunner{}
+		ctx := makeCtx()
+		ctx.AutonomousBackend = "interactive"
+		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "implement feature", Session: model.SessionNew, Capture: "out"}
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeFailed {
+			t.Fatalf("outcome = %q, want failed", outcome)
+		}
+		if ptyCalls != 0 {
+			t.Fatalf("expected no interactive invocation when capture cannot be honored, got %d", ptyCalls)
+		}
+		if len(runner.calls) != 0 {
+			t.Fatalf("expected no headless invocation after validation failure, got %d", len(runner.calls))
+		}
+		if _, ok := ctx.CapturedVariables["out"]; ok {
+			t.Fatal("did not expect capture variable after validation failure")
+		}
+	})
+
 	t.Run("autonomous backend interactive falls back to headless without TTY", func(t *testing.T) {
 		oldTTY := isStdinTerminal
 		isStdinTerminal = func() bool { return false }
