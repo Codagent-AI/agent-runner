@@ -355,84 +355,17 @@ func (m *Model) Init() tea.Cmd {
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case settingseditor.SavedMsg:
-		m.settingsEditor = nil
-		m.applyUserTheme(msg.Settings.Theme)
-		return m, m.forceRerender()
+		return m.handleSettingsSaved(msg)
 
 	case settingseditor.CancelledMsg:
 		m.settingsEditor = nil
 		return m, nil
 
 	case tea.WindowSizeMsg:
-		m.termWidth = msg.Width
-		m.termHeight = msg.Height
-		if m.settingsEditor != nil {
-			next, _ := m.settingsEditor.Update(msg)
-			m.settingsEditor = next.(*settingseditor.Model)
-		}
+		m.handleWindowSize(msg)
 
 	case tea.KeyMsg:
-		m.errMsg = "" // auto-clear inline error on any keypress
-
-		if msg.String() == "ctrl+c" {
-			m.quitting = true
-			return m, tea.Quit
-		}
-		if m.settingsEditor != nil {
-			next, cmd := m.settingsEditor.Update(msg)
-			m.settingsEditor = next.(*settingseditor.Model)
-			return m, cmd
-		}
-
-		// When the new tab is active and the search box has focus, most keys
-		// go to the filter text. Global quit and tab-switching still work.
-		if m.activeTab == tabNew && m.newTab.searchFocused {
-			return m.handleSearchKey(msg)
-		}
-
-		switch msg.String() {
-		case "q":
-			m.quitting = true
-			return m, tea.Quit
-
-		case "tab", "right":
-			m.nextTab()
-		case "shift+tab", "left":
-			m.prevTab()
-		case "n":
-			m.activeTab = tabNew
-		case "c":
-			m.activeTab = tabCurrentDir
-		case "w":
-			if m.worktreeTab.worktrees != nil {
-				m.activeTab = tabWorktrees
-			}
-		case "a":
-			m.activeTab = tabAll
-
-		case "up", "k":
-			m.moveCursor(-1)
-		case "down", "j":
-			m.moveCursor(1)
-
-		case "enter":
-			return m.handleEnter()
-
-		case "r":
-			return m.handleResumeRun()
-
-		case "s":
-			m.openSettingsEditor()
-			return m, nil
-
-		case "?":
-			return m.handleHelpRun()
-
-		case "esc":
-			m.handleEsc()
-		}
-		cmd := m.schedulePulseIfNeeded()
-		return m, cmd
+		return m.handleKey(msg)
 
 	case refreshMsg:
 		m.loadData()
@@ -449,6 +382,80 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m *Model) handleSettingsSaved(msg settingseditor.SavedMsg) (tea.Model, tea.Cmd) {
+	m.settingsEditor = nil
+	m.applyUserTheme(msg.Settings.Theme)
+	cmd := m.forceRerender()
+	return m, cmd
+}
+
+func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) {
+	m.termWidth = msg.Width
+	m.termHeight = msg.Height
+	if m.settingsEditor != nil {
+		next, _ := m.settingsEditor.Update(msg)
+		m.settingsEditor = next.(*settingseditor.Model)
+	}
+}
+
+func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.errMsg = "" // auto-clear inline error on any keypress
+
+	if msg.String() == "ctrl+c" {
+		m.quitting = true
+		return m, tea.Quit
+	}
+	if m.settingsEditor != nil {
+		next, cmd := m.settingsEditor.Update(msg)
+		m.settingsEditor = next.(*settingseditor.Model)
+		return m, cmd
+	}
+
+	if m.activeTab == tabNew && m.newTab.searchFocused {
+		return m.handleSearchKey(msg)
+	}
+	return m.handleListKey(msg)
+}
+
+func (m *Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q":
+		m.quitting = true
+		return m, tea.Quit
+	case "tab", "right":
+		m.nextTab()
+	case "shift+tab", "left":
+		m.prevTab()
+	case "n":
+		m.activeTab = tabNew
+	case "c":
+		m.activeTab = tabCurrentDir
+	case "w":
+		if m.worktreeTab.worktrees != nil {
+			m.activeTab = tabWorktrees
+		}
+	case "a":
+		m.activeTab = tabAll
+	case "up", "k":
+		m.moveCursor(-1)
+	case "down", "j":
+		m.moveCursor(1)
+	case "enter":
+		return m.handleEnter()
+	case "r":
+		return m.handleResumeRun()
+	case "s":
+		m.openSettingsEditor()
+		return m, nil
+	case "?":
+		return m.handleHelpRun()
+	case "esc":
+		m.handleEsc()
+	}
+	cmd := m.schedulePulseIfNeeded()
+	return m, cmd
 }
 
 func (m *Model) openSettingsEditor() {

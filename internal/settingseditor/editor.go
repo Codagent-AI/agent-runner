@@ -81,7 +81,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "down", "right", "tab":
 		m.move(1)
 	case "enter":
-		return m, m.saveSelected()
+		cmd := m.saveSelected()
+		return m, cmd
 	case "esc":
 		return m, func() tea.Msg { return CancelledMsg{} }
 	case "ctrl+c":
