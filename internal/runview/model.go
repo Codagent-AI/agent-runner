@@ -235,8 +235,13 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	for _, e := range events {
 		tree.ApplyEvent(e)
 	}
+	current := m.applyCurrentStepState(&state)
 	if m.autoFollow {
-		m.applyAutoFollowToInProgress()
+		if current != nil {
+			m.applyAutoFollowToNode(current)
+		} else {
+			m.applyAutoFollowToInProgress()
+		}
 	}
 
 	return m, nil
@@ -250,6 +255,71 @@ func currentStepID(state *model.RunState) string {
 		return state.CurrentStep.Nested.StepID
 	}
 	return state.CurrentStep.StepID
+}
+
+func (m *Model) applyCurrentStepState(state *model.RunState) *StepNode {
+	if state == nil {
+		return nil
+	}
+	if state.CurrentStep.Nested != nil {
+		return m.applyNestedCurrentStepState(m.tree.Root, state.CurrentStep.Nested)
+	}
+	if state.CurrentStep.StepID == "" {
+		return nil
+	}
+	node := childByID(m.tree.Root, state.CurrentStep.StepID)
+	markCurrentNode(node, false)
+	return node
+}
+
+func (m *Model) applyNestedCurrentStepState(container *StepNode, current *model.NestedStepState) *StepNode {
+	if container == nil || current == nil || current.StepID == "" {
+		return nil
+	}
+	scope := container.Drilldown()
+	if scope == nil {
+		return nil
+	}
+	node := childByID(scope, current.StepID)
+	if node == nil {
+		return nil
+	}
+	markCurrentNode(node, current.Completed && current.Child == nil)
+
+	if current.Iteration != nil {
+		iter := findIteration(node, *current.Iteration)
+		if iter == nil {
+			iter = ensureIteration(node, *current.Iteration)
+		}
+		markCurrentNode(iter, current.Completed && current.Child == nil)
+		if current.Child != nil {
+			if child := m.applyNestedCurrentStepState(iter, current.Child); child != nil {
+				return child
+			}
+		}
+		return iter
+	}
+
+	if current.Child != nil {
+		if node.Type == NodeSubWorkflow {
+			if err := m.tree.EnsureSubWorkflowLoaded(node); err != nil && node.ErrorMessage == "" {
+				node.ErrorMessage = err.Error()
+			}
+		}
+		if child := m.applyNestedCurrentStepState(node, current.Child); child != nil {
+			return child
+		}
+	}
+	return node
+}
+
+func markCurrentNode(node *StepNode, completed bool) {
+	if node == nil || completed {
+		return
+	}
+	node.Status = StatusInProgress
+	node.Aborted = false
+	node.Outcome = ""
 }
 
 // NewForDefinition constructs a runview Model for inspecting a workflow definition
@@ -605,10 +675,10 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) {
 
 func (m *Model) handleOutputChunkMsg(msg liverun.OutputChunkMsg) {
 	m.applyOutputChunk(msg)
-	if (m.active || m.running) && m.autoFollow && !m.liveUIVisible() {
-		m.logOffset = math.MaxInt32
-	}
 	lineCount := m.rebuildRanges()
+	if m.shouldSyncAutoFollowDetail() {
+		m.syncLogToSelection()
+	}
 	m.clampLogOffset(lineCount)
 }
 
@@ -617,10 +687,10 @@ func (m *Model) handleStepStateMsg(msg liverun.StepStateMsg) {
 	if m.autoFollow {
 		m.applyAutoFollowCursor()
 	}
-	if (m.active || m.running) && m.autoFollow && !m.liveUIVisible() {
-		m.logOffset = math.MaxInt32
-	}
 	lineCount := m.rebuildRanges()
+	if m.shouldSyncAutoFollowDetail() {
+		m.syncLogToSelection()
+	}
 	m.clampLogOffset(lineCount)
 }
 
@@ -688,15 +758,22 @@ func (m *Model) handleRefreshMsg() tea.Cmd {
 		return nil
 	}
 	m.refreshData()
-	if m.autoFollow && !m.liveUIVisible() {
-		m.logOffset = math.MaxInt32
+	if m.autoFollow {
+		m.applyAutoFollowCursor()
 	}
 	lineCount := m.rebuildRanges()
+	if m.shouldSyncAutoFollowDetail() {
+		m.syncLogToSelection()
+	}
 	m.clampLogOffset(lineCount)
 	if !m.hasLiveUpdates() {
 		return nil
 	}
 	return tuistyle.DoRefresh()
+}
+
+func (m *Model) shouldSyncAutoFollowDetail() bool {
+	return (m.active || m.running) && m.autoFollow && !m.liveUIVisible()
 }
 
 func (m *Model) handlePulseMsg() tea.Cmd {
