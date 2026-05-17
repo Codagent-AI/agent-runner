@@ -247,8 +247,8 @@ func TestValidatorWorkflowShape(t *testing.T) {
 		t.Fatalf("setup prompt missing validator setup skill:\n%s", setup.Prompt)
 	}
 	breakIt := stepByID(t, &wf, "break-it")
-	assertAgentStep(t, breakIt, "", "tutor-session", model.ModeHeadless)
-	for _, want := range []string{"previous guided workflow", "git status --short", "git diff", "git show", "previously implemented code", ".validator/config.yml", "Do not commit"} {
+	assertAgentStep(t, breakIt, "", "impl-session", model.ModeHeadless)
+	for _, want := range []string{"same implementor-agent context", "previous guided workflow", "git status --short", "git diff", "git show", "previously implemented code", ".validator/config.yml", "Do not commit"} {
 		if !strings.Contains(breakIt.Prompt, want) {
 			t.Fatalf("break-it prompt missing %q:\n%s", want, breakIt.Prompt)
 		}

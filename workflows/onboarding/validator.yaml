@@ -35,18 +35,18 @@ steps:
     mode: ui
     title: Validation Run
     body: |
-      Agent Runner will first ask the tutorial agent to intentionally introduce a small defect in the code produced by the guided workflow, then Agent Validator will run on the result. If validation finds fixable failures, Agent Runner can hand that context back to the implementor session.
+      Agent Runner will first ask the implementor agent to intentionally introduce a small defect in the code produced by the guided workflow, then Agent Validator will run on the result. If validation finds fixable failures, Agent Runner can hand that context back to the implementor session.
     actions:
       - label: Continue
         outcome: continue
 
   - id: break-it
-    session: tutor-session
+    session: impl-session
     mode: headless
     prompt: |
       You are the onboarding "break it" step.
 
-      Use the same tutorial-agent context from the guided workflow. First, identify the code that was implemented by the previous guided workflow. Inspect `git status --short` and `git diff`; if the working tree is clean, inspect the previous commit with `git show --stat --name-only HEAD` and `git show HEAD`.
+      Use the same implementor-agent context from the guided workflow. First, identify the code that was implemented by the previous guided workflow. Inspect `git status --short` and `git diff`; if the working tree is clean, inspect the previous commit with `git show --stat --name-only HEAD` and `git show HEAD`.
 
       Intentionally introduce one or two small, reversible bugs only in that previously implemented code. Do not modify unrelated files just because they would be easier to break. Inspect `.validator/config.yml` and choose defects that the configured validator checks or reviews should catch on the next run.
 

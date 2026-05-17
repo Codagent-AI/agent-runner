@@ -33,7 +33,8 @@ steps:
       agent-validator skip
 
   - id: generate-code
-    session: resume
+    agent: implementor
+    session: new
     mode: headless
     prompt: |
       Implement the task described in openspec/changes/{{change_name}}/tasks.md. You MUST use the codagent:implement-with-tdd skill. When you are done implementing, commit your changes following the project's commit message conventions and prepend [{{step_id}}]. Then summarize to the user what you changed.
