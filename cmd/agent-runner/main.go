@@ -1718,6 +1718,17 @@ func findLatestIncompleteOnboardingRunState(ref string) (statePath string, ok bo
 		if state.WorkflowFile != ref || state.Completed {
 			continue
 		}
+		if runStateCurrentStepID(&state) == "" {
+			inferred := inferOnboardingResumeStepFromAudit(filepath.Dir(statePath))
+			if inferred == "" {
+				inferred = firstWorkflowStepID(ref)
+			}
+			if inferred == "" {
+				continue
+			}
+			state.CurrentStep = model.CurrentStep{Nested: &model.NestedStepState{StepID: inferred}}
+			_ = stateio.WriteState(&state, filepath.Dir(statePath))
+		}
 		candidates = append(candidates, candidate{
 			statePath: statePath,
 			sessionID: entry.Name(),
@@ -1734,6 +1745,52 @@ func findLatestIncompleteOnboardingRunState(ref string) (statePath string, ok bo
 		return candidates[i].modUnix > candidates[j].modUnix
 	})
 	return candidates[0].statePath, true, nil
+}
+
+func inferOnboardingResumeStepFromAudit(sessionDir string) string {
+	data, err := os.ReadFile(filepath.Join(sessionDir, "audit.log")) // #nosec G304 -- session dir from internal run state.
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(data), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		ev, err := runview.ParseLine(strings.TrimSpace(lines[i]))
+		if err != nil || ev.Type != string(audit.EventRunStart) {
+			continue
+		}
+		if from, ok := ev.Data["resume_from"].(string); ok && strings.TrimSpace(from) != "" {
+			return strings.TrimSpace(from)
+		}
+	}
+	return ""
+}
+
+func firstWorkflowStepID(ref string) string {
+	workflow, err := loader.LoadWorkflow(ref, loader.Options{})
+	if err != nil || len(workflow.Steps) == 0 {
+		return ""
+	}
+	return workflow.Steps[0].ID
+}
+
+func runStateCurrentStepID(state *model.RunState) string {
+	if state == nil {
+		return ""
+	}
+	if state.CurrentStep.Nested != nil {
+		return nestedStepLeafID(state.CurrentStep.Nested)
+	}
+	return state.CurrentStep.StepID
+}
+
+func nestedStepLeafID(n *model.NestedStepState) string {
+	if n == nil {
+		return ""
+	}
+	if n.Child != nil {
+		return nestedStepLeafID(n.Child)
+	}
+	return n.StepID
 }
 
 func newOnboardingSessionDir(workflowName string) (string, error) {

@@ -791,6 +791,69 @@ func TestPrepareRun_SeedsInitialState(t *testing.T) {
 	if state.Params["k"] != "v" {
 		t.Errorf("Params = %v, want k=v", state.Params)
 	}
+	if state.CurrentStep.Nested == nil {
+		t.Fatal("CurrentStep should be seeded with the first step")
+	}
+	if state.CurrentStep.Nested.StepID != "s1" {
+		t.Fatalf("CurrentStep.StepID = %q, want s1", state.CurrentStep.Nested.StepID)
+	}
+}
+
+func TestPrepareRun_SeedsResumeState(t *testing.T) {
+	w := model.Workflow{
+		Name: "my-workflow",
+		Steps: []model.Step{
+			shellStep("before", "echo before"),
+			{ID: "validator", Workflow: "validator.yaml"},
+		},
+	}
+	w.ApplyDefaults()
+
+	sessionDir := t.TempDir()
+	child := &model.NestedStepState{
+		StepID:            "summary-ui",
+		SessionIDs:        map[string]string{"agent": "session-1"},
+		CapturedVariables: map[string]model.CapturedValue{"answer": model.NewCapturedString("continue")},
+		Completed:         false,
+	}
+	h, err := PrepareRun(&w, map[string]string{"k": "v"}, &Options{
+		WorkflowFile:      ".agent-runner/workflows/my-workflow.yaml",
+		From:              "validator",
+		SessionIDs:        map[string]string{"root-agent": "root-session"},
+		CapturedVariables: map[string]model.CapturedValue{"root": model.NewCapturedString("value")},
+		LastSessionStepID: "root-step",
+		NamedSessions:     map[string]string{"validator-setup": "session-2"},
+		NamedSessionDecls: map[string]string{"validator-setup": "planner"},
+		ChildState:        child,
+		ProcessRunner:     &mockRunner{},
+		GlobExpander:      &mockGlob{},
+		Log:               &mockLog{},
+		SessionDir:        sessionDir,
+	})
+	if err != nil {
+		t.Fatalf("PrepareRun: %v", err)
+	}
+	defer finalizeRun(h.rs, ResultSuccess)
+
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatalf("state.json missing after PrepareRun: %v", err)
+	}
+	if state.CurrentStep.Nested == nil {
+		t.Fatal("CurrentStep should be nested")
+	}
+	if got := state.CurrentStep.Nested.StepID; got != "validator" {
+		t.Fatalf("CurrentStep.StepID = %q, want validator", got)
+	}
+	if got := state.CurrentStep.Nested.Child; got == nil || got.StepID != "summary-ui" {
+		t.Fatalf("CurrentStep.Child = %#v, want summary-ui", got)
+	}
+	if got := state.CurrentStep.Nested.SessionIDs["root-agent"]; got != "root-session" {
+		t.Fatalf("CurrentStep.SessionIDs[root-agent] = %q, want root-session", got)
+	}
+	if got := state.CurrentStep.Nested.NamedSessions["validator-setup"]; got != "session-2" {
+		t.Fatalf("CurrentStep.NamedSessions[validator-setup] = %q, want session-2", got)
+	}
 }
 
 func contains(s, substr string) bool {

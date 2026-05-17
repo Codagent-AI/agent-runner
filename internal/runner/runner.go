@@ -472,12 +472,7 @@ func PrepareRun(workflow *model.Workflow, params map[string]string, opts *Option
 	// state concurrently (live run TUI, --inspect on a freshly-started run)
 	// can resolve the workflow file immediately instead of falling back to
 	// name-based discovery that does not know about .agent-runner/workflows/.
-	if err := stateio.WriteState(&model.RunState{
-		WorkflowFile: opts.WorkflowFile,
-		WorkflowName: workflow.Name,
-		Params:       rs.ctx.Params,
-		WorkflowHash: rs.workflowHash,
-	}, rs.sessionDir); err != nil {
+	if err := stateio.WriteState(initialRunState(workflow, rs, opts), rs.sessionDir); err != nil {
 		runlock.Delete(rs.sessionDir)
 		if rs.auditLogger != nil {
 			rs.auditLogger.Close()
@@ -495,6 +490,37 @@ func PrepareRun(workflow *model.Workflow, params map[string]string, opts *Option
 		SessionDir: rs.sessionDir,
 		ProjectDir: projectDir,
 	}, nil
+}
+
+func initialRunState(workflow *model.Workflow, rs *runState, opts *Options) *model.RunState {
+	stepID := strings.TrimSpace(opts.From)
+	if stepID == "" && len(workflow.Steps) > 0 {
+		stepID = workflow.Steps[0].ID
+	}
+
+	state := &model.RunState{
+		WorkflowFile: opts.WorkflowFile,
+		WorkflowName: workflow.Name,
+		Params:       rs.ctx.Params,
+		WorkflowHash: rs.workflowHash,
+	}
+	if stepID == "" {
+		return state
+	}
+
+	state.CurrentStep = model.CurrentStep{
+		Nested: &model.NestedStepState{
+			StepID:            stepID,
+			SessionIDs:        copyMap(rs.ctx.SessionIDs),
+			SessionProfiles:   copyMap(rs.ctx.SessionProfiles),
+			CapturedVariables: copyCapturedMap(rs.ctx.CapturedVariables),
+			LastSessionStepID: rs.ctx.LastSessionStepID,
+			NamedSessions:     copyMap(rs.ctx.NamedSessions),
+			NamedSessionDecls: copyMap(rs.ctx.NamedSessionDecls),
+			Child:             opts.ChildState,
+		},
+	}
+	return state
 }
 
 // ExecuteFromHandle runs executeSteps + finalizeRun on an already-prepared handle.

@@ -332,6 +332,98 @@ func TestFindLatestIncompleteOnboardingRunState(t *testing.T) {
 	}
 }
 
+func TestFindLatestIncompleteOnboardingRunStateRepairsEmptyCurrentStepToFirstStep(t *testing.T) {
+	originalHome := userHomeDir
+	home := t.TempDir()
+	userHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHomeDir = originalHome })
+
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repo, 0o750); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	t.Chdir(repo)
+
+	ref := "builtin:onboarding/onboarding.yaml"
+	runsDir := filepath.Join(home, ".agent-runner", "onboarding", "runs")
+	writeRunState(t, runsDir, "onboarding-onboarding-2026-05-10T10-00-00Z", ref, false)
+	emptyDir := filepath.Join(runsDir, "onboarding-onboarding-2026-05-10T11-00-00Z")
+	if err := stateio.WriteState(&model.RunState{
+		WorkflowFile: ref,
+		WorkflowName: "onboarding-onboarding",
+		WorkflowHash: "test-hash",
+	}, emptyDir); err != nil {
+		t.Fatalf("write empty current step state: %v", err)
+	}
+
+	got, ok, err := findLatestIncompleteOnboardingRunState(ref)
+	if err != nil {
+		t.Fatalf("findLatestIncompleteOnboardingRunState: %v", err)
+	}
+	if !ok {
+		t.Fatal("findLatestIncompleteOnboardingRunState ok = false, want repaired candidate")
+	}
+	want := filepath.Join(emptyDir, "state.json")
+	if got != want {
+		t.Fatalf("state path = %q, want %q", got, want)
+	}
+	state, err := stateio.ReadState(got)
+	if err != nil {
+		t.Fatalf("read repaired state: %v", err)
+	}
+	if state.CurrentStep.Nested == nil || state.CurrentStep.Nested.StepID != "step-types-demo" {
+		t.Fatalf("repaired CurrentStep = %#v, want step-types-demo", state.CurrentStep)
+	}
+}
+
+func TestFindLatestIncompleteOnboardingRunStateRepairsEmptyCurrentStepFromAudit(t *testing.T) {
+	originalHome := userHomeDir
+	home := t.TempDir()
+	userHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHomeDir = originalHome })
+
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repo, 0o750); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	t.Chdir(repo)
+
+	ref := "builtin:onboarding/onboarding.yaml"
+	runsDir := filepath.Join(home, ".agent-runner", "onboarding", "runs")
+	writeRunState(t, runsDir, "onboarding-onboarding-2026-05-10T10-00-00Z", ref, false)
+	emptyDir := filepath.Join(runsDir, "onboarding-onboarding-2026-05-10T11-00-00Z")
+	if err := stateio.WriteState(&model.RunState{
+		WorkflowFile: ref,
+		WorkflowName: "onboarding-onboarding",
+		WorkflowHash: "test-hash",
+	}, emptyDir); err != nil {
+		t.Fatalf("write empty current step state: %v", err)
+	}
+	auditLine := `2026-05-10T11:00:00Z run_start {"resumed":true,"resume_from":"validator"}` + "\n"
+	if err := os.WriteFile(filepath.Join(emptyDir, "audit.log"), []byte(auditLine), 0o600); err != nil {
+		t.Fatalf("write audit log: %v", err)
+	}
+
+	got, ok, err := findLatestIncompleteOnboardingRunState(ref)
+	if err != nil {
+		t.Fatalf("findLatestIncompleteOnboardingRunState: %v", err)
+	}
+	if !ok {
+		t.Fatal("findLatestIncompleteOnboardingRunState ok = false, want repaired candidate")
+	}
+	want := filepath.Join(emptyDir, "state.json")
+	if got != want {
+		t.Fatalf("state path = %q, want %q", got, want)
+	}
+	state, err := stateio.ReadState(got)
+	if err != nil {
+		t.Fatalf("read repaired state: %v", err)
+	}
+	if state.CurrentStep.Nested == nil || state.CurrentStep.Nested.StepID != "validator" {
+		t.Fatalf("repaired CurrentStep = %#v, want validator", state.CurrentStep)
+	}
+}
+
 func TestFindLatestIncompleteOnboardingRunStateMissingRunsDir(t *testing.T) {
 	originalHome := userHomeDir
 	home := t.TempDir()
