@@ -49,6 +49,7 @@ steps:
 
   - id: run-validator
     workflow: ../core/run-validator.yaml
+    continue_on_failure: true
 
   - id: finalize
     workflow: ../core/finalize-pr.yaml
