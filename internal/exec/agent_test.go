@@ -581,6 +581,23 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("capture forces headless even when autonomous backend is interactive", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "captured-dir"}}}
+		ctx := makeCtx()
+		ctx.AutonomousBackend = "interactive"
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "find it", Session: model.SessionNew, Capture: "result_dir"}
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected success, got %q", outcome)
+		}
+		if ctx.CapturedVariables["result_dir"].Str != "captured-dir" {
+			t.Fatalf("expected captured output, got %q", ctx.CapturedVariables["result_dir"].Str)
+		}
+	})
+
 	t.Run("strips trailing newlines from captured agent output", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "path/to/tasks/*.md\n"}}}
 		ctx := makeCtx()
@@ -1140,7 +1157,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		t.Fatalf("expected autonomy instructions in interactive invocation args, got %v", ptyCalls[0])
 	})
 
-	t.Run("capture fails when autonomous backend resolves to interactive invocation", func(t *testing.T) {
+	t.Run("capture forces headless when autonomous backend prefers interactive", func(t *testing.T) {
 		var ptyCalls int
 		oldRunner := interactiveRunnerFn
 		interactiveRunnerFn = func(_ []string, _ pty.Options) (pty.Result, error) {
@@ -1154,7 +1171,7 @@ func TestExecuteAgentStep(t *testing.T) {
 			isStdinTerminal = oldTTY
 		}()
 
-		runner := &mockRunner{}
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "captured-value"}}}
 		ctx := makeCtx()
 		ctx.AutonomousBackend = "interactive"
 		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "implement feature", Session: model.SessionNew, Capture: "out"}
@@ -1162,17 +1179,14 @@ func TestExecuteAgentStep(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if outcome != OutcomeFailed {
-			t.Fatalf("outcome = %q, want failed", outcome)
+		if outcome != OutcomeSuccess {
+			t.Fatalf("outcome = %q, want success", outcome)
 		}
 		if ptyCalls != 0 {
-			t.Fatalf("expected no interactive invocation when capture cannot be honored, got %d", ptyCalls)
+			t.Fatalf("expected no interactive invocation when capture forces headless, got %d", ptyCalls)
 		}
-		if len(runner.calls) != 0 {
-			t.Fatalf("expected no headless invocation after validation failure, got %d", len(runner.calls))
-		}
-		if _, ok := ctx.CapturedVariables["out"]; ok {
-			t.Fatal("did not expect capture variable after validation failure")
+		if ctx.CapturedVariables["out"].Str != "captured-value" {
+			t.Fatalf("expected captured output, got %q", ctx.CapturedVariables["out"].Str)
 		}
 	})
 
