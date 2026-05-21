@@ -24,7 +24,6 @@ steps:
 
   - id: review-assumptions
     session: lead-agent
-    mode: autonomous
     prompt: |
       The implementor iterations for change "{{change_name}}" have completed. Each iteration produced a session report (via codagent:session-report) listing risky and notable assumptions plus any context gaps.
 
