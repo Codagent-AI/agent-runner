@@ -1429,10 +1429,9 @@ func exitFirstRun(code int) firstRunResult {
 }
 
 var defaultFirstRunDeps = firstRunDeps{
-	load:                          usersettings.Load,
-	isStdinTTY:                    func() bool { return isatty.IsTerminal(os.Stdin.Fd()) },
-	isStdoutTTY:                   func() bool { return isatty.IsTerminal(os.Stdout.Fd()) },
-	continueAfterNativeSetupError: true,
+	load:        usersettings.Load,
+	isStdinTTY:  func() bool { return isatty.IsTerminal(os.Stdin.Fd()) },
+	isStdoutTTY: func() bool { return isatty.IsTerminal(os.Stdout.Fd()) },
 	runNativeSetup: func(onboardingCompleted bool) (nativeSetupResult, error) {
 		result, err := nativesetup.Run(&nativesetup.Deps{
 			OnboardingCompleted: onboardingCompleted,
