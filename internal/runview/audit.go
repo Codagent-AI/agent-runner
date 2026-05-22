@@ -228,7 +228,7 @@ func filterAuditEventsForWorkflowState(events []RawEvent, workflowHash string, r
 			continue
 		}
 		if segmentMatches {
-			if currentIndex >= 0 && (event.Type == "run_end" || eventIsAfterCurrentTopLevelStep(event, root, currentIndex)) {
+			if currentIndex >= 0 && eventIsAfterCurrentTopLevelStep(event, root, currentIndex) {
 				continue
 			}
 			filtered = append(filtered, event)

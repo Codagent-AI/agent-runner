@@ -154,11 +154,7 @@ func ExecuteAgentStep(
 		return OutcomeFailed, nil
 	}
 
-	invocationContext := resolveInvocationContext(mode, ctx, cliName, log)
-	if errMsg := captureInvocationError(step, invocationContext); errMsg != "" {
-		emitAgentFailure(ctx, prefix, startTime, string(mode), step, errMsg)
-		return OutcomeFailed, nil
-	}
+	invocationContext := resolveInvocationContext(mode, ctx, cliName, step.Capture != "", log)
 
 	if !invocationContext.IsHeadless() {
 		if r, ok := adapter.(cli.InteractiveRejector); ok {
@@ -237,9 +233,14 @@ func ExecuteAgentStep(
 	return outcome, nil
 }
 
-func resolveInvocationContext(mode model.StepMode, ctx *model.ExecutionContext, cliName string, log Logger) cli.InvocationContext {
+func resolveInvocationContext(mode model.StepMode, ctx *model.ExecutionContext, cliName string, hasCapture bool, log Logger) cli.InvocationContext {
 	if mode != model.ModeAutonomous {
 		return cli.ContextInteractive
+	}
+
+	// Capture requires a clean stdout pipe, which only the headless path provides.
+	if hasCapture {
+		return cli.ContextAutonomousHeadless
 	}
 
 	var wantsInteractive bool
@@ -259,13 +260,6 @@ func resolveInvocationContext(mode model.StepMode, ctx *model.ExecutionContext, 
 		log.Errorf("  autonomous backend requested interactive mode for %s, but stdin is not a TTY; falling back to headless\n", cliName)
 	}
 	return cli.ContextAutonomousHeadless
-}
-
-func captureInvocationError(step *model.Step, invocationContext cli.InvocationContext) string {
-	if step.Capture == "" || invocationContext.IsHeadless() {
-		return ""
-	}
-	return fmt.Sprintf("capture requires headless execution, but step %q resolved to %s", step.ID, invocationContext)
 }
 
 func configureAgentOutputWrappers(adapter cli.Adapter, runner ProcessRunner) func() {
@@ -301,7 +295,7 @@ func ResolveAgentInvocationContext(step *model.Step, ctx *model.ExecutionContext
 	}
 	mode := resolveModeFromProfile(step, profile)
 	cliName := resolveCLIName(step, profile)
-	return resolveInvocationContext(mode, ctx, cliName, nil)
+	return resolveInvocationContext(mode, ctx, cliName, step.Capture != "", nil)
 }
 
 func resolveCLIName(step *model.Step, profile *config.ResolvedAgent) string {

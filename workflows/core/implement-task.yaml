@@ -17,6 +17,7 @@ steps:
 
   - id: run-validator
     workflow: run-validator.yaml
+    continue_on_failure: true
 
   - id: check-clean
     command: test -z "$(git status --porcelain)"
@@ -32,6 +33,8 @@ steps:
     session: resume
     prompt: |
       Run the codagent:session-report skill against the task file {{task_file}}.
+
+      After the session report, check if validator_logs/report.txt exists and contains unresolved failures. If it does, include a ⚠️ VALIDATOR WARNING section at the end of your output summarizing the unresolved violations and recommending next steps. If the report shows all checks passed, skip this section.
     # sh: skip_if values are interpolated with shell quoting; leave the placeholder
     # unquoted here so a literal true compares as true after interpolation.
     skip_if: 'sh: test {{run_session_report}} != true'

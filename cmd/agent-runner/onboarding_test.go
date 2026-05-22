@@ -231,9 +231,9 @@ func TestEnsureFirstRunForTUISetupErrorFailsWhenNonFatalModeDisabled(t *testing.
 	requireFirstRunExit(t, result, 1)
 }
 
-func TestDefaultFirstRunDepsReportsNativeSetupErrors(t *testing.T) {
-	if !defaultFirstRunDeps.continueAfterNativeSetupError {
-		t.Fatal("default first-run setup should continue to the normal TUI after native setup errors")
+func TestDefaultFirstRunDepsExitsOnNativeSetupError(t *testing.T) {
+	if defaultFirstRunDeps.continueAfterNativeSetupError {
+		t.Fatal("default first-run setup should exit on native setup errors, not silently continue")
 	}
 }
 

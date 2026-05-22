@@ -111,6 +111,7 @@ steps:
 
   - id: run-validator
     workflow: ../core/run-validator.yaml
+    continue_on_failure: true
 
   - id: review-validator-status
     session: tutor-session

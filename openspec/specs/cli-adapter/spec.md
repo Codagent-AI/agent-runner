@@ -193,6 +193,18 @@ When the invocation context is autonomous-interactive, the runner SHALL prepend 
 - **WHEN** the runner prepares system prompt content for an interactive step
 - **THEN** no autonomy instructions are prepended (the human supervises directly)
 
+### Requirement: Capture forces autonomous-headless
+
+When an autonomous step has a `capture` field, the runner SHALL force the invocation context to autonomous-headless regardless of the `autonomous_backend` setting or TTY availability. Capture requires a clean stdout pipe, which only the headless execution path provides; the interactive backend runs inside a PTY whose output stream contains terminal control sequences unsuitable for programmatic capture. This override is per-step — other autonomous steps in the same run that do not use `capture` are unaffected by this rule.
+
+#### Scenario: Capture step with interactive backend forced to headless
+- **WHEN** the `autonomous_backend` setting is `interactive` and an autonomous step has `capture: result`
+- **THEN** the runner invokes the step as autonomous-headless and captures stdout into the variable
+
+#### Scenario: Non-capture step unaffected
+- **WHEN** the `autonomous_backend` setting is `interactive` and an autonomous step does not have `capture`
+- **THEN** the runner routes the step per the normal backend and TTY rules
+
 ### Requirement: TTY fallback for autonomous-interactive
 
 When the runner determines that the invocation context should be autonomous-interactive (based on the step mode and the `autonomous_backend` setting) but no TTY is available, the runner SHALL fall back to autonomous-headless for that step and SHALL log a warning indicating the fallback occurred and the reason. The fallback SHALL be per-step, not global — other steps in the same run that do have a TTY available (or that are already autonomous-headless) are unaffected.

@@ -12,7 +12,7 @@ A shell, script, or `mode: ui` step MAY have a `capture` field. When set, the ru
 - **Script steps**: capture stdout per the rules in `workflow-bundled-scripts` — string by default; `capture_format: json` produces a typed list-of-strings or map-of-strings.
 - **UI steps**: capture per the rules in `ui-step` — a map keyed by input id when `inputs` are declared; rejected when no inputs are declared.
 
-The `capture` field SHALL fail at load time on interactive agent steps. Headless agent steps MAY use `capture` (preserving existing behavior).
+The `capture` field SHALL fail at load time on interactive agent steps. Autonomous agent steps MAY use `capture`. When the `autonomous_backend` setting would otherwise route an autonomous step to the interactive backend, the runner SHALL force the step to autonomous-headless so that stdout can be captured via a clean pipe. This override is per-step and does not affect other autonomous steps in the same run that do not use `capture`.
 
 #### Scenario: Shell capture stores stdout as string
 - **WHEN** a shell step has `capture: validator_output` and produces stdout `tests passed`
@@ -34,9 +34,13 @@ The `capture` field SHALL fail at load time on interactive agent steps. Headless
 - **WHEN** an interactive agent step has a `capture` field
 - **THEN** the runner fails at load time with a validation error indicating that `capture` is not valid on interactive agent steps
 
-#### Scenario: Capture on headless agent step accepted
-- **WHEN** a headless agent step has `capture: agent_output`
+#### Scenario: Capture on autonomous agent step accepted
+- **WHEN** an autonomous agent step has `capture: agent_output`
 - **THEN** validation succeeds; the captured value is a string (stdout of the agent process)
+
+#### Scenario: Capture forces headless when autonomous backend prefers interactive
+- **WHEN** an autonomous agent step has `capture: result` and the `autonomous_backend` setting is `interactive`
+- **THEN** the runner forces the step to autonomous-headless so that stdout is captured via a clean pipe, regardless of TTY availability
 
 #### Scenario: Capture on script step accepted
 - **WHEN** a script step declares `capture: out`
