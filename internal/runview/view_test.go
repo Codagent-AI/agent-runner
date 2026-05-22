@@ -74,12 +74,8 @@ func TestView_FailedRunShowsFailureReasonBelowBreadcrumb(t *testing.T) {
 	if breadcrumbIdx < 0 {
 		t.Fatalf("view should show breadcrumb, got:\n%s", view)
 	}
-	ruleIdx := strings.Index(view, "─")
-	if ruleIdx < 0 {
-		t.Fatalf("view should show rule, got:\n%s", view)
-	}
-	if reasonIdx < breadcrumbIdx || reasonIdx > ruleIdx {
-		t.Fatalf("failure reason should appear between breadcrumb and first rule, got:\n%s", view)
+	if reasonIdx < breadcrumbIdx {
+		t.Fatalf("failure reason should appear after breadcrumb, got:\n%s", view)
 	}
 }
 
@@ -526,12 +522,12 @@ func TestView_HeaderShowsOriginCwdShortened(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	m.termWidth = 100
+	m.termWidth = 120
 	m.termHeight = 30
 
 	view := stripANSI(m.View())
 	if !strings.Contains(view, "~/src/agent-runner") {
-		t.Fatalf("run view header should show shortened origin cwd, got:\n%s", view)
+		t.Fatalf("run view should show shortened origin cwd in footer, got:\n%s", view)
 	}
 	if strings.Contains(view, projectDir) {
 		t.Fatalf("run view should not show internal project dir %q, got:\n%s", projectDir, view)

@@ -3,7 +3,6 @@ package listview
 import "github.com/codagent/agent-runner/internal/tuistyle"
 
 var (
-	headerStyle    = tuistyle.HeaderStyle
 	activeTabStyle = tuistyle.ActiveTabStyle
 	dimTabStyle    = tuistyle.DimTabStyle
 	cursorStyle    = tuistyle.CursorStyle

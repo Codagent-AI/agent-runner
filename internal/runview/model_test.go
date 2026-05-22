@@ -1356,7 +1356,7 @@ func TestModel_View_Renders(t *testing.T) {
 		t.Fatal("View should produce output")
 	}
 
-	checks := []string{"Agent Runner", "test-workflow", "build", "implement", "tasks"}
+	checks := []string{"test-workflow", "build", "implement", "tasks"}
 	for _, check := range checks {
 		if !containsString(output, check) {
 			t.Errorf("View output missing %q", check)
@@ -1515,12 +1515,12 @@ func TestModel_BodyHeightMatchesSubWorkflowHeaderLines(t *testing.T) {
 	m.termHeight = 30
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
-	if got, want := m.bodyHeight(), 18; got != want {
+	if got, want := m.bodyHeight(), 19; got != want {
 		t.Fatalf("bodyHeight without params = %d, want %d", got, want)
 	}
 
 	subwf.InterpolatedParams = map[string]string{"task_file": "task.md"}
-	if got, want := m.bodyHeight(), 17; got != want {
+	if got, want := m.bodyHeight(), 18; got != want {
 		t.Fatalf("bodyHeight with params = %d, want %d", got, want)
 	}
 }

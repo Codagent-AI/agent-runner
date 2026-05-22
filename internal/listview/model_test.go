@@ -288,11 +288,7 @@ func TestListModel_QuestionMark_EmitsHelpStartRunMsg(t *testing.T) {
 func TestListView_UsesSingleScreenMargin(t *testing.T) {
 	m := newTestListModel([]runs.RunInfo{inactiveRun()})
 	m.cwd = "/repo/project"
-
-	header := sanitize(m.renderHeader())
-	if !strings.HasPrefix(header, " Agent Runner") || strings.HasPrefix(header, "  Agent Runner") {
-		t.Fatalf("header should use a single leading margin, got %q", header)
-	}
+	m.termWidth = 120
 
 	help := sanitize(m.renderHelp())
 	if !strings.HasPrefix(help, " ") || strings.HasPrefix(help, "  ") {
@@ -300,40 +296,43 @@ func TestListView_UsesSingleScreenMargin(t *testing.T) {
 	}
 }
 
-func TestListView_RenderHeaderDisplaysVersionAndCWD(t *testing.T) {
+func TestListView_RenderChromeShowsTabsAndLogoWhenWide(t *testing.T) {
 	m := newTestListModel(nil)
-	m.cwd = "/repo/project"
-	m.termWidth = 60
-	WithVersion("0.7.0")(m)
+	m.termWidth = 100
 
-	header := sanitize(m.renderHeader())
-	if !strings.HasPrefix(header, " Agent Runner v0.7.0") {
-		t.Fatalf("header = %q, want title followed by version", header)
+	chrome := sanitize(m.renderChrome())
+	if !strings.Contains(chrome, "New") {
+		t.Fatalf("chrome = %q, want tab labels", chrome)
 	}
-	if !strings.Contains(header, "/repo/project") {
-		t.Fatalf("header = %q, want cwd indicator", header)
+	if !strings.Contains(chrome, "█") {
+		t.Fatalf("chrome = %q, want logo block chars", chrome)
 	}
 }
 
-func TestListView_RenderHeaderDisplaysDevVersion(t *testing.T) {
+func TestListView_RenderHelpWithCwdDisplaysPath(t *testing.T) {
 	m := newTestListModel(nil)
-	WithVersion("dev")(m)
+	m.cwd = "/repo/project"
+	m.termWidth = 120
 
-	header := sanitize(m.renderHeader())
-	if !strings.HasPrefix(header, " Agent Runner vdev") {
-		t.Fatalf("header = %q, want dev version", header)
+	helpLine := sanitize(m.renderHelpWithCwd())
+	if !strings.Contains(helpLine, "/repo/project") {
+		t.Fatalf("help line = %q, want cwd indicator", helpLine)
+	}
+	if !strings.Contains(helpLine, "q quit") {
+		t.Fatalf("help line = %q, want help shortcuts", helpLine)
 	}
 }
 
-func TestListView_RenderHeaderDropsCWDButKeepsVersionWhenNarrow(t *testing.T) {
+func TestListView_RenderChromeDropsLogoWhenNarrow(t *testing.T) {
 	m := newTestListModel(nil)
-	m.cwd = "/repo/project"
-	m.termWidth = len(" Agent Runner v0.7.0") + 2
-	WithVersion("0.7.0")(m)
+	m.termWidth = 40
 
-	header := sanitize(m.renderHeader())
-	if header != " Agent Runner v0.7.0" {
-		t.Fatalf("header = %q, want only title and version", header)
+	chrome := sanitize(m.renderChrome())
+	if !strings.Contains(chrome, "New") {
+		t.Fatalf("chrome = %q, want tabs even when narrow", chrome)
+	}
+	if strings.Contains(chrome, "█") {
+		t.Fatalf("chrome should not contain logo at narrow width, got %q", chrome)
 	}
 }
 
@@ -686,7 +685,7 @@ func TestListView_SettingsOverlayKeepsUnderlyingListVisible(t *testing.T) {
 
 	view := sanitize(m.View())
 
-	for _, want := range []string{"Agent Runner", "Current Dir", "implement", "Theme", "Light", "Dark"} {
+	for _, want := range []string{"Current Dir", "implement", "Theme", "Light", "Dark"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("View() missing %q with settings editor open:\n%s", want, view)
 		}

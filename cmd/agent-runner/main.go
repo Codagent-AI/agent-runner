@@ -32,6 +32,7 @@ import (
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	nativesetup "github.com/codagent/agent-runner/internal/onboarding/native"
+	"github.com/codagent/agent-runner/internal/onboarding/splash"
 	"github.com/codagent/agent-runner/internal/paramform"
 	"github.com/codagent/agent-runner/internal/prevalidate"
 	"github.com/codagent/agent-runner/internal/runlock"
@@ -1502,6 +1503,9 @@ func ensureFirstRunForTUI(deps firstRunDeps) firstRunResult {
 	onboardingDone := settings.Onboarding.CompletedAt != "" || settings.Onboarding.Dismissed != ""
 
 	if settings.Setup.CompletedAt == "" {
+		if err := splash.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: splash: %v\n", err)
+		}
 		result, err := deps.runNativeSetup(onboardingDone)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
