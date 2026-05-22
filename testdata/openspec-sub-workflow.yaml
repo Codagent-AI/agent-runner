@@ -7,21 +7,21 @@ params:
 
 steps:
   - id: proposal
-    mode: headless
+    mode: autonomous
     prompt: "Propose it"
 
   - id: specs
-    mode: headless
+    mode: autonomous
     prompt: "Spec it"
 
   - id: design
-    mode: headless
+    mode: autonomous
     prompt: "Design it"
 
   - id: tasks
-    mode: headless
+    mode: autonomous
     prompt: "Plan it"
 
   - id: review
-    mode: headless
+    mode: autonomous
     prompt: "Review it"

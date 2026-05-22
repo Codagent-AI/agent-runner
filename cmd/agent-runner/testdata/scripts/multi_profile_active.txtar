@@ -31,13 +31,13 @@ profiles:
   default:
     agents:
       planner:
-        default_mode: headless
+        default_mode: autonomous
         cli: claude
         model: opus
   alt:
     agents:
       planner:
-        default_mode: headless
+        default_mode: autonomous
         cli: claude
         model: haiku
 

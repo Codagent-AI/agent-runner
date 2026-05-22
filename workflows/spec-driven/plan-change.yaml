@@ -14,19 +14,14 @@ steps:
   - id: proposal
     session: lead-agent
     prompt: |
-      Help the user write a change proposal.
-      First, ask the user what the change is about. DO NOT attempt to guess.
-      Then, you MUST use the codagent:propose skill.
-      Once the proposal document is written, continue to the next step.
+      Help the user write a change proposal. First, ask the user what the change is about. DO NOT attempt to guess. Then, you MUST use the codagent:propose skill. Once the proposal document is written, continue to the next step.
 
   - id: locate-proposal
     session: lead-agent
-    mode: headless
+    mode: autonomous
     capture: proposal_dir
     prompt: |
-      You just wrote a proposal. Output the directory containing the
-      proposal document on a single line with NO other text, NO markdown
-      fences, and NO explanation.
+      You just wrote a proposal. Output the directory containing the proposal document on a single line with NO other text, NO markdown fences, and NO explanation.
 
       Example valid output: specs/changes/my-change
 
@@ -38,30 +33,20 @@ steps:
   - id: specs
     session: resume
     prompt: |
-      Help the user write the change spec.
-      You MUST use the codagent:spec skill.
-      Once all spec documents are written, continue to the next step.
+      Help the user write the change spec. You MUST use the codagent:spec skill. Once all spec documents are written, continue to the next step.
 
   - id: design
     session: resume
     prompt: |
-      Help the user design the change.
-      You MUST use the codagent:design skill.
-      Once the design document is written, continue to the next step.
+      Help the user design the change. You MUST use the codagent:design skill. Once the design document is written, continue to the next step.
 
   - id: tasks
     session: resume
     prompt: |
-      Help the user plan tasks for the change.
-      You MUST use the codagent:plan-tasks skill.
-      You MUST create detailed task files under {{proposal_dir}}/tasks/*.md.
-      You MUST also create {{proposal_dir}}/tasks.md as an index that links to those task files.
-      The implement workflow requires at least one matching tasks/*.md file.
-      Once all task documents are written, continue to the next step.
+      Help the user plan tasks for the change. You MUST use the codagent:plan-tasks skill. You MUST create detailed task files under {{proposal_dir}}/tasks/*.md. You MUST also create {{proposal_dir}}/tasks.md as an index that links to those task files. The implement workflow requires at least one matching tasks/*.md file. Once all task documents are written, continue to the next step.
 
   - id: review
-    mode: headless
+    mode: autonomous
     session: resume
     prompt: |
-      You MUST use a subagent to run the codagent:review-spec skill to review the change artifacts we just planned.
-      Then address issues the review subagent finds.
+      You MUST use a subagent to run the codagent:review-spec skill to review the change artifacts we just planned. Then address issues the review subagent finds.

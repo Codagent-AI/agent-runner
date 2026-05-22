@@ -32,7 +32,7 @@ func TestDispatchStep(t *testing.T) {
 
 	t.Run("dispatches agent step", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do it", Session: model.SessionNew}
 		outcome, err := DispatchStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -157,7 +157,7 @@ func TestDispatchStepEmitsAuditEnvelopeForEveryStepType(t *testing.T) {
 		},
 		{
 			name:    "agent",
-			step:    model.Step{ID: "agent", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew},
+			step:    model.Step{ID: "agent", Mode: model.ModeAutonomous, Prompt: "do it", Session: model.SessionNew},
 			results: []ProcessResult{{ExitCode: 0}},
 		},
 		{
@@ -258,7 +258,7 @@ func TestDispatchStep_PrepareStepHook(t *testing.T) {
 		ctx := makeCtx()
 		ctx.PrepareStepHook = func(interactive bool) { called = append(called, interactive) }
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
-		step := model.Step{ID: "s", Mode: model.ModeHeadless, Prompt: "do it", Session: model.SessionNew}
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do it", Session: model.SessionNew}
 		DispatchStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
 		if len(called) != 1 || called[0] != false {
 			t.Fatalf("expected hook called with false, got %v", called)

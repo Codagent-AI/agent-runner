@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
+	agentconfig "github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/profilewrite"
 	"github.com/codagent/agent-runner/internal/usersettings"
 	"gopkg.in/yaml.v3"
@@ -55,6 +58,28 @@ func handleInternalWithIO(args []string, stdin io.Reader, stderr io.Writer) int 
 			return 1
 		}
 		return 0
+	case "configured-agent-clis":
+		if len(args) != 1 {
+			_, _ = fmt.Fprintln(stderr, "agent-runner: internal configured-agent-clis accepts no arguments")
+			return 1
+		}
+		value, err := configuredAgentCLIs(filepath.Join(".agent-runner", "config.yaml"))
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "agent-runner: %v\n", err)
+			return 1
+		}
+		_, _ = fmt.Fprint(os.Stdout, value)
+		return 0
+	case "validator-init":
+		if len(args) != 1 {
+			_, _ = fmt.Fprintln(stderr, "agent-runner: internal validator-init accepts no arguments")
+			return 1
+		}
+		if err := runValidatorInit(filepath.Join(".agent-runner", "config.yaml")); err != nil {
+			_, _ = fmt.Fprintf(stderr, "agent-runner: %v\n", err)
+			return 1
+		}
+		return 0
 	case "json-value":
 		if len(args) != 2 {
 			_, _ = fmt.Fprintln(stderr, "agent-runner: internal json-value requires key")
@@ -95,6 +120,31 @@ func handleInternalWithIO(args []string, stdin io.Reader, stderr io.Writer) int 
 		_, _ = fmt.Fprintf(stderr, "agent-runner: unknown internal command %q\n", args[0])
 		return 1
 	}
+}
+
+func configuredAgentCLIs(projectConfigPath string) (string, error) {
+	values, err := agentconfig.ConfiguredCLIs(projectConfigPath)
+	if err != nil {
+		return "", err
+	}
+	return strings.Join(values, ","), nil
+}
+
+func validatorInitArgs(projectConfigPath string) ([]string, error) {
+	_ = projectConfigPath
+	return []string{"init"}, nil
+}
+
+func runValidatorInit(projectConfigPath string) error {
+	args, err := validatorInitArgs(projectConfigPath)
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("agent-validator", args...) // #nosec G204 -- executable is fixed and args are validated config CLI names
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 func decodeJSONStringField(r io.Reader, key string) (string, error) {

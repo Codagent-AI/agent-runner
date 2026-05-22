@@ -18,6 +18,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
+	"github.com/codagent/agent-runner/internal/agentplugin"
+	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/profilewrite"
 	"github.com/codagent/agent-runner/internal/tuistyle"
 	"github.com/codagent/agent-runner/internal/usersettings"
@@ -30,6 +32,7 @@ const (
 	ResultCancelled
 	ResultFailed
 	ResultDemo
+	ResultExitRequested
 )
 
 type AdapterDetector interface {
@@ -74,12 +77,20 @@ func (f SettingsStoreFunc) Update(mutator func(usersettings.Settings) usersettin
 	return f(mutator)
 }
 
+type PluginInstaller interface {
+	Resolve(clis []string, scope string) (*agentplugin.Plan, error)
+	DryRun(plan *agentplugin.Plan) (*agentplugin.Preview, error)
+	Install(plan *agentplugin.Plan) (*agentplugin.Result, error)
+}
+
 type Deps struct {
 	Detector            AdapterDetector
 	Models              ModelDiscoverer
 	Profiles            ProfileWriter
 	Collisions          CollisionDetector
 	Settings            SettingsStore
+	Plugin              PluginInstaller
+	EnumCLIs            func(globalPath, projectPath string) ([]string, error)
 	Clock               func() time.Time
 	HomeDir             func() (string, error)
 	Cwd                 func() (string, error)
@@ -119,20 +130,32 @@ const (
 	stageInteractiveModelDefault
 	stageInteractiveModel
 	stageHeadlessCLI
+	stageAutonomousBackend
 	stageHeadlessModelDefault
 	stageHeadlessModel
 	stageScope
 	stageOverwrite
+	stagePluginIntro
+	stagePluginPreview
 	stageDemoPrompt
 	stageDone
 )
 
 var (
-	scopeOptions      = []string{"global", "project"}
-	overwriteOptions  = []string{"Overwrite", "Cancel"}
-	demoPromptOptions = []string{"Continue", "Not now", "Dismiss"}
-	continueOptions   = []string{"Continue"}
+	scopeOptions         = []string{"global", "project"}
+	overwriteOptions     = []string{"Overwrite", "Cancel"}
+	pluginConfirmOptions = []string{"Install"}
+	demoPromptOptions    = []string{"Continue", "Not now", "Dismiss"}
+	continueOptions      = []string{"Continue"}
 )
+
+func autonomousBackendOptions() []string {
+	return []string{
+		string(usersettings.BackendHeadless),
+		string(usersettings.BackendInteractive),
+		string(usersettings.BackendInteractiveClaude),
+	}
+}
 
 const (
 	minCenterWidth  = 80
@@ -141,8 +164,17 @@ const (
 	minPanelWidth   = 44
 	panelFrameWidth = 6
 	textWrapInset   = 4
-	animFrames      = 12
+	animFrames      = 6
 	animFrameTime   = time.Second / 60
+)
+
+var (
+	setupBodyStyle             = lipgloss.NewStyle()
+	setupTitleStyle            = tuistyle.LabelStyle.Bold(true)
+	setupOptionStyle           = lipgloss.NewStyle()
+	setupFocusedOptionStyle    = tuistyle.LabelStyle.Bold(true)
+	setupTransitionStyle       = lipgloss.NewStyle().Faint(true)
+	setupTransitionStatusStyle = tuistyle.DimStyle
 )
 
 type animTick struct{}
@@ -154,25 +186,41 @@ type modelsLoadedMsg struct {
 	err    error
 }
 
+type pluginDryRunMsg struct {
+	preview *agentplugin.Preview
+	err     error
+}
+
+type pluginInstallMsg struct {
+	result *agentplugin.Result
+	err    error
+}
+
 type Model struct {
-	deps             Deps
-	stage            stage
-	focus            int
-	options          []string
-	adapters         []string
-	interactiveCLI   string
-	interactiveModel string
-	headlessCLI      string
-	headlessModel    string
-	scope            string
-	targetPath       string
-	collisions       []string
-	width            int
-	height           int
-	result           Result
-	err              error
-	terminal         bool
-	demoOnly         bool
+	deps              Deps
+	stage             stage
+	focus             int
+	options           []string
+	adapters          []string
+	interactiveCLI    string
+	interactiveModel  string
+	headlessCLI       string
+	headlessModel     string
+	autonomousBackend usersettings.AutonomousBackend
+	scope             string
+	targetPath        string
+	collisions        []string
+	width             int
+	height            int
+	result            Result
+	err               error
+	terminal          bool
+	demoOnly          bool
+
+	pluginPlan       *agentplugin.Plan
+	pluginPreview    *agentplugin.Preview
+	pluginResult     *agentplugin.Result
+	pluginInstalling bool
 
 	animDone  bool
 	animFrame int
@@ -242,6 +290,9 @@ func fillDefaults(deps *Deps) *Deps {
 	if deps.Cwd == nil {
 		deps.Cwd = os.Getwd
 	}
+	if deps.EnumCLIs == nil {
+		deps.EnumCLIs = config.EnumerateCLIs
+	}
 	return deps
 }
 
@@ -272,7 +323,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := m.tickAnim()
 		return m, cmd
 	case loadingTick:
-		if !m.modelsLoading {
+		if !m.modelsLoading && !m.pluginInstalling {
 			return m, nil
 		}
 		m.loadingPhase++
@@ -285,38 +336,78 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmd := m.applyModelsLoaded(msg)
 		return m, cmd
-	case tea.KeyMsg:
-		key := msg.String()
-		if !m.animDone && key != "ctrl+c" && key != "esc" {
-			return m, nil
-		}
-		if m.modelsLoading && key != "ctrl+c" && key != "esc" {
-			return m, nil
-		}
-		switch key {
-		case "ctrl+c", "esc":
-			m.cancel()
+	case pluginDryRunMsg:
+		if msg.err != nil {
+			m.fail(msg.err)
 			return m, tea.Quit
-		case "up", "k":
-			m.move(-1)
-		case "down", "j", "tab":
-			m.move(1)
-		case "left", "h":
-			m.move(-1)
-		case "right", "l":
-			m.move(1)
-		case "enter":
-			done, cmd := m.enter()
-			if done {
-				return m, tea.Quit
-			}
-			if cmd != nil {
-				return m, cmd
-			}
-			if !m.animDone {
-				cmd := m.tickAnim()
-				return m, cmd
-			}
+		}
+		m.clearAnimation()
+		m.pluginPreview = msg.preview
+		m.setStage(stagePluginPreview, pluginConfirmOptions)
+		return m, nil
+	case pluginInstallMsg:
+		m.pluginInstalling = false
+		m.loadingPhase = 0
+		if msg.err != nil {
+			m.fail(msg.err)
+			return m, tea.Quit
+		}
+		m.pluginResult = msg.result
+		done, cmd := m.complete()
+		if done {
+			return m, tea.Quit
+		}
+		if cmd != nil {
+			return m, cmd
+		}
+		if !m.animDone {
+			cmd := m.tickAnim()
+			return m, cmd
+		}
+		return m, nil
+	case tea.KeyMsg:
+		return m.handleKeyMsg(msg)
+	}
+	return m, nil
+}
+
+func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	if !m.animDone && key != "ctrl+c" && key != "esc" {
+		return m, nil
+	}
+	if m.modelsLoading && key != "ctrl+c" && key != "esc" {
+		return m, nil
+	}
+	if m.pluginInstalling && key != "ctrl+c" && key != "esc" {
+		return m, nil
+	}
+	switch key {
+	case "ctrl+c":
+		m.exitRequested()
+		return m, tea.Quit
+	case "esc":
+		m.cancel()
+		return m, tea.Quit
+	case "up", "k":
+		m.move(-1)
+	case "down", "j", "tab":
+		m.move(1)
+	case "left", "h":
+		m.move(-1)
+	case "right", "l":
+		m.move(1)
+	case "enter":
+		done, cmd := m.enter()
+		if done {
+			return m, tea.Quit
+		}
+		if cmd != nil {
+			return m, cmd
+		}
+		if !m.animDone {
+			cmd := m.tickAnim()
+			return m, cmd
 		}
 	}
 	return m, nil
@@ -337,6 +428,12 @@ func (m *Model) tickLoading() tea.Cmd {
 func (m *Model) startAnim() {
 	m.animFrame = 0
 	m.animDone = false
+}
+
+func (m *Model) clearAnimation() {
+	m.animFrame = 0
+	m.animDone = true
+	m.prevView = ""
 }
 
 func (m *Model) discoverModels(next stage, adapter string) tea.Cmd {
@@ -392,15 +489,18 @@ func (m *Model) enter() (bool, tea.Cmd) {
 		m.setStageAnimated(stageHeadlessCLI, m.adapters)
 	case stageHeadlessCLI:
 		m.headlessCLI = selected
+		m.setStageAnimated(stageAutonomousBackend, autonomousBackendOptions())
+	case stageAutonomousBackend:
+		m.autonomousBackend = usersettings.AutonomousBackend(selected)
 		m.startModelLoading()
 		m.setStageAnimated(stageHeadlessModel, nil)
-		return false, tea.Batch(m.tickAnim(), m.tickLoading(), m.discoverModels(stageHeadlessModel, selected))
+		return false, tea.Batch(m.tickAnim(), m.tickLoading(), m.discoverModels(stageHeadlessModel, m.headlessCLI))
 	case stageHeadlessModel:
 		m.headlessModel = selected
-		m.setStageAnimated(stageScope, scopeOptions)
+		m.setStageAfterModelSelection()
 	case stageHeadlessModelDefault:
 		m.headlessModel = ""
-		m.setStageAnimated(stageScope, scopeOptions)
+		m.setStageAfterModelSelection()
 	case stageScope:
 		m.scope = selected
 		if err := m.resolveTarget(); err != nil {
@@ -415,13 +515,18 @@ func (m *Model) enter() (bool, tea.Cmd) {
 			m.setStageAnimated(stageOverwrite, overwriteOptions)
 			return false, nil
 		}
-		return m.write(), nil
+		return m.write()
 	case stageOverwrite:
 		if selected == "Cancel" {
 			m.cancel()
 			return true, nil
 		}
-		return m.write(), nil
+		return m.write()
+	case stagePluginIntro:
+		m.setStageAnimated(stageScope, scopeOptions)
+	case stagePluginPreview:
+		m.startPluginInstallLoading()
+		return false, tea.Batch(m.tickLoading(), m.runPluginInstall())
 	case stageDemoPrompt:
 		return m.handleDemoPrompt(selected), nil
 	}
@@ -482,6 +587,13 @@ func (m *Model) startModelLoading() {
 	m.loadingPhase = 0
 }
 
+func (m *Model) startPluginInstallLoading() {
+	m.pluginInstalling = true
+	m.loadingPhase = 0
+	m.options = nil
+	m.focus = 0
+}
+
 func (m *Model) resolveTarget() error {
 	switch m.scope {
 	case "global":
@@ -502,7 +614,7 @@ func (m *Model) resolveTarget() error {
 	return nil
 }
 
-func (m *Model) write() bool {
+func (m *Model) write() (bool, tea.Cmd) {
 	err := m.deps.Profiles.WriteProfile(&profilewrite.Request{
 		TargetPath:       m.targetPath,
 		InteractiveCLI:   m.interactiveCLI,
@@ -511,25 +623,88 @@ func (m *Model) write() bool {
 		HeadlessModel:    m.headlessModel,
 	})
 	if err != nil {
-		return m.fail(err)
+		return m.fail(err), nil
 	}
+
+	if m.deps.Plugin == nil {
+		return m.complete()
+	}
+
+	clis, err := m.enumerateCLIs()
+	if err != nil {
+		return m.fail(err), nil
+	}
+	plan, err := m.deps.Plugin.Resolve(clis, m.scope)
+	if err != nil {
+		return m.fail(err), nil
+	}
+	if plan == nil {
+		return m.complete()
+	}
+
+	m.pluginPlan = plan
+	m.setStageAnimated(stagePluginPreview, nil)
+	return false, m.runPluginDryRun()
+}
+
+func (m *Model) setStageAfterModelSelection() {
+	if m.deps.Plugin != nil {
+		m.setStageAnimated(stagePluginIntro, continueOptions)
+		return
+	}
+	m.setStageAnimated(stageScope, scopeOptions)
+}
+
+func (m *Model) complete() (bool, tea.Cmd) {
 	stamp := m.deps.Clock().UTC().Format(time.RFC3339)
 	if err := m.deps.Settings.Update(func(settings usersettings.Settings) usersettings.Settings {
+		settings.AutonomousBackend = m.autonomousBackend
 		settings.Setup.CompletedAt = stamp
 		return settings
 	}); err != nil {
-		return m.fail(err)
+		return m.fail(err), nil
 	}
 
 	if m.deps.OnboardingCompleted {
 		m.result = ResultCompleted
 		m.terminal = true
 		m.stage = stageDone
-		return true
+		return true, nil
 	}
 
 	m.setStageAnimated(stageDemoPrompt, demoPromptOptions)
-	return false
+	return false, nil
+}
+
+func (m *Model) enumerateCLIs() ([]string, error) {
+	home, err := m.deps.HomeDir()
+	if err != nil {
+		return nil, err
+	}
+	globalPath := filepath.Join(home, ".agent-runner", "config.yaml")
+	cwd, err := m.deps.Cwd()
+	if err != nil {
+		return nil, err
+	}
+	projectPath := filepath.Join(cwd, ".agent-runner", "config.yaml")
+	return m.deps.EnumCLIs(globalPath, projectPath)
+}
+
+func (m *Model) runPluginDryRun() tea.Cmd {
+	return func() tea.Msg {
+		preview, err := m.deps.Plugin.DryRun(m.pluginPlan)
+		return pluginDryRunMsg{preview: preview, err: err}
+	}
+}
+
+func (m *Model) runPluginInstall() tea.Cmd {
+	return func() tea.Msg {
+		result, err := m.deps.Plugin.Install(m.pluginPlan)
+		if err != nil {
+			return pluginInstallMsg{err: err}
+		}
+		return pluginInstallMsg{result: result}
+	}
 }
 
 func (m *Model) setStage(next stage, options []string) {
@@ -539,13 +714,18 @@ func (m *Model) setStage(next stage, options []string) {
 }
 
 func (m *Model) setStageAnimated(next stage, options []string) {
-	m.prevView = m.renderPanel()
 	m.setStage(next, options)
 	m.startAnim()
 }
 
 func (m *Model) cancel() {
 	m.result = ResultCancelled
+	m.terminal = true
+	m.stage = stageDone
+}
+
+func (m *Model) exitRequested() {
+	m.result = ResultExitRequested
 	m.terminal = true
 	m.stage = stageDone
 }
@@ -562,10 +742,7 @@ func (m *Model) View() string {
 	content := m.renderPanel()
 
 	if m.width >= minCenterWidth && m.height >= minCenterHeight {
-		if !m.animDone && m.prevView != "" {
-			return renderTransition(m.width, m.height, m.prevView, content, transitionScrollRows(m.height, m.animFrame))
-		}
-		content = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
+		content = renderCenteredSetup(content, m.width, m.height, m.animDone, m.animFrame)
 	}
 
 	return content
@@ -581,10 +758,10 @@ func (m *Model) renderPanel() string {
 		b.WriteString(lipgloss.PlaceHorizontal(contentWidth, lipgloss.Center, progress))
 		b.WriteString("\n\n")
 	}
-	b.WriteString(tuistyle.SectionStyle.Render(title))
+	b.WriteString(setupTitleStyle.Render(title))
 	b.WriteString("\n\n")
 	if body != "" {
-		b.WriteString(renderWrapped(body, textWidth, tuistyle.NormalStyle.Render))
+		b.WriteString(renderWrapped(body, textWidth, setupBodyStyle.Render))
 		b.WriteString("\n\n")
 	}
 	if prompt != "" {
@@ -606,55 +783,38 @@ func (m *Model) renderPanel() string {
 		Render(b.String())
 }
 
-func renderTransition(width, height int, outgoing, incoming string, offset int) string {
-	canvas := make([]string, height)
-	for i := range canvas {
-		canvas[i] = strings.Repeat(" ", width)
+func renderCenteredSetup(content string, width, height int, animDone bool, frame int) string {
+	renderedContent := content
+	if !animDone && frame <= animFrames/2 {
+		renderedContent = setupTransitionStyle.Render(renderedContent)
+	}
+	rendered := lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, renderedContent)
+	if animDone {
+		return rendered
 	}
 
-	outX, outY := centeredPosition(width, height, outgoing)
-	inX, inY := centeredPosition(width, height, incoming)
-	drawBlock(canvas, width, outgoing, outX, outY-offset)
-	drawBlock(canvas, width, incoming, inX, inY+height-offset)
-	return strings.Join(canvas, "\n")
+	lines := strings.Split(rendered, "\n")
+	panelHeight := lipgloss.Height(renderedContent)
+	panelWidth := lipgloss.Width(renderedContent)
+	panelTop := max((height-panelHeight)/2, 0)
+	panelLeft := max((width-panelWidth)/2, 0)
+	statusRow := panelTop + panelHeight
+	if statusRow >= len(lines) {
+		return rendered
+	}
+	lines[statusRow] = strings.Repeat(" ", panelLeft) + renderSetupTransitionStatus(frame)
+	return strings.Join(lines, "\n")
 }
 
-func transitionScrollRows(height, tick int) int {
-	if height <= 0 || tick <= 0 {
-		return 0
-	}
-	if tick >= animFrames {
-		return height
-	}
-	return (height * tick) / animFrames
+func renderSetupTransitionStatus(frame int) string {
+	return setupTransitionStatusStyle.Render(tuistyle.SpinnerGlyph(float64(frame)) + " Preparing next step...")
 }
 
-func centeredPosition(width, height int, content string) (x, y int) {
-	lines := strings.Split(content, "\n")
-	blockWidth := 0
-	for _, line := range lines {
-		blockWidth = max(blockWidth, runewidth.StringWidth(tuistyle.Sanitize(line)))
+func modelSelectionPrompt(loading bool, phase float64, cliName, readyPrompt string) string {
+	if loading {
+		return tuistyle.SpinnerGlyph(phase) + " Checking available models for " + cliName + "."
 	}
-	x = max(0, (width-blockWidth)/2)
-	y = max(0, (height-len(lines))/2)
-	return x, y
-}
-
-func drawBlock(canvas []string, width int, content string, x, y int) {
-	for i, line := range strings.Split(content, "\n") {
-		row := y + i
-		if row < 0 || row >= len(canvas) {
-			continue
-		}
-		canvas[row] = padLine(line, width, x)
-	}
-}
-
-func padLine(line string, width, left int) string {
-	left = max(0, min(left, width))
-	visible := runewidth.StringWidth(tuistyle.Sanitize(line))
-	right := max(0, width-left-visible)
-	return strings.Repeat(" ", left) + line + strings.Repeat(" ", right)
+	return readyPrompt
 }
 
 func setupPanelWidth(termWidth int) int {
@@ -689,10 +849,10 @@ func (m *Model) renderOptions(width, textWidth int) string {
 	for i, option := range m.options {
 		label := m.optionLabel(option)
 		prefix := "  "
-		style := tuistyle.NormalStyle
+		style := setupOptionStyle
 		if i == m.focus {
 			prefix = tuistyle.FocusedSelectorPrefix + " "
-			style = tuistyle.FocusedOption
+			style = setupFocusedOptionStyle
 		}
 		lines := wrapTextLine(prefix+label, textWidth)
 		for _, line := range lines {
@@ -719,9 +879,14 @@ func (m *Model) setupProgress() (current, total int, ok bool) {
 	if m.demoOnly {
 		return 0, 0, false
 	}
-	total = 6
-	if m.stage == stageOverwrite || len(m.collisions) > 0 {
-		total = 7
+	total = 7
+	hasOverwrite := m.stage == stageOverwrite || len(m.collisions) > 0
+	hasPlugin := m.deps.Plugin != nil
+	if hasOverwrite {
+		total++
+	}
+	if hasPlugin {
+		total += 2
 	}
 
 	switch m.stage {
@@ -731,12 +896,30 @@ func (m *Model) setupProgress() (current, total int, ok bool) {
 		return 2, total, true
 	case stageHeadlessCLI:
 		return 3, total, true
-	case stageHeadlessModelDefault, stageHeadlessModel:
+	case stageAutonomousBackend:
 		return 4, total, true
-	case stageScope:
+	case stageHeadlessModelDefault, stageHeadlessModel:
 		return 5, total, true
-	case stageOverwrite:
+	case stagePluginIntro:
 		return 6, total, true
+	case stageScope:
+		step := 6
+		if hasPlugin {
+			step = 7
+		}
+		return step, total, true
+	case stageOverwrite:
+		step := 7
+		if hasPlugin {
+			step = 8
+		}
+		return step, total, true
+	case stagePluginPreview:
+		step := 8
+		if hasOverwrite {
+			step = 9
+		}
+		return step, total, true
 	case stageDemoPrompt:
 		return total, total, true
 	default:
@@ -751,6 +934,8 @@ func (m *Model) defaultFocus(next stage, options []string) int {
 		preferred = "claude"
 	case stageHeadlessCLI:
 		preferred = "codex"
+	case stageAutonomousBackend:
+		preferred = string(usersettings.BackendInteractiveClaude)
 	default:
 		return 0
 	}
@@ -769,8 +954,20 @@ func (m *Model) optionLabel(option string) string {
 			return option + " (recommended)"
 		}
 	case stageHeadlessCLI:
+		if option == "claude" {
+			return option + " (programmatic use may be billed at API rates)"
+		}
 		if option == "codex" {
 			return option + " (recommended)"
+		}
+	case stageAutonomousBackend:
+		switch usersettings.AutonomousBackend(option) {
+		case usersettings.BackendHeadless:
+			return "Headless - Runs the agent in non-interactive print mode (default, uses API billing for Claude)"
+		case usersettings.BackendInteractive:
+			return "Interactive - Runs the agent in an interactive session with autonomy instructions"
+		case usersettings.BackendInteractiveClaude:
+			return "Interactive for Claude - Uses interactive mode for Claude only; other CLIs use headless (recommended, avoids API billing)"
 		}
 	}
 	return option
@@ -875,15 +1072,15 @@ func (m *Model) screenContent() (title, body, prompt string) {
 	case stageInteractiveModel:
 		title = "Planner Model"
 		body = "The planner handles conversations, planning, and decisions that need your input. Pick the model that " + m.interactiveCLI + " should use for those interactive workflow steps."
-		if m.modelsLoading {
-			prompt = tuistyle.SpinnerGlyph(m.loadingPhase) + " Checking available models for " + m.interactiveCLI + "."
-		} else {
-			prompt = "Choose the planner model."
-		}
+		prompt = modelSelectionPrompt(m.modelsLoading, m.loadingPhase, m.interactiveCLI, "Choose the planner model.")
 	case stageHeadlessCLI:
 		title = "Implementor CLI"
 		body = "The implementor runs headless tasks such as code generation, edits, and validation follow-ups. This CLI is used when Agent Runner needs work to continue without an interactive session."
 		prompt = "Choose the CLI for the implementor agent."
+	case stageAutonomousBackend:
+		title = "Autonomous Backend"
+		body = "Choose how autonomous agent steps are launched. This controls whether Agent Runner uses non-interactive print mode or an interactive session with autonomy instructions."
+		prompt = "Choose the backend for autonomous steps."
 	case stageHeadlessModelDefault:
 		title = "Implementor Model"
 		body = "No selectable models were found for " + m.headlessCLI + ". Agent Runner will use the CLI default and leave the model field unset."
@@ -891,40 +1088,61 @@ func (m *Model) screenContent() (title, body, prompt string) {
 	case stageHeadlessModel:
 		title = "Implementor Model"
 		body = "The implementor model is used for unattended implementation steps in your workflows. Pick the model that " + m.headlessCLI + " should use for that work."
-		if m.modelsLoading {
-			prompt = tuistyle.SpinnerGlyph(m.loadingPhase) + " Checking available models for " + m.headlessCLI + "."
-		} else {
-			prompt = "Choose the implementor model."
-		}
+		prompt = modelSelectionPrompt(m.modelsLoading, m.loadingPhase, m.headlessCLI, "Choose the implementor model.")
 	case stageScope:
 		title = "Config Scope"
-		body = "Choose where to save this profile. Global applies everywhere from ~/.agent-runner/config.yaml. Project applies only in the current repository via .agent-runner/config.yaml."
-		prompt = "Where should Agent Runner save the profile?"
+		body = "Choose where to save this profile and install agent skills. Global applies everywhere from ~/.agent-runner/config.yaml. Project applies only in the current repository via .agent-runner/config.yaml."
+		prompt = "Where should Agent Runner save the profile and install skills?"
 	case stageOverwrite:
 		title = "Existing Agent Profiles"
 		body = "These entries already exist and will be replaced: " + strings.Join(m.collisions, ", ")
 		prompt = "Overwrite the existing entries?"
+	case stagePluginIntro:
+		title = "Agent Skills"
+		body = "Agent Runner uses skills from https://github.com/Codagent-AI/agent-skills. These skills provide focused workflows for spec-driven development, from evaluating ideas and writing specs to planning right-sized tasks and implementing changes with TDD.\n\nThey also connect implementation work to Agent Validator quality gates and PR/CI follow-up skills, so agents can validate changes, fix failures, and shepherd work through review. Next you will select where Agent Runner installs these skills."
+		prompt = "Continue to skill location."
+	case stagePluginPreview:
+		title = "Install Agent Skills"
+		body, prompt = m.pluginPreviewContent()
 	case stageDemoPrompt:
 		title = "Agent Runner Workflow Demo"
 		body = "Agent Runner includes a short interactive demo that walks through UI prompts, interactive agents, headless agents, shell commands, and data capture. It takes about two minutes and runs real workflow steps."
 		prompt = "Run the demo now?"
 	case stageDone:
-		switch {
-		case m.result == ResultCancelled:
-			title = "Setup Cancelled"
-			body = ""
-		case m.err != nil:
-			title = "Setup Failed"
-			body = m.err.Error()
-		default:
-			title = "Setup Complete"
-			body = ""
-		}
+		title, body = m.doneContent()
 	default:
 		title = "Set Up Agent Runner"
 		body = ""
 	}
 	return title, body, prompt
+}
+
+func (m *Model) doneContent() (title, body string) {
+	switch {
+	case m.result == ResultCancelled:
+		return "Setup Cancelled", ""
+	case m.result == ResultExitRequested:
+		return "Setup Interrupted", ""
+	case m.err != nil:
+		return "Setup Failed", m.err.Error()
+	default:
+		return "Setup Complete", ""
+	}
+}
+
+func (m *Model) pluginPreviewContent() (body, prompt string) {
+	switch {
+	case m.pluginInstalling:
+		return tuistyle.SpinnerGlyph(m.loadingPhase) + " Installing agent skills.\n\nThis can take a moment.", ""
+	case m.pluginPreview == nil:
+		return "Preparing skill installation...", ""
+	default:
+		body = m.pluginPreview.Output
+		if m.pluginResult != nil && m.pluginResult.Warning != "" {
+			body += "\n\nWarning: " + m.pluginResult.Warning
+		}
+		return body, "Install skills for your configured CLIs?"
+	}
 }
 
 type PathDetector struct{}

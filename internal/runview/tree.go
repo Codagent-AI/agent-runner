@@ -235,7 +235,7 @@ func buildStepNode(s *model.Step, parent *StepNode) *StepNode {
 		n.CaptureName = s.Capture
 	case s.Prompt != "" || s.Agent != "":
 		// Agent step. Classify mode statically; audit events may correct it.
-		if s.Mode == model.ModeHeadless {
+		if s.Mode == model.ModeAutonomous {
 			n.Type = NodeHeadlessAgent
 		} else {
 			// Default to interactive when Mode is empty (profile default is

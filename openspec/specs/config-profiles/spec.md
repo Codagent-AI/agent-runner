@@ -26,7 +26,7 @@ When the runner loads a config file whose top-level `profiles:` map contains ent
 - **THEN** config loading fails with an error naming the file and instructing the user to move the entries under `profiles.default.agents`
 
 #### Scenario: Global config uses legacy flat shape
-- **WHEN** `~/.agent-runner/config.yaml` contains `profiles: { headless_base: { default_mode: headless, cli: claude } }`
+- **WHEN** `~/.agent-runner/config.yaml` contains `profiles: { autonomous_base: { default_mode: autonomous, cli: claude } }`
 - **THEN** config loading fails with an error naming the global file and instructing the user to restructure
 
 #### Scenario: Mixed shape within a single file
@@ -102,12 +102,12 @@ A profile set MAY include an optional top-level `extends: <parent_profile_set_na
 The `extends` field MAY appear in either the global config (`~/.agent-runner/config.yaml`) or the project config (`.agent-runner/config.yaml`). When both files declare `extends` on a profile set of the same name, the project file's value SHALL win (matching the existing project-over-global precedence rule).
 
 #### Scenario: Child profile set inherits parent's agents
-- **WHEN** the global file defines profile set `team_base` with agents `{ headless_base, planner }` and the project file defines `copilot` with `extends: team_base` and agents `{ implementor }`
-- **THEN** the effective `copilot` profile set contains `headless_base`, `planner`, and `implementor`
+- **WHEN** the global file defines profile set `team_base` with agents `{ autonomous_base, planner }` and the project file defines `copilot` with `extends: team_base` and agents `{ implementor }`
+- **THEN** the effective `copilot` profile set contains `autonomous_base`, `planner`, and `implementor`
 
 #### Scenario: Child profile set overrides a parent agent by name
-- **WHEN** the parent profile set defines `implementor` with `cli: claude` and `model: opus`, and the child profile set (via `extends`) defines `implementor` with `extends: headless_base` and `cli: copilot`
-- **THEN** the effective child `implementor` is exactly the child's version (`extends: headless_base`, `cli: copilot`); no fields inherit from the parent set's `implementor`
+- **WHEN** the parent profile set defines `implementor` with `cli: claude` and `model: opus`, and the child profile set (via `extends`) defines `implementor` with `extends: autonomous_base` and `cli: copilot`
+- **THEN** the effective child `implementor` is exactly the child's version (`extends: autonomous_base`, `cli: copilot`); no fields inherit from the parent set's `implementor`
 
 #### Scenario: Extends references a profile set that does not exist
 - **WHEN** a profile set declares `extends: missing` and no profile set named `missing` exists in the merged config
@@ -130,12 +130,12 @@ The runner SHALL resolve profile set `extends` after merging profile sets across
 4. Run agent-level validation (base completeness, allowed field values, agent-level cycle detection) against each profile set's effective agents map.
 
 #### Scenario: Merge-then-extend across global and project
-- **WHEN** the global file contributes `team_base.agents: { headless_base }` and `copilot.agents: { planner }`, and the project file contributes `copilot.extends: team_base` and `copilot.agents: { implementor }`
-- **THEN** the effective `copilot` profile set contains `headless_base` (from `team_base`), `planner` (from global `copilot`), and `implementor` (from project `copilot`)
+- **WHEN** the global file contributes `team_base.agents: { autonomous_base }` and `copilot.agents: { planner }`, and the project file contributes `copilot.extends: team_base` and `copilot.agents: { implementor }`
+- **THEN** the effective `copilot` profile set contains `autonomous_base` (from `team_base`), `planner` (from global `copilot`), and `implementor` (from project `copilot`)
 
 #### Scenario: Multi-level profile set chain
-- **WHEN** profile set `a` extends `b`, and profile set `b` extends `c`; `c` defines `{ headless_base }`, `b` defines `{ planner }`, `a` defines `{ implementor }`
-- **THEN** the effective `a` contains `headless_base`, `planner`, and `implementor`
+- **WHEN** profile set `a` extends `b`, and profile set `b` extends `c`; `c` defines `{ autonomous_base }`, `b` defines `{ planner }`, `a` defines `{ implementor }`
+- **THEN** the effective `a` contains `autonomous_base`, `planner`, and `implementor`
 
 #### Scenario: Validation runs against effective agents
 - **WHEN** a non-active profile set inherits (via `extends`) an agent whose `effort` is invalid
@@ -160,8 +160,8 @@ The runner SHALL detect cycles in the profile set `extends` chain and SHALL reje
 After profile set `extends` resolution, an agent's `extends` field SHALL resolve against the containing profile set's effective agents map. Inherited agents (pulled in from a parent profile set via profile-set `extends`) are eligible parents for agent-level `extends`.
 
 #### Scenario: Child agent extends an agent inherited from a parent set
-- **WHEN** the project's `copilot` profile set declares `extends: team_base`, and `team_base` defines `headless_base`, and `copilot` defines `implementor` with `extends: headless_base`
-- **THEN** resolving `implementor` in the active `copilot` profile succeeds and inherits fields from `team_base`'s `headless_base`
+- **WHEN** the project's `copilot` profile set declares `extends: team_base`, and `team_base` defines `autonomous_base`, and `copilot` defines `implementor` with `extends: autonomous_base`
+- **THEN** resolving `implementor` in the active `copilot` profile succeeds and inherits fields from `team_base`'s `autonomous_base`
 
 #### Scenario: Agent-level extends still cannot cross unrelated profile sets
 - **WHEN** the active profile set is `copilot` (with no `extends`), and an agent in `copilot` declares `extends: planner`, where `planner` is defined only in a different, unrelated profile set

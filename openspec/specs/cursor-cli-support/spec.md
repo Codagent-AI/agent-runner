@@ -8,12 +8,11 @@ TBD - created by archiving change cursor-support. Update Purpose after archive.
 The Cursor adapter SHALL construct headless invocations using:
 
 ```
-agent -p --output-format stream-json --force --trust [--model <m>] <prompt>
+agent -p --output-format stream-json --trust [--model <m>] <prompt>
 ```
 
 - `-p` selects non-interactive (print) mode.
 - `--output-format stream-json` emits one JSON event per line on stdout, including a `session_id` field on every event. This format is required for session ID discovery; it is only valid together with `-p`.
-- `--force` allows all tool calls unless explicitly denied — the autonomous-operation analogue of copilot's `--allow-all`.
 - `--trust` trusts the current workspace without prompting; cursor only accepts this flag in `--print`/headless mode.
 - `--model <m>` selects the model for fresh sessions; see the model and resume requirements below.
 
@@ -21,11 +20,11 @@ Cursor has no CLI equivalents for reasoning effort or tool-level restrictions, s
 
 #### Scenario: Fresh headless Cursor step
 - **WHEN** the runner executes a headless step with `cli: cursor` and session strategy `new`
-- **THEN** the adapter returns args beginning with `agent` and including `-p`, `--output-format stream-json`, `--force`, `--trust`, and the prompt, and does not include `--resume`
+- **THEN** the adapter returns args beginning with `agent` and including `-p`, `--output-format stream-json`, `--trust`, and the prompt, and does not include `--resume`
 
 #### Scenario: Headless autonomy flags required
 - **WHEN** the runner constructs args for any Cursor headless step (fresh or resumed)
-- **THEN** the args include both `--force` and `--trust` regardless of other options
+- **THEN** the args include `--trust` and omit `--force` regardless of other options
 
 #### Scenario: Output format is always stream-json
 - **WHEN** the runner constructs args for any Cursor headless step
@@ -113,4 +112,3 @@ The adapter registry SHALL expose `cursor` as a resolvable adapter name, and the
 #### Scenario: Config accepts cli: cursor
 - **WHEN** a configuration file sets `cli: cursor` on an agent profile
 - **THEN** configuration validation succeeds and the error message listing valid CLIs (when some other invalid value is used) mentions `cursor`
-

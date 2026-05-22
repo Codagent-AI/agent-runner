@@ -13,7 +13,7 @@ type ClaudeAdapter struct{}
 //
 // Patterns:
 //   - Fresh interactive:  claude --session-id <uuid> <prompt>
-//   - Fresh headless:     claude --session-id <uuid> -p <prompt>
+//   - Fresh headless:     claude --session-id <uuid> --permission-mode acceptEdits -p <prompt>
 //   - Resume interactive: claude --resume <uuid> <prompt>
 //   - Resume headless:    claude --resume <uuid> -p <prompt>
 //   - Model override:     appends --model <m> (fresh sessions only)
@@ -28,6 +28,7 @@ type ClaudeAdapter struct{}
 // model is honored on fresh sessions and inherited thereafter.
 func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 	args := []string{"claude"}
+	context := input.InvocationContext()
 
 	if input.SessionID != "" {
 		if input.Resume {
@@ -45,7 +46,11 @@ func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 		args = append(args, "--effort", input.Effort)
 	}
 
-	if input.Headless {
+	if context.IsAutonomous() {
+		args = append(args, "--permission-mode", "acceptEdits")
+	}
+
+	if context.IsHeadless() {
 		args = append(args, "-p")
 	}
 

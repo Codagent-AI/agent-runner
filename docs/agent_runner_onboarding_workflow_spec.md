@@ -47,7 +47,7 @@ Key principle:
 ### 3.1 Problem
 Existing step types are insufficient:
 - shell → too raw
-- headless → no user interaction
+- autonomous → no user interaction
 - interactive → agent-centric, not UI-centric
 
 ### 3.2 New Step Type (proposed)
@@ -150,7 +150,7 @@ Walk through each step type:
 - User plays around
 - Instruction: "type /continue when done"
 
-#### 2. Headless step
+#### 2. Autonomous step
 - Show autonomous execution
 
 #### 3. Shell step
@@ -199,10 +199,10 @@ A **separate agent session** used for:
 
 - UI explanation:
   - "now we implement"
-  - headless agent behavior
+  - autonomous agent behavior
 
 - Run:
-  - headless implementation step
+  - autonomous implementation step
 
 ---
 

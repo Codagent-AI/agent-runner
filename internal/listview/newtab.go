@@ -294,7 +294,7 @@ func (m *Model) renderNewTabRow(entry *discovery.WorkflowEntry, isSel bool, maxW
 
 	var namePart, descPart string
 	if isSel {
-		namePart = lipgloss.NewStyle().Foreground(groupColor).Bold(true).Render(highlightMatch(entry.CanonicalName, m.newTab.searchText, true, groupColor))
+		namePart = renderSelectedName(entry.CanonicalName, m.newTab.searchText)
 	} else {
 		namePart = renderColoredName(entry, m.newTab.searchText, groupColor)
 	}
@@ -314,6 +314,16 @@ func (m *Model) renderNewTabRow(entry *discovery.WorkflowEntry, isSel bool, maxW
 	return prefix + namePart + descPart + "\n"
 }
 
+// renderSelectedName uses the selected-text token instead of the group accent.
+// On light terminals, accent+bold can be remapped to bright ANSI cyan by some
+// terminal palettes.
+func renderSelectedName(name, searchText string) string {
+	if searchText != "" {
+		return highlightMatch(name, searchText, true, tuistyle.SelectedText)
+	}
+	return selectedStyle.Bold(true).Render(name)
+}
+
 // renderColoredName renders a non-selected workflow name in the group color.
 func renderColoredName(entry *discovery.WorkflowEntry, searchText string, color lipgloss.AdaptiveColor) string {
 	name := entry.CanonicalName
@@ -324,27 +334,27 @@ func renderColoredName(entry *discovery.WorkflowEntry, searchText string, color 
 }
 
 // highlightMatch returns the name string with the first occurrence of the search
-// substring underlined, using groupColor as the base color for non-selected rows.
+// substring underlined, using color as the base color.
 // Matching is case-insensitive via Unicode simple case-folding, working entirely
 // in original-rune positions so no transformation can change index alignment.
-func highlightMatch(name, filter string, selected bool, groupColor lipgloss.AdaptiveColor) string {
+func highlightMatch(name, filter string, selected bool, color lipgloss.AdaptiveColor) string {
 	if filter == "" {
 		return name
+	}
+	baseStyle := lipgloss.NewStyle().Foreground(color)
+	if selected {
+		baseStyle = baseStyle.Bold(true)
 	}
 	nr := []rune(name)
 	fr := []rune(filter)
 	idx := runeIndexFold(nr, fr)
 	if idx < 0 {
-		return name
+		return baseStyle.Render(name)
 	}
 	before := string(nr[:idx])
 	match := string(nr[idx : idx+len(fr)])
 	after := string(nr[idx+len(fr):])
 
-	baseStyle := lipgloss.NewStyle().Foreground(groupColor)
-	if selected {
-		baseStyle = baseStyle.Bold(true)
-	}
 	matchStyle := baseStyle.Underline(true)
 	return baseStyle.Render(before) + matchStyle.Render(match) + baseStyle.Render(after)
 }

@@ -5,11 +5,11 @@ Define the interactive agent profile editor that guides users through choosing C
 ## Requirements
 ### Requirement: Editor produces a fixed four-agent shape
 
-The editor SHALL write exactly four agent entries under `profiles.default.agents` in the chosen config file: `interactive_base`, `headless_base`, `planner`, `implementor`. `interactive_base` SHALL include `default_mode: interactive` and the user-chosen `cli` and `model`. `headless_base` SHALL include `default_mode: headless` and the user-chosen `cli` and `model`. `planner` SHALL declare `extends: interactive_base` and SHALL NOT include any other field. `implementor` SHALL declare `extends: headless_base` and SHALL NOT include any other field. The editor SHALL NOT write `summarizer` or any other agent.
+The editor SHALL write exactly four agent entries under `profiles.default.agents` in the chosen config file: `interactive_base`, `autonomous_base`, `planner`, `implementor`. `interactive_base` SHALL include `default_mode: interactive` and the user-chosen `cli` and `model`. `autonomous_base` SHALL include `default_mode: autonomous` and the user-chosen `cli` and `model`. `planner` SHALL declare `extends: interactive_base` and SHALL NOT include any other field. `implementor` SHALL declare `extends: autonomous_base` and SHALL NOT include any other field. The editor SHALL NOT write `summarizer` or any other agent.
 
 #### Scenario: Successful first-time write
-- **WHEN** the user picks `cli: claude, model: opus` for interactive_base and `cli: codex, model: gpt-5` for headless_base, scope `global`, and confirms the write
-- **THEN** `~/.agent-runner/config.yaml` contains exactly the four entries: `interactive_base` with `default_mode: interactive, cli: claude, model: opus`; `headless_base` with `default_mode: headless, cli: codex, model: gpt-5`; `planner` with only `extends: interactive_base`; `implementor` with only `extends: headless_base`
+- **WHEN** the user picks `cli: claude, model: opus` for interactive_base and `cli: codex, model: gpt-5` for autonomous_base, scope `global`, and confirms the write
+- **THEN** `~/.agent-runner/config.yaml` contains exactly the four entries: `interactive_base` with `default_mode: interactive, cli: claude, model: opus`; `autonomous_base` with `default_mode: autonomous, cli: codex, model: gpt-5`; `planner` with only `extends: interactive_base`; `implementor` with only `extends: autonomous_base`
 
 #### Scenario: Editor does not write summarizer
 - **WHEN** the editor completes a successful write
@@ -17,11 +17,11 @@ The editor SHALL write exactly four agent entries under `profiles.default.agents
 
 ### Requirement: User chooses CLI and model for each base agent
 
-The native setup profile editor SHALL prompt the user to choose a CLI adapter and a model for `interactive_base`, and separately for `headless_base`. CLI options SHALL be drawn at runtime from the existing adapter detection behavior. Model options SHALL be discovered at runtime by querying the chosen CLI adapter for available models. When the CLI does not support model listing or model discovery returns an empty list, the model selection step SHALL be skipped and the model field SHALL be written as empty, meaning adapter default.
+The native setup profile editor SHALL prompt the user to choose a CLI adapter and a model for `interactive_base`, and separately for `autonomous_base`. CLI options SHALL be drawn at runtime from the existing adapter detection behavior. Model options SHALL be discovered at runtime by querying the chosen CLI adapter for available models. When the CLI does not support model listing or model discovery returns an empty list, the model selection step SHALL be skipped and the model field SHALL be written as empty, meaning adapter default.
 
 #### Scenario: CLI options reflect detected adapters
 - **WHEN** the host has `claude` and `codex` on `$PATH` but not `cursor`
-- **THEN** the native setup CLI selection screens for both `interactive_base` and `headless_base` present `claude` and `codex` as the only options
+- **THEN** the native setup CLI selection screens for both `interactive_base` and `autonomous_base` present `claude` and `codex` as the only options
 
 #### Scenario: Model options reflect chosen CLI
 - **WHEN** the user picks `cli: claude` for `interactive_base` and model discovery returns `["opus", "sonnet", "haiku"]`
@@ -65,10 +65,10 @@ The native setup profile editor SHALL present a confirmation screen showing the 
 
 ### Requirement: Overwrite confirmation when entries already exist
 
-Before writing, the native setup profile editor SHALL inspect the chosen scope's config file, if it exists, for any of the four entries `interactive_base`, `headless_base`, `planner`, or `implementor` under `profiles.default.agents`. If any are present, the editor SHALL display an additional confirmation screen naming the colliding entries and offering an `overwrite` action and a `cancel` action. The `overwrite` action SHALL proceed with the write, replacing those entries. The `cancel` action SHALL leave the file unchanged and leave native setup incomplete.
+Before writing, the native setup profile editor SHALL inspect the chosen scope's config file, if it exists, for any of the four entries `interactive_base`, `autonomous_base`, `planner`, or `implementor` under `profiles.default.agents`. If any are present, the editor SHALL display an additional confirmation screen naming the colliding entries and offering an `overwrite` action and a `cancel` action. The `overwrite` action SHALL proceed with the write, replacing those entries. The `cancel` action SHALL leave the file unchanged and leave native setup incomplete.
 
 #### Scenario: No collisions, no overwrite screen
-- **WHEN** the chosen config file does not exist or contains no entry named `interactive_base`, `headless_base`, `planner`, or `implementor` under `profiles.default.agents`
+- **WHEN** the chosen config file does not exist or contains no entry named `interactive_base`, `autonomous_base`, `planner`, or `implementor` under `profiles.default.agents`
 - **THEN** the editor proceeds directly from confirmation to write with no overwrite screen
 
 #### Scenario: Existing planner triggers overwrite screen
@@ -110,7 +110,7 @@ A single editor session SHALL produce one set of writes. The editor SHALL NOT lo
 ### Requirement: Profile write uses shared Go writer
 
 The native setup profile editor SHALL use the tested internal Go profile-writing path directly. The existing `agent-runner internal write-profile` subcommand SHALL remain a wrapper around that same shared writer. User-selected values SHALL NOT enter a YAML emitter inside a shell script. The shared writer SHALL:
-- Accept its inputs as structured data for interactive cli/model, headless cli/model, and target path.
+- Accept its inputs as structured data for interactive cli/model, autonomous cli/model, and target path.
 - Read the existing file, if any, parse it, and merge the four entries into `profiles.default.agents` while preserving any other agents, other profile sets, and any other top-level keys.
 - Write the result atomically using a temp file and rename in the same directory.
 - Set the resulting file mode to `0o600` and create any missing parent directories with mode `0o755`.

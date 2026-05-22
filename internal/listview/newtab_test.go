@@ -7,6 +7,8 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/tuistyle"
@@ -358,6 +360,43 @@ func TestNewTab_ViewFitsTerminalHeight(t *testing.T) {
 	}
 }
 
+func TestRenderNewTabRow_SelectedNameUsesSelectedText(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	lipgloss.SetHasDarkBackground(false)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(termenv.Ascii)
+	})
+
+	entry := validEntry("core:finalize-pr")
+	m := newTabModel([]discovery.WorkflowEntry{entry})
+
+	got := m.renderNewTabRow(&entry, true, 80, tuistyle.AccentCyan)
+	want := selectedStyle.Bold(true).Render(entry.CanonicalName)
+	if !strings.Contains(got, want) {
+		t.Fatalf("selected row should style name with selected text, got %q, want substring %q", got, want)
+	}
+
+	accentName := lipgloss.NewStyle().Foreground(tuistyle.AccentCyan).Bold(true).Render(entry.CanonicalName)
+	if strings.Contains(got, accentName) {
+		t.Fatalf("selected row should not style name with accent cyan, got %q", got)
+	}
+}
+
+func TestRenderSelectedNameWithSearchMissStillStylesSelection(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	lipgloss.SetHasDarkBackground(false)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(termenv.Ascii)
+	})
+
+	name := "core:finalize-pr"
+	got := renderSelectedName(name, "description-only")
+	want := selectedStyle.Bold(true).Render(name)
+	if got != want {
+		t.Fatalf("renderSelectedName search miss = %q, want selected styling %q", got, want)
+	}
+}
+
 // TestBackspace_MultiByte verifies backspace removes a full rune, not just one byte.
 func TestBackspace_MultiByte(t *testing.T) {
 	m := newTabModel(nil)
@@ -411,7 +450,7 @@ func TestHighlightMatch_CaseInsensitive(t *testing.T) {
 	name := "core:Deploy"
 	filter := "deploy"
 	result := highlightMatch(name, filter, false, tuistyle.AccentCyan)
-	if !strings.Contains(result, "Deploy") {
+	if !strings.Contains(sanitize(result), "Deploy") {
 		t.Errorf("highlightMatch(%q, %q) should render the original casing: %q", name, filter, result)
 	}
 }

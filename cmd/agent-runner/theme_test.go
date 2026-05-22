@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/muesli/termenv"
 
 	"github.com/codagent/agent-runner/internal/usersettings"
 )
@@ -145,6 +146,19 @@ func TestApplyThemeSetsLipglossBackground(t *testing.T) {
 	applyTheme(usersettings.ThemeLight)
 	if lipgloss.HasDarkBackground() {
 		t.Fatal("light theme did not set light background")
+	}
+}
+
+func TestApplyThemeUsesTrueColorProfile(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(termenv.Ascii)
+	})
+
+	applyTheme(usersettings.ThemeDark)
+
+	if got := lipgloss.ColorProfile(); got != termenv.TrueColor {
+		t.Fatalf("color profile = %v, want %v", got, termenv.TrueColor)
 	}
 }
 

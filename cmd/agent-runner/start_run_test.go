@@ -13,6 +13,8 @@ import (
 	"github.com/codagent/agent-runner/internal/model"
 	nativesetup "github.com/codagent/agent-runner/internal/onboarding/native"
 	"github.com/codagent/agent-runner/internal/paramform"
+	"github.com/codagent/agent-runner/internal/runlock"
+	"github.com/codagent/agent-runner/internal/runview"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
 
@@ -197,11 +199,107 @@ func TestOnboardingDemoPromptFlowWindowSizeDoesNotCompletePrompt(t *testing.T) {
 	}
 }
 
+func TestOnboardingDemoPromptFlowContinueShowsPreparingState(t *testing.T) {
+	m := &onboardingDemoPromptFlow{
+		prompt: nativesetup.NewDemoPromptModel(&nativesetup.Deps{}),
+		ref:    "builtin:onboarding/onboarding.yaml",
+		opts:   liveTUIOptions{quitOnDone: true, startInAltScreen: true},
+	}
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m = updated.(*onboardingDemoPromptFlow)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(*onboardingDemoPromptFlow)
+
+	if cmd == nil {
+		t.Fatal("Continue should start preparing the onboarding demo")
+	}
+	if !m.preparingRun {
+		t.Fatal("Continue should enter preparing state while demo run is prepared")
+	}
+	view := m.View()
+	if !strings.Contains(view, "Preparing Onboarding Demo") {
+		t.Fatalf("view missing preparing title:\n%s", view)
+	}
+	if !strings.Contains(view, "This can take a moment") {
+		t.Fatalf("view missing wait guidance:\n%s", view)
+	}
+}
+
+func TestOnboardingDemoLaunchFlowStartsInPreparingState(t *testing.T) {
+	m := &onboardingDemoPromptFlow{
+		ref:          "builtin:onboarding/onboarding.yaml",
+		opts:         liveTUIOptions{quitOnDone: true, startInAltScreen: true},
+		preparingRun: true,
+	}
+
+	cmd := m.Init()
+	if cmd == nil {
+		t.Fatal("launch flow should start preparation commands immediately")
+	}
+	view := m.View()
+	if !strings.Contains(view, "Preparing Onboarding Demo") {
+		t.Fatalf("view missing preparing title:\n%s", view)
+	}
+}
+
+func TestOnboardingDemoLaunchFlowViewHandlesFailedPreparation(t *testing.T) {
+	m := &onboardingDemoPromptFlow{
+		ref:          "builtin:onboarding/onboarding.yaml",
+		opts:         liveTUIOptions{quitOnDone: true, startInAltScreen: true},
+		preparingRun: true,
+	}
+
+	updated, cmd := m.Update(onboardingDemoPrepareMsg{exitCode: 1})
+	m = updated.(*onboardingDemoPromptFlow)
+
+	if cmd == nil {
+		t.Fatal("failed preparation should quit")
+	}
+	if m.exitCode != 1 {
+		t.Fatalf("exitCode = %d, want 1", m.exitCode)
+	}
+	if got := m.View(); got != "" {
+		t.Fatalf("failed preparation without prompt should render empty view, got %q", got)
+	}
+}
+
+func TestOnboardingDemoPromptFlowConfirmedLiveRunQuitExitsApp(t *testing.T) {
+	sessionDir := writeRunState(t, t.TempDir(), "onboarding-run", "builtin:onboarding/onboarding.yaml", false)
+	rv, err := runview.New(sessionDir, "", runview.FromLiveRun)
+	if err != nil {
+		t.Fatalf("new runview: %v", err)
+	}
+	m := &onboardingDemoPromptFlow{
+		run:  rv,
+		mode: onboardingDemoRunMode,
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	m = updated.(*onboardingDemoPromptFlow)
+	if cmd != nil {
+		t.Fatalf("q should only open quit confirmation, got cmd %T", cmd())
+	}
+
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	m = updated.(*onboardingDemoPromptFlow)
+	if cmd == nil {
+		t.Fatal("confirming quit should produce a quit cmd")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("expected tea.QuitMsg, got %T", cmd())
+	}
+	if !m.exitRequested {
+		t.Fatal("confirmed live-run quit should mark the wrapper as exit-requested")
+	}
+}
+
 func TestFindLatestIncompleteOnboardingRunState(t *testing.T) {
 	originalHome := userHomeDir
 	home := t.TempDir()
 	userHomeDir = func() (string, error) { return home, nil }
 	t.Cleanup(func() { userHomeDir = originalHome })
+	t.Setenv("HOME", home)
 
 	startCwd := filepath.Join(t.TempDir(), "start")
 	resumeCwd := filepath.Join(t.TempDir(), "resume")
@@ -235,6 +333,100 @@ func TestFindLatestIncompleteOnboardingRunState(t *testing.T) {
 	}
 }
 
+func TestFindLatestIncompleteOnboardingRunStateRepairsEmptyCurrentStepToFirstStep(t *testing.T) {
+	originalHome := userHomeDir
+	home := t.TempDir()
+	userHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHomeDir = originalHome })
+	t.Setenv("HOME", home)
+
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repo, 0o750); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	t.Chdir(repo)
+
+	ref := "builtin:onboarding/onboarding.yaml"
+	runsDir := filepath.Join(home, ".agent-runner", "onboarding", "runs")
+	writeRunState(t, runsDir, "onboarding-onboarding-2026-05-10T10-00-00Z", ref, false)
+	emptyDir := filepath.Join(runsDir, "onboarding-onboarding-2026-05-10T11-00-00Z")
+	if err := stateio.WriteState(&model.RunState{
+		WorkflowFile: ref,
+		WorkflowName: "onboarding-onboarding",
+		WorkflowHash: "test-hash",
+	}, emptyDir); err != nil {
+		t.Fatalf("write empty current step state: %v", err)
+	}
+
+	got, ok, err := findLatestIncompleteOnboardingRunState(ref)
+	if err != nil {
+		t.Fatalf("findLatestIncompleteOnboardingRunState: %v", err)
+	}
+	if !ok {
+		t.Fatal("findLatestIncompleteOnboardingRunState ok = false, want repaired candidate")
+	}
+	want := filepath.Join(emptyDir, "state.json")
+	if got != want {
+		t.Fatalf("state path = %q, want %q", got, want)
+	}
+	state, err := stateio.ReadState(got)
+	if err != nil {
+		t.Fatalf("read repaired state: %v", err)
+	}
+	if state.CurrentStep.Nested == nil || state.CurrentStep.Nested.StepID != "step-types-demo" {
+		t.Fatalf("repaired CurrentStep = %#v, want step-types-demo", state.CurrentStep)
+	}
+}
+
+func TestFindLatestIncompleteOnboardingRunStateRepairsEmptyCurrentStepFromAudit(t *testing.T) {
+	originalHome := userHomeDir
+	home := t.TempDir()
+	userHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHomeDir = originalHome })
+	t.Setenv("HOME", home)
+
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repo, 0o750); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	t.Chdir(repo)
+
+	ref := "builtin:onboarding/onboarding.yaml"
+	runsDir := filepath.Join(home, ".agent-runner", "onboarding", "runs")
+	writeRunState(t, runsDir, "onboarding-onboarding-2026-05-10T10-00-00Z", ref, false)
+	emptyDir := filepath.Join(runsDir, "onboarding-onboarding-2026-05-10T11-00-00Z")
+	if err := stateio.WriteState(&model.RunState{
+		WorkflowFile: ref,
+		WorkflowName: "onboarding-onboarding",
+		WorkflowHash: "test-hash",
+	}, emptyDir); err != nil {
+		t.Fatalf("write empty current step state: %v", err)
+	}
+	auditLine := `2026-05-10T11:00:00Z run_start {"resumed":true,"resume_from":"validator"}` + "\n"
+	if err := os.WriteFile(filepath.Join(emptyDir, "audit.log"), []byte(auditLine), 0o600); err != nil {
+		t.Fatalf("write audit log: %v", err)
+	}
+
+	got, ok, err := findLatestIncompleteOnboardingRunState(ref)
+	if err != nil {
+		t.Fatalf("findLatestIncompleteOnboardingRunState: %v", err)
+	}
+	if !ok {
+		t.Fatal("findLatestIncompleteOnboardingRunState ok = false, want repaired candidate")
+	}
+	want := filepath.Join(emptyDir, "state.json")
+	if got != want {
+		t.Fatalf("state path = %q, want %q", got, want)
+	}
+	state, err := stateio.ReadState(got)
+	if err != nil {
+		t.Fatalf("read repaired state: %v", err)
+	}
+	if state.CurrentStep.Nested == nil || state.CurrentStep.Nested.StepID != "validator" {
+		t.Fatalf("repaired CurrentStep = %#v, want validator", state.CurrentStep)
+	}
+}
+
 func TestFindLatestIncompleteOnboardingRunStateMissingRunsDir(t *testing.T) {
 	originalHome := userHomeDir
 	home := t.TempDir()
@@ -253,6 +445,41 @@ func TestFindLatestIncompleteOnboardingRunStateMissingRunsDir(t *testing.T) {
 	}
 	if ok || got != "" {
 		t.Fatalf("result = %q, %v; want no candidate", got, ok)
+	}
+}
+
+func TestPrepareBuiltinOnboardingRunStartsFromRequestedTopLevelStep(t *testing.T) {
+	originalHome := userHomeDir
+	home := t.TempDir()
+	userHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHomeDir = originalHome })
+	t.Setenv("HOME", home)
+
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repo, 0o750); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	t.Chdir(repo)
+
+	ref := "builtin:onboarding/onboarding.yaml"
+	runsDir := filepath.Join(home, ".agent-runner", "onboarding", "runs")
+	writeRunState(t, runsDir, "onboarding-onboarding-2026-05-10T10-00-00Z", ref, false)
+
+	handle, exitCode := prepareBuiltinOnboardingRun(ref, "validator")
+	if exitCode != 0 {
+		t.Fatalf("prepareBuiltinOnboardingRun exit = %d, want 0", exitCode)
+	}
+	t.Cleanup(func() { runlock.Delete(handle.SessionDir) })
+
+	if strings.Contains(handle.SessionDir, "2026-05-10T10-00-00Z") {
+		t.Fatalf("session dir = %q, reused incomplete run despite explicit start step", handle.SessionDir)
+	}
+
+	event := readFirstAuditLine(t, filepath.Join(handle.SessionDir, "audit.log"))
+	for _, want := range []string{` run_start `, `"resumed":true`, `"resume_from":"validator"`} {
+		if !strings.Contains(event, want) {
+			t.Fatalf("run_start event = %q, want to contain %q", event, want)
+		}
 	}
 }
 
@@ -276,6 +503,19 @@ func TestNewOnboardingSessionDirUsesGlobalOnboardingScope(t *testing.T) {
 	if !strings.HasPrefix(got, wantPrefix) {
 		t.Fatalf("session dir = %q, want prefix %q", got, wantPrefix)
 	}
+}
+
+func readFirstAuditLine(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	line, _, ok := strings.Cut(string(data), "\n")
+	if !ok {
+		t.Fatalf("audit log has no newline-delimited event: %q", data)
+	}
+	return line
 }
 
 func envContains(env []string, want string) bool {

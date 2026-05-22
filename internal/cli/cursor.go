@@ -27,20 +27,21 @@ func (a *CursorAdapter) ExecutableName() string {
 // BuildArgs constructs Cursor CLI args.
 //
 // Patterns:
-//   - Fresh headless:      agent -p --output-format stream-json --force --trust [--model <m>] <prompt>
-//   - Resume headless:     agent -p --output-format stream-json --force --trust --resume=<id> <prompt>
+//   - Fresh headless:      agent -p --output-format stream-json --trust [--model <m>] <prompt>
+//   - Resume headless:     agent -p --output-format stream-json --trust --resume=<id> <prompt>
 //   - Fresh interactive:   agent [--model <m>] <prompt>
 //   - Resume interactive:  agent --resume=<id> <prompt>
 //
 // Cursor has no native system-prompt, effort, or disallowed-tools flags. Those
 // inputs are intentionally ignored here. Interactive mode omits headless-only
-// output/trust flags and --force because a human supervises permissions at the
+// output/trust flags because a human supervises permissions at the
 // terminal. --model is omitted on resume because a resumed Cursor chat keeps the
 // model it was started with.
 func (a *CursorAdapter) BuildArgs(input *BuildArgsInput) []string {
 	args := []string{"agent"}
-	if input.Headless {
-		args = append(args, "-p", "--output-format", "stream-json", "--force", "--trust")
+	context := input.InvocationContext()
+	if context.IsHeadless() {
+		args = append(args, "-p", "--output-format", "stream-json", "--trust")
 	}
 
 	if input.Resume && input.SessionID != "" {

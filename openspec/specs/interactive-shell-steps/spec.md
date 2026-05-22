@@ -5,24 +5,24 @@ TBD - created by archiving change interactive-shell. Update Purpose after archiv
 ## Requirements
 ### Requirement: Interactive mode attribute on shell steps
 
-A shell step MAY set `mode: interactive` to request PTY-based execution with the user's terminal attached. When `mode` is absent, the shell step SHALL default to `headless`. When `mode` is `headless` (explicit or defaulted), the shell step SHALL execute via the existing non-PTY path. The `mode` value MUST be `interactive` or `headless`; any other value SHALL fail validation.
+A shell step MAY set `mode: interactive` to request PTY-based execution with the user's terminal attached. When `mode` is absent, the shell step SHALL default to `autonomous`. When `mode` is `autonomous` (explicit or defaulted), the shell step SHALL execute via the existing non-PTY path. The `mode` value MUST be `interactive` or `autonomous`; any other value SHALL fail validation.
 
-Unlike agent steps — where `mode` defaults come from the resolved profile's `default_mode` — shell steps have no profile, so the default is always `headless`.
+Unlike agent steps — where `mode` defaults come from the resolved profile's `default_mode` — shell steps have no profile, so the default is always `autonomous`.
 
 #### Scenario: Shell step with mode: interactive
 
 - **WHEN** a workflow declares a shell step with `command: "read -p 'Name? ' name && echo Hi $name"` and `mode: interactive`
 - **THEN** validation succeeds and the runner dispatches the step through the interactive shell path
 
-#### Scenario: Shell step with mode: headless
+#### Scenario: Shell step with mode: autonomous
 
-- **WHEN** a workflow declares a shell step with `mode: headless`
+- **WHEN** a workflow declares a shell step with `mode: autonomous`
 - **THEN** validation succeeds and the runner dispatches the step through the existing non-PTY shell path
 
-#### Scenario: Shell step without mode defaults to headless
+#### Scenario: Shell step without mode defaults to autonomous
 
 - **WHEN** a workflow declares a shell step with no `mode` field
-- **THEN** the step is treated as `mode: headless` and the runner dispatches it through the existing non-PTY shell path
+- **THEN** the step is treated as `mode: autonomous` and the runner dispatches it through the existing non-PTY shell path
 
 #### Scenario: Invalid mode value on shell step
 

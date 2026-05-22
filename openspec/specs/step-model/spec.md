@@ -8,7 +8,7 @@ Defines per-step model and CLI overrides for agent steps.
 A step MAY include a `model` field specifying which model the agent should use. When present, the runner SHALL pass the model to the CLI adapter, overriding the model from the resolved agent profile. When absent, the profile's model is used (which may itself be unset, in which case no model is passed to the CLI). The `model` field is only valid on agent steps, not shell steps.
 
 #### Scenario: Model specified overrides profile
-- **WHEN** an agent step has `agent: headless_base` (profile model=opus) and `model: sonnet`
+- **WHEN** an agent step has `agent: autonomous_base` (profile model=opus) and `model: sonnet`
 - **THEN** the runner passes sonnet to the CLI adapter, not the profile's model
 
 #### Scenario: No model on step, profile has model
@@ -27,7 +27,7 @@ A step MAY include a `model` field specifying which model the agent should use. 
 A step MAY include a `cli` field specifying which CLI backend to use. When present, it SHALL override the cli from the resolved agent profile. When absent, the profile's cli is used. If both the step and the resolved profile omit `cli`, the runner SHALL fall back to `claude`. The `cli` field is only valid on agent steps, not shell steps.
 
 #### Scenario: CLI specified overrides profile
-- **WHEN** an agent step has `agent: headless_base` (profile cli=claude) and `cli: codex`
+- **WHEN** an agent step has `agent: autonomous_base` (profile cli=claude) and `cli: codex`
 - **THEN** the runner uses the Codex adapter for that step
 
 #### Scenario: CLI not specified, uses profile

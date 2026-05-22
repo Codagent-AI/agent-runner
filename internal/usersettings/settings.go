@@ -17,10 +17,19 @@ const (
 	ThemeDark  Theme = "dark"
 )
 
+type AutonomousBackend string
+
+const (
+	BackendHeadless          AutonomousBackend = "headless"
+	BackendInteractive       AutonomousBackend = "interactive"
+	BackendInteractiveClaude AutonomousBackend = "interactive-claude"
+)
+
 type Settings struct {
-	Theme      Theme
-	Setup      SetupSettings
-	Onboarding OnboardingSettings
+	Theme             Theme
+	AutonomousBackend AutonomousBackend
+	Setup             SetupSettings
+	Onboarding        OnboardingSettings
 
 	raw *string
 }
@@ -92,18 +101,26 @@ func Load() (Settings, error) {
 	for i := 0; i+1 < len(yamlRoot.Content); i += 2 {
 		key := yamlRoot.Content[i]
 		value := yamlRoot.Content[i+1]
-		parseSettingPair(&settings, key, value)
+		if err := parseSettingPair(&settings, key, value); err != nil {
+			return Settings{}, err
+		}
 	}
 
 	return settings, nil
 }
 
-func parseSettingPair(settings *Settings, key, value *yaml.Node) {
+func parseSettingPair(settings *Settings, key, value *yaml.Node) error {
 	switch key.Value {
 	case "theme":
 		if theme := parseTheme(value); theme != "" {
 			settings.Theme = theme
 		}
+	case "autonomous_backend":
+		backend, err := parseAutonomousBackend(value)
+		if err != nil {
+			return err
+		}
+		settings.AutonomousBackend = backend
 	case "setup":
 		if setup, ok := parseSetup(value); ok {
 			settings.Setup = setup
@@ -113,6 +130,7 @@ func parseSettingPair(settings *Settings, key, value *yaml.Node) {
 			settings.Onboarding = onboarding
 		}
 	}
+	return nil
 }
 
 func parseTheme(value *yaml.Node) Theme {
@@ -127,6 +145,26 @@ func parseTheme(value *yaml.Node) Theme {
 	default:
 		return ""
 	}
+}
+
+func parseAutonomousBackend(value *yaml.Node) (AutonomousBackend, error) {
+	if value.Kind != yaml.ScalarNode {
+		return "", invalidAutonomousBackendError(value.Value)
+	}
+	switch AutonomousBackend(value.Value) {
+	case BackendHeadless:
+		return BackendHeadless, nil
+	case BackendInteractive:
+		return BackendInteractive, nil
+	case BackendInteractiveClaude:
+		return BackendInteractiveClaude, nil
+	default:
+		return "", invalidAutonomousBackendError(value.Value)
+	}
+}
+
+func invalidAutonomousBackendError(value string) error {
+	return fmt.Errorf("invalid autonomous_backend %q (valid values: %s, %s, %s)", value, BackendHeadless, BackendInteractive, BackendInteractiveClaude)
 }
 
 func parseSetup(value *yaml.Node) (SetupSettings, bool) {
@@ -165,6 +203,7 @@ func parseOnboarding(value *yaml.Node) (OnboardingSettings, bool) {
 	return onboarding, true
 }
 
+//nolint:gocritic // Save persists a complete settings value; keeping value semantics matches Load.
 func Save(settings Settings) error {
 	path, err := Path()
 	if err != nil {
@@ -225,6 +264,7 @@ func Save(settings Settings) error {
 	return nil
 }
 
+//nolint:gocritic // marshalSettings preserves the public Save value semantics internally.
 func marshalSettings(settings Settings) ([]byte, error) {
 	root := &yaml.Node{Kind: yaml.MappingNode}
 	if settings.raw != nil {
@@ -238,6 +278,12 @@ func marshalSettings(settings Settings) ([]byte, error) {
 		setScalar(root, "theme", string(settings.Theme))
 	} else {
 		removeKey(root, "theme")
+	}
+
+	if settings.AutonomousBackend != "" {
+		setScalar(root, "autonomous_backend", string(settings.AutonomousBackend))
+	} else {
+		removeKey(root, "autonomous_backend")
 	}
 
 	if settings.Setup.CompletedAt != "" {

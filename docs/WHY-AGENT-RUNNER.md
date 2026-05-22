@@ -47,7 +47,7 @@ The closest existing tool. Taskfile is a YAML-based CLI task runner with `for:` 
 
 3. **No conditional branching.** `if:` on a command skips or runs that one command. There is no if/else that routes to different task paths or step sequences.
 
-4. **No session management.** No concept of tracking session IDs between steps, resuming a previous session, or choosing between interactive and headless execution modes at the workflow level.
+4. **No session management.** No concept of tracking session IDs between steps, resuming a previous session, or choosing between interactive and autonomous execution modes at the workflow level.
 
 The honest version of agent-runner's implement-verify workflow in Taskfile collapses to a single `cmd:` block containing a bash script:
 
@@ -96,12 +96,12 @@ Agent Runner tracks session IDs across workflow steps. A step can declare `sessi
 
 ```yaml
 - id: implement
-  mode: headless
+  mode: autonomous
   session: new
   prompt: "Implement this feature"
 
 - id: fix
-  mode: headless
+  mode: autonomous
   session: resume    # continues implement's session
   prompt: "Fix the test failures"
 ```
@@ -113,7 +113,7 @@ No workflow engine has this concept because no workflow engine was designed to o
 Every step declares one of three execution modes:
 
 - **interactive** — Agent runs with full terminal access. Human collaborates. Step advances when the user signals completion.
-- **headless** — Agent runs non-interactively. Output streams to terminal. Step advances on exit.
+- **autonomous** — Agent runs non-interactively. Output streams to terminal. Step advances on exit.
 - **shell** — No agent. Direct shell command execution.
 
 These three modes coexist in a single workflow. CI systems have "manual approval gates" but not interactive agent sessions. Task runners have shell commands but not agent modes. No tool combines all three.

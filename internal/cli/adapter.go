@@ -73,8 +73,35 @@ type BuildArgsInput struct {
 	Resume          bool   // True when resuming an existing session, false for fresh sessions
 	Model           string
 	Effort          string // Effort level (low, medium, high, xhigh) — empty means unset
-	Headless        bool
+	Context         InvocationContext
 	DisallowedTools []string // Tool names to block (e.g. "AskUserQuestion"); adapter translates to CLI flags where supported
+}
+
+type InvocationContext string
+
+const (
+	ContextInteractive           InvocationContext = "interactive"
+	ContextAutonomousHeadless    InvocationContext = "autonomous-headless"
+	ContextAutonomousInteractive InvocationContext = "autonomous-interactive"
+)
+
+func (c InvocationContext) IsInteractive() bool {
+	return c == ContextInteractive
+}
+
+func (c InvocationContext) IsAutonomous() bool {
+	return c != ContextInteractive
+}
+
+func (c InvocationContext) IsHeadless() bool {
+	return c == ContextAutonomousHeadless
+}
+
+func (input *BuildArgsInput) InvocationContext() InvocationContext {
+	if input.Context != "" {
+		return input.Context
+	}
+	return ContextInteractive
 }
 
 // Adapter abstracts CLI invocation for a specific agent backend.

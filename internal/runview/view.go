@@ -16,7 +16,8 @@ var (
 	uiGlyphStyle      = lipgloss.NewStyle().Foreground(tuistyle.AccentMagenta)
 	loopGlyphStyle    = lipgloss.NewStyle().Foreground(tuistyle.AccentCyan)
 	subwfGlyphStyle   = lipgloss.NewStyle().Foreground(tuistyle.AccentCyan)
-	selectedStepStyle = lipgloss.NewStyle().Foreground(tuistyle.SuccessGreen).Bold(true)
+	defaultTextStyle  = lipgloss.NewStyle()
+	selectedStepStyle = lipgloss.NewStyle().Foreground(tuistyle.SuccessGreen)
 )
 
 type renderedStepRow struct {
@@ -239,7 +240,7 @@ func (m *Model) renderStepRow(n *StepNode, selected, suppressStatus bool) string
 		glyph = " "
 	}
 
-	style := tuistyle.NormalStyle
+	style := defaultTextStyle
 	if selected {
 		style = selectedStepStyle
 	}
@@ -281,7 +282,7 @@ func (m *Model) expansionChildren(selected *StepNode) []*StepNode {
 
 func (m *Model) renderExpansionRow(n *StepNode, depth int) string {
 	typeCol, label, glyph := m.stepRowParts(n)
-	return "   " + strings.Repeat("  ", depth) + typeCol + tuistyle.NormalStyle.Render(label) + "  " + glyph
+	return "   " + strings.Repeat("  ", depth) + typeCol + defaultTextStyle.Render(label) + "  " + glyph
 }
 
 func rowTexts(rows []renderedStepRow) []string {

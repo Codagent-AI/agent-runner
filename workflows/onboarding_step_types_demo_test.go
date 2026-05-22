@@ -16,9 +16,10 @@ func TestStepTypesDemoWorkflowShape(t *testing.T) {
 		"intro-ui",
 		"explain-interactive",
 		"interactive-qa",
-		"explain-headless",
-		"headless-demo",
-		"review-headless",
+		"back-in-workflow",
+		"explain-autonomous",
+		"autonomous-demo",
+		"review-autonomous",
 		"explain-shell",
 		"shell-capture",
 		"summary",
@@ -32,12 +33,13 @@ func TestStepTypesDemoWorkflowShape(t *testing.T) {
 	assertUIStep(t, &wf.Steps[0], "UI")
 	assertUIStep(t, &wf.Steps[1], "interactive")
 	assertAgentStep(t, &wf.Steps[2], "planner", "", model.ModeInteractive)
-	assertUIStep(t, &wf.Steps[3], "headless")
-	assertAgentStep(t, &wf.Steps[4], "implementor", "", model.ModeHeadless)
-	assertUIStep(t, &wf.Steps[5], "Headless")
-	assertUIStep(t, &wf.Steps[6], "shell")
+	assertUIStep(t, &wf.Steps[3], "TUI")
+	assertUIStep(t, &wf.Steps[4], "autonomous")
+	assertAgentStep(t, &wf.Steps[5], "implementor", "", model.ModeAutonomous)
+	assertUIStep(t, &wf.Steps[6], "Autonomous")
+	assertUIStep(t, &wf.Steps[7], "shell")
 
-	shellCapture := wf.Steps[7]
+	shellCapture := wf.Steps[8]
 	if shellCapture.StepType() != "shell" {
 		t.Fatalf("shell-capture type = %q, want shell", shellCapture.StepType())
 	}
@@ -48,7 +50,7 @@ func TestStepTypesDemoWorkflowShape(t *testing.T) {
 		t.Fatalf("shell-capture command does not emit deterministic demo value: %q", shellCapture.Command)
 	}
 
-	summary := wf.Steps[8]
+	summary := wf.Steps[9]
 	assertUIStep(t, &summary, "shell_capture")
 	if summary.OutcomeCapture != "summary_action" {
 		t.Fatalf("summary outcome_capture = %q, want summary_action", summary.OutcomeCapture)
@@ -58,7 +60,7 @@ func TestStepTypesDemoWorkflowShape(t *testing.T) {
 		t.Fatalf("summary outcomes mismatch (-want +got):\n%s", diff)
 	}
 
-	learnMore := wf.Steps[9]
+	learnMore := wf.Steps[10]
 	assertAgentStep(t, &learnMore, "planner", "", model.ModeInteractive)
 	if learnMore.SkipIf != `sh: [ "x{{summary_action}}" != "xlearn_more" ]` {
 		t.Fatalf("learn-more-qa skip_if = %q", learnMore.SkipIf)
@@ -93,7 +95,7 @@ func TestStepTypesDemoPromptsUsePackagedDocsAndStayNonDestructive(t *testing.T) 
 		}
 	}
 
-	headlessPrompt := strings.ToLower(stepByID(t, &wf, "headless-demo").Prompt)
+	headlessPrompt := strings.ToLower(stepByID(t, &wf, "autonomous-demo").Prompt)
 	for _, forbidden := range []string{"touch ", "mkdir", "rm ", "write-setting", "config.yaml", "settings.yaml"} {
 		if strings.Contains(headlessPrompt, forbidden) {
 			t.Fatalf("headless prompt contains destructive instruction %q:\n%s", forbidden, headlessPrompt)
@@ -189,7 +191,7 @@ func TestGuidedWorkflowShape(t *testing.T) {
 		t.Fatalf("plan prompt should suggest small tasks without enforcing scope:\n%s", stepByID(t, &wf, "plan").Prompt)
 	}
 	locate := stepByID(t, &wf, "locate-task")
-	assertAgentStep(t, locate, "", "planning-session", model.ModeHeadless)
+	assertAgentStep(t, locate, "", "planning-session", model.ModeAutonomous)
 	if locate.Capture != "task_file" {
 		t.Fatalf("locate-task capture = %q, want task_file", locate.Capture)
 	}
@@ -201,11 +203,14 @@ func TestGuidedWorkflowShape(t *testing.T) {
 		t.Fatalf("tutor prompt missing docs reference:\n%s", stepByID(t, &wf, "tutor").Prompt)
 	}
 	impl := stepByID(t, &wf, "implement")
-	assertAgentStep(t, impl, "", "impl-session", model.ModeHeadless)
-	for _, want := range []string{"{{task_file}}", "codagent:implement-with-tdd", "Do not commit"} {
+	assertAgentStep(t, impl, "", "impl-session", model.ModeAutonomous)
+	for _, want := range []string{"{{task_file}}", "codagent:implement-with-tdd", "git add", "including newly added files", "do not commit"} {
 		if !strings.Contains(impl.Prompt, want) {
 			t.Fatalf("implement prompt missing %q:\n%s", want, impl.Prompt)
 		}
+	}
+	if !strings.Contains(stepByID(t, &wf, "summary").Body, "do not commit yet") {
+		t.Fatalf("summary should tell the user not to commit yet:\n%s", stepByID(t, &wf, "summary").Body)
 	}
 }
 
@@ -214,17 +219,22 @@ func TestValidatorWorkflowShape(t *testing.T) {
 
 	wantSessions := map[string]string{
 		"validator-setup-session": "planner",
+		"tutor-session":           "planner",
 		"impl-session":            "implementor",
 	}
 	assertSessions(t, wf.Sessions, wantSessions)
 
 	wantIDs := []string{
 		"intro-ui",
+		"stash-guided-changes",
 		"init",
 		"setup",
+		"restore-guided-changes",
 		"explain-validation",
+		"break-it",
 		"prepare-fix-context",
 		"run-validator",
+		"review-validator-status",
 		"summary-ui",
 	}
 	gotIDs := stepIDs(wf.Steps)
@@ -233,18 +243,50 @@ func TestValidatorWorkflowShape(t *testing.T) {
 	}
 
 	assertUIStep(t, stepByID(t, &wf, "intro-ui"), "Agent Validator")
-	if stepByID(t, &wf, "init").Command != "agent-validator init" {
-		t.Fatalf("init command = %q, want agent-validator init", stepByID(t, &wf, "init").Command)
+	stash := stepByID(t, &wf, "stash-guided-changes")
+	if stash.StepType() != "shell" {
+		t.Fatalf("stash-guided-changes type = %q, want shell", stash.StepType())
+	}
+	for _, want := range []string{"git status --porcelain", "git stash push -u", "agent-runner onboarding guided changes", "git status --short"} {
+		if !strings.Contains(stash.Command, want) {
+			t.Fatalf("stash-guided-changes command missing %q:\n%s", want, stash.Command)
+		}
+	}
+	if stepByID(t, &wf, "init").Command != `"$AGENT_RUNNER_EXECUTABLE" internal validator-init` {
+		t.Fatalf("init command = %q, want current executable validator init", stepByID(t, &wf, "init").Command)
 	}
 	setup := stepByID(t, &wf, "setup")
 	assertAgentStep(t, setup, "", "validator-setup-session", model.ModeInteractive)
 	if !strings.Contains(setup.Prompt, "agent-validator:validator-setup") {
 		t.Fatalf("setup prompt missing validator setup skill:\n%s", setup.Prompt)
 	}
-	assertAgentStep(t, stepByID(t, &wf, "prepare-fix-context"), "", "impl-session", model.ModeHeadless)
+	restore := stepByID(t, &wf, "restore-guided-changes")
+	if restore.StepType() != "shell" {
+		t.Fatalf("restore-guided-changes type = %q, want shell", restore.StepType())
+	}
+	for _, want := range []string{"git stash list", "git stash pop", "agent-runner onboarding guided changes", "git status --porcelain", "git status --short", "git diff --stat"} {
+		if !strings.Contains(restore.Command, want) {
+			t.Fatalf("restore-guided-changes command missing %q:\n%s", want, restore.Command)
+		}
+	}
+	breakIt := stepByID(t, &wf, "break-it")
+	assertAgentStep(t, breakIt, "", "tutor-session", model.ModeAutonomous)
+	for _, want := range []string{"same tutorial-agent context", "previous guided workflow", "git status --short", "git diff", "git show", "previously implemented code", ".validator/config.yml", "Do not commit"} {
+		if !strings.Contains(breakIt.Prompt, want) {
+			t.Fatalf("break-it prompt missing %q:\n%s", want, breakIt.Prompt)
+		}
+	}
+	assertAgentStep(t, stepByID(t, &wf, "prepare-fix-context"), "", "impl-session", model.ModeAutonomous)
 	runValidator := stepByID(t, &wf, "run-validator")
 	if runValidator.StepType() != "sub-workflow" || runValidator.Workflow != "../core/run-validator.yaml" {
 		t.Fatalf("run-validator = type %q workflow %q, want sub-workflow ../core/run-validator.yaml", runValidator.StepType(), runValidator.Workflow)
+	}
+	review := stepByID(t, &wf, "review-validator-status")
+	assertAgentStep(t, review, "", "tutor-session", model.ModeInteractive)
+	for _, want := range []string{"agent-validator:validator-status", "intentional bug", "validator_logs/*.json", "review_*.json", "reviewer reported violations", "fixed, skipped, or absent", "Do not infer that reviews passed merely because JSON or log files exist", "additional issues", "agent-validator:validator-help", "{{session_dir}}/bundled/onboarding/docs/"} {
+		if !strings.Contains(review.Prompt, want) {
+			t.Fatalf("review-validator-status prompt missing %q:\n%s", want, review.Prompt)
+		}
 	}
 	assertUIStep(t, stepByID(t, &wf, "summary-ui"), "feedback-loop")
 }

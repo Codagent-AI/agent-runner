@@ -20,7 +20,7 @@ A workflow step MAY declare `script: <path>` to invoke a script bundled alongsid
 - **THEN** validation fails with an error indicating exactly one step type is allowed
 
 #### Scenario: Agent-only fields rejected on script step
-- **WHEN** a script step sets `cli: claude`, `model: opus`, `mode: headless`, or `session: new`
+- **WHEN** a script step sets `cli: claude`, `model: opus`, `mode: autonomous`, or `session: new`
 - **THEN** validation fails with an error indicating that field is not valid on script steps
 
 ### Requirement: `script:` is a static literal path

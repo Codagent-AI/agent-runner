@@ -107,7 +107,7 @@ func Merge(doc *yaml.Node, req *Request) error {
 		"model":        req.InteractiveModel,
 	})
 	setMapping(agents, "implementor", map[string]string{
-		"default_mode": "headless",
+		"default_mode": "autonomous",
 		"cli":          req.HeadlessCLI,
 		"model":        req.HeadlessModel,
 	})

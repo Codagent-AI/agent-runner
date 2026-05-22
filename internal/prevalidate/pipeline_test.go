@@ -108,7 +108,7 @@ steps:
 `)
 		cfg := &config.Config{
 			ActiveAgents: map[string]*config.Agent{
-				"implementor": {DefaultMode: "headless", CLI: "claude", Model: "opus", Effort: "high"},
+				"implementor": {DefaultMode: "autonomous", CLI: "claude", Model: "opus", Effort: "high"},
 			},
 		}
 		opts, _, _ := fakeOptions(t, cfg)
@@ -167,11 +167,11 @@ steps:
 		ActiveProfile: "default",
 		Profiles: map[string]*config.ProfileSet{
 			"default": {Agents: map[string]*config.Agent{
-				"implementor": {DefaultMode: "headless", CLI: "claude", Model: "opus", Effort: "high"},
+				"implementor": {DefaultMode: "autonomous", CLI: "claude", Model: "opus", Effort: "high"},
 			}},
 		},
 		ActiveAgents: map[string]*config.Agent{
-			"implementor": {DefaultMode: "headless", CLI: "claude", Model: "opus", Effort: "high"},
+			"implementor": {DefaultMode: "autonomous", CLI: "claude", Model: "opus", Effort: "high"},
 		},
 	}
 	opts, lookups, probes := fakeOptions(t, cfg)
@@ -219,13 +219,13 @@ steps:
 		ActiveProfile: "default",
 		Profiles: map[string]*config.ProfileSet{
 			"default": {Agents: map[string]*config.Agent{
-				"implementor-a": {DefaultMode: "headless", CLI: "claude", Model: "haiku", Effort: "high"},
-				"implementor-b": {DefaultMode: "headless", CLI: "claude", Model: "sonnet", Effort: "medium"},
+				"implementor-a": {DefaultMode: "autonomous", CLI: "claude", Model: "haiku", Effort: "high"},
+				"implementor-b": {DefaultMode: "autonomous", CLI: "claude", Model: "sonnet", Effort: "medium"},
 			}},
 		},
 		ActiveAgents: map[string]*config.Agent{
-			"implementor-a": {DefaultMode: "headless", CLI: "claude", Model: "haiku", Effort: "high"},
-			"implementor-b": {DefaultMode: "headless", CLI: "claude", Model: "sonnet", Effort: "medium"},
+			"implementor-a": {DefaultMode: "autonomous", CLI: "claude", Model: "haiku", Effort: "high"},
+			"implementor-b": {DefaultMode: "autonomous", CLI: "claude", Model: "sonnet", Effort: "medium"},
 		},
 	}
 	opts, _, probes := fakeOptions(t, cfg)
@@ -257,7 +257,7 @@ steps:
 `)
 	cfg := &config.Config{
 		ActiveAgents: map[string]*config.Agent{
-			"implementor": {DefaultMode: "headless", CLI: "cursor", Model: "auto", Effort: "low"},
+			"implementor": {DefaultMode: "autonomous", CLI: "cursor", Model: "auto", Effort: "low"},
 		},
 	}
 

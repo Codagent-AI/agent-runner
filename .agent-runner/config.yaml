@@ -4,7 +4,7 @@ profiles:
     extends: default
     agents:
       claude_headless_smoke:
-        default_mode: headless
+        default_mode: autonomous
         cli: claude
         model: haiku
         effort: low
@@ -14,22 +14,22 @@ profiles:
         model: haiku
         effort: low
       codex_headless_smoke:
-        default_mode: headless
+        default_mode: autonomous
         cli: codex
         model: gpt-5.4-mini
         effort: low
       copilot_headless_smoke:
-        default_mode: headless
+        default_mode: autonomous
         cli: copilot
         model: gpt-5.4-mini
         effort: low
       cursor_headless_smoke:
-        default_mode: headless
+        default_mode: autonomous
         cli: cursor
         model: auto
         effort: low
       opencode_headless_smoke:
-        default_mode: headless
+        default_mode: autonomous
         cli: opencode
         model: anthropic/claude-sonnet-4
         effort: low

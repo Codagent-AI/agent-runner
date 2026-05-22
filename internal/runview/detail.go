@@ -506,7 +506,7 @@ func renderWrappedOutputLines(output string, contentWidth int, loadedFull bool) 
 			continue
 		}
 		for _, wrapped := range wrapLine(sanitized, w) {
-			lines = append(lines, tuistyle.NormalStyle.Render(wrapped))
+			lines = append(lines, defaultTextStyle.Render(wrapped))
 		}
 	}
 	return lines
@@ -526,7 +526,7 @@ func renderWrappedText(text string, contentWidth int) []string {
 			continue
 		}
 		for _, wrapped := range wrapLine(sanitized, w) {
-			lines = append(lines, tuistyle.NormalStyle.Render(wrapped))
+			lines = append(lines, defaultTextStyle.Render(wrapped))
 		}
 	}
 	return lines

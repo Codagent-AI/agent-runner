@@ -18,19 +18,19 @@ type OpenCodeAdapter struct{}
 // BuildArgs constructs OpenCode CLI args.
 //
 // Patterns:
-//   - Fresh headless:      opencode run --format json --dangerously-skip-permissions [--model <m>] [--variant <e>] <prompt>
-//   - Resume headless:     opencode run --format json --dangerously-skip-permissions -s <id> <prompt>
+//   - Fresh headless:      opencode run --format json [--model <m>] [--variant <e>] <prompt>
+//   - Resume headless:     opencode run --format json -s <id> <prompt>
 //   - Fresh interactive:   opencode --prompt <prompt> [--model <m>]
 //   - Resume interactive:  opencode --prompt <prompt> -s <id>
 //
 // OpenCode has no native system-prompt or disallowed-tools flags. --variant
-// and --dangerously-skip-permissions are run-only, so interactive mode omits
-// them. --model and --variant are omitted on resume because a resumed session
+// is run-only, so interactive mode omits it. --model and --variant are omitted on resume because a resumed session
 // keeps the settings it was started with.
 func (a *OpenCodeAdapter) BuildArgs(input *BuildArgsInput) []string {
 	var args []string
-	if input.Headless {
-		args = []string{"opencode", "run", "--format", "json", "--dangerously-skip-permissions"}
+	context := input.InvocationContext()
+	if context.IsHeadless() {
+		args = []string{"opencode", "run", "--format", "json"}
 	} else {
 		args = []string{"opencode", "--prompt", input.Prompt}
 	}
@@ -42,11 +42,11 @@ func (a *OpenCodeAdapter) BuildArgs(input *BuildArgsInput) []string {
 		args = append(args, "--model", input.Model)
 	}
 
-	if input.Headless && !resuming && input.Effort != "" {
+	if context.IsHeadless() && !resuming && input.Effort != "" {
 		args = append(args, "--variant", input.Effort)
 	}
 
-	if input.Headless {
+	if context.IsHeadless() {
 		args = append(args, input.Prompt)
 	}
 	return args

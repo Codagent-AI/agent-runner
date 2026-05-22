@@ -19,7 +19,7 @@ type StepMode string
 // Step mode constants.
 const (
 	ModeInteractive StepMode = "interactive"
-	ModeHeadless    StepMode = "headless"
+	ModeAutonomous  StepMode = "autonomous"
 	ModeUI          StepMode = "ui"
 )
 
@@ -311,16 +311,16 @@ func (s *Step) validateCaptureFields(isAgent, isShell bool) error {
 		case isShell, s.Script != "", s.Mode == ModeUI:
 			// ok
 		case !isAgent:
-			return fmt.Errorf(`"capture" is only allowed on shell, script, ui, and headless steps`)
+			return fmt.Errorf(`"capture" is only allowed on shell, script, ui, and autonomous steps`)
 		default:
 			// When mode is explicit, validate it directly. When mode is unset and
 			// a profile is configured (s.Agent), the profile's default_mode may
-			// resolve to headless at execution time — defer the check.
-			if s.Mode != "" && s.Mode != ModeHeadless {
-				return fmt.Errorf(`"capture" is only allowed on shell, script, ui, and headless steps`)
+			// resolve to autonomous at execution time — defer the check.
+			if s.Mode != "" && s.Mode != ModeAutonomous {
+				return fmt.Errorf(`"capture" is only allowed on shell, script, ui, and autonomous steps`)
 			}
 			if s.Mode == "" && s.Agent == "" && s.Session != SessionResume && s.Session != SessionInherit && !IsNamedSession(s.Session) {
-				return fmt.Errorf(`"capture" is only allowed on shell, script, ui, and headless steps`)
+				return fmt.Errorf(`"capture" is only allowed on shell, script, ui, and autonomous steps`)
 			}
 		}
 	}
@@ -385,7 +385,10 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 		return fmt.Errorf(`invalid break_if value: %q`, s.BreakIf)
 	}
 
-	if s.Mode != "" && s.Mode != ModeInteractive && s.Mode != ModeHeadless && s.Mode != ModeUI {
+	if s.Mode != "" && s.Mode != ModeInteractive && s.Mode != ModeAutonomous && s.Mode != ModeUI {
+		if s.Mode == "headless" {
+			return fmt.Errorf(`invalid mode: %q (renamed to %q)`, s.Mode, ModeAutonomous)
+		}
 		return fmt.Errorf(`invalid mode: %q`, s.Mode)
 	}
 

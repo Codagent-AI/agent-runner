@@ -11,5 +11,5 @@ steps:
     command: echo "setting up {{project}}"
   - id: deploy
     agent: implementor
-    mode: headless
+    mode: autonomous
     prompt: "Deploy {{project}} to {{env}}"
