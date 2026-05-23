@@ -2250,6 +2250,33 @@ func TestModel_StepStateMsg_ActiveRunAutoScrollsLog(t *testing.T) {
 	}
 }
 
+func TestModel_OutputChunk_AutoFollowTailsActiveStep(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.termHeight = 15
+	m.activeStepPrefix = "[build]"
+	m.cursor = 0
+
+	m.Update(liverun.OutputChunkMsg{
+		StepPrefix: "[build]",
+		Stream:     "stdout",
+		Bytes:      []byte(generateLargeOutput(80)),
+	})
+
+	active := m.tree.FindByPrefix("[build]")
+	r, ok := rangeForNode(m.stepRanges, active)
+	if !ok {
+		t.Fatal("missing active step range")
+	}
+	want := max(r.startLine, r.endLine-m.bodyHeight())
+	want = min(want, m.maxLogOffset())
+	if m.logOffset != want {
+		t.Fatalf("logOffset = %d, want active tail offset %d (range=%+v body=%d)", m.logOffset, want, r, m.bodyHeight())
+	}
+	if m.logOffset == r.startLine {
+		t.Fatalf("auto-follow pinned active step header at %d instead of tailing output", r.startLine)
+	}
+}
+
 func TestModel_StepStateMsg_AutoFollowScrollsDetailToActiveSelection(t *testing.T) {
 	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
 	runValidator := &StepNode{
@@ -2405,6 +2432,29 @@ func TestModel_LKey_ReengagesAutoFollow(t *testing.T) {
 	}
 	if m.cursor != 1 {
 		t.Fatalf("cursor = %d, want 1 after l key", m.cursor)
+	}
+}
+
+func TestModel_LKey_ReengagesAutoFollowAtActiveTail(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.termHeight = 15
+	m.autoFollow = false
+	m.activeStepPrefix = "[build]"
+	m.tree.Root.Children[0].Stdout = generateLargeOutput(80)
+	m.rebuildRanges()
+	m.logOffset = 0
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+
+	active := m.tree.FindByPrefix("[build]")
+	r, ok := rangeForNode(m.stepRanges, active)
+	if !ok {
+		t.Fatal("missing active step range")
+	}
+	want := max(r.startLine, r.endLine-m.bodyHeight())
+	want = min(want, m.maxLogOffset())
+	if m.logOffset != want {
+		t.Fatalf("logOffset = %d, want active tail offset %d", m.logOffset, want)
 	}
 }
 
@@ -2873,6 +2923,15 @@ func makeRanges(nodes []*StepNode, lineSize int) []stepLineRange {
 		ranges[i] = stepLineRange{node: n, startLine: i * lineSize, endLine: (i + 1) * lineSize}
 	}
 	return ranges
+}
+
+func rangeForNode(ranges []stepLineRange, node *StepNode) (stepLineRange, bool) {
+	for _, r := range ranges {
+		if r.node == node {
+			return r, true
+		}
+	}
+	return stepLineRange{}, false
 }
 
 func TestScrollSync_SyncLogToSelection_SetsOffset(t *testing.T) {
