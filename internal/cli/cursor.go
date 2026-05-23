@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/codagent/agent-runner/internal/usersettings"
 )
 
 // CursorAdapter constructs invocation args for the Cursor agent CLI.
@@ -42,6 +44,9 @@ func (a *CursorAdapter) BuildArgs(input *BuildArgsInput) []string {
 	context := input.InvocationContext()
 	if context.IsHeadless() {
 		args = append(args, "-p", "--output-format", "stream-json", "--trust")
+		if usersettings.EffectiveAutonomousPermissionMode(input.PermissionMode) == usersettings.PermissionModeYOLO {
+			args = append(args, "--force")
+		}
 	}
 
 	if input.Resume && input.SessionID != "" {

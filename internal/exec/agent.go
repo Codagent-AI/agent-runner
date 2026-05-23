@@ -409,11 +409,12 @@ func buildAdapterInput(
 	}
 
 	input := cli.BuildArgsInput{
-		SessionID: sessionID,
-		Resume:    isResume,
-		Model:     profile.Model,
-		Effort:    profile.Effort,
-		Context:   invocationContext,
+		SessionID:      sessionID,
+		Resume:         isResume,
+		Model:          profile.Model,
+		Effort:         profile.Effort,
+		Context:        invocationContext,
+		PermissionMode: usersettings.AutonomousPermissionMode(ctx.AutonomousPermissionMode),
 	}
 
 	// Block AskUserQuestion in autonomous mode so the agent cannot stall

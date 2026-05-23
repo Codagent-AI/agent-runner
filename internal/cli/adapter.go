@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"time"
+
+	"github.com/codagent/agent-runner/internal/usersettings"
 )
 
 // lineBufferedWriter is an io.WriteCloser that buffers input until a newline,
@@ -74,6 +76,7 @@ type BuildArgsInput struct {
 	Model           string
 	Effort          string // Effort level (low, medium, high, xhigh) — empty means unset
 	Context         InvocationContext
+	PermissionMode  usersettings.AutonomousPermissionMode
 	DisallowedTools []string // Tool names to block (e.g. "AskUserQuestion"); adapter translates to CLI flags where supported
 }
 

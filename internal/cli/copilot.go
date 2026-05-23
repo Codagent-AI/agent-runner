@@ -8,6 +8,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/codagent/agent-runner/internal/usersettings"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -39,6 +41,9 @@ func (a *CopilotAdapter) BuildArgs(input *BuildArgsInput) []string {
 	}
 	if context.IsAutonomous() {
 		args = append(args, "--allow-tool=write", "--autopilot")
+		if usersettings.EffectiveAutonomousPermissionMode(input.PermissionMode) == usersettings.PermissionModeYOLO {
+			args = append(args, "--allow-all-tools")
+		}
 	}
 
 	resuming := input.Resume
