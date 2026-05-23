@@ -27,14 +27,24 @@ When `core/run-validator` is invoked with a non-empty `task_file` param, the val
 - **WHEN** `core/run-validator` is invoked with `task_file: ""` (or the param omitted)
 - **THEN** the validator command executed is `agent-validator run --report`
 
-### Requirement: implement-task propagates task_file
+### Requirement: Per-task workflows propagate task_file
 
-`core/implement-task` SHALL pass its `task_file` param to the `core/run-validator` sub-workflow call so that task-compliance is activated for the iteration's task.
+Built-in workflows that implement against a single task file SHALL pass that task file to the `core/run-validator` sub-workflow call so that task-compliance is activated. This applies to `core/implement-task`, `spec-driven/simple-change`, and `openspec/simple-change`.
 
 #### Scenario: implement-task forwards task_file
 - **WHEN** `core/implement-task` is invoked with `task_file: "openspec/changes/foo/tasks/01.md"`
 - **AND** the workflow reaches the `run-validator` step
 - **THEN** the sub-workflow is invoked with `task_file: "openspec/changes/foo/tasks/01.md"` and the validator command includes the activation flags
+
+#### Scenario: spec-driven simple-change forwards captured task_file
+- **WHEN** `spec-driven/simple-change` runs and its `locate-task` step captures `task_file`
+- **AND** the workflow reaches the `run-validator` step
+- **THEN** the sub-workflow is invoked with that captured `task_file` value and the validator command includes the activation flags
+
+#### Scenario: openspec simple-change forwards the change tasks path
+- **WHEN** `openspec/simple-change` is invoked with `change_name: "foo"`
+- **AND** the workflow reaches the `run-validator` step
+- **THEN** the sub-workflow is invoked with `task_file: "openspec/changes/foo/tasks.md"` and the validator command includes the activation flags
 
 ### Requirement: validator-init requests task-compliance scaffolding
 
