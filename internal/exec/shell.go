@@ -160,7 +160,7 @@ func ExecuteShellStep(
 		return OutcomeFailed, nil
 	}
 
-	command, err := textfmt.InterpolateTyped(step.Command, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(step.ID))
+	command, err := textfmt.InterpolateShellSafeTyped(step.Command, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(step.ID))
 	if err != nil {
 		emitShellInterpolationFailure(ctx, step, err)
 		return OutcomeFailed, err

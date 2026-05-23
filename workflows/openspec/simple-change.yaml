@@ -41,6 +41,8 @@ steps:
 
   - id: run-validator
     workflow: ../core/run-validator.yaml
+    params:
+      task_file: "openspec/changes/{{change_name}}/tasks.md"
     continue_on_failure: true
 
   - id: archive

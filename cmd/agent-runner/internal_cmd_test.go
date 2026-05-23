@@ -273,7 +273,7 @@ func TestValidatorInitArgsIgnoresConfiguredCLIs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("validatorInitArgs() returned error: %v", err)
 	}
-	want := []string{"init"}
+	want := []string{"init", "--enable-builtin", "task-compliance"}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Fatalf("validatorInitArgs() mismatch (-want +got):\n%s", diff)
 	}
@@ -289,7 +289,7 @@ func TestValidatorInitArgsOmitsAgentsWhenNoExplicitConfigCLIs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("validatorInitArgs() returned error: %v", err)
 	}
-	want := []string{"init"}
+	want := []string{"init", "--enable-builtin", "task-compliance"}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Fatalf("validatorInitArgs() mismatch (-want +got):\n%s", diff)
 	}

@@ -34,4 +34,6 @@ steps:
 
   - id: run-validator
     workflow: ../core/run-validator.yaml
+    params:
+      task_file: "{{task_file}}"
     continue_on_failure: true
