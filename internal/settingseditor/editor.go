@@ -3,6 +3,7 @@ package settingseditor
 
 import (
 	"fmt"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -238,7 +239,10 @@ func (m *Model) settingsPath() string {
 	return path
 }
 
-const labelColumnWidth = 30
+// contentWidth is the visible-column width of every row the editor renders
+// (cursor + label + gap + value, and the legend line). The bordered overlay
+// fits to this width plus its own padding and border.
+const contentWidth = 60
 
 func (m *Model) View() string {
 	header := tuistyle.HeaderStyle.Render("Settings")
@@ -247,8 +251,12 @@ func (m *Model) View() string {
 		lines = append(lines, m.fieldLine(fieldIdx, f))
 	}
 	if desc := m.currentDescription(); desc != "" {
-		lines = append(lines, "", "  "+desc)
+		lines = append(lines, "")
+		for _, wrapped := range wrapLines(desc, contentWidth-2) {
+			lines = append(lines, "  "+wrapped)
+		}
 	}
+	lines = append(lines, "", tuistyle.HelpStyle.Render("↑↓ navigate · Tab/Space cycle · Esc close"))
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	if m.saveErr != "" {
 		content = lipgloss.JoinVertical(lipgloss.Left, content, "", tuistyle.StatusFailed.Render(m.saveErr))
@@ -257,13 +265,51 @@ func (m *Model) View() string {
 }
 
 func (m *Model) fieldLine(fieldIdx int, f field) string {
-	cursor := "  "
+	cursorPrefix := "  "
 	if fieldIdx == m.cursor {
-		cursor = tuistyle.FocusedOption.Render("▶ ")
+		cursorPrefix = tuistyle.FocusedOption.Render("▶ ")
 	}
+	label := tuistyle.LabelStyle.Render(f.label)
 	value := m.currentOption(fieldIdx).label
-	padded := fmt.Sprintf("%-*s", labelColumnWidth, tuistyle.LabelStyle.Render(f.label))
-	return cursor + padded + value
+	// Compute padding so the value sits right-aligned at column contentWidth.
+	// "▶ " and "  " both render as 2 visible columns regardless of style.
+	used := 2 + lipgloss.Width(label) + lipgloss.Width(value)
+	padding := max(contentWidth-used, 2)
+	return cursorPrefix + label + strings.Repeat(" ", padding) + value
+}
+
+// wrapLines performs a simple word wrap so the description fits within the
+// editor's content width without overflowing the overlay.
+func wrapLines(text string, width int) []string {
+	if width <= 0 {
+		return []string{text}
+	}
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return nil
+	}
+	var (
+		lines   []string
+		current strings.Builder
+	)
+	for _, word := range words {
+		if current.Len() == 0 {
+			current.WriteString(word)
+			continue
+		}
+		if current.Len()+1+len(word) <= width {
+			current.WriteByte(' ')
+			current.WriteString(word)
+			continue
+		}
+		lines = append(lines, current.String())
+		current.Reset()
+		current.WriteString(word)
+	}
+	if current.Len() > 0 {
+		lines = append(lines, current.String())
+	}
+	return lines
 }
 
 func (m *Model) currentOption(fieldIdx int) option {
