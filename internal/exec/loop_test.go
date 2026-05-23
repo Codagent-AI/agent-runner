@@ -123,10 +123,10 @@ func TestExecuteLoopStep(t *testing.T) {
 		if result.Outcome != OutcomeExhausted {
 			t.Fatalf("expected exhausted, got %q", result.Outcome)
 		}
-		if runner.calls[0][2] != "echo initial" {
+		if runner.calls[0][2] != "echo 'initial'" {
 			t.Fatalf("expected first iteration to use initial capture, got %q", runner.calls[0][2])
 		}
-		if runner.calls[2][2] != "echo next-0" {
+		if runner.calls[2][2] != "echo 'next-0'" {
 			t.Fatalf("expected second iteration to use previous capture, got %q", runner.calls[2][2])
 		}
 		if ctx.CapturedVariables["message"].Str != "next-1" {
@@ -228,7 +228,7 @@ func TestExecuteLoopStep(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		want := []string{"echo iter 0", "echo iter 1", "echo iter 2"}
+		want := []string{"echo iter '0'", "echo iter '1'", "echo iter '2'"}
 		for idx, call := range runner.calls {
 			if call[2] != want[idx] {
 				t.Fatalf("call %d: expected %q, got %q", idx, want[idx], call[2])
@@ -248,7 +248,7 @@ func TestExecuteLoopStep(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		want := []string{"echo 0:a.go", "echo 1:b.go"}
+		want := []string{"echo '0':'a.go'", "echo '1':'b.go'"}
 		for idx, call := range runner.calls {
 			if call[2] != want[idx] {
 				t.Fatalf("call %d: expected %q, got %q", idx, want[idx], call[2])

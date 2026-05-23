@@ -132,7 +132,7 @@ func configuredAgentCLIs(projectConfigPath string) (string, error) {
 
 func validatorInitArgs(projectConfigPath string) ([]string, error) {
 	_ = projectConfigPath
-	return []string{"init"}, nil
+	return []string{"init", "--enable-builtin", "task-compliance"}, nil
 }
 
 func runValidatorInit(projectConfigPath string) error {

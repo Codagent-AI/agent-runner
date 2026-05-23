@@ -490,8 +490,8 @@ func TestRunWorkflow(t *testing.T) {
 		if result != ResultSuccess {
 			t.Fatalf("expected success, got %q", result)
 		}
-		if runner.calls[0][2] != "echo dev" {
-			t.Fatalf("expected 'echo dev', got %q", runner.calls[0][2])
+		if runner.calls[0][2] != "echo 'dev'" {
+			t.Fatalf("expected %q, got %q", "echo 'dev'", runner.calls[0][2])
 		}
 	})
 

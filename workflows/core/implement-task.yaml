@@ -25,6 +25,8 @@ steps:
 
   - id: run-validator
     workflow: run-validator.yaml
+    params:
+      task_file: "{{task_file}}"
     continue_on_failure: true
 
   - id: check-clean
