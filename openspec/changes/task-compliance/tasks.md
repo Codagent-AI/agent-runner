@@ -1,4 +1,4 @@
-- [ ] Implement the change described by these files:
+- [x] Implement the change described by these files:
   - [proposal.md](proposal.md)
   - [specs/task-compliance-activation/spec.md](specs/task-compliance-activation/spec.md)
   - [design.md](design.md)

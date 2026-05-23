@@ -1,13 +1,23 @@
 name: run-validator
 description: "Counted retry loop: run validator, fix on failure, max 3 attempts"
 
+params:
+  - name: task_file
+    required: false
+    default: ""
+
 steps:
   - id: validator-retry
     loop:
       max: 3
     steps:
       - id: run-validator
-        command: agent-validator run --report
+        command: |
+          if [ -n {{task_file}} ]; then
+            agent-validator run --report --enable-review task-compliance --context-file {{task_file}}
+          else
+            agent-validator run --report
+          fi
         capture: validator_output
         capture_stderr: true
         continue_on_failure: true

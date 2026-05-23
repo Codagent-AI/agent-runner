@@ -110,8 +110,25 @@ func TestExecuteShellStep(t *testing.T) {
 		if len(runner.calls) == 0 {
 			t.Fatal("expected command to be called")
 		}
-		if runner.calls[0][2] != "echo world" {
+		if runner.calls[0][2] != "echo 'world'" {
 			t.Fatalf("expected interpolated command, got %q", runner.calls[0][2])
+		}
+	})
+
+	t.Run("shell-quotes interpolated params", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		ctx := model.NewRootContext(&model.RootContextOptions{
+			Params:       map[string]string{"task_file": `openspec/tasks.md"; touch /tmp/pwned; echo "`},
+			WorkflowFile: "test.yaml",
+		})
+		step := model.Step{ID: "s", Command: `agent-validator run --context-file "{{task_file}}"`, Session: model.SessionNew}
+		ExecuteShellStep(&step, ctx, runner, &mockLogger{})
+		if len(runner.calls) == 0 {
+			t.Fatal("expected command to be called")
+		}
+		want := `agent-validator run --context-file "openspec/tasks.md\"; touch /tmp/pwned; echo \""`
+		if runner.calls[0][2] != want {
+			t.Fatalf("expected shell-safe interpolation, got %q", runner.calls[0][2])
 		}
 	})
 
@@ -126,7 +143,7 @@ func TestExecuteShellStep(t *testing.T) {
 		if len(runner.calls) == 0 {
 			t.Fatal("expected command to be called")
 		}
-		if runner.calls[0][2] != "ls /tmp/runs/abc/output" {
+		if runner.calls[0][2] != "ls '/tmp/runs/abc'/output" {
 			t.Fatalf("expected interpolated command, got %q", runner.calls[0][2])
 		}
 	})
@@ -219,7 +236,7 @@ func TestExecuteShellStep(t *testing.T) {
 		ctx.CapturedVariables["prev"] = model.NewCapturedString("previous-value")
 		step := model.Step{ID: "s", Command: "echo {{prev}}", Session: model.SessionNew}
 		ExecuteShellStep(&step, ctx, runner, &mockLogger{})
-		if runner.calls[0][2] != "echo previous-value" {
+		if runner.calls[0][2] != "echo 'previous-value'" {
 			t.Fatalf("expected interpolated command, got %q", runner.calls[0][2])
 		}
 	})
