@@ -1,0 +1,5 @@
+- [ ] Implement the change described by these files:
+  - [proposal.md](proposal.md)
+  - [specs/task-compliance-activation/spec.md](specs/task-compliance-activation/spec.md)
+  - [design.md](design.md)
+  - [handoff-agent-validator.md](handoff-agent-validator.md) — cross-repo context for the agent-validator side (already landed upstream)
