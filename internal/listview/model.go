@@ -386,7 +386,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 //nolint:gocritic // Bubble Tea messages are passed by value throughout this model.
 func (m *Model) handleSettingsSaved(msg settingseditor.SavedMsg) (tea.Model, tea.Cmd) {
-	m.settingsEditor = nil
+	// SavedMsg now fires on every cycle inside the editor, so the editor
+	// stays open; we only apply runtime-affecting changes and force a
+	// re-render so theme changes are visible behind the overlay.
 	m.applyUserTheme(msg.Settings.Theme)
 	cmd := m.forceRerender()
 	return m, cmd

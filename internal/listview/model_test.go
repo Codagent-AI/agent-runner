@@ -533,7 +533,7 @@ func TestListModel_SettingsEditorSwallowsListKeys(t *testing.T) {
 	}
 }
 
-func TestListModel_SettingsEditorSaveAppliesThemeClosesAndForcesRender(t *testing.T) {
+func TestListModel_SettingsEditorCycleAppliesThemeAndForcesRenderButKeepsEditorOpen(t *testing.T) {
 	var saved []usersettings.Settings
 	var applied []usersettings.Theme
 	m := newTestListModel([]runs.RunInfo{inactiveRun()})
@@ -550,11 +550,10 @@ func TestListModel_SettingsEditorSaveAppliesThemeClosesAndForcesRender(t *testin
 		applied = append(applied, theme)
 	}
 	m, _ = pressKey(m, "s")
-	m, _ = pressSpecialKey(m, tea.KeyRight)
 
-	m, cmd := pressSpecialKey(m, tea.KeyEnter)
+	m, cmd := pressSpecialKey(m, tea.KeyTab)
 	if cmd == nil {
-		t.Fatal("enter in settings editor should emit a save command")
+		t.Fatal("tab on cursor row should emit a save command")
 	}
 	msg := cmd()
 	if _, ok := msg.(settingseditor.SavedMsg); !ok {
@@ -564,8 +563,8 @@ func TestListModel_SettingsEditorSaveAppliesThemeClosesAndForcesRender(t *testin
 	next, rerender := m.Update(msg)
 	m = next.(*Model)
 
-	if m.settingsEditor != nil {
-		t.Fatal("saved settings editor should close")
+	if m.settingsEditor == nil {
+		t.Fatal("editor should remain open after a cycle save so the user can keep editing")
 	}
 	if len(saved) != 1 || saved[0].Theme != usersettings.ThemeDark {
 		t.Fatalf("saved settings = %#v, want one dark save", saved)
@@ -583,22 +582,21 @@ func TestListModel_SettingsEditorSaveAppliesThemeClosesAndForcesRender(t *testin
 	}
 }
 
-func TestListModel_SettingsEditorCancelClosesWithoutSavingOrApplying(t *testing.T) {
-	saved := false
-	applied := false
+func TestListModel_SettingsEditorEscClosesAndDoesNotInvokeSave(t *testing.T) {
+	saveCount := 0
+	applyCount := 0
 	m := newTestListModel([]runs.RunInfo{inactiveRun()})
 	m.loadSettings = func() (usersettings.Settings, error) {
 		return usersettings.Settings{Theme: usersettings.ThemeLight}, nil
 	}
 	m.saveSettings = func(usersettings.Settings) error {
-		saved = true
+		saveCount++
 		return nil
 	}
 	m.applyTheme = func(usersettings.Theme) {
-		applied = true
+		applyCount++
 	}
 	m, _ = pressKey(m, "s")
-	m, _ = pressSpecialKey(m, tea.KeyRight)
 
 	m, cmd := pressSpecialKey(m, tea.KeyEsc)
 	if cmd == nil {
@@ -613,11 +611,11 @@ func TestListModel_SettingsEditorCancelClosesWithoutSavingOrApplying(t *testing.
 	if m.settingsEditor != nil {
 		t.Fatal("cancelled settings editor should close")
 	}
-	if saved {
-		t.Fatal("cancel should not save")
+	if saveCount != 0 {
+		t.Fatalf("esc should not invoke save (got %d saves)", saveCount)
 	}
-	if applied {
-		t.Fatal("cancel should not apply theme")
+	if applyCount != 0 {
+		t.Fatalf("esc should not invoke apply (got %d applies)", applyCount)
 	}
 }
 
@@ -637,9 +635,8 @@ func TestListModel_SettingsEditorSaveFailureStaysOpenAndDoesNotApply(t *testing.
 		applied = true
 	}
 	m, _ = pressKey(m, "s")
-	m, _ = pressSpecialKey(m, tea.KeyRight)
 
-	m, cmd := pressSpecialKey(m, tea.KeyEnter)
+	m, cmd := pressSpecialKey(m, tea.KeyTab)
 
 	if cmd != nil {
 		t.Fatal("failed editor save should not emit completion command")
@@ -685,7 +682,11 @@ func TestListView_SettingsOverlayKeepsUnderlyingListVisible(t *testing.T) {
 
 	view := sanitize(m.View())
 
-	for _, want := range []string{"Current Dir", "implement", "Theme", "Light", "Dark"} {
+	// The editor's compact view shows each field's current value only (not all
+	// options). The test asserts both the underlying list ("implement",
+	// "Current Dir") and the editor's content (field labels + current values)
+	// are visible simultaneously.
+	for _, want := range []string{"Current Dir", "implement", "Theme", "Autonomous Backend", "Dark"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("View() missing %q with settings editor open:\n%s", want, view)
 		}
