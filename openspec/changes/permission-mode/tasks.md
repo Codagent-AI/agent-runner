@@ -1,0 +1,9 @@
+- [ ] Implement the change described by these files:
+  - [proposal.md](proposal.md)
+  - [specs/user-settings-file/spec.md](specs/user-settings-file/spec.md)
+  - [specs/user-settings-editor/spec.md](specs/user-settings-editor/spec.md)
+  - [specs/native-setup/spec.md](specs/native-setup/spec.md)
+  - [specs/cli-adapter/spec.md](specs/cli-adapter/spec.md)
+  - [specs/cursor-cli-support/spec.md](specs/cursor-cli-support/spec.md)
+  - [specs/copilot-cli-support/spec.md](specs/copilot-cli-support/spec.md)
+  - [design.md](design.md)
