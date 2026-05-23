@@ -26,6 +26,18 @@ steps:
     prompt: |
       Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports. Keep running the command and fixing until it passes with no errors.
 
+  - id: check-planning-artifacts
+    command: |
+      missing=""
+      for f in proposal.md tasks.md; do
+        [ -s "openspec/changes/{{change_name}}/$f" ] || missing="$missing $f"
+      done
+      if [ -n "$missing" ]; then
+        echo "ERROR: planning did not produce required artifacts in openspec/changes/{{change_name}}/:$missing" >&2
+        echo "The plan step may have written to the wrong directory or failed silently. Re-run planning before retrying." >&2
+        exit 1
+      fi
+
   - id: commit-openspec
     command: |
       git add openspec/changes/{{change_name}}/

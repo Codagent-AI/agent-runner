@@ -9,6 +9,14 @@ params:
     default: "false"
 
 steps:
+  - id: check-task-file
+    command: |
+      if [ ! -s "{{task_file}}" ]; then
+        echo "ERROR: task file does not exist or is empty: {{task_file}}" >&2
+        echo "Cannot implement a task with no specification. Aborting." >&2
+        exit 1
+      fi
+
   - id: generate-code
     agent: implementor
     session: new

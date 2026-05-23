@@ -25,6 +25,14 @@ steps:
 
       Example valid output: some/path/tasks/001-do-the-thing.md
 
+  - id: check-planning-artifacts
+    command: |
+      if [ ! -s "{{task_file}}" ]; then
+        echo "ERROR: planning did not produce a task file at: {{task_file}}" >&2
+        echo "The plan step may have written to the wrong directory or failed silently. Re-run planning before retrying." >&2
+        exit 1
+      fi
+
   - id: generate-code
     agent: implementor
     session: new
