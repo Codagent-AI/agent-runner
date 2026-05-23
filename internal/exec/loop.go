@@ -56,7 +56,7 @@ func executeCountedLoop(
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), stepID)
 	startTime := time.Now()
 
-	resumeIter, resumeBody, _ := consumeLoopResume(ctx, stepID)
+	resumeIter, resumeBody, resumed := consumeLoopResume(ctx, stepID)
 	if resumeIter > opts.ResumeFromIteration {
 		opts.ResumeFromIteration = resumeIter
 	}
@@ -69,6 +69,13 @@ func executeCountedLoop(
 	startIter := opts.ResumeFromIteration
 	lastIter := startIter
 	completed := 0
+	if startIter >= maxIter {
+		if resumed {
+			flushAndKeepLoopIterationProgress(ctx, stepID, startIter, false)
+		}
+		emitLoopEnd(ctx, prefix, startTime, completed, false, "exhausted")
+		return LoopResult{Outcome: OutcomeExhausted, LastIteration: maxIter - 1}, nil
+	}
 
 	for i := startIter; i < maxIter; i++ {
 		lastIter = i
@@ -103,8 +110,7 @@ func executeCountedLoop(
 			emitLoopEnd(ctx, prefix, startTime, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, nil
 		}
-		recordLoopIterationProgress(ctx, stepID, i+1, false)
-		flushLoopState(ctx)
+		flushAndKeepLoopIterationProgress(ctx, stepID, i+1, false)
 		if result.breakTriggered {
 			emitLoopEnd(ctx, prefix, startTime, completed, true, "success")
 			return LoopResult{Outcome: OutcomeSuccess, LastIteration: i}, nil
@@ -138,7 +144,7 @@ func executeForEachLoop(
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), stepID)
 	startTime := time.Now()
 
-	resumeIter, resumeBody, _ := consumeLoopResume(ctx, stepID)
+	resumeIter, resumeBody, resumed := consumeLoopResume(ctx, stepID)
 	if resumeIter > opts.ResumeFromIteration {
 		opts.ResumeFromIteration = resumeIter
 	}
@@ -162,6 +168,13 @@ func executeForEachLoop(
 	startIter := opts.ResumeFromIteration
 	lastIter := startIter
 	completed := 0
+	if startIter >= len(matches) {
+		if resumed {
+			flushAndKeepLoopIterationProgress(ctx, stepID, startIter, false)
+		}
+		emitLoopEnd(ctx, prefix, startTime, completed, false, "success")
+		return LoopResult{Outcome: OutcomeSuccess, LastIteration: len(matches) - 1}, nil
+	}
 
 	for i := startIter; i < len(matches); i++ {
 		lastIter = i
@@ -196,8 +209,7 @@ func executeForEachLoop(
 			emitLoopEnd(ctx, prefix, startTime, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, nil
 		}
-		recordLoopIterationProgress(ctx, stepID, i+1, false)
-		flushLoopState(ctx)
+		flushAndKeepLoopIterationProgress(ctx, stepID, i+1, false)
 		if result.breakTriggered {
 			emitLoopEnd(ctx, prefix, startTime, completed, true, "success")
 			return LoopResult{Outcome: OutcomeSuccess, LastIteration: i}, nil
@@ -217,6 +229,12 @@ func recordLoopIterationProgress(ctx *model.ExecutionContext, loopStepID string,
 	entry := newLoopStepMarker(ctx, loopStepID, iteration, nil)
 	entry.Completed = loopCompleted
 	ctx.LastSubWorkflowChild = entry
+}
+
+func flushAndKeepLoopIterationProgress(ctx *model.ExecutionContext, loopStepID string, iteration int, loopCompleted bool) {
+	recordLoopIterationProgress(ctx, loopStepID, iteration, loopCompleted)
+	flushLoopState(ctx)
+	recordLoopIterationProgress(ctx, loopStepID, iteration, loopCompleted)
 }
 
 // newLoopStepMarker builds a NestedStepState whose StepID is the loop step

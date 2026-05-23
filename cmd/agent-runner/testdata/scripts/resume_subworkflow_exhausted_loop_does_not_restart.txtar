@@ -1,0 +1,40 @@
+# Test that resuming a parent workflow after a sub-workflow retry loop exhausts
+# preserves the exhausted loop position instead of restarting the loop body.
+
+! exec agent-runner top
+stdout 'step "outer" failed'
+
+exec cat attempts.txt
+stdout '^3$'
+
+! exec sh -c 'agent-runner -resume "$(ls -d .agent-runner/projects/*/runs/*/ | head -1 | xargs basename)"'
+stdout 'step "outer" failed'
+
+exec cat attempts.txt
+stdout '^3$'
+
+-- .agent-runner/workflows/top.yaml --
+name: e2e-sub-workflow-exhausted-loop-top
+steps:
+  - id: outer
+    workflow: inner.yaml
+-- .agent-runner/workflows/inner.yaml --
+name: e2e-sub-workflow-exhausted-loop-inner
+steps:
+  - id: retry
+    loop:
+      max: 3
+    steps:
+      - id: run
+        command: |
+          count=0
+          if [ -f attempts.txt ]; then
+            count=$(cat attempts.txt)
+          fi
+          echo $((count + 1)) > attempts.txt
+          exit 1
+        continue_on_failure: true
+        break_if: success
+      - id: fix
+        command: "true"
+        continue_on_failure: true
