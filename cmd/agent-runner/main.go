@@ -1513,13 +1513,17 @@ func ensureFirstRunForTUI(deps firstRunDeps) firstRunResult {
 			}
 			return continueToList()
 		}
-		if result == nativeSetupDemo {
+		switch result {
+		case nativeSetupCompleted:
+			return continueToList()
+		case nativeSetupDemo:
 			return launchOnboardingDemo(deps)
-		}
-		if result == nativeSetupExitRequested {
+		default:
+			// Cancelled, ExitRequested, or any non-completion outcome:
+			// setup is the only path into the home TUI, so any exit short of
+			// completion exits the program.
 			return exitFirstRun(0)
 		}
-		return continueToList()
 	}
 
 	if !onboardingDone {
