@@ -1,5 +1,11 @@
 # agent-runner
 
+## 0.7.2
+
+### Patch Changes
+
+- [#35](https://github.com/Codagent-AI/agent-runner/pull/35) Fix workflow resume behavior, headless run-view cursor tracking, and validator/onboarding issues so resumed workflows and live validation flows remain stable.
+
 ## 0.7.0
 
 ### Minor Changes
