@@ -64,6 +64,26 @@ steps:
 		}
 	})
 
+	t.Run("accepts hidden sub-workflow references", func(t *testing.T) {
+		dir := t.TempDir()
+		writeWorkflow(t, dir, "sub.yaml", `
+name: sub
+hidden: true
+steps:
+  - id: inner
+    command: echo sub
+`)
+		root := writeWorkflow(t, dir, "root.yaml", `
+name: root
+steps:
+  - id: call
+    workflow: sub.yaml
+`)
+		if err := ValidateComposition(root); err != nil {
+			t.Fatalf("hidden sub-workflow should validate normally: %v", err)
+		}
+	})
+
 	t.Run("rejects incompatible declarations across files", func(t *testing.T) {
 		dir := t.TempDir()
 		writeWorkflow(t, dir, "sub.yaml", `

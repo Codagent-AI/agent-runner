@@ -72,6 +72,105 @@ func TestEnumerate_AllScopesOrderedWithMetadata(t *testing.T) {
 	}
 }
 
+func TestEnumerate_CopiesHiddenField(t *testing.T) {
+	projectDir := t.TempDir()
+	userDir := t.TempDir()
+
+	writeWorkflow(t, filepath.Join(projectDir, ".agent-runner", "workflows", "hidden-local.yaml"), hiddenWorkflowYAML("Hidden local"))
+	entries := discovery.Enumerate(fakeBuiltinFS(), projectDir, userDir)
+
+	local := entryByName(t, entries, "hidden-local")
+	if !local.Hidden {
+		t.Fatal("local hidden workflow should be marked hidden in discovery")
+	}
+
+	builtin := entryByName(t, entries, "core:implement-task")
+	if !builtin.Hidden {
+		t.Fatal("builtin hidden workflow should be marked hidden in discovery")
+	}
+}
+
+func TestEnumerate_SkipsUnderscorePrefixedWorkflowFiles(t *testing.T) {
+	projectDir := t.TempDir()
+	userDir := t.TempDir()
+
+	writeWorkflow(t, filepath.Join(projectDir, ".agent-runner", "workflows", "_local.yaml"), validWorkflowYAML("Local metadata"))
+	writeWorkflow(t, filepath.Join(userDir, "_user.yaml"), validWorkflowYAML("User metadata"))
+
+	entries := discovery.Enumerate(fakeBuiltinFS(), projectDir, userDir)
+
+	for _, name := range []string{"_local", "_user", "core:_group"} {
+		if countByName(entries, name) != 0 {
+			t.Fatalf("underscore-prefixed workflow %q should not be enumerated: %v", name, canonicalNames(entries))
+		}
+	}
+}
+
+func TestEnumerate_SkipsTopLevelBuiltinWorkflowFiles(t *testing.T) {
+	fsys := fstest.MapFS{
+		"top-level.yaml":        {Data: validWorkflowYAML("Top level")},
+		"core/finalize-pr.yaml": {Data: validWorkflowYAML("Finalize")},
+	}
+
+	entries := discovery.Enumerate(fsys, "", "")
+
+	if countByName(entries, "top-level") != 0 {
+		t.Fatalf("top-level builtin workflow should not be enumerated: %v", canonicalNames(entries))
+	}
+	if countByName(entries, "core:finalize-pr") != 1 {
+		t.Fatalf("expected namespaced builtin workflow, got %v", canonicalNames(entries))
+	}
+}
+
+func TestEnumerateGroups_LoadsBuiltinMetadata(t *testing.T) {
+	entries := discovery.Enumerate(fakeBuiltinFS(), "", "")
+
+	groups := discovery.EnumerateGroups(fakeBuiltinFS(), entries)
+
+	core := groupByScopeNamespace(t, groups, discovery.ScopeBuiltin, "core")
+	if core.DisplayName != "Core Tools" {
+		t.Fatalf("core display name = %q, want Core Tools", core.DisplayName)
+	}
+	if core.Description != "Shared implementation workflows." {
+		t.Fatalf("core description = %q, want metadata description", core.Description)
+	}
+}
+
+func TestEnumerateGroups_DefaultsWhenMetadataAbsent(t *testing.T) {
+	fsys := fstest.MapFS{
+		"extra/deploy.yaml": {Data: validWorkflowYAML("Deploy")},
+	}
+	entries := discovery.Enumerate(fsys, "", "")
+
+	groups := discovery.EnumerateGroups(fsys, entries)
+
+	extra := groupByScopeNamespace(t, groups, discovery.ScopeBuiltin, "extra")
+	if extra.DisplayName != "extra" {
+		t.Fatalf("display name = %q, want namespace fallback", extra.DisplayName)
+	}
+	if extra.Description != "" {
+		t.Fatalf("description = %q, want empty fallback", extra.Description)
+	}
+}
+
+func TestEnumerateGroups_DefaultsWhenMetadataMalformed(t *testing.T) {
+	fsys := fstest.MapFS{
+		"broken/deploy.yaml": {Data: validWorkflowYAML("Deploy")},
+		"broken/_group.yaml": {Data: malformedYAML()},
+	}
+	entries := discovery.Enumerate(fsys, "", "")
+
+	groups := discovery.EnumerateGroups(fsys, entries)
+
+	broken := groupByScopeNamespace(t, groups, discovery.ScopeBuiltin, "broken")
+	if broken.DisplayName != "broken" {
+		t.Fatalf("display name = %q, want namespace fallback", broken.DisplayName)
+	}
+	if broken.Description != "" {
+		t.Fatalf("description = %q, want empty fallback", broken.Description)
+	}
+}
+
 func TestEnumerate_MissingProjectDirectoryContributesNoEntries(t *testing.T) {
 	projectDir := t.TempDir()
 	userDir := t.TempDir()
@@ -220,7 +319,8 @@ func TestEnumerate_PrefersYAMLOverYMLForDuplicateNames(t *testing.T) {
 func fakeBuiltinFS() fstest.MapFS {
 	return fstest.MapFS{
 		"core/finalize-pr.yaml":    {Data: validWorkflowYAML("Finalize a pull request")},
-		"core/implement-task.yaml": {Data: validWorkflowYAML("Implement a task")},
+		"core/implement-task.yaml": {Data: hiddenWorkflowYAML("Implement a task")},
+		"core/_group.yaml":         {Data: []byte("display_name: Core Tools\ndescription: Shared implementation workflows.\n")},
 		"spec-driven/change.yaml":  {Data: validWorkflowYAML("Spec-driven change")},
 	}
 }
@@ -228,6 +328,16 @@ func fakeBuiltinFS() fstest.MapFS {
 func validWorkflowYAML(description string) []byte {
 	return []byte(fmt.Sprintf(`name: test-workflow
 description: %s
+steps:
+  - id: step1
+    command: echo hello
+`, description))
+}
+
+func hiddenWorkflowYAML(description string) []byte {
+	return []byte(fmt.Sprintf(`name: test-workflow
+description: %s
+hidden: true
 steps:
   - id: step1
     command: echo hello
@@ -299,4 +409,15 @@ func entryByName(t *testing.T, entries []discovery.WorkflowEntry, name string) d
 	}
 	t.Fatalf("entry %q not found in %v", name, canonicalNames(entries))
 	return discovery.WorkflowEntry{}
+}
+
+func groupByScopeNamespace(t *testing.T, groups []discovery.GroupMetadata, scope discovery.Scope, namespace string) discovery.GroupMetadata {
+	t.Helper()
+	for _, group := range groups {
+		if group.Scope == scope && group.Namespace == namespace {
+			return group
+		}
+	}
+	t.Fatalf("group (%v, %q) not found in %+v", scope, namespace, groups)
+	return discovery.GroupMetadata{}
 }

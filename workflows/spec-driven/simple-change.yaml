@@ -1,5 +1,5 @@
 name: simple-change
-description: "End-to-end change with inlined planning (no nested plan workflow, no openspec dependency)"
+description: "Quick plan + implement + validate workflow, okay for small changes"
 
 sessions:
   - name: lead-agent

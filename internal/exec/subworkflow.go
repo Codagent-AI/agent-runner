@@ -330,9 +330,13 @@ func validateSubWorkflowParams(workflow *model.Workflow, resolvedParams map[stri
 		}
 		if param.Default != "" {
 			resolvedParams[param.Name] = param.Default
-		} else if param.IsRequired() {
-			return fmt.Errorf("missing required parameter: %s", param.Name)
+			continue
 		}
+		if !param.IsRequired() {
+			resolvedParams[param.Name] = ""
+			continue
+		}
+		return fmt.Errorf("missing required parameter: %s", param.Name)
 	}
 	return nil
 }

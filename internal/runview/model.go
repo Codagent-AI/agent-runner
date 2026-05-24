@@ -1035,6 +1035,10 @@ func (m *Model) handleStepNavigation(delta int) tea.Cmd {
 // the currently active step. This is the new auto-follow logic that does NOT
 // drill into sub-workflows or loops.
 func (m *Model) applyAutoFollowCursor() {
+	if active := m.liveUINode(); active != nil {
+		m.applyAutoFollowToNode(active)
+		return
+	}
 	active := m.tree.FindByPrefix(m.activeStepPrefix)
 	if active == nil {
 		return

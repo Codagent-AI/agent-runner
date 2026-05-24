@@ -12,6 +12,7 @@ import (
 var (
 	fitCell      = tuistyle.FitCell
 	fitCellLeft  = tuistyle.FitCellLeft
+	wrapCell     = tuistyle.WrapCell
 	adjustOffset = tuistyle.AdjustOffset
 	shortenPath  = tuistyle.ShortenPath
 	formatTime   = tuistyle.FormatTime

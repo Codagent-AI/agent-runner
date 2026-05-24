@@ -470,7 +470,7 @@ func (m *Model) helpParts() []string {
 
 	switch m.activeTab {
 	case tabNew:
-		parts = append(parts, "↑↓ navigate", "enter view", "r start run")
+		parts = append(parts, "↑↓ navigate", "enter view", "r start run", "h hidden")
 		if m.settingsShortcutEnabled() && !m.newTab.searchFocused {
 			parts = append(parts, "s settings")
 		}

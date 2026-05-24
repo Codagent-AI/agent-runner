@@ -1,5 +1,6 @@
 name: review-proposal
 description: "Adversarial proposal review: reviewer challenges, lead responds, up to 3 rounds"
+hidden: true
 
 params:
   - name: proposal_dir

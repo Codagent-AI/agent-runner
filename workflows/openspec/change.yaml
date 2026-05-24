@@ -1,5 +1,5 @@
 name: change
-description: "End-to-end change: plan then implement"
+description: "Full plan + implement + validate + PR creation workflow. Use for normal feature development."
 
 params:
   - name: change_name

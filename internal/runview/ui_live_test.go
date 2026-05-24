@@ -114,6 +114,43 @@ func TestLiveUIRequestAutoFollowsInProgressTopLevelStep(t *testing.T) {
 	}
 }
 
+func TestLiveUIFollowSurvivesRefreshWithStaleActiveStepPrefix(t *testing.T) {
+	root := &StepNode{ID: "onboarding", Type: NodeRoot, Status: StatusInProgress}
+	autonomousDemo := &StepNode{ID: "autonomous-demo", Type: NodeHeadlessAgent, Status: StatusSuccess, Parent: root}
+	reviewAutonomous := &StepNode{ID: "review-autonomous", Type: NodeUI, Status: StatusInProgress, Parent: root}
+	root.Children = []*StepNode{autonomousDemo, reviewAutonomous}
+
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.running = true
+	m.autoFollow = false
+	m.cursor = 0
+	m.activeStepPrefix = "[autonomous-demo]"
+
+	reply := make(chan model.UIStepResult, 1)
+	updated, _ := m.Update(&liverun.UIRequestMsg{
+		Request: model.UIStepRequest{
+			StepID:  "review-autonomous",
+			Title:   "Review Autonomous",
+			Actions: []model.UIAction{{Label: "Continue", Outcome: "continue"}},
+		},
+		Reply: reply,
+	})
+	m = updated.(*Model)
+	m.autoFollow = false
+	m.cursor = 0
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	if got := m.selectedNode(); got != reviewAutonomous {
+		t.Fatalf("after l selected node = %v, want review-autonomous", got)
+	}
+
+	m.Update(tuistyle.RefreshMsg{})
+
+	if got := m.selectedNode(); got != reviewAutonomous {
+		t.Fatalf("after refresh selected node = %v, want review-autonomous", got)
+	}
+}
+
 func TestLiveUIRequestLeavesCompletedDrillInForSiblingSubWorkflow(t *testing.T) {
 	root := &StepNode{ID: "onboarding", Type: NodeRoot, Status: StatusInProgress}
 	guided := &StepNode{ID: "guided-workflow", Type: NodeSubWorkflow, Status: StatusSuccess, Parent: root, SubLoaded: true}
