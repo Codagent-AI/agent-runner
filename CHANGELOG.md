@@ -1,71 +1,15 @@
 # agent-runner
 
-## 0.7.0
-
-### Minor Changes
-
-- [#30](https://github.com/Codagent-AI/agent-runner/pull/30) Add onboarding phases 3-6 (guided workflow, validator, advanced, help agent)
-
-## 0.6.0
-
-### Minor Changes
-
-- [#28](https://github.com/Codagent-AI/agent-runner/pull/28) Add native onboarding setup
-
-## 0.5.0
-
-### Minor Changes
-
-- [#26](https://github.com/Codagent-AI/agent-runner/pull/26) Add onboarding step types demo
-
-## 0.4.0
-
-### Minor Changes
-
-- [#25](https://github.com/Codagent-AI/agent-runner/pull/25) Add onboarding workflow with UI and script step primitives
-
-## 0.3.1
-
-### Patch Changes
-
-- Publish `agent-runner` as a Homebrew cask and install `agent-validator` as a Homebrew dependency.
-
-## 0.3.0
-
-### Minor Changes
-
-- [#24](https://github.com/Codagent-AI/agent-runner/pull/24) Add interactive copilot/cursor and opencode adapter
-
-## 0.2.0
-
-### Minor Changes
-
-- [#23](https://github.com/Codagent-AI/agent-runner/pull/23) Cursor support, start-run TUI, multi-profile config, and polish
-
-## 0.1.1
-
-### Patch Changes
-
-- [#21](https://github.com/Codagent-AI/agent-runner/pull/21) Resolve builtin workflows when running from any directory
-
 ## 0.1.0
 
 ### Minor Changes
 
-- [#1](https://github.com/Codagent-AI/agent-runner/pull/1) Unified session directory and flattened CLI
-- [#2](https://github.com/Codagent-AI/agent-runner/pull/2) Add pseudo-terminal with PTY execution and CLI adapter abstraction
-- [#8](https://github.com/Codagent-AI/agent-runner/pull/8) Add system prompt routing for interactive mode
-- [#9](https://github.com/Codagent-AI/agent-runner/pull/9) Add agent-initiated continue trigger via stdout sentinel
-- [#11](https://github.com/Codagent-AI/agent-runner/pull/11) Add agent profiles and effort support
-- [#13](https://github.com/Codagent-AI/agent-runner/pull/13) Add run list TUI with lock management and run discovery
-- [#14](https://github.com/Codagent-AI/agent-runner/pull/14) Add run-view TUI with --inspect flag and list-screen handoff
-- [#16](https://github.com/Codagent-AI/agent-runner/pull/16) Live-run TUI as the default workflow console
+- Initial public release of Agent Runner, a Go CLI workflow orchestrator for deterministic multi-step AI agent workflows.
+- Add built-in onboarding workflows, live run and list TUIs, workflow composition, step execution for agents/shell/scripts/UI, session resume support, and Agent Validator integration.
+- Add release automation and Homebrew packaging support for publishing `agent-runner`.
 
 ### Patch Changes
 
-- [#4](https://github.com/Codagent-AI/agent-runner/pull/4) Add GitHub Actions workflow
-- [#7](https://github.com/Codagent-AI/agent-runner/pull/7) Validator config, workflow improvements, and gauntlet-to-validator rename
-- [#10](https://github.com/Codagent-AI/agent-runner/pull/10) PTY refactor, interactive step improvements, and session review
-- [#12](https://github.com/Codagent-AI/agent-runner/pull/12) Agent profiles, headless session fixes, and validator integration
-- [#15](https://github.com/Codagent-AI/agent-runner/pull/15) Runview resume exec's agent CLI; TUI refactor + help-bar pinning
-- [#20](https://github.com/Codagent-AI/agent-runner/pull/20) Full Go rewrite with live TUI, interactive PTY, and workflow orchestration
+- Fix live-run follow behavior while UI steps are active so follow mode does not snap back to the previous process-backed step.
+- Treat omitted optional workflow parameters as empty strings during interpolation, allowing shell conditionals such as optional validator context files to render and branch correctly.
+- Improve the Docker live-update skill with binary permission checks and robust install target discovery.
