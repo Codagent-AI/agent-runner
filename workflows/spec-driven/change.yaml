@@ -1,5 +1,5 @@
 name: change
-description: "Full spec-driven planning "
+description: "Full spec-driven plan + implement + PR creation workflow"
 
 sessions:
   - name: lead-agent
