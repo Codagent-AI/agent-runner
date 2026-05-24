@@ -98,7 +98,9 @@ steps:
       fi
 `
 		childPath := filepath.Join(dir, "child.yaml")
-		os.WriteFile(childPath, []byte(childYAML), 0o644)
+		if err := os.WriteFile(childPath, []byte(childYAML), 0o644); err != nil {
+			t.Fatalf("write child workflow: %v", err)
+		}
 
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		ctx := model.NewRootContext(&model.RootContextOptions{
