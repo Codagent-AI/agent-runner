@@ -3,10 +3,26 @@ package listview
 import (
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
 	"github.com/codagent/agent-runner/internal/runs"
 	"github.com/codagent/agent-runner/internal/tuistyle"
+)
+
+const splashInnerWidth = 52
+
+var (
+	splashBox = tuistyle.OverlayBox.Padding(1, 4)
+
+	splashTitleStyle = lipgloss.NewStyle().
+				Foreground(tuistyle.InactiveAmber).
+				Bold(true).
+				Align(lipgloss.Center).
+				Width(splashInnerWidth)
+	splashCenterLineStyle = lipgloss.NewStyle().
+				Align(lipgloss.Center).
+				Width(splashInnerWidth)
 )
 
 // workflowDisplay returns the best display name for a run's workflow.
@@ -32,18 +48,22 @@ func (m *Model) View() string {
 }
 
 func (m *Model) renderSplash() string {
+	const splashButtonGap = 6
+	gotIt := tuistyle.RenderButton("Got it", m.splashFocus == 0)
+	dontShow := tuistyle.RenderButton("Don't show again", m.splashFocus == 1)
+	buttons := gotIt + strings.Repeat(" ", splashButtonGap) + dontShow
 	lines := []string{
-		tuistyle.HeaderStyle.Render("Welcome to Agent Runner!"),
+		splashTitleStyle.Render("Welcome to Agent Runner!"),
 		"",
 		"Select a workflow and press 'r' to get started.",
 		"",
 		"From this screen you can also:",
-		"  - Browse runs in the current directory, your worktrees, or across all projects",
-		"  - Press ? for help, s for settings, q to quit",
+		"  • Browse runs by directory, worktree, or project",
+		"  • Press ? for help, s for settings, q to quit",
 		"",
-		tuistyle.RenderButtonRow([]string{"Got it", "Don't show again"}, m.splashFocus, 64),
+		splashCenterLineStyle.Render(buttons),
 	}
-	return tuistyle.OverlayBox.Render(strings.Join(lines, "\n"))
+	return splashBox.Render(strings.Join(lines, "\n"))
 }
 
 func (m *Model) viewBase() string {
