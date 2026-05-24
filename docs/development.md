@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- [Go](https://golang.org) 1.23+
+- The Go version declared in [../go.mod](../go.mod)
 - [Claude Code](https://claude.com/claude-code) CLI installed and authenticated
 
 ## Go toolchain setup
@@ -21,7 +21,7 @@ go install github.com/securego/gosec/v2/cmd/gosec@latest
 go install golang.org/x/vuln/cmd/govulncheck@latest
 ```
 
-These install to `~/go/bin/`. To make them available system-wide (including to non-interactive shells like those used by agent-validate), add the path via `/etc/paths.d/`:
+These install to `~/go/bin/`. To make them available system-wide (including to non-interactive shells like those used by Agent Validator), add the path via `/etc/paths.d/`:
 
 ```bash
 echo "$HOME/go/bin" | sudo tee /etc/paths.d/go
@@ -54,11 +54,11 @@ If you only add `~/go/bin` to `.zshrc`, it will work in your terminal but **not*
 
 ```bash
 ./dev.sh openspec:plan-change my-change
-./dev.sh --validate openspec:plan-change
-./dev.sh --resume --session plan-change-2026-04-03T23-19-18-552111Z
+./dev.sh --validate openspec:plan-change change_name=my-change
+./dev.sh --resume plan-change-2026-04-03T23-19-18-552111Z
 ```
 
-> **Why not `make`?** `make` intercepts `--flag` arguments as its own options, so flags like `--session` can't be passed through. `./dev.sh` avoids this.
+> **Why not `make`?** `make` intercepts `--flag` arguments as its own options, so flags like `--resume` can't be passed through. `./dev.sh` avoids this.
 
 ## Linting
 
@@ -70,7 +70,7 @@ The project uses golangci-lint v2 with strict rules configured in `.golangci.yml
 - **gocritic**: diagnostic, style, and performance checks enabled
 - **nolintlint**: all `//nolint` directives must have an explanation and be linter-specific
 
-Test files and the PTY POC have relaxed rules (see `.golangci.yml` exclusions).
+Test files have relaxed rules (see `.golangci.yml` exclusions).
 
 ## Testing
 
@@ -97,13 +97,3 @@ Both are also run by the validator checks (see `.validator/checks/`).
 ## Validating changes
 
 Use the `/validator-run` skill to run the full quality gate suite before committing. This runs all validator checks (build, test, lint, security) and code quality reviews, then fixes any issues found.
-
-## PTY POC
-
-The PTY proof of concept lives in `cmd/pty-poc/`. Run it with:
-
-```bash
-go run ./cmd/pty-poc
-```
-
-This launches a PTY session using `creack/pty` and is the foundation for future terminal UI work with the Charm stack (Bubble Tea).
