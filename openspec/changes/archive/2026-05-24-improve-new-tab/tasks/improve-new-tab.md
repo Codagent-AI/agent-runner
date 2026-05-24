@@ -48,7 +48,7 @@ Read these files to understand current structure before editing:
 - `make test` passes; `make lint` is clean; `make fmt` shows no diff.
 - The new tab in the running TUI shows the group sequence: Project → User → spec-driven → openspec → onboarding → core (with empty groups omitted).
 - Each visible group renders with a header and description above it.
-- **Exactly these eight workflow YAMLs carry `hidden: true`** and are absent from the new tab by default, then visible after pressing `h`:
+- These sub-workflow YAMLs carry `hidden: true` and are absent from the new tab by default, then visible after pressing `h`:
   - `workflows/core/finalize-pr.yaml`
   - `workflows/core/implement-task.yaml`
   - `workflows/core/run-validator.yaml`
@@ -57,7 +57,11 @@ Read these files to understand current structure before editing:
   - `workflows/spec-driven/implement-change.yaml`
   - `workflows/openspec/plan-change.yaml`
   - `workflows/openspec/implement-change.yaml`
+  - `workflows/onboarding/advanced.yaml`
+  - `workflows/onboarding/guided-workflow.yaml`
+  - `workflows/onboarding/step-types-demo.yaml`
+  - `workflows/onboarding/validator.yaml`
 - All four `_group.yaml` files (`spec-driven`, `openspec`, `onboarding`, `core`) exist with both `display_name` and `description` set, and ship in the embedded built-in set.
 - `agent-runner run core:finalize-pr` (and every other workflow marked `hidden: true`) still executes normally.
 - `agent-runner run core:_group` returns a workflow-not-found error.
-- All workflows in `workflows/onboarding/`, plus `workflows/spec-driven/change.yaml`, `workflows/spec-driven/simple-change.yaml`, `workflows/openspec/change.yaml`, and `workflows/openspec/simple-change.yaml`, remain user-facing on the new tab.
+- `workflows/onboarding/onboarding.yaml`, `workflows/onboarding/help.yaml`, plus `workflows/spec-driven/change.yaml`, `workflows/spec-driven/simple-change.yaml`, `workflows/openspec/change.yaml`, and `workflows/openspec/simple-change.yaml`, remain user-facing on the new tab.

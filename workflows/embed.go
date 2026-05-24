@@ -43,7 +43,7 @@ func Resolve(name string) (string, error) {
 	if !ok || ns == "" || workflowName == "" {
 		return "", fmt.Errorf("workflow %q not found", name)
 	}
-	if strings.HasPrefix(workflowName, "_") {
+	if isMetadataBasename(workflowName) {
 		return "", fmt.Errorf("workflow %q not found", name)
 	}
 	for _, ext := range []string{".yaml", ".yml"} {
@@ -60,6 +60,12 @@ func Resolve(name string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("workflow %q not found", name)
+}
+
+// isMetadataBasename reports whether the basename of name starts with `_`,
+// matching the convention used by List() to skip namespace metadata files.
+func isMetadataBasename(name string) bool {
+	return strings.HasPrefix(path.Base(name), "_")
 }
 
 func ReadFile(workflowFile string) ([]byte, error) {
@@ -124,7 +130,7 @@ func List() ([]string, error) {
 		if d.IsDir() {
 			return nil
 		}
-		if strings.HasPrefix(path.Base(p), "_") || !strings.Contains(p, "/") {
+		if isMetadataBasename(p) || !strings.Contains(p, "/") {
 			return nil
 		}
 		ext := path.Ext(p)

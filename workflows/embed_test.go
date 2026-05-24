@@ -109,6 +109,22 @@ func TestUnderscorePrefixedYAMLIsNotWorkflow(t *testing.T) {
 	}
 }
 
+// TestIsMetadataBasename matches the underscore-prefix convention used by
+// List() and discovery, so any workflow name whose basename starts with `_`
+// is rejected regardless of its directory depth.
+func TestIsMetadataBasename(t *testing.T) {
+	for _, in := range []string{"_group", "sub/_group", "nested/dir/_meta"} {
+		if !isMetadataBasename(in) {
+			t.Errorf("isMetadataBasename(%q) = false, want true", in)
+		}
+	}
+	for _, in := range []string{"group", "sub/group", "nested/dir/group"} {
+		if isMetadataBasename(in) {
+			t.Errorf("isMetadataBasename(%q) = true, want false", in)
+		}
+	}
+}
+
 func TestNamespaceGroupMetadataEmbedded(t *testing.T) {
 	// Go's //go:embed default skips files whose basename starts with `_` or `.`.
 	// The pattern in embed.go must use the `all:` prefix so _group.yaml files

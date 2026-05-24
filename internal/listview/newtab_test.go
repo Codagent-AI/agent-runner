@@ -534,6 +534,53 @@ func TestNewTab_ViewFitsTerminalHeight(t *testing.T) {
 	}
 }
 
+// TestNewTab_CursorRowRendersWhenHeaderWraps guards against the budget loop
+// dropping the cursor row off-screen when a multi-line wrapped header above
+// it consumes the visual budget first.
+func TestNewTab_CursorRowRendersWhenHeaderWraps(t *testing.T) {
+	longDesc := strings.Repeat("alphabet ", 30)
+	groups := []discovery.GroupMetadata{
+		{Scope: discovery.ScopeBuiltin, Namespace: "core", DisplayName: "Core", Description: longDesc},
+	}
+	entries := []discovery.WorkflowEntry{
+		{CanonicalName: "core:a", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/a.yaml", Description: "first"},
+		{CanonicalName: "core:b", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/b.yaml", Description: "second"},
+		{CanonicalName: "core:c", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/c.yaml", Description: "third"},
+	}
+	m := newTabModel(entries)
+	m.newTab.groups = groups
+	m.newTab.filtered = buildFilteredRows(entries, groups, "", false)
+	m.termWidth = 30
+	m.termHeight = 18
+
+	// Park the cursor on the last workflow row.
+	m.newTab.cursor = len(m.newTab.filtered) - 1
+
+	rendered := sanitize(m.renderNewTab())
+	if !strings.Contains(rendered, "core:c") {
+		t.Fatalf("cursor row 'core:c' missing from rendered output:\n%s", rendered)
+	}
+}
+
+// TestNewTab_SanitizesWorkflowRowFields ensures ANSI escapes and control bytes
+// from external workflow YAML cannot leak into the rendered new-tab row.
+func TestNewTab_SanitizesWorkflowRowFields(t *testing.T) {
+	entry := discovery.WorkflowEntry{
+		CanonicalName: "core:evil\x1b[31m",
+		Description:   "desc\x1b[1mwith escape",
+		Scope:         discovery.ScopeBuiltin,
+		Namespace:     "core",
+		SourcePath:    "/b/evil.yaml",
+	}
+	m := newTabModel([]discovery.WorkflowEntry{entry})
+	m.termWidth = 80
+
+	got := m.renderNewTabRow(&entry, false, 80, tuistyle.AccentCyan)
+	if strings.Contains(got, "\x1b[31m") || strings.Contains(got, "\x1b[1m") {
+		t.Fatalf("renderNewTabRow leaked raw ANSI escape from workflow fields: %q", got)
+	}
+}
+
 func TestRenderNewTabRow_SelectedNameUsesSelectedText(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	lipgloss.SetHasDarkBackground(false)

@@ -83,7 +83,7 @@ func (m *Model) rebuildNewTabFiltered() {
 }
 
 // buildFilteredRows computes the filtered slice for the new tab.
-// Each element is tagged as a workflow, group header, description, or separator.
+// Each element is tagged as a workflow, group header, or separator.
 // Groups with no visible matching entries are collapsed.
 // Filter is case-insensitive substring match against CanonicalName or SourcePath.
 func buildFilteredRows(workflows []discovery.WorkflowEntry, groups []discovery.GroupMetadata, filter string, showHidden bool) []filteredRow {
@@ -263,44 +263,75 @@ func (m *Model) renderNewTab() string {
 	// The new tab body includes the search row and a blank separator before the
 	// workflow rows, so leave those rows out of the scrollable list budget.
 	maxRows := max(1, m.listMaxRows(false)-2)
-	// Adjust offset so cursor stays in view. Offset is still tracked by row
-	// index; wrapped descriptions may push later rows past the visual budget
-	// (the user scrolls down with j/down in that case).
-	m.newTab.offset = adjustOffset(m.newTab.cursor, m.newTab.offset, maxRows, len(filtered))
 
-	visualBudget := maxRows
-	for i := m.newTab.offset; i < len(filtered); i++ {
-		row := filtered[i]
-		var rendered string
+	// Render each row once, then use the resulting visual heights to pick an
+	// offset that guarantees the cursor row fits in the budget even when a
+	// wrapped header above it consumes multiple lines.
+	rendered := make([]string, len(filtered))
+	heights := make([]int, len(filtered))
+	for i, row := range filtered {
 		switch row.kind {
 		case separatorRow:
-			rendered = "\n"
+			rendered[i] = "\n"
 		case headerRow:
 			group := &m.newTab.groups[row.index]
 			groupColor := tuistyle.GroupColors[row.index%len(tuistyle.GroupColors)]
-			rendered = renderNewTabGroupHeader(group.DisplayName, group.Description, maxWidth, groupColor)
+			rendered[i] = renderNewTabGroupHeader(group.DisplayName, group.Description, maxWidth, groupColor)
 		case workflowRow:
 			entry := &workflows[row.index]
 			isSel := i == m.newTab.cursor && !m.newTab.searchFocused
 			groupIndex := groupIndexForEntry(m.newTab.groups, entry)
 			groupColor := tuistyle.GroupColors[groupIndex%len(tuistyle.GroupColors)]
-			rendered = m.renderNewTabRow(entry, isSel, maxWidth, groupColor)
+			rendered[i] = m.renderNewTabRow(entry, isSel, maxWidth, groupColor)
 		}
-		lines := strings.Count(rendered, "\n")
-		if lines == 0 {
-			lines = 1
-		}
-		// Always render the offset row; for later rows, stop if they'd overflow.
-		if i > m.newTab.offset && lines > visualBudget {
+		heights[i] = max(1, strings.Count(rendered[i], "\n"))
+	}
+
+	m.newTab.offset = adjustOffsetByVisualHeight(m.newTab.cursor, m.newTab.offset, maxRows, heights)
+
+	visualBudget := maxRows
+	for i := m.newTab.offset; i < len(filtered); i++ {
+		h := heights[i]
+		// Always render the offset row and any row up to and including the
+		// cursor; for later rows stop if they would overflow the budget.
+		if i > m.newTab.cursor && h > visualBudget {
 			break
 		}
-		b.WriteString(rendered)
-		visualBudget -= lines
-		if visualBudget <= 0 {
+		b.WriteString(rendered[i])
+		visualBudget -= h
+		if visualBudget <= 0 && i >= m.newTab.cursor {
 			break
 		}
 	}
 	return b.String()
+}
+
+// adjustOffsetByVisualHeight returns an offset that keeps the cursor row
+// visible given each row's rendered visual height (lines). It first ensures
+// cursor >= offset, then advances offset so that the cumulative height from
+// offset through cursor fits within maxRows. The cursor row itself is always
+// included even if its own height exceeds maxRows.
+func adjustOffsetByVisualHeight(cursor, offset, maxRows int, heights []int) int {
+	if len(heights) == 0 {
+		return 0
+	}
+	if maxRows <= 0 {
+		return cursor
+	}
+	if cursor < offset {
+		offset = cursor
+	}
+	for offset < cursor {
+		sum := 0
+		for i := offset; i <= cursor; i++ {
+			sum += heights[i]
+		}
+		if sum <= maxRows {
+			break
+		}
+		offset++
+	}
+	return offset
 }
 
 func groupIndexForEntry(groups []discovery.GroupMetadata, entry *discovery.WorkflowEntry) int {
@@ -394,7 +425,9 @@ func formatCount(n int) string {
 }
 
 // renderNewTabRow renders a single workflow row. Long descriptions wrap onto
-// continuation lines aligned with the description's start column.
+// continuation lines aligned with the description's start column. CanonicalName,
+// Description, and ParseError are sanitized so ANSI escapes or control bytes
+// from external YAML cannot leak into the rendered output or distort width math.
 func (m *Model) renderNewTabRow(entry *discovery.WorkflowEntry, isSel bool, maxWidth int, groupColor lipgloss.AdaptiveColor) string {
 	var prefix string
 	if isSel {
@@ -404,22 +437,24 @@ func (m *Model) renderNewTabRow(entry *discovery.WorkflowEntry, isSel bool, maxW
 	}
 	prefixWidth := lipgloss.Width(prefix)
 	avail := max(10, maxWidth-prefixWidth)
-	nameCellWidth := runewidth.StringWidth(entry.CanonicalName)
+	canonicalName := sanitize(entry.CanonicalName)
+	nameCellWidth := runewidth.StringWidth(canonicalName)
 
 	if entry.ParseError != "" {
 		errNameStyle := tuistyle.StatusFailed
-		errPart := " " + fitCell(entry.ParseError, avail-nameCellWidth-1)
-		return prefix + errNameStyle.Render(entry.CanonicalName) + errNameStyle.Render(errPart) + "\n"
+		errPart := " " + fitCell(sanitize(entry.ParseError), avail-nameCellWidth-1)
+		return prefix + errNameStyle.Render(canonicalName) + errNameStyle.Render(errPart) + "\n"
 	}
 
 	var namePart string
 	if isSel {
-		namePart = renderSelectedName(entry.CanonicalName, m.newTab.searchText)
+		namePart = renderSelectedName(canonicalName, m.newTab.searchText)
 	} else {
-		namePart = renderColoredName(entry, m.newTab.searchText, groupColor)
+		namePart = renderColoredName(canonicalName, m.newTab.searchText, groupColor)
 	}
 
-	if entry.Description == "" {
+	description := sanitize(entry.Description)
+	if description == "" {
 		return prefix + namePart + "\n"
 	}
 
@@ -433,7 +468,7 @@ func (m *Model) renderNewTabRow(entry *discovery.WorkflowEntry, isSel bool, maxW
 		descStyle = selectedStyle
 	}
 
-	lines := wrapCell(entry.Description, descAvail)
+	lines := wrapCell(description, descAvail)
 	contIndent := strings.Repeat(" ", prefixWidth+nameCellWidth+1)
 
 	var b strings.Builder
@@ -461,8 +496,7 @@ func renderSelectedName(name, searchText string) string {
 }
 
 // renderColoredName renders a non-selected workflow name in the group color.
-func renderColoredName(entry *discovery.WorkflowEntry, searchText string, color lipgloss.AdaptiveColor) string {
-	name := entry.CanonicalName
+func renderColoredName(name, searchText string, color lipgloss.AdaptiveColor) string {
 	if searchText != "" {
 		return highlightMatch(name, searchText, false, color)
 	}
