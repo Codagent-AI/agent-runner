@@ -92,6 +92,23 @@ func TestOnboardingWorkflowsResolveAndAssetsList(t *testing.T) {
 	}
 }
 
+func TestUnderscorePrefixedYAMLIsNotWorkflow(t *testing.T) {
+	ref, err := Resolve("core:_group")
+	if err == nil {
+		t.Fatalf("Resolve(core:_group) = %q, want not found", ref)
+	}
+
+	refs, err := List()
+	if err != nil {
+		t.Fatalf("List() returned error: %v", err)
+	}
+	for _, ref := range refs {
+		if strings.HasSuffix(ref, "/_group.yaml") {
+			t.Fatalf("List() exposed metadata file as workflow: %v", refs)
+		}
+	}
+}
+
 func TestOpenSpecPlanningWorkflowsUseSharedCreateScript(t *testing.T) {
 	for _, ref := range []string{"builtin:openspec/plan-change.yaml", "builtin:openspec/simple-change.yaml"} {
 		t.Run(ref, func(t *testing.T) {

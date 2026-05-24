@@ -285,6 +285,104 @@ func TestListModel_QuestionMark_EmitsHelpStartRunMsg(t *testing.T) {
 	}
 }
 
+func TestNewTab_HKeyTogglesHiddenVisibility(t *testing.T) {
+	m := newTabModel([]discovery.WorkflowEntry{
+		{CanonicalName: "core:visible", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/visible.yaml"},
+		{CanonicalName: "core:hidden", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/hidden.yaml", Hidden: true},
+	})
+
+	m, _ = pressKey(m, "h")
+	if !m.newTab.showHidden {
+		t.Fatal("first h press should enable showHidden")
+	}
+	if got := workflowRows(m.newTab.filtered); len(got) != 2 {
+		t.Fatalf("workflow rows after first h = %v, want visible and hidden", got)
+	}
+
+	m, _ = pressKey(m, "h")
+	if m.newTab.showHidden {
+		t.Fatal("second h press should disable showHidden")
+	}
+	if got := workflowRows(m.newTab.filtered); len(got) != 1 || got[0] != 0 {
+		t.Fatalf("workflow rows after second h = %v, want only visible", got)
+	}
+}
+
+func TestNewTab_HKeyPreservesSearchText(t *testing.T) {
+	m := newTabModel([]discovery.WorkflowEntry{
+		{CanonicalName: "core:visible", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/visible.yaml"},
+		{CanonicalName: "core:hidden-target", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/hidden.yaml", Hidden: true},
+	})
+	m.newTab.searchText = "hidden"
+	m.updateSearchFilter()
+
+	m, _ = pressKey(m, "h")
+
+	if m.newTab.searchText != "hidden" {
+		t.Fatalf("search text = %q, want hidden", m.newTab.searchText)
+	}
+	if got := workflowRows(m.newTab.filtered); len(got) != 1 || got[0] != 1 {
+		t.Fatalf("workflow rows = %v, want hidden search match", got)
+	}
+}
+
+func TestNewTab_HKeyInSearchBoxAppendsInput(t *testing.T) {
+	m := newTabModel([]discovery.WorkflowEntry{
+		{CanonicalName: "core:hidden", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/hidden.yaml", Hidden: true},
+	})
+	m.newTab.searchFocused = true
+
+	m, _ = pressKey(m, "h")
+
+	if m.newTab.showHidden {
+		t.Fatal("h while search is focused should not toggle showHidden")
+	}
+	if m.newTab.searchText != "h" {
+		t.Fatalf("search text = %q, want h", m.newTab.searchText)
+	}
+}
+
+func TestNewTab_EnteringNewTabResetsShowHidden(t *testing.T) {
+	m := newTabModel([]discovery.WorkflowEntry{
+		{CanonicalName: "core:visible", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/visible.yaml"},
+		{CanonicalName: "core:hidden", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/hidden.yaml", Hidden: true},
+	})
+	m.newTab.showHidden = true
+	m.newTab.filtered = buildFilteredRows(m.newTab.workflows, m.newTab.groups, "", true)
+	m.activeTab = tabCurrentDir
+
+	m, _ = pressKey(m, "n")
+
+	if m.newTab.showHidden {
+		t.Fatal("entering new tab with n should reset showHidden")
+	}
+	if got := workflowRows(m.newTab.filtered); len(got) != 1 || got[0] != 0 {
+		t.Fatalf("workflow rows after entering new tab = %v, want only visible", got)
+	}
+}
+
+func TestNewTab_TabCyclingIntoNewTabResetsShowHidden(t *testing.T) {
+	m := newTabModel([]discovery.WorkflowEntry{
+		{CanonicalName: "core:visible", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/visible.yaml"},
+		{CanonicalName: "core:hidden", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/hidden.yaml", Hidden: true},
+	})
+	m.newTab.showHidden = true
+	m.newTab.filtered = buildFilteredRows(m.newTab.workflows, m.newTab.groups, "", true)
+	m.activeTab = tabAll
+
+	m.nextTab()
+
+	if m.activeTab != tabNew {
+		t.Fatalf("active tab = %v, want tabNew", m.activeTab)
+	}
+	if m.newTab.showHidden {
+		t.Fatal("tab cycling into new tab should reset showHidden")
+	}
+	if got := workflowRows(m.newTab.filtered); len(got) != 1 || got[0] != 0 {
+		t.Fatalf("workflow rows after tab cycle = %v, want only visible", got)
+	}
+}
+
 func TestListView_UsesSingleScreenMargin(t *testing.T) {
 	m := newTestListModel([]runs.RunInfo{inactiveRun()})
 	m.cwd = "/repo/project"

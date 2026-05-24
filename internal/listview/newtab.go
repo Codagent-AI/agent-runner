@@ -1,6 +1,7 @@
 package listview
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -12,6 +13,36 @@ import (
 	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/tuistyle"
 )
+
+type rowKind int
+
+const (
+	workflowRow rowKind = iota
+	headerRow
+	descriptionRow
+	separatorRow
+)
+
+type filteredRow struct {
+	kind  rowKind
+	index int
+}
+
+type groupKey struct {
+	scope discovery.Scope
+	ns    string
+}
+
+type workflowGroup struct {
+	indices []int
+}
+
+var builtinGroupOrder = []string{
+	"spec-driven",
+	"openspec",
+	"onboarding",
+	"core",
+}
 
 // handleSearchKey processes a key event when the new tab search box has focus.
 // Returns the updated model and a command.
@@ -26,7 +57,7 @@ func (m *Model) handleSearchKey(msg tea.KeyMsg) (*Model, tea.Cmd) {
 		m.prevTab()
 	case "esc":
 		m.newTab.searchText = ""
-		m.newTab.filtered = buildFilteredRows(m.newTab.workflows, "")
+		m.newTab.filtered = buildFilteredRows(m.newTab.workflows, m.newTab.groups, "", m.newTab.showHidden)
 		m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
 	case "backspace":
 		if m.newTab.searchText != "" {
@@ -47,61 +78,98 @@ func (m *Model) handleSearchKey(msg tea.KeyMsg) (*Model, tea.Cmd) {
 }
 
 func (m *Model) updateSearchFilter() {
-	m.newTab.filtered = buildFilteredRows(m.newTab.workflows, m.newTab.searchText)
+	m.newTab.filtered = buildFilteredRows(m.newTab.workflows, m.newTab.groups, m.newTab.searchText, m.newTab.showHidden)
 	m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
 }
 
 // buildFilteredRows computes the filtered slice for the new tab.
-// Each element is either an index into workflows (>= 0) or -1 for a blank-line separator.
-// Groups are: project entries, user entries, builtin namespace sub-groups.
-// Groups with no matching entries are collapsed (no separator).
+// Each element is tagged as a workflow, group header, description, or separator.
+// Groups with no visible matching entries are collapsed.
 // Filter is case-insensitive substring match against CanonicalName or SourcePath.
-func buildFilteredRows(workflows []discovery.WorkflowEntry, filter string) []int {
+func buildFilteredRows(workflows []discovery.WorkflowEntry, groups []discovery.GroupMetadata, filter string, showHidden bool) []filteredRow {
 	filter = strings.ToLower(filter)
 
-	type group struct {
-		indices []int
-	}
-
-	// Collect groups in display order.
-	// Project and user are each one group.
-	// Builtins are sub-grouped by namespace.
-	type groupKey struct {
-		scope discovery.Scope
-		ns    string
-	}
-
-	var order []groupKey
-	seen := make(map[groupKey]bool)
-	groups := make(map[groupKey]*group)
+	groupRows := make(map[groupKey]*workflowGroup)
 
 	for i, e := range workflows {
-		key := groupKey{scope: e.Scope, ns: e.Namespace}
-		if !seen[key] {
-			seen[key] = true
-			order = append(order, key)
-			groups[key] = &group{}
+		if e.Hidden && !showHidden {
+			continue
+		}
+		if filter != "" && !matchesFilter(&e, filter) {
+			continue
 		}
 
-		if filter == "" || matchesFilter(&e, filter) {
-			groups[key].indices = append(groups[key].indices, i)
+		key := groupKey{scope: e.Scope, ns: e.Namespace}
+		if groupRows[key] == nil {
+			groupRows[key] = &workflowGroup{}
 		}
+		groupRows[key].indices = append(groupRows[key].indices, i)
 	}
 
-	var result []int
+	groupIndices := make(map[groupKey]int, len(groups))
+	for i, group := range groups {
+		groupIndices[groupKey{scope: group.Scope, ns: group.Namespace}] = i
+	}
+
+	var result []filteredRow
 	first := true
-	for _, key := range order {
-		g := groups[key]
+	for _, key := range orderedGroupKeys(groupRows) {
+		g := groupRows[key]
 		if len(g.indices) == 0 {
 			continue
 		}
-		if !first {
-			result = append(result, -1) // blank-line separator
+		groupIndex, ok := groupIndices[key]
+		if !ok {
+			continue
 		}
-		result = append(result, g.indices...)
+		if !first {
+			result = append(result, filteredRow{kind: separatorRow})
+		}
+		result = append(result,
+			filteredRow{kind: headerRow, index: groupIndex},
+			filteredRow{kind: descriptionRow, index: groupIndex},
+		)
+		for _, workflowIndex := range g.indices {
+			result = append(result, filteredRow{kind: workflowRow, index: workflowIndex})
+		}
 		first = false
 	}
 	return result
+}
+
+func orderedGroupKeys(groups map[groupKey]*workflowGroup) []groupKey {
+	var order []groupKey
+	for _, key := range []groupKey{
+		{scope: discovery.ScopeProject},
+		{scope: discovery.ScopeUser},
+	} {
+		if groups[key] != nil {
+			order = append(order, key)
+		}
+	}
+
+	emittedBuiltins := make(map[string]bool)
+	for _, namespace := range builtinGroupOrder {
+		key := groupKey{scope: discovery.ScopeBuiltin, ns: namespace}
+		if groups[key] != nil {
+			order = append(order, key)
+			emittedBuiltins[namespace] = true
+		}
+	}
+
+	var remaining []string
+	for key := range groups {
+		if key.scope != discovery.ScopeBuiltin || emittedBuiltins[key.ns] {
+			continue
+		}
+		remaining = append(remaining, key.ns)
+	}
+	sort.Strings(remaining)
+	for _, namespace := range remaining {
+		order = append(order, groupKey{scope: discovery.ScopeBuiltin, ns: namespace})
+	}
+
+	return order
 }
 
 func matchesFilter(e *discovery.WorkflowEntry, lowerFilter string) bool {
@@ -109,25 +177,11 @@ func matchesFilter(e *discovery.WorkflowEntry, lowerFilter string) bool {
 		strings.Contains(strings.ToLower(e.SourcePath), lowerFilter)
 }
 
-// computeGroupIndices returns a group index for each position in filtered,
-// incrementing at each blank-line separator.
-func computeGroupIndices(filtered []int) []int {
-	groups := make([]int, len(filtered))
-	g := 0
-	for i, idx := range filtered {
-		if idx == -1 {
-			g++
-		}
-		groups[i] = g
-	}
-	return groups
-}
-
-// firstSelectableRow returns the index of the first non-separator row in filtered,
+// firstSelectableRow returns the index of the first workflow row in filtered,
 // or 0 if there are none.
-func firstSelectableRow(filtered []int) int {
-	for i, idx := range filtered {
-		if idx != -1 {
+func firstSelectableRow(filtered []filteredRow) int {
+	for i, row := range filtered {
+		if row.kind == workflowRow {
 			return i
 		}
 	}
@@ -145,11 +199,11 @@ func (m *Model) newTabCurrentEntry() *discovery.WorkflowEntry {
 	if pos < 0 || pos >= len(f) {
 		return nil
 	}
-	idx := f[pos]
-	if idx < 0 || idx >= len(m.newTab.workflows) {
+	row := f[pos]
+	if row.kind != workflowRow || row.index < 0 || row.index >= len(m.newTab.workflows) {
 		return nil
 	}
-	e := m.newTab.workflows[idx]
+	e := m.newTab.workflows[row.index]
 	return &e
 }
 
@@ -194,8 +248,8 @@ func (m *Model) renderNewTab() string {
 
 	filtered := m.newTab.filtered
 	count := 0
-	for _, idx := range filtered {
-		if idx >= 0 {
+	for _, row := range filtered {
+		if row.kind == workflowRow {
 			count++
 		}
 	}
@@ -209,8 +263,6 @@ func (m *Model) renderNewTab() string {
 		maxWidth = 80
 	}
 
-	groupIndices := computeGroupIndices(filtered)
-
 	// The new tab body includes the search row and a blank separator before the
 	// workflow rows, so leave those rows out of the scrollable list budget.
 	maxRows := max(1, m.listMaxRows(false)-2)
@@ -219,17 +271,49 @@ func (m *Model) renderNewTab() string {
 	end := min(m.newTab.offset+maxRows, len(filtered))
 
 	for i := m.newTab.offset; i < end; i++ {
-		idx := filtered[i]
-		if idx == -1 {
+		row := filtered[i]
+		switch row.kind {
+		case separatorRow:
 			b.WriteString("\n")
-			continue
+		case headerRow:
+			group := &m.newTab.groups[row.index]
+			groupColor := tuistyle.GroupColors[row.index%len(tuistyle.GroupColors)]
+			b.WriteString(renderNewTabGroupHeader(group.DisplayName, maxWidth, groupColor))
+		case descriptionRow:
+			group := &m.newTab.groups[row.index]
+			b.WriteString(renderNewTabGroupDescription(group.Description, maxWidth))
+		case workflowRow:
+			entry := &workflows[row.index]
+			isSel := i == m.newTab.cursor && !m.newTab.searchFocused
+			groupIndex := groupIndexForEntry(m.newTab.groups, entry)
+			groupColor := tuistyle.GroupColors[groupIndex%len(tuistyle.GroupColors)]
+			b.WriteString(m.renderNewTabRow(entry, isSel, maxWidth, groupColor))
 		}
-		entry := &workflows[idx]
-		isSel := i == m.newTab.cursor && !m.newTab.searchFocused
-		groupColor := tuistyle.GroupColors[groupIndices[i]%len(tuistyle.GroupColors)]
-		b.WriteString(m.renderNewTabRow(entry, isSel, maxWidth, groupColor))
 	}
 	return b.String()
+}
+
+func groupIndexForEntry(groups []discovery.GroupMetadata, entry *discovery.WorkflowEntry) int {
+	key := groupKey{scope: entry.Scope, ns: entry.Namespace}
+	for i, group := range groups {
+		if group.Scope == key.scope && group.Namespace == key.ns {
+			return i
+		}
+	}
+	return 0
+}
+
+func renderNewTabGroupHeader(name string, maxWidth int, color lipgloss.AdaptiveColor) string {
+	name = sanitize(name)
+	prefix := tuistyle.ScreenMargin + "  "
+	avail := max(10, maxWidth-lipgloss.Width(prefix))
+	return prefix + lipgloss.NewStyle().Foreground(color).Bold(true).Render(fitCell(name, avail)) + "\n"
+}
+
+func renderNewTabGroupDescription(description string, maxWidth int) string {
+	prefix := tuistyle.ScreenMargin + "  "
+	avail := max(10, maxWidth-lipgloss.Width(prefix))
+	return prefix + dimStyle.Render(fitCell(sanitize(description), avail)) + "\n"
 }
 
 // renderNewTabSearch renders the search box line.
@@ -250,8 +334,8 @@ func (m *Model) renderNewTabSearch() string {
 	}
 
 	count := 0
-	for _, idx := range m.newTab.filtered {
-		if idx >= 0 {
+	for _, row := range m.newTab.filtered {
+		if row.kind == workflowRow {
 			count++
 		}
 	}

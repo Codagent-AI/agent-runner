@@ -41,6 +41,9 @@ func Resolve(name string) (string, error) {
 	if !ok || ns == "" || workflowName == "" {
 		return "", fmt.Errorf("workflow %q not found", name)
 	}
+	if strings.HasPrefix(workflowName, "_") {
+		return "", fmt.Errorf("workflow %q not found", name)
+	}
 	for _, ext := range []string{".yaml", ".yml"} {
 		candidate := path.Join(ns, workflowName+ext)
 		info, err := fs.Stat(FS, candidate)
@@ -117,6 +120,9 @@ func List() ([]string, error) {
 			return err
 		}
 		if d.IsDir() {
+			return nil
+		}
+		if strings.HasPrefix(path.Base(p), "_") || !strings.Contains(p, "/") {
 			return nil
 		}
 		ext := path.Ext(p)

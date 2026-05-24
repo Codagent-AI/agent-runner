@@ -63,6 +63,30 @@ func TestLoadWorkflow(t *testing.T) {
 		if w.Name != "finalize-pr" {
 			t.Fatalf("expected builtin workflow name finalize-pr, got %q", w.Name)
 		}
+		if !w.Hidden {
+			t.Fatal("expected hidden builtin workflow to load normally")
+		}
+	})
+
+	t.Run("loads hidden workflow field", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "hidden.yaml")
+		if err := os.WriteFile(path, []byte(`name: hidden-workflow
+hidden: true
+steps:
+  - id: step1
+    command: echo hidden
+`), 0o600); err != nil {
+			t.Fatalf("write workflow: %v", err)
+		}
+
+		w, err := LoadWorkflow(path, Options{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !w.Hidden {
+			t.Fatal("expected hidden workflow field to round-trip")
+		}
 	})
 }
 

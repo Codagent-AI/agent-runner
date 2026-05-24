@@ -601,6 +601,7 @@ type EngineConfig struct {
 type Workflow struct {
 	Name        string        `yaml:"name" json:"name"`
 	Description string        `yaml:"description,omitempty" json:"description,omitempty"`
+	Hidden      bool          `yaml:"hidden,omitempty" json:"hidden,omitempty"`
 	Params      []Param       `yaml:"params,omitempty" json:"params,omitempty"`
 	Sessions    []SessionDecl `yaml:"sessions,omitempty" json:"sessions,omitempty"`
 	Steps       []Step        `yaml:"steps" json:"steps"`

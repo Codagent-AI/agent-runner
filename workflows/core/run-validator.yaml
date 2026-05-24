@@ -1,5 +1,6 @@
 name: run-validator
 description: "Counted retry loop: run validator, fix on failure, max 3 attempts"
+hidden: true
 
 params:
   - name: task_file
