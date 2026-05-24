@@ -3,6 +3,7 @@ package discovery
 
 import (
 	"io/fs"
+	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -321,6 +322,7 @@ func loadBuiltinGroupMetadata(builtinFS fs.FS, namespace string) GroupMetadata {
 		Description string `yaml:"description"`
 	}
 	if err := yaml.Unmarshal(data, &metadata); err != nil {
+		log.Printf("discovery: malformed _group.yaml in builtin namespace %q: %v", namespace, err)
 		return group
 	}
 	if metadata.DisplayName != "" {
