@@ -240,8 +240,8 @@ steps:
       - id: run-validator
         mode: shell
         command: |
-          if [ -n {{task_file}} ]; then
-            agent-validator run --report --enable-review task-compliance --context-file {{task_file}}
+          if [ -n "{{task_file}}" ]; then
+            agent-validator run --report --enable-review task-compliance --context-file "{{task_file}}"
           else
             agent-validator run --report
           fi

@@ -130,17 +130,17 @@ func New(settings usersettings.Settings, opts ...Option) *Model {
 	return m
 }
 
-// SelectedTheme returns the persisted theme value.
+// SelectedTheme returns the current in-editor theme selection.
 func (m *Model) SelectedTheme() usersettings.Theme {
 	return m.theme
 }
 
-// SelectedAutonomousBackend returns the persisted backend value.
+// SelectedAutonomousBackend returns the current in-editor backend selection.
 func (m *Model) SelectedAutonomousBackend() usersettings.AutonomousBackend {
 	return m.backend
 }
 
-// SelectedAutonomousPermissionMode returns the persisted permission mode value.
+// SelectedAutonomousPermissionMode returns the current in-editor permission mode selection.
 func (m *Model) SelectedAutonomousPermissionMode() usersettings.AutonomousPermissionMode {
 	return m.permissionMode
 }

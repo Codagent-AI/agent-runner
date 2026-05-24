@@ -136,7 +136,7 @@ func TestLoadAutonomousPermissionModeValues(t *testing.T) {
 	}{
 		{name: "yolo", body: "autonomous_permission_mode: yolo\n", want: PermissionModeYOLO},
 		{name: "conservative", body: "autonomous_permission_mode: conservative\n", want: PermissionModeConservative},
-		{name: "missing defaults conservative", body: "theme: dark\n", want: PermissionModeConservative},
+		{name: "missing preserves absence", body: "theme: dark\n", want: ""},
 		{name: "invalid rejected", body: "autonomous_permission_mode: ludicrous\n", wantErr: `invalid autonomous_permission_mode "ludicrous"`},
 		{name: "sequence rejected", body: "autonomous_permission_mode: [yolo]\n", wantErr: "invalid autonomous_permission_mode"},
 	}
@@ -229,6 +229,45 @@ func TestSavePreservesAutonomousPermissionModeOnUnrelatedWrite(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "experimental_foo: 7") {
 		t.Fatalf("settings body lost unrelated key:\n%s", body)
+	}
+}
+
+func TestSaveLeavesMissingAutonomousPermissionModeAbsentOnUnrelatedWrite(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeSettingsFile(t, home, "theme: light\nexperimental_foo: 7\n")
+
+	settings, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	settings.Theme = ThemeDark
+	if err := Save(settings); err != nil {
+		t.Fatalf("Save() returned error: %v", err)
+	}
+
+	body, err := os.ReadFile(filepath.Join(home, ".agent-runner", "settings.yaml"))
+	if err != nil {
+		t.Fatalf("ReadFile(settings) returned error: %v", err)
+	}
+	if strings.Contains(string(body), "autonomous_permission_mode") {
+		t.Fatalf("settings body wrote absent autonomous_permission_mode:\n%s", body)
+	}
+	if !strings.Contains(string(body), "experimental_foo: 7") {
+		t.Fatalf("settings body lost unrelated key:\n%s", body)
+	}
+}
+
+func TestSaveRejectsInvalidAutonomousPermissionMode(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	err := Save(Settings{AutonomousPermissionMode: AutonomousPermissionMode("invalid")})
+	if err == nil {
+		t.Fatal("Save() returned nil error, want validation error")
+	}
+	if !strings.Contains(err.Error(), `invalid autonomous_permission_mode "invalid"`) {
+		t.Fatalf("Save() error = %v, want invalid autonomous_permission_mode", err)
 	}
 }
 

@@ -113,8 +113,6 @@ func Load() (Settings, error) {
 			return Settings{}, err
 		}
 	}
-	settings.AutonomousPermissionMode = EffectiveAutonomousPermissionMode(settings.AutonomousPermissionMode)
-
 	return settings, nil
 }
 
@@ -205,6 +203,15 @@ func EffectiveAutonomousPermissionMode(mode AutonomousPermissionMode) Autonomous
 		return PermissionModeYOLO
 	}
 	return PermissionModeConservative
+}
+
+func validAutonomousPermissionMode(mode AutonomousPermissionMode) bool {
+	switch mode {
+	case PermissionModeConservative, PermissionModeYOLO:
+		return true
+	default:
+		return false
+	}
 }
 
 func parseSetup(value *yaml.Node) (SetupSettings, bool) {
@@ -327,6 +334,9 @@ func marshalSettings(settings Settings) ([]byte, error) {
 	}
 
 	if settings.AutonomousPermissionMode != "" {
+		if !validAutonomousPermissionMode(settings.AutonomousPermissionMode) {
+			return nil, invalidAutonomousPermissionModeError(string(settings.AutonomousPermissionMode))
+		}
 		setScalar(root, "autonomous_permission_mode", string(settings.AutonomousPermissionMode))
 	} else {
 		removeKey(root, "autonomous_permission_mode")

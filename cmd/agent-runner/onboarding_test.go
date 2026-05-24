@@ -198,6 +198,22 @@ func TestEnsureFirstRunForTUIInterruptedSetupExitsApp(t *testing.T) {
 	}
 }
 
+func TestEnsureFirstRunForTUIFailedSetupResultExitsNonZero(t *testing.T) {
+	result := ensureFirstRunForTUI(firstRunDeps{
+		load:        func() (usersettings.Settings, error) { return usersettings.Settings{}, nil },
+		isStdinTTY:  func() bool { return true },
+		isStdoutTTY: func() bool { return true },
+		runNativeSetup: func(bool) (nativeSetupResult, error) {
+			return nativeSetupFailed, nil
+		},
+		runWorkflow: func(string) firstRunWorkflowResult {
+			t.Fatal("runWorkflow should not be called")
+			return firstRunWorkflowResult{}
+		},
+	})
+	requireFirstRunExit(t, result, 1)
+}
+
 func TestEnsureFirstRunForTUISetupErrorGoesHome(t *testing.T) {
 	result := ensureFirstRunForTUI(firstRunDeps{
 		load:        func() (usersettings.Settings, error) { return usersettings.Settings{}, nil },

@@ -1518,6 +1518,8 @@ func ensureFirstRunForTUI(deps firstRunDeps) firstRunResult {
 			return continueToList()
 		case nativeSetupDemo:
 			return launchOnboardingDemo(deps)
+		case nativeSetupFailed:
+			return exitFirstRun(1)
 		default:
 			// Cancelled, ExitRequested, or any non-completion outcome:
 			// setup is the only path into the home TUI, so any exit short of
