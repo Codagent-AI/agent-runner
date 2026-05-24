@@ -81,6 +81,47 @@ steps:
 		}
 	})
 
+	t.Run("optional child params are available as empty strings", func(t *testing.T) {
+		dir := t.TempDir()
+		childYAML := `name: child
+params:
+  - name: task_file
+    required: false
+    default: ""
+steps:
+  - id: s1
+    command: |
+      if [ -n "{{task_file}}" ]; then
+        echo with-task
+      else
+        echo no-task
+      fi
+`
+		childPath := filepath.Join(dir, "child.yaml")
+		os.WriteFile(childPath, []byte(childYAML), 0o644)
+
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		ctx := model.NewRootContext(&model.RootContextOptions{
+			Params:       map[string]string{},
+			WorkflowFile: filepath.Join(dir, "parent.yaml"),
+		})
+
+		step := model.Step{ID: "sub", Workflow: "child.yaml", Session: model.SessionNew}
+		outcome, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("expected success, got %q", outcome)
+		}
+		if len(runner.calls) != 1 {
+			t.Fatalf("expected 1 call, got %d", len(runner.calls))
+		}
+		if cmd := runner.calls[0][2]; !strings.Contains(cmd, `[ -n "" ]`) {
+			t.Fatalf("command did not interpolate optional empty param: %q", cmd)
+		}
+	})
+
 	t.Run("child context does not inherit parent params", func(t *testing.T) {
 		dir := t.TempDir()
 		childYAML := `name: child

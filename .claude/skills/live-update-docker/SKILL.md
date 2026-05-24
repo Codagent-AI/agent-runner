@@ -32,33 +32,40 @@ Use this skill to replace the `agent-runner` binary inside an already-running Do
 
    ```bash
    GOOS=linux GOARCH=<arch> go build -o bin/agent-runner-linux-<arch> ./cmd/agent-runner
+   chmod 0755 bin/agent-runner-linux-<arch>
    ```
 
    If the default build cannot write the host Go cache, use a sandbox-friendly cache path:
 
    ```bash
    GOCACHE=/private/tmp/agent-runner-go-build GOOS=linux GOARCH=<arch> go build -o bin/agent-runner-linux-<arch> ./cmd/agent-runner
+   chmod 0755 bin/agent-runner-linux-<arch>
    ```
 
    Do not copy the host macOS binary into the container. It will fail with `Exec format error`.
+   Make the built Linux binary world-executable before `docker cp`; Docker can
+   preserve restrictive host modes such as `0700`, which makes `/tmp/agent-runner`
+   unreadable to the `linuxbrew` user inside the container.
 
 4. Copy and install the binary inside the running container.
 
    ```bash
    docker cp bin/agent-runner-linux-<arch> <container-id>:/tmp/agent-runner
-   docker exec <container-id> bash -lc 'install -m 0755 /tmp/agent-runner /home/linuxbrew/.linuxbrew/bin/agent-runner'
+   docker exec <container-id> bash -lc 'ls -l /tmp/agent-runner'
    ```
 
-   If the Homebrew path is not present, find the installed binary path first:
+   Find the install target. Prefer an existing `agent-runner` on PATH; otherwise
+   use Homebrew's Linux bin directory and ensure it exists.
 
    ```bash
-   docker exec <container-id> bash -lc 'command -v agent-runner'
+   docker exec <container-id> bash -lc 'type -a agent-runner || true'
+   docker exec <container-id> bash -lc 'target=$(command -v agent-runner || printf "%s" /home/linuxbrew/.linuxbrew/bin/agent-runner); install -d -m 0755 "$(dirname "$target")"; install -m 0755 /tmp/agent-runner "$target"; ls -l "$target"'
    ```
 
 5. Verify the patched binary from inside the container.
 
    ```bash
-   docker exec <container-id> bash -lc '/home/linuxbrew/.linuxbrew/bin/agent-runner --help >/tmp/agent-runner-help.out && head -3 /tmp/agent-runner-help.out'
+   docker exec <container-id> bash -lc 'target=$(command -v agent-runner || printf "%s" /home/linuxbrew/.linuxbrew/bin/agent-runner); "$target" --help >/tmp/agent-runner-help.out && head -3 /tmp/agent-runner-help.out'
    ```
 
 ## Notes
