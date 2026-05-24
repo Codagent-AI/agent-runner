@@ -1,5 +1,5 @@
 name: change
-description: "Full spec-driven plan + implement + PR creation workflow"
+description: "Full plan + implement + validate + PR creation workflow. Use for normal feature development."
 
 sessions:
   - name: lead-agent
