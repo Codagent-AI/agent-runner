@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/usersettings"
@@ -46,5 +49,20 @@ func TestShouldShowSplashIndependentOfSetupAndOnboarding(t *testing.T) {
 
 	if !shouldShowSplash(&settings, true, true) {
 		t.Fatal("setup and onboarding state should not suppress splash")
+	}
+}
+
+func TestLoadSplashSettingsForListFallsBackOnLoadError(t *testing.T) {
+	var stderr bytes.Buffer
+
+	settings := loadSplashSettingsForList(func() (usersettings.Settings, error) {
+		return usersettings.Settings{Splash: usersettings.SplashSettings{Dismissed: "2026-05-24T00:00:00Z"}}, errors.New("permission denied")
+	}, &stderr)
+
+	if settings != (usersettings.Settings{}) {
+		t.Fatalf("settings = %#v, want empty fallback", settings)
+	}
+	if got := stderr.String(); !strings.Contains(got, "warning: could not load settings for splash") || !strings.Contains(got, "permission denied") {
+		t.Fatalf("stderr = %q, want splash load warning", got)
 	}
 }

@@ -523,11 +523,7 @@ func handleListWithDeps(initialTab listview.InitialTab, firstRun firstRunDeps) i
 		return result.exitCode
 	}
 
-	settings, err := firstRun.load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-		return 1
-	}
+	settings := loadSplashSettingsForList(firstRun.load, os.Stderr)
 
 	m, err := listview.New(
 		listview.WithInitialTab(initialTab),
@@ -545,6 +541,15 @@ func handleListWithDeps(initialTab listview.InitialTab, firstRun firstRunDeps) i
 
 func shouldShowSplash(settings *usersettings.Settings, stdinTTY, stdoutTTY bool) bool {
 	return settings != nil && stdinTTY && stdoutTTY && settings.Splash.Dismissed == ""
+}
+
+func loadSplashSettingsForList(load func() (usersettings.Settings, error), stderr io.Writer) usersettings.Settings {
+	settings, err := load()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "agent-runner: warning: could not load settings for splash: %v\n", err)
+		return usersettings.Settings{}
+	}
+	return settings
 }
 
 func runSwitcher(sw *switcher) int {
