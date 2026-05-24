@@ -12,24 +12,25 @@ import (
 	"github.com/codagent/agent-runner/internal/usersettings"
 )
 
-// SavedMsg is emitted after the editor successfully persists a settings change.
-// The editor stays open after a save; the embedder applies runtime-affecting
-// changes (e.g., theme) but SHOULD NOT close the editor on this message.
+// SavedMsg is emitted after the editor successfully persists all pending
+// changes in response to Enter. The embedder SHOULD close the editor on this
+// message and apply any runtime-affecting changes (e.g., theme).
 type SavedMsg struct {
 	Settings usersettings.Settings
 }
 
-// CancelledMsg is emitted when the user closes the editor (Esc).
-// The embedder SHOULD close the editor on this message. All changes made
-// during the session were already persisted via SavedMsg events.
+// CancelledMsg is emitted when the user closes the editor without saving
+// (Esc). The embedder SHOULD close the editor on this message and discard
+// any in-flight changes; nothing was persisted during the session.
 type CancelledMsg struct{}
 
 // Model is the bubbletea submodel for editing user settings.
 //
 // The editor presents every editable setting as a labeled row with its
-// current value. A row cursor moves between rows; Tab/Space/Enter cycles
-// the cursor row's value to the next option (wrapping after the last), and
-// each cycle persists immediately. Esc closes the editor.
+// current value. A row cursor moves between rows; Tab/Space cycles the
+// cursor row's value to the next option (wrapping after the last) but does
+// NOT persist. Enter commits every cycled change to ~/.agent-runner/settings.yaml
+// and closes the editor; Esc closes the editor without writing anything.
 type Model struct {
 	settings       usersettings.Settings
 	theme          usersettings.Theme
@@ -160,11 +161,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		m.cursor = (m.cursor + 1) % len(fields)
 		m.saveErr = ""
-	case "tab", " ", "right", "l", "enter":
-		cmd := m.cycle(1)
-		return m, cmd
+	case "tab", " ", "right", "l":
+		m.cycle(1)
 	case "shift+tab", "left", "h":
-		cmd := m.cycle(-1)
+		m.cycle(-1)
+	case "enter":
+		cmd := m.commit()
 		return m, cmd
 	case "esc":
 		return m, func() tea.Msg { return CancelledMsg{} }
@@ -174,38 +176,41 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// cycle advances the cursor row's value to the next option (with wrap) and
-// persists immediately. delta is +1 to cycle forward, -1 to cycle backward.
-// On save error, the persisted value is left unchanged and the error is shown
-// inline; the next cycle attempt is independent.
-func (m *Model) cycle(delta int) tea.Cmd {
+// cycle advances the cursor row's value to the next option (with wrap) but
+// does NOT persist. The new value is held in the editor's local state until
+// the user presses Enter (commit) or Esc (discard). delta is +1 to cycle
+// forward, -1 to cycle backward.
+func (m *Model) cycle(delta int) {
 	f := fields[m.cursor]
 	currentIdx := m.currentOptionIndex(m.cursor)
 	nextIdx := (currentIdx + delta + len(f.options)) % len(f.options)
 	opt := f.options[nextIdx]
+	if opt.theme != "" {
+		m.theme = opt.theme
+	}
+	if opt.backend != "" {
+		m.backend = opt.backend
+	}
+	if opt.permissionMode != "" {
+		m.permissionMode = opt.permissionMode
+	}
+	m.saveErr = ""
+}
 
+// commit writes the editor's pending state to ~/.agent-runner/settings.yaml.
+// On success it emits SavedMsg so the embedder can close the editor and apply
+// runtime-affecting changes. On failure it surfaces the error inline and
+// keeps the editor open so the user can retry or Esc out.
+func (m *Model) commit() tea.Cmd {
 	next := m.settings
 	next.Theme = m.theme
 	next.AutonomousBackend = m.backend
 	next.AutonomousPermissionMode = m.permissionMode
-	if opt.theme != "" {
-		next.Theme = opt.theme
-	}
-	if opt.backend != "" {
-		next.AutonomousBackend = opt.backend
-	}
-	if opt.permissionMode != "" {
-		next.AutonomousPermissionMode = opt.permissionMode
-	}
-
 	if err := m.save(next); err != nil {
 		m.saveErr = fmt.Sprintf("Failed to save %s: %v", m.settingsPath(), err)
 		return nil
 	}
 	m.settings = next
-	m.theme = next.Theme
-	m.backend = next.AutonomousBackend
-	m.permissionMode = next.AutonomousPermissionMode
 	m.saveErr = ""
 	return func() tea.Msg { return SavedMsg{Settings: next} }
 }
@@ -256,7 +261,7 @@ func (m *Model) View() string {
 			lines = append(lines, "  "+wrapped)
 		}
 	}
-	lines = append(lines, "", tuistyle.HelpStyle.Render("↑↓ navigate · Tab/Space cycle · Esc close"))
+	lines = append(lines, "", tuistyle.HelpStyle.Render("↑↓ navigate · Tab/Space cycle · Enter save · Esc cancel"))
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	if m.saveErr != "" {
 		content = lipgloss.JoinVertical(lipgloss.Left, content, "", tuistyle.StatusFailed.Render(m.saveErr))

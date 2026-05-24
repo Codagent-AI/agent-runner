@@ -201,7 +201,7 @@ func TestEditorCursorMovementDoesNotCycleValue(t *testing.T) {
 	}
 }
 
-func TestEditorTabCyclesCursorRowForward(t *testing.T) {
+func TestEditorTabCyclesCursorRowForwardWithoutSaving(t *testing.T) {
 	var saved []usersettings.Settings
 	m := New(
 		usersettings.Settings{Theme: usersettings.ThemeLight},
@@ -212,26 +212,18 @@ func TestEditorTabCyclesCursorRowForward(t *testing.T) {
 	)
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = next.(*Model)
-	if cmd == nil {
-		t.Fatal("Tab on cursor row should emit a save command")
+	if cmd != nil {
+		t.Fatal("Tab should not emit a save command; saves are deferred to Enter")
 	}
 	if m.SelectedTheme() != usersettings.ThemeDark {
 		t.Fatalf("SelectedTheme() = %q, want dark (Tab should cycle Light → Dark)", m.SelectedTheme())
 	}
-	if len(saved) != 1 || saved[0].Theme != usersettings.ThemeDark {
-		t.Fatalf("saved settings = %#v, want one dark save", saved)
-	}
-	msg := cmd()
-	got, ok := msg.(SavedMsg)
-	if !ok {
-		t.Fatalf("command emitted %T, want SavedMsg", msg)
-	}
-	if got.Settings.Theme != usersettings.ThemeDark {
-		t.Fatalf("SavedMsg.Settings.Theme = %q, want dark", got.Settings.Theme)
+	if len(saved) != 0 {
+		t.Fatalf("saved settings = %#v, want no saves before Enter", saved)
 	}
 }
 
-func TestEditorSpaceCyclesCursorRowForward(t *testing.T) {
+func TestEditorSpaceCyclesCursorRowForwardWithoutSaving(t *testing.T) {
 	var saved []usersettings.Settings
 	m := New(
 		usersettings.Settings{Theme: usersettings.ThemeLight},
@@ -245,12 +237,53 @@ func TestEditorSpaceCyclesCursorRowForward(t *testing.T) {
 	if m.SelectedTheme() != usersettings.ThemeDark {
 		t.Fatalf("SelectedTheme() = %q, want dark (Space should cycle Light → Dark)", m.SelectedTheme())
 	}
-	if len(saved) != 1 {
-		t.Fatalf("saved count = %d, want 1", len(saved))
+	if len(saved) != 0 {
+		t.Fatalf("saved count = %d, want 0 (Space should not save)", len(saved))
 	}
 }
 
-func TestEditorEnterCyclesCursorRowForward(t *testing.T) {
+func TestEditorEnterCommitsAllPendingChangesAndEmitsSaved(t *testing.T) {
+	var saved []usersettings.Settings
+	m := New(
+		usersettings.Settings{Theme: usersettings.ThemeLight, AutonomousBackend: usersettings.BackendHeadless},
+		WithSave(func(s usersettings.Settings) error {
+			saved = append(saved, s)
+			return nil
+		}),
+	)
+	// Cycle Theme: Light → Dark.
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = next.(*Model)
+	// Move to Backend row and cycle Headless → Interactive.
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(*Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = next.(*Model)
+	if len(saved) != 0 {
+		t.Fatalf("saved count after two cycles = %d, want 0 (no save before Enter)", len(saved))
+	}
+	// Enter commits everything at once.
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Enter should emit a save command")
+	}
+	if len(saved) != 1 {
+		t.Fatalf("saved count = %d, want 1 (Enter triggers a single combined save)", len(saved))
+	}
+	if saved[0].Theme != usersettings.ThemeDark || saved[0].AutonomousBackend != usersettings.BackendInteractive {
+		t.Fatalf("saved settings = %#v, want theme=dark backend=interactive", saved[0])
+	}
+	msg := cmd()
+	got, ok := msg.(SavedMsg)
+	if !ok {
+		t.Fatalf("command emitted %T, want SavedMsg", msg)
+	}
+	if got.Settings.Theme != usersettings.ThemeDark || got.Settings.AutonomousBackend != usersettings.BackendInteractive {
+		t.Fatalf("SavedMsg.Settings = %#v, want dark + interactive", got.Settings)
+	}
+}
+
+func TestEditorEscDiscardsPendingChanges(t *testing.T) {
 	var saved []usersettings.Settings
 	m := New(
 		usersettings.Settings{Theme: usersettings.ThemeLight},
@@ -259,13 +292,19 @@ func TestEditorEnterCyclesCursorRowForward(t *testing.T) {
 			return nil
 		}),
 	)
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	// Cycle Theme but do NOT press Enter.
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = next.(*Model)
-	if m.SelectedTheme() != usersettings.ThemeDark {
-		t.Fatalf("SelectedTheme() = %q, want dark (Enter should cycle Light → Dark)", m.SelectedTheme())
+	// Esc closes without saving.
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd == nil {
+		t.Fatal("Esc should emit a close command")
 	}
-	if len(saved) != 1 {
-		t.Fatalf("saved count = %d, want 1", len(saved))
+	if msg := cmd(); msg != (CancelledMsg{}) {
+		t.Fatalf("command emitted %#v, want CancelledMsg{}", msg)
+	}
+	if len(saved) != 0 {
+		t.Fatalf("saved count = %d, want 0 (Esc should not persist pending changes)", len(saved))
 	}
 }
 
@@ -340,7 +379,7 @@ func TestEditorEscEmitsCancelledMsg(t *testing.T) {
 	}
 }
 
-func TestEditorSaveFailureLeavesPersistedValueUnchanged(t *testing.T) {
+func TestEditorEnterSaveFailureSurfacesInlineAndStaysOpen(t *testing.T) {
 	m := New(
 		usersettings.Settings{Theme: usersettings.ThemeLight},
 		WithSave(func(usersettings.Settings) error {
@@ -350,13 +389,18 @@ func TestEditorSaveFailureLeavesPersistedValueUnchanged(t *testing.T) {
 			return "/home/me/.agent-runner/settings.yaml", nil
 		}),
 	)
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	// Cycle Theme to Dark (pending), then Enter to commit; the save fails.
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = next.(*Model)
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(*Model)
 	if cmd != nil {
-		t.Fatal("failed save should not emit completion command")
+		t.Fatal("failed save should not emit SavedMsg")
 	}
-	if m.SelectedTheme() != usersettings.ThemeLight {
-		t.Fatalf("SelectedTheme() = %q, want light (failed save should not change persisted value)", m.SelectedTheme())
+	// The editor's pending value remains so the user can retry; the embedder
+	// keeps the editor open (no SavedMsg fires).
+	if m.SelectedTheme() != usersettings.ThemeDark {
+		t.Fatalf("SelectedTheme() = %q, want dark (pending value should remain after failed save so user can retry or Esc)", m.SelectedTheme())
 	}
 	view := m.View()
 	for _, want := range []string{"/home/me/.agent-runner/settings.yaml", "permission denied"} {
