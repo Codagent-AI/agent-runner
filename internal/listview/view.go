@@ -171,6 +171,9 @@ func (m *Model) renderBody() string {
 		return m.renderRunList(wt.Runs, m.worktreeTab.listCursor, &m.worktreeTab.listOffset)
 	case tabAll:
 		if m.allTab.subView == subViewPicker {
+			if len(m.allTab.dirs) == 0 {
+				return m.renderEmpty()
+			}
 			return m.renderAllPicker()
 		}
 		d := m.selectedAllDir()
@@ -202,8 +205,8 @@ func (m *Model) listMaxRows(hasHeader bool) int {
 
 func (m *Model) renderEmpty() string {
 	return "\n" +
-		dimStyle.Render("               No runs found for this directory.") + "\n\n" +
-		dimStyle.Render("               Press tab to view other scopes.")
+		dimStyle.Render("               Nothing to see here yet.") + "\n\n" +
+		dimStyle.Render("               From the new tab, select a workflow to get started.")
 }
 
 const (

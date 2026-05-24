@@ -387,6 +387,43 @@ func TestListView_RenderSubheaderExplainsTopLevelTabs(t *testing.T) {
 	}
 }
 
+func TestListView_RenderEmptyRunScopes(t *testing.T) {
+	tests := []struct {
+		name string
+		m    *Model
+	}{
+		{
+			name: "current dir no runs",
+			m: &Model{
+				activeTab: tabCurrentDir,
+			},
+		},
+		{
+			name: "all no directories",
+			m: &Model{
+				activeTab: tabAll,
+				allTab: allTabState{
+					subView: subViewPicker,
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitize(tt.m.renderBody())
+			for _, want := range []string{
+				"Nothing to see here yet",
+				"From the new tab, select a workflow to get started",
+			} {
+				if !strings.Contains(got, want) {
+					t.Fatalf("empty body = %q, want to contain %q", got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestListView_RenderSubheaderExplainsRunListDrilldowns(t *testing.T) {
 	tests := []struct {
 		name string
