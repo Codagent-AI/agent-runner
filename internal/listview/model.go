@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -47,6 +48,16 @@ func WithInitialTab(t InitialTab) func(*Model) {
 // WithVersion returns an option that sets the build version displayed in the header.
 func WithVersion(version string) func(*Model) {
 	return func(m *Model) { m.version = version }
+}
+
+// WithSplash shows the home-screen splash overlay for this listview session.
+func WithSplash(show bool) func(*Model) {
+	return func(m *Model) {
+		if show {
+			m.splashVisible = true
+			m.splashShown = true
+		}
+	}
 }
 
 // newTabState holds all state for the "new" tab (workflow browser + search).
@@ -99,6 +110,11 @@ type Model struct {
 	saveSettings func(usersettings.Settings) error
 	settingsPath func() (string, error)
 	applyTheme   func(usersettings.Theme)
+
+	splashVisible bool
+	splashShown   bool
+	splashFocus   int
+	now           func() time.Time
 
 	quitting bool
 }
@@ -171,6 +187,7 @@ func New(opts ...func(*Model)) (*Model, error) {
 		projectDir:   projectDir,
 		projectsRoot: projectsRoot,
 		cwd:          cwd,
+		now:          time.Now,
 	}
 	m.newTab.workflows = workflows
 	m.newTab.filtered = buildFilteredRows(workflows, "")
@@ -410,6 +427,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		return m, tea.Quit
 	}
+	if m.splashVisible {
+		return m.handleSplashKey(msg)
+	}
 	if m.settingsEditor != nil {
 		next, cmd := m.settingsEditor.Update(msg)
 		m.settingsEditor = next.(*settingseditor.Model)
@@ -420,6 +440,54 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleSearchKey(msg)
 	}
 	return m.handleListKey(msg)
+}
+
+func (m *Model) handleSplashKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "left", "right", "tab", "shift+tab":
+		m.splashFocus = 1 - m.splashFocus
+	case "enter", " ":
+		m.activateSplashButton()
+	case "esc":
+		m.dismissSplashForSession()
+	}
+	return m, nil
+}
+
+func (m *Model) activateSplashButton() {
+	if m.splashFocus == 1 {
+		m.dismissSplashPermanently()
+		return
+	}
+	m.dismissSplashForSession()
+}
+
+func (m *Model) dismissSplashForSession() {
+	m.splashVisible = false
+	m.splashShown = true
+}
+
+func (m *Model) dismissSplashPermanently() {
+	settings, err := m.loadUserSettings()
+	if err != nil {
+		m.splashVisible = false
+		m.splashShown = true
+		m.errMsg = fmt.Sprintf("could not save splash preference: %v", err)
+		return
+	}
+	now := time.Now
+	if m.now != nil {
+		now = m.now
+	}
+	settings.Splash.Dismissed = now().UTC().Format(time.RFC3339)
+	if err := m.saveUserSettings(settings); err != nil {
+		m.splashVisible = false
+		m.splashShown = true
+		m.errMsg = fmt.Sprintf("could not save splash preference: %v", err)
+		return
+	}
+	m.splashVisible = false
+	m.splashShown = true
 }
 
 func (m *Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

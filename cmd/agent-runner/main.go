@@ -523,7 +523,17 @@ func handleListWithDeps(initialTab listview.InitialTab, firstRun firstRunDeps) i
 		return result.exitCode
 	}
 
-	m, err := listview.New(listview.WithInitialTab(initialTab), listview.WithVersion(version))
+	settings, err := firstRun.load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+
+	m, err := listview.New(
+		listview.WithInitialTab(initialTab),
+		listview.WithVersion(version),
+		listview.WithSplash(shouldShowSplash(&settings, firstRun.isStdinTTY(), firstRun.isStdoutTTY())),
+	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
@@ -531,6 +541,10 @@ func handleListWithDeps(initialTab listview.InitialTab, firstRun firstRunDeps) i
 
 	sw := &switcher{list: m, mode: showingList}
 	return runSwitcher(sw)
+}
+
+func shouldShowSplash(settings *usersettings.Settings, stdinTTY, stdoutTTY bool) bool {
+	return settings != nil && stdinTTY && stdoutTTY && settings.Splash.Dismissed == ""
 }
 
 func runSwitcher(sw *switcher) int {

@@ -304,6 +304,83 @@ func TestAutonomousBackendAndPermissionModeCoexist(t *testing.T) {
 	}
 }
 
+func TestLoadSplashDismissed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeSettingsFile(t, home, "splash:\n  dismissed: 2026-05-24T00:00:00Z\n")
+
+	settings, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if settings.Splash.Dismissed != "2026-05-24T00:00:00Z" {
+		t.Fatalf("Splash.Dismissed = %q, want 2026-05-24T00:00:00Z", settings.Splash.Dismissed)
+	}
+}
+
+func TestSavePreservesSplashDismissedOnUnrelatedWrite(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeSettingsFile(t, home, "theme: light\nsplash:\n  dismissed: 2026-05-24T00:00:00Z\nexperimental_foo: 7\n")
+
+	settings, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	settings.Theme = ThemeDark
+	if err := Save(settings); err != nil {
+		t.Fatalf("Save() returned error: %v", err)
+	}
+
+	reloaded, err := Load()
+	if err != nil {
+		t.Fatalf("Reload() returned error: %v", err)
+	}
+	if reloaded.Splash.Dismissed != "2026-05-24T00:00:00Z" {
+		t.Fatalf("Splash.Dismissed = %q, want 2026-05-24T00:00:00Z", reloaded.Splash.Dismissed)
+	}
+	body, err := os.ReadFile(filepath.Join(home, ".agent-runner", "settings.yaml"))
+	if err != nil {
+		t.Fatalf("ReadFile(settings) returned error: %v", err)
+	}
+	for _, want := range []string{"splash:", "dismissed: 2026-05-24T00:00:00Z", "experimental_foo: 7"} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("settings body missing %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestSplashAndOnboardingDismissalsLoadIndependently(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeSettingsFile(t, home, "splash:\n  dismissed: 2026-05-24T00:00:00Z\nonboarding:\n  dismissed: 2026-05-23T00:00:00Z\n")
+
+	settings, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if settings.Splash.Dismissed != "2026-05-24T00:00:00Z" {
+		t.Fatalf("Splash.Dismissed = %q, want 2026-05-24T00:00:00Z", settings.Splash.Dismissed)
+	}
+	if settings.Onboarding.Dismissed != "2026-05-23T00:00:00Z" {
+		t.Fatalf("Onboarding.Dismissed = %q, want 2026-05-23T00:00:00Z", settings.Onboarding.Dismissed)
+	}
+}
+
+func TestSplashCompletedAtDoesNotSuppressSplash(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeSettingsFile(t, home, "splash:\n  completed_at: 2026-05-24T00:00:00Z\n")
+
+	settings, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if settings.Splash.Dismissed != "" {
+		t.Fatalf("Splash.Dismissed = %q, want unset", settings.Splash.Dismissed)
+	}
+}
+
 func TestSaveCreatesParentAndWritesMode0600(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

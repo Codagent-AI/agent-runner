@@ -38,6 +38,7 @@ type Settings struct {
 	AutonomousPermissionMode AutonomousPermissionMode
 	Setup                    SetupSettings
 	Onboarding               OnboardingSettings
+	Splash                   SplashSettings
 
 	raw *string
 }
@@ -49,6 +50,10 @@ type SetupSettings struct {
 type OnboardingSettings struct {
 	CompletedAt string `yaml:"completed_at,omitempty"`
 	Dismissed   string `yaml:"dismissed,omitempty"`
+}
+
+type SplashSettings struct {
+	Dismissed string `yaml:"dismissed,omitempty"`
 }
 
 var (
@@ -141,6 +146,10 @@ func parseSettingPair(settings *Settings, key, value *yaml.Node) error {
 	case "onboarding":
 		if onboarding, ok := parseOnboarding(value); ok {
 			settings.Onboarding = onboarding
+		}
+	case "splash":
+		if splash, ok := parseSplash(value); ok {
+			settings.Splash = splash
 		}
 	}
 	return nil
@@ -248,6 +257,21 @@ func parseOnboarding(value *yaml.Node) (OnboardingSettings, bool) {
 		}
 	}
 	return onboarding, true
+}
+
+func parseSplash(value *yaml.Node) (SplashSettings, bool) {
+	var splash SplashSettings
+	if value.Kind != yaml.MappingNode {
+		return splash, false
+	}
+	for j := 0; j+1 < len(value.Content); j += 2 {
+		k := value.Content[j]
+		v := value.Content[j+1]
+		if k.Value == "dismissed" && v.Kind == yaml.ScalarNode {
+			splash.Dismissed = v.Value
+		}
+	}
+	return splash, true
 }
 
 //nolint:gocritic // Save persists a complete settings value; keeping value semantics matches Load.
@@ -364,6 +388,14 @@ func marshalSettings(settings Settings) ([]byte, error) {
 		}
 	} else {
 		removeKey(root, "onboarding")
+	}
+
+	if settings.Splash.Dismissed != "" {
+		splash := mappingValue(root, "splash")
+		setTimestampScalar(splash, "dismissed", settings.Splash.Dismissed)
+		removeKey(splash, "completed_at")
+	} else {
+		removeKey(root, "splash")
 	}
 
 	var doc yaml.Node

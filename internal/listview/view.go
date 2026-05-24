@@ -22,10 +22,28 @@ func (m *Model) View() string {
 		return ""
 	}
 	view := m.viewBase()
+	if m.splashVisible {
+		return tuistyle.RenderOverlay(view, m.renderSplash(), m.termWidth, m.termHeight)
+	}
 	if m.settingsEditor != nil {
 		return tuistyle.RenderOverlay(view, m.settingsEditor.View(), m.termWidth, m.termHeight)
 	}
 	return view
+}
+
+func (m *Model) renderSplash() string {
+	lines := []string{
+		tuistyle.HeaderStyle.Render("Welcome to Agent Runner!"),
+		"",
+		"Select a workflow and press 'r' to get started.",
+		"",
+		"From this screen you can also:",
+		"  - Browse runs in the current directory, your worktrees, or across all projects",
+		"  - Press ? for help, s for settings, q to quit",
+		"",
+		tuistyle.RenderButtonRow([]string{"Got it", "Don't show again"}, m.splashFocus, 64),
+	}
+	return tuistyle.OverlayBox.Render(strings.Join(lines, "\n"))
 }
 
 func (m *Model) viewBase() string {

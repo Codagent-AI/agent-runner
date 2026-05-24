@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -721,6 +722,231 @@ func TestListModel_SettingsEditorCtrlCStillQuits(t *testing.T) {
 	}
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Fatalf("ctrl+c command = %T, want tea.QuitMsg", cmd())
+	}
+}
+
+func TestListView_SplashOverlayRendersContentButtonsAndUnderlyingList(t *testing.T) {
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.cwd = "/repo/project"
+	m.termWidth = 120
+	m.termHeight = 32
+	m.splashVisible = true
+	m.splashShown = true
+
+	view := sanitize(m.View())
+
+	for _, want := range []string{
+		"Welcome to Agent Runner!",
+		"Select a workflow and press 'r' to get started.",
+		"From this screen you can also:",
+		"- Browse runs in the current directory, your worktrees, or across all projects",
+		"- Press ? for help, s for settings, q to quit",
+		"[ Got it ]",
+		"[ Don't show again ]",
+		"Current Dir",
+		"implement",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("View() missing %q with splash visible:\n%s", want, view)
+		}
+	}
+	if m.splashFocus != 0 {
+		t.Fatalf("initial splash focus = %d, want Got it", m.splashFocus)
+	}
+}
+
+func TestListModel_SplashSwallowsListKeys(t *testing.T) {
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.cwd = "/repo/project"
+	m.newTab.workflows = []discovery.WorkflowEntry{
+		{CanonicalName: "onboarding:help", SourcePath: "builtin:onboarding/help.yaml", Namespace: "onboarding", Scope: discovery.ScopeBuiltin},
+	}
+	m.splashVisible = true
+	m.splashShown = true
+	m.loadSettings = func() (usersettings.Settings, error) {
+		t.Fatal("splash should not let s open settings")
+		return usersettings.Settings{}, nil
+	}
+
+	for _, key := range []string{"s", "?", "r", "q", "up", "down", "right"} {
+		beforeTab := m.activeTab
+		beforeCursor := m.currentDirCursor
+		var cmd tea.Cmd
+		if key == "up" || key == "down" || key == "right" {
+			var keyType tea.KeyType
+			switch key {
+			case "up":
+				keyType = tea.KeyUp
+			case "down":
+				keyType = tea.KeyDown
+			case "right":
+				keyType = tea.KeyRight
+			}
+			m, cmd = pressSpecialKey(m, keyType)
+		} else {
+			m, cmd = pressKey(m, key)
+		}
+		if cmd != nil {
+			t.Fatalf("%q produced a command while splash is visible", key)
+		}
+		if !m.splashVisible {
+			t.Fatalf("%q closed the splash unexpectedly", key)
+		}
+		if m.activeTab != beforeTab || m.currentDirCursor != beforeCursor {
+			t.Fatalf("%q changed list state: tab %v->%v cursor %d->%d", key, beforeTab, m.activeTab, beforeCursor, m.currentDirCursor)
+		}
+		if m.settingsEditor != nil {
+			t.Fatalf("%q opened settings while splash is visible", key)
+		}
+		if m.quitting {
+			t.Fatalf("%q quit while splash is visible", key)
+		}
+	}
+
+	m.splashFocus = 0
+	m, cmd := pressSpecialKey(m, tea.KeyTab)
+	if cmd != nil {
+		t.Fatal("tab should not produce a command while splash is visible")
+	}
+	if m.splashFocus != 1 {
+		t.Fatalf("splash focus after tab = %d, want Don't show again", m.splashFocus)
+	}
+	m, _ = pressSpecialKey(m, tea.KeyShiftTab)
+	if m.splashFocus != 0 {
+		t.Fatalf("splash focus after shift+tab = %d, want Got it", m.splashFocus)
+	}
+}
+
+func TestListModel_SplashGotItClosesWithoutSaving(t *testing.T) {
+	saveCount := 0
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.splashVisible = true
+	m.splashShown = true
+	m.saveSettings = func(usersettings.Settings) error {
+		saveCount++
+		return nil
+	}
+
+	m, cmd := pressSpecialKey(m, tea.KeyEnter)
+
+	if cmd != nil {
+		t.Fatal("Got it should not produce a command")
+	}
+	if m.splashVisible {
+		t.Fatal("Got it should close the splash")
+	}
+	if saveCount != 0 {
+		t.Fatalf("Got it saved settings %d times, want 0", saveCount)
+	}
+}
+
+func TestListModel_SplashEscClosesWithoutSaving(t *testing.T) {
+	saveCount := 0
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.splashVisible = true
+	m.splashShown = true
+	m.saveSettings = func(usersettings.Settings) error {
+		saveCount++
+		return nil
+	}
+
+	m, _ = pressSpecialKey(m, tea.KeyEsc)
+
+	if m.splashVisible {
+		t.Fatal("Esc should close the splash")
+	}
+	if saveCount != 0 {
+		t.Fatalf("Esc saved settings %d times, want 0", saveCount)
+	}
+}
+
+func TestListModel_SplashDontShowAgainPersistsDismissal(t *testing.T) {
+	var saved []usersettings.Settings
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.splashVisible = true
+	m.splashShown = true
+	m.splashFocus = 1
+	m.now = func() time.Time { return time.Date(2026, 5, 24, 12, 30, 0, 0, time.UTC) }
+	m.loadSettings = func() (usersettings.Settings, error) {
+		return usersettings.Settings{
+			Theme:      usersettings.ThemeDark,
+			Onboarding: usersettings.OnboardingSettings{Dismissed: "2026-05-23T00:00:00Z"},
+		}, nil
+	}
+	m.saveSettings = func(settings usersettings.Settings) error {
+		saved = append(saved, settings)
+		return nil
+	}
+
+	m, cmd := pressSpecialKey(m, tea.KeyEnter)
+
+	if cmd != nil {
+		t.Fatal("Don't show again should not produce a command")
+	}
+	if m.splashVisible {
+		t.Fatal("Don't show again should close the splash")
+	}
+	if len(saved) != 1 {
+		t.Fatalf("saved count = %d, want 1", len(saved))
+	}
+	if saved[0].Splash.Dismissed != "2026-05-24T12:30:00Z" {
+		t.Fatalf("Splash.Dismissed = %q, want 2026-05-24T12:30:00Z", saved[0].Splash.Dismissed)
+	}
+	if saved[0].Theme != usersettings.ThemeDark || saved[0].Onboarding.Dismissed != "2026-05-23T00:00:00Z" {
+		t.Fatalf("saved settings lost unrelated fields: %#v", saved[0])
+	}
+}
+
+func TestListModel_SplashSaveFailureClosesAndShowsInlineError(t *testing.T) {
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.termWidth = 100
+	m.termHeight = 30
+	m.splashVisible = true
+	m.splashShown = true
+	m.splashFocus = 1
+	m.now = func() time.Time { return time.Date(2026, 5, 24, 12, 30, 0, 0, time.UTC) }
+	m.loadSettings = func() (usersettings.Settings, error) {
+		return usersettings.Settings{}, nil
+	}
+	m.saveSettings = func(usersettings.Settings) error {
+		return errors.New("permission denied")
+	}
+
+	m, _ = pressSpecialKey(m, tea.KeyEnter)
+
+	if m.splashVisible {
+		t.Fatal("failed Don't show again save should still close splash")
+	}
+	view := sanitize(m.View())
+	if !strings.Contains(view, "could not save splash preference") || !strings.Contains(view, "permission denied") {
+		t.Fatalf("View() missing splash save failure:\n%s", view)
+	}
+}
+
+func TestListModel_SplashCtrlCQuitsWithoutSaving(t *testing.T) {
+	saveCount := 0
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.splashVisible = true
+	m.splashShown = true
+	m.splashFocus = 1
+	m.saveSettings = func(usersettings.Settings) error {
+		saveCount++
+		return nil
+	}
+
+	m, cmd := pressSpecialKey(m, tea.KeyCtrlC)
+
+	if !m.quitting {
+		t.Fatal("ctrl+c should mark list as quitting")
+	}
+	if cmd == nil {
+		t.Fatal("ctrl+c should return tea.Quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("ctrl+c command = %T, want tea.QuitMsg", cmd())
+	}
+	if saveCount != 0 {
+		t.Fatalf("ctrl+c saved settings %d times, want 0", saveCount)
 	}
 }
 
