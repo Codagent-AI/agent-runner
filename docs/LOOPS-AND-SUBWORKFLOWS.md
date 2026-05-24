@@ -219,12 +219,19 @@ steps:
 
   - id: run-validator
     workflow: run-validator.yaml
+    params:
+      task_file: "{{task_file}}"
 ```
 
 **workflows/core/run-validator.yaml** -- counted retry loop with capture and flow control:
 
 ```yaml
 name: run-validator
+params:
+  - name: task_file
+    required: false
+    default: ""
+
 steps:
   - id: validator-retry
     loop:
@@ -232,7 +239,12 @@ steps:
     steps:
       - id: run-validator
         mode: shell
-        command: agent-validator run --report
+        command: |
+          if [ -n "{{task_file}}" ]; then
+            agent-validator run --report --enable-review task-compliance --context-file "{{task_file}}"
+          else
+            agent-validator run --report
+          fi
         capture: validator_output
         continue_on_failure: true
         break_if: success

@@ -38,10 +38,11 @@ type ExecutionContext struct {
 	NestingPath   []NestingSegment
 	ParentContext *ExecutionContext
 
-	WorkflowFile        string
-	WorkflowName        string
-	WorkflowDescription string
-	AutonomousBackend   string
+	WorkflowFile             string
+	WorkflowName             string
+	WorkflowDescription      string
+	AutonomousBackend        string
+	AutonomousPermissionMode string
 
 	// SessionDir is the absolute path of the run's session directory
 	// (e.g. ~/.agent-runner/projects/<encoded-cwd>/runs/<run-id>). Exposed to
@@ -87,21 +88,22 @@ type ExecutionContext struct {
 
 // RootContextOptions configures a new root execution context.
 type RootContextOptions struct {
-	Params              map[string]string
-	WorkflowFile        string
-	WorkflowName        string
-	WorkflowDescription string
-	AutonomousBackend   string
-	SessionDir          string
-	EngineRef           interface{} // internal/engine.Engine
-	ProfileStore        interface{} // *config.Config
-	SessionIDs          map[string]string
-	SessionProfiles     map[string]string
-	CapturedVariables   map[string]CapturedValue
-	AuditLogger         audit.EventLogger
-	NamedSessions       map[string]string
-	NamedSessionDecls   map[string]string
-	UIStepHandler       func(*UIStepRequest) (UIStepResult, error)
+	Params                   map[string]string
+	WorkflowFile             string
+	WorkflowName             string
+	WorkflowDescription      string
+	AutonomousBackend        string
+	AutonomousPermissionMode string
+	SessionDir               string
+	EngineRef                interface{} // internal/engine.Engine
+	ProfileStore             interface{} // *config.Config
+	SessionIDs               map[string]string
+	SessionProfiles          map[string]string
+	CapturedVariables        map[string]CapturedValue
+	AuditLogger              audit.EventLogger
+	NamedSessions            map[string]string
+	NamedSessionDecls        map[string]string
+	UIStepHandler            func(*UIStepRequest) (UIStepResult, error)
 }
 
 // NewRootContext creates a top-level execution context.
@@ -137,24 +139,25 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 	}
 
 	return &ExecutionContext{
-		Params:              params,
-		SessionIDs:          sessionIDs,
-		SessionProfiles:     sessionProfiles,
-		CapturedVariables:   capturedVars,
-		LastStepOutcome:     nil,
-		NestingPath:         []NestingSegment{},
-		ParentContext:       nil,
-		WorkflowFile:        opts.WorkflowFile,
-		WorkflowName:        opts.WorkflowName,
-		WorkflowDescription: opts.WorkflowDescription,
-		AutonomousBackend:   opts.AutonomousBackend,
-		SessionDir:          opts.SessionDir,
-		EngineRef:           opts.EngineRef,
-		ProfileStore:        opts.ProfileStore,
-		AuditLogger:         opts.AuditLogger,
-		NamedSessions:       namedSessions,
-		NamedSessionDecls:   namedSessionDecls,
-		UIStepHandler:       opts.UIStepHandler,
+		Params:                   params,
+		SessionIDs:               sessionIDs,
+		SessionProfiles:          sessionProfiles,
+		CapturedVariables:        capturedVars,
+		LastStepOutcome:          nil,
+		NestingPath:              []NestingSegment{},
+		ParentContext:            nil,
+		WorkflowFile:             opts.WorkflowFile,
+		WorkflowName:             opts.WorkflowName,
+		WorkflowDescription:      opts.WorkflowDescription,
+		AutonomousBackend:        opts.AutonomousBackend,
+		AutonomousPermissionMode: opts.AutonomousPermissionMode,
+		SessionDir:               opts.SessionDir,
+		EngineRef:                opts.EngineRef,
+		ProfileStore:             opts.ProfileStore,
+		AuditLogger:              opts.AuditLogger,
+		NamedSessions:            namedSessions,
+		NamedSessionDecls:        namedSessionDecls,
+		UIStepHandler:            opts.UIStepHandler,
 	}
 }
 
@@ -226,28 +229,29 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 	}
 
 	return &ExecutionContext{
-		Params:              params,
-		SessionIDs:          sessionIDs,
-		SessionProfiles:     sessionProfiles,
-		CapturedVariables:   capturedVars,
-		LastStepOutcome:     nil,
-		LastSessionStepID:   parent.LastSessionStepID,
-		NestingPath:         nestingPath,
-		ParentContext:       parent,
-		WorkflowFile:        parent.WorkflowFile,
-		WorkflowName:        parent.WorkflowName,
-		WorkflowDescription: parent.WorkflowDescription,
-		AutonomousBackend:   parent.AutonomousBackend,
-		SessionDir:          parent.SessionDir,
-		EngineRef:           parent.EngineRef,
-		ProfileStore:        parent.ProfileStore,
-		AuditLogger:         parent.AuditLogger,
-		WorkflowResumed:     parent.WorkflowResumed,
-		FlushState:          parent.FlushState,
-		SuspendHook:         parent.SuspendHook,
-		ResumeHook:          parent.ResumeHook,
-		PrepareStepHook:     parent.PrepareStepHook,
-		UIStepHandler:       parent.UIStepHandler,
+		Params:                   params,
+		SessionIDs:               sessionIDs,
+		SessionProfiles:          sessionProfiles,
+		CapturedVariables:        capturedVars,
+		LastStepOutcome:          nil,
+		LastSessionStepID:        parent.LastSessionStepID,
+		NestingPath:              nestingPath,
+		ParentContext:            parent,
+		WorkflowFile:             parent.WorkflowFile,
+		WorkflowName:             parent.WorkflowName,
+		WorkflowDescription:      parent.WorkflowDescription,
+		AutonomousBackend:        parent.AutonomousBackend,
+		AutonomousPermissionMode: parent.AutonomousPermissionMode,
+		SessionDir:               parent.SessionDir,
+		EngineRef:                parent.EngineRef,
+		ProfileStore:             parent.ProfileStore,
+		AuditLogger:              parent.AuditLogger,
+		WorkflowResumed:          parent.WorkflowResumed,
+		FlushState:               parent.FlushState,
+		SuspendHook:              parent.SuspendHook,
+		ResumeHook:               parent.ResumeHook,
+		PrepareStepHook:          parent.PrepareStepHook,
+		UIStepHandler:            parent.UIStepHandler,
 		// Named session maps are shared by reference so writes from any child
 		// are immediately visible to parents and sibling sub-workflows.
 		NamedSessions:     parent.NamedSessions,
@@ -302,28 +306,29 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 	}
 
 	return &ExecutionContext{
-		Params:              params,
-		SessionIDs:          sessionIDs,
-		SessionProfiles:     sessionProfiles,
-		CapturedVariables:   capturedVars,
-		LastStepOutcome:     nil,
-		LastSessionStepID:   parent.LastSessionStepID,
-		NestingPath:         nestingPath,
-		ParentContext:       parent,
-		WorkflowFile:        opts.WorkflowFile,
-		WorkflowName:        parent.WorkflowName,
-		WorkflowDescription: parent.WorkflowDescription,
-		AutonomousBackend:   parent.AutonomousBackend,
-		SessionDir:          parent.SessionDir,
-		EngineRef:           engineRef,
-		ProfileStore:        parent.ProfileStore,
-		AuditLogger:         parent.AuditLogger,
-		WorkflowResumed:     parent.WorkflowResumed,
-		FlushState:          parent.FlushState,
-		SuspendHook:         parent.SuspendHook,
-		ResumeHook:          parent.ResumeHook,
-		PrepareStepHook:     parent.PrepareStepHook,
-		UIStepHandler:       parent.UIStepHandler,
+		Params:                   params,
+		SessionIDs:               sessionIDs,
+		SessionProfiles:          sessionProfiles,
+		CapturedVariables:        capturedVars,
+		LastStepOutcome:          nil,
+		LastSessionStepID:        parent.LastSessionStepID,
+		NestingPath:              nestingPath,
+		ParentContext:            parent,
+		WorkflowFile:             opts.WorkflowFile,
+		WorkflowName:             parent.WorkflowName,
+		WorkflowDescription:      parent.WorkflowDescription,
+		AutonomousBackend:        parent.AutonomousBackend,
+		AutonomousPermissionMode: parent.AutonomousPermissionMode,
+		SessionDir:               parent.SessionDir,
+		EngineRef:                engineRef,
+		ProfileStore:             parent.ProfileStore,
+		AuditLogger:              parent.AuditLogger,
+		WorkflowResumed:          parent.WorkflowResumed,
+		FlushState:               parent.FlushState,
+		SuspendHook:              parent.SuspendHook,
+		ResumeHook:               parent.ResumeHook,
+		PrepareStepHook:          parent.PrepareStepHook,
+		UIStepHandler:            parent.UIStepHandler,
 		// Named session maps are shared by reference so writes from a child
 		// sub-workflow are immediately visible to the parent and later siblings.
 		NamedSessions:     parent.NamedSessions,

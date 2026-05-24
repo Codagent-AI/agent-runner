@@ -32,11 +32,7 @@ func (m *Model) viewBase() string {
 	var b strings.Builder
 
 	b.WriteString("\n")
-	b.WriteString(m.renderHeader())
-	b.WriteString("\n\n")
-	b.WriteString(m.renderTabs())
-	b.WriteString("\n\n")
-	b.WriteString(tuistyle.RenderRule(m.termWidth))
+	b.WriteString(m.renderChrome())
 	b.WriteString("\n\n")
 	b.WriteString(m.renderSubheader())
 	b.WriteString("\n\n")
@@ -65,7 +61,7 @@ func (m *Model) viewBase() string {
 		b.WriteString(tuistyle.ScreenMargin + errStyle.Render(m.errMsg))
 	}
 	b.WriteString("\n")
-	b.WriteString(m.renderHelp())
+	b.WriteString(m.renderHelpWithCwd())
 	b.WriteString("\n")
 
 	return b.String()
@@ -86,34 +82,20 @@ func countLines(s string) int {
 
 // bodyHeight returns the vertical space reserved for the body region —
 // everything between the subheader blank and the bottom divider. Chrome
-// consists of: leading blank + header + blank + tabs + blank + rule +
-// blank + subheader + blank (above) and blank + rule + reserved-error-row
-// + help + trailing blank (below) = 15 rows.
+// consists of: leading blank + chrome(3: tabs/blank/rule with logo) +
+// blank + subheader + blank (above = 7) and blank + rule +
+// reserved-error-row + help + trailing blank (below = 5) = 12 rows.
 func (m *Model) bodyHeight() int {
 	if m.termHeight == 0 {
 		return 1 << 30
 	}
-	return max(3, m.termHeight-15)
+	return max(3, m.termHeight-12)
 }
 
-func (m *Model) renderHeader() string {
-	const prefix = tuistyle.ScreenMargin
-	title := "Agent Runner"
-	if m.version != "" {
-		title += " v" + m.version
-	}
-	left := prefix + headerStyle.Render(title)
-	if m.termWidth <= 0 {
-		return left
-	}
-	cwdText := sanitize(shortenPath(m.cwd))
-	leftW := len(prefix) + runewidth.StringWidth(title)
-	rightW := runewidth.StringWidth(cwdText)
-	if leftW+rightW+2 > m.termWidth {
-		return left
-	}
-	pad := m.termWidth - leftW - rightW
-	return left + strings.Repeat(" ", pad) + dimStyle.Render(cwdText)
+func (m *Model) renderChrome() string {
+	tabs := m.renderTabs()
+	tabsW := runewidth.StringWidth(tuistyle.Sanitize(tabs))
+	return tuistyle.RenderChromeWithLogo(tabs, tabsW, m.termWidth)
 }
 
 func (m *Model) renderTabs() string {
@@ -477,6 +459,10 @@ func (m *Model) renderAllPicker() string {
 }
 
 func (m *Model) renderHelp() string {
+	return tuistyle.ScreenMargin + helpStyle.Render(strings.Join(m.helpParts(), "   "))
+}
+
+func (m *Model) helpParts() []string {
 	var parts []string
 
 	switch m.activeTab {
@@ -530,5 +516,11 @@ func (m *Model) renderHelp() string {
 		}
 	}
 
-	return tuistyle.ScreenMargin + helpStyle.Render(strings.Join(parts, "   "))
+	return parts
+}
+
+func (m *Model) renderHelpWithCwd() string {
+	helpText := strings.Join(m.helpParts(), "   ")
+	cwd := sanitize(shortenPath(m.cwd))
+	return tuistyle.RenderHelpWithCwd(helpText, cwd, m.termWidth)
 }

@@ -231,7 +231,7 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 			m.loadErr = "audit log: " + err.Error()
 		}
 	}
-	events = filterAuditEventsForWorkflowState(events, state.WorkflowHash, tree.Root, currentStepID(&state))
+	events = filterAuditEventsForWorkflowState(events, state.WorkflowHash, tree.Root, currentStepID(&state), state.Completed)
 	for _, e := range events {
 		tree.ApplyEvent(e)
 	}
@@ -677,7 +677,7 @@ func (m *Model) handleOutputChunkMsg(msg liverun.OutputChunkMsg) {
 	m.applyOutputChunk(msg)
 	lineCount := m.rebuildRanges()
 	if m.shouldSyncAutoFollowDetail() {
-		m.syncLogToSelection()
+		m.syncLogToAutoFollowTail()
 	}
 	m.clampLogOffset(lineCount)
 }
@@ -689,7 +689,7 @@ func (m *Model) handleStepStateMsg(msg liverun.StepStateMsg) {
 	}
 	lineCount := m.rebuildRanges()
 	if m.shouldSyncAutoFollowDetail() {
-		m.syncLogToSelection()
+		m.syncLogToAutoFollowTail()
 	}
 	m.clampLogOffset(lineCount)
 }
@@ -763,7 +763,7 @@ func (m *Model) handleRefreshMsg() tea.Cmd {
 	}
 	lineCount := m.rebuildRanges()
 	if m.shouldSyncAutoFollowDetail() {
-		m.syncLogToSelection()
+		m.syncLogToAutoFollowTail()
 	}
 	m.clampLogOffset(lineCount)
 	if !m.hasLiveUpdates() {
@@ -893,12 +893,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.logOffset++
 		m.syncSelectionToLog()
 	case "l":
-		if m.liveUI != nil {
-			m.followLiveUI()
-			return m, nil
-		}
-		m.autoFollow = true
-		m.applyAutoFollowCursor()
+		m.handleFollowKey()
 	case "r":
 		return m.handleResumeKey()
 	case "g":
@@ -909,6 +904,20 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	return m, nil
+}
+
+func (m *Model) handleFollowKey() {
+	if m.liveUI != nil {
+		m.followLiveUI()
+		return
+	}
+	m.autoFollow = true
+	m.applyAutoFollowCursor()
+	lineCount := m.rebuildRanges()
+	if m.shouldSyncAutoFollowDetail() {
+		m.syncLogToAutoFollowTail()
+	}
+	m.clampLogOffset(lineCount)
 }
 
 func (m *Model) handleResumeKey() (tea.Model, tea.Cmd) {
@@ -1184,6 +1193,38 @@ func (m *Model) syncLogToSelection() {
 			return
 		}
 	}
+}
+
+func (m *Model) syncLogToAutoFollowTail() {
+	if m.syncLogToNodeTail(m.autoFollowDetailNode()) {
+		return
+	}
+	m.syncLogToSelection()
+}
+
+func (m *Model) autoFollowDetailNode() *StepNode {
+	if active := m.tree.FindByPrefix(m.activeStepPrefix); active != nil {
+		return active
+	}
+	return m.selectedNode()
+}
+
+func (m *Model) syncLogToNodeTail(node *StepNode) bool {
+	if node == nil {
+		return false
+	}
+	bodyH := m.bodyHeight()
+	for _, r := range m.stepRanges {
+		if r.node == node {
+			m.logOffset = min(max(r.startLine, r.endLine-bodyH), m.maxLogOffset())
+			m.logAnchor = stepLineAnchor{
+				stepKey:           node.NodeKey(),
+				lineOffsetInBlock: m.logOffset - r.startLine,
+			}
+			return true
+		}
+	}
+	return false
 }
 
 // syncSelectionToLog updates the step-list cursor to the latest started step

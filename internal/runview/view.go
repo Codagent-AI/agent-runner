@@ -40,17 +40,12 @@ func (m *Model) View() string {
 	var b strings.Builder
 
 	b.WriteString("\n")
-	b.WriteString(m.renderHeader())
-	b.WriteString("\n\n")
-	b.WriteString(m.renderBreadcrumb())
+	b.WriteString(m.renderChrome())
 	if reason := m.renderFailureReason(); reason != "" {
 		b.WriteString("\n")
 		b.WriteString(reason)
 	}
 	b.WriteString("\n\n")
-
-	b.WriteString(m.renderRule())
-	b.WriteString("\n")
 
 	swHeader := m.renderSubWorkflowHeader()
 	if swHeader != "" {
@@ -81,28 +76,16 @@ func (m *Model) View() string {
 	b.WriteString("\n")
 	b.WriteString(m.renderRule())
 	b.WriteString("\n")
-	b.WriteString(m.renderHelpBar())
+	b.WriteString(m.renderHelpBarWithCwd())
 	b.WriteString("\n")
 
 	return b.String()
 }
 
-func (m *Model) renderHeader() string {
-	const prefix = tuistyle.ScreenMargin
-	const title = "Agent Runner"
-	left := prefix + tuistyle.HeaderStyle.Render(title)
-	if m.termWidth <= 0 || m.originCwd == "" {
-		return left
-	}
-
-	cwdText := tuistyle.Sanitize(tuistyle.ShortenPath(m.originCwd))
-	leftW := len(prefix) + runewidth.StringWidth(title)
-	rightW := runewidth.StringWidth(cwdText)
-	if leftW+rightW+2 > m.termWidth {
-		return left
-	}
-	pad := m.termWidth - leftW - rightW
-	return left + strings.Repeat(" ", pad) + tuistyle.PathStyle.Render(cwdText)
+func (m *Model) renderChrome() string {
+	crumb := m.renderBreadcrumb()
+	crumbW := runewidth.StringWidth(tuistyle.Sanitize(crumb))
+	return tuistyle.RenderChromeWithLogo(crumb, crumbW, m.termWidth)
 }
 
 func (m *Model) renderRule() string {
@@ -412,6 +395,16 @@ func truncateSidebarName(name string) string {
 }
 
 func (m *Model) renderHelpBar() string {
+	return tuistyle.ScreenMargin + tuistyle.HelpStyle.Render(strings.Join(m.helpBarParts(), "   "))
+}
+
+func (m *Model) renderHelpBarWithCwd() string {
+	helpText := strings.Join(m.helpBarParts(), "   ")
+	cwd := tuistyle.Sanitize(tuistyle.ShortenPath(m.originCwd))
+	return tuistyle.RenderHelpWithCwd(helpText, cwd, m.termWidth)
+}
+
+func (m *Model) helpBarParts() []string {
 	if m.liveUIVisible() {
 		parts := []string{"↑↓ step", "j/k scroll"}
 		if sel := m.selectedNode(); sel != nil && (sel.Type == NodeLoop || sel.Type == NodeSubWorkflow || sel.Type == NodeIteration) {
@@ -435,7 +428,7 @@ func (m *Model) renderHelpBar() string {
 			parts = append(parts, "l follow")
 		}
 		parts = append(parts, "q quit")
-		return tuistyle.ScreenMargin + tuistyle.HelpStyle.Render(strings.Join(parts, "   "))
+		return parts
 	}
 
 	sel := m.selectedNode()
@@ -482,7 +475,7 @@ func (m *Model) renderHelpBar() string {
 
 	parts = append(parts, "? legend", "q quit")
 
-	return tuistyle.ScreenMargin + tuistyle.HelpStyle.Render(strings.Join(parts, "   "))
+	return parts
 }
 
 func (m *Model) selectedNodeHasTruncatedOutput() bool {
@@ -544,13 +537,9 @@ func (m *Model) bodyHeight() int {
 	if m.termHeight == 0 {
 		return 20
 	}
-	chrome := 10
+	chrome := 9
 	chrome += m.subWorkflowHeaderChromeLines()
-	h := m.termHeight - chrome
-	if h < 5 {
-		return 5
-	}
-	return h
+	return max(5, m.termHeight-chrome)
 }
 
 func (m *Model) subWorkflowHeaderChromeLines() int {

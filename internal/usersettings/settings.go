@@ -25,11 +25,19 @@ const (
 	BackendInteractiveClaude AutonomousBackend = "interactive-claude"
 )
 
+type AutonomousPermissionMode string
+
+const (
+	PermissionModeConservative AutonomousPermissionMode = "conservative"
+	PermissionModeYOLO         AutonomousPermissionMode = "yolo"
+)
+
 type Settings struct {
-	Theme             Theme
-	AutonomousBackend AutonomousBackend
-	Setup             SetupSettings
-	Onboarding        OnboardingSettings
+	Theme                    Theme
+	AutonomousBackend        AutonomousBackend
+	AutonomousPermissionMode AutonomousPermissionMode
+	Setup                    SetupSettings
+	Onboarding               OnboardingSettings
 
 	raw *string
 }
@@ -105,7 +113,6 @@ func Load() (Settings, error) {
 			return Settings{}, err
 		}
 	}
-
 	return settings, nil
 }
 
@@ -121,6 +128,12 @@ func parseSettingPair(settings *Settings, key, value *yaml.Node) error {
 			return err
 		}
 		settings.AutonomousBackend = backend
+	case "autonomous_permission_mode":
+		mode, err := parseAutonomousPermissionMode(value)
+		if err != nil {
+			return err
+		}
+		settings.AutonomousPermissionMode = mode
 	case "setup":
 		if setup, ok := parseSetup(value); ok {
 			settings.Setup = setup
@@ -165,6 +178,40 @@ func parseAutonomousBackend(value *yaml.Node) (AutonomousBackend, error) {
 
 func invalidAutonomousBackendError(value string) error {
 	return fmt.Errorf("invalid autonomous_backend %q (valid values: %s, %s, %s)", value, BackendHeadless, BackendInteractive, BackendInteractiveClaude)
+}
+
+func parseAutonomousPermissionMode(value *yaml.Node) (AutonomousPermissionMode, error) {
+	if value.Kind != yaml.ScalarNode {
+		return "", invalidAutonomousPermissionModeError(value.Value)
+	}
+	switch AutonomousPermissionMode(value.Value) {
+	case PermissionModeConservative:
+		return PermissionModeConservative, nil
+	case PermissionModeYOLO:
+		return PermissionModeYOLO, nil
+	default:
+		return "", invalidAutonomousPermissionModeError(value.Value)
+	}
+}
+
+func invalidAutonomousPermissionModeError(value string) error {
+	return fmt.Errorf("invalid autonomous_permission_mode %q (valid values: %s, %s)", value, PermissionModeConservative, PermissionModeYOLO)
+}
+
+func EffectiveAutonomousPermissionMode(mode AutonomousPermissionMode) AutonomousPermissionMode {
+	if mode == PermissionModeYOLO {
+		return PermissionModeYOLO
+	}
+	return PermissionModeConservative
+}
+
+func validAutonomousPermissionMode(mode AutonomousPermissionMode) bool {
+	switch mode {
+	case PermissionModeConservative, PermissionModeYOLO:
+		return true
+	default:
+		return false
+	}
 }
 
 func parseSetup(value *yaml.Node) (SetupSettings, bool) {
@@ -284,6 +331,15 @@ func marshalSettings(settings Settings) ([]byte, error) {
 		setScalar(root, "autonomous_backend", string(settings.AutonomousBackend))
 	} else {
 		removeKey(root, "autonomous_backend")
+	}
+
+	if settings.AutonomousPermissionMode != "" {
+		if !validAutonomousPermissionMode(settings.AutonomousPermissionMode) {
+			return nil, invalidAutonomousPermissionModeError(string(settings.AutonomousPermissionMode))
+		}
+		setScalar(root, "autonomous_permission_mode", string(settings.AutonomousPermissionMode))
+	} else {
+		removeKey(root, "autonomous_permission_mode")
 	}
 
 	if settings.Setup.CompletedAt != "" {

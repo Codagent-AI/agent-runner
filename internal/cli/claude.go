@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+
+	"github.com/codagent/agent-runner/internal/usersettings"
 )
 
 // ClaudeAdapter constructs invocation args for the Claude CLI.
@@ -47,7 +49,11 @@ func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 	}
 
 	if context.IsAutonomous() {
-		args = append(args, "--permission-mode", "acceptEdits")
+		permissionMode := "acceptEdits"
+		if usersettings.EffectiveAutonomousPermissionMode(input.PermissionMode) == usersettings.PermissionModeYOLO {
+			permissionMode = "bypassPermissions"
+		}
+		args = append(args, "--permission-mode", permissionMode)
 	}
 
 	if context.IsHeadless() {

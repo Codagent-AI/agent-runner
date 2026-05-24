@@ -210,7 +210,7 @@ func (f *FileTailer) ReadSince(sessionDir string) ([]RawEvent, error) {
 	return events, err
 }
 
-func filterAuditEventsForWorkflowState(events []RawEvent, workflowHash string, root *StepNode, currentStepID string) []RawEvent {
+func filterAuditEventsForWorkflowState(events []RawEvent, workflowHash string, root *StepNode, currentStepID string, runCompleted bool) []RawEvent {
 	if workflowHash == "" || len(events) == 0 {
 		return events
 	}
@@ -228,7 +228,7 @@ func filterAuditEventsForWorkflowState(events []RawEvent, workflowHash string, r
 			continue
 		}
 		if segmentMatches {
-			if currentIndex >= 0 && (event.Type == "run_end" || eventIsAfterCurrentTopLevelStep(event, root, currentIndex)) {
+			if currentIndex >= 0 && !runCompleted && (event.Type == "run_end" || eventIsAfterCurrentTopLevelStep(event, root, currentIndex)) {
 				continue
 			}
 			filtered = append(filtered, event)

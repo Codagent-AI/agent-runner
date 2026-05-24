@@ -26,6 +26,18 @@ steps:
     prompt: |
       Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports. Keep running the command and fixing until it passes with no errors.
 
+  - id: check-planning-artifacts
+    command: |
+      missing=""
+      for f in proposal.md tasks.md; do
+        [ -s "openspec/changes/{{change_name}}/$f" ] || missing="$missing $f"
+      done
+      if [ -n "$missing" ]; then
+        echo "ERROR: planning did not produce required artifacts in openspec/changes/{{change_name}}/:$missing" >&2
+        echo "The plan step may have written to the wrong directory or failed silently. Re-run planning before retrying." >&2
+        exit 1
+      fi
+
   - id: commit-openspec
     command: |
       git add openspec/changes/{{change_name}}/
@@ -41,18 +53,9 @@ steps:
 
   - id: run-validator
     workflow: ../core/run-validator.yaml
+    params:
+      task_file: "openspec/changes/{{change_name}}/tasks.md"
     continue_on_failure: true
-
-  - id: check-clean
-    command: test -z "$(git status --porcelain)"
-    continue_on_failure: true
-
-  - id: commit-leftovers-if-needed
-    session: resume
-    mode: autonomous
-    prompt: |
-      There are uncommitted changes leftover after implementing the task described in openspec/changes/{{change_name}}/tasks.md. Run git status and git diff to review them. Only stage and commit files that are related to this task and appropriate to check into git — ignore unrelated changes, generated artifacts, or files that should be gitignored. Follow the project's commit message conventions and prepend [{{step_id}}]. Summarize which files you committed and which you left out, and why.
-    skip_if: previous_success
 
   - id: archive
     command: |

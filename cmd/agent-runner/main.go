@@ -32,6 +32,7 @@ import (
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	nativesetup "github.com/codagent/agent-runner/internal/onboarding/native"
+	"github.com/codagent/agent-runner/internal/onboarding/splash"
 	"github.com/codagent/agent-runner/internal/paramform"
 	"github.com/codagent/agent-runner/internal/prevalidate"
 	"github.com/codagent/agent-runner/internal/runlock"
@@ -1501,6 +1502,9 @@ func ensureFirstRunForTUI(deps firstRunDeps) firstRunResult {
 	onboardingDone := settings.Onboarding.CompletedAt != "" || settings.Onboarding.Dismissed != ""
 
 	if settings.Setup.CompletedAt == "" {
+		if err := splash.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: splash: %v\n", err)
+		}
 		result, err := deps.runNativeSetup(onboardingDone)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
@@ -1509,13 +1513,19 @@ func ensureFirstRunForTUI(deps firstRunDeps) firstRunResult {
 			}
 			return continueToList()
 		}
-		if result == nativeSetupDemo {
+		switch result {
+		case nativeSetupCompleted:
+			return continueToList()
+		case nativeSetupDemo:
 			return launchOnboardingDemo(deps)
-		}
-		if result == nativeSetupExitRequested {
+		case nativeSetupFailed:
+			return exitFirstRun(1)
+		default:
+			// Cancelled, ExitRequested, or any non-completion outcome:
+			// setup is the only path into the home TUI, so any exit short of
+			// completion exits the program.
 			return exitFirstRun(0)
 		}
-		return continueToList()
 	}
 
 	if !onboardingDone {

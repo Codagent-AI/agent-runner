@@ -161,7 +161,7 @@ func TestFilterAuditEventsForWorkflowState_DropsFutureEventsFromOldWorkflowHash(
 		{Prefix: "[guided-workflow]", Type: "step_start", Data: map[string]any{}},
 	}
 
-	for _, event := range filterAuditEventsForWorkflowState(events, "new", tree.Root, "guided-workflow") {
+	for _, event := range filterAuditEventsForWorkflowState(events, "new", tree.Root, "guided-workflow", false) {
 		tree.ApplyEvent(event)
 	}
 
@@ -173,6 +173,56 @@ func TestFilterAuditEventsForWorkflowState_DropsFutureEventsFromOldWorkflowHash(
 	}
 	if got := childByID(tree.Root, "set-completed").Status; got != StatusPending {
 		t.Fatalf("future step from old workflow hash should be ignored, got %v", got)
+	}
+}
+
+func TestFilterAuditEventsForWorkflowState_DropsRunEndWhenResumeIsInProgress(t *testing.T) {
+	wf := model.Workflow{
+		Name: "onboarding",
+		Steps: []model.Step{
+			{ID: "step-types-demo", Workflow: "step-types-demo.yaml"},
+			{ID: "guided-workflow", Workflow: "guided-workflow.yaml"},
+		},
+	}
+	tree := BuildTree(&wf, fixturePath("onboarding/onboarding.yaml"))
+	events := []RawEvent{
+		{Type: "run_start", Data: map[string]any{"workflow_hash": "new"}},
+		{Prefix: "[guided-workflow]", Type: "step_start", Data: map[string]any{}},
+		{Prefix: "[guided-workflow]", Type: "step_end", Data: map[string]any{"outcome": "success"}},
+		{Type: "run_end", Data: map[string]any{"outcome": "success"}},
+	}
+
+	for _, event := range filterAuditEventsForWorkflowState(events, "new", tree.Root, "guided-workflow", false) {
+		tree.ApplyEvent(event)
+	}
+
+	if got := tree.Root.Status; got == StatusSuccess {
+		t.Fatalf("in-progress resume should not retain stale run_end, got %v", got)
+	}
+}
+
+func TestFilterAuditEventsForWorkflowState_KeepsRunEndForCompletedMatchingWorkflowHash(t *testing.T) {
+	wf := model.Workflow{
+		Name: "onboarding",
+		Steps: []model.Step{
+			{ID: "step-types-demo", Workflow: "step-types-demo.yaml"},
+			{ID: "guided-workflow", Workflow: "guided-workflow.yaml"},
+		},
+	}
+	tree := BuildTree(&wf, fixturePath("onboarding/onboarding.yaml"))
+	events := []RawEvent{
+		{Type: "run_start", Data: map[string]any{"workflow_hash": "new"}},
+		{Prefix: "[guided-workflow]", Type: "step_start", Data: map[string]any{}},
+		{Prefix: "[guided-workflow]", Type: "step_end", Data: map[string]any{"outcome": "success"}},
+		{Type: "run_end", Data: map[string]any{"outcome": "success"}},
+	}
+
+	for _, event := range filterAuditEventsForWorkflowState(events, "new", tree.Root, "guided-workflow", true) {
+		tree.ApplyEvent(event)
+	}
+
+	if got := tree.Root.Status; got != StatusSuccess {
+		t.Fatalf("completed matching run should retain run_end, got %v", got)
 	}
 }
 

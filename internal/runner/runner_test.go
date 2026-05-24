@@ -156,6 +156,32 @@ func TestPrepareRunPopulatesAutonomousBackendFromUserSettings(t *testing.T) {
 	}
 }
 
+func TestPrepareRunPopulatesAutonomousPermissionModeFromUserSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	settingsPath := filepath.Join(home, ".agent-runner", "settings.yaml")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("mkdir settings dir: %v", err)
+	}
+	if err := os.WriteFile(settingsPath, []byte("autonomous_permission_mode: yolo\n"), 0o600); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	w := model.Workflow{Name: "test", Steps: []model.Step{shellStep("s", "echo hi")}}
+	h, err := PrepareRun(&w, nil, &Options{
+		ProcessRunner: &mockRunner{},
+		Log:           &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareRun() returned error: %v", err)
+	}
+	defer finalizeRun(h.rs, ResultSuccess)
+
+	if got := h.rs.ctx.AutonomousPermissionMode; got != "yolo" {
+		t.Fatalf("ctx.AutonomousPermissionMode = %q, want yolo", got)
+	}
+}
+
 func TestRunWorkflow(t *testing.T) {
 	t.Run("runs single step workflow", func(t *testing.T) {
 		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}}}
@@ -490,8 +516,8 @@ func TestRunWorkflow(t *testing.T) {
 		if result != ResultSuccess {
 			t.Fatalf("expected success, got %q", result)
 		}
-		if runner.calls[0][2] != "echo dev" {
-			t.Fatalf("expected 'echo dev', got %q", runner.calls[0][2])
+		if runner.calls[0][2] != "echo 'dev'" {
+			t.Fatalf("expected %q, got %q", "echo 'dev'", runner.calls[0][2])
 		}
 	})
 

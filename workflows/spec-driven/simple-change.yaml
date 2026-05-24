@@ -25,6 +25,14 @@ steps:
 
       Example valid output: some/path/tasks/001-do-the-thing.md
 
+  - id: check-planning-artifacts
+    command: |
+      if [ ! -s "{{task_file}}" ]; then
+        echo "ERROR: planning did not produce a task file at: {{task_file}}" >&2
+        echo "The plan step may have written to the wrong directory or failed silently. Re-run planning before retrying." >&2
+        exit 1
+      fi
+
   - id: generate-code
     agent: implementor
     session: new
@@ -34,15 +42,6 @@ steps:
 
   - id: run-validator
     workflow: ../core/run-validator.yaml
+    params:
+      task_file: "{{task_file}}"
     continue_on_failure: true
-
-  - id: check-clean
-    command: test -z "$(git status --porcelain)"
-    continue_on_failure: true
-
-  - id: commit-leftovers-if-needed
-    session: resume
-    mode: autonomous
-    prompt: |
-      There are uncommitted changes leftover after implementing the task described in {{task_file}}. Run git status and git diff to review them. Only stage and commit files that are related to this task and appropriate to check into git — ignore unrelated changes, generated artifacts, or files that should be gitignored. Follow the project's commit message conventions and prepend [{{step_id}}]. Summarize which files you committed and which you left out, and why.
-    skip_if: previous_success
