@@ -3,6 +3,7 @@ package discovery
 
 import (
 	"io/fs"
+	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	builtinworkflows "github.com/codagent/agent-runner/workflows"
+	"gopkg.in/yaml.v3"
 )
 
 // Scope identifies where a workflow was found.
@@ -27,11 +29,20 @@ const (
 type WorkflowEntry struct {
 	CanonicalName string        // e.g. "core:finalize-pr" or "deploy"
 	Description   string        // from the workflow YAML description field
+	Hidden        bool          // from the workflow YAML hidden field
 	Params        []model.Param // declared parameters, in order
 	SourcePath    string        // file path for search matching
 	Namespace     string        // builtin namespace (e.g. "core"), empty for project/user
 	Scope         Scope
 	ParseError    string // non-empty if the file could not be loaded or parsed
+}
+
+// GroupMetadata describes the display metadata for a workflow group.
+type GroupMetadata struct {
+	Namespace   string
+	Scope       Scope
+	DisplayName string
+	Description string
 }
 
 type workflowCandidate struct {
@@ -110,6 +121,9 @@ func enumerateLocalDir(dir string, scope Scope) []WorkflowEntry {
 		if walkErr != nil || d.IsDir() {
 			return nil
 		}
+		if strings.HasPrefix(d.Name(), "_") {
+			return nil
+		}
 		ext := strings.ToLower(filepath.Ext(d.Name()))
 		if ext != ".yaml" && ext != ".yml" {
 			return nil
@@ -142,6 +156,9 @@ func enumerateBuiltinFS(fsys fs.FS) []WorkflowEntry {
 	candidates := make(map[string]workflowCandidate)
 	_ = fs.WalkDir(fsys, ".", func(relPath string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil || d.IsDir() {
+			return nil
+		}
+		if strings.HasPrefix(path.Base(relPath), "_") || !strings.Contains(relPath, "/") {
 			return nil
 		}
 		ext := strings.ToLower(path.Ext(relPath))
@@ -184,6 +201,7 @@ func loadLocalEntries(scope Scope, candidates map[string]workflowCandidate) []Wo
 			entry.ParseError = err.Error()
 		} else {
 			entry.Description = workflow.Description
+			entry.Hidden = workflow.Hidden
 			entry.Params = workflow.Params
 		}
 
@@ -233,6 +251,7 @@ func loadBuiltinEntries(fsys fs.FS, candidates map[string]workflowCandidate) []W
 			entry.ParseError = err.Error()
 		} else {
 			entry.Description = workflow.Description
+			entry.Hidden = workflow.Hidden
 			entry.Params = workflow.Params
 		}
 
@@ -240,6 +259,77 @@ func loadBuiltinEntries(fsys fs.FS, candidates map[string]workflowCandidate) []W
 	}
 
 	return entries
+}
+
+// EnumerateGroups returns display metadata for every scope/namespace group
+// represented in entries. Builtin metadata comes from workflows/<ns>/_group.yaml.
+func EnumerateGroups(builtinFS fs.FS, entries []WorkflowEntry) []GroupMetadata {
+	type groupKey struct {
+		scope Scope
+		ns    string
+	}
+
+	seen := make(map[groupKey]bool)
+	var keys []groupKey
+	for _, entry := range entries {
+		key := groupKey{scope: entry.Scope, ns: entry.Namespace}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		keys = append(keys, key)
+	}
+
+	groups := make([]GroupMetadata, 0, len(keys))
+	for _, key := range keys {
+		switch key.scope {
+		case ScopeProject:
+			groups = append(groups, GroupMetadata{
+				Scope:       ScopeProject,
+				DisplayName: "Project workflows",
+				Description: "Workflows defined in this project's .agent-runner directory.",
+			})
+		case ScopeUser:
+			groups = append(groups, GroupMetadata{
+				Scope:       ScopeUser,
+				DisplayName: "User workflows",
+				Description: "Workflows from your home .agent-runner directory.",
+			})
+		case ScopeBuiltin:
+			groups = append(groups, loadBuiltinGroupMetadata(builtinFS, key.ns))
+		}
+	}
+	return groups
+}
+
+func loadBuiltinGroupMetadata(builtinFS fs.FS, namespace string) GroupMetadata {
+	group := GroupMetadata{
+		Scope:       ScopeBuiltin,
+		Namespace:   namespace,
+		DisplayName: namespace,
+	}
+	if builtinFS == nil || namespace == "" {
+		return group
+	}
+
+	data, err := fs.ReadFile(builtinFS, path.Join(namespace, "_group.yaml"))
+	if err != nil {
+		return group
+	}
+
+	var metadata struct {
+		DisplayName string `yaml:"display_name"`
+		Description string `yaml:"description"`
+	}
+	if err := yaml.Unmarshal(data, &metadata); err != nil {
+		log.Printf("discovery: malformed _group.yaml in builtin namespace %q: %v", namespace, err)
+		return group
+	}
+	if metadata.DisplayName != "" {
+		group.DisplayName = metadata.DisplayName
+	}
+	group.Description = metadata.Description
+	return group
 }
 
 func recordCandidate(candidates map[string]workflowCandidate, candidate workflowCandidate) {

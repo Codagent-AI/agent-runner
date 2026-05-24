@@ -1,5 +1,6 @@
 name: finalize-pr
 description: "Push PR, wait for CI, fix failures, repeat until green (max 3 fix cycles)"
+hidden: true
 
 sessions:
   - name: lead-agent

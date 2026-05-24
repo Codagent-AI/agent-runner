@@ -1,5 +1,5 @@
 name: simple-change
-description: "End-to-end change with inlined planning steps (no nested plan workflow)"
+description: "Quick plan + implement + validate workflow, okay for small changes"
 
 params:
   - name: change_name

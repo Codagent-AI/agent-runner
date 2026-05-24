@@ -1,5 +1,6 @@
 name: implement-task
 description: "Implement a single task: agent step then validator retry"
+hidden: true
 
 params:
   - name: task_file

@@ -1,5 +1,6 @@
 name: onboarding-validator
 description: Demonstrates Agent Validator setup and the validation feedback loop during onboarding.
+hidden: true
 
 sessions:
   - name: validator-setup-session

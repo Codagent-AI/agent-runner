@@ -1,5 +1,6 @@
 name: onboarding-advanced
 description: Introduces advanced Agent Runner concepts and opens the help agent.
+hidden: true
 
 steps:
   - id: concepts-ui

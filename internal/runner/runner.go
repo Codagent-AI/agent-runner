@@ -83,13 +83,15 @@ func validateParams(workflow *model.Workflow, params map[string]string) error {
 		if _, ok := params[param.Name]; ok {
 			continue
 		}
-		if param.IsRequired() {
-			if param.Default != "" {
-				params[param.Name] = param.Default
-			} else {
-				return fmt.Errorf("missing required parameter: %s", param.Name)
-			}
+		if param.Default != "" {
+			params[param.Name] = param.Default
+			continue
 		}
+		if !param.IsRequired() {
+			params[param.Name] = ""
+			continue
+		}
+		return fmt.Errorf("missing required parameter: %s", param.Name)
 	}
 	return nil
 }
@@ -167,6 +169,9 @@ func workflowNeedsAgentProfiles(steps []model.Step) bool {
 }
 
 func initRunState(workflow *model.Workflow, params map[string]string, opts *Options) (*runState, error) {
+	if params == nil {
+		params = map[string]string{}
+	}
 	if err := validateParams(workflow, params); err != nil {
 		return nil, err
 	}

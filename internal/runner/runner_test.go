@@ -117,6 +117,39 @@ func shellStep(id, cmd string) model.Step {
 	return model.Step{ID: id, Command: cmd, Session: model.SessionNew}
 }
 
+func TestRunWorkflow_OptionalParamAvailableAsEmptyString(t *testing.T) {
+	optional := false
+	workflow := &model.Workflow{
+		Name: "optional-param",
+		Params: []model.Param{
+			{Name: "task_file", Required: &optional, Default: ""},
+		},
+		Steps: []model.Step{
+			shellStep("validate", `if [ -n "{{task_file}}" ]; then echo with-task; else echo no-task; fi`),
+		},
+	}
+	runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}}}
+
+	result, err := RunWorkflow(workflow, nil, &Options{
+		WorkflowFile:  "optional.yaml",
+		SessionDir:    t.TempDir(),
+		ProcessRunner: runner,
+		Log:           &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("RunWorkflow returned error: %v", err)
+	}
+	if result != ResultSuccess {
+		t.Fatalf("result = %q, want success", result)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected 1 shell call, got %d", len(runner.calls))
+	}
+	if cmd := runner.calls[0][2]; !strings.Contains(cmd, `[ -n "" ]`) {
+		t.Fatalf("command did not interpolate optional empty param: %q", cmd)
+	}
+}
+
 func TestMaterializeBundledAssetsCreatesMarkerForNamespaceWithoutAssets(t *testing.T) {
 	sessionDir := t.TempDir()
 

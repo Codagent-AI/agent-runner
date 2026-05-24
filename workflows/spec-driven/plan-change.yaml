@@ -1,5 +1,6 @@
 name: plan-change
-description: "Plan a change using codagent skills: propose, spec, design, task-plan, review"
+description: "Plan a change: create, propose, spec, design, task-plan, and review"
+hidden: true
 
 sessions:
   - name: lead-agent

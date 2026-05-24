@@ -63,9 +63,11 @@ func WithSplash(show bool) func(*Model) {
 // newTabState holds all state for the "new" tab (workflow browser + search).
 type newTabState struct {
 	workflows     []discovery.WorkflowEntry
-	filtered      []int // indices into workflows (-1 = blank-line separator)
-	cursor        int   // index into filtered of the selected row
-	offset        int   // scroll offset
+	groups        []discovery.GroupMetadata
+	filtered      []filteredRow
+	showHidden    bool
+	cursor        int // index into filtered of the selected row
+	offset        int // scroll offset
 	searchText    string
 	searchFocused bool // true when search box has focus
 }
@@ -181,6 +183,7 @@ func New(opts ...func(*Model)) (*Model, error) {
 	userWorkflowsDir := filepath.Join(home, ".agent-runner", "workflows")
 
 	workflows := discovery.Enumerate(builtinworkflows.FS, cwd, userWorkflowsDir)
+	groups := discovery.EnumerateGroups(builtinworkflows.FS, workflows)
 
 	m := &Model{
 		activeTab:    tabNew,
@@ -190,8 +193,8 @@ func New(opts ...func(*Model)) (*Model, error) {
 		now:          time.Now,
 	}
 	m.newTab.workflows = workflows
-	m.newTab.filtered = buildFilteredRows(workflows, "")
-	m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
+	m.newTab.groups = groups
+	m.rebuildNewTabFiltered()
 
 	for _, opt := range opts {
 		opt(m)
@@ -500,7 +503,7 @@ func (m *Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab", "left":
 		m.prevTab()
 	case "n":
-		m.activeTab = tabNew
+		m.enterNewTab()
 	case "c":
 		m.activeTab = tabCurrentDir
 	case "w":
@@ -509,6 +512,11 @@ func (m *Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "a":
 		m.activeTab = tabAll
+	case "h":
+		if m.activeTab == tabNew {
+			m.newTab.showHidden = !m.newTab.showHidden
+			m.rebuildNewTabFiltered()
+		}
 	case "up", "k":
 		m.moveCursor(-1)
 	case "down", "j":
@@ -647,6 +655,9 @@ func (m *Model) nextTab() {
 			m.activeTab = tabNew
 		}
 	}
+	if m.activeTab == tabNew {
+		m.enterNewTab()
+	}
 }
 
 func (m *Model) prevTab() {
@@ -662,6 +673,15 @@ func (m *Model) prevTab() {
 			m.activeTab = tabNew
 		}
 	}
+	if m.activeTab == tabNew {
+		m.enterNewTab()
+	}
+}
+
+func (m *Model) enterNewTab() {
+	m.activeTab = tabNew
+	m.newTab.showHidden = false
+	m.rebuildNewTabFiltered()
 }
 
 func (m *Model) moveCursor(delta int) {
@@ -717,16 +737,16 @@ func (m *Model) moveNewTabCursor(delta int) {
 		}
 	}
 
-	// Advance and skip separators.
+	// Advance and skip non-selectable rows.
 	pos := m.newTab.cursor + delta
-	for pos >= 0 && pos < len(filtered) && filtered[pos] == -1 {
+	for pos >= 0 && pos < len(filtered) && filtered[pos].kind != workflowRow {
 		if delta > 0 {
 			pos++
 		} else {
 			pos--
 		}
 	}
-	if pos >= 0 && pos < len(filtered) && filtered[pos] != -1 {
+	if pos >= 0 && pos < len(filtered) && filtered[pos].kind == workflowRow {
 		m.newTab.cursor = pos
 	}
 }
@@ -894,8 +914,7 @@ func (m *Model) handleEsc() {
 	case tabNew:
 		if m.newTab.searchText != "" {
 			m.newTab.searchText = ""
-			m.newTab.filtered = buildFilteredRows(m.newTab.workflows, "")
-			m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
+			m.rebuildNewTabFiltered()
 			m.newTab.searchFocused = true
 		}
 	case tabWorktrees:

@@ -1,6 +1,7 @@
 package listview
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -12,6 +13,35 @@ import (
 	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/tuistyle"
 )
+
+type rowKind int
+
+const (
+	workflowRow rowKind = iota
+	headerRow
+	separatorRow
+)
+
+type filteredRow struct {
+	kind  rowKind
+	index int
+}
+
+type groupKey struct {
+	scope discovery.Scope
+	ns    string
+}
+
+type workflowGroup struct {
+	indices []int
+}
+
+var builtinGroupOrder = []string{
+	"spec-driven",
+	"openspec",
+	"onboarding",
+	"core",
+}
 
 // handleSearchKey processes a key event when the new tab search box has focus.
 // Returns the updated model and a command.
@@ -26,13 +56,12 @@ func (m *Model) handleSearchKey(msg tea.KeyMsg) (*Model, tea.Cmd) {
 		m.prevTab()
 	case "esc":
 		m.newTab.searchText = ""
-		m.newTab.filtered = buildFilteredRows(m.newTab.workflows, "")
-		m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
+		m.rebuildNewTabFiltered()
 	case "backspace":
 		if m.newTab.searchText != "" {
 			r := []rune(m.newTab.searchText)
 			m.newTab.searchText = string(r[:len(r)-1])
-			m.updateSearchFilter()
+			m.rebuildNewTabFiltered()
 		}
 	case "down", "enter":
 		m.newTab.searchFocused = false
@@ -40,68 +69,104 @@ func (m *Model) handleSearchKey(msg tea.KeyMsg) (*Model, tea.Cmd) {
 	default:
 		if msg.Type == tea.KeyRunes {
 			m.newTab.searchText += msg.String()
-			m.updateSearchFilter()
+			m.rebuildNewTabFiltered()
 		}
 	}
 	return m, nil
 }
 
-func (m *Model) updateSearchFilter() {
-	m.newTab.filtered = buildFilteredRows(m.newTab.workflows, m.newTab.searchText)
+// rebuildNewTabFiltered recomputes the filtered row list and resets the cursor
+// to the first selectable row, using the current searchText and showHidden state.
+func (m *Model) rebuildNewTabFiltered() {
+	m.newTab.filtered = buildFilteredRows(m.newTab.workflows, m.newTab.groups, m.newTab.searchText, m.newTab.showHidden)
 	m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
 }
 
 // buildFilteredRows computes the filtered slice for the new tab.
-// Each element is either an index into workflows (>= 0) or -1 for a blank-line separator.
-// Groups are: project entries, user entries, builtin namespace sub-groups.
-// Groups with no matching entries are collapsed (no separator).
+// Each element is tagged as a workflow, group header, or separator.
+// Groups with no visible matching entries are collapsed.
 // Filter is case-insensitive substring match against CanonicalName or SourcePath.
-func buildFilteredRows(workflows []discovery.WorkflowEntry, filter string) []int {
+func buildFilteredRows(workflows []discovery.WorkflowEntry, groups []discovery.GroupMetadata, filter string, showHidden bool) []filteredRow {
 	filter = strings.ToLower(filter)
 
-	type group struct {
-		indices []int
-	}
-
-	// Collect groups in display order.
-	// Project and user are each one group.
-	// Builtins are sub-grouped by namespace.
-	type groupKey struct {
-		scope discovery.Scope
-		ns    string
-	}
-
-	var order []groupKey
-	seen := make(map[groupKey]bool)
-	groups := make(map[groupKey]*group)
+	groupRows := make(map[groupKey]*workflowGroup)
 
 	for i, e := range workflows {
-		key := groupKey{scope: e.Scope, ns: e.Namespace}
-		if !seen[key] {
-			seen[key] = true
-			order = append(order, key)
-			groups[key] = &group{}
+		if e.Hidden && !showHidden {
+			continue
+		}
+		if filter != "" && !matchesFilter(&e, filter) {
+			continue
 		}
 
-		if filter == "" || matchesFilter(&e, filter) {
-			groups[key].indices = append(groups[key].indices, i)
+		key := groupKey{scope: e.Scope, ns: e.Namespace}
+		if groupRows[key] == nil {
+			groupRows[key] = &workflowGroup{}
 		}
+		groupRows[key].indices = append(groupRows[key].indices, i)
 	}
 
-	var result []int
+	groupIndices := make(map[groupKey]int, len(groups))
+	for i, group := range groups {
+		groupIndices[groupKey{scope: group.Scope, ns: group.Namespace}] = i
+	}
+
+	var result []filteredRow
 	first := true
-	for _, key := range order {
-		g := groups[key]
+	for _, key := range orderedGroupKeys(groupRows) {
+		g := groupRows[key]
 		if len(g.indices) == 0 {
 			continue
 		}
-		if !first {
-			result = append(result, -1) // blank-line separator
+		groupIndex, ok := groupIndices[key]
+		if !ok {
+			continue
 		}
-		result = append(result, g.indices...)
+		if !first {
+			result = append(result, filteredRow{kind: separatorRow})
+		}
+		result = append(result, filteredRow{kind: headerRow, index: groupIndex})
+		for _, workflowIndex := range g.indices {
+			result = append(result, filteredRow{kind: workflowRow, index: workflowIndex})
+		}
 		first = false
 	}
 	return result
+}
+
+func orderedGroupKeys(groups map[groupKey]*workflowGroup) []groupKey {
+	var order []groupKey
+	for _, key := range []groupKey{
+		{scope: discovery.ScopeProject},
+		{scope: discovery.ScopeUser},
+	} {
+		if groups[key] != nil {
+			order = append(order, key)
+		}
+	}
+
+	emittedBuiltins := make(map[string]bool)
+	for _, namespace := range builtinGroupOrder {
+		key := groupKey{scope: discovery.ScopeBuiltin, ns: namespace}
+		if groups[key] != nil {
+			order = append(order, key)
+			emittedBuiltins[namespace] = true
+		}
+	}
+
+	var remaining []string
+	for key := range groups {
+		if key.scope != discovery.ScopeBuiltin || emittedBuiltins[key.ns] {
+			continue
+		}
+		remaining = append(remaining, key.ns)
+	}
+	sort.Strings(remaining)
+	for _, namespace := range remaining {
+		order = append(order, groupKey{scope: discovery.ScopeBuiltin, ns: namespace})
+	}
+
+	return order
 }
 
 func matchesFilter(e *discovery.WorkflowEntry, lowerFilter string) bool {
@@ -109,25 +174,11 @@ func matchesFilter(e *discovery.WorkflowEntry, lowerFilter string) bool {
 		strings.Contains(strings.ToLower(e.SourcePath), lowerFilter)
 }
 
-// computeGroupIndices returns a group index for each position in filtered,
-// incrementing at each blank-line separator.
-func computeGroupIndices(filtered []int) []int {
-	groups := make([]int, len(filtered))
-	g := 0
-	for i, idx := range filtered {
-		if idx == -1 {
-			g++
-		}
-		groups[i] = g
-	}
-	return groups
-}
-
-// firstSelectableRow returns the index of the first non-separator row in filtered,
+// firstSelectableRow returns the index of the first workflow row in filtered,
 // or 0 if there are none.
-func firstSelectableRow(filtered []int) int {
-	for i, idx := range filtered {
-		if idx != -1 {
+func firstSelectableRow(filtered []filteredRow) int {
+	for i, row := range filtered {
+		if row.kind == workflowRow {
 			return i
 		}
 	}
@@ -145,11 +196,11 @@ func (m *Model) newTabCurrentEntry() *discovery.WorkflowEntry {
 	if pos < 0 || pos >= len(f) {
 		return nil
 	}
-	idx := f[pos]
-	if idx < 0 || idx >= len(m.newTab.workflows) {
+	row := f[pos]
+	if row.kind != workflowRow || row.index < 0 || row.index >= len(m.newTab.workflows) {
 		return nil
 	}
-	e := m.newTab.workflows[idx]
+	e := m.newTab.workflows[row.index]
 	return &e
 }
 
@@ -194,8 +245,8 @@ func (m *Model) renderNewTab() string {
 
 	filtered := m.newTab.filtered
 	count := 0
-	for _, idx := range filtered {
-		if idx >= 0 {
+	for _, row := range filtered {
+		if row.kind == workflowRow {
 			count++
 		}
 	}
@@ -209,25 +260,124 @@ func (m *Model) renderNewTab() string {
 		maxWidth = 80
 	}
 
-	groupIndices := computeGroupIndices(filtered)
-
 	// The new tab body includes the search row and a blank separator before the
 	// workflow rows, so leave those rows out of the scrollable list budget.
 	maxRows := max(1, m.listMaxRows(false)-2)
-	// Adjust offset so cursor stays in view.
-	m.newTab.offset = adjustOffset(m.newTab.cursor, m.newTab.offset, maxRows, len(filtered))
-	end := min(m.newTab.offset+maxRows, len(filtered))
 
-	for i := m.newTab.offset; i < end; i++ {
-		idx := filtered[i]
-		if idx == -1 {
-			b.WriteString("\n")
-			continue
+	// Render each row once, then use the resulting visual heights to pick an
+	// offset that guarantees the cursor row fits in the budget even when a
+	// wrapped header above it consumes multiple lines.
+	rendered := make([]string, len(filtered))
+	heights := make([]int, len(filtered))
+	for i, row := range filtered {
+		switch row.kind {
+		case separatorRow:
+			rendered[i] = "\n"
+		case headerRow:
+			group := &m.newTab.groups[row.index]
+			groupColor := tuistyle.GroupColors[row.index%len(tuistyle.GroupColors)]
+			rendered[i] = renderNewTabGroupHeader(group.DisplayName, group.Description, maxWidth, groupColor)
+		case workflowRow:
+			entry := &workflows[row.index]
+			isSel := i == m.newTab.cursor && !m.newTab.searchFocused
+			groupIndex := groupIndexForEntry(m.newTab.groups, entry)
+			groupColor := tuistyle.GroupColors[groupIndex%len(tuistyle.GroupColors)]
+			rendered[i] = m.renderNewTabRow(entry, isSel, maxWidth, groupColor)
 		}
-		entry := &workflows[idx]
-		isSel := i == m.newTab.cursor && !m.newTab.searchFocused
-		groupColor := tuistyle.GroupColors[groupIndices[i]%len(tuistyle.GroupColors)]
-		b.WriteString(m.renderNewTabRow(entry, isSel, maxWidth, groupColor))
+		heights[i] = max(1, strings.Count(rendered[i], "\n"))
+	}
+
+	m.newTab.offset = adjustOffsetByVisualHeight(m.newTab.cursor, m.newTab.offset, maxRows, heights)
+
+	visualBudget := maxRows
+	for i := m.newTab.offset; i < len(filtered); i++ {
+		h := heights[i]
+		// Always render the offset row and any row up to and including the
+		// cursor; for later rows stop if they would overflow the budget.
+		if i > m.newTab.cursor && h > visualBudget {
+			break
+		}
+		b.WriteString(rendered[i])
+		visualBudget -= h
+		if visualBudget <= 0 && i >= m.newTab.cursor {
+			break
+		}
+	}
+	return b.String()
+}
+
+// adjustOffsetByVisualHeight returns an offset that keeps the cursor row
+// visible given each row's rendered visual height (lines). It first ensures
+// cursor >= offset, then advances offset so that the cumulative height from
+// offset through cursor fits within maxRows. The cursor row itself is always
+// included even if its own height exceeds maxRows.
+func adjustOffsetByVisualHeight(cursor, offset, maxRows int, heights []int) int {
+	if len(heights) == 0 {
+		return 0
+	}
+	if maxRows <= 0 {
+		return cursor
+	}
+	if cursor < offset {
+		offset = cursor
+	}
+	for offset < cursor {
+		sum := 0
+		for i := offset; i <= cursor; i++ {
+			sum += heights[i]
+		}
+		if sum <= maxRows {
+			break
+		}
+		offset++
+	}
+	return offset
+}
+
+func groupIndexForEntry(groups []discovery.GroupMetadata, entry *discovery.WorkflowEntry) int {
+	key := groupKey{scope: entry.Scope, ns: entry.Namespace}
+	for i, group := range groups {
+		if group.Scope == key.scope && group.Namespace == key.ns {
+			return i
+		}
+	}
+	return 0
+}
+
+// renderNewTabGroupHeader renders the group's display name in its accent color,
+// followed by the description in dim style on the same line. The header sits
+// flush against the screen margin (no cursor-column indent) so the group name
+// reads as a section divider. Long descriptions wrap onto continuation lines
+// aligned with the description's start column.
+func renderNewTabGroupHeader(name, description string, maxWidth int, color lipgloss.AdaptiveColor) string {
+	name = sanitize(name)
+	prefix := tuistyle.ScreenMargin
+	avail := max(10, maxWidth-lipgloss.Width(prefix))
+
+	namePart := lipgloss.NewStyle().Foreground(color).Bold(true).Render(name)
+	nameWidth := lipgloss.Width(namePart)
+	if description = sanitize(description); description == "" {
+		return prefix + namePart + "\n"
+	}
+
+	descAvail := avail - nameWidth - 1
+	if descAvail < 4 {
+		return prefix + namePart + "\n"
+	}
+
+	lines := wrapCell(description, descAvail)
+	contIndent := strings.Repeat(" ", lipgloss.Width(prefix)+nameWidth+1)
+
+	var b strings.Builder
+	b.WriteString(prefix)
+	b.WriteString(namePart)
+	b.WriteByte(' ')
+	b.WriteString(dimStyle.Render(lines[0]))
+	b.WriteByte('\n')
+	for _, line := range lines[1:] {
+		b.WriteString(contIndent)
+		b.WriteString(dimStyle.Render(line))
+		b.WriteByte('\n')
 	}
 	return b.String()
 }
@@ -250,8 +400,8 @@ func (m *Model) renderNewTabSearch() string {
 	}
 
 	count := 0
-	for _, idx := range m.newTab.filtered {
-		if idx >= 0 {
+	for _, row := range m.newTab.filtered {
+		if row.kind == workflowRow {
 			count++
 		}
 	}
@@ -274,7 +424,10 @@ func formatCount(n int) string {
 	return "(" + strconv.Itoa(n) + " workflows)"
 }
 
-// renderNewTabRow renders a single workflow row.
+// renderNewTabRow renders a single workflow row. Long descriptions wrap onto
+// continuation lines aligned with the description's start column. CanonicalName,
+// Description, and ParseError are sanitized so ANSI escapes or control bytes
+// from external YAML cannot leak into the rendered output or distort width math.
 func (m *Model) renderNewTabRow(entry *discovery.WorkflowEntry, isSel bool, maxWidth int, groupColor lipgloss.AdaptiveColor) string {
 	var prefix string
 	if isSel {
@@ -284,34 +437,52 @@ func (m *Model) renderNewTabRow(entry *discovery.WorkflowEntry, isSel bool, maxW
 	}
 	prefixWidth := lipgloss.Width(prefix)
 	avail := max(10, maxWidth-prefixWidth)
+	canonicalName := sanitize(entry.CanonicalName)
+	nameCellWidth := runewidth.StringWidth(canonicalName)
 
 	if entry.ParseError != "" {
 		errNameStyle := tuistyle.StatusFailed
-		nameWidth := lipgloss.Width(entry.CanonicalName)
-		errPart := " " + fitCell(entry.ParseError, avail-nameWidth-1)
-		return prefix + errNameStyle.Render(entry.CanonicalName) + errNameStyle.Render(errPart) + "\n"
+		errPart := " " + fitCell(sanitize(entry.ParseError), avail-nameCellWidth-1)
+		return prefix + errNameStyle.Render(canonicalName) + errNameStyle.Render(errPart) + "\n"
 	}
 
-	var namePart, descPart string
+	var namePart string
 	if isSel {
-		namePart = renderSelectedName(entry.CanonicalName, m.newTab.searchText)
+		namePart = renderSelectedName(canonicalName, m.newTab.searchText)
 	} else {
-		namePart = renderColoredName(entry, m.newTab.searchText, groupColor)
+		namePart = renderColoredName(canonicalName, m.newTab.searchText, groupColor)
 	}
 
-	if entry.Description != "" {
-		descAvail := avail - runewidth.StringWidth(entry.CanonicalName) - 1
-		if descAvail > 3 {
-			desc := fitCell(entry.Description, descAvail)
-			descStyle := dimStyle
-			if isSel {
-				descStyle = selectedStyle
-			}
-			descPart = " " + descStyle.Render(desc)
-		}
+	description := sanitize(entry.Description)
+	if description == "" {
+		return prefix + namePart + "\n"
 	}
 
-	return prefix + namePart + descPart + "\n"
+	descAvail := avail - nameCellWidth - 1
+	if descAvail < 4 {
+		return prefix + namePart + "\n"
+	}
+
+	descStyle := dimStyle
+	if isSel {
+		descStyle = selectedStyle
+	}
+
+	lines := wrapCell(description, descAvail)
+	contIndent := strings.Repeat(" ", prefixWidth+nameCellWidth+1)
+
+	var b strings.Builder
+	b.WriteString(prefix)
+	b.WriteString(namePart)
+	b.WriteByte(' ')
+	b.WriteString(descStyle.Render(lines[0]))
+	b.WriteByte('\n')
+	for _, line := range lines[1:] {
+		b.WriteString(contIndent)
+		b.WriteString(descStyle.Render(line))
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 // renderSelectedName uses the selected-text token instead of the group accent.
@@ -325,8 +496,7 @@ func renderSelectedName(name, searchText string) string {
 }
 
 // renderColoredName renders a non-selected workflow name in the group color.
-func renderColoredName(entry *discovery.WorkflowEntry, searchText string, color lipgloss.AdaptiveColor) string {
-	name := entry.CanonicalName
+func renderColoredName(name, searchText string, color lipgloss.AdaptiveColor) string {
 	if searchText != "" {
 		return highlightMatch(name, searchText, false, color)
 	}

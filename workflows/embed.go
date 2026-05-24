@@ -12,9 +12,11 @@ import (
 const RefPrefix = "builtin:"
 
 // FS contains the builtin workflows embedded at build time from the repository's
-// workflows/ directory.
+// workflows/ directory. The `all:` prefix is required so that `_group.yaml`
+// namespace metadata files are embedded — Go's default embed behaviour excludes
+// any file whose basename begins with `_` or `.`.
 //
-//go:embed *
+//go:embed all:*
 var FS embed.FS
 
 func IsRef(workflowFile string) bool {
@@ -41,6 +43,9 @@ func Resolve(name string) (string, error) {
 	if !ok || ns == "" || workflowName == "" {
 		return "", fmt.Errorf("workflow %q not found", name)
 	}
+	if isMetadataBasename(workflowName) {
+		return "", fmt.Errorf("workflow %q not found", name)
+	}
 	for _, ext := range []string{".yaml", ".yml"} {
 		candidate := path.Join(ns, workflowName+ext)
 		info, err := fs.Stat(FS, candidate)
@@ -55,6 +60,12 @@ func Resolve(name string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("workflow %q not found", name)
+}
+
+// isMetadataBasename reports whether the basename of name starts with `_`,
+// matching the convention used by List() to skip namespace metadata files.
+func isMetadataBasename(name string) bool {
+	return strings.HasPrefix(path.Base(name), "_")
 }
 
 func ReadFile(workflowFile string) ([]byte, error) {
@@ -117,6 +128,9 @@ func List() ([]string, error) {
 			return err
 		}
 		if d.IsDir() {
+			return nil
+		}
+		if isMetadataBasename(p) || !strings.Contains(p, "/") {
 			return nil
 		}
 		ext := path.Ext(p)
