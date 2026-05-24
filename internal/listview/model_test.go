@@ -533,7 +533,7 @@ func TestListModel_SettingsEditorSwallowsListKeys(t *testing.T) {
 	}
 }
 
-func TestListModel_SettingsEditorSaveAppliesThemeClosesAndForcesRender(t *testing.T) {
+func TestListModel_SettingsEditorEnterCommitsAppliesThemeAndClosesEditor(t *testing.T) {
 	var saved []usersettings.Settings
 	var applied []usersettings.Theme
 	m := newTestListModel([]runs.RunInfo{inactiveRun()})
@@ -550,11 +550,20 @@ func TestListModel_SettingsEditorSaveAppliesThemeClosesAndForcesRender(t *testin
 		applied = append(applied, theme)
 	}
 	m, _ = pressKey(m, "s")
-	m, _ = pressSpecialKey(m, tea.KeyRight)
 
-	m, cmd := pressSpecialKey(m, tea.KeyEnter)
+	// Tab cycles the value locally without saving.
+	m, cmd := pressSpecialKey(m, tea.KeyTab)
+	if cmd != nil {
+		t.Fatal("tab should not emit a save command; saves are deferred to Enter")
+	}
+	if len(saved) != 0 {
+		t.Fatalf("saved count after Tab = %d, want 0", len(saved))
+	}
+
+	// Enter commits the pending change, fires SavedMsg, and the embedder closes.
+	m, cmd = pressSpecialKey(m, tea.KeyEnter)
 	if cmd == nil {
-		t.Fatal("enter in settings editor should emit a save command")
+		t.Fatal("enter should emit a save command")
 	}
 	msg := cmd()
 	if _, ok := msg.(settingseditor.SavedMsg); !ok {
@@ -565,7 +574,7 @@ func TestListModel_SettingsEditorSaveAppliesThemeClosesAndForcesRender(t *testin
 	m = next.(*Model)
 
 	if m.settingsEditor != nil {
-		t.Fatal("saved settings editor should close")
+		t.Fatal("editor should close after Enter commits and SavedMsg is handled")
 	}
 	if len(saved) != 1 || saved[0].Theme != usersettings.ThemeDark {
 		t.Fatalf("saved settings = %#v, want one dark save", saved)
@@ -583,22 +592,60 @@ func TestListModel_SettingsEditorSaveAppliesThemeClosesAndForcesRender(t *testin
 	}
 }
 
-func TestListModel_SettingsEditorCancelClosesWithoutSavingOrApplying(t *testing.T) {
-	saved := false
-	applied := false
+func TestListModel_SettingsEditorEscDiscardsPendingChangesAndClosesEditor(t *testing.T) {
+	saveCount := 0
+	applyCount := 0
 	m := newTestListModel([]runs.RunInfo{inactiveRun()})
 	m.loadSettings = func() (usersettings.Settings, error) {
 		return usersettings.Settings{Theme: usersettings.ThemeLight}, nil
 	}
 	m.saveSettings = func(usersettings.Settings) error {
-		saved = true
+		saveCount++
 		return nil
 	}
 	m.applyTheme = func(usersettings.Theme) {
-		applied = true
+		applyCount++
 	}
 	m, _ = pressKey(m, "s")
-	m, _ = pressSpecialKey(m, tea.KeyRight)
+
+	// Cycle Theme locally, then Esc without committing.
+	m, _ = pressSpecialKey(m, tea.KeyTab)
+	m, cmd := pressSpecialKey(m, tea.KeyEsc)
+	if cmd == nil {
+		t.Fatal("esc should emit a cancel command")
+	}
+	next, closeCmd := m.Update(cmd())
+	m = next.(*Model)
+
+	if closeCmd != nil {
+		t.Fatal("cancel should not force render")
+	}
+	if m.settingsEditor != nil {
+		t.Fatal("cancelled settings editor should close")
+	}
+	if saveCount != 0 {
+		t.Fatalf("Esc should not invoke save (got %d saves)", saveCount)
+	}
+	if applyCount != 0 {
+		t.Fatalf("Esc should not invoke apply (got %d applies)", applyCount)
+	}
+}
+
+func TestListModel_SettingsEditorEscClosesAndDoesNotInvokeSave(t *testing.T) {
+	saveCount := 0
+	applyCount := 0
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.loadSettings = func() (usersettings.Settings, error) {
+		return usersettings.Settings{Theme: usersettings.ThemeLight}, nil
+	}
+	m.saveSettings = func(usersettings.Settings) error {
+		saveCount++
+		return nil
+	}
+	m.applyTheme = func(usersettings.Theme) {
+		applyCount++
+	}
+	m, _ = pressKey(m, "s")
 
 	m, cmd := pressSpecialKey(m, tea.KeyEsc)
 	if cmd == nil {
@@ -613,11 +660,11 @@ func TestListModel_SettingsEditorCancelClosesWithoutSavingOrApplying(t *testing.
 	if m.settingsEditor != nil {
 		t.Fatal("cancelled settings editor should close")
 	}
-	if saved {
-		t.Fatal("cancel should not save")
+	if saveCount != 0 {
+		t.Fatalf("esc should not invoke save (got %d saves)", saveCount)
 	}
-	if applied {
-		t.Fatal("cancel should not apply theme")
+	if applyCount != 0 {
+		t.Fatalf("esc should not invoke apply (got %d applies)", applyCount)
 	}
 }
 
@@ -637,12 +684,13 @@ func TestListModel_SettingsEditorSaveFailureStaysOpenAndDoesNotApply(t *testing.
 		applied = true
 	}
 	m, _ = pressKey(m, "s")
-	m, _ = pressSpecialKey(m, tea.KeyRight)
 
+	// Cycle the value, then Enter to commit. The save fails.
+	m, _ = pressSpecialKey(m, tea.KeyTab)
 	m, cmd := pressSpecialKey(m, tea.KeyEnter)
 
 	if cmd != nil {
-		t.Fatal("failed editor save should not emit completion command")
+		t.Fatal("failed editor save should not emit SavedMsg")
 	}
 	if m.settingsEditor == nil {
 		t.Fatal("editor should stay open on save failure")
@@ -685,7 +733,11 @@ func TestListView_SettingsOverlayKeepsUnderlyingListVisible(t *testing.T) {
 
 	view := sanitize(m.View())
 
-	for _, want := range []string{"Current Dir", "implement", "Theme", "Light", "Dark"} {
+	// The editor's compact view shows each field's current value only (not all
+	// options). The test asserts both the underlying list ("implement",
+	// "Current Dir") and the editor's content (field labels + current values)
+	// are visible simultaneously.
+	for _, want := range []string{"Current Dir", "implement", "Theme", "Autonomous Backend", "Dark"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("View() missing %q with settings editor open:\n%s", want, view)
 		}

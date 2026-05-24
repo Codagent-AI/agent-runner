@@ -289,21 +289,22 @@ func buildExecutionContext(workflow *model.Workflow, params map[string]string, o
 	}
 
 	ctx := model.NewRootContext(&model.RootContextOptions{
-		Params:              params,
-		WorkflowFile:        opts.WorkflowFile,
-		WorkflowName:        workflow.Name,
-		WorkflowDescription: workflow.Description,
-		AutonomousBackend:   string(settings.AutonomousBackend),
-		SessionDir:          sessionDir,
-		EngineRef:           engineRef,
-		ProfileStore:        profileStore,
-		SessionIDs:          opts.SessionIDs,
-		SessionProfiles:     opts.SessionProfiles,
-		CapturedVariables:   opts.CapturedVariables,
-		AuditLogger:         auditEventLogger,
-		NamedSessions:       opts.NamedSessions,
-		NamedSessionDecls:   opts.NamedSessionDecls,
-		UIStepHandler:       opts.UIStepHandler,
+		Params:                   params,
+		WorkflowFile:             opts.WorkflowFile,
+		WorkflowName:             workflow.Name,
+		WorkflowDescription:      workflow.Description,
+		AutonomousBackend:        string(settings.AutonomousBackend),
+		AutonomousPermissionMode: string(usersettings.EffectiveAutonomousPermissionMode(settings.AutonomousPermissionMode)),
+		SessionDir:               sessionDir,
+		EngineRef:                engineRef,
+		ProfileStore:             profileStore,
+		SessionIDs:               opts.SessionIDs,
+		SessionProfiles:          opts.SessionProfiles,
+		CapturedVariables:        opts.CapturedVariables,
+		AuditLogger:              auditEventLogger,
+		NamedSessions:            opts.NamedSessions,
+		NamedSessionDecls:        opts.NamedSessionDecls,
+		UIStepHandler:            opts.UIStepHandler,
 	})
 	if opts.ChildState != nil {
 		ctx.ResumeChildState = opts.ChildState

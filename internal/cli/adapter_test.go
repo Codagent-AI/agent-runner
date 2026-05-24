@@ -133,6 +133,40 @@ func TestClaudeAdapter(t *testing.T) {
 		assertArgs(t, expected, args)
 	})
 
+	t.Run("yolo autonomous uses bypass permission mode", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:         "do something",
+			Context:        ContextAutonomousHeadless,
+			PermissionMode: "yolo",
+		})
+		expected := []string{"claude", "--permission-mode", "bypassPermissions", "-p", "--", "do something"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("yolo interactive does not loosen permissions", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:         "review code",
+			Context:        ContextInteractive,
+			PermissionMode: "yolo",
+		})
+		for _, disallowed := range []string{"acceptEdits", "bypassPermissions"} {
+			if containsString(args, disallowed) {
+				t.Fatalf("did not expect %s in interactive args, got %v", disallowed, args)
+			}
+		}
+	})
+
+	t.Run("yolo autonomous-interactive uses bypass permission mode", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:         "do something",
+			Context:        ContextAutonomousInteractive,
+			PermissionMode: "yolo",
+		})
+		if !hasFlagValue(args, "--permission-mode", "bypassPermissions") {
+			t.Fatalf("expected --permission-mode bypassPermissions in autonomous-interactive yolo args, got %v", args)
+		}
+	})
+
 	t.Run("resume headless uses --resume", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:    "continue",
@@ -327,6 +361,40 @@ func TestCodexAdapter(t *testing.T) {
 		})
 		expected := []string{"codex", "--sandbox", "workspace-write", "exec", "--json", "do something"}
 		assertArgs(t, expected, args)
+	})
+
+	t.Run("yolo autonomous uses danger full access sandbox", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:         "do something",
+			Context:        ContextAutonomousHeadless,
+			PermissionMode: "yolo",
+		})
+		expected := []string{"codex", "--sandbox", "danger-full-access", "exec", "--json", "do something"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("yolo interactive does not loosen permissions", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:         "review code",
+			Context:        ContextInteractive,
+			PermissionMode: "yolo",
+		})
+		for i, a := range args {
+			if a == "--sandbox" && i+1 < len(args) && args[i+1] == "danger-full-access" {
+				t.Fatalf("did not expect danger-full-access sandbox for interactive mode, got %v", args)
+			}
+		}
+	})
+
+	t.Run("yolo autonomous-interactive uses danger-full-access sandbox", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:         "do something",
+			Context:        ContextAutonomousInteractive,
+			PermissionMode: "yolo",
+		})
+		if !hasFlagValue(args, "--sandbox", "danger-full-access") {
+			t.Fatalf("expected --sandbox danger-full-access in autonomous-interactive yolo args, got %v", args)
+		}
 	})
 
 	t.Run("fresh interactive", func(t *testing.T) {
@@ -790,6 +858,42 @@ func TestCopilotAdapter(t *testing.T) {
 		assertArgs(t, expected, args)
 	})
 
+	t.Run("yolo autonomous adds all tools flag", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:         "do something",
+			Context:        ContextAutonomousHeadless,
+			PermissionMode: "yolo",
+		})
+		expected := []string{"copilot", "-p", "do something", "-s", "--allow-tool=write", "--autopilot", "--allow-all-tools"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("yolo interactive does not loosen permissions", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:         "review code",
+			Context:        ContextInteractive,
+			PermissionMode: "yolo",
+		})
+		for _, disallowed := range []string{"--allow-tool=write", "--autopilot", "--allow-all-tools"} {
+			if containsString(args, disallowed) {
+				t.Fatalf("did not expect %s in interactive args, got %v", disallowed, args)
+			}
+		}
+	})
+
+	t.Run("yolo autonomous-interactive adds all tools flag", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:         "do something",
+			Context:        ContextAutonomousInteractive,
+			PermissionMode: "yolo",
+		})
+		for _, want := range []string{"--allow-tool=write", "--autopilot", "--allow-all-tools"} {
+			if !containsString(args, want) {
+				t.Fatalf("expected %s in autonomous-interactive yolo args, got %v", want, args)
+			}
+		}
+	})
+
 	t.Run("fresh interactive copilot step uses interactive prompt flag", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:  "review code",
@@ -1085,6 +1189,27 @@ func TestCursorAdapter(t *testing.T) {
 			Context: ContextAutonomousHeadless,
 		})
 		expected := []string{"agent", "-p", "--output-format", "stream-json", "--trust", "do something"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("headless conservative omits force", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:         "do something",
+			Context:        ContextAutonomousHeadless,
+			PermissionMode: "conservative",
+		})
+		if containsString(args, "--force") {
+			t.Fatalf("did not expect --force in conservative args, got %v", args)
+		}
+	})
+
+	t.Run("headless yolo includes force", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:         "do something",
+			Context:        ContextAutonomousHeadless,
+			PermissionMode: "yolo",
+		})
+		expected := []string{"agent", "-p", "--output-format", "stream-json", "--trust", "--force", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -1577,6 +1702,15 @@ func assertArgs(t *testing.T, expected, actual []string) {
 func containsString(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func hasFlagValue(values []string, flag, value string) bool {
+	for i, v := range values {
+		if v == flag && i+1 < len(values) && values[i+1] == value {
 			return true
 		}
 	}

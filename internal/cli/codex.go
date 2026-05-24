@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/codagent/agent-runner/internal/usersettings"
 )
 
 // CodexAdapter constructs invocation args for the Codex CLI.
@@ -37,7 +39,11 @@ func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 	resuming := sessionID != ""
 
 	if context.IsAutonomous() {
-		args = append(args, "--sandbox", "workspace-write")
+		sandbox := "workspace-write"
+		if usersettings.EffectiveAutonomousPermissionMode(input.PermissionMode) == usersettings.PermissionModeYOLO {
+			sandbox = "danger-full-access"
+		}
+		args = append(args, "--sandbox", sandbox)
 	}
 
 	if context.IsHeadless() {

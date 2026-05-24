@@ -107,6 +107,20 @@ func TestOpenCodeAdapter(t *testing.T) {
 		assertArgs(t, expected, args)
 	})
 
+	t.Run("autonomous permission mode does not change args", func(t *testing.T) {
+		baseline := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:         "do something",
+			Context:        ContextAutonomousHeadless,
+			PermissionMode: "conservative",
+		})
+		yolo := adapter.BuildArgs(&BuildArgsInput{
+			Prompt:         "do something",
+			Context:        ContextAutonomousHeadless,
+			PermissionMode: "yolo",
+		})
+		assertArgs(t, baseline, yolo)
+	})
+
 	t.Run("does not support system prompt", func(t *testing.T) {
 		if adapter.SupportsSystemPrompt() {
 			t.Fatal("expected OpenCode adapter to not support system prompt")

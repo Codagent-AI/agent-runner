@@ -158,7 +158,7 @@ func TestEnsureFirstRunForTUISkipsWhenCompletedDismissedOrNonTTY(t *testing.T) {
 	}
 }
 
-func TestEnsureFirstRunForTUICancelledSetupDoesNotStartDemo(t *testing.T) {
+func TestEnsureFirstRunForTUICancelledSetupExitsApp(t *testing.T) {
 	var launched bool
 	result := ensureFirstRunForTUI(firstRunDeps{
 		load:        func() (usersettings.Settings, error) { return usersettings.Settings{}, nil },
@@ -172,7 +172,7 @@ func TestEnsureFirstRunForTUICancelledSetupDoesNotStartDemo(t *testing.T) {
 			return firstRunWorkflowResult{}
 		},
 	})
-	requireFirstRunContinue(t, result)
+	requireFirstRunExit(t, result, 0)
 	if launched {
 		t.Fatal("onboarding demo launched after cancelled setup")
 	}

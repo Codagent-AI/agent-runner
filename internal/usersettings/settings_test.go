@@ -127,6 +127,51 @@ func TestLoadAutonomousBackendValues(t *testing.T) {
 	}
 }
 
+func TestLoadAutonomousPermissionModeValues(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		want    AutonomousPermissionMode
+		wantErr string
+	}{
+		{name: "yolo", body: "autonomous_permission_mode: yolo\n", want: PermissionModeYOLO},
+		{name: "conservative", body: "autonomous_permission_mode: conservative\n", want: PermissionModeConservative},
+		{name: "missing defaults conservative", body: "theme: dark\n", want: PermissionModeConservative},
+		{name: "invalid rejected", body: "autonomous_permission_mode: ludicrous\n", wantErr: `invalid autonomous_permission_mode "ludicrous"`},
+		{name: "sequence rejected", body: "autonomous_permission_mode: [yolo]\n", wantErr: "invalid autonomous_permission_mode"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			writeSettingsFile(t, home, tt.body)
+
+			got, err := Load()
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatal("Load() returned nil error, want validation error")
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Load() error = %v, want containing %q", err, tt.wantErr)
+				}
+				for _, valid := range []string{"conservative", "yolo"} {
+					if !strings.Contains(err.Error(), valid) {
+						t.Fatalf("Load() error = %v, want valid option %q", err, valid)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() returned error: %v", err)
+			}
+			if got.AutonomousPermissionMode != tt.want {
+				t.Fatalf("Load().AutonomousPermissionMode = %q, want %q", got.AutonomousPermissionMode, tt.want)
+			}
+		})
+	}
+}
+
 func TestSavePreservesAutonomousBackendOnUnrelatedWrite(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -154,6 +199,69 @@ func TestSavePreservesAutonomousBackendOnUnrelatedWrite(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "experimental_foo: 7") {
 		t.Fatalf("settings body lost unrelated key:\n%s", body)
+	}
+}
+
+func TestSavePreservesAutonomousPermissionModeOnUnrelatedWrite(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeSettingsFile(t, home, "autonomous_permission_mode: yolo\ntheme: light\nexperimental_foo: 7\n")
+
+	settings, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	settings.Theme = ThemeDark
+	if err := Save(settings); err != nil {
+		t.Fatalf("Save() returned error: %v", err)
+	}
+
+	reloaded, err := Load()
+	if err != nil {
+		t.Fatalf("Reload() returned error: %v", err)
+	}
+	if reloaded.AutonomousPermissionMode != PermissionModeYOLO {
+		t.Fatalf("AutonomousPermissionMode = %q, want yolo", reloaded.AutonomousPermissionMode)
+	}
+	body, err := os.ReadFile(filepath.Join(home, ".agent-runner", "settings.yaml"))
+	if err != nil {
+		t.Fatalf("ReadFile(settings) returned error: %v", err)
+	}
+	if !strings.Contains(string(body), "experimental_foo: 7") {
+		t.Fatalf("settings body lost unrelated key:\n%s", body)
+	}
+}
+
+func TestAutonomousBackendAndPermissionModeCoexist(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeSettingsFile(t, home, "autonomous_backend: interactive-claude\nautonomous_permission_mode: yolo\n")
+
+	settings, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if settings.AutonomousBackend != BackendInteractiveClaude {
+		t.Fatalf("AutonomousBackend = %q, want interactive-claude", settings.AutonomousBackend)
+	}
+	if settings.AutonomousPermissionMode != PermissionModeYOLO {
+		t.Fatalf("AutonomousPermissionMode = %q, want yolo", settings.AutonomousPermissionMode)
+	}
+
+	settings.AutonomousBackend = BackendHeadless
+	if err := Save(settings); err != nil {
+		t.Fatalf("Save() returned error: %v", err)
+	}
+
+	reloaded, err := Load()
+	if err != nil {
+		t.Fatalf("Reload() returned error: %v", err)
+	}
+	if reloaded.AutonomousBackend != BackendHeadless {
+		t.Fatalf("AutonomousBackend = %q, want headless", reloaded.AutonomousBackend)
+	}
+	if reloaded.AutonomousPermissionMode != PermissionModeYOLO {
+		t.Fatalf("AutonomousPermissionMode = %q, want yolo", reloaded.AutonomousPermissionMode)
 	}
 }
 
