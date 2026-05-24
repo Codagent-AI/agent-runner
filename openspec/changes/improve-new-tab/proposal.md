@@ -8,19 +8,23 @@ We want the home screen to read top-to-bottom as a curated, self-explanatory men
 
 - Add a per-group header on the new tab, rendered above each group's workflow rows, containing a group label and a short description.
 - Add a configurable ordering for built-in workflow groups so the order they appear in the new tab is decoupled from filesystem/alphabetical order.
-- Project-scope and user-scope workflows SHALL render as two separate groups (each with its own header and description) above all built-in groups by default. The precise sequence of built-in groups will be defined in the spec phase.
+- Project-scope and user-scope workflows SHALL render as two separate groups (each with its own header and description) above all built-in groups by default. The built-in group sequence is **spec-driven → openspec → onboarding → core**.
 - Each built-in namespace (`workflows/<ns>/`) SHALL contribute its own display name and description via a per-namespace metadata file embedded alongside the workflow YAMLs. The project and user scope groups SHALL get their headers and descriptions from static copy defined in the listview code (they don't live under `workflows/<ns>/`).
-- The search/filter behavior, row rendering, selection model, and keybindings on the new tab are unchanged.
+- Workflows MAY declare themselves as sub-workflows by adding `hidden: true` to their YAML frontmatter. Hidden workflows SHALL be omitted from the new tab's default view but SHALL remain runnable via `agent-runner run <name>` and other non-TUI entry points.
+- The new tab SHALL provide a keybinding that toggles the visibility of hidden workflows, allowing users to reveal and run them from the TUI when needed.
+- The search/filter behavior, row rendering, selection model, and other keybindings on the new tab are unchanged.
 
 ## Capabilities
 
 ### New Capabilities
 
-- `new-tab-layout`: Defines how the new-tab home screen presents discovered workflows — group ordering, group headers, per-group descriptions, and how project/user/builtin scopes map onto display groups. Covers the visual layout above each group and the rule that the project and user groups render (in that relative order) above all built-in groups.
+- `new-tab-layout`: Defines how the new-tab home screen presents discovered workflows — group ordering, group headers, per-group descriptions, and how project/user/builtin scopes map onto display groups. Covers the visual layout above each group, the rule that project and user groups render above all built-in groups, the built-in group sequence (spec-driven → openspec → onboarding → core), and the default-hide behavior plus reveal-toggle keybinding for `hidden` workflows.
 
 ### Modified Capabilities
 
 - `builtin-workflows`: Adds the per-namespace metadata file (display name and description, consumed by `new-tab-layout`) as an embedded part of each `workflows/<ns>/` directory. Whether the same file also carries an ordering hint, or whether ordering is configured elsewhere, is deferred to the `new-tab-layout` spec. The existing requirements about YAML workflow files, sub-workflow resolution, and bundled assets are unchanged; this is purely additive.
+
+The optional `hidden: true` workflow YAML field is introduced and specified by `new-tab-layout` (it is a display-layer hint with no effect on workflow loading, resolution, or execution).
 
 ## Technical Approach
 
@@ -70,7 +74,7 @@ Key technical decisions:
 
 4. **Render the header inside the existing scroll budget.** The new-tab body currently treats group separators as blank rows in the filtered list (`buildFilteredRows` emits `-1` entries). The header + description rows extend this pattern: a small struct identifying header rows is added to the filtered list alongside the workflow indices, and `renderNewTab` renders them as multi-line non-selectable rows. Scroll math (`maxRows`, `adjustOffset`) accounts for header height.
 
-5. **Ordering is data-driven, not a hardcoded switch in code.** The eventual sequence of built-in groups is configured outside Go source — the exact configuration surface (per-namespace metadata file, a project-level config, or both) is to be decided in the spec phase. When two groups tie on the configured ordering signal (or both lack one), the renderer SHALL fall back to today's behavior: alphabetical by namespace within each scope. This keeps `improve-new-tab` from baking specific group names into Go source and makes future additions of new namespaces declarative.
+5. **Built-in group ordering is hardcoded in Go.** The sequence of built-in groups lives in `internal/listview` as a `var builtinGroupOrder []string` constant. Adding a new builtin namespace requires a code edit to position it in the sequence — which already happens for every namespace change since builtins are embedded at build time. When a namespace is not listed in the configured order (or two groups tie), the renderer falls back to today's behavior: alphabetical by namespace within each scope. The design phase considered and rejected per-namespace `order` fields and a top-level `workflows/groups.yaml`; see `design.md` for rationale.
 
 Detailed ordering rules, the exact metadata-file schema, header styling, and the rendering behavior for a group whose rows are all filtered out by the search box are deferred to the spec and design phases.
 
@@ -92,5 +96,5 @@ Detailed ordering rules, the exact metadata-file schema, header styling, and the
   - `internal/tuistyle/styles.go` — styles for the group header / divider rule and description line.
 - **Embedded assets:** New metadata files added under `workflows/core/`, `workflows/onboarding/`, `workflows/openspec/`, `workflows/spec-driven/`.
 - **Specs:** New `new-tab-layout` spec; delta to `builtin-workflows` for the metadata file.
-- **No API or CLI surface changes.** Run/resume/inspect commands and discovery output formats are unchanged.
+- **No CLI surface changes.** Run/resume/inspect commands behave identically. The `Workflow` JSON serialization gains an optional `hidden` field (omitempty), which is the only externally visible structural change — no existing consumer is known to parse this output, and the field defaults to absent when unset.
 - **No dependency changes** anticipated; metadata parsing reuses existing YAML loader.
