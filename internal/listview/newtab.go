@@ -57,13 +57,12 @@ func (m *Model) handleSearchKey(msg tea.KeyMsg) (*Model, tea.Cmd) {
 		m.prevTab()
 	case "esc":
 		m.newTab.searchText = ""
-		m.newTab.filtered = buildFilteredRows(m.newTab.workflows, m.newTab.groups, "", m.newTab.showHidden)
-		m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
+		m.rebuildNewTabFiltered()
 	case "backspace":
 		if m.newTab.searchText != "" {
 			r := []rune(m.newTab.searchText)
 			m.newTab.searchText = string(r[:len(r)-1])
-			m.updateSearchFilter()
+			m.rebuildNewTabFiltered()
 		}
 	case "down", "enter":
 		m.newTab.searchFocused = false
@@ -71,13 +70,15 @@ func (m *Model) handleSearchKey(msg tea.KeyMsg) (*Model, tea.Cmd) {
 	default:
 		if msg.Type == tea.KeyRunes {
 			m.newTab.searchText += msg.String()
-			m.updateSearchFilter()
+			m.rebuildNewTabFiltered()
 		}
 	}
 	return m, nil
 }
 
-func (m *Model) updateSearchFilter() {
+// rebuildNewTabFiltered recomputes the filtered row list and resets the cursor
+// to the first selectable row, using the current searchText and showHidden state.
+func (m *Model) rebuildNewTabFiltered() {
 	m.newTab.filtered = buildFilteredRows(m.newTab.workflows, m.newTab.groups, m.newTab.searchText, m.newTab.showHidden)
 	m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
 }

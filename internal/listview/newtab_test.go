@@ -577,7 +577,7 @@ func TestBackspace_MultiByte(t *testing.T) {
 	m.newTab.searchFocused = true
 	// "café" ends with é (U+00E9, 2 bytes in UTF-8).
 	m.newTab.searchText = "café"
-	m.updateSearchFilter()
+	m.rebuildNewTabFiltered()
 
 	// Simulate a single backspace.
 	m, _ = m.handleSearchKey(keyMsg("backspace"))

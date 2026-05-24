@@ -177,8 +177,7 @@ func New(opts ...func(*Model)) (*Model, error) {
 	}
 	m.newTab.workflows = workflows
 	m.newTab.groups = groups
-	m.newTab.filtered = buildFilteredRows(workflows, groups, "", false)
-	m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
+	m.rebuildNewTabFiltered()
 
 	for _, opt := range opts {
 		opt(m)
@@ -448,8 +447,7 @@ func (m *Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "h":
 		if m.activeTab == tabNew {
 			m.newTab.showHidden = !m.newTab.showHidden
-			m.newTab.filtered = buildFilteredRows(m.newTab.workflows, m.newTab.groups, m.newTab.searchText, m.newTab.showHidden)
-			m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
+			m.rebuildNewTabFiltered()
 		}
 	case "up", "k":
 		m.moveCursor(-1)
@@ -615,8 +613,7 @@ func (m *Model) prevTab() {
 func (m *Model) enterNewTab() {
 	m.activeTab = tabNew
 	m.newTab.showHidden = false
-	m.newTab.filtered = buildFilteredRows(m.newTab.workflows, m.newTab.groups, m.newTab.searchText, false)
-	m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
+	m.rebuildNewTabFiltered()
 }
 
 func (m *Model) moveCursor(delta int) {
@@ -849,8 +846,7 @@ func (m *Model) handleEsc() {
 	case tabNew:
 		if m.newTab.searchText != "" {
 			m.newTab.searchText = ""
-			m.newTab.filtered = buildFilteredRows(m.newTab.workflows, m.newTab.groups, "", m.newTab.showHidden)
-			m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
+			m.rebuildNewTabFiltered()
 			m.newTab.searchFocused = true
 		}
 	case tabWorktrees:

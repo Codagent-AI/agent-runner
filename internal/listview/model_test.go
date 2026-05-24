@@ -314,7 +314,7 @@ func TestNewTab_HKeyPreservesSearchText(t *testing.T) {
 		{CanonicalName: "core:hidden-target", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/hidden.yaml", Hidden: true},
 	})
 	m.newTab.searchText = "hidden"
-	m.updateSearchFilter()
+	m.rebuildNewTabFiltered()
 
 	m, _ = pressKey(m, "h")
 
