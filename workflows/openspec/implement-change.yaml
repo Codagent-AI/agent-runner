@@ -1,5 +1,6 @@
 name: implement-change
 description: "For-each loop over task files, invoking implement-task per task"
+hidden: true
 
 params:
   - name: change_name

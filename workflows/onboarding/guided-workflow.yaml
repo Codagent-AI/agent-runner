@@ -1,5 +1,6 @@
 name: onboarding-guided-workflow
 description: Guides the user through planning, tutoring, and autonomous implementation during onboarding.
+hidden: true
 
 sessions:
   - name: planning-session

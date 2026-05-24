@@ -52,8 +52,41 @@ func newTabModel(entries []discovery.WorkflowEntry) *Model {
 		activeTab: tabNew,
 	}
 	m.newTab.workflows = entries
-	m.newTab.filtered = buildFilteredRows(entries, "")
+	m.newTab.groups = defaultTestGroups()
+	m.newTab.filtered = buildFilteredRows(entries, m.newTab.groups, "", false)
+	m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
 	return m
+}
+
+func defaultTestGroups() []discovery.GroupMetadata {
+	return []discovery.GroupMetadata{
+		{Scope: discovery.ScopeProject, DisplayName: "Project workflows", Description: "Project-specific workflows."},
+		{Scope: discovery.ScopeUser, DisplayName: "User workflows", Description: "Personal workflows."},
+		{Scope: discovery.ScopeBuiltin, Namespace: "spec-driven", DisplayName: "Spec-Driven", Description: "Spec-driven workflows."},
+		{Scope: discovery.ScopeBuiltin, Namespace: "openspec", DisplayName: "OpenSpec", Description: "OpenSpec workflows."},
+		{Scope: discovery.ScopeBuiltin, Namespace: "onboarding", DisplayName: "Onboarding", Description: "Onboarding workflows."},
+		{Scope: discovery.ScopeBuiltin, Namespace: "core", DisplayName: "Core", Description: "Core workflows."},
+	}
+}
+
+func workflowRows(filtered []filteredRow) []int {
+	var indices []int
+	for _, row := range filtered {
+		if row.kind == workflowRow {
+			indices = append(indices, row.index)
+		}
+	}
+	return indices
+}
+
+func headerNames(filtered []filteredRow, groups []discovery.GroupMetadata) []string {
+	var names []string
+	for _, row := range filtered {
+		if row.kind == headerRow {
+			names = append(names, groups[row.index].DisplayName)
+		}
+	}
+	return names
 }
 
 // TestNewTab_PressN_SwitchesToNewTab verifies n key switches to new tab.
@@ -170,20 +203,14 @@ func TestNewTab_FilterNarrowsList(t *testing.T) {
 		{CanonicalName: "core:implement-task", SourcePath: "/w/impl.yaml", Scope: discovery.ScopeBuiltin, Namespace: "core"},
 		{CanonicalName: "core:finalize-pr", SourcePath: "/w/fin.yaml", Scope: discovery.ScopeBuiltin, Namespace: "core"},
 	}
-	filtered := buildFilteredRows(entries, "impl")
+	filtered := buildFilteredRows(entries, defaultTestGroups(), "impl", false)
 
-	// Count non-separator rows.
-	count := 0
-	for _, idx := range filtered {
-		if idx >= 0 {
-			count++
-		}
+	rows := workflowRows(filtered)
+	if len(rows) != 1 {
+		t.Errorf("filter 'impl' should match 1 entry, got %d", len(rows))
 	}
-	if count != 1 {
-		t.Errorf("filter 'impl' should match 1 entry, got %d", count)
-	}
-	if filtered[0] != 0 {
-		t.Errorf("filtered[0] should be index 0 (implement-task), got %d", filtered[0])
+	if rows[0] != 0 {
+		t.Errorf("first workflow row should be index 0 (implement-task), got %d", rows[0])
 	}
 }
 
@@ -193,16 +220,11 @@ func TestNewTab_FilterCaseInsensitive(t *testing.T) {
 		{CanonicalName: "core:Implement-Task", SourcePath: "/w/impl.yaml", Scope: discovery.ScopeBuiltin, Namespace: "core"},
 		{CanonicalName: "core:finalize-pr", SourcePath: "/w/fin.yaml", Scope: discovery.ScopeBuiltin, Namespace: "core"},
 	}
-	filtered := buildFilteredRows(entries, "IMPL")
+	filtered := buildFilteredRows(entries, defaultTestGroups(), "IMPL", false)
 
-	count := 0
-	for _, idx := range filtered {
-		if idx >= 0 {
-			count++
-		}
-	}
-	if count != 1 {
-		t.Errorf("filter 'IMPL' (case-insensitive) should match 1 entry, got %d", count)
+	rows := workflowRows(filtered)
+	if len(rows) != 1 {
+		t.Errorf("filter 'IMPL' (case-insensitive) should match 1 entry, got %d", len(rows))
 	}
 }
 
@@ -212,16 +234,11 @@ func TestNewTab_EmptyFilterShowsAll(t *testing.T) {
 		{CanonicalName: "core:implement-task", SourcePath: "/w/impl.yaml", Scope: discovery.ScopeBuiltin, Namespace: "core"},
 		{CanonicalName: "core:finalize-pr", SourcePath: "/w/fin.yaml", Scope: discovery.ScopeBuiltin, Namespace: "core"},
 	}
-	filtered := buildFilteredRows(entries, "")
+	filtered := buildFilteredRows(entries, defaultTestGroups(), "", false)
 
-	count := 0
-	for _, idx := range filtered {
-		if idx >= 0 {
-			count++
-		}
-	}
-	if count != len(entries) {
-		t.Errorf("empty filter should show %d entries, got %d", len(entries), count)
+	rows := workflowRows(filtered)
+	if len(rows) != len(entries) {
+		t.Errorf("empty filter should show %d entries, got %d", len(entries), len(rows))
 	}
 }
 
@@ -232,11 +249,11 @@ func TestNewTab_BlankLineSeparatorsBetweenGroups(t *testing.T) {
 		{CanonicalName: "proj-wf", Scope: discovery.ScopeProject, SourcePath: "/proj/wf.yaml"},
 		{CanonicalName: "core:finalize-pr", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/fin.yaml"},
 	}
-	filtered := buildFilteredRows(entries, "")
+	filtered := buildFilteredRows(entries, defaultTestGroups(), "", false)
 
 	hasSeparator := false
-	for _, idx := range filtered {
-		if idx == -1 {
+	for _, row := range filtered {
+		if row.kind == separatorRow {
 			hasSeparator = true
 			break
 		}
@@ -253,14 +270,147 @@ func TestNewTab_EmptyGroupsCollapsed(t *testing.T) {
 		{CanonicalName: "core:finalize-pr", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/fin.yaml"},
 	}
 	// Filter that only matches the builtin.
-	filtered := buildFilteredRows(entries, "finalize")
+	filtered := buildFilteredRows(entries, defaultTestGroups(), "finalize", false)
 
 	// Proj-wf group should be collapsed. The first entry should be the builtin, no separator at start.
 	if len(filtered) == 0 {
 		t.Fatal("expected some results")
 	}
-	if filtered[0] == -1 {
+	if filtered[0].kind == separatorRow {
 		t.Error("filter collapsed project group: first row should be a valid entry, not separator")
+	}
+	if got := workflowRows(filtered); len(got) != 1 || got[0] != 1 {
+		t.Fatalf("workflow rows = %v, want only builtin index 1", got)
+	}
+}
+
+func TestNewTab_RendersGroupHeadersAndDescriptions(t *testing.T) {
+	entries := []discovery.WorkflowEntry{
+		{CanonicalName: "project-build", Scope: discovery.ScopeProject, SourcePath: "/proj/build.yaml"},
+		{CanonicalName: "user-deploy", Scope: discovery.ScopeUser, SourcePath: "/user/deploy.yaml"},
+		{CanonicalName: "core:finalize-pr", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/fin.yaml"},
+	}
+	m := newTabModel(entries)
+	m.termWidth = 100
+
+	rendered := sanitize(m.renderNewTab())
+	for _, want := range []string{
+		"Project workflows",
+		"Project-specific workflows.",
+		"User workflows",
+		"Personal workflows.",
+		"Core",
+		"Core workflows.",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered new tab missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
+func TestNewTab_GroupOrderingUsesCuratedBuiltinOrder(t *testing.T) {
+	entries := []discovery.WorkflowEntry{
+		{CanonicalName: "core:finalize-pr", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/core.yaml"},
+		{CanonicalName: "project-build", Scope: discovery.ScopeProject, SourcePath: "/proj/build.yaml"},
+		{CanonicalName: "onboarding:help", Scope: discovery.ScopeBuiltin, Namespace: "onboarding", SourcePath: "/b/help.yaml"},
+		{CanonicalName: "user-deploy", Scope: discovery.ScopeUser, SourcePath: "/user/deploy.yaml"},
+		{CanonicalName: "openspec:change", Scope: discovery.ScopeBuiltin, Namespace: "openspec", SourcePath: "/b/open.yaml"},
+		{CanonicalName: "spec-driven:change", Scope: discovery.ScopeBuiltin, Namespace: "spec-driven", SourcePath: "/b/spec.yaml"},
+	}
+
+	filtered := buildFilteredRows(entries, defaultTestGroups(), "", false)
+
+	got := strings.Join(headerNames(filtered, defaultTestGroups()), ",")
+	want := "Project workflows,User workflows,Spec-Driven,OpenSpec,Onboarding,Core"
+	if got != want {
+		t.Fatalf("header order = %s, want %s", got, want)
+	}
+}
+
+func TestNewTab_OmitsScopeWithZeroWorkflows(t *testing.T) {
+	entries := []discovery.WorkflowEntry{
+		{CanonicalName: "core:finalize-pr", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/core.yaml"},
+	}
+
+	filtered := buildFilteredRows(entries, defaultTestGroups(), "", false)
+
+	if got := strings.Join(headerNames(filtered, defaultTestGroups()), ","); got != "Core" {
+		t.Fatalf("headers = %s, want only Core", got)
+	}
+}
+
+func TestNewTab_UnconfiguredBuiltinNamespacesSortAfterConfigured(t *testing.T) {
+	entries := []discovery.WorkflowEntry{
+		{CanonicalName: "zeta:deploy", Scope: discovery.ScopeBuiltin, Namespace: "zeta", SourcePath: "/b/z.yaml"},
+		{CanonicalName: "alpha:deploy", Scope: discovery.ScopeBuiltin, Namespace: "alpha", SourcePath: "/b/a.yaml"},
+		{CanonicalName: "core:finalize-pr", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/core.yaml"},
+	}
+	groups := append(defaultTestGroups(),
+		discovery.GroupMetadata{Scope: discovery.ScopeBuiltin, Namespace: "zeta", DisplayName: "Zeta", Description: "Zeta workflows."},
+		discovery.GroupMetadata{Scope: discovery.ScopeBuiltin, Namespace: "alpha", DisplayName: "Alpha", Description: "Alpha workflows."},
+	)
+
+	filtered := buildFilteredRows(entries, groups, "", false)
+
+	got := strings.Join(headerNames(filtered, groups), ",")
+	want := "Core,Alpha,Zeta"
+	if got != want {
+		t.Fatalf("header order = %s, want %s", got, want)
+	}
+}
+
+func TestNewTab_HiddenWorkflowsOmittedByDefaultAndShownWhenToggled(t *testing.T) {
+	entries := []discovery.WorkflowEntry{
+		{CanonicalName: "core:visible", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/visible.yaml"},
+		{CanonicalName: "core:hidden", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/hidden.yaml", Hidden: true},
+	}
+
+	hiddenOff := buildFilteredRows(entries, defaultTestGroups(), "", false)
+	if got := workflowRows(hiddenOff); len(got) != 1 || got[0] != 0 {
+		t.Fatalf("hidden-off workflow rows = %v, want only visible index 0", got)
+	}
+
+	hiddenOn := buildFilteredRows(entries, defaultTestGroups(), "", true)
+	if got := workflowRows(hiddenOn); len(got) != 2 || got[0] != 0 || got[1] != 1 {
+		t.Fatalf("hidden-on workflow rows = %v, want visible and hidden", got)
+	}
+}
+
+func TestNewTab_HiddenOnlyGroupOmittedWhenToggleOff(t *testing.T) {
+	entries := []discovery.WorkflowEntry{
+		{CanonicalName: "core:hidden", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/hidden.yaml", Hidden: true},
+		{CanonicalName: "openspec:change", Scope: discovery.ScopeBuiltin, Namespace: "openspec", SourcePath: "/b/change.yaml"},
+	}
+
+	filtered := buildFilteredRows(entries, defaultTestGroups(), "", false)
+
+	if got := strings.Join(headerNames(filtered, defaultTestGroups()), ","); got != "OpenSpec" {
+		t.Fatalf("headers = %s, want only OpenSpec", got)
+	}
+}
+
+func TestNewTab_SearchDoesNotSurfaceHiddenWhenToggleOff(t *testing.T) {
+	entries := []discovery.WorkflowEntry{
+		{CanonicalName: "core:visible", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/visible.yaml"},
+		{CanonicalName: "core:hidden-target", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/hidden.yaml", Hidden: true},
+	}
+
+	hiddenOff := buildFilteredRows(entries, defaultTestGroups(), "hidden-target", false)
+	if got := workflowRows(hiddenOff); len(got) != 0 {
+		t.Fatalf("hidden-off search rows = %v, want none", got)
+	}
+
+	hiddenOn := buildFilteredRows(entries, defaultTestGroups(), "hidden-target", true)
+	if got := workflowRows(hiddenOn); len(got) != 1 || got[0] != 1 {
+		t.Fatalf("hidden-on search rows = %v, want hidden index 1", got)
+	}
+}
+
+func TestNewTab_InitialCursorSkipsLeadingHeader(t *testing.T) {
+	m := newTabModel([]discovery.WorkflowEntry{validEntry("core:finalize-pr")})
+
+	if m.newTab.filtered[m.newTab.cursor].kind != workflowRow {
+		t.Fatalf("initial cursor landed on %+v, want workflow row", m.newTab.filtered[m.newTab.cursor])
 	}
 }
 
@@ -272,20 +422,41 @@ func TestNewTab_CursorSkipsSeparators(t *testing.T) {
 	}
 	m := newTabModel(entries)
 	// Put cursor at first entry (proj-wf), move down — should skip separator and land on builtin.
-	m.newTab.cursor = 0
+	m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
 
 	m.moveCursor(1)
 
-	// Cursor should now point to the builtin entry (index 1 in workflows), not the separator.
+	// Cursor should now point to the builtin entry (index 1 in workflows), not any header/separator row.
 	cursorIdx := m.newTab.cursor
 	if cursorIdx >= len(m.newTab.filtered) {
 		t.Fatalf("cursor %d out of bounds (len=%d)", cursorIdx, len(m.newTab.filtered))
 	}
-	if m.newTab.filtered[cursorIdx] == -1 {
-		t.Error("cursor should skip blank-line separators")
+	if m.newTab.filtered[cursorIdx].kind != workflowRow {
+		t.Fatalf("cursor should skip non-workflow rows, landed on %+v", m.newTab.filtered[cursorIdx])
 	}
-	if m.newTab.filtered[cursorIdx] != 1 {
-		t.Errorf("cursor should land on workflow index 1 (core:finalize-pr), filtered[%d]=%d", cursorIdx, m.newTab.filtered[cursorIdx])
+	if m.newTab.filtered[cursorIdx].index != 1 {
+		t.Errorf("cursor should land on workflow index 1 (core:finalize-pr), filtered[%d]=%+v", cursorIdx, m.newTab.filtered[cursorIdx])
+	}
+}
+
+func TestNewTab_CursorSkipsHeadersWhenNavigatingUp(t *testing.T) {
+	entries := []discovery.WorkflowEntry{
+		{CanonicalName: "project-build", Scope: discovery.ScopeProject, SourcePath: "/proj/build.yaml"},
+		{CanonicalName: "core:finalize-pr", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/fin.yaml"},
+	}
+	m := newTabModel(entries)
+	for i, row := range m.newTab.filtered {
+		if row.kind == workflowRow && row.index == 1 {
+			m.newTab.cursor = i
+			break
+		}
+	}
+
+	m.moveCursor(-1)
+
+	row := m.newTab.filtered[m.newTab.cursor]
+	if row.kind != workflowRow || row.index != 0 {
+		t.Fatalf("cursor after moving up = %+v, want previous group's workflow row", row)
 	}
 }
 
@@ -293,7 +464,7 @@ func TestNewTab_CursorSkipsSeparators(t *testing.T) {
 func TestNewTab_UpFromFirstItem_FocusesSearchBox(t *testing.T) {
 	entries := []discovery.WorkflowEntry{validEntry("core:finalize-pr")}
 	m := newTabModel(entries)
-	m.newTab.cursor = 0
+	m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
 	m.newTab.searchFocused = false
 
 	m.moveCursor(-1)
@@ -343,6 +514,9 @@ func TestNewTab_HelpBar_ShowsNewTabBindings(t *testing.T) {
 	if !strings.Contains(help, "start run") {
 		t.Errorf("help bar should contain 'start run', got: %q", help)
 	}
+	if !strings.Contains(help, "h hidden") {
+		t.Errorf("help bar should contain 'h hidden', got: %q", help)
+	}
 }
 
 func TestNewTab_ViewFitsTerminalHeight(t *testing.T) {
@@ -357,6 +531,53 @@ func TestNewTab_ViewFitsTerminalHeight(t *testing.T) {
 	view := m.View()
 	if got := countLines(view); got > m.termHeight {
 		t.Fatalf("new tab view rendered %d rows, want at most %d", got, m.termHeight)
+	}
+}
+
+// TestNewTab_CursorRowRendersWhenHeaderWraps guards against the budget loop
+// dropping the cursor row off-screen when a multi-line wrapped header above
+// it consumes the visual budget first.
+func TestNewTab_CursorRowRendersWhenHeaderWraps(t *testing.T) {
+	longDesc := strings.Repeat("alphabet ", 30)
+	groups := []discovery.GroupMetadata{
+		{Scope: discovery.ScopeBuiltin, Namespace: "core", DisplayName: "Core", Description: longDesc},
+	}
+	entries := []discovery.WorkflowEntry{
+		{CanonicalName: "core:a", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/a.yaml", Description: "first"},
+		{CanonicalName: "core:b", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/b.yaml", Description: "second"},
+		{CanonicalName: "core:c", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/c.yaml", Description: "third"},
+	}
+	m := newTabModel(entries)
+	m.newTab.groups = groups
+	m.newTab.filtered = buildFilteredRows(entries, groups, "", false)
+	m.termWidth = 30
+	m.termHeight = 18
+
+	// Park the cursor on the last workflow row.
+	m.newTab.cursor = len(m.newTab.filtered) - 1
+
+	rendered := sanitize(m.renderNewTab())
+	if !strings.Contains(rendered, "core:c") {
+		t.Fatalf("cursor row 'core:c' missing from rendered output:\n%s", rendered)
+	}
+}
+
+// TestNewTab_SanitizesWorkflowRowFields ensures ANSI escapes and control bytes
+// from external workflow YAML cannot leak into the rendered new-tab row.
+func TestNewTab_SanitizesWorkflowRowFields(t *testing.T) {
+	entry := discovery.WorkflowEntry{
+		CanonicalName: "core:evil\x1b[31m",
+		Description:   "desc\x1b[1mwith escape",
+		Scope:         discovery.ScopeBuiltin,
+		Namespace:     "core",
+		SourcePath:    "/b/evil.yaml",
+	}
+	m := newTabModel([]discovery.WorkflowEntry{entry})
+	m.termWidth = 80
+
+	got := m.renderNewTabRow(&entry, false, 80, tuistyle.AccentCyan)
+	if strings.Contains(got, "\x1b[31m") || strings.Contains(got, "\x1b[1m") {
+		t.Fatalf("renderNewTabRow leaked raw ANSI escape from workflow fields: %q", got)
 	}
 }
 
@@ -403,7 +624,7 @@ func TestBackspace_MultiByte(t *testing.T) {
 	m.newTab.searchFocused = true
 	// "café" ends with é (U+00E9, 2 bytes in UTF-8).
 	m.newTab.searchText = "café"
-	m.updateSearchFilter()
+	m.rebuildNewTabFiltered()
 
 	// Simulate a single backspace.
 	m, _ = m.handleSearchKey(keyMsg("backspace"))
@@ -482,19 +703,12 @@ func TestBuildFilteredRows_MultipleNamespaces(t *testing.T) {
 		{CanonicalName: "core:implement", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/impl.yaml"},
 		{CanonicalName: "openspec:change", Scope: discovery.ScopeBuiltin, Namespace: "openspec", SourcePath: "/b/change.yaml"},
 	}
-	filtered := buildFilteredRows(entries, "")
+	filtered := buildFilteredRows(entries, defaultTestGroups(), "", false)
 
-	// Expect: [0, -1, 1] — core entry, separator, openspec entry.
-	if len(filtered) != 3 {
-		t.Fatalf("expected 3 rows (entry, sep, entry), got %d: %v", len(filtered), filtered)
+	if got := workflowRows(filtered); len(got) != 2 || got[0] != 1 || got[1] != 0 {
+		t.Fatalf("workflow rows = %v, want openspec index 1 then core index 0", got)
 	}
-	if filtered[0] != 0 {
-		t.Errorf("filtered[0] = %d, want 0", filtered[0])
-	}
-	if filtered[1] != -1 {
-		t.Errorf("filtered[1] = %d, want -1 (separator)", filtered[1])
-	}
-	if filtered[2] != 1 {
-		t.Errorf("filtered[2] = %d, want 1", filtered[2])
+	if got := headerNames(filtered, defaultTestGroups()); strings.Join(got, ",") != "OpenSpec,Core" {
+		t.Fatalf("headers = %v, want OpenSpec then Core", got)
 	}
 }

@@ -58,6 +58,84 @@ func FitCellLeft(s string, n int) string {
 	return s
 }
 
+// WrapCell wraps s into lines whose cell width does not exceed width, breaking
+// at whitespace where possible. Words wider than width are character-broken.
+// Always returns at least one line; an empty input yields []string{""}.
+func WrapCell(s string, width int) []string {
+	if width <= 0 {
+		return []string{""}
+	}
+	if runewidth.StringWidth(s) <= width {
+		return []string{s}
+	}
+
+	var lines []string
+	var cur strings.Builder
+	curWidth := 0
+	flush := func() {
+		lines = append(lines, cur.String())
+		cur.Reset()
+		curWidth = 0
+	}
+
+	for _, word := range strings.Fields(s) {
+		ww := runewidth.StringWidth(word)
+		if ww > width {
+			if curWidth > 0 {
+				flush()
+			}
+			lines = append(lines, chunkRunes(word, width)...)
+			continue
+		}
+		need := ww
+		if curWidth > 0 {
+			need++ // space separator
+		}
+		if curWidth+need > width {
+			flush()
+		}
+		if curWidth > 0 {
+			cur.WriteByte(' ')
+			curWidth++
+		}
+		cur.WriteString(word)
+		curWidth += ww
+	}
+	if curWidth > 0 {
+		flush()
+	}
+	if len(lines) == 0 {
+		return []string{""}
+	}
+	return lines
+}
+
+func chunkRunes(word string, width int) []string {
+	var out []string
+	var cur strings.Builder
+	curWidth := 0
+	for _, r := range word {
+		rw := runewidth.RuneWidth(r)
+		if curWidth+rw > width {
+			if cur.Len() > 0 {
+				out = append(out, cur.String())
+				cur.Reset()
+				curWidth = 0
+			}
+			if rw > width {
+				out = append(out, string(r))
+				continue
+			}
+		}
+		cur.WriteRune(r)
+		curWidth += rw
+	}
+	if cur.Len() > 0 {
+		out = append(out, cur.String())
+	}
+	return out
+}
+
 // FitCell truncates s to width n (adding an ellipsis if needed) and pads with
 // spaces to reach exactly n visible columns.
 func FitCell(s string, n int) string {

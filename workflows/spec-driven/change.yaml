@@ -1,5 +1,5 @@
 name: change
-description: "End-to-end change: plan then implement (no openspec dependency)"
+description: "Full plan + implement + validate + PR creation workflow. Use for normal feature development."
 
 sessions:
   - name: lead-agent
