@@ -6,7 +6,6 @@ Agent Runner runs YAML workflows that coordinate agent CLIs, shell commands, scr
 
 ### Prerequisites
 
-- Go version from [go.mod](../go.mod), if building from source
 - At least one supported agent CLI installed and authenticated: `claude`, `codex`, `copilot`, `cursor`, or `opencode`
 - Optional: `openspec`, if using the `openspec:*` built-in workflows
 - Optional: `agent-validator`, if using the built-in validation workflows
@@ -18,12 +17,7 @@ brew tap Codagent-AI/tap
 brew install --cask agent-runner
 ```
 
-From source:
-
-```bash
-make build
-./bin/agent-runner -version
-```
+For local development and source builds, see [development.md](development.md).
 
 ## Running Agent Runner
 

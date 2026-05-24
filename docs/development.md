@@ -37,6 +37,14 @@ If you only add `~/go/bin` to `.zshrc`, it will work in your terminal but **not*
 
 ## Make targets
 
+To build from source, use the Go version declared in [../go.mod](../go.mod):
+
+```bash
+make build       # compiles to bin/agent-runner
+make test        # run tests
+make lint        # run golangci-lint
+```
+
 ### Build and quality
 
 | Target | Command | Description |
