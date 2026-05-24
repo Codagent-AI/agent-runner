@@ -19,7 +19,6 @@ type rowKind int
 const (
 	workflowRow rowKind = iota
 	headerRow
-	descriptionRow
 	separatorRow
 )
 
@@ -126,10 +125,7 @@ func buildFilteredRows(workflows []discovery.WorkflowEntry, groups []discovery.G
 		if !first {
 			result = append(result, filteredRow{kind: separatorRow})
 		}
-		result = append(result,
-			filteredRow{kind: headerRow, index: groupIndex},
-			filteredRow{kind: descriptionRow, index: groupIndex},
-		)
+		result = append(result, filteredRow{kind: headerRow, index: groupIndex})
 		for _, workflowIndex := range g.indices {
 			result = append(result, filteredRow{kind: workflowRow, index: workflowIndex})
 		}
@@ -267,28 +263,41 @@ func (m *Model) renderNewTab() string {
 	// The new tab body includes the search row and a blank separator before the
 	// workflow rows, so leave those rows out of the scrollable list budget.
 	maxRows := max(1, m.listMaxRows(false)-2)
-	// Adjust offset so cursor stays in view.
+	// Adjust offset so cursor stays in view. Offset is still tracked by row
+	// index; wrapped descriptions may push later rows past the visual budget
+	// (the user scrolls down with j/down in that case).
 	m.newTab.offset = adjustOffset(m.newTab.cursor, m.newTab.offset, maxRows, len(filtered))
-	end := min(m.newTab.offset+maxRows, len(filtered))
 
-	for i := m.newTab.offset; i < end; i++ {
+	visualBudget := maxRows
+	for i := m.newTab.offset; i < len(filtered); i++ {
 		row := filtered[i]
+		var rendered string
 		switch row.kind {
 		case separatorRow:
-			b.WriteString("\n")
+			rendered = "\n"
 		case headerRow:
 			group := &m.newTab.groups[row.index]
 			groupColor := tuistyle.GroupColors[row.index%len(tuistyle.GroupColors)]
-			b.WriteString(renderNewTabGroupHeader(group.DisplayName, maxWidth, groupColor))
-		case descriptionRow:
-			group := &m.newTab.groups[row.index]
-			b.WriteString(renderNewTabGroupDescription(group.Description, maxWidth))
+			rendered = renderNewTabGroupHeader(group.DisplayName, group.Description, maxWidth, groupColor)
 		case workflowRow:
 			entry := &workflows[row.index]
 			isSel := i == m.newTab.cursor && !m.newTab.searchFocused
 			groupIndex := groupIndexForEntry(m.newTab.groups, entry)
 			groupColor := tuistyle.GroupColors[groupIndex%len(tuistyle.GroupColors)]
-			b.WriteString(m.renderNewTabRow(entry, isSel, maxWidth, groupColor))
+			rendered = m.renderNewTabRow(entry, isSel, maxWidth, groupColor)
+		}
+		lines := strings.Count(rendered, "\n")
+		if lines == 0 {
+			lines = 1
+		}
+		// Always render the offset row; for later rows, stop if they'd overflow.
+		if i > m.newTab.offset && lines > visualBudget {
+			break
+		}
+		b.WriteString(rendered)
+		visualBudget -= lines
+		if visualBudget <= 0 {
+			break
 		}
 	}
 	return b.String()
@@ -304,17 +313,42 @@ func groupIndexForEntry(groups []discovery.GroupMetadata, entry *discovery.Workf
 	return 0
 }
 
-func renderNewTabGroupHeader(name string, maxWidth int, color lipgloss.AdaptiveColor) string {
+// renderNewTabGroupHeader renders the group's display name in its accent color,
+// followed by the description in dim style on the same line. The header sits
+// flush against the screen margin (no cursor-column indent) so the group name
+// reads as a section divider. Long descriptions wrap onto continuation lines
+// aligned with the description's start column.
+func renderNewTabGroupHeader(name, description string, maxWidth int, color lipgloss.AdaptiveColor) string {
 	name = sanitize(name)
-	prefix := tuistyle.ScreenMargin + "  "
+	prefix := tuistyle.ScreenMargin
 	avail := max(10, maxWidth-lipgloss.Width(prefix))
-	return prefix + lipgloss.NewStyle().Foreground(color).Bold(true).Render(fitCell(name, avail)) + "\n"
-}
 
-func renderNewTabGroupDescription(description string, maxWidth int) string {
-	prefix := tuistyle.ScreenMargin + "  "
-	avail := max(10, maxWidth-lipgloss.Width(prefix))
-	return prefix + dimStyle.Render(fitCell(sanitize(description), avail)) + "\n"
+	namePart := lipgloss.NewStyle().Foreground(color).Bold(true).Render(name)
+	nameWidth := lipgloss.Width(namePart)
+	if description = sanitize(description); description == "" {
+		return prefix + namePart + "\n"
+	}
+
+	descAvail := avail - nameWidth - 1
+	if descAvail < 4 {
+		return prefix + namePart + "\n"
+	}
+
+	lines := wrapCell(description, descAvail)
+	contIndent := strings.Repeat(" ", lipgloss.Width(prefix)+nameWidth+1)
+
+	var b strings.Builder
+	b.WriteString(prefix)
+	b.WriteString(namePart)
+	b.WriteByte(' ')
+	b.WriteString(dimStyle.Render(lines[0]))
+	b.WriteByte('\n')
+	for _, line := range lines[1:] {
+		b.WriteString(contIndent)
+		b.WriteString(dimStyle.Render(line))
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 // renderNewTabSearch renders the search box line.
@@ -359,7 +393,8 @@ func formatCount(n int) string {
 	return "(" + strconv.Itoa(n) + " workflows)"
 }
 
-// renderNewTabRow renders a single workflow row.
+// renderNewTabRow renders a single workflow row. Long descriptions wrap onto
+// continuation lines aligned with the description's start column.
 func (m *Model) renderNewTabRow(entry *discovery.WorkflowEntry, isSel bool, maxWidth int, groupColor lipgloss.AdaptiveColor) string {
 	var prefix string
 	if isSel {
@@ -369,34 +404,50 @@ func (m *Model) renderNewTabRow(entry *discovery.WorkflowEntry, isSel bool, maxW
 	}
 	prefixWidth := lipgloss.Width(prefix)
 	avail := max(10, maxWidth-prefixWidth)
+	nameCellWidth := runewidth.StringWidth(entry.CanonicalName)
 
 	if entry.ParseError != "" {
 		errNameStyle := tuistyle.StatusFailed
-		nameWidth := lipgloss.Width(entry.CanonicalName)
-		errPart := " " + fitCell(entry.ParseError, avail-nameWidth-1)
+		errPart := " " + fitCell(entry.ParseError, avail-nameCellWidth-1)
 		return prefix + errNameStyle.Render(entry.CanonicalName) + errNameStyle.Render(errPart) + "\n"
 	}
 
-	var namePart, descPart string
+	var namePart string
 	if isSel {
 		namePart = renderSelectedName(entry.CanonicalName, m.newTab.searchText)
 	} else {
 		namePart = renderColoredName(entry, m.newTab.searchText, groupColor)
 	}
 
-	if entry.Description != "" {
-		descAvail := avail - runewidth.StringWidth(entry.CanonicalName) - 1
-		if descAvail > 3 {
-			desc := fitCell(entry.Description, descAvail)
-			descStyle := dimStyle
-			if isSel {
-				descStyle = selectedStyle
-			}
-			descPart = " " + descStyle.Render(desc)
-		}
+	if entry.Description == "" {
+		return prefix + namePart + "\n"
 	}
 
-	return prefix + namePart + descPart + "\n"
+	descAvail := avail - nameCellWidth - 1
+	if descAvail < 4 {
+		return prefix + namePart + "\n"
+	}
+
+	descStyle := dimStyle
+	if isSel {
+		descStyle = selectedStyle
+	}
+
+	lines := wrapCell(entry.Description, descAvail)
+	contIndent := strings.Repeat(" ", prefixWidth+nameCellWidth+1)
+
+	var b strings.Builder
+	b.WriteString(prefix)
+	b.WriteString(namePart)
+	b.WriteByte(' ')
+	b.WriteString(descStyle.Render(lines[0]))
+	b.WriteByte('\n')
+	for _, line := range lines[1:] {
+		b.WriteString(contIndent)
+		b.WriteString(descStyle.Render(line))
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 // renderSelectedName uses the selected-text token instead of the group accent.

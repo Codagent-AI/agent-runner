@@ -5,34 +5,34 @@ TBD - created by archiving change improve-new-tab. Update Purpose after archive.
 ## Requirements
 ### Requirement: Workflow groups render with header and description
 
-The new tab SHALL render each workflow group with a header row showing the group's display name and a description row below it. The header and description SHALL appear above the group's workflow rows. Header and description rows SHALL NOT be selectable — the cursor SHALL skip over them when the user navigates with the keyboard.
+The new tab SHALL render each workflow group with a header containing the group's display name and its description. The header SHALL appear above the group's workflow rows. The header SHALL NOT be selectable — the cursor SHALL skip over it when the user navigates with the keyboard. The visual arrangement of the display name relative to the description (same line, separate lines, etc.) is an implementation detail and not pinned by this spec.
 
 #### Scenario: Project group renders with header and description
 - **WHEN** the new tab renders and the project scope contains at least one visible workflow
-- **THEN** a header row identifying the group as the project's workflows appears above the project workflows
-- **AND** a non-empty description row appears below the header (exact copy is an implementation detail and not pinned by this spec)
+- **THEN** a header identifying the group as the project's workflows appears above the project workflows
+- **AND** the header includes a non-empty description (exact copy and visual layout are implementation details and not pinned by this spec)
 
 #### Scenario: User group renders with header and description
 - **WHEN** the new tab renders and the user scope contains at least one visible workflow
-- **THEN** a header row identifying the group as the user's workflows appears above the user workflows
-- **AND** a non-empty description row appears below the header (exact copy is an implementation detail and not pinned by this spec)
+- **THEN** a header identifying the group as the user's workflows appears above the user workflows
+- **AND** the header includes a non-empty description (exact copy and visual layout are implementation details and not pinned by this spec)
 
 #### Scenario: Builtin group renders using namespace metadata
 - **WHEN** the new tab renders a builtin namespace whose metadata file declares a display name and description
-- **THEN** the header row shows the declared display name
-- **AND** the description row shows the declared description
+- **THEN** the header shows the declared display name
+- **AND** the header shows the declared description
 
-#### Scenario: Header rows are not focusable when navigating downward
-- **WHEN** the cursor is on the row immediately above a header row and the user presses `down`
-- **THEN** the cursor moves to the first workflow row below the header, skipping both the header and description rows
+#### Scenario: Header is not focusable when navigating downward
+- **WHEN** the cursor is on the row immediately above a header and the user presses `down`
+- **THEN** the cursor moves to the first workflow row of the group below the header, skipping the header
 
-#### Scenario: Header rows are not focusable when navigating upward
+#### Scenario: Header is not focusable when navigating upward
 - **WHEN** the cursor is on the first workflow row of a non-first group and the user presses `up`
-- **THEN** the cursor lands on the last workflow row of the previous group, skipping the current group's header, description, and the separator between the groups
+- **THEN** the cursor lands on the last workflow row of the previous group, skipping the current group's header and any separator between the groups
 
 #### Scenario: Initial cursor position skips the leading header
 - **WHEN** the new tab opens fresh with at least one visible workflow
-- **THEN** the initial cursor position is on the first workflow row of the first non-empty group, not on the header or description row above it
+- **THEN** the initial cursor position is on the first workflow row of the first non-empty group, not on the header above it
 
 #### Scenario: Upward navigation from the first workflow focuses the search box
 - **WHEN** the cursor is on the first workflow row of the first visible group and the user presses `up`
@@ -56,7 +56,7 @@ Groups SHALL appear in this top-to-bottom order: project group first, user group
 
 ### Requirement: Empty groups omitted
 
-A group SHALL be omitted entirely (header row, description row, and workflow rows) from the new tab when it has zero visible workflows. A workflow is "not visible" when it is hidden via `hidden: true` and the show-hidden toggle is off, or when the current search filter excludes it.
+A group SHALL be omitted entirely (header and workflow rows) from the new tab when it has zero visible workflows. A workflow is "not visible" when it is hidden via `hidden: true` and the show-hidden toggle is off, or when the current search filter excludes it.
 
 #### Scenario: Scope with zero workflows omits its group
 - **WHEN** the project scope contains zero workflows

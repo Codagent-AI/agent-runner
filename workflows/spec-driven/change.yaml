@@ -1,5 +1,5 @@
 name: change
-description: "End-to-end change: plan then implement (no openspec dependency)"
+description: "Full spec-driven planning "
 
 sessions:
   - name: lead-agent

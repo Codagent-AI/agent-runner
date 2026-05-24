@@ -12,9 +12,11 @@ import (
 const RefPrefix = "builtin:"
 
 // FS contains the builtin workflows embedded at build time from the repository's
-// workflows/ directory.
+// workflows/ directory. The `all:` prefix is required so that `_group.yaml`
+// namespace metadata files are embedded — Go's default embed behaviour excludes
+// any file whose basename begins with `_` or `.`.
 //
-//go:embed *
+//go:embed all:*
 var FS embed.FS
 
 func IsRef(workflowFile string) bool {

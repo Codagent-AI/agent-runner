@@ -109,6 +109,23 @@ func TestUnderscorePrefixedYAMLIsNotWorkflow(t *testing.T) {
 	}
 }
 
+func TestNamespaceGroupMetadataEmbedded(t *testing.T) {
+	// Go's //go:embed default skips files whose basename starts with `_` or `.`.
+	// The pattern in embed.go must use the `all:` prefix so _group.yaml files
+	// are actually present in FS; otherwise discovery silently falls back to
+	// default display name and empty description.
+	for _, ns := range []string{"spec-driven", "openspec", "onboarding", "core"} {
+		data, err := FS.ReadFile(ns + "/_group.yaml")
+		if err != nil {
+			t.Errorf("FS.ReadFile(%s/_group.yaml) = %v, want embedded metadata", ns, err)
+			continue
+		}
+		if len(data) == 0 {
+			t.Errorf("%s/_group.yaml is embedded but empty", ns)
+		}
+	}
+}
+
 func TestOpenSpecPlanningWorkflowsUseSharedCreateScript(t *testing.T) {
 	for _, ref := range []string{"builtin:openspec/plan-change.yaml", "builtin:openspec/simple-change.yaml"} {
 		t.Run(ref, func(t *testing.T) {
