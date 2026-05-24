@@ -44,6 +44,27 @@ func TestEditorRendersEveryFieldWithCurrentValue(t *testing.T) {
 	}
 }
 
+func TestEditorRendersAgentSettingsConfigPath(t *testing.T) {
+	m := New(
+		usersettings.Settings{Theme: usersettings.ThemeDark},
+		WithAgentConfigPath(func() (string, error) {
+			return "/home/me/.agent-runner/config.yaml", nil
+		}),
+	)
+
+	view := m.View()
+	for _, want := range []string{
+		"Looking for agent settings",
+		"planner / implementor CLI",
+		"model",
+		"/home/me/.agent-runner/config.yaml",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("View() missing agent settings copy %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestEditorOpensWithCursorOnFirstRow(t *testing.T) {
 	m := New(usersettings.Settings{Theme: usersettings.ThemeDark})
 	if m.cursor != 0 {
@@ -129,6 +150,28 @@ func TestEditorCursorRowYoloShowsRiskCopy(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("View() should show YOLO risk copy %q when cursor on Permission Mode row with value YOLO:\n%s", want, view)
 		}
+	}
+}
+
+func TestEditorAgentSettingsCopyAppearsBelowSelectedOptionDescription(t *testing.T) {
+	m := New(usersettings.Settings{
+		Theme:                    usersettings.ThemeDark,
+		AutonomousPermissionMode: usersettings.PermissionModeYOLO,
+	})
+	// Move cursor to the Autonomous Permission Mode row (index 2).
+	for range 2 {
+		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = next.(*Model)
+	}
+
+	view := m.View()
+	descIdx := strings.Index(view, "per-command approval")
+	agentSettingsIdx := strings.Index(view, "Looking for agent settings")
+	if descIdx == -1 || agentSettingsIdx == -1 {
+		t.Fatalf("View() missing expected copy:\n%s", view)
+	}
+	if agentSettingsIdx < descIdx {
+		t.Fatalf("agent settings copy should render below selected option description:\n%s", view)
 	}
 }
 
