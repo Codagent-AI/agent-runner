@@ -869,9 +869,8 @@ func handlePostWorkflowResumeHandoff(sessionDir string, result runner.WorkflowRe
 	}
 	runID, ok, err := resumehandoff.Read(sessionDir)
 	if err != nil {
-		msg := fmt.Sprintf("resume target marker could not be read: %v", err)
-		fmt.Fprintf(os.Stderr, "agent-runner: %s\n", msg)
-		return liveTUIResult{inlineError: msg}
+		fmt.Fprintf(os.Stderr, "agent-runner: resume target marker could not be read: %v\n", err)
+		return liveTUIResult{}
 	}
 	if !ok {
 		return liveTUIResult{}
