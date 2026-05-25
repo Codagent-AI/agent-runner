@@ -24,17 +24,17 @@ The launching prompt provides:
 - `failed_run_id`
 - `failed_session_dir`
 
-If `failed_run_id` is set, it takes precedence over `failed_session_dir`. If neither input is set, use the cold-start run-selection flow before gathering context.
+If `failed_session_dir` is set, it takes precedence over `failed_run_id` because it is not sensitive to the current working directory. If neither input is set, use the cold-start run-selection flow before gathering context.
 
 ## Phase 1: Resolve the target run
 
 Choose exactly one target before triage:
 
-- If `failed_run_id` is provided, use it and ignore `failed_session_dir`.
-- If only `failed_session_dir` is provided, validate that it is a run session directory, read its `state.json` with `debug --state-dir`, read its audit summary with `debug --audit-summary-dir`, and derive the canonical run id from that state or from the directory name.
+- If `failed_session_dir` is provided, validate that it is a run session directory, read its `state.json` with `debug --state-dir`, read its audit summary with `debug --audit-summary-dir`, and derive the canonical run id from that state or from the directory name.
+- If only `failed_run_id` is provided, use it as the target run id.
 - If neither is provided, list recent failed runs for the current project before triage. Show run id, workflow name, age, and a short failure-reason snippet. Prompt the user to pick by number/id or paste an absolute session-directory path. Do not begin triage until a target is selected. If no failed runs exist, say so and offer to debug a successful run by path/id or end the workflow.
 
-When both inputs are set, `failed_run_id` wins.
+When both inputs are set, `failed_session_dir` wins.
 
 ## Phase 2: Gather context
 
@@ -55,6 +55,31 @@ agent-runner debug --audit-summary-dir <session-dir>
 Use state JSON to find the workflow name/ref, step statuses, current step, completion state, and failure reason.
 
 Use audit summary for run boundaries, step boundaries, sub-workflow boundaries, the top-level `failures` list, errors, output snippets, the `session_dir`, the `project_dir`, and the absolute audit-log path. If the summary says the audit log is missing, continue with state and workflow YAML and tell the user the assessment is less specific because no audit log was available.
+
+Gather basic environment details before filing any GitHub issue:
+
+```sh
+agent-runner --version
+command -v agent-runner
+uname -a
+printf 'shell=%s\ncwd=%s\n' "$SHELL" "$PWD"
+```
+
+If `uname -a` shows Darwin, also run:
+
+```sh
+sw_vers
+```
+
+If `/etc/os-release` exists, also run:
+
+```sh
+cat /etc/os-release
+```
+
+If an environment command is unavailable or fails, record that fact in the issue body instead of stopping triage.
+
+When including environment details in issue bodies, apply the redaction guidance from Phase 3: redact or sanitize hostnames from `uname -a` output and sensitive path components from `$PWD`, such as usernames or internal project names. Use placeholders such as `<redacted-host>` or `<redacted-path>` and state when values were redacted.
 
 Retrieve workflow YAML with the CLI when you need to reason about the failing workflow definition:
 
@@ -140,7 +165,14 @@ If opening fails, print the issue URL. Do not assemble a new body.
 
 If the user chooses to file new, or no matches are found, prepare a concise title and issue body. Include:
 
+- Environment:
+  - `agent-runner --version` output.
+  - `command -v agent-runner` output.
+  - OS/kernel/architecture from `uname -a`.
+  - macOS version from `sw_vers` when available, or Linux distribution details from `/etc/os-release` when available.
+  - Shell and cwd from the `printf` command above, with hostnames and personal path segments replaced by placeholders when needed.
 - Workflow name/ref and run id.
+- Session directory and project directory from audit summary when available.
 - Classification: suspected bug or unknown.
 - Expected behavior.
 - Actual behavior.

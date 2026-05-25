@@ -27,6 +27,27 @@ CURRENT_BRANCH=$(git branch --show-current)
 
 if [ "$CURRENT_BRANCH" = "main" ]; then
   git checkout -q -B "release/v${NEW_VERSION}"
+else
+  BRANCH_PR=$(gh pr view --json number,state,url,baseRefName 2>&1) || {
+    echo "Error: current branch has no associated PR. Create a PR before adding release changes to a feature branch." >&2
+    exit 1
+  }
+  BRANCH_PR_STATE=$(echo "$BRANCH_PR" | jq -r '.state')
+  BRANCH_PR_BASE=$(echo "$BRANCH_PR" | jq -r '.baseRefName // ""')
+  if [ "$BRANCH_PR_STATE" != "OPEN" ]; then
+    BRANCH_PR_NUMBER=$(echo "$BRANCH_PR" | jq -r '.number')
+    BRANCH_PR_URL=$(echo "$BRANCH_PR" | jq -r '.url')
+    echo "Error: current branch PR #${BRANCH_PR_NUMBER} is ${BRANCH_PR_STATE}; create a new open PR before adding release changes." >&2
+    echo "$BRANCH_PR_URL" >&2
+    exit 1
+  fi
+  if [ "$BRANCH_PR_BASE" != "main" ]; then
+    BRANCH_PR_NUMBER=$(echo "$BRANCH_PR" | jq -r '.number')
+    BRANCH_PR_URL=$(echo "$BRANCH_PR" | jq -r '.url')
+    echo "Error: current branch PR #${BRANCH_PR_NUMBER} targets ${BRANCH_PR_BASE}; release changes must target main." >&2
+    echo "$BRANCH_PR_URL" >&2
+    exit 1
+  fi
 fi
 
 printf '%s\n' "$NEW_VERSION" > "$VERSION_FILE"

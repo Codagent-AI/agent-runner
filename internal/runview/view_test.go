@@ -62,6 +62,7 @@ func TestView_FailedRunShowsFailureReasonBelowBreadcrumb(t *testing.T) {
 	m.cursor = 2
 	m.termWidth = 125
 	m.termHeight = 30
+	m.sessionDir = "/runs/failed-run"
 	m.rebuildRanges()
 	m.syncLogToSelection()
 
@@ -76,6 +77,27 @@ func TestView_FailedRunShowsFailureReasonBelowBreadcrumb(t *testing.T) {
 	}
 	if reasonIdx < breadcrumbIdx {
 		t.Fatalf("failure reason should appear after breadcrumb, got:\n%s", view)
+	}
+	hintIdx := strings.Index(view, "press d to debug")
+	if hintIdx < 0 {
+		t.Fatalf("view should show debug hint for failed inactive run, got:\n%s", view)
+	}
+	if hintIdx < reasonIdx {
+		t.Fatalf("debug hint should appear after failure reason, got:\n%s", view)
+	}
+}
+
+func TestView_FailedActiveRunHidesDebugHint(t *testing.T) {
+	root := &StepNode{ID: "build", Type: NodeRoot, Status: StatusFailed, ErrorMessage: "compile failed"}
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.active = true
+	m.sessionDir = "/runs/failed-run"
+	m.termWidth = 100
+	m.termHeight = 25
+
+	view := tuistyle.Sanitize(m.View())
+	if strings.Contains(view, "press d to debug") {
+		t.Fatalf("active failed run should not show debug hint, got:\n%s", view)
 	}
 }
 

@@ -20,7 +20,9 @@ bash .claude/skills/release/scripts/release-info.sh
 ```
 
 Capture the JSON output. If the output contains `"error"`, stop and report the
-message to the user.
+message to the user. In particular, do not continue from a feature branch whose
+associated PR is already merged/closed or does not target `main`; switch to or
+create the open PR for the current unreleased changes first.
 
 ### 2. Show the release summary
 
@@ -29,6 +31,8 @@ Display:
 - Version bump: `current_version` -> `new_version`
 - Number of PRs by category
 - Each PR number and title, grouped by Major / Minor / Patch
+- When a current branch PR is included, confirm it is the open PR for the
+  current branch, not an already-merged predecessor.
 
 ### 3. Write changelog descriptions
 

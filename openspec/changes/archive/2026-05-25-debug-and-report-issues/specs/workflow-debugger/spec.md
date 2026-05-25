@@ -2,7 +2,7 @@
 
 ### Requirement: Workflow accepts optional failed-run identifier
 
-The debug workflow SHALL accept two optional input parameters: `failed_session_dir` (an absolute path to a run's session directory) and `failed_run_id` (the canonical run id). When both are provided, `failed_run_id` SHALL take precedence and `failed_session_dir` SHALL be ignored. The workflow SHALL resolve the chosen input to a single canonical session directory before any triage step runs.
+The debug workflow SHALL accept two optional input parameters: `failed_session_dir` (an absolute path to a run's session directory) and `failed_run_id` (the canonical run id). When both are provided, `failed_session_dir` SHALL take precedence and `failed_run_id` SHALL be treated as advisory context only. The workflow SHALL resolve the chosen input to a single canonical session directory before any triage step runs.
 
 #### Scenario: failed_run_id supplied
 - **WHEN** the workflow is launched with `failed_run_id` set and the id resolves to a known run
@@ -14,7 +14,7 @@ The debug workflow SHALL accept two optional input parameters: `failed_session_d
 
 #### Scenario: Both params supplied
 - **WHEN** the workflow is launched with both parameters set and they refer to different runs
-- **THEN** `failed_run_id` wins; `failed_session_dir` is ignored
+- **THEN** `failed_session_dir` wins; `failed_run_id` is treated as advisory context only
 
 #### Scenario: Neither param supplied
 - **WHEN** the workflow is launched with neither parameter set
