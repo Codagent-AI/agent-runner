@@ -45,6 +45,10 @@ func (m *Model) View() string {
 		b.WriteString("\n")
 		b.WriteString(reason)
 	}
+	if hint := m.renderFailedRunDebugHint(); hint != "" {
+		b.WriteString("\n")
+		b.WriteString(hint)
+	}
 	b.WriteString("\n\n")
 
 	swHeader := m.renderSubWorkflowHeader()
@@ -101,6 +105,13 @@ func (m *Model) renderFailureReason() string {
 		reason = "workflow failed"
 	}
 	return tuistyle.ScreenMargin + tuistyle.StatusFailed.Render("reason: "+reason)
+}
+
+func (m *Model) renderFailedRunDebugHint() string {
+	if m.rootStatus() != StatusFailed || !m.canLaunchDebug() {
+		return ""
+	}
+	return tuistyle.ScreenMargin + tuistyle.StatusFailed.Bold(true).Render("press d to debug")
 }
 
 func (m *Model) renderTwoColumn(children []*StepNode) string {

@@ -41,7 +41,8 @@ type ResumeRunMsg struct {
 // LaunchDebugMsg asks the shell to exit the TUI and exec the built-in debug
 // workflow for the currently viewed agent-runner run.
 type LaunchDebugMsg struct {
-	FailedRunID string
+	FailedRunID      string
+	FailedProjectDir string
 }
 
 // ResumeListMsg asks the shell to exit the current TUI flow and exec
@@ -108,10 +109,12 @@ type Model struct {
 	// switcher to intercept ResumeMsg — so we stash the info here and quit.
 	// The CLI wrapper reads it via ResumeAgentCLI/ResumeSessionID after
 	// p.Run() returns and execs the agent CLI.
-	resumeAgentCLI  string
-	resumeSessionID string
-	resumeToList    bool
-	exitRequested   bool
+	resumeAgentCLI        string
+	resumeSessionID       string
+	resumeToList          bool
+	launchDebugRunID      string
+	launchDebugProjectDir string
+	exitRequested         bool
 
 	// Alt-screen management. When the program starts without tea.WithAltScreen
 	// (FromLiveRun mode), alt-screen entry is deferred so a fast non-interactive
@@ -135,6 +138,12 @@ func (m *Model) ResumeSessionID() string { return m.resumeSessionID }
 // ResumeToList reports whether the user requested to leave the run view and
 // exec back into the list TUI.
 func (m *Model) ResumeToList() bool { return m.resumeToList }
+
+// LaunchDebugRunID returns the failed agent-runner run ID selected for debug.
+func (m *Model) LaunchDebugRunID() string { return m.launchDebugRunID }
+
+// LaunchDebugProjectDir returns the original project directory for the failed run.
+func (m *Model) LaunchDebugProjectDir() string { return m.launchDebugProjectDir }
 
 // ExitRequested reports whether the user explicitly requested application exit.
 func (m *Model) ExitRequested() bool { return m.exitRequested }
@@ -505,6 +514,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ResumeListMsg:
 		m.resumeToList = true
+		return m, tea.Quit
+
+	case LaunchDebugMsg:
+		m.launchDebugRunID = msg.FailedRunID
+		m.launchDebugProjectDir = msg.FailedProjectDir
 		return m, tea.Quit
 
 	case ExitMsg:
@@ -925,7 +939,7 @@ func (m *Model) handleDebugKey() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	runID := filepath.Base(m.sessionDir)
-	return m, func() tea.Msg { return LaunchDebugMsg{FailedRunID: runID} }
+	return m, func() tea.Msg { return LaunchDebugMsg{FailedRunID: runID, FailedProjectDir: m.projectDir} }
 }
 
 func (m *Model) handleFollowKey() {
