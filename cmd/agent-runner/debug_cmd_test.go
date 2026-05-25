@@ -87,13 +87,36 @@ func TestHandleDebugState(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
 		t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout.String())
 	}
-	for _, field := range []string{"workflowFile", "params", "status"} {
+	for _, field := range []string{"workflowFile", "params"} {
 		if _, ok := got[field]; !ok {
 			t.Fatalf("state JSON missing %q: %#v", field, got)
 		}
 	}
+	if _, ok := got["status"]; ok {
+		t.Fatalf("state JSON injected status field: %#v", got)
+	}
 	if got["workflowFile"] != "workflow.yaml" {
 		t.Fatalf("workflowFile = %v, want workflow.yaml", got["workflowFile"])
+	}
+}
+
+func TestHandleDebugStatePreservesRawStateJSON(t *testing.T) {
+	home, repo := setupDebugRunHome(t, "run-123")
+	t.Setenv("HOME", home)
+	t.Chdir(repo)
+	sessionDir := filepath.Join(home, ".agent-runner", "projects", audit.EncodePath(repo), "runs", "run-123")
+	raw := `{"workflowFile":"workflow.yaml","params":{"task":"debug"},"status":"failed","customField":true}`
+	if err := os.WriteFile(filepath.Join(sessionDir, "state.json"), []byte(raw), 0o600); err != nil {
+		t.Fatalf("write raw state: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := handleDebug([]string{"--state", "run-123"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("handleDebug() = %d, stderr: %s", code, stderr.String())
+	}
+	if stdout.String() != raw {
+		t.Fatalf("stdout = %q, want raw state JSON %q", stdout.String(), raw)
 	}
 }
 

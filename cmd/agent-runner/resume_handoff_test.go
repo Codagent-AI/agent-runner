@@ -183,3 +183,20 @@ func TestPostWorkflowResumeHandoffExecError(t *testing.T) {
 		t.Fatalf("exitCode = %d, want 1", result.exitCode)
 	}
 }
+
+func TestPostWorkflowResumeHandoffMarkerReadError(t *testing.T) {
+	sourceSession := t.TempDir()
+	if err := os.Mkdir(resumehandoff.MarkerPath(sourceSession), 0o700); err != nil {
+		t.Fatalf("create marker directory: %v", err)
+	}
+	restore, calls := stubExecSelf(t)
+	defer restore()
+
+	result := handlePostWorkflowResumeHandoff(sourceSession, runner.ResultSuccess)
+	if result.inlineError == "" || !strings.Contains(result.inlineError, "resume target marker") {
+		t.Fatalf("inlineError = %q, want marker read error", result.inlineError)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("exec calls = %d, want 0", len(*calls))
+	}
+}

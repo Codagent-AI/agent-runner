@@ -82,27 +82,16 @@ func debugState(runID string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	statePath := filepath.Join(sessionDir, "state.json")
-	state, err := stateio.ReadState(statePath)
-	if err != nil {
+	if _, err := stateio.ReadState(statePath); err != nil {
 		_, _ = fmt.Fprintf(stderr, "agent-runner debug --state: %v\n", err)
 		return 1
 	}
-	data, err := json.Marshal(state)
+	data, err := os.ReadFile(statePath) // #nosec G304 -- state path is resolved from a known run session dir.
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "agent-runner debug --state: marshal state: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "agent-runner debug --state: read state: %v\n", err)
 		return 1
 	}
-	var out map[string]any
-	if err := json.Unmarshal(data, &out); err != nil {
-		_, _ = fmt.Fprintf(stderr, "agent-runner debug --state: marshal state: %v\n", err)
-		return 1
-	}
-	if state.Completed {
-		out["status"] = "completed"
-	} else {
-		out["status"] = "started"
-	}
-	if err := json.NewEncoder(stdout).Encode(out); err != nil {
+	if _, err := stdout.Write(data); err != nil {
 		_, _ = fmt.Fprintf(stderr, "agent-runner debug --state: write output: %v\n", err)
 		return 1
 	}

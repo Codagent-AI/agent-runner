@@ -53,14 +53,14 @@ func TestRead(t *testing.T) {
 		}
 	})
 
-	t.Run("read error ignored", func(t *testing.T) {
+	t.Run("read error returned", func(t *testing.T) {
 		dir := t.TempDir()
 		if err := os.Mkdir(MarkerPath(dir), 0o700); err != nil {
 			t.Fatalf("create marker directory: %v", err)
 		}
 		runID, ok, err := Read(dir)
-		if err != nil {
-			t.Fatalf("Read returned error: %v", err)
+		if err == nil {
+			t.Fatal("Read returned nil error, want read error")
 		}
 		if ok || runID != "" {
 			t.Fatalf("Read() = %q, %v, want empty false", runID, ok)
