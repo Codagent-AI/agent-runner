@@ -42,6 +42,7 @@ type ResumeRunMsg struct {
 // workflow for the currently viewed agent-runner run.
 type LaunchDebugMsg struct {
 	FailedRunID      string
+	FailedSessionDir string
 	FailedProjectDir string
 }
 
@@ -113,6 +114,7 @@ type Model struct {
 	resumeSessionID       string
 	resumeToList          bool
 	launchDebugRunID      string
+	launchDebugSessionDir string
 	launchDebugProjectDir string
 	exitRequested         bool
 
@@ -141,6 +143,9 @@ func (m *Model) ResumeToList() bool { return m.resumeToList }
 
 // LaunchDebugRunID returns the failed agent-runner run ID selected for debug.
 func (m *Model) LaunchDebugRunID() string { return m.launchDebugRunID }
+
+// LaunchDebugSessionDir returns the absolute session directory selected for debug.
+func (m *Model) LaunchDebugSessionDir() string { return m.launchDebugSessionDir }
 
 // LaunchDebugProjectDir returns the original project directory for the failed run.
 func (m *Model) LaunchDebugProjectDir() string { return m.launchDebugProjectDir }
@@ -518,6 +523,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case LaunchDebugMsg:
 		m.launchDebugRunID = msg.FailedRunID
+		m.launchDebugSessionDir = msg.FailedSessionDir
 		m.launchDebugProjectDir = msg.FailedProjectDir
 		return m, tea.Quit
 
@@ -939,7 +945,13 @@ func (m *Model) handleDebugKey() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	runID := filepath.Base(m.sessionDir)
-	return m, func() tea.Msg { return LaunchDebugMsg{FailedRunID: runID, FailedProjectDir: m.projectDir} }
+	return m, func() tea.Msg {
+		return LaunchDebugMsg{
+			FailedRunID:      runID,
+			FailedSessionDir: m.sessionDir,
+			FailedProjectDir: m.projectDir,
+		}
+	}
 }
 
 func (m *Model) handleFollowKey() {

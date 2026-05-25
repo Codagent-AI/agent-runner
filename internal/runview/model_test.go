@@ -435,7 +435,11 @@ func TestModel_D_InactiveRun_EmitsLaunchDebugMsg(t *testing.T) {
 		t.Fatal("d on inactive run should produce a cmd")
 	}
 	msg := cmd()
-	want := LaunchDebugMsg{FailedRunID: "my-run-id", FailedProjectDir: "/workspace/project"}
+	want := LaunchDebugMsg{
+		FailedRunID:      "my-run-id",
+		FailedSessionDir: "/runs/my-run-id",
+		FailedProjectDir: "/workspace/project",
+	}
 	got, ok := msg.(LaunchDebugMsg)
 	if !ok {
 		t.Fatalf("expected LaunchDebugMsg, got %T", msg)
@@ -463,7 +467,11 @@ func TestModel_D_WorksAtAnyDrillDepth(t *testing.T) {
 		t.Fatal("d at drill depth should produce a cmd")
 	}
 	msg := cmd()
-	want := LaunchDebugMsg{FailedRunID: "my-run-id", FailedProjectDir: "/workspace/project"}
+	want := LaunchDebugMsg{
+		FailedRunID:      "my-run-id",
+		FailedSessionDir: "/runs/my-run-id",
+		FailedProjectDir: "/workspace/project",
+	}
 	got, ok := msg.(LaunchDebugMsg)
 	if !ok {
 		t.Fatalf("expected LaunchDebugMsg, got %T", msg)
@@ -494,6 +502,9 @@ func TestModel_D_InTopLevelLiveRun_StoresDebugTargetAndQuits(t *testing.T) {
 	}
 	if m.LaunchDebugRunID() != "my-run-id" {
 		t.Fatalf("LaunchDebugRunID = %q, want my-run-id", m.LaunchDebugRunID())
+	}
+	if m.LaunchDebugSessionDir() != "/runs/my-run-id" {
+		t.Fatalf("LaunchDebugSessionDir = %q, want /runs/my-run-id", m.LaunchDebugSessionDir())
 	}
 	if m.LaunchDebugProjectDir() != "/workspace/project" {
 		t.Fatalf("LaunchDebugProjectDir = %q, want /workspace/project", m.LaunchDebugProjectDir())

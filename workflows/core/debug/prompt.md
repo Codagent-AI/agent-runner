@@ -24,17 +24,17 @@ The launching prompt provides:
 - `failed_run_id`
 - `failed_session_dir`
 
-If `failed_run_id` is set, it takes precedence over `failed_session_dir`. If neither input is set, use the cold-start run-selection flow before gathering context.
+If `failed_session_dir` is set, it takes precedence over `failed_run_id` because it is not sensitive to the current working directory. If neither input is set, use the cold-start run-selection flow before gathering context.
 
 ## Phase 1: Resolve the target run
 
 Choose exactly one target before triage:
 
-- If `failed_run_id` is provided, use it and ignore `failed_session_dir`.
-- If only `failed_session_dir` is provided, validate that it is a run session directory, read its `state.json` with `debug --state-dir`, read its audit summary with `debug --audit-summary-dir`, and derive the canonical run id from that state or from the directory name.
+- If `failed_session_dir` is provided, validate that it is a run session directory, read its `state.json` with `debug --state-dir`, read its audit summary with `debug --audit-summary-dir`, and derive the canonical run id from that state or from the directory name.
+- If only `failed_run_id` is provided, use it as the target run id.
 - If neither is provided, list recent failed runs for the current project before triage. Show run id, workflow name, age, and a short failure-reason snippet. Prompt the user to pick by number/id or paste an absolute session-directory path. Do not begin triage until a target is selected. If no failed runs exist, say so and offer to debug a successful run by path/id or end the workflow.
 
-When both inputs are set, `failed_run_id` wins.
+When both inputs are set, `failed_session_dir` wins.
 
 ## Phase 2: Gather context
 

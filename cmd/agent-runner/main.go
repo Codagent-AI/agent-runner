@@ -644,8 +644,8 @@ func runSwitcher(sw *switcher) int {
 		if final.resumeRunID != "" {
 			return execRunnerResume(final.resumeRunID, final.resumeRunProjectDir)
 		}
-		if final.launchDebugRunID != "" {
-			return execRunnerDebug(final.launchDebugRunID, final.launchDebugProjectDir)
+		if final.launchDebugRunID != "" || final.launchDebugSessionDir != "" {
+			return execRunnerDebug(final.launchDebugRunID, final.launchDebugSessionDir, final.launchDebugProjectDir)
 		}
 		if final.startRunReady && final.startRunEntry != nil {
 			return execStartRun(final.startRunEntry, final.startRunParams)
@@ -798,8 +798,8 @@ func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResul
 		if rv.ResumeToList() {
 			return liveTUIResult{exitCode: execRunnerResume("", h.ProjectDir), sessionDir: h.SessionDir}
 		}
-		if rv.LaunchDebugRunID() != "" {
-			return liveTUIResult{exitCode: execRunnerDebug(rv.LaunchDebugRunID(), rv.LaunchDebugProjectDir()), sessionDir: h.SessionDir}
+		if rv.LaunchDebugRunID() != "" || rv.LaunchDebugSessionDir() != "" {
+			return liveTUIResult{exitCode: execRunnerDebug(rv.LaunchDebugRunID(), rv.LaunchDebugSessionDir(), rv.LaunchDebugProjectDir()), sessionDir: h.SessionDir}
 		}
 	}
 	return liveTUIResult{sessionDir: h.SessionDir}
@@ -816,9 +816,9 @@ func terminalLiveTUIResult(rv *runview.Model, resultCh <-chan runner.WorkflowRes
 		<-resultCh
 		return liveTUIResult{exitCode: execRunnerResume("", projectDir), sessionDir: sessionDir}, true
 	}
-	if rv.LaunchDebugRunID() != "" {
+	if rv.LaunchDebugRunID() != "" || rv.LaunchDebugSessionDir() != "" {
 		<-resultCh
-		return liveTUIResult{exitCode: execRunnerDebug(rv.LaunchDebugRunID(), rv.LaunchDebugProjectDir()), sessionDir: sessionDir}, true
+		return liveTUIResult{exitCode: execRunnerDebug(rv.LaunchDebugRunID(), rv.LaunchDebugSessionDir(), rv.LaunchDebugProjectDir()), sessionDir: sessionDir}, true
 	}
 	if opts.quitOnDone {
 		return dispatcherLiveTUIResult(resultCh, sessionDir), true
@@ -981,18 +981,21 @@ func execRunnerResume(runID, projectDir string) int {
 	return execSelf(args...)
 }
 
-func launchDebugArgs(runID string) []string {
+func launchDebugArgs(runID, sessionDir string) []string {
+	if sessionDir != "" {
+		return []string{"run", "core:debug", "--param", "failed_session_dir=" + sessionDir}
+	}
 	return []string{"run", "core:debug", "--param", "failed_run_id=" + runID}
 }
 
-var execRunnerDebug = func(runID, projectDir string) int {
+var execRunnerDebug = func(runID, sessionDir, projectDir string) int {
 	if projectDir != "" {
 		if err := os.Chdir(projectDir); err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: chdir %s: %v\n", projectDir, err)
 			return 1
 		}
 	}
-	return execSelfWithEnv([]string{liveRunImmediateAltScreenEnv + "=1"}, launchDebugArgs(runID)...)
+	return execSelfWithEnv([]string{liveRunImmediateAltScreenEnv + "=1"}, launchDebugArgs(runID, sessionDir)...)
 }
 
 // execStartRun replaces the current process with `agent-runner run <workflow>`
@@ -1082,6 +1085,7 @@ type switcher struct {
 	resumeRunID           string
 	resumeRunProjectDir   string
 	launchDebugRunID      string
+	launchDebugSessionDir string
 	launchDebugProjectDir string
 	resumeListProjectDir  string
 	startRunEntry         *discovery.WorkflowEntry
@@ -1204,6 +1208,7 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case runview.LaunchDebugMsg:
 		s.launchDebugRunID = msg.FailedRunID
+		s.launchDebugSessionDir = msg.FailedSessionDir
 		s.launchDebugProjectDir = msg.FailedProjectDir
 		return s, tea.Quit
 
