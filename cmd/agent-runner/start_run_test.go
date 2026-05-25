@@ -649,7 +649,11 @@ func TestSwitcher_SubmittedParamForm_QueuesRunLaunchAndQuits(t *testing.T) {
 func TestSwitcher_LaunchDebugMsg_QueuesDirectDebugExec(t *testing.T) {
 	sw := &switcher{mode: showingRunView}
 
-	newModel, cmd := sw.Update(runview.LaunchDebugMsg{FailedRunID: "run-123", FailedProjectDir: "/workspace/project"})
+	newModel, cmd := sw.Update(runview.LaunchDebugMsg{
+		FailedRunID:      "run-123",
+		FailedSessionDir: "/state/runs/run-123",
+		FailedProjectDir: "/workspace/project",
+	})
 	if cmd == nil {
 		t.Fatal("LaunchDebugMsg should quit so the run can be exec-replaced")
 	}
@@ -660,6 +664,9 @@ func TestSwitcher_LaunchDebugMsg_QueuesDirectDebugExec(t *testing.T) {
 	sw = newModel.(*switcher)
 	if sw.launchDebugRunID != "run-123" {
 		t.Fatalf("launchDebugRunID = %q, want run-123", sw.launchDebugRunID)
+	}
+	if sw.launchDebugSessionDir != "/state/runs/run-123" {
+		t.Fatalf("launchDebugSessionDir = %q, want /state/runs/run-123", sw.launchDebugSessionDir)
 	}
 	if sw.launchDebugProjectDir != "/workspace/project" {
 		t.Fatalf("launchDebugProjectDir = %q, want /workspace/project", sw.launchDebugProjectDir)
@@ -677,7 +684,14 @@ func TestSwitcher_LaunchDebugMsg_QueuesDirectDebugExec(t *testing.T) {
 
 func TestLaunchDebugArgs_UsesRunSubcommandAndParamFlag(t *testing.T) {
 	want := []string{"run", "core:debug", "--param", "failed_run_id=run-123"}
-	if diff := cmp.Diff(want, launchDebugArgs("run-123")); diff != "" {
+	if diff := cmp.Diff(want, launchDebugArgs("run-123", "")); diff != "" {
+		t.Fatalf("debug launch args mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestLaunchDebugArgs_PrefersSessionDirParam(t *testing.T) {
+	want := []string{"run", "core:debug", "--param", "failed_session_dir=/state/runs/run-123"}
+	if diff := cmp.Diff(want, launchDebugArgs("run-123", "/state/runs/run-123")); diff != "" {
 		t.Fatalf("debug launch args mismatch (-want +got):\n%s", diff)
 	}
 }
@@ -718,7 +732,8 @@ func TestExecRunnerDebug_ChdirsToFailedRunProjectBeforeExec(t *testing.T) {
 		return nil
 	}
 
-	code := execRunnerDebug("run-123", projectDir)
+	sessionDir := "/state/runs/run-123"
+	code := execRunnerDebug("run-123", sessionDir, projectDir)
 	if code != 0 {
 		t.Fatalf("execRunnerDebug() = %d, want 0", code)
 	}
@@ -733,7 +748,7 @@ func TestExecRunnerDebug_ChdirsToFailedRunProjectBeforeExec(t *testing.T) {
 	if gotResolvedWD != wantWD {
 		t.Fatalf("exec cwd = %q, want %q", gotResolvedWD, wantWD)
 	}
-	wantArgs := []string{filepath.Base("/tmp/agent-runner"), "run", "core:debug", "--param", "failed_run_id=run-123"}
+	wantArgs := []string{filepath.Base("/tmp/agent-runner"), "run", "core:debug", "--param", "failed_session_dir=" + sessionDir}
 	if diff := cmp.Diff(wantArgs, gotArgs); diff != "" {
 		t.Fatalf("exec args mismatch (-want +got):\n%s", diff)
 	}
@@ -748,8 +763,10 @@ func TestTerminalLiveTUIResult_LaunchDebugExecsSelectedRun(t *testing.T) {
 
 	var gotRunID string
 	var gotProjectDir string
-	execRunnerDebug = func(runID, projectDir string) int {
+	var gotSessionDir string
+	execRunnerDebug = func(runID, sessionDir, projectDir string) int {
 		gotRunID = runID
+		gotSessionDir = sessionDir
 		gotProjectDir = projectDir
 		return 7
 	}
@@ -758,7 +775,11 @@ func TestTerminalLiveTUIResult_LaunchDebugExecsSelectedRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewForDefinition: %v", err)
 	}
-	next, cmd := rv.Update(runview.LaunchDebugMsg{FailedRunID: "run-123", FailedProjectDir: "/failed/project"})
+	next, cmd := rv.Update(runview.LaunchDebugMsg{
+		FailedRunID:      "run-123",
+		FailedSessionDir: "/state/runs/run-123",
+		FailedProjectDir: "/failed/project",
+	})
 	if cmd == nil {
 		t.Fatal("LaunchDebugMsg should quit the top-level run view")
 	}
@@ -777,8 +798,8 @@ func TestTerminalLiveTUIResult_LaunchDebugExecsSelectedRun(t *testing.T) {
 	if result.exitCode != 7 || result.sessionDir != "/runs/run-123" {
 		t.Fatalf("terminalLiveTUIResult = %#v, want exitCode 7 and session dir", result)
 	}
-	if gotRunID != "run-123" || gotProjectDir != "/failed/project" {
-		t.Fatalf("debug target = (%q, %q), want (run-123, /failed/project)", gotRunID, gotProjectDir)
+	if gotRunID != "run-123" || gotSessionDir != "/state/runs/run-123" || gotProjectDir != "/failed/project" {
+		t.Fatalf("debug target = (%q, %q, %q), want (run-123, /state/runs/run-123, /failed/project)", gotRunID, gotSessionDir, gotProjectDir)
 	}
 }
 
