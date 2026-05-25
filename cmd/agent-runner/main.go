@@ -354,6 +354,13 @@ type commandFlags struct {
 }
 
 func dispatchRunCommand(args []string, opts commandFlags) int {
+	var err error
+	args, err = normalizeRunCommandArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+
 	if opts.validate {
 		return handleValidateArgs(args)
 	}
@@ -400,6 +407,40 @@ func dispatchRunCommand(args []string, opts commandFlags) int {
 	}
 
 	return handleRunWithRunOptions(append([]string{workflowFile}, args[1:]...), runCommandOptions{from: opts.onboardingFrom}).exitCode
+}
+
+func normalizeRunCommandArgs(args []string) ([]string, error) {
+	if len(args) == 0 || args[0] != "run" {
+		return args, nil
+	}
+	if len(args) == 1 {
+		return nil, fmt.Errorf("run requires a workflow name")
+	}
+
+	normalized := []string{args[1]}
+	for i := 2; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--param":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("--param requires key=value")
+			}
+			i++
+			if !strings.Contains(args[i], "=") {
+				return nil, fmt.Errorf("--param requires key=value")
+			}
+			normalized = append(normalized, args[i])
+		case strings.HasPrefix(arg, "--param="):
+			value := strings.TrimPrefix(arg, "--param=")
+			if !strings.Contains(value, "=") {
+				return nil, fmt.Errorf("--param requires key=value")
+			}
+			normalized = append(normalized, value)
+		default:
+			normalized = append(normalized, arg)
+		}
+	}
+	return normalized, nil
 }
 
 func handleResume(sessionID string) int {
@@ -571,6 +612,9 @@ func runSwitcher(sw *switcher) int {
 		}
 		if final.resumeRunID != "" {
 			return execRunnerResume(final.resumeRunID, final.resumeRunProjectDir)
+		}
+		if final.launchDebugRunID != "" {
+			return execSelfWithEnv([]string{liveRunImmediateAltScreenEnv + "=1"}, launchDebugArgs(final.launchDebugRunID)...)
 		}
 		if final.startRunReady && final.startRunEntry != nil {
 			return execStartRun(final.startRunEntry, final.startRunParams)
@@ -945,6 +989,10 @@ func execRunnerResume(runID, projectDir string) int {
 	return execSelf(args...)
 }
 
+func launchDebugArgs(runID string) []string {
+	return []string{"run", "core:debug", "--param", "failed_run_id=" + runID}
+}
+
 // execStartRun replaces the current process with `agent-runner run <workflow>`
 // using the workflow's canonical name and ordered key=value params.
 func execStartRun(entry *discovery.WorkflowEntry, values map[string]string) int {
@@ -1031,6 +1079,7 @@ type switcher struct {
 	resumeSessionID      string
 	resumeRunID          string
 	resumeRunProjectDir  string
+	launchDebugRunID     string
 	resumeListProjectDir string
 	startRunEntry        *discovery.WorkflowEntry
 	startRunParams       map[string]string
@@ -1147,14 +1196,7 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return s, tea.Quit
 
 	case runview.LaunchDebugMsg:
-		s.startRunEntry = &discovery.WorkflowEntry{
-			CanonicalName: "core:debug",
-			Params: []model.Param{
-				{Name: "failed_run_id"},
-			},
-		}
-		s.startRunParams = map[string]string{"failed_run_id": msg.FailedRunID}
-		s.startRunReady = true
+		s.launchDebugRunID = msg.FailedRunID
 		return s, tea.Quit
 
 	case runview.ResumeListMsg:

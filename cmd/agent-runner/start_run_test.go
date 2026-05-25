@@ -615,7 +615,7 @@ func TestSwitcher_SubmittedParamForm_QueuesRunLaunchAndQuits(t *testing.T) {
 	}
 }
 
-func TestSwitcher_LaunchDebugMsg_QueuesCoreDebugWithFailedRunID(t *testing.T) {
+func TestSwitcher_LaunchDebugMsg_QueuesDirectDebugExec(t *testing.T) {
 	sw := &switcher{mode: showingRunView}
 
 	newModel, cmd := sw.Update(runview.LaunchDebugMsg{FailedRunID: "run-123"})
@@ -627,22 +627,35 @@ func TestSwitcher_LaunchDebugMsg_QueuesCoreDebugWithFailedRunID(t *testing.T) {
 	}
 
 	sw = newModel.(*switcher)
-	if sw.startRunEntry == nil {
-		t.Fatal("startRunEntry should be set")
+	if sw.launchDebugRunID != "run-123" {
+		t.Fatalf("launchDebugRunID = %q, want run-123", sw.launchDebugRunID)
 	}
-	if diff := cmp.Diff("core:debug", sw.startRunEntry.CanonicalName); diff != "" {
-		t.Fatalf("debug workflow mismatch (-want +got):\n%s", diff)
+	if sw.startRunEntry != nil {
+		t.Fatalf("startRunEntry = %#v, want nil for direct debug exec", sw.startRunEntry)
 	}
-	if diff := cmp.Diff(
-		[]model.Param{{Name: "failed_run_id"}},
-		sw.startRunEntry.Params,
-	); diff != "" {
-		t.Fatalf("debug params mismatch (-want +got):\n%s", diff)
+	if sw.startRunParams != nil {
+		t.Fatalf("startRunParams = %#v, want nil for direct debug exec", sw.startRunParams)
 	}
-	if diff := cmp.Diff(map[string]string{"failed_run_id": "run-123"}, sw.startRunParams); diff != "" {
-		t.Fatalf("startRunParams mismatch (-want +got):\n%s", diff)
+	if sw.startRunReady {
+		t.Fatal("startRunReady should be false for direct debug exec")
 	}
-	if !sw.startRunReady {
-		t.Fatal("startRunReady should be true")
+}
+
+func TestLaunchDebugArgs_UsesRunSubcommandAndParamFlag(t *testing.T) {
+	want := []string{"run", "core:debug", "--param", "failed_run_id=run-123"}
+	if diff := cmp.Diff(want, launchDebugArgs("run-123")); diff != "" {
+		t.Fatalf("debug launch args mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestNormalizeRunCommandArgs_SupportsRunSubcommandParamFlag(t *testing.T) {
+	got, err := normalizeRunCommandArgs([]string{"run", "core:debug", "--param", "failed_run_id=run-123"})
+	if err != nil {
+		t.Fatalf("normalizeRunCommandArgs returned error: %v", err)
+	}
+
+	want := []string{"core:debug", "failed_run_id=run-123"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("normalized args mismatch (-want +got):\n%s", diff)
 	}
 }
