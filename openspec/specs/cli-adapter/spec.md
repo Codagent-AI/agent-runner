@@ -239,7 +239,7 @@ The setting SHALL NOT affect interactive (non-autonomous) invocations. The exist
 #### Scenario: Conservative mode preserves today's baseline flags
 
 - **WHEN** an autonomous agent step runs with `autonomous_permission_mode: conservative` (or the setting absent)
-- **THEN** each adapter's emitted args match the per-CLI autonomous baseline it emits today: Claude includes `--permission-mode acceptEdits`, Codex includes `--sandbox workspace-write`, Copilot includes `--allow-tool=write --autopilot`, Cursor includes `--trust` only, OpenCode emits no permission flag
+- **THEN** each adapter's emitted args match the per-CLI autonomous baseline it emits today: Claude includes `--permission-mode acceptEdits`, Codex includes `--sandbox workspace-write --skip-git-repo-check`, Copilot includes `--allow-tool=write --autopilot`, Cursor includes `--trust` only, OpenCode emits no permission flag
 
 #### Scenario: YOLO mode permits broader authority flag
 
@@ -260,4 +260,3 @@ The setting SHALL NOT affect interactive (non-autonomous) invocations. The exist
 
 - **WHEN** an autonomous OpenCode step runs and OpenCode has no broader-authority flag exposed by its CLI
 - **THEN** the OpenCode adapter emits the same args under `conservative` and `yolo`
-

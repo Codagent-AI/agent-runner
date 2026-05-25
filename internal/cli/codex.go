@@ -21,9 +21,9 @@ type CodexAdapter struct{}
 //
 // Patterns:
 //   - Fresh interactive:  codex --no-alt-screen <prompt>
-//   - Fresh headless:     codex --sandbox workspace-write exec --json <prompt>
+//   - Fresh headless:     codex --sandbox workspace-write --skip-git-repo-check exec --json <prompt>
 //   - Resume interactive: codex resume --no-alt-screen <uuid> <prompt>
-//   - Resume headless:    codex --sandbox workspace-write exec resume --json <uuid> <prompt>
+//   - Resume headless:    codex --sandbox workspace-write --skip-git-repo-check exec resume --json <uuid> <prompt>
 //   - Model override:     appends -m <m>
 //   - Effort override:    appends -c model_reasoning_effort="<effort>"
 //
@@ -43,7 +43,7 @@ func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 		if usersettings.EffectiveAutonomousPermissionMode(input.PermissionMode) == usersettings.PermissionModeYOLO {
 			sandbox = "danger-full-access"
 		}
-		args = append(args, "--sandbox", sandbox)
+		args = append(args, "--sandbox", sandbox, "--skip-git-repo-check")
 	}
 
 	if context.IsHeadless() {
