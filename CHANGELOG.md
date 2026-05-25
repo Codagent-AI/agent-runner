@@ -1,5 +1,15 @@
 # agent-runner
 
+## 0.1.1
+
+### Minor Changes
+
+- [#38](https://github.com/Codagent-AI/agent-runner/pull/38) Improve the new-workflow tab so workflows are grouped more clearly, hidden/current-directory visibility is easier to understand, and descriptions are more useful while browsing.
+
+### Patch Changes
+
+- [#39](https://github.com/Codagent-AI/agent-runner/pull/39) Add a built-in debug workflow and failure entry points so failed runs can be inspected through state/audit-summary commands and routed toward user remediation or issue filing.
+
 ## 0.1.0
 
 ### Minor Changes
