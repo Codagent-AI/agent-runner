@@ -38,6 +38,9 @@ func (m *Model) View() string {
 		return ""
 	}
 	view := m.viewBase()
+	if m.onboardingFailureVisible {
+		return tuistyle.RenderOverlay(view, m.renderOnboardingFailure(), m.termWidth, m.termHeight)
+	}
 	if m.splashVisible {
 		return tuistyle.RenderOverlay(view, m.renderSplash(), m.termWidth, m.termHeight)
 	}
@@ -45,6 +48,30 @@ func (m *Model) View() string {
 		return tuistyle.RenderOverlay(view, m.settingsEditor.View(), m.termWidth, m.termHeight)
 	}
 	return view
+}
+
+func (m *Model) renderOnboardingFailure() string {
+	const buttonGap = 6
+	debugNow := tuistyle.RenderButton("Debug now", m.onboardingFailureFocus == 0)
+	skip := tuistyle.RenderButton("Skip", m.onboardingFailureFocus == 1)
+	buttons := debugNow + strings.Repeat(" ", buttonGap) + skip
+
+	reason := sanitize(m.onboardingFailureReason)
+	if reason == "" {
+		reason = "workflow failed"
+	}
+	reasonLines := wrapCell(reason, splashInnerWidth)
+
+	lines := []string{
+		splashTitleStyle.Render("Onboarding failed unexpectedly"),
+		"",
+	}
+	lines = append(lines, reasonLines...)
+	lines = append(lines,
+		"",
+		splashCenterLineStyle.Render(buttons),
+	)
+	return splashBox.Render(strings.Join(lines, "\n"))
 }
 
 func (m *Model) renderSplash() string {

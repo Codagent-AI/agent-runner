@@ -56,7 +56,8 @@ type workflowCandidate struct {
 // a run for a workflow (e.g. pressing r on the new tab or in the definition view).
 // The handler that launches the actual run is wired separately.
 type StartRunMsg struct {
-	Entry WorkflowEntry
+	Entry  WorkflowEntry
+	Params map[string]string
 }
 
 // ViewDefinitionMsg is a bubbletea message emitted when the user opens a

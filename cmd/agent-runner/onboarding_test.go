@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/usersettings"
 	"github.com/google/go-cmp/cmp"
 )
@@ -250,6 +251,56 @@ func TestEnsureFirstRunForTUISetupErrorFailsWhenNonFatalModeDisabled(t *testing.
 func TestDefaultFirstRunDepsExitsOnNativeSetupError(t *testing.T) {
 	if defaultFirstRunDeps.continueAfterNativeSetupError {
 		t.Fatal("default first-run setup should exit on native setup errors, not silently continue")
+	}
+}
+
+func TestShouldShowOnboardingFailureModalGatesByTerminalOutcomeCancellationAndDismissal(t *testing.T) {
+	tests := []struct {
+		name     string
+		result   liveTUIResult
+		settings usersettings.Settings
+		want     bool
+	}{
+		{
+			name:     "terminal failure",
+			result:   liveTUIResult{workflowResult: runner.ResultFailed, sessionDir: "/tmp/onboarding-run"},
+			settings: usersettings.Settings{},
+			want:     true,
+		},
+		{
+			name:     "user cancellation",
+			result:   liveTUIResult{workflowResult: runner.ResultFailed, exitRequested: true, sessionDir: "/tmp/onboarding-run"},
+			settings: usersettings.Settings{},
+		},
+		{
+			name:     "clean break_if success",
+			result:   liveTUIResult{workflowResult: runner.ResultSuccess, sessionDir: "/tmp/onboarding-run"},
+			settings: usersettings.Settings{},
+		},
+		{
+			name:     "stopped run",
+			result:   liveTUIResult{workflowResult: runner.ResultStopped, sessionDir: "/tmp/onboarding-run"},
+			settings: usersettings.Settings{},
+		},
+		{
+			name:     "dismissed setting",
+			result:   liveTUIResult{workflowResult: runner.ResultFailed, sessionDir: "/tmp/onboarding-run"},
+			settings: usersettings.Settings{Onboarding: usersettings.OnboardingSettings{Dismissed: "2026-05-24T00:00:00Z"}},
+		},
+		{
+			name:     "missing session dir",
+			result:   liveTUIResult{workflowResult: runner.ResultFailed},
+			settings: usersettings.Settings{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldShowOnboardingFailureModal(tt.result, &tt.settings)
+			if got != tt.want {
+				t.Fatalf("shouldShowOnboardingFailureModal = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

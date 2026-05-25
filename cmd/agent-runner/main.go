@@ -396,7 +396,7 @@ func dispatchRunCommand(args []string, opts commandFlags) int {
 				fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 				return 1
 			}
-			return handleRunWithRunOptions([]string{ref}, runCommandOptions{from: opts.onboardingFrom}).exitCode
+			return handleOnboardingFromRun(ref, opts.onboardingFrom)
 		}
 		return handleListWithDeps(listview.InitialTabNew, defaultFirstRunDeps)
 	}
@@ -411,7 +411,10 @@ func dispatchRunCommand(args []string, opts commandFlags) int {
 		return 1
 	}
 
-	return handleRunWithRunOptions(append([]string{workflowFile}, args[1:]...), runCommandOptions{from: opts.onboardingFrom}).exitCode
+	if opts.onboardingFrom != "" {
+		return handleOnboardingFromRun(workflowFile, opts.onboardingFrom, args[1:]...)
+	}
+	return handleRunWithRunOptions(append([]string{workflowFile}, args[1:]...), runCommandOptions{}).exitCode
 }
 
 func isRunCommandHelp(args []string) bool {
@@ -576,15 +579,24 @@ func handleListWithDeps(initialTab listview.InitialTab, firstRun firstRunDeps) i
 	}
 	if result := ensureFirstRunForTUI(firstRun); !result.continueToList {
 		return result.exitCode
+	} else if len(result.listOptions) > 0 {
+		return handleListAfterFirstRun(initialTab, firstRun, result.listOptions)
 	}
 
+	return handleListAfterFirstRun(initialTab, firstRun, nil)
+}
+
+func handleListAfterFirstRun(initialTab listview.InitialTab, firstRun firstRunDeps, extraOptions []func(*listview.Model)) int {
 	settings := loadSplashSettingsForList(firstRun.load, os.Stderr)
 
-	m, err := listview.New(
+	options := []func(*listview.Model){
 		listview.WithInitialTab(initialTab),
 		listview.WithVersion(version),
 		listview.WithSplash(shouldShowSplash(&settings, firstRun.isStdinTTY(), firstRun.isStdoutTTY())),
-	)
+	}
+	options = append(options, extraOptions...)
+
+	m, err := listview.New(options...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
@@ -605,6 +617,16 @@ func loadSplashSettingsForList(load func() (usersettings.Settings, error), stder
 		return usersettings.Settings{}
 	}
 	return settings
+}
+
+func shouldShowOnboardingFailureModal(result liveTUIResult, settings *usersettings.Settings) bool {
+	if settings == nil {
+		settings = &usersettings.Settings{}
+	}
+	return result.workflowResult == runner.ResultFailed &&
+		!result.exitRequested &&
+		result.sessionDir != "" &&
+		settings.Onboarding.Dismissed == ""
 }
 
 func runSwitcher(sw *switcher) int {
@@ -694,13 +716,15 @@ type liveTUIResult struct {
 	exitRequested  bool
 	inlineError    string
 	handoffHandled bool
+	workflowResult runner.WorkflowResult
+	sessionDir     string
 }
 
 func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResult {
 	rv, err := runview.New(h.SessionDir, h.ProjectDir, runview.FromLiveRun)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-		return liveTUIResult{exitCode: 1}
+		return liveTUIResult{exitCode: 1, sessionDir: h.SessionDir}
 	}
 
 	programOptions := []tea.ProgramOption{tea.WithMouseCellMotion()}
@@ -742,7 +766,7 @@ func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResul
 	rv, err = finalRunviewModel(p.Run())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-		return liveTUIResult{exitCode: 1}
+		return liveTUIResult{exitCode: 1, sessionDir: h.SessionDir}
 	}
 
 	// If the user did not request a resume, map the runner result to an exit
@@ -758,6 +782,8 @@ func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResul
 	// agent CLI, then enter the spawn-and-reenter loop.
 	runResult := <-resultCh
 	if handoff := handlePostWorkflowResumeHandoff(h.SessionDir, runResult); isPostHandoffResult(handoff) {
+		handoff.workflowResult = runResult
+		handoff.sessionDir = h.SessionDir
 		return handoff
 	}
 
@@ -775,13 +801,13 @@ func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResul
 			return liveTUIResult{exitCode: 1}
 		}
 		if rv.ExitRequested() {
-			return liveTUIResult{exitRequested: true}
+			return liveTUIResult{exitRequested: true, sessionDir: h.SessionDir}
 		}
 		if rv.ResumeToList() {
-			return liveTUIResult{exitCode: execRunnerResume("", h.ProjectDir)}
+			return liveTUIResult{exitCode: execRunnerResume("", h.ProjectDir), sessionDir: h.SessionDir}
 		}
 	}
-	return liveTUIResult{}
+	return liveTUIResult{sessionDir: h.SessionDir}
 }
 
 func terminalLiveTUIResult(rv *runview.Model, resultCh <-chan runner.WorkflowResult, projectDir, sessionDir string, opts liveTUIOptions) (liveTUIResult, bool) {
@@ -789,11 +815,11 @@ func terminalLiveTUIResult(rv *runview.Model, resultCh <-chan runner.WorkflowRes
 		return liveTUIResult{}, false
 	}
 	if rv.ExitRequested() {
-		return liveTUIResult{exitRequested: true}, true
+		return liveTUIResult{exitRequested: true, sessionDir: sessionDir}, true
 	}
 	if rv.ResumeToList() {
 		<-resultCh
-		return liveTUIResult{exitCode: execRunnerResume("", projectDir)}, true
+		return liveTUIResult{exitCode: execRunnerResume("", projectDir), sessionDir: sessionDir}, true
 	}
 	if opts.quitOnDone {
 		return dispatcherLiveTUIResult(resultCh, sessionDir), true
@@ -805,30 +831,36 @@ func dispatcherLiveTUIResult(resultCh <-chan runner.WorkflowResult, sessionDir s
 	select {
 	case runResult := <-resultCh:
 		if handoff := handlePostWorkflowResumeHandoff(sessionDir, runResult); isPostHandoffResult(handoff) {
+			handoff.workflowResult = runResult
+			handoff.sessionDir = sessionDir
 			return handoff
 		}
 		if runResult != runner.ResultSuccess {
-			return liveTUIResult{exitCode: 1}
+			return liveTUIResult{exitCode: 1, workflowResult: runResult, sessionDir: sessionDir}
 		}
+		return liveTUIResult{workflowResult: runResult, sessionDir: sessionDir}
 	default:
 		// User quit before the dispatcher-launched workflow reached a terminal
 		// state; preserve the normal live-run orphan behavior.
 	}
-	return liveTUIResult{}
+	return liveTUIResult{sessionDir: sessionDir}
 }
 
 func completedLiveTUIResult(resultCh <-chan runner.WorkflowResult, sessionDir string) liveTUIResult {
 	select {
 	case runResult := <-resultCh:
 		if handoff := handlePostWorkflowResumeHandoff(sessionDir, runResult); isPostHandoffResult(handoff) {
+			handoff.workflowResult = runResult
+			handoff.sessionDir = sessionDir
 			return handoff
 		}
 		if runResult != runner.ResultSuccess {
-			return liveTUIResult{exitCode: 1}
+			return liveTUIResult{exitCode: 1, workflowResult: runResult, sessionDir: sessionDir}
 		}
+		return liveTUIResult{workflowResult: runResult, sessionDir: sessionDir}
 	default:
 	}
-	return liveTUIResult{}
+	return liveTUIResult{sessionDir: sessionDir}
 }
 
 func handlePostWorkflowResumeHandoff(sessionDir string, result runner.WorkflowResult) liveTUIResult {
@@ -1164,8 +1196,12 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case discovery.StartRunMsg:
 		entry := msg.Entry
 		s.startRunEntry = &entry
-		s.startRunParams = nil
+		s.startRunParams = maps.Clone(msg.Params)
 		s.startRunReady = false
+		if len(msg.Params) > 0 {
+			s.startRunReady = true
+			return s, tea.Quit
+		}
 		if len(entry.Params) == 0 {
 			s.startRunReady = true
 			return s, tea.Quit
@@ -1473,12 +1509,14 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 			Log:           &realLogger{},
 		})
 		if handoff := handlePostWorkflowResumeHandoff(h.SessionDir, result); isPostHandoffResult(handoff) {
+			handoff.workflowResult = result
+			handoff.sessionDir = h.SessionDir
 			return handoff
 		}
 		if result != runner.ResultSuccess {
-			return liveTUIResult{exitCode: 1}
+			return liveTUIResult{exitCode: 1, workflowResult: result, sessionDir: h.SessionDir}
 		}
-		return liveTUIResult{}
+		return liveTUIResult{workflowResult: result, sessionDir: h.SessionDir}
 	}
 
 	if code := ensureThemeForTUI(defaultThemeDeps); code != 0 {
@@ -1499,6 +1537,24 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 	}
 
 	return runLiveTUIWithResult(h, liveOpts)
+}
+
+func handleOnboardingFromRun(workflowFile, from string, args ...string) int {
+	runArgs := append([]string{workflowFile}, args...)
+	result := handleRunWithRunOptions(runArgs, runCommandOptions{from: from})
+	settings, err := usersettings.Load()
+	if err != nil {
+		settings = usersettings.Settings{}
+	}
+	if !shouldShowOnboardingFailureModal(result, &settings) {
+		return result.exitCode
+	}
+	reason := runview.FailureReasonForSession(result.sessionDir)
+	return handleListAfterFirstRun(
+		listview.InitialTabCurrentDir,
+		defaultFirstRunDeps,
+		[]func(*listview.Model){listview.WithOnboardingFailure(result.sessionDir, reason)},
+	)
 }
 
 func ensureThemeForTUI(deps themeDeps) int {
@@ -1558,11 +1614,14 @@ type firstRunDeps struct {
 type firstRunResult struct {
 	exitCode       int
 	continueToList bool
+	listOptions    []func(*listview.Model)
 }
 
 type firstRunWorkflowResult struct {
-	exitCode      int
-	exitRequested bool
+	exitCode       int
+	exitRequested  bool
+	workflowResult runner.WorkflowResult
+	sessionDir     string
 }
 
 func continueToList() firstRunResult {
@@ -1592,7 +1651,12 @@ var defaultFirstRunDeps = firstRunDeps{
 	runDemoLaunchFlow: runOnboardingDemoLaunchFlow,
 	runWorkflow: func(ref string) firstRunWorkflowResult {
 		result := handleRunWithResult([]string{ref}, liveTUIOptions{quitOnDone: true, startInAltScreen: true})
-		return firstRunWorkflowResult{exitCode: result.exitCode, exitRequested: result.exitRequested}
+		return firstRunWorkflowResult{
+			exitCode:       result.exitCode,
+			exitRequested:  result.exitRequested,
+			workflowResult: result.workflowResult,
+			sessionDir:     result.sessionDir,
+		}
 	},
 }
 
@@ -1613,7 +1677,12 @@ func firstRunDepsWithOnboardingFrom(from string) firstRunDeps {
 			liveOpts: liveTUIOptions{quitOnDone: true, startInAltScreen: true},
 			from:     from,
 		})
-		return firstRunWorkflowResult{exitCode: result.exitCode, exitRequested: result.exitRequested}
+		return firstRunWorkflowResult{
+			exitCode:       result.exitCode,
+			exitRequested:  result.exitRequested,
+			workflowResult: result.workflowResult,
+			sessionDir:     result.sessionDir,
+		}
 	}
 	return deps
 }
@@ -1701,6 +1770,25 @@ func launchOnboardingDemo(deps firstRunDeps) firstRunResult {
 		return exitFirstRun(1)
 	}
 	result := deps.runWorkflow(ref)
+	liveResult := liveTUIResult{
+		exitCode:       result.exitCode,
+		exitRequested:  result.exitRequested,
+		workflowResult: result.workflowResult,
+		sessionDir:     result.sessionDir,
+	}
+	settings, err := deps.load()
+	if err != nil {
+		settings = usersettings.Settings{}
+	}
+	if shouldShowOnboardingFailureModal(liveResult, &settings) {
+		reason := runview.FailureReasonForSession(result.sessionDir)
+		return firstRunResult{
+			continueToList: true,
+			listOptions: []func(*listview.Model){
+				listview.WithOnboardingFailure(result.sessionDir, reason),
+			},
+		}
+	}
 	if result.exitRequested || result.exitCode != 0 {
 		return exitFirstRun(result.exitCode)
 	}

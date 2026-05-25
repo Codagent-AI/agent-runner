@@ -1,6 +1,23 @@
 package runview
 
-import "fmt"
+import (
+	"fmt"
+	"path/filepath"
+)
+
+// FailureReasonForSession returns the same root failure reason rendered by the
+// run view for a recorded session directory.
+func FailureReasonForSession(sessionDir string) string {
+	if sessionDir == "" {
+		return ""
+	}
+	projectDir := filepath.Dir(filepath.Dir(sessionDir))
+	m, err := New(sessionDir, projectDir, FromInspect)
+	if err != nil || m == nil || m.tree == nil {
+		return ""
+	}
+	return failureReason(m.tree.Root)
+}
 
 func failureReason(root *StepNode) string {
 	if root == nil {

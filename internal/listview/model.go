@@ -60,6 +60,19 @@ func WithSplash(show bool) func(*Model) {
 	}
 }
 
+// WithOnboardingFailure shows the onboarding-failure overlay for this listview session.
+func WithOnboardingFailure(sessionDir, reason string) func(*Model) {
+	return func(m *Model) {
+		if strings.TrimSpace(sessionDir) == "" {
+			return
+		}
+		m.onboardingFailureVisible = true
+		m.onboardingFailureSessionDir = sessionDir
+		m.onboardingFailureReason = strings.TrimSpace(reason)
+		m.splashVisible = false
+	}
+}
+
 // newTabState holds all state for the "new" tab (workflow browser + search).
 type newTabState struct {
 	workflows     []discovery.WorkflowEntry
@@ -117,6 +130,11 @@ type Model struct {
 	splashShown   bool
 	splashFocus   int
 	now           func() time.Time
+
+	onboardingFailureVisible    bool
+	onboardingFailureSessionDir string
+	onboardingFailureReason     string
+	onboardingFailureFocus      int
 
 	quitting bool
 }
@@ -430,6 +448,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		return m, tea.Quit
 	}
+	if m.onboardingFailureVisible {
+		return m.handleOnboardingFailureKey(msg)
+	}
 	if m.splashVisible {
 		return m.handleSplashKey(msg)
 	}
@@ -455,6 +476,65 @@ func (m *Model) handleSplashKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.dismissSplashForSession()
 	}
 	return m, nil
+}
+
+func (m *Model) handleOnboardingFailureKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "left", "right", "tab", "shift+tab":
+		m.onboardingFailureFocus = 1 - m.onboardingFailureFocus
+	case "enter", " ":
+		return m.activateOnboardingFailureButton()
+	case "esc":
+		m.skipOnboardingFailure()
+	}
+	return m, nil
+}
+
+func (m *Model) activateOnboardingFailureButton() (tea.Model, tea.Cmd) {
+	if m.onboardingFailureFocus == 1 {
+		m.skipOnboardingFailure()
+		return m, nil
+	}
+	return m.debugOnboardingFailure()
+}
+
+func (m *Model) debugOnboardingFailure() (tea.Model, tea.Cmd) {
+	sessionDir := m.onboardingFailureSessionDir
+	m.onboardingFailureVisible = false
+	return m, func() tea.Msg {
+		return discovery.StartRunMsg{
+			Entry: discovery.WorkflowEntry{
+				CanonicalName: "core:debug",
+				Scope:         discovery.ScopeBuiltin,
+				Namespace:     "core",
+				SourcePath:    "builtin:core/debug.yaml",
+			},
+			Params: map[string]string{"failed_session_dir": sessionDir},
+		}
+	}
+}
+
+func (m *Model) skipOnboardingFailure() {
+	settings, err := m.loadUserSettings()
+	if err != nil {
+		m.closeOnboardingFailureWithSaveError(err)
+		return
+	}
+	now := time.Now
+	if m.now != nil {
+		now = m.now
+	}
+	settings.Onboarding.Dismissed = now().UTC().Format(time.RFC3339)
+	if err := m.saveUserSettings(settings); err != nil {
+		m.closeOnboardingFailureWithSaveError(err)
+		return
+	}
+	m.onboardingFailureVisible = false
+}
+
+func (m *Model) closeOnboardingFailureWithSaveError(err error) {
+	m.onboardingFailureVisible = false
+	m.errMsg = fmt.Sprintf("could not save onboarding dismissal preference: %v", err)
 }
 
 func (m *Model) activateSplashButton() {
