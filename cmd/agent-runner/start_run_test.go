@@ -659,3 +659,26 @@ func TestNormalizeRunCommandArgs_SupportsRunSubcommandParamFlag(t *testing.T) {
 		t.Fatalf("normalized args mismatch (-want +got):\n%s", diff)
 	}
 }
+
+func TestNormalizeRunCommandArgs_PreservesSingleRunWorkflowName(t *testing.T) {
+	got, err := normalizeRunCommandArgs([]string{"run"})
+	if err != nil {
+		t.Fatalf("normalizeRunCommandArgs returned error: %v", err)
+	}
+
+	want := []string{"run"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("normalized args mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestIsRunCommandHelp_DetectsHelpFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{"run", "--help"},
+		{"run", "-h"},
+	} {
+		if !isRunCommandHelp(args) {
+			t.Fatalf("isRunCommandHelp(%v) = false, want true", args)
+		}
+	}
+}

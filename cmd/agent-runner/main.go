@@ -354,6 +354,11 @@ type commandFlags struct {
 }
 
 func dispatchRunCommand(args []string, opts commandFlags) int {
+	if isRunCommandHelp(args) {
+		printRunUsage(os.Stderr)
+		return 0
+	}
+
 	var err error
 	args, err = normalizeRunCommandArgs(args)
 	if err != nil {
@@ -409,12 +414,17 @@ func dispatchRunCommand(args []string, opts commandFlags) int {
 	return handleRunWithRunOptions(append([]string{workflowFile}, args[1:]...), runCommandOptions{from: opts.onboardingFrom}).exitCode
 }
 
+func isRunCommandHelp(args []string) bool {
+	return len(args) == 2 && args[0] == "run" && (args[1] == "--help" || args[1] == "-h")
+}
+
+func printRunUsage(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "Usage: agent-runner run <workflow> [--param key=value] [key=value ...]")
+}
+
 func normalizeRunCommandArgs(args []string) ([]string, error) {
-	if len(args) == 0 || args[0] != "run" {
+	if len(args) <= 1 || args[0] != "run" || strings.HasPrefix(args[1], "-") {
 		return args, nil
-	}
-	if len(args) == 1 {
-		return nil, fmt.Errorf("run requires a workflow name")
 	}
 
 	normalized := []string{args[1]}
