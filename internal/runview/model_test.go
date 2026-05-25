@@ -428,7 +428,8 @@ func TestModel_D_InactiveRun_EmitsLaunchDebugMsg(t *testing.T) {
 	tree.Root.Status = StatusFailed
 	m := newTestModel(tree, FromList)
 	m.sessionDir = "/runs/my-run-id"
-	m.projectDir = "/workspace/project"
+	m.projectDir = "/home/me/.agent-runner/projects/-workspace-project"
+	m.originCwd = "/workspace/project"
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
 	if cmd == nil {
@@ -454,7 +455,8 @@ func TestModel_D_WorksAtAnyDrillDepth(t *testing.T) {
 	tree.Root.Status = StatusSuccess
 	m := newTestModel(tree, FromList)
 	m.sessionDir = "/runs/my-run-id"
-	m.projectDir = "/workspace/project"
+	m.projectDir = "/home/me/.agent-runner/projects/-workspace-project"
+	m.originCwd = "/workspace/project"
 
 	m.cursor = 2
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -486,7 +488,8 @@ func TestModel_D_InTopLevelLiveRun_StoresDebugTargetAndQuits(t *testing.T) {
 	tree.Root.Status = StatusFailed
 	m := newTestModel(tree, FromLiveRun)
 	m.sessionDir = "/runs/my-run-id"
-	m.projectDir = "/workspace/project"
+	m.projectDir = "/home/me/.agent-runner/projects/-workspace-project"
+	m.originCwd = "/workspace/project"
 	m.running = false
 	m.liveResult = "failed"
 
