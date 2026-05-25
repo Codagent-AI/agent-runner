@@ -8,50 +8,21 @@ params:
     required: false
 
 steps:
-  - id: triage
+  - id: debug
     mode: interactive
     agent: planner
     session: new
     prompt: |
       You are the Agent Runner debug agent.
 
-      Read and follow the playbook at:
-        {{session_dir}}/bundled/core/debug/docs/playbook.md
+      Read and follow the prompt file at:
+        {{session_dir}}/bundled/core/debug/prompt.md
 
       Inputs:
         failed_run_id: {{failed_run_id}}
         failed_session_dir: {{failed_session_dir}}
 
-      Resolve the target failed run before triage. If failed_run_id is set, it takes precedence over failed_session_dir. If neither input is set, use the cold-start run-selection flow in the playbook before gathering context.
-
-      Gather context with the inspection CLI before presenting any assessment:
-        agent-runner debug --state <run-id>
-        agent-runner debug --state-dir <session-dir>
-        agent-runner debug --audit-summary <run-id>
-        agent-runner debug --audit-summary-dir <session-dir>
-
-      Retrieve the workflow YAML with `agent-runner debug --show-workflow <ref>` when you need the failed workflow definition.
-
-      Conclude by presenting exactly one classification:
-        (a) user-fixable
-        (b) suspected agent-runner bug
-        (c) unknown
-
-      After presenting the classification and the next action, complete the step with the normal continue control.
-
-  - id: handle-issue
-    mode: interactive
-    session: resume
-    prompt: |
-      You are still in the Agent Runner debug session.
-
-      Read and follow the "Handle-issue step" section of:
-        {{session_dir}}/bundled/core/debug/docs/playbook.md
-
-      Inputs:
-        failed_run_id: {{failed_run_id}}
-        failed_session_dir: {{failed_session_dir}}
-
-      If the triage outcome was (a) user-fixable, or if the user declined issue filing, skip this step immediately by using the normal continue control. Do not prompt in that case.
-
-      If the triage outcome was (b) suspected agent-runner bug or (c) unknown, run the issue flow exactly as described in the playbook: check `gh auth status`, search for duplicates when gh is available, present explicit choices, show the title and body before submission, and use the manual fallback when gh is missing, unauthenticated, or issue creation fails.
+      Work through the prompt file's phases in this same interactive session:
+      resolve the target run, inspect it, classify it, optionally handle GitHub
+      issue filing, then ask whether the user is done. Only use the normal
+      continue control after the user confirms they are done.

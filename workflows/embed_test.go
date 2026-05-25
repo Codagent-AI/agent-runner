@@ -353,7 +353,7 @@ Unresolved review threads: 2
 	}
 }
 
-func TestCoreDebugWorkflowDoesNotUseResumeHandoff(t *testing.T) {
+func TestCoreDebugWorkflowIsSinglePromptStepAndDoesNotUseResumeHandoff(t *testing.T) {
 	data, err := ReadFile("builtin:core/debug.yaml")
 	if err != nil {
 		t.Fatalf("ReadFile(core/debug): %v", err)
@@ -361,12 +361,25 @@ func TestCoreDebugWorkflowDoesNotUseResumeHandoff(t *testing.T) {
 
 	var workflow struct {
 		Steps []struct {
-			ID     string `yaml:"id"`
-			Prompt string `yaml:"prompt"`
+			Agent   string `yaml:"agent"`
+			ID      string `yaml:"id"`
+			Mode    string `yaml:"mode"`
+			Prompt  string `yaml:"prompt"`
+			Session string `yaml:"session"`
 		} `yaml:"steps"`
 	}
 	if err := yaml.Unmarshal(data, &workflow); err != nil {
 		t.Fatalf("unmarshal debug workflow: %v", err)
+	}
+	if len(workflow.Steps) != 1 {
+		t.Fatalf("debug workflow should be a single prompt step, got %#v", workflow.Steps)
+	}
+	step := workflow.Steps[0]
+	if step.ID != "debug" || step.Mode != "interactive" || step.Agent != "planner" || step.Session != "new" {
+		t.Fatalf("debug step shape = %#v", step)
+	}
+	if !strings.Contains(step.Prompt, "{{session_dir}}/bundled/core/debug/prompt.md") {
+		t.Fatalf("debug step does not point at bundled prompt file:\n%s", step.Prompt)
 	}
 	for _, step := range workflow.Steps {
 		if step.ID == "handle-resume" {
@@ -377,18 +390,21 @@ func TestCoreDebugWorkflowDoesNotUseResumeHandoff(t *testing.T) {
 		}
 	}
 
-	playbook, err := ReadAsset("core/debug/docs/playbook.md")
+	prompt, err := ReadAsset("core/debug/prompt.md")
 	if err != nil {
-		t.Fatalf("ReadAsset(core/debug/docs/playbook.md): %v", err)
+		t.Fatalf("ReadAsset(core/debug/prompt.md): %v", err)
 	}
-	playbookText := string(playbook)
+	promptText := string(prompt)
 	for _, forbidden := range []string{"resume-target", "resume-handoff", "emit a resume handoff"} {
-		if strings.Contains(playbookText, forbidden) {
-			t.Fatalf("debug playbook still mentions %q", forbidden)
+		if strings.Contains(promptText, forbidden) {
+			t.Fatalf("debug prompt still mentions %q", forbidden)
 		}
 	}
-	if !strings.Contains(playbookText, "agent-runner --resume <run-id>") {
-		t.Fatalf("debug playbook does not tell user the manual resume command")
+	if !strings.Contains(promptText, "agent-runner --resume <run-id>") {
+		t.Fatalf("debug prompt does not tell user the manual resume command")
+	}
+	if !strings.Contains(promptText, "This workflow is a single interactive step") {
+		t.Fatalf("debug prompt does not describe the single-step flow")
 	}
 }
 

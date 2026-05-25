@@ -6,7 +6,7 @@ Specify the built-in debug workflow that triages failed runs, helps users apply 
 ## Requirements
 ### Requirement: Workflow accepts optional failed-run identifier
 
-The debug workflow SHALL accept two optional input parameters: `failed_session_dir` (an absolute path to a run's session directory) and `failed_run_id` (the canonical run id). When both are provided, `failed_run_id` SHALL take precedence and `failed_session_dir` SHALL be ignored. The workflow SHALL resolve the chosen input to a single canonical session directory before any triage step runs.
+The debug workflow SHALL accept two optional input parameters: `failed_session_dir` (an absolute path to a run's session directory) and `failed_run_id` (the canonical run id). When both are provided, `failed_run_id` SHALL take precedence and `failed_session_dir` SHALL be ignored. The workflow SHALL resolve the chosen input to a single canonical session directory before triage begins.
 
 #### Scenario: failed_run_id supplied
 - **WHEN** the workflow is launched with `failed_run_id` set and the id resolves to a known run
@@ -26,7 +26,7 @@ The debug workflow SHALL accept two optional input parameters: `failed_session_d
 
 ### Requirement: Cold-start interactive run selection
 
-When launched without either input parameter, the agent SHALL list the recent failed runs in the current project (run id, workflow name, age, and a short failure-reason snippet) and SHALL prompt the user to pick one or paste a session-directory path before proceeding to triage. The agent SHALL NOT perform triage steps until a run has been selected.
+When launched without either input parameter, the agent SHALL list the recent failed runs in the current project (run id, workflow name, age, and a short failure-reason snippet) and SHALL prompt the user to pick one or paste a session-directory path before proceeding to triage. The agent SHALL NOT perform triage until a run has been selected.
 
 #### Scenario: List shown on cold start
 - **WHEN** the agent is launched cold and recent failed runs exist for the current project
@@ -94,15 +94,15 @@ The agent's assessment for the chosen run SHALL classify it as exactly one of: *
 
 ### Requirement: Audit-log redaction (defense in depth)
 
-Secret-like patterns SHALL be redacted from agent-visible audit content. The `agent-runner debug --audit-summary` command SHALL apply a programmatic redaction pass over the audit content before output, replacing matches of a known pattern set with the literal placeholder `<REDACTED>`. The pattern set SHALL include at minimum: GitHub tokens (`gh[pousr]_[A-Za-z0-9]+`), OpenAI-style keys (`sk-[A-Za-z0-9]+`), HTTP bearer credentials (`Bearer [A-Za-z0-9._-]+`), env-style token assignments (`[A-Za-z0-9_]*_TOKEN=[^\s]+`), and `password=[^\s]+` assignments. Additionally, the bundled playbook SHALL instruct the agent to apply further redaction (summarize rather than verbatim quote opaque/long values) when composing any issue body.
+Secret-like patterns SHALL be redacted from agent-visible audit content. The `agent-runner debug --audit-summary` command SHALL apply a programmatic redaction pass over the audit content before output, replacing matches of a known pattern set with the literal placeholder `<REDACTED>`. The pattern set SHALL include at minimum: GitHub tokens (`gh[pousr]_[A-Za-z0-9]+`), OpenAI-style keys (`sk-[A-Za-z0-9]+`), HTTP bearer credentials (`Bearer [A-Za-z0-9._-]+`), env-style token assignments (`[A-Za-z0-9_]*_TOKEN=[^\s]+`), and `password=[^\s]+` assignments. Additionally, the bundled prompt file SHALL instruct the agent to apply further redaction (summarize rather than verbatim quote opaque/long values) when composing any issue body.
 
 #### Scenario: Known secret pattern substituted in audit summary
 - **WHEN** `debug --audit-summary` encounters a value matching a known pattern (e.g. `ghp_AbC123...`)
 - **THEN** the output line contains `<REDACTED>` in place of the matched span and the surrounding context is preserved
 
-#### Scenario: Playbook prompts further agent-side redaction
+#### Scenario: Prompt file prompts further agent-side redaction
 - **WHEN** the agent prepares to assemble a GitHub issue body
-- **THEN** the bundled playbook instruction directs the agent to summarize/redact any remaining opaque or long values rather than quote them verbatim
+- **THEN** the bundled prompt-file instruction directs the agent to summarize/redact any remaining opaque or long values rather than quote them verbatim
 
 #### Scenario: Pattern set updates apply at read time
 - **WHEN** the redaction pattern set is updated and the same `audit.log` is read by `debug --audit-summary` again

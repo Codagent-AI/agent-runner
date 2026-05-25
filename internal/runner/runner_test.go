@@ -163,20 +163,20 @@ func TestMaterializeBundledAssetsCreatesMarkerForNamespaceWithoutAssets(t *testi
 	}
 }
 
-func TestMaterializeBundledAssetsPutsDebugPlaybookAtPromptPath(t *testing.T) {
+func TestMaterializeBundledAssetsPutsDebugPromptAtPromptPath(t *testing.T) {
 	sessionDir := t.TempDir()
 
 	if err := materializeBundledAssets(sessionDir, "builtin:core/debug.yaml"); err != nil {
 		t.Fatalf("materialize bundled assets: %v", err)
 	}
 
-	playbook := filepath.Join(sessionDir, "bundled", "core", "debug", "docs", "playbook.md")
-	data, err := os.ReadFile(playbook)
+	prompt := filepath.Join(sessionDir, "bundled", "core", "debug", "prompt.md")
+	data, err := os.ReadFile(prompt)
 	if err != nil {
-		t.Fatalf("read debug playbook at prompt path: %v", err)
+		t.Fatalf("read debug prompt at prompt path: %v", err)
 	}
-	if !strings.Contains(string(data), "# Debug Workflow Playbook") {
-		t.Fatalf("debug playbook missing title, got %q", string(data))
+	if !strings.Contains(string(data), "# Debug Workflow Prompt") {
+		t.Fatalf("debug prompt missing title, got %q", string(data))
 	}
 }
 
