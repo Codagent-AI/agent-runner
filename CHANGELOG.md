@@ -1,5 +1,11 @@
 # agent-runner
 
+## 0.1.2
+
+### Patch Changes
+
+- [#41](https://github.com/Codagent-AI/agent-runner/pull/41) Improve failed-run debugging follow-up by launching debug from the original run cwd, resolving failed runs by absolute session directory, showing a visible debug hint in failed run views, and including environment details in debug-created issue reports.
+
 ## 0.1.1
 
 ### Minor Changes
