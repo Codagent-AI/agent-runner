@@ -163,6 +163,23 @@ func TestMaterializeBundledAssetsCreatesMarkerForNamespaceWithoutAssets(t *testi
 	}
 }
 
+func TestMaterializeBundledAssetsPutsDebugPlaybookAtPromptPath(t *testing.T) {
+	sessionDir := t.TempDir()
+
+	if err := materializeBundledAssets(sessionDir, "builtin:core/debug.yaml"); err != nil {
+		t.Fatalf("materialize bundled assets: %v", err)
+	}
+
+	playbook := filepath.Join(sessionDir, "bundled", "core", "debug", "docs", "playbook.md")
+	data, err := os.ReadFile(playbook)
+	if err != nil {
+		t.Fatalf("read debug playbook at prompt path: %v", err)
+	}
+	if !strings.Contains(string(data), "# Debug Workflow Playbook") {
+		t.Fatalf("debug playbook missing title, got %q", string(data))
+	}
+}
+
 func TestPrepareRunPopulatesAutonomousBackendFromUserSettings(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
