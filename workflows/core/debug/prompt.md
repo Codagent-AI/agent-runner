@@ -56,6 +56,31 @@ Use state JSON to find the workflow name/ref, step statuses, current step, compl
 
 Use audit summary for run boundaries, step boundaries, sub-workflow boundaries, the top-level `failures` list, errors, output snippets, the `session_dir`, the `project_dir`, and the absolute audit-log path. If the summary says the audit log is missing, continue with state and workflow YAML and tell the user the assessment is less specific because no audit log was available.
 
+Gather basic environment details before filing any GitHub issue:
+
+```sh
+agent-runner --version
+command -v agent-runner
+uname -a
+printf 'shell=%s\ncwd=%s\n' "$SHELL" "$PWD"
+```
+
+If `uname -a` shows Darwin, also run:
+
+```sh
+sw_vers
+```
+
+If `/etc/os-release` exists, also run:
+
+```sh
+cat /etc/os-release
+```
+
+If an environment command is unavailable or fails, record that fact in the issue body instead of stopping triage.
+
+When including environment details in issue bodies, apply the redaction guidance from Phase 3: redact or sanitize hostnames from `uname -a` output and sensitive path components from `$PWD`, such as usernames or internal project names. Use placeholders such as `<redacted-host>` or `<redacted-path>` and state when values were redacted.
+
 Retrieve workflow YAML with the CLI when you need to reason about the failing workflow definition:
 
 ```sh
@@ -140,7 +165,14 @@ If opening fails, print the issue URL. Do not assemble a new body.
 
 If the user chooses to file new, or no matches are found, prepare a concise title and issue body. Include:
 
+- Environment:
+  - `agent-runner --version` output.
+  - `command -v agent-runner` output.
+  - OS/kernel/architecture from `uname -a`.
+  - macOS version from `sw_vers` when available, or Linux distribution details from `/etc/os-release` when available.
+  - Shell and cwd from the `printf` command above, with hostnames and personal path segments replaced by placeholders when needed.
 - Workflow name/ref and run id.
+- Session directory and project directory from audit summary when available.
 - Classification: suspected bug or unknown.
 - Expected behavior.
 - Actual behavior.

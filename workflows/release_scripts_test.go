@@ -43,7 +43,7 @@ func TestReleaseInfoOnBranchIncludesCurrentBranchPR(t *testing.T) {
 	runGit(t, repo.workdir, "commit", "-m", "feat: branch work")
 	writeFakeReleaseGH(t, repo.binDir, `[
 		{"number":31,"title":"fix: merged fix","mergedAt":"2026-05-01T00:00:00Z","labels":[]}
-	]`, `{"number":35,"title":"feat: release current branch","labels":[]}`)
+	]`, `{"number":35,"title":"feat: release current branch","labels":[],"state":"OPEN","url":"https://github.com/Codagent-AI/agent-runner/pull/35","baseRefName":"main","headRefName":"feature/release-skill","mergedAt":null}`)
 
 	out := runReleaseScript(t, repo, releaseInfoScript(t))
 
@@ -79,13 +79,27 @@ func TestReleaseInfoOnBranchDoesNotMergeOriginMain(t *testing.T) {
 
 	writeFakeReleaseGH(t, repo.binDir, `[
 		{"number":31,"title":"fix: merged fix","mergedAt":"2026-05-01T00:00:00Z","labels":[]}
-	]`, `{"number":35,"title":"feat: release current branch","labels":[]}`)
+	]`, `{"number":35,"title":"feat: release current branch","labels":[],"state":"OPEN","url":"https://github.com/Codagent-AI/agent-runner/pull/35","baseRefName":"main","headRefName":"feature/release-skill","mergedAt":null}`)
 
 	runReleaseScript(t, repo, releaseInfoScript(t))
 
 	after := strings.TrimSpace(string(runGitOutput(t, repo.workdir, "rev-parse", "HEAD")))
 	if after != before {
 		t.Fatalf("release-info changed HEAD from %s to %s", before, after)
+	}
+}
+
+func TestReleaseInfoOnBranchRejectsMergedCurrentBranchPR(t *testing.T) {
+	repo := newReleaseScriptRepo(t)
+	runGit(t, repo.workdir, "switch", "-c", "feature/release-skill")
+	mustWriteFile(t, filepath.Join(repo.workdir, "branch.txt"), "branch change\n")
+	runGit(t, repo.workdir, "add", "branch.txt")
+	runGit(t, repo.workdir, "commit", "-m", "fix: branch work")
+	writeFakeReleaseGH(t, repo.binDir, `[]`, `{"number":35,"title":"fix: old branch","labels":[],"state":"MERGED","url":"https://github.com/Codagent-AI/agent-runner/pull/35","baseRefName":"main","headRefName":"feature/release-skill","mergedAt":"2026-05-01T00:00:00Z"}`)
+
+	out := runReleaseScriptExpectFailure(t, repo, releaseInfoScript(t))
+	if !strings.Contains(string(out), `"error": "branch_pr_not_open"`) {
+		t.Fatalf("output = %s, want branch_pr_not_open error", out)
 	}
 }
 
@@ -117,7 +131,7 @@ func TestCreateReleasePROnBranchWithoutUpstreamPushesAndReturnsPR(t *testing.T) 
 	runGit(t, repo.workdir, "switch", "-c", "feature/release-skill")
 	changelog := filepath.Join(repo.workdir, "release-changelog.md")
 	mustWriteFile(t, changelog, "## 0.8.0\n\n### Minor Changes\n\n- [#35](https://github.com/Codagent-AI/agent-runner/pull/35) Add release skill\n")
-	writeFakeReleaseGH(t, repo.binDir, "[]", `{"number":35,"title":"feat: release current branch","labels":[]}`)
+	writeFakeReleaseGH(t, repo.binDir, "[]", `{"number":35,"title":"feat: release current branch","labels":[],"state":"OPEN","url":"https://github.com/Codagent-AI/agent-runner/pull/35","baseRefName":"main","headRefName":"feature/release-skill","mergedAt":null}`)
 
 	out := runReleaseScript(t, repo, createReleasePRScript(t), "0.8.0", changelog)
 
@@ -200,6 +214,10 @@ if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
   printf 'https://github.com/Codagent-AI/agent-runner/pull/99\n'
   exit 0
 fi
+if [ "$1" = "release" ] && [ "$2" = "view" ]; then
+  printf '2026-04-30T00:00:00Z\n'
+  exit 0
+fi
 printf 'unexpected gh invocation: %s\n' "$*" >&2
 exit 99
 `)
@@ -213,6 +231,18 @@ func runReleaseScript(t *testing.T, repo releaseScriptRepo, script string, args 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s failed: %v\n%s", filepath.Base(script), err, out)
+	}
+	return out
+}
+
+func runReleaseScriptExpectFailure(t *testing.T, repo releaseScriptRepo, script string, args ...string) []byte {
+	t.Helper()
+	cmd := exec.Command("bash", append([]string{script}, args...)...)
+	cmd.Dir = repo.workdir
+	cmd.Env = append(os.Environ(), "PATH="+repo.binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("%s succeeded unexpectedly\n%s", filepath.Base(script), out)
 	}
 	return out
 }

@@ -91,6 +91,7 @@ func TestView_FailedActiveRunHidesDebugHint(t *testing.T) {
 	root := &StepNode{ID: "build", Type: NodeRoot, Status: StatusFailed, ErrorMessage: "compile failed"}
 	m := newTestModel(&Tree{Root: root}, FromList)
 	m.active = true
+	m.sessionDir = "/runs/failed-run"
 	m.termWidth = 100
 	m.termHeight = 25
 
