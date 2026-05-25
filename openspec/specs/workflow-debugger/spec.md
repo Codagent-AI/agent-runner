@@ -201,33 +201,29 @@ When the user has elected to file a new issue (no matches found, or matches were
 - **WHEN** outcome is (b) or (c) and the gh availability check passed
 - **THEN** the agent has run duplicate-search (or surfaced its failure) before reaching the new-issue flow
 
-### Requirement: Auto-resume offer on confirmed fix
+### Requirement: Manual resume command on user-fixable outcome
 
-After presenting a (a) user-fixable outcome AND receiving an explicit signal from the user that the fix has been applied, the agent SHALL ask whether to resume the failed run now and SHALL require a yes/no answer. On explicit yes, the workflow SHALL emit a *resume-handoff* signal carrying the failed run's id (per the `workflow-resume-handoff` capability) and end successfully. On explicit no, the agent SHALL continue with the standard "anything else?" continuation. The resume offer SHALL NOT appear when the outcome is (b) or (c), and SHALL NOT be acted on implicitly from a passing mention of a fix.
+After presenting a (a) user-fixable outcome, the agent SHALL give concrete remediation and, when it knows the failed run id, SHALL tell the user they can resume the run after applying the fix with `agent-runner --resume <run-id>`. The workflow SHALL NOT auto-resume, SHALL NOT ask whether to resume now, and SHALL NOT emit a resume-handoff signal or write a marker file. The resume command SHALL NOT appear when the outcome is (b) or (c).
 
-#### Scenario: Fix applied, resume confirmed
-- **WHEN** outcome is (a), the user has explicitly confirmed the fix is applied, and the user explicitly answers yes to the resume prompt
-- **THEN** the workflow emits the resume-handoff signal with the failed run's id and ends successfully
+#### Scenario: User-fixable outcome with known run id
+- **WHEN** outcome is (a) and the failed run id is known
+- **THEN** the agent prints `agent-runner --resume <run-id>` using the originally-failed run id
 
-#### Scenario: Fix applied, resume declined
-- **WHEN** outcome is (a), the user has explicitly confirmed the fix is applied, and the user answers no to the resume prompt
-- **THEN** no resume-handoff is emitted; the agent proceeds to the standard "anything else?" continuation
+#### Scenario: User-fixable outcome without known run id
+- **WHEN** outcome is (a) but the agent only has a session directory and cannot derive a run id
+- **THEN** the agent gives remediation and explains that it cannot provide an exact resume command without a run id
 
-#### Scenario: Bug outcome suppresses resume offer
+#### Scenario: Bug outcome suppresses resume command
 - **WHEN** outcome is (b) or (c)
-- **THEN** the resume prompt is never presented
+- **THEN** the resume command is not presented
 
-#### Scenario: Implicit fix mention does not bypass confirmation
-- **WHEN** the user mentions a fix in passing without explicit confirmation that it was applied
-- **THEN** the agent prompts explicitly to confirm before offering resume; no resume-handoff is emitted from the passing mention alone
-
-#### Scenario: Resume target is the failed run, not the debug run
-- **WHEN** the resume-handoff is emitted
-- **THEN** the carried run id is the originally-failed run (`failed_run_id`, or the id derived from `failed_session_dir`), not the debug workflow's own run id
+#### Scenario: No resume handoff side effect
+- **WHEN** the debug workflow presents any outcome
+- **THEN** it does not emit a resume-handoff signal, write a resume marker, or cause agent-runner to exec `--resume`
 
 ### Requirement: Workflow continuation pattern
 
-After delivering a triage outcome (and after any resume offer or issue-submission action has resolved), the agent SHALL ask the user whether they are done (e.g. "Are you done?"). If the user signals done, the agent SHALL emit the standard continue-trigger to end the workflow run successfully. If the user signals not-done, the agent SHALL continue interactively in the same session and MAY handle additional runs, follow-up questions, or another full triage cycle.
+After delivering a triage outcome (and after any issue-submission action has resolved), the agent SHALL ask the user whether they are done (e.g. "Are you done?"). If the user signals done, the agent SHALL emit the standard continue-trigger to end the workflow run successfully. If the user signals not-done, the agent SHALL continue interactively in the same session and MAY handle additional runs, follow-up questions, or another full triage cycle.
 
 #### Scenario: User signals done
 - **WHEN** the user answers yes to "Are you done?"
@@ -239,4 +235,4 @@ After delivering a triage outcome (and after any resume offer or issue-submissio
 
 #### Scenario: User abandons the session
 - **WHEN** the user closes the agent CLI (Ctrl+C, `/exit`, or similar) before signalling done
-- **THEN** the workflow records the outcome per the existing interactive-agent abort behavior; no resume-handoff is emitted
+- **THEN** the workflow records the outcome per the existing interactive-agent abort behavior

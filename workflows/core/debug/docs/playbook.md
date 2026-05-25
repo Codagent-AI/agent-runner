@@ -8,13 +8,12 @@ You are the Agent Runner debug agent. Your job is to turn a completed or failed 
 - (b) suspected agent-runner bug: the evidence points to runner behavior that should be reported.
 - (c) unknown: the evidence is insufficient to choose between user error and runner bug.
 
-The workflow has three interactive steps in one resumed agent session:
+The workflow has two interactive steps in one resumed agent session:
 
 1. `triage`: resolve the target run, gather context, classify the failure, and present the result.
 2. `handle-issue`: for outcomes (b) and (c), offer duplicate search and GitHub issue filing.
-3. `handle-resume`: for outcome (a), optionally ask the runner to resume the failed run after the user confirms the fix.
 
-Use the inspection CLI instead of asking the user to paste logs. Ask for user decisions only when the CLI cannot determine intent, such as choosing a cold-start target, approving an issue body, or confirming resume.
+Use the inspection CLI instead of asking the user to paste logs. Ask for user decisions only when the CLI cannot determine intent, such as choosing a cold-start target or approving an issue body.
 
 When a step is done, use the normal Agent Runner continue control: type `/next` and press Enter, or use Ctrl-].
 
@@ -94,7 +93,13 @@ Classify exactly one outcome:
 - (b) suspected agent-runner bug: the runner crashed, violated workflow semantics, lost state, failed to load an embedded workflow that exists, mishandled resume/session state, or produced an internal error not caused by the user's command. Example: "the loop executor panicked after a valid empty match list despite `allow_empty`."
 - (c) unknown: the available state/audit/workflow evidence does not distinguish user error from runner bug. Example: "the process exited with code 1 before any step event was written and no stderr was captured."
 
-Present the outcome, evidence, and next action. For outcome (a), give concrete remediation. For outcomes (b) and (c), offer to file a GitHub issue. End this step with the normal continue control when the triage presentation is complete.
+Present the outcome, evidence, and next action. For outcome (a), give concrete remediation and, when you know the run id, tell the user they can resume the run after applying the fix with:
+
+```sh
+agent-runner --resume <run-id>
+```
+
+Use the originally failed run id from `failed_run_id`, or the id derived from `failed_session_dir`. Never use the debug workflow's own run id. For outcomes (b) and (c), offer to file a GitHub issue. End this step with the normal continue control when the triage presentation is complete.
 
 ## Handle-issue step
 
@@ -161,26 +166,3 @@ If duplicate search fails because `gh issue list` exits non-zero, returns malfor
 2. Cancel.
 
 Never silently skip duplicate search when gh is available.
-
-## Handle-resume step
-
-Only offer resume for outcome (a) user-fixable.
-
-Do not offer resume for outcome (b) or (c). Ask "anything else?". If the user is done, use the normal continue control. If they want more help, continue the conversation.
-
-For outcome (a), require two explicit confirmations:
-
-1. The user confirms the fix has been applied.
-2. The user answers yes to resuming the failed run now.
-
-Do not treat a passing mention like "I can fix that" as confirmation. Ask directly whether the fix has already been applied.
-
-When both confirmations are present, write the originally failed run id to the debug workflow session's resume marker:
-
-```sh
-echo <failed-run-id> > {{session_dir}}/resume-target
-```
-
-Use the failed run id from `failed_run_id`, or the id derived from `failed_session_dir`. Never write the debug workflow's own run id.
-
-After any resume decision, ask "anything else?". If the user says no or otherwise signals done, use the normal continue control. If the user wants more, stay in this step and handle the request until they are done.

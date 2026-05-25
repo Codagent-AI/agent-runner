@@ -14,6 +14,7 @@ import (
 	nativesetup "github.com/codagent/agent-runner/internal/onboarding/native"
 	"github.com/codagent/agent-runner/internal/paramform"
 	"github.com/codagent/agent-runner/internal/runlock"
+	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/runview"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
@@ -146,6 +147,36 @@ func TestLiveTUIOptionsReadsImmediateAltScreenEnv(t *testing.T) {
 	opts := liveTUIOptions{}.withEnv()
 	if !opts.startInAltScreen {
 		t.Fatalf("startInAltScreen = false, want true when %s=1", liveRunImmediateAltScreenEnv)
+	}
+}
+
+func TestCompletedLiveTUIResultIgnoresResumeTargetMarker(t *testing.T) {
+	originalExecutable := currentExecutable
+	originalExec := execProcess
+	t.Cleanup(func() {
+		currentExecutable = originalExecutable
+		execProcess = originalExec
+	})
+	currentExecutable = func() (string, error) { return "/tmp/agent-runner", nil }
+	var execCalls int
+	execProcess = func(path string, args []string, env []string) error {
+		execCalls++
+		return nil
+	}
+
+	sessionDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sessionDir, "resume-target"), []byte("target-run\n"), 0o600); err != nil {
+		t.Fatalf("write stale marker: %v", err)
+	}
+	resultCh := make(chan runner.WorkflowResult, 1)
+	resultCh <- runner.ResultSuccess
+
+	result := completedLiveTUIResult(resultCh, sessionDir)
+	if result.exitCode != 0 || result.workflowResult != runner.ResultSuccess || result.sessionDir != sessionDir {
+		t.Fatalf("completedLiveTUIResult = %#v, want ordinary success", result)
+	}
+	if execCalls != 0 {
+		t.Fatalf("exec calls = %d, want 0", execCalls)
 	}
 }
 

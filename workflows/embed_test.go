@@ -353,6 +353,45 @@ Unresolved review threads: 2
 	}
 }
 
+func TestCoreDebugWorkflowDoesNotUseResumeHandoff(t *testing.T) {
+	data, err := ReadFile("builtin:core/debug.yaml")
+	if err != nil {
+		t.Fatalf("ReadFile(core/debug): %v", err)
+	}
+
+	var workflow struct {
+		Steps []struct {
+			ID     string `yaml:"id"`
+			Prompt string `yaml:"prompt"`
+		} `yaml:"steps"`
+	}
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		t.Fatalf("unmarshal debug workflow: %v", err)
+	}
+	for _, step := range workflow.Steps {
+		if step.ID == "handle-resume" {
+			t.Fatalf("debug workflow still has handle-resume step: %#v", workflow.Steps)
+		}
+		if strings.Contains(step.Prompt, "resume-target") || strings.Contains(step.Prompt, "resume handoff") {
+			t.Fatalf("step %s prompt still mentions resume handoff:\n%s", step.ID, step.Prompt)
+		}
+	}
+
+	playbook, err := ReadAsset("core/debug/docs/playbook.md")
+	if err != nil {
+		t.Fatalf("ReadAsset(core/debug/docs/playbook.md): %v", err)
+	}
+	playbookText := string(playbook)
+	for _, forbidden := range []string{"resume-target", "resume-handoff", "emit a resume handoff"} {
+		if strings.Contains(playbookText, forbidden) {
+			t.Fatalf("debug playbook still mentions %q", forbidden)
+		}
+	}
+	if !strings.Contains(playbookText, "agent-runner --resume <run-id>") {
+		t.Fatalf("debug playbook does not tell user the manual resume command")
+	}
+}
+
 func TestCoreCIFixNeededGateScript(t *testing.T) {
 	script, err := ReadAsset("core/ci-fix-needed-gate.sh")
 	if err != nil {
