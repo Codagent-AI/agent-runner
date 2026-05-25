@@ -26,7 +26,9 @@ steps:
 
       Gather context with the inspection CLI before presenting any assessment:
         agent-runner debug --state <run-id>
+        agent-runner debug --state-dir <session-dir>
         agent-runner debug --audit-summary <run-id>
+        agent-runner debug --audit-summary-dir <session-dir>
 
       Retrieve the workflow YAML with `agent-runner debug --show-workflow <ref>` when you need the failed workflow definition.
 

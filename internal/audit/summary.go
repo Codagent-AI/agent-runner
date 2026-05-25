@@ -5,15 +5,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
+	"strconv"
 	"strings"
 )
 
 type Summary struct {
 	Path               string                `json:"path"`
+	SessionDir         string                `json:"session_dir,omitempty"`
+	ProjectDir         string                `json:"project_dir,omitempty"`
 	RunStart           *EventRef             `json:"run_start,omitempty"`
 	RunEnd             *EventRef             `json:"run_end,omitempty"`
 	Steps              []StepBoundary        `json:"steps"`
 	SubWorkflows       []SubWorkflowBoundary `json:"sub_workflows"`
+	Failures           []FailureEvent        `json:"failures"`
 	Errors             []ErrorEvent          `json:"errors"`
 	Truncated          bool                  `json:"truncated"`
 	DroppedEventsCount int                   `json:"dropped_events_count"`
@@ -36,12 +41,28 @@ type StepBoundary struct {
 }
 
 type SubWorkflowBoundary struct {
-	Timestamp string         `json:"timestamp,omitempty"`
-	Prefix    string         `json:"prefix,omitempty"`
-	Type      EventType      `json:"type"`
-	Workflow  string         `json:"workflow,omitempty"`
-	Outcome   string         `json:"outcome,omitempty"`
-	Data      map[string]any `json:"data,omitempty"`
+	Timestamp    string         `json:"timestamp,omitempty"`
+	Prefix       string         `json:"prefix,omitempty"`
+	Type         EventType      `json:"type"`
+	Workflow     string         `json:"workflow,omitempty"`
+	WorkflowPath string         `json:"workflow_path,omitempty"`
+	Outcome      string         `json:"outcome,omitempty"`
+	Data         map[string]any `json:"data,omitempty"`
+}
+
+type FailureEvent struct {
+	Timestamp    string         `json:"timestamp,omitempty"`
+	Prefix       string         `json:"prefix,omitempty"`
+	Type         EventType      `json:"type"`
+	StepType     string         `json:"step_type,omitempty"`
+	Workflow     string         `json:"workflow,omitempty"`
+	WorkflowPath string         `json:"workflow_path,omitempty"`
+	Outcome      string         `json:"outcome,omitempty"`
+	ExitCode     *int           `json:"exit_code,omitempty"`
+	Error        string         `json:"error,omitempty"`
+	Stderr       string         `json:"stderr,omitempty"`
+	Stdout       string         `json:"stdout,omitempty"`
+	Data         map[string]any `json:"data,omitempty"`
 }
 
 type ErrorEvent struct {
@@ -55,6 +76,7 @@ func BuildSummary(r io.Reader, capBytes int) (Summary, error) {
 	summary := Summary{
 		Steps:        []StepBoundary{},
 		SubWorkflows: []SubWorkflowBoundary{},
+		Failures:     []FailureEvent{},
 		Errors:       []ErrorEvent{},
 	}
 	if capBytes < 0 {
@@ -111,19 +133,34 @@ func appendClassifiedEvent(summary *Summary, event Event, capBytes int, used *in
 			return false
 		}
 		summary.Steps = append(summary.Steps, item)
+		if event.Type == EventStepEnd && stringField(event.Data, "outcome") == "failed" {
+			failure := failureEvent(event)
+			if !fitsCap(failure, capBytes, used) {
+				return false
+			}
+			summary.Failures = append(summary.Failures, failure)
+		}
 	case EventSubWorkflowStart, EventSubWorkflowEnd:
 		item := SubWorkflowBoundary{
-			Timestamp: event.Timestamp,
-			Prefix:    event.Prefix,
-			Type:      event.Type,
-			Workflow:  stringField(event.Data, "workflow"),
-			Outcome:   stringField(event.Data, "outcome"),
-			Data:      event.Data,
+			Timestamp:    event.Timestamp,
+			Prefix:       event.Prefix,
+			Type:         event.Type,
+			Workflow:     firstStringField(event.Data, "workflow", "workflow_name"),
+			WorkflowPath: stringField(event.Data, "workflow_path"),
+			Outcome:      stringField(event.Data, "outcome"),
+			Data:         event.Data,
 		}
 		if !fitsCap(item, capBytes, used) {
 			return false
 		}
 		summary.SubWorkflows = append(summary.SubWorkflows, item)
+		if event.Type == EventSubWorkflowEnd && stringField(event.Data, "outcome") == "failed" {
+			failure := failureEvent(event)
+			if !fitsCap(failure, capBytes, used) {
+				return false
+			}
+			summary.Failures = append(summary.Failures, failure)
+		}
 	case EventError:
 		item := ErrorEvent{
 			Timestamp: event.Timestamp,
@@ -137,6 +174,25 @@ func appendClassifiedEvent(summary *Summary, event Event, capBytes int, used *in
 		summary.Errors = append(summary.Errors, item)
 	}
 	return true
+}
+
+const failureSnippetLimit = 2000
+
+func failureEvent(event Event) FailureEvent {
+	return FailureEvent{
+		Timestamp:    event.Timestamp,
+		Prefix:       event.Prefix,
+		Type:         event.Type,
+		StepType:     stringField(event.Data, "type"),
+		Workflow:     firstStringField(event.Data, "workflow", "workflow_name"),
+		WorkflowPath: stringField(event.Data, "workflow_path"),
+		Outcome:      stringField(event.Data, "outcome"),
+		ExitCode:     intField(event.Data, "exit_code"),
+		Error:        stringField(event.Data, "error"),
+		Stderr:       snippetStringField(event.Data, "stderr"),
+		Stdout:       snippetStringField(event.Data, "stdout"),
+		Data:         event.Data,
+	}
 }
 
 func eventRef(event Event) EventRef {
@@ -212,4 +268,49 @@ func redactValue(v any) any {
 func stringField(data map[string]any, key string) string {
 	value, _ := data[key].(string)
 	return value
+}
+
+func firstStringField(data map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value := stringField(data, key); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func snippetStringField(data map[string]any, key string) string {
+	value := strings.TrimSpace(stringField(data, key))
+	if len(value) <= failureSnippetLimit {
+		return value
+	}
+	return value[:failureSnippetLimit] + "...[truncated]"
+}
+
+func intField(data map[string]any, key string) *int {
+	switch value := data[key].(type) {
+	case int:
+		return &value
+	case int64:
+		if value < math.MinInt || value > math.MaxInt {
+			return nil
+		}
+		v := int(value)
+		return &v
+	case float64:
+		if math.Trunc(value) != value || value < math.MinInt || value > math.MaxInt {
+			return nil
+		}
+		v := int(value)
+		return &v
+	case json.Number:
+		parsed, err := strconv.ParseInt(string(value), 10, 0)
+		if err != nil {
+			return nil
+		}
+		v := int(parsed)
+		return &v
+	default:
+		return nil
+	}
 }

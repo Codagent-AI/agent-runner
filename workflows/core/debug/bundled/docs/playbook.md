@@ -24,13 +24,15 @@ Use the canonical run id whenever you have one:
 
 ```sh
 agent-runner debug --state <id>
+agent-runner debug --state-dir <session-dir>
 agent-runner debug --audit-summary <id>
+agent-runner debug --audit-summary-dir <session-dir>
 agent-runner debug --show-workflow <ref>
 ```
 
-`debug --state` prints the run state JSON. Use it to find the workflow name/ref, step statuses, current step, completion state, and failure reason.
+`debug --state` prints the run state JSON by resolving a run id in the current project. `debug --state-dir` prints the same JSON directly from a session directory and does not depend on the current working directory. Use state JSON to find the workflow name/ref, step statuses, current step, completion state, and failure reason.
 
-`debug --audit-summary` prints a bounded, redacted JSON summary. Use it for run boundaries, step boundaries, sub-workflow boundaries, errors, output snippets, and the absolute audit-log path. If the summary says the audit log is missing, continue with state and workflow YAML and tell the user the assessment is less specific because no audit log was available.
+`debug --audit-summary` resolves a run id in the current project. `debug --audit-summary-dir` reads directly from a session directory. Both print a bounded, redacted JSON summary. Use it for run boundaries, step boundaries, sub-workflow boundaries, the top-level `failures` list, errors, output snippets, the `session_dir`, the `project_dir`, and the absolute audit-log path. If the summary says the audit log is missing, continue with state and workflow YAML and tell the user the assessment is less specific because no audit log was available.
 
 `debug --show-workflow <ref>` prints the workflow YAML. Use it when you need to reason about the failing workflow definition. Do not read a hard-coded workflow path when a workflow ref is available in state.
 
@@ -45,7 +47,7 @@ Treat full-log inspection as deeper evidence gathering. Quote sparingly and reda
 
 For cold start, when neither `failed_run_id` nor `failed_session_dir` is set, list recent failed runs for the current project before triage. Show run id, workflow name, age, and a short failure-reason snippet. Prompt the user to pick by number/id or paste an absolute session-directory path. Do not begin triage until a target is selected. If no failed runs exist, say so and offer to debug a successful run by path/id or end the workflow.
 
-When both inputs are set, `failed_run_id` wins. Ignore `failed_session_dir`. When only `failed_session_dir` is set, validate that it is a run session directory, read its `state.json`, and derive the canonical run id from that state or from the directory name.
+When both inputs are set, `failed_run_id` wins. Ignore `failed_session_dir`. When only `failed_session_dir` is set, validate that it is a run session directory, read its `state.json` with `debug --state-dir`, read its audit summary with `debug --audit-summary-dir`, and derive the canonical run id from that state or from the directory name.
 
 ## Redaction
 
@@ -71,6 +73,13 @@ Gather context before assessment:
 ```sh
 agent-runner debug --state <id>
 agent-runner debug --audit-summary <id>
+```
+
+If you have a session directory instead of a run id in the current project, use:
+
+```sh
+agent-runner debug --state-dir <session-dir>
+agent-runner debug --audit-summary-dir <session-dir>
 ```
 
 If the workflow definition matters, get it with:

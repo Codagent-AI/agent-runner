@@ -34,7 +34,7 @@ The `agent-runner debug --show-workflow <ref>` command SHALL print the YAML for 
 
 ### Requirement: `debug --state <run-id>` prints state JSON
 
-The `agent-runner debug --state <run-id>` command SHALL print the contents of `<sessionDir>/state.json` for the given run id to stdout as JSON and exit 0 on success. The output SHALL be valid JSON parseable without additional transformation. The JSON SHALL include at minimum the fields that `state.json` records for the run: `workflowFile` (string ref of the workflow that produced the run), `params` (object of input parameters), `currentStep` (latest step pointer the runner has recorded), and `completed` (boolean true when the run finished successfully). The command SHALL emit the on-disk JSON contents faithfully rather than rewriting or re-projecting fields.
+The `agent-runner debug --state <run-id>` command SHALL print the contents of `<sessionDir>/state.json` for the given run id to stdout as JSON and exit 0 on success. The command resolves `<run-id>` in the current project, using the same project-scoped lookup as run inspection. The output SHALL be valid JSON parseable without additional transformation. The JSON SHALL include at minimum the fields that `state.json` records for the run: `workflowFile` (string ref of the workflow that produced the run), `params` (object of input parameters), `currentStep` (latest step pointer the runner has recorded), and `completed` (boolean true when the run finished successfully). The command SHALL emit the on-disk JSON contents faithfully rather than rewriting or re-projecting fields.
 
 #### Scenario: Known run id returns state JSON
 - **WHEN** `agent-runner debug --state <run-id>` is invoked for a known run
@@ -52,6 +52,18 @@ The `agent-runner debug --state <run-id>` command SHALL print the contents of `<
 - **WHEN** the run's session directory exists but `state.json` is missing or unparseable
 - **THEN** the command exits non-zero and prints an error to stderr naming the file and the underlying read or parse error
 
+### Requirement: `debug --state-dir <session-dir>` prints state JSON by path
+
+The `agent-runner debug --state-dir <session-dir>` command SHALL print the contents of `<session-dir>/state.json` to stdout as JSON and exit 0 on success. Unlike `debug --state <run-id>`, the command SHALL NOT resolve the session through the current project; it SHALL read the provided session directory directly. The command SHALL emit the on-disk JSON contents faithfully rather than rewriting or re-projecting fields.
+
+#### Scenario: Known session dir returns state JSON outside project
+- **WHEN** `agent-runner debug --state-dir <session-dir>` is invoked from a current directory unrelated to the failed run's project
+- **THEN** the run's `state.json` contents are printed to stdout as valid JSON and the command exits 0
+
+#### Scenario: Invalid session dir
+- **WHEN** `agent-runner debug --state-dir <session-dir>` is invoked with a path that is missing, not a directory, or contains no readable `state.json`
+- **THEN** the command exits non-zero and prints an error to stderr naming the invalid path or state file
+
 ### Requirement: `debug --audit-summary <run-id>` emits bounded structured summary plus path
 
 The `agent-runner debug --audit-summary <run-id>` command SHALL parse `<sessionDir>/audit.log` for the given run and emit a bounded, structured JSON summary to stdout. The summary SHALL include, at minimum:
@@ -59,14 +71,24 @@ The `agent-runner debug --audit-summary <run-id>` command SHALL parse `<sessionD
 - a list of step boundaries (start and end events with their nesting prefix, type, and outcome);
 - error events (with their nesting prefix and message);
 - run start and run end events;
-- sub-workflow boundaries;
+- sub-workflow boundaries, including embedded or on-disk `workflow_path` values when present in audit data;
+- failed step and failed sub-workflow events in a top-level `failures` list, including prefix, outcome, exit code, error, stderr/stdout snippets, and workflow path when present;
+- the session directory and project directory for the inspected run;
 - the **absolute path** to the full `audit.log` (in a `path` or equivalent field) so the caller can grep, tail, or otherwise inspect the file for additional detail.
 
 The summary SHALL be capped at a configurable maximum byte size with a default of 64 KB. When the cap is reached, the output SHALL include an explicit boolean `truncated: true` flag and a `dropped_events_count` integer indicating how many events were not represented. When the cap is not reached, the output SHALL include `truncated: false`. The cap SHALL apply to the structured event list only; the audit-log `path` field SHALL be present even on truncation. When the audit log is missing entirely (e.g. the run crashed before any audit event was written), the command SHALL exit 0 with a summary object indicating no events, `truncated: false`, `dropped_events_count: 0`, plus the path where the audit log would have been.
 
 #### Scenario: Known run id with audit log
 - **WHEN** `agent-runner debug --audit-summary <run-id>` is invoked for a known run with a populated audit log
-- **THEN** the command prints a JSON summary to stdout including step boundaries, error events, run start/end, sub-workflow boundaries, and the absolute path of the audit log, and exits 0
+- **THEN** the command prints a JSON summary to stdout including step boundaries, error events, run start/end, sub-workflow boundaries, failures, session/project directories, and the absolute path of the audit log, and exits 0
+
+#### Scenario: Failed command summarized
+- **WHEN** an audit log contains a failed `step_end` event with an exit code and stderr/stdout
+- **THEN** the output JSON includes a corresponding entry in `failures` with the step prefix, exit code, outcome, and bounded stderr/stdout snippets
+
+#### Scenario: Failed sub-workflow summarized
+- **WHEN** an audit log contains a failed `sub_workflow_end` event with workflow metadata
+- **THEN** the output JSON includes a corresponding entry in `failures` with the workflow name/path and nesting prefix
 
 #### Scenario: Summary stays under cap
 - **WHEN** the structured event list serializes to fewer than the configured cap bytes
@@ -78,7 +100,7 @@ The summary SHALL be capped at a configurable maximum byte size with a default o
 
 #### Scenario: Missing audit log
 - **WHEN** the run's session directory exists but `<sessionDir>/audit.log` does not exist
-- **THEN** the command exits 0 with a JSON summary indicating no events, `truncated: false`, `dropped_events_count: 0`, and a `path` field naming where the audit log would have been
+- **THEN** the command exits 0 with a JSON summary indicating no events, `truncated: false`, `dropped_events_count: 0`, `session_dir`, `project_dir`, and a `path` field naming where the audit log would have been
 
 #### Scenario: Unknown run id
 - **WHEN** `agent-runner debug --audit-summary <run-id>` is invoked with a run id whose session directory does not exist
@@ -87,6 +109,18 @@ The summary SHALL be capped at a configurable maximum byte size with a default o
 #### Scenario: Output is valid JSON
 - **WHEN** the command succeeds (with or without truncation, with or without audit log present)
 - **THEN** the stdout output is valid JSON parseable by a standard JSON parser
+
+### Requirement: `debug --audit-summary-dir <session-dir>` emits audit summary by path
+
+The `agent-runner debug --audit-summary-dir <session-dir>` command SHALL emit the same bounded, redacted JSON summary shape as `debug --audit-summary <run-id>`, but SHALL read directly from the provided session directory instead of resolving a run id in the current project.
+
+#### Scenario: Known session dir returns audit summary outside project
+- **WHEN** `agent-runner debug --audit-summary-dir <session-dir>` is invoked from a current directory unrelated to the failed run's project
+- **THEN** the command prints the run's audit summary, including `session_dir`, `project_dir`, and `path`, and exits 0
+
+#### Scenario: Missing audit log by session dir
+- **WHEN** the provided session directory exists but has no `audit.log`
+- **THEN** the command exits 0 with an empty summary, `session_dir`, `project_dir`, and the path where the audit log would have been
 
 ### Requirement: Redaction applied in `debug --audit-summary`
 
@@ -118,10 +152,10 @@ Redaction SHALL NOT modify the on-disk `audit.log`. Redaction SHALL apply at rea
 
 ### Requirement: All inspection commands are read-only
 
-The three inspection commands (`debug --show-workflow`, `debug --state`, `debug --audit-summary`) SHALL be read-only. None of them SHALL modify any file on disk, take any run-lock, acquire any TUI surface, or otherwise affect runner state. They MAY be invoked while the same run is being viewed in another agent-runner process or while another inspection command is running for the same id.
+The inspection commands (`debug --show-workflow`, `debug --state`, `debug --state-dir`, `debug --audit-summary`, `debug --audit-summary-dir`) SHALL be read-only. None of them SHALL modify any file on disk, take any run-lock, acquire any TUI surface, or otherwise affect runner state. They MAY be invoked while the same run is being viewed in another agent-runner process or while another inspection command is running for the same id.
 
 #### Scenario: No disk writes from any inspection command
-- **WHEN** any of `debug --show-workflow`, `debug --state`, or `debug --audit-summary` is invoked
+- **WHEN** any debug inspection command is invoked
 - **THEN** no file on disk is created, modified, or deleted as a side effect
 
 #### Scenario: No run-lock acquired

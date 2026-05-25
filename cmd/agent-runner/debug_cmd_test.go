@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -120,6 +121,27 @@ func TestHandleDebugStatePreservesRawStateJSON(t *testing.T) {
 	}
 }
 
+func TestHandleDebugStateDirPreservesRawStateJSONOutsideProject(t *testing.T) {
+	home, repo := setupDebugRunHome(t, "run-123")
+	t.Setenv("HOME", home)
+	outside := t.TempDir()
+	t.Chdir(outside)
+	sessionDir := filepath.Join(home, ".agent-runner", "projects", audit.EncodePath(repo), "runs", "run-123")
+	raw := `{"workflowFile":"workflow.yaml","params":{"task":"debug"},"customField":true}`
+	if err := os.WriteFile(filepath.Join(sessionDir, "state.json"), []byte(raw), 0o600); err != nil {
+		t.Fatalf("write raw state: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := handleDebug([]string{"--state-dir", sessionDir}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("handleDebug() = %d, stderr: %s", code, stderr.String())
+	}
+	if stdout.String() != raw {
+		t.Fatalf("stdout = %q, want raw state JSON %q", stdout.String(), raw)
+	}
+}
+
 func TestHandleDebugStateUnknownRun(t *testing.T) {
 	home := t.TempDir()
 	repo := t.TempDir()
@@ -133,6 +155,88 @@ func TestHandleDebugStateUnknownRun(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "missing-run") {
 		t.Fatalf("stderr = %q, want missing run id", stderr.String())
+	}
+}
+
+func TestHandleDebugAuditSummaryDirIncludesMetadataAndFailures(t *testing.T) {
+	home, repo := setupDebugRunHome(t, "run-123")
+	t.Setenv("HOME", home)
+	t.Chdir(t.TempDir())
+	storageProjectDir := filepath.Join(home, ".agent-runner", "projects", audit.EncodePath(repo))
+	sessionDir := filepath.Join(storageProjectDir, "runs", "run-123")
+	logPath := filepath.Join(sessionDir, "audit.log")
+	originalLog := auditLineForDebugTest(t, audit.Event{
+		Timestamp: "2026-05-24T10:00:00Z",
+		Prefix:    "[validator, sub:onboarding-validator]",
+		Type:      audit.EventSubWorkflowStart,
+		Data:      map[string]any{"workflow_name": "onboarding-validator", "workflow_path": "builtin:onboarding/validator.yaml"},
+	}) + auditLineForDebugTest(t, audit.Event{
+		Timestamp: "2026-05-24T10:00:01Z",
+		Prefix:    "[validator, sub:onboarding-validator, init]",
+		Type:      audit.EventStepEnd,
+		Data:      map[string]any{"outcome": "failed", "exit_code": float64(127), "stderr": "sh: : command not found"},
+	})
+	if err := os.WriteFile(logPath, []byte(originalLog), 0o600); err != nil {
+		t.Fatalf("write audit log: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := handleDebug([]string{"--audit-summary-dir", sessionDir}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("handleDebug() = %d, stderr: %s", code, stderr.String())
+	}
+
+	var got struct {
+		Path         string `json:"path"`
+		SessionDir   string `json:"session_dir"`
+		ProjectDir   string `json:"project_dir"`
+		SubWorkflows []struct {
+			WorkflowPath string `json:"workflow_path"`
+		} `json:"sub_workflows"`
+		Failures []struct {
+			Prefix       string `json:"prefix"`
+			Type         string `json:"type"`
+			ExitCode     *int   `json:"exit_code"`
+			Stderr       string `json:"stderr"`
+			WorkflowPath string `json:"workflow_path"`
+		} `json:"failures"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout.String())
+	}
+	if got.Path != logPath {
+		t.Fatalf("path = %q, want %q", got.Path, logPath)
+	}
+	if got.SessionDir != sessionDir {
+		t.Fatalf("session_dir = %q, want %q", got.SessionDir, sessionDir)
+	}
+	if got.ProjectDir != repo {
+		t.Fatalf("project_dir = %q, want %q", got.ProjectDir, repo)
+	}
+	if len(got.SubWorkflows) != 1 || got.SubWorkflows[0].WorkflowPath != "builtin:onboarding/validator.yaml" {
+		t.Fatalf("sub_workflows = %#v, want workflow_path", got.SubWorkflows)
+	}
+	if len(got.Failures) != 1 {
+		t.Fatalf("failures = %#v, want one failed step", got.Failures)
+	}
+	if got.Failures[0].ExitCode == nil || *got.Failures[0].ExitCode != 127 || got.Failures[0].Stderr != "sh: : command not found" {
+		t.Fatalf("failure = %#v, want exit code and stderr", got.Failures[0])
+	}
+}
+
+func TestHandleDebugAuditSummaryDirRejectsSessionOutsideRunStorage(t *testing.T) {
+	sessionDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sessionDir, "state.json"), []byte(`{"workflowFile":"workflow.yaml"}`), 0o600); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := handleDebug([]string{"--audit-summary-dir", sessionDir}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatal("handleDebug() = 0, want non-zero")
+	}
+	if !strings.Contains(stderr.String(), "run storage") {
+		t.Fatalf("stderr = %q, want run storage error", stderr.String())
 	}
 }
 
@@ -238,7 +342,14 @@ func setupDebugRunHome(t *testing.T, runID string) (home, repo string) {
 	t.Helper()
 	home = t.TempDir()
 	repo = t.TempDir()
-	sessionDir := filepath.Join(home, ".agent-runner", "projects", audit.EncodePath(repo), "runs", runID)
+	projectDir := filepath.Join(home, ".agent-runner", "projects", audit.EncodePath(repo))
+	if err := os.MkdirAll(projectDir, 0o700); err != nil {
+		t.Fatalf("create project dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "meta.json"), []byte(`{"path":`+strconv.Quote(repo)+`}`), 0o600); err != nil {
+		t.Fatalf("write project meta: %v", err)
+	}
+	sessionDir := filepath.Join(projectDir, "runs", runID)
 	state := &model.RunState{
 		WorkflowFile: "workflow.yaml",
 		WorkflowName: "workflow",

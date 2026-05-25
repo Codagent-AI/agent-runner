@@ -14,7 +14,7 @@ The debug workflow SHALL accept two optional input parameters: `failed_session_d
 
 #### Scenario: failed_session_dir supplied
 - **WHEN** the workflow is launched with only `failed_session_dir` set and the path is a valid run session directory
-- **THEN** the agent operates on that session directory; the run id is derived from the directory's `state.json`
+- **THEN** the agent operates on that session directory, invokes `debug --state-dir` and `debug --audit-summary-dir` for context, and derives the run id from the directory's `state.json` or basename
 
 #### Scenario: Both params supplied
 - **WHEN** the workflow is launched with both parameters set and they refer to different runs
@@ -50,11 +50,11 @@ When launched without either input parameter, the agent SHALL list the recent fa
 
 ### Requirement: Context gathering via inspection CLI
 
-Before presenting any assessment to the user, the agent SHALL gather context for the chosen run by invoking, at minimum, `agent-runner debug --state <id>` and `agent-runner debug --audit-summary <id>`. The workflow YAML SHALL be retrieved via `agent-runner debug --show-workflow <ref>` when referenced. The agent SHALL NOT ask the user to paste log contents that the inspection CLI can produce.
+Before presenting any assessment to the user, the agent SHALL gather context for the chosen run by invoking, at minimum, `agent-runner debug --state <id>` and `agent-runner debug --audit-summary <id>` when it has a run id resolvable in the current project, or `agent-runner debug --state-dir <session-dir>` and `agent-runner debug --audit-summary-dir <session-dir>` when it has a session directory. The workflow YAML SHALL be retrieved via `agent-runner debug --show-workflow <ref>` when referenced. The agent SHALL NOT ask the user to paste log contents that the inspection CLI can produce.
 
 #### Scenario: State and audit summary invoked before assessment
 - **WHEN** the agent transitions from input-resolution to assessment for a chosen run
-- **THEN** both `debug --state` and `debug --audit-summary` have been invoked at least once
+- **THEN** the corresponding state and audit summary commands have been invoked at least once, using either run-id or session-dir forms
 
 #### Scenario: Workflow YAML retrieved via CLI
 - **WHEN** the agent needs to reason about the failed workflow's definition
