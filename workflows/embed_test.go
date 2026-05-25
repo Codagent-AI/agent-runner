@@ -406,6 +406,15 @@ func TestCoreDebugWorkflowIsSinglePromptStepAndDoesNotUseResumeHandoff(t *testin
 	if !strings.Contains(promptText, "This workflow is a single interactive step") {
 		t.Fatalf("debug prompt does not describe the single-step flow")
 	}
+	if !strings.Contains(promptText, "agent-runner --version") {
+		t.Fatalf("debug prompt does not require agent-runner version in issue reports")
+	}
+	if !strings.Contains(promptText, "uname -a") {
+		t.Fatalf("debug prompt does not require OS details in issue reports")
+	}
+	if !strings.Contains(promptText, "Session directory and project directory") {
+		t.Fatalf("debug prompt does not require run directory details in issue reports")
+	}
 }
 
 func TestCoreCIFixNeededGateScript(t *testing.T) {
