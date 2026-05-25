@@ -79,6 +79,8 @@ cat /etc/os-release
 
 If an environment command is unavailable or fails, record that fact in the issue body instead of stopping triage.
 
+When including environment details in issue bodies, apply the redaction guidance from Phase 3: redact or sanitize hostnames from `uname -a` output and sensitive path components from `$PWD`, such as usernames or internal project names. Use placeholders such as `<redacted-host>` or `<redacted-path>` and state when values were redacted.
+
 Retrieve workflow YAML with the CLI when you need to reason about the failing workflow definition:
 
 ```sh
@@ -168,7 +170,7 @@ If the user chooses to file new, or no matches are found, prepare a concise titl
   - `command -v agent-runner` output.
   - OS/kernel/architecture from `uname -a`.
   - macOS version from `sw_vers` when available, or Linux distribution details from `/etc/os-release` when available.
-  - Shell and cwd from the `printf` command above.
+  - Shell and cwd from the `printf` command above, with hostnames and personal path segments replaced by placeholders when needed.
 - Workflow name/ref and run id.
 - Session directory and project directory from audit summary when available.
 - Classification: suspected bug or unknown.
