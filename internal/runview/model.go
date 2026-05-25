@@ -949,7 +949,7 @@ func (m *Model) handleDebugKey() (tea.Model, tea.Cmd) {
 		return LaunchDebugMsg{
 			FailedRunID:      runID,
 			FailedSessionDir: m.sessionDir,
-			FailedProjectDir: m.projectDir,
+			FailedProjectDir: m.copyDirectory(),
 		}
 	}
 }
