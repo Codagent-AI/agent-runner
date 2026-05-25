@@ -1146,6 +1146,17 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.resumeRunID = msg.RunID
 		return s, tea.Quit
 
+	case runview.LaunchDebugMsg:
+		s.startRunEntry = &discovery.WorkflowEntry{
+			CanonicalName: "core:debug",
+			Params: []model.Param{
+				{Name: "failed_run_id"},
+			},
+		}
+		s.startRunParams = map[string]string{"failed_run_id": msg.FailedRunID}
+		s.startRunReady = true
+		return s, tea.Quit
+
 	case runview.ResumeListMsg:
 		if s.runview != nil {
 			s.resumeListProjectDir = s.runview.ProjectDir()

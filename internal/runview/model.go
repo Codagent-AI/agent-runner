@@ -38,6 +38,12 @@ type ResumeRunMsg struct {
 	RunID string
 }
 
+// LaunchDebugMsg asks the shell to exit the TUI and exec the built-in debug
+// workflow for the currently viewed agent-runner run.
+type LaunchDebugMsg struct {
+	FailedRunID string
+}
+
 // ResumeListMsg asks the shell to exit the current TUI flow and exec
 // `agent-runner --resume`, which opens the list TUI on the current-dir tab.
 type ResumeListMsg struct{}
@@ -795,6 +801,12 @@ func (m *Model) canResumeRun() bool {
 		m.rootStatus() != StatusFailed && m.rootStatus() != StatusSuccess
 }
 
+func (m *Model) canLaunchDebug() bool {
+	return m.entered != FromDefinition &&
+		m.sessionDir != "" &&
+		!m.running && !m.active
+}
+
 func (m *Model) canResumeAgentSession(n *StepNode) bool {
 	return n != nil && n.SessionID != "" && !m.running && !m.active
 }
@@ -896,6 +908,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.handleFollowKey()
 	case "r":
 		return m.handleResumeKey()
+	case "d":
+		return m.handleDebugKey()
 	case "g":
 		m.handleLoadFull()
 		m.rebuildRanges()
@@ -904,6 +918,14 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	return m, nil
+}
+
+func (m *Model) handleDebugKey() (tea.Model, tea.Cmd) {
+	if !m.canLaunchDebug() {
+		return m, nil
+	}
+	runID := filepath.Base(m.sessionDir)
+	return m, func() tea.Msg { return LaunchDebugMsg{FailedRunID: runID} }
 }
 
 func (m *Model) handleFollowKey() {

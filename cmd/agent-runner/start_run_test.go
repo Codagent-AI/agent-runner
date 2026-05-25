@@ -614,3 +614,35 @@ func TestSwitcher_SubmittedParamForm_QueuesRunLaunchAndQuits(t *testing.T) {
 		t.Fatal("startRunReady should be true after submit")
 	}
 }
+
+func TestSwitcher_LaunchDebugMsg_QueuesCoreDebugWithFailedRunID(t *testing.T) {
+	sw := &switcher{mode: showingRunView}
+
+	newModel, cmd := sw.Update(runview.LaunchDebugMsg{FailedRunID: "run-123"})
+	if cmd == nil {
+		t.Fatal("LaunchDebugMsg should quit so the run can be exec-replaced")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("expected tea.QuitMsg, got %T", cmd())
+	}
+
+	sw = newModel.(*switcher)
+	if sw.startRunEntry == nil {
+		t.Fatal("startRunEntry should be set")
+	}
+	if diff := cmp.Diff("core:debug", sw.startRunEntry.CanonicalName); diff != "" {
+		t.Fatalf("debug workflow mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(
+		[]model.Param{{Name: "failed_run_id"}},
+		sw.startRunEntry.Params,
+	); diff != "" {
+		t.Fatalf("debug params mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(map[string]string{"failed_run_id": "run-123"}, sw.startRunParams); diff != "" {
+		t.Fatalf("startRunParams mismatch (-want +got):\n%s", diff)
+	}
+	if !sw.startRunReady {
+		t.Fatal("startRunReady should be true")
+	}
+}
