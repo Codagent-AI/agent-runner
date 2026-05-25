@@ -623,8 +623,7 @@ func shouldShowOnboardingFailureModal(result liveTUIResult, settings *usersettin
 	if settings == nil {
 		settings = &usersettings.Settings{}
 	}
-	return result.workflowResult != "" &&
-		result.workflowResult != runner.ResultSuccess &&
+	return result.workflowResult == runner.ResultFailed &&
 		!result.exitRequested &&
 		result.sessionDir != "" &&
 		settings.Onboarding.Dismissed == ""

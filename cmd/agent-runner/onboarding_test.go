@@ -278,10 +278,9 @@ func TestShouldShowOnboardingFailureModalGatesByTerminalOutcomeCancellationAndDi
 			settings: usersettings.Settings{},
 		},
 		{
-			name:     "stopped non-success run",
+			name:     "stopped non-failure run",
 			result:   liveTUIResult{workflowResult: runner.ResultStopped, sessionDir: "/tmp/onboarding-run"},
 			settings: usersettings.Settings{},
-			want:     true,
 		},
 		{
 			name:     "dismissed setting",
