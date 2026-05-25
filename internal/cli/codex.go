@@ -21,9 +21,9 @@ type CodexAdapter struct{}
 //
 // Patterns:
 //   - Fresh interactive:  codex --no-alt-screen <prompt>
-//   - Fresh headless:     codex --sandbox workspace-write exec --json <prompt>
+//   - Fresh headless:     codex --sandbox workspace-write exec --skip-git-repo-check --json <prompt>
 //   - Resume interactive: codex resume --no-alt-screen <uuid> <prompt>
-//   - Resume headless:    codex --sandbox workspace-write exec resume --json <uuid> <prompt>
+//   - Resume headless:    codex --sandbox workspace-write exec --skip-git-repo-check resume --json <uuid> <prompt>
 //   - Model override:     appends -m <m>
 //   - Effort override:    appends -c model_reasoning_effort="<effort>"
 //
@@ -47,7 +47,7 @@ func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 	}
 
 	if context.IsHeadless() {
-		args = append(args, "exec")
+		args = append(args, "exec", "--skip-git-repo-check")
 		if resuming {
 			args = append(args, "resume", "--json")
 		} else {

@@ -67,7 +67,7 @@ func TestAdapterInvocationContexts(t *testing.T) {
 			adapter:      &CodexAdapter{},
 			context:      ContextAutonomousHeadless,
 			input:        BuildArgsInput{Prompt: "do it", Model: "o3", SessionID: "thread-123"},
-			wantContains: []string{"--sandbox", "workspace-write", "exec", "--json", "-m", "o3"},
+			wantContains: []string{"--sandbox", "workspace-write", "exec", "--skip-git-repo-check", "--json", "-m", "o3"},
 			wantAbsent:   []string{"--no-alt-screen", "--dangerously-bypass-approvals-and-sandbox", "--allow-all", "--force", "--dangerously-skip-permissions"},
 		},
 		{
@@ -76,7 +76,7 @@ func TestAdapterInvocationContexts(t *testing.T) {
 			context:      ContextAutonomousInteractive,
 			input:        BuildArgsInput{Prompt: "do it"},
 			wantContains: []string{"--sandbox", "workspace-write", "--no-alt-screen"},
-			wantAbsent:   []string{"exec", "--json", "--dangerously-bypass-approvals-and-sandbox"},
+			wantAbsent:   []string{"exec", "--skip-git-repo-check", "--json", "--dangerously-bypass-approvals-and-sandbox"},
 		},
 		{
 			name:         "copilot autonomous headless grants write only",

@@ -4,6 +4,8 @@
 
 The Codex adapter SHALL always include the `--no-alt-screen` flag when constructing args for interactive mode steps. This prevents Codex from using the alternate screen buffer.
 
+In headless Codex invocations, the Codex adapter SHALL include `--skip-git-repo-check` after the `exec` subcommand so autonomous steps can run in workflow work directories that are not git repositories. The adapter SHALL NOT include this flag before `exec` or for non-headless invocations.
+
 #### Scenario: Interactive Codex step
 - **WHEN** the runner executes an interactive step with `cli: codex`
 - **THEN** the adapter includes `--no-alt-screen` in the invocation args
@@ -11,6 +13,14 @@ The Codex adapter SHALL always include the `--no-alt-screen` flag when construct
 #### Scenario: Headless Codex step
 - **WHEN** the runner executes a headless step with `cli: codex`
 - **THEN** the adapter does not include `--no-alt-screen`
+
+#### Scenario: Headless Codex step skips git repository check
+- **WHEN** the runner executes a headless step with `cli: codex`
+- **THEN** the adapter includes `exec --skip-git-repo-check` in the invocation args
+
+#### Scenario: Non-headless Codex step keeps git repository check
+- **WHEN** the runner executes a non-headless step with `cli: codex`
+- **THEN** the adapter does not include `--skip-git-repo-check` in the invocation args
 
 ### Requirement: Codex model override
 
@@ -26,7 +36,7 @@ The Codex adapter SHALL support per-step model overrides. When a step specifies 
 
 ### Requirement: Codex session resume
 
-The Codex adapter SHALL support session resume. For interactive mode, the adapter SHALL use `codex resume --no-alt-screen <session-id> <prompt>`. For headless mode, the adapter SHALL use `codex exec resume <session-id> <prompt>`.
+The Codex adapter SHALL support session resume. For interactive mode, the adapter SHALL use `codex resume --no-alt-screen <session-id> <prompt>`. For headless mode, the adapter SHALL use `codex exec --skip-git-repo-check resume <session-id> <prompt>`.
 
 #### Scenario: Codex interactive step resumes prior session
 - **WHEN** a Codex interactive step has session strategy `resume` and a session ID exists in state
@@ -34,7 +44,7 @@ The Codex adapter SHALL support session resume. For interactive mode, the adapte
 
 #### Scenario: Codex headless step resumes prior session
 - **WHEN** a Codex headless step has session strategy `resume` and a session ID exists in state
-- **THEN** the adapter invokes `codex exec resume <session-id> <prompt>`
+- **THEN** the adapter invokes `codex exec --skip-git-repo-check resume <session-id> <prompt>`
 
 ### Requirement: Codex session discovery
 
