@@ -193,8 +193,8 @@ func TestPostWorkflowResumeHandoffMarkerReadError(t *testing.T) {
 	defer restore()
 
 	result := handlePostWorkflowResumeHandoff(sourceSession, runner.ResultSuccess)
-	if result.inlineError != "" {
-		t.Fatalf("inlineError = %q, want empty (marker read errors are silent to the TUI)", result.inlineError)
+	if result.inlineError == "" || !strings.Contains(result.inlineError, "resume target marker could not be read") {
+		t.Fatalf("inlineError = %q, want marker read error", result.inlineError)
 	}
 	if result.handoffHandled {
 		t.Fatalf("handoffHandled = true, want false")
