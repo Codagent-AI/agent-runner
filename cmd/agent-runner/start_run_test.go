@@ -649,7 +649,7 @@ func TestSwitcher_SubmittedParamForm_QueuesRunLaunchAndQuits(t *testing.T) {
 func TestSwitcher_LaunchDebugMsg_QueuesDirectDebugExec(t *testing.T) {
 	sw := &switcher{mode: showingRunView}
 
-	newModel, cmd := sw.Update(runview.LaunchDebugMsg{FailedRunID: "run-123"})
+	newModel, cmd := sw.Update(runview.LaunchDebugMsg{FailedRunID: "run-123", FailedProjectDir: "/workspace/project"})
 	if cmd == nil {
 		t.Fatal("LaunchDebugMsg should quit so the run can be exec-replaced")
 	}
@@ -660,6 +660,9 @@ func TestSwitcher_LaunchDebugMsg_QueuesDirectDebugExec(t *testing.T) {
 	sw = newModel.(*switcher)
 	if sw.launchDebugRunID != "run-123" {
 		t.Fatalf("launchDebugRunID = %q, want run-123", sw.launchDebugRunID)
+	}
+	if sw.launchDebugProjectDir != "/workspace/project" {
+		t.Fatalf("launchDebugProjectDir = %q, want /workspace/project", sw.launchDebugProjectDir)
 	}
 	if sw.startRunEntry != nil {
 		t.Fatalf("startRunEntry = %#v, want nil for direct debug exec", sw.startRunEntry)
@@ -676,6 +679,106 @@ func TestLaunchDebugArgs_UsesRunSubcommandAndParamFlag(t *testing.T) {
 	want := []string{"run", "core:debug", "--param", "failed_run_id=run-123"}
 	if diff := cmp.Diff(want, launchDebugArgs("run-123")); diff != "" {
 		t.Fatalf("debug launch args mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestExecRunnerDebug_ChdirsToFailedRunProjectBeforeExec(t *testing.T) {
+	originalExecutable := currentExecutable
+	originalExec := execProcess
+	originalDebug := execRunnerDebug
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() {
+		currentExecutable = originalExecutable
+		execProcess = originalExec
+		execRunnerDebug = originalDebug
+		if err := os.Chdir(originalWD); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+
+	projectDir := t.TempDir()
+	currentExecutable = func() (string, error) {
+		return "/tmp/agent-runner", nil
+	}
+
+	var gotWD string
+	var gotArgs []string
+	var gotEnv []string
+	execProcess = func(path string, args []string, env []string) error {
+		wd, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("getwd during exec: %v", err)
+		}
+		gotWD = wd
+		gotArgs = append([]string(nil), args...)
+		gotEnv = append([]string(nil), env...)
+		return nil
+	}
+
+	code := execRunnerDebug("run-123", projectDir)
+	if code != 0 {
+		t.Fatalf("execRunnerDebug() = %d, want 0", code)
+	}
+	wantWD, err := filepath.EvalSymlinks(projectDir)
+	if err != nil {
+		t.Fatalf("eval project dir: %v", err)
+	}
+	gotResolvedWD, err := filepath.EvalSymlinks(gotWD)
+	if err != nil {
+		t.Fatalf("eval exec cwd: %v", err)
+	}
+	if gotResolvedWD != wantWD {
+		t.Fatalf("exec cwd = %q, want %q", gotResolvedWD, wantWD)
+	}
+	wantArgs := []string{filepath.Base("/tmp/agent-runner"), "run", "core:debug", "--param", "failed_run_id=run-123"}
+	if diff := cmp.Diff(wantArgs, gotArgs); diff != "" {
+		t.Fatalf("exec args mismatch (-want +got):\n%s", diff)
+	}
+	if !envContains(gotEnv, liveRunImmediateAltScreenEnv+"=1") {
+		t.Fatalf("exec env missing %s=1", liveRunImmediateAltScreenEnv)
+	}
+}
+
+func TestTerminalLiveTUIResult_LaunchDebugExecsSelectedRun(t *testing.T) {
+	originalDebug := execRunnerDebug
+	t.Cleanup(func() { execRunnerDebug = originalDebug })
+
+	var gotRunID string
+	var gotProjectDir string
+	execRunnerDebug = func(runID, projectDir string) int {
+		gotRunID = runID
+		gotProjectDir = projectDir
+		return 7
+	}
+
+	rv, err := runview.NewForDefinition(&discovery.WorkflowEntry{CanonicalName: "wf"}, "/current/project")
+	if err != nil {
+		t.Fatalf("NewForDefinition: %v", err)
+	}
+	next, cmd := rv.Update(runview.LaunchDebugMsg{FailedRunID: "run-123", FailedProjectDir: "/failed/project"})
+	if cmd == nil {
+		t.Fatal("LaunchDebugMsg should quit the top-level run view")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("expected tea.QuitMsg, got %T", cmd())
+	}
+	rv = next.(*runview.Model)
+
+	resultCh := make(chan runner.WorkflowResult, 1)
+	resultCh <- runner.ResultFailed
+
+	result, ok := terminalLiveTUIResult(rv, resultCh, "/current/project", "/runs/run-123", liveTUIOptions{})
+	if !ok {
+		t.Fatal("terminalLiveTUIResult did not handle debug launch")
+	}
+	if result.exitCode != 7 || result.sessionDir != "/runs/run-123" {
+		t.Fatalf("terminalLiveTUIResult = %#v, want exitCode 7 and session dir", result)
+	}
+	if gotRunID != "run-123" || gotProjectDir != "/failed/project" {
+		t.Fatalf("debug target = (%q, %q), want (run-123, /failed/project)", gotRunID, gotProjectDir)
 	}
 }
 
