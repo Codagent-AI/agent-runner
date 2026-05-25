@@ -304,6 +304,47 @@ func TestShouldShowOnboardingFailureModalGatesByTerminalOutcomeCancellationAndDi
 	}
 }
 
+func TestFinishOnboardingDemoFlowShowsFailureModalWhenWorkflowFailsWithZeroExit(t *testing.T) {
+	sessionDir := t.TempDir()
+	resultCh := make(chan runner.WorkflowResult, 1)
+	resultCh <- runner.ResultFailed
+	result := finishOnboardingDemoFlow(&onboardingDemoPromptFlow{
+		handle:   &runner.RunHandle{SessionDir: sessionDir},
+		resultCh: resultCh,
+	}, &usersettings.Settings{})
+
+	if !result.continueToList {
+		t.Fatalf("finishOnboardingDemoFlow() exits with %d, want continue to list", result.exitCode)
+	}
+	if len(result.listOptions) == 0 {
+		t.Fatal("finishOnboardingDemoFlow() did not return onboarding failure list option")
+	}
+}
+
+func TestFinishOnboardingDemoFlowKeepsDismissedOnboardingFailureHidden(t *testing.T) {
+	sessionDir := t.TempDir()
+	resultCh := make(chan runner.WorkflowResult, 1)
+	resultCh <- runner.ResultFailed
+	result := finishOnboardingDemoFlow(&onboardingDemoPromptFlow{
+		handle:   &runner.RunHandle{SessionDir: sessionDir},
+		resultCh: resultCh,
+	}, &usersettings.Settings{Onboarding: usersettings.OnboardingSettings{Dismissed: "2026-05-24T00:00:00Z"}})
+
+	requireFirstRunContinue(t, result)
+	if len(result.listOptions) != 0 {
+		t.Fatalf("listOptions length = %d, want 0 after dismissal", len(result.listOptions))
+	}
+}
+
+func TestFinishOnboardingDemoFlowExitRequestedDoesNotWaitForWorkflowResult(t *testing.T) {
+	result := finishOnboardingDemoFlow(&onboardingDemoPromptFlow{
+		exitRequested: true,
+		resultCh:      make(chan runner.WorkflowResult),
+	}, &usersettings.Settings{})
+
+	requireFirstRunExit(t, result, 0)
+}
+
 func TestResetOnboardingStateClearsSettingsProjectValidatorAndRuns(t *testing.T) {
 	originalHome := userHomeDir
 	home := t.TempDir()

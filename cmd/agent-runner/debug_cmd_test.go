@@ -224,6 +224,55 @@ func TestHandleDebugAuditSummaryDirIncludesMetadataAndFailures(t *testing.T) {
 	}
 }
 
+func TestHandleDebugAuditSummaryDirAllowsGlobalOnboardingRunWithoutProjectMetadata(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sessionDir := filepath.Join(home, ".agent-runner", "onboarding", "runs", "onboarding-onboarding-2026-05-24T22-30-06Z")
+	if err := os.MkdirAll(sessionDir, 0o750); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	logPath := filepath.Join(sessionDir, "audit.log")
+	originalLog := auditLineForDebugTest(t, audit.Event{
+		Timestamp: "2026-05-24T22:33:17Z",
+		Prefix:    "[step-types-demo, sub:onboarding-step-types-demo, autonomous-demo]",
+		Type:      audit.EventStepEnd,
+		Data:      map[string]any{"outcome": "failed", "stderr": "Not inside a trusted directory"},
+	})
+	if err := os.WriteFile(logPath, []byte(originalLog), 0o600); err != nil {
+		t.Fatalf("write audit log: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := handleDebug([]string{"--audit-summary-dir", sessionDir}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("handleDebug() = %d, stderr: %s", code, stderr.String())
+	}
+
+	var got struct {
+		Path       string `json:"path"`
+		SessionDir string `json:"session_dir"`
+		ProjectDir string `json:"project_dir"`
+		Failures   []struct {
+			Stderr string `json:"stderr"`
+		} `json:"failures"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout.String())
+	}
+	if got.Path != logPath {
+		t.Fatalf("path = %q, want %q", got.Path, logPath)
+	}
+	if got.SessionDir != sessionDir {
+		t.Fatalf("session_dir = %q, want %q", got.SessionDir, sessionDir)
+	}
+	if got.ProjectDir != "" {
+		t.Fatalf("project_dir = %q, want omitted/empty for global onboarding run", got.ProjectDir)
+	}
+	if len(got.Failures) != 1 || got.Failures[0].Stderr != "Not inside a trusted directory" {
+		t.Fatalf("failures = %#v, want onboarding failure stderr", got.Failures)
+	}
+}
+
 func TestHandleDebugAuditSummaryDirRejectsSessionOutsideRunStorage(t *testing.T) {
 	sessionDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(sessionDir, "state.json"), []byte(`{"workflowFile":"workflow.yaml"}`), 0o600); err != nil {

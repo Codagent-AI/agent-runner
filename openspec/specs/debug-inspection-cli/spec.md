@@ -112,7 +112,7 @@ The summary SHALL be capped at a configurable maximum byte size with a default o
 
 ### Requirement: `debug --audit-summary-dir <session-dir>` emits audit summary by path
 
-The `agent-runner debug --audit-summary-dir <session-dir>` command SHALL emit the same bounded, redacted JSON summary shape as `debug --audit-summary <run-id>`, but SHALL read directly from the provided session directory instead of resolving a run id in the current project.
+The `agent-runner debug --audit-summary-dir <session-dir>` command SHALL emit the same bounded, redacted JSON summary shape as `debug --audit-summary <run-id>`, but SHALL read directly from the provided session directory instead of resolving a run id in the current project. If the session directory is valid run storage but has no project metadata, such as global onboarding run storage, the command SHALL omit `project_dir` or emit it as an empty string instead of failing.
 
 #### Scenario: Known session dir returns audit summary outside project
 - **WHEN** `agent-runner debug --audit-summary-dir <session-dir>` is invoked from a current directory unrelated to the failed run's project
@@ -121,6 +121,10 @@ The `agent-runner debug --audit-summary-dir <session-dir>` command SHALL emit th
 #### Scenario: Missing audit log by session dir
 - **WHEN** the provided session directory exists but has no `audit.log`
 - **THEN** the command exits 0 with an empty summary, `session_dir`, `project_dir`, and the path where the audit log would have been
+
+#### Scenario: Global onboarding session without project metadata
+- **WHEN** `agent-runner debug --audit-summary-dir <session-dir>` is invoked for a global onboarding run under onboarding run storage that has no project metadata file
+- **THEN** the command exits 0, includes `session_dir` and `path`, and omits `project_dir` or emits it as an empty string
 
 ### Requirement: Redaction applied in `debug --audit-summary`
 

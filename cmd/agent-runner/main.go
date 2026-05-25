@@ -1873,8 +1873,39 @@ func runOnboardingDemoFlowFrom(from string, preparing bool) firstRunResult {
 		fmt.Fprintf(os.Stderr, "agent-runner: unexpected onboarding demo model %T\n", final)
 		return exitFirstRun(1)
 	}
+	settings, err := usersettings.Load()
+	if err != nil {
+		settings = usersettings.Settings{}
+	}
+	return finishOnboardingDemoFlow(fm, &settings)
+}
+
+func finishOnboardingDemoFlow(fm *onboardingDemoPromptFlow, settings *usersettings.Settings) firstRunResult {
+	var workflowResult runner.WorkflowResult
 	if fm.exitRequested || fm.exitCode != 0 {
 		return exitFirstRun(fm.exitCode)
+	}
+	if fm.resultCh != nil {
+		workflowResult = <-fm.resultCh
+	}
+	sessionDir := ""
+	if fm.handle != nil {
+		sessionDir = fm.handle.SessionDir
+	}
+	liveResult := liveTUIResult{
+		exitCode:       fm.exitCode,
+		exitRequested:  fm.exitRequested,
+		workflowResult: workflowResult,
+		sessionDir:     sessionDir,
+	}
+	if shouldShowOnboardingFailureModal(liveResult, settings) {
+		reason := runview.FailureReasonForSession(sessionDir)
+		return firstRunResult{
+			continueToList: true,
+			listOptions: []func(*listview.Model){
+				listview.WithOnboardingFailure(sessionDir, reason),
+			},
+		}
 	}
 	return continueToList()
 }

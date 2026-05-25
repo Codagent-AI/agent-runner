@@ -219,7 +219,7 @@ func debugSessionProjectDir(sessionDir string) (string, error) {
 	storageProjectDir := filepath.Dir(runsDir)
 	projectDir := runs.ReadProjectPath(storageProjectDir)
 	if strings.HasPrefix(projectDir, "? ") {
-		return "", fmt.Errorf("session dir is missing project metadata: %s", sessionDir)
+		return "", nil
 	}
 	return projectDir, nil
 }
