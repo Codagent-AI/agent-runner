@@ -13,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/codagent/agent-runner/internal/liverun"
 	"github.com/codagent/agent-runner/internal/model"
@@ -422,6 +423,77 @@ func TestModel_R_IgnoredOnActiveRun(t *testing.T) {
 	}
 }
 
+func TestModel_D_InactiveRun_EmitsLaunchDebugMsg(t *testing.T) {
+	tree := simpleTree()
+	tree.Root.Status = StatusFailed
+	m := newTestModel(tree, FromList)
+	m.sessionDir = "/runs/my-run-id"
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	if cmd == nil {
+		t.Fatal("d on inactive run should produce a cmd")
+	}
+	msg := cmd()
+	want := LaunchDebugMsg{FailedRunID: "my-run-id"}
+	got, ok := msg.(LaunchDebugMsg)
+	if !ok {
+		t.Fatalf("expected LaunchDebugMsg, got %T", msg)
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("LaunchDebugMsg mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestModel_D_WorksAtAnyDrillDepth(t *testing.T) {
+	tree := simpleTree()
+	tree.Root.Status = StatusSuccess
+	m := newTestModel(tree, FromList)
+	m.sessionDir = "/runs/my-run-id"
+
+	m.cursor = 2
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if len(m.path) != 2 {
+		t.Fatalf("expected drilled path len 2, got %d", len(m.path))
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	if cmd == nil {
+		t.Fatal("d at drill depth should produce a cmd")
+	}
+	msg := cmd()
+	want := LaunchDebugMsg{FailedRunID: "my-run-id"}
+	got, ok := msg.(LaunchDebugMsg)
+	if !ok {
+		t.Fatalf("expected LaunchDebugMsg, got %T", msg)
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("LaunchDebugMsg mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestModel_D_IgnoredWhileRunning(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = true
+	m.sessionDir = "/runs/my-run-id"
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	if cmd != nil {
+		t.Fatalf("d while running should be no-op, got cmd %v", cmd)
+	}
+}
+
+func TestModel_D_IgnoredOnActiveRun(t *testing.T) {
+	tree := simpleTree()
+	m := newTestModel(tree, FromList)
+	m.sessionDir = "/runs/my-run-id"
+	m.active = true
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	if cmd != nil {
+		t.Fatalf("d on active run should be no-op, got cmd %v", cmd)
+	}
+}
+
 func TestModel_R_CompletedRun_SelectedAgent_EmitsResumeMsg(t *testing.T) {
 	tree := simpleTree()
 	tree.Root.Status = StatusSuccess
@@ -786,6 +858,42 @@ func TestModel_HelpBar_HidesRBinding_WhenCompletedRunHasNoAgentSession(t *testin
 	help := m.renderHelpBar()
 	if containsString(help, "r resume") {
 		t.Errorf("help bar should not show 'r resume' for completed run with no agent session: %q", help)
+	}
+}
+
+func TestModel_HelpBar_ShowsDBinding_WhenInactive(t *testing.T) {
+	tree := simpleTree()
+	tree.Root.Status = StatusFailed
+	m := newTestModel(tree, FromList)
+	m.sessionDir = "/runs/my-run-id"
+
+	help := m.renderHelpBar()
+	if !containsString(help, "d debug") {
+		t.Errorf("help bar should show 'd debug' for inactive run: %q", help)
+	}
+}
+
+func TestModel_HelpBar_HidesDBinding_WhenRunning(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = true
+	m.sessionDir = "/runs/my-run-id"
+
+	help := m.renderHelpBar()
+	if containsString(help, "d debug") {
+		t.Errorf("help bar should hide 'd debug' while running: %q", help)
+	}
+}
+
+func TestModel_HelpBar_ShowsDBinding_AfterLiveRunCompletes(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.running = true
+	m.sessionDir = "/runs/my-run-id"
+
+	m.Update(liverun.ExecDoneMsg{Result: "failed"})
+
+	help := m.renderHelpBar()
+	if !containsString(help, "d debug") {
+		t.Errorf("help bar should show 'd debug' after live run completes: %q", help)
 	}
 }
 

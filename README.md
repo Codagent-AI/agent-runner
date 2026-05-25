@@ -1,305 +1,136 @@
 # Agent Runner
 
-CLI workflow orchestrator for AI agents written in Go. Runs multi-step workflows by spawning separate agent sessions for each step, keeping orchestration deterministic and outside the agent.
+Agent Runner is a local workflow runner for coding agents.
 
-## Why
+It lets you define multi-step workflows - plan, implement, validate, fix, review, open a PR - and run those steps through the agent CLIs you already use: Claude Code, Codex, Copilot, Cursor, and OpenCode.
 
-Agents are good at execution, bad at orchestration. When given a complex multi-step workflow, they lose track of sequence, skip steps, accumulate stale context, and ignore instructions buried deep in prompts. Agent Runner solves this by moving orchestration out of the agent entirely. Each step gets a fresh or resumed session, a focused prompt in the highest-attention position, and a single responsibility.
-
-## Why not use an existing workflow tool?
-
-There are many YAML-based workflow engines (Argo, Kestra, Step Functions) and CLI task runners (Taskfile, Just, Make). The cloud/server orchestrators have rich control flow but can't run local CLI processes. The CLI task runners can run shell commands but collapse into bash scripts the moment you need loop-until with multi-step bodies, mid-pipeline output capture, or conditional branching. None of them have the concepts that agent orchestration requires: session management across steps, interactive/autonomous mode switching, prompt-based agent steps, or signal-based advancement. Agent Runner borrows proven workflow primitives (for-each, loop-until, sub-workflows, output capture) from these systems and adds a purpose-built runtime for orchestrating stateful conversational agents. See [docs/WHY-AGENT-RUNNER.md](docs/WHY-AGENT-RUNNER.md) for the full comparison.
-
-## Features
-
-- **Multi-CLI support**: invoke Claude, Codex, or other agent backends through a uniform adapter interface
-- **Three step modes**: interactive (collaborative), autonomous (unattended), shell (CLI commands)
-- **Session management**: `new`, `resume`, or `inherit` sessions across steps and sub-workflows
-- **Loops**: counted loops (`loop: { max: N }`) and for-each loops (`loop: { over, as }`) with `break_if` conditions
-- **Sub-workflows**: compose workflows from reusable workflow files with parameter passing
-- **Output capture**: capture shell stdout into variables for use in subsequent steps (`capture` field with tee behavior)
-- **Flow control**: `continue_on_failure`, `skip_if: previous_success`, `break_if: success|failure`
-- **Per-step model override**: specify which model an agent step should use (`model` field)
-- **State and resumption**: `state.json` persists after each step for resume on interruption
-- **Audit logging**: structured log of every execution event (step start/end, iterations, sub-workflows) for post-failure troubleshooting
-- **Engines**: pluggable lifecycle hooks for prompt enrichment, step validation, and state management
-- **PTY support**: improved terminal I/O for interactive agent sessions (via Go's creack/pty)
-
-## Install
-
-### Homebrew (macOS / Linux)
-
-```bash
-brew tap Codagent-AI/tap
-brew install --cask agent-runner
-```
-
-### From source
-
-Requires [Go](https://golang.org) 1.23+.
-
-```bash
-go install github.com/codagent/agent-runner/cmd/agent-runner@latest
-```
-
-Or clone and build:
-
-```bash
-make build       # compiles to bin/agent-runner
-make test        # run tests
-make lint        # run golangci-lint
-```
+The key difference: the workflow lives outside the agent's context window. The agent still reasons, writes code, and fixes problems. Agent Runner owns the sequencing, retries, state, validation loops, and resumption, so "run the validator and fix failures until it passes" becomes a workflow, not a prompt the model might forget.
 
 ## Quick start
 
 ```bash
-# Validate a workflow
-./agent-runner -validate flokay
-
-# Run a workflow with parameters
-./agent-runner flokay my-change-name
-
-# Resume an interrupted workflow (most recent session)
-./agent-runner -resume
-
-# Resume a specific session
-./agent-runner --session <session-id>
+brew tap Codagent-AI/tap
+brew install --cask agent-runner
+agent-runner
 ```
 
-## How it works
+That's all you need to do. First launch opens the guided setup and tutorial.
 
-Agent Runner reads a YAML workflow file and executes steps sequentially. Each step is one of several types:
+## Why
 
-| Type | What happens | Use case |
-|------|-------------|----------|
-| **interactive** | Agent runs with full stdin. User works with it, types `/continue` to advance. | Collaborative steps (proposal, specs, design) |
-| **autonomous** | Agent runs with `-p` flag. Output streams to terminal. Auto-advances on exit. | Autonomous steps (tasks, review, implementation) |
-| **shell** | Runs a shell command directly, no agent. | CLI operations (`openspec new`, `git commit`) |
-| **loop** | Repeats child steps (counted or for-each). | Iterating over tasks, retry loops |
-| **sub-workflow** | Invokes another workflow file. | Reusable workflow composition |
+Coding agents are good at execution. They are much less reliable at orchestration.
 
-```
-agent-runner (harness)
-  |
-  +-- step 1: shell        -> sh -c "openspec new change my-feature"
-  +-- step 2: interactive  -> claude "Write the proposal..."
-  +-- step 3: autonomous     -> claude -p "Generate specs..."
-  +-- step 4: loop (per-task)
-  |     +-- step 4a: autonomous  -> claude -p "Implement {{task_file}}"
-  |     +-- step 4b: sub-workflow -> workflows/core/run-validator.yaml
-  +-- step 5: autonomous     -> claude -p "Finalize..."
-```
+You can ask an agent to follow a long checklist, but the checklist still lives in the same context window as the implementation details, error logs, side quests, and model drift. It might skip a step. It might stop early and ask if you're "ready to proceed." It might run validation once, see failures, and decide the task is "mostly done." Classic tiny goblin behavior.
 
-### Session management
+Agent Runner flips the control flow around. Instead of asking the agent to remember the workflow, Agent Runner runs the workflow and calls the agent for each step.
 
-Each agent step declares a session strategy:
+That gives you:
 
-- **`session: new`** -- Fresh session, no prior context. Agent reads what it needs from disk.
-- **`session: resume`** -- Continues the most recent session within the current workflow. Also picks up a session seeded via `--session`.
-- **`session: inherit`** -- Crosses sub-workflow boundaries to resume the parent workflow's most recent session.
+- deterministic sequencing
+- resumable run state
+- explicit validation and fix loops
+- separate or resumed agent sessions per step
+- shell, script, and UI steps alongside agent steps
+- workflows that work across multiple agent CLIs
 
-### State and resumption
+The agent handles judgment and code. Agent Runner handles order, state, and enforcement.
 
-Agent Runner writes `state.json` after each step. If a workflow is interrupted, `agent-runner resume` picks up from where it left off, including persisted session IDs, captured variables, and parameters. State is recursive -- nested loops and sub-workflows track their own position.
+## Use Agent Runner when
 
-### Engines
+- You want validation and fix loops to run every time, not only when the agent remembers.
+- You use more than one agent CLI and want workflows that are not locked to one vendor.
+- You want to combine interactive planning with autonomous implementation, shell commands, tests, review agents, and PR steps.
+- You want long-running work to be inspectable and resumable instead of buried in a chat transcript.
+- You already have repeatable agent workflows, but they currently live in prompts, docs, or muscle memory.
 
-Workflows can declare an **engine** that hooks into the execution lifecycle:
+## What Agent Runner is not
 
-- **`enrichPrompt`** -- Append context (templates, output paths, dependencies) to step prompts
-- **`validateStep`** -- Verify expected output was created after a step
-- **`validateWorkflow`** -- Check workflow structure at load time
-- **`getStateDir`** -- Control where the state file lives
+Agent Runner is not another agent framework, chat UI, or replacement for Claude Code, Codex, Copilot, Cursor, or OpenCode. It does not try to be the brain.
 
-The built-in `openspec` engine integrates with the [OpenSpec](https://github.com/pacaplan/openspec) CLI to inject artifact context and validate artifact completion.
+It is the workflow layer around those tools. You keep using the agent CLIs you already have. Agent Runner decides which step runs next, what context the step receives, when to retry, what output to capture, and where the run state lives.
 
-## Workflow format
+## Features
+
+- **TUI-first run management**: browse workflow definitions, start runs, inspect run history, and resume interrupted runs.
+- **Multiple agent CLIs**: built-in adapters for `claude`, `codex`, `copilot`, `cursor`, and `opencode`.
+- **Existing CLI auth**: Agent Runner launches installed CLI tools as subprocesses, so workflows can use your existing subscriptions and local credentials instead of requiring direct API integration.
+- **Agent profiles**: configure named agents such as `planner`, `implementor`, and `summarizer` in global or project config.
+- **Session control**: start fresh agent sessions, resume prior ones, or inherit context across sub-workflows so validation fixes can happen in the same context that wrote the code.
+- **Real workflow control**: retry validation loops, skip fix steps when checks pass, stop loops on success, and fan out over files or tasks.
+- **Output capture**: pass test results, validator reports, generated plans, or user input from one step into the next.
+- **Step types**: agent, shell, script, UI, loop, group, and sub-workflow steps.
+- **State, audit, and run views**: each run writes `state.json` and `audit.log` under `~/.agent-runner/projects/.../runs/<run-id>/`.
+- **Built-in workflows**: namespaced workflows for OpenSpec, spec-driven planning, validation, implementation, onboarding, and PR finalization.
+
+## Example: validate, fix, retry
+
+This workflow runs Agent Validator, captures its report, asks the agent to fix failures, and retries up to three times.
 
 ```yaml
-name: my-workflow
-description: "What this workflow does"
-
-params:
-  - name: change_name
-    required: true
-
-engine:                          # optional
-  type: openspec
-  change_param: change_name
+name: validate-and-fix
+description: "Run validation, ask the agent to fix failures, retry up to 3 times"
 
 steps:
-  - id: create
-    mode: shell
-    command: openspec new change "{{change_name}}"
+  - id: validator-retry
+    loop:
+      max: 3
+    steps:
+      - id: run-validator
+        command: agent-validator run --report
+        capture: validator_output
+        capture_stderr: true
+        continue_on_failure: true
+        break_if: success
 
-  - id: proposal
-    mode: interactive
-    session: new
-    prompt: /codagent:propose "{{change_name}}"
+      - id: fix-violations
+        session: resume
+        mode: autonomous
+        prompt: |
+          The validator found failures. Fix the issues you reasonably agree with.
 
-  - id: implement
-    workflow: implement-change.yaml
-    params:
-      change_name: "{{change_name}}"
-
-  - id: verify
-    mode: autonomous
-    session: new
-    model: sonnet
-    prompt: "Verify the implementation"
-
-  - id: codex-review
-    mode: autonomous
-    cli: codex
-    model: o3
-    prompt: "Review the implementation"
+          <validator-output>
+          {{validator_output}}
+          </validator-output>
+        skip_if: previous_success
+        continue_on_failure: true
 ```
 
-### Step fields
+Agent Runner enforces the loop. The agent only sees the focused task for the current step.
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `id` | yes | Unique step identifier. Used for `--from`, state tracking, and engine matching. |
-| `mode` | agent/shell | `interactive`, `autonomous`, or `shell` |
-| `prompt` | agent steps | Prompt passed to the agent. Supports `{{param}}` interpolation. |
-| `command` | shell steps | Shell command to execute. Supports `{{param}}` interpolation. |
-| `session` | no | `new` (default), `resume`, or `inherit`. Only applies to agent steps. |
-| `cli` | no | CLI backend for agent steps: `claude` (default) or `codex`. |
-| `model` | no | Model override for agent steps. Passed through the CLI adapter. |
-| `capture` | no | Variable name to capture shell stdout into. Shell steps only. |
-| `continue_on_failure` | no | If `true`, workflow continues even if this step fails. |
-| `skip_if` | no | `previous_success` (skip on prior success) or `sh: <cmd>` (skip when interpolated shell command exits 0). |
-| `break_if` | no | `success` or `failure` -- break out of enclosing loop on this condition. |
-| `loop` | no | `{ max: N }` for counted loops, `{ over: glob, as: var }` for for-each. |
-| `steps` | loop/group | Nested child steps (required for loops, optional for groups). |
-| `workflow` | sub-workflow | Path to another workflow YAML file. |
-| `params` | sub-workflow | Parameters to pass to the sub-workflow. |
+## Workflow discovery
 
-### Parameter interpolation
+Agent Runner resolves workflow names from:
 
-Parameters declared in `params:` are passed as positional arguments:
+1. Project workflows: `.agent-runner/workflows/<name>.yaml`
+2. User workflows: `~/.agent-runner/workflows/<name>.yaml`
+3. Built-ins: `<namespace>:<name>`, such as `openspec:plan-change`, `spec-driven:simple-change`, or `core:run-validator`
 
-```bash
-./agent-runner my-workflow value1 value2
-```
+Project workflows shadow user workflows with the same name. Built-ins are embedded into the binary from [workflows](workflows).
 
-Referenced in prompts and commands as `{{param_name}}`. Captured variables from shell steps are also available via `{{var_name}}`.
+## Works with your existing agent CLIs
 
-## CLI reference
+Agent Runner launches installed CLI tools as subprocesses. If you already use Claude Code, Codex, Copilot, Cursor, or OpenCode, Agent Runner can run workflows through those tools using their existing authentication.
 
-```text
-agent-runner [flags] <workflow-name> [params...]
-agent-runner -validate <workflow-name>
-agent-runner -resume [--session <id>]
-agent-runner --session <id>
-```
+That means workflows can use subscription-backed CLIs and local filesystem/git context instead of requiring every agent step to go through a direct API integration.
 
-### -session
+Agent profiles are loaded from built-in defaults, then `~/.agent-runner/config.yaml`, then `.agent-runner/config.yaml`. Project config wins over global config. The default profile set includes:
 
-Seeds the resume with a specific session ID. Implies `--resume`.
+- `planner`: interactive Claude profile
+- `implementor`: autonomous Claude profile
+- `summarizer`: lightweight autonomous Claude profile
 
-```bash
-# Resume a specific session
-./agent-runner --session abc-123-def
-```
+User settings live in `~/.agent-runner/settings.yaml` and include TUI theme, autonomous backend behavior, and autonomous permission mode.
 
-The seed propagates through sub-workflows and loop iterations, so it works regardless of nesting depth. If no step uses `session: resume`, the seeded session is ignored.
+## Documentation
 
-## Configuration
+- [User Guide](docs/USER-GUIDE.md) covers workflow authoring, sessions, loops, sub-workflows, engines, audit logging, and troubleshooting.
+- [Development Guide](docs/development.md) covers local setup, build/test/lint commands, and validation.
 
-Configuration resolves in layers, each overriding the previous:
+## Status
 
-1. **Global (user-level)** — `default_model`
-2. **Project-level** — project-specific defaults
-3. **Step-level** — `cli` and `model` fields on individual steps
+Agent Runner is pre-release. It is ready for serious early users who are comfortable with CLI tools, YAML workflows, and rough edges.
 
-Steps default to the `claude` CLI adapter. Use `cli: codex` on a step to invoke Codex instead. The `model` field is passed through the CLI adapter.
-
-## Planned: Workflow extensibility
-
-Users will be able to extend base workflows without redefining the entire pipeline:
-
-- **Extend** a base workflow and inherit its steps
-- **Override** specific steps (agent, prompt, mode) while keeping the rest
-- **Add** new steps at specific positions
-
-Design goal: modify behavior without rewriting entire workflows.
-
-## Architecture
-
-```
-.
-├── cmd/
-│   └── agent-runner/
-│       ├── main.go            # CLI entry (flag-based)
-│       └── helpers.go         # process runner, glob expander
-│
-├── internal/
-│   ├── model/
-│   │   ├── step.go            # Step, Loop, Param, Workflow structs
-│   │   ├── context.go         # ExecutionContext, nesting
-│   │   └── state.go           # RunState serialization
-│   │
-│   ├── loader/
-│   │   └── loader.go          # YAML loading, param interpolation
-│   │
-│   ├── runner/
-│   │   ├── runner.go          # Workflow execution loop
-│   │   └── resume.go          # State restoration
-│   │
-│   ├── cli/
-│   │   ├── adapter.go         # Adapter interface & registry
-│   │   ├── claude.go          # Claude CLI adapter
-│   │   └── codex.go           # Codex CLI adapter
-│   │
-│   ├── exec/                  # Step executors
-│   │   ├── agent.go           # Agent step executor
-│   │   ├── shell.go           # Shell step executor
-│   │   ├── loop.go            # Loop executor
-│   │   ├── subworkflow.go     # Sub-workflow executor
-│   │   ├── dispatch.go        # Step type routing
-│   │   └── interfaces.go      # ProcessRunner, GlobExpander, Logger
-│   │
-│   ├── engine/
-│   │   ├── engine.go          # Engine interface & registry
-│   │   └── openspec/
-│   │       └── openspec.go    # OpenSpec engine implementation
-│   │
-│   ├── session/
-│   │   └── session.go         # Session resolution (new, resume, inherit)
-│   │
-│   ├── flowctl/
-│   │   └── flowctl.go         # skip_if, break_if evaluation
-│   │
-│   ├── textfmt/
-│   │   ├── interpolation.go   # {{variable}} interpolation
-│   │   └── format.go          # Formatting utilities
-│   │
-│   ├── stateio/
-│   │   └── stateio.go         # State file read/write
-│   │
-│   ├── audit/
-│   │   ├── types.go           # Event types
-│   │   └── logger.go          # AuditLogger
-│   │
-│   └── validate/
-│       └── workflow.go        # Workflow constraint validation
-│
-├── go.mod
-├── go.sum
-└── Makefile
-```
-
-## Development
-
-```bash
-make build        # compile to agent-runner binary
-make test         # run all tests
-make test-verbose # run tests with output
-make test-cover   # run tests with coverage
-make lint         # run golangci-lint
-make fmt          # format code (goimports)
-```
+The core value I want feedback on: does moving workflow control outside the agent make your coding-agent work more reliable? If setup, workflow authoring, or the mental model breaks for you, please open an issue.
 
 ## License
 

@@ -463,6 +463,10 @@ func (m *Model) helpBarParts() []string {
 		parts = append(parts, "r resume")
 	}
 
+	if m.canLaunchDebug() {
+		parts = append(parts, "d debug")
+	}
+
 	if m.selectedNodeHasTruncatedOutput() {
 		parts = append(parts, "g full output")
 	}

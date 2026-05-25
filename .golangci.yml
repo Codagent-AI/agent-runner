@@ -58,14 +58,6 @@ linters:
           - gocognit
           - funlen
           - errcheck
-      - path: cmd/pty-poc/
-        linters:
-          - errcheck
-          - funlen
-          - gocognit
-          - cyclop
-          - revive
-          - gocritic
       - path: cmd/agent-runner/
         linters:
           - revive

@@ -1,0 +1,28 @@
+name: debug
+description: Debug a failed agent-runner run and optionally file an issue.
+
+params:
+  - name: failed_session_dir
+    required: false
+  - name: failed_run_id
+    required: false
+
+steps:
+  - id: debug
+    mode: interactive
+    agent: planner
+    session: new
+    prompt: |
+      You are the Agent Runner debug agent.
+
+      Read and follow the prompt file at:
+        {{session_dir}}/bundled/core/debug/prompt.md
+
+      Inputs:
+        failed_run_id: {{failed_run_id}}
+        failed_session_dir: {{failed_session_dir}}
+
+      Work through the prompt file's phases in this same interactive session:
+      resolve the target run, inspect it, classify it, optionally handle GitHub
+      issue filing, then ask whether the user is done. Only use the normal
+      continue control after the user confirms they are done.

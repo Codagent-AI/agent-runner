@@ -1,6 +1,9 @@
 package builtinworkflows
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -149,6 +152,9 @@ func TestGuidedWorkflowShape(t *testing.T) {
 	wantIDs := []string{
 		"intro-ui",
 		"capture-cwd",
+		"check-existing-project",
+		"existing-project-required",
+		"require-existing-project",
 		"confirm-cwd",
 		"check-git-clean",
 		"warn-dirty",
@@ -171,6 +177,25 @@ func TestGuidedWorkflowShape(t *testing.T) {
 	assertUIStep(t, stepByID(t, &wf, "intro-ui"), "plan a real task")
 	if stepByID(t, &wf, "capture-cwd").Capture != "cwd" {
 		t.Fatal("capture-cwd should capture cwd")
+	}
+	projectCheck := stepByID(t, &wf, "check-existing-project")
+	if projectCheck.Capture != "project_status" ||
+		!strings.Contains(projectCheck.Command, "git rev-parse --is-inside-work-tree") ||
+		!strings.Contains(projectCheck.Command, "find . -mindepth 1 -maxdepth 1") {
+		t.Fatalf("check-existing-project command/capture mismatch: %#v", projectCheck)
+	}
+	existingProjectRequired := stepByID(t, &wf, "existing-project-required")
+	assertUIStep(t, existingProjectRequired, "should be run in an existing project")
+	if !strings.Contains(existingProjectRequired.Body, "bootstrap the project scaffolding") ||
+		!strings.Contains(existingProjectRequired.Body, "commit the Git repository") ||
+		!strings.Contains(existingProjectRequired.Body, "run agent-runner again") {
+		t.Fatalf("existing-project-required body missing new-project instructions:\n%s", existingProjectRequired.Body)
+	}
+	if existingProjectRequired.SkipIf != `sh: [ "{{project_status}}" = "ok" ]` {
+		t.Fatalf("existing-project-required skip_if = %q", existingProjectRequired.SkipIf)
+	}
+	if require := stepByID(t, &wf, "require-existing-project"); require.Command != `test "{{project_status}}" = "ok"` {
+		t.Fatalf("require-existing-project command = %q", require.Command)
 	}
 	assertUIStep(t, stepByID(t, &wf, "confirm-cwd"), "{{cwd}}")
 	gitStatus := stepByID(t, &wf, "check-git-clean")
@@ -211,6 +236,69 @@ func TestGuidedWorkflowShape(t *testing.T) {
 	}
 	if !strings.Contains(stepByID(t, &wf, "summary").Body, "do not commit yet") {
 		t.Fatalf("summary should tell the user not to commit yet:\n%s", stepByID(t, &wf, "summary").Body)
+	}
+}
+
+func TestGuidedWorkflowExistingProjectCheck(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/guided-workflow.yaml")
+	command := stepByID(t, &wf, "check-existing-project").Command
+
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, dir string)
+		want  string
+	}{
+		{
+			name: "empty directory",
+			want: "empty",
+		},
+		{
+			name: "new git repo without project files",
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				initGitRepo(t, dir)
+			},
+			want: "empty",
+		},
+		{
+			name: "non-git directory with files",
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				writeProjectFile(t, dir, "README.md")
+			},
+			want: "not_git",
+		},
+		{
+			name: "existing git project",
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				initGitRepo(t, dir)
+				writeProjectFile(t, dir, "README.md")
+			},
+			want: "ok",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tt.setup != nil {
+				tt.setup(t, dir)
+			}
+			cmd := exec.Command("sh", "-c", command)
+			cmd.Dir = dir
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("project check failed: %v\n%s", err, out)
+			}
+			if got := strings.TrimSpace(string(out)); got != tt.want {
+				t.Fatalf("project status = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -347,6 +435,23 @@ func TestHelpWorkflowShape(t *testing.T) {
 		if !strings.Contains(helpAgent.Prompt, want) {
 			t.Fatalf("help-agent prompt missing %q:\n%s", want, helpAgent.Prompt)
 		}
+	}
+}
+
+func initGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	cmd := exec.Command("git", "init")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init failed: %v\n%s", err, out)
+	}
+}
+
+func writeProjectFile(t *testing.T, dir, name string) {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("demo\n"), 0o644); err != nil {
+		t.Fatalf("write project file: %v", err)
 	}
 }
 

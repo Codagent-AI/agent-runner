@@ -14,6 +14,7 @@ import (
 	nativesetup "github.com/codagent/agent-runner/internal/onboarding/native"
 	"github.com/codagent/agent-runner/internal/paramform"
 	"github.com/codagent/agent-runner/internal/runlock"
+	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/runview"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
@@ -146,6 +147,36 @@ func TestLiveTUIOptionsReadsImmediateAltScreenEnv(t *testing.T) {
 	opts := liveTUIOptions{}.withEnv()
 	if !opts.startInAltScreen {
 		t.Fatalf("startInAltScreen = false, want true when %s=1", liveRunImmediateAltScreenEnv)
+	}
+}
+
+func TestCompletedLiveTUIResultIgnoresResumeTargetMarker(t *testing.T) {
+	originalExecutable := currentExecutable
+	originalExec := execProcess
+	t.Cleanup(func() {
+		currentExecutable = originalExecutable
+		execProcess = originalExec
+	})
+	currentExecutable = func() (string, error) { return "/tmp/agent-runner", nil }
+	var execCalls int
+	execProcess = func(path string, args []string, env []string) error {
+		execCalls++
+		return nil
+	}
+
+	sessionDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sessionDir, "resume-target"), []byte("target-run\n"), 0o600); err != nil {
+		t.Fatalf("write stale marker: %v", err)
+	}
+	resultCh := make(chan runner.WorkflowResult, 1)
+	resultCh <- runner.ResultSuccess
+
+	result := completedLiveTUIResult(resultCh, sessionDir)
+	if result.exitCode != 0 || result.workflowResult != runner.ResultSuccess || result.sessionDir != sessionDir {
+		t.Fatalf("completedLiveTUIResult = %#v, want ordinary success", result)
+	}
+	if execCalls != 0 {
+		t.Fatalf("exec calls = %d, want 0", execCalls)
 	}
 }
 
@@ -612,5 +643,73 @@ func TestSwitcher_SubmittedParamForm_QueuesRunLaunchAndQuits(t *testing.T) {
 	}
 	if !sw.startRunReady {
 		t.Fatal("startRunReady should be true after submit")
+	}
+}
+
+func TestSwitcher_LaunchDebugMsg_QueuesDirectDebugExec(t *testing.T) {
+	sw := &switcher{mode: showingRunView}
+
+	newModel, cmd := sw.Update(runview.LaunchDebugMsg{FailedRunID: "run-123"})
+	if cmd == nil {
+		t.Fatal("LaunchDebugMsg should quit so the run can be exec-replaced")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("expected tea.QuitMsg, got %T", cmd())
+	}
+
+	sw = newModel.(*switcher)
+	if sw.launchDebugRunID != "run-123" {
+		t.Fatalf("launchDebugRunID = %q, want run-123", sw.launchDebugRunID)
+	}
+	if sw.startRunEntry != nil {
+		t.Fatalf("startRunEntry = %#v, want nil for direct debug exec", sw.startRunEntry)
+	}
+	if sw.startRunParams != nil {
+		t.Fatalf("startRunParams = %#v, want nil for direct debug exec", sw.startRunParams)
+	}
+	if sw.startRunReady {
+		t.Fatal("startRunReady should be false for direct debug exec")
+	}
+}
+
+func TestLaunchDebugArgs_UsesRunSubcommandAndParamFlag(t *testing.T) {
+	want := []string{"run", "core:debug", "--param", "failed_run_id=run-123"}
+	if diff := cmp.Diff(want, launchDebugArgs("run-123")); diff != "" {
+		t.Fatalf("debug launch args mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestNormalizeRunCommandArgs_SupportsRunSubcommandParamFlag(t *testing.T) {
+	got, err := normalizeRunCommandArgs([]string{"run", "core:debug", "--param", "failed_run_id=run-123"})
+	if err != nil {
+		t.Fatalf("normalizeRunCommandArgs returned error: %v", err)
+	}
+
+	want := []string{"core:debug", "failed_run_id=run-123"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("normalized args mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestNormalizeRunCommandArgs_PreservesSingleRunWorkflowName(t *testing.T) {
+	got, err := normalizeRunCommandArgs([]string{"run"})
+	if err != nil {
+		t.Fatalf("normalizeRunCommandArgs returned error: %v", err)
+	}
+
+	want := []string{"run"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("normalized args mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestIsRunCommandHelp_DetectsHelpFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{"run", "--help"},
+		{"run", "-h"},
+	} {
+		if !isRunCommandHelp(args) {
+			t.Fatalf("isRunCommandHelp(%v) = false, want true", args)
+		}
 	}
 }

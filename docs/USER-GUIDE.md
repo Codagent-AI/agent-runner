@@ -1,28 +1,68 @@
 # Agent Runner User Guide
 
-## Getting started
+Agent Runner runs YAML workflows that coordinate agent CLIs, shell commands, scripts, UI prompts, loops, and sub-workflows. It persists run state outside the agent so workflows can be inspected and resumed.
+
+## Getting Started
 
 ### Prerequisites
 
-- [Go](https://golang.org) 1.23+
-- [Claude Code](https://claude.com/claude-code) CLI installed and authenticated
-- (Optional) [OpenSpec](https://github.com/pacaplan/openspec) CLI, if using the openspec engine
+- At least one supported agent CLI installed and authenticated: `claude`, `codex`, `copilot`, `cursor`, or `opencode`
+- Optional: `openspec`, if using the `openspec:*` built-in workflows
+- Optional: `agent-validator`, if using the built-in validation workflows
 
-### Installation
+### Install
 
 ```bash
-git clone <repo-url>
-cd agent-runner
-go build ./cmd/agent-runner    # compiles to agent-runner binary
+brew tap Codagent-AI/tap
+brew install --cask agent-runner
 ```
 
-Add the binary to your PATH, or run it directly from the current directory: `./agent-runner`.
+For local development and source builds, see [development.md](development.md).
 
-## Writing workflows
+## Running Agent Runner
 
-A workflow is a YAML file that defines a sequence of steps. Each step either runs an agent session, a shell command, a loop, or a sub-workflow.
+```bash
+agent-runner
+```
 
-### Minimal example
+With no arguments, Agent Runner opens the TUI. From there you can browse workflow definitions, start a run, inspect previous runs, or resume an interrupted run.
+
+Common commands:
+
+```bash
+agent-runner -list
+agent-runner -inspect <run-id>
+agent-runner -resume
+agent-runner -resume <run-id>
+agent-runner -validate openspec:plan-change change_name=my-change
+agent-runner openspec:plan-change my-change
+agent-runner -C /path/to/project spec-driven:change
+agent-runner -version
+```
+
+`-validate` accepts workflow parameters only as `key=value`. Normal runs accept positional parameters, `key=value` parameters, or a mix of both.
+
+## Workflow Discovery
+
+Workflow names resolve in this order:
+
+1. `.agent-runner/workflows/<name>.yaml` or `.yml` in the current project
+2. `~/.agent-runner/workflows/<name>.yaml` or `.yml`
+3. Built-ins using `<namespace>:<name>`
+
+Examples:
+
+```bash
+agent-runner deploy
+agent-runner team/deploy prod
+agent-runner core:run-validator
+agent-runner openspec:plan-change my-change
+agent-runner spec-driven:simple-change
+```
+
+Built-in namespaces currently include `core`, `openspec`, `spec-driven`, and `onboarding`.
+
+## Basic Workflow
 
 ```yaml
 name: hello
@@ -30,14 +70,15 @@ description: "A simple two-step workflow"
 
 steps:
   - id: greet
-    mode: autonomous
+    agent: planner
     prompt: "Say hello and list the files in the current directory."
 
   - id: summarize
-    mode: autonomous
     session: resume
     prompt: "Summarize what you found."
 ```
+
+The first agent step defaults to `session: new`, so it must specify an `agent` profile. Later agent steps default to `session: resume` and continue the most recent session unless you set a different session.
 
 Run it:
 
@@ -45,11 +86,12 @@ Run it:
 agent-runner hello
 ```
 
-### With parameters
+## Parameters
+
+Workflow parameters are declared in `params:` and referenced as `{{name}}`.
 
 ```yaml
 name: review-pr
-description: "Review a pull request"
 
 params:
   - name: pr_number
@@ -57,210 +99,208 @@ params:
 
 steps:
   - id: fetch
-    mode: shell
     command: gh pr checkout {{pr_number}}
 
   - id: review
-    mode: interactive
-    session: new
-    prompt: "Review the changes in this PR and suggest improvements."
+    agent: planner
+    prompt: "Review PR {{pr_number}}."
 ```
 
-Run it:
+Run with positional or keyed arguments:
 
 ```bash
 agent-runner review-pr 42
+agent-runner review-pr pr_number=42
 ```
 
-Parameters are positional -- they map to the `params` array in order.
+`required` defaults to `true`. Sub-workflows can also use `default` values for omitted parameters.
 
-### Built-in variables
+## Built-In Variables
 
-In addition to workflow-declared `params` and captured variables, the runner
-exposes a small set of built-in variables that every step can reference:
+Every step can reference:
 
-| Variable          | Value                                                                                   |
-| ----------------- | --------------------------------------------------------------------------------------- |
-| `{{session_dir}}` | Absolute path of the current run's session directory (`~/.agent-runner/projects/<encoded-cwd>/runs/<run-id>/`). Useful for pointing agents at per-step output files under `<session_dir>/output/` or the run's `audit.log`. |
-| `{{step_id}}`     | The current step's `id`. |
+| Variable | Value |
+| --- | --- |
+| `{{session_dir}}` | Absolute path to the current run directory, such as `~/.agent-runner/projects/<encoded-cwd>/runs/<run-id>`. |
+| `{{step_id}}` | Current step ID. |
 
-Built-ins have the lowest interpolation precedence: a workflow `param` or
-captured variable with the same name shadows the built-in.
+Workflow parameters and captured variables shadow built-ins with the same name.
 
-## Step modes
+## Agent Profiles
 
-### Interactive
+Agent steps use named profiles. Profiles define the default mode, CLI, model, effort, and optional system prompt.
 
-The agent runs in full interactive mode. You collaborate with it in your terminal. When you're done with the step, exit the agent session to advance to the next step.
-
-If you exit the session, agent-runner treats the step as complete and moves on. The state file persists so you can resume later if the workflow is interrupted.
-
-### Autonomous
-
-The agent runs non-interactively (`claude -p`). Its output streams to your terminal so you can watch progress. When the agent finishes, agent-runner automatically advances.
-
-Use autonomous for steps that don't need human interaction -- task generation, code review, implementation, etc.
-
-Pressing ctrl-c during an autonomous step kills the agent subprocess and exits agent-runner. The state file preserves the interrupted step so you can resume later.
-
-### Shell
-
-No agent involved. Agent Runner runs a shell command directly. Useful for:
-
-- Scaffolding: `openspec new change "{{name}}"`
-- Validation: `openspec validate`
-- Git operations: `git commit -m "..."`
-- Any CLI tool
-
-Shell steps fail the workflow on non-zero exit codes.
-
-## Session management
-
-### New sessions
+Built-in defaults include:
 
 ```yaml
-- id: design
-  mode: autonomous
-  session: new
-  prompt: "Design the architecture..."
+profiles:
+  default:
+    agents:
+      interactive_base:
+        default_mode: interactive
+        cli: claude
+        model: opus
+        effort: high
+      autonomous_base:
+        default_mode: autonomous
+        cli: claude
+        model: opus
+        effort: high
+      planner:
+        extends: interactive_base
+      implementor:
+        extends: autonomous_base
+      summarizer:
+        default_mode: autonomous
+        cli: claude
+        model: haiku
+        effort: low
 ```
 
-Starts a fresh agent session with no prior context. The agent reads what it needs from disk. Use this when:
+Config is layered in this order:
 
-- The step has a different concern than the previous one
-- Context from prior steps would be bloating or confusing
-- The step is self-contained
+1. Built-in defaults
+2. Global config: `~/.agent-runner/config.yaml`
+3. Project config: `.agent-runner/config.yaml`
 
-### Resumed sessions
+Project config wins over global config. Project config may set `active_profile`; global config may not.
 
-```yaml
-- id: specs
-  mode: interactive
-  session: resume
-  prompt: "Now write the specs based on what we discussed."
-```
+Agent step-level `mode`, `cli`, and `model` override the resolved profile for that step.
 
-Continues the most recent session within the current workflow. The agent has full conversational context from earlier. Use this when:
-
-- Steps are tightly coupled (proposal -> specs uses the same conversation)
-- The agent needs to remember decisions from the prior step
-- You want continuity in an ongoing dialogue
-
-### Inherited sessions
+## Agent Steps
 
 ```yaml
-# Inside a sub-workflow
-- id: fix
-  mode: autonomous
-  session: inherit
-  prompt: "Fix the issues found by the validator."
-```
+- id: plan
+  agent: planner
+  prompt: "Plan the change."
 
-Crosses sub-workflow boundaries to resume the parent workflow's most recent session. Use this when:
-
-- A sub-workflow needs to continue the conversation from the parent
-- The validator pattern: a sub-workflow needs to fix issues using the context of the step that created the code
-
-`session: inherit` walks the parent context chain to find the nearest session from a different workflow file.
-
-## Per-step CLI override
-
-Agent steps can specify which CLI backend to use via the `cli` field:
-
-```yaml
 - id: implement
+  agent: implementor
+  session: new
   mode: autonomous
-  cli: codex
-  model: o3
-  prompt: "Implement the feature."
+  prompt: "Implement the plan."
 
 - id: review
+  session: resume
   mode: autonomous
-  prompt: "Review the implementation."
+  prompt: "Review what you just changed."
 ```
 
-When `cli` is set, agent-runner uses the corresponding CLI adapter for arg construction and session discovery. When absent, `claude` is used by default. Currently supported values: `claude`, `codex`. The `cli` field is only valid on agent steps (autonomous or interactive), not shell steps.
+Supported CLI adapters are `claude`, `codex`, `copilot`, `cursor`, and `opencode`.
 
-## Per-step model override
+Interactive steps run inside a PTY. Agent Runner injects a continuation marker instruction; when the agent emits the marker, the workflow advances. If the CLI exits without the marker, the step is treated as aborted so you can resume the workflow later.
 
-Agent steps can specify which model the agent should use:
+Autonomous steps run without user interaction. Depending on `~/.agent-runner/settings.yaml`, autonomous steps may run in headless mode or in an interactive backend with autonomy instructions. Capturing an autonomous agent step forces headless execution so stdout can be captured reliably.
+
+## Sessions
+
+Agent steps support these session strategies:
+
+| Session | Meaning |
+| --- | --- |
+| `new` | Start a fresh session using the step's `agent` profile. |
+| `resume` | Resume the most recent session in the current workflow context. |
+| `inherit` | In a sub-workflow, resume the parent workflow's most recent session. |
+| named session | Resume or create a declared session such as `lead-agent`. |
+
+Named sessions are declared at the workflow top level:
 
 ```yaml
-- id: quick-check
-  mode: autonomous
-  model: sonnet
-  prompt: "Do a quick syntax check on the files."
+sessions:
+  - name: lead-agent
+    agent: planner
+  - name: reviewer-agent
+    agent: planner
 
-- id: deep-review
-  mode: autonomous
-  model: opus
-  prompt: "Do a thorough code review."
+steps:
+  - id: draft
+    session: lead-agent
+    prompt: "Draft the proposal."
+
+  - id: review
+    session: reviewer-agent
+    mode: autonomous
+    prompt: "Review the proposal."
 ```
 
-When `model` is set, agent-runner passes it through the CLI adapter (e.g., `--model <value>` for Claude, `-m <value>` for Codex). When absent, the CLI uses its default model. The `model` field is only valid on agent steps (autonomous or interactive), not shell steps.
+Named session names cannot be `new`, `resume`, or `inherit`.
+
+## Shell Steps
+
+```yaml
+- id: validate
+  command: agent-validator run --report
+  capture: validator_output
+  capture_stderr: true
+  continue_on_failure: true
+```
+
+Shell commands are interpolated with shell-safe quoting and run through `/bin/sh`. Non-zero exit codes fail the step unless `continue_on_failure: true` is set.
+
+Shell steps may set `mode: interactive` to run in a PTY. Interactive shell steps cannot use `capture`.
+
+## Script Steps
+
+Script steps run static workflow-local or bundled scripts.
+
+```yaml
+- id: detect
+  script: detect-options.sh
+  script_inputs:
+    cwd: "{{session_dir}}"
+  capture: options
+  capture_format: json
+```
+
+`script` must be a static relative path and cannot use interpolation or path traversal. `script_inputs` are passed to the script as JSON on stdin. `capture_format` may be `text` or `json`; JSON captures must be either an array of strings or an object whose values are strings.
+
+## UI Steps
+
+UI steps render inside the live run TUI.
+
+```yaml
+- id: choose-cli
+  mode: ui
+  title: "Choose CLI"
+  body: "Select the CLI for this run."
+  inputs:
+    - kind: single_select
+      id: cli
+      prompt: "CLI"
+      options: ["claude", "codex"]
+      default: "claude"
+  actions:
+    - label: "Continue"
+      outcome: continue
+  capture: setup_inputs
+  outcome_capture: setup_action
+```
+
+`capture` stores UI inputs as a map. `outcome_capture` stores the selected action outcome as a string. UI steps require a TTY.
 
 ## Loops
 
-### Counted loops
-
-Repeat a group of steps up to N times:
+Counted loop:
 
 ```yaml
-- id: verify-fix
+- id: retry
   loop:
     max: 3
+    as_index: attempt
   steps:
-    - id: validator
-      mode: shell
+    - id: validate
       command: agent-validator run
-      capture: validator_output
       continue_on_failure: true
       break_if: success
 
     - id: fix
+      session: inherit
       mode: autonomous
-      session: new
-      prompt: |
-        The validator found issues:
-        {{validator_output}}
-        Fix them.
+      prompt: "Fix validator failures."
       skip_if: previous_success
 ```
 
-The loop runs up to 3 times. If `break_if: success` triggers on the validator step (exit code 0), the loop exits early. If the loop exhausts all iterations without breaking, it fails the workflow.
-
-### For-each loops
-
-Iterate over a list of files matching a glob pattern:
-
-```yaml
-- id: per-task
-  loop:
-    over: "openspec/changes/{{change_name}}/tasks/*.task.md"
-    as: task_file
-  steps:
-    - id: implement
-      mode: autonomous
-      session: new
-      prompt: "Implement {{task_file}}"
-```
-
-The `over` field accepts a glob pattern, expanded at runtime. Each match is bound to the variable named in `as`, available via `{{task_file}}` interpolation in nested steps. Each iteration gets a fresh context for session IDs and captured variables.
-
-### Exposing the iteration index
-
-Both counted and for-each loops can publish the zero-based iteration index as a
-template variable using `as_index`:
-
-```yaml
-- id: steps
-  loop:
-    max: 3
-    as_index: i
-  steps:
-    - id: log
-      command: echo "step {{i}}"
-```
+For-each loop:
 
 ```yaml
 - id: per-task
@@ -268,357 +308,163 @@ template variable using `as_index`:
     over: "tasks/*.md"
     as: task_file
     as_index: i
+    require_matches: true
   steps:
-    - id: run
-      command: echo "{{i}}: {{task_file}}"
+    - id: implement
+      agent: implementor
+      session: new
+      mode: autonomous
+      prompt: "Implement {{task_file}}."
 ```
 
-### Loop early exit with break_if
+`break_if: success` or `break_if: failure` exits the enclosing loop. A loop with a break condition fails if all iterations are exhausted without a break. A loop without any break condition succeeds after all iterations complete.
 
-`break_if` is evaluated after a step executes:
-
-- `break_if: success` -- exit the enclosing loop if the step succeeded
-- `break_if: failure` -- exit the enclosing loop if the step failed
-
-Execution continues with the next step after the loop.
-
-## Sub-workflows
-
-Complex patterns can be extracted into reusable workflow files:
+## Sub-Workflows
 
 ```yaml
-# .agent-runner/workflows/implement-task.yaml
-name: implement-task
-params:
-  - name: task_file
-    required: true
-
-steps:
-  - id: implement
-    mode: autonomous
-    session: new
-    prompt: "Implement the task described in {{task_file}}."
-
-  - id: run-validator
-    workflow: run-validator.yaml
-```
-
-Invoke from a parent workflow:
-
-```yaml
-- id: implement-single-task
-  workflow: implement-task.yaml
+- id: implement-task
+  workflow: ../core/implement-task.yaml
   params:
     task_file: "{{task_file}}"
 ```
 
-Sub-workflows:
+Sub-workflow paths resolve relative to the parent workflow. Built-in workflows can call scripts and child workflows bundled in the same namespace. Sub-workflows get their own execution context, receive only explicitly passed parameters plus defaults, and may use `session: inherit` to continue the parent session.
 
-- Execute in the same process
-- Get their own execution context (session IDs, captured variables)
-- Receive only explicitly passed parameters
-- Can nest arbitrarily (sub-workflow calling sub-workflow)
-- Support `session: inherit` to resume a parent session
+## Flow Control
 
-## Flow control
+`continue_on_failure: true` lets the workflow continue after a failed step.
 
-### continue_on_failure
-
-By default, a failed step stops the workflow. `continue_on_failure: true` allows the workflow to proceed:
+`skip_if` supports:
 
 ```yaml
-- id: validator
-  mode: shell
-  command: agent-validator run
-  continue_on_failure: true
+skip_if: previous_success
+skip_if: 'sh: test "{{run_session_report}}" != "true"'
 ```
 
-Essential for the verify-fix pattern where validator failure is expected and handled by the next step.
+`previous_success` is not allowed on the first step in a scope. The `sh:` form is allowed on the first step and skips when the shell command exits 0.
 
-### skip_if
-
-Skip a step based on the previous step's outcome:
+`break_if` supports:
 
 ```yaml
-- id: fix
-  mode: autonomous
-  session: resume
-  prompt: "Fix the issues..."
-  skip_if: previous_success
+break_if: success
+break_if: failure
 ```
 
-When `skip_if: previous_success` is set, the step is skipped if the previous step succeeded. This pairs with `continue_on_failure` to create conditional execution: run the fix step only when the validator fails.
+It is only valid inside a loop body.
 
-Alternatively, use `skip_if: 'sh: <command>'` to skip based on an arbitrary shell expression. The command is interpolated with `{{params}}` and captured vars, then run through `/bin/sh`. The step is skipped when the command exits 0.
+## Capture And Interpolation
 
-```yaml
-- id: session-report
-  session: resume
-  prompt: "Run the session-report skill."
-  skip_if: 'sh: test "{{run_session_report}}" != "true"'
-```
-
-Unlike `previous_success`, the shell form is self-contained and is allowed on the first step in a scope (workflow or loop body).
-
-## Output capture
-
-Shell steps can capture their stdout into a named variable:
+Captured values are available to later steps with `{{name}}`.
 
 ```yaml
-- id: validator
-  mode: shell
-  command: agent-validator run
-  capture: validator_output
-  continue_on_failure: true
+- id: collect
+  command: git status --short
+  capture: status
 
-- id: fix
+- id: summarize
+  agent: summarizer
   mode: autonomous
   prompt: |
-    Fix these issues:
-    {{validator_output}}
-  skip_if: previous_success
+    Summarize this status:
+    {{status}}
 ```
 
-The captured output is both displayed to the terminal (tee behavior) and stored in the variable. Captured variables are available to all subsequent steps via `{{var_name}}` interpolation and are persisted in the state file for resume.
+Shell and autonomous agent captures are strings. Script JSON captures can produce lists or maps. UI captures produce maps. Whole-value interpolation preserves typed values where supported, such as using a captured list as UI select options.
 
-## Running workflows
+## Built-In Workflows
 
-### Basic run
+Common built-ins:
 
-```bash
-agent-runner flokay my-change
-```
+| Workflow | Purpose |
+| --- | --- |
+| `openspec:plan-change` | Create and plan an OpenSpec change. |
+| `openspec:implement-change` | Implement task files for an OpenSpec change. |
+| `openspec:change` | Run OpenSpec planning and implementation. |
+| `openspec:simple-change` | Inline OpenSpec planning and implementation for smaller changes. |
+| `spec-driven:plan-change` | Plan without depending on OpenSpec. |
+| `spec-driven:implement-change` | Implement discovered task files without OpenSpec. |
+| `spec-driven:change` | Run spec-driven planning and implementation. |
+| `spec-driven:simple-change` | Inline spec-driven planning and implementation. |
+| `core:run-validator` | Run Agent Validator with a retry/fix loop. |
+| `core:implement-task` | Implement one task file and run validation. |
+| `core:finalize-pr` | Push/update PR, wait for CI, and fix failures. |
 
-### Starting with an existing Claude session
-
-```bash
-agent-runner --session <session-id> plan-change my-change
-```
-
-Seeds the workflow with a Claude session ID from a conversation you were already having. The first step that uses `session: resume` will continue that conversation, giving the agent full context from your prior discussion.
-
-This is the natural flow when you've been exploring an idea with Claude and want to transition into a structured workflow:
-
-1. Chat with Claude about a feature idea
-2. Decide to formalize it: `agent-runner --session <session-id> plan-change my-feature`
-3. The first `session: resume` step picks up where your conversation left off
-
-Steps using `session: new` are unaffected -- the seeded session is only used by `session: resume`. If no step uses `session: resume`, the flag is ignored. The seed propagates through sub-workflows and loop iterations, so it works even when the first agent step is inside a nested workflow.
-
-You can find your current session ID in `~/.claude/projects/<encoded-cwd>/` -- it's the filename (without `.jsonl`) of the most recently modified conversation file.
-
-### Resuming interrupted workflows
-
-If a workflow is interrupted (you abort, a step fails, your machine restarts), agent-runner saves its state to `state.json`. Resume with:
-
-```bash
-agent-runner -resume
-```
-
-This reloads the workflow, restores session IDs and parameters, and picks up from the last step. If the workflow file has changed since the state was written, agent-runner warns you but proceeds.
-
-To resume a specific session:
-
-```bash
-agent-runner -resume -session <session-id>
-```
-
-The state file location depends on the engine. The openspec engine stores it in the change directory. Without an engine, it's in the project root.
-
-### Validating workflows
-
-Check that a workflow is syntactically valid without running it:
-
-```bash
-agent-runner -validate flokay
-```
-
-With an engine configured, this also runs engine-specific validation (e.g., checking that every openspec artifact has a matching workflow step).
+Use the TUI or `agent-runner -list` to browse the full embedded set.
 
 ## Engines
 
-Engines are optional plugins that hook into agent-runner's execution lifecycle. They enrich prompts with external context, validate that steps produced expected output, and control where state files live.
+Engines are Go plugins registered in the binary. The engine interface supports workflow validation, deferred validation, prompt enrichment, and post-step validation.
 
-### The openspec engine
+```go
+type Engine interface {
+    ValidateWorkflow(workflow *model.Workflow, params map[string]string, workflowFile string) error
+    NeedsDeferredValidation() bool
+    EnrichPrompt(stepID string, params map[string]string, opts engine.EnrichOptions) string
+    ValidateStep(stepID string, params map[string]string) (bool, error)
+}
+```
 
-The built-in openspec engine integrates with the OpenSpec CLI. It:
-
-1. **Enriches prompts** -- Before each artifact step, calls `openspec instructions` to get the template, output path, and dependencies, and appends them to the prompt in an `<artifact_context>` block.
-
-2. **Validates steps** -- After each artifact step, calls `openspec status` to check that the artifact was created. If validation fails, agent-runner offers you the choice to resume the session interactively or exit.
-
-3. **Validates the workflow** -- At load time, checks that every openspec schema artifact has a matching step ID in the workflow.
-
-4. **Controls state directory** -- Places `state.json` in the openspec change directory.
-
-#### Configuration
+The built-in `openspec` engine is configured like this:
 
 ```yaml
 engine:
   type: openspec
-  change_param: change_name    # which workflow param holds the change name
+  change_param: change_name
 ```
 
-The engine uses the step ID to determine which steps are artifact steps. Step IDs must match the openspec schema's artifact IDs exactly (e.g., `proposal`, `specs`, `design`, `tasks`, `review`).
+It uses `openspec status --change <name> --json` and `openspec instructions <step> --change <name> --json` to validate artifact steps and enrich prompts.
 
-#### Requirements
+## Run State And Audit Logs
 
-The `openspec` CLI must be installed and on your PATH. The engine checks for this at initialization and fails fast with a clear error if it's missing.
-
-### Writing custom engines
-
-Engines implement the `Engine` interface (all methods optional):
-
-```typescript
-interface Engine {
-  getStateDir?(params: Record<string, string>): string;
-  validateWorkflow?(workflow: Workflow, params: Record<string, string>): void;
-  enrichPrompt?(stepId: string, params: Record<string, string>): string | undefined;
-  validateStep?(stepId: string, params: Record<string, string>): boolean;
-}
-```
-
-Register your engine in `src/engine.ts`:
-
-```typescript
-import { myEngine } from './engines/my-engine.ts';
-
-const engineRegistry: Record<string, EngineConstructor> = {
-  openspec: createOpenSpecEngine,
-  'my-engine': myEngine,
-};
-```
-
-## The flokay workflow
-
-The flokay workflow (`workflows/flokay.yaml`) orchestrates the full change lifecycle using composition. It calls into sub-workflows for the implementation phase:
-
-| Step | Type | What it does |
-|------|------|-------------|
-| `create` | shell | Scaffolds a new openspec change |
-| `proposal` | interactive | Collaboratively write the proposal |
-| `specs` | interactive (resume) | Write specs based on the proposal |
-| `design` | interactive | Design the architecture |
-| `tasks` | autonomous | Generate implementation tasks |
-| `review` | autonomous (resume) | Run validator review |
-| `implement` | sub-workflow | Loops over task files, implements each with validator retry |
-| `verify` | autonomous | Verify implementation with validator |
-| `archive` | autonomous (resume) | Archive the change, sync specs |
-| `archive-verify` | shell | Skip validator for archive-only changes |
-| `finalize` | autonomous (resume) | Push PR, wait for CI, fix failures |
-
-The `implement` step invokes `implement-change.yaml`, which loops over task files and for each one invokes `../core/implement-task.yaml`, which itself invokes `run-validator.yaml` within the `core` builtin namespace for the verify-fix retry loop.
-
-Run it:
-
-```bash
-agent-runner flokay my-feature-name
-```
-
-## Audit logging
-
-Every workflow run produces a structured audit log for post-failure troubleshooting and visibility. Log files are stored at:
+Runs are stored under:
 
 ```text
-~/.agent-runner/projects/{encoded-cwd}/logs/{workflow-name}-{timestamp}.log
+~/.agent-runner/projects/<encoded-cwd>/runs/<run-id>/
 ```
 
-The `{encoded-cwd}` replaces `/`, `.`, and `_` in your project path with `-` (e.g., `/Users/foo/my_project` becomes `-Users-foo-my-project`).
+Important files:
 
-### Log format
+| File | Purpose |
+| --- | --- |
+| `state.json` | Resume state, current step, session IDs, params, captures, nested progress, and completion flag. |
+| `audit.log` | JSONL event log for the run. |
+| `output/` | Per-step output files used by the live run view and workflows. |
+| `bundled/` | Materialized bundled scripts/assets for built-in workflow runs. |
 
-Each line is a hybrid of human-scannable prefix and structured JSON:
-
-```text
-2026-03-15T18:30:00Z [validate] step_start {"command":"npm test","context":{...}}
-2026-03-15T18:30:02Z [validate] step_end {"outcome":"success","duration_ms":2000,"exit_code":0,"stderr":""}
-2026-03-15T18:30:02Z [task-loop:0, implement] step_start {"prompt":"Implement tasks/1.md",...}
-```
-
-The nesting prefix in brackets shows exactly where in the execution you are:
-
-- `[validate]` -- top-level step
-- `[task-loop:0, implement]` -- step `implement` inside loop `task-loop` at iteration 0
-- `[task-loop:0, verify, sub:verify-task, check]` -- step `check` inside sub-workflow `verify-task`, invoked from loop iteration 0
-
-### Event types
-
-The audit log emits paired start/end events at every lifecycle boundary:
-
-| Events | When |
-|--------|------|
-| `run_start` / `run_end` | Workflow execution begins and ends |
-| `step_start` / `step_end` | Before and after each step |
-| `iteration_start` / `iteration_end` | Before and after each loop iteration |
-| `sub_workflow_start` / `sub_workflow_end` | Before and after sub-workflow execution |
-| `error` | Uncaught exception during execution |
-
-### What gets captured
-
-**Start events** include a full context snapshot (all params and captured variables at that point), plus step-type-specific data:
-
-- **Shell steps**: interpolated command
-- **Agent steps**: interpolated prompt, mode, session strategy, resolved session ID, model, engine enrichment
-- **Loop steps**: loop type, max or glob pattern with resolved matches
-- **Sub-workflow steps**: resolved workflow path, interpolated params
-
-**End events** include outcome, duration in milliseconds, and step-type-specific results:
-
-- **Shell steps**: exit code, stderr (always captured), stdout (if `capture` set)
-- **Agent steps**: exit code, discovered session ID
-- **Loop steps**: iterations completed, whether break was triggered
-- **Skipped steps**: the `skip_if` condition that triggered the skip
-
-### Crash safety
-
-The audit log flushes each entry to disk immediately. If the process crashes, an `error` event and `run_end` are emitted before exit. All entries written before the crash are preserved.
-
-### Retention
-
-Log files are never automatically deleted. One file is created per workflow execution (including resumed runs). You manage cleanup yourself.
-
-### Using the log for troubleshooting
-
-When a workflow fails:
-
-1. Find the log file in `~/.agent-runner/projects/{encoded-cwd}/logs/`
-2. Search for `step_end` events with `"outcome":"failed"` to find the failing step
-3. Check the `stderr` field for error output
-4. Look at the `step_start` event's context snapshot to see what params and variables the step received
-5. Use the nesting prefix to trace through loop iterations or sub-workflow calls
-
-You can also pipe through `jq` by splitting on the first `{`:
-
-```bash
-grep 'step_end' logfile.log | sed 's/.*{/{/' | jq 'select(.outcome=="failed")'
-```
+Audit events include `run_start`, `run_end`, `step_start`, `step_end`, `iteration_start`, `iteration_end`, `sub_workflow_start`, `sub_workflow_end`, and `error`.
 
 ## Troubleshooting
 
-### "Missing required parameter"
+### Missing required parameter
 
-You forgot to pass a required parameter. Check the workflow's `params` section and pass values as positional arguments.
+Pass the parameter positionally or as `key=value`.
 
-### "Step not found in workflow"
+### Unknown workflow
 
-The `--from` step ID doesn't match any step in the workflow. Check `agent-runner validate` output for the list of step IDs.
+Use a project/user workflow name, a path-like name under `.agent-runner/workflows`, or a built-in name such as `core:run-validator`.
 
-### "Unknown engine type"
+### Unknown CLI adapter
 
-The engine type in the workflow doesn't match any registered engine. Currently only `openspec` is built-in.
+Valid step-level `cli` values are `claude`, `codex`, `copilot`, `cursor`, and `opencode`.
 
-### "openspec CLI not found"
+### Agent step requires "agent"
 
-The openspec engine requires the `openspec` CLI on your PATH. Install it and try again.
+Fresh sessions need an agent profile. Add `agent: planner`, `agent: implementor`, or another configured profile, or use `session: resume`, `session: inherit`, or a declared named session when that is what you intend.
 
-### Interactive step won't advance
+### Interactive step will not advance
 
-Exit the agent session to advance to the next step. If the agent session is stuck, press ctrl-c to terminate it.
+The workflow advances when the agent emits the injected continuation marker. If the CLI exits without the marker, the step is aborted and the workflow can be resumed.
 
-### Workflow interrupted, how to resume
+### Resume a run
 
-Resume with:
+Use the TUI:
 
 ```bash
 agent-runner -resume
+```
+
+Or resume a specific run ID from the current project:
+
+```bash
+agent-runner -resume <run-id>
 ```

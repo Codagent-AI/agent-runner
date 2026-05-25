@@ -28,6 +28,38 @@ steps:
     command: pwd
     capture: cwd
 
+  - id: check-existing-project
+    command: |
+      if [ -z "$(find . -mindepth 1 -maxdepth 1 ! -name .git -print -quit)" ]; then
+        printf 'empty'
+      elif ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        printf 'not_git'
+      else
+        printf 'ok'
+      fi
+    capture: project_status
+
+  - id: existing-project-required
+    mode: ui
+    title: Existing Project Required
+    body: |
+      Guided workflow should be run in an existing project.
+
+      Agent Runner is currently running in:
+
+      {{cwd}}
+
+      This directory is empty or is not inside a Git repository.
+
+      If you want to start a new project, bootstrap the project scaffolding, commit the Git repository, then run agent-runner again.
+    actions:
+      - label: Exit
+        outcome: exit
+    skip_if: 'sh: [ "{{project_status}}" = "ok" ]'
+
+  - id: require-existing-project
+    command: test "{{project_status}}" = "ok"
+
   - id: confirm-cwd
     mode: ui
     title: Confirm Directory

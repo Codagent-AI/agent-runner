@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/usersettings"
 	"github.com/google/go-cmp/cmp"
 )
@@ -251,6 +252,97 @@ func TestDefaultFirstRunDepsExitsOnNativeSetupError(t *testing.T) {
 	if defaultFirstRunDeps.continueAfterNativeSetupError {
 		t.Fatal("default first-run setup should exit on native setup errors, not silently continue")
 	}
+}
+
+func TestShouldShowOnboardingFailureModalGatesByTerminalOutcomeCancellationAndDismissal(t *testing.T) {
+	tests := []struct {
+		name     string
+		result   liveTUIResult
+		settings usersettings.Settings
+		want     bool
+	}{
+		{
+			name:     "terminal failure",
+			result:   liveTUIResult{workflowResult: runner.ResultFailed, sessionDir: "/tmp/onboarding-run"},
+			settings: usersettings.Settings{},
+			want:     true,
+		},
+		{
+			name:     "user cancellation",
+			result:   liveTUIResult{workflowResult: runner.ResultFailed, exitRequested: true, sessionDir: "/tmp/onboarding-run"},
+			settings: usersettings.Settings{},
+		},
+		{
+			name:     "clean break_if success",
+			result:   liveTUIResult{workflowResult: runner.ResultSuccess, sessionDir: "/tmp/onboarding-run"},
+			settings: usersettings.Settings{},
+		},
+		{
+			name:     "stopped non-failure run",
+			result:   liveTUIResult{workflowResult: runner.ResultStopped, sessionDir: "/tmp/onboarding-run"},
+			settings: usersettings.Settings{},
+		},
+		{
+			name:     "dismissed setting",
+			result:   liveTUIResult{workflowResult: runner.ResultFailed, sessionDir: "/tmp/onboarding-run"},
+			settings: usersettings.Settings{Onboarding: usersettings.OnboardingSettings{Dismissed: "2026-05-24T00:00:00Z"}},
+		},
+		{
+			name:     "missing session dir",
+			result:   liveTUIResult{workflowResult: runner.ResultFailed},
+			settings: usersettings.Settings{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldShowOnboardingFailureModal(tt.result, &tt.settings)
+			if got != tt.want {
+				t.Fatalf("shouldShowOnboardingFailureModal = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFinishOnboardingDemoFlowShowsFailureModalWhenWorkflowFailsWithZeroExit(t *testing.T) {
+	sessionDir := t.TempDir()
+	resultCh := make(chan runner.WorkflowResult, 1)
+	resultCh <- runner.ResultFailed
+	result := finishOnboardingDemoFlow(&onboardingDemoPromptFlow{
+		handle:   &runner.RunHandle{SessionDir: sessionDir},
+		resultCh: resultCh,
+	}, &usersettings.Settings{})
+
+	if !result.continueToList {
+		t.Fatalf("finishOnboardingDemoFlow() exits with %d, want continue to list", result.exitCode)
+	}
+	if len(result.listOptions) == 0 {
+		t.Fatal("finishOnboardingDemoFlow() did not return onboarding failure list option")
+	}
+}
+
+func TestFinishOnboardingDemoFlowKeepsDismissedOnboardingFailureHidden(t *testing.T) {
+	sessionDir := t.TempDir()
+	resultCh := make(chan runner.WorkflowResult, 1)
+	resultCh <- runner.ResultFailed
+	result := finishOnboardingDemoFlow(&onboardingDemoPromptFlow{
+		handle:   &runner.RunHandle{SessionDir: sessionDir},
+		resultCh: resultCh,
+	}, &usersettings.Settings{Onboarding: usersettings.OnboardingSettings{Dismissed: "2026-05-24T00:00:00Z"}})
+
+	requireFirstRunContinue(t, result)
+	if len(result.listOptions) != 0 {
+		t.Fatalf("listOptions length = %d, want 0 after dismissal", len(result.listOptions))
+	}
+}
+
+func TestFinishOnboardingDemoFlowExitRequestedDoesNotWaitForWorkflowResult(t *testing.T) {
+	result := finishOnboardingDemoFlow(&onboardingDemoPromptFlow{
+		exitRequested: true,
+		resultCh:      make(chan runner.WorkflowResult),
+	}, &usersettings.Settings{})
+
+	requireFirstRunExit(t, result, 0)
 }
 
 func TestResetOnboardingStateClearsSettingsProjectValidatorAndRuns(t *testing.T) {

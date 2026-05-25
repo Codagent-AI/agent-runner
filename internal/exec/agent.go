@@ -238,7 +238,11 @@ func resolveInvocationContext(mode model.StepMode, ctx *model.ExecutionContext, 
 		return cli.ContextInteractive
 	}
 
-	// Capture requires a clean stdout pipe, which only the headless path provides.
+	// Captured agent output must come from a clean stdout pipe, so capture
+	// currently forces headless execution even when the user selected an
+	// interactive autonomous backend such as "interactive-claude".
+	// TODO: Support capture for autonomous-interactive steps without relying on
+	// stdout parsing, so built-in review workflows can honor interactive Claude.
 	if hasCapture {
 		return cli.ContextAutonomousHeadless
 	}

@@ -305,6 +305,11 @@ func run() int {
 		return 0
 	}
 
+	args := flag.Args()
+	if handled, code := routeDebugCommand(args, os.Stdout, os.Stderr); handled {
+		return code
+	}
+
 	// Validate flag combinations.
 	if *validateFlag && *resumeFlag {
 		fmt.Fprintln(os.Stderr, "agent-runner: --validate and --resume are mutually exclusive")
@@ -322,8 +327,6 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "agent-runner: --inspect is mutually exclusive with --list and --resume")
 		return 1
 	}
-
-	args := flag.Args()
 
 	if *resetOnboardingFlag {
 		if err := resetOnboardingState(); err != nil {
@@ -350,6 +353,18 @@ type commandFlags struct {
 }
 
 func dispatchRunCommand(args []string, opts commandFlags) int {
+	if isRunCommandHelp(args) {
+		printRunUsage(os.Stderr)
+		return 0
+	}
+
+	var err error
+	args, err = normalizeRunCommandArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+
 	if opts.validate {
 		return handleValidateArgs(args)
 	}
@@ -380,7 +395,7 @@ func dispatchRunCommand(args []string, opts commandFlags) int {
 				fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 				return 1
 			}
-			return handleRunWithRunOptions([]string{ref}, runCommandOptions{from: opts.onboardingFrom}).exitCode
+			return handleOnboardingFromRun(ref, opts.onboardingFrom)
 		}
 		return handleListWithDeps(listview.InitialTabNew, defaultFirstRunDeps)
 	}
@@ -395,7 +410,49 @@ func dispatchRunCommand(args []string, opts commandFlags) int {
 		return 1
 	}
 
-	return handleRunWithRunOptions(append([]string{workflowFile}, args[1:]...), runCommandOptions{from: opts.onboardingFrom}).exitCode
+	if opts.onboardingFrom != "" {
+		return handleOnboardingFromRun(workflowFile, opts.onboardingFrom, args[1:]...)
+	}
+	return handleRunWithRunOptions(append([]string{workflowFile}, args[1:]...), runCommandOptions{}).exitCode
+}
+
+func isRunCommandHelp(args []string) bool {
+	return len(args) == 2 && args[0] == "run" && (args[1] == "--help" || args[1] == "-h")
+}
+
+func printRunUsage(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "Usage: agent-runner run <workflow> [--param key=value] [key=value ...]")
+}
+
+func normalizeRunCommandArgs(args []string) ([]string, error) {
+	if len(args) <= 1 || args[0] != "run" || strings.HasPrefix(args[1], "-") {
+		return args, nil
+	}
+
+	normalized := []string{args[1]}
+	for i := 2; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--param":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("--param requires key=value")
+			}
+			i++
+			if !strings.Contains(args[i], "=") {
+				return nil, fmt.Errorf("--param requires key=value")
+			}
+			normalized = append(normalized, args[i])
+		case strings.HasPrefix(arg, "--param="):
+			value := strings.TrimPrefix(arg, "--param=")
+			if !strings.Contains(value, "=") {
+				return nil, fmt.Errorf("--param requires key=value")
+			}
+			normalized = append(normalized, value)
+		default:
+			normalized = append(normalized, arg)
+		}
+	}
+	return normalized, nil
 }
 
 func handleResume(sessionID string) int {
@@ -521,9 +578,24 @@ func handleListWithDeps(initialTab listview.InitialTab, firstRun firstRunDeps) i
 	}
 	if result := ensureFirstRunForTUI(firstRun); !result.continueToList {
 		return result.exitCode
+	} else if len(result.listOptions) > 0 {
+		return handleListAfterFirstRun(initialTab, firstRun, result.listOptions)
 	}
 
-	m, err := listview.New(listview.WithInitialTab(initialTab), listview.WithVersion(version))
+	return handleListAfterFirstRun(initialTab, firstRun, nil)
+}
+
+func handleListAfterFirstRun(initialTab listview.InitialTab, firstRun firstRunDeps, extraOptions []func(*listview.Model)) int {
+	settings := loadSplashSettingsForList(firstRun.load, os.Stderr)
+
+	options := []func(*listview.Model){
+		listview.WithInitialTab(initialTab),
+		listview.WithVersion(version),
+		listview.WithSplash(shouldShowSplash(&settings, firstRun.isStdinTTY(), firstRun.isStdoutTTY())),
+	}
+	options = append(options, extraOptions...)
+
+	m, err := listview.New(options...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
@@ -531,6 +603,29 @@ func handleListWithDeps(initialTab listview.InitialTab, firstRun firstRunDeps) i
 
 	sw := &switcher{list: m, mode: showingList}
 	return runSwitcher(sw)
+}
+
+func shouldShowSplash(settings *usersettings.Settings, stdinTTY, stdoutTTY bool) bool {
+	return settings != nil && stdinTTY && stdoutTTY && settings.Splash.Dismissed == ""
+}
+
+func loadSplashSettingsForList(load func() (usersettings.Settings, error), stderr io.Writer) usersettings.Settings {
+	settings, err := load()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "agent-runner: warning: could not load settings for splash: %v\n", err)
+		return usersettings.Settings{}
+	}
+	return settings
+}
+
+func shouldShowOnboardingFailureModal(result liveTUIResult, settings *usersettings.Settings) bool {
+	if settings == nil {
+		settings = &usersettings.Settings{}
+	}
+	return result.workflowResult == runner.ResultFailed &&
+		!result.exitRequested &&
+		result.sessionDir != "" &&
+		settings.Onboarding.Dismissed == ""
 }
 
 func runSwitcher(sw *switcher) int {
@@ -548,6 +643,9 @@ func runSwitcher(sw *switcher) int {
 		}
 		if final.resumeRunID != "" {
 			return execRunnerResume(final.resumeRunID, final.resumeRunProjectDir)
+		}
+		if final.launchDebugRunID != "" {
+			return execSelfWithEnv([]string{liveRunImmediateAltScreenEnv + "=1"}, launchDebugArgs(final.launchDebugRunID)...)
 		}
 		if final.startRunReady && final.startRunEntry != nil {
 			return execStartRun(final.startRunEntry, final.startRunParams)
@@ -613,15 +711,17 @@ func runLiveTUIWithOptions(h *runner.RunHandle, opts liveTUIOptions) int {
 }
 
 type liveTUIResult struct {
-	exitCode      int
-	exitRequested bool
+	exitCode       int
+	exitRequested  bool
+	workflowResult runner.WorkflowResult
+	sessionDir     string
 }
 
 func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResult {
 	rv, err := runview.New(h.SessionDir, h.ProjectDir, runview.FromLiveRun)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-		return liveTUIResult{exitCode: 1}
+		return liveTUIResult{exitCode: 1, sessionDir: h.SessionDir}
 	}
 
 	programOptions := []tea.ProgramOption{tea.WithMouseCellMotion()}
@@ -663,14 +763,14 @@ func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResul
 	rv, err = finalRunviewModel(p.Run())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-		return liveTUIResult{exitCode: 1}
+		return liveTUIResult{exitCode: 1, sessionDir: h.SessionDir}
 	}
 
 	// If the user did not request a resume, map the runner result to an exit
 	// code. If the user confirmed quit while the workflow was still running,
 	// resultCh has no value yet — keep the documented orphan-on-quit behavior
 	// and return 0 without blocking on the lingering goroutine.
-	if result, ok := terminalLiveTUIResult(rv, resultCh, h.ProjectDir, opts); ok {
+	if result, ok := terminalLiveTUIResult(rv, resultCh, h.ProjectDir, h.SessionDir, opts); ok {
 		return result
 	}
 
@@ -693,54 +793,56 @@ func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResul
 			return liveTUIResult{exitCode: 1}
 		}
 		if rv.ExitRequested() {
-			return liveTUIResult{exitRequested: true}
+			return liveTUIResult{exitRequested: true, sessionDir: h.SessionDir}
 		}
 		if rv.ResumeToList() {
-			return liveTUIResult{exitCode: execRunnerResume("", h.ProjectDir)}
+			return liveTUIResult{exitCode: execRunnerResume("", h.ProjectDir), sessionDir: h.SessionDir}
 		}
 	}
-	return liveTUIResult{}
+	return liveTUIResult{sessionDir: h.SessionDir}
 }
 
-func terminalLiveTUIResult(rv *runview.Model, resultCh <-chan runner.WorkflowResult, projectDir string, opts liveTUIOptions) (liveTUIResult, bool) {
+func terminalLiveTUIResult(rv *runview.Model, resultCh <-chan runner.WorkflowResult, projectDir, sessionDir string, opts liveTUIOptions) (liveTUIResult, bool) {
 	if rv.ResumeSessionID() != "" {
 		return liveTUIResult{}, false
 	}
 	if rv.ExitRequested() {
-		return liveTUIResult{exitRequested: true}, true
+		return liveTUIResult{exitRequested: true, sessionDir: sessionDir}, true
 	}
 	if rv.ResumeToList() {
 		<-resultCh
-		return liveTUIResult{exitCode: execRunnerResume("", projectDir)}, true
+		return liveTUIResult{exitCode: execRunnerResume("", projectDir), sessionDir: sessionDir}, true
 	}
 	if opts.quitOnDone {
-		return dispatcherLiveTUIResult(resultCh), true
+		return dispatcherLiveTUIResult(resultCh, sessionDir), true
 	}
-	return completedLiveTUIResult(resultCh), true
+	return completedLiveTUIResult(resultCh, sessionDir), true
 }
 
-func dispatcherLiveTUIResult(resultCh <-chan runner.WorkflowResult) liveTUIResult {
+func dispatcherLiveTUIResult(resultCh <-chan runner.WorkflowResult, sessionDir string) liveTUIResult {
 	select {
 	case runResult := <-resultCh:
 		if runResult != runner.ResultSuccess {
-			return liveTUIResult{exitCode: 1}
+			return liveTUIResult{exitCode: 1, workflowResult: runResult, sessionDir: sessionDir}
 		}
+		return liveTUIResult{workflowResult: runResult, sessionDir: sessionDir}
 	default:
 		// User quit before the dispatcher-launched workflow reached a terminal
 		// state; preserve the normal live-run orphan behavior.
 	}
-	return liveTUIResult{}
+	return liveTUIResult{sessionDir: sessionDir}
 }
 
-func completedLiveTUIResult(resultCh <-chan runner.WorkflowResult) liveTUIResult {
+func completedLiveTUIResult(resultCh <-chan runner.WorkflowResult, sessionDir string) liveTUIResult {
 	select {
 	case runResult := <-resultCh:
 		if runResult != runner.ResultSuccess {
-			return liveTUIResult{exitCode: 1}
+			return liveTUIResult{exitCode: 1, workflowResult: runResult, sessionDir: sessionDir}
 		}
+		return liveTUIResult{workflowResult: runResult, sessionDir: sessionDir}
 	default:
 	}
-	return liveTUIResult{}
+	return liveTUIResult{sessionDir: sessionDir}
 }
 
 // finalRunviewModel extracts the terminal runview Model returned by tea.Program.Run.
@@ -872,6 +974,10 @@ func execRunnerResume(runID, projectDir string) int {
 	return execSelf(args...)
 }
 
+func launchDebugArgs(runID string) []string {
+	return []string{"run", "core:debug", "--param", "failed_run_id=" + runID}
+}
+
 // execStartRun replaces the current process with `agent-runner run <workflow>`
 // using the workflow's canonical name and ordered key=value params.
 func execStartRun(entry *discovery.WorkflowEntry, values map[string]string) int {
@@ -958,6 +1064,7 @@ type switcher struct {
 	resumeSessionID      string
 	resumeRunID          string
 	resumeRunProjectDir  string
+	launchDebugRunID     string
 	resumeListProjectDir string
 	startRunEntry        *discovery.WorkflowEntry
 	startRunParams       map[string]string
@@ -1032,8 +1139,12 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case discovery.StartRunMsg:
 		entry := msg.Entry
 		s.startRunEntry = &entry
-		s.startRunParams = nil
+		s.startRunParams = maps.Clone(msg.Params)
 		s.startRunReady = false
+		if len(msg.Params) > 0 {
+			s.startRunReady = true
+			return s, tea.Quit
+		}
 		if len(entry.Params) == 0 {
 			s.startRunReady = true
 			return s, tea.Quit
@@ -1071,6 +1182,10 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case runview.ResumeRunMsg:
 		s.resumeRunID = msg.RunID
+		return s, tea.Quit
+
+	case runview.LaunchDebugMsg:
+		s.launchDebugRunID = msg.FailedRunID
 		return s, tea.Quit
 
 	case runview.ResumeListMsg:
@@ -1319,7 +1434,7 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 	}
 
 	if os.Getenv("AGENT_RUNNER_NO_TUI") == "1" {
-		result, runErr := runner.RunWorkflow(&workflow, params, &runner.Options{
+		h, err := runner.PrepareRun(&workflow, params, &runner.Options{
 			WorkflowFile:  workflowFile,
 			From:          runOpts.from,
 			Engine:        eng,
@@ -1327,14 +1442,19 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 			GlobExpander:  &realGlobExpander{},
 			Log:           &realLogger{},
 		})
-		if runErr != nil {
-			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", runErr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 			return liveTUIResult{exitCode: 1}
 		}
+		result := runner.ExecuteFromHandle(h, &runner.Options{
+			ProcessRunner: &realProcessRunner{},
+			GlobExpander:  &realGlobExpander{},
+			Log:           &realLogger{},
+		})
 		if result != runner.ResultSuccess {
-			return liveTUIResult{exitCode: 1}
+			return liveTUIResult{exitCode: 1, workflowResult: result, sessionDir: h.SessionDir}
 		}
-		return liveTUIResult{}
+		return liveTUIResult{workflowResult: result, sessionDir: h.SessionDir}
 	}
 
 	if code := ensureThemeForTUI(defaultThemeDeps); code != 0 {
@@ -1355,6 +1475,24 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 	}
 
 	return runLiveTUIWithResult(h, liveOpts)
+}
+
+func handleOnboardingFromRun(workflowFile, from string, args ...string) int {
+	runArgs := append([]string{workflowFile}, args...)
+	result := handleRunWithRunOptions(runArgs, runCommandOptions{from: from})
+	settings, err := usersettings.Load()
+	if err != nil {
+		settings = usersettings.Settings{}
+	}
+	if !shouldShowOnboardingFailureModal(result, &settings) {
+		return result.exitCode
+	}
+	reason := runview.FailureReasonForSession(result.sessionDir)
+	return handleListAfterFirstRun(
+		listview.InitialTabCurrentDir,
+		defaultFirstRunDeps,
+		[]func(*listview.Model){listview.WithOnboardingFailure(result.sessionDir, reason)},
+	)
 }
 
 func ensureThemeForTUI(deps themeDeps) int {
@@ -1414,11 +1552,14 @@ type firstRunDeps struct {
 type firstRunResult struct {
 	exitCode       int
 	continueToList bool
+	listOptions    []func(*listview.Model)
 }
 
 type firstRunWorkflowResult struct {
-	exitCode      int
-	exitRequested bool
+	exitCode       int
+	exitRequested  bool
+	workflowResult runner.WorkflowResult
+	sessionDir     string
 }
 
 func continueToList() firstRunResult {
@@ -1557,6 +1698,20 @@ func launchOnboardingDemo(deps firstRunDeps) firstRunResult {
 		return exitFirstRun(1)
 	}
 	result := deps.runWorkflow(ref)
+	liveResult := liveTUIResult(result)
+	settings, err := deps.load()
+	if err != nil {
+		settings = usersettings.Settings{}
+	}
+	if shouldShowOnboardingFailureModal(liveResult, &settings) {
+		reason := runview.FailureReasonForSession(result.sessionDir)
+		return firstRunResult{
+			continueToList: true,
+			listOptions: []func(*listview.Model){
+				listview.WithOnboardingFailure(result.sessionDir, reason),
+			},
+		}
+	}
 	if result.exitRequested || result.exitCode != 0 {
 		return exitFirstRun(result.exitCode)
 	}
@@ -1641,8 +1796,39 @@ func runOnboardingDemoFlowFrom(from string, preparing bool) firstRunResult {
 		fmt.Fprintf(os.Stderr, "agent-runner: unexpected onboarding demo model %T\n", final)
 		return exitFirstRun(1)
 	}
+	settings, err := usersettings.Load()
+	if err != nil {
+		settings = usersettings.Settings{}
+	}
+	return finishOnboardingDemoFlow(fm, &settings)
+}
+
+func finishOnboardingDemoFlow(fm *onboardingDemoPromptFlow, settings *usersettings.Settings) firstRunResult {
+	var workflowResult runner.WorkflowResult
 	if fm.exitRequested || fm.exitCode != 0 {
 		return exitFirstRun(fm.exitCode)
+	}
+	if fm.resultCh != nil {
+		workflowResult = <-fm.resultCh
+	}
+	sessionDir := ""
+	if fm.handle != nil {
+		sessionDir = fm.handle.SessionDir
+	}
+	liveResult := liveTUIResult{
+		exitCode:       fm.exitCode,
+		exitRequested:  fm.exitRequested,
+		workflowResult: workflowResult,
+		sessionDir:     sessionDir,
+	}
+	if shouldShowOnboardingFailureModal(liveResult, settings) {
+		reason := runview.FailureReasonForSession(sessionDir)
+		return firstRunResult{
+			continueToList: true,
+			listOptions: []func(*listview.Model){
+				listview.WithOnboardingFailure(sessionDir, reason),
+			},
+		}
 	}
 	return continueToList()
 }

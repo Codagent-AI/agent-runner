@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -485,6 +486,43 @@ func TestListView_RenderSubheaderExplainsTopLevelTabs(t *testing.T) {
 	}
 }
 
+func TestListView_RenderEmptyRunScopes(t *testing.T) {
+	tests := []struct {
+		name string
+		m    *Model
+	}{
+		{
+			name: "current dir no runs",
+			m: &Model{
+				activeTab: tabCurrentDir,
+			},
+		},
+		{
+			name: "all no directories",
+			m: &Model{
+				activeTab: tabAll,
+				allTab: allTabState{
+					subView: subViewPicker,
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitize(tt.m.renderBody())
+			for _, want := range []string{
+				"Nothing to see here yet",
+				"From the new tab, select a workflow to get started",
+			} {
+				if !strings.Contains(got, want) {
+					t.Fatalf("empty body = %q, want to contain %q", got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestListView_RenderSubheaderExplainsRunListDrilldowns(t *testing.T) {
 	tests := []struct {
 		name string
@@ -819,6 +857,463 @@ func TestListModel_SettingsEditorCtrlCStillQuits(t *testing.T) {
 	}
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Fatalf("ctrl+c command = %T, want tea.QuitMsg", cmd())
+	}
+}
+
+func TestListView_SplashOverlayRendersContentButtonsAndUnderlyingList(t *testing.T) {
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.cwd = "/repo/project"
+	m.termWidth = 120
+	m.termHeight = 32
+	m.splashVisible = true
+	m.splashShown = true
+
+	view := sanitize(m.View())
+
+	for _, want := range []string{
+		"Welcome to Agent Runner!",
+		"Select a workflow and press 'r' to get started.",
+		"From this screen you can also:",
+		"• Browse runs by directory, worktree, or project",
+		"• Press ? for help, s for settings, q to quit",
+		"[ Got it ]",
+		"[ Don't show again ]",
+		"Current Dir",
+		"implement",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("View() missing %q with splash visible:\n%s", want, view)
+		}
+	}
+	if m.splashFocus != 0 {
+		t.Fatalf("initial splash focus = %d, want Got it", m.splashFocus)
+	}
+}
+
+func TestListModel_SplashSwallowsListKeys(t *testing.T) {
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.cwd = "/repo/project"
+	m.newTab.workflows = []discovery.WorkflowEntry{
+		{CanonicalName: "onboarding:help", SourcePath: "builtin:onboarding/help.yaml", Namespace: "onboarding", Scope: discovery.ScopeBuiltin},
+	}
+	m.splashVisible = true
+	m.splashShown = true
+	m.loadSettings = func() (usersettings.Settings, error) {
+		t.Fatal("splash should not let s open settings")
+		return usersettings.Settings{}, nil
+	}
+
+	for _, key := range []string{"s", "?", "r", "q", "up", "down", "right"} {
+		beforeTab := m.activeTab
+		beforeCursor := m.currentDirCursor
+		var cmd tea.Cmd
+		if key == "up" || key == "down" || key == "right" {
+			var keyType tea.KeyType
+			switch key {
+			case "up":
+				keyType = tea.KeyUp
+			case "down":
+				keyType = tea.KeyDown
+			case "right":
+				keyType = tea.KeyRight
+			}
+			m, cmd = pressSpecialKey(m, keyType)
+		} else {
+			m, cmd = pressKey(m, key)
+		}
+		if cmd != nil {
+			t.Fatalf("%q produced a command while splash is visible", key)
+		}
+		if !m.splashVisible {
+			t.Fatalf("%q closed the splash unexpectedly", key)
+		}
+		if m.activeTab != beforeTab || m.currentDirCursor != beforeCursor {
+			t.Fatalf("%q changed list state: tab %v->%v cursor %d->%d", key, beforeTab, m.activeTab, beforeCursor, m.currentDirCursor)
+		}
+		if m.settingsEditor != nil {
+			t.Fatalf("%q opened settings while splash is visible", key)
+		}
+		if m.quitting {
+			t.Fatalf("%q quit while splash is visible", key)
+		}
+	}
+
+	m.splashFocus = 0
+	m, cmd := pressSpecialKey(m, tea.KeyTab)
+	if cmd != nil {
+		t.Fatal("tab should not produce a command while splash is visible")
+	}
+	if m.splashFocus != 1 {
+		t.Fatalf("splash focus after tab = %d, want Don't show again", m.splashFocus)
+	}
+	m, _ = pressSpecialKey(m, tea.KeyShiftTab)
+	if m.splashFocus != 0 {
+		t.Fatalf("splash focus after shift+tab = %d, want Got it", m.splashFocus)
+	}
+}
+
+func TestListModel_SplashGotItClosesWithoutSaving(t *testing.T) {
+	saveCount := 0
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.splashVisible = true
+	m.splashShown = true
+	m.saveSettings = func(usersettings.Settings) error {
+		saveCount++
+		return nil
+	}
+
+	m, cmd := pressSpecialKey(m, tea.KeyEnter)
+
+	if cmd != nil {
+		t.Fatal("Got it should not produce a command")
+	}
+	if m.splashVisible {
+		t.Fatal("Got it should close the splash")
+	}
+	if saveCount != 0 {
+		t.Fatalf("Got it saved settings %d times, want 0", saveCount)
+	}
+}
+
+func TestListModel_SplashEscClosesWithoutSaving(t *testing.T) {
+	saveCount := 0
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.splashVisible = true
+	m.splashShown = true
+	m.saveSettings = func(usersettings.Settings) error {
+		saveCount++
+		return nil
+	}
+
+	m, _ = pressSpecialKey(m, tea.KeyEsc)
+
+	if m.splashVisible {
+		t.Fatal("Esc should close the splash")
+	}
+	if saveCount != 0 {
+		t.Fatalf("Esc saved settings %d times, want 0", saveCount)
+	}
+}
+
+func TestListModel_SplashDontShowAgainPersistsDismissal(t *testing.T) {
+	var saved []usersettings.Settings
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.splashVisible = true
+	m.splashShown = true
+	m.splashFocus = 1
+	m.now = func() time.Time { return time.Date(2026, 5, 24, 12, 30, 0, 0, time.UTC) }
+	m.loadSettings = func() (usersettings.Settings, error) {
+		return usersettings.Settings{
+			Theme:      usersettings.ThemeDark,
+			Onboarding: usersettings.OnboardingSettings{Dismissed: "2026-05-23T00:00:00Z"},
+		}, nil
+	}
+	m.saveSettings = func(settings usersettings.Settings) error {
+		saved = append(saved, settings)
+		return nil
+	}
+
+	m, cmd := pressSpecialKey(m, tea.KeyEnter)
+
+	if cmd != nil {
+		t.Fatal("Don't show again should not produce a command")
+	}
+	if m.splashVisible {
+		t.Fatal("Don't show again should close the splash")
+	}
+	if len(saved) != 1 {
+		t.Fatalf("saved count = %d, want 1", len(saved))
+	}
+	if saved[0].Splash.Dismissed != "2026-05-24T12:30:00Z" {
+		t.Fatalf("Splash.Dismissed = %q, want 2026-05-24T12:30:00Z", saved[0].Splash.Dismissed)
+	}
+	if saved[0].Theme != usersettings.ThemeDark || saved[0].Onboarding.Dismissed != "2026-05-23T00:00:00Z" {
+		t.Fatalf("saved settings lost unrelated fields: %#v", saved[0])
+	}
+}
+
+func TestListModel_SplashSaveFailureClosesAndShowsInlineError(t *testing.T) {
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.termWidth = 100
+	m.termHeight = 30
+	m.splashVisible = true
+	m.splashShown = true
+	m.splashFocus = 1
+	m.now = func() time.Time { return time.Date(2026, 5, 24, 12, 30, 0, 0, time.UTC) }
+	m.loadSettings = func() (usersettings.Settings, error) {
+		return usersettings.Settings{}, nil
+	}
+	m.saveSettings = func(usersettings.Settings) error {
+		return errors.New("permission denied")
+	}
+
+	m, _ = pressSpecialKey(m, tea.KeyEnter)
+
+	if m.splashVisible {
+		t.Fatal("failed Don't show again save should still close splash")
+	}
+	view := sanitize(m.View())
+	if !strings.Contains(view, "could not save splash preference") || !strings.Contains(view, "permission denied") {
+		t.Fatalf("View() missing splash save failure:\n%s", view)
+	}
+}
+
+func TestListModel_SplashCtrlCQuitsWithoutSaving(t *testing.T) {
+	saveCount := 0
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.splashVisible = true
+	m.splashShown = true
+	m.splashFocus = 1
+	m.saveSettings = func(usersettings.Settings) error {
+		saveCount++
+		return nil
+	}
+
+	m, cmd := pressSpecialKey(m, tea.KeyCtrlC)
+
+	if !m.quitting {
+		t.Fatal("ctrl+c should mark list as quitting")
+	}
+	if cmd == nil {
+		t.Fatal("ctrl+c should return tea.Quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("ctrl+c command = %T, want tea.QuitMsg", cmd())
+	}
+	if saveCount != 0 {
+		t.Fatalf("ctrl+c saved settings %d times, want 0", saveCount)
+	}
+}
+
+func TestListView_OnboardingFailureOverlayRendersContentButtonsAndUnderlyingList(t *testing.T) {
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.cwd = "/repo/project"
+	m.termWidth = 120
+	m.termHeight = 32
+	WithOnboardingFailure("/tmp/onboarding-run", "validator failed: missing config")(m)
+
+	view := sanitize(m.View())
+
+	for _, want := range []string{
+		"Onboarding failed unexpectedly",
+		"validator failed: missing config",
+		"[ Debug now ]",
+		"[ Skip ]",
+		"Current Dir",
+		"implement",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("View() missing %q with onboarding failure visible:\n%s", want, view)
+		}
+	}
+	if m.onboardingFailureFocus != 0 {
+		t.Fatalf("initial onboarding failure focus = %d, want Debug now", m.onboardingFailureFocus)
+	}
+}
+
+func TestListModel_OnboardingFailureTogglesFocus(t *testing.T) {
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	WithOnboardingFailure("/tmp/onboarding-run", "failed")(m)
+
+	m, cmd := pressSpecialKey(m, tea.KeyTab)
+	if cmd != nil {
+		t.Fatal("tab should not produce a command while onboarding failure modal is visible")
+	}
+	if m.onboardingFailureFocus != 1 {
+		t.Fatalf("focus after tab = %d, want Skip", m.onboardingFailureFocus)
+	}
+	m, _ = pressSpecialKey(m, tea.KeyLeft)
+	if m.onboardingFailureFocus != 0 {
+		t.Fatalf("focus after left = %d, want Debug now", m.onboardingFailureFocus)
+	}
+	m, _ = pressSpecialKey(m, tea.KeyRight)
+	if m.onboardingFailureFocus != 1 {
+		t.Fatalf("focus after right = %d, want Skip", m.onboardingFailureFocus)
+	}
+	m, _ = pressSpecialKey(m, tea.KeyShiftTab)
+	if m.onboardingFailureFocus != 0 {
+		t.Fatalf("focus after shift+tab = %d, want Debug now", m.onboardingFailureFocus)
+	}
+}
+
+func TestListModel_OnboardingFailureDebugNowLaunchesDebugWithoutSaving(t *testing.T) {
+	saveCount := 0
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	WithOnboardingFailure("/tmp/onboarding-run", "failed")(m)
+	m.saveSettings = func(usersettings.Settings) error {
+		saveCount++
+		return nil
+	}
+
+	m, cmd := pressSpecialKey(m, tea.KeyEnter)
+
+	if m.onboardingFailureVisible {
+		t.Fatal("Debug now should close the onboarding failure modal")
+	}
+	if saveCount != 0 {
+		t.Fatalf("Debug now saved settings %d times, want 0", saveCount)
+	}
+	if cmd == nil {
+		t.Fatal("Debug now should produce a start-run command")
+	}
+	msg := cmd()
+	start, ok := msg.(discovery.StartRunMsg)
+	if !ok {
+		t.Fatalf("Debug now command = %T, want discovery.StartRunMsg", msg)
+	}
+	if start.Entry.CanonicalName != "core:debug" {
+		t.Fatalf("CanonicalName = %q, want core:debug", start.Entry.CanonicalName)
+	}
+	if got := start.Params["failed_session_dir"]; got != "/tmp/onboarding-run" {
+		t.Fatalf("failed_session_dir = %q, want /tmp/onboarding-run", got)
+	}
+}
+
+func TestListModel_OnboardingFailureSpaceActivatesFocusedSkip(t *testing.T) {
+	var saved []usersettings.Settings
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	WithOnboardingFailure("/tmp/onboarding-run", "failed")(m)
+	m.onboardingFailureFocus = 1
+	m.now = func() time.Time { return time.Date(2026, 5, 24, 12, 30, 0, 0, time.UTC) }
+	m.loadSettings = func() (usersettings.Settings, error) {
+		return usersettings.Settings{Theme: usersettings.ThemeDark}, nil
+	}
+	m.saveSettings = func(settings usersettings.Settings) error {
+		saved = append(saved, settings)
+		return nil
+	}
+
+	m, cmd := pressSpecialKey(m, tea.KeySpace)
+
+	if cmd != nil {
+		t.Fatal("Skip should not produce a command")
+	}
+	if m.onboardingFailureVisible {
+		t.Fatal("Skip should close the onboarding failure modal")
+	}
+	if len(saved) != 1 {
+		t.Fatalf("saved count = %d, want 1", len(saved))
+	}
+	if saved[0].Onboarding.Dismissed != "2026-05-24T12:30:00Z" {
+		t.Fatalf("Onboarding.Dismissed = %q, want 2026-05-24T12:30:00Z", saved[0].Onboarding.Dismissed)
+	}
+	if saved[0].Theme != usersettings.ThemeDark {
+		t.Fatalf("saved settings lost unrelated fields: %#v", saved[0])
+	}
+}
+
+func TestListModel_OnboardingFailureEscActsAsSkip(t *testing.T) {
+	saveCount := 0
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	WithOnboardingFailure("/tmp/onboarding-run", "failed")(m)
+	m.loadSettings = func() (usersettings.Settings, error) { return usersettings.Settings{}, nil }
+	m.saveSettings = func(usersettings.Settings) error {
+		saveCount++
+		return nil
+	}
+
+	m, cmd := pressSpecialKey(m, tea.KeyEsc)
+
+	if cmd != nil {
+		t.Fatal("Esc-as-Skip should not produce a command")
+	}
+	if m.onboardingFailureVisible {
+		t.Fatal("Esc should close the onboarding failure modal")
+	}
+	if saveCount != 1 {
+		t.Fatalf("Esc saved settings %d times, want 1", saveCount)
+	}
+}
+
+func TestListModel_OnboardingFailureSaveFailureClosesAndShowsInlineError(t *testing.T) {
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.termWidth = 100
+	m.termHeight = 30
+	WithOnboardingFailure("/tmp/onboarding-run", "failed")(m)
+	m.onboardingFailureFocus = 1
+	m.loadSettings = func() (usersettings.Settings, error) {
+		return usersettings.Settings{}, nil
+	}
+	m.saveSettings = func(usersettings.Settings) error {
+		return errors.New("permission denied")
+	}
+
+	m, _ = pressSpecialKey(m, tea.KeyEnter)
+
+	if m.onboardingFailureVisible {
+		t.Fatal("failed Skip save should still close onboarding failure modal")
+	}
+	view := sanitize(m.View())
+	if !strings.Contains(view, "could not save onboarding dismissal preference") || !strings.Contains(view, "permission denied") {
+		t.Fatalf("View() missing onboarding dismissal save failure:\n%s", view)
+	}
+}
+
+func TestListModel_OnboardingFailureCtrlCQuitsWithoutSaving(t *testing.T) {
+	saveCount := 0
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	WithOnboardingFailure("/tmp/onboarding-run", "failed")(m)
+	m.saveSettings = func(usersettings.Settings) error {
+		saveCount++
+		return nil
+	}
+
+	m, cmd := pressSpecialKey(m, tea.KeyCtrlC)
+
+	if !m.quitting {
+		t.Fatal("ctrl+c should mark list as quitting")
+	}
+	if cmd == nil {
+		t.Fatal("ctrl+c should return tea.Quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("ctrl+c command = %T, want tea.QuitMsg", cmd())
+	}
+	if saveCount != 0 {
+		t.Fatalf("ctrl+c saved settings %d times, want 0", saveCount)
+	}
+}
+
+func TestListModel_OnboardingFailureSwallowsListKeys(t *testing.T) {
+	m := newTestListModel([]runs.RunInfo{inactiveRun()})
+	m.cwd = "/repo/project"
+	m.newTab.workflows = []discovery.WorkflowEntry{
+		{CanonicalName: "onboarding:help", SourcePath: "builtin:onboarding/help.yaml", Namespace: "onboarding", Scope: discovery.ScopeBuiltin},
+	}
+	WithOnboardingFailure("/tmp/onboarding-run", "failed")(m)
+	m.loadSettings = func() (usersettings.Settings, error) {
+		t.Fatal("onboarding failure modal should not let s open settings")
+		return usersettings.Settings{}, nil
+	}
+
+	for _, key := range []string{"s", "?", "r", "q", "up", "down"} {
+		beforeTab := m.activeTab
+		beforeCursor := m.currentDirCursor
+		var cmd tea.Cmd
+		if key == "up" || key == "down" {
+			keyType := tea.KeyUp
+			if key == "down" {
+				keyType = tea.KeyDown
+			}
+			m, cmd = pressSpecialKey(m, keyType)
+		} else {
+			m, cmd = pressKey(m, key)
+		}
+		if cmd != nil {
+			t.Fatalf("%q produced a command while onboarding failure modal is visible", key)
+		}
+		if !m.onboardingFailureVisible {
+			t.Fatalf("%q closed the onboarding failure modal unexpectedly", key)
+		}
+		if m.activeTab != beforeTab || m.currentDirCursor != beforeCursor {
+			t.Fatalf("%q changed list state: tab %v->%v cursor %d->%d", key, beforeTab, m.activeTab, beforeCursor, m.currentDirCursor)
+		}
+		if m.settingsEditor != nil {
+			t.Fatalf("%q opened settings while onboarding failure modal is visible", key)
+		}
+		if m.quitting {
+			t.Fatalf("%q quit while onboarding failure modal is visible", key)
+		}
 	}
 }
 

@@ -3,10 +3,26 @@ package listview
 import (
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
 	"github.com/codagent/agent-runner/internal/runs"
 	"github.com/codagent/agent-runner/internal/tuistyle"
+)
+
+const splashInnerWidth = 52
+
+var (
+	splashBox = tuistyle.OverlayBox.Padding(1, 4)
+
+	splashTitleStyle = lipgloss.NewStyle().
+				Foreground(tuistyle.InactiveAmber).
+				Bold(true).
+				Align(lipgloss.Center).
+				Width(splashInnerWidth)
+	splashCenterLineStyle = lipgloss.NewStyle().
+				Align(lipgloss.Center).
+				Width(splashInnerWidth)
 )
 
 // workflowDisplay returns the best display name for a run's workflow.
@@ -22,10 +38,59 @@ func (m *Model) View() string {
 		return ""
 	}
 	view := m.viewBase()
+	if m.onboardingFailureVisible {
+		return tuistyle.RenderOverlay(view, m.renderOnboardingFailure(), m.termWidth, m.termHeight)
+	}
+	if m.splashVisible {
+		return tuistyle.RenderOverlay(view, m.renderSplash(), m.termWidth, m.termHeight)
+	}
 	if m.settingsEditor != nil {
 		return tuistyle.RenderOverlay(view, m.settingsEditor.View(), m.termWidth, m.termHeight)
 	}
 	return view
+}
+
+func (m *Model) renderOnboardingFailure() string {
+	const buttonGap = 6
+	debugNow := tuistyle.RenderButton("Debug now", m.onboardingFailureFocus == 0)
+	skip := tuistyle.RenderButton("Skip", m.onboardingFailureFocus == 1)
+	buttons := debugNow + strings.Repeat(" ", buttonGap) + skip
+
+	reason := sanitize(m.onboardingFailureReason)
+	if reason == "" {
+		reason = "workflow failed"
+	}
+	reasonLines := wrapCell(reason, splashInnerWidth)
+
+	lines := []string{
+		splashTitleStyle.Render("Onboarding failed unexpectedly"),
+		"",
+	}
+	lines = append(lines, reasonLines...)
+	lines = append(lines,
+		"",
+		splashCenterLineStyle.Render(buttons),
+	)
+	return splashBox.Render(strings.Join(lines, "\n"))
+}
+
+func (m *Model) renderSplash() string {
+	const splashButtonGap = 6
+	gotIt := tuistyle.RenderButton("Got it", m.splashFocus == 0)
+	dontShow := tuistyle.RenderButton("Don't show again", m.splashFocus == 1)
+	buttons := gotIt + strings.Repeat(" ", splashButtonGap) + dontShow
+	lines := []string{
+		splashTitleStyle.Render("Welcome to Agent Runner!"),
+		"",
+		"Select a workflow and press 'r' to get started.",
+		"",
+		"From this screen you can also:",
+		"  • Browse runs by directory, worktree, or project",
+		"  • Press ? for help, s for settings, q to quit",
+		"",
+		splashCenterLineStyle.Render(buttons),
+	}
+	return splashBox.Render(strings.Join(lines, "\n"))
 }
 
 func (m *Model) viewBase() string {
@@ -171,6 +236,9 @@ func (m *Model) renderBody() string {
 		return m.renderRunList(wt.Runs, m.worktreeTab.listCursor, &m.worktreeTab.listOffset)
 	case tabAll:
 		if m.allTab.subView == subViewPicker {
+			if len(m.allTab.dirs) == 0 {
+				return m.renderEmpty()
+			}
 			return m.renderAllPicker()
 		}
 		d := m.selectedAllDir()
@@ -202,8 +270,8 @@ func (m *Model) listMaxRows(hasHeader bool) int {
 
 func (m *Model) renderEmpty() string {
 	return "\n" +
-		dimStyle.Render("               No runs found for this directory.") + "\n\n" +
-		dimStyle.Render("               Press tab to view other scopes.")
+		dimStyle.Render("               Nothing to see here yet.") + "\n\n" +
+		dimStyle.Render("               From the new tab, select a workflow to get started.")
 }
 
 const (

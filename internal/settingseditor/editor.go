@@ -3,6 +3,8 @@ package settingseditor
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -40,8 +42,9 @@ type Model struct {
 	cursor  int
 	saveErr string
 
-	save func(usersettings.Settings) error
-	path func() (string, error)
+	save            func(usersettings.Settings) error
+	path            func() (string, error)
+	agentConfigPath func() (string, error)
 }
 
 type field struct {
@@ -103,6 +106,11 @@ func WithPath(path func() (string, error)) Option {
 	return func(m *Model) { m.path = path }
 }
 
+// WithAgentConfigPath overrides the profile config path shown in helper copy.
+func WithAgentConfigPath(path func() (string, error)) Option {
+	return func(m *Model) { m.agentConfigPath = path }
+}
+
 // New creates an editor seeded from persisted settings.
 //
 //nolint:gocritic // Settings is a small value object and callers already pass it by value throughout the TUI.
@@ -117,12 +125,13 @@ func New(settings usersettings.Settings, opts ...Option) *Model {
 	}
 	permissionMode := usersettings.EffectiveAutonomousPermissionMode(settings.AutonomousPermissionMode)
 	m := &Model{
-		settings:       settings,
-		theme:          theme,
-		backend:        backend,
-		permissionMode: permissionMode,
-		save:           usersettings.Save,
-		path:           usersettings.Path,
+		settings:        settings,
+		theme:           theme,
+		backend:         backend,
+		permissionMode:  permissionMode,
+		save:            usersettings.Save,
+		path:            usersettings.Path,
+		agentConfigPath: defaultAgentConfigPath,
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -244,6 +253,25 @@ func (m *Model) settingsPath() string {
 	return path
 }
 
+func (m *Model) agentSettingsPath() string {
+	if m.agentConfigPath == nil {
+		return "~/.agent-runner/config.yaml"
+	}
+	path, err := m.agentConfigPath()
+	if err != nil || path == "" {
+		return "~/.agent-runner/config.yaml"
+	}
+	return path
+}
+
+func defaultAgentConfigPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
+	return filepath.Join(home, ".agent-runner", "config.yaml"), nil
+}
+
 // contentWidth is the visible-column width of every row the editor renders
 // (cursor + label + gap + value, and the legend line). The bordered overlay
 // fits to this width plus its own padding and border.
@@ -260,6 +288,10 @@ func (m *Model) View() string {
 		for _, wrapped := range wrapLines(desc, contentWidth-2) {
 			lines = append(lines, "  "+wrapped)
 		}
+	}
+	lines = append(lines, "")
+	for _, wrapped := range wrapLines(m.agentSettingsCopy(), contentWidth) {
+		lines = append(lines, tuistyle.DimStyle.Render(wrapped))
 	}
 	lines = append(lines, "", tuistyle.HelpStyle.Render("↑↓ navigate · Tab/Space cycle · Enter save · Esc cancel"))
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
@@ -325,4 +357,11 @@ func (m *Model) currentOption(fieldIdx int) option {
 // value, or empty string if the cursor's value has none.
 func (m *Model) currentDescription() string {
 	return m.currentOption(m.cursor).description
+}
+
+func (m *Model) agentSettingsCopy() string {
+	return fmt.Sprintf(
+		"Looking for agent settings (planner / implementor CLI, model, etc.)? You can edit those in %s.",
+		m.agentSettingsPath(),
+	)
 }

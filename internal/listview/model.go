@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -47,6 +48,29 @@ func WithInitialTab(t InitialTab) func(*Model) {
 // WithVersion returns an option that sets the build version displayed in the header.
 func WithVersion(version string) func(*Model) {
 	return func(m *Model) { m.version = version }
+}
+
+// WithSplash shows the home-screen splash overlay for this listview session.
+func WithSplash(show bool) func(*Model) {
+	return func(m *Model) {
+		if show {
+			m.splashVisible = true
+			m.splashShown = true
+		}
+	}
+}
+
+// WithOnboardingFailure shows the onboarding-failure overlay for this listview session.
+func WithOnboardingFailure(sessionDir, reason string) func(*Model) {
+	return func(m *Model) {
+		if strings.TrimSpace(sessionDir) == "" {
+			return
+		}
+		m.onboardingFailureVisible = true
+		m.onboardingFailureSessionDir = sessionDir
+		m.onboardingFailureReason = strings.TrimSpace(reason)
+		m.splashVisible = false
+	}
 }
 
 // newTabState holds all state for the "new" tab (workflow browser + search).
@@ -101,6 +125,16 @@ type Model struct {
 	saveSettings func(usersettings.Settings) error
 	settingsPath func() (string, error)
 	applyTheme   func(usersettings.Theme)
+
+	splashVisible bool
+	splashShown   bool
+	splashFocus   int
+	now           func() time.Time
+
+	onboardingFailureVisible    bool
+	onboardingFailureSessionDir string
+	onboardingFailureReason     string
+	onboardingFailureFocus      int
 
 	quitting bool
 }
@@ -174,6 +208,7 @@ func New(opts ...func(*Model)) (*Model, error) {
 		projectDir:   projectDir,
 		projectsRoot: projectsRoot,
 		cwd:          cwd,
+		now:          time.Now,
 	}
 	m.newTab.workflows = workflows
 	m.newTab.groups = groups
@@ -413,6 +448,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		return m, tea.Quit
 	}
+	if m.onboardingFailureVisible {
+		return m.handleOnboardingFailureKey(msg)
+	}
+	if m.splashVisible {
+		return m.handleSplashKey(msg)
+	}
 	if m.settingsEditor != nil {
 		next, cmd := m.settingsEditor.Update(msg)
 		m.settingsEditor = next.(*settingseditor.Model)
@@ -423,6 +464,113 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleSearchKey(msg)
 	}
 	return m.handleListKey(msg)
+}
+
+func (m *Model) handleSplashKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "left", "right", "tab", "shift+tab":
+		m.splashFocus = 1 - m.splashFocus
+	case "enter", " ":
+		m.activateSplashButton()
+	case "esc":
+		m.dismissSplashForSession()
+	}
+	return m, nil
+}
+
+func (m *Model) handleOnboardingFailureKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "left", "right", "tab", "shift+tab":
+		m.onboardingFailureFocus = 1 - m.onboardingFailureFocus
+	case "enter", " ":
+		return m.activateOnboardingFailureButton()
+	case "esc":
+		m.skipOnboardingFailure()
+	}
+	return m, nil
+}
+
+func (m *Model) activateOnboardingFailureButton() (tea.Model, tea.Cmd) {
+	if m.onboardingFailureFocus == 1 {
+		m.skipOnboardingFailure()
+		return m, nil
+	}
+	return m.debugOnboardingFailure()
+}
+
+func (m *Model) debugOnboardingFailure() (tea.Model, tea.Cmd) {
+	sessionDir := m.onboardingFailureSessionDir
+	m.onboardingFailureVisible = false
+	return m, func() tea.Msg {
+		return discovery.StartRunMsg{
+			Entry: discovery.WorkflowEntry{
+				CanonicalName: "core:debug",
+				Scope:         discovery.ScopeBuiltin,
+				Namespace:     "core",
+				SourcePath:    "builtin:core/debug.yaml",
+			},
+			Params: map[string]string{"failed_session_dir": sessionDir},
+		}
+	}
+}
+
+func (m *Model) skipOnboardingFailure() {
+	settings, err := m.loadUserSettings()
+	if err != nil {
+		m.closeOnboardingFailureWithSaveError(err)
+		return
+	}
+	now := time.Now
+	if m.now != nil {
+		now = m.now
+	}
+	settings.Onboarding.Dismissed = now().UTC().Format(time.RFC3339)
+	if err := m.saveUserSettings(settings); err != nil {
+		m.closeOnboardingFailureWithSaveError(err)
+		return
+	}
+	m.onboardingFailureVisible = false
+}
+
+func (m *Model) closeOnboardingFailureWithSaveError(err error) {
+	m.onboardingFailureVisible = false
+	m.errMsg = fmt.Sprintf("could not save onboarding dismissal preference: %v", err)
+}
+
+func (m *Model) activateSplashButton() {
+	if m.splashFocus == 1 {
+		m.dismissSplashPermanently()
+		return
+	}
+	m.dismissSplashForSession()
+}
+
+func (m *Model) dismissSplashForSession() {
+	m.splashVisible = false
+	m.splashShown = true
+}
+
+func (m *Model) dismissSplashPermanently() {
+	settings, err := m.loadUserSettings()
+	if err != nil {
+		m.splashVisible = false
+		m.splashShown = true
+		m.errMsg = fmt.Sprintf("could not save splash preference: %v", err)
+		return
+	}
+	now := time.Now
+	if m.now != nil {
+		now = m.now
+	}
+	settings.Splash.Dismissed = now().UTC().Format(time.RFC3339)
+	if err := m.saveUserSettings(settings); err != nil {
+		m.splashVisible = false
+		m.splashShown = true
+		m.errMsg = fmt.Sprintf("could not save splash preference: %v", err)
+		return
+	}
+	m.splashVisible = false
+	m.splashShown = true
 }
 
 func (m *Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
