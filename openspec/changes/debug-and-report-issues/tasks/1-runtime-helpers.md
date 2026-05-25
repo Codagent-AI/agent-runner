@@ -86,7 +86,7 @@ The `agent-runner debug --show-workflow <ref>` command SHALL print the YAML for 
 
 ### Requirement: `debug --state <run-id>` prints state JSON
 
-The `agent-runner debug --state <run-id>` command SHALL print the contents of `<sessionDir>/state.json` for the given run id to stdout as JSON and exit 0 on success. The output SHALL be valid JSON parseable without additional transformation. The JSON SHALL include at minimum: `workflowFile` (string ref of the workflow that produced the run), `params` (object of input parameters), `status` (string status value), and the latest step pointer if one has been recorded.
+The `agent-runner debug --state <run-id>` command SHALL print the contents of `<sessionDir>/state.json` for the given run id to stdout as JSON and exit 0 on success. The output SHALL be valid JSON parseable without additional transformation. The JSON SHALL include at minimum the fields that `state.json` records for the run: `workflowFile` (string ref of the workflow that produced the run), `params` (object of input parameters), `currentStep` (latest step pointer the runner has recorded), and `completed` (boolean true when the run finished successfully). The command SHALL emit the on-disk JSON contents faithfully rather than rewriting or re-projecting fields.
 
 #### Scenario: Known run id returns state JSON
 - **WHEN** `agent-runner debug --state <run-id>` is invoked for a known run
@@ -94,7 +94,7 @@ The `agent-runner debug --state <run-id>` command SHALL print the contents of `<
 
 #### Scenario: Output includes required fields
 - **WHEN** the command succeeds for a started run
-- **THEN** the JSON output contains at least `workflowFile`, `params`, and `status` fields
+- **THEN** the JSON output contains at least `workflowFile`, `params`, and `currentStep` fields, and includes `completed` when the run has finished
 
 #### Scenario: Unknown run id
 - **WHEN** `agent-runner debug --state <run-id>` is invoked with a run id that does not exist
