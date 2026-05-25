@@ -35,6 +35,7 @@ import (
 	"github.com/codagent/agent-runner/internal/onboarding/splash"
 	"github.com/codagent/agent-runner/internal/paramform"
 	"github.com/codagent/agent-runner/internal/prevalidate"
+	"github.com/codagent/agent-runner/internal/resumehandoff"
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/runview"
@@ -305,6 +306,11 @@ func run() int {
 		return 0
 	}
 
+	args := flag.Args()
+	if handled, code := routeDebugCommand(args, os.Stdout, os.Stderr); handled {
+		return code
+	}
+
 	// Validate flag combinations.
 	if *validateFlag && *resumeFlag {
 		fmt.Fprintln(os.Stderr, "agent-runner: --validate and --resume are mutually exclusive")
@@ -322,8 +328,6 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "agent-runner: --inspect is mutually exclusive with --list and --resume")
 		return 1
 	}
-
-	args := flag.Args()
 
 	if *resetOnboardingFlag {
 		if err := resetOnboardingState(); err != nil {
@@ -632,8 +636,10 @@ func runLiveTUIWithOptions(h *runner.RunHandle, opts liveTUIOptions) int {
 }
 
 type liveTUIResult struct {
-	exitCode      int
-	exitRequested bool
+	exitCode       int
+	exitRequested  bool
+	inlineError    string
+	handoffHandled bool
 }
 
 func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResult {
@@ -689,14 +695,17 @@ func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResul
 	// code. If the user confirmed quit while the workflow was still running,
 	// resultCh has no value yet — keep the documented orphan-on-quit behavior
 	// and return 0 without blocking on the lingering goroutine.
-	if result, ok := terminalLiveTUIResult(rv, resultCh, h.ProjectDir, opts); ok {
+	if result, ok := terminalLiveTUIResult(rv, resultCh, h.ProjectDir, h.SessionDir, opts); ok {
 		return result
 	}
 
 	// The user pressed enter on a completed agent step. Wait for the runner
 	// goroutine so its run lock is released before handing the terminal to the
 	// agent CLI, then enter the spawn-and-reenter loop.
-	<-resultCh
+	runResult := <-resultCh
+	if handoff := handlePostWorkflowResumeHandoff(h.SessionDir, runResult); isPostHandoffResult(handoff) {
+		return handoff
+	}
 
 	for rv.ResumeSessionID() != "" {
 		spawnErr := spawnAgentResume(rv.ResumeAgentCLI(), rv.ResumeSessionID())
@@ -721,7 +730,7 @@ func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResul
 	return liveTUIResult{}
 }
 
-func terminalLiveTUIResult(rv *runview.Model, resultCh <-chan runner.WorkflowResult, projectDir string, opts liveTUIOptions) (liveTUIResult, bool) {
+func terminalLiveTUIResult(rv *runview.Model, resultCh <-chan runner.WorkflowResult, projectDir, sessionDir string, opts liveTUIOptions) (liveTUIResult, bool) {
 	if rv.ResumeSessionID() != "" {
 		return liveTUIResult{}, false
 	}
@@ -733,14 +742,17 @@ func terminalLiveTUIResult(rv *runview.Model, resultCh <-chan runner.WorkflowRes
 		return liveTUIResult{exitCode: execRunnerResume("", projectDir)}, true
 	}
 	if opts.quitOnDone {
-		return dispatcherLiveTUIResult(resultCh), true
+		return dispatcherLiveTUIResult(resultCh, sessionDir), true
 	}
-	return completedLiveTUIResult(resultCh), true
+	return completedLiveTUIResult(resultCh, sessionDir), true
 }
 
-func dispatcherLiveTUIResult(resultCh <-chan runner.WorkflowResult) liveTUIResult {
+func dispatcherLiveTUIResult(resultCh <-chan runner.WorkflowResult, sessionDir string) liveTUIResult {
 	select {
 	case runResult := <-resultCh:
+		if handoff := handlePostWorkflowResumeHandoff(sessionDir, runResult); isPostHandoffResult(handoff) {
+			return handoff
+		}
 		if runResult != runner.ResultSuccess {
 			return liveTUIResult{exitCode: 1}
 		}
@@ -751,15 +763,52 @@ func dispatcherLiveTUIResult(resultCh <-chan runner.WorkflowResult) liveTUIResul
 	return liveTUIResult{}
 }
 
-func completedLiveTUIResult(resultCh <-chan runner.WorkflowResult) liveTUIResult {
+func completedLiveTUIResult(resultCh <-chan runner.WorkflowResult, sessionDir string) liveTUIResult {
 	select {
 	case runResult := <-resultCh:
+		if handoff := handlePostWorkflowResumeHandoff(sessionDir, runResult); isPostHandoffResult(handoff) {
+			return handoff
+		}
 		if runResult != runner.ResultSuccess {
 			return liveTUIResult{exitCode: 1}
 		}
 	default:
 	}
 	return liveTUIResult{}
+}
+
+func handlePostWorkflowResumeHandoff(sessionDir string, result runner.WorkflowResult) liveTUIResult {
+	if result != runner.ResultSuccess {
+		return liveTUIResult{}
+	}
+	runID, ok, err := resumehandoff.Read(sessionDir)
+	if err != nil || !ok {
+		return liveTUIResult{}
+	}
+	if err := validateResumeTarget(runID); err != nil {
+		msg := fmt.Sprintf("resume target %q is invalid: %v", runID, err)
+		fmt.Fprintf(os.Stderr, "agent-runner: %s\n", msg)
+		return liveTUIResult{inlineError: msg}
+	}
+	return liveTUIResult{
+		exitCode:       execRunnerResume(runID, ""),
+		handoffHandled: true,
+	}
+}
+
+func isPostHandoffResult(result liveTUIResult) bool {
+	return result.handoffHandled || result.inlineError != ""
+}
+
+func validateResumeTarget(runID string) error {
+	statePath, err := resolveResumeStatePath(runID)
+	if err != nil {
+		return err
+	}
+	if _, err := stateio.ReadState(statePath); err != nil {
+		return err
+	}
+	return nil
 }
 
 // finalRunviewModel extracts the terminal runview Model returned by tea.Program.Run.
@@ -1338,7 +1387,7 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 	}
 
 	if os.Getenv("AGENT_RUNNER_NO_TUI") == "1" {
-		result, runErr := runner.RunWorkflow(&workflow, params, &runner.Options{
+		h, err := runner.PrepareRun(&workflow, params, &runner.Options{
 			WorkflowFile:  workflowFile,
 			From:          runOpts.from,
 			Engine:        eng,
@@ -1346,9 +1395,17 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 			GlobExpander:  &realGlobExpander{},
 			Log:           &realLogger{},
 		})
-		if runErr != nil {
-			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", runErr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 			return liveTUIResult{exitCode: 1}
+		}
+		result := runner.ExecuteFromHandle(h, &runner.Options{
+			ProcessRunner: &realProcessRunner{},
+			GlobExpander:  &realGlobExpander{},
+			Log:           &realLogger{},
+		})
+		if handoff := handlePostWorkflowResumeHandoff(h.SessionDir, result); isPostHandoffResult(handoff) {
+			return handoff
 		}
 		if result != runner.ResultSuccess {
 			return liveTUIResult{exitCode: 1}
@@ -1467,7 +1524,7 @@ var defaultFirstRunDeps = firstRunDeps{
 	runDemoLaunchFlow: runOnboardingDemoLaunchFlow,
 	runWorkflow: func(ref string) firstRunWorkflowResult {
 		result := handleRunWithResult([]string{ref}, liveTUIOptions{quitOnDone: true, startInAltScreen: true})
-		return firstRunWorkflowResult(result)
+		return firstRunWorkflowResult{exitCode: result.exitCode, exitRequested: result.exitRequested}
 	},
 }
 
@@ -1488,7 +1545,7 @@ func firstRunDepsWithOnboardingFrom(from string) firstRunDeps {
 			liveOpts: liveTUIOptions{quitOnDone: true, startInAltScreen: true},
 			from:     from,
 		})
-		return firstRunWorkflowResult(result)
+		return firstRunWorkflowResult{exitCode: result.exitCode, exitRequested: result.exitRequested}
 	}
 	return deps
 }
