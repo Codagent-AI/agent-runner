@@ -371,7 +371,7 @@ func TestValidatorWorkflowShape(t *testing.T) {
 	}
 	review := stepByID(t, &wf, "review-validator-status")
 	assertAgentStep(t, review, "", "tutor-session", model.ModeInteractive)
-	for _, want := range []string{"agent-validator:validator-status", "intentional bug", "validator_logs/*.json", "review_*.json", "reviewer reported violations", "fixed, skipped, or absent", "Do not infer that reviews passed merely because JSON or log files exist", "additional issues", "agent-validator:validator-help", "{{session_dir}}/bundled/onboarding/docs/"} {
+	for _, want := range []string{"agent-validator:validator-help", "intentional bug", "Do not rely on `agent-validate status` alone", "validator_logs/report.txt", "validator_logs/.execution_state", "validator_logs/console.*.log", "validator_logs/*.json", "review_*.json", "reviewer reported violations", "fixed, skipped, or absent", "Do not infer that reviews passed merely because JSON or log files exist", "additional issues", "Do not invoke validator-issue", "let the user review", "Do not complete the step", "until the user explicitly says they are ready", "{{session_dir}}/bundled/onboarding/docs/"} {
 		if !strings.Contains(review.Prompt, want) {
 			t.Fatalf("review-validator-status prompt missing %q:\n%s", want, review.Prompt)
 		}
