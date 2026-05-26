@@ -188,7 +188,7 @@ Agent step-level `mode`, `cli`, and `model` override the resolved profile for th
 
 Supported CLI adapters are `claude`, `codex`, `copilot`, `cursor`, and `opencode`.
 
-Interactive steps run inside a PTY. Agent Runner injects a continuation marker instruction; when the agent emits the marker, the workflow advances. If the CLI exits without the marker, the step is treated as aborted so you can resume the workflow later.
+Interactive steps run inside a PTY. The workflow advances when the user types `/next`, presses Ctrl-], or when the agent emits the continuation marker injected by Agent Runner. Workflow prompts may describe this as "complete the step" or "signal continuation": the agent should answer the user's question, then use its injected continuation-marker instruction to end the step. If the CLI exits without any continuation trigger, the step is treated as aborted so you can resume the workflow later.
 
 Autonomous steps run without user interaction. Depending on `~/.agent-runner/settings.yaml`, autonomous steps may run in headless mode or in an interactive backend with autonomy instructions. Capturing an autonomous agent step forces headless execution so stdout can be captured reliably.
 
@@ -453,7 +453,13 @@ Fresh sessions need an agent profile. Add `agent: planner`, `agent: implementor`
 
 ### Interactive step will not advance
 
-The workflow advances when the agent emits the injected continuation marker. If the CLI exits without the marker, the step is aborted and the workflow can be resumed.
+The workflow advances when any continuation trigger is detected:
+
+- The user types `/next` and presses Enter.
+- The user presses Ctrl-].
+- The agent emits the injected continuation marker after the user asks it to continue or the prompt tells it to complete the step.
+
+If the CLI exits without one of these triggers, the step is aborted and the workflow can be resumed.
 
 ### Resume a run
 

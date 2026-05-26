@@ -247,7 +247,7 @@ func TestConfiguredAgentCLIsJoinsExplicitConfigValues(t *testing.T) {
 	}
 }
 
-func TestValidatorInitArgsIgnoresConfiguredCLIs(t *testing.T) {
+func TestValidatorInitArgsIncludesConfiguredCLIs(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	repo := filepath.Join(root, "repo")
@@ -267,13 +267,16 @@ func TestValidatorInitArgsIgnoresConfiguredCLIs(t *testing.T) {
       implementor:
         default_mode: autonomous
         cli: codex
+      reviewer:
+        default_mode: autonomous
+        cli: copilot
 `)
 
 	got, err := validatorInitArgs(projectPath)
 	if err != nil {
 		t.Fatalf("validatorInitArgs() returned error: %v", err)
 	}
-	want := []string{"init", "--enable-builtin", "task-compliance"}
+	want := []string{"init", "--agents", "claude", "codex", "copilot", "--enable-builtin", "task-compliance"}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Fatalf("validatorInitArgs() mismatch (-want +got):\n%s", diff)
 	}

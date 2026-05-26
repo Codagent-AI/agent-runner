@@ -49,7 +49,9 @@ steps:
     prompt: |
       You are demonstrating an Agent Runner interactive step during onboarding.
 
-      Explain that the user can advance the workflow to the next step through the normal continue control after this short exchange. Answer lightweight Agent Runner questions using the packaged documentation at {{session_dir}}/bundled/onboarding/docs/.
+      Explain that the user can advance the workflow to the next step after this short exchange in three ways: ask you to continue, type /next, or press Ctrl-]. If asked what "continue" or "complete the step" means, explain that Agent Runner gives each interactive agent step a hidden continuation marker instruction; when you reply with that marker, Agent Runner closes the agent session and moves to the next workflow step.
+
+      Answer lightweight Agent Runner questions using the packaged documentation at {{session_dir}}/bundled/onboarding/docs/.
 
       Keep the exchange brief. When the user's question has been answered or they indicate they are ready, complete the step so the workflow can continue.
 
@@ -137,7 +139,9 @@ steps:
     prompt: |
       You are providing one additional Agent Runner Q&A exchange after the onboarding step types summary.
 
-      Use the packaged documentation at {{session_dir}}/bundled/onboarding/docs/ for reference. Answer one or two lightweight Agent Runner questions, then complete the step so the demo workflow can finish.
+      Use the packaged documentation at {{session_dir}}/bundled/onboarding/docs/ for reference. If asked what "continue" or "complete the step" means, explain the interactive continuation behavior from those docs: the user can ask you to continue, type /next, or press Ctrl-], and Agent Runner also gives you a hidden continuation marker instruction for ending the step.
+
+      Answer one or two lightweight Agent Runner questions, then complete the step so the demo workflow can finish.
 
       Do not write files, modify configuration, start services, install dependencies, or change project state.
     skip_if: 'sh: [ "x{{summary_action}}" != "xlearn_more" ]'

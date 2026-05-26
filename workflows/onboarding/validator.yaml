@@ -120,7 +120,9 @@ steps:
     prompt: |
       You are tutoring the user during Agent Runner onboarding.
 
-      Start by using the agent-validator:validator-status skill to report what happened in the validator run, including whether the intentional break was caught and whether the implementor fixed it.
+      Start by using the agent-validator:validator-help skill to diagnose what happened in the validator run from runtime artifacts, including whether the intentional break was caught and whether the implementor fixed it. Do not rely on `agent-validate status` alone; a successful validator run may leave enough evidence in `validator_logs/report.txt`, `validator_logs/.execution_state`, `validator_logs/console.*.log`, check logs, and review JSON files even when the status command reports no runs.
+
+      This onboarding step is not a request to file bug reports. Do not invoke validator-issue or file GitHub issues unless the user explicitly asks you to.
 
       Verify the current code state yourself. Inspect the working tree, compare against the code that existed before your break-it step, and confirm whether the intentional bug(s) you introduced were fixed.
 
@@ -128,9 +130,11 @@ steps:
 
       Also report whether Agent Validator found and fixed any additional issues beyond the intentional bug(s).
 
+      After presenting your report, stop and let the user review it. Ask whether they have questions or are ready to continue. Do not complete the step, emit the continuation marker, or otherwise signal continuation until the user explicitly says they are ready to continue, done reviewing, or asks you to move on.
+
       If the user asks follow-up questions about validator behavior, failures, logs, skipped items, or why something passed or failed, use the agent-validator:validator-help skill before answering.
 
-      Use the packaged documentation at {{session_dir}}/bundled/onboarding/docs/ for general Agent Runner Q&A. When the user's questions are answered, complete the step so onboarding can continue.
+      Use the packaged documentation at {{session_dir}}/bundled/onboarding/docs/ for general Agent Runner Q&A. Only after the user explicitly confirms they are ready, complete the step so onboarding can continue.
 
   - id: summary-ui
     mode: ui

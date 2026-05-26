@@ -458,6 +458,129 @@ func TestFindLatestIncompleteOnboardingRunStateRepairsEmptyCurrentStepFromAudit(
 	}
 }
 
+func TestFindLatestIncompleteOnboardingRunStateRewindsGuidedDirectoryConfirmationAfterCwdChange(t *testing.T) {
+	originalHome := userHomeDir
+	home := t.TempDir()
+	userHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHomeDir = originalHome })
+	t.Setenv("HOME", home)
+
+	startCwd := filepath.Join(t.TempDir(), "start")
+	resumeCwd := filepath.Join(t.TempDir(), "resume")
+	for _, dir := range []string{startCwd, resumeCwd} {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	t.Chdir(resumeCwd)
+
+	ref := "builtin:onboarding/onboarding.yaml"
+	runsDir := filepath.Join(home, ".agent-runner", "onboarding", "runs")
+	sessionDir := filepath.Join(runsDir, "onboarding-onboarding-2026-05-10T11-00-00Z")
+	if err := stateio.WriteState(&model.RunState{
+		WorkflowFile: ref,
+		WorkflowName: "onboarding-onboarding",
+		WorkflowHash: "test-hash",
+		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+			StepID: "guided-workflow",
+			Child: &model.NestedStepState{
+				StepID:    "confirm-cwd",
+				Completed: false,
+				CapturedVariables: map[string]model.CapturedValue{
+					"cwd":            model.NewCapturedString(startCwd),
+					"project_status": model.NewCapturedString("ok"),
+				},
+			},
+		}},
+	}, sessionDir); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	got, ok, err := findLatestIncompleteOnboardingRunState(ref)
+	if err != nil {
+		t.Fatalf("findLatestIncompleteOnboardingRunState: %v", err)
+	}
+	if !ok {
+		t.Fatal("findLatestIncompleteOnboardingRunState ok = false, want repaired candidate")
+	}
+	if got != filepath.Join(sessionDir, "state.json") {
+		t.Fatalf("state path = %q, want %q", got, filepath.Join(sessionDir, "state.json"))
+	}
+
+	state, err := stateio.ReadState(got)
+	if err != nil {
+		t.Fatalf("read repaired state: %v", err)
+	}
+	child := state.CurrentStep.Nested.Child
+	if child == nil || child.StepID != "capture-cwd" {
+		t.Fatalf("guided child = %#v, want capture-cwd", child)
+	}
+	if child.Completed {
+		t.Fatal("capture-cwd should be incomplete so resume reruns pwd in the new directory")
+	}
+	if _, ok := child.CapturedVariables["cwd"]; ok {
+		t.Fatalf("child captured cwd = %#v, want cleared before rerun", child.CapturedVariables["cwd"])
+	}
+}
+
+func TestFindLatestIncompleteOnboardingRunStateReturnsRepairWriteError(t *testing.T) {
+	originalHome := userHomeDir
+	home := t.TempDir()
+	userHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHomeDir = originalHome })
+	t.Setenv("HOME", home)
+
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repo, 0o750); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	t.Chdir(repo)
+
+	ref := "builtin:onboarding/onboarding.yaml"
+	runsDir := filepath.Join(home, ".agent-runner", "onboarding", "runs")
+	sessionDir := filepath.Join(runsDir, "onboarding-onboarding-2026-05-10T11-00-00Z")
+	if err := stateio.WriteState(&model.RunState{
+		WorkflowFile: ref,
+		WorkflowName: "onboarding-onboarding",
+		WorkflowHash: "test-hash",
+	}, sessionDir); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	if err := os.Chmod(sessionDir, 0o500); err != nil {
+		t.Fatalf("chmod session dir read-only: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(sessionDir, 0o700)
+	})
+
+	_, ok, err := findLatestIncompleteOnboardingRunState(ref)
+	if err == nil {
+		t.Fatal("findLatestIncompleteOnboardingRunState error = nil, want repair write error")
+	}
+	if ok {
+		t.Fatal("findLatestIncompleteOnboardingRunState ok = true, want false on repair write error")
+	}
+	if !strings.Contains(err.Error(), "persist repaired onboarding state") {
+		t.Fatalf("error = %v, want persist repaired onboarding state", err)
+	}
+}
+
+func TestSameCleanPathTreatsSymlinkAliasAsSameDirectory(t *testing.T) {
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	if err := os.Mkdir(realDir, 0o750); err != nil {
+		t.Fatalf("mkdir real dir: %v", err)
+	}
+	linkDir := filepath.Join(root, "link")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	if !sameCleanPath(linkDir, realDir) {
+		t.Fatalf("sameCleanPath(%q, %q) = false, want true", linkDir, realDir)
+	}
+}
+
 func TestFindLatestIncompleteOnboardingRunStateMissingRunsDir(t *testing.T) {
 	originalHome := userHomeDir
 	home := t.TempDir()

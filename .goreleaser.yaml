@@ -31,6 +31,23 @@ homebrew_casks:
       - formula: agent-validator
       - formula: agent-plugin
     hooks:
+      pre:
+        install: |
+          brew = ENV.fetch("HOMEBREW_BREW_FILE", "brew")
+          ["agent-plugin", "agent-validator"].each do |formula|
+            installed = system_command brew,
+                                       args: ["list", "--formula", formula],
+                                       must_succeed: false
+            next unless installed.success?
+
+            upgrade = system_command brew, args: ["upgrade", "--formula", formula], must_succeed: false
+            next if upgrade.success?
+
+            message = "Warning: failed to upgrade #{formula} before installing agent-runner"
+            message += " (exit status #{upgrade.exit_status})" if upgrade.exit_status
+            $stderr.puts message
+            $stderr.puts upgrade.merged_output unless upgrade.merged_output.empty?
+          end
       post:
         install: |
           if OS.mac?
