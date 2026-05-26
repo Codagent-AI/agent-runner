@@ -523,6 +523,48 @@ func TestFindLatestIncompleteOnboardingRunStateRewindsGuidedDirectoryConfirmatio
 	}
 }
 
+func TestFindLatestIncompleteOnboardingRunStateReturnsRepairWriteError(t *testing.T) {
+	originalHome := userHomeDir
+	home := t.TempDir()
+	userHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHomeDir = originalHome })
+	t.Setenv("HOME", home)
+
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repo, 0o750); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	t.Chdir(repo)
+
+	ref := "builtin:onboarding/onboarding.yaml"
+	runsDir := filepath.Join(home, ".agent-runner", "onboarding", "runs")
+	sessionDir := filepath.Join(runsDir, "onboarding-onboarding-2026-05-10T11-00-00Z")
+	if err := stateio.WriteState(&model.RunState{
+		WorkflowFile: ref,
+		WorkflowName: "onboarding-onboarding",
+		WorkflowHash: "test-hash",
+	}, sessionDir); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	if err := os.Chmod(sessionDir, 0o500); err != nil {
+		t.Fatalf("chmod session dir read-only: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(sessionDir, 0o700)
+	})
+
+	_, ok, err := findLatestIncompleteOnboardingRunState(ref)
+	if err == nil {
+		t.Fatal("findLatestIncompleteOnboardingRunState error = nil, want repair write error")
+	}
+	if ok {
+		t.Fatal("findLatestIncompleteOnboardingRunState ok = true, want false on repair write error")
+	}
+	if !strings.Contains(err.Error(), "persist repaired onboarding state") {
+		t.Fatalf("error = %v, want persist repaired onboarding state", err)
+	}
+}
+
 func TestSameCleanPathTreatsSymlinkAliasAsSameDirectory(t *testing.T) {
 	root := t.TempDir()
 	realDir := filepath.Join(root, "real")

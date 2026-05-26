@@ -1953,7 +1953,9 @@ func findLatestIncompleteOnboardingRunState(ref string) (statePath string, ok bo
 			stateChanged = true
 		}
 		if stateChanged {
-			_ = stateio.WriteState(&state, filepath.Dir(statePath))
+			if err := stateio.WriteState(&state, filepath.Dir(statePath)); err != nil {
+				return "", false, fmt.Errorf("persist repaired onboarding state %s: %w", statePath, err)
+			}
 		}
 		candidates = append(candidates, candidate{
 			statePath: statePath,

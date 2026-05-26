@@ -4,7 +4,7 @@
 
 ### Patch Changes
 
-- [#42](https://github.com/Codagent-AI/agent-runner/pull/42) Refresh guided onboarding directory checks when users restart from a different project directory, handle symlink aliases safely, and ensure the Homebrew cask upgrades dependent formulas before installing.
+- [#42](https://github.com/Codagent-AI/agent-runner/pull/42) Refresh guided onboarding directory checks when users restart from a different project directory, ground the tutor prompt in the immediate implement step, handle symlink aliases safely, and ensure the Homebrew cask upgrades dependent formulas before installing.
 
 ## 0.1.2
 
