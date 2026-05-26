@@ -40,7 +40,13 @@ homebrew_casks:
                                        must_succeed: false
             next unless installed.success?
 
-            system_command brew, args: ["upgrade", "--formula", formula], must_succeed: false
+            upgrade = system_command brew, args: ["upgrade", "--formula", formula], must_succeed: false
+            next if upgrade.success?
+
+            message = "Warning: failed to upgrade #{formula} before installing agent-runner"
+            message += " (exit status #{upgrade.exit_status})" if upgrade.exit_status
+            $stderr.puts message
+            $stderr.puts upgrade.merged_output unless upgrade.merged_output.empty?
           end
       post:
         install: |
