@@ -31,6 +31,10 @@ homebrew_casks:
       - formula: agent-validator
       - formula: agent-plugin
     hooks:
+      pre:
+        install: |
+          system_command ENV.fetch("HOMEBREW_BREW_FILE", "brew"),
+                         args: ["upgrade", "--formula", "agent-plugin", "agent-validator"]
       post:
         install: |
           if OS.mac?

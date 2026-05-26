@@ -1937,6 +1937,7 @@ func findLatestIncompleteOnboardingRunState(ref string) (statePath string, ok bo
 		if state.WorkflowFile != ref || state.Completed {
 			continue
 		}
+		stateChanged := false
 		if runStateCurrentStepID(&state) == "" {
 			inferred := inferOnboardingResumeStepFromAudit(filepath.Dir(statePath))
 			if inferred == "" {
@@ -1946,6 +1947,12 @@ func findLatestIncompleteOnboardingRunState(ref string) (statePath string, ok bo
 				continue
 			}
 			state.CurrentStep = model.CurrentStep{Nested: &model.NestedStepState{StepID: inferred}}
+			stateChanged = true
+		}
+		if rewindOnboardingGuidedDirectoryGate(&state) {
+			stateChanged = true
+		}
+		if stateChanged {
 			_ = stateio.WriteState(&state, filepath.Dir(statePath))
 		}
 		candidates = append(candidates, candidate{
@@ -1964,6 +1971,65 @@ func findLatestIncompleteOnboardingRunState(ref string) (statePath string, ok bo
 		return candidates[i].modUnix > candidates[j].modUnix
 	})
 	return candidates[0].statePath, true, nil
+}
+
+func rewindOnboardingGuidedDirectoryGate(state *model.RunState) bool {
+	if state == nil || state.CurrentStep.Nested == nil {
+		return false
+	}
+	root := state.CurrentStep.Nested
+	if root.StepID != "guided-workflow" || root.Child == nil {
+		return false
+	}
+	if !isOnboardingGuidedDirectoryGateStep(root.Child.StepID) {
+		return false
+	}
+	capturedCWD, ok := root.Child.CapturedVariables["cwd"].StringValue()
+	if !ok || strings.TrimSpace(capturedCWD) == "" {
+		return false
+	}
+	cwd, err := os.Getwd()
+	if err != nil || sameCleanPath(capturedCWD, cwd) {
+		return false
+	}
+
+	root.Child = &model.NestedStepState{
+		StepID:            "capture-cwd",
+		SessionIDs:        maps.Clone(root.Child.SessionIDs),
+		SessionProfiles:   maps.Clone(root.Child.SessionProfiles),
+		CapturedVariables: map[string]model.CapturedValue{},
+		LastSessionStepID: root.Child.LastSessionStepID,
+	}
+	return true
+}
+
+func isOnboardingGuidedDirectoryGateStep(stepID string) bool {
+	switch stepID {
+	case "capture-cwd",
+		"check-existing-project",
+		"existing-project-required",
+		"require-existing-project",
+		"confirm-cwd":
+		return true
+	default:
+		return false
+	}
+}
+
+func sameCleanPath(a, b string) bool {
+	if abs, err := filepath.Abs(a); err == nil {
+		a = abs
+	}
+	if abs, err := filepath.Abs(b); err == nil {
+		b = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(a); err == nil {
+		a = resolved
+	}
+	if resolved, err := filepath.EvalSymlinks(b); err == nil {
+		b = resolved
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
 }
 
 func inferOnboardingResumeStepFromAudit(sessionDir string) string {
