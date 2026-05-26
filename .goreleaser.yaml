@@ -33,8 +33,15 @@ homebrew_casks:
     hooks:
       pre:
         install: |
-          system_command ENV.fetch("HOMEBREW_BREW_FILE", "brew"),
-                         args: ["upgrade", "--formula", "agent-plugin", "agent-validator"]
+          brew = ENV.fetch("HOMEBREW_BREW_FILE", "brew")
+          ["agent-plugin", "agent-validator"].each do |formula|
+            installed = system_command brew,
+                                       args: ["list", "--formula", formula],
+                                       must_succeed: false
+            next unless installed.success?
+
+            system_command brew, args: ["upgrade", "--formula", formula], must_succeed: false
+          end
       post:
         install: |
           if OS.mac?
