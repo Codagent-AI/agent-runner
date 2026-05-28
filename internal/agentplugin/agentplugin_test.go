@@ -58,6 +58,15 @@ func TestResolve_ReturnsBinaryMissingWhenNotOnPATH(t *testing.T) {
 	if !errors.Is(err, ErrBinaryMissing) {
 		t.Fatalf("Resolve() error = %v, want ErrBinaryMissing", err)
 	}
+	for _, want := range []string{
+		"brew install agent-plugin",
+		"npm install -g @codagent-ai/agent-plugin",
+		"agent-plugin binary was not found on PATH",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Resolve() error = %q, want install hint containing %q", err.Error(), want)
+		}
+	}
 }
 
 func TestResolve_NilRequestReturnsError(t *testing.T) {

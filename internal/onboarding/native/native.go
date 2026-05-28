@@ -857,6 +857,9 @@ func (m *Model) renderOptions(width, textWidth int) string {
 	if m.stage == stageDemoPrompt {
 		return m.renderButtonRow(width)
 	}
+	if m.isModelSelectionStage() {
+		return m.renderWindowedOptions(textWidth)
+	}
 
 	var b strings.Builder
 	for i, option := range m.options {
@@ -874,6 +877,58 @@ func (m *Model) renderOptions(width, textWidth int) string {
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m *Model) renderWindowedOptions(textWidth int) string {
+	start, end := optionWindow(m.focus, len(m.options), m.maxVisibleOptions())
+
+	var b strings.Builder
+	for i := start; i < end; i++ {
+		label := m.optionLabel(m.options[i])
+		prefix := "  "
+		style := setupOptionStyle
+		if i == m.focus {
+			prefix = tuistyle.FocusedSelectorPrefix + " "
+			style = setupFocusedOptionStyle
+		}
+		line := runewidth.Truncate(prefix+label, textWidth, "...")
+		b.WriteString(style.Render(line))
+		b.WriteByte('\n')
+	}
+	if start > 0 || end < len(m.options) {
+		b.WriteString(tuistyle.DimStyle.Render(fmt.Sprintf("Showing %d-%d of %d. Use up/down to choose.", start+1, end, len(m.options))))
+		b.WriteByte('\n')
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m *Model) isModelSelectionStage() bool {
+	return m.stage == stageInteractiveModel || m.stage == stageHeadlessModel
+}
+
+func (m *Model) maxVisibleOptions() int {
+	height := m.height
+	if height <= 0 {
+		height = 24
+	}
+	return max(4, min(12, height-13))
+}
+
+func optionWindow(focus, total, maxVisible int) (start, end int) {
+	if total <= 0 {
+		return 0, 0
+	}
+	if maxVisible <= 0 || total <= maxVisible {
+		return 0, total
+	}
+	start = focus - maxVisible/2
+	if start < 0 {
+		start = 0
+	}
+	if start+maxVisible > total {
+		start = total - maxVisible
+	}
+	return start, start + maxVisible
 }
 
 func (m *Model) renderButtonRow(width int) string {

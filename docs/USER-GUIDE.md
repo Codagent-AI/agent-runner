@@ -8,13 +8,28 @@ Agent Runner runs YAML workflows that coordinate agent CLIs, shell commands, scr
 
 - At least one supported agent CLI installed and authenticated: `claude`, `codex`, `copilot`, `cursor`, or `opencode`
 - Optional: `openspec`, if using the `openspec:*` built-in workflows
-- Optional: `agent-validator`, if using the built-in validation workflows
+- Optional: `agent-validator`, if using the built-in validation workflows and not installing Agent Runner through Homebrew
 
 ### Install
+
+Homebrew is the preferred install path on macOS and Linux:
 
 ```bash
 brew tap Codagent-AI/tap
 brew install --cask agent-runner
+```
+
+The Homebrew cask installs Agent Runner and its helper CLIs, including
+`agent-plugin` and `agent-validator`.
+
+On Linux without Homebrew, download the latest release tarball for your
+architecture and install the helper CLIs separately:
+
+```bash
+curl -LO https://github.com/Codagent-AI/agent-runner/releases/latest/download/agent-runner_linux_amd64.tar.gz
+tar xzf agent-runner_linux_amd64.tar.gz
+sudo mv agent-runner /usr/local/bin/
+npm install -g agent-validator @codagent-ai/agent-plugin
 ```
 
 For local development and source builds, see [development.md](development.md).

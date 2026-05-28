@@ -9,7 +9,7 @@ import (
 
 const Source = "Codagent-AI/agent-skills"
 
-var ErrBinaryMissing = errors.New("agent-plugin binary not found on PATH")
+var ErrBinaryMissing = errors.New("agent-plugin binary was not found on PATH")
 
 var lookPath = exec.LookPath
 
@@ -51,7 +51,7 @@ func Resolve(req *Request) (*Plan, error) {
 	}
 	binary, err := lookPath("agent-plugin")
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrBinaryMissing, err)
+		return nil, fmt.Errorf("%w: %v\nInstall agent-plugin with Homebrew:\n  brew tap Codagent-AI/tap\n  brew install agent-plugin\nOr with npm:\n  npm install -g @codagent-ai/agent-plugin", ErrBinaryMissing, err)
 	}
 	return &Plan{
 		Binary:  binary,
