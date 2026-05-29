@@ -6,6 +6,8 @@ It lets you define multi-step workflows - plan, implement, validate, fix, review
 
 The key difference: the workflow lives outside the agent's context window. The agent still reasons, writes code, and fixes problems. Agent Runner owns the sequencing, retries, state, validation loops, and resumption, so "run the validator and fix failures until it passes" becomes a workflow, not a prompt the model might forget.
 
+https://github.com/user-attachments/assets/e40c22f5-87dc-4158-9cc0-6bf9f6ede0ba
+
 ## Quick start
 
 **macOS and Linux (Homebrew)**
