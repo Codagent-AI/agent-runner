@@ -10,13 +10,36 @@ https://github.com/user-attachments/assets/e40c22f5-87dc-4158-9cc0-6bf9f6ede0ba
 
 ## Quick start
 
+**macOS and Linux (Homebrew)**
+
 ```bash
 brew tap Codagent-AI/tap
 brew install --cask agent-runner
 agent-runner
 ```
 
-That's all you need to do. First launch opens the guided setup and tutorial.
+First launch opens the guided setup and tutorial. The Homebrew install also
+installs Agent Runner's helper CLIs, including `agent-plugin` and
+`agent-validator`.
+
+**Linux tarball fallback**
+
+If you are not using Homebrew, download the latest Linux tarball for your
+architecture from [releases](https://github.com/Codagent-AI/agent-runner/releases):
+
+```bash
+# amd64
+curl -LO https://github.com/Codagent-AI/agent-runner/releases/latest/download/agent-runner_linux_amd64.tar.gz
+tar xzf agent-runner_linux_amd64.tar.gz
+sudo mv agent-runner /usr/local/bin/
+```
+
+Tarball installs do not install helper CLIs. Install them separately before
+onboarding:
+
+```bash
+npm install -g agent-validator @codagent-ai/agent-plugin
+```
 
 ## Why
 

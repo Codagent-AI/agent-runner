@@ -3,6 +3,7 @@ package native
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -652,6 +653,53 @@ func TestSubprocessModelsTimeoutReturnsError(t *testing.T) {
 	}
 }
 
+func TestModelSelectionLongListIsWindowedToTerminalHeight(t *testing.T) {
+	models := numberedModels(30)
+	m := NewModel(&Deps{
+		Detector: AdapterDetectorFunc(func() ([]string, error) { return []string{"codex"}, nil }),
+		Models:   ModelDiscovererFunc(func(string) ([]string, error) { return models, nil }),
+	})
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 18})
+
+	sendKey(t, m, "enter")
+
+	panel := tuistyle.Sanitize(m.renderPanel())
+	if !strings.Contains(panel, "Choose the planner model.") {
+		t.Fatalf("model picker should keep the prompt visible:\n%s", panel)
+	}
+	if !strings.Contains(panel, "▶ openrouter/example/model-01") {
+		t.Fatalf("model picker should show the selected model:\n%s", panel)
+	}
+	if strings.Contains(panel, "openrouter/example/model-20") {
+		t.Fatalf("model picker should not render the full long model list:\n%s", panel)
+	}
+	if !strings.Contains(panel, "Showing 1-") || !strings.Contains(panel, "of 30") {
+		t.Fatalf("model picker should summarize the visible window:\n%s", panel)
+	}
+}
+
+func TestModelSelectionWindowFollowsFocusedModel(t *testing.T) {
+	models := numberedModels(30)
+	m := NewModel(&Deps{
+		Detector: AdapterDetectorFunc(func() ([]string, error) { return []string{"codex"}, nil }),
+		Models:   ModelDiscovererFunc(func(string) ([]string, error) { return models, nil }),
+	})
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 18})
+
+	sendKey(t, m, "enter")
+	for range 14 {
+		sendKey(t, m, "down")
+	}
+
+	panel := tuistyle.Sanitize(m.renderPanel())
+	if !strings.Contains(panel, "▶ openrouter/example/model-15") {
+		t.Fatalf("model picker should keep the focused model visible:\n%s", panel)
+	}
+	if strings.Contains(panel, "openrouter/example/model-01") {
+		t.Fatalf("model picker should scroll away from early models when focus moves down:\n%s", panel)
+	}
+}
+
 func TestViewCentersContentInLargeTerminal(t *testing.T) {
 	m := NewModel(&Deps{
 		Detector: AdapterDetectorFunc(func() ([]string, error) { return []string{"claude"}, nil }),
@@ -982,6 +1030,14 @@ func leadingColumns(line, needle string) int {
 		return -1
 	}
 	return runewidth.StringWidth(line[:idx])
+}
+
+func numberedModels(n int) []string {
+	models := make([]string, 0, n)
+	for i := 1; i <= n; i++ {
+		models = append(models, fmt.Sprintf("openrouter/example/model-%02d", i))
+	}
+	return models
 }
 
 func sendKeys(t *testing.T, m *Model, keys ...string) {
