@@ -27,6 +27,10 @@ agent-runner
 
 With no arguments, Agent Runner opens the TUI. From there you can browse workflow definitions, start a run, inspect previous runs, or resume an interrupted run.
 
+![Agent Runner TUI home screen listing built-in workflows](images/home.png)
+
+_The TUI opens on the workflow browser, where you can filter workflows, view current-directory or all runs, and start a selected workflow._
+
 Common commands:
 
 ```bash
@@ -61,6 +65,10 @@ agent-runner spec-driven:simple-change
 ```
 
 Built-in namespaces currently include `core`, `openspec`, `spec-driven`, and `onboarding`.
+
+In the TUI, open a workflow to inspect its step tree before starting a run. Nested workflow and loop steps are shown in the left pane, while the right pane shows the selected step's details.
+
+![Agent Runner workflow detail view for spec-driven:change](images/workflow-plan.png)
 
 ## Basic Workflow
 
@@ -391,6 +399,8 @@ Common built-ins:
 
 Use the TUI or `agent-runner -list` to browse the full embedded set.
 
+The built-in `spec-driven:change` and `openspec:change` workflows are full development flows: they plan the change, implement task files, validate the result, and can continue through PR finalization. Their shorter `simple-change` variants keep planning and implementation inline for smaller changes.
+
 ## Engines
 
 Engines are Go plugins registered in the binary. The engine interface supports workflow validation, deferred validation, prompt enrichment, and post-step validation.
@@ -432,6 +442,10 @@ Important files:
 | `bundled/` | Materialized bundled scripts/assets for built-in workflow runs. |
 
 Audit events include `run_start`, `run_end`, `step_start`, `step_end`, `iteration_start`, `iteration_end`, `sub_workflow_start`, `sub_workflow_end`, and `error`.
+
+The run detail view uses the same step tree to show progress, completed steps, pending steps, and the currently selected step. If an agent session can be resumed, the detail pane shows the CLI, model, session name, session ID, prompt, and duration.
+
+![Agent Runner run detail view with an inactive resumable OpenSpec workflow](images/workflow-implement.png)
 
 ## Troubleshooting
 
