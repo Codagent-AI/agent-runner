@@ -48,6 +48,7 @@ func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 
 	if context.IsHeadless() {
 		args = append(args, "exec")
+		args = append(args, "--skip-git-repo-check")
 		if resuming {
 			args = append(args, "resume", "--json")
 		} else {

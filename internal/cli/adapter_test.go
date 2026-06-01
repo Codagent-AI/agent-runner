@@ -359,7 +359,7 @@ func TestCodexAdapter(t *testing.T) {
 			Prompt:  "do something",
 			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"codex", "--sandbox", "workspace-write", "exec", "--json", "do something"}
+		expected := []string{"codex", "--sandbox", "workspace-write", "exec", "--skip-git-repo-check", "--json", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -369,7 +369,7 @@ func TestCodexAdapter(t *testing.T) {
 			Context:        ContextAutonomousHeadless,
 			PermissionMode: "yolo",
 		})
-		expected := []string{"codex", "--sandbox", "danger-full-access", "exec", "--json", "do something"}
+		expected := []string{"codex", "--sandbox", "danger-full-access", "exec", "--skip-git-repo-check", "--json", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -412,7 +412,7 @@ func TestCodexAdapter(t *testing.T) {
 			SessionID: "thread-abc",
 			Context:   ContextAutonomousHeadless,
 		})
-		expected := []string{"codex", "--sandbox", "workspace-write", "exec", "resume", "--json", "thread-abc", "continue"}
+		expected := []string{"codex", "--sandbox", "workspace-write", "exec", "--skip-git-repo-check", "resume", "--json", "thread-abc", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -442,7 +442,7 @@ func TestCodexAdapter(t *testing.T) {
 			Model:   "o3",
 			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"codex", "--sandbox", "workspace-write", "exec", "--json", "-m", "o3", "do something"}
+		expected := []string{"codex", "--sandbox", "workspace-write", "exec", "--skip-git-repo-check", "--json", "-m", "o3", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -465,7 +465,7 @@ func TestCodexAdapter(t *testing.T) {
 			Model:     "o3",
 			Context:   ContextAutonomousHeadless,
 		})
-		expected := []string{"codex", "--sandbox", "workspace-write", "exec", "resume", "--json", "-m", "o3", "thread-abc", "continue"}
+		expected := []string{"codex", "--sandbox", "workspace-write", "exec", "--skip-git-repo-check", "resume", "--json", "-m", "o3", "thread-abc", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -487,7 +487,7 @@ func TestCodexAdapter(t *testing.T) {
 			Effort:    "low",
 			Context:   ContextAutonomousHeadless,
 		})
-		expected := []string{"codex", "--sandbox", "workspace-write", "exec", "resume", "--json", "-c", `model_reasoning_effort="low"`, "thread-abc", "continue"}
+		expected := []string{"codex", "--sandbox", "workspace-write", "exec", "--skip-git-repo-check", "resume", "--json", "-c", `model_reasoning_effort="low"`, "thread-abc", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -497,7 +497,7 @@ func TestCodexAdapter(t *testing.T) {
 			Effort:  "medium",
 			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"codex", "--sandbox", "workspace-write", "exec", "--json", "-c", `model_reasoning_effort="medium"`, "do something"}
+		expected := []string{"codex", "--sandbox", "workspace-write", "exec", "--skip-git-repo-check", "--json", "-c", `model_reasoning_effort="medium"`, "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -545,7 +545,7 @@ func TestCodexAdapter(t *testing.T) {
 			SystemPrompt: "should be ignored",
 			Context:      ContextAutonomousHeadless,
 		})
-		expected := []string{"codex", "--sandbox", "workspace-write", "exec", "--json", "do something"}
+		expected := []string{"codex", "--sandbox", "workspace-write", "exec", "--skip-git-repo-check", "--json", "do something"}
 		assertArgs(t, expected, args)
 	})
 
