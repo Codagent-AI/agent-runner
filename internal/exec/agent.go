@@ -440,6 +440,9 @@ func buildAdapterInput(
 		default:
 			input.Prompt = fmt.Sprintf("Let's start the %s step", step.ID)
 		}
+		if continueMarkerPromptNeedsRefresh(ctx.WorkflowResumed, isResume, invocationContext) {
+			input.Prompt += completionInstruction(continueMarker)
+		}
 	case enrichment != "" || profile.SystemPrompt != "":
 		input.Prompt = "<system>\n" + fullPrompt + "\n</system>"
 	default:
@@ -455,6 +458,10 @@ func buildAdapterInput(
 	}
 
 	return input
+}
+
+func continueMarkerPromptNeedsRefresh(workflowResumed, isResume bool, context cli.InvocationContext) bool {
+	return !context.IsHeadless() && (workflowResumed || isResume)
 }
 
 func newContinueMarker() string {

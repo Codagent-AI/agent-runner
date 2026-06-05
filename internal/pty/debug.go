@@ -54,6 +54,13 @@ func (l *ptyDebugLogger) logResult(result outputResult) {
 		result.triggered, len(result.forward), result.forward, string(result.forward))
 }
 
+func (l *ptyDebugLogger) logExpectedContinueMarker(marker string) {
+	if l == nil || l.file == nil || marker == "" {
+		return
+	}
+	l.logf("expected_continue_marker=%q", marker)
+}
+
 func (l *ptyDebugLogger) logMarkerNearMiss(raw []byte, result outputResult, proc *outputProcessor) {
 	if l == nil || l.file == nil || result.triggered {
 		return

@@ -1,6 +1,10 @@
 package pty
 
-import "bytes"
+import (
+	"bytes"
+	"unicode"
+	"unicode/utf8"
+)
 
 const (
 	sentinelPayload = "999;signal-continuation"
@@ -304,7 +308,7 @@ func csiStartsTextCell(final byte) bool {
 func (p *outputProcessor) isTextMarkerComplete(buf []byte) bool {
 	for _, marker := range p.textMarkerForms() {
 		if bytes.HasPrefix(buf, marker) {
-			return len(bytes.Trim(buf[len(marker):], " \t")) == 0
+			return len(trimCompleteTextMarkerPadding(buf[len(marker):])) == 0
 		}
 	}
 	return false
@@ -322,7 +326,7 @@ func (p *outputProcessor) isTextMarkerPrefix(buf []byte, startBoundary bool) boo
 			return true
 		}
 		if bytes.HasPrefix(buf, marker) {
-			return len(bytes.Trim(buf[len(marker):], " \t")) == 0
+			return isOnlyTextMarkerPaddingPrefix(buf[len(marker):])
 		}
 	}
 	return false
@@ -337,7 +341,7 @@ func (p *outputProcessor) textMarkerTriggerSuffix(buf []byte, startBoundary bool
 			continue
 		}
 		rest := buf[len(marker):]
-		trimmed := bytes.TrimLeft(rest, " \t")
+		trimmed := trimLeftCompleteTextMarkerPadding(rest)
 		if len(trimmed) == 0 {
 			return nil, false
 		}
@@ -359,6 +363,36 @@ func (p *outputProcessor) textMarkerForms() [][]byte {
 		}
 	}
 	return p.markerForms
+}
+
+func trimCompleteTextMarkerPadding(buf []byte) []byte {
+	return bytes.TrimFunc(buf, isTextMarkerPaddingRune)
+}
+
+func trimLeftCompleteTextMarkerPadding(buf []byte) []byte {
+	return bytes.TrimLeftFunc(buf, isTextMarkerPaddingRune)
+}
+
+func isOnlyTextMarkerPaddingPrefix(buf []byte) bool {
+	for len(buf) > 0 {
+		if buf[0] == ' ' || buf[0] == '\t' || isLineTerminator(buf[0]) {
+			buf = buf[1:]
+			continue
+		}
+		r, size := utf8.DecodeRune(buf)
+		if r == utf8.RuneError && size == 1 {
+			return !utf8.FullRune(buf)
+		}
+		if !isTextMarkerPaddingRune(r) {
+			return false
+		}
+		buf = buf[size:]
+	}
+	return true
+}
+
+func isTextMarkerPaddingRune(r rune) bool {
+	return r == '\t' || unicode.IsSpace(r)
 }
 
 func isTextMarkerBoundaryByte(b byte) bool {

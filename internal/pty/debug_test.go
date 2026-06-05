@@ -76,4 +76,25 @@ func TestPTYDebugLogger(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("logs expected continuation marker", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "pty-debug.log")
+		t.Setenv(ptyDebugLogEnv, path)
+
+		l := openPTYDebugLogger("cli=claude")
+		if l == nil {
+			t.Fatal("expected debug logger")
+		}
+		l.logExpectedContinueMarker("AGENT_RUNNER_CONTINUE_current")
+		l.close()
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read debug log: %v", err)
+		}
+		log := string(data)
+		if !strings.Contains(log, `expected_continue_marker="AGENT_RUNNER_CONTINUE_current"`) {
+			t.Fatalf("debug log missing expected marker:\n%s", log)
+		}
+	})
 }
