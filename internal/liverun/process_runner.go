@@ -12,6 +12,7 @@ import (
 	"time"
 
 	iexec "github.com/codagent/agent-runner/internal/exec"
+	"github.com/codagent/agent-runner/internal/shellcmd"
 )
 
 // PrefixSetter is implemented by TUIProcessRunner. The exec package uses this
@@ -197,7 +198,7 @@ func (r *tuiProcessRunner) compositeWriter(stream, ext string, buf *bytes.Buffer
 // persisting raw bytes to output files. Behaves identically to realProcessRunner
 // from the caller's perspective; ProcessResult is always populated.
 func (r *tuiProcessRunner) RunShell(cmd string, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
-	c := exec.Command("sh", "-c", cmd) // #nosec G204
+	c := shellcmd.New(cmd)
 	c.Stdin = os.Stdin
 	if workdir != "" {
 		c.Dir = filepath.Clean(workdir) // #nosec G304

@@ -11,13 +11,14 @@ import (
 	"github.com/codagent/agent-runner/internal/flowctl"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/pty"
+	"github.com/codagent/agent-runner/internal/shellcmd"
 	"github.com/codagent/agent-runner/internal/textfmt"
 )
 
 // runSkipShell runs a skip_if shell expression and returns its exit code.
 // Overridden in tests to avoid spawning subprocesses.
 var runSkipShell = func(cmd string) (int, error) {
-	c := exec.Command("sh", "-c", cmd) // #nosec G204 -- skip_if command comes from workflow YAML
+	c := shellcmd.New(cmd)
 	err := c.Run()
 	if err == nil {
 		return 0, nil

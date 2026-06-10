@@ -1,3 +1,5 @@
+//go:build linux || darwin
+
 package pty
 
 import (
@@ -23,24 +25,6 @@ const (
 	killTimeout = 3 * time.Second
 	stdinPollMs = 100 // poll timeout in ms for cancellable stdin reads
 )
-
-// Result holds the outcome of an interactive PTY session.
-type Result struct {
-	ExitCode          int
-	ContinueTriggered bool
-	// Stdout is a transcript of bytes the PTY emitted during the session, with
-	// ANSI escape sequences stripped. Populated for shell interactive sessions
-	// so callers can surface what scrolled past after the session ends.
-	Stdout string
-}
-
-// Options configures an interactive PTY session.
-type Options struct {
-	Env            []string // additional environment variables
-	Workdir        string   // working directory for the child process
-	DebugLabel     string   // optional human-readable context for PTY debug logs
-	ContinueMarker string   // optional plain-text continuation marker accepted from PTY output
-}
 
 // ptyState holds shared mutable state for a PTY session.
 type ptyState struct {

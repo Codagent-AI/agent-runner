@@ -14,7 +14,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -50,7 +49,12 @@ var version = "dev"
 
 var userHomeDir = os.UserHomeDir
 var currentExecutable = os.Executable
-var execProcess = syscall.Exec
+
+// execProcess replaces the current process with the named program. On Unix
+// it is wired to syscall.Exec. Windows lacks an exec(2) equivalent, so
+// execProcess_windows.go emulates it by spawning a child and exiting with
+// the child's exit code.
+var execProcess = execProcessImpl
 
 const liveRunImmediateAltScreenEnv = "AGENT_RUNNER_LIVE_RUN_IMMEDIATE_ALT_SCREEN"
 const agentRunnerExecutableEnv = "AGENT_RUNNER_EXECUTABLE"
