@@ -80,11 +80,14 @@ func BuildPrefix(nestingPath []NestingInfo, stepID string) string {
 	return "[" + strings.Join(tokens, ", ") + "]"
 }
 
-var pathUnsafeRe = regexp.MustCompile(`[/._]`)
+var pathUnsafeRe = regexp.MustCompile(`[/._:\\]`)
 var fileUnsafeRe = regexp.MustCompile(`[\\/:*?"<>|]`)
 
-// EncodePath replaces path-unsafe characters (/, ., _) with dashes for use
-// in directory names under ~/.agent-runner/projects/.
+// EncodePath replaces path-unsafe characters (/, ., _, :, \) with dashes for
+// use in directory names under ~/.agent-runner/projects/. The backslash and
+// colon are required for Windows paths (e.g. C:\dev\appacadabra), which
+// cannot otherwise be used as a single directory name. On Unix paths these
+// characters do not appear, so the encoding remains stable.
 func EncodePath(dirPath string) string {
 	return pathUnsafeRe.ReplaceAllString(dirPath, "-")
 }

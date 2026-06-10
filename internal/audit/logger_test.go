@@ -60,6 +60,13 @@ func TestEncodePath(t *testing.T) {
 			t.Fatalf("expected 'my-project-v2', got %q", result)
 		}
 	})
+
+	t.Run("replaces windows drive colon and backslashes", func(t *testing.T) {
+		result := EncodePath(`C:\dev\appacadabra`)
+		if result != "C--dev-appacadabra" {
+			t.Fatalf("expected 'C--dev-appacadabra', got %q", result)
+		}
+	})
 }
 
 func TestSanitizeWorkflowName(t *testing.T) {
