@@ -64,7 +64,7 @@ Captured variables SHALL be available to all subsequent steps within the same sc
 
 #### Scenario: Variable does not leak from sub-workflow to parent
 - **WHEN** a sub-workflow captures `internal_var` and the parent step after the sub-workflow references `{{internal_var}}`
-- **THEN** baton fails with an undefined variable error
+- **THEN** Agent Runner fails with an undefined variable error
 
 ### Requirement: Shell stderr capture
 

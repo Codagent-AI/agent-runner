@@ -1,7 +1,7 @@
 # resume-by-session-id Specification
 
 ## Purpose
-TBD - created by archiving change move-state-file. Update Purpose after archive.
+Define how `--resume` selects unfinished runs, opens completed runs for inspection, and handles the TUI selector path.
 ## Requirements
 ### Requirement: Resume by session ID
 

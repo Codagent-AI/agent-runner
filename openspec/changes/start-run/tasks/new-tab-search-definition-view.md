@@ -36,7 +36,7 @@ type newTabState struct {
 
 **Workflow enumeration** is eager — call `discovery.Enumerate(builtinworkflows.FS, projectDir, userHomeWorkflowsDir)` during `listview.New()` alongside existing run loading. The `discovery` package is at `internal/discovery/` (created in a prior task). `builtinworkflows.FS` is the embed.FS from `workflows/embed.go`.
 
-**Default tab on entry**: `listview.New()` needs a way to know which tab to start on. Add an initial tab parameter or option. Current callers pass nothing — add a `WithInitialTab(tab)` option or similar that defaults to `tabNew` for bare invocation and `tabCurrentDir` for `--list`/`--resume`. Look at `cmd/agent-runner/main.go`'s `handleList()` (around line 326) for where `listview.New()` is called.
+**Default tab on entry**: `listview.New()` needs a way to know which tab to start on. Add an initial tab parameter or option. Current callers pass nothing — add a `WithInitialTab(tab)` option or similar that defaults to `tabNew` for bare invocation and `tabCurrentDir` for `--list`/`--resume`. Look at `cmd/agent-runner/main.go`'s `handleList()` for where `listview.New()` is called.
 
 ### New tab rendering
 
@@ -108,7 +108,7 @@ The list view already tracks which tab is active; when returning from the run vi
 - `internal/listview/view.go` — renderTabs(), renderBody(), renderRunList() for style patterns
 - `internal/tuistyle/styles.go` — all color tokens and style vars
 - `internal/runview/model.go` — Entered enum, New(), handleEsc(), how FromList differs from FromInspect
-- `cmd/agent-runner/main.go` — handleList(), bare invocation path (~line 219), ViewRunMsg handling
+- `cmd/agent-runner/main.go` — handleList(), bare invocation path, ViewRunMsg handling
 - `internal/discovery/` — WorkflowEntry type (created in prior task)
 - `workflows/embed.go` — builtinworkflows.FS
 

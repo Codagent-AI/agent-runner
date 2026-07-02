@@ -95,6 +95,10 @@ This workflow runs Agent Validator, captures its report, asks the agent to fix f
 name: validate-and-fix
 description: "Run validation, ask the agent to fix failures, retry up to 3 times"
 
+sessions:
+  - name: fixer
+    agent: implementor
+
 steps:
   - id: validator-retry
     loop:
@@ -108,7 +112,7 @@ steps:
         break_if: success
 
       - id: fix-violations
-        session: resume
+        session: fixer
         mode: autonomous
         prompt: |
           The validator found failures. Fix the issues you reasonably agree with.
@@ -120,7 +124,7 @@ steps:
         continue_on_failure: true
 ```
 
-Agent Runner enforces the loop. The agent only sees the focused task for the current step.
+Agent Runner enforces the loop. The named `fixer` session gives the first fix step a real agent profile and lets later loop iterations resume the same role. The agent only sees the focused task for the current step.
 
 ## Workflow discovery
 

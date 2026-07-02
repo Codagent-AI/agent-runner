@@ -1,7 +1,7 @@
 # workflow-pre-validation Specification
 
 ## Purpose
-TBD - created by archiving change validate-workflow. Update Purpose after archive.
+Define static pre-validation of workflow composition, session references, parameters, and adapter availability before run start.
 ## Requirements
 ### Requirement: Pre-validation pipeline scope
 
@@ -203,4 +203,3 @@ The CLI SHALL print the populated fields to stderr, omitting fields that are not
 #### Scenario: Parse error names the file and line
 - **WHEN** a sub-workflow contains malformed YAML
 - **THEN** the pre-validation error names the sub-workflow file path and surfaces the parser's line/column information
-

@@ -1,7 +1,7 @@
 # named-sessions Specification
 
 ## Purpose
-TBD - created by archiving change assumption-review. Update Purpose after archive.
+Define top-level named session declarations and how role-keyed sessions are shared across workflow and sub-workflow scopes.
 ## Requirements
 ### Requirement: Named session declaration
 
@@ -122,4 +122,3 @@ The named-session map SHALL propagate from a parent execution context to its chi
 #### Scenario: Child creates, parent's later step reuses
 - **WHEN** a sub-workflow step creates the `planner` session and a later step in the parent workflow has `session: planner`
 - **THEN** the parent's later step resumes that session
-

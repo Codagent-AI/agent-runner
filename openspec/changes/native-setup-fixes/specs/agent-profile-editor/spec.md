@@ -2,11 +2,11 @@
 
 ### Requirement: Editor produces a fixed two-agent shape
 
-The editor SHALL write exactly two agent entries under `profiles.default.agents` in the chosen config file: `planner` and `implementor`. `planner` SHALL include `default_mode: interactive` and the user-chosen interactive `cli` and `model`. `implementor` SHALL include `default_mode: headless` and the user-chosen headless `cli` and `model`. The editor SHALL NOT write `interactive_base`, `headless_base`, `summarizer`, or any other agent. When the model field is empty (adapter default), it SHALL be omitted from the written entry.
+The editor SHALL write exactly two agent entries under `profiles.default.agents` in the chosen config file: `planner` and `implementor`. `planner` SHALL include `default_mode: interactive` and the user-chosen interactive `cli` and `model`. `implementor` SHALL include `default_mode: autonomous` and the user-chosen autonomous `cli` and `model`. The editor SHALL NOT write `interactive_base`, `headless_base`, `summarizer`, or any other agent. When the model field is empty (adapter default), it SHALL be omitted from the written entry.
 
 #### Scenario: Successful first-time write
 - **WHEN** the user picks `cli: claude, model: opus` for planner and `cli: codex, model: gpt-5` for implementor, scope `global`, and the write proceeds
-- **THEN** `~/.agent-runner/config.yaml` contains exactly two entries: `planner` with `default_mode: interactive, cli: claude, model: opus`; `implementor` with `default_mode: headless, cli: codex, model: gpt-5`
+- **THEN** `~/.agent-runner/config.yaml` contains exactly two entries: `planner` with `default_mode: interactive, cli: claude, model: opus`; `implementor` with `default_mode: autonomous, cli: codex, model: gpt-5`
 
 #### Scenario: Editor does not write base agents
 - **WHEN** the editor completes a successful write
@@ -18,7 +18,7 @@ The editor SHALL write exactly two agent entries under `profiles.default.agents`
 
 ### Requirement: User chooses CLI and model for planner and implementor
 
-The native setup profile editor SHALL prompt the user to choose a CLI adapter and a model for the planner agent (interactive), and separately for the implementor agent (headless). CLI options SHALL be drawn at runtime from the existing adapter detection behavior. Model options SHALL be discovered at runtime by querying the chosen CLI adapter for available models where the adapter exposes model listing. When the CLI does not support model listing or model discovery returns an empty list, the editor SHALL show an explicit default-model screen with a Continue action; after Continue, the model field SHALL be omitted from the written entry.
+The native setup profile editor SHALL prompt the user to choose a CLI adapter and a model for the planner agent (interactive), and separately for the implementor agent (autonomous). CLI options SHALL be drawn at runtime from the existing adapter detection behavior. Model options SHALL be discovered at runtime by querying the chosen CLI adapter for available models where the adapter exposes model listing. When the CLI does not support model listing or model discovery returns an empty list, the editor SHALL show an explicit default-model screen with a Continue action; after Continue, the model field SHALL be omitted from the written entry.
 
 The model discovery for `codex` SHALL parse the `{"models": [...]}` JSON envelope returned by `codex debug models`, extracting models from the `models` array field. Each model entry with `"visibility": "list"` SHALL be included; entries with other visibility values SHALL be excluded.
 

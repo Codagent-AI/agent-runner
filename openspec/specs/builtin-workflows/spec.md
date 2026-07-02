@@ -1,7 +1,7 @@
 # builtin-workflows Specification
 
 ## Purpose
-TBD - created by archiving change builtin-workflows. Update Purpose after archive.
+Define embedded built-in workflow namespaces, metadata, name resolution, validation, and launch behavior.
 ## Requirements
 ### Requirement: Builtin workflow set embedded at build time
 The `agent-runner` binary SHALL include a set of builtin workflows embedded at build time from the repository's top-level `workflows/` directory. Each top-level subdirectory of `workflows/` SHALL define a builtin namespace whose name equals the subdirectory name; the YAML files within it whose basenames do not start with an underscore (`_`) SHALL be the workflows of that namespace. YAML files in a namespace directory whose basenames begin with an underscore SHALL be reserved for namespace metadata (see "Per-namespace group metadata") and SHALL NOT be exposed as workflows. The embedded set SHALL be available without any files present on the end user's filesystem.
@@ -109,4 +109,3 @@ Each builtin namespace directory `workflows/<ns>/` MAY contain a metadata file n
 - **WHEN** a builtin namespace's `_group.yaml` exists but cannot be parsed
 - **THEN** discovery reports the namespace with default display name and empty description
 - **AND** the namespace's workflows are still discovered and runnable
-

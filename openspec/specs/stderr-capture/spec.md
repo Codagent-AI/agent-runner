@@ -1,11 +1,11 @@
 # stderr-capture Specification
 
 ## Purpose
-TBD - created by archiving change audit-log. Update Purpose after archive.
+Define shell-step stderr capture, live display, and audit-log persistence.
 ## Requirements
 ### Requirement: Shell stderr piping
 
-Baton SHALL pipe stderr from all shell steps instead of inheriting it. The stderr output SHALL be teed to the terminal in real-time and stored for inclusion in the audit log.
+Agent Runner SHALL pipe stderr from all shell steps instead of inheriting it. The stderr output SHALL be teed to the terminal in real-time and stored for inclusion in the audit log.
 
 #### Scenario: Stderr displayed and captured
 - **WHEN** a shell step produces stderr output
@@ -22,4 +22,3 @@ Baton SHALL pipe stderr from all shell steps instead of inheriting it. The stder
 #### Scenario: No stderr output
 - **WHEN** a shell step produces no stderr
 - **THEN** the audit log `step_end` entry includes an empty stderr field
-

@@ -1,7 +1,7 @@
 # user-settings-editor Specification
 
 ## Purpose
-TBD - created by archiving change settings. Update Purpose after archive.
+Define the TUI editor for user-editable settings and its navigation, persistence, and cancellation behavior.
 ## Requirements
 ### Requirement: Editor exposes editable user settings
 

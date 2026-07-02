@@ -1,7 +1,7 @@
 # view-run Specification
 
 ## Purpose
-TBD - created by archiving change view-run. Update Purpose after archive.
+Define run-view entry points, rendering, navigation, drill-down behavior, and per-step detail surfaces.
 ## Requirements
 ### Requirement: Run-view entry points
 The CLI SHALL provide two entry points to the run view: a `--inspect <run-id>` flag for direct entry, and an Enter action from the list TUI (covered by the `list-runs` delta). Direct entry SHALL require a full run ID (no prefix matching). When the target run's run-lock is held by another live process, `--inspect` SHALL reject the entry with an error and not launch the TUI.

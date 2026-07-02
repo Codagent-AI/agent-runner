@@ -5,7 +5,7 @@
 Defines named, inheritable agent profiles that bundle CLI choice, default mode, model, effort, and system prompt into reusable units, so workflow steps reference a profile by name rather than re-declaring each attribute. Profiles support single-parent `extends` inheritance and per-step overrides for `mode`, `model`, and `cli`. When no config files are present, the runner uses a built-in default profile set in memory and SHALL NOT write any config file to disk.
 ## Requirements
 ### Requirement: Profile schema
-Each agent profile SHALL have a name (the YAML key) and MAY include: `default_mode` (interactive|autonomous), `cli` (claude|codex), `model` (string), `effort` (low|medium|high), `system_prompt` (string), and `extends` (string referencing another profile name).
+Each agent profile SHALL have a name (the YAML key) and MAY include: `default_mode` (interactive|autonomous), `cli` (claude|codex|copilot|cursor|opencode), `model` (string), `effort` (low|medium|high|xhigh), `system_prompt` (string), and `extends` (string referencing another profile name).
 
 #### Scenario: All fields specified
 - **WHEN** a profile specifies default_mode, cli, model, effort, system_prompt
@@ -20,7 +20,7 @@ Each agent profile SHALL have a name (the YAML key) and MAY include: `default_mo
 - **THEN** the runner ignores it without error
 
 #### Scenario: Invalid effort value
-- **WHEN** a profile specifies an effort value not in (low, medium, high)
+- **WHEN** a profile specifies an effort value not in (low, medium, high, xhigh)
 - **THEN** config loading SHALL fail with a validation error indicating the invalid effort value
 
 #### Scenario: Invalid default_mode value
@@ -247,4 +247,3 @@ Within a single profile set (after global/project merging), an agent MAY specify
 #### Scenario: Project agent shadows then extends the original global name
 - **WHEN** within the same profile set, the global file defines `autonomous_base` and the project file defines `autonomous_base` with `extends: autonomous_base`
 - **THEN** config loading fails with a cycle error (the project agent's `extends` resolves to itself in the merged set)
-

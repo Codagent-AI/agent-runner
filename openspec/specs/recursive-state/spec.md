@@ -8,7 +8,7 @@ Defines how the state file tracks execution position recursively through nested 
 
 ### Requirement: Recursive position tracking
 
-The state file (`baton-state.json`) SHALL track the current execution position through nested workflows and loops recursively. When execution is inside a sub-workflow or loop, the state file SHALL capture the full nesting path — from the top-level workflow down to the currently executing step.
+The state file (`state.json`) SHALL track the current execution position through nested workflows and loops recursively. When execution is inside a sub-workflow or loop, the state file SHALL capture the full nesting path from the top-level workflow down to the currently executing step.
 
 #### Scenario: Flat workflow state
 - **WHEN** a workflow with no loops or sub-workflows completes step 2 of 4
@@ -27,25 +27,25 @@ The state file (`baton-state.json`) SHALL track the current execution position t
 Captured variables SHALL be persisted in the state file alongside session IDs. This allows resume to restore captured values without re-executing the capture step.
 
 #### Scenario: Captured variable persisted
-- **WHEN** a shell step captures stdout into `validator_output` and baton writes the state file
+- **WHEN** a shell step captures stdout into `validator_output` and Agent Runner writes the state file
 - **THEN** the state file includes `validator_output` and its value
 
 #### Scenario: Resume restores captured variables
-- **WHEN** baton resumes from a state file that contains captured variables
+- **WHEN** Agent Runner resumes from a state file that contains captured variables
 - **THEN** the captured variables are available for interpolation in subsequent steps
 
 ### Requirement: Resume from nested position
 
-`baton resume` SHALL restore execution to the exact nested position recorded in the state file — including loop iteration and sub-workflow depth. Execution continues from the step after the last completed step at the deepest nesting level.
+`agent-runner -resume` SHALL restore execution to the exact nested position recorded in the state file, including loop iteration and sub-workflow depth. Execution continues from the step after the last completed step at the deepest nesting level.
 
 #### Scenario: Resume into a loop
 - **WHEN** the state file records position inside a for-each loop at iteration 3 of 5
-- **THEN** baton resumes at iteration 3, skipping iterations 1 and 2
+- **THEN** Agent Runner resumes at iteration 3, skipping iterations 1 and 2
 
 #### Scenario: Resume into a sub-workflow
 - **WHEN** the state file records position inside a sub-workflow with step 2 of 3 as the last completed step
-- **THEN** baton resumes inside the sub-workflow at step 3, within the parent's context
+- **THEN** Agent Runner resumes inside the sub-workflow at step 3, within the parent's context
 
 #### Scenario: Resume with stale nested state
 - **WHEN** the sub-workflow file has changed since the state was written and the recorded step ID no longer exists
-- **THEN** baton fails with a descriptive error identifying the missing step and which workflow file changed
+- **THEN** Agent Runner fails with a descriptive error identifying the missing step and which workflow file changed

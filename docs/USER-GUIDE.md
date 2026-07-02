@@ -61,6 +61,8 @@ agent-runner -version
 
 `-validate` accepts workflow parameters only as `key=value`. Normal runs accept positional parameters, `key=value` parameters, or a mix of both.
 
+In the workflow browser, `?` starts the built-in help agent and `s` opens the user settings editor where available. In the run detail view, `d` launches the debug workflow for an inactive run.
+
 ## Workflow Discovery
 
 Workflow names resolve in this order:
@@ -189,6 +191,18 @@ Config is layered in this order:
 Project config wins over global config. Project config may set `active_profile`; global config may not.
 
 Agent step-level `mode`, `cli`, and `model` override the resolved profile for that step.
+
+## User Settings
+
+User settings live in `~/.agent-runner/settings.yaml`. The settings editor in the TUI writes the user-facing preferences:
+
+| Setting | Values |
+| --- | --- |
+| `theme` | `light` or `dark` |
+| `autonomous_backend` | `headless`, `interactive`, or `interactive-claude` |
+| `autonomous_permission_mode` | `conservative` or `yolo` |
+
+Setup, onboarding, and splash-screen lifecycle fields under `setup`, `onboarding`, and `splash` are managed by Agent Runner.
 
 ## Agent Steps
 
@@ -413,6 +427,7 @@ Common built-ins:
 | `core:run-validator` | Run Agent Validator with a retry/fix loop. |
 | `core:implement-task` | Implement one task file and run validation. |
 | `core:finalize-pr` | Push/update PR, wait for CI, and fix failures. |
+| `core:debug` | Start an interactive debug agent for a run, optionally with a run ID or session directory. |
 
 Use the TUI or `agent-runner -list` to browse the full embedded set.
 
@@ -491,6 +506,28 @@ The workflow advances when any continuation trigger is detected:
 - The agent emits the injected continuation marker after the user asks it to continue or the prompt tells it to complete the step.
 
 If the CLI exits without one of these triggers, the step is aborted and the workflow can be resumed.
+
+### Debug a run
+
+From an inactive run detail view, press `d` to launch the built-in debug workflow for that run.
+
+You can also launch the workflow directly:
+
+```bash
+agent-runner run core:debug
+agent-runner run core:debug failed_run_id=<run-id>
+agent-runner run core:debug failed_session_dir=<session-dir>
+```
+
+Read-only debug inspection commands are available for state, audit summaries, and embedded workflow YAML:
+
+```bash
+agent-runner debug --state <run-id>
+agent-runner debug --audit-summary <run-id>
+agent-runner debug --state-dir <session-dir>
+agent-runner debug --audit-summary-dir <session-dir>
+agent-runner debug --show-workflow <workflow-ref>
+```
 
 ### Resume a run
 

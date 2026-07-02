@@ -10,7 +10,7 @@ Create the `advanced.yaml` (Phase 6), `help.yaml` (permanent help agent), update
 
 The existing `workflows/onboarding/step-types-demo.yaml` and `workflows/onboarding/onboarding.yaml` are the models for onboarding sub-workflows and the top-level chain. Follow the same conventions.
 
-The list view key handling is in `internal/listview/model.go` in the `Update` method's `tea.KeyMsg` switch (around line 354). Keys like `"n"`, `"c"`, `"r"` are handled there. The `?` key should follow the same pattern.
+The list view key handling is in `internal/listview/model.go` in the `Update` method's `tea.KeyMsg` switch. Keys like `"n"`, `"c"`, `"r"`, `"s"`, and `"?"` are handled there.
 
 ### advanced.yaml (Phase 6)
 
@@ -52,11 +52,11 @@ steps:
 
 ### `?` keybinding
 
-In `internal/listview/model.go`, add a `case "?"` in the key-handling switch (non-search-focused state, around line 354). When pressed:
+In `internal/listview/model.go`, the `case "?"` key handler in the non-search-focused state:
 
-1. Resolve the workflow via `builtinworkflows.Resolve("onboarding:help")`.
-2. If resolution succeeds, emit a `discovery.StartRunMsg` with a `discovery.WorkflowEntry` populated from the resolved ref.
-3. If resolution fails (e.g., the builtin is missing), set `m.errMsg` and return.
+1. Resolves the workflow via `builtinworkflows.Resolve("onboarding:help")`.
+2. If resolution succeeds, emits a `discovery.StartRunMsg` with a `discovery.WorkflowEntry` populated from the resolved ref.
+3. If resolution fails (e.g., the builtin is missing), sets `m.errMsg` and returns.
 
 Look at how `handleEnter()` and `newTabStartRunCmd()` emit `StartRunMsg` for the pattern. The `?` handler needs to construct a `WorkflowEntry` from the builtin ref rather than from the cursor selection.
 
@@ -68,7 +68,7 @@ Relevant imports: `builtinworkflows "github.com/codagent/agent-runner/workflows"
 - `workflows/onboarding/step-types-demo.yaml` — reference for conventions
 - `workflows/onboarding/docs/agent-runner-basics.md` — bundled docs the help agent references
 - `workflows/embed_test.go` — add resolution tests for new sub-workflows
-- `internal/listview/model.go` — add `?` keybinding (around line 354 in the key switch)
+- `internal/listview/model.go` — `?` keybinding in the key-handling switch
 - `internal/listview/model_test.go` — add test for `?` keybinding
 - `internal/discovery/` — provides `StartRunMsg`, `WorkflowEntry`, `ViewDefinitionMsg`
 

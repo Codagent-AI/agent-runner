@@ -1,7 +1,7 @@
 # new-tab-layout Specification
 
 ## Purpose
-TBD - created by archiving change improve-new-tab. Update Purpose after archive.
+Define the workflow browser's New tab grouping, filtering, row rendering, and launch affordances.
 ## Requirements
 ### Requirement: Workflow groups render with header and description
 
@@ -127,4 +127,3 @@ Pressing `h` on the new tab SHALL toggle whether hidden workflows are included i
 #### Scenario: Help bar advertises the shortcut
 - **WHEN** the new tab is active
 - **THEN** the help bar includes an `h hidden` entry regardless of the current toggle state
-

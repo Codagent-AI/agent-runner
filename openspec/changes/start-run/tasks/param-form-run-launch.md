@@ -23,7 +23,7 @@ This task depends on two packages created before it runs:
 
 When launching a new run from the TUI, use `syscall.Exec` to replace the current process with `agent-runner run <workflow-canonical-name> param1=value1 param2=value2 ...`. This reuses the existing `handleRun()` path in `cmd/agent-runner/main.go` exactly — no in-process wiring needed.
 
-Look at the existing `execRunnerResume()` function (around line 546 in `cmd/agent-runner/main.go`) for the exact pattern:
+Look at the existing `execRunnerResume()` function in `cmd/agent-runner/main.go` for the exact pattern:
 ```go
 self, _ := os.Executable()
 syscall.Exec(self, []string{filepath.Base(self), "--resume", runID}, os.Environ())
@@ -103,7 +103,7 @@ type Model struct {
 
 ### Post-run Escape to list
 
-In `internal/runview/model.go`, the `handleEsc()` function (around line 679) handles Escape at the top level. Currently, for `FromLiveRun`, it exits the program. Change this:
+In `internal/runview/model.go`, the `handleEsc()` function handles Escape at the top level. Currently, for `FromLiveRun`, it exits the program. Change this:
 
 The rule: **if the run is in a terminal state (completed or failed) AND the entry mode is not `FromInspect`, exec-self to the list. Otherwise use the existing behavior.**
 
@@ -124,7 +124,7 @@ In `FromDefinition` mode, `r` should emit `StartRunMsg{workflowEntry}`. The work
 
 **Key files to read before starting:**
 - `internal/runview/model.go` — full file, especially `handleEsc()`, `Entered` modes, `liveResult`, `active`, `running` fields
-- `cmd/agent-runner/main.go` — `execRunnerResume()` (~line 546), `handleRun()` (~line 808), `ViewRunMsg` handling, `BackMsg` handling
+- `cmd/agent-runner/main.go` — `execRunnerResume()`, `handleRun()`, `ViewRunMsg` handling, `BackMsg` handling
 - `internal/listview/model.go` — `StartRunMsg` type definition (if defined there in prior task) and `ViewDefinitionMsg`
 - `internal/tuistyle/styles.go` — color tokens for param form styling
 - `internal/model/step.go` — `Param` struct (`Required *bool`, `Default string`)

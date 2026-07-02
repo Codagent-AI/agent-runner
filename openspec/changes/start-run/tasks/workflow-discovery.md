@@ -35,7 +35,7 @@ The existing codebase resolves a single workflow by name (`resolveWorkflowArg` i
 - `internal/model/descriptor.go` — canonical name derivation patterns
 - `internal/loader/` — existing workflow loading/parsing
 - `workflows/embed.go` — embed.FS structure
-- `cmd/agent-runner/main.go`, specifically `resolveWorkflowArg()` (around line 756) — shadowing/precedence logic to match
+- `cmd/agent-runner/main.go`, specifically `resolveWorkflowArg()` — shadowing/precedence logic to match
 
 ## Spec
 

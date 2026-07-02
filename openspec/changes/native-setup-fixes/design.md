@@ -50,7 +50,7 @@ The demo prompt is a reusable component of the native setup TUI. The `ensureFirs
 stageInteractiveCLI           → "Planner CLI" — pick CLI for interactive/planner work; recommend/default claude when available
 stageInteractiveModel         → "Planner Model" — show loading status while async model discovery runs, then pick model
 stageInteractiveModelDefault  → "Planner Model" — explicit Continue screen when discovery is empty or unavailable
-stageHeadlessCLI              → "Implementor CLI" — pick CLI for headless/implementor work; recommend/default codex when available
+stageHeadlessCLI              → "Implementor CLI" — pick CLI for autonomous implementor work; recommend/default codex when available
 stageHeadlessModel            → "Implementor Model" — show loading status while async model discovery runs, then pick model
 stageHeadlessModelDefault     → "Implementor Model" — explicit Continue screen when discovery is empty or unavailable
 stageScope                    → "Config Scope" — global or project
@@ -68,7 +68,7 @@ The `NewModel` constructor SHALL initialize with `stageInteractiveCLI` and immed
 To align with the two-agent shape:
 - "Interactive Agent CLI" → the screen explains this is for the **planner** agent
 - "Interactive Agent Model" → planner model
-- "Headless Agent CLI" → the screen explains this is for the **implementor** agent  
+- "Headless Agent CLI" → the screen explains this is for the **implementor** agent
 - "Headless Agent Model" → implementor model
 
 The internal field names (`interactiveCLI`, `interactiveModel`, `headlessCLI`, `headlessModel`) can stay since they describe the mode, not the agent name.
@@ -85,7 +85,7 @@ profiles:
         cli: claude
         model: opus
       headless_base:
-        default_mode: headless
+        default_mode: autonomous
         cli: codex
         model: gpt-5
       planner:
@@ -104,7 +104,7 @@ profiles:
         cli: claude
         model: opus
       implementor:
-        default_mode: headless
+        default_mode: autonomous
         cli: codex
         model: gpt-5
 ```
@@ -114,7 +114,7 @@ profiles:
 `internal/config/config.go` currently defines four built-in agents. After this change:
 ```go
 "planner":     {DefaultMode: "interactive", CLI: "claude", Model: "opus", Effort: "high"},
-"implementor": {DefaultMode: "headless", CLI: "claude", Model: "opus", Effort: "high"},
+"implementor": {DefaultMode: "autonomous", CLI: "claude", Model: "opus", Effort: "high"},
 ```
 
 No `interactive_base`, no `headless_base`. The `extends` field is still supported by the config system for user-defined inheritance — it just isn't used by the built-in defaults or the editor.

@@ -10,17 +10,21 @@ Defines loop constructs for workflow steps: counted loops with max iterations, f
 
 A step with `loop: { max: N }` and a `steps` array SHALL execute its child steps sequentially, then repeat from the first child step, up to N total iterations. The loop body is the `steps` array.
 
-#### Scenario: Loop runs to completion
-- **WHEN** a step has `loop: { max: 3 }` and no `break_if` triggers during any iteration
-- **THEN** baton executes the loop body 3 times, then fails the workflow (exhaustion)
+#### Scenario: Loop runs to completion without break conditions
+- **WHEN** a step has `loop: { max: 3 }` and no child step has `break_if`
+- **THEN** Agent Runner executes the loop body 3 times, then continues with the next step after the loop
+
+#### Scenario: Loop with break condition exhausts
+- **WHEN** a step has `loop: { max: 3 }` and a child step's `break_if` never triggers during any iteration
+- **THEN** Agent Runner executes the loop body 3 times, then fails the workflow (exhaustion)
 
 #### Scenario: Loop with break_if exits early
 - **WHEN** a step has `loop: { max: 3 }` and a child step's `break_if` triggers on iteration 2
-- **THEN** baton executes 2 iterations, exits the loop, and continues with the next step after the loop
+- **THEN** Agent Runner executes 2 iterations, exits the loop, and continues with the next step after the loop
 
 #### Scenario: Max is required for counted loops
 - **WHEN** a step has `loop: {}` with no `max` and no `over`
-- **THEN** baton fails at load time with a validation error
+- **THEN** Agent Runner fails at load time with a validation error
 
 ### Requirement: For-each loop execution
 
@@ -28,15 +32,15 @@ A step with `loop: { over: <glob>, as: <var> }` and a `steps` array SHALL expand
 
 #### Scenario: Glob matches multiple files
 - **WHEN** a step has `loop: { over: "tasks/*.task.md", as: task_file }` and the glob matches 3 files
-- **THEN** baton executes the loop body 3 times, binding `{{task_file}}` to each matched path in order
+- **THEN** Agent Runner executes the loop body 3 times, binding `{{task_file}}` to each matched path in order
 
 #### Scenario: Glob matches zero files
 - **WHEN** a step has `loop: { over: "tasks/*.task.md", as: task_file }` and the glob matches no files
-- **THEN** baton skips the loop body and continues with the next step after the loop
+- **THEN** Agent Runner skips the loop body and continues with the next step after the loop
 
 #### Scenario: Glob pattern supports parameter interpolation
 - **WHEN** a step has `loop: { over: "openspec/changes/{{change_name}}/tasks/*.task.md", as: task_file }`
-- **THEN** baton interpolates `{{change_name}}` before expanding the glob
+- **THEN** Agent Runner interpolates `{{change_name}}` before expanding the glob
 
 ### Requirement: Nested steps
 
@@ -44,7 +48,7 @@ A step with a `steps` array SHALL execute its child steps sequentially. Child st
 
 #### Scenario: Steps nested without a loop
 - **WHEN** a step has a `steps` array but no `loop` field
-- **THEN** baton executes the child steps sequentially as a group
+- **THEN** Agent Runner executes the child steps sequentially as a group
 
 #### Scenario: Child steps inherit parent scope
 - **WHEN** a parent step binds `{{task_file}}` via a for-each loop and a child step references `{{task_file}}`
@@ -52,19 +56,19 @@ A step with a `steps` array SHALL execute its child steps sequentially. Child st
 
 ### Requirement: break_if
 
-A step within a loop body with `break_if: success` or `break_if: failure` SHALL be evaluated after the step executes. If the condition matches the step's outcome, baton SHALL exit the enclosing loop immediately, skipping any remaining steps in the current iteration. Execution continues with the next step after the loop.
+A step within a loop body with `break_if: success` or `break_if: failure` SHALL be evaluated after the step executes. If the condition matches the step's outcome, Agent Runner SHALL exit the enclosing loop immediately, skipping any remaining steps in the current iteration. Execution continues with the next step after the loop.
 
 #### Scenario: break_if success triggers on passing step
 - **WHEN** a shell step has `break_if: success` and exits with code 0
-- **THEN** baton exits the enclosing loop and skips remaining steps in this iteration
+- **THEN** Agent Runner exits the enclosing loop and skips remaining steps in this iteration
 
 #### Scenario: break_if success does not trigger on failing step
 - **WHEN** a shell step has `break_if: success` and exits with non-zero code
-- **THEN** baton continues to the next step in the loop body
+- **THEN** Agent Runner continues to the next step in the loop body
 
 #### Scenario: break_if outside a loop
 - **WHEN** a step has `break_if` but is not inside a loop
-- **THEN** baton fails at validation time with a validation error (load time for the parent workflow, execution time for lazily loaded sub-workflows)
+- **THEN** Agent Runner fails at validation time with a validation error (load time for the parent workflow, execution time for lazily loaded sub-workflows)
 
 ### Requirement: Session scoping within loops
 

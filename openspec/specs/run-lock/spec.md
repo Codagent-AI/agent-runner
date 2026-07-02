@@ -1,7 +1,7 @@
 # run-lock Specification
 
 ## Purpose
-TBD - created by archiving change list-runs. Update Purpose after archive.
+Define run-lock files that let Agent Runner distinguish active runs from inspectable inactive runs.
 ## Requirements
 ### Requirement: Lock file created on run start
 
