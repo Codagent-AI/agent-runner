@@ -340,6 +340,7 @@ func forwardOutput(ptmx *os.File, hint *idleHint, cmd *exec.Cmd, state *ptyState
 	proc := &outputProcessor{textSentinel: continueMarker}
 	debugLog := openPTYDebugLogger(debugLabel)
 	defer debugLog.close()
+	debugLog.logExpectedContinueMarker(continueMarker)
 	buf := make([]byte, 4096)
 	sentinelTriggered := false
 	for {

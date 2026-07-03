@@ -863,6 +863,74 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("interactive claude resume includes current completion instruction in positional prompt", func(t *testing.T) {
+		var ptyCalls [][]string
+		var ptyOpts []pty.Options
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(args []string, opts pty.Options) (pty.Result, error) {
+			ptyCalls = append(ptyCalls, args)
+			ptyOpts = append(ptyOpts, opts)
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		runner := &mockRunner{}
+		ctx := makeCtx()
+		ctx.SessionIDs["prev"] = "session-abc"
+		ctx.LastSessionStepID = "prev"
+		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review code", Session: model.SessionResume}
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if len(ptyCalls) == 0 || len(ptyOpts) == 0 {
+			t.Fatal("expected PTY to be called")
+		}
+		args := ptyCalls[0]
+		if !containsArg(args, "--append-system-prompt") {
+			t.Fatal("expected --append-system-prompt for interactive claude resume step")
+		}
+		lastArg := args[len(args)-1]
+		if !strings.Contains(lastArg, "Let's continue to the s step") {
+			t.Fatalf("expected resume prompt in positional arg, got %q", lastArg)
+		}
+		assertContinueMarkerInstruction(t, lastArg, ptyOpts[0].ContinueMarker)
+	})
+
+	t.Run("autonomous interactive claude resume includes current completion instruction in positional prompt", func(t *testing.T) {
+		var ptyCalls [][]string
+		var ptyOpts []pty.Options
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(args []string, opts pty.Options) (pty.Result, error) {
+			ptyCalls = append(ptyCalls, args)
+			ptyOpts = append(ptyOpts, opts)
+			return pty.Result{ContinueTriggered: true}, nil
+		}
+		oldTTY := isStdinTerminal
+		isStdinTerminal = func() bool { return true }
+		defer func() {
+			interactiveRunnerFn = oldFn
+			isStdinTerminal = oldTTY
+		}()
+
+		runner := &mockRunner{}
+		ctx := makeCtx()
+		ctx.AutonomousBackend = "interactive-claude"
+		ctx.SessionIDs["prev"] = "session-abc"
+		ctx.LastSessionStepID = "prev"
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "review code", Session: model.SessionResume}
+		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if len(ptyCalls) == 0 || len(ptyOpts) == 0 {
+			t.Fatal("expected PTY to be called")
+		}
+		args := ptyCalls[0]
+		if !containsArg(args, "--append-system-prompt") {
+			t.Fatal("expected --append-system-prompt for autonomous interactive claude resume step")
+		}
+		lastArg := args[len(args)-1]
+		if !strings.Contains(lastArg, "Let's continue to the s step") {
+			t.Fatalf("expected resume prompt in positional arg, got %q", lastArg)
+		}
+		assertContinueMarkerInstruction(t, lastArg, ptyOpts[0].ContinueMarker)
+	})
+
 	t.Run("interactive codex without enrichment passes prompt positionally", func(t *testing.T) {
 		var ptyCalls [][]string
 		var ptyOpts []pty.Options

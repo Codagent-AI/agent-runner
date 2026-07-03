@@ -8,6 +8,9 @@ validator_logs/
 .validator/cache/
 agent-runner-state.json
 worktrees/
+artifacts/
+.sandbox-secrets.env
+.eval-secrets.env
 .debug.log
 .debug.log.1
 .vscode-screenshots/

@@ -145,6 +145,19 @@ func TestOutputProcessor(t *testing.T) {
 		}
 	})
 
+	t.Run("detects text sentinel with trailing non-breaking space before newline", func(t *testing.T) {
+		marker := textSentinel + "_2d9f4b7a1c8e0a3f6b5d2e9c4a7f1b08"
+		p := &outputProcessor{textSentinel: marker}
+		input := "before\n" + marker + "\u00a0\nafter"
+		r := p.process([]byte(input))
+		if !r.triggered {
+			t.Fatal("expected trigger")
+		}
+		if string(r.forward) != "before\nafter" {
+			t.Fatalf("expected %q, got %q", "before\nafter", string(r.forward))
+		}
+	})
+
 	t.Run("does not trigger text sentinel before punctuation", func(t *testing.T) {
 		p := textOutputProcessor()
 		input := "before\n" + textSentinel + ".\nafter"

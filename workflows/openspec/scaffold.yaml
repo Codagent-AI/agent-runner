@@ -1,0 +1,134 @@
+name: scaffold
+description: "Bootstrap a brand new OpenSpec project, configure validation, and optionally publish it to GitHub."
+
+sessions:
+  - name: scaffold-agent
+    agent: implementor
+  - name: validator-setup-session
+    agent: planner
+  - name: publish-agent
+    agent: planner
+
+steps:
+  - id: prepare-repo
+    command: |
+      set -eu
+
+      if [ ! -d .git ]; then
+        git init
+        echo "Initialized a new git repository."
+      else
+        echo "Using existing git repository."
+      fi
+
+      entries="$(find . -mindepth 1 -maxdepth 1 \
+        ! -name .git \
+        ! -name .agent-runner \
+        ! -name .agents \
+        ! -name .claude \
+        ! -name .codex \
+        ! -name .config \
+        ! -name runs \
+        ! -name validator_logs \
+        -print | sed -n '1,20p')"
+
+      if [ -n "$entries" ]; then
+        echo "WARNING: this directory is not empty. Existing files are listed below." >&2
+        echo "$entries" >&2
+        echo "The scaffold agent will inspect the existing files before making changes." >&2
+      fi
+
+  - id: openspec-init
+    command: |
+      set -eu
+
+      openspec init --tools none .
+      mkdir -p openspec/changes openspec/specs
+      touch openspec/changes/.gitkeep openspec/specs/.gitkeep
+
+  - id: scaffold-project
+    session: scaffold-agent
+    mode: interactive
+    prompt: |
+      Help the user scaffold a brand new project in the current directory.
+
+      Start by asking what project they want to create, including tech stack, package manager/build tool, test framework, and any starter features. This workflow supports any stack, so do not assume one before asking.
+
+      This is an OpenSpec-ready project. `openspec init --tools none .` has already run so the repository has OpenSpec directories, but this workflow intentionally does not install OpenSpec skills or slash commands because Codagent skills are used instead.
+
+      Before writing project files, inspect the current directory. Ignore the existing `.git` and `openspec` scaffolding created by earlier steps. If there are other existing non-Agent Runner files, tell the user what you found and ask how they want you to proceed. Do not overwrite existing files without explicit user direction.
+
+      Create a practical initial project for the chosen stack. Include:
+      - source files needed for a minimal working project
+      - a README with setup and run/test instructions
+      - a .gitignore suited to the stack
+      - build/test/check scripts or commands where the stack supports them
+      - at least one minimal test or deterministic check when practical
+
+      Run the project's initial check before completing this step. If a dependency install is required, ask the user before running it. Do not configure Agent Validator and do not push to GitHub in this step.
+
+  - id: commit-initial-scaffold
+    command: |
+      set -eu
+
+      git add -A
+      if git diff --cached --quiet; then
+        echo "ERROR: scaffold step did not produce files to commit." >&2
+        exit 1
+      fi
+
+      git commit -m "[{{step_id}}] chore: scaffold initial project"
+
+  - id: validator-init
+    command: '"$AGENT_RUNNER_EXECUTABLE" internal validator-init'
+    mode: interactive
+
+  - id: validator-setup
+    session: validator-setup-session
+    mode: interactive
+    prompt: |
+      Help the user configure Agent Validator for this new project.
+
+      You MUST use the agent-validator:validator-setup skill to configure checks and reviews. Base the setup on the project files, stack, and commands created by the scaffold step. Keep the configuration practical for a brand new project.
+
+      The initial project scaffold has already been committed. If the validator setup skill creates or changes validator configuration, follow that skill's commit guidance.
+
+  - id: run-validator
+    workflow: ../core/run-validator.yaml
+    continue_on_failure: true
+
+  - id: publish-choice
+    mode: ui
+    title: "Publish to GitHub"
+    body: |
+      The project has been scaffolded and Agent Validator has run. You can publish it to GitHub now, or keep it local.
+    inputs:
+      - kind: single_select
+        id: publish
+        prompt: "GitHub"
+        options: ["Skip for now", "Create or push GitHub repo"]
+        default: "Skip for now"
+    actions:
+      - label: "Continue"
+        outcome: continue
+    capture: github_publish
+
+  - id: publish-github
+    session: publish-agent
+    mode: interactive
+    prompt: |
+      The user chose to publish this project to GitHub.
+
+      First, inspect the repository state:
+      - run `git status --short`
+      - run `git remote -v`
+      - run `gh auth status`
+
+      If there are uncommitted changes, explain them to the user and ask whether to commit them before publishing. Do not push a dirty working tree without user approval.
+
+      If an `origin` remote already exists, confirm with the user that this is the remote to push to, then run `git push -u origin HEAD`.
+
+      If no `origin` remote exists, ask the user for the GitHub repository name and whether it should be private or public. Then create and push it with `gh repo create` using the current directory as the source and `origin` as the remote. Prefer a private repository unless the user explicitly asks for public.
+
+      If `gh` is missing or not authenticated, explain the exact command the user should run, then stop without changing remotes.
+    skip_if: 'sh: [ "{{github_publish.publish}}" != "Create or push GitHub repo" ]'

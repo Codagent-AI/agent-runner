@@ -404,17 +404,19 @@ Common built-ins:
 | `openspec:implement-change` | Implement task files for an OpenSpec change. |
 | `openspec:change` | Run OpenSpec planning and implementation. |
 | `openspec:simple-change` | Inline OpenSpec planning and implementation for smaller changes. |
+| `openspec:scaffold` | Bootstrap a new OpenSpec-ready project, configure validation, and optionally publish to GitHub. |
 | `spec-driven:plan-change` | Plan without depending on OpenSpec. |
 | `spec-driven:implement-change` | Implement discovered task files without OpenSpec. |
 | `spec-driven:change` | Run spec-driven planning and implementation. |
 | `spec-driven:simple-change` | Inline spec-driven planning and implementation. |
+| `spec-driven:scaffold` | Bootstrap a new project, configure validation, and optionally publish to GitHub. |
 | `core:run-validator` | Run Agent Validator with a retry/fix loop. |
 | `core:implement-task` | Implement one task file and run validation. |
 | `core:finalize-pr` | Push/update PR, wait for CI, and fix failures. |
 
 Use the TUI or `agent-runner -list` to browse the full embedded set.
 
-The built-in `spec-driven:change` and `openspec:change` workflows are full development flows: they plan the change, implement task files, validate the result, and can continue through PR finalization. Their shorter `simple-change` variants keep planning and implementation inline for smaller changes.
+The built-in `spec-driven:change` and `openspec:change` workflows are full development flows: they plan the change, implement task files, validate the result, and can continue through PR finalization. Their shorter `simple-change` variants keep planning and implementation inline for smaller changes. The `scaffold` variants are for new project setup; `openspec:scaffold` runs `openspec init --tools none` so the project has OpenSpec directories without installing OpenSpec agent skills or slash commands.
 
 ## Engines
 
