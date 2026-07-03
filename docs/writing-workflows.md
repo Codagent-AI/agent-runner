@@ -138,7 +138,7 @@ See [Sessions And Modes](sessions-and-modes.md) for the full session and mode mo
   continue_on_failure: true
 ```
 
-Shell commands are interpolated with shell-safe quoting and run through `/bin/sh`. Non-zero exit codes fail the step unless `continue_on_failure: true` is set.
+Shell commands are interpolated with shell-safe quoting and run through `sh -c`, resolved from `PATH`. Non-zero exit codes fail the step unless `continue_on_failure: true` is set.
 
 Shell steps may set `mode: interactive` to run in a PTY. Interactive shell steps cannot use `capture`.
 

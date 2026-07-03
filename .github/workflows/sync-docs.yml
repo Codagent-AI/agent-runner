@@ -2,7 +2,7 @@ name: Sync docs to dot-dev
 
 on:
   push:
-    branches: [docs-full-pass]
+    branches: [main]
     paths: ['docs/**']
   workflow_dispatch: {}
 
@@ -55,7 +55,7 @@ jobs:
           git config user.name "docs-sync-bot"
           git config user.email "actions@users.noreply.github.com"
           SHORT_SHA="$(cd ../agent-runner && git rev-parse --short HEAD)"
-          BRANCH="docs-sync/agent-runner-${SHORT_SHA}"
+          BRANCH="docs-sync/agent-runner-${SHORT_SHA}-${GITHUB_RUN_ID}"
           git checkout -b "$BRANCH"
           git commit -m "docs: sync agent-runner docs from ${SHORT_SHA}"
           git push origin "$BRANCH"

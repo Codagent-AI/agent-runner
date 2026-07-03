@@ -77,7 +77,7 @@ Capturing an autonomous agent step forces headless execution so `stdout` can be 
 
 ## Interactive Shell Steps
 
-Shell steps normally run through `/bin/sh`. A shell step can set `mode: interactive` to run in a PTY.
+Shell steps normally run through `sh -c`, resolved from `PATH`. A shell step can set `mode: interactive` to run in a PTY.
 
 ```yaml
 - id: open-shell-tool
