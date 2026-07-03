@@ -7,7 +7,7 @@ description: Index of Agent Runner documentation pages.
 
 # Documentation
 
-Agent Runner documentation is split into focused pages for GitHub and the docs site. Read the pages in sidebar order if you are new, or jump directly to the reference you need.
+Agent Runner documentation is split into focused pages for GitHub and the docs site. Read the pages in sidebar order if you're new, or jump directly to the reference you need.
 
 ## Getting Started
 
