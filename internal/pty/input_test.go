@@ -145,6 +145,34 @@ func TestInputProcessor(t *testing.T) {
 		}
 	})
 
+	t.Run("forwards SGR mouse input when mouse tracking is enabled", func(t *testing.T) {
+		mouse := &mouseTracker{}
+		mouse.observeCSI([]byte("\x1b[?1002h"))
+		p := &inputProcessor{mouse: mouse}
+		input := "\x1b[<0;31;58M\x1b[<0;31;58m"
+		r := p.process([]byte(input))
+		if r.triggered {
+			t.Fatal("unexpected trigger inside mouse input")
+		}
+		if string(r.forward) != input {
+			t.Fatalf("expected mouse input forwarded, got %q", string(r.forward))
+		}
+	})
+
+	t.Run("drops SGR mouse input after mouse tracking is disabled", func(t *testing.T) {
+		mouse := &mouseTracker{}
+		mouse.observeCSI([]byte("\x1b[?1002h"))
+		mouse.observeCSI([]byte("\x1b[?1002l"))
+		p := &inputProcessor{mouse: mouse}
+		r := p.process([]byte("\x1b[<0;31;58M"))
+		if r.triggered {
+			t.Fatal("unexpected trigger inside mouse input")
+		}
+		if len(r.forward) != 0 {
+			t.Fatalf("expected mouse input dropped, got %q", string(r.forward))
+		}
+	})
+
 	t.Run("does not trigger on Ctrl-] byte inside CSI", func(t *testing.T) {
 		p := &inputProcessor{}
 		// 0x1d is below the CSI final byte range (0x40-0x7e), so it stays

@@ -23,6 +23,10 @@ type inputProcessor struct {
 	lineBuffer []byte
 	escState   int
 	escBuf     []byte
+	// mouse reports whether the child has enabled mouse tracking. When it
+	// has, SGR mouse input is forwarded; otherwise it is dropped so stray
+	// mouse events are not typed into the child as text. May be nil.
+	mouse *mouseTracker
 }
 
 // processResult holds the outcome of processing an input chunk.
@@ -113,7 +117,7 @@ func (p *inputProcessor) processEscapeByte(b byte) []byte {
 			return nil
 		}
 		out := []byte(nil)
-		if !isSGRMouseInput(p.escBuf) {
+		if !isSGRMouseInput(p.escBuf) || p.mouse.enabled() {
 			out = append(out, p.escBuf...)
 		}
 		p.escBuf = p.escBuf[:0]

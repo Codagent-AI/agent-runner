@@ -32,6 +32,10 @@ const outOSCSawEsc = 10
 type outputProcessor struct {
 	textSentinel string
 	markerForms  [][]byte
+	// mouse, when non-nil, is updated as mouse-tracking DECSET/DECRST
+	// sequences pass through so the input side knows whether the child
+	// wants SGR mouse input forwarded.
+	mouse *mouseTracker
 
 	escState          int
 	escBuf            []byte // bytes accumulated for the current escape sequence
@@ -106,6 +110,7 @@ func (p *outputProcessor) processCSIByte(b byte, fwd *[]byte) {
 	if b < 0x40 || b > 0x7e {
 		return
 	}
+	p.mouse.observeCSI(p.escBuf)
 	*fwd = append(*fwd, p.escBuf...)
 	if len(p.textBuf) == 0 && csiStartsTextCell(b) {
 		p.markTextBoundary()
