@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copies allowlisted host config from /host-home into the sandbox's writable
+# HOME. It keeps mounted credentials read-only, creates private env/zsh files,
+# and seeds CLI conveniences such as Codex trust and claude-headless.
 set -euo pipefail
 
 HOME_DIR="${HOME:-/workspace/home}"

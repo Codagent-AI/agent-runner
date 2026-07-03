@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Runs the narrow and-scene browser proof inside the sandbox substrate.
+# This verifies clean fixture/reference checkouts can install, build, run
+# Playwright-backed verification, and copy logs/metadata to host artifacts.
 set -euo pipefail
 
 REPO="${REPO:-https://github.com/Codagent-AI/and-scene.git}"

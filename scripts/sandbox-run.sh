@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Runs a one-shot command in the eval sandbox image after building the current
+# Agent Runner checkout inside the container. This script owns Docker launch,
+# explicit env/auth pass-through, workspace setup, and artifact mounting.
 set -euo pipefail
 
 IMAGE="${IMAGE:-agent-runner-dev:local}"
