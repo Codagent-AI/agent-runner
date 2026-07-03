@@ -108,6 +108,11 @@ func RunInteractive(args []string, opts Options) (Result, error) {
 	hint := newIdleHint(hintDelay)
 	exitCh := make(chan struct{})
 
+	// Shared between the output and input goroutines: the output side
+	// observes mouse-tracking DECSET/DECRST from the child, the input side
+	// forwards SGR mouse input only while tracking is enabled.
+	mouse := &mouseTracker{}
+
 	// Propagate terminal resize events to the PTY.
 	resizeCh := startResizeHandler(ptmx)
 
@@ -115,14 +120,14 @@ func RunInteractive(args []string, opts Options) (Result, error) {
 	outputDone := make(chan struct{})
 	go func() {
 		defer close(outputDone)
-		forwardOutput(ptmx, hint, cmd, state, exitCh, opts.DebugLabel, opts.ContinueMarker)
+		forwardOutput(ptmx, hint, cmd, state, exitCh, opts.DebugLabel, opts.ContinueMarker, mouse)
 	}()
 
 	// Read stdin, process input, forward to PTY, detect continue triggers.
 	inputDone := make(chan struct{})
 	go func() {
 		defer close(inputDone)
-		processStdin(ptmx, cmd, hint, state, exitCh)
+		processStdin(ptmx, cmd, hint, state, exitCh, mouse)
 	}()
 
 	// Wait for the process to exit.
@@ -336,8 +341,8 @@ func forwardChunk(result outputResult, proc *outputProcessor, hint *idleHint, se
 	return false, nil
 }
 
-func forwardOutput(ptmx *os.File, hint *idleHint, cmd *exec.Cmd, state *ptyState, exitCh chan struct{}, debugLabel, continueMarker string) {
-	proc := &outputProcessor{textSentinel: continueMarker}
+func forwardOutput(ptmx *os.File, hint *idleHint, cmd *exec.Cmd, state *ptyState, exitCh chan struct{}, debugLabel, continueMarker string, mouse *mouseTracker) {
+	proc := &outputProcessor{textSentinel: continueMarker, mouse: mouse}
 	debugLog := openPTYDebugLogger(debugLabel)
 	defer debugLog.close()
 	debugLog.logExpectedContinueMarker(continueMarker)
@@ -485,8 +490,8 @@ func stripTranscript(s string) string {
 // the escape-sequence-aware input processor, forwards bytes to the PTY, and
 // detects continue triggers. On trigger, it sends SIGTERM (then SIGKILL after
 // timeout) to the child process.
-func processStdin(ptmx *os.File, cmd *exec.Cmd, hint *idleHint, state *ptyState, exitCh chan struct{}) {
-	proc := &inputProcessor{}
+func processStdin(ptmx *os.File, cmd *exec.Cmd, hint *idleHint, state *ptyState, exitCh chan struct{}, mouse *mouseTracker) {
+	proc := &inputProcessor{mouse: mouse}
 	fd := os.Stdin.Fd()
 	pollFds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}} // #nosec G115 -- fd fits int32
 	buf := make([]byte, 1024)

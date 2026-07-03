@@ -415,6 +415,41 @@ func TestOutputProcessor(t *testing.T) {
 		}
 	})
 
+	t.Run("mouse tracking DECSET in output updates the tracker", func(t *testing.T) {
+		mouse := &mouseTracker{}
+		p := &outputProcessor{textSentinel: textSentinel, mouse: mouse}
+		enable := "\x1b[?1049h\x1b[?1000;1002;1006h"
+		r := p.process([]byte(enable))
+		if string(r.forward) != enable {
+			t.Fatalf("expected DECSET forwarded, got %q", string(r.forward))
+		}
+		if !mouse.enabled() {
+			t.Fatal("expected mouse tracking enabled after DECSET in output")
+		}
+
+		disable := "\x1b[?1000;1002l"
+		r = p.process([]byte(disable))
+		if string(r.forward) != disable {
+			t.Fatalf("expected DECRST forwarded, got %q", string(r.forward))
+		}
+		if mouse.enabled() {
+			t.Fatal("expected mouse tracking disabled after DECRST in output")
+		}
+	})
+
+	t.Run("split mouse tracking DECSET updates the tracker", func(t *testing.T) {
+		mouse := &mouseTracker{}
+		p := &outputProcessor{textSentinel: textSentinel, mouse: mouse}
+		p.process([]byte("\x1b[?10"))
+		if mouse.enabled() {
+			t.Fatal("unexpected tracking enable on partial DECSET")
+		}
+		p.process([]byte("02h"))
+		if !mouse.enabled() {
+			t.Fatal("expected mouse tracking enabled after split DECSET completes")
+		}
+	})
+
 	t.Run("escape state persists across chunks", func(t *testing.T) {
 		p := textOutputProcessor()
 		// Send just the ESC byte in one chunk.
