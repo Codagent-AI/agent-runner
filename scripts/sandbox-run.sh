@@ -44,7 +44,8 @@ Options:
   --mount-claude-auth    Mount host ~/.claude auth/settings files read-only for
                           subscription-based Claude Code auth. Files are copied
                           into writable container home before the command runs.
-  --docker-run-arg ARG   Extra docker run argument. Repeatable.
+  --docker-run-arg ARG   Extra docker run argument. Repeatable. Use this for
+                          explicit opt-ins such as --ipc=host.
   -h, --help             Show this help.
 USAGE
 }
@@ -194,7 +195,6 @@ AGENT_RUNNER_SOURCE_COMMIT="${AGENT_RUNNER_SOURCE_COMMIT:-$(git -C "$RUNNER_ROOT
 AGENT_RUNNER_SOURCE_DIRTY="${AGENT_RUNNER_SOURCE_DIRTY:-$(if git -C "$RUNNER_ROOT" diff --quiet --ignore-submodules -- 2>/dev/null && git -C "$RUNNER_ROOT" diff --cached --quiet --ignore-submodules -- 2>/dev/null; then echo false; else echo true; fi)}"
 export AGENT_RUNNER_SOURCE_COMMIT AGENT_RUNNER_SOURCE_DIRTY
 
-inner_command="$*"
 bootstrap=$(cat <<'BOOTSTRAP'
 set -euo pipefail
 mkdir -p /workspace/bin "$HOME" /tmp/agent-runner-local
@@ -215,14 +215,20 @@ go build -ldflags "-X main.version=local-dev" -o /workspace/bin/agent-runner ./c
 cd /workspace
 BOOTSTRAP
 )
-container_script="${bootstrap}"$'\n'"${inner_command}"
+if (($# == 1)); then
+  container_script="${bootstrap}"$'\n'"$1"
+  container_command=(bash -lc "$container_script")
+else
+  container_script="${bootstrap}"$'\n''exec "$@"'
+  container_command=(bash -lc "$container_script" -- "$@")
+fi
 
 build_cmd=(docker build -t "$IMAGE" -f "$DOCKERFILE" "$RUNNER_ROOT")
 run_cmd=(
   docker run
   --rm
   --init
-  --ipc=host
+  --shm-size=1g
   -w /workspace
   -e CI=1
   -e HOME=/workspace/home
@@ -276,7 +282,7 @@ if [[ "$MOUNT_CLAUDE_AUTH" == 1 ]]; then
   add_optional_file_mount "$HOME/.claude/settings.local.json" "/host-home/claude/settings.local.json"
 fi
 
-run_cmd+=("$IMAGE" bash -lc "$container_script")
+run_cmd+=("$IMAGE" "${container_command[@]}")
 
 if [[ "$DRY_RUN" == 1 ]]; then
   print_command "${build_cmd[@]}"

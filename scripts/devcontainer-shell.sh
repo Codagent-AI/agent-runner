@@ -78,22 +78,33 @@ if [[ "$WITH_HOST_CONFIG" == 1 ]]; then
   CONFIG="$RUNNER_ROOT/artifacts/devcontainer/devcontainer.with-host-config.json"
   BASE_CONFIG="$RUNNER_ROOT/.devcontainer/eval/devcontainer.json" \
   OUT_CONFIG="$CONFIG" \
+  HOST_HOME="$HOME" \
+  RUNNER_ROOT="$RUNNER_ROOT" \
   node <<'NODE'
 const fs = require("fs");
+const path = require("path");
 
 const config = JSON.parse(fs.readFileSync(process.env.BASE_CONFIG, "utf8"));
+const hostHome = process.env.HOST_HOME;
+const runnerRoot = process.env.RUNNER_ROOT;
+const optionalHostMounts = [
+  [path.join(hostHome, ".codex", "auth.json"), "source=${localEnv:HOME}/.codex/auth.json,target=/host-home/codex/auth.json,type=bind,readonly"],
+  [path.join(hostHome, ".codex", "config.toml"), "source=${localEnv:HOME}/.codex/config.toml,target=/host-home/codex/config.toml,type=bind,readonly"],
+  [path.join(hostHome, ".claude", ".credentials.json"), "source=${localEnv:HOME}/.claude/.credentials.json,target=/host-home/claude/.credentials.json,type=bind,readonly"],
+  [path.join(hostHome, ".claude", "settings.json"), "source=${localEnv:HOME}/.claude/settings.json,target=/host-home/claude/settings.json,type=bind,readonly"],
+  [path.join(hostHome, ".claude", "settings.local.json"), "source=${localEnv:HOME}/.claude/settings.local.json,target=/host-home/claude/settings.local.json,type=bind,readonly"],
+  [path.join(hostHome, ".zshrc"), "source=${localEnv:HOME}/.zshrc,target=/host-home/shell/.zshrc,type=bind,readonly"],
+  [path.join(hostHome, ".zprofile"), "source=${localEnv:HOME}/.zprofile,target=/host-home/shell/.zprofile,type=bind,readonly"],
+  [path.join(hostHome, ".gitconfig"), "source=${localEnv:HOME}/.gitconfig,target=/host-home/git/.gitconfig,type=bind,readonly"],
+  [path.join(hostHome, ".gitignore"), "source=${localEnv:HOME}/.gitignore,target=/host-home/git/.gitignore,type=bind,readonly"],
+  [path.join(hostHome, ".config", "git", "ignore"), "source=${localEnv:HOME}/.config/git/ignore,target=/host-home/git/config-ignore,type=bind,readonly"],
+];
+const requiredHostMounts = [
+  [path.join(runnerRoot, ".sandbox-secrets.env"), "source=${localWorkspaceFolder}/.sandbox-secrets.env,target=/host-home/sandbox-secrets.env,type=bind,readonly"],
+];
 const hostMounts = [
-  "source=${localEnv:HOME}/.codex/auth.json,target=/host-home/codex/auth.json,type=bind,readonly",
-  "source=${localEnv:HOME}/.codex/config.toml,target=/host-home/codex/config.toml,type=bind,readonly",
-  "source=${localEnv:HOME}/.claude/.credentials.json,target=/host-home/claude/.credentials.json,type=bind,readonly",
-  "source=${localEnv:HOME}/.claude/settings.json,target=/host-home/claude/settings.json,type=bind,readonly",
-  "source=${localEnv:HOME}/.claude/settings.local.json,target=/host-home/claude/settings.local.json,type=bind,readonly",
-  "source=${localEnv:HOME}/.zshrc,target=/host-home/shell/.zshrc,type=bind,readonly",
-  "source=${localEnv:HOME}/.zprofile,target=/host-home/shell/.zprofile,type=bind,readonly",
-  "source=${localEnv:HOME}/.gitconfig,target=/host-home/git/.gitconfig,type=bind,readonly",
-  "source=${localEnv:HOME}/.gitignore,target=/host-home/git/.gitignore,type=bind,readonly",
-  "source=${localEnv:HOME}/.config/git/ignore,target=/host-home/git/config-ignore,type=bind,readonly",
-  "source=${localWorkspaceFolder}/.sandbox-secrets.env,target=/host-home/sandbox-secrets.env,type=bind,readonly",
+  ...optionalHostMounts.filter(([source]) => fs.existsSync(source)).map(([, mount]) => mount),
+  ...requiredHostMounts.map(([, mount]) => mount),
 ];
 
 config.name = `${config.name} (host config)`;

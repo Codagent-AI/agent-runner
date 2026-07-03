@@ -35,17 +35,48 @@ func TestSandboxRunDryRunShowsSafeDockerInvocation(t *testing.T) {
 		"-v " + artifacts + ":/artifacts",
 		"-e AGENT_RUNNER_SOURCE_COMMIT",
 		"-e ANTHROPIC_API_KEY",
+		"--shm-size=1g",
 		"echo proof",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("dry-run output missing %q:\n%s", want, text)
 		}
 	}
+	if strings.Contains(text, "--ipc=host") {
+		t.Fatalf("sandbox-run should not share host IPC by default:\n%s", text)
+	}
 	if strings.Contains(text, "SSH_AUTH_SOCK") {
 		t.Fatalf("dry-run output leaked SSH_AUTH_SOCK:\n%s", text)
 	}
 	if strings.Contains(text, "test-key") {
 		t.Fatalf("dry-run output leaked env value:\n%s", text)
+	}
+}
+
+func TestSandboxRunDryRunPreservesMultiArgCommandBoundaries(t *testing.T) {
+	dir := t.TempDir()
+	cmd := exec.Command("bash", "./sandbox-run.sh",
+		"--dry-run",
+		"--no-default-secrets",
+		"--artifact-dir", filepath.Join(dir, "artifacts"),
+		"--",
+		"node",
+		"-e",
+		"console.log(process.argv[1])",
+		"hello world",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandbox-run dry run failed: %v\n%s", err, output)
+	}
+	text := string(output)
+	for _, want := range []string{`bash -lc`, `exec "$@"`, ` -- node -e`, `hello\ world`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("dry-run output missing argv-preserving marker %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, `node\ -e\ console.log`) {
+		t.Fatalf("dry-run output flattened argv into one shell string:\n%s", text)
 	}
 }
 
@@ -489,6 +520,8 @@ func TestDevcontainerShellDefaultsToZsh(t *testing.T) {
 	for _, want := range []string{
 		"--with-host-config",
 		"agent-runner-dev-home-host-config",
+		"optionalHostMounts.filter(([source]) => fs.existsSync(source))",
+		"requiredHostMounts",
 		"target=/host-home/codex/auth.json",
 		"target=/host-home/claude/.credentials.json",
 		"target=/host-home/sandbox-secrets.env",
