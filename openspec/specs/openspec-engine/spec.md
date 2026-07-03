@@ -1,20 +1,20 @@
 ## Requirements
 
-### Requirement: State directory resolution
+### Requirement: Change parameter resolution
 
-The openspec engine SHALL implement `getStateDir(params)` to return the openspec change directory as the state file location. The change name SHALL be read from the param specified by `engine.change_param` in the workflow config.
+The openspec engine SHALL read the change name from the param specified by `engine.change_param` in the workflow config. The engine SHALL use that change name when invoking `openspec status` and `openspec instructions`.
 
-#### Scenario: State dir resolves to change directory
+#### Scenario: Change param resolves
 - **WHEN** the workflow has `engine.change_param: change_name` and params has `change_name: "my-change"`
-- **THEN** `getStateDir` returns `openspec/changes/my-change/` and baton writes `baton-state.json` there
+- **THEN** the engine uses `my-change` as the change name for OpenSpec CLI calls
 
 #### Scenario: Change param missing from params
-- **WHEN** `getStateDir` is called but the param specified by `change_param` is not in params
+- **WHEN** an OpenSpec engine hook is called but the param specified by `change_param` is not in params
 - **THEN** the engine fails with a descriptive error naming the missing param
 
 ### Requirement: Workflow validation via schema matching
 
-The openspec engine SHALL implement `validateWorkflow` to verify that every artifact ID in the openspec schema has a step with a matching ID in the workflow. The match SHALL be exact by name.
+The openspec engine SHALL implement `ValidateWorkflow` to verify that every artifact ID in the openspec schema has a step with a matching ID in the workflow. The match SHALL be exact by name.
 
 #### Scenario: All artifacts have matching steps
 - **WHEN** the openspec schema has artifacts `proposal`, `specs`, `design`, `tasks`, `review` and the workflow has steps with those same IDs
@@ -30,10 +30,10 @@ The openspec engine SHALL implement `validateWorkflow` to verify that every arti
 
 ### Requirement: Prompt enrichment via openspec instructions
 
-The openspec engine SHALL implement `enrichPrompt` by calling `openspec instructions <step-id> --change "<name>" --json` (using the step ID as the artifact ID) and prepending template, output path, and dependencies to the step's prompt. The `instruction` field from the openspec output SHALL be excluded since the prompt already invokes the appropriate skill.
+The openspec engine SHALL implement `EnrichPrompt` by calling `openspec instructions <step-id> --change "<name>" --json` (using the step ID as the artifact ID) and prepending template, output path, and dependencies to the step's prompt. The `instruction` field from the openspec output SHALL be excluded since the prompt already invokes the appropriate skill.
 
 #### Scenario: Enrichment prepends artifact context
-- **WHEN** a step with ID `proposal` is executed and the engine calls `enrichPrompt`
+- **WHEN** a step with ID `proposal` is executed and the engine calls `EnrichPrompt`
 - **THEN** the engine calls `openspec instructions proposal --change "<name>" --json`, and prepends an `<artifact_context>` block containing `<output_path>` (absolute, joined from changeDir + outputPath), `<dependencies>` (absolute paths with descriptions), and `<template>` (full template content)
 
 #### Scenario: Openspec CLI call fails
@@ -46,7 +46,7 @@ The openspec engine SHALL implement `enrichPrompt` by calling `openspec instruct
 
 ### Requirement: Step validation via openspec status
 
-The openspec engine SHALL implement `validateStep` by calling `openspec status --change "<name>" --json` and checking whether the artifact matching the step ID has status `done`.
+The openspec engine SHALL implement `ValidateStep` by calling `openspec status --change "<name>" --json` and checking whether the artifact matching the step ID has status `done`.
 
 #### Scenario: Artifact status is done
 - **WHEN** after a step completes, `openspec status` reports the step's artifact as `done`
@@ -54,7 +54,7 @@ The openspec engine SHALL implement `validateStep` by calling `openspec status -
 
 #### Scenario: Artifact status is not done
 - **WHEN** after a step completes, `openspec status` reports the step's artifact as `ready` or `blocked`
-- **THEN** validation fails (triggering baton's resume-or-exit prompt)
+- **THEN** validation fails (triggering Agent Runner's resume-or-exit prompt)
 
 #### Scenario: Openspec CLI call fails during validation
 - **WHEN** `openspec status` returns a non-zero exit code

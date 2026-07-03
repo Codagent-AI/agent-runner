@@ -2,55 +2,47 @@
 
 ### Requirement: Engine loading
 
-Baton SHALL load the engine specified in a workflow's `engine` block at workflow load time. If the engine type is unrecognized or the engine fails to initialize (e.g., missing CLI dependency), baton SHALL fail immediately with a descriptive error before executing any steps.
+Agent Runner SHALL load the engine specified in a workflow's `engine` block at workflow load time. If the engine type is unrecognized or the engine fails to initialize (e.g., missing CLI dependency), Agent Runner SHALL fail immediately with a descriptive error before executing any steps.
 
 #### Scenario: Engine loads successfully
 - **WHEN** a workflow has `engine.type: openspec` and the openspec CLI is available
-- **THEN** baton initializes the engine and proceeds to execute steps
+- **THEN** Agent Runner initializes the engine and proceeds to execute steps
 
 #### Scenario: Engine type unrecognized
 - **WHEN** a workflow has `engine.type: foo` and no engine named "foo" is registered
-- **THEN** baton fails immediately with an error naming the unknown engine type
+- **THEN** Agent Runner fails immediately with an error naming the unknown engine type
 
 #### Scenario: Engine initialization fails
 - **WHEN** a workflow has `engine.type: openspec` but the openspec CLI is not installed
-- **THEN** baton fails immediately with an error explaining the missing dependency
+- **THEN** Agent Runner fails immediately with an error explaining the missing dependency
 
 ### Requirement: Workflow validation
 
-After loading the engine and the workflow, baton SHALL call the engine's `validateWorkflow` (if implemented) to verify the workflow is compatible with the engine. If validation fails, baton SHALL fail immediately with a descriptive error.
+After loading the engine and the workflow, Agent Runner SHALL call the engine's `ValidateWorkflow` hook to verify the workflow is compatible with the engine. If validation fails, Agent Runner SHALL fail immediately with a descriptive error.
 
 #### Scenario: Engine validates workflow successfully
-- **WHEN** the engine implements `validateWorkflow` and the workflow passes validation
-- **THEN** baton proceeds to execute steps
+- **WHEN** the engine's `ValidateWorkflow` hook passes
+- **THEN** Agent Runner proceeds to execute steps
 
 #### Scenario: Engine validation fails
-- **WHEN** the engine implements `validateWorkflow` and it reports errors
-- **THEN** baton fails immediately with the engine's error messages
-
-#### Scenario: Engine does not implement validateWorkflow
-- **WHEN** the engine does not implement `validateWorkflow`
-- **THEN** baton skips workflow validation and proceeds
+- **WHEN** the engine's `ValidateWorkflow` hook reports errors
+- **THEN** Agent Runner fails immediately with the engine's error messages
 
 ### Requirement: State file persistence
 
-Baton SHALL persist workflow state to a JSON file after each step. The engine's `getStateDir(params)` (if implemented) determines the directory; otherwise baton defaults to the project root. The state file SHALL contain at the top level: `workflowFile`, `workflowName`, `params`, and `workflowHash`. The `currentStep` field SHALL be a recursive nested object tracking the full nesting path through sub-workflows and loop iterations; each node in this nesting chain SHALL contain its own scope-local `sessionIds` and `capturedVariables`.
+Agent Runner SHALL persist workflow state to `state.json` in the run session directory after each step. Engines do not choose the state directory. The state file SHALL contain at the top level: `workflowFile`, `workflowName`, `params`, and `workflowHash`. The `currentStep` field SHALL be a recursive nested object tracking the full nesting path through sub-workflows and loop iterations; each node in this nesting chain SHALL contain its own scope-local `sessionIds` and `capturedVariables`.
 
 #### Scenario: State file written after each step
 - **WHEN** a step completes (success or abort)
-- **THEN** baton writes the state file to the engine's state dir (or project root)
+- **THEN** Agent Runner writes `state.json` in the run session directory
 
-#### Scenario: Engine provides custom state dir
-- **WHEN** the engine implements `getStateDir` and returns a path
-- **THEN** baton writes the state file to that directory
-
-#### Scenario: No engine configured
-- **WHEN** a workflow has no engine block
-- **THEN** baton writes the state file to the project root
+#### Scenario: Engine does not affect state dir
+- **WHEN** a workflow has an engine block
+- **THEN** Agent Runner still writes `state.json` in the run session directory
 
 #### Scenario: Workflow completes successfully
 - **WHEN** all steps complete successfully
-- **THEN** baton deletes the state file
+- **THEN** Agent Runner preserves `state.json` and marks it completed
 
 #### Scenario: State file captures nested position
 - **WHEN** execution is inside a sub-workflow within a loop
@@ -62,56 +54,52 @@ Baton SHALL persist workflow state to a JSON file after each step. The engine's 
 
 ### Requirement: Workflow resumption
 
-`baton resume <state-file-path>` SHALL load the state file, re-load the workflow from the persisted `workflowFile`, and resume from `currentStep`. If the workflow file has changed since the state was written, baton SHALL warn but proceed. `--from` on a normal `baton run` SHALL override the state file if one exists.
+`agent-runner -resume <run-id>` SHALL load the run's state file, re-load the workflow from the persisted `workflowFile`, and resume from `currentStep`. If the workflow file has changed since the state was written, Agent Runner SHALL warn but proceed.
 
 #### Scenario: Resume from state file
-- **WHEN** the user runs `baton resume path/to/baton-state.json`
-- **THEN** baton loads the state, re-loads the workflow, and resumes from `currentStep` with the persisted `sessionIds` and `params`
+- **WHEN** the user runs `agent-runner -resume <run-id>`
+- **THEN** Agent Runner loads the run state, re-loads the workflow, and resumes from `currentStep` with the persisted `sessionIds` and `params`
 
 #### Scenario: Workflow changed since state was written
 - **WHEN** resuming and the workflow file differs from when the state was written
-- **THEN** baton warns that the workflow has changed but proceeds if `currentStep` ID still exists in the workflow
+- **THEN** Agent Runner warns that the workflow has changed but proceeds if `currentStep` ID still exists in the workflow
 
 #### Scenario: Current step ID no longer exists
 - **WHEN** resuming and `currentStep` references a step ID that no longer exists in the workflow
-- **THEN** baton fails with a descriptive error
-
-#### Scenario: --from overrides state file
-- **WHEN** a state file exists and the user runs `baton run workflow.yaml --from design`
-- **THEN** baton starts from `design`, ignoring the state file's `currentStep`
+- **THEN** Agent Runner fails with a descriptive error
 
 ### Requirement: Prompt enrichment
 
-For steps whose ID matches an engine-managed artifact, baton SHALL call the engine's `enrichPrompt` (if implemented) to obtain engine-provided context. The enrichment SHALL be kept separate from the step prompt and delivered according to the system prompt routing rules: via native system prompt for supporting adapters in interactive mode, wrapped in `<system>` XML tags for non-supporting adapters in interactive mode, or concatenated into the positional argument for headless mode. The engine determines which step IDs it manages.
+For steps whose ID matches an engine-managed artifact, Agent Runner SHALL call the engine's `EnrichPrompt` hook to obtain engine-provided context. The enrichment SHALL be kept separate from the step prompt and delivered according to the system prompt routing rules: via native system prompt for supporting adapters in interactive mode, wrapped in `<system>` XML tags for non-supporting adapters in interactive mode, or concatenated into the positional argument for headless mode. The engine determines which step IDs it manages.
 
 #### Scenario: Step ID matches an engine artifact
-- **WHEN** a step's ID matches an engine-managed artifact and the engine implements `enrichPrompt`
-- **THEN** baton calls `enrichPrompt` and delivers the result separately from the step prompt via system prompt routing
+- **WHEN** a step's ID matches an engine-managed artifact and the engine returns enrichment
+- **THEN** Agent Runner calls `EnrichPrompt` and delivers the result separately from the step prompt via system prompt routing
 
 #### Scenario: Step ID does not match any engine artifact
 - **WHEN** a step's ID does not match any engine-managed artifact
-- **THEN** baton uses the step's prompt as-is, without calling `enrichPrompt`
+- **THEN** Agent Runner uses the step's prompt as-is, without calling `EnrichPrompt`
 
-#### Scenario: Engine does not implement enrichPrompt
-- **WHEN** the engine does not implement `enrichPrompt`
-- **THEN** baton uses the step's prompt as-is
+#### Scenario: Engine returns no enrichment
+- **WHEN** the engine's `EnrichPrompt` hook returns an empty string
+- **THEN** Agent Runner uses the step's prompt as-is
 
 ### Requirement: Step validation
 
-After a step whose ID matches an engine-managed artifact completes successfully, baton SHALL call the engine's `validateStep` (if implemented) to verify the artifact was created. If validation fails, baton SHALL offer the user a choice: resume the previous session interactively, or exit.
+After a step whose ID matches an engine-managed artifact completes successfully, Agent Runner SHALL call the engine's `ValidateStep` hook to verify the artifact was created. If validation fails, Agent Runner SHALL offer the user a choice: resume the previous session interactively, or exit.
 
 #### Scenario: Validation passes
-- **WHEN** a step completes and `validateStep` confirms the artifact exists
-- **THEN** baton proceeds to the next step
+- **WHEN** a step completes and `ValidateStep` confirms the artifact exists
+- **THEN** Agent Runner proceeds to the next step
 
 #### Scenario: Validation fails — user chooses resume
-- **WHEN** a step completes but `validateStep` reports the artifact is missing, and the user chooses to resume
-- **THEN** baton re-launches the previous session in interactive mode so the user can fix it
+- **WHEN** a step completes but `ValidateStep` reports the artifact is missing, and the user chooses to resume
+- **THEN** Agent Runner re-launches the previous session in interactive mode so the user can fix it
 
 #### Scenario: Validation fails — user chooses exit
-- **WHEN** a step completes but `validateStep` reports the artifact is missing, and the user chooses to exit
-- **THEN** baton exits the workflow
+- **WHEN** a step completes but `ValidateStep` reports the artifact is missing, and the user chooses to exit
+- **THEN** Agent Runner exits the workflow
 
 #### Scenario: Step ID does not match any engine artifact
 - **WHEN** a step's ID does not match any engine-managed artifact and the step completes successfully
-- **THEN** baton skips validation and proceeds to the next step
+- **THEN** Agent Runner skips validation and proceeds to the next step

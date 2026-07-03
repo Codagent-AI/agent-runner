@@ -1,7 +1,7 @@
 # splash-modal Specification
 
 ## Purpose
-TBD - created by archiving change splash-modal. Update Purpose after archive.
+Define the one-time splash modal trigger, layout, key handling, and dismissal persistence.
 ## Requirements
 ### Requirement: Splash modal trigger condition
 
@@ -138,4 +138,3 @@ Activating the **Don't show again** button SHALL close the splash modal and SHAL
 #### Scenario: Write failure surfaces inline error
 - **WHEN** the user activates **Don't show again** and the settings write returns an error
 - **THEN** the splash modal closes, an inline error appears on the home screen identifying that the splash preference could not be saved, and `settings.splash.dismissed` is not set in the file
-

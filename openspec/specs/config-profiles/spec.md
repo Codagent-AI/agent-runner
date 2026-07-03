@@ -1,7 +1,7 @@
 # config-profiles Specification
 
 ## Purpose
-TBD - created by archiving change multi-profile. Update Purpose after archive.
+Define profile-set schema, active-profile selection, profile-set inheritance, and layered config merge behavior.
 ## Requirements
 ### Requirement: Top-level profile set schema
 The config file's top-level `profiles:` key SHALL be a map of named profile sets. Each profile set SHALL be an object with an `agents:` key whose value is a map of agent names to agent definitions (as specified in the `agent-profiles` capability). A profile set MAY be empty (no `agents:` key or an empty map) but MUST be a mapping, not a scalar.
@@ -186,4 +186,3 @@ Errors from layered-config validation SHALL include the profile set name, agent 
 #### Scenario: Profile resolution failure names the chain
 - **WHEN** an agent definition extends a parent profile that does not exist in the active profile set
 - **THEN** pre-validation fails with an error naming the agent, the missing parent, the active profile set, and the best-effort layer list searched
-

@@ -1,7 +1,7 @@
 # tui-theme Specification
 
 ## Purpose
-TBD - created by archiving change themes. Update Purpose after archive.
+Define how the TUI theme is persisted, loaded, prompted for, and applied across Agent Runner TUI entry points.
 ## Requirements
 ### Requirement: Theme key in the settings file
 The TUI theme SHALL be persisted as a top-level `theme:` key in `~/.agent-runner/settings.yaml` (defined by the `user-settings-file` capability). The value SHALL be the lowercase string `light` or the lowercase string `dark`. Any other value (including the empty string, `auto`, integer, mapping, sequence, or capitalized variants like `Light` / `DARK`) SHALL be treated as if the key were not set.

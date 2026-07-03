@@ -1,7 +1,7 @@
 # task-compliance-activation Specification
 
 ## Purpose
-TBD - created by archiving change task-compliance. Update Purpose after archive.
+Define task-compliance activation in validator setup and the optional task-file context passed through validation workflows.
 ## Requirements
 ### Requirement: Optional task_file param on run-validator
 
@@ -72,4 +72,3 @@ The `.validator/config.yml` checked into the agent-runner repository SHALL inclu
 #### Scenario: Activator runs against repo locally
 - **WHEN** a developer runs `agent-validator run --report --enable-review task-compliance --context-file <some-task-file>` in the agent-runner repo
 - **THEN** the `task-compliance` review is activated (the config entry is present to flip)
-

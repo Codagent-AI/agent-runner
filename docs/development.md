@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - The Go version declared in [../go.mod](../go.mod)
-- [Claude Code](https://claude.com/claude-code) CLI installed and authenticated
+- At least one supported agent CLI installed and authenticated if you run agent-backed workflows locally: Claude Code, Codex, Copilot, Cursor, or OpenCode
 
 ## Go toolchain setup
 

@@ -10,15 +10,15 @@ A step with a `workflow` field SHALL load and execute the referenced workflow fi
 
 #### Scenario: Sub-workflow executes successfully
 - **WHEN** a step has `workflow: workflows/run-validator.yaml` and the referenced file exists
-- **THEN** baton loads the sub-workflow, executes its steps, and continues with the next step in the parent
+- **THEN** Agent Runner loads the sub-workflow, executes its steps, and continues with the next step in the parent
 
 #### Scenario: Sub-workflow file not found
 - **WHEN** a step has `workflow: workflows/missing.yaml` and the file does not exist
-- **THEN** baton fails with a descriptive error naming the missing file
+- **THEN** Agent Runner fails with a descriptive error naming the missing file
 
 #### Scenario: Sub-workflow step is mutually exclusive with prompt/command/mode
 - **WHEN** a step has both `workflow` and `prompt` (or `command` or `mode`)
-- **THEN** baton fails at load time with a validation error
+- **THEN** Agent Runner fails at load time with a validation error
 
 ### Requirement: Parameter passing to sub-workflows
 
@@ -30,7 +30,7 @@ A step with `workflow` MAY include a `params` map that passes values to the sub-
 
 #### Scenario: Missing required parameter
 - **WHEN** a sub-workflow declares a required parameter and the parent step's `params` map does not include it
-- **THEN** baton fails with a descriptive error naming the missing parameter
+- **THEN** Agent Runner fails with a descriptive error naming the missing parameter
 
 #### Scenario: Sub-workflow does not inherit parent params implicitly
 - **WHEN** the parent workflow has a parameter `change_name` but the step's `params` map does not pass it
@@ -46,11 +46,11 @@ A step with `session: inherit` SHALL resume the most recent session from the par
 
 #### Scenario: Inherit with no parent session
 - **WHEN** a sub-workflow step has `session: inherit` but no parent workflow session exists
-- **THEN** baton fails with a descriptive error
+- **THEN** Agent Runner fails with a descriptive error
 
 #### Scenario: Inherit in a top-level workflow
 - **WHEN** a step in a top-level workflow (not a sub-workflow) has `session: inherit`
-- **THEN** baton logs a warning and falls back to a new session (the agent executor's existing try/catch ensures this is non-fatal)
+- **THEN** Agent Runner logs a warning and falls back to a new session (the agent executor's existing try/catch ensures this is non-fatal)
 
 ### Requirement: Session resume scoping
 

@@ -1,7 +1,7 @@
 # interactive-shell-steps Specification
 
 ## Purpose
-TBD - created by archiving change interactive-shell. Update Purpose after archive.
+Define PTY-backed interactive shell steps, non-PTY autonomous shell defaults, and validation constraints.
 ## Requirements
 ### Requirement: Interactive mode attribute on shell steps
 
@@ -89,4 +89,3 @@ An interactive shell step SHALL honor its `workdir` field the same way a non-int
 
 - **WHEN** an interactive shell step has `workdir: ./subdir`
 - **THEN** the command is spawned with `./subdir` (resolved against the run's base directory) as its current working directory
-

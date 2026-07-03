@@ -8,7 +8,7 @@ Common step types:
 - Interactive agent steps (`mode: interactive`) open an agent session that can converse with the user before the workflow continues.
 - Autonomous agent steps (`mode: autonomous`) give an agent a bounded task and wait for the result without live interaction.
 - Shell steps (`command:`) run deterministic local commands and can capture stdout into workflow variables.
-- Script steps (`script:`) run packaged scripts that ship with a built-in workflow.
+- Script steps (`script:`) run static workflow-local or bundled scripts.
 - Sub-workflow steps (`workflow:`) call another workflow, including embedded workflows from the same namespace.
 
 Captured values can be interpolated later with `{{name}}`. Built-in onboarding workflows use this to pass choices and command output between steps without writing project files.

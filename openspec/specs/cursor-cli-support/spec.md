@@ -1,7 +1,7 @@
 # cursor-cli-support Specification
 
 ## Purpose
-TBD - created by archiving change cursor-support. Update Purpose after archive.
+Define Cursor CLI adapter behavior for autonomous and interactive invocation, session resume, effort handling, and session discovery.
 ## Requirements
 ### Requirement: Cursor headless invocation
 
@@ -121,4 +121,3 @@ The adapter registry SHALL expose `cursor` as a resolvable adapter name, and the
 #### Scenario: Config accepts cli: cursor
 - **WHEN** a configuration file sets `cli: cursor` on an agent profile
 - **THEN** configuration validation succeeds and the error message listing valid CLIs (when some other invalid value is used) mentions `cursor`
-

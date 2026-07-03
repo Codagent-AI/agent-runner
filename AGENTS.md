@@ -6,7 +6,7 @@ This project is pre-release and under active development. Prefer clear, well-tes
 
 ## Workspace Context
 
-For broader Codagent workspace context, see [../AGENTS.md](../AGENTS.md). Read it when the user mentions another Codagent repo or project.
+For broader Codagent workspace context, read the workspace-level `AGENTS.md` when the user mentions another Codagent repo or project. From the main checkout this is `../AGENTS.md`; from a worktree under `./worktrees/<name>`, this is `../../../AGENTS.md`.
 
 ## Project Map
 
@@ -22,6 +22,10 @@ For broader Codagent workspace context, see [../AGENTS.md](../AGENTS.md). Read i
 - `internal/textfmt/`: interpolation and output formatting helpers
 - `internal/runview/`, `internal/listview/`, `internal/liverun/`, `internal/pty/`, `internal/tuistyle/`: terminal UI and PTY behavior
 - `internal/config/`, `internal/discovery/`, `internal/stateio/`, `internal/audit/`, `internal/validate/`: supporting runtime services
+- `internal/onboarding/`, `internal/usersettings/`, `internal/settingseditor/`, `internal/profilewrite/`: first-run setup, persisted user settings, settings UI, and profile config writing
+- `internal/paramform/`, `internal/uistep/`: workflow parameter forms and workflow-defined UI step rendering
+- `internal/prevalidate/`, `internal/runlock/`, `internal/runs/`, `internal/agentplugin/`: pre-run validation, live-run locking, run discovery, and agent plugin integration
+- `internal/themeprompt/`: theme selection prompts shared by TUI entry points
 - `workflows/`: built-in workflow YAML files embedded into the binary
 - `openspec/specs/`: current behavioral specs; archived changes under `openspec/changes/archive/` are historical
 - `testdata/`: workflow fixtures used by tests

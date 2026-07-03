@@ -76,7 +76,7 @@ If no model can be resolved (the step has no `model:` override and no profile st
 - **THEN** the `step_start` entry includes prompt, mode, session strategy, resolved session ID, model, and enrichment
 
 #### Scenario: Agent step end
-- **WHEN** an agent step completes and baton discovers session ID `def-456`
+- **WHEN** an agent step completes and Agent Runner discovers session ID `def-456`
 - **THEN** the `step_end` entry includes exit code and discovered session ID `def-456`
 
 #### Scenario: Resolved model populated from profile default
@@ -121,19 +121,19 @@ Sub-workflow step `step_start` entries SHALL include the resolved workflow path 
 
 ### Requirement: Skipped step entries
 
-When a step is skipped due to `skip_if`, baton SHALL emit a `step_start` / `step_end` pair with outcome `skipped` and the skip_if condition that triggered it.
+When a step is skipped due to `skip_if`, Agent Runner SHALL emit a `step_start` / `step_end` pair with outcome `skipped` and the skip_if condition that triggered it.
 
 #### Scenario: Step skipped due to skip_if
 - **WHEN** a step has `skip_if: previous_success` and the previous step succeeded
-- **THEN** baton emits `step_start` and `step_end` with outcome `skipped` and condition `previous_success`
+- **THEN** Agent Runner emits `step_start` and `step_end` with outcome `skipped` and condition `previous_success`
 
 ### Requirement: Error event for unexpected crashes
 
-When an uncaught exception occurs during workflow execution, baton SHALL emit an `error` event with the exception message and stack trace, followed by a `run_end` event, before the process exits.
+When an uncaught exception occurs during workflow execution, Agent Runner SHALL emit an `error` event with the exception message and stack trace, followed by a `run_end` event, before the process exits.
 
 #### Scenario: Uncaught exception mid-run
 - **WHEN** an unexpected error occurs during step execution
-- **THEN** baton emits an `error` event with the exception message, then a `run_end` event with outcome `failed`
+- **THEN** Agent Runner emits an `error` event with the exception message, then a `run_end` event with outcome `failed`
 
 ### Requirement: Runtime error details on step failure
 
@@ -142,4 +142,3 @@ When a step fails due to a caught runtime error (interpolation failure, missing 
 #### Scenario: Interpolation failure
 - **WHEN** a step fails because variable `{{foo}}` is undefined
 - **THEN** the `step_end` entry has outcome `failed` and error `"Undefined variable: {{foo}}"`
-
