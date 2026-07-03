@@ -75,6 +75,7 @@ The Markdown docs in [`docs/`](docs/) are the source of truth for the documentat
 
 - [Introduction](docs/introduction.md)
 - [Quickstart](docs/quickstart.md)
+- [Setup](docs/setup.md)
 - [Writing Workflows](docs/writing-workflows.md)
 - [Agent Profiles](docs/agent-profiles.md)
 - [Sessions And Modes](docs/sessions-and-modes.md)

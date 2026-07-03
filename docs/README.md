@@ -15,6 +15,7 @@ Agent Runner documentation is split into focused pages for GitHub and the docs s
 | --- | --- |
 | [Introduction](introduction.md) | What Agent Runner is, when to use it, and how it fits around agent CLIs. |
 | [Quickstart](quickstart.md) | Install Agent Runner, launch the TUI, and run common commands. |
+| [Setup](setup.md) | Set up Agent Runner in a Git project and run the onboarding workflow. |
 
 ## Guides
 

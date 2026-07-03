@@ -66,3 +66,5 @@ The `spec-driven:change` workflow is a full development flow without an OpenSpec
 | `onboarding:validator` | Demonstrate Agent Validator setup and the validation feedback loop during onboarding. |
 
 Onboarding workflows are used by first launch and help flows. Several are hidden from normal browsing because they are designed as steps in the onboarding chain.
+
+The `onboarding:validator` workflow includes an internal Agent Validator init step. It scaffolds the `task-compliance` built-in review and passes configured Agent Runner CLI names through to Agent Validator when project agent profiles are available.
