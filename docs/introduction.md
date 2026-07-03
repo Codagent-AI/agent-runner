@@ -19,9 +19,13 @@ That means "run the validator and fix failures until it passes" becomes a workfl
 
 Coding agents are good at execution. They are less reliable at orchestration.
 
-You can ask an agent to follow a long checklist, but the checklist still lives in the same context window as implementation details, error logs, unrelated detours, and model drift. It might skip a step, stop early, or treat a failed validation pass as mostly done.
+There is a big difference between asking an agent to run a workflow and having a workflow that runs the agent.
 
-Agent Runner flips the control flow around. Instead of asking the agent to remember the workflow, Agent Runner runs the workflow and calls the agent for each step.
+You can write the clearest instruction in the world: implement the task, run tests and linters, review the diff, fix failures, re-review, open the PR, wait for CI, address review comments. The agent may do most of it. But "most" is not a reliable engineering workflow.
+
+Agent Runner flips that around. Instead of the agent calling your workflow code when it happens to remember, Agent Runner tells the agent what to do next. It is a deterministic workflow layer outside the agent's context window.
+
+So you don't have to remember what comes next, or babysit the workflow to make sure each validation loop actually runs. Agent Runner does that for you. It runs those steps automatically and *autonomously*, in sequence.
 
 ## When To Use It
 
