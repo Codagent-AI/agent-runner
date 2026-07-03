@@ -1,5 +1,16 @@
 # agent-runner
 
+## 0.2.0
+
+### Minor Changes
+
+- [#48](https://github.com/Codagent-AI/agent-runner/pull/48) Added a Playwright-based Docker/devcontainer sandbox substrate for Agent Runner eval work, including browser proof scripts with explicit secret/auth handling and devcontainer shell tooling.
+
+### Patch Changes
+
+- [#47](https://github.com/Codagent-AI/agent-runner/pull/47) Restructured Agent Runner's user documentation into focused docs-site pages with an index and generated CLI reference, replacing the old single user guide.
+- [#49](https://github.com/Codagent-AI/agent-runner/pull/49) Fixed the PTY layer dropping mouse input for interactive agent sessions, which broke selection, copy, and scrolling when running Claude Code's fullscreen terminal renderer through Agent Runner.
+
 ## 0.1.3
 
 ### Patch Changes
