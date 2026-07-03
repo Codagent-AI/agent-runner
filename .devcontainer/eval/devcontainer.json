@@ -1,0 +1,37 @@
+{
+  "name": "Agent Runner Dev Sandbox",
+  "build": {
+    "dockerfile": "../../docker/dev/Dockerfile",
+    "context": "../.."
+  },
+  "init": true,
+  "remoteUser": "pwuser",
+  "workspaceFolder": "/workspace/agent-runner",
+  "mounts": [
+    "source=${localWorkspaceFolder},target=/workspace/agent-runner,type=bind,consistency=cached",
+    "source=agent-runner-dev-home,target=/workspace/home,type=volume",
+    "source=${localWorkspaceFolder}/artifacts/devcontainer,target=/artifacts,type=bind,consistency=cached"
+  ],
+  "containerEnv": {
+    "CI": "1",
+    "SHELL": "/usr/bin/zsh"
+  },
+  "postCreateCommand": "scripts/sandbox-sync-home.sh && go mod download && make build",
+  "postStartCommand": "scripts/sandbox-sync-home.sh",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "zsh",
+        "terminal.integrated.profiles.linux": {
+          "zsh": {
+            "path": "/usr/bin/zsh"
+          }
+        }
+      },
+      "extensions": [
+        "golang.go",
+        "ms-playwright.playwright"
+      ]
+    }
+  }
+}
