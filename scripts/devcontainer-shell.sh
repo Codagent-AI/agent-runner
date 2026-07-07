@@ -78,7 +78,8 @@ if [[ ! -f "$RUNNER_ROOT/.sandbox-secrets.env" ]]; then
 fi
 
 if [[ "$WITH_HOST_CONFIG" == 1 ]]; then
-  CONFIG="$RUNNER_ROOT/artifacts/devcontainer/devcontainer.with-host-config.json"
+  CONFIG="$RUNNER_ROOT/artifacts/devcontainer/with-host-config/devcontainer.json"
+  mkdir -p "$(dirname -- "$CONFIG")"
   BASE_CONFIG="$RUNNER_ROOT/.devcontainer/eval/devcontainer.json" \
   OUT_CONFIG="$CONFIG" \
   HOST_HOME="$HOME" \
@@ -90,6 +91,7 @@ const path = require("path");
 const config = JSON.parse(fs.readFileSync(process.env.BASE_CONFIG, "utf8"));
 const hostHome = process.env.HOST_HOME;
 const runnerRoot = process.env.RUNNER_ROOT;
+const outConfigDir = path.dirname(process.env.OUT_CONFIG);
 const optionalHostMounts = [
   [path.join(hostHome, ".codex", "auth.json"), "source=${localEnv:HOME}/.codex/auth.json,target=/host-home/codex/auth.json,type=bind,readonly"],
   [path.join(hostHome, ".codex", "config.toml"), "source=${localEnv:HOME}/.codex/config.toml,target=/host-home/codex/config.toml,type=bind,readonly"],
@@ -111,6 +113,11 @@ const hostMounts = [
 ];
 
 config.name = `${config.name} (host config)`;
+config.build = {
+  ...config.build,
+  dockerfile: path.relative(outConfigDir, path.join(runnerRoot, "docker", "dev", "Dockerfile")),
+  context: path.relative(outConfigDir, runnerRoot),
+};
 config.mounts = (config.mounts || []).map((mount) =>
   mount.startsWith("source=agent-runner-dev-home,target=/workspace/home,")
     ? mount.replace("source=agent-runner-dev-home,", "source=agent-runner-dev-home-host-config,")

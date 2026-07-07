@@ -519,7 +519,9 @@ func TestDevcontainerShellDefaultsToZsh(t *testing.T) {
 	}
 	for _, want := range []string{
 		"--with-host-config",
+		"with-host-config/devcontainer.json",
 		"agent-runner-dev-home-host-config",
+		"path.relative(outConfigDir",
 		"optionalHostMounts.filter(([source]) => fs.existsSync(source))",
 		"requiredHostMounts",
 		"target=/host-home/codex/auth.json",
