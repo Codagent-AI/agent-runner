@@ -211,7 +211,7 @@ func TestSandboxSyncHomeCopiesAllowedFilesWritable(t *testing.T) {
 		filepath.Join(hostHome, "claude", ".credentials.json"): `{"claude":true}` + "\n",
 		filepath.Join(hostHome, "claude", "settings.json"):     "{}\n",
 		filepath.Join(hostHome, "shell", ".zshrc"):             "export TEST_ZSH=1\n",
-		filepath.Join(hostHome, "git", ".gitconfig"):           "[user]\n\tname = Test\n",
+		filepath.Join(hostHome, "git", ".gitconfig"):           "[user]\n\tname = Test\n[credential]\n\thelper = /opt/homebrew/bin/gh auth git-credential\n",
 		filepath.Join(hostHome, "git", "config-ignore"):        "*.tmp\n",
 		filepath.Join(hostHome, "sandbox-secrets.env"):         "CLAUDE_CODE_OAUTH_TOKEN=test-oauth-token\nexport GITHUB_TOKEN=test-github-token\n",
 	}
@@ -237,7 +237,6 @@ func TestSandboxSyncHomeCopiesAllowedFilesWritable(t *testing.T) {
 		filepath.Join(containerHome, ".claude", ".credentials.json"): files[filepath.Join(hostHome, "claude", ".credentials.json")],
 		filepath.Join(containerHome, ".claude", "settings.json"):     files[filepath.Join(hostHome, "claude", "settings.json")],
 		filepath.Join(containerHome, ".zshrc"):                       files[filepath.Join(hostHome, "shell", ".zshrc")],
-		filepath.Join(containerHome, ".gitconfig"):                   files[filepath.Join(hostHome, "git", ".gitconfig")],
 		filepath.Join(containerHome, ".config", "git", "ignore"):     files[filepath.Join(hostHome, "git", "config-ignore")],
 	}
 	for path, want := range targets {
@@ -294,6 +293,46 @@ func TestSandboxSyncHomeCopiesAllowedFilesWritable(t *testing.T) {
 	if !strings.Contains(string(zshenv), ".sandbox-env") {
 		t.Fatalf("zshenv should source sandbox env:\n%s", zshenv)
 	}
+	knownHosts, err := os.ReadFile(filepath.Join(containerHome, ".ssh", "known_hosts"))
+	if err != nil {
+		t.Fatalf("read known_hosts: %v", err)
+	}
+	for _, want := range []string{"github.com ssh-ed25519", "github.com ecdsa-sha2-nistp256", "github.com ssh-rsa"} {
+		if !strings.Contains(string(knownHosts), want) {
+			t.Fatalf("known_hosts missing %q:\n%s", want, knownHosts)
+		}
+	}
+	gitConfig, err := os.ReadFile(filepath.Join(containerHome, ".gitconfig"))
+	if err != nil {
+		t.Fatalf("read git config after sync: %v", err)
+	}
+	for _, want := range []string{
+		"[user]\n\tname = Test",
+		`[url "https://github.com/"]`,
+		"insteadOf = git@github.com:",
+		"insteadOf = ssh://git@github.com/",
+		`[credential "https://github.com"]`,
+		"helper = !",
+		"github-credential-helper",
+	} {
+		if !strings.Contains(string(gitConfig), want) {
+			t.Fatalf("git config missing GitHub HTTPS rewrite %q:\n%s", want, gitConfig)
+		}
+	}
+	if strings.Contains(string(gitConfig), "/opt/homebrew/bin/gh") {
+		t.Fatalf("git config kept host-only credential helper:\n%s", gitConfig)
+	}
+	githubCredentialHelper := filepath.Join(dir, "workspace", "bin", "github-credential-helper")
+	helperCmd := exec.Command(githubCredentialHelper, "get")
+	helperCmd.Env = append(os.Environ(), "HOME="+containerHome)
+	helperCmd.Stdin = strings.NewReader("protocol=https\nhost=github.com\n\n")
+	helperOutput, err := helperCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("github credential helper failed: %v\n%s", err, helperOutput)
+	}
+	if got := string(helperOutput); !strings.Contains(got, "username=x-access-token") || !strings.Contains(got, "password=test-github-token") {
+		t.Fatalf("github credential helper did not return sandbox token credentials:\n%s", helperOutput)
+	}
 
 	localConfig := "model = \"test\"\n\n[projects.\"/workspace/agent-runner\"]\ntrust_level = \"trusted\"\nlocal = true\n"
 	if err := os.WriteFile(codexConfig, []byte(localConfig), 0o600); err != nil {
@@ -315,6 +354,15 @@ func TestSandboxSyncHomeCopiesAllowedFilesWritable(t *testing.T) {
 	}
 	if string(data) != localConfig {
 		t.Fatalf("second sync overwrote local codex config: %q", data)
+	}
+	gitConfig, err = os.ReadFile(filepath.Join(containerHome, ".gitconfig"))
+	if err != nil {
+		t.Fatalf("read git config after second sync: %v", err)
+	}
+	for _, value := range []string{"insteadOf = git@github.com:", "insteadOf = ssh://git@github.com/"} {
+		if count := strings.Count(string(gitConfig), value); count != 1 {
+			t.Fatalf("second sync wrote %q %d times, want once:\n%s", value, count, gitConfig)
+		}
 	}
 	helper, err := os.ReadFile(filepath.Join(dir, "workspace", "bin", "claude-headless"))
 	if err != nil {

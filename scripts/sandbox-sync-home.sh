@@ -7,11 +7,14 @@ set -euo pipefail
 HOME_DIR="${HOME:-/workspace/home}"
 HOST_HOME_ROOT="${SANDBOX_HOST_HOME_ROOT:-/host-home}"
 WORKSPACE_BIN="${SANDBOX_WORKSPACE_BIN:-/workspace/bin}"
+export HOME="$HOME_DIR"
 
 mkdir -p \
   "$HOME_DIR/.codex" \
   "$HOME_DIR/.claude" \
-  "$HOME_DIR/.config/git"
+  "$HOME_DIR/.config/git" \
+  "$HOME_DIR/.ssh"
+chmod 700 "$HOME_DIR/.ssh" 2>/dev/null || true
 
 copy_file_if_present() {
   local source="$1"
@@ -96,6 +99,73 @@ ensure_codex_workspace_trust() {
   } >> "$config"
 }
 
+seed_github_known_hosts() {
+  local target="$HOME_DIR/.ssh/known_hosts"
+  local line
+  touch "$target"
+  chmod u+rw,go-rwx "$target" 2>/dev/null || chmod u+rw "$target"
+  # Pinned from GitHub Docs so SSH does not prompt on first use.
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    if ! grep -Fqx "$line" "$target"; then
+      printf '%s\n' "$line" >> "$target"
+    fi
+  done <<'KNOWN_HOSTS'
+github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
+KNOWN_HOSTS
+}
+
+ensure_git_config_value() {
+  local key="$1"
+  local value="$2"
+  local existing
+  existing="$(git config --global --get-all "$key" 2>/dev/null || true)"
+  if grep -Fxq "$value" <<<"$existing"; then
+    return 0
+  fi
+  git config --global --add "$key" "$value"
+}
+
+configure_github_https_rewrites() {
+  touch "$HOME_DIR/.gitconfig"
+  chmod u+rw,go-rwx "$HOME_DIR/.gitconfig" 2>/dev/null || chmod u+rw "$HOME_DIR/.gitconfig"
+  ensure_git_config_value "url.https://github.com/.insteadOf" "git@github.com:"
+  ensure_git_config_value "url.https://github.com/.insteadOf" "ssh://git@github.com/"
+  git config --global --unset-all credential.helper >/dev/null 2>&1 || true
+  git config --global --replace-all credential.https://github.com.helper "!$WORKSPACE_BIN/github-credential-helper"
+}
+
+write_github_credential_helper() {
+  local target="$WORKSPACE_BIN/github-credential-helper"
+  mkdir -p "$(dirname -- "$target")"
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' 'set -euo pipefail'
+    printf '%s\n' 'if [[ -r "$HOME/.sandbox-env" ]]; then'
+    printf '%s\n' '  source "$HOME/.sandbox-env"'
+    printf '%s\n' 'fi'
+    printf '%s\n' 'if [[ "${1:-}" != "get" ]]; then'
+    printf '%s\n' '  exit 0'
+    printf '%s\n' 'fi'
+    printf '%s\n' 'protocol=""'
+    printf '%s\n' 'host=""'
+    printf '%s\n' 'while IFS= read -r line && [[ -n "$line" ]]; do'
+    printf '%s\n' '  case "$line" in'
+    printf '%s\n' '    protocol=*) protocol="${line#protocol=}" ;;'
+    printf '%s\n' '    host=*) host="${line#host=}" ;;'
+    printf '%s\n' '  esac'
+    printf '%s\n' 'done'
+    printf '%s\n' 'token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"'
+    printf '%s\n' 'if [[ "$protocol" == "https" && "$host" == "github.com" && -n "$token" ]]; then'
+    printf '%s\n' '  printf "%s\n" "username=x-access-token"'
+    printf '%s\n' '  printf "%s\n" "password=$token"'
+    printf '%s\n' 'fi'
+  } > "$target"
+  chmod 755 "$target"
+}
+
 write_claude_headless_helper() {
   local target="$WORKSPACE_BIN/claude-headless"
   mkdir -p "$(dirname -- "$target")"
@@ -126,4 +196,7 @@ copy_file_if_present "$HOST_HOME_ROOT/git/config-ignore" "$HOME_DIR/.config/git/
 write_sandbox_env_if_present
 write_zshenv
 ensure_codex_workspace_trust
+seed_github_known_hosts
+write_github_credential_helper
+configure_github_https_rewrites
 write_claude_headless_helper
