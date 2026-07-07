@@ -163,6 +163,29 @@ write_github_credential_helper() {
   chmod 755 "$target"
 }
 
+write_agent_yolo_wrappers() {
+  local codex_target="$WORKSPACE_BIN/codex"
+  local claude_target="$WORKSPACE_BIN/claude"
+  mkdir -p "$WORKSPACE_BIN"
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' 'set -euo pipefail'
+    printf '%s\n' 'if [[ -r "$HOME/.sandbox-env" ]]; then'
+    printf '%s\n' '  source "$HOME/.sandbox-env"'
+    printf '%s\n' 'fi'
+    printf '%s\n' 'exec "${SANDBOX_REAL_CODEX:-/usr/bin/codex}" --dangerously-bypass-approvals-and-sandbox "$@"'
+  } > "$codex_target"
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' 'set -euo pipefail'
+    printf '%s\n' 'if [[ -r "$HOME/.sandbox-env" ]]; then'
+    printf '%s\n' '  source "$HOME/.sandbox-env"'
+    printf '%s\n' 'fi'
+    printf '%s\n' 'exec "${SANDBOX_REAL_CLAUDE:-/usr/bin/claude}" --dangerously-skip-permissions "$@"'
+  } > "$claude_target"
+  chmod 755 "$codex_target" "$claude_target"
+}
+
 write_claude_headless_helper() {
   local target="$WORKSPACE_BIN/claude-headless"
   mkdir -p "$(dirname -- "$target")"
@@ -194,5 +217,6 @@ write_zshenv
 write_codex_sandbox_config
 seed_github_known_hosts
 write_github_credential_helper
+write_agent_yolo_wrappers
 configure_github_https_rewrites
 write_claude_headless_helper

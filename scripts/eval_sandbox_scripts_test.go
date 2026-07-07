@@ -345,6 +345,46 @@ func TestSandboxSyncHomeCopiesAllowedFilesWritable(t *testing.T) {
 	if got := string(helperOutput); !strings.Contains(got, "username=x-access-token") || !strings.Contains(got, "password=test-github-token") {
 		t.Fatalf("github credential helper did not return sandbox token credentials:\n%s", helperOutput)
 	}
+	fakeAgentCLI := filepath.Join(dir, "fake-agent-cli")
+	if err := os.WriteFile(fakeAgentCLI, []byte("#!/usr/bin/env bash\nprintf 'arg=%s\\n' \"$@\"\nprintf 'github=%s\\n' \"${GITHUB_TOKEN:-}\"\n"), 0o755); err != nil {
+		t.Fatalf("write fake agent cli: %v", err)
+	}
+	wrapperCases := []struct {
+		name    string
+		path    string
+		envName string
+		flag    string
+	}{
+		{
+			name:    "codex",
+			path:    filepath.Join(dir, "workspace", "bin", "codex"),
+			envName: "SANDBOX_REAL_CODEX",
+			flag:    "--dangerously-bypass-approvals-and-sandbox",
+		},
+		{
+			name:    "claude",
+			path:    filepath.Join(dir, "workspace", "bin", "claude"),
+			envName: "SANDBOX_REAL_CLAUDE",
+			flag:    "--dangerously-skip-permissions",
+		},
+	}
+	for _, tc := range wrapperCases {
+		wrapperCmd := exec.Command(tc.path, "plugin", "list")
+		wrapperCmd.Env = append(os.Environ(),
+			"HOME="+containerHome,
+			tc.envName+"="+fakeAgentCLI,
+		)
+		wrapperOutput, err := wrapperCmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s yolo wrapper failed: %v\n%s", tc.name, err, wrapperOutput)
+		}
+		got := string(wrapperOutput)
+		for _, want := range []string{"arg=" + tc.flag, "arg=plugin", "arg=list", "github=test-github-token"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%s yolo wrapper missing %q:\n%s", tc.name, want, wrapperOutput)
+			}
+		}
+	}
 
 	localConfig := "model = \"local-test\"\n[mcp_servers.node_repl]\ncommand = \"node_repl\"\n\n[projects.\"/workspace/agent-runner\"]\ntrust_level = \"trusted\"\nlocal = true\n"
 	if err := os.WriteFile(codexConfig, []byte(localConfig), 0o600); err != nil {
