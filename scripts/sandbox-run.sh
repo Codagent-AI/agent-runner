@@ -276,7 +276,6 @@ add_optional_file_mount() {
 
 if [[ "$MOUNT_CODEX_AUTH" == 1 ]]; then
   add_required_file_mount "$HOME/.codex/auth.json" "/host-home/codex/auth.json" "Codex"
-  add_optional_file_mount "$HOME/.codex/config.toml" "/host-home/codex/config.toml"
 fi
 
 if [[ "$MOUNT_CLAUDE_AUTH" == 1 ]]; then
