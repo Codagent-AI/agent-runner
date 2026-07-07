@@ -9,6 +9,28 @@ HOST_HOME_ROOT="${SANDBOX_HOST_HOME_ROOT:-/host-home}"
 WORKSPACE_BIN="${SANDBOX_WORKSPACE_BIN:-/workspace/bin}"
 export HOME="$HOME_DIR"
 
+mkdir -p "$HOME_DIR"
+SANDBOX_SYNC_HOME_LOCK="${SANDBOX_SYNC_HOME_LOCK:-$HOME_DIR/.sandbox-sync-home.lock.d}"
+SANDBOX_SYNC_HOME_LOCK_TIMEOUT="${SANDBOX_SYNC_HOME_LOCK_TIMEOUT:-30}"
+lock_start="$(date +%s)"
+while ! mkdir "$SANDBOX_SYNC_HOME_LOCK" 2>/dev/null; do
+  lock_pid=""
+  if [[ -f "$SANDBOX_SYNC_HOME_LOCK/pid" ]]; then
+    lock_pid="$(cat "$SANDBOX_SYNC_HOME_LOCK/pid" 2>/dev/null || true)"
+  fi
+  if [[ "$lock_pid" =~ ^[0-9]+$ ]] && ! kill -0 "$lock_pid" 2>/dev/null; then
+    rm -rf "$SANDBOX_SYNC_HOME_LOCK"
+    continue
+  fi
+  if (( $(date +%s) - lock_start >= SANDBOX_SYNC_HOME_LOCK_TIMEOUT )); then
+    echo "Timed out waiting for sandbox home sync lock: $SANDBOX_SYNC_HOME_LOCK" >&2
+    exit 2
+  fi
+  sleep 0.1
+done
+printf '%s\n' "$$" > "$SANDBOX_SYNC_HOME_LOCK/pid"
+trap 'rm -f "$SANDBOX_SYNC_HOME_LOCK/pid"; rmdir "$SANDBOX_SYNC_HOME_LOCK" 2>/dev/null || true' EXIT
+
 mkdir -p \
   "$HOME_DIR/.codex" \
   "$HOME_DIR/.claude" \

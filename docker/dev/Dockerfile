@@ -15,6 +15,7 @@ RUN apt-get update \
     git \
     jq \
     make \
+    socat \
     tar \
     zsh \
     xz-utils \

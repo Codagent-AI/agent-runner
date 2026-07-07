@@ -432,6 +432,45 @@ func TestSandboxSyncHomeCopiesAllowedFilesWritable(t *testing.T) {
 	}
 }
 
+func TestSandboxSyncHomeRecoversStaleLock(t *testing.T) {
+	dir := t.TempDir()
+	hostHome := filepath.Join(dir, "host-home")
+	containerHome := filepath.Join(dir, "container-home")
+	lockDir := filepath.Join(dir, "stale.lock.d")
+	for _, path := range []string{
+		filepath.Join(hostHome, "codex"),
+		filepath.Join(hostHome, "claude"),
+		containerHome,
+		lockDir,
+	} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(hostHome, "sandbox-secrets.env"), []byte("GITHUB_TOKEN=test\n"), 0o600); err != nil {
+		t.Fatalf("write sandbox secrets: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(lockDir, "pid"), []byte("999999\n"), 0o600); err != nil {
+		t.Fatalf("write stale lock pid: %v", err)
+	}
+
+	cmd := exec.Command("bash", "./sandbox-sync-home.sh")
+	cmd.Env = append(os.Environ(),
+		"HOME="+containerHome,
+		"SANDBOX_HOST_HOME_ROOT="+hostHome,
+		"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
+		"SANDBOX_SYNC_HOME_LOCK="+lockDir,
+		"SANDBOX_SYNC_HOME_LOCK_TIMEOUT=2",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandbox-sync-home should recover stale lock: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(lockDir); !os.IsNotExist(err) {
+		t.Fatalf("lock dir should be removed after sync, stat err=%v", err)
+	}
+}
+
 func TestEvalAndSceneProofDryRunTargetsFixtureAndReference(t *testing.T) {
 	dir := t.TempDir()
 	artifacts := filepath.Join(dir, "and-scene-proof")
@@ -603,6 +642,16 @@ func TestEvalDevcontainerUsesSharedDockerfile(t *testing.T) {
 	}
 }
 
+func TestDevDockerfileIncludesPortForwardDependencies(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "docker", "dev", "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read dev Dockerfile: %v", err)
+	}
+	if !strings.Contains(string(data), "socat") {
+		t.Fatalf("dev Dockerfile should install socat for sandbox browser forwarding:\n%s", data)
+	}
+}
+
 func TestDevcontainerShellDefaultsToZsh(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "devcontainer-shell.sh"))
 	if err != nil {
@@ -641,6 +690,74 @@ func TestDevcontainerShellDefaultsToZsh(t *testing.T) {
 	}
 	if strings.Contains(text, "target=/host-home/codex/config.toml") {
 		t.Fatalf("devcontainer-shell.sh should not mount host Codex config:\n%s", text)
+	}
+}
+
+func TestDevcontainerForwardDryRunBridgesHostToContainerLoopback(t *testing.T) {
+	cmd := exec.Command("bash", "./devcontainer-forward.sh",
+		"--dry-run",
+		"--container-id", "container123",
+		"--container-ip", "172.17.0.4",
+		"5174:5173",
+		"/agent-tool-loop",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("devcontainer-forward dry run failed: %v\n%s", err, output)
+	}
+	text := string(output)
+	for _, want := range []string{
+		"docker exec",
+		"container123",
+		"TCP-LISTEN:15174",
+		"TCP:127.0.0.1:5173",
+		"docker run",
+		"--name agent-runner-devcontainer-forward-5174",
+		"-p 5174:5174",
+		"TCP:172.17.0.4:15174",
+		"curl",
+		"http://127.0.0.1:5174/agent-tool-loop",
+		"http://localhost:5174/agent-tool-loop",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("dry-run output missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestDevcontainerForwardSelectsOneContainerIP(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "devcontainer-forward.sh"))
+	if err != nil {
+		t.Fatalf("read devcontainer-forward.sh: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"{{println}}",
+		"head -n 1",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("devcontainer-forward.sh should select one container IP using %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}") {
+		t.Fatalf("devcontainer-forward.sh should not concatenate all Docker network IPs:\n%s", text)
+	}
+}
+
+func TestSandboxSyncHomeSerializesSharedHomeMutation(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "sandbox-sync-home.sh"))
+	if err != nil {
+		t.Fatalf("read sandbox-sync-home.sh: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"SANDBOX_SYNC_HOME_LOCK",
+		"while ! mkdir",
+		"rmdir \"$SANDBOX_SYNC_HOME_LOCK\"",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sandbox-sync-home.sh should serialize shared home mutation with %q:\n%s", want, text)
+		}
 	}
 }
 
