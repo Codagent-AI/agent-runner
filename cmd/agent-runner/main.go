@@ -1347,6 +1347,10 @@ func fileExists(path string) bool {
 var workflowNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+(:[a-zA-Z0-9_-]+|(/[a-zA-Z0-9_-]+)+)?$`)
 
 func resolveWorkflowArg(arg string) (string, error) {
+	ext := strings.ToLower(filepath.Ext(arg))
+	if (ext == ".yaml" || ext == ".yml") && fileExists(arg) {
+		return arg, nil
+	}
 	if !workflowNamePattern.MatchString(arg) {
 		return "", fmt.Errorf("invalid workflow name %q: use a bare name or path under .agent-runner/workflows/ (e.g., 'myworkflow' or 'team/deploy') or a builtin name like 'core:finalize-pr'", arg)
 	}

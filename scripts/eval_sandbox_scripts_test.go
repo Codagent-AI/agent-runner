@@ -538,6 +538,63 @@ func TestEvalAndSceneProofDryRunTargetsFixtureAndReference(t *testing.T) {
 	}
 }
 
+func TestEvalAndSceneAgentDryRunWiresScoredHarness(t *testing.T) {
+	dir := t.TempDir()
+	artifacts := filepath.Join(dir, "and-scene-run")
+	home := filepath.Join(dir, "home")
+	claudeDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o700); err != nil {
+		t.Fatalf("mkdir claude auth dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(claudeDir, ".credentials.json"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write claude auth: %v", err)
+	}
+
+	cmd := exec.Command("bash", "./eval-and-scene.sh",
+		"--dry-run",
+		"--run-agent",
+		"--artifact-dir", artifacts,
+		"--agent", "claude",
+		"--model", "sonnet",
+		"--judge-model", "gpt-5",
+	)
+	cmd.Env = append(os.Environ(),
+		"HOME="+home,
+		"SANDBOX_SECRETS_FILE="+filepath.Join(dir, "missing.env"),
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("eval-and-scene agent dry run failed: %v\n%s", err, output)
+	}
+	text := string(output)
+	for _, want := range []string{
+		"origin/eval/create-and-scene-spec-only",
+		"origin/change/create-and-scene",
+		"scripts/eval-workflows/and-scene-implement.yaml",
+		"agent-runner run",
+		"AGENT_RUNNER_NO_TUI=1",
+		"change_name=create-and-scene",
+		"npm ci",
+		"npm run build",
+		"npm run verify",
+		"implementation.diff",
+		"diff-hash.txt",
+		"metadata.json",
+		"tier1-result.json",
+		"tier2-judge-prompt.md",
+		"tier2-result.json",
+		"target=/host-home/claude/.credentials.json",
+		artifacts,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("dry-run output missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "review-assumptions") || strings.Contains(text, "simplify") {
+		t.Fatalf("agent eval workflow should not include interactive tail steps:\n%s", text)
+	}
+}
+
 func TestEvalAndSceneProofDryRunShellQuotesRepoInputs(t *testing.T) {
 	dir := t.TempDir()
 	maliciousRepo := `https://example.invalid/repo.git"; echo pwned; #`
