@@ -11,7 +11,19 @@ bump, writing a changelog section, and opening or updating the release PR.
 
 ## Steps
 
-### 1. Gather release info
+### 1. Run end-to-end smoke tests
+
+Run:
+
+```bash
+make test-e2e-smoke
+```
+
+If either the headless or interactive agent workflow smoke test fails, stop and
+report the failure. Do not gather release metadata or create/update a release
+PR until both tests pass.
+
+### 2. Gather release info
 
 Run:
 
@@ -24,7 +36,7 @@ message to the user. In particular, do not continue from a feature branch whose
 associated PR is already merged/closed or does not target `main`; switch to or
 create the open PR for the current unreleased changes first.
 
-### 2. Reclassify internal-only changes
+### 3. Reclassify internal-only changes
 
 The `major`/`minor` buckets from the script are based only on conventional-commit
 prefixes (`feat:`, `!:`, a `breaking` label) — they say nothing about whether the
@@ -47,29 +59,29 @@ After reclassifying, recompute `new_version` from `current_version` using the
 corrected buckets: major bump if any PR remains in `major`, else minor bump if
 any remains in `minor`, else patch bump.
 
-When you downgrade a PR, note it in the summary (see step 3) so the user can
+When you downgrade a PR, note it in the summary (see step 4) so the user can
 override the call if they disagree.
 
-### 3. Show the release summary
+### 4. Show the release summary
 
 Display:
 
 - Version bump: `current_version` -> `new_version` (using the corrected buckets
-  from step 2)
+  from step 3)
 - Number of PRs by category, after reclassification
 - Each PR number and title, grouped by Major / Minor / Patch
-- Any PRs downgraded in step 2, with a one-line reason
+- Any PRs downgraded in step 3, with a one-line reason
 - When a current branch PR is included, confirm it is the open PR for the
   current branch, not an already-merged predecessor.
 
-### 4. Write changelog descriptions
+### 5. Write changelog descriptions
 
 For each PR in the JSON output, write a one-sentence description that is more
 informative than the raw PR title. Strip the conventional commit prefix from
 the title and keep enough context to understand the change without clicking
 through.
 
-### 5. Format the changelog section
+### 6. Format the changelog section
 
 Build the changelog section for the new version. Only include sections that
 have entries. Sort entries by PR number ascending within each section.
@@ -92,7 +104,7 @@ Format:
 - [#<number>](https://github.com/Codagent-AI/agent-runner/pull/<number>) <description>
 ```
 
-### 6. Write the changelog section to a temp file
+### 7. Write the changelog section to a temp file
 
 ```bash
 TMPFILE=$(mktemp)
@@ -102,7 +114,7 @@ CHANGELOG_EOF
 echo "$TMPFILE"
 ```
 
-### 7. Create the release PR
+### 8. Create the release PR
 
 Run:
 
@@ -114,7 +126,7 @@ When run on `main`, the script creates `release/v<new_version>` and opens a
 release PR. When run on another branch, it commits the release changes directly
 to that branch and prints its PR URL.
 
-### 8. Report
+### 9. Report
 
 Print the PR URL returned by the script, then clean up:
 

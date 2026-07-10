@@ -14,7 +14,7 @@ test-cover:
 	go tool cover -html=coverage.out -o coverage.html
 
 test-e2e-smoke:
-	./.validator/go-offline.sh go test -count=1 -tags e2e ./cmd/agent-runner -run TestSmokeTestHeadlessWorkflowE2E -v
+	./.validator/go-offline.sh go test -count=1 -tags e2e ./cmd/agent-runner -run 'TestSmokeTest(HeadlessWorkflow|InteractiveAgentsWorkflow)E2E' -v
 
 lint:
 	golangci-lint run ./...
