@@ -522,7 +522,7 @@ func TestEvalAndSceneProofDryRunTargetsFixtureAndReference(t *testing.T) {
 	}
 	text := string(output)
 	for _, want := range []string{
-		"origin/eval/create-and-scene-spec-only",
+		"cd0cc0038b9754345c1baf2b2bbad7b3ad37b19c",
 		"origin/change/create-and-scene",
 		"npm ci",
 		"npm run build",
@@ -587,10 +587,13 @@ func TestEvalAndSceneAgentDryRunWiresScoredHarness(t *testing.T) {
 	}
 	text := string(output)
 	for _, want := range []string{
-		"origin/eval/create-and-scene-spec-only",
+		"cd0cc0038b9754345c1baf2b2bbad7b3ad37b19c",
 		"origin/change/create-and-scene",
-		"scripts/eval-workflows/and-scene-implement.yaml",
-		"agent-runner run",
+		"workflows/openspec/implement-change.yaml",
+		"RUN_ARGS=(run",
+		"--until",
+		"run-validator",
+		"planner:",
 		"AGENT_RUNNER_NO_TUI=1",
 		"change_name=create-and-scene",
 		"npm ci",
@@ -599,6 +602,8 @@ func TestEvalAndSceneAgentDryRunWiresScoredHarness(t *testing.T) {
 		"implementation.diff",
 		"diff-hash.txt",
 		"metadata.json",
+		"reward.json",
+		"manifest.json",
 		"tier1-result.json",
 		"tier2-judge-prompt.md",
 		"tier2-result.json",
@@ -617,8 +622,12 @@ func TestEvalAndSceneAgentDryRunWiresScoredHarness(t *testing.T) {
 			t.Fatalf("dry-run output missing %q:\n%s", want, text)
 		}
 	}
-	if strings.Contains(text, "review-assumptions") || strings.Contains(text, "simplify") {
-		t.Fatalf("agent eval workflow should not include interactive tail steps:\n%s", text)
+	// The eval runs the real implement-change workflow but must stop at
+	// run-validator, before its outward-facing archive/finalize (PR-opening)
+	// tail. --until is what enforces that; the planner session is configured
+	// autonomous so the review-assumptions/simplify steps run headless.
+	if !strings.Contains(text, "--until") || !strings.Contains(text, "run-validator") {
+		t.Fatalf("agent eval must cap the real workflow at run-validator via --until:\n%s", text)
 	}
 }
 
@@ -633,6 +642,13 @@ func TestEvalAndSceneScoringIncludesCompleteEvidence(t *testing.T) {
 		`cat -- "\$file"`,
 		`--image "\$screenshot"`,
 		`jq -e '.pass == true' /artifacts/tier2-result.json`,
+		"write_reward",
+		"write_manifest",
+		"hard_pass",
+		"soft_score",
+		"scenario_compliance",
+		"> /artifacts/reward.json",
+		"> /artifacts/manifest.json",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("eval scoring missing %q:\n%s", want, text)
@@ -680,6 +696,9 @@ func TestEvalAndSceneCustomWorkflowReceivesOnlyCallerSuppliedArgs(t *testing.T) 
 	}
 	if strings.Contains(text, "change_name=create-and-scene") {
 		t.Fatalf("custom workflow received and-scene-specific argument:\n%s", text)
+	}
+	if strings.Contains(text, "run-validator") {
+		t.Fatalf("custom workflow received the default-workflow --until cap:\n%s", text)
 	}
 }
 

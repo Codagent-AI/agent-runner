@@ -110,27 +110,42 @@ prefer extending to keep one entry point) must, inside the sandbox:
 
 1. Clone and-scene, check out the fixture ref (default
    `origin/eval/create-and-scene-spec-only`), record `fixture_commit`.
-2. Run `agent-runner run <workflow>` against that checkout, non-interactively /
-   autonomously. For this session the workflow is an **implementation-only**
-   variant that: loops the implement-task cycle over the baked `tasks/*.md`, then
-   is followed by build + verify. See "Workflow" below.
+2. Run the **real production workflow** against that checkout, non-interactively /
+   autonomously. The build + verify that follows is the harness's own tier-1, not a
+   workflow step. See "Workflow" below.
 3. Capture outputs (see "Captured artifacts").
 4. Grade: tier-1 (build + verify), tier-2 (LLM judge).
 
-### Workflow to run (first variant)
+### Workflow to run
 
-The existing `workflows/openspec/implement-change.yaml` loops `implement-task`
-over `tasks/*.md` — the right core — but its tail steps (`review-assumptions`,
-`simplify`) are interactive `lead-agent` prompts that can't run unattended, and it
-has no build/verify step. For the eval, author a **thin internal eval workflow**
-(NOT embedded/shipped in `workflows/`, since those get baked into the binary):
-the implement-task loop over the baked tasks + `npm ci && npm run build && npm run
-verify`, all autonomous, no interactive review/simplify tail.
+The eval runs the **real** `workflows/openspec/implement-change.yaml` — not a
+custom eval-only workflow. An earlier iteration authored a stripped internal
+`and-scene-implement.yaml`; that was wrong. The eval's whole point is to exercise
+the shipping workflow, so the harness must run it as-is and adapt only through
+configuration and a stop cap:
 
-**Verify during implementation:** confirm `agent-runner run` can execute a workflow
-from an arbitrary **file path** (not only embedded names). If it can't, decide how
-to inject the eval workflow (e.g. a temp workflow dir on the sandbox workspace, or
-a build-tag). Do not assume; check `internal/loader` / the `run` command wiring.
+- **Stop before the outward tail with `--until run-validator`.** The workflow ends
+  with `archive` (openspec archive + local commit) and `finalize`
+  (`finalize-pr.yaml`, which pushes a branch and opens a real PR + polls CI). Those
+  are out of the eval's scope and outward-facing. `run --until <step_id>` runs
+  top-level steps inclusively through the named step and stops; the harness passes
+  `--until run-validator` for the default workflow only.
+- **Configure the `planner` agent autonomous.** `implement-change` drives its
+  `review-assumptions` and `simplify` tail through the `lead-agent` session (agent
+  `planner`). `review-assumptions` has no explicit `mode:`, so it inherits the
+  profile `default_mode`; setting `planner.default_mode: autonomous` makes it (and
+  `simplify`) resolve to headless in the non-TTY sandbox instead of blocking on
+  input. The harness's `write_eval_config` configures both `implementor` and
+  `planner` this way.
+
+The harness stays workflow-agnostic: `--workflow`/`--until` are inputs, and the
+`--until run-validator` default is applied only when the default workflow is used.
+
+**File-path execution confirmed:** `agent-runner run` accepts a `.yaml`/`.yml` file
+path (see `resolveWorkflowArg` in `cmd/agent-runner/main.go`), and sub-workflow
+`workflow:` paths resolve relative to the parent workflow file, so the container
+path `/tmp/agent-runner-local/workflows/openspec/implement-change.yaml` resolves its
+`../core/implement-task.yaml` children correctly.
 
 ### Sandbox & auth
 
@@ -194,6 +209,32 @@ and its full structured output in the captured artifacts. Full-tree + screenshot
 token-heavy — expect to filter obvious boilerplate (lockfiles, node_modules is
 absent post-`npm ci`? ensure it's excluded) from the tree passed to the judge.
 
+## Harbor concepts adopted (and deferred)
+
+The [Harbor eval framework](https://github.com/harbor-framework/harbor) is a good
+fit for the *direction* of this harness but not worth adopting as a dependency yet
+(pre-1.0 schema churn, a Python graph on a Go project, and its value is the
+experiment matrix we don't need at N=1). We borrowed the cheap, dependency-free
+concepts into the shell harness instead:
+
+- **`reward.json` shape** — named dimensions (`workflow_health`, `correctness`,
+  `scenario_compliance`) plus a `hard_pass` gate and a `soft_score`, so a hard
+  failure still yields a comparable number.
+- **`manifest.json`** — every collected artifact with size + sha256, so the
+  artifact dir is self-describing instead of requiring filesystem spelunking.
+- **Pinned fixture commit** — the default `FIXTURE_REF` is an exact SHA, not a
+  moving branch head, so scored runs are reproducible.
+
+**Deferred: separate verifier environment.** Harbor's strongest structural idea is
+running the grader/judge in an environment the implementation agent never
+controlled, with only declared artifacts copied in. Its payoff is realized only
+when the judge and agent use **different** credentials — the first
+codex-implements/codex-judges run shares one account, so a container split buys
+little there. Revisit it when running cross-model (e.g. Claude implements, Codex
+judges), where the agent container should not hold the judge's credentials. Doing
+the split before the first green oracle run would also invert the "one green run
+first" sequencing.
+
 ## Out of scope this session / future
 
 - The **no-tasks** workflow variant (implement straight from specs, tasks
@@ -202,14 +243,17 @@ absent post-`npm ci`? ensure it's excluded) from the tree passed to the judge.
   out for free (another fixture ref); not needed now.
 - Reference-comparison judge mode.
 - Renaming the `...-spec-only` fixture branch.
+- Adopting Harbor as the outer substrate (experiment matrix, `harbor view`, ATIF
+  trajectories) — a bounded parity spike once there's a stable oracle run.
 
 ## Open items to confirm during implementation
 
-1. **Confirm** `agent-runner run` can run a workflow from a file path; if not,
-   choose an injection mechanism for the internal eval workflow.
-2. Determine the exact harness-injected path exclusion set from a real run before
-   finalizing diff scoring.
+1. Determine the exact harness-injected path exclusion set from a **real** run and
+   confirm the `write_diff` exclude globs match it before trusting diff scoring
+   (still pending a live run).
 
 Resolved: tier-2 rubric settled (spec-primary, reference-as-tiebreak; full tree +
 logs + screenshots; per-scenario pass/fail + 0–100 + pass + rationale). Fixture
-branch prepped and pushed (`cd0cc00`).
+branch prepped and pushed (`cd0cc00`). File-path workflow execution confirmed; the
+harness runs the real `implement-change` workflow capped at `run-validator` via
+`--until`, with `planner` configured autonomous.

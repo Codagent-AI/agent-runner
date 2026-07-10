@@ -3,11 +3,22 @@
 set -euo pipefail
 
 REPO="${REPO:-https://github.com/Codagent-AI/and-scene.git}"
-FIXTURE_REF="${FIXTURE_REF:-origin/eval/create-and-scene-spec-only}"
+# Pin the fixture to an exact commit, not a moving branch head, so scored runs
+# are reproducible. This is the head of eval/create-and-scene-spec-only as of
+# 2026-07-10; bump it deliberately when the fixture snapshot changes.
+FIXTURE_REF="${FIXTURE_REF:-cd0cc0038b9754345c1baf2b2bbad7b3ad37b19c}"
+# The reference is a tiebreak-only, divergence-tolerant input, so it stays a
+# branch ref rather than a pin.
 REFERENCE_REF="${REFERENCE_REF:-origin/change/create-and-scene}"
 CHANGE_NAME="${CHANGE_NAME:-create-and-scene}"
-DEFAULT_WORKFLOW="/tmp/agent-runner-local/scripts/eval-workflows/and-scene-implement.yaml"
+DEFAULT_WORKFLOW="/tmp/agent-runner-local/workflows/openspec/implement-change.yaml"
 WORKFLOW="${WORKFLOW:-$DEFAULT_WORKFLOW}"
+# Stop the default workflow after the implementation is validated, before its
+# outward-facing archive/finalize tail (which would open a real PR). Applied
+# only to the default workflow, since a custom --workflow may lack this step and
+# --until validates the step ID up front.
+DEFAULT_UNTIL="run-validator"
+UNTIL="${UNTIL:-}"
 AGENT="${AGENT:-claude}"
 MODEL="${MODEL:-}"
 JUDGE_MODEL="${JUDGE_MODEL:-codex-default}"
@@ -54,7 +65,11 @@ Options:
                           Default: origin/change/create-and-scene
   --workflow REF         Workflow name or container-visible YAML path for
                           --run-agent. Default:
-                          /tmp/agent-runner-local/scripts/eval-workflows/and-scene-implement.yaml
+                          /tmp/agent-runner-local/workflows/openspec/implement-change.yaml
+  --until STEP           Stop the run after the named top-level step. Defaults to
+                          run-validator for the default workflow, halting before
+                          its outward archive/finalize (PR-opening) tail. Empty
+                          for a custom --workflow unless set explicitly.
   --change-name NAME     OpenSpec change name. Default: create-and-scene
   --workflow-arg ARG     Pass NAME=VALUE to the selected workflow. Repeatable.
                           The default workflow receives change_name automatically
@@ -118,6 +133,10 @@ while (($#)); do
       ;;
     --workflow)
       WORKFLOW="${2:?missing value for --workflow}"
+      shift 2
+      ;;
+    --until)
+      UNTIL="${2:?missing value for --until}"
       shift 2
       ;;
     --change-name)
@@ -208,6 +227,9 @@ if [[ "$RUN_AGENT" == 1 ]]; then
   if [[ "${#WORKFLOW_ARGS[@]}" -eq 0 && "$WORKFLOW" == "$DEFAULT_WORKFLOW" ]]; then
     WORKFLOW_ARGS+=("change_name=$CHANGE_NAME")
   fi
+  if [[ -z "$UNTIL" && "$WORKFLOW" == "$DEFAULT_WORKFLOW" ]]; then
+    UNTIL="$DEFAULT_UNTIL"
+  fi
   for workflow_arg in "${WORKFLOW_ARGS[@]}"; do
     if [[ "$workflow_arg" != *=* || "$workflow_arg" == =* ]]; then
       echo "Invalid --workflow-arg $workflow_arg; expected NAME=VALUE." >&2
@@ -231,6 +253,7 @@ FIXTURE_REF_Q="$(shell_quote "$FIXTURE_REF")"
 REFERENCE_REF_Q="$(shell_quote "$REFERENCE_REF")"
 CHANGE_NAME_Q="$(shell_quote "$CHANGE_NAME")"
 WORKFLOW_Q="$(shell_quote "$WORKFLOW")"
+UNTIL_Q="$(shell_quote "$UNTIL")"
 AGENT_Q="$(shell_quote "$AGENT")"
 MODEL_Q="$(shell_quote "$MODEL")"
 JUDGE_MODEL_Q="$(shell_quote "$JUDGE_MODEL")"
@@ -337,6 +360,7 @@ FIXTURE_REF=$FIXTURE_REF_Q
 REFERENCE_REF=$REFERENCE_REF_Q
 CHANGE_NAME=$CHANGE_NAME_Q
 WORKFLOW_PATH=$WORKFLOW_Q
+UNTIL=$UNTIL_Q
 EVAL_AGENT=$AGENT_Q
 EVAL_MODEL=$MODEL_Q
 JUDGE_MODEL=$JUDGE_MODEL_Q
@@ -386,6 +410,15 @@ write_eval_config() {
     printf '%s\n' '  eval:'
     printf '%s\n' '    agents:'
     printf '%s\n' '      implementor:'
+    printf '%s\n' '        default_mode: autonomous'
+    printf '        cli: %s\n' "\$EVAL_AGENT"
+    if [ -n "\$EVAL_MODEL" ]; then
+      printf '        model: %s\n' "\$EVAL_MODEL"
+    fi
+    # The real implement-change workflow drives its review-assumptions/simplify
+    # tail through the lead-agent (planner) session. Configure it autonomous so
+    # those steps run headless in the sandbox instead of blocking on input.
+    printf '%s\n' '      planner:'
     printf '%s\n' '        default_mode: autonomous'
     printf '        cli: %s\n' "\$EVAL_AGENT"
     if [ -n "\$EVAL_MODEL" ]; then
@@ -644,6 +677,7 @@ write_metadata() {
     --arg reference_ref "\$REFERENCE_REF" \\
     --arg change_name "\$CHANGE_NAME" \\
     --arg workflow "\$WORKFLOW_PATH" \\
+    --arg until "\$UNTIL" \\
     --argjson workflow_args "\$workflow_args_json" \\
     --arg agent "\$EVAL_AGENT" \\
     --arg model "\$EVAL_MODEL" \\
@@ -673,6 +707,7 @@ write_metadata() {
       reference_ref: \$reference_ref,
       change_name: \$change_name,
       workflow: \$workflow,
+      until: \$until,
       workflow_args: \$workflow_args,
       agent: \$agent,
       model: \$model,
@@ -703,9 +738,76 @@ write_metadata() {
     }' > /artifacts/metadata.json
 }
 
+# Aggregate the scored dimensions into a single reward record. Borrowed from the
+# Harbor reward.json shape: named dimensions plus a hard gate and a soft score,
+# so runs stay comparable and a hard failure still yields a graded number.
+# Computed from the exit-code vars (always set) and a defensive tier-2 read, so
+# it produces a coherent record even on a partial run.
+write_reward() {
+  local scenario_score="null"
+  local scenario_pass="false"
+  if [ -f /artifacts/tier2-result.json ]; then
+    scenario_score="\$(jq '.overall_score // null' /artifacts/tier2-result.json 2>/dev/null || echo null)"
+    if jq -e '.pass == true' /artifacts/tier2-result.json >/dev/null 2>&1; then
+      scenario_pass="true"
+    fi
+  fi
+  jq -n \\
+    --argjson agent_runner_exit_code "\$AGENT_RUNNER_EXIT_CODE" \\
+    --argjson npm_ci_exit_code "\$NPM_CI_EXIT_CODE" \\
+    --argjson build_exit_code "\$BUILD_EXIT_CODE" \\
+    --argjson verify_exit_code "\$VERIFY_EXIT_CODE" \\
+    --argjson scenario_score "\$scenario_score" \\
+    --argjson scenario_pass "\$scenario_pass" \\
+    '
+    (\$agent_runner_exit_code == 0) as \$wf
+    | (\$npm_ci_exit_code == 0 and \$build_exit_code == 0 and \$verify_exit_code == 0) as \$correct
+    | {
+        dimensions: {
+          workflow_health: {
+            pass: \$wf,
+            agent_runner_exit_code: \$agent_runner_exit_code
+          },
+          correctness: {
+            pass: \$correct,
+            npm_ci_exit_code: \$npm_ci_exit_code,
+            build_exit_code: \$build_exit_code,
+            verify_exit_code: \$verify_exit_code
+          },
+          scenario_compliance: {
+            pass: \$scenario_pass,
+            score: \$scenario_score
+          }
+        },
+        hard_pass: (\$wf and \$correct and \$scenario_pass),
+        soft_score: (
+          (if \$wf then 20 else 0 end)
+          + (if \$correct then 40 else 0 end)
+          + ((\$scenario_score // 0) * 0.4)
+        )
+      }' > /artifacts/reward.json
+}
+
+# Enumerate every collected artifact with size and hash. Borrowed from Harbor's
+# collection manifest: turns the artifact dir into a self-describing record
+# instead of requiring filesystem spelunking. Excludes itself and tolerates a
+# partial run by listing whatever exists.
+write_manifest() {
+  (
+    cd /artifacts
+    find . -type f ! -name manifest.json -print0 | sort -z | while IFS= read -r -d '' f; do
+      rel="\${f#./}"
+      size="\$(wc -c < "\$f" | tr -d ' ')"
+      hash="\$(sha256sum "\$f" | awk '{print \$1}')"
+      jq -n --arg path "\$rel" --argjson size "\$size" --arg sha256 "\$hash" \\
+        '{path: \$path, size: \$size, sha256: \$sha256}'
+    done | jq -s '{generated_by: "eval-and-scene.sh", file_count: length, files: sort_by(.path)}'
+  ) > /artifacts/manifest.json
+}
+
 STARTED_AT="\$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 EXIT_CODE=0
-trap 'EXIT_CODE=\$?; write_metadata; exit \$EXIT_CODE' EXIT
+trap 'EXIT_CODE=\$?; write_metadata || true; write_reward || true; write_manifest || true; exit \$EXIT_CODE' EXIT
 
 configure_github_https_auth
 
@@ -717,11 +819,14 @@ FIXTURE_COMMIT="\$(git rev-parse HEAD)"
 write_eval_config
 
 set +e
-if [ "\${#WORKFLOW_ARGS[@]}" -gt 0 ]; then
-  run_logged agent-runner env AGENT_RUNNER_NO_TUI=1 agent-runner run "\$WORKFLOW_PATH" "\${WORKFLOW_ARGS[@]}"
-else
-  run_logged agent-runner env AGENT_RUNNER_NO_TUI=1 agent-runner run "\$WORKFLOW_PATH"
+RUN_ARGS=(run "\$WORKFLOW_PATH")
+if [ -n "\$UNTIL" ]; then
+  RUN_ARGS+=(--until "\$UNTIL")
 fi
+if [ "\${#WORKFLOW_ARGS[@]}" -gt 0 ]; then
+  RUN_ARGS+=("\${WORKFLOW_ARGS[@]}")
+fi
+run_logged agent-runner env AGENT_RUNNER_NO_TUI=1 agent-runner "\${RUN_ARGS[@]}"
 AGENT_RUNNER_EXIT_CODE=\$?
 set -e
 capture_run_state
