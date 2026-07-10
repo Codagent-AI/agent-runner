@@ -34,6 +34,7 @@ const (
 // Options configures a workflow run.
 type Options struct {
 	From              string
+	Until             string
 	WorkflowFile      string
 	SessionDir        string // Override session directory (for testing); computed automatically if empty.
 	Engine            engine.Engine
@@ -108,6 +109,18 @@ func resolveStartIndex(workflow *model.Workflow, from string) (int, error) {
 	return 0, fmt.Errorf("step %q not found in workflow", from)
 }
 
+func validateUntilStep(workflow *model.Workflow, until string) error {
+	if until == "" {
+		return nil
+	}
+	for i := range workflow.Steps {
+		if workflow.Steps[i].ID == until {
+			return nil
+		}
+	}
+	return fmt.Errorf("--until step %q not found in top-level workflow steps", until)
+}
+
 func computeHash(workflowFile string) string {
 	if workflowFile == "" {
 		return ""
@@ -139,16 +152,18 @@ func emitAudit(ctx *model.ExecutionContext, event audit.Event) {
 
 // runState holds the internal state needed during workflow execution.
 type runState struct {
-	workflow     model.Workflow
-	ctx          *model.ExecutionContext
-	sessionDir   string
-	sessionID    string
-	workflowHash string
-	auditLogger  *audit.Logger
-	runStartTime time.Time
-	log          exec.Logger
-	runner       exec.ProcessRunner
-	glob         exec.GlobExpander
+	workflow             model.Workflow
+	ctx                  *model.ExecutionContext
+	until                string
+	untilLeavesRemaining bool
+	sessionDir           string
+	sessionID            string
+	workflowHash         string
+	auditLogger          *audit.Logger
+	runStartTime         time.Time
+	log                  exec.Logger
+	runner               exec.ProcessRunner
+	glob                 exec.GlobExpander
 }
 
 // workflowNeedsAgentProfiles returns true if any step in the tree is an agent
@@ -260,6 +275,7 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	return &runState{
 		workflow:     *workflow,
 		ctx:          ctx,
+		until:        opts.Until,
 		sessionDir:   sessionDir,
 		sessionID:    sessionID,
 		workflowHash: computeHash(opts.WorkflowFile),
@@ -359,6 +375,12 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 		}
 		if skip {
 			emitSkippedStep(rs, step, i)
+			if step.ID == rs.until {
+				writeStepState(step, rs.ctx, &rs.workflow, rs.workflowHash, rs.sessionDir, nil, true)
+			}
+			if stopAfterUntil(rs, step.ID, i) {
+				return ResultSuccess
+			}
 			continue
 		}
 
@@ -392,6 +414,9 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 			rs.ctx.LastStepOutcome = &o
 			if step.ContinueOnFailure {
 				rs.log.Printf("--- step %q failed (continue_on_failure) ---\n\n", step.ID)
+				if stopAfterUntil(rs, step.ID, i) {
+					return ResultSuccess
+				}
 				continue
 			}
 			rs.log.Printf("\nagent-runner: step %q failed. Stopping.\n", step.ID)
@@ -400,9 +425,21 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 
 		o := "success"
 		rs.ctx.LastStepOutcome = &o
+		if stopAfterUntil(rs, step.ID, i) {
+			return ResultSuccess
+		}
 	}
 
 	return ResultSuccess
+}
+
+func stopAfterUntil(rs *runState, stepID string, stepIndex int) bool {
+	if rs.until == "" || stepID != rs.until {
+		return false
+	}
+	rs.untilLeavesRemaining = stepIndex < len(rs.workflow.Steps)-1
+	rs.log.Printf("agent-runner: stopped after step %q (--until).\n", stepID)
+	return true
 }
 
 func emitSkippedStep(rs *runState, step *model.Step, index int) {
@@ -435,8 +472,10 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 
 	switch result {
 	case ResultSuccess:
-		if err := markStateCompleted(rs.sessionDir); err != nil {
-			rs.log.Printf("agent-runner: warning: could not mark state completed: %v\n", err)
+		if !rs.untilLeavesRemaining {
+			if err := markStateCompleted(rs.sessionDir); err != nil {
+				rs.log.Printf("agent-runner: warning: could not mark state completed: %v\n", err)
+			}
 		}
 	case ResultFailed:
 		rs.log.Printf("\nto resume: agent-runner --resume %s\n", rs.sessionID)
@@ -472,6 +511,10 @@ func markStateCompleted(sessionDir string) error {
 // the audit logger, and emits run_start. Returns a RunHandle with SessionDir
 // exposed so callers can construct the TUI before execution starts.
 func PrepareRun(workflow *model.Workflow, params map[string]string, opts *Options) (*RunHandle, error) {
+	if err := validateUntilStep(workflow, opts.Until); err != nil {
+		return nil, err
+	}
+
 	rs, err := initRunState(workflow, params, opts)
 	if err != nil {
 		return nil, err

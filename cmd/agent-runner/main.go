@@ -359,7 +359,8 @@ func dispatchRunCommand(args []string, opts commandFlags) int {
 	}
 
 	var err error
-	args, err = normalizeRunCommandArgs(args)
+	var runOpts runCommandOptions
+	args, runOpts, err = parseRunCommandArgs(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
@@ -411,9 +412,13 @@ func dispatchRunCommand(args []string, opts commandFlags) int {
 	}
 
 	if opts.onboardingFrom != "" {
+		if runOpts.until != "" {
+			fmt.Fprintln(os.Stderr, "agent-runner: --until cannot be combined with --onboarding-from")
+			return 1
+		}
 		return handleOnboardingFromRun(workflowFile, opts.onboardingFrom, args[1:]...)
 	}
-	return handleRunWithRunOptions(append([]string{workflowFile}, args[1:]...), runCommandOptions{}).exitCode
+	return handleRunWithRunOptions(append([]string{workflowFile}, args[1:]...), runOpts).exitCode
 }
 
 func isRunCommandHelp(args []string) bool {
@@ -421,12 +426,20 @@ func isRunCommandHelp(args []string) bool {
 }
 
 func printRunUsage(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "Usage: agent-runner run <workflow> [--param key=value] [key=value ...]")
+	_, _ = fmt.Fprintln(w, "Usage: agent-runner run <workflow> [--until <step-id>] [--param key=value] [key=value ...]")
+	_, _ = fmt.Fprintln(w, "\nFlags:")
+	_, _ = fmt.Fprintln(w, "  --until <step-id>\n\tStop successfully after reaching the named top-level step")
 }
 
 func normalizeRunCommandArgs(args []string) ([]string, error) {
+	normalized, _, err := parseRunCommandArgs(args)
+	return normalized, err
+}
+
+func parseRunCommandArgs(args []string) ([]string, runCommandOptions, error) {
+	var opts runCommandOptions
 	if len(args) <= 1 || args[0] != "run" || strings.HasPrefix(args[1], "-") {
-		return args, nil
+		return args, opts, nil
 	}
 
 	normalized := []string{args[1]}
@@ -435,24 +448,36 @@ func normalizeRunCommandArgs(args []string) ([]string, error) {
 		switch {
 		case arg == "--param":
 			if i+1 >= len(args) {
-				return nil, fmt.Errorf("--param requires key=value")
+				return nil, opts, fmt.Errorf("--param requires key=value")
 			}
 			i++
 			if !strings.Contains(args[i], "=") {
-				return nil, fmt.Errorf("--param requires key=value")
+				return nil, opts, fmt.Errorf("--param requires key=value")
 			}
 			normalized = append(normalized, args[i])
 		case strings.HasPrefix(arg, "--param="):
 			value := strings.TrimPrefix(arg, "--param=")
 			if !strings.Contains(value, "=") {
-				return nil, fmt.Errorf("--param requires key=value")
+				return nil, opts, fmt.Errorf("--param requires key=value")
 			}
 			normalized = append(normalized, value)
+		case arg == "--until":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return nil, opts, fmt.Errorf("--until requires a step ID")
+			}
+			i++
+			opts.until = args[i]
+		case strings.HasPrefix(arg, "--until="):
+			value := strings.TrimPrefix(arg, "--until=")
+			if strings.TrimSpace(value) == "" {
+				return nil, opts, fmt.Errorf("--until requires a step ID")
+			}
+			opts.until = value
 		default:
 			normalized = append(normalized, arg)
 		}
 	}
-	return normalized, nil
+	return normalized, opts, nil
 }
 
 func handleResume(sessionID string) int {
@@ -1415,6 +1440,7 @@ func handleRunWithResult(args []string, liveOpts liveTUIOptions) liveTUIResult {
 type runCommandOptions struct {
 	liveOpts liveTUIOptions
 	from     string
+	until    string
 }
 
 func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIResult {
@@ -1465,6 +1491,7 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 		h, err := runner.PrepareRun(&workflow, params, &runner.Options{
 			WorkflowFile:  workflowFile,
 			From:          runOpts.from,
+			Until:         runOpts.until,
 			Engine:        eng,
 			ProcessRunner: &realProcessRunner{},
 			GlobExpander:  &realGlobExpander{},
@@ -1492,6 +1519,7 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 	h, err := runner.PrepareRun(&workflow, params, &runner.Options{
 		WorkflowFile:  workflowFile,
 		From:          runOpts.from,
+		Until:         runOpts.until,
 		Engine:        eng,
 		ProcessRunner: &realProcessRunner{},
 		GlobExpander:  &realGlobExpander{},

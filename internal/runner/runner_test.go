@@ -150,6 +150,159 @@ func TestRunWorkflow_OptionalParamAvailableAsEmptyString(t *testing.T) {
 	}
 }
 
+func TestRunWorkflowUntilStopsAfterNamedTopLevelStep(t *testing.T) {
+	workflow := &model.Workflow{
+		Name: "until",
+		Steps: []model.Step{
+			shellStep("A", "echo A"),
+			shellStep("B", "echo B"),
+			shellStep("C", "echo C"),
+		},
+	}
+	processRunner := &mockRunner{}
+	log := &mockLog{}
+	sessionDir := t.TempDir()
+
+	result, err := RunWorkflow(workflow, nil, &Options{
+		Until:         "B",
+		SessionDir:    sessionDir,
+		ProcessRunner: processRunner,
+		Log:           log,
+	})
+	if err != nil {
+		t.Fatalf("RunWorkflow returned error: %v", err)
+	}
+	if result != ResultSuccess {
+		t.Fatalf("result = %q, want success", result)
+	}
+	if got, want := len(processRunner.calls), 2; got != want {
+		t.Fatalf("shell calls = %d, want %d: %v", got, want, processRunner.calls)
+	}
+	if got, want := processRunner.calls[0][2], "echo A"; got != want {
+		t.Fatalf("first command = %q, want %q", got, want)
+	}
+	if got, want := processRunner.calls[1][2], "echo B"; got != want {
+		t.Fatalf("second command = %q, want %q", got, want)
+	}
+	if got := strings.Join(log.lines, "\n"); !strings.Contains(got, `stopped after step "B" (--until).`) {
+		t.Fatalf("log missing --until stop message: %q", got)
+	}
+
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if state.Completed {
+		t.Fatal("capped run state should remain resumable")
+	}
+	if state.CurrentStep.Nested == nil || state.CurrentStep.Nested.StepID != "B" || !state.CurrentStep.Nested.Completed {
+		t.Fatalf("current step = %#v, want completed step B", state.CurrentStep.Nested)
+	}
+}
+
+func TestRunWorkflowUntilFinalStepMarksRunCompleted(t *testing.T) {
+	workflow := &model.Workflow{
+		Name: "until-final",
+		Steps: []model.Step{
+			shellStep("A", "echo A"),
+			shellStep("B", "echo B"),
+		},
+	}
+	sessionDir := t.TempDir()
+
+	result, err := RunWorkflow(workflow, nil, &Options{
+		Until:         "B",
+		SessionDir:    sessionDir,
+		ProcessRunner: &mockRunner{},
+		Log:           &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("RunWorkflow returned error: %v", err)
+	}
+	if result != ResultSuccess {
+		t.Fatalf("result = %q, want success", result)
+	}
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if !state.Completed {
+		t.Fatal("run capped at its final step should be completed")
+	}
+}
+
+func TestRunWorkflowUntilRejectsUnknownTopLevelStepBeforeRunning(t *testing.T) {
+	workflow := &model.Workflow{
+		Name: "until",
+		Steps: []model.Step{
+			shellStep("A", "echo A"),
+			shellStep("B", "echo B"),
+		},
+	}
+	processRunner := &mockRunner{}
+	sessionDir := t.TempDir()
+
+	result, err := RunWorkflow(workflow, nil, &Options{
+		Until:         "missing",
+		SessionDir:    sessionDir,
+		ProcessRunner: processRunner,
+		Log:           &mockLog{},
+	})
+	if err == nil {
+		t.Fatal("RunWorkflow returned nil error, want unknown --until step error")
+	}
+	if result != ResultFailed {
+		t.Fatalf("result = %q, want failed", result)
+	}
+	if got := err.Error(); !strings.Contains(got, `--until step "missing" not found in top-level workflow steps`) {
+		t.Fatalf("error = %q, want clear unknown --until step error", got)
+	}
+	if len(processRunner.calls) != 0 {
+		t.Fatalf("steps ran before --until validation: %v", processRunner.calls)
+	}
+	for _, name := range []string{"state.json", "audit.log", "lock"} {
+		if _, statErr := os.Stat(filepath.Join(sessionDir, name)); !os.IsNotExist(statErr) {
+			t.Fatalf("%s created before --until validation; stat error = %v", name, statErr)
+		}
+	}
+}
+
+func TestRunWorkflowUntilStopsWhenNamedTopLevelStepIsSkipped(t *testing.T) {
+	workflow := &model.Workflow{
+		Name: "until-skipped",
+		Steps: []model.Step{
+			shellStep("A", "echo A"),
+			{ID: "B", Command: "echo B", Session: model.SessionNew, SkipIf: "previous_success"},
+			shellStep("C", "echo C"),
+		},
+	}
+	processRunner := &mockRunner{}
+	sessionDir := t.TempDir()
+
+	result, err := RunWorkflow(workflow, nil, &Options{
+		Until:         "B",
+		SessionDir:    sessionDir,
+		ProcessRunner: processRunner,
+		Log:           &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("RunWorkflow returned error: %v", err)
+	}
+	if result != ResultSuccess {
+		t.Fatalf("result = %q, want success", result)
+	}
+	if got, want := len(processRunner.calls), 1; got != want {
+		t.Fatalf("shell calls = %d, want %d (A ran; B skipped; C capped): %v", got, want, processRunner.calls)
+	}
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if state.CurrentStep.Nested == nil || state.CurrentStep.Nested.StepID != "B" || !state.CurrentStep.Nested.Completed {
+		t.Fatalf("current step = %#v, want reached skipped step B", state.CurrentStep.Nested)
+	}
+}
+
 func TestMaterializeBundledAssetsCreatesMarkerForNamespaceWithoutAssets(t *testing.T) {
 	sessionDir := t.TempDir()
 

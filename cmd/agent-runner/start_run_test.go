@@ -938,6 +938,31 @@ func TestNormalizeRunCommandArgs_SupportsRunSubcommandParamFlag(t *testing.T) {
 	}
 }
 
+func TestParseRunCommandArgsSupportsUntilFlag(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args []string
+	}{
+		{name: "separate value", args: []string{"run", "core:debug", "--until", "summarize", "failed_run_id=run-123"}},
+		{name: "equals value", args: []string{"run", "core:debug", "--until=summarize", "failed_run_id=run-123"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			gotArgs, gotOpts, err := parseRunCommandArgs(tt.args)
+			if err != nil {
+				t.Fatalf("parseRunCommandArgs returned error: %v", err)
+			}
+
+			wantArgs := []string{"core:debug", "failed_run_id=run-123"}
+			if diff := cmp.Diff(wantArgs, gotArgs); diff != "" {
+				t.Fatalf("normalized args mismatch (-want +got):\n%s", diff)
+			}
+			if gotOpts.until != "summarize" {
+				t.Fatalf("until = %q, want %q", gotOpts.until, "summarize")
+			}
+		})
+	}
+}
+
 func TestNormalizeRunCommandArgs_PreservesSingleRunWorkflowName(t *testing.T) {
 	got, err := normalizeRunCommandArgs([]string{"run"})
 	if err != nil {
