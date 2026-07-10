@@ -406,16 +406,23 @@ capture_run_state() {
   fi
 }
 
+# Capture real render screenshots for the tier-2 judge. and-scene's own
+# verify checks for render errors but never screenshots, so we boot the built
+# preview and shoot each presentation/scene using the same registry + step
+# contract verify relies on. The helper script is copied in under a dot name so
+# bare imports resolve against the checkout's node_modules, then removed so it
+# never lands in the scored diff.
 capture_screenshots() {
   cd /workspace/runs/fixture
-  while IFS= read -r file; do
-    local target="/artifacts/screenshots/\${file#./}"
-    mkdir -p "\$(dirname "\$target")"
-    cp "\$file" "\$target"
-  done < <(find . \\
-    -path './node_modules' -prune -o \\
-    -path './.git' -prune -o \\
-    -type f \\( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.webp' \\) -print)
+  local script_src="/tmp/agent-runner-local/scripts/eval-workflows/scene-shots.mjs"
+  if [ ! -f "\$script_src" ]; then
+    printf '%s\\n' "scene-shots helper not found at \$script_src" > /artifacts/logs/screenshots.log
+    return 0
+  fi
+  cp "\$script_src" ./.eval-scene-shots.mjs
+  SHOTS_OUT=/artifacts/screenshots node --experimental-strip-types ./.eval-scene-shots.mjs \\
+    > /artifacts/logs/screenshots.log 2>&1 || true
+  rm -f ./.eval-scene-shots.mjs
 }
 
 write_diff() {

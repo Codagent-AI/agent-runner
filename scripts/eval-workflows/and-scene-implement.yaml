@@ -18,9 +18,3 @@ steps:
         params:
           task_file: "{{task_file}}"
           run_session_report: "false"
-
-  - id: tier1-build-and-verify
-    command: |
-      npm ci
-      npm run build
-      npm run verify
