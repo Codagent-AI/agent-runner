@@ -165,7 +165,7 @@ if [[ "$DRY_RUN" == 1 ]]; then
 else
   docker rm -f "$FORWARD_NAME" >/dev/null 2>&1 || true
 fi
-run_or_print docker run -d --name "$FORWARD_NAME" -p "$HOST_PORT:$HOST_PORT" alpine/socat \
+run_or_print docker run -d --name "$FORWARD_NAME" -p "127.0.0.1:$HOST_PORT:$HOST_PORT" alpine/socat \
   "TCP-LISTEN:$HOST_PORT,fork,reuseaddr" "TCP:$CONTAINER_IP:$INNER_PORT"
 
 URL="http://127.0.0.1:$HOST_PORT$CHECK_PATH"

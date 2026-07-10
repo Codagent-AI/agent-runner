@@ -195,7 +195,11 @@ write_agent_yolo_wrappers() {
     printf '%s\n' 'if [[ -r "$HOME/.sandbox-env" ]]; then'
     printf '%s\n' '  source "$HOME/.sandbox-env"'
     printf '%s\n' 'fi'
-    printf '%s\n' 'exec "${SANDBOX_REAL_CODEX:-/usr/bin/codex}" --dangerously-bypass-approvals-and-sandbox "$@"'
+    printf '%s\n' 'real="${SANDBOX_REAL_CODEX:-/usr/bin/codex}"'
+    printf '%s\n' 'if [[ "${1:-}" == "exec" ]]; then'
+    printf '%s\n' '  exec "$real" exec --dangerously-bypass-approvals-and-sandbox "${@:2}"'
+    printf '%s\n' 'fi'
+    printf '%s\n' 'exec "$real" "$@"'
   } > "$codex_target"
   {
     printf '%s\n' '#!/usr/bin/env bash'

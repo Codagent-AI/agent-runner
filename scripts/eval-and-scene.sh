@@ -6,10 +6,11 @@ REPO="${REPO:-https://github.com/Codagent-AI/and-scene.git}"
 FIXTURE_REF="${FIXTURE_REF:-origin/eval/create-and-scene-spec-only}"
 REFERENCE_REF="${REFERENCE_REF:-origin/change/create-and-scene}"
 CHANGE_NAME="${CHANGE_NAME:-create-and-scene}"
-WORKFLOW="${WORKFLOW:-/tmp/agent-runner-local/scripts/eval-workflows/and-scene-implement.yaml}"
+DEFAULT_WORKFLOW="/tmp/agent-runner-local/scripts/eval-workflows/and-scene-implement.yaml"
+WORKFLOW="${WORKFLOW:-$DEFAULT_WORKFLOW}"
 AGENT="${AGENT:-claude}"
 MODEL="${MODEL:-}"
-JUDGE_MODEL="${JUDGE_MODEL:-}"
+JUDGE_MODEL="${JUDGE_MODEL:-codex-default}"
 JUDGE_COMMAND="${JUDGE_COMMAND:-}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-}"
 DRY_RUN=0
@@ -21,6 +22,7 @@ SANDBOX_RUNNER="${SANDBOX_RUNNER:-$SCRIPT_DIR/sandbox-run.sh}"
 ENV_ARGS=()
 ENV_FILE_ARGS=()
 AUTH_ARGS=()
+WORKFLOW_ARGS=()
 MOUNT_CODEX_AUTH=0
 MOUNT_CLAUDE_AUTH=0
 
@@ -54,12 +56,15 @@ Options:
                           --run-agent. Default:
                           /tmp/agent-runner-local/scripts/eval-workflows/and-scene-implement.yaml
   --change-name NAME     OpenSpec change name. Default: create-and-scene
+  --workflow-arg ARG     Pass NAME=VALUE to the selected workflow. Repeatable.
+                          The default workflow receives change_name automatically
+                          when no workflow arguments are supplied.
   --agent CLI            Implementor CLI for --run-agent. Default: claude.
   --model MODEL          Implementor model override recorded in injected config.
-  --judge-model MODEL    Tier-2 judge model label recorded in metadata.
-  --judge-command CMD    Optional shell command that reads the judge prompt from
-                          stdin and writes structured JSON to stdout. Example:
-                          codex exec --model gpt-5 --output-schema /artifacts/tier2-schema.json -
+  --judge-model MODEL    Tier-2 judge model. Default: the Codex CLI default.
+  --judge-command CMD    Override the default Codex judge. The command reads the
+                          prompt from stdin, writes structured JSON to stdout,
+                          and receives every screenshot path as a positional arg.
   --env NAME             Pass through one named environment variable.
                           Repeatable.
   --env-file PATH        Read simple NAME=value or export NAME=value entries
@@ -119,6 +124,10 @@ while (($#)); do
       CHANGE_NAME="${2:?missing value for --change-name}"
       shift 2
       ;;
+    --workflow-arg)
+      WORKFLOW_ARGS+=("${2:?missing value for --workflow-arg}")
+      shift 2
+      ;;
     --agent)
       AGENT="${2:?missing value for --agent}"
       shift 2
@@ -176,11 +185,13 @@ if [[ "$RUN_AGENT" == 1 ]]; then
     claude)
       if [[ "$MOUNT_CLAUDE_AUTH" != 1 ]]; then
         AUTH_ARGS+=(--mount-claude-auth)
+        MOUNT_CLAUDE_AUTH=1
       fi
       ;;
     codex)
       if [[ "$MOUNT_CODEX_AUTH" != 1 ]]; then
         AUTH_ARGS+=(--mount-codex-auth)
+        MOUNT_CODEX_AUTH=1
       fi
       ;;
     *)
@@ -188,6 +199,21 @@ if [[ "$RUN_AGENT" == 1 ]]; then
       exit 2
       ;;
   esac
+
+  if [[ -z "$JUDGE_COMMAND" && "$MOUNT_CODEX_AUTH" != 1 ]]; then
+    AUTH_ARGS+=(--mount-codex-auth)
+    MOUNT_CODEX_AUTH=1
+  fi
+
+  if [[ "${#WORKFLOW_ARGS[@]}" -eq 0 && "$WORKFLOW" == "$DEFAULT_WORKFLOW" ]]; then
+    WORKFLOW_ARGS+=("change_name=$CHANGE_NAME")
+  fi
+  for workflow_arg in "${WORKFLOW_ARGS[@]}"; do
+    if [[ "$workflow_arg" != *=* || "$workflow_arg" == =* ]]; then
+      echo "Invalid --workflow-arg $workflow_arg; expected NAME=VALUE." >&2
+      exit 2
+    fi
+  done
 fi
 
 if [[ -z "$ARTIFACT_DIR" ]]; then
@@ -204,12 +230,15 @@ REPO_Q="$(shell_quote "$REPO")"
 FIXTURE_REF_Q="$(shell_quote "$FIXTURE_REF")"
 REFERENCE_REF_Q="$(shell_quote "$REFERENCE_REF")"
 CHANGE_NAME_Q="$(shell_quote "$CHANGE_NAME")"
-CHANGE_PARAM_Q="$(shell_quote "change_name=$CHANGE_NAME")"
 WORKFLOW_Q="$(shell_quote "$WORKFLOW")"
 AGENT_Q="$(shell_quote "$AGENT")"
 MODEL_Q="$(shell_quote "$MODEL")"
 JUDGE_MODEL_Q="$(shell_quote "$JUDGE_MODEL")"
 JUDGE_COMMAND_Q="$(shell_quote "$JUDGE_COMMAND")"
+WORKFLOW_ARGS_Q=""
+for workflow_arg in "${WORKFLOW_ARGS[@]+"${WORKFLOW_ARGS[@]}"}"; do
+  WORKFLOW_ARGS_Q+="$(shell_quote "$workflow_arg") "
+done
 
 proof_script=$(cat <<PROOF
 set -euo pipefail
@@ -312,6 +341,7 @@ EVAL_AGENT=$AGENT_Q
 EVAL_MODEL=$MODEL_Q
 JUDGE_MODEL=$JUDGE_MODEL_Q
 JUDGE_COMMAND=$JUDGE_COMMAND_Q
+WORKFLOW_ARGS=($WORKFLOW_ARGS_Q)
 FIXTURE_COMMIT=""
 REFERENCE_COMMIT=""
 FINAL_COMMIT=""
@@ -322,7 +352,7 @@ NPM_CI_EXIT_CODE=0
 BUILD_EXIT_CODE=0
 VERIFY_EXIT_CODE=0
 JUDGE_EXIT_CODE=0
-TIER2_STATUS="not_configured"
+TIER2_STATUS="pending"
 
 configure_github_https_auth() {
   local token="\${GITHUB_TOKEN:-\${GH_TOKEN:-}}"
@@ -419,12 +449,7 @@ write_tier1_result() {
     --argjson build_exit_code "\$BUILD_EXIT_CODE" \\
     --argjson verify_exit_code "\$VERIFY_EXIT_CODE" \\
     '{
-      pass: (
-        \$agent_runner_exit_code == 0 and
-        \$npm_ci_exit_code == 0 and
-        \$build_exit_code == 0 and
-        \$verify_exit_code == 0
-      ),
+      pass: (\$build_exit_code == 0 and \$verify_exit_code == 0),
       agent_runner_exit_code: \$agent_runner_exit_code,
       npm_ci_exit_code: \$npm_ci_exit_code,
       build_exit_code: \$build_exit_code,
@@ -465,7 +490,7 @@ append_file_block() {
   local file="\$1"
   printf '\\n### %s\\n\\n' "\$file"
   printf '~~~\\n'
-  sed -n '1,220p' "\$file"
+  cat -- "\$file"
   printf '\\n~~~\\n'
 }
 
@@ -496,16 +521,21 @@ write_judge_prompt() {
       -path './node_modules' -prune -o \\
       -path './dist' -prune -o \\
       -path './.agent-runner' -prune -o \\
+      -path './.validator' -prune -o \\
       -path './validator_logs' -prune -o \\
+      -path './.openspec' -prune -o \\
+      -path './.codex' -prune -o \\
+      -path './.claude' -prune -o \\
       -type f \\
       ! -name 'package-lock.json' \\
       ! -name '*.png' \\
       ! -name '*.jpg' \\
       ! -name '*.jpeg' \\
       ! -name '*.webp' \\
-      -size -200k \\
       -print | sort | while IFS= read -r file; do
-        append_file_block "\$file"
+        if LC_ALL=C grep -Iq . "\$file" || [ ! -s "\$file" ]; then
+          append_file_block "\$file"
+        fi
       done
 
     printf '\\n%s\\n' '## Build And Verify Logs'
@@ -516,6 +546,7 @@ write_judge_prompt() {
     done
 
     printf '\\n%s\\n' '## Screenshots'
+    printf '%s\\n' 'Every path below is attached to the multimodal judge request.'
     find /artifacts/screenshots -type f | sort || true
 
     if [ -d /workspace/runs/reference ]; then
@@ -531,9 +562,10 @@ write_judge_prompt() {
         ! -name '*.jpg' \\
         ! -name '*.jpeg' \\
         ! -name '*.webp' \\
-        -size -200k \\
         -print | sort | while IFS= read -r file; do
-          append_file_block "\$file"
+          if LC_ALL=C grep -Iq . "\$file" || [ ! -s "\$file" ]; then
+            append_file_block "\$file"
+          fi
         done
     fi
   } > /artifacts/tier2-judge-prompt.md
@@ -542,39 +574,70 @@ write_judge_prompt() {
 run_tier2_judge() {
   write_judge_schema
   write_judge_prompt
-  if [ -z "\$JUDGE_COMMAND" ]; then
-    jq -n \\
-      --arg judge_model "\$JUDGE_MODEL" \\
-      '{
-        status: "not_configured",
-        judge_model: \$judge_model,
-        pass: false,
-        overall_score: 0,
-        rationale: "No --judge-command was provided. Judge prompt and schema were written for an external tier-2 run."
-      }' > /artifacts/tier2-result.json
-    TIER2_STATUS="not_configured"
+  local screenshots=()
+  while IFS= read -r -d '' screenshot; do
+    screenshots+=("\$screenshot")
+  done < <(find /artifacts/screenshots -type f -print0 | sort -z)
+  if [ "\${#screenshots[@]}" -eq 0 ]; then
+    printf '%s\\n' 'Tier-2 judging requires at least one render screenshot.' > /artifacts/logs/tier2-judge.log
+    JUDGE_EXIT_CODE=2
+    TIER2_STATUS="failed"
     return 0
   fi
 
   set +e
-  bash -lc "\$JUDGE_COMMAND" < /artifacts/tier2-judge-prompt.md > /artifacts/tier2-result.json 2> /artifacts/logs/tier2-judge.log
-  JUDGE_EXIT_CODE=\$?
+  if [ -n "\$JUDGE_COMMAND" ]; then
+    bash -lc "\$JUDGE_COMMAND" judge-command "\${screenshots[@]}" \\
+      < /artifacts/tier2-judge-prompt.md \\
+      > /artifacts/tier2-result.json \\
+      2> /artifacts/logs/tier2-judge.log
+    JUDGE_EXIT_CODE=\$?
+  else
+    judge_args=(
+      exec
+      --cd /workspace/runs/fixture
+      --sandbox read-only
+      --skip-git-repo-check
+      --ephemeral
+      --output-schema /artifacts/tier2-schema.json
+      --output-last-message /artifacts/tier2-result.json
+    )
+    if [ "\$JUDGE_MODEL" != "codex-default" ]; then
+      judge_args+=(--model "\$JUDGE_MODEL")
+    fi
+    for screenshot in "\${screenshots[@]}"; do
+      judge_args+=(--image "\$screenshot")
+    done
+    judge_args+=(-)
+    codex "\${judge_args[@]}" \\
+      < /artifacts/tier2-judge-prompt.md \\
+      > /artifacts/logs/tier2-judge.log 2>&1
+    JUDGE_EXIT_CODE=\$?
+  fi
   set -e
-  if [ "\$JUDGE_EXIT_CODE" -eq 0 ]; then
+  if [ "\$JUDGE_EXIT_CODE" -eq 0 ] && jq -e '.pass == true' /artifacts/tier2-result.json >/dev/null 2>&1; then
     TIER2_STATUS="completed"
   else
+    if [ "\$JUDGE_EXIT_CODE" -eq 0 ]; then
+      JUDGE_EXIT_CODE=1
+    fi
     TIER2_STATUS="failed"
   fi
   return 0
 }
 
 write_metadata() {
+  local workflow_args_json='[]'
+  if [ "\${#WORKFLOW_ARGS[@]}" -gt 0 ]; then
+    workflow_args_json="\$(printf '%s\\n' "\${WORKFLOW_ARGS[@]}" | jq -Rsc 'split("\\n")[:-1]')"
+  fi
   jq -n \\
     --arg repo "\$REPO" \\
     --arg fixture_ref "\$FIXTURE_REF" \\
     --arg reference_ref "\$REFERENCE_REF" \\
     --arg change_name "\$CHANGE_NAME" \\
     --arg workflow "\$WORKFLOW_PATH" \\
+    --argjson workflow_args "\$workflow_args_json" \\
     --arg agent "\$EVAL_AGENT" \\
     --arg model "\$EVAL_MODEL" \\
     --arg judge_model "\$JUDGE_MODEL" \\
@@ -603,6 +666,7 @@ write_metadata() {
       reference_ref: \$reference_ref,
       change_name: \$change_name,
       workflow: \$workflow,
+      workflow_args: \$workflow_args,
       agent: \$agent,
       model: \$model,
       judge_model: \$judge_model,
@@ -646,7 +710,11 @@ FIXTURE_COMMIT="\$(git rev-parse HEAD)"
 write_eval_config
 
 set +e
-run_logged agent-runner env AGENT_RUNNER_NO_TUI=1 agent-runner run "\$WORKFLOW_PATH" $CHANGE_PARAM_Q
+if [ "\${#WORKFLOW_ARGS[@]}" -gt 0 ]; then
+  run_logged agent-runner env AGENT_RUNNER_NO_TUI=1 agent-runner run "\$WORKFLOW_PATH" "\${WORKFLOW_ARGS[@]}"
+else
+  run_logged agent-runner env AGENT_RUNNER_NO_TUI=1 agent-runner run "\$WORKFLOW_PATH"
+fi
 AGENT_RUNNER_EXIT_CODE=\$?
 set -e
 capture_run_state

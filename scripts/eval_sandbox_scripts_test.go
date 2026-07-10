@@ -354,22 +354,27 @@ func TestSandboxSyncHomeCopiesAllowedFilesWritable(t *testing.T) {
 		path    string
 		envName string
 		flag    string
+		args    []string
+		ordered string
 	}{
 		{
 			name:    "codex",
 			path:    filepath.Join(dir, "workspace", "bin", "codex"),
 			envName: "SANDBOX_REAL_CODEX",
 			flag:    "--dangerously-bypass-approvals-and-sandbox",
+			args:    []string{"exec", "judge this"},
+			ordered: "arg=exec\narg=--dangerously-bypass-approvals-and-sandbox\narg=judge this\n",
 		},
 		{
 			name:    "claude",
 			path:    filepath.Join(dir, "workspace", "bin", "claude"),
 			envName: "SANDBOX_REAL_CLAUDE",
 			flag:    "--dangerously-skip-permissions",
+			args:    []string{"plugin", "list"},
 		},
 	}
 	for _, tc := range wrapperCases {
-		wrapperCmd := exec.Command(tc.path, "plugin", "list")
+		wrapperCmd := exec.Command(tc.path, tc.args...)
 		wrapperCmd.Env = append(os.Environ(),
 			"HOME="+containerHome,
 			tc.envName+"="+fakeAgentCLI,
@@ -379,10 +384,18 @@ func TestSandboxSyncHomeCopiesAllowedFilesWritable(t *testing.T) {
 			t.Fatalf("%s yolo wrapper failed: %v\n%s", tc.name, err, wrapperOutput)
 		}
 		got := string(wrapperOutput)
-		for _, want := range []string{"arg=" + tc.flag, "arg=plugin", "arg=list", "github=test-github-token"} {
+		for _, arg := range tc.args {
+			if !strings.Contains(got, "arg="+arg) {
+				t.Fatalf("%s yolo wrapper missing argument %q:\n%s", tc.name, arg, wrapperOutput)
+			}
+		}
+		for _, want := range []string{"arg=" + tc.flag, "github=test-github-token"} {
 			if !strings.Contains(got, want) {
 				t.Fatalf("%s yolo wrapper missing %q:\n%s", tc.name, want, wrapperOutput)
 			}
+		}
+		if tc.ordered != "" && !strings.Contains(got, tc.ordered) {
+			t.Fatalf("%s yolo wrapper arguments are in the wrong order:\n%s", tc.name, wrapperOutput)
 		}
 	}
 
@@ -531,7 +544,7 @@ func TestEvalAndSceneProofDryRunTargetsFixtureAndReference(t *testing.T) {
 	if strings.Contains(text, "https://x-access-token") || strings.Contains(text, "@github.com") {
 		t.Fatalf("dry-run output should not include token-in-URL auth wiring:\n%s", text)
 	}
-	for _, forbidden := range []string{`case "\$1" in`, `\${GITHUB_TOKEN`} {
+	for _, forbidden := range []string{`case "\$1" in`, `\${GITHUB_TOKEN`, "WORKFLOW_ARGS"} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("dry-run output contains escaped askpass content %q:\n%s", forbidden, text)
 		}
@@ -542,12 +555,18 @@ func TestEvalAndSceneAgentDryRunWiresScoredHarness(t *testing.T) {
 	dir := t.TempDir()
 	artifacts := filepath.Join(dir, "and-scene-run")
 	home := filepath.Join(dir, "home")
-	claudeDir := filepath.Join(home, ".claude")
-	if err := os.MkdirAll(claudeDir, 0o700); err != nil {
-		t.Fatalf("mkdir claude auth dir: %v", err)
+	for _, path := range []string{filepath.Join(home, ".claude"), filepath.Join(home, ".codex")} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatalf("mkdir auth dir %s: %v", path, err)
+		}
 	}
-	if err := os.WriteFile(filepath.Join(claudeDir, ".credentials.json"), []byte("{}\n"), 0o600); err != nil {
-		t.Fatalf("write claude auth: %v", err)
+	for path, body := range map[string]string{
+		filepath.Join(home, ".claude", ".credentials.json"): "{}\n",
+		filepath.Join(home, ".codex", "auth.json"):          "{}\n",
+	} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("write auth file %s: %v", path, err)
+		}
 	}
 
 	cmd := exec.Command("bash", "./eval-and-scene.sh",
@@ -583,7 +602,11 @@ func TestEvalAndSceneAgentDryRunWiresScoredHarness(t *testing.T) {
 		"tier1-result.json",
 		"tier2-judge-prompt.md",
 		"tier2-result.json",
+		"judge_args=(",
+		"--output-schema",
+		"--image",
 		"target=/host-home/claude/.credentials.json",
+		"target=/host-home/codex/auth.json",
 		artifacts,
 	} {
 		if !strings.Contains(text, want) {
@@ -592,6 +615,67 @@ func TestEvalAndSceneAgentDryRunWiresScoredHarness(t *testing.T) {
 	}
 	if strings.Contains(text, "review-assumptions") || strings.Contains(text, "simplify") {
 		t.Fatalf("agent eval workflow should not include interactive tail steps:\n%s", text)
+	}
+}
+
+func TestEvalAndSceneScoringIncludesCompleteEvidence(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "eval-and-scene.sh"))
+	if err != nil {
+		t.Fatalf("read eval-and-scene.sh: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		`pass: (\$build_exit_code == 0 and \$verify_exit_code == 0)`,
+		`cat -- "\$file"`,
+		`--image "\$screenshot"`,
+		`jq -e '.pass == true' /artifacts/tier2-result.json`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("eval scoring missing %q:\n%s", want, text)
+		}
+	}
+	for _, forbidden := range []string{
+		`sed -n '1,220p' "$file"`,
+		`status: "not_configured"`,
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("eval scoring still contains %q:\n%s", forbidden, text)
+		}
+	}
+}
+
+func TestEvalAndSceneCustomWorkflowReceivesOnlyCallerSuppliedArgs(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o700); err != nil {
+		t.Fatalf("mkdir codex auth dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".codex", "auth.json"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write codex auth: %v", err)
+	}
+
+	cmd := exec.Command("bash", "./eval-and-scene.sh",
+		"--dry-run",
+		"--run-agent",
+		"--artifact-dir", filepath.Join(dir, "artifacts"),
+		"--agent", "codex",
+		"--workflow", "/tmp/custom.yaml",
+		"--workflow-arg", "feature=demo",
+	)
+	cmd.Env = append(os.Environ(),
+		"HOME="+home,
+		"SANDBOX_SECRETS_FILE="+filepath.Join(dir, "missing.env"),
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("custom workflow dry run failed: %v\n%s", err, output)
+	}
+	text := string(output)
+	if !strings.Contains(text, "feature=demo") {
+		t.Fatalf("custom workflow dry run missing caller argument:\n%s", text)
+	}
+	if strings.Contains(text, "change_name=create-and-scene") {
+		t.Fatalf("custom workflow received and-scene-specific argument:\n%s", text)
 	}
 }
 
@@ -770,7 +854,7 @@ func TestDevcontainerForwardDryRunBridgesHostToContainerLoopback(t *testing.T) {
 		"TCP:127.0.0.1:5173",
 		"docker run",
 		"--name agent-runner-devcontainer-forward-5174",
-		"-p 5174:5174",
+		"-p 127.0.0.1:5174:5174",
 		"TCP:172.17.0.4:15174",
 		"curl",
 		"http://127.0.0.1:5174/agent-tool-loop",
