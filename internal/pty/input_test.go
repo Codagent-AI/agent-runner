@@ -185,9 +185,13 @@ func TestInputProcessor(t *testing.T) {
 
 	t.Run("passes through OSC sequences", func(t *testing.T) {
 		p := &inputProcessor{}
-		r := p.process([]byte("\x1b]0;title\x07"))
+		input := "\x1b]0;title\x07"
+		r := p.process([]byte(input))
 		if r.triggered {
 			t.Fatal("unexpected trigger inside OSC")
+		}
+		if string(r.forward) != input {
+			t.Fatalf("expected OSC sequence forwarded intact, got %q", string(r.forward))
 		}
 	})
 
@@ -216,7 +220,7 @@ func TestInputProcessor(t *testing.T) {
 		}
 	})
 
-	t.Run("simple two-byte escape passes through", func(t *testing.T) {
+	t.Run("passes through complete SS3 sequence", func(t *testing.T) {
 		p := &inputProcessor{}
 		r := p.process([]byte("\x1bOP"))
 		if r.triggered {
@@ -227,12 +231,64 @@ func TestInputProcessor(t *testing.T) {
 		}
 	})
 
+	t.Run("buffers split SS3 arrow sequence", func(t *testing.T) {
+		p := &inputProcessor{}
+		r1 := p.process([]byte("\x1bO"))
+		if r1.triggered {
+			t.Fatal("unexpected trigger inside partial SS3 sequence")
+		}
+		if len(r1.forward) != 0 {
+			t.Fatalf("expected partial SS3 input buffered, got %q", string(r1.forward))
+		}
+
+		r2 := p.process([]byte("A"))
+		if r2.triggered {
+			t.Fatal("unexpected trigger inside SS3 sequence")
+		}
+		if string(r2.forward) != "\x1bOA" {
+			t.Fatalf("expected complete SS3 arrow forwarded, got %q", string(r2.forward))
+		}
+	})
+
+	t.Run("flushes ambiguous escape prefixes after input goes idle", func(t *testing.T) {
+		for _, input := range []string{"\x1b", "\x1bO"} {
+			p := &inputProcessor{}
+			r := p.process([]byte(input))
+			if len(r.forward) != 0 {
+				t.Fatalf("expected %q buffered, got %q", input, string(r.forward))
+			}
+			if got := string(p.flushAmbiguousEscape()); got != input {
+				t.Fatalf("flushAmbiguousEscape() = %q, want %q", got, input)
+			}
+			if got := string(p.process([]byte("x")).forward); got != "x" {
+				t.Fatalf("input after flush = %q, want %q", got, "x")
+			}
+		}
+	})
+
+	t.Run("does not flush a partial CSI sequence when input goes idle", func(t *testing.T) {
+		p := &inputProcessor{}
+		if r := p.process([]byte("\x1b[")); len(r.forward) != 0 {
+			t.Fatalf("expected partial CSI input buffered, got %q", string(r.forward))
+		}
+		if got := p.flushAmbiguousEscape(); len(got) != 0 {
+			t.Fatalf("flushAmbiguousEscape() = %q, want no bytes", string(got))
+		}
+		if got := string(p.process([]byte("A")).forward); got != "\x1b[A" {
+			t.Fatalf("completed CSI input = %q, want %q", got, "\x1b[A")
+		}
+	})
+
 	t.Run("DCS sequence passes through", func(t *testing.T) {
 		p := &inputProcessor{}
 		// DCS q ... ST (\x1b\)
-		r := p.process([]byte("\x1bPq\x1b\\"))
+		input := "\x1bPq\x1b\\"
+		r := p.process([]byte(input))
 		if r.triggered {
 			t.Fatal("unexpected trigger inside DCS")
+		}
+		if string(r.forward) != input {
+			t.Fatalf("expected DCS sequence forwarded intact, got %q", string(r.forward))
 		}
 	})
 

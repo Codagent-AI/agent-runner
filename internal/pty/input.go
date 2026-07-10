@@ -4,6 +4,7 @@ import "strings"
 
 // Escape sequence parser states. Covers all standard ANSI/xterm sequences:
 //   - CSI  (\x1b[)  — parameter bytes + final byte (0x40-0x7e)
+//   - SS3  (\x1bO)  — one following byte, used for application cursor keys
 //   - OSC  (\x1b])  — payload terminated by BEL (0x07) or ST (\x1b\)
 //   - DCS  (\x1bP)  — same termination as OSC
 //   - PM   (\x1b^)  — same termination as OSC
@@ -13,6 +14,7 @@ const (
 	escNone         = iota
 	escSawEsc       // saw 0x1b, waiting for next byte
 	escInCSI        // inside CSI, waiting for final byte (0x40-0x7e)
+	escInSS3        // inside SS3, waiting for the application-key byte
 	escInStringSeq  // inside OSC/DCS/PM/APC/SOS, waiting for BEL or ST
 	escStringSawEsc // inside a string sequence after ESC, waiting for ST final byte
 )
@@ -103,6 +105,9 @@ func (p *inputProcessor) processEscapeByte(b byte) []byte {
 		case '[':
 			p.escState = escInCSI
 			return nil
+		case 'O':
+			p.escState = escInSS3
+			return nil
 		case ']', 'P', '^', '_', 'X': // OSC, DCS, PM, APC, SOS
 			p.escState = escInStringSeq
 		default:
@@ -120,6 +125,12 @@ func (p *inputProcessor) processEscapeByte(b byte) []byte {
 		if !isSGRMouseInput(p.escBuf) || p.mouse.enabled() {
 			out = append(out, p.escBuf...)
 		}
+		p.escBuf = p.escBuf[:0]
+		p.escState = escNone
+		return out
+	case escInSS3:
+		p.escBuf = append(p.escBuf, b)
+		out := append([]byte(nil), p.escBuf...)
 		p.escBuf = p.escBuf[:0]
 		p.escState = escNone
 		return out
@@ -141,6 +152,19 @@ func (p *inputProcessor) processEscapeByte(b byte) []byte {
 	default:
 		return nil
 	}
+}
+
+// flushAmbiguousEscape releases an incomplete escape prefix after stdin has
+// gone idle. A lone ESC may be the Escape key, and ESC O may be an Alt+O key;
+// complete SS3 keys arrive with their final byte before the idle poll.
+func (p *inputProcessor) flushAmbiguousEscape() []byte {
+	if p.escState != escSawEsc && p.escState != escInSS3 {
+		return nil
+	}
+	out := append([]byte(nil), p.escBuf...)
+	p.escBuf = p.escBuf[:0]
+	p.escState = escNone
+	return out
 }
 
 func isSGRMouseInput(seq []byte) bool {

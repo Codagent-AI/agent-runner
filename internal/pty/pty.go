@@ -510,6 +510,9 @@ func processStdin(ptmx *os.File, cmd *exec.Cmd, hint *idleHint, state *ptyState,
 			return
 		}
 		if ready == 0 {
+			if pending := proc.flushAmbiguousEscape(); len(pending) > 0 && !state.isDone() {
+				_ = writeFull(ptmx, pending)
+			}
 			continue
 		}
 
