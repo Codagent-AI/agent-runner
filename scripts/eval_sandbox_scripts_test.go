@@ -594,6 +594,8 @@ func TestEvalAndSceneAgentDryRunWiresScoredHarness(t *testing.T) {
 		"--until",
 		"run-validator",
 		"planner:",
+		"autonomous_permission_mode: yolo",
+		"write_user_settings",
 		"AGENT_RUNNER_NO_TUI=1",
 		"change_name=create-and-scene",
 		"npm ci",

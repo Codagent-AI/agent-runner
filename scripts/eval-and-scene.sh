@@ -427,6 +427,17 @@ write_eval_config() {
   } > .agent-runner/config.yaml
 }
 
+# Run agents in YOLO permission mode. Codex's default workspace-write sandbox
+# shells out to bubblewrap, which cannot create a user namespace inside the
+# unprivileged container and fails every command with "bwrap: No permissions to
+# create a new namespace". YOLO switches codex to --sandbox danger-full-access
+# (no bwrap); the disposable, network- and mount-restricted container is itself
+# the isolation boundary, matching the devcontainer default.
+write_user_settings() {
+  mkdir -p "\$HOME/.agent-runner"
+  printf '%s\n' 'autonomous_permission_mode: yolo' > "\$HOME/.agent-runner/settings.yaml"
+}
+
 latest_run_dir() {
   ls -td "\$HOME"/.agent-runner/projects/*/runs/* 2>/dev/null | head -n 1 || true
 }
@@ -817,6 +828,7 @@ git fetch origin 2>&1 | tee -a /artifacts/logs/fixture-clone.log
 git checkout "\$FIXTURE_REF" 2>&1 | tee -a /artifacts/logs/fixture-clone.log
 FIXTURE_COMMIT="\$(git rev-parse HEAD)"
 write_eval_config
+write_user_settings
 
 set +e
 RUN_ARGS=(run "\$WORKFLOW_PATH")
