@@ -16,7 +16,7 @@ profiles:
       codex_headless_smoke:
         default_mode: headless
         cli: codex
-        model: gpt-5.4-mini
+        model: gpt-5.6-sol
         effort: low
       copilot_headless_smoke:
         default_mode: headless
@@ -36,7 +36,7 @@ profiles:
       codex_interactive_smoke:
         default_mode: interactive
         cli: codex
-        model: gpt-5.4-mini
+        model: gpt-5.6-sol
         effort: low
       copilot_interactive_smoke:
         default_mode: interactive
