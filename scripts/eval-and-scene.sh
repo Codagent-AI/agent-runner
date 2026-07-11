@@ -6,7 +6,7 @@ REPO="${REPO:-https://github.com/Codagent-AI/and-scene.git}"
 # Pin the fixture to an exact commit, not a moving branch head, so scored runs
 # are reproducible. This is the head of eval/create-and-scene-spec-only as of
 # 2026-07-10; bump it deliberately when the fixture snapshot changes.
-FIXTURE_REF="${FIXTURE_REF:-cd0cc0038b9754345c1baf2b2bbad7b3ad37b19c}"
+FIXTURE_REF="${FIXTURE_REF:-26d2866e5003f34786fffa528891e6092c87cf8b}"
 # The reference is a tiebreak-only, divergence-tolerant input, so it stays a
 # branch ref rather than a pin.
 REFERENCE_REF="${REFERENCE_REF:-origin/change/create-and-scene}"
@@ -344,6 +344,23 @@ npm ci 2>&1 | tee /artifacts/logs/reference-npm-ci.log
 npm run build 2>&1 | tee /artifacts/logs/reference-build.log
 npm run verify 2>&1 | tee /artifacts/logs/reference-verify.log
 
+# Prove the recommended agent-facing browser CLI can launch Chromium, navigate,
+# and inspect a real page inside the sandbox.
+npm exec vite -- preview --host 127.0.0.1 --port 4173 --strictPort \
+  > /artifacts/logs/axi-preview.log 2>&1 &
+AXI_PREVIEW_PID="\$!"
+for _ in {1..100}; do
+  if curl -fsS http://127.0.0.1:4173/ >/dev/null; then break; fi
+  sleep 0.1
+done
+{
+  chrome-devtools-axi open http://127.0.0.1:4173/
+  chrome-devtools-axi snapshot
+} > /artifacts/logs/axi-browser-proof.log 2>&1
+grep -q 'Presentations' /artifacts/logs/axi-browser-proof.log
+chrome-devtools-axi stop >/dev/null 2>&1 || true
+kill "\$AXI_PREVIEW_PID" 2>/dev/null || true
+
 echo "and-scene browser proof passed" | tee /artifacts/tier1-result.txt
 PROOF
 )
@@ -377,6 +394,8 @@ BUILD_EXIT_CODE=0
 VERIFY_EXIT_CODE=0
 JUDGE_EXIT_CODE=0
 TIER2_STATUS="pending"
+EVIDENCE_REPAIR_ATTEMPTED=false
+EVIDENCE_REPAIR_PENALTY=0
 
 configure_github_https_auth() {
   local token="\${GITHUB_TOKEN:-\${GH_TOKEN:-}}"
@@ -461,12 +480,84 @@ capture_screenshots() {
   local script_src="/tmp/agent-runner-local/scripts/eval-workflows/scene-shots.mjs"
   if [ ! -f "\$script_src" ]; then
     printf '%s\\n' "scene-shots helper not found at \$script_src" > /artifacts/logs/screenshots.log
-    return 0
+    return 1
   fi
   cp "\$script_src" ./.eval-scene-shots.mjs
-  SHOTS_OUT=/artifacts/screenshots node --experimental-strip-types ./.eval-scene-shots.mjs \\
-    > /artifacts/logs/screenshots.log 2>&1 || true
+  set +e
+  SHOTS_OUT=/artifacts/screenshots \\
+    SHOTS_MANIFEST=/artifacts/screenshot-manifest.json \\
+    node --experimental-strip-types ./.eval-scene-shots.mjs \\
+    > /artifacts/logs/screenshots.log 2>&1
+  local capture_exit=\$?
+  set -e
   rm -f ./.eval-scene-shots.mjs
+  return "\$capture_exit"
+}
+
+# Give the judge model one bounded chance to repair evidence collection. It may
+# edit only a temporary helper copy; the evaluated fixture remains untouched.
+repair_screenshot_capture() {
+  EVIDENCE_REPAIR_ATTEMPTED=true
+  EVIDENCE_REPAIR_PENALTY=5
+  local repair_dir=/tmp/evidence-repair
+  rm -rf "\$repair_dir"
+  mkdir -p "\$repair_dir"
+  cp /tmp/agent-runner-local/scripts/eval-workflows/scene-shots.mjs "\$repair_dir/scene-shots.mjs"
+  # The raw log, slugs, and error messages are fixture-controlled. Reduce the
+  # manifest to fixed numeric/boolean fields before it enters an agent prompt.
+  jq '{
+    expectedPresentations: (.expectedPresentations | numbers),
+    capturedPresentations: (.capturedPresentations | numbers),
+    expectedScreenshots: (.expectedScreenshots | numbers),
+    capturedScreenshots: (.capturedScreenshots | numbers),
+    complete: (.complete == true),
+    errorCount: ([.presentations[]?.errors[]?] | length)
+  }' /artifacts/screenshot-manifest.json \
+    > "\$repair_dir/sanitized-screenshot-manifest.json" 2>/dev/null || \
+    printf '%s\\n' '{"expectedPresentations":0,"capturedPresentations":0,"expectedScreenshots":0,"capturedScreenshots":0,"complete":false,"errorCount":1}' \
+      > "\$repair_dir/sanitized-screenshot-manifest.json"
+  cat > "\$repair_dir/prompt.md" <<'PROMPT'
+The screenshot evidence for an evaluation is incomplete. Diagnose the supplied
+scene-shots.mjs using sanitized-screenshot-manifest.json, then edit only
+scene-shots.mjs in this directory so it captures every presentation step. The
+coverage summary intentionally excludes fixture-controlled text. Do not inspect
+or edit the evaluated fixture or any other file. Preserve the output manifest
+contract and use data-step-count/data-step-index. This is one bounded evidence
+repair attempt.
+PROMPT
+  local repair_args=(
+    exec
+    --cd "\$repair_dir"
+    --sandbox danger-full-access
+    --skip-git-repo-check
+    --ephemeral
+    --output-last-message /artifacts/evidence-repair-result.txt
+  )
+  if [ "\$JUDGE_MODEL" != "codex-default" ]; then
+    repair_args+=(--model "\$JUDGE_MODEL")
+  fi
+  set +e
+  codex "\${repair_args[@]}" - \\
+    < "\$repair_dir/prompt.md" \\
+    > /artifacts/logs/repair-screenshot-capture.log 2>&1
+  local repair_exit=\$?
+  set -e
+  if [ "\$repair_exit" -ne 0 ] || ! node --check "\$repair_dir/scene-shots.mjs" >/dev/null 2>&1; then
+    return 1
+  fi
+  cd /workspace/runs/fixture
+  cp "\$repair_dir/scene-shots.mjs" ./.eval-scene-shots.mjs
+  rm -rf /artifacts/screenshots
+  mkdir -p /artifacts/screenshots
+  set +e
+  SHOTS_OUT=/artifacts/screenshots \\
+    SHOTS_MANIFEST=/artifacts/screenshot-manifest.json \\
+    node --experimental-strip-types ./.eval-scene-shots.mjs \\
+    > /artifacts/logs/screenshots-repaired.log 2>&1
+  local capture_exit=\$?
+  set -e
+  rm -f ./.eval-scene-shots.mjs
+  return "\$capture_exit"
 }
 
 write_diff() {
@@ -598,6 +689,10 @@ write_judge_prompt() {
 
     printf '\\n%s\\n' '## Screenshots'
     printf '%s\\n' 'Every path below is attached to the multimodal judge request.'
+    printf 'Evidence repair attempted: %s; score penalty: %s\\n' "\$EVIDENCE_REPAIR_ATTEMPTED" "\$EVIDENCE_REPAIR_PENALTY"
+    if [ -f /artifacts/screenshot-manifest.json ]; then
+      append_file_block /artifacts/screenshot-manifest.json
+    fi
     find /artifacts/screenshots -type f | sort || true
 
     if [ -d /workspace/runs/reference ]; then
@@ -694,6 +789,7 @@ write_metadata() {
     --arg model "\$EVAL_MODEL" \\
     --arg judge_model "\$JUDGE_MODEL" \\
     --arg judge_status "\$TIER2_STATUS" \\
+    --arg evidence_repair_attempted "\$EVIDENCE_REPAIR_ATTEMPTED" \\
     --arg started_at "\${STARTED_AT}" \\
     --arg ended_at "\$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \\
     --arg agent_runner_commit "\${AGENT_RUNNER_SOURCE_COMMIT:-}" \\
@@ -711,6 +807,7 @@ write_metadata() {
     --argjson build_exit_code "\$BUILD_EXIT_CODE" \\
     --argjson verify_exit_code "\$VERIFY_EXIT_CODE" \\
     --argjson judge_exit_code "\$JUDGE_EXIT_CODE" \\
+    --argjson evidence_repair_penalty "\$EVIDENCE_REPAIR_PENALTY" \\
     --argjson exit_code "\${EXIT_CODE:-0}" \\
     '{
       repo: \$repo,
@@ -724,6 +821,10 @@ write_metadata() {
       model: \$model,
       judge_model: \$judge_model,
       judge_status: \$judge_status,
+      evidence_repair: {
+        attempted: (\$evidence_repair_attempted == "true"),
+        penalty: \$evidence_repair_penalty
+      },
       started_at: \$started_at,
       ended_at: \$ended_at,
       agent_runner_commit: \$agent_runner_commit,
@@ -770,6 +871,7 @@ write_reward() {
     --argjson verify_exit_code "\$VERIFY_EXIT_CODE" \\
     --argjson scenario_score "\$scenario_score" \\
     --argjson scenario_pass "\$scenario_pass" \\
+    --argjson evidence_repair_penalty "\$EVIDENCE_REPAIR_PENALTY" \\
     '
     (\$agent_runner_exit_code == 0) as \$wf
     | (\$npm_ci_exit_code == 0 and \$build_exit_code == 0 and \$verify_exit_code == 0) as \$correct
@@ -788,14 +890,20 @@ write_reward() {
           scenario_compliance: {
             pass: \$scenario_pass,
             score: \$scenario_score
+          },
+          evidence_repair: {
+            attempted: (\$evidence_repair_penalty > 0),
+            penalty: \$evidence_repair_penalty
           }
         },
         hard_pass: (\$wf and \$correct and \$scenario_pass),
-        soft_score: (
+        soft_score: ([
           (if \$wf then 20 else 0 end)
           + (if \$correct then 40 else 0 end)
           + ((\$scenario_score // 0) * 0.4)
-        )
+          - \$evidence_repair_penalty,
+          0
+        ] | max)
       }' > /artifacts/reward.json
 }
 
@@ -851,7 +959,13 @@ BUILD_EXIT_CODE=\$?
 run_logged fixture-verify npm run verify
 VERIFY_EXIT_CODE=\$?
 set -e
+set +e
 capture_screenshots
+SCREENSHOT_CAPTURE_EXIT_CODE=\$?
+set -e
+if [ "\$SCREENSHOT_CAPTURE_EXIT_CODE" -ne 0 ]; then
+  repair_screenshot_capture || true
+fi
 write_diff
 write_tier1_result
 

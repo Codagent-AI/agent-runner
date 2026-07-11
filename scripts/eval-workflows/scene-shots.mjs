@@ -12,18 +12,19 @@
 //   SHOTS_OUT=/artifacts/screenshots \
 //     node --experimental-strip-types ./.eval-scene-shots.mjs
 //
-// It is intentionally best-effort: a broken presentation logs an error and the
-// pass moves on rather than aborting the harness. Zero screenshots is itself a
-// signal the tier-2 judge step treats as a failure.
+// It records per-presentation coverage in SHOTS_MANIFEST and exits non-zero
+// when the step contract, navigation, or capture is incomplete. The harness may
+// then give the judge model one penalized evidence-repair attempt.
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { chromium } from 'playwright'
 
 const ROOT = process.cwd()
 const OUT = process.env.SHOTS_OUT || '/artifacts/screenshots'
+const MANIFEST = process.env.SHOTS_MANIFEST || '/artifacts/screenshot-manifest.json'
 const VITE_BIN = join(ROOT, 'node_modules', '.bin', 'vite')
 const MAX_STEPS = 50
 
@@ -108,35 +109,58 @@ async function shootPresentation(page, port, slug) {
   await mkdir(dir, { recursive: true })
   await page.goto(`http://localhost:${port}${route}`, { waitUntil: 'load', timeout: 30_000 })
 
-  const progress = page.locator('[data-testid="step-progress"]')
+  const progress = page.locator('[data-step-count]')
   let stepCount = 1
+  let expectedScreenshots = 1
+  let capturedScreenshots = 0
+  const errors = []
   try {
     await progress.waitFor({ timeout: 5_000 })
     const count = Number(await progress.getAttribute('data-step-count'))
-    if (Number.isFinite(count) && count >= 1) stepCount = Math.min(count, MAX_STEPS)
-  } catch {
-    // No step-progress contract; capture a single frame of whatever rendered.
+    if (!Number.isFinite(count) || count < 1) {
+      throw new Error(`invalid data-step-count value: ${String(count)}`)
+    }
+    expectedScreenshots = count
+    if (count > MAX_STEPS) {
+      throw new Error(`data-step-count ${count} exceeds capture limit ${MAX_STEPS}`)
+    }
+    stepCount = count
+  } catch (err) {
+    const message = `step contract unavailable for ${slug || 'index'}; falling back to one frame: ${err.message}`
+    errors.push(message)
+    console.error(message)
   }
 
   for (let i = 0; i < stepCount; i++) {
     await page.waitForTimeout(400)
     const name = `step-${String(i).padStart(2, '0')}.png`
     await page.screenshot({ path: join(dir, name) })
+    capturedScreenshots += 1
     if (i < stepCount - 1) {
       await page.keyboard.press('ArrowRight')
       try {
         await page.waitForFunction(
           (expected) => {
-            const el = document.querySelector('[data-testid="step-progress"]')
+            const el = document.querySelector('[data-step-count]')
             return el && Number(el.getAttribute('data-step-index')) === expected
           },
           i + 1,
           { timeout: 5_000 },
         )
-      } catch {
-        // Advance stalled; the next screenshot still records the current frame.
+      } catch (err) {
+        const message = `step advance stalled for ${slug || 'index'} at ${i + 1}: ${err.message}`
+        errors.push(message)
+        console.error(message)
       }
     }
+  }
+
+  return {
+    slug: slug || 'index',
+    expectedScreenshots,
+    capturedScreenshots,
+    complete: errors.length === 0 && capturedScreenshots === expectedScreenshots,
+    errors,
   }
 }
 
@@ -146,25 +170,50 @@ async function main() {
   const port = await getFreePort()
   const child = await startPreview(port)
   const browser = await chromium.launch()
-  let captured = 0
+  const coverage = []
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 720 } })
     for (const { slug } of presentations) {
       try {
-        await shootPresentation(page, port, slug)
-        captured += 1
+        coverage.push(await shootPresentation(page, port, slug))
       } catch (err) {
         console.error(`screenshot ${slug || 'index'} failed: ${err.message}`)
+        coverage.push({
+          slug: slug || 'index',
+          expectedScreenshots: 1,
+          capturedScreenshots: 0,
+          complete: false,
+          errors: [err.message],
+        })
       }
     }
   } finally {
     await browser.close()
     stopPreview(child)
   }
-  console.log(`captured screenshots for ${captured}/${presentations.length} presentation(s) into ${OUT}`)
+  const manifest = {
+    expectedPresentations: presentations.length,
+    capturedPresentations: coverage.filter(({ capturedScreenshots }) => capturedScreenshots > 0).length,
+    expectedScreenshots: coverage.reduce((sum, item) => sum + item.expectedScreenshots, 0),
+    capturedScreenshots: coverage.reduce((sum, item) => sum + item.capturedScreenshots, 0),
+    complete: coverage.length === presentations.length && coverage.every(({ complete }) => complete),
+    presentations: coverage,
+  }
+  await writeFile(MANIFEST, `${JSON.stringify(manifest, null, 2)}\n`)
+  console.log(`captured ${manifest.capturedScreenshots}/${manifest.expectedScreenshots} screenshot(s) for ${manifest.capturedPresentations}/${manifest.expectedPresentations} presentation(s) into ${OUT}`)
+  if (!manifest.complete) process.exitCode = 1
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error(err)
+  await writeFile(MANIFEST, `${JSON.stringify({
+    expectedPresentations: 0,
+    capturedPresentations: 0,
+    expectedScreenshots: 0,
+    capturedScreenshots: 0,
+    complete: false,
+    presentations: [],
+    fatalError: err.message,
+  }, null, 2)}\n`).catch(() => {})
   process.exit(1)
 })

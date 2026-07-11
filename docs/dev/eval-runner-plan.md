@@ -195,9 +195,12 @@ check) in the produced checkout.
   divergence.
 - **Evidence shown to the judge:** the **full produced source tree** (post-run
   checkout, not just the diff), the **build + verify logs**, and the **render
-  screenshots** from the inspection tooling (`scripts/inspect-presentation.mjs` /
-  what `npm run verify` captures) for each presentation step. This is a visual
-  artifact — the judge must see what actually rendered.
+  screenshots** for each presentation step. The harness records expected and
+  captured counts in `screenshot-manifest.json`; incomplete coverage triggers
+  one judge-model repair attempt against a temporary capture-helper copy. The
+  evaluated fixture remains untouched, and any repair attempt incurs a
+  five-point soft-score penalty. This is a visual artifact — the judge must see
+  what actually rendered.
 - **Output:** per-scenario `{id, verdict (pass/fail), note}`, an `overall_score`
   (0–100), a `pass` boolean, and a `rationale`. `pass` = every scenario the rubric
   marks **critical** passes (mark which scenarios are critical when building the

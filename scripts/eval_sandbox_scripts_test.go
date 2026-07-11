@@ -522,11 +522,16 @@ func TestEvalAndSceneProofDryRunTargetsFixtureAndReference(t *testing.T) {
 	}
 	text := string(output)
 	for _, want := range []string{
-		"cd0cc0038b9754345c1baf2b2bbad7b3ad37b19c",
+		"26d2866e5003f34786fffa528891e6092c87cf8b",
 		"origin/change/create-and-scene",
 		"npm ci",
 		"npm run build",
 		"npm run verify",
+		"chrome-devtools-axi open",
+		"chrome-devtools-axi snapshot",
+		"axi-browser-proof.log",
+		"grep -q",
+		"Presentations",
 		"proof-metadata.json",
 		"target=/host-home/codex/auth.json",
 		"target=/host-home/claude/.credentials.json",
@@ -587,7 +592,7 @@ func TestEvalAndSceneAgentDryRunWiresScoredHarness(t *testing.T) {
 	}
 	text := string(output)
 	for _, want := range []string{
-		"cd0cc0038b9754345c1baf2b2bbad7b3ad37b19c",
+		"26d2866e5003f34786fffa528891e6092c87cf8b",
 		"origin/change/create-and-scene",
 		"workflows/openspec/implement-change.yaml",
 		"RUN_ARGS=(run",
@@ -612,6 +617,9 @@ func TestEvalAndSceneAgentDryRunWiresScoredHarness(t *testing.T) {
 		"scene-shots.mjs",
 		".eval-scene-shots.mjs",
 		"SHOTS_OUT=/artifacts/screenshots",
+		"SHOTS_MANIFEST=/artifacts/screenshot-manifest.json",
+		"repair-screenshot-capture",
+		"evidence_repair_penalty",
 		"node --experimental-strip-types",
 		"judge_args=(",
 		"--output-schema",
@@ -651,6 +659,8 @@ func TestEvalAndSceneScoringIncludesCompleteEvidence(t *testing.T) {
 		"scenario_compliance",
 		"> /artifacts/reward.json",
 		"> /artifacts/manifest.json",
+		"screenshot-manifest.json",
+		"evidence_repair_penalty",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("eval scoring missing %q:\n%s", want, text)
@@ -662,6 +672,61 @@ func TestEvalAndSceneScoringIncludesCompleteEvidence(t *testing.T) {
 	} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("eval scoring still contains %q:\n%s", forbidden, text)
+		}
+	}
+}
+
+func TestSceneShotsUsesSpecContractAndReportsCoverage(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "eval-workflows", "scene-shots.mjs"))
+	if err != nil {
+		t.Fatalf("read scene-shots.mjs: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		`locator('[data-step-count]')`,
+		`document.querySelector('[data-step-count]')`,
+		"SHOTS_MANIFEST",
+		"expectedScreenshots",
+		"capturedScreenshots",
+		"complete",
+		"count > MAX_STEPS",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("scene screenshot capture missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, `data-testid="step-progress"`) {
+		t.Fatalf("scene screenshot capture must use the spec contract, not the reference-only test id:\n%s", text)
+	}
+	if strings.Contains(text, "Math.min(count, MAX_STEPS)") {
+		t.Fatalf("scene screenshot capture must not silently truncate declared steps:\n%s", text)
+	}
+}
+
+func TestEvalEvidenceRepairSanitizesFixtureControlledDiagnostics(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "eval-and-scene.sh"))
+	if err != nil {
+		t.Fatalf("read eval-and-scene.sh: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"sanitized-screenshot-manifest.json",
+		"expectedPresentations",
+		"capturedPresentations",
+		"expectedScreenshots",
+		"capturedScreenshots",
+		"errorCount",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("evidence repair sanitization missing %q:\n%s", want, text)
+		}
+	}
+	for _, forbidden := range []string{
+		`cp /artifacts/logs/screenshots.log "\$repair_dir/screenshots.log"`,
+		`cp /artifacts/screenshot-manifest.json "\$repair_dir/screenshot-manifest.json"`,
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("evidence repair exposes fixture-controlled diagnostic %q:\n%s", forbidden, text)
 		}
 	}
 }
@@ -808,13 +873,23 @@ func TestEvalDevcontainerUsesSharedDockerfile(t *testing.T) {
 	}
 }
 
-func TestDevDockerfileIncludesPortForwardDependencies(t *testing.T) {
+func TestDevDockerfileIncludesBrowserAgentTools(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), "docker", "dev", "Dockerfile"))
 	if err != nil {
 		t.Fatalf("read dev Dockerfile: %v", err)
 	}
-	if !strings.Contains(string(data), "socat") {
-		t.Fatalf("dev Dockerfile should install socat for sandbox browser forwarding:\n%s", data)
+	text := string(data)
+	for _, want := range []string{
+		"socat",
+		"chrome-devtools-axi@0.1.26",
+		"chrome-devtools-mcp@1.5.0",
+		"CHROME_DEVTOOLS_AXI_MCP_PATH=/usr/lib/node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js",
+		`CHROME_DEVTOOLS_AXI_CHROME_ARGS="--no-sandbox --disable-setuid-sandbox"`,
+		"/opt/google/chrome/chrome",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("dev Dockerfile should include browser agent tool %q:\n%s", want, data)
+		}
 	}
 }
 
