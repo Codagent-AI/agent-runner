@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Starts the eval sandbox devcontainer for interactive Agent Runner development.
+# Starts the development sandbox devcontainer for interactive Agent Runner development.
 # By default it uses the safe devcontainer config; --with-host-config generates
 # a local derived config that mounts selected host auth/shell/git files.
 set -euo pipefail

@@ -30,7 +30,7 @@ func TestSandboxRunDryRunShowsSafeDockerInvocation(t *testing.T) {
 	text := string(output)
 	for _, want := range []string{
 		"docker build",
-		"-f docker/dev/Dockerfile",
+		"-f " + filepath.Join(repoRoot(t), "docker", "dev", "Dockerfile"),
 		"-v " + repoRoot(t) + ":/agent-runner-source:ro",
 		"-v " + artifacts + ":/artifacts",
 		"-e AGENT_RUNNER_SOURCE_COMMIT",
@@ -50,6 +50,154 @@ func TestSandboxRunDryRunShowsSafeDockerInvocation(t *testing.T) {
 	}
 	if strings.Contains(text, "test-key") {
 		t.Fatalf("dry-run output leaked env value:\n%s", text)
+	}
+}
+
+func TestSandboxRunResolvesDockerfileOutsideRepository(t *testing.T) {
+	root := repoRoot(t)
+	cmd := exec.Command("bash", filepath.Join(root, "scripts", "sandbox-run.sh"),
+		"--dry-run",
+		"--no-default-secrets",
+		"--artifact-dir", filepath.Join(t.TempDir(), "artifacts"),
+		"--",
+		"echo proof",
+	)
+	cmd.Dir = t.TempDir()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandbox-run dry run outside repo failed: %v\n%s", err, output)
+	}
+	want := "-f " + filepath.Join(root, "docker", "dev", "Dockerfile")
+	if !strings.Contains(string(output), want) {
+		t.Fatalf("dry-run output missing absolute Dockerfile path %q:\n%s", want, output)
+	}
+}
+
+func TestSandboxRunDryRunMountsInputDirectoryReadOnly(t *testing.T) {
+	dir := t.TempDir()
+	inputDir := filepath.Join(dir, "eval input")
+	if err := os.Mkdir(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input dir: %v", err)
+	}
+
+	cmd := exec.Command("bash", "./sandbox-run.sh",
+		"--dry-run",
+		"--no-default-secrets",
+		"--artifact-dir", filepath.Join(dir, "artifacts"),
+		"--input-dir", inputDir,
+		"--",
+		"echo proof",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandbox-run dry run failed: %v\n%s", err, output)
+	}
+	text := string(output)
+	resolvedInput, err := filepath.EvalSymlinks(inputDir)
+	if err != nil {
+		t.Fatalf("resolve input dir: %v", err)
+	}
+	want := "-v " + strings.ReplaceAll(resolvedInput+":/eval-input:ro", " ", `\ `)
+	if !strings.Contains(text, want) {
+		t.Fatalf("dry-run output missing read-only input mount %q:\n%s", want, text)
+	}
+}
+
+func TestSandboxRunResolvesRelativeInputDirectory(t *testing.T) {
+	dir := t.TempDir()
+	inputDir := filepath.Join(dir, "payload")
+	if err := os.Mkdir(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input dir: %v", err)
+	}
+	scriptsDir := filepath.Join(repoRoot(t), "scripts")
+	relativeInput, err := filepath.Rel(scriptsDir, inputDir)
+	if err != nil {
+		t.Fatalf("relative input path: %v", err)
+	}
+
+	cmd := exec.Command("bash", "./sandbox-run.sh",
+		"--dry-run",
+		"--no-default-secrets",
+		"--artifact-dir", filepath.Join(dir, "artifacts"),
+		"--input-dir", relativeInput,
+		"--",
+		"echo proof",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandbox-run dry run failed: %v\n%s", err, output)
+	}
+	resolvedInput, err := filepath.EvalSymlinks(inputDir)
+	if err != nil {
+		t.Fatalf("resolve input dir: %v", err)
+	}
+	want := "-v " + strings.ReplaceAll(resolvedInput+":/eval-input:ro", ",", `\,`)
+	if !strings.Contains(string(output), want) {
+		t.Fatalf("dry-run output missing resolved input mount %q:\n%s", want, output)
+	}
+}
+
+func TestSandboxRunRejectsInvalidInputDirectory(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "payload.txt")
+	if err := os.WriteFile(file, []byte("not a directory\n"), 0o600); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		path string
+		want string
+	}{
+		{name: "missing", path: filepath.Join(dir, "missing"), want: "Input directory not found"},
+		{name: "file", path: file, want: "Input path is not a directory"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command("bash", "./sandbox-run.sh",
+				"--dry-run",
+				"--no-default-secrets",
+				"--artifact-dir", filepath.Join(dir, "artifacts-"+tc.name),
+				"--input-dir", tc.path,
+				"--",
+				"echo proof",
+			)
+			output, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("sandbox-run accepted invalid input path %q:\n%s", tc.path, output)
+			}
+			if !strings.Contains(string(output), tc.want) {
+				t.Fatalf("sandbox-run error missing %q:\n%s", tc.want, output)
+			}
+		})
+	}
+}
+
+func TestSandboxRunAcceptsInputDirectoryContainingComma(t *testing.T) {
+	dir := t.TempDir()
+	inputDir := filepath.Join(dir, "payload,with-comma")
+	if err := os.Mkdir(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input dir: %v", err)
+	}
+
+	cmd := exec.Command("bash", "./sandbox-run.sh",
+		"--dry-run",
+		"--no-default-secrets",
+		"--artifact-dir", filepath.Join(dir, "artifacts"),
+		"--input-dir", inputDir,
+		"--",
+		"echo proof",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandbox-run rejected comma-containing input directory: %v\n%s", err, output)
+	}
+	resolvedInput, err := filepath.EvalSymlinks(inputDir)
+	if err != nil {
+		t.Fatalf("resolve input dir: %v", err)
+	}
+	want := "-v " + strings.ReplaceAll(resolvedInput+":/eval-input:ro", ",", `\,`)
+	if !strings.Contains(string(output), want) {
+		t.Fatalf("dry-run output missing read-only input mount %q:\n%s", want, output)
 	}
 }
 
@@ -481,322 +629,6 @@ func TestSandboxSyncHomeRecoversStaleLock(t *testing.T) {
 	}
 	if _, err := os.Stat(lockDir); !os.IsNotExist(err) {
 		t.Fatalf("lock dir should be removed after sync, stat err=%v", err)
-	}
-}
-
-func TestEvalAndSceneProofDryRunTargetsFixtureAndReference(t *testing.T) {
-	dir := t.TempDir()
-	artifacts := filepath.Join(dir, "and-scene-proof")
-	home := filepath.Join(dir, "home")
-	for _, path := range []string{
-		filepath.Join(home, ".codex"),
-		filepath.Join(home, ".claude"),
-	} {
-		if err := os.MkdirAll(path, 0o700); err != nil {
-			t.Fatalf("mkdir %s: %v", path, err)
-		}
-	}
-	for path, body := range map[string]string{
-		filepath.Join(home, ".codex", "auth.json"):          "{}\n",
-		filepath.Join(home, ".claude", ".credentials.json"): "{}\n",
-	} {
-		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-			t.Fatalf("write %s: %v", path, err)
-		}
-	}
-
-	cmd := exec.Command("bash", "./eval-and-scene.sh",
-		"--dry-run",
-		"--proof-browser",
-		"--artifact-dir", artifacts,
-		"--mount-codex-auth",
-		"--mount-claude-auth",
-	)
-	cmd.Env = append(os.Environ(),
-		"HOME="+home,
-		"SANDBOX_SECRETS_FILE="+filepath.Join(dir, "missing.env"),
-	)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("eval-and-scene proof dry run failed: %v\n%s", err, output)
-	}
-	text := string(output)
-	for _, want := range []string{
-		"26d2866e5003f34786fffa528891e6092c87cf8b",
-		"origin/change/create-and-scene",
-		"npm ci",
-		"npm run build",
-		"npm run verify",
-		"chrome-devtools-axi open",
-		"chrome-devtools-axi snapshot",
-		"axi-browser-proof.log",
-		"grep -q",
-		"Presentations",
-		"proof-metadata.json",
-		"target=/host-home/codex/auth.json",
-		"target=/host-home/claude/.credentials.json",
-		artifacts,
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("dry-run output missing %q:\n%s", want, text)
-		}
-	}
-	for _, want := range []string{`case "$1" in`, `${GITHUB_TOKEN:-${GH_TOKEN:-}}`} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("dry-run output missing askpass content %q:\n%s", want, text)
-		}
-	}
-	if strings.Contains(text, "https://x-access-token") || strings.Contains(text, "@github.com") {
-		t.Fatalf("dry-run output should not include token-in-URL auth wiring:\n%s", text)
-	}
-	for _, forbidden := range []string{`case "\$1" in`, `\${GITHUB_TOKEN`, "WORKFLOW_ARGS"} {
-		if strings.Contains(text, forbidden) {
-			t.Fatalf("dry-run output contains escaped askpass content %q:\n%s", forbidden, text)
-		}
-	}
-}
-
-func TestEvalAndSceneAgentDryRunWiresScoredHarness(t *testing.T) {
-	dir := t.TempDir()
-	artifacts := filepath.Join(dir, "and-scene-run")
-	home := filepath.Join(dir, "home")
-	for _, path := range []string{filepath.Join(home, ".claude"), filepath.Join(home, ".codex")} {
-		if err := os.MkdirAll(path, 0o700); err != nil {
-			t.Fatalf("mkdir auth dir %s: %v", path, err)
-		}
-	}
-	for path, body := range map[string]string{
-		filepath.Join(home, ".claude", ".credentials.json"): "{}\n",
-		filepath.Join(home, ".codex", "auth.json"):          "{}\n",
-	} {
-		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-			t.Fatalf("write auth file %s: %v", path, err)
-		}
-	}
-
-	cmd := exec.Command("bash", "./eval-and-scene.sh",
-		"--dry-run",
-		"--run-agent",
-		"--artifact-dir", artifacts,
-		"--agent", "claude",
-		"--model", "sonnet",
-		"--judge-model", "gpt-5",
-	)
-	cmd.Env = append(os.Environ(),
-		"HOME="+home,
-		"SANDBOX_SECRETS_FILE="+filepath.Join(dir, "missing.env"),
-	)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("eval-and-scene agent dry run failed: %v\n%s", err, output)
-	}
-	text := string(output)
-	for _, want := range []string{
-		"26d2866e5003f34786fffa528891e6092c87cf8b",
-		"origin/change/create-and-scene",
-		"workflows/openspec/implement-change.yaml",
-		"RUN_ARGS=(run",
-		"--until",
-		"run-validator",
-		"planner:",
-		"autonomous_permission_mode: yolo",
-		"write_user_settings",
-		"AGENT_RUNNER_NO_TUI=1",
-		"change_name=create-and-scene",
-		"npm ci",
-		"npm run build",
-		"npm run verify",
-		"implementation.diff",
-		"diff-hash.txt",
-		"metadata.json",
-		"reward.json",
-		"manifest.json",
-		"tier1-result.json",
-		"tier2-judge-prompt.md",
-		"tier2-result.json",
-		"scene-shots.mjs",
-		".eval-scene-shots.mjs",
-		"SHOTS_OUT=/artifacts/screenshots",
-		"SHOTS_MANIFEST=/artifacts/screenshot-manifest.json",
-		"repair-screenshot-capture",
-		"evidence_repair_penalty",
-		"node --experimental-strip-types",
-		"judge_args=(",
-		"--output-schema",
-		"--image",
-		"target=/host-home/claude/.credentials.json",
-		"target=/host-home/codex/auth.json",
-		artifacts,
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("dry-run output missing %q:\n%s", want, text)
-		}
-	}
-	// The eval runs the real implement-change workflow but must stop at
-	// run-validator, before its outward-facing archive/finalize (PR-opening)
-	// tail. --until is what enforces that; the planner session is configured
-	// autonomous so the review-assumptions/simplify steps run headless.
-	if !strings.Contains(text, "--until") || !strings.Contains(text, "run-validator") {
-		t.Fatalf("agent eval must cap the real workflow at run-validator via --until:\n%s", text)
-	}
-}
-
-func TestEvalAndSceneScoringIncludesCompleteEvidence(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "eval-and-scene.sh"))
-	if err != nil {
-		t.Fatalf("read eval-and-scene.sh: %v", err)
-	}
-	text := string(data)
-	for _, want := range []string{
-		`pass: (\$build_exit_code == 0 and \$verify_exit_code == 0)`,
-		`cat -- "\$file"`,
-		`--image "\$screenshot"`,
-		`jq -e '.pass == true' /artifacts/tier2-result.json`,
-		"write_reward",
-		"write_manifest",
-		"hard_pass",
-		"soft_score",
-		"scenario_compliance",
-		"> /artifacts/reward.json",
-		"> /artifacts/manifest.json",
-		"screenshot-manifest.json",
-		"evidence_repair_penalty",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("eval scoring missing %q:\n%s", want, text)
-		}
-	}
-	for _, forbidden := range []string{
-		`sed -n '1,220p' "$file"`,
-		`status: "not_configured"`,
-	} {
-		if strings.Contains(text, forbidden) {
-			t.Fatalf("eval scoring still contains %q:\n%s", forbidden, text)
-		}
-	}
-}
-
-func TestSceneShotsUsesSpecContractAndReportsCoverage(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "eval-workflows", "scene-shots.mjs"))
-	if err != nil {
-		t.Fatalf("read scene-shots.mjs: %v", err)
-	}
-	text := string(data)
-	for _, want := range []string{
-		`locator('[data-step-count]')`,
-		`document.querySelector('[data-step-count]')`,
-		"SHOTS_MANIFEST",
-		"expectedScreenshots",
-		"capturedScreenshots",
-		"complete",
-		"count > MAX_STEPS",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("scene screenshot capture missing %q:\n%s", want, text)
-		}
-	}
-	if strings.Contains(text, `data-testid="step-progress"`) {
-		t.Fatalf("scene screenshot capture must use the spec contract, not the reference-only test id:\n%s", text)
-	}
-	if strings.Contains(text, "Math.min(count, MAX_STEPS)") {
-		t.Fatalf("scene screenshot capture must not silently truncate declared steps:\n%s", text)
-	}
-}
-
-func TestEvalEvidenceRepairSanitizesFixtureControlledDiagnostics(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "eval-and-scene.sh"))
-	if err != nil {
-		t.Fatalf("read eval-and-scene.sh: %v", err)
-	}
-	text := string(data)
-	for _, want := range []string{
-		"sanitized-screenshot-manifest.json",
-		"expectedPresentations",
-		"capturedPresentations",
-		"expectedScreenshots",
-		"capturedScreenshots",
-		"errorCount",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("evidence repair sanitization missing %q:\n%s", want, text)
-		}
-	}
-	for _, forbidden := range []string{
-		`cp /artifacts/logs/screenshots.log "\$repair_dir/screenshots.log"`,
-		`cp /artifacts/screenshot-manifest.json "\$repair_dir/screenshot-manifest.json"`,
-	} {
-		if strings.Contains(text, forbidden) {
-			t.Fatalf("evidence repair exposes fixture-controlled diagnostic %q:\n%s", forbidden, text)
-		}
-	}
-}
-
-func TestEvalAndSceneCustomWorkflowReceivesOnlyCallerSuppliedArgs(t *testing.T) {
-	dir := t.TempDir()
-	home := filepath.Join(dir, "home")
-	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o700); err != nil {
-		t.Fatalf("mkdir codex auth dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(home, ".codex", "auth.json"), []byte("{}\n"), 0o600); err != nil {
-		t.Fatalf("write codex auth: %v", err)
-	}
-
-	cmd := exec.Command("bash", "./eval-and-scene.sh",
-		"--dry-run",
-		"--run-agent",
-		"--artifact-dir", filepath.Join(dir, "artifacts"),
-		"--agent", "codex",
-		"--workflow", "/tmp/custom.yaml",
-		"--workflow-arg", "feature=demo",
-	)
-	cmd.Env = append(os.Environ(),
-		"HOME="+home,
-		"SANDBOX_SECRETS_FILE="+filepath.Join(dir, "missing.env"),
-	)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("custom workflow dry run failed: %v\n%s", err, output)
-	}
-	text := string(output)
-	if !strings.Contains(text, "feature=demo") {
-		t.Fatalf("custom workflow dry run missing caller argument:\n%s", text)
-	}
-	if strings.Contains(text, "change_name=create-and-scene") {
-		t.Fatalf("custom workflow received and-scene-specific argument:\n%s", text)
-	}
-	if strings.Contains(text, "run-validator") {
-		t.Fatalf("custom workflow received the default-workflow --until cap:\n%s", text)
-	}
-}
-
-func TestEvalAndSceneProofDryRunShellQuotesRepoInputs(t *testing.T) {
-	dir := t.TempDir()
-	maliciousRepo := `https://example.invalid/repo.git"; echo pwned; #`
-	maliciousRef := `origin/eval"; echo ref-pwned; #`
-
-	cmd := exec.Command("bash", "./eval-and-scene.sh",
-		"--dry-run",
-		"--proof-browser",
-		"--artifact-dir", filepath.Join(dir, "artifacts"),
-		"--repo", maliciousRepo,
-		"--fixture-ref", maliciousRef,
-		"--reference-ref", maliciousRef,
-	)
-	cmd.Env = append(os.Environ(), "SANDBOX_SECRETS_FILE="+filepath.Join(dir, "missing.env"))
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("eval-and-scene proof dry run failed: %v\n%s", err, output)
-	}
-	text := string(output)
-	for _, forbidden := range []string{`git clone "https://example.invalid/repo.git"; echo pwned; #`, `git checkout "origin/eval"; echo ref-pwned; #`} {
-		if strings.Contains(text, forbidden) {
-			t.Fatalf("dry-run output embedded unquoted shell input %q:\n%s", forbidden, text)
-		}
-	}
-	for _, want := range []string{`repo.git\\"\\;\\ echo\\ pwned`, `origin/eval\\"\\;\\ echo\\ ref-pwned`} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("dry-run output missing shell-quoted input marker %q:\n%s", want, text)
-		}
 	}
 }
 
