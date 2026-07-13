@@ -31,7 +31,7 @@ profiles:
       opencode_headless_smoke:
         default_mode: autonomous
         cli: opencode
-        model: anthropic/claude-sonnet-4
+        model: opencode/big-pickle
         effort: low
       codex_interactive_smoke:
         default_mode: interactive
@@ -51,5 +51,5 @@ profiles:
       opencode_interactive_smoke:
         default_mode: interactive
         cli: opencode
-        model: anthropic/claude-sonnet-4
+        model: opencode/big-pickle
         effort: low

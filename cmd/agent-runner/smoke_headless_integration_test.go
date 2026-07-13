@@ -1,5 +1,3 @@
-//go:build e2e
-
 package main
 
 import (
@@ -17,7 +15,7 @@ import (
 	"github.com/codagent/agent-runner/internal/stateio"
 )
 
-func TestSmokeTestHeadlessWorkflowE2E(t *testing.T) {
+func TestSmokeTestHeadlessWorkflowIntegration(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake CLI stubs are POSIX shell scripts")
 	}

@@ -3,9 +3,11 @@ package cli
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -21,33 +23,38 @@ type OpenCodeAdapter struct{}
 //   - Fresh headless:      opencode run --format json [--model <m>] [--variant <e>] <prompt>
 //   - Resume headless:     opencode run --format json -s <id> <prompt>
 //   - Fresh interactive:   opencode --prompt <prompt> [--model <m>]
-//   - Resume interactive:  opencode --prompt <prompt> -s <id>
+//   - Resume interactive:  opencode -s <id> --prompt <prompt>
 //
 // OpenCode has no native system-prompt or disallowed-tools flags. --variant
 // is run-only, so interactive mode omits it. --model and --variant are omitted on resume because a resumed session
 // keeps the settings it was started with.
 func (a *OpenCodeAdapter) BuildArgs(input *BuildArgsInput) []string {
-	var args []string
 	context := input.InvocationContext()
-	if context.IsHeadless() {
-		args = []string{"opencode", "run", "--format", "json"}
-	} else {
-		args = []string{"opencode", "--prompt", input.Prompt}
-	}
-
 	resuming := input.Resume && input.SessionID != ""
-	if resuming {
-		args = append(args, "-s", input.SessionID)
-	} else if input.Model != "" {
-		args = append(args, "--model", input.Model)
-	}
-
-	if context.IsHeadless() && !resuming && input.Effort != "" {
-		args = append(args, "--variant", input.Effort)
-	}
-
 	if context.IsHeadless() {
-		args = append(args, input.Prompt)
+		args := []string{"opencode", "run", "--format", "json"}
+		if resuming {
+			args = append(args, "-s", input.SessionID)
+		} else {
+			if input.Model != "" {
+				args = append(args, "--model", input.Model)
+			}
+			if input.Effort != "" {
+				args = append(args, "--variant", input.Effort)
+			}
+		}
+		return append(args, input.Prompt)
+	}
+
+	args := []string{"opencode"}
+	if resuming {
+		// OpenCode 1.17 only auto-submits --prompt to a resumed TUI when
+		// --session precedes --prompt.
+		args = append(args, "-s", input.SessionID)
+	}
+	args = append(args, "--prompt", input.Prompt)
+	if !resuming && input.Model != "" {
+		args = append(args, "--model", input.Model)
 	}
 	return args
 }
@@ -64,7 +71,15 @@ func (a *OpenCodeAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
 	if opts.Headless {
 		return discoverOpenCodeHeadlessSession(opts.ProcessOutput)
 	}
-	return discoverOpenCodeInteractiveSession(opts.SpawnTime)
+	if id := discoverOpenCodeInteractiveSession(opts.SpawnTime); id != "" {
+		return id
+	}
+	if id := discoverOpenCodeDatabaseSession(opts.SpawnTime, opts.Workdir, func(query string) ([]byte, error) {
+		return exec.Command("opencode", "db", query, "--format", "json").Output() // #nosec G204 -- fixed executable; query is one argv value, not shell-expanded
+	}); id != "" {
+		return id
+	}
+	return ""
 }
 
 func (a *OpenCodeAdapter) FilterOutput(stdout string) string {
@@ -94,6 +109,40 @@ func discoverOpenCodeHeadlessSession(output string) string {
 			return ""
 		}
 	}
+}
+
+func discoverOpenCodeDatabaseSession(spawnTime time.Time, workdir string, runQuery func(string) ([]byte, error)) string {
+	if workdir == "" {
+		var err error
+		workdir, err = os.Getwd()
+		if err != nil {
+			return ""
+		}
+	}
+
+	escapedWorkdir := strings.ReplaceAll(workdir, "'", "''")
+	query := fmt.Sprintf(
+		"SELECT id, time_created FROM session WHERE time_created >= %d AND directory = '%s' ORDER BY time_created DESC",
+		spawnTime.UnixMilli(), escapedWorkdir,
+	)
+	output, err := runQuery(query)
+	if err != nil {
+		return ""
+	}
+	var candidates []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(output, &candidates); err != nil {
+		return ""
+	}
+	if len(candidates) > 1 {
+		log.Printf("opencode: %d database sessions match spawn time and workdir; refusing to guess", len(candidates))
+		return ""
+	}
+	if len(candidates) == 1 {
+		return candidates[0].ID
+	}
+	return ""
 }
 
 func discoverOpenCodeInteractiveSession(spawnTime time.Time) string {

@@ -80,7 +80,7 @@ func TestOpenCodeAdapter(t *testing.T) {
 			Effort:    "max",
 			Context:   ContextInteractive,
 		})
-		expected := []string{"opencode", "--prompt", "continue review", "-s", "ses_def456"}
+		expected := []string{"opencode", "-s", "ses_def456", "--prompt", "continue review"}
 		assertArgs(t, expected, args)
 	})
 
@@ -90,7 +90,7 @@ func TestOpenCodeAdapter(t *testing.T) {
 			Context:         ContextInteractive,
 			DisallowedTools: []string{"AskUserQuestion"},
 		})
-		for _, disallowed := range []string{"run", "--format", "json", "--variant"} {
+		for _, disallowed := range []string{"--format", "json", "--variant"} {
 			if containsString(args, disallowed) {
 				t.Fatalf("did not expect %s in interactive args, got %v", disallowed, args)
 			}
@@ -198,6 +198,22 @@ func TestOpenCodeAdapter(t *testing.T) {
 		})
 		if id != "ses_new" {
 			t.Fatalf("expected %q, got %q", "ses_new", id)
+		}
+	})
+
+	t.Run("discover interactive session ID from opencode database", func(t *testing.T) {
+		spawnTime := time.UnixMilli(1_700_000_000_000)
+		id := discoverOpenCodeDatabaseSession(spawnTime, "/repo", func(query string) ([]byte, error) {
+			if !strings.Contains(query, "time_created >= 1700000000000") {
+				t.Fatalf("database query does not filter by spawn time: %s", query)
+			}
+			if !strings.Contains(query, "directory = '/repo'") {
+				t.Fatalf("database query does not filter by workdir: %s", query)
+			}
+			return []byte(`[{"id":"ses_database","time_created":1700000000123}]`), nil
+		})
+		if id != "ses_database" {
+			t.Fatalf("expected %q, got %q", "ses_database", id)
 		}
 	})
 

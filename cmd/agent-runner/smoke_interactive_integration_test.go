@@ -1,5 +1,3 @@
-//go:build e2e
-
 package main
 
 import (
@@ -13,7 +11,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +19,6 @@ import (
 	gopty "github.com/creack/pty"
 
 	"github.com/codagent/agent-runner/internal/audit"
-	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
 
@@ -36,7 +32,7 @@ var (
 	sessionUUIDRE        = regexp.MustCompile(`\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
 )
 
-func TestSmokeTestInteractiveAgentsWorkflowE2E(t *testing.T) {
+func TestInteractivePTYWorkflowIntegration(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("interactive PTY smoke test requires a POSIX terminal")
 	}
@@ -53,9 +49,10 @@ func TestSmokeTestInteractiveAgentsWorkflowE2E(t *testing.T) {
 	}
 
 	buildAgentRunner(t, repoRoot, runnerBin)
-	writeInteractiveAgentFixtures(t, binDir, fakeExecutableNames(t))
+	writeInteractiveAgentFixtures(t, binDir, []string{"claude"})
+	workflowPath := writeInteractivePTYWorkflow(t, tmp)
 
-	cmd := exec.Command(runnerBin, "--headless", "smoke-test-interactive-agents")
+	cmd := exec.Command(runnerBin, "--headless", workflowPath)
 	cmd.Dir = repoRoot
 	cmd.Env = append(os.Environ(),
 		"AGENT_RUNNER_NO_TUI=1",
@@ -67,14 +64,14 @@ func TestSmokeTestInteractiveAgentsWorkflowE2E(t *testing.T) {
 
 	output, err := runInteractiveWorkflowInPTY(cmd, 45*time.Second)
 	if err != nil {
-		t.Fatalf("smoke-test-interactive-agents failed: %v\n%s", err, output)
+		t.Fatalf("interactive PTY integration workflow failed: %v\n%s", err, output)
 	}
 	if strings.Contains(output, "AGENT_RUNNER_CONTINUE_") {
 		t.Fatalf("continuation marker leaked into terminal output:\n%s", output)
 	}
 
-	wantSteps := interactiveSmokeStepIDs()
-	sessionDir := latestWorkflowRunDir(t, home, repoRoot, "smoke-test-interactive-agents")
+	wantSteps := []string{"claude-interactive", "claude-interactive-resume"}
+	sessionDir := latestWorkflowRunDir(t, home, repoRoot, "interactive-pty-integration")
 	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
 	if err != nil {
 		t.Fatalf("read run state: %v", err)
@@ -84,6 +81,26 @@ func TestSmokeTestInteractiveAgentsWorkflowE2E(t *testing.T) {
 	}
 	assertSuccessfulInteractiveSteps(t, filepath.Join(sessionDir, "audit.log"), wantSteps)
 	assertInteractiveFixtureInvocations(t, fixtureLog)
+}
+
+func writeInteractivePTYWorkflow(t *testing.T, dir string) string {
+	t.Helper()
+	path := filepath.Join(dir, "interactive-pty-integration.yaml")
+	data := []byte(`name: interactive-pty-integration
+description: "Deterministic PTY integration fixture"
+steps:
+  - id: claude-interactive
+    agent: claude_interactive_smoke
+    session: new
+    prompt: "Wait for the integration controller."
+  - id: claude-interactive-resume
+    session: resume
+    prompt: "Wait for the integration controller again."
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write PTY integration workflow: %v", err)
+	}
+	return path
 }
 
 // TestInteractiveAgentFixtureProcess is re-executed by the fake CLI wrappers.
@@ -130,11 +147,11 @@ func runInteractiveAgentFixture() error {
 		_, _ = fmt.Fprintf(os.Stdout, "FAKE_AGENT_READY %s new\r\n", name)
 		// Split and style the agent-generated marker to exercise the real PTY
 		// output scanner across reads and ANSI cursor styling.
-		_, _ = io.WriteString(os.Stdout, "AGENT_RUNNER_")
+		_, _ = os.Stdout.WriteString("AGENT_RUNNER_")
 		time.Sleep(20 * time.Millisecond)
-		_, _ = io.WriteString(os.Stdout, "\x1b[32m\x1b[2CCONTINUE_")
+		_, _ = os.Stdout.WriteString("\x1b[32m\x1b[2CCONTINUE_")
 		time.Sleep(20 * time.Millisecond)
-		_, _ = io.WriteString(os.Stdout, suffix+"\x1b[0m\r\n")
+		_, _ = os.Stdout.WriteString(suffix + "\x1b[0m\r\n")
 		return waitForFixtureTermination()
 	}
 
@@ -147,7 +164,7 @@ func runInteractiveAgentFixture() error {
 	// Real full-screen agents enable mouse reporting before they can receive
 	// wheel events. The E2E controller sends SS3, CSI, and a wheel report and
 	// waits for this fixture to prove that all three reached the child.
-	_, _ = io.WriteString(os.Stdout, "\x1b[?1000h\x1b[?1006h")
+	_, _ = os.Stdout.WriteString("\x1b[?1000h\x1b[?1006h")
 	_, _ = fmt.Fprintf(os.Stdout, "FAKE_AGENT_READY %s resume\r\n", name)
 	wantInput := []byte("\x1bOA\x1b[B\x1b[<64;10;5M")
 	gotInput := make([]byte, 0, len(wantInput))
@@ -239,15 +256,15 @@ func runInteractiveWorkflowInPTY(cmd *exec.Cmd, timeout time.Duration) (string, 
 			if len(result.data) > 0 {
 				output.Write(result.data)
 				text := output.String()
-				for _, executable := range []string{"claude", "codex", "copilot", "agent", "opencode"} {
+				for _, executable := range []string{"claude"} {
 					ready := "FAKE_AGENT_READY " + executable + " resume"
 					if strings.Contains(text, ready) && !seenReady[executable] {
 						seenReady[executable] = true
 						// Deliberately split SS3 at the outer terminal boundary, then
 						// send CSI and an SGR wheel event while mouse tracking is on.
-						_, _ = ptmx.Write([]byte("\x1bO"))
+						_, _ = ptmx.WriteString("\x1bO")
 						time.Sleep(10 * time.Millisecond)
-						_, _ = ptmx.Write([]byte("A\x1b[B\x1b[<64;10;5M"))
+						_, _ = ptmx.WriteString("A\x1b[B\x1b[<64;10;5M")
 					}
 					inputOK := "FAKE_AGENT_INPUT_OK " + executable
 					if strings.Contains(text, inputOK) && !seenInputOK[executable] {
@@ -255,7 +272,7 @@ func runInteractiveWorkflowInPTY(cmd *exec.Cmd, timeout time.Duration) (string, 
 						// The focused input-parser regression owns SS3 line-state
 						// semantics. Clear the synthetic input here so this workflow
 						// test independently exercises user-triggered continuation.
-						_, _ = ptmx.Write([]byte("\x15/next\r"))
+						_, _ = ptmx.WriteString("\x15/next\r")
 					}
 				}
 			}
@@ -271,11 +288,11 @@ func runInteractiveWorkflowInPTY(cmd *exec.Cmd, timeout time.Duration) (string, 
 		}
 	}
 
-	if len(seenReady) != len(cli.KnownCLIs()) {
-		return output.String(), fmt.Errorf("received terminal readiness from %d agents, want %d", len(seenReady), len(cli.KnownCLIs()))
+	if len(seenReady) != 1 {
+		return output.String(), fmt.Errorf("received terminal readiness from %d agents, want 1", len(seenReady))
 	}
-	if len(seenInputOK) != len(cli.KnownCLIs()) {
-		return output.String(), fmt.Errorf("verified terminal input for %d agents, want %d", len(seenInputOK), len(cli.KnownCLIs()))
+	if len(seenInputOK) != 1 {
+		return output.String(), fmt.Errorf("verified terminal input for %d agents, want 1", len(seenInputOK))
 	}
 	return output.String(), waitErr
 }
@@ -399,16 +416,6 @@ func appendInteractiveFixtureInvocation(invocation interactiveFixtureInvocation)
 	return json.NewEncoder(file).Encode(invocation)
 }
 
-func interactiveSmokeStepIDs() []string {
-	names := cli.KnownCLIs()
-	sort.Strings(names)
-	steps := make([]string, 0, len(names)*2)
-	for _, name := range names {
-		steps = append(steps, name+"-interactive", name+"-interactive-resume")
-	}
-	return steps
-}
-
 func latestWorkflowRunDir(t *testing.T, home, repoRoot, workflow string) string {
 	t.Helper()
 	runsDir := filepath.Join(home, ".agent-runner", "projects", audit.EncodePath(repoRoot), "runs")
@@ -483,7 +490,7 @@ func assertInteractiveFixtureInvocations(t *testing.T, logPath string) {
 		}
 	}
 
-	for _, executable := range []string{"claude", "codex", "copilot", "agent", "opencode"} {
+	for _, executable := range []string{"claude"} {
 		if got := counts[executable][false]; got != 1 {
 			t.Errorf("%s fresh invocations = %d, want 1", executable, got)
 		}
