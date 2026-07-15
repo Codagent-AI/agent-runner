@@ -65,6 +65,19 @@ func TestOpenCodeInteractiveRealAgentE2E(t *testing.T) {
 	runRealInteractiveAgentE2E(t, "opencode")
 }
 
+func TestRealAgentTestEnvUsesFileCredentialStore(t *testing.T) {
+	t.Setenv("AGENT_CLI_CREDENTIAL_STORE", "keychain")
+
+	env := realAgentTestEnv(false)
+
+	for _, entry := range env {
+		if entry == "AGENT_CLI_CREDENTIAL_STORE=file" {
+			return
+		}
+	}
+	t.Fatalf("real-agent E2E environment does not select Cursor's file credential store: %q", env)
+}
+
 func runRealHeadlessAgentE2E(t *testing.T, agent string) {
 	t.Helper()
 	_, workdir, runnerBin := prepareRealAgentE2E(t, agent)
@@ -92,7 +105,7 @@ steps:
 	defer cancel()
 	cmd := exec.CommandContext(ctx, runnerBin, "--headless", workflowPath)
 	cmd.Dir = workdir
-	cmd.Env = append(os.Environ(), "AGENT_RUNNER_NO_TUI=1")
+	cmd.Env = realAgentTestEnv(false)
 	output, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
 		t.Fatalf("real %s headless E2E timed out after %s\n%s", agent, realAgentTimeout, output)
@@ -235,7 +248,10 @@ func realAgentSelected(agent, selection string) bool {
 }
 
 func realAgentTestEnv(interactive bool) []string {
-	overrides := map[string]string{"AGENT_RUNNER_NO_TUI": "1"}
+	overrides := map[string]string{
+		"AGENT_CLI_CREDENTIAL_STORE": "file",
+		"AGENT_RUNNER_NO_TUI":        "1",
+	}
 	if interactive {
 		overrides["TERM"] = "xterm-256color"
 	}
