@@ -176,7 +176,14 @@ func NewControlServer(config *ControlConfig) (*ControlServer, error) {
 	if err := os.Chmod(privateDir, 0o700); err != nil { // #nosec G302 -- a private directory needs owner execute permission
 		return nil, fmt.Errorf("secure private control directory: %w", err)
 	}
-	digest := sha256.Sum256([]byte(config.RunID))
+	// Run IDs are only unique within one project's run directory tree, so the
+	// socket name must also cover the canonical run directory: two projects
+	// with the same run ID must never share a socket in the per-user temp dir.
+	canonicalRunDir, err := filepath.Abs(config.RunDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve run directory for control socket: %w", err)
+	}
+	digest := sha256.Sum256([]byte(canonicalRunDir + "\x00" + config.RunID))
 	socketPath := filepath.Join(privateDir, hex.EncodeToString(digest[:12])+".sock")
 	if len(socketPath) >= 104 {
 		return nil, fmt.Errorf("create control endpoint: socket path is %d bytes, exceeds macOS sun_path limit: %s", len(socketPath), socketPath)

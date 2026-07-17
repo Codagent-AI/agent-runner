@@ -74,6 +74,33 @@ func TestControlServerCreatesPrivateEndpointAndAttemptEnvironment(t *testing.T) 
 	}
 }
 
+func TestControlServerSocketPathIsUniquePerRunDirectory(t *testing.T) {
+	tempDir := shortTempDir(t)
+	logger := &recordingEventLogger{}
+	paths := make(map[string]string)
+	for _, name := range []string{"project-a", "project-b"} {
+		runDir := t.TempDir()
+		server, err := NewControlServer(&ControlConfig{
+			RunID:     "run",
+			RunDir:    runDir,
+			TempDir:   tempDir,
+			LockProof: heldRunLockProof(t, runDir),
+			Logger:    logger,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = server.Close() })
+		if len(server.SocketPath()) >= 104 {
+			t.Fatalf("socket path length = %d, want below macOS sun_path limit: %s", len(server.SocketPath()), server.SocketPath())
+		}
+		paths[name] = server.SocketPath()
+	}
+	if paths["project-a"] == paths["project-b"] {
+		t.Fatalf("socket path %q is shared by two projects with the same run ID", paths["project-a"])
+	}
+}
+
 func TestControlServerCreationFailureIsDescriptive(t *testing.T) {
 	root := t.TempDir()
 	notDir := filepath.Join(root, "not-a-directory")
