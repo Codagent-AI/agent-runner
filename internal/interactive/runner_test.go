@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -176,6 +178,42 @@ func TestDirectRunnerSucceedsWhenSessionStoreAppearsAfterAcceptance(t *testing.T
 	}
 	if !result.Completed || result.DurabilityFailed {
 		t.Fatalf("Run result = %#v (durability error %v), want durable completion for a store that appeared after acceptance", result, result.DurabilityError)
+	}
+}
+
+func TestDirectRunnerWatchdogStartFailureTearsDownChild(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+	defer server.Close()
+	t.Setenv("AGENT_RUNNER_DIRECT_HELPER", "1")
+
+	var childPID int
+	runner := NewDirectRunner(&DirectOptions{
+		Args:               []string{os.Args[0], "-test.run=^TestDirectRunnerHelperProcess$"},
+		StepID:             "implement",
+		SessionID:          "session-1",
+		CLI:                "fake",
+		Control:            server,
+		Probe:              immediateDurabilityProbe{},
+		Foreground:         false,
+		TerminationGrace:   250 * time.Millisecond,
+		DurabilityTimeout:  time.Second,
+		WatchdogExecutable: filepath.Join(t.TempDir(), "missing-watchdog"),
+		Persist: func(metadata *ProcessMetadata) {
+			if metadata != nil {
+				childPID = metadata.ChildPID
+			}
+		},
+	})
+
+	_, err := runner.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "start child watchdog") {
+		t.Fatalf("Run error = %v, want watchdog start failure", err)
+	}
+	if childPID == 0 {
+		t.Fatal("child pid was never persisted")
+	}
+	if killErr := syscall.Kill(childPID, 0); !errors.Is(killErr, syscall.ESRCH) {
+		t.Fatalf("kill(child, 0) = %v, want ESRCH for a killed and reaped child", killErr)
 	}
 }
 

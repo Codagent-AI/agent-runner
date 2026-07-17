@@ -103,8 +103,7 @@ func (r *DirectRunner) Run(ctx context.Context) (result DirectResult, err error)
 
 	identity, identityErr := ReadProcessIdentity(cmd.Process.Pid)
 	if identityErr != nil {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		return result, fmt.Errorf("identify direct interactive child: %w", identityErr)
+		return result, errors.Join(fmt.Errorf("identify direct interactive child: %w", identityErr), teardownSpawnedChild(cmd, tty, runnerModes))
 	}
 	metadata := ProcessMetadata{ChildPID: cmd.Process.Pid, PGID: cmd.Process.Pid, StartTime: identity, Socket: options.Control.SocketPath()}
 	if options.Persist != nil {
@@ -114,8 +113,7 @@ func (r *DirectRunner) Run(ctx context.Context) (result DirectResult, err error)
 
 	closeWatchdog, watchdogErr := startWatchdog(options.WatchdogExecutable, metadata, options.TerminationGrace)
 	if watchdogErr != nil {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		return result, watchdogErr
+		return result, errors.Join(watchdogErr, teardownSpawnedChild(cmd, tty, runnerModes))
 	}
 	if closeWatchdog != nil {
 		defer closeWatchdog()
@@ -280,6 +278,23 @@ func durationOrDefault(value, fallback time.Duration) time.Duration {
 		return value
 	}
 	return fallback
+}
+
+// teardownSpawnedChild fully cleans up a just-spawned child when post-spawn
+// setup fails before the supervisor takes ownership: it kills the child's
+// process group, reaps the child so no zombie remains, and restores terminal
+// foreground and modes to the runner. Restore failures are returned rather
+// than silently discarded.
+func teardownSpawnedChild(cmd *exec.Cmd, tty *os.File, runnerModes *unix.Termios) error {
+	if err := unix.Kill(-cmd.Process.Pid, unix.SIGKILL); err != nil {
+		_ = cmd.Process.Kill()
+	}
+	for {
+		if _, err := unix.Wait4(cmd.Process.Pid, nil, 0, nil); err == nil || !errors.Is(err, unix.EINTR) {
+			break
+		}
+	}
+	return restoreRunnerTerminal(tty, unix.Getpgrp(), runnerModes)
 }
 
 func newWatchdogCommand(executable string, metadata ProcessMetadata, grace time.Duration) *exec.Cmd {

@@ -130,8 +130,9 @@ func (s *Supervisor) waitLoop() {
 			// Continuation is audited by forwardStop after foreground ownership
 			// has been restored. This event can also arrive for the SIGTTIN fix.
 		case waitExited:
-			s.reclaimForeground()
-			s.finish(processResult{status: status})
+			// The restore error is surfaced through the result without
+			// altering the recorded exit status.
+			s.finish(processResult{status: status, err: s.reclaimForeground()})
 			return
 		}
 	}
@@ -234,17 +235,31 @@ func (s *Supervisor) resumeTimers() {
 	s.mu.Unlock()
 }
 
-func (s *Supervisor) reclaimForeground() {
-	if s.tty != nil {
-		fd, err := checkedTerminalFD(s.tty.Fd())
-		if err != nil {
-			return
-		}
-		_ = setForegroundProcessGroup(fd, s.runnerPGID)
-		if s.runnerModes != nil {
-			_ = writeTerminalModes(fd, s.runnerModes)
+func (s *Supervisor) reclaimForeground() error {
+	return restoreRunnerTerminal(s.tty, s.runnerPGID, s.runnerModes)
+}
+
+// restoreRunnerTerminal returns terminal foreground to the runner's process
+// group and restores the runner's saved modes. Failures are surfaced to the
+// caller instead of being silently discarded.
+func restoreRunnerTerminal(tty *os.File, runnerPGID int, runnerModes *unix.Termios) error {
+	if tty == nil {
+		return nil
+	}
+	fd, err := checkedTerminalFD(tty.Fd())
+	if err != nil {
+		return err
+	}
+	var errs []error
+	if err := setForegroundProcessGroup(fd, runnerPGID); err != nil {
+		errs = append(errs, fmt.Errorf("reclaim terminal foreground: %w", err))
+	}
+	if runnerModes != nil {
+		if err := writeTerminalModes(fd, runnerModes); err != nil {
+			errs = append(errs, fmt.Errorf("restore runner terminal modes: %w", err))
 		}
 	}
+	return errors.Join(errs...)
 }
 
 func (s *Supervisor) finish(result processResult) {
