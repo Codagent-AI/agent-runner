@@ -63,15 +63,25 @@ type StepRecord struct {
 	EstimatedAPICostUSD *float64           `json:"estimated_api_cost_usd"`
 }
 
+type executionKey struct {
+	Prefix    string
+	ID        string
+	Kind      string
+	Iteration int
+}
+
 // Collector owns the in-memory projection and cumulative-usage baselines.
 type Collector struct {
-	mu        sync.Mutex
-	path      string
-	artifact  Artifact
-	attempts  map[string]int
-	baselines map[string]model.TokenCounts
-	errors    []error
-	now       func() time.Time
+	mu             sync.Mutex
+	path           string
+	artifact       Artifact
+	attempts       map[executionKey]int
+	baselines      map[string]model.TokenCounts
+	errors         []error
+	writeFailures  int
+	lastWriteError error
+	writeRecovered bool
+	now            func() time.Time
 }
 
 // NewCollector creates a collector and rehydrates an existing artifact when
@@ -83,7 +93,7 @@ func NewCollector(sessionDir, runID, workflow string, sessionStart time.Time) *C
 			SchemaVersion: SchemaVersion, RunID: runID, Workflow: workflow, HistoryComplete: true,
 			Sessions: []SessionRecord{}, Steps: []StepRecord{}, Totals: emptyTotals(),
 		},
-		attempts:  make(map[string]int),
+		attempts:  make(map[executionKey]int),
 		baselines: make(map[string]model.TokenCounts),
 		now:       time.Now,
 	}
@@ -125,7 +135,22 @@ func (c *Collector) Totals() model.RunTotals {
 func (c *Collector) Errors() []error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return append([]error(nil), c.errors...)
+	errors := append([]error(nil), c.errors...)
+	if c.writeFailures == 0 {
+		return errors
+	}
+	occurrences := "time"
+	if c.writeFailures != 1 {
+		occurrences = "times"
+	}
+	recovery := ""
+	if c.writeRecovered {
+		recovery = "; a subsequent write succeeded"
+	}
+	return append(errors, fmt.Errorf(
+		"write run-metrics artifact failed %d %s (latest: %v)%s",
+		c.writeFailures, occurrences, c.lastWriteError, recovery,
+	))
 }
 
 func (c *Collector) processTerminal(event *audit.Event) {
@@ -224,11 +249,16 @@ func (c *Collector) observeSession(at time.Time, closeSession bool) {
 	}
 	session := &c.artifact.Sessions[len(c.artifact.Sessions)-1]
 	started := parseTimestamp(session.StartedAt)
-	if at.Before(started) {
-		at = started
+	lastObserved := parseTimestamp(session.LastObservedAt)
+	observed := at
+	if lastObserved.After(observed) {
+		observed = lastObserved
 	}
-	session.LastObservedAt = at.UTC().Format(time.RFC3339Nano)
-	session.DurationMS = at.Sub(started).Milliseconds()
+	if started.After(observed) {
+		observed = started
+	}
+	session.LastObservedAt = observed.UTC().Format(time.RFC3339Nano)
+	session.DurationMS = observed.Sub(started).Milliseconds()
 	if closeSession {
 		session.Status = SessionClosed
 		session.EndedAt = session.LastObservedAt
@@ -280,7 +310,13 @@ func (c *Collector) totalsLocked(includeLiveSession bool) model.RunTotals {
 
 func (c *Collector) persist() {
 	if err := stateio.WriteJSONAtomic(c.path, &c.artifact); err != nil {
-		c.errors = append(c.errors, fmt.Errorf("write run-metrics artifact: %w", err))
+		c.writeFailures++
+		c.lastWriteError = err
+		c.writeRecovered = false
+		return
+	}
+	if c.writeFailures > 0 {
+		c.writeRecovered = true
 	}
 }
 
@@ -300,6 +336,13 @@ func (c *Collector) rehydrate(sessionStart time.Time) {
 	}
 	if artifact.SchemaVersion != SchemaVersion {
 		c.recoverArtifact(sessionStart, fmt.Errorf("unsupported schema version %d", artifact.SchemaVersion))
+		return
+	}
+	if artifact.RunID != c.artifact.RunID || artifact.Workflow != c.artifact.Workflow {
+		c.recoverArtifact(sessionStart, fmt.Errorf(
+			"artifact identity %q/%q does not match run %q/%q",
+			artifact.RunID, artifact.Workflow, c.artifact.RunID, c.artifact.Workflow,
+		))
 		return
 	}
 	if artifact.Sessions == nil {
@@ -355,24 +398,44 @@ func coverage(eligible, reported int) model.Coverage {
 	return model.CoveragePartial
 }
 
-func logicalKey(prefix, id string) string { return prefix + "\x00" + id }
-
-func attemptKey(prefix, id, kind string, iteration int) string {
-	if kind == "iteration" {
-		id = fmt.Sprintf("%s:%d", id, iteration)
-	}
-	return logicalKey(prefix, id)
+func attemptKey(prefix, id, kind string, iteration int) executionKey {
+	return executionKey{Prefix: prefix, ID: id, Kind: kind, Iteration: iteration}
 }
 
 func recordID(prefix, id, kind string, iteration, attempt int) string {
+	escapedPrefix := escapeRecordComponent(prefix)
+	escapedID := escapeRecordComponent(id)
+	var name string
 	if kind == "iteration" {
-		id = fmt.Sprintf("%s:%d", id, iteration)
-	}
-	name := id
-	if prefix != "" {
-		name = strings.TrimSuffix(prefix, "/") + "/" + id
+		parts := []string{"@iteration"}
+		if escapedPrefix != "" {
+			parts = append(parts, escapedPrefix)
+		}
+		parts = append(parts, escapedID, fmt.Sprintf("%d", iteration))
+		name = strings.Join(parts, "/")
+	} else {
+		name = escapedID
+		if escapedPrefix != "" {
+			name = escapedPrefix + "/" + escapedID
+		}
 	}
 	return fmt.Sprintf("%s#%d", name, attempt)
+}
+
+func escapeRecordComponent(value string) string {
+	const hex = "0123456789ABCDEF"
+	var escaped strings.Builder
+	for i := 0; i < len(value); i++ {
+		char := value[i]
+		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '_' || char == '-' {
+			escaped.WriteByte(char)
+			continue
+		}
+		escaped.WriteByte('%')
+		escaped.WriteByte(hex[char>>4])
+		escaped.WriteByte(hex[char&0x0f])
+	}
+	return escaped.String()
 }
 
 func baselineKey(cliName, sessionID string) string { return cliName + "\x00" + sessionID }

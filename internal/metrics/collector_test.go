@@ -182,8 +182,27 @@ func TestCollectorKeepsIterationAndContainerAttemptSequencesSeparate(t *testing.
 		t.Fatalf("container attempt = %d, want 1", got)
 	}
 	a := readArtifact(t, filepath.Dir(c.path))
-	if a.Steps[0].RecordID != "loop:0#1" || a.Steps[1].RecordID != "loop#1" {
+	if a.Steps[0].RecordID != "@iteration/loop/0#1" || a.Steps[1].RecordID != "loop#1" {
 		t.Fatalf("record ids = %q, %q", a.Steps[0].RecordID, a.Steps[1].RecordID)
+	}
+}
+
+func TestCollectorRecordIDsCannotCollideAcrossKinds(t *testing.T) {
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(t.TempDir(), "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, nil))
+	c.Process(audit.Event{Timestamp: started.Add(time.Second).Format(time.RFC3339), Type: audit.EventIterationEnd, Data: map[string]any{
+		DataIdentity: model.ExecutionIdentity{StepID: "loop", StepType: "loop", Kind: "iteration", Iteration: 0},
+		"outcome":    "completed", "duration_ms": int64(10),
+	}})
+	c.Process(stepEvent(started.Add(2*time.Second), model.ExecutionIdentity{StepID: "loop:0", StepType: "shell", Kind: "step"}, zeroUsage(), nil, "completed", 20))
+
+	a := readArtifact(t, filepath.Dir(c.path))
+	if a.Steps[0].RecordID == a.Steps[1].RecordID {
+		t.Fatalf("iteration and step record IDs collided: %q", a.Steps[0].RecordID)
+	}
+	if a.Steps[0].Attempt != 1 || a.Steps[1].Attempt != 1 {
+		t.Fatalf("distinct identities shared attempts: %+v", a.Steps)
 	}
 }
 
@@ -348,6 +367,65 @@ func TestCollectorRehydratesBaselinesAndExcludesPausedTime(t *testing.T) {
 	}
 }
 
+func TestCollectorRecoversArtifactWithMismatchedRunIdentity(t *testing.T) {
+	tests := []struct {
+		name        string
+		newRunID    string
+		newWorkflow string
+	}{
+		{name: "run id differs", newRunID: "run-new", newWorkflow: "workflow-old"},
+		{name: "workflow differs", newRunID: "run-old", newWorkflow: "workflow-new"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			started := mustTime(t, "2026-07-17T10:00:00Z")
+			old := NewCollector(dir, "run-old", "workflow-old", started)
+			old.Process(event(audit.EventRunStart, started, nil))
+			old.Process(stepEvent(started.Add(time.Second), agentIdentity("old", true), unavailableUsage(), nil, "completed", 1))
+			original, err := os.ReadFile(filepath.Join(dir, FileName))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			resumedAt := started.Add(time.Hour)
+			fresh := NewCollector(dir, tt.newRunID, tt.newWorkflow, resumedAt)
+			fresh.Process(event(audit.EventRunStart, resumedAt, map[string]any{"resumed": true}))
+			fresh.Process(stepEvent(resumedAt.Add(time.Second), agentIdentity("new", true), unavailableUsage(), nil, "completed", 1))
+
+			a := readArtifact(t, dir)
+			if a.RunID != tt.newRunID || a.Workflow != tt.newWorkflow || a.HistoryComplete || len(a.Steps) != 1 || a.Steps[0].ID != "new" {
+				t.Fatalf("fresh artifact = %+v", a)
+			}
+			backups, err := filepath.Glob(filepath.Join(dir, FileName+".bak-*"))
+			if err != nil || len(backups) != 1 {
+				t.Fatalf("backups = %v, err = %v", backups, err)
+			}
+			preserved, err := os.ReadFile(backups[0])
+			if err != nil || !cmp.Equal(original, preserved) {
+				t.Fatalf("preserved artifact differs: err=%v", err)
+			}
+		})
+	}
+}
+
+func TestCollectorSessionObservationNeverRegresses(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(dir, "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, nil))
+	c.Process(stepEvent(started.Add(10*time.Second), agentIdentity("later", true), unavailableUsage(), nil, "completed", 1))
+	c.Process(stepEvent(started.Add(3*time.Second), agentIdentity("earlier", true), unavailableUsage(), nil, "completed", 1))
+	c.Process(event(audit.EventRunEnd, started.Add(8*time.Second), nil))
+
+	a := readArtifact(t, dir)
+	session := a.Sessions[0]
+	wantObserved := started.Add(10 * time.Second).Format(time.RFC3339Nano)
+	if session.LastObservedAt != wantObserved || session.EndedAt != wantObserved || session.DurationMS != 10_000 || session.Status != SessionClosed {
+		t.Fatalf("session regressed: %+v", session)
+	}
+}
+
 func TestCollectorClosesSessionAndEmbedsFinalTotals(t *testing.T) {
 	dir := t.TempDir()
 	started := mustTime(t, "2026-07-17T10:00:00Z")
@@ -429,6 +507,31 @@ func TestCollectorRetainsWriteErrors(t *testing.T) {
 	c.Process(stepEvent(time.Now(), agentIdentity("one", true), unavailableUsage(), nil, "completed", 1))
 	if len(c.Errors()) == 0 || !strings.Contains(c.Errors()[0].Error(), "run-metrics") {
 		t.Fatalf("errors = %v", c.Errors())
+	}
+}
+
+func TestCollectorConsolidatesRepeatedWriteErrors(t *testing.T) {
+	dir := t.TempDir()
+	c := NewCollector(dir, "run", "workflow", time.Now())
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	c.Process(event(audit.EventRunStart, time.Now(), nil))
+	for i := 0; i < 25; i++ {
+		c.Process(stepEvent(time.Now(), agentIdentity("same", true), unavailableUsage(), nil, "completed", 1))
+	}
+
+	errors := c.Errors()
+	if len(errors) != 1 || !strings.Contains(errors[0].Error(), "25 times") {
+		t.Fatalf("repeated write errors were not consolidated: %v", errors)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	c.Process(stepEvent(time.Now(), agentIdentity("same", true), unavailableUsage(), nil, "completed", 1))
+	if errors := c.Errors(); len(errors) != 1 || !strings.Contains(errors[0].Error(), "25 times") {
+		t.Fatalf("consolidated warning was not retained after recovery: %v", errors)
 	}
 }
 
