@@ -1578,6 +1578,14 @@ func containsArg(args []string, target string) bool {
 	return false
 }
 
+func TestCompletionInstructionQuotesExecutablePath(t *testing.T) {
+	prompt := completionInstruction("/Applications/Agent Runner/bin/agent-runner")
+	want := "`'/Applications/Agent Runner/bin/agent-runner' step complete`"
+	if !strings.Contains(prompt, want) {
+		t.Fatalf("completion instruction = %q, want rendered command %q", prompt, want)
+	}
+}
+
 func assertContinueMarkerInstruction(t *testing.T, prompt, marker string) {
 	t.Helper()
 	for _, phrase := range []string{"step complete", "absolute path", "control channel", "You MUST run", "Do not merely", "separate shell words"} {

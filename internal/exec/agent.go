@@ -513,7 +513,8 @@ func completionExecutableForContext(invocationContext cli.InvocationContext) str
 }
 
 func completionInstruction(executable string) string {
-	return "\n\nWhen you or the user determine this step is complete, signal it through the Agent Runner control channel. You MUST run the absolute path command `" + executable + " step complete` with your shell tool. The executable path and `step complete` are separate shell words; do not quote the entire command as one word. Run that exact command with no extra arguments as the final action before finishing the current response. Do not merely say that the step is complete."
+	command := cli.CompletionCommand{Executable: executable, Args: []string{"step", "complete"}}.ShellCommand()
+	return "\n\nWhen you or the user determine this step is complete, signal it through the Agent Runner control channel. You MUST run the absolute path command `" + command + "` with your shell tool. The executable path and `step complete` are separate shell words; do not quote the entire command as one word. Run that exact command with no extra arguments as the final action before finishing the current response. Do not merely say that the step is complete."
 }
 
 func runDirectInteractive(args []string, options pty.Options) (pty.Result, error) {

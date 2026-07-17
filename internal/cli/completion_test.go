@@ -48,6 +48,17 @@ func TestCompletionCommandValidation(t *testing.T) {
 	}
 }
 
+func TestCompletionCommandShellCommandQuotesExecutablePath(t *testing.T) {
+	command := CompletionCommand{
+		Executable: "/Applications/Agent Runner/bin/agent-runner",
+		Args:       []string{"step", "complete"},
+	}
+
+	if got, want := command.ShellCommand(), "'/Applications/Agent Runner/bin/agent-runner' step complete"; got != want {
+		t.Fatalf("ShellCommand() = %q, want %q", got, want)
+	}
+}
+
 func TestAdaptersEmitCompletionIntegrations(t *testing.T) {
 	command := &CompletionCommand{
 		Executable: "/Applications/Agent Runner/bin/agent-runner",

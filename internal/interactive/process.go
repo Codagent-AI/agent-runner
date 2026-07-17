@@ -113,7 +113,12 @@ func (s *Supervisor) waitLoop() {
 		switch event {
 		case waitStopped:
 			if stopSignal == unix.SIGTTIN && s.tty != nil {
-				_ = setForegroundProcessGroup(int(s.tty.Fd()), s.pgid)
+				fd, fdErr := checkedTerminalFD(s.tty.Fd())
+				if fdErr != nil {
+					s.finish(processResult{err: fdErr})
+					return
+				}
+				_ = setForegroundProcessGroup(fd, s.pgid)
 				_ = unix.Kill(-s.pgid, unix.SIGCONT)
 				continue
 			}
@@ -136,7 +141,10 @@ func (s *Supervisor) forwardStop(stopSignal unix.Signal) error {
 	if s.tty == nil {
 		return fmt.Errorf("child %d stopped with %s without a controlling terminal", s.pid, stopSignal)
 	}
-	fd := int(s.tty.Fd())
+	fd, err := checkedTerminalFD(s.tty.Fd())
+	if err != nil {
+		return err
+	}
 	childModes, err := readTerminalModes(fd)
 	if err != nil {
 		return fmt.Errorf("save child terminal modes: %w", err)
@@ -228,7 +236,10 @@ func (s *Supervisor) resumeTimers() {
 
 func (s *Supervisor) reclaimForeground() {
 	if s.tty != nil {
-		fd := int(s.tty.Fd())
+		fd, err := checkedTerminalFD(s.tty.Fd())
+		if err != nil {
+			return
+		}
 		_ = setForegroundProcessGroup(fd, s.runnerPGID)
 		if s.runnerModes != nil {
 			_ = writeTerminalModes(fd, s.runnerModes)

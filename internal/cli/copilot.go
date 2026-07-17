@@ -65,7 +65,7 @@ func (a *CopilotAdapter) BuildArgs(input *BuildArgsInput) []string {
 		args = append(args, "--no-ask-user")
 	}
 	if !context.IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid() {
-		args = append(args, "--allow-tool=shell("+input.CompletionCommand.shellCommand()+")")
+		args = append(args, "--allow-tool=shell("+input.CompletionCommand.ShellCommand()+")")
 		if pluginDir, err := prepareNextCommandPlugin(*input.CompletionCommand); err != nil {
 			log.Printf("copilot: /next completion plugin unavailable: %v", err)
 		} else {

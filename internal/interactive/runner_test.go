@@ -3,6 +3,7 @@ package interactive
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,15 @@ import (
 
 	"github.com/codagent/agent-runner/internal/cli"
 )
+
+func TestCheckedTerminalFDRejectsOverflow(t *testing.T) {
+	overflow := uintptr(^uint(0)>>1) + 1
+	if _, err := checkedTerminalFD(overflow); err == nil {
+		t.Fatalf("checkedTerminalFD(%d) succeeded, want overflow error", overflow)
+	} else if got, want := err.Error(), fmt.Sprintf("terminal file descriptor %d overflows int", overflow); got != want {
+		t.Fatalf("checkedTerminalFD error = %q, want %q", got, want)
+	}
+}
 
 func TestDirectRunnerReleaseFailurePreventsSpawn(t *testing.T) {
 	spawned := filepath.Join(t.TempDir(), "spawned")

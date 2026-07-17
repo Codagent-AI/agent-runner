@@ -251,6 +251,62 @@ func TestControlServerAcceptsTurnCommittedAfterCompletion(t *testing.T) {
 	}
 }
 
+func TestControlServerRoutesCommittedTurnsToAttemptSubscriber(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+	defer server.Close()
+
+	stale := server.Activate("implement")
+	staleCommitted, unsubscribeStale := server.SubscribeCommittedTurn(stale.ID)
+	unsubscribeStale()
+
+	current := server.Activate("implement")
+	currentCommitted, unsubscribeCurrent := server.SubscribeCommittedTurn(current.ID)
+	defer unsubscribeCurrent()
+	complete := controlRequest{Type: MessageCompleteStep, RunID: current.RunID, StepID: current.StepID, Token: current.Token, RequestID: "complete"}
+	if response := exchange(t, server.SocketPath(), &complete); !response.OK {
+		t.Fatalf("completion response = %#v", response)
+	}
+	<-server.Completions()
+	committed := controlRequest{Type: MessageTurnCommitted, RunID: current.RunID, StepID: current.StepID, Token: current.Token, RequestID: "turn"}
+	if response := exchange(t, server.SocketPath(), &committed); !response.OK {
+		t.Fatalf("turn response = %#v", response)
+	}
+
+	select {
+	case <-currentCommitted:
+	case <-time.After(time.Second):
+		t.Fatal("current attempt did not receive committed-turn evidence")
+	}
+	select {
+	case <-staleCommitted:
+		t.Fatal("cancelled stale attempt received a later attempt's committed-turn evidence")
+	default:
+	}
+}
+
+func TestControlServerLateCommittedTurnSubscriberReceivesRecordedEvidence(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+	defer server.Close()
+	attempt := server.Activate("implement")
+	complete := controlRequest{Type: MessageCompleteStep, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "complete"}
+	if response := exchange(t, server.SocketPath(), &complete); !response.OK {
+		t.Fatalf("completion response = %#v", response)
+	}
+	<-server.Completions()
+	committed := controlRequest{Type: MessageTurnCommitted, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "turn"}
+	if response := exchange(t, server.SocketPath(), &committed); !response.OK {
+		t.Fatalf("turn response = %#v", response)
+	}
+
+	recorded, unsubscribe := server.SubscribeCommittedTurn(attempt.ID)
+	defer unsubscribe()
+	select {
+	case <-recorded:
+	case <-time.After(time.Second):
+		t.Fatal("late subscriber did not receive recorded committed-turn evidence")
+	}
+}
+
 func TestControlServerRejectsTurnCommittedBeforeCompletion(t *testing.T) {
 	logger := &recordingEventLogger{}
 	server := newTestControlServer(t, t.TempDir(), logger)

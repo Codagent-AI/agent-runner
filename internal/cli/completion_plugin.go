@@ -16,7 +16,7 @@ func prepareNextCommandPlugin(command CompletionCommand) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("locate user cache: %w", err)
 	}
-	digest := sha256.Sum256([]byte(command.shellCommand()))
+	digest := sha256.Sum256([]byte(command.ShellCommand()))
 	pluginDir := filepath.Join(cacheDir, "agent-runner", "completion-plugins", "next-"+hex.EncodeToString(digest[:6]))
 	manifest := `{
   "name": "agent-runner-completion",
@@ -31,7 +31,7 @@ description: Complete the current Agent Runner workflow step
 
 Run this exact command now, then finish the response:
 
-` + "`" + command.shellCommand() + "`" + `
+` + "`" + command.ShellCommand() + "`" + `
 `
 	files := map[string]string{
 		"plugin.json": manifest,

@@ -80,7 +80,7 @@ func prepareCursorCompletionPlugin(command CompletionCommand) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("locate user cache: %w", err)
 	}
-	digest := sha256.Sum256([]byte("cursor-v2\x00" + command.shellCommand()))
+	digest := sha256.Sum256([]byte("cursor-v2\x00" + command.ShellCommand()))
 	pluginDir := filepath.Join(cacheDir, "agent-runner", "completion-plugins", "cursor-"+hex.EncodeToString(digest[:6]))
 	files := map[string]string{
 		filepath.Join(".cursor-plugin", "plugin.json"): `{
@@ -95,7 +95,7 @@ description: Complete the current Agent Runner workflow step
 
 Run this exact shell command now, then finish the current response:
 
-` + "`" + command.shellCommand() + "`" + `
+` + "`" + command.ShellCommand() + "`" + `
 `,
 	}
 	for relativePath, content := range files {

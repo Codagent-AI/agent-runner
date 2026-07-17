@@ -100,7 +100,8 @@ func (c CompletionCommand) Valid() bool {
 	return filepath.IsAbs(c.Executable) && slices.Equal(c.Args, []string{"step", "complete"})
 }
 
-func (c CompletionCommand) shellCommand() string {
+// ShellCommand renders the validated command as shell-safe words.
+func (c CompletionCommand) ShellCommand() string {
 	if !c.Valid() {
 		return ""
 	}

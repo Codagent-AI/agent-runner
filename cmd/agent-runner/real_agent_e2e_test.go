@@ -78,6 +78,72 @@ func TestRealAgentTestEnvUsesFileCredentialStore(t *testing.T) {
 	t.Fatalf("real-agent E2E environment does not select Cursor's file credential store: %q", env)
 }
 
+func TestDurabilityTimeoutResumeUsesFreshCredentialE2E(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("durability retry E2E requires a POSIX terminal")
+	}
+	repoRoot := findRepoRoot(t)
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "home")
+	binDir := filepath.Join(tmp, "bin")
+	runnerBin := filepath.Join(tmp, "agent-runner")
+	fixtureLog := filepath.Join(tmp, "interactive-fixture.jsonl")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	buildAgentRunner(t, repoRoot, runnerBin)
+	writeInteractiveAgentFixtures(t, binDir, []string{"claude"})
+	workflowName := "durability-timeout-resume-e2e"
+	workflowPath := writeTerminalLeaseWorkflow(t, tmp, workflowName)
+	env := append(os.Environ(),
+		"AGENT_RUNNER_NO_TUI=1",
+		"HOME="+home,
+		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		interactiveFixtureEnv+"=1",
+		interactiveFixtureLog+"="+fixtureLog,
+		durabilityRetryFixtureEnv+"=1",
+	)
+
+	first := exec.Command(runnerBin, "--headless", workflowPath)
+	first.Dir = repoRoot
+	first.Env = env
+	firstOutput, firstErr := runCommandInPTY(first, 45*time.Second)
+	if firstErr == nil {
+		t.Fatalf("first attempt succeeded, want durability timeout\n%s", firstOutput)
+	}
+
+	sessionDir := latestWorkflowRunDir(t, home, repoRoot, workflowName)
+	auditData, err := os.ReadFile(filepath.Join(sessionDir, "audit.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(auditData), "durability_failure") {
+		t.Fatalf("first attempt did not record a durability timeout:\n%s", auditData)
+	}
+	resumed := exec.Command(runnerBin, "--headless", "--resume", filepath.Base(sessionDir))
+	resumed.Dir = repoRoot
+	resumed.Env = env
+	resumedOutput, resumedErr := runCommandInPTY(resumed, 30*time.Second)
+	if resumedErr != nil {
+		t.Fatalf("resumed durability attempt failed: %v\n%s", resumedErr, resumedOutput)
+	}
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.Completed {
+		t.Fatalf("resumed workflow did not complete: %#v", state)
+	}
+
+	invocations := readInteractiveFixtureInvocations(t, fixtureLog)
+	if len(invocations) != 2 {
+		t.Fatalf("fixture invocations = %d, want 2", len(invocations))
+	}
+	if invocations[0].Token == "" || invocations[1].Token == "" || invocations[0].Token == invocations[1].Token {
+		t.Fatalf("completion credentials were not freshly issued: first=%q resumed=%q", invocations[0].Token, invocations[1].Token)
+	}
+}
+
 func runRealHeadlessAgentE2E(t *testing.T, agent string) {
 	t.Helper()
 	_, workdir, runnerBin := prepareRealAgentE2E(t, agent)

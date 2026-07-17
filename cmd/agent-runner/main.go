@@ -745,6 +745,10 @@ type liveTUIResult struct {
 	sessionDir     string
 }
 
+var liveRunCoordinatorFactory = func(program *tea.Program, sessionDir string) *liverun.Coordinator {
+	return liverun.NewCoordinator(program, sessionDir)
+}
+
 func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResult {
 	rv, err := runview.New(h.SessionDir, h.ProjectDir, runview.FromLiveRun)
 	if err != nil {
@@ -758,7 +762,7 @@ func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResul
 		programOptions = append(programOptions, tea.WithAltScreen())
 	}
 	p := tea.NewProgram(rv, programOptions...)
-	coord := liverun.NewCoordinator(p, h.SessionDir)
+	coord := liveRunCoordinatorFactory(p, h.SessionDir)
 
 	resultCh := make(chan runner.WorkflowResult, 1)
 	go func() {
@@ -2342,7 +2346,7 @@ func (m *onboardingDemoPromptFlow) startRunner() {
 		return
 	}
 	m.started = true
-	coord := liverun.NewCoordinator(m.program, m.handle.SessionDir)
+	coord := liveRunCoordinatorFactory(m.program, m.handle.SessionDir)
 	go func() {
 		result := runner.ResultFailed
 		var runErr error

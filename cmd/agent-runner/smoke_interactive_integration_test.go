@@ -17,19 +17,24 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	cterm "github.com/charmbracelet/x/term"
 	gopty "github.com/creack/pty"
 	"golang.org/x/sys/unix"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/interactive"
+	"github.com/codagent/agent-runner/internal/liverun"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
 
 const (
-	interactiveFixtureEnv = "AGENT_RUNNER_INTERACTIVE_E2E_FIXTURE"
-	interactiveFixtureLog = "AGENT_RUNNER_INTERACTIVE_E2E_LOG"
-	jobControlFixtureEnv  = "AGENT_RUNNER_JOB_CONTROL_FIXTURE"
+	interactiveFixtureEnv     = "AGENT_RUNNER_INTERACTIVE_E2E_FIXTURE"
+	interactiveFixtureLog     = "AGENT_RUNNER_INTERACTIVE_E2E_LOG"
+	jobControlFixtureEnv      = "AGENT_RUNNER_JOB_CONTROL_FIXTURE"
+	terminalLeaseFixtureEnv   = "AGENT_RUNNER_TERMINAL_LEASE_E2E_FIXTURE"
+	terminalLeaseWorkflowEnv  = "AGENT_RUNNER_TERMINAL_LEASE_E2E_WORKFLOW"
+	durabilityRetryFixtureEnv = "AGENT_RUNNER_DURABILITY_RETRY_E2E_FIXTURE"
 )
 
 var (
@@ -158,6 +163,113 @@ func TestInteractiveDirectHandoffJobControl(t *testing.T) {
 	}
 }
 
+func TestInteractiveTerminalLeaseFailures(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("interactive terminal lease smoke test requires a POSIX terminal")
+	}
+	repoRoot := findRepoRoot(t)
+
+	for _, mode := range []string{"release", "restore"} {
+		t.Run(mode, func(t *testing.T) {
+			tmp := t.TempDir()
+			home := filepath.Join(tmp, "home")
+			binDir := filepath.Join(tmp, "bin")
+			fixtureLog := filepath.Join(tmp, "interactive-fixture.jsonl")
+			if err := os.MkdirAll(binDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Join(home, ".agent-runner"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(home, ".agent-runner", "settings.yaml"), []byte("theme: dark\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			writeInteractiveAgentFixtures(t, binDir, []string{"claude"})
+			workflowName := "interactive-terminal-lease-" + mode
+			workflowPath := writeTerminalLeaseWorkflow(t, tmp, workflowName)
+
+			cmd := exec.Command(currentTestBinary(t), "-test.run=^TestInteractiveTerminalLeaseFixtureProcess$")
+			cmd.Dir = repoRoot
+			cmd.Env = append(os.Environ(),
+				"HOME="+home,
+				"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"TERM=xterm-256color",
+				interactiveFixtureEnv+"=1",
+				interactiveFixtureLog+"="+fixtureLog,
+				terminalLeaseFixtureEnv+"="+mode,
+				terminalLeaseWorkflowEnv+"="+workflowPath,
+			)
+			output, err := runCommandInPTY(cmd, 30*time.Second)
+			if err == nil {
+				t.Fatalf("%s failure injection unexpectedly succeeded\n%s", mode, output)
+			}
+			sessionDir := latestWorkflowRunDir(t, home, repoRoot, workflowName)
+			if mode == "release" {
+				if data, readErr := os.ReadFile(fixtureLog); readErr == nil && len(bytes.TrimSpace(data)) != 0 {
+					t.Fatalf("fake CLI spawned despite release failure: %s", data)
+				} else if readErr != nil && !os.IsNotExist(readErr) {
+					t.Fatalf("read fixture log: %v", readErr)
+				}
+				return
+			}
+
+			assertSuccessfulInteractiveSteps(t, filepath.Join(sessionDir, "audit.log"), []string{"interactive"})
+			assertInteractiveFixtureInvocationCount(t, fixtureLog, 1)
+		})
+	}
+}
+
+// TestInteractiveTerminalLeaseFixtureProcess runs the live TUI with a
+// deterministic terminal program decorator. The outer test launches this
+// helper in a PTY so Bubble Tea exercises the real release/restore wiring.
+func TestInteractiveTerminalLeaseFixtureProcess(t *testing.T) {
+	mode := os.Getenv(terminalLeaseFixtureEnv)
+	if mode == "" {
+		return
+	}
+	liveRunCoordinatorFactory = func(program *tea.Program, sessionDir string) *liverun.Coordinator {
+		return liverun.NewCoordinator(&terminalFaultProgram{Program: program, mode: mode}, sessionDir)
+	}
+	result := handleRunWithResult([]string{os.Getenv(terminalLeaseWorkflowEnv)}, liveTUIOptions{quitOnDone: true, startInAltScreen: true})
+	os.Exit(result.exitCode)
+}
+
+type terminalFaultProgram struct {
+	*tea.Program
+	mode string
+}
+
+func (p *terminalFaultProgram) ReleaseTerminal() error {
+	if p.mode == "release" {
+		return errors.New("injected release failure")
+	}
+	return p.Program.ReleaseTerminal()
+}
+
+func (p *terminalFaultProgram) RestoreTerminal() error {
+	err := p.Program.RestoreTerminal()
+	if p.mode == "restore" {
+		return errors.Join(err, errors.New("injected restore failure"))
+	}
+	return err
+}
+
+func writeTerminalLeaseWorkflow(t *testing.T, dir, name string) string {
+	t.Helper()
+	path := filepath.Join(dir, name+".yaml")
+	data := []byte(fmt.Sprintf(`name: %s
+steps:
+  - id: interactive
+    agent: claude_interactive_smoke
+    session: new
+    prompt: "Complete through the control channel."
+`, name))
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func writeJobControlWorkflow(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "interactive-job-control.yaml")
@@ -246,6 +358,7 @@ type interactiveFixtureInvocation struct {
 	CLI       string   `json:"cli"`
 	Resume    bool     `json:"resume"`
 	SessionID string   `json:"session_id"`
+	Token     string   `json:"token"`
 	Args      []string `json:"args"`
 }
 
@@ -260,9 +373,11 @@ func runInteractiveAgentFixture() error {
 	if mode := os.Getenv(jobControlFixtureEnv); mode != "" {
 		return runJobControlFixture(mode)
 	}
-	if err := appendInteractiveFixtureInvocation(interactiveFixtureInvocation{
-		CLI: name, Resume: resume, SessionID: sessionID, Args: args,
-	}); err != nil {
+	invocationNumber, err := appendInteractiveFixtureInvocation(&interactiveFixtureInvocation{
+		CLI: name, Resume: resume, SessionID: sessionID,
+		Token: os.Getenv(interactive.EnvControlToken), Args: args,
+	})
+	if err != nil {
 		return err
 	}
 
@@ -274,6 +389,12 @@ func runInteractiveAgentFixture() error {
 
 	if !resume {
 		_, _ = fmt.Fprintf(os.Stdout, "FAKE_AGENT_READY %s new\r\n", name)
+		if os.Getenv(durabilityRetryFixtureEnv) == "1" && invocationNumber == 1 {
+			if err := interactive.SendControlEventFromEnvironment(context.Background(), interactive.MessageCompleteStep, os.Getenv); err != nil {
+				return fmt.Errorf("send completion without committed turn: %w", err)
+			}
+			return waitForFixtureTermination()
+		}
 		if err := completeInteractiveFixture(); err != nil {
 			return err
 		}
@@ -457,6 +578,40 @@ func runInteractiveWorkflowInPTY(cmd *exec.Cmd, timeout time.Duration) (string, 
 	return output.String(), waitErr
 }
 
+func runCommandInPTY(cmd *exec.Cmd, timeout time.Duration) (string, error) {
+	ptmx, err := gopty.StartWithSize(cmd, &gopty.Winsize{Rows: 40, Cols: 120})
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = ptmx.Close() }()
+
+	outputCh := make(chan []byte, 1)
+	go func() {
+		output, _ := io.ReadAll(ptmx)
+		outputCh <- output
+	}()
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- cmd.Wait() }()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	var output []byte
+	var waitErr error
+	for outputCh != nil || waitCh != nil {
+		select {
+		case output = <-outputCh:
+			outputCh = nil
+		case waitErr = <-waitCh:
+			waitCh = nil
+		case <-timer.C:
+			_ = cmd.Process.Kill()
+			_ = ptmx.Close()
+			return string(output), fmt.Errorf("timed out after %s", timeout)
+		}
+	}
+	return string(output), waitErr
+}
+
 func argsAfterDoubleDash(args []string) []string {
 	for i, arg := range args {
 		if arg == "--" {
@@ -566,14 +721,23 @@ func valueWithPrefix(args []string, prefix string) string {
 	return ""
 }
 
-func appendInteractiveFixtureInvocation(invocation interactiveFixtureInvocation) error {
+func appendInteractiveFixtureInvocation(invocation *interactiveFixtureInvocation) (int, error) {
 	path := os.Getenv(interactiveFixtureLog)
+	invocationNumber := 1
+	if data, err := os.ReadFile(path); err == nil {
+		invocationNumber += bytes.Count(data, []byte{'\n'})
+	} else if !os.IsNotExist(err) {
+		return 0, err
+	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer func() { _ = file.Close() }()
-	return json.NewEncoder(file).Encode(invocation)
+	if err := json.NewEncoder(file).Encode(invocation); err != nil {
+		return 0, err
+	}
+	return invocationNumber, nil
 }
 
 func latestWorkflowRunDir(t *testing.T, home, repoRoot, workflow string) string {
@@ -661,4 +825,34 @@ func assertInteractiveFixtureInvocations(t *testing.T, logPath string) {
 			t.Errorf("%s resumed session %q, want fresh session %q", executable, resumed, fresh)
 		}
 	}
+}
+
+func assertInteractiveFixtureInvocationCount(t *testing.T, logPath string, want int) {
+	t.Helper()
+	invocations := readInteractiveFixtureInvocations(t, logPath)
+	if len(invocations) != want {
+		t.Fatalf("interactive fixture invocations = %d, want %d", len(invocations), want)
+	}
+}
+
+func readInteractiveFixtureInvocations(t *testing.T, logPath string) []interactiveFixtureInvocation {
+	t.Helper()
+	file, err := os.Open(logPath)
+	if err != nil {
+		t.Fatalf("open interactive fixture log: %v", err)
+	}
+	defer func() { _ = file.Close() }()
+	decoder := json.NewDecoder(file)
+	var invocations []interactiveFixtureInvocation
+	for {
+		var invocation interactiveFixtureInvocation
+		if err := decoder.Decode(&invocation); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			t.Fatalf("decode interactive fixture log: %v", err)
+		}
+		invocations = append(invocations, invocation)
+	}
+	return invocations
 }

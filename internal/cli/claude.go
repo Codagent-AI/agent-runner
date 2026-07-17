@@ -71,7 +71,7 @@ func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 	}
 
 	if !context.IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid() {
-		command := input.CompletionCommand.shellCommand()
+		command := input.CompletionCommand.ShellCommand()
 		args = append(args, "--allowedTools", "Bash("+command+")")
 		settings, _ := json.Marshal(map[string]any{
 			"hooks": map[string]any{

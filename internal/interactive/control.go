@@ -139,6 +139,8 @@ type ControlServer struct {
 	active      *attemptState
 	accepted    map[string]*acceptedCompletion
 	committed   map[string]struct{}
+	turnWaiters map[string]map[uint64]chan struct{}
+	nextWaiter  uint64
 	completions chan CompletionRequest
 	turns       chan CommittedTurn
 	done        chan struct{}
@@ -209,6 +211,7 @@ func NewControlServer(config *ControlConfig) (*ControlServer, error) {
 		now:         now,
 		accepted:    make(map[string]*acceptedCompletion),
 		committed:   make(map[string]struct{}),
+		turnWaiters: make(map[string]map[uint64]chan struct{}),
 		completions: make(chan CompletionRequest, 1),
 		turns:       make(chan CommittedTurn, 1),
 		done:        make(chan struct{}),
@@ -250,6 +253,36 @@ func (s *ControlServer) Deactivate() {
 
 func (s *ControlServer) Completions() <-chan CompletionRequest { return s.completions }
 func (s *ControlServer) CommittedTurns() <-chan CommittedTurn  { return s.turns }
+
+// SubscribeCommittedTurn returns evidence scoped to one attempt. The
+// unsubscribe function removes a waiter whose durability was confirmed by a
+// different source, so it cannot consume or retain a later attempt's event.
+func (s *ControlServer) SubscribeCommittedTurn(attemptID string) (committed <-chan struct{}, unsubscribe func()) {
+	s.mu.Lock()
+	waiter := make(chan struct{})
+	if _, ok := s.committed[attemptID]; ok {
+		close(waiter)
+		s.mu.Unlock()
+		return waiter, func() {}
+	}
+	s.nextWaiter++
+	waiterID := s.nextWaiter
+	if s.turnWaiters[attemptID] == nil {
+		s.turnWaiters[attemptID] = make(map[uint64]chan struct{})
+	}
+	s.turnWaiters[attemptID][waiterID] = waiter
+	s.mu.Unlock()
+
+	return waiter, func() {
+		s.mu.Lock()
+		waiters := s.turnWaiters[attemptID]
+		delete(waiters, waiterID)
+		if len(waiters) == 0 {
+			delete(s.turnWaiters, attemptID)
+		}
+		s.mu.Unlock()
+	}
+}
 
 // Close stops the server and removes both the socket and its run-directory pointer.
 func (s *ControlServer) Close() error {
@@ -376,6 +409,13 @@ func (s *ControlServer) deliverCompletion(request *CompletionRequest) {
 }
 
 func (s *ControlServer) deliverCommittedTurn(turn CommittedTurn) {
+	s.mu.Lock()
+	waiters := s.turnWaiters[turn.AttemptID]
+	delete(s.turnWaiters, turn.AttemptID)
+	for _, waiter := range waiters {
+		close(waiter)
+	}
+	s.mu.Unlock()
 	select {
 	case s.turns <- turn:
 	case <-s.done:

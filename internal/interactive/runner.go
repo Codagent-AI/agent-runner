@@ -191,12 +191,16 @@ func startDirectChild(options *DirectOptions, attempt *Attempt) (*exec.Cmd, *os.
 		if tty == nil {
 			return nil, nil, nil, errors.New("direct interactive runner: stdin is not a terminal")
 		}
-		modes, err := readTerminalModes(int(tty.Fd()))
+		fd, err := checkedTerminalFD(tty.Fd())
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		modes, err := readTerminalModes(fd)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("read runner terminal modes: %w", err)
 		}
 		runnerModes = modes
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Foreground: true, Ctty: int(tty.Fd())}
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Foreground: true, Ctty: fd}
 	} else {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	}
@@ -231,7 +235,8 @@ func finishDirectCompletion(ctx context.Context, options *DirectOptions, attempt
 		_ = supervisor.Terminate(options.TerminationGrace)
 		return DirectResult{}, errors.New("direct interactive runner: received completion for a different attempt")
 	}
-	committed := committedTurnForAttempt(options.Control, attempt.ID)
+	committed, unsubscribe := options.Control.SubscribeCommittedTurn(attempt.ID)
+	defer unsubscribe()
 	durabilityTimer := NewActiveRuntimeTimer(durationOrDefault(options.DurabilityTimeout, DefaultDurabilityTimeout))
 	untrack := supervisor.TrackTimer(durabilityTimer)
 	durability := AwaitTurnDurability(ctx, &DurabilityOptions{
@@ -255,17 +260,11 @@ func finishDirectCompletion(ctx context.Context, options *DirectOptions, attempt
 	return result, nil
 }
 
-func committedTurnForAttempt(control *ControlServer, attemptID string) <-chan struct{} {
-	committed := make(chan struct{}, 1)
-	go func() {
-		for turn := range control.CommittedTurns() {
-			if turn.AttemptID == attemptID {
-				committed <- struct{}{}
-				return
-			}
-		}
-	}()
-	return committed
+func checkedTerminalFD(fd uintptr) (int, error) {
+	if fd > uintptr(^uint(0)>>1) {
+		return 0, fmt.Errorf("terminal file descriptor %d overflows int", fd)
+	}
+	return int(fd), nil
 }
 
 func durationOrDefault(value, fallback time.Duration) time.Duration {
