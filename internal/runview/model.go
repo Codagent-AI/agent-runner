@@ -85,13 +85,14 @@ type Model struct {
 	stepRanges []stepLineRange
 	logAnchor  stepLineAnchor
 
-	active     bool
-	pulsePhase float64
-	termWidth  int
-	termHeight int
-	showLegend bool
-	loadErr    string
-	notice     string // transient message shown below the step list (e.g. spawn error)
+	active      bool
+	pulsePhase  float64
+	termWidth   int
+	termHeight  int
+	showLegend  bool
+	showSummary bool
+	loadErr     string
+	notice      string // transient message shown below the step list (e.g. spawn error)
 
 	resolverCfg   ResolverConfig
 	startTime     time.Time
@@ -254,6 +255,9 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	events = filterAuditEventsForWorkflowState(events, state.WorkflowHash, tree.Root, currentStepID(&state), state.Completed)
 	for _, e := range events {
 		tree.ApplyEvent(e)
+	}
+	if entered != FromLiveRun && (state.Completed || tree.Root.Status == StatusSuccess) {
+		m.showSummary = true
 	}
 	current := m.applyCurrentStepState(&state)
 	if m.autoFollow {
@@ -733,10 +737,12 @@ func (m *Model) handleExecDoneMsg(msg liverun.ExecDoneMsg) {
 	}
 	switch msg.Result {
 	case "failed":
+		m.showSummary = false
 		if failed := findFailedLeaf(m.tree.Root); failed != nil {
 			m.navigateToNode(failed)
 		}
 	case "success":
+		m.showSummary = true
 		// Land on the final top-level step so the user sees the workflow's
 		// end state. Loop iterations and other deep leaves emit StepStateMsg
 		// before their tree nodes exist (audit replay runs lazily), so cursor
@@ -908,6 +914,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, emitExit
 	case "?":
 		m.showLegend = true
+	case "s":
+		m.showSummary = !m.showSummary
 	case "esc":
 		m.autoFollow = false
 		return m.handleEsc()
@@ -1413,7 +1421,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 	}
 
 	switch n.Type {
-	case NodeLoop:
+	case NodeLoop, NodeGroup:
 		m.path = append(m.path, n)
 		m.cursor = 0
 		m.logOffset = 0

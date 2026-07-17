@@ -286,9 +286,13 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 		t.Root.Aborted = false
 		t.Root.Outcome = ""
 		t.Root.ErrorMessage = ""
+		t.RunTotals = nil
 	case "run_end":
 		outcome, _ := stringField(e.Data, "outcome")
 		applyOutcome(t.Root, outcome)
+		if totals, ok := decodeRunTotals(e.Data); ok {
+			t.RunTotals = totals
+		}
 	case "error":
 		target := t.Root
 		if len(tokens) > 0 {
@@ -377,7 +381,13 @@ func (t *Tree) resolve(tokens []prefixToken, createIterations bool) *StepNode {
 			}
 			current = iter
 		default:
-			child := childByID(current, tok.stepID)
+			child := groupDescendantByID(current, tok.stepID, true)
+			if child == nil {
+				child = childByID(current, tok.stepID)
+			}
+			if child == nil {
+				child = groupDescendantByID(current, tok.stepID, false)
+			}
 			if child == nil {
 				return nil
 			}
@@ -385,6 +395,52 @@ func (t *Tree) resolve(tokens []prefixToken, createIterations bool) *StepNode {
 		}
 	}
 	return current
+}
+
+// groupDescendantByID adapts the current audit shape for group members. Group
+// execution emits a lifecycle event for the group but does not add the group
+// ID to each member's prefix, so members must be resolved through the active
+// static group subtree. Ambiguous matches are ignored rather than attributed
+// to the wrong logical step.
+func groupDescendantByID(parent *StepNode, id string, activeOnly bool) *StepNode {
+	var match *StepNode
+	ambiguous := false
+	var visit func(*StepNode)
+	visit = func(node *StepNode) {
+		if node == nil || ambiguous {
+			return
+		}
+		for _, child := range node.Children {
+			if child.Type != NodeGroup {
+				continue
+			}
+			if activeOnly && child.Status != StatusInProgress {
+				continue
+			}
+			if child.ID == id {
+				if match != nil && match != child {
+					ambiguous = true
+					return
+				}
+				match = child
+			}
+			for _, member := range child.Children {
+				if member.ID == id {
+					if match != nil && match != member {
+						ambiguous = true
+						return
+					}
+					match = member
+				}
+			}
+			visit(child)
+		}
+	}
+	visit(parent)
+	if ambiguous {
+		return nil
+	}
+	return match
 }
 
 // EnsureSubWorkflowLoaded is the UI-facing counterpart to the lazy-load done
@@ -597,6 +653,80 @@ func applyStepEnd(n *StepNode, data map[string]any) {
 	}
 	if s, ok := stringField(data, "discovered_session_id"); ok && s != "" {
 		n.SessionID = s
+	}
+
+	attempt := len(n.Attempts) + 1
+	if identity, ok := data["identity"].(map[string]any); ok {
+		if v, found := intField(identity, "attempt"); found && v > 0 {
+			attempt = v
+		}
+	}
+	metrics := AttemptMetrics{Attempt: attempt, Outcome: outcome}
+	if n.DurationMs != nil {
+		v := *n.DurationMs
+		metrics.DurationMs = &v
+	}
+	if usage, ok := decodeUsageRecord(data); ok {
+		metrics.Usage = usage
+	}
+	if cost, exists := data["estimated_api_cost_usd"]; exists && cost != nil {
+		if value, ok := float64FieldValue(cost); ok {
+			metrics.CostUSD = &value
+		}
+	}
+	n.Attempts = append(n.Attempts, metrics)
+}
+
+func decodeUsageRecord(data map[string]any) (*model.UsageRecord, bool) {
+	raw, exists := data["usage"]
+	if !exists || raw == nil {
+		return nil, false
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil, false
+	}
+	var usage model.UsageRecord
+	if err := json.Unmarshal(encoded, &usage); err != nil {
+		return nil, false
+	}
+	return &usage, true
+}
+
+func decodeRunTotals(data map[string]any) (*model.RunTotals, bool) {
+	raw, exists := data["totals"]
+	if !exists || raw == nil {
+		return nil, false
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil, false
+	}
+	var totals model.RunTotals
+	if err := json.Unmarshal(encoded, &totals); err != nil {
+		return nil, false
+	}
+	if totals.Tokens == nil {
+		totals.Tokens = model.TokenCounts{}
+	}
+	return &totals, true
+}
+
+func float64FieldValue(value any) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case json.Number:
+		parsed, err := v.Float64()
+		return parsed, err == nil
+	default:
+		return 0, false
 	}
 }
 

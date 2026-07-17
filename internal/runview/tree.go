@@ -23,6 +23,7 @@ const (
 	NodeIteration
 	NodeScript
 	NodeUI
+	NodeGroup
 )
 
 // NodeStatus is the visual status of a StepNode.
@@ -95,6 +96,7 @@ type StepNode struct {
 	BreakTriggered      bool
 	ErrorMessage        string
 	Aborted             bool // aborted mid-execution; UI suppresses blink when no run is active
+	Attempts            []AttemptMetrics
 
 	// Iteration-only fields (set when the node is an iteration child of a loop).
 	IterationIndex int    // 0-based internal; UI renders as IterationIndex+1
@@ -110,6 +112,17 @@ type StepNode struct {
 	// FlattenTarget (on iteration nodes): when set, drill-in should skip this
 	// iteration and enter FlattenTarget's children (the sub-workflow body).
 	FlattenTarget *StepNode
+}
+
+// AttemptMetrics contains the metrics for one execution of a logical step.
+// Runtime display fields on StepNode remain latest-wins, while Attempts is
+// append-only so summaries can account for retries and resume sessions.
+type AttemptMetrics struct {
+	Attempt    int
+	Usage      *model.UsageRecord
+	CostUSD    *float64
+	DurationMs *int64
+	Outcome    string
 }
 
 // NodeKey returns a stable key for a node based on its structural position in
@@ -148,6 +161,10 @@ func indexStepNode(nodes []*StepNode, target *StepNode) int {
 // Tree is the root container for a run-view tree.
 type Tree struct {
 	Root *StepNode
+
+	// RunTotals is populated from the authoritative totals on the latest
+	// run_end event. It is nil while a run is active or for legacy audit logs.
+	RunTotals *model.RunTotals
 
 	// WorkflowPath is the resolved absolute path of the top-level workflow.
 	WorkflowPath string
@@ -233,6 +250,11 @@ func buildStepNode(s *model.Step, parent *StepNode) *StepNode {
 		n.StaticWorkflow = s.Workflow
 		n.StaticParams = copyParams(s.Params)
 		n.CaptureName = s.Capture
+	case s.Loop == nil && len(s.Steps) > 0:
+		n.Type = NodeGroup
+		for i := range s.Steps {
+			n.Children = append(n.Children, buildStepNode(&s.Steps[i], n))
+		}
 	case s.Prompt != "" || s.Agent != "":
 		// Agent step. Classify mode statically; audit events may correct it.
 		if s.Mode == model.ModeAutonomous {
@@ -276,14 +298,13 @@ func (n *StepNode) Drilldown() *StepNode {
 	return n
 }
 
-// IsContainer reports whether the node can be drilled into: loops,
-// sub-workflows, iterations, and the root all qualify.
+// IsContainer reports whether the node can be drilled into.
 func (n *StepNode) IsContainer() bool {
 	if n == nil {
 		return false
 	}
 	switch n.Type {
-	case NodeRoot, NodeLoop, NodeSubWorkflow, NodeIteration:
+	case NodeRoot, NodeLoop, NodeSubWorkflow, NodeIteration, NodeGroup:
 		return true
 	}
 	return false
@@ -378,6 +399,11 @@ func cloneTemplate(src, parent *StepNode) *StepNode {
 	}
 	for _, c := range src.Body {
 		dst.Body = append(dst.Body, cloneTemplate(c, dst))
+	}
+	if src.Type == NodeGroup {
+		for _, c := range src.Children {
+			dst.Children = append(dst.Children, cloneTemplate(c, dst))
+		}
 	}
 	// Note: Children on a loop template are NOT cloned (iterations are runtime).
 	// Children on a sub-workflow template are empty until lazy-load.
