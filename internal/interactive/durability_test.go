@@ -183,6 +183,20 @@ func TestAwaitTurnDurabilityAcceptsNativeHookWhenStoreCheckpointUnavailable(t *t
 	}
 }
 
+func TestAwaitTurnDurabilityTimeoutReportsUnavailableCheckpoint(t *testing.T) {
+	checkpointErr := errors.New("session ID is not discoverable")
+	result := AwaitTurnDurability(context.Background(), &DurabilityOptions{
+		Probe:         &fakeDurabilityProbe{},
+		CheckpointErr: checkpointErr,
+		CommittedTurn: make(chan struct{}),
+		Timeout:       20 * time.Millisecond,
+	})
+
+	if !errors.Is(result.Err, ErrDurabilityTimeout) || !strings.Contains(result.Err.Error(), checkpointErr.Error()) {
+		t.Fatalf("result error = %v, want timeout with checkpoint cause", result.Err)
+	}
+}
+
 func TestActiveRuntimeTimerPausesDeadline(t *testing.T) {
 	timer := NewActiveRuntimeTimer(50 * time.Millisecond)
 	defer timer.Stop()

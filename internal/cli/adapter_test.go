@@ -1462,6 +1462,32 @@ func TestCursorAdapter(t *testing.T) {
 		}
 	})
 
+	t.Run("discover interactive session ID prefers live chat metadata", func(t *testing.T) {
+		fakeHome := t.TempDir()
+		t.Setenv("HOME", fakeHome)
+
+		spawnTime := time.Now().Add(-10 * time.Second)
+		matchingID := "77777777-7777-7777-7777-777777777777"
+		workdir := t.TempDir()
+		metaDir := filepath.Join(fakeHome, ".cursor", "chats", "workspace-meta", matchingID)
+		if err := os.MkdirAll(metaDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		meta := fmt.Sprintf(`{"schemaVersion":1,"createdAtMs":%d,"cwd":%q}`, spawnTime.Add(time.Second).UnixMilli(), workdir)
+		if err := os.WriteFile(filepath.Join(metaDir, "meta.json"), []byte(meta), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			SpawnTime: spawnTime,
+			Headless:  false,
+			Workdir:   workdir,
+		})
+		if id != matchingID {
+			t.Fatalf("expected matching cursor metadata chat %q, got %q", matchingID, id)
+		}
+	})
+
 	t.Run("discover interactive session ID reads an active WAL", func(t *testing.T) {
 		fakeHome := t.TempDir()
 		t.Setenv("HOME", fakeHome)

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -122,7 +123,7 @@ func (a *CursorAdapter) WaitForCommittedTurn(ctx context.Context, sessionID stri
 			return false, err
 		}
 		for _, row := range rows {
-			if _, ok := baseline[row.ID]; !ok {
+			if _, ok := baseline[cursorRowFingerprint(row)]; !ok {
 				return true, nil
 			}
 		}
@@ -131,16 +132,33 @@ func (a *CursorAdapter) WaitForCommittedTurn(ctx context.Context, sessionID stri
 }
 
 type cursorAssistantRow struct {
-	ID string `json:"id"`
+	ID      string `json:"id"`
+	Content string `json:"content"`
 }
 
 func (a *CursorAdapter) cursorAssistantRows(path string) ([]cursorAssistantRow, error) {
-	const query = `SELECT id FROM blobs
+	// Cursor persists the assistant message containing a shell call before it
+	// launches that command. The corresponding tool-result row is therefore the
+	// first semantic native-store record that can appear after completion is
+	// acknowledged. Accept either a later assistant message or that persisted
+	// tool result; both are part of the resumable completing turn.
+	const query = `SELECT id, json_extract(CAST(data AS TEXT), '$.content') AS content FROM blobs
 WHERE json_valid(CAST(data AS TEXT))
-  AND json_extract(CAST(data AS TEXT), '$.role') = 'assistant'
-  AND EXISTS (
-    SELECT 1 FROM json_each(CAST(data AS TEXT), '$.content')
-    WHERE json_extract(value, '$.type') = 'text'
+  AND (
+    (
+      json_extract(CAST(data AS TEXT), '$.role') = 'assistant'
+      AND EXISTS (
+        SELECT 1 FROM json_each(CAST(data AS TEXT), '$.content')
+        WHERE json_extract(value, '$.type') = 'text'
+      )
+    )
+    OR (
+      json_extract(CAST(data AS TEXT), '$.role') = 'tool'
+      AND EXISTS (
+        SELECT 1 FROM json_each(CAST(data AS TEXT), '$.content')
+        WHERE json_extract(value, '$.type') = 'tool-result'
+      )
+    )
   )
 ORDER BY id`
 	var output []byte
@@ -153,6 +171,9 @@ ORDER BY id`
 	if err != nil {
 		return nil, fmt.Errorf("query Cursor chat store %s: %w", path, err)
 	}
+	if len(bytes.TrimSpace(output)) == 0 {
+		return nil, nil
+	}
 	var rows []cursorAssistantRow
 	if err := json.Unmarshal(output, &rows); err != nil {
 		return nil, fmt.Errorf("decode Cursor chat store %s: %w", path, err)
@@ -161,13 +182,18 @@ ORDER BY id`
 }
 
 func cursorRowMarker(rows []cursorAssistantRow) string {
-	ids := make([]string, 0, len(rows))
+	markers := make([]string, 0, len(rows))
 	for _, row := range rows {
 		if row.ID != "" {
-			ids = append(ids, row.ID)
+			markers = append(markers, cursorRowFingerprint(row))
 		}
 	}
-	return strings.Join(ids, "\n")
+	return strings.Join(markers, "\n")
+}
+
+func cursorRowFingerprint(row cursorAssistantRow) string {
+	digest := sha256.Sum256([]byte(row.ID + "\x00" + row.Content))
+	return fmt.Sprintf("%x", digest)
 }
 
 func (a *OpenCodeAdapter) Checkpoint(sessionID string) (Checkpoint, error) {

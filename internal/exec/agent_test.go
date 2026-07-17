@@ -1,6 +1,7 @@
 package exec
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -838,6 +839,24 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("interactive surfaces committed-turn durability failure", func(t *testing.T) {
+		durabilityErr := errors.New("native session store did not commit the turn")
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(_ []string, _ pty.Options) (pty.Result, error) {
+			return pty.Result{DurabilityFailed: true, DurabilityError: durabilityErr}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, makeCtx(), &mockRunner{}, &mockLogger{})
+		if outcome != OutcomeFailed {
+			t.Fatalf("outcome = %q, want failed", outcome)
+		}
+		if !errors.Is(err, durabilityErr) {
+			t.Fatalf("error = %v, want durability error", err)
+		}
+	})
+
 	t.Run("interactive claude routes prompt to system prompt", func(t *testing.T) {
 		var ptyCalls [][]string
 		oldFn := interactiveRunnerFn
@@ -1498,12 +1517,7 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatalf("expected cursor agent command, got %v", args)
 		}
 		prompt := args[len(args)-1]
-		if !strings.Contains(prompt, "automatically") || !strings.Contains(prompt, "absolute path") {
-			t.Fatalf("expected Cursor completion instructions to describe the automatic control hook, got %q", prompt)
-		}
-		if strings.Contains(prompt, "You MUST run") {
-			t.Fatalf("expected Cursor instructions not to request a permission-gated shell invocation, got %q", prompt)
-		}
+		assertContinueMarkerInstruction(t, prompt, "")
 		for _, disallowed := range []string{"-p", "--output-format", "stream-json", "--trust", "--force"} {
 			if containsArg(args, disallowed) {
 				t.Fatalf("did not expect %s in cursor interactive args, got %v", disallowed, args)
@@ -1566,7 +1580,7 @@ func containsArg(args []string, target string) bool {
 
 func assertContinueMarkerInstruction(t *testing.T, prompt, marker string) {
 	t.Helper()
-	for _, phrase := range []string{"step complete", "absolute path", "control channel", "You MUST run", "Do not merely"} {
+	for _, phrase := range []string{"step complete", "absolute path", "control channel", "You MUST run", "Do not merely", "separate shell words"} {
 		if !strings.Contains(prompt, phrase) {
 			t.Fatalf("expected control-channel completion guidance %q in prompt, got %q", phrase, prompt)
 		}

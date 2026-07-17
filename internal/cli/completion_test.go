@@ -124,22 +124,25 @@ func TestAdaptersEmitCompletionIntegrations(t *testing.T) {
 		if strings.Contains(strings.Join(args, " "), "Shell(") {
 			t.Fatalf("Cursor command-base allowlist would cover extra arguments: %v", args)
 		}
-		if len(args) < 6 || args[0] != "env" || args[1] != "AGENT_RUNNER_COMPLETION_CLIENT=/Applications/Agent Runner/bin/agent-runner" || args[2] != "agent" || args[3] != "--plugin-dir" {
+		if len(args) < 4 || args[0] != "agent" || args[1] != "--plugin-dir" {
 			t.Fatalf("Cursor args do not load the isolated completion plugin: %v", args)
 		}
-		hooks, err := os.ReadFile(filepath.Join(args[4], "hooks", "hooks.json"))
+		manifest, err := os.ReadFile(filepath.Join(args[2], ".cursor-plugin", "plugin.json"))
 		if err != nil {
-			t.Fatalf("read Cursor completion hooks: %v", err)
+			t.Fatalf("read Cursor completion manifest: %v", err)
 		}
-		if !strings.Contains(string(hooks), `"stop"`) || !strings.Contains(string(hooks), `step complete`) || !strings.Contains(string(hooks), `internal turn-committed`) {
-			t.Fatalf("Cursor completion hook is incomplete: %s", hooks)
+		if !strings.Contains(string(manifest), `"name": "agent-runner-completion"`) {
+			t.Fatalf("Cursor-compatible plugin manifest is incomplete: %s", manifest)
 		}
-		next, err := os.ReadFile(filepath.Join(args[4], "commands", "next.md"))
+		if _, err := os.Stat(filepath.Join(args[2], "hooks", "hooks.json")); !os.IsNotExist(err) {
+			t.Fatalf("Cursor plugin must rely on native-store durability, hook stat error = %v", err)
+		}
+		next, err := os.ReadFile(filepath.Join(args[2], "commands", "next.md"))
 		if err != nil {
 			t.Fatalf("read Cursor /next command: %v", err)
 		}
-		if !strings.Contains(string(next), "completion is automatic") {
-			t.Fatalf("Cursor /next command does not route through Stop hook: %s", next)
+		if !strings.Contains(string(next), `'/Applications/Agent Runner/bin/agent-runner' step complete`) {
+			t.Fatalf("Cursor /next command does not invoke the completion client: %s", next)
 		}
 	})
 
@@ -149,7 +152,10 @@ func TestAdaptersEmitCompletionIntegrations(t *testing.T) {
 			Context:           ContextInteractive,
 			CompletionCommand: command,
 		})
-		if len(args) < 4 || args[0] != "env" || args[3] != "opencode" {
+		if !containsString(args, "OPENCODE_DISABLE_AUTOUPDATE=1") {
+			t.Fatalf("OpenCode interactive completion must suppress update prompts: %v", args)
+		}
+		if len(args) < 5 || args[0] != "env" || args[4] != "opencode" {
 			t.Fatalf("OpenCode args do not use an ephemeral environment override: %v", args)
 		}
 		const prefix = "OPENCODE_PERMISSION="

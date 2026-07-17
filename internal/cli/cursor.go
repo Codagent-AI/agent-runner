@@ -3,6 +3,8 @@ package cli
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -60,52 +62,40 @@ func (a *CursorAdapter) BuildArgs(input *BuildArgsInput) []string {
 
 	args = append(args, input.Prompt)
 	if !context.IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid() {
-		pluginDir, err := prepareCursorCompletionPlugin()
+		pluginDir, err := prepareCursorCompletionPlugin(*input.CompletionCommand)
 		if err != nil {
 			log.Printf("cursor: completion plugin unavailable: %v", err)
 			return args
 		}
 		args = append([]string{"agent", "--plugin-dir", pluginDir}, args[1:]...)
-		args = append([]string{"env", "AGENT_RUNNER_COMPLETION_CLIENT=" + input.CompletionCommand.Executable}, args...)
 	}
 	return args
 }
 
-func prepareCursorCompletionPlugin() (string, error) {
+func prepareCursorCompletionPlugin(command CompletionCommand) (string, error) {
+	if !command.Valid() {
+		return "", fmt.Errorf("invalid completion command")
+	}
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {
 		return "", fmt.Errorf("locate user cache: %w", err)
 	}
-	pluginDir := filepath.Join(cacheDir, "agent-runner", "completion-plugins", "cursor-v1")
+	digest := sha256.Sum256([]byte("cursor-v2\x00" + command.shellCommand()))
+	pluginDir := filepath.Join(cacheDir, "agent-runner", "completion-plugins", "cursor-"+hex.EncodeToString(digest[:6]))
 	files := map[string]string{
 		filepath.Join(".cursor-plugin", "plugin.json"): `{
   "name": "agent-runner-completion",
-  "version": "1.0.0",
-  "description": "Agent Runner control-channel completion"
-}
-`,
-		filepath.Join("hooks", "hooks.json"): `{
-  "version": 1,
-  "hooks": {
-    "stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$AGENT_RUNNER_COMPLETION_CLIENT\" step complete && \"$AGENT_RUNNER_COMPLETION_CLIENT\" internal turn-committed"
-          }
-        ]
-      }
-    ]
-  }
+  "version": "1.0.2",
+	"description": "Agent Runner control-channel completion"
 }
 `,
 		filepath.Join("commands", "next.md"): `---
 description: Complete the current Agent Runner workflow step
 ---
 
-Finish the current response now. Step completion is automatic through the
-Agent Runner Stop hook loaded for this process.
+Run this exact shell command now, then finish the current response:
+
+` + "`" + command.shellCommand() + "`" + `
 `,
 	}
 	for relativePath, content := range files {
@@ -287,6 +277,9 @@ func discoverCursorInteractiveSession(spawnTime time.Time, workdir string) strin
 	}
 	defer func() { _ = rootDir.Close() }()
 	rootFS := rootDir.FS()
+	if sessionID := discoverCursorMetadataSession(rootFS, spawnTime, workdir); sessionID != "" {
+		return sessionID
+	}
 
 	workspaceNeedle := []byte("Workspace Path: " + workdir)
 	var matches []string
@@ -325,6 +318,48 @@ func discoverCursorInteractiveSession(spawnTime time.Time, workdir string) strin
 		return ""
 	}
 	if len(matches) != 1 {
+		return ""
+	}
+	return matches[0]
+}
+
+func discoverCursorMetadataSession(rootFS fs.FS, spawnTime time.Time, workdir string) string {
+	type cursorChatMetadata struct {
+		CreatedAtMS int64  `json:"createdAtMs"`
+		CWD         string `json:"cwd"`
+	}
+	var matches []string
+	err := fs.WalkDir(rootFS, ".", func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil || entry.IsDir() || entry.Name() != "meta.json" {
+			return nil
+		}
+		data, readErr := fs.ReadFile(rootFS, path)
+		if readErr != nil || len(data) > 1024*1024 {
+			return nil
+		}
+		var metadata cursorChatMetadata
+		if json.Unmarshal(data, &metadata) != nil || metadata.CreatedAtMS == 0 {
+			return nil
+		}
+		metadataWorkdir, absErr := filepath.Abs(metadata.CWD)
+		if absErr != nil || filepath.Clean(metadataWorkdir) != workdir {
+			return nil
+		}
+		// Cursor records millisecond timestamps while the runner keeps
+		// nanoseconds. Allow one second for truncation and filesystem clock skew.
+		if time.UnixMilli(metadata.CreatedAtMS).Before(spawnTime.Add(-time.Second)) {
+			return nil
+		}
+		chatID := filepath.Base(filepath.Dir(path))
+		if chatID != "" {
+			matches = append(matches, chatID)
+			if len(matches) > 1 {
+				return fs.SkipAll
+			}
+		}
+		return nil
+	})
+	if err != nil || len(matches) != 1 {
 		return ""
 	}
 	return matches[0]

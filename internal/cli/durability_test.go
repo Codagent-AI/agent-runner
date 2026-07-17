@@ -159,7 +159,9 @@ func TestCursorDurabilityProbeQueriesSemanticAssistantRows(t *testing.T) {
 		readFixture(t, "testdata/durability/cursor/committed.json"),
 	}
 	var calls atomic.Int32
-	probe := &CursorAdapter{runStoreQuery: func(string) ([]byte, error) {
+	var query string
+	probe := &CursorAdapter{runStoreQuery: func(gotQuery string) ([]byte, error) {
+		query = gotQuery
 		index := int(calls.Add(1)) - 1
 		if index >= len(responses) {
 			index = len(responses) - 1
@@ -173,6 +175,54 @@ func TestCursorDurabilityProbeQueriesSemanticAssistantRows(t *testing.T) {
 	waitForProbe(t, probe, "cursor-session", checkpoint)
 	if got := calls.Load(); got != 3 {
 		t.Fatalf("Cursor store query calls = %d, want baseline, intermediate, committed", got)
+	}
+	if !strings.Contains(query, "'tool-result'") {
+		t.Fatalf("Cursor durability query does not inspect persisted shell results: %s", query)
+	}
+}
+
+func TestCursorDurabilityProbeAcceptsCommittedUpdateToExistingAssistantRow(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".cursor", "chats", "workspace", "cursor-session", "store.db")
+	copyFixture(t, "testdata/durability/cursor/store.db", path)
+	responses := [][]byte{
+		[]byte(`[{"id":"assistant-current","content":"before completion"}]`),
+		[]byte(`[{"id":"assistant-current","content":"committed after completion"}]`),
+	}
+	var calls atomic.Int32
+	probe := &CursorAdapter{runStoreQuery: func(string) ([]byte, error) {
+		index := int(calls.Add(1)) - 1
+		if index >= len(responses) {
+			index = len(responses) - 1
+		}
+		return responses[index], nil
+	}}
+	checkpoint, err := probe.Checkpoint("cursor-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForProbe(t, probe, "cursor-session", checkpoint)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("Cursor store query calls = %d, want baseline and committed update", got)
+	}
+}
+
+func TestCursorDurabilityCheckpointAcceptsEmptySQLiteJSONOutput(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".cursor", "chats", "workspace", "cursor-session", "store.db")
+	copyFixture(t, "testdata/durability/cursor/store.db", path)
+	probe := &CursorAdapter{runStoreQuery: func(string) ([]byte, error) {
+		return nil, nil
+	}}
+
+	checkpoint, err := probe.Checkpoint("cursor-session")
+	if err != nil {
+		t.Fatalf("Checkpoint returned error for empty sqlite3 JSON output: %v", err)
+	}
+	if checkpoint.Artifact != path || checkpoint.Marker != "" {
+		t.Fatalf("checkpoint = %#v, want empty marker for %s", checkpoint, path)
 	}
 }
 

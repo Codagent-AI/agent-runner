@@ -142,12 +142,23 @@ steps:
     prompt: "The recall phrase is %s. Remember it for the next turn. Reply with one line made by concatenating AR_, %s, _FRESH_, and the recall phrase."
 `, workflowName, agent, agent, agent, recallPhrase, upperAgent)
 	phases := []realAgentPTYPhase{{ready: freshReady}}
+	if agent == "cursor" {
+		phases[0].afterReady = "Run the exact Agent Runner completion command from the step instructions now."
+	}
 	stepIDs := []string{agent + "-interactive-fresh"}
 	workflow += fmt.Sprintf(`  - id: %s-interactive-resume
     session: resume
     prompt: "Recall the phrase from the prior turn. Reply with one line made by concatenating AR_, %s, _RESUME_, and that phrase."
 `, agent, upperAgent)
-	phases = append(phases, realAgentPTYPhase{ready: resumeReady})
+	resumeSubmission := ""
+	if agent == "opencode" {
+		resumeSubmission = fmt.Sprintf("Recall the phrase from the prior turn. Reply with one line made by concatenating AR_, %s, _RESUME_, and that phrase.", upperAgent)
+	}
+	resumePhase := realAgentPTYPhase{ready: resumeReady, submit: resumeSubmission}
+	if agent == "cursor" || agent == "opencode" {
+		resumePhase.afterReady = "Run the exact Agent Runner completion command from the step instructions now."
+	}
+	phases = append(phases, resumePhase)
 	stepIDs = append(stepIDs, agent+"-interactive-resume")
 	writeRealAgentTestFile(t, workflowPath, []byte(workflow))
 	cleanupNewRealAgentRuns(t, workdir, workflowName)
@@ -276,7 +287,9 @@ type realAgentPTYResult struct {
 }
 
 type realAgentPTYPhase struct {
-	ready string
+	ready      string
+	submit     string
+	afterReady string
 }
 
 func runRealAgentWorkflowInPTY(cmd *exec.Cmd, agent string, phases []realAgentPTYPhase, timeout time.Duration) (realAgentPTYResult, error) {
@@ -323,17 +336,46 @@ func runRealAgentWorkflowInPTY(cmd *exec.Cmd, agent string, phases []realAgentPT
 
 	var raw strings.Builder
 	ready := make([]bool, len(phases))
+	readyAt := make([]time.Time, len(phases))
+	submitted := make([]bool, len(phases))
+	afterReadySubmitted := make([]bool, len(phases))
 	trustHandled := make([]bool, len(phases))
 	phaseBoundary := 0
 	approvalBoundary := 0
-	copilotApprovals := 0
+	commandApprovals := 0
 	readDone := false
 	waitDone := false
 	var waitErr error
 	var lastOpenCodeProbe time.Time
 	advancePhase := func(i, boundary int) {
 		ready[i] = true
+		readyAt[i] = time.Now()
 		phaseBoundary = boundary
+	}
+	handleInteractivePrompts := func(plain string) {
+		currentPhase := 0
+		for currentPhase < len(ready) && ready[currentPhase] {
+			currentPhase++
+		}
+		if currentPhase < len(phases) && !trustHandled[currentPhase] &&
+			strings.Contains(plain[phaseBoundary:], "Confirm folder trust") {
+			trustHandled[currentPhase] = true
+			_, _ = ptmx.Write([]byte("\r"))
+		}
+		if commandApprovals >= len(phases) {
+			return
+		}
+		approvalText := plain[approvalBoundary:]
+		switch {
+		case agent == "copilot" && strings.Contains(approvalText, "Do you want to run this command?"):
+			commandApprovals++
+			approvalBoundary = len(plain)
+			_, _ = ptmx.Write([]byte("\r"))
+		case agent == "cursor" && strings.Contains(approvalText, "Run this command?"):
+			commandApprovals++
+			approvalBoundary = len(plain)
+			_, _ = ptmx.Write([]byte("y"))
+		}
 	}
 	for !readDone || !waitDone {
 		select {
@@ -344,25 +386,7 @@ func runRealAgentWorkflowInPTY(cmd *exec.Cmd, agent string, phases []realAgentPT
 					_, _ = transcript.Write(result.data)
 				}
 				plain := ansi.Strip(raw.String())
-				currentPhase := 0
-				for currentPhase < len(ready) && ready[currentPhase] {
-					currentPhase++
-				}
-				if currentPhase < len(phases) && !trustHandled[currentPhase] &&
-					strings.Contains(plain[phaseBoundary:], "Confirm folder trust") {
-					trustHandled[currentPhase] = true
-					// Accept Copilot's one-session default without persisting trust
-					// for the user's repository.
-					_, _ = ptmx.Write([]byte("\r"))
-				}
-				if agent == "copilot" && copilotApprovals < len(phases) &&
-					strings.Contains(plain[approvalBoundary:], "Do you want to run this command?") {
-					copilotApprovals++
-					approvalBoundary = len(plain)
-					// The adapter's exact command permission is the only approval
-					// presented; accept it once for this invocation.
-					_, _ = ptmx.Write([]byte("\r"))
-				}
+				handleInteractivePrompts(plain)
 				for i, expected := range phases {
 					if !ready[i] && terminalTextContains(plain, expected.ready) {
 						advancePhase(i, len(plain))
@@ -375,6 +399,20 @@ func runRealAgentWorkflowInPTY(cmd *exec.Cmd, agent string, phases []realAgentPT
 		case waitErr = <-waitCh:
 			waitDone = true
 		case <-probeTicker.C:
+			plain := ansi.Strip(raw.String())
+			handleInteractivePrompts(plain)
+			for i := 1; i < len(phases); i++ {
+				if phases[i].submit != "" && ready[i-1] && !ready[i] && !submitted[i] && time.Since(readyAt[i-1]) >= 10*time.Second {
+					submitted[i] = true
+					_, _ = ptmx.Write([]byte(phases[i].submit + "\r"))
+				}
+			}
+			for i := range phases {
+				if phases[i].afterReady != "" && ready[i] && !afterReadySubmitted[i] && time.Since(readyAt[i]) >= 2*time.Second {
+					afterReadySubmitted[i] = true
+					_, _ = ptmx.Write([]byte(phases[i].afterReady + "\r"))
+				}
+			}
 			if agent == "copilot" || agent == "opencode" {
 				if agent == "opencode" && time.Since(lastOpenCodeProbe) < time.Second {
 					continue
@@ -389,7 +427,7 @@ func runRealAgentWorkflowInPTY(cmd *exec.Cmd, agent string, phases []realAgentPT
 						durableResponseObserved = openCodeSessionContains(expected.ready)
 					}
 					if !ready[i] && durableResponseObserved {
-						advancePhase(i, len(ansi.Strip(raw.String())))
+						advancePhase(i, len(plain))
 						break
 					}
 				}

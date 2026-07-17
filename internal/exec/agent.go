@@ -147,7 +147,6 @@ func ExecuteAgentStep(
 
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 	startTime := time.Now()
-
 	profile, profileErr := resolveStepProfile(step, ctx)
 	if profileErr != nil {
 		emitAgentFailure(ctx, prefix, startTime, "", step, profileErr.Error())
@@ -170,13 +169,9 @@ func ExecuteAgentStep(
 
 	invocationContext := resolveInvocationContext(mode, ctx, cliName, step.Capture != "", log)
 
-	if !invocationContext.IsHeadless() {
-		if r, ok := adapter.(cli.InteractiveRejector); ok {
-			if modeErr := r.InteractiveModeError(); modeErr != nil {
-				emitAgentFailure(ctx, prefix, startTime, string(mode), step, modeErr.Error())
-				return OutcomeFailed, nil
-			}
-		}
+	if modeErr := interactiveModeError(adapter, invocationContext); modeErr != nil {
+		emitAgentFailure(ctx, prefix, startTime, string(mode), step, modeErr.Error())
+		return OutcomeFailed, nil
 	}
 
 	completionExecutable := completionExecutableForContext(invocationContext)
@@ -258,6 +253,17 @@ func ExecuteAgentStep(
 	emitAgentEnd(ctx, prefix, startTime, discoveredID, outcome, filteredStdout, result.Stderr)
 
 	return outcome, nil
+}
+
+func interactiveModeError(adapter cli.Adapter, invocationContext cli.InvocationContext) error {
+	if invocationContext.IsHeadless() {
+		return nil
+	}
+	rejector, ok := adapter.(cli.InteractiveRejector)
+	if !ok {
+		return nil
+	}
+	return rejector.InteractiveModeError()
 }
 
 func resolveInvocationContext(mode model.StepMode, ctx *model.ExecutionContext, cliName string, hasCapture bool, log Logger) cli.InvocationContext {
@@ -434,10 +440,10 @@ func buildAdapterInput(
 			fullPrompt = autonomyPreamble + fullPrompt
 		}
 		if invocationContext == cli.ContextAutonomousInteractive {
-			fullPrompt += completionInstruction(completionExecutable, cliName)
+			fullPrompt += completionInstruction(completionExecutable)
 		}
 	} else {
-		fullPrompt = buildStepPrefix(step.ID, ctx, ctx.WorkflowResumed, isResume) + fullPrompt + completionInstruction(completionExecutable, cliName)
+		fullPrompt = buildStepPrefix(step.ID, ctx, ctx.WorkflowResumed, isResume) + fullPrompt + completionInstruction(completionExecutable)
 	}
 
 	input := cli.BuildArgsInput{
@@ -472,7 +478,7 @@ func buildAdapterInput(
 			input.Prompt = fmt.Sprintf("Let's start the %s step", step.ID)
 		}
 		if continueMarkerPromptNeedsRefresh(ctx.WorkflowResumed, isResume, invocationContext) {
-			input.Prompt += completionInstruction(completionExecutable, cliName)
+			input.Prompt += completionInstruction(completionExecutable)
 		}
 	case enrichment != "" || profile.SystemPrompt != "":
 		input.Prompt = "<system>\n" + fullPrompt + "\n</system>"
@@ -506,11 +512,8 @@ func completionExecutableForContext(invocationContext cli.InvocationContext) str
 	return executable
 }
 
-func completionInstruction(executable, cliName string) string {
-	if cliName == "cursor" {
-		return "\n\nWhen you or the user determine this step is complete, finish the current response. The Cursor Stop hook loaded for this process automatically signals completion through the Agent Runner control channel using the absolute path completion client `" + executable + "`. Do not invoke that client yourself."
-	}
-	return "\n\nWhen you or the user determine this step is complete, signal it through the Agent Runner control channel. You MUST run the absolute path command `" + executable + " step complete` with your shell tool. Run that exact command with no extra arguments as the final action before finishing the current response. Do not merely say that the step is complete."
+func completionInstruction(executable string) string {
+	return "\n\nWhen you or the user determine this step is complete, signal it through the Agent Runner control channel. You MUST run the absolute path command `" + executable + " step complete` with your shell tool. The executable path and `step complete` are separate shell words; do not quote the entire command as one word. Run that exact command with no extra arguments as the final action before finishing the current response. Do not merely say that the step is complete."
 }
 
 func runDirectInteractive(args []string, options pty.Options) (pty.Result, error) {
@@ -543,7 +546,7 @@ func runDirectInteractive(args []string, options pty.Options) (pty.Result, error
 	result, runErr := direct.Run(context.Background())
 	return pty.Result{
 		ExitCode: result.ExitCode, ContinueTriggered: result.Completed,
-		DurabilityFailed: result.DurabilityFailed,
+		DurabilityFailed: result.DurabilityFailed, DurabilityError: result.DurabilityError,
 	}, runErr
 }
 
@@ -644,6 +647,9 @@ func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, i
 	}
 	result := ProcessResult{ExitCode: ptyResult.ExitCode}
 	if ptyResult.DurabilityFailed {
+		if err == nil {
+			err = ptyResult.DurabilityError
+		}
 		return OutcomeFailed, result, err
 	}
 

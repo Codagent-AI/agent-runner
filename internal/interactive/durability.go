@@ -107,8 +107,12 @@ func AwaitTurnDurability(ctx context.Context, options *DurabilityOptions) Durabi
 			childExited = nil
 		case <-timer.Done():
 			cancelWait()
-			emitDurabilityFailure(options, timeout, checkpoint.Artifact, ErrDurabilityTimeout)
-			return DurabilityResult{Outcome: CompletionFailed, TerminateChild: true, Err: ErrDurabilityTimeout}
+			timeoutErr := fmt.Errorf("%w", ErrDurabilityTimeout)
+			if options.CheckpointErr != nil {
+				timeoutErr = fmt.Errorf("%w: checkpoint unavailable: %v", ErrDurabilityTimeout, options.CheckpointErr)
+			}
+			emitDurabilityFailure(options, timeout, checkpoint.Artifact, timeoutErr)
+			return DurabilityResult{Outcome: CompletionFailed, TerminateChild: true, Err: timeoutErr}
 		case <-ctx.Done():
 			return DurabilityResult{Outcome: CompletionFailed, TerminateChild: true, Err: ctx.Err()}
 		}

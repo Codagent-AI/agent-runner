@@ -73,7 +73,12 @@ func (a *OpenCodeAdapter) BuildArgs(input *BuildArgsInput) []string {
 			},
 		},
 	})
-	return append([]string{"env", "OPENCODE_PERMISSION=" + string(permission), "OPENCODE_CONFIG_CONTENT=" + string(config)}, args...)
+	return append([]string{
+		"env",
+		"OPENCODE_PERMISSION=" + string(permission),
+		"OPENCODE_CONFIG_CONTENT=" + string(config),
+		"OPENCODE_DISABLE_AUTOUPDATE=1",
+	}, args...)
 }
 
 func (a *OpenCodeAdapter) SupportsSystemPrompt() bool {

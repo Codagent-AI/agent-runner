@@ -70,16 +70,24 @@ func TestDirectRunnerResolvesFreshSessionBeforeDurabilityCheckpoint(t *testing.T
 	defer server.Close()
 	t.Setenv("AGENT_RUNNER_DIRECT_HELPER", "2")
 	probe := &sessionRecordingDurabilityProbe{
-		checkpointSession: make(chan string, 1),
-		waitSession:       make(chan string, 1),
+		checkpointSession:  make(chan string, 1),
+		waitSession:        make(chan string, 1),
+		checkpointFailures: 2,
 	}
+	resolveAttempts := 0
 	runner := NewDirectRunner(&DirectOptions{
-		Args:              []string{os.Args[0], "-test.run=^TestDirectRunnerHelperProcess$"},
-		StepID:            "implement",
-		CLI:               "fake",
-		Control:           server,
-		Probe:             probe,
-		ResolveSessionID:  func() string { return "discovered-session" },
+		Args:    []string{os.Args[0], "-test.run=^TestDirectRunnerHelperProcess$"},
+		StepID:  "implement",
+		CLI:     "fake",
+		Control: server,
+		Probe:   probe,
+		ResolveSessionID: func() string {
+			resolveAttempts++
+			if resolveAttempts < 3 {
+				return ""
+			}
+			return "discovered-session"
+		},
 		Foreground:        false,
 		TerminationGrace:  250 * time.Millisecond,
 		DurabilityTimeout: time.Second,
@@ -97,6 +105,12 @@ func TestDirectRunnerResolvesFreshSessionBeforeDurabilityCheckpoint(t *testing.T
 	}
 	if got := <-probe.waitSession; got != "discovered-session" {
 		t.Fatalf("wait session = %q, want discovered-session", got)
+	}
+	if resolveAttempts != 3 {
+		t.Fatalf("session resolution attempts = %d, want 3", resolveAttempts)
+	}
+	if probe.checkpointAttempts != 3 {
+		t.Fatalf("checkpoint attempts = %d, want 3", probe.checkpointAttempts)
 	}
 }
 
@@ -128,11 +142,17 @@ func (immediateDurabilityProbe) WaitForCommittedTurn(ctx context.Context, _ stri
 }
 
 type sessionRecordingDurabilityProbe struct {
-	checkpointSession chan string
-	waitSession       chan string
+	checkpointSession  chan string
+	waitSession        chan string
+	checkpointFailures int
+	checkpointAttempts int
 }
 
 func (p *sessionRecordingDurabilityProbe) Checkpoint(sessionID string) (cli.Checkpoint, error) {
+	p.checkpointAttempts++
+	if p.checkpointAttempts <= p.checkpointFailures {
+		return cli.Checkpoint{}, errors.New("native store temporarily unavailable")
+	}
 	p.checkpointSession <- sessionID
 	return cli.Checkpoint{Artifact: "fixture"}, nil
 }

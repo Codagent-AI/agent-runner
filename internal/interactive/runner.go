@@ -18,24 +18,24 @@ import (
 )
 
 type DirectOptions struct {
-	Args       []string
-	Env        []string
-	Workdir    string
-	StepID     string
-	SessionID  string
-	CLI        string
-	Control    *ControlServer
-	Probe      cli.TurnDurabilityProbe
+	Args      []string
+	Env       []string
+	Workdir   string
+	StepID    string
+	SessionID string
+	CLI       string
+	Control   *ControlServer
+	Probe     cli.TurnDurabilityProbe
 	// ResolveSessionID discovers a CLI-assigned fresh session after spawn and
 	// before the completion checkpoint is captured.
 	ResolveSessionID func() string
-	Before     func() error
-	After      func() error
-	Stdin      io.Reader
-	Stdout     io.Writer
-	Stderr     io.Writer
-	TTY        *os.File
-	Foreground bool
+	Before           func() error
+	After            func() error
+	Stdin            io.Reader
+	Stdout           io.Writer
+	Stderr           io.Writer
+	TTY              *os.File
+	Foreground       bool
 
 	DurabilityTimeout  time.Duration
 	TerminationGrace   time.Duration
@@ -55,6 +55,11 @@ type DirectResult struct {
 type DirectRunner struct{ options *DirectOptions }
 
 func NewDirectRunner(options *DirectOptions) *DirectRunner { return &DirectRunner{options: options} }
+
+const (
+	freshSessionResolveTimeout  = 2 * time.Second
+	freshSessionResolveInterval = 25 * time.Millisecond
+)
 
 func (r *DirectRunner) Run(ctx context.Context) (result DirectResult, err error) {
 	options := r.options
@@ -85,9 +90,9 @@ func (r *DirectRunner) Run(ctx context.Context) (result DirectResult, err error)
 
 	attempt := options.Control.ActivateWithCheckpoint(options.StepID, func() (cli.Checkpoint, error) {
 		if options.SessionID == "" && options.ResolveSessionID != nil {
-			options.SessionID = options.ResolveSessionID()
+			options.SessionID = resolveFreshSessionID(ctx, options.ResolveSessionID)
 		}
-		return options.Probe.Checkpoint(options.SessionID)
+		return captureDurabilityCheckpoint(ctx, options.Probe, options.SessionID)
 	})
 	defer options.Control.Deactivate()
 
@@ -119,6 +124,47 @@ func (r *DirectRunner) Run(ctx context.Context) (result DirectResult, err error)
 	supervisor := newSupervisor(cmd, tty, runnerModes, options.Logger, options.Prefix)
 	supervisor.Start()
 	return awaitDirectResult(ctx, options, &attempt, supervisor)
+}
+
+func captureDurabilityCheckpoint(ctx context.Context, probe cli.TurnDurabilityProbe, sessionID string) (cli.Checkpoint, error) {
+	deadline := time.NewTimer(freshSessionResolveTimeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(freshSessionResolveInterval)
+	defer ticker.Stop()
+	var lastErr error
+	for {
+		checkpoint, err := probe.Checkpoint(sessionID)
+		if err == nil {
+			return checkpoint, nil
+		}
+		lastErr = err
+		select {
+		case <-ctx.Done():
+			return cli.Checkpoint{}, ctx.Err()
+		case <-deadline.C:
+			return cli.Checkpoint{}, lastErr
+		case <-ticker.C:
+		}
+	}
+}
+
+func resolveFreshSessionID(ctx context.Context, resolve func() string) string {
+	deadline := time.NewTimer(freshSessionResolveTimeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(freshSessionResolveInterval)
+	defer ticker.Stop()
+	for {
+		if sessionID := resolve(); sessionID != "" {
+			return sessionID
+		}
+		select {
+		case <-ctx.Done():
+			return ""
+		case <-deadline.C:
+			return ""
+		case <-ticker.C:
+		}
+	}
 }
 
 func startDirectChild(options *DirectOptions, attempt *Attempt) (*exec.Cmd, *os.File, *unix.Termios, error) {
