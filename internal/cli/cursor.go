@@ -112,41 +112,7 @@ func (a *CursorAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, err
 }
 
 func prepareCursorCompletionPlugin(command CompletionCommand) (string, error) {
-	if !command.Valid() {
-		return "", fmt.Errorf("invalid completion command")
-	}
-	cacheDir, err := os.UserCacheDir()
-	if err != nil {
-		return "", fmt.Errorf("locate user cache: %w", err)
-	}
-	digest := sha256.Sum256([]byte("cursor-v2\x00" + command.ShellCommand()))
-	pluginDir := filepath.Join(cacheDir, "agent-runner", "completion-plugins", "cursor-"+hex.EncodeToString(digest[:6]))
-	files := map[string]string{
-		filepath.Join(".cursor-plugin", "plugin.json"): `{
-  "name": "agent-runner-completion",
-  "version": "1.0.2",
-	"description": "Agent Runner control-channel completion"
-}
-`,
-		filepath.Join("commands", "next.md"): `---
-description: Complete the current Agent Runner workflow step
----
-
-Run this exact shell command now, then finish the current response:
-
-` + "`" + command.ShellCommand() + "`" + `
-`,
-	}
-	for relativePath, content := range files {
-		path := filepath.Join(pluginDir, relativePath)
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			return "", fmt.Errorf("create Cursor completion plugin: %w", err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			return "", fmt.Errorf("write Cursor completion plugin: %w", err)
-		}
-	}
-	return pluginDir, nil
+	return prepareNextCommandPlugin(command)
 }
 
 // SpawnEnv implements SpawnEnvContributor: interactive-backend invocations

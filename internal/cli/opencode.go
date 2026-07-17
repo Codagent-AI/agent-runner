@@ -74,7 +74,7 @@ func (a *OpenCodeAdapter) BuildArgs(input *BuildArgsInput) []string {
 	})
 	config, _ := json.Marshal(map[string]any{
 		"command": map[string]any{
-			"next": map[string]string{
+			"agent-runner:next": map[string]string{
 				"description": "Complete the current Agent Runner workflow step",
 				"template":    "!`" + command + "`",
 			},

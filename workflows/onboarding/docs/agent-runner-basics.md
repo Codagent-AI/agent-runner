@@ -15,14 +15,14 @@ Captured values can be interpolated later with `{{name}}`. Built-in onboarding w
 
 ## Interactive Continuation
 
-Interactive agent steps run in a live terminal session. The workflow waits there until one of these continuation mechanisms fires:
+Interactive agent steps run in a live terminal session. The workflow waits there until the current step sends an authenticated completion event:
 
 - The user asks the agent to continue, and the agent completes the step.
-- The user types `/next` and presses Enter.
-- The user presses Ctrl-].
+- The user types `/agent-runner:next` in Claude, Copilot, or Cursor.
+- The user invokes `$agent-runner-next` in Codex.
 
-When an interactive step starts, Agent Runner also appends a private continuation-marker instruction to the agent prompt. If the agent emits that marker exactly, Agent Runner treats the step as complete, closes the session, and moves to the next workflow step. Workflow prompts often describe this as "complete the step" or "signal continuation."
+When an interactive step starts, Agent Runner appends an absolute-path completion command to the agent prompt. The command sends a credentialed event through a private local control socket. Agent Runner acknowledges it, waits until the CLI has durably saved the completing turn, then closes the session and moves to the next workflow step. Workflow prompts often describe this as "complete the step" or "signal continuation."
 
-If the agent exits without a continuation trigger, Agent Runner treats the step as aborted so the run can be resumed later instead of silently skipping ahead.
+Agent Runner does not draw a continuation overlay or intercept a global keyboard shortcut. If the agent exits before completion is accepted, Agent Runner treats the step as aborted so the run can be resumed later instead of silently skipping ahead.
 
 The optional demo is available as `agent-runner run onboarding:onboarding`. Native first-run setup creates agent profiles before the demo, and the demo shows how workflow primitives compose into an end-to-end run.

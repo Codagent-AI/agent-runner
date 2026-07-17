@@ -59,15 +59,15 @@ Agent Runner uses modes to choose the runtime behavior for a step:
 
 ## Interactive Agent Steps
 
-Interactive agent steps run inside a PTY. The workflow advances when any continuation trigger is detected:
+Interactive agent steps hand the real terminal directly to the agent CLI. The workflow advances when the current step sends an authenticated completion event:
 
-| Trigger | Meaning |
+| Method | Meaning |
 | --- | --- |
-| `/next` | The user typed `/next` and pressed Enter. |
-| `Ctrl-]` | The user pressed the keyboard continuation shortcut. |
-| Injected continuation marker | The agent emitted the hidden marker after the user asked it to continue or the prompt told it to complete the step. |
+| Ask the agent to continue | The agent follows its injected instruction and runs the absolute-path completion client. |
+| Native completion command | Type `/agent-runner:next` in Claude, Copilot, or Cursor. In Codex, invoke `$agent-runner-next`. |
+| Injected completion instruction | The agent runs `agent-runner step complete` through the private control channel when its work is done. |
 
-If the CLI exits without one of these triggers, the step is aborted and the workflow can be resumed.
+Agent Runner does not draw a continuation overlay or intercept a global keyboard shortcut. If the CLI exits before completion is accepted, the step is aborted and the workflow can be resumed.
 
 ## Autonomous Agent Steps
 

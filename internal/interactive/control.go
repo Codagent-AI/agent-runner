@@ -415,7 +415,11 @@ func (s *ControlServer) acknowledgeCompletion(connection net.Conn, accepted *acc
 func (s *ControlServer) handleCommittedTurn(connection net.Conn, request *controlRequest, active *attemptState) {
 	if !active.completionAccepted {
 		s.mu.Unlock()
-		s.reject(connection, "turn_committed arrived before completion was accepted", request)
+		// Post-turn hooks run after every agent turn, including conversational
+		// turns before the step is complete. Acknowledge those notifications so
+		// the CLI does not surface a hook error, but do not retain them as
+		// durability evidence for a later completion request.
+		_ = writeControlResponse(connection, controlResponse{OK: true})
 		return
 	}
 	turnKey := active.ID

@@ -3,10 +3,20 @@ package cli
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 )
+
+const completionPluginName = "agent-runner"
+
+var codexSharedStateDirectories = []string{
+	"archived_sessions",
+	"memories",
+	"sessions",
+	"shell_snapshots",
+}
 
 func prepareNextCommandPlugin(command CompletionCommand) (string, error) {
 	if !command.Valid() {
@@ -18,13 +28,23 @@ func prepareNextCommandPlugin(command CompletionCommand) (string, error) {
 	}
 	digest := sha256.Sum256([]byte(command.ShellCommand()))
 	pluginDir := filepath.Join(cacheDir, "agent-runner", "completion-plugins", "next-"+hex.EncodeToString(digest[:6]))
-	manifest := `{
-  "name": "agent-runner-completion",
-  "version": "1.0.0",
-  "description": "Agent Runner control-channel completion",
-  "commands": "commands/"
+	if err := writeNextCommandPlugin(pluginDir, command, "1.0.0"); err != nil {
+		return "", err
+	}
+	return pluginDir, nil
 }
-`
+
+func writeNextCommandPlugin(pluginDir string, command CompletionCommand, version string) error {
+	manifest, err := json.MarshalIndent(map[string]any{
+		"name":        completionPluginName,
+		"version":     version,
+		"description": "Agent Runner control-channel completion",
+		"commands":    "./commands/",
+	}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode completion command plugin: %w", err)
+	}
+	manifest = append(manifest, '\n')
 	next := `---
 description: Complete the current Agent Runner workflow step
 ---
@@ -34,18 +54,149 @@ Run this exact command now, then finish the response:
 ` + "`" + command.ShellCommand() + "`" + `
 `
 	files := map[string]string{
-		"plugin.json": manifest,
-		filepath.Join(".claude-plugin", "plugin.json"): manifest,
+		"plugin.json": string(manifest),
+		filepath.Join(".claude-plugin", "plugin.json"): string(manifest),
+		filepath.Join(".cursor-plugin", "plugin.json"): string(manifest),
+		filepath.Join(".codex-plugin", "plugin.json"):  string(manifest),
 		filepath.Join("commands", "next.md"):           next,
 	}
 	for relativePath, content := range files {
 		path := filepath.Join(pluginDir, relativePath)
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			return "", fmt.Errorf("create completion command plugin: %w", err)
+			return fmt.Errorf("create completion command plugin: %w", err)
 		}
 		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			return "", fmt.Errorf("write completion command plugin: %w", err)
+			return fmt.Errorf("write completion command plugin: %w", err)
 		}
 	}
-	return pluginDir, nil
+	return nil
+}
+
+func prepareCodexCompletionHome(command CompletionCommand, runID string) (string, error) {
+	if !command.Valid() {
+		return "", fmt.Errorf("invalid completion command")
+	}
+	if runID == "" {
+		return "", fmt.Errorf("missing run identity")
+	}
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("locate user cache: %w", err)
+	}
+	sourceHome := os.Getenv("CODEX_HOME")
+	if sourceHome == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("locate Codex home: %w", err)
+		}
+		sourceHome = filepath.Join(home, ".codex")
+	}
+	config, err := os.ReadFile(filepath.Join(sourceHome, "config.toml")) // #nosec G703,G304 -- CODEX_HOME is the user's documented Codex root and the joined name is fixed
+	if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("read Codex config: %w", err)
+	}
+	digest := sha256.Sum256([]byte("codex-v5\x00" + runID + "\x00" + sourceHome + "\x00" + string(config) + "\x00" + command.ShellCommand()))
+	hash := hex.EncodeToString(digest[:6])
+
+	privateHome := filepath.Join(cacheDir, "agent-runner", "codex-homes", hash)
+	if err := os.MkdirAll(privateHome, 0o700); err != nil { // #nosec G703 -- path is the local cache root plus fixed components and a hex digest
+		return "", fmt.Errorf("create private Codex home: %w", err)
+	}
+	if err := ensureCodexSharedStateDirectories(sourceHome); err != nil {
+		return "", err
+	}
+	if err := linkCodexHomeEntries(sourceHome, privateHome); err != nil {
+		return "", err
+	}
+	privateConfigPath := filepath.Join(privateHome, "config.toml")
+	configFile, err := os.OpenFile(privateConfigPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G703,G304 -- privateHome is confined to the cache digest directory and the filename is fixed
+	if err == nil {
+		if _, err := configFile.Write(config); err != nil {
+			_ = configFile.Close()
+			return "", fmt.Errorf("write private Codex config: %w", err)
+		}
+		if err := configFile.Close(); err != nil {
+			return "", fmt.Errorf("close private Codex config: %w", err)
+		}
+	} else if !os.IsExist(err) {
+		return "", fmt.Errorf("create private Codex config: %w", err)
+	}
+
+	privateSkills := filepath.Join(privateHome, "skills")
+	if err := linkCodexSkillEntries(filepath.Join(sourceHome, "skills"), privateSkills); err != nil {
+		return "", err
+	}
+	next := `---
+name: agent-runner-next
+description: Complete the current Agent Runner workflow step
+---
+
+Run this exact command now, then finish the response:
+
+` + "`" + command.ShellCommand() + "`" + `
+`
+	nextSkillDir := filepath.Join(privateSkills, "agent-runner-next")
+	if err := os.MkdirAll(nextSkillDir, 0o700); err != nil { // #nosec G703 -- fixed skill path beneath the cache digest directory
+		return "", fmt.Errorf("create Codex completion skill: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(nextSkillDir, "SKILL.md"), []byte(next), 0o600); err != nil { // #nosec G703 -- fixed filename beneath the cache digest directory
+		return "", fmt.Errorf("write Codex completion skill: %w", err)
+	}
+	return privateHome, nil
+}
+
+func ensureCodexSharedStateDirectories(sourceHome string) error {
+	for _, name := range codexSharedStateDirectories {
+		if err := os.MkdirAll(filepath.Join(sourceHome, name), 0o700); err != nil { // #nosec G703 -- CODEX_HOME is the selected root and name comes from the fixed shared-state allowlist
+			return fmt.Errorf("create shared Codex state directory %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func linkCodexHomeEntries(sourceHome, privateHome string) error {
+	entries, err := os.ReadDir(sourceHome)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read Codex home: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.Name() == "config.toml" || entry.Name() == "skills" {
+			continue
+		}
+		if err := ensureSymlink(filepath.Join(sourceHome, entry.Name()), filepath.Join(privateHome, entry.Name())); err != nil {
+			return fmt.Errorf("link Codex home entry %s: %w", entry.Name(), err)
+		}
+	}
+	return nil
+}
+
+func linkCodexSkillEntries(sourceSkills, privateSkills string) error {
+	if err := os.MkdirAll(privateSkills, 0o700); err != nil { // #nosec G703 -- fixed skills path beneath the cache digest directory
+		return fmt.Errorf("create private Codex skills: %w", err)
+	}
+	entries, err := os.ReadDir(sourceSkills)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read Codex skills: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.Name() == "agent-runner-next" {
+			continue
+		}
+		if err := ensureSymlink(filepath.Join(sourceSkills, entry.Name()), filepath.Join(privateSkills, entry.Name())); err != nil {
+			return fmt.Errorf("link Codex skill %s: %w", entry.Name(), err)
+		}
+	}
+	return nil
+}
+
+func ensureSymlink(target, link string) error {
+	if _, err := os.Lstat(link); err == nil { // #nosec G703 -- callers construct link from a confined root plus a single os.ReadDir entry name
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return os.Symlink(target, link)
 }

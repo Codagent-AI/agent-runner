@@ -116,8 +116,9 @@ WATCHDOG MISMATCH PASS identity_match=false signal_sent=false target_alive=true
 - Durability hook: an additive JSON value passed through `--settings` installs
   a process-local `Stop` command that invokes
   `<absolute-path> internal turn-committed`.
-- `/next`: a generated, user-cache plugin loaded only for the spawned process
-  via `--plugin-dir`. Its command contains the quoted absolute client command.
+- `/agent-runner:next`: a generated `agent-runner` user-cache plugin loaded
+  only for the spawned process via `--plugin-dir`. Its `next` command contains
+  the quoted absolute client command.
 - Store fallback: a completed record is `type: "assistant"`,
   `message.role: "assistant"`, and a terminal `message.stop_reason`. Tool-use
   and paused-turn records are not terminal evidence.
@@ -132,19 +133,30 @@ WATCHDOG MISMATCH PASS identity_match=false signal_sent=false target_alive=true
 - Durability hook: `-c
   'notify=["<absolute-path>","internal","turn-committed"]'`. `notify` is a
   top-level additive override and fires for `agent-turn-complete`.
-- `/next`: no custom slash-command package is injected. Codex continues to use
-  the universal absolute-path instruction.
+- `$agent-runner-next`: the adapter gives the spawned process a private,
+  run-scoped and content-addressed `CODEX_HOME` that links the user's
+  authentication, session stores, shell snapshots, plugins, and other state
+  while adding one process-local skill. Known session-state directories are
+  created and linked before launch so the first interactive turn cannot split
+  state away from the real home, and concurrent runs receive distinct homes.
+  Codex does not expose plugin command directories as slash commands, so the
+  skill is its supported explicit invocation surface. Runtime hook trust state
+  written into the private config is preserved across steps in the same run.
 - Store fallback: the explicit terminal record is an `event_msg` whose
   `payload.type` is `task_complete`. A final assistant message alone is not
   sufficient.
 
 ### GitHub Copilot CLI
 
-- Exact approval: `--allow-tool=shell(<quoted-absolute-path> step complete)`.
-  Copilot's permission help identifies this form as an exact shell-command
-  match; the `:*` prefix form is deliberately absent.
-- `/next`: the same generated process-local plugin format used for Claude is
-  loaded with `--plugin-dir` and contains the absolute command.
+- Supervised approval alternative: Copilot 1.0.71 scopes shell permission to
+  the executable name, even when `--allow-tool=shell(...)` includes fixed
+  arguments. Its confirmation UI offers to remember the executable for the
+  repository, which would authorize other Agent Runner subcommands. The
+  adapter therefore emits no shell pre-approval and leaves the completion
+  command under Copilot's normal interactive confirmation prompt.
+- `/agent-runner:next`: the same generated `agent-runner` process-local plugin
+  format used for Claude is loaded with `--plugin-dir` and contains the
+  absolute command.
 - Store evidence: `~/.copilot/session-state/<id>/events.jsonl` records
   `assistant.turn_start`, one or more `assistant.message` events, and the
   semantic terminal record `assistant.turn_end`. Only `assistant.turn_end`
@@ -189,7 +201,8 @@ WATCHDOG MISMATCH PASS identity_match=false signal_sent=false target_alive=true
 - Plugin: the adapter generates an isolated plugin in the user's cache and
   loads it for the spawned process with `--plugin-dir`. The plugin contains
   no hook of any kind; it consists of a manifest and a single slash command.
-- `/next`: the isolated plugin includes `commands/next.md`, which instructs
+- `/agent-runner:next`: the isolated `agent-runner` plugin includes
+  `commands/next.md`, which instructs
   the agent to run the quoted absolute-path completion client
   (`<path> step complete`) and then finish its response. Completion otherwise
   relies on the same absolute-path instructions injected into the prompt as
@@ -232,9 +245,10 @@ WATCHDOG MISMATCH PASS identity_match=false signal_sent=false target_alive=true
   `bash` rule, `<quoted-absolute-path> step complete: allow`. It has no
   catch-all or wildcard. The installed config resolver accepted this inline
   form.
-- `/next`: `OPENCODE_CONFIG_CONTENT` adds a `next` custom command whose shell
-  interpolation runs the same quoted absolute command. Both environment
-  overrides apply only to the spawned process.
+- `/agent-runner:next`: `OPENCODE_CONFIG_CONTENT` adds an
+  `agent-runner:next` custom command whose shell interpolation runs the same
+  quoted absolute command. Both environment overrides apply only to the
+  spawned process.
 - Store evidence: `opencode db` exposes assistant messages with
   `data.role: "assistant"`, `data.time.completed`, and `data.finish`. The probe
   requires a newly completed final assistant message and rejects
@@ -253,14 +267,14 @@ error rather than converting elapsed time into success.
 Native commands are injected per process instead of installed globally or
 written into the target repository:
 
-- Claude and Copilot load a generated cache plugin with the exact absolute
-  command.
-- Cursor loads its generated `/next` completion plugin, which carries no
-  hooks.
+- Claude and Copilot load a generated `agent-runner` cache plugin with the
+  exact absolute command.
+- Cursor loads the same generated `/agent-runner:next` completion plugin,
+  which carries no hooks.
 - OpenCode receives an inline custom command through
   `OPENCODE_CONFIG_CONTENT`.
-- Codex uses the universal completion instruction because its current plugin
-  surface does not provide a `/next` command with stronger semantics than the
-  baseline.
+- Codex receives the process-local `$agent-runner-next` skill through an
+  isolated `CODEX_HOME`; current Codex does not expose plugin commands as
+  slash commands.
 
 This keeps completion additive and avoids persistent edits to user config.

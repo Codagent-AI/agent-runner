@@ -86,6 +86,9 @@ type BuildArgsInput struct {
 	// Adapters use it to discover project-level CLI configuration such as
 	// Cursor's <project>/.cursor/cli.json permissions.
 	Workdir string
+	// RunID is the stable identity of the owning Agent Runner run. Adapters use
+	// it to isolate mutable process-local configuration across concurrent runs.
+	RunID string
 	// CompletionCommand is the in-session control client. Adapters only use
 	// it when it names the absolute-path, fixed `step complete` command.
 	CompletionCommand *CompletionCommand

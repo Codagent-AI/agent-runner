@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -32,6 +33,13 @@ type CodexAdapter struct{}
 // was recorded with a different model. Passing the resolved model preserves
 // the model selected by the workflow/profile across session resume.
 func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
+	args, _ := a.BuildArgsWithError(input)
+	return args
+}
+
+// BuildArgsWithError constructs Codex args and surfaces failures to materialize
+// the process-local Agent Runner command plugin before the CLI is spawned.
+func (a *CodexAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, error) {
 	args := []string{"codex"}
 	context := input.InvocationContext()
 
@@ -76,7 +84,28 @@ func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 		args = append(args, sessionID)
 	}
 	args = append(args, input.Prompt)
-	return args
+	return args, nil
+}
+
+// SpawnEnv gives interactive Codex processes an isolated configuration home
+// that adds the Agent Runner command plugin without modifying the user's real
+// config. Session and authentication state remain linked to the real home.
+func (a *CodexAdapter) SpawnEnv(input *BuildArgsInput) ([]string, error) {
+	if input.InvocationContext().IsHeadless() || input.CompletionCommand == nil || !input.CompletionCommand.Valid() {
+		return nil, nil
+	}
+	runID := input.RunID
+	if runID == "" {
+		// Direct adapter callers do not own an Agent Runner run. A process-scoped
+		// fallback still prevents cross-process config sharing; production
+		// workflow invocations always provide the stable run ID.
+		runID = fmt.Sprintf("process-%d", os.Getpid())
+	}
+	privateHome, err := prepareCodexCompletionHome(*input.CompletionCommand, runID)
+	if err != nil {
+		return nil, fmt.Errorf("codex: create completion plugin: %w", err)
+	}
+	return []string{"CODEX_HOME=" + privateHome}, nil
 }
 
 // SupportsSystemPrompt returns false — Codex CLI has no native system prompt flag.
