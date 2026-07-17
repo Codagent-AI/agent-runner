@@ -32,7 +32,7 @@ TDD; tests next to the source package; `google/go-cmp` for structured comparison
 
 ### Requirement: Universal completion surface
 
-For every interactive or autonomous-interactive agent step, regardless of which CLI backs it, the agent SHALL have a working way to signal completion through the control channel. No step SHALL depend on CLI-specific byte-stream behavior to advance. The injected completion instructions SHALL reference the completion client by absolute path rather than assuming the runner binary is on the agent's PATH. For autonomous-interactive steps, the completion path SHALL NOT block on human permission approval. CLI-native completion surfaces (such as a user-invocable `/next`-style command or a tool exposed to the agent) MAY additionally exist, and any such surface SHALL route through the same control channel with the same credential validation.
+For every interactive or autonomous-interactive agent step, regardless of which CLI backs it, the agent SHALL have a working way to signal completion through the control channel. No step SHALL depend on CLI-specific byte-stream behavior to advance. The injected completion instructions SHALL reference the completion client by absolute path rather than assuming the runner binary is on the agent's PATH. In interactive context, the completion command MAY be gated by the CLI's normal supervised approval prompt when the adapter has no safe narrow pre-approval (per `cli-adapter`). For autonomous-interactive steps, the completion path SHALL NOT silently block on human permission approval: the adapter SHALL provide an approval-free path (narrow pre-approval, its autonomous permission flags, or a native integration), or the step SHALL fail early with a clear explanation that unattended completion requires one. CLI-native completion surfaces (such as a user-invocable `/next`-style command or a tool exposed to the agent) MAY additionally exist, and any such surface SHALL route through the same control channel with the same credential validation.
 
 #### Scenario: Any registered CLI can complete a step
 - **WHEN** an interactive agent step runs with any registered CLI and the agent follows the injected completion instructions
@@ -43,8 +43,12 @@ For every interactive or autonomous-interactive agent step, regardless of which 
 - **THEN** the instructions reference the completion client by absolute path
 
 #### Scenario: Autonomous-interactive completion does not block on approval
-- **WHEN** an autonomous-interactive step's agent signals completion through its completion surface
+- **WHEN** an autonomous-interactive step runs with an approval-free completion path and its agent signals completion through that surface
 - **THEN** the completion is delivered without waiting for human permission approval
+
+#### Scenario: Autonomous-interactive without an approval-free path fails early
+- **WHEN** an autonomous-interactive step starts with a CLI configuration that provides no approval-free completion path
+- **THEN** the step fails early with a clear explanation instead of hanging while awaiting human approval
 
 #### Scenario: Native surface routes through the control channel
 - **WHEN** a CLI-native completion surface exists and the user or agent invokes it (for example, typing `/next`)
@@ -56,14 +60,14 @@ For every interactive or autonomous-interactive agent step, regardless of which 
 
 In interactive context, no adapter SHALL emit a flag that bypasses or pre-approves the underlying CLI's permission/approval prompts. The human at the terminal supervises permissions; the runner MUST NOT preempt that supervision. Autonomous invocations (both headless and interactive backend) MAY emit such flags, since the step operates without human supervision.
 
-Exception — the completion client: every adapter SHALL provide a completion path that does not require human approval. An adapter MAY pre-approve the completion client only when it can restrict approval to the exact absolute executable path and fixed `step complete` arguments — never a wildcard, shell chaining, substitution, or any other subcommand of the runner binary. If a CLI cannot express that narrow approval safely, its adapter SHALL use another completion integration rather than broadening permissions.
+Exception — the completion client: an adapter MAY pre-approve the completion client only when it can restrict approval to the exact absolute executable path and fixed `step complete` arguments — never a wildcard, shell chaining, substitution, or any other subcommand of the runner binary. If a CLI cannot express that narrow approval safely, its adapter SHALL NOT broaden permissions to compensate: in interactive context the completion command MAY instead be gated by the CLI's normal supervised approval prompt (the human at the terminal approves it like any other command), and unattended contexts follow the autonomous completion rules in `step-control-channel` (approval-free via the CLI's autonomous permission flags, or failing early).
 
 #### Scenario: Adapter omits permission-grant flags in interactive context
 - **WHEN** any adapter constructs args for an interactive step
 - **THEN** the args do not include any flag that auto-approves tools, paths, URLs, or commands (e.g., `--allow-all`, `--force`, `--yolo`, `--dangerously-skip-permissions`), with the sole exception of the narrow completion-client pre-approval
 
 #### Scenario: Exact completion command runs without prompting
-- **WHEN** the agent in an interactive step runs the completion client at its exact absolute path with the fixed `step complete` arguments
+- **WHEN** the agent in an interactive step whose adapter emits the narrow pre-approval runs the completion client at its exact absolute path with the fixed `step complete` arguments
 - **THEN** the command executes without a human approval prompt
 
 #### Scenario: Broader completion-command forms are not pre-approved
@@ -74,9 +78,9 @@ Exception — the completion client: every adapter SHALL provide a completion pa
 - **WHEN** the agent in an interactive step attempts any command other than the exact completion command
 - **THEN** the CLI's normal permission prompts apply, unchanged by the completion-client pre-approval
 
-#### Scenario: CLI that cannot express narrow approval uses another integration
+#### Scenario: CLI that cannot express narrow approval keeps supervised prompting
 - **WHEN** a CLI cannot restrict pre-approval to the exact absolute executable path and fixed arguments
-- **THEN** its adapter provides a different completion integration (such as a native hook or trusted command surface) and does not emit a broader permission flag
+- **THEN** its adapter emits no broader permission flag, and in interactive context the completion command is subject to the CLI's normal supervised approval prompt
 
 #### Scenario: Autonomous-headless adapter MAY include permission-grant flags
 - **WHEN** any adapter constructs args for an autonomous-headless step
