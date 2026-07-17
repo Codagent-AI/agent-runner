@@ -52,13 +52,17 @@ For interactive shell steps, the PTY layer SHALL act as an opaque relay: it crea
 
 ### Requirement: Relay lifecycle hardening
 
-The shell-step PTY relay SHALL have a deterministic lifecycle. Any signal the runner sends to terminate the command SHALL target the command's process group. When the command exits, the relay SHALL drain remaining PTY output within a bounded interval and close its resources in an explicit order that cannot deadlock. If the relay encounters an unrecoverable I/O error while the command is still running, the runner SHALL terminate the command's process group and fail the step with a descriptive error; normal failed-shell-step handling applies.
+The shell-step PTY relay SHALL have a deterministic lifecycle. Any signal the runner sends to terminate the command SHALL target the command's process group. When the command exits, the relay SHALL drain remaining PTY output within a bounded interval (one second). If the drain bound elapses — for example because a surviving descendant still holds the PTY — the runner SHALL terminate any surviving child process group, close the PTY, and record a prominent drain-timeout warning indicating possible output truncation, while preserving the outcome derived from the command's exit code (the step is not automatically rerun). Resources SHALL be closed in an explicit order that cannot deadlock. If the relay encounters an unrecoverable I/O error while the command is still running, the runner SHALL terminate the command's process group and fail the step with a descriptive error; normal failed-shell-step handling applies.
 
-<!-- deferred-to-design: the exact drain bound and close ordering -->
+<!-- resolved-in-design: 1s drain bound and drain-timeout behavior — see design.md -->
 
 #### Scenario: Output drained after command exit
 - **WHEN** the command of an interactive shell step exits while output remains buffered in the PTY
-- **THEN** the remaining output is written to the user's terminal within a bounded interval and the step completes without hanging
+- **THEN** the remaining output is written to the user's terminal within the drain bound and the step completes without hanging
+
+#### Scenario: Drain timeout with a surviving descendant
+- **WHEN** the command of an interactive shell step has exited but a descendant process keeps the PTY open past the drain bound
+- **THEN** the runner terminates the surviving process group, closes the PTY, records a drain-timeout warning indicating possible output truncation, and the step outcome remains the one derived from the command's exit code
 
 #### Scenario: Relay I/O error fails the step
 - **WHEN** the relay hits an unrecoverable I/O error while the command is still running
