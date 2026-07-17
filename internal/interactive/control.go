@@ -120,6 +120,10 @@ type attemptState struct {
 }
 
 type acceptedCompletion struct {
+	// ready is closed once the accept-time checkpoint has been captured and
+	// request holds its final value. Retries block on it so every client is
+	// acknowledged only after the checkpoint exists.
+	ready     chan struct{}
 	request   CompletionRequest
 	delivered bool
 }
@@ -328,16 +332,8 @@ func (s *ControlServer) handleConnection(connection net.Conn) {
 	s.mu.Lock()
 	cacheKey := requestCacheKey(&request)
 	if cached, ok := s.accepted[cacheKey]; ok {
-		writeErr := writeControlResponse(connection, controlResponse{OK: true})
-		if writeErr == nil && !cached.delivered {
-			cached.delivered = true
-			accepted := cached.request
-			s.mu.Unlock()
-			s.emit(audit.EventCompletionAcknowledged, accepted.StepID, map[string]any{"request_id": accepted.RequestID, "attempt_id": accepted.AttemptID})
-			s.deliverCompletion(&accepted)
-			return
-		}
 		s.mu.Unlock()
+		s.acknowledgeCompletion(connection, cached)
 		return
 	}
 	active := s.active
@@ -362,20 +358,48 @@ func (s *ControlServer) handleCompletion(connection net.Conn, request *controlRe
 		return
 	}
 	active.completionAccepted = true
-	accepted := CompletionRequest{AttemptID: active.ID, RunID: request.RunID, StepID: request.StepID, RequestID: request.RequestID}
-	s.emit(audit.EventCompletionRequested, request.StepID, map[string]any{"request_id": request.RequestID, "attempt_id": active.ID})
-	if active.checkpoint != nil {
-		accepted.Checkpoint, accepted.CheckpointErr = active.checkpoint()
+	accepted := &acceptedCompletion{
+		ready:   make(chan struct{}),
+		request: CompletionRequest{AttemptID: active.ID, RunID: request.RunID, StepID: request.StepID, RequestID: request.RequestID},
 	}
-	s.accepted[cacheKey] = &acceptedCompletion{request: accepted}
+	s.accepted[cacheKey] = accepted
+	checkpoint := active.checkpoint
 	s.mu.Unlock()
-	if writeControlResponse(connection, controlResponse{OK: true}) == nil {
-		s.mu.Lock()
-		s.accepted[cacheKey].delivered = true
-		s.mu.Unlock()
-		s.emit(audit.EventCompletionAcknowledged, request.StepID, map[string]any{"request_id": request.RequestID, "attempt_id": active.ID})
-		s.deliverCompletion(&accepted)
+
+	// The checkpoint is the accept-time baseline, so it must be captured
+	// before any client is acknowledged, but it can stall on a slow native
+	// store and therefore must not run while holding the server mutex.
+	s.emit(audit.EventCompletionRequested, request.StepID, map[string]any{"request_id": request.RequestID, "attempt_id": accepted.request.AttemptID})
+	var captured cli.Checkpoint
+	var capturedErr error
+	if checkpoint != nil {
+		captured, capturedErr = checkpoint()
 	}
+	s.mu.Lock()
+	accepted.request.Checkpoint, accepted.request.CheckpointErr = captured, capturedErr
+	s.mu.Unlock()
+	close(accepted.ready)
+	s.acknowledgeCompletion(connection, accepted)
+}
+
+// acknowledgeCompletion waits for the accept-time checkpoint, acknowledges the
+// client, and delivers the completion to the consumer exactly once across
+// idempotent retries.
+func (s *ControlServer) acknowledgeCompletion(connection net.Conn, accepted *acceptedCompletion) {
+	<-accepted.ready
+	if writeControlResponse(connection, controlResponse{OK: true}) != nil {
+		return
+	}
+	s.mu.Lock()
+	alreadyDelivered := accepted.delivered
+	accepted.delivered = true
+	completion := accepted.request
+	s.mu.Unlock()
+	if alreadyDelivered {
+		return
+	}
+	s.emit(audit.EventCompletionAcknowledged, completion.StepID, map[string]any{"request_id": completion.RequestID, "attempt_id": completion.AttemptID})
+	s.deliverCompletion(&completion)
 }
 
 func (s *ControlServer) handleCommittedTurn(connection net.Conn, request *controlRequest, active *attemptState) {

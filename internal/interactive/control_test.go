@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -220,6 +221,146 @@ func TestControlServerCapturesDurabilityCheckpointBeforeAcknowledgement(t *testi
 		}
 	case <-time.After(time.Second):
 		t.Fatal("completion was not delivered")
+	}
+}
+
+func TestControlServerRunsCheckpointOutsideServerMutex(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+	defer server.Close()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	attempt := server.ActivateWithCheckpoint("implement", func() (cli.Checkpoint, error) {
+		close(started)
+		<-release
+		return cli.Checkpoint{Artifact: "fixture"}, nil
+	})
+
+	acknowledged := make(chan controlResponse, 1)
+	go func() {
+		response, err := tryExchange(server.SocketPath(), &controlRequest{
+			Type: MessageCompleteStep, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "complete",
+		})
+		if err != nil {
+			t.Errorf("completion exchange failed: %v", err)
+			return
+		}
+		acknowledged <- response
+	}()
+	<-started
+
+	otherOperations := make(chan struct{})
+	go func() {
+		defer close(otherOperations)
+		_, unsubscribe := server.SubscribeCommittedTurn("unrelated-attempt")
+		unsubscribe()
+		rejected, err := tryExchange(server.SocketPath(), &controlRequest{
+			Type: MessageCompleteStep, RunID: attempt.RunID, StepID: attempt.StepID, Token: "wrong-token", RequestID: "other",
+		})
+		if err != nil {
+			t.Errorf("rejection exchange failed: %v", err)
+			return
+		}
+		if rejected.OK {
+			t.Error("mismatched credential was accepted while a checkpoint was in flight")
+		}
+	}()
+	select {
+	case <-otherOperations:
+	case <-time.After(time.Second):
+		t.Fatal("control operations blocked behind an in-flight completion checkpoint")
+	}
+
+	select {
+	case <-acknowledged:
+		t.Fatal("completion was acknowledged before its checkpoint finished")
+	default:
+	}
+	unblock()
+	select {
+	case response := <-acknowledged:
+		if !response.OK {
+			t.Fatalf("completion response = %#v", response)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("completion was not acknowledged after the checkpoint finished")
+	}
+	select {
+	case completion := <-server.Completions():
+		if completion.Checkpoint.Artifact != "fixture" {
+			t.Fatalf("completion checkpoint = %#v", completion.Checkpoint)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("completion was not delivered")
+	}
+}
+
+func TestControlServerRetryDuringInFlightCheckpointIsIdempotent(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+	defer server.Close()
+	var checkpointCalls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	attempt := server.ActivateWithCheckpoint("implement", func() (cli.Checkpoint, error) {
+		if checkpointCalls.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		return cli.Checkpoint{Artifact: "fixture", Offset: 7}, nil
+	})
+	request := controlRequest{
+		Type: MessageCompleteStep, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "complete-once",
+	}
+
+	responses := make(chan controlResponse, 2)
+	sendCompletion := func() {
+		response, err := tryExchange(server.SocketPath(), &request)
+		if err != nil {
+			t.Errorf("completion exchange failed: %v", err)
+			return
+		}
+		responses <- response
+	}
+	go sendCompletion()
+	<-started
+	go sendCompletion()
+
+	select {
+	case response := <-responses:
+		t.Fatalf("completion was acknowledged before its checkpoint finished: %#v", response)
+	case <-time.After(50 * time.Millisecond):
+	}
+	unblock()
+	for i := 0; i < 2; i++ {
+		select {
+		case response := <-responses:
+			if !response.OK {
+				t.Fatalf("completion response = %#v", response)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("completion retry was not acknowledged")
+		}
+	}
+	if got := checkpointCalls.Load(); got != 1 {
+		t.Fatalf("checkpoint ran %d times, want 1", got)
+	}
+	select {
+	case completion := <-server.Completions():
+		if completion.RequestID != request.RequestID || completion.Checkpoint.Offset != 7 {
+			t.Fatalf("completion = %#v", completion)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("completion was not delivered")
+	}
+	select {
+	case duplicate := <-server.Completions():
+		t.Fatalf("retry double-delivered the completion: %#v", duplicate)
+	case <-time.After(40 * time.Millisecond):
 	}
 }
 
@@ -520,6 +661,32 @@ func marshalLine(t *testing.T, value any) []byte {
 		t.Fatal(err)
 	}
 	return append(data, '\n')
+}
+
+// tryExchange is safe to call from non-test goroutines: it reports transport
+// failures instead of failing the test.
+func tryExchange(socket string, request *controlRequest) (controlResponse, error) {
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return controlResponse{}, err
+	}
+	connection, err := net.Dial("unix", socket)
+	if err != nil {
+		return controlResponse{}, err
+	}
+	defer connection.Close()
+	if _, err := connection.Write(append(payload, '\n')); err != nil {
+		return controlResponse{}, err
+	}
+	line, err := bufio.NewReader(connection).ReadBytes('\n')
+	if err != nil {
+		return controlResponse{}, err
+	}
+	var response controlResponse
+	if err := json.Unmarshal(line, &response); err != nil {
+		return controlResponse{}, err
+	}
+	return response, nil
 }
 
 func exchangeRaw(t *testing.T, socket string, request []byte) controlResponse {
