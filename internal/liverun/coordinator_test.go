@@ -277,7 +277,10 @@ func TestNotifyDone_RestoresWhenSuspended(t *testing.T) {
 	c.AfterInteractive()
 	mp.clearMsgs()
 
-	c.NotifyDone("success", nil)
+	notifyErr := c.NotifyDone("success", nil)
+	if notifyErr != nil {
+		t.Fatalf("NotifyDone error = %v, want nil", notifyErr)
+	}
 
 	_, res := mp.counts()
 	if res != 1 {
@@ -302,7 +305,10 @@ func TestNotifyDone_SurfacesRestoreFailureWithoutChangingResult(t *testing.T) {
 	}
 	_ = c.AfterInteractive()
 
-	c.NotifyDone("success", nil)
+	notifyErr := c.NotifyDone("success", nil)
+	if notifyErr == nil || !strings.Contains(notifyErr.Error(), "restore terminal") {
+		t.Fatalf("NotifyDone error = %v, want surfaced restore failure", notifyErr)
+	}
 
 	done, ok := mp.doneMessage()
 	if !ok {

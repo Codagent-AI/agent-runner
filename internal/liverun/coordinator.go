@@ -98,7 +98,7 @@ func (c *Coordinator) PrepareForStep(interactive bool) {
 // NotifyDone signals the TUI that the runner goroutine has finished. If the
 // terminal is still suspended (e.g. the last step was interactive), it is
 // restored so the TUI can show results.
-func (c *Coordinator) NotifyDone(result string, err error) {
+func (c *Coordinator) NotifyDone(result string, err error) error {
 	c.mu.Lock()
 	err = errors.Join(err, c.terminalErr)
 	if c.suspended || c.pendingResume {
@@ -115,6 +115,7 @@ func (c *Coordinator) NotifyDone(result string, err error) {
 	}
 	c.mu.Unlock()
 	c.send(ExecDoneMsg{Result: result, Err: err})
+	return err
 }
 
 // NotifyStepChange signals the TUI that a new step has become active.

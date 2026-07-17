@@ -227,6 +227,13 @@ func TestInteractiveTerminalLeaseFixtureProcess(t *testing.T) {
 	if mode == "" {
 		return
 	}
+	runnerExecutable, err := exec.LookPath("agent-runner")
+	if err != nil {
+		t.Fatalf("locate testscript agent-runner executable: %v", err)
+	}
+	if err := os.Setenv(agentRunnerExecutableEnv, runnerExecutable); err != nil {
+		t.Fatalf("set runner executable: %v", err)
+	}
 	liveRunCoordinatorFactory = func(program *tea.Program, sessionDir string) *liverun.Coordinator {
 		return liverun.NewCoordinator(&terminalFaultProgram{Program: program, mode: mode}, sessionDir)
 	}
@@ -606,6 +613,10 @@ func runCommandInPTY(cmd *exec.Cmd, timeout time.Duration) (string, error) {
 		case <-timer.C:
 			_ = cmd.Process.Kill()
 			_ = ptmx.Close()
+			select {
+			case output = <-outputCh:
+			case <-time.After(time.Second):
+			}
 			return string(output), fmt.Errorf("timed out after %s", timeout)
 		}
 	}

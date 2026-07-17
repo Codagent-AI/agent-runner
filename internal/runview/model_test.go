@@ -1948,6 +1948,18 @@ func TestModel_LiveRun_ExecDone_Success(t *testing.T) {
 	}
 }
 
+func TestModel_LiveRun_ExecDone_DisplaysTerminalErrorWithoutChangingResult(t *testing.T) {
+	m := newLiveModel()
+	m.Update(liverun.ExecDoneMsg{Result: "success", Err: errors.New("restore terminal: injected failure")})
+
+	if m.liveResult != "success" {
+		t.Fatalf("liveResult = %q, want success", m.liveResult)
+	}
+	if !strings.Contains(m.notice, "restore terminal: injected failure") {
+		t.Fatalf("notice = %q, want terminal error", m.notice)
+	}
+}
+
 func TestModel_LiveRun_ExecDone_Failed(t *testing.T) {
 	m := newLiveModel()
 	m.Update(liverun.ExecDoneMsg{Result: "failed"})

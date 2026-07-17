@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/pty"
@@ -1583,6 +1584,15 @@ func TestCompletionInstructionQuotesExecutablePath(t *testing.T) {
 	want := "`'/Applications/Agent Runner/bin/agent-runner' step complete`"
 	if !strings.Contains(prompt, want) {
 		t.Fatalf("completion instruction = %q, want rendered command %q", prompt, want)
+	}
+}
+
+func TestCompletionExecutableUsesConfiguredAgentRunner(t *testing.T) {
+	t.Setenv("AGENT_RUNNER_EXECUTABLE", "/Applications/Agent Runner/bin/agent-runner")
+
+	got := completionExecutableForContext(cli.ContextInteractive)
+	if want := "/Applications/Agent Runner/bin/agent-runner"; got != want {
+		t.Fatalf("completionExecutableForContext() = %q, want %q", got, want)
 	}
 }
 

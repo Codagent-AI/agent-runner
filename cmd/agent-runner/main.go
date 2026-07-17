@@ -770,12 +770,16 @@ func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResul
 		var runErr error
 		defer func() {
 			if rec := recover(); rec != nil {
-				coord.NotifyDone(string(runner.ResultFailed), fmt.Errorf("panic: %v", rec))
+				_ = coord.NotifyDone(string(runner.ResultFailed), fmt.Errorf("panic: %v", rec))
 				resultCh <- runner.ResultFailed
 				return
 			}
-			coord.NotifyDone(string(result), runErr)
-			resultCh <- result
+			notifyErr := coord.NotifyDone(string(result), runErr)
+			if notifyErr != nil && result == runner.ResultSuccess {
+				resultCh <- runner.ResultFailed
+			} else {
+				resultCh <- result
+			}
 			if opts.quitOnDone {
 				p.Send(runview.ExitMsg{})
 			}
@@ -2352,12 +2356,16 @@ func (m *onboardingDemoPromptFlow) startRunner() {
 		var runErr error
 		defer func() {
 			if rec := recover(); rec != nil {
-				coord.NotifyDone(string(runner.ResultFailed), fmt.Errorf("panic: %v", rec))
+				_ = coord.NotifyDone(string(runner.ResultFailed), fmt.Errorf("panic: %v", rec))
 				m.resultCh <- runner.ResultFailed
 				return
 			}
-			coord.NotifyDone(string(result), runErr)
-			m.resultCh <- result
+			notifyErr := coord.NotifyDone(string(result), runErr)
+			if notifyErr != nil && result == runner.ResultSuccess {
+				m.resultCh <- runner.ResultFailed
+			} else {
+				m.resultCh <- result
+			}
 			if m.opts.quitOnDone {
 				m.program.Send(runview.ExitMsg{})
 			}

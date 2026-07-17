@@ -505,11 +505,18 @@ func completionExecutableForContext(invocationContext cli.InvocationContext) str
 	if invocationContext.IsHeadless() {
 		return ""
 	}
-	executable, err := os.Executable()
+	executable, err := agentRunnerExecutable()
 	if err != nil {
 		return ""
 	}
 	return executable
+}
+
+func agentRunnerExecutable() (string, error) {
+	if executable := os.Getenv("AGENT_RUNNER_EXECUTABLE"); filepath.IsAbs(executable) {
+		return executable, nil
+	}
+	return os.Executable()
 }
 
 func completionInstruction(executable string) string {
@@ -527,7 +534,7 @@ func runDirectInteractive(args []string, options pty.Options) (pty.Result, error
 	if err != nil {
 		return pty.Result{}, err
 	}
-	executable, err := os.Executable()
+	executable, err := agentRunnerExecutable()
 	if err != nil {
 		return pty.Result{}, fmt.Errorf("resolve watchdog executable: %w", err)
 	}
