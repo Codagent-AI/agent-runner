@@ -256,7 +256,7 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	for _, e := range events {
 		tree.ApplyEvent(e)
 	}
-	if entered != FromLiveRun && (state.Completed || tree.Root.Status == StatusSuccess) {
+	if entered != FromLiveRun && tree.Root.Status != StatusFailed && (state.Completed || tree.Root.Status == StatusSuccess) {
 		m.showSummary = true
 	}
 	current := m.applyCurrentStepState(&state)

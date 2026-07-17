@@ -248,7 +248,7 @@ func TestNewCompletedRunStartsInSummaryButFailedRunDoesNot(t *testing.T) {
 	}{
 		{name: "completed inspect", completed: true, wantSummary: true},
 		{name: "completed list", outcome: "success", completed: true, includeRunEnd: true, wantSummary: true},
-		{name: "failed inspect", outcome: "failed", includeRunEnd: true, wantSummary: false},
+		{name: "failed inspect overrides completed state", outcome: "failed", completed: true, includeRunEnd: true, wantSummary: false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
