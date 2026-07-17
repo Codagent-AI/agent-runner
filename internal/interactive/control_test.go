@@ -53,7 +53,7 @@ func TestControlServerCreatesPrivateEndpointAndAttemptEnvironment(t *testing.T) 
 		t.Fatalf("pointer = %q, want %q", got, server.SocketPath())
 	}
 
-	attempt := server.Activate("review")
+	attempt := server.ActivateWithCheckpoint("review", nil)
 	want := map[string]string{
 		EnvControlSocket: server.SocketPath(),
 		EnvRunID:         "run-with-a-deliberately-long-identifier",
@@ -68,7 +68,7 @@ func TestControlServerCreatesPrivateEndpointAndAttemptEnvironment(t *testing.T) 
 	}
 
 	previous := attempt
-	attempt = server.Activate("review")
+	attempt = server.ActivateWithCheckpoint("review", nil)
 	if attempt.Token == previous.Token || attempt.ID == previous.ID {
 		t.Fatalf("attempt credential was not rotated: before=%#v after=%#v", previous, attempt)
 	}
@@ -116,7 +116,7 @@ func TestControlServerCloseRemovesSocketAndPointer(t *testing.T) {
 func TestControlServerCloseUnblocksBackpressuredDeliveries(t *testing.T) {
 	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
 
-	first := server.Activate("first")
+	first := server.ActivateWithCheckpoint("first", nil)
 	if response := exchange(t, server.SocketPath(), &controlRequest{
 		Type: MessageCompleteStep, RunID: first.RunID, StepID: first.StepID, Token: first.Token, RequestID: "complete-first",
 	}); !response.OK {
@@ -128,7 +128,7 @@ func TestControlServerCloseUnblocksBackpressuredDeliveries(t *testing.T) {
 		t.Fatalf("first turn response = %#v", response)
 	}
 
-	second := server.Activate("second")
+	second := server.ActivateWithCheckpoint("second", nil)
 	if response := exchange(t, server.SocketPath(), &controlRequest{
 		Type: MessageCompleteStep, RunID: second.RunID, StepID: second.StepID, Token: second.Token, RequestID: "complete-second",
 	}); !response.OK {
@@ -193,7 +193,7 @@ func TestControlServerAcceptsCurrentCredentialAndAcknowledgesIdempotently(t *tes
 	logger := &recordingEventLogger{}
 	server := newTestControlServer(t, t.TempDir(), logger)
 	defer server.Close()
-	attempt := server.Activate("implement")
+	attempt := server.ActivateWithCheckpoint("implement", nil)
 	request := controlRequest{
 		Type:      MessageCompleteStep,
 		RunID:     attempt.RunID,
@@ -405,7 +405,7 @@ func TestControlServerAcceptsTurnCommittedAfterCompletion(t *testing.T) {
 	logger := &recordingEventLogger{}
 	server := newTestControlServer(t, t.TempDir(), logger)
 	defer server.Close()
-	attempt := server.Activate("implement")
+	attempt := server.ActivateWithCheckpoint("implement", nil)
 	complete := controlRequest{Type: MessageCompleteStep, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "complete"}
 	if response := exchange(t, server.SocketPath(), &complete); !response.OK {
 		t.Fatalf("completion response = %#v", response)
@@ -433,11 +433,11 @@ func TestControlServerRoutesCommittedTurnsToAttemptSubscriber(t *testing.T) {
 	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
 	defer server.Close()
 
-	stale := server.Activate("implement")
+	stale := server.ActivateWithCheckpoint("implement", nil)
 	staleCommitted, unsubscribeStale := server.SubscribeCommittedTurn(stale.ID)
 	unsubscribeStale()
 
-	current := server.Activate("implement")
+	current := server.ActivateWithCheckpoint("implement", nil)
 	currentCommitted, unsubscribeCurrent := server.SubscribeCommittedTurn(current.ID)
 	defer unsubscribeCurrent()
 	complete := controlRequest{Type: MessageCompleteStep, RunID: current.RunID, StepID: current.StepID, Token: current.Token, RequestID: "complete"}
@@ -465,7 +465,7 @@ func TestControlServerRoutesCommittedTurnsToAttemptSubscriber(t *testing.T) {
 func TestControlServerLateCommittedTurnSubscriberReceivesRecordedEvidence(t *testing.T) {
 	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
 	defer server.Close()
-	attempt := server.Activate("implement")
+	attempt := server.ActivateWithCheckpoint("implement", nil)
 	complete := controlRequest{Type: MessageCompleteStep, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "complete"}
 	if response := exchange(t, server.SocketPath(), &complete); !response.OK {
 		t.Fatalf("completion response = %#v", response)
@@ -489,7 +489,7 @@ func TestControlServerRejectsTurnCommittedBeforeCompletion(t *testing.T) {
 	logger := &recordingEventLogger{}
 	server := newTestControlServer(t, t.TempDir(), logger)
 	defer server.Close()
-	attempt := server.Activate("implement")
+	attempt := server.ActivateWithCheckpoint("implement", nil)
 	committed := controlRequest{Type: MessageTurnCommitted, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "early-turn"}
 
 	response := exchange(t, server.SocketPath(), &committed)
@@ -509,7 +509,7 @@ func TestControlServerRejectsTurnCommittedBeforeCompletion(t *testing.T) {
 func TestControlServerRetriesTurnCommittedAfterLostAcknowledgement(t *testing.T) {
 	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
 	defer server.Close()
-	attempt := server.Activate("implement")
+	attempt := server.ActivateWithCheckpoint("implement", nil)
 	complete := controlRequest{Type: MessageCompleteStep, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "complete"}
 	if response := exchange(t, server.SocketPath(), &complete); !response.OK {
 		t.Fatalf("completion response = %#v", response)
@@ -550,15 +550,15 @@ func TestControlServerRejectsStaleMalformedAndInactiveEvents(t *testing.T) {
 		{
 			name: "stale credential",
 			prepare: func(server *ControlServer) []byte {
-				stale := server.Activate("step")
-				server.Activate("step")
+				stale := server.ActivateWithCheckpoint("step", nil)
+				server.ActivateWithCheckpoint("step", nil)
 				return marshalLine(t, controlRequest{Type: MessageCompleteStep, RunID: stale.RunID, StepID: stale.StepID, Token: stale.Token, RequestID: "stale"})
 			},
 		},
 		{
 			name: "malformed payload",
 			prepare: func(server *ControlServer) []byte {
-				server.Activate("step")
+				server.ActivateWithCheckpoint("step", nil)
 				return []byte("{not-json}\n")
 			},
 		},
@@ -571,7 +571,7 @@ func TestControlServerRejectsStaleMalformedAndInactiveEvents(t *testing.T) {
 		{
 			name: "message exceeds bound",
 			prepare: func(server *ControlServer) []byte {
-				server.Activate("step")
+				server.ActivateWithCheckpoint("step", nil)
 				return append([]byte(`{"type":"complete_step","padding":"`), append([]byte(strings.Repeat("x", MaxControlMessageBytes)), []byte(`"}`+"\n")...)...)
 			},
 		},
@@ -601,7 +601,7 @@ func TestControlServerRejectsStaleMalformedAndInactiveEvents(t *testing.T) {
 func TestSendControlEventFromEnvironment(t *testing.T) {
 	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
 	defer server.Close()
-	attempt := server.Activate("step")
+	attempt := server.ActivateWithCheckpoint("step", nil)
 	environment := attempt.EnvironmentMap()
 	getenv := func(key string) string { return environment[key] }
 

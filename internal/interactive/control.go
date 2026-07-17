@@ -227,11 +227,6 @@ func NewControlServer(config *ControlConfig) (*ControlServer, error) {
 
 func (s *ControlServer) SocketPath() string { return s.socketPath }
 
-// Activate rotates the credential and makes one interactive attempt current.
-func (s *ControlServer) Activate(stepID string) Attempt {
-	return s.ActivateWithCheckpoint(stepID, nil)
-}
-
 // ActivateWithCheckpoint rotates the credential and binds the durability
 // checkpoint captured synchronously when completion is accepted.
 func (s *ControlServer) ActivateWithCheckpoint(stepID string, checkpoint func() (cli.Checkpoint, error)) Attempt {
