@@ -81,15 +81,17 @@ tests preserve the exact emitted forms so version drift fails visibly.
   the response, after which the same Stop hook routes completion through the
   control channel.
 - Store fallback: Cursor's `store.db` contains complete assistant messages as
-  JSON blobs. The probe hashes the semantic assistant objects at checkpoint
-  time and requires a new assistant object afterward; database mtime and quiet
-  periods are ignored.
+  JSON blobs in the `blobs` table. The probe queries text-bearing assistant
+  rows, checkpoints their content-addressed row IDs, and requires a new row
+  afterward. Queries use exponential backoff; database mtime and quiet periods
+  are ignored.
 
 ### OpenCode
 
 - Exact approval: a process-local `OPENCODE_PERMISSION` value contains one
-  rule, `<quoted-absolute-path> step complete: allow`. It has no catch-all or
-  wildcard. The installed config resolver accepted this inline form.
+  `bash` rule, `<quoted-absolute-path> step complete: allow`. It has no
+  catch-all or wildcard. The installed config resolver accepted this inline
+  form.
 - `/next`: `OPENCODE_CONFIG_CONTENT` adds a `next` custom command whose shell
   interpolation runs the same quoted absolute command. Both environment
   overrides apply only to the spawned process.

@@ -62,7 +62,9 @@ func (a *OpenCodeAdapter) BuildArgs(input *BuildArgsInput) []string {
 		return args
 	}
 	command := input.CompletionCommand.shellCommand()
-	permission, _ := json.Marshal(map[string]string{command: "allow"})
+	permission, _ := json.Marshal(map[string]map[string]string{
+		"bash": {command: "allow"},
+	})
 	config, _ := json.Marshal(map[string]any{
 		"command": map[string]any{
 			"next": map[string]string{

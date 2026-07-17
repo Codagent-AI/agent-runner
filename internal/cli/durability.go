@@ -1,11 +1,8 @@
 package cli
 
 import (
-	"bufio"
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -104,11 +100,11 @@ func (a *CursorAdapter) Checkpoint(sessionID string) (Checkpoint, error) {
 	if err != nil {
 		return Checkpoint{}, err
 	}
-	data, err := os.ReadFile(path) // #nosec G304 -- resolved beneath Cursor's native chat store
+	rows, err := a.cursorAssistantRows(path)
 	if err != nil {
-		return Checkpoint{}, fmt.Errorf("read Cursor chat store %s: %w", path, err)
+		return Checkpoint{}, err
 	}
-	return Checkpoint{Artifact: path, Marker: strings.Join(cursorAssistantDigests(data), "\n")}, nil
+	return Checkpoint{Artifact: path, Marker: cursorRowMarker(rows)}, nil
 }
 
 func (a *CursorAdapter) WaitForCommittedTurn(ctx context.Context, sessionID string, after Checkpoint) error {
@@ -120,18 +116,58 @@ func (a *CursorAdapter) WaitForCommittedTurn(ctx context.Context, sessionID stri
 		return err
 	}
 	baseline := stringSet(after.Marker)
-	return pollForCommittedTurn(ctx, path, func() (bool, error) {
-		data, err := os.ReadFile(path) // #nosec G304 -- resolved beneath Cursor's native chat store
+	return pollForCommittedTurnWithBackoff(ctx, path, 250*time.Millisecond, 2*time.Second, func() (bool, error) {
+		rows, err := a.cursorAssistantRows(path)
 		if err != nil {
 			return false, err
 		}
-		for _, digest := range cursorAssistantDigests(data) {
-			if _, ok := baseline[digest]; !ok {
+		for _, row := range rows {
+			if _, ok := baseline[row.ID]; !ok {
 				return true, nil
 			}
 		}
 		return false, nil
 	})
+}
+
+type cursorAssistantRow struct {
+	ID string `json:"id"`
+}
+
+func (a *CursorAdapter) cursorAssistantRows(path string) ([]cursorAssistantRow, error) {
+	const query = `SELECT id FROM blobs
+WHERE json_valid(CAST(data AS TEXT))
+  AND json_extract(CAST(data AS TEXT), '$.role') = 'assistant'
+  AND EXISTS (
+    SELECT 1 FROM json_each(CAST(data AS TEXT), '$.content')
+    WHERE json_extract(value, '$.type') = 'text'
+  )
+ORDER BY id`
+	var output []byte
+	var err error
+	if a.runStoreQuery != nil {
+		output, err = a.runStoreQuery(query)
+	} else {
+		output, err = exec.Command("sqlite3", "-readonly", "-json", path, query).Output() // #nosec G204 -- fixed executable and query; adapter-resolved path is one argv value
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query Cursor chat store %s: %w", path, err)
+	}
+	var rows []cursorAssistantRow
+	if err := json.Unmarshal(output, &rows); err != nil {
+		return nil, fmt.Errorf("decode Cursor chat store %s: %w", path, err)
+	}
+	return rows, nil
+}
+
+func cursorRowMarker(rows []cursorAssistantRow) string {
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if row.ID != "" {
+			ids = append(ids, row.ID)
+		}
+	}
+	return strings.Join(ids, "\n")
 }
 
 func (a *OpenCodeAdapter) Checkpoint(sessionID string) (Checkpoint, error) {
@@ -153,7 +189,7 @@ func (a *OpenCodeAdapter) WaitForCommittedTurn(ctx context.Context, sessionID st
 	if err := validateCheckpoint(after, wantArtifact); err != nil {
 		return err
 	}
-	return pollForCommittedTurn(ctx, after.Artifact, func() (bool, error) {
+	return pollForCommittedTurnWithBackoff(ctx, after.Artifact, 250*time.Millisecond, 2*time.Second, func() (bool, error) {
 		record, err := a.latestCompletedOpenCodeAssistant(sessionID)
 		if err != nil {
 			return false, err
@@ -295,14 +331,39 @@ func validateSessionID(sessionID string) error {
 }
 
 func fileCheckpoint(path string) (Checkpoint, error) {
-	info, err := os.Stat(path)
+	file, err := os.Open(path) // #nosec G304 -- adapter resolved the native session path
+	if err != nil {
+		return Checkpoint{}, fmt.Errorf("checkpoint native session store %s: %w", path, err)
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
 	if err != nil {
 		return Checkpoint{}, fmt.Errorf("checkpoint native session store %s: %w", path, err)
 	}
 	if info.IsDir() {
 		return Checkpoint{}, fmt.Errorf("checkpoint native session store %s: is a directory", path)
 	}
-	return Checkpoint{Artifact: path, Offset: info.Size()}, nil
+	offset, err := jsonlCheckpointOffset(file, info.Size())
+	if err != nil {
+		return Checkpoint{}, fmt.Errorf("checkpoint native session store %s: %w", path, err)
+	}
+	return Checkpoint{Artifact: path, Offset: offset}, nil
+}
+
+func jsonlCheckpointOffset(file *os.File, size int64) (int64, error) {
+	const chunkSize int64 = 64 * 1024
+	for end := size; end > 0; {
+		start := max(end-chunkSize, 0)
+		chunk := make([]byte, end-start)
+		if _, err := file.ReadAt(chunk, start); err != nil && err != io.EOF {
+			return 0, err
+		}
+		if index := bytes.LastIndexByte(chunk, '\n'); index >= 0 {
+			return start + int64(index) + 1, nil
+		}
+		end = start
+	}
+	return 0, nil
 }
 
 func waitForSemanticRecord(ctx context.Context, after Checkpoint, path string, semantic func([]byte) bool) error {
@@ -318,14 +379,19 @@ func waitForSemanticRecord(ctx context.Context, after Checkpoint, path string, s
 		if _, err := file.Seek(after.Offset, io.SeekStart); err != nil {
 			return false, err
 		}
-		scanner := bufio.NewScanner(file)
-		scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-		for scanner.Scan() {
-			if semantic(scanner.Bytes()) {
+		decoder := json.NewDecoder(file)
+		for {
+			var record json.RawMessage
+			if err := decoder.Decode(&record); err != nil {
+				if err == io.EOF || err == io.ErrUnexpectedEOF {
+					return false, nil
+				}
+				return false, err
+			}
+			if semantic(record) {
 				return true, nil
 			}
 		}
-		return false, scanner.Err()
 	})
 }
 
@@ -340,52 +406,36 @@ func validateCheckpoint(after Checkpoint, artifact string) error {
 }
 
 func pollForCommittedTurn(ctx context.Context, artifact string, inspect func() (bool, error)) error {
-	ticker := time.NewTicker(durabilityPollInterval)
-	defer ticker.Stop()
+	return pollForCommittedTurnWithBackoff(ctx, artifact, durabilityPollInterval, durabilityPollInterval, inspect)
+}
+
+func pollForCommittedTurnWithBackoff(
+	ctx context.Context,
+	artifact string,
+	initialDelay time.Duration,
+	maxDelay time.Duration,
+	inspect func() (bool, error),
+) error {
+	delay := initialDelay
+	var lastErr error
 	for {
 		committed, err := inspect()
-		if err != nil {
-			return fmt.Errorf("inspect committed turn in %s: %w", artifact, err)
-		}
+		lastErr = err
 		if committed {
 			return nil
 		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
+			if lastErr != nil {
+				return fmt.Errorf("wait for committed turn in %s after inspection error %v: %w", artifact, lastErr, ctx.Err())
+			}
 			return fmt.Errorf("wait for committed turn in %s: %w", artifact, ctx.Err())
-		case <-ticker.C:
+		case <-timer.C:
 		}
+		delay = min(delay*2, maxDelay)
 	}
-}
-
-func cursorAssistantDigests(data []byte) []string {
-	needle := []byte(`{"role":"assistant"`)
-	var digests []string
-	for start := 0; ; {
-		index := bytes.Index(data[start:], needle)
-		if index < 0 {
-			break
-		}
-		index += start
-		decoder := json.NewDecoder(bytes.NewReader(data[index:]))
-		var raw json.RawMessage
-		if err := decoder.Decode(&raw); err == nil {
-			var message struct {
-				Role    string            `json:"role"`
-				Content []json.RawMessage `json:"content"`
-			}
-			if json.Unmarshal(raw, &message) == nil && message.Role == "assistant" && len(message.Content) > 0 {
-				compact := &bytes.Buffer{}
-				if json.Compact(compact, raw) == nil {
-					sum := sha256.Sum256(compact.Bytes())
-					digests = append(digests, hex.EncodeToString(sum[:]))
-				}
-			}
-		}
-		start = index + len(needle)
-	}
-	sort.Strings(digests)
-	return digests
 }
 
 func stringSet(joined string) map[string]struct{} {

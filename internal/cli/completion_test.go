@@ -156,13 +156,13 @@ func TestAdaptersEmitCompletionIntegrations(t *testing.T) {
 		if !strings.HasPrefix(args[1], prefix) {
 			t.Fatalf("OpenCode args do not include OPENCODE_PERMISSION: %v", args)
 		}
-		var permission map[string]string
+		var permission map[string]map[string]string
 		if err := json.Unmarshal([]byte(strings.TrimPrefix(args[1], prefix)), &permission); err != nil {
 			t.Fatalf("decode OpenCode permission: %v", err)
 		}
 		want := "'/Applications/Agent Runner/bin/agent-runner' step complete"
-		if len(permission) != 1 || permission[want] != "allow" {
-			t.Fatalf("OpenCode permission = %#v, want only exact command", permission)
+		if len(permission) != 1 || len(permission["bash"]) != 1 || permission["bash"][want] != "allow" {
+			t.Fatalf("OpenCode permission = %#v, want only exact bash command", permission)
 		}
 		const configPrefix = "OPENCODE_CONFIG_CONTENT="
 		if !strings.HasPrefix(args[2], configPrefix) {

@@ -17,7 +17,9 @@ import (
 )
 
 // CursorAdapter constructs invocation args for the Cursor agent CLI.
-type CursorAdapter struct{}
+type CursorAdapter struct {
+	runStoreQuery func(string) ([]byte, error)
+}
 
 const maxCursorStoreDBSize = 64 * 1024 * 1024
 
