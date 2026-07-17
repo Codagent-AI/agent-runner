@@ -38,6 +38,7 @@ type directInvocation struct {
 	cliName          string
 	sessionID        string
 	probe            cli.TurnDurabilityProbe
+	spawnEnv         []string
 	resolveSessionID func() string
 }
 
@@ -172,7 +173,7 @@ func ExecuteAgentStep(
 		return OutcomeFailed, nil
 	}
 
-	args, resolvedModel, argsErr := buildStepInvocation(step, ctx, profile, adapter, cliName, prompt, enrichment, sessionID, isResume, invocationContext)
+	args, spawnEnv, resolvedModel, argsErr := buildStepInvocation(step, ctx, profile, adapter, cliName, prompt, enrichment, sessionID, isResume, invocationContext)
 	if argsErr != nil {
 		emitAgentFailure(ctx, prefix, startTime, string(mode), step, argsErr.Error())
 		return OutcomeFailed, nil
@@ -207,7 +208,7 @@ func ExecuteAgentStep(
 	spawnTime := time.Now()
 	probe, _ := adapter.(cli.TurnDurabilityProbe)
 	direct := &directInvocation{
-		ctx: ctx, stepID: step.ID, cliName: cliName, sessionID: sessionID, probe: probe,
+		ctx: ctx, stepID: step.ID, cliName: cliName, sessionID: sessionID, probe: probe, spawnEnv: spawnEnv,
 		resolveSessionID: func() string {
 			return adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: spawnTime, Workdir: step.Workdir})
 		},
@@ -409,10 +410,10 @@ func resolveAdapterAndSession(
 	return adapter, cliName, sessionID, isResume, nil
 }
 
-// buildAdapterInput assembles the full prompt and CLI input for an agent step.
-// buildStepInvocation constructs the CLI invocation args and resolved model
-// for an agent step. Arg-construction failures (e.g. a required completion
-// integration that cannot be materialized) surface before the CLI is spawned.
+// buildStepInvocation constructs the CLI invocation args, the adapter's
+// process-local spawn environment, and the resolved model for an agent step.
+// Construction failures (e.g. a required completion integration that cannot
+// be materialized) surface before the CLI is spawned.
 func buildStepInvocation(
 	step *model.Step,
 	ctx *model.ExecutionContext,
@@ -421,18 +422,22 @@ func buildStepInvocation(
 	cliName, prompt, enrichment, sessionID string,
 	isResume bool,
 	invocationContext cli.InvocationContext,
-) (args []string, resolvedModel string, err error) {
+) (args, spawnEnv []string, resolvedModel string, err error) {
 	completionExecutable := completionExecutableForContext(invocationContext)
 	input := buildAdapterInput(step, ctx, profile, adapter, cliName, prompt, enrichment, sessionID, isResume, invocationContext, completionExecutable)
 	args, err = cli.BuildInvocationArgs(adapter, &input)
 	if err != nil {
-		return nil, "", err
+		return nil, nil, "", err
+	}
+	spawnEnv, err = cli.SpawnEnvForInvocation(adapter, &input)
+	if err != nil {
+		return nil, nil, "", err
 	}
 	resolvedModel = input.Model
 	if resolvedModel == "" && profile != nil {
 		resolvedModel = profile.Model
 	}
-	return args, resolvedModel, nil
+	return args, spawnEnv, resolvedModel, nil
 }
 
 func buildAdapterInput(
@@ -578,7 +583,7 @@ func runDirectInteractive(args []string, options directRunOptions) (interactive.
 	direct := interactive.NewDirectRunner(&interactive.DirectOptions{
 		Args: args, Workdir: options.workdir, StepID: invocation.stepID,
 		SessionID: invocation.sessionID, CLI: invocation.cliName,
-		DropEnv: dropSpawnEnvForCLI(invocation.cliName),
+		Env: invocation.spawnEnv, DropEnv: dropSpawnEnvForCLI(invocation.cliName),
 		Control: server, Probe: invocation.probe, ResolveSessionID: invocation.resolveSessionID, Foreground: true,
 		WatchdogExecutable: executable, Logger: invocation.ctx.AuditLogger,
 		Prefix: audit.BuildPrefix(nestingToAudit(invocation.ctx), invocation.stepID),

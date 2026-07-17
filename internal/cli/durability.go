@@ -383,11 +383,11 @@ func cursorStorePath(sessionID string) (string, error) {
 	if err := validateSessionID(sessionID); err != nil {
 		return "", err
 	}
-	home, err := os.UserHomeDir()
+	root, err := cursorChatsRoot()
 	if err != nil {
 		return "", err
 	}
-	pattern := filepath.Join(home, ".cursor", "chats", "*", sessionID, "store.db")
+	pattern := filepath.Join(root, "*", sessionID, "store.db")
 	paths, err := filepath.Glob(pattern)
 	return exactlyOneSessionPath("Cursor", sessionID, paths, err)
 }

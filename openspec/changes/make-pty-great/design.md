@@ -120,7 +120,7 @@ Baseline for all five: the agent's shell tool runs the absolute-path client (pat
 | Claude | `--allowedTools "Bash(<abs> step complete)"` — exact command only *(P0)* | Ephemeral `Stop` hook injected via `--settings`, running `agent-runner internal turn-committed` *(P0)*; fallback: completed assistant-turn record in `~/.claude/projects/<encoded>/<id>.jsonl` after checkpoint |
 | Codex | Approval override scoped to the exact command via `-c` config *(P0)* | `notify` config on `agent-turn-complete` running the turn-committed sender *(P0)*; fallback: turn-end records in `~/.codex/sessions/**/<id>.jsonl` after checkpoint |
 | Copilot | Granular `--allow-tool` shell scoping *(P0)* | Completed-turn record in its session-directory state *(P0)* |
-| Cursor | Permissions config allowlist *(P0)* | Completed assistant message in the local chat store after checkpoint *(P0)* |
+| Cursor | `Shell(<abs>:step complete)` rule appended in a private per-invocation `CURSOR_CONFIG_DIR` config copy *(P0)* | Completion receipt persisted in the chat store's tool-result blob after checkpoint *(P0)* |
 | OpenCode | `opencode.json` bash permission allow-pattern for the exact command *(P0)* | `opencode db` query for a completed assistant message after checkpoint *(P0)* |
 
 Interactive pre-approval is governed by the `cli-adapter` delta spec: pre-approval may cover only the exact absolute executable path with fixed `step complete` arguments — no wildcards, chaining, or other subcommands. Autonomous-interactive invocations may additionally use each CLI's existing autonomous permission flags (unchanged).

@@ -270,8 +270,8 @@ steps:
 	if err != nil {
 		t.Fatalf("real %s interactive E2E failed: %v\n%s", agent, err, result.output)
 	}
-	if agent == "cursor" && result.commandApprovals == 0 {
-		t.Fatalf("real cursor interactive run never surfaced the supervised approval prompt (Run this command?); interactive Cursor completion must go through human approval, so a run without the prompt hides a behavior change\n%s", result.output)
+	if agent == "cursor" && result.commandApprovals != 0 {
+		t.Fatalf("real cursor interactive run surfaced %d approval prompt(s) (Run this command?); the narrow Shell(<abs>:step complete) pre-approval in the private CURSOR_CONFIG_DIR must cover the completion command without prompting\n%s", result.commandApprovals, result.output)
 	}
 	plain := ansi.Strip(result.output)
 	freshPhrase := capturedRealAgentPhrase(agent, plain, freshPrefix)
@@ -403,8 +403,9 @@ func writeRealAgentTestFile(t *testing.T, path string, data []byte) {
 
 type realAgentPTYResult struct {
 	output string
-	// commandApprovals counts the CLI-native supervised approval prompts the
-	// harness answered (Copilot's and Cursor's shell-command confirmations).
+	// commandApprovals counts CLI-native shell-command approval prompts:
+	// answered for Copilot, and only counted for Cursor — where the narrow
+	// pre-approval means any prompt at all is a regression.
 	commandApprovals int
 }
 
@@ -552,9 +553,11 @@ func runRealAgentWorkflowInPTY(cmd *exec.Cmd, agent string, phases []realAgentPT
 			approvalBoundary = len(plain)
 			_, _ = ptmx.Write([]byte("\r"))
 		case agent == "cursor" && strings.Contains(approvalText, "Run this command?"):
+			// Never answered: the narrow pre-approval in the private config
+			// must cover the completion command, so a prompt is a regression.
+			// Counting it lets the caller fail with a precise message.
 			commandApprovals++
 			approvalBoundary = len(plain)
-			_, _ = ptmx.Write([]byte("y"))
 		}
 	}
 	for !readDone || !waitDone {

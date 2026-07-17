@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -22,7 +23,17 @@ import (
 // CursorAdapter constructs invocation args for the Cursor agent CLI.
 type CursorAdapter struct {
 	runStoreQuery           func(context.Context, string) ([]byte, error)
-	prepareCompletionPlugin func(CompletionCommand) (string, error) // test seam; nil uses prepareCursorCompletionPlugin
+	prepareCompletionPlugin func(CompletionCommand) (string, error)              // test seam; nil uses prepareCursorCompletionPlugin
+	prepareConfig           func(CompletionCommand) (cursorPrivateConfig, error) // test seam; nil uses prepareCursorPrivateConfig
+}
+
+// cursorPrivateConfig describes the materialized per-invocation configuration
+// directory. DenyRuleBlockingCompletion carries the first user deny rule that
+// covers the completion command; deny rules take precedence over allow rules
+// in Cursor, so such a rule means the pre-approval cannot take effect.
+type cursorPrivateConfig struct {
+	Dir                        string
+	DenyRuleBlockingCompletion string
 }
 
 const maxCursorStoreDBSize = 64 * 1024 * 1024
@@ -48,10 +59,12 @@ func (a *CursorAdapter) ExecutableName() string {
 // model it was started with.
 //
 // Autonomous contexts honor autonomous_permission_mode: yolo emits --force in
-// both autonomous-headless and autonomous-interactive invocations. Cursor's
-// Shell allowlist is prefix-matching, so no safe narrow pre-approval of the
-// completion command exists; a conservative autonomous-interactive invocation
-// would hang unattended at Cursor's approval prompt and fails early instead.
+// both autonomous-headless and autonomous-interactive invocations. Interactive
+// backends additionally receive a private configuration directory (via
+// SpawnEnv) whose permissions allow exactly the completion command —
+// Shell(<abs>:step complete) matches the command and argument patterns
+// separately, so the completion client runs without an approval prompt while
+// every other command keeps Cursor's normal permission behavior.
 //
 // BuildArgs exists only to satisfy the Adapter interface; callers must use
 // BuildInvocationArgs so a construction failure surfaces before spawn.
@@ -64,14 +77,10 @@ func (a *CursorAdapter) BuildArgs(input *BuildArgsInput) []string {
 }
 
 // BuildArgsWithError constructs Cursor CLI args, failing when the completion
-// plugin — Cursor's only completion integration — cannot be created, or when
-// an autonomous-interactive invocation has no approval-free completion path.
+// plugin cannot be created.
 func (a *CursorAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, error) {
 	invocationContext := input.InvocationContext()
 	mode := usersettings.EffectiveAutonomousPermissionMode(input.PermissionMode)
-	if invocationContext == ContextAutonomousInteractive && mode != usersettings.PermissionModeYOLO {
-		return nil, fmt.Errorf("cursor: unattended completion requires autonomous_permission_mode: yolo; Cursor's Shell allowlist is prefix-matching, so there is no safe narrow pre-approval for the completion command, and under conservative mode an autonomous-interactive step would hang at Cursor's approval prompt with nobody to answer it")
-	}
 	args := []string{"agent"}
 	if invocationContext.IsHeadless() {
 		args = append(args, "-p", "--output-format", "stream-json", "--trust")
@@ -137,6 +146,269 @@ Run this exact shell command now, then finish the current response:
 		}
 	}
 	return pluginDir, nil
+}
+
+// SpawnEnv implements SpawnEnvContributor: interactive-backend invocations
+// with a completion command run against a private, per-invocation
+// configuration directory whose permissions pre-approve exactly the
+// completion command. The user's own configuration files are never modified.
+func (a *CursorAdapter) SpawnEnv(input *BuildArgsInput) ([]string, error) {
+	if input.InvocationContext().IsHeadless() || input.CompletionCommand == nil || !input.CompletionCommand.Valid() {
+		return nil, nil
+	}
+	prepare := a.prepareConfig
+	if prepare == nil {
+		prepare = prepareCursorPrivateConfig
+	}
+	config, err := prepare(*input.CompletionCommand)
+	if err != nil {
+		return nil, fmt.Errorf("cursor: prepare private config: %w", err)
+	}
+	if config.DenyRuleBlockingCompletion != "" &&
+		input.InvocationContext() == ContextAutonomousInteractive &&
+		usersettings.EffectiveAutonomousPermissionMode(input.PermissionMode) != usersettings.PermissionModeYOLO {
+		return nil, fmt.Errorf("cursor: unattended completion is blocked by your Cursor deny rule %q, which takes precedence over the completion pre-approval; remove that deny rule or set autonomous_permission_mode: yolo", config.DenyRuleBlockingCompletion)
+	}
+	return []string{"CURSOR_CONFIG_DIR=" + config.Dir}, nil
+}
+
+// cursorConfigSourceDir resolves the configuration directory the Cursor CLI
+// would use for this process: an inherited CURSOR_CONFIG_DIR, else ~/.cursor.
+// The result is always absolute — it becomes a symlink target resolved from
+// the symlink's own directory, where a relative path would point elsewhere.
+func cursorConfigSourceDir() (string, error) {
+	if dir := os.Getenv("CURSOR_CONFIG_DIR"); dir != "" {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return "", fmt.Errorf("resolve cursor config dir %q: %w", dir, err)
+		}
+		return abs, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", fmt.Errorf("locate cursor config dir: %w", err)
+	}
+	return filepath.Join(home, ".cursor"), nil
+}
+
+// cursorChatsRoot resolves the chat-store root for session discovery and
+// durability inspection. The private per-invocation config dir symlinks its
+// chats entry here, so spawned sessions always land in this shared store.
+func cursorChatsRoot() (string, error) {
+	source, err := cursorConfigSourceDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(source, "chats"), nil
+}
+
+// cursorCompletionPermission renders the narrow pre-approval rule: Cursor
+// matches the command and argument patterns separately, so this covers
+// exactly the absolute-path completion client with its fixed arguments —
+// never other arguments, chaining, or other agent-runner subcommands. A
+// command containing Cursor permission metacharacters is rejected: wildcards
+// would silently broaden the rule to other executables and delimiters would
+// malform it, and Cursor documents no literal-escaping mechanism.
+func cursorCompletionPermission(command CompletionCommand) (string, error) {
+	for _, part := range append([]string{command.Executable}, command.Args...) {
+		if strings.ContainsAny(part, "*?:()") {
+			return "", fmt.Errorf("completion command part %q contains Cursor permission metacharacters; a safe narrow pre-approval cannot be expressed", part)
+		}
+		for _, r := range part {
+			if r < 0x20 || r == 0x7f {
+				return "", fmt.Errorf("completion command part %q contains control characters; a safe narrow pre-approval cannot be expressed", part)
+			}
+		}
+	}
+	return "Shell(" + command.Executable + ":" + strings.Join(command.Args, " ") + ")", nil
+}
+
+func prepareCursorPrivateConfig(command CompletionCommand) (cursorPrivateConfig, error) {
+	if !command.Valid() {
+		return cursorPrivateConfig{}, fmt.Errorf("invalid completion command")
+	}
+	source, err := cursorConfigSourceDir()
+	if err != nil {
+		return cursorPrivateConfig{}, err
+	}
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return cursorPrivateConfig{}, fmt.Errorf("locate user cache: %w", err)
+	}
+	return prepareCursorPrivateConfigAt(source, filepath.Join(cacheDir, "agent-runner"), command)
+}
+
+// prepareCursorPrivateConfigAt materializes the private configuration
+// directory: the user's cli-config.json with the completion pre-approval
+// appended to permissions.allow (deny rules are preserved and keep
+// precedence, per Cursor's semantics), plus a chats symlink back to the
+// user's real session store so resume, discovery, and durability keep
+// operating on the shared store.
+func prepareCursorPrivateConfigAt(sourceDir, cacheRoot string, command CompletionCommand) (cursorPrivateConfig, error) {
+	rule, err := cursorCompletionPermission(command)
+	if err != nil {
+		return cursorPrivateConfig{}, err
+	}
+	sourceConfig := filepath.Join(sourceDir, "cli-config.json")
+	raw, err := os.ReadFile(sourceConfig) // #nosec G304 -- the user's own Cursor config location
+	switch {
+	case os.IsNotExist(err):
+		raw = []byte(`{"version": 1, "permissions": {"allow": [], "deny": []}}`)
+	case err != nil:
+		return cursorPrivateConfig{}, fmt.Errorf("read cursor config %s: %w", sourceConfig, err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(raw, &config); err != nil {
+		return cursorPrivateConfig{}, fmt.Errorf("parse cursor config %s: %w", sourceConfig, err)
+	}
+	permissions, ok := config["permissions"].(map[string]any)
+	if !ok {
+		permissions = map[string]any{}
+		config["permissions"] = permissions
+	}
+	allow, _ := permissions["allow"].([]any)
+	present := false
+	for _, entry := range allow {
+		if entry == rule {
+			present = true
+			break
+		}
+	}
+	if !present {
+		permissions["allow"] = append(allow, rule)
+	}
+	blockingDeny := ""
+	if deny, _ := permissions["deny"].([]any); deny != nil {
+		for _, entry := range deny {
+			if rule, ok := entry.(string); ok && cursorShellPermissionMatches(rule, command) {
+				blockingDeny = rule
+				break
+			}
+		}
+	}
+	rendered, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return cursorPrivateConfig{}, fmt.Errorf("render cursor config: %w", err)
+	}
+
+	digest := sha256.Sum256([]byte("cursor-config-v1\x00" + rule + "\x00" + string(raw)))
+	dir := filepath.Join(cacheRoot, "cursor-config", hex.EncodeToString(digest[:6]))
+	if err := os.MkdirAll(dir, 0o700); err != nil { // #nosec G703 -- dir combines the local user's cache root with a content digest; creating it is this function's purpose
+		return cursorPrivateConfig{}, fmt.Errorf("create cursor private config dir: %w", err)
+	}
+	if err := writeFileAtomic(filepath.Join(dir, "cli-config.json"), rendered); err != nil {
+		return cursorPrivateConfig{}, fmt.Errorf("write cursor private config: %w", err)
+	}
+	result := cursorPrivateConfig{Dir: dir, DenyRuleBlockingCompletion: blockingDeny}
+
+	// The chat store follows CURSOR_CONFIG_DIR, so without this link every
+	// spawned session would be stranded in the private dir — breaking resume,
+	// discovery, and the durability probe.
+	chatsTarget := filepath.Join(sourceDir, "chats")
+	if err := os.MkdirAll(chatsTarget, 0o700); err != nil {
+		return cursorPrivateConfig{}, fmt.Errorf("create cursor chats dir: %w", err)
+	}
+	chatsLink := filepath.Join(dir, "chats")
+	if existing, err := os.Readlink(chatsLink); err == nil {
+		if existing == chatsTarget {
+			return result, nil
+		}
+		return cursorPrivateConfig{}, fmt.Errorf("cursor private config %s: chats links to %s, want %s", dir, existing, chatsTarget)
+	} else if !os.IsNotExist(err) {
+		return cursorPrivateConfig{}, fmt.Errorf("cursor private config %s: chats exists and is not a symlink", dir)
+	}
+	if err := os.Symlink(chatsTarget, chatsLink); err != nil {
+		// A concurrent invocation with identical content may have linked first.
+		if existing, readErr := os.Readlink(chatsLink); readErr == nil && existing == chatsTarget {
+			return result, nil
+		}
+		return cursorPrivateConfig{}, fmt.Errorf("link cursor chats store: %w", err)
+	}
+	return result, nil
+}
+
+// cursorShellPermissionMatches reports whether a Shell(...) permission entry
+// covers the completion command. The colon form matches the command and
+// argument patterns separately with *, ** and ? wildcards. The legacy
+// no-colon form is a prefix pattern over the full command line: it matches
+// the whole command or any command beginning with the pattern plus a space.
+func cursorShellPermissionMatches(entry string, command CompletionCommand) bool {
+	inner, ok := strings.CutPrefix(entry, "Shell(")
+	if !ok || !strings.HasSuffix(inner, ")") {
+		return false
+	}
+	inner = strings.TrimSuffix(inner, ")")
+	commandPattern, argsPattern, hasArgs := strings.Cut(inner, ":")
+	if !hasArgs {
+		full := command.Executable + " " + strings.Join(command.Args, " ")
+		return cursorGlobPrefixMatch(commandPattern, full)
+	}
+	return cursorGlobMatch(commandPattern, command.Executable) &&
+		cursorGlobMatch(argsPattern, strings.Join(command.Args, " "))
+}
+
+func cursorGlobMatch(pattern, value string) bool {
+	matched, err := regexp.MatchString("^"+cursorGlobRegexp(pattern)+"$", value)
+	return err == nil && matched
+}
+
+// cursorGlobPrefixMatch applies the legacy allowlist semantics: the pattern
+// matches the value exactly or as a leading word-boundary prefix.
+func cursorGlobPrefixMatch(pattern, value string) bool {
+	matched, err := regexp.MatchString("^"+cursorGlobRegexp(pattern)+"( .*)?$", value)
+	return err == nil && matched
+}
+
+func cursorGlobRegexp(pattern string) string {
+	var expr strings.Builder
+	for i := 0; i < len(pattern); i++ {
+		switch pattern[i] {
+		case '*':
+			expr.WriteString(".*")
+			if i+1 < len(pattern) && pattern[i+1] == '*' {
+				i++
+			}
+		case '?':
+			expr.WriteString(".")
+		default:
+			expr.WriteString(regexp.QuoteMeta(string(pattern[i])))
+		}
+	}
+	return expr.String()
+}
+
+// writeFileAtomic writes via a temporary file and rename so concurrent
+// invocations sharing a digest directory never expose a truncated config to
+// a Cursor process that is starting up.
+//
+// #nosec G703 -- path is the runner-built private config file under the local
+// user's cache directory, and the temp name comes from os.CreateTemp in that
+// same directory; writing there is this helper's purpose.
+func writeFileAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(name)
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(name)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	if err := os.Rename(name, path); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	return nil
 }
 
 // SupportsSystemPrompt returns false — Cursor CLI has no native system prompt flag.
@@ -295,11 +567,10 @@ func discoverCursorInteractiveSession(spawnTime time.Time, workdir string) strin
 	}
 	workdir = filepath.Clean(absWorkdir)
 
-	homeDir, err := os.UserHomeDir()
-	if err != nil || homeDir == "" {
+	root, err := cursorChatsRoot()
+	if err != nil {
 		return ""
 	}
-	root := filepath.Join(homeDir, ".cursor", "chats")
 	rootDir, err := os.OpenRoot(root)
 	if err != nil {
 		return ""

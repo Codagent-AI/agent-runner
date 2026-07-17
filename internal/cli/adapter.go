@@ -314,6 +314,25 @@ func DropSpawnEnvVars(adapter Adapter) []string {
 	return nil
 }
 
+// SpawnEnvContributor is an optional interface adapters may implement when a
+// spawned invocation needs process-local environment variables — for example
+// a private, per-invocation configuration directory. The entries apply only
+// to the spawned CLI process, never to the runner's own environment. The
+// runner currently applies contributed entries to interactive-backend spawns;
+// adapters must return nil for contexts that need none.
+type SpawnEnvContributor interface {
+	SpawnEnv(input *BuildArgsInput) ([]string, error)
+}
+
+// SpawnEnvForInvocation returns the adapter's process-local environment
+// entries for an invocation, or nil for adapters without any.
+func SpawnEnvForInvocation(adapter Adapter, input *BuildArgsInput) ([]string, error) {
+	if contributor, ok := adapter.(SpawnEnvContributor); ok {
+		return contributor.SpawnEnv(input)
+	}
+	return nil, nil
+}
+
 // InteractiveRejector is an optional interface adapters may implement to refuse
 // interactive mode at runtime with a descriptive error.
 type InteractiveRejector interface {

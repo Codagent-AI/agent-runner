@@ -152,24 +152,31 @@ WATCHDOG MISMATCH PASS identity_match=false signal_sent=false target_alive=true
 
 ### Cursor Agent
 
-- Failed candidate: Cursor's `Shell(commandBase)` permission entry is a prefix
-  allowlist. Inspection of the installed implementation confirms that an
-  allowed full pattern also matches strings beginning with that pattern plus a
-  space. `Shell(<path> step complete)` would therefore also approve extra
-  arguments and is not emitted.
-- Autonomous rules: because no safe narrow pre-approval exists, interactive
-  Cursor keeps the CLI's normal supervised approval prompt (the human approves
-  the completion command). Under `autonomous_permission_mode: yolo` the
-  adapter emits `--force` in both autonomous-headless and
-  autonomous-interactive invocations. A conservative autonomous-interactive
-  invocation has no approval-free completion path, so the adapter fails args
-  construction early with an error explaining that unattended Cursor
-  completion requires `autonomous_permission_mode: yolo`, instead of hanging
-  at an approval prompt nobody can answer.
-- Alternative integration: the adapter generates an isolated plugin in the
-  user's cache and loads it for the spawned process with `--plugin-dir`. The
-  plugin contains no hook of any kind; it consists of a manifest and a single
-  slash command. User and project settings are neither replaced nor modified.
+- Exact approval: Cursor's `Shell(command:args)` permission syntax matches the
+  command and argument patterns separately (the bare `Shell(commandBase)` form
+  is a prefix allowlist and remains unusable). Verified against Cursor
+  2026.07.16-899851b: with `Shell(<absolute-path>:step complete)` in
+  `permissions.allow`, the exact command runs without prompting, the same
+  command with an extra argument is rejected, and the exact command followed
+  by `&&` chaining is rejected. Explicit user deny rules take precedence over
+  allow rules per Cursor's documented semantics.
+- Delivery: the adapter never modifies the user's files. It reads the user's
+  `cli-config.json` (from `CURSOR_CONFIG_DIR` or `~/.cursor`), writes a
+  private per-invocation copy with the narrow rule appended to
+  `permissions.allow` (deny rules preserved), and sets `CURSOR_CONFIG_DIR` to
+  the private directory for the spawned process only. Verified: Cursor's chat
+  store follows `CURSOR_CONFIG_DIR`, so the private directory symlinks
+  `chats` back to the user's real store — without the link, sessions are
+  stranded per invocation and resume, discovery, and durability all break.
+  Authentication is unaffected by the redirect (verified against a private
+  directory containing only `cli-config.json`).
+- Autonomous rules: under `autonomous_permission_mode: yolo` the adapter
+  emits `--force` in both autonomous-headless and autonomous-interactive
+  invocations. Conservative autonomous-interactive invocations proceed
+  normally: the narrow pre-approval gives completion an approval-free path.
+- Plugin: the adapter generates an isolated plugin in the user's cache and
+  loads it for the spawned process with `--plugin-dir`. The plugin contains
+  no hook of any kind; it consists of a manifest and a single slash command.
 - `/next`: the isolated plugin includes `commands/next.md`, which instructs
   the agent to run the quoted absolute-path completion client
   (`<path> step complete`) and then finish its response. Completion otherwise

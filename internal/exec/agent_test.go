@@ -1599,6 +1599,39 @@ func TestCompletionExecutableUsesConfiguredAgentRunner(t *testing.T) {
 	}
 }
 
+type spawnEnvAdapter struct {
+	env []string
+	err error
+}
+
+func (a *spawnEnvAdapter) BuildArgs(*cli.BuildArgsInput) []string        { return []string{"fake"} }
+func (a *spawnEnvAdapter) DiscoverSessionID(*cli.DiscoverOptions) string { return "" }
+func (a *spawnEnvAdapter) SupportsSystemPrompt() bool                    { return false }
+func (a *spawnEnvAdapter) ProbeModel(string, string) (cli.ProbeStrength, error) {
+	return cli.BinaryOnly, nil
+}
+func (a *spawnEnvAdapter) SpawnEnv(*cli.BuildArgsInput) ([]string, error) { return a.env, a.err }
+
+func TestBuildStepInvocationCollectsSpawnEnv(t *testing.T) {
+	step := &model.Step{ID: "implement"}
+	ctx := &model.ExecutionContext{}
+	profile := &config.ResolvedAgent{}
+
+	adapter := &spawnEnvAdapter{env: []string{"CURSOR_CONFIG_DIR=/private/dir"}}
+	_, spawnEnv, _, err := buildStepInvocation(step, ctx, profile, adapter, "fake", "prompt", "", "", false, cli.ContextInteractive)
+	if err != nil {
+		t.Fatalf("buildStepInvocation: %v", err)
+	}
+	if diff := cmp.Diff(adapter.env, spawnEnv); diff != "" {
+		t.Fatalf("spawn env mismatch (-want +got):\n%s", diff)
+	}
+
+	failing := &spawnEnvAdapter{err: errors.New("prepare config: boom")}
+	if _, _, _, err := buildStepInvocation(step, ctx, profile, failing, "fake", "prompt", "", "", false, cli.ContextInteractive); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("buildStepInvocation error = %v, want spawn env failure", err)
+	}
+}
+
 func TestDropSpawnEnvForCLI(t *testing.T) {
 	got := dropSpawnEnvForCLI("claude")
 	want := []string{"CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID"}
