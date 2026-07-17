@@ -542,7 +542,7 @@ func agentRunnerExecutable() (string, error) {
 // file. A stale or bogus inherited override would otherwise silently break
 // both the completion client instruction and the watchdog executable.
 func isExecutableFile(path string) bool {
-	info, err := os.Stat(path)
+	info, err := os.Stat(path) // #nosec G703 -- the override is an operator-provided absolute path; this stat IS the validation gate before it is trusted.
 	return err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0
 }
 

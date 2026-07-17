@@ -595,7 +595,7 @@ func SendControlEventFromEnvironmentWithReceipt(ctx context.Context, messageType
 	return "", errors.New("control request failed")
 }
 
-func sendControlRequest(ctx context.Context, socketPath string, request *controlRequest) (string, bool, error) {
+func sendControlRequest(ctx context.Context, socketPath string, request *controlRequest) (receipt string, retryable bool, err error) {
 	connection, err := (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
 	if err != nil {
 		return "", false, fmt.Errorf("connect to interactive step control socket: %w", err)
