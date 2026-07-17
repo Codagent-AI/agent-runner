@@ -113,7 +113,7 @@ func TestClaudeAdapter(t *testing.T) {
 			SessionID: "uuid-123",
 			Context:   ContextAutonomousHeadless,
 		})
-		expected := []string{"claude", "--session-id", "uuid-123", "--permission-mode", "acceptEdits", "-p", "--", "do something"}
+		expected := []string{"claude", "--session-id", "uuid-123", "--permission-mode", "acceptEdits", "-p", "--output-format", "stream-json", "--verbose", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -132,7 +132,7 @@ func TestClaudeAdapter(t *testing.T) {
 			Prompt:  "do something",
 			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"claude", "--permission-mode", "acceptEdits", "-p", "--", "do something"}
+		expected := []string{"claude", "--permission-mode", "acceptEdits", "-p", "--output-format", "stream-json", "--verbose", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -142,7 +142,7 @@ func TestClaudeAdapter(t *testing.T) {
 			Context:        ContextAutonomousHeadless,
 			PermissionMode: "yolo",
 		})
-		expected := []string{"claude", "--permission-mode", "bypassPermissions", "-p", "--", "do something"}
+		expected := []string{"claude", "--permission-mode", "bypassPermissions", "-p", "--output-format", "stream-json", "--verbose", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -179,7 +179,7 @@ func TestClaudeAdapter(t *testing.T) {
 		})
 		// --session-id is reserved for fresh sessions — Claude CLI rejects it
 		// for existing session IDs. Use --resume for headless continuations too.
-		expected := []string{"claude", "--resume", "session-abc", "--permission-mode", "acceptEdits", "-p", "--", "continue"}
+		expected := []string{"claude", "--resume", "session-abc", "--permission-mode", "acceptEdits", "-p", "--output-format", "stream-json", "--verbose", "--", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -200,7 +200,7 @@ func TestClaudeAdapter(t *testing.T) {
 			Model:   "opus",
 			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"claude", "--model", "opus", "--permission-mode", "acceptEdits", "-p", "--", "do something"}
+		expected := []string{"claude", "--model", "opus", "--permission-mode", "acceptEdits", "-p", "--output-format", "stream-json", "--verbose", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -215,7 +215,7 @@ func TestClaudeAdapter(t *testing.T) {
 			Model:     "sonnet",
 			Context:   ContextAutonomousHeadless,
 		})
-		expected := []string{"claude", "--resume", "session-abc", "--permission-mode", "acceptEdits", "-p", "--", "continue"}
+		expected := []string{"claude", "--resume", "session-abc", "--permission-mode", "acceptEdits", "-p", "--output-format", "stream-json", "--verbose", "--", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -229,7 +229,7 @@ func TestClaudeAdapter(t *testing.T) {
 		})
 		// --disallowedTools is compatible with --resume; both flags coexist on
 		// autonomous resume steps.
-		expected := []string{"claude", "--resume", "session-abc", "--permission-mode", "acceptEdits", "-p", "--disallowedTools", "AskUserQuestion", "--", "continue"}
+		expected := []string{"claude", "--resume", "session-abc", "--permission-mode", "acceptEdits", "-p", "--output-format", "stream-json", "--verbose", "--disallowedTools", "AskUserQuestion", "--", "continue"}
 		assertArgs(t, expected, args)
 	})
 
@@ -239,7 +239,7 @@ func TestClaudeAdapter(t *testing.T) {
 			Effort:  "high",
 			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"claude", "--effort", "high", "--permission-mode", "acceptEdits", "-p", "--", "do something"}
+		expected := []string{"claude", "--effort", "high", "--permission-mode", "acceptEdits", "-p", "--output-format", "stream-json", "--verbose", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -262,7 +262,7 @@ func TestClaudeAdapter(t *testing.T) {
 			Effort:  "low",
 			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"claude", "--model", "opus", "--effort", "low", "--permission-mode", "acceptEdits", "-p", "--", "do something"}
+		expected := []string{"claude", "--model", "opus", "--effort", "low", "--permission-mode", "acceptEdits", "-p", "--output-format", "stream-json", "--verbose", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -289,7 +289,7 @@ func TestClaudeAdapter(t *testing.T) {
 			SessionID:    "uuid-abc",
 			Context:      ContextAutonomousHeadless,
 		})
-		expected := []string{"claude", "--session-id", "uuid-abc", "--permission-mode", "acceptEdits", "-p", "--append-system-prompt", "extra context", "--", "do something"}
+		expected := []string{"claude", "--session-id", "uuid-abc", "--permission-mode", "acceptEdits", "-p", "--output-format", "stream-json", "--verbose", "--append-system-prompt", "extra context", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -299,7 +299,7 @@ func TestClaudeAdapter(t *testing.T) {
 			Context:         ContextAutonomousHeadless,
 			DisallowedTools: []string{"AskUserQuestion"},
 		})
-		expected := []string{"claude", "--permission-mode", "acceptEdits", "-p", "--disallowedTools", "AskUserQuestion", "--", "do something"}
+		expected := []string{"claude", "--permission-mode", "acceptEdits", "-p", "--output-format", "stream-json", "--verbose", "--disallowedTools", "AskUserQuestion", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -309,7 +309,7 @@ func TestClaudeAdapter(t *testing.T) {
 			Context:         ContextAutonomousHeadless,
 			DisallowedTools: []string{"AskUserQuestion", "WebSearch"},
 		})
-		expected := []string{"claude", "--permission-mode", "acceptEdits", "-p", "--disallowedTools", "AskUserQuestion", "--disallowedTools", "WebSearch", "--", "do something"}
+		expected := []string{"claude", "--permission-mode", "acceptEdits", "-p", "--output-format", "stream-json", "--verbose", "--disallowedTools", "AskUserQuestion", "--disallowedTools", "WebSearch", "--", "do something"}
 		assertArgs(t, expected, args)
 	})
 
@@ -870,7 +870,7 @@ func TestCopilotAdapter(t *testing.T) {
 			Prompt:  "do something",
 			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"copilot", "-p", "do something", "-s", "--allow-tool=write", "--autopilot"}
+		expected := []string{"copilot", "-p", "do something", "-s", "--output-format", "json", "--allow-tool=write", "--autopilot"}
 		assertArgs(t, expected, args)
 	})
 
@@ -880,7 +880,7 @@ func TestCopilotAdapter(t *testing.T) {
 			Context:        ContextAutonomousHeadless,
 			PermissionMode: "yolo",
 		})
-		expected := []string{"copilot", "-p", "do something", "-s", "--allow-tool=write", "--autopilot", "--allow-all-tools"}
+		expected := []string{"copilot", "-p", "do something", "-s", "--output-format", "json", "--allow-tool=write", "--autopilot", "--allow-all-tools"}
 		assertArgs(t, expected, args)
 	})
 
@@ -991,7 +991,7 @@ func TestCopilotAdapter(t *testing.T) {
 			Resume:    true,
 			Context:   ContextAutonomousHeadless,
 		})
-		expected := []string{"copilot", "-p", "continue", "-s", "--allow-tool=write", "--autopilot", "--resume=session-abc"}
+		expected := []string{"copilot", "-p", "continue", "-s", "--output-format", "json", "--allow-tool=write", "--autopilot", "--resume=session-abc"}
 		assertArgs(t, expected, args)
 	})
 
@@ -1016,7 +1016,7 @@ func TestCopilotAdapter(t *testing.T) {
 			Model:   "gpt-5.2",
 			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"copilot", "-p", "do something", "-s", "--allow-tool=write", "--autopilot", "--model", "gpt-5.2"}
+		expected := []string{"copilot", "-p", "do something", "-s", "--output-format", "json", "--allow-tool=write", "--autopilot", "--model", "gpt-5.2"}
 		assertArgs(t, expected, args)
 	})
 
@@ -1041,7 +1041,7 @@ func TestCopilotAdapter(t *testing.T) {
 			Effort:  "high",
 			Context: ContextAutonomousHeadless,
 		})
-		expected := []string{"copilot", "-p", "do something", "-s", "--allow-tool=write", "--autopilot", "--reasoning-effort", "high"}
+		expected := []string{"copilot", "-p", "do something", "-s", "--output-format", "json", "--allow-tool=write", "--autopilot", "--reasoning-effort", "high"}
 		assertArgs(t, expected, args)
 	})
 
@@ -1078,7 +1078,7 @@ func TestCopilotAdapter(t *testing.T) {
 			Context:         ContextAutonomousHeadless,
 			DisallowedTools: []string{"AskUserQuestion"},
 		})
-		expected := []string{"copilot", "-p", "do something", "-s", "--allow-tool=write", "--autopilot", "--no-ask-user"}
+		expected := []string{"copilot", "-p", "do something", "-s", "--output-format", "json", "--allow-tool=write", "--autopilot", "--no-ask-user"}
 		assertArgs(t, expected, args)
 	})
 

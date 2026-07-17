@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/usersettings"
 )
 
@@ -258,6 +259,19 @@ type DiscoverOptions struct {
 // the plain-text response for capture variables and display.
 type OutputFilter interface {
 	FilterOutput(stdout string) string
+}
+
+// UsageExtraction contains the structured usage and optional CLI-reported USD
+// cost extracted from a headless invocation's raw stdout.
+type UsageExtraction struct {
+	Usage            model.UsageRecord
+	EstimatedCostUSD *float64
+}
+
+// UsageExtractor is an optional adapter capability for CLIs whose headless
+// output includes structured token usage.
+type UsageExtractor interface {
+	ExtractUsage(rawStdout string) (UsageExtraction, error)
 }
 
 // HeadlessResultFilter is an optional interface adapters may implement when a

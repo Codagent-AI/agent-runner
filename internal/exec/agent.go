@@ -192,7 +192,8 @@ func ExecuteAgentStep(
 	// Bind the run-scoped endpoint before the terminal lease is released. A
 	// bind or stale-cleanup failure therefore fails without blanking the TUI.
 	if controlErr := ensureInteractiveControl(ctx, invocationContext); controlErr != nil {
-		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, false, "", OutcomeFailed, "", controlErr.Error())
+		extraction := cli.UsageExtraction{Usage: defaultAgentUsage(cliName, invocationContext.IsHeadless())}
+		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, false, "", OutcomeFailed, "", controlErr.Error(), &extraction)
 		return OutcomeFailed, controlErr
 	}
 
@@ -216,8 +217,9 @@ func ExecuteAgentStep(
 		},
 	}
 	outcome, result, runErr := runAgentProcess(runner, adapter, args, invocationContext, step.Workdir, log, ctx.SuspendHook, ctx.ResumeHook, direct)
+	usageExtraction := extractAgentUsage(adapter, cliName, invocationContext, result.Stdout)
 	if runErr != nil {
-		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, true, "", outcome, "", result.Stderr)
+		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, true, "", outcome, "", result.Stderr, &usageExtraction)
 		return outcome, runErr
 	}
 
@@ -247,7 +249,7 @@ func ExecuteAgentStep(
 
 	discoveredID := discoverAndStoreSession(adapter, step, ctx, spawnTime, sessionID, invocationContext.IsHeadless(), result.Stdout, log)
 
-	emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, true, discoveredID, outcome, filteredStdout, result.Stderr)
+	emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, true, discoveredID, outcome, filteredStdout, result.Stderr, &usageExtraction)
 
 	return outcome, nil
 }
@@ -800,6 +802,7 @@ func emitAgentEnd(
 	discoveredID string,
 	outcome StepOutcome,
 	stdout, stderr string,
+	extraction *cli.UsageExtraction,
 ) {
 	resolvedSessionID := discoveredID
 	if resolvedSessionID == "" {
@@ -808,8 +811,8 @@ func emitAgentEnd(
 	data := map[string]any{
 		"discovered_session_id":  discoveredID,
 		"identity":               executionIdentity(ctx, step, "step", 0, agentInvoked, cliName, resolvedSessionID),
-		"usage":                  defaultAgentUsage(cliName, invocationContext.IsHeadless()),
-		"estimated_api_cost_usd": (*float64)(nil),
+		"usage":                  extraction.Usage,
+		"estimated_api_cost_usd": extraction.EstimatedCostUSD,
 	}
 	if stdout != "" {
 		data["stdout"] = stdout
@@ -818,6 +821,24 @@ func emitAgentEnd(
 		data["stderr"] = stderr
 	}
 	emitStepEnd(ctx, prefix, startTime, string(outcome), data, step)
+}
+
+func extractAgentUsage(adapter cli.Adapter, cliName string, invocationContext cli.InvocationContext, rawStdout string) cli.UsageExtraction {
+	if !invocationContext.IsHeadless() {
+		return cli.UsageExtraction{Usage: defaultAgentUsage(cliName, false)}
+	}
+	extractor, ok := adapter.(cli.UsageExtractor)
+	if !ok {
+		return cli.UsageExtraction{Usage: defaultAgentUsage(cliName, true)}
+	}
+	extraction, err := extractor.ExtractUsage(rawStdout)
+	if err != nil {
+		return cli.UsageExtraction{Usage: model.UsageRecord{
+			Status: model.UsageUnavailable, Reason: model.UnavailableParseFailure,
+			CLI: cliName, Source: "agent-runner",
+		}}
+	}
+	return extraction
 }
 
 func defaultAgentUsage(cliName string, headless bool) model.UsageRecord {

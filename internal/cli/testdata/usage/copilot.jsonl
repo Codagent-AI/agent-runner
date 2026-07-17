@@ -1,0 +1,3 @@
+{"type":"assistant.message","data":{"messageId":"fixture-message-1","model":"gpt-5.4-mini","content":"fixture-ok","phase":"final_answer","outputTokens":20,"toolRequests":[]}}
+{"type":"assistant.message","data":{"messageId":"fixture-message-2","model":"gpt-5.4-mini","content":"","outputTokens":128,"toolRequests":[{"name":"task_complete"}]}}
+{"type":"result","sessionId":"fixture-session","exitCode":0,"usage":{"premiumRequests":0,"totalApiDurationMs":4131,"sessionDurationMs":5777}}

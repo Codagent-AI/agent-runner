@@ -1,0 +1,4 @@
+{"type":"step_start","timestamp":1784330568141,"sessionID":"fixture-session","part":{"type":"step-start"}}
+{"type":"text","timestamp":1784330568299,"sessionID":"fixture-session","part":{"type":"text","text":"fixture-ok"}}
+{"type":"step_finish","timestamp":1784330568299,"sessionID":"fixture-session","part":{"reason":"stop","type":"step-finish","tokens":{"total":11557,"input":9748,"output":5,"reasoning":12,"cache":{"write":0,"read":1792}},"cost":0.00125}}
+{"type":"step_finish","timestamp":1784330568300,"sessionID":"fixture-session","part":{"reason":"stop","type":"step-finish","tokens":{"total":8,"input":3,"output":2,"reasoning":1,"cache":{"write":1,"read":1}},"cost":0.00025}}

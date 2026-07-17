@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/usersettings"
 )
 
@@ -113,7 +114,7 @@ func (a *CodexAdapter) SupportsSystemPrompt() bool {
 	return false
 }
 
-func (a *CodexAdapter) ProbeModel(model, effort string) (ProbeStrength, error) {
+func (a *CodexAdapter) ProbeModel(modelName, effort string) (ProbeStrength, error) {
 	return BinaryOnly, nil
 }
 
@@ -330,6 +331,57 @@ func codexTurnCompleted(output string) bool {
 		}
 	}
 	return false
+}
+
+// ExtractUsage returns the last cumulative usage snapshot emitted by a
+// turn.completed event. Per-step attribution is deliberately left to the
+// metrics collector.
+func (a *CodexAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) {
+	var (
+		lastUsage json.RawMessage
+		modelName string
+	)
+	scanner := bufio.NewScanner(strings.NewReader(rawStdout))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		if strings.TrimSpace(scanner.Text()) == "" {
+			continue
+		}
+		var event struct {
+			Type  string          `json:"type"`
+			Model string          `json:"model"`
+			Usage json.RawMessage `json:"usage"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			return UsageExtraction{}, fmt.Errorf("codex: parse JSONL: %w", err)
+		}
+		if event.Model != "" {
+			modelName = event.Model
+		}
+		if event.Type == "turn.completed" {
+			lastUsage = event.Usage
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return UsageExtraction{}, fmt.Errorf("codex: scan JSONL: %w", err)
+	}
+	if len(lastUsage) == 0 || string(lastUsage) == "null" {
+		return UsageExtraction{Usage: unavailableUsage("codex", "codex:turn.completed", model.UnavailableNoUsageEvent)}, nil
+	}
+
+	tokens, complete, err := tokenCountsFromObject(lastUsage, map[string]string{
+		"input_tokens":            model.TokenInput,
+		"cached_input_tokens":     model.TokenCachedInput,
+		"output_tokens":           model.TokenOutput,
+		"reasoning_output_tokens": model.TokenReasoning,
+	})
+	if err != nil {
+		return UsageExtraction{}, fmt.Errorf("codex: parse turn.completed usage: %w", err)
+	}
+	return UsageExtraction{Usage: model.UsageRecord{
+		Status: model.UsageCollected, CLI: "codex", Provider: "openai", Model: modelName,
+		RawCumulative: tokens, Source: "codex:turn.completed", Completeness: completeness(complete),
+	}}, nil
 }
 
 func filterCodexStderr(stderr string, suppressApplyPatch bool) string {

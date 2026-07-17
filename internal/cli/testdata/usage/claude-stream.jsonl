@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","session_id":"fixture-session","model":"claude-sonnet-4-6","permissionMode":"acceptEdits"}
+{"type":"assistant","message":{"model":"claude-sonnet-4-6","role":"assistant","usage":{"input_tokens":3,"output_tokens":2,"cache_creation_input_tokens":11,"cache_read_input_tokens":101},"content":[{"type":"text","text":"fixture-ok"}]},"session_id":"fixture-session"}
+{"type":"result","subtype":"success","is_error":false,"result":"fixture-ok","session_id":"fixture-session","total_cost_usd":0.0042,"usage":{"input_tokens":3,"cache_creation_input_tokens":11,"cache_read_input_tokens":101,"output_tokens":2}}

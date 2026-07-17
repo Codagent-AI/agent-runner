@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/codagent/agent-runner/internal/model"
 )
 
 // OpenCodeAdapter constructs invocation args for the OpenCode CLI.
@@ -103,7 +105,7 @@ func (a *OpenCodeAdapter) InteractiveModeError() error {
 	return errors.New("opencode does not support interactive steps: a resumed OpenCode session never submits the step prompt (anomalyco/opencode#37536), which stalls workflows silently; use autonomous (headless) mode for opencode or a different CLI for interactive steps")
 }
 
-func (a *OpenCodeAdapter) ProbeModel(model, effort string) (ProbeStrength, error) {
+func (a *OpenCodeAdapter) ProbeModel(modelName, effort string) (ProbeStrength, error) {
 	return BinaryOnly, nil
 }
 
@@ -128,6 +130,98 @@ func (a *OpenCodeAdapter) FilterOutput(stdout string) string {
 
 func (a *OpenCodeAdapter) WrapStdout(downstream io.Writer) io.Writer {
 	return newOpenCodeStreamFilter(downstream)
+}
+
+// ExtractUsage sums the per-step increments and USD costs emitted by
+// step_finish events.
+func (a *OpenCodeAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) {
+	tokens := make(model.TokenCounts)
+	complete := true
+	foundUsage := false
+	var totalCost float64
+	foundCost := false
+	var provider, modelName string
+
+	scanner := bufio.NewScanner(strings.NewReader(rawStdout))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		if strings.TrimSpace(scanner.Text()) == "" {
+			continue
+		}
+		var event struct {
+			Type string `json:"type"`
+			Part *struct {
+				Tokens     json.RawMessage `json:"tokens"`
+				Cost       *float64        `json:"cost"`
+				ProviderID string          `json:"providerID"`
+				ModelID    string          `json:"modelID"`
+			} `json:"part"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			return UsageExtraction{}, fmt.Errorf("opencode: parse JSONL: %w", err)
+		}
+		if event.Type != "step_finish" || event.Part == nil {
+			continue
+		}
+		if event.Part.ProviderID != "" {
+			provider = event.Part.ProviderID
+		}
+		if event.Part.ModelID != "" {
+			modelName = event.Part.ModelID
+		}
+		if event.Part.Cost != nil {
+			totalCost += *event.Part.Cost
+			foundCost = true
+		}
+		if len(event.Part.Tokens) == 0 || string(event.Part.Tokens) == "null" {
+			continue
+		}
+		foundUsage = true
+
+		stepTokens, topComplete, err := tokenCountsFromObject(event.Part.Tokens, map[string]string{
+			"input": model.TokenInput, "output": model.TokenOutput, "reasoning": model.TokenReasoning,
+		})
+		if err != nil {
+			return UsageExtraction{}, fmt.Errorf("opencode: parse step_finish tokens: %w", err)
+		}
+		var tokenObject map[string]json.RawMessage
+		if err := json.Unmarshal(event.Part.Tokens, &tokenObject); err != nil {
+			return UsageExtraction{}, fmt.Errorf("opencode: parse step_finish tokens: %w", err)
+		}
+		cacheRaw := tokenObject["cache"]
+		cacheTokens, cacheComplete, err := tokenCountsFromObject(cacheRaw, map[string]string{
+			"read": model.TokenCachedInput, "write": model.TokenCacheWrite,
+		})
+		if err != nil {
+			return UsageExtraction{}, fmt.Errorf("opencode: parse step_finish cache tokens: %w", err)
+		}
+		for category, count := range stepTokens {
+			tokens[category] += count
+		}
+		for category, count := range cacheTokens {
+			tokens[category] += count
+		}
+		complete = complete && topComplete && cacheComplete
+	}
+	if err := scanner.Err(); err != nil {
+		return UsageExtraction{}, fmt.Errorf("opencode: scan JSONL: %w", err)
+	}
+	if !foundUsage {
+		result := UsageExtraction{Usage: unavailableUsage("opencode", "opencode:step_finish", model.UnavailableNoUsageEvent)}
+		if foundCost {
+			result.EstimatedCostUSD = &totalCost
+		}
+		return result, nil
+	}
+
+	result := UsageExtraction{Usage: model.UsageRecord{
+		Status: model.UsageCollected, CLI: "opencode", Provider: provider, Model: modelName,
+		Tokens: tokens, Source: "opencode:step_finish", Completeness: completeness(complete),
+	}}
+	if foundCost {
+		result.EstimatedCostUSD = &totalCost
+	}
+	return result, nil
 }
 
 func discoverOpenCodeHeadlessSession(output string) string {

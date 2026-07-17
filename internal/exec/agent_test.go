@@ -2,6 +2,7 @@ package exec
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,7 +35,88 @@ func findAuditEvent(events []audit.Event, typ audit.EventType) *audit.Event {
 }
 
 func TestExecuteAgentStep(t *testing.T) {
-	t.Run("headless terminal event reports unsupported adapter usage", func(t *testing.T) {
+	t.Run("adapter without extraction keeps unsupported usage unavailable", func(t *testing.T) {
+		got := extractAgentUsage(&spawnEnvAdapter{}, "fake", cli.ContextAutonomousHeadless, `{"type":"result"}`+"\n")
+		want := cli.UsageExtraction{Usage: model.UsageRecord{
+			Status: model.UsageUnavailable, Reason: model.UnavailableUnsupportedAdapter,
+			CLI: "fake", Source: "agent-runner",
+		}}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Fatalf("extraction mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("headless adapter usage and cost are attached to terminal event", func(t *testing.T) {
+		auditLog := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do something", Session: model.SessionNew}
+		raw := claudeUsageOutput("done", 0.42)
+
+		outcome, err := ExecuteAgentStep(&step, ctx, &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: raw}}}, &mockLogger{})
+		if err != nil || outcome != OutcomeSuccess {
+			t.Fatalf("ExecuteAgentStep() = (%q, %v), want success", outcome, err)
+		}
+		end := findAuditEvent(auditLog.events, audit.EventStepEnd)
+		wantUsage := model.UsageRecord{
+			Status: model.UsageCollected, CLI: "claude", Provider: "anthropic", Model: "claude-sonnet-4-6",
+			Tokens: model.TokenCounts{
+				model.TokenInput: 10, model.TokenCachedInput: 20,
+				model.TokenCacheWrite: 3, model.TokenOutput: 4,
+			},
+			Source: "claude:result-event", Completeness: model.CompletenessComplete,
+		}
+		if diff := cmp.Diff(wantUsage, end.Data["usage"]); diff != "" {
+			t.Fatalf("usage mismatch (-want +got):\n%s", diff)
+		}
+		cost, ok := end.Data["estimated_api_cost_usd"].(*float64)
+		if !ok || cost == nil || *cost != 0.42 {
+			t.Fatalf("cost = %#v, want 0.42", end.Data["estimated_api_cost_usd"])
+		}
+	})
+
+	t.Run("usage parse failure does not change successful outcome", func(t *testing.T) {
+		auditLog := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do something", Session: model.SessionNew}
+
+		outcome, err := ExecuteAgentStep(&step, ctx, &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "not-json\n"}}}, &mockLogger{})
+		if err != nil || outcome != OutcomeSuccess {
+			t.Fatalf("ExecuteAgentStep() = (%q, %v), want success", outcome, err)
+		}
+		end := findAuditEvent(auditLog.events, audit.EventStepEnd)
+		usage := end.Data["usage"].(model.UsageRecord)
+		if usage.Status != model.UsageUnavailable || usage.Reason != model.UnavailableParseFailure || usage.CLI != "claude" {
+			t.Fatalf("usage = %#v, want parse-failure", usage)
+		}
+		if end.Data["estimated_api_cost_usd"] != (*float64)(nil) {
+			t.Fatalf("cost = %#v, want nil", end.Data["estimated_api_cost_usd"])
+		}
+	})
+
+	t.Run("failed step retains extracted usage and cost", func(t *testing.T) {
+		auditLog := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do something", Session: model.SessionNew}
+
+		outcome, err := ExecuteAgentStep(&step, ctx, &mockRunner{results: []ProcessResult{{ExitCode: 1, Stdout: claudeUsageOutput("failed", 0.25)}}}, &mockLogger{})
+		if err != nil || outcome != OutcomeFailed {
+			t.Fatalf("ExecuteAgentStep() = (%q, %v), want failed outcome without execution error", outcome, err)
+		}
+		end := findAuditEvent(auditLog.events, audit.EventStepEnd)
+		usage := end.Data["usage"].(model.UsageRecord)
+		if usage.Status != model.UsageCollected || usage.Tokens[model.TokenInput] != 10 {
+			t.Fatalf("usage = %#v, want collected failed-step usage", usage)
+		}
+		cost := end.Data["estimated_api_cost_usd"].(*float64)
+		if cost == nil || *cost != 0.25 {
+			t.Fatalf("cost = %#v, want 0.25", cost)
+		}
+	})
+
+	t.Run("headless terminal event reports missing usage event", func(t *testing.T) {
 		auditLog := &recordingAuditLogger{}
 		ctx := makeCtx()
 		ctx.AuditLogger = auditLog
@@ -50,7 +132,7 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatalf("identity = %#v", end.Data["identity"])
 		}
 		usage, ok := end.Data["usage"].(model.UsageRecord)
-		if !ok || usage.Status != model.UsageUnavailable || usage.Reason != model.UnavailableUnsupportedAdapter {
+		if !ok || usage.Status != model.UsageUnavailable || usage.Reason != model.UnavailableNoUsageEvent {
 			t.Fatalf("usage = %#v", end.Data["usage"])
 		}
 		if value, exists := end.Data["estimated_api_cost_usd"]; !exists || value != (*float64)(nil) {
@@ -616,7 +698,7 @@ func TestExecuteAgentStep(t *testing.T) {
 	})
 
 	t.Run("captures stdout on autonomous step with capture", func(t *testing.T) {
-		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "review-output"}}}
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: claudeResultOutput("review-output")}}}
 		ctx := makeCtx()
 		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "review", Session: model.SessionNew, Capture: "review_result"}
 		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
@@ -632,7 +714,7 @@ func TestExecuteAgentStep(t *testing.T) {
 	})
 
 	t.Run("capture forces headless even when autonomous backend is interactive", func(t *testing.T) {
-		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "captured-dir"}}}
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: claudeResultOutput("captured-dir")}}}
 		ctx := makeCtx()
 		ctx.AutonomousBackend = "interactive"
 		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "find it", Session: model.SessionNew, Capture: "result_dir"}
@@ -649,7 +731,7 @@ func TestExecuteAgentStep(t *testing.T) {
 	})
 
 	t.Run("strips trailing newlines from captured agent output", func(t *testing.T) {
-		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "path/to/tasks/*.md\n"}}}
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: claudeResultOutput("path/to/tasks/*.md\n")}}}
 		ctx := makeCtx()
 		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "find tasks", Session: model.SessionNew, Capture: "tasks_glob"}
 		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
@@ -665,7 +747,7 @@ func TestExecuteAgentStep(t *testing.T) {
 	})
 
 	t.Run("preserves multiple trailing newlines except final one", func(t *testing.T) {
-		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "value\n\n"}}}
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: claudeResultOutput("value\n\n")}}}
 		ctx := makeCtx()
 		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "get output", Session: model.SessionNew, Capture: "result"}
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
@@ -675,7 +757,7 @@ func TestExecuteAgentStep(t *testing.T) {
 	})
 
 	t.Run("preserves leading whitespace in captured agent output", func(t *testing.T) {
-		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "  indented output\n"}}}
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: claudeResultOutput("  indented output\n")}}}
 		ctx := makeCtx()
 		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "get output", Session: model.SessionNew, Capture: "result"}
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
@@ -685,7 +767,7 @@ func TestExecuteAgentStep(t *testing.T) {
 	})
 
 	t.Run("captures stdout on failed autonomous step with capture", func(t *testing.T) {
-		runner := &mockRunner{results: []ProcessResult{{ExitCode: 1, Stdout: "review-failures"}}}
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 1, Stdout: claudeResultOutput("review-failures")}}}
 		ctx := makeCtx()
 		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "review", Session: model.SessionNew, Capture: "review_result"}
 		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
@@ -1307,7 +1389,7 @@ func TestExecuteAgentStep(t *testing.T) {
 			isStdinTerminal = oldTTY
 		}()
 
-		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "captured-value"}}}
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: claudeResultOutput("captured-value")}}}
 		ctx := makeCtx()
 		ctx.AutonomousBackend = "interactive"
 		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "implement feature", Session: model.SessionNew, Capture: "out"}
@@ -1643,6 +1725,16 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatalf("expected successful step end audit event, got %v", end.Data)
 		}
 	})
+}
+
+func claudeUsageOutput(result string, cost float64) string {
+	return `{"type":"system","subtype":"init","model":"claude-sonnet-4-6"}` + "\n" +
+		`{"type":"assistant","message":{"model":"claude-sonnet-4-6","content":[{"type":"text","text":"` + result + `"}]}}` + "\n" +
+		fmt.Sprintf(`{"type":"result","result":%q,"total_cost_usd":%g,"usage":{"input_tokens":10,"cache_read_input_tokens":20,"cache_creation_input_tokens":3,"output_tokens":4}}`, result, cost) + "\n"
+}
+
+func claudeResultOutput(result string) string {
+	return fmt.Sprintf(`{"type":"result","result":%q}`, result) + "\n"
 }
 
 // withFakeClaudeHome redirects $HOME to a test-scoped temp dir and returns

@@ -1,12 +1,16 @@
 package cli
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
+	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/usersettings"
 )
 
@@ -19,9 +23,9 @@ type ClaudeAdapter struct {
 //
 // Patterns:
 //   - Fresh interactive:  claude --session-id <uuid> <prompt>
-//   - Fresh headless:     claude --session-id <uuid> --permission-mode acceptEdits -p <prompt>
+//   - Fresh headless:     claude --session-id <uuid> --permission-mode acceptEdits -p --output-format stream-json --verbose <prompt>
 //   - Resume interactive: claude --resume <uuid> <prompt>
-//   - Resume headless:    claude --resume <uuid> -p <prompt>
+//   - Resume headless:    claude --resume <uuid> -p --output-format stream-json --verbose <prompt>
 //   - Model override:     appends --model <m> (fresh sessions only)
 //
 // --session-id is reserved for fresh sessions — Claude CLI rejects it when
@@ -68,7 +72,7 @@ func (a *ClaudeAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, err
 	}
 
 	if context.IsHeadless() {
-		args = append(args, "-p")
+		args = append(args, "-p", "--output-format", "stream-json", "--verbose")
 	}
 
 	for _, tool := range input.DisallowedTools {
@@ -118,7 +122,7 @@ func (a *ClaudeAdapter) SupportsSystemPrompt() bool {
 	return true
 }
 
-func (a *ClaudeAdapter) ProbeModel(model, effort string) (ProbeStrength, error) {
+func (a *ClaudeAdapter) ProbeModel(modelName, effort string) (ProbeStrength, error) {
 	return BinaryOnly, nil
 }
 
@@ -148,6 +152,135 @@ func (a *ClaudeAdapter) DropSpawnEnvVars() []string {
 // upfront and passes it via --session-id; the adapter returns this same UUID.
 func (a *ClaudeAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
 	return opts.PresetID
+}
+
+// FilterOutput extracts the final result text from Claude stream-json output.
+func (a *ClaudeAdapter) FilterOutput(stdout string) string {
+	var result string
+	scanner := bufio.NewScanner(strings.NewReader(stdout))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		var event struct {
+			Type   string `json:"type"`
+			Result string `json:"result"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &event) == nil && event.Type == "result" {
+			result = event.Result
+		}
+	}
+	return result
+}
+
+// WrapStdout forwards assistant text from Claude stream-json without replaying
+// the final result event, which contains the same response.
+func (a *ClaudeAdapter) WrapStdout(downstream io.Writer) io.Writer {
+	filter := &claudeStreamFilter{}
+	filter.downstream = downstream
+	filter.onLine = filter.processLine
+	return filter
+}
+
+type claudeStreamFilter struct {
+	lineBufferedWriter
+}
+
+func (f *claudeStreamFilter) processLine(line []byte) error {
+	text := claudeAssistantText(line)
+	if text == "" {
+		return nil
+	}
+	return f.writeDownstream([]byte(text))
+}
+
+func claudeAssistantText(line []byte) string {
+	var event struct {
+		Type    string `json:"type"`
+		Message *struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	if json.Unmarshal(line, &event) != nil || event.Type != "assistant" || event.Message == nil {
+		return ""
+	}
+	var text strings.Builder
+	for _, content := range event.Message.Content {
+		if content.Type == "text" {
+			text.WriteString(content.Text)
+		}
+	}
+	return text.String()
+}
+
+// ExtractUsage returns the final Claude result event's usage and reported USD
+// cost. Earlier result events are superseded by the last one.
+func (a *ClaudeAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) {
+	var (
+		modelName string
+		lastUsage json.RawMessage
+		lastCost  *float64
+	)
+	scanner := bufio.NewScanner(strings.NewReader(rawStdout))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if strings.TrimSpace(string(line)) == "" {
+			continue
+		}
+		var event struct {
+			Type         string          `json:"type"`
+			Model        string          `json:"model"`
+			Message      json.RawMessage `json:"message"`
+			Usage        json.RawMessage `json:"usage"`
+			TotalCostUSD *float64        `json:"total_cost_usd"`
+		}
+		if err := json.Unmarshal(line, &event); err != nil {
+			return UsageExtraction{}, fmt.Errorf("claude: parse stream-json: %w", err)
+		}
+		if event.Model != "" {
+			modelName = event.Model
+		}
+		if len(event.Message) > 0 {
+			var message struct {
+				Model string `json:"model"`
+			}
+			if json.Unmarshal(event.Message, &message) == nil && message.Model != "" {
+				modelName = message.Model
+			}
+		}
+		if event.Type == "result" {
+			lastUsage = event.Usage
+			lastCost = event.TotalCostUSD
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return UsageExtraction{}, fmt.Errorf("claude: scan stream-json: %w", err)
+	}
+	if len(lastUsage) == 0 || string(lastUsage) == "null" {
+		return UsageExtraction{
+			Usage:            unavailableUsage("claude", "claude:result-event", model.UnavailableNoUsageEvent),
+			EstimatedCostUSD: lastCost,
+		}, nil
+	}
+
+	tokens, complete, err := tokenCountsFromObject(lastUsage, map[string]string{
+		"input_tokens":                model.TokenInput,
+		"cache_read_input_tokens":     model.TokenCachedInput,
+		"cache_creation_input_tokens": model.TokenCacheWrite,
+		"output_tokens":               model.TokenOutput,
+	})
+	if err != nil {
+		return UsageExtraction{}, fmt.Errorf("claude: parse result usage: %w", err)
+	}
+	return UsageExtraction{
+		Usage: model.UsageRecord{
+			Status: model.UsageCollected, CLI: "claude", Provider: "anthropic", Model: modelName,
+			Tokens: tokens, Source: "claude:result-event", Completeness: completeness(complete),
+		},
+		EstimatedCostUSD: lastCost,
+	}, nil
 }
 
 var claudePathUnsafeRe = regexp.MustCompile(`[/._]`)

@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","cwd":"/tmp","session_id":"fixture-session","model":"Auto","permissionMode":"default"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Reply with exactly: fixture-ok"}]},"session_id":"fixture-session"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"fixture-ok"}]},"session_id":"fixture-session"}
+{"type":"result","subtype":"success","duration_ms":5733,"is_error":false,"result":"fixture-ok","session_id":"fixture-session","usage":{"inputTokens":13740,"outputTokens":31,"cacheReadTokens":4096,"cacheWriteTokens":0}}

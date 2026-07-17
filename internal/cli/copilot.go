@@ -1,14 +1,18 @@
 package cli
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/usersettings"
 
 	"gopkg.in/yaml.v3"
@@ -22,14 +26,15 @@ type CopilotAdapter struct {
 // BuildArgs constructs Copilot CLI args.
 //
 // Patterns:
-//   - Fresh headless:      copilot -p <prompt> -s --allow-tool=write --autopilot [--model <m>] [--reasoning-effort <e>]
-//   - Resume headless:     copilot -p <prompt> -s --allow-tool=write --autopilot --resume=<id>
+//   - Fresh headless:      copilot -p <prompt> -s --output-format json --allow-tool=write --autopilot [--model <m>] [--reasoning-effort <e>]
+//   - Resume headless:     copilot -p <prompt> -s --output-format json --allow-tool=write --autopilot --resume=<id>
 //   - Fresh interactive:   copilot -i <prompt> [--model <m>] [--reasoning-effort <e>]
 //   - Resume interactive:  copilot -i <prompt> --resume=<id>
 //
 // --allow-tool=write grants the least permission needed for autonomous
 // workspace edits. --autopilot keeps the agent running until the task is complete.
-// -s outputs only the agent response text, matching Claude's plain-text output.
+// -s suppresses formatted stats while --output-format json requests the JSONL
+// events needed for plain-text response and usage extraction.
 // Interactive mode omits those autonomy/headless flags because a human supervises
 // permissions at the terminal.
 // --model and --reasoning-effort are omitted on resume: a resumed copilot thread
@@ -45,7 +50,7 @@ func (a *CopilotAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, er
 	args := []string{"copilot"}
 	context := input.InvocationContext()
 	if context.IsHeadless() {
-		args = append(args, "-p", input.Prompt, "-s")
+		args = append(args, "-p", input.Prompt, "-s", "--output-format", "json")
 	} else {
 		args = append(args, "-i", input.Prompt)
 	}
@@ -94,8 +99,104 @@ func (a *CopilotAdapter) SupportsSystemPrompt() bool {
 	return false
 }
 
-func (a *CopilotAdapter) ProbeModel(model, effort string) (ProbeStrength, error) {
+func (a *CopilotAdapter) ProbeModel(modelName, effort string) (ProbeStrength, error) {
 	return BinaryOnly, nil
+}
+
+// FilterOutput extracts the last non-empty assistant response from Copilot's
+// JSONL stream.
+func (a *CopilotAdapter) FilterOutput(stdout string) string {
+	var result string
+	scanner := bufio.NewScanner(strings.NewReader(stdout))
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		var event struct {
+			Type string `json:"type"`
+			Data *struct {
+				Content string `json:"content"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &event) == nil && event.Type == "assistant.message" && event.Data != nil && event.Data.Content != "" {
+			result = event.Data.Content
+		}
+	}
+	return result
+}
+
+// ExtractUsage sums the incremental token metrics on assistant.message
+// events. Copilot's premiumRequests/cost values are AI Credits rather than
+// USD, so they are intentionally not returned as cost.
+func (a *CopilotAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) {
+	known := map[string]string{
+		"inputTokens":       model.TokenInput,
+		"cachedInputTokens": model.TokenCachedInput,
+		"cacheWriteTokens":  model.TokenCacheWrite,
+		"outputTokens":      model.TokenOutput,
+		"reasoningTokens":   model.TokenReasoning,
+	}
+	tokens := make(model.TokenCounts)
+	seen := make(map[string]bool, len(known))
+	foundUsage := false
+	var modelName string
+
+	scanner := bufio.NewScanner(strings.NewReader(rawStdout))
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		if strings.TrimSpace(scanner.Text()) == "" {
+			continue
+		}
+		var event struct {
+			Type string                     `json:"type"`
+			Data map[string]json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			return UsageExtraction{}, fmt.Errorf("copilot: parse JSONL: %w", err)
+		}
+		if event.Type != "assistant.message" || event.Data == nil {
+			continue
+		}
+		if rawModel := event.Data["model"]; len(rawModel) > 0 {
+			_ = json.Unmarshal(rawModel, &modelName)
+		}
+		tokenFields := make(map[string]json.RawMessage)
+		for key, value := range event.Data {
+			if strings.HasSuffix(strings.ToLower(key), "tokens") {
+				tokenFields[key] = value
+				if _, ok := known[key]; ok {
+					seen[key] = true
+				}
+			}
+		}
+		if len(tokenFields) == 0 {
+			continue
+		}
+		foundUsage = true
+		rawTokens, err := json.Marshal(tokenFields)
+		if err != nil {
+			return UsageExtraction{}, fmt.Errorf("copilot: marshal token metrics: %w", err)
+		}
+		eventTokens, _, err := tokenCountsFromObject(rawTokens, known)
+		if err != nil {
+			return UsageExtraction{}, fmt.Errorf("copilot: parse token metrics: %w", err)
+		}
+		for category, count := range eventTokens {
+			tokens[category] += count
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return UsageExtraction{}, fmt.Errorf("copilot: scan JSONL: %w", err)
+	}
+	if !foundUsage {
+		return UsageExtraction{Usage: unavailableUsage("copilot", "copilot:assistant.message", model.UnavailableNoUsageEvent)}, nil
+	}
+	complete := true
+	for key := range known {
+		complete = complete && seen[key]
+	}
+	return UsageExtraction{Usage: model.UsageRecord{
+		Status: model.UsageCollected, CLI: "copilot", Provider: "github", Model: modelName,
+		Tokens: tokens, Source: "copilot:assistant.message", Completeness: completeness(complete),
+	}}, nil
 }
 
 // DiscoverSessionID returns the session ID after a copilot process exits by
