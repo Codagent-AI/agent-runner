@@ -161,7 +161,9 @@ WATCHDOG MISMATCH PASS identity_match=false signal_sent=false target_alive=true
   by `&&` chaining is rejected. Explicit user deny rules take precedence over
   allow rules per Cursor's documented semantics.
 - Delivery: the adapter never modifies the user's files. It reads the user's
-  `cli-config.json` (from `CURSOR_CONFIG_DIR` or `~/.cursor`), writes a
+  `cli-config.json` (from `CURSOR_CONFIG_DIR`, else on Linux/BSD
+  `$XDG_CONFIG_HOME/cursor` when that holds a `cli-config.json`, else
+  `~/.cursor` — matching Cursor's documented file locations), writes a
   private per-invocation copy with the narrow rule appended to
   `permissions.allow` (deny rules preserved), and sets `CURSOR_CONFIG_DIR` to
   the private directory for the spawned process only. Verified: Cursor's chat
@@ -169,7 +171,17 @@ WATCHDOG MISMATCH PASS identity_match=false signal_sent=false target_alive=true
   `chats` back to the user's real store — without the link, sessions are
   stranded per invocation and resume, discovery, and durability all break.
   Authentication is unaffected by the redirect (verified against a private
-  directory containing only `cli-config.json`).
+  directory containing only `cli-config.json`). Private directories are keyed
+  by a digest of the source directory, rule, and config contents (the chats
+  link is source-specific), and dirs unused for 14 days are evicted
+  best-effort on each prepare.
+- Project-level permissions: Cursor also reads `<project>/.cursor/cli.json`,
+  which `CURSOR_CONFIG_DIR` does not redirect, so a project deny rule
+  survives the private copy. Unattended (conservative autonomous-interactive)
+  invocations scan that file's deny rules with the same matcher and fail
+  early with the rule and file path instead of hanging on a prompt;
+  supervised interactive and yolo runs proceed under Cursor's own
+  enforcement.
 - Autonomous rules: under `autonomous_permission_mode: yolo` the adapter
   emits `--force` in both autonomous-headless and autonomous-interactive
   invocations. Conservative autonomous-interactive invocations proceed

@@ -477,6 +477,7 @@ func buildAdapterInput(
 		Effort:         profile.Effort,
 		Context:        invocationContext,
 		PermissionMode: usersettings.AutonomousPermissionMode(ctx.AutonomousPermissionMode),
+		Workdir:        step.Workdir,
 	}
 
 	// Block AskUserQuestion in autonomous mode so the agent cannot stall

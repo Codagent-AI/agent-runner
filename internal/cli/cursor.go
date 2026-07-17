@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -164,25 +165,92 @@ func (a *CursorAdapter) SpawnEnv(input *BuildArgsInput) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cursor: prepare private config: %w", err)
 	}
-	if config.DenyRuleBlockingCompletion != "" &&
-		input.InvocationContext() == ContextAutonomousInteractive &&
+	if input.InvocationContext() == ContextAutonomousInteractive &&
 		usersettings.EffectiveAutonomousPermissionMode(input.PermissionMode) != usersettings.PermissionModeYOLO {
-		return nil, fmt.Errorf("cursor: unattended completion is blocked by your Cursor deny rule %q, which takes precedence over the completion pre-approval; remove that deny rule or set autonomous_permission_mode: yolo", config.DenyRuleBlockingCompletion)
+		if config.DenyRuleBlockingCompletion != "" {
+			return nil, fmt.Errorf("cursor: unattended completion is blocked by your Cursor deny rule %q, which takes precedence over the completion pre-approval; remove that deny rule or set autonomous_permission_mode: yolo", config.DenyRuleBlockingCompletion)
+		}
+		// Project-level permissions are read by Cursor straight from the
+		// project directory — CURSOR_CONFIG_DIR does not redirect them — so a
+		// blocking deny there survives the private config copy and must fail
+		// the unattended run early instead of hanging on a prompt.
+		rule, path, err := cursorProjectDenyBlockingCompletion(input.Workdir, *input.CompletionCommand)
+		if err != nil {
+			return nil, fmt.Errorf("cursor: project permissions: %w", err)
+		}
+		if rule != "" {
+			return nil, fmt.Errorf("cursor: unattended completion is blocked by the project-level Cursor deny rule %q in %s, which takes precedence over the completion pre-approval; remove that deny rule or set autonomous_permission_mode: yolo", rule, path)
+		}
 	}
 	return []string{"CURSOR_CONFIG_DIR=" + config.Dir}, nil
 }
 
+// cursorProjectDenyBlockingCompletion reports the first deny rule in the
+// project-level Cursor permissions file (<workdir>/.cursor/cli.json) that
+// covers the completion command, along with the file's path. A missing file
+// is not an error; an unreadable or unparsable one is, because deny detection
+// cannot be trusted without it.
+func cursorProjectDenyBlockingCompletion(workdir string, command CompletionCommand) (rule, path string, err error) {
+	if workdir == "" {
+		workdir, err = os.Getwd()
+		if err != nil {
+			return "", "", fmt.Errorf("resolve step working directory: %w", err)
+		}
+	}
+	path = filepath.Join(workdir, ".cursor", "cli.json")
+	raw, err := os.ReadFile(path) // #nosec G304 -- fixed name under the step's own working directory
+	if os.IsNotExist(err) {
+		return "", path, nil
+	}
+	if err != nil {
+		return "", path, fmt.Errorf("read %s: %w", path, err)
+	}
+	var config struct {
+		Permissions struct {
+			Deny []any `json:"deny"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal(raw, &config); err != nil {
+		return "", path, fmt.Errorf("parse %s: %w", path, err)
+	}
+	for _, entry := range config.Permissions.Deny {
+		if s, ok := entry.(string); ok && cursorShellPermissionMatches(s, command) {
+			return s, path, nil
+		}
+	}
+	return "", path, nil
+}
+
 // cursorConfigSourceDir resolves the configuration directory the Cursor CLI
-// would use for this process: an inherited CURSOR_CONFIG_DIR, else ~/.cursor.
-// The result is always absolute — it becomes a symlink target resolved from
-// the symlink's own directory, where a relative path would point elsewhere.
+// would use for this process: an inherited CURSOR_CONFIG_DIR, else (on
+// Linux/BSD, per Cursor's configuration reference) $XDG_CONFIG_HOME/cursor
+// when it holds a cli-config.json, else ~/.cursor. The result is always
+// absolute — it becomes a symlink target resolved from the symlink's own
+// directory, where a relative path would point elsewhere.
 func cursorConfigSourceDir() (string, error) {
+	return cursorConfigSourceDirFor(runtime.GOOS)
+}
+
+func cursorConfigSourceDirFor(goos string) (string, error) {
 	if dir := os.Getenv("CURSOR_CONFIG_DIR"); dir != "" {
 		abs, err := filepath.Abs(dir)
 		if err != nil {
 			return "", fmt.Errorf("resolve cursor config dir %q: %w", dir, err)
 		}
 		return abs, nil
+	}
+	if goos != "darwin" && goos != "windows" {
+		if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+			candidate := filepath.Join(xdg, "cursor")
+			if _, err := os.Stat(filepath.Join(candidate, "cli-config.json")); err == nil { // #nosec G703 -- XDG_CONFIG_HOME is the user's own documented Cursor config location; the stat only selects the source dir Cursor itself would read
+
+				abs, err := filepath.Abs(candidate)
+				if err != nil {
+					return "", fmt.Errorf("resolve cursor config dir %q: %w", candidate, err)
+				}
+				return abs, nil
+			}
+		}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
@@ -291,7 +359,10 @@ func prepareCursorPrivateConfigAt(sourceDir, cacheRoot string, command Completio
 		return cursorPrivateConfig{}, fmt.Errorf("render cursor config: %w", err)
 	}
 
-	digest := sha256.Sum256([]byte("cursor-config-v1\x00" + rule + "\x00" + string(raw)))
+	// The source directory participates in the digest because the chats
+	// symlink below is tied to it: identical configs from different sources
+	// must not share a private dir.
+	digest := sha256.Sum256([]byte("cursor-config-v2\x00" + sourceDir + "\x00" + rule + "\x00" + string(raw)))
 	dir := filepath.Join(cacheRoot, "cursor-config", hex.EncodeToString(digest[:6]))
 	if err := os.MkdirAll(dir, 0o700); err != nil { // #nosec G703 -- dir combines the local user's cache root with a content digest; creating it is this function's purpose
 		return cursorPrivateConfig{}, fmt.Errorf("create cursor private config dir: %w", err)
@@ -299,6 +370,7 @@ func prepareCursorPrivateConfigAt(sourceDir, cacheRoot string, command Completio
 	if err := writeFileAtomic(filepath.Join(dir, "cli-config.json"), rendered); err != nil {
 		return cursorPrivateConfig{}, fmt.Errorf("write cursor private config: %w", err)
 	}
+	evictStaleCursorConfigs(filepath.Join(cacheRoot, "cursor-config"), dir)
 	result := cursorPrivateConfig{Dir: dir, DenyRuleBlockingCompletion: blockingDeny}
 
 	// The chat store follows CURSOR_CONFIG_DIR, so without this link every
@@ -325,6 +397,41 @@ func prepareCursorPrivateConfigAt(sourceDir, cacheRoot string, command Completio
 		return cursorPrivateConfig{}, fmt.Errorf("link cursor chats store: %w", err)
 	}
 	return result, nil
+}
+
+// cursorConfigCacheTTL bounds the private-config cache. Every invocation
+// rewrites its own cli-config.json, so that file's mtime marks the digest
+// dir's last use; dirs untouched for the TTL are removed. Digests change with
+// the runner executable path and the user's config contents (test-built
+// binaries mint a new dir per build), and Cursor writes sizable state files
+// into active dirs, so without eviction the cache grows without bound.
+const cursorConfigCacheTTL = 14 * 24 * time.Hour
+
+// evictStaleCursorConfigs is best-effort: eviction failures never fail the
+// spawn, and a dir serving a live session is always younger than the TTL.
+func evictStaleCursorConfigs(root, current string) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-cursorConfigCacheTTL)
+	for _, entry := range entries {
+		dir := filepath.Join(root, entry.Name())
+		if dir == current || !entry.IsDir() {
+			continue
+		}
+		var lastUse time.Time
+		if info, err := os.Stat(filepath.Join(dir, "cli-config.json")); err == nil {
+			lastUse = info.ModTime()
+		} else if info, err := entry.Info(); err == nil {
+			lastUse = info.ModTime()
+		} else {
+			continue
+		}
+		if lastUse.Before(cutoff) {
+			_ = os.RemoveAll(dir)
+		}
+	}
 }
 
 // cursorShellPermissionMatches reports whether a Shell(...) permission entry

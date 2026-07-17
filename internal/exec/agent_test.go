@@ -1600,8 +1600,9 @@ func TestCompletionExecutableUsesConfiguredAgentRunner(t *testing.T) {
 }
 
 type spawnEnvAdapter struct {
-	env []string
-	err error
+	env     []string
+	err     error
+	workdir string
 }
 
 func (a *spawnEnvAdapter) BuildArgs(*cli.BuildArgsInput) []string        { return []string{"fake"} }
@@ -1610,10 +1611,13 @@ func (a *spawnEnvAdapter) SupportsSystemPrompt() bool                    { retur
 func (a *spawnEnvAdapter) ProbeModel(string, string) (cli.ProbeStrength, error) {
 	return cli.BinaryOnly, nil
 }
-func (a *spawnEnvAdapter) SpawnEnv(*cli.BuildArgsInput) ([]string, error) { return a.env, a.err }
+func (a *spawnEnvAdapter) SpawnEnv(input *cli.BuildArgsInput) ([]string, error) {
+	a.workdir = input.Workdir
+	return a.env, a.err
+}
 
 func TestBuildStepInvocationCollectsSpawnEnv(t *testing.T) {
-	step := &model.Step{ID: "implement"}
+	step := &model.Step{ID: "implement", Workdir: "/repo/project"}
 	ctx := &model.ExecutionContext{}
 	profile := &config.ResolvedAgent{}
 
@@ -1624,6 +1628,9 @@ func TestBuildStepInvocationCollectsSpawnEnv(t *testing.T) {
 	}
 	if diff := cmp.Diff(adapter.env, spawnEnv); diff != "" {
 		t.Fatalf("spawn env mismatch (-want +got):\n%s", diff)
+	}
+	if adapter.workdir != "/repo/project" {
+		t.Fatalf("adapter received workdir %q, want step workdir for project-level config discovery", adapter.workdir)
 	}
 
 	failing := &spawnEnvAdapter{err: errors.New("prepare config: boom")}

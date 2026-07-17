@@ -82,6 +82,10 @@ type BuildArgsInput struct {
 	Context         InvocationContext
 	PermissionMode  usersettings.AutonomousPermissionMode
 	DisallowedTools []string // Tool names to block (e.g. "AskUserQuestion"); adapter translates to CLI flags where supported
+	// Workdir is the step's working directory ("" means the runner's own cwd).
+	// Adapters use it to discover project-level CLI configuration such as
+	// Cursor's <project>/.cursor/cli.json permissions.
+	Workdir string
 	// CompletionCommand is the in-session control client. Adapters only use
 	// it when it names the absolute-path, fixed `step complete` command.
 	CompletionCommand *CompletionCommand
