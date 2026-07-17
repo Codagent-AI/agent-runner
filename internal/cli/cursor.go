@@ -47,8 +47,14 @@ func (a *CursorAdapter) ExecutableName() string {
 // terminal. --model is omitted on resume because a resumed Cursor chat keeps the
 // model it was started with.
 //
+// Autonomous contexts honor autonomous_permission_mode: yolo emits --force in
+// both autonomous-headless and autonomous-interactive invocations. Cursor's
+// Shell allowlist is prefix-matching, so no safe narrow pre-approval of the
+// completion command exists; a conservative autonomous-interactive invocation
+// would hang unattended at Cursor's approval prompt and fails early instead.
+//
 // BuildArgs exists only to satisfy the Adapter interface; callers must use
-// BuildInvocationArgs so a completion-plugin failure surfaces before spawn.
+// BuildInvocationArgs so a construction failure surfaces before spawn.
 func (a *CursorAdapter) BuildArgs(input *BuildArgsInput) []string {
 	args, err := a.BuildArgsWithError(input)
 	if err != nil {
@@ -58,15 +64,20 @@ func (a *CursorAdapter) BuildArgs(input *BuildArgsInput) []string {
 }
 
 // BuildArgsWithError constructs Cursor CLI args, failing when the completion
-// plugin — Cursor's only completion integration — cannot be created.
+// plugin — Cursor's only completion integration — cannot be created, or when
+// an autonomous-interactive invocation has no approval-free completion path.
 func (a *CursorAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, error) {
+	invocationContext := input.InvocationContext()
+	mode := usersettings.EffectiveAutonomousPermissionMode(input.PermissionMode)
+	if invocationContext == ContextAutonomousInteractive && mode != usersettings.PermissionModeYOLO {
+		return nil, fmt.Errorf("cursor: unattended completion requires autonomous_permission_mode: yolo; Cursor's Shell allowlist is prefix-matching, so there is no safe narrow pre-approval for the completion command, and under conservative mode an autonomous-interactive step would hang at Cursor's approval prompt with nobody to answer it")
+	}
 	args := []string{"agent"}
-	context := input.InvocationContext()
-	if context.IsHeadless() {
+	if invocationContext.IsHeadless() {
 		args = append(args, "-p", "--output-format", "stream-json", "--trust")
-		if usersettings.EffectiveAutonomousPermissionMode(input.PermissionMode) == usersettings.PermissionModeYOLO {
-			args = append(args, "--force")
-		}
+	}
+	if invocationContext.IsAutonomous() && mode == usersettings.PermissionModeYOLO {
+		args = append(args, "--force")
 	}
 
 	if input.Resume && input.SessionID != "" {
@@ -76,7 +87,7 @@ func (a *CursorAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, err
 	}
 
 	args = append(args, input.Prompt)
-	if !context.IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid() {
+	if !invocationContext.IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid() {
 		prepare := a.prepareCompletionPlugin
 		if prepare == nil {
 			prepare = prepareCursorCompletionPlugin

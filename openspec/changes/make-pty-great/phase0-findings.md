@@ -157,6 +157,15 @@ WATCHDOG MISMATCH PASS identity_match=false signal_sent=false target_alive=true
   allowed full pattern also matches strings beginning with that pattern plus a
   space. `Shell(<path> step complete)` would therefore also approve extra
   arguments and is not emitted.
+- Autonomous rules: because no safe narrow pre-approval exists, interactive
+  Cursor keeps the CLI's normal supervised approval prompt (the human approves
+  the completion command). Under `autonomous_permission_mode: yolo` the
+  adapter emits `--force` in both autonomous-headless and
+  autonomous-interactive invocations. A conservative autonomous-interactive
+  invocation has no approval-free completion path, so the adapter fails args
+  construction early with an error explaining that unattended Cursor
+  completion requires `autonomous_permission_mode: yolo`, instead of hanging
+  at an approval prompt nobody can answer.
 - Alternative integration: the adapter generates an isolated plugin in the
   user's cache and loads it for the spawned process with `--plugin-dir`. The
   plugin contains no hook of any kind; it consists of a manifest and a single

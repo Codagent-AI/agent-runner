@@ -1357,6 +1357,47 @@ func TestCursorAdapter(t *testing.T) {
 		assertArgs(t, expected, args)
 	})
 
+	t.Run("autonomous interactive yolo includes force", func(t *testing.T) {
+		args, err := BuildInvocationArgs(adapter, &BuildArgsInput{
+			Prompt:         "do something",
+			Context:        ContextAutonomousInteractive,
+			PermissionMode: "yolo",
+		})
+		if err != nil {
+			t.Fatalf("BuildInvocationArgs() error = %v", err)
+		}
+		expected := []string{"agent", "--force", "do something"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("autonomous interactive conservative fails with yolo requirement", func(t *testing.T) {
+		args, err := BuildInvocationArgs(adapter, &BuildArgsInput{
+			Prompt:  "do something",
+			Context: ContextAutonomousInteractive,
+		})
+		if err == nil {
+			t.Fatalf("expected autonomous-interactive conservative error, got args %v", args)
+		}
+		for _, want := range []string{"autonomous_permission_mode: yolo", "approval", "cursor"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error %q does not explain %q", err, want)
+			}
+		}
+	})
+
+	t.Run("interactive yolo omits force and keeps supervised prompting", func(t *testing.T) {
+		args, err := BuildInvocationArgs(adapter, &BuildArgsInput{
+			Prompt:         "review code",
+			Context:        ContextInteractive,
+			PermissionMode: "yolo",
+		})
+		if err != nil {
+			t.Fatalf("BuildInvocationArgs() error = %v", err)
+		}
+		expected := []string{"agent", "review code"}
+		assertArgs(t, expected, args)
+	})
+
 	t.Run("discover session ID from stream-json init event", func(t *testing.T) {
 		output := `{"type":"system","subtype":"init","session_id":"chat-abc-123","model":"composer-1.5","cwd":"/tmp","permissionMode":"default"}`
 		id := adapter.DiscoverSessionID(&DiscoverOptions{
