@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/config"
@@ -1594,6 +1596,17 @@ func TestCompletionExecutableUsesConfiguredAgentRunner(t *testing.T) {
 	got := completionExecutableForContext(cli.ContextInteractive)
 	if got != override {
 		t.Fatalf("completionExecutableForContext() = %q, want %q", got, override)
+	}
+}
+
+func TestDropSpawnEnvForCLI(t *testing.T) {
+	got := dropSpawnEnvForCLI("claude")
+	want := []string{"CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("dropSpawnEnvForCLI(claude) mismatch (-want +got):\n%s", diff)
+	}
+	if got := dropSpawnEnvForCLI("no-such-cli"); got != nil {
+		t.Fatalf("dropSpawnEnvForCLI(no-such-cli) = %v, want nil", got)
 	}
 }
 

@@ -78,6 +78,28 @@ func TestRealAgentTestEnvUsesFileCredentialStore(t *testing.T) {
 	t.Fatalf("real-agent E2E environment does not select Cursor's file credential store: %q", env)
 }
 
+func TestRealAgentTestEnvScrubsEnclosingSessionState(t *testing.T) {
+	t.Setenv("CLAUDECODE", "1")
+	t.Setenv("CLAUDE_CODE_CHILD_SESSION", "1")
+	t.Setenv("CLAUDE_CODE_ENTRYPOINT", "cli")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "enclosing-session")
+	t.Setenv("AGENT_RUNNER_EXECUTABLE", "/somewhere/else/agent-runner")
+
+	scrubbed := map[string]bool{
+		"CLAUDECODE":                true,
+		"CLAUDE_CODE_CHILD_SESSION": true,
+		"CLAUDE_CODE_ENTRYPOINT":    true,
+		"CLAUDE_CODE_SESSION_ID":    true,
+		"AGENT_RUNNER_EXECUTABLE":   true,
+	}
+	for _, entry := range realAgentTestEnv(true) {
+		key, _, _ := strings.Cut(entry, "=")
+		if scrubbed[key] {
+			t.Errorf("real-agent E2E environment leaks %s", entry)
+		}
+	}
+}
+
 func TestDurabilityTimeoutResumeUsesFreshCredentialE2E(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("durability retry E2E requires a POSIX terminal")
@@ -343,12 +365,25 @@ func realAgentTestEnv(interactive bool) []string {
 	if interactive {
 		overrides["TERM"] = "xterm-256color"
 	}
+	// The suite must be hermetic no matter which terminal launches it. An
+	// inherited executable override would point the completion client and
+	// watchdog at an installed binary instead of the freshly built one, and
+	// enclosing Claude Code session markers make a spawned interactive Claude
+	// silently skip transcript persistence, breaking the resume steps.
+	scrubbed := map[string]bool{
+		"AGENT_RUNNER_EXECUTABLE":   true,
+		"CLAUDECODE":                true,
+		"CLAUDE_CODE_CHILD_SESSION": true,
+		"CLAUDE_CODE_ENTRYPOINT":    true,
+		"CLAUDE_CODE_SESSION_ID":    true,
+	}
 	env := make([]string, 0, len(os.Environ())+len(overrides))
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
-		if _, replaced := overrides[key]; !replaced {
-			env = append(env, entry)
+		if _, replaced := overrides[key]; replaced || scrubbed[key] {
+			continue
 		}
+		env = append(env, entry)
 	}
 	for key, value := range overrides {
 		env = append(env, key+"="+value)

@@ -16,6 +16,39 @@ import (
 	"github.com/codagent/agent-runner/internal/cli"
 )
 
+func TestStartDirectChildDropsConfiguredEnvVars(t *testing.T) {
+	t.Setenv("AGENT_RUNNER_TEST_LEAK", "leaked")
+	out := filepath.Join(t.TempDir(), "env.out")
+	options := &DirectOptions{
+		Args:    []string{"sh", "-c", `printf '%s' "${AGENT_RUNNER_TEST_LEAK-absent}" > ` + out},
+		DropEnv: []string{"AGENT_RUNNER_TEST_LEAK"},
+	}
+
+	cmd, _, _, err := startDirectChild(options, &Attempt{})
+	if err != nil {
+		t.Fatalf("startDirectChild: %v", err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("child failed: %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read child env capture: %v", err)
+	}
+	if got := string(data); got != "absent" {
+		t.Fatalf("child saw AGENT_RUNNER_TEST_LEAK = %q, want it dropped", got)
+	}
+}
+
+func TestPruneEnvironmentKeepsUnrelatedEntries(t *testing.T) {
+	env := []string{"KEEP=1", "DROP=2", "ALSO_KEEP=DROP=nested"}
+	got := pruneEnvironment(env, []string{"DROP"})
+	want := []string{"KEEP=1", "ALSO_KEEP=DROP=nested"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("pruneEnvironment mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestCheckedTerminalFDRejectsOverflow(t *testing.T) {
 	overflow := uintptr(^uint(0)>>1) + 1
 	if _, err := checkedTerminalFD(overflow); err == nil {

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,8 +19,11 @@ import (
 )
 
 type DirectOptions struct {
-	Args      []string
-	Env       []string
+	Args []string
+	Env  []string
+	// DropEnv names inherited environment variables that must not reach the
+	// child (for example enclosing-session markers of the same CLI).
+	DropEnv   []string
 	Workdir   string
 	StepID    string
 	SessionID string
@@ -179,10 +183,30 @@ func resolveFreshSessionID(ctx context.Context, resolve func() string) string {
 	}
 }
 
+// pruneEnvironment returns env without the named variables.
+func pruneEnvironment(env, drop []string) []string {
+	if len(drop) == 0 {
+		return env
+	}
+	dropped := make(map[string]struct{}, len(drop))
+	for _, name := range drop {
+		dropped[name] = struct{}{}
+	}
+	kept := make([]string, 0, len(env))
+	for _, entry := range env {
+		name, _, _ := strings.Cut(entry, "=")
+		if _, skip := dropped[name]; skip {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept
+}
+
 func startDirectChild(options *DirectOptions, attempt *Attempt) (*exec.Cmd, *os.File, *unix.Termios, error) {
 	cmd := exec.Command(options.Args[0], options.Args[1:]...) // #nosec G204 -- adapter-built interactive command
 	cmd.Dir = options.Workdir
-	cmd.Env = append(os.Environ(), options.Env...)
+	cmd.Env = append(pruneEnvironment(os.Environ(), options.DropEnv), options.Env...)
 	cmd.Env = append(cmd.Env, attempt.Environment()...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = options.Stdin, options.Stdout, options.Stderr
 	if cmd.Stdin == nil {

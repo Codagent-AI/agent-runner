@@ -295,6 +295,25 @@ func BuildInvocationArgs(adapter Adapter, input *BuildArgsInput) ([]string, erro
 	return adapter.BuildArgs(input), nil
 }
 
+// SpawnEnvSanitizer is an optional interface adapters may implement when the
+// CLI changes behavior under environment variables inherited from an
+// enclosing session of the same CLI. DropSpawnEnvVars returns the names of
+// variables the runner must remove from the spawned process environment so
+// the child runs as a clean top-level session.
+type SpawnEnvSanitizer interface {
+	DropSpawnEnvVars() []string
+}
+
+// DropSpawnEnvVars returns the environment variable names the adapter needs
+// removed from spawned process environments, or nil for adapters without
+// sanitization requirements.
+func DropSpawnEnvVars(adapter Adapter) []string {
+	if sanitizer, ok := adapter.(SpawnEnvSanitizer); ok {
+		return sanitizer.DropSpawnEnvVars()
+	}
+	return nil
+}
+
 // InteractiveRejector is an optional interface adapters may implement to refuse
 // interactive mode at runtime with a descriptive error.
 type InteractiveRejector interface {

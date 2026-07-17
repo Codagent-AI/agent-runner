@@ -1790,6 +1790,26 @@ func (w errorWriter) Write([]byte) (int, error) {
 	return 0, w.err
 }
 
+func TestClaudeAdapterDropsEnclosingSessionEnv(t *testing.T) {
+	adapter, err := Get("claude")
+	if err != nil {
+		t.Fatalf("get claude adapter: %v", err)
+	}
+	got := DropSpawnEnvVars(adapter)
+	want := []string{"CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID"}
+	assertArgs(t, want, got)
+}
+
+func TestDropSpawnEnvVarsDefaultsToNil(t *testing.T) {
+	adapter, err := Get("codex")
+	if err != nil {
+		t.Fatalf("get codex adapter: %v", err)
+	}
+	if got := DropSpawnEnvVars(adapter); got != nil {
+		t.Fatalf("DropSpawnEnvVars(codex) = %v, want nil", got)
+	}
+}
+
 func assertArgs(t *testing.T, expected, actual []string) {
 	t.Helper()
 	if len(expected) != len(actual) {

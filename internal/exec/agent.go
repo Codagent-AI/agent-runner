@@ -551,6 +551,17 @@ func completionInstruction(executable string) string {
 	return "\n\nWhen you or the user determine this step is complete, signal it through the Agent Runner control channel. You MUST run the absolute path command `" + command + "` with your shell tool. The executable path and `step complete` are separate shell words; do not quote the entire command as one word. Run that exact command with no extra arguments as the final action before finishing the current response. Do not merely say that the step is complete."
 }
 
+// dropSpawnEnvForCLI returns the adapter's spawn-environment removals so the
+// child CLI runs as a clean top-level session even when the runner itself is
+// nested inside a session of the same CLI.
+func dropSpawnEnvForCLI(cliName string) []string {
+	adapter, err := cli.Get(cliName)
+	if err != nil {
+		return nil
+	}
+	return cli.DropSpawnEnvVars(adapter)
+}
+
 func runDirectInteractive(args []string, options directRunOptions) (interactive.DirectResult, error) {
 	invocation := options.invocation
 	if invocation == nil || invocation.ctx == nil {
@@ -567,6 +578,7 @@ func runDirectInteractive(args []string, options directRunOptions) (interactive.
 	direct := interactive.NewDirectRunner(&interactive.DirectOptions{
 		Args: args, Workdir: options.workdir, StepID: invocation.stepID,
 		SessionID: invocation.sessionID, CLI: invocation.cliName,
+		DropEnv: dropSpawnEnvForCLI(invocation.cliName),
 		Control: server, Probe: invocation.probe, ResolveSessionID: invocation.resolveSessionID, Foreground: true,
 		WatchdogExecutable: executable, Logger: invocation.ctx.AuditLogger,
 		Prefix: audit.BuildPrefix(nestingToAudit(invocation.ctx), invocation.stepID),
