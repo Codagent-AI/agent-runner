@@ -32,18 +32,18 @@ func ExecuteLoopStep(
 	loop := step.Loop
 
 	if loop.Over != "" && loop.As != "" {
-		return executeForEachLoop(step.ID, loop.Over, loop.As, loop.AsIndex, step.Steps, ctx, runner, glob, log, opts, loop.RequireMatches)
+		return executeForEachLoop(step, loop.Over, loop.As, loop.AsIndex, step.Steps, ctx, runner, glob, log, opts, loop.RequireMatches)
 	}
 
 	if loop.Max != nil {
-		return executeCountedLoop(step.ID, *loop.Max, loop.AsIndex, step.Steps, ctx, runner, glob, log, opts)
+		return executeCountedLoop(step, *loop.Max, loop.AsIndex, step.Steps, ctx, runner, glob, log, opts)
 	}
 
 	return LoopResult{Outcome: OutcomeFailed, LastIteration: -1}, nil
 }
 
 func executeCountedLoop(
-	stepID string,
+	step *model.Step,
 	maxIter int,
 	asIndex string,
 	steps []model.Step,
@@ -53,6 +53,7 @@ func executeCountedLoop(
 	log Logger,
 	opts LoopExecuteOptions,
 ) (LoopResult, error) {
+	stepID := step.ID
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), stepID)
 	startTime := time.Now()
 
@@ -73,7 +74,7 @@ func executeCountedLoop(
 		if resumed {
 			flushAndKeepLoopIterationProgress(ctx, stepID, startIter, false)
 		}
-		emitLoopEnd(ctx, prefix, startTime, completed, false, "exhausted")
+		emitLoopEnd(ctx, prefix, startTime, step, completed, false, "exhausted")
 		return LoopResult{Outcome: OutcomeExhausted, LastIteration: maxIter - 1}, nil
 	}
 
@@ -96,33 +97,34 @@ func executeCountedLoop(
 
 		result, err := executeIterationWithAudit(steps, iterCtx, runner, glob, log)
 		if err != nil {
-			emitLoopEnd(ctx, prefix, startTime, completed, false, "failed")
+			emitLoopEnd(ctx, prefix, startTime, step, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, err
 		}
 		mergeIterationCaptures(ctx, iterCtx)
 		completed++
 
 		if result.aborted {
-			emitLoopEnd(ctx, prefix, startTime, completed, false, "aborted")
+			emitLoopEnd(ctx, prefix, startTime, step, completed, false, "aborted")
 			return LoopResult{Outcome: OutcomeAborted, LastIteration: i}, nil
 		}
 		if result.failed {
-			emitLoopEnd(ctx, prefix, startTime, completed, false, "failed")
+			emitLoopEnd(ctx, prefix, startTime, step, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, nil
 		}
 		flushAndKeepLoopIterationProgress(ctx, stepID, i+1, false)
 		if result.breakTriggered {
-			emitLoopEnd(ctx, prefix, startTime, completed, true, "success")
+			emitLoopEnd(ctx, prefix, startTime, step, completed, true, "success")
 			return LoopResult{Outcome: OutcomeSuccess, LastIteration: i}, nil
 		}
 	}
 
-	emitLoopEnd(ctx, prefix, startTime, completed, false, "exhausted")
+	emitLoopEnd(ctx, prefix, startTime, step, completed, false, "exhausted")
 	return LoopResult{Outcome: OutcomeExhausted, LastIteration: lastIter}, nil
 }
 
 func executeForEachLoop(
-	stepID, overPattern, asVar, asIndex string,
+	step *model.Step,
+	overPattern, asVar, asIndex string,
 	steps []model.Step,
 	ctx *model.ExecutionContext,
 	runner ProcessRunner,
@@ -131,6 +133,7 @@ func executeForEachLoop(
 	opts LoopExecuteOptions,
 	requireMatches *bool,
 ) (LoopResult, error) {
+	stepID := step.ID
 	pattern, err := textfmt.InterpolateTyped(overPattern, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
 	if err != nil {
 		return LoopResult{Outcome: OutcomeFailed, LastIteration: -1}, err
@@ -158,10 +161,10 @@ func executeForEachLoop(
 	if len(matches) == 0 {
 		if requireMatches != nil && *requireMatches {
 			log.Errorf("agent-runner: for-each loop %q matched 0 files for pattern: %s\n", stepID, pattern)
-			emitLoopEnd(ctx, prefix, startTime, 0, false, "failed")
+			emitLoopEnd(ctx, prefix, startTime, step, 0, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: -1}, nil
 		}
-		emitLoopEnd(ctx, prefix, startTime, 0, false, "success")
+		emitLoopEnd(ctx, prefix, startTime, step, 0, false, "success")
 		return LoopResult{Outcome: OutcomeSuccess, LastIteration: -1}, nil
 	}
 
@@ -172,7 +175,7 @@ func executeForEachLoop(
 		if resumed {
 			flushAndKeepLoopIterationProgress(ctx, stepID, startIter, false)
 		}
-		emitLoopEnd(ctx, prefix, startTime, completed, false, "success")
+		emitLoopEnd(ctx, prefix, startTime, step, completed, false, "success")
 		return LoopResult{Outcome: OutcomeSuccess, LastIteration: len(matches) - 1}, nil
 	}
 
@@ -195,28 +198,28 @@ func executeForEachLoop(
 
 		result, err := executeIterationWithAudit(steps, iterCtx, runner, globExp, log)
 		if err != nil {
-			emitLoopEnd(ctx, prefix, startTime, completed, false, "failed")
+			emitLoopEnd(ctx, prefix, startTime, step, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, err
 		}
 		mergeIterationCaptures(ctx, iterCtx)
 		completed++
 
 		if result.aborted {
-			emitLoopEnd(ctx, prefix, startTime, completed, false, "aborted")
+			emitLoopEnd(ctx, prefix, startTime, step, completed, false, "aborted")
 			return LoopResult{Outcome: OutcomeAborted, LastIteration: i}, nil
 		}
 		if result.failed {
-			emitLoopEnd(ctx, prefix, startTime, completed, false, "failed")
+			emitLoopEnd(ctx, prefix, startTime, step, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, nil
 		}
 		flushAndKeepLoopIterationProgress(ctx, stepID, i+1, false)
 		if result.breakTriggered {
-			emitLoopEnd(ctx, prefix, startTime, completed, true, "success")
+			emitLoopEnd(ctx, prefix, startTime, step, completed, true, "success")
 			return LoopResult{Outcome: OutcomeSuccess, LastIteration: i}, nil
 		}
 	}
 
-	emitLoopEnd(ctx, prefix, startTime, completed, false, "success")
+	emitLoopEnd(ctx, prefix, startTime, step, completed, false, "success")
 	return LoopResult{Outcome: OutcomeSuccess, LastIteration: lastIter}, nil
 }
 
@@ -321,11 +324,11 @@ func consumeLoopResume(ctx *model.ExecutionContext, loopStepID string) (int, *mo
 	return iter, body, true
 }
 
-func emitLoopEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, completed int, breakTriggered bool, outcome string) {
+func emitLoopEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, step *model.Step, completed int, breakTriggered bool, outcome string) {
 	emitStepEnd(ctx, prefix, startTime, outcome, map[string]any{
 		"iterations_completed": completed,
 		"break_triggered":      breakTriggered,
-	})
+	}, step)
 }
 
 type iterationResult struct {
@@ -369,7 +372,7 @@ func executeIterationWithAudit(
 	}
 
 	emitAudit(iterCtx, audit.Event{
-		Timestamp: iterStart.UTC().Format(time.RFC3339),
+		Timestamp: iterStart.UTC().Format(time.RFC3339Nano),
 		Prefix:    prefix,
 		Type:      audit.EventIterationStart,
 		Data:      startData,
@@ -385,13 +388,16 @@ func executeIterationWithAudit(
 	}
 
 	emitAudit(iterCtx, audit.Event{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		Prefix:    prefix,
 		Type:      audit.EventIterationEnd,
 		Data: map[string]any{
 			"iteration":   iteration,
 			"outcome":     outcome,
 			"duration_ms": time.Since(iterStart).Milliseconds(),
+			"identity": executionIdentity(iterCtx.ParentContext, &model.Step{
+				ID: lastSeg.StepID, Loop: &model.Loop{}, Steps: []model.Step{{ID: "iteration"}},
+			}, "iteration", iteration, false, "", ""),
 		},
 	})
 

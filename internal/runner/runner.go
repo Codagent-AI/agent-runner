@@ -15,6 +15,7 @@ import (
 	"github.com/codagent/agent-runner/internal/exec"
 	"github.com/codagent/agent-runner/internal/interactive"
 	"github.com/codagent/agent-runner/internal/loader"
+	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/stateio"
@@ -162,6 +163,7 @@ type runState struct {
 	sessionID            string
 	workflowHash         string
 	auditLogger          *audit.Logger
+	metricsCollector     *metrics.Collector
 	runStartTime         time.Time
 	log                  exec.Logger
 	runner               exec.ProcessRunner
@@ -257,7 +259,7 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		writeMetaJSON(projectDir, cwd)
 	}
 
-	auditLogger, ctx, err := buildExecutionContext(workflow, params, opts, sessionDir)
+	auditLogger, metricsCollector, ctx, err := buildExecutionContext(workflow, params, opts, sessionDir, sessionID, now)
 	if err != nil {
 		runlock.Delete(sessionDir)
 		if auditLogger != nil {
@@ -279,17 +281,18 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	}
 
 	return &runState{
-		workflow:     *workflow,
-		ctx:          ctx,
-		until:        opts.Until,
-		sessionDir:   sessionDir,
-		sessionID:    sessionID,
-		workflowHash: computeHash(opts.WorkflowFile),
-		auditLogger:  auditLogger,
-		runStartTime: now,
-		log:          log,
-		runner:       opts.ProcessRunner,
-		glob:         opts.GlobExpander,
+		workflow:         *workflow,
+		ctx:              ctx,
+		until:            opts.Until,
+		sessionDir:       sessionDir,
+		sessionID:        sessionID,
+		workflowHash:     computeHash(opts.WorkflowFile),
+		auditLogger:      auditLogger,
+		metricsCollector: metricsCollector,
+		runStartTime:     now,
+		log:              log,
+		runner:           opts.ProcessRunner,
+		glob:             opts.GlobExpander,
 	}, nil
 }
 
@@ -312,17 +315,25 @@ func cleanupCrashedInteractiveAttempt(sessionDir string, opts *Options) error {
 	return nil
 }
 
-func buildExecutionContext(workflow *model.Workflow, params map[string]string, opts *Options, sessionDir string) (*audit.Logger, *model.ExecutionContext, error) {
+func buildExecutionContext(
+	workflow *model.Workflow,
+	params map[string]string,
+	opts *Options,
+	sessionDir, sessionID string,
+	runStart time.Time,
+) (*audit.Logger, *metrics.Collector, *model.ExecutionContext, error) {
 	var engineRef interface{}
 	if opts.Engine != nil {
 		engineRef = opts.Engine
 	}
 
-	var auditEventLogger audit.EventLogger
 	auditLogger, err := audit.NewLogger(filepath.Join(sessionDir, "audit.log"))
+	var auditSink audit.EventLogger
 	if err == nil {
-		auditEventLogger = auditLogger
+		auditSink = auditLogger
 	}
+	metricsCollector := metrics.NewCollector(sessionDir, sessionID, workflow.Name, runStart)
+	auditEventLogger := metrics.NewPipeline(metricsCollector, auditSink)
 
 	var profileStore any
 	if opts.ProfileStore != nil {
@@ -331,7 +342,7 @@ func buildExecutionContext(workflow *model.Workflow, params map[string]string, o
 
 	settings, err := usersettings.Load()
 	if err != nil {
-		return auditLogger, nil, err
+		return auditLogger, metricsCollector, nil, err
 	}
 
 	ctx := model.NewRootContext(&model.RootContextOptions{
@@ -362,13 +373,10 @@ func buildExecutionContext(workflow *model.Workflow, params map[string]string, o
 	if opts.From != "" {
 		ctx.WorkflowResumed = true
 	}
-	return auditLogger, ctx, nil
+	return auditLogger, metricsCollector, ctx, nil
 }
 
 func emitRunStart(rs *runState, opts *Options) {
-	if rs.auditLogger == nil {
-		return
-	}
 	auditData := map[string]any{
 		"workflow_file": opts.WorkflowFile,
 		"workflow_name": rs.workflow.Name,
@@ -383,8 +391,8 @@ func emitRunStart(rs *runState, opts *Options) {
 		auditData["resumed"] = true
 		auditData["resume_from"] = opts.From
 	}
-	rs.auditLogger.Emit(audit.Event{
-		Timestamp: rs.runStartTime.UTC().Format(time.RFC3339),
+	emitAudit(rs.ctx, audit.Event{
+		Timestamp: rs.runStartTime.UTC().Format(time.RFC3339Nano),
 		Type:      audit.EventRunStart,
 		Data:      auditData,
 	})
@@ -471,17 +479,36 @@ func stopAfterUntil(rs *runState, stepID string, stepIndex int) bool {
 func emitSkippedStep(rs *runState, step *model.Step, index int) {
 	prefix := audit.BuildPrefix(nestingToAuditInfo(rs.ctx), step.ID)
 	emitAudit(rs.ctx, audit.Event{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		Prefix:    prefix,
 		Type:      audit.EventStepStart,
 		Data:      map[string]any{"context": contextSnapshot(rs.ctx)},
 	})
 	emitAudit(rs.ctx, audit.Event{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		Prefix:    prefix,
 		Type:      audit.EventStepEnd,
-		Data:      map[string]any{"outcome": "skipped", "skip_if": step.SkipIf, "duration_ms": 0},
+		Data: map[string]any{
+			"outcome": "skipped", "skip_if": step.SkipIf, "duration_ms": int64(0),
+			metrics.DataIdentity: model.ExecutionIdentity{
+				StepID: step.ID, StepType: step.StepType(), Kind: "step", CLI: step.CLI,
+				SessionStrategy: string(step.Session), AgentInvoked: false,
+			},
+			metrics.DataUsage:               skippedStepUsage(step),
+			metrics.DataEstimatedAPICostUSD: (*float64)(nil),
+		},
 	})
+}
+
+func skippedStepUsage(step *model.Step) model.UsageRecord {
+	if step.StepType() == "agent" {
+		return model.UsageRecord{
+			Status: model.UsageUnavailable, Reason: model.UnavailableUnsupportedAdapter, CLI: step.CLI, Source: "agent-runner",
+		}
+	}
+	return model.UsageRecord{
+		Status: model.UsageCollected, Tokens: model.TokenCounts{}, Source: "agent-runner", Completeness: model.CompletenessComplete,
+	}
 }
 
 func runStep(step *model.Step, rs *runState) (exec.StepOutcome, *exec.LoopResult, error) {
@@ -512,15 +539,22 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 		rs.log.Printf("\nto resume: agent-runner --resume %s\n", rs.sessionID)
 	}
 
-	if rs.auditLogger != nil {
-		rs.auditLogger.Emit(audit.Event{
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
+	if rs.ctx.AuditLogger != nil {
+		totals := rs.metricsCollector.Totals()
+		emitAudit(rs.ctx, audit.Event{
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 			Type:      audit.EventRunEnd,
 			Data: map[string]any{
-				"outcome":     string(result),
-				"duration_ms": time.Since(rs.runStartTime).Milliseconds(),
+				"outcome":          string(result),
+				"duration_ms":      time.Since(rs.runStartTime).Milliseconds(),
+				metrics.DataTotals: totals,
 			},
 		})
+		for _, metricsErr := range rs.metricsCollector.Errors() {
+			rs.log.Printf("agent-runner: warning: metrics: %v\n", metricsErr)
+		}
+	}
+	if rs.auditLogger != nil {
 		rs.auditLogger.Close()
 	}
 }

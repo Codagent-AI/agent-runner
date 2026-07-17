@@ -31,7 +31,7 @@ func ExecuteSubWorkflowStep(
 
 	workflow, workflowPath, childCtx, err := prepareSubWorkflow(step, parentCtx, log)
 	if err != nil {
-		emitSubEnd(parentCtx, prefix, startTime, "failed", err.Error())
+		emitSubEnd(parentCtx, prefix, startTime, step, "failed", err.Error())
 		return OutcomeFailed, err
 	}
 
@@ -64,7 +64,7 @@ func ExecuteSubWorkflowStep(
 		},
 	})
 
-	emitSubEnd(parentCtx, prefix, startTime, string(outcome), "")
+	emitSubEnd(parentCtx, prefix, startTime, step, string(outcome), "")
 	return outcome, err
 }
 
@@ -209,7 +209,7 @@ func emitSkippedChildStep(childCtx *model.ExecutionContext, step *model.Step) {
 	prefix := audit.BuildPrefix(nestingToAudit(childCtx), step.ID)
 	startTime := time.Now()
 	emitStepStart(childCtx, prefix, startTime, nil)
-	emitStepEnd(childCtx, prefix, startTime, string(OutcomeSkipped), map[string]any{"skip_if": step.SkipIf})
+	emitStepEnd(childCtx, prefix, startTime, string(OutcomeSkipped), map[string]any{"skip_if": step.SkipIf}, step)
 }
 
 func recordChildProgress(childCtx *model.ExecutionContext, childStepID string, completed bool) {
@@ -341,12 +341,12 @@ func validateSubWorkflowParams(workflow *model.Workflow, resolvedParams map[stri
 	return nil
 }
 
-func emitSubEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, outcome, errMsg string) {
+func emitSubEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, step *model.Step, outcome, errMsg string) {
 	data := map[string]any{}
 	if errMsg != "" {
 		data["error"] = errMsg
 	}
-	emitStepEnd(ctx, prefix, startTime, outcome, data)
+	emitStepEnd(ctx, prefix, startTime, outcome, data, step)
 }
 
 // MergeSessionDecls adds session declarations from a newly loaded (sub-)workflow

@@ -192,7 +192,7 @@ func ExecuteAgentStep(
 	// Bind the run-scoped endpoint before the terminal lease is released. A
 	// bind or stale-cleanup failure therefore fails without blanking the TUI.
 	if controlErr := ensureInteractiveControl(ctx, invocationContext); controlErr != nil {
-		emitAgentEnd(ctx, prefix, startTime, "", OutcomeFailed, "", controlErr.Error())
+		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, false, "", OutcomeFailed, "", controlErr.Error())
 		return OutcomeFailed, controlErr
 	}
 
@@ -217,7 +217,7 @@ func ExecuteAgentStep(
 	}
 	outcome, result, runErr := runAgentProcess(runner, adapter, args, invocationContext, step.Workdir, log, ctx.SuspendHook, ctx.ResumeHook, direct)
 	if runErr != nil {
-		emitAgentEnd(ctx, prefix, startTime, "", outcome, "", result.Stderr)
+		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, true, "", outcome, "", result.Stderr)
 		return outcome, runErr
 	}
 
@@ -247,7 +247,7 @@ func ExecuteAgentStep(
 
 	discoveredID := discoverAndStoreSession(adapter, step, ctx, spawnTime, sessionID, invocationContext.IsHeadless(), result.Stdout, log)
 
-	emitAgentEnd(ctx, prefix, startTime, discoveredID, outcome, filteredStdout, result.Stderr)
+	emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, true, discoveredID, outcome, filteredStdout, result.Stderr)
 
 	return outcome, nil
 }
@@ -789,9 +789,27 @@ func emitAgentStart(
 	})
 }
 
-func emitAgentEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, discoveredID string, outcome StepOutcome, stdout, stderr string) {
+func emitAgentEnd(
+	ctx *model.ExecutionContext,
+	prefix string,
+	startTime time.Time,
+	step *model.Step,
+	cliName, sessionID string,
+	invocationContext cli.InvocationContext,
+	agentInvoked bool,
+	discoveredID string,
+	outcome StepOutcome,
+	stdout, stderr string,
+) {
+	resolvedSessionID := discoveredID
+	if resolvedSessionID == "" {
+		resolvedSessionID = sessionID
+	}
 	data := map[string]any{
-		"discovered_session_id": discoveredID,
+		"discovered_session_id":  discoveredID,
+		"identity":               executionIdentity(ctx, step, "step", 0, agentInvoked, cliName, resolvedSessionID),
+		"usage":                  defaultAgentUsage(cliName, invocationContext.IsHeadless()),
+		"estimated_api_cost_usd": (*float64)(nil),
 	}
 	if stdout != "" {
 		data["stdout"] = stdout
@@ -799,7 +817,17 @@ func emitAgentEnd(ctx *model.ExecutionContext, prefix string, startTime time.Tim
 	if stderr != "" {
 		data["stderr"] = stderr
 	}
-	emitStepEnd(ctx, prefix, startTime, string(outcome), data)
+	emitStepEnd(ctx, prefix, startTime, string(outcome), data, step)
+}
+
+func defaultAgentUsage(cliName string, headless bool) model.UsageRecord {
+	reason := model.UnavailableUnsupportedAdapter
+	if !headless {
+		reason = model.UnavailablePTYContext
+	}
+	return model.UsageRecord{
+		Status: model.UsageUnavailable, Reason: reason, CLI: cliName, Source: "agent-runner",
+	}
 }
 
 // buildStepPrefix returns a preamble for interactive prompts that orients the
@@ -881,5 +909,15 @@ func emitAgentFailure(ctx *model.ExecutionContext, prefix string, startTime time
 		"mode":             mode,
 		"session_strategy": string(step.Session),
 	})
-	emitStepEnd(ctx, prefix, startTime, "failed", map[string]any{"error": errMsg})
+	cliName := step.CLI
+	if cliName == "" {
+		cliName = "claude"
+	}
+	headless := mode != string(model.ModeInteractive)
+	emitStepEnd(ctx, prefix, startTime, "failed", map[string]any{
+		"error":                  errMsg,
+		"identity":               executionIdentity(ctx, step, "step", 0, false, cliName, ""),
+		"usage":                  defaultAgentUsage(cliName, headless),
+		"estimated_api_cost_usd": (*float64)(nil),
+	}, step)
 }

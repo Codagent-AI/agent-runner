@@ -34,6 +34,52 @@ func findAuditEvent(events []audit.Event, typ audit.EventType) *audit.Event {
 }
 
 func TestExecuteAgentStep(t *testing.T) {
+	t.Run("headless terminal event reports unsupported adapter usage", func(t *testing.T) {
+		auditLog := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do something", Session: model.SessionNew}
+
+		_, err := ExecuteAgentStep(&step, ctx, &mockRunner{results: []ProcessResult{{ExitCode: 0}}}, &mockLogger{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		end := findAuditEvent(auditLog.events, audit.EventStepEnd)
+		identity, ok := end.Data["identity"].(model.ExecutionIdentity)
+		if !ok || !identity.AgentInvoked || identity.StepType != "agent" || identity.CLI != "claude" || identity.SessionID == "" {
+			t.Fatalf("identity = %#v", end.Data["identity"])
+		}
+		usage, ok := end.Data["usage"].(model.UsageRecord)
+		if !ok || usage.Status != model.UsageUnavailable || usage.Reason != model.UnavailableUnsupportedAdapter {
+			t.Fatalf("usage = %#v", end.Data["usage"])
+		}
+		if value, exists := end.Data["estimated_api_cost_usd"]; !exists || value != (*float64)(nil) {
+			t.Fatalf("cost = %#v, exists=%v", value, exists)
+		}
+	})
+
+	t.Run("interactive terminal event reports pty usage unavailable", func(t *testing.T) {
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(_ []string, _ directRunOptions) (interactive.DirectResult, error) {
+			return interactive.DirectResult{Completed: true}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		auditLog := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew}
+		_, err := ExecuteAgentStep(&step, ctx, &mockRunner{}, &mockLogger{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		end := findAuditEvent(auditLog.events, audit.EventStepEnd)
+		usage := end.Data["usage"].(model.UsageRecord)
+		if usage.Status != model.UsageUnavailable || usage.Reason != model.UnavailablePTYContext {
+			t.Fatalf("usage = %+v", usage)
+		}
+	})
+
 	t.Run("returns success for exit code 0", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do something", Session: model.SessionNew}

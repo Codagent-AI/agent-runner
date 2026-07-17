@@ -17,7 +17,7 @@ func ExecuteUIStep(step *model.Step, ctx *model.ExecutionContext, log Logger) (S
 
 	request, err := buildUIRequest(step, ctx)
 	if err != nil {
-		emitUIEnd(ctx, prefix, startTime, "failed", "", err)
+		emitUIEnd(ctx, prefix, startTime, step, "failed", "", err)
 		return OutcomeFailed, err
 	}
 	var result model.UIStepResult
@@ -25,15 +25,15 @@ func ExecuteUIStep(step *model.Step, ctx *model.ExecutionContext, log Logger) (S
 		result, err = ctx.UIStepHandler(&request)
 	} else {
 		err := fmt.Errorf("UI steps require a TTY")
-		emitUIEnd(ctx, prefix, startTime, "failed", "", err)
+		emitUIEnd(ctx, prefix, startTime, step, "failed", "", err)
 		return OutcomeFailed, err
 	}
 	if err != nil {
-		emitUIEnd(ctx, prefix, startTime, "failed", "", err)
+		emitUIEnd(ctx, prefix, startTime, step, "failed", "", err)
 		return OutcomeFailed, err
 	}
 	if result.Canceled {
-		emitUIEnd(ctx, prefix, startTime, string(OutcomeAborted), result.Outcome, nil)
+		emitUIEnd(ctx, prefix, startTime, step, string(OutcomeAborted), result.Outcome, nil)
 		return OutcomeAborted, nil
 	}
 	if step.OutcomeCapture != "" {
@@ -43,11 +43,11 @@ func ExecuteUIStep(step *model.Step, ctx *model.ExecutionContext, log Logger) (S
 		ctx.CapturedVariables[step.Capture] = model.NewCapturedMap(result.Inputs)
 	}
 	log.Printf("  ui outcome: %s\n", result.Outcome)
-	emitUIEnd(ctx, prefix, startTime, "success", result.Outcome, nil)
+	emitUIEnd(ctx, prefix, startTime, step, "success", result.Outcome, nil)
 	return OutcomeSuccess, nil
 }
 
-func emitUIEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, outcome, uiOutcome string, err error) {
+func emitUIEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, step *model.Step, outcome, uiOutcome string, err error) {
 	data := map[string]any{}
 	if uiOutcome != "" {
 		data["ui_outcome"] = uiOutcome
@@ -55,7 +55,7 @@ func emitUIEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, 
 	if err != nil {
 		data["error"] = err.Error()
 	}
-	emitStepEnd(ctx, prefix, startTime, outcome, data)
+	emitStepEnd(ctx, prefix, startTime, outcome, data, step)
 }
 
 func buildUIRequest(step *model.Step, ctx *model.ExecutionContext) (model.UIStepRequest, error) {

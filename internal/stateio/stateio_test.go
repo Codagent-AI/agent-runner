@@ -1,6 +1,7 @@
 package stateio
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,78 @@ import (
 
 	"github.com/codagent/agent-runner/internal/model"
 )
+
+func TestWriteJSONAtomic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "metrics.json")
+
+	if err := WriteJSONAtomic(path, map[string]any{"version": 1, "value": "before"}); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+	if err := WriteJSONAtomic(path, map[string]any{"version": 1, "value": "after"}); err != nil {
+		t.Fatalf("replacement write: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("result is not valid JSON: %v", err)
+	}
+	if got["value"] != "after" {
+		t.Fatalf("value = %v, want after", got["value"])
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, ".metrics.json-*.tmp"))
+	if err != nil {
+		t.Fatalf("glob temp files: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary files remain after atomic write: %v", matches)
+	}
+}
+
+func TestWriteJSONAtomicNeverExposesPartialJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "metrics.json")
+	if err := WriteJSONAtomic(path, map[string]any{"sequence": 0, "payload": strings.Repeat("x", 32_000)}); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	errors := make(chan error, 1)
+	go func() {
+		defer close(done)
+		for i := 1; i <= 50; i++ {
+			if err := WriteJSONAtomic(path, map[string]any{"sequence": i, "payload": strings.Repeat("x", 32_000)}); err != nil {
+				errors <- err
+				return
+			}
+		}
+	}()
+
+	for {
+		select {
+		case <-done:
+			select {
+			case err := <-errors:
+				t.Fatal(err)
+			default:
+			}
+			return
+		default:
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document map[string]any
+			if err := json.Unmarshal(data, &document); err != nil {
+				t.Fatalf("reader observed partial JSON: %v", err)
+			}
+		}
+	}
+}
 
 func TestWriteAndReadState(t *testing.T) {
 	t.Run("writes and reads state file", func(t *testing.T) {

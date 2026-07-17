@@ -23,6 +23,7 @@ Important files:
 | --- | --- |
 | `state.json` | Resume state, current step, session IDs, params, captures, nested progress, and completion flag. |
 | `audit.log` | JSONL event log for the run. |
+| `run-metrics.json` | Versioned per-attempt metrics, execution sessions, and run totals. |
 | `output/` | Per-step output files used by the live run view and workflows. |
 | `bundled/` | Materialized bundled scripts and assets for built-in workflow runs. |
 
@@ -41,6 +42,19 @@ Audit events include:
 | `sub_workflow_start` | A sub-workflow started. |
 | `sub_workflow_end` | A sub-workflow ended. |
 | `error` | An error was recorded. |
+
+## Run Metrics
+
+`run-metrics.json` is the supported machine-readable metrics artifact for a run. Schema version 1 records:
+
+- each completed step attempt with its identity, nesting prefix, outcome, duration, usage state, and reported API cost;
+- loop iteration completions with identity and duration only, avoiding duplicate usage rollups;
+- execution sessions with observed active duration and clean/open status; and
+- run totals for active duration, token categories, usage coverage, estimated API cost, and cost coverage.
+
+The artifact is rewritten atomically after every terminal step or iteration event and finalized at `run_end`. An interrupted run therefore retains every completion already observed without exposing a partially written JSON document.
+
+On resume, Agent Runner reads this artifact directly, retains earlier attempts, restores cumulative-usage baselines, and appends a new execution session. Paused time between invocations is excluded from active duration. If the existing artifact is corrupt or uses an unsupported schema version, Agent Runner preserves it under a unique `run-metrics.json.bak-<timestamp>` name, starts a fresh artifact with `history_complete: false`, and prints a warning.
 
 ## Run Detail View
 

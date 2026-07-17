@@ -78,6 +78,30 @@ func makeCtx() *model.ExecutionContext {
 }
 
 func TestExecuteShellStep(t *testing.T) {
+	t.Run("emits identity and measured zero usage", func(t *testing.T) {
+		auditLog := &mockAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		step := model.Step{ID: "s", Command: "echo hi", Session: model.SessionNew}
+
+		_, err := ExecuteShellStep(&step, ctx, &mockRunner{results: []ProcessResult{{ExitCode: 0}}}, &mockLogger{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		end := auditLog.events[len(auditLog.events)-1]
+		identity, ok := end.Data["identity"].(model.ExecutionIdentity)
+		if !ok || identity.StepID != "s" || identity.StepType != "shell" || identity.Kind != "step" || identity.AgentInvoked {
+			t.Fatalf("identity = %#v", end.Data["identity"])
+		}
+		usage, ok := end.Data["usage"].(model.UsageRecord)
+		if !ok || usage.Status != model.UsageCollected || usage.Tokens == nil || len(usage.Tokens) != 0 {
+			t.Fatalf("usage = %#v", end.Data["usage"])
+		}
+		if value, exists := end.Data["estimated_api_cost_usd"]; !exists || value != (*float64)(nil) {
+			t.Fatalf("cost = %#v, exists=%v", value, exists)
+		}
+	})
+
 	t.Run("returns success for exit code 0", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		step := model.Step{ID: "s", Command: "echo hi", Session: model.SessionNew}

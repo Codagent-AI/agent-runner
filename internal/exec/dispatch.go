@@ -104,19 +104,19 @@ func executeGroupStep(
 	for i := range steps {
 		outcome, err := DispatchStep(&steps[i], ctx, runner, glob, log)
 		if err != nil {
-			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), map[string]any{"error": err.Error()})
+			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), map[string]any{"error": err.Error()}, step)
 			return OutcomeFailed, err
 		}
 		if outcome == OutcomeAborted {
-			emitStepEnd(ctx, prefix, startTime, string(OutcomeAborted), nil)
+			emitStepEnd(ctx, prefix, startTime, string(OutcomeAborted), nil, step)
 			return OutcomeAborted, nil
 		}
 		recordLastStepOutcome(ctx, outcome)
 		if outcome == OutcomeFailed && !steps[i].ContinueOnFailure {
-			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), nil)
+			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), nil, step)
 			return OutcomeFailed, nil
 		}
 	}
-	emitStepEnd(ctx, prefix, startTime, string(OutcomeSuccess), nil)
+	emitStepEnd(ctx, prefix, startTime, string(OutcomeSuccess), nil, step)
 	return OutcomeSuccess, nil
 }

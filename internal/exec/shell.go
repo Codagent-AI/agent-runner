@@ -113,7 +113,7 @@ func emitShellInterpolationFailure(ctx *model.ExecutionContext, step *model.Step
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 	startTime := time.Now()
 	emitStepStart(ctx, prefix, startTime, map[string]any{"command": step.Command})
-	emitStepEnd(ctx, prefix, startTime, "failed", map[string]any{"error": err.Error()})
+	emitStepEnd(ctx, prefix, startTime, "failed", map[string]any{"error": err.Error()}, step)
 }
 
 func runShellProcess(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, command string, log Logger) (ProcessResult, bool, error) {
@@ -187,7 +187,7 @@ func ExecuteShellStep(
 
 	result, useCapture, runErr := runShellProcess(step, ctx, runner, command, log)
 	if runErr != nil {
-		emitStepEnd(ctx, prefix, startTime, "failed", map[string]any{"error": runErr.Error()})
+		emitStepEnd(ctx, prefix, startTime, "failed", map[string]any{"error": runErr.Error()}, step)
 		return OutcomeFailed, runErr
 	}
 
@@ -206,7 +206,7 @@ func ExecuteShellStep(
 		"stdout":    truncateForAudit(result.Stdout),
 	}
 
-	emitStepEnd(ctx, prefix, startTime, string(outcome), endData)
+	emitStepEnd(ctx, prefix, startTime, string(outcome), endData, step)
 
 	return outcome, nil
 }
