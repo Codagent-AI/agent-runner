@@ -32,9 +32,9 @@ type OpenCodeAdapter struct {
 // is run-only, so interactive mode omits it. --model and --variant are omitted on resume because a resumed session
 // keeps the settings it was started with.
 func (a *OpenCodeAdapter) BuildArgs(input *BuildArgsInput) []string {
-	context := input.InvocationContext()
+	invocationContext := input.InvocationContext()
 	resuming := input.Resume && input.SessionID != ""
-	if context.IsHeadless() {
+	if invocationContext.IsHeadless() {
 		args := []string{"opencode", "run", "--format", "json"}
 		if resuming {
 			args = append(args, "-s", input.SessionID)
@@ -51,8 +51,12 @@ func (a *OpenCodeAdapter) BuildArgs(input *BuildArgsInput) []string {
 
 	args := []string{"opencode"}
 	if resuming {
-		// OpenCode 1.17 only auto-submits --prompt to a resumed TUI when
-		// --session precedes --prompt.
+		// As of OpenCode 1.17.15 a resumed TUI no longer auto-submits
+		// --prompt; it only prefills the composer (earlier 1.17 builds
+		// auto-submitted when --session preceded --prompt). The E2E harness
+		// types the prompt into the resumed TUI itself; delivering the resume
+		// prompt in real interactive use is a known open issue. --session is
+		// kept before --prompt so the prefill lands in the resumed session.
 		args = append(args, "-s", input.SessionID)
 	}
 	args = append(args, "--prompt", input.Prompt)

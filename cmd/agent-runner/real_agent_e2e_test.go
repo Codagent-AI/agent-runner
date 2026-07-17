@@ -3,12 +3,12 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -190,13 +190,25 @@ steps:
 	assertRealAgentRunCompleted(t, workdir, workflowName, []string{agent + "-headless-fresh", "remove-headless-artifact", agent + "-headless-resume"})
 }
 
+// runRealInteractiveAgentE2E proves completing-turn durability: the agent
+// INVENTS a recall phrase during the same turn that runs the completion
+// command, so the resumed session can only repeat it if the completing turn
+// itself survived process termination. A phrase supplied in the prompt would
+// only prove the prompt turn was persisted. The harness never learns the
+// phrase in advance; it captures whatever the agent stated after the
+// per-phase marker prefix (terminal output first, session store fallback).
 func runRealInteractiveAgentE2E(t *testing.T, agent string) {
 	t.Helper()
 	_, workdir, runnerBin := prepareRealAgentE2E(t, agent)
-	recallPhrase := strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+	nonce := strings.ReplaceAll(uuid.NewString(), "-", "")[:10]
 	upperAgent := strings.ToUpper(agent)
-	freshReady := "AR_" + upperAgent + "_FRESH_" + recallPhrase
-	resumeReady := "AR_" + upperAgent + "_RESUME_" + recallPhrase
+	// The prompts spell the marker parts as prose ("AR, then CLAUDE, then
+	// ...") so neither the raw prompt echo nor its compacted form ever
+	// assembles the contiguous marker prefix; only the agent's answer does.
+	freshPrefix := "AR_" + upperAgent + "_FRESH_" + nonce + "_"
+	resumePrefix := "AR_" + upperAgent + "_RESUME_" + nonce + "_"
+	freshPrompt := fmt.Sprintf("Invent a recall phrase made of exactly two unusual lowercase English words that appear nowhere in these instructions. In this same turn, first state the phrase exactly once as a single line built from these six parts joined by single underscores. AR, then %s, then FRESH, then %s, then the first word, then the second word. Immediately after stating that line, run the exact Agent Runner completion command from the step instructions.", upperAgent, nonce)
+	resumePrompt := fmt.Sprintf("Reply with a single line built from these six parts joined by single underscores. AR, then %s, then RESUME, then %s, then the first word, then the second word of the recall phrase you invented in the previous turn.", upperAgent, nonce)
 	workflowName := "real-" + agent + "-interactive-e2e"
 	workflowPath := filepath.Join(t.TempDir(), "workflow.yaml")
 	workflow := fmt.Sprintf(`name: %s
@@ -205,27 +217,27 @@ steps:
   - id: %s-interactive-fresh
     agent: %s_interactive_smoke
     session: new
-    prompt: "The recall phrase is %s. Remember it for the next turn. Reply with one line made by concatenating AR_, %s, _FRESH_, and the recall phrase."
-`, workflowName, agent, agent, agent, recallPhrase, upperAgent)
-	phases := []realAgentPTYPhase{{ready: freshReady}}
+    prompt: "%s"
+  - id: %s-interactive-resume
+    session: resume
+    prompt: "%s"
+`, workflowName, agent, agent, agent, freshPrompt, agent, resumePrompt)
+	phases := []realAgentPTYPhase{{markerPrefix: freshPrefix}}
 	if agent == "claude" || agent == "cursor" {
 		phases[0].afterReady = "Run the exact Agent Runner completion command from the step instructions now."
 	}
-	stepIDs := []string{agent + "-interactive-fresh"}
-	workflow += fmt.Sprintf(`  - id: %s-interactive-resume
-    session: resume
-    prompt: "Recall the phrase from the prior turn. Reply with one line made by concatenating AR_, %s, _RESUME_, and that phrase."
-`, agent, upperAgent)
-	resumeSubmission := ""
+	resumePhase := realAgentPTYPhase{markerPrefix: resumePrefix}
 	if agent == "opencode" {
-		resumeSubmission = fmt.Sprintf("Recall the phrase from the prior turn. Reply with one line made by concatenating AR_, %s, _RESUME_, and that phrase.", upperAgent)
+		// OpenCode 1.17.15 no longer auto-submits --prompt on a resumed TUI;
+		// the harness types the prompt itself (periodically, because a
+		// one-shot submission races resumed-TUI startup).
+		resumePhase.submit = resumePrompt
 	}
-	resumePhase := realAgentPTYPhase{ready: resumeReady, submit: resumeSubmission}
 	if agent == "claude" || agent == "cursor" || agent == "opencode" {
 		resumePhase.afterReady = "Run the exact Agent Runner completion command from the step instructions now."
 	}
 	phases = append(phases, resumePhase)
-	stepIDs = append(stepIDs, agent+"-interactive-resume")
+	stepIDs := []string{agent + "-interactive-fresh", agent + "-interactive-resume"}
 	writeRealAgentTestFile(t, workflowPath, []byte(workflow))
 	cleanupNewRealAgentRuns(t, workdir, workflowName)
 
@@ -236,14 +248,20 @@ steps:
 	if err != nil {
 		t.Fatalf("real %s interactive E2E failed: %v\n%s", agent, err, result.output)
 	}
-	if len(phases) > 1 {
-		resumedOutputObserved := terminalTextContains(ansi.Strip(result.output), resumeReady)
-		if agent == "copilot" {
-			resumedOutputObserved = resumedOutputObserved || copilotSessionContains(resumeReady)
-		}
-		if !resumedOutputObserved {
-			t.Fatalf("real %s resumed output did not recall the prior token; want %q\n%s", agent, resumeReady, result.output)
-		}
+	if agent == "cursor" && result.commandApprovals == 0 {
+		t.Fatalf("real cursor interactive run never surfaced the supervised approval prompt (Run this command?); interactive Cursor completion must go through human approval, so a run without the prompt hides a behavior change\n%s", result.output)
+	}
+	plain := ansi.Strip(result.output)
+	freshPhrase := capturedRealAgentPhrase(agent, plain, freshPrefix)
+	if freshPhrase == "" {
+		t.Fatalf("real %s fresh turn never stated an invented recall phrase after marker %q\n%s", agent, freshPrefix, result.output)
+	}
+	resumePhrase := capturedRealAgentPhrase(agent, plain, resumePrefix)
+	if resumePhrase == "" {
+		t.Fatalf("real %s resumed turn never answered with marker %q\n%s", agent, resumePrefix, result.output)
+	}
+	if !strings.Contains(resumePhrase, freshPhrase) && !strings.Contains(freshPhrase, resumePhrase) {
+		t.Fatalf("real %s resumed answer did not recall the phrase invented in the completing turn: fresh=%q resume=%q\n%s", agent, freshPhrase, resumePhrase, result.output)
 	}
 	assertRealAgentRunCompleted(t, workdir, workflowName, stepIDs)
 }
@@ -350,12 +368,69 @@ func writeRealAgentTestFile(t *testing.T, path string, data []byte) {
 
 type realAgentPTYResult struct {
 	output string
+	// commandApprovals counts the CLI-native supervised approval prompts the
+	// harness answered (Copilot's and Cursor's shell-command confirmations).
+	commandApprovals int
 }
 
 type realAgentPTYPhase struct {
-	ready      string
-	submit     string
-	afterReady string
+	// markerPrefix is the known head of the phase's answer line; the agent
+	// completes it with an invented two-word phrase the harness captures.
+	markerPrefix string
+	submit       string
+	afterReady   string
+}
+
+// realAgentMarkerRegexp matches a phase marker: the known prefix followed by
+// the agent's invented two-lowercase-word phrase joined by an underscore. The
+// first submatch captures the phrase.
+func realAgentMarkerRegexp(prefix string) *regexp.Regexp {
+	return regexp.MustCompile(regexp.QuoteMeta(prefix) + `([a-z]{2,32}_[a-z]{2,32})`)
+}
+
+// longestMarkerPhrase returns the longest captured phrase among all matches.
+// Terminal transcripts accumulate partial streaming frames, so an early
+// truncated rendering of the marker stays in the transcript forever; the
+// longest occurrence is the fully streamed one.
+func longestMarkerPhrase(text string, re *regexp.Regexp) string {
+	longest := ""
+	for _, match := range re.FindAllStringSubmatch(text, -1) {
+		if len(match[1]) > len(longest) {
+			longest = match[1]
+		}
+	}
+	return longest
+}
+
+// captureMarkerPhrase extracts the invented phrase from rendered terminal
+// text, falling back to the compacted form only when line wrapping broke the
+// marker across rows.
+func captureMarkerPhrase(rendered string, re *regexp.Regexp) string {
+	if phrase := longestMarkerPhrase(rendered, re); phrase != "" {
+		return phrase
+	}
+	return longestMarkerPhrase(compactTerminalText(rendered), re)
+}
+
+// capturedRealAgentPhrase extracts a phase's invented phrase from the final
+// transcript, consulting the CLI's session store for agents whose TUIs do not
+// reliably render the response.
+func capturedRealAgentPhrase(agent, plain, prefix string) string {
+	re := realAgentMarkerRegexp(prefix)
+	if phrase := captureMarkerPhrase(plain, re); phrase != "" {
+		return phrase
+	}
+	return realAgentSessionCapture(agent, prefix, re)
+}
+
+func realAgentSessionCapture(agent, prefix string, re *regexp.Regexp) string {
+	switch agent {
+	case "copilot":
+		return copilotSessionCapture(re)
+	case "opencode":
+		return openCodeSessionCapture(prefix, re)
+	}
+	return ""
 }
 
 func runRealAgentWorkflowInPTY(cmd *exec.Cmd, agent string, phases []realAgentPTYPhase, timeout time.Duration) (realAgentPTYResult, error) {
@@ -401,9 +476,13 @@ func runRealAgentWorkflowInPTY(cmd *exec.Cmd, agent string, phases []realAgentPT
 	defer probeTicker.Stop()
 
 	var raw strings.Builder
+	captures := make([]*regexp.Regexp, len(phases))
+	for i := range phases {
+		captures[i] = realAgentMarkerRegexp(phases[i].markerPrefix)
+	}
 	ready := make([]bool, len(phases))
 	readyAt := make([]time.Time, len(phases))
-	submitted := make([]bool, len(phases))
+	lastSubmit := make([]time.Time, len(phases))
 	afterReadySubmitted := make([]bool, len(phases))
 	trustHandled := make([]bool, len(phases))
 	phaseBoundary := 0
@@ -453,8 +532,8 @@ func runRealAgentWorkflowInPTY(cmd *exec.Cmd, agent string, phases []realAgentPT
 				}
 				plain := ansi.Strip(raw.String())
 				handleInteractivePrompts(plain)
-				for i, expected := range phases {
-					if !ready[i] && terminalTextContains(plain, expected.ready) {
+				for i := range phases {
+					if !ready[i] && captureMarkerPhrase(plain, captures[i]) != "" {
 						advancePhase(i, len(plain))
 					}
 				}
@@ -467,9 +546,20 @@ func runRealAgentWorkflowInPTY(cmd *exec.Cmd, agent string, phases []realAgentPT
 		case <-probeTicker.C:
 			plain := ansi.Strip(raw.String())
 			handleInteractivePrompts(plain)
+			// Periodic resubmit: a one-shot typed submission races
+			// resumed-TUI startup (keystrokes typed before the TUI reads
+			// stdin are dropped), so re-type the phase's prompt every ~12s
+			// while the previous phase is ready and this one is not.
 			for i := 1; i < len(phases); i++ {
-				if phases[i].submit != "" && ready[i-1] && !ready[i] && !submitted[i] && time.Since(readyAt[i-1]) >= 10*time.Second {
-					submitted[i] = true
+				if phases[i].submit == "" || !ready[i-1] || ready[i] {
+					continue
+				}
+				since := readyAt[i-1]
+				if lastSubmit[i].After(since) {
+					since = lastSubmit[i]
+				}
+				if time.Since(since) >= 12*time.Second {
+					lastSubmit[i] = time.Now()
 					_, _ = ptmx.Write([]byte(phases[i].submit + "\r"))
 				}
 			}
@@ -484,15 +574,8 @@ func runRealAgentWorkflowInPTY(cmd *exec.Cmd, agent string, phases []realAgentPT
 					continue
 				}
 				lastOpenCodeProbe = time.Now()
-				for i, expected := range phases {
-					var durableResponseObserved bool
-					switch agent {
-					case "copilot":
-						durableResponseObserved = copilotSessionContains(expected.ready)
-					case "opencode":
-						durableResponseObserved = openCodeSessionContains(expected.ready)
-					}
-					if !ready[i] && durableResponseObserved {
+				for i := range phases {
+					if !ready[i] && realAgentSessionCapture(agent, phases[i].markerPrefix, captures[i]) != "" {
 						advancePhase(i, len(plain))
 						break
 					}
@@ -501,11 +584,11 @@ func runRealAgentWorkflowInPTY(cmd *exec.Cmd, agent string, phases []realAgentPT
 		case <-timer.C:
 			_ = cmd.Process.Kill()
 			_ = ptmx.Close()
-			return realAgentPTYResult{output: raw.String()}, fmt.Errorf("timed out after %s; readiness=%v", timeout, ready)
+			return realAgentPTYResult{output: raw.String(), commandApprovals: commandApprovals}, fmt.Errorf("timed out after %s; readiness=%v", timeout, ready)
 		}
 	}
 
-	result := realAgentPTYResult{output: raw.String()}
+	result := realAgentPTYResult{output: raw.String(), commandApprovals: commandApprovals}
 	for i := range phases {
 		if !ready[i] {
 			return result, fmt.Errorf("real-agent phase %d incomplete: ready=false", i)
@@ -514,56 +597,59 @@ func runRealAgentWorkflowInPTY(cmd *exec.Cmd, agent string, phases []realAgentPT
 	return result, waitErr
 }
 
-func copilotSessionContains(expected string) bool {
+func copilotSessionCapture(re *regexp.Regexp) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return false
+		return ""
 	}
 	paths, err := filepath.Glob(filepath.Join(home, ".copilot", "session-state", "*", "events.jsonl"))
 	if err != nil {
-		return false
+		return ""
 	}
+	longest := ""
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
-		if err == nil && bytes.Contains(data, []byte(expected)) {
-			return true
+		if err != nil {
+			continue
+		}
+		if phrase := longestMarkerPhrase(string(data), re); len(phrase) > len(longest) {
+			longest = phrase
 		}
 	}
-	return false
+	return longest
 }
 
-func openCodeSessionContains(expected string) bool {
+func openCodeSessionCapture(prefix string, re *regexp.Regexp) string {
 	since := time.Now().Add(-realAgentTimeout).UnixMilli()
-	escapedExpected := strings.ReplaceAll(expected, "'", "''")
+	escapedPrefix := strings.ReplaceAll(prefix, "'", "''")
 	query := fmt.Sprintf(
-		"SELECT data FROM part WHERE time_created >= %d AND instr(data, '%s') > 0 LIMIT 1",
-		since, escapedExpected,
+		"SELECT data FROM part WHERE time_created >= %d AND instr(data, '%s') > 0 LIMIT 8",
+		since, escapedPrefix,
 	)
 	output, err := exec.Command("opencode", "db", query, "--format", "json").Output()
-	return err == nil && bytes.Contains(output, []byte(expected))
+	if err != nil {
+		return ""
+	}
+	return longestMarkerPhrase(string(output), re)
 }
 
-func terminalTextContains(rendered, expected string) bool {
-	if strings.Contains(rendered, expected) {
-		return true
-	}
-	compact := func(value string) string {
-		return strings.Map(func(r rune) rune {
-			switch {
-			case r >= 'a' && r <= 'z':
-				return r
-			case r >= 'A' && r <= 'Z':
-				return r
-			case r >= '0' && r <= '9':
-				return r
-			case r == '_':
-				return r
-			default:
-				return -1
-			}
-		}, value)
-	}
-	return strings.Contains(compact(rendered), compact(expected))
+// compactTerminalText strips everything but marker-safe characters so markers
+// broken across rendered lines still match contiguously.
+func compactTerminalText(value string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r
+		case r >= '0' && r <= '9':
+			return r
+		case r == '_':
+			return r
+		default:
+			return -1
+		}
+	}, value)
 }
 
 func assertRealAgentRunCompleted(t *testing.T, workdir, workflowName string, stepIDs []string) {
