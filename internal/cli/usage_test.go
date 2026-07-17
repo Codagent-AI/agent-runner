@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -78,6 +79,15 @@ func TestClaudeStructuredHeadlessOutput(t *testing.T) {
 		}
 	})
 
+	t.Run("capture filter handles result lines larger than one MiB", func(t *testing.T) {
+		filter := any(adapter).(OutputFilter)
+		want := strings.Repeat("x", 1024*1024+1)
+		raw := fmt.Sprintf(`{"type":"result","result":%q}`, want) + "\n"
+		if got := filter.FilterOutput(raw); got != want {
+			t.Fatalf("FilterOutput() length = %d, want %d", len(got), len(want))
+		}
+	})
+
 	t.Run("live stream does not repeat final result", func(t *testing.T) {
 		wrapper, ok := any(adapter).(StdoutWrapper)
 		if !ok {
@@ -130,7 +140,7 @@ func TestOpenCodeUsageExtraction(t *testing.T) {
 			Tokens: model.TokenCounts{
 				model.TokenInput: 9751, model.TokenOutput: 7,
 				model.TokenReasoning: 13, model.TokenCachedInput: 1793,
-				model.TokenCacheWrite: 1, "other:total": 11565,
+				model.TokenCacheWrite: 1,
 			},
 			Source: "opencode:step_finish", Completeness: model.CompletenessComplete,
 		},

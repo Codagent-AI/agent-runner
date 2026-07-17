@@ -36,7 +36,10 @@ func findAuditEvent(events []audit.Event, typ audit.EventType) *audit.Event {
 
 func TestExecuteAgentStep(t *testing.T) {
 	t.Run("adapter without extraction keeps unsupported usage unavailable", func(t *testing.T) {
-		got := extractAgentUsage(&spawnEnvAdapter{}, "fake", cli.ContextAutonomousHeadless, `{"type":"result"}`+"\n")
+		got, err := extractAgentUsage(&spawnEnvAdapter{}, "fake", cli.ContextAutonomousHeadless, `{"type":"result"}`+"\n")
+		if err != nil {
+			t.Fatalf("extractAgentUsage() error = %v", err)
+		}
 		want := cli.UsageExtraction{Usage: model.UsageRecord{
 			Status: model.UsageUnavailable, Reason: model.UnavailableUnsupportedAdapter,
 			CLI: "fake", Source: "agent-runner",
@@ -92,6 +95,10 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 		if end.Data["estimated_api_cost_usd"] != (*float64)(nil) {
 			t.Fatalf("cost = %#v, want nil", end.Data["estimated_api_cost_usd"])
+		}
+		usageError, ok := end.Data["usage_error"].(string)
+		if !ok || !strings.Contains(usageError, "claude: parse stream-json") {
+			t.Fatalf("usage_error = %#v, want adapter parse context", end.Data["usage_error"])
 		}
 	})
 

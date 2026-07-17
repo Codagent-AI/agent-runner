@@ -157,15 +157,18 @@ func (a *ClaudeAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
 // FilterOutput extracts the final result text from Claude stream-json output.
 func (a *ClaudeAdapter) FilterOutput(stdout string) string {
 	var result string
-	scanner := bufio.NewScanner(strings.NewReader(stdout))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
+	reader := bufio.NewReader(strings.NewReader(stdout))
+	for {
+		line, err := reader.ReadBytes('\n')
 		var event struct {
 			Type   string `json:"type"`
 			Result string `json:"result"`
 		}
-		if json.Unmarshal(scanner.Bytes(), &event) == nil && event.Type == "result" {
+		if json.Unmarshal(line, &event) == nil && event.Type == "result" {
 			result = event.Result
+		}
+		if err != nil {
+			break
 		}
 	}
 	return result

@@ -178,14 +178,21 @@ func (a *OpenCodeAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error
 		}
 		foundUsage = true
 
-		stepTokens, topComplete, err := tokenCountsFromObject(event.Part.Tokens, map[string]string{
+		var tokenObject map[string]json.RawMessage
+		if err := json.Unmarshal(event.Part.Tokens, &tokenObject); err != nil {
+			return UsageExtraction{}, fmt.Errorf("opencode: parse step_finish tokens: %w", err)
+		}
+		// total is an aggregate of the component token fields, not a disjoint
+		// vendor category. Keeping it would double-count every OpenCode step.
+		delete(tokenObject, "total")
+		topLevelTokens, err := json.Marshal(tokenObject)
+		if err != nil {
+			return UsageExtraction{}, fmt.Errorf("opencode: normalize step_finish tokens: %w", err)
+		}
+		stepTokens, topComplete, err := tokenCountsFromObject(topLevelTokens, map[string]string{
 			"input": model.TokenInput, "output": model.TokenOutput, "reasoning": model.TokenReasoning,
 		})
 		if err != nil {
-			return UsageExtraction{}, fmt.Errorf("opencode: parse step_finish tokens: %w", err)
-		}
-		var tokenObject map[string]json.RawMessage
-		if err := json.Unmarshal(event.Part.Tokens, &tokenObject); err != nil {
 			return UsageExtraction{}, fmt.Errorf("opencode: parse step_finish tokens: %w", err)
 		}
 		cacheRaw := tokenObject["cache"]
