@@ -1588,12 +1588,70 @@ func TestCompletionInstructionQuotesExecutablePath(t *testing.T) {
 }
 
 func TestCompletionExecutableUsesConfiguredAgentRunner(t *testing.T) {
-	t.Setenv("AGENT_RUNNER_EXECUTABLE", "/Applications/Agent Runner/bin/agent-runner")
+	override := writeExecutableFixture(t)
+	t.Setenv("AGENT_RUNNER_EXECUTABLE", override)
 
 	got := completionExecutableForContext(cli.ContextInteractive)
-	if want := "/Applications/Agent Runner/bin/agent-runner"; got != want {
-		t.Fatalf("completionExecutableForContext() = %q, want %q", got, want)
+	if got != override {
+		t.Fatalf("completionExecutableForContext() = %q, want %q", got, override)
 	}
+}
+
+func TestAgentRunnerExecutableIgnoresInvalidOverride(t *testing.T) {
+	fallback, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	nonExecutable := filepath.Join(dir, "not-executable")
+	if err := os.WriteFile(nonExecutable, []byte("#!/bin/sh\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]string{
+		"missing path":        filepath.Join(dir, "does-not-exist"),
+		"directory":           dir,
+		"non-executable file": nonExecutable,
+	}
+	for name, override := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("AGENT_RUNNER_EXECUTABLE", override)
+			got, err := agentRunnerExecutable()
+			if err != nil {
+				t.Fatalf("agentRunnerExecutable() error = %v", err)
+			}
+			if got != fallback {
+				t.Fatalf("agentRunnerExecutable() = %q, want fallback %q", got, fallback)
+			}
+		})
+	}
+}
+
+func TestAgentRunnerExecutableUsesValidOverride(t *testing.T) {
+	override := writeExecutableFixture(t)
+	t.Setenv("AGENT_RUNNER_EXECUTABLE", override)
+
+	got, err := agentRunnerExecutable()
+	if err != nil {
+		t.Fatalf("agentRunnerExecutable() error = %v", err)
+	}
+	if got != override {
+		t.Fatalf("agentRunnerExecutable() = %q, want %q", got, override)
+	}
+}
+
+// writeExecutableFixture creates a real executable file at a path containing a
+// space, mirroring installs under directories like "Agent Runner".
+func writeExecutableFixture(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "Agent Runner", "bin")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "agent-runner")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil { // #nosec G306 -- the fixture must be executable
+		t.Fatal(err)
+	}
+	return path
 }
 
 func assertControlCompletionInstruction(t *testing.T, prompt string) {

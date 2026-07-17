@@ -532,10 +532,18 @@ func completionExecutableForContext(invocationContext cli.InvocationContext) str
 }
 
 func agentRunnerExecutable() (string, error) {
-	if executable := os.Getenv("AGENT_RUNNER_EXECUTABLE"); filepath.IsAbs(executable) {
+	if executable := os.Getenv("AGENT_RUNNER_EXECUTABLE"); filepath.IsAbs(executable) && isExecutableFile(executable) {
 		return executable, nil
 	}
 	return os.Executable()
+}
+
+// isExecutableFile reports whether path is an existing, executable regular
+// file. A stale or bogus inherited override would otherwise silently break
+// both the completion client instruction and the watchdog executable.
+func isExecutableFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0
 }
 
 func completionInstruction(executable string) string {
