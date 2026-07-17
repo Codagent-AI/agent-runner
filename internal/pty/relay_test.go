@@ -15,18 +15,24 @@ import (
 
 type fakeRelayProcess struct {
 	waitErr     error
+	observeErr  error
 	waitRelease chan struct{}
-	groupAlive  bool
 
-	mu      sync.Mutex
-	signals []syscall.Signal
+	mu              sync.Mutex
+	signals         []syscall.Signal
+	reaped          bool
+	killedAfterReap bool
 }
 
 type stubbornRelayProcess struct {
 	signals chan syscall.Signal
 }
 
-func (p *stubbornRelayProcess) wait() error {
+func (p *stubbornRelayProcess) waitForExit() error {
+	select {}
+}
+
+func (p *stubbornRelayProcess) reap() error {
 	select {}
 }
 
@@ -35,14 +41,17 @@ func (p *stubbornRelayProcess) signalGroup(sig syscall.Signal) error {
 	return nil
 }
 
-func (p *stubbornRelayProcess) isGroupAlive() bool {
-	return true
-}
-
-func (p *fakeRelayProcess) wait() error {
+func (p *fakeRelayProcess) waitForExit() error {
 	if p.waitRelease != nil {
 		<-p.waitRelease
 	}
+	return p.observeErr
+}
+
+func (p *fakeRelayProcess) reap() error {
+	p.mu.Lock()
+	p.reaped = true
+	p.mu.Unlock()
 	return p.waitErr
 }
 
@@ -50,8 +59,8 @@ func (p *fakeRelayProcess) signalGroup(sig syscall.Signal) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.signals = append(p.signals, sig)
-	if sig == syscall.SIGKILL {
-		p.groupAlive = false
+	if sig == syscall.SIGKILL && p.reaped {
+		p.killedAfterReap = true
 	}
 	if p.waitRelease != nil && sig == syscall.SIGTERM {
 		close(p.waitRelease)
@@ -60,16 +69,16 @@ func (p *fakeRelayProcess) signalGroup(sig syscall.Signal) error {
 	return nil
 }
 
-func (p *fakeRelayProcess) isGroupAlive() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.groupAlive
-}
-
 func (p *fakeRelayProcess) gotSignals() []syscall.Signal {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]syscall.Signal(nil), p.signals...)
+}
+
+func (p *fakeRelayProcess) wasKilledAfterReap() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.killedAfterReap
 }
 
 func TestSuperviseRelayDrainsOutputAfterCommandExit(t *testing.T) {
@@ -108,7 +117,7 @@ func TestSuperviseRelayDrainsOutputAfterCommandExit(t *testing.T) {
 
 func TestSuperviseRelayBoundsDrainAndPreservesCommandOutcome(t *testing.T) {
 	waitErr := errors.New("exit status 9")
-	process := &fakeRelayProcess{waitErr: waitErr, groupAlive: true}
+	process := &fakeRelayProcess{waitErr: waitErr}
 	outputDone := make(chan error)
 	closed := make(chan struct{})
 
@@ -136,6 +145,9 @@ func TestSuperviseRelayBoundsDrainAndPreservesCommandOutcome(t *testing.T) {
 	}
 	if diff := cmp.Diff([]syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}, process.gotSignals()); diff != "" {
 		t.Fatalf("signals mismatch (-want +got):\n%s", diff)
+	}
+	if process.wasKilledAfterReap() {
+		t.Fatal("SIGKILL was sent after the process-group leader was reaped")
 	}
 	select {
 	case <-closed:
@@ -169,6 +181,22 @@ func TestSuperviseRelayTerminatesProcessGroupOnOutputError(t *testing.T) {
 	case <-closed:
 	default:
 		t.Fatal("PTY was not closed after relay failure")
+	}
+}
+
+func TestSuperviseRelayDoesNotSignalUnverifiedGroupAfterExitObservationFailure(t *testing.T) {
+	process := &fakeRelayProcess{observeErr: errors.New("waitid failed")}
+
+	outcome := superviseRelay(relayConfig{
+		process:  process,
+		closePTY: func() error { return nil },
+	})
+
+	if outcome.relayErr == nil || !strings.Contains(outcome.relayErr.Error(), "observe command exit") {
+		t.Fatalf("relay error = %v, want exit-observation failure", outcome.relayErr)
+	}
+	if diff := cmp.Diff([]syscall.Signal(nil), process.gotSignals()); diff != "" {
+		t.Fatalf("signals mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -223,5 +251,20 @@ func TestCommandRelayProcessSignalsNegativeProcessGroupID(t *testing.T) {
 	}
 	if gotPID != -4321 || gotSignal != syscall.SIGTERM {
 		t.Fatalf("signal target = (%d, %v), want (-4321, %v)", gotPID, gotSignal, syscall.SIGTERM)
+	}
+}
+
+func TestWaitForProcessExitLeavesCommandReapable(t *testing.T) {
+	cmd := exec.Command("sh", "-c", "exit 7")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start command: %v", err)
+	}
+	if err := waitForProcessExit(cmd.Process.Pid); err != nil {
+		t.Fatalf("observe command exit: %v", err)
+	}
+	waitErr := cmd.Wait()
+	var exitErr *exec.ExitError
+	if !errors.As(waitErr, &exitErr) || exitErr.ExitCode() != 7 {
+		t.Fatalf("wait error = %v, want exit status 7", waitErr)
 	}
 }

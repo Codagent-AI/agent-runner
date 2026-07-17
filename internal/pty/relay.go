@@ -13,16 +13,26 @@ const relayStopTimeout = 250 * time.Millisecond
 var signalProcessGroup = syscall.Kill
 
 type relayProcess interface {
-	wait() error
+	waitForExit() error
+	reap() error
 	signalGroup(syscall.Signal) error
-	isGroupAlive() bool
 }
 
 type commandRelayProcess struct {
 	cmd *exec.Cmd
 }
 
-func (p commandRelayProcess) wait() error {
+func (p commandRelayProcess) waitForExit() error {
+	if p.cmd == nil || p.cmd.Process == nil {
+		return errors.New("pty: command process is unavailable")
+	}
+	return waitForProcessExit(p.cmd.Process.Pid)
+}
+
+func (p commandRelayProcess) reap() error {
+	if p.cmd == nil {
+		return errors.New("pty: command is unavailable")
+	}
 	return p.cmd.Wait()
 }
 
@@ -31,14 +41,6 @@ func (p commandRelayProcess) signalGroup(sig syscall.Signal) error {
 		return nil
 	}
 	return signalProcessGroup(-p.cmd.Process.Pid, sig)
-}
-
-func (p commandRelayProcess) isGroupAlive() bool {
-	if p.cmd == nil || p.cmd.Process == nil {
-		return false
-	}
-	err := signalProcessGroup(-p.cmd.Process.Pid, syscall.Signal(0))
-	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 type relayConfig struct {
@@ -58,35 +60,38 @@ type relayOutcome struct {
 }
 
 func superviseRelay(config relayConfig) relayOutcome {
-	waitDone := make(chan error, 1)
-	go func() { waitDone <- config.process.wait() }()
+	exitDone := make(chan error, 1)
+	go func() { exitDone <- config.process.waitForExit() }()
 
 	outputDone := config.outputDone
 	inputDone := config.inputDone
 	for {
 		select {
-		case waitErr := <-waitDone:
-			return finishRelay(config, waitErr, outputDone, inputDone)
+		case err := <-exitDone:
+			if err != nil {
+				return failExitObservation(config, err)
+			}
+			return finishRelay(config, outputDone, inputDone)
 		case err := <-outputDone:
 			outputDone = nil
 			if err != nil {
-				return failRelay(config, waitDone, "output", err)
+				return failRelay(config, exitDone, "output", err)
 			}
 		case err := <-inputDone:
 			inputDone = nil
 			if err != nil {
-				return failRelay(config, waitDone, "input", err)
+				return failRelay(config, exitDone, "input", err)
 			}
 		}
 	}
 }
 
-func finishRelay(config relayConfig, waitErr error, outputDone, inputDone <-chan error) relayOutcome {
+func finishRelay(config relayConfig, outputDone, inputDone <-chan error) relayOutcome {
 	if config.stopInput != nil {
 		config.stopInput()
 	}
 
-	outcome := relayOutcome{waitErr: waitErr}
+	outcome := relayOutcome{}
 	drainTimedOut := false
 	ptyClosed := false
 	if outputDone != nil {
@@ -134,6 +139,7 @@ func finishRelay(config relayConfig, waitErr error, outputDone, inputDone <-chan
 		case <-time.After(relayStopTimeout):
 		}
 	}
+	outcome.waitErr = config.process.reap()
 	return outcome
 }
 
@@ -145,12 +151,12 @@ func escalateProcessGroup(config relayConfig) {
 	timer := time.NewTimer(grace)
 	defer timer.Stop()
 	<-timer.C
-	if config.process.isGroupAlive() {
-		_ = config.process.signalGroup(syscall.SIGKILL)
-	}
+	// waitForExit deliberately leaves the group leader unreaped, so its PID
+	// cannot be reused by an unrelated process group during this grace period.
+	_ = config.process.signalGroup(syscall.SIGKILL)
 }
 
-func failRelay(config relayConfig, waitDone <-chan error, direction string, relayErr error) relayOutcome {
+func failRelay(config relayConfig, exitDone <-chan error, direction string, relayErr error) relayOutcome {
 	if config.stopInput != nil {
 		config.stopInput()
 	}
@@ -166,13 +172,22 @@ func failRelay(config relayConfig, waitDone <-chan error, direction string, rela
 	timer := time.NewTimer(grace)
 	defer timer.Stop()
 	var waitErr error
+	exited := false
 	select {
-	case waitErr = <-waitDone:
+	case err := <-exitDone:
+		exited = true
+		if err != nil {
+			relayErr = fmt.Errorf("%w (observe process exit: %v)", relayErr, err)
+		}
 	case <-timer.C:
 		_ = config.process.signalGroup(syscall.SIGKILL)
 		killTimer := time.NewTimer(grace)
 		select {
-		case waitErr = <-waitDone:
+		case err := <-exitDone:
+			exited = true
+			if err != nil {
+				relayErr = fmt.Errorf("%w (observe process exit: %v)", relayErr, err)
+			}
 		case <-killTimer.C:
 			relayErr = fmt.Errorf("%w (process did not exit after SIGKILL)", relayErr)
 		}
@@ -183,8 +198,26 @@ func failRelay(config relayConfig, waitDone <-chan error, direction string, rela
 			}
 		}
 	}
+	if exited {
+		waitErr = config.process.reap()
+	}
 	return relayOutcome{
 		waitErr:  waitErr,
 		relayErr: fmt.Errorf("pty: relay %s failed while command was running: %w", direction, relayErr),
+	}
+}
+
+func failExitObservation(config relayConfig, observeErr error) relayOutcome {
+	if config.stopInput != nil {
+		config.stopInput()
+	}
+	if config.closePTY != nil {
+		_ = config.closePTY()
+	}
+	// Without a successful non-reaping observation, the group leader cannot
+	// serve as a stable identity anchor. Do not signal a numeric PGID here.
+	return relayOutcome{
+		waitErr:  config.process.reap(),
+		relayErr: fmt.Errorf("pty: observe command exit without reaping: %w", observeErr),
 	}
 }
