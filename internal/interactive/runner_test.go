@@ -318,11 +318,11 @@ func TestDirectRunnerHelperProcess(t *testing.T) {
 	if helperMode != "1" && helperMode != "2" {
 		return
 	}
-	if err := SendControlEventFromEnvironment(context.Background(), MessageCompleteStep, os.Getenv); err != nil {
+	if _, err := SendControlEventFromEnvironment(context.Background(), MessageCompleteStep, os.Getenv); err != nil {
 		os.Exit(10)
 	}
 	if helperMode == "1" {
-		if err := SendControlEventFromEnvironment(context.Background(), MessageTurnCommitted, os.Getenv); err != nil {
+		if _, err := SendControlEventFromEnvironment(context.Background(), MessageTurnCommitted, os.Getenv); err != nil {
 			os.Exit(11)
 		}
 	}

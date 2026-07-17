@@ -154,7 +154,8 @@ Run this exact shell command now, then finish the current response:
 // configuration directory whose permissions pre-approve exactly the
 // completion command. The user's own configuration files are never modified.
 func (a *CursorAdapter) SpawnEnv(input *BuildArgsInput) ([]string, error) {
-	if input.InvocationContext().IsHeadless() || input.CompletionCommand == nil || !input.CompletionCommand.Valid() {
+	invocationContext := input.InvocationContext()
+	if invocationContext.IsHeadless() || input.CompletionCommand == nil || !input.CompletionCommand.Valid() {
 		return nil, nil
 	}
 	prepare := a.prepareConfig
@@ -165,10 +166,10 @@ func (a *CursorAdapter) SpawnEnv(input *BuildArgsInput) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cursor: prepare private config: %w", err)
 	}
-	if input.InvocationContext() == ContextAutonomousInteractive &&
+	if invocationContext == ContextAutonomousInteractive &&
 		usersettings.EffectiveAutonomousPermissionMode(input.PermissionMode) != usersettings.PermissionModeYOLO {
 		if config.DenyRuleBlockingCompletion != "" {
-			return nil, fmt.Errorf("cursor: unattended completion is blocked by your Cursor deny rule %q, which takes precedence over the completion pre-approval; remove that deny rule or set autonomous_permission_mode: yolo", config.DenyRuleBlockingCompletion)
+			return nil, cursorDenyBlockedError(fmt.Sprintf("your Cursor deny rule %q", config.DenyRuleBlockingCompletion))
 		}
 		// Project-level permissions are read by Cursor straight from the
 		// project directory — CURSOR_CONFIG_DIR does not redirect them — so a
@@ -179,10 +180,17 @@ func (a *CursorAdapter) SpawnEnv(input *BuildArgsInput) ([]string, error) {
 			return nil, fmt.Errorf("cursor: project permissions: %w", err)
 		}
 		if rule != "" {
-			return nil, fmt.Errorf("cursor: unattended completion is blocked by the project-level Cursor deny rule %q in %s, which takes precedence over the completion pre-approval; remove that deny rule or set autonomous_permission_mode: yolo", rule, path)
+			return nil, cursorDenyBlockedError(fmt.Sprintf("the project-level Cursor deny rule %q in %s", rule, path))
 		}
 	}
 	return []string{"CURSOR_CONFIG_DIR=" + config.Dir}, nil
+}
+
+// cursorDenyBlockedError formats the unattended-run failure for a deny rule
+// that covers the completion command; source names the rule and where it
+// lives, so the remediation advice stays identical for every deny location.
+func cursorDenyBlockedError(source string) error {
+	return fmt.Errorf("cursor: unattended completion is blocked by %s, which takes precedence over the completion pre-approval; remove that deny rule or set autonomous_permission_mode: yolo", source)
 }
 
 // cursorProjectDenyBlockingCompletion reports the first deny rule in the
@@ -213,12 +221,19 @@ func cursorProjectDenyBlockingCompletion(workdir string, command CompletionComma
 	if err := json.Unmarshal(raw, &config); err != nil {
 		return "", path, fmt.Errorf("parse %s: %w", path, err)
 	}
-	for _, entry := range config.Permissions.Deny {
-		if s, ok := entry.(string); ok && cursorShellPermissionMatches(s, command) {
-			return s, path, nil
+	return firstBlockingDenyRule(config.Permissions.Deny, command), path, nil
+}
+
+// firstBlockingDenyRule returns the first deny-list entry covering the
+// completion command. The user-level and project-level scans both go through
+// it so deny detection cannot drift between the two.
+func firstBlockingDenyRule(deny []any, command CompletionCommand) string {
+	for _, entry := range deny {
+		if rule, ok := entry.(string); ok && cursorShellPermissionMatches(rule, command) {
+			return rule
 		}
 	}
-	return "", path, nil
+	return ""
 }
 
 // cursorConfigSourceDir resolves the configuration directory the Cursor CLI
@@ -233,23 +248,13 @@ func cursorConfigSourceDir() (string, error) {
 
 func cursorConfigSourceDirFor(goos string) (string, error) {
 	if dir := os.Getenv("CURSOR_CONFIG_DIR"); dir != "" {
-		abs, err := filepath.Abs(dir)
-		if err != nil {
-			return "", fmt.Errorf("resolve cursor config dir %q: %w", dir, err)
-		}
-		return abs, nil
+		return absCursorConfigDir(dir)
 	}
-	if goos != "darwin" && goos != "windows" {
-		if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-			candidate := filepath.Join(xdg, "cursor")
-			if _, err := os.Stat(filepath.Join(candidate, "cli-config.json")); err == nil { // #nosec G703 -- XDG_CONFIG_HOME is the user's own documented Cursor config location; the stat only selects the source dir Cursor itself would read
-
-				abs, err := filepath.Abs(candidate)
-				if err != nil {
-					return "", fmt.Errorf("resolve cursor config dir %q: %w", candidate, err)
-				}
-				return abs, nil
-			}
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" && goos != "darwin" && goos != "windows" {
+		candidate := filepath.Join(xdg, "cursor")
+		// #nosec G703 -- XDG_CONFIG_HOME is the user's own documented Cursor config location; the stat only selects the source dir Cursor itself would read
+		if _, err := os.Stat(filepath.Join(candidate, "cli-config.json")); err == nil {
+			return absCursorConfigDir(candidate)
 		}
 	}
 	home, err := os.UserHomeDir()
@@ -257,6 +262,14 @@ func cursorConfigSourceDirFor(goos string) (string, error) {
 		return "", fmt.Errorf("locate cursor config dir: %w", err)
 	}
 	return filepath.Join(home, ".cursor"), nil
+}
+
+func absCursorConfigDir(dir string) (string, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("resolve cursor config dir %q: %w", dir, err)
+	}
+	return abs, nil
 }
 
 // cursorChatsRoot resolves the chat-store root for session discovery and
@@ -345,15 +358,8 @@ func prepareCursorPrivateConfigAt(sourceDir, cacheRoot string, command Completio
 	if !present {
 		permissions["allow"] = append(allow, rule)
 	}
-	blockingDeny := ""
-	if deny, _ := permissions["deny"].([]any); deny != nil {
-		for _, entry := range deny {
-			if rule, ok := entry.(string); ok && cursorShellPermissionMatches(rule, command) {
-				blockingDeny = rule
-				break
-			}
-		}
-	}
+	deny, _ := permissions["deny"].([]any)
+	blockingDeny := firstBlockingDenyRule(deny, command)
 	rendered, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return cursorPrivateConfig{}, fmt.Errorf("render cursor config: %w", err)

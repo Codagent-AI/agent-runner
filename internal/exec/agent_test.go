@@ -1685,7 +1685,7 @@ func TestBuildStepInvocationCollectsSpawnEnv(t *testing.T) {
 	profile := &config.ResolvedAgent{}
 
 	adapter := &spawnEnvAdapter{env: []string{"CURSOR_CONFIG_DIR=/private/dir"}}
-	_, spawnEnv, _, err := buildStepInvocation(step, ctx, profile, adapter, "fake", "prompt", "", "", false, cli.ContextInteractive)
+	_, spawnEnv, _, err := buildStepInvocation(step, ctx, profile, adapter, "prompt", "", "", false, cli.ContextInteractive)
 	if err != nil {
 		t.Fatalf("buildStepInvocation: %v", err)
 	}
@@ -1697,19 +1697,8 @@ func TestBuildStepInvocationCollectsSpawnEnv(t *testing.T) {
 	}
 
 	failing := &spawnEnvAdapter{err: errors.New("prepare config: boom")}
-	if _, _, _, err := buildStepInvocation(step, ctx, profile, failing, "fake", "prompt", "", "", false, cli.ContextInteractive); err == nil || !strings.Contains(err.Error(), "boom") {
+	if _, _, _, err := buildStepInvocation(step, ctx, profile, failing, "prompt", "", "", false, cli.ContextInteractive); err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("buildStepInvocation error = %v, want spawn env failure", err)
-	}
-}
-
-func TestDropSpawnEnvForCLI(t *testing.T) {
-	got := dropSpawnEnvForCLI("claude")
-	want := []string{"CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID"}
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Fatalf("dropSpawnEnvForCLI(claude) mismatch (-want +got):\n%s", diff)
-	}
-	if got := dropSpawnEnvForCLI("no-such-cli"); got != nil {
-		t.Fatalf("dropSpawnEnvForCLI(no-such-cli) = %v, want nil", got)
 	}
 }
 

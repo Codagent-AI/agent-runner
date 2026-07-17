@@ -549,19 +549,12 @@ func (s *ControlServer) emit(eventType audit.EventType, stepID string, data map[
 }
 
 // SendControlEventFromEnvironment sends one authenticated event using only
-// the child environment. A lost acknowledgement is retried once with the same
-// request ID so the server can answer idempotently.
-func SendControlEventFromEnvironment(ctx context.Context, messageType string, getenv func(string) string) error {
-	_, err := SendControlEventFromEnvironmentWithReceipt(ctx, messageType, getenv)
-	return err
-}
-
-// SendControlEventFromEnvironmentWithReceipt behaves like
-// SendControlEventFromEnvironment and additionally returns the server's
-// acknowledgement receipt — the accepted completion request's ID — so the
-// caller can print it into the CLI-visible tool output. Retries reuse the same
-// request ID, so a lost acknowledgement yields the same receipt.
-func SendControlEventFromEnvironmentWithReceipt(ctx context.Context, messageType string, getenv func(string) string) (string, error) {
+// the child environment and returns the server's acknowledgement receipt —
+// the accepted completion request's ID — so the caller can print it into the
+// CLI-visible tool output. A lost acknowledgement is retried once with the
+// same request ID, so the server can answer idempotently and the retry yields
+// the same receipt.
+func SendControlEventFromEnvironment(ctx context.Context, messageType string, getenv func(string) string) (string, error) {
 	if messageType != MessageCompleteStep && messageType != MessageTurnCommitted {
 		return "", fmt.Errorf("unsupported control message type %q", messageType)
 	}

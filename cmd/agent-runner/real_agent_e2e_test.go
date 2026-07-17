@@ -395,14 +395,17 @@ func realAgentTestEnv(interactive bool) []string {
 	// The suite must be hermetic no matter which terminal launches it. An
 	// inherited executable override would point the completion client and
 	// watchdog at an installed binary instead of the freshly built one, and
-	// enclosing Claude Code session markers make a spawned interactive Claude
-	// silently skip transcript persistence, breaking the resume steps.
-	scrubbed := map[string]bool{
-		"AGENT_RUNNER_EXECUTABLE":   true,
-		"CLAUDECODE":                true,
-		"CLAUDE_CODE_CHILD_SESSION": true,
-		"CLAUDE_CODE_ENTRYPOINT":    true,
-		"CLAUDE_CODE_SESSION_ID":    true,
+	// enclosing-session markers make a spawned interactive CLI silently change
+	// behavior (Claude skips transcript persistence, breaking the resume
+	// steps). The marker names come from the adapters' own drop lists so the
+	// harness cannot drift from what production spawns scrub.
+	scrubbed := map[string]bool{"AGENT_RUNNER_EXECUTABLE": true}
+	for _, name := range cli.KnownCLIs() {
+		if adapter, err := cli.Get(name); err == nil {
+			for _, key := range cli.DropSpawnEnvVars(adapter) {
+				scrubbed[key] = true
+			}
+		}
 	}
 	env := make([]string, 0, len(os.Environ())+len(overrides))
 	for _, entry := range os.Environ() {
@@ -482,12 +485,11 @@ func capturedRealAgentPhrase(agent, plain, prefix string) string {
 	if phrase := captureMarkerPhrase(plain, re); phrase != "" {
 		return phrase
 	}
-	return realAgentSessionCapture(agent, prefix, re)
+	return realAgentSessionCapture(agent, re)
 }
 
-func realAgentSessionCapture(agent, prefix string, re *regexp.Regexp) string {
-	switch agent {
-	case "copilot":
+func realAgentSessionCapture(agent string, re *regexp.Regexp) string {
+	if agent == "copilot" {
 		return copilotSessionCapture(re)
 	}
 	return ""
@@ -614,7 +616,7 @@ func runRealAgentWorkflowInPTY(cmd *exec.Cmd, agent string, phases []realAgentPT
 			}
 			if agent == "copilot" {
 				for i := range phases {
-					if !ready[i] && realAgentSessionCapture(agent, phases[i].markerPrefix, captures[i]) != "" {
+					if !ready[i] && realAgentSessionCapture(agent, captures[i]) != "" {
 						advancePhase(i, len(plain))
 						break
 					}

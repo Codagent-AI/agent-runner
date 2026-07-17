@@ -143,7 +143,8 @@ func captureDurabilityCheckpoint(ctx context.Context, probe cli.TurnDurabilityPr
 		}
 		// Keep the classification from the last completed inspection; an error
 		// caused only by the expiring capture window must not mask it.
-		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) || lastErr == nil {
+		windowExpired := errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+		if lastErr == nil || !windowExpired {
 			lastErr = err
 		}
 		select {

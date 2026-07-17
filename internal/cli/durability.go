@@ -102,7 +102,7 @@ func (a *CursorAdapter) Checkpoint(ctx context.Context, sessionID string) (Check
 	if err != nil {
 		return Checkpoint{}, err
 	}
-	rows, err := a.cursorAssistantRows(ctx, path)
+	rows, err := a.queryCursorRows(ctx, path, cursorCheckpointQuery)
 	if err != nil {
 		return Checkpoint{}, err
 	}
@@ -139,7 +139,7 @@ func (a *CursorAdapter) WaitForCommittedTurnWithReceipt(ctx context.Context, ses
 	}
 	baseline := stringSet(after.Marker)
 	return pollForCommittedTurnWithBackoff(ctx, path, 250*time.Millisecond, 2*time.Second, func() (bool, error) {
-		rows, err := a.cursorToolResultRows(ctx, path)
+		rows, err := a.queryCursorRows(ctx, path, cursorToolResultQuery)
 		if err != nil {
 			return false, err
 		}
@@ -155,7 +155,7 @@ func (a *CursorAdapter) WaitForCommittedTurnWithReceipt(ctx context.Context, ses
 	})
 }
 
-type cursorAssistantRow struct {
+type cursorStoreRow struct {
 	ID      string `json:"id"`
 	Content string `json:"content"`
 }
@@ -196,15 +196,7 @@ WHERE json_valid(CAST(data AS TEXT))
   )
 ORDER BY id`
 
-func (a *CursorAdapter) cursorAssistantRows(ctx context.Context, path string) ([]cursorAssistantRow, error) {
-	return a.queryCursorRows(ctx, path, cursorCheckpointQuery)
-}
-
-func (a *CursorAdapter) cursorToolResultRows(ctx context.Context, path string) ([]cursorAssistantRow, error) {
-	return a.queryCursorRows(ctx, path, cursorToolResultQuery)
-}
-
-func (a *CursorAdapter) queryCursorRows(ctx context.Context, path, query string) ([]cursorAssistantRow, error) {
+func (a *CursorAdapter) queryCursorRows(ctx context.Context, path, query string) ([]cursorStoreRow, error) {
 	var output []byte
 	var err error
 	if a.runStoreQuery != nil {
@@ -218,14 +210,14 @@ func (a *CursorAdapter) queryCursorRows(ctx context.Context, path, query string)
 	if len(bytes.TrimSpace(output)) == 0 {
 		return nil, nil
 	}
-	var rows []cursorAssistantRow
+	var rows []cursorStoreRow
 	if err := json.Unmarshal(output, &rows); err != nil {
 		return nil, fmt.Errorf("decode Cursor chat store %s: %w", path, err)
 	}
 	return rows, nil
 }
 
-func cursorRowMarker(rows []cursorAssistantRow) string {
+func cursorRowMarker(rows []cursorStoreRow) string {
 	markers := make([]string, 0, len(rows))
 	for _, row := range rows {
 		if row.ID != "" {
@@ -235,7 +227,7 @@ func cursorRowMarker(rows []cursorAssistantRow) string {
 	return strings.Join(markers, "\n")
 }
 
-func cursorRowFingerprint(row cursorAssistantRow) string {
+func cursorRowFingerprint(row cursorStoreRow) string {
 	digest := sha256.Sum256([]byte(row.ID + "\x00" + row.Content))
 	return fmt.Sprintf("%x", digest)
 }

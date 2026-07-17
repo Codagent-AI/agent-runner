@@ -635,7 +635,7 @@ func TestSendControlEventFromEnvironment(t *testing.T) {
 	environment := attempt.EnvironmentMap()
 	getenv := func(key string) string { return environment[key] }
 
-	receipt, err := SendControlEventFromEnvironmentWithReceipt(context.Background(), MessageCompleteStep, getenv)
+	receipt, err := SendControlEventFromEnvironment(context.Background(), MessageCompleteStep, getenv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -650,7 +650,7 @@ func TestSendControlEventFromEnvironment(t *testing.T) {
 }
 
 func TestSendControlEventRequiresInteractiveStepEnvironment(t *testing.T) {
-	err := SendControlEventFromEnvironment(context.Background(), MessageCompleteStep, func(string) string { return "" })
+	_, err := SendControlEventFromEnvironment(context.Background(), MessageCompleteStep, func(string) string { return "" })
 	if err == nil || !strings.Contains(err.Error(), "inside an interactive agent step session") {
 		t.Fatalf("error = %v", err)
 	}
@@ -686,7 +686,7 @@ func TestSendControlEventRetriesLostAcknowledgementWithSameRequestID(t *testing.
 		EnvStepID:        "step",
 		EnvControlToken:  "token",
 	}
-	if err := SendControlEventFromEnvironment(context.Background(), MessageCompleteStep, func(key string) string { return environment[key] }); err != nil {
+	if _, err := SendControlEventFromEnvironment(context.Background(), MessageCompleteStep, func(key string) string { return environment[key] }); err != nil {
 		t.Fatal(err)
 	}
 	first, second := <-requests, <-requests

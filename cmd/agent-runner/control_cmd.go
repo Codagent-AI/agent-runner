@@ -11,7 +11,7 @@ import (
 
 type controlEventSender func(context.Context, string, func(string) string) (string, error)
 
-var sendControlEvent controlEventSender = interactive.SendControlEventFromEnvironmentWithReceipt
+var sendControlEvent controlEventSender = interactive.SendControlEventFromEnvironment
 
 func handleStep(args []string) int {
 	return handleStepWithIO(args, os.Stdout, os.Stderr)

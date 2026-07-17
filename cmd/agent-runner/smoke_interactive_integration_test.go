@@ -394,7 +394,7 @@ func runInteractiveAgentFixture() error {
 	if !resume {
 		_, _ = fmt.Fprintf(os.Stdout, "FAKE_AGENT_READY %s new\r\n", name)
 		if os.Getenv(durabilityRetryFixtureEnv) == "1" && invocationNumber == 1 {
-			if err := interactive.SendControlEventFromEnvironment(context.Background(), interactive.MessageCompleteStep, os.Getenv); err != nil {
+			if _, err := interactive.SendControlEventFromEnvironment(context.Background(), interactive.MessageCompleteStep, os.Getenv); err != nil {
 				return fmt.Errorf("send completion without committed turn: %w", err)
 			}
 			return waitForFixtureTermination()
@@ -462,10 +462,10 @@ func runJobControlFixture(mode string) error {
 }
 
 func completeInteractiveFixture() error {
-	if err := interactive.SendControlEventFromEnvironment(context.Background(), interactive.MessageCompleteStep, os.Getenv); err != nil {
+	if _, err := interactive.SendControlEventFromEnvironment(context.Background(), interactive.MessageCompleteStep, os.Getenv); err != nil {
 		return fmt.Errorf("send completion: %w", err)
 	}
-	if err := interactive.SendControlEventFromEnvironment(context.Background(), interactive.MessageTurnCommitted, os.Getenv); err != nil {
+	if _, err := interactive.SendControlEventFromEnvironment(context.Background(), interactive.MessageTurnCommitted, os.Getenv); err != nil {
 		return fmt.Errorf("send committed turn: %w", err)
 	}
 	return nil

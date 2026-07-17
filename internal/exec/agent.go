@@ -39,6 +39,7 @@ type directInvocation struct {
 	sessionID        string
 	probe            cli.TurnDurabilityProbe
 	spawnEnv         []string
+	dropEnv          []string
 	resolveSessionID func() string
 }
 
@@ -173,7 +174,7 @@ func ExecuteAgentStep(
 		return OutcomeFailed, nil
 	}
 
-	args, spawnEnv, resolvedModel, argsErr := buildStepInvocation(step, ctx, profile, adapter, cliName, prompt, enrichment, sessionID, isResume, invocationContext)
+	args, spawnEnv, resolvedModel, argsErr := buildStepInvocation(step, ctx, profile, adapter, prompt, enrichment, sessionID, isResume, invocationContext)
 	if argsErr != nil {
 		emitAgentFailure(ctx, prefix, startTime, string(mode), step, argsErr.Error(), log)
 		return OutcomeFailed, nil
@@ -208,7 +209,8 @@ func ExecuteAgentStep(
 	spawnTime := time.Now()
 	probe, _ := adapter.(cli.TurnDurabilityProbe)
 	direct := &directInvocation{
-		ctx: ctx, stepID: step.ID, cliName: cliName, sessionID: sessionID, probe: probe, spawnEnv: spawnEnv,
+		ctx: ctx, stepID: step.ID, cliName: cliName, sessionID: sessionID, probe: probe,
+		spawnEnv: spawnEnv, dropEnv: cli.DropSpawnEnvVars(adapter),
 		resolveSessionID: func() string {
 			return adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: spawnTime, Workdir: step.Workdir})
 		},
@@ -419,12 +421,12 @@ func buildStepInvocation(
 	ctx *model.ExecutionContext,
 	profile *config.ResolvedAgent,
 	adapter cli.Adapter,
-	cliName, prompt, enrichment, sessionID string,
+	prompt, enrichment, sessionID string,
 	isResume bool,
 	invocationContext cli.InvocationContext,
 ) (args, spawnEnv []string, resolvedModel string, err error) {
 	completionExecutable := completionExecutableForContext(invocationContext)
-	input := buildAdapterInput(step, ctx, profile, adapter, cliName, prompt, enrichment, sessionID, isResume, invocationContext, completionExecutable)
+	input := buildAdapterInput(step, ctx, profile, adapter, prompt, enrichment, sessionID, isResume, invocationContext, completionExecutable)
 	args, err = cli.BuildInvocationArgs(adapter, &input)
 	if err != nil {
 		return nil, nil, "", err
@@ -445,7 +447,6 @@ func buildAdapterInput(
 	ctx *model.ExecutionContext,
 	profile *config.ResolvedAgent,
 	adapter cli.Adapter,
-	cliName string,
 	prompt, enrichment, sessionID string,
 	isResume bool,
 	invocationContext cli.InvocationContext,
@@ -557,17 +558,6 @@ func completionInstruction(executable string) string {
 	return "\n\nWhen you or the user determine this step is complete, signal it through the Agent Runner control channel. You MUST run the absolute path command `" + command + "` with your shell tool. The executable path and `step complete` are separate shell words; do not quote the entire command as one word. Run that exact command with no extra arguments as the final action before finishing the current response. Do not merely say that the step is complete."
 }
 
-// dropSpawnEnvForCLI returns the adapter's spawn-environment removals so the
-// child CLI runs as a clean top-level session even when the runner itself is
-// nested inside a session of the same CLI.
-func dropSpawnEnvForCLI(cliName string) []string {
-	adapter, err := cli.Get(cliName)
-	if err != nil {
-		return nil
-	}
-	return cli.DropSpawnEnvVars(adapter)
-}
-
 func runDirectInteractive(args []string, options directRunOptions) (interactive.DirectResult, error) {
 	invocation := options.invocation
 	if invocation == nil || invocation.ctx == nil {
@@ -584,7 +574,7 @@ func runDirectInteractive(args []string, options directRunOptions) (interactive.
 	direct := interactive.NewDirectRunner(&interactive.DirectOptions{
 		Args: args, Workdir: options.workdir, StepID: invocation.stepID,
 		SessionID: invocation.sessionID, CLI: invocation.cliName,
-		Env: invocation.spawnEnv, DropEnv: dropSpawnEnvForCLI(invocation.cliName),
+		Env: invocation.spawnEnv, DropEnv: invocation.dropEnv,
 		Control: server, Probe: invocation.probe, ResolveSessionID: invocation.resolveSessionID, Foreground: true,
 		WatchdogExecutable: executable, Logger: invocation.ctx.AuditLogger,
 		Prefix: audit.BuildPrefix(nestingToAudit(invocation.ctx), invocation.stepID),
