@@ -1462,6 +1462,29 @@ func TestCursorAdapter(t *testing.T) {
 		}
 	})
 
+	t.Run("discover interactive session ID reads an active WAL", func(t *testing.T) {
+		fakeHome := t.TempDir()
+		t.Setenv("HOME", fakeHome)
+
+		spawnTime := time.Now().Add(-10 * time.Second)
+		matchingID := "66666666-6666-6666-6666-666666666666"
+		workdir := t.TempDir()
+		writeCursorStoreDB(t, fakeHome, "workspace-wal", matchingID, time.Now().Add(-5*time.Second), "")
+		walPath := filepath.Join(fakeHome, ".cursor", "chats", "workspace-wal", matchingID, "store.db-wal")
+		if err := os.WriteFile(walPath, []byte("Workspace Path: "+workdir+"\n"), 0o600); err != nil {
+			t.Fatalf("write cursor store.db-wal: %v", err)
+		}
+
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			SpawnTime: spawnTime,
+			Headless:  false,
+			Workdir:   workdir,
+		})
+		if id != matchingID {
+			t.Fatalf("expected matching cursor WAL chat %q, got %q", matchingID, id)
+		}
+	})
+
 	t.Run("discover interactive session ID falls back to current directory", func(t *testing.T) {
 		fakeHome := t.TempDir()
 		t.Setenv("HOME", fakeHome)

@@ -1,26 +1,111 @@
 # Phase 0 findings
 
-This document records the adapter feasibility evidence consumed by the
-completion/durability task. The process-supervision spikes (wait ownership,
-foreground spawn, and watchdog behavior) belong to the control-plane task and
-are not repeated here.
+This document records the blocking process-supervision and adapter feasibility
+evidence consumed by the direct-execution and completion/durability tasks.
 
 ## Environment
 
 The adapter cells were checked on macOS with the locally installed CLIs on
-2026-07-16:
+2026-07-16. The process spikes were rerun on 2026-07-17 on Darwin 25.1.0
+(arm64) and Linux 6.12.76 (arm64, Docker):
 
 | CLI | Version |
 |---|---|
 | Claude Code | 2.1.212 |
 | Codex CLI | 0.144.5 |
-| GitHub Copilot CLI | 1.0.70 |
+| GitHub Copilot CLI | 1.0.71 (1.0.70 during the original adapter capture) |
 | Cursor Agent | 2026.07.16-899851b |
 | OpenCode | 1.17.15 |
 
 CLI help/config validation established that every injected flag or config key
 is accepted by the corresponding installed binary. The checked-in adapter
 tests preserve the exact emitted forms so version drift fails visibly.
+
+## Process supervision
+
+The same throwaway Go spike was compiled and run natively on macOS and inside
+the repository's Linux development container. Both executions used inherited
+streams; no `StdoutPipe`, `StderrPipe`, or Go pipe-copy goroutine existed.
+
+### Wait ownership
+
+The parent constructed the child with `exec.Command`, called `Start`, and then
+exclusively reaped it with:
+
+```go
+for {
+    pid, err := unix.Wait4(childPID, &status,
+        unix.WUNTRACED|unix.WCONTINUED, nil)
+    // classify stop, continue, and exit; cmd.Wait is never called
+}
+```
+
+The child raised `SIGSTOP`, the supervisor observed it and sent `SIGCONT`, the
+supervisor observed continuation, and the child exited with status 23. Both
+platforms reported:
+
+```text
+WAIT4 PASS stop=true continue=true exit=23 cmd.Wait=false
+```
+
+Linux's `unix.WaitStatus` predicates classify the events directly. Darwin's
+BSD status encoding needs a small normalization in the supervisor: the raw
+`SIGSTOP` status (`0x117f` in this run) satisfies x/sys's `Continued` helper,
+while the subsequent continuation status (`0x137f`) satisfies `Stopped` with
+`StopSignal() == SIGCONT`. The `Wait4` syscall delivered each event exactly
+once and no `waitid` fallback was needed; production code must normalize those
+Darwin predicate results rather than treating the helpers as portable event
+labels.
+
+### Foreground spawn
+
+The spike opened `/dev/tty`, inherited it for all child streams, and started a
+fresh process group with the binding attributes:
+
+```go
+cmd.SysProcAttr = &syscall.SysProcAttr{
+    Setpgid:   true,
+    Foreground: true,
+    Ctty:       int(tty.Fd()), // parent descriptor for Foreground
+}
+```
+
+Immediately after `Start` returned, before waiting for the child, a
+`TIOCGPGRP` query returned the child's pid/pgid on both platforms. The observed
+results were:
+
+```text
+Darwin: FOREGROUND PASS child_pgid=61761 tty_foreground=61761 observed_immediately_after_start=true
+Linux:  FOREGROUND PASS child_pgid=79 tty_foreground=79 observed_immediately_after_start=true
+```
+
+Reclaiming the foreground after the child exits requires the supervisor to
+ignore `SIGTTOU` around `TIOCSPGRP`; without that normal job-control guard,
+Darwin returns `EIO` to the background parent. Spawn itself showed no initial
+`SIGTTIN` race on either platform.
+
+### Parent-death watchdog
+
+The parent created a pipe, kept only its write end, and passed the read end as
+fd 3 to a sibling watchdog. Closing the writer (the same kernel EOF condition
+produced when the parent dies) woke the watchdog. Before signaling, it compared
+the expected process-start identity with a fresh lookup:
+
+- Linux: field 22 (`starttime`) from `/proc/<pid>/stat`, parsed after the final
+  `)` so spaces or parentheses in the command name do not shift fields.
+- macOS: `unix.SysctlKinfoProc("kern.proc.pid", pid)` and
+  `Proc.P_starttime` (seconds plus microseconds), which uses the
+  `CTL_KERN/KERN_PROC/KERN_PROC_PID/<pid>` sysctl MIB.
+
+With a matching identity the watchdog sent `SIGTERM` and the target was reaped
+as signaled. With an intentionally wrong start time the watchdog exited
+without signaling and a signal-0 probe confirmed that the target was still
+alive. Both platforms reported the matching and mismatch passes:
+
+```text
+WATCHDOG MATCH PASS eof=true identity=<platform-start-time> signal=SIGTERM
+WATCHDOG MISMATCH PASS identity_match=false signal_sent=false target_alive=true
+```
 
 ## Completion and approval matrix
 

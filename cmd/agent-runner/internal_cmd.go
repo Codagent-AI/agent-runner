@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	agentconfig "github.com/codagent/agent-runner/internal/config"
+	"github.com/codagent/agent-runner/internal/interactive"
 	"github.com/codagent/agent-runner/internal/profilewrite"
 	"github.com/codagent/agent-runner/internal/usersettings"
 	"gopkg.in/yaml.v3"
@@ -33,6 +34,8 @@ func handleInternalWithIO(args []string, stdin io.Reader, stderr io.Writer) int 
 		return 1
 	}
 	switch args[0] {
+	case "turn-committed":
+		return handleTurnCommitted(args, stderr)
 	case "write-profile":
 		if len(args) != 1 {
 			_, _ = fmt.Fprintln(stderr, "agent-runner: internal write-profile accepts no arguments")
@@ -120,6 +123,18 @@ func handleInternalWithIO(args []string, stdin io.Reader, stderr io.Writer) int 
 		_, _ = fmt.Fprintf(stderr, "agent-runner: unknown internal command %q\n", args[0])
 		return 1
 	}
+}
+
+func handleTurnCommitted(args []string, stderr io.Writer) int {
+	if len(args) != 1 {
+		_, _ = fmt.Fprintln(stderr, "agent-runner: internal turn-committed accepts no arguments")
+		return 1
+	}
+	if err := sendControlMessage(interactive.MessageTurnCommitted); err != nil {
+		_, _ = fmt.Fprintf(stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func configuredAgentCLIs(projectConfigPath string) (string, error) {

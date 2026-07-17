@@ -299,6 +299,17 @@ func discoverCursorInteractiveSession(spawnTime time.Time, workdir string) strin
 			return nil
 		}
 		found, readErr := cursorStoreContains(rootFS, path, workspaceNeedle)
+		if readErr != nil {
+			return nil
+		}
+		if !found {
+			walPath := path + "-wal"
+			walInfo, statErr := fs.Stat(rootFS, walPath)
+			if statErr != nil || walInfo.Size() > maxCursorStoreDBSize {
+				return nil
+			}
+			found, readErr = cursorStoreContains(rootFS, walPath, workspaceNeedle)
+		}
 		if readErr != nil || !found {
 			return nil
 		}

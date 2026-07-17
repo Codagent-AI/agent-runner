@@ -256,6 +256,9 @@ func main() {
 func run() int {
 	ensureAgentRunnerExecutableEnv()
 
+	if len(os.Args) > 1 && os.Args[1] == "step" {
+		return handleStep(os.Args[2:])
+	}
 	if len(os.Args) > 1 && os.Args[1] == "internal" {
 		return handleInternal(os.Args[2:])
 	}

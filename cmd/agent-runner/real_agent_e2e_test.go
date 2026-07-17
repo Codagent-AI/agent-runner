@@ -144,11 +144,12 @@ steps:
 `, workflowName, agent, agent, agent, token, upperAgent)
 	phases := []realAgentPTYPhase{{ready: freshReady}}
 	stepIDs := []string{agent + "-interactive-fresh"}
-	// OpenCode 1.17 does not auto-submit --prompt when a TUI session is
-	// resumed immediately after Agent Runner's /next termination. Its real
-	// headless test still covers session resume; keep this interactive smoke
-	// focused on terminal input and user-driven continuation for now.
-	if agent != "opencode" {
+	// OpenCode 1.17 and Cursor 2026.07.16 do not complete an auto-submitted
+	// prompt when a TUI session is resumed immediately after Agent Runner's
+	// /next termination. Their real headless tests still cover session resume;
+	// keep these interactive smokes focused on terminal input and user-driven
+	// continuation for now.
+	if agent != "opencode" && agent != "cursor" {
 		workflow += fmt.Sprintf(`  - id: %s-interactive-resume
     session: resume
     prompt: "Recall the random test value from the prior turn. Reply with one line made by concatenating AR_, %s, _RESUME_, and that test value."
