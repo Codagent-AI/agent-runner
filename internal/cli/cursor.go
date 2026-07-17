@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"log"
@@ -56,7 +57,65 @@ func (a *CursorAdapter) BuildArgs(input *BuildArgsInput) []string {
 	}
 
 	args = append(args, input.Prompt)
+	if !context.IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid() {
+		pluginDir, err := prepareCursorCompletionPlugin()
+		if err != nil {
+			log.Printf("cursor: completion plugin unavailable: %v", err)
+			return args
+		}
+		args = append([]string{"agent", "--plugin-dir", pluginDir}, args[1:]...)
+		args = append([]string{"env", "AGENT_RUNNER_COMPLETION_CLIENT=" + input.CompletionCommand.Executable}, args...)
+	}
 	return args
+}
+
+func prepareCursorCompletionPlugin() (string, error) {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("locate user cache: %w", err)
+	}
+	pluginDir := filepath.Join(cacheDir, "agent-runner", "completion-plugins", "cursor-v1")
+	files := map[string]string{
+		filepath.Join(".cursor-plugin", "plugin.json"): `{
+  "name": "agent-runner-completion",
+  "version": "1.0.0",
+  "description": "Agent Runner control-channel completion"
+}
+`,
+		filepath.Join("hooks", "hooks.json"): `{
+  "version": 1,
+  "hooks": {
+    "stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$AGENT_RUNNER_COMPLETION_CLIENT\" step complete && \"$AGENT_RUNNER_COMPLETION_CLIENT\" internal turn-committed"
+          }
+        ]
+      }
+    ]
+  }
+}
+`,
+		filepath.Join("commands", "next.md"): `---
+description: Complete the current Agent Runner workflow step
+---
+
+Finish the current response now. Step completion is automatic through the
+Agent Runner Stop hook loaded for this process.
+`,
+	}
+	for relativePath, content := range files {
+		path := filepath.Join(pluginDir, relativePath)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return "", fmt.Errorf("create Cursor completion plugin: %w", err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			return "", fmt.Errorf("write Cursor completion plugin: %w", err)
+		}
+	}
+	return pluginDir, nil
 }
 
 // SupportsSystemPrompt returns false — Cursor CLI has no native system prompt flag.

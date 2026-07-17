@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -66,6 +68,27 @@ func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 
 	if input.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", input.SystemPrompt)
+	}
+
+	if !context.IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid() {
+		command := input.CompletionCommand.shellCommand()
+		args = append(args, "--allowedTools", "Bash("+command+")")
+		settings, _ := json.Marshal(map[string]any{
+			"hooks": map[string]any{
+				"Stop": []any{map[string]any{
+					"hooks": []any{map[string]string{
+						"type":    "command",
+						"command": input.CompletionCommand.hookCommand(),
+					}},
+				}},
+			},
+		})
+		args = append(args, "--settings", string(settings))
+		if pluginDir, err := prepareNextCommandPlugin(*input.CompletionCommand); err != nil {
+			log.Printf("claude: /next completion plugin unavailable: %v", err)
+		} else {
+			args = append(args, "--plugin-dir", pluginDir)
+		}
 	}
 
 	if input.Prompt != "" {

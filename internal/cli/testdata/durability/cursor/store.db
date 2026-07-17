@@ -1,0 +1,3 @@
+SQLite format 3 fixture with captured JSON blob payloads
+{"role":"user","content":[{"type":"text","text":"work"}]}
+{"role":"assistant","id":"message-1","content":[{"type":"text","text":"baseline"}]}

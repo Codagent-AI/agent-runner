@@ -3,8 +3,12 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
+	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/codagent/agent-runner/internal/usersettings"
@@ -78,6 +82,55 @@ type BuildArgsInput struct {
 	Context         InvocationContext
 	PermissionMode  usersettings.AutonomousPermissionMode
 	DisallowedTools []string // Tool names to block (e.g. "AskUserQuestion"); adapter translates to CLI flags where supported
+	// CompletionCommand is the in-session control client. Adapters only use
+	// it when it names the absolute-path, fixed `step complete` command.
+	CompletionCommand *CompletionCommand
+}
+
+// CompletionCommand describes the only runner command an interactive CLI may
+// pre-approve. Keeping the executable and argv separate prevents adapters from
+// accepting shell fragments supplied as a single opaque string.
+type CompletionCommand struct {
+	Executable string
+	Args       []string
+}
+
+// Valid reports whether the descriptor is the spec-bounded completion client.
+func (c CompletionCommand) Valid() bool {
+	return filepath.IsAbs(c.Executable) && slices.Equal(c.Args, []string{"step", "complete"})
+}
+
+func (c CompletionCommand) shellCommand() string {
+	if !c.Valid() {
+		return ""
+	}
+	parts := make([]string, 0, 1+len(c.Args))
+	parts = append(parts, shellQuote(c.Executable))
+	for _, arg := range c.Args {
+		parts = append(parts, shellQuote(arg))
+	}
+	return strings.Join(parts, " ")
+}
+
+func (c CompletionCommand) hookCommand() string {
+	if !c.Valid() {
+		return ""
+	}
+	return strings.Join([]string{shellQuote(c.Executable), "internal", "turn-committed"}, " ")
+}
+
+func shellQuote(value string) string {
+	if value != "" && strings.IndexFunc(value, func(r rune) bool {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return false
+		default:
+			return !strings.ContainsRune("_@%+=:,./-", r)
+		}
+	}) == -1 {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }
 
 type InvocationContext string
@@ -124,6 +177,22 @@ type Adapter interface {
 	// ProbeModel performs the lightest available acceptance check for a
 	// model/effort pair without spawning an agent invocation.
 	ProbeModel(model, effort string) (ProbeStrength, error)
+}
+
+// Checkpoint is opaque adapter-owned state captured when completion is
+// accepted. Artifact identifies the native store inspected on failure.
+type Checkpoint struct {
+	Artifact string
+	Offset   int64
+	Marker   string
+}
+
+// TurnDurabilityProbe confirms that a completed assistant turn was persisted
+// after completion acceptance. Implementations must use semantic records, not
+// mtimes, quiet periods, or successful file writes.
+type TurnDurabilityProbe interface {
+	Checkpoint(sessionID string) (Checkpoint, error)
+	WaitForCommittedTurn(ctx context.Context, sessionID string, after Checkpoint) error
 }
 
 // ProbeStrength describes how strongly ProbeModel verified a model/effort

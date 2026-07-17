@@ -15,7 +15,9 @@ import (
 )
 
 // OpenCodeAdapter constructs invocation args for the OpenCode CLI.
-type OpenCodeAdapter struct{}
+type OpenCodeAdapter struct {
+	runDBQuery func(string) ([]byte, error)
+}
 
 // BuildArgs constructs OpenCode CLI args.
 //
@@ -56,7 +58,20 @@ func (a *OpenCodeAdapter) BuildArgs(input *BuildArgsInput) []string {
 	if !resuming && input.Model != "" {
 		args = append(args, "--model", input.Model)
 	}
-	return args
+	if input.CompletionCommand == nil || !input.CompletionCommand.Valid() {
+		return args
+	}
+	command := input.CompletionCommand.shellCommand()
+	permission, _ := json.Marshal(map[string]string{command: "allow"})
+	config, _ := json.Marshal(map[string]any{
+		"command": map[string]any{
+			"next": map[string]string{
+				"description": "Complete the current Agent Runner workflow step",
+				"template":    "!`" + command + "`",
+			},
+		},
+	})
+	return append([]string{"env", "OPENCODE_PERMISSION=" + string(permission), "OPENCODE_CONFIG_CONTENT=" + string(config)}, args...)
 }
 
 func (a *OpenCodeAdapter) SupportsSystemPrompt() bool {
