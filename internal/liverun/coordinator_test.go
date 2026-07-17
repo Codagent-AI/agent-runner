@@ -1,6 +1,7 @@
 package liverun
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -10,24 +11,42 @@ import (
 
 // mockProgram records ReleaseTerminal/RestoreTerminal calls and messages.
 type mockProgram struct {
-	mu       sync.Mutex
-	released int
-	restored int
-	msgs     []tea.Msg
+	mu         sync.Mutex
+	released   int
+	restored   int
+	releaseErr error
+	restoreErr error
+	msgs       []tea.Msg
 }
 
 func (m *mockProgram) ReleaseTerminal() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.released++
-	return nil
+	return m.releaseErr
 }
 
 func (m *mockProgram) RestoreTerminal() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.restored++
-	return nil
+	return m.restoreErr
+}
+
+func TestBeforeInteractive_ReleaseFailureDoesNotAcquireLease(t *testing.T) {
+	mp := &mockProgram{releaseErr: errors.New("release failed")}
+	c := NewCoordinator(mp, "")
+
+	c.BeforeInteractive()
+	c.BeforeInteractive()
+
+	released, _ := mp.counts()
+	if released != 2 {
+		t.Fatalf("ReleaseTerminal calls = %d, want 2 because failed release must remain retryable", released)
+	}
+	if mp.hasMsg(t, "suspended") {
+		t.Fatal("failed release reported the terminal as suspended")
+	}
 }
 
 func (m *mockProgram) Send(msg tea.Msg) {
@@ -73,6 +92,17 @@ func (m *mockProgram) clearMsgs() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.msgs = nil
+}
+
+func (m *mockProgram) doneMessage() (ExecDoneMsg, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, msg := range m.msgs {
+		if done, ok := msg.(ExecDoneMsg); ok {
+			return done, true
+		}
+	}
+	return ExecDoneMsg{}, false
 }
 
 func TestHandleUIStep_NilRequestReturnsError(t *testing.T) {
@@ -247,7 +277,10 @@ func TestNotifyDone_RestoresWhenSuspended(t *testing.T) {
 	c.AfterInteractive()
 	mp.clearMsgs()
 
-	c.NotifyDone("success", nil)
+	notifyErr := c.NotifyDone("success", nil)
+	if notifyErr != nil {
+		t.Fatalf("NotifyDone error = %v, want nil", notifyErr)
+	}
 
 	_, res := mp.counts()
 	if res != 1 {
@@ -261,6 +294,48 @@ func TestNotifyDone_RestoresWhenSuspended(t *testing.T) {
 	}
 	if !mp.hasMsg(t, "done") {
 		t.Error("expected ExecDoneMsg")
+	}
+}
+
+func TestNotifyDone_SurfacesRestoreFailureWithoutChangingResult(t *testing.T) {
+	mp := &mockProgram{restoreErr: errors.New("restore failed")}
+	c := NewCoordinator(mp, "")
+	if err := c.BeforeInteractive(); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.AfterInteractive()
+
+	notifyErr := c.NotifyDone("success", nil)
+	if notifyErr == nil || !strings.Contains(notifyErr.Error(), "restore terminal") {
+		t.Fatalf("NotifyDone error = %v, want surfaced restore failure", notifyErr)
+	}
+
+	done, ok := mp.doneMessage()
+	if !ok {
+		t.Fatal("missing ExecDoneMsg")
+	}
+	if done.Result != "success" {
+		t.Fatalf("result = %q, want success", done.Result)
+	}
+	if done.Err == nil || !strings.Contains(done.Err.Error(), "restore terminal") {
+		t.Fatalf("error = %v, want surfaced restore failure", done.Err)
+	}
+}
+
+func TestPrepareForStep_RestoreFailureIsSurfacedAtCompletion(t *testing.T) {
+	mp := &mockProgram{restoreErr: errors.New("restore failed")}
+	c := NewCoordinator(mp, "")
+	if err := c.BeforeInteractive(); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.AfterInteractive()
+	c.PrepareForStep(false)
+
+	c.NotifyDone("success", nil)
+
+	done, ok := mp.doneMessage()
+	if !ok || done.Err == nil || !strings.Contains(done.Err.Error(), "restore terminal") {
+		t.Fatalf("done = %#v, want surfaced restore error", done)
 	}
 }
 

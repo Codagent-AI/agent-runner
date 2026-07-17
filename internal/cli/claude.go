@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -68,6 +70,27 @@ func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 		args = append(args, "--append-system-prompt", input.SystemPrompt)
 	}
 
+	if !context.IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid() {
+		command := input.CompletionCommand.ShellCommand()
+		args = append(args, "--allowedTools", "Bash("+command+")")
+		settings, _ := json.Marshal(map[string]any{
+			"hooks": map[string]any{
+				"Stop": []any{map[string]any{
+					"hooks": []any{map[string]string{
+						"type":    "command",
+						"command": input.CompletionCommand.hookCommand(),
+					}},
+				}},
+			},
+		})
+		args = append(args, "--settings", string(settings))
+		if pluginDir, err := prepareNextCommandPlugin(*input.CompletionCommand); err != nil {
+			log.Printf("claude: /next completion plugin unavailable: %v", err)
+		} else {
+			args = append(args, "--plugin-dir", pluginDir)
+		}
+	}
+
 	if input.Prompt != "" {
 		// Use "--" to terminate flags before the positional prompt. Without
 		// this, variadic flags like --disallowedTools consume the trailing
@@ -84,6 +107,27 @@ func (a *ClaudeAdapter) SupportsSystemPrompt() bool {
 
 func (a *ClaudeAdapter) ProbeModel(model, effort string) (ProbeStrength, error) {
 	return BinaryOnly, nil
+}
+
+// claudeEnclosingSessionEnvVars mark a process as living inside an enclosing
+// Claude Code session. A spawned CLI must not inherit them: Claude Code
+// (observed on 2.1.212) treats CLAUDE_CODE_CHILD_SESSION as "this is a child
+// session" and silently skips persisting the interactive session transcript,
+// which breaks session resume; the other variables describe the enclosing
+// session's identity, not the spawned one's. User configuration such as
+// CLAUDE_CODE_USE_BEDROCK is deliberately left untouched.
+var claudeEnclosingSessionEnvVars = []string{
+	"CLAUDECODE",
+	"CLAUDE_CODE_CHILD_SESSION",
+	"CLAUDE_CODE_ENTRYPOINT",
+	"CLAUDE_CODE_SESSION_ID",
+}
+
+// DropSpawnEnvVars implements SpawnEnvSanitizer: spawned Claude processes run
+// as clean top-level sessions even when the runner itself was launched from
+// inside a Claude Code session.
+func (a *ClaudeAdapter) DropSpawnEnvVars() []string {
+	return claudeEnclosingSessionEnvVars
 }
 
 // DiscoverSessionID returns the pre-generated session ID.

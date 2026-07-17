@@ -1,0 +1,4 @@
+{"type":"session.start","data":{"sessionId":"copilot-session"}}
+{"type":"assistant.turn_start","data":{"turnId":"1"}}
+{"type":"assistant.message","data":{"turnId":"1","content":"baseline"}}
+{"type":"assistant.turn_end","data":{"turnId":"1"}}

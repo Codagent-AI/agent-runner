@@ -278,6 +278,21 @@ func TestDispatchStep_PrepareStepHook(t *testing.T) {
 		}
 	})
 
+	t.Run("autonomous interactive agent step calls hook with true", func(t *testing.T) {
+		var called []bool
+		ctx := makeCtx()
+		ctx.AutonomousBackend = "interactive"
+		ctx.PrepareStepHook = func(interactive bool) { called = append(called, interactive) }
+		oldTTY := isStdinTerminal
+		isStdinTerminal = func() bool { return true }
+		defer func() { isStdinTerminal = oldTTY }()
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do it", Session: model.SessionNew}
+		DispatchStep(&step, ctx, &mockRunner{}, &mockGlob{}, &mockLogger{})
+		if len(called) != 1 || !called[0] {
+			t.Fatalf("expected hook called with true, got %v", called)
+		}
+	})
+
 	t.Run("ui step calls hook with false", func(t *testing.T) {
 		var called []bool
 		ctx := makeCtx()

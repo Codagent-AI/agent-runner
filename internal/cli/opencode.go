@@ -2,10 +2,14 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -13,7 +17,9 @@ import (
 )
 
 // OpenCodeAdapter constructs invocation args for the OpenCode CLI.
-type OpenCodeAdapter struct{}
+type OpenCodeAdapter struct {
+	runDBQuery func(context.Context, string) ([]byte, error)
+}
 
 // BuildArgs constructs OpenCode CLI args.
 //
@@ -21,39 +27,80 @@ type OpenCodeAdapter struct{}
 //   - Fresh headless:      opencode run --format json [--model <m>] [--variant <e>] <prompt>
 //   - Resume headless:     opencode run --format json -s <id> <prompt>
 //   - Fresh interactive:   opencode --prompt <prompt> [--model <m>]
-//   - Resume interactive:  opencode --prompt <prompt> -s <id>
+//   - Resume interactive:  opencode -s <id> --prompt <prompt>
 //
 // OpenCode has no native system-prompt or disallowed-tools flags. --variant
 // is run-only, so interactive mode omits it. --model and --variant are omitted on resume because a resumed session
 // keeps the settings it was started with.
 func (a *OpenCodeAdapter) BuildArgs(input *BuildArgsInput) []string {
-	var args []string
-	context := input.InvocationContext()
-	if context.IsHeadless() {
-		args = []string{"opencode", "run", "--format", "json"}
-	} else {
-		args = []string{"opencode", "--prompt", input.Prompt}
+	invocationContext := input.InvocationContext()
+	resuming := input.Resume && input.SessionID != ""
+	if invocationContext.IsHeadless() {
+		args := []string{"opencode", "run", "--format", "json"}
+		if resuming {
+			args = append(args, "-s", input.SessionID)
+		} else {
+			if input.Model != "" {
+				args = append(args, "--model", input.Model)
+			}
+			if input.Effort != "" {
+				args = append(args, "--variant", input.Effort)
+			}
+		}
+		return append(args, input.Prompt)
 	}
 
-	resuming := input.Resume && input.SessionID != ""
+	// Interactive invocations are normally rejected before this point via
+	// InteractiveModeError; the arg construction is kept for the day the
+	// upstream resume-prompt fix ships and the rejection is lifted.
+	args := []string{"opencode"}
 	if resuming {
+		// As of OpenCode 1.17.15 a resumed TUI no longer auto-submits
+		// --prompt; it only prefills the composer (earlier 1.17 builds
+		// auto-submitted when --session preceded --prompt). --session is
+		// kept before --prompt so the prefill lands in the resumed session.
 		args = append(args, "-s", input.SessionID)
-	} else if input.Model != "" {
+	}
+	args = append(args, "--prompt", input.Prompt)
+	if !resuming && input.Model != "" {
 		args = append(args, "--model", input.Model)
 	}
-
-	if context.IsHeadless() && !resuming && input.Effort != "" {
-		args = append(args, "--variant", input.Effort)
+	if input.CompletionCommand == nil || !input.CompletionCommand.Valid() {
+		return args
 	}
-
-	if context.IsHeadless() {
-		args = append(args, input.Prompt)
-	}
-	return args
+	command := input.CompletionCommand.ShellCommand()
+	permission, _ := json.Marshal(map[string]map[string]string{
+		"bash": {command: "allow"},
+	})
+	config, _ := json.Marshal(map[string]any{
+		"command": map[string]any{
+			"next": map[string]string{
+				"description": "Complete the current Agent Runner workflow step",
+				"template":    "!`" + command + "`",
+			},
+		},
+	})
+	return append([]string{
+		"env",
+		"OPENCODE_PERMISSION=" + string(permission),
+		"OPENCODE_CONFIG_CONTENT=" + string(config),
+		"OPENCODE_DISABLE_AUTOUPDATE=1",
+	}, args...)
 }
 
 func (a *OpenCodeAdapter) SupportsSystemPrompt() bool {
 	return false
+}
+
+// InteractiveModeError declares that interactive OpenCode sessions are
+// unsupported: a resumed OpenCode TUI prefills but never submits the --prompt
+// supplied by the runner (anomalyco/opencode#37536, present through at least
+// 1.18.3), so any workflow that resumes an interactive session stalls
+// silently. Headless OpenCode is unaffected and remains fully supported.
+// Remove this once the first OpenCode release containing the upstream fix is
+// the supported baseline.
+func (a *OpenCodeAdapter) InteractiveModeError() error {
+	return errors.New("opencode does not support interactive steps: a resumed OpenCode session never submits the step prompt (anomalyco/opencode#37536), which stalls workflows silently; use autonomous (headless) mode for opencode or a different CLI for interactive steps")
 }
 
 func (a *OpenCodeAdapter) ProbeModel(model, effort string) (ProbeStrength, error) {
@@ -64,7 +111,15 @@ func (a *OpenCodeAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
 	if opts.Headless {
 		return discoverOpenCodeHeadlessSession(opts.ProcessOutput)
 	}
-	return discoverOpenCodeInteractiveSession(opts.SpawnTime)
+	if id := discoverOpenCodeInteractiveSession(opts.SpawnTime); id != "" {
+		return id
+	}
+	if id := discoverOpenCodeDatabaseSession(opts.SpawnTime, opts.Workdir, func(query string) ([]byte, error) {
+		return exec.Command("opencode", "db", query, "--format", "json").Output() // #nosec G204 -- fixed executable; query is one argv value, not shell-expanded
+	}); id != "" {
+		return id
+	}
+	return ""
 }
 
 func (a *OpenCodeAdapter) FilterOutput(stdout string) string {
@@ -94,6 +149,40 @@ func discoverOpenCodeHeadlessSession(output string) string {
 			return ""
 		}
 	}
+}
+
+func discoverOpenCodeDatabaseSession(spawnTime time.Time, workdir string, runQuery func(string) ([]byte, error)) string {
+	if workdir == "" {
+		var err error
+		workdir, err = os.Getwd()
+		if err != nil {
+			return ""
+		}
+	}
+
+	escapedWorkdir := strings.ReplaceAll(workdir, "'", "''")
+	query := fmt.Sprintf(
+		"SELECT id, time_created FROM session WHERE time_created >= %d AND directory = '%s' ORDER BY time_created DESC",
+		spawnTime.UnixMilli(), escapedWorkdir,
+	)
+	output, err := runQuery(query)
+	if err != nil {
+		return ""
+	}
+	var candidates []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(output, &candidates); err != nil {
+		return ""
+	}
+	if len(candidates) > 1 {
+		log.Printf("opencode: %d database sessions match spawn time and workdir; refusing to guess", len(candidates))
+		return ""
+	}
+	if len(candidates) == 1 {
+		return candidates[0].ID
+	}
+	return ""
 }
 
 func discoverOpenCodeInteractiveSession(spawnTime time.Time) string {

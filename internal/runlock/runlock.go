@@ -24,6 +24,42 @@ const (
 	LockStale                    // lock file present, PID is dead
 )
 
+// HeldProof is an unforgeable-by-construction capability showing that this
+// process owns a run directory's lock. Its zero value is invalid.
+type HeldProof struct {
+	sessionDir string
+	pid        int
+}
+
+// ProveHeld returns a capability only when sessionDir is currently locked by
+// this process.
+func ProveHeld(sessionDir string) (HeldProof, error) {
+	status, pid, err := checkPID(sessionDir)
+	if err != nil {
+		return HeldProof{}, fmt.Errorf("prove held run lock: %w", err)
+	}
+	if status != LockActive || pid != os.Getpid() {
+		return HeldProof{}, errors.New("prove held run lock: current process does not own the lock")
+	}
+	return HeldProof{sessionDir: filepath.Clean(sessionDir), pid: pid}, nil
+}
+
+// Validate confirms that the proof still names a lock currently owned by this
+// process and that it belongs to sessionDir.
+func (p HeldProof) Validate(sessionDir string) error {
+	if p.pid != os.Getpid() || p.sessionDir == "" || p.sessionDir != filepath.Clean(sessionDir) {
+		return errors.New("run lock proof does not match the run directory")
+	}
+	status, pid, err := checkPID(sessionDir)
+	if err != nil {
+		return fmt.Errorf("validate run lock proof: %w", err)
+	}
+	if status != LockActive || pid != p.pid {
+		return errors.New("run lock proof is no longer held by this process")
+	}
+	return nil
+}
+
 // Write creates a lock file in sessionDir containing the current PID.
 // Returns nil on success. Non-fatal: callers MUST proceed even if this fails.
 //

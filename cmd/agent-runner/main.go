@@ -256,6 +256,9 @@ func main() {
 func run() int {
 	ensureAgentRunnerExecutableEnv()
 
+	if len(os.Args) > 1 && os.Args[1] == "step" {
+		return handleStep(os.Args[2:])
+	}
 	if len(os.Args) > 1 && os.Args[1] == "internal" {
 		return handleInternal(os.Args[2:])
 	}
@@ -742,6 +745,10 @@ type liveTUIResult struct {
 	sessionDir     string
 }
 
+var liveRunCoordinatorFactory = func(program *tea.Program, sessionDir string) *liverun.Coordinator {
+	return liverun.NewCoordinator(program, sessionDir)
+}
+
 func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResult {
 	rv, err := runview.New(h.SessionDir, h.ProjectDir, runview.FromLiveRun)
 	if err != nil {
@@ -755,7 +762,7 @@ func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResul
 		programOptions = append(programOptions, tea.WithAltScreen())
 	}
 	p := tea.NewProgram(rv, programOptions...)
-	coord := liverun.NewCoordinator(p, h.SessionDir)
+	coord := liveRunCoordinatorFactory(p, h.SessionDir)
 
 	resultCh := make(chan runner.WorkflowResult, 1)
 	go func() {
@@ -763,12 +770,16 @@ func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResul
 		var runErr error
 		defer func() {
 			if rec := recover(); rec != nil {
-				coord.NotifyDone(string(runner.ResultFailed), fmt.Errorf("panic: %v", rec))
+				_ = coord.NotifyDone(string(runner.ResultFailed), fmt.Errorf("panic: %v", rec))
 				resultCh <- runner.ResultFailed
 				return
 			}
-			coord.NotifyDone(string(result), runErr)
-			resultCh <- result
+			notifyErr := coord.NotifyDone(string(result), runErr)
+			if notifyErr != nil && result == runner.ResultSuccess {
+				resultCh <- runner.ResultFailed
+			} else {
+				resultCh <- result
+			}
 			if opts.quitOnDone {
 				p.Send(runview.ExitMsg{})
 			}
@@ -2339,18 +2350,22 @@ func (m *onboardingDemoPromptFlow) startRunner() {
 		return
 	}
 	m.started = true
-	coord := liverun.NewCoordinator(m.program, m.handle.SessionDir)
+	coord := liveRunCoordinatorFactory(m.program, m.handle.SessionDir)
 	go func() {
 		result := runner.ResultFailed
 		var runErr error
 		defer func() {
 			if rec := recover(); rec != nil {
-				coord.NotifyDone(string(runner.ResultFailed), fmt.Errorf("panic: %v", rec))
+				_ = coord.NotifyDone(string(runner.ResultFailed), fmt.Errorf("panic: %v", rec))
 				m.resultCh <- runner.ResultFailed
 				return
 			}
-			coord.NotifyDone(string(result), runErr)
-			m.resultCh <- result
+			notifyErr := coord.NotifyDone(string(result), runErr)
+			if notifyErr != nil && result == runner.ResultSuccess {
+				m.resultCh <- runner.ResultFailed
+			} else {
+				m.resultCh <- result
+			}
 			if m.opts.quitOnDone {
 				m.program.Send(runview.ExitMsg{})
 			}

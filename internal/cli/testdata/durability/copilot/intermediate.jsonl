@@ -1,0 +1,1 @@
+{"type":"assistant.message","data":{"messageId":"message-2","content":"","toolRequests":[{"toolCallId":"tool-1","name":"bash","arguments":{"command":"pwd","description":"Inspect workspace","mode":"sync","initial_wait":30},"type":"function"}],"interactionId":"interaction-2","turnId":"2"},"id":"event-2","timestamp":"2026-07-16T00:00:02Z","parentId":"event-1"}

@@ -13,6 +13,7 @@ import (
 	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/engine"
 	"github.com/codagent/agent-runner/internal/exec"
+	"github.com/codagent/agent-runner/internal/interactive"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runlock"
@@ -33,17 +34,18 @@ const (
 
 // Options configures a workflow run.
 type Options struct {
-	From              string
-	Until             string
-	WorkflowFile      string
-	SessionDir        string // Override session directory (for testing); computed automatically if empty.
-	Engine            engine.Engine
-	ProfileStore      *config.Config
-	SessionIDs        map[string]string
-	SessionProfiles   map[string]string
-	CapturedVariables map[string]model.CapturedValue
-	LastSessionStepID string
-	ChildState        *model.NestedStepState
+	From               string
+	Until              string
+	WorkflowFile       string
+	SessionDir         string // Override session directory (for testing); computed automatically if empty.
+	Engine             engine.Engine
+	ProfileStore       *config.Config
+	SessionIDs         map[string]string
+	SessionProfiles    map[string]string
+	CapturedVariables  map[string]model.CapturedValue
+	LastSessionStepID  string
+	ChildState         *model.NestedStepState
+	InteractiveAttempt *model.InteractiveAttemptMetadata
 	// NamedSessions and NamedSessionDecls are restored from state on --resume.
 	NamedSessions     map[string]string
 	NamedSessionDecls map[string]string
@@ -53,10 +55,10 @@ type Options struct {
 
 	// SuspendHook is called just before an interactive step takes over the
 	// terminal (e.g. p.ReleaseTerminal in TUI mode). Nil = no-op.
-	SuspendHook func()
+	SuspendHook func() error
 	// ResumeHook is called immediately after an interactive step exits (e.g.
 	// p.RestoreTerminal in TUI mode). Nil = no-op.
-	ResumeHook func()
+	ResumeHook func() error
 
 	// PrepareStepHook is called before each leaf step begins. The boolean
 	// argument is true when the step will be interactive. Used by the TUI
@@ -245,6 +247,10 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	case activePID > 0:
 		return nil, fmt.Errorf("run already in progress (PID %d) in %s; wait for it to finish or kill the process before resuming", activePID, sessionDir)
 	}
+	if err := cleanupCrashedInteractiveAttempt(sessionDir, opts); err != nil {
+		runlock.Delete(sessionDir)
+		return nil, err
+	}
 
 	if opts.SessionDir == "" {
 		projectDir := filepath.Dir(filepath.Dir(sessionDir)) // parent of runs/
@@ -285,6 +291,25 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		runner:       opts.ProcessRunner,
 		glob:         opts.GlobExpander,
 	}, nil
+}
+
+func cleanupCrashedInteractiveAttempt(sessionDir string, opts *Options) error {
+	if opts.InteractiveAttempt == nil {
+		return nil
+	}
+	metadata := interactive.ProcessMetadata{
+		ChildPID: opts.InteractiveAttempt.ChildPID, PGID: opts.InteractiveAttempt.PGID,
+		StartTime: opts.InteractiveAttempt.StartTime, Socket: opts.InteractiveAttempt.Socket,
+	}
+	if err := interactive.CleanupProcess(metadata, interactive.DefaultTerminationGrace); err != nil {
+		return fmt.Errorf("clean up crashed interactive attempt: %w", err)
+	}
+	if metadata.Socket != "" {
+		_ = os.Remove(metadata.Socket)
+	}
+	_ = os.Remove(filepath.Join(sessionDir, interactive.ControlSocketPointerFile))
+	opts.InteractiveAttempt = nil
+	return nil
 }
 
 func buildExecutionContext(workflow *model.Workflow, params map[string]string, opts *Options, sessionDir string) (*audit.Logger, *model.ExecutionContext, error) {
@@ -333,6 +358,7 @@ func buildExecutionContext(workflow *model.Workflow, params map[string]string, o
 	if opts.LastSessionStepID != "" {
 		ctx.LastSessionStepID = opts.LastSessionStepID
 	}
+	ctx.InteractiveAttempt = opts.InteractiveAttempt
 	if opts.From != "" {
 		ctx.WorkflowResumed = true
 	}
@@ -468,6 +494,11 @@ func runStep(step *model.Step, rs *runState) (exec.StepOutcome, *exec.LoopResult
 }
 
 func finalizeRun(rs *runState, result WorkflowResult) {
+	if closer, ok := rs.ctx.InteractiveControl.(interface{ Close() error }); ok && closer != nil {
+		if err := closer.Close(); err != nil {
+			rs.log.Printf("agent-runner: warning: close interactive control endpoint: %v\n", err)
+		}
+	}
 	runlock.Delete(rs.sessionDir)
 
 	switch result {
@@ -573,14 +604,15 @@ func initialRunState(workflow *model.Workflow, rs *runState, opts *Options) *mod
 
 	state.CurrentStep = model.CurrentStep{
 		Nested: &model.NestedStepState{
-			StepID:            stepID,
-			SessionIDs:        copyMap(rs.ctx.SessionIDs),
-			SessionProfiles:   copyMap(rs.ctx.SessionProfiles),
-			CapturedVariables: copyCapturedMap(rs.ctx.CapturedVariables),
-			LastSessionStepID: rs.ctx.LastSessionStepID,
-			NamedSessions:     copyMap(rs.ctx.NamedSessions),
-			NamedSessionDecls: copyMap(rs.ctx.NamedSessionDecls),
-			Child:             opts.ChildState,
+			StepID:             stepID,
+			SessionIDs:         copyMap(rs.ctx.SessionIDs),
+			SessionProfiles:    copyMap(rs.ctx.SessionProfiles),
+			CapturedVariables:  copyCapturedMap(rs.ctx.CapturedVariables),
+			LastSessionStepID:  rs.ctx.LastSessionStepID,
+			NamedSessions:      copyMap(rs.ctx.NamedSessions),
+			NamedSessionDecls:  copyMap(rs.ctx.NamedSessionDecls),
+			Child:              opts.ChildState,
+			InteractiveAttempt: opts.InteractiveAttempt,
 		},
 	}
 	return state
@@ -665,16 +697,17 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 	}
 
 	nested := &model.NestedStepState{
-		StepID:            step.ID,
-		SessionIDs:        copyMap(ctx.SessionIDs),
-		SessionProfiles:   copyMap(ctx.SessionProfiles),
-		CapturedVariables: copyCapturedMap(ctx.CapturedVariables),
-		LastSessionStepID: ctx.LastSessionStepID,
-		NamedSessions:     copyMap(ctx.NamedSessions),
-		NamedSessionDecls: copyMap(ctx.NamedSessionDecls),
-		Completed:         completed,
-		Iteration:         iteration,
-		Child:             child,
+		StepID:             step.ID,
+		SessionIDs:         copyMap(ctx.SessionIDs),
+		SessionProfiles:    copyMap(ctx.SessionProfiles),
+		CapturedVariables:  copyCapturedMap(ctx.CapturedVariables),
+		LastSessionStepID:  ctx.LastSessionStepID,
+		NamedSessions:      copyMap(ctx.NamedSessions),
+		NamedSessionDecls:  copyMap(ctx.NamedSessionDecls),
+		Completed:          completed,
+		Iteration:          iteration,
+		Child:              child,
+		InteractiveAttempt: ctx.InteractiveAttempt,
 	}
 
 	state := model.RunState{

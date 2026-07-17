@@ -67,6 +67,10 @@ func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 	if input.Effort != "" {
 		args = append(args, "-c", `model_reasoning_effort="`+input.Effort+`"`)
 	}
+	if !context.IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid() {
+		notify, _ := json.Marshal([]string{input.CompletionCommand.Executable, "internal", "turn-committed"})
+		args = append(args, "-c", "notify="+string(notify))
+	}
 
 	if resuming {
 		args = append(args, sessionID)

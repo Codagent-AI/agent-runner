@@ -16,12 +16,17 @@ bump, writing a changelog section, and opening or updating the release PR.
 Run:
 
 ```bash
-make test-e2e-smoke
+make test-e2e-agents
 ```
 
-If either the headless or interactive agent workflow smoke test fails, stop and
-report the failure. Do not gather release metadata or create/update a release
-PR until both tests pass.
+This intentionally requires all supported agent CLIs to be available to the
+current login. It runs real headless fresh/resume tests and real interactive
+terminal/continuation tests for Claude, Codex, Copilot, Cursor, and OpenCode.
+Interactive resume is also asserted for every agent except OpenCode, whose
+resume coverage remains headless because OpenCode 1.17 does not auto-submit a
+prompt immediately after Agent Runner terminates its TUI for continuation. If
+any test fails, stop and report the failure. Do not gather release metadata or
+create/update a release PR until all real-agent tests pass.
 
 ### 2. Gather release info
 

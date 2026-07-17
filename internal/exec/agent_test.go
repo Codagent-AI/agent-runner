@@ -1,15 +1,19 @@
 package exec
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/config"
+	"github.com/codagent/agent-runner/internal/interactive"
 	"github.com/codagent/agent-runner/internal/model"
-	"github.com/codagent/agent-runner/internal/pty"
 )
 
 type recordingAuditLogger struct {
@@ -454,21 +458,21 @@ func TestExecuteAgentStep(t *testing.T) {
 	})
 
 	t.Run("no -p flag for interactive mode", func(t *testing.T) {
-		var ptyCalls [][]string
+		var interactiveCalls [][]string
 		oldFn := interactiveRunnerFn
-		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
-			ptyCalls = append(ptyCalls, args)
-			return pty.Result{ContinueTriggered: true}, nil
+		interactiveRunnerFn = func(args []string, _ directRunOptions) (interactive.DirectResult, error) {
+			interactiveCalls = append(interactiveCalls, args)
+			return interactive.DirectResult{Completed: true}, nil
 		}
 		defer func() { interactiveRunnerFn = oldFn }()
 
 		runner := &mockRunner{}
 		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
-		if len(ptyCalls) == 0 {
-			t.Fatal("expected PTY to be called")
+		if len(interactiveCalls) == 0 {
+			t.Fatal("expected direct interactive runner to be called")
 		}
-		if containsArg(ptyCalls[0], "-p") {
+		if containsArg(interactiveCalls[0], "-p") {
 			t.Fatal("did not expect -p flag for interactive mode")
 		}
 	})
@@ -484,22 +488,22 @@ func TestExecuteAgentStep(t *testing.T) {
 	})
 
 	t.Run("codex interactive uses --no-alt-screen", func(t *testing.T) {
-		var ptyCalls [][]string
+		var interactiveCalls [][]string
 		oldFn := interactiveRunnerFn
-		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
-			ptyCalls = append(ptyCalls, args)
-			return pty.Result{ContinueTriggered: true}, nil
+		interactiveRunnerFn = func(args []string, _ directRunOptions) (interactive.DirectResult, error) {
+			interactiveCalls = append(interactiveCalls, args)
+			return interactive.DirectResult{Completed: true}, nil
 		}
 		defer func() { interactiveRunnerFn = oldFn }()
 
 		runner := &mockRunner{}
 		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew, CLI: "codex"}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
-		if len(ptyCalls) == 0 {
-			t.Fatal("expected PTY to be called")
+		if len(interactiveCalls) == 0 {
+			t.Fatal("expected direct interactive runner to be called")
 		}
-		if !containsArg(ptyCalls[0], "--no-alt-screen") {
-			t.Fatalf("expected --no-alt-screen for codex interactive, got %v", ptyCalls[0])
+		if !containsArg(interactiveCalls[0], "--no-alt-screen") {
+			t.Fatalf("expected --no-alt-screen for codex interactive, got %v", interactiveCalls[0])
 		}
 	})
 
@@ -521,8 +525,8 @@ func TestExecuteAgentStep(t *testing.T) {
 
 	t.Run("interactive continue trigger returns success", func(t *testing.T) {
 		oldFn := interactiveRunnerFn
-		interactiveRunnerFn = func(_ []string, _ pty.Options) (pty.Result, error) {
-			return pty.Result{ContinueTriggered: true, ExitCode: 0}, nil
+		interactiveRunnerFn = func(_ []string, _ directRunOptions) (interactive.DirectResult, error) {
+			return interactive.DirectResult{Completed: true, ExitCode: 0}, nil
 		}
 		defer func() { interactiveRunnerFn = oldFn }()
 
@@ -539,8 +543,8 @@ func TestExecuteAgentStep(t *testing.T) {
 
 	t.Run("interactive exit without trigger returns aborted", func(t *testing.T) {
 		oldFn := interactiveRunnerFn
-		interactiveRunnerFn = func(_ []string, _ pty.Options) (pty.Result, error) {
-			return pty.Result{ContinueTriggered: false, ExitCode: 0}, nil
+		interactiveRunnerFn = func(_ []string, _ directRunOptions) (interactive.DirectResult, error) {
+			return interactive.DirectResult{Completed: false, ExitCode: 0}, nil
 		}
 		defer func() { interactiveRunnerFn = oldFn }()
 
@@ -825,8 +829,8 @@ func TestExecuteAgentStep(t *testing.T) {
 
 	t.Run("interactive does not call RunAgent on ProcessRunner", func(t *testing.T) {
 		oldFn := interactiveRunnerFn
-		interactiveRunnerFn = func(_ []string, _ pty.Options) (pty.Result, error) {
-			return pty.Result{ContinueTriggered: true}, nil
+		interactiveRunnerFn = func(_ []string, _ directRunOptions) (interactive.DirectResult, error) {
+			return interactive.DirectResult{Completed: true}, nil
 		}
 		defer func() { interactiveRunnerFn = oldFn }()
 
@@ -838,22 +842,40 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
-	t.Run("interactive claude routes prompt to system prompt", func(t *testing.T) {
-		var ptyCalls [][]string
+	t.Run("interactive surfaces committed-turn durability failure", func(t *testing.T) {
+		durabilityErr := errors.New("native session store did not commit the turn")
 		oldFn := interactiveRunnerFn
-		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
-			ptyCalls = append(ptyCalls, args)
-			return pty.Result{ContinueTriggered: true}, nil
+		interactiveRunnerFn = func(_ []string, _ directRunOptions) (interactive.DirectResult, error) {
+			return interactive.DirectResult{DurabilityFailed: true, DurabilityError: durabilityErr}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, makeCtx(), &mockRunner{}, &mockLogger{})
+		if outcome != OutcomeFailed {
+			t.Fatalf("outcome = %q, want failed", outcome)
+		}
+		if !errors.Is(err, durabilityErr) {
+			t.Fatalf("error = %v, want durability error", err)
+		}
+	})
+
+	t.Run("interactive claude routes prompt to system prompt", func(t *testing.T) {
+		var interactiveCalls [][]string
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(args []string, _ directRunOptions) (interactive.DirectResult, error) {
+			interactiveCalls = append(interactiveCalls, args)
+			return interactive.DirectResult{Completed: true}, nil
 		}
 		defer func() { interactiveRunnerFn = oldFn }()
 
 		runner := &mockRunner{}
 		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review code", Session: model.SessionNew}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
-		if len(ptyCalls) == 0 {
-			t.Fatal("expected PTY to be called")
+		if len(interactiveCalls) == 0 {
+			t.Fatal("expected direct interactive runner to be called")
 		}
-		args := ptyCalls[0]
+		args := interactiveCalls[0]
 		if !containsArg(args, "--append-system-prompt") {
 			t.Fatal("expected --append-system-prompt for interactive claude step")
 		}
@@ -864,13 +886,13 @@ func TestExecuteAgentStep(t *testing.T) {
 	})
 
 	t.Run("interactive claude resume includes current completion instruction in positional prompt", func(t *testing.T) {
-		var ptyCalls [][]string
-		var ptyOpts []pty.Options
+		var interactiveCalls [][]string
+		var directOpts []directRunOptions
 		oldFn := interactiveRunnerFn
-		interactiveRunnerFn = func(args []string, opts pty.Options) (pty.Result, error) {
-			ptyCalls = append(ptyCalls, args)
-			ptyOpts = append(ptyOpts, opts)
-			return pty.Result{ContinueTriggered: true}, nil
+		interactiveRunnerFn = func(args []string, opts directRunOptions) (interactive.DirectResult, error) {
+			interactiveCalls = append(interactiveCalls, args)
+			directOpts = append(directOpts, opts)
+			return interactive.DirectResult{Completed: true}, nil
 		}
 		defer func() { interactiveRunnerFn = oldFn }()
 
@@ -880,10 +902,10 @@ func TestExecuteAgentStep(t *testing.T) {
 		ctx.LastSessionStepID = "prev"
 		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review code", Session: model.SessionResume}
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
-		if len(ptyCalls) == 0 || len(ptyOpts) == 0 {
-			t.Fatal("expected PTY to be called")
+		if len(interactiveCalls) == 0 || len(directOpts) == 0 {
+			t.Fatal("expected direct interactive runner to be called")
 		}
-		args := ptyCalls[0]
+		args := interactiveCalls[0]
 		if !containsArg(args, "--append-system-prompt") {
 			t.Fatal("expected --append-system-prompt for interactive claude resume step")
 		}
@@ -891,17 +913,17 @@ func TestExecuteAgentStep(t *testing.T) {
 		if !strings.Contains(lastArg, "Let's continue to the s step") {
 			t.Fatalf("expected resume prompt in positional arg, got %q", lastArg)
 		}
-		assertContinueMarkerInstruction(t, lastArg, ptyOpts[0].ContinueMarker)
+		assertControlCompletionInstruction(t, lastArg)
 	})
 
 	t.Run("autonomous interactive claude resume includes current completion instruction in positional prompt", func(t *testing.T) {
-		var ptyCalls [][]string
-		var ptyOpts []pty.Options
+		var interactiveCalls [][]string
+		var directOpts []directRunOptions
 		oldFn := interactiveRunnerFn
-		interactiveRunnerFn = func(args []string, opts pty.Options) (pty.Result, error) {
-			ptyCalls = append(ptyCalls, args)
-			ptyOpts = append(ptyOpts, opts)
-			return pty.Result{ContinueTriggered: true}, nil
+		interactiveRunnerFn = func(args []string, opts directRunOptions) (interactive.DirectResult, error) {
+			interactiveCalls = append(interactiveCalls, args)
+			directOpts = append(directOpts, opts)
+			return interactive.DirectResult{Completed: true}, nil
 		}
 		oldTTY := isStdinTerminal
 		isStdinTerminal = func() bool { return true }
@@ -917,10 +939,10 @@ func TestExecuteAgentStep(t *testing.T) {
 		ctx.LastSessionStepID = "prev"
 		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "review code", Session: model.SessionResume}
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
-		if len(ptyCalls) == 0 || len(ptyOpts) == 0 {
-			t.Fatal("expected PTY to be called")
+		if len(interactiveCalls) == 0 || len(directOpts) == 0 {
+			t.Fatal("expected direct interactive runner to be called")
 		}
-		args := ptyCalls[0]
+		args := interactiveCalls[0]
 		if !containsArg(args, "--append-system-prompt") {
 			t.Fatal("expected --append-system-prompt for autonomous interactive claude resume step")
 		}
@@ -928,35 +950,35 @@ func TestExecuteAgentStep(t *testing.T) {
 		if !strings.Contains(lastArg, "Let's continue to the s step") {
 			t.Fatalf("expected resume prompt in positional arg, got %q", lastArg)
 		}
-		assertContinueMarkerInstruction(t, lastArg, ptyOpts[0].ContinueMarker)
+		assertControlCompletionInstruction(t, lastArg)
 	})
 
 	t.Run("interactive codex without enrichment passes prompt positionally", func(t *testing.T) {
-		var ptyCalls [][]string
-		var ptyOpts []pty.Options
+		var interactiveCalls [][]string
+		var directOpts []directRunOptions
 		oldFn := interactiveRunnerFn
-		interactiveRunnerFn = func(args []string, opts pty.Options) (pty.Result, error) {
-			ptyCalls = append(ptyCalls, args)
-			ptyOpts = append(ptyOpts, opts)
-			return pty.Result{ContinueTriggered: true}, nil
+		interactiveRunnerFn = func(args []string, opts directRunOptions) (interactive.DirectResult, error) {
+			interactiveCalls = append(interactiveCalls, args)
+			directOpts = append(directOpts, opts)
+			return interactive.DirectResult{Completed: true}, nil
 		}
 		defer func() { interactiveRunnerFn = oldFn }()
 
 		runner := &mockRunner{}
 		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review code", Session: model.SessionNew, CLI: "codex"}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
-		if len(ptyCalls) == 0 {
-			t.Fatal("expected PTY to be called")
+		if len(interactiveCalls) == 0 {
+			t.Fatal("expected direct interactive runner to be called")
 		}
-		args := ptyCalls[0]
+		args := interactiveCalls[0]
 		lastArg := args[len(args)-1]
 		if !strings.Contains(lastArg, "review code") {
 			t.Fatalf("expected prompt in positional arg for codex without enrichment, got %q", lastArg)
 		}
-		if len(ptyOpts) == 0 {
-			t.Fatal("expected PTY options to be captured")
+		if len(directOpts) == 0 {
+			t.Fatal("expected direct-run options to be captured")
 		}
-		assertContinueMarkerInstruction(t, lastArg, ptyOpts[0].ContinueMarker)
+		assertControlCompletionInstruction(t, lastArg)
 	})
 
 	t.Run("autonomous mode passes prompt as positional arg without wrapping", func(t *testing.T) {
@@ -989,12 +1011,12 @@ func TestExecuteAgentStep(t *testing.T) {
 
 	t.Run("interactive step prompt includes completion instruction", func(t *testing.T) {
 		var capturedArgs [][]string
-		var capturedOpts []pty.Options
+		var capturedOpts []directRunOptions
 		oldFn := interactiveRunnerFn
-		interactiveRunnerFn = func(args []string, opts pty.Options) (pty.Result, error) {
+		interactiveRunnerFn = func(args []string, opts directRunOptions) (interactive.DirectResult, error) {
 			capturedArgs = append(capturedArgs, args)
 			capturedOpts = append(capturedOpts, opts)
-			return pty.Result{ContinueTriggered: true}, nil
+			return interactive.DirectResult{Completed: true}, nil
 		}
 		defer func() { interactiveRunnerFn = oldFn }()
 
@@ -1002,10 +1024,10 @@ func TestExecuteAgentStep(t *testing.T) {
 		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "do the task", Session: model.SessionNew}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
 		if len(capturedArgs) == 0 {
-			t.Fatal("expected PTY to be called")
+			t.Fatal("expected direct interactive runner to be called")
 		}
 		if len(capturedOpts) == 0 {
-			t.Fatal("expected PTY options to be captured")
+			t.Fatal("expected direct-run options to be captured")
 		}
 		// For Claude interactive, the completion instruction goes into --append-system-prompt.
 		args := capturedArgs[0]
@@ -1014,7 +1036,7 @@ func TestExecuteAgentStep(t *testing.T) {
 				continue
 			}
 			sysPrompt := args[i+1]
-			assertContinueMarkerInstruction(t, sysPrompt, capturedOpts[0].ContinueMarker)
+			assertControlCompletionInstruction(t, sysPrompt)
 			if !strings.Contains(sysPrompt, "you or the user") {
 				t.Fatalf("expected 'you or the user' wording in completion instruction, got %q", sysPrompt)
 			}
@@ -1056,18 +1078,18 @@ func TestExecuteAgentStep(t *testing.T) {
 	})
 
 	t.Run("interactive prompt does not include autonomy preamble", func(t *testing.T) {
-		var ptyCalls [][]string
+		var interactiveCalls [][]string
 		oldFn := interactiveRunnerFn
-		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
-			ptyCalls = append(ptyCalls, args)
-			return pty.Result{ContinueTriggered: true}, nil
+		interactiveRunnerFn = func(args []string, _ directRunOptions) (interactive.DirectResult, error) {
+			interactiveCalls = append(interactiveCalls, args)
+			return interactive.DirectResult{Completed: true}, nil
 		}
 		defer func() { interactiveRunnerFn = oldFn }()
 
 		runner := &mockRunner{}
 		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review code", Session: model.SessionNew}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
-		args := ptyCalls[0]
+		args := interactiveCalls[0]
 		for _, a := range args {
 			if strings.Contains(a, "running autonomously") {
 				t.Fatalf("did not expect autonomy preamble in interactive prompt, got %q", a)
@@ -1111,20 +1133,20 @@ func TestExecuteAgentStep(t *testing.T) {
 	})
 
 	t.Run("interactive claude does not include --disallowedTools", func(t *testing.T) {
-		var ptyCalls [][]string
+		var interactiveCalls [][]string
 		oldFn := interactiveRunnerFn
-		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
-			ptyCalls = append(ptyCalls, args)
-			return pty.Result{ContinueTriggered: true}, nil
+		interactiveRunnerFn = func(args []string, _ directRunOptions) (interactive.DirectResult, error) {
+			interactiveCalls = append(interactiveCalls, args)
+			return interactive.DirectResult{Completed: true}, nil
 		}
 		defer func() { interactiveRunnerFn = oldFn }()
 
 		runner := &mockRunner{}
 		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
-		for _, a := range ptyCalls[0] {
+		for _, a := range interactiveCalls[0] {
 			if a == "--disallowedTools" {
-				t.Fatalf("did not expect --disallowedTools for interactive mode, got %v", ptyCalls[0])
+				t.Fatalf("did not expect --disallowedTools for interactive mode, got %v", interactiveCalls[0])
 			}
 		}
 	})
@@ -1149,23 +1171,23 @@ func TestExecuteAgentStep(t *testing.T) {
 	})
 
 	t.Run("interactive codex does not include permission bypass flags", func(t *testing.T) {
-		var ptyCalls [][]string
+		var interactiveCalls [][]string
 		oldFn := interactiveRunnerFn
-		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
-			ptyCalls = append(ptyCalls, args)
-			return pty.Result{ContinueTriggered: true}, nil
+		interactiveRunnerFn = func(args []string, _ directRunOptions) (interactive.DirectResult, error) {
+			interactiveCalls = append(interactiveCalls, args)
+			return interactive.DirectResult{Completed: true}, nil
 		}
 		defer func() { interactiveRunnerFn = oldFn }()
 
 		runner := &mockRunner{}
 		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew, CLI: "codex"}
 		ExecuteAgentStep(&step, makeCtx(), runner, &mockLogger{})
-		for i, a := range ptyCalls[0] {
-			if a == "-a" && i+1 < len(ptyCalls[0]) && ptyCalls[0][i+1] == "never" {
-				t.Fatalf("did not expect -a never for interactive codex, got %v", ptyCalls[0])
+		for i, a := range interactiveCalls[0] {
+			if a == "-a" && i+1 < len(interactiveCalls[0]) && interactiveCalls[0][i+1] == "never" {
+				t.Fatalf("did not expect -a never for interactive codex, got %v", interactiveCalls[0])
 			}
 			if a == "--dangerously-bypass-approvals-and-sandbox" {
-				t.Fatalf("did not expect sandbox bypass for interactive codex, got %v", ptyCalls[0])
+				t.Fatalf("did not expect sandbox bypass for interactive codex, got %v", interactiveCalls[0])
 			}
 		}
 	})
@@ -1184,13 +1206,13 @@ func TestExecuteAgentStep(t *testing.T) {
 	})
 
 	t.Run("autonomous backend interactive uses interactive invocation when TTY is available", func(t *testing.T) {
-		var ptyCalls [][]string
-		var ptyOpts []pty.Options
+		var interactiveCalls [][]string
+		var directOpts []directRunOptions
 		oldRunner := interactiveRunnerFn
-		interactiveRunnerFn = func(args []string, opts pty.Options) (pty.Result, error) {
-			ptyCalls = append(ptyCalls, args)
-			ptyOpts = append(ptyOpts, opts)
-			return pty.Result{ContinueTriggered: true}, nil
+		interactiveRunnerFn = func(args []string, opts directRunOptions) (interactive.DirectResult, error) {
+			interactiveCalls = append(interactiveCalls, args)
+			directOpts = append(directOpts, opts)
+			return interactive.DirectResult{Completed: true}, nil
 		}
 		oldTTY := isStdinTerminal
 		isStdinTerminal = func() bool { return true }
@@ -1213,24 +1235,24 @@ func TestExecuteAgentStep(t *testing.T) {
 		if len(runner.calls) != 0 {
 			t.Fatalf("expected no headless RunAgent calls, got %d", len(runner.calls))
 		}
-		if len(ptyCalls) != 1 || len(ptyOpts) != 1 {
-			t.Fatalf("expected one interactive PTY call, got calls=%d opts=%d", len(ptyCalls), len(ptyOpts))
+		if len(interactiveCalls) != 1 || len(directOpts) != 1 {
+			t.Fatalf("expected one interactive direct interactive call, got calls=%d opts=%d", len(interactiveCalls), len(directOpts))
 		}
-		for _, arg := range ptyCalls[0] {
+		for _, arg := range interactiveCalls[0] {
 			if strings.Contains(arg, "autonomously") {
-				assertContinueMarkerInstruction(t, arg, ptyOpts[0].ContinueMarker)
+				assertControlCompletionInstruction(t, arg)
 				return
 			}
 		}
-		t.Fatalf("expected autonomy instructions in interactive invocation args, got %v", ptyCalls[0])
+		t.Fatalf("expected autonomy instructions in interactive invocation args, got %v", interactiveCalls[0])
 	})
 
 	t.Run("capture forces headless when autonomous backend prefers interactive", func(t *testing.T) {
-		var ptyCalls int
+		var interactiveCalls int
 		oldRunner := interactiveRunnerFn
-		interactiveRunnerFn = func(_ []string, _ pty.Options) (pty.Result, error) {
-			ptyCalls++
-			return pty.Result{ContinueTriggered: true}, nil
+		interactiveRunnerFn = func(_ []string, _ directRunOptions) (interactive.DirectResult, error) {
+			interactiveCalls++
+			return interactive.DirectResult{Completed: true}, nil
 		}
 		oldTTY := isStdinTerminal
 		isStdinTerminal = func() bool { return true }
@@ -1250,8 +1272,8 @@ func TestExecuteAgentStep(t *testing.T) {
 		if outcome != OutcomeSuccess {
 			t.Fatalf("outcome = %q, want success", outcome)
 		}
-		if ptyCalls != 0 {
-			t.Fatalf("expected no interactive invocation when capture forces headless, got %d", ptyCalls)
+		if interactiveCalls != 0 {
+			t.Fatalf("expected no interactive invocation when capture forces headless, got %d", interactiveCalls)
 		}
 		if ctx.CapturedVariables["out"].Str != "captured-value" {
 			t.Fatalf("expected captured output, got %q", ctx.CapturedVariables["out"].Str)
@@ -1286,6 +1308,69 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("interactive opencode step fails before spawning", func(t *testing.T) {
+		var interactiveCalls int
+		oldRunner := interactiveRunnerFn
+		interactiveRunnerFn = func(_ []string, _ directRunOptions) (interactive.DirectResult, error) {
+			interactiveCalls++
+			return interactive.DirectResult{Completed: true}, nil
+		}
+		oldTTY := isStdinTerminal
+		isStdinTerminal = func() bool { return true }
+		defer func() {
+			interactiveRunnerFn = oldRunner
+			isStdinTerminal = oldTTY
+		}()
+
+		runner := &mockRunner{}
+		log := &mockLogger{}
+		ctx := makeCtx()
+		step := model.Step{ID: "s", CLI: "opencode", Mode: model.ModeInteractive, Prompt: "review code", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, log)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeFailed {
+			t.Fatalf("outcome = %q, want failed", outcome)
+		}
+		if len(runner.calls) != 0 || interactiveCalls != 0 {
+			t.Fatalf("expected no spawn for rejected interactive opencode step, got headless=%d interactive=%d", len(runner.calls), interactiveCalls)
+		}
+		if !strings.Contains(strings.Join(log.lines, "\n"), "does not support interactive steps") {
+			t.Fatalf("expected rejection reason on the step log, got %v", log.lines)
+		}
+	})
+
+	t.Run("autonomous backend interactive fails for opencode", func(t *testing.T) {
+		var interactiveCalls int
+		oldRunner := interactiveRunnerFn
+		interactiveRunnerFn = func(_ []string, _ directRunOptions) (interactive.DirectResult, error) {
+			interactiveCalls++
+			return interactive.DirectResult{Completed: true}, nil
+		}
+		oldTTY := isStdinTerminal
+		isStdinTerminal = func() bool { return true }
+		defer func() {
+			interactiveRunnerFn = oldRunner
+			isStdinTerminal = oldTTY
+		}()
+
+		runner := &mockRunner{}
+		ctx := makeCtx()
+		ctx.AutonomousBackend = "interactive"
+		step := model.Step{ID: "s", CLI: "opencode", Mode: model.ModeAutonomous, Prompt: "implement feature", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeFailed {
+			t.Fatalf("outcome = %q, want failed", outcome)
+		}
+		if len(runner.calls) != 0 || interactiveCalls != 0 {
+			t.Fatalf("expected no spawn for rejected autonomous-interactive opencode step, got headless=%d interactive=%d", len(runner.calls), interactiveCalls)
+		}
+	})
+
 	t.Run("interactive claude backend stays headless for non-claude adapter", func(t *testing.T) {
 		oldTTY := isStdinTerminal
 		isStdinTerminal = func() bool { return true }
@@ -1311,11 +1396,11 @@ func TestExecuteAgentStep(t *testing.T) {
 	})
 
 	t.Run("interactive mode ignores autonomous backend", func(t *testing.T) {
-		var ptyCalls [][]string
+		var interactiveCalls [][]string
 		oldRunner := interactiveRunnerFn
-		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
-			ptyCalls = append(ptyCalls, args)
-			return pty.Result{ContinueTriggered: true}, nil
+		interactiveRunnerFn = func(args []string, _ directRunOptions) (interactive.DirectResult, error) {
+			interactiveCalls = append(interactiveCalls, args)
+			return interactive.DirectResult{Completed: true}, nil
 		}
 		oldTTY := isStdinTerminal
 		isStdinTerminal = func() bool { return true }
@@ -1329,7 +1414,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		ctx.AutonomousBackend = "interactive"
 		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review code", Session: model.SessionNew}
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
-		for _, arg := range ptyCalls[0] {
+		for _, arg := range interactiveCalls[0] {
 			if strings.Contains(arg, "autonomously") {
 				t.Fatalf("did not expect autonomy instructions for plain interactive step, got %q", arg)
 			}
@@ -1339,9 +1424,9 @@ func TestExecuteAgentStep(t *testing.T) {
 	t.Run("interactive step includes step prefix with step ID", func(t *testing.T) {
 		var capturedArgs [][]string
 		oldFn := interactiveRunnerFn
-		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
+		interactiveRunnerFn = func(args []string, _ directRunOptions) (interactive.DirectResult, error) {
 			capturedArgs = append(capturedArgs, args)
-			return pty.Result{ContinueTriggered: true}, nil
+			return interactive.DirectResult{Completed: true}, nil
 		}
 		defer func() { interactiveRunnerFn = oldFn }()
 
@@ -1367,9 +1452,9 @@ func TestExecuteAgentStep(t *testing.T) {
 	t.Run("fresh interactive step includes workflow name and description", func(t *testing.T) {
 		var capturedArgs [][]string
 		oldFn := interactiveRunnerFn
-		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
+		interactiveRunnerFn = func(args []string, _ directRunOptions) (interactive.DirectResult, error) {
 			capturedArgs = append(capturedArgs, args)
-			return pty.Result{ContinueTriggered: true}, nil
+			return interactive.DirectResult{Completed: true}, nil
 		}
 		defer func() { interactiveRunnerFn = oldFn }()
 
@@ -1398,9 +1483,9 @@ func TestExecuteAgentStep(t *testing.T) {
 	t.Run("session resume step does not include workflow description", func(t *testing.T) {
 		var capturedArgs [][]string
 		oldFn := interactiveRunnerFn
-		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
+		interactiveRunnerFn = func(args []string, _ directRunOptions) (interactive.DirectResult, error) {
 			capturedArgs = append(capturedArgs, args)
-			return pty.Result{ContinueTriggered: true}, nil
+			return interactive.DirectResult{Completed: true}, nil
 		}
 		defer func() { interactiveRunnerFn = oldFn }()
 
@@ -1429,11 +1514,11 @@ func TestExecuteAgentStep(t *testing.T) {
 	})
 
 	t.Run("copilot step in interactive mode spawns CLI", func(t *testing.T) {
-		var ptyCalls [][]string
+		var interactiveCalls [][]string
 		oldFn := interactiveRunnerFn
-		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
-			ptyCalls = append(ptyCalls, args)
-			return pty.Result{ContinueTriggered: true}, nil
+		interactiveRunnerFn = func(args []string, _ directRunOptions) (interactive.DirectResult, error) {
+			interactiveCalls = append(interactiveCalls, args)
+			return interactive.DirectResult{Completed: true}, nil
 		}
 		defer func() { interactiveRunnerFn = oldFn }()
 
@@ -1449,10 +1534,10 @@ func TestExecuteAgentStep(t *testing.T) {
 		if len(runner.calls) != 0 {
 			t.Fatalf("expected no CLI invocations, got %d", len(runner.calls))
 		}
-		if len(ptyCalls) != 1 {
-			t.Fatalf("expected one PTY invocation, got %d", len(ptyCalls))
+		if len(interactiveCalls) != 1 {
+			t.Fatalf("expected one direct interactive invocation, got %d", len(interactiveCalls))
 		}
-		args := ptyCalls[0]
+		args := interactiveCalls[0]
 		if args[0] != "copilot" {
 			t.Fatalf("expected copilot command, got %v", args)
 		}
@@ -1467,11 +1552,11 @@ func TestExecuteAgentStep(t *testing.T) {
 	})
 
 	t.Run("cursor step in interactive mode spawns CLI", func(t *testing.T) {
-		var ptyCalls [][]string
+		var interactiveCalls [][]string
 		oldFn := interactiveRunnerFn
-		interactiveRunnerFn = func(args []string, _ pty.Options) (pty.Result, error) {
-			ptyCalls = append(ptyCalls, args)
-			return pty.Result{ContinueTriggered: true}, nil
+		interactiveRunnerFn = func(args []string, _ directRunOptions) (interactive.DirectResult, error) {
+			interactiveCalls = append(interactiveCalls, args)
+			return interactive.DirectResult{Completed: true}, nil
 		}
 		defer func() { interactiveRunnerFn = oldFn }()
 
@@ -1490,13 +1575,15 @@ func TestExecuteAgentStep(t *testing.T) {
 		if len(runner.calls) != 0 {
 			t.Fatalf("expected no CLI invocations, got %d", len(runner.calls))
 		}
-		if len(ptyCalls) != 1 {
-			t.Fatalf("expected one PTY invocation, got %d", len(ptyCalls))
+		if len(interactiveCalls) != 1 {
+			t.Fatalf("expected one direct interactive invocation, got %d", len(interactiveCalls))
 		}
-		args := ptyCalls[0]
-		if args[0] != "agent" {
+		args := interactiveCalls[0]
+		if !containsArg(args, "agent") {
 			t.Fatalf("expected cursor agent command, got %v", args)
 		}
+		prompt := args[len(args)-1]
+		assertControlCompletionInstruction(t, prompt)
 		for _, disallowed := range []string{"-p", "--output-format", "stream-json", "--trust", "--force"} {
 			if containsArg(args, disallowed) {
 				t.Fatalf("did not expect %s in cursor interactive args, got %v", disallowed, args)
@@ -1557,34 +1644,131 @@ func containsArg(args []string, target string) bool {
 	return false
 }
 
-func assertContinueMarkerInstruction(t *testing.T, prompt, marker string) {
+func TestCompletionInstructionQuotesExecutablePath(t *testing.T) {
+	prompt := completionInstruction("/Applications/Agent Runner/bin/agent-runner")
+	want := "`'/Applications/Agent Runner/bin/agent-runner' step complete`"
+	if !strings.Contains(prompt, want) {
+		t.Fatalf("completion instruction = %q, want rendered command %q", prompt, want)
+	}
+}
+
+func TestCompletionExecutableUsesConfiguredAgentRunner(t *testing.T) {
+	override := writeExecutableFixture(t)
+	t.Setenv("AGENT_RUNNER_EXECUTABLE", override)
+
+	got := completionExecutableForContext(cli.ContextInteractive)
+	if got != override {
+		t.Fatalf("completionExecutableForContext() = %q, want %q", got, override)
+	}
+}
+
+type spawnEnvAdapter struct {
+	env     []string
+	err     error
+	workdir string
+}
+
+func (a *spawnEnvAdapter) BuildArgs(*cli.BuildArgsInput) []string        { return []string{"fake"} }
+func (a *spawnEnvAdapter) DiscoverSessionID(*cli.DiscoverOptions) string { return "" }
+func (a *spawnEnvAdapter) SupportsSystemPrompt() bool                    { return false }
+func (a *spawnEnvAdapter) ProbeModel(string, string) (cli.ProbeStrength, error) {
+	return cli.BinaryOnly, nil
+}
+func (a *spawnEnvAdapter) SpawnEnv(input *cli.BuildArgsInput) ([]string, error) {
+	a.workdir = input.Workdir
+	return a.env, a.err
+}
+
+func TestBuildStepInvocationCollectsSpawnEnv(t *testing.T) {
+	step := &model.Step{ID: "implement", Workdir: "/repo/project"}
+	ctx := &model.ExecutionContext{}
+	profile := &config.ResolvedAgent{}
+
+	adapter := &spawnEnvAdapter{env: []string{"CURSOR_CONFIG_DIR=/private/dir"}}
+	_, spawnEnv, _, err := buildStepInvocation(step, ctx, profile, adapter, "prompt", "", "", false, cli.ContextInteractive)
+	if err != nil {
+		t.Fatalf("buildStepInvocation: %v", err)
+	}
+	if diff := cmp.Diff(adapter.env, spawnEnv); diff != "" {
+		t.Fatalf("spawn env mismatch (-want +got):\n%s", diff)
+	}
+	if adapter.workdir != "/repo/project" {
+		t.Fatalf("adapter received workdir %q, want step workdir for project-level config discovery", adapter.workdir)
+	}
+
+	failing := &spawnEnvAdapter{err: errors.New("prepare config: boom")}
+	if _, _, _, err := buildStepInvocation(step, ctx, profile, failing, "prompt", "", "", false, cli.ContextInteractive); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("buildStepInvocation error = %v, want spawn env failure", err)
+	}
+}
+
+func TestAgentRunnerExecutableIgnoresInvalidOverride(t *testing.T) {
+	fallback, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	nonExecutable := filepath.Join(dir, "not-executable")
+	if err := os.WriteFile(nonExecutable, []byte("#!/bin/sh\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]string{
+		"missing path":        filepath.Join(dir, "does-not-exist"),
+		"directory":           dir,
+		"non-executable file": nonExecutable,
+	}
+	for name, override := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("AGENT_RUNNER_EXECUTABLE", override)
+			got, err := agentRunnerExecutable()
+			if err != nil {
+				t.Fatalf("agentRunnerExecutable() error = %v", err)
+			}
+			if got != fallback {
+				t.Fatalf("agentRunnerExecutable() = %q, want fallback %q", got, fallback)
+			}
+		})
+	}
+}
+
+func TestAgentRunnerExecutableUsesValidOverride(t *testing.T) {
+	override := writeExecutableFixture(t)
+	t.Setenv("AGENT_RUNNER_EXECUTABLE", override)
+
+	got, err := agentRunnerExecutable()
+	if err != nil {
+		t.Fatalf("agentRunnerExecutable() error = %v", err)
+	}
+	if got != override {
+		t.Fatalf("agentRunnerExecutable() = %q, want %q", got, override)
+	}
+}
+
+// writeExecutableFixture creates a real executable file at a path containing a
+// space, mirroring installs under directories like "Agent Runner".
+func writeExecutableFixture(t *testing.T) string {
 	t.Helper()
-	if marker == "" {
-		t.Fatal("expected interactive PTY continue marker")
+	dir := filepath.Join(t.TempDir(), "Agent Runner", "bin")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.HasPrefix(marker, continuationMarkerPrefix) {
-		t.Fatalf("expected marker prefix %q, got %q", continuationMarkerPrefix, marker)
+	path := filepath.Join(dir, "agent-runner")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil { // #nosec G306 -- the fixture must be executable
+		t.Fatal(err)
 	}
-	suffix := strings.TrimPrefix(marker, continuationMarkerPrefix)
-	if suffix == "" {
-		t.Fatalf("expected marker suffix, got %q", marker)
-	}
-	for _, part := range []string{"`AGENT`", "`_RUNNER`", "`_CONTINUE_`", "`" + suffix + "`"} {
-		if !strings.Contains(prompt, part) {
-			t.Fatalf("expected dynamic text marker instruction part %q in prompt, marker %q prompt %q", part, marker, prompt)
-		}
-	}
-	for _, phrase := range []string{"in this exact order", "no spaces or separators", "must start with `AGENT`", "end with `" + suffix + "`"} {
+	return path
+}
+
+func assertControlCompletionInstruction(t *testing.T, prompt string) {
+	t.Helper()
+	for _, phrase := range []string{"step complete", "absolute path", "control channel", "You MUST run", "Do not merely", "separate shell words"} {
 		if !strings.Contains(prompt, phrase) {
-			t.Fatalf("expected marker assembly guidance %q in prompt, got %q", phrase, prompt)
+			t.Fatalf("expected control-channel completion guidance %q in prompt, got %q", phrase, prompt)
 		}
 	}
-	if strings.Contains(prompt, marker) {
-		t.Fatalf("completion instruction must not include the exact marker contiguously, got %q", prompt)
-	}
-	for _, disallowed := range []string{"signal-continuation", "AGENT_RUNNER_TTY", "printf"} {
+	for _, disallowed := range []string{"signal-continuation", "printf"} {
 		if strings.Contains(prompt, disallowed) {
-			t.Fatalf("completion instruction should use hosted-CLI text marker, got %q", prompt)
+			t.Fatalf("completion instruction should use the control client, got %q", prompt)
 		}
 	}
 }

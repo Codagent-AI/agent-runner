@@ -80,7 +80,7 @@ func TestOpenCodeAdapter(t *testing.T) {
 			Effort:    "max",
 			Context:   ContextInteractive,
 		})
-		expected := []string{"opencode", "--prompt", "continue review", "-s", "ses_def456"}
+		expected := []string{"opencode", "-s", "ses_def456", "--prompt", "continue review"}
 		assertArgs(t, expected, args)
 	})
 
@@ -90,7 +90,7 @@ func TestOpenCodeAdapter(t *testing.T) {
 			Context:         ContextInteractive,
 			DisallowedTools: []string{"AskUserQuestion"},
 		})
-		for _, disallowed := range []string{"run", "--format", "json", "--variant"} {
+		for _, disallowed := range []string{"--format", "json", "--variant"} {
 			if containsString(args, disallowed) {
 				t.Fatalf("did not expect %s in interactive args, got %v", disallowed, args)
 			}
@@ -201,6 +201,22 @@ func TestOpenCodeAdapter(t *testing.T) {
 		}
 	})
 
+	t.Run("discover interactive session ID from opencode database", func(t *testing.T) {
+		spawnTime := time.UnixMilli(1_700_000_000_000)
+		id := discoverOpenCodeDatabaseSession(spawnTime, "/repo", func(query string) ([]byte, error) {
+			if !strings.Contains(query, "time_created >= 1700000000000") {
+				t.Fatalf("database query does not filter by spawn time: %s", query)
+			}
+			if !strings.Contains(query, "directory = '/repo'") {
+				t.Fatalf("database query does not filter by workdir: %s", query)
+			}
+			return []byte(`[{"id":"ses_database","time_created":1700000000123}]`), nil
+		})
+		if id != "ses_database" {
+			t.Fatalf("expected %q, got %q", "ses_database", id)
+		}
+	})
+
 	t.Run("discover interactive session ID ignores non-session files", func(t *testing.T) {
 		fakeHome := t.TempDir()
 		t.Setenv("HOME", fakeHome)
@@ -247,13 +263,6 @@ func TestOpenCodeAdapter(t *testing.T) {
 		}
 		if !strings.Contains(logBuf.String(), "opencode: 2 session candidates") {
 			t.Fatalf("expected ambiguity log, got %q", logBuf.String())
-		}
-	})
-
-	t.Run("does not implement InteractiveRejector", func(t *testing.T) {
-		var a Adapter = adapter
-		if _, ok := a.(InteractiveRejector); ok {
-			t.Fatal("did not expect OpenCodeAdapter to implement InteractiveRejector")
 		}
 	})
 
@@ -367,5 +376,22 @@ func writeOpenCodeSessionDiff(t *testing.T, home, sessionID string, modTime time
 	}
 	if err := os.Chtimes(path, modTime, modTime); err != nil {
 		t.Fatalf("chtimes opencode session diff: %v", err)
+	}
+}
+
+func TestOpenCodeRejectsInteractiveMode(t *testing.T) {
+	var adapter Adapter = &OpenCodeAdapter{}
+	rejector, ok := adapter.(InteractiveRejector)
+	if !ok {
+		t.Fatal("OpenCodeAdapter does not implement InteractiveRejector")
+	}
+	err := rejector.InteractiveModeError()
+	if err == nil {
+		t.Fatal("InteractiveModeError() = nil, want a descriptive error")
+	}
+	for _, want := range []string{"opencode", "interactive", "autonomous", "37536"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("InteractiveModeError() = %q, want it to mention %q", err.Error(), want)
+		}
 	}
 }
