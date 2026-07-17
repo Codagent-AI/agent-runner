@@ -44,7 +44,7 @@ When a run whose status is `completed` is opened via `--inspect` or from the run
 
 ### Requirement: Summary content with nested rollup
 
-The summary screen SHALL show one row per step of the workflow, displaying the step's wall-clock duration and its reported API cost. Nested steps — loop iterations, sub-workflow children, and group members — SHALL render indented beneath their parent, and every container row SHALL show the rolled-up totals (summed duration and summed cost) of its descendants. Top-level rows therefore show whole-subtree totals. A run-totals line SHALL show the run's total active execution duration (the sum of its execution sessions, excluding interrupted time, per `run-metrics-artifact`), per-category token totals, and cost total with its coverage state (per `cost-capture`). Token totals SHALL follow the `run-metrics-artifact` aggregation semantics — only reported values are summed — and the totals line SHALL indicate when usage coverage is partial.
+The summary screen SHALL show one row per step of the workflow, displaying the step's wall-clock duration and its reported API cost. When a logical step executed more than once (repeated attempts), its row SHALL aggregate the duration, usage, and cost of every attempt. Nested steps — loop iterations, sub-workflow children, and group members — SHALL render indented beneath their parent, and every container row SHALL show the rolled-up totals (summed duration and summed cost) of its descendants. Top-level rows therefore show whole-subtree totals. A run-totals line SHALL show the run's total active execution duration (the sum of its execution sessions, excluding interrupted time, per `run-metrics-artifact`), per-category token totals, and cost total with its coverage state (per `cost-capture`). Token totals SHALL follow the `run-metrics-artifact` aggregation semantics — only reported values are summed — and the totals line SHALL indicate when usage coverage is partial.
 
 #### Scenario: Flat workflow rows
 - **WHEN** the summary is shown for a run of top-level steps only
@@ -61,6 +61,10 @@ The summary screen SHALL show one row per step of the workflow, displaying the s
 #### Scenario: Group rolls up its members
 - **WHEN** a group step ran member steps that consumed time and cost
 - **THEN** the group's row shows its members' summed duration and cost, with the member rows indented beneath it
+
+#### Scenario: Repeated step aggregates its attempts
+- **WHEN** a logical step executed twice in the run (a failed attempt followed by a successful one)
+- **THEN** the step's summary row shows the summed duration and cost of both attempts
 
 #### Scenario: Run totals line
 - **WHEN** the summary is shown

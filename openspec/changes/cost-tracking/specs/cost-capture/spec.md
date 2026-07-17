@@ -32,7 +32,7 @@ When a step has no CLI-reported USD cost — because the CLI reports none, the s
 
 ### Requirement: Run-level cost aggregation with coverage
 
-Run-level cost SHALL be the sum of `estimated_api_cost_usd` over the agent steps that reported a cost, regardless of step outcome, accompanied by an explicit coverage indicator: `complete` when every executed agent step in the run reported a cost, `partial` when some did and some did not, and `none` when no step reported a cost (including runs with no agent steps). When coverage is `none`, the run-level cost total SHALL be null.
+Run-level cost SHALL be the sum of `estimated_api_cost_usd` over the agent steps that reported a cost, regardless of step outcome, accompanied by an explicit coverage indicator: `complete` when every agent step that actually invoked its CLI reported a cost, `partial` when some did and some did not, and `none` when no step reported a cost (including runs with no agent steps). Agent steps that never invoked their CLI (skipped, or failed before launch) SHALL NOT count toward the coverage denominator. When coverage is `none`, the run-level cost total SHALL be null.
 
 #### Scenario: All agent steps priced
 - **WHEN** every completed agent step in a run reported a USD cost
@@ -45,6 +45,10 @@ Run-level cost SHALL be the sum of `estimated_api_cost_usd` over the agent steps
 #### Scenario: No cost reported
 - **WHEN** a run's agent steps reported no cost (or the run has no agent steps)
 - **THEN** the run-level cost is null and coverage is `none`
+
+#### Scenario: Skipped agent step does not affect coverage
+- **WHEN** a run contains one agent step that invoked its CLI and reported a cost, and one agent step that was skipped and never invoked its CLI
+- **THEN** the run-level cost coverage is `complete`; the skipped step is excluded from the denominator
 
 ### Requirement: Cost separated from raw usage
 

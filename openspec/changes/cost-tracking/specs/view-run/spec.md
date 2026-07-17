@@ -13,7 +13,7 @@ Each block SHALL open with a header containing the step name and its type glyph,
 - **Sub-workflow**: resolved workflow path, interpolated params, outcome, duration. Children's blocks render inline beneath this header; no "drill in" hint appears because the content is already inline.
 - **Loop**: loop type (counted or for-each), iteration counter `(N/M)`, iterations completed, break_triggered, outcome, duration. Each started iteration renders as a block inline beneath this header, with that iteration's children inline beneath the iteration block; no "drill in" hint appears.
 
-Token-usage and cost lines on agent blocks SHALL render adjacent to the duration line on completed steps. When usage is unavailable (PTY-backed step, parse failure) the usage line SHALL render an explicit unavailable marker; when no cost was reported the cost line SHALL render an unavailable marker, never `$0.00` (per `cost-capture`).
+Token-usage and cost lines on agent blocks SHALL render adjacent to the duration line on completed steps. When usage is unavailable (PTY-backed step, parse failure) the usage line SHALL render an explicit unavailable marker; when no cost was reported the cost line SHALL render an unavailable marker, never `$0.00` (per `cost-capture`). When a logical step executed more than once, the detail block SHALL reflect the latest attempt's metrics, annotated with the attempt number; earlier attempts remain part of run-level aggregates (per `run-metrics-artifact`).
 
 #### Scenario: Shell step block
 - **WHEN** a shell step has started and is rendered in the log
@@ -34,6 +34,10 @@ Token-usage and cost lines on agent blocks SHALL render adjacent to the duration
 #### Scenario: Agent block shows unavailable usage marker
 - **WHEN** a completed agent step's block is rendered and its usage record is unavailable
 - **THEN** the usage and cost lines render explicit unavailable markers; no zero token counts and no `$0.00` are shown
+
+#### Scenario: Re-executed step block shows latest attempt
+- **WHEN** a logical step executed twice and its block is rendered
+- **THEN** the block shows the latest attempt's usage, cost, and duration with an attempt annotation; earlier attempts are not shown in the block but still count in run aggregates
 
 #### Scenario: Agent block header order places model under CLI
 - **WHEN** a headless or interactive agent block is rendered

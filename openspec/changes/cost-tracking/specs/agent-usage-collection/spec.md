@@ -48,11 +48,11 @@ When usage cannot be collected for an agent step, Agent Runner SHALL record an e
 
 ### Requirement: Usage record provenance
 
-Every usage record SHALL retain provenance alongside the token counts: the CLI (adapter) that produced it, the actual model reported by the CLI where available, the measurement source (e.g. which output event supplied the data), and a completeness indicator distinguishing full, partial, and unavailable measurements.
+Every usage record SHALL retain provenance alongside the token counts: the CLI (adapter) that produced it, the provider where available, the actual model reported by the CLI where available, the measurement source (e.g. which output event supplied the data), and a completeness indicator distinguishing full, partial, and unavailable measurements.
 
 #### Scenario: Provenance recorded with usage
 - **WHEN** a usage record is collected from a completed agent step
-- **THEN** the record includes the CLI name, the reported model (when the CLI provides one), the measurement source, and a completeness indicator
+- **THEN** the record includes the CLI name, the provider and reported model (when the CLI provides them), the measurement source, and a completeness indicator
 
 #### Scenario: Partial measurement flagged
 - **WHEN** a CLI reports only a subset of the token categories its adapter expects it to provide
@@ -68,17 +68,24 @@ Non-agent steps (shell, UI, and other step types that invoke no agent CLI) SHALL
 
 ### Requirement: Per-step attribution for cumulative usage sources
 
-When a CLI reports cumulative session totals rather than per-invocation usage, the usage recorded for a step that resumes an existing session SHALL reflect only that step's consumption, not the session's lifetime total. Attribution SHALL never produce a negative or fabricated token count: when the reported cumulative total is lower than the session's previously recorded total (e.g. a counter reset), the step's usage SHALL be recorded as unavailable.
-
-<!-- deferred-to-design: mechanism for per-step attribution — delta against the previously
-     recorded cumulative total for the session vs. recording the raw cumulative value with a
-     source marker. Depends on where per-session usage state is kept across steps.
-     (Known cumulative-reporting CLI at research time: Codex.) -->
+When a CLI reports cumulative session totals rather than per-invocation usage, the usage recorded for a step that resumes an existing session SHALL reflect only that step's consumption, not the session's lifetime total. Attribution SHALL never produce a negative or fabricated token count: when the reported cumulative total is lower than the session's previously recorded total (e.g. a counter reset), the step's usage SHALL be recorded as unavailable. When a session is resumed but no previously recorded total for it exists within the run, the step's usage SHALL be recorded as unavailable rather than attributing the session's lifetime total to the step; the reported cumulative value SHALL be retained in provenance and SHALL serve as the prior total for subsequent invocations of that session. A token category present in the prior total but absent from the current report SHALL produce no value for that category (absent, never negative); a category absent from the prior total SHALL be attributed from zero.
 
 #### Scenario: Resumed session step records its own usage
 - **WHEN** an agent step resumes a session whose earlier step already consumed tokens, and the CLI reports cumulative session totals
 - **THEN** the resumed step's usage record reflects only the tokens consumed by that step's invocation
 
+#### Scenario: Resumed session without prior total yields unavailable
+- **WHEN** an agent step resumes a session whose earlier consumption was never recorded in this run, and the CLI reports cumulative session totals
+- **THEN** the step's usage record is an explicit unavailable state, the reported cumulative value is retained in provenance, and a subsequent step on the same session is attributed relative to that retained value
+
 #### Scenario: Cumulative counter reset yields unavailable
 - **WHEN** a step's reported cumulative total is lower than the total previously recorded for that session
-- **THEN** the step's usage record is an explicit unavailable state; no negative counts are recorded
+- **THEN** the step's usage record is an explicit unavailable state; no negative counts are recorded; subsequent attribution for that session is based on the newly reported total
+
+#### Scenario: Category disappears from cumulative reporting
+- **WHEN** a token category present in the session's previously recorded total is absent from the current report
+- **THEN** the step's usage record contains no value for that category (absent, never negative)
+
+#### Scenario: Category appears mid-session
+- **WHEN** the current report contains a token category absent from the session's previously recorded total
+- **THEN** that category's attributed value equals the newly reported value (attributed from zero)

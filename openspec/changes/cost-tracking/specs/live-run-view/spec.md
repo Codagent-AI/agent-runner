@@ -35,3 +35,7 @@ While a workflow run is executing, the live detailed view SHALL show each comple
 #### Scenario: Completed step shows metrics mid-run
 - **WHEN** an agent step completes while later steps are still running
 - **THEN** that step's detail block shows its token usage and reported cost without waiting for the run to finish
+
+#### Scenario: Re-executed step shows latest attempt mid-run
+- **WHEN** a logical step completes a second attempt while the run is still active
+- **THEN** the step's detail block reflects the latest attempt's metrics (per the `view-run` attempt rule), while run-so-far totals include every attempt
