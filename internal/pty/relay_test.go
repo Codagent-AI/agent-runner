@@ -2,8 +2,10 @@ package pty
 
 import (
 	"errors"
+	"math"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -266,5 +268,15 @@ func TestWaitForProcessExitLeavesCommandReapable(t *testing.T) {
 	var exitErr *exec.ExitError
 	if !errors.As(waitErr, &exitErr) || exitErr.ExitCode() != 7 {
 		t.Fatalf("wait error = %v, want exit status 7", waitErr)
+	}
+}
+
+func TestWaitForProcessExitRejectsOutOfRangePID(t *testing.T) {
+	if strconv.IntSize < 64 {
+		t.Skip("int cannot represent a PID above uint32")
+	}
+	pid := int(int64(math.MaxUint32) + 1)
+	if err := waitForProcessExit(pid); !errors.Is(err, syscall.EINVAL) {
+		t.Fatalf("waitForProcessExit(%d) error = %v, want EINVAL", pid, err)
 	}
 }
