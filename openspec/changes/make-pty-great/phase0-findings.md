@@ -219,6 +219,15 @@ WATCHDOG MISMATCH PASS identity_match=false signal_sent=false target_alive=true
 
 ### OpenCode
 
+- Interactive mode is disallowed: a resumed OpenCode TUI never submits the
+  `--prompt` supplied by the runner (anomalyco/opencode#37536, observed on
+  1.17.15 and 1.18.3), which silently stalls any workflow that resumes an
+  interactive session. The adapter implements `InteractiveModeError`, so both
+  `mode: interactive` steps and autonomous steps routed to the interactive
+  backend fail before spawn with an error naming the issue and pointing at
+  headless mode. Headless OpenCode (fresh and resume) is fully supported.
+  Lift the rejection once the first OpenCode release containing the upstream
+  fix (anomalyco/opencode#37539) is the supported baseline.
 - Exact approval: a process-local `OPENCODE_PERMISSION` value contains one
   `bash` rule, `<quoted-absolute-path> step complete: allow`. It has no
   catch-all or wildcard. The installed config resolver accepted this inline

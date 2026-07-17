@@ -148,7 +148,7 @@ func ExecuteAgentStep(
 	startTime := time.Now()
 	profile, profileErr := resolveStepProfile(step, ctx)
 	if profileErr != nil {
-		emitAgentFailure(ctx, prefix, startTime, "", step, profileErr.Error())
+		emitAgentFailure(ctx, prefix, startTime, "", step, profileErr.Error(), log)
 		return OutcomeFailed, nil
 	}
 
@@ -156,26 +156,26 @@ func ExecuteAgentStep(
 
 	prompt, enrichment, err := buildAgentPrompt(step, ctx)
 	if err != nil {
-		emitAgentFailure(ctx, prefix, startTime, string(mode), step, err.Error())
+		emitAgentFailure(ctx, prefix, startTime, string(mode), step, err.Error(), log)
 		return OutcomeFailed, nil
 	}
 
 	adapter, cliName, sessionID, isResume, err := resolveAdapterAndSession(step, ctx, profile)
 	if err != nil {
-		emitAgentFailure(ctx, prefix, startTime, string(mode), step, err.Error())
+		emitAgentFailure(ctx, prefix, startTime, string(mode), step, err.Error(), log)
 		return OutcomeFailed, nil
 	}
 
 	invocationContext := resolveInvocationContext(mode, ctx, cliName, step.Capture != "", log)
 
 	if modeErr := interactiveModeError(adapter, invocationContext); modeErr != nil {
-		emitAgentFailure(ctx, prefix, startTime, string(mode), step, modeErr.Error())
+		emitAgentFailure(ctx, prefix, startTime, string(mode), step, modeErr.Error(), log)
 		return OutcomeFailed, nil
 	}
 
 	args, spawnEnv, resolvedModel, argsErr := buildStepInvocation(step, ctx, profile, adapter, cliName, prompt, enrichment, sessionID, isResume, invocationContext)
 	if argsErr != nil {
-		emitAgentFailure(ctx, prefix, startTime, string(mode), step, argsErr.Error())
+		emitAgentFailure(ctx, prefix, startTime, string(mode), step, argsErr.Error(), log)
 		return OutcomeFailed, nil
 	}
 
@@ -877,7 +877,13 @@ func resolveSessionID(step *model.Step, ctx *model.ExecutionContext) (string, er
 	return "", nil
 }
 
-func emitAgentFailure(ctx *model.ExecutionContext, prefix string, startTime time.Time, mode string, step *model.Step, errMsg string) {
+// emitAgentFailure records a pre-spawn agent step failure in the audit log and
+// surfaces the reason on the step logger — without the latter, the console only
+// shows "step failed" while the actual cause is buried in audit.log.
+func emitAgentFailure(ctx *model.ExecutionContext, prefix string, startTime time.Time, mode string, step *model.Step, errMsg string, log Logger) {
+	if log != nil {
+		log.Errorf("agent-runner: step %q: %s\n", step.ID, errMsg)
+	}
 	emitStepStart(ctx, prefix, startTime, map[string]any{
 		"mode":             mode,
 		"session_strategy": string(step.Session),

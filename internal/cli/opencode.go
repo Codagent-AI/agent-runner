@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -49,13 +50,14 @@ func (a *OpenCodeAdapter) BuildArgs(input *BuildArgsInput) []string {
 		return append(args, input.Prompt)
 	}
 
+	// Interactive invocations are normally rejected before this point via
+	// InteractiveModeError; the arg construction is kept for the day the
+	// upstream resume-prompt fix ships and the rejection is lifted.
 	args := []string{"opencode"}
 	if resuming {
 		// As of OpenCode 1.17.15 a resumed TUI no longer auto-submits
 		// --prompt; it only prefills the composer (earlier 1.17 builds
-		// auto-submitted when --session preceded --prompt). The E2E harness
-		// types the prompt into the resumed TUI itself; delivering the resume
-		// prompt in real interactive use is a known open issue. --session is
+		// auto-submitted when --session preceded --prompt). --session is
 		// kept before --prompt so the prefill lands in the resumed session.
 		args = append(args, "-s", input.SessionID)
 	}
@@ -88,6 +90,17 @@ func (a *OpenCodeAdapter) BuildArgs(input *BuildArgsInput) []string {
 
 func (a *OpenCodeAdapter) SupportsSystemPrompt() bool {
 	return false
+}
+
+// InteractiveModeError declares that interactive OpenCode sessions are
+// unsupported: a resumed OpenCode TUI prefills but never submits the --prompt
+// supplied by the runner (anomalyco/opencode#37536, present through at least
+// 1.18.3), so any workflow that resumes an interactive session stalls
+// silently. Headless OpenCode is unaffected and remains fully supported.
+// Remove this once the first OpenCode release containing the upstream fix is
+// the supported baseline.
+func (a *OpenCodeAdapter) InteractiveModeError() error {
+	return errors.New("opencode does not support interactive steps: a resumed OpenCode session never submits the step prompt (anomalyco/opencode#37536), which stalls workflows silently; use autonomous (headless) mode for opencode or a different CLI for interactive steps")
 }
 
 func (a *OpenCodeAdapter) ProbeModel(model, effort string) (ProbeStrength, error) {

@@ -1308,6 +1308,69 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("interactive opencode step fails before spawning", func(t *testing.T) {
+		var interactiveCalls int
+		oldRunner := interactiveRunnerFn
+		interactiveRunnerFn = func(_ []string, _ directRunOptions) (interactive.DirectResult, error) {
+			interactiveCalls++
+			return interactive.DirectResult{Completed: true}, nil
+		}
+		oldTTY := isStdinTerminal
+		isStdinTerminal = func() bool { return true }
+		defer func() {
+			interactiveRunnerFn = oldRunner
+			isStdinTerminal = oldTTY
+		}()
+
+		runner := &mockRunner{}
+		log := &mockLogger{}
+		ctx := makeCtx()
+		step := model.Step{ID: "s", CLI: "opencode", Mode: model.ModeInteractive, Prompt: "review code", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, log)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeFailed {
+			t.Fatalf("outcome = %q, want failed", outcome)
+		}
+		if len(runner.calls) != 0 || interactiveCalls != 0 {
+			t.Fatalf("expected no spawn for rejected interactive opencode step, got headless=%d interactive=%d", len(runner.calls), interactiveCalls)
+		}
+		if !strings.Contains(strings.Join(log.lines, "\n"), "does not support interactive steps") {
+			t.Fatalf("expected rejection reason on the step log, got %v", log.lines)
+		}
+	})
+
+	t.Run("autonomous backend interactive fails for opencode", func(t *testing.T) {
+		var interactiveCalls int
+		oldRunner := interactiveRunnerFn
+		interactiveRunnerFn = func(_ []string, _ directRunOptions) (interactive.DirectResult, error) {
+			interactiveCalls++
+			return interactive.DirectResult{Completed: true}, nil
+		}
+		oldTTY := isStdinTerminal
+		isStdinTerminal = func() bool { return true }
+		defer func() {
+			interactiveRunnerFn = oldRunner
+			isStdinTerminal = oldTTY
+		}()
+
+		runner := &mockRunner{}
+		ctx := makeCtx()
+		ctx.AutonomousBackend = "interactive"
+		step := model.Step{ID: "s", CLI: "opencode", Mode: model.ModeAutonomous, Prompt: "implement feature", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeFailed {
+			t.Fatalf("outcome = %q, want failed", outcome)
+		}
+		if len(runner.calls) != 0 || interactiveCalls != 0 {
+			t.Fatalf("expected no spawn for rejected autonomous-interactive opencode step, got headless=%d interactive=%d", len(runner.calls), interactiveCalls)
+		}
+	})
+
 	t.Run("interactive claude backend stays headless for non-claude adapter", func(t *testing.T) {
 		oldTTY := isStdinTerminal
 		isStdinTerminal = func() bool { return true }

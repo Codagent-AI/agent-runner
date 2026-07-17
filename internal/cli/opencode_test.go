@@ -266,13 +266,6 @@ func TestOpenCodeAdapter(t *testing.T) {
 		}
 	})
 
-	t.Run("does not implement InteractiveRejector", func(t *testing.T) {
-		var a Adapter = adapter
-		if _, ok := a.(InteractiveRejector); ok {
-			t.Fatal("did not expect OpenCodeAdapter to implement InteractiveRejector")
-		}
-	})
-
 	t.Run("implements OutputFilter interface", func(t *testing.T) {
 		var a Adapter = adapter
 		if _, ok := a.(OutputFilter); !ok {
@@ -383,5 +376,22 @@ func writeOpenCodeSessionDiff(t *testing.T, home, sessionID string, modTime time
 	}
 	if err := os.Chtimes(path, modTime, modTime); err != nil {
 		t.Fatalf("chtimes opencode session diff: %v", err)
+	}
+}
+
+func TestOpenCodeRejectsInteractiveMode(t *testing.T) {
+	var adapter Adapter = &OpenCodeAdapter{}
+	rejector, ok := adapter.(InteractiveRejector)
+	if !ok {
+		t.Fatal("OpenCodeAdapter does not implement InteractiveRejector")
+	}
+	err := rejector.InteractiveModeError()
+	if err == nil {
+		t.Fatal("InteractiveModeError() = nil, want a descriptive error")
+	}
+	for _, want := range []string{"opencode", "interactive", "autonomous", "37536"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("InteractiveModeError() = %q, want it to mention %q", err.Error(), want)
+		}
 	}
 }

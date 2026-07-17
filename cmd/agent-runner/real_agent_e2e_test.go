@@ -61,8 +61,41 @@ func TestCursorInteractiveRealAgentE2E(t *testing.T) {
 	runRealInteractiveAgentE2E(t, "cursor")
 }
 
+// TestOpenCodeInteractiveRealAgentE2E proves the runner refuses interactive
+// OpenCode steps up front. Interactive OpenCode is deliberately unsupported:
+// a resumed OpenCode TUI never submits the runner's prompt
+// (anomalyco/opencode#37536), which stalls workflows silently, so the adapter
+// rejects interactive invocations before any TUI spawns.
 func TestOpenCodeInteractiveRealAgentE2E(t *testing.T) {
-	runRealInteractiveAgentE2E(t, "opencode")
+	_, workdir, runnerBin := prepareRealAgentE2E(t, "opencode")
+	workflowName := "real-opencode-interactive-e2e"
+	workflowPath := filepath.Join(t.TempDir(), "workflow.yaml")
+	workflow := fmt.Sprintf(`name: %s
+description: "Real opencode interactive rejection test"
+steps:
+  - id: opencode-interactive-fresh
+    agent: opencode_interactive_smoke
+    session: new
+    prompt: "Say hello."
+`, workflowName)
+	writeRealAgentTestFile(t, workflowPath, []byte(workflow))
+	cleanupNewRealAgentRuns(t, workdir, workflowName)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, runnerBin, "--headless", workflowPath)
+	cmd.Dir = workdir
+	cmd.Env = realAgentTestEnv(false)
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("opencode interactive rejection E2E timed out\n%s", output)
+	}
+	if err == nil {
+		t.Fatalf("expected interactive opencode workflow to fail fast, got success\n%s", output)
+	}
+	if !strings.Contains(string(output), "opencode does not support interactive steps") {
+		t.Fatalf("run output does not name the interactive opencode rejection (exit err %v):\n%s", err, output)
+	}
 }
 
 func TestRealAgentTestEnvUsesFileCredentialStore(t *testing.T) {
@@ -249,13 +282,7 @@ steps:
 		phases[0].afterReady = "Run the exact Agent Runner completion command from the step instructions now."
 	}
 	resumePhase := realAgentPTYPhase{markerPrefix: resumePrefix}
-	if agent == "opencode" {
-		// OpenCode 1.17.15 no longer auto-submits --prompt on a resumed TUI;
-		// the harness types the prompt itself (periodically, because a
-		// one-shot submission races resumed-TUI startup).
-		resumePhase.submit = resumePrompt
-	}
-	if agent == "claude" || agent == "cursor" || agent == "opencode" {
+	if agent == "claude" || agent == "cursor" {
 		resumePhase.afterReady = "Run the exact Agent Runner completion command from the step instructions now."
 	}
 	phases = append(phases, resumePhase)
@@ -413,7 +440,6 @@ type realAgentPTYPhase struct {
 	// markerPrefix is the known head of the phase's answer line; the agent
 	// completes it with an invented two-word phrase the harness captures.
 	markerPrefix string
-	submit       string
 	afterReady   string
 }
 
@@ -463,8 +489,6 @@ func realAgentSessionCapture(agent, prefix string, re *regexp.Regexp) string {
 	switch agent {
 	case "copilot":
 		return copilotSessionCapture(re)
-	case "opencode":
-		return openCodeSessionCapture(prefix, re)
 	}
 	return ""
 }
@@ -518,7 +542,6 @@ func runRealAgentWorkflowInPTY(cmd *exec.Cmd, agent string, phases []realAgentPT
 	}
 	ready := make([]bool, len(phases))
 	readyAt := make([]time.Time, len(phases))
-	lastSubmit := make([]time.Time, len(phases))
 	afterReadySubmitted := make([]bool, len(phases))
 	trustHandled := make([]bool, len(phases))
 	phaseBoundary := 0
@@ -527,7 +550,6 @@ func runRealAgentWorkflowInPTY(cmd *exec.Cmd, agent string, phases []realAgentPT
 	readDone := false
 	waitDone := false
 	var waitErr error
-	var lastOpenCodeProbe time.Time
 	advancePhase := func(i, boundary int) {
 		ready[i] = true
 		readyAt[i] = time.Now()
@@ -584,34 +606,13 @@ func runRealAgentWorkflowInPTY(cmd *exec.Cmd, agent string, phases []realAgentPT
 		case <-probeTicker.C:
 			plain := ansi.Strip(raw.String())
 			handleInteractivePrompts(plain)
-			// Periodic resubmit: a one-shot typed submission races
-			// resumed-TUI startup (keystrokes typed before the TUI reads
-			// stdin are dropped), so re-type the phase's prompt every ~12s
-			// while the previous phase is ready and this one is not.
-			for i := 1; i < len(phases); i++ {
-				if phases[i].submit == "" || !ready[i-1] || ready[i] {
-					continue
-				}
-				since := readyAt[i-1]
-				if lastSubmit[i].After(since) {
-					since = lastSubmit[i]
-				}
-				if time.Since(since) >= 12*time.Second {
-					lastSubmit[i] = time.Now()
-					_, _ = ptmx.Write([]byte(phases[i].submit + "\r"))
-				}
-			}
 			for i := range phases {
 				if phases[i].afterReady != "" && ready[i] && !afterReadySubmitted[i] && time.Since(readyAt[i]) >= 2*time.Second {
 					afterReadySubmitted[i] = true
 					_, _ = ptmx.Write([]byte(phases[i].afterReady + "\r"))
 				}
 			}
-			if agent == "copilot" || agent == "opencode" {
-				if agent == "opencode" && time.Since(lastOpenCodeProbe) < time.Second {
-					continue
-				}
-				lastOpenCodeProbe = time.Now()
+			if agent == "copilot" {
 				for i := range phases {
 					if !ready[i] && realAgentSessionCapture(agent, phases[i].markerPrefix, captures[i]) != "" {
 						advancePhase(i, len(plain))
@@ -655,20 +656,6 @@ func copilotSessionCapture(re *regexp.Regexp) string {
 		}
 	}
 	return longest
-}
-
-func openCodeSessionCapture(prefix string, re *regexp.Regexp) string {
-	since := time.Now().Add(-realAgentTimeout).UnixMilli()
-	escapedPrefix := strings.ReplaceAll(prefix, "'", "''")
-	query := fmt.Sprintf(
-		"SELECT data FROM part WHERE time_created >= %d AND instr(data, '%s') > 0 LIMIT 8",
-		since, escapedPrefix,
-	)
-	output, err := exec.Command("opencode", "db", query, "--format", "json").Output()
-	if err != nil {
-		return ""
-	}
-	return longestMarkerPhrase(string(output), re)
 }
 
 // compactTerminalText strips everything but marker-safe characters so markers
