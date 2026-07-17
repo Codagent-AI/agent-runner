@@ -350,7 +350,7 @@ type fakeDurabilityProbe struct {
 	waitCalls       int
 }
 
-func (p *fakeDurabilityProbe) Checkpoint(string) (cli.Checkpoint, error) {
+func (p *fakeDurabilityProbe) Checkpoint(context.Context, string) (cli.Checkpoint, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.checkpointCalls++

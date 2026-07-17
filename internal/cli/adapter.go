@@ -190,9 +190,11 @@ type Checkpoint struct {
 
 // TurnDurabilityProbe confirms that a completed assistant turn was persisted
 // after completion acceptance. Implementations must use semantic records, not
-// mtimes, quiet periods, or successful file writes.
+// mtimes, quiet periods, or successful file writes. Both methods must honor
+// the caller's context, including any subprocesses they spawn: a hung
+// inspection tool must never stall completion acknowledgement or shutdown.
 type TurnDurabilityProbe interface {
-	Checkpoint(sessionID string) (Checkpoint, error)
+	Checkpoint(ctx context.Context, sessionID string) (Checkpoint, error)
 	WaitForCommittedTurn(ctx context.Context, sessionID string, after Checkpoint) error
 }
 

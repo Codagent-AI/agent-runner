@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -20,7 +21,7 @@ import (
 
 // CursorAdapter constructs invocation args for the Cursor agent CLI.
 type CursorAdapter struct {
-	runStoreQuery           func(string) ([]byte, error)
+	runStoreQuery           func(context.Context, string) ([]byte, error)
 	prepareCompletionPlugin func(CompletionCommand) (string, error) // test seam; nil uses prepareCursorCompletionPlugin
 }
 

@@ -125,21 +125,27 @@ func (r *DirectRunner) Run(ctx context.Context) (result DirectResult, err error)
 }
 
 func captureDurabilityCheckpoint(ctx context.Context, probe cli.TurnDurabilityProbe, sessionID string) (cli.Checkpoint, error) {
-	deadline := time.NewTimer(freshSessionResolveTimeout)
-	defer deadline.Stop()
+	// The capture window is plumbed into the probe context so an inspection
+	// subprocess that hangs cannot stall completion acknowledgement beyond it.
+	captureCtx, cancel := context.WithTimeout(ctx, freshSessionResolveTimeout)
+	defer cancel()
 	ticker := time.NewTicker(freshSessionResolveInterval)
 	defer ticker.Stop()
 	var lastErr error
 	for {
-		checkpoint, err := probe.Checkpoint(sessionID)
+		checkpoint, err := probe.Checkpoint(captureCtx, sessionID)
 		if err == nil {
 			return checkpoint, nil
 		}
-		lastErr = err
+		// Keep the classification from the last completed inspection; an error
+		// caused only by the expiring capture window must not mask it.
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) || lastErr == nil {
+			lastErr = err
+		}
 		select {
 		case <-ctx.Done():
 			return cli.Checkpoint{}, ctx.Err()
-		case <-deadline.C:
+		case <-captureCtx.Done():
 			if errors.Is(lastErr, os.ErrNotExist) {
 				// The native store does not exist yet, so nothing was
 				// persisted at accept time: the semantically correct baseline

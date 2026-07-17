@@ -157,7 +157,7 @@ func waitForDurableTurn(
 	for {
 		current := baseline
 		if current.Artifact == "" {
-			captured, err := probe.Checkpoint(sessionID)
+			captured, err := probe.Checkpoint(ctx, sessionID)
 			if err != nil {
 				if !errors.Is(err, fs.ErrNotExist) {
 					return err

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,7 +17,7 @@ import (
 
 // OpenCodeAdapter constructs invocation args for the OpenCode CLI.
 type OpenCodeAdapter struct {
-	runDBQuery func(string) ([]byte, error)
+	runDBQuery func(context.Context, string) ([]byte, error)
 }
 
 // BuildArgs constructs OpenCode CLI args.

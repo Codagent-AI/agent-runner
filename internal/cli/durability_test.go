@@ -31,7 +31,7 @@ func TestClaudeDurabilityProbeFindsCompletedAssistantAfterCheckpoint(t *testing.
 	path := filepath.Join(home, ".claude", "projects", "-repo", "claude-session.jsonl")
 	copyFixture(t, "testdata/durability/claude/session.jsonl", path)
 	probe := &ClaudeAdapter{}
-	checkpoint, err := probe.Checkpoint("claude-session")
+	checkpoint, err := probe.Checkpoint(context.Background(), "claude-session")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestCodexDurabilityProbeRequiresTaskCompleteAfterCheckpoint(t *testing.T) {
 	path := filepath.Join(home, ".codex", "sessions", "2026", "07", "16", "rollout-codex-session.jsonl")
 	copyFixture(t, "testdata/durability/codex/session.jsonl", path)
 	probe := &CodexAdapter{}
-	checkpoint, err := probe.Checkpoint("codex-session")
+	checkpoint, err := probe.Checkpoint(context.Background(), "codex-session")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestCopilotDurabilityProbeRequiresTurnEndAfterCheckpoint(t *testing.T) {
 	path := filepath.Join(home, ".copilot", "session-state", "copilot-session", "events.jsonl")
 	copyFixture(t, "testdata/durability/copilot/events.jsonl", path)
 	probe := &CopilotAdapter{}
-	checkpoint, err := probe.Checkpoint("copilot-session")
+	checkpoint, err := probe.Checkpoint(context.Background(), "copilot-session")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestCursorReceiptDurabilityProbeFindsReceiptToolResultAfterCheckpoint(t *te
 	path := filepath.Join(home, ".cursor", "chats", "workspace", "cursor-session", "store.db")
 	copyFixture(t, "testdata/durability/cursor/store.db", path)
 	probe := &CursorAdapter{}
-	checkpoint, err := probe.Checkpoint("cursor-session")
+	checkpoint, err := probe.Checkpoint(context.Background(), "cursor-session")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestCursorReceiptDurabilityProbeRejectsAssistantTextAndUnrelatedToolResults
 	path := filepath.Join(home, ".cursor", "chats", "workspace", "cursor-session", "store.db")
 	copyFixture(t, "testdata/durability/cursor/store.db", path)
 	probe := &CursorAdapter{}
-	checkpoint, err := probe.Checkpoint("cursor-session")
+	checkpoint, err := probe.Checkpoint(context.Background(), "cursor-session")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestOpenCodeDurabilityProbeRequiresCompletedFinalAssistantMessage(t *testin
 	toolCall := readFixture(t, "testdata/durability/opencode/tool-call.json")
 	committed := readFixture(t, "testdata/durability/opencode/committed.json")
 	var calls atomic.Int32
-	probe := &OpenCodeAdapter{runDBQuery: func(string) ([]byte, error) {
+	probe := &OpenCodeAdapter{runDBQuery: func(context.Context, string) ([]byte, error) {
 		switch calls.Add(1) {
 		case 1:
 			return baseline, nil
@@ -160,7 +160,7 @@ func TestOpenCodeDurabilityProbeRequiresCompletedFinalAssistantMessage(t *testin
 			return committed, nil
 		}
 	}}
-	checkpoint, err := probe.Checkpoint("opencode-session")
+	checkpoint, err := probe.Checkpoint(context.Background(), "opencode-session")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,11 +170,11 @@ func TestOpenCodeDurabilityProbeRequiresCompletedFinalAssistantMessage(t *testin
 func TestOpenCodeDurabilityProbeBacksOffDatabaseQueries(t *testing.T) {
 	baseline := readFixture(t, "testdata/durability/opencode/baseline.json")
 	var calls atomic.Int32
-	probe := &OpenCodeAdapter{runDBQuery: func(string) ([]byte, error) {
+	probe := &OpenCodeAdapter{runDBQuery: func(context.Context, string) ([]byte, error) {
 		calls.Add(1)
 		return baseline, nil
 	}}
-	checkpoint, err := probe.Checkpoint("opencode-session")
+	checkpoint, err := probe.Checkpoint(context.Background(), "opencode-session")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestOpenCodeDurabilityProbeRetriesTransientQueryFailure(t *testing.T) {
 	baseline := readFixture(t, "testdata/durability/opencode/baseline.json")
 	committed := readFixture(t, "testdata/durability/opencode/committed.json")
 	var calls atomic.Int32
-	probe := &OpenCodeAdapter{runDBQuery: func(string) ([]byte, error) {
+	probe := &OpenCodeAdapter{runDBQuery: func(context.Context, string) ([]byte, error) {
 		switch calls.Add(1) {
 		case 1:
 			return baseline, nil
@@ -202,7 +202,7 @@ func TestOpenCodeDurabilityProbeRetriesTransientQueryFailure(t *testing.T) {
 			return committed, nil
 		}
 	}}
-	checkpoint, err := probe.Checkpoint("opencode-session")
+	checkpoint, err := probe.Checkpoint(context.Background(), "opencode-session")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestCursorReceiptDurabilityProbeQueriesToolResultRows(t *testing.T) {
 	}
 	var calls atomic.Int32
 	var query string
-	probe := &CursorAdapter{runStoreQuery: func(gotQuery string) ([]byte, error) {
+	probe := &CursorAdapter{runStoreQuery: func(_ context.Context, gotQuery string) ([]byte, error) {
 		query = gotQuery
 		index := int(calls.Add(1)) - 1
 		if index >= len(responses) {
@@ -230,7 +230,7 @@ func TestCursorReceiptDurabilityProbeQueriesToolResultRows(t *testing.T) {
 		}
 		return responses[index], nil
 	}}
-	checkpoint, err := probe.Checkpoint("cursor-session")
+	checkpoint, err := probe.Checkpoint(context.Background(), "cursor-session")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,11 +255,11 @@ func TestCursorDurabilityCheckpointAcceptsEmptySQLiteJSONOutput(t *testing.T) {
 	t.Setenv("HOME", home)
 	path := filepath.Join(home, ".cursor", "chats", "workspace", "cursor-session", "store.db")
 	copyFixture(t, "testdata/durability/cursor/store.db", path)
-	probe := &CursorAdapter{runStoreQuery: func(string) ([]byte, error) {
+	probe := &CursorAdapter{runStoreQuery: func(context.Context, string) ([]byte, error) {
 		return nil, nil
 	}}
 
-	checkpoint, err := probe.Checkpoint("cursor-session")
+	checkpoint, err := probe.Checkpoint(context.Background(), "cursor-session")
 	if err != nil {
 		t.Fatalf("Checkpoint returned error for empty sqlite3 JSON output: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestCursorDurabilityProbeFailsFastWhenSQLiteBinaryMissing(t *testing.T) {
 	t.Setenv("HOME", home)
 	path := filepath.Join(home, ".cursor", "chats", "workspace", "cursor-session", "store.db")
 	copyFixture(t, "testdata/durability/cursor/store.db", path)
-	probe := &CursorAdapter{runStoreQuery: func(string) ([]byte, error) {
+	probe := &CursorAdapter{runStoreQuery: func(context.Context, string) ([]byte, error) {
 		return nil, &osexec.Error{Name: "sqlite3", Err: osexec.ErrNotFound}
 	}}
 
@@ -292,13 +292,83 @@ func TestCursorDurabilityProbeFailsFastWhenSQLiteBinaryMissing(t *testing.T) {
 	}
 }
 
+// stubSlowBinary installs a fake binary that sleeps far longer than any test
+// bound, replacing PATH so probe subprocesses resolve to it. The stub keeps
+// `sleep` as a grandchild of the shell on purpose: a killed process whose
+// child still holds the output pipe must not stall the probe either.
+func stubSlowBinary(t *testing.T, name string) {
+	t.Helper()
+	dir := t.TempDir()
+	script := "#!/bin/sh\nsleep 10\n"
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil { // #nosec G306 -- test stub must be executable
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+}
+
+func TestCursorProbeSubprocessesHonorContext(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".cursor", "chats", "workspace", "cursor-session", "store.db")
+	copyFixture(t, "testdata/durability/cursor/store.db", path)
+	stubSlowBinary(t, "sqlite3")
+	probe := &CursorAdapter{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := probe.Checkpoint(ctx, "cursor-session"); err == nil {
+		t.Fatal("Checkpoint unexpectedly succeeded with a hung sqlite3")
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("Checkpoint with a hung sqlite3 took %v, want prompt cancellation", elapsed)
+	}
+
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancelWait()
+	start = time.Now()
+	err := probe.WaitForCommittedTurnWithReceipt(waitCtx, "cursor-session", Checkpoint{Artifact: path}, cursorFixtureReceipt)
+	if err == nil {
+		t.Fatal("WaitForCommittedTurnWithReceipt unexpectedly succeeded with a hung sqlite3")
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("WaitForCommittedTurnWithReceipt with a hung sqlite3 took %v, want prompt cancellation", elapsed)
+	}
+}
+
+func TestOpenCodeProbeSubprocessesHonorContext(t *testing.T) {
+	stubSlowBinary(t, "opencode")
+	probe := &OpenCodeAdapter{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := probe.Checkpoint(ctx, "opencode-session"); err == nil {
+		t.Fatal("Checkpoint unexpectedly succeeded with a hung opencode db")
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("Checkpoint with a hung opencode db took %v, want prompt cancellation", elapsed)
+	}
+
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancelWait()
+	checkpoint := Checkpoint{Artifact: "opencode db message table for session opencode-session"}
+	start = time.Now()
+	if err := probe.WaitForCommittedTurn(waitCtx, "opencode-session", checkpoint); err == nil {
+		t.Fatal("WaitForCommittedTurn unexpectedly succeeded with a hung opencode db")
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("WaitForCommittedTurn with a hung opencode db took %v, want prompt cancellation", elapsed)
+	}
+}
+
 func TestDurabilityProbeHonorsContextWhenNoCommittedTurnAppears(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	path := filepath.Join(home, ".copilot", "session-state", "copilot-session", "events.jsonl")
 	copyFixture(t, "testdata/durability/copilot/events.jsonl", path)
 	probe := &CopilotAdapter{}
-	checkpoint, err := probe.Checkpoint("copilot-session")
+	checkpoint, err := probe.Checkpoint(context.Background(), "copilot-session")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +389,7 @@ func TestCheckpointReportsAbsentSessionStoreAsNotExist(t *testing.T) {
 		"cursor":  &CursorAdapter{},
 	}
 	for name, probe := range probes {
-		if _, err := probe.Checkpoint("absent-session"); !errors.Is(err, fs.ErrNotExist) {
+		if _, err := probe.Checkpoint(context.Background(), "absent-session"); !errors.Is(err, fs.ErrNotExist) {
 			t.Errorf("%s Checkpoint error = %v, want fs.ErrNotExist classification for an absent store", name, err)
 		}
 	}
@@ -347,7 +417,7 @@ func TestClaudeDurabilityProbeAcceptsRecordLargerThanFourMiB(t *testing.T) {
 	path := filepath.Join(home, ".claude", "projects", "-repo", "claude-session.jsonl")
 	copyFixture(t, "testdata/durability/claude/session.jsonl", path)
 	probe := &ClaudeAdapter{}
-	checkpoint, err := probe.Checkpoint("claude-session")
+	checkpoint, err := probe.Checkpoint(context.Background(), "claude-session")
 	if err != nil {
 		t.Fatal(err)
 	}

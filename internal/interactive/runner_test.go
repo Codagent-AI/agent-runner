@@ -162,6 +162,20 @@ func TestDirectRunnerResolvesFreshSessionBeforeDurabilityCheckpoint(t *testing.T
 	}
 }
 
+func TestCaptureDurabilityCheckpointBoundsProbeContext(t *testing.T) {
+	t.Parallel()
+	probe := &contextBlockingCheckpointProbe{}
+
+	start := time.Now()
+	_, err := captureDurabilityCheckpoint(context.Background(), probe, "session-1")
+	if err == nil {
+		t.Fatal("captureDurabilityCheckpoint succeeded despite a stalled probe subprocess")
+	}
+	if elapsed := time.Since(start); elapsed > freshSessionResolveTimeout+time.Second {
+		t.Fatalf("captureDurabilityCheckpoint took %v; the capture window was not plumbed into the probe context", elapsed)
+	}
+}
+
 func TestCaptureDurabilityCheckpointTreatsAbsentStoreAsEmptyBaseline(t *testing.T) {
 	t.Parallel()
 	probe := &fakeDurabilityProbe{checkpointErr: fmt.Errorf("locate session %q: %w", "fresh", os.ErrNotExist)}
@@ -282,11 +296,26 @@ func TestDirectRunnerHelperProcess(t *testing.T) {
 	select {}
 }
 
+// contextBlockingCheckpointProbe models an inspection subprocess that hangs
+// until its context is cancelled — only a plumbed-through capture window can
+// unblock it.
+type contextBlockingCheckpointProbe struct{}
+
+func (p *contextBlockingCheckpointProbe) Checkpoint(ctx context.Context, _ string) (cli.Checkpoint, error) {
+	<-ctx.Done()
+	return cli.Checkpoint{}, ctx.Err()
+}
+
+func (p *contextBlockingCheckpointProbe) WaitForCommittedTurn(ctx context.Context, _ string, _ cli.Checkpoint) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 type receiptCapturingProbe struct {
 	receipts chan string
 }
 
-func (p *receiptCapturingProbe) Checkpoint(string) (cli.Checkpoint, error) {
+func (p *receiptCapturingProbe) Checkpoint(context.Context, string) (cli.Checkpoint, error) {
 	return cli.Checkpoint{Artifact: "fixture"}, nil
 }
 
@@ -301,7 +330,7 @@ func (p *receiptCapturingProbe) WaitForCommittedTurnWithReceipt(_ context.Contex
 
 type immediateDurabilityProbe struct{}
 
-func (immediateDurabilityProbe) Checkpoint(string) (cli.Checkpoint, error) {
+func (immediateDurabilityProbe) Checkpoint(context.Context, string) (cli.Checkpoint, error) {
 	return cli.Checkpoint{Artifact: "fixture"}, nil
 }
 
@@ -314,7 +343,7 @@ type lateAppearingStoreProbe struct {
 	appearAt time.Time
 }
 
-func (p *lateAppearingStoreProbe) Checkpoint(string) (cli.Checkpoint, error) {
+func (p *lateAppearingStoreProbe) Checkpoint(context.Context, string) (cli.Checkpoint, error) {
 	if time.Now().Before(p.appearAt) {
 		return cli.Checkpoint{}, fmt.Errorf("locate session: native session store not found: %w", os.ErrNotExist)
 	}
@@ -335,7 +364,7 @@ type sessionRecordingDurabilityProbe struct {
 	checkpointAttempts int
 }
 
-func (p *sessionRecordingDurabilityProbe) Checkpoint(sessionID string) (cli.Checkpoint, error) {
+func (p *sessionRecordingDurabilityProbe) Checkpoint(_ context.Context, sessionID string) (cli.Checkpoint, error) {
 	p.checkpointAttempts++
 	if p.checkpointAttempts <= p.checkpointFailures {
 		return cli.Checkpoint{}, errors.New("native store temporarily unavailable")

@@ -19,7 +19,7 @@ import (
 
 const durabilityPollInterval = 20 * time.Millisecond
 
-func (a *ClaudeAdapter) Checkpoint(sessionID string) (Checkpoint, error) {
+func (a *ClaudeAdapter) Checkpoint(_ context.Context, sessionID string) (Checkpoint, error) {
 	path, err := claudeSessionPath(sessionID)
 	if err != nil {
 		return Checkpoint{}, err
@@ -49,7 +49,7 @@ func (a *ClaudeAdapter) WaitForCommittedTurn(ctx context.Context, sessionID stri
 	})
 }
 
-func (a *CodexAdapter) Checkpoint(sessionID string) (Checkpoint, error) {
+func (a *CodexAdapter) Checkpoint(_ context.Context, sessionID string) (Checkpoint, error) {
 	path, err := codexSessionPath(sessionID)
 	if err != nil {
 		return Checkpoint{}, err
@@ -73,7 +73,7 @@ func (a *CodexAdapter) WaitForCommittedTurn(ctx context.Context, sessionID strin
 	})
 }
 
-func (a *CopilotAdapter) Checkpoint(sessionID string) (Checkpoint, error) {
+func (a *CopilotAdapter) Checkpoint(_ context.Context, sessionID string) (Checkpoint, error) {
 	path, err := copilotEventsPath(sessionID)
 	if err != nil {
 		return Checkpoint{}, err
@@ -97,12 +97,12 @@ func (a *CopilotAdapter) WaitForCommittedTurn(ctx context.Context, sessionID str
 	})
 }
 
-func (a *CursorAdapter) Checkpoint(sessionID string) (Checkpoint, error) {
+func (a *CursorAdapter) Checkpoint(ctx context.Context, sessionID string) (Checkpoint, error) {
 	path, err := cursorStorePath(sessionID)
 	if err != nil {
 		return Checkpoint{}, err
 	}
-	rows, err := a.cursorAssistantRows(path)
+	rows, err := a.cursorAssistantRows(ctx, path)
 	if err != nil {
 		return Checkpoint{}, err
 	}
@@ -139,7 +139,7 @@ func (a *CursorAdapter) WaitForCommittedTurnWithReceipt(ctx context.Context, ses
 	}
 	baseline := stringSet(after.Marker)
 	return pollForCommittedTurnWithBackoff(ctx, path, 250*time.Millisecond, 2*time.Second, func() (bool, error) {
-		rows, err := a.cursorToolResultRows(path)
+		rows, err := a.cursorToolResultRows(ctx, path)
 		if err != nil {
 			return false, err
 		}
@@ -196,21 +196,21 @@ WHERE json_valid(CAST(data AS TEXT))
   )
 ORDER BY id`
 
-func (a *CursorAdapter) cursorAssistantRows(path string) ([]cursorAssistantRow, error) {
-	return a.queryCursorRows(path, cursorCheckpointQuery)
+func (a *CursorAdapter) cursorAssistantRows(ctx context.Context, path string) ([]cursorAssistantRow, error) {
+	return a.queryCursorRows(ctx, path, cursorCheckpointQuery)
 }
 
-func (a *CursorAdapter) cursorToolResultRows(path string) ([]cursorAssistantRow, error) {
-	return a.queryCursorRows(path, cursorToolResultQuery)
+func (a *CursorAdapter) cursorToolResultRows(ctx context.Context, path string) ([]cursorAssistantRow, error) {
+	return a.queryCursorRows(ctx, path, cursorToolResultQuery)
 }
 
-func (a *CursorAdapter) queryCursorRows(path, query string) ([]cursorAssistantRow, error) {
+func (a *CursorAdapter) queryCursorRows(ctx context.Context, path, query string) ([]cursorAssistantRow, error) {
 	var output []byte
 	var err error
 	if a.runStoreQuery != nil {
-		output, err = a.runStoreQuery(query)
+		output, err = a.runStoreQuery(ctx, query)
 	} else {
-		output, err = exec.Command("sqlite3", "-readonly", "-json", path, query).Output() // #nosec G204 -- fixed executable and query; adapter-resolved path is one argv value
+		output, err = boundedCommandOutput(ctx, "sqlite3", "-readonly", "-json", path, query) // #nosec G204 -- fixed executable and query; adapter-resolved path is one argv value
 	}
 	if err != nil {
 		return nil, fmt.Errorf("query Cursor chat store %s: %w", path, err)
@@ -240,11 +240,11 @@ func cursorRowFingerprint(row cursorAssistantRow) string {
 	return fmt.Sprintf("%x", digest)
 }
 
-func (a *OpenCodeAdapter) Checkpoint(sessionID string) (Checkpoint, error) {
+func (a *OpenCodeAdapter) Checkpoint(ctx context.Context, sessionID string) (Checkpoint, error) {
 	if err := validateSessionID(sessionID); err != nil {
 		return Checkpoint{}, err
 	}
-	record, err := a.latestCompletedOpenCodeAssistant(sessionID)
+	record, err := a.latestCompletedOpenCodeAssistant(ctx, sessionID)
 	if err != nil {
 		return Checkpoint{}, err
 	}
@@ -260,7 +260,7 @@ func (a *OpenCodeAdapter) WaitForCommittedTurn(ctx context.Context, sessionID st
 		return err
 	}
 	return pollForCommittedTurnWithBackoff(ctx, after.Artifact, 250*time.Millisecond, 2*time.Second, func() (bool, error) {
-		record, err := a.latestCompletedOpenCodeAssistant(sessionID)
+		record, err := a.latestCompletedOpenCodeAssistant(ctx, sessionID)
 		if err != nil {
 			return false, err
 		}
@@ -281,13 +281,13 @@ func (r openCodeCompletedMessage) marker() string {
 	return r.ID + ":" + strconv.FormatInt(r.Completed, 10)
 }
 
-func (a *OpenCodeAdapter) latestCompletedOpenCodeAssistant(sessionID string) (openCodeCompletedMessage, error) {
+func (a *OpenCodeAdapter) latestCompletedOpenCodeAssistant(ctx context.Context, sessionID string) (openCodeCompletedMessage, error) {
 	escapedID := strings.ReplaceAll(sessionID, "'", "''")
 	query := "SELECT id, json_extract(data, '$.time.completed') AS completed, " +
 		"json_extract(data, '$.finish') AS finish FROM message " +
 		"WHERE session_id = '" + escapedID + "' AND json_extract(data, '$.role') = 'assistant' " +
 		"AND json_extract(data, '$.time.completed') IS NOT NULL ORDER BY completed DESC LIMIT 1"
-	output, err := a.queryOpenCodeDB(query)
+	output, err := a.queryOpenCodeDB(ctx, query)
 	if err != nil {
 		return openCodeCompletedMessage{}, fmt.Errorf("query OpenCode message store: %w", err)
 	}
@@ -301,11 +301,26 @@ func (a *OpenCodeAdapter) latestCompletedOpenCodeAssistant(sessionID string) (op
 	return records[0], nil
 }
 
-func (a *OpenCodeAdapter) queryOpenCodeDB(query string) ([]byte, error) {
+func (a *OpenCodeAdapter) queryOpenCodeDB(ctx context.Context, query string) ([]byte, error) {
 	if a.runDBQuery != nil {
-		return a.runDBQuery(query)
+		return a.runDBQuery(ctx, query)
 	}
-	return exec.Command("opencode", "db", query, "--format", "json").Output() // #nosec G204 -- fixed executable; query is one argv value
+	return boundedCommandOutput(ctx, "opencode", "db", query, "--format", "json") // #nosec G204 -- fixed executable; query is one argv value
+}
+
+// probeSubprocessWaitDelay bounds how long a cancelled probe subprocess may
+// keep its output pipe open (e.g. through an orphaned grandchild) before the
+// wait is abandoned.
+const probeSubprocessWaitDelay = time.Second
+
+// boundedCommandOutput runs an inspection subprocess under the caller's
+// context so a hung tool can never stall completion acknowledgement or
+// shutdown: cancellation kills the process, and WaitDelay bounds the wait for
+// stragglers that inherited its pipes.
+func boundedCommandOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, name, args...) // #nosec G204 -- callers pass a fixed executable; arguments are single argv values
+	command.WaitDelay = probeSubprocessWaitDelay
+	return command.Output()
 }
 
 func claudeSessionPath(sessionID string) (string, error) {
