@@ -169,11 +169,25 @@ WATCHDOG MISMATCH PASS identity_match=false signal_sent=false target_alive=true
   signal exists for Cursor; durability is confirmed only by the store
   fallback below.
 - Store fallback (the only durability evidence for Cursor): Cursor's
-  `store.db` contains complete assistant messages as
-  JSON blobs in the `blobs` table. The probe queries text-bearing assistant
-  rows, checkpoints their content-addressed row IDs, and requires a new row
-  afterward. Queries use exponential backoff; database mtime and quiet periods
-  are ignored.
+  `store.db` records assistant messages and tool exchanges as JSON blobs in
+  the `blobs` table, but it has no terminal committed-turn marker — new
+  assistant text and arbitrary tool results are persisted while a turn is
+  still in progress, so neither is committed-turn evidence. The shipped probe
+  is receipt-based: after the control server accepts a completion, the client
+  prints `agent-runner completion receipt <request_id>` to stdout, and
+  inspection of a live store confirmed Cursor persists the shell tool's
+  captured stdout in the corresponding `role: "tool"` / `tool-result` blob
+  (both the `result` field and `experimental_content` carry the full command
+  output). The probe checkpoints the content-addressed row IDs at acceptance
+  and succeeds only when a post-checkpoint tool-result row contains the exact
+  receipt. Because the receipt is only printed after acceptance, its presence
+  proves the store committed the completion exchange and everything recorded
+  before it — causal, timing-free evidence. The receipt-free
+  `WaitForCommittedTurn` fails immediately and honestly for Cursor.
+  Residual limitation: assistant text emitted after the completion command in
+  the same turn could still be clipped; the injected instructions tell the
+  agent to run the command as the final action of the response. Queries use
+  exponential backoff; database mtime and quiet periods are ignored.
 
 ### OpenCode
 

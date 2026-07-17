@@ -229,8 +229,8 @@ func TestControlServerAcceptsCurrentCredentialAndAcknowledgesIdempotently(t *tes
 		RequestID: "request-1",
 	}
 
-	if response := exchange(t, server.SocketPath(), &request); !response.OK {
-		t.Fatalf("completion response = %#v", response)
+	if response := exchange(t, server.SocketPath(), &request); !response.OK || response.Receipt != "request-1" {
+		t.Fatalf("completion response = %#v, want ok with receipt request-1", response)
 	}
 	select {
 	case got := <-server.Completions():
@@ -241,12 +241,15 @@ func TestControlServerAcceptsCurrentCredentialAndAcknowledgesIdempotently(t *tes
 		t.Fatal("completion was not delivered")
 	}
 
-	if response := exchange(t, server.SocketPath(), &request); !response.OK {
-		t.Fatalf("retry response = %#v", response)
+	if response := exchange(t, server.SocketPath(), &request); !response.OK || response.Receipt != "request-1" {
+		t.Fatalf("retry response = %#v, want idempotent receipt request-1", response)
 	}
+	// A duplicate completion from a fresh client invocation carries a new
+	// request ID; the acknowledgement must repeat the originally accepted
+	// receipt so every printed receipt line matches the durability wait.
 	request.RequestID = "request-2"
-	if response := exchange(t, server.SocketPath(), &request); !response.OK {
-		t.Fatalf("duplicate response = %#v", response)
+	if response := exchange(t, server.SocketPath(), &request); !response.OK || response.Receipt != "request-1" {
+		t.Fatalf("duplicate response = %#v, want accepted receipt request-1", response)
 	}
 	select {
 	case duplicate := <-server.Completions():
@@ -632,11 +635,15 @@ func TestSendControlEventFromEnvironment(t *testing.T) {
 	environment := attempt.EnvironmentMap()
 	getenv := func(key string) string { return environment[key] }
 
-	if err := SendControlEventFromEnvironment(context.Background(), MessageCompleteStep, getenv); err != nil {
+	receipt, err := SendControlEventFromEnvironmentWithReceipt(context.Background(), MessageCompleteStep, getenv)
+	if err != nil {
 		t.Fatal(err)
 	}
 	select {
-	case <-server.Completions():
+	case completion := <-server.Completions():
+		if receipt == "" || receipt != completion.RequestID {
+			t.Fatalf("client receipt = %q, want accepted request ID %q", receipt, completion.RequestID)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("client did not send completion")
 	}

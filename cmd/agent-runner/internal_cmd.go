@@ -167,7 +167,7 @@ func handleTurnCommitted(args []string, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "agent-runner: internal turn-committed accepts only the optional hook payload")
 		return 1
 	}
-	if err := sendControlMessage(interactive.MessageTurnCommitted); err != nil {
+	if _, err := sendControlMessage(interactive.MessageTurnCommitted); err != nil {
 		_, _ = fmt.Fprintf(stderr, "agent-runner: %v\n", err)
 		return 1
 	}

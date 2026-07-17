@@ -196,6 +196,19 @@ type TurnDurabilityProbe interface {
 	WaitForCommittedTurn(ctx context.Context, sessionID string, after Checkpoint) error
 }
 
+// ReceiptTurnDurabilityProbe is an optional extension for adapters whose
+// native store records no terminal committed-turn marker. The receipt is the
+// acknowledged completion request's ID, printed to stdout by the completion
+// client after the control server accepted the completion. Finding the exact
+// receipt persisted after the checkpoint proves the store committed the
+// completion exchange (and everything before it) — causal evidence that never
+// converts elapsed time into success. The durability orchestrator prefers
+// this method whenever the probe implements it and a receipt is available.
+type ReceiptTurnDurabilityProbe interface {
+	TurnDurabilityProbe
+	WaitForCommittedTurnWithReceipt(ctx context.Context, sessionID string, after Checkpoint, receipt string) error
+}
+
 // ProbeStrength describes how strongly ProbeModel verified a model/effort
 // pair.
 type ProbeStrength int

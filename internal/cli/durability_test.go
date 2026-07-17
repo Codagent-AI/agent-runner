@@ -70,7 +70,18 @@ func TestCopilotDurabilityProbeRequiresTurnEndAfterCheckpoint(t *testing.T) {
 	waitForProbe(t, probe, "copilot-session", checkpoint)
 }
 
-func TestCursorDurabilityProbeFindsNewStoredAssistantMessage(t *testing.T) {
+// cursorFixtureReceipt is the acceptance receipt embedded in the committed
+// Cursor fixture's persisted completion-client tool result.
+const cursorFixtureReceipt = "3f6bb84a-97c5-4a02-b7f1-8a2f4f4e9d1c"
+
+func TestCursorAdapterImplementsReceiptTurnDurabilityProbe(t *testing.T) {
+	var probe TurnDurabilityProbe = &CursorAdapter{}
+	if _, ok := probe.(ReceiptTurnDurabilityProbe); !ok {
+		t.Fatal("CursorAdapter does not implement ReceiptTurnDurabilityProbe")
+	}
+}
+
+func TestCursorReceiptDurabilityProbeFindsReceiptToolResultAfterCheckpoint(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	path := filepath.Join(home, ".cursor", "chats", "workspace", "cursor-session", "store.db")
@@ -82,7 +93,56 @@ func TestCursorDurabilityProbeFindsNewStoredAssistantMessage(t *testing.T) {
 	}
 	replaceFixture(t, path, "testdata/durability/cursor/store-intermediate.db")
 	replaceFixtureAfter(t, path, "testdata/durability/cursor/store-committed.db")
-	waitForProbe(t, probe, "cursor-session", checkpoint)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := probe.WaitForCommittedTurnWithReceipt(ctx, "cursor-session", checkpoint, cursorFixtureReceipt); err != nil {
+		t.Fatalf("WaitForCommittedTurnWithReceipt: %v", err)
+	}
+}
+
+func TestCursorReceiptDurabilityProbeRejectsAssistantTextAndUnrelatedToolResults(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".cursor", "chats", "workspace", "cursor-session", "store.db")
+	copyFixture(t, "testdata/durability/cursor/store.db", path)
+	probe := &CursorAdapter{}
+	checkpoint, err := probe.Checkpoint("cursor-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The intermediate store mutates the existing assistant row's text, adds a
+	// new assistant text row, a tool call, and an unrelated tool result. None
+	// of these is committed-turn evidence: only the receipt-bearing tool
+	// result proves the completion exchange was persisted.
+	replaceFixture(t, path, "testdata/durability/cursor/store-intermediate.db")
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	err = probe.WaitForCommittedTurnWithReceipt(ctx, "cursor-session", checkpoint, cursorFixtureReceipt)
+	if err == nil {
+		t.Fatal("intermediate assistant and tool rows satisfied the receipt probe")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitForCommittedTurnWithReceipt error = %v, want context deadline", err)
+	}
+}
+
+func TestCursorWaitForCommittedTurnWithoutReceiptFailsHonestly(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".cursor", "chats", "workspace", "cursor-session", "store.db")
+	copyFixture(t, "testdata/durability/cursor/store-committed.db", path)
+	probe := &CursorAdapter{}
+
+	err := probe.WaitForCommittedTurn(context.Background(), "cursor-session", Checkpoint{Artifact: path})
+	if err == nil || !strings.Contains(err.Error(), "receipt") {
+		t.Fatalf("WaitForCommittedTurn error = %v, want honest receipt-required failure", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := probe.WaitForCommittedTurnWithReceipt(ctx, "cursor-session", Checkpoint{Artifact: path}, ""); err == nil {
+		t.Fatal("empty receipt unexpectedly accepted")
+	}
 }
 
 func TestOpenCodeDurabilityProbeRequiresCompletedFinalAssistantMessage(t *testing.T) {
@@ -150,7 +210,7 @@ func TestOpenCodeDurabilityProbeRetriesTransientQueryFailure(t *testing.T) {
 	waitForProbe(t, probe, "opencode-session", checkpoint)
 }
 
-func TestCursorDurabilityProbeQueriesSemanticAssistantRows(t *testing.T) {
+func TestCursorReceiptDurabilityProbeQueriesToolResultRows(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	path := filepath.Join(home, ".cursor", "chats", "workspace", "cursor-session", "store.db")
@@ -174,39 +234,19 @@ func TestCursorDurabilityProbeQueriesSemanticAssistantRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitForProbe(t, probe, "cursor-session", checkpoint)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := probe.WaitForCommittedTurnWithReceipt(ctx, "cursor-session", checkpoint, cursorFixtureReceipt); err != nil {
+		t.Fatalf("WaitForCommittedTurnWithReceipt: %v", err)
+	}
 	if got := calls.Load(); got != 3 {
 		t.Fatalf("Cursor store query calls = %d, want baseline, intermediate, committed", got)
 	}
-	if !strings.Contains(query, "'tool-result'") {
-		t.Fatalf("Cursor durability query does not inspect persisted shell results: %s", query)
+	if !strings.Contains(query, "'tool-result'") || !strings.Contains(query, "'tool'") {
+		t.Fatalf("Cursor receipt query does not restrict evidence to persisted tool results: %s", query)
 	}
-}
-
-func TestCursorDurabilityProbeAcceptsCommittedUpdateToExistingAssistantRow(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	path := filepath.Join(home, ".cursor", "chats", "workspace", "cursor-session", "store.db")
-	copyFixture(t, "testdata/durability/cursor/store.db", path)
-	responses := [][]byte{
-		[]byte(`[{"id":"assistant-current","content":"before completion"}]`),
-		[]byte(`[{"id":"assistant-current","content":"committed after completion"}]`),
-	}
-	var calls atomic.Int32
-	probe := &CursorAdapter{runStoreQuery: func(string) ([]byte, error) {
-		index := int(calls.Add(1)) - 1
-		if index >= len(responses) {
-			index = len(responses) - 1
-		}
-		return responses[index], nil
-	}}
-	checkpoint, err := probe.Checkpoint("cursor-session")
-	if err != nil {
-		t.Fatal(err)
-	}
-	waitForProbe(t, probe, "cursor-session", checkpoint)
-	if got := calls.Load(); got != 2 {
-		t.Fatalf("Cursor store query calls = %d, want baseline and committed update", got)
+	if strings.Contains(query, "'assistant'") {
+		t.Fatalf("Cursor receipt query still accepts assistant rows as evidence: %s", query)
 	}
 }
 
@@ -240,15 +280,15 @@ func TestCursorDurabilityProbeFailsFastWhenSQLiteBinaryMissing(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	start := time.Now()
-	err := probe.WaitForCommittedTurn(ctx, "cursor-session", Checkpoint{Artifact: path})
+	err := probe.WaitForCommittedTurnWithReceipt(ctx, "cursor-session", Checkpoint{Artifact: path}, cursorFixtureReceipt)
 	if err == nil || !errors.Is(err, osexec.ErrNotFound) {
-		t.Fatalf("WaitForCommittedTurn error = %v, want exec.ErrNotFound", err)
+		t.Fatalf("WaitForCommittedTurnWithReceipt error = %v, want exec.ErrNotFound", err)
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("WaitForCommittedTurn polled until the durability deadline: %v", err)
+		t.Fatalf("WaitForCommittedTurnWithReceipt polled until the durability deadline: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("WaitForCommittedTurn took %v, want immediate failure for missing sqlite3 binary", elapsed)
+		t.Fatalf("WaitForCommittedTurnWithReceipt took %v, want immediate failure for missing sqlite3 binary", elapsed)
 	}
 }
 

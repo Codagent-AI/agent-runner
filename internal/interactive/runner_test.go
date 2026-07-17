@@ -79,6 +79,40 @@ func TestDirectRunnerCompletesThroughControlChannelAndRestores(t *testing.T) {
 	}
 }
 
+func TestDirectRunnerPassesAcceptedReceiptToReceiptProbe(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+	defer server.Close()
+	t.Setenv("AGENT_RUNNER_DIRECT_HELPER", "2")
+	probe := &receiptCapturingProbe{receipts: make(chan string, 1)}
+	runner := NewDirectRunner(&DirectOptions{
+		Args:              []string{os.Args[0], "-test.run=^TestDirectRunnerHelperProcess$"},
+		StepID:            "implement",
+		SessionID:         "session-1",
+		CLI:               "cursor",
+		Control:           server,
+		Probe:             probe,
+		Foreground:        false,
+		TerminationGrace:  250 * time.Millisecond,
+		DurabilityTimeout: time.Second,
+	})
+
+	result, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Completed || result.DurabilityFailed {
+		t.Fatalf("Run result = %#v, want receipt-confirmed completion", result)
+	}
+	select {
+	case receipt := <-probe.receipts:
+		if receipt == "" {
+			t.Fatal("durability wait ran without the accepted completion receipt")
+		}
+	default:
+		t.Fatal("receipt-capable probe was not used for the durability wait")
+	}
+}
+
 func TestDirectRunnerResolvesFreshSessionBeforeDurabilityCheckpoint(t *testing.T) {
 	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
 	defer server.Close()
@@ -246,6 +280,23 @@ func TestDirectRunnerHelperProcess(t *testing.T) {
 		}
 	}
 	select {}
+}
+
+type receiptCapturingProbe struct {
+	receipts chan string
+}
+
+func (p *receiptCapturingProbe) Checkpoint(string) (cli.Checkpoint, error) {
+	return cli.Checkpoint{Artifact: "fixture"}, nil
+}
+
+func (p *receiptCapturingProbe) WaitForCommittedTurn(context.Context, string, cli.Checkpoint) error {
+	return errors.New("receipt-free wait used despite an available receipt")
+}
+
+func (p *receiptCapturingProbe) WaitForCommittedTurnWithReceipt(_ context.Context, _ string, _ cli.Checkpoint, receipt string) error {
+	p.receipts <- receipt
+	return nil
 }
 
 type immediateDurabilityProbe struct{}

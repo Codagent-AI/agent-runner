@@ -248,6 +248,7 @@ func finishDirectCompletion(ctx context.Context, options *DirectOptions, attempt
 	durability := AwaitTurnDurability(ctx, &DurabilityOptions{
 		CLI: options.CLI, SessionID: options.SessionID, Probe: options.Probe,
 		Checkpoint: completion.Checkpoint, CheckpointErr: completion.CheckpointErr,
+		Receipt:       completion.RequestID,
 		CommittedTurn: committed, ChildExited: supervisor.Done(),
 		Timeout: options.DurabilityTimeout, Timer: durabilityTimer,
 		Logger: options.Logger, Prefix: options.Prefix,

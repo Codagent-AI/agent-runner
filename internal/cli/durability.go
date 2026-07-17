@@ -109,7 +109,27 @@ func (a *CursorAdapter) Checkpoint(sessionID string) (Checkpoint, error) {
 	return Checkpoint{Artifact: path, Marker: cursorRowMarker(rows)}, nil
 }
 
-func (a *CursorAdapter) WaitForCommittedTurn(ctx context.Context, sessionID string, after Checkpoint) error {
+// WaitForCommittedTurn cannot succeed for Cursor: its chat store records no
+// terminal committed-turn marker, and both assistant-text mutations and
+// arbitrary tool results are persisted while a turn is still in progress.
+// The only semantic evidence is the persisted completion-client exchange,
+// which requires the acceptance receipt — see WaitForCommittedTurnWithReceipt.
+// Failing immediately is honest: it never disguises elapsed time as
+// durability.
+func (a *CursorAdapter) WaitForCommittedTurn(context.Context, string, Checkpoint) error {
+	return errors.New("cursor durability confirmation requires the completion receipt; Cursor's chat store has no receipt-free committed-turn marker")
+}
+
+// WaitForCommittedTurnWithReceipt succeeds only when a tool-result row that
+// was not part of the acceptance-time baseline contains the exact receipt the
+// completion client printed after acknowledgement. Cursor persists the shell
+// tool's captured stdout in that row, so the receipt proves the completion
+// exchange — and every earlier record of the completing turn — reached the
+// store after the completion was accepted.
+func (a *CursorAdapter) WaitForCommittedTurnWithReceipt(ctx context.Context, sessionID string, after Checkpoint, receipt string) error {
+	if strings.TrimSpace(receipt) == "" {
+		return errors.New("cursor durability confirmation requires a non-empty completion receipt")
+	}
 	path, err := cursorStorePath(sessionID)
 	if err != nil {
 		return err
@@ -119,12 +139,15 @@ func (a *CursorAdapter) WaitForCommittedTurn(ctx context.Context, sessionID stri
 	}
 	baseline := stringSet(after.Marker)
 	return pollForCommittedTurnWithBackoff(ctx, path, 250*time.Millisecond, 2*time.Second, func() (bool, error) {
-		rows, err := a.cursorAssistantRows(path)
+		rows, err := a.cursorToolResultRows(path)
 		if err != nil {
 			return false, err
 		}
 		for _, row := range rows {
-			if _, ok := baseline[cursorRowFingerprint(row)]; !ok {
+			if _, ok := baseline[cursorRowFingerprint(row)]; ok {
+				continue
+			}
+			if strings.Contains(row.Content, receipt) {
 				return true, nil
 			}
 		}
@@ -137,13 +160,11 @@ type cursorAssistantRow struct {
 	Content string `json:"content"`
 }
 
-func (a *CursorAdapter) cursorAssistantRows(path string) ([]cursorAssistantRow, error) {
-	// Cursor persists the assistant message containing a shell call before it
-	// launches that command. The corresponding tool-result row is therefore the
-	// first semantic native-store record that can appear after completion is
-	// acknowledged. Accept either a later assistant message or that persisted
-	// tool result; both are part of the resumable completing turn.
-	const query = `SELECT id, json_extract(CAST(data AS TEXT), '$.content') AS content FROM blobs
+// cursorCheckpointQuery captures the acceptance-time baseline: every
+// text-bearing assistant row and every persisted tool result. The baseline
+// only excludes pre-existing rows from receipt matching; none of these row
+// kinds is committed-turn evidence by itself.
+const cursorCheckpointQuery = `SELECT id, json_extract(CAST(data AS TEXT), '$.content') AS content FROM blobs
 WHERE json_valid(CAST(data AS TEXT))
   AND (
     (
@@ -162,6 +183,28 @@ WHERE json_valid(CAST(data AS TEXT))
     )
   )
 ORDER BY id`
+
+// cursorToolResultQuery selects only persisted tool results. Cursor records a
+// tool-result row's content — including the completion client's stdout — so
+// the acceptance receipt appears here once the store commits the exchange.
+const cursorToolResultQuery = `SELECT id, json_extract(CAST(data AS TEXT), '$.content') AS content FROM blobs
+WHERE json_valid(CAST(data AS TEXT))
+  AND json_extract(CAST(data AS TEXT), '$.role') = 'tool'
+  AND EXISTS (
+    SELECT 1 FROM json_each(CAST(data AS TEXT), '$.content')
+    WHERE json_extract(value, '$.type') = 'tool-result'
+  )
+ORDER BY id`
+
+func (a *CursorAdapter) cursorAssistantRows(path string) ([]cursorAssistantRow, error) {
+	return a.queryCursorRows(path, cursorCheckpointQuery)
+}
+
+func (a *CursorAdapter) cursorToolResultRows(path string) ([]cursorAssistantRow, error) {
+	return a.queryCursorRows(path, cursorToolResultQuery)
+}
+
+func (a *CursorAdapter) queryCursorRows(path, query string) ([]cursorAssistantRow, error) {
 	var output []byte
 	var err error
 	if a.runStoreQuery != nil {

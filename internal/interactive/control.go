@@ -109,13 +109,19 @@ type controlRequest struct {
 }
 
 type controlResponse struct {
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
+	OK bool `json:"ok"`
+	// Receipt echoes the accepted completion request's ID so the client can
+	// print a receipt line into the CLI's tool output. Idempotent retries and
+	// duplicate completions repeat the originally accepted receipt. Older
+	// clients ignore the field.
+	Receipt string `json:"receipt,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 type attemptState struct {
 	Attempt
 	completionAccepted bool
+	acceptedRequestID  string
 	checkpoint         func() (cli.Checkpoint, error)
 }
 
@@ -355,11 +361,13 @@ func (s *ControlServer) handleConnection(connection net.Conn) {
 
 func (s *ControlServer) handleCompletion(connection net.Conn, request *controlRequest, active *attemptState, cacheKey string) {
 	if active.completionAccepted {
+		receipt := active.acceptedRequestID
 		s.mu.Unlock()
-		_ = writeControlResponse(connection, controlResponse{OK: true})
+		_ = writeControlResponse(connection, controlResponse{OK: true, Receipt: receipt})
 		return
 	}
 	active.completionAccepted = true
+	active.acceptedRequestID = request.RequestID
 	accepted := &acceptedCompletion{
 		ready:   make(chan struct{}),
 		request: CompletionRequest{AttemptID: active.ID, RunID: request.RunID, StepID: request.StepID, RequestID: request.RequestID},
@@ -389,7 +397,7 @@ func (s *ControlServer) handleCompletion(connection net.Conn, request *controlRe
 // idempotent retries.
 func (s *ControlServer) acknowledgeCompletion(connection net.Conn, accepted *acceptedCompletion) {
 	<-accepted.ready
-	if writeControlResponse(connection, controlResponse{OK: true}) != nil {
+	if writeControlResponse(connection, controlResponse{OK: true, Receipt: accepted.request.RequestID}) != nil {
 		return
 	}
 	s.mu.Lock()
@@ -544,8 +552,18 @@ func (s *ControlServer) emit(eventType audit.EventType, stepID string, data map[
 // the child environment. A lost acknowledgement is retried once with the same
 // request ID so the server can answer idempotently.
 func SendControlEventFromEnvironment(ctx context.Context, messageType string, getenv func(string) string) error {
+	_, err := SendControlEventFromEnvironmentWithReceipt(ctx, messageType, getenv)
+	return err
+}
+
+// SendControlEventFromEnvironmentWithReceipt behaves like
+// SendControlEventFromEnvironment and additionally returns the server's
+// acknowledgement receipt — the accepted completion request's ID — so the
+// caller can print it into the CLI-visible tool output. Retries reuse the same
+// request ID, so a lost acknowledgement yields the same receipt.
+func SendControlEventFromEnvironmentWithReceipt(ctx context.Context, messageType string, getenv func(string) string) (string, error) {
 	if messageType != MessageCompleteStep && messageType != MessageTurnCommitted {
-		return fmt.Errorf("unsupported control message type %q", messageType)
+		return "", fmt.Errorf("unsupported control message type %q", messageType)
 	}
 	values := map[string]string{
 		EnvControlSocket: getenv(EnvControlSocket),
@@ -555,7 +573,7 @@ func SendControlEventFromEnvironment(ctx context.Context, messageType string, ge
 	}
 	for _, key := range []string{EnvControlSocket, EnvRunID, EnvStepID, EnvControlToken} {
 		if values[key] == "" {
-			return fmt.Errorf("%s must run inside an interactive agent step session (missing %s)", controlCommandName(messageType), key)
+			return "", fmt.Errorf("%s must run inside an interactive agent step session (missing %s)", controlCommandName(messageType), key)
 		}
 	}
 	request := controlRequest{
@@ -566,21 +584,21 @@ func SendControlEventFromEnvironment(ctx context.Context, messageType string, ge
 		RequestID: uuid.NewString(),
 	}
 	for attempt := 0; attempt < 2; attempt++ {
-		retryable, err := sendControlRequest(ctx, values[EnvControlSocket], &request)
+		receipt, retryable, err := sendControlRequest(ctx, values[EnvControlSocket], &request)
 		if err == nil {
-			return nil
+			return receipt, nil
 		}
 		if !retryable || attempt == 1 {
-			return err
+			return "", err
 		}
 	}
-	return errors.New("control request failed")
+	return "", errors.New("control request failed")
 }
 
-func sendControlRequest(ctx context.Context, socketPath string, request *controlRequest) (bool, error) {
+func sendControlRequest(ctx context.Context, socketPath string, request *controlRequest) (string, bool, error) {
 	connection, err := (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
 	if err != nil {
-		return false, fmt.Errorf("connect to interactive step control socket: %w", err)
+		return "", false, fmt.Errorf("connect to interactive step control socket: %w", err)
 	}
 	defer func() { _ = connection.Close() }()
 	deadline := time.Now().Add(ControlConnectionDeadline)
@@ -590,24 +608,24 @@ func sendControlRequest(ctx context.Context, socketPath string, request *control
 	_ = connection.SetDeadline(deadline)
 	payload, err := json.Marshal(request)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	payload = append(payload, '\n')
 	written, err := connection.Write(payload)
 	if err != nil {
-		return written > 0, fmt.Errorf("send interactive step control message: %w", err)
+		return "", written > 0, fmt.Errorf("send interactive step control message: %w", err)
 	}
 	var response controlResponse
 	if err := json.NewDecoder(io.LimitReader(connection, MaxControlMessageBytes+1)).Decode(&response); err != nil {
-		return true, fmt.Errorf("read interactive step control acknowledgement: %w", err)
+		return "", true, fmt.Errorf("read interactive step control acknowledgement: %w", err)
 	}
 	if !response.OK {
 		if response.Error == "" {
 			response.Error = "control request rejected"
 		}
-		return false, errors.New(response.Error)
+		return "", false, errors.New(response.Error)
 	}
-	return false, nil
+	return response.Receipt, false, nil
 }
 
 func controlCommandName(messageType string) string {

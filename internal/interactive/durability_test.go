@@ -257,6 +257,64 @@ func TestAwaitTurnDurabilityKeepsFailingOnRealWaitErrors(t *testing.T) {
 	}
 }
 
+func TestAwaitTurnDurabilityPrefersReceiptEvidenceWhenAvailable(t *testing.T) {
+	checkpoint := cli.Checkpoint{Artifact: "/native/store.db", Marker: "baseline"}
+	probe := &fakeReceiptDurabilityProbe{}
+	probe.wait = func(context.Context, string, cli.Checkpoint) error {
+		t.Error("receipt-capable probe used the receipt-free wait despite an available receipt")
+		return errors.New("wrong wait method")
+	}
+	receipts := make(chan string, 1)
+	probe.receiptWait = func(_ context.Context, sessionID string, after cli.Checkpoint, receipt string) error {
+		if sessionID != "session-1" || after != checkpoint {
+			t.Errorf("WaitForCommittedTurnWithReceipt(%q, %#v)", sessionID, after)
+		}
+		receipts <- receipt
+		return nil
+	}
+
+	result := AwaitTurnDurability(context.Background(), &DurabilityOptions{
+		CLI:        "cursor",
+		SessionID:  "session-1",
+		Probe:      probe,
+		Checkpoint: checkpoint,
+		Receipt:    "receipt-request-1",
+		Timeout:    time.Second,
+	})
+	if result.Outcome != CompletionSuccess || result.Err != nil {
+		t.Fatalf("result = %#v", result)
+	}
+	if got := <-receipts; got != "receipt-request-1" {
+		t.Fatalf("probe receipt = %q, want receipt-request-1", got)
+	}
+}
+
+func TestAwaitTurnDurabilityFallsBackToPlainWaitWithoutReceipt(t *testing.T) {
+	checkpoint := cli.Checkpoint{Artifact: "/native/store.db"}
+	probe := &fakeReceiptDurabilityProbe{}
+	waited := make(chan struct{}, 1)
+	probe.wait = func(context.Context, string, cli.Checkpoint) error {
+		waited <- struct{}{}
+		return nil
+	}
+	probe.receiptWait = func(context.Context, string, cli.Checkpoint, string) error {
+		t.Error("receipt wait used without an available receipt")
+		return errors.New("no receipt")
+	}
+
+	result := AwaitTurnDurability(context.Background(), &DurabilityOptions{
+		CLI:        "cursor",
+		SessionID:  "session-1",
+		Probe:      probe,
+		Checkpoint: checkpoint,
+		Timeout:    time.Second,
+	})
+	if result.Outcome != CompletionSuccess || result.Err != nil {
+		t.Fatalf("result = %#v", result)
+	}
+	<-waited
+}
+
 func TestActiveRuntimeTimerPausesDeadline(t *testing.T) {
 	timer := NewActiveRuntimeTimer(50 * time.Millisecond)
 	defer timer.Stop()
@@ -308,6 +366,18 @@ func (p *fakeDurabilityProbe) WaitForCommittedTurn(ctx context.Context, sessionI
 	p.mu.Unlock()
 	if p.wait != nil {
 		return p.wait(ctx, sessionID, after)
+	}
+	return nil
+}
+
+type fakeReceiptDurabilityProbe struct {
+	fakeDurabilityProbe
+	receiptWait func(context.Context, string, cli.Checkpoint, string) error
+}
+
+func (p *fakeReceiptDurabilityProbe) WaitForCommittedTurnWithReceipt(ctx context.Context, sessionID string, after cli.Checkpoint, receipt string) error {
+	if p.receiptWait != nil {
+		return p.receiptWait(ctx, sessionID, after, receipt)
 	}
 	return nil
 }

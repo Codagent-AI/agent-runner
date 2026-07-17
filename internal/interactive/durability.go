@@ -31,6 +31,11 @@ type DurabilityOptions struct {
 	Probe         cli.TurnDurabilityProbe
 	Checkpoint    cli.Checkpoint
 	CheckpointErr error
+	// Receipt is the accepted completion request's ID, echoed back to the
+	// client and printed into the CLI's tool output. When the probe implements
+	// cli.ReceiptTurnDurabilityProbe and a receipt is available, the wait uses
+	// receipt-based evidence instead of the receipt-free method.
+	Receipt       string
 	CommittedTurn <-chan struct{}
 	ChildExited   <-chan struct{}
 	Timeout       time.Duration
@@ -82,9 +87,10 @@ func AwaitTurnDurability(ctx context.Context, options *DurabilityOptions) Durabi
 	defer cancelWait()
 	var probeResult chan error
 	if options.CheckpointErr == nil {
+		wait := probeWaitFunc(options.Probe, options.Receipt)
 		probeResult = make(chan error, 1)
 		go func() {
-			probeResult <- waitForDurableTurn(waitCtx, options.Probe, options.SessionID, checkpoint)
+			probeResult <- waitForDurableTurn(waitCtx, options.Probe, options.SessionID, checkpoint, wait)
 		}()
 	}
 
@@ -124,12 +130,30 @@ func AwaitTurnDurability(ctx context.Context, options *DurabilityOptions) Durabi
 // does not exist yet. The wait itself stays bounded by the durability timer.
 const storeAppearancePollInterval = 50 * time.Millisecond
 
+// probeWaitFunc selects the strongest committed-turn wait the adapter offers:
+// receipt-based evidence when the probe supports it and the acknowledged
+// receipt is known, otherwise the receipt-free semantic wait.
+func probeWaitFunc(probe cli.TurnDurabilityProbe, receipt string) func(context.Context, string, cli.Checkpoint) error {
+	if receiptProbe, ok := probe.(cli.ReceiptTurnDurabilityProbe); ok && receipt != "" {
+		return func(ctx context.Context, sessionID string, after cli.Checkpoint) error {
+			return receiptProbe.WaitForCommittedTurnWithReceipt(ctx, sessionID, after, receipt)
+		}
+	}
+	return probe.WaitForCommittedTurn
+}
+
 // waitForDurableTurn confirms a committed turn against the accept-time
 // baseline. A zero baseline means the native store did not exist when the
 // completion was accepted; the store is then awaited and inspected from its
 // start. A store that is still (or again) absent is not a real failure, so
 // the probe keeps polling until the context ends the bound.
-func waitForDurableTurn(ctx context.Context, probe cli.TurnDurabilityProbe, sessionID string, baseline cli.Checkpoint) error {
+func waitForDurableTurn(
+	ctx context.Context,
+	probe cli.TurnDurabilityProbe,
+	sessionID string,
+	baseline cli.Checkpoint,
+	wait func(context.Context, string, cli.Checkpoint) error,
+) error {
 	for {
 		current := baseline
 		if current.Artifact == "" {
@@ -145,7 +169,7 @@ func waitForDurableTurn(ctx context.Context, probe cli.TurnDurabilityProbe, sess
 			}
 			current = cli.Checkpoint{Artifact: captured.Artifact}
 		}
-		err := probe.WaitForCommittedTurn(ctx, sessionID, current)
+		err := wait(ctx, sessionID, current)
 		if err == nil || !errors.Is(err, fs.ErrNotExist) || ctx.Err() != nil {
 			return err
 		}
