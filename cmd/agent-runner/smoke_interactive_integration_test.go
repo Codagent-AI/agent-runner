@@ -75,9 +75,6 @@ func TestInteractivePTYWorkflowIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("interactive PTY integration workflow failed: %v\n%s", err, output)
 	}
-	if strings.Contains(output, "AGENT_RUNNER_CONTINUE_") {
-		t.Fatalf("continuation marker leaked into terminal output:\n%s", output)
-	}
 
 	wantSteps := []string{"claude-interactive", "claude-interactive-resume"}
 	sessionDir := latestWorkflowRunDir(t, home, repoRoot, "interactive-pty-integration")

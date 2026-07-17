@@ -116,7 +116,7 @@ func emitShellInterpolationFailure(ctx *model.ExecutionContext, step *model.Step
 	emitStepEnd(ctx, prefix, startTime, "failed", map[string]any{"error": err.Error()})
 }
 
-func runShellProcess(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, command string) (ProcessResult, bool, error) {
+func runShellProcess(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, command string, log Logger) (ProcessResult, bool, error) {
 	interactive := step.Mode == model.ModeInteractive
 	useCapture := step.Capture != "" && !interactive
 
@@ -139,7 +139,10 @@ func runShellProcess(step *model.Step, ctx *model.ExecutionContext, runner Proce
 	if err != nil {
 		return ProcessResult{}, false, err
 	}
-	return ProcessResult{ExitCode: ptyResult.ExitCode, Stdout: ptyResult.Stdout}, false, nil
+	if ptyResult.Warning != "" {
+		log.Errorf("%s\n", ptyResult.Warning)
+	}
+	return ProcessResult{ExitCode: ptyResult.ExitCode, Stdout: ptyResult.Stdout, Stderr: ptyResult.Warning}, false, nil
 }
 
 func captureShellOutput(step *model.Step, ctx *model.ExecutionContext, result ProcessResult) {
@@ -182,7 +185,7 @@ func ExecuteShellStep(
 
 	emitStepStart(ctx, prefix, startTime, map[string]any{"command": truncateForAudit(command)})
 
-	result, useCapture, runErr := runShellProcess(step, ctx, runner, command)
+	result, useCapture, runErr := runShellProcess(step, ctx, runner, command, log)
 	if runErr != nil {
 		emitStepEnd(ctx, prefix, startTime, "failed", map[string]any{"error": runErr.Error()})
 		return OutcomeFailed, runErr

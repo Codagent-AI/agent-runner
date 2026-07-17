@@ -1,0 +1,212 @@
+package pty
+
+import (
+	"errors"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/google/go-cmp/cmp"
+)
+
+type fakeRelayProcess struct {
+	waitErr     error
+	waitRelease chan struct{}
+
+	mu      sync.Mutex
+	signals []syscall.Signal
+}
+
+type stubbornRelayProcess struct {
+	signals chan syscall.Signal
+}
+
+func (p *stubbornRelayProcess) wait() error {
+	select {}
+}
+
+func (p *stubbornRelayProcess) signalGroup(sig syscall.Signal) error {
+	p.signals <- sig
+	return nil
+}
+
+func (p *fakeRelayProcess) wait() error {
+	if p.waitRelease != nil {
+		<-p.waitRelease
+	}
+	return p.waitErr
+}
+
+func (p *fakeRelayProcess) signalGroup(sig syscall.Signal) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.signals = append(p.signals, sig)
+	if p.waitRelease != nil && sig == syscall.SIGTERM {
+		close(p.waitRelease)
+		p.waitRelease = nil
+	}
+	return nil
+}
+
+func (p *fakeRelayProcess) gotSignals() []syscall.Signal {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]syscall.Signal(nil), p.signals...)
+}
+
+func TestSuperviseRelayDrainsOutputAfterCommandExit(t *testing.T) {
+	waitErr := errors.New("exit status 7")
+	process := &fakeRelayProcess{waitErr: waitErr}
+	outputDone := make(chan error, 1)
+	closed := make(chan struct{})
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		outputDone <- nil
+	}()
+
+	outcome := superviseRelay(relayConfig{
+		process:      process,
+		outputDone:   outputDone,
+		closePTY:     func() error { close(closed); return nil },
+		drainTimeout: 100 * time.Millisecond,
+	})
+
+	if !errors.Is(outcome.waitErr, waitErr) {
+		t.Fatalf("wait error = %v, want %v", outcome.waitErr, waitErr)
+	}
+	if outcome.relayErr != nil {
+		t.Fatalf("unexpected relay error: %v", outcome.relayErr)
+	}
+	if outcome.warning != "" {
+		t.Fatalf("unexpected warning: %q", outcome.warning)
+	}
+	select {
+	case <-closed:
+	default:
+		t.Fatal("PTY was not closed after output drained")
+	}
+}
+
+func TestSuperviseRelayBoundsDrainAndPreservesCommandOutcome(t *testing.T) {
+	waitErr := errors.New("exit status 9")
+	process := &fakeRelayProcess{waitErr: waitErr}
+	outputDone := make(chan error)
+	closed := make(chan struct{})
+
+	start := time.Now()
+	outcome := superviseRelay(relayConfig{
+		process:      process,
+		outputDone:   outputDone,
+		closePTY:     func() error { close(closed); return errors.New("close after timeout") },
+		drainTimeout: 15 * time.Millisecond,
+	})
+
+	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
+		t.Fatalf("bounded drain took %s", elapsed)
+	}
+	if !errors.Is(outcome.waitErr, waitErr) {
+		t.Fatalf("wait error = %v, want preserved %v", outcome.waitErr, waitErr)
+	}
+	if outcome.relayErr != nil {
+		t.Fatalf("drain timeout must not replace command outcome: %v", outcome.relayErr)
+	}
+	if !strings.Contains(strings.ToLower(outcome.warning), "drain timeout") ||
+		!strings.Contains(strings.ToLower(outcome.warning), "output truncation") {
+		t.Fatalf("warning = %q, want prominent drain-timeout/output-truncation warning", outcome.warning)
+	}
+	if diff := cmp.Diff([]syscall.Signal{syscall.SIGTERM}, process.gotSignals()); diff != "" {
+		t.Fatalf("signals mismatch (-want +got):\n%s", diff)
+	}
+	select {
+	case <-closed:
+	default:
+		t.Fatal("PTY was not closed on drain timeout")
+	}
+}
+
+func TestSuperviseRelayTerminatesProcessGroupOnOutputError(t *testing.T) {
+	process := &fakeRelayProcess{waitRelease: make(chan struct{})}
+	outputDone := make(chan error, 1)
+	outputDone <- errors.New("stdout broke")
+	closed := make(chan struct{})
+
+	outcome := superviseRelay(relayConfig{
+		process:          process,
+		outputDone:       outputDone,
+		closePTY:         func() error { close(closed); return nil },
+		drainTimeout:     50 * time.Millisecond,
+		terminationGrace: 50 * time.Millisecond,
+	})
+
+	if outcome.relayErr == nil || !strings.Contains(outcome.relayErr.Error(), "relay output") ||
+		!strings.Contains(outcome.relayErr.Error(), "stdout broke") {
+		t.Fatalf("relay error = %v, want descriptive output error", outcome.relayErr)
+	}
+	if diff := cmp.Diff([]syscall.Signal{syscall.SIGTERM}, process.gotSignals()); diff != "" {
+		t.Fatalf("signals mismatch (-want +got):\n%s", diff)
+	}
+	select {
+	case <-closed:
+	default:
+		t.Fatal("PTY was not closed after relay failure")
+	}
+}
+
+func TestSuperviseRelayFailureCannotDeadlockOnUnreapedProcess(t *testing.T) {
+	process := &stubbornRelayProcess{signals: make(chan syscall.Signal, 2)}
+	outputDone := make(chan error, 1)
+	outputDone <- errors.New("stdout broke")
+	resultDone := make(chan relayOutcome, 1)
+
+	go func() {
+		resultDone <- superviseRelay(relayConfig{
+			process:          process,
+			outputDone:       outputDone,
+			closePTY:         func() error { return nil },
+			drainTimeout:     10 * time.Millisecond,
+			terminationGrace: 10 * time.Millisecond,
+		})
+	}()
+
+	select {
+	case outcome := <-resultDone:
+		if outcome.relayErr == nil {
+			t.Fatal("expected relay error")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("relay failure deadlocked after SIGKILL")
+	}
+	var got []syscall.Signal
+	for len(process.signals) > 0 {
+		got = append(got, <-process.signals)
+	}
+	if diff := cmp.Diff([]syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}, got); diff != "" {
+		t.Fatalf("signals mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestCommandRelayProcessSignalsNegativeProcessGroupID(t *testing.T) {
+	oldKill := signalProcessGroup
+	defer func() { signalProcessGroup = oldKill }()
+
+	var gotPID int
+	var gotSignal syscall.Signal
+	signalProcessGroup = func(pid int, sig syscall.Signal) error {
+		gotPID = pid
+		gotSignal = sig
+		return nil
+	}
+
+	process := commandRelayProcess{cmd: &exec.Cmd{Process: &os.Process{Pid: 4321}}}
+	if err := process.signalGroup(syscall.SIGTERM); err != nil {
+		t.Fatalf("signal process group: %v", err)
+	}
+	if gotPID != -4321 || gotSignal != syscall.SIGTERM {
+		t.Fatalf("signal target = (%d, %v), want (-4321, %v)", gotPID, gotSignal, syscall.SIGTERM)
+	}
+}

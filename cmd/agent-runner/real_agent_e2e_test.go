@@ -208,7 +208,7 @@ steps:
     prompt: "The recall phrase is %s. Remember it for the next turn. Reply with one line made by concatenating AR_, %s, _FRESH_, and the recall phrase."
 `, workflowName, agent, agent, agent, recallPhrase, upperAgent)
 	phases := []realAgentPTYPhase{{ready: freshReady}}
-	if agent == "cursor" {
+	if agent == "claude" || agent == "cursor" {
 		phases[0].afterReady = "Run the exact Agent Runner completion command from the step instructions now."
 	}
 	stepIDs := []string{agent + "-interactive-fresh"}
@@ -221,7 +221,7 @@ steps:
 		resumeSubmission = fmt.Sprintf("Recall the phrase from the prior turn. Reply with one line made by concatenating AR_, %s, _RESUME_, and that phrase.", upperAgent)
 	}
 	resumePhase := realAgentPTYPhase{ready: resumeReady, submit: resumeSubmission}
-	if agent == "cursor" || agent == "opencode" {
+	if agent == "claude" || agent == "cursor" || agent == "opencode" {
 		resumePhase.afterReady = "Run the exact Agent Runner completion command from the step instructions now."
 	}
 	phases = append(phases, resumePhase)

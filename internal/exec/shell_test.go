@@ -318,6 +318,38 @@ func TestExecuteShellStep(t *testing.T) {
 		}
 	})
 
+	t.Run("interactive mode records drain timeout warning without changing exit outcome", func(t *testing.T) {
+		oldFn := interactiveShellRunnerFn
+		interactiveShellRunnerFn = func(_ string, _ pty.Options) (pty.Result, error) {
+			return pty.Result{
+				ExitCode: 0,
+				Warning:  "WARNING: PTY output drain timeout after 1s; possible output truncation",
+			}, nil
+		}
+		defer func() { interactiveShellRunnerFn = oldFn }()
+
+		recorder := &mockAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = recorder
+		log := &mockLogger{}
+		step := model.Step{ID: "s", Command: "true", Session: model.SessionNew, Mode: model.ModeInteractive}
+
+		outcome, err := ExecuteShellStep(&step, ctx, &mockRunner{}, log)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != OutcomeSuccess {
+			t.Fatalf("outcome = %q, want success", outcome)
+		}
+		if len(log.lines) == 0 || !strings.Contains(strings.Join(log.lines, "\n"), "possible output truncation") {
+			t.Fatalf("expected prominent console warning, got %v", log.lines)
+		}
+		end := findAuditEvent(recorder.events, audit.EventStepEnd)
+		if end == nil || !strings.Contains(fmt.Sprint(end.Data["stderr"]), "possible output truncation") {
+			t.Fatalf("expected warning in step audit output, got %+v", end)
+		}
+	})
+
 	t.Run("interactive mode maps nonzero exit code to failed", func(t *testing.T) {
 		oldFn := interactiveShellRunnerFn
 		interactiveShellRunnerFn = func(_ string, _ pty.Options) (pty.Result, error) {

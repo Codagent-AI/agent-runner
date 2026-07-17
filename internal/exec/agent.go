@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,19 +19,18 @@ import (
 	"github.com/codagent/agent-runner/internal/engine"
 	"github.com/codagent/agent-runner/internal/interactive"
 	"github.com/codagent/agent-runner/internal/model"
-	"github.com/codagent/agent-runner/internal/pty"
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/session"
 	"github.com/codagent/agent-runner/internal/textfmt"
 	"github.com/codagent/agent-runner/internal/usersettings"
 )
 
-// interactiveRunnerFn is the production direct-handoff seam. Its legacy
-// signature is retained temporarily so the old PTY unit tests can remain in
-// the tree until the cleanup phase, but production never calls RunInteractive.
 var interactiveRunnerFn = runDirectInteractive
 
-var directInvocations sync.Map
+type directRunOptions struct {
+	workdir    string
+	invocation *directInvocation
+}
 
 type directInvocation struct {
 	ctx              *model.ExecutionContext
@@ -209,8 +207,6 @@ func ExecuteAgentStep(
 	recordSessionOnSpawn(step, ctx, sessionID)
 
 	spawnTime := time.Now()
-	debugLabel := fmt.Sprintf("workflow=%s step=%s cli=%s model=%s session=%s resume=%t",
-		ctx.WorkflowName, step.ID, cliName, resolvedModel, sessionID, isResume)
 	probe, _ := adapter.(cli.TurnDurabilityProbe)
 	direct := &directInvocation{
 		ctx: ctx, stepID: step.ID, cliName: cliName, sessionID: sessionID, probe: probe,
@@ -218,7 +214,7 @@ func ExecuteAgentStep(
 			return adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: spawnTime, Workdir: step.Workdir})
 		},
 	}
-	outcome, result, runErr := runAgentProcess(runner, adapter, args, invocationContext, step.Workdir, debugLabel, log, ctx.SuspendHook, ctx.ResumeHook, direct)
+	outcome, result, runErr := runAgentProcess(runner, adapter, args, invocationContext, step.Workdir, log, ctx.SuspendHook, ctx.ResumeHook, direct)
 	if runErr != nil {
 		emitAgentEnd(ctx, prefix, startTime, "", outcome, "", result.Stderr)
 		return outcome, runErr
@@ -524,22 +520,21 @@ func completionInstruction(executable string) string {
 	return "\n\nWhen you or the user determine this step is complete, signal it through the Agent Runner control channel. You MUST run the absolute path command `" + command + "` with your shell tool. The executable path and `step complete` are separate shell words; do not quote the entire command as one word. Run that exact command with no extra arguments as the final action before finishing the current response. Do not merely say that the step is complete."
 }
 
-func runDirectInteractive(args []string, options pty.Options) (pty.Result, error) {
-	invocationValue, ok := directInvocations.Load(options.ContinueMarker)
-	invocation, invocationOK := invocationValue.(*directInvocation)
-	if !ok || !invocationOK || invocation == nil || invocation.ctx == nil {
-		return pty.Result{}, errors.New("direct interactive runner: execution context is unavailable")
+func runDirectInteractive(args []string, options directRunOptions) (interactive.DirectResult, error) {
+	invocation := options.invocation
+	if invocation == nil || invocation.ctx == nil {
+		return interactive.DirectResult{}, errors.New("direct interactive runner: execution context is unavailable")
 	}
 	server, err := controlServerForContext(invocation.ctx)
 	if err != nil {
-		return pty.Result{}, err
+		return interactive.DirectResult{}, err
 	}
 	executable, err := agentRunnerExecutable()
 	if err != nil {
-		return pty.Result{}, fmt.Errorf("resolve watchdog executable: %w", err)
+		return interactive.DirectResult{}, fmt.Errorf("resolve watchdog executable: %w", err)
 	}
 	direct := interactive.NewDirectRunner(&interactive.DirectOptions{
-		Args: args, Workdir: options.Workdir, StepID: invocation.stepID,
+		Args: args, Workdir: options.workdir, StepID: invocation.stepID,
 		SessionID: invocation.sessionID, CLI: invocation.cliName,
 		Control: server, Probe: invocation.probe, ResolveSessionID: invocation.resolveSessionID, Foreground: true,
 		WatchdogExecutable: executable, Logger: invocation.ctx.AuditLogger,
@@ -551,11 +546,7 @@ func runDirectInteractive(args []string, options pty.Options) (pty.Result, error
 			}
 		},
 	})
-	result, runErr := direct.Run(context.Background())
-	return pty.Result{
-		ExitCode: result.ExitCode, ContinueTriggered: result.Completed,
-		DurabilityFailed: result.DurabilityFailed, DurabilityError: result.DurabilityError,
-	}, runErr
+	return direct.Run(context.Background())
 }
 
 func controlServerForContext(ctx *model.ExecutionContext) (*interactive.ControlServer, error) {
@@ -610,7 +601,7 @@ func setInteractiveAttempt(ctx *model.ExecutionContext, metadata *interactive.Pr
 	root.InteractiveAttempt = stored
 }
 
-func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, invocationContext cli.InvocationContext, workdir, debugLabel string, log Logger, suspendHook, resumeHook func() error, direct *directInvocation) (StepOutcome, ProcessResult, error) {
+func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, invocationContext cli.InvocationContext, workdir string, log Logger, suspendHook, resumeHook func() error, direct *directInvocation) (StepOutcome, ProcessResult, error) {
 	if invocationContext.IsHeadless() {
 		// Capture stdout for headless runs so that adapters (e.g. Codex) can
 		// parse session IDs from the process output.
@@ -638,30 +629,27 @@ func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, i
 		return OutcomeSuccess, result, nil
 	}
 
-	// Interactive: release the terminal if a hook is set, then run inside a PTY.
+	// Interactive: release the terminal if a hook is set, then hand it directly to the CLI.
 	if suspendHook != nil {
 		if err := suspendHook(); err != nil {
 			return OutcomeFailed, ProcessResult{}, err
 		}
 	}
-	directKey := uuid.NewString()
-	directInvocations.Store(directKey, direct)
-	defer directInvocations.Delete(directKey)
-	ptyResult, err := interactiveRunnerFn(args, pty.Options{Workdir: workdir, DebugLabel: debugLabel, ContinueMarker: directKey})
+	directResult, err := interactiveRunnerFn(args, directRunOptions{workdir: workdir, invocation: direct})
 	if resumeHook != nil {
 		if resumeErr := resumeHook(); err == nil && resumeErr != nil {
 			err = resumeErr
 		}
 	}
-	result := ProcessResult{ExitCode: ptyResult.ExitCode}
-	if ptyResult.DurabilityFailed {
+	result := ProcessResult{ExitCode: directResult.ExitCode}
+	if directResult.DurabilityFailed {
 		if err == nil {
-			err = ptyResult.DurabilityError
+			err = directResult.DurabilityError
 		}
 		return OutcomeFailed, result, err
 	}
 
-	if ptyResult.ContinueTriggered {
+	if directResult.Completed {
 		return OutcomeSuccess, result, err
 	}
 	if err != nil {
