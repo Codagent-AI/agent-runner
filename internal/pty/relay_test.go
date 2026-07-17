@@ -22,6 +22,9 @@ type fakeRelayProcess struct {
 
 	mu              sync.Mutex
 	signals         []syscall.Signal
+	processSignals  []syscall.Signal
+	reapBlock       chan struct{}
+	reapReleaseSig  syscall.Signal
 	reaped          bool
 	killedAfterReap bool
 }
@@ -43,14 +46,27 @@ func (p *stubbornRelayProcess) signalGroup(sig syscall.Signal) error {
 	return nil
 }
 
+func (p *stubbornRelayProcess) signalProcess(syscall.Signal) error {
+	return nil
+}
+
 func (p *fakeRelayProcess) waitForExit() error {
-	if p.waitRelease != nil {
-		<-p.waitRelease
+	p.mu.Lock()
+	release := p.waitRelease
+	p.mu.Unlock()
+	if release != nil {
+		<-release
 	}
 	return p.observeErr
 }
 
 func (p *fakeRelayProcess) reap() error {
+	p.mu.Lock()
+	block := p.reapBlock
+	p.mu.Unlock()
+	if block != nil {
+		<-block
+	}
 	p.mu.Lock()
 	p.reaped = true
 	p.mu.Unlock()
@@ -71,10 +87,27 @@ func (p *fakeRelayProcess) signalGroup(sig syscall.Signal) error {
 	return nil
 }
 
+func (p *fakeRelayProcess) signalProcess(sig syscall.Signal) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.processSignals = append(p.processSignals, sig)
+	if p.reapBlock != nil && sig == p.reapReleaseSig {
+		close(p.reapBlock)
+		p.reapBlock = nil
+	}
+	return nil
+}
+
 func (p *fakeRelayProcess) gotSignals() []syscall.Signal {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]syscall.Signal(nil), p.signals...)
+}
+
+func (p *fakeRelayProcess) gotProcessSignals() []syscall.Signal {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]syscall.Signal(nil), p.processSignals...)
 }
 
 func (p *fakeRelayProcess) wasKilledAfterReap() bool {
@@ -202,6 +235,115 @@ func TestSuperviseRelayDoesNotSignalUnverifiedGroupAfterExitObservationFailure(t
 	}
 }
 
+func TestSuperviseRelayBoundsReapAfterExitObservationFailure(t *testing.T) {
+	waitErr := errors.New("signal: terminated")
+	process := &fakeRelayProcess{
+		waitErr:        waitErr,
+		observeErr:     errors.New("waitid failed"),
+		reapBlock:      make(chan struct{}),
+		reapReleaseSig: syscall.SIGTERM,
+	}
+	resultDone := make(chan relayOutcome, 1)
+
+	go func() {
+		resultDone <- superviseRelay(relayConfig{
+			process:          process,
+			closePTY:         func() error { return nil },
+			terminationGrace: 20 * time.Millisecond,
+		})
+	}()
+
+	var outcome relayOutcome
+	select {
+	case outcome = <-resultDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("relay hung reaping a live child after exit observation failure")
+	}
+	if outcome.relayErr == nil || !strings.Contains(outcome.relayErr.Error(), "observe command exit") {
+		t.Fatalf("relay error = %v, want exit-observation failure", outcome.relayErr)
+	}
+	if !errors.Is(outcome.waitErr, waitErr) {
+		t.Fatalf("wait error = %v, want preserved %v", outcome.waitErr, waitErr)
+	}
+	if diff := cmp.Diff([]syscall.Signal(nil), process.gotSignals()); diff != "" {
+		t.Fatalf("group signals mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]syscall.Signal{syscall.SIGTERM}, process.gotProcessSignals()); diff != "" {
+		t.Fatalf("process signals mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestSuperviseRelayEscalatesProcessSignalAfterExitObservationFailure(t *testing.T) {
+	process := &fakeRelayProcess{
+		observeErr:     errors.New("waitid failed"),
+		reapBlock:      make(chan struct{}),
+		reapReleaseSig: syscall.SIGKILL,
+	}
+	resultDone := make(chan relayOutcome, 1)
+
+	go func() {
+		resultDone <- superviseRelay(relayConfig{
+			process:          process,
+			closePTY:         func() error { return nil },
+			terminationGrace: 20 * time.Millisecond,
+		})
+	}()
+
+	var outcome relayOutcome
+	select {
+	case outcome = <-resultDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("relay hung reaping a SIGTERM-resistant child after exit observation failure")
+	}
+	if outcome.relayErr == nil || !strings.Contains(outcome.relayErr.Error(), "observe command exit") {
+		t.Fatalf("relay error = %v, want exit-observation failure", outcome.relayErr)
+	}
+	if diff := cmp.Diff([]syscall.Signal(nil), process.gotSignals()); diff != "" {
+		t.Fatalf("group signals mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}, process.gotProcessSignals()); diff != "" {
+		t.Fatalf("process signals mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestSuperviseRelayGivesUpOnUnreapableProcessAfterExitObservationFailure(t *testing.T) {
+	process := &fakeRelayProcess{
+		waitErr:    errors.New("never seen"),
+		observeErr: errors.New("waitid failed"),
+		reapBlock:  make(chan struct{}),
+		// reapReleaseSig is zero: no signal ever unblocks reap.
+	}
+	resultDone := make(chan relayOutcome, 1)
+
+	go func() {
+		resultDone <- superviseRelay(relayConfig{
+			process:          process,
+			closePTY:         func() error { return nil },
+			terminationGrace: 20 * time.Millisecond,
+		})
+	}()
+
+	var outcome relayOutcome
+	select {
+	case outcome = <-resultDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("relay hung on an unreapable child after exit observation failure")
+	}
+	if outcome.relayErr == nil || !strings.Contains(outcome.relayErr.Error(), "observe command exit") ||
+		!strings.Contains(outcome.relayErr.Error(), "SIGKILL") {
+		t.Fatalf("relay error = %v, want exit-observation failure noting SIGKILL escalation", outcome.relayErr)
+	}
+	if outcome.waitErr != nil {
+		t.Fatalf("wait error = %v, want nil for unreaped process", outcome.waitErr)
+	}
+	if diff := cmp.Diff([]syscall.Signal(nil), process.gotSignals()); diff != "" {
+		t.Fatalf("group signals mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}, process.gotProcessSignals()); diff != "" {
+		t.Fatalf("process signals mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestSuperviseRelayFailureCannotDeadlockOnUnreapedProcess(t *testing.T) {
 	process := &stubbornRelayProcess{signals: make(chan syscall.Signal, 2)}
 	outputDone := make(chan error, 1)
@@ -253,6 +395,32 @@ func TestCommandRelayProcessSignalsNegativeProcessGroupID(t *testing.T) {
 	}
 	if gotPID != -4321 || gotSignal != syscall.SIGTERM {
 		t.Fatalf("signal target = (%d, %v), want (-4321, %v)", gotPID, gotSignal, syscall.SIGTERM)
+	}
+}
+
+func TestCommandRelayProcessSignalsProcessHandle(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start command: %v", err)
+	}
+	process := commandRelayProcess{cmd: cmd}
+	if err := process.signalProcess(syscall.SIGKILL); err != nil {
+		t.Fatalf("signal process: %v", err)
+	}
+	waitErr := cmd.Wait()
+	var exitErr *exec.ExitError
+	if !errors.As(waitErr, &exitErr) {
+		t.Fatalf("wait error = %v, want exit error from SIGKILL", waitErr)
+	}
+	status, ok := exitErr.Sys().(syscall.WaitStatus)
+	if !ok || !status.Signaled() || status.Signal() != syscall.SIGKILL {
+		t.Fatalf("wait status = %+v, want killed by SIGKILL", exitErr.Sys())
+	}
+}
+
+func TestCommandRelayProcessSignalProcessWithoutHandle(t *testing.T) {
+	if err := (commandRelayProcess{}).signalProcess(syscall.SIGTERM); err == nil {
+		t.Fatal("signalProcess without a process handle must return an error, not panic or signal")
 	}
 }
 

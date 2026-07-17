@@ -16,6 +16,7 @@ type relayProcess interface {
 	waitForExit() error
 	reap() error
 	signalGroup(syscall.Signal) error
+	signalProcess(syscall.Signal) error
 }
 
 type commandRelayProcess struct {
@@ -41,6 +42,15 @@ func (p commandRelayProcess) signalGroup(sig syscall.Signal) error {
 		return nil
 	}
 	return signalProcessGroup(-p.cmd.Process.Pid, sig)
+}
+
+func (p commandRelayProcess) signalProcess(sig syscall.Signal) error {
+	if p.cmd == nil || p.cmd.Process == nil {
+		return errors.New("pty: command process is unavailable")
+	}
+	// The child is unreaped here, so its PID cannot have been reused; the
+	// os.Process handle is a safe way to signal the immediate child directly.
+	return p.cmd.Process.Signal(sig)
 }
 
 type relayConfig struct {
@@ -216,8 +226,35 @@ func failExitObservation(config relayConfig, observeErr error) relayOutcome {
 	}
 	// Without a successful non-reaping observation, the group leader cannot
 	// serve as a stable identity anchor. Do not signal a numeric PGID here.
-	return relayOutcome{
-		waitErr:  config.process.reap(),
-		relayErr: fmt.Errorf("pty: observe command exit without reaping: %w", observeErr),
+	// The immediate child is still unreaped, so signaling it through the
+	// process handle is safe and bounds the reap below.
+	relayErr := fmt.Errorf("pty: observe command exit without reaping: %w", observeErr)
+	_ = config.process.signalProcess(syscall.SIGTERM)
+
+	reapDone := make(chan error, 1)
+	go func() { reapDone <- config.process.reap() }()
+
+	grace := config.terminationGrace
+	if grace <= 0 {
+		grace = killTimeout
+	}
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case waitErr := <-reapDone:
+		return relayOutcome{waitErr: waitErr, relayErr: relayErr}
+	case <-timer.C:
+	}
+
+	_ = config.process.signalProcess(syscall.SIGKILL)
+	killTimer := time.NewTimer(grace)
+	defer killTimer.Stop()
+	select {
+	case waitErr := <-reapDone:
+		return relayOutcome{waitErr: waitErr, relayErr: relayErr}
+	case <-killTimer.C:
+		return relayOutcome{
+			relayErr: fmt.Errorf("%w (process was not reaped after SIGKILL)", relayErr),
+		}
 	}
 }
