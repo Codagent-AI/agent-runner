@@ -158,14 +158,18 @@ WATCHDOG MISMATCH PASS identity_match=false signal_sent=false target_alive=true
   space. `Shell(<path> step complete)` would therefore also approve extra
   arguments and is not emitted.
 - Alternative integration: the adapter generates an isolated plugin in the
-  user's cache and loads it for the spawned process with `--plugin-dir`. Its
-  `stop` hook invokes `step complete` and then `internal turn-committed` using
-  the absolute executable supplied in a process-local environment variable.
-  User and project settings are neither replaced nor modified.
-- `/next`: the isolated plugin includes `commands/next.md`; invoking it ends
-  the response, after which the same Stop hook routes completion through the
-  control channel.
-- Store fallback: Cursor's `store.db` contains complete assistant messages as
+  user's cache and loads it for the spawned process with `--plugin-dir`. The
+  plugin contains no hook of any kind; it consists of a manifest and a single
+  slash command. User and project settings are neither replaced nor modified.
+- `/next`: the isolated plugin includes `commands/next.md`, which instructs
+  the agent to run the quoted absolute-path completion client
+  (`<path> step complete`) and then finish its response. Completion otherwise
+  relies on the same absolute-path instructions injected into the prompt as
+  for other CLIs. There is no Stop hook, so no `internal turn-committed`
+  signal exists for Cursor; durability is confirmed only by the store
+  fallback below.
+- Store fallback (the only durability evidence for Cursor): Cursor's
+  `store.db` contains complete assistant messages as
   JSON blobs in the `blobs` table. The probe queries text-bearing assistant
   rows, checkpoints their content-addressed row IDs, and requires a new row
   afterward. Queries use exponential backoff; database mtime and quiet periods
@@ -200,7 +204,8 @@ written into the target repository:
 
 - Claude and Copilot load a generated cache plugin with the exact absolute
   command.
-- Cursor loads its generated completion/Stop-hook plugin.
+- Cursor loads its generated `/next` completion plugin, which carries no
+  hooks.
 - OpenCode receives an inline custom command through
   `OPENCODE_CONFIG_CONTENT`.
 - Codex uses the universal completion instruction because its current plugin
