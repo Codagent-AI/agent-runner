@@ -480,6 +480,9 @@ func buildAdapterInput(
 		PermissionMode: usersettings.AutonomousPermissionMode(ctx.AutonomousPermissionMode),
 		Workdir:        step.Workdir,
 	}
+	if ctx.SessionDir != "" {
+		input.RunID = filepath.Base(filepath.Clean(ctx.SessionDir))
+	}
 
 	// Block AskUserQuestion in autonomous mode so the agent cannot stall
 	// waiting for input. Applies to fresh and resumed autonomous sessions alike.

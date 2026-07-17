@@ -515,7 +515,7 @@ func TestControlServerLateCommittedTurnSubscriberReceivesRecordedEvidence(t *tes
 	}
 }
 
-func TestControlServerRejectsTurnCommittedBeforeCompletion(t *testing.T) {
+func TestControlServerIgnoresTurnCommittedBeforeCompletion(t *testing.T) {
 	logger := &recordingEventLogger{}
 	server := newTestControlServer(t, t.TempDir(), logger)
 	defer server.Close()
@@ -523,7 +523,7 @@ func TestControlServerRejectsTurnCommittedBeforeCompletion(t *testing.T) {
 	committed := controlRequest{Type: MessageTurnCommitted, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "early-turn"}
 
 	response := exchange(t, server.SocketPath(), &committed)
-	if response.OK || !strings.Contains(response.Error, "before completion") {
+	if !response.OK || response.Error != "" {
 		t.Fatalf("early turn response = %#v", response)
 	}
 	select {
@@ -531,7 +531,7 @@ func TestControlServerRejectsTurnCommittedBeforeCompletion(t *testing.T) {
 		t.Fatalf("pre-completion turn was delivered: %#v", turn)
 	case <-time.After(40 * time.Millisecond):
 	}
-	if diff := cmp.Diff([]audit.EventType{audit.EventControlRejected}, logger.types()); diff != "" {
+	if diff := cmp.Diff([]audit.EventType{}, logger.types()); diff != "" {
 		t.Fatalf("audit events mismatch (-want +got):\n%s", diff)
 	}
 }

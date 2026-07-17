@@ -1666,6 +1666,7 @@ type spawnEnvAdapter struct {
 	env     []string
 	err     error
 	workdir string
+	runID   string
 }
 
 func (a *spawnEnvAdapter) BuildArgs(*cli.BuildArgsInput) []string        { return []string{"fake"} }
@@ -1676,12 +1677,13 @@ func (a *spawnEnvAdapter) ProbeModel(string, string) (cli.ProbeStrength, error) 
 }
 func (a *spawnEnvAdapter) SpawnEnv(input *cli.BuildArgsInput) ([]string, error) {
 	a.workdir = input.Workdir
+	a.runID = input.RunID
 	return a.env, a.err
 }
 
 func TestBuildStepInvocationCollectsSpawnEnv(t *testing.T) {
 	step := &model.Step{ID: "implement", Workdir: "/repo/project"}
-	ctx := &model.ExecutionContext{}
+	ctx := &model.ExecutionContext{SessionDir: filepath.Join(t.TempDir(), "run-123")}
 	profile := &config.ResolvedAgent{}
 
 	adapter := &spawnEnvAdapter{env: []string{"CURSOR_CONFIG_DIR=/private/dir"}}
@@ -1694,6 +1696,9 @@ func TestBuildStepInvocationCollectsSpawnEnv(t *testing.T) {
 	}
 	if adapter.workdir != "/repo/project" {
 		t.Fatalf("adapter received workdir %q, want step workdir for project-level config discovery", adapter.workdir)
+	}
+	if adapter.runID != "run-123" {
+		t.Fatalf("adapter received run ID %q, want run-scoped process-local configuration", adapter.runID)
 	}
 
 	failing := &spawnEnvAdapter{err: errors.New("prepare config: boom")}

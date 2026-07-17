@@ -118,14 +118,14 @@ Baseline for all five: the agent's shell tool runs the absolute-path client (pat
 | CLI | No-approval invocation (interactive) | Turn-committed evidence (probe) |
 |---|---|---|
 | Claude | `--allowedTools "Bash(<abs> step complete)"` — exact command only *(P0)* | Ephemeral `Stop` hook injected via `--settings`, running `agent-runner internal turn-committed` *(P0)*; fallback: completed assistant-turn record in `~/.claude/projects/<encoded>/<id>.jsonl` after checkpoint |
-| Codex | Approval override scoped to the exact command via `-c` config *(P0)* | `notify` config on `agent-turn-complete` running the turn-committed sender *(P0)*; fallback: turn-end records in `~/.codex/sessions/**/<id>.jsonl` after checkpoint |
-| Copilot | Granular `--allow-tool` shell scoping *(P0)* | Completed-turn record in its session-directory state *(P0)* |
+| Codex | Normal Codex sandbox and supervised approval policy; no broad or prefix-based override *(P0 alternative)* | `notify` config on `agent-turn-complete` running the turn-committed sender *(P0)*; fallback: terminal `task_complete` records in `~/.codex/sessions/**/<id>.jsonl` after checkpoint |
+| Copilot | Normal supervised approval prompt; current `--allow-tool=shell(...)` matches the executable rather than exact fixed arguments, so the adapter emits no unsafe broader rule *(P0 alternative)* | Completed-turn record in its session-directory state *(P0)* |
 | Cursor | `Shell(<abs>:step complete)` rule appended in a private per-invocation `CURSOR_CONFIG_DIR` config copy *(P0)* | Completion receipt persisted in the chat store's tool-result blob after checkpoint *(P0)* |
 | OpenCode | `opencode.json` bash permission allow-pattern for the exact command *(P0)* | `opencode db` query for a completed assistant message after checkpoint *(P0)* |
 
 Interactive pre-approval is governed by the `cli-adapter` delta spec: pre-approval may cover only the exact absolute executable path with fixed `step complete` arguments — no wildcards, chaining, or other subcommands. Autonomous-interactive invocations may additionally use each CLI's existing autonomous permission flags (unchanged).
 
-User-typed `/next`: a thin custom command per CLI that supports custom commands (shipped through the agent-skills plugin or a new plugin; exact packaging chosen in Phase 0 alongside the matrix) that simply runs the client.
+User-invoked completion: adapters inject a thin process-local command that runs the client. Claude, Copilot, Cursor, and OpenCode expose `/agent-runner:next`; Codex exposes `$agent-runner-next` because its current native extension surface is an explicitly invoked skill, not a plugin slash command.
 
 ### Prompt and adapter integration
 
@@ -155,7 +155,7 @@ User-typed `/next`: a thin custom command per CLI that supports custom commands 
 
 Staged internally within this change (no public flag), per the proposal:
 
-- **Phase 0 (blocking feasibility)**: wait-ownership + `Foreground` spike on macOS/Linux; prove all ten matrix cells (five approvals, five durability evidences) with minimal per-CLI scripts; choose and document alternative integrations for any failing cell; pick the `/next` plugin packaging.
+- **Phase 0 (blocking feasibility)**: wait-ownership + `Foreground` spike on macOS/Linux; prove all ten matrix cells (five approvals, five durability evidences) with minimal per-CLI scripts; choose and document alternative integrations for any failing cell; pick each CLI's process-local completion-command packaging.
 - **Phase 1**: build `internal/interactive` control server + client subcommand + probes with unit tests; old path untouched.
 - **Phase 2**: build DirectRunner + job control + watchdog; prove fidelity, durability, and completion on the extended fake-agent harness.
 - **Phase 3**: switch `interactiveRunnerFn`; adapters emit pre-approval flags and control instructions; coordinator hardening lands.
@@ -169,9 +169,9 @@ Rollback within the change: each phase is a revertable commit sequence; producti
 - **Unit**: control server (auth, rotation, idempotent retry, message bound, deadlines, no-active-step rejection); durability probes against fixture session stores per adapter; job-control state machine against a scriptable fake child; watchdog (pipe EOF, PID-reuse guard).
 - **Deterministic integration** (existing fake-agent harness, extended): fake agent completes via the socket; all terminal-fidelity cases retained; release/restore failure injection; drain-timeout case for the shell relay.
 - **Real-shell job-control E2E**: an outer PTY runs a real job-control shell, launches agent-runner as a foreground job, suspends (both cooperative self-suspend and external SIGSTOP), verifies the shell reports the job stopped, runs `fg`, verifies the child resumes with correct terminal modes.
-- **Per-CLI durability E2E (gate 1 proof)**: step 1 tells the agent a unique recall phrase and the agent completes via the control channel; step 2 resumes the same session and asks the agent to repeat the phrase. The phrase appears **only** in step 1's prompt — never in step 2's prompt, environment, state summary, or fixture — so recall proves the completing turn survived. (Called a "recall phrase", not a nonce, to avoid collision with the completion credential.) Runs for all five CLIs.
+- **Per-CLI durability E2E (gate 1 proof)**: step 1 tells the agent a unique recall phrase and the agent completes via the control channel; step 2 resumes the same session and asks the agent to repeat the phrase. The phrase appears **only** in step 1's prompt — never in step 2's prompt, environment, state summary, or fixture — so recall proves the completing turn survived. The E2E proves both the explicit native completion command and a natural-language request to continue. It runs through Agent Runner for Claude, Codex, Copilot, and Cursor. OpenCode uses two real fresh-TUI completion-surface tests plus a fail-fast workflow test until its resumed-prompt bug is fixed.
 - Existing five headless real-agent E2Es unchanged.
 
 ## Open Questions
 
-None blocking design; all are Phase 0 deliverables with defined failure paths: the ten matrix cells, the Claude `--settings` merge behavior, the Wait4-on-macOS spike outcome, and the `/next` plugin packaging choice.
+None. Phase 0 findings record the proven adapter integrations, platform spikes, and process-local completion-command packaging.

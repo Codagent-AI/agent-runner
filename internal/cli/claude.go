@@ -2,7 +2,7 @@ package cli
 
 import (
 	"encoding/json"
-	"log"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,7 +11,9 @@ import (
 )
 
 // ClaudeAdapter constructs invocation args for the Claude CLI.
-type ClaudeAdapter struct{}
+type ClaudeAdapter struct {
+	prepareCompletionPlugin func(CompletionCommand) (string, error) // test seam; nil uses prepareNextCommandPlugin
+}
 
 // BuildArgs constructs Claude CLI args.
 //
@@ -31,6 +33,13 @@ type ClaudeAdapter struct{}
 // would be silently ignored at best or rejected at worst. The profile's
 // model is honored on fresh sessions and inherited thereafter.
 func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
+	args, _ := a.BuildArgsWithError(input)
+	return args
+}
+
+// BuildArgsWithError constructs Claude args and fails before spawn if its
+// process-local completion command cannot be materialized.
+func (a *ClaudeAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, error) {
 	args := []string{"claude"}
 	context := input.InvocationContext()
 
@@ -84,11 +93,15 @@ func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 			},
 		})
 		args = append(args, "--settings", string(settings))
-		if pluginDir, err := prepareNextCommandPlugin(*input.CompletionCommand); err != nil {
-			log.Printf("claude: /next completion plugin unavailable: %v", err)
-		} else {
-			args = append(args, "--plugin-dir", pluginDir)
+		prepare := a.prepareCompletionPlugin
+		if prepare == nil {
+			prepare = prepareNextCommandPlugin
 		}
+		pluginDir, err := prepare(*input.CompletionCommand)
+		if err != nil {
+			return nil, fmt.Errorf("claude: create completion plugin: %w", err)
+		}
+		args = append(args, "--plugin-dir", pluginDir)
 	}
 
 	if input.Prompt != "" {
@@ -97,7 +110,7 @@ func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 		// prompt as an additional flag value.
 		args = append(args, "--", input.Prompt)
 	}
-	return args
+	return args, nil
 }
 
 // SupportsSystemPrompt returns true — Claude CLI supports --append-system-prompt.

@@ -130,7 +130,7 @@ steps:
 
       Also report whether Agent Validator found and fixed any additional issues beyond the intentional bug(s).
 
-      After presenting your report, stop and let the user review it. Ask whether they have questions or are ready to continue. Do not complete the step, emit the continuation marker, or otherwise signal continuation until the user explicitly says they are ready to continue, done reviewing, or asks you to move on.
+      After presenting your report, stop and let the user review it. Ask whether they have questions or are ready to continue. Do not complete the step by running the injected Agent Runner completion command until the user explicitly says they are ready to continue, done reviewing, or asks you to move on.
 
       If the user asks follow-up questions about validator behavior, failures, logs, skipped items, or why something passed or failed, use the agent-validator:validator-help skill before answering.
 

@@ -4,7 +4,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -95,6 +97,146 @@ steps:
 	}
 	if !strings.Contains(string(output), "opencode does not support interactive steps") {
 		t.Fatalf("run output does not name the interactive opencode rejection (exit err %v):\n%s", err, output)
+	}
+}
+
+// TestOpenCodeCompletionSurfacesInteractiveRealAgentE2E exercises OpenCode's
+// real TUI directly because Agent Runner rejects interactive OpenCode workflows
+// until anomalyco/opencode#37536 is fixed. Fresh sessions can still prove that
+// both completion surfaces are correctly injected into the adapter invocation.
+func TestOpenCodeCompletionSurfacesInteractiveRealAgentE2E(t *testing.T) {
+	_, workdir, runnerBin := prepareRealAgentE2E(t, "opencode")
+	for _, test := range []struct {
+		name  string
+		input string
+	}{
+		{name: "slash command", input: "/agent-runner:next"},
+		{name: "prompted continuation", input: "Please continue to the next workflow step now."},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runOpenCodeCompletionSurfaceE2E(t, workdir, runnerBin, test.input)
+		})
+	}
+}
+
+func runOpenCodeCompletionSurfaceE2E(t *testing.T, workdir, runnerBin, input string) {
+	t.Helper()
+	socketDir, err := os.MkdirTemp("/tmp", "ar-oc-")
+	if err != nil {
+		t.Fatalf("create short OpenCode control directory: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketPath := filepath.Join(socketDir, "control.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen on fake control endpoint: %v", err)
+	}
+	defer func() { _ = listener.Close() }()
+	type controlRequest struct {
+		Type      string `json:"type"`
+		RunID     string `json:"run_id"`
+		StepID    string `json:"step_id"`
+		Token     string `json:"token"`
+		RequestID string `json:"request_id"`
+	}
+	requests := make(chan controlRequest, 1)
+	serveErrors := make(chan error, 1)
+	go func() {
+		connection, err := listener.Accept()
+		if err != nil {
+			serveErrors <- err
+			return
+		}
+		defer func() { _ = connection.Close() }()
+		var request controlRequest
+		if err := json.NewDecoder(connection).Decode(&request); err != nil {
+			serveErrors <- err
+			return
+		}
+		if err := json.NewEncoder(connection).Encode(map[string]any{"ok": true, "receipt": request.RequestID}); err != nil {
+			serveErrors <- err
+			return
+		}
+		requests <- request
+	}()
+
+	const runID = "opencode-surface-run"
+	const stepID = "opencode-surface-step"
+	const token = "opencode-surface-token"
+	marker := "AR_OPENCODE_SURFACE_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:10] + "_READY"
+	command := &cli.CompletionCommand{Executable: runnerBin, Args: []string{"step", "complete"}}
+	prompt := fmt.Sprintf("Print %s on its own line, then wait for the user. When the user asks you to continue, run the exact shell command %s and finish the response.", marker, command.ShellCommand())
+	args := (&cli.OpenCodeAdapter{}).BuildArgs(&cli.BuildArgsInput{
+		Prompt:            prompt,
+		Context:           cli.ContextInteractive,
+		CompletionCommand: command,
+	})
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Dir = workdir
+	cmd.Env = append(realAgentTestEnv(true),
+		"AGENT_RUNNER_CONTROL_SOCKET="+socketPath,
+		"AGENT_RUNNER_RUN_ID="+runID,
+		"AGENT_RUNNER_STEP_ID="+stepID,
+		"AGENT_RUNNER_CONTROL_TOKEN="+token,
+	)
+	ptmx, err := gopty.StartWithSize(cmd, &gopty.Winsize{Rows: 40, Cols: 120})
+	if err != nil {
+		t.Fatalf("start real OpenCode TUI: %v", err)
+	}
+	defer func() {
+		_ = cmd.Process.Kill()
+		_ = ptmx.Close()
+		_ = cmd.Wait()
+	}()
+
+	output := make(chan []byte, 32)
+	go func() {
+		buffer := make([]byte, 4096)
+		for {
+			n, readErr := ptmx.Read(buffer)
+			if n > 0 {
+				output <- append([]byte(nil), buffer[:n]...)
+			}
+			if readErr != nil {
+				close(output)
+				return
+			}
+		}
+	}()
+
+	timer := time.NewTimer(2 * time.Minute)
+	defer timer.Stop()
+	var transcript strings.Builder
+	ready := false
+	for {
+		select {
+		case chunk, ok := <-output:
+			if !ok {
+				t.Fatalf("real OpenCode TUI exited before completion event\n%s", transcript.String())
+			}
+			transcript.Write(chunk)
+			if !ready && strings.Contains(ansi.Strip(transcript.String()), marker) {
+				ready = true
+				if strings.HasPrefix(input, "/") {
+					_, _ = ptmx.Write([]byte("/"))
+					time.Sleep(200 * time.Millisecond)
+					_, _ = ptmx.Write([]byte(strings.TrimPrefix(input, "/")))
+				} else {
+					_, _ = ptmx.Write([]byte(input))
+				}
+				time.Sleep(100 * time.Millisecond)
+				_, _ = ptmx.Write([]byte("\r"))
+			}
+		case request := <-requests:
+			if request.Type != "complete_step" || request.RunID != runID || request.StepID != stepID || request.Token != token || request.RequestID == "" {
+				t.Fatalf("OpenCode completion request = %#v", request)
+			}
+			return
+		case err := <-serveErrors:
+			t.Fatalf("serve OpenCode control request: %v\n%s", err, transcript.String())
+		case <-timer.C:
+			t.Fatalf("real OpenCode %q completion timed out; ready=%v\n%s", input, ready, transcript.String())
+		}
 	}
 }
 
@@ -262,8 +404,8 @@ func runRealInteractiveAgentE2E(t *testing.T, agent string) {
 	// assembles the contiguous marker prefix; only the agent's answer does.
 	freshPrefix := "AR_" + upperAgent + "_FRESH_" + nonce + "_"
 	resumePrefix := "AR_" + upperAgent + "_RESUME_" + nonce + "_"
-	freshPrompt := fmt.Sprintf("Invent a recall phrase made of exactly two unusual lowercase English words that appear nowhere in these instructions. In this same turn, first state the phrase exactly once as a single line built from these six parts joined by single underscores. AR, then %s, then FRESH, then %s, then the first word, then the second word. Immediately after stating that line, run the exact Agent Runner completion command from the step instructions.", upperAgent, nonce)
-	resumePrompt := fmt.Sprintf("Reply with a single line built from these six parts joined by single underscores. AR, then %s, then RESUME, then %s, then the first word, then the second word of the recall phrase you invented in the previous turn.", upperAgent, nonce)
+	freshPrompt := fmt.Sprintf("Invent a recall phrase made of exactly two unusual lowercase English words that appear nowhere in these instructions. State the phrase exactly once as a single line built from these seven parts joined by single underscores. AR, then %s, then FRESH, then %s, then the first word, then the second word, then END. After stating that line, wait for the user. Do not run the Agent Runner completion command yourself; the user will invoke the native Agent Runner completion command.", upperAgent, nonce)
+	resumePrompt := fmt.Sprintf("Reply with a single line built from these seven parts joined by single underscores. AR, then %s, then RESUME, then %s, then the first word, then the second word of the recall phrase you invented in the previous turn, then END. Then wait for the user without running the Agent Runner completion command yourself.", upperAgent, nonce)
 	workflowName := "real-" + agent + "-interactive-e2e"
 	workflowPath := filepath.Join(t.TempDir(), "workflow.yaml")
 	workflow := fmt.Sprintf(`name: %s
@@ -277,15 +419,10 @@ steps:
     session: resume
     prompt: "%s"
 `, workflowName, agent, agent, agent, freshPrompt, agent, resumePrompt)
-	phases := []realAgentPTYPhase{{markerPrefix: freshPrefix}}
-	if agent == "claude" || agent == "cursor" {
-		phases[0].afterReady = "Run the exact Agent Runner completion command from the step instructions now."
+	phases := []realAgentPTYPhase{
+		{markerPrefix: freshPrefix, afterReady: realAgentExplicitCompletionCommand(agent)},
+		{markerPrefix: resumePrefix, afterReady: "Please continue to the next workflow step now."},
 	}
-	resumePhase := realAgentPTYPhase{markerPrefix: resumePrefix}
-	if agent == "claude" || agent == "cursor" {
-		resumePhase.afterReady = "Run the exact Agent Runner completion command from the step instructions now."
-	}
-	phases = append(phases, resumePhase)
 	stepIDs := []string{agent + "-interactive-fresh", agent + "-interactive-resume"}
 	writeRealAgentTestFile(t, workflowPath, []byte(workflow))
 	cleanupNewRealAgentRuns(t, workdir, workflowName)
@@ -313,6 +450,15 @@ steps:
 		t.Fatalf("real %s resumed answer did not recall the phrase invented in the completing turn: fresh=%q resume=%q\n%s", agent, freshPhrase, resumePhrase, result.output)
 	}
 	assertRealAgentRunCompleted(t, workdir, workflowName, stepIDs)
+}
+
+func realAgentExplicitCompletionCommand(agent string) string {
+	if agent == "codex" {
+		// Current Codex does not expose plugin commands or custom prompts as
+		// slash commands. Skills are its supported explicit invocation surface.
+		return "$agent-runner-next"
+	}
+	return "/agent-runner:next"
 }
 
 func prepareRealAgentE2E(t *testing.T, agent string) (repoRoot, workdir, runnerBin string) {
@@ -450,7 +596,7 @@ type realAgentPTYPhase struct {
 // the agent's invented two-lowercase-word phrase joined by an underscore. The
 // first submatch captures the phrase.
 func realAgentMarkerRegexp(prefix string) *regexp.Regexp {
-	return regexp.MustCompile(regexp.QuoteMeta(prefix) + `([a-z]{2,32}_[a-z]{2,32})`)
+	return regexp.MustCompile(regexp.QuoteMeta(prefix) + `([a-z]{2,32}_[a-z]{2,32})_END`)
 }
 
 // longestMarkerPhrase returns the longest captured phrase among all matches.
@@ -549,6 +695,7 @@ func runRealAgentWorkflowInPTY(cmd *exec.Cmd, agent string, phases []realAgentPT
 	phaseBoundary := 0
 	approvalBoundary := 0
 	commandApprovals := 0
+	hookTrustHandled := false
 	readDone := false
 	waitDone := false
 	var waitErr error
@@ -558,6 +705,13 @@ func runRealAgentWorkflowInPTY(cmd *exec.Cmd, agent string, phases []realAgentPT
 		phaseBoundary = boundary
 	}
 	handleInteractivePrompts := func(plain string) {
+		if agent == "codex" && !hookTrustHandled && strings.Contains(plain, "Hooks need review") {
+			hookTrustHandled = true
+			// The generated notify hook contains the test binary's unique path.
+			// Trust it once in the process-local CODEX_HOME; the resumed step
+			// must reuse the state written by this choice.
+			_, _ = ptmx.Write([]byte("2\r"))
+		}
 		currentPhase := 0
 		for currentPhase < len(ready) && ready[currentPhase] {
 			currentPhase++
@@ -611,7 +765,21 @@ func runRealAgentWorkflowInPTY(cmd *exec.Cmd, agent string, phases []realAgentPT
 			for i := range phases {
 				if phases[i].afterReady != "" && ready[i] && !afterReadySubmitted[i] && time.Since(readyAt[i]) >= 2*time.Second {
 					afterReadySubmitted[i] = true
-					_, _ = ptmx.Write([]byte(phases[i].afterReady + "\r"))
+					input := phases[i].afterReady
+					if agent == "codex" && strings.HasPrefix(input, "$") {
+						// Codex only opens its skill-completion menu for typed input,
+						// not for a whole mention pasted atomically. Type the sigil,
+						// accept the match, then submit it as the user's message.
+						_, _ = ptmx.Write([]byte("$"))
+						time.Sleep(250 * time.Millisecond)
+						_, _ = ptmx.Write([]byte(strings.TrimPrefix(input, "$")))
+						time.Sleep(250 * time.Millisecond)
+						_, _ = ptmx.Write([]byte("\t\r"))
+						continue
+					}
+					_, _ = ptmx.Write([]byte(input))
+					time.Sleep(100 * time.Millisecond)
+					_, _ = ptmx.Write([]byte("\r"))
 				}
 			}
 			if agent == "copilot" {

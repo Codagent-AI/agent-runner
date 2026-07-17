@@ -36,8 +36,8 @@ steps:
 
       The next step opens a short interactive session. Ask it anything about Agent Runner. When you're done, continue in any of these ways:
         - Tell the agent to continue
-        - Type /next
-        - Press Ctrl-]
+        - Type /agent-runner:next in Claude, Copilot, or Cursor
+        - Invoke $agent-runner-next in Codex
     actions:
       - label: Continue
         outcome: continue
@@ -49,7 +49,7 @@ steps:
     prompt: |
       You are demonstrating an Agent Runner interactive step during onboarding.
 
-      Explain that the user can advance the workflow to the next step after this short exchange in three ways: ask you to continue, type /next, or press Ctrl-]. If asked what "continue" or "complete the step" means, explain that Agent Runner gives each interactive agent step a hidden continuation marker instruction; when you reply with that marker, Agent Runner closes the agent session and moves to the next workflow step.
+      Explain that the user can advance the workflow after this short exchange by asking you to continue or by invoking the CLI-native Agent Runner completion command: /agent-runner:next in Claude, Copilot, or Cursor, and $agent-runner-next in Codex. If asked what "continue" or "complete the step" means, explain that Agent Runner gives each interactive agent step an absolute-path completion command; you run it to send an authenticated event, and Agent Runner waits for the turn to be saved before closing the session and moving on.
 
       Answer lightweight Agent Runner questions using the packaged documentation at {{session_dir}}/bundled/onboarding/docs/.
 
@@ -139,7 +139,7 @@ steps:
     prompt: |
       You are providing one additional Agent Runner Q&A exchange after the onboarding step types summary.
 
-      Use the packaged documentation at {{session_dir}}/bundled/onboarding/docs/ for reference. If asked what "continue" or "complete the step" means, explain the interactive continuation behavior from those docs: the user can ask you to continue, type /next, or press Ctrl-], and Agent Runner also gives you a hidden continuation marker instruction for ending the step.
+      Use the packaged documentation at {{session_dir}}/bundled/onboarding/docs/ for reference. If asked what "continue" or "complete the step" means, explain the interactive continuation behavior from those docs: the user can ask you to continue or invoke the CLI-native completion command, and Agent Runner gives you an absolute-path control-channel command for ending the step safely.
 
       Answer one or two lightweight Agent Runner questions, then complete the step so the demo workflow can finish.
 
