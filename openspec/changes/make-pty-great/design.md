@@ -2,7 +2,7 @@
 
 ## Context
 
-Interactive and autonomous-interactive agent steps currently run inside an Agent Runner PTY (`internal/pty`) that parses every byte to detect `/next`, Ctrl-], and a per-attempt output sentinel (`AGENT_RUNNER_CONTINUE_*`). The specs in this change retire that mechanism: the CLI child inherits the user's real terminal, and step completion travels over an out-of-band control channel. See `proposal.md` for motivation and the four delta specs for behavioral requirements.
+Interactive and autonomous-interactive agent steps currently run inside an Agent Runner PTY (`internal/pty`) that parses every byte to detect `/next`, Ctrl-], and a per-attempt output sentinel. The specs in this change retire that mechanism: the CLI child inherits the user's real terminal, and step completion travels over an out-of-band control channel. See `proposal.md` for motivation and the four delta specs for behavioral requirements.
 
 Key existing seams (verified in code):
 

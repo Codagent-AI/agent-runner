@@ -1,6 +1,7 @@
 package pty
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"syscall"
@@ -14,6 +15,7 @@ var signalProcessGroup = syscall.Kill
 type relayProcess interface {
 	wait() error
 	signalGroup(syscall.Signal) error
+	isGroupAlive() bool
 }
 
 type commandRelayProcess struct {
@@ -29,6 +31,14 @@ func (p commandRelayProcess) signalGroup(sig syscall.Signal) error {
 		return nil
 	}
 	return signalProcessGroup(-p.cmd.Process.Pid, sig)
+}
+
+func (p commandRelayProcess) isGroupAlive() bool {
+	if p.cmd == nil || p.cmd.Process == nil {
+		return false
+	}
+	err := signalProcessGroup(-p.cmd.Process.Pid, syscall.Signal(0))
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 type relayConfig struct {
@@ -78,6 +88,7 @@ func finishRelay(config relayConfig, waitErr error, outputDone, inputDone <-chan
 
 	outcome := relayOutcome{waitErr: waitErr}
 	drainTimedOut := false
+	ptyClosed := false
 	if outputDone != nil {
 		timer := time.NewTimer(config.drainTimeout)
 		select {
@@ -89,6 +100,13 @@ func finishRelay(config relayConfig, waitErr error, outputDone, inputDone <-chan
 			drainTimedOut = true
 			outcome.warning = fmt.Sprintf("WARNING: PTY output drain timeout after %s; possible output truncation", config.drainTimeout)
 			_ = config.process.signalGroup(syscall.SIGTERM)
+			if config.closePTY != nil {
+				ptyClosed = true
+				if err := config.closePTY(); err != nil {
+					outcome.warning += fmt.Sprintf("; PTY close error: %v", err)
+				}
+			}
+			escalateProcessGroup(config)
 		}
 		if !timer.Stop() {
 			select {
@@ -98,7 +116,7 @@ func finishRelay(config relayConfig, waitErr error, outputDone, inputDone <-chan
 		}
 	}
 
-	if config.closePTY != nil {
+	if config.closePTY != nil && !ptyClosed {
 		if err := config.closePTY(); err != nil && outcome.relayErr == nil {
 			if drainTimedOut {
 				outcome.warning += fmt.Sprintf("; PTY close error: %v", err)
@@ -117,6 +135,19 @@ func finishRelay(config relayConfig, waitErr error, outputDone, inputDone <-chan
 		}
 	}
 	return outcome
+}
+
+func escalateProcessGroup(config relayConfig) {
+	grace := config.terminationGrace
+	if grace <= 0 {
+		grace = killTimeout
+	}
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	<-timer.C
+	if config.process.isGroupAlive() {
+		_ = config.process.signalGroup(syscall.SIGKILL)
+	}
 }
 
 func failRelay(config relayConfig, waitDone <-chan error, direction string, relayErr error) relayOutcome {

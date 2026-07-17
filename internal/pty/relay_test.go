@@ -16,6 +16,7 @@ import (
 type fakeRelayProcess struct {
 	waitErr     error
 	waitRelease chan struct{}
+	groupAlive  bool
 
 	mu      sync.Mutex
 	signals []syscall.Signal
@@ -34,6 +35,10 @@ func (p *stubbornRelayProcess) signalGroup(sig syscall.Signal) error {
 	return nil
 }
 
+func (p *stubbornRelayProcess) isGroupAlive() bool {
+	return true
+}
+
 func (p *fakeRelayProcess) wait() error {
 	if p.waitRelease != nil {
 		<-p.waitRelease
@@ -45,11 +50,20 @@ func (p *fakeRelayProcess) signalGroup(sig syscall.Signal) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.signals = append(p.signals, sig)
+	if sig == syscall.SIGKILL {
+		p.groupAlive = false
+	}
 	if p.waitRelease != nil && sig == syscall.SIGTERM {
 		close(p.waitRelease)
 		p.waitRelease = nil
 	}
 	return nil
+}
+
+func (p *fakeRelayProcess) isGroupAlive() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.groupAlive
 }
 
 func (p *fakeRelayProcess) gotSignals() []syscall.Signal {
@@ -94,16 +108,17 @@ func TestSuperviseRelayDrainsOutputAfterCommandExit(t *testing.T) {
 
 func TestSuperviseRelayBoundsDrainAndPreservesCommandOutcome(t *testing.T) {
 	waitErr := errors.New("exit status 9")
-	process := &fakeRelayProcess{waitErr: waitErr}
+	process := &fakeRelayProcess{waitErr: waitErr, groupAlive: true}
 	outputDone := make(chan error)
 	closed := make(chan struct{})
 
 	start := time.Now()
 	outcome := superviseRelay(relayConfig{
-		process:      process,
-		outputDone:   outputDone,
-		closePTY:     func() error { close(closed); return errors.New("close after timeout") },
-		drainTimeout: 15 * time.Millisecond,
+		process:          process,
+		outputDone:       outputDone,
+		closePTY:         func() error { close(closed); return errors.New("close after timeout") },
+		drainTimeout:     15 * time.Millisecond,
+		terminationGrace: 10 * time.Millisecond,
 	})
 
 	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
@@ -119,7 +134,7 @@ func TestSuperviseRelayBoundsDrainAndPreservesCommandOutcome(t *testing.T) {
 		!strings.Contains(strings.ToLower(outcome.warning), "output truncation") {
 		t.Fatalf("warning = %q, want prominent drain-timeout/output-truncation warning", outcome.warning)
 	}
-	if diff := cmp.Diff([]syscall.Signal{syscall.SIGTERM}, process.gotSignals()); diff != "" {
+	if diff := cmp.Diff([]syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}, process.gotSignals()); diff != "" {
 		t.Fatalf("signals mismatch (-want +got):\n%s", diff)
 	}
 	select {
