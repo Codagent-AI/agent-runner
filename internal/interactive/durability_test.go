@@ -24,20 +24,46 @@ func TestAwaitTurnDurabilityConfirmsAfterCheckpoint(t *testing.T) {
 	}
 	logger := &recordingEventLogger{}
 	result := AwaitTurnDurability(context.Background(), &DurabilityOptions{
-		CLI:       "codex",
-		SessionID: "session-1",
-		Probe:     probe,
-		Logger:    logger,
-		Timeout:   time.Second,
+		CLI:        "codex",
+		SessionID:  "session-1",
+		Probe:      probe,
+		Checkpoint: probe.checkpoint,
+		Logger:     logger,
+		Timeout:    time.Second,
 	})
 	if diff := cmp.Diff(DurabilityResult{Outcome: CompletionSuccess, TerminateChild: true}, result, cmp.Comparer(compareErrors)); diff != "" {
 		t.Fatalf("result mismatch (-want +got):\n%s", diff)
 	}
-	if probe.checkpointCalls != 1 || probe.waitCalls != 1 {
+	if probe.checkpointCalls != 0 || probe.waitCalls != 1 {
 		t.Fatalf("probe calls checkpoint=%d wait=%d", probe.checkpointCalls, probe.waitCalls)
 	}
 	if len(logger.snapshot()) != 0 {
 		t.Fatalf("successful durability emitted failure audit: %#v", logger.snapshot())
+	}
+}
+
+func TestAwaitTurnDurabilityUsesAcceptanceCheckpointWithoutRecapturing(t *testing.T) {
+	checkpoint := cli.Checkpoint{Artifact: "/native/session.jsonl", Offset: 27}
+	probe := &fakeDurabilityProbe{}
+	probe.wait = func(_ context.Context, sessionID string, after cli.Checkpoint) error {
+		if sessionID != "session-accept" || after != checkpoint {
+			t.Fatalf("WaitForCommittedTurn(%q, %#v)", sessionID, after)
+		}
+		return nil
+	}
+
+	result := AwaitTurnDurability(context.Background(), &DurabilityOptions{
+		CLI:        "codex",
+		SessionID:  "session-accept",
+		Probe:      probe,
+		Checkpoint: checkpoint,
+		Timeout:    time.Second,
+	})
+	if result.Outcome != CompletionSuccess || result.Err != nil {
+		t.Fatalf("result = %#v", result)
+	}
+	if probe.checkpointCalls != 0 {
+		t.Fatalf("durability checkpoint recaptured %d times after acknowledgement", probe.checkpointCalls)
 	}
 }
 
@@ -73,11 +99,12 @@ func TestAwaitTurnDurabilityTimesOutAndAuditsFailure(t *testing.T) {
 	}
 	logger := &recordingEventLogger{}
 	result := AwaitTurnDurability(context.Background(), &DurabilityOptions{
-		CLI:       "copilot",
-		SessionID: "session-9",
-		Probe:     probe,
-		Logger:    logger,
-		Timeout:   25 * time.Millisecond,
+		CLI:        "copilot",
+		SessionID:  "session-9",
+		Probe:      probe,
+		Checkpoint: probe.checkpoint,
+		Logger:     logger,
+		Timeout:    25 * time.Millisecond,
 	})
 	if result.Outcome != CompletionFailed || !result.TerminateChild || !errors.Is(result.Err, ErrDurabilityTimeout) {
 		t.Fatalf("result = %#v", result)
@@ -112,6 +139,7 @@ func TestAwaitTurnDurabilityContinuesAfterChildExit(t *testing.T) {
 		CLI:         "cursor",
 		SessionID:   "session-2",
 		Probe:       probe,
+		Checkpoint:  probe.checkpoint,
 		ChildExited: childExited,
 		Timeout:     time.Second,
 	})
@@ -121,14 +149,15 @@ func TestAwaitTurnDurabilityContinuesAfterChildExit(t *testing.T) {
 }
 
 func TestAwaitTurnDurabilityCheckpointFailureAuditsArtifact(t *testing.T) {
-	probe := &fakeDurabilityProbe{checkpointErr: errors.New("store missing")}
+	probe := &fakeDurabilityProbe{}
 	logger := &recordingEventLogger{}
 	result := AwaitTurnDurability(context.Background(), &DurabilityOptions{
-		CLI:       "opencode",
-		SessionID: "session-3",
-		Probe:     probe,
-		Logger:    logger,
-		Timeout:   time.Second,
+		CLI:           "opencode",
+		SessionID:     "session-3",
+		Probe:         probe,
+		CheckpointErr: errors.New("store missing"),
+		Logger:        logger,
+		Timeout:       time.Second,
 	})
 	if result.Outcome != CompletionFailed || !strings.Contains(result.Err.Error(), "checkpoint") {
 		t.Fatalf("result = %#v", result)

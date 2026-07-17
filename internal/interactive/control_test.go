@@ -16,17 +16,20 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/cli"
+	"github.com/codagent/agent-runner/internal/runlock"
 )
 
 func TestControlServerCreatesPrivateEndpointAndAttemptEnvironment(t *testing.T) {
 	runDir := t.TempDir()
 	tempDir := shortTempDir(t)
 	logger := &recordingEventLogger{}
-	server, err := NewControlServer(ControlConfig{
-		RunID:   "run-with-a-deliberately-long-identifier",
-		RunDir:  runDir,
-		TempDir: tempDir,
-		Logger:  logger,
+	server, err := NewControlServer(&ControlConfig{
+		RunID:     "run-with-a-deliberately-long-identifier",
+		RunDir:    runDir,
+		TempDir:   tempDir,
+		LockProof: heldRunLockProof(t, runDir),
+		Logger:    logger,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -76,8 +79,21 @@ func TestControlServerCreationFailureIsDescriptive(t *testing.T) {
 	if err := os.WriteFile(notDir, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := NewControlServer(ControlConfig{RunID: "run", RunDir: t.TempDir(), TempDir: notDir})
+	runDir := t.TempDir()
+	_, err := NewControlServer(&ControlConfig{RunID: "run", RunDir: runDir, TempDir: notDir, LockProof: heldRunLockProof(t, runDir)})
 	if err == nil || !strings.Contains(err.Error(), "create private control directory") {
+		t.Fatalf("NewControlServer error = %v", err)
+	}
+}
+
+func TestControlServerRequiresHeldRunLockProof(t *testing.T) {
+	_, err := NewControlServer(&ControlConfig{
+		RunID:     "run",
+		RunDir:    t.TempDir(),
+		TempDir:   shortTempDir(t),
+		LockProof: runlock.HeldProof{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "run lock proof") {
 		t.Fatalf("NewControlServer error = %v", err)
 	}
 }
@@ -93,6 +109,45 @@ func TestControlServerCloseRemovesSocketAndPointer(t *testing.T) {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("%s still exists after close (err=%v)", path, err)
 		}
+	}
+}
+
+func TestControlServerCloseUnblocksBackpressuredDeliveries(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+
+	first := server.Activate("first")
+	if response := exchange(t, server.SocketPath(), &controlRequest{
+		Type: MessageCompleteStep, RunID: first.RunID, StepID: first.StepID, Token: first.Token, RequestID: "complete-first",
+	}); !response.OK {
+		t.Fatalf("first completion response = %#v", response)
+	}
+	if response := exchange(t, server.SocketPath(), &controlRequest{
+		Type: MessageTurnCommitted, RunID: first.RunID, StepID: first.StepID, Token: first.Token, RequestID: "turn-first",
+	}); !response.OK {
+		t.Fatalf("first turn response = %#v", response)
+	}
+
+	second := server.Activate("second")
+	if response := exchange(t, server.SocketPath(), &controlRequest{
+		Type: MessageCompleteStep, RunID: second.RunID, StepID: second.StepID, Token: second.Token, RequestID: "complete-second",
+	}); !response.OK {
+		t.Fatalf("second completion response = %#v", response)
+	}
+	if response := exchange(t, server.SocketPath(), &controlRequest{
+		Type: MessageTurnCommitted, RunID: second.RunID, StepID: second.StepID, Token: second.Token, RequestID: "turn-second",
+	}); !response.OK {
+		t.Fatalf("second turn response = %#v", response)
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- server.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Close blocked behind unread completion and turn deliveries")
 	}
 }
 
@@ -139,6 +194,35 @@ func TestControlServerAcceptsCurrentCredentialAndAcknowledgesIdempotently(t *tes
 	}
 }
 
+func TestControlServerCapturesDurabilityCheckpointBeforeAcknowledgement(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+	defer server.Close()
+	wantCheckpoint := cli.Checkpoint{Artifact: "/native/session.jsonl", Offset: 42}
+	checkpointCaptured := false
+	attempt := server.ActivateWithCheckpoint("implement", func() (cli.Checkpoint, error) {
+		checkpointCaptured = true
+		return wantCheckpoint, nil
+	})
+
+	response := exchange(t, server.SocketPath(), &controlRequest{
+		Type: MessageCompleteStep, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "complete",
+	})
+	if !response.OK {
+		t.Fatalf("completion response = %#v", response)
+	}
+	if !checkpointCaptured {
+		t.Fatal("completion was acknowledged before its durability checkpoint was captured")
+	}
+	select {
+	case completion := <-server.Completions():
+		if diff := cmp.Diff(wantCheckpoint, completion.Checkpoint); diff != "" {
+			t.Fatalf("checkpoint mismatch (-want +got):\n%s", diff)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("completion was not delivered")
+	}
+}
+
 func TestControlServerAcceptsTurnCommittedAfterCompletion(t *testing.T) {
 	logger := &recordingEventLogger{}
 	server := newTestControlServer(t, t.TempDir(), logger)
@@ -167,10 +251,36 @@ func TestControlServerAcceptsTurnCommittedAfterCompletion(t *testing.T) {
 	}
 }
 
+func TestControlServerRejectsTurnCommittedBeforeCompletion(t *testing.T) {
+	logger := &recordingEventLogger{}
+	server := newTestControlServer(t, t.TempDir(), logger)
+	defer server.Close()
+	attempt := server.Activate("implement")
+	committed := controlRequest{Type: MessageTurnCommitted, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "early-turn"}
+
+	response := exchange(t, server.SocketPath(), &committed)
+	if response.OK || !strings.Contains(response.Error, "before completion") {
+		t.Fatalf("early turn response = %#v", response)
+	}
+	select {
+	case turn := <-server.CommittedTurns():
+		t.Fatalf("pre-completion turn was delivered: %#v", turn)
+	case <-time.After(40 * time.Millisecond):
+	}
+	if diff := cmp.Diff([]audit.EventType{audit.EventControlRejected}, logger.types()); diff != "" {
+		t.Fatalf("audit events mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestControlServerRetriesTurnCommittedAfterLostAcknowledgement(t *testing.T) {
 	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
 	defer server.Close()
 	attempt := server.Activate("implement")
+	complete := controlRequest{Type: MessageCompleteStep, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "complete"}
+	if response := exchange(t, server.SocketPath(), &complete); !response.OK {
+		t.Fatalf("completion response = %#v", response)
+	}
+	<-server.Completions()
 	request := controlRequest{Type: MessageTurnCommitted, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "turn"}
 
 	client, peer := net.Pipe()
@@ -319,11 +429,27 @@ func TestSendControlEventRetriesLostAcknowledgementWithSameRequestID(t *testing.
 
 func newTestControlServer(t *testing.T, runDir string, logger audit.EventLogger) *ControlServer {
 	t.Helper()
-	server, err := NewControlServer(ControlConfig{RunID: "run", RunDir: runDir, TempDir: shortTempDir(t), Logger: logger})
+	server, err := NewControlServer(&ControlConfig{
+		RunID: "run", RunDir: runDir, TempDir: shortTempDir(t), LockProof: heldRunLockProof(t, runDir), Logger: logger,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return server
+}
+
+func heldRunLockProof(t *testing.T, runDir string) runlock.HeldProof {
+	t.Helper()
+	activePID, err := runlock.Acquire(runDir)
+	if err != nil || activePID != 0 {
+		t.Fatalf("acquire run lock: active PID %d: %v", activePID, err)
+	}
+	t.Cleanup(func() { runlock.Delete(runDir) })
+	proof, err := runlock.ProveHeld(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return proof
 }
 
 func exchange(t *testing.T, socket string, request *controlRequest) controlResponse {

@@ -22,6 +22,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/cli"
+	"github.com/codagent/agent-runner/internal/runlock"
 )
 
 const (
@@ -42,11 +44,12 @@ const (
 // server only after acquiring the run lock; that lock is what makes removal of
 // a stale socket safe on resume.
 type ControlConfig struct {
-	RunID   string
-	RunDir  string
-	TempDir string
-	Logger  audit.EventLogger
-	Now     func() time.Time
+	RunID     string
+	RunDir    string
+	TempDir   string
+	LockProof runlock.HeldProof
+	Logger    audit.EventLogger
+	Now       func() time.Time
 }
 
 // Attempt is the child-facing identity and credential for one step attempt.
@@ -81,10 +84,12 @@ func (a *Attempt) Environment() []string {
 
 // CompletionRequest is emitted only once for an accepted attempt.
 type CompletionRequest struct {
-	AttemptID string
-	RunID     string
-	StepID    string
-	RequestID string
+	AttemptID     string
+	RunID         string
+	StepID        string
+	RequestID     string
+	Checkpoint    cli.Checkpoint
+	CheckpointErr error
 }
 
 // CommittedTurn is authenticated semantic evidence from a CLI post-turn hook.
@@ -111,6 +116,7 @@ type controlResponse struct {
 type attemptState struct {
 	Attempt
 	completionAccepted bool
+	checkpoint         func() (cli.Checkpoint, error)
 }
 
 type acceptedCompletion struct {
@@ -135,6 +141,7 @@ type ControlServer struct {
 	committed   map[string]struct{}
 	completions chan CompletionRequest
 	turns       chan CommittedTurn
+	done        chan struct{}
 
 	closeOnce sync.Once
 	closeErr  error
@@ -142,12 +149,15 @@ type ControlServer struct {
 }
 
 // NewControlServer binds the private run endpoint and writes its pointer file.
-func NewControlServer(config ControlConfig) (*ControlServer, error) {
+func NewControlServer(config *ControlConfig) (*ControlServer, error) {
 	if strings.TrimSpace(config.RunID) == "" {
 		return nil, errors.New("create control endpoint: run ID is required")
 	}
 	if strings.TrimSpace(config.RunDir) == "" {
 		return nil, errors.New("create control endpoint: run directory is required")
+	}
+	if err := config.LockProof.Validate(config.RunDir); err != nil {
+		return nil, fmt.Errorf("create control endpoint: invalid run lock proof: %w", err)
 	}
 	tempDir := config.TempDir
 	if tempDir == "" {
@@ -157,7 +167,7 @@ func NewControlServer(config ControlConfig) (*ControlServer, error) {
 	if err := os.MkdirAll(privateDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create private control directory: %w", err)
 	}
-	if err := os.Chmod(privateDir, 0o700); err != nil {
+	if err := os.Chmod(privateDir, 0o700); err != nil { // #nosec G302 -- a private directory needs owner execute permission
 		return nil, fmt.Errorf("secure private control directory: %w", err)
 	}
 	digest := sha256.Sum256([]byte(config.RunID))
@@ -201,6 +211,7 @@ func NewControlServer(config ControlConfig) (*ControlServer, error) {
 		committed:   make(map[string]struct{}),
 		completions: make(chan CompletionRequest, 1),
 		turns:       make(chan CommittedTurn, 1),
+		done:        make(chan struct{}),
 	}
 	server.wg.Add(1)
 	go server.acceptLoop()
@@ -211,6 +222,12 @@ func (s *ControlServer) SocketPath() string { return s.socketPath }
 
 // Activate rotates the credential and makes one interactive attempt current.
 func (s *ControlServer) Activate(stepID string) Attempt {
+	return s.ActivateWithCheckpoint(stepID, nil)
+}
+
+// ActivateWithCheckpoint rotates the credential and binds the durability
+// checkpoint captured synchronously when completion is accepted.
+func (s *ControlServer) ActivateWithCheckpoint(stepID string, checkpoint func() (cli.Checkpoint, error)) Attempt {
 	attempt := Attempt{
 		ID:         uuid.NewString(),
 		RunID:      s.runID,
@@ -219,7 +236,7 @@ func (s *ControlServer) Activate(stepID string) Attempt {
 		SocketPath: s.socketPath,
 	}
 	s.mu.Lock()
-	s.active = &attemptState{Attempt: attempt}
+	s.active = &attemptState{Attempt: attempt, checkpoint: checkpoint}
 	s.mu.Unlock()
 	return attempt
 }
@@ -237,6 +254,7 @@ func (s *ControlServer) CommittedTurns() <-chan CommittedTurn  { return s.turns 
 // Close stops the server and removes both the socket and its run-directory pointer.
 func (s *ControlServer) Close() error {
 	s.closeOnce.Do(func() {
+		close(s.done)
 		if err := s.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			s.closeErr = err
 		}
@@ -283,7 +301,7 @@ func (s *ControlServer) handleConnection(connection net.Conn) {
 			accepted := cached.request
 			s.mu.Unlock()
 			s.emit(audit.EventCompletionAcknowledged, accepted.StepID, map[string]any{"request_id": accepted.RequestID, "attempt_id": accepted.AttemptID})
-			s.completions <- accepted
+			s.deliverCompletion(&accepted)
 			return
 		}
 		s.mu.Unlock()
@@ -298,39 +316,69 @@ func (s *ControlServer) handleConnection(connection net.Conn) {
 
 	switch request.Type {
 	case MessageCompleteStep:
-		if active.completionAccepted {
-			s.mu.Unlock()
-			_ = writeControlResponse(connection, controlResponse{OK: true})
-			return
-		}
-		active.completionAccepted = true
-		accepted := CompletionRequest{AttemptID: active.ID, RunID: request.RunID, StepID: request.StepID, RequestID: request.RequestID}
-		s.accepted[cacheKey] = &acceptedCompletion{request: accepted}
-		s.mu.Unlock()
-		s.emit(audit.EventCompletionRequested, request.StepID, map[string]any{"request_id": request.RequestID, "attempt_id": active.ID})
-		if writeControlResponse(connection, controlResponse{OK: true}) == nil {
-			s.mu.Lock()
-			s.accepted[cacheKey].delivered = true
-			s.mu.Unlock()
-			s.emit(audit.EventCompletionAcknowledged, request.StepID, map[string]any{"request_id": request.RequestID, "attempt_id": active.ID})
-			s.completions <- accepted
-		}
+		s.handleCompletion(connection, &request, active, cacheKey)
 	case MessageTurnCommitted:
-		turnKey := active.ID
-		if _, duplicate := s.committed[turnKey]; duplicate {
-			s.mu.Unlock()
-			_ = writeControlResponse(connection, controlResponse{OK: true})
-			return
-		}
-		turn := CommittedTurn{AttemptID: active.ID, RunID: request.RunID, StepID: request.StepID, RequestID: request.RequestID}
-		if writeControlResponse(connection, controlResponse{OK: true}) != nil {
-			s.mu.Unlock()
-			return
-		}
-		s.committed[turnKey] = struct{}{}
+		s.handleCommittedTurn(connection, &request, active)
+	}
+}
+
+func (s *ControlServer) handleCompletion(connection net.Conn, request *controlRequest, active *attemptState, cacheKey string) {
+	if active.completionAccepted {
 		s.mu.Unlock()
-		s.emit(audit.EventTurnCommitted, request.StepID, map[string]any{"request_id": request.RequestID, "attempt_id": active.ID})
-		s.turns <- turn
+		_ = writeControlResponse(connection, controlResponse{OK: true})
+		return
+	}
+	active.completionAccepted = true
+	accepted := CompletionRequest{AttemptID: active.ID, RunID: request.RunID, StepID: request.StepID, RequestID: request.RequestID}
+	s.emit(audit.EventCompletionRequested, request.StepID, map[string]any{"request_id": request.RequestID, "attempt_id": active.ID})
+	if active.checkpoint != nil {
+		accepted.Checkpoint, accepted.CheckpointErr = active.checkpoint()
+	}
+	s.accepted[cacheKey] = &acceptedCompletion{request: accepted}
+	s.mu.Unlock()
+	if writeControlResponse(connection, controlResponse{OK: true}) == nil {
+		s.mu.Lock()
+		s.accepted[cacheKey].delivered = true
+		s.mu.Unlock()
+		s.emit(audit.EventCompletionAcknowledged, request.StepID, map[string]any{"request_id": request.RequestID, "attempt_id": active.ID})
+		s.deliverCompletion(&accepted)
+	}
+}
+
+func (s *ControlServer) handleCommittedTurn(connection net.Conn, request *controlRequest, active *attemptState) {
+	if !active.completionAccepted {
+		s.mu.Unlock()
+		s.reject(connection, "turn_committed arrived before completion was accepted", request)
+		return
+	}
+	turnKey := active.ID
+	if _, duplicate := s.committed[turnKey]; duplicate {
+		s.mu.Unlock()
+		_ = writeControlResponse(connection, controlResponse{OK: true})
+		return
+	}
+	turn := CommittedTurn{AttemptID: active.ID, RunID: request.RunID, StepID: request.StepID, RequestID: request.RequestID}
+	if writeControlResponse(connection, controlResponse{OK: true}) != nil {
+		s.mu.Unlock()
+		return
+	}
+	s.committed[turnKey] = struct{}{}
+	s.mu.Unlock()
+	s.emit(audit.EventTurnCommitted, request.StepID, map[string]any{"request_id": request.RequestID, "attempt_id": active.ID})
+	s.deliverCommittedTurn(turn)
+}
+
+func (s *ControlServer) deliverCompletion(request *CompletionRequest) {
+	select {
+	case s.completions <- *request:
+	case <-s.done:
+	}
+}
+
+func (s *ControlServer) deliverCommittedTurn(turn CommittedTurn) {
+	select {
+	case s.turns <- turn:
+	case <-s.done:
 	}
 }
 

@@ -28,6 +28,8 @@ type DurabilityOptions struct {
 	CLI           string
 	SessionID     string
 	Probe         cli.TurnDurabilityProbe
+	Checkpoint    cli.Checkpoint
+	CheckpointErr error
 	CommittedTurn <-chan struct{}
 	ChildExited   <-chan struct{}
 	Timeout       time.Duration
@@ -46,10 +48,10 @@ type DurabilityResult struct {
 	Err            error
 }
 
-// AwaitTurnDurability checkpoints at acceptance time, then waits for either a
-// native post-turn signal or an adapter-confirmed committed assistant turn.
-// Child exit is deliberately not a cancellation source: store inspection
-// continues for the remaining active-runtime bound.
+// AwaitTurnDurability uses the checkpoint captured at acceptance time, then
+// waits for either a native post-turn signal or an adapter-confirmed committed
+// assistant turn. Child exit is deliberately not a cancellation source: store
+// inspection continues for the remaining active-runtime bound.
 func AwaitTurnDurability(ctx context.Context, options *DurabilityOptions) DurabilityResult {
 	timeout := options.Timeout
 	if timeout <= 0 {
@@ -60,9 +62,9 @@ func AwaitTurnDurability(ctx context.Context, options *DurabilityOptions) Durabi
 		emitDurabilityFailure(options, timeout, "unavailable", err)
 		return DurabilityResult{Outcome: CompletionFailed, TerminateChild: true, Err: err}
 	}
-	checkpoint, err := options.Probe.Checkpoint(options.SessionID)
-	if err != nil {
-		err = fmt.Errorf("checkpoint committed-turn evidence: %w", err)
+	checkpoint := options.Checkpoint
+	if options.CheckpointErr != nil {
+		err := fmt.Errorf("checkpoint committed-turn evidence: %w", options.CheckpointErr)
 		emitDurabilityFailure(options, timeout, "unavailable", err)
 		return DurabilityResult{Outcome: CompletionFailed, TerminateChild: true, Err: err}
 	}
