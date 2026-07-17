@@ -426,6 +426,13 @@ func (s *ControlServer) handleCommittedTurn(connection net.Conn, request *contro
 }
 
 func (s *ControlServer) deliverCompletion(request *CompletionRequest) {
+	// The client was already told OK, so prefer delivery over shutdown: only
+	// consult done when the buffer is full and delivery would block.
+	select {
+	case s.completions <- *request:
+		return
+	default:
+	}
 	select {
 	case s.completions <- *request:
 	case <-s.done:
@@ -440,6 +447,13 @@ func (s *ControlServer) deliverCommittedTurn(turn CommittedTurn) {
 		close(waiter)
 	}
 	s.mu.Unlock()
+	// The client was already told OK, so prefer delivery over shutdown: only
+	// consult done when the buffer is full and delivery would block.
+	select {
+	case s.turns <- turn:
+		return
+	default:
+	}
 	select {
 	case s.turns <- turn:
 	case <-s.done:

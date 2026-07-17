@@ -152,6 +152,43 @@ func TestControlServerCloseUnblocksBackpressuredDeliveries(t *testing.T) {
 	}
 }
 
+func TestControlServerPrefersDeliveryOverShutdownForAcknowledgedEvents(t *testing.T) {
+	// The old implementation selected randomly between the buffered send and
+	// the closed done channel, dropping acknowledged events roughly half the
+	// time. Loop enough iterations to make the old behavior fail reliably.
+	for iteration := 0; iteration < 200; iteration++ {
+		server := &ControlServer{
+			accepted:    make(map[string]*acceptedCompletion),
+			committed:   make(map[string]struct{}),
+			turnWaiters: make(map[string]map[uint64]chan struct{}),
+			completions: make(chan CompletionRequest, 1),
+			turns:       make(chan CommittedTurn, 1),
+			done:        make(chan struct{}),
+		}
+		close(server.done)
+
+		server.deliverCompletion(&CompletionRequest{RequestID: "acknowledged"})
+		select {
+		case completion := <-server.completions:
+			if completion.RequestID != "acknowledged" {
+				t.Fatalf("iteration %d: completion = %#v", iteration, completion)
+			}
+		default:
+			t.Fatalf("iteration %d: acknowledged completion was dropped on shutdown", iteration)
+		}
+
+		server.deliverCommittedTurn(CommittedTurn{RequestID: "acknowledged"})
+		select {
+		case turn := <-server.turns:
+			if turn.RequestID != "acknowledged" {
+				t.Fatalf("iteration %d: turn = %#v", iteration, turn)
+			}
+		default:
+			t.Fatalf("iteration %d: acknowledged committed turn was dropped on shutdown", iteration)
+		}
+	}
+}
+
 func TestControlServerAcceptsCurrentCredentialAndAcknowledgesIdempotently(t *testing.T) {
 	logger := &recordingEventLogger{}
 	server := newTestControlServer(t, t.TempDir(), logger)
