@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -197,6 +198,26 @@ func TestAdaptersEmitCompletionIntegrations(t *testing.T) {
 			t.Fatalf("OpenCode /next template = %q", got)
 		}
 	})
+}
+
+func TestCursorInvocationFailsWhenCompletionPluginCreationFails(t *testing.T) {
+	adapter := &CursorAdapter{prepareCompletionPlugin: func(CompletionCommand) (string, error) {
+		return "", errors.New("cache dir unavailable")
+	}}
+	args, err := BuildInvocationArgs(adapter, &BuildArgsInput{
+		Prompt:  "work",
+		Context: ContextInteractive,
+		CompletionCommand: &CompletionCommand{
+			Executable: "/opt/codagent/bin/agent-runner",
+			Args:       []string{"step", "complete"},
+		},
+	})
+	if err == nil {
+		t.Fatalf("BuildInvocationArgs = %v, want error when completion plugin creation fails", args)
+	}
+	if !strings.Contains(err.Error(), "completion plugin") || !strings.Contains(err.Error(), "cache dir unavailable") {
+		t.Fatalf("BuildInvocationArgs error = %v, want descriptive completion plugin error", err)
+	}
 }
 
 func TestInvalidCompletionDescriptorDoesNotLoosenPermissions(t *testing.T) {

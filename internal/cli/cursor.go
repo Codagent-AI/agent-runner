@@ -20,7 +20,8 @@ import (
 
 // CursorAdapter constructs invocation args for the Cursor agent CLI.
 type CursorAdapter struct {
-	runStoreQuery func(string) ([]byte, error)
+	runStoreQuery           func(string) ([]byte, error)
+	prepareCompletionPlugin func(CompletionCommand) (string, error) // test seam; nil uses prepareCursorCompletionPlugin
 }
 
 const maxCursorStoreDBSize = 64 * 1024 * 1024
@@ -44,7 +45,20 @@ func (a *CursorAdapter) ExecutableName() string {
 // output/trust flags because a human supervises permissions at the
 // terminal. --model is omitted on resume because a resumed Cursor chat keeps the
 // model it was started with.
+//
+// BuildArgs exists only to satisfy the Adapter interface; callers must use
+// BuildInvocationArgs so a completion-plugin failure surfaces before spawn.
 func (a *CursorAdapter) BuildArgs(input *BuildArgsInput) []string {
+	args, err := a.BuildArgsWithError(input)
+	if err != nil {
+		return nil
+	}
+	return args
+}
+
+// BuildArgsWithError constructs Cursor CLI args, failing when the completion
+// plugin — Cursor's only completion integration — cannot be created.
+func (a *CursorAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, error) {
 	args := []string{"agent"}
 	context := input.InvocationContext()
 	if context.IsHeadless() {
@@ -62,14 +76,17 @@ func (a *CursorAdapter) BuildArgs(input *BuildArgsInput) []string {
 
 	args = append(args, input.Prompt)
 	if !context.IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid() {
-		pluginDir, err := prepareCursorCompletionPlugin(*input.CompletionCommand)
+		prepare := a.prepareCompletionPlugin
+		if prepare == nil {
+			prepare = prepareCursorCompletionPlugin
+		}
+		pluginDir, err := prepare(*input.CompletionCommand)
 		if err != nil {
-			log.Printf("cursor: completion plugin unavailable: %v", err)
-			return args
+			return nil, fmt.Errorf("cursor: create completion plugin: %w", err)
 		}
 		args = append([]string{"agent", "--plugin-dir", pluginDir}, args[1:]...)
 	}
-	return args
+	return args, nil
 }
 
 func prepareCursorCompletionPlugin(command CompletionCommand) (string, error) {

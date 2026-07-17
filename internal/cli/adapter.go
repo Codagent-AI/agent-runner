@@ -260,6 +260,26 @@ type StderrWrapper interface {
 	WrapStderr(downstream io.Writer) io.Writer
 }
 
+// ArgsBuilderWithError is an optional interface adapters may implement when
+// constructing invocation args can fail — for example when a required
+// completion integration must be materialized on disk. BuildInvocationArgs
+// prefers this path so a failure surfaces before the CLI is spawned instead
+// of silently degrading the invocation.
+type ArgsBuilderWithError interface {
+	BuildArgsWithError(input *BuildArgsInput) ([]string, error)
+}
+
+// BuildInvocationArgs constructs the invocation args for an adapter,
+// surfacing construction errors from adapters that implement
+// ArgsBuilderWithError. Adapters without a fallible path never return an
+// error.
+func BuildInvocationArgs(adapter Adapter, input *BuildArgsInput) ([]string, error) {
+	if builder, ok := adapter.(ArgsBuilderWithError); ok {
+		return builder.BuildArgsWithError(input)
+	}
+	return adapter.BuildArgs(input), nil
+}
+
 // InteractiveRejector is an optional interface adapters may implement to refuse
 // interactive mode at runtime with a descriptive error.
 type InteractiveRejector interface {

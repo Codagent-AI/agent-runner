@@ -172,12 +172,10 @@ func ExecuteAgentStep(
 		return OutcomeFailed, nil
 	}
 
-	completionExecutable := completionExecutableForContext(invocationContext)
-	input := buildAdapterInput(step, ctx, profile, adapter, cliName, prompt, enrichment, sessionID, isResume, invocationContext, completionExecutable)
-	args := adapter.BuildArgs(&input)
-	resolvedModel := input.Model
-	if resolvedModel == "" && profile != nil {
-		resolvedModel = profile.Model
+	args, resolvedModel, argsErr := buildStepInvocation(step, ctx, profile, adapter, cliName, prompt, enrichment, sessionID, isResume, invocationContext)
+	if argsErr != nil {
+		emitAgentFailure(ctx, prefix, startTime, string(mode), step, argsErr.Error())
+		return OutcomeFailed, nil
 	}
 
 	emitAgentStart(ctx, prefix, startTime, prompt, mode, step, sessionID, cliName, resolvedModel, enrichment)
@@ -412,6 +410,31 @@ func resolveAdapterAndSession(
 }
 
 // buildAdapterInput assembles the full prompt and CLI input for an agent step.
+// buildStepInvocation constructs the CLI invocation args and resolved model
+// for an agent step. Arg-construction failures (e.g. a required completion
+// integration that cannot be materialized) surface before the CLI is spawned.
+func buildStepInvocation(
+	step *model.Step,
+	ctx *model.ExecutionContext,
+	profile *config.ResolvedAgent,
+	adapter cli.Adapter,
+	cliName, prompt, enrichment, sessionID string,
+	isResume bool,
+	invocationContext cli.InvocationContext,
+) (args []string, resolvedModel string, err error) {
+	completionExecutable := completionExecutableForContext(invocationContext)
+	input := buildAdapterInput(step, ctx, profile, adapter, cliName, prompt, enrichment, sessionID, isResume, invocationContext, completionExecutable)
+	args, err = cli.BuildInvocationArgs(adapter, &input)
+	if err != nil {
+		return nil, "", err
+	}
+	resolvedModel = input.Model
+	if resolvedModel == "" && profile != nil {
+		resolvedModel = profile.Model
+	}
+	return args, resolvedModel, nil
+}
+
 func buildAdapterInput(
 	step *model.Step,
 	ctx *model.ExecutionContext,
