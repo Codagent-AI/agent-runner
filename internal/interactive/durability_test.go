@@ -3,6 +3,8 @@ package interactive
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io/fs"
 	"strings"
 	"sync"
 	"testing"
@@ -197,6 +199,64 @@ func TestAwaitTurnDurabilityTimeoutReportsUnavailableCheckpoint(t *testing.T) {
 	}
 }
 
+func TestAwaitTurnDurabilityWaitsForStoreToAppearFromEmptyBaseline(t *testing.T) {
+	notExist := fmt.Errorf("locate session %q: %w", "session-late", fs.ErrNotExist)
+	baselines := make(chan cli.Checkpoint, 2)
+	probe := &fakeDurabilityProbe{}
+	probe.checkpointFn = func(calls int) (cli.Checkpoint, error) {
+		if calls < 3 {
+			return cli.Checkpoint{}, notExist
+		}
+		return cli.Checkpoint{Artifact: "/native/session.jsonl", Offset: 512}, nil
+	}
+	probe.wait = func(_ context.Context, sessionID string, after cli.Checkpoint) error {
+		if after.Artifact == "" {
+			return errors.New("durability checkpoint has no inspected artifact")
+		}
+		if sessionID != "session-late" {
+			t.Errorf("WaitForCommittedTurn session = %q", sessionID)
+		}
+		baselines <- after
+		return nil
+	}
+
+	result := AwaitTurnDurability(context.Background(), &DurabilityOptions{
+		CLI:       "claude",
+		SessionID: "session-late",
+		Probe:     probe,
+		// Store absent at accept time: empty baseline, no checkpoint error.
+		Checkpoint: cli.Checkpoint{},
+		Timeout:    5 * time.Second,
+	})
+	if result.Outcome != CompletionSuccess || result.Err != nil {
+		t.Fatalf("result = %#v, want success once the store appears within the bound", result)
+	}
+	want := cli.Checkpoint{Artifact: "/native/session.jsonl"}
+	if got := <-baselines; got != want {
+		t.Fatalf("wait baseline = %#v, want start-of-store baseline %#v", got, want)
+	}
+}
+
+func TestAwaitTurnDurabilityKeepsFailingOnRealWaitErrors(t *testing.T) {
+	realErr := errors.New("decode session store: corrupt record")
+	probe := &fakeDurabilityProbe{
+		checkpoint: cli.Checkpoint{Artifact: "/native/session.jsonl"},
+		wait: func(context.Context, string, cli.Checkpoint) error {
+			return realErr
+		},
+	}
+	result := AwaitTurnDurability(context.Background(), &DurabilityOptions{
+		CLI:        "claude",
+		SessionID:  "session-1",
+		Probe:      probe,
+		Checkpoint: probe.checkpoint,
+		Timeout:    time.Second,
+	})
+	if result.Outcome != CompletionFailed || !errors.Is(result.Err, realErr) {
+		t.Fatalf("result = %#v, want immediate failure on a real probe error", result)
+	}
+}
+
 func TestActiveRuntimeTimerPausesDeadline(t *testing.T) {
 	timer := NewActiveRuntimeTimer(50 * time.Millisecond)
 	defer timer.Stop()
@@ -226,6 +286,7 @@ type fakeDurabilityProbe struct {
 	mu              sync.Mutex
 	checkpoint      cli.Checkpoint
 	checkpointErr   error
+	checkpointFn    func(calls int) (cli.Checkpoint, error)
 	wait            func(context.Context, string, cli.Checkpoint) error
 	checkpointCalls int
 	waitCalls       int
@@ -235,6 +296,9 @@ func (p *fakeDurabilityProbe) Checkpoint(string) (cli.Checkpoint, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.checkpointCalls++
+	if p.checkpointFn != nil {
+		return p.checkpointFn(p.checkpointCalls)
+	}
 	return p.checkpoint, p.checkpointErr
 }
 

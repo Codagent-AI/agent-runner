@@ -142,6 +142,14 @@ func captureDurabilityCheckpoint(ctx context.Context, probe cli.TurnDurabilityPr
 		case <-ctx.Done():
 			return cli.Checkpoint{}, ctx.Err()
 		case <-deadline.C:
+			if errors.Is(lastErr, os.ErrNotExist) {
+				// The native store does not exist yet, so nothing was
+				// persisted at accept time: the semantically correct baseline
+				// is an empty store. The durability wait then runs its full
+				// bound from that start-of-store baseline instead of failing
+				// the completion at accept time.
+				return cli.Checkpoint{}, nil
+			}
 			return cli.Checkpoint{}, lastErr
 		case <-ticker.C:
 		}

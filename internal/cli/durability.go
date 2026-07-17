@@ -339,7 +339,7 @@ func exactlyOneSessionPath(cliName, sessionID string, paths []string, err error)
 		return "", fmt.Errorf("locate %s session %q: %w", cliName, sessionID, err)
 	}
 	if len(paths) == 0 {
-		return "", fmt.Errorf("locate %s session %q: native session store not found", cliName, sessionID)
+		return "", fmt.Errorf("locate %s session %q: native session store not found: %w", cliName, sessionID, fs.ErrNotExist)
 	}
 	if len(paths) > 1 {
 		return "", fmt.Errorf("locate %s session %q: %d native session stores found", cliName, sessionID, len(paths))

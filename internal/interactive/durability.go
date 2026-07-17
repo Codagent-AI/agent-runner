@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"sync"
 	"time"
 
@@ -83,7 +84,7 @@ func AwaitTurnDurability(ctx context.Context, options *DurabilityOptions) Durabi
 	if options.CheckpointErr == nil {
 		probeResult = make(chan error, 1)
 		go func() {
-			probeResult <- options.Probe.WaitForCommittedTurn(waitCtx, options.SessionID, checkpoint)
+			probeResult <- waitForDurableTurn(waitCtx, options.Probe, options.SessionID, checkpoint)
 		}()
 	}
 
@@ -116,6 +117,52 @@ func AwaitTurnDurability(ctx context.Context, options *DurabilityOptions) Durabi
 		case <-ctx.Done():
 			return DurabilityResult{Outcome: CompletionFailed, TerminateChild: true, Err: ctx.Err()}
 		}
+	}
+}
+
+// storeAppearancePollInterval paces retries while the native session store
+// does not exist yet. The wait itself stays bounded by the durability timer.
+const storeAppearancePollInterval = 50 * time.Millisecond
+
+// waitForDurableTurn confirms a committed turn against the accept-time
+// baseline. A zero baseline means the native store did not exist when the
+// completion was accepted; the store is then awaited and inspected from its
+// start. A store that is still (or again) absent is not a real failure, so
+// the probe keeps polling until the context ends the bound.
+func waitForDurableTurn(ctx context.Context, probe cli.TurnDurabilityProbe, sessionID string, baseline cli.Checkpoint) error {
+	for {
+		current := baseline
+		if current.Artifact == "" {
+			captured, err := probe.Checkpoint(sessionID)
+			if err != nil {
+				if !errors.Is(err, fs.ErrNotExist) {
+					return err
+				}
+				if sleepErr := sleepContext(ctx, storeAppearancePollInterval); sleepErr != nil {
+					return sleepErr
+				}
+				continue
+			}
+			current = cli.Checkpoint{Artifact: captured.Artifact}
+		}
+		err := probe.WaitForCommittedTurn(ctx, sessionID, current)
+		if err == nil || !errors.Is(err, fs.ErrNotExist) || ctx.Err() != nil {
+			return err
+		}
+		if sleepErr := sleepContext(ctx, storeAppearancePollInterval); sleepErr != nil {
+			return sleepErr
+		}
+	}
+}
+
+func sleepContext(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 

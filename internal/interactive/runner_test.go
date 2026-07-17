@@ -124,6 +124,59 @@ func TestDirectRunnerResolvesFreshSessionBeforeDurabilityCheckpoint(t *testing.T
 	}
 }
 
+func TestCaptureDurabilityCheckpointTreatsAbsentStoreAsEmptyBaseline(t *testing.T) {
+	t.Parallel()
+	probe := &fakeDurabilityProbe{checkpointErr: fmt.Errorf("locate session %q: %w", "fresh", os.ErrNotExist)}
+
+	checkpoint, err := captureDurabilityCheckpoint(context.Background(), probe, "fresh")
+	if err != nil {
+		t.Fatalf("captureDurabilityCheckpoint error = %v, want empty baseline for an absent store", err)
+	}
+	if checkpoint != (cli.Checkpoint{}) {
+		t.Fatalf("checkpoint = %#v, want zero start-of-store baseline", checkpoint)
+	}
+}
+
+func TestCaptureDurabilityCheckpointKeepsRealErrors(t *testing.T) {
+	t.Parallel()
+	realErr := errors.New("open session store: permission denied")
+	probe := &fakeDurabilityProbe{checkpointErr: realErr}
+
+	_, err := captureDurabilityCheckpoint(context.Background(), probe, "session-1")
+	if !errors.Is(err, realErr) {
+		t.Fatalf("captureDurabilityCheckpoint error = %v, want %v", err, realErr)
+	}
+}
+
+func TestDirectRunnerSucceedsWhenSessionStoreAppearsAfterAcceptance(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+	defer server.Close()
+	t.Setenv("AGENT_RUNNER_DIRECT_HELPER", "2")
+	// The store appears only after the accept-time capture window has expired,
+	// so the completion must fall back to an empty baseline and confirm within
+	// the durability bound instead of failing at accept time.
+	probe := &lateAppearingStoreProbe{appearAt: time.Now().Add(freshSessionResolveTimeout + time.Second)}
+	runner := NewDirectRunner(&DirectOptions{
+		Args:              []string{os.Args[0], "-test.run=^TestDirectRunnerHelperProcess$"},
+		StepID:            "implement",
+		SessionID:         "session-late",
+		CLI:               "fake",
+		Control:           server,
+		Probe:             probe,
+		Foreground:        false,
+		TerminationGrace:  250 * time.Millisecond,
+		DurabilityTimeout: 8 * time.Second,
+	})
+
+	result, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Completed || result.DurabilityFailed {
+		t.Fatalf("Run result = %#v (durability error %v), want durable completion for a store that appeared after acceptance", result, result.DurabilityError)
+	}
+}
+
 func TestDirectRunnerHelperProcess(t *testing.T) {
 	helperMode := os.Getenv("AGENT_RUNNER_DIRECT_HELPER")
 	if helperMode != "1" && helperMode != "2" {
@@ -149,6 +202,24 @@ func (immediateDurabilityProbe) Checkpoint(string) (cli.Checkpoint, error) {
 func (immediateDurabilityProbe) WaitForCommittedTurn(ctx context.Context, _ string, _ cli.Checkpoint) error {
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+type lateAppearingStoreProbe struct {
+	appearAt time.Time
+}
+
+func (p *lateAppearingStoreProbe) Checkpoint(string) (cli.Checkpoint, error) {
+	if time.Now().Before(p.appearAt) {
+		return cli.Checkpoint{}, fmt.Errorf("locate session: native session store not found: %w", os.ErrNotExist)
+	}
+	return cli.Checkpoint{Artifact: "fixture", Offset: 64}, nil
+}
+
+func (p *lateAppearingStoreProbe) WaitForCommittedTurn(_ context.Context, _ string, after cli.Checkpoint) error {
+	if after.Artifact == "" {
+		return errors.New("durability checkpoint has no inspected artifact")
+	}
+	return nil
 }
 
 type sessionRecordingDurabilityProbe struct {

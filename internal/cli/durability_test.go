@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
@@ -265,6 +266,22 @@ func TestDurabilityProbeHonorsContextWhenNoCommittedTurnAppears(t *testing.T) {
 	defer cancel()
 	if err := probe.WaitForCommittedTurn(ctx, "copilot-session", checkpoint); err == nil || !strings.Contains(err.Error(), "context deadline exceeded") {
 		t.Fatalf("WaitForCommittedTurn error = %v, want context deadline", err)
+	}
+}
+
+func TestCheckpointReportsAbsentSessionStoreAsNotExist(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	probes := map[string]TurnDurabilityProbe{
+		"claude":  &ClaudeAdapter{},
+		"codex":   &CodexAdapter{},
+		"copilot": &CopilotAdapter{},
+		"cursor":  &CursorAdapter{},
+	}
+	for name, probe := range probes {
+		if _, err := probe.Checkpoint("absent-session"); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s Checkpoint error = %v, want fs.ErrNotExist classification for an absent store", name, err)
+		}
 	}
 }
 
