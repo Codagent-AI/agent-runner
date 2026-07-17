@@ -48,7 +48,7 @@ The usage record on `step_end` SHALL follow the `agent-usage-collection` capabil
 
 ### Requirement: Run end usage and cost totals
 
-The `run_end` entry SHALL include the run's aggregated metrics: per-category token totals across all steps of the run (cumulative across resume sessions) and the run-level cost total with its coverage indicator, per the `cost-capture` capability. When no step reported cost, the cost total SHALL be null with coverage `none`.
+The `run_end` entry SHALL include the run's aggregated metrics: per-category token totals across all steps of the run (cumulative across resume sessions) with the usage-coverage indicator, and the run-level cost total with its coverage indicator, per the `cost-capture` capability. Token totals SHALL follow the aggregation semantics of the `run-metrics-artifact` capability: only reported values are summed, steps with unavailable usage contribute nothing, and unreported categories are absent rather than zero. When no step reported cost, the cost total SHALL be null with coverage `none`.
 
 #### Scenario: Run end carries aggregated totals
 - **WHEN** a run ends after agent steps consumed tokens and some reported cost
@@ -57,3 +57,7 @@ The `run_end` entry SHALL include the run's aggregated metrics: per-category tok
 #### Scenario: Run end with no cost data
 - **WHEN** a run ends and no step reported a USD cost
 - **THEN** the `run_end` entry's cost total is null and its coverage is `none`
+
+#### Scenario: Run end with mixed usage availability
+- **WHEN** a run ends containing one agent step with a full usage record and one whose usage is unavailable
+- **THEN** the `run_end` entry's token totals equal the reporting step's values with usage coverage `partial`; no zeros are substituted

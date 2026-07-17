@@ -31,6 +31,8 @@ This artifact is the supported boundary for external consumers (Agent Evals and 
 
 `run-metrics.json` SHALL contain one record per executed step and a run-level aggregate. Each step record SHALL include the step's identifier and nesting prefix, step type, outcome, duration in milliseconds, the usage record (token categories plus provenance and completeness, per `agent-usage-collection`), and `estimated_api_cost_usd` (per `cost-capture`). The run-level aggregate SHALL include the run's duration, per-category token totals, and the cost total with its coverage indicator. Unavailable usage and absent cost SHALL appear as explicit null/unavailable states, never as zeros.
 
+Per-category token totals SHALL be the sum of the values reported for that category across all executed steps regardless of outcome. Steps with unavailable usage, and categories a step did not report, contribute nothing to the totals; a category no step reported SHALL be absent from the totals, not zero. The aggregate SHALL include a usage-coverage indicator — `complete` when every executed agent step has an available usage record, `partial` when some do, and `none` when none do (including runs with no agent steps) — parallel to the cost coverage indicator.
+
 #### Scenario: Agent step record content
 - **WHEN** an autonomous-headless agent step completes with usage and cost collected
 - **THEN** its record in `run-metrics.json` carries the step identifier, prefix, type, outcome, duration, token categories with provenance, and the reported cost
@@ -42,6 +44,10 @@ This artifact is the supported boundary for external consumers (Agent Evals and 
 #### Scenario: Unavailable data explicit in artifact
 - **WHEN** a step's usage is unavailable
 - **THEN** the artifact represents that step's usage as an explicit unavailable state and its cost as null, not as zeros
+
+#### Scenario: Mixed usage availability in aggregate
+- **WHEN** a run contains one agent step with a full usage record and one whose usage is unavailable
+- **THEN** the aggregate's token totals equal the reporting step's values, the usage-coverage indicator is `partial`, and no zero is substituted for the missing step
 
 ### Requirement: Incremental atomic writes
 
@@ -59,6 +65,12 @@ Agent Runner SHALL update `run-metrics.json` after each step completes and final
 
 When a run is resumed, `run-metrics.json` SHALL accumulate: step records from earlier sessions of the run are retained, new steps are appended, and run-level aggregates cover all sessions, so the artifact always describes the whole run.
 
+The run-level duration SHALL be the run's total active execution time: the sum of each execution session's duration. Time between an interruption and the subsequent resume SHALL NOT count toward the run's duration.
+
 #### Scenario: Resumed run accumulates metrics
 - **WHEN** a run executes two steps, is interrupted, and is later resumed to execute two more
 - **THEN** the final `run-metrics.json` contains all four step records and run totals spanning both sessions
+
+#### Scenario: Paused time excluded from run duration
+- **WHEN** a run executes for 5 minutes, sits interrupted for an hour, and is resumed to execute for 3 more minutes
+- **THEN** the artifact's run-level duration is 8 minutes, not 68

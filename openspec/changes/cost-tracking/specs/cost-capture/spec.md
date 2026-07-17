@@ -32,7 +32,7 @@ When a step has no CLI-reported USD cost — because the CLI reports none, the s
 
 ### Requirement: Run-level cost aggregation with coverage
 
-Run-level cost SHALL be the sum of `estimated_api_cost_usd` over the agent steps that reported a cost, accompanied by an explicit coverage indicator: `complete` when every completed agent step in the run reported a cost, `partial` when some did and some did not, and `none` when no step reported a cost (including runs with no agent steps). When coverage is `none`, the run-level cost total SHALL be null.
+Run-level cost SHALL be the sum of `estimated_api_cost_usd` over the agent steps that reported a cost, regardless of step outcome, accompanied by an explicit coverage indicator: `complete` when every executed agent step in the run reported a cost, `partial` when some did and some did not, and `none` when no step reported a cost (including runs with no agent steps). When coverage is `none`, the run-level cost total SHALL be null.
 
 #### Scenario: All agent steps priced
 - **WHEN** every completed agent step in a run reported a USD cost

@@ -4,7 +4,7 @@
 
 ### Requirement: Usage collection on autonomous-headless agent steps
 
-After an autonomous-headless agent step's CLI process exits, Agent Runner SHALL obtain a token-usage record for that step by extracting structured usage data from the CLI's captured stdout via the step's CLI adapter. Extraction SHALL be attempted for every autonomous-headless agent step regardless of which CLI it uses.
+After an autonomous-headless agent step's CLI process exits, Agent Runner SHALL obtain a token-usage record for that step by extracting structured usage data from the CLI's captured stdout via the step's CLI adapter. Extraction SHALL be attempted for every autonomous-headless agent step regardless of which CLI it uses and regardless of the step's exit code: usage and cost successfully extracted from a failed step's output SHALL be retained and included in run-level aggregates, since those tokens were consumed regardless of outcome.
 
 #### Scenario: Adapter supports usage extraction
 - **WHEN** an autonomous-headless agent step completes, its adapter supports usage extraction, and the CLI's structured output contains usage data
@@ -13,6 +13,10 @@ After an autonomous-headless agent step's CLI process exits, Agent Runner SHALL 
 #### Scenario: Adapter does not support usage extraction
 - **WHEN** an autonomous-headless agent step completes and its adapter does not support usage extraction
 - **THEN** the step's usage record is recorded as unavailable (not zero)
+
+#### Scenario: Failed step retains extracted usage
+- **WHEN** an autonomous-headless agent step exits with a nonzero code but its structured output contains valid usage data
+- **THEN** the step's usage record contains the reported counts (and any reported cost is captured per `cost-capture`), and the step's usage and cost are included in run-level aggregates
 
 ### Requirement: Distinct token categories
 
@@ -64,7 +68,7 @@ Non-agent steps (shell, UI, and other step types that invoke no agent CLI) SHALL
 
 ### Requirement: Per-step attribution for cumulative usage sources
 
-When a CLI reports cumulative session totals rather than per-invocation usage, the usage recorded for a step that resumes an existing session SHALL reflect only that step's consumption, not the session's lifetime total.
+When a CLI reports cumulative session totals rather than per-invocation usage, the usage recorded for a step that resumes an existing session SHALL reflect only that step's consumption, not the session's lifetime total. Attribution SHALL never produce a negative or fabricated token count: when the reported cumulative total is lower than the session's previously recorded total (e.g. a counter reset), the step's usage SHALL be recorded as unavailable.
 
 <!-- deferred-to-design: mechanism for per-step attribution — delta against the previously
      recorded cumulative total for the session vs. recording the raw cumulative value with a
@@ -74,3 +78,7 @@ When a CLI reports cumulative session totals rather than per-invocation usage, t
 #### Scenario: Resumed session step records its own usage
 - **WHEN** an agent step resumes a session whose earlier step already consumed tokens, and the CLI reports cumulative session totals
 - **THEN** the resumed step's usage record reflects only the tokens consumed by that step's invocation
+
+#### Scenario: Cumulative counter reset yields unavailable
+- **WHEN** a step's reported cumulative total is lower than the total previously recorded for that session
+- **THEN** the step's usage record is an explicit unavailable state; no negative counts are recorded

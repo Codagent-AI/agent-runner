@@ -25,3 +25,13 @@ Once in the post-completion detailed view, the run view SHALL behave identically
 #### Scenario: Resume action available after completion
 - **WHEN** the workflow has finished and the user triggers the resume action on an agent step with a known session ID from the detailed view
 - **THEN** the TUI exits and agent-runner is relaunched with `--resume <session-id>`, exactly as the `view-run` capability's resume behavior specifies
+
+## ADDED Requirements
+
+### Requirement: Metrics update during an active run
+
+While a workflow run is executing, the live detailed view SHALL show each completed step's token usage and reported cost in its detail block as soon as the step completes, per the `view-run` capability's detail-pane contract. Metrics for the run so far SHALL also be available mid-run through the summary toggle (per `run-complete-screen`).
+
+#### Scenario: Completed step shows metrics mid-run
+- **WHEN** an agent step completes while later steps are still running
+- **THEN** that step's detail block shows its token usage and reported cost without waiting for the run to finish
