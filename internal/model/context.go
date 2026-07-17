@@ -62,6 +62,12 @@ type ExecutionContext struct {
 	// AuditLogger writes structured audit events (audit.EventLogger).
 	AuditLogger audit.EventLogger
 
+	// InteractiveControl is the lazily-created run-scoped control server. It is
+	// intentionally opaque here to keep core model types independent of runtime
+	// packages.
+	InteractiveControl any
+	InteractiveAttempt *InteractiveAttemptMetadata
+
 	LastSubWorkflowChild *NestedStepState
 	ResumeChildState     *NestedStepState
 	FlushState           func()
@@ -72,10 +78,10 @@ type ExecutionContext struct {
 
 	// SuspendHook is called just before an interactive step takes over the
 	// terminal. Nil in non-TUI callers (tests, library use).
-	SuspendHook func()
+	SuspendHook func() error
 	// ResumeHook is called immediately after an interactive step exits.
 	// Nil in non-TUI callers.
-	ResumeHook func()
+	ResumeHook func() error
 
 	// PrepareStepHook is called before each leaf step begins. The boolean
 	// argument is true when the step will be interactive. Used by the TUI
@@ -246,6 +252,8 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		EngineRef:                parent.EngineRef,
 		ProfileStore:             parent.ProfileStore,
 		AuditLogger:              parent.AuditLogger,
+		InteractiveControl:       parent.InteractiveControl,
+		InteractiveAttempt:       parent.InteractiveAttempt,
 		WorkflowResumed:          parent.WorkflowResumed,
 		FlushState:               parent.FlushState,
 		SuspendHook:              parent.SuspendHook,
@@ -323,6 +331,8 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		EngineRef:                engineRef,
 		ProfileStore:             parent.ProfileStore,
 		AuditLogger:              parent.AuditLogger,
+		InteractiveControl:       parent.InteractiveControl,
+		InteractiveAttempt:       parent.InteractiveAttempt,
 		WorkflowResumed:          parent.WorkflowResumed,
 		FlushState:               parent.FlushState,
 		SuspendHook:              parent.SuspendHook,

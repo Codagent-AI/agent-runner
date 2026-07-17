@@ -255,8 +255,8 @@ func TestExecuteShellStep(t *testing.T) {
 		runner := &mockRunner{}
 		ctx := makeCtx()
 		var hooks []string
-		ctx.SuspendHook = func() { hooks = append(hooks, "suspend") }
-		ctx.ResumeHook = func() { hooks = append(hooks, "resume") }
+		ctx.SuspendHook = func() error { hooks = append(hooks, "suspend"); return nil }
+		ctx.ResumeHook = func() error { hooks = append(hooks, "resume"); return nil }
 
 		step := model.Step{
 			ID:      "s",

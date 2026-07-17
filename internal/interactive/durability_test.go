@@ -168,6 +168,21 @@ func TestAwaitTurnDurabilityCheckpointFailureAuditsArtifact(t *testing.T) {
 	}
 }
 
+func TestAwaitTurnDurabilityAcceptsNativeHookWhenStoreCheckpointUnavailable(t *testing.T) {
+	committed := make(chan struct{}, 1)
+	committed <- struct{}{}
+	result := AwaitTurnDurability(context.Background(), &DurabilityOptions{
+		Probe:         &fakeDurabilityProbe{},
+		CheckpointErr: errors.New("session id not discovered yet"),
+		CommittedTurn: committed,
+		Timeout:       time.Second,
+	})
+
+	if result.Outcome != CompletionSuccess || result.Err != nil {
+		t.Fatalf("result = %#v, want hook-confirmed success", result)
+	}
+}
+
 func TestActiveRuntimeTimerPausesDeadline(t *testing.T) {
 	timer := NewActiveRuntimeTimer(50 * time.Millisecond)
 	defer timer.Stop()

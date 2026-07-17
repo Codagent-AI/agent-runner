@@ -1,10 +1,14 @@
 package exec
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,24 +18,34 @@ import (
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/engine"
+	"github.com/codagent/agent-runner/internal/interactive"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/pty"
+	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/session"
 	"github.com/codagent/agent-runner/internal/textfmt"
 	"github.com/codagent/agent-runner/internal/usersettings"
 )
 
-// interactiveRunnerFn runs an interactive agent step inside a PTY.
-// Defaults to pty.RunInteractive; replaced in tests.
-var interactiveRunnerFn = pty.RunInteractive
+// interactiveRunnerFn is the production direct-handoff seam. Its legacy
+// signature is retained temporarily so the old PTY unit tests can remain in
+// the tree until the cleanup phase, but production never calls RunInteractive.
+var interactiveRunnerFn = runDirectInteractive
+
+var directInvocations sync.Map
+
+type directInvocation struct {
+	ctx              *model.ExecutionContext
+	stepID           string
+	cliName          string
+	sessionID        string
+	probe            cli.TurnDurabilityProbe
+	resolveSessionID func() string
+}
 
 var isStdinTerminal = func() bool {
 	return isatty.IsTerminal(os.Stdin.Fd())
 }
-
-// continuationMarkerPrefix begins the per-step text marker used by interactive
-// agents to signal completion through the PTY output scanner.
-const continuationMarkerPrefix = "AGENT_RUNNER_CONTINUE_"
 
 // autonomyPreamble is prepended to autonomous prompts to reinforce autonomous behavior.
 const autonomyPreamble = "You are running autonomously with no human in the loop. " +
@@ -165,8 +179,8 @@ func ExecuteAgentStep(
 		}
 	}
 
-	continueMarker := continueMarkerForContext(invocationContext)
-	input := buildAdapterInput(step, ctx, profile, adapter, prompt, enrichment, sessionID, isResume, invocationContext, continueMarker)
+	completionExecutable := completionExecutableForContext(invocationContext)
+	input := buildAdapterInput(step, ctx, profile, adapter, cliName, prompt, enrichment, sessionID, isResume, invocationContext, completionExecutable)
 	args := adapter.BuildArgs(&input)
 	resolvedModel := input.Model
 	if resolvedModel == "" && profile != nil {
@@ -182,6 +196,12 @@ func ExecuteAgentStep(
 
 	cleanupOutputWrappers := configureAgentOutputWrappers(adapter, runner)
 	defer cleanupOutputWrappers()
+	// Bind the run-scoped endpoint before the terminal lease is released. A
+	// bind or stale-cleanup failure therefore fails without blanking the TUI.
+	if controlErr := ensureInteractiveControl(ctx, invocationContext); controlErr != nil {
+		emitAgentEnd(ctx, prefix, startTime, "", OutcomeFailed, "", controlErr.Error())
+		return OutcomeFailed, controlErr
+	}
 
 	// Persist session bookkeeping BEFORE spawning the CLI so that if the runner
 	// is killed mid-step (ctrl-c, terminal hangup, crash) resume can reconnect
@@ -196,10 +216,17 @@ func ExecuteAgentStep(
 	spawnTime := time.Now()
 	debugLabel := fmt.Sprintf("workflow=%s step=%s cli=%s model=%s session=%s resume=%t",
 		ctx.WorkflowName, step.ID, cliName, resolvedModel, sessionID, isResume)
-	outcome, result, runErr := runAgentProcess(runner, adapter, args, invocationContext, step.Workdir, debugLabel, continueMarker, log, ctx.SuspendHook, ctx.ResumeHook)
+	probe, _ := adapter.(cli.TurnDurabilityProbe)
+	direct := &directInvocation{
+		ctx: ctx, stepID: step.ID, cliName: cliName, sessionID: sessionID, probe: probe,
+		resolveSessionID: func() string {
+			return adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: spawnTime, Workdir: step.Workdir})
+		},
+	}
+	outcome, result, runErr := runAgentProcess(runner, adapter, args, invocationContext, step.Workdir, debugLabel, log, ctx.SuspendHook, ctx.ResumeHook, direct)
 	if runErr != nil {
-		emitAgentEnd(ctx, prefix, startTime, "", OutcomeFailed, "", result.Stderr)
-		return OutcomeFailed, runErr
+		emitAgentEnd(ctx, prefix, startTime, "", outcome, "", result.Stderr)
+		return outcome, runErr
 	}
 
 	// When the adapter produces structured output (e.g. JSONL), extract the
@@ -388,10 +415,11 @@ func buildAdapterInput(
 	ctx *model.ExecutionContext,
 	profile *config.ResolvedAgent,
 	adapter cli.Adapter,
+	cliName string,
 	prompt, enrichment, sessionID string,
 	isResume bool,
 	invocationContext cli.InvocationContext,
-	continueMarker string,
+	completionExecutable string,
 ) cli.BuildArgsInput {
 	// Build the full prompt: [system_prompt] [step prompt] [engine enrichment]
 	fullPrompt := prompt
@@ -406,10 +434,10 @@ func buildAdapterInput(
 			fullPrompt = autonomyPreamble + fullPrompt
 		}
 		if invocationContext == cli.ContextAutonomousInteractive {
-			fullPrompt += completionInstruction(continueMarker)
+			fullPrompt += completionInstruction(completionExecutable, cliName)
 		}
 	} else {
-		fullPrompt = buildStepPrefix(step.ID, ctx, ctx.WorkflowResumed, isResume) + fullPrompt + completionInstruction(continueMarker)
+		fullPrompt = buildStepPrefix(step.ID, ctx, ctx.WorkflowResumed, isResume) + fullPrompt + completionInstruction(completionExecutable, cliName)
 	}
 
 	input := cli.BuildArgsInput{
@@ -426,6 +454,9 @@ func buildAdapterInput(
 	if invocationContext.IsAutonomous() {
 		input.DisallowedTools = []string{"AskUserQuestion"}
 	}
+	if completionExecutable != "" {
+		input.CompletionCommand = &cli.CompletionCommand{Executable: completionExecutable, Args: []string{"step", "complete"}}
+	}
 
 	switch {
 	case invocationContext.IsHeadless():
@@ -441,7 +472,7 @@ func buildAdapterInput(
 			input.Prompt = fmt.Sprintf("Let's start the %s step", step.ID)
 		}
 		if continueMarkerPromptNeedsRefresh(ctx.WorkflowResumed, isResume, invocationContext) {
-			input.Prompt += completionInstruction(continueMarker)
+			input.Prompt += completionInstruction(completionExecutable, cliName)
 		}
 	case enrichment != "" || profile.SystemPrompt != "":
 		input.Prompt = "<system>\n" + fullPrompt + "\n</system>"
@@ -460,28 +491,116 @@ func buildAdapterInput(
 	return input
 }
 
-func continueMarkerPromptNeedsRefresh(workflowResumed, isResume bool, context cli.InvocationContext) bool {
-	return !context.IsHeadless() && (workflowResumed || isResume)
+func continueMarkerPromptNeedsRefresh(workflowResumed, isResume bool, invocationContext cli.InvocationContext) bool {
+	return !invocationContext.IsHeadless() && (workflowResumed || isResume)
 }
 
-func newContinueMarker() string {
-	return continuationMarkerPrefix + strings.ReplaceAll(uuid.New().String(), "-", "")
-}
-
-func continueMarkerForContext(context cli.InvocationContext) string {
-	if context.IsHeadless() {
+func completionExecutableForContext(invocationContext cli.InvocationContext) string {
+	if invocationContext.IsHeadless() {
 		return ""
 	}
-	return newContinueMarker()
+	executable, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return executable
 }
 
-func completionInstruction(marker string) string {
-	suffix := strings.TrimPrefix(marker, continuationMarkerPrefix)
-	return "\n\nWhen you or the user determine this step is complete, continue to the next step by replying with one line containing only the current continuation marker. Construct that line by writing these pieces in this exact order with no spaces or separators: `AGENT`, `_RUNNER`, `_CONTINUE_`, and `" + suffix + "`. The line must start with `AGENT` and end with `" + suffix + "`. Do not run a shell command, use a tool, wrap it in a code block, or add any other commentary."
+func completionInstruction(executable, cliName string) string {
+	if cliName == "cursor" {
+		return "\n\nWhen you or the user determine this step is complete, finish the current response. The Cursor Stop hook loaded for this process automatically signals completion through the Agent Runner control channel using the absolute path completion client `" + executable + "`. Do not invoke that client yourself."
+	}
+	return "\n\nWhen you or the user determine this step is complete, signal it through the Agent Runner control channel. You MUST run the absolute path command `" + executable + " step complete` with your shell tool. Run that exact command with no extra arguments as the final action before finishing the current response. Do not merely say that the step is complete."
 }
 
-func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, context cli.InvocationContext, workdir, debugLabel, continueMarker string, log Logger, suspendHook, resumeHook func()) (StepOutcome, ProcessResult, error) {
-	if context.IsHeadless() {
+func runDirectInteractive(args []string, options pty.Options) (pty.Result, error) {
+	invocationValue, ok := directInvocations.Load(options.ContinueMarker)
+	invocation, invocationOK := invocationValue.(*directInvocation)
+	if !ok || !invocationOK || invocation == nil || invocation.ctx == nil {
+		return pty.Result{}, errors.New("direct interactive runner: execution context is unavailable")
+	}
+	server, err := controlServerForContext(invocation.ctx)
+	if err != nil {
+		return pty.Result{}, err
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return pty.Result{}, fmt.Errorf("resolve watchdog executable: %w", err)
+	}
+	direct := interactive.NewDirectRunner(&interactive.DirectOptions{
+		Args: args, Workdir: options.Workdir, StepID: invocation.stepID,
+		SessionID: invocation.sessionID, CLI: invocation.cliName,
+		Control: server, Probe: invocation.probe, ResolveSessionID: invocation.resolveSessionID, Foreground: true,
+		WatchdogExecutable: executable, Logger: invocation.ctx.AuditLogger,
+		Prefix: audit.BuildPrefix(nestingToAudit(invocation.ctx), invocation.stepID),
+		Persist: func(metadata *interactive.ProcessMetadata) {
+			setInteractiveAttempt(invocation.ctx, metadata)
+			if invocation.ctx.FlushState != nil {
+				invocation.ctx.FlushState()
+			}
+		},
+	})
+	result, runErr := direct.Run(context.Background())
+	return pty.Result{
+		ExitCode: result.ExitCode, ContinueTriggered: result.Completed,
+		DurabilityFailed: result.DurabilityFailed,
+	}, runErr
+}
+
+func controlServerForContext(ctx *model.ExecutionContext) (*interactive.ControlServer, error) {
+	root := ctx
+	for root.ParentContext != nil {
+		root = root.ParentContext
+	}
+	if server, ok := root.InteractiveControl.(*interactive.ControlServer); ok && server != nil {
+		ctx.InteractiveControl = server
+		return server, nil
+	}
+	if root.SessionDir == "" {
+		return nil, errors.New("create interactive control endpoint: session directory is unavailable")
+	}
+	proof, err := runlock.ProveHeld(root.SessionDir)
+	if err != nil {
+		return nil, err
+	}
+	server, err := interactive.NewControlServer(&interactive.ControlConfig{
+		RunID: filepath.Base(root.SessionDir), RunDir: root.SessionDir,
+		LockProof: proof, Logger: root.AuditLogger,
+	})
+	if err != nil {
+		return nil, err
+	}
+	root.InteractiveControl = server
+	ctx.InteractiveControl = server
+	return server, nil
+}
+
+func ensureInteractiveControl(ctx *model.ExecutionContext, invocationContext cli.InvocationContext) error {
+	if invocationContext.IsHeadless() || ctx.SessionDir == "" {
+		return nil
+	}
+	_, err := controlServerForContext(ctx)
+	return err
+}
+
+func setInteractiveAttempt(ctx *model.ExecutionContext, metadata *interactive.ProcessMetadata) {
+	root := ctx
+	for root.ParentContext != nil {
+		root = root.ParentContext
+	}
+	var stored *model.InteractiveAttemptMetadata
+	if metadata != nil {
+		stored = &model.InteractiveAttemptMetadata{
+			ChildPID: metadata.ChildPID, PGID: metadata.PGID,
+			StartTime: metadata.StartTime, Socket: metadata.Socket,
+		}
+	}
+	ctx.InteractiveAttempt = stored
+	root.InteractiveAttempt = stored
+}
+
+func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, invocationContext cli.InvocationContext, workdir, debugLabel string, log Logger, suspendHook, resumeHook func() error, direct *directInvocation) (StepOutcome, ProcessResult, error) {
+	if invocationContext.IsHeadless() {
 		// Capture stdout for headless runs so that adapters (e.g. Codex) can
 		// parse session IDs from the process output.
 		result, runErr := runner.RunAgent(args, true, workdir)
@@ -510,20 +629,29 @@ func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, c
 
 	// Interactive: release the terminal if a hook is set, then run inside a PTY.
 	if suspendHook != nil {
-		suspendHook()
+		if err := suspendHook(); err != nil {
+			return OutcomeFailed, ProcessResult{}, err
+		}
 	}
-	ptyResult, err := interactiveRunnerFn(args, pty.Options{Workdir: workdir, DebugLabel: debugLabel, ContinueMarker: continueMarker})
+	directKey := uuid.NewString()
+	directInvocations.Store(directKey, direct)
+	defer directInvocations.Delete(directKey)
+	ptyResult, err := interactiveRunnerFn(args, pty.Options{Workdir: workdir, DebugLabel: debugLabel, ContinueMarker: directKey})
 	if resumeHook != nil {
-		resumeHook()
+		if resumeErr := resumeHook(); err == nil && resumeErr != nil {
+			err = resumeErr
+		}
 	}
-	if err != nil {
-		return OutcomeFailed, ProcessResult{}, err
-	}
-
 	result := ProcessResult{ExitCode: ptyResult.ExitCode}
+	if ptyResult.DurabilityFailed {
+		return OutcomeFailed, result, err
+	}
 
 	if ptyResult.ContinueTriggered {
-		return OutcomeSuccess, result, nil
+		return OutcomeSuccess, result, err
+	}
+	if err != nil {
+		return OutcomeFailed, result, err
 	}
 
 	// CLI exited without a continue trigger.

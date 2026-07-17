@@ -63,7 +63,7 @@ func AwaitTurnDurability(ctx context.Context, options *DurabilityOptions) Durabi
 		return DurabilityResult{Outcome: CompletionFailed, TerminateChild: true, Err: err}
 	}
 	checkpoint := options.Checkpoint
-	if options.CheckpointErr != nil {
+	if options.CheckpointErr != nil && options.CommittedTurn == nil {
 		err := fmt.Errorf("checkpoint committed-turn evidence: %w", options.CheckpointErr)
 		emitDurabilityFailure(options, timeout, "unavailable", err)
 		return DurabilityResult{Outcome: CompletionFailed, TerminateChild: true, Err: err}
@@ -79,10 +79,13 @@ func AwaitTurnDurability(ctx context.Context, options *DurabilityOptions) Durabi
 	}
 	waitCtx, cancelWait := context.WithCancel(ctx)
 	defer cancelWait()
-	probeResult := make(chan error, 1)
-	go func() {
-		probeResult <- options.Probe.WaitForCommittedTurn(waitCtx, options.SessionID, checkpoint)
-	}()
+	var probeResult chan error
+	if options.CheckpointErr == nil {
+		probeResult = make(chan error, 1)
+		go func() {
+			probeResult <- options.Probe.WaitForCommittedTurn(waitCtx, options.SessionID, checkpoint)
+		}()
+	}
 
 	childExited := options.ChildExited
 	for {

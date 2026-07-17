@@ -59,6 +59,10 @@ func TestInternalTurnCommittedSendsHookEvent(t *testing.T) {
 	if code := handleInternalWithIO([]string{"turn-committed"}, strings.NewReader(""), &stderr); code != 0 {
 		t.Fatalf("code = %d, stderr = %s", code, stderr.String())
 	}
+	stderr.Reset()
+	if code := handleInternalWithIO([]string{"turn-committed", `{"type":"agent-turn-complete"}`}, strings.NewReader(""), &stderr); code != 0 {
+		t.Fatalf("Codex notify payload code = %d, stderr = %s", code, stderr.String())
+	}
 }
 
 func replaceControlSender(t *testing.T, sender controlEventSender) {

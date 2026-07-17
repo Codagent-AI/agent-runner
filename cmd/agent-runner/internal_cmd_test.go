@@ -4,12 +4,31 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v3"
+
+	"github.com/codagent/agent-runner/internal/interactive"
 )
+
+func TestInternalWatchdogSkipsReusedPID(t *testing.T) {
+	identity, err := interactive.ReadProcessIdentity(os.Getpid())
+	if err != nil {
+		t.Fatalf("read process identity: %v", err)
+	}
+	var stderr bytes.Buffer
+	code := handleInternalWithIO([]string{
+		"watchdog", "--pid", strconv.Itoa(os.Getpid()), "--pgid", strconv.Itoa(unix.Getpgrp()),
+		"--start-time", identity + "-reused", "--grace", "10ms",
+	}, strings.NewReader(""), &stderr)
+	if code != 0 {
+		t.Fatalf("watchdog exit = %d, stderr = %s", code, stderr.String())
+	}
+}
 
 func TestWriteProfilePayloadValidation(t *testing.T) {
 	var payload writeProfilePayload

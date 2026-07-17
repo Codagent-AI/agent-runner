@@ -1494,8 +1494,15 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatalf("expected one PTY invocation, got %d", len(ptyCalls))
 		}
 		args := ptyCalls[0]
-		if args[0] != "agent" {
+		if !containsArg(args, "agent") {
 			t.Fatalf("expected cursor agent command, got %v", args)
+		}
+		prompt := args[len(args)-1]
+		if !strings.Contains(prompt, "automatically") || !strings.Contains(prompt, "absolute path") {
+			t.Fatalf("expected Cursor completion instructions to describe the automatic control hook, got %q", prompt)
+		}
+		if strings.Contains(prompt, "You MUST run") {
+			t.Fatalf("expected Cursor instructions not to request a permission-gated shell invocation, got %q", prompt)
 		}
 		for _, disallowed := range []string{"-p", "--output-format", "stream-json", "--trust", "--force"} {
 			if containsArg(args, disallowed) {
@@ -1559,32 +1566,14 @@ func containsArg(args []string, target string) bool {
 
 func assertContinueMarkerInstruction(t *testing.T, prompt, marker string) {
 	t.Helper()
-	if marker == "" {
-		t.Fatal("expected interactive PTY continue marker")
-	}
-	if !strings.HasPrefix(marker, continuationMarkerPrefix) {
-		t.Fatalf("expected marker prefix %q, got %q", continuationMarkerPrefix, marker)
-	}
-	suffix := strings.TrimPrefix(marker, continuationMarkerPrefix)
-	if suffix == "" {
-		t.Fatalf("expected marker suffix, got %q", marker)
-	}
-	for _, part := range []string{"`AGENT`", "`_RUNNER`", "`_CONTINUE_`", "`" + suffix + "`"} {
-		if !strings.Contains(prompt, part) {
-			t.Fatalf("expected dynamic text marker instruction part %q in prompt, marker %q prompt %q", part, marker, prompt)
-		}
-	}
-	for _, phrase := range []string{"in this exact order", "no spaces or separators", "must start with `AGENT`", "end with `" + suffix + "`"} {
+	for _, phrase := range []string{"step complete", "absolute path", "control channel", "You MUST run", "Do not merely"} {
 		if !strings.Contains(prompt, phrase) {
-			t.Fatalf("expected marker assembly guidance %q in prompt, got %q", phrase, prompt)
+			t.Fatalf("expected control-channel completion guidance %q in prompt, got %q", phrase, prompt)
 		}
 	}
-	if strings.Contains(prompt, marker) {
-		t.Fatalf("completion instruction must not include the exact marker contiguously, got %q", prompt)
-	}
-	for _, disallowed := range []string{"signal-continuation", "AGENT_RUNNER_TTY", "printf"} {
+	for _, disallowed := range []string{"AGENT_RUNNER_CONTINUE_", "signal-continuation", "printf"} {
 		if strings.Contains(prompt, disallowed) {
-			t.Fatalf("completion instruction should use hosted-CLI text marker, got %q", prompt)
+			t.Fatalf("completion instruction should use the control client, got %q", prompt)
 		}
 	}
 }

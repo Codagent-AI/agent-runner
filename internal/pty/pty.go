@@ -28,6 +28,7 @@ const (
 type Result struct {
 	ExitCode          int
 	ContinueTriggered bool
+	DurabilityFailed  bool
 	// Stdout is a transcript of bytes the PTY emitted during the session, with
 	// ANSI escape sequences stripped. Populated for shell interactive sessions
 	// so callers can surface what scrolled past after the session ends.

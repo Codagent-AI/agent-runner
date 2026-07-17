@@ -126,12 +126,11 @@ steps:
 
 func runRealInteractiveAgentE2E(t *testing.T, agent string) {
 	t.Helper()
-	repoRoot, _, runnerBin := prepareRealAgentE2E(t, agent)
-	workdir := repoRoot
-	token := strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+	_, workdir, runnerBin := prepareRealAgentE2E(t, agent)
+	recallPhrase := strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
 	upperAgent := strings.ToUpper(agent)
-	freshReady := "AR_" + upperAgent + "_FRESH_" + token
-	resumeReady := "AR_" + upperAgent + "_RESUME_" + token
+	freshReady := "AR_" + upperAgent + "_FRESH_" + recallPhrase
+	resumeReady := "AR_" + upperAgent + "_RESUME_" + recallPhrase
 	workflowName := "real-" + agent + "-interactive-e2e"
 	workflowPath := filepath.Join(t.TempDir(), "workflow.yaml")
 	workflow := fmt.Sprintf(`name: %s
@@ -140,23 +139,16 @@ steps:
   - id: %s-interactive-fresh
     agent: %s_interactive_smoke
     session: new
-    prompt: "The random test value is %s. Reply with one line made by concatenating AR_, %s, _FRESH_, and the test value."
-`, workflowName, agent, agent, agent, token, upperAgent)
+    prompt: "The recall phrase is %s. Remember it for the next turn. Reply with one line made by concatenating AR_, %s, _FRESH_, and the recall phrase."
+`, workflowName, agent, agent, agent, recallPhrase, upperAgent)
 	phases := []realAgentPTYPhase{{ready: freshReady}}
 	stepIDs := []string{agent + "-interactive-fresh"}
-	// OpenCode 1.17 and Cursor 2026.07.16 do not complete an auto-submitted
-	// prompt when a TUI session is resumed immediately after Agent Runner's
-	// /next termination. Their real headless tests still cover session resume;
-	// keep these interactive smokes focused on terminal input and user-driven
-	// continuation for now.
-	if agent != "opencode" && agent != "cursor" {
-		workflow += fmt.Sprintf(`  - id: %s-interactive-resume
+	workflow += fmt.Sprintf(`  - id: %s-interactive-resume
     session: resume
-    prompt: "Recall the random test value from the prior turn. Reply with one line made by concatenating AR_, %s, _RESUME_, and that test value."
+    prompt: "Recall the phrase from the prior turn. Reply with one line made by concatenating AR_, %s, _RESUME_, and that phrase."
 `, agent, upperAgent)
-		phases = append(phases, realAgentPTYPhase{ready: resumeReady})
-		stepIDs = append(stepIDs, agent+"-interactive-resume")
-	}
+	phases = append(phases, realAgentPTYPhase{ready: resumeReady})
+	stepIDs = append(stepIDs, agent+"-interactive-resume")
 	writeRealAgentTestFile(t, workflowPath, []byte(workflow))
 	cleanupNewRealAgentRuns(t, workdir, workflowName)
 
@@ -333,23 +325,14 @@ func runRealAgentWorkflowInPTY(cmd *exec.Cmd, agent string, phases []realAgentPT
 	ready := make([]bool, len(phases))
 	trustHandled := make([]bool, len(phases))
 	phaseBoundary := 0
+	approvalBoundary := 0
+	copilotApprovals := 0
 	readDone := false
 	waitDone := false
 	var waitErr error
 	var lastOpenCodeProbe time.Time
 	advancePhase := func(i, boundary int) {
 		ready[i] = true
-		// Exercise representative cursor and wheel input while the real
-		// terminal UI is alive, after its submitted turn has stabilized.
-		_, _ = ptmx.Write([]byte("\x1bO"))
-		time.Sleep(10 * time.Millisecond)
-		_, _ = ptmx.Write([]byte("A\x1b[B\x1b[<64;10;5M"))
-		// Give the CLI time to durably record its completed turn before
-		// Agent Runner terminates it for workflow continuation.
-		time.Sleep(time.Second)
-		// Clear any cursor-sequence residue from Agent Runner's line
-		// tracker, then exercise the real user-driven continuation path.
-		_, _ = ptmx.Write([]byte("\x15/next\r"))
 		phaseBoundary = boundary
 	}
 	for !readDone || !waitDone {
@@ -370,6 +353,14 @@ func runRealAgentWorkflowInPTY(cmd *exec.Cmd, agent string, phases []realAgentPT
 					trustHandled[currentPhase] = true
 					// Accept Copilot's one-session default without persisting trust
 					// for the user's repository.
+					_, _ = ptmx.Write([]byte("\r"))
+				}
+				if agent == "copilot" && copilotApprovals < len(phases) &&
+					strings.Contains(plain[approvalBoundary:], "Do you want to run this command?") {
+					copilotApprovals++
+					approvalBoundary = len(plain)
+					// The adapter's exact command permission is the only approval
+					// presented; accept it once for this invocation.
 					_, _ = ptmx.Write([]byte("\r"))
 				}
 				for i, expected := range phases {

@@ -1,8 +1,8 @@
 package liverun
 
 import (
+	"errors"
 	"fmt"
-	"os"
 	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -31,6 +31,7 @@ type Coordinator struct {
 	suspended          bool // terminal has been released
 	pendingResume      bool // interactive step finished; restore deferred
 	altScreenRequested bool // ShowTUIMsg has been sent at least once
+	terminalErr        error
 }
 
 // NewCoordinator creates a Coordinator for a live workflow run.
@@ -42,28 +43,30 @@ func NewCoordinator(program terminalProgram, sessionDir string) *Coordinator {
 // Idempotent: a second call while already suspended is a no-op, which
 // eliminates the restore-then-release flicker between consecutive
 // interactive steps.
-func (c *Coordinator) BeforeInteractive() {
+func (c *Coordinator) BeforeInteractive() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.suspended {
 		c.pendingResume = false
-		return
+		return nil
 	}
 	if err := c.program.ReleaseTerminal(); err != nil {
-		fmt.Fprintf(os.Stderr, "agent-runner: release terminal failed: %v\n", err)
+		return fmt.Errorf("release terminal: %w", err)
 	}
 	c.suspended = true
 	c.send(SuspendedMsg{})
+	return nil
 }
 
 // AfterInteractive marks that an interactive step has finished. The terminal
 // is NOT restored here — that decision is deferred to PrepareForStep or
 // NotifyDone so we can avoid the flicker when the next step is also
 // interactive.
-func (c *Coordinator) AfterInteractive() {
+func (c *Coordinator) AfterInteractive() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.pendingResume = true
+	return nil
 }
 
 // PrepareForStep is called before each leaf step begins. It decides whether
@@ -80,7 +83,7 @@ func (c *Coordinator) PrepareForStep(interactive bool) {
 	// Non-interactive step: restore if we were suspended.
 	if c.pendingResume {
 		if err := c.program.RestoreTerminal(); err != nil {
-			fmt.Fprintf(os.Stderr, "agent-runner: restore terminal failed: %v\n", err)
+			c.terminalErr = errors.Join(c.terminalErr, fmt.Errorf("restore terminal: %w", err))
 		}
 		c.suspended = false
 		c.pendingResume = false
@@ -97,9 +100,10 @@ func (c *Coordinator) PrepareForStep(interactive bool) {
 // restored so the TUI can show results.
 func (c *Coordinator) NotifyDone(result string, err error) {
 	c.mu.Lock()
+	err = errors.Join(err, c.terminalErr)
 	if c.suspended || c.pendingResume {
 		if restoreErr := c.program.RestoreTerminal(); restoreErr != nil {
-			fmt.Fprintf(os.Stderr, "agent-runner: restore terminal failed: %v\n", restoreErr)
+			err = errors.Join(err, fmt.Errorf("restore terminal: %w", restoreErr))
 		}
 		c.suspended = false
 		c.pendingResume = false

@@ -126,11 +126,15 @@ func runShellProcess(step *model.Step, ctx *model.ExecutionContext, runner Proce
 	}
 
 	if ctx.SuspendHook != nil {
-		ctx.SuspendHook()
+		if err := ctx.SuspendHook(); err != nil {
+			return ProcessResult{}, false, err
+		}
 	}
 	ptyResult, err := interactiveShellRunnerFn(command, pty.Options{Workdir: step.Workdir})
 	if ctx.ResumeHook != nil {
-		ctx.ResumeHook()
+		if resumeErr := ctx.ResumeHook(); err == nil && resumeErr != nil {
+			err = resumeErr
+		}
 	}
 	if err != nil {
 		return ProcessResult{}, false, err

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,25 +12,28 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	cterm "github.com/charmbracelet/x/term"
 	gopty "github.com/creack/pty"
+	"golang.org/x/sys/unix"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/interactive"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
 
 const (
 	interactiveFixtureEnv = "AGENT_RUNNER_INTERACTIVE_E2E_FIXTURE"
 	interactiveFixtureLog = "AGENT_RUNNER_INTERACTIVE_E2E_LOG"
+	jobControlFixtureEnv  = "AGENT_RUNNER_JOB_CONTROL_FIXTURE"
 )
 
 var (
-	continuationSuffixRE = regexp.MustCompile(`\b[0-9a-f]{32}\b`)
-	sessionUUIDRE        = regexp.MustCompile(`\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
+	sessionUUIDRE = regexp.MustCompile(`\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
 )
 
 func TestInteractivePTYWorkflowIntegration(t *testing.T) {
@@ -83,6 +87,128 @@ func TestInteractivePTYWorkflowIntegration(t *testing.T) {
 	assertInteractiveFixtureInvocations(t, fixtureLog)
 }
 
+func TestInteractiveDirectHandoffJobControl(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("job control requires a POSIX terminal")
+	}
+	shell, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("zsh is required for the real-shell job-control test")
+	}
+	repoRoot := findRepoRoot(t)
+	tmp := t.TempDir()
+	runnerBin := filepath.Join(tmp, "agent-runner")
+	binDir := filepath.Join(tmp, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	buildAgentRunner(t, repoRoot, runnerBin)
+	writeInteractiveAgentFixtures(t, binDir, []string{"claude"})
+
+	for _, mode := range []string{"cooperative", "external"} {
+		t.Run(mode, func(t *testing.T) {
+			home := filepath.Join(tmp, "home-"+mode)
+			workflow := writeJobControlWorkflow(t, t.TempDir())
+			command := exec.Command(shell, "-f")
+			command.Dir = repoRoot
+			command.Env = append(os.Environ(), "PS1=JOB_SHELL_READY> ", "HOME="+home,
+				"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			ptmx, err := gopty.StartWithSize(command, &gopty.Winsize{Rows: 40, Cols: 120})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ptmx.Close()
+			output := make(chan string, 64)
+			go scanPTYText(ptmx, output)
+			waitForPTYText(t, output, "JOB_SHELL_READY>", 5*time.Second)
+			launch := fmt.Sprintf("AGENT_RUNNER_NO_TUI=1 %s=1 %s=%s %s --headless %s\r",
+				interactiveFixtureEnv, jobControlFixtureEnv, mode, runnerBin, workflow)
+			_, _ = ptmx.WriteString(launch)
+			ready := waitForPTYText(t, output, "JOB_CHILD_READY "+mode+" ", 30*time.Second)
+			match := regexp.MustCompile(`JOB_CHILD_READY ` + mode + ` ([0-9]+)`).FindStringSubmatch(ready)
+			if len(match) != 2 {
+				t.Fatalf("parse child readiness from %q", ready)
+			}
+			pid, parseErr := strconv.Atoi(match[1])
+			if parseErr != nil {
+				t.Fatalf("parse child pid from %q: %v", ready, parseErr)
+			}
+			if mode == "external" {
+				if err := unix.Kill(pid, unix.SIGSTOP); err != nil {
+					t.Fatalf("stop child: %v", err)
+				}
+			}
+			waitForPTYText(t, output, "suspended", 10*time.Second)
+			if mode == "cooperative" {
+				_, _ = ptmx.WriteString("bg\r")
+				waitForPTYText(t, output, "JOB_SHELL_READY>", 5*time.Second)
+				state, stateErr := exec.Command("ps", "-o", "state=", "-p", strconv.Itoa(pid)).Output()
+				if stateErr != nil || !strings.HasPrefix(strings.TrimSpace(string(state)), "T") {
+					t.Fatalf("child state after bg = %q, err %v; want stopped", state, stateErr)
+				}
+			}
+			_, _ = ptmx.WriteString("fg\r")
+			time.Sleep(100 * time.Millisecond)
+			_, _ = ptmx.WriteString("R")
+			waitForPTYText(t, output, "JOB_CHILD_RESUMED "+mode, 10*time.Second)
+			waitForPTYText(t, output, "JOB_SHELL_READY>", 15*time.Second)
+			_, _ = ptmx.WriteString("exit\r")
+			_ = command.Wait()
+		})
+	}
+}
+
+func writeJobControlWorkflow(t *testing.T, dir string) string {
+	t.Helper()
+	path := filepath.Join(dir, "interactive-job-control.yaml")
+	data := []byte(`name: interactive-job-control
+steps:
+  - id: job-control
+    agent: claude_interactive_smoke
+    session: new
+    prompt: "Exercise job control."
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func scanPTYText(reader io.Reader, output chan<- string) {
+	buffer := make([]byte, 4096)
+	for {
+		n, err := reader.Read(buffer)
+		if n > 0 {
+			output <- string(buffer[:n])
+		}
+		if err != nil {
+			close(output)
+			return
+		}
+	}
+}
+
+func waitForPTYText(t *testing.T, output <-chan string, want string, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	var text strings.Builder
+	for {
+		select {
+		case chunk, ok := <-output:
+			if !ok {
+				t.Fatalf("PTY closed before %q; output: %s", want, text.String())
+			}
+			text.WriteString(chunk)
+			if strings.Contains(text.String(), want) {
+				return text.String()
+			}
+		case <-deadline.C:
+			t.Fatalf("timed out waiting for %q; output: %s", want, text.String())
+		}
+	}
+}
+
 func writeInteractivePTYWorkflow(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "interactive-pty-integration.yaml")
@@ -131,27 +257,26 @@ func runInteractiveAgentFixture() error {
 	if err != nil {
 		return err
 	}
+	if mode := os.Getenv(jobControlFixtureEnv); mode != "" {
+		return runJobControlFixture(mode)
+	}
 	if err := appendInteractiveFixtureInvocation(interactiveFixtureInvocation{
 		CLI: name, Resume: resume, SessionID: sessionID, Args: args,
 	}); err != nil {
 		return err
 	}
 
-	joined := strings.Join(args, "\n")
-	suffix := continuationSuffixRE.FindString(joined)
-	if suffix == "" {
-		return fmt.Errorf("%s prompt did not contain a continuation suffix", name)
+	for _, key := range []string{interactive.EnvControlSocket, interactive.EnvRunID, interactive.EnvStepID, interactive.EnvControlToken} {
+		if os.Getenv(key) == "" {
+			return fmt.Errorf("%s did not receive %s", name, key)
+		}
 	}
 
 	if !resume {
 		_, _ = fmt.Fprintf(os.Stdout, "FAKE_AGENT_READY %s new\r\n", name)
-		// Split and style the agent-generated marker to exercise the real PTY
-		// output scanner across reads and ANSI cursor styling.
-		_, _ = os.Stdout.WriteString("AGENT_RUNNER_")
-		time.Sleep(20 * time.Millisecond)
-		_, _ = os.Stdout.WriteString("\x1b[32m\x1b[2CCONTINUE_")
-		time.Sleep(20 * time.Millisecond)
-		_, _ = os.Stdout.WriteString(suffix + "\x1b[0m\r\n")
+		if err := completeInteractiveFixture(); err != nil {
+			return err
+		}
 		return waitForFixtureTermination()
 	}
 
@@ -179,7 +304,46 @@ func runInteractiveAgentFixture() error {
 		}
 	}
 	_, _ = fmt.Fprintf(os.Stdout, "FAKE_AGENT_INPUT_OK %s\r\n", name)
+	if err := completeInteractiveFixture(); err != nil {
+		return err
+	}
 	return waitForFixtureTermination()
+}
+
+func runJobControlFixture(mode string) error {
+	oldState, err := cterm.MakeRaw(os.Stdin.Fd())
+	if err != nil {
+		return err
+	}
+	defer func() { _ = cterm.Restore(os.Stdin.Fd(), oldState) }()
+	_, _ = fmt.Fprintf(os.Stdout, "JOB_CHILD_READY %s %d\r\n", mode, os.Getpid())
+	if mode == "cooperative" {
+		if err := unix.Kill(-unix.Getpgrp(), unix.SIGSTOP); err != nil {
+			return err
+		}
+	}
+	input := []byte{0}
+	if _, err := io.ReadFull(os.Stdin, input); err != nil {
+		return err
+	}
+	if input[0] != 'R' {
+		return fmt.Errorf("terminal mode was not restored for child: read %q", input)
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "JOB_CHILD_RESUMED %s\r\n", mode)
+	if err := completeInteractiveFixture(); err != nil {
+		return err
+	}
+	return waitForFixtureTermination()
+}
+
+func completeInteractiveFixture() error {
+	if err := interactive.SendControlEventFromEnvironment(context.Background(), interactive.MessageCompleteStep, os.Getenv); err != nil {
+		return fmt.Errorf("send completion: %w", err)
+	}
+	if err := interactive.SendControlEventFromEnvironment(context.Background(), interactive.MessageTurnCommitted, os.Getenv); err != nil {
+		return fmt.Errorf("send committed turn: %w", err)
+	}
+	return nil
 }
 
 func waitForFixtureTermination() error {
@@ -269,10 +433,6 @@ func runInteractiveWorkflowInPTY(cmd *exec.Cmd, timeout time.Duration) (string, 
 					inputOK := "FAKE_AGENT_INPUT_OK " + executable
 					if strings.Contains(text, inputOK) && !seenInputOK[executable] {
 						seenInputOK[executable] = true
-						// The focused input-parser regression owns SS3 line-state
-						// semantics. Clear the synthetic input here so this workflow
-						// test independently exercises user-triggered continuation.
-						_, _ = ptmx.WriteString("\x15/next\r")
 					}
 				}
 			}
