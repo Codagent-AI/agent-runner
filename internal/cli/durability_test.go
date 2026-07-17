@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -223,6 +224,30 @@ func TestCursorDurabilityCheckpointAcceptsEmptySQLiteJSONOutput(t *testing.T) {
 	}
 	if checkpoint.Artifact != path || checkpoint.Marker != "" {
 		t.Fatalf("checkpoint = %#v, want empty marker for %s", checkpoint, path)
+	}
+}
+
+func TestCursorDurabilityProbeFailsFastWhenSQLiteBinaryMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".cursor", "chats", "workspace", "cursor-session", "store.db")
+	copyFixture(t, "testdata/durability/cursor/store.db", path)
+	probe := &CursorAdapter{runStoreQuery: func(string) ([]byte, error) {
+		return nil, &osexec.Error{Name: "sqlite3", Err: osexec.ErrNotFound}
+	}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	err := probe.WaitForCommittedTurn(ctx, "cursor-session", Checkpoint{Artifact: path})
+	if err == nil || !errors.Is(err, osexec.ErrNotFound) {
+		t.Fatalf("WaitForCommittedTurn error = %v, want exec.ErrNotFound", err)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitForCommittedTurn polled until the durability deadline: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("WaitForCommittedTurn took %v, want immediate failure for missing sqlite3 binary", elapsed)
 	}
 }
 

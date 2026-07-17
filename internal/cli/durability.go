@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -446,6 +447,11 @@ func pollForCommittedTurnWithBackoff(
 	var lastErr error
 	for {
 		committed, err := inspect()
+		if err != nil && errors.Is(err, exec.ErrNotFound) {
+			// A missing inspection binary (e.g. sqlite3) cannot resolve by
+			// waiting; fail fast instead of polling until the deadline.
+			return fmt.Errorf("wait for committed turn in %s: %w", artifact, err)
+		}
 		lastErr = err
 		if committed {
 			return nil
