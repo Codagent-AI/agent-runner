@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/codagent/agent-runner/internal/cli"
 )
 
@@ -174,6 +176,21 @@ func TestDirectRunnerSucceedsWhenSessionStoreAppearsAfterAcceptance(t *testing.T
 	}
 	if !result.Completed || result.DurabilityFailed {
 		t.Fatalf("Run result = %#v (durability error %v), want durable completion for a store that appeared after acceptance", result, result.DurabilityError)
+	}
+}
+
+func TestWatchdogCommandRunsInOwnProcessGroup(t *testing.T) {
+	t.Parallel()
+	metadata := ProcessMetadata{ChildPID: 123, PGID: 123, StartTime: "42"}
+
+	command := newWatchdogCommand("/bin/agent-runner", metadata, time.Second)
+
+	if command.SysProcAttr == nil || !command.SysProcAttr.Setpgid {
+		t.Fatalf("watchdog command SysProcAttr = %+v, want Setpgid enabled so group-directed signals to the runner do not kill the watchdog", command.SysProcAttr)
+	}
+	wantArgs := []string{"/bin/agent-runner", "internal", "watchdog", "--pid", "123", "--pgid", "123", "--start-time", "42", "--grace", "1s"}
+	if diff := cmp.Diff(wantArgs, command.Args); diff != "" {
+		t.Fatalf("watchdog command args mismatch (-want +got):\n%s", diff)
 	}
 }
 

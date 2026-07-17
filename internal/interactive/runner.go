@@ -282,6 +282,15 @@ func durationOrDefault(value, fallback time.Duration) time.Duration {
 	return fallback
 }
 
+func newWatchdogCommand(executable string, metadata ProcessMetadata, grace time.Duration) *exec.Cmd {
+	command := exec.Command(executable, watchdogArgs(metadata, grace)...) // #nosec G204 -- current executable and internal args
+	// The watchdog must outlive signals aimed at the runner's process group
+	// (for example the shell killing the whole job); its cleanup trigger is
+	// the parent-death pipe EOF, so isolate it in its own group.
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	return command
+}
+
 func startWatchdog(executable string, metadata ProcessMetadata, grace time.Duration) (func(), error) {
 	if executable == "" {
 		return nil, nil
@@ -290,7 +299,7 @@ func startWatchdog(executable string, metadata ProcessMetadata, grace time.Durat
 	if err != nil {
 		return nil, fmt.Errorf("create watchdog pipe: %w", err)
 	}
-	command := exec.Command(executable, watchdogArgs(metadata, durationOrDefault(grace, DefaultTerminationGrace))...) // #nosec G204 -- current executable and internal args
+	command := newWatchdogCommand(executable, metadata, durationOrDefault(grace, DefaultTerminationGrace))
 	command.ExtraFiles = []*os.File{reader}
 	command.Stdin = nil
 	command.Stdout = nil
