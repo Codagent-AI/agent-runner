@@ -24,7 +24,7 @@ You MUST read these files before starting:
 
 The collector is a **normalizing processor** in the audit pipeline, not a passive tee. A pipeline logger implementing `audit.EventLogger` wraps the file audit sink:
 
-```
+```text
 executor emits event (typed usage record + identity block in Data)
   → Collector.Process(e audit.Event) audit.Event: attributes cumulative usage
     (baseline delta), replaces raw values with the final UsageRecord, updates
@@ -127,7 +127,7 @@ Cost travels separately as `estimated_api_cost_usd` (`*float64`, nil = not repor
 }
 ```
 
-Semantics the collector must implement: append-only attempt records (`record_id` = `prefix/id#attempt`; the collector assigns the authoritative attempt number by counting prior records for the same prefix/id, rehydrated records included, and stamps it into both the artifact record and the enriched event's identity block, so `audit.log` and the TUI always see the normalized attempt number); iteration records (`kind: "iteration"`) carry identity and duration only; sessions open on `run_start`, snapshot on every terminal write, close on `run_end` (a hard-killed session stays `"open"` and resume closes it at the last observed value); coverage denominators count only agent records with `agent_invoked` true; `history_complete: false` plus a unique backup (`run-metrics.json.bak-<RFC3339-session-start>`) whenever a corrupt or unsupported-version (including newer) artifact forces a fresh start.
+Semantics the collector must implement: append-only attempt records (`record_id` = `prefix/id#attempt`; the collector assigns the authoritative attempt number by counting prior records for the same prefix/id, rehydrated records included, and stamps it into both the artifact record and the enriched event's identity block, so `audit.log` and the TUI always see the normalized attempt number); iteration records (`kind: "iteration"`) carry identity and duration only; sessions open on `run_start`, snapshot on every terminal write, close on `run_end` (a hard-killed session stays `"open"` and resume closes it at the last observed value); coverage denominators count only agent records with `agent_invoked` true; `history_complete: false` plus a unique backup (`run-metrics.json.bak-<filename-safe-UTC-session-start>`) whenever corrupt data, malformed persisted timestamps, or an unsupported version (including newer) forces a fresh start. Invalid event timestamps surface warnings and never fabricate elapsed time.
 
 ### Cumulative attribution (implemented in the collector now, exercised once adapters report `RawCumulative`)
 

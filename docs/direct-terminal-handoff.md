@@ -1,4 +1,11 @@
-# Direct terminal handoff
+---
+title: Direct Terminal Handoff
+group: Development
+order: 10
+description: How interactive agent steps hand terminal ownership to agent CLIs and receive durable completion signals.
+---
+
+# Direct Terminal Handoff
 
 Interactive agent steps give the agent CLI direct ownership of the user's terminal. Agent Runner remains the parent process, supervises the CLI, and advances the workflow through a separate authenticated control channel.
 

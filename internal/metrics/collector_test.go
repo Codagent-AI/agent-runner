@@ -576,7 +576,7 @@ func TestCollectorRecoveryBackupNamesAreUnique(t *testing.T) {
 	dir := t.TempDir()
 	started := mustTime(t, "2026-07-17T10:00:00Z")
 	path := filepath.Join(dir, FileName)
-	firstBackup := path + ".bak-" + started.Format(time.RFC3339)
+	firstBackup := path + ".bak-20260717T100000.000000000Z"
 	if err := os.WriteFile(firstBackup, []byte("older"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -591,6 +591,53 @@ func TestCollectorRecoveryBackupNamesAreUnique(t *testing.T) {
 	}
 	if _, err := os.Stat(firstBackup + "-2"); err != nil {
 		t.Fatalf("unique second backup missing: %v", err)
+	}
+	if strings.Contains(filepath.Base(firstBackup), ":") {
+		t.Fatalf("backup filename %q contains a Windows-invalid colon", filepath.Base(firstBackup))
+	}
+}
+
+func TestCollectorMalformedRunEndTimestampClosesAtLastObservation(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(dir, "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, nil))
+	c.Process(stepEvent(started.Add(3*time.Second), agentIdentity("one", true), unavailableUsage(), nil, "completed", 1))
+	c.Process(audit.Event{Timestamp: "not-a-timestamp", Type: audit.EventRunEnd, Data: map[string]any{}})
+
+	a := readArtifact(t, dir)
+	session := a.Sessions[0]
+	wantObserved := started.Add(3 * time.Second).Format(time.RFC3339Nano)
+	if session.Status != SessionClosed || session.EndedAt != wantObserved || session.DurationMS != 3000 {
+		t.Fatalf("session after malformed run_end = %+v", session)
+	}
+	if errors := c.Errors(); len(errors) == 0 || !strings.Contains(errors[0].Error(), "invalid run_end timestamp") {
+		t.Fatalf("collector errors = %v, want invalid run_end timestamp", errors)
+	}
+}
+
+func TestCollectorRecoversArtifactWithMalformedPersistedTimestamp(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	contents := `{"schema_version":1,"run_id":"run","workflow":"workflow","history_complete":true,"sessions":[{"started_at":"invalid","last_observed_at":"2026-07-17T10:00:00Z","duration_ms":0,"status":"open"}],"steps":[],"totals":{"tokens":{},"usage_coverage":"none","token_total_coverage":"none","estimated_api_cost_usd":null,"cost_coverage":"none"}}`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	started := mustTime(t, "2026-07-17T11:00:00Z")
+	c := NewCollector(dir, "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, map[string]any{"resumed": true}))
+	c.Process(stepEvent(started.Add(time.Second), agentIdentity("one", true), unavailableUsage(), nil, "completed", 1))
+
+	a := readArtifact(t, dir)
+	if a.HistoryComplete || len(a.Sessions) != 1 || a.Sessions[0].StartedAt != started.Format(time.RFC3339Nano) {
+		t.Fatalf("recovered artifact = %+v", a)
+	}
+	backups, err := filepath.Glob(path + ".bak-*")
+	if err != nil || len(backups) != 1 {
+		t.Fatalf("backups = %v, err = %v", backups, err)
+	}
+	if errors := c.Errors(); len(errors) == 0 || !strings.Contains(errors[0].Error(), "invalid session timestamp") {
+		t.Fatalf("collector errors = %v, want invalid persisted timestamp recovery", errors)
 	}
 }
 

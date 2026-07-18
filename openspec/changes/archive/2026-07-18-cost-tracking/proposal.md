@@ -43,7 +43,7 @@ Agent Runner owns measurement end to end: it collects usage, CLI-reported cost, 
 
 PTY-backed runs (interactive and autonomous-interactive contexts) capture no stdout, which is why autonomous-headless collection comes first.
 
-```
+```text
 agent step runs CLI (headless)
    → adapter extracts raw usage + any CLI-reported cost
      (categories, provider, actual model, source, completeness)

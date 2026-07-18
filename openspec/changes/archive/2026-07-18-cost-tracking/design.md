@@ -55,7 +55,7 @@ func (c *Collector) Totals() model.RunTotals
 
 A pipeline logger implements `audit.EventLogger` and is installed by the runner at run initialization (the `initRunState` neighborhood in `runner.go`):
 
-```
+```text
 executor emits event (raw extraction + identity block attached, typed)
   → Collector.Process: attributes cumulative usage (baseline delta),
     replaces raw values with the final attributed UsageRecord,
@@ -230,7 +230,7 @@ Semantics:
 - **Sessions.** One record per execution session, opened on `run_start`, `status: "open"`. Every terminal-event write snapshots `last_observed_at` and provisional `duration_ms`. `run_end` closes the session (`ended_at`, `status: "closed"`). After a hard kill the session stays `open` and its duration is trusted only up to the last persisted event; resume closes it at that observed value. Run-level `active_duration_ms` is the sum of session durations; paused time between sessions never counts. (Note: the top-level `sessions[]` array records **execution sessions** — one per `agent-runner` invocation of the run. The `session_id` field on each step record is a different concept: the **agent CLI session** identifier assigned by the CLI to that particular invocation. The two use "session" in distinct senses.)
 - **Coverage.** `usage_coverage` and `cost_coverage` are `complete`/`partial`/`none`, computed over agent step records with `agent_invoked` true (skipped/never-launched steps are excluded from denominators). Token totals sum only reported values in canonical categories; a category no step reported is absent, not zero.
 - **`history_complete`** is orthogonal to coverage: `false` means the artifact itself lost history (a corrupt or unreadable predecessor forced a fresh start), so the coverage indicators describe only the steps this artifact knows about.
-- **Recovery.** On resume: a corrupt artifact, or one with an **unsupported schema version (including newer than this binary)**, is preserved under a unique backup name (`run-metrics.json.bak-<RFC3339-session-start>`), never overwritten in place; a fresh artifact starts with `history_complete: false` and a warning is surfaced.
+- **Recovery.** On resume: a corrupt artifact, one with malformed session timestamps, or one with an **unsupported schema version (including newer than this binary)**, is preserved under a unique backup name (`run-metrics.json.bak-<filename-safe-UTC-session-start>`), never overwritten in place; a fresh artifact starts with `history_complete: false` and a warning is surfaced. Malformed lifecycle-event timestamps never fabricate elapsed time: the event's timing observation is ignored, and an invalid `run_end` closes at the last trustworthy observation.
 - **Write failures** are nonfatal: the run and step proceed; errors accumulate in the collector and are reported at run end.
 
 `WriteJSONAtomic(path string, v any) error` is added to `internal/stateio` (generalizing `WriteState`'s existing temp-then-rename logic); `WriteState` becomes a thin wrapper over it.

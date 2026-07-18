@@ -1878,13 +1878,88 @@ func TestCompletionInstructionQuotesExecutablePath(t *testing.T) {
 	}
 }
 
+func TestCompletionInstructionRejectsInvalidExecutable(t *testing.T) {
+	for _, executable := range []string{"", "relative/agent-runner"} {
+		if got := completionInstruction(executable); got != "" {
+			t.Fatalf("completionInstruction(%q) = %q, want empty", executable, got)
+		}
+	}
+}
+
 func TestCompletionExecutableUsesConfiguredAgentRunner(t *testing.T) {
 	override := writeExecutableFixture(t)
 	t.Setenv("AGENT_RUNNER_EXECUTABLE", override)
 
-	got := completionExecutableForContext(cli.ContextInteractive)
+	got, err := completionExecutableForContext(cli.ContextInteractive)
+	if err != nil {
+		t.Fatalf("completionExecutableForContext() error = %v", err)
+	}
 	if got != override {
 		t.Fatalf("completionExecutableForContext() = %q, want %q", got, override)
+	}
+}
+
+func TestBuildStepInvocationFailsWhenInteractiveCompletionExecutableCannotBeResolved(t *testing.T) {
+	original := osExecutableFn
+	osExecutableFn = func() (string, error) { return "", errors.New("executable unavailable") }
+	t.Cleanup(func() { osExecutableFn = original })
+	t.Setenv("AGENT_RUNNER_EXECUTABLE", "")
+
+	step := &model.Step{ID: "implement"}
+	ctx := &model.ExecutionContext{}
+	profile := &config.ResolvedAgent{}
+	adapter := &spawnEnvAdapter{}
+
+	_, _, _, err := buildStepInvocation(step, ctx, profile, adapter, "prompt", "", "", false, cli.ContextInteractive)
+	if err == nil || !strings.Contains(err.Error(), "resolve completion executable") || !strings.Contains(err.Error(), "executable unavailable") {
+		t.Fatalf("buildStepInvocation error = %v, want completion executable resolution failure", err)
+	}
+}
+
+func TestBuildStepInvocationHeadlessDoesNotRequireCompletionExecutable(t *testing.T) {
+	original := osExecutableFn
+	osExecutableFn = func() (string, error) { return "", errors.New("executable unavailable") }
+	t.Cleanup(func() { osExecutableFn = original })
+	t.Setenv("AGENT_RUNNER_EXECUTABLE", "")
+
+	step := &model.Step{ID: "implement"}
+	adapter := &spawnEnvAdapter{}
+	_, _, _, err := buildStepInvocation(step, &model.ExecutionContext{}, &config.ResolvedAgent{}, adapter, "prompt", "", "", false, cli.ContextAutonomousHeadless)
+	if err != nil {
+		t.Fatalf("buildStepInvocation() error = %v", err)
+	}
+	if adapter.input.CompletionCommand != nil {
+		t.Fatalf("headless completion command = %+v, want nil", adapter.input.CompletionCommand)
+	}
+	if strings.Contains(adapter.input.Prompt, "step complete") {
+		t.Fatalf("headless prompt unexpectedly contains completion instruction: %q", adapter.input.Prompt)
+	}
+}
+
+func TestExecuteAgentStepDoesNotStartWhenCompletionExecutableCannotBeResolved(t *testing.T) {
+	original := osExecutableFn
+	osExecutableFn = func() (string, error) { return "", errors.New("executable unavailable") }
+	t.Cleanup(func() { osExecutableFn = original })
+	t.Setenv("AGENT_RUNNER_EXECUTABLE", "")
+
+	runner := &mockRunner{}
+	auditLog := &recordingAuditLogger{}
+	ctx := makeCtx()
+	ctx.AuditLogger = auditLog
+	step := &model.Step{ID: "implement", CLI: "claude", Mode: model.ModeInteractive, Prompt: "do it", Session: model.SessionNew}
+
+	outcome, err := ExecuteAgentStep(step, ctx, runner, &mockLogger{})
+	if err != nil {
+		t.Fatalf("ExecuteAgentStep() error = %v", err)
+	}
+	if outcome != OutcomeFailed {
+		t.Fatalf("ExecuteAgentStep() outcome = %v, want failed", outcome)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner calls = %d, want 0", len(runner.calls))
+	}
+	if event := findAuditEvent(auditLog.events, audit.EventStepStart); event != nil {
+		t.Fatalf("unexpected step_start event: %+v", event)
 	}
 }
 
@@ -1893,9 +1968,14 @@ type spawnEnvAdapter struct {
 	err     error
 	workdir string
 	runID   string
+	input   *cli.BuildArgsInput
 }
 
-func (a *spawnEnvAdapter) BuildArgs(*cli.BuildArgsInput) []string        { return []string{"fake"} }
+func (a *spawnEnvAdapter) BuildArgs(input *cli.BuildArgsInput) []string {
+	cloned := *input
+	a.input = &cloned
+	return []string{"fake"}
+}
 func (a *spawnEnvAdapter) DiscoverSessionID(*cli.DiscoverOptions) string { return "" }
 func (a *spawnEnvAdapter) SupportsSystemPrompt() bool                    { return false }
 func (a *spawnEnvAdapter) ProbeModel(string, string) (cli.ProbeStrength, error) {
@@ -1925,6 +2005,12 @@ func TestBuildStepInvocationCollectsSpawnEnv(t *testing.T) {
 	}
 	if adapter.runID != "run-123" {
 		t.Fatalf("adapter received run ID %q, want run-scoped process-local configuration", adapter.runID)
+	}
+	if adapter.input.CompletionCommand == nil {
+		t.Fatal("interactive invocation completion command = nil")
+	}
+	if command := adapter.input.CompletionCommand.ShellCommand(); !strings.Contains(adapter.input.Prompt, command) {
+		t.Fatalf("interactive prompt %q does not contain completion command %q", adapter.input.Prompt, command)
 	}
 
 	failing := &spawnEnvAdapter{err: errors.New("prepare config: boom")}

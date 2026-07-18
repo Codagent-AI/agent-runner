@@ -18,6 +18,9 @@ import (
 const (
 	SchemaVersion = 1
 	FileName      = "run-metrics.json"
+	// Compact UTC with fixed nanoseconds is sortable, collision-resistant, and
+	// safe on Windows (unlike RFC3339, which contains colons).
+	backupTimestampLayout = "20060102T150405.000000000Z"
 
 	DataIdentity            = "identity"
 	DataUsage               = "usage"
@@ -109,21 +112,39 @@ func (c *Collector) Process(event audit.Event) audit.Event {
 	defer c.mu.Unlock()
 
 	event.Data = cloneData(event.Data)
-	at := parseTimestamp(event.Timestamp)
 	switch event.Type {
 	case audit.EventRunStart:
-		c.openSession(at)
+		if at, ok := c.eventTimestamp(event); ok {
+			c.openSession(at)
+		}
 	case audit.EventStepEnd, audit.EventIterationEnd:
 		c.processTerminal(&event)
-		c.observeSession(at, false)
+		if at, ok := c.eventTimestamp(event); ok {
+			c.observeSession(at, false)
+		}
 		c.artifact.Totals = c.totalsLocked(false)
 		c.persist()
 	case audit.EventRunEnd:
-		c.observeSession(at, true)
+		if at, ok := c.eventTimestamp(event); ok {
+			c.observeSession(at, true)
+		} else {
+			// The final event is still terminal even when its timestamp is bad.
+			// Close at the last trustworthy observation instead of inventing time.
+			c.closeSessionAtLastObservation()
+		}
 		c.artifact.Totals = c.totalsLocked(false)
 		c.persist()
 	}
 	return event
+}
+
+func (c *Collector) eventTimestamp(event audit.Event) (time.Time, bool) {
+	at, err := parseTimestamp(event.Timestamp)
+	if err != nil {
+		c.errors = append(c.errors, fmt.Errorf("run-metrics: invalid %s timestamp %q: %w", event.Type, event.Timestamp, err))
+		return time.Time{}, false
+	}
+	return at, true
 }
 
 // Totals returns aggregates through the latest observed terminal event.
@@ -283,8 +304,18 @@ func (c *Collector) observeSession(at time.Time, closeSession bool) {
 		return
 	}
 	session := &c.artifact.Sessions[len(c.artifact.Sessions)-1]
-	started := parseTimestamp(session.StartedAt)
-	lastObserved := parseTimestamp(session.LastObservedAt)
+	started, startedErr := parseTimestamp(session.StartedAt)
+	lastObserved, observedErr := parseTimestamp(session.LastObservedAt)
+	if startedErr != nil || observedErr != nil {
+		// Rehydration validates persisted timestamps, and new records are created
+		// from parsed event times, so reaching this guard indicates an internal
+		// invariant violation. Preserve the last stored values and surface it.
+		c.errors = append(c.errors, fmt.Errorf(
+			"run-metrics: invalid active session timestamp: started_at=%q (%v), last_observed_at=%q (%v)",
+			session.StartedAt, startedErr, session.LastObservedAt, observedErr,
+		))
+		return
+	}
 	observed := at
 	if lastObserved.After(observed) {
 		observed = lastObserved
@@ -300,14 +331,25 @@ func (c *Collector) observeSession(at time.Time, closeSession bool) {
 	}
 }
 
+func (c *Collector) closeSessionAtLastObservation() {
+	if len(c.artifact.Sessions) == 0 {
+		return
+	}
+	session := &c.artifact.Sessions[len(c.artifact.Sessions)-1]
+	session.Status = SessionClosed
+	session.EndedAt = session.LastObservedAt
+}
+
 func (c *Collector) totalsLocked(includeLiveSession bool) model.RunTotals {
 	totals := emptyTotals()
 	for i, session := range c.artifact.Sessions {
 		duration := session.DurationMS
 		if includeLiveSession && i == len(c.artifact.Sessions)-1 && session.Status == SessionOpen {
-			liveDuration := c.now().Sub(parseTimestamp(session.StartedAt)).Milliseconds()
-			if liveDuration > duration {
-				duration = liveDuration
+			if started, err := parseTimestamp(session.StartedAt); err == nil {
+				liveDuration := c.now().Sub(started).Milliseconds()
+				if liveDuration > duration {
+					duration = liveDuration
+				}
 			}
 		}
 		totals.ActiveDurationMS += duration
@@ -392,6 +434,10 @@ func (c *Collector) rehydrate(sessionStart time.Time) {
 		))
 		return
 	}
+	if err := validateSessionTimestamps(artifact.Sessions); err != nil {
+		c.recoverArtifact(sessionStart, fmt.Errorf("invalid session timestamp: %w", err))
+		return
+	}
 	if artifact.Sessions == nil {
 		artifact.Sessions = []SessionRecord{}
 	}
@@ -420,12 +466,13 @@ func (c *Collector) rehydrate(sessionStart time.Time) {
 }
 
 func (c *Collector) recoverArtifact(sessionStart time.Time, cause error) {
-	backup := c.path + ".bak-" + sessionStart.UTC().Format(time.RFC3339)
+	stamp := sessionStart.UTC().Format(backupTimestampLayout)
+	backup := c.path + ".bak-" + stamp
 	for suffix := 2; ; suffix++ {
 		if _, err := os.Stat(backup); os.IsNotExist(err) {
 			break
 		}
-		backup = fmt.Sprintf("%s.bak-%s-%d", c.path, sessionStart.UTC().Format(time.RFC3339), suffix)
+		backup = fmt.Sprintf("%s.bak-%s-%d", c.path, stamp, suffix)
 	}
 	if err := os.Rename(c.path, backup); err != nil {
 		c.errors = append(c.errors, fmt.Errorf("run-metrics recovery (%v), preserve artifact: %w", cause, err))
@@ -491,12 +538,32 @@ func escapeRecordComponent(value string) string {
 
 func baselineKey(cliName, sessionID string) string { return cliName + "\x00" + sessionID }
 
-func parseTimestamp(value string) time.Time {
+func parseTimestamp(value string) (time.Time, error) {
 	at, err := time.Parse(time.RFC3339Nano, value)
 	if err != nil {
-		return time.Now().UTC()
+		return time.Time{}, err
 	}
-	return at
+	return at, nil
+}
+
+func validateSessionTimestamps(sessions []SessionRecord) error {
+	for i := range sessions {
+		session := &sessions[i]
+		for _, field := range []struct{ name, value string }{
+			{name: "started_at", value: session.StartedAt},
+			{name: "last_observed_at", value: session.LastObservedAt},
+		} {
+			if _, err := parseTimestamp(field.value); err != nil {
+				return fmt.Errorf("session %d %s %q: %w", i, field.name, field.value, err)
+			}
+		}
+		if session.EndedAt != "" {
+			if _, err := parseTimestamp(session.EndedAt); err != nil {
+				return fmt.Errorf("session %d ended_at %q: %w", i, session.EndedAt, err)
+			}
+		}
+	}
+	return nil
 }
 
 func cloneData(data map[string]any) map[string]any {
