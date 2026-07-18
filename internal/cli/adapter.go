@@ -2,6 +2,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -14,6 +15,23 @@ import (
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/usersettings"
 )
+
+// streamScanBufferMax is the maximum single-line (token) size for the JSONL
+// scanners that parse agent CLI stream output. A CLI's terminal "result" event
+// can embed the whole turn's output text plus its usage on one line, so this
+// ceiling must comfortably exceed a large turn's output; otherwise the scanner
+// errors with bufio.ErrTooLong and that step's usage is lost even though the
+// run succeeded. It stays bounded (not unbounded) to cap memory on pathological
+// input. Shared across every adapter so the limit is consistent.
+const streamScanBufferMax = 16 * 1024 * 1024
+
+// newStreamScanner returns a bufio.Scanner configured with the shared
+// stream-parsing buffer ceiling (see streamScanBufferMax).
+func newStreamScanner(r io.Reader) *bufio.Scanner {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), streamScanBufferMax)
+	return scanner
+}
 
 // lineBufferedWriter is an io.WriteCloser that buffers input until a newline,
 // then dispatches each newline-terminated line to onLine. Adapters use it to

@@ -275,8 +275,7 @@ func (f *codexStderrFilter) writeDownstream(p []byte) error {
 }
 
 func extractCodexAgentMessages(output string) string {
-	scanner := bufio.NewScanner(strings.NewReader(output))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner := newStreamScanner(strings.NewReader(output))
 	var messages []string
 	for scanner.Scan() {
 		if text := codexDisplayText(scanner.Bytes()); text != "" {
@@ -317,8 +316,7 @@ func codexDisplayText(line []byte) string {
 }
 
 func codexTurnCompleted(output string) bool {
-	scanner := bufio.NewScanner(strings.NewReader(output))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner := newStreamScanner(strings.NewReader(output))
 	for scanner.Scan() {
 		var event struct {
 			Type string `json:"type"`
@@ -341,8 +339,7 @@ func (a *CodexAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) {
 		lastUsage json.RawMessage
 		modelName string
 	)
-	scanner := bufio.NewScanner(strings.NewReader(rawStdout))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner := newStreamScanner(strings.NewReader(rawStdout))
 	for scanner.Scan() {
 		if strings.TrimSpace(scanner.Text()) == "" {
 			continue

@@ -533,8 +533,7 @@ func (a *CursorAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) 
 		lastUsage json.RawMessage
 		modelName string
 	)
-	scanner := bufio.NewScanner(strings.NewReader(rawStdout))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner := newStreamScanner(strings.NewReader(rawStdout))
 	for scanner.Scan() {
 		if strings.TrimSpace(scanner.Text()) == "" {
 			continue
@@ -644,8 +643,7 @@ func (f *cursorStreamFilter) writeDownstream(p []byte) error {
 }
 
 func extractCursorResult(output string) string {
-	scanner := bufio.NewScanner(strings.NewReader(output))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner := newStreamScanner(strings.NewReader(output))
 	for scanner.Scan() {
 		var event struct {
 			Type   string `json:"type"`
@@ -662,6 +660,9 @@ func extractCursorResult(output string) string {
 }
 
 func discoverCursorSessionID(output string) string {
+	// Session discovery keeps a smaller bounded ceiling (not the shared stream
+	// ceiling): the session_id rides on small early events, and an oversized
+	// line here is a handled fallback (logged, empty return), not usage loss.
 	scanner := bufio.NewScanner(strings.NewReader(output))
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {

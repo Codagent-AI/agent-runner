@@ -48,6 +48,33 @@ func TestClaudeUsageExtraction(t *testing.T) {
 	}
 }
 
+func TestClaudeUsageExtractionHandlesLargeResultLine(t *testing.T) {
+	adapter := &ClaudeAdapter{}
+	extractor := requireUsageExtractor(t, adapter)
+
+	// The result event embeds the whole turn's output text plus usage on one
+	// line. Pad it past the old 1MiB scanner ceiling (still under the shared
+	// ceiling) to prove usage is no longer lost on long sessions.
+	big := strings.Repeat("x", 2*1024*1024)
+	resultEvent := fmt.Sprintf(`{"type":"result","subtype":"success","result":%q,"total_cost_usd":0.0042,"usage":{"input_tokens":3,"output_tokens":2,"cache_creation_input_tokens":11,"cache_read_input_tokens":101}}`, big)
+	raw := `{"type":"system","subtype":"init","model":"claude-sonnet-4-6"}` + "\n" + resultEvent + "\n"
+
+	got, err := extractor.ExtractUsage(raw)
+	if err != nil {
+		t.Fatalf("ExtractUsage() on >1MiB result line error = %v", err)
+	}
+	if got.Usage.Status != model.UsageCollected {
+		t.Fatalf("usage status = %q, want collected", got.Usage.Status)
+	}
+	wantTokens := model.TokenCounts{
+		model.TokenInput: 3, model.TokenCachedInput: 101,
+		model.TokenCacheWrite: 11, model.TokenOutput: 2,
+	}
+	if diff := cmp.Diff(wantTokens, got.Usage.Tokens); diff != "" {
+		t.Fatalf("tokens mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestClaudeStructuredHeadlessOutput(t *testing.T) {
 	adapter := &ClaudeAdapter{}
 

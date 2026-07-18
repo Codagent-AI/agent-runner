@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -107,8 +106,7 @@ func (a *CopilotAdapter) ProbeModel(modelName, effort string) (ProbeStrength, er
 // JSONL stream.
 func (a *CopilotAdapter) FilterOutput(stdout string) string {
 	var result string
-	scanner := bufio.NewScanner(strings.NewReader(stdout))
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	scanner := newStreamScanner(strings.NewReader(stdout))
 	for scanner.Scan() {
 		var event struct {
 			Type string `json:"type"`
@@ -139,8 +137,7 @@ func (a *CopilotAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error)
 	foundUsage := false
 	var modelName string
 
-	scanner := bufio.NewScanner(strings.NewReader(rawStdout))
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	scanner := newStreamScanner(strings.NewReader(rawStdout))
 	for scanner.Scan() {
 		if strings.TrimSpace(scanner.Text()) == "" {
 			continue

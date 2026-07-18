@@ -225,8 +225,7 @@ func (a *ClaudeAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) 
 		lastUsage json.RawMessage
 		lastCost  *float64
 	)
-	scanner := bufio.NewScanner(strings.NewReader(rawStdout))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner := newStreamScanner(strings.NewReader(rawStdout))
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if strings.TrimSpace(string(line)) == "" {

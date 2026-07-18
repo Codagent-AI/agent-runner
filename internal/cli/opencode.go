@@ -142,8 +142,7 @@ func (a *OpenCodeAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error
 	foundCost := false
 	var provider, modelName string
 
-	scanner := bufio.NewScanner(strings.NewReader(rawStdout))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner := newStreamScanner(strings.NewReader(rawStdout))
 	for scanner.Scan() {
 		if strings.TrimSpace(scanner.Text()) == "" {
 			continue
