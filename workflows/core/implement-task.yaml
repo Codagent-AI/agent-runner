@@ -1,5 +1,5 @@
 name: implement-task
-description: "Implement a single task: agent step then validator retry"
+description: "Implement a single task: agent step then optional validator retry"
 hidden: true
 
 params:
@@ -8,8 +8,17 @@ params:
   - name: run_session_report
     required: false
     default: "false"
+  - name: skip_validator
+    required: false
+    default: "false"
 
 steps:
+  - id: validate-skip-validator
+    script: validate-boolean-param.sh
+    script_inputs:
+      name: skip_validator
+      value: "{{skip_validator}}"
+
   - id: check-task-file
     command: |
       if [ ! -s "{{task_file}}" ]; then
@@ -29,6 +38,9 @@ steps:
     params:
       task_file: "{{task_file}}"
     continue_on_failure: true
+    # skip_if parameters are shell-quoted by InterpolateShellSafeTyped. The
+    # validation step above additionally constrains this value to true|false.
+    skip_if: 'sh: test {{skip_validator}} = true'
 
   - id: check-clean
     command: test -z "$(git status --porcelain)"

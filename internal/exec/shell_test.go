@@ -1,13 +1,14 @@
 package exec
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/interactive"
 	"github.com/codagent/agent-runner/internal/model"
-	"github.com/codagent/agent-runner/internal/pty"
 )
 
 type mockAuditLogger struct {
@@ -265,14 +266,38 @@ func TestExecuteShellStep(t *testing.T) {
 		}
 	})
 
-	t.Run("interactive mode uses PTY shell runner with suspend and resume hooks", func(t *testing.T) {
+	t.Run("autonomous mode records stdout in the audit log without a capture variable", func(t *testing.T) {
+		recorder := &mockAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = recorder
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: "observable output"}}}
+		step := model.Step{ID: "s", Command: "echo observable output", Session: model.SessionNew}
+
+		if _, err := ExecuteShellStep(&step, ctx, runner, &mockLogger{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		end := findAuditEvent(recorder.events, audit.EventStepEnd)
+		if end == nil {
+			t.Fatalf("expected step_end event, got %+v", recorder.events)
+		}
+		if got, exists := end.Data["stdout"]; !exists || got != "observable output" {
+			t.Fatalf("autonomous step_end stdout = %q, exists = %v", got, exists)
+		}
+	})
+
+	t.Run("interactive mode uses direct terminal runner with suspend and resume hooks", func(t *testing.T) {
 		oldFn := interactiveShellRunnerFn
-		var gotCommand string
-		var gotOpts pty.Options
-		interactiveShellRunnerFn = func(command string, opts pty.Options) (pty.Result, error) {
-			gotCommand = command
+		var gotOpts *interactive.TerminalOptions
+		interactiveShellRunnerFn = func(_ context.Context, opts *interactive.TerminalOptions) (interactive.TerminalResult, error) {
 			gotOpts = opts
-			return pty.Result{ExitCode: 0}, nil
+			if err := opts.Before(); err != nil {
+				return interactive.TerminalResult{}, err
+			}
+			if err := opts.After(); err != nil {
+				return interactive.TerminalResult{}, err
+			}
+			return interactive.TerminalResult{ExitCode: 0}, nil
 		}
 		defer func() { interactiveShellRunnerFn = oldFn }()
 
@@ -299,8 +324,8 @@ func TestExecuteShellStep(t *testing.T) {
 		if len(runner.calls) != 0 {
 			t.Fatalf("expected ProcessRunner.RunShell not to be used, got %v", runner.calls)
 		}
-		if gotCommand != "read -p 'Name? ' name" {
-			t.Fatalf("expected interactive shell command, got %q", gotCommand)
+		if got := strings.Join(gotOpts.Args, " "); got != "sh -c read -p 'Name? ' name" {
+			t.Fatalf("expected interactive shell command, got %q", got)
 		}
 		if gotOpts.Workdir != "/tmp/project" {
 			t.Fatalf("expected workdir to be forwarded, got %q", gotOpts.Workdir)
@@ -310,10 +335,10 @@ func TestExecuteShellStep(t *testing.T) {
 		}
 	})
 
-	t.Run("interactive mode surfaces PTY transcript as step stdout in audit log", func(t *testing.T) {
+	t.Run("interactive mode does not record terminal output in the audit log", func(t *testing.T) {
 		oldFn := interactiveShellRunnerFn
-		interactiveShellRunnerFn = func(_ string, _ pty.Options) (pty.Result, error) {
-			return pty.Result{ExitCode: 0, Stdout: "What's your favorite color? blue\nNice choice — blue it is.\n"}, nil
+		interactiveShellRunnerFn = func(_ context.Context, _ *interactive.TerminalOptions) (interactive.TerminalResult, error) {
+			return interactive.TerminalResult{ExitCode: 0}, nil
 		}
 		defer func() { interactiveShellRunnerFn = oldFn }()
 
@@ -335,49 +360,15 @@ func TestExecuteShellStep(t *testing.T) {
 		if end.Type != audit.EventStepEnd {
 			t.Fatalf("expected step_end event, got %+v", recorder.events)
 		}
-		got, _ := end.Data["stdout"].(string)
-		want := "What's your favorite color? blue\nNice choice — blue it is.\n"
-		if got != want {
-			t.Errorf("audit stdout = %q, want %q", got, want)
-		}
-	})
-
-	t.Run("interactive mode records drain timeout warning without changing exit outcome", func(t *testing.T) {
-		oldFn := interactiveShellRunnerFn
-		interactiveShellRunnerFn = func(_ string, _ pty.Options) (pty.Result, error) {
-			return pty.Result{
-				ExitCode: 0,
-				Warning:  "WARNING: PTY output drain timeout after 1s; possible output truncation",
-			}, nil
-		}
-		defer func() { interactiveShellRunnerFn = oldFn }()
-
-		recorder := &mockAuditLogger{}
-		ctx := makeCtx()
-		ctx.AuditLogger = recorder
-		log := &mockLogger{}
-		step := model.Step{ID: "s", Command: "true", Session: model.SessionNew, Mode: model.ModeInteractive}
-
-		outcome, err := ExecuteShellStep(&step, ctx, &mockRunner{}, log)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if outcome != OutcomeSuccess {
-			t.Fatalf("outcome = %q, want success", outcome)
-		}
-		if len(log.lines) == 0 || !strings.Contains(strings.Join(log.lines, "\n"), "possible output truncation") {
-			t.Fatalf("expected prominent console warning, got %v", log.lines)
-		}
-		end := findAuditEvent(recorder.events, audit.EventStepEnd)
-		if end == nil || !strings.Contains(fmt.Sprint(end.Data["stderr"]), "possible output truncation") {
-			t.Fatalf("expected warning in step audit output, got %+v", end)
+		if _, exists := end.Data["stdout"]; exists {
+			t.Errorf("interactive step_end unexpectedly recorded terminal stdout: %+v", end.Data)
 		}
 	})
 
 	t.Run("interactive mode maps nonzero exit code to failed", func(t *testing.T) {
 		oldFn := interactiveShellRunnerFn
-		interactiveShellRunnerFn = func(_ string, _ pty.Options) (pty.Result, error) {
-			return pty.Result{ExitCode: 2}, nil
+		interactiveShellRunnerFn = func(_ context.Context, _ *interactive.TerminalOptions) (interactive.TerminalResult, error) {
+			return interactive.TerminalResult{ExitCode: 2}, nil
 		}
 		defer func() { interactiveShellRunnerFn = oldFn }()
 

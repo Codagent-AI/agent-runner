@@ -13,23 +13,97 @@ mkdir -p "$HOME_DIR"
 SANDBOX_SYNC_HOME_LOCK="${SANDBOX_SYNC_HOME_LOCK:-$HOME_DIR/.sandbox-sync-home.lock.d}"
 SANDBOX_SYNC_HOME_LOCK_TIMEOUT="${SANDBOX_SYNC_HOME_LOCK_TIMEOUT:-30}"
 lock_start="$(date +%s)"
-while ! mkdir "$SANDBOX_SYNC_HOME_LOCK" 2>/dev/null; do
-  lock_pid=""
-  if [[ -f "$SANDBOX_SYNC_HOME_LOCK/pid" ]]; then
-    lock_pid="$(cat "$SANDBOX_SYNC_HOME_LOCK/pid" 2>/dev/null || true)"
+
+# A symlink records the owner PID in the same atomic operation that acquires
+# the lock. Older versions used a directory plus a separately-written pid
+# file, so the wait loop also recovers those legacy locks (including an
+# ownerless directory left by a process that died between the two writes).
+acquire_sync_lock() {
+  if ! ln -s "$$" "$SANDBOX_SYNC_HOME_LOCK" 2>/dev/null; then
+    return 1
   fi
-  if [[ "$lock_pid" =~ ^[0-9]+$ ]] && ! kill -0 "$lock_pid" 2>/dev/null; then
-    rm -rf "$SANDBOX_SYNC_HOME_LOCK"
+  # POSIX ln treats an existing directory as a destination directory. During
+  # migration from the legacy directory lock, reject and remove that nested
+  # link instead of mistaking it for ownership of the lock path itself.
+  if [[ ! -L "$SANDBOX_SYNC_HOME_LOCK" ]] || [[ "$(readlink "$SANDBOX_SYNC_HOME_LOCK" 2>/dev/null || true)" != "$$" ]]; then
+    rm -f "$SANDBOX_SYNC_HOME_LOCK/$$"
+    return 1
+  fi
+}
+
+inspect_sync_lock() {
+  lock_pid=""
+  lock_token="missing"
+  lock_identity=""
+  if lock_identity="$(stat -f '%d:%i:%Fm:%Fc' "$SANDBOX_SYNC_HOME_LOCK" 2>/dev/null)"; then
+    :
+  elif lock_identity="$(stat -c '%d:%i:%y:%z' "$SANDBOX_SYNC_HOME_LOCK" 2>/dev/null)"; then
+    :
+  else
+    lock_identity=""
+  fi
+  if [[ -L "$SANDBOX_SYNC_HOME_LOCK" ]]; then
+    lock_pid="$(readlink "$SANDBOX_SYNC_HOME_LOCK" 2>/dev/null || true)"
+    lock_token="symlink:$lock_pid:$lock_identity"
+  elif [[ -f "$SANDBOX_SYNC_HOME_LOCK" && ! -d "$SANDBOX_SYNC_HOME_LOCK" ]]; then
+    lock_pid="$(cat "$SANDBOX_SYNC_HOME_LOCK" 2>/dev/null || true)"
+    lock_token="file:$lock_pid:$lock_identity"
+  elif [[ -f "$SANDBOX_SYNC_HOME_LOCK/pid" ]]; then
+    lock_pid="$(cat "$SANDBOX_SYNC_HOME_LOCK/pid" 2>/dev/null || true)"
+    lock_token="legacy-directory:$lock_pid:$lock_identity"
+  elif [[ -d "$SANDBOX_SYNC_HOME_LOCK" ]]; then
+    lock_token="legacy-directory:ownerless:$lock_identity"
+  fi
+}
+
+# Serialize stale-lock deletion and revalidate the exact observed token while
+# holding the guard. Linux uses an OS-backed flock, which is released on
+# process death. macOS shlock uses atomic link(2) acquisition with PID-based
+# stale-owner recovery, so the guard itself cannot be left ownerless.
+reclaim_sync_lock() {
+  local observed_token="$1"
+  local reclaim_guard="${SANDBOX_SYNC_HOME_LOCK}.reclaim"
+  if command -v flock >/dev/null 2>&1; then
+    (
+      flock -x 9 || exit 1
+      inspect_sync_lock
+      [[ "$lock_token" == "$observed_token" ]] || exit 1
+      rm -rf "$SANDBOX_SYNC_HOME_LOCK"
+    ) 9> "$reclaim_guard"
+    return
+  fi
+  if command -v shlock >/dev/null 2>&1; then
+    if ! shlock -f "$reclaim_guard" -p "$$"; then
+      return 1
+    fi
+    inspect_sync_lock
+    local status=1
+    if [[ "$lock_token" == "$observed_token" ]] && rm -rf "$SANDBOX_SYNC_HOME_LOCK"; then
+      status=0
+    fi
+    rm -f "$reclaim_guard"
+    return "$status"
+  fi
+  echo "Cannot safely reclaim sandbox home sync lock: flock or shlock is required" >&2
+  return 1
+}
+
+while ! acquire_sync_lock; do
+  elapsed=$(( $(date +%s) - lock_start ))
+  inspect_sync_lock
+  if [[ "$lock_token" == legacy-directory:ownerless:* ]] && [[ -n "$lock_identity" ]] && (( elapsed >= 1 )) && reclaim_sync_lock "$lock_token"; then
     continue
   fi
-  if (( $(date +%s) - lock_start >= SANDBOX_SYNC_HOME_LOCK_TIMEOUT )); then
+  if [[ "$lock_pid" =~ ^[0-9]+$ ]] && [[ -n "$lock_identity" ]] && ! kill -0 "$lock_pid" 2>/dev/null && reclaim_sync_lock "$lock_token"; then
+    continue
+  fi
+  if (( elapsed >= SANDBOX_SYNC_HOME_LOCK_TIMEOUT )); then
     echo "Timed out waiting for sandbox home sync lock: $SANDBOX_SYNC_HOME_LOCK" >&2
     exit 2
   fi
   sleep 0.1
 done
-printf '%s\n' "$$" > "$SANDBOX_SYNC_HOME_LOCK/pid"
-trap 'rm -f "$SANDBOX_SYNC_HOME_LOCK/pid"; rmdir "$SANDBOX_SYNC_HOME_LOCK" 2>/dev/null || true' EXIT
+trap 'rm -f "$SANDBOX_SYNC_HOME_LOCK"' EXIT
 
 mkdir -p \
   "$HOME_DIR/.codex" \

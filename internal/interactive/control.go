@@ -1,6 +1,5 @@
-// Package interactive contains the out-of-band control plane and direct
-// interactive execution primitives. The control plane is intentionally
-// usable before the production PTY execution path is cut over.
+// Package interactive contains the out-of-band agent control plane and the
+// direct terminal execution primitives shared by agent and shell steps.
 package interactive
 
 import (
@@ -162,6 +161,9 @@ type ControlServer struct {
 
 // NewControlServer binds the private run endpoint and writes its pointer file.
 func NewControlServer(config *ControlConfig) (*ControlServer, error) {
+	if err := interactivePlatformError(); err != nil {
+		return nil, fmt.Errorf("create control endpoint: %w", err)
+	}
 	if strings.TrimSpace(config.RunID) == "" {
 		return nil, errors.New("create control endpoint: run ID is required")
 	}
@@ -175,7 +177,7 @@ func NewControlServer(config *ControlConfig) (*ControlServer, error) {
 	if tempDir == "" {
 		tempDir = os.TempDir()
 	}
-	privateDir := filepath.Join(tempDir, fmt.Sprintf("agent-runner-%d", os.Getuid()))
+	privateDir := filepath.Join(tempDir, "agent-runner-"+platformUserID())
 	if err := os.MkdirAll(privateDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create private control directory: %w", err)
 	}
@@ -559,6 +561,9 @@ func (s *ControlServer) emit(eventType audit.EventType, stepID string, data map[
 // same request ID, so the server can answer idempotently and the retry yields
 // the same receipt.
 func SendControlEventFromEnvironment(ctx context.Context, messageType string, getenv func(string) string) (string, error) {
+	if err := interactivePlatformError(); err != nil {
+		return "", err
+	}
 	if messageType != MessageCompleteStep && messageType != MessageTurnCommitted {
 		return "", fmt.Errorf("unsupported control message type %q", messageType)
 	}

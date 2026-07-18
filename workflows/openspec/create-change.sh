@@ -2,15 +2,8 @@
 set -eu
 
 payload=$(cat)
-change_name=$(
-  printf '%s\n' "$payload" |
-    sed -n 's/.*"change_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
-)
-
-if [ -z "$change_name" ]; then
-  printf 'create-change: missing script input "change_name"\n' >&2
-  exit 1
-fi
+script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
+change_name=$(printf '%s' "$payload" | "$script_dir/validate-change-name.sh")
 
 set +e
 agent-validator detect

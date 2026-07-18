@@ -1,3 +1,5 @@
+//go:build darwin || linux
+
 package interactive
 
 import (
@@ -96,6 +98,14 @@ func (s *Supervisor) TrackTimer(timer *ActiveRuntimeTimer) func() {
 }
 
 func (s *Supervisor) waitLoop() {
+	var result processResult
+	defer func() {
+		// The child owns the real terminal while supervised. Reclaim it on
+		// every exit path, including wait and job-control failures, and retain
+		// both the original failure and any restoration failure.
+		result.err = errors.Join(result.err, s.reclaimForeground())
+		s.finish(result)
+	}()
 	for {
 		var status unix.WaitStatus
 		pid, err := unix.Wait4(s.pid, &status, unix.WUNTRACED|unix.WCONTINUED, nil)
@@ -103,7 +113,7 @@ func (s *Supervisor) waitLoop() {
 			if errors.Is(err, unix.EINTR) {
 				continue
 			}
-			s.finish(processResult{err: fmt.Errorf("wait for child %d: %w", s.pid, err)})
+			result.err = fmt.Errorf("wait for child %d: %w", s.pid, err)
 			return
 		}
 		if pid != s.pid {
@@ -115,7 +125,7 @@ func (s *Supervisor) waitLoop() {
 			if stopSignal == unix.SIGTTIN && s.tty != nil {
 				fd, fdErr := checkedTerminalFD(s.tty.Fd())
 				if fdErr != nil {
-					s.finish(processResult{err: fdErr})
+					result.err = fdErr
 					return
 				}
 				_ = setForegroundProcessGroup(fd, s.pgid)
@@ -123,16 +133,15 @@ func (s *Supervisor) waitLoop() {
 				continue
 			}
 			if err := s.forwardStop(stopSignal); err != nil {
-				s.finish(processResult{err: err})
+				result.err = err
 				return
 			}
 		case waitContinued:
 			// Continuation is audited by forwardStop after foreground ownership
 			// has been restored. This event can also arrive for the SIGTTIN fix.
 		case waitExited:
-			// The restore error is surfaced through the result without
-			// altering the recorded exit status.
-			s.finish(processResult{status: status, err: s.reclaimForeground()})
+			// The deferred restore error is surfaced without altering status.
+			result.status = status
 			return
 		}
 	}

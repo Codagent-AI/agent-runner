@@ -2,11 +2,11 @@
 
 ## Context
 
-Interactive and autonomous-interactive agent steps currently run inside an Agent Runner PTY (`internal/pty`) that parses every byte to detect `/next`, Ctrl-], and a per-attempt output sentinel. The specs in this change retire that mechanism: the CLI child inherits the user's real terminal, and step completion travels over an out-of-band control channel. See `proposal.md` for motivation and the four delta specs for behavioral requirements.
+Before this change, interactive agent steps ran through a runner-owned byte proxy that parsed input and output for in-band continuation. The implemented design gives every interactive agent or shell child the user's real terminal directly. Agent step completion travels over an out-of-band control channel; shell steps complete from their exit status.
 
 Key existing seams (verified in code):
 
-- `internal/exec/agent.go` — `interactiveRunnerFn = pty.RunInteractive` is the single swap point for the interactive execution path; `completionInstruction()`/`continueMarkerForContext()` generate the sentinel prompt text to be replaced; `ctx.SuspendHook`/`ctx.ResumeHook` wire the TUI coordinator; `recordSessionOnSpawn`/`discoverAndStoreSession` handle session persistence.
+- `internal/exec/agent.go` and `internal/exec/shell.go` — dispatch interactive children to the shared direct terminal machinery; agent prompts carry control-channel completion instructions, while shell steps retain normal exit semantics.
 - `internal/liverun/coordinator.go` — `BeforeInteractive`/`AfterInteractive`/`PrepareForStep` implement release/restore with an idempotent skip between consecutive interactive steps; release and restore failures are currently logged and swallowed (must become fatal/surfaced per spec).
 - `internal/cli` — every adapter already locates its CLI's native session store for `DiscoverSessionID` (Claude: `~/.claude/projects/<encoded-cwd>/<id>.jsonl`; Codex: `~/.codex/sessions/YYYY/MM/DD/*.jsonl`; Copilot: session dirs with `workspace.yaml`; Cursor: local chat store; OpenCode: storage files / `opencode db`).
 
@@ -16,35 +16,34 @@ This design was reviewed interactively; the completion state machine, job-contro
 
 **Goals:**
 
-- Zero terminal-byte interpretation for interactive agent steps; child behaves exactly as if launched from a shell (including Ctrl-Z).
+- Zero terminal-byte interpretation for interactive agent and shell steps; each child behaves exactly as if launched from a shell (including Ctrl-Z).
 - Structured, authenticated, idempotent step completion with turn-durability guarantees strong enough that a later `session: resume` step never silently misses the completing turn.
 - One universal completion surface (absolute-path shell client) with per-CLI narrow pre-approval; no MCP server.
 - Survive runner crashes without orphaning a CLI that owns the terminal.
 
 **Non-Goals:**
 
-- Terminal recording, Windows transport, cross-terminal force-advance, shell-step redesign beyond the specced hardening, Herdr changes (all per proposal Out of Scope).
+- Terminal recording, Windows transport, cross-terminal force-advance, and Herdr changes (all per proposal Out of Scope).
 
 ## Approach
 
 ### Package layout
 
 ```text
-internal/interactive/          (new package)
-├── runner.go      # DirectRunner: orchestrates one interactive step end-to-end
+internal/interactive/
+├── runner.go      # DirectRunner: agent completion and durability lifecycle
+├── terminal_process.go # shared direct child lifecycle for shell steps
 ├── control.go     # per-run Unix-socket ControlServer, JSON protocol, credential rotation
 ├── process.go     # child supervisor: wait ownership, job control, termination, watchdog
 └── durability.go  # WaitForCommittedTurn orchestration over cli.TurnDurabilityProbe
 
 internal/cli       # + TurnDurabilityProbe implementations per adapter
                    # + narrow completion-command pre-approval emission in BuildArgs
-internal/exec      # agent.go: interactive branch calls interactive.Run; control-channel
-                   # instructions replace completionInstruction/continueMarker
+internal/exec      # agent.go and shell.go dispatch through direct handoff
 internal/liverun   # coordinator: error-returning release lease; restore errors surfaced;
                    # consecutive-interactive-step skip retained
 cmd/agent-runner   # `step complete` client subcommand; `internal turn-committed` sender
                    # (used by CLI post-turn hooks); `internal watchdog` process
-internal/pty       # narrowed to the interactive-shell relay per the pseudo-terminal delta
 ```
 
 ### Control plane
@@ -160,14 +159,14 @@ Staged internally within this change (no public flag), per the proposal:
 - **Phase 2**: build DirectRunner + job control + watchdog; prove fidelity, durability, and completion on the extended fake-agent harness.
 - **Phase 3**: switch `interactiveRunnerFn`; adapters emit pre-approval flags and control instructions; coordinator hardening lands.
 - **Phase 4**: delete the PTY agent path (input parser, mouse tracker, sentinel scanner, idle hints) and rewrite marker-asserting tests against the control contract.
-- **Phase 5**: harden the retained shell relay (process-group signaling, 1 s drain bound with defined timeout behavior, close ordering, error propagation); run the full deterministic + real-agent suites.
+- **Phase 5**: move interactive shell steps to the shared direct terminal-process primitive, delete the runtime relay package, and prove exact terminal-device inheritance with an E2E; run the full deterministic and real-agent suites.
 
 Rollback within the change: each phase is a revertable commit sequence; production behavior changes only at Phase 3.
 
 ## Testing
 
 - **Unit**: control server (auth, rotation, idempotent retry, message bound, deadlines, no-active-step rejection); durability probes against fixture session stores per adapter; job-control state machine against a scriptable fake child; watchdog (pipe EOF, PID-reuse guard).
-- **Deterministic integration** (existing fake-agent harness, extended): fake agent completes via the socket; all terminal-fidelity cases retained; release/restore failure injection; drain-timeout case for the shell relay.
+- **Deterministic integration** (existing fake-agent harness, extended): fake agent completes via the socket; all terminal-fidelity cases retained; release/restore failure injection; direct shell terminal-device inheritance.
 - **Real-shell job-control E2E**: an outer PTY runs a real job-control shell, launches agent-runner as a foreground job, suspends (both cooperative self-suspend and external SIGSTOP), verifies the shell reports the job stopped, runs `fg`, verifies the child resumes with correct terminal modes.
 - **Per-CLI durability E2E (gate 1 proof)**: step 1 tells the agent a unique recall phrase and the agent completes via the control channel; step 2 resumes the same session and asks the agent to repeat the phrase. The phrase appears **only** in step 1's prompt — never in step 2's prompt, environment, state summary, or fixture — so recall proves the completing turn survived. The E2E proves both the explicit native completion command and a natural-language request to continue. It runs through Agent Runner for Claude, Codex, Copilot, and Cursor. OpenCode uses two real fresh-TUI completion-surface tests plus a fail-fast workflow test until its resumed-prompt bug is fixed.
 - Existing five headless real-agent E2Es unchanged.

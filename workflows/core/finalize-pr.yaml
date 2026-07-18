@@ -1,5 +1,5 @@
 name: finalize-pr
-description: "Push PR, wait for CI, fix failures, repeat until green (max 3 fix cycles)"
+description: "Push changes, mark a draft PR ready, and fix CI or review failures (max 3 cycles)."
 hidden: true
 
 sessions:
@@ -11,7 +11,9 @@ steps:
     session: lead-agent
     mode: autonomous
     prompt: |
-      Invoke codagent:push-pr to commit, push, and create or update the pull request. Follow the project's commit message conventions and prepend [{{step_id}}].
+      Invoke codagent:push-pr to commit any appropriate remaining changes, push them, and create or update the pull request. Follow the project's commit message conventions and prepend [{{step_id}}] when a commit is needed.
+
+      If there is an existing pull request and it is a draft, mark it as ready for review.
 
   - id: ci-fix-loop
     loop:
@@ -43,10 +45,18 @@ steps:
         mode: autonomous
         skip_if: previous_success
         prompt: |
-          CI has failures or unresolved review comments. Invoke codagent:fix-pr to address them. Follow the project's commit message conventions and prepend [{{step_id}}].
+          CI has failures or unresolved review comments. Invoke codagent:fix-pr to address only issues that stay within the approved requirements, design, and implementation scope. Follow the project's commit message conventions and prepend [{{step_id}}].
+
+          This workflow boundary overrides any more permissive default in the skill: do not silently treat a requirement, design, or scope change as ordinary review feedback. If a requested fix would change approved product behavior, requirements, design decisions, or materially expand scope, do not make it. Leave the finding unresolved and report that the change must return to its acceptance or planning workflow before finalization can continue.
 
   - id: verify-final
     session: resume
     mode: autonomous
+    capture: final_ci_report
     prompt: |
       Invoke codagent:wait-ci to verify the final fix cycle made CI green. Treat top-level bot summaries, rate-limit notices, and already-resolved reports as informational. Report comments only when actionable unresolved review feedback remains. Report the final status to the user.
+
+  - id: final-ci-status-gate
+    script: ci-status-gate.sh
+    script_inputs:
+      report: "{{final_ci_report}}"

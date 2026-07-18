@@ -74,6 +74,24 @@ func TestDirectRunnerReleaseFailurePreventsSpawn(t *testing.T) {
 	}
 }
 
+func TestDirectRunnerJoinsRunAndRestoreFailures(t *testing.T) {
+	restoreErr := errors.New("restore terminal: boom")
+	runner := NewDirectRunner(&DirectOptions{
+		Args:  []string{"unused"},
+		After: func() error { return restoreErr },
+	})
+
+	_, err := runner.Run(context.Background())
+	if err == nil || !errors.Is(err, restoreErr) {
+		t.Fatalf("Run() error = %v, want joined restore failure", err)
+	}
+	for _, want := range []string{"control server is required", "restore terminal after direct child"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Run() error = %v, want %q", err, want)
+		}
+	}
+}
+
 func TestDirectRunnerCompletesThroughControlChannelAndRestores(t *testing.T) {
 	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
 	defer server.Close()

@@ -5,11 +5,15 @@ Define the structure, types, and content requirements for individual audit log e
 ## Requirements
 ### Requirement: Event types
 
-The audit log SHALL support these event types: `run_start`, `run_end`, `step_start`, `step_end`, `iteration_start`, `iteration_end`, `sub_workflow_start`, `sub_workflow_end`, and `error`.
+The audit log SHALL support these event types: `run_start`, `run_end`, `step_start`, `step_end`, `iteration_start`, `iteration_end`, `sub_workflow_start`, `sub_workflow_end`, `error`, `completion_requested`, `completion_acknowledged`, `turn_committed`, `durability_failure`, `control_rejected`, `child_stopped`, and `child_continued`.
 
 #### Scenario: All event types recognized
 - **WHEN** the audit logger receives any of the defined event types
 - **THEN** it writes the entry without error
+
+#### Scenario: Completion events are intermediate
+- **WHEN** the audit logger receives control or durability events during an interactive agent step
+- **THEN** it writes them as intermediate events distinct from the step's final `step_end`
 
 ### Requirement: Nesting prefix
 

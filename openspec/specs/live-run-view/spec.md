@@ -100,11 +100,11 @@ When the workflow dispatches an interactive agent step, the run-view TUI SHALL s
 - **THEN** the run-view TUI suspends and the agent process owns the terminal
 
 #### Scenario: Agent exits successfully and returns to TUI
-- **WHEN** the interactive agent process exits with a successful outcome (continue-trigger received)
+- **WHEN** the interactive agent process exits with a successful outcome (completion accepted and turn durability confirmed)
 - **THEN** the run-view TUI re-enters automatically, the step's row reflects `success`, and workflow execution continues
 
 #### Scenario: Agent exits abnormally and returns to TUI
-- **WHEN** the interactive agent process exits without a continue-trigger (the session was abandoned or the CLI returned non-zero)
+- **WHEN** the interactive agent process exits without an accepted completion event (the session was abandoned or the CLI returned non-zero)
 - **THEN** the run-view TUI re-enters automatically and the step's row reflects the recorded outcome (`aborted` or `failed`, per the existing interactive-agent behavior defined in the agent-runner engine)
 
 ### Requirement: Cursor auto-follows the active step

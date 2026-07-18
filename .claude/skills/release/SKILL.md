@@ -22,6 +22,11 @@ make test-e2e-agents
 This intentionally requires all supported agent CLIs to be available to the
 current login. It runs real headless fresh/resume tests and real interactive
 terminal/continuation tests for Claude, Codex, Copilot, Cursor, and OpenCode.
+On macOS, the E2E harness avoids non-interactive keychain failures by loading
+Claude's long-lived setup token from
+`~/.config/agent-runner/claude-oauth-token` when
+`CLAUDE_CODE_OAUTH_TOKEN` is not already set. Create that token with
+`claude setup-token`; never print it or commit it to the repository.
 Interactive resume is also asserted for every agent except OpenCode, whose
 resume coverage remains headless because OpenCode 1.17 does not auto-submit a
 prompt immediately after Agent Runner terminates its TUI for continuation. If

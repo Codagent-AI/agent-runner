@@ -273,6 +273,41 @@ func TestCodexCompletionHomePreservesRuntimeTrustState(t *testing.T) {
 	}
 }
 
+func TestCodexCompletionHomePreservesTrustedUserHooks(t *testing.T) {
+	realCodexHome := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CODEX_HOME", realCodexHome)
+	if err := os.WriteFile(filepath.Join(realCodexHome, "hooks.json"), []byte(`{"hooks":{"SessionStart":[]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sourceHookID := filepath.Join(realCodexHome, "hooks.json") + ":session_start:0:0"
+	config := "model = \"gpt-5.6-sol\"\n\n" +
+		"[hooks.state.\"" + sourceHookID + "\"]\n" +
+		"trusted_hash = \"sha256:already-trusted\"\n"
+	if err := os.WriteFile(filepath.Join(realCodexHome, "config.toml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	command := CompletionCommand{
+		Executable: "/opt/codagent/bin/agent-runner",
+		Args:       []string{"step", "complete"},
+	}
+
+	privateHome, err := prepareCodexCompletionHome(command, "run-a")
+	if err != nil {
+		t.Fatalf("prepare Codex completion home: %v", err)
+	}
+	privateConfig, err := os.ReadFile(filepath.Join(privateHome, "config.toml"))
+	if err != nil {
+		t.Fatalf("read private Codex config: %v", err)
+	}
+	privateHookID := filepath.Join(privateHome, "hooks.json") + ":session_start:0:0"
+	want := "[hooks.state.\"" + privateHookID + "\"]\n" +
+		"trusted_hash = \"sha256:already-trusted\""
+	if !strings.Contains(string(privateConfig), want) {
+		t.Fatalf("private Codex config did not carry trust to the symlinked hook path; want:\n%s\n\ngot:\n%s", want, privateConfig)
+	}
+}
+
 func TestCodexCompletionHomeSharesSessionsCreatedAfterPreparation(t *testing.T) {
 	realCodexHome := t.TempDir()
 	t.Setenv("HOME", t.TempDir())

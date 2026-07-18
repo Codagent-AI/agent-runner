@@ -140,7 +140,7 @@ See [Sessions And Modes](sessions-and-modes.md) for the full session and mode mo
 
 Shell commands are interpolated with shell-safe quoting and run through `sh -c`, resolved from `PATH`. Non-zero exit codes fail the step unless `continue_on_failure: true` is set.
 
-Shell steps may set `mode: interactive` to run in a PTY. Interactive shell steps cannot use `capture`.
+Shell steps may set `mode: interactive` to inherit the user's real terminal. Their output is live-only, and interactive shell steps cannot use `capture`.
 
 ## Script Steps
 

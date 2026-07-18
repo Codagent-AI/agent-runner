@@ -24,6 +24,7 @@ Agent Runner documentation is split into focused pages for GitHub and the docs s
 | [Writing Workflows](writing-workflows.md) | YAML workflow authoring, step types, parameters, variables, loops, sub-workflows, flow control, capture, and interpolation. |
 | [Agent Profiles](agent-profiles.md) | Named profiles that set an agent step's mode, CLI, model, and effort. |
 | [Sessions And Modes](sessions-and-modes.md) | Session strategies and the `interactive`, `autonomous`, and `ui` mode model. |
+| [Direct Terminal Handoff](direct-terminal-handoff.md) | How interactive agent and shell steps share the real terminal, including completion, durability, and job control. |
 
 ## Reference
 

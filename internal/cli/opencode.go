@@ -20,6 +20,8 @@ import (
 
 // OpenCodeAdapter constructs invocation args for the OpenCode CLI.
 type OpenCodeAdapter struct {
+	// runDBQuery is a test seam for durability-probe database responses. The
+	// production path in queryOpenCodeDB executes `opencode db` directly.
 	runDBQuery func(context.Context, string) ([]byte, error)
 }
 

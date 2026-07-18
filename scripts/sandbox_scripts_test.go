@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSandboxRunDryRunShowsSafeDockerInvocation(t *testing.T) {
@@ -632,6 +633,261 @@ func TestSandboxSyncHomeRecoversStaleLock(t *testing.T) {
 	}
 }
 
+func TestSandboxSyncHomeRecoversOwnerlessLock(t *testing.T) {
+	dir := t.TempDir()
+	hostHome := filepath.Join(dir, "host-home")
+	containerHome := filepath.Join(dir, "container-home")
+	lockDir := filepath.Join(dir, "ownerless.lock.d")
+	for _, path := range []string{
+		filepath.Join(hostHome, "codex"),
+		filepath.Join(hostHome, "claude"),
+		containerHome,
+		lockDir,
+	} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(hostHome, "sandbox-secrets.env"), []byte("GITHUB_TOKEN=test\n"), 0o600); err != nil {
+		t.Fatalf("write sandbox secrets: %v", err)
+	}
+
+	cmd := exec.Command("bash", "./sandbox-sync-home.sh")
+	cmd.Env = append(os.Environ(),
+		"HOME="+containerHome,
+		"SANDBOX_HOST_HOME_ROOT="+hostHome,
+		"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
+		"SANDBOX_SYNC_HOME_LOCK="+lockDir,
+		"SANDBOX_SYNC_HOME_LOCK_TIMEOUT=1",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandbox-sync-home should recover ownerless lock: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(lockDir); !os.IsNotExist(err) {
+		t.Fatalf("lock should be removed after sync, stat err=%v", err)
+	}
+}
+
+func TestSandboxSyncHomeSerializesConcurrentStaleLockReclaimers(t *testing.T) {
+	dir := t.TempDir()
+	hostHome := filepath.Join(dir, "host-home")
+	containerHome := filepath.Join(dir, "container-home")
+	workspaceBin := filepath.Join(dir, "workspace", "bin")
+	lockPath := filepath.Join(dir, "stale.lock")
+	for _, path := range []string{
+		filepath.Join(hostHome, "shell"),
+		containerHome,
+		workspaceBin,
+	} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(hostHome, "shell", ".zshrc"), []byte("# shared mutation\n"), 0o600); err != nil {
+		t.Fatalf("write host zshrc: %v", err)
+	}
+	if err := os.Symlink("999999", lockPath); err != nil {
+		t.Fatalf("create stale lock: %v", err)
+	}
+
+	realRM, err := exec.LookPath("rm")
+	if err != nil {
+		t.Fatalf("find rm: %v", err)
+	}
+	realCP, err := exec.LookPath("cp")
+	if err != nil {
+		t.Fatalf("find cp: %v", err)
+	}
+	aBin := filepath.Join(dir, "a-bin")
+	bBin := filepath.Join(dir, "b-bin")
+	for _, path := range []string{aBin, bBin} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatalf("mkdir wrapper dir: %v", err)
+		}
+	}
+	aPaused := filepath.Join(dir, "a-paused")
+	aRelease := filepath.Join(dir, "a-release")
+	bEntered := filepath.Join(dir, "b-entered")
+	bRelease := filepath.Join(dir, "b-release")
+	if err := os.WriteFile(filepath.Join(aBin, "rm"), []byte(`#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${*: -1}" == "$SANDBOX_SYNC_HOME_LOCK" && ! -e "$A_PAUSED" ]]; then
+  : > "$A_PAUSED"
+  while [[ ! -e "$A_RELEASE" ]]; do sleep 0.01; done
+fi
+exec "$REAL_RM" "$@"
+`), 0o755); err != nil {
+		t.Fatalf("write rm wrapper: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bBin, "cp"), []byte(`#!/usr/bin/env bash
+set -euo pipefail
+: > "$B_ENTERED"
+while [[ ! -e "$B_RELEASE" ]]; do sleep 0.01; done
+exec "$REAL_CP" "$@"
+`), 0o755); err != nil {
+		t.Fatalf("write cp wrapper: %v", err)
+	}
+
+	baseEnv := append(os.Environ(),
+		"HOME="+containerHome,
+		"SANDBOX_HOST_HOME_ROOT="+hostHome,
+		"SANDBOX_WORKSPACE_BIN="+workspaceBin,
+		"SANDBOX_SYNC_HOME_LOCK="+lockPath,
+		"SANDBOX_SYNC_HOME_LOCK_TIMEOUT=3",
+	)
+	aCmd := exec.Command("bash", "./sandbox-sync-home.sh")
+	aEnv := append([]string(nil), baseEnv...)
+	aEnv = append(aEnv,
+		"PATH="+aBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"A_PAUSED="+aPaused,
+		"A_RELEASE="+aRelease,
+		"REAL_RM="+realRM,
+	)
+	aCmd.Env = aEnv
+	if err := aCmd.Start(); err != nil {
+		t.Fatalf("start first reclaimer: %v", err)
+	}
+	waitForPath(t, aPaused, time.Second)
+
+	bCmd := exec.Command("bash", "./sandbox-sync-home.sh")
+	bEnv := append([]string(nil), baseEnv...)
+	bEnv = append(bEnv,
+		"PATH="+bBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"B_ENTERED="+bEntered,
+		"B_RELEASE="+bRelease,
+		"REAL_CP="+realCP,
+	)
+	bCmd.Env = bEnv
+	if err := bCmd.Start(); err != nil {
+		_ = aCmd.Process.Kill()
+		t.Fatalf("start second reclaimer: %v", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	_, enteredErr := os.Stat(bEntered)
+	for _, path := range []string{aRelease, bRelease} {
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatalf("release blocked command: %v", err)
+		}
+	}
+	for name, cmd := range map[string]*exec.Cmd{"first": aCmd, "second": bCmd} {
+		if err := waitForCommand(cmd, 5*time.Second); err != nil {
+			t.Fatalf("%s reclaimer: %v", name, err)
+		}
+	}
+	if enteredErr == nil {
+		t.Fatal("second reclaimer entered the protected sync while the first still owned stale-lock reclamation")
+	}
+	if !os.IsNotExist(enteredErr) {
+		t.Fatalf("stat second reclaimer marker: %v", enteredErr)
+	}
+}
+
+func TestSandboxSyncHomeDoesNotReclaimWhenFlockFails(t *testing.T) {
+	dir := t.TempDir()
+	hostHome := filepath.Join(dir, "host-home")
+	containerHome := filepath.Join(dir, "container-home")
+	lockPath := filepath.Join(dir, "stale.lock")
+	fakeBin := filepath.Join(dir, "fake-bin")
+	for _, path := range []string{hostHome, containerHome, fakeBin} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	if err := os.Symlink("999999", lockPath); err != nil {
+		t.Fatalf("create stale lock: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(fakeBin, "flock"), []byte("#!/usr/bin/env bash\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("write flock wrapper: %v", err)
+	}
+
+	cmd := exec.Command("bash", "./sandbox-sync-home.sh")
+	cmd.Env = append(os.Environ(),
+		"HOME="+containerHome,
+		"SANDBOX_HOST_HOME_ROOT="+hostHome,
+		"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
+		"SANDBOX_SYNC_HOME_LOCK="+lockPath,
+		"SANDBOX_SYNC_HOME_LOCK_TIMEOUT=1",
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
+	if output, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(output), "Timed out waiting") {
+		t.Fatalf("sync with failed flock should time out, err=%v\n%s", err, output)
+	}
+	if target, err := os.Readlink(lockPath); err != nil || target != "999999" {
+		t.Fatalf("failed flock changed stale lock: target=%q err=%v", target, err)
+	}
+}
+
+func TestSandboxSyncHomeDoesNotDeleteReplacedOwnerlessLock(t *testing.T) {
+	dir := t.TempDir()
+	hostHome := filepath.Join(dir, "host-home")
+	containerHome := filepath.Join(dir, "container-home")
+	lockPath := filepath.Join(dir, "ownerless.lock.d")
+	fakeBin := filepath.Join(dir, "fake-bin")
+	for _, path := range []string{hostHome, containerHome, lockPath, fakeBin} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	realRM, err := exec.LookPath("rm")
+	if err != nil {
+		t.Fatalf("find rm: %v", err)
+	}
+	realMkdir, err := exec.LookPath("mkdir")
+	if err != nil {
+		t.Fatalf("find mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(fakeBin, "flock"), []byte(`#!/usr/bin/env bash
+set -euo pipefail
+"$REAL_RM" -rf "$SANDBOX_SYNC_HOME_LOCK"
+"$REAL_MKDIR" "$SANDBOX_SYNC_HOME_LOCK"
+`), 0o755); err != nil {
+		t.Fatalf("write flock replacement wrapper: %v", err)
+	}
+
+	cmd := exec.Command("bash", "./sandbox-sync-home.sh")
+	cmd.Env = append(os.Environ(),
+		"HOME="+containerHome,
+		"SANDBOX_HOST_HOME_ROOT="+hostHome,
+		"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
+		"SANDBOX_SYNC_HOME_LOCK="+lockPath,
+		"SANDBOX_SYNC_HOME_LOCK_TIMEOUT=2",
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"REAL_RM="+realRM,
+		"REAL_MKDIR="+realMkdir,
+	)
+	if output, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(output), "Timed out waiting") {
+		t.Fatalf("sync that observes a replacement lock should time out, err=%v\n%s", err, output)
+	}
+	if info, err := os.Stat(lockPath); err != nil || !info.IsDir() {
+		t.Fatalf("replacement ownerless lock was deleted: info=%v err=%v", info, err)
+	}
+}
+
+func waitForPath(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", path)
+}
+
+func waitForCommand(cmd *exec.Cmd, timeout time.Duration) error {
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(timeout):
+		_ = cmd.Process.Kill()
+		return <-done
+	}
+}
+
 func TestEvalDevcontainerUsesSharedDockerfile(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), ".devcontainer", "eval", "devcontainer.json"))
 	if err != nil {
@@ -825,8 +1081,8 @@ func TestSandboxSyncHomeSerializesSharedHomeMutation(t *testing.T) {
 	text := string(data)
 	for _, want := range []string{
 		"SANDBOX_SYNC_HOME_LOCK",
-		"while ! mkdir",
-		"rmdir \"$SANDBOX_SYNC_HOME_LOCK\"",
+		"while ! acquire_sync_lock",
+		"ln -s \"$$\"",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("sandbox-sync-home.sh should serialize shared home mutation with %q:\n%s", want, text)

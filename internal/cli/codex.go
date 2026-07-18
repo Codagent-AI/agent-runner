@@ -38,8 +38,10 @@ func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 	return args
 }
 
-// BuildArgsWithError constructs Codex args and surfaces failures to materialize
-// the process-local Agent Runner command plugin before the CLI is spawned.
+// BuildArgsWithError constructs Codex args. Codex currently has no fallible
+// argv construction, but implementing ArgsBuilderWithError keeps this adapter
+// on the shared pre-spawn error path; process-local plugin materialization is
+// performed separately by SpawnEnv.
 func (a *CodexAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, error) {
 	args := []string{"codex"}
 	context := input.InvocationContext()

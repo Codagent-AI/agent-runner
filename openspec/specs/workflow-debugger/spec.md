@@ -223,11 +223,11 @@ After presenting a (a) user-fixable outcome, the agent SHALL give concrete remed
 
 ### Requirement: Workflow continuation pattern
 
-After delivering a triage outcome (and after any issue-submission action has resolved), the agent SHALL ask the user whether they are done (e.g. "Are you done?"). If the user signals done, the agent SHALL emit the standard continue-trigger to end the workflow run successfully. If the user signals not-done, the agent SHALL continue interactively in the same session and MAY handle additional runs, follow-up questions, or another full triage cycle.
+After delivering a triage outcome (and after any issue-submission action has resolved), the agent SHALL ask the user whether they are done (e.g. "Are you done?"). If the user signals done, the agent SHALL signal step completion through the Agent Runner control channel to end the workflow run successfully. If the user signals not-done, the agent SHALL continue interactively in the same session and MAY handle additional runs, follow-up questions, or another full triage cycle.
 
 #### Scenario: User signals done
 - **WHEN** the user answers yes to "Are you done?"
-- **THEN** the agent emits the continue-trigger; the workflow run ends with outcome success
+- **THEN** the agent signals completion through the control channel; the workflow run ends with outcome success
 
 #### Scenario: User signals not done
 - **WHEN** the user answers no to "Are you done?" (they want to continue)

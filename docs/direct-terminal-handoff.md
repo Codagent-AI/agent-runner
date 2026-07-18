@@ -1,22 +1,23 @@
 ---
 title: Direct Terminal Handoff
-group: Development
-order: 10
-description: How interactive agent steps hand terminal ownership to agent CLIs and receive durable completion signals.
+group: Guides
+order: 6
+description: How interactive agent and shell steps share the real terminal safely.
 ---
 
 # Direct Terminal Handoff
 
-Interactive agent steps give the agent CLI direct ownership of the user's terminal. Agent Runner remains the parent process, supervises the CLI, and advances the workflow through a separate authenticated control channel.
+Interactive agent and shell steps give the child process direct ownership of the user's terminal. Agent Runner remains the supervising parent. Agent steps advance through a separate authenticated control channel; shell steps finish normally from their command's exit status.
 
 This document describes the runtime as it works now. It covers interactive agent steps, the completion handshake, session durability, Unix job control, adapter integrations, failure handling, and tests.
 
 ## Scope
 
-Direct terminal handoff applies to agent steps using `interactive` or `autonomous-interactive` execution.
+Direct terminal handoff applies to agent steps using `interactive` or `autonomous-interactive` execution and shell steps using `mode: interactive`.
 
 - Headless agent steps use the existing non-interactive execution path.
-- Interactive shell steps still use a PTY because Agent Runner must host and capture a shell command. That PTY is an opaque byte relay with process-group signaling and a bounded output drain.
+- Autonomous shell steps use the existing piped `sh -c` path.
+- Interactive terminal output is visible live but is not captured or written to the audit log. Interactive steps cannot use `capture`.
 - OpenCode interactive steps fail before spawn while [anomalyco/opencode#37536](https://github.com/anomalyco/opencode/issues/37536) remains present in supported OpenCode releases. Fresh and resumed OpenCode headless steps remain supported.
 - Windows control transport is outside the current scope.
 
@@ -27,8 +28,6 @@ Agent Runner does not draw a continuation overlay or reserve a global continuati
 A terminal emulator is the application window. It renders output bytes and converts keyboard, paste, and mouse actions into input bytes.
 
 A TTY is the kernel terminal device exposed to a process as standard input, output, and error. It also stores terminal modes and the identity of the foreground process group.
-
-A PTY is a virtual TTY pair. A hosted program uses the slave side as its terminal while another process relays bytes through the master side.
 
 A process group is a set of related processes that Unix can signal together. The foreground process group owns terminal input and receives terminal-generated signals such as Ctrl-C.
 
@@ -43,11 +42,11 @@ Terminal data plane
           ^
           | inherited stdin, stdout, stderr
           v
-  agent CLI process group
+  agent CLI or shell-command process group
           |
           | foreground terminal owner during the step
           v
-  mouse, paste, resize, arrow keys, Ctrl-C, native CLI UI
+  mouse, paste, resize, arrow keys, Ctrl-C, native terminal UI
 
 
 Workflow control plane
@@ -67,7 +66,7 @@ Workflow control plane
           +--> record outcome and advance workflow
 ```
 
-Agent Runner keeps the terminal file descriptors open because it must reclaim the terminal after the child finishes. It does not read or rewrite the CLI's terminal traffic while the step is active.
+Agent Runner keeps the terminal file descriptors open because it must reclaim the terminal after the child finishes. It does not read or rewrite terminal traffic while the step is active.
 
 ## Process model
 
@@ -76,22 +75,22 @@ The shell, Agent Runner, the CLI, and the watchdog remain in one terminal sessio
 ```text
 user's shell
 └── agent-runner
-    ├── agent CLI
-    │   └── CLI helper processes
+    ├── agent CLI or interactive shell command
+    │   └── child helper processes
     └── agent-runner internal watchdog
 
 foreground ownership while the step runs:
 
-    terminal foreground process group --> agent CLI process group
+    terminal foreground process group --> child process group
     Agent Runner                       --> supervising parent
     watchdog                           --> separate process group
 ```
 
-Agent Runner starts the CLI in a new process group and asks the kernel to make that group foreground before the child reads the terminal. The parent exclusively waits for child state with `wait4(WUNTRACED | WCONTINUED)`. One waiter owns exit, stop, and continue events, which avoids races between `cmd.Wait` and job-control handling.
+Agent Runner starts the child in a new process group and asks the kernel to make that group foreground before it reads the terminal. The parent exclusively waits for child state with `wait4(WUNTRACED | WCONTINUED)`. One waiter owns exit, stop, and continue events, which avoids races between `cmd.Wait` and job-control handling.
 
 The watchdog runs in its own process group. A pipe connects it to the parent. If the parent exits or crashes, the pipe reaches EOF. The watchdog verifies the child's PID and process start time before sending any signal, which prevents a reused PID from being killed.
 
-## Interactive step lifecycle
+## Interactive agent lifecycle
 
 One interactive step follows this sequence:
 
@@ -164,6 +163,8 @@ The generated plugins and skills live in the user's cache. Adapters pass them on
 Claude, Copilot, and Cursor expose the same command name because their plugin systems namespace `commands/next.md` by the plugin name `agent-runner`. Codex uses a skill because its current TUI supports explicit skill mentions and does not load plugin command directories as slash commands.
 
 Codex receives a run-scoped, content-addressed private `CODEX_HOME`. Different Agent Runner runs cannot share its mutable config, while later steps in the same run reuse it. The private home links the user's authentication, session stores, shell snapshots, plugins, and unrelated state; copies the current config; and adds the completion skill. Agent Runner creates and links the shared session-state directories before launch, so state created by the first interactive turn remains visible to normal and headless Codex invocations. Codex may write hook trust decisions into the private config, and those writes remain available to later steps in the same run.
+
+Codex identifies hook trust by the absolute `hooks.json` path. Because the private home presents the same hook file at a run-specific path, Agent Runner copies any trusted hook hash from the user's source path to the corresponding private path. A hook the user has already trusted therefore remains trusted across new workflow runs without weakening trust for unrelated hooks.
 
 ## Completion and turn durability
 
@@ -263,9 +264,9 @@ When a run resumes after a crash, cleanup happens under the run lock. Agent Runn
 
 ## Interactive shell steps
 
-Interactive shell steps use `internal/pty` as an opaque relay. The relay allocates the PTY, forwards resize events, copies bytes, captures output, and maps the command's exit code to the workflow outcome.
+Interactive shell steps use the same direct terminal-process primitive and job-control supervisor as interactive agent steps. Agent Runner releases the live-run TUI, starts `sh -c <command>` with inherited stdin, stdout, and stderr, makes the command's process group foreground, waits for it to exit, then reclaims the terminal and restores the TUI.
 
-The shell relay sends signals to the command's process group, closes the PTY in a defined order, and allows one second for final output to drain. A drain timeout prints a prominent truncation warning without replacing the command's exit outcome. Relay and lifecycle errors fail the step.
+Shell steps do not use the agent control endpoint or turn-durability handshake. Exit code 0 produces `success`; a nonzero exit code produces `failed`. Terminal output is live-only: Agent Runner does not proxy it, retain a transcript, or include it in `step_end`. Use an autonomous shell step with `capture` when later workflow steps need command output.
 
 ## Verification
 
@@ -275,6 +276,7 @@ The implementation has several test layers:
 - Adapter unit tests cover process-local command generation, safe permission behavior, private configuration, durability probes, and failure before spawn when an integration cannot be created.
 - Session-store fixtures contain representative Claude, Codex, Copilot, Cursor, and OpenCode records. Tests prove that intermediate records are rejected and terminal records are accepted.
 - The deterministic fake-agent integration harness exercises terminal inheritance, input and output fidelity, completion, process-group termination, TUI release and restore errors, and job-control state transitions.
+- A direct-shell E2E records the outer terminal device and proves that an interactive shell child inherits that exact device on stdin, stdout, and stderr.
 - Real-agent interactive E2Es test both completion paths. The fresh step uses the explicit native command. The resumed step asks the agent in natural language to continue. A generated phrase must survive into the resumed session, which proves the completing turn was durably saved before termination.
 - Claude, Codex, Copilot, and Cursor run the complete fresh plus resume workflow through Agent Runner.
 - OpenCode runs two real fresh-TUI completion tests, one for `/agent-runner:next` and one for natural-language continuation. A separate workflow E2E proves that interactive OpenCode fails early while resumed prompt submission remains broken.
@@ -288,6 +290,7 @@ The real-agent suites are separate from `make test` because they require install
 internal/interactive/
   control.go       per-run socket, attempts, authentication, acknowledgements
   runner.go        direct child lifecycle and completion state machine
+  terminal_process.go  shared direct terminal execution for shell steps
   process.go       wait4 ownership, foreground transfer, stop and continue
   durability.go    committed-turn wait and active-runtime deadline
   watchdog.go      parent-crash cleanup
@@ -304,11 +307,11 @@ internal/cli/
 internal/exec/agent.go
   builds the absolute completion instruction and launches DirectRunner
 
+internal/exec/shell.go
+  launches interactive shell commands through the shared direct terminal runner
+
 internal/liverun/
   releases and restores the live-run TUI around terminal ownership
-
-internal/pty/
-  retained opaque relay for interactive shell steps
 
 cmd/agent-runner/
   step complete              authenticated completion client

@@ -1,11 +1,11 @@
 # interactive-shell-steps Specification
 
 ## Purpose
-Define PTY-backed interactive shell steps, non-PTY autonomous shell defaults, and validation constraints.
+Define direct-terminal interactive shell steps, piped autonomous shell defaults, and validation constraints.
 ## Requirements
 ### Requirement: Interactive mode attribute on shell steps
 
-A shell step MAY set `mode: interactive` to request PTY-based execution with the user's terminal attached. When `mode` is absent, the shell step SHALL default to `autonomous`. When `mode` is `autonomous` (explicit or defaulted), the shell step SHALL execute via the existing non-PTY path. The `mode` value MUST be `interactive` or `autonomous`; any other value SHALL fail validation.
+A shell step MAY set `mode: interactive` to request direct execution with the user's terminal attached. When `mode` is absent, the shell step SHALL default to `autonomous`. When `mode` is `autonomous` (explicit or defaulted), the shell step SHALL execute through the piped shell path. The `mode` value MUST be `interactive` or `autonomous`; any other value SHALL fail validation.
 
 Unlike agent steps — where `mode` defaults come from the resolved profile's `default_mode` — shell steps have no profile, so the default is always `autonomous`.
 
@@ -17,40 +17,48 @@ Unlike agent steps — where `mode` defaults come from the resolved profile's `d
 #### Scenario: Shell step with mode: autonomous
 
 - **WHEN** a workflow declares a shell step with `mode: autonomous`
-- **THEN** validation succeeds and the runner dispatches the step through the existing non-PTY shell path
+- **THEN** validation succeeds and the runner dispatches the step through the existing piped shell path
 
 #### Scenario: Shell step without mode defaults to autonomous
 
 - **WHEN** a workflow declares a shell step with no `mode` field
-- **THEN** the step is treated as `mode: autonomous` and the runner dispatches it through the existing non-PTY shell path
+- **THEN** the step is treated as `mode: autonomous` and the runner dispatches it through the existing piped shell path
 
 #### Scenario: Invalid mode value on shell step
 
 - **WHEN** a workflow declares a shell step with `mode: foo`
 - **THEN** validation SHALL fail with an error identifying the invalid mode value
 
-### Requirement: PTY execution with TUI suspend and resume
+### Requirement: Direct terminal inheritance with TUI suspend and resume
 
-When a shell step runs with `mode: interactive`, the runner SHALL suspend the TUI before spawning the command, execute the command inside a pseudo-terminal with the user's terminal attached for stdin, stdout, and stderr, and resume the TUI after the command exits.
+When a shell step runs with `mode: interactive`, the runner SHALL suspend the TUI before spawning the command, execute `sh -c <command>` with the user's real terminal inherited directly as stdin, stdout, and stderr, and resume the TUI after the command exits. The runner SHALL NOT proxy, capture, inspect, buffer, or rewrite terminal bytes. The shell command SHALL use the same foreground-process-group and job-control supervisor as interactive agent steps.
 
 #### Scenario: TUI released during interactive shell step
 
 - **WHEN** the runner starts an interactive shell step while the TUI is active
-- **THEN** the TUI is suspended before the command is spawned and the user's terminal is attached to the PTY
+- **THEN** the TUI is suspended before the command is spawned and the command inherits the user's terminal directly
 
 #### Scenario: Command reads from stdin
 
 - **WHEN** an interactive shell step's command reads from stdin
-- **THEN** the user's keystrokes are delivered to the command through the PTY
+- **THEN** the user's keystrokes are delivered directly to the command by the terminal
 
 #### Scenario: TUI resumed after command exit
 
 - **WHEN** the command in an interactive shell step exits (any exit code)
 - **THEN** the TUI is resumed before the next workflow step begins
 
+#### Scenario: Terminal identity is inherited
+- **WHEN** an interactive shell command inspects its stdin, stdout, and stderr terminal devices
+- **THEN** all three are the same terminal device held by Agent Runner before spawn
+
+#### Scenario: Terminal features remain native
+- **WHEN** the command uses resize notifications, mouse input, bracketed paste, cursor modes, or terminal-generated signals
+- **THEN** the terminal delivers them natively without relay logic in Agent Runner
+
 ### Requirement: Shell-native exit semantics
 
-An interactive shell step SHALL map the command's exit code to the step outcome using the same rules as a non-interactive shell step: exit code 0 maps to outcome `success`, any nonzero exit code maps to outcome `failed`. The runner SHALL NOT detect continue triggers (`/next`, keyboard shortcut, or sentinel escape sequences) during an interactive shell step, and SHALL NOT print a resume-the-session hint when the command exits.
+An interactive shell step SHALL map the command's exit code to the step outcome using the same rules as a non-interactive shell step: exit code 0 maps to outcome `success`, any nonzero exit code maps to outcome `failed`. Shell steps do not use the agent completion control channel and SHALL NOT print an agent-session resume hint when the command exits.
 
 #### Scenario: Command exits zero
 
@@ -62,15 +70,18 @@ An interactive shell step SHALL map the command's exit code to the step outcome 
 - **WHEN** the command of an interactive shell step exits with code 2
 - **THEN** the step outcome is `failed` and workflow error handling applies as for any failed shell step
 
-#### Scenario: User types a continue-trigger sequence
+#### Scenario: Agent completion command has no special shell semantics
 
-- **WHEN** the user types `/next` or presses the continue-trigger keyboard shortcut during an interactive shell step
-- **THEN** the bytes are delivered to the command as normal input and the runner does not terminate the command or advance the workflow
+- **WHEN** text resembling an agent completion command is entered or printed during an interactive shell step
+- **THEN** Agent Runner does not interpret terminal bytes or advance the workflow; only the shell command's exit determines completion
 
-#### Scenario: Command emits the agent sentinel
+### Requirement: No interactive terminal transcript
 
-- **WHEN** the command writes the bytes used as the agent continue-trigger sentinel to its terminal
-- **THEN** the runner forwards the bytes to the user's terminal and does not terminate the command or advance the workflow
+The runner SHALL NOT capture or persist terminal output from an interactive shell step. Its `step_end` audit event SHALL contain the exit code and outcome, no `stdout` field, and an empty schema-required `stderr` value. Workflows that require output SHALL use an autonomous shell step with `capture`.
+
+#### Scenario: Interactive output is live only
+- **WHEN** an interactive shell command writes output
+- **THEN** the user sees it on the terminal, but the output is not retained in run state, output files, or audit data
 
 ### Requirement: Interactive shell is incompatible with capture
 

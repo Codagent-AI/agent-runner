@@ -1,5 +1,7 @@
 .PHONY: test lint build fmt fmt-check test-verbose test-cover test-e2e-agents test-e2e-headless-agents test-e2e-interactive-agents
 
+GO_FILES := $(shell git ls-files --cached --others --exclude-standard '*.go' | while IFS= read -r file; do test ! -f "$$file" || printf '%s ' "$$file"; done)
+
 build:
 	go build -o bin/agent-runner ./cmd/agent-runner
 
@@ -27,7 +29,7 @@ lint:
 	golangci-lint run ./...
 
 fmt:
-	goimports -w $(shell git ls-files '*.go')
+	goimports -w $(GO_FILES)
 
 fmt-check:
-	test -z "$$(goimports -l $$(git ls-files '*.go'))"
+	test -z "$$(goimports -l $(GO_FILES))"

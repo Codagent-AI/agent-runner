@@ -181,6 +181,34 @@ func TestOpenSpecPlanningWorkflowsUseSharedCreateScript(t *testing.T) {
 	}
 }
 
+func TestCoreReviewProposalUsesReviewerAgentProfile(t *testing.T) {
+	data, err := ReadFile("builtin:core/review-proposal.yaml")
+	if err != nil {
+		t.Fatalf("ReadFile(core/review-proposal): %v", err)
+	}
+
+	var workflow struct {
+		Sessions []struct {
+			Name  string `yaml:"name"`
+			Agent string `yaml:"agent"`
+		} `yaml:"sessions"`
+	}
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		t.Fatalf("unmarshal workflow: %v", err)
+	}
+
+	for _, session := range workflow.Sessions {
+		if session.Name != "reviewer-agent" {
+			continue
+		}
+		if session.Agent != "reviewer" {
+			t.Fatalf("reviewer-agent profile = %q, want reviewer", session.Agent)
+		}
+		return
+	}
+	t.Fatal("review-proposal workflow has no reviewer-agent session")
+}
+
 func TestCoreFinalizePRUsesCIStatusGate(t *testing.T) {
 	data, err := ReadFile("builtin:core/finalize-pr.yaml")
 	if err != nil {
