@@ -1,0 +1,50 @@
+name: define-change
+description: "Interactively define an OpenSpec change through proposal, specification, and design."
+hidden: true
+
+params:
+  - name: change_name
+    required: true
+
+engine:
+  type: openspec
+  change_param: change_name
+
+sessions:
+  - name: lead-agent
+    agent: planner
+
+steps:
+  - id: create
+    script: create-change.sh
+    script_inputs:
+      change_name: "{{change_name}}"
+
+  - id: proposal
+    session: lead-agent
+    mode: interactive
+    prompt: |
+      Help the user write the proposal for OpenSpec change "{{change_name}}". First ask what the change is about; do not guess. You MUST use the codagent:propose skill.
+
+      Keep this phase interactive. Do not signal completion until the user has approved the proposal and the proposal artifact is complete.
+
+  - id: proposal-review
+    workflow: ../core/review-proposal.yaml
+    params:
+      proposal_dir: "openspec/changes/{{change_name}}"
+
+  - id: specs
+    session: lead-agent
+    mode: interactive
+    prompt: |
+      Help the user write the specifications for OpenSpec change "{{change_name}}". You MUST use the codagent:spec skill.
+
+      Keep this phase interactive. Do not signal completion until the user has approved the specifications and all specification artifacts are complete.
+
+  - id: design
+    session: lead-agent
+    mode: interactive
+    prompt: |
+      Help the user design OpenSpec change "{{change_name}}". You MUST use the codagent:design skill.
+
+      Keep this phase interactive. Do not signal completion until the user has approved the design and the design artifact is complete.

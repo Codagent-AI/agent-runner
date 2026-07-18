@@ -1,0 +1,66 @@
+name: implement-change2
+description: "Implement and validate OpenSpec tasks, then open a draft pull request for human acceptance."
+hidden: true
+
+params:
+  - name: change_name
+    required: true
+
+sessions:
+  - name: lead-agent
+    agent: planner
+
+steps:
+  - id: implement-tasks
+    loop:
+      over: "openspec/changes/{{change_name}}/tasks/*.md"
+      as: task_file
+      require_matches: true
+    steps:
+      - id: implement-single-task
+        workflow: ../core/implement-task.yaml
+        params:
+          task_file: "{{task_file}}"
+          run_session_report: "true"
+
+  - id: review-assumptions
+    session: lead-agent
+    mode: autonomous
+    prompt: |
+      The implementation iterations for OpenSpec change "{{change_name}}" have completed. Audit the risky and notable assumptions plus context gaps in their session reports.
+
+      Session-report output for this run is persisted as one file per iteration at:
+
+          {{session_dir}}/output/*session-report*.out
+
+      The iteration index is embedded in each filename. Cross-reference each report with the matching task file in the `step_start` or `iteration_start` metadata in `{{session_dir}}/audit.log`; the audit log contains metadata, not report text.
+
+      Build a complete finding ledger. Fix and commit high-confidence implementation issues directly. For ambiguous findings or context gaps, do not ask the user during this autonomous phase; preserve them in a concise acceptance handoff under `{{session_dir}}/output/` so the acceptance agent can discuss them with the user. Do not silently resolve product, scope, or design ambiguity.
+
+  - id: simplify
+    session: lead-agent
+    mode: autonomous
+    prompt: |
+      If the /simplify skill is available, run it focusing on code reuse and readability. If it is not available, review all changes for duplicated logic that should be extracted into shared helpers and readability problems such as deep nesting, unclear naming, or overly complex conditionals.
+
+      Fix and commit clear-cut issues, following the project's commit message conventions and prepending [{{step_id}}]. Do not expand the accepted scope.
+
+  - id: run-validator
+    workflow: ../core/run-validator.yaml
+    continue_on_failure: true
+
+  - id: verify-validator
+    command: agent-validator run --report
+
+  - id: open-draft-pr
+    session: lead-agent
+    mode: autonomous
+    prompt: |
+      Invoke codagent:push-pr to commit any appropriate remaining changes, push the current branch, and create or update its pull request.
+
+      The pull request MUST be a draft so the user can review it during the acceptance phase. This requirement intentionally overrides the skill's default non-draft creation command:
+      - when creating a pull request, create it as a draft;
+      - when updating an existing open pull request that is not a draft, convert it back to draft;
+      - do not mark the pull request ready for review in this step.
+
+      Verify the final state with `gh pr view --json isDraft,url`. Do not signal completion unless `isDraft` is true. Report the pull request URL.
