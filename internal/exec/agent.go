@@ -193,7 +193,7 @@ func ExecuteAgentStep(
 	// bind or stale-cleanup failure therefore fails without blanking the TUI.
 	if controlErr := ensureInteractiveControl(ctx, invocationContext); controlErr != nil {
 		extraction := cli.UsageExtraction{Usage: defaultAgentUsage(cliName, invocationContext.IsHeadless())}
-		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, false, "", OutcomeFailed, "", controlErr.Error(), &extraction, nil)
+		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, false, "", OutcomeFailed, "", controlErr.Error(), &extraction, nil)
 		return OutcomeFailed, controlErr
 	}
 
@@ -216,10 +216,10 @@ func ExecuteAgentStep(
 			return adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: spawnTime, Workdir: step.Workdir})
 		},
 	}
-	outcome, result, runErr := runAgentProcess(runner, adapter, args, invocationContext, step.Workdir, log, ctx.SuspendHook, ctx.ResumeHook, direct)
+	outcome, result, agentInvoked, runErr := runAgentProcess(runner, adapter, args, invocationContext, step.Workdir, log, ctx.SuspendHook, ctx.ResumeHook, direct)
 	usageExtraction, usageErr := extractAgentUsage(adapter, cliName, invocationContext, result.Stdout)
 	if runErr != nil {
-		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, true, "", outcome, "", result.Stderr, &usageExtraction, usageErr)
+		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, agentInvoked, "", outcome, "", result.Stderr, &usageExtraction, usageErr)
 		return outcome, runErr
 	}
 
@@ -249,7 +249,7 @@ func ExecuteAgentStep(
 
 	discoveredID := discoverAndStoreSession(adapter, step, ctx, spawnTime, sessionID, invocationContext.IsHeadless(), result.Stdout, log)
 
-	emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, true, discoveredID, outcome, filteredStdout, result.Stderr, &usageExtraction, usageErr)
+	emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, true, discoveredID, outcome, filteredStdout, result.Stderr, &usageExtraction, usageErr)
 
 	return outcome, nil
 }
@@ -645,19 +645,19 @@ func setInteractiveAttempt(ctx *model.ExecutionContext, metadata *interactive.Pr
 	root.InteractiveAttempt = stored
 }
 
-func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, invocationContext cli.InvocationContext, workdir string, log Logger, suspendHook, resumeHook func() error, direct *directInvocation) (StepOutcome, ProcessResult, error) {
+func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, invocationContext cli.InvocationContext, workdir string, log Logger, suspendHook, resumeHook func() error, direct *directInvocation) (StepOutcome, ProcessResult, bool, error) {
 	if invocationContext.IsHeadless() {
 		// Capture stdout for headless runs so that adapters (e.g. Codex) can
 		// parse session IDs from the process output.
 		result, runErr := runner.RunAgent(args, true, workdir)
 		if runErr != nil {
-			return OutcomeFailed, result, runErr
+			return OutcomeFailed, result, false, runErr
 		}
 		if f, ok := adapter.(cli.HeadlessResultFilter); ok {
 			result.ExitCode, result.Stderr = f.FilterHeadlessResult(result.ExitCode, result.Stdout, result.Stderr)
 		}
 		if result.ExitCode != 0 {
-			return OutcomeFailed, result, nil
+			return OutcomeFailed, result, true, nil
 		}
 		// Detect AskUserQuestion failures in autonomous mode — these indicate
 		// the agent could not complete the task autonomously. Only scan
@@ -667,16 +667,16 @@ func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, i
 		for _, line := range strings.Split(strings.ToLower(result.Stderr), "\n") {
 			if strings.Contains(line, "askuserquestion") && isToolDisallowedLine(line) {
 				log.Errorf("  autonomous session attempted interactive prompt (AskUserQuestion); treating as failure\n")
-				return OutcomeFailed, result, nil
+				return OutcomeFailed, result, true, nil
 			}
 		}
-		return OutcomeSuccess, result, nil
+		return OutcomeSuccess, result, true, nil
 	}
 
 	// Interactive: release the terminal if a hook is set, then hand it directly to the CLI.
 	if suspendHook != nil {
 		if err := suspendHook(); err != nil {
-			return OutcomeFailed, ProcessResult{}, err
+			return OutcomeFailed, ProcessResult{}, false, err
 		}
 	}
 	directResult, err := interactiveRunnerFn(args, directRunOptions{workdir: workdir, invocation: direct})
@@ -690,19 +690,19 @@ func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, i
 		if err == nil {
 			err = directResult.DurabilityError
 		}
-		return OutcomeFailed, result, err
+		return OutcomeFailed, result, directResult.Started, err
 	}
 
 	if directResult.Completed {
-		return OutcomeSuccess, result, err
+		return OutcomeSuccess, result, true, err
 	}
 	if err != nil {
-		return OutcomeFailed, result, err
+		return OutcomeFailed, result, directResult.Started, err
 	}
 
 	// CLI exited without a continue trigger.
 	log.Printf("\n  CLI session exited. To resume this workflow, run:\n    agent-runner --resume\n\n")
-	return OutcomeAborted, result, nil
+	return OutcomeAborted, result, true, nil
 }
 
 // isToolDisallowedLine returns true if a lowercased output line matches a
@@ -798,6 +798,7 @@ func emitAgentEnd(
 	step *model.Step,
 	cliName, sessionID string,
 	invocationContext cli.InvocationContext,
+	sessionResumed bool,
 	agentInvoked bool,
 	discoveredID string,
 	outcome StepOutcome,
@@ -809,9 +810,11 @@ func emitAgentEnd(
 	if resolvedSessionID == "" {
 		resolvedSessionID = sessionID
 	}
+	identity := executionIdentity(ctx, step, "step", 0, agentInvoked, cliName, resolvedSessionID)
+	identity.SessionResumed = sessionResumed
 	data := map[string]any{
 		"discovered_session_id":  discoveredID,
-		"identity":               executionIdentity(ctx, step, "step", 0, agentInvoked, cliName, resolvedSessionID),
+		"identity":               identity,
 		"usage":                  extraction.Usage,
 		"estimated_api_cost_usd": extraction.EstimatedCostUSD,
 	}

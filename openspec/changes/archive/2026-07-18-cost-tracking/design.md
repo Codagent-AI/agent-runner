@@ -280,3 +280,15 @@ Schema-first sequencing (per proposal): 1) `internal/model` types + canonical vo
 ## Open Questions
 
 None blocking. Copilot/Cursor exact vendor field mappings are deliberately deferred to their fixture-recording tasks; the canonical vocabulary and best-effort commitments above bound the outcome.
+
+## Post-implementation design correction: scoped token summary and eval totals
+
+The initial summary implementation exposed only duration and cost per row and flattened every nested descendant into one table. Before release, the design was corrected as follows:
+
+- The summary is a full-width, level-scoped table that reuses the detailed run view's existing `path`, `cursor`, breadcrumb, `handleEnter`, and `handleEsc` navigation. It shows only `currentChildren()`; loop, group, sub-workflow, and iteration rows recursively roll up their descendants. Up/down selects a row, Enter drills into a container, and Escape drills out. This preserves terminal width for metrics and makes arbitrarily nested workflows readable.
+- Columns are Step, Duration, Input, Cache read, Cache write, Output, Reasoning, and Cost. Every numeric column is right-aligned, and the final Total row uses the same measured column widths. At the root, Total uses the authoritative whole-run totals; below the root it is the aggregate for the current scope. A reported zero renders `0`, an unreported category renders an em dash, and wholly unavailable usage renders an explicit unavailable marker.
+- Raw token categories remain provider-reported values and are never blindly added horizontally because providers disagree about whether cache and reasoning fields are disjoint components or details within input/output. Every category is still summed vertically across attempts and descendants.
+- For eval consumers, `UsageRecord` additionally carries optional canonical processed-token totals: input, output, and overall. The adapter that understands the source schema owns this normalization, preferring a CLI-reported total and deriving only when the relationship is documented or established by a fixture. Cumulative sources retain raw cumulative canonical totals so the collector can baseline-delta them alongside raw categories. When a reliable total cannot be produced it remains absent rather than fabricated.
+- `RunTotals` sums the canonical totals reported by steps and carries `token_total_coverage`, using the same invoked-agent denominator semantics as usage/cost coverage. The artifact and `run_end` event therefore expose eval-ready total tokens while remaining honest for mixed runs. The summary displays the canonical input/output/overall totals beneath the aligned raw-category Total row, with a partial marker when coverage is incomplete.
+
+This is an additive pre-release extension of the v1 artifact rather than a schema-version bump: no released consumer exists yet, and older in-branch artifacts decode the new fields as absent. Rehydration tolerates that absence and reports partial/none canonical-total coverage until new records supply totals.

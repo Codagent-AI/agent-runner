@@ -104,7 +104,7 @@ func TestDirectRunnerCompletesThroughControlChannelAndRestores(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if !result.Completed || result.DurabilityFailed {
+	if !result.Started || !result.Completed || result.DurabilityFailed {
 		t.Fatalf("Run result = %#v, want completed durable result", result)
 	}
 	if before != 1 || after != 1 {
@@ -286,9 +286,12 @@ func TestDirectRunnerWatchdogStartFailureTearsDownChild(t *testing.T) {
 		},
 	})
 
-	_, err := runner.Run(context.Background())
+	result, err := runner.Run(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "start child watchdog") {
 		t.Fatalf("Run error = %v, want watchdog start failure", err)
+	}
+	if !result.Started {
+		t.Fatalf("Run result = %#v, want started child despite post-spawn watchdog failure", result)
 	}
 	if childPID == 0 {
 		t.Fatal("child pid was never persisted")

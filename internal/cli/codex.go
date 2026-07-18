@@ -375,10 +375,19 @@ func (a *CodexAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) {
 	if err != nil {
 		return UsageExtraction{}, fmt.Errorf("codex: parse turn.completed usage: %w", err)
 	}
-	return UsageExtraction{Usage: model.UsageRecord{
+	usage := model.UsageRecord{
 		Status: model.UsageCollected, CLI: "codex", Provider: "openai", Model: modelName,
 		RawCumulative: tokens, Source: "codex:turn.completed", Completeness: completeness(complete),
-	}}, nil
+	}
+	if complete {
+		input := tokens[model.TokenInput]
+		// Codex reports cached input and reasoning output as details within the
+		// input_tokens and output_tokens totals, respectively. Adding either
+		// detail again would double-count it.
+		output := tokens[model.TokenOutput]
+		usage.RawCumulativeTokenTotals = &model.TokenTotals{Input: input, Output: output, Total: input + output}
+	}
+	return UsageExtraction{Usage: usage}, nil
 }
 
 func filterCodexStderr(stderr string, suppressApplyPatch bool) string {

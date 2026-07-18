@@ -27,9 +27,9 @@ This artifact is the supported boundary for external consumers (Agent Evals and 
 
 ### Requirement: Artifact content
 
-`run-metrics.json` SHALL contain one record per executed step and a run-level aggregate. Each step record SHALL include the step's identifier and nesting prefix, step type, outcome, duration in milliseconds, the usage record (token categories plus provenance and completeness, per `agent-usage-collection`), and `estimated_api_cost_usd` (per `cost-capture`). The run-level aggregate SHALL include the run's duration, per-category token totals, and the cost total with its coverage indicator. Unavailable usage and absent cost SHALL appear as explicit null/unavailable states, never as zeros.
+`run-metrics.json` SHALL contain one record per executed step and a run-level aggregate. Each step record SHALL include the step's identifier and nesting prefix, step type, outcome, duration in milliseconds, the usage record (token categories, optional canonical processed-token totals, provenance, and completeness, per `agent-usage-collection`), and `estimated_api_cost_usd` (per `cost-capture`). The run-level aggregate SHALL include the run's duration, per-category token totals, canonical input/output/overall token totals, canonical-total coverage, and the cost total with its coverage indicator. Unavailable usage and absent totals/cost SHALL appear as explicit null/unavailable states, never as zeros.
 
-Per-category token totals SHALL be the sum of the values reported for that category across all executed steps regardless of outcome. Steps with unavailable usage, and categories a step did not report, contribute nothing to the totals; a category no step reported SHALL be absent from the totals, not zero. The aggregate SHALL include a usage-coverage indicator — `complete` when every agent step that actually invoked its CLI has an available usage record, `partial` when some do, and `none` when none do (including runs with no agent steps) — parallel to the cost coverage indicator. Agent steps that never invoked their CLI (skipped, or failed before launch) SHALL NOT count toward either coverage denominator.
+Per-category token totals SHALL be the sum of the values reported for that category across all executed steps regardless of outcome. Canonical input/output/overall totals SHALL sum only steps for which an adapter produced reliable canonical totals. Steps with unavailable usage, and categories or canonical totals a step did not report, contribute nothing to the corresponding aggregate. The aggregate SHALL include usage-coverage and canonical-total-coverage indicators — `complete` when every agent step that actually invoked its CLI reported the metric, `partial` when some did, and `none` when none did — parallel to the cost coverage indicator. Agent steps that never invoked their CLI (skipped, or failed before launch) SHALL NOT count toward these coverage denominators.
 
 #### Scenario: Agent step record content
 - **WHEN** an autonomous-headless agent step completes with usage and cost collected
@@ -37,7 +37,11 @@ Per-category token totals SHALL be the sum of the values reported for that categ
 
 #### Scenario: Run aggregate content
 - **WHEN** a run ends
-- **THEN** the artifact's run-level aggregate carries the run duration, per-category token totals across all steps, and the cost total with coverage
+- **THEN** the artifact's run-level aggregate carries the run duration, per-category token totals, canonical input/output/overall totals with coverage, and the cost total with coverage
+
+#### Scenario: Mixed canonical-total availability
+- **WHEN** a run contains one invoked agent step with reliable canonical totals and one without
+- **THEN** the aggregate sums the known canonical totals and marks canonical-total coverage `partial`
 
 #### Scenario: Unavailable data explicit in artifact
 - **WHEN** a step's usage is unavailable
@@ -116,4 +120,3 @@ When a resume finds `run-metrics.json` corrupt, unreadable, or carrying a schema
 #### Scenario: Intact artifact reports complete history
 - **WHEN** a run resumes with a valid, supported `run-metrics.json`
 - **THEN** the artifact accumulates normally and its history-completeness flag indicates no loss
-

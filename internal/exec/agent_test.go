@@ -21,6 +21,16 @@ type recordingAuditLogger struct {
 	events []audit.Event
 }
 
+type agentErrorRunner struct {
+	mockRunner
+	err error
+}
+
+func (r *agentErrorRunner) RunAgent(args []string, _ bool, _ string) (ProcessResult, error) {
+	r.calls = append(r.calls, args)
+	return ProcessResult{}, r.err
+}
+
 func (l *recordingAuditLogger) Emit(event audit.Event) {
 	l.events = append(l.events, event)
 }
@@ -67,7 +77,8 @@ func TestExecuteAgentStep(t *testing.T) {
 				model.TokenInput: 10, model.TokenCachedInput: 20,
 				model.TokenCacheWrite: 3, model.TokenOutput: 4,
 			},
-			Source: "claude:result-event", Completeness: model.CompletenessComplete,
+			TokenTotals: &model.TokenTotals{Input: 33, Output: 4, Total: 37},
+			Source:      "claude:result-event", Completeness: model.CompletenessComplete,
 		}
 		if diff := cmp.Diff(wantUsage, end.Data["usage"]); diff != "" {
 			t.Fatalf("usage mismatch (-want +got):\n%s", diff)
@@ -144,6 +155,76 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 		if value, exists := end.Data["estimated_api_cost_usd"]; !exists || value != (*float64)(nil) {
 			t.Fatalf("cost = %#v, exists=%v", value, exists)
+		}
+	})
+
+	t.Run("terminal identity records resolved named-session reuse", func(t *testing.T) {
+		auditLog := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		ctx.NamedSessionDecls["fixer"] = "planner"
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}, {ExitCode: 0}}}
+
+		first := model.Step{ID: "first", Mode: model.ModeAutonomous, Prompt: "start", Session: "fixer"}
+		second := model.Step{ID: "second", Mode: model.ModeAutonomous, Prompt: "continue", Session: "fixer"}
+		if outcome, err := ExecuteAgentStep(&first, ctx, runner, &mockLogger{}); err != nil || outcome != OutcomeSuccess {
+			t.Fatalf("first ExecuteAgentStep() = (%q, %v), want success", outcome, err)
+		}
+		if outcome, err := ExecuteAgentStep(&second, ctx, runner, &mockLogger{}); err != nil || outcome != OutcomeSuccess {
+			t.Fatalf("second ExecuteAgentStep() = (%q, %v), want success", outcome, err)
+		}
+
+		var identities []model.ExecutionIdentity
+		for _, event := range auditLog.events {
+			if event.Type != audit.EventStepEnd {
+				continue
+			}
+			if identity, ok := event.Data["identity"].(model.ExecutionIdentity); ok {
+				identities = append(identities, identity)
+			}
+		}
+		if len(identities) != 2 || identities[0].SessionResumed || !identities[1].SessionResumed {
+			t.Fatalf("session resume identities = %+v, want fresh then resumed", identities)
+		}
+	})
+
+	t.Run("headless spawn failure is not counted as an agent invocation", func(t *testing.T) {
+		auditLog := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do something", Session: model.SessionNew}
+
+		outcome, err := ExecuteAgentStep(&step, ctx, &agentErrorRunner{err: errors.New("executable not found")}, &mockLogger{})
+		if err == nil || outcome != OutcomeFailed {
+			t.Fatalf("ExecuteAgentStep() = (%q, %v), want failed spawn error", outcome, err)
+		}
+		end := findAuditEvent(auditLog.events, audit.EventStepEnd)
+		identity, ok := end.Data["identity"].(model.ExecutionIdentity)
+		if !ok || identity.AgentInvoked {
+			t.Fatalf("identity = %#v, want agent_invoked=false", end.Data["identity"])
+		}
+	})
+
+	t.Run("interactive spawn failure is not counted as an agent invocation", func(t *testing.T) {
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(_ []string, _ directRunOptions) (interactive.DirectResult, error) {
+			return interactive.DirectResult{}, errors.New("executable not found")
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		auditLog := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew}
+
+		outcome, err := ExecuteAgentStep(&step, ctx, &mockRunner{}, &mockLogger{})
+		if err == nil || outcome != OutcomeFailed {
+			t.Fatalf("ExecuteAgentStep() = (%q, %v), want failed spawn error", outcome, err)
+		}
+		end := findAuditEvent(auditLog.events, audit.EventStepEnd)
+		identity, ok := end.Data["identity"].(model.ExecutionIdentity)
+		if !ok || identity.AgentInvoked {
+			t.Fatalf("identity = %#v, want agent_invoked=false", end.Data["identity"])
 		}
 	})
 

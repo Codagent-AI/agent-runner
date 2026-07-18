@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -35,7 +36,8 @@ func TestClaudeUsageExtraction(t *testing.T) {
 				model.TokenInput: 3, model.TokenCachedInput: 101,
 				model.TokenCacheWrite: 11, model.TokenOutput: 2,
 			},
-			Source: "claude:result-event", Completeness: model.CompletenessComplete,
+			TokenTotals: &model.TokenTotals{Input: 115, Output: 2, Total: 117},
+			Source:      "claude:result-event", Completeness: model.CompletenessComplete,
 		},
 		EstimatedCostUSD: &wantCost,
 	}
@@ -46,6 +48,9 @@ func TestClaudeUsageExtraction(t *testing.T) {
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Fatalf("ExtractUsage() mismatch (-want +got):\n%s", diff)
 	}
+	assertUsageJSONField(t, &got.Usage, "token_totals", map[string]any{
+		"input": float64(115), "output": float64(2), "total": float64(117),
+	})
 }
 
 func TestClaudeUsageExtractionHandlesLargeResultLine(t *testing.T) {
@@ -144,7 +149,8 @@ func TestCodexUsageExtraction(t *testing.T) {
 			model.TokenInput: 2521, model.TokenCachedInput: 2432,
 			model.TokenOutput: 3, model.TokenReasoning: 19,
 		},
-		Source: "codex:turn.completed", Completeness: model.CompletenessComplete,
+		RawCumulativeTokenTotals: &model.TokenTotals{Input: 2521, Output: 3, Total: 2524},
+		Source:                   "codex:turn.completed", Completeness: model.CompletenessComplete,
 	}}
 	got, err := extractor.ExtractUsage(readUsageFixture(t, "codex.jsonl"))
 	if err != nil {
@@ -156,6 +162,9 @@ func TestCodexUsageExtraction(t *testing.T) {
 	if got.Usage.Tokens != nil {
 		t.Fatalf("cumulative Codex usage must leave Tokens empty, got %#v", got.Usage.Tokens)
 	}
+	assertUsageJSONField(t, &got.Usage, "raw_cumulative_token_totals", map[string]any{
+		"input": float64(2521), "output": float64(3), "total": float64(2524),
+	})
 }
 
 func TestOpenCodeUsageExtraction(t *testing.T) {
@@ -169,7 +178,8 @@ func TestOpenCodeUsageExtraction(t *testing.T) {
 				model.TokenReasoning: 13, model.TokenCachedInput: 1793,
 				model.TokenCacheWrite: 1,
 			},
-			Source: "opencode:step_finish", Completeness: model.CompletenessComplete,
+			TokenTotals: &model.TokenTotals{Input: 11545, Output: 20, Total: 11565},
+			Source:      "opencode:step_finish", Completeness: model.CompletenessComplete,
 		},
 		EstimatedCostUSD: &wantCost,
 	}
@@ -180,6 +190,9 @@ func TestOpenCodeUsageExtraction(t *testing.T) {
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Fatalf("ExtractUsage() mismatch (-want +got):\n%s", diff)
 	}
+	assertUsageJSONField(t, &got.Usage, "token_totals", map[string]any{
+		"input": float64(11545), "output": float64(20), "total": float64(11565),
+	})
 }
 
 func TestCopilotUsageExtraction(t *testing.T) {
@@ -330,7 +343,21 @@ func TestUsageExtractionEdgeSemantics(t *testing.T) {
 		}
 	})
 
-	t.Run("OpenCode cost remains independent when tokens are absent", func(t *testing.T) {
+	t.Run("Claude drops cost when usage is absent", func(t *testing.T) {
+		raw := `{"type":"result","total_cost_usd":0.2}` + "\n"
+		got, err := requireUsageExtractor(t, &ClaudeAdapter{}).ExtractUsage(raw)
+		if err != nil {
+			t.Fatalf("ExtractUsage() error = %v", err)
+		}
+		if got.Usage.Status != model.UsageUnavailable || got.Usage.Reason != model.UnavailableNoUsageEvent {
+			t.Fatalf("usage = %#v, want no-usage-event", got.Usage)
+		}
+		if got.EstimatedCostUSD != nil {
+			t.Fatalf("cost = %#v, want nil when usage is unavailable", got.EstimatedCostUSD)
+		}
+	})
+
+	t.Run("OpenCode drops cost when tokens are absent", func(t *testing.T) {
 		raw := `{"type":"step_finish","part":{"cost":0.3}}` + "\n"
 		got, err := requireUsageExtractor(t, &OpenCodeAdapter{}).ExtractUsage(raw)
 		if err != nil {
@@ -339,8 +366,8 @@ func TestUsageExtractionEdgeSemantics(t *testing.T) {
 		if got.Usage.Status != model.UsageUnavailable || got.Usage.Reason != model.UnavailableNoUsageEvent {
 			t.Fatalf("usage = %#v, want no-usage-event", got.Usage)
 		}
-		if got.EstimatedCostUSD == nil || *got.EstimatedCostUSD != 0.3 {
-			t.Fatalf("cost = %#v, want 0.3", got.EstimatedCostUSD)
+		if got.EstimatedCostUSD != nil {
+			t.Fatalf("cost = %#v, want nil when usage is unavailable", got.EstimatedCostUSD)
 		}
 	})
 
@@ -379,4 +406,19 @@ func readUsageFixture(t *testing.T, name string) string {
 		t.Fatalf("read usage fixture: %v", err)
 	}
 	return strings.TrimSpace(string(raw)) + "\n"
+}
+
+func assertUsageJSONField(t *testing.T, usage *model.UsageRecord, field string, want any) {
+	t.Helper()
+	data, err := json.Marshal(usage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(data, &object); err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(want, object[field]); diff != "" {
+		t.Fatalf("usage %s mismatch (-want +got):\n%s\nusage: %s", field, diff, data)
+	}
 }

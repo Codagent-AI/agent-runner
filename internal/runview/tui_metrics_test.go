@@ -11,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/go-cmp/cmp"
+	"github.com/mattn/go-runewidth"
 
 	"github.com/codagent/agent-runner/internal/liverun"
 	"github.com/codagent/agent-runner/internal/model"
@@ -162,15 +163,182 @@ func TestRenderSummaryAggregatesAttemptsNestedContainersAndCoverage(t *testing.T
 		"sub", "750ms", "$0.30",
 		"group", "250ms", "$0.05",
 		"pending", "—",
-		"Total", "7.5s", "input 45", "output 10", "$1.05 (partial)", "usage partial",
+		"Total", "7.5s", "45", "10", "$1.05 (partial)", "usage partial",
+		"Processed tokens: unavailable (none)",
 	} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("summary missing %q:\n%s", want, plain)
 		}
 	}
-	if !strings.Contains(plain, "  iter 1") || !strings.Contains(plain, "    loop-priced") ||
-		!strings.Contains(plain, "  sub-child") || !strings.Contains(plain, "  group-child") {
-		t.Errorf("nested rows are not indented:\n%s", plain)
+	for _, nested := range []string{"iteration 1", "loop-priced", "sub-child", "group-child"} {
+		if strings.Contains(plain, nested) {
+			t.Errorf("root summary flattened nested row %q:\n%s", nested, plain)
+		}
+	}
+}
+
+func TestRenderSummaryAlignsDurationAndCostColumns(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusSuccess}
+	root.Children = []*StepNode{
+		summaryLeaf("short", root, 1200, float64Pointer(0.25), collectedUsageRecord(12, 3)),
+		summaryLeaf("a-much-longer-step", root, 12000, float64Pointer(12.34), collectedUsageRecord(20, 4)),
+	}
+	m := newTestModel(&Tree{Root: root, RunTotals: &model.RunTotals{
+		ActiveDurationMS: 13200, Tokens: model.TokenCounts{model.TokenInput: 32, model.TokenOutput: 7},
+		UsageCoverage: model.CoverageComplete, EstimatedAPICostUSD: float64Pointer(12.59), CostCoverage: model.CoverageComplete,
+	}}, FromList)
+
+	lines := strings.Split(tuistyle.Sanitize(m.renderSummary()), "\n")
+	header := summaryLineContaining(t, lines, "Duration")
+	short := summaryLineContaining(t, lines, "short")
+	long := summaryLineContaining(t, lines, "a-much-longer-step")
+	total := summaryLineContaining(t, lines, "Total")
+
+	if !strings.Contains(header, "Step") || !strings.Contains(header, "Cost") {
+		t.Fatalf("summary header = %q, want Step, Duration, and Cost columns", header)
+	}
+	assertSameRightEdge(t, header, "Duration", short, "1.2s")
+	assertSameRightEdge(t, header, "Duration", long, "12.0s")
+	assertSameRightEdge(t, header, "Duration", total, "13.2s")
+	assertSameRightEdge(t, header, "Cost", short, "$0.25")
+	assertSameRightEdge(t, header, "Cost", long, "$12.34")
+	assertSameRightEdge(t, header, "Cost", total, "$12.59")
+}
+
+func TestRenderSummaryDistinguishesUnavailableFromNotApplicableCost(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusSuccess}
+	agent := summaryLeaf("interactive-agent", root, 1200, nil, unavailableUsageRecord())
+	shell := &StepNode{ID: "shell", Type: NodeShell, Status: StatusSuccess, Parent: root,
+		Attempts: []AttemptMetrics{{Attempt: 1, DurationMs: int64Pointer(25), Outcome: "success", AgentInvoked: false}}}
+	root.Children = []*StepNode{agent, shell}
+
+	lines := strings.Split(tuistyle.Sanitize(newTestModel(&Tree{Root: root}, FromList).renderSummary()), "\n")
+	agentLine := summaryLineContaining(t, lines, "interactive-agent")
+	shellLine := summaryLineContaining(t, lines, "shell")
+	if !strings.Contains(agentLine, "unavailable") {
+		t.Fatalf("agent row = %q, want explicit unavailable cost", agentLine)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(shellLine), "—") {
+		t.Fatalf("shell row = %q, want not-applicable em dash", shellLine)
+	}
+}
+
+func TestRenderSummaryShowsAlignedTokenColumnsAndCanonicalTotals(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusSuccess}
+	firstUsage := &model.UsageRecord{
+		Status: model.UsageCollected, CLI: "claude",
+		Tokens: model.TokenCounts{
+			model.TokenInput: 1200, model.TokenCachedInput: 800, model.TokenCacheWrite: 120,
+			model.TokenOutput: 400, model.TokenReasoning: 95,
+		},
+		TokenTotals: &model.TokenTotals{Input: 2120, Output: 495, Total: 2615},
+		Source:      "test", Completeness: model.CompletenessComplete,
+	}
+	secondUsage := &model.UsageRecord{
+		Status: model.UsageCollected, CLI: "opencode",
+		Tokens: model.TokenCounts{
+			model.TokenInput: 30, model.TokenCachedInput: 20, model.TokenCacheWrite: 10,
+			model.TokenOutput: 8, model.TokenReasoning: 2,
+		},
+		TokenTotals: &model.TokenTotals{Input: 60, Output: 10, Total: 70},
+		Source:      "test", Completeness: model.CompletenessComplete,
+	}
+	root.Children = []*StepNode{
+		summaryLeaf("plan", root, 32000, float64Pointer(0.42), firstUsage),
+		summaryLeaf("verify", root, 8000, float64Pointer(0.08), secondUsage),
+	}
+	tree := &Tree{Root: root, RunTotals: &model.RunTotals{
+		ActiveDurationMS: 40000,
+		Tokens: model.TokenCounts{
+			model.TokenInput: 1230, model.TokenCachedInput: 820, model.TokenCacheWrite: 130,
+			model.TokenOutput: 408, model.TokenReasoning: 97,
+		},
+		UsageCoverage: model.CoverageComplete,
+		TokenTotals:   &model.TokenTotals{Input: 2180, Output: 505, Total: 2685}, TokenTotalCoverage: model.CoverageComplete,
+		EstimatedAPICostUSD: float64Pointer(0.50), CostCoverage: model.CoverageComplete,
+	}}
+	m := newTestModel(tree, FromList)
+	m.termWidth = 180
+
+	lines := strings.Split(tuistyle.Sanitize(m.renderSummary()), "\n")
+	header := summaryLineContaining(t, lines, "Cache read")
+	plan := summaryLineContaining(t, lines, "plan")
+	total := summaryLineContaining(t, lines, "Total")
+	for _, column := range []string{"Step", "Duration", "Input", "Cache read", "Cache write", "Output", "Reasoning", "Cost"} {
+		if !strings.Contains(header, column) {
+			t.Fatalf("summary header missing %q: %q", column, header)
+		}
+	}
+	for headerValue, rowValue := range map[string]string{
+		"Duration": "32.0s", "Input": "1,200", "Cache read": "800", "Cache write": "120",
+		"Output": "400", "Reasoning": "95", "Cost": "$0.42",
+	} {
+		assertSameRightEdge(t, header, headerValue, plan, rowValue)
+	}
+	for headerValue, rowValue := range map[string]string{
+		"Duration": "40.0s", "Input": "1,230", "Cache read": "820", "Cache write": "130",
+		"Output": "408", "Reasoning": "97", "Cost": "$0.50",
+	} {
+		assertSameRightEdge(t, header, headerValue, total, rowValue)
+	}
+	processed := summaryLineContaining(t, lines, "Processed tokens")
+	for _, want := range []string{"input 2,180", "output 505", "total 2,685", "complete"} {
+		if !strings.Contains(processed, want) {
+			t.Fatalf("processed-token line missing %q: %q", want, processed)
+		}
+	}
+}
+
+func TestSummaryReusesRunViewDrillPath(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusSuccess}
+	loop := &StepNode{ID: "verify-loop", Type: NodeLoop, Status: StatusSuccess, Parent: root}
+	iteration := &StepNode{ID: "verify-loop", Type: NodeIteration, Status: StatusSuccess, Parent: loop, IterationIndex: 0}
+	iteration.Children = []*StepNode{summaryLeaf("check", iteration, 1000, float64Pointer(0.10), collectedUsageRecord(5, 1))}
+	loop.Children = []*StepNode{iteration}
+	root.Children = []*StepNode{loop, summaryLeaf("after", root, 500, float64Pointer(0.05), collectedUsageRecord(2, 1))}
+
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.showSummary = true
+	rootSummary := tuistyle.Sanitize(m.renderSummary())
+	if !strings.Contains(rootSummary, "verify-loop") || !strings.Contains(rootSummary, "after") || strings.Contains(rootSummary, "iteration 1") || strings.Contains(rootSummary, "check") {
+		t.Fatalf("root summary must show only direct children:\n%s", rootSummary)
+	}
+
+	if _, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEnter}); len(m.path) != 2 || !m.showSummary {
+		t.Fatalf("summary Enter did not drill into loop: path=%d showSummary=%v", len(m.path), m.showSummary)
+	}
+	nestedSummary := tuistyle.Sanitize(m.renderSummary())
+	if !strings.Contains(nestedSummary, "iteration 1") || strings.Contains(nestedSummary, "after") || strings.Contains(nestedSummary, "check") {
+		t.Fatalf("nested summary must show only loop children:\n%s", nestedSummary)
+	}
+
+	if _, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc}); len(m.path) != 1 || !m.showSummary {
+		t.Fatalf("summary Escape did not drill out: path=%d showSummary=%v", len(m.path), m.showSummary)
+	}
+}
+
+func summaryLineContaining(t *testing.T, lines []string, value string) string {
+	t.Helper()
+	for _, line := range lines {
+		if strings.Contains(line, value) {
+			return line
+		}
+	}
+	t.Fatalf("summary has no line containing %q:\n%s", value, strings.Join(lines, "\n"))
+	return ""
+}
+
+func assertSameRightEdge(t *testing.T, header, headerValue, row, rowValue string) {
+	t.Helper()
+	if !strings.Contains(header, headerValue) || !strings.Contains(row, rowValue) {
+		t.Fatalf("cannot compare %q in %q with %q in %q", headerValue, header, rowValue, row)
+	}
+	headerIndex := strings.Index(header, headerValue)
+	rowIndex := strings.Index(row, rowValue)
+	headerEnd := runewidth.StringWidth(header[:headerIndex]) + runewidth.StringWidth(headerValue)
+	rowEnd := runewidth.StringWidth(row[:rowIndex]) + runewidth.StringWidth(rowValue)
+	if rowEnd != headerEnd {
+		t.Fatalf("%q right edge = %d, want column edge %d:\nheader: %q\nrow:    %q", rowValue, rowEnd, headerEnd, header, row)
 	}
 }
 
@@ -182,7 +350,7 @@ func TestRenderSummaryComputesMidRunTotalsFromAttempts(t *testing.T) {
 	}
 	m := newTestModel(&Tree{Root: root}, FromLiveRun)
 	plain := tuistyle.Sanitize(m.renderSummary())
-	for _, want := range []string{"done", "1.2s", "$0.25", "not-yet-run", "Total", "input 12", "output 3", "usage complete"} {
+	for _, want := range []string{"done", "1.2s", "$0.25", "not-yet-run", "Total", "12", "3", "usage complete"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("mid-run summary missing %q:\n%s", want, plain)
 		}
@@ -285,7 +453,7 @@ func TestSummaryScrollsRowsWhilePinningTotals(t *testing.T) {
 	}
 }
 
-func TestSummaryScrollKeysAdjustOffset(t *testing.T) {
+func TestSummaryNavigationKeysAdjustCursor(t *testing.T) {
 	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusSuccess}
 	var children []*StepNode
 	for i := 0; i < 30; i++ {
@@ -297,12 +465,12 @@ func TestSummaryScrollKeysAdjustOffset(t *testing.T) {
 	m.showSummary = true
 
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	if m.summaryOffset != 1 {
-		t.Fatalf("j did not scroll summary down: offset=%d, want 1", m.summaryOffset)
+	if m.cursor != 1 {
+		t.Fatalf("j did not select next summary row: cursor=%d, want 1", m.cursor)
 	}
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
-	if m.summaryOffset != 0 {
-		t.Fatalf("k did not scroll summary up: offset=%d, want 0", m.summaryOffset)
+	if m.cursor != 0 {
+		t.Fatalf("k did not select previous summary row: cursor=%d, want 0", m.cursor)
 	}
 }
 
@@ -476,7 +644,7 @@ func TestInspectCompletedRunShowsAuditMetricsEndToEnd(t *testing.T) {
 	m.termWidth = 120
 	m.termHeight = 40
 	summary := tuistyle.Sanitize(m.View())
-	for _, want := range []string{"Run summary", "agent", "1.5s", "$0.42", "input 1,234", "output 56"} {
+	for _, want := range []string{"Run summary", "agent", "1.5s", "$0.42", "1,234", "56"} {
 		if !strings.Contains(summary, want) {
 			t.Errorf("inspect summary missing %q:\n%s", want, summary)
 		}

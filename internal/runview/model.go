@@ -676,10 +676,7 @@ func (m *Model) requestQuit() (tea.Model, tea.Cmd) {
 // here; the upper bound depends on rendered row count vs. available height and
 // is clamped at render time (see renderSummary), matching the log-offset model.
 func (m *Model) scrollSummary(delta int) {
-	m.summaryOffset += delta
-	if m.summaryOffset < 0 {
-		m.summaryOffset = 0
-	}
+	m.moveCursor(delta)
 }
 
 func (m *Model) liveUIVisible() bool {
@@ -912,7 +909,15 @@ func (m *Model) handleOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 	case m.showSummary:
 		switch msg.String() {
-		case "s", "esc":
+		case "s":
+			m.showSummary = false
+			m.summaryOffset = 0
+		case "esc":
+			if len(m.path) > 1 {
+				mdl, cmd := m.handleEsc()
+				m.summaryOffset = 0
+				return mdl, cmd, true
+			}
 			m.showSummary = false
 			m.summaryOffset = 0
 		case "q":
@@ -926,6 +931,12 @@ func (m *Model) handleOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			m.scrollSummary(-1)
 		case "down", "j":
 			m.scrollSummary(1)
+		case "enter":
+			if selected := m.selectedNode(); selected != nil && selected.IsContainer() {
+				mdl, cmd := m.handleEnter()
+				m.summaryOffset = 0
+				return mdl, cmd, true
+			}
 		}
 		return m, nil, true
 	case m.quitConfirming:

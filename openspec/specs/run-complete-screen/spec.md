@@ -43,25 +43,27 @@ When a run whose status is `completed` is opened via `--inspect` or from the run
 - **WHEN** a run with status `failed` is opened via `--inspect` or the run list
 - **THEN** the detailed run view is displayed first
 
-### Requirement: Summary content with nested rollup
+### Requirement: Level-scoped summary with token rollups
 
-The summary screen SHALL show one row per step of the workflow, displaying the step's wall-clock duration and its reported API cost. When a logical step executed more than once (repeated attempts), its row SHALL aggregate the duration, usage, and cost of every attempt. Nested steps — loop iterations, sub-workflow children, and group members — SHALL render indented beneath their parent, and every container row SHALL show the rolled-up totals (summed duration and summed cost) of its descendants. Top-level rows therefore show whole-subtree totals. A run-totals line SHALL show the run's total active execution duration (the sum of its execution sessions, excluding interrupted time, per `run-metrics-artifact`), per-category token totals, and cost total with its coverage state (per `cost-capture`). Token totals SHALL follow the `run-metrics-artifact` aggregation semantics — only reported values are summed — and the totals line SHALL indicate when usage coverage is partial.
+The summary screen SHALL render a full-width table for the current drill-in level, reusing the detailed run view's breadcrumb, cursor, and container navigation. The table SHALL show one row per direct child with right-aligned columns for duration, input, cache read, cache write, output, reasoning, and reported API cost. Up/down SHALL select rows, Enter SHALL drill into container rows, and Escape SHALL drill out. Nested descendants SHALL not be flattened into the same table.
+
+When a logical step executed more than once, its row SHALL aggregate every attempt. A container row SHALL recursively roll up all descendant attempts. The aligned final Total row SHALL describe the current scope: the authoritative whole-run totals at the root and the selected container's descendant aggregate below the root. Every reported token category SHALL be summed vertically; absent categories SHALL render an em dash, reported zeros SHALL render `0`, and unavailable usage SHALL render an explicit unavailable marker. Canonical processed input/output/overall totals and their coverage SHALL be shown beneath the raw-category Total row for eval-oriented consumption.
 
 #### Scenario: Flat workflow rows
 - **WHEN** the summary is shown for a run of top-level steps only
-- **THEN** each step has a row with its duration and cost, followed by the run-totals line
+- **THEN** each step has a row with aligned duration, token-category, and cost columns, followed by the aligned Total row
 
 #### Scenario: Loop rolls up its iterations
 - **WHEN** a loop ran 3 iterations that each consumed time and cost
-- **THEN** the loop's row shows the summed duration and cost of all 3 iterations, and the iteration rows render indented beneath it
+- **THEN** the root table shows one loop row with all descendant metrics rolled up, and Enter on that row opens a table of its 3 iterations
 
 #### Scenario: Sub-workflow rolls up its children
 - **WHEN** a sub-workflow step ran child steps
-- **THEN** the sub-workflow's row shows its children's summed duration and cost, with the child rows indented beneath it
+- **THEN** the parent table shows one sub-workflow row with child metrics rolled up, and Enter opens a table of its direct children
 
 #### Scenario: Group rolls up its members
 - **WHEN** a group step ran member steps that consumed time and cost
-- **THEN** the group's row shows its members' summed duration and cost, with the member rows indented beneath it
+- **THEN** the parent table shows one group row with member metrics rolled up, and Enter opens a table of its direct members
 
 #### Scenario: Repeated step aggregates its attempts
 - **WHEN** a logical step executed twice in the run (a failed attempt followed by a successful one)
@@ -69,7 +71,11 @@ The summary screen SHALL show one row per step of the workflow, displaying the s
 
 #### Scenario: Run totals line
 - **WHEN** the summary is shown
-- **THEN** a totals line shows the run's total active execution duration, per-category token totals, and the cost total with its coverage indicator
+- **THEN** the aligned Total row shows duration, every token category, and cost for the current scope, and the root additionally uses the authoritative active run duration
+
+#### Scenario: Canonical processed-token totals
+- **WHEN** the current scope contains steps with canonical processed-token totals
+- **THEN** the summary shows canonical input, output, and overall tokens beneath the aligned raw-category Total row, with a partial marker when coverage is incomplete
 
 #### Scenario: Run totals with steps missing usage
 - **WHEN** the summary is shown for a run where some agent steps have unavailable usage
@@ -86,4 +92,3 @@ Steps without a reported cost SHALL display an explicit unavailable marker in th
 #### Scenario: Partially priced container flagged
 - **WHEN** a sub-workflow contains one step with reported cost and one without
 - **THEN** the sub-workflow row shows the sum of the priced steps with a partial indicator
-

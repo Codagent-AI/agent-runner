@@ -153,6 +153,7 @@ func TestCollectorAggregatesCoverageAndIterations(t *testing.T) {
 	totals := c.Totals()
 	want := model.RunTotals{
 		ActiveDurationMS: 5000, Tokens: model.TokenCounts{model.TokenInput: 10}, UsageCoverage: model.CoveragePartial,
+		TokenTotalCoverage:  model.CoverageNone,
 		EstimatedAPICostUSD: &cost, CostCoverage: model.CoveragePartial,
 	}
 	if diff := cmp.Diff(want, totals); diff != "" {
@@ -279,16 +280,19 @@ func TestCollectorAttributesCumulativeUsage(t *testing.T) {
 		name       string
 		prior      *model.TokenCounts
 		strategy   string
+		resumed    bool
 		reported   model.TokenCounts
 		wantStatus model.UsageStatus
 		wantReason model.UnavailableReason
 		wantTokens model.TokenCounts
 	}{
 		{name: "new session attributes from zero", strategy: "new", reported: model.TokenCounts{model.TokenInput: 10}, wantStatus: model.UsageCollected, wantTokens: model.TokenCounts{model.TokenInput: 10}},
-		{name: "resumed session uses baseline", prior: counts(model.TokenCounts{model.TokenInput: 10, model.TokenOutput: 4}), strategy: "resume", reported: model.TokenCounts{model.TokenInput: 15, model.TokenOutput: 6}, wantStatus: model.UsageCollected, wantTokens: model.TokenCounts{model.TokenInput: 5, model.TokenOutput: 2}},
-		{name: "resume without baseline is unavailable", strategy: "resume", reported: model.TokenCounts{model.TokenInput: 15}, wantStatus: model.UsageUnavailable, wantReason: model.UnavailableNoBaseline},
-		{name: "counter reset is unavailable", prior: counts(model.TokenCounts{model.TokenInput: 10}), strategy: "resume", reported: model.TokenCounts{model.TokenInput: 3}, wantStatus: model.UsageUnavailable, wantReason: model.UnavailableCounterReset},
-		{name: "missing category stays absent and new category starts at zero", prior: counts(model.TokenCounts{model.TokenInput: 10, model.TokenOutput: 4}), strategy: "inherit", reported: model.TokenCounts{model.TokenInput: 13, model.TokenReasoning: 2}, wantStatus: model.UsageCollected, wantTokens: model.TokenCounts{model.TokenInput: 3, model.TokenReasoning: 2}},
+		{name: "new named session attributes from zero", strategy: "fixer", reported: model.TokenCounts{model.TokenInput: 10}, wantStatus: model.UsageCollected, wantTokens: model.TokenCounts{model.TokenInput: 10}},
+		{name: "resumed session uses baseline", prior: counts(model.TokenCounts{model.TokenInput: 10, model.TokenOutput: 4}), strategy: "resume", resumed: true, reported: model.TokenCounts{model.TokenInput: 15, model.TokenOutput: 6}, wantStatus: model.UsageCollected, wantTokens: model.TokenCounts{model.TokenInput: 5, model.TokenOutput: 2}},
+		{name: "legacy resume event without marker uses baseline", prior: counts(model.TokenCounts{model.TokenInput: 10, model.TokenOutput: 4}), strategy: "resume", reported: model.TokenCounts{model.TokenInput: 15, model.TokenOutput: 6}, wantStatus: model.UsageCollected, wantTokens: model.TokenCounts{model.TokenInput: 5, model.TokenOutput: 2}},
+		{name: "resume without baseline is unavailable", strategy: "resume", resumed: true, reported: model.TokenCounts{model.TokenInput: 15}, wantStatus: model.UsageUnavailable, wantReason: model.UnavailableNoBaseline},
+		{name: "counter reset is unavailable", prior: counts(model.TokenCounts{model.TokenInput: 10}), strategy: "resume", resumed: true, reported: model.TokenCounts{model.TokenInput: 3}, wantStatus: model.UsageUnavailable, wantReason: model.UnavailableCounterReset},
+		{name: "missing category stays absent and new category starts at zero", prior: counts(model.TokenCounts{model.TokenInput: 10, model.TokenOutput: 4}), strategy: "inherit", resumed: true, reported: model.TokenCounts{model.TokenInput: 13, model.TokenReasoning: 2}, wantStatus: model.UsageCollected, wantTokens: model.TokenCounts{model.TokenInput: 3, model.TokenReasoning: 2}},
 	}
 
 	for _, tt := range tests {
@@ -300,12 +304,99 @@ func TestCollectorAttributesCumulativeUsage(t *testing.T) {
 			if tt.prior != nil {
 				c.Process(stepEvent(started.Add(time.Second), model.ExecutionIdentity{StepID: "prior", StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", SessionStrategy: "new", AgentInvoked: true}, cumulativeUsage(*tt.prior), nil, "completed", 10))
 			}
-			gotEvent := c.Process(stepEvent(started.Add(2*time.Second), model.ExecutionIdentity{StepID: "current", StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", SessionStrategy: tt.strategy, AgentInvoked: true}, cumulativeUsage(tt.reported), nil, "completed", 10))
+			gotEvent := c.Process(stepEvent(started.Add(2*time.Second), model.ExecutionIdentity{StepID: "current", StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", SessionStrategy: tt.strategy, SessionResumed: tt.resumed, AgentInvoked: true}, cumulativeUsage(tt.reported), nil, "completed", 10))
 			got := gotEvent.Data[DataUsage].(model.UsageRecord)
 			if got.Status != tt.wantStatus || got.Reason != tt.wantReason || !cmp.Equal(got.Tokens, tt.wantTokens) || !cmp.Equal(got.RawCumulative, tt.reported) {
 				t.Fatalf("attributed usage = %+v, want status=%q reason=%q tokens=%v raw=%v", got, tt.wantStatus, tt.wantReason, tt.wantTokens, tt.reported)
 			}
 		})
+	}
+}
+
+func TestCollectorAttributesCumulativeCanonicalTokenTotals(t *testing.T) {
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(t.TempDir(), "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, nil))
+
+	prior := cumulativeUsage(model.TokenCounts{model.TokenInput: 100, model.TokenOutput: 20})
+	prior.RawCumulativeTokenTotals = &model.TokenTotals{Input: 100, Output: 20, Total: 120}
+	c.Process(stepEvent(started.Add(time.Second), model.ExecutionIdentity{
+		StepID: "prior", StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", SessionStrategy: "new", AgentInvoked: true,
+	}, prior, nil, "completed", 1))
+
+	current := cumulativeUsage(model.TokenCounts{model.TokenInput: 140, model.TokenOutput: 35})
+	current.RawCumulativeTokenTotals = &model.TokenTotals{Input: 140, Output: 35, Total: 175}
+	gotEvent := c.Process(stepEvent(started.Add(2*time.Second), model.ExecutionIdentity{
+		StepID: "current", StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", SessionStrategy: "resume", SessionResumed: true, AgentInvoked: true,
+	}, current, nil, "completed", 1))
+
+	got := gotEvent.Data[DataUsage].(model.UsageRecord)
+	want := &model.TokenTotals{Input: 40, Output: 15, Total: 55}
+	if diff := cmp.Diff(want, got.TokenTotals); diff != "" {
+		t.Fatalf("canonical token totals mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(current.RawCumulativeTokenTotals, got.RawCumulativeTokenTotals); diff != "" {
+		t.Fatalf("raw canonical totals mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestCollectorInvalidatesCanonicalBaselineAcrossMissingReport(t *testing.T) {
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(t.TempDir(), "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, nil))
+	identity := model.ExecutionIdentity{
+		StepID: "codex", StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", AgentInvoked: true,
+	}
+
+	first := cumulativeUsage(model.TokenCounts{model.TokenInput: 100})
+	first.RawCumulativeTokenTotals = &model.TokenTotals{Input: 100, Output: 20, Total: 120}
+	c.Process(stepEvent(started.Add(time.Second), identity, first, nil, "completed", 1))
+
+	identity.SessionStrategy = "resume"
+	identity.SessionResumed = true
+	missing := cumulativeUsage(model.TokenCounts{model.TokenInput: 140})
+	c.Process(stepEvent(started.Add(2*time.Second), identity, missing, nil, "completed", 1))
+
+	reappeared := cumulativeUsage(model.TokenCounts{model.TokenInput: 170})
+	reappeared.RawCumulativeTokenTotals = &model.TokenTotals{Input: 170, Output: 35, Total: 205}
+	third := c.Process(stepEvent(started.Add(3*time.Second), identity, reappeared, nil, "completed", 1))
+	if got := third.Data[DataUsage].(model.UsageRecord).TokenTotals; got != nil {
+		t.Fatalf("canonical totals after a missing report = %+v, want unavailable until a consecutive baseline exists", got)
+	}
+
+	consecutive := cumulativeUsage(model.TokenCounts{model.TokenInput: 180})
+	consecutive.RawCumulativeTokenTotals = &model.TokenTotals{Input: 180, Output: 40, Total: 220}
+	fourth := c.Process(stepEvent(started.Add(4*time.Second), identity, consecutive, nil, "completed", 1))
+	want := &model.TokenTotals{Input: 10, Output: 5, Total: 15}
+	if diff := cmp.Diff(want, fourth.Data[DataUsage].(model.UsageRecord).TokenTotals); diff != "" {
+		t.Fatalf("canonical totals after baseline recovery mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestCollectorAggregatesCanonicalTokenTotalsWithCoverage(t *testing.T) {
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(t.TempDir(), "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, nil))
+
+	known := collectedUsage(10)
+	known.TokenTotals = &model.TokenTotals{Input: 10, Output: 2, Total: 12}
+	c.Process(stepEvent(started.Add(time.Second), agentIdentity("known", true), known, nil, "completed", 1))
+	c.Process(stepEvent(started.Add(2*time.Second), agentIdentity("unknown", true), collectedUsage(5), nil, "completed", 1))
+
+	data, err := json.Marshal(c.Totals())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var totals map[string]any
+	if err := json.Unmarshal(data, &totals); err != nil {
+		t.Fatal(err)
+	}
+	wantTotals := map[string]any{"input": float64(10), "output": float64(2), "total": float64(12)}
+	if diff := cmp.Diff(wantTotals, totals["token_totals"]); diff != "" {
+		t.Fatalf("token totals mismatch (-want +got):\n%s", diff)
+	}
+	if got := totals["token_total_coverage"]; got != "partial" {
+		t.Fatalf("token_total_coverage = %#v, want partial", got)
 	}
 }
 
@@ -327,11 +418,11 @@ func TestCollectorRebasesAfterUnavailableCumulativeValues(t *testing.T) {
 			if tc.seed != nil {
 				c.Process(stepEvent(started.Add(time.Second), model.ExecutionIdentity{StepID: "baseline", StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", SessionStrategy: "new", AgentInvoked: true}, cumulativeUsage(*tc.seed), nil, "completed", 1))
 			}
-			first := c.Process(stepEvent(started.Add(2*time.Second), model.ExecutionIdentity{StepID: "first", StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", SessionStrategy: tc.strategy, AgentInvoked: true}, cumulativeUsage(tc.first), nil, "completed", 1))
+			first := c.Process(stepEvent(started.Add(2*time.Second), model.ExecutionIdentity{StepID: "first", StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", SessionStrategy: tc.strategy, SessionResumed: true, AgentInvoked: true}, cumulativeUsage(tc.first), nil, "completed", 1))
 			if got := first.Data[DataUsage].(model.UsageRecord).Reason; got != tc.wantReason {
 				t.Fatalf("first unavailable reason = %q, want %q", got, tc.wantReason)
 			}
-			second := c.Process(stepEvent(started.Add(3*time.Second), model.ExecutionIdentity{StepID: "second", StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", SessionStrategy: "resume", AgentInvoked: true}, cumulativeUsage(tc.second), nil, "completed", 1))
+			second := c.Process(stepEvent(started.Add(3*time.Second), model.ExecutionIdentity{StepID: "second", StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", SessionStrategy: "resume", SessionResumed: true, AgentInvoked: true}, cumulativeUsage(tc.second), nil, "completed", 1))
 			if diff := cmp.Diff(tc.wantDelta, second.Data[DataUsage].(model.UsageRecord).Tokens); diff != "" {
 				t.Fatalf("rebased delta mismatch (-want +got):\n%s", diff)
 			}
@@ -344,16 +435,23 @@ func TestCollectorRehydratesBaselinesAndExcludesPausedTime(t *testing.T) {
 	firstStart := mustTime(t, "2026-07-17T10:00:00Z")
 	first := NewCollector(dir, "run", "workflow", firstStart)
 	first.Process(event(audit.EventRunStart, firstStart, nil))
-	first.Process(stepEvent(firstStart.Add(5*time.Minute), model.ExecutionIdentity{StepID: "same", StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", SessionStrategy: "new", AgentInvoked: true}, cumulativeUsage(model.TokenCounts{model.TokenInput: 100}), nil, "completed", 1))
+	firstUsage := cumulativeUsage(model.TokenCounts{model.TokenInput: 100, model.TokenOutput: 20})
+	firstUsage.RawCumulativeTokenTotals = &model.TokenTotals{Input: 100, Output: 20, Total: 120}
+	first.Process(stepEvent(firstStart.Add(5*time.Minute), model.ExecutionIdentity{StepID: "same", StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", SessionStrategy: "new", AgentInvoked: true}, firstUsage, nil, "completed", 1))
 
 	secondStart := firstStart.Add(65 * time.Minute)
 	second := NewCollector(dir, "run", "workflow", secondStart)
 	second.now = func() time.Time { return secondStart.Add(3 * time.Minute) }
 	second.Process(event(audit.EventRunStart, secondStart, map[string]any{"resumed": true}))
-	gotEvent := second.Process(stepEvent(secondStart.Add(3*time.Minute), model.ExecutionIdentity{StepID: "same", StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", SessionStrategy: "resume", AgentInvoked: true}, cumulativeUsage(model.TokenCounts{model.TokenInput: 140}), nil, "completed", 1))
+	secondUsage := cumulativeUsage(model.TokenCounts{model.TokenInput: 140, model.TokenOutput: 25})
+	secondUsage.RawCumulativeTokenTotals = &model.TokenTotals{Input: 140, Output: 25, Total: 165}
+	gotEvent := second.Process(stepEvent(secondStart.Add(3*time.Minute), model.ExecutionIdentity{StepID: "same", StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", SessionStrategy: "resume", SessionResumed: true, AgentInvoked: true}, secondUsage, nil, "completed", 1))
 	gotUsage := gotEvent.Data[DataUsage].(model.UsageRecord)
-	if diff := cmp.Diff(model.TokenCounts{model.TokenInput: 40}, gotUsage.Tokens); diff != "" {
+	if diff := cmp.Diff(model.TokenCounts{model.TokenInput: 40, model.TokenOutput: 5}, gotUsage.Tokens); diff != "" {
 		t.Fatalf("rehydrated delta mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(&model.TokenTotals{Input: 40, Output: 5, Total: 45}, gotUsage.TokenTotals); diff != "" {
+		t.Fatalf("rehydrated canonical total mismatch (-want +got):\n%s", diff)
 	}
 	if got := gotEvent.Data[DataIdentity].(model.ExecutionIdentity).Attempt; got != 2 {
 		t.Fatalf("rehydrated attempt = %d, want 2", got)

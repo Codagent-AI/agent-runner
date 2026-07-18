@@ -31,6 +31,22 @@ Usage records SHALL represent token counts in distinct categories — input, cac
 - **WHEN** a CLI's output provides no count for a token category (for example, no cache-write count)
 - **THEN** the usage record marks that category as absent rather than recording `0`
 
+### Requirement: Canonical processed-token totals
+
+In addition to preserving provider-reported categories, an adapter SHALL report canonical processed-token totals for input, output, and overall tokens when the CLI reports those totals or the adapter can derive them without double-counting according to that CLI's accounting semantics. The adapter SHALL own this normalization. It SHALL NOT blindly add raw category fields whose relationships may overlap. When a reliable overall total cannot be obtained, the canonical totals SHALL be absent rather than fabricated.
+
+#### Scenario: Adapter derives non-overlapping totals
+- **WHEN** a CLI reports cache or reasoning categories separately and its documented accounting semantics establish how they relate to input and output
+- **THEN** the adapter records canonical input, output, and overall totals that count each token exactly once while preserving the original categories
+
+#### Scenario: Uncertain accounting leaves totals absent
+- **WHEN** a CLI reports token categories but their overlap is not reliably known
+- **THEN** the categories remain available and canonical totals are absent
+
+#### Scenario: Cumulative canonical totals are attributed per step
+- **WHEN** a cumulative CLI reports canonical totals for a resumed session
+- **THEN** the collector attributes the totals against the prior cumulative baseline using the same no-baseline and counter-reset protections as the raw categories
+
 ### Requirement: Unavailable usage is explicit
 
 When usage cannot be collected for an agent step, Agent Runner SHALL record an explicit unavailable state with the reason. Missing usage SHALL never be represented as zero tokens. Situations that produce an unavailable record include: PTY-backed invocation contexts (interactive and autonomous-interactive), structured-output parse failures, missing usage events in otherwise valid output, and adapters that do not support extraction.
@@ -90,4 +106,3 @@ When a CLI reports cumulative session totals rather than per-invocation usage, t
 #### Scenario: Category appears mid-session
 - **WHEN** the current report contains a token category absent from the session's previously recorded total
 - **THEN** that category's attributed value equals the newly reported value (attributed from zero)
-

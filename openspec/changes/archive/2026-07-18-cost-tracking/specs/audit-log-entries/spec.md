@@ -48,11 +48,15 @@ The usage record on `step_end` SHALL follow the `agent-usage-collection` capabil
 
 ### Requirement: Run end usage and cost totals
 
-The `run_end` entry SHALL include the run's aggregated metrics: per-category token totals across all steps of the run (cumulative across resume sessions) with the usage-coverage indicator, and the run-level cost total with its coverage indicator, per the `cost-capture` capability. Token totals SHALL follow the aggregation semantics of the `run-metrics-artifact` capability: only reported values are summed, steps with unavailable usage contribute nothing, and unreported categories are absent rather than zero. When no step reported cost, the cost total SHALL be null with coverage `none`.
+The `run_end` entry SHALL include the run's aggregated metrics: per-category token totals across all steps of the run (cumulative across resume sessions) with the usage-coverage indicator; canonical processed input, output, and overall token totals with their coverage indicator; and the run-level cost total with its coverage indicator, per the `cost-capture` capability. Token totals SHALL follow the aggregation semantics of the `run-metrics-artifact` capability: only reported values are summed, canonical totals are included only when an adapter can obtain them without double-counting, steps with unavailable usage contribute nothing, and unreported categories are absent rather than zero. When no step reported canonical totals or cost, the corresponding total SHALL be null with coverage `none`.
 
 #### Scenario: Run end carries aggregated totals
 - **WHEN** a run ends after agent steps consumed tokens and some reported cost
-- **THEN** the `run_end` entry includes per-category token totals and the cost total with its coverage indicator
+- **THEN** the `run_end` entry includes per-category token totals, canonical processed-token totals, and the cost total with their coverage indicators
+
+#### Scenario: Run end with partial canonical-total coverage
+- **WHEN** a run ends after one agent step reports reliable canonical processed-token totals and another reports only raw categories
+- **THEN** the `run_end` entry sums the known canonical totals and marks canonical-total coverage `partial`
 
 #### Scenario: Run end with no cost data
 - **WHEN** a run ends and no step reported a USD cost

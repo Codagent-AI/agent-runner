@@ -262,8 +262,7 @@ func (a *ClaudeAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) 
 	}
 	if len(lastUsage) == 0 || string(lastUsage) == "null" {
 		return UsageExtraction{
-			Usage:            unavailableUsage("claude", "claude:result-event", model.UnavailableNoUsageEvent),
-			EstimatedCostUSD: lastCost,
+			Usage: unavailableUsage("claude", "claude:result-event", model.UnavailableNoUsageEvent),
 		}, nil
 	}
 
@@ -276,11 +275,17 @@ func (a *ClaudeAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) 
 	if err != nil {
 		return UsageExtraction{}, fmt.Errorf("claude: parse result usage: %w", err)
 	}
+	usage := model.UsageRecord{
+		Status: model.UsageCollected, CLI: "claude", Provider: "anthropic", Model: modelName,
+		Tokens: tokens, Source: "claude:result-event", Completeness: completeness(complete),
+	}
+	if complete {
+		input := tokens[model.TokenInput] + tokens[model.TokenCachedInput] + tokens[model.TokenCacheWrite]
+		output := tokens[model.TokenOutput]
+		usage.TokenTotals = &model.TokenTotals{Input: input, Output: output, Total: input + output}
+	}
 	return UsageExtraction{
-		Usage: model.UsageRecord{
-			Status: model.UsageCollected, CLI: "claude", Provider: "anthropic", Model: modelName,
-			Tokens: tokens, Source: "claude:result-event", Completeness: completeness(complete),
-		},
+		Usage:            usage,
 		EstimatedCostUSD: lastCost,
 	}, nil
 }

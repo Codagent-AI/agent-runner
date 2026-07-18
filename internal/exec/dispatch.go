@@ -101,22 +101,32 @@ func executeGroupStep(
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 	startTime := time.Now()
 	emitStepStart(ctx, prefix, startTime, nil)
+	originalNestingPath := ctx.NestingPath
+	childNestingPath := make([]model.NestingSegment, len(originalNestingPath)+1)
+	copy(childNestingPath, originalNestingPath)
+	childNestingPath[len(originalNestingPath)] = model.NestingSegment{StepID: step.ID}
+	ctx.NestingPath = childNestingPath
+	defer func() { ctx.NestingPath = originalNestingPath }()
 	for i := range steps {
 		outcome, err := DispatchStep(&steps[i], ctx, runner, glob, log)
 		if err != nil {
+			ctx.NestingPath = originalNestingPath
 			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), map[string]any{"error": err.Error()}, step)
 			return OutcomeFailed, err
 		}
 		if outcome == OutcomeAborted {
+			ctx.NestingPath = originalNestingPath
 			emitStepEnd(ctx, prefix, startTime, string(OutcomeAborted), nil, step)
 			return OutcomeAborted, nil
 		}
 		recordLastStepOutcome(ctx, outcome)
 		if outcome == OutcomeFailed && !steps[i].ContinueOnFailure {
+			ctx.NestingPath = originalNestingPath
 			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), nil, step)
 			return OutcomeFailed, nil
 		}
 	}
+	ctx.NestingPath = originalNestingPath
 	emitStepEnd(ctx, prefix, startTime, string(OutcomeSuccess), nil, step)
 	return OutcomeSuccess, nil
 }

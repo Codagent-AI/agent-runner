@@ -140,6 +140,8 @@ func (a *OpenCodeAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error
 	foundUsage := false
 	var totalCost float64
 	foundCost := false
+	canonicalTotals := model.TokenTotals{}
+	totalsComplete := true
 	var provider, modelName string
 
 	scanner := newStreamScanner(strings.NewReader(rawStdout))
@@ -177,57 +179,83 @@ func (a *OpenCodeAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error
 		}
 		foundUsage = true
 
-		var tokenObject map[string]json.RawMessage
-		if err := json.Unmarshal(event.Part.Tokens, &tokenObject); err != nil {
-			return UsageExtraction{}, fmt.Errorf("opencode: parse step_finish tokens: %w", err)
-		}
-		// total is an aggregate of the component token fields, not a disjoint
-		// vendor category. Keeping it would double-count every OpenCode step.
-		delete(tokenObject, "total")
-		topLevelTokens, err := json.Marshal(tokenObject)
+		eventUsage, err := parseOpenCodeTokenUsage(event.Part.Tokens)
 		if err != nil {
-			return UsageExtraction{}, fmt.Errorf("opencode: normalize step_finish tokens: %w", err)
+			return UsageExtraction{}, err
 		}
-		stepTokens, topComplete, err := tokenCountsFromObject(topLevelTokens, map[string]string{
-			"input": model.TokenInput, "output": model.TokenOutput, "reasoning": model.TokenReasoning,
-		})
-		if err != nil {
-			return UsageExtraction{}, fmt.Errorf("opencode: parse step_finish tokens: %w", err)
-		}
-		cacheRaw := tokenObject["cache"]
-		cacheTokens, cacheComplete, err := tokenCountsFromObject(cacheRaw, map[string]string{
-			"read": model.TokenCachedInput, "write": model.TokenCacheWrite,
-		})
-		if err != nil {
-			return UsageExtraction{}, fmt.Errorf("opencode: parse step_finish cache tokens: %w", err)
-		}
-		for category, count := range stepTokens {
+		for category, count := range eventUsage.stepTokens {
 			tokens[category] += count
 		}
-		for category, count := range cacheTokens {
+		for category, count := range eventUsage.cacheTokens {
 			tokens[category] += count
 		}
-		complete = complete && topComplete && cacheComplete
+		canonicalTotals.Input += eventUsage.stepTokens[model.TokenInput] + eventUsage.cacheTokens[model.TokenCachedInput] + eventUsage.cacheTokens[model.TokenCacheWrite]
+		canonicalTotals.Output += eventUsage.stepTokens[model.TokenOutput] + eventUsage.stepTokens[model.TokenReasoning]
+		canonicalTotals.Total += eventUsage.reportedTotal
+		complete = complete && eventUsage.complete
+		totalsComplete = totalsComplete && eventUsage.totalComplete
 	}
 	if err := scanner.Err(); err != nil {
 		return UsageExtraction{}, fmt.Errorf("opencode: scan JSONL: %w", err)
 	}
 	if !foundUsage {
-		result := UsageExtraction{Usage: unavailableUsage("opencode", "opencode:step_finish", model.UnavailableNoUsageEvent)}
-		if foundCost {
-			result.EstimatedCostUSD = &totalCost
-		}
-		return result, nil
+		return UsageExtraction{Usage: unavailableUsage("opencode", "opencode:step_finish", model.UnavailableNoUsageEvent)}, nil
 	}
 
 	result := UsageExtraction{Usage: model.UsageRecord{
 		Status: model.UsageCollected, CLI: "opencode", Provider: provider, Model: modelName,
 		Tokens: tokens, Source: "opencode:step_finish", Completeness: completeness(complete),
 	}}
+	if complete && totalsComplete {
+		result.Usage.TokenTotals = &canonicalTotals
+	}
 	if foundCost {
 		result.EstimatedCostUSD = &totalCost
 	}
 	return result, nil
+}
+
+type openCodeTokenUsage struct {
+	stepTokens    model.TokenCounts
+	cacheTokens   model.TokenCounts
+	reportedTotal int64
+	complete      bool
+	totalComplete bool
+}
+
+func parseOpenCodeTokenUsage(raw json.RawMessage) (openCodeTokenUsage, error) {
+	var tokenObject map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &tokenObject); err != nil {
+		return openCodeTokenUsage{}, fmt.Errorf("opencode: parse step_finish tokens: %w", err)
+	}
+
+	var reportedTotal int64
+	rawTotal, totalPresent := tokenObject["total"]
+	totalComplete := totalPresent && json.Unmarshal(rawTotal, &reportedTotal) == nil
+	// total is an aggregate of the component token fields, not a disjoint
+	// vendor category. Keeping it would double-count every OpenCode step.
+	delete(tokenObject, "total")
+
+	topLevelTokens, err := json.Marshal(tokenObject)
+	if err != nil {
+		return openCodeTokenUsage{}, fmt.Errorf("opencode: normalize step_finish tokens: %w", err)
+	}
+	stepTokens, topComplete, err := tokenCountsFromObject(topLevelTokens, map[string]string{
+		"input": model.TokenInput, "output": model.TokenOutput, "reasoning": model.TokenReasoning,
+	})
+	if err != nil {
+		return openCodeTokenUsage{}, fmt.Errorf("opencode: parse step_finish tokens: %w", err)
+	}
+	cacheTokens, cacheComplete, err := tokenCountsFromObject(tokenObject["cache"], map[string]string{
+		"read": model.TokenCachedInput, "write": model.TokenCacheWrite,
+	})
+	if err != nil {
+		return openCodeTokenUsage{}, fmt.Errorf("opencode: parse step_finish cache tokens: %w", err)
+	}
+	return openCodeTokenUsage{
+		stepTokens: stepTokens, cacheTokens: cacheTokens, reportedTotal: reportedTotal,
+		complete: topComplete && cacheComplete, totalComplete: totalComplete,
+	}, nil
 }
 
 func discoverOpenCodeHeadlessSession(output string) string {

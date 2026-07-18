@@ -77,6 +77,7 @@ type Collector struct {
 	artifact       Artifact
 	attempts       map[executionKey]int
 	baselines      map[string]model.TokenCounts
+	totalBaselines map[string]model.TokenTotals
 	errors         []error
 	writeFailures  int
 	lastWriteError error
@@ -93,9 +94,10 @@ func NewCollector(sessionDir, runID, workflow string, sessionStart time.Time) *C
 			SchemaVersion: SchemaVersion, RunID: runID, Workflow: workflow, HistoryComplete: true,
 			Sessions: []SessionRecord{}, Steps: []StepRecord{}, Totals: emptyTotals(),
 		},
-		attempts:  make(map[executionKey]int),
-		baselines: make(map[string]model.TokenCounts),
-		now:       time.Now,
+		attempts:       make(map[executionKey]int),
+		baselines:      make(map[string]model.TokenCounts),
+		totalBaselines: make(map[string]model.TokenTotals),
+		now:            time.Now,
 	}
 	c.rehydrate(sessionStart)
 	return c
@@ -128,7 +130,8 @@ func (c *Collector) Process(event audit.Event) audit.Event {
 func (c *Collector) Totals() model.RunTotals {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return cloneTotals(c.totalsLocked(true))
+	totals := c.totalsLocked(true)
+	return cloneTotals(&totals)
 }
 
 // Errors returns a snapshot of all nonfatal recovery and persistence errors.
@@ -195,17 +198,28 @@ func (c *Collector) attribute(identity *model.ExecutionIdentity, input *model.Us
 	key := baselineKey(identity.CLI, identity.SessionID)
 	prior, found := c.baselines[key]
 	c.baselines[key] = cloneCounts(raw)
+	priorTotals, totalsFound := c.totalBaselines[key]
+	if usage.RawCumulativeTokenTotals != nil {
+		c.totalBaselines[key] = *usage.RawCumulativeTokenTotals
+	} else {
+		// A cumulative report without canonical totals breaks the attribution
+		// chain. Keeping the older total baseline would charge the missing
+		// invocation's tokens to the next invocation that reports totals.
+		delete(c.totalBaselines, key)
+	}
 
-	if identity.SessionStrategy == string(model.SessionNew) {
+	if !sessionWasResumed(identity) {
 		usage.Status = model.UsageCollected
 		usage.Reason = ""
 		usage.Tokens = cloneCounts(raw)
+		usage.TokenTotals = cloneTokenTotals(usage.RawCumulativeTokenTotals)
 		return usage
 	}
 	if !found {
 		usage.Status = model.UsageUnavailable
 		usage.Reason = model.UnavailableNoBaseline
 		usage.Tokens = nil
+		usage.TokenTotals = nil
 		usage.Completeness = ""
 		return usage
 	}
@@ -217,6 +231,7 @@ func (c *Collector) attribute(identity *model.ExecutionIdentity, input *model.Us
 		usage.Status = model.UsageUnavailable
 		usage.Reason = model.UnavailableCounterReset
 		usage.Tokens = nil
+		usage.TokenTotals = nil
 		usage.Completeness = ""
 		return usage
 	}
@@ -227,7 +242,27 @@ func (c *Collector) attribute(identity *model.ExecutionIdentity, input *model.Us
 	usage.Status = model.UsageCollected
 	usage.Reason = ""
 	usage.Tokens = delta
+	if usage.RawCumulativeTokenTotals != nil && totalsFound {
+		current := usage.RawCumulativeTokenTotals
+		if current.Input < priorTotals.Input || current.Output < priorTotals.Output || current.Total < priorTotals.Total {
+			usage.Status = model.UsageUnavailable
+			usage.Reason = model.UnavailableCounterReset
+			usage.Tokens = nil
+			usage.TokenTotals = nil
+			usage.Completeness = ""
+			return usage
+		}
+		usage.TokenTotals = &model.TokenTotals{
+			Input: current.Input - priorTotals.Input, Output: current.Output - priorTotals.Output, Total: current.Total - priorTotals.Total,
+		}
+	}
 	return usage
+}
+
+func sessionWasResumed(identity *model.ExecutionIdentity) bool {
+	return identity.SessionResumed ||
+		identity.SessionStrategy == string(model.SessionResume) ||
+		identity.SessionStrategy == string(model.SessionInherit)
 }
 
 func (c *Collector) openSession(at time.Time) {
@@ -279,8 +314,10 @@ func (c *Collector) totalsLocked(includeLiveSession bool) model.RunTotals {
 	}
 	agents := 0
 	usageReported := 0
+	tokenTotalsReported := 0
 	costReported := 0
 	var cost float64
+	canonicalTotals := model.TokenTotals{}
 	for i := range c.artifact.Steps {
 		step := &c.artifact.Steps[i]
 		if step.Usage != nil && step.Usage.Status == model.UsageCollected {
@@ -294,6 +331,12 @@ func (c *Collector) totalsLocked(includeLiveSession bool) model.RunTotals {
 		agents++
 		if step.Usage != nil && step.Usage.Status == model.UsageCollected {
 			usageReported++
+			if step.Usage.TokenTotals != nil {
+				tokenTotalsReported++
+				canonicalTotals.Input += step.Usage.TokenTotals.Input
+				canonicalTotals.Output += step.Usage.TokenTotals.Output
+				canonicalTotals.Total += step.Usage.TokenTotals.Total
+			}
 		}
 		if step.EstimatedAPICostUSD != nil {
 			costReported++
@@ -301,6 +344,10 @@ func (c *Collector) totalsLocked(includeLiveSession bool) model.RunTotals {
 		}
 	}
 	totals.UsageCoverage = coverage(agents, usageReported)
+	totals.TokenTotalCoverage = coverage(agents, tokenTotalsReported)
+	if tokenTotalsReported > 0 {
+		totals.TokenTotals = &canonicalTotals
+	}
 	totals.CostCoverage = coverage(agents, costReported)
 	if costReported > 0 {
 		totals.EstimatedAPICostUSD = &cost
@@ -363,7 +410,11 @@ func (c *Collector) rehydrate(sessionStart time.Time) {
 			c.attempts[key] = record.Attempt
 		}
 		if record.SessionID != "" && record.Usage != nil && len(record.Usage.RawCumulative) > 0 {
-			c.baselines[baselineKey(record.Usage.CLI, record.SessionID)] = cloneCounts(record.Usage.RawCumulative)
+			key := baselineKey(record.Usage.CLI, record.SessionID)
+			c.baselines[key] = cloneCounts(record.Usage.RawCumulative)
+			if record.Usage.RawCumulativeTokenTotals != nil {
+				c.totalBaselines[key] = *record.Usage.RawCumulativeTokenTotals
+			}
 		}
 	}
 }
@@ -385,7 +436,7 @@ func (c *Collector) recoverArtifact(sessionStart time.Time, cause error) {
 }
 
 func emptyTotals() model.RunTotals {
-	return model.RunTotals{Tokens: make(model.TokenCounts), UsageCoverage: model.CoverageNone, CostCoverage: model.CoverageNone}
+	return model.RunTotals{Tokens: make(model.TokenCounts), UsageCoverage: model.CoverageNone, TokenTotalCoverage: model.CoverageNone, CostCoverage: model.CoverageNone}
 }
 
 func coverage(eligible, reported int) model.Coverage {
@@ -471,13 +522,25 @@ func cloneUsage(usage *model.UsageRecord) model.UsageRecord {
 	cloned := *usage
 	cloned.Tokens = cloneCounts(usage.Tokens)
 	cloned.RawCumulative = cloneCounts(usage.RawCumulative)
+	cloned.TokenTotals = cloneTokenTotals(usage.TokenTotals)
+	cloned.RawCumulativeTokenTotals = cloneTokenTotals(usage.RawCumulativeTokenTotals)
 	return cloned
 }
 
-func cloneTotals(totals model.RunTotals) model.RunTotals {
-	totals.Tokens = cloneCounts(totals.Tokens)
-	if totals.EstimatedAPICostUSD != nil {
-		value := *totals.EstimatedAPICostUSD
+func cloneTokenTotals(totals *model.TokenTotals) *model.TokenTotals {
+	if totals == nil {
+		return nil
+	}
+	cloned := *totals
+	return &cloned
+}
+
+func cloneTotals(input *model.RunTotals) model.RunTotals {
+	totals := *input
+	totals.Tokens = cloneCounts(input.Tokens)
+	totals.TokenTotals = cloneTokenTotals(input.TokenTotals)
+	if input.EstimatedAPICostUSD != nil {
+		value := *input.EstimatedAPICostUSD
 		totals.EstimatedAPICostUSD = &value
 	}
 	return totals
