@@ -31,6 +31,32 @@ func TestRestoreRunnerTerminalWithoutTTYIsNoOp(t *testing.T) {
 	}
 }
 
+func TestSupervisorRestoresTerminalAfterWaitFailure(t *testing.T) {
+	t.Parallel()
+	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open %s: %v", os.DevNull, err)
+	}
+	defer devNull.Close()
+
+	supervisor := &Supervisor{
+		pid:        1 << 30,
+		tty:        devNull,
+		runnerPGID: unix.Getpgrp(),
+		done:       make(chan struct{}),
+	}
+	supervisor.Start()
+	result := supervisor.Result()
+	if result.err == nil {
+		t.Fatal("supervisor wait failure returned nil error")
+	}
+	for _, want := range []string{"wait for child", "reclaim terminal foreground"} {
+		if !strings.Contains(result.err.Error(), want) {
+			t.Fatalf("supervisor error = %v, want joined %q error", result.err, want)
+		}
+	}
+}
+
 func TestProcessIdentityRejectsDifferentStartTime(t *testing.T) {
 	identity, err := ReadProcessIdentity(os.Getpid())
 	if err != nil {
