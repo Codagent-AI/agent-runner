@@ -32,4 +32,4 @@ steps:
       change_name: "{{change_name}}"
 
   - id: finalize
-    workflow: ../core/finalize-pr2.yaml
+    workflow: ../core/finalize-pr.yaml
