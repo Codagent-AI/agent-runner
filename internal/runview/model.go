@@ -661,6 +661,17 @@ func (m *Model) scrollLiveUI(delta int) {
 	}
 }
 
+// requestQuit handles the `q` action: while a run is live it opens the
+// quit-confirmation modal; otherwise it requests exit immediately.
+func (m *Model) requestQuit() (tea.Model, tea.Cmd) {
+	if m.running {
+		m.quitConfirming = true
+		return m, nil
+	}
+	m.exitRequested = true
+	return m, emitExit
+}
+
 // scrollSummary adjusts the summary scroll offset. The lower bound is applied
 // here; the upper bound depends on rendered row count vs. available height and
 // is clamped at render time (see renderSummary), matching the log-offset model.
@@ -909,12 +920,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.showSummary = false
 			m.summaryOffset = 0
 		case "q":
-			if m.running {
-				m.quitConfirming = true
-				return m, nil
-			}
-			m.exitRequested = true
-			return m, emitExit
+			return m.requestQuit()
 		case "up", "k":
 			m.scrollSummary(-1)
 		case "down", "j":
@@ -937,12 +943,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "q":
-		if m.running {
-			m.quitConfirming = true
-			return m, nil
-		}
-		m.exitRequested = true
-		return m, emitExit
+		return m.requestQuit()
 	case "?":
 		m.showLegend = true
 	case "s":

@@ -659,12 +659,15 @@ func extractCursorResult(output string) string {
 	return ""
 }
 
+// sessionScanBufferMax is the max line size for session-ID discovery. It is
+// deliberately smaller than the shared streamScanBufferMax: the session_id
+// rides on small early events, and an oversized line here is a handled
+// fallback (logged, empty return), not usage loss.
+const sessionScanBufferMax = 1024 * 1024
+
 func discoverCursorSessionID(output string) string {
-	// Session discovery keeps a smaller bounded ceiling (not the shared stream
-	// ceiling): the session_id rides on small early events, and an oversized
-	// line here is a handled fallback (logged, empty return), not usage loss.
 	scanner := bufio.NewScanner(strings.NewReader(output))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), sessionScanBufferMax)
 	for scanner.Scan() {
 		var event struct {
 			SessionID string `json:"session_id"`

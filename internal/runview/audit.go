@@ -550,10 +550,9 @@ func parseEventTime(ts string) time.Time {
 	if ts == "" {
 		return time.Time{}
 	}
+	// RFC3339Nano parses non-fractional timestamps too (the fractional part is
+	// optional), so it subsumes a plain RFC3339 parse.
 	if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
-		return t
-	}
-	if t, err := time.Parse(time.RFC3339, ts); err == nil {
 		return t
 	}
 	return time.Time{}
