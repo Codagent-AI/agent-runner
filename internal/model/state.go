@@ -20,11 +20,19 @@ type NestedStepState struct {
 	// NamedSessions and NamedSessionDecls are only meaningful at the root
 	// NestedStepState level (written by runner.writeStepState). Nested entries
 	// produced by sub-workflow and loop progress records leave these nil.
-	NamedSessions     map[string]string `json:"namedSessions,omitempty"`
-	NamedSessionDecls map[string]string `json:"namedSessionDecls,omitempty"`
-	Completed         bool              `json:"completed,omitempty"`
-	Iteration         *int              `json:"iteration,omitempty"`
-	Child             *NestedStepState  `json:"child"`
+	NamedSessions      map[string]string           `json:"namedSessions,omitempty"`
+	NamedSessionDecls  map[string]string           `json:"namedSessionDecls,omitempty"`
+	Completed          bool                        `json:"completed,omitempty"`
+	Iteration          *int                        `json:"iteration,omitempty"`
+	Child              *NestedStepState            `json:"child"`
+	InteractiveAttempt *InteractiveAttemptMetadata `json:"interactiveAttempt,omitempty"`
+}
+
+type InteractiveAttemptMetadata struct {
+	ChildPID  int    `json:"child_pid"`
+	PGID      int    `json:"pgid"`
+	StartTime string `json:"start_time"`
+	Socket    string `json:"socket_path"`
 }
 
 // CurrentStep can be either a plain string (legacy) or a NestedStepState.

@@ -271,9 +271,25 @@ func TestDispatchStep_PrepareStepHook(t *testing.T) {
 		ctx.PrepareStepHook = func(interactive bool) { called = append(called, interactive) }
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "do it", Session: model.SessionNew}
-		// Interactive agent steps need PTY — this will fail, but the hook should fire first
+		// Direct interactive execution lacks its full runtime context here, but
+		// the preparation hook must fire before dispatch reaches that validation.
 		DispatchStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
 		if len(called) != 1 || called[0] != true {
+			t.Fatalf("expected hook called with true, got %v", called)
+		}
+	})
+
+	t.Run("autonomous interactive agent step calls hook with true", func(t *testing.T) {
+		var called []bool
+		ctx := makeCtx()
+		ctx.AutonomousBackend = "interactive"
+		ctx.PrepareStepHook = func(interactive bool) { called = append(called, interactive) }
+		oldTTY := isStdinTerminal
+		isStdinTerminal = func() bool { return true }
+		defer func() { isStdinTerminal = oldTTY }()
+		step := model.Step{ID: "s", Mode: model.ModeAutonomous, Prompt: "do it", Session: model.SessionNew}
+		DispatchStep(&step, ctx, &mockRunner{}, &mockGlob{}, &mockLogger{})
+		if len(called) != 1 || !called[0] {
 			t.Fatalf("expected hook called with true, got %v", called)
 		}
 	})

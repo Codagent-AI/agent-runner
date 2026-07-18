@@ -1,0 +1,2 @@
+{"timestamp":"2026-07-16T00:00:00Z","type":"session_meta","payload":{"id":"codex-session","cwd":"/repo"}}
+{"timestamp":"2026-07-16T00:00:01Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}

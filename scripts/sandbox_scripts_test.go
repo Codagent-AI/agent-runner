@@ -1,0 +1,1122 @@
+package scripts_test
+
+import (
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestSandboxRunDryRunShowsSafeDockerInvocation(t *testing.T) {
+	artifacts := filepath.Join(t.TempDir(), "artifacts")
+	cmd := exec.Command("bash", "./sandbox-run.sh",
+		"--dry-run",
+		"--no-default-secrets",
+		"--artifact-dir", artifacts,
+		"--env", "ANTHROPIC_API_KEY",
+		"--",
+		"echo proof",
+	)
+	cmd.Env = append(os.Environ(),
+		"ANTHROPIC_API_KEY=test-key",
+		"SSH_AUTH_SOCK=/tmp/ssh-agent.sock",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandbox-run dry run failed: %v\n%s", err, output)
+	}
+	text := string(output)
+	for _, want := range []string{
+		"docker build",
+		"-f " + filepath.Join(repoRoot(t), "docker", "dev", "Dockerfile"),
+		"-v " + repoRoot(t) + ":/agent-runner-source:ro",
+		"-v " + artifacts + ":/artifacts",
+		"-e AGENT_RUNNER_SOURCE_COMMIT",
+		"-e ANTHROPIC_API_KEY",
+		"--shm-size=1g",
+		"echo proof",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("dry-run output missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "--ipc=host") {
+		t.Fatalf("sandbox-run should not share host IPC by default:\n%s", text)
+	}
+	if strings.Contains(text, "SSH_AUTH_SOCK") {
+		t.Fatalf("dry-run output leaked SSH_AUTH_SOCK:\n%s", text)
+	}
+	if strings.Contains(text, "test-key") {
+		t.Fatalf("dry-run output leaked env value:\n%s", text)
+	}
+}
+
+func TestSandboxRunResolvesDockerfileOutsideRepository(t *testing.T) {
+	root := repoRoot(t)
+	cmd := exec.Command("bash", filepath.Join(root, "scripts", "sandbox-run.sh"),
+		"--dry-run",
+		"--no-default-secrets",
+		"--artifact-dir", filepath.Join(t.TempDir(), "artifacts"),
+		"--",
+		"echo proof",
+	)
+	cmd.Dir = t.TempDir()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandbox-run dry run outside repo failed: %v\n%s", err, output)
+	}
+	want := "-f " + filepath.Join(root, "docker", "dev", "Dockerfile")
+	if !strings.Contains(string(output), want) {
+		t.Fatalf("dry-run output missing absolute Dockerfile path %q:\n%s", want, output)
+	}
+}
+
+func TestSandboxRunDryRunMountsInputDirectoryReadOnly(t *testing.T) {
+	dir := t.TempDir()
+	inputDir := filepath.Join(dir, "eval input")
+	if err := os.Mkdir(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input dir: %v", err)
+	}
+
+	cmd := exec.Command("bash", "./sandbox-run.sh",
+		"--dry-run",
+		"--no-default-secrets",
+		"--artifact-dir", filepath.Join(dir, "artifacts"),
+		"--input-dir", inputDir,
+		"--",
+		"echo proof",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandbox-run dry run failed: %v\n%s", err, output)
+	}
+	text := string(output)
+	resolvedInput, err := filepath.EvalSymlinks(inputDir)
+	if err != nil {
+		t.Fatalf("resolve input dir: %v", err)
+	}
+	want := "-v " + strings.ReplaceAll(resolvedInput+":/eval-input:ro", " ", `\ `)
+	if !strings.Contains(text, want) {
+		t.Fatalf("dry-run output missing read-only input mount %q:\n%s", want, text)
+	}
+}
+
+func TestSandboxRunResolvesRelativeInputDirectory(t *testing.T) {
+	dir := t.TempDir()
+	inputDir := filepath.Join(dir, "payload")
+	if err := os.Mkdir(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input dir: %v", err)
+	}
+	scriptsDir := filepath.Join(repoRoot(t), "scripts")
+	relativeInput, err := filepath.Rel(scriptsDir, inputDir)
+	if err != nil {
+		t.Fatalf("relative input path: %v", err)
+	}
+
+	cmd := exec.Command("bash", "./sandbox-run.sh",
+		"--dry-run",
+		"--no-default-secrets",
+		"--artifact-dir", filepath.Join(dir, "artifacts"),
+		"--input-dir", relativeInput,
+		"--",
+		"echo proof",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandbox-run dry run failed: %v\n%s", err, output)
+	}
+	resolvedInput, err := filepath.EvalSymlinks(inputDir)
+	if err != nil {
+		t.Fatalf("resolve input dir: %v", err)
+	}
+	want := "-v " + strings.ReplaceAll(resolvedInput+":/eval-input:ro", ",", `\,`)
+	if !strings.Contains(string(output), want) {
+		t.Fatalf("dry-run output missing resolved input mount %q:\n%s", want, output)
+	}
+}
+
+func TestSandboxRunRejectsInvalidInputDirectory(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "payload.txt")
+	if err := os.WriteFile(file, []byte("not a directory\n"), 0o600); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		path string
+		want string
+	}{
+		{name: "missing", path: filepath.Join(dir, "missing"), want: "Input directory not found"},
+		{name: "file", path: file, want: "Input path is not a directory"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command("bash", "./sandbox-run.sh",
+				"--dry-run",
+				"--no-default-secrets",
+				"--artifact-dir", filepath.Join(dir, "artifacts-"+tc.name),
+				"--input-dir", tc.path,
+				"--",
+				"echo proof",
+			)
+			output, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("sandbox-run accepted invalid input path %q:\n%s", tc.path, output)
+			}
+			if !strings.Contains(string(output), tc.want) {
+				t.Fatalf("sandbox-run error missing %q:\n%s", tc.want, output)
+			}
+		})
+	}
+}
+
+func TestSandboxRunAcceptsInputDirectoryContainingComma(t *testing.T) {
+	dir := t.TempDir()
+	inputDir := filepath.Join(dir, "payload,with-comma")
+	if err := os.Mkdir(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input dir: %v", err)
+	}
+
+	cmd := exec.Command("bash", "./sandbox-run.sh",
+		"--dry-run",
+		"--no-default-secrets",
+		"--artifact-dir", filepath.Join(dir, "artifacts"),
+		"--input-dir", inputDir,
+		"--",
+		"echo proof",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandbox-run rejected comma-containing input directory: %v\n%s", err, output)
+	}
+	resolvedInput, err := filepath.EvalSymlinks(inputDir)
+	if err != nil {
+		t.Fatalf("resolve input dir: %v", err)
+	}
+	want := "-v " + strings.ReplaceAll(resolvedInput+":/eval-input:ro", ",", `\,`)
+	if !strings.Contains(string(output), want) {
+		t.Fatalf("dry-run output missing read-only input mount %q:\n%s", want, output)
+	}
+}
+
+func TestSandboxRunDryRunPreservesMultiArgCommandBoundaries(t *testing.T) {
+	dir := t.TempDir()
+	cmd := exec.Command("bash", "./sandbox-run.sh",
+		"--dry-run",
+		"--no-default-secrets",
+		"--artifact-dir", filepath.Join(dir, "artifacts"),
+		"--",
+		"node",
+		"-e",
+		"console.log(process.argv[1])",
+		"hello world",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandbox-run dry run failed: %v\n%s", err, output)
+	}
+	text := string(output)
+	for _, want := range []string{`bash -lc`, `exec "$@"`, ` -- node -e`, `hello\ world`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("dry-run output missing argv-preserving marker %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, `node\ -e\ console.log`) {
+		t.Fatalf("dry-run output flattened argv into one shell string:\n%s", text)
+	}
+}
+
+func TestSandboxRunEnvFilePassesNamesWithoutLeakingValues(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "eval-secrets.env")
+	if err := os.WriteFile(envFile, []byte("GITHUB_TOKEN=secret-token\n# comment\nexport ANTHROPIC_API_KEY=another-secret\n"), 0o600); err != nil {
+		t.Fatalf("write env file: %v", err)
+	}
+
+	cmd := exec.Command("bash", "./sandbox-run.sh",
+		"--dry-run",
+		"--no-default-secrets",
+		"--artifact-dir", filepath.Join(dir, "artifacts"),
+		"--env-file", envFile,
+		"--",
+		"echo proof",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandbox-run dry run with env file failed: %v\n%s", err, output)
+	}
+	text := string(output)
+	for _, want := range []string{"-e GITHUB_TOKEN", "-e ANTHROPIC_API_KEY"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("dry-run output missing %q:\n%s", want, text)
+		}
+	}
+	for _, forbidden := range []string{"secret-token", "another-secret"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("dry-run output leaked secret value %q:\n%s", forbidden, text)
+		}
+	}
+}
+
+func TestSandboxRunLoadsDefaultSandboxSecretsFile(t *testing.T) {
+	dir := t.TempDir()
+	secretsFile := filepath.Join(dir, "sandbox-secrets.env")
+	if err := os.WriteFile(secretsFile, []byte("GITHUB_TOKEN=secret-token\n"), 0o600); err != nil {
+		t.Fatalf("write sandbox secrets file: %v", err)
+	}
+
+	cmd := exec.Command("bash", "./sandbox-run.sh",
+		"--dry-run",
+		"--artifact-dir", filepath.Join(dir, "artifacts"),
+		"--",
+		"echo proof",
+	)
+	cmd.Env = append(os.Environ(), "SANDBOX_SECRETS_FILE="+secretsFile)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandbox-run dry run with default secrets failed: %v\n%s", err, output)
+	}
+	text := string(output)
+	if !strings.Contains(text, "-e GITHUB_TOKEN") {
+		t.Fatalf("dry-run output missing GITHUB_TOKEN env pass-through:\n%s", text)
+	}
+	if strings.Contains(text, "secret-token") {
+		t.Fatalf("dry-run output leaked secret value:\n%s", text)
+	}
+}
+
+func TestSandboxRunCanMountSubscriptionAuthFiles(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	for _, path := range []string{
+		filepath.Join(home, ".codex"),
+		filepath.Join(home, ".claude"),
+	} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	for path, body := range map[string]string{
+		filepath.Join(home, ".codex", "auth.json"):            "{}\n",
+		filepath.Join(home, ".codex", "config.toml"):          "[mcp_servers.node_repl]\ncommand = \"node_repl\"\n",
+		filepath.Join(home, ".claude", ".credentials.json"):   "{}\n",
+		filepath.Join(home, ".claude", "settings.json"):       "{}\n",
+		filepath.Join(home, ".claude", "settings.local.json"): "{}\n",
+	} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	cmd := exec.Command("bash", "./sandbox-run.sh",
+		"--dry-run",
+		"--no-default-secrets",
+		"--artifact-dir", filepath.Join(dir, "artifacts"),
+		"--mount-codex-auth",
+		"--mount-claude-auth",
+		"--",
+		"echo proof",
+	)
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandbox-run dry run with auth mounts failed: %v\n%s", err, output)
+	}
+	text := string(output)
+	for _, want := range []string{
+		"target=/host-home/codex/auth.json",
+		"target=/host-home/claude/.credentials.json",
+		"target=/host-home/claude/settings.json",
+		"target=/host-home/claude/settings.local.json",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("dry-run output missing auth mount %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "target=/host-home/codex/config.toml") {
+		t.Fatalf("sandbox-run should not mount host Codex config:\n%s", text)
+	}
+}
+
+func TestSandboxSyncHomeCopiesAllowedFilesWritable(t *testing.T) {
+	dir := t.TempDir()
+	hostHome := filepath.Join(dir, "host-home")
+	containerHome := filepath.Join(dir, "container-home")
+	for _, path := range []string{
+		filepath.Join(hostHome, "codex"),
+		filepath.Join(hostHome, "claude"),
+		filepath.Join(hostHome, "shell"),
+		filepath.Join(hostHome, "git"),
+		filepath.Join(containerHome, ".codex"),
+		containerHome,
+	} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	files := map[string]string{
+		filepath.Join(hostHome, "codex", "auth.json"):          `{"codex":true}` + "\n",
+		filepath.Join(hostHome, "codex", "config.toml"):        "model = \"host-model\"\n[plugins.\"agentmemory@agentmemory\"]\nenabled = true\n[mcp_servers.node_repl]\ncommand = \"node_repl\"\n",
+		filepath.Join(hostHome, "claude", ".credentials.json"): `{"claude":true}` + "\n",
+		filepath.Join(hostHome, "claude", "settings.json"):     "{}\n",
+		filepath.Join(hostHome, "shell", ".zshrc"):             "export TEST_ZSH=1\n",
+		filepath.Join(hostHome, "git", ".gitconfig"):           "[user]\n\tname = Test\n[credential]\n\thelper = /opt/homebrew/bin/gh auth git-credential\n",
+		filepath.Join(hostHome, "git", "config-ignore"):        "*.tmp\n",
+		filepath.Join(hostHome, "sandbox-secrets.env"):         "CLAUDE_CODE_OAUTH_TOKEN=test-oauth-token\nexport GITHUB_TOKEN=test-github-token\n",
+	}
+	for path, body := range files {
+		if err := os.WriteFile(path, []byte(body), 0o400); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	staleCodexConfig := "[marketplaces.agentmemory]\nsource = \"https://example.invalid/agentmemory.git\"\n[mcp_servers.agentmemory]\ncommand = \"npx\"\n"
+	if err := os.WriteFile(filepath.Join(containerHome, ".codex", "config.toml"), []byte(staleCodexConfig), 0o600); err != nil {
+		t.Fatalf("write stale container codex config: %v", err)
+	}
+
+	cmd := exec.Command("bash", "./sandbox-sync-home.sh")
+	cmd.Env = append(os.Environ(),
+		"HOME="+containerHome,
+		"SANDBOX_HOST_HOME_ROOT="+hostHome,
+		"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandbox-sync-home failed: %v\n%s", err, output)
+	}
+
+	targets := map[string]string{
+		filepath.Join(containerHome, ".codex", "auth.json"):          files[filepath.Join(hostHome, "codex", "auth.json")],
+		filepath.Join(containerHome, ".claude", ".credentials.json"): files[filepath.Join(hostHome, "claude", ".credentials.json")],
+		filepath.Join(containerHome, ".claude", "settings.json"):     files[filepath.Join(hostHome, "claude", "settings.json")],
+		filepath.Join(containerHome, ".zshrc"):                       files[filepath.Join(hostHome, "shell", ".zshrc")],
+		filepath.Join(containerHome, ".config", "git", "ignore"):     files[filepath.Join(hostHome, "git", "config-ignore")],
+	}
+	for path, want := range targets {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read copied file %s: %v", path, err)
+		}
+		if string(data) != want {
+			t.Fatalf("copied file %s = %q, want %q", path, data, want)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat copied file %s: %v", path, err)
+		}
+		if info.Mode().Perm()&0o200 == 0 {
+			t.Fatalf("copied file %s is not writable: %v", path, info.Mode().Perm())
+		}
+		if info.Mode().Perm()&0o077 != 0 {
+			t.Fatalf("copied file %s grants group/other permissions: %v", path, info.Mode().Perm())
+		}
+	}
+	codexConfig := filepath.Join(containerHome, ".codex", "config.toml")
+	data, err := os.ReadFile(codexConfig)
+	if err != nil {
+		t.Fatalf("read codex config: %v", err)
+	}
+	for _, want := range []string{`# Generated by sandbox-sync-home.sh.`, `[projects."/workspace/agent-runner"]`, `trust_level = "trusted"`} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("codex config missing %q:\n%s", want, data)
+		}
+	}
+	for _, forbidden := range []string{"host-model", "mcp_servers", "agentmemory", "marketplaces", "plugins"} {
+		if strings.Contains(string(data), forbidden) {
+			t.Fatalf("codex config should not include host/stale config marker %q:\n%s", forbidden, data)
+		}
+	}
+	sandboxEnv := filepath.Join(containerHome, ".sandbox-env")
+	data, err = os.ReadFile(sandboxEnv)
+	if err != nil {
+		t.Fatalf("read sandbox env: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{"export CLAUDE_CODE_OAUTH_TOKEN=", "export GITHUB_TOKEN="} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sandbox env missing %q:\n%s", want, text)
+		}
+	}
+	info, err := os.Stat(sandboxEnv)
+	if err != nil {
+		t.Fatalf("stat sandbox env: %v", err)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		t.Fatalf("sandbox env grants group/other permissions: %v", info.Mode().Perm())
+	}
+	zshenv, err := os.ReadFile(filepath.Join(containerHome, ".zshenv"))
+	if err != nil {
+		t.Fatalf("read zshenv: %v", err)
+	}
+	if !strings.Contains(string(zshenv), ".sandbox-env") {
+		t.Fatalf("zshenv should source sandbox env:\n%s", zshenv)
+	}
+	knownHosts, err := os.ReadFile(filepath.Join(containerHome, ".ssh", "known_hosts"))
+	if err != nil {
+		t.Fatalf("read known_hosts: %v", err)
+	}
+	for _, want := range []string{"github.com ssh-ed25519", "github.com ecdsa-sha2-nistp256", "github.com ssh-rsa"} {
+		if !strings.Contains(string(knownHosts), want) {
+			t.Fatalf("known_hosts missing %q:\n%s", want, knownHosts)
+		}
+	}
+	gitConfig, err := os.ReadFile(filepath.Join(containerHome, ".gitconfig"))
+	if err != nil {
+		t.Fatalf("read git config after sync: %v", err)
+	}
+	for _, want := range []string{
+		"[user]\n\tname = Test",
+		`[url "https://github.com/"]`,
+		"insteadOf = git@github.com:",
+		"insteadOf = ssh://git@github.com/",
+		`[credential "https://github.com"]`,
+		"helper = !",
+		"github-credential-helper",
+	} {
+		if !strings.Contains(string(gitConfig), want) {
+			t.Fatalf("git config missing GitHub HTTPS rewrite %q:\n%s", want, gitConfig)
+		}
+	}
+	if strings.Contains(string(gitConfig), "/opt/homebrew/bin/gh") {
+		t.Fatalf("git config kept host-only credential helper:\n%s", gitConfig)
+	}
+	githubCredentialHelper := filepath.Join(dir, "workspace", "bin", "github-credential-helper")
+	helperCmd := exec.Command(githubCredentialHelper, "get")
+	helperCmd.Env = append(os.Environ(), "HOME="+containerHome)
+	helperCmd.Stdin = strings.NewReader("protocol=https\nhost=github.com\n\n")
+	helperOutput, err := helperCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("github credential helper failed: %v\n%s", err, helperOutput)
+	}
+	if got := string(helperOutput); !strings.Contains(got, "username=x-access-token") || !strings.Contains(got, "password=test-github-token") {
+		t.Fatalf("github credential helper did not return sandbox token credentials:\n%s", helperOutput)
+	}
+	fakeAgentCLI := filepath.Join(dir, "fake-agent-cli")
+	if err := os.WriteFile(fakeAgentCLI, []byte("#!/usr/bin/env bash\nprintf 'arg=%s\\n' \"$@\"\nprintf 'github=%s\\n' \"${GITHUB_TOKEN:-}\"\n"), 0o755); err != nil {
+		t.Fatalf("write fake agent cli: %v", err)
+	}
+	wrapperCases := []struct {
+		name    string
+		path    string
+		envName string
+		flag    string
+		args    []string
+		ordered string
+	}{
+		{
+			name:    "codex",
+			path:    filepath.Join(dir, "workspace", "bin", "codex"),
+			envName: "SANDBOX_REAL_CODEX",
+			flag:    "--dangerously-bypass-approvals-and-sandbox",
+			args:    []string{"exec", "judge this"},
+			ordered: "arg=exec\narg=--dangerously-bypass-approvals-and-sandbox\narg=judge this\n",
+		},
+		{
+			name:    "claude",
+			path:    filepath.Join(dir, "workspace", "bin", "claude"),
+			envName: "SANDBOX_REAL_CLAUDE",
+			flag:    "--dangerously-skip-permissions",
+			args:    []string{"plugin", "list"},
+		},
+	}
+	for _, tc := range wrapperCases {
+		wrapperCmd := exec.Command(tc.path, tc.args...)
+		wrapperCmd.Env = append(os.Environ(),
+			"HOME="+containerHome,
+			tc.envName+"="+fakeAgentCLI,
+		)
+		wrapperOutput, err := wrapperCmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s yolo wrapper failed: %v\n%s", tc.name, err, wrapperOutput)
+		}
+		got := string(wrapperOutput)
+		for _, arg := range tc.args {
+			if !strings.Contains(got, "arg="+arg) {
+				t.Fatalf("%s yolo wrapper missing argument %q:\n%s", tc.name, arg, wrapperOutput)
+			}
+		}
+		for _, want := range []string{"arg=" + tc.flag, "github=test-github-token"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%s yolo wrapper missing %q:\n%s", tc.name, want, wrapperOutput)
+			}
+		}
+		if tc.ordered != "" && !strings.Contains(got, tc.ordered) {
+			t.Fatalf("%s yolo wrapper arguments are in the wrong order:\n%s", tc.name, wrapperOutput)
+		}
+	}
+
+	localConfig := "model = \"local-test\"\n[mcp_servers.node_repl]\ncommand = \"node_repl\"\n\n[projects.\"/workspace/agent-runner\"]\ntrust_level = \"trusted\"\nlocal = true\n"
+	if err := os.WriteFile(codexConfig, []byte(localConfig), 0o600); err != nil {
+		t.Fatalf("write local codex config: %v", err)
+	}
+	cmd = exec.Command("bash", "./sandbox-sync-home.sh")
+	cmd.Env = append(os.Environ(),
+		"HOME="+containerHome,
+		"SANDBOX_HOST_HOME_ROOT="+hostHome,
+		"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
+	)
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandbox-sync-home second run failed: %v\n%s", err, output)
+	}
+	data, err = os.ReadFile(codexConfig)
+	if err != nil {
+		t.Fatalf("read local codex config after second sync: %v", err)
+	}
+	for _, forbidden := range []string{"local-test", "mcp_servers", "local = true"} {
+		if strings.Contains(string(data), forbidden) {
+			t.Fatalf("second sync kept local/stale Codex config marker %q:\n%s", forbidden, data)
+		}
+	}
+	for _, want := range []string{`# Generated by sandbox-sync-home.sh.`, `[projects."/workspace/agent-runner"]`, `trust_level = "trusted"`} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("second sync codex config missing %q:\n%s", want, data)
+		}
+	}
+	gitConfig, err = os.ReadFile(filepath.Join(containerHome, ".gitconfig"))
+	if err != nil {
+		t.Fatalf("read git config after second sync: %v", err)
+	}
+	for _, value := range []string{"insteadOf = git@github.com:", "insteadOf = ssh://git@github.com/"} {
+		if count := strings.Count(string(gitConfig), value); count != 1 {
+			t.Fatalf("second sync wrote %q %d times, want once:\n%s", value, count, gitConfig)
+		}
+	}
+	helper, err := os.ReadFile(filepath.Join(dir, "workspace", "bin", "claude-headless"))
+	if err != nil {
+		t.Fatalf("read claude-headless helper: %v", err)
+	}
+	if !strings.Contains(string(helper), "exec claude -p") || !strings.Contains(string(helper), ".sandbox-env") {
+		t.Fatalf("claude-headless helper should source sandbox env and run claude -p:\n%s", helper)
+	}
+}
+
+func TestSandboxSyncHomeRecoversStaleLock(t *testing.T) {
+	dir := t.TempDir()
+	hostHome := filepath.Join(dir, "host-home")
+	containerHome := filepath.Join(dir, "container-home")
+	lockDir := filepath.Join(dir, "stale.lock.d")
+	for _, path := range []string{
+		filepath.Join(hostHome, "codex"),
+		filepath.Join(hostHome, "claude"),
+		containerHome,
+		lockDir,
+	} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(hostHome, "sandbox-secrets.env"), []byte("GITHUB_TOKEN=test\n"), 0o600); err != nil {
+		t.Fatalf("write sandbox secrets: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(lockDir, "pid"), []byte("999999\n"), 0o600); err != nil {
+		t.Fatalf("write stale lock pid: %v", err)
+	}
+
+	cmd := exec.Command("bash", "./sandbox-sync-home.sh")
+	cmd.Env = append(os.Environ(),
+		"HOME="+containerHome,
+		"SANDBOX_HOST_HOME_ROOT="+hostHome,
+		"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
+		"SANDBOX_SYNC_HOME_LOCK="+lockDir,
+		"SANDBOX_SYNC_HOME_LOCK_TIMEOUT=2",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandbox-sync-home should recover stale lock: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(lockDir); !os.IsNotExist(err) {
+		t.Fatalf("lock dir should be removed after sync, stat err=%v", err)
+	}
+}
+
+func TestSandboxSyncHomeRecoversOwnerlessLock(t *testing.T) {
+	dir := t.TempDir()
+	hostHome := filepath.Join(dir, "host-home")
+	containerHome := filepath.Join(dir, "container-home")
+	lockDir := filepath.Join(dir, "ownerless.lock.d")
+	for _, path := range []string{
+		filepath.Join(hostHome, "codex"),
+		filepath.Join(hostHome, "claude"),
+		containerHome,
+		lockDir,
+	} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(hostHome, "sandbox-secrets.env"), []byte("GITHUB_TOKEN=test\n"), 0o600); err != nil {
+		t.Fatalf("write sandbox secrets: %v", err)
+	}
+
+	cmd := exec.Command("bash", "./sandbox-sync-home.sh")
+	cmd.Env = append(os.Environ(),
+		"HOME="+containerHome,
+		"SANDBOX_HOST_HOME_ROOT="+hostHome,
+		"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
+		"SANDBOX_SYNC_HOME_LOCK="+lockDir,
+		"SANDBOX_SYNC_HOME_LOCK_TIMEOUT=1",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandbox-sync-home should recover ownerless lock: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(lockDir); !os.IsNotExist(err) {
+		t.Fatalf("lock should be removed after sync, stat err=%v", err)
+	}
+}
+
+func TestSandboxSyncHomeSerializesConcurrentStaleLockReclaimers(t *testing.T) {
+	dir := t.TempDir()
+	hostHome := filepath.Join(dir, "host-home")
+	containerHome := filepath.Join(dir, "container-home")
+	workspaceBin := filepath.Join(dir, "workspace", "bin")
+	lockPath := filepath.Join(dir, "stale.lock")
+	for _, path := range []string{
+		filepath.Join(hostHome, "shell"),
+		containerHome,
+		workspaceBin,
+	} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(hostHome, "shell", ".zshrc"), []byte("# shared mutation\n"), 0o600); err != nil {
+		t.Fatalf("write host zshrc: %v", err)
+	}
+	if err := os.Symlink("999999", lockPath); err != nil {
+		t.Fatalf("create stale lock: %v", err)
+	}
+
+	realRM, err := exec.LookPath("rm")
+	if err != nil {
+		t.Fatalf("find rm: %v", err)
+	}
+	realCP, err := exec.LookPath("cp")
+	if err != nil {
+		t.Fatalf("find cp: %v", err)
+	}
+	aBin := filepath.Join(dir, "a-bin")
+	bBin := filepath.Join(dir, "b-bin")
+	for _, path := range []string{aBin, bBin} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatalf("mkdir wrapper dir: %v", err)
+		}
+	}
+	aPaused := filepath.Join(dir, "a-paused")
+	aRelease := filepath.Join(dir, "a-release")
+	bEntered := filepath.Join(dir, "b-entered")
+	bRelease := filepath.Join(dir, "b-release")
+	if err := os.WriteFile(filepath.Join(aBin, "rm"), []byte(`#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${*: -1}" == "$SANDBOX_SYNC_HOME_LOCK" && ! -e "$A_PAUSED" ]]; then
+  : > "$A_PAUSED"
+  while [[ ! -e "$A_RELEASE" ]]; do sleep 0.01; done
+fi
+exec "$REAL_RM" "$@"
+`), 0o755); err != nil {
+		t.Fatalf("write rm wrapper: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bBin, "cp"), []byte(`#!/usr/bin/env bash
+set -euo pipefail
+: > "$B_ENTERED"
+while [[ ! -e "$B_RELEASE" ]]; do sleep 0.01; done
+exec "$REAL_CP" "$@"
+`), 0o755); err != nil {
+		t.Fatalf("write cp wrapper: %v", err)
+	}
+
+	baseEnv := append(os.Environ(),
+		"HOME="+containerHome,
+		"SANDBOX_HOST_HOME_ROOT="+hostHome,
+		"SANDBOX_WORKSPACE_BIN="+workspaceBin,
+		"SANDBOX_SYNC_HOME_LOCK="+lockPath,
+		"SANDBOX_SYNC_HOME_LOCK_TIMEOUT=3",
+	)
+	aCmd := exec.Command("bash", "./sandbox-sync-home.sh")
+	aEnv := append([]string(nil), baseEnv...)
+	aEnv = append(aEnv,
+		"PATH="+aBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"A_PAUSED="+aPaused,
+		"A_RELEASE="+aRelease,
+		"REAL_RM="+realRM,
+	)
+	aCmd.Env = aEnv
+	if err := aCmd.Start(); err != nil {
+		t.Fatalf("start first reclaimer: %v", err)
+	}
+	waitForPath(t, aPaused, time.Second)
+
+	bCmd := exec.Command("bash", "./sandbox-sync-home.sh")
+	bEnv := append([]string(nil), baseEnv...)
+	bEnv = append(bEnv,
+		"PATH="+bBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"B_ENTERED="+bEntered,
+		"B_RELEASE="+bRelease,
+		"REAL_CP="+realCP,
+	)
+	bCmd.Env = bEnv
+	if err := bCmd.Start(); err != nil {
+		_ = aCmd.Process.Kill()
+		t.Fatalf("start second reclaimer: %v", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	_, enteredErr := os.Stat(bEntered)
+	for _, path := range []string{aRelease, bRelease} {
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatalf("release blocked command: %v", err)
+		}
+	}
+	for name, cmd := range map[string]*exec.Cmd{"first": aCmd, "second": bCmd} {
+		if err := waitForCommand(cmd, 5*time.Second); err != nil {
+			t.Fatalf("%s reclaimer: %v", name, err)
+		}
+	}
+	if enteredErr == nil {
+		t.Fatal("second reclaimer entered the protected sync while the first still owned stale-lock reclamation")
+	}
+	if !os.IsNotExist(enteredErr) {
+		t.Fatalf("stat second reclaimer marker: %v", enteredErr)
+	}
+}
+
+func TestSandboxSyncHomeDoesNotReclaimWhenFlockFails(t *testing.T) {
+	dir := t.TempDir()
+	hostHome := filepath.Join(dir, "host-home")
+	containerHome := filepath.Join(dir, "container-home")
+	lockPath := filepath.Join(dir, "stale.lock")
+	fakeBin := filepath.Join(dir, "fake-bin")
+	for _, path := range []string{hostHome, containerHome, fakeBin} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	if err := os.Symlink("999999", lockPath); err != nil {
+		t.Fatalf("create stale lock: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(fakeBin, "flock"), []byte("#!/usr/bin/env bash\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("write flock wrapper: %v", err)
+	}
+
+	cmd := exec.Command("bash", "./sandbox-sync-home.sh")
+	cmd.Env = append(os.Environ(),
+		"HOME="+containerHome,
+		"SANDBOX_HOST_HOME_ROOT="+hostHome,
+		"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
+		"SANDBOX_SYNC_HOME_LOCK="+lockPath,
+		"SANDBOX_SYNC_HOME_LOCK_TIMEOUT=1",
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
+	if output, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(output), "Timed out waiting") {
+		t.Fatalf("sync with failed flock should time out, err=%v\n%s", err, output)
+	}
+	if target, err := os.Readlink(lockPath); err != nil || target != "999999" {
+		t.Fatalf("failed flock changed stale lock: target=%q err=%v", target, err)
+	}
+}
+
+func TestSandboxSyncHomeDoesNotDeleteReplacedOwnerlessLock(t *testing.T) {
+	dir := t.TempDir()
+	hostHome := filepath.Join(dir, "host-home")
+	containerHome := filepath.Join(dir, "container-home")
+	lockPath := filepath.Join(dir, "ownerless.lock.d")
+	fakeBin := filepath.Join(dir, "fake-bin")
+	for _, path := range []string{hostHome, containerHome, lockPath, fakeBin} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	realRM, err := exec.LookPath("rm")
+	if err != nil {
+		t.Fatalf("find rm: %v", err)
+	}
+	realMkdir, err := exec.LookPath("mkdir")
+	if err != nil {
+		t.Fatalf("find mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(fakeBin, "flock"), []byte(`#!/usr/bin/env bash
+set -euo pipefail
+"$REAL_RM" -rf "$SANDBOX_SYNC_HOME_LOCK"
+"$REAL_MKDIR" "$SANDBOX_SYNC_HOME_LOCK"
+`), 0o755); err != nil {
+		t.Fatalf("write flock replacement wrapper: %v", err)
+	}
+
+	cmd := exec.Command("bash", "./sandbox-sync-home.sh")
+	cmd.Env = append(os.Environ(),
+		"HOME="+containerHome,
+		"SANDBOX_HOST_HOME_ROOT="+hostHome,
+		"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
+		"SANDBOX_SYNC_HOME_LOCK="+lockPath,
+		"SANDBOX_SYNC_HOME_LOCK_TIMEOUT=2",
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"REAL_RM="+realRM,
+		"REAL_MKDIR="+realMkdir,
+	)
+	if output, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(output), "Timed out waiting") {
+		t.Fatalf("sync that observes a replacement lock should time out, err=%v\n%s", err, output)
+	}
+	if info, err := os.Stat(lockPath); err != nil || !info.IsDir() {
+		t.Fatalf("replacement ownerless lock was deleted: info=%v err=%v", info, err)
+	}
+}
+
+func waitForPath(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", path)
+}
+
+func waitForCommand(cmd *exec.Cmd, timeout time.Duration) error {
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(timeout):
+		_ = cmd.Process.Kill()
+		return <-done
+	}
+}
+
+func TestEvalDevcontainerUsesSharedDockerfile(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), ".devcontainer", "eval", "devcontainer.json"))
+	if err != nil {
+		t.Fatalf("read eval devcontainer: %v", err)
+	}
+	var doc struct {
+		Build struct {
+			Dockerfile string `json:"dockerfile"`
+			Context    string `json:"context"`
+		} `json:"build"`
+		RemoteUser        string            `json:"remoteUser"`
+		WorkspaceFolder   string            `json:"workspaceFolder"`
+		Mounts            []string          `json:"mounts"`
+		ContainerEnv      map[string]string `json:"containerEnv"`
+		PostCreateCommand string            `json:"postCreateCommand"`
+		Customizations    struct {
+			VSCode struct {
+				Settings map[string]any `json:"settings"`
+			} `json:"vscode"`
+		} `json:"customizations"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse devcontainer json: %v", err)
+	}
+	if doc.Build.Dockerfile != "../../docker/dev/Dockerfile" {
+		t.Fatalf("dockerfile = %q, want ../../docker/dev/Dockerfile", doc.Build.Dockerfile)
+	}
+	if doc.Build.Context != "../.." {
+		t.Fatalf("context = %q, want ../..", doc.Build.Context)
+	}
+	if doc.RemoteUser == "" || doc.RemoteUser == "root" {
+		t.Fatalf("remoteUser = %q, want a non-root user", doc.RemoteUser)
+	}
+	if doc.WorkspaceFolder != "/workspace/agent-runner" {
+		t.Fatalf("workspaceFolder = %q, want /workspace/agent-runner", doc.WorkspaceFolder)
+	}
+	for _, want := range []string{
+		"target=/workspace/agent-runner",
+		"target=/workspace/home,type=volume",
+		"target=/artifacts",
+	} {
+		if !sliceContainsSubstring(doc.Mounts, want) {
+			t.Fatalf("devcontainer mounts missing %q: %#v", want, doc.Mounts)
+		}
+	}
+	for _, forbidden := range []string{
+		"target=/host-home/codex/auth.json",
+		"target=/host-home/codex/config.toml",
+		"target=/host-home/claude/.credentials.json",
+		"target=/host-home/claude/settings.json",
+		"target=/host-home/claude/settings.local.json",
+		"target=/host-home/shell/.zshrc",
+		"target=/host-home/shell/.zprofile",
+		"target=/host-home/git/.gitconfig",
+		"target=/host-home/git/.gitignore",
+		"target=/host-home/git/config-ignore",
+		"target=/host-home/sandbox-secrets.env",
+	} {
+		if sliceContainsSubstring(doc.Mounts, forbidden) {
+			t.Fatalf("devcontainer should not mount host config by default %q: %#v", forbidden, doc.Mounts)
+		}
+	}
+	if got := doc.ContainerEnv["SHELL"]; got != "/usr/bin/zsh" {
+		t.Fatalf("containerEnv SHELL = %q, want /usr/bin/zsh", got)
+	}
+	if got := doc.Customizations.VSCode.Settings["terminal.integrated.defaultProfile.linux"]; got != "zsh" {
+		t.Fatalf("default terminal profile = %#v, want zsh", got)
+	}
+	if !strings.Contains(doc.PostCreateCommand, "scripts/sandbox-sync-home.sh") || !strings.Contains(doc.PostCreateCommand, "make build") {
+		t.Fatalf("postCreateCommand = %q, want home sync and make build", doc.PostCreateCommand)
+	}
+}
+
+func TestDevDockerfileIncludesBrowserAgentTools(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "docker", "dev", "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read dev Dockerfile: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"socat",
+		"chrome-devtools-axi@0.1.26",
+		"chrome-devtools-mcp@1.5.0",
+		"CHROME_DEVTOOLS_AXI_MCP_PATH=/usr/lib/node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js",
+		`CHROME_DEVTOOLS_AXI_CHROME_ARGS="--no-sandbox --disable-setuid-sandbox"`,
+		"/opt/google/chrome/chrome",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("dev Dockerfile should include browser agent tool %q:\n%s", want, data)
+		}
+	}
+}
+
+func TestDevcontainerShellDefaultsToZsh(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "devcontainer-shell.sh"))
+	if err != nil {
+		t.Fatalf("read devcontainer-shell.sh: %v", err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "exec zsh -l") {
+		t.Fatalf("devcontainer-shell.sh should default to a zsh login shell:\n%s", text)
+	}
+	if !strings.Contains(text, "set -- zsh -lc") {
+		t.Fatalf("devcontainer-shell.sh should run commands through zsh:\n%s", text)
+	}
+	if strings.Count(text, "scripts/sandbox-sync-home.sh") < 2 {
+		t.Fatalf("devcontainer-shell.sh should sync home before interactive and one-shot commands:\n%s", text)
+	}
+	if !strings.Contains(text, `source \"\$HOME/.sandbox-env\"`) {
+		t.Fatalf("devcontainer-shell.sh should source sandbox env before one-shot commands:\n%s", text)
+	}
+	if !strings.Contains(text, ".sandbox-secrets.env") || !strings.Contains(text, "chmod 600") {
+		t.Fatalf("devcontainer-shell.sh should create a private sandbox secrets file when missing:\n%s", text)
+	}
+	for _, want := range []string{
+		"--with-host-config",
+		"with-host-auth/devcontainer.json",
+		"agent-runner-dev-home-host-auth",
+		"path.relative(outConfigDir",
+		"optionalHostMounts.filter(([source]) => fs.existsSync(source))",
+		"requiredHostMounts",
+		"target=/host-home/codex/auth.json",
+		"target=/host-home/claude/.credentials.json",
+		"target=/host-home/sandbox-secrets.env",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("devcontainer-shell.sh missing opt-in host config support %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "target=/host-home/codex/config.toml") {
+		t.Fatalf("devcontainer-shell.sh should not mount host Codex config:\n%s", text)
+	}
+}
+
+func TestDevcontainerForwardDryRunBridgesHostToContainerLoopback(t *testing.T) {
+	cmd := exec.Command("bash", "./devcontainer-forward.sh",
+		"--dry-run",
+		"--container-id", "container123",
+		"--container-ip", "172.17.0.4",
+		"5174:5173",
+		"/agent-tool-loop",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("devcontainer-forward dry run failed: %v\n%s", err, output)
+	}
+	text := string(output)
+	for _, want := range []string{
+		"docker exec",
+		"container123",
+		"TCP-LISTEN:15174",
+		"TCP:127.0.0.1:5173",
+		"docker run",
+		"--name agent-runner-devcontainer-forward-5174",
+		"-p 127.0.0.1:5174:5174",
+		"TCP:172.17.0.4:15174",
+		"curl",
+		"http://127.0.0.1:5174/agent-tool-loop",
+		"http://localhost:5174/agent-tool-loop",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("dry-run output missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestDevcontainerForwardSelectsOneContainerIP(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "devcontainer-forward.sh"))
+	if err != nil {
+		t.Fatalf("read devcontainer-forward.sh: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"{{println}}",
+		"head -n 1",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("devcontainer-forward.sh should select one container IP using %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}") {
+		t.Fatalf("devcontainer-forward.sh should not concatenate all Docker network IPs:\n%s", text)
+	}
+}
+
+func TestSandboxSyncHomeSerializesSharedHomeMutation(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "sandbox-sync-home.sh"))
+	if err != nil {
+		t.Fatalf("read sandbox-sync-home.sh: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"SANDBOX_SYNC_HOME_LOCK",
+		"while ! acquire_sync_lock",
+		"ln -s \"$$\"",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sandbox-sync-home.sh should serialize shared home mutation with %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestLocalEvalSecretsAndArtifactsAreGitignored(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), ".gitignore"))
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{".sandbox-secrets.env", ".eval-secrets.env", "artifacts/"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf(".gitignore missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	root, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+	return root
+}
+
+func sliceContainsSubstring(items []string, want string) bool {
+	for _, item := range items {
+		if strings.Contains(item, want) {
+			return true
+		}
+	}
+	return false
+}

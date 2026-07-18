@@ -51,15 +51,14 @@ Fresh sessions need an agent profile. Add `agent: planner`, `agent: implementor`
 
 ## Interactive Step Will Not Advance
 
-The workflow advances when any continuation trigger is detected:
+The workflow advances when the current interactive step sends a completion event:
 
-| Trigger | Action |
+| Method | Action |
 | --- | --- |
-| `/next` | Type `/next` and press Enter. |
-| `Ctrl-]` | Press the keyboard continuation shortcut. |
-| Injected continuation marker | Ask the agent to continue, or write the prompt so it completes the step using its injected continuation-marker instruction. |
+| Ask the agent | Tell the agent to continue to the next workflow step. It should run the completion client from its injected instructions. |
+| Native completion command | Type `/agent-runner:next` in Claude, Copilot, or Cursor. In Codex, invoke `$agent-runner-next`. |
 
-If the CLI exits without one of these triggers, the step is aborted and the workflow can be resumed.
+There is no Agent Runner continuation overlay or global keyboard shortcut. If the agent does not respond, quit the CLI and resume the run. Exiting before completion is accepted records the step as aborted.
 
 ## Debug A Run
 

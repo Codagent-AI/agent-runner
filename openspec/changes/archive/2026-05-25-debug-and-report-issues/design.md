@@ -368,7 +368,7 @@ Embedded via the existing `workflows/<ns>/bundled/...` mechanism (see `internal/
 1. **Per-session resume marker file (`<sessionDir>/resume-target`) rather than PTY sentinel or global location.**
    - Rationale: decoupled from PTY layer; works for headless and interactive agents; concurrency-safe by construction (each workflow run has its own session dir); inspectable by users.
    - Alternatives considered:
-     - A second PTY sentinel mirroring `AGENT_RUNNER_CONTINUE_`. Rejected because it entangles two unrelated concepts in one byte stream and only works for interactive steps.
+     - A second PTY sentinel mirroring the historical continuation marker. Rejected because it entangles two unrelated concepts in one byte stream and only works for interactive steps.
      - Global marker at `~/.agent-runner/resume-target`. Rejected because two debug workflows in parallel would clobber each other and a stale marker from a crashed earlier session could trigger an unwanted resume.
 
 2. **Single `debug` subcommand with internal flag dispatch (not subcommand restructuring; not three top-level flags).**

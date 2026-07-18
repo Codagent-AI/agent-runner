@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestRegistry(t *testing.T) {
@@ -1357,6 +1360,44 @@ func TestCursorAdapter(t *testing.T) {
 		assertArgs(t, expected, args)
 	})
 
+	t.Run("autonomous interactive yolo includes force", func(t *testing.T) {
+		args, err := BuildInvocationArgs(adapter, &BuildArgsInput{
+			Prompt:         "do something",
+			Context:        ContextAutonomousInteractive,
+			PermissionMode: "yolo",
+		})
+		if err != nil {
+			t.Fatalf("BuildInvocationArgs() error = %v", err)
+		}
+		expected := []string{"agent", "--force", "do something"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("autonomous interactive conservative builds args without force", func(t *testing.T) {
+		args, err := BuildInvocationArgs(adapter, &BuildArgsInput{
+			Prompt:  "do something",
+			Context: ContextAutonomousInteractive,
+		})
+		if err != nil {
+			t.Fatalf("BuildInvocationArgs() error = %v", err)
+		}
+		expected := []string{"agent", "do something"}
+		assertArgs(t, expected, args)
+	})
+
+	t.Run("interactive yolo omits force and keeps supervised prompting", func(t *testing.T) {
+		args, err := BuildInvocationArgs(adapter, &BuildArgsInput{
+			Prompt:         "review code",
+			Context:        ContextInteractive,
+			PermissionMode: "yolo",
+		})
+		if err != nil {
+			t.Fatalf("BuildInvocationArgs() error = %v", err)
+		}
+		expected := []string{"agent", "review code"}
+		assertArgs(t, expected, args)
+	})
+
 	t.Run("discover session ID from stream-json init event", func(t *testing.T) {
 		output := `{"type":"system","subtype":"init","session_id":"chat-abc-123","model":"composer-1.5","cwd":"/tmp","permissionMode":"default"}`
 		id := adapter.DiscoverSessionID(&DiscoverOptions{
@@ -1459,6 +1500,55 @@ func TestCursorAdapter(t *testing.T) {
 		})
 		if id != matchingID {
 			t.Fatalf("expected matching cursor chat %q, got %q", matchingID, id)
+		}
+	})
+
+	t.Run("discover interactive session ID prefers live chat metadata", func(t *testing.T) {
+		fakeHome := t.TempDir()
+		t.Setenv("HOME", fakeHome)
+
+		spawnTime := time.Now().Add(-10 * time.Second)
+		matchingID := "77777777-7777-7777-7777-777777777777"
+		workdir := t.TempDir()
+		metaDir := filepath.Join(fakeHome, ".cursor", "chats", "workspace-meta", matchingID)
+		if err := os.MkdirAll(metaDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		meta := fmt.Sprintf(`{"schemaVersion":1,"createdAtMs":%d,"cwd":%q}`, spawnTime.Add(time.Second).UnixMilli(), workdir)
+		if err := os.WriteFile(filepath.Join(metaDir, "meta.json"), []byte(meta), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			SpawnTime: spawnTime,
+			Headless:  false,
+			Workdir:   workdir,
+		})
+		if id != matchingID {
+			t.Fatalf("expected matching cursor metadata chat %q, got %q", matchingID, id)
+		}
+	})
+
+	t.Run("discover interactive session ID reads an active WAL", func(t *testing.T) {
+		fakeHome := t.TempDir()
+		t.Setenv("HOME", fakeHome)
+
+		spawnTime := time.Now().Add(-10 * time.Second)
+		matchingID := "66666666-6666-6666-6666-666666666666"
+		workdir := t.TempDir()
+		writeCursorStoreDB(t, fakeHome, "workspace-wal", matchingID, time.Now().Add(-5*time.Second), "")
+		walPath := filepath.Join(fakeHome, ".cursor", "chats", "workspace-wal", matchingID, "store.db-wal")
+		if err := os.WriteFile(walPath, []byte("Workspace Path: "+workdir+"\n"), 0o600); err != nil {
+			t.Fatalf("write cursor store.db-wal: %v", err)
+		}
+
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			SpawnTime: spawnTime,
+			Headless:  false,
+			Workdir:   workdir,
+		})
+		if id != matchingID {
+			t.Fatalf("expected matching cursor WAL chat %q, got %q", matchingID, id)
 		}
 	})
 
@@ -1698,6 +1788,554 @@ type errorWriter struct {
 
 func (w errorWriter) Write([]byte) (int, error) {
 	return 0, w.err
+}
+
+func TestCursorPrivateConfig(t *testing.T) {
+	command := CompletionCommand{Executable: "/opt/agent-runner", Args: []string{"step", "complete"}}
+	wantRule := "Shell(/opt/agent-runner:step complete)"
+
+	t.Run("appends narrow rule and preserves user config", func(t *testing.T) {
+		source, cache := t.TempDir(), t.TempDir()
+		userConfig := `{
+  "version": 1,
+  "editor": {"vimMode": true},
+  "permissions": {"allow": ["Shell(ls)"], "deny": ["Shell(rm)"]}
+}`
+		if err := os.WriteFile(filepath.Join(source, "cli-config.json"), []byte(userConfig), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		private, err := prepareCursorPrivateConfigAt(source, cache, command)
+		if err != nil {
+			t.Fatalf("prepareCursorPrivateConfigAt: %v", err)
+		}
+		dir := private.Dir
+		var config struct {
+			Version int `json:"version"`
+			Editor  struct {
+				VimMode bool `json:"vimMode"`
+			} `json:"editor"`
+			Permissions struct {
+				Allow []string `json:"allow"`
+				Deny  []string `json:"deny"`
+			} `json:"permissions"`
+		}
+		data, err := os.ReadFile(filepath.Join(dir, "cli-config.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(data, &config); err != nil {
+			t.Fatalf("private config is not valid JSON: %v\n%s", err, data)
+		}
+		if diff := cmp.Diff([]string{"Shell(ls)", wantRule}, config.Permissions.Allow); diff != "" {
+			t.Fatalf("allow rules mismatch (-want +got):\n%s", diff)
+		}
+		if diff := cmp.Diff([]string{"Shell(rm)"}, config.Permissions.Deny); diff != "" {
+			t.Fatalf("deny rules mismatch (-want +got):\n%s", diff)
+		}
+		if config.Version != 1 || !config.Editor.VimMode {
+			t.Fatalf("user config fields not preserved: %s", data)
+		}
+
+		target, err := os.Readlink(filepath.Join(dir, "chats"))
+		if err != nil {
+			t.Fatalf("chats is not a symlink: %v", err)
+		}
+		if target != filepath.Join(source, "chats") {
+			t.Fatalf("chats symlink target = %q, want %q", target, filepath.Join(source, "chats"))
+		}
+		if info, err := os.Stat(filepath.Join(source, "chats")); err != nil || !info.IsDir() {
+			t.Fatalf("source chats dir was not created: %v", err)
+		}
+
+		after, err := os.ReadFile(filepath.Join(source, "cli-config.json"))
+		if err != nil || string(after) != userConfig {
+			t.Fatalf("user config was modified: %v\n%s", err, after)
+		}
+	})
+
+	t.Run("missing user config yields minimal private config", func(t *testing.T) {
+		source, cache := t.TempDir(), t.TempDir()
+		private, err := prepareCursorPrivateConfigAt(source, cache, command)
+		if err != nil {
+			t.Fatalf("prepareCursorPrivateConfigAt: %v", err)
+		}
+		data, err := os.ReadFile(filepath.Join(private.Dir, "cli-config.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var config struct {
+			Version     int `json:"version"`
+			Permissions struct {
+				Allow []string `json:"allow"`
+			} `json:"permissions"`
+		}
+		if err := json.Unmarshal(data, &config); err != nil {
+			t.Fatalf("private config is not valid JSON: %v\n%s", err, data)
+		}
+		if config.Version != 1 {
+			t.Fatalf("version = %d, want 1\n%s", config.Version, data)
+		}
+		if diff := cmp.Diff([]string{wantRule}, config.Permissions.Allow); diff != "" {
+			t.Fatalf("allow rules mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("existing rule is not duplicated and calls are idempotent", func(t *testing.T) {
+		source, cache := t.TempDir(), t.TempDir()
+		userConfig := `{"version": 1, "permissions": {"allow": ["` + wantRule + `"], "deny": []}}`
+		if err := os.WriteFile(filepath.Join(source, "cli-config.json"), []byte(userConfig), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		first, err := prepareCursorPrivateConfigAt(source, cache, command)
+		if err != nil {
+			t.Fatalf("first prepareCursorPrivateConfigAt: %v", err)
+		}
+		second, err := prepareCursorPrivateConfigAt(source, cache, command)
+		if err != nil {
+			t.Fatalf("second prepareCursorPrivateConfigAt: %v", err)
+		}
+		if first.Dir != second.Dir {
+			t.Fatalf("idempotent calls produced different dirs: %q vs %q", first.Dir, second.Dir)
+		}
+		data, err := os.ReadFile(filepath.Join(first.Dir, "cli-config.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Count(string(data), wantRule); got != 1 {
+			t.Fatalf("rule appears %d times, want 1:\n%s", got, data)
+		}
+	})
+
+	t.Run("relative CURSOR_CONFIG_DIR resolves to an absolute source", func(t *testing.T) {
+		t.Setenv("CURSOR_CONFIG_DIR", "relative/cursor-config")
+		dir, err := cursorConfigSourceDir()
+		if err != nil {
+			t.Fatalf("cursorConfigSourceDir: %v", err)
+		}
+		if !filepath.IsAbs(dir) {
+			t.Fatalf("cursorConfigSourceDir() = %q, want absolute path", dir)
+		}
+	})
+
+	t.Run("xdg config home is used on linux when it holds a cli config", func(t *testing.T) {
+		xdg := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(xdg, "cursor"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(xdg, "cursor", "cli-config.json"), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("CURSOR_CONFIG_DIR", "")
+		t.Setenv("XDG_CONFIG_HOME", xdg)
+		dir, err := cursorConfigSourceDirFor("linux")
+		if err != nil {
+			t.Fatalf("cursorConfigSourceDirFor: %v", err)
+		}
+		if dir != filepath.Join(xdg, "cursor") {
+			t.Fatalf("cursorConfigSourceDirFor(linux) = %q, want %q", dir, filepath.Join(xdg, "cursor"))
+		}
+	})
+
+	t.Run("xdg config home is ignored on darwin", func(t *testing.T) {
+		xdg := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(xdg, "cursor"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(xdg, "cursor", "cli-config.json"), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("CURSOR_CONFIG_DIR", "")
+		t.Setenv("XDG_CONFIG_HOME", xdg)
+		t.Setenv("HOME", t.TempDir())
+		dir, err := cursorConfigSourceDirFor("darwin")
+		if err != nil {
+			t.Fatalf("cursorConfigSourceDirFor: %v", err)
+		}
+		if strings.HasPrefix(dir, xdg) {
+			t.Fatalf("cursorConfigSourceDirFor(darwin) = %q, must not use XDG_CONFIG_HOME", dir)
+		}
+	})
+
+	t.Run("xdg config home without a cli config falls back to home", func(t *testing.T) {
+		t.Setenv("CURSOR_CONFIG_DIR", "")
+		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+		t.Setenv("HOME", t.TempDir())
+		dir, err := cursorConfigSourceDirFor("linux")
+		if err != nil {
+			t.Fatalf("cursorConfigSourceDirFor: %v", err)
+		}
+		if !strings.HasSuffix(dir, string(filepath.Separator)+".cursor") {
+			t.Fatalf("cursorConfigSourceDirFor(linux) = %q, want home .cursor fallback", dir)
+		}
+	})
+
+	t.Run("CURSOR_CONFIG_DIR overrides xdg config home", func(t *testing.T) {
+		override := t.TempDir()
+		t.Setenv("CURSOR_CONFIG_DIR", override)
+		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+		dir, err := cursorConfigSourceDirFor("linux")
+		if err != nil {
+			t.Fatalf("cursorConfigSourceDirFor: %v", err)
+		}
+		if dir != override {
+			t.Fatalf("cursorConfigSourceDirFor(linux) = %q, want %q", dir, override)
+		}
+	})
+
+	t.Run("identical configs from different sources use different private dirs", func(t *testing.T) {
+		cache := t.TempDir()
+		sourceA, sourceB := t.TempDir(), t.TempDir()
+		privateA, err := prepareCursorPrivateConfigAt(sourceA, cache, command)
+		if err != nil {
+			t.Fatalf("prepareCursorPrivateConfigAt(sourceA): %v", err)
+		}
+		privateB, err := prepareCursorPrivateConfigAt(sourceB, cache, command)
+		if err != nil {
+			t.Fatalf("prepareCursorPrivateConfigAt(sourceB): %v", err)
+		}
+		if privateA.Dir == privateB.Dir {
+			t.Fatalf("different sources share private dir %q; the chats symlink can only point at one store", privateA.Dir)
+		}
+		for private, source := range map[string]string{privateA.Dir: sourceA, privateB.Dir: sourceB} {
+			target, err := os.Readlink(filepath.Join(private, "chats"))
+			if err != nil || target != filepath.Join(source, "chats") {
+				t.Fatalf("chats link in %q = %q (%v), want %q", private, target, err, filepath.Join(source, "chats"))
+			}
+		}
+	})
+
+	t.Run("stale private config dirs are evicted", func(t *testing.T) {
+		source, cache := t.TempDir(), t.TempDir()
+		stale := filepath.Join(cache, "cursor-config", "deadbeef0000")
+		fresh := filepath.Join(cache, "cursor-config", "cafe00001111")
+		for _, dir := range []string{stale, fresh} {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "cli-config.json"), []byte("{}"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		old := time.Now().Add(-cursorConfigCacheTTL - time.Hour)
+		if err := os.Chtimes(filepath.Join(stale, "cli-config.json"), old, old); err != nil {
+			t.Fatal(err)
+		}
+		private, err := prepareCursorPrivateConfigAt(source, cache, command)
+		if err != nil {
+			t.Fatalf("prepareCursorPrivateConfigAt: %v", err)
+		}
+		if _, err := os.Stat(stale); !os.IsNotExist(err) {
+			t.Fatalf("stale private config dir was not evicted: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(fresh, "cli-config.json")); err != nil {
+			t.Fatalf("recently used private config dir must survive eviction: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(private.Dir, "cli-config.json")); err != nil {
+			t.Fatalf("current private config dir must survive eviction: %v", err)
+		}
+	})
+
+	t.Run("metacharacters in the completion command are rejected", func(t *testing.T) {
+		for name, bad := range map[string]CompletionCommand{
+			"glob star in path":     {Executable: "/tmp/runner*", Args: []string{"step", "complete"}},
+			"question mark in path": {Executable: "/tmp/runner?", Args: []string{"step", "complete"}},
+			"colon delimiter":       {Executable: "/tmp/run:ner", Args: []string{"step", "complete"}},
+			"paren delimiter":       {Executable: "/tmp/runner)", Args: []string{"step", "complete"}},
+			"newline in path":       {Executable: "/tmp/run\nner", Args: []string{"step", "complete"}},
+		} {
+			t.Run(name, func(t *testing.T) {
+				source, cache := t.TempDir(), t.TempDir()
+				if _, err := prepareCursorPrivateConfigAt(source, cache, bad); err == nil {
+					t.Fatalf("expected metacharacter rejection for %q", bad.Executable)
+				}
+			})
+		}
+	})
+
+	t.Run("invalid user config fails instead of dropping it", func(t *testing.T) {
+		source, cache := t.TempDir(), t.TempDir()
+		if err := os.WriteFile(filepath.Join(source, "cli-config.json"), []byte("{not json"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := prepareCursorPrivateConfigAt(source, cache, command); err == nil {
+			t.Fatal("expected error for invalid user config")
+		}
+	})
+
+	t.Run("reports deny rules that block the completion command", func(t *testing.T) {
+		cases := map[string]string{
+			"exact rule":                `Shell(/opt/agent-runner:step complete)`,
+			"command base rule":         `Shell(/opt/agent-runner)`,
+			"glob args rule":            `Shell(/opt/agent-runner:step *)`,
+			"glob command rule":         `Shell(/opt/*:step complete)`,
+			"legacy full-command rule":  `Shell(/opt/agent-runner step)`,
+			"legacy glob command rule":  `Shell(/opt/agent-runner step *)`,
+			"legacy exact command rule": `Shell(/opt/agent-runner step complete)`,
+		}
+		for name, deny := range cases {
+			t.Run(name, func(t *testing.T) {
+				source, cache := t.TempDir(), t.TempDir()
+				userConfig := `{"version": 1, "permissions": {"allow": [], "deny": ["` + deny + `"]}}`
+				if err := os.WriteFile(filepath.Join(source, "cli-config.json"), []byte(userConfig), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				config, err := prepareCursorPrivateConfigAt(source, cache, command)
+				if err != nil {
+					t.Fatalf("prepareCursorPrivateConfigAt: %v", err)
+				}
+				if config.DenyRuleBlockingCompletion != deny {
+					t.Fatalf("DenyRuleBlockingCompletion = %q, want %q", config.DenyRuleBlockingCompletion, deny)
+				}
+			})
+		}
+	})
+
+	t.Run("unrelated deny rules do not block completion", func(t *testing.T) {
+		source, cache := t.TempDir(), t.TempDir()
+		userConfig := `{"version": 1, "permissions": {"allow": [], "deny": ["Shell(rm)", "Shell(/opt/agent-runner:workflow *)", "Shell(/opt/agent-runner-audit)", "Shell(/opt/agent-runner steps)", "Read(/etc/**)"]}}`
+		if err := os.WriteFile(filepath.Join(source, "cli-config.json"), []byte(userConfig), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		config, err := prepareCursorPrivateConfigAt(source, cache, command)
+		if err != nil {
+			t.Fatalf("prepareCursorPrivateConfigAt: %v", err)
+		}
+		if config.DenyRuleBlockingCompletion != "" {
+			t.Fatalf("DenyRuleBlockingCompletion = %q, want none", config.DenyRuleBlockingCompletion)
+		}
+	})
+}
+
+func TestCursorSpawnEnv(t *testing.T) {
+	command := &CompletionCommand{Executable: "/opt/agent-runner", Args: []string{"step", "complete"}}
+
+	t.Run("interactive with completion command sets private config dir", func(t *testing.T) {
+		adapter := &CursorAdapter{prepareConfig: func(got CompletionCommand) (cursorPrivateConfig, error) {
+			if got.Executable != command.Executable {
+				t.Fatalf("prepareConfig received %q, want %q", got.Executable, command.Executable)
+			}
+			return cursorPrivateConfig{Dir: "/private/config"}, nil
+		}}
+		env, err := adapter.SpawnEnv(&BuildArgsInput{Context: ContextInteractive, CompletionCommand: command})
+		if err != nil {
+			t.Fatalf("SpawnEnv: %v", err)
+		}
+		if diff := cmp.Diff([]string{"CURSOR_CONFIG_DIR=/private/config"}, env); diff != "" {
+			t.Fatalf("env mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("autonomous interactive also sets private config dir", func(t *testing.T) {
+		adapter := &CursorAdapter{prepareConfig: func(CompletionCommand) (cursorPrivateConfig, error) {
+			return cursorPrivateConfig{Dir: "/private/config"}, nil
+		}}
+		env, err := adapter.SpawnEnv(&BuildArgsInput{Context: ContextAutonomousInteractive, CompletionCommand: command})
+		if err != nil {
+			t.Fatalf("SpawnEnv: %v", err)
+		}
+		if len(env) != 1 {
+			t.Fatalf("env = %v, want one entry", env)
+		}
+	})
+
+	t.Run("interactive with blocking deny rule keeps supervised prompting", func(t *testing.T) {
+		adapter := &CursorAdapter{prepareConfig: func(CompletionCommand) (cursorPrivateConfig, error) {
+			return cursorPrivateConfig{Dir: "/private/config", DenyRuleBlockingCompletion: "Shell(/opt/agent-runner)"}, nil
+		}}
+		env, err := adapter.SpawnEnv(&BuildArgsInput{Context: ContextInteractive, CompletionCommand: command})
+		if err != nil {
+			t.Fatalf("SpawnEnv: %v", err)
+		}
+		if len(env) != 1 {
+			t.Fatalf("env = %v, want one entry", env)
+		}
+	})
+
+	t.Run("conservative autonomous interactive with blocking deny rule fails early", func(t *testing.T) {
+		adapter := &CursorAdapter{prepareConfig: func(CompletionCommand) (cursorPrivateConfig, error) {
+			return cursorPrivateConfig{Dir: "/private/config", DenyRuleBlockingCompletion: "Shell(/opt/agent-runner)"}, nil
+		}}
+		_, err := adapter.SpawnEnv(&BuildArgsInput{Context: ContextAutonomousInteractive, CompletionCommand: command})
+		if err == nil {
+			t.Fatal("expected deny-rule error for unattended completion")
+		}
+		for _, want := range []string{"Shell(/opt/agent-runner)", "deny", "yolo"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error %q does not mention %q", err, want)
+			}
+		}
+	})
+
+	t.Run("yolo autonomous interactive with blocking deny rule proceeds", func(t *testing.T) {
+		adapter := &CursorAdapter{prepareConfig: func(CompletionCommand) (cursorPrivateConfig, error) {
+			return cursorPrivateConfig{Dir: "/private/config", DenyRuleBlockingCompletion: "Shell(/opt/agent-runner)"}, nil
+		}}
+		env, err := adapter.SpawnEnv(&BuildArgsInput{Context: ContextAutonomousInteractive, CompletionCommand: command, PermissionMode: "yolo"})
+		if err != nil {
+			t.Fatalf("SpawnEnv: %v", err)
+		}
+		if len(env) != 1 {
+			t.Fatalf("env = %v, want one entry", env)
+		}
+	})
+
+	t.Run("conservative autonomous interactive with blocking project deny rule fails early", func(t *testing.T) {
+		workdir := t.TempDir()
+		projectConfig := filepath.Join(workdir, ".cursor", "cli.json")
+		if err := os.MkdirAll(filepath.Dir(projectConfig), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(projectConfig, []byte(`{"permissions": {"deny": ["Shell(/opt/agent-runner)"]}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		adapter := &CursorAdapter{prepareConfig: func(CompletionCommand) (cursorPrivateConfig, error) {
+			return cursorPrivateConfig{Dir: "/private/config"}, nil
+		}}
+		_, err := adapter.SpawnEnv(&BuildArgsInput{Context: ContextAutonomousInteractive, CompletionCommand: command, Workdir: workdir})
+		if err == nil {
+			t.Fatal("expected project deny-rule error for unattended completion")
+		}
+		for _, want := range []string{"Shell(/opt/agent-runner)", "deny", "yolo", projectConfig} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error %q does not mention %q", err, want)
+			}
+		}
+	})
+
+	t.Run("yolo autonomous interactive with blocking project deny rule proceeds", func(t *testing.T) {
+		workdir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(workdir, ".cursor"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(workdir, ".cursor", "cli.json"), []byte(`{"permissions": {"deny": ["Shell(/opt/agent-runner)"]}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		adapter := &CursorAdapter{prepareConfig: func(CompletionCommand) (cursorPrivateConfig, error) {
+			return cursorPrivateConfig{Dir: "/private/config"}, nil
+		}}
+		env, err := adapter.SpawnEnv(&BuildArgsInput{Context: ContextAutonomousInteractive, CompletionCommand: command, Workdir: workdir, PermissionMode: "yolo"})
+		if err != nil {
+			t.Fatalf("SpawnEnv: %v", err)
+		}
+		if len(env) != 1 {
+			t.Fatalf("env = %v, want one entry", env)
+		}
+	})
+
+	t.Run("unrelated project deny rules do not block completion", func(t *testing.T) {
+		workdir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(workdir, ".cursor"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(workdir, ".cursor", "cli.json"), []byte(`{"permissions": {"deny": ["Shell(rm)", "Read(.env*)"]}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		adapter := &CursorAdapter{prepareConfig: func(CompletionCommand) (cursorPrivateConfig, error) {
+			return cursorPrivateConfig{Dir: "/private/config"}, nil
+		}}
+		env, err := adapter.SpawnEnv(&BuildArgsInput{Context: ContextAutonomousInteractive, CompletionCommand: command, Workdir: workdir})
+		if err != nil {
+			t.Fatalf("SpawnEnv: %v", err)
+		}
+		if len(env) != 1 {
+			t.Fatalf("env = %v, want one entry", env)
+		}
+	})
+
+	t.Run("invalid project permissions fail unattended completion", func(t *testing.T) {
+		workdir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(workdir, ".cursor"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(workdir, ".cursor", "cli.json"), []byte("{not json"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		adapter := &CursorAdapter{prepareConfig: func(CompletionCommand) (cursorPrivateConfig, error) {
+			return cursorPrivateConfig{Dir: "/private/config"}, nil
+		}}
+		if _, err := adapter.SpawnEnv(&BuildArgsInput{Context: ContextAutonomousInteractive, CompletionCommand: command, Workdir: workdir}); err == nil {
+			t.Fatal("expected error for unparsable project permissions")
+		}
+	})
+
+	t.Run("supervised interactive ignores project deny rules", func(t *testing.T) {
+		workdir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(workdir, ".cursor"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(workdir, ".cursor", "cli.json"), []byte(`{"permissions": {"deny": ["Shell(/opt/agent-runner)"]}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		adapter := &CursorAdapter{prepareConfig: func(CompletionCommand) (cursorPrivateConfig, error) {
+			return cursorPrivateConfig{Dir: "/private/config"}, nil
+		}}
+		env, err := adapter.SpawnEnv(&BuildArgsInput{Context: ContextInteractive, CompletionCommand: command, Workdir: workdir})
+		if err != nil {
+			t.Fatalf("SpawnEnv: %v", err)
+		}
+		if len(env) != 1 {
+			t.Fatalf("env = %v, want one entry", env)
+		}
+	})
+
+	t.Run("headless gets no env", func(t *testing.T) {
+		adapter := &CursorAdapter{prepareConfig: func(CompletionCommand) (cursorPrivateConfig, error) {
+			t.Fatal("prepareConfig must not run for headless invocations")
+			return cursorPrivateConfig{}, nil
+		}}
+		env, err := adapter.SpawnEnv(&BuildArgsInput{Context: ContextAutonomousHeadless, CompletionCommand: command})
+		if err != nil || env != nil {
+			t.Fatalf("SpawnEnv headless = %v, %v; want nil, nil", env, err)
+		}
+	})
+
+	t.Run("no completion command gets no env", func(t *testing.T) {
+		adapter := &CursorAdapter{}
+		env, err := adapter.SpawnEnv(&BuildArgsInput{Context: ContextInteractive})
+		if err != nil || env != nil {
+			t.Fatalf("SpawnEnv without completion = %v, %v; want nil, nil", env, err)
+		}
+	})
+
+	t.Run("prepare failure surfaces", func(t *testing.T) {
+		adapter := &CursorAdapter{prepareConfig: func(CompletionCommand) (cursorPrivateConfig, error) {
+			return cursorPrivateConfig{}, errors.New("disk full")
+		}}
+		if _, err := adapter.SpawnEnv(&BuildArgsInput{Context: ContextInteractive, CompletionCommand: command}); err == nil || !strings.Contains(err.Error(), "cursor") {
+			t.Fatalf("SpawnEnv error = %v, want cursor-prefixed failure", err)
+		}
+	})
+}
+
+func TestSpawnEnvForInvocationDefaultsToNil(t *testing.T) {
+	adapter, err := Get("claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := SpawnEnvForInvocation(adapter, &BuildArgsInput{Context: ContextInteractive})
+	if err != nil || env != nil {
+		t.Fatalf("SpawnEnvForInvocation(claude) = %v, %v; want nil, nil", env, err)
+	}
+}
+
+func TestClaudeAdapterDropsEnclosingSessionEnv(t *testing.T) {
+	adapter, err := Get("claude")
+	if err != nil {
+		t.Fatalf("get claude adapter: %v", err)
+	}
+	got := DropSpawnEnvVars(adapter)
+	want := []string{"CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID"}
+	assertArgs(t, want, got)
+}
+
+func TestDropSpawnEnvVarsDefaultsToNil(t *testing.T) {
+	adapter, err := Get("codex")
+	if err != nil {
+		t.Fatalf("get codex adapter: %v", err)
+	}
+	if got := DropSpawnEnvVars(adapter); got != nil {
+		t.Fatalf("DropSpawnEnvVars(codex) = %v, want nil", got)
+	}
 }
 
 func assertArgs(t *testing.T, expected, actual []string) {

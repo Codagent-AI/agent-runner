@@ -237,8 +237,8 @@ func (r *tuiProcessRunner) RunShell(cmd string, captureStdout bool, workdir stri
 }
 
 // RunAgent runs an agent CLI process, streaming output to the TUI and persisting
-// raw bytes to output files. Interactive steps bypass this path entirely (they
-// go through pty.RunInteractive).
+// raw bytes to output files. Interactive steps bypass this path entirely and
+// hand the user's terminal directly to the agent CLI.
 func (r *tuiProcessRunner) RunAgent(args []string, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
 	c := exec.Command(args[0], args[1:]...) // #nosec G204
 	if workdir != "" {

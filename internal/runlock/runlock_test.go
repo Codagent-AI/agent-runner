@@ -289,6 +289,30 @@ func TestAcquire(t *testing.T) {
 	})
 }
 
+func TestProveHeldRequiresCurrentProcessLock(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := ProveHeld(dir); err == nil {
+		t.Fatal("ProveHeld succeeded without an acquired run lock")
+	}
+
+	activePID, err := Acquire(dir)
+	if err != nil || activePID != 0 {
+		t.Fatalf("Acquire() = (%d, %v)", activePID, err)
+	}
+	proof, err := ProveHeld(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := proof.Validate(dir); err != nil {
+		t.Fatalf("Validate() with held lock: %v", err)
+	}
+
+	Delete(dir)
+	if err := proof.Validate(dir); err == nil {
+		t.Fatal("stale proof remained valid after the run lock was deleted")
+	}
+}
+
 func TestCheckOwnedByOther(t *testing.T) {
 	t.Run("returns false when no lock file exists", func(t *testing.T) {
 		dir := t.TempDir()

@@ -177,3 +177,33 @@ func TestLogger(t *testing.T) {
 		}
 	})
 }
+
+func TestControlAndJobControlEventTypesAreRecognized(t *testing.T) {
+	types := []EventType{
+		EventCompletionRequested,
+		EventCompletionAcknowledged,
+		EventTurnCommitted,
+		EventDurabilityFailure,
+		EventControlRejected,
+		EventChildStopped,
+		EventChildContinued,
+	}
+	path := filepath.Join(t.TempDir(), "audit.log")
+	logger, err := NewLogger(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, eventType := range types {
+		logger.Emit(Event{Timestamp: "2026-07-17T00:00:00Z", Type: eventType, Data: map[string]any{}})
+	}
+	logger.Close()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, eventType := range types {
+		if !strings.Contains(string(data), " "+string(eventType)+" ") {
+			t.Fatalf("audit log missing event type %q:\n%s", eventType, data)
+		}
+	}
+}

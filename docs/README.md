@@ -24,6 +24,7 @@ Agent Runner documentation is split into focused pages for GitHub and the docs s
 | [Writing Workflows](writing-workflows.md) | YAML workflow authoring, step types, parameters, variables, loops, sub-workflows, flow control, capture, and interpolation. |
 | [Agent Profiles](agent-profiles.md) | Named profiles that set an agent step's mode, CLI, model, and effort. |
 | [Sessions And Modes](sessions-and-modes.md) | Session strategies and the `interactive`, `autonomous`, and `ui` mode model. |
+| [Direct Terminal Handoff](direct-terminal-handoff.md) | How interactive agent and shell steps share the real terminal, including completion, durability, and job control. |
 
 ## Reference
 
@@ -33,3 +34,10 @@ Agent Runner documentation is split into focused pages for GitHub and the docs s
 | [Built-In Workflows](built-in-workflows.md) | Embedded workflow namespaces and workflow purposes. |
 | [Run State And Audit](run-state-and-audit.md) | Run storage, state files, audit logs, output files, and run views. |
 | [Troubleshooting](troubleshooting.md) | Common failures and recovery commands. |
+
+## Development
+
+| Page | Description |
+| --- | --- |
+| [Development Guide](development.md) | Build, test, lint, and validate Agent Runner from source. |
+| [Development Sandbox](dev/sandbox.md) | Run local source and external payloads in the Docker sandbox. |

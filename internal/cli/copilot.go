@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -14,7 +15,9 @@ import (
 )
 
 // CopilotAdapter constructs invocation args for the GitHub Copilot CLI.
-type CopilotAdapter struct{}
+type CopilotAdapter struct {
+	prepareCompletionPlugin func(CompletionCommand) (string, error) // test seam; nil uses prepareNextCommandPlugin
+}
 
 // BuildArgs constructs Copilot CLI args.
 //
@@ -32,6 +35,13 @@ type CopilotAdapter struct{}
 // --model and --reasoning-effort are omitted on resume: a resumed copilot thread
 // keeps the model and effort it was started with.
 func (a *CopilotAdapter) BuildArgs(input *BuildArgsInput) []string {
+	args, _ := a.BuildArgsWithError(input)
+	return args
+}
+
+// BuildArgsWithError constructs Copilot args and fails before spawn if its
+// process-local completion command cannot be materialized.
+func (a *CopilotAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, error) {
 	args := []string{"copilot"}
 	context := input.InvocationContext()
 	if context.IsHeadless() {
@@ -64,8 +74,19 @@ func (a *CopilotAdapter) BuildArgs(input *BuildArgsInput) []string {
 	if context.IsAutonomous() && slices.Contains(input.DisallowedTools, "AskUserQuestion") {
 		args = append(args, "--no-ask-user")
 	}
+	if !context.IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid() {
+		prepare := a.prepareCompletionPlugin
+		if prepare == nil {
+			prepare = prepareNextCommandPlugin
+		}
+		pluginDir, err := prepare(*input.CompletionCommand)
+		if err != nil {
+			return nil, fmt.Errorf("copilot: create completion plugin: %w", err)
+		}
+		args = append(args, "--plugin-dir", pluginDir)
+	}
 
-	return args
+	return args, nil
 }
 
 // SupportsSystemPrompt returns false — Copilot CLI has no native system prompt flag.

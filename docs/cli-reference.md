@@ -36,16 +36,19 @@ With no arguments, Agent Runner opens the TUI. With a workflow argument, it reso
 ## Run Command
 
 ```text
-agent-runner run <workflow> [--param key=value] [key=value ...]
+agent-runner run <workflow> [--until <step-id>] [--param key=value] [key=value ...]
 ```
 
 `agent-runner run` is a command-form alias for starting a workflow. `--param key=value` and `--param=key=value` are normalized into workflow parameters before execution.
+
+`--until <step-id>` stops successfully after the named top-level step is reached. The target step is inclusive: it runs before the workflow stops. If runtime conditions skip the target step, the workflow still stops at that position. The step ID is validated before execution begins, and nested loop or sub-workflow step IDs cannot be targeted.
 
 Examples:
 
 ```bash
 agent-runner run openspec:plan-change --param change_name=my-change
 agent-runner run spec-driven:change
+agent-runner run spec-driven:change --until review
 ```
 
 ## Debug Command

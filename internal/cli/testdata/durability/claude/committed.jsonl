@@ -1,0 +1,1 @@
+{"parentUuid":"turn-1","isSidechain":false,"message":{"model":"claude-sonnet-5","id":"message-3","type":"message","role":"assistant","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn","stop_sequence":null},"sessionId":"claude-session","type":"assistant","uuid":"record-3","timestamp":"2026-07-16T00:00:03Z"}

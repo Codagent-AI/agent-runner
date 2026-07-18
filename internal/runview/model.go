@@ -728,6 +728,9 @@ func (m *Model) handleExecDoneMsg(msg liverun.ExecDoneMsg) {
 	m.refreshData()
 	m.running = false
 	m.liveResult = msg.Result
+	if msg.Err != nil {
+		m.notice = msg.Err.Error()
+	}
 	switch msg.Result {
 	case "failed":
 		if failed := findFailedLeaf(m.tree.Root); failed != nil {

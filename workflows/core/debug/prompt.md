@@ -13,7 +13,7 @@ This workflow is a single interactive step. Stay in this session for the full fl
 3. Classify the failure.
 4. For outcome (b) or (c), offer duplicate search and GitHub issue filing.
 5. Ask whether the user is done.
-6. Complete the step only after the user says they are done. Use the injected Agent Runner continuation-marker instruction; if that is unavailable, tell the user they can type `/next` or press Ctrl-].
+6. Complete the step only after the user says they are done. Use the injected Agent Runner completion-client instruction.
 
 Use the inspection CLI instead of asking the user to paste logs. Ask for user decisions only when the CLI cannot determine intent, such as choosing a cold-start target, deciding whether to file an issue, or approving an issue body.
 
@@ -208,8 +208,7 @@ Never silently skip duplicate search when gh is available.
 
 After delivering a triage outcome and resolving any issue-submission action, ask the user whether they are done.
 
-- If the user says they are done, use the injected Agent Runner continuation-marker instruction to end the workflow successfully.
-- If the continuation-marker instruction is unavailable, tell the user they can type `/next` and press Enter or press Ctrl-].
+- If the user says they are done, use the injected Agent Runner completion-client instruction to end the workflow successfully.
 - If the user is not done, continue in this same interactive session. You may handle additional runs, answer follow-up questions, or perform another full triage cycle.
 
 If the user closes the agent CLI before signalling done, the workflow records the outcome per the existing interactive-agent abort behavior.

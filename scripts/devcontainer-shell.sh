@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Starts the eval sandbox devcontainer for interactive Agent Runner development.
+# Starts the development sandbox devcontainer for interactive Agent Runner development.
 # By default it uses the safe devcontainer config; --with-host-config generates
 # a local derived config that mounts selected host auth/shell/git files.
 set -euo pipefail
@@ -78,7 +78,7 @@ if [[ ! -f "$RUNNER_ROOT/.sandbox-secrets.env" ]]; then
 fi
 
 if [[ "$WITH_HOST_CONFIG" == 1 ]]; then
-  CONFIG="$RUNNER_ROOT/artifacts/devcontainer/with-host-config/devcontainer.json"
+  CONFIG="$RUNNER_ROOT/artifacts/devcontainer/with-host-auth/devcontainer.json"
   mkdir -p "$(dirname -- "$CONFIG")"
   BASE_CONFIG="$RUNNER_ROOT/.devcontainer/eval/devcontainer.json" \
   OUT_CONFIG="$CONFIG" \
@@ -94,7 +94,6 @@ const runnerRoot = process.env.RUNNER_ROOT;
 const outConfigDir = path.dirname(process.env.OUT_CONFIG);
 const optionalHostMounts = [
   [path.join(hostHome, ".codex", "auth.json"), "source=${localEnv:HOME}/.codex/auth.json,target=/host-home/codex/auth.json,type=bind,readonly"],
-  [path.join(hostHome, ".codex", "config.toml"), "source=${localEnv:HOME}/.codex/config.toml,target=/host-home/codex/config.toml,type=bind,readonly"],
   [path.join(hostHome, ".claude", ".credentials.json"), "source=${localEnv:HOME}/.claude/.credentials.json,target=/host-home/claude/.credentials.json,type=bind,readonly"],
   [path.join(hostHome, ".claude", "settings.json"), "source=${localEnv:HOME}/.claude/settings.json,target=/host-home/claude/settings.json,type=bind,readonly"],
   [path.join(hostHome, ".claude", "settings.local.json"), "source=${localEnv:HOME}/.claude/settings.local.json,target=/host-home/claude/settings.local.json,type=bind,readonly"],
@@ -112,7 +111,7 @@ const hostMounts = [
   ...requiredHostMounts.map(([, mount]) => mount),
 ];
 
-config.name = `${config.name} (host config)`;
+config.name = `${config.name} (host auth)`;
 config.build = {
   ...config.build,
   dockerfile: path.relative(outConfigDir, path.join(runnerRoot, "docker", "dev", "Dockerfile")),
@@ -120,7 +119,7 @@ config.build = {
 };
 config.mounts = (config.mounts || []).map((mount) =>
   mount.startsWith("source=agent-runner-dev-home,target=/workspace/home,")
-    ? mount.replace("source=agent-runner-dev-home,", "source=agent-runner-dev-home-host-config,")
+    ? mount.replace("source=agent-runner-dev-home,", "source=agent-runner-dev-home-host-auth,")
     : mount
 );
 config.mounts.push(...hostMounts);

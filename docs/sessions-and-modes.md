@@ -53,21 +53,21 @@ Agent Runner uses modes to choose the runtime behavior for a step:
 
 | Mode | Applies to | Meaning |
 | --- | --- | --- |
-| `interactive` | Agent and shell steps | Run in a PTY with user interaction. |
+| `interactive` | Agent and shell steps | Hand the real terminal directly to the child process for user interaction. |
 | `autonomous` | Agent steps | Run without user interaction, using either a headless backend or an interactive backend with autonomy instructions. |
 | `ui` | UI steps | Render an Agent Runner UI prompt inside the live run TUI. |
 
 ## Interactive Agent Steps
 
-Interactive agent steps run inside a PTY. The workflow advances when any continuation trigger is detected:
+Interactive agent steps hand the real terminal directly to the agent CLI. The workflow advances when the current step sends an authenticated completion event:
 
-| Trigger | Meaning |
+| Method | Meaning |
 | --- | --- |
-| `/next` | The user typed `/next` and pressed Enter. |
-| `Ctrl-]` | The user pressed the keyboard continuation shortcut. |
-| Injected continuation marker | The agent emitted the hidden marker after the user asked it to continue or the prompt told it to complete the step. |
+| Ask the agent to continue | The agent follows its injected instruction and runs the absolute-path completion client. |
+| Native completion command | Type `/agent-runner:next` in Claude, Copilot, or Cursor. In Codex, invoke `$agent-runner-next`. |
+| Injected completion instruction | The agent runs `agent-runner step complete` through the private control channel when its work is done. |
 
-If the CLI exits without one of these triggers, the step is aborted and the workflow can be resumed.
+Agent Runner does not draw a continuation overlay or intercept a global keyboard shortcut. If the CLI exits before completion is accepted, the step is aborted and the workflow can be resumed.
 
 ## Autonomous Agent Steps
 
@@ -77,7 +77,7 @@ Capturing an autonomous agent step forces headless execution so `stdout` can be 
 
 ## Interactive Shell Steps
 
-Shell steps normally run through `sh -c`, resolved from `PATH`. A shell step can set `mode: interactive` to run in a PTY.
+Shell steps normally run through `sh -c` with piped input and output. A shell step can set `mode: interactive` to give the command direct ownership of the user's terminal.
 
 ```yaml
 - id: open-shell-tool
@@ -85,7 +85,7 @@ Shell steps normally run through `sh -c`, resolved from `PATH`. A shell step can
   mode: interactive
 ```
 
-Interactive shell steps cannot use `capture`.
+Interactive shell output is visible live but is not proxied, retained, or written to the audit log. Interactive shell steps cannot use `capture`; use an autonomous shell step when later steps need the output.
 
 ## UI Steps
 

@@ -10,6 +10,20 @@ import (
 )
 
 func TestResolveWorkflowArg(t *testing.T) {
+	t.Run("resolves existing workflow YAML path", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		path := filepath.Join("custom", "workflow.yaml")
+		writeTestFile(t, path, "name: test\nsteps:\n  - id: s\n    command: echo ok\n")
+
+		got, err := resolveWorkflowArg(path)
+		if err != nil {
+			t.Fatalf("resolveWorkflowArg returned error: %v", err)
+		}
+		if got != path {
+			t.Fatalf("resolveWorkflowArg = %q, want %q", got, path)
+		}
+	})
+
 	t.Run("resolves bare user workflow from dot-agent-runner directory", func(t *testing.T) {
 		t.Chdir(t.TempDir())
 		writeTestFile(t, filepath.Join(".agent-runner", "workflows", "my-workflow.yaml"), "name: test\nsteps:\n  - id: s\n    command: echo ok\n")

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs a one-shot command in the eval sandbox image after building the current
+# Runs a one-shot command in the development sandbox image after building the current
 # Agent Runner checkout inside the container. This script owns Docker launch,
 # explicit env/auth pass-through, workspace setup, and artifact mounting.
 set -euo pipefail
@@ -7,6 +7,7 @@ set -euo pipefail
 IMAGE="${IMAGE:-agent-runner-dev:local}"
 DOCKERFILE="${DOCKERFILE:-docker/dev/Dockerfile}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-}"
+INPUT_DIR=""
 DRY_RUN=0
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 RUNNER_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
@@ -22,7 +23,7 @@ usage() {
   cat <<'USAGE'
 Usage: sandbox-run.sh [options] -- <command>
 
-Runs a command in the Agent Runner eval sandbox. The current checkout is mounted
+Runs a command in the Agent Runner development sandbox. The current checkout is mounted
 read-only, copied inside the container, built there, and exposed on PATH as
 agent-runner before the command runs.
 
@@ -33,6 +34,7 @@ Options:
                           Default: docker/dev/Dockerfile
   --artifact-dir PATH    Host directory mounted at /artifacts. Default:
                           artifacts/sandbox-runs/<timestamp>
+  --input-dir PATH       Existing host directory mounted read-only at /eval-input.
   --no-default-secrets   Do not automatically load .sandbox-secrets.env.
   --secrets-file PATH    Load a sandbox secrets env file. Default, when present:
                           .sandbox-secrets.env
@@ -92,6 +94,10 @@ while (($#)); do
       ARTIFACT_DIR="${2:?missing value for --artifact-dir}"
       shift 2
       ;;
+    --input-dir)
+      INPUT_DIR="${2:?missing value for --input-dir}"
+      shift 2
+      ;;
     --no-default-secrets)
       LOAD_DEFAULT_SECRETS=0
       shift
@@ -140,6 +146,18 @@ if (($# == 0)); then
   echo "Missing command. Use -- <command>." >&2
   usage >&2
   exit 2
+fi
+
+if [[ -n "$INPUT_DIR" ]]; then
+  if [[ ! -e "$INPUT_DIR" ]]; then
+    echo "Input directory not found: $INPUT_DIR" >&2
+    exit 2
+  fi
+  if [[ ! -d "$INPUT_DIR" ]]; then
+    echo "Input path is not a directory: $INPUT_DIR" >&2
+    exit 2
+  fi
+  INPUT_DIR="$(cd -- "$INPUT_DIR" && pwd -P)"
 fi
 
 load_env_file() {
@@ -226,7 +244,7 @@ else
   container_command=(bash -lc "$container_script" -- "$@")
 fi
 
-build_cmd=(docker build -t "$IMAGE" -f "$DOCKERFILE" "$RUNNER_ROOT")
+build_cmd=(docker build -t "$IMAGE" -f "$DOCKERFILE_ABS" "$RUNNER_ROOT")
 run_cmd=(
   docker run
   --rm
@@ -240,6 +258,10 @@ run_cmd=(
   -v "$RUNNER_ROOT:/agent-runner-source:ro"
   -v "$ARTIFACT_DIR:/artifacts"
 )
+
+if [[ -n "$INPUT_DIR" ]]; then
+  run_cmd+=(-v "$INPUT_DIR:/eval-input:ro")
+fi
 
 for name in "${ENV_VARS[@]+"${ENV_VARS[@]}"}"; do
   if [[ ! "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
@@ -276,7 +298,6 @@ add_optional_file_mount() {
 
 if [[ "$MOUNT_CODEX_AUTH" == 1 ]]; then
   add_required_file_mount "$HOME/.codex/auth.json" "/host-home/codex/auth.json" "Codex"
-  add_optional_file_mount "$HOME/.codex/config.toml" "/host-home/codex/config.toml"
 fi
 
 if [[ "$MOUNT_CLAUDE_AUTH" == 1 ]]; then

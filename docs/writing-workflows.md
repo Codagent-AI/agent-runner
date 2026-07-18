@@ -122,7 +122,7 @@ Workflow parameters and captured variables shadow built-ins with the same name.
 
 Supported CLI adapters are `claude`, `codex`, `copilot`, `cursor`, and `opencode`.
 
-Interactive steps run inside a PTY. The workflow advances when the user types `/next`, presses `Ctrl-]`, or when the agent emits the continuation marker injected by Agent Runner. Workflow prompts may describe this as "complete the step" or "signal continuation": the agent should answer the user's question, then use its injected continuation-marker instruction to end the step. If the CLI exits without any continuation trigger, the step is treated as aborted so you can resume the workflow later.
+Interactive agent steps hand the real terminal directly to the agent CLI. Agent Runner injects an absolute-path completion command into the step prompt; after answering the user, the agent runs that command to send an authenticated event through the run's private control channel. Users can ask the agent to continue or invoke the CLI-native completion command (`/agent-runner:next` in Claude, Copilot, and Cursor; `$agent-runner-next` in Codex). If the CLI exits before completion is accepted, the step is treated as aborted so you can resume the workflow later.
 
 Autonomous steps run without user interaction. Depending on `~/.agent-runner/settings.yaml`, autonomous steps may run in headless mode or in an interactive backend with autonomy instructions. Capturing an autonomous agent step forces headless execution so `stdout` can be captured reliably.
 
@@ -140,7 +140,7 @@ See [Sessions And Modes](sessions-and-modes.md) for the full session and mode mo
 
 Shell commands are interpolated with shell-safe quoting and run through `sh -c`, resolved from `PATH`. Non-zero exit codes fail the step unless `continue_on_failure: true` is set.
 
-Shell steps may set `mode: interactive` to run in a PTY. Interactive shell steps cannot use `capture`.
+Shell steps may set `mode: interactive` to inherit the user's real terminal. Their output is live-only, and interactive shell steps cannot use `capture`.
 
 ## Script Steps
 

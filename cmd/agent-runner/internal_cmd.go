@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	agentconfig "github.com/codagent/agent-runner/internal/config"
+	"github.com/codagent/agent-runner/internal/interactive"
 	"github.com/codagent/agent-runner/internal/profilewrite"
 	"github.com/codagent/agent-runner/internal/usersettings"
 	"gopkg.in/yaml.v3"
@@ -24,6 +26,15 @@ type writeProfilePayload struct {
 }
 
 func handleInternal(args []string) int {
+	if len(args) > 0 && args[0] == "watchdog" {
+		parent := os.NewFile(3, "agent-runner-watchdog-parent")
+		if parent == nil {
+			_, _ = fmt.Fprintln(os.Stderr, "agent-runner: watchdog parent pipe is unavailable")
+			return 1
+		}
+		defer func() { _ = parent.Close() }()
+		return handleWatchdog(args[1:], parent, os.Stderr)
+	}
 	return handleInternalWithIO(args, os.Stdin, os.Stderr)
 }
 
@@ -33,6 +44,10 @@ func handleInternalWithIO(args []string, stdin io.Reader, stderr io.Writer) int 
 		return 1
 	}
 	switch args[0] {
+	case "watchdog":
+		return handleWatchdog(args[1:], stdin, stderr)
+	case "turn-committed":
+		return handleTurnCommitted(args, stderr)
 	case "write-profile":
 		if len(args) != 1 {
 			_, _ = fmt.Fprintln(stderr, "agent-runner: internal write-profile accepts no arguments")
@@ -120,6 +135,43 @@ func handleInternalWithIO(args []string, stdin io.Reader, stderr io.Writer) int 
 		_, _ = fmt.Fprintf(stderr, "agent-runner: unknown internal command %q\n", args[0])
 		return 1
 	}
+}
+
+func handleWatchdog(args []string, parent io.Reader, stderr io.Writer) int {
+	flags := flag.NewFlagSet("internal watchdog", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	pid := flags.Int("pid", 0, "child process id")
+	pgid := flags.Int("pgid", 0, "child process group id")
+	startTime := flags.String("start-time", "", "child process start identity")
+	grace := flags.Duration("grace", interactive.DefaultTerminationGrace, "termination grace")
+	if err := flags.Parse(args); err != nil {
+		return 1
+	}
+	if flags.NArg() != 0 || *pid <= 0 || *pgid <= 0 || *startTime == "" || *grace <= 0 {
+		_, _ = fmt.Fprintln(stderr, "agent-runner: watchdog requires --pid, --pgid, --start-time, and a positive --grace")
+		return 1
+	}
+	metadata := interactive.ProcessMetadata{ChildPID: *pid, PGID: *pgid, StartTime: *startTime}
+	if err := interactive.RunWatchdog(parent, metadata, *grace); err != nil {
+		_, _ = fmt.Fprintf(stderr, "agent-runner: watchdog: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func handleTurnCommitted(args []string, stderr io.Writer) int {
+	// Codex appends one JSON notification payload to notify commands. Other
+	// hooks invoke the same sender without it; the authenticated environment is
+	// the only input used for the control event.
+	if len(args) < 1 || len(args) > 2 {
+		_, _ = fmt.Fprintln(stderr, "agent-runner: internal turn-committed accepts only the optional hook payload")
+		return 1
+	}
+	if _, err := sendControlMessage(interactive.MessageTurnCommitted); err != nil {
+		_, _ = fmt.Fprintf(stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func configuredAgentCLIs(projectConfigPath string) (string, error) {

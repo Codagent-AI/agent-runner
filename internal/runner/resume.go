@@ -106,27 +106,35 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	}
 
 	resumeOpts := &Options{
-		From:              fromStep,
-		WorkflowFile:      state.WorkflowFile,
-		SessionDir:        filepath.Dir(stateFilePath),
-		Engine:            eng,
-		SessionIDs:        sessionIDs,
-		SessionProfiles:   sessionProfiles,
-		CapturedVariables: capturedVars,
-		LastSessionStepID: lastSessionStepID,
-		NamedSessions:     namedSessions,
-		NamedSessionDecls: namedSessionDecls,
-		ChildState:        childState,
-		ProcessRunner:     opts.ProcessRunner,
-		GlobExpander:      opts.GlobExpander,
-		Log:               opts.Log,
-		SuspendHook:       opts.SuspendHook,
-		ResumeHook:        opts.ResumeHook,
-		PrepareStepHook:   opts.PrepareStepHook,
-		UIStepHandler:     opts.UIStepHandler,
+		From:               fromStep,
+		WorkflowFile:       state.WorkflowFile,
+		SessionDir:         filepath.Dir(stateFilePath),
+		Engine:             eng,
+		SessionIDs:         sessionIDs,
+		SessionProfiles:    sessionProfiles,
+		CapturedVariables:  capturedVars,
+		LastSessionStepID:  lastSessionStepID,
+		NamedSessions:      namedSessions,
+		NamedSessionDecls:  namedSessionDecls,
+		ChildState:         childState,
+		InteractiveAttempt: resumeInteractiveAttempt(&state),
+		ProcessRunner:      opts.ProcessRunner,
+		GlobExpander:       opts.GlobExpander,
+		Log:                opts.Log,
+		SuspendHook:        opts.SuspendHook,
+		ResumeHook:         opts.ResumeHook,
+		PrepareStepHook:    opts.PrepareStepHook,
+		UIStepHandler:      opts.UIStepHandler,
 	}
 
 	return PrepareRun(&workflow, state.Params, resumeOpts)
+}
+
+func resumeInteractiveAttempt(state *model.RunState) *model.InteractiveAttemptMetadata {
+	if state.CurrentStep.Nested == nil {
+		return nil
+	}
+	return state.CurrentStep.Nested.InteractiveAttempt
 }
 
 // ResumeWorkflow resumes a workflow from a state file.

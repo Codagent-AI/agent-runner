@@ -256,6 +256,9 @@ func main() {
 func run() int {
 	ensureAgentRunnerExecutableEnv()
 
+	if len(os.Args) > 1 && os.Args[1] == "step" {
+		return handleStep(os.Args[2:])
+	}
 	if len(os.Args) > 1 && os.Args[1] == "internal" {
 		return handleInternal(os.Args[2:])
 	}
@@ -359,7 +362,8 @@ func dispatchRunCommand(args []string, opts commandFlags) int {
 	}
 
 	var err error
-	args, err = normalizeRunCommandArgs(args)
+	var runOpts runCommandOptions
+	args, runOpts, err = parseRunCommandArgs(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
@@ -411,9 +415,13 @@ func dispatchRunCommand(args []string, opts commandFlags) int {
 	}
 
 	if opts.onboardingFrom != "" {
+		if runOpts.until != "" {
+			fmt.Fprintln(os.Stderr, "agent-runner: --until cannot be combined with --onboarding-from")
+			return 1
+		}
 		return handleOnboardingFromRun(workflowFile, opts.onboardingFrom, args[1:]...)
 	}
-	return handleRunWithRunOptions(append([]string{workflowFile}, args[1:]...), runCommandOptions{}).exitCode
+	return handleRunWithRunOptions(append([]string{workflowFile}, args[1:]...), runOpts).exitCode
 }
 
 func isRunCommandHelp(args []string) bool {
@@ -421,12 +429,20 @@ func isRunCommandHelp(args []string) bool {
 }
 
 func printRunUsage(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "Usage: agent-runner run <workflow> [--param key=value] [key=value ...]")
+	_, _ = fmt.Fprintln(w, "Usage: agent-runner run <workflow> [--until <step-id>] [--param key=value] [key=value ...]")
+	_, _ = fmt.Fprintln(w, "\nFlags:")
+	_, _ = fmt.Fprintln(w, "  --until <step-id>\n\tStop successfully after reaching the named top-level step")
 }
 
 func normalizeRunCommandArgs(args []string) ([]string, error) {
+	normalized, _, err := parseRunCommandArgs(args)
+	return normalized, err
+}
+
+func parseRunCommandArgs(args []string) ([]string, runCommandOptions, error) {
+	var opts runCommandOptions
 	if len(args) <= 1 || args[0] != "run" || strings.HasPrefix(args[1], "-") {
-		return args, nil
+		return args, opts, nil
 	}
 
 	normalized := []string{args[1]}
@@ -435,24 +451,36 @@ func normalizeRunCommandArgs(args []string) ([]string, error) {
 		switch {
 		case arg == "--param":
 			if i+1 >= len(args) {
-				return nil, fmt.Errorf("--param requires key=value")
+				return nil, opts, fmt.Errorf("--param requires key=value")
 			}
 			i++
 			if !strings.Contains(args[i], "=") {
-				return nil, fmt.Errorf("--param requires key=value")
+				return nil, opts, fmt.Errorf("--param requires key=value")
 			}
 			normalized = append(normalized, args[i])
 		case strings.HasPrefix(arg, "--param="):
 			value := strings.TrimPrefix(arg, "--param=")
 			if !strings.Contains(value, "=") {
-				return nil, fmt.Errorf("--param requires key=value")
+				return nil, opts, fmt.Errorf("--param requires key=value")
 			}
 			normalized = append(normalized, value)
+		case arg == "--until":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return nil, opts, fmt.Errorf("--until requires a step ID")
+			}
+			i++
+			opts.until = args[i]
+		case strings.HasPrefix(arg, "--until="):
+			value := strings.TrimPrefix(arg, "--until=")
+			if strings.TrimSpace(value) == "" {
+				return nil, opts, fmt.Errorf("--until requires a step ID")
+			}
+			opts.until = value
 		default:
 			normalized = append(normalized, arg)
 		}
 	}
-	return normalized, nil
+	return normalized, opts, nil
 }
 
 func handleResume(sessionID string) int {
@@ -717,6 +745,10 @@ type liveTUIResult struct {
 	sessionDir     string
 }
 
+var liveRunCoordinatorFactory = func(program *tea.Program, sessionDir string) *liverun.Coordinator {
+	return liverun.NewCoordinator(program, sessionDir)
+}
+
 func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResult {
 	rv, err := runview.New(h.SessionDir, h.ProjectDir, runview.FromLiveRun)
 	if err != nil {
@@ -730,7 +762,7 @@ func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResul
 		programOptions = append(programOptions, tea.WithAltScreen())
 	}
 	p := tea.NewProgram(rv, programOptions...)
-	coord := liverun.NewCoordinator(p, h.SessionDir)
+	coord := liveRunCoordinatorFactory(p, h.SessionDir)
 
 	resultCh := make(chan runner.WorkflowResult, 1)
 	go func() {
@@ -738,12 +770,16 @@ func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResul
 		var runErr error
 		defer func() {
 			if rec := recover(); rec != nil {
-				coord.NotifyDone(string(runner.ResultFailed), fmt.Errorf("panic: %v", rec))
+				_ = coord.NotifyDone(string(runner.ResultFailed), fmt.Errorf("panic: %v", rec))
 				resultCh <- runner.ResultFailed
 				return
 			}
-			coord.NotifyDone(string(result), runErr)
-			resultCh <- result
+			notifyErr := coord.NotifyDone(string(result), runErr)
+			if notifyErr != nil && result == runner.ResultSuccess {
+				resultCh <- runner.ResultFailed
+			} else {
+				resultCh <- result
+			}
 			if opts.quitOnDone {
 				p.Send(runview.ExitMsg{})
 			}
@@ -1347,6 +1383,10 @@ func fileExists(path string) bool {
 var workflowNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+(:[a-zA-Z0-9_-]+|(/[a-zA-Z0-9_-]+)+)?$`)
 
 func resolveWorkflowArg(arg string) (string, error) {
+	ext := strings.ToLower(filepath.Ext(arg))
+	if (ext == ".yaml" || ext == ".yml") && fileExists(arg) {
+		return arg, nil
+	}
 	if !workflowNamePattern.MatchString(arg) {
 		return "", fmt.Errorf("invalid workflow name %q: use a bare name or path under .agent-runner/workflows/ (e.g., 'myworkflow' or 'team/deploy') or a builtin name like 'core:finalize-pr'", arg)
 	}
@@ -1411,6 +1451,7 @@ func handleRunWithResult(args []string, liveOpts liveTUIOptions) liveTUIResult {
 type runCommandOptions struct {
 	liveOpts liveTUIOptions
 	from     string
+	until    string
 }
 
 func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIResult {
@@ -1461,6 +1502,7 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 		h, err := runner.PrepareRun(&workflow, params, &runner.Options{
 			WorkflowFile:  workflowFile,
 			From:          runOpts.from,
+			Until:         runOpts.until,
 			Engine:        eng,
 			ProcessRunner: &realProcessRunner{},
 			GlobExpander:  &realGlobExpander{},
@@ -1488,6 +1530,7 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 	h, err := runner.PrepareRun(&workflow, params, &runner.Options{
 		WorkflowFile:  workflowFile,
 		From:          runOpts.from,
+		Until:         runOpts.until,
 		Engine:        eng,
 		ProcessRunner: &realProcessRunner{},
 		GlobExpander:  &realGlobExpander{},
@@ -2307,18 +2350,22 @@ func (m *onboardingDemoPromptFlow) startRunner() {
 		return
 	}
 	m.started = true
-	coord := liverun.NewCoordinator(m.program, m.handle.SessionDir)
+	coord := liveRunCoordinatorFactory(m.program, m.handle.SessionDir)
 	go func() {
 		result := runner.ResultFailed
 		var runErr error
 		defer func() {
 			if rec := recover(); rec != nil {
-				coord.NotifyDone(string(runner.ResultFailed), fmt.Errorf("panic: %v", rec))
+				_ = coord.NotifyDone(string(runner.ResultFailed), fmt.Errorf("panic: %v", rec))
 				m.resultCh <- runner.ResultFailed
 				return
 			}
-			coord.NotifyDone(string(result), runErr)
-			m.resultCh <- result
+			notifyErr := coord.NotifyDone(string(result), runErr)
+			if notifyErr != nil && result == runner.ResultSuccess {
+				m.resultCh <- runner.ResultFailed
+			} else {
+				m.resultCh <- result
+			}
 			if m.opts.quitOnDone {
 				m.program.Send(runview.ExitMsg{})
 			}
