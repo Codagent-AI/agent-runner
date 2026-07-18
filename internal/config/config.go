@@ -476,6 +476,7 @@ func defaultParsedFile() *parsedFile {
 		"interactive_base": {DefaultMode: "interactive", CLI: "claude", Model: "opus", Effort: "high"},
 		"autonomous_base":  {DefaultMode: "autonomous", CLI: "claude", Model: "opus", Effort: "high"},
 		"planner":          {Extends: "interactive_base"},
+		"reviewer":         {Extends: "interactive_base"},
 		"implementor":      {Extends: "autonomous_base"},
 		"summarizer":       {DefaultMode: "autonomous", CLI: "claude", Model: "haiku", Effort: "low"},
 	}
