@@ -20,7 +20,7 @@ For broader Codagent workspace context, read the workspace-level `AGENTS.md` whe
 - `internal/session/`: session resolution for `new`, `resume`, and `inherit`
 - `internal/flowctl/`: `skip_if` and `break_if` behavior
 - `internal/textfmt/`: interpolation and output formatting helpers
-- `internal/runview/`, `internal/listview/`, `internal/liverun/`, `internal/pty/`, `internal/tuistyle/`: terminal UI and PTY behavior
+- `internal/runview/`, `internal/listview/`, `internal/liverun/`, `internal/interactive/`, `internal/tuistyle/`: terminal UI, direct terminal handoff, and interactive control behavior
 - `internal/config/`, `internal/discovery/`, `internal/stateio/`, `internal/audit/`, `internal/validate/`: supporting runtime services
 - `internal/onboarding/`, `internal/usersettings/`, `internal/settingseditor/`, `internal/profilewrite/`: first-run setup, persisted user settings, settings UI, and profile config writing
 - `internal/paramform/`, `internal/uistep/`: workflow parameter forms and workflow-defined UI step rendering

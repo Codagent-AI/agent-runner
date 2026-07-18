@@ -1,6 +1,7 @@
 package exec
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -9,8 +10,8 @@ import (
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/flowctl"
+	"github.com/codagent/agent-runner/internal/interactive"
 	"github.com/codagent/agent-runner/internal/model"
-	"github.com/codagent/agent-runner/internal/pty"
 	"github.com/codagent/agent-runner/internal/textfmt"
 )
 
@@ -29,9 +30,9 @@ var runSkipShell = func(cmd string) (int, error) {
 	return -1, err
 }
 
-// interactiveShellRunnerFn runs an interactive shell step inside a PTY.
-// Defaults to pty.RunShellInteractive; replaced in tests.
-var interactiveShellRunnerFn = pty.RunShellInteractive
+// interactiveShellRunnerFn runs an interactive shell step with direct terminal
+// inheritance. It is replaced in focused executor tests.
+var interactiveShellRunnerFn = interactive.RunTerminal
 
 // ShouldSkipStep evaluates a step's skip_if condition. For "previous_success",
 // it returns true when the previous step in scope succeeded. For "sh:<cmd>",
@@ -116,33 +117,35 @@ func emitShellInterpolationFailure(ctx *model.ExecutionContext, step *model.Step
 	emitStepEnd(ctx, prefix, startTime, "failed", map[string]any{"error": err.Error()})
 }
 
-func runShellProcess(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, command string, log Logger) (ProcessResult, bool, error) {
-	interactive := step.Mode == model.ModeInteractive
-	useCapture := step.Capture != "" && !interactive
+func runShellProcess(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, command string) (ProcessResult, bool, error) {
+	isInteractive := step.Mode == model.ModeInteractive
+	useCapture := step.Capture != "" && !isInteractive
 
-	if !interactive {
+	if !isInteractive {
 		result, err := runner.RunShell(command, useCapture, step.Workdir)
 		return result, useCapture, err
 	}
 
-	if ctx.SuspendHook != nil {
-		if err := ctx.SuspendHook(); err != nil {
-			return ProcessResult{}, false, err
-		}
+	executable, err := agentRunnerExecutable()
+	if err != nil {
+		return ProcessResult{}, false, fmt.Errorf("resolve watchdog executable: %w", err)
 	}
-	ptyResult, err := interactiveShellRunnerFn(command, pty.Options{Workdir: step.Workdir})
-	if ctx.ResumeHook != nil {
-		if resumeErr := ctx.ResumeHook(); err == nil && resumeErr != nil {
-			err = resumeErr
-		}
-	}
+	terminalResult, err := interactiveShellRunnerFn(context.Background(), &interactive.TerminalOptions{
+		Args: []string{"sh", "-c", command}, Workdir: step.Workdir,
+		Before: ctx.SuspendHook, After: ctx.ResumeHook, Foreground: true,
+		WatchdogExecutable: executable, Logger: ctx.AuditLogger,
+		Prefix: audit.BuildPrefix(nestingToAudit(ctx), step.ID),
+		Persist: func(metadata *interactive.ProcessMetadata) {
+			setInteractiveAttempt(ctx, metadata)
+			if ctx.FlushState != nil {
+				ctx.FlushState()
+			}
+		},
+	})
 	if err != nil {
 		return ProcessResult{}, false, err
 	}
-	if ptyResult.Warning != "" {
-		log.Errorf("%s\n", ptyResult.Warning)
-	}
-	return ProcessResult{ExitCode: ptyResult.ExitCode, Stdout: ptyResult.Stdout, Stderr: ptyResult.Warning}, false, nil
+	return ProcessResult{ExitCode: terminalResult.ExitCode}, false, nil
 }
 
 func captureShellOutput(step *model.Step, ctx *model.ExecutionContext, result ProcessResult) {
@@ -185,7 +188,7 @@ func ExecuteShellStep(
 
 	emitStepStart(ctx, prefix, startTime, map[string]any{"command": truncateForAudit(command)})
 
-	result, useCapture, runErr := runShellProcess(step, ctx, runner, command, log)
+	result, useCapture, runErr := runShellProcess(step, ctx, runner, command)
 	if runErr != nil {
 		emitStepEnd(ctx, prefix, startTime, "failed", map[string]any{"error": runErr.Error()})
 		return OutcomeFailed, runErr
@@ -203,7 +206,9 @@ func ExecuteShellStep(
 	endData := map[string]any{
 		"exit_code": result.ExitCode,
 		"stderr":    truncateForAudit(result.Stderr),
-		"stdout":    truncateForAudit(result.Stdout),
+	}
+	if step.Mode != model.ModeInteractive {
+		endData["stdout"] = truncateForAudit(result.Stdout)
 	}
 
 	emitStepEnd(ctx, prefix, startTime, string(outcome), endData)

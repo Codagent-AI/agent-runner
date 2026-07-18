@@ -2,14 +2,14 @@
 
 ## Purpose
 
-Defines how the runner dispatches agent step execution to CLI adapters via PTY or direct process execution.
+Defines how the runner dispatches agent step execution to CLI adapters through direct terminal handoff or headless process execution.
 ## Requirements
 ### Requirement: Agent step execution dispatch
-The runner's agent step executor SHALL resolve the agent profile before delegating CLI invocation. For `session: new` steps, the profile is resolved from the step's `agent` field. For `session: resume` or `session: inherit` steps, the profile is inherited from the session-originating step. The step's optional `mode` override is applied on top of the resolved profile's `default_mode`. Per-step `model` and `cli` overrides, if present, take precedence over the profile's values. Interactive steps SHALL execute via the PTY layer. Autonomous steps SHALL execute via direct process execution. Both paths use the adapter for arg construction.
+The runner's agent step executor SHALL resolve the agent profile before delegating CLI invocation. For `session: new` steps, the profile is resolved from the step's `agent` field. For `session: resume` or `session: inherit` steps, the profile is inherited from the session-originating step. The step's optional `mode` override is applied on top of the resolved profile's `default_mode`. Per-step `model` and `cli` overrides, if present, take precedence over the profile's values. Interactive steps and autonomous steps routed to the interactive backend SHALL execute via direct terminal handoff. Autonomous-headless steps SHALL execute via direct process execution with piped output. Both paths use the adapter for argument construction.
 
 #### Scenario: New session step dispatched
 - **WHEN** the runner executes an agent step with `session: new` and `agent: interactive_base`
-- **THEN** the runner resolves the `interactive_base` profile, determines mode from the profile's `default_mode` (or the step's `mode` override), and dispatches via PTY for interactive or direct exec for autonomous
+- **THEN** the runner resolves the `interactive_base` profile, determines mode from the profile's `default_mode` (or the step's `mode` override), and dispatches via direct terminal handoff for interactive or direct headless exec for autonomous
 
 #### Scenario: Resume step with mode override
 - **WHEN** the runner executes an agent step with `session: resume` and `mode: autonomous`, and the inherited profile has `default_mode: interactive`
@@ -52,4 +52,3 @@ The `WorkflowResumed` flag SHALL be set on `ExecutionContext` when `opts.From` i
 #### Scenario: Session reuse without workflow resume
 - **WHEN** a step has `session: resume` during a normal (non-resumed) workflow run
 - **THEN** the user prompt is `"Let's continue to the {step} step"` and the system prefix uses the normal workflow description, not resume messaging
-

@@ -1,6 +1,5 @@
-// Package interactive contains the out-of-band control plane and direct
-// interactive execution primitives. The control plane is intentionally
-// usable before the production PTY execution path is cut over.
+// Package interactive contains the out-of-band agent control plane and the
+// direct terminal execution primitives shared by agent and shell steps.
 package interactive
 
 import (

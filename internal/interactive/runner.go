@@ -205,10 +205,30 @@ func pruneEnvironment(env, drop []string) []string {
 }
 
 func startDirectChild(options *DirectOptions, attempt *Attempt) (*exec.Cmd, *os.File, *unix.Termios, error) {
-	cmd := exec.Command(options.Args[0], options.Args[1:]...) // #nosec G204 -- adapter-built interactive command
+	return startTerminalChild(&childLaunchOptions{
+		Args: options.Args, Env: options.Env, DropEnv: options.DropEnv,
+		Workdir: options.Workdir, Stdin: options.Stdin, Stdout: options.Stdout,
+		Stderr: options.Stderr, TTY: options.TTY, Foreground: options.Foreground,
+	}, attempt.Environment())
+}
+
+type childLaunchOptions struct {
+	Args       []string
+	Env        []string
+	DropEnv    []string
+	Workdir    string
+	Stdin      io.Reader
+	Stdout     io.Writer
+	Stderr     io.Writer
+	TTY        *os.File
+	Foreground bool
+}
+
+func startTerminalChild(options *childLaunchOptions, extraEnv []string) (*exec.Cmd, *os.File, *unix.Termios, error) {
+	cmd := exec.Command(options.Args[0], options.Args[1:]...) // #nosec G204 -- workflow or adapter command by design
 	cmd.Dir = options.Workdir
 	cmd.Env = append(pruneEnvironment(os.Environ(), options.DropEnv), options.Env...)
-	cmd.Env = append(cmd.Env, attempt.Environment()...)
+	cmd.Env = append(cmd.Env, extraEnv...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = options.Stdin, options.Stdout, options.Stderr
 	if cmd.Stdin == nil {
 		cmd.Stdin = os.Stdin
@@ -226,7 +246,7 @@ func startDirectChild(options *DirectOptions, attempt *Attempt) (*exec.Cmd, *os.
 	var runnerModes *unix.Termios
 	if options.Foreground {
 		if tty == nil {
-			return nil, nil, nil, errors.New("direct interactive runner: stdin is not a terminal")
+			return nil, nil, nil, errors.New("direct terminal runner: stdin is not a terminal")
 		}
 		fd, err := checkedTerminalFD(tty.Fd())
 		if err != nil {
@@ -242,7 +262,7 @@ func startDirectChild(options *DirectOptions, attempt *Attempt) (*exec.Cmd, *os.
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, nil, nil, fmt.Errorf("start direct interactive child: %w", err)
+		return nil, nil, nil, fmt.Errorf("start direct terminal child: %w", err)
 	}
 	return cmd, tty, runnerModes, nil
 }

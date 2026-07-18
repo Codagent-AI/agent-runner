@@ -35,15 +35,20 @@ const (
 	terminalLeaseFixtureEnv   = "AGENT_RUNNER_TERMINAL_LEASE_E2E_FIXTURE"
 	terminalLeaseWorkflowEnv  = "AGENT_RUNNER_TERMINAL_LEASE_E2E_WORKFLOW"
 	durabilityRetryFixtureEnv = "AGENT_RUNNER_DURABILITY_RETRY_E2E_FIXTURE"
+	directShellFixtureEnv     = "AGENT_RUNNER_DIRECT_SHELL_E2E_FIXTURE"
+	directShellRunnerEnv      = "AGENT_RUNNER_DIRECT_SHELL_E2E_RUNNER"
+	directShellWorkflowEnv    = "AGENT_RUNNER_DIRECT_SHELL_E2E_WORKFLOW"
+	directShellTTYDeviceEnv   = "AGENT_RUNNER_DIRECT_SHELL_TTY_DEVICE"
+	directShellChildEnv       = "AGENT_RUNNER_DIRECT_SHELL_CHILD"
 )
 
 var (
 	sessionUUIDRE = regexp.MustCompile(`\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
 )
 
-func TestInteractivePTYWorkflowIntegration(t *testing.T) {
+func TestInteractiveDirectHandoffWorkflowIntegration(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("interactive PTY smoke test requires a POSIX terminal")
+		t.Skip("interactive direct-handoff smoke test requires a POSIX terminal")
 	}
 
 	repoRoot := findRepoRoot(t)
@@ -59,7 +64,7 @@ func TestInteractivePTYWorkflowIntegration(t *testing.T) {
 
 	buildAgentRunner(t, repoRoot, runnerBin)
 	writeInteractiveAgentFixtures(t, binDir, []string{"claude"})
-	workflowPath := writeInteractivePTYWorkflow(t, tmp)
+	workflowPath := writeInteractiveDirectHandoffWorkflow(t, tmp)
 
 	cmd := exec.Command(runnerBin, "--headless", workflowPath)
 	cmd.Dir = repoRoot
@@ -73,11 +78,11 @@ func TestInteractivePTYWorkflowIntegration(t *testing.T) {
 
 	output, err := runInteractiveWorkflowInPTY(cmd, 45*time.Second)
 	if err != nil {
-		t.Fatalf("interactive PTY integration workflow failed: %v\n%s", err, output)
+		t.Fatalf("interactive direct-handoff workflow failed: %v\n%s", err, output)
 	}
 
 	wantSteps := []string{"claude-interactive", "claude-interactive-resume"}
-	sessionDir := latestWorkflowRunDir(t, home, repoRoot, "interactive-pty-integration")
+	sessionDir := latestWorkflowRunDir(t, home, repoRoot, "interactive-direct-handoff-integration")
 	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
 	if err != nil {
 		t.Fatalf("read run state: %v", err)
@@ -158,6 +163,86 @@ func TestInteractiveDirectHandoffJobControl(t *testing.T) {
 			_ = command.Wait()
 		})
 	}
+}
+
+func TestInteractiveShellDirectTerminalHandoffE2E(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("direct terminal handoff requires a POSIX terminal")
+	}
+	repoRoot := findRepoRoot(t)
+	tmp := t.TempDir()
+	runnerBin := filepath.Join(tmp, "agent-runner")
+	buildAgentRunner(t, repoRoot, runnerBin)
+	workflowPath := writeDirectShellWorkflow(t, tmp, currentTestBinary(t))
+
+	command := exec.Command(currentTestBinary(t), "-test.run=^TestInteractiveShellDirectHandoffFixtureProcess$")
+	command.Dir = repoRoot
+	command.Env = append(os.Environ(),
+		directShellFixtureEnv+"=1",
+		directShellRunnerEnv+"="+runnerBin,
+		directShellWorkflowEnv+"="+workflowPath,
+	)
+	output, err := runCommandInPTY(command, 30*time.Second)
+	if err != nil {
+		t.Fatalf("interactive shell direct-handoff workflow failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "DIRECT_SHELL_TTY_OK") {
+		t.Fatalf("interactive shell did not confirm direct terminal inheritance:\n%s", output)
+	}
+}
+
+// TestInteractiveShellDirectHandoffFixtureProcess records the outer terminal
+// device before launching Agent Runner. The workflow's shell child must inherit
+// that same device rather than receiving a runner-created nested PTY.
+func TestInteractiveShellDirectHandoffFixtureProcess(t *testing.T) {
+	if os.Getenv(directShellFixtureEnv) == "" {
+		return
+	}
+	device, err := terminalDeviceID(os.Stdin)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "inspect outer terminal: %v\n", err)
+		os.Exit(2)
+	}
+	command := exec.Command(os.Getenv(directShellRunnerEnv), "--headless", os.Getenv(directShellWorkflowEnv))
+	command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
+	command.Env = append(os.Environ(), directShellTTYDeviceEnv+"="+strconv.FormatUint(device, 10))
+	if err := command.Run(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "run direct-shell workflow: %v\n", err)
+		os.Exit(2)
+	}
+	os.Exit(0)
+}
+
+func TestInteractiveShellDirectChildProcess(t *testing.T) {
+	if os.Getenv(directShellChildEnv) == "" {
+		return
+	}
+	want, err := strconv.ParseUint(os.Getenv(directShellTTYDeviceEnv), 10, 64)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "parse expected terminal device: %v\n", err)
+		os.Exit(2)
+	}
+	for name, file := range map[string]*os.File{"stdin": os.Stdin, "stdout": os.Stdout, "stderr": os.Stderr} {
+		got, statErr := terminalDeviceID(file)
+		if statErr != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "inspect %s terminal: %v\n", name, statErr)
+			os.Exit(2)
+		}
+		if got != want {
+			_, _ = fmt.Fprintf(os.Stderr, "%s terminal device = %d, want inherited device %d\n", name, got, want)
+			os.Exit(2)
+		}
+	}
+	_, _ = fmt.Fprintln(os.Stdout, "DIRECT_SHELL_TTY_OK")
+	os.Exit(0)
+}
+
+func terminalDeviceID(file *os.File) (uint64, error) {
+	var stat unix.Stat_t
+	if err := unix.Fstat(int(file.Fd()), &stat); err != nil {
+		return 0, err
+	}
+	return uint64(stat.Rdev), nil
 }
 
 func TestInteractiveTerminalLeaseFailures(t *testing.T) {
@@ -290,6 +375,22 @@ steps:
 	return path
 }
 
+func writeDirectShellWorkflow(t *testing.T, dir, testBinary string) string {
+	t.Helper()
+	path := filepath.Join(dir, "interactive-shell-direct-handoff.yaml")
+	data := []byte(fmt.Sprintf(`name: interactive-shell-direct-handoff
+steps:
+  - id: direct-shell
+    command: |
+      %s=1 %q -test.run='^TestInteractiveShellDirectChildProcess$'
+    mode: interactive
+`, directShellChildEnv, testBinary))
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func scanPTYText(reader io.Reader, output chan<- string) {
 	buffer := make([]byte, 4096)
 	for {
@@ -325,11 +426,11 @@ func waitForPTYText(t *testing.T, output <-chan string, want string, timeout tim
 	}
 }
 
-func writeInteractivePTYWorkflow(t *testing.T, dir string) string {
+func writeInteractiveDirectHandoffWorkflow(t *testing.T, dir string) string {
 	t.Helper()
-	path := filepath.Join(dir, "interactive-pty-integration.yaml")
-	data := []byte(`name: interactive-pty-integration
-description: "Deterministic PTY integration fixture"
+	path := filepath.Join(dir, "interactive-direct-handoff-integration.yaml")
+	data := []byte(`name: interactive-direct-handoff-integration
+description: "Deterministic direct terminal handoff fixture"
 steps:
   - id: claude-interactive
     agent: claude_interactive_smoke
@@ -340,7 +441,7 @@ steps:
     prompt: "Wait for the integration controller again."
 `)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("write PTY integration workflow: %v", err)
+		t.Fatalf("write direct-handoff integration workflow: %v", err)
 	}
 	return path
 }

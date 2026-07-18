@@ -147,11 +147,19 @@ Every registered CLI adapter SHALL support all three invocation contexts: intera
 
 ### Requirement: No permission loosening in interactive mode
 
-In interactive context, no adapter SHALL emit a flag that bypasses or pre-approves the underlying CLI's permission/approval prompts. The human at the terminal supervises permissions; the runner MUST NOT preempt that supervision. Autonomous invocations (both headless and interactive backend) MAY emit such flags, since the step operates without human supervision.
+In interactive context, no adapter SHALL emit a flag that broadly bypasses or pre-approves the underlying CLI's permission/approval prompts. The human at the terminal supervises permissions; the runner MUST NOT preempt that supervision. An adapter MAY pre-approve the completion client only when it can restrict approval to the exact absolute executable path and fixed `step complete` arguments. If a CLI cannot express that narrow rule safely, the adapter SHALL retain the CLI's normal supervised approval prompt rather than broaden the rule. Autonomous invocations (both headless and interactive backend) MAY emit broader permission flags because the step operates without human supervision.
 
 #### Scenario: Adapter omits permission-grant flags in interactive context
 - **WHEN** any adapter constructs args for an interactive step
-- **THEN** the args do not include any flag that auto-approves tools, paths, URLs, or commands (e.g., `--allow-all`, `--force`, `--yolo`, `--dangerously-skip-permissions`)
+- **THEN** the args do not include any broad permission grant; only an exact completion-client rule is permitted
+
+#### Scenario: Broader completion forms are not pre-approved
+- **WHEN** the agent adds arguments, shell chaining, substitutions, or uses another Agent Runner subcommand
+- **THEN** the CLI's normal permission behavior applies
+
+#### Scenario: CLI without exact rules stays supervised
+- **WHEN** a CLI cannot constrain pre-approval to the absolute executable and fixed `step complete` arguments
+- **THEN** its adapter emits no broader rule and the completion command uses the normal interactive approval prompt
 
 #### Scenario: Autonomous-headless adapter MAY include permission-grant flags
 - **WHEN** any adapter constructs args for an autonomous-headless step
@@ -179,7 +187,7 @@ The runner SHALL include `AskUserQuestion` in the disallowed-tools list for ever
 
 ### Requirement: Autonomy system prompt enrichment for interactive backend
 
-When the invocation context is autonomous-interactive, the runner SHALL prepend autonomy instructions to the step's system prompt before passing it to the adapter. The instructions SHALL direct the agent to work autonomously without asking for human input and to signal continuation when done using the same continuation mechanism that interactive steps use. The autonomy instructions SHALL be prepended before any engine enrichment or step-level system prompt content.
+When the invocation context is autonomous-interactive, the runner SHALL prepend autonomy instructions to the step's system prompt before passing it to the adapter. The instructions SHALL direct the agent to work autonomously without asking for human input and to signal completion through the same control channel that interactive steps use. The autonomy instructions SHALL be prepended before any engine enrichment or step-level system prompt content.
 
 #### Scenario: Autonomy instructions prepended in autonomous-interactive context
 - **WHEN** the runner prepares system prompt content for an autonomous-interactive step
@@ -195,7 +203,7 @@ When the invocation context is autonomous-interactive, the runner SHALL prepend 
 
 ### Requirement: Capture forces autonomous-headless
 
-When an autonomous step has a `capture` field, the runner SHALL force the invocation context to autonomous-headless regardless of the `autonomous_backend` setting or TTY availability. Capture requires a clean stdout pipe, which only the headless execution path provides; the interactive backend runs inside a PTY whose output stream contains terminal control sequences unsuitable for programmatic capture. This override is per-step — other autonomous steps in the same run that do not use `capture` are unaffected by this rule.
+When an autonomous step has a `capture` field, the runner SHALL force the invocation context to autonomous-headless regardless of the `autonomous_backend` setting or TTY availability. Capture requires a clean stdout pipe, which only the headless execution path provides; the interactive backend attaches directly to the user's terminal and does not expose its output for programmatic capture. This override is per-step — other autonomous steps in the same run that do not use `capture` are unaffected by this rule.
 
 #### Scenario: Capture step with interactive backend forced to headless
 - **WHEN** the `autonomous_backend` setting is `interactive` and an autonomous step has `capture: result`
@@ -253,7 +261,7 @@ The setting SHALL NOT affect interactive (non-autonomous) invocations. The exist
 
 #### Scenario: Setting applies to both autonomous-headless and autonomous-interactive
 
-- **WHEN** an autonomous step runs with `autonomous_permission_mode: yolo` and the resolved backend is autonomous-interactive (e.g., Claude in a PTY)
+- **WHEN** an autonomous step runs with `autonomous_permission_mode: yolo` and the resolved backend is autonomous-interactive (e.g., Claude on the user's terminal)
 - **THEN** the adapter applies the same yolo-mode flag set it would apply in autonomous-headless
 
 #### Scenario: Adapter without a broader flag is mode-insensitive

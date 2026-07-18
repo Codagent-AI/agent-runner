@@ -4,7 +4,7 @@
 
 ### Requirement: Direct terminal inheritance
 
-Interactive and autonomous-interactive agent steps SHALL spawn the CLI process with the user's terminal attached directly: the child inherits the runner's stdin, stdout, and stderr. The runner SHALL NOT create a pseudo-terminal for these steps and SHALL NOT read, write, buffer, or modify any bytes flowing between the user's terminal and the CLI process while the step runs. Headless agent steps are unchanged: they run via direct exec with piped output and no terminal.
+Interactive and autonomous-interactive agent steps and interactive shell steps SHALL spawn the child process with the user's terminal attached directly: the child inherits the runner's stdin, stdout, and stderr. The runner SHALL NOT create an intermediate terminal or read, write, buffer, capture, or modify any bytes flowing between the user's terminal and the child while the step runs. Headless agent and autonomous shell steps are unchanged: they use piped execution.
 
 #### Scenario: Interactive step inherits the terminal
 - **WHEN** the runner executes an interactive agent step
@@ -127,9 +127,9 @@ If the runner process dies while an interactive agent step's CLI child is runnin
 - **WHEN** a run is resumed after a runner crash and a verified child from the crashed attempt is still running
 - **THEN** the runner terminates that child's process group gracefully and removes the stale control endpoint before the fresh attempt spawns
 
-### Requirement: No terminal transcript for interactive agent steps
+### Requirement: No terminal transcript for interactive terminal steps
 
-The runner SHALL NOT capture, persist, or parse the terminal output of interactive or autonomous-interactive agent steps. The durable record of such a step is the agent CLI's native session log plus the runner's workflow audit events.
+The runner SHALL NOT capture, persist, or parse terminal output for interactive or autonomous-interactive agent steps or interactive shell steps. The durable record of an agent step is the CLI's native session log plus workflow audit events. An interactive shell step records command metadata, exit code, and outcome only.
 
 #### Scenario: No output files created
 - **WHEN** an interactive agent step runs and exits

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const completionPluginName = "agent-runner"
@@ -108,6 +109,7 @@ func prepareCodexCompletionHome(command CompletionCommand, runID string) (string
 	if err := linkCodexHomeEntries(sourceHome, privateHome); err != nil {
 		return "", err
 	}
+	config = inheritCodexHookTrust(config, sourceHome, privateHome)
 	privateConfigPath := filepath.Join(privateHome, "config.toml")
 	configFile, err := os.OpenFile(privateConfigPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G703,G304 -- privateHome is confined to the cache digest directory and the filename is fixed
 	if err == nil {
@@ -143,6 +145,43 @@ Run this exact command now, then finish the response:
 		return "", fmt.Errorf("write Codex completion skill: %w", err)
 	}
 	return privateHome, nil
+}
+
+func inheritCodexHookTrust(config []byte, sourceHome, privateHome string) []byte {
+	sourcePrefix := `[hooks.state."` + filepath.Join(sourceHome, "hooks.json") + `:`
+	privatePrefix := `[hooks.state."` + filepath.Join(privateHome, "hooks.json") + `:`
+	lines := strings.SplitAfter(string(config), "\n")
+	var inherited []string
+	for i := 0; i < len(lines); {
+		if !strings.HasPrefix(lines[i], sourcePrefix) {
+			i++
+			continue
+		}
+		end := i + 1
+		for end < len(lines) && !strings.HasPrefix(lines[end], "[") {
+			end++
+		}
+		section := strings.Join(lines[i:end], "")
+		privateSection := strings.Replace(section, sourcePrefix, privatePrefix, 1)
+		privateHeader := strings.TrimSuffix(strings.SplitN(privateSection, "\n", 2)[0], "\r")
+		if !strings.Contains(string(config), privateHeader) {
+			inherited = append(inherited, privateSection)
+		}
+		i = end
+	}
+	if len(inherited) == 0 {
+		return config
+	}
+	var result strings.Builder
+	result.Write(config)
+	if len(config) > 0 && config[len(config)-1] != '\n' {
+		result.WriteByte('\n')
+	}
+	for _, section := range inherited {
+		result.WriteByte('\n')
+		result.WriteString(section)
+	}
+	return []byte(result.String())
 }
 
 func ensureCodexSharedStateDirectories(sourceHome string) error {
