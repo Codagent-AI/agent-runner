@@ -148,10 +148,12 @@ The run view SHALL render a single continuous, scrollable log pane that stacks a
 Each block SHALL open with a header containing the step name and its type glyph, and SHALL contain the same content contract previously rendered on selection:
 
 - **Shell**: interpolated command, exit code, duration, captured-variable name if `capture:` is set, full stdout and stderr (distinguishable).
-- **Headless agent**: agent profile, CLI, model, resolved session ID, interpolated prompt, exit code, duration, full stdout and stderr, resume action. The header lines SHALL render in the order: profile, CLI, model, session strategy, session ID. The `model:` line SHALL always be present on a started agent step; when no model can be resolved (no step-level override and no profile default available), the value SHALL render as `(unknown)`.
-- **Interactive agent**: agent profile, CLI, model, session ID, interpolated prompt, outcome, duration, resume action. The header-line ordering and always-shown `model:` rule (including the `(unknown)` fallback) match the headless-agent block.
+- **Headless agent**: agent profile, CLI, model, resolved session ID, interpolated prompt, exit code, duration, token usage, reported cost, full stdout and stderr, resume action. The header lines SHALL render in the order: profile, CLI, model, session strategy, session ID. The `model:` line SHALL always be present on a started agent step; when no model can be resolved (no step-level override and no profile default available), the value SHALL render as `(unknown)`.
+- **Interactive agent**: agent profile, CLI, model, session ID, interpolated prompt, outcome, duration, token usage, reported cost, resume action. The header-line ordering and always-shown `model:` rule (including the `(unknown)` fallback) match the headless-agent block.
 - **Sub-workflow**: resolved workflow path, interpolated params, outcome, duration. Children's blocks render inline beneath this header; no "drill in" hint appears because the content is already inline.
 - **Loop**: loop type (counted or for-each), iteration counter `(N/M)`, iterations completed, break_triggered, outcome, duration. Each started iteration renders as a block inline beneath this header, with that iteration's children inline beneath the iteration block; no "drill in" hint appears.
+
+Token-usage and cost lines on agent blocks SHALL render adjacent to the duration line on completed steps. When usage is unavailable (PTY-backed step, parse failure) the usage line SHALL render an explicit unavailable marker; when no cost was reported the cost line SHALL render an unavailable marker, never `$0.00` (per `cost-capture`). When a logical step executed more than once, the detail block SHALL reflect the latest attempt's metrics, annotated with the attempt number; earlier attempts remain part of run-level aggregates (per `run-metrics-artifact`).
 
 #### Scenario: Shell step block
 - **WHEN** a shell step has started and is rendered in the log
@@ -159,11 +161,23 @@ Each block SHALL open with a header containing the step name and its type glyph,
 
 #### Scenario: Headless agent block
 - **WHEN** a headless agent step has started
-- **THEN** the log contains a block with profile, CLI, model, session ID, interpolated prompt, exit code, duration, stdout/stderr, and a resume action
+- **THEN** the log contains a block with profile, CLI, model, session ID, interpolated prompt, exit code, duration, token usage, reported cost, stdout/stderr, and a resume action
 
 #### Scenario: Interactive agent block
 - **WHEN** an interactive agent step has started
-- **THEN** the log contains a block with profile, CLI, model, session ID, interpolated prompt, outcome, duration, and a resume action
+- **THEN** the log contains a block with profile, CLI, model, session ID, interpolated prompt, outcome, duration, token usage, reported cost, and a resume action
+
+#### Scenario: Agent block shows collected usage and cost
+- **WHEN** a completed autonomous-headless agent step's block is rendered and usage plus cost were collected
+- **THEN** the block shows the token usage and the reported cost adjacent to the duration line
+
+#### Scenario: Agent block shows unavailable usage marker
+- **WHEN** a completed agent step's block is rendered and its usage record is unavailable
+- **THEN** the usage and cost lines render explicit unavailable markers; no zero token counts and no `$0.00` are shown
+
+#### Scenario: Re-executed step block shows latest attempt
+- **WHEN** a logical step executed twice and its block is rendered
+- **THEN** the block shows the latest attempt's usage, cost, and duration with an attempt annotation; earlier attempts are not shown in the block but still count in run aggregates
 
 #### Scenario: Agent block header order places model under CLI
 - **WHEN** a headless or interactive agent block is rendered
@@ -557,3 +571,4 @@ When the step transitions out of `in-progress` (to `success`, `failed`, `skipped
 #### Scenario: Spinner absent for aborted step without active run
 - **WHEN** an agent step was interrupted by an earlier run and no run is currently active
 - **THEN** the log block shows no animated progress indicator (matching the step-list rule that `in-progress` does not blink outside an active run)
+
