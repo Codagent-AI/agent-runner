@@ -2,6 +2,7 @@ package runview
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -240,6 +241,68 @@ func TestMidRunCoverageExcludesSkippedAgentStep(t *testing.T) {
 	}
 	if totals.CostCoverage != model.CoverageComplete {
 		t.Fatalf("cost coverage = %q, want complete", totals.CostCoverage)
+	}
+}
+
+func TestSummaryScrollsRowsWhilePinningTotals(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusSuccess}
+	var children []*StepNode
+	for i := 0; i < 30; i++ {
+		children = append(children, summaryLeaf(fmt.Sprintf("step-%02d", i), root, 1000, float64Pointer(0.1), collectedUsageRecord(5, 1)))
+	}
+	root.Children = children
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.termHeight = 20
+	m.showSummary = true
+
+	// At offset 0 the top rows and the pinned totals line are visible; a late
+	// row has overflowed off the bottom.
+	plain := tuistyle.Sanitize(m.renderSummary())
+	if !strings.Contains(plain, "Total") {
+		t.Fatalf("totals line clipped at offset 0:\n%s", plain)
+	}
+	if !strings.Contains(plain, "step-00") {
+		t.Fatalf("top row missing at offset 0:\n%s", plain)
+	}
+	if strings.Contains(plain, "step-29") {
+		t.Fatalf("expected step-29 to be scrolled out of view at offset 0:\n%s", plain)
+	}
+
+	// Scrolling past the end reaches the last row; the totals line stays pinned
+	// and the offset clamps (top row leaves view, no runaway).
+	for i := 0; i < 50; i++ {
+		m.scrollSummary(1)
+	}
+	plain = tuistyle.Sanitize(m.renderSummary())
+	if !strings.Contains(plain, "step-29") {
+		t.Fatalf("bottom row not reachable after scrolling:\n%s", plain)
+	}
+	if !strings.Contains(plain, "Total") {
+		t.Fatalf("totals line clipped after scrolling:\n%s", plain)
+	}
+	if strings.Contains(plain, "step-00") {
+		t.Fatalf("top row still visible after scrolling to the bottom:\n%s", plain)
+	}
+}
+
+func TestSummaryScrollKeysAdjustOffset(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusSuccess}
+	var children []*StepNode
+	for i := 0; i < 30; i++ {
+		children = append(children, summaryLeaf(fmt.Sprintf("step-%02d", i), root, 1000, float64Pointer(0.1), collectedUsageRecord(5, 1)))
+	}
+	root.Children = children
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.termHeight = 20
+	m.showSummary = true
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	if m.summaryOffset != 1 {
+		t.Fatalf("j did not scroll summary down: offset=%d, want 1", m.summaryOffset)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	if m.summaryOffset != 0 {
+		t.Fatalf("k did not scroll summary up: offset=%d, want 0", m.summaryOffset)
 	}
 }
 

@@ -29,57 +29,80 @@ func (m *Model) renderSummary() string {
 		now = time.Now()
 	}
 
-	var b strings.Builder
-	b.WriteString("\n")
-	b.WriteString(m.renderChrome())
-	b.WriteString("\n\n")
-	b.WriteString(tuistyle.ScreenMargin)
-	b.WriteString(tuistyle.SectionStyle.Render("Run summary"))
-	b.WriteString("\n\n")
+	// The step rows scroll within a fixed header and a pinned footer, so the
+	// run-totals line stays visible no matter how many steps the workflow has.
+	header := []string{""}
+	header = append(header, strings.Split(m.renderChrome(), "\n")...)
+	header = append(header, "")
+	titleIdx := len(header)
+	header = append(header, tuistyle.ScreenMargin+tuistyle.SectionStyle.Render("Run summary"))
+	header = append(header, "")
 
+	var rowLines []string
 	if m.tree == nil || m.tree.Root == nil || len(m.tree.Root.Children) == 0 {
-		b.WriteString(tuistyle.ScreenMargin)
-		b.WriteString(tuistyle.DimStyle.Render("No steps to display."))
-		b.WriteString("\n")
+		rowLines = []string{tuistyle.ScreenMargin + tuistyle.DimStyle.Render("No steps to display.")}
 	} else {
+		var rb strings.Builder
 		for _, child := range m.tree.Root.Children {
-			m.renderSummaryNode(&b, child, 0, now)
+			m.renderSummaryNode(&rb, child, 0, now)
 		}
+		rowLines = strings.Split(strings.TrimRight(rb.String(), "\n"), "\n")
 	}
 
+	footer := m.summaryFooterLines(now)
+
+	// Window the rows to the space left between header and footer. termHeight 0
+	// (unsized, e.g. in tests) means render everything so nothing is hidden.
+	budget := len(rowLines)
+	if m.termHeight > 0 {
+		budget = max(1, m.termHeight-len(header)-len(footer))
+	}
+	maxOffset := max(0, len(rowLines)-budget)
+	if m.summaryOffset > maxOffset {
+		m.summaryOffset = maxOffset
+	}
+	off := m.summaryOffset
+	end := min(off+budget, len(rowLines))
+	visible := rowLines[off:end]
+
+	if maxOffset > 0 {
+		header[titleIdx] += tuistyle.DimStyle.Render(fmt.Sprintf("  rows %d–%d of %d · ↑/↓ scroll", off+1, end, len(rowLines)))
+	}
+
+	lines := make([]string, 0, len(header)+len(visible)+len(footer))
+	lines = append(lines, header...)
+	lines = append(lines, visible...)
+	lines = append(lines, footer...)
+	return strings.Join(lines, "\n") + "\n"
+}
+
+// summaryFooterLines builds the pinned footer: the run-totals line, any
+// error/notice, and the rule plus help bar.
+func (m *Model) summaryFooterLines(now time.Time) []string {
 	totals := m.summaryRunTotals(now)
-	b.WriteString("\n")
-	b.WriteString(tuistyle.ScreenMargin)
-	b.WriteString(tuistyle.SectionStyle.Render("Total"))
-	b.WriteString("  ")
-	b.WriteString(formatDuration(totals.ActiveDurationMS))
+	var total strings.Builder
+	total.WriteString(tuistyle.ScreenMargin)
+	total.WriteString(tuistyle.SectionStyle.Render("Total"))
+	total.WriteString("  ")
+	total.WriteString(formatDuration(totals.ActiveDurationMS))
 	if len(totals.Tokens) > 0 {
-		b.WriteString("  ")
-		b.WriteString(formatTokenCounts(totals.Tokens))
+		total.WriteString("  ")
+		total.WriteString(formatTokenCounts(totals.Tokens))
 	}
-	b.WriteString("  cost ")
-	b.WriteString(formatCoveredCost(totals.EstimatedAPICostUSD, totals.CostCoverage))
-	b.WriteString("  usage ")
-	b.WriteString(string(totals.UsageCoverage))
-	b.WriteString("\n")
+	total.WriteString("  cost ")
+	total.WriteString(formatCoveredCost(totals.EstimatedAPICostUSD, totals.CostCoverage))
+	total.WriteString("  usage ")
+	total.WriteString(string(totals.UsageCoverage))
 
+	footer := []string{"", total.String()}
 	if m.loadErr != "" {
-		b.WriteString("\n")
-		b.WriteString(tuistyle.ScreenMargin)
-		b.WriteString(tuistyle.DimStyle.Render("Error: " + m.loadErr))
+		footer = append(footer, "", tuistyle.ScreenMargin+tuistyle.DimStyle.Render("Error: "+m.loadErr))
 	}
 	if m.notice != "" {
-		b.WriteString("\n")
-		b.WriteString(tuistyle.ScreenMargin)
-		b.WriteString(tuistyle.DimStyle.Render(m.notice))
+		footer = append(footer, "", tuistyle.ScreenMargin+tuistyle.DimStyle.Render(m.notice))
 	}
-
-	b.WriteString("\n")
-	b.WriteString(m.renderRule())
-	b.WriteString("\n")
-	b.WriteString(m.renderHelpBarWithCwd())
-	b.WriteString("\n")
-	return b.String()
+	footer = append(footer, "", m.renderRule(), m.renderHelpBarWithCwd())
+	return footer
 }
 
 func (m *Model) renderSummaryNode(b *strings.Builder, node *StepNode, depth int, now time.Time) summaryMetrics {

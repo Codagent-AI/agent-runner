@@ -85,14 +85,15 @@ type Model struct {
 	stepRanges []stepLineRange
 	logAnchor  stepLineAnchor
 
-	active      bool
-	pulsePhase  float64
-	termWidth   int
-	termHeight  int
-	showLegend  bool
-	showSummary bool
-	loadErr     string
-	notice      string // transient message shown below the step list (e.g. spawn error)
+	active        bool
+	pulsePhase    float64
+	termWidth     int
+	termHeight    int
+	showLegend    bool
+	showSummary   bool
+	summaryOffset int // scroll offset (in step rows) for the summary screen
+	loadErr       string
+	notice        string // transient message shown below the step list (e.g. spawn error)
 
 	resolverCfg   ResolverConfig
 	startTime     time.Time
@@ -660,6 +661,16 @@ func (m *Model) scrollLiveUI(delta int) {
 	}
 }
 
+// scrollSummary adjusts the summary scroll offset. The lower bound is applied
+// here; the upper bound depends on rendered row count vs. available height and
+// is clamped at render time (see renderSummary), matching the log-offset model.
+func (m *Model) scrollSummary(delta int) {
+	m.summaryOffset += delta
+	if m.summaryOffset < 0 {
+		m.summaryOffset = 0
+	}
+}
+
 func (m *Model) liveUIVisible() bool {
 	if m.liveUI == nil {
 		return false
@@ -892,6 +903,26 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.showSummary {
+		switch msg.String() {
+		case "s", "esc":
+			m.showSummary = false
+			m.summaryOffset = 0
+		case "q":
+			if m.running {
+				m.quitConfirming = true
+				return m, nil
+			}
+			m.exitRequested = true
+			return m, emitExit
+		case "up", "k":
+			m.scrollSummary(-1)
+		case "down", "j":
+			m.scrollSummary(1)
+		}
+		return m, nil
+	}
+
 	// Quit-confirmation modal.
 	if m.quitConfirming {
 		switch msg.String() {
@@ -916,6 +947,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.showLegend = true
 	case "s":
 		m.showSummary = !m.showSummary
+		m.summaryOffset = 0
 	case "esc":
 		m.autoFollow = false
 		return m.handleEsc()
