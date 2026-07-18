@@ -102,7 +102,7 @@ type UsageRecord struct {
     Status        UsageStatus       `json:"status"`
     Reason        UnavailableReason `json:"reason,omitempty"`
     CLI           string            `json:"cli"`
-    Provider      string            `json:"provider,omitempty"`
+    Provider      string            `json:"provider,omitempty"` // best-effort: model API provider when known (claude→anthropic, codex→openai, opencode→reported), else the CLI vendor as a fallback for multi-backend CLIs that don't report one (copilot→github, cursor→cursor)
     Model         string            `json:"model,omitempty"` // actual model reported by the CLI
     Tokens        TokenCounts       `json:"tokens,omitempty"`         // attributed per-step counts
     RawCumulative TokenCounts       `json:"raw_cumulative,omitempty"` // provenance for cumulative CLIs
