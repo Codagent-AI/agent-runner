@@ -21,10 +21,24 @@ PY
 )
 fi
 
-if printf '%s\n' "$report" | grep -Fxq PLANNING_READY; then
-  printf 'Planning status gate: ready\n'
-  exit 0
-fi
+last_line=$(printf '%s\n' "$report" | sed '/^[[:space:]]*$/d' | tail -n 1)
 
-printf 'Planning status gate: blocked; return to define-change before continuing\n' >&2
-exit 1
+case "$last_line" in
+  PLANNING_READY)
+    printf 'Planning status gate: ready\n'
+    exit 0
+    ;;
+  PLANNING_BLOCKED:*)
+    reason=${last_line#PLANNING_BLOCKED:}
+    reason=$(printf '%s' "$reason" | sed 's/^[[:space:]]*//')
+    if [ -z "$reason" ]; then
+      reason="no reason provided"
+    fi
+    printf 'Planning status gate: blocked: %s\n' "$reason" >&2
+    exit 1
+    ;;
+  *)
+    printf 'Planning status gate: final non-empty line must be PLANNING_READY or PLANNING_BLOCKED:<reason>; got: %s\n' "$last_line" >&2
+    exit 1
+    ;;
+esac

@@ -21,15 +21,24 @@ PY
 )
 fi
 
-if printf '%s\n' "$report" | grep -Fxq REVIEW_RESOLVED; then
-  printf 'Plan review loop: resolved\n'
-  exit 0
-fi
+last_line=$(printf '%s\n' "$report" | sed '/^[[:space:]]*$/d' | tail -n 1)
 
-if printf '%s\n' "$report" | grep -Eq '^PLANNING_BLOCKED:'; then
-  printf 'Plan review loop: semantic blocker found\n'
-  exit 0
-fi
-
-printf 'Plan review loop: another discussion round is required\n' >&2
-exit 1
+case "$last_line" in
+  REVIEW_RESOLVED)
+    printf 'Plan review loop: resolved\n'
+    exit 0
+    ;;
+  PLANNING_BLOCKED:*)
+    reason=${last_line#PLANNING_BLOCKED:}
+    reason=$(printf '%s' "$reason" | sed 's/^[[:space:]]*//')
+    if [ -z "$reason" ]; then
+      reason="no reason provided"
+    fi
+    printf 'Plan review loop: semantic blocker found: %s\n' "$reason"
+    exit 0
+    ;;
+  *)
+    printf 'Plan review loop: another discussion round is required; final non-empty line was: %s\n' "$last_line" >&2
+    exit 1
+    ;;
+esac
