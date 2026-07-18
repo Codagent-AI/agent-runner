@@ -59,8 +59,10 @@ steps:
       Invoke codagent:push-pr to commit any appropriate remaining changes, push the current branch, and create or update its pull request.
 
       The pull request MUST be a draft so the user can review it during the acceptance phase. This requirement intentionally overrides the skill's default non-draft creation command:
+      - the pull request MUST target `dev` as its base branch;
+      - if an existing pull request targets another base branch, update its base to `dev`;
       - when creating a pull request, create it as a draft;
       - when updating an existing open pull request that is not a draft, convert it back to draft;
       - do not mark the pull request ready for review in this step.
 
-      Verify the final state with `gh pr view --json isDraft,url`. Do not signal completion unless `isDraft` is true. Report the pull request URL.
+      Verify the final state with `gh pr view --json baseRefName,isDraft,url`. Do not signal completion unless `baseRefName` is `dev` and `isDraft` is true. Report the pull request URL.
