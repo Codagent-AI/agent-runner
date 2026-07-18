@@ -35,9 +35,9 @@ inspect_sync_lock() {
   lock_pid=""
   lock_token="missing"
   lock_identity=""
-  if lock_identity="$(stat -f '%d:%i:%m' "$SANDBOX_SYNC_HOME_LOCK" 2>/dev/null)"; then
+  if lock_identity="$(stat -f '%d:%i:%Fm:%Fc' "$SANDBOX_SYNC_HOME_LOCK" 2>/dev/null)"; then
     :
-  elif lock_identity="$(stat -c '%d:%i:%Y' "$SANDBOX_SYNC_HOME_LOCK" 2>/dev/null)"; then
+  elif lock_identity="$(stat -c '%d:%i:%y:%z' "$SANDBOX_SYNC_HOME_LOCK" 2>/dev/null)"; then
     :
   else
     lock_identity=""
