@@ -7,8 +7,8 @@ change_name=$(printf '%s' "$payload" | "$script_dir/validate-change-name.sh")
 
 change_dir="openspec/changes/$change_name"
 archive_root="openspec/changes/archive"
-before_archives=$(mktemp)
-after_archives=$(mktemp)
+before_archives=$(mktemp "${TMPDIR:-/tmp}/openspec-archive-before.XXXXXX")
+after_archives=$(mktemp "${TMPDIR:-/tmp}/openspec-archive-after.XXXXXX")
 trap 'rm -f "$before_archives" "$after_archives"' EXIT
 
 find "$archive_root" -mindepth 1 -maxdepth 1 -type d -name "*-$change_name" -print | sort > "$before_archives"
