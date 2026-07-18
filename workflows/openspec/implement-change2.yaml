@@ -14,6 +14,11 @@ sessions:
     agent: planner
 
 steps:
+  - id: validate-change-name
+    script: validate-change-name.sh
+    script_inputs:
+      change_name: "{{change_name}}"
+
   - id: implement-tasks
     loop:
       over: "openspec/changes/{{change_name}}/tasks/*.md"

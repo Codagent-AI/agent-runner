@@ -2,19 +2,8 @@
 set -eu
 
 payload=$(cat)
-
-if command -v jq >/dev/null 2>&1; then
-  change_name=$(printf '%s' "$payload" | jq -r '.change_name // ""')
-else
-  change_name=$(printf '%s\n' "$payload" | sed -n 's/.*"change_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-fi
-
-case "$change_name" in
-  ""|[!a-z0-9]*|*[!a-z0-9-]*)
-    printf 'commit-change-plan: invalid change_name %s\n' "$change_name" >&2
-    exit 1
-    ;;
-esac
+script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
+change_name=$(printf '%s' "$payload" | "$script_dir/validate-change-name.sh")
 
 change_dir="openspec/changes/$change_name"
 
