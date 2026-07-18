@@ -205,7 +205,7 @@ func TestInteractiveShellDirectHandoffFixtureProcess(t *testing.T) {
 	}
 	command := exec.Command(os.Getenv(directShellRunnerEnv), "--headless", os.Getenv(directShellWorkflowEnv))
 	command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
-	command.Env = append(os.Environ(), directShellTTYDeviceEnv+"="+strconv.FormatUint(device, 10))
+	command.Env = append(os.Environ(), directShellTTYDeviceEnv+"="+device)
 	if err := command.Run(); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "run direct-shell workflow: %v\n", err)
 		os.Exit(2)
@@ -217,11 +217,7 @@ func TestInteractiveShellDirectChildProcess(t *testing.T) {
 	if os.Getenv(directShellChildEnv) == "" {
 		return
 	}
-	want, err := strconv.ParseUint(os.Getenv(directShellTTYDeviceEnv), 10, 64)
-	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "parse expected terminal device: %v\n", err)
-		os.Exit(2)
-	}
+	want := os.Getenv(directShellTTYDeviceEnv)
 	for name, file := range map[string]*os.File{"stdin": os.Stdin, "stdout": os.Stdout, "stderr": os.Stderr} {
 		got, statErr := terminalDeviceID(file)
 		if statErr != nil {
@@ -229,7 +225,7 @@ func TestInteractiveShellDirectChildProcess(t *testing.T) {
 			os.Exit(2)
 		}
 		if got != want {
-			_, _ = fmt.Fprintf(os.Stderr, "%s terminal device = %d, want inherited device %d\n", name, got, want)
+			_, _ = fmt.Fprintf(os.Stderr, "%s terminal device = %s, want inherited device %s\n", name, got, want)
 			os.Exit(2)
 		}
 	}
@@ -237,12 +233,12 @@ func TestInteractiveShellDirectChildProcess(t *testing.T) {
 	os.Exit(0)
 }
 
-func terminalDeviceID(file *os.File) (uint64, error) {
+func terminalDeviceID(file *os.File) (string, error) {
 	var stat unix.Stat_t
 	if err := unix.Fstat(int(file.Fd()), &stat); err != nil {
-		return 0, err
+		return "", err
 	}
-	return uint64(stat.Rdev), nil
+	return fmt.Sprint(stat.Rdev), nil
 }
 
 func TestInteractiveTerminalLeaseFailures(t *testing.T) {
