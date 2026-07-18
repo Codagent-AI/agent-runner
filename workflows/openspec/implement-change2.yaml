@@ -5,6 +5,9 @@ hidden: true
 params:
   - name: change_name
     required: true
+  - name: skip_validator
+    required: false
+    default: "false"
 
 sessions:
   - name: lead-agent
@@ -22,12 +25,13 @@ steps:
         params:
           task_file: "{{task_file}}"
           run_session_report: "true"
+          skip_validator: "{{skip_validator}}"
 
   - id: complete-task-index
     session: lead-agent
     mode: autonomous
     prompt: |
-      Every task workflow for OpenSpec change "{{change_name}}" has now completed successfully, including its implementation commit and task-compliance validation.
+      Every task workflow for OpenSpec change "{{change_name}}" has now completed successfully, including its implementation commit and, unless `skip_validator` is `true`, task-compliance validation.
 
       Update `openspec/changes/{{change_name}}/tasks.md` so each checklist entry corresponding to a task file under `openspec/changes/{{change_name}}/tasks/*.md` is checked. Do not change task wording, task-file content, requirements, design, or implementation. Verify the index still links to every task file and contains no unchecked task entry.
 
