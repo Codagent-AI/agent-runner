@@ -20,6 +20,8 @@ steps:
 
       Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports in the existing definition artifacts. Keep running the command and fixing until the existing artifacts pass validation. Do not create task files in this step.
 
+      Do not treat that command alone as proof that requirements are archiveable. Run `openspec show "{{change_name}}" --json` and inspect every parsed requirement in every delta. Each requirement MUST contain at least one parsed scenario. OpenSpec can report a change as valid while parsing zero scenarios when a code fence, note, or other content separates requirement text from its `#### Scenario:` headings. Mechanically move already-approved scenario blocks into the parser-recognized position when their intended requirement is unambiguous. If a missing or detached scenario requires inventing behavior or deciding which requirement it belongs to, stop and route the change back to `define-change`.
+
       Limit autonomous edits to unambiguously mechanical corrections that do not change the meaning, scope, or behavior approved by the user. If resolving an issue requires changing proposal intent, requirement or scenario semantics, or a design decision, do not make that change and do not proceed to task planning. Report the exact blocker and require the interactive `define-change` workflow to run again.
 
       Then dry-run the delta apply because `openspec validate` does not verify that MODIFIED, REMOVED, or RENAMED headers exist in the target main spec. For every delta file under `openspec/changes/{{change_name}}/specs/<capability>/spec.md`:
@@ -57,6 +59,8 @@ steps:
     capture: post_validation
     prompt: |
       Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports. Keep running the command and fixing until it passes with no errors.
+
+      Run `openspec show "{{change_name}}" --json` again and verify that every parsed requirement in every delta contains at least one parsed scenario. Fix only unambiguous formatting or placement problems. Treat any missing scenario semantics or ambiguous attachment as a blocker requiring `define-change`.
 
       Then repeat the delta-apply dry-run: for every `### Requirement:` header under `## MODIFIED`, `## REMOVED`, or `## RENAMED` FROM sections in `openspec/changes/{{change_name}}/specs/<capability>/spec.md`, confirm the exact header exists in `openspec/specs/<capability>/spec.md`. Fix every mismatch before proceeding.
 
