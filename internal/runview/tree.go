@@ -120,11 +120,12 @@ type StepNode struct {
 // Runtime display fields on StepNode remain latest-wins, while Attempts is
 // append-only so summaries can account for retries and resume sessions.
 type AttemptMetrics struct {
-	Attempt    int
-	Usage      *model.UsageRecord
-	CostUSD    *float64
-	DurationMs *int64
-	Outcome    string
+	Attempt      int
+	Usage        *model.UsageRecord
+	CostUSD      *float64
+	DurationMs   *int64
+	Outcome      string
+	AgentInvoked bool // whether this attempt actually launched an agent; gates mid-run coverage denominators
 }
 
 // NodeKey returns a stable key for a node based on its structural position in

@@ -128,7 +128,11 @@ func aggregateSummaryMetrics(node *StepNode, now time.Time) summaryMetrics {
 			metrics.costUSD += *attempt.CostUSD
 			metrics.pricedAttempts++
 		}
-		if node.Type == NodeHeadlessAgent || node.Type == NodeInteractiveAgent {
+		// Coverage denominators count only attempts that actually launched an
+		// agent. Skipped or never-invoked agent steps are excluded so the
+		// mid-run indicator matches the finished-run one (which filters on
+		// agent_invoked via the authoritative run_end totals).
+		if (node.Type == NodeHeadlessAgent || node.Type == NodeInteractiveAgent) && attempt.AgentInvoked {
 			metrics.agentAttempts++
 			if attempt.CostUSD != nil {
 				metrics.costReported++

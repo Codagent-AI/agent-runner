@@ -35,8 +35,8 @@ func TestApplyEventAppendsAttemptMetricsAndRunTotals(t *testing.T) {
 
 	node := tree.Root.Children[0]
 	wantAttempts := []AttemptMetrics{
-		{Attempt: 1, Usage: collectedUsageRecord(10, 2), CostUSD: float64Pointer(0.25), DurationMs: int64Pointer(1200), Outcome: "failed"},
-		{Attempt: 2, Usage: collectedUsageRecord(7, 3), CostUSD: float64Pointer(0.15), DurationMs: int64Pointer(800), Outcome: "success"},
+		{Attempt: 1, Usage: collectedUsageRecord(10, 2), CostUSD: float64Pointer(0.25), DurationMs: int64Pointer(1200), Outcome: "failed", AgentInvoked: true},
+		{Attempt: 2, Usage: collectedUsageRecord(7, 3), CostUSD: float64Pointer(0.15), DurationMs: int64Pointer(800), Outcome: "success", AgentInvoked: true},
 	}
 	if diff := cmp.Diff(wantAttempts, node.Attempts); diff != "" {
 		t.Fatalf("attempts mismatch (-want +got):\n%s", diff)
@@ -127,7 +127,7 @@ func TestRenderSummaryAggregatesAttemptsNestedContainersAndCoverage(t *testing.T
 	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusSuccess}
 	repeated := summaryLeaf("retry", root, 1000, float64Pointer(0.20), collectedUsageRecord(10, 2))
 	repeated.Attempts = append(repeated.Attempts,
-		AttemptMetrics{Attempt: 2, Usage: collectedUsageRecord(5, 1), CostUSD: float64Pointer(0.10), DurationMs: int64Pointer(500), Outcome: "success"})
+		AttemptMetrics{Attempt: 2, Usage: collectedUsageRecord(5, 1), CostUSD: float64Pointer(0.10), DurationMs: int64Pointer(500), Outcome: "success", AgentInvoked: true})
 
 	loop := &StepNode{ID: "loop", Type: NodeLoop, Status: StatusSuccess, Parent: root}
 	iter1 := &StepNode{ID: "loop", Type: NodeIteration, Status: StatusSuccess, Parent: loop, IterationIndex: 0}
@@ -224,6 +224,22 @@ func TestSummaryAddsInFlightElapsedForRunningStepWhenLive(t *testing.T) {
 		Attempts: []AttemptMetrics{{Attempt: 1, DurationMs: int64Pointer(2000), Outcome: "failed"}}}
 	if got := aggregateSummaryMetrics(retry, now); got.durationMS != 7000 {
 		t.Fatalf("retry: durationMS=%d, want 7000", got.durationMS)
+	}
+}
+
+func TestMidRunCoverageExcludesSkippedAgentStep(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusInProgress}
+	invoked := summaryLeaf("ran", root, 1200, float64Pointer(0.25), collectedUsageRecord(12, 3))
+	skipped := &StepNode{ID: "skipped", Type: NodeHeadlessAgent, Status: StatusSkipped, Parent: root,
+		Attempts: []AttemptMetrics{{Attempt: 1, Outcome: "skipped", AgentInvoked: false}}}
+	root.Children = []*StepNode{invoked, skipped}
+
+	totals := (&Model{tree: &Tree{Root: root}}).summaryRunTotals(time.Time{})
+	if totals.UsageCoverage != model.CoverageComplete {
+		t.Fatalf("usage coverage = %q, want complete (skipped step must not drag it to partial)", totals.UsageCoverage)
+	}
+	if totals.CostCoverage != model.CoverageComplete {
+		t.Fatalf("cost coverage = %q, want complete", totals.CostCoverage)
 	}
 }
 
@@ -431,7 +447,7 @@ func stepEndMetricsEvent(id string, attempt int, duration int64, outcome string,
 
 func summaryLeaf(id string, parent *StepNode, duration int64, cost *float64, usage *model.UsageRecord) *StepNode {
 	return &StepNode{ID: id, Type: NodeHeadlessAgent, Status: StatusSuccess, Parent: parent, DurationMs: int64Pointer(duration), Attempts: []AttemptMetrics{{
-		Attempt: 1, Usage: usage, CostUSD: cost, DurationMs: int64Pointer(duration), Outcome: "success",
+		Attempt: 1, Usage: usage, CostUSD: cost, DurationMs: int64Pointer(duration), Outcome: "success", AgentInvoked: true,
 	}}}
 }
 

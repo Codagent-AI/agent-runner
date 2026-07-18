@@ -674,12 +674,16 @@ func applyStepEnd(n *StepNode, data map[string]any) {
 	}
 
 	attempt := len(n.Attempts) + 1
+	agentInvoked := false
 	if identity, ok := data["identity"].(map[string]any); ok {
 		if v, found := intField(identity, "attempt"); found && v > 0 {
 			attempt = v
 		}
+		if v, found := boolField(identity, "agent_invoked"); found {
+			agentInvoked = v
+		}
 	}
-	metrics := AttemptMetrics{Attempt: attempt, Outcome: outcome}
+	metrics := AttemptMetrics{Attempt: attempt, Outcome: outcome, AgentInvoked: agentInvoked}
 	if n.DurationMs != nil {
 		v := *n.DurationMs
 		metrics.DurationMs = &v
