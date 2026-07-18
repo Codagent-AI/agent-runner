@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/exec"
 	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
@@ -24,12 +25,13 @@ func (r *delayedRunner) RunShell(cmd string, capture bool, workdir string) (exec
 
 func TestRunWorkflowProducesMetricsWhenAuditLogCannotOpen(t *testing.T) {
 	dir := t.TempDir()
+	log := &mockLog{}
 	if err := os.Mkdir(filepath.Join(dir, "audit.log"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	w := model.Workflow{Name: "test", Steps: []model.Step{shellStep("s1", "echo hi")}}
 	w.ApplyDefaults()
-	result, err := RunWorkflow(&w, nil, &Options{SessionDir: dir, ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{}})
+	result, err := RunWorkflow(&w, nil, &Options{SessionDir: dir, ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: log})
 	if err != nil || result != ResultSuccess {
 		t.Fatalf("RunWorkflow = %q, %v", result, err)
 	}
@@ -43,6 +45,52 @@ func TestRunWorkflowProducesMetricsWhenAuditLogCannotOpen(t *testing.T) {
 	}
 	if len(artifact.Steps) != 1 || artifact.Sessions[0].Status != metrics.SessionClosed {
 		t.Fatalf("artifact = %+v", artifact)
+	}
+	if !strings.Contains(strings.Join(log.lines, "\n"), "warning: audit trail unavailable") {
+		t.Fatalf("audit logger warning missing from log: %v", log.lines)
+	}
+}
+
+func TestRunWorkflowContinuesWhenAuditLogCannotOpenWithoutCustomLogger(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "audit.log"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	w := model.Workflow{Name: "test", Steps: []model.Step{shellStep("s1", "echo hi")}}
+	w.ApplyDefaults()
+
+	result, err := RunWorkflow(&w, nil, &Options{
+		SessionDir: dir, ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{},
+	})
+	if err != nil || result != ResultSuccess {
+		t.Fatalf("RunWorkflow = %q, %v", result, err)
+	}
+}
+
+type recordingAuditSink struct{ events []audit.Event }
+
+func (s *recordingAuditSink) Emit(event audit.Event) { s.events = append(s.events, event) }
+
+func TestEmitSkippedStepIncludesNestingPrefixInMetricsIdentity(t *testing.T) {
+	iteration := 2
+	sink := &recordingAuditSink{}
+	rs := &runState{ctx: &model.ExecutionContext{
+		AuditLogger: sink,
+		NestingPath: []model.NestingSegment{
+			{StepID: "outer", Iteration: &iteration},
+			{StepID: "workflow", SubWorkflowName: "child"},
+		},
+	}}
+	step := model.Step{ID: "duplicate", Command: "true", SkipIf: "previous_success"}
+
+	emitSkippedStep(rs, &step, 0)
+
+	if len(sink.events) != 2 {
+		t.Fatalf("events = %d, want 2", len(sink.events))
+	}
+	identity := sink.events[1].Data[metrics.DataIdentity].(model.ExecutionIdentity)
+	if identity.Prefix != "outer:2/workflow/sub:child" {
+		t.Fatalf("skipped identity prefix = %q, want %q", identity.Prefix, "outer:2/workflow/sub:child")
 	}
 }
 
@@ -94,13 +142,10 @@ func TestMetricsWriteFailureWarnsWithoutFailingRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(dir, 0o500); err != nil {
+	if err := os.Mkdir(filepath.Join(dir, metrics.FileName), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	result := ExecuteFromHandle(handle, &Options{})
-	if err := os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
 	if result != ResultSuccess {
 		t.Fatalf("result = %q, want success", result)
 	}

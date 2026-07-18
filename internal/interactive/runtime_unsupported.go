@@ -52,6 +52,7 @@ type DirectOptions struct {
 type DirectResult struct {
 	ExitCode         int
 	Completed        bool
+	Started          bool
 	DurabilityFailed bool
 	DurabilityError  error
 }

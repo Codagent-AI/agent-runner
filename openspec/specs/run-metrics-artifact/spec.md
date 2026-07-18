@@ -1,7 +1,7 @@
 # run-metrics-artifact Specification
 
 ## Purpose
-TBD - created by archiving change cost-tracking. Update Purpose after archive.
+Define the durable, versioned run metrics artifact that records per-attempt duration, token usage, and reported cost while providing stable aggregate fields and explicit coverage for external consumers.
 ## Requirements
 ### Requirement: Artifact location
 

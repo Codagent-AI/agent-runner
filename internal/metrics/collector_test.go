@@ -340,6 +340,42 @@ func TestCollectorAttributesCumulativeCanonicalTokenTotals(t *testing.T) {
 	}
 }
 
+func TestCollectorInvalidatesCumulativeBaselinesAcrossMissingReport(t *testing.T) {
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(t.TempDir(), "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, nil))
+	identity := model.ExecutionIdentity{
+		StepID: "codex", StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", AgentInvoked: true,
+	}
+
+	first := cumulativeUsage(model.TokenCounts{model.TokenInput: 100, model.TokenOutput: 20})
+	first.RawCumulativeTokenTotals = &model.TokenTotals{Input: 100, Output: 20, Total: 120}
+	c.Process(stepEvent(started.Add(time.Second), identity, first, nil, "completed", 1))
+
+	identity.SessionStrategy = "resume"
+	identity.SessionResumed = true
+	c.Process(stepEvent(started.Add(2*time.Second), identity, unavailableUsage(), nil, "failed", 1))
+
+	reappeared := cumulativeUsage(model.TokenCounts{model.TokenInput: 170, model.TokenOutput: 35})
+	reappeared.RawCumulativeTokenTotals = &model.TokenTotals{Input: 170, Output: 35, Total: 205}
+	third := c.Process(stepEvent(started.Add(3*time.Second), identity, reappeared, nil, "completed", 1))
+	got := third.Data[DataUsage].(model.UsageRecord)
+	if got.Status != model.UsageUnavailable || got.Reason != model.UnavailableNoBaseline || got.Tokens != nil || got.TokenTotals != nil {
+		t.Fatalf("usage after missing cumulative report = %+v, want unavailable no-baseline", got)
+	}
+
+	consecutive := cumulativeUsage(model.TokenCounts{model.TokenInput: 180, model.TokenOutput: 40})
+	consecutive.RawCumulativeTokenTotals = &model.TokenTotals{Input: 180, Output: 40, Total: 220}
+	fourth := c.Process(stepEvent(started.Add(4*time.Second), identity, consecutive, nil, "completed", 1))
+	got = fourth.Data[DataUsage].(model.UsageRecord)
+	if diff := cmp.Diff(model.TokenCounts{model.TokenInput: 10, model.TokenOutput: 5}, got.Tokens); diff != "" {
+		t.Fatalf("tokens after baseline recovery mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(&model.TokenTotals{Input: 10, Output: 5, Total: 15}, got.TokenTotals); diff != "" {
+		t.Fatalf("canonical totals after baseline recovery mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestCollectorInvalidatesCanonicalBaselineAcrossMissingReport(t *testing.T) {
 	started := mustTime(t, "2026-07-17T10:00:00Z")
 	c := NewCollector(t.TempDir(), "run", "workflow", started)
@@ -462,6 +498,47 @@ func TestCollectorRehydratesBaselinesAndExcludesPausedTime(t *testing.T) {
 	a := readArtifact(t, dir)
 	if len(a.Sessions) != 2 || a.Sessions[0].Status != SessionClosed || a.Sessions[0].EndedAt != a.Sessions[0].LastObservedAt || a.Sessions[1].Status != SessionOpen {
 		t.Fatalf("sessions = %+v", a.Sessions)
+	}
+}
+
+func TestCollectorRehydratePreservesCumulativeBaselineGap(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	first := NewCollector(dir, "run", "workflow", started)
+	first.Process(event(audit.EventRunStart, started, nil))
+	identity := model.ExecutionIdentity{
+		StepID: "codex", StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", AgentInvoked: true,
+	}
+	baseline := cumulativeUsage(model.TokenCounts{model.TokenInput: 100, model.TokenOutput: 20})
+	baseline.RawCumulativeTokenTotals = &model.TokenTotals{Input: 100, Output: 20, Total: 120}
+	first.Process(stepEvent(started.Add(time.Second), identity, baseline, nil, "completed", 1))
+	identity.SessionStrategy = "resume"
+	identity.SessionResumed = true
+	missing := unavailableUsage()
+	missing.CLI = "codex"
+	first.Process(stepEvent(started.Add(2*time.Second), identity, missing, nil, "failed", 1))
+
+	resumedAt := started.Add(time.Hour)
+	second := NewCollector(dir, "run", "workflow", resumedAt)
+	second.Process(event(audit.EventRunStart, resumedAt, map[string]any{"resumed": true}))
+	reappeared := cumulativeUsage(model.TokenCounts{model.TokenInput: 170, model.TokenOutput: 35})
+	reappeared.RawCumulativeTokenTotals = &model.TokenTotals{Input: 170, Output: 35, Total: 205}
+	gotEvent := second.Process(stepEvent(resumedAt.Add(time.Second), identity, reappeared, nil, "completed", 1))
+	got := gotEvent.Data[DataUsage].(model.UsageRecord)
+	if got.Status != model.UsageUnavailable || got.Reason != model.UnavailableNoBaseline || got.Tokens != nil || got.TokenTotals != nil {
+		t.Fatalf("rehydrated usage after baseline gap = %+v, want unavailable no-baseline", got)
+	}
+}
+
+func TestCollectorMarksLegacyResumeWithoutArtifactHistoryIncomplete(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(dir, "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, map[string]any{"resumed": true}))
+	c.Process(stepEvent(started.Add(time.Second), agentIdentity("one", true), unavailableUsage(), nil, "completed", 1))
+
+	if a := readArtifact(t, dir); a.HistoryComplete {
+		t.Fatal("legacy resume without metrics artifact has history_complete = true, want false")
 	}
 }
 
@@ -644,10 +721,9 @@ func TestCollectorRecoversArtifactWithMalformedPersistedTimestamp(t *testing.T) 
 func TestCollectorRetainsWriteErrors(t *testing.T) {
 	dir := t.TempDir()
 	c := NewCollector(dir, "run", "workflow", time.Now())
-	if err := os.Chmod(dir, 0o500); err != nil {
+	if err := os.Mkdir(filepath.Join(dir, FileName), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 	c.Process(event(audit.EventRunStart, time.Now(), nil))
 	c.Process(stepEvent(time.Now(), agentIdentity("one", true), unavailableUsage(), nil, "completed", 1))
 	if len(c.Errors()) == 0 || !strings.Contains(c.Errors()[0].Error(), "run-metrics") {
@@ -658,10 +734,10 @@ func TestCollectorRetainsWriteErrors(t *testing.T) {
 func TestCollectorConsolidatesRepeatedWriteErrors(t *testing.T) {
 	dir := t.TempDir()
 	c := NewCollector(dir, "run", "workflow", time.Now())
-	if err := os.Chmod(dir, 0o500); err != nil {
+	path := filepath.Join(dir, FileName)
+	if err := os.Mkdir(path, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 	c.Process(event(audit.EventRunStart, time.Now(), nil))
 	for i := 0; i < 25; i++ {
 		c.Process(stepEvent(time.Now(), agentIdentity("same", true), unavailableUsage(), nil, "completed", 1))
@@ -671,7 +747,7 @@ func TestCollectorConsolidatesRepeatedWriteErrors(t *testing.T) {
 	if len(errors) != 1 || !strings.Contains(errors[0].Error(), "25 times") {
 		t.Fatalf("repeated write errors were not consolidated: %v", errors)
 	}
-	if err := os.Chmod(dir, 0o700); err != nil {
+	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
 	c.Process(stepEvent(time.Now(), agentIdentity("same", true), unavailableUsage(), nil, "completed", 1))

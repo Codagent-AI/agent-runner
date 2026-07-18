@@ -327,10 +327,16 @@ func buildExecutionContext(
 		engineRef = opts.Engine
 	}
 
-	auditLogger, err := audit.NewLogger(filepath.Join(sessionDir, "audit.log"))
+	auditLogger, auditErr := audit.NewLogger(filepath.Join(sessionDir, "audit.log"))
 	var auditSink audit.EventLogger
-	if err == nil {
+	if auditErr == nil {
 		auditSink = auditLogger
+	} else {
+		log := opts.Log
+		if log == nil {
+			log = &defaultLogger{}
+		}
+		log.Printf("agent-runner: warning: audit trail unavailable: %v\n", auditErr)
 	}
 	metricsCollector := metrics.NewCollector(sessionDir, sessionID, workflow.Name, runStart)
 	auditEventLogger := metrics.NewPipeline(metricsCollector, auditSink)
@@ -491,13 +497,30 @@ func emitSkippedStep(rs *runState, step *model.Step, index int) {
 		Data: map[string]any{
 			"outcome": "skipped", "skip_if": step.SkipIf, "duration_ms": int64(0),
 			metrics.DataIdentity: model.ExecutionIdentity{
-				StepID: step.ID, StepType: step.StepType(), Kind: "step", CLI: step.CLI,
+				StepID: step.ID, Prefix: metricsIdentityPrefix(rs.ctx), StepType: step.StepType(), Kind: "step", CLI: step.CLI,
 				SessionStrategy: string(step.Session), AgentInvoked: false,
 			},
 			metrics.DataUsage:               skippedStepUsage(step),
 			metrics.DataEstimatedAPICostUSD: (*float64)(nil),
 		},
 	})
+}
+
+func metricsIdentityPrefix(ctx *model.ExecutionContext) string {
+	parts := make([]string, 0, len(ctx.NestingPath)*2)
+	for _, segment := range ctx.NestingPath {
+		stepID := segment.StepID
+		if segment.Iteration != nil {
+			stepID = fmt.Sprintf("%s:%d", stepID, *segment.Iteration)
+		}
+		if stepID != "" {
+			parts = append(parts, stepID)
+		}
+		if segment.SubWorkflowName != "" {
+			parts = append(parts, "sub:"+segment.SubWorkflowName)
+		}
+	}
+	return strings.Join(parts, "/")
 }
 
 func skippedStepUsage(step *model.Step) model.UsageRecord {

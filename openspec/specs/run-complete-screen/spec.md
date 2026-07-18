@@ -1,7 +1,7 @@
 # run-complete-screen Specification
 
 ## Purpose
-TBD - created by archiving change cost-tracking. Update Purpose after archive.
+Define the completed-run summary experience, including when it appears, how users navigate metric scopes, and how duration, token, and cost values are aligned and labeled.
 ## Requirements
 ### Requirement: Summary is the post-completion view on success
 

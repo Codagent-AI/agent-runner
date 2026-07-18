@@ -85,6 +85,7 @@ type Collector struct {
 	writeFailures  int
 	lastWriteError error
 	writeRecovered bool
+	artifactLoaded bool
 	now            func() time.Time
 }
 
@@ -114,6 +115,9 @@ func (c *Collector) Process(event audit.Event) audit.Event {
 	event.Data = cloneData(event.Data)
 	switch event.Type {
 	case audit.EventRunStart:
+		if resumed, _ := event.Data["resumed"].(bool); resumed && !c.artifactLoaded {
+			c.artifact.HistoryComplete = false
+		}
 		if at, ok := c.eventTimestamp(event); ok {
 			c.openSession(at)
 		}
@@ -212,6 +216,11 @@ func (c *Collector) processTerminal(event *audit.Event) {
 func (c *Collector) attribute(identity *model.ExecutionIdentity, input *model.UsageRecord) model.UsageRecord {
 	usage := cloneUsage(input)
 	if len(usage.RawCumulative) == 0 {
+		if identity.SessionID != "" {
+			key := baselineKey(identity.CLI, identity.SessionID)
+			delete(c.baselines, key)
+			delete(c.totalBaselines, key)
+		}
 		return usage
 	}
 	raw := cloneCounts(usage.RawCumulative)
@@ -445,6 +454,7 @@ func (c *Collector) rehydrate(sessionStart time.Time) {
 		artifact.Steps = []StepRecord{}
 	}
 	c.artifact = artifact
+	c.artifactLoaded = true
 	for i := range artifact.Steps {
 		record := &artifact.Steps[i]
 		iteration := 0
@@ -455,12 +465,20 @@ func (c *Collector) rehydrate(sessionStart time.Time) {
 		if record.Attempt > c.attempts[key] {
 			c.attempts[key] = record.Attempt
 		}
-		if record.SessionID != "" && record.Usage != nil && len(record.Usage.RawCumulative) > 0 {
-			key := baselineKey(record.Usage.CLI, record.SessionID)
-			c.baselines[key] = cloneCounts(record.Usage.RawCumulative)
-			if record.Usage.RawCumulativeTokenTotals != nil {
-				c.totalBaselines[key] = *record.Usage.RawCumulativeTokenTotals
-			}
+		if record.SessionID == "" || record.Usage == nil {
+			continue
+		}
+		baseline := baselineKey(record.Usage.CLI, record.SessionID)
+		if len(record.Usage.RawCumulative) == 0 {
+			delete(c.baselines, baseline)
+			delete(c.totalBaselines, baseline)
+			continue
+		}
+		c.baselines[baseline] = cloneCounts(record.Usage.RawCumulative)
+		if record.Usage.RawCumulativeTokenTotals != nil {
+			c.totalBaselines[baseline] = *record.Usage.RawCumulativeTokenTotals
+		} else {
+			delete(c.totalBaselines, baseline)
 		}
 	}
 }
