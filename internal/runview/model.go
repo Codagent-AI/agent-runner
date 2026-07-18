@@ -898,6 +898,49 @@ func (m *Model) lastResumableAgentInWorkflow(scope *StepNode) *StepNode {
 	return nil
 }
 
+// handleOverlayKey processes keys for the modal overlays (legend, summary,
+// quit confirmation) that intercept input before the main key switch. These
+// are checked in priority order; the bool result reports whether an overlay
+// consumed the key.
+func (m *Model) handleOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+	switch {
+	case m.showLegend:
+		switch msg.String() {
+		case "?", "esc":
+			m.showLegend = false
+		}
+		return m, nil, true
+	case m.showSummary:
+		switch msg.String() {
+		case "s", "esc":
+			m.showSummary = false
+			m.summaryOffset = 0
+		case "q":
+			// Dismiss the summary before opening the quit-confirmation modal so
+			// its y/n keys reach that handler instead of this block.
+			m.showSummary = false
+			m.summaryOffset = 0
+			mdl, cmd := m.requestQuit()
+			return mdl, cmd, true
+		case "up", "k":
+			m.scrollSummary(-1)
+		case "down", "j":
+			m.scrollSummary(1)
+		}
+		return m, nil, true
+	case m.quitConfirming:
+		switch msg.String() {
+		case "y", "Y":
+			m.exitRequested = true
+			return m, tea.Quit, true
+		case "n", "N", "esc":
+			m.quitConfirming = false
+		}
+		return m, nil, true
+	}
+	return m, nil, false
+}
+
 // handleKey processes a key message. Extracted from Update to keep the main
 // message switch within funlen limits.
 func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -906,39 +949,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 
-	if m.showLegend {
-		switch msg.String() {
-		case "?", "esc":
-			m.showLegend = false
-		}
-		return m, nil
-	}
-
-	if m.showSummary {
-		switch msg.String() {
-		case "s", "esc":
-			m.showSummary = false
-			m.summaryOffset = 0
-		case "q":
-			return m.requestQuit()
-		case "up", "k":
-			m.scrollSummary(-1)
-		case "down", "j":
-			m.scrollSummary(1)
-		}
-		return m, nil
-	}
-
-	// Quit-confirmation modal.
-	if m.quitConfirming {
-		switch msg.String() {
-		case "y", "Y":
-			m.exitRequested = true
-			return m, tea.Quit
-		case "n", "N", "esc":
-			m.quitConfirming = false
-		}
-		return m, nil
+	if mdl, cmd, handled := m.handleOverlayKey(msg); handled {
+		return mdl, cmd
 	}
 
 	switch msg.String() {

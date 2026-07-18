@@ -306,6 +306,29 @@ func TestSummaryScrollKeysAdjustOffset(t *testing.T) {
 	}
 }
 
+func TestSummaryQuitConfirmDuringLiveRunReachesConfirmHandler(t *testing.T) {
+	m := newTestModel(simpleTree(), FromLiveRun)
+	m.running = true
+	m.showSummary = true
+
+	// q while the summary is shown must dismiss the summary and open the
+	// quit-confirmation modal, so the modal's y/n keys reach the confirm
+	// handler instead of being swallowed by the summary key block.
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if !m.quitConfirming {
+		t.Fatal("q during live-run summary did not open quit confirmation")
+	}
+	if m.showSummary {
+		t.Fatal("summary should be dismissed when the quit confirmation opens")
+	}
+
+	// n cancels the confirmation (previously swallowed while showSummary stayed true).
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	if m.quitConfirming {
+		t.Fatal("n did not cancel the quit confirmation")
+	}
+}
+
 func TestSummaryToggleWorksInEveryRunStateAndAtDrillDepth(t *testing.T) {
 	statuses := []NodeStatus{StatusInProgress, StatusSuccess, StatusFailed}
 	for _, status := range statuses {

@@ -35,8 +35,9 @@ func (m *Model) renderSummary() string {
 	header = append(header, strings.Split(m.renderChrome(), "\n")...)
 	header = append(header, "")
 	titleIdx := len(header)
-	header = append(header, tuistyle.ScreenMargin+tuistyle.SectionStyle.Render("Run summary"))
-	header = append(header, "")
+	header = append(header,
+		tuistyle.ScreenMargin+tuistyle.SectionStyle.Render("Run summary"),
+		"")
 
 	var rowLines []string
 	if m.tree == nil || m.tree.Root == nil || len(m.tree.Root.Children) == 0 {
