@@ -1,0 +1,13 @@
+name: archive-change
+description: "Validate and archive an explicitly accepted OpenSpec change."
+hidden: true
+
+params:
+  - name: change_name
+    required: true
+
+steps:
+  - id: archive
+    script: archive-change.sh
+    script_inputs:
+      change_name: "{{change_name}}"

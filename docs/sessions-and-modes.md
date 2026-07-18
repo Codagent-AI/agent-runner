@@ -31,7 +31,7 @@ sessions:
   - name: lead-agent
     agent: planner
   - name: reviewer-agent
-    agent: planner
+    agent: reviewer
 
 steps:
   - id: draft

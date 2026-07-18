@@ -56,13 +56,13 @@ func TestLoad_MissingProjectFileDoesNotWriteDefaults(t *testing.T) {
 	if defaultSet == nil {
 		t.Fatal("expected 'default' profile set")
 	}
-	if len(defaultSet.Agents) != 5 {
-		t.Fatalf("expected 5 agents in default profile set, got %d", len(defaultSet.Agents))
+	if len(defaultSet.Agents) != 6 {
+		t.Fatalf("expected 6 agents in default profile set, got %d", len(defaultSet.Agents))
 	}
 
-	// Active agents should have 5 entries.
-	if len(cfg.ActiveAgents) != 5 {
-		t.Fatalf("expected 5 active agents, got %d", len(cfg.ActiveAgents))
+	// Active agents should have 6 entries.
+	if len(cfg.ActiveAgents) != 6 {
+		t.Fatalf("expected 6 active agents, got %d", len(cfg.ActiveAgents))
 	}
 
 	// Verify planner inherits the interactive base profile.
@@ -81,6 +81,16 @@ func TestLoad_MissingProjectFileDoesNotWriteDefaults(t *testing.T) {
 	}
 	if im.Extends != "autonomous_base" {
 		t.Fatalf("unexpected implementor: %+v", im)
+	}
+
+	// Verify reviewer inherits the interactive base profile so installations
+	// can override its CLI/model independently for cross-model review.
+	reviewer := cfg.ActiveAgents["reviewer"]
+	if reviewer == nil {
+		t.Fatal("expected reviewer agent")
+	}
+	if reviewer.Extends != "interactive_base" {
+		t.Fatalf("unexpected reviewer: %+v", reviewer)
 	}
 
 	// Verify summarizer.
@@ -112,8 +122,8 @@ func TestLoad_SkipsGlobalConfigWhenHomeDirUnavailable(t *testing.T) {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("expected config file to NOT be created on disk")
 	}
-	if len(cfg.ActiveAgents) != 5 {
-		t.Fatalf("expected 5 default active agents, got %d", len(cfg.ActiveAgents))
+	if len(cfg.ActiveAgents) != 6 {
+		t.Fatalf("expected 6 default active agents, got %d", len(cfg.ActiveAgents))
 	}
 }
 
@@ -141,9 +151,9 @@ func TestLoad_LoadsExisting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Built-in defaults (5 agents) layer under the project's 1 custom agent.
-	if len(cfg.ActiveAgents) != 6 {
-		t.Fatalf("expected 6 active agents (5 defaults + 1 custom), got %d", len(cfg.ActiveAgents))
+	// Built-in defaults (6 agents) layer under the project's 1 custom agent.
+	if len(cfg.ActiveAgents) != 7 {
+		t.Fatalf("expected 7 active agents (6 defaults + 1 custom), got %d", len(cfg.ActiveAgents))
 	}
 	p := cfg.ActiveAgents["custom"]
 	if p == nil || p.DefaultMode != "autonomous" || p.CLI != "codex" || p.Model != "o3" {
@@ -465,7 +475,7 @@ func TestLoad_DoesNotCreateGlobalConfigWhenMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(cfg.ActiveAgents) != 5 {
+	if len(cfg.ActiveAgents) != 6 {
 		t.Fatalf("expected default project config, got %d active agents", len(cfg.ActiveAgents))
 	}
 
@@ -1791,6 +1801,16 @@ func TestResolve_DefaultConfigAgents(t *testing.T) {
 	}
 	if rp.DefaultMode != "autonomous" || rp.CLI != "claude" || rp.Model != "opus" || rp.Effort != "high" {
 		t.Fatalf("unexpected implementor resolution: %+v", rp)
+	}
+
+	// Reviewer should resolve to interactive_base values by default. Global or
+	// project profile sets can override CLI/model to enforce cross-model review.
+	rp, err = cfg.Resolve("reviewer")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rp.DefaultMode != "interactive" || rp.CLI != "claude" || rp.Model != "opus" || rp.Effort != "high" {
+		t.Fatalf("unexpected reviewer resolution: %+v", rp)
 	}
 
 	// Summarizer should resolve to its standalone low-cost defaults.

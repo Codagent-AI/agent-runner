@@ -29,6 +29,8 @@ profiles:
         effort: high
       planner:
         extends: interactive_base
+      reviewer:
+        extends: interactive_base
       implementor:
         extends: autonomous_base
       summarizer:
@@ -39,6 +41,8 @@ profiles:
 ```
 
 Supported CLI adapters are `claude`, `codex`, `copilot`, `cursor`, and `opencode`. A step-level `mode`, `cli`, or `model` overrides the resolved profile for that one step.
+
+The built-in `reviewer` role inherits `interactive_base`. Override its `cli` and `model` in a profile set when you want reviews to run through a different model family than the planner.
 
 ## How Config Layers
 

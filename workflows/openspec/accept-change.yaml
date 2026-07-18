@@ -1,0 +1,35 @@
+name: accept-change
+description: "Interactively review an implemented OpenSpec change and obtain explicit human acceptance."
+hidden: true
+
+params:
+  - name: change_name
+    required: true
+
+sessions:
+  - name: acceptance-agent
+    agent: planner
+
+steps:
+  - id: accept
+    session: acceptance-agent
+    mode: interactive
+    prompt: |
+      Lead the human acceptance review for implemented OpenSpec change "{{change_name}}". This is a fresh change-level session and the pull request must remain a draft throughout this step.
+
+      Build an evidence-backed overview by inspecting:
+      - all approved artifacts and task files under `openspec/changes/{{change_name}}/`;
+      - the current repository status and diff against the target branch;
+      - task implementation and validation commits;
+      - task-compliance and Agent Validator evidence under `validator_logs/` and `{{session_dir}}/output/`;
+      - implementation session reports, assumption-review handoffs, and `{{session_dir}}/audit.log`.
+
+      Help the user understand what changed, inspect important decisions, and review any unresolved assumptions or context gaps. The user may request corrections or decline to advance.
+
+      Correction policy:
+      - You may make small, unambiguous implementation corrections in this session. Run the appropriate targeted checks and Agent Validator afterward, then create a traceable commit following the project's commit conventions and prepending [{{step_id}}]. Push the correction to the existing draft PR.
+      - For larger implementation work, create or update a supplemental task under `openspec/changes/{{change_name}}/tasks/`, keep the change unaccepted, and tell the user that `implement-change2` must run again.
+      - For changed requirements or design, update the appropriate definition artifacts only with the user's direction, keep the change unaccepted, and tell the user that `define-change` or `plan-change2` must run again.
+      - If any code or artifact changes during acceptance, rerun the appropriate validation before asking for acceptance again.
+
+      Do not signal step completion merely because the review conversation has ended. Signal completion only after the user explicitly states that they accept the implemented change and all requested corrections have been validated and committed. If the user declines or more work is required, leave the step incomplete so the run remains resumable. Do not archive the OpenSpec change and do not mark the pull request ready for review in this session.

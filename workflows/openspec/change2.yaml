@@ -1,0 +1,35 @@
+name: change2
+description: "Define, plan, implement, accept, archive, and finalize an OpenSpec change."
+
+params:
+  - name: change_name
+    required: true
+
+steps:
+  - id: define
+    workflow: define-change.yaml
+    params:
+      change_name: "{{change_name}}"
+
+  - id: plan
+    workflow: plan-change2.yaml
+    params:
+      change_name: "{{change_name}}"
+
+  - id: implement
+    workflow: implement-change2.yaml
+    params:
+      change_name: "{{change_name}}"
+
+  - id: accept
+    workflow: accept-change.yaml
+    params:
+      change_name: "{{change_name}}"
+
+  - id: archive
+    workflow: archive-change.yaml
+    params:
+      change_name: "{{change_name}}"
+
+  - id: finalize
+    workflow: ../core/finalize-pr.yaml
