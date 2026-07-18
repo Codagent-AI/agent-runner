@@ -157,7 +157,7 @@ func formatSummaryCost(metrics summaryMetrics) string {
 		return "—"
 	}
 	value := formatUSD(metrics.costUSD)
-	if metrics.pricedAttempts < metrics.totalAttempts {
+	if metrics.agentAttempts > 0 && metrics.costReported < metrics.agentAttempts {
 		value += " (partial)"
 	}
 	return value

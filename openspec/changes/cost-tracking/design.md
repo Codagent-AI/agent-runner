@@ -199,7 +199,7 @@ Located at `~/.agent-runner/projects/{encoded-path}/runs/{run-id}/run-metrics.js
     {
       "record_id": "plan#1",
       "prefix": "", "id": "plan", "kind": "step", "type": "agent",
-      "attempt": 1, "iteration": null,
+      "attempt": 1, "iteration": null, "agent_invoked": true,
       "outcome": "completed", "duration_ms": 32000,
       "session_id": "abc-123",
       "usage": {
@@ -224,8 +224,9 @@ Located at `~/.agent-runner/projects/{encoded-path}/runs/{run-id}/run-metrics.js
 
 Semantics:
 
-- **Append-only attempts.** Step records are never replaced. Each execution of a logical step appends a record with a 1-based `attempt` and `record_id` = `prefix/id#attempt`. Failed attempts stay and their usage counts toward totals.
-- **Iterations.** `iteration_end` appends a record with `kind: "iteration"` and an `iteration` index, carrying identity and duration only (`usage: null` semantics); usage lives on the nested step records. Loop/iteration rollups derive from descendants.
+- **Append-only attempts.** Step records are never replaced. Each execution of a logical step appends a record with a 1-based `attempt` and `record_id` = `prefix/id#attempt` (where `prefix` and `id` are percent-encoded — only alphanumeric, `_`, and `-` kept literal; other bytes become `%XX`). Failed attempts stay and their usage counts toward totals.
+- **Iterations.** `iteration_end` appends a record with `kind: "iteration"` and an `iteration` index, carrying identity and duration only (`usage: null` semantics); usage lives on the nested step records. Loop/iteration rollups derive from descendants. Iteration `record_id` uses the sentinel prefix `@iteration`: `@iteration[/escaped-prefix]/escaped-id/N#attempt` (where N is the 1-based iteration number).
+- **Prefix grammar.** `ExecutionIdentity.Prefix` is slash-separated: step IDs from the nesting path, with `stepID:N` when inside the N-th iteration of a loop, and `sub:name` when inside a named sub-workflow. Example: `outer:2/sub:core/inner` for the `inner` step inside the `outer` loop's 2nd iteration's `core` sub-workflow.
 - **Sessions.** One record per execution session, opened on `run_start`, `status: "open"`. Every terminal-event write snapshots `last_observed_at` and provisional `duration_ms`. `run_end` closes the session (`ended_at`, `status: "closed"`). After a hard kill the session stays `open` and its duration is trusted only up to the last persisted event; resume closes it at that observed value. Run-level `active_duration_ms` is the sum of session durations; paused time between sessions never counts. (Note: the top-level `sessions[]` array records **execution sessions** — one per `agent-runner` invocation of the run. The `session_id` field on each step record is a different concept: the **agent CLI session** identifier assigned by the CLI to that particular invocation. The two use "session" in distinct senses.)
 - **Coverage.** `usage_coverage` and `cost_coverage` are `complete`/`partial`/`none`, computed over agent step records with `agent_invoked` true (skipped/never-launched steps are excluded from denominators). Token totals sum only reported values in canonical categories; a category no step reported is absent, not zero.
 - **`history_complete`** is orthogonal to coverage: `false` means the artifact itself lost history (a corrupt or unreadable predecessor forced a fresh start), so the coverage indicators describe only the steps this artifact knows about.

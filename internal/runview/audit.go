@@ -674,6 +674,12 @@ func applyStepEnd(n *StepNode, data map[string]any) {
 			metrics.CostUSD = &value
 		}
 	}
+	for i, a := range n.Attempts {
+		if a.Attempt == attempt {
+			n.Attempts[i] = metrics
+			return
+		}
+	}
 	n.Attempts = append(n.Attempts, metrics)
 }
 
