@@ -241,6 +241,8 @@ func runOpenCodeCompletionSurfaceE2E(t *testing.T, workdir, runnerBin, input str
 }
 
 func TestRealAgentTestEnvUsesFileCredentialStore(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
 	t.Setenv("AGENT_CLI_CREDENTIAL_STORE", "keychain")
 
 	env := realAgentTestEnv(false)
@@ -253,7 +255,25 @@ func TestRealAgentTestEnvUsesFileCredentialStore(t *testing.T) {
 	t.Fatalf("real-agent E2E environment does not select Cursor's file credential store: %q", env)
 }
 
+func TestRealAgentTestEnvLoadsClaudeOAuthTokenFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	writeRealAgentTestFile(t, filepath.Join(home, ".config", "agent-runner", "claude-oauth-token"), []byte("test-setup-token\n"))
+
+	env := realAgentTestEnv(false)
+
+	for _, entry := range env {
+		if entry == "CLAUDE_CODE_OAUTH_TOKEN=test-setup-token" {
+			return
+		}
+	}
+	t.Fatal("real-agent E2E environment did not load the configured Claude OAuth token")
+}
+
 func TestRealAgentTestEnvScrubsEnclosingSessionState(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
 	t.Setenv("CLAUDECODE", "1")
 	t.Setenv("CLAUDE_CODE_CHILD_SESSION", "1")
 	t.Setenv("CLAUDE_CODE_ENTRYPOINT", "cli")
@@ -534,6 +554,16 @@ func realAgentTestEnv(interactive bool) []string {
 	overrides := map[string]string{
 		"AGENT_CLI_CREDENTIAL_STORE": "file",
 		"AGENT_RUNNER_NO_TUI":        "1",
+	}
+	if os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			tokenPath := filepath.Join(home, ".config", "agent-runner", "claude-oauth-token")
+			if data, err := os.ReadFile(tokenPath); err == nil {
+				if token := strings.TrimSpace(string(data)); token != "" {
+					overrides["CLAUDE_CODE_OAUTH_TOKEN"] = token
+				}
+			}
+		}
 	}
 	if interactive {
 		overrides["TERM"] = "xterm-256color"
