@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
@@ -312,6 +313,7 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 		n.Status = StatusInProgress
 		n.Aborted = false
 		n.Outcome = ""
+		n.StartedAt = parseEventTime(e.Timestamp)
 		applyStepStart(n, e.Data)
 	case "step_end":
 		n := t.resolve(tokens, true)
@@ -539,6 +541,22 @@ func parentWorkflowPath(n *StepNode, fallback string) string {
 		}
 	}
 	return fallback
+}
+
+// parseEventTime parses an audit-log line timestamp (RFC3339, e.g.
+// "2026-07-13T03:23:36Z") into a time.Time. Returns the zero time on any
+// parse failure so callers can treat "unknown start" as not-running.
+func parseEventTime(ts string) time.Time {
+	if ts == "" {
+		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+		return t
+	}
+	if t, err := time.Parse(time.RFC3339, ts); err == nil {
+		return t
+	}
+	return time.Time{}
 }
 
 // applyStepStart copies data from a step_start event onto a node.

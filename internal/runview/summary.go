@@ -3,6 +3,7 @@ package runview
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/tuistyle"
@@ -21,6 +22,13 @@ type summaryMetrics struct {
 }
 
 func (m *Model) renderSummary() string {
+	// Count the currently-running step's elapsed time only while the run is
+	// live; a static inspect of an interrupted run must not add stale wall time.
+	var now time.Time
+	if m.hasLiveUpdates() {
+		now = time.Now()
+	}
+
 	var b strings.Builder
 	b.WriteString("\n")
 	b.WriteString(m.renderChrome())
@@ -35,11 +43,11 @@ func (m *Model) renderSummary() string {
 		b.WriteString("\n")
 	} else {
 		for _, child := range m.tree.Root.Children {
-			m.renderSummaryNode(&b, child, 0)
+			m.renderSummaryNode(&b, child, 0, now)
 		}
 	}
 
-	totals := m.summaryRunTotals()
+	totals := m.summaryRunTotals(now)
 	b.WriteString("\n")
 	b.WriteString(tuistyle.ScreenMargin)
 	b.WriteString(tuistyle.SectionStyle.Render("Total"))
@@ -74,8 +82,8 @@ func (m *Model) renderSummary() string {
 	return b.String()
 }
 
-func (m *Model) renderSummaryNode(b *strings.Builder, node *StepNode, depth int) summaryMetrics {
-	metrics := aggregateSummaryMetrics(node)
+func (m *Model) renderSummaryNode(b *strings.Builder, node *StepNode, depth int, now time.Time) summaryMetrics {
+	metrics := aggregateSummaryMetrics(node, now)
 	label := node.ID
 	if node.Type == NodeIteration {
 		label = fmt.Sprintf("iter %d", node.IterationIndex+1)
@@ -93,19 +101,19 @@ func (m *Model) renderSummaryNode(b *strings.Builder, node *StepNode, depth int)
 	b.WriteString(formatSummaryCost(metrics))
 	b.WriteString("\n")
 	for _, child := range node.Children {
-		m.renderSummaryNode(b, child, depth+1)
+		m.renderSummaryNode(b, child, depth+1, now)
 	}
 	return metrics
 }
 
-func aggregateSummaryMetrics(node *StepNode) summaryMetrics {
+func aggregateSummaryMetrics(node *StepNode, now time.Time) summaryMetrics {
 	metrics := summaryMetrics{tokens: model.TokenCounts{}}
 	if node == nil {
 		return metrics
 	}
 	if node.IsContainer() {
 		for _, child := range node.Children {
-			metrics.add(aggregateSummaryMetrics(child))
+			metrics.add(aggregateSummaryMetrics(child, now))
 		}
 		return metrics
 	}
@@ -133,6 +141,16 @@ func aggregateSummaryMetrics(node *StepNode) summaryMetrics {
 			for category, count := range attempt.Usage.Tokens {
 				metrics.tokens[category] += count
 			}
+		}
+	}
+	// Mid-run, the currently-executing step has no attempt record yet (attempts
+	// are appended only on step_end). Add its elapsed wall time so the summary
+	// reflects active work instead of reading 0 until the first step finishes.
+	// Skipped when not live (now zero) or aborted (not actually running).
+	if !now.IsZero() && node.Status == StatusInProgress && !node.Aborted && !node.StartedAt.IsZero() {
+		if elapsed := now.Sub(node.StartedAt); elapsed > 0 {
+			metrics.durationMS += elapsed.Milliseconds()
+			metrics.durationReported = true
 		}
 	}
 	return metrics
@@ -163,11 +181,11 @@ func formatSummaryCost(metrics summaryMetrics) string {
 	return value
 }
 
-func (m *Model) summaryRunTotals() model.RunTotals {
+func (m *Model) summaryRunTotals(now time.Time) model.RunTotals {
 	if m.tree != nil && m.tree.RunTotals != nil {
 		return *m.tree.RunTotals
 	}
-	metrics := aggregateSummaryMetrics(m.tree.Root)
+	metrics := aggregateSummaryMetrics(m.tree.Root, now)
 	totals := model.RunTotals{
 		ActiveDurationMS: metrics.durationMS,
 		Tokens:           metrics.tokens,

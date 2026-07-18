@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/go-cmp/cmp"
@@ -184,6 +185,45 @@ func TestRenderSummaryComputesMidRunTotalsFromAttempts(t *testing.T) {
 		if !strings.Contains(plain, want) {
 			t.Errorf("mid-run summary missing %q:\n%s", want, plain)
 		}
+	}
+}
+
+func TestApplyStepStartRecordsStartedAt(t *testing.T) {
+	wf := model.Workflow{Name: "metrics", Steps: []model.Step{{ID: "agent", Prompt: "do it", Mode: model.ModeAutonomous}}}
+	tree := BuildTree(&wf, "")
+	tree.ApplyEvent(RawEvent{Timestamp: "2026-07-13T03:23:36Z", Prefix: "[agent]", Type: "step_start", Data: map[string]any{}})
+	node := tree.Root.Children[0]
+	want := time.Date(2026, 7, 13, 3, 23, 36, 0, time.UTC)
+	if !node.StartedAt.Equal(want) {
+		t.Fatalf("StartedAt = %v, want %v", node.StartedAt, want)
+	}
+}
+
+func TestSummaryAddsInFlightElapsedForRunningStepWhenLive(t *testing.T) {
+	start := time.Date(2026, 7, 13, 3, 23, 36, 0, time.UTC)
+	now := start.Add(5 * time.Second)
+
+	running := &StepNode{ID: "run", Type: NodeHeadlessAgent, Status: StatusInProgress, StartedAt: start}
+	if got := aggregateSummaryMetrics(running, now); !got.durationReported || got.durationMS != 5000 {
+		t.Fatalf("live running: durationReported=%v durationMS=%d, want true/5000", got.durationReported, got.durationMS)
+	}
+
+	// Not live (now zero): the in-flight step contributes no duration.
+	if got := aggregateSummaryMetrics(running, time.Time{}); got.durationReported || got.durationMS != 0 {
+		t.Fatalf("not live: durationReported=%v durationMS=%d, want false/0", got.durationReported, got.durationMS)
+	}
+
+	// Aborted mid-execution: excluded even while live.
+	aborted := &StepNode{ID: "ab", Type: NodeHeadlessAgent, Status: StatusInProgress, Aborted: true, StartedAt: start}
+	if got := aggregateSummaryMetrics(aborted, now); got.durationReported || got.durationMS != 0 {
+		t.Fatalf("aborted: durationReported=%v durationMS=%d, want false/0", got.durationReported, got.durationMS)
+	}
+
+	// A prior failed attempt plus the current in-flight retry both count.
+	retry := &StepNode{ID: "retry", Type: NodeHeadlessAgent, Status: StatusInProgress, StartedAt: start,
+		Attempts: []AttemptMetrics{{Attempt: 1, DurationMs: int64Pointer(2000), Outcome: "failed"}}}
+	if got := aggregateSummaryMetrics(retry, now); got.durationMS != 7000 {
+		t.Fatalf("retry: durationMS=%d, want 7000", got.durationMS)
 	}
 }
 

@@ -5,6 +5,7 @@ package runview
 
 import (
 	"strconv"
+	"time"
 
 	"github.com/codagent/agent-runner/internal/model"
 )
@@ -97,6 +98,7 @@ type StepNode struct {
 	ErrorMessage        string
 	Aborted             bool // aborted mid-execution; UI suppresses blink when no run is active
 	Attempts            []AttemptMetrics
+	StartedAt           time.Time // wall-clock start of the current in-flight execution (from step_start); zero when not running
 
 	// Iteration-only fields (set when the node is an iteration child of a loop).
 	IterationIndex int    // 0-based internal; UI renders as IterationIndex+1
