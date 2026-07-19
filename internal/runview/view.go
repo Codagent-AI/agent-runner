@@ -36,6 +36,9 @@ func (m *Model) View() string {
 	if m.quitConfirming {
 		return m.renderQuitConfirm()
 	}
+	if m.showSummary {
+		return m.renderSummary()
+	}
 
 	var b strings.Builder
 
@@ -390,7 +393,7 @@ func typeGlyph(t NodeType) string {
 		return scriptGlyphStyle.Render(raw)
 	case NodeUI:
 		return uiGlyphStyle.Render(raw)
-	case NodeLoop, NodeIteration:
+	case NodeLoop, NodeIteration, NodeGroup:
 		return loopGlyphStyle.Render(raw)
 	case NodeHeadlessAgent, NodeInteractiveAgent, NodeSubWorkflow:
 		return subwfGlyphStyle.Render(raw)
@@ -417,8 +420,8 @@ func (m *Model) renderHelpBarWithCwd() string {
 
 func (m *Model) helpBarParts() []string {
 	if m.liveUIVisible() {
-		parts := []string{"↑↓ step", "j/k scroll"}
-		if sel := m.selectedNode(); sel != nil && (sel.Type == NodeLoop || sel.Type == NodeSubWorkflow || sel.Type == NodeIteration) {
+		parts := []string{"↑↓ step", "j/k scroll", "s summary"}
+		if sel := m.selectedNode(); sel != nil && sel.IsContainer() {
 			parts = append(parts, "d drill down")
 		}
 		for _, part := range m.liveUI.HelpParts() {
@@ -455,7 +458,7 @@ func (m *Model) helpBarParts() []string {
 
 	if sel != nil {
 		switch sel.Type {
-		case NodeLoop, NodeSubWorkflow, NodeIteration:
+		case NodeLoop, NodeSubWorkflow, NodeIteration, NodeGroup:
 			parts = append(parts, "enter drill")
 		case NodeHeadlessAgent, NodeInteractiveAgent:
 			if m.canResumeAgentSession(sel) {
@@ -484,13 +487,20 @@ func (m *Model) helpBarParts() []string {
 
 	parts = append(parts, "c copy")
 
-	if !m.autoFollow {
+	if !m.autoFollow && (m.active || m.running) {
 		parts = append(parts, "l follow")
 	}
 
-	parts = append(parts, "? legend", "q quit")
+	parts = append(parts, m.viewSwitchHelpPart(), "? legend", "q quit")
 
 	return parts
+}
+
+func (m *Model) viewSwitchHelpPart() string {
+	if m.showSummary {
+		return "v view run"
+	}
+	return "s summary"
 }
 
 func (m *Model) selectedNodeHasTruncatedOutput() bool {
@@ -621,6 +631,7 @@ func (m *Model) renderLegend() string {
 	b.WriteString("  " + typeGlyph(NodeSubWorkflow) + "  sub-workflow\n")
 	b.WriteString("  " + typeGlyph(NodeLoop) + "  loop\n")
 	b.WriteString("  " + typeGlyph(NodeIteration) + "  iteration\n")
+	b.WriteString("  " + typeGlyph(NodeGroup) + "  group\n")
 
 	b.WriteString("\n  ")
 	b.WriteString(tuistyle.SelectedStyle.Render("Live Navigation"))

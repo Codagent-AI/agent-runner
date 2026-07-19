@@ -59,8 +59,8 @@ func RunTerminal(ctx context.Context, options *TerminalOptions) (result Terminal
 	}
 	if options.After != nil {
 		defer func() {
-			if restoreErr := options.After(); restoreErr != nil && err == nil {
-				err = restoreErr
+			if restoreErr := options.After(); restoreErr != nil {
+				err = errors.Join(err, fmt.Errorf("restore terminal after direct child: %w", restoreErr))
 			}
 		}()
 	}

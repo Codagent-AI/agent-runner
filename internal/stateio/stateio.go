@@ -15,33 +15,43 @@ const stateFileName = "state.json"
 
 // WriteState writes the run state to a JSON file in the given directory.
 func WriteState(state *model.RunState, dir string) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create state dir: %w", err)
+	if err := WriteJSONAtomic(filepath.Join(dir, stateFileName), state); err != nil {
+		return fmt.Errorf("write state: %w", err)
 	}
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal state: %w", err)
-	}
+	return nil
+}
 
-	target := filepath.Join(dir, stateFileName)
-	tmp, err := os.CreateTemp(dir, ".state-*.tmp")
+// WriteJSONAtomic marshals v as indented JSON and atomically replaces path.
+// Readers therefore observe either the prior complete document or the new one.
+func WriteJSONAtomic(path string, v any) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create JSON dir: %w", err)
+	}
+	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		return fmt.Errorf("create temp state file: %w", err)
+		return fmt.Errorf("marshal JSON: %w", err)
+	}
+	data = append(data, '\n')
+
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+"-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp JSON file: %w", err)
 	}
 	tmpName := tmp.Name()
 
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpName)
-		return fmt.Errorf("write temp state file: %w", err)
+		return fmt.Errorf("write temp JSON file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpName)
-		return fmt.Errorf("close temp state file: %w", err)
+		return fmt.Errorf("close temp JSON file: %w", err)
 	}
-	if err := os.Rename(tmpName, target); err != nil {
+	if err := os.Rename(tmpName, path); err != nil {
 		_ = os.Remove(tmpName)
-		return fmt.Errorf("rename state file: %w", err)
+		return fmt.Errorf("rename JSON file: %w", err)
 	}
 	return nil
 }

@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/mattn/go-runewidth"
 
+	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/tuistyle"
 )
 
@@ -152,6 +154,7 @@ func renderHeadlessBlock(node *StepNode, indent, width int, loadedFull bool, pul
 	}
 
 	lines = append(lines, blockExitAndDuration(node)...)
+	lines = append(lines, blockAgentMetrics(node)...)
 
 	if node.ErrorMessage != "" {
 		lines = append(lines, "", blockLabelStr("error:"))
@@ -181,6 +184,7 @@ func renderInteractiveBlock(node *StepNode, indent, width int, pulsePhase float6
 	}
 
 	lines = append(lines, blockOutcomeAndDuration(node)...)
+	lines = append(lines, blockAgentMetrics(node)...)
 
 	if node.ErrorMessage != "" {
 		lines = append(lines, "", blockLabelStr("error:"))
@@ -308,6 +312,18 @@ func renderIterationBlock(node *StepNode, indent, width int) []string {
 	return lines
 }
 
+func renderGroupBlock(node *StepNode, indent, width int) []string {
+	contentWidth := width - 2*indent
+	if contentWidth <= 0 {
+		return nil
+	}
+	lines := []string{renderSeparator(node.ID, blockTypeGlyph(node.Type), indent, contentWidth)}
+	if node.Status != StatusPending {
+		lines = append(lines, blockOutcomeAndDuration(node)...)
+	}
+	return lines
+}
+
 func renderUIBlock(node *StepNode, indent, width int) []string {
 	contentWidth := width - 2*indent
 	if contentWidth <= 0 {
@@ -345,6 +361,8 @@ func blockTypeGlyph(t NodeType) string {
 		return "↺"
 	case NodeIteration:
 		return "»"
+	case NodeGroup:
+		return "▾"
 	}
 	return "·"
 }
@@ -422,6 +440,87 @@ func blockOutcomeAndDuration(n *StepNode) []string {
 
 func blockDurationStr(ms int64) string {
 	return tuistyle.LabelStyle.Render("duration: ") + tuistyle.NormalStyle.Render(formatDuration(ms))
+}
+
+func blockAgentMetrics(n *StepNode) []string {
+	if n.Status == StatusPending || n.Status == StatusInProgress {
+		return nil
+	}
+	if len(n.Attempts) == 0 {
+		return nil
+	}
+	latest := &n.Attempts[len(n.Attempts)-1]
+	lines := make([]string, 0, 3)
+	if latest.Attempt > 1 {
+		lines = append(lines, blockDimStr("attempt", strconv.Itoa(latest.Attempt)))
+	}
+	if latest.Usage == nil || latest.Usage.Status != model.UsageCollected {
+		reason := ""
+		if latest.Usage != nil && latest.Usage.Reason != "" {
+			reason = " (" + string(latest.Usage.Reason) + ")"
+		}
+		lines = append(lines, blockDimStr("usage", "?"+reason))
+	} else {
+		lines = append(lines, blockDimStr("tokens", formatTokenCounts(latest.Usage.Tokens)))
+	}
+	if latest.CostUSD == nil {
+		lines = append(lines, blockDimStr("cost", "?"))
+	} else {
+		lines = append(lines, blockDimStr("cost", formatUSD(*latest.CostUSD)))
+	}
+	return lines
+}
+
+func formatTokenCounts(tokens model.TokenCounts) string {
+	if len(tokens) == 0 {
+		return "none reported"
+	}
+	keys := orderedTokenCategories(tokens)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, tokenCategoryLabel(key)+" "+formatCount(tokens[key]))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func orderedTokenCategories(tokens model.TokenCounts) []string {
+	canonical := []string{model.TokenInput, model.TokenCachedInput, model.TokenCacheWrite, model.TokenOutput, model.TokenReasoning}
+	keys := make([]string, 0, len(tokens))
+	seen := make(map[string]bool, len(canonical))
+	for _, key := range canonical {
+		seen[key] = true
+		if _, ok := tokens[key]; ok {
+			keys = append(keys, key)
+		}
+	}
+	var other []string
+	for key := range tokens {
+		if !seen[key] {
+			other = append(other, key)
+		}
+	}
+	sort.Strings(other)
+	return append(keys, other...)
+}
+
+func tokenCategoryLabel(category string) string {
+	return strings.ReplaceAll(category, "_", " ")
+}
+
+func formatCount(value int64) string {
+	raw := strconv.FormatInt(value, 10)
+	start := 0
+	if strings.HasPrefix(raw, "-") {
+		start = 1
+	}
+	for i := len(raw) - 3; i > start; i -= 3 {
+		raw = raw[:i] + "," + raw[i:]
+	}
+	return raw
+}
+
+func formatUSD(value float64) string {
+	return fmt.Sprintf("$%.2f", value)
 }
 
 func renderAgentOutput(node *StepNode, contentWidth int, loadedFull bool, pulsePhase float64, running bool) []string {

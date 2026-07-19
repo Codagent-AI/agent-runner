@@ -54,6 +54,7 @@ type DirectOptions struct {
 type DirectResult struct {
 	ExitCode         int
 	Completed        bool
+	Started          bool
 	DurabilityFailed bool
 	DurabilityError  error
 }
@@ -82,8 +83,8 @@ func (r *DirectRunner) Run(ctx context.Context) (result DirectResult, err error)
 	}
 	if options.After != nil {
 		defer func() {
-			if restoreErr := options.After(); restoreErr != nil && err == nil {
-				err = restoreErr
+			if restoreErr := options.After(); restoreErr != nil {
+				err = errors.Join(err, fmt.Errorf("restore terminal after direct child: %w", restoreErr))
 			}
 		}()
 	}
@@ -106,6 +107,7 @@ func (r *DirectRunner) Run(ctx context.Context) (result DirectResult, err error)
 	if startErr != nil {
 		return result, startErr
 	}
+	result.Started = true
 
 	identity, identityErr := ReadProcessIdentity(cmd.Process.Pid)
 	if identityErr != nil {
@@ -127,7 +129,9 @@ func (r *DirectRunner) Run(ctx context.Context) (result DirectResult, err error)
 
 	supervisor := newSupervisor(cmd, tty, runnerModes, options.Logger, options.Prefix)
 	supervisor.Start()
-	return awaitDirectResult(ctx, options, &attempt, supervisor)
+	result, err = awaitDirectResult(ctx, options, &attempt, supervisor)
+	result.Started = true
+	return result, err
 }
 
 func captureDurabilityCheckpoint(ctx context.Context, probe cli.TurnDurabilityProbe, sessionID string) (cli.Checkpoint, error) {

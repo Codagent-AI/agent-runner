@@ -1,6 +1,7 @@
 package runview
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/mattn/go-runewidth"
@@ -93,6 +94,8 @@ func buildLogLinesRecurse(
 				blockLines = renderLoopBlock(child, indent, bodyWidth)
 			case NodeIteration:
 				blockLines = renderIterationBlock(child, indent, bodyWidth)
+			case NodeGroup:
+				blockLines = renderGroupBlock(child, indent, bodyWidth)
 			}
 		}
 
@@ -215,6 +218,8 @@ func renderGhostBlock(node *StepNode, indent, width int, resolverCfg ResolverCon
 		lines = append(lines, tuistyle.DimStyle.Render(blockDimStr("loop", loopKind)))
 	case NodeIteration:
 		lines = append(lines, tuistyle.DimStyle.Render(blockDimStr("iteration", itNum(node.IterationIndex))))
+	case NodeGroup:
+		lines = append(lines, tuistyle.DimStyle.Render(blockDimStr("steps", fmt.Sprintf("%d", len(node.Children)))))
 	}
 
 	return lines

@@ -3,12 +3,40 @@ package exec
 import (
 	"testing"
 
+	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/model"
 )
 
 func boolPtr(b bool) *bool { return &b }
 
 func TestExecuteLoopStep(t *testing.T) {
+	t.Run("iteration end carries duration-only identity", func(t *testing.T) {
+		auditLog := &mockAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		step := model.Step{ID: "loop", Session: model.SessionNew, Loop: &model.Loop{Max: intPtr(1)}, Steps: []model.Step{{ID: "work", Command: "true"}}}
+		_, err := ExecuteLoopStep(&step, ctx, &mockRunner{results: []ProcessResult{{ExitCode: 0}}}, &mockGlob{}, &mockLogger{}, LoopExecuteOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var end *audit.Event
+		for i := range auditLog.events {
+			if auditLog.events[i].Type == audit.EventIterationEnd {
+				end = &auditLog.events[i]
+			}
+		}
+		if end == nil {
+			t.Fatal("iteration_end not emitted")
+		}
+		identity, ok := end.Data["identity"].(model.ExecutionIdentity)
+		if !ok || identity.Kind != "iteration" || identity.StepID != "loop" || identity.StepType != "loop" || identity.Iteration != 0 {
+			t.Fatalf("identity = %#v", end.Data["identity"])
+		}
+		if _, exists := end.Data["usage"]; exists {
+			t.Fatalf("iteration unexpectedly has usage: %#v", end.Data["usage"])
+		}
+	})
+
 	t.Run("counted loop runs N iterations", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}, {ExitCode: 0}, {ExitCode: 0}}}
 		step := model.Step{

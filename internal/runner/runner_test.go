@@ -1,16 +1,158 @@
 package runner
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/exec"
+	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
+
+type delayedRunner struct{ mockRunner }
+
+func (r *delayedRunner) RunShell(cmd string, capture bool, workdir string) (exec.ProcessResult, error) {
+	time.Sleep(10 * time.Millisecond)
+	return r.mockRunner.RunShell(cmd, capture, workdir)
+}
+
+func TestRunWorkflowProducesMetricsWhenAuditLogCannotOpen(t *testing.T) {
+	dir := t.TempDir()
+	log := &mockLog{}
+	if err := os.Mkdir(filepath.Join(dir, "audit.log"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	w := model.Workflow{Name: "test", Steps: []model.Step{shellStep("s1", "echo hi")}}
+	w.ApplyDefaults()
+	result, err := RunWorkflow(&w, nil, &Options{SessionDir: dir, ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: log})
+	if err != nil || result != ResultSuccess {
+		t.Fatalf("RunWorkflow = %q, %v", result, err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, metrics.FileName))
+	if err != nil {
+		t.Fatalf("metrics artifact missing: %v", err)
+	}
+	var artifact metrics.Artifact
+	if err := json.Unmarshal(data, &artifact); err != nil {
+		t.Fatalf("metrics artifact invalid: %v", err)
+	}
+	if len(artifact.Steps) != 1 || artifact.Sessions[0].Status != metrics.SessionClosed {
+		t.Fatalf("artifact = %+v", artifact)
+	}
+	if !strings.Contains(strings.Join(log.lines, "\n"), "warning: audit trail unavailable") {
+		t.Fatalf("audit logger warning missing from log: %v", log.lines)
+	}
+}
+
+func TestRunWorkflowContinuesWhenAuditLogCannotOpenWithoutCustomLogger(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "audit.log"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	w := model.Workflow{Name: "test", Steps: []model.Step{shellStep("s1", "echo hi")}}
+	w.ApplyDefaults()
+
+	result, err := RunWorkflow(&w, nil, &Options{
+		SessionDir: dir, ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{},
+	})
+	if err != nil || result != ResultSuccess {
+		t.Fatalf("RunWorkflow = %q, %v", result, err)
+	}
+}
+
+type recordingAuditSink struct{ events []audit.Event }
+
+func (s *recordingAuditSink) Emit(event audit.Event) { s.events = append(s.events, event) }
+
+func TestEmitSkippedStepIncludesNestingPrefixInMetricsIdentity(t *testing.T) {
+	iteration := 2
+	sink := &recordingAuditSink{}
+	rs := &runState{ctx: &model.ExecutionContext{
+		AuditLogger: sink,
+		NestingPath: []model.NestingSegment{
+			{StepID: "outer", Iteration: &iteration},
+			{StepID: "workflow", SubWorkflowName: "child"},
+		},
+	}}
+	step := model.Step{ID: "duplicate", Command: "true", SkipIf: "previous_success"}
+
+	emitSkippedStep(rs, &step, 0)
+
+	if len(sink.events) != 2 {
+		t.Fatalf("events = %d, want 2", len(sink.events))
+	}
+	identity := sink.events[1].Data[metrics.DataIdentity].(model.ExecutionIdentity)
+	if identity.Prefix != "outer:2/workflow/sub:child" {
+		t.Fatalf("skipped identity prefix = %q, want %q", identity.Prefix, "outer:2/workflow/sub:child")
+	}
+}
+
+func TestRunWorkflowRoutesRunLifecycleAndTotalsThroughPipeline(t *testing.T) {
+	dir := t.TempDir()
+	w := model.Workflow{Name: "test", Steps: []model.Step{shellStep("s1", "echo hi")}}
+	w.ApplyDefaults()
+	result, err := RunWorkflow(&w, nil, &Options{SessionDir: dir, ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{}})
+	if err != nil || result != ResultSuccess {
+		t.Fatalf("RunWorkflow = %q, %v", result, err)
+	}
+	auditData, err := os.ReadFile(filepath.Join(dir, "audit.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	logText := string(auditData)
+	if !strings.Contains(logText, " run_start ") || !strings.Contains(logText, " run_end ") || !strings.Contains(logText, `"totals":{`) || !strings.Contains(logText, `"cost_coverage":"none"`) {
+		t.Fatalf("audit log missing lifecycle totals:\n%s", logText)
+	}
+}
+
+func TestRunWorkflowMetricsPreserveMillisecondActiveDuration(t *testing.T) {
+	dir := t.TempDir()
+	w := model.Workflow{Name: "test", Steps: []model.Step{shellStep("s1", "echo hi")}}
+	w.ApplyDefaults()
+	result, err := RunWorkflow(&w, nil, &Options{SessionDir: dir, ProcessRunner: &delayedRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{}})
+	if err != nil || result != ResultSuccess {
+		t.Fatalf("RunWorkflow = %q, %v", result, err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, metrics.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var artifact metrics.Artifact
+	if err := json.Unmarshal(data, &artifact); err != nil {
+		t.Fatal(err)
+	}
+	if artifact.Totals.ActiveDurationMS < 5 {
+		t.Fatalf("active duration = %dms, want millisecond precision", artifact.Totals.ActiveDurationMS)
+	}
+}
+
+func TestMetricsWriteFailureWarnsWithoutFailingRun(t *testing.T) {
+	dir := t.TempDir()
+	log := &mockLog{}
+	w := model.Workflow{Name: "test", Steps: []model.Step{shellStep("s1", "echo hi")}}
+	w.ApplyDefaults()
+	handle, err := PrepareRun(&w, nil, &Options{SessionDir: dir, ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: log})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, metrics.FileName), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	result := ExecuteFromHandle(handle, &Options{})
+	if result != ResultSuccess {
+		t.Fatalf("result = %q, want success", result)
+	}
+	if !strings.Contains(strings.Join(log.lines, "\n"), "warning: metrics: write run-metrics artifact") {
+		t.Fatalf("metrics warning missing from log: %v", log.lines)
+	}
+}
 
 type mockRunner struct {
 	calls   [][]string

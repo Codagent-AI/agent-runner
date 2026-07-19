@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
@@ -274,11 +275,106 @@ func childIndexByID(root *StepNode, id string) int {
 	return -1
 }
 
+// reconstructTopLevelStepsFromAudit recovers the executed portion of a run
+// when its workflow file is no longer available. Audit events do not contain
+// pending steps, but they carry enough type and lifecycle data to render every
+// top-level step that actually started.
+func reconstructTopLevelStepsFromAudit(root *StepNode, events []RawEvent) bool {
+	if root == nil {
+		return false
+	}
+	for _, event := range events {
+		switch event.Type {
+		case "step_start", "step_end", "iteration_start", "iteration_end", "sub_workflow_start", "sub_workflow_end":
+		default:
+			continue
+		}
+		tokens := parsePrefix(event.Prefix)
+		if len(tokens) == 0 || tokens[0].stepID == "" {
+			continue
+		}
+		id := tokens[0].stepID
+		node := childByID(root, id)
+		if node == nil {
+			node = &StepNode{ID: id, Type: NodeShell, Status: StatusPending, Parent: root}
+			root.Children = append(root.Children, node)
+		}
+		if nodeType, ok := auditNodeType(event, tokens); ok {
+			node.Type = nodeType
+		}
+	}
+	return len(root.Children) > 0
+}
+
+func auditNodeType(event RawEvent, tokens []prefixToken) (NodeType, bool) {
+	if len(tokens) > 1 {
+		switch {
+		case tokens[1].subName != "":
+			return NodeSubWorkflow, true
+		case tokens[0].iteration != nil:
+			return NodeLoop, true
+		default:
+			return NodeGroup, true
+		}
+	}
+	if event.Type == "sub_workflow_start" || event.Type == "sub_workflow_end" {
+		return NodeSubWorkflow, true
+	}
+	if _, ok := event.Data["loop_type"]; ok {
+		return NodeLoop, true
+	}
+	if _, ok := event.Data["command"]; ok {
+		return NodeShell, true
+	}
+	if _, ok := event.Data["script"]; ok {
+		return NodeScript, true
+	}
+	if _, ok := event.Data["title"]; ok {
+		return NodeUI, true
+	}
+	if mode, ok := stringField(event.Data, "mode"); ok {
+		switch model.StepMode(mode) {
+		case model.ModeAutonomous:
+			return NodeHeadlessAgent, true
+		case model.ModeInteractive:
+			return NodeInteractiveAgent, true
+		case model.ModeUI:
+			return NodeUI, true
+		}
+	}
+	identity, ok := event.Data["identity"].(map[string]any)
+	if !ok {
+		return NodeRoot, false
+	}
+	stepType, _ := stringField(identity, "step_type")
+	switch stepType {
+	case "shell":
+		return NodeShell, true
+	case "script":
+		return NodeScript, true
+	case "ui":
+		return NodeUI, true
+	case "agent":
+		return NodeHeadlessAgent, true
+	case "loop":
+		return NodeLoop, true
+	case "sub-workflow":
+		return NodeSubWorkflow, true
+	case "group":
+		return NodeGroup, true
+	default:
+		return NodeRoot, false
+	}
+}
+
 // ApplyEvent mutates the tree according to a single audit event.
 // Unknown event types and unresolved prefixes are silently ignored so a
 // malformed log doesn't poison the tree.
 func (t *Tree) ApplyEvent(e RawEvent) {
 	tokens := parsePrefix(e.Prefix)
+	if eventCarriesMetrics(e) {
+		t.MetricsCaptured = true
+	}
 
 	switch e.Type {
 	case "run_start":
@@ -286,9 +382,13 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 		t.Root.Aborted = false
 		t.Root.Outcome = ""
 		t.Root.ErrorMessage = ""
+		t.RunTotals = nil
 	case "run_end":
 		outcome, _ := stringField(e.Data, "outcome")
 		applyOutcome(t.Root, outcome)
+		if totals, ok := decodeRunTotals(e.Data); ok {
+			t.RunTotals = totals
+		}
 	case "error":
 		target := t.Root
 		if len(tokens) > 0 {
@@ -308,6 +408,7 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 		n.Status = StatusInProgress
 		n.Aborted = false
 		n.Outcome = ""
+		n.StartedAt = parseEventTime(e.Timestamp)
 		applyStepStart(n, e.Data)
 	case "step_end":
 		n := t.resolve(tokens, true)
@@ -377,7 +478,13 @@ func (t *Tree) resolve(tokens []prefixToken, createIterations bool) *StepNode {
 			}
 			current = iter
 		default:
-			child := childByID(current, tok.stepID)
+			child := groupDescendantByID(current, tok.stepID, true)
+			if child == nil {
+				child = childByID(current, tok.stepID)
+			}
+			if child == nil {
+				child = groupDescendantByID(current, tok.stepID, false)
+			}
 			if child == nil {
 				return nil
 			}
@@ -385,6 +492,52 @@ func (t *Tree) resolve(tokens []prefixToken, createIterations bool) *StepNode {
 		}
 	}
 	return current
+}
+
+// groupDescendantByID adapts the current audit shape for group members. Group
+// execution emits a lifecycle event for the group but does not add the group
+// ID to each member's prefix, so members must be resolved through the active
+// static group subtree. Ambiguous matches are ignored rather than attributed
+// to the wrong logical step.
+func groupDescendantByID(parent *StepNode, id string, activeOnly bool) *StepNode {
+	var match *StepNode
+	ambiguous := false
+	var visit func(*StepNode)
+	visit = func(node *StepNode) {
+		if node == nil || ambiguous {
+			return
+		}
+		for _, child := range node.Children {
+			if child.Type != NodeGroup {
+				continue
+			}
+			if activeOnly && child.Status != StatusInProgress {
+				continue
+			}
+			if child.ID == id {
+				if match != nil && match != child {
+					ambiguous = true
+					return
+				}
+				match = child
+			}
+			for _, member := range child.Children {
+				if member.ID == id {
+					if match != nil && match != member {
+						ambiguous = true
+						return
+					}
+					match = member
+				}
+			}
+			visit(child)
+		}
+	}
+	visit(parent)
+	if ambiguous {
+		return nil
+	}
+	return match
 }
 
 // EnsureSubWorkflowLoaded is the UI-facing counterpart to the lazy-load done
@@ -483,6 +636,21 @@ func parentWorkflowPath(n *StepNode, fallback string) string {
 		}
 	}
 	return fallback
+}
+
+// parseEventTime parses an audit-log line timestamp (RFC3339, e.g.
+// "2026-07-13T03:23:36Z") into a time.Time. Returns the zero time on any
+// parse failure so callers can treat "unknown start" as not-running.
+func parseEventTime(ts string) time.Time {
+	if ts == "" {
+		return time.Time{}
+	}
+	// RFC3339Nano parses non-fractional timestamps too (the fractional part is
+	// optional), so it subsumes a plain RFC3339 parse.
+	if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+		return t
+	}
+	return time.Time{}
 }
 
 // applyStepStart copies data from a step_start event onto a node.
@@ -597,6 +765,110 @@ func applyStepEnd(n *StepNode, data map[string]any) {
 	}
 	if s, ok := stringField(data, "discovered_session_id"); ok && s != "" {
 		n.SessionID = s
+	}
+	if !dataCarriesMetrics(data) {
+		return
+	}
+
+	attempt := len(n.Attempts) + 1
+	agentInvoked := false
+	if identity, ok := data["identity"].(map[string]any); ok {
+		if v, found := intField(identity, "attempt"); found && v > 0 {
+			attempt = v
+		}
+		if v, found := boolField(identity, "agent_invoked"); found {
+			agentInvoked = v
+		}
+	}
+	metrics := AttemptMetrics{Attempt: attempt, Outcome: outcome, AgentInvoked: agentInvoked}
+	if n.DurationMs != nil {
+		v := *n.DurationMs
+		metrics.DurationMs = &v
+	}
+	if usage, ok := decodeUsageRecord(data); ok {
+		metrics.Usage = usage
+	}
+	if cost, exists := data["estimated_api_cost_usd"]; exists && cost != nil {
+		if value, ok := float64FieldValue(cost); ok {
+			metrics.CostUSD = &value
+		}
+	}
+	for i, a := range n.Attempts {
+		if a.Attempt == attempt {
+			n.Attempts[i] = metrics
+			return
+		}
+	}
+	n.Attempts = append(n.Attempts, metrics)
+}
+
+func eventCarriesMetrics(event RawEvent) bool {
+	if event.Type == "run_end" {
+		_, ok := event.Data["totals"]
+		return ok
+	}
+	return dataCarriesMetrics(event.Data)
+}
+
+func dataCarriesMetrics(data map[string]any) bool {
+	for _, key := range []string{"identity", "usage", "estimated_api_cost_usd"} {
+		if _, ok := data[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func decodeUsageRecord(data map[string]any) (*model.UsageRecord, bool) {
+	raw, exists := data["usage"]
+	if !exists || raw == nil {
+		return nil, false
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil, false
+	}
+	var usage model.UsageRecord
+	if err := json.Unmarshal(encoded, &usage); err != nil {
+		return nil, false
+	}
+	return &usage, true
+}
+
+func decodeRunTotals(data map[string]any) (*model.RunTotals, bool) {
+	raw, exists := data["totals"]
+	if !exists || raw == nil {
+		return nil, false
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil, false
+	}
+	var totals model.RunTotals
+	if err := json.Unmarshal(encoded, &totals); err != nil {
+		return nil, false
+	}
+	if totals.Tokens == nil {
+		totals.Tokens = model.TokenCounts{}
+	}
+	return &totals, true
+}
+
+func float64FieldValue(value any) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case json.Number:
+		parsed, err := v.Float64()
+		return parsed, err == nil
+	default:
+		return 0, false
 	}
 }
 

@@ -1,12 +1,31 @@
 package interactive
 
 import (
+	"context"
+	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"golang.org/x/sys/unix"
 )
+
+func TestRunTerminalJoinsChildAndRestoreFailures(t *testing.T) {
+	restoreErr := errors.New("restore terminal: boom")
+	_, err := RunTerminal(context.Background(), &TerminalOptions{
+		Args:  []string{filepath.Join(t.TempDir(), "missing-command")},
+		After: func() error { return restoreErr },
+	})
+	if err == nil || !errors.Is(err, restoreErr) {
+		t.Fatalf("RunTerminal() error = %v, want joined restore failure", err)
+	}
+	for _, want := range []string{"missing-command", "restore terminal after direct child"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("RunTerminal() error = %v, want %q", err, want)
+		}
+	}
+}
 
 func TestReclaimForegroundSurfacesTerminalErrors(t *testing.T) {
 	t.Parallel()

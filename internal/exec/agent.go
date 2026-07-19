@@ -26,6 +26,7 @@ import (
 )
 
 var interactiveRunnerFn = runDirectInteractive
+var osExecutableFn = os.Executable
 
 type directRunOptions struct {
 	workdir    string
@@ -176,7 +177,7 @@ func ExecuteAgentStep(
 
 	args, spawnEnv, resolvedModel, argsErr := buildStepInvocation(step, ctx, profile, adapter, prompt, enrichment, sessionID, isResume, invocationContext)
 	if argsErr != nil {
-		emitAgentFailure(ctx, prefix, startTime, string(mode), step, argsErr.Error(), log)
+		emitAgentPreStartFailure(ctx, prefix, startTime, string(mode), step, argsErr.Error(), log)
 		return OutcomeFailed, nil
 	}
 
@@ -192,7 +193,8 @@ func ExecuteAgentStep(
 	// Bind the run-scoped endpoint before the terminal lease is released. A
 	// bind or stale-cleanup failure therefore fails without blanking the TUI.
 	if controlErr := ensureInteractiveControl(ctx, invocationContext); controlErr != nil {
-		emitAgentEnd(ctx, prefix, startTime, "", OutcomeFailed, "", controlErr.Error())
+		extraction := cli.UsageExtraction{Usage: defaultAgentUsage(cliName, invocationContext.IsHeadless())}
+		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, false, "", OutcomeFailed, "", controlErr.Error(), &extraction, nil)
 		return OutcomeFailed, controlErr
 	}
 
@@ -215,9 +217,10 @@ func ExecuteAgentStep(
 			return adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: spawnTime, Workdir: step.Workdir})
 		},
 	}
-	outcome, result, runErr := runAgentProcess(runner, adapter, args, invocationContext, step.Workdir, log, ctx.SuspendHook, ctx.ResumeHook, direct)
+	outcome, result, agentInvoked, runErr := runAgentProcess(runner, adapter, args, invocationContext, step.Workdir, log, ctx.SuspendHook, ctx.ResumeHook, direct)
+	usageExtraction, usageErr := extractAgentUsage(adapter, cliName, invocationContext, result.Stdout)
 	if runErr != nil {
-		emitAgentEnd(ctx, prefix, startTime, "", outcome, "", result.Stderr)
+		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, agentInvoked, "", outcome, "", result.Stderr, &usageExtraction, usageErr)
 		return outcome, runErr
 	}
 
@@ -247,7 +250,7 @@ func ExecuteAgentStep(
 
 	discoveredID := discoverAndStoreSession(adapter, step, ctx, spawnTime, sessionID, invocationContext.IsHeadless(), result.Stdout, log)
 
-	emitAgentEnd(ctx, prefix, startTime, discoveredID, outcome, filteredStdout, result.Stderr)
+	emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, true, discoveredID, outcome, filteredStdout, result.Stderr, &usageExtraction, usageErr)
 
 	return outcome, nil
 }
@@ -425,8 +428,14 @@ func buildStepInvocation(
 	isResume bool,
 	invocationContext cli.InvocationContext,
 ) (args, spawnEnv []string, resolvedModel string, err error) {
-	completionExecutable := completionExecutableForContext(invocationContext)
+	completionExecutable, err := completionExecutableForContext(invocationContext)
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("resolve completion executable: %w", err)
+	}
 	input := buildAdapterInput(step, ctx, profile, adapter, prompt, enrichment, sessionID, isResume, invocationContext, completionExecutable)
+	if err := validateCompletionIntegration(&input); err != nil {
+		return nil, nil, "", err
+	}
 	args, err = cli.BuildInvocationArgs(adapter, &input)
 	if err != nil {
 		return nil, nil, "", err
@@ -530,22 +539,39 @@ func continueMarkerPromptNeedsRefresh(workflowResumed, isResume bool, invocation
 	return !invocationContext.IsHeadless() && (workflowResumed || isResume)
 }
 
-func completionExecutableForContext(invocationContext cli.InvocationContext) string {
+func completionExecutableForContext(invocationContext cli.InvocationContext) (string, error) {
 	if invocationContext.IsHeadless() {
-		return ""
+		return "", nil
 	}
 	executable, err := agentRunnerExecutable()
 	if err != nil {
-		return ""
+		return "", err
 	}
-	return executable
+	if executable == "" {
+		return "", errors.New("resolved executable path is empty")
+	}
+	return executable, nil
 }
 
 func agentRunnerExecutable() (string, error) {
 	if executable := os.Getenv("AGENT_RUNNER_EXECUTABLE"); filepath.IsAbs(executable) && isExecutableFile(executable) {
 		return executable, nil
 	}
-	return os.Executable()
+	executable, err := osExecutableFn()
+	if err != nil {
+		return "", err
+	}
+	if executable == "" {
+		return "", errors.New("current executable path is empty")
+	}
+	absolute, err := filepath.Abs(executable)
+	if err != nil {
+		return "", fmt.Errorf("resolve absolute executable path: %w", err)
+	}
+	if !isExecutableFile(absolute) {
+		return "", fmt.Errorf("current executable %q is not an executable file", absolute)
+	}
+	return absolute, nil
 }
 
 // isExecutableFile reports whether path is an existing, executable regular
@@ -558,7 +584,27 @@ func isExecutableFile(path string) bool {
 
 func completionInstruction(executable string) string {
 	command := cli.CompletionCommand{Executable: executable, Args: []string{"step", "complete"}}.ShellCommand()
+	if command == "" {
+		return ""
+	}
 	return "\n\nWhen you or the user determine this step is complete, signal it through the Agent Runner control channel. You MUST run the absolute path command `" + command + "` with your shell tool. The executable path and `step complete` are separate shell words; do not quote the entire command as one word. Run that exact command with no extra arguments as the final action before finishing the current response. Do not merely say that the step is complete."
+}
+
+func validateCompletionIntegration(input *cli.BuildArgsInput) error {
+	if input.Context.IsHeadless() {
+		if input.CompletionCommand != nil {
+			return errors.New("headless invocation unexpectedly includes a completion command")
+		}
+		return nil
+	}
+	if input.CompletionCommand == nil || input.CompletionCommand.Executable == "" {
+		return errors.New("interactive invocation is missing its completion command")
+	}
+	command := input.CompletionCommand.ShellCommand()
+	if !strings.Contains(input.Prompt, command) && !strings.Contains(input.SystemPrompt, command) {
+		return errors.New("interactive prompt does not include its completion command")
+	}
+	return nil
 }
 
 func runDirectInteractive(args []string, options directRunOptions) (interactive.DirectResult, error) {
@@ -643,19 +689,19 @@ func setInteractiveAttempt(ctx *model.ExecutionContext, metadata *interactive.Pr
 	root.InteractiveAttempt = stored
 }
 
-func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, invocationContext cli.InvocationContext, workdir string, log Logger, suspendHook, resumeHook func() error, direct *directInvocation) (StepOutcome, ProcessResult, error) {
+func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, invocationContext cli.InvocationContext, workdir string, log Logger, suspendHook, resumeHook func() error, direct *directInvocation) (StepOutcome, ProcessResult, bool, error) {
 	if invocationContext.IsHeadless() {
 		// Capture stdout for headless runs so that adapters (e.g. Codex) can
 		// parse session IDs from the process output.
 		result, runErr := runner.RunAgent(args, true, workdir)
 		if runErr != nil {
-			return OutcomeFailed, result, runErr
+			return OutcomeFailed, result, false, runErr
 		}
 		if f, ok := adapter.(cli.HeadlessResultFilter); ok {
 			result.ExitCode, result.Stderr = f.FilterHeadlessResult(result.ExitCode, result.Stdout, result.Stderr)
 		}
 		if result.ExitCode != 0 {
-			return OutcomeFailed, result, nil
+			return OutcomeFailed, result, true, nil
 		}
 		// Detect AskUserQuestion failures in autonomous mode — these indicate
 		// the agent could not complete the task autonomously. Only scan
@@ -665,16 +711,16 @@ func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, i
 		for _, line := range strings.Split(strings.ToLower(result.Stderr), "\n") {
 			if strings.Contains(line, "askuserquestion") && isToolDisallowedLine(line) {
 				log.Errorf("  autonomous session attempted interactive prompt (AskUserQuestion); treating as failure\n")
-				return OutcomeFailed, result, nil
+				return OutcomeFailed, result, true, nil
 			}
 		}
-		return OutcomeSuccess, result, nil
+		return OutcomeSuccess, result, true, nil
 	}
 
 	// Interactive: release the terminal if a hook is set, then hand it directly to the CLI.
 	if suspendHook != nil {
 		if err := suspendHook(); err != nil {
-			return OutcomeFailed, ProcessResult{}, err
+			return OutcomeFailed, ProcessResult{}, false, err
 		}
 	}
 	directResult, err := interactiveRunnerFn(args, directRunOptions{workdir: workdir, invocation: direct})
@@ -688,19 +734,19 @@ func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, i
 		if err == nil {
 			err = directResult.DurabilityError
 		}
-		return OutcomeFailed, result, err
+		return OutcomeFailed, result, directResult.Started, err
 	}
 
 	if directResult.Completed {
-		return OutcomeSuccess, result, err
+		return OutcomeSuccess, result, true, err
 	}
 	if err != nil {
-		return OutcomeFailed, result, err
+		return OutcomeFailed, result, directResult.Started, err
 	}
 
 	// CLI exited without a continue trigger.
 	log.Printf("\n  CLI session exited. To resume this workflow, run:\n    agent-runner --resume\n\n")
-	return OutcomeAborted, result, nil
+	return OutcomeAborted, result, true, nil
 }
 
 // isToolDisallowedLine returns true if a lowercased output line matches a
@@ -789,9 +835,32 @@ func emitAgentStart(
 	})
 }
 
-func emitAgentEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, discoveredID string, outcome StepOutcome, stdout, stderr string) {
+func emitAgentEnd(
+	ctx *model.ExecutionContext,
+	prefix string,
+	startTime time.Time,
+	step *model.Step,
+	cliName, sessionID string,
+	invocationContext cli.InvocationContext,
+	sessionResumed bool,
+	agentInvoked bool,
+	discoveredID string,
+	outcome StepOutcome,
+	stdout, stderr string,
+	extraction *cli.UsageExtraction,
+	usageErr error,
+) {
+	resolvedSessionID := discoveredID
+	if resolvedSessionID == "" {
+		resolvedSessionID = sessionID
+	}
+	identity := executionIdentity(ctx, step, "step", 0, agentInvoked, cliName, resolvedSessionID)
+	identity.SessionResumed = sessionResumed
 	data := map[string]any{
-		"discovered_session_id": discoveredID,
+		"discovered_session_id":  discoveredID,
+		"identity":               identity,
+		"usage":                  extraction.Usage,
+		"estimated_api_cost_usd": extraction.EstimatedCostUSD,
 	}
 	if stdout != "" {
 		data["stdout"] = stdout
@@ -799,7 +868,38 @@ func emitAgentEnd(ctx *model.ExecutionContext, prefix string, startTime time.Tim
 	if stderr != "" {
 		data["stderr"] = stderr
 	}
-	emitStepEnd(ctx, prefix, startTime, string(outcome), data)
+	if usageErr != nil {
+		data["usage_error"] = usageErr.Error()
+	}
+	emitStepEnd(ctx, prefix, startTime, string(outcome), data, step)
+}
+
+func extractAgentUsage(adapter cli.Adapter, cliName string, invocationContext cli.InvocationContext, rawStdout string) (cli.UsageExtraction, error) {
+	if !invocationContext.IsHeadless() {
+		return cli.UsageExtraction{Usage: defaultAgentUsage(cliName, false)}, nil
+	}
+	extractor, ok := adapter.(cli.UsageExtractor)
+	if !ok {
+		return cli.UsageExtraction{Usage: defaultAgentUsage(cliName, true)}, nil
+	}
+	extraction, err := extractor.ExtractUsage(rawStdout)
+	if err != nil {
+		return cli.UsageExtraction{Usage: model.UsageRecord{
+			Status: model.UsageUnavailable, Reason: model.UnavailableParseFailure,
+			CLI: cliName, Source: "agent-runner",
+		}}, fmt.Errorf("%s usage extraction: %w", cliName, err)
+	}
+	return extraction, nil
+}
+
+func defaultAgentUsage(cliName string, headless bool) model.UsageRecord {
+	reason := model.UnavailableUnsupportedAdapter
+	if !headless {
+		reason = model.UnavailablePTYContext
+	}
+	return model.UsageRecord{
+		Status: model.UsageUnavailable, Reason: reason, CLI: cliName, Source: "agent-runner",
+	}
 }
 
 // buildStepPrefix returns a preamble for interactive prompts that orients the
@@ -881,5 +981,30 @@ func emitAgentFailure(ctx *model.ExecutionContext, prefix string, startTime time
 		"mode":             mode,
 		"session_strategy": string(step.Session),
 	})
-	emitStepEnd(ctx, prefix, startTime, "failed", map[string]any{"error": errMsg})
+	emitAgentFailureEnd(ctx, prefix, startTime, step, mode, errMsg)
+}
+
+// emitAgentPreStartFailure records an invocation-construction failure without
+// claiming that the step started. Resolution and adapter construction happen
+// before emitAgentStart, so the terminal record is sufficient for diagnostics
+// and correctly reports that no agent process was invoked.
+func emitAgentPreStartFailure(ctx *model.ExecutionContext, prefix string, startTime time.Time, mode string, step *model.Step, errMsg string, log Logger) {
+	if log != nil {
+		log.Errorf("agent-runner: step %q: %s\n", step.ID, errMsg)
+	}
+	emitAgentFailureEnd(ctx, prefix, startTime, step, mode, errMsg)
+}
+
+func emitAgentFailureEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, step *model.Step, mode, errMsg string) {
+	cliName := step.CLI
+	if cliName == "" {
+		cliName = "claude"
+	}
+	headless := mode != string(model.ModeInteractive)
+	emitStepEnd(ctx, prefix, startTime, "failed", map[string]any{
+		"error":                  errMsg,
+		"identity":               executionIdentity(ctx, step, "step", 0, false, cliName, ""),
+		"usage":                  defaultAgentUsage(cliName, headless),
+		"estimated_api_cost_usd": (*float64)(nil),
+	}, step)
 }

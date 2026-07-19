@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/codagent/agent-runner/internal/model"
 )
 
 // OpenCodeAdapter constructs invocation args for the OpenCode CLI.
@@ -105,7 +107,7 @@ func (a *OpenCodeAdapter) InteractiveModeError() error {
 	return errors.New("opencode does not support interactive steps: a resumed OpenCode session never submits the step prompt (anomalyco/opencode#37536), which stalls workflows silently; use autonomous (headless) mode for opencode or a different CLI for interactive steps")
 }
 
-func (a *OpenCodeAdapter) ProbeModel(model, effort string) (ProbeStrength, error) {
+func (a *OpenCodeAdapter) ProbeModel(modelName, effort string) (ProbeStrength, error) {
 	return BinaryOnly, nil
 }
 
@@ -130,6 +132,132 @@ func (a *OpenCodeAdapter) FilterOutput(stdout string) string {
 
 func (a *OpenCodeAdapter) WrapStdout(downstream io.Writer) io.Writer {
 	return newOpenCodeStreamFilter(downstream)
+}
+
+// ExtractUsage sums the per-step increments and USD costs emitted by
+// step_finish events.
+func (a *OpenCodeAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) {
+	tokens := make(model.TokenCounts)
+	complete := true
+	foundUsage := false
+	var totalCost float64
+	foundCost := false
+	canonicalTotals := model.TokenTotals{}
+	totalsComplete := true
+	var provider, modelName string
+
+	scanner := newStreamScanner(strings.NewReader(rawStdout))
+	for scanner.Scan() {
+		if strings.TrimSpace(scanner.Text()) == "" {
+			continue
+		}
+		var event struct {
+			Type string `json:"type"`
+			Part *struct {
+				Tokens     json.RawMessage `json:"tokens"`
+				Cost       *float64        `json:"cost"`
+				ProviderID string          `json:"providerID"`
+				ModelID    string          `json:"modelID"`
+			} `json:"part"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			return UsageExtraction{}, fmt.Errorf("opencode: parse JSONL: %w", err)
+		}
+		if event.Type != "step_finish" || event.Part == nil {
+			continue
+		}
+		if event.Part.ProviderID != "" {
+			provider = event.Part.ProviderID
+		}
+		if event.Part.ModelID != "" {
+			modelName = event.Part.ModelID
+		}
+		if event.Part.Cost != nil {
+			totalCost += *event.Part.Cost
+			foundCost = true
+		}
+		if len(event.Part.Tokens) == 0 || string(event.Part.Tokens) == "null" {
+			continue
+		}
+		foundUsage = true
+
+		eventUsage, err := parseOpenCodeTokenUsage(event.Part.Tokens)
+		if err != nil {
+			return UsageExtraction{}, err
+		}
+		for category, count := range eventUsage.stepTokens {
+			tokens[category] += count
+		}
+		for category, count := range eventUsage.cacheTokens {
+			tokens[category] += count
+		}
+		canonicalTotals.Input += eventUsage.stepTokens[model.TokenInput] + eventUsage.cacheTokens[model.TokenCachedInput] + eventUsage.cacheTokens[model.TokenCacheWrite]
+		canonicalTotals.Output += eventUsage.stepTokens[model.TokenOutput] + eventUsage.stepTokens[model.TokenReasoning]
+		canonicalTotals.Total += eventUsage.reportedTotal
+		complete = complete && eventUsage.complete
+		totalsComplete = totalsComplete && eventUsage.totalComplete
+	}
+	if err := scanner.Err(); err != nil {
+		return UsageExtraction{}, fmt.Errorf("opencode: scan JSONL: %w", err)
+	}
+	if !foundUsage {
+		return UsageExtraction{Usage: unavailableUsage("opencode", "opencode:step_finish", model.UnavailableNoUsageEvent)}, nil
+	}
+
+	result := UsageExtraction{Usage: model.UsageRecord{
+		Status: model.UsageCollected, CLI: "opencode", Provider: provider, Model: modelName,
+		Tokens: tokens, Source: "opencode:step_finish", Completeness: completeness(complete),
+	}}
+	if complete && totalsComplete {
+		result.Usage.TokenTotals = &canonicalTotals
+	}
+	if foundCost {
+		result.EstimatedCostUSD = &totalCost
+	}
+	return result, nil
+}
+
+type openCodeTokenUsage struct {
+	stepTokens    model.TokenCounts
+	cacheTokens   model.TokenCounts
+	reportedTotal int64
+	complete      bool
+	totalComplete bool
+}
+
+func parseOpenCodeTokenUsage(raw json.RawMessage) (openCodeTokenUsage, error) {
+	var tokenObject map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &tokenObject); err != nil {
+		return openCodeTokenUsage{}, fmt.Errorf("opencode: parse step_finish tokens: %w", err)
+	}
+
+	var reportedTotal int64
+	rawTotal, totalPresent := tokenObject["total"]
+	totalComplete := totalPresent && json.Unmarshal(rawTotal, &reportedTotal) == nil
+	// total is an aggregate of the component token fields, not a disjoint
+	// vendor category. Keeping it would double-count every OpenCode step.
+	delete(tokenObject, "total")
+
+	topLevelTokens, err := json.Marshal(tokenObject)
+	if err != nil {
+		return openCodeTokenUsage{}, fmt.Errorf("opencode: normalize step_finish tokens: %w", err)
+	}
+	stepTokens, topComplete, err := tokenCountsFromObject(topLevelTokens, map[string]string{
+		"input": model.TokenInput, "output": model.TokenOutput, "reasoning": model.TokenReasoning,
+	})
+	if err != nil {
+		return openCodeTokenUsage{}, fmt.Errorf("opencode: parse step_finish tokens: %w", err)
+	}
+	cacheTokens, cacheComplete, err := tokenCountsFromObject(tokenObject["cache"], map[string]string{
+		"read": model.TokenCachedInput, "write": model.TokenCacheWrite,
+	})
+	if err != nil {
+		return openCodeTokenUsage{}, fmt.Errorf("opencode: parse step_finish cache tokens: %w", err)
+	}
+	return openCodeTokenUsage{
+		stepTokens: stepTokens, cacheTokens: cacheTokens, reportedTotal: reportedTotal,
+		complete: topComplete && cacheComplete, totalComplete: totalComplete,
+	}, nil
 }
 
 func discoverOpenCodeHeadlessSession(output string) string {

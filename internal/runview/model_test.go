@@ -1290,11 +1290,18 @@ func TestModel_Enter_AgentStep_InSubWorkflow_LiveRunAfterCompletion(t *testing.T
 	subwf.Children = []*StepNode{agent}
 	root.Children = []*StepNode{subwf}
 
-	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m := newTestModel(&Tree{Root: root, MetricsCaptured: true}, FromLiveRun)
 	m.running = true
 
 	// Simulate run completion
 	m.Update(liverun.ExecDoneMsg{Result: "success"})
+
+	// Completion auto-shows the summary; dismiss it to return to the detail
+	// view before navigating (the summary is a modal screen).
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	if m.showSummary {
+		t.Fatal("s did not dismiss the auto-shown summary")
+	}
 
 	// Drill into the sub-workflow
 	m.cursor = 0 // subwf is the only child at root level

@@ -119,6 +119,39 @@ func TestDispatchStep(t *testing.T) {
 	})
 }
 
+func TestGroupMembersIncludeGroupInAuditIdentity(t *testing.T) {
+	recorder := &mockAuditLogger{}
+	ctx := makeCtx()
+	ctx.AuditLogger = recorder
+	step := model.Step{
+		ID: "group", Steps: []model.Step{
+			{ID: "child", Command: "echo child", Session: model.SessionNew},
+		},
+	}
+
+	outcome, err := DispatchStep(&step, ctx, &mockRunner{results: []ProcessResult{{ExitCode: 0}}}, &mockGlob{}, &mockLogger{})
+	if err != nil || outcome != OutcomeSuccess {
+		t.Fatalf("DispatchStep() = (%q, %v), want success", outcome, err)
+	}
+	for _, event := range recorder.events {
+		if event.Type != audit.EventStepEnd {
+			continue
+		}
+		identity, ok := event.Data["identity"].(model.ExecutionIdentity)
+		if !ok || identity.StepID != "child" {
+			continue
+		}
+		if identity.Prefix != "group" || event.Prefix != "[group, child]" {
+			t.Fatalf("group child identity = %#v, event prefix = %q", identity, event.Prefix)
+		}
+		if len(ctx.NestingPath) != 0 {
+			t.Fatalf("group nesting leaked into parent context: %+v", ctx.NestingPath)
+		}
+		return
+	}
+	t.Fatalf("group child step_end not found: %+v", recorder.events)
+}
+
 func TestDispatchStepEmitsAuditEnvelopeForEveryStepType(t *testing.T) {
 	dir := t.TempDir()
 	scriptPath := filepath.Join(dir, "ok.sh")

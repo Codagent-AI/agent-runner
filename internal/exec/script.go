@@ -25,12 +25,12 @@ func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner Pro
 
 	scriptPath, err := resolveScriptPath(step.Script, ctx)
 	if err != nil {
-		emitScriptEnd(ctx, prefix, startTime, "failed", nil, err)
+		emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err)
 		return OutcomeFailed, err
 	}
 	stdin, err := buildScriptInput(step, ctx)
 	if err != nil {
-		emitScriptEnd(ctx, prefix, startTime, "failed", nil, err)
+		emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err)
 		return OutcomeFailed, err
 	}
 
@@ -46,26 +46,26 @@ func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner Pro
 	var result ProcessResult
 	result, err = runner.RunScript(scriptPath, stdin, step.Capture != "", step.Workdir)
 	if err != nil {
-		emitScriptEnd(ctx, prefix, startTime, "failed", nil, err)
+		emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err)
 		return OutcomeFailed, err
 	}
 	if result.ExitCode != 0 {
-		emitScriptEnd(ctx, prefix, startTime, "failed", &result, nil)
+		emitScriptEnd(ctx, prefix, startTime, step, "failed", &result, nil)
 		return OutcomeFailed, nil
 	}
 	if step.Capture != "" {
 		captured, err := captureScriptOutput(step.CaptureFormat, result.Stdout)
 		if err != nil {
-			emitScriptEnd(ctx, prefix, startTime, "failed", &result, err)
+			emitScriptEnd(ctx, prefix, startTime, step, "failed", &result, err)
 			return OutcomeFailed, err
 		}
 		ctx.CapturedVariables[step.Capture] = captured
 	}
-	emitScriptEnd(ctx, prefix, startTime, "success", &result, nil)
+	emitScriptEnd(ctx, prefix, startTime, step, "success", &result, nil)
 	return OutcomeSuccess, nil
 }
 
-func emitScriptEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, outcome string, result *ProcessResult, err error) {
+func emitScriptEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, step *model.Step, outcome string, result *ProcessResult, err error) {
 	data := map[string]any{}
 	if result != nil {
 		data["exit_code"] = result.ExitCode
@@ -75,7 +75,7 @@ func emitScriptEnd(ctx *model.ExecutionContext, prefix string, startTime time.Ti
 	if err != nil {
 		data["error"] = err.Error()
 	}
-	emitStepEnd(ctx, prefix, startTime, outcome, data)
+	emitStepEnd(ctx, prefix, startTime, outcome, data, step)
 }
 
 func resolveScriptPath(script string, ctx *model.ExecutionContext) (string, error) {

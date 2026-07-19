@@ -75,6 +75,14 @@ Status glyphs SHALL be: `●` running, `○` pending, `✓` success, `✗` faile
 - **WHEN** the run has no audit entries yet but the workflow file is known
 - **THEN** the step list is populated from the workflow file with every row in `pending`
 
+#### Scenario: Executed steps recovered when the workflow file is gone
+- **WHEN** a saved run's workflow file can no longer be resolved but its audit log contains top-level step events
+- **THEN** the run view reconstructs and renders the top-level steps that executed, applies their lifecycle data, and does not show the missing-workflow error; pending steps that never emitted an event cannot be reconstructed
+
+#### Scenario: Missing workflow and audit history still reports an error
+- **WHEN** a saved run's workflow file cannot be resolved and its audit log contains no recoverable step events
+- **THEN** the run view reports the missing-workflow error
+
 #### Scenario: Long step name truncated in sidebar
 - **WHEN** a step name longer than 20 visual characters is rendered in the step list
 - **THEN** the sidebar row displays the first 17 characters of the name followed by `…`
@@ -148,10 +156,12 @@ The run view SHALL render a single continuous, scrollable log pane that stacks a
 Each block SHALL open with a header containing the step name and its type glyph, and SHALL contain the same content contract previously rendered on selection:
 
 - **Shell**: interpolated command, exit code, duration, captured-variable name if `capture:` is set, full stdout and stderr (distinguishable).
-- **Headless agent**: agent profile, CLI, model, resolved session ID, interpolated prompt, exit code, duration, full stdout and stderr, resume action. The header lines SHALL render in the order: profile, CLI, model, session strategy, session ID. The `model:` line SHALL always be present on a started agent step; when no model can be resolved (no step-level override and no profile default available), the value SHALL render as `(unknown)`.
-- **Interactive agent**: agent profile, CLI, model, session ID, interpolated prompt, outcome, duration, resume action. The header-line ordering and always-shown `model:` rule (including the `(unknown)` fallback) match the headless-agent block.
+- **Headless agent**: agent profile, CLI, model, resolved session ID, interpolated prompt, exit code, duration, token usage, reported cost, full stdout and stderr, resume action. The header lines SHALL render in the order: profile, CLI, model, session strategy, session ID. The `model:` line SHALL always be present on a started agent step; when no model can be resolved (no step-level override and no profile default available), the value SHALL render as `(unknown)`.
+- **Interactive agent**: agent profile, CLI, model, session ID, interpolated prompt, outcome, duration, token usage, reported cost, resume action. The header-line ordering and always-shown `model:` rule (including the `(unknown)` fallback) match the headless-agent block.
 - **Sub-workflow**: resolved workflow path, interpolated params, outcome, duration. Children's blocks render inline beneath this header; no "drill in" hint appears because the content is already inline.
 - **Loop**: loop type (counted or for-each), iteration counter `(N/M)`, iterations completed, break_triggered, outcome, duration. Each started iteration renders as a block inline beneath this header, with that iteration's children inline beneath the iteration block; no "drill in" hint appears.
+
+Token-usage and cost lines on agent blocks SHALL render adjacent to the duration line on completed steps whose audit event carries structured metrics. When usage is unavailable (PTY-backed step, parse failure) the usage line SHALL render `?` with the reason when available; when no cost was reported the cost line SHALL render `?`, never `$0.00` (per `cost-capture`). When a logical step executed more than once, the detail block SHALL reflect the latest attempt's metrics, annotated with the attempt number; earlier attempts remain part of run-level aggregates (per `run-metrics-artifact`). Agent blocks reconstructed from legacy audit events with no structured metrics fields SHALL omit usage and cost lines, preserving the pre-metrics detail display.
 
 #### Scenario: Shell step block
 - **WHEN** a shell step has started and is rendered in the log
@@ -159,11 +169,27 @@ Each block SHALL open with a header containing the step name and its type glyph,
 
 #### Scenario: Headless agent block
 - **WHEN** a headless agent step has started
-- **THEN** the log contains a block with profile, CLI, model, session ID, interpolated prompt, exit code, duration, stdout/stderr, and a resume action
+- **THEN** the log contains a block with profile, CLI, model, session ID, interpolated prompt, exit code, duration, token usage, reported cost, stdout/stderr, and a resume action
 
 #### Scenario: Interactive agent block
 - **WHEN** an interactive agent step has started
-- **THEN** the log contains a block with profile, CLI, model, session ID, interpolated prompt, outcome, duration, and a resume action
+- **THEN** the log contains a block with profile, CLI, model, session ID, interpolated prompt, outcome, duration, token usage, reported cost, and a resume action
+
+#### Scenario: Agent block shows collected usage and cost
+- **WHEN** a completed autonomous-headless agent step's block is rendered and usage plus cost were collected
+- **THEN** the block shows the token usage and the reported cost adjacent to the duration line
+
+#### Scenario: Agent block shows unavailable usage marker
+- **WHEN** a completed agent step's block is rendered and its usage record is unavailable
+- **THEN** the usage and cost lines render `?` markers, the usage reason is retained when available, and no zero token counts or `$0.00` are shown
+
+#### Scenario: Legacy agent block omits metrics lines
+- **WHEN** a completed agent step is reconstructed from an audit event that contains no structured metrics fields
+- **THEN** the block renders its original detail content without usage or cost lines
+
+#### Scenario: Re-executed step block shows latest attempt
+- **WHEN** a logical step executed twice and its block is rendered
+- **THEN** the block shows the latest attempt's usage, cost, and duration with an attempt annotation; earlier attempts are not shown in the block but still count in run aggregates
 
 #### Scenario: Agent block header order places model under CLI
 - **WHEN** a headless or interactive agent block is rendered

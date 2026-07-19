@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/usersettings"
 )
 
@@ -495,7 +496,7 @@ func (a *CursorAdapter) SupportsSystemPrompt() bool {
 	return false
 }
 
-func (a *CursorAdapter) ProbeModel(model, effort string) (ProbeStrength, error) {
+func (a *CursorAdapter) ProbeModel(modelName, effort string) (ProbeStrength, error) {
 	return BinaryOnly, nil
 }
 
@@ -523,6 +524,54 @@ func (a *CursorAdapter) FilterOutput(stdout string) string {
 // forwards only assistant text content to downstream.
 func (a *CursorAdapter) WrapStdout(downstream io.Writer) io.Writer {
 	return newCursorStreamFilter(downstream)
+}
+
+// ExtractUsage returns the last best-effort usage object on a Cursor result
+// event. Cursor does not report a USD-denominated cost.
+func (a *CursorAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) {
+	var (
+		lastUsage json.RawMessage
+		modelName string
+	)
+	scanner := newStreamScanner(strings.NewReader(rawStdout))
+	for scanner.Scan() {
+		if strings.TrimSpace(scanner.Text()) == "" {
+			continue
+		}
+		var event struct {
+			Type  string          `json:"type"`
+			Model string          `json:"model"`
+			Usage json.RawMessage `json:"usage"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			return UsageExtraction{}, fmt.Errorf("cursor: parse stream-json: %w", err)
+		}
+		if event.Model != "" {
+			modelName = event.Model
+		}
+		if event.Type == "result" {
+			lastUsage = event.Usage
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return UsageExtraction{}, fmt.Errorf("cursor: scan stream-json: %w", err)
+	}
+	if len(lastUsage) == 0 || string(lastUsage) == "null" {
+		return UsageExtraction{Usage: unavailableUsage("cursor", "cursor:result-event", model.UnavailableNoUsageEvent)}, nil
+	}
+	tokens, complete, err := tokenCountsFromObject(lastUsage, map[string]string{
+		"inputTokens":      model.TokenInput,
+		"outputTokens":     model.TokenOutput,
+		"cacheReadTokens":  model.TokenCachedInput,
+		"cacheWriteTokens": model.TokenCacheWrite,
+	})
+	if err != nil {
+		return UsageExtraction{}, fmt.Errorf("cursor: parse result usage: %w", err)
+	}
+	return UsageExtraction{Usage: model.UsageRecord{
+		Status: model.UsageCollected, CLI: "cursor", Provider: "cursor", Model: modelName,
+		Tokens: tokens, Source: "cursor:result-event", Completeness: completeness(complete),
+	}}, nil
 }
 
 type cursorStreamFilter struct {
@@ -594,8 +643,7 @@ func (f *cursorStreamFilter) writeDownstream(p []byte) error {
 }
 
 func extractCursorResult(output string) string {
-	scanner := bufio.NewScanner(strings.NewReader(output))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner := newStreamScanner(strings.NewReader(output))
 	for scanner.Scan() {
 		var event struct {
 			Type   string `json:"type"`
@@ -611,9 +659,15 @@ func extractCursorResult(output string) string {
 	return ""
 }
 
+// sessionScanBufferMax is the max line size for session-ID discovery. It is
+// deliberately smaller than the shared streamScanBufferMax: the session_id
+// rides on small early events, and an oversized line here is a handled
+// fallback (logged, empty return), not usage loss.
+const sessionScanBufferMax = 1024 * 1024
+
 func discoverCursorSessionID(output string) string {
 	scanner := bufio.NewScanner(strings.NewReader(output))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), sessionScanBufferMax)
 	for scanner.Scan() {
 		var event struct {
 			SessionID string `json:"session_id"`

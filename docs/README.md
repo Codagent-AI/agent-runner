@@ -26,6 +26,12 @@ Agent Runner documentation is split into focused pages for GitHub and the docs s
 | [Sessions And Modes](sessions-and-modes.md) | Session strategies and the `interactive`, `autonomous`, and `ui` mode model. |
 | [Direct Terminal Handoff](direct-terminal-handoff.md) | How interactive agent and shell steps share the real terminal, including completion, durability, and job control. |
 
+## Usage
+
+| Page | Description |
+| --- | --- |
+| [Usage And Cost Tracking](usage-and-cost-tracking.md) | Token categories, CLI support, reported cost, coverage, and the `run-metrics.json` artifact. |
+
 ## Reference
 
 | Page | Description |

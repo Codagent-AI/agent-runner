@@ -85,13 +85,15 @@ type Model struct {
 	stepRanges []stepLineRange
 	logAnchor  stepLineAnchor
 
-	active     bool
-	pulsePhase float64
-	termWidth  int
-	termHeight int
-	showLegend bool
-	loadErr    string
-	notice     string // transient message shown below the step list (e.g. spawn error)
+	active        bool
+	pulsePhase    float64
+	termWidth     int
+	termHeight    int
+	showLegend    bool
+	showSummary   bool
+	summaryOffset int // scroll offset (in step rows) for the summary screen
+	loadErr       string
+	notice        string // transient message shown below the step list (e.g. spawn error)
 
 	resolverCfg   ResolverConfig
 	startTime     time.Time
@@ -183,8 +185,9 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	resolved, _ := ResolveWorkflow(sessionDir, projectDir, &state)
 
 	var (
-		tree    *Tree
-		loadErr string
+		tree            *Tree
+		loadErr         string
+		workflowMissing bool
 	)
 	if resolved.AbsPath != "" {
 		wf, err := loader.LoadWorkflow(resolved.AbsPath, loader.Options{})
@@ -195,6 +198,7 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 		}
 	} else if state.WorkflowFile != "" || state.WorkflowName != "" {
 		loadErr = "workflow file not found (state: " + describeWorkflowHint(&state, sessionDir) + ")"
+		workflowMissing = true
 	}
 	if tree == nil {
 		rootName := state.WorkflowName
@@ -245,6 +249,7 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	// (nil, nil) for missing/empty audit logs.
 	events, err := m.tailer.ReadSince(sessionDir)
 	if err != nil {
+		workflowMissing = false
 		if m.loadErr != "" {
 			m.loadErr = m.loadErr + "; audit log: " + err.Error()
 		} else {
@@ -252,8 +257,17 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 		}
 	}
 	events = filterAuditEventsForWorkflowState(events, state.WorkflowHash, tree.Root, currentStepID(&state), state.Completed)
+	if workflowMissing && len(tree.Root.Children) == 0 && reconstructTopLevelStepsFromAudit(tree.Root, events) {
+		m.loadErr = ""
+		// Re-run the position filter now that currentStepID can be resolved
+		// against the recovered top-level order.
+		events = filterAuditEventsForWorkflowState(events, state.WorkflowHash, tree.Root, currentStepID(&state), state.Completed)
+	}
 	for _, e := range events {
 		tree.ApplyEvent(e)
+	}
+	if entered != FromLiveRun && tree.MetricsCaptured && tree.Root.Status != StatusFailed && (state.Completed || tree.Root.Status == StatusSuccess) {
+		m.showSummary = true
 	}
 	current := m.applyCurrentStepState(&state)
 	if m.autoFollow {
@@ -656,6 +670,24 @@ func (m *Model) scrollLiveUI(delta int) {
 	}
 }
 
+// requestQuit handles the `q` action: while a run is live it opens the
+// quit-confirmation modal; otherwise it requests exit immediately.
+func (m *Model) requestQuit() (tea.Model, tea.Cmd) {
+	if m.running {
+		m.quitConfirming = true
+		return m, nil
+	}
+	m.exitRequested = true
+	return m, emitExit
+}
+
+// scrollSummary adjusts the summary scroll offset. The lower bound is applied
+// here; the upper bound depends on rendered row count vs. available height and
+// is clamped at render time (see renderSummary), matching the log-offset model.
+func (m *Model) scrollSummary(delta int) {
+	m.moveCursor(delta)
+}
+
 func (m *Model) liveUIVisible() bool {
 	if m.liveUI == nil {
 		return false
@@ -733,10 +765,12 @@ func (m *Model) handleExecDoneMsg(msg liverun.ExecDoneMsg) {
 	}
 	switch msg.Result {
 	case "failed":
+		m.showSummary = false
 		if failed := findFailedLeaf(m.tree.Root); failed != nil {
 			m.navigateToNode(failed)
 		}
 	case "success":
+		m.showSummary = m.tree.MetricsCaptured
 		// Land on the final top-level step so the user sees the workflow's
 		// end state. Loop iterations and other deep leaves emit StepStateMsg
 		// before their tree nodes exist (audit replay runs lazily), so cursor
@@ -870,6 +904,63 @@ func (m *Model) lastResumableAgentInWorkflow(scope *StepNode) *StepNode {
 	return nil
 }
 
+// handleOverlayKey processes keys for the modal overlays (legend, summary,
+// quit confirmation) that intercept input before the main key switch. These
+// are checked in priority order; the bool result reports whether an overlay
+// consumed the key.
+func (m *Model) handleOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+	switch {
+	case m.showLegend:
+		switch msg.String() {
+		case "?", "esc":
+			m.showLegend = false
+		}
+		return m, nil, true
+	case m.showSummary:
+		switch msg.String() {
+		case "v", "s":
+			m.showSummary = false
+			m.summaryOffset = 0
+		case "esc":
+			if len(m.path) > 1 {
+				mdl, cmd := m.handleEsc()
+				m.summaryOffset = 0
+				return mdl, cmd, true
+			}
+			m.showSummary = false
+			m.summaryOffset = 0
+		case "q":
+			// Dismiss the summary before opening the quit-confirmation modal so
+			// its y/n keys reach that handler instead of this block.
+			m.showSummary = false
+			m.summaryOffset = 0
+			mdl, cmd := m.requestQuit()
+			return mdl, cmd, true
+		case "up", "k":
+			m.scrollSummary(-1)
+		case "down", "j":
+			m.scrollSummary(1)
+		case "enter":
+			if selected := m.selectedNode(); selected != nil && selected.IsContainer() {
+				mdl, cmd := m.handleEnter()
+				m.summaryOffset = 0
+				return mdl, cmd, true
+			}
+		}
+		return m, nil, true
+	case m.quitConfirming:
+		switch msg.String() {
+		case "y", "Y":
+			m.exitRequested = true
+			return m, tea.Quit, true
+		case "n", "N", "esc":
+			m.quitConfirming = false
+		}
+		return m, nil, true
+	}
+	return m, nil, false
+}
+
 // handleKey processes a key message. Extracted from Update to keep the main
 // message switch within funlen limits.
 func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -878,36 +969,18 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 
-	if m.showLegend {
-		switch msg.String() {
-		case "?", "esc":
-			m.showLegend = false
-		}
-		return m, nil
-	}
-
-	// Quit-confirmation modal.
-	if m.quitConfirming {
-		switch msg.String() {
-		case "y", "Y":
-			m.exitRequested = true
-			return m, tea.Quit
-		case "n", "N", "esc":
-			m.quitConfirming = false
-		}
-		return m, nil
+	if mdl, cmd, handled := m.handleOverlayKey(msg); handled {
+		return mdl, cmd
 	}
 
 	switch msg.String() {
 	case "q":
-		if m.running {
-			m.quitConfirming = true
-			return m, nil
-		}
-		m.exitRequested = true
-		return m, emitExit
+		return m.requestQuit()
 	case "?":
 		m.showLegend = true
+	case "s":
+		m.showSummary = !m.showSummary
+		m.summaryOffset = 0
 	case "esc":
 		m.autoFollow = false
 		return m.handleEsc()
@@ -1413,7 +1486,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 	}
 
 	switch n.Type {
-	case NodeLoop:
+	case NodeLoop, NodeGroup:
 		m.path = append(m.path, n)
 		m.cursor = 0
 		m.logOffset = 0
