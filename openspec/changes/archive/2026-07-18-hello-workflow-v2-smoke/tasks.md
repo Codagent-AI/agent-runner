@@ -1,0 +1,1 @@
+- [x] Add Workflow V2 Smoke Document (`tasks/add-smoke-document.md`)
