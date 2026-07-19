@@ -185,8 +185,9 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	resolved, _ := ResolveWorkflow(sessionDir, projectDir, &state)
 
 	var (
-		tree    *Tree
-		loadErr string
+		tree            *Tree
+		loadErr         string
+		workflowMissing bool
 	)
 	if resolved.AbsPath != "" {
 		wf, err := loader.LoadWorkflow(resolved.AbsPath, loader.Options{})
@@ -197,6 +198,7 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 		}
 	} else if state.WorkflowFile != "" || state.WorkflowName != "" {
 		loadErr = "workflow file not found (state: " + describeWorkflowHint(&state, sessionDir) + ")"
+		workflowMissing = true
 	}
 	if tree == nil {
 		rootName := state.WorkflowName
@@ -247,6 +249,7 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	// (nil, nil) for missing/empty audit logs.
 	events, err := m.tailer.ReadSince(sessionDir)
 	if err != nil {
+		workflowMissing = false
 		if m.loadErr != "" {
 			m.loadErr = m.loadErr + "; audit log: " + err.Error()
 		} else {
@@ -254,10 +257,16 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 		}
 	}
 	events = filterAuditEventsForWorkflowState(events, state.WorkflowHash, tree.Root, currentStepID(&state), state.Completed)
+	if workflowMissing && len(tree.Root.Children) == 0 && reconstructTopLevelStepsFromAudit(tree.Root, events) {
+		m.loadErr = ""
+		// Re-run the position filter now that currentStepID can be resolved
+		// against the recovered top-level order.
+		events = filterAuditEventsForWorkflowState(events, state.WorkflowHash, tree.Root, currentStepID(&state), state.Completed)
+	}
 	for _, e := range events {
 		tree.ApplyEvent(e)
 	}
-	if entered != FromLiveRun && tree.Root.Status != StatusFailed && (state.Completed || tree.Root.Status == StatusSuccess) {
+	if entered != FromLiveRun && tree.MetricsCaptured && tree.Root.Status != StatusFailed && (state.Completed || tree.Root.Status == StatusSuccess) {
 		m.showSummary = true
 	}
 	current := m.applyCurrentStepState(&state)
@@ -761,7 +770,7 @@ func (m *Model) handleExecDoneMsg(msg liverun.ExecDoneMsg) {
 			m.navigateToNode(failed)
 		}
 	case "success":
-		m.showSummary = true
+		m.showSummary = m.tree.MetricsCaptured
 		// Land on the final top-level step so the user sees the workflow's
 		// end state. Loop iterations and other deep leaves emit StepStateMsg
 		// before their tree nodes exist (audit replay runs lazily), so cursor
@@ -909,7 +918,7 @@ func (m *Model) handleOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 	case m.showSummary:
 		switch msg.String() {
-		case "s":
+		case "v", "s":
 			m.showSummary = false
 			m.summaryOffset = 0
 		case "esc":

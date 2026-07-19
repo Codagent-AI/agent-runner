@@ -75,6 +75,14 @@ Status glyphs SHALL be: `●` running, `○` pending, `✓` success, `✗` faile
 - **WHEN** the run has no audit entries yet but the workflow file is known
 - **THEN** the step list is populated from the workflow file with every row in `pending`
 
+#### Scenario: Executed steps recovered when the workflow file is gone
+- **WHEN** a saved run's workflow file can no longer be resolved but its audit log contains top-level step events
+- **THEN** the run view reconstructs and renders the top-level steps that executed, applies their lifecycle data, and does not show the missing-workflow error; pending steps that never emitted an event cannot be reconstructed
+
+#### Scenario: Missing workflow and audit history still reports an error
+- **WHEN** a saved run's workflow file cannot be resolved and its audit log contains no recoverable step events
+- **THEN** the run view reports the missing-workflow error
+
 #### Scenario: Long step name truncated in sidebar
 - **WHEN** a step name longer than 20 visual characters is rendered in the step list
 - **THEN** the sidebar row displays the first 17 characters of the name followed by `…`
@@ -153,7 +161,7 @@ Each block SHALL open with a header containing the step name and its type glyph,
 - **Sub-workflow**: resolved workflow path, interpolated params, outcome, duration. Children's blocks render inline beneath this header; no "drill in" hint appears because the content is already inline.
 - **Loop**: loop type (counted or for-each), iteration counter `(N/M)`, iterations completed, break_triggered, outcome, duration. Each started iteration renders as a block inline beneath this header, with that iteration's children inline beneath the iteration block; no "drill in" hint appears.
 
-Token-usage and cost lines on agent blocks SHALL render adjacent to the duration line on completed steps. When usage is unavailable (PTY-backed step, parse failure) the usage line SHALL render an explicit unavailable marker; when no cost was reported the cost line SHALL render an unavailable marker, never `$0.00` (per `cost-capture`). When a logical step executed more than once, the detail block SHALL reflect the latest attempt's metrics, annotated with the attempt number; earlier attempts remain part of run-level aggregates (per `run-metrics-artifact`).
+Token-usage and cost lines on agent blocks SHALL render adjacent to the duration line on completed steps whose audit event carries structured metrics. When usage is unavailable (PTY-backed step, parse failure) the usage line SHALL render `?` with the reason when available; when no cost was reported the cost line SHALL render `?`, never `$0.00` (per `cost-capture`). When a logical step executed more than once, the detail block SHALL reflect the latest attempt's metrics, annotated with the attempt number; earlier attempts remain part of run-level aggregates (per `run-metrics-artifact`). Agent blocks reconstructed from legacy audit events with no structured metrics fields SHALL omit usage and cost lines, preserving the pre-metrics detail display.
 
 #### Scenario: Shell step block
 - **WHEN** a shell step has started and is rendered in the log
@@ -173,7 +181,11 @@ Token-usage and cost lines on agent blocks SHALL render adjacent to the duration
 
 #### Scenario: Agent block shows unavailable usage marker
 - **WHEN** a completed agent step's block is rendered and its usage record is unavailable
-- **THEN** the usage and cost lines render explicit unavailable markers; no zero token counts and no `$0.00` are shown
+- **THEN** the usage and cost lines render `?` markers, the usage reason is retained when available, and no zero token counts or `$0.00` are shown
+
+#### Scenario: Legacy agent block omits metrics lines
+- **WHEN** a completed agent step is reconstructed from an audit event that contains no structured metrics fields
+- **THEN** the block renders its original detail content without usage or cost lines
 
 #### Scenario: Re-executed step block shows latest attempt
 - **WHEN** a logical step executed twice and its block is rendered
@@ -571,4 +583,3 @@ When the step transitions out of `in-progress` (to `success`, `failed`, `skipped
 #### Scenario: Spinner absent for aborted step without active run
 - **WHEN** an agent step was interrupted by an earlier run and no run is currently active
 - **THEN** the log block shows no animated progress indicator (matching the step-list rule that `in-progress` does not blink outside an active run)
-

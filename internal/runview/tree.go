@@ -165,6 +165,11 @@ func indexStepNode(nodes []*StepNode, target *StepNode) int {
 type Tree struct {
 	Root *StepNode
 
+	// MetricsCaptured reports whether the audit stream contains the structured
+	// metrics fields introduced with run metrics. It stays false for legacy
+	// audit logs so those runs retain the pre-metrics viewing experience.
+	MetricsCaptured bool
+
 	// RunTotals is populated from the authoritative totals on the latest
 	// run_end event. It is nil while a run is active or for legacy audit logs.
 	RunTotals *model.RunTotals

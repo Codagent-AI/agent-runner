@@ -15,16 +15,16 @@ When a live workflow run reaches the `completed` (successful) terminal state, th
 - **WHEN** a step fails and the workflow halts
 - **THEN** the TUI shows the detailed run view with the cursor on the failed step; the summary is not auto-shown
 
-### Requirement: Summary toggle key in any state
+### Requirement: Contextual keys switch between run and summary views
 
-The run view SHALL bind the `s` key to toggle between the summary screen and the detailed run view. The toggle SHALL work in every run state — while a run is executing (showing metrics collected so far), and for completed, failed, and interrupted runs — and at any drill depth. The help bar SHALL advertise the `s` binding.
+The detailed run view SHALL bind `s` to open the summary screen, and the summary screen SHALL bind `v` to return to the detailed run view. These view switches SHALL work in every run state — while a run is executing (showing metrics collected so far), and for completed, failed, and interrupted runs — and at any drill depth. The detailed help bar SHALL advertise `s summary`; the summary help bar SHALL advertise `v view run` instead of calling the current screen a summary action.
 
 #### Scenario: Toggle to summary mid-run
 - **WHEN** a workflow is running and the user presses `s`
 - **THEN** the summary screen is shown with the metrics of steps completed so far; steps not yet run appear without time or cost values
 
 #### Scenario: Toggle back to detail
-- **WHEN** the summary screen is shown and the user presses `s`
+- **WHEN** the summary screen is shown and the user presses `v`
 - **THEN** the detailed run view is restored in the state it was left
 
 #### Scenario: Summary for a failed run on demand
@@ -33,11 +33,15 @@ The run view SHALL bind the `s` key to toggle between the summary screen and the
 
 ### Requirement: Default view for inspected completed runs
 
-When a run whose status is `completed` is opened via `--inspect` or from the run list, the run view SHALL open showing the summary screen. Runs in any other status (failed, interrupted/inactive, active) SHALL open in the detailed view as today.
+When a run whose status is `completed` is opened via `--inspect` or from the run list and its audit stream contains structured run metrics, the run view SHALL open showing the summary screen. Runs in any other status (failed, interrupted/inactive, active), and legacy completed runs whose audit stream predates structured metrics, SHALL open in the detailed view as before.
 
 #### Scenario: Inspect completed run opens summary
-- **WHEN** `agent-runner --inspect <run-id>` opens a run with status `completed`
-- **THEN** the summary screen is displayed first; `s` switches to the detailed view
+- **WHEN** `agent-runner --inspect <run-id>` opens a run with status `completed` whose audit stream contains structured run metrics
+- **THEN** the summary screen is displayed first; `v` switches to the detailed run view
+
+#### Scenario: Legacy completed run opens the original detail view
+- **WHEN** a completed run whose audit events contain no structured usage, cost, identity, or run-total fields is opened via `--inspect` or the run list
+- **THEN** the detailed run view is displayed first rather than an empty metrics summary
 
 #### Scenario: Inspect failed run opens detail
 - **WHEN** a run with status `failed` is opened via `--inspect` or the run list
@@ -47,7 +51,7 @@ When a run whose status is `completed` is opened via `--inspect` or from the run
 
 The summary screen SHALL render a full-width table for the current drill-in level, reusing the detailed run view's breadcrumb, cursor, and container navigation. The table SHALL show one row per direct child with right-aligned columns for duration, input, cache read, cache write, output, reasoning, and reported API cost. Up/down SHALL select rows, Enter SHALL drill into container rows, and Escape SHALL drill out. Nested descendants SHALL not be flattened into the same table.
 
-When a logical step executed more than once, its row SHALL aggregate every attempt. A container row SHALL recursively roll up all descendant attempts. The aligned final Total row SHALL describe the current scope: the authoritative whole-run totals at the root and the selected container's descendant aggregate below the root. Every reported token category SHALL be summed vertically; absent categories SHALL render an em dash, reported zeros SHALL render `0`, and unavailable usage SHALL render an explicit unavailable marker. Canonical processed input/output/overall totals and their coverage SHALL be shown beneath the raw-category Total row for eval-oriented consumption.
+When a logical step executed more than once, its row SHALL aggregate every attempt. A container row SHALL recursively roll up all descendant attempts. The aligned final Total row SHALL describe the current scope: the authoritative whole-run totals at the root and the selected container's descendant aggregate below the root. Every reported token category SHALL be summed vertically; absent categories SHALL render an em dash, reported zeros SHALL render `0`, and unavailable usage SHALL render `?`. Canonical processed input/output/overall totals and their coverage SHALL be shown beneath the raw-category Total row for eval-oriented consumption.
 
 #### Scenario: Flat workflow rows
 - **WHEN** the summary is shown for a run of top-level steps only
@@ -83,11 +87,11 @@ When a logical step executed more than once, its row SHALL aggregate every attem
 
 ### Requirement: Unavailable cost display in summary
 
-Steps without a reported cost SHALL display an explicit unavailable marker in the cost column, never `$0.00`. A container row whose descendants are only partially priced SHALL mark its rolled-up cost as partial.
+Steps without a reported cost SHALL display `?` in the cost column, never `$0.00`. A container row whose descendants are only partially priced SHALL mark its rolled-up cost as partial.
 
 #### Scenario: Unpriced step shows marker
 - **WHEN** a step whose CLI reported no cost appears in the summary
-- **THEN** its cost column shows an unavailable marker rather than a zero amount
+- **THEN** its cost column shows `?` rather than a zero amount
 
 #### Scenario: Partially priced container flagged
 - **WHEN** a sub-workflow contains one step with reported cost and one without

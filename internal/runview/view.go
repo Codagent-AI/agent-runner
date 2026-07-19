@@ -491,9 +491,16 @@ func (m *Model) helpBarParts() []string {
 		parts = append(parts, "l follow")
 	}
 
-	parts = append(parts, "s summary", "? legend", "q quit")
+	parts = append(parts, m.viewSwitchHelpPart(), "? legend", "q quit")
 
 	return parts
+}
+
+func (m *Model) viewSwitchHelpPart() string {
+	if m.showSummary {
+		return "v view run"
+	}
+	return "s summary"
 }
 
 func (m *Model) selectedNodeHasTruncatedOutput() bool {

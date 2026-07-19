@@ -1290,7 +1290,7 @@ func TestModel_Enter_AgentStep_InSubWorkflow_LiveRunAfterCompletion(t *testing.T
 	subwf.Children = []*StepNode{agent}
 	root.Children = []*StepNode{subwf}
 
-	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m := newTestModel(&Tree{Root: root, MetricsCaptured: true}, FromLiveRun)
 	m.running = true
 
 	// Simulate run completion

@@ -446,25 +446,25 @@ func blockAgentMetrics(n *StepNode) []string {
 	if n.Status == StatusPending || n.Status == StatusInProgress {
 		return nil
 	}
-	var latest *AttemptMetrics
-	if len(n.Attempts) > 0 {
-		latest = &n.Attempts[len(n.Attempts)-1]
+	if len(n.Attempts) == 0 {
+		return nil
 	}
+	latest := &n.Attempts[len(n.Attempts)-1]
 	lines := make([]string, 0, 3)
-	if latest != nil && latest.Attempt > 1 {
+	if latest.Attempt > 1 {
 		lines = append(lines, blockDimStr("attempt", strconv.Itoa(latest.Attempt)))
 	}
-	if latest == nil || latest.Usage == nil || latest.Usage.Status != model.UsageCollected {
+	if latest.Usage == nil || latest.Usage.Status != model.UsageCollected {
 		reason := ""
-		if latest != nil && latest.Usage != nil && latest.Usage.Reason != "" {
+		if latest.Usage != nil && latest.Usage.Reason != "" {
 			reason = " (" + string(latest.Usage.Reason) + ")"
 		}
-		lines = append(lines, blockDimStr("usage", "unavailable"+reason))
+		lines = append(lines, blockDimStr("usage", "?"+reason))
 	} else {
 		lines = append(lines, blockDimStr("tokens", formatTokenCounts(latest.Usage.Tokens)))
 	}
-	if latest == nil || latest.CostUSD == nil {
-		lines = append(lines, blockDimStr("cost", "unavailable"))
+	if latest.CostUSD == nil {
+		lines = append(lines, blockDimStr("cost", "?"))
 	} else {
 		lines = append(lines, blockDimStr("cost", formatUSD(*latest.CostUSD)))
 	}

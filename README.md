@@ -82,6 +82,7 @@ The Markdown docs in [`docs/`](docs/) are the source of truth for the documentat
 - [CLI Reference](docs/cli-reference.md)
 - [Built-In Workflows](docs/built-in-workflows.md)
 - [Run State And Audit](docs/run-state-and-audit.md)
+- [Usage And Cost Tracking](docs/usage-and-cost-tracking.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Development Guide](docs/development.md)
 

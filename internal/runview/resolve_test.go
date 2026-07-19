@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/model"
@@ -340,6 +341,7 @@ func TestNew_ReportsErrorWhenWorkflowMissing(t *testing.T) {
 	}
 	data, _ := json.Marshal(state)
 	writeFile(t, filepath.Join(sessionDir, "state.json"), string(data))
+	writeFile(t, filepath.Join(sessionDir, "audit.log"), "2026-04-11T09:14:01Z [unknown] error {\"message\":\"workflow failed before any step started\"}\n")
 	chdirTo(t, realPath(t, t.TempDir()))
 
 	m, err := New(sessionDir, projectDir, FromList)
@@ -348,6 +350,80 @@ func TestNew_ReportsErrorWhenWorkflowMissing(t *testing.T) {
 	}
 	if m.loadErr == "" {
 		t.Fatal("expected loadErr to be set when workflow cannot be resolved")
+	}
+}
+
+func TestNew_ReconstructsCompletedRunFromAuditWhenWorkflowWasDeleted(t *testing.T) {
+	base := realPath(t, t.TempDir())
+	projectDir := filepath.Join(base, "projects", "encoded")
+	sessionDir := filepath.Join(projectDir, "runs", "temporary-workflow-2026-07-18T04-43-34-715518Z")
+	state := model.RunState{
+		WorkflowFile: filepath.Join(base, "deleted", "temporary-workflow.yaml"),
+		WorkflowName: "temporary-workflow",
+		WorkflowHash: "workflow-hash",
+		CurrentStep:  model.CurrentStep{Nested: &model.NestedStepState{StepID: "direct-shell", Completed: true}},
+		Completed:    true,
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(sessionDir, "state.json"), string(data))
+	writeFile(t, filepath.Join(sessionDir, "audit.log"), `2026-07-18T04:40:00Z run_start {"workflow_hash":"old-hash","workflow_name":"old-workflow"}
+2026-07-18T04:40:01Z [stale-step] step_start {"command":"echo stale"}
+2026-07-18T04:40:02Z [stale-step] step_end {"duration_ms":1,"exit_code":0,"outcome":"success"}
+2026-07-18T04:43:34Z run_start {"workflow_hash":"workflow-hash","workflow_name":"temporary-workflow"}
+2026-07-18T04:43:35Z [direct-shell] step_start {"command":"echo recovered"}
+2026-07-18T04:43:36Z [direct-shell] step_end {"duration_ms":18,"estimated_api_cost_usd":null,"exit_code":0,"identity":{"step_id":"direct-shell","prefix":"","step_type":"shell","kind":"step","attempt":1,"agent_invoked":false},"outcome":"success","stdout":"recovered\n","stderr":"","usage":{"status":"collected","source":"agent-runner","completeness":"complete"}}
+2026-07-18T04:43:36Z run_end {"outcome":"success","totals":{"active_duration_ms":18,"tokens":{},"usage_coverage":"none","estimated_api_cost_usd":null,"cost_coverage":"none"}}
+`)
+
+	m, err := New(sessionDir, projectDir, FromList)
+	if err != nil {
+		t.Fatalf("runview.New: %v", err)
+	}
+	if m.loadErr != "" {
+		t.Fatalf("recovered run retained missing-workflow error: %s", m.loadErr)
+	}
+	if len(m.tree.Root.Children) != 1 {
+		t.Fatalf("recovered children = %d, want 1", len(m.tree.Root.Children))
+	}
+	step := m.tree.Root.Children[0]
+	if step.ID != "direct-shell" || step.Type != NodeShell || step.Status != StatusSuccess || step.InterpolatedCommand != "echo recovered" {
+		t.Fatalf("recovered step = %#v", step)
+	}
+}
+
+func TestNew_PreservesWorkflowLoadErrorWhenAuditCanReconstructSteps(t *testing.T) {
+	base := realPath(t, t.TempDir())
+	projectDir := filepath.Join(base, "projects", "encoded")
+	sessionDir := filepath.Join(projectDir, "runs", "malformed-2026-07-18T04-43-34-715518Z")
+	workflowPath := filepath.Join(base, "workflows", "malformed.yaml")
+	writeFile(t, workflowPath, "name: [not valid yaml")
+
+	state := model.RunState{
+		WorkflowFile: workflowPath,
+		WorkflowName: "malformed",
+		WorkflowHash: "workflow-hash",
+		Completed:    true,
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(sessionDir, "state.json"), string(data))
+	writeFile(t, filepath.Join(sessionDir, "audit.log"), `2026-07-18T04:43:34Z run_start {"workflow_hash":"workflow-hash","workflow_name":"malformed"}
+2026-07-18T04:43:35Z [direct-shell] step_start {"command":"echo recovered"}
+2026-07-18T04:43:36Z [direct-shell] step_end {"duration_ms":18,"exit_code":0,"outcome":"success"}
+2026-07-18T04:43:36Z run_end {"outcome":"success"}
+`)
+
+	m, err := New(sessionDir, projectDir, FromList)
+	if err != nil {
+		t.Fatalf("runview.New: %v", err)
+	}
+	if !strings.Contains(m.loadErr, "load workflow:") {
+		t.Fatalf("loadErr = %q, want workflow load error", m.loadErr)
 	}
 }
 

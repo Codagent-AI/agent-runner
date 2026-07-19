@@ -135,6 +135,7 @@ func (m *Model) summaryFooterLines(totals *model.RunTotals, columns summaryColum
 	}
 	footer := []string{"", renderSummaryTotalRow(totalRow, columns)}
 	footer = append(footer,
+		"",
 		tuistyle.ScreenMargin+"  "+tuistyle.DimStyle.Render(formatProcessedTokenTotals(totals)),
 		tuistyle.ScreenMargin+"  "+tuistyle.DimStyle.Render(
 			"usage "+string(totals.UsageCoverage)+"  ·  cost "+string(totals.CostCoverage)))
@@ -268,10 +269,7 @@ func formatSummaryToken(metrics *summaryMetrics, category string) string {
 		return formatCount(value)
 	}
 	if metrics.agentAttempts > 0 && metrics.usageReported == 0 {
-		return "unavailable"
-	}
-	if metrics.agentAttempts == 0 && metrics.totalAttempts > 0 {
-		return "0"
+		return "?"
 	}
 	return "—"
 }
@@ -366,7 +364,7 @@ func (m *summaryMetrics) add(other *summaryMetrics) {
 func formatSummaryCost(metrics *summaryMetrics) string {
 	if metrics.pricedAttempts == 0 {
 		if metrics.agentAttempts > 0 {
-			return "unavailable"
+			return "?"
 		}
 		return "—"
 	}
@@ -423,7 +421,7 @@ func formatProcessedTokenTotals(totals *model.RunTotals) string {
 		coverage = model.CoverageNone
 	}
 	if totals.TokenTotals == nil {
-		return "Processed tokens: unavailable (" + string(coverage) + ")"
+		return "Processed tokens: ? (" + string(coverage) + ")"
 	}
 	value := fmt.Sprintf("Processed tokens: input %s · output %s · total %s",
 		formatCount(totals.TokenTotals.Input), formatCount(totals.TokenTotals.Output), formatCount(totals.TokenTotals.Total))
@@ -443,7 +441,7 @@ func summaryCoverage(total, reported int) model.Coverage {
 
 func formatCoveredCost(cost *float64, coverage model.Coverage) string {
 	if cost == nil {
-		return "unavailable (" + string(coverage) + ")"
+		return "? (" + string(coverage) + ")"
 	}
 	value := formatUSD(*cost)
 	if coverage != model.CoverageComplete {

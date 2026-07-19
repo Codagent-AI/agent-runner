@@ -275,11 +275,106 @@ func childIndexByID(root *StepNode, id string) int {
 	return -1
 }
 
+// reconstructTopLevelStepsFromAudit recovers the executed portion of a run
+// when its workflow file is no longer available. Audit events do not contain
+// pending steps, but they carry enough type and lifecycle data to render every
+// top-level step that actually started.
+func reconstructTopLevelStepsFromAudit(root *StepNode, events []RawEvent) bool {
+	if root == nil {
+		return false
+	}
+	for _, event := range events {
+		switch event.Type {
+		case "step_start", "step_end", "iteration_start", "iteration_end", "sub_workflow_start", "sub_workflow_end":
+		default:
+			continue
+		}
+		tokens := parsePrefix(event.Prefix)
+		if len(tokens) == 0 || tokens[0].stepID == "" {
+			continue
+		}
+		id := tokens[0].stepID
+		node := childByID(root, id)
+		if node == nil {
+			node = &StepNode{ID: id, Type: NodeShell, Status: StatusPending, Parent: root}
+			root.Children = append(root.Children, node)
+		}
+		if nodeType, ok := auditNodeType(event, tokens); ok {
+			node.Type = nodeType
+		}
+	}
+	return len(root.Children) > 0
+}
+
+func auditNodeType(event RawEvent, tokens []prefixToken) (NodeType, bool) {
+	if len(tokens) > 1 {
+		switch {
+		case tokens[1].subName != "":
+			return NodeSubWorkflow, true
+		case tokens[0].iteration != nil:
+			return NodeLoop, true
+		default:
+			return NodeGroup, true
+		}
+	}
+	if event.Type == "sub_workflow_start" || event.Type == "sub_workflow_end" {
+		return NodeSubWorkflow, true
+	}
+	if _, ok := event.Data["loop_type"]; ok {
+		return NodeLoop, true
+	}
+	if _, ok := event.Data["command"]; ok {
+		return NodeShell, true
+	}
+	if _, ok := event.Data["script"]; ok {
+		return NodeScript, true
+	}
+	if _, ok := event.Data["title"]; ok {
+		return NodeUI, true
+	}
+	if mode, ok := stringField(event.Data, "mode"); ok {
+		switch model.StepMode(mode) {
+		case model.ModeAutonomous:
+			return NodeHeadlessAgent, true
+		case model.ModeInteractive:
+			return NodeInteractiveAgent, true
+		case model.ModeUI:
+			return NodeUI, true
+		}
+	}
+	identity, ok := event.Data["identity"].(map[string]any)
+	if !ok {
+		return NodeRoot, false
+	}
+	stepType, _ := stringField(identity, "step_type")
+	switch stepType {
+	case "shell":
+		return NodeShell, true
+	case "script":
+		return NodeScript, true
+	case "ui":
+		return NodeUI, true
+	case "agent":
+		return NodeHeadlessAgent, true
+	case "loop":
+		return NodeLoop, true
+	case "sub-workflow":
+		return NodeSubWorkflow, true
+	case "group":
+		return NodeGroup, true
+	default:
+		return NodeRoot, false
+	}
+}
+
 // ApplyEvent mutates the tree according to a single audit event.
 // Unknown event types and unresolved prefixes are silently ignored so a
 // malformed log doesn't poison the tree.
 func (t *Tree) ApplyEvent(e RawEvent) {
 	tokens := parsePrefix(e.Prefix)
+	if eventCarriesMetrics(e) {
+		t.MetricsCaptured = true
+	}
 
 	switch e.Type {
 	case "run_start":
@@ -671,6 +766,9 @@ func applyStepEnd(n *StepNode, data map[string]any) {
 	if s, ok := stringField(data, "discovered_session_id"); ok && s != "" {
 		n.SessionID = s
 	}
+	if !dataCarriesMetrics(data) {
+		return
+	}
 
 	attempt := len(n.Attempts) + 1
 	agentInvoked := false
@@ -702,6 +800,23 @@ func applyStepEnd(n *StepNode, data map[string]any) {
 		}
 	}
 	n.Attempts = append(n.Attempts, metrics)
+}
+
+func eventCarriesMetrics(event RawEvent) bool {
+	if event.Type == "run_end" {
+		_, ok := event.Data["totals"]
+		return ok
+	}
+	return dataCarriesMetrics(event.Data)
+}
+
+func dataCarriesMetrics(data map[string]any) bool {
+	for _, key := range []string{"identity", "usage", "estimated_api_cost_usd"} {
+		if _, ok := data[key]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func decodeUsageRecord(data map[string]any) (*model.UsageRecord, bool) {

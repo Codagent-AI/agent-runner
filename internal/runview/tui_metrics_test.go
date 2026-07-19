@@ -62,6 +62,23 @@ func TestApplyEventAppendsAttemptMetricsAndRunTotals(t *testing.T) {
 	}
 }
 
+func TestApplyEventLegacyStepEndDoesNotInventMetrics(t *testing.T) {
+	wf := model.Workflow{Name: "legacy", Steps: []model.Step{{ID: "agent", Prompt: "do it", Mode: model.ModeAutonomous}}}
+	tree := BuildTree(&wf, "")
+
+	tree.ApplyEvent(RawEvent{Prefix: "[agent]", Type: "step_end", Data: map[string]any{
+		"outcome": "success", "duration_ms": float64(1500),
+	}})
+
+	node := tree.Root.Children[0]
+	if node.Status != StatusSuccess || node.DurationMs == nil || *node.DurationMs != 1500 {
+		t.Fatalf("legacy terminal fields were not applied: %#v", node)
+	}
+	if len(node.Attempts) != 0 {
+		t.Fatalf("legacy event invented metric attempts: %#v", node.Attempts)
+	}
+}
+
 func TestAgentDetailMetricsRenderCollectedUnavailableAndLatestAttempt(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -77,8 +94,8 @@ func TestAgentDetailMetricsRenderCollectedUnavailableAndLatestAttempt(t *testing
 		{
 			name:     "unavailable usage and cost",
 			attempts: []AttemptMetrics{{Attempt: 1, Usage: &model.UsageRecord{Status: model.UsageUnavailable, Reason: model.UnavailablePTYContext, CLI: "claude", Source: "agent-runner"}, DurationMs: int64Pointer(1000), Outcome: "success"}},
-			want:     []string{"usage: unavailable (pty-context)", "cost: unavailable"},
-			dontWant: []string{"$0.00", "input 0", "output 0"},
+			want:     []string{"usage: ? (pty-context)", "cost: ?"},
+			dontWant: []string{"unavailable", "$0.00", "input 0", "output 0"},
 		},
 		{
 			name: "latest repeated attempt",
@@ -108,6 +125,17 @@ func TestAgentDetailMetricsRenderCollectedUnavailableAndLatestAttempt(t *testing
 				}
 			}
 		})
+	}
+}
+
+func TestAgentDetailLegacyAuditWithoutMetricsKeepsClassicDisplay(t *testing.T) {
+	node := &StepNode{ID: "agent", Type: NodeHeadlessAgent, Status: StatusSuccess, DurationMs: int64Pointer(1500)}
+	plain := tuistyle.Sanitize(strings.Join(renderHeadlessBlock(node, 0, 100, true, 0, false), "\n"))
+
+	for _, unwanted := range []string{"usage:", "tokens:", "cost:"} {
+		if strings.Contains(plain, unwanted) {
+			t.Errorf("legacy detail unexpectedly contains %q:\n%s", unwanted, plain)
+		}
 	}
 }
 
@@ -164,7 +192,7 @@ func TestRenderSummaryAggregatesAttemptsNestedContainersAndCoverage(t *testing.T
 		"group", "250ms", "$0.05",
 		"pending", "—",
 		"Total", "7.5s", "45", "10", "$1.05 (partial)", "usage partial",
-		"Processed tokens: unavailable (none)",
+		"Processed tokens: ? (none)",
 	} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("summary missing %q:\n%s", want, plain)
@@ -215,11 +243,14 @@ func TestRenderSummaryDistinguishesUnavailableFromNotApplicableCost(t *testing.T
 	lines := strings.Split(tuistyle.Sanitize(newTestModel(&Tree{Root: root}, FromList).renderSummary()), "\n")
 	agentLine := summaryLineContaining(t, lines, "interactive-agent")
 	shellLine := summaryLineContaining(t, lines, "shell")
-	if !strings.Contains(agentLine, "unavailable") {
-		t.Fatalf("agent row = %q, want explicit unavailable cost", agentLine)
+	if !strings.Contains(agentLine, "?") || strings.Contains(agentLine, "unavailable") {
+		t.Fatalf("agent row = %q, want '?' unavailable marker", agentLine)
 	}
 	if !strings.HasSuffix(strings.TrimSpace(shellLine), "—") {
 		t.Fatalf("shell row = %q, want not-applicable em dash", shellLine)
+	}
+	if got := strings.Count(shellLine, "—"); got != len(summaryTokenColumns)+1 {
+		t.Fatalf("shell row = %q, got %d not-applicable cells, want %d token columns plus cost", shellLine, got, len(summaryTokenColumns)+1)
 	}
 }
 
@@ -497,7 +528,7 @@ func TestSummaryQuitConfirmDuringLiveRunReachesConfirmHandler(t *testing.T) {
 	}
 }
 
-func TestSummaryToggleWorksInEveryRunStateAndAtDrillDepth(t *testing.T) {
+func TestSummaryAndRunViewKeysWorkInEveryRunStateAndAtDrillDepth(t *testing.T) {
 	statuses := []NodeStatus{StatusInProgress, StatusSuccess, StatusFailed}
 	for _, status := range statuses {
 		t.Run(statusLabel(status), func(t *testing.T) {
@@ -514,9 +545,9 @@ func TestSummaryToggleWorksInEveryRunStateAndAtDrillDepth(t *testing.T) {
 			if len(m.path) != 2 {
 				t.Fatalf("toggle changed drill path: %d", len(m.path))
 			}
-			m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+			m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v")})
 			if m.showSummary {
-				t.Fatal("second s did not restore detail")
+				t.Fatal("v did not restore run view")
 			}
 		})
 	}
@@ -525,6 +556,7 @@ func TestSummaryToggleWorksInEveryRunStateAndAtDrillDepth(t *testing.T) {
 func TestSummaryCompletionDefaultsAndHelp(t *testing.T) {
 	t.Run("successful live completion auto shows summary", func(t *testing.T) {
 		m := newLiveModelWithFlags()
+		m.tree.MetricsCaptured = true
 		m.Update(liverun.ExecDoneMsg{Result: "success"})
 		if !m.showSummary {
 			t.Fatal("successful completion did not show summary")
@@ -546,9 +578,18 @@ func TestSummaryCompletionDefaultsAndHelp(t *testing.T) {
 			t.Fatalf("help missing summary binding: %q", help)
 		}
 	})
+
+	t.Run("summary help advertises run view", func(t *testing.T) {
+		m := newTestModel(simpleTree(), FromList)
+		m.showSummary = true
+		help := tuistyle.Sanitize(m.renderHelpBar())
+		if !strings.Contains(help, "v view run") || strings.Contains(help, "s summary") {
+			t.Fatalf("summary help does not distinguish the run view: %q", help)
+		}
+	})
 }
 
-func TestNewCompletedRunStartsInSummaryButFailedRunDoesNot(t *testing.T) {
+func TestNewCompletedRunChoosesDefaultViewFromOutcomeAndMetrics(t *testing.T) {
 	for _, tt := range []struct {
 		name          string
 		outcome       string
@@ -556,8 +597,8 @@ func TestNewCompletedRunStartsInSummaryButFailedRunDoesNot(t *testing.T) {
 		includeRunEnd bool
 		wantSummary   bool
 	}{
-		{name: "completed inspect", completed: true, wantSummary: true},
-		{name: "completed list", outcome: "success", completed: true, includeRunEnd: true, wantSummary: true},
+		{name: "legacy completed inspect", completed: true, wantSummary: false},
+		{name: "legacy completed list", outcome: "success", completed: true, includeRunEnd: true, wantSummary: false},
 		{name: "failed inspect overrides completed state", outcome: "failed", completed: true, includeRunEnd: true, wantSummary: false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
