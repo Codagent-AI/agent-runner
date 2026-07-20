@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 const completionPluginName = "agent-runner"
@@ -112,7 +114,11 @@ func prepareCodexRunnerHome(completion *CompletionCommand, integration *RunnerIn
 		completionCommand = completion.ShellCommand()
 	}
 	if integration != nil {
-		if codexConfigHasAgentCallConflict(config) {
+		conflict, err := codexConfigHasAgentCallConflict(config)
+		if err != nil {
+			return "", err
+		}
+		if conflict {
 			return "", fmt.Errorf("codex config already defines %s; cannot safely install the Runner-owned server", agentCallMCPServerName)
 		}
 		config = appendCodexAgentCallConfig(config, *integration.AgentCall, context.IsAutonomous())
@@ -171,19 +177,20 @@ Run this exact command now, then finish the response:
 	return privateHome, nil
 }
 
-func codexConfigHasAgentCallConflict(config []byte) bool {
-	for _, line := range strings.Split(string(config), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "[mcp_servers.agent-runner]") ||
-			strings.HasPrefix(trimmed, "[mcp_servers.agent-runner.") ||
-			strings.HasPrefix(trimmed, `[mcp_servers."agent-runner"]`) ||
-			strings.HasPrefix(trimmed, `[mcp_servers."agent-runner".`) ||
-			strings.HasPrefix(trimmed, "mcp_servers.agent-runner.") ||
-			strings.HasPrefix(trimmed, `mcp_servers."agent-runner".`) {
-			return true
-		}
+func codexConfigHasAgentCallConflict(config []byte) (bool, error) {
+	if strings.TrimSpace(string(config)) == "" {
+		return false, nil
 	}
-	return false
+	var decoded map[string]any
+	if err := toml.Unmarshal(config, &decoded); err != nil {
+		return false, fmt.Errorf("parse Codex config before installing Runner integration: %w", err)
+	}
+	mcpServers, ok := decoded["mcp_servers"].(map[string]any)
+	if !ok {
+		return false, nil
+	}
+	_, conflict := mcpServers[agentCallMCPServerName]
+	return conflict, nil
 }
 
 func appendCodexAgentCallConfig(config []byte, command MCPServerCommand, autonomous bool) []byte {

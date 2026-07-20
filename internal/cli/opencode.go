@@ -45,8 +45,7 @@ func (a *OpenCodeAdapter) BuildArgs(input *BuildArgsInput) []string {
 // integration failures before the CLI can spawn.
 func (a *OpenCodeAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, error) {
 	invocationContext := input.InvocationContext()
-	agentCall, err := validatedAgentCall(input)
-	if err != nil {
+	if _, err := validatedAgentCall(input); err != nil {
 		return nil, fmt.Errorf("opencode: prepare agent-call integration: %w", err)
 	}
 	resuming := input.Resume && input.SessionID != ""
@@ -77,16 +76,29 @@ func (a *OpenCodeAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, e
 		}
 	}
 
+	return args, nil
+}
+
+// SpawnEnv supplies OpenCode's process-local integrations through the native
+// process environment. Keeping these entries out of argv avoids depending on
+// the Unix-only `env` executable and works with the runner's Windows spawn
+// path as well.
+func (a *OpenCodeAdapter) SpawnEnv(input *BuildArgsInput) ([]string, error) {
+	invocationContext := input.InvocationContext()
+	agentCall, err := validatedAgentCall(input)
+	if err != nil {
+		return nil, fmt.Errorf("opencode: prepare agent-call integration: %w", err)
+	}
 	completionEnabled := !invocationContext.IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid()
 	if !completionEnabled && agentCall == nil {
-		return args, nil
+		return nil, nil
 	}
 	config := make(map[string]any)
-	envArgs := []string{"env"}
+	env := make([]string, 0, 3)
 	if completionEnabled {
 		command := input.CompletionCommand.ShellCommand()
 		permission, _ := json.Marshal(map[string]map[string]string{"bash": {command: "allow"}})
-		envArgs = append(envArgs, "OPENCODE_PERMISSION="+string(permission))
+		env = append(env, "OPENCODE_PERMISSION="+string(permission))
 		config["command"] = map[string]any{
 			"agent-runner:next": map[string]string{
 				"description": "Complete the current Agent Runner workflow step",
@@ -110,11 +122,19 @@ func (a *OpenCodeAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, e
 	if err != nil {
 		return nil, fmt.Errorf("opencode: encode process-local integration: %w", err)
 	}
-	envArgs = append(envArgs,
+	env = append(env,
 		"OPENCODE_CONFIG_CONTENT="+string(rendered),
 		"OPENCODE_DISABLE_AUTOUPDATE=1",
 	)
-	return append(envArgs, args...), nil
+	return env, nil
+}
+
+// DropSpawnEnvVars prevents an OpenCode process launched from an enclosing
+// OpenCode session from inheriting that parent's invocation-scoped MCP and
+// completion integrations. SpawnEnv then adds back only those owned by the
+// child invocation itself.
+func (a *OpenCodeAdapter) DropSpawnEnvVars() []string {
+	return []string{"OPENCODE_CONFIG_CONTENT", "OPENCODE_PERMISSION", "OPENCODE_DISABLE_AUTOUPDATE"}
 }
 
 func (a *OpenCodeAdapter) SupportsSystemPrompt() bool {

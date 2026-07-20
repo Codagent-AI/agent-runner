@@ -49,6 +49,16 @@ func TestCompletionCommandValidation(t *testing.T) {
 	}
 }
 
+func envEntry(t *testing.T, env []string, prefix string) string {
+	t.Helper()
+	for _, entry := range env {
+		if value, ok := strings.CutPrefix(entry, prefix); ok {
+			return value
+		}
+	}
+	return ""
+}
+
 func TestCompletionCommandShellCommandQuotesExecutablePath(t *testing.T) {
 	command := CompletionCommand{
 		Executable: "/Applications/Agent Runner/bin/agent-runner",
@@ -187,23 +197,33 @@ func TestAdaptersEmitCompletionIntegrations(t *testing.T) {
 	})
 
 	t.Run("opencode injects exact inline bash permission", func(t *testing.T) {
-		args := (&OpenCodeAdapter{}).BuildArgs(&BuildArgsInput{
+		adapter := &OpenCodeAdapter{}
+		input := &BuildArgsInput{
 			Prompt:            "work",
 			Context:           ContextInteractive,
 			CompletionCommand: command,
-		})
-		if !containsString(args, "OPENCODE_DISABLE_AUTOUPDATE=1") {
-			t.Fatalf("OpenCode interactive completion must suppress update prompts: %v", args)
 		}
-		if len(args) < 5 || args[0] != "env" || args[4] != "opencode" {
-			t.Fatalf("OpenCode args do not use an ephemeral environment override: %v", args)
+		args, err := BuildInvocationArgs(adapter, input)
+		if err != nil {
+			t.Fatalf("build OpenCode invocation: %v", err)
+		}
+		env, err := SpawnEnvForInvocation(adapter, input)
+		if err != nil {
+			t.Fatalf("build OpenCode spawn env: %v", err)
+		}
+		if !containsString(env, "OPENCODE_DISABLE_AUTOUPDATE=1") {
+			t.Fatalf("OpenCode interactive completion must suppress update prompts: %v", env)
+		}
+		if len(args) == 0 || args[0] != "opencode" {
+			t.Fatalf("OpenCode args do not launch the native executable: %v", args)
 		}
 		const prefix = "OPENCODE_PERMISSION="
-		if !strings.HasPrefix(args[1], prefix) {
-			t.Fatalf("OpenCode args do not include OPENCODE_PERMISSION: %v", args)
+		permissionJSON := envEntry(t, env, prefix)
+		if permissionJSON == "" {
+			t.Fatalf("OpenCode spawn env does not include OPENCODE_PERMISSION: %v", env)
 		}
 		var permission map[string]map[string]string
-		if err := json.Unmarshal([]byte(strings.TrimPrefix(args[1], prefix)), &permission); err != nil {
+		if err := json.Unmarshal([]byte(permissionJSON), &permission); err != nil {
 			t.Fatalf("decode OpenCode permission: %v", err)
 		}
 		want := "'/Applications/Agent Runner/bin/agent-runner' step complete"
@@ -211,15 +231,16 @@ func TestAdaptersEmitCompletionIntegrations(t *testing.T) {
 			t.Fatalf("OpenCode permission = %#v, want only exact bash command", permission)
 		}
 		const configPrefix = "OPENCODE_CONFIG_CONTENT="
-		if !strings.HasPrefix(args[2], configPrefix) {
-			t.Fatalf("OpenCode args do not include /agent-runner:next command config: %v", args)
+		configJSON := envEntry(t, env, configPrefix)
+		if configJSON == "" {
+			t.Fatalf("OpenCode spawn env does not include /agent-runner:next command config: %v", env)
 		}
 		var config struct {
 			Command map[string]struct {
 				Template string `json:"template"`
 			} `json:"command"`
 		}
-		if err := json.Unmarshal([]byte(strings.TrimPrefix(args[2], configPrefix)), &config); err != nil {
+		if err := json.Unmarshal([]byte(configJSON), &config); err != nil {
 			t.Fatalf("decode OpenCode config: %v", err)
 		}
 		if got := config.Command["agent-runner:next"].Template; got != "!`"+want+"`" {

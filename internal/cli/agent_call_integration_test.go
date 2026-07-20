@@ -129,6 +129,37 @@ func TestAgentCallProvisioningDoesNotModifyUserOrProjectConfig(t *testing.T) {
 	}
 }
 
+func TestAgentCallGenerationFailuresPreventSpawnAndPreservePersistentConfig(t *testing.T) {
+	for _, adapterName := range []string{"claude", "cursor", "codex"} {
+		t.Run(adapterName, func(t *testing.T) {
+			adapter, input := agentCallTestInput(t, adapterName, ContextAutonomousHeadless)
+			configPaths := adapterConfigSentinels(t, adapterName, input.Workdir)
+			before := make(map[string]configSentinel, len(configPaths))
+			for _, path := range configPaths {
+				before[path] = readConfigSentinel(t, path)
+			}
+
+			cacheDir, err := os.UserCacheDir()
+			if err != nil {
+				t.Fatalf("locate test cache: %v", err)
+			}
+			if err := os.MkdirAll(filepath.Dir(cacheDir), 0o700); err != nil {
+				t.Fatalf("create test cache parent: %v", err)
+			}
+			if err := os.WriteFile(cacheDir, []byte("blocks cache directory creation"), 0o600); err != nil {
+				t.Fatalf("block test cache directory: %v", err)
+			}
+
+			if _, err := prepareAgentCallTestInvocation(adapter, input); err == nil || !strings.Contains(err.Error(), cacheDir) {
+				t.Fatalf("prepare invocation error = %v, want filesystem generation cause containing %q", err, cacheDir)
+			}
+			for _, path := range configPaths {
+				assertConfigSentinelUnchanged(t, path, before[path])
+			}
+		})
+	}
+}
+
 func TestOpenCodeAgentCallBuilderIsModeNeutral(t *testing.T) {
 	adapter := &OpenCodeAdapter{}
 	for _, invocationContext := range []InvocationContext{ContextInteractive, ContextAutonomousHeadless} {
@@ -141,6 +172,46 @@ func TestOpenCodeAgentCallBuilderIsModeNeutral(t *testing.T) {
 		if registration.serverName != expectedAgentCallServer {
 			t.Fatalf("%s OpenCode server = %q", invocationContext, registration.serverName)
 		}
+	}
+}
+
+func TestOpenCodeAgentCallUsesNativeSpawnEnvironment(t *testing.T) {
+	adapter, input := agentCallTestInput(t, "opencode", ContextAutonomousHeadless)
+	prepared, err := prepareAgentCallTestInvocation(adapter, input)
+	if err != nil {
+		t.Fatalf("prepare invocation: %v", err)
+	}
+	if len(prepared.args) == 0 || prepared.args[0] != "opencode" {
+		t.Fatalf("OpenCode args = %v, want native opencode executable without an env wrapper", prepared.args)
+	}
+	if got := envValue(t, prepared.env, "OPENCODE_CONFIG_CONTENT"); !strings.Contains(got, `"agent-runner"`) {
+		t.Fatalf("OPENCODE_CONFIG_CONTENT = %q, want process-local agent-runner MCP config", got)
+	}
+	if got := envValue(t, prepared.env, "OPENCODE_DISABLE_AUTOUPDATE"); got != "1" {
+		t.Fatalf("OPENCODE_DISABLE_AUTOUPDATE = %q, want 1", got)
+	}
+	for _, name := range []string{"OPENCODE_CONFIG_CONTENT", "OPENCODE_PERMISSION", "OPENCODE_DISABLE_AUTOUPDATE"} {
+		if !containsString(DropSpawnEnvVars(adapter), name) {
+			t.Fatalf("OpenCode nested-child environment does not drop %s", name)
+		}
+	}
+}
+
+func TestCodexAgentCallRejectsEquivalentReservedServerSpellings(t *testing.T) {
+	for _, table := range []string{
+		"[mcp_servers.'agent-runner']\ncommand = 'other'\n",
+		"[mcp_servers . agent-runner]\ncommand = 'other'\n",
+	} {
+		t.Run(strings.ReplaceAll(strings.TrimSpace(table), " ", "_"), func(t *testing.T) {
+			adapter, input := agentCallTestInput(t, "codex", ContextAutonomousHeadless)
+			codexHome := os.Getenv("CODEX_HOME")
+			if err := os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(table), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := prepareAgentCallTestInvocation(adapter, input); err == nil || !strings.Contains(err.Error(), "already defines agent-runner") {
+				t.Fatalf("prepare invocation error = %v, want reserved-server conflict", err)
+			}
+		})
 	}
 }
 
@@ -262,7 +333,7 @@ func agentCallRegistration(t *testing.T, adapterName string, prepared agentCallP
 		}
 		t.Fatalf("Copilot args have no additional MCP config: %v", prepared.args)
 	case "opencode":
-		value := argEnvValue(t, prepared.args, "OPENCODE_CONFIG_CONTENT")
+		value := envValue(t, prepared.env, "OPENCODE_CONFIG_CONTENT")
 		var config struct {
 			MCP map[string]struct {
 				Command []string `json:"command"`
@@ -341,7 +412,7 @@ func assertAgentCallApproval(t *testing.T, adapterName string, invocationContext
 		}
 		found = strings.Contains(string(data), `"Mcp(agent-runner:call_agent)"`)
 	case "opencode":
-		config := argEnvValue(t, prepared.args, "OPENCODE_CONFIG_CONTENT")
+		config := envValue(t, prepared.env, "OPENCODE_CONFIG_CONTENT")
 		found = strings.Contains(config, `"agent-runner_call_agent":"allow"`)
 	}
 	if found != wantApproval {
@@ -393,18 +464,6 @@ func envValue(t *testing.T, env []string, key string) string {
 		}
 	}
 	t.Fatalf("environment has no %s: %v", key, env)
-	return ""
-}
-
-func argEnvValue(t *testing.T, args []string, key string) string {
-	t.Helper()
-	prefix := key + "="
-	for _, arg := range args {
-		if value, ok := strings.CutPrefix(arg, prefix); ok {
-			return value
-		}
-	}
-	t.Fatalf("args have no %s: %v", key, args)
 	return ""
 }
 
