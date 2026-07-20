@@ -328,6 +328,25 @@ func TestRealProcessRunner_RunAgentDoesNotInheritStdin(t *testing.T) {
 	}
 }
 
+func TestRealProcessRunner_RunAgentCanceledBeforeStartIsNotLaunched(t *testing.T) {
+	for _, captureStdout := range []bool{false, true} {
+		t.Run(fmt.Sprintf("capture=%t", captureStdout), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			result, err := (&realProcessRunner{}).RunAgent(&iexec.AgentProcessOptions{
+				Context: ctx, Args: []string{"sh", "-c", "exit 0"}, CaptureStdout: captureStdout,
+			})
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("RunAgent() error = %v, want context canceled", err)
+			}
+			if result.Started {
+				t.Fatalf("RunAgent() result = %#v, want Started=false", result)
+			}
+		})
+	}
+}
+
 func TestRealProcessRunner_RunShellExposesCurrentExecutable(t *testing.T) {
 	originalExecutable := currentExecutable
 	t.Cleanup(func() {

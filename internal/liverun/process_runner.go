@@ -282,17 +282,24 @@ func (r *tuiProcessRunner) RunAgent(options *iexec.AgentProcessOptions) (iexec.P
 	c.Stdout = stdoutW
 	c.Stderr = stderrW
 
-	err := c.Run()
-	if ctx.Err() != nil {
-		return iexec.ProcessResult{Started: true, ExitCode: -1, Stdout: stdoutBuf.String(), Stderr: stderrBuf.String()}, ctx.Err()
+	if err := c.Start(); err != nil {
+		return iexec.ProcessResult{}, err
 	}
+	err := c.Wait()
+	result := iexec.ProcessResult{Started: true, ExitCode: -1, Stdout: stdoutBuf.String(), Stderr: stderrBuf.String()}
 	exitCode := 0
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return result, err
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return result, ctxErr
+		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitCode()
 		} else {
-			return iexec.ProcessResult{}, err
+			return result, err
 		}
 	}
 

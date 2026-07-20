@@ -3,6 +3,7 @@ package liverun
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -323,6 +324,22 @@ func TestTUIProcessRunner_RunAgentDoesNotInheritStdin(t *testing.T) {
 	}
 	if result.Stdout != "eof" {
 		t.Fatalf("RunAgent inherited stdin, stdout = %q", result.Stdout)
+	}
+}
+
+func TestTUIProcessRunner_RunAgentCanceledBeforeStartIsNotLaunched(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runner := NewCoordinator(&captureProgram{}, "").TUIProcessRunner(unusedRunner{}).(*tuiProcessRunner)
+
+	result, err := runner.RunAgent(&iexec.AgentProcessOptions{
+		Context: ctx, Args: []string{"sh", "-c", "exit 0"}, CaptureStdout: true,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunAgent() error = %v, want context canceled", err)
+	}
+	if result.Started {
+		t.Fatalf("RunAgent() result = %#v, want Started=false", result)
 	}
 }
 

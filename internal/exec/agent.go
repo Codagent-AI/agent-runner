@@ -29,6 +29,7 @@ var interactiveRunnerFn = runDirectInteractive
 var osExecutableFn = os.Executable
 
 type directRunOptions struct {
+	context    context.Context
 	workdir    string
 	invocation *directInvocation
 }
@@ -587,7 +588,11 @@ func runDirectInteractive(args []string, options directRunOptions) (interactive.
 			}
 		},
 	})
-	return direct.Run(context.Background())
+	ctx := options.context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return direct.Run(ctx)
 }
 
 func controlServerForContext(ctx *model.ExecutionContext) (*control.ControlServer, error) {
@@ -676,7 +681,7 @@ func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, options *AgentPr
 			return OutcomeFailed, ProcessResult{}, false, err
 		}
 	}
-	directResult, err := interactiveRunnerFn(options.Args, directRunOptions{workdir: options.Workdir, invocation: direct})
+	directResult, err := interactiveRunnerFn(options.Args, directRunOptions{context: options.Context, workdir: options.Workdir, invocation: direct})
 	if resumeHook != nil {
 		if resumeErr := resumeHook(); err == nil && resumeErr != nil {
 			err = resumeErr

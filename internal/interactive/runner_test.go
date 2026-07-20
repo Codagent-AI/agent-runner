@@ -131,6 +131,54 @@ func TestDirectRunnerCompletesThroughControlChannelAndRestores(t *testing.T) {
 	}
 }
 
+func TestDirectRunnerCancellationTerminatesChild(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan int, 1)
+	runner := NewDirectRunner(&DirectOptions{
+		Args:             []string{"sh", "-c", `trap '' TERM; while :; do sleep 1; done`},
+		StepID:           "implement",
+		SessionID:        "session-1",
+		CLI:              "fake",
+		Control:          server,
+		Probe:            immediateDurabilityProbe{},
+		Foreground:       false,
+		TerminationGrace: 50 * time.Millisecond,
+		Persist: func(metadata *ProcessMetadata) {
+			if metadata != nil {
+				started <- metadata.ChildPID
+			}
+		},
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := runner.Run(ctx)
+		done <- err
+	}()
+	var childPID int
+	select {
+	case childPID = <-started:
+	case err := <-done:
+		t.Fatalf("Run() returned before starting child: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for direct child to start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run() error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for canceled direct child")
+	}
+	if err := syscall.Kill(childPID, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("direct child %d survived context cancellation: %v", childPID, err)
+	}
+}
+
 func TestDirectRunnerPassesAcceptedReceiptToReceiptProbe(t *testing.T) {
 	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
 	defer server.Close()

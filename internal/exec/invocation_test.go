@@ -3,6 +3,7 @@ package exec
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/control"
+	"github.com/codagent/agent-runner/internal/interactive"
 	"github.com/codagent/agent-runner/internal/model"
 )
 
@@ -223,6 +225,65 @@ func TestInvokeAgentOverlappingCallsKeepProcessOptionsIsolated(t *testing.T) {
 	}
 	if completed["second"].err != nil || completed["second"].result.Response != "filtered:second output" {
 		t.Fatalf("second completion = %#v", completed["second"])
+	}
+}
+
+func TestInvokeAgentOverlappingDirectCallsKeepCancellationIsolated(t *testing.T) {
+	firstContext, cancelFirst := context.WithCancel(context.Background())
+	defer cancelFirst()
+	secondContext, cancelSecond := context.WithCancel(context.Background())
+	defer cancelSecond()
+	release := map[string]chan struct{}{"/first": make(chan struct{}), "/second": make(chan struct{})}
+	started := make(chan directRunOptions, 2)
+	oldRunner := interactiveRunnerFn
+	interactiveRunnerFn = func(_ []string, options directRunOptions) (interactive.DirectResult, error) {
+		started <- options
+		select {
+		case <-options.context.Done():
+			return interactive.DirectResult{Started: true}, options.context.Err()
+		case <-release[options.workdir]:
+			return interactive.DirectResult{Started: true, Completed: true}, nil
+		}
+	}
+	defer func() { interactiveRunnerFn = oldRunner }()
+
+	type completion struct {
+		workdir string
+		result  AgentInvocationResult
+		err     error
+	}
+	completed := make(chan completion, 2)
+	invoke := func(ctx context.Context, workdir string) {
+		result, err := InvokeAgent(&AgentInvocation{
+			Context: ctx, Adapter: &invocationTestAdapter{}, Args: []string{"agent"},
+			Workdir: workdir, InvocationContext: cli.ContextAutonomousInteractive, CLI: "test",
+		}, &invocationRecordingRunner{options: make(chan AgentProcessOptions, 1)}, &mockLogger{})
+		completed <- completion{workdir: workdir, result: result, err: err}
+	}
+	go invoke(firstContext, "/first")
+	go invoke(secondContext, "/second")
+
+	contexts := make(map[string]context.Context)
+	for range 2 {
+		options := <-started
+		contexts[options.workdir] = options.context
+	}
+	if contexts["/first"] != firstContext || contexts["/second"] != secondContext {
+		t.Fatal("direct invocation contexts crossed between overlapping calls")
+	}
+	cancelFirst()
+	close(release["/second"])
+
+	byWorkdir := make(map[string]completion)
+	for range 2 {
+		item := <-completed
+		byWorkdir[item.workdir] = item
+	}
+	if !errors.Is(byWorkdir["/first"].err, context.Canceled) || !byWorkdir["/first"].result.CLILaunched {
+		t.Fatalf("first completion = %#v", byWorkdir["/first"])
+	}
+	if byWorkdir["/second"].err != nil || byWorkdir["/second"].result.Outcome != OutcomeSuccess {
+		t.Fatalf("second completion = %#v", byWorkdir["/second"])
 	}
 }
 

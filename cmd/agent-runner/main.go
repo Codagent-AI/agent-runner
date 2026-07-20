@@ -160,16 +160,23 @@ func (r *realProcessRunner) RunAgent(options *iexec.AgentProcessOptions) (iexec.
 		defer closeStderr()
 		c.Stdout = io.MultiWriter(stdout, &stdoutBuf)
 		c.Stderr = io.MultiWriter(stderr, &stderrBuf)
-		err := c.Run()
-		if ctx.Err() != nil {
-			return iexec.ProcessResult{Started: true, ExitCode: -1, Stdout: stdoutBuf.String(), Stderr: stderrBuf.String()}, ctx.Err()
+		if err := c.Start(); err != nil {
+			return iexec.ProcessResult{}, err
 		}
+		err := c.Wait()
+		result := iexec.ProcessResult{Started: true, ExitCode: -1, Stdout: stdoutBuf.String(), Stderr: stderrBuf.String()}
 		exitCode := 0
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return result, err
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return result, ctxErr
+			}
 			if exitErr, ok := err.(*exec.ExitError); ok {
 				exitCode = exitErr.ExitCode()
 			} else {
-				return iexec.ProcessResult{}, err
+				return result, err
 			}
 		}
 		return iexec.ProcessResult{Started: true, ExitCode: exitCode, Stdout: stdoutBuf.String(), Stderr: stderrBuf.String()}, nil
@@ -181,16 +188,23 @@ func (r *realProcessRunner) RunAgent(options *iexec.AgentProcessOptions) (iexec.
 	defer closeStderr()
 	c.Stdout = stdout
 	c.Stderr = stderr
-	err := c.Run()
-	if ctx.Err() != nil {
-		return iexec.ProcessResult{Started: true, ExitCode: -1}, ctx.Err()
+	if err := c.Start(); err != nil {
+		return iexec.ProcessResult{}, err
 	}
+	err := c.Wait()
+	result := iexec.ProcessResult{Started: true, ExitCode: -1}
 	exitCode := 0
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return result, err
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return result, ctxErr
+		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		} else {
-			return iexec.ProcessResult{}, err
+			return result, err
 		}
 	}
 	return iexec.ProcessResult{Started: true, ExitCode: exitCode}, nil

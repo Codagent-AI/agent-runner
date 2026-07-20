@@ -29,9 +29,15 @@ func ConfigureAgentCommand(command *stdexec.Cmd, supervision AgentProcessSupervi
 		if command.Process == nil {
 			return os.ErrProcessDone
 		}
-		err := syscall.Kill(-command.Process.Pid, syscall.SIGTERM)
+		processGroupID := command.Process.Pid
+		err := syscall.Kill(-processGroupID, syscall.SIGTERM)
 		if errors.Is(err, syscall.ESRCH) {
 			return os.ErrProcessDone
+		}
+		if err == nil {
+			time.AfterFunc(grace, func() {
+				_ = syscall.Kill(-processGroupID, syscall.SIGKILL)
+			})
 		}
 		return err
 	}
