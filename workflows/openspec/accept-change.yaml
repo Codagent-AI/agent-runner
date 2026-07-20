@@ -1,5 +1,5 @@
 name: accept-change
-description: "Interactively review an implemented OpenSpec change and obtain explicit human acceptance."
+description: "Resolve undecided assumptions, support human review and testing, and apply requested follow-up changes."
 hidden: true
 
 params:
@@ -15,21 +15,27 @@ steps:
     session: acceptance-agent
     mode: interactive
     prompt: |
-      Lead the human acceptance review for implemented OpenSpec change "{{change_name}}". This is a fresh change-level session and the pull request must remain a draft throughout this step.
+      Help the user review, test, and request additional changes for implemented OpenSpec change "{{change_name}}". This is a fresh change-level session and the pull request must remain a draft throughout this step.
 
-      Build an evidence-backed overview by inspecting:
-      - all approved artifacts and task files under `openspec/changes/{{change_name}}/`;
-      - the current repository status and diff against the target branch;
-      - task implementation and validation commits;
-      - task-compliance and Agent Validator evidence under `validator_logs/` and `{{session_dir}}/output/`;
-      - implementation session reports, assumption-review handoffs, and `{{session_dir}}/audit.log`.
+      The implementation workflow has already gathered completion evidence. Start by reading the canonical handoff at `{{session_dir}}/output/acceptance-handoff.md` and use its referenced evidence. Verify that its head SHA still equals both local `HEAD` and the draft pull request's current `headRefOid`; never present stale evidence or ask the user to accept a moving branch name. Do not make the user wait while you reconstruct an overview that the handoff already provides. Explicitly call out and show the referenced screenshots and their text equivalents when screenshots are applicable.
 
-      Help the user understand what changed, inspect important decisions, and review any unresolved assumptions or context gaps. The user may request corrections or decline to advance.
+      Conduct the session in this order:
+
+      1. **Resolve undecided assumptions.** Address every unresolved assumption or context gap in the handoff with the user before moving on. Explain the decision and impact clearly, get the user's direction, and make any resulting changes under the correction policy below. Record each item, the user's decision, its disposition, and any resulting commit in `{{session_dir}}/output/acceptance-resolutions.md`; never let an unresolved item disappear without a recorded resolution. If the handoff says none remain, state that briefly and continue.
+      2. **Support human review and additional changes.** Present the concise implementation summary, validation result, screenshots where applicable, and practical testing instructions from the handoff. The main purpose of this phase is to give the user room to inspect and test the result and request additional changes. Do not treat the existing implementation as presumptively final or pressure the user to accept it.
 
       Correction policy:
-      - You may make small, unambiguous implementation corrections in this session. Run the appropriate targeted checks and Agent Validator afterward, then create a traceable commit following the project's commit conventions and prepending [{{step_id}}]. Push the correction to the existing draft PR.
+      - You may make small, unambiguous implementation corrections in this session. Validate each correction using the sequence below, then create a traceable commit following the project's commit conventions and prepending [{{step_id}}]. Push the correction to the existing draft PR.
       - For larger implementation work, create or update a supplemental task under `openspec/changes/{{change_name}}/tasks/`, keep the change unaccepted, and tell the user that `implement-change2` must run again.
       - For changed requirements or design, update the appropriate definition artifacts only with the user's direction, keep the change unaccepted, and tell the user that `define-change` or `plan-change2` must run again.
-      - If any code or artifact changes during acceptance, rerun the appropriate validation before asking for acceptance again.
 
-      Do not signal step completion merely because the review conversation has ended. Signal completion only after the user explicitly states that they accept the implemented change and all requested corrections have been validated and committed. If the user declines or more work is required, leave the step incomplete so the run remains resumable. Do not archive the OpenSpec change and do not mark the pull request ready for review in this session.
+      Required validation after any acceptance-session change:
+      1. Run the narrowest relevant automated tests or checks for the changed behavior while iterating. Use the repository's documented commands and include regression coverage for a bug fix.
+      2. If any file under `openspec/changes/{{change_name}}/` changed, run `openspec validate --type change "{{change_name}}"` and require it to pass.
+      3. Run `agent-validator run --report` after all edits. It MUST exit successfully. If it reports a failed check or review violation, fix or explicitly resolve the finding, rerun the affected targeted check, and repeat `agent-validator run --report` until it passes.
+      4. Commit and push the validator-confirmed changes while keeping the pull request in draft.
+      5. Treat all previous acceptance results, screenshots, CI results, and handoff evidence as stale because Validator ran. Invoke codagent:prepare-acceptance for the approved artifacts under `openspec/changes/{{change_name}}/`, using `{{session_dir}}/output/` as its evidence directory and `{{session_dir}}/output/acceptance-assumptions.md` as its assumptions ledger. Re-exercise every supported user or client flow against the committed post-validator HEAD, not merely the flow directly affected by the correction. The skill must only test and report; it MUST NOT fix implementation defects, modify repository files, commit, push, or run automated validation.
+      6. If the skill reports clear implementation defects, read `{{session_dir}}/output/acceptance-findings.md`, apply small unambiguous corrections under the correction policy, then restart this required validation sequence at step 1. Continue until the skill reports that no clear defects remain and the current-head evidence is ready. If a finding requires larger work or changed requirements or design, follow the corresponding correction policy instead. If the skill reports a blocker, do not ask for acceptance; explain the blocker and leave the step incomplete.
+      7. Verify that local `HEAD`, the pull request `headRefOid`, `acceptance-test.md`, and `acceptance-handoff.md` identify the same revision. Present the refreshed evidence, updated screenshots where applicable, exact commands and outcomes, and known limitations before asking the user for acceptance again.
+
+      Do not signal step completion merely because the review conversation has ended or because the user has no immediate feedback. Signal completion only after every undecided assumption has been addressed and the user explicitly states that they accept the exact current head SHA with its disclosed limitations, with all requested corrections validated, committed, pushed, and represented in refreshed evidence. If the user declines or more work is required, leave the step incomplete so the run remains resumable. Do not archive the OpenSpec change and do not mark the pull request ready for review in this session.
