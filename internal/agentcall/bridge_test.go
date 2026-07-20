@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -68,6 +70,51 @@ func TestBridgeMapsStructuredToolFailure(t *testing.T) {
 	raw, _ := json.Marshal(result.StructuredContent)
 	if string(raw) != `{"code":"execution_failed","message":"child failed"}` {
 		t.Fatalf("structured error = %s", raw)
+	}
+}
+
+func TestBridgeRetriesLostControlResponseWithSameRequestID(t *testing.T) {
+	var requestIDs []string
+	generated := 0
+	launches := 0
+	accepted := make(map[string]Response)
+	server := NewServer(BridgeOptions{
+		NewRequestID: func() string {
+			generated++
+			return fmt.Sprintf("request-%d", generated)
+		},
+		Send: func(_ context.Context, requestID string, request Request) (Response, error) {
+			requestIDs = append(requestIDs, requestID)
+			response, duplicate := accepted[requestID]
+			if !duplicate {
+				launches++
+				response = Response{Result: &Result{Target: request.Target(), Response: "cached result"}}
+				accepted[requestID] = response
+				return Response{}, errors.New("lost control response")
+			}
+			return response, nil
+		},
+	})
+	clientSession, closeSessions := connectBridgeTest(t, server, nil)
+	defer closeSessions()
+
+	result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: ToolName, Arguments: map[string]any{"prompt": "do it", "agent": "implementor"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("tool result = %#v", result)
+	}
+	if diff := cmp.Diff([]string{"request-1", "request-1"}, requestIDs); diff != "" {
+		t.Fatalf("control request IDs mismatch (-want +got):\n%s", diff)
+	}
+	if generated != 1 {
+		t.Fatalf("generated request IDs = %d, want 1", generated)
+	}
+	if launches != 1 {
+		t.Fatalf("supervised launches = %d, want 1", launches)
 	}
 }
 

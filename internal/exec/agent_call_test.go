@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -90,8 +92,13 @@ func TestAgentCallHandlerRejectsBeforeAcceptance(t *testing.T) {
 			o.Adapter = func(string) (cli.Adapter, error) { return &callTestAdapter{probeErr: errors.New("bad model")}, nil }
 		}, code: agentcall.CodeInvalidModel},
 		{name: "invalid workdir", payload: `{"prompt":"x","agent":"implementor","workdir":"missing"}`, code: agentcall.CodeInvalidWorkdir},
+		{name: "workdir outside parent worktree", payload: `{"prompt":"x","agent":"implementor","workdir":".."}`, code: agentcall.CodeInvalidWorkdir},
 		{name: "named cli override", payload: `{"prompt":"x","session":"named","cli":"codex"}`, code: agentcall.CodeInvalidRequest},
 		{name: "self session", payload: `{"prompt":"x","session":"named"}`, mutate: func(o *AgentCallHandlerOptions) { o.Context.NamedSessions["named"] = "parent-session" }, code: agentcall.CodeSelfSession},
+		{name: "self session before CLI ID discovery", payload: `{"prompt":"x","session":"named"}`, mutate: func(o *AgentCallHandlerOptions) {
+			o.Parent.SessionID = ""
+			o.Parent.NamedSession = "named"
+		}, code: agentcall.CodeSelfSession},
 		{name: "ineligible", payload: `{"prompt":"x","agent":"implementor"}`, mutate: func(o *AgentCallHandlerOptions) { o.Eligible = false }, code: agentcall.CodeIneligible},
 	}
 	for _, tt := range tests {
@@ -129,9 +136,48 @@ func TestAgentCallHandlerAuditsPreAcceptanceRejection(t *testing.T) {
 	}
 }
 
+func TestAgentCallHandlerRejectsLateDiscoveredParentSessionIdentity(t *testing.T) {
+	options := testAgentCallOptions(t.TempDir(), &callTestRunner{}, &callTestAdapter{})
+	options.Context.NamedSessions["named"] = "late-parent-session"
+	options.Parent.SessionID = ""
+	options.Parent.ResolveSessionID = func() string { return "late-parent-session" }
+	handler := NewAgentCallHandler(options)
+
+	response := decodeCallResponse(t, handler.HandleAgentCall(context.Background(), control.AgentCallRequest{
+		RequestID: "self", Payload: json.RawMessage(`{"prompt":"x","session":"named"}`),
+	}))
+	if response.Error == nil || response.Error.Code != agentcall.CodeSelfSession {
+		t.Fatalf("response = %#v, want %q", response, agentcall.CodeSelfSession)
+	}
+}
+
+func TestAgentCallHandlerRejectsWorkdirSymlinkOutsideParentWorktree(t *testing.T) {
+	worktree := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(worktree, "outside-link")); err != nil {
+		t.Fatal(err)
+	}
+	options := testAgentCallOptions(worktree, &callTestRunner{}, &callTestAdapter{})
+	handler := NewAgentCallHandler(options)
+
+	response := decodeCallResponse(t, handler.HandleAgentCall(context.Background(), control.AgentCallRequest{
+		RequestID: "outside", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor","workdir":"outside-link"}`),
+	}))
+	if response.Error == nil || response.Error.Code != agentcall.CodeInvalidWorkdir {
+		t.Fatalf("response = %#v, want %q", response, agentcall.CodeInvalidWorkdir)
+	}
+}
+
 func TestAgentCallHandlerRunsFreshProfileAutonomousHeadless(t *testing.T) {
 	workdir := t.TempDir()
-	childWorkdir := t.TempDir()
+	childWorkdir := filepath.Join(workdir, "child")
+	if err := os.Mkdir(childWorkdir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	childWorkdir, err := filepath.EvalSymlinks(childWorkdir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	adapter := &callTestAdapter{discovered: "fresh-session"}
 	runner := &callTestRunner{result: ProcessResult{Started: true, Stdout: "raw"}}
 	options := testAgentCallOptions(workdir, runner, adapter)
@@ -143,7 +189,7 @@ func TestAgentCallHandlerRunsFreshProfileAutonomousHeadless(t *testing.T) {
 
 	payload, _ := json.Marshal(agentcall.Request{
 		Prompt: "child task", Agent: stringPointer("implementor"), CLI: stringPointer("test"),
-		Model: stringPointer("override-model"), Workdir: &childWorkdir,
+		Model: stringPointer("override-model"), Workdir: stringPointer("child"),
 	})
 	response := decodeCallResponse(t, handler.HandleAgentCall(context.Background(), control.AgentCallRequest{
 		RequestID: "request", Payload: payload,
@@ -172,6 +218,34 @@ func TestAgentCallHandlerRunsFreshProfileAutonomousHeadless(t *testing.T) {
 	}
 	if len(options.Context.NamedSessions) != 0 || options.Context.LastSessionStepID != "prior" {
 		t.Fatalf("fresh call changed workflow session bookkeeping: named=%v last=%q", options.Context.NamedSessions, options.Context.LastSessionStepID)
+	}
+}
+
+func TestAgentCallHandlerResolvesRelativeWorkdirFromParentEffectiveDirectory(t *testing.T) {
+	worktree := t.TempDir()
+	parentWorkdir := filepath.Join(worktree, "apps")
+	childWorkdir := filepath.Join(parentWorkdir, "frontend")
+	if err := os.MkdirAll(childWorkdir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	childWorkdir, err := filepath.EvalSymlinks(childWorkdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &callTestRunner{result: ProcessResult{Started: true, Stdout: "done"}}
+	adapter := &callTestAdapter{}
+	options := testAgentCallOptions(worktree, runner, adapter)
+	options.Parent.Workdir = parentWorkdir
+	handler := NewAgentCallHandler(options)
+
+	response := decodeCallResponse(t, handler.HandleAgentCall(context.Background(), control.AgentCallRequest{
+		RequestID: "relative", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor","workdir":"frontend"}`),
+	}))
+	if response.Error != nil {
+		t.Fatalf("response = %#v", response)
+	}
+	if got := adapter.inputs[0].Workdir; got != childWorkdir {
+		t.Fatalf("child workdir = %q, want %q", got, childWorkdir)
 	}
 }
 
@@ -419,7 +493,7 @@ func testAgentCallOptions(workdir string, runner ProcessRunner, adapter cli.Adap
 	ids := 0
 	return &AgentCallHandlerOptions{
 		Context: ctx, Runner: runner, Eligible: true,
-		Parent: AgentCallParent{CLI: "test", SessionID: "parent-session", Workdir: workdir, Prefix: "parent"},
+		Parent: AgentCallParent{CLI: "test", SessionID: "parent-session", Worktree: workdir, Workdir: workdir, Prefix: "parent"},
 		Adapter: func(name string) (cli.Adapter, error) {
 			if name != "test" {
 				return nil, errors.New("unknown adapter")

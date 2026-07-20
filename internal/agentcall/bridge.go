@@ -73,9 +73,10 @@ func NewServer(options BridgeOptions) *mcp.Server {
 			response Response
 			err      error
 		}
+		requestID := options.NewRequestID()
 		done := make(chan sendResult, 1)
 		go func() {
-			response, err := options.Send(ctx, options.NewRequestID(), input)
+			response, err := sendWithRetry(ctx, options.Send, requestID, input)
 			done <- sendResult{response: response, err: err}
 		}()
 
@@ -117,6 +118,21 @@ func NewServer(options BridgeOptions) *mcp.Server {
 		}
 	})
 	return server
+}
+
+func sendWithRetry(ctx context.Context, send BridgeSender, requestID string, request Request) (Response, error) {
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		response, err := send(ctx, requestID, request)
+		if err == nil {
+			return response, nil
+		}
+		lastErr = err
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return Response{}, err
+		}
+	}
+	return Response{}, lastErr
 }
 
 func mcpSuccessResult(result *Result) *mcp.CallToolResult {

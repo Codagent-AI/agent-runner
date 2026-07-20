@@ -23,10 +23,13 @@ import (
 )
 
 type AgentCallParent struct {
-	CLI       string
-	SessionID string
-	Workdir   string
-	Prefix    string
+	CLI              string
+	SessionID        string
+	NamedSession     string
+	Worktree         string
+	Workdir          string
+	Prefix           string
+	ResolveSessionID func() string
 }
 
 type AgentCallAccepted struct {
@@ -67,6 +70,9 @@ type AgentCallHandler struct {
 	mu       sync.Mutex
 	accepted map[string]*acceptedAgentCall
 	active   *acceptedAgentCall
+
+	parentMu        sync.Mutex
+	parentSessionID string
 }
 
 func NewAgentCallHandler(input *AgentCallHandlerOptions) *AgentCallHandler {
@@ -86,7 +92,10 @@ func NewAgentCallHandler(input *AgentCallHandlerOptions) *AgentCallHandler {
 	if options.Log == nil {
 		options.Log = discardLogger{}
 	}
-	return &AgentCallHandler{options: options, accepted: make(map[string]*acceptedAgentCall)}
+	return &AgentCallHandler{
+		options: options, accepted: make(map[string]*acceptedAgentCall),
+		parentSessionID: options.Parent.SessionID,
+	}
 }
 
 func (h *AgentCallHandler) HandleAgentCall(ctx context.Context, envelope control.AgentCallRequest) json.RawMessage {
@@ -231,19 +240,20 @@ func (h *AgentCallHandler) resolve(raw json.RawMessage) (*resolvedAgentCall, *ag
 	}
 	workdir := h.options.Parent.Workdir
 	if request.Workdir != nil {
-		workdir = strings.TrimSpace(*request.Workdir)
-		info, err := os.Stat(filepath.Clean(workdir))
-		if err != nil || !info.IsDir() {
-			if err == nil {
-				err = errors.New("not a directory")
-			}
-			return nil, callFailure(agentcall.CodeInvalidWorkdir, fmt.Sprintf("invalid workdir %q: %v", workdir, err), target)
+		workdir, err = resolveAgentCallWorkdir(
+			h.options.Parent.Worktree, h.options.Parent.Workdir, strings.TrimSpace(*request.Workdir),
+		)
+		if err != nil {
+			return nil, callFailure(agentcall.CodeInvalidWorkdir, fmt.Sprintf("invalid workdir %q: %v", *request.Workdir, err), target)
 		}
 	}
 	sessionID := ""
 	if target.Kind == agentcall.TargetSession {
 		sessionID = ctx.NamedSessions[target.Name]
-		if sessionID != "" && h.options.Parent.CLI == resolvedProfile.CLI && h.options.Parent.SessionID == sessionID {
+		sameCLI := h.options.Parent.CLI == resolvedProfile.CLI
+		sameNamedSession := h.options.Parent.NamedSession != "" && h.options.Parent.NamedSession == target.Name
+		sameResolvedSession := sessionID != "" && h.activeParentSessionID() == sessionID
+		if sameCLI && (sameNamedSession || sameResolvedSession) {
 			return nil, callFailure(agentcall.CodeSelfSession, fmt.Sprintf("named session %q is the parent's active CLI session", target.Name), target)
 		}
 	}
@@ -252,6 +262,70 @@ func (h *AgentCallHandler) resolve(raw json.RawMessage) (*resolvedAgentCall, *ag
 		adapter: adapter, cliName: resolvedProfile.CLI, model: resolvedProfile.Model,
 		workdir: workdir, sessionID: sessionID, resume: sessionID != "",
 	}, nil
+}
+
+func (h *AgentCallHandler) activeParentSessionID() string {
+	h.parentMu.Lock()
+	defer h.parentMu.Unlock()
+	if h.parentSessionID == "" && h.options.Parent.ResolveSessionID != nil {
+		h.parentSessionID = strings.TrimSpace(h.options.Parent.ResolveSessionID())
+	}
+	return h.parentSessionID
+}
+
+func resolveAgentCallWorkdir(worktree, base, requested string) (string, error) {
+	root, err := filepath.Abs(worktree)
+	if err != nil {
+		return "", fmt.Errorf("resolve parent worktree: %w", err)
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve parent worktree: %w", err)
+	}
+	if base == "" {
+		base = root
+	} else if !filepath.IsAbs(base) {
+		base = filepath.Join(root, base)
+	}
+	base, err = canonicalContainedDirectory(root, base)
+	if err != nil {
+		return "", fmt.Errorf("resolve parent workdir: %w", err)
+	}
+	if requested == "" {
+		return base, nil
+	}
+	candidate := requested
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(base, candidate)
+	}
+	return canonicalContainedDirectory(root, candidate)
+}
+
+func canonicalContainedDirectory(root, candidate string) (string, error) {
+	var err error
+	candidate, err = filepath.Abs(candidate)
+	if err != nil {
+		return "", err
+	}
+	candidate, err = filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(candidate) // #nosec G703 -- candidate has been canonicalized and is containment-checked below.
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", errors.New("not a directory")
+	}
+	relative, err := filepath.Rel(root, candidate)
+	if err != nil {
+		return "", err
+	}
+	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", errors.New("directory is outside the parent worktree")
+	}
+	return candidate, nil
 }
 
 func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCall, call *resolvedAgentCall) agentcall.Response {

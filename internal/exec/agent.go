@@ -175,7 +175,7 @@ func ExecuteAgentStep(
 	}
 
 	callHandler, spawnEnv, deactivate, controlErr := prepareAgentCallRuntime(
-		agentCallEligible, invocationContext, step, ctx, runner, log,
+		agentCallEligible, invocationContext, step, ctx, adapter, runner, log,
 		cliName, sessionID, prefix, spawnEnv,
 	)
 	if controlErr != nil {
@@ -250,6 +250,7 @@ func prepareAgentCallRuntime(
 	invocationContext cli.InvocationContext,
 	step *model.Step,
 	ctx *model.ExecutionContext,
+	adapter cli.Adapter,
 	runner ProcessRunner,
 	log Logger,
 	cliName, sessionID, prefix string,
@@ -258,11 +259,27 @@ func prepareAgentCallRuntime(
 	if !eligible {
 		return nil, spawnEnv, nil, nil
 	}
+	worktree, worktreeErr := os.Getwd()
+	if worktreeErr != nil {
+		return nil, spawnEnv, nil, fmt.Errorf("resolve parent worktree: %w", worktreeErr)
+	}
+	parentWorkdir, workdirErr := resolveAgentCallWorkdir(worktree, worktree, step.Workdir)
+	if workdirErr != nil {
+		return nil, spawnEnv, nil, fmt.Errorf("resolve parent workdir: %w", workdirErr)
+	}
+	parentNamedSession := ""
+	if model.IsNamedSession(step.Session) {
+		parentNamedSession = string(step.Session)
+	}
+	spawnTime := time.Now()
 	handler = NewAgentCallHandler(&AgentCallHandlerOptions{
 		Context: ctx, Runner: runner, Log: log, Eligible: true,
 		Parent: AgentCallParent{
-			CLI: cliName, SessionID: sessionID,
-			Workdir: step.Workdir, Prefix: prefix,
+			CLI: cliName, SessionID: sessionID, NamedSession: parentNamedSession,
+			Worktree: worktree, Workdir: parentWorkdir, Prefix: prefix,
+			ResolveSessionID: func() string {
+				return adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: spawnTime, Workdir: parentWorkdir})
+			},
 		},
 	})
 	if !invocationContext.IsHeadless() {
