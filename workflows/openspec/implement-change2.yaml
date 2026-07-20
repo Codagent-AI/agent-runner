@@ -118,16 +118,23 @@ steps:
           - approved change artifacts: `openspec/changes/{{change_name}}/`;
           - evidence output directory: `{{session_dir}}/output/`;
           - unresolved-assumptions ledger: `{{session_dir}}/output/acceptance-assumptions.md`;
-          - implementation session reports and audit evidence: `{{session_dir}}/output/*session-report*.out` and `{{session_dir}}/audit.log`;
-          - required pull request state: draft throughout this step.
+          - implementation session reports and audit evidence: `{{session_dir}}/output/*session-report*.out` and `{{session_dir}}/audit.log`.
 
-          The current draft PR head passed the caller-managed Agent Validator loop immediately before this acceptance iteration. The skill MUST NOT fix implementation defects, modify repository files, commit, push, or invoke Validator. Require it to write its terminal marker as the only non-empty line in `{{session_dir}}/output/acceptance-status.txt` and return the same marker as its final response line. If it finds a clear defect, require it to write `{{session_dir}}/output/acceptance-findings.md` and use `ACCEPTANCE_FIX_NEEDED`. Use `ACCEPTANCE_READY` only when no clear defects remain, current-head CI passes or is explicitly absent, and revision-bound evidence is complete. Use `ACCEPTANCE_BLOCKED: <reason>` for any blocker and do not include either success marker.
+          The current draft PR head passed the caller-managed Agent Validator loop immediately before this acceptance iteration. The skill MUST NOT fix implementation defects, modify repository files, commit, push, or invoke Validator.
+
+          Workflow result protocol (owned by this workflow, not by the reusable skill):
+          - After the skill finishes, classify its outcome and overwrite `{{session_dir}}/output/acceptance-status.txt` with exactly one non-empty line. Do not append to a status left by an earlier loop iteration. Return that same line as the final line of this workflow step.
+          - Write `ACCEPTANCE_FIX_NEEDED` when the skill finds one or more clear implementation defects during flow testing, or when current-head CI has an actionable failure or review comment clearly attributable to the implementation. Require `{{session_dir}}/output/acceptance-findings.md` to describe the defects or failing CI checks/comments with durable evidence, and do not produce final acceptance evidence for that invocation.
+          - Write `ACCEPTANCE_READY` only when the skill finds no clear defects, current-head CI passes or is explicitly absent, and all revision-bound acceptance evidence is complete and verified.
+          - Write `ACCEPTANCE_BLOCKED: <reason>` when required inputs, testing, PR state, or evidence cannot be completed, when CI remains pending, or when a CI failure is environmental, infrastructural, unrelated to the implementation, or otherwise not actionable by the fix loop. Do not include either non-blocked marker anywhere in a blocked response.
 
       - id: acceptance-status-gate
         command: |
           status_file="{{session_dir}}/output/acceptance-status.txt"
           test -s "$status_file"
-          status=$(sed '/^[[:space:]]*$/d' "$status_file" | tail -n 1)
+          status_lines=$(awk 'NF { count++ } END { print count+0 }' "$status_file")
+          test "$status_lines" -eq 1
+          status=$(sed '/^[[:space:]]*$/d' "$status_file")
           case "$status" in
             ACCEPTANCE_READY)
               ;;
@@ -149,7 +156,7 @@ steps:
         mode: autonomous
         skip_if: 'sh: test "$(sed ''/^[[:space:]]*$/d'' "{{session_dir}}/output/acceptance-status.txt" | tail -n 1)" != "ACCEPTANCE_FIX_NEEDED"'
         prompt: |
-          Fix the clear implementation defects found while acceptance-testing OpenSpec change "{{change_name}}".
+          Fix the clear implementation defects found while acceptance-testing OpenSpec change "{{change_name}}", including actionable current-head CI failures or review comments attributed to the implementation.
 
           Read the durable findings at `{{session_dir}}/output/acceptance-findings.md` and evaluate the captured acceptance report below:
 
