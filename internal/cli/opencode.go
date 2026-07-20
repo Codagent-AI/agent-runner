@@ -37,10 +37,22 @@ type OpenCodeAdapter struct {
 // is run-only, so interactive mode omits it. --model and --variant are omitted on resume because a resumed session
 // keeps the settings it was started with.
 func (a *OpenCodeAdapter) BuildArgs(input *BuildArgsInput) []string {
+	args, _ := a.BuildArgsWithError(input)
+	return args
+}
+
+// BuildArgsWithError constructs OpenCode args and surfaces process-local
+// integration failures before the CLI can spawn.
+func (a *OpenCodeAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, error) {
 	invocationContext := input.InvocationContext()
+	agentCall, err := validatedAgentCall(input)
+	if err != nil {
+		return nil, fmt.Errorf("opencode: prepare agent-call integration: %w", err)
+	}
 	resuming := input.Resume && input.SessionID != ""
+	var args []string
 	if invocationContext.IsHeadless() {
-		args := []string{"opencode", "run", "--format", "json"}
+		args = []string{"opencode", "run", "--format", "json"}
 		if resuming {
 			args = append(args, "-s", input.SessionID)
 		} else {
@@ -51,45 +63,58 @@ func (a *OpenCodeAdapter) BuildArgs(input *BuildArgsInput) []string {
 				args = append(args, "--variant", input.Effort)
 			}
 		}
-		return append(args, input.Prompt)
+		args = append(args, input.Prompt)
+	} else {
+		// Interactive invocations are normally rejected before this point via
+		// InteractiveModeError; integration construction remains mode-neutral.
+		args = []string{"opencode"}
+		if resuming {
+			args = append(args, "-s", input.SessionID)
+		}
+		args = append(args, "--prompt", input.Prompt)
+		if !resuming && input.Model != "" {
+			args = append(args, "--model", input.Model)
+		}
 	}
 
-	// Interactive invocations are normally rejected before this point via
-	// InteractiveModeError; the arg construction is kept for the day the
-	// upstream resume-prompt fix ships and the rejection is lifted.
-	args := []string{"opencode"}
-	if resuming {
-		// As of OpenCode 1.17.15 a resumed TUI no longer auto-submits
-		// --prompt; it only prefills the composer (earlier 1.17 builds
-		// auto-submitted when --session preceded --prompt). --session is
-		// kept before --prompt so the prefill lands in the resumed session.
-		args = append(args, "-s", input.SessionID)
+	completionEnabled := !invocationContext.IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid()
+	if !completionEnabled && agentCall == nil {
+		return args, nil
 	}
-	args = append(args, "--prompt", input.Prompt)
-	if !resuming && input.Model != "" {
-		args = append(args, "--model", input.Model)
-	}
-	if input.CompletionCommand == nil || !input.CompletionCommand.Valid() {
-		return args
-	}
-	command := input.CompletionCommand.ShellCommand()
-	permission, _ := json.Marshal(map[string]map[string]string{
-		"bash": {command: "allow"},
-	})
-	config, _ := json.Marshal(map[string]any{
-		"command": map[string]any{
+	config := make(map[string]any)
+	envArgs := []string{"env"}
+	if completionEnabled {
+		command := input.CompletionCommand.ShellCommand()
+		permission, _ := json.Marshal(map[string]map[string]string{"bash": {command: "allow"}})
+		envArgs = append(envArgs, "OPENCODE_PERMISSION="+string(permission))
+		config["command"] = map[string]any{
 			"agent-runner:next": map[string]string{
 				"description": "Complete the current Agent Runner workflow step",
 				"template":    "!`" + command + "`",
 			},
-		},
-	})
-	return append([]string{
-		"env",
-		"OPENCODE_PERMISSION=" + string(permission),
-		"OPENCODE_CONFIG_CONTENT=" + string(config),
+		}
+	}
+	if agentCall != nil {
+		config["mcp"] = map[string]any{
+			agentCallMCPServerName: map[string]any{
+				"type":    "local",
+				"command": agentCall.Command(),
+				"enabled": true,
+			},
+		}
+		if invocationContext.IsAutonomous() {
+			config["permission"] = map[string]string{"agent-runner_call_agent": "allow"}
+		}
+	}
+	rendered, err := json.Marshal(config)
+	if err != nil {
+		return nil, fmt.Errorf("opencode: encode process-local integration: %w", err)
+	}
+	envArgs = append(envArgs,
+		"OPENCODE_CONFIG_CONTENT="+string(rendered),
 		"OPENCODE_DISABLE_AUTOUPDATE=1",
-	}, args...)
+	)
+	return append(envArgs, args...), nil
 }
 
 func (a *OpenCodeAdapter) SupportsSystemPrompt() bool {

@@ -45,6 +45,9 @@ func (a *CodexAdapter) BuildArgs(input *BuildArgsInput) []string {
 func (a *CodexAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, error) {
 	args := []string{"codex"}
 	context := input.InvocationContext()
+	if _, err := validatedAgentCall(input); err != nil {
+		return nil, fmt.Errorf("codex: prepare agent-call integration: %w", err)
+	}
 
 	sessionID := normalizeCodexSessionID(input.SessionID)
 	resuming := sessionID != ""
@@ -94,7 +97,12 @@ func (a *CodexAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, erro
 // that adds the Agent Runner command plugin without modifying the user's real
 // config. Session and authentication state remain linked to the real home.
 func (a *CodexAdapter) SpawnEnv(input *BuildArgsInput) ([]string, error) {
-	if input.InvocationContext().IsHeadless() || input.CompletionCommand == nil || !input.CompletionCommand.Valid() {
+	agentCall, err := validatedAgentCall(input)
+	if err != nil {
+		return nil, fmt.Errorf("codex: prepare agent-call integration: %w", err)
+	}
+	completionEnabled := !input.InvocationContext().IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid()
+	if !completionEnabled && agentCall == nil {
 		return nil, nil
 	}
 	runID := input.RunID
@@ -104,9 +112,13 @@ func (a *CodexAdapter) SpawnEnv(input *BuildArgsInput) ([]string, error) {
 		// workflow invocations always provide the stable run ID.
 		runID = fmt.Sprintf("process-%d", os.Getpid())
 	}
-	privateHome, err := prepareCodexCompletionHome(*input.CompletionCommand, runID)
+	var completion *CompletionCommand
+	if completionEnabled {
+		completion = input.CompletionCommand
+	}
+	privateHome, err := prepareCodexRunnerHome(completion, input.RunnerIntegration, input.InvocationContext(), runID)
 	if err != nil {
-		return nil, fmt.Errorf("codex: create completion plugin: %w", err)
+		return nil, fmt.Errorf("codex: create private integration home: %w", err)
 	}
 	return []string{"CODEX_HOME=" + privateHome}, nil
 }

@@ -47,6 +47,65 @@ func TestOpenCodeHeadlessRealAgentE2E(t *testing.T) {
 	runRealHeadlessAgentE2E(t, "opencode")
 }
 
+func TestClaudeAgentCallRealAgentE2E(t *testing.T) {
+	_, workdir, runnerBin := prepareRealAgentE2E(t, "claude")
+	workflowName := "real-claude-agent-call-e2e"
+	childPath := filepath.Join(workdir, "call-child-response.txt")
+	parentPath := filepath.Join(workdir, "call-parent-response.txt")
+	reusePath := filepath.Join(workdir, "call-reused-session.txt")
+	workflowPath := filepath.Join(workdir, "workflow.yaml")
+	workflow := fmt.Sprintf(`name: %s
+description: "Real Runner-owned call_agent tool and named-session reuse test"
+sessions:
+  - name: called-claude
+    agent: claude_headless_smoke
+steps:
+  - id: claude-call-parent
+    agent: claude_headless_smoke
+    session: new
+    prompt: |
+      Use call_agent exactly once with the named session called-claude. Ask the called agent to invent a token made of exactly two unusual lowercase words joined by one underscore, write only that token into %s, remember it, and reply with only that token. After call_agent returns, write its exact response into %s and reply with only that same response. Do not use a proprietary subagent tool.
+  - id: claude-call-session-reuse
+    session: called-claude
+    prompt: "Write only the exact token you invented in the previous turn into %s, then reply with only that token."
+`, workflowName, childPath, parentPath, reusePath)
+	writeRealAgentTestFile(t, workflowPath, []byte(workflow))
+	cleanupNewRealAgentRuns(t, workdir, workflowName)
+
+	ctx, cancel := context.WithTimeout(context.Background(), realAgentTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, runnerBin, "--headless", workflowPath)
+	cmd.Dir = workdir
+	cmd.Env = realAgentTestEnv(false)
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("real Claude agent-call E2E timed out after %s\n%s", realAgentTimeout, output)
+	}
+	if err != nil {
+		t.Fatalf("real Claude agent-call E2E failed: %v\n%s", err, output)
+	}
+
+	child := readRealAgentToken(t, childPath, output)
+	parent := readRealAgentToken(t, parentPath, output)
+	reused := readRealAgentToken(t, reusePath, output)
+	if child != parent || child != reused {
+		t.Fatalf("agent-call response/session reuse mismatch: child=%q parent=%q reused=%q\n%s", child, parent, reused, output)
+	}
+	if !regexp.MustCompile(`^[a-z]{2,32}_[a-z]{2,32}$`).MatchString(child) {
+		t.Fatalf("agent-call token = %q, want two lowercase words joined by underscore\n%s", child, output)
+	}
+	assertRealAgentRunCompleted(t, workdir, workflowName, []string{"claude-call-parent", "claude-call-session-reuse"})
+}
+
+func readRealAgentToken(t *testing.T, path string, output []byte) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read real-agent token %s: %v\n%s", path, err, output)
+	}
+	return strings.TrimSpace(string(data))
+}
+
 func TestClaudeInteractiveRealAgentE2E(t *testing.T) {
 	runRealInteractiveAgentE2E(t, "claude")
 }
