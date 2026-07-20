@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	agentconfig "github.com/codagent/agent-runner/internal/config"
+	"github.com/codagent/agent-runner/internal/control"
 	"github.com/codagent/agent-runner/internal/interactive"
 	"github.com/codagent/agent-runner/internal/profilewrite"
 	"github.com/codagent/agent-runner/internal/usersettings"
@@ -167,7 +168,7 @@ func handleTurnCommitted(args []string, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "agent-runner: internal turn-committed accepts only the optional hook payload")
 		return 1
 	}
-	if _, err := sendControlMessage(interactive.MessageTurnCommitted); err != nil {
+	if _, err := sendControlMessage(control.MessageTurnCommitted); err != nil {
 		_, _ = fmt.Fprintf(stderr, "agent-runner: %v\n", err)
 		return 1
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/codagent/agent-runner/internal/cli"
+	"github.com/codagent/agent-runner/internal/control"
 )
 
 func TestStartDirectChildDropsConfiguredEnvVars(t *testing.T) {
@@ -24,7 +25,7 @@ func TestStartDirectChildDropsConfiguredEnvVars(t *testing.T) {
 		DropEnv: []string{"AGENT_RUNNER_TEST_LEAK"},
 	}
 
-	cmd, _, _, err := startDirectChild(options, &Attempt{})
+	cmd, _, _, err := startDirectChild(options, &control.Attempt{})
 	if err != nil {
 		t.Fatalf("startDirectChild: %v", err)
 	}
@@ -339,11 +340,11 @@ func TestDirectRunnerHelperProcess(t *testing.T) {
 	if helperMode != "1" && helperMode != "2" {
 		return
 	}
-	if _, err := SendControlEventFromEnvironment(context.Background(), MessageCompleteStep, os.Getenv); err != nil {
+	if _, err := control.SendControlEventFromEnvironment(context.Background(), control.MessageCompleteStep, os.Getenv); err != nil {
 		os.Exit(10)
 	}
 	if helperMode == "1" {
-		if _, err := SendControlEventFromEnvironment(context.Background(), MessageTurnCommitted, os.Getenv); err != nil {
+		if _, err := control.SendControlEventFromEnvironment(context.Background(), control.MessageTurnCommitted, os.Getenv); err != nil {
 			os.Exit(11)
 		}
 	}

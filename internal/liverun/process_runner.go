@@ -2,6 +2,7 @@ package liverun
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -34,15 +35,25 @@ type tuiProcessRunner struct {
 	delayedStepTimer  *time.Timer
 }
 
+type outputScope struct {
+	prefix        string
+	stdoutWrapper func(io.Writer) io.Writer
+	stderrWrapper func(io.Writer) io.Writer
+}
+
 // SetStdoutWrapper sets a function that wraps the TUI stdout writer. When set,
 // the wrapper filters structured output (e.g. JSONL) before display.
 func (r *tuiProcessRunner) SetStdoutWrapper(fn func(w io.Writer) io.Writer) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.stdoutWrapper = fn
 }
 
 // SetStderrWrapper sets a function that wraps the TUI stderr writer. When set,
 // the wrapper filters known diagnostics before display.
 func (r *tuiProcessRunner) SetStderrWrapper(fn func(w io.Writer) io.Writer) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.stderrWrapper = fn
 }
 
@@ -114,15 +125,15 @@ func sanitizePrefix(prefix string) string {
 // openOutputFile creates (or truncates) an output file under
 // <sessionDir>/output/<sanitizedPrefix>.<ext>. Returns nil on any error —
 // callers treat a nil file as "no persistence" and continue without it.
-func (r *tuiProcessRunner) openOutputFile(ext string) *os.File {
-	if r.coord.sessionDir == "" || r.stepPrefix == "" {
+func (r *tuiProcessRunner) openOutputFile(prefix, ext string) *os.File {
+	if r.coord.sessionDir == "" || prefix == "" {
 		return nil
 	}
 	dir := filepath.Join(r.coord.sessionDir, "output")
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil
 	}
-	base := sanitizePrefix(r.stepPrefix)
+	base := sanitizePrefix(prefix)
 	// Defense in depth: reject any residual traversal tokens even after
 	// allowlist sanitization, and verify the resolved path stays under dir.
 	if base == "" || base == "." || base == ".." || strings.Contains(base, "..") {
@@ -152,25 +163,32 @@ func (r *tuiProcessRunner) openOutputFile(ext string) *os.File {
 // When a stream wrapper is set, it is inserted between the ANSI stripper and
 // the chunk writer so adapters can filter output before display.
 func (r *tuiProcessRunner) compositeWriter(stream, ext string, buf *bytes.Buffer) (w io.Writer, cleanup func()) {
-	chunk := newChunkWriter(r.coord, r.stepPrefix, stream)
+	r.mu.Lock()
+	scope := outputScope{prefix: r.stepPrefix, stdoutWrapper: r.stdoutWrapper, stderrWrapper: r.stderrWrapper}
+	r.mu.Unlock()
+	return r.compositeWriterFor(scope, stream, ext, buf)
+}
+
+func (r *tuiProcessRunner) compositeWriterFor(scope outputScope, stream, ext string, buf *bytes.Buffer) (w io.Writer, cleanup func()) {
+	chunk := newChunkWriter(r.coord, scope.prefix, stream)
 
 	var tuiTarget io.Writer = chunk
 	var wrapperClosers []io.Closer
-	if stream == "stdout" && r.stdoutWrapper != nil {
-		tuiTarget = r.stdoutWrapper(chunk)
+	if stream == "stdout" && scope.stdoutWrapper != nil {
+		tuiTarget = scope.stdoutWrapper(chunk)
 		if c, ok := tuiTarget.(io.Closer); ok {
 			wrapperClosers = append(wrapperClosers, c)
 		}
 	}
-	if stream == "stderr" && r.stderrWrapper != nil {
-		tuiTarget = r.stderrWrapper(chunk)
+	if stream == "stderr" && scope.stderrWrapper != nil {
+		tuiTarget = scope.stderrWrapper(chunk)
 		if c, ok := tuiTarget.(io.Closer); ok {
 			wrapperClosers = append(wrapperClosers, c)
 		}
 	}
 	stripped := NewANSIStripper(tuiTarget)
 
-	f := r.openOutputFile(ext)
+	f := r.openOutputFile(scope.prefix, ext)
 
 	writers := []io.Writer{stripped}
 	if f != nil {
@@ -239,16 +257,25 @@ func (r *tuiProcessRunner) RunShell(cmd string, captureStdout bool, workdir stri
 // RunAgent runs an agent CLI process, streaming output to the TUI and persisting
 // raw bytes to output files. Interactive steps bypass this path entirely and
 // hand the user's terminal directly to the agent CLI.
-func (r *tuiProcessRunner) RunAgent(args []string, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
-	c := exec.Command(args[0], args[1:]...) // #nosec G204
-	if workdir != "" {
-		c.Dir = filepath.Clean(workdir) // #nosec G304
+func (r *tuiProcessRunner) RunAgent(options *iexec.AgentProcessOptions) (iexec.ProcessResult, error) {
+	ctx := options.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	c := exec.CommandContext(ctx, options.Args[0], options.Args[1:]...) // #nosec G204
+	iexec.ConfigureAgentCommand(c, options.Supervision)
+	c.Env = iexec.BuildAgentEnvironment(os.Environ(), options.DropEnv, options.Env)
+	if options.Workdir != "" {
+		c.Dir = filepath.Clean(options.Workdir) // #nosec G304
 	}
 
 	var stdoutBuf, stderrBuf bytes.Buffer
-
-	stdoutW, stdoutCleanup := r.compositeWriter("stdout", "out", &stdoutBuf)
-	stderrW, stderrCleanup := r.compositeWriter("stderr", "err", &stderrBuf)
+	scope := outputScope{prefix: options.Prefix, stdoutWrapper: options.StdoutWrapper, stderrWrapper: options.StderrWrapper}
+	if options.Prefix != "" {
+		r.coord.NotifyStepChange(options.Prefix)
+	}
+	stdoutW, stdoutCleanup := r.compositeWriterFor(scope, "stdout", "out", &stdoutBuf)
+	stderrW, stderrCleanup := r.compositeWriterFor(scope, "stderr", "err", &stderrBuf)
 	defer stdoutCleanup()
 	defer stderrCleanup()
 
@@ -256,6 +283,9 @@ func (r *tuiProcessRunner) RunAgent(args []string, captureStdout bool, workdir s
 	c.Stderr = stderrW
 
 	err := c.Run()
+	if ctx.Err() != nil {
+		return iexec.ProcessResult{Started: true, ExitCode: -1, Stdout: stdoutBuf.String(), Stderr: stderrBuf.String()}, ctx.Err()
+	}
 	exitCode := 0
 	if err != nil {
 		var exitErr *exec.ExitError
@@ -267,11 +297,12 @@ func (r *tuiProcessRunner) RunAgent(args []string, captureStdout bool, workdir s
 	}
 
 	stdout := stdoutBuf.String()
-	if !captureStdout {
+	if !options.CaptureStdout {
 		stdout = ""
 	}
 
 	return iexec.ProcessResult{
+		Started:  true,
 		ExitCode: exitCode,
 		Stdout:   stdout,
 		Stderr:   stderrBuf.String(),

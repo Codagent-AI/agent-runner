@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -138,19 +139,31 @@ func (r *realProcessRunner) RunShell(cmd string, captureStdout bool, workdir str
 	return iexec.ProcessResult{ExitCode: exitCode}, nil
 }
 
-func (r *realProcessRunner) RunAgent(args []string, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
-	c := exec.Command(args[0], args[1:]...) // #nosec G204 -- CLI runner launches agent processes by design
+func (r *realProcessRunner) RunAgent(options *iexec.AgentProcessOptions) (iexec.ProcessResult, error) {
+	ctx := options.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	c := exec.CommandContext(ctx, options.Args[0], options.Args[1:]...) // #nosec G204 -- CLI runner launches agent processes by design
+	iexec.ConfigureAgentCommand(c, options.Supervision)
 	c.Stderr = os.Stderr
-	c.Env = agentRunnerCommandEnv()
-	if workdir != "" {
-		c.Dir = filepath.Clean(workdir) // #nosec G304 -- workdir is from user-authored workflow YAML
+	c.Env = iexec.BuildAgentEnvironment(agentRunnerCommandEnv(), options.DropEnv, options.Env)
+	if options.Workdir != "" {
+		c.Dir = filepath.Clean(options.Workdir) // #nosec G304 -- workdir is from user-authored workflow YAML
 	}
 
-	if captureStdout {
+	if options.CaptureStdout {
 		var stdoutBuf, stderrBuf bytes.Buffer
-		c.Stdout = io.MultiWriter(os.Stdout, &stdoutBuf)
-		c.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
+		stdout, closeStdout := wrapAgentWriter(os.Stdout, options.StdoutWrapper)
+		stderr, closeStderr := wrapAgentWriter(os.Stderr, options.StderrWrapper)
+		defer closeStdout()
+		defer closeStderr()
+		c.Stdout = io.MultiWriter(stdout, &stdoutBuf)
+		c.Stderr = io.MultiWriter(stderr, &stderrBuf)
 		err := c.Run()
+		if ctx.Err() != nil {
+			return iexec.ProcessResult{Started: true, ExitCode: -1, Stdout: stdoutBuf.String(), Stderr: stderrBuf.String()}, ctx.Err()
+		}
 		exitCode := 0
 		if err != nil {
 			if exitErr, ok := err.(*exec.ExitError); ok {
@@ -159,12 +172,19 @@ func (r *realProcessRunner) RunAgent(args []string, captureStdout bool, workdir 
 				return iexec.ProcessResult{}, err
 			}
 		}
-		return iexec.ProcessResult{ExitCode: exitCode, Stdout: stdoutBuf.String(), Stderr: stderrBuf.String()}, nil
+		return iexec.ProcessResult{Started: true, ExitCode: exitCode, Stdout: stdoutBuf.String(), Stderr: stderrBuf.String()}, nil
 	}
 
-	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
+	stdout, closeStdout := wrapAgentWriter(os.Stdout, options.StdoutWrapper)
+	stderr, closeStderr := wrapAgentWriter(os.Stderr, options.StderrWrapper)
+	defer closeStdout()
+	defer closeStderr()
+	c.Stdout = stdout
+	c.Stderr = stderr
 	err := c.Run()
+	if ctx.Err() != nil {
+		return iexec.ProcessResult{Started: true, ExitCode: -1}, ctx.Err()
+	}
 	exitCode := 0
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -173,7 +193,19 @@ func (r *realProcessRunner) RunAgent(args []string, captureStdout bool, workdir 
 			return iexec.ProcessResult{}, err
 		}
 	}
-	return iexec.ProcessResult{ExitCode: exitCode}, nil
+	return iexec.ProcessResult{Started: true, ExitCode: exitCode}, nil
+}
+
+func wrapAgentWriter(writer io.Writer, wrapper func(io.Writer) io.Writer) (wrappedWriter io.Writer, cleanup func()) {
+	if wrapper == nil {
+		return writer, func() {}
+	}
+	wrapped := wrapper(writer)
+	return wrapped, func() {
+		if closer, ok := wrapped.(io.Closer); ok {
+			_ = closer.Close()
+		}
+	}
 }
 
 func (r *realProcessRunner) RunScript(path string, stdin []byte, captureStdout bool, workdir string) (iexec.ProcessResult, error) {

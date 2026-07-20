@@ -6,12 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/codagent/agent-runner/internal/interactive"
+	"github.com/codagent/agent-runner/internal/control"
 )
 
 func TestStepCompleteCommandSendsCompletionEvent(t *testing.T) {
 	replaceControlSender(t, func(_ context.Context, messageType string, _ func(string) string) (string, error) {
-		if messageType != interactive.MessageCompleteStep {
+		if messageType != control.MessageCompleteStep {
 			t.Fatalf("message type = %q", messageType)
 		}
 		return "receipt-123", nil
@@ -42,7 +42,7 @@ func TestStepCompleteCommandOmitsReceiptLineWhenServerSendsNone(t *testing.T) {
 }
 
 func TestStepCompleteCommandOutsideSessionExplainsScope(t *testing.T) {
-	for _, key := range []string{interactive.EnvControlSocket, interactive.EnvRunID, interactive.EnvStepID, interactive.EnvControlToken} {
+	for _, key := range []string{control.EnvControlSocket, control.EnvRunID, control.EnvStepID, control.EnvControlToken} {
 		t.Setenv(key, "")
 	}
 	var stdout, stderr bytes.Buffer
@@ -66,7 +66,7 @@ func TestStepCommandRejectsCrossTerminalArguments(t *testing.T) {
 
 func TestInternalTurnCommittedSendsHookEvent(t *testing.T) {
 	replaceControlSender(t, func(_ context.Context, messageType string, _ func(string) string) (string, error) {
-		if messageType != interactive.MessageTurnCommitted {
+		if messageType != control.MessageTurnCommitted {
 			t.Fatalf("message type = %q", messageType)
 		}
 		return "", nil

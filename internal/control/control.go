@@ -1,6 +1,6 @@
-// Package interactive contains the out-of-band agent control plane and the
-// direct terminal execution primitives shared by agent and shell steps.
-package interactive
+// Package control contains the authenticated, run-scoped control plane used
+// by interactive completion and runner-owned agent integrations.
+package control
 
 import (
 	"bufio"
@@ -39,6 +39,13 @@ const (
 	ControlConnectionDeadline = 5 * time.Second
 )
 
+// EnvironmentVariables returns every attempt-scoped credential variable that
+// must be removed from inherited agent environments before selectively adding
+// a fresh active attempt.
+func EnvironmentVariables() []string {
+	return []string{EnvControlSocket, EnvRunID, EnvStepID, EnvControlToken}
+}
+
 // ControlConfig identifies a run-scoped control endpoint. Callers create the
 // server only after acquiring the run lock; that lock is what makes removal of
 // a stale socket safe on resume.
@@ -58,6 +65,7 @@ type Attempt struct {
 	StepID     string
 	Token      string
 	SocketPath string
+	Context    context.Context
 }
 
 // EnvironmentMap returns the exact control environment injected into a child.
@@ -122,6 +130,7 @@ type attemptState struct {
 	completionAccepted bool
 	acceptedRequestID  string
 	checkpoint         func() (cli.Checkpoint, error)
+	cancel             context.CancelFunc
 }
 
 type acceptedCompletion struct {
@@ -134,7 +143,7 @@ type acceptedCompletion struct {
 }
 
 // ControlServer owns one Unix socket for a workflow run and rotates its active
-// credential for each interactive step attempt.
+// credential for each runner-integrated agent attempt.
 type ControlServer struct {
 	runID       string
 	runDir      string
@@ -161,7 +170,7 @@ type ControlServer struct {
 
 // NewControlServer binds the private run endpoint and writes its pointer file.
 func NewControlServer(config *ControlConfig) (*ControlServer, error) {
-	if err := interactivePlatformError(); err != nil {
+	if err := controlPlatformError(); err != nil {
 		return nil, fmt.Errorf("create control endpoint: %w", err)
 	}
 	if strings.TrimSpace(config.RunID) == "" {
@@ -245,24 +254,43 @@ func (s *ControlServer) SocketPath() string { return s.socketPath }
 // ActivateWithCheckpoint rotates the credential and binds the durability
 // checkpoint captured synchronously when completion is accepted.
 func (s *ControlServer) ActivateWithCheckpoint(stepID string, checkpoint func() (cli.Checkpoint, error)) Attempt {
+	return s.Activate(context.Background(), stepID, checkpoint)
+}
+
+// Activate rotates the credential and binds an attempt lifetime plus the
+// durability checkpoint captured synchronously when completion is accepted.
+func (s *ControlServer) Activate(ctx context.Context, stepID string, checkpoint func() (cli.Checkpoint, error)) Attempt {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	attemptContext, cancel := context.WithCancel(ctx)
 	attempt := Attempt{
 		ID:         uuid.NewString(),
 		RunID:      s.runID,
 		StepID:     stepID,
 		Token:      strings.ReplaceAll(uuid.NewString(), "-", ""),
 		SocketPath: s.socketPath,
+		Context:    attemptContext,
 	}
 	s.mu.Lock()
-	s.active = &attemptState{Attempt: attempt, checkpoint: checkpoint}
+	previous := s.active
+	s.active = &attemptState{Attempt: attempt, checkpoint: checkpoint, cancel: cancel}
 	s.mu.Unlock()
+	if previous != nil {
+		previous.cancel()
+	}
 	return attempt
 }
 
 // Deactivate invalidates the current credential while leaving the run socket alive.
 func (s *ControlServer) Deactivate() {
 	s.mu.Lock()
+	active := s.active
 	s.active = nil
 	s.mu.Unlock()
+	if active != nil {
+		active.cancel()
+	}
 }
 
 func (s *ControlServer) Completions() <-chan CompletionRequest { return s.completions }
@@ -301,6 +329,7 @@ func (s *ControlServer) SubscribeCommittedTurn(attemptID string) (committed <-ch
 // Close stops the server and removes both the socket and its run-directory pointer.
 func (s *ControlServer) Close() error {
 	s.closeOnce.Do(func() {
+		s.Deactivate()
 		close(s.done)
 		if err := s.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			s.closeErr = err
@@ -561,7 +590,7 @@ func (s *ControlServer) emit(eventType audit.EventType, stepID string, data map[
 // same request ID, so the server can answer idempotently and the retry yields
 // the same receipt.
 func SendControlEventFromEnvironment(ctx context.Context, messageType string, getenv func(string) string) (string, error) {
-	if err := interactivePlatformError(); err != nil {
+	if err := controlPlatformError(); err != nil {
 		return "", err
 	}
 	if messageType != MessageCompleteStep && messageType != MessageTurnCommitted {

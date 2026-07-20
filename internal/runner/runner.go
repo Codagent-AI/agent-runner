@@ -11,6 +11,7 @@ import (
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/config"
+	"github.com/codagent/agent-runner/internal/control"
 	"github.com/codagent/agent-runner/internal/engine"
 	"github.com/codagent/agent-runner/internal/exec"
 	"github.com/codagent/agent-runner/internal/interactive"
@@ -310,7 +311,7 @@ func cleanupCrashedInteractiveAttempt(sessionDir string, opts *Options) error {
 	if metadata.Socket != "" {
 		_ = os.Remove(metadata.Socket)
 	}
-	_ = os.Remove(filepath.Join(sessionDir, interactive.ControlSocketPointerFile))
+	_ = os.Remove(filepath.Join(sessionDir, control.ControlSocketPointerFile))
 	opts.InteractiveAttempt = nil
 	return nil
 }
@@ -544,9 +545,9 @@ func runStep(step *model.Step, rs *runState) (exec.StepOutcome, *exec.LoopResult
 }
 
 func finalizeRun(rs *runState, result WorkflowResult) {
-	if closer, ok := rs.ctx.InteractiveControl.(interface{ Close() error }); ok && closer != nil {
+	if closer, ok := rs.ctx.Control.(interface{ Close() error }); ok && closer != nil {
 		if err := closer.Close(); err != nil {
-			rs.log.Printf("agent-runner: warning: close interactive control endpoint: %v\n", err)
+			rs.log.Printf("agent-runner: warning: close control endpoint: %v\n", err)
 		}
 	}
 	runlock.Delete(rs.sessionDir)

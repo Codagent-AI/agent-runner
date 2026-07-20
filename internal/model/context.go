@@ -62,10 +62,10 @@ type ExecutionContext struct {
 	// AuditLogger writes structured audit events (audit.EventLogger).
 	AuditLogger audit.EventLogger
 
-	// InteractiveControl is the lazily-created run-scoped control server. It is
+	// Control is the lazily-created run-scoped control server. It is
 	// intentionally opaque here to keep core model types independent of runtime
 	// packages.
-	InteractiveControl any
+	Control            any
 	InteractiveAttempt *InteractiveAttemptMetadata
 
 	LastSubWorkflowChild *NestedStepState
@@ -252,7 +252,7 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		EngineRef:                parent.EngineRef,
 		ProfileStore:             parent.ProfileStore,
 		AuditLogger:              parent.AuditLogger,
-		InteractiveControl:       parent.InteractiveControl,
+		Control:                  parent.Control,
 		InteractiveAttempt:       parent.InteractiveAttempt,
 		WorkflowResumed:          parent.WorkflowResumed,
 		FlushState:               parent.FlushState,
@@ -331,7 +331,7 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		EngineRef:                engineRef,
 		ProfileStore:             parent.ProfileStore,
 		AuditLogger:              parent.AuditLogger,
-		InteractiveControl:       parent.InteractiveControl,
+		Control:                  parent.Control,
 		InteractiveAttempt:       parent.InteractiveAttempt,
 		WorkflowResumed:          parent.WorkflowResumed,
 		FlushState:               parent.FlushState,

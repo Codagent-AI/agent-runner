@@ -2,6 +2,7 @@ package liverun
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"strings"
@@ -55,7 +56,7 @@ func (unusedRunner) RunShell(string, bool, string) (iexec.ProcessResult, error) 
 	return iexec.ProcessResult{}, nil
 }
 
-func (unusedRunner) RunAgent([]string, bool, string) (iexec.ProcessResult, error) {
+func (unusedRunner) RunAgent(*iexec.AgentProcessOptions) (iexec.ProcessResult, error) {
 	return iexec.ProcessResult{}, nil
 }
 
@@ -314,7 +315,9 @@ func TestTUIProcessRunner_RunAgentDoesNotInheritStdin(t *testing.T) {
 	}()
 
 	runner := NewCoordinator(&captureProgram{}, "").TUIProcessRunner(unusedRunner{}).(*tuiProcessRunner)
-	result, err := runner.RunAgent([]string{"sh", "-c", `if read x; then printf "read:%s" "$x"; else printf "eof"; fi`}, true, "")
+	result, err := runner.RunAgent(&iexec.AgentProcessOptions{
+		Context: context.Background(), Args: []string{"sh", "-c", `if read x; then printf "read:%s" "$x"; else printf "eof"; fi`}, CaptureStdout: true,
+	})
 	if err != nil {
 		t.Fatalf("RunAgent returned error: %v", err)
 	}

@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	iexec "github.com/codagent/agent-runner/internal/exec"
 )
 
 func TestResolveWorkflowArg(t *testing.T) {
@@ -314,7 +317,9 @@ func TestRealProcessRunner_RunAgentDoesNotInheritStdin(t *testing.T) {
 		_ = r.Close()
 	}()
 
-	result, err := (&realProcessRunner{}).RunAgent([]string{"sh", "-c", `if read x; then printf "read:%s" "$x"; else printf "eof"; fi`}, true, "")
+	result, err := (&realProcessRunner{}).RunAgent(&iexec.AgentProcessOptions{
+		Context: context.Background(), Args: []string{"sh", "-c", `if read x; then printf "read:%s" "$x"; else printf "eof"; fi`}, CaptureStdout: true,
+	})
 	if err != nil {
 		t.Fatalf("RunAgent returned error: %v", err)
 	}

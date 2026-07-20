@@ -170,8 +170,8 @@ func (m *mockRunner) RunShell(cmd string, capture bool, _ string) (exec.ProcessR
 	return r, nil
 }
 
-func (m *mockRunner) RunAgent(args []string, _ bool, _ string) (exec.ProcessResult, error) {
-	m.calls = append(m.calls, args)
+func (m *mockRunner) RunAgent(options *exec.AgentProcessOptions) (exec.ProcessResult, error) {
+	m.calls = append(m.calls, options.Args)
 	if m.idx >= len(m.results) {
 		return exec.ProcessResult{ExitCode: 0}, nil
 	}
@@ -215,8 +215,8 @@ func (m *lockProbeRunner) RunShell(cmd string, _ bool, _ string) (exec.ProcessRe
 	return r, nil
 }
 
-func (m *lockProbeRunner) RunAgent(args []string, _ bool, _ string) (exec.ProcessResult, error) {
-	m.calls = append(m.calls, args)
+func (m *lockProbeRunner) RunAgent(options *exec.AgentProcessOptions) (exec.ProcessResult, error) {
+	m.calls = append(m.calls, options.Args)
 	if _, err := os.Stat(m.lockPath); err == nil && m.observed != nil {
 		*m.observed = true
 	}

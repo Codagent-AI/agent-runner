@@ -1,4 +1,4 @@
-package interactive
+package control
 
 import (
 	"bufio"
@@ -71,6 +71,20 @@ func TestControlServerCreatesPrivateEndpointAndAttemptEnvironment(t *testing.T) 
 	attempt = server.ActivateWithCheckpoint("review", nil)
 	if attempt.Token == previous.Token || attempt.ID == previous.ID {
 		t.Fatalf("attempt credential was not rotated: before=%#v after=%#v", previous, attempt)
+	}
+}
+
+func TestControlServerDeactivationCancelsAttemptContext(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+	defer server.Close()
+
+	attempt := server.Activate(context.Background(), "step", nil)
+	server.Deactivate()
+
+	select {
+	case <-attempt.Context.Done():
+	case <-time.After(time.Second):
+		t.Fatal("attempt context was not canceled on deactivation")
 	}
 }
 

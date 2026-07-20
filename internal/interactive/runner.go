@@ -18,6 +18,7 @@ import (
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
+	"github.com/codagent/agent-runner/internal/control"
 )
 
 type DirectOptions struct {
@@ -30,7 +31,7 @@ type DirectOptions struct {
 	StepID    string
 	SessionID string
 	CLI       string
-	Control   *ControlServer
+	Control   *control.ControlServer
 	Probe     cli.TurnDurabilityProbe
 	// ResolveSessionID discovers a CLI-assigned fresh session after spawn and
 	// before the completion checkpoint is captured.
@@ -95,7 +96,7 @@ func (r *DirectRunner) Run(ctx context.Context) (result DirectResult, err error)
 		return result, errors.New("direct interactive runner: turn durability probe is required")
 	}
 
-	attempt := options.Control.ActivateWithCheckpoint(options.StepID, func() (cli.Checkpoint, error) {
+	attempt := options.Control.Activate(ctx, options.StepID, func() (cli.Checkpoint, error) {
 		if options.SessionID == "" && options.ResolveSessionID != nil {
 			options.SessionID = resolveFreshSessionID(ctx, options.ResolveSessionID)
 		}
@@ -210,7 +211,7 @@ func pruneEnvironment(env, drop []string) []string {
 	return kept
 }
 
-func startDirectChild(options *DirectOptions, attempt *Attempt) (*exec.Cmd, *os.File, *unix.Termios, error) {
+func startDirectChild(options *DirectOptions, attempt *control.Attempt) (*exec.Cmd, *os.File, *unix.Termios, error) {
 	return startTerminalChild(&childLaunchOptions{
 		Args: options.Args, Env: options.Env, DropEnv: options.DropEnv,
 		Workdir: options.Workdir, Stdin: options.Stdin, Stdout: options.Stdout,
@@ -273,7 +274,7 @@ func startTerminalChild(options *childLaunchOptions, extraEnv []string) (*exec.C
 	return cmd, tty, runnerModes, nil
 }
 
-func awaitDirectResult(ctx context.Context, options *DirectOptions, attempt *Attempt, supervisor *Supervisor) (DirectResult, error) {
+func awaitDirectResult(ctx context.Context, options *DirectOptions, attempt *control.Attempt, supervisor *Supervisor) (DirectResult, error) {
 	select {
 	case completion := <-options.Control.Completions():
 		return finishDirectCompletion(ctx, options, attempt, supervisor, &completion)
@@ -293,7 +294,7 @@ func awaitDirectResult(ctx context.Context, options *DirectOptions, attempt *Att
 	}
 }
 
-func finishDirectCompletion(ctx context.Context, options *DirectOptions, attempt *Attempt, supervisor *Supervisor, completion *CompletionRequest) (DirectResult, error) {
+func finishDirectCompletion(ctx context.Context, options *DirectOptions, attempt *control.Attempt, supervisor *Supervisor, completion *control.CompletionRequest) (DirectResult, error) {
 	if completion.AttemptID != attempt.ID {
 		_ = supervisor.Terminate(options.TerminationGrace)
 		return DirectResult{}, errors.New("direct interactive runner: received completion for a different attempt")
