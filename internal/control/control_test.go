@@ -58,6 +58,7 @@ func TestControlServerCreatesPrivateEndpointAndAttemptEnvironment(t *testing.T) 
 		EnvControlSocket: server.SocketPath(),
 		EnvRunID:         "run-with-a-deliberately-long-identifier",
 		EnvStepID:        "review",
+		EnvAttemptID:     attempt.ID,
 		EnvControlToken:  attempt.Token,
 	}
 	if diff := cmp.Diff(want, attempt.EnvironmentMap()); diff != "" {
@@ -86,6 +87,155 @@ func TestControlServerDeactivationCancelsAttemptContext(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("attempt context was not canceled on deactivation")
 	}
+}
+
+func TestControlServerAdmitsAgentCallToActiveAttemptHandler(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+	defer server.Close()
+	handler := &recordingCallHandler{requests: make(chan AgentCallRequest, 1)}
+	attempt := server.ActivateAttempt(context.Background(), "step", AttemptOptions{
+		AgentCallEligible: true,
+		AgentCallHandler:  handler,
+	})
+
+	response := exchange(t, server.SocketPath(), &controlRequest{
+		Type: MessageAgentCall, RunID: attempt.RunID, StepID: attempt.StepID,
+		AttemptID: attempt.ID, Token: attempt.Token, RequestID: "call-1",
+		Payload: json.RawMessage(`{"prompt":"do it","agent":"implementor"}`),
+	})
+	if !response.OK || string(response.Payload) != `{"result":"done"}` {
+		t.Fatalf("agent-call response = %#v", response)
+	}
+	got := <-handler.requests
+	if got.RequestID != "call-1" || string(got.Payload) != `{"prompt":"do it","agent":"implementor"}` {
+		t.Fatalf("handler request = %#v", got)
+	}
+}
+
+func TestControlServerRejectsAgentCallWithWrongAttemptIdentity(t *testing.T) {
+	logger := &recordingEventLogger{}
+	server := newTestControlServer(t, t.TempDir(), logger)
+	defer server.Close()
+	handler := &recordingCallHandler{requests: make(chan AgentCallRequest, 1)}
+	attempt := server.ActivateAttempt(context.Background(), "step", AttemptOptions{
+		AgentCallEligible: true,
+		AgentCallHandler:  handler,
+	})
+
+	response := exchange(t, server.SocketPath(), &controlRequest{
+		Type: MessageAgentCall, RunID: attempt.RunID, StepID: attempt.StepID,
+		AttemptID: "wrong-attempt", Token: attempt.Token, RequestID: "call-1",
+		Payload: json.RawMessage(`{}`),
+	})
+	if response.OK || !strings.Contains(response.Error, "active step attempt") {
+		t.Fatalf("agent-call response = %#v", response)
+	}
+	select {
+	case got := <-handler.requests:
+		t.Fatalf("rejected request reached handler: %#v", got)
+	default:
+	}
+}
+
+func TestControlServerDisconnectCancelsAgentCallLease(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+	defer server.Close()
+	handler := &blockingCallHandler{started: make(chan struct{}), canceled: make(chan struct{})}
+	attempt := server.ActivateAttempt(context.Background(), "step", AttemptOptions{
+		AgentCallEligible: true,
+		AgentCallHandler:  handler,
+	})
+	connection, err := net.Dial("unix", server.SocketPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := controlRequest{
+		Type: MessageAgentCall, RunID: attempt.RunID, StepID: attempt.StepID,
+		AttemptID: attempt.ID, Token: attempt.Token, RequestID: "call-1", Payload: json.RawMessage(`{}`),
+	}
+	if err := json.NewEncoder(connection).Encode(request); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-handler.started:
+	case <-time.After(time.Second):
+		t.Fatal("agent-call handler did not start")
+	}
+	_ = connection.Close()
+	select {
+	case <-handler.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("control disconnect did not cancel the agent-call lease")
+	}
+}
+
+func TestSendAgentCallFromEnvironmentUsesAuthenticatedAttemptAndReturnsPayload(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+	defer server.Close()
+	handler := &recordingCallHandler{requests: make(chan AgentCallRequest, 1)}
+	attempt := server.ActivateAttempt(context.Background(), "step", AttemptOptions{
+		AgentCallEligible: true,
+		AgentCallHandler:  handler,
+	})
+	values := attempt.EnvironmentMap()
+
+	got, err := SendAgentCallFromEnvironment(
+		context.Background(), "request-1", json.RawMessage(`{"prompt":"do it"}`),
+		func(key string) string { return values[key] },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != `{"result":"done"}` {
+		t.Fatalf("response payload = %s", got)
+	}
+	request := <-handler.requests
+	if request.RequestID != "request-1" || string(request.Payload) != `{"prompt":"do it"}` {
+		t.Fatalf("handler request = %#v", request)
+	}
+}
+
+func TestControlRequestRegistrySeparatesCompletionAndAgentCallIDs(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+	defer server.Close()
+	handler := &recordingCallHandler{requests: make(chan AgentCallRequest, 1)}
+	attempt := server.ActivateAttempt(context.Background(), "step", AttemptOptions{
+		AgentCallEligible: true, AgentCallHandler: handler,
+	})
+	if response := exchange(t, server.SocketPath(), &controlRequest{
+		Type: MessageCompleteStep, RunID: attempt.RunID, StepID: attempt.StepID,
+		Token: attempt.Token, RequestID: "shared-id",
+	}); !response.OK {
+		t.Fatalf("completion response = %#v", response)
+	}
+	response := exchange(t, server.SocketPath(), &controlRequest{
+		Type: MessageAgentCall, RunID: attempt.RunID, StepID: attempt.StepID,
+		AttemptID: attempt.ID, Token: attempt.Token, RequestID: "shared-id", Payload: json.RawMessage(`{}`),
+	})
+	if !response.OK || string(response.Payload) != `{"result":"done"}` {
+		t.Fatalf("agent-call response = %#v", response)
+	}
+}
+
+type recordingCallHandler struct {
+	requests chan AgentCallRequest
+}
+
+func (h *recordingCallHandler) HandleAgentCall(_ context.Context, request AgentCallRequest) json.RawMessage {
+	h.requests <- request
+	return json.RawMessage(`{"result":"done"}`)
+}
+
+type blockingCallHandler struct {
+	started  chan struct{}
+	canceled chan struct{}
+}
+
+func (h *blockingCallHandler) HandleAgentCall(ctx context.Context, _ AgentCallRequest) json.RawMessage {
+	close(h.started)
+	<-ctx.Done()
+	close(h.canceled)
+	return json.RawMessage(`{"error":"canceled"}`)
 }
 
 func TestControlServerSocketPathIsUniquePerRunDirectory(t *testing.T) {

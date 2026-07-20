@@ -26,13 +26,15 @@ type DirectOptions struct {
 	Env  []string
 	// DropEnv names inherited environment variables that must not reach the
 	// child (for example enclosing-session markers of the same CLI).
-	DropEnv   []string
-	Workdir   string
-	StepID    string
-	SessionID string
-	CLI       string
-	Control   *control.ControlServer
-	Probe     cli.TurnDurabilityProbe
+	DropEnv           []string
+	Workdir           string
+	StepID            string
+	SessionID         string
+	CLI               string
+	Control           *control.ControlServer
+	AgentCallEligible bool
+	AgentCallHandler  control.AgentCallHandler
+	Probe             cli.TurnDurabilityProbe
 	// ResolveSessionID discovers a CLI-assigned fresh session after spawn and
 	// before the completion checkpoint is captured.
 	ResolveSessionID func() string
@@ -96,11 +98,15 @@ func (r *DirectRunner) Run(ctx context.Context) (result DirectResult, err error)
 		return result, errors.New("direct interactive runner: turn durability probe is required")
 	}
 
-	attempt := options.Control.Activate(ctx, options.StepID, func() (cli.Checkpoint, error) {
-		if options.SessionID == "" && options.ResolveSessionID != nil {
-			options.SessionID = resolveFreshSessionID(ctx, options.ResolveSessionID)
-		}
-		return captureDurabilityCheckpoint(ctx, options.Probe, options.SessionID)
+	attempt := options.Control.ActivateAttempt(ctx, options.StepID, control.AttemptOptions{
+		AgentCallEligible: options.AgentCallEligible,
+		AgentCallHandler:  options.AgentCallHandler,
+		Checkpoint: func() (cli.Checkpoint, error) {
+			if options.SessionID == "" && options.ResolveSessionID != nil {
+				options.SessionID = resolveFreshSessionID(ctx, options.ResolveSessionID)
+			}
+			return captureDurabilityCheckpoint(ctx, options.Probe, options.SessionID)
+		},
 	})
 	defer options.Control.Deactivate()
 
