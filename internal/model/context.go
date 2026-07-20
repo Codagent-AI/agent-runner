@@ -38,9 +38,14 @@ type ExecutionContext struct {
 	NestingPath   []NestingSegment
 	ParentContext *ExecutionContext
 
-	WorkflowFile             string
-	WorkflowName             string
-	WorkflowDescription      string
+	WorkflowFile        string
+	WorkflowName        string
+	WorkflowDescription string
+	// ProjectRoot is the canonical repository/worktree boundary established
+	// when the run starts. WorkingDir is the canonical launch directory used
+	// to resolve relative step workdirs.
+	ProjectRoot              string
+	WorkingDir               string
 	AutonomousBackend        string
 	AutonomousPermissionMode string
 
@@ -98,6 +103,8 @@ type RootContextOptions struct {
 	WorkflowFile             string
 	WorkflowName             string
 	WorkflowDescription      string
+	ProjectRoot              string
+	WorkingDir               string
 	AutonomousBackend        string
 	AutonomousPermissionMode string
 	SessionDir               string
@@ -155,6 +162,8 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		WorkflowFile:             opts.WorkflowFile,
 		WorkflowName:             opts.WorkflowName,
 		WorkflowDescription:      opts.WorkflowDescription,
+		ProjectRoot:              opts.ProjectRoot,
+		WorkingDir:               opts.WorkingDir,
 		AutonomousBackend:        opts.AutonomousBackend,
 		AutonomousPermissionMode: opts.AutonomousPermissionMode,
 		SessionDir:               opts.SessionDir,
@@ -246,6 +255,8 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		WorkflowFile:             parent.WorkflowFile,
 		WorkflowName:             parent.WorkflowName,
 		WorkflowDescription:      parent.WorkflowDescription,
+		ProjectRoot:              parent.ProjectRoot,
+		WorkingDir:               parent.WorkingDir,
 		AutonomousBackend:        parent.AutonomousBackend,
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
 		SessionDir:               parent.SessionDir,
@@ -325,6 +336,8 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		WorkflowFile:             opts.WorkflowFile,
 		WorkflowName:             parent.WorkflowName,
 		WorkflowDescription:      parent.WorkflowDescription,
+		ProjectRoot:              parent.ProjectRoot,
+		WorkingDir:               parent.WorkingDir,
 		AutonomousBackend:        parent.AutonomousBackend,
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
 		SessionDir:               parent.SessionDir,

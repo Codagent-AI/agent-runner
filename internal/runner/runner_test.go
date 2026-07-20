@@ -51,6 +51,53 @@ func TestRunWorkflowProducesMetricsWhenAuditLogCannotOpen(t *testing.T) {
 	}
 }
 
+func TestDiscoverProjectRootUsesWorkflowRepositoryFromAncestor(t *testing.T) {
+	workspace := t.TempDir()
+	repo := filepath.Join(workspace, "repo")
+	workflow := filepath.Join(repo, ".agent-runner", "workflows", "test.yaml")
+	if err := os.MkdirAll(filepath.Dir(workflow), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := filepath.EvalSymlinks(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := discoverProjectRoot(workflow, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != repo {
+		t.Fatalf("project root = %q, want %q", got, repo)
+	}
+}
+
+func TestDiscoverProjectRootUsesRepositoryWhenLaunchedFromSubdirectory(t *testing.T) {
+	repo := t.TempDir()
+	workingDir := filepath.Join(repo, "packages", "api")
+	if err := os.MkdirAll(workingDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := filepath.EvalSymlinks(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := discoverProjectRoot("builtin:core/test.yaml", workingDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != repo {
+		t.Fatalf("project root = %q, want %q", got, repo)
+	}
+}
+
 func TestRunWorkflowContinuesWhenAuditLogCannotOpenWithoutCustomLogger(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, "audit.log"), 0o700); err != nil {

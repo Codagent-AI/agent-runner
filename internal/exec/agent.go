@@ -259,11 +259,10 @@ func prepareAgentCallRuntime(
 	if !eligible {
 		return nil, spawnEnv, nil, nil
 	}
-	worktree, worktreeErr := os.Getwd()
-	if worktreeErr != nil {
-		return nil, spawnEnv, nil, fmt.Errorf("resolve parent worktree: %w", worktreeErr)
+	if ctx.ProjectRoot == "" || ctx.WorkingDir == "" {
+		return nil, spawnEnv, nil, errors.New("agent-call project root is unavailable")
 	}
-	parentWorkdir, workdirErr := resolveAgentCallWorkdir(worktree, worktree, step.Workdir)
+	parentWorkdir, workdirErr := resolveAgentCallWorkdir(ctx.ProjectRoot, ctx.WorkingDir, step.Workdir)
 	if workdirErr != nil {
 		return nil, spawnEnv, nil, fmt.Errorf("resolve parent workdir: %w", workdirErr)
 	}
@@ -276,7 +275,7 @@ func prepareAgentCallRuntime(
 		Context: ctx, Runner: runner, Log: log, Eligible: true,
 		Parent: AgentCallParent{
 			CLI: cliName, SessionID: sessionID, NamedSession: parentNamedSession,
-			Worktree: worktree, Workdir: parentWorkdir, Prefix: prefix,
+			Worktree: ctx.ProjectRoot, Workdir: parentWorkdir, Prefix: prefix,
 			ResolveSessionID: func() string {
 				return adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: spawnTime, Workdir: parentWorkdir})
 			},

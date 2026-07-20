@@ -36,9 +36,13 @@ const (
 
 // Options configures a workflow run.
 type Options struct {
-	From               string
-	Until              string
-	WorkflowFile       string
+	From         string
+	Until        string
+	WorkflowFile string
+	// ProjectRoot and WorkingDir may be supplied by embedding callers. When
+	// empty, PrepareRun discovers and canonicalizes them once for the run.
+	ProjectRoot        string
+	WorkingDir         string
 	SessionDir         string // Override session directory (for testing); computed automatically if empty.
 	Engine             engine.Engine
 	ProfileStore       *config.Config
@@ -123,6 +127,92 @@ func validateUntilStep(workflow *model.Workflow, until string) error {
 		}
 	}
 	return fmt.Errorf("--until step %q not found in top-level workflow steps", until)
+}
+
+func resolveExecutionRoots(opts *Options) (workingDir, projectRoot string, err error) {
+	workingDir = opts.WorkingDir
+	if workingDir == "" {
+		workingDir, err = os.Getwd()
+		if err != nil {
+			return "", "", fmt.Errorf("cannot determine working directory: %w", err)
+		}
+	}
+	workingDir, err = canonicalDirectory(workingDir)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve working directory: %w", err)
+	}
+	if opts.ProjectRoot != "" {
+		projectRoot, err = canonicalDirectory(opts.ProjectRoot)
+		if err != nil {
+			return "", "", fmt.Errorf("resolve project root: %w", err)
+		}
+		return workingDir, projectRoot, nil
+	}
+	projectRoot, err = discoverProjectRoot(opts.WorkflowFile, workingDir)
+	if err != nil {
+		return "", "", err
+	}
+	return workingDir, projectRoot, nil
+}
+
+func discoverProjectRoot(workflowFile, workingDir string) (string, error) {
+	workingDir, err := canonicalDirectory(workingDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve project working directory: %w", err)
+	}
+	if root, ok := findRepositoryRoot(workingDir); ok {
+		return root, nil
+	}
+	if workflowFile != "" && !builtinworkflows.IsRef(workflowFile) {
+		workflowPath := workflowFile
+		if !filepath.IsAbs(workflowPath) {
+			workflowPath = filepath.Join(workingDir, workflowPath)
+		}
+		if root, ok := findRepositoryRoot(filepath.Dir(filepath.Clean(workflowPath))); ok {
+			return root, nil
+		}
+	}
+	return workingDir, nil
+}
+
+func findRepositoryRoot(start string) (string, bool) {
+	dir, err := filepath.Abs(start)
+	if err != nil {
+		return "", false
+	}
+	dir, err = filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", false
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil { // #nosec G703 -- fixed marker beneath a canonical directory.
+			return dir, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
+}
+
+func canonicalDirectory(dirPath string) (string, error) {
+	absolute, err := filepath.Abs(dirPath)
+	if err != nil {
+		return "", err
+	}
+	canonical, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(canonical) // #nosec G703 -- callers provide trusted run configuration paths.
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("%s is not a directory", dirPath)
+	}
+	return canonical, nil
 }
 
 func computeHash(workflowFile string) string {
@@ -211,6 +301,13 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		}
 	}
 
+	workingDir, projectRoot, rootErr := resolveExecutionRoots(opts)
+	if rootErr != nil {
+		return nil, rootErr
+	}
+	opts.WorkingDir = workingDir
+	opts.ProjectRoot = projectRoot
+
 	// Build session ID and directory.
 	safeName := audit.SanitizeWorkflowName(workflow.Name)
 	now := time.Now()
@@ -218,17 +315,12 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	sessionID := safeName + "-" + timestamp
 
 	sessionDir := opts.SessionDir
-	var cwd string
 	if sessionDir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return nil, fmt.Errorf("cannot determine home directory: %w", err)
 		}
-		cwd, err = os.Getwd()
-		if err != nil {
-			return nil, fmt.Errorf("cannot determine working directory: %w", err)
-		}
-		encoded := audit.EncodePath(cwd)
+		encoded := audit.EncodePath(workingDir)
 		sessionDir = filepath.Join(home, ".agent-runner", "projects", encoded, "runs", sessionID)
 	} else {
 		sessionID = filepath.Base(sessionDir)
@@ -257,7 +349,7 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 
 	if opts.SessionDir == "" {
 		projectDir := filepath.Dir(filepath.Dir(sessionDir)) // parent of runs/
-		writeMetaJSON(projectDir, cwd)
+		writeMetaJSON(projectDir, workingDir)
 	}
 
 	auditLogger, metricsCollector, ctx, err := buildExecutionContext(workflow, params, opts, sessionDir, sessionID, now)
@@ -357,6 +449,8 @@ func buildExecutionContext(
 		WorkflowFile:             opts.WorkflowFile,
 		WorkflowName:             workflow.Name,
 		WorkflowDescription:      workflow.Description,
+		ProjectRoot:              opts.ProjectRoot,
+		WorkingDir:               opts.WorkingDir,
 		AutonomousBackend:        string(settings.AutonomousBackend),
 		AutonomousPermissionMode: string(usersettings.EffectiveAutonomousPermissionMode(settings.AutonomousPermissionMode)),
 		SessionDir:               sessionDir,

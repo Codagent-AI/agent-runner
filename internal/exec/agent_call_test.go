@@ -249,6 +249,38 @@ func TestAgentCallHandlerResolvesRelativeWorkdirFromParentEffectiveDirectory(t *
 	}
 }
 
+func TestPrepareAgentCallRuntimeUsesEstablishedProjectRoot(t *testing.T) {
+	workspace := t.TempDir()
+	projectRoot := filepath.Join(workspace, "repo")
+	workingDir := filepath.Join(projectRoot, "packages", "api")
+	if err := os.MkdirAll(workingDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	projectRoot, err := filepath.EvalSymlinks(projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workingDir, err = filepath.EvalSymlinks(workingDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		WorkflowFile: "workflow.yaml", ProjectRoot: projectRoot, WorkingDir: workingDir,
+	})
+	step := &model.Step{ID: "parent", Session: model.SessionNew}
+
+	handler, _, _, err := prepareAgentCallRuntime(
+		true, cli.ContextInteractive, step, ctx, &callTestAdapter{}, nil, nil,
+		"test", "parent-session", "parent", nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handler.options.Parent.Worktree != projectRoot || handler.options.Parent.Workdir != workingDir {
+		t.Fatalf("parent paths = worktree %q workdir %q", handler.options.Parent.Worktree, handler.options.Parent.Workdir)
+	}
+}
+
 func TestBuildStepInvocationCarriesPreInterpolationAgentCallEligibility(t *testing.T) {
 	ctx := model.NewRootContext(&model.RootContextOptions{SessionDir: t.TempDir()})
 	profile := &config.ResolvedAgent{CLI: "test"}
@@ -396,7 +428,10 @@ func TestExecuteAgentStepEnablesAuthenticatedCallsOnlyFromAuthoredPrompt(t *test
 	if activePID, err := runlock.Acquire(runDir); err != nil || activePID != 0 {
 		t.Fatalf("acquire run lock: active=%d err=%v", activePID, err)
 	}
-	ctx := model.NewRootContext(&model.RootContextOptions{WorkflowFile: "workflow.yaml", SessionDir: runDir})
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		WorkflowFile: "workflow.yaml", SessionDir: runDir,
+		ProjectRoot: runDir, WorkingDir: runDir,
+	})
 	ctx.ProfileStore = &config.Config{ActiveAgents: map[string]*config.Agent{
 		"parent":      {DefaultMode: "autonomous", CLI: "claude"},
 		"implementor": {DefaultMode: "interactive", CLI: "claude", SystemPrompt: "child system"},
