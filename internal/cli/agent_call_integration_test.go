@@ -236,6 +236,28 @@ command = "agent-runner"
 	}
 }
 
+func TestCodexAgentCallConflictDetectionRejectsInvalidTOML(t *testing.T) {
+	conflict, err := codexConfigHasAgentCallConflict([]byte("foo = invalid\n"))
+	if err == nil {
+		t.Fatalf("conflict = %v, want malformed TOML error", conflict)
+	}
+}
+
+func TestCodexAgentCallConflictDetectionAcceptsMultilineStringsEndingInQuotes(t *testing.T) {
+	config := []byte(`basic_one = """value""""
+basic_two = """value"""""
+literal_one = '''value''''
+literal_two = '''value'''''
+`)
+	conflict, err := codexConfigHasAgentCallConflict(config)
+	if err != nil {
+		t.Fatalf("detect conflict: %v", err)
+	}
+	if conflict {
+		t.Fatal("multiline string values must not be interpreted as the reserved MCP server")
+	}
+}
+
 func TestCursorAutonomousAgentCallRejectsProjectDenyConflict(t *testing.T) {
 	adapter, input := agentCallTestInput(t, "cursor", ContextAutonomousHeadless)
 	projectConfig := filepath.Join(input.Workdir, ".cursor", "cli.json")

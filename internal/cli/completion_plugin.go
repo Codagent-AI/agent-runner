@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 const completionPluginName = "agent-runner"
@@ -173,6 +175,22 @@ Run this exact command now, then finish the response:
 		return "", fmt.Errorf("write Codex completion skill: %w", err)
 	}
 	return privateHome, nil
+}
+
+func codexConfigHasAgentCallConflict(config []byte) (bool, error) {
+	if strings.TrimSpace(string(config)) == "" {
+		return false, nil
+	}
+	var decoded map[string]any
+	if err := toml.Unmarshal(config, &decoded); err != nil {
+		return false, fmt.Errorf("parse Codex config before installing Runner integration: %w", err)
+	}
+	mcpServers, ok := decoded["mcp_servers"].(map[string]any)
+	if !ok {
+		return false, nil
+	}
+	_, conflict := mcpServers[agentCallMCPServerName]
+	return conflict, nil
 }
 
 func appendCodexAgentCallConfig(config []byte, command MCPServerCommand, autonomous bool) []byte {
