@@ -2,7 +2,7 @@
 
 ### Requirement: Live agent-call visibility
 
-When an autonomous-headless parent invokes `call_agent`, the live run view SHALL insert the accepted call beneath its parent, update the call's status independently, and stream its stdout and stderr through the call's detail pane using ordinary headless-agent behavior. Parent and called-child output MUST remain separate.
+When an autonomous-headless parent invokes `call_agent`, the live run view SHALL insert the call beneath its parent when it becomes accepted, before child CLI launch, update the call's status independently, and stream its stdout and stderr through the call's detail pane using ordinary headless-agent behavior. Parent and called-child output MUST remain separate. If the CLI fails to launch, the inserted call SHALL transition to failed and remain visible.
 
 When auto-follow is engaged, the cursor SHALL move to an active call and SHALL return to the next active execution point after the call finishes. Existing manual navigation SHALL pause auto-follow. When an expanded parent has an active call child, the child SHALL carry the sole running indicator using the existing active-child status-suppression behavior.
 
@@ -11,6 +11,10 @@ When an interactive parent owns the terminal, Agent Runner MUST NOT interrupt it
 #### Scenario: Autonomous call appears live
 - **WHEN** an autonomous-headless parent starts an accepted agent call
 - **THEN** the live run view inserts an in-progress call row beneath that parent
+
+#### Scenario: CLI launch failure updates live row
+- **WHEN** an accepted autonomous call fails while launching its child CLI
+- **THEN** its inserted live row transitions to failed without disappearing
 
 #### Scenario: Called-child output streams separately
 - **WHEN** an active called child produces stdout or stderr

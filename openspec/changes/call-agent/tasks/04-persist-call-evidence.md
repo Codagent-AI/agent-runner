@@ -15,16 +15,16 @@ You MUST read these approved artifacts before starting:
 Relevant implementation seams:
 
 - `internal/audit/types.go` defines event types; `internal/audit/logger.go` writes JSONL and builds structural prefixes.
-- `internal/exec/step_audit.go` and the Runner-owned call wrapper emit start/end metadata. Use exactly one call event pair per accepted execution and no pair for pre-launch rejection.
+- `internal/exec/step_audit.go` and the Runner-owned call wrapper emit start/end metadata. Use exactly one call event pair per accepted execution and no pair for pre-acceptance rejection.
 - `internal/liverun/process_runner.go` persists raw stdout/stderr beneath `<sessionDir>/output/` using the invocation's structural prefix. The call ID must prevent collisions with the parent and repeated calls.
 - `internal/model/usage.go` carries execution identity and usage provenance.
 - `internal/metrics/collector.go` projects terminal audit events into schema-v1 `run-metrics.json`, attributes cumulative-session usage, calculates coverage/totals, rehydrates prior records, and performs atomic writes through existing state I/O.
 - `internal/metrics/pipeline.go` normalizes events before forwarding them to the audit sink.
 - Existing tests in `internal/audit/`, `internal/metrics/`, `internal/exec/agent_test.go`, and `internal/liverun/liverun_test.go` establish compatibility expectations.
 
-Each accepted call gets a unique `call_id` and a structural child prefix beneath its active parent attempt. Start metadata includes the requested prompt and resolved execution context; end metadata follows ordinary agent-step rules for outcome, exit/session information, usage, cost, and errors. Do not copy the full child response into `audit.log`; the parent receives it through the tool result, while ordinary headless output persistence retains inspectable stdout/stderr with existing privacy and size behavior.
+Each accepted call gets a unique `call_id` and a structural child prefix beneath its active parent attempt. Acceptance occurs after Runner validation and request-ID reservation but before CLI launch, so emit start evidence before attempting launch. A CLI launch failure is a failed accepted call with a paired end event. Start metadata includes the requested prompt and resolved execution context; end metadata follows ordinary agent-step rules for outcome, exit/session information, usage, cost, and errors. Do not copy the full child response into `audit.log`; the parent receives it through the tool result, while ordinary headless output persistence retains inspectable stdout/stderr with existing privacy and size behavior.
 
-Keep `run-metrics.json` at schema version 1. Extend the existing `steps[]` execution-record union with `kind: "agent-call"` plus additive call and parent/target fields. Do not add a parallel top-level `agent_calls[]` collection. Parent workflow-step records retain only parent metrics. Completed calls append exactly one record and participate in usage, canonical-total, cost, provenance, completeness, and coverage calculations exactly as ordinary invoked agents do. Rejected calls create no record, and a call rejected or failed before CLI launch does not participate in coverage denominators. Do not infer a broader pre-launch record rule than the approved metrics requirement defines.
+Keep `run-metrics.json` at schema version 1. Extend the existing `steps[]` execution-record union with `kind: "agent-call"` plus additive call and parent/target fields. Do not add a parallel top-level `agent_calls[]` collection. Parent workflow-step records retain only parent metrics. Every accepted call that reaches a terminal outcome appends exactly one record, including CLI launch failure. Launch failures have failed outcome but do not participate in CLI usage-coverage denominators. Requests rejected before acceptance create no metric record or coverage obligation.
 
 A call's duration is useful on its record but overlaps the synchronously waiting parent. Keep active execution-session wall time authoritative and never add child duration again. Named-session state continues through `state.json`; do not create a second persisted workflow-state tree for calls. Rehydrate older schema-v1 artifacts that have no agent-call fields and preserve completed call records across resumed Runner sessions.
 
@@ -48,7 +48,7 @@ Agent Runner SHALL retain each called child's output, session bookkeeping, usage
 
 ### Requirement: Agent-call event data
 
-Every accepted agent call SHALL emit exactly one `agent_call_start` and one `agent_call_end` beneath the parent step's existing nesting prefix. Both entries SHALL include a unique `call_id` and the parent attempt identity. Repeated calls from one parent SHALL have distinct call IDs, while an idempotent retry of one request MUST NOT duplicate its event pair.
+Every accepted agent call SHALL emit exactly one `agent_call_start` and one `agent_call_end` beneath the parent step's existing nesting prefix. Agent Runner SHALL emit `agent_call_start` after the call passes the acceptance boundary and before attempting to launch its child CLI. Both entries SHALL include a unique `call_id` and the parent attempt identity. Repeated calls from one parent SHALL have distinct call IDs, while an idempotent retry of one request MUST NOT duplicate its event pair.
 
 The `agent_call_start` entry SHALL include the requested prompt; target kind and name; effective working directory; and resolved profile, CLI, model, and session metadata available at start. The `agent_call_end` entry SHALL include the outcome, duration, exit code, discovered session ID, usage, cost, and error information following ordinary agent-step rules.
 
@@ -62,6 +62,10 @@ The full child response MUST NOT be duplicated in `audit.log`. Called-child outp
 - **WHEN** an accepted agent call starts a child that fails
 - **THEN** the audit log retains its start event and writes an end event containing the failed outcome and error metadata
 
+#### Scenario: CLI launch failure emits failed pair
+- **WHEN** an accepted agent call fails while launching its child CLI
+- **THEN** the audit log contains its start event and a failed end event with the launch error
+
 #### Scenario: Repeated calls have distinct identities
 - **WHEN** one parent completes multiple separate agent calls
 - **THEN** each call's event pair has a distinct call ID
@@ -70,8 +74,8 @@ The full child response MUST NOT be duplicated in `audit.log`. Called-child outp
 - **WHEN** an accepted agent-call request is retried with the same request ID
 - **THEN** the audit log contains only the original call's start/end pair
 
-#### Scenario: Rejected request emits no call pair
-- **WHEN** an agent-call request is rejected before a child starts
+#### Scenario: Pre-acceptance rejection emits no call pair
+- **WHEN** an agent-call request fails before reaching the acceptance boundary
 - **THEN** Agent Runner records the rejection through existing control-rejection auditing and emits no agent-call start/end pair
 
 #### Scenario: Full response omitted from audit entries
@@ -131,7 +135,7 @@ End events (`step_end`, `run_end`, `iteration_end`, `sub_workflow_end`, `agent_c
 
 ### Requirement: Agent-call metric records and aggregation
 
-Each completed called-agent execution SHALL append a distinct `agent-call` record to `run-metrics.json`. The record SHALL include its call ID, parent attempt identity, target kind and name, outcome, duration in milliseconds, usage record, `estimated_api_cost_usd`, provenance, and completeness using ordinary agent-step metric semantics. Parent workflow-step records SHALL contain only the parent's own usage and cost; called-agent records SHALL remain separate so consumers can roll up the parent and its calls without counting any execution more than once.
+Each accepted agent call that reaches a terminal outcome SHALL append a distinct `agent-call` record to `run-metrics.json`, including an accepted call whose child CLI fails to launch. The record SHALL include its call ID, parent attempt identity, target kind and name, outcome, duration in milliseconds, usage record, `estimated_api_cost_usd`, provenance, and completeness using ordinary agent-step metric semantics. Parent workflow-step records SHALL contain only the parent's own usage and cost; called-agent records SHALL remain separate so consumers can roll up the parent and its calls without counting any execution more than once.
 
 Called-agent usage and cost SHALL contribute to run totals regardless of call outcome when the child reports them. Every called child that invokes its CLI SHALL participate in usage, canonical-total, and cost coverage calculations; a call rejected or failed before CLI launch MUST NOT participate in those coverage denominators. A called child's duration SHALL be retained on its record but MUST NOT be added to run elapsed time because that interval overlaps the waiting parent; the existing active execution-session duration remains authoritative.
 
@@ -144,6 +148,10 @@ Agent Runner SHALL update the artifact through its existing atomic-write path af
 #### Scenario: Failed call retains reported metrics
 - **WHEN** a called agent fails after its CLI reports usage or cost
 - **THEN** its failed call record retains those metrics and they contribute to run totals
+
+#### Scenario: CLI launch failure appends failed record
+- **WHEN** an accepted call fails before its child CLI launches
+- **THEN** `run-metrics.json` contains a failed `agent-call` record and excludes that call from CLI usage-coverage denominators
 
 #### Scenario: Separate calls append separate records
 - **WHEN** one parent completes multiple separate agent calls
@@ -169,8 +177,8 @@ Agent Runner SHALL update the artifact through its existing atomic-write path af
 - **WHEN** a called child invokes its CLI and is then canceled
 - **THEN** that execution participates in usage, canonical-total, and cost coverage calculations according to the metrics it reported
 
-#### Scenario: Pre-launch rejection excluded from coverage
-- **WHEN** an agent call is rejected before launching a child CLI
+#### Scenario: Pre-acceptance rejection creates no record
+- **WHEN** an agent-call request is rejected before reaching the acceptance boundary
 - **THEN** it contributes no metric record and is excluded from coverage denominators
 
 #### Scenario: Call completion updates artifact atomically
@@ -184,10 +192,10 @@ Agent Runner SHALL update the artifact through its existing atomic-write path af
 ## Done When
 
 - Audit constants, parsing, and summary tests recognize `agent_call_start` and `agent_call_end` while preserving all existing event types and formats.
-- Accepted success, failure, and cancellation paths emit one attributable start/end pair with a stable call ID and parent attempt identity; idempotent retries do not duplicate it, and rejected requests emit only existing control-rejection evidence.
+- Accepted success, post-launch failure, launch failure, and cancellation paths emit one attributable start/end pair with a stable call ID and parent attempt identity; idempotent retries do not duplicate it, and pre-acceptance rejections emit only existing control-rejection evidence.
 - Start events contain the parent context snapshot and approved resolved/request metadata. End events contain outcome, duration, exit/session, usage/cost, and error metadata without duplicating the full response.
 - Raw output files use the call's structural identity, stay separate from parent/repeated-call output, and retain ordinary headless privacy, truncation, failure, and best-effort persistence behavior.
 - `run-metrics.json` remains schema v1 and appends additive `agent-call` records with call ID, parent attempt, target, outcome, duration, session, usage, cost, provenance, and completeness.
-- Collector tests prove successful, failed, and canceled invoked children affect totals and coverage once; pre-launch rejections do not; parent and child usage/cost are not folded together; and child duration does not inflate active run duration.
+- Collector tests prove successful, failed, and canceled invoked children affect totals and coverage once; accepted CLI launch failures append failed records without entering CLI usage-coverage denominators; pre-acceptance rejections append no record; parent and child usage/cost are not folded together; and child duration does not inflate active run duration.
 - Atomic-write and rehydration tests prove same-request retries do not append duplicates, separate calls do append separate records, older schema-v1 artifacts remain readable, corrupt-artifact recovery is unchanged, and records survive workflow resume.
 - Tests for every scenario copied into this task pass. Run `make fmt`, targeted `internal/audit`, `internal/metrics`, `internal/exec`, and `internal/liverun` tests, then `go test ./...`.

@@ -26,15 +26,15 @@ Before the first parent agent step that receives runner control integration spaw
 
 ### Requirement: Fresh authenticated attempt
 
-Every parent agent step attempt that receives runner control integration SHALL receive a fresh credential. The server SHALL accept events and requests only for the active run, step, attempt, and credential. Malformed, stale, unknown, or inactive events and requests SHALL be rejected and audited without advancing the workflow. A repeated accepted completion request ID SHALL return its original acknowledgement idempotently. A repeated accepted agent-call request ID SHALL return the same eventual or completed tool result without spawning another child. An accepted agent call SHALL be leased to its authenticated client connection; loss of that connection before delivery of a result SHALL cancel the child and cache its canceled terminal result. The credential remains usable for committed-turn evidence until the attempt concludes.
+Every parent agent step attempt that receives runner control integration SHALL receive a fresh credential. The server SHALL accept events and requests only for the active run, step, attempt, and credential. Malformed, stale, unknown, or inactive events and requests SHALL be rejected and audited without advancing the workflow. Authenticating and admitting an agent-call request for Runner processing MUST NOT by itself mark the call accepted; agent-call acceptance occurs only after the Runner validation and request-ID reservation boundary. A repeated accepted completion request ID SHALL return its original acknowledgement idempotently. A repeated accepted agent-call request ID SHALL return the same eventual or completed tool result without spawning another child. An accepted agent call SHALL be leased to its authenticated client connection; loss of that connection before delivery of a result SHALL cancel the child and cache its canceled terminal result. The credential remains usable for committed-turn evidence until the attempt concludes.
 
 #### Scenario: Current completion is accepted
 - **WHEN** a well-formed completion request carries the active attempt's credential
 - **THEN** the server accepts and acknowledges it
 
-#### Scenario: Current agent call is accepted
+#### Scenario: Current agent call is admitted for processing
 - **WHEN** a well-formed agent-call request carries the active parent attempt's credential
-- **THEN** the server accepts the request for agent-call processing
+- **THEN** the server authenticates and admits the request for Runner validation without marking the call accepted
 
 #### Scenario: Stale completion is rejected
 - **WHEN** a request carries an earlier attempt's credential

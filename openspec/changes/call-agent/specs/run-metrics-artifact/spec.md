@@ -2,7 +2,7 @@
 
 ### Requirement: Agent-call metric records and aggregation
 
-Each completed called-agent execution SHALL append a distinct `agent-call` record to `run-metrics.json`. The record SHALL include its call ID, parent attempt identity, target kind and name, outcome, duration in milliseconds, usage record, `estimated_api_cost_usd`, provenance, and completeness using ordinary agent-step metric semantics. Parent workflow-step records SHALL contain only the parent's own usage and cost; called-agent records SHALL remain separate so consumers can roll up the parent and its calls without counting any execution more than once.
+Each accepted agent call that reaches a terminal outcome SHALL append a distinct `agent-call` record to `run-metrics.json`, including an accepted call whose child CLI fails to launch. The record SHALL include its call ID, parent attempt identity, target kind and name, outcome, duration in milliseconds, usage record, `estimated_api_cost_usd`, provenance, and completeness using ordinary agent-step metric semantics. Parent workflow-step records SHALL contain only the parent's own usage and cost; called-agent records SHALL remain separate so consumers can roll up the parent and its calls without counting any execution more than once.
 
 Called-agent usage and cost SHALL contribute to run totals regardless of call outcome when the child reports them. Every called child that invokes its CLI SHALL participate in usage, canonical-total, and cost coverage calculations; a call rejected or failed before CLI launch MUST NOT participate in those coverage denominators. A called child's duration SHALL be retained on its record but MUST NOT be added to run elapsed time because that interval overlaps the waiting parent; the existing active execution-session duration remains authoritative.
 
@@ -15,6 +15,10 @@ Agent Runner SHALL update the artifact through its existing atomic-write path af
 #### Scenario: Failed call retains reported metrics
 - **WHEN** a called agent fails after its CLI reports usage or cost
 - **THEN** its failed call record retains those metrics and they contribute to run totals
+
+#### Scenario: CLI launch failure appends failed record
+- **WHEN** an accepted call fails before its child CLI launches
+- **THEN** `run-metrics.json` contains a failed `agent-call` record and excludes that call from CLI usage-coverage denominators
 
 #### Scenario: Separate calls append separate records
 - **WHEN** one parent completes multiple separate agent calls
@@ -40,8 +44,8 @@ Agent Runner SHALL update the artifact through its existing atomic-write path af
 - **WHEN** a called child invokes its CLI and is then canceled
 - **THEN** that execution participates in usage, canonical-total, and cost coverage calculations according to the metrics it reported
 
-#### Scenario: Pre-launch rejection excluded from coverage
-- **WHEN** an agent call is rejected before launching a child CLI
+#### Scenario: Pre-acceptance rejection creates no record
+- **WHEN** an agent-call request is rejected before reaching the acceptance boundary
 - **THEN** it contributes no metric record and is excluded from coverage denominators
 
 #### Scenario: Call completion updates artifact atomically

@@ -23,9 +23,9 @@ Use the shared invocation and mode-neutral control abstractions already present 
 
 The workflow-authored prompt template is the capability opt-in. Compute eligibility from the literal, case-sensitive `call_agent` substring before interpolation and engine enrichment. Carry that decision as trusted invocation metadata; interpolated params, system prompts, engine enrichment, and later chat messages must not enable the tool.
 
-The MCP process only translates protocol messages and forwards a typed request over the private socket. It must not resolve profiles, mutate session state, or spawn agents. The supervising Runner validates profiles, fields, workdirs, named declarations, self-session safety, and the one-in-flight rule, then calls the shared invocation core.
+The MCP process only translates protocol messages and forwards a typed request over the private socket. It must not resolve profiles, mutate session state, or spawn agents. Authenticated control admission is not call acceptance. The supervising Runner validates the schema, prompt-based eligibility, profiles, fields, workdirs, named declarations, self-session safety, and the one-in-flight rule, then reserves the request ID. The call becomes accepted at that boundary, before the shared invocation core attempts CLI launch.
 
-Use a unique call ID and request ID. The first accepted request owns a shared eventual result; a retry of that request waits for or receives the same result. A different request while one call is active receives `call_in_progress` and never queues, cancels, or preempts the child. Lease an accepted call to its authenticated control connection so MCP cancellation, bridge exit, disconnect, or parent-attempt deactivation terminates the child process group and retains its terminal result.
+Use a unique call ID and request ID. The first accepted request owns a shared eventual result; a retry of that request waits for or receives the same result. A different request while one call is active receives `call_in_progress` and never queues, cancels, or preempts the child. Lease an accepted call to its authenticated control connection so MCP cancellation, bridge exit, disconnect, or parent-attempt deactivation terminates the child process group and retains its terminal result. Invalid, ineligible, and distinct concurrent requests remain pre-acceptance rejections with no call execution evidence. If CLI launch fails after acceptance, retain the failed call evidence and cache its structured error for same-request-ID retries.
 
 Fresh `agent` targets do not enter the named-session map or change last-session-step bookkeeping. Named `session` targets use the declaration's profile and CLI, share the existing map with workflow steps, flush a discovered session before success returns, and reject a target whose resolved CLI/session identity equals the parent's active session. Calls always run autonomous-headless in the parent's worktree, receive the profile system prompt and supplied prompt, omit workflow-engine enrichment, and never receive control credentials or agent-call integration.
 
@@ -82,6 +82,24 @@ A `call_agent` invocation MUST include a `prompt` and exactly one target: `agent
 #### Scenario: Named-session invocation overrides are applied
 - **WHEN** a valid `session`-targeted call includes `model` or `workdir`
 - **THEN** Agent Runner applies those fields while retaining the CLI resolved from the named session's declared profile
+
+### Requirement: Agent-call acceptance boundary
+
+Agent Runner SHALL accept an agent call only after authenticating the request, validating its schema, confirming the parent is eligible to use `call_agent`, resolving and validating the target and invocation overrides, enforcing self-session and concurrency safety, and reserving the request ID. The call SHALL become accepted after those checks succeed and before Agent Runner attempts to launch the child CLI.
+
+An invalid, ineligible, or distinct concurrent request SHALL be rejected before acceptance and MUST NOT create call execution evidence. A CLI launch failure after acceptance SHALL be a failed accepted call and SHALL return a cached structured error for idempotent retries of the same request ID.
+
+#### Scenario: Validated request is accepted before launch
+- **WHEN** an authenticated agent-call request passes all Runner validation and safety checks and its request ID is reserved
+- **THEN** Agent Runner accepts the call before attempting to launch the child CLI
+
+#### Scenario: Invalid request remains rejected
+- **WHEN** an agent-call request fails schema, eligibility, target, override, self-session, or concurrency validation
+- **THEN** Agent Runner rejects it without creating call execution evidence
+
+#### Scenario: CLI launch failure is an accepted failure
+- **WHEN** an accepted call fails while launching its child CLI
+- **THEN** Agent Runner returns a structured failure and gives a retry with the same request ID that cached failure without another launch attempt
 
 ### Requirement: Synchronous autonomous execution
 
@@ -269,15 +287,15 @@ Before the first parent agent step that receives runner control integration spaw
 
 ### Requirement: Fresh authenticated attempt
 
-Every parent agent step attempt that receives runner control integration SHALL receive a fresh credential. The server SHALL accept events and requests only for the active run, step, attempt, and credential. Malformed, stale, unknown, or inactive events and requests SHALL be rejected and audited without advancing the workflow. A repeated accepted completion request ID SHALL return its original acknowledgement idempotently. A repeated accepted agent-call request ID SHALL return the same eventual or completed tool result without spawning another child. An accepted agent call SHALL be leased to its authenticated client connection; loss of that connection before delivery of a result SHALL cancel the child and cache its canceled terminal result. The credential remains usable for committed-turn evidence until the attempt concludes.
+Every parent agent step attempt that receives runner control integration SHALL receive a fresh credential. The server SHALL accept events and requests only for the active run, step, attempt, and credential. Malformed, stale, unknown, or inactive events and requests SHALL be rejected and audited without advancing the workflow. Authenticating and admitting an agent-call request for Runner processing MUST NOT by itself mark the call accepted; agent-call acceptance occurs only after the Runner validation and request-ID reservation boundary. A repeated accepted completion request ID SHALL return its original acknowledgement idempotently. A repeated accepted agent-call request ID SHALL return the same eventual or completed tool result without spawning another child. An accepted agent call SHALL be leased to its authenticated client connection; loss of that connection before delivery of a result SHALL cancel the child and cache its canceled terminal result. The credential remains usable for committed-turn evidence until the attempt concludes.
 
 #### Scenario: Current completion is accepted
 - **WHEN** a well-formed completion request carries the active attempt's credential
 - **THEN** the server accepts and acknowledges it
 
-#### Scenario: Current agent call is accepted
+#### Scenario: Current agent call is admitted for processing
 - **WHEN** a well-formed agent-call request carries the active parent attempt's credential
-- **THEN** the server accepts the request for agent-call processing
+- **THEN** the server authenticates and admits the request for Runner validation without marking the call accepted
 
 #### Scenario: Stale completion is rejected
 - **WHEN** a request carries an earlier attempt's credential
@@ -299,6 +317,7 @@ Every parent agent step attempt that receives runner control integration SHALL r
 
 - The internal MCP subcommand performs SDK lifecycle negotiation, publishes only the canonical `call_agent` schema, forwards authenticated requests over the run's private socket, emits rate-limited progress when a token is supplied, and maps success/failure into the approved MCP result semantics.
 - Table-driven tests reject missing prompts, missing or multiple targets, undeclared or reserved session names, forbidden `cli`/ `mode` combinations, invalid profile/CLI/model/workdir overrides, and named-session self-resume before a child starts.
+- Acceptance-boundary tests prove authenticated admission alone creates no call execution, successful Runner validation and request-ID reservation accept the call before launch, pre-acceptance rejection creates no call evidence, and CLI launch failure returns a cached structured failure without a second launch on same-ID retry.
 - Focused executor tests prove fresh-profile calls, first-use and resumed named-session calls, workflow-created/call-created session sharing, persistence across Runner resume, model/workdir overrides, forced autonomous-headless execution, omitted engine enrichment, and no recursive Runner tools.
 - Control tests prove fresh attempt credentials for eligible interactive and autonomous parents, exact run/step/attempt/token validation, same-request idempotency before and after completion, distinct-request `call_in_progress` rejection, and slot reuse after terminal completion.
 - Cancellation tests prove parent cancellation/exit, MCP request cancellation, bridge exit, and control disconnect terminate the entire child process group, cache a canceled result for same-ID retry, release the in-flight slot, and leave the parent attempt active where specified.

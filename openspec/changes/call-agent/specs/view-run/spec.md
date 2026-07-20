@@ -2,7 +2,7 @@
 
 ### Requirement: Agent-call hierarchy rendering
 
-A parent agent row with accepted agent calls SHALL display its call count and become expandable through the existing nested-row interaction. When expanded, each call SHALL appear as a dynamic child execution row rather than a workflow step, ordered by invocation time. A named-session target SHALL be labeled `call session: <name>` and a profile target SHALL be labeled `call agent: <profile>`. Each call row SHALL display its own status and an agent-call type glyph; the exact glyph is a design choice.
+A parent agent row with accepted agent calls SHALL display its call count and become expandable through the existing nested-row interaction. When expanded, each call SHALL appear as a dynamic child execution row rather than a workflow step, ordered by invocation time. A named-session target SHALL be labeled `call session: <name>` and a profile target SHALL be labeled `call agent: <profile>`. Each call row SHALL display its own status and an agent-call type glyph; the exact glyph is a design choice. An accepted call whose child CLI fails to launch SHALL remain visible as a failed call row.
 
 #### Scenario: Parent displays call count
 - **WHEN** a parent agent attempt has two accepted calls
@@ -19,6 +19,10 @@ A parent agent row with accepted agent calls SHALL display its call count and be
 #### Scenario: Call status is independent
 - **WHEN** a parent recovers from a failed call and later succeeds
 - **THEN** the failed call remains visible with failed status beneath the successful parent
+
+#### Scenario: CLI launch failure remains visible
+- **WHEN** an accepted call fails while launching its child CLI
+- **THEN** the run view displays that call as a failed child row beneath its parent
 
 #### Scenario: Repeated target calls remain distinct
 - **WHEN** a parent calls the same target multiple times

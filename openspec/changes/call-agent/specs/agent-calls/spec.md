@@ -48,6 +48,24 @@ A `call_agent` invocation MUST include a `prompt` and exactly one target: `agent
 - **WHEN** a valid `session`-targeted call includes `model` or `workdir`
 - **THEN** Agent Runner applies those fields while retaining the CLI resolved from the named session's declared profile
 
+### Requirement: Agent-call acceptance boundary
+
+Agent Runner SHALL accept an agent call only after authenticating the request, validating its schema, confirming the parent is eligible to use `call_agent`, resolving and validating the target and invocation overrides, enforcing self-session and concurrency safety, and reserving the request ID. The call SHALL become accepted after those checks succeed and before Agent Runner attempts to launch the child CLI.
+
+An invalid, ineligible, or distinct concurrent request SHALL be rejected before acceptance and MUST NOT create call execution evidence. A CLI launch failure after acceptance SHALL be a failed accepted call and SHALL return a cached structured error for idempotent retries of the same request ID.
+
+#### Scenario: Validated request is accepted before launch
+- **WHEN** an authenticated agent-call request passes all Runner validation and safety checks and its request ID is reserved
+- **THEN** Agent Runner accepts the call before attempting to launch the child CLI
+
+#### Scenario: Invalid request remains rejected
+- **WHEN** an agent-call request fails schema, eligibility, target, override, self-session, or concurrency validation
+- **THEN** Agent Runner rejects it without creating call execution evidence
+
+#### Scenario: CLI launch failure is an accepted failure
+- **WHEN** an accepted call fails while launching its child CLI
+- **THEN** Agent Runner returns a structured failure and gives a retry with the same request ID that cached failure without another launch attempt
+
 ### Requirement: Synchronous autonomous execution
 
 Agent Runner SHALL execute a valid agent call synchronously and SHALL keep the parent tool invocation pending until the child finishes. The child SHALL run autonomous-headless through the normal profile, system-prompt, permission, and CLI-adapter resolution paths regardless of the target profile's default mode.

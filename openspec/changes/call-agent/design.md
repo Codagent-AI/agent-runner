@@ -74,7 +74,11 @@ Before spawning any parent that receives Runner tools, the executor activates an
 - the registered agent-call handler; and
 - a context canceled when the attempt ends.
 
-The control server validates every request against the active attempt. For agent calls, the first accepted request ID creates a shared in-progress result. A duplicate request ID waits for or receives that same result. A different request while a call is active receives `call_in_progress`, including the active target and elapsed time plus an instruction that calls are serial and the caller must wait for the active call to finish or be canceled. A later request never preempts an active child because that child may already be mutating the worktree.
+The control server first authenticates each request against the active attempt and admits a valid envelope for agent-call processing. Admission is not execution acceptance. The Runner then performs schema validation, prompt-based eligibility checks, target and override resolution, workdir validation, self-session protection, and the one-in-flight check. A call becomes accepted only after all of those checks pass and its request ID is reserved, immediately before the Runner attempts to launch the CLI. Invalid, ineligible, and distinct concurrent requests are rejected before acceptance and create no call execution evidence.
+
+The first accepted request ID creates a shared in-progress result and receives a unique call ID. A duplicate request ID waits for or receives that same result. A different request while a call is active receives `call_in_progress`, including the active target and elapsed time plus an instruction that calls are serial and the caller must wait for the active call to finish or be canceled. A later request never preempts an active child because that child may already be mutating the worktree.
+
+Because acceptance precedes process launch, a CLI launch failure is a failed accepted call. The Runner records its start and failed end evidence, appends a failed metric record that is excluded from CLI usage-coverage denominators, exposes it as a failed call node, and caches the structured failure for same-request-ID retries.
 
 The accepted MCP request and its authenticated control connection lease the call. MCP cancellation closes the bridge-side control request; bridge exit or connection loss has the same effect. The control server cancels the child process group, records its terminal evidence, caches the canceled result for same-request-ID retries, and releases the in-flight slot while keeping the parent attempt active. Deactivating the parent attempt also cancels the active call and releases waiting clients.
 
@@ -166,7 +170,7 @@ A successful MCP result has this conceptual shape:
 }
 ```
 
-Failures use MCP tool-error semantics with a stable error code, message, and requested target where available. The tool description states that calls are synchronous and serial, called children receive the profile system prompt and call prompt but no workflow-engine step enrichment, and a second call must wait for the active call. `call_in_progress` repeats that instruction in-band for models that attempt parallel tool use. Results omit raw session IDs, usage, and cost. The parent remains active and decides whether to retry.
+Failures use MCP tool-error semantics with a stable error code, message, and requested target where available. A failure after acceptance, including CLI launch failure, is cached as the terminal result for that request ID; a pre-acceptance rejection is not represented as a call execution. The tool description states that calls are synchronous and serial, called children receive the profile system prompt and call prompt but no workflow-engine step enrichment, and a second call must wait for the active call. `call_in_progress` repeats that instruction in-band for models that attempt parallel tool use. Results omit raw session IDs, usage, and cost. The parent remains active and decides whether to retry.
 
 Alternatives considered:
 
@@ -177,7 +181,7 @@ Alternatives considered:
 
 ### 7. Represent calls as nested execution evidence
 
-Each accepted call receives a unique `call_id`; its structural prefix appends `call:<call-id>` to the parent path. Audit events carry both the call ID and active parent-attempt identity:
+Each accepted call receives a unique `call_id`; its structural prefix appends `call:<call-id>` to the parent path. Acceptance occurs before CLI launch, so the start event is written before launch is attempted and a launch failure still produces the paired failed end event. Audit events carry both the call ID and active parent-attempt identity:
 
 ```text
 step_start:       review-assumptions
@@ -190,7 +194,7 @@ The call's filtered output uses ordinary headless-agent persistence, privacy, an
 
 `run-metrics.json` remains schema v1. Its existing `steps[]` execution-record union gains records with `kind: "agent-call"` and additive `call_id`, `parent_attempt_id`, `target_kind`, and `target_name` fields. The remaining outcome, duration, session, usage, and cost fields reuse ordinary agent-record semantics.
 
-Parent records retain only parent usage and cost. Agent-call records contribute to aggregate usage, cost, and coverage exactly once, but their overlapping duration does not increase run active duration. Only completed calls are durable metric records. Rejected requests produce control-rejection audit evidence but no call event pair or metric record.
+Parent records retain only parent usage and cost. Agent-call records contribute to aggregate usage, cost, and coverage exactly once, but their overlapping duration does not increase run active duration. Every accepted call that reaches a terminal outcome is a durable metric record, including a launch failure; a launch failure has failed outcome and does not participate in CLI usage-coverage denominators. Requests rejected before acceptance produce control-rejection audit evidence but no call event pair or metric record.
 
 Named-session state is flushed through `state.json`; call results are reconstructed from audit, metrics, and output artifacts rather than added to workflow sequencing state.
 
@@ -212,7 +216,7 @@ Rows use explicit target labels and `↗` as the agent-call type glyph:
   ● ↗ call agent: implementor
 ```
 
-For autonomous parents, call rows appear and stream output live. Auto-follow enters the active call and returns to the next active execution afterward. For interactive parents, the CLI retains terminal ownership; accumulated call evidence appears when the run TUI resumes.
+For autonomous parents, call rows appear at acceptance and stream output live after launch. A CLI launch failure transitions that row to failed and remains inspectable even though no child session exists. Auto-follow enters the active call and returns to the next active execution afterward. For interactive parents, the CLI retains terminal ownership; accumulated call evidence appears when the run TUI resumes.
 
 Completed summaries treat a parent with calls as a container:
 

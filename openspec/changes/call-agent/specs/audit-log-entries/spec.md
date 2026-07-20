@@ -2,7 +2,7 @@
 
 ### Requirement: Agent-call event data
 
-Every accepted agent call SHALL emit exactly one `agent_call_start` and one `agent_call_end` beneath the parent step's existing nesting prefix. Both entries SHALL include a unique `call_id` and the parent attempt identity. Repeated calls from one parent SHALL have distinct call IDs, while an idempotent retry of one request MUST NOT duplicate its event pair.
+Every accepted agent call SHALL emit exactly one `agent_call_start` and one `agent_call_end` beneath the parent step's existing nesting prefix. Agent Runner SHALL emit `agent_call_start` after the call passes the acceptance boundary and before attempting to launch its child CLI. Both entries SHALL include a unique `call_id` and the parent attempt identity. Repeated calls from one parent SHALL have distinct call IDs, while an idempotent retry of one request MUST NOT duplicate its event pair.
 
 The `agent_call_start` entry SHALL include the requested prompt; target kind and name; effective working directory; and resolved profile, CLI, model, and session metadata available at start. The `agent_call_end` entry SHALL include the outcome, duration, exit code, discovered session ID, usage, cost, and error information following ordinary agent-step rules.
 
@@ -16,6 +16,10 @@ The full child response MUST NOT be duplicated in `audit.log`. Called-child outp
 - **WHEN** an accepted agent call starts a child that fails
 - **THEN** the audit log retains its start event and writes an end event containing the failed outcome and error metadata
 
+#### Scenario: CLI launch failure emits failed pair
+- **WHEN** an accepted agent call fails while launching its child CLI
+- **THEN** the audit log contains its start event and a failed end event with the launch error
+
 #### Scenario: Repeated calls have distinct identities
 - **WHEN** one parent completes multiple separate agent calls
 - **THEN** each call's event pair has a distinct call ID
@@ -24,8 +28,8 @@ The full child response MUST NOT be duplicated in `audit.log`. Called-child outp
 - **WHEN** an accepted agent-call request is retried with the same request ID
 - **THEN** the audit log contains only the original call's start/end pair
 
-#### Scenario: Rejected request emits no call pair
-- **WHEN** an agent-call request is rejected before a child starts
+#### Scenario: Pre-acceptance rejection emits no call pair
+- **WHEN** an agent-call request fails before reaching the acceptance boundary
 - **THEN** Agent Runner records the rejection through existing control-rejection auditing and emits no agent-call start/end pair
 
 #### Scenario: Full response omitted from audit entries

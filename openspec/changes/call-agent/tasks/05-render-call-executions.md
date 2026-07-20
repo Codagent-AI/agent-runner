@@ -25,7 +25,7 @@ Relevant implementation and documentation paths:
 
 Add a dynamic agent-call node beneath the exact parent attempt identified by persisted evidence. It is an execution node, never a workflow-definition step and never part of workflow sequencing. Repeated targets remain distinct and ordered by invocation time. Use the design's `↗` type glyph and explicit labels `call session: <name>` and `call agent: <profile>`.
 
-A parent with accepted calls displays `(<n> calls)` and becomes expandable through the existing inline nested-row interaction. The call node owns its status, output, error, resolved target/agent/session data, timing, usage, and cost. Load stdout/stderr from the call-specific output files; do not reconstruct a child response from `audit.log`.
+A parent with accepted calls displays `(<n> calls)` and becomes expandable through the existing inline nested-row interaction. Insert a call node when the call becomes accepted, before CLI launch. A CLI launch failure leaves that node visible with failed status and its failed metric record. The call node owns its status, output, error, resolved target/agent/session data, timing, usage, and cost. Load stdout/stderr from the call-specific output files; do not reconstruct a child response from `audit.log`.
 
 For autonomous-headless parents, live events create the call node immediately and call-specific output chunks update its detail pane. Existing auto-follow moves into the active call and returns to the next active execution afterward; manual navigation disables auto-follow. Apply active-child status suppression so only the expanded running child blinks. For interactive parents, preserve terminal ownership and rebuild accumulated calls when the TUI resumes instead of drawing over the CLI.
 
@@ -39,7 +39,7 @@ Complete user documentation in this final user-visible delivery unit so it can d
 
 ### Requirement: Agent-call hierarchy rendering
 
-A parent agent row with accepted agent calls SHALL display its call count and become expandable through the existing nested-row interaction. When expanded, each call SHALL appear as a dynamic child execution row rather than a workflow step, ordered by invocation time. A named-session target SHALL be labeled `call session: <name>` and a profile target SHALL be labeled `call agent: <profile>`. Each call row SHALL display its own status and an agent-call type glyph; the exact glyph is a design choice.
+A parent agent row with accepted agent calls SHALL display its call count and become expandable through the existing nested-row interaction. When expanded, each call SHALL appear as a dynamic child execution row rather than a workflow step, ordered by invocation time. A named-session target SHALL be labeled `call session: <name>` and a profile target SHALL be labeled `call agent: <profile>`. Each call row SHALL display its own status and an agent-call type glyph; the exact glyph is a design choice. An accepted call whose child CLI fails to launch SHALL remain visible as a failed call row.
 
 #### Scenario: Parent displays call count
 - **WHEN** a parent agent attempt has two accepted calls
@@ -56,6 +56,10 @@ A parent agent row with accepted agent calls SHALL display its call count and be
 #### Scenario: Call status is independent
 - **WHEN** a parent recovers from a failed call and later succeeds
 - **THEN** the failed call remains visible with failed status beneath the successful parent
+
+#### Scenario: CLI launch failure remains visible
+- **WHEN** an accepted call fails while launching its child CLI
+- **THEN** the run view displays that call as a failed child row beneath its parent
 
 #### Scenario: Repeated target calls remain distinct
 - **WHEN** a parent calls the same target multiple times
@@ -95,7 +99,7 @@ When the run is inactive, a completed called-agent execution with a known CLI se
 
 ### Requirement: Live agent-call visibility
 
-When an autonomous-headless parent invokes `call_agent`, the live run view SHALL insert the accepted call beneath its parent, update the call's status independently, and stream its stdout and stderr through the call's detail pane using ordinary headless-agent behavior. Parent and called-child output MUST remain separate.
+When an autonomous-headless parent invokes `call_agent`, the live run view SHALL insert the call beneath its parent when it becomes accepted, before child CLI launch, update the call's status independently, and stream its stdout and stderr through the call's detail pane using ordinary headless-agent behavior. Parent and called-child output MUST remain separate. If the CLI fails to launch, the inserted call SHALL transition to failed and remain visible.
 
 When auto-follow is engaged, the cursor SHALL move to an active call and SHALL return to the next active execution point after the call finishes. Existing manual navigation SHALL pause auto-follow. When an expanded parent has an active call child, the child SHALL carry the sole running indicator using the existing active-child status-suppression behavior.
 
@@ -104,6 +108,10 @@ When an interactive parent owns the terminal, Agent Runner MUST NOT interrupt it
 #### Scenario: Autonomous call appears live
 - **WHEN** an autonomous-headless parent starts an accepted agent call
 - **THEN** the live run view inserts an in-progress call row beneath that parent
+
+#### Scenario: CLI launch failure updates live row
+- **WHEN** an accepted autonomous call fails while launching its child CLI
+- **THEN** its inserted live row transitions to failed without disappearing
 
 #### Scenario: Called-child output streams separately
 - **WHEN** an active called child produces stdout or stderr
@@ -139,7 +147,7 @@ When an interactive parent owns the terminal, Agent Runner MUST NOT interrupt it
 
 An agent step with accepted agent calls SHALL be a drillable container in the run summary. In its enclosing scope, the parent row SHALL roll up the parent turn's own usage and cost together with every called-agent execution exactly once. Its duration SHALL use the parent step's wall-clock attempt duration, including all repeated attempts, and MUST NOT add called-agent durations because they overlap time spent waiting within the parent.
 
-Entering the parent row SHALL show a `parent turn` row followed by one row per accepted call in invocation order. The `parent turn` row SHALL aggregate only the parent step's own attempts. Each call row SHALL show its independent status and metrics and SHALL use `call session: <name>` or `call agent: <profile>` to identify its target. The scope Total SHALL sum usage and cost from the `parent turn` and call rows while retaining the parent step's wall-clock duration. An agent step without accepted calls SHALL remain an ordinary leaf row.
+Entering the parent row SHALL show a `parent turn` row followed by one row per accepted call in invocation order. The `parent turn` row SHALL aggregate only the parent step's own attempts. Each call row SHALL show its independent status and metrics and SHALL use `call session: <name>` or `call agent: <profile>` to identify its target. An accepted call whose child CLI failed to launch SHALL appear as a failed call row with its failed metric record. The scope Total SHALL sum usage and cost from the `parent turn` and call rows while retaining the parent step's wall-clock duration. An agent step without accepted calls SHALL remain an ordinary leaf row.
 
 #### Scenario: Parent row rolls up own and call metrics
 - **WHEN** a parent agent step and two called agents report usage or cost
@@ -161,6 +169,10 @@ Entering the parent row SHALL show a `parent turn` row followed by one row per a
 - **WHEN** a parent recovers from a failed call and completes successfully
 - **THEN** the drilled summary retains the failed call row beneath the successful parent scope
 
+#### Scenario: CLI launch failure appears in summary
+- **WHEN** an accepted call fails while launching its child CLI
+- **THEN** the drilled summary contains its failed call row and failed metric record
+
 #### Scenario: Repeated parent attempts are aggregated
 - **WHEN** a logical parent agent step runs more than one attempt and those attempts make accepted calls
 - **THEN** `parent turn` aggregates the parent attempts while each accepted call remains a separate chronological row
@@ -178,6 +190,6 @@ Entering the parent row SHALL show a `parent turn` row followed by one row per a
 - Live autonomous calls insert and update independently, stream stdout and stderr only to the child, transfer auto-follow into and out of the call, respect manual navigation, and suppress the parent's duplicate running indicator.
 - Interactive parents retain terminal ownership throughout calls; all accumulated rows, details, and output become visible when the run TUI resumes.
 - Completed summary tests prove parent-turn/call drill-down ordering, retry aggregation, independent failed-call visibility, exact-once usage/cost rollup, unchanged coverage semantics, non-additive child duration, and leaf behavior for agents without calls.
+- Launch-failure view tests prove an accepted call appears before CLI launch, transitions to failed if launch fails, remains visible in live and reconstructed views, and contributes its failed metric record to the completed drill-down without usage coverage.
 - `docs/agent-calls.md` and the linked existing docs accurately describe the shipped contract and artifact/UI behavior, with no internal MCP subcommand presented as a user API.
 - Tests for every scenario copied into this task pass. Run `make fmt`, targeted `internal/runview` and `internal/liverun` tests, `go test ./...`, and `make lint`.
-

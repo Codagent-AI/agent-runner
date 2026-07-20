@@ -4,7 +4,7 @@
 
 An agent step with accepted agent calls SHALL be a drillable container in the run summary. In its enclosing scope, the parent row SHALL roll up the parent turn's own usage and cost together with every called-agent execution exactly once. Its duration SHALL use the parent step's wall-clock attempt duration, including all repeated attempts, and MUST NOT add called-agent durations because they overlap time spent waiting within the parent.
 
-Entering the parent row SHALL show a `parent turn` row followed by one row per accepted call in invocation order. The `parent turn` row SHALL aggregate only the parent step's own attempts. Each call row SHALL show its independent status and metrics and SHALL use `call session: <name>` or `call agent: <profile>` to identify its target. The scope Total SHALL sum usage and cost from the `parent turn` and call rows while retaining the parent step's wall-clock duration. An agent step without accepted calls SHALL remain an ordinary leaf row.
+Entering the parent row SHALL show a `parent turn` row followed by one row per accepted call in invocation order. The `parent turn` row SHALL aggregate only the parent step's own attempts. Each call row SHALL show its independent status and metrics and SHALL use `call session: <name>` or `call agent: <profile>` to identify its target. An accepted call whose child CLI failed to launch SHALL appear as a failed call row with its failed metric record. The scope Total SHALL sum usage and cost from the `parent turn` and call rows while retaining the parent step's wall-clock duration. An agent step without accepted calls SHALL remain an ordinary leaf row.
 
 #### Scenario: Parent row rolls up own and call metrics
 - **WHEN** a parent agent step and two called agents report usage or cost
@@ -25,6 +25,10 @@ Entering the parent row SHALL show a `parent turn` row followed by one row per a
 #### Scenario: Failed call remains independently visible
 - **WHEN** a parent recovers from a failed call and completes successfully
 - **THEN** the drilled summary retains the failed call row beneath the successful parent scope
+
+#### Scenario: CLI launch failure appears in summary
+- **WHEN** an accepted call fails while launching its child CLI
+- **THEN** the drilled summary contains its failed call row and failed metric record
 
 #### Scenario: Repeated parent attempts are aggregated
 - **WHEN** a logical parent agent step runs more than one attempt and those attempts make accepted calls
