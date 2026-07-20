@@ -129,9 +129,15 @@ The runner SHALL resolve profile set `extends` after merging profile sets across
 3. Walk the `extends` chain from the profile set toward its ancestors, composing effective agents maps such that each child's agents override the parent's agents by name (wholesale; no field-level merge).
 4. Run agent-level validation (base completeness, allowed field values, agent-level cycle detection) against each profile set's effective agents map.
 
+Built-in agents are fallback entries only when global and project configuration do not explicitly select a parent for that profile set. When a user layer declares `extends`, the selected parent's agents replace built-in agents as the fallback; agents declared in global and project layers for the child still merge normally and override the parent.
+
 #### Scenario: Merge-then-extend across global and project
 - **WHEN** the global file contributes `team_base.agents: { autonomous_base }` and `copilot.agents: { planner }`, and the project file contributes `copilot.extends: team_base` and `copilot.agents: { implementor }`
 - **THEN** the effective `copilot` profile set contains `autonomous_base` (from `team_base`), `planner` (from global `copilot`), and `implementor` (from project `copilot`)
+
+#### Scenario: User-selected parent replaces built-in fallback agents
+- **WHEN** global configuration defines a `codex` profile set, declares `default.extends: codex`, and does not declare `default.agents.implementor`
+- **THEN** the effective `default` profile inherits `implementor` from `codex`; the built-in `default.agents.implementor` does not shadow the user-selected parent
 
 #### Scenario: Multi-level profile set chain
 - **WHEN** profile set `a` extends `b`, and profile set `b` extends `c`; `c` defines `{ autonomous_base }`, `b` defines `{ planner }`, `a` defines `{ implementor }`
