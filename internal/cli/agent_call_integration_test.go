@@ -201,6 +201,9 @@ func TestCodexAgentCallRejectsEquivalentReservedServerSpellings(t *testing.T) {
 	for _, table := range []string{
 		"[mcp_servers.'agent-runner']\ncommand = 'other'\n",
 		"[mcp_servers . agent-runner]\ncommand = 'other'\n",
+		"[\"mcp_servers\".\"agent-runner\"]\ncommand = 'other'\n",
+		"mcp_servers.'agent-runner'.command = 'other'\n",
+		"[mcp_servers]\n'agent-runner' = { command = 'other' }\n",
 	} {
 		t.Run(strings.ReplaceAll(strings.TrimSpace(table), " ", "_"), func(t *testing.T) {
 			adapter, input := agentCallTestInput(t, "codex", ContextAutonomousHeadless)
@@ -212,6 +215,24 @@ func TestCodexAgentCallRejectsEquivalentReservedServerSpellings(t *testing.T) {
 				t.Fatalf("prepare invocation error = %v, want reserved-server conflict", err)
 			}
 		})
+	}
+}
+
+func TestCodexAgentCallConflictDetectionIgnoresCommentsAndValues(t *testing.T) {
+	config := []byte(`# [mcp_servers.'agent-runner']
+note = "mcp_servers.'agent-runner'"
+multiline = '''
+[mcp_servers.agent-runner]
+'''
+[mcp_servers.other]
+command = "agent-runner"
+`)
+	conflict, err := codexConfigHasAgentCallConflict(config)
+	if err != nil {
+		t.Fatalf("detect conflict: %v", err)
+	}
+	if conflict {
+		t.Fatal("comments and string values must not be interpreted as the reserved MCP server")
 	}
 }
 

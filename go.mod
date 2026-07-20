@@ -15,7 +15,6 @@ require (
 	github.com/mattn/go-runewidth v0.0.19
 	github.com/modelcontextprotocol/go-sdk v1.6.0
 	github.com/muesli/termenv v0.16.0
-	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/rogpeppe/go-internal v1.14.1
 	golang.org/x/sys v0.42.0
 	gopkg.in/yaml.v3 v3.0.1
