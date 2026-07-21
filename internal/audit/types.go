@@ -13,6 +13,8 @@ const (
 	EventIterationEnd           EventType = "iteration_end"
 	EventSubWorkflowStart       EventType = "sub_workflow_start"
 	EventSubWorkflowEnd         EventType = "sub_workflow_end"
+	EventAgentCallStart         EventType = "agent_call_start"
+	EventAgentCallEnd           EventType = "agent_call_end"
 	EventError                  EventType = "error"
 	EventCompletionRequested    EventType = "completion_requested"
 	EventCompletionAcknowledged EventType = "completion_acknowledged"

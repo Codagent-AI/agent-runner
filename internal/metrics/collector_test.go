@@ -110,6 +110,167 @@ func TestCollectorProjectsTerminalEventsAndNormalizesAttempts(t *testing.T) {
 	}
 }
 
+func TestCollectorProjectsAgentCallAndAggregatesParentAndChildOnce(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(dir, "run", "workflow", started)
+	c.now = func() time.Time { return started.Add(10 * time.Second) }
+	c.Process(event(audit.EventRunStart, started, nil))
+	parentCost := 0.50
+	childCost := 0.20
+	c.Process(stepEvent(started.Add(10*time.Second), agentIdentity("parent", true), collectedUsage(10), &parentCost, "success", 10_000))
+	c.Process(audit.Event{Timestamp: started.Add(8 * time.Second).Format(time.RFC3339Nano), Prefix: "[parent, call:call-1]", Type: audit.EventAgentCallEnd, Data: map[string]any{
+		DataIdentity: model.ExecutionIdentity{StepID: "call-1", Prefix: "parent", StepType: "agent", Kind: "agent-call", CLI: "claude", SessionID: "child-session", AgentInvoked: true},
+		DataUsage:    collectedUsage(4), DataEstimatedAPICostUSD: &childCost,
+		"call_id": "call-1", "parent_attempt_id": "attempt-1", "target_kind": "agent", "target_name": "implementor",
+		"outcome": "success", "duration_ms": int64(3_000),
+	}})
+
+	a := readArtifact(t, dir)
+	if len(a.Steps) != 2 {
+		t.Fatalf("records = %+v, want parent and agent call", a.Steps)
+	}
+	if a.Steps[1].Kind != "agent-call" || a.Steps[1].DurationMS != 3_000 || a.Steps[1].SessionID != "child-session" {
+		t.Fatalf("agent-call record = %+v", a.Steps[1])
+	}
+	if a.Steps[1].Usage == nil || a.Steps[1].Usage.Source != "test" || a.Steps[1].Usage.Completeness != model.CompletenessComplete {
+		t.Fatalf("agent-call usage provenance = %+v", a.Steps[1].Usage)
+	}
+	encoded, err := json.Marshal(a.Steps[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(encoded, &raw); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{
+		"call_id": "call-1", "parent_attempt_id": "attempt-1", "target_kind": "agent", "target_name": "implementor",
+	} {
+		if got := raw[key]; got != want {
+			t.Fatalf("%s = %#v, want %q", key, got, want)
+		}
+	}
+	totals := c.Totals()
+	if totals.Tokens[model.TokenInput] != 14 || totals.EstimatedAPICostUSD == nil || *totals.EstimatedAPICostUSD != 0.70 {
+		t.Fatalf("totals = %+v, want parent and child counted once", totals)
+	}
+	if totals.ActiveDurationMS != 10_000 {
+		t.Fatalf("active duration = %dms, want overlapping child excluded", totals.ActiveDurationMS)
+	}
+}
+
+func TestCollectorDeduplicatesAgentCallTerminalEventsByCallID(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(dir, "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, nil))
+	first := agentCallEvent(started.Add(time.Second), "call-1", true, collectedUsage(3), nil, "success", 100)
+	c.Process(first)
+	c.Process(first)
+	c.Process(agentCallEvent(started.Add(2*time.Second), "call-2", true, collectedUsage(5), nil, "success", 200))
+
+	a := readArtifact(t, dir)
+	if len(a.Steps) != 2 || a.Steps[0].CallID != "call-1" || a.Steps[1].CallID != "call-2" {
+		t.Fatalf("agent-call records = %+v, want one per call ID", a.Steps)
+	}
+	if got := c.Totals().Tokens[model.TokenInput]; got != 8 {
+		t.Fatalf("total input tokens = %d, want 8", got)
+	}
+}
+
+func TestCollectorAgentCallCoverageTracksOnlyInvokedChildren(t *testing.T) {
+	for _, outcome := range []string{"success", "failed", "aborted"} {
+		t.Run(outcome, func(t *testing.T) {
+			started := mustTime(t, "2026-07-17T10:00:00Z")
+			c := NewCollector(t.TempDir(), "run", "workflow", started)
+			c.Process(event(audit.EventRunStart, started, nil))
+			usage := collectedUsage(3)
+			usage.TokenTotals = &model.TokenTotals{Input: 3, Output: 2, Total: 5}
+			cost := 0.25
+			c.Process(agentCallEvent(started.Add(time.Second), "call-1", true, usage, &cost, outcome, 100))
+
+			totals := c.Totals()
+			if totals.UsageCoverage != model.CoverageComplete || totals.TokenTotalCoverage != model.CoverageComplete || totals.CostCoverage != model.CoverageComplete {
+				t.Fatalf("%s coverage = usage %q canonical %q cost %q", outcome, totals.UsageCoverage, totals.TokenTotalCoverage, totals.CostCoverage)
+			}
+			if totals.Tokens[model.TokenInput] != 3 || totals.EstimatedAPICostUSD == nil || *totals.EstimatedAPICostUSD != cost {
+				t.Fatalf("%s totals = %+v, want reported usage and cost", outcome, totals)
+			}
+		})
+	}
+
+	t.Run("accepted launch failure is recorded but excluded", func(t *testing.T) {
+		dir := t.TempDir()
+		started := mustTime(t, "2026-07-17T10:00:00Z")
+		c := NewCollector(dir, "run", "workflow", started)
+		c.Process(event(audit.EventRunStart, started, nil))
+		c.Process(agentCallEvent(started.Add(time.Second), "call-1", false, unavailableUsage(), nil, "failed", 25))
+
+		a := readArtifact(t, dir)
+		if len(a.Steps) != 1 || a.Steps[0].AgentInvoked || a.Steps[0].Outcome != "failed" {
+			t.Fatalf("launch-failure record = %+v", a.Steps)
+		}
+		totals := c.Totals()
+		if totals.UsageCoverage != model.CoverageNone || totals.TokenTotalCoverage != model.CoverageNone || totals.CostCoverage != model.CoverageNone {
+			t.Fatalf("launch-failure coverage = %+v", totals)
+		}
+	})
+}
+
+func TestCollectorPreAcceptanceRejectionCreatesNoCallRecordOrCoverage(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(dir, "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, nil))
+	c.Process(audit.Event{
+		Timestamp: started.Add(time.Second).Format(time.RFC3339Nano),
+		Type:      audit.EventControlRejected,
+		Data:      map[string]any{"message_type": "agent_call", "request_id": "rejected"},
+	})
+	c.Process(event(audit.EventRunEnd, started.Add(2*time.Second), map[string]any{"outcome": "failed"}))
+
+	a := readArtifact(t, dir)
+	if len(a.Steps) != 0 {
+		t.Fatalf("pre-acceptance rejection records = %+v, want none", a.Steps)
+	}
+	if a.Totals.UsageCoverage != model.CoverageNone || a.Totals.TokenTotalCoverage != model.CoverageNone || a.Totals.CostCoverage != model.CoverageNone {
+		t.Fatalf("pre-acceptance rejection coverage = %+v", a.Totals)
+	}
+}
+
+func TestCollectorRehydratesAgentCallsAcrossResumeAndReadsOlderSchemaV1(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	first := NewCollector(dir, "run", "workflow", started)
+	first.Process(event(audit.EventRunStart, started, nil))
+	first.Process(agentCallEvent(started.Add(time.Second), "call-before", true, collectedUsage(2), nil, "success", 100))
+
+	resumedAt := started.Add(time.Hour)
+	second := NewCollector(dir, "run", "workflow", resumedAt)
+	second.Process(event(audit.EventRunStart, resumedAt, map[string]any{"resumed": true}))
+	second.Process(agentCallEvent(resumedAt.Add(time.Second), "call-before", true, collectedUsage(2), nil, "success", 100))
+	second.Process(agentCallEvent(resumedAt.Add(2*time.Second), "call-after", true, collectedUsage(3), nil, "success", 200))
+
+	a := readArtifact(t, dir)
+	if len(a.Steps) != 2 || a.Steps[0].CallID != "call-before" || a.Steps[1].CallID != "call-after" {
+		t.Fatalf("resumed agent calls = %+v", a.Steps)
+	}
+
+	legacyDir := t.TempDir()
+	legacy := `{"schema_version":1,"run_id":"run","workflow":"workflow","history_complete":true,"sessions":[],"steps":[{"record_id":"old#1","prefix":"","id":"old","kind":"step","type":"shell","attempt":1,"iteration":null,"outcome":"success","duration_ms":1,"agent_invoked":false,"usage":null,"estimated_api_cost_usd":null}],"totals":{"active_duration_ms":0,"tokens":{},"usage_coverage":"none","token_totals":null,"token_total_coverage":"none","estimated_api_cost_usd":null,"cost_coverage":"none"}}`
+	if err := os.WriteFile(filepath.Join(legacyDir, FileName), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	legacyCollector := NewCollector(legacyDir, "run", "workflow", resumedAt)
+	legacyCollector.Process(event(audit.EventRunStart, resumedAt, map[string]any{"resumed": true}))
+	legacyCollector.Process(agentCallEvent(resumedAt.Add(time.Second), "call-new", false, unavailableUsage(), nil, "failed", 10))
+	legacyArtifact := readArtifact(t, legacyDir)
+	if len(legacyArtifact.Steps) != 2 || legacyArtifact.Steps[0].ID != "old" || legacyArtifact.Steps[1].CallID != "call-new" {
+		t.Fatalf("legacy schema-v1 rehydration = %+v", legacyArtifact.Steps)
+	}
+}
+
 func TestArtifactKeepsEmptyTotalsAndNullCostExplicit(t *testing.T) {
 	dir := t.TempDir()
 	started := mustTime(t, "2026-07-17T10:00:00Z")
@@ -779,6 +940,15 @@ func event(typ audit.EventType, at time.Time, data map[string]any) audit.Event {
 func stepEvent(at time.Time, identity model.ExecutionIdentity, usage model.UsageRecord, cost *float64, outcome string, duration int64) audit.Event { //nolint:gocritic // value copies keep test cases concise and isolated
 	return audit.Event{Timestamp: at.UTC().Format(time.RFC3339Nano), Prefix: identity.Prefix, Type: audit.EventStepEnd, Data: map[string]any{
 		DataIdentity: identity, DataUsage: usage, DataEstimatedAPICostUSD: cost, "outcome": outcome, "duration_ms": duration,
+	}}
+}
+
+func agentCallEvent(at time.Time, callID string, invoked bool, usage model.UsageRecord, cost *float64, outcome string, duration int64) audit.Event { //nolint:gocritic // value copies keep test cases concise and isolated
+	return audit.Event{Timestamp: at.UTC().Format(time.RFC3339Nano), Prefix: "[parent, call:" + callID + "]", Type: audit.EventAgentCallEnd, Data: map[string]any{
+		DataIdentity: model.ExecutionIdentity{StepID: callID, Prefix: "parent", StepType: "agent", Kind: "agent-call", CLI: usage.CLI, AgentInvoked: invoked},
+		DataUsage:    usage, DataEstimatedAPICostUSD: cost,
+		"call_id": callID, "parent_attempt_id": "attempt-1", "target_kind": "agent", "target_name": "implementor",
+		"outcome": outcome, "duration_ms": duration,
 	}}
 }
 

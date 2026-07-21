@@ -54,11 +54,19 @@ type AgentCallHandlerOptions struct {
 }
 
 type acceptedAgentCall struct {
-	callID   string
-	target   agentcall.Target
-	started  time.Time
-	done     chan struct{}
-	response json.RawMessage
+	callID          string
+	requestID       string
+	parentAttemptID string
+	target          agentcall.Target
+	started         time.Time
+	done            chan struct{}
+	response        json.RawMessage
+}
+
+type agentCallExecution struct {
+	response     agentcall.Response
+	invocation   AgentInvocationResult
+	errorMessage string
 }
 
 // AgentCallHandler is attempt-scoped. It owns validation, acceptance,
@@ -138,12 +146,13 @@ func (h *AgentCallHandler) HandleAgentCall(ctx context.Context, envelope control
 		})
 	}
 	record := &acceptedAgentCall{
-		callID: h.options.NewID(), target: resolved.target,
+		callID: h.options.NewID(), requestID: envelope.RequestID, parentAttemptID: envelope.AttemptID, target: resolved.target,
 		started: h.options.Now(), done: make(chan struct{}),
 	}
 	h.accepted[envelope.RequestID] = record
 	h.active = record
 	h.mu.Unlock()
+	h.emitAgentCallStart(record, resolved)
 
 	if h.options.OnAccepted != nil {
 		h.options.OnAccepted(AgentCallAccepted{
@@ -153,8 +162,9 @@ func (h *AgentCallHandler) HandleAgentCall(ctx context.Context, envelope control
 		})
 	}
 
-	response := h.execute(ctx, record, resolved)
-	raw := marshalAgentCallResponse(response)
+	execution := h.execute(ctx, record, resolved)
+	h.emitAgentCallEnd(record, resolved, &execution)
+	raw := marshalAgentCallResponse(execution.response)
 	h.mu.Lock()
 	record.response = raw
 	if h.active == record {
@@ -182,15 +192,16 @@ func (h *AgentCallHandler) reject(envelope control.AgentCallRequest, failure *ag
 }
 
 type resolvedAgentCall struct {
-	request   agentcall.Request
-	target    agentcall.Target
-	profile   *config.ResolvedAgent
-	adapter   cli.Adapter
-	cliName   string
-	model     string
-	workdir   string
-	sessionID string
-	resume    bool
+	request     agentcall.Request
+	target      agentcall.Target
+	profile     *config.ResolvedAgent
+	adapter     cli.Adapter
+	cliName     string
+	model       string
+	workdir     string
+	sessionID   string
+	resume      bool
+	profileName string
 }
 
 func (h *AgentCallHandler) resolve(raw json.RawMessage) (*resolvedAgentCall, *agentcall.Error) {
@@ -260,7 +271,7 @@ func (h *AgentCallHandler) resolve(raw json.RawMessage) (*resolvedAgentCall, *ag
 	return &resolvedAgentCall{
 		request: request, target: target, profile: &resolvedProfile,
 		adapter: adapter, cliName: resolvedProfile.CLI, model: resolvedProfile.Model,
-		workdir: workdir, sessionID: sessionID, resume: sessionID != "",
+		workdir: workdir, sessionID: sessionID, resume: sessionID != "", profileName: profileName,
 	}, nil
 }
 
@@ -328,7 +339,7 @@ func canonicalContainedDirectory(root, candidate string) (string, error) {
 	return candidate, nil
 }
 
-func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCall, call *resolvedAgentCall) agentcall.Response {
+func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCall, call *resolvedAgentCall) agentCallExecution {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -355,25 +366,28 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 	}
 	args, err := cli.BuildInvocationArgs(call.adapter, &input)
 	if err != nil {
-		return acceptedFailure(record, agentcall.CodeExecutionFailed, "prepare called agent: "+err.Error(), call.target)
+		return h.preLaunchFailure(record, call, "prepare called agent: "+err.Error())
 	}
 	spawnEnv, err := cli.SpawnEnvForInvocation(call.adapter, &input)
 	if err != nil {
-		return acceptedFailure(record, agentcall.CodeExecutionFailed, "prepare called agent environment: "+err.Error(), call.target)
+		return h.preLaunchFailure(record, call, "prepare called agent environment: "+err.Error())
 	}
 	invocation, runErr := InvokeAgent(&AgentInvocation{
 		Context: ctx, Adapter: call.adapter, Args: args,
 		Env: spawnEnv, DropEnv: cli.DropSpawnEnvVars(call.adapter),
-		Workdir: call.workdir, Prefix: strings.TrimSuffix(h.options.Parent.Prefix, "/") + "/call:" + record.callID,
+		Workdir: call.workdir, Prefix: agentCallPrefix(h.options.Parent.Prefix, record.callID),
 		InvocationContext: cli.ContextAutonomousHeadless,
 		CLI:               call.cliName, Model: call.model, SessionID: sessionID, SessionResumed: call.resume,
-		Log: h.options.Log,
+		Log: h.options.Log, Now: h.options.Now,
 	}, h.options.Runner, h.options.Log)
 	if runErr != nil {
 		if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) || ctx.Err() != nil {
-			return acceptedFailure(record, agentcall.CodeCallCanceled, "called agent was canceled", call.target)
+			invocation.Outcome = OutcomeAborted
+			message := "called agent was canceled"
+			return agentCallExecution{response: acceptedFailure(record, agentcall.CodeCallCanceled, message, call.target), invocation: invocation, errorMessage: message}
 		}
-		return acceptedFailure(record, agentcall.CodeExecutionFailed, "called agent failed: "+runErr.Error(), call.target)
+		message := "called agent failed: " + runErr.Error()
+		return agentCallExecution{response: acceptedFailure(record, agentcall.CodeExecutionFailed, message, call.target), invocation: invocation, errorMessage: message}
 	}
 	if call.target.Kind == agentcall.TargetSession {
 		discovered := invocation.DiscoveredSessionID
@@ -388,12 +402,110 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 		}
 	}
 	if invocation.Outcome != OutcomeSuccess {
-		return acceptedFailure(record, agentcall.CodeExecutionFailed, fmt.Sprintf("called agent failed with exit code %d", invocation.ExitCode), call.target)
+		message := fmt.Sprintf("called agent failed with exit code %d", invocation.ExitCode)
+		return agentCallExecution{response: acceptedFailure(record, agentcall.CodeExecutionFailed, message, call.target), invocation: invocation, errorMessage: message}
 	}
-	return agentcall.Response{
-		CallID: record.callID,
-		Result: &agentcall.Result{Target: call.target, Response: invocation.Response},
+	return agentCallExecution{response: agentcall.Response{
+		CallID: record.callID, Result: &agentcall.Result{Target: call.target, Response: invocation.Response},
+	}, invocation: invocation}
+}
+
+func (h *AgentCallHandler) preLaunchFailure(record *acceptedAgentCall, call *resolvedAgentCall, message string) agentCallExecution {
+	finished := h.options.Now()
+	return agentCallExecution{
+		response: acceptedFailure(record, agentcall.CodeExecutionFailed, message, call.target),
+		invocation: AgentInvocationResult{
+			Outcome: OutcomeFailed, CLI: call.cliName, Model: call.model, SessionID: call.sessionID, SessionResumed: call.resume,
+			Usage: defaultAgentUsage(call.cliName, true), StartedAt: record.started, FinishedAt: finished, Duration: finished.Sub(record.started),
+		},
+		errorMessage: message,
 	}
+}
+
+func (h *AgentCallHandler) emitAgentCallStart(record *acceptedAgentCall, call *resolvedAgentCall) {
+	data := map[string]any{
+		"call_id": record.callID, "request_id": record.requestID, "parent_attempt_id": record.parentAttemptID,
+		"prompt": call.request.Prompt, "target_kind": string(call.target.Kind), "target_name": call.target.Name,
+		"workdir": call.workdir, "profile": call.profileName, "cli": call.cliName, "model": call.model,
+		"session_strategy": agentCallSessionStrategy(call), "resolved_session_id": call.sessionID, "session_resumed": call.resume,
+		"context": contextSnapshot(h.options.Context),
+	}
+	emitAudit(h.options.Context, audit.Event{
+		Timestamp: record.started.UTC().Format(time.RFC3339Nano), Prefix: agentCallPrefix(h.options.Parent.Prefix, record.callID),
+		Type: audit.EventAgentCallStart, Data: data,
+	})
+}
+
+func (h *AgentCallHandler) emitAgentCallEnd(record *acceptedAgentCall, call *resolvedAgentCall, execution *agentCallExecution) {
+	invocation := execution.invocation
+	finished := invocation.FinishedAt
+	if finished.IsZero() {
+		finished = h.options.Now()
+	}
+	duration := finished.Sub(record.started)
+	if duration < 0 {
+		duration = 0
+	}
+	resolvedSessionID := invocation.DiscoveredSessionID
+	if resolvedSessionID == "" {
+		resolvedSessionID = invocation.SessionID
+	}
+	identity := model.ExecutionIdentity{
+		StepID: record.callID, Prefix: agentCallIdentityPrefix(h.options.Parent.Prefix), StepType: "agent", Kind: "agent-call",
+		CLI: call.cliName, SessionID: resolvedSessionID, SessionStrategy: agentCallSessionStrategy(call),
+		SessionResumed: call.resume, AgentInvoked: invocation.CLILaunched,
+	}
+	data := map[string]any{
+		"call_id": record.callID, "request_id": record.requestID, "parent_attempt_id": record.parentAttemptID,
+		"target_kind": string(call.target.Kind), "target_name": call.target.Name,
+		"outcome": string(invocation.Outcome), "duration_ms": duration.Milliseconds(),
+		"cli_launched": invocation.CLILaunched, "discovered_session_id": invocation.DiscoveredSessionID,
+		"resolved_session_id": resolvedSessionID, "identity": identity,
+		"usage": invocation.Usage, "estimated_api_cost_usd": invocation.EstimatedCostUSD,
+	}
+	if invocation.CLILaunched {
+		data["exit_code"] = invocation.ExitCode
+	}
+	if execution.errorMessage != "" {
+		data["error"] = execution.errorMessage
+	}
+	if invocation.Stderr != "" {
+		data["stderr"] = invocation.Stderr
+	}
+	if invocation.UsageError != nil {
+		data["usage_error"] = invocation.UsageError.Error()
+	}
+	emitAudit(h.options.Context, audit.Event{
+		Timestamp: finished.UTC().Format(time.RFC3339Nano), Prefix: agentCallPrefix(h.options.Parent.Prefix, record.callID),
+		Type: audit.EventAgentCallEnd, Data: data,
+	})
+}
+
+func agentCallSessionStrategy(call *resolvedAgentCall) string {
+	if call.target.Kind == agentcall.TargetSession {
+		return call.target.Name
+	}
+	return string(model.SessionNew)
+}
+
+func agentCallPrefix(parent, callID string) string {
+	parent = strings.TrimSpace(parent)
+	if strings.HasPrefix(parent, "[") && strings.HasSuffix(parent, "]") {
+		return strings.TrimSuffix(parent, "]") + ", call:" + callID + "]"
+	}
+	if parent == "" {
+		return "call:" + callID
+	}
+	return strings.TrimSuffix(parent, "/") + "/call:" + callID
+}
+
+func agentCallIdentityPrefix(parent string) string {
+	parent = strings.TrimSpace(parent)
+	if strings.HasPrefix(parent, "[") && strings.HasSuffix(parent, "]") {
+		parent = strings.TrimSuffix(strings.TrimPrefix(parent, "["), "]")
+		parent = strings.ReplaceAll(parent, ", ", "/")
+	}
+	return parent
 }
 
 func acceptedFailure(record *acceptedAgentCall, code, message string, target agentcall.Target) agentcall.Response {

@@ -42,12 +42,13 @@ func (a *callTestAdapter) ProbeModel(string, string) (cli.ProbeStrength, error) 
 func (a *callTestAdapter) FilterOutput(raw string) string { return "filtered:" + raw }
 
 type callTestRunner struct {
-	mu      sync.Mutex
-	calls   int
-	started chan AgentProcessOptions
-	release chan struct{}
-	result  ProcessResult
-	err     error
+	mu        sync.Mutex
+	calls     int
+	started   chan AgentProcessOptions
+	release   chan struct{}
+	result    ProcessResult
+	err       error
+	beforeRun func()
 }
 
 func (r *callTestRunner) RunShell(string, bool, string) (ProcessResult, error) {
@@ -60,6 +61,9 @@ func (r *callTestRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, 
 	r.mu.Lock()
 	r.calls++
 	r.mu.Unlock()
+	if r.beforeRun != nil {
+		r.beforeRun()
+	}
 	if r.started != nil {
 		r.started <- *options
 	}
@@ -71,6 +75,15 @@ func (r *callTestRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, 
 		}
 	}
 	return r.result, r.err
+}
+
+type evidenceCallAdapter struct {
+	*callTestAdapter
+	extraction cli.UsageExtraction
+}
+
+func (a *evidenceCallAdapter) ExtractUsage(string) (cli.UsageExtraction, error) {
+	return a.extraction, nil
 }
 
 func TestAgentCallHandlerRejectsBeforeAcceptance(t *testing.T) {
@@ -133,6 +146,9 @@ func TestAgentCallHandlerAuditsPreAcceptanceRejection(t *testing.T) {
 	event := findAuditEvent(logger.events, audit.EventControlRejected)
 	if event == nil || event.Data["request_id"] != "bad" || event.Data["error_code"] != agentcall.CodeUnknownAgent {
 		t.Fatalf("control rejection event = %#v", event)
+	}
+	if calls := agentCallAuditEvents(logger.events); len(calls) != 0 {
+		t.Fatalf("pre-acceptance rejection emitted call evidence: %+v", calls)
 	}
 }
 
@@ -218,6 +234,73 @@ func TestAgentCallHandlerRunsFreshProfileAutonomousHeadless(t *testing.T) {
 	}
 	if len(options.Context.NamedSessions) != 0 || options.Context.LastSessionStepID != "prior" {
 		t.Fatalf("fresh call changed workflow session bookkeeping: named=%v last=%q", options.Context.NamedSessions, options.Context.LastSessionStepID)
+	}
+}
+
+func TestAgentCallHandlerEmitsSuccessfulEvidencePairWithoutResponse(t *testing.T) {
+	workdir := t.TempDir()
+	cost := 0.42
+	adapter := &evidenceCallAdapter{
+		callTestAdapter: &callTestAdapter{discovered: "child-session"},
+		extraction: cli.UsageExtraction{Usage: model.UsageRecord{
+			Status: model.UsageCollected, CLI: "test", Provider: "provider", Model: "base-model",
+			Tokens: model.TokenCounts{model.TokenInput: 7}, Source: "test:result", Completeness: model.CompletenessComplete,
+		}, EstimatedCostUSD: &cost},
+	}
+	logger := &recordingAuditLogger{}
+	runner := &callTestRunner{result: ProcessResult{Started: true, ExitCode: 0, Stdout: "full child response", Stderr: "warning"}}
+	options := testAgentCallOptions(workdir, runner, adapter)
+	options.Context.AuditLogger = logger
+	options.Context.Params["environment"] = "staging"
+	options.Context.CapturedVariables["artifact"] = model.NewCapturedString("build.tar")
+	startWasBeforeLaunch := false
+	runner.beforeRun = func() {
+		startWasBeforeLaunch = len(logger.events) == 1 && logger.events[0].Type == audit.EventAgentCallStart
+	}
+	handler := NewAgentCallHandler(options)
+	response := decodeCallResponse(t, handler.HandleAgentCall(context.Background(), control.AgentCallRequest{
+		AttemptID: "attempt-1", RequestID: "request-1", Payload: json.RawMessage(`{"prompt":"requested child task","agent":"implementor"}`),
+	}))
+	if response.Error != nil {
+		t.Fatalf("response = %#v", response)
+	}
+	if !startWasBeforeLaunch {
+		t.Fatal("agent_call_start was not emitted before CLI launch")
+	}
+	if len(logger.events) != 2 || logger.events[0].Type != audit.EventAgentCallStart || logger.events[1].Type != audit.EventAgentCallEnd {
+		t.Fatalf("events = %+v, want one start/end pair", logger.events)
+	}
+	start, end := logger.events[0], logger.events[1]
+	if start.Prefix != end.Prefix || start.Data["call_id"] != response.CallID || end.Data["call_id"] != response.CallID {
+		t.Fatalf("unattributed pair: start=%+v end=%+v response=%+v", start, end, response)
+	}
+	if start.Prefix != "parent/call:"+response.CallID {
+		t.Fatalf("call prefix = %q, want structural child of parent", start.Prefix)
+	}
+	if start.Data["parent_attempt_id"] != "attempt-1" || start.Data["request_id"] != "request-1" || start.Data["prompt"] != "requested child task" || start.Data["target_kind"] != "agent" || start.Data["target_name"] != "implementor" {
+		t.Fatalf("start metadata = %+v", start.Data)
+	}
+	if start.Data["workdir"] != workdir || start.Data["profile"] != "implementor" || start.Data["cli"] != "test" || start.Data["model"] != "base-model" {
+		t.Fatalf("resolved start metadata = %+v", start.Data)
+	}
+	snapshot, ok := start.Data["context"].(map[string]any)
+	if !ok || snapshot["params"].(map[string]any)["environment"] != "staging" || snapshot["capturedVariables"].(map[string]any)["artifact"] != "build.tar" {
+		t.Fatalf("context snapshot = %#v", start.Data["context"])
+	}
+	usage, ok := end.Data["usage"].(model.UsageRecord)
+	if !ok || usage.Tokens[model.TokenInput] != 7 || end.Data["estimated_api_cost_usd"] != adapter.extraction.EstimatedCostUSD {
+		t.Fatalf("end metrics = %+v", end.Data)
+	}
+	if end.Data["outcome"] != string(OutcomeSuccess) || end.Data["exit_code"] != 0 || end.Data["discovered_session_id"] != "child-session" || end.Data["parent_attempt_id"] != "attempt-1" {
+		t.Fatalf("terminal metadata = %+v", end.Data)
+	}
+	if _, ok := end.Data["duration_ms"].(int64); !ok {
+		t.Fatalf("duration_ms = %#v, want int64", end.Data["duration_ms"])
+	}
+	for _, forbidden := range []string{"stdout", "response", "prompt"} {
+		if _, exists := end.Data[forbidden]; exists {
+			t.Fatalf("agent_call_end duplicated %s: %+v", forbidden, end.Data)
+		}
 	}
 }
 
@@ -345,7 +428,10 @@ func TestAgentCallHandlerSharesAndFlushesNamedSessions(t *testing.T) {
 func TestAgentCallHandlerCachesAcceptedLaunchFailure(t *testing.T) {
 	adapter := &callTestAdapter{}
 	runner := &callTestRunner{err: errors.New("launch failed")}
-	handler := NewAgentCallHandler(testAgentCallOptions(t.TempDir(), runner, adapter))
+	options := testAgentCallOptions(t.TempDir(), runner, adapter)
+	logger := &recordingAuditLogger{}
+	options.Context.AuditLogger = logger
+	handler := NewAgentCallHandler(options)
 	request := control.AgentCallRequest{RequestID: "same", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`)}
 	first := decodeCallResponse(t, handler.HandleAgentCall(context.Background(), request))
 	second := decodeCallResponse(t, handler.HandleAgentCall(context.Background(), request))
@@ -354,6 +440,81 @@ func TestAgentCallHandlerCachesAcceptedLaunchFailure(t *testing.T) {
 	}
 	if runner.calls != 1 {
 		t.Fatalf("launch attempts = %d, want 1", runner.calls)
+	}
+	events := agentCallAuditEvents(logger.events)
+	if len(events) != 2 || events[0].Type != audit.EventAgentCallStart || events[1].Type != audit.EventAgentCallEnd {
+		t.Fatalf("launch failure events = %+v, want one start/end pair", events)
+	}
+	end := events[1]
+	if end.Data["outcome"] != string(OutcomeFailed) || end.Data["cli_launched"] != false || !strings.Contains(end.Data["error"].(string), "launch failed") {
+		t.Fatalf("launch failure end metadata = %+v", end.Data)
+	}
+	if _, exists := end.Data["exit_code"]; exists {
+		t.Fatalf("launch failure unexpectedly reports an exit code: %+v", end.Data)
+	}
+}
+
+func TestAgentCallHandlerRetainsFailedChildEvidenceAndMetrics(t *testing.T) {
+	cost := 0.19
+	adapter := &evidenceCallAdapter{
+		callTestAdapter: &callTestAdapter{discovered: "failed-session"},
+		extraction: cli.UsageExtraction{Usage: model.UsageRecord{
+			Status: model.UsageCollected, CLI: "test", Tokens: model.TokenCounts{model.TokenOutput: 9},
+			Source: "test:result", Completeness: model.CompletenessComplete,
+		}, EstimatedCostUSD: &cost},
+	}
+	runner := &callTestRunner{result: ProcessResult{Started: true, ExitCode: 17, Stdout: "failed response", Stderr: "child error"}}
+	options := testAgentCallOptions(t.TempDir(), runner, adapter)
+	logger := &recordingAuditLogger{}
+	options.Context.AuditLogger = logger
+
+	response := decodeCallResponse(t, NewAgentCallHandler(options).HandleAgentCall(context.Background(), control.AgentCallRequest{
+		AttemptID: "attempt-failed", RequestID: "failed", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`),
+	}))
+	if response.Error == nil || response.Error.Code != agentcall.CodeExecutionFailed {
+		t.Fatalf("failed response = %#v", response)
+	}
+	events := agentCallAuditEvents(logger.events)
+	if len(events) != 2 {
+		t.Fatalf("failed call events = %+v", events)
+	}
+	end := events[1]
+	usage := end.Data["usage"].(model.UsageRecord)
+	if end.Data["outcome"] != string(OutcomeFailed) || end.Data["exit_code"] != 17 || end.Data["stderr"] != "child error" || usage.Tokens[model.TokenOutput] != 9 {
+		t.Fatalf("failed call evidence = %+v", end.Data)
+	}
+	if got := end.Data["estimated_api_cost_usd"].(*float64); got == nil || *got != cost {
+		t.Fatalf("failed call cost = %#v, want %v", got, cost)
+	}
+	if _, exists := end.Data["stdout"]; exists {
+		t.Fatalf("failed call duplicated response into audit: %+v", end.Data)
+	}
+}
+
+func TestAgentCallHandlerSeparateCallsEmitDistinctPairs(t *testing.T) {
+	options := testAgentCallOptions(t.TempDir(), &callTestRunner{result: ProcessResult{Started: true, Stdout: "done"}}, &callTestAdapter{})
+	logger := &recordingAuditLogger{}
+	options.Context.AuditLogger = logger
+	handler := NewAgentCallHandler(options)
+
+	first := decodeCallResponse(t, handler.HandleAgentCall(context.Background(), control.AgentCallRequest{
+		AttemptID: "attempt", RequestID: "first", Payload: json.RawMessage(`{"prompt":"one","agent":"implementor"}`),
+	}))
+	second := decodeCallResponse(t, handler.HandleAgentCall(context.Background(), control.AgentCallRequest{
+		AttemptID: "attempt", RequestID: "second", Payload: json.RawMessage(`{"prompt":"two","agent":"implementor"}`),
+	}))
+	if first.CallID == "" || second.CallID == "" || first.CallID == second.CallID {
+		t.Fatalf("call IDs = %q, %q, want distinct", first.CallID, second.CallID)
+	}
+	events := agentCallAuditEvents(logger.events)
+	if len(events) != 4 {
+		t.Fatalf("events = %+v, want two pairs", events)
+	}
+	for i, callID := range []string{first.CallID, second.CallID} {
+		start, end := events[i*2], events[i*2+1]
+		if start.Type != audit.EventAgentCallStart || end.Type != audit.EventAgentCallEnd || start.Data["call_id"] != callID || end.Data["call_id"] != callID {
+			t.Fatalf("pair %d = %+v / %+v", i, start, end)
+		}
 	}
 }
 
@@ -382,7 +543,10 @@ func TestAgentCallHandlerRejectsDistinctConcurrentCallAndReusesSlot(t *testing.T
 
 func TestAgentCallHandlerDuplicateWaitsForSameEventualResult(t *testing.T) {
 	runner := &callTestRunner{started: make(chan AgentProcessOptions, 1), release: make(chan struct{}), result: ProcessResult{Started: true, Stdout: "done"}}
-	handler := NewAgentCallHandler(testAgentCallOptions(t.TempDir(), runner, &callTestAdapter{}))
+	callOptions := testAgentCallOptions(t.TempDir(), runner, &callTestAdapter{})
+	logger := &recordingAuditLogger{}
+	callOptions.Context.AuditLogger = logger
+	handler := NewAgentCallHandler(callOptions)
 	request := control.AgentCallRequest{RequestID: "same", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`)}
 	results := make(chan agentcall.Response, 2)
 	go func() { results <- decodeCallResponse(t, handler.HandleAgentCall(context.Background(), request)) }()
@@ -397,24 +561,34 @@ func TestAgentCallHandlerDuplicateWaitsForSameEventualResult(t *testing.T) {
 	if first.CallID == "" || first.CallID != second.CallID || first.Result == nil || second.Result == nil {
 		t.Fatalf("eventual results = %#v %#v", first, second)
 	}
+	if events := agentCallAuditEvents(logger.events); len(events) != 2 {
+		t.Fatalf("idempotent retry emitted %d call events, want one pair: %+v", len(events), events)
+	}
 }
 
 func TestAgentCallHandlerCancellationIsCachedAndReleasesSlot(t *testing.T) {
 	runner := &callTestRunner{started: make(chan AgentProcessOptions, 2), release: make(chan struct{})}
-	handler := NewAgentCallHandler(testAgentCallOptions(t.TempDir(), runner, &callTestAdapter{}))
+	options := testAgentCallOptions(t.TempDir(), runner, &callTestAdapter{})
+	logger := &recordingAuditLogger{}
+	options.Context.AuditLogger = logger
+	handler := NewAgentCallHandler(options)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan agentcall.Response, 1)
 	request := control.AgentCallRequest{RequestID: "cancel-me", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`)}
 	go func() { done <- decodeCallResponse(t, handler.HandleAgentCall(ctx, request)) }()
-	options := <-runner.started
+	childOptions := <-runner.started
 	cancel()
 	first := <-done
-	if first.Error == nil || first.Error.Code != agentcall.CodeCallCanceled || options.Context.Err() == nil {
-		t.Fatalf("canceled response=%#v child context err=%v", first, options.Context.Err())
+	if first.Error == nil || first.Error.Code != agentcall.CodeCallCanceled || childOptions.Context.Err() == nil {
+		t.Fatalf("canceled response=%#v child context err=%v", first, childOptions.Context.Err())
 	}
 	retry := decodeCallResponse(t, handler.HandleAgentCall(context.Background(), request))
 	if retry.Error == nil || retry.Error.Code != agentcall.CodeCallCanceled || retry.CallID != first.CallID || runner.calls != 1 {
 		t.Fatalf("cached retry=%#v calls=%d", retry, runner.calls)
+	}
+	events := agentCallAuditEvents(logger.events)
+	if len(events) != 2 || events[1].Data["outcome"] != string(OutcomeAborted) || events[1].Data["cli_launched"] != true {
+		t.Fatalf("canceled call evidence = %+v", events)
 	}
 	close(runner.release)
 	later := decodeCallResponse(t, handler.HandleAgentCall(context.Background(), control.AgentCallRequest{RequestID: "later", Payload: json.RawMessage(`{"prompt":"y","agent":"implementor"}`)}))
@@ -487,7 +661,7 @@ func (r *runtimeCallRunner) RunScript(string, []byte, bool, string) (ProcessResu
 	return ProcessResult{}, nil
 }
 func (r *runtimeCallRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, error) {
-	if strings.Contains(options.Prefix, "/call:") {
+	if strings.Contains(options.Prefix, "call:") {
 		for _, entry := range options.Env {
 			if strings.HasPrefix(entry, control.EnvControlSocket+"=") || strings.HasPrefix(entry, control.EnvAttemptID+"=") {
 				r.childAttemptEnvFound = true
@@ -547,4 +721,14 @@ func decodeCallResponse(t *testing.T, raw json.RawMessage) agentcall.Response {
 		t.Fatal(err)
 	}
 	return response
+}
+
+func agentCallAuditEvents(events []audit.Event) []audit.Event {
+	var calls []audit.Event
+	for _, event := range events {
+		if event.Type == audit.EventAgentCallStart || event.Type == audit.EventAgentCallEnd {
+			calls = append(calls, event)
+		}
+	}
+	return calls
 }

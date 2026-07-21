@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -340,6 +341,52 @@ func TestTUIProcessRunner_RunAgentCanceledBeforeStartIsNotLaunched(t *testing.T)
 	}
 	if result.Started {
 		t.Fatalf("RunAgent() result = %#v, want Started=false", result)
+	}
+}
+
+func TestTUIProcessRunnerPersistsRepeatedAgentCallOutputByCallIdentity(t *testing.T) {
+	sessionDir := t.TempDir()
+	runner := NewCoordinator(&captureProgram{}, sessionDir).TUIProcessRunner(unusedRunner{}).(*tuiProcessRunner)
+
+	for _, call := range []struct {
+		id, output string
+	}{
+		{id: "call-1", output: "first child response"},
+		{id: "call-2", output: "second child response"},
+	} {
+		prefix := "[parent, call:" + call.id + "]"
+		result, err := runner.RunAgent(&iexec.AgentProcessOptions{
+			Context: context.Background(), Args: []string{"sh", "-c", "printf '%s' \"$1\"", "agent", call.output},
+			CaptureStdout: true, Prefix: prefix,
+		})
+		if err != nil {
+			t.Fatalf("RunAgent(%s): %v", call.id, err)
+		}
+		if result.Stdout != call.output {
+			t.Fatalf("RunAgent(%s) stdout = %q, want %q", call.id, result.Stdout, call.output)
+		}
+		path := filepath.Join(sessionDir, "output", sanitizePrefix(prefix)+".out")
+		persisted, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s output: %v", call.id, err)
+		}
+		if string(persisted) != call.output {
+			t.Fatalf("persisted %s output = %q, want %q", call.id, persisted, call.output)
+		}
+	}
+
+	entries, err := os.ReadDir(filepath.Join(sessionDir, "output"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdoutFiles int
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".out") {
+			stdoutFiles++
+		}
+	}
+	if stdoutFiles != 2 {
+		t.Fatalf("persisted stdout files = %d, want one per call; entries=%v", stdoutFiles, entries)
 	}
 }
 
