@@ -364,6 +364,36 @@ func TestPrepareAgentCallRuntimeUsesEstablishedProjectRoot(t *testing.T) {
 	}
 }
 
+func TestPrepareAgentCallRuntimeNotifiesLiveRunnerBeforeLaunchAndAfterFinish(t *testing.T) {
+	workdir := t.TempDir()
+	base := &callTestRunner{result: ProcessResult{Started: true, Stdout: "done"}}
+	runner := &callLifecycleRunner{callTestRunner: base}
+	ctx := testAgentCallOptions(workdir, runner, &callTestAdapter{}).Context
+	ctx.ProjectRoot = workdir
+	ctx.WorkingDir = workdir
+	step := &model.Step{ID: "parent", Session: model.SessionNew}
+
+	handler, _, _, err := prepareAgentCallRuntime(
+		true, cli.ContextInteractive, step, ctx, &callTestAdapter{}, runner, nil,
+		"test", "parent-session", "[parent]", nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.options.Adapter = func(string) (cli.Adapter, error) { return &callTestAdapter{}, nil }
+	handler.options.NewID = func() string { return "call-live" }
+	handler.HandleAgentCall(context.Background(), control.AgentCallRequest{
+		AttemptID: "attempt-1", RequestID: "request-1", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`),
+	})
+
+	if runner.accepted != 1 || !runner.acceptedBeforeLaunch {
+		t.Fatalf("accepted notifications = %d beforeLaunch=%v, want one before launch", runner.accepted, runner.acceptedBeforeLaunch)
+	}
+	if runner.finished != 1 || runner.finishedBeforeLaunch {
+		t.Fatalf("finished notifications = %d beforeLaunch=%v, want one after launch", runner.finished, runner.finishedBeforeLaunch)
+	}
+}
+
 func TestBuildStepInvocationCarriesPreInterpolationAgentCallEligibility(t *testing.T) {
 	ctx := model.NewRootContext(&model.RootContextOptions{SessionDir: t.TempDir()})
 	profile := &config.ResolvedAgent{CLI: "test"}
@@ -692,6 +722,24 @@ func (r *runtimeCallRunner) RunAgent(options *AgentProcessOptions) (ProcessResul
 }
 
 func stringPointer(value string) *string { return &value }
+
+type callLifecycleRunner struct {
+	*callTestRunner
+	accepted             int
+	finished             int
+	acceptedBeforeLaunch bool
+	finishedBeforeLaunch bool
+}
+
+func (r *callLifecycleRunner) NotifyAgentCallAccepted(*AgentCallAccepted) {
+	r.accepted++
+	r.acceptedBeforeLaunch = r.calls == 0
+}
+
+func (r *callLifecycleRunner) NotifyAgentCallFinished(*AgentCallAccepted) {
+	r.finished++
+	r.finishedBeforeLaunch = r.calls == 0
+}
 
 func testAgentCallOptions(workdir string, runner ProcessRunner, adapter cli.Adapter) *AgentCallHandlerOptions {
 	ctx := model.NewRootContext(&model.RootContextOptions{WorkflowFile: "workflow.yaml", SessionDir: workdir})

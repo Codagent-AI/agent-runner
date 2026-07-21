@@ -271,7 +271,7 @@ func prepareAgentCallRuntime(
 		parentNamedSession = string(step.Session)
 	}
 	spawnTime := time.Now()
-	handler = NewAgentCallHandler(&AgentCallHandlerOptions{
+	options := &AgentCallHandlerOptions{
 		Context: ctx, Runner: runner, Log: log, Eligible: true,
 		Parent: AgentCallParent{
 			CLI: cliName, SessionID: sessionID, NamedSession: parentNamedSession,
@@ -280,7 +280,12 @@ func prepareAgentCallRuntime(
 				return adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: spawnTime, Workdir: parentWorkdir})
 			},
 		},
-	})
+	}
+	if notifier, ok := runner.(AgentCallLifecycleNotifier); ok {
+		options.OnAccepted = func(call AgentCallAccepted) { notifier.NotifyAgentCallAccepted(&call) }
+		options.OnFinished = func(call AgentCallAccepted) { notifier.NotifyAgentCallFinished(&call) }
+	}
+	handler = NewAgentCallHandler(options)
 	if !invocationContext.IsHeadless() {
 		return handler, spawnEnv, nil, nil
 	}

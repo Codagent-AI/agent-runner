@@ -38,6 +38,16 @@ type AgentCallAccepted struct {
 	ParentAttemptID string
 	Target          agentcall.Target
 	StartedAt       time.Time
+	Prefix          string
+	ParentPrefix    string
+}
+
+// AgentCallLifecycleNotifier lets the live process wrapper move the run view
+// into a dynamic child as soon as acceptance evidence is durable, then back to
+// the still-active parent after the synchronous child finishes.
+type AgentCallLifecycleNotifier interface {
+	NotifyAgentCallAccepted(*AgentCallAccepted)
+	NotifyAgentCallFinished(*AgentCallAccepted)
 }
 
 type AgentCallHandlerOptions struct {
@@ -51,6 +61,7 @@ type AgentCallHandlerOptions struct {
 	NewID      func() string
 	Now        func() time.Time
 	OnAccepted func(AgentCallAccepted)
+	OnFinished func(AgentCallAccepted)
 }
 
 type acceptedAgentCall struct {
@@ -155,15 +166,14 @@ func (h *AgentCallHandler) HandleAgentCall(ctx context.Context, envelope control
 	h.emitAgentCallStart(record, resolved)
 
 	if h.options.OnAccepted != nil {
-		h.options.OnAccepted(AgentCallAccepted{
-			CallID: record.callID, RequestID: envelope.RequestID,
-			ParentAttemptID: envelope.AttemptID,
-			Target:          resolved.target, StartedAt: record.started,
-		})
+		h.options.OnAccepted(h.lifecycleEvent(record, resolved.target))
 	}
 
 	execution := h.execute(ctx, record, resolved)
 	h.emitAgentCallEnd(record, resolved, &execution)
+	if h.options.OnFinished != nil {
+		h.options.OnFinished(h.lifecycleEvent(record, resolved.target))
+	}
 	raw := marshalAgentCallResponse(execution.response)
 	h.mu.Lock()
 	record.response = raw
@@ -173,6 +183,14 @@ func (h *AgentCallHandler) HandleAgentCall(ctx context.Context, envelope control
 	close(record.done)
 	h.mu.Unlock()
 	return append(json.RawMessage(nil), raw...)
+}
+
+func (h *AgentCallHandler) lifecycleEvent(record *acceptedAgentCall, target agentcall.Target) AgentCallAccepted {
+	return AgentCallAccepted{
+		CallID: record.callID, RequestID: record.requestID, ParentAttemptID: record.parentAttemptID,
+		Target: target, StartedAt: record.started,
+		Prefix: agentCallPrefix(h.options.Parent.Prefix, record.callID), ParentPrefix: h.options.Parent.Prefix,
+	}
 }
 
 func (h *AgentCallHandler) reject(envelope control.AgentCallRequest, failure *agentcall.Error) json.RawMessage {

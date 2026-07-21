@@ -51,6 +51,8 @@ Interactive agent steps and autonomous steps using an interactive backend own a 
 
 Failed agent steps still count. If a CLI process consumes tokens, reports metrics, and then exits with an error, Agent Runner keeps those metrics in the step and run totals.
 
+Accepted agent calls receive their own execution records. Their usage and cost contribute to run totals exactly once and remain attributable to the call. A parent summary row rolls up its own attempts plus its calls, while its duration remains the parent's wall-clock duration instead of adding synchronous child durations. A call that fails before its CLI launches remains a failed metric record but does not reduce usage or cost coverage.
+
 Shell, script, UI, loop, group, and sub-workflow steps do not call an agent CLI themselves. Their token and cost cells show a dash. Container rows roll up metrics from agent steps below them.
 
 ## Reading The Summary
@@ -65,7 +67,7 @@ Shell, script, UI, loop, group, and sub-workflow steps do not call an agent CLI 
 
 These symbols apply to the TUI. In `run-metrics.json`, unavailable usage remains a structured `unavailable` record with a reason, while missing cost is `null`.
 
-Press `s` in the detailed run view to open the summary. Press `v` in the summary to return to the run view. Up and down select rows. Enter drills into loops, groups, and sub-workflows, and Escape moves back up one level. The Total row describes the current level.
+Press `s` in the detailed run view to open the summary. Press `v` in the summary to return to the run view. Up and down select rows. Enter drills into loops, groups, sub-workflows, and agent parents with accepted calls; Escape moves back up one level. A call parent contains a synthetic `parent turn` row followed by chronological call rows. The Total row describes the current level.
 
 Coverage appears separately for usage, canonical processed-token totals, and cost:
 
@@ -95,7 +97,7 @@ Each run stores a versioned file beside `state.json` and `audit.log`:
 
 `run-metrics.json` is the supported input for evaluation tools and other automated consumers. It contains:
 
-- one append-only record per step attempt;
+- one append-only record per step attempt or accepted agent-call execution;
 - duration, outcome, nesting identity, usage provenance, token categories, canonical totals, and reported cost;
 - execution-session durations for interrupted and resumed runs;
 - run totals and coverage values; and

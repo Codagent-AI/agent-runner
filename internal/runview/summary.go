@@ -152,8 +152,11 @@ func (m *Model) summaryFooterLines(totals *model.RunTotals, columns summaryColum
 func makeSummaryRow(node *StepNode, selected bool, now time.Time) summaryRow {
 	metrics := aggregateSummaryMetrics(node, now)
 	label := node.ID
-	if node.Type == NodeIteration {
+	switch node.Type {
+	case NodeIteration:
 		label = fmt.Sprintf("iteration %d", node.IterationIndex+1)
+	case NodeAgentCall:
+		label = node.callLabel()
 	}
 	if node.IsContainer() {
 		label += " ›"
@@ -287,6 +290,18 @@ func aggregateSummaryMetrics(node *StepNode, now time.Time) summaryMetrics {
 	if node == nil {
 		return metrics
 	}
+	if (node.Type == NodeHeadlessAgent || node.Type == NodeInteractiveAgent) && len(node.Children) > 0 {
+		metrics = aggregateOwnSummaryMetrics(node, now)
+		for _, child := range node.Children {
+			childMetrics := aggregateSummaryMetrics(child, now)
+			// Calls run synchronously while the parent wall clock advances, so
+			// their durations overlap rather than extending the enclosing scope.
+			childMetrics.durationMS = 0
+			childMetrics.durationReported = false
+			metrics.add(&childMetrics)
+		}
+		return metrics
+	}
 	if node.IsContainer() {
 		for _, child := range node.Children {
 			childMetrics := aggregateSummaryMetrics(child, now)
@@ -294,6 +309,11 @@ func aggregateSummaryMetrics(node *StepNode, now time.Time) summaryMetrics {
 		}
 		return metrics
 	}
+	return aggregateOwnSummaryMetrics(node, now)
+}
+
+func aggregateOwnSummaryMetrics(node *StepNode, now time.Time) summaryMetrics {
+	metrics := summaryMetrics{tokens: model.TokenCounts{}}
 	for i := range node.Attempts {
 		attempt := &node.Attempts[i]
 		metrics.totalAttempts++
@@ -309,7 +329,7 @@ func aggregateSummaryMetrics(node *StepNode, now time.Time) summaryMetrics {
 		// agent. Skipped or never-invoked agent steps are excluded so the
 		// mid-run indicator matches the finished-run one (which filters on
 		// agent_invoked via the authoritative run_end totals).
-		if (node.Type == NodeHeadlessAgent || node.Type == NodeInteractiveAgent) && attempt.AgentInvoked {
+		if isSummaryAgentExecution(node) && attempt.AgentInvoked {
 			metrics.agentAttempts++
 			if attempt.CostUSD != nil {
 				metrics.costReported++
@@ -341,6 +361,13 @@ func aggregateSummaryMetrics(node *StepNode, now time.Time) summaryMetrics {
 		}
 	}
 	return metrics
+}
+
+func isSummaryAgentExecution(node *StepNode) bool {
+	if node == nil {
+		return false
+	}
+	return node.Type == NodeHeadlessAgent || node.Type == NodeInteractiveAgent || node.Type == NodeAgentCall || node.Type == NodeParentTurn
 }
 
 func (m *summaryMetrics) add(other *summaryMetrics) {

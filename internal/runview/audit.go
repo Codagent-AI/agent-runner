@@ -78,6 +78,7 @@ type prefixToken struct {
 	stepID    string
 	iteration *int
 	subName   string
+	callID    string
 }
 
 // parsePrefix splits a bracketed prefix like "[task-loop:2, verify, sub:verify-task, check]"
@@ -98,6 +99,10 @@ func parsePrefix(prefix string) []prefixToken {
 		}
 		if strings.HasPrefix(p, "sub:") {
 			tokens = append(tokens, prefixToken{subName: strings.TrimPrefix(p, "sub:")})
+			continue
+		}
+		if strings.HasPrefix(p, "call:") {
+			tokens = append(tokens, prefixToken{callID: strings.TrimPrefix(p, "call:")})
 			continue
 		}
 		if colon := strings.LastIndexByte(p, ':'); colon > 0 {
@@ -285,12 +290,16 @@ func reconstructTopLevelStepsFromAudit(root *StepNode, events []RawEvent) bool {
 	}
 	for _, event := range events {
 		switch event.Type {
-		case "step_start", "step_end", "iteration_start", "iteration_end", "sub_workflow_start", "sub_workflow_end":
+		case "step_start", "step_end", "iteration_start", "iteration_end", "sub_workflow_start", "sub_workflow_end", "agent_call_start", "agent_call_end":
 		default:
 			continue
 		}
 		tokens := parsePrefix(event.Prefix)
 		if len(tokens) == 0 || tokens[0].stepID == "" {
+			continue
+		}
+		if event.Type == "agent_call_start" || event.Type == "agent_call_end" {
+			reconstructAgentCallParent(root, tokens)
 			continue
 		}
 		id := tokens[0].stepID
@@ -304,6 +313,38 @@ func reconstructTopLevelStepsFromAudit(root *StepNode, events []RawEvent) bool {
 		}
 	}
 	return len(root.Children) > 0
+}
+
+func reconstructAgentCallParent(root *StepNode, tokens []prefixToken) {
+	if root == nil || len(tokens) < 2 || tokens[len(tokens)-1].callID == "" {
+		return
+	}
+	current := root
+	for i, token := range tokens[:len(tokens)-1] {
+		switch {
+		case token.subName != "":
+			current.Type = NodeSubWorkflow
+			current.SubLoaded = true
+		case token.iteration != nil:
+			loop := childByID(current, token.stepID)
+			if loop == nil {
+				loop = &StepNode{ID: token.stepID, Type: NodeLoop, Status: StatusPending, Parent: current}
+				current.Children = append(current.Children, loop)
+			}
+			current = ensureIteration(loop, *token.iteration)
+		default:
+			child := childByID(current, token.stepID)
+			if child == nil {
+				typeHint := NodeGroup
+				if i == len(tokens)-2 {
+					typeHint = NodeHeadlessAgent
+				}
+				child = &StepNode{ID: token.stepID, Type: typeHint, Status: StatusPending, Parent: current}
+				current.Children = append(current.Children, child)
+			}
+			current = child
+		}
+	}
 }
 
 func auditNodeType(event RawEvent, tokens []prefixToken) (NodeType, bool) {
@@ -374,6 +415,9 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 	tokens := parsePrefix(e.Prefix)
 	if eventCarriesMetrics(e) {
 		t.MetricsCaptured = true
+	}
+	if t.applyAgentCallEvent(e, tokens) {
+		return
 	}
 
 	switch e.Type {
@@ -446,6 +490,19 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 	}
 }
 
+func (t *Tree) applyAgentCallEvent(event RawEvent, tokens []prefixToken) bool {
+	switch event.Type {
+	case "agent_call_start":
+		t.applyAgentCallStart(event, tokens)
+		return true
+	case "agent_call_end":
+		t.applyAgentCallEnd(event, tokens)
+		return true
+	default:
+		return false
+	}
+}
+
 // resolve walks the tree from the root along the given prefix tokens. If
 // createIterations is true, missing iteration children are created on the
 // fly. sub:NAME tokens trigger lazy loading of the current node's sub-workflow
@@ -454,6 +511,11 @@ func (t *Tree) resolve(tokens []prefixToken, createIterations bool) *StepNode {
 	current := t.Root
 	for _, tok := range tokens {
 		switch {
+		case tok.callID != "":
+			current = callChildByID(current, tok.callID)
+			if current == nil {
+				return nil
+			}
 		case tok.subName != "":
 			if err := t.ensureSubWorkflowLoaded(current); err != nil {
 				// Lazy-load failure: record on the node so the UI can display it;
@@ -492,6 +554,139 @@ func (t *Tree) resolve(tokens []prefixToken, createIterations bool) *StepNode {
 		}
 	}
 	return current
+}
+
+func (t *Tree) applyAgentCallStart(event RawEvent, tokens []prefixToken) {
+	parent, callID := t.resolveAgentCallParent(tokens)
+	if parent == nil || callID == "" {
+		return
+	}
+	call := callChildByID(parent, callID)
+	if call == nil {
+		call = &StepNode{ID: callID, CallID: callID, Type: NodeAgentCall, Status: StatusPending, Parent: parent}
+		parent.Children = append(parent.Children, call)
+	}
+	call.Status = StatusInProgress
+	call.Outcome = ""
+	call.Aborted = false
+	call.StartedAt = parseEventTime(event.Timestamp)
+	call.CallOutputPrefix = event.Prefix
+	applyAgentCallFields(call, event.Data)
+}
+
+func (t *Tree) applyAgentCallEnd(event RawEvent, tokens []prefixToken) {
+	parent, callID := t.resolveAgentCallParent(tokens)
+	if parent == nil || callID == "" {
+		return
+	}
+	call := callChildByID(parent, callID)
+	if call == nil {
+		call = &StepNode{ID: callID, CallID: callID, Type: NodeAgentCall, Status: StatusPending, Parent: parent}
+		parent.Children = append(parent.Children, call)
+	}
+	call.CallOutputPrefix = event.Prefix
+	applyAgentCallFields(call, event.Data)
+	outcome, _ := stringField(event.Data, "outcome")
+	applyOutcome(call, outcome)
+	if value, ok := intField(event.Data, "exit_code"); ok {
+		call.ExitCode = &value
+	}
+	if value, ok := boolField(event.Data, "cli_launched"); ok {
+		call.CallCLILaunched = value
+	}
+	if value, ok := int64Field(event.Data, "duration_ms"); ok {
+		call.DurationMs = &value
+	}
+	if value, ok := stringField(event.Data, "error"); ok {
+		call.ErrorMessage = value
+	}
+	if value, ok := stringField(event.Data, "usage_error"); ok {
+		call.CallUsageError = value
+	}
+	if value, ok := stringField(event.Data, "resolved_session_id"); ok && value != "" {
+		call.SessionID = value
+	}
+	if value, ok := stringField(event.Data, "discovered_session_id"); ok && value != "" {
+		call.SessionID = value
+	}
+	if !dataCarriesMetrics(event.Data) {
+		return
+	}
+	metrics := AttemptMetrics{Attempt: 1, Outcome: outcome}
+	if call.DurationMs != nil {
+		value := *call.DurationMs
+		metrics.DurationMs = &value
+	}
+	if identity, ok := event.Data["identity"].(map[string]any); ok {
+		if value, found := intField(identity, "attempt"); found && value > 0 {
+			metrics.Attempt = value
+		}
+		if value, found := boolField(identity, "agent_invoked"); found {
+			metrics.AgentInvoked = value
+		}
+	}
+	if value, found := boolField(event.Data, "cli_launched"); found {
+		metrics.AgentInvoked = value
+	}
+	if usage, ok := decodeUsageRecord(event.Data); ok {
+		metrics.Usage = usage
+	}
+	if cost, exists := event.Data["estimated_api_cost_usd"]; exists && cost != nil {
+		if value, ok := float64FieldValue(cost); ok {
+			metrics.CostUSD = &value
+		}
+	}
+	call.Attempts = []AttemptMetrics{metrics}
+}
+
+func (t *Tree) resolveAgentCallParent(tokens []prefixToken) (parent *StepNode, callID string) {
+	if len(tokens) < 2 || tokens[len(tokens)-1].callID == "" {
+		return nil, ""
+	}
+	return t.resolve(tokens[:len(tokens)-1], true), tokens[len(tokens)-1].callID
+}
+
+func applyAgentCallFields(call *StepNode, data map[string]any) {
+	if value, ok := stringField(data, "call_id"); ok && value != "" {
+		call.CallID = value
+		call.ID = value
+	}
+	if value, ok := stringField(data, "request_id"); ok {
+		call.CallRequestID = value
+	}
+	if value, ok := stringField(data, "parent_attempt_id"); ok {
+		call.ParentAttemptID = value
+	}
+	if value, ok := stringField(data, "target_kind"); ok {
+		call.CallTargetKind = value
+	}
+	if value, ok := stringField(data, "target_name"); ok {
+		call.CallTargetName = value
+	}
+	if value, ok := stringField(data, "prompt"); ok {
+		call.InterpolatedPrompt = value
+	}
+	if value, ok := stringField(data, "profile"); ok {
+		call.AgentProfile = value
+	}
+	if value, ok := stringField(data, "cli"); ok {
+		call.AgentCLI = value
+	}
+	if value, ok := stringField(data, "model"); ok {
+		call.AgentModel = value
+	}
+	if value, ok := stringField(data, "workdir"); ok {
+		call.CallWorkdir = value
+	}
+	if value, ok := stringField(data, "session_strategy"); ok {
+		call.CallSession = value
+	}
+	if value, ok := boolField(data, "session_resumed"); ok {
+		call.CallSessionResumed = value
+	}
+	if value, ok := stringField(data, "resolved_session_id"); ok && value != "" {
+		call.SessionID = value
+	}
 }
 
 // groupDescendantByID adapts the current audit shape for group members. Group

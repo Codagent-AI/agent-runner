@@ -41,6 +41,14 @@ type outputScope struct {
 	stderrWrapper func(io.Writer) io.Writer
 }
 
+func (r *tuiProcessRunner) NotifyAgentCallAccepted(call *iexec.AgentCallAccepted) {
+	r.coord.NotifyStepChange(call.Prefix)
+}
+
+func (r *tuiProcessRunner) NotifyAgentCallFinished(call *iexec.AgentCallAccepted) {
+	r.coord.NotifyStepChange(call.ParentPrefix)
+}
+
 // SetStdoutWrapper sets a function that wraps the TUI stdout writer. When set,
 // the wrapper filters structured output (e.g. JSONL) before display.
 func (r *tuiProcessRunner) SetStdoutWrapper(fn func(w io.Writer) io.Writer) {
@@ -105,6 +113,13 @@ func (r *tuiProcessRunner) cancelDelayedStepLocked() {
 // the containment check in openOutputFile rejects any residual '..'
 // substring.
 func sanitizePrefix(prefix string) string {
+	return SanitizeOutputPrefix(prefix)
+}
+
+// SanitizeOutputPrefix returns the stable filesystem-safe basename used for
+// persisted stdout and stderr. Run inspection uses the same mapping to load
+// execution-specific output without consulting audit metadata.
+func SanitizeOutputPrefix(prefix string) string {
 	var b strings.Builder
 	for _, ch := range prefix {
 		switch {
