@@ -83,11 +83,11 @@ func agentRunnerCommandEnv() []string {
 }
 
 func ensureAgentRunnerExecutableEnv() {
-	if os.Getenv(agentRunnerExecutableEnv) != "" {
-		return
-	}
 	if self, err := currentExecutable(); err == nil && self != "" {
 		_ = os.Setenv(agentRunnerExecutableEnv, self)
+		return
+	}
+	if os.Getenv(agentRunnerExecutableEnv) != "" {
 		return
 	}
 	if len(os.Args) == 0 {

@@ -382,20 +382,20 @@ func TestEnsureAgentRunnerExecutableEnvSetsParentEnvironment(t *testing.T) {
 	}
 }
 
-func TestEnsureAgentRunnerExecutableEnvPreservesExistingValue(t *testing.T) {
+func TestEnsureAgentRunnerExecutableEnvReplacesInheritedValue(t *testing.T) {
 	originalExecutable := currentExecutable
 	t.Cleanup(func() {
 		currentExecutable = originalExecutable
 	})
-	t.Setenv(agentRunnerExecutableEnv, "/already/set/agent-runner")
+	t.Setenv(agentRunnerExecutableEnv, "/outer/agent-runner")
 	currentExecutable = func() (string, error) {
 		return "/tmp/source-build/agent-runner", nil
 	}
 
 	ensureAgentRunnerExecutableEnv()
 
-	if got := os.Getenv(agentRunnerExecutableEnv); got != "/already/set/agent-runner" {
-		t.Fatalf("%s = %q, want existing value preserved", agentRunnerExecutableEnv, got)
+	if got := os.Getenv(agentRunnerExecutableEnv); got != "/tmp/source-build/agent-runner" {
+		t.Fatalf("%s = %q, want current executable", agentRunnerExecutableEnv, got)
 	}
 }
 
