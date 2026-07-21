@@ -1,6 +1,9 @@
 package runview
 
 import (
+	"errors"
+	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -870,7 +873,7 @@ func (m *Model) canResumeAgentSession(n *StepNode) bool {
 	if n == nil || n.SessionID == "" || m.running || m.active {
 		return false
 	}
-	return n.Type != NodeAgentCall || n.Status == StatusSuccess
+	return n.Type != NodeAgentCall || (n.Status != StatusPending && n.Status != StatusInProgress)
 }
 
 func isAgentNode(n *StepNode) bool {
@@ -1429,14 +1432,85 @@ func (m *Model) loadSelectedAgentCallOutput() {
 	if m.entered == FromLiveRun && node.Status == StatusInProgress {
 		return
 	}
-	base := filepath.Join(m.sessionDir, "output", liverun.SanitizeOutputPrefix(node.CallOutputPrefix))
-	if data, err := os.ReadFile(base + ".out"); err == nil {
-		node.Stdout = string(data)
+	base := liverun.SanitizeOutputPrefix(node.CallOutputPrefix)
+	if base == "" || base == "." || base == ".." || strings.Contains(base, "..") {
+		m.loadErr = fmt.Sprintf("load call output: invalid output prefix %q", node.CallOutputPrefix)
+		return
 	}
-	if data, err := os.ReadFile(base + ".err"); err == nil {
-		node.Stderr = string(data)
+	root, err := os.OpenRoot(filepath.Join(m.sessionDir, "output"))
+	if errors.Is(err, os.ErrNotExist) {
+		node.CallOutputLoaded = true
+		m.clearCallOutputLoadError()
+		return
+	}
+	if err != nil {
+		m.loadErr = "load call output: " + err.Error()
+		return
+	}
+
+	stdout, stdoutFound, err := readBoundedCallOutput(root, base+".out")
+	if err != nil {
+		err = errors.Join(err, root.Close())
+		m.loadErr = "load call output: " + err.Error()
+		return
+	}
+	stderr, stderrFound, err := readBoundedCallOutput(root, base+".err")
+	if err != nil {
+		err = errors.Join(err, root.Close())
+		m.loadErr = "load call output: " + err.Error()
+		return
+	}
+	if err := root.Close(); err != nil {
+		m.loadErr = "load call output: " + err.Error()
+		return
+	}
+	if stdoutFound {
+		node.Stdout = stdout
+	}
+	if stderrFound {
+		node.Stderr = stderr
 	}
 	node.CallOutputLoaded = true
+	m.clearCallOutputLoadError()
+}
+
+func readBoundedCallOutput(root *os.Root, name string) (output string, found bool, err error) {
+	file, err := root.Open(name)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("open %s: %w", name, err)
+	}
+	defer func() {
+		err = errors.Join(err, file.Close())
+	}()
+
+	info, err := file.Stat()
+	if err != nil {
+		return "", false, fmt.Errorf("stat %s: %w", name, err)
+	}
+	start := max(info.Size()-int64(maxOutputBytes), 0)
+	if _, err := file.Seek(start, io.SeekStart); err != nil {
+		return "", false, fmt.Errorf("seek %s: %w", name, err)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, int64(maxOutputBytes)))
+	if err != nil {
+		return "", false, fmt.Errorf("read %s: %w", name, err)
+	}
+	output = string(data)
+	if start > 0 {
+		if idx := strings.IndexByte(output, '\n'); idx >= 0 {
+			output = output[idx+1:]
+		}
+	}
+	return tailOutputCap(output), true, nil
+}
+
+func (m *Model) clearCallOutputLoadError() {
+	if strings.HasPrefix(m.loadErr, "load call output: ") {
+		m.loadErr = ""
+	}
 }
 
 // tailOutputCap enforces the maxOutputLines / maxOutputBytes cap on a string,

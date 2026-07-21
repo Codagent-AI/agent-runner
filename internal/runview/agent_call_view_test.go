@@ -181,7 +181,7 @@ func TestAgentCallLoadsPersistedOutputAndIgnoresAuditResponse(t *testing.T) {
 	}
 }
 
-func TestAgentCallResumeRequiresInactiveSuccessfulKnownSession(t *testing.T) {
+func TestAgentCallResumeRequiresInactiveTerminalKnownSession(t *testing.T) {
 	tree := agentCallTestTree()
 	tree.ApplyEvent(agentCallStartEvent("call-1", "attempt-1", "agent", "implementor"))
 	tree.ApplyEvent(agentCallEndEvent("call-1", "attempt-1", "agent", "implementor", "success", true, 1000, nil, nil))
@@ -203,9 +203,81 @@ func TestAgentCallResumeRequiresInactiveSuccessfulKnownSession(t *testing.T) {
 		t.Fatal("call without session exposed resume")
 	}
 	call.SessionID = "child-session"
-	call.Status = StatusFailed
-	if m.canResumeAgentSession(call) {
-		t.Fatal("failed call exposed completed-session resume")
+	for _, status := range []NodeStatus{StatusSuccess, StatusFailed, StatusSkipped} {
+		call.Status = status
+		if !m.canResumeAgentSession(call) {
+			t.Errorf("inactive terminal call with status %v should be resumable", status)
+		}
+	}
+	for _, status := range []NodeStatus{StatusPending, StatusInProgress} {
+		call.Status = status
+		if m.canResumeAgentSession(call) {
+			t.Errorf("non-terminal call with status %v exposed resume", status)
+		}
+	}
+}
+
+func TestAgentCallPersistedOutputLoadIsMemoryBounded(t *testing.T) {
+	sessionDir := t.TempDir()
+	tree := agentCallTestTree()
+	tree.ApplyEvent(agentCallStartEvent("call-1", "attempt-1", "agent", "implementor"))
+	tree.ApplyEvent(agentCallEndEvent("call-1", "attempt-1", "agent", "implementor", "success", true, 1000, nil, nil))
+	call := tree.Root.Children[0].Children[0]
+	outputDir := filepath.Join(sessionDir, "output")
+	if err := os.MkdirAll(outputDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	large := strings.Repeat("discarded-line\n", maxOutputLines+5000) + "retained-tail"
+	path := filepath.Join(outputDir, sanitizeOutputPrefixForTest(call.CallOutputPrefix)+".out")
+	if err := os.WriteFile(path, []byte(large), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := newTestModel(tree, FromInspect)
+	m.sessionDir = sessionDir
+	m.path = []*StepNode{tree.Root, tree.Root.Children[0]}
+
+	m.loadSelectedAgentCallOutput()
+
+	if len(call.Stdout) > maxOutputBytes {
+		t.Fatalf("loaded output bytes = %d, want at most %d", len(call.Stdout), maxOutputBytes)
+	}
+	if strings.Count(call.Stdout, "\n") > maxOutputLines || !strings.Contains(call.Stdout, "retained-tail") {
+		t.Fatalf("bounded output did not retain the expected tail: bytes=%d lines=%d", len(call.Stdout), strings.Count(call.Stdout, "\n"))
+	}
+}
+
+func TestAgentCallOutputReadFailureRemainsRetryableAndVisible(t *testing.T) {
+	sessionDir := t.TempDir()
+	tree := agentCallTestTree()
+	tree.ApplyEvent(agentCallStartEvent("call-1", "attempt-1", "agent", "implementor"))
+	tree.ApplyEvent(agentCallEndEvent("call-1", "attempt-1", "agent", "implementor", "success", true, 1000, nil, nil))
+	call := tree.Root.Children[0].Children[0]
+	outputDir := filepath.Join(sessionDir, "output")
+	if err := os.MkdirAll(outputDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(outputDir, sanitizeOutputPrefixForTest(call.CallOutputPrefix)+".out")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	m := newTestModel(tree, FromInspect)
+	m.sessionDir = sessionDir
+	m.path = []*StepNode{tree.Root, tree.Root.Children[0]}
+
+	m.loadSelectedAgentCallOutput()
+	if call.CallOutputLoaded || !strings.Contains(m.loadErr, "load call output") {
+		t.Fatalf("read failure loaded=%v error=%q, want retryable surfaced error", call.CallOutputLoaded, m.loadErr)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("recovered output"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m.loadSelectedAgentCallOutput()
+	if !call.CallOutputLoaded || call.Stdout != "recovered output" || strings.Contains(m.loadErr, "load call output") {
+		t.Fatalf("retry loaded=%v stdout=%q error=%q", call.CallOutputLoaded, call.Stdout, m.loadErr)
 	}
 }
 
@@ -298,6 +370,11 @@ func TestAgentCallSummaryRollsUpExactlyOnceWithoutAddingChildDuration(t *testing
 	m.showSummary = true
 	m.path = []*StepNode{tree.Root, parent}
 	plain := tuistyle.Sanitize(m.renderSummary())
+	lines := strings.Split(plain, "\n")
+	totalLine := summaryLineContaining(t, lines, "Total")
+	if !strings.Contains(totalLine, "1m 0s") || strings.Contains(totalLine, "1m 40s") {
+		t.Fatalf("drilled scope total double-counted child duration: %q", totalLine)
+	}
 	parentTurn := strings.Index(plain, "parent turn")
 	launchCall := strings.Index(plain, "call agent: reviewer")
 	firstCall := strings.Index(plain, "call session: implementor-session")

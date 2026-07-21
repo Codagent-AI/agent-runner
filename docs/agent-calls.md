@@ -99,7 +99,7 @@ An accepted call appears beneath its parent with an `↗` glyph and an explicit 
 
 For an autonomous-headless parent, the live run view follows the active call and streams its stdout and stderr into the child's detail pane, separate from parent output. Manual navigation pauses auto-follow. When an interactive parent owns the terminal, Agent Runner does not interrupt it to draw the TUI; accumulated calls appear when terminal ownership returns.
 
-Selecting a call shows its request and parent identity, target, resolved profile, CLI, model, session metadata, working directory, prompt, outcome, duration, metrics, error, and retained output. In an inactive run, a successful call with a known native CLI session ID can use the normal direct-session resume action.
+Selecting a call shows its request and parent identity, target, resolved profile, CLI, model, session metadata, working directory, prompt, outcome, duration, metrics, error, and retained output. In an inactive run, a completed call with a known native CLI session ID can use the normal direct-session resume action.
 
 The completed summary treats a parent with calls as a container. Entering it shows `parent turn` followed by each call. Usage and cost include the parent attempts and every call exactly once. Duration remains the parent's wall-clock duration because synchronous child time overlaps the time the parent spent waiting.
 
