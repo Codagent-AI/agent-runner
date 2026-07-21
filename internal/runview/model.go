@@ -1746,6 +1746,15 @@ func findFailedLeaf(n *StepNode) *StepNode {
 }
 
 func (m *Model) refreshData() {
+	// Views opened from the run list or inspect command read called-agent output
+	// from files rather than receiving the in-process OutputChunkMsg stream. An
+	// in-progress call's file can grow between refreshes, so make those snapshots
+	// reloadable before applying the next batch of lifecycle events. Resetting
+	// before replay also guarantees one final load when this batch completes the
+	// call or the run lock disappears.
+	if m.active {
+		invalidateInProgressAgentCallOutput(m.tree.Root)
+	}
 	m.active = runlock.Check(m.sessionDir) == runlock.LockActive
 	events, err := m.tailer.ReadSince(m.sessionDir)
 	if err != nil {
@@ -1755,6 +1764,18 @@ func (m *Model) refreshData() {
 	}
 	for _, e := range events {
 		m.tree.ApplyEvent(e)
+	}
+}
+
+func invalidateInProgressAgentCallOutput(node *StepNode) {
+	if node == nil {
+		return
+	}
+	if node.Type == NodeAgentCall && node.Status == StatusInProgress {
+		node.CallOutputLoaded = false
+	}
+	for _, child := range node.Children {
+		invalidateInProgressAgentCallOutput(child)
 	}
 }
 

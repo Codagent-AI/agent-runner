@@ -281,6 +281,40 @@ func TestAgentCallOutputReadFailureRemainsRetryableAndVisible(t *testing.T) {
 	}
 }
 
+func TestActiveExternalViewRefreshesGrowingAgentCallOutput(t *testing.T) {
+	sessionDir := t.TempDir()
+	tree := agentCallTestTree()
+	tree.ApplyEvent(agentCallStartEvent("call-1", "attempt-1", "agent", "implementor"))
+	call := tree.Root.Children[0].Children[0]
+	outputDir := filepath.Join(sessionDir, "output")
+	if err := os.MkdirAll(outputDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(outputDir, sanitizeOutputPrefixForTest(call.CallOutputPrefix)+".out")
+	if err := os.WriteFile(path, []byte("first chunk"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := newTestModel(tree, FromInspect)
+	m.sessionDir = sessionDir
+	m.path = []*StepNode{tree.Root, tree.Root.Children[0]}
+	m.active = true
+
+	m.loadSelectedAgentCallOutput()
+	if call.Stdout != "first chunk" || !call.CallOutputLoaded {
+		t.Fatalf("initial output=%q loaded=%v", call.Stdout, call.CallOutputLoaded)
+	}
+	if err := os.WriteFile(path, []byte("first chunk\nsecond chunk"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m.refreshData()
+	m.loadSelectedAgentCallOutput()
+
+	if call.Stdout != "first chunk\nsecond chunk" {
+		t.Fatalf("refreshed output=%q, want growing persisted output", call.Stdout)
+	}
+}
+
 func TestLiveAgentCallAppearsStreamsSeparatelyAndAutoFollows(t *testing.T) {
 	sessionDir := t.TempDir()
 	tree := agentCallTestTree()
