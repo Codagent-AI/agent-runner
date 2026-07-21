@@ -6,6 +6,28 @@ params:
     required: true
 
 steps:
+  - id: validate-feature-branch
+    command: |
+      current_branch=$(git branch --show-current)
+      if [ -z "$current_branch" ]; then
+        echo "openspec:change2 requires a named feature branch; HEAD is detached" >&2
+        exit 1
+      fi
+
+      default_branch=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name) || {
+        echo "could not determine the repository's default branch" >&2
+        exit 1
+      }
+      if [ -z "$default_branch" ]; then
+        echo "repository default branch is empty" >&2
+        exit 1
+      fi
+
+      if [ "$current_branch" = "$default_branch" ]; then
+        echo "openspec:change2 cannot run on the default branch '$default_branch'; create or switch to a feature branch first" >&2
+        exit 1
+      fi
+
   - id: define
     workflow: define-change.yaml
     params:

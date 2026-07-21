@@ -18,6 +18,8 @@ steps:
     prompt: |
       Validate the approved proposal, specifications, and design for OpenSpec change "{{change_name}}" before task planning.
 
+      This is mechanical OpenSpec validation, not an artifact review. Do not invoke `codagent:proposal-review`, `codagent:review-approach`, `codagent:review-spec`, or `codagent:review-tasks`.
+
       Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports in the existing definition artifacts. Keep running the command and fixing until the existing artifacts pass validation. Do not create task files in this step.
 
       Do not treat that command alone as proof that requirements are archiveable. Run `openspec show "{{change_name}}" --json` and reconcile its parsed requirements against every `### Requirement:` heading in the source delta files. The parsed and source requirement counts MUST match, every non-empty delta MUST parse at least one requirement, and every source heading MUST map in source order to the corresponding parsed requirement text; OpenSpec's JSON may omit requirement names, so use the normative text immediately following each heading for that mapping. Then verify that every matched parsed requirement contains at least one parsed scenario. OpenSpec can report a change as valid while parsing zero requirements or scenarios when malformed headings, a code fence, a note, or other content disconnects source sections from the parser. Mechanically fix already-approved formatting or move already-approved scenario blocks when the intended mapping is unambiguous. If a missing requirement or scenario requires inventing behavior or deciding where it belongs, stop and route the change back to `define-change`.
@@ -48,8 +50,8 @@ steps:
 
       You MUST create detailed task files under `openspec/changes/{{change_name}}/tasks/*.md` and `openspec/changes/{{change_name}}/tasks.md` as an index linking to them. The implementation workflow requires at least one matching `tasks/*.md` file.
 
-  - id: review-plan
-    workflow: review-plan.yaml
+  - id: review-tasks
+    workflow: review-tasks.yaml
     params:
       change_name: "{{change_name}}"
 
@@ -59,6 +61,8 @@ steps:
     capture: post_validation
     prompt: |
       Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports. Keep running the command and fixing until it passes with no errors.
+
+      This is mechanical OpenSpec and task-file validation, not an artifact review. Do not invoke `codagent:proposal-review`, `codagent:review-approach`, `codagent:review-spec`, or `codagent:review-tasks`.
 
       Run `openspec show "{{change_name}}" --json` again and reconcile its parsed requirements against every source `### Requirement:` heading: require equal nonzero counts for every non-empty delta, map each source heading in order to its parsed normative text, and require at least one parsed scenario for every matched requirement. Fix only unambiguous formatting or placement problems. Treat any missing requirement or scenario semantics, count mismatch without a mechanical cause, or ambiguous attachment as a blocker requiring `define-change`.
 
