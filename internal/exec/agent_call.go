@@ -123,8 +123,7 @@ func (h *AgentCallHandler) HandleAgentCall(ctx context.Context, envelope control
 	h.mu.Lock()
 	if existing := h.accepted[envelope.RequestID]; existing != nil {
 		h.mu.Unlock()
-		<-existing.done
-		return append(json.RawMessage(nil), existing.response...)
+		return waitForAgentCallResponse(existing)
 	}
 	h.mu.Unlock()
 
@@ -138,8 +137,7 @@ func (h *AgentCallHandler) HandleAgentCall(ctx context.Context, envelope control
 	// have reserved it while profile/model/workdir validation ran.
 	if existing := h.accepted[envelope.RequestID]; existing != nil {
 		h.mu.Unlock()
-		<-existing.done
-		return append(json.RawMessage(nil), existing.response...)
+		return waitForAgentCallResponse(existing)
 	}
 	if h.active != nil {
 		active := h.active
@@ -183,6 +181,11 @@ func (h *AgentCallHandler) HandleAgentCall(ctx context.Context, envelope control
 	close(record.done)
 	h.mu.Unlock()
 	return append(json.RawMessage(nil), raw...)
+}
+
+func waitForAgentCallResponse(call *acceptedAgentCall) json.RawMessage {
+	<-call.done
+	return append(json.RawMessage(nil), call.response...)
 }
 
 func (h *AgentCallHandler) lifecycleEvent(record *acceptedAgentCall, target agentcall.Target) AgentCallAccepted {
@@ -441,13 +444,16 @@ func (h *AgentCallHandler) preLaunchFailure(record *acceptedAgentCall, call *res
 }
 
 func (h *AgentCallHandler) emitAgentCallStart(record *acceptedAgentCall, call *resolvedAgentCall) {
-	data := map[string]any{
-		"call_id": record.callID, "request_id": record.requestID, "parent_attempt_id": record.parentAttemptID,
-		"prompt": call.request.Prompt, "target_kind": string(call.target.Kind), "target_name": call.target.Name,
-		"workdir": call.workdir, "profile": call.profileName, "cli": call.cliName, "model": call.model,
-		"session_strategy": agentCallSessionStrategy(call), "resolved_session_id": call.sessionID, "session_resumed": call.resume,
-		"context": contextSnapshot(h.options.Context),
-	}
+	data := agentCallAuditData(record, call)
+	data["prompt"] = call.request.Prompt
+	data["workdir"] = call.workdir
+	data["profile"] = call.profileName
+	data["cli"] = call.cliName
+	data["model"] = call.model
+	data["session_strategy"] = agentCallSessionStrategy(call)
+	data["resolved_session_id"] = call.sessionID
+	data["session_resumed"] = call.resume
+	data["context"] = contextSnapshot(h.options.Context)
 	emitAudit(h.options.Context, audit.Event{
 		Timestamp: record.started.UTC().Format(time.RFC3339Nano), Prefix: agentCallPrefix(h.options.Parent.Prefix, record.callID),
 		Type: audit.EventAgentCallStart, Data: data,
@@ -473,14 +479,15 @@ func (h *AgentCallHandler) emitAgentCallEnd(record *acceptedAgentCall, call *res
 		CLI: call.cliName, SessionID: resolvedSessionID, SessionStrategy: agentCallSessionStrategy(call),
 		SessionResumed: call.resume, AgentInvoked: invocation.CLILaunched,
 	}
-	data := map[string]any{
-		"call_id": record.callID, "request_id": record.requestID, "parent_attempt_id": record.parentAttemptID,
-		"target_kind": string(call.target.Kind), "target_name": call.target.Name,
-		"outcome": string(invocation.Outcome), "duration_ms": duration.Milliseconds(),
-		"cli_launched": invocation.CLILaunched, "discovered_session_id": invocation.DiscoveredSessionID,
-		"resolved_session_id": resolvedSessionID, "identity": identity,
-		"usage": invocation.Usage, "estimated_api_cost_usd": invocation.EstimatedCostUSD,
-	}
+	data := agentCallAuditData(record, call)
+	data["outcome"] = string(invocation.Outcome)
+	data["duration_ms"] = duration.Milliseconds()
+	data["cli_launched"] = invocation.CLILaunched
+	data["discovered_session_id"] = invocation.DiscoveredSessionID
+	data["resolved_session_id"] = resolvedSessionID
+	data["identity"] = identity
+	data["usage"] = invocation.Usage
+	data["estimated_api_cost_usd"] = invocation.EstimatedCostUSD
 	if invocation.CLILaunched {
 		data["exit_code"] = invocation.ExitCode
 	}
@@ -497,6 +504,16 @@ func (h *AgentCallHandler) emitAgentCallEnd(record *acceptedAgentCall, call *res
 		Timestamp: finished.UTC().Format(time.RFC3339Nano), Prefix: agentCallPrefix(h.options.Parent.Prefix, record.callID),
 		Type: audit.EventAgentCallEnd, Data: data,
 	})
+}
+
+func agentCallAuditData(record *acceptedAgentCall, call *resolvedAgentCall) map[string]any {
+	return map[string]any{
+		"call_id":           record.callID,
+		"request_id":        record.requestID,
+		"parent_attempt_id": record.parentAttemptID,
+		"target_kind":       string(call.target.Kind),
+		"target_name":       call.target.Name,
+	}
 }
 
 func agentCallSessionStrategy(call *resolvedAgentCall) string {

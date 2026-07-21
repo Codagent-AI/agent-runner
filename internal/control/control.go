@@ -539,17 +539,7 @@ func (s *ControlServer) handleCommittedTurn(connection net.Conn, request *contro
 }
 
 func (s *ControlServer) deliverCompletion(request *CompletionRequest) {
-	// The client was already told OK, so prefer delivery over shutdown: only
-	// consult done when the buffer is full and delivery would block.
-	select {
-	case s.completions <- *request:
-		return
-	default:
-	}
-	select {
-	case s.completions <- *request:
-	case <-s.done:
-	}
+	deliverBeforeShutdown(s.completions, *request, s.done)
 }
 
 func (s *ControlServer) deliverCommittedTurn(turn CommittedTurn) {
@@ -560,16 +550,20 @@ func (s *ControlServer) deliverCommittedTurn(turn CommittedTurn) {
 		close(waiter)
 	}
 	s.mu.Unlock()
-	// The client was already told OK, so prefer delivery over shutdown: only
-	// consult done when the buffer is full and delivery would block.
+	deliverBeforeShutdown(s.turns, turn, s.done)
+}
+
+// deliverBeforeShutdown prefers an already-acknowledged event over shutdown.
+// The shutdown channel is consulted only when delivery would otherwise block.
+func deliverBeforeShutdown[T any](destination chan<- T, value T, done <-chan struct{}) {
 	select {
-	case s.turns <- turn:
+	case destination <- value:
 		return
 	default:
 	}
 	select {
-	case s.turns <- turn:
-	case <-s.done:
+	case destination <- value:
+	case <-done:
 	}
 }
 
@@ -667,16 +661,9 @@ func SendControlEventFromEnvironment(ctx context.Context, messageType string, ge
 	if messageType != MessageCompleteStep && messageType != MessageTurnCommitted {
 		return "", fmt.Errorf("unsupported control message type %q", messageType)
 	}
-	values := map[string]string{
-		EnvControlSocket: getenv(EnvControlSocket),
-		EnvRunID:         getenv(EnvRunID),
-		EnvStepID:        getenv(EnvStepID),
-		EnvControlToken:  getenv(EnvControlToken),
-	}
-	for _, key := range []string{EnvControlSocket, EnvRunID, EnvStepID, EnvControlToken} {
-		if values[key] == "" {
-			return "", fmt.Errorf("%s must run inside an interactive agent step session (missing %s)", controlCommandName(messageType), key)
-		}
+	values, missing := requiredEnvironmentValues(getenv, EnvControlSocket, EnvRunID, EnvStepID, EnvControlToken)
+	if missing != "" {
+		return "", fmt.Errorf("%s must run inside an interactive agent step session (missing %s)", controlCommandName(messageType), missing)
 	}
 	request := controlRequest{
 		Type:      messageType,
@@ -713,17 +700,9 @@ func SendAgentCallFromEnvironment(
 	if strings.TrimSpace(requestID) == "" || len(payload) == 0 {
 		return nil, errors.New("agent-call control request is missing request ID or payload")
 	}
-	values := map[string]string{
-		EnvControlSocket: getenv(EnvControlSocket),
-		EnvRunID:         getenv(EnvRunID),
-		EnvStepID:        getenv(EnvStepID),
-		EnvAttemptID:     getenv(EnvAttemptID),
-		EnvControlToken:  getenv(EnvControlToken),
-	}
-	for _, key := range []string{EnvControlSocket, EnvRunID, EnvStepID, EnvAttemptID, EnvControlToken} {
-		if values[key] == "" {
-			return nil, fmt.Errorf("agent-runner internal call-agent-mcp must run inside an enabled agent step (missing %s)", key)
-		}
+	values, missing := requiredEnvironmentValues(getenv, EnvironmentVariables()...)
+	if missing != "" {
+		return nil, fmt.Errorf("agent-runner internal call-agent-mcp must run inside an enabled agent step (missing %s)", missing)
 	}
 	connection, err := (&net.Dialer{}).DialContext(ctx, "unix", values[EnvControlSocket])
 	if err != nil {
@@ -776,6 +755,18 @@ func SendAgentCallFromEnvironment(
 		return nil, errors.New("agent-call control response is missing payload")
 	}
 	return append(json.RawMessage(nil), response.Payload...), nil
+}
+
+func requiredEnvironmentValues(getenv func(string) string, keys ...string) (values map[string]string, missing string) {
+	values = make(map[string]string, len(keys))
+	for _, key := range keys {
+		value := getenv(key)
+		if value == "" {
+			return nil, key
+		}
+		values[key] = value
+	}
+	return values, ""
 }
 
 func sendControlRequest(ctx context.Context, socketPath string, request *controlRequest) (receipt string, retryable bool, err error) {

@@ -110,7 +110,7 @@ func (a *CursorAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, err
 		}
 		args = append([]string{"agent", "--plugin-dir", pluginDir}, args[1:]...)
 	}
-	if !invocationContext.IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid() {
+	if completionCommandEnabled(input) {
 		prepare := a.prepareCompletionPlugin
 		if prepare == nil {
 			prepare = prepareCursorCompletionPlugin
@@ -138,7 +138,7 @@ func (a *CursorAdapter) SpawnEnv(input *BuildArgsInput) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cursor: prepare agent-call integration: %w", err)
 	}
-	completionEnabled := !invocationContext.IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid()
+	completionEnabled := completionCommandEnabled(input)
 	if !completionEnabled && agentCall == nil {
 		return nil, nil
 	}

@@ -92,7 +92,7 @@ func (a *CopilotAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, er
 			args = append(args, "--allow-tool=agent-runner(call_agent)")
 		}
 	}
-	if !context.IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid() {
+	if completionCommandEnabled(input) {
 		prepare := a.prepareCompletionPlugin
 		if prepare == nil {
 			prepare = prepareNextCommandPlugin

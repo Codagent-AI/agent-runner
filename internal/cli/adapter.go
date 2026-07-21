@@ -117,6 +117,13 @@ type BuildArgsInput struct {
 	RunnerIntegration *RunnerIntegration
 }
 
+func completionCommandEnabled(input *BuildArgsInput) bool {
+	return input != nil &&
+		!input.InvocationContext().IsHeadless() &&
+		input.CompletionCommand != nil &&
+		input.CompletionCommand.Valid()
+}
+
 type MCPServerCommand struct {
 	Executable string
 	Args       []string

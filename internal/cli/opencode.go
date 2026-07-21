@@ -89,7 +89,7 @@ func (a *OpenCodeAdapter) SpawnEnv(input *BuildArgsInput) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opencode: prepare agent-call integration: %w", err)
 	}
-	completionEnabled := !invocationContext.IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid()
+	completionEnabled := completionCommandEnabled(input)
 	if !completionEnabled && agentCall == nil {
 		return nil, nil
 	}

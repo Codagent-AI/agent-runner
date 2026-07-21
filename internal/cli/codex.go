@@ -81,7 +81,7 @@ func (a *CodexAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, erro
 	if input.Effort != "" {
 		args = append(args, "-c", `model_reasoning_effort="`+input.Effort+`"`)
 	}
-	if !context.IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid() {
+	if completionCommandEnabled(input) {
 		notify, _ := json.Marshal([]string{input.CompletionCommand.Executable, "internal", "turn-committed"})
 		args = append(args, "-c", "notify="+string(notify))
 	}
@@ -101,7 +101,7 @@ func (a *CodexAdapter) SpawnEnv(input *BuildArgsInput) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("codex: prepare agent-call integration: %w", err)
 	}
-	completionEnabled := !input.InvocationContext().IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid()
+	completionEnabled := completionCommandEnabled(input)
 	if !completionEnabled && agentCall == nil {
 		return nil, nil
 	}

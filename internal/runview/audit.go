@@ -561,11 +561,7 @@ func (t *Tree) applyAgentCallStart(event RawEvent, tokens []prefixToken) {
 	if parent == nil || callID == "" {
 		return
 	}
-	call := callChildByID(parent, callID)
-	if call == nil {
-		call = &StepNode{ID: callID, CallID: callID, Type: NodeAgentCall, Status: StatusPending, Parent: parent}
-		parent.Children = append(parent.Children, call)
-	}
+	call := ensureAgentCallChild(parent, callID)
 	call.Status = StatusInProgress
 	call.Outcome = ""
 	call.Aborted = false
@@ -579,11 +575,7 @@ func (t *Tree) applyAgentCallEnd(event RawEvent, tokens []prefixToken) {
 	if parent == nil || callID == "" {
 		return
 	}
-	call := callChildByID(parent, callID)
-	if call == nil {
-		call = &StepNode{ID: callID, CallID: callID, Type: NodeAgentCall, Status: StatusPending, Parent: parent}
-		parent.Children = append(parent.Children, call)
-	}
+	call := ensureAgentCallChild(parent, callID)
 	call.CallOutputPrefix = event.Prefix
 	applyAgentCallFields(call, event.Data)
 	outcome, _ := stringField(event.Data, "outcome")
@@ -637,6 +629,15 @@ func (t *Tree) applyAgentCallEnd(event RawEvent, tokens []prefixToken) {
 		}
 	}
 	call.Attempts = []AttemptMetrics{metrics}
+}
+
+func ensureAgentCallChild(parent *StepNode, callID string) *StepNode {
+	if call := callChildByID(parent, callID); call != nil {
+		return call
+	}
+	call := &StepNode{ID: callID, CallID: callID, Type: NodeAgentCall, Status: StatusPending, Parent: parent}
+	parent.Children = append(parent.Children, call)
+	return call
 }
 
 func (t *Tree) resolveAgentCallParent(tokens []prefixToken) (parent *StepNode, callID string) {

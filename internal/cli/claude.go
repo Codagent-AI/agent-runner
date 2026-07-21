@@ -97,7 +97,7 @@ func (a *ClaudeAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, err
 		}
 	}
 
-	if !context.IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid() {
+	if completionCommandEnabled(input) {
 		command := input.CompletionCommand.ShellCommand()
 		args = append(args, "--allowedTools", "Bash("+command+")")
 		settings, _ := json.Marshal(map[string]any{
