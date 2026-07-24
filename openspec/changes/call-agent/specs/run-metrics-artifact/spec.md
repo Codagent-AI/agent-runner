@@ -4,6 +4,8 @@
 
 Each accepted agent call that reaches a terminal outcome SHALL append a distinct `agent-call` record to `run-metrics.json`, including an accepted call whose child CLI fails to launch. The record SHALL include its call ID, parent attempt identity, target kind and name, outcome, duration in milliseconds, usage record, `estimated_api_cost_usd`, provenance, and completeness using ordinary agent-step metric semantics. Parent workflow-step records SHALL contain only the parent's own usage and cost; called-agent records SHALL remain separate so consumers can roll up the parent and its calls without counting any execution more than once.
 
+The record's `parent_attempt_id` SHALL be opaque provenance identifying the originating control attempt. Agent Runner MUST NOT promise that it equals a parent record's `record_id` or another foreign key. The record's structural prefix SHALL remain the authoritative parent/child hierarchy.
+
 Called-agent usage and cost SHALL contribute to run totals regardless of call outcome when the child reports them. Every called child that invokes its CLI SHALL participate in usage, canonical-total, and cost coverage calculations; a call rejected or failed before CLI launch MUST NOT participate in those coverage denominators. A called child's duration SHALL be retained on its record but MUST NOT be added to run elapsed time because that interval overlaps the waiting parent; the existing active execution-session duration remains authoritative.
 
 Agent Runner SHALL update the artifact through its existing atomic-write path after each agent call completes. Separate calls SHALL append separate records, an idempotent retry MUST NOT append a duplicate record, and completed call records SHALL accumulate across workflow resume with existing step records.
@@ -11,6 +13,10 @@ Agent Runner SHALL update the artifact through its existing atomic-write path af
 #### Scenario: Successful call appends nested record
 - **WHEN** a called agent succeeds
 - **THEN** `run-metrics.json` contains one `agent-call` record with its call ID, parent attempt identity, target, outcome, duration, usage, and cost data
+
+#### Scenario: Parent attempt identity is not a record foreign key
+- **WHEN** Agent Runner appends an `agent-call` record
+- **THEN** the record contains an opaque `parent_attempt_id` while its structural prefix identifies where the call belongs beneath its parent
 
 #### Scenario: Failed call retains reported metrics
 - **WHEN** a called agent fails after its CLI reports usage or cost

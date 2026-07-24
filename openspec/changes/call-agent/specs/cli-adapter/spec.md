@@ -4,6 +4,8 @@
 
 Every registered CLI adapter SHALL provision the `call_agent` tool for an interactive or autonomous parent agent invocation whose workflow-authored prompt template contains the literal `call_agent` substring, using process-local configuration. The integration MUST NOT modify global or project agent configuration and MUST NOT be provisioned to an ordinary step without that substring or to an agent started by `call_agent`. If an adapter cannot prepare the required integration, Agent Runner SHALL fail the enabled parent step with the preparation cause before launching the parent CLI.
 
+For a Runner-launched OpenCode invocation receiving the `call_agent` integration, Agent Runner SHALL replace inherited `OPENCODE_CONFIG_CONTENT`, `OPENCODE_PERMISSION`, and `OPENCODE_DISABLE_AUTOUPDATE` values with invocation-owned values rather than merging inherited values into the Runner-owned MCP and permission configuration. This replacement SHALL remain process-local and MUST NOT modify persistent global or project configuration.
+
 #### Scenario: Registered adapter provisions the tool
 - **WHEN** Agent Runner prepares a parent agent invocation whose authored prompt contains `call_agent` through any registered CLI adapter
 - **THEN** the invocation exposes the `call_agent` tool
@@ -23,6 +25,10 @@ Every registered CLI adapter SHALL provision the `call_agent` tool for an intera
 #### Scenario: User configuration remains unchanged
 - **WHEN** an adapter provisions `call_agent` for a parent invocation
 - **THEN** no global or project agent configuration is created or modified
+
+#### Scenario: OpenCode integration replaces inherited invocation configuration
+- **WHEN** an enabled OpenCode parent inherits `OPENCODE_CONFIG_CONTENT`, `OPENCODE_PERMISSION`, or `OPENCODE_DISABLE_AUTOUPDATE`
+- **THEN** the spawned parent receives the Runner-owned values for that invocation without merging the inherited values or modifying persistent user or project configuration
 
 #### Scenario: Provisioning failure prevents launch
 - **WHEN** an adapter cannot prepare a safe process-local `call_agent` integration

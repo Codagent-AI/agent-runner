@@ -4,6 +4,8 @@
 
 Every accepted agent call SHALL emit exactly one `agent_call_start` and one `agent_call_end` beneath the parent step's existing nesting prefix. Agent Runner SHALL emit `agent_call_start` after the call passes the acceptance boundary and before attempting to launch its child CLI. Both entries SHALL include a unique `call_id` and the parent attempt identity. Repeated calls from one parent SHALL have distinct call IDs, while an idempotent retry of one request MUST NOT duplicate its event pair.
 
+The `parent_attempt_id` SHALL be opaque provenance identifying the originating control attempt. Agent Runner MUST NOT promise that it equals a parent event ID, metrics `record_id`, or another foreign key. The audit nesting prefix SHALL remain the authoritative parent/child hierarchy.
+
 The `agent_call_start` entry SHALL include the requested prompt; target kind and name; effective working directory; and resolved profile, CLI, model, and session metadata available at start. The `agent_call_end` entry SHALL include the outcome, duration, exit code, discovered session ID, usage, cost, and error information following ordinary agent-step rules.
 
 The full child response MUST NOT be duplicated in `audit.log`. Called-child output SHALL follow ordinary headless agent-step output persistence and privacy behavior. When that execution path persists output files, the call identity SHALL distinguish them from the parent and from other calls.
@@ -11,6 +13,10 @@ The full child response MUST NOT be duplicated in `audit.log`. Called-child outp
 #### Scenario: Successful call emits attributable pair
 - **WHEN** an accepted agent call succeeds
 - **THEN** the audit log contains one start/end pair with the same call ID and parent attempt identity
+
+#### Scenario: Parent attempt identity is opaque provenance
+- **WHEN** Agent Runner emits an agent-call event pair
+- **THEN** the entries include an opaque `parent_attempt_id` while their structural nesting prefix identifies where the call belongs beneath its parent
 
 #### Scenario: Failed child emits end event
 - **WHEN** an accepted agent call starts a child that fails

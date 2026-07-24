@@ -627,6 +627,13 @@ func writeControlResponse(writer io.Writer, response controlResponse) error {
 	return json.NewEncoder(writer).Encode(response)
 }
 
+// FitsAgentCallPayload reports whether payload fits in the complete framed
+// control response read by an agent-call client.
+func FitsAgentCallPayload(payload json.RawMessage) bool {
+	encoded, err := json.Marshal(controlResponse{OK: true, Payload: payload})
+	return err == nil && len(encoded)+1 <= MaxControlMessageBytes
+}
+
 func (s *ControlServer) reject(connection net.Conn, reason string, request *controlRequest) {
 	s.emit(audit.EventControlRejected, request.StepID, map[string]any{"reason": reason, "message_type": request.Type, "request_id": request.RequestID})
 	_ = writeControlResponse(connection, controlResponse{OK: false, Error: reason})

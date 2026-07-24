@@ -2,11 +2,15 @@
 
 ### Requirement: Agent-call access to named sessions
 
-An agent call targeting `session: <name>` SHALL use the same declaration visibility, pinned agent profile, run-scoped named-session map, persistence, composition, and drift behavior as a workflow step targeting that name. Agent calls and workflow steps SHALL read and update the same named-session entry. A call-level `model` override SHALL apply to the invocation without changing the agent profile pinned by the declaration. The invocation SHALL use the CLI resolved from the declared profile.
+An agent call targeting `session: <name>` SHALL use the same declaration visibility, pinned agent profile, run-scoped named-session map, persistence, composition, and drift behavior as a workflow step targeting that name. Agent calls and workflow steps SHALL read and update the same named-session entry. A call SHALL add a new entry only after its called child succeeds; a failed, canceled, or runner/transport-error call MUST NOT establish a new named-session entry. A call-level `model` override SHALL apply to the invocation without changing the agent profile pinned by the declaration. The invocation SHALL use the CLI resolved from the declared profile.
 
 #### Scenario: Call creates named session on first use
-- **WHEN** an agent call targets a declared named session with no entry in the run-scoped named-session map
+- **WHEN** a successful agent call targets a declared named session with no entry in the run-scoped named-session map
 - **THEN** Agent Runner creates the CLI session and stores its ID under the declared name
+
+#### Scenario: Unsuccessful first call does not update shared state
+- **WHEN** an agent call targets a declared named session with no stored entry and then fails, is canceled, or encounters a runner or transport error
+- **THEN** the shared run-scoped named-session map remains unchanged
 
 #### Scenario: Call resumes workflow-created named session
 - **WHEN** a workflow step previously created the named session targeted by an agent call

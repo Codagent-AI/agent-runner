@@ -455,6 +455,61 @@ func TestAgentCallHandlerSharesAndFlushesNamedSessions(t *testing.T) {
 	}
 }
 
+func TestAgentCallHandlerDoesNotPersistNamedSessionAfterFailedFirstUse(t *testing.T) {
+	adapter := &callTestAdapter{discovered: "failed-session"}
+	runner := &callTestRunner{result: ProcessResult{Started: true, ExitCode: 1}}
+	options := testAgentCallOptions(t.TempDir(), runner, adapter)
+	flushes := 0
+	options.Context.FlushState = func() { flushes++ }
+
+	response := decodeCallResponse(t, NewAgentCallHandler(options).HandleAgentCall(
+		context.Background(),
+		control.AgentCallRequest{
+			RequestID: "failed-first-use",
+			Payload:   json.RawMessage(`{"prompt":"fail","session":"named"}`),
+		},
+	))
+
+	if response.Error == nil || response.Error.Code != agentcall.CodeExecutionFailed {
+		t.Fatalf("response = %#v, want %q", response, agentcall.CodeExecutionFailed)
+	}
+	if len(options.Context.NamedSessions) != 0 {
+		t.Fatalf("failed call persisted named session: %v", options.Context.NamedSessions)
+	}
+	if flushes != 0 {
+		t.Fatalf("failed call flushed named-session state %d times, want 0", flushes)
+	}
+}
+
+func TestAgentCallHandlerReturnsStructuredErrorForOversizedSuccessfulResult(t *testing.T) {
+	runner := &callTestRunner{result: ProcessResult{
+		Started: true,
+		Stdout:  strings.Repeat("x", control.MaxControlMessageBytes),
+	}}
+	options := testAgentCallOptions(t.TempDir(), runner, &callTestAdapter{})
+	logger := &recordingAuditLogger{}
+	options.Context.AuditLogger = logger
+
+	response := decodeCallResponse(t, NewAgentCallHandler(options).HandleAgentCall(
+		context.Background(),
+		control.AgentCallRequest{
+			RequestID: "oversized",
+			Payload:   json.RawMessage(`{"prompt":"large result","agent":"implementor"}`),
+		},
+	))
+
+	if response.Error == nil || response.Error.Code != "result_too_large" {
+		t.Fatalf("response = %#v, want structured oversized-result error", response)
+	}
+	if response.CallID == "" || response.Result != nil {
+		t.Fatalf("response = %#v, want call identity without inline result", response)
+	}
+	events := agentCallAuditEvents(logger.events)
+	if len(events) != 2 || events[1].Data["outcome"] != string(OutcomeSuccess) {
+		t.Fatalf("oversized successful child evidence = %+v, want successful start/end pair", events)
+	}
+}
+
 func TestAgentCallHandlerCachesAcceptedLaunchFailure(t *testing.T) {
 	adapter := &callTestAdapter{}
 	runner := &callTestRunner{err: errors.New("launch failed")}

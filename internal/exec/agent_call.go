@@ -173,6 +173,15 @@ func (h *AgentCallHandler) HandleAgentCall(ctx context.Context, envelope control
 		h.options.OnFinished(h.lifecycleEvent(record, resolved.target))
 	}
 	raw := marshalAgentCallResponse(execution.response)
+	if execution.response.Result != nil && !control.FitsAgentCallPayload(raw) {
+		execution.response = acceptedFailure(
+			record,
+			agentcall.CodeResultTooLarge,
+			fmt.Sprintf("called agent result exceeds the %d-byte control message limit; inspect the persisted call output", control.MaxControlMessageBytes),
+			resolved.target,
+		)
+		raw = marshalAgentCallResponse(execution.response)
+	}
 	h.mu.Lock()
 	record.response = raw
 	if h.active == record {
@@ -410,6 +419,10 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 		message := "called agent failed: " + runErr.Error()
 		return agentCallExecution{response: acceptedFailure(record, agentcall.CodeExecutionFailed, message, call.target), invocation: invocation, errorMessage: message}
 	}
+	if invocation.Outcome != OutcomeSuccess {
+		message := fmt.Sprintf("called agent failed with exit code %d", invocation.ExitCode)
+		return agentCallExecution{response: acceptedFailure(record, agentcall.CodeExecutionFailed, message, call.target), invocation: invocation, errorMessage: message}
+	}
 	if call.target.Kind == agentcall.TargetSession {
 		discovered := invocation.DiscoveredSessionID
 		if discovered == "" {
@@ -421,10 +434,6 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 				h.options.Context.FlushState()
 			}
 		}
-	}
-	if invocation.Outcome != OutcomeSuccess {
-		message := fmt.Sprintf("called agent failed with exit code %d", invocation.ExitCode)
-		return agentCallExecution{response: acceptedFailure(record, agentcall.CodeExecutionFailed, message, call.target), invocation: invocation, errorMessage: message}
 	}
 	return agentCallExecution{response: agentcall.Response{
 		CallID: record.callID, Result: &agentcall.Result{Target: call.target, Response: invocation.Response},

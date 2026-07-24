@@ -28,6 +28,7 @@ const (
 	CodeExecutionFailed = "execution_failed"
 	CodeCallCanceled    = "call_canceled"
 	CodeControlFailure  = "control_failure"
+	CodeResultTooLarge  = "result_too_large"
 )
 
 const toolDescription = "Call one Agent Runner profile or declared named session. The tool is synchronous and serial: " +

@@ -102,27 +102,41 @@ Agent Runner MUST NOT impose a fixed duration limit on a valid agent call. The p
 
 ### Requirement: Working-directory behavior
 
-The called child SHALL run in the same worktree as its parent. When `workdir` is omitted, the child SHALL use the parent's effective working directory. When `workdir` is supplied, Agent Runner SHALL apply the existing agent-step validation and resolution rules.
+The called child SHALL remain within the current worktree established for the run. Agent Runner SHALL use the Git worktree containing the run's launch directory as that boundary; when the launch directory is not inside a Git worktree, the launch directory itself SHALL be the boundary. Loading a workflow file from a different repository MUST NOT change the boundary.
+
+When `workdir` is omitted, the child SHALL use the parent's effective working directory. A relative `workdir` SHALL resolve from the parent's effective working directory. Every resolved `workdir`, including a path reached through a symbolic link, MUST remain inside the current worktree boundary.
 
 #### Scenario: Omitted workdir uses parent directory
 - **WHEN** a parent running from an effective working directory invokes `call_agent` without `workdir`
 - **THEN** the child runs from the parent's effective working directory
 
-#### Scenario: Explicit workdir is honored
-- **WHEN** a valid call supplies `workdir: frontend`
-- **THEN** the child runs from `frontend` according to existing agent-step workdir semantics
+#### Scenario: Relative workdir uses parent directory as its base
+- **WHEN** a parent running from `/repo/backend` invokes `call_agent` with `workdir: frontend`
+- **THEN** Agent Runner resolves the child's working directory as `/repo/backend/frontend`
+
+#### Scenario: Workdir cannot escape the current worktree
+- **WHEN** a call supplies a path or symbolic link that resolves outside the current worktree boundary
+- **THEN** Agent Runner rejects the workdir without spawning the child
+
+#### Scenario: External workflow file does not move the boundary
+- **WHEN** Agent Runner launches inside one worktree and loads a workflow file located in another repository
+- **THEN** called children remain confined to the worktree containing the launch directory
 
 ### Requirement: Session behavior
 
-An `agent` target SHALL start a fresh session for every call and MUST NOT add that session to the named-session map. A `session` target SHALL use the existing run-scoped named-session declaration and map, creating the session on first use or resuming the stored CLI session on subsequent use.
+An `agent` target SHALL start a fresh session for every call and MUST NOT add that session to the named-session map. A `session` target SHALL use the existing run-scoped named-session declaration and map, creating the session on first successful use or resuming the stored CLI session on subsequent use. A failed, canceled, or runner/transport-error call MUST NOT establish a new named-session entry.
 
 #### Scenario: Repeated profile calls remain fresh
 - **WHEN** two calls independently target `agent: implementor`
 - **THEN** Agent Runner starts two distinct CLI sessions and stores neither as a named session
 
 #### Scenario: Named session is created on first call
-- **WHEN** a call targets a declared named session with no stored CLI session
+- **WHEN** a successful call targets a declared named session with no stored CLI session
 - **THEN** Agent Runner creates the CLI session and stores its ID under the declared name
+
+#### Scenario: Unsuccessful first call does not establish named-session state
+- **WHEN** a call targeting a declared named session with no stored CLI session fails, is canceled, or encounters a runner or transport error
+- **THEN** Agent Runner leaves the named-session entry unset
 
 #### Scenario: Workflow-created named session is reused
 - **WHEN** an ordinary workflow step already created the targeted named session
@@ -152,6 +166,8 @@ Agent Runner MUST reject a named-session call whose resolved CLI session is the 
 
 A successful call SHALL return a structured tool result containing the child's final response and the requested target kind and name. The result MUST NOT expose the raw CLI session ID, usage, or cost. A validation or child-execution failure SHALL return a structured tool error without automatically failing the parent step or retrying the call.
 
+The control channel SHALL retain its 16 MiB message limit. When an otherwise successful child's encoded tool result exceeds that limit, Agent Runner SHALL return a structured oversized-result error, keep the parent attempt active, and retain the child's persisted output and execution evidence for inspection. Agent Runner SHALL NOT stream or chunk oversized results in this change.
+
 #### Scenario: Named-session success result
 - **WHEN** a child targeted through `session: implementor-session` succeeds
 - **THEN** the tool result contains the child's final response and identifies the named-session target
@@ -167,6 +183,10 @@ A successful call SHALL return a structured tool result containing the child's f
 #### Scenario: Parent explicitly retries
 - **WHEN** a call returns a failure and the parent submits a later valid call
 - **THEN** Agent Runner treats the later call as a separate invocation
+
+#### Scenario: Oversized successful response retains evidence
+- **WHEN** a child succeeds but its encoded tool result exceeds the 16 MiB control-message limit
+- **THEN** the tool returns a structured oversized-result error, keeps the parent active, and retains the child's persisted output and execution evidence
 
 ### Requirement: Cancellation propagation
 
