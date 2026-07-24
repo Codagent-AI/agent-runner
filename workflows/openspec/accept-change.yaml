@@ -7,15 +7,15 @@ params:
     required: true
 
 sessions:
-  - name: acceptance-agent
+  - name: lead-agent
     agent: planner
 
 steps:
   - id: accept
-    session: acceptance-agent
+    session: lead-agent
     mode: interactive
     prompt: |
-      Help the user review, test, and request additional changes for implemented OpenSpec change "{{change_name}}". This is a fresh change-level session and the pull request must remain a draft throughout this step.
+      Continue helping the user review, test, and request additional changes for implemented OpenSpec change "{{change_name}}" in the existing change-level lead-agent session. The pull request must remain a draft throughout this step.
 
       The implementation workflow has already gathered completion evidence. Start by reading the canonical handoff at `{{session_dir}}/output/acceptance-handoff.md` and use its referenced evidence. Verify that its head SHA still equals both local `HEAD` and the draft pull request's current `headRefOid`; never present stale evidence or ask the user to accept a moving branch name. Do not make the user wait while you reconstruct an overview that the handoff already provides. Explicitly call out and show the referenced screenshots and their text equivalents when screenshots are applicable.
 
