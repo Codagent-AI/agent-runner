@@ -1476,7 +1476,8 @@ func (m *Model) loadSelectedAgentCallOutput() {
 	m.clearCallOutputLoadError()
 }
 
-func filterAgentCallOutput(node *StepNode, stdout, stderr string) (string, string) {
+func filterAgentCallOutput(node *StepNode, rawStdout, rawStderr string) (stdout, stderr string) {
+	stdout, stderr = rawStdout, rawStderr
 	adapter, err := cli.Get(node.AgentCLI)
 	if err != nil {
 		return stdout, stderr

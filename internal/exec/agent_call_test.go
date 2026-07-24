@@ -651,6 +651,72 @@ func TestAgentCallHandlerDuplicateWaitsForSameEventualResult(t *testing.T) {
 	}
 }
 
+func TestAgentCallHandlerCanceledDuplicateDoesNotChangeStoredResult(t *testing.T) {
+	runner := &callTestRunner{started: make(chan AgentProcessOptions, 1), release: make(chan struct{}), result: ProcessResult{Started: true, Stdout: "done"}}
+	handler := NewAgentCallHandler(testAgentCallOptions(t.TempDir(), runner, &callTestAdapter{}))
+	request := control.AgentCallRequest{RequestID: "same", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`)}
+	originalDone := make(chan agentcall.Response, 1)
+	go func() {
+		originalDone <- decodeCallResponse(t, handler.HandleAgentCall(context.Background(), request))
+	}()
+	<-runner.started
+
+	duplicateCtx, cancelDuplicate := context.WithCancel(context.Background())
+	duplicateDone := make(chan agentcall.Response, 1)
+	go func() {
+		duplicateDone <- decodeCallResponse(t, handler.HandleAgentCall(duplicateCtx, request))
+	}()
+	cancelDuplicate()
+
+	var duplicate agentcall.Response
+	select {
+	case duplicate = <-duplicateDone:
+	case <-time.After(250 * time.Millisecond):
+		close(runner.release)
+		t.Fatal("canceled duplicate remained blocked on the original call")
+	}
+	if duplicate.Error == nil || duplicate.Error.Code != agentcall.CodeCallCanceled || duplicate.CallID == "" {
+		close(runner.release)
+		t.Fatalf("canceled duplicate response = %#v", duplicate)
+	}
+	if runner.calls != 1 {
+		close(runner.release)
+		t.Fatalf("duplicate launched %d children, want 1", runner.calls)
+	}
+
+	close(runner.release)
+	original := <-originalDone
+	retry := decodeCallResponse(t, handler.HandleAgentCall(context.Background(), request))
+	if original.Error != nil || original.Result == nil || retry.Error != nil || retry.Result == nil {
+		t.Fatalf("stored responses = original %#v, retry %#v", original, retry)
+	}
+	if original.CallID != duplicate.CallID || retry.CallID != original.CallID {
+		t.Fatalf("call IDs = duplicate %q, original %q, retry %q", duplicate.CallID, original.CallID, retry.CallID)
+	}
+}
+
+func TestAgentCallHandlerCompletedDuplicateWinsOverCanceledContext(t *testing.T) {
+	runner := &callTestRunner{result: ProcessResult{Started: true, Stdout: "done"}}
+	handler := NewAgentCallHandler(testAgentCallOptions(t.TempDir(), runner, &callTestAdapter{}))
+	request := control.AgentCallRequest{RequestID: "same", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`)}
+	original := decodeCallResponse(t, handler.HandleAgentCall(context.Background(), request))
+	if original.Error != nil || original.Result == nil {
+		t.Fatalf("original response = %#v", original)
+	}
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for range 100 {
+		duplicate := decodeCallResponse(t, handler.HandleAgentCall(canceledCtx, request))
+		if duplicate.Error != nil || duplicate.Result == nil || duplicate.CallID != original.CallID {
+			t.Fatalf("completed duplicate response = %#v, want stored result %#v", duplicate, original)
+		}
+	}
+	if runner.calls != 1 {
+		t.Fatalf("duplicate launched %d children, want 1", runner.calls)
+	}
+}
+
 func TestAgentCallHandlerCancellationIsCachedAndReleasesSlot(t *testing.T) {
 	runner := &callTestRunner{started: make(chan AgentProcessOptions, 2), release: make(chan struct{})}
 	options := testAgentCallOptions(t.TempDir(), runner, &callTestAdapter{})

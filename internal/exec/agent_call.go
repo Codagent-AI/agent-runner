@@ -123,7 +123,7 @@ func (h *AgentCallHandler) HandleAgentCall(ctx context.Context, envelope control
 	h.mu.Lock()
 	if existing := h.accepted[envelope.RequestID]; existing != nil {
 		h.mu.Unlock()
-		return waitForAgentCallResponse(existing)
+		return waitForAgentCallResponse(ctx, existing)
 	}
 	h.mu.Unlock()
 
@@ -137,7 +137,7 @@ func (h *AgentCallHandler) HandleAgentCall(ctx context.Context, envelope control
 	// have reserved it while profile/model/workdir validation ran.
 	if existing := h.accepted[envelope.RequestID]; existing != nil {
 		h.mu.Unlock()
-		return waitForAgentCallResponse(existing)
+		return waitForAgentCallResponse(ctx, existing)
 	}
 	if h.active != nil {
 		active := h.active
@@ -192,9 +192,23 @@ func (h *AgentCallHandler) HandleAgentCall(ctx context.Context, envelope control
 	return append(json.RawMessage(nil), raw...)
 }
 
-func waitForAgentCallResponse(call *acceptedAgentCall) json.RawMessage {
-	<-call.done
-	return append(json.RawMessage(nil), call.response...)
+func waitForAgentCallResponse(ctx context.Context, call *acceptedAgentCall) json.RawMessage {
+	select {
+	case <-call.done:
+		return append(json.RawMessage(nil), call.response...)
+	default:
+	}
+	select {
+	case <-call.done:
+		return append(json.RawMessage(nil), call.response...)
+	case <-ctx.Done():
+		return marshalAgentCallResponse(acceptedFailure(
+			call,
+			agentcall.CodeCallCanceled,
+			"call_agent request was canceled while waiting for the accepted call result",
+			call.target,
+		))
+	}
 }
 
 func (h *AgentCallHandler) lifecycleEvent(record *acceptedAgentCall, target agentcall.Target) AgentCallAccepted {
