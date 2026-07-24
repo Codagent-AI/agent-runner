@@ -17,6 +17,14 @@ const (
 	agentCallTimeoutMilliseconds = int64(2_147_483_647)
 )
 
+var agentCallControlEnvironmentVariables = []string{
+	"AGENT_RUNNER_CONTROL_SOCKET",
+	"AGENT_RUNNER_RUN_ID",
+	"AGENT_RUNNER_STEP_ID",
+	"AGENT_RUNNER_ATTEMPT_ID",
+	"AGENT_RUNNER_CONTROL_TOKEN",
+}
+
 // validatedAgentCall returns the trusted process-local server command, if one
 // was supplied. Adapters deliberately do not infer eligibility from prompts.
 func validatedAgentCall(input *BuildArgsInput) (*MCPServerCommand, error) {
@@ -41,10 +49,17 @@ func validatedAgentCall(input *BuildArgsInput) (*MCPServerCommand, error) {
 	return command, nil
 }
 
-func standardAgentCallMCPConfig(command MCPServerCommand, includeToolFilter bool, timeoutMilliseconds int64) ([]byte, error) {
+func standardAgentCallMCPConfig(command MCPServerCommand, includeToolFilter bool, timeoutMilliseconds int64, inheritControlEnvironment bool) ([]byte, error) {
 	server := map[string]any{
 		"command": command.Executable,
 		"args":    command.Args,
+	}
+	if inheritControlEnvironment {
+		environment := make(map[string]string, len(agentCallControlEnvironmentVariables))
+		for _, name := range agentCallControlEnvironmentVariables {
+			environment[name] = "${" + name + "}"
+		}
+		server["env"] = environment
 	}
 	if includeToolFilter {
 		server["tools"] = []string{agentCallMCPToolName}
@@ -58,7 +73,7 @@ func standardAgentCallMCPConfig(command MCPServerCommand, includeToolFilter bool
 }
 
 func prepareAgentCallPlugin(command MCPServerCommand) (string, error) {
-	config, err := standardAgentCallMCPConfig(command, false, 0)
+	config, err := standardAgentCallMCPConfig(command, false, 0, true)
 	if err != nil {
 		return "", fmt.Errorf("encode agent-call MCP plugin: %w", err)
 	}

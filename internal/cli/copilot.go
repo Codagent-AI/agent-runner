@@ -83,7 +83,7 @@ func (a *CopilotAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, er
 		args = append(args, "--no-ask-user")
 	}
 	if agentCall != nil {
-		config, err := standardAgentCallMCPConfig(*agentCall, true, agentCallTimeoutMilliseconds)
+		config, err := standardAgentCallMCPConfig(*agentCall, true, agentCallTimeoutMilliseconds, false)
 		if err != nil {
 			return nil, fmt.Errorf("copilot: encode agent-call MCP config: %w", err)
 		}

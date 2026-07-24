@@ -73,6 +73,26 @@ func TestCodexAgentCallForwardsActiveControlEnvironment(t *testing.T) {
 	}
 }
 
+func TestCursorAgentCallForwardsActiveControlEnvironment(t *testing.T) {
+	adapter, input := agentCallTestInput(t, "cursor", ContextAutonomousHeadless)
+	prepared, err := prepareAgentCallTestInvocation(adapter, input)
+	if err != nil {
+		t.Fatalf("prepare invocation: %v", err)
+	}
+	registration := agentCallRegistration(t, "cursor", prepared)
+	for _, name := range []string{
+		"AGENT_RUNNER_CONTROL_SOCKET",
+		"AGENT_RUNNER_RUN_ID",
+		"AGENT_RUNNER_STEP_ID",
+		"AGENT_RUNNER_ATTEMPT_ID",
+		"AGENT_RUNNER_CONTROL_TOKEN",
+	} {
+		if got := registration.env[name]; got != "${"+name+"}" {
+			t.Fatalf("Cursor MCP environment %s = %q, want environment reference", name, got)
+		}
+	}
+}
+
 func TestAdaptersDoNotInferAgentCallEligibilityFromPrompt(t *testing.T) {
 	for _, adapterName := range []string{"claude", "codex", "copilot", "cursor", "opencode"} {
 		adapterName := adapterName
@@ -294,6 +314,7 @@ type agentCallRegistrationView struct {
 	command    string
 	args       []string
 	tools      []string
+	env        map[string]string
 	timeout    int64
 }
 
@@ -425,10 +446,11 @@ func decodeStandardMCPJSON(t *testing.T, data []byte) agentCallRegistrationView 
 	t.Helper()
 	var config struct {
 		MCPServers map[string]struct {
-			Command string   `json:"command"`
-			Args    []string `json:"args"`
-			Tools   []string `json:"tools"`
-			Timeout int64    `json:"timeout"`
+			Command string            `json:"command"`
+			Args    []string          `json:"args"`
+			Tools   []string          `json:"tools"`
+			Env     map[string]string `json:"env"`
+			Timeout int64             `json:"timeout"`
 		} `json:"mcpServers"`
 	}
 	if err := json.Unmarshal(data, &config); err != nil {
@@ -445,7 +467,7 @@ func decodeStandardMCPJSON(t *testing.T, data []byte) agentCallRegistrationView 
 	if len(tools) == 0 {
 		tools = []string{expectedAgentCallTool}
 	}
-	return agentCallRegistrationView{serverName: expectedAgentCallServer, command: server.Command, args: server.Args, tools: tools, timeout: server.Timeout}
+	return agentCallRegistrationView{serverName: expectedAgentCallServer, command: server.Command, args: server.Args, tools: tools, env: server.Env, timeout: server.Timeout}
 }
 
 func assertAgentCallApproval(t *testing.T, adapterName string, invocationContext InvocationContext, prepared agentCallPreparedInvocation) {

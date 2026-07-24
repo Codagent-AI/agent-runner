@@ -22,14 +22,6 @@ var codexSharedStateDirectories = []string{
 	"shell_snapshots",
 }
 
-var codexAgentCallControlEnvironment = []string{
-	"AGENT_RUNNER_CONTROL_SOCKET",
-	"AGENT_RUNNER_RUN_ID",
-	"AGENT_RUNNER_STEP_ID",
-	"AGENT_RUNNER_ATTEMPT_ID",
-	"AGENT_RUNNER_CONTROL_TOKEN",
-}
-
 func prepareNextCommandPlugin(command CompletionCommand) (string, error) {
 	if !command.Valid() {
 		return "", fmt.Errorf("invalid completion command")
@@ -217,7 +209,7 @@ func appendCodexAgentCallConfig(config []byte, command MCPServerCommand, autonom
 	result.WriteByte('\n')
 	result.WriteString(`enabled_tools = ["call_agent"]`)
 	result.WriteByte('\n')
-	envVars, _ := json.Marshal(codexAgentCallControlEnvironment)
+	envVars, _ := json.Marshal(agentCallControlEnvironmentVariables)
 	result.WriteString("env_vars = ")
 	result.Write(envVars)
 	result.WriteByte('\n')
