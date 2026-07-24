@@ -158,7 +158,10 @@ func TestAgentCallLoadsPersistedOutputAndIgnoresAuditResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	prefix := "[parent, call:call-1]"
-	if err := os.WriteFile(filepath.Join(outputDir, sanitizeOutputPrefixForTest(prefix)+".out"), []byte("persisted child stdout"), 0o600); err != nil {
+	rawStdout := `{"type":"system","subtype":"hook_started"}` + "\n" +
+		`{"type":"result","subtype":"success","result":"persisted child stdout"}` + "\n"
+	stdoutPath := filepath.Join(outputDir, sanitizeOutputPrefixForTest(prefix)+".out")
+	if err := os.WriteFile(stdoutPath, []byte(rawStdout), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(outputDir, sanitizeOutputPrefixForTest(prefix)+".err"), []byte{0xff, 'e', 'r', 'r'}, 0o600); err != nil {
@@ -177,6 +180,58 @@ func TestAgentCallLoadsPersistedOutputAndIgnoresAuditResponse(t *testing.T) {
 	for _, unwanted := range []string{"audit response must not render", "audit stdout must not render", "audit stderr must not render"} {
 		if strings.Contains(plain, unwanted) {
 			t.Errorf("audit metadata rendered as call output %q:\n%s", unwanted, plain)
+		}
+	}
+	if strings.Contains(plain, "hook_started") {
+		t.Errorf("raw Claude protocol event rendered in call detail:\n%s", plain)
+	}
+	persisted, err := os.ReadFile(stdoutPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(persisted) != rawStdout {
+		t.Fatalf("display filtering changed persisted evidence:\n%s", persisted)
+	}
+}
+
+func TestFailedAgentCallLoadsOrdinaryFilteredOutputAndDiagnostics(t *testing.T) {
+	sessionDir := t.TempDir()
+	tree := agentCallTestTree()
+	start := agentCallStartEvent("call-1", "attempt-1", "agent", "implementor")
+	start.Data["cli"] = "codex"
+	tree.ApplyEvent(start)
+	end := agentCallEndEvent("call-1", "attempt-1", "agent", "implementor", "failed", true, 1000, nil, nil)
+	end.Data["exit_code"] = float64(1)
+	end.Data["error"] = "called agent failed"
+	tree.ApplyEvent(end)
+
+	outputDir := filepath.Join(sessionDir, "output")
+	if err := os.MkdirAll(outputDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	prefix := sanitizeOutputPrefixForTest("[parent, call:call-1]")
+	rawStdout := `{"type":"thread.started","thread_id":"thread-1"}` + "\n" +
+		`{"type":"error","message":"You've hit your usage limit."}` + "\n" +
+		`{"type":"turn.failed","error":{"message":"You've hit your usage limit."}}` + "\n"
+	rawStderr := "Reading additional input from stdin...\n" +
+		"codex_core::session: failed to record rollout items: thread thread-1 not found"
+	if err := os.WriteFile(filepath.Join(outputDir, prefix+".out"), []byte(rawStdout), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outputDir, prefix+".err"), []byte(rawStderr), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newTestModel(tree, FromInspect)
+	m.sessionDir = sessionDir
+	m.path = []*StepNode{tree.Root, tree.Root.Children[0]}
+	plain := tuistyle.Sanitize(m.View())
+	if !strings.Contains(plain, "You've hit your usage limit.") {
+		t.Fatalf("filtered Codex failure missing from call detail:\n%s", plain)
+	}
+	for _, unwanted := range []string{"thread.started", "Reading additional input", "failed to record rollout items"} {
+		if strings.Contains(plain, unwanted) {
+			t.Errorf("raw Codex diagnostic rendered in failed call detail %q:\n%s", unwanted, plain)
 		}
 	}
 }
@@ -223,6 +278,7 @@ func TestAgentCallPersistedOutputLoadIsMemoryBounded(t *testing.T) {
 	tree.ApplyEvent(agentCallStartEvent("call-1", "attempt-1", "agent", "implementor"))
 	tree.ApplyEvent(agentCallEndEvent("call-1", "attempt-1", "agent", "implementor", "success", true, 1000, nil, nil))
 	call := tree.Root.Children[0].Children[0]
+	call.AgentCLI = "unfiltered-test"
 	outputDir := filepath.Join(sessionDir, "output")
 	if err := os.MkdirAll(outputDir, 0o750); err != nil {
 		t.Fatal(err)
@@ -252,6 +308,7 @@ func TestAgentCallOutputReadFailureRemainsRetryableAndVisible(t *testing.T) {
 	tree.ApplyEvent(agentCallStartEvent("call-1", "attempt-1", "agent", "implementor"))
 	tree.ApplyEvent(agentCallEndEvent("call-1", "attempt-1", "agent", "implementor", "success", true, 1000, nil, nil))
 	call := tree.Root.Children[0].Children[0]
+	call.AgentCLI = "unfiltered-test"
 	outputDir := filepath.Join(sessionDir, "output")
 	if err := os.MkdirAll(outputDir, 0o750); err != nil {
 		t.Fatal(err)
@@ -286,6 +343,7 @@ func TestActiveExternalViewRefreshesGrowingAgentCallOutput(t *testing.T) {
 	tree := agentCallTestTree()
 	tree.ApplyEvent(agentCallStartEvent("call-1", "attempt-1", "agent", "implementor"))
 	call := tree.Root.Children[0].Children[0]
+	call.AgentCLI = "unfiltered-test"
 	outputDir := filepath.Join(sessionDir, "output")
 	if err := os.MkdirAll(outputDir, 0o750); err != nil {
 		t.Fatal(err)

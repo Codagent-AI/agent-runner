@@ -13,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/liverun"
 	"github.com/codagent/agent-runner/internal/loader"
@@ -1464,6 +1465,7 @@ func (m *Model) loadSelectedAgentCallOutput() {
 		m.loadErr = "load call output: " + err.Error()
 		return
 	}
+	stdout, stderr = filterAgentCallOutput(node, stdout, stderr)
 	if stdoutFound {
 		node.Stdout = stdout
 	}
@@ -1472,6 +1474,24 @@ func (m *Model) loadSelectedAgentCallOutput() {
 	}
 	node.CallOutputLoaded = true
 	m.clearCallOutputLoadError()
+}
+
+func filterAgentCallOutput(node *StepNode, stdout, stderr string) (string, string) {
+	adapter, err := cli.Get(node.AgentCLI)
+	if err != nil {
+		return stdout, stderr
+	}
+	if filter, ok := adapter.(cli.HeadlessResultFilter); ok {
+		exitCode := 0
+		if node.ExitCode != nil {
+			exitCode = *node.ExitCode
+		}
+		_, stderr = filter.FilterHeadlessResult(exitCode, stdout, stderr)
+	}
+	if filter, ok := adapter.(cli.OutputFilter); ok {
+		stdout = filter.FilterOutput(stdout)
+	}
+	return stdout, stderr
 }
 
 func readBoundedCallOutput(root *os.Root, name string) (output string, found bool, err error) {

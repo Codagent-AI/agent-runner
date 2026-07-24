@@ -34,7 +34,7 @@ A parent agent row with accepted agent calls SHALL display its call count and be
 
 ### Requirement: Agent-call detail and resume
 
-Selecting an agent-call row SHALL show the target kind and name; resolved profile, CLI, model, session metadata, and working directory; prompt, outcome, duration, usage, cost, and error; and stdout and stderr retained through ordinary headless-agent output behavior. The detail view MUST NOT reconstruct full output from `audit.log`.
+Selecting an agent-call row SHALL show the target kind and name; resolved profile, CLI, model, session metadata, and working directory; prompt, outcome, duration, usage, cost, and error; and stdout and stderr retained through ordinary headless-agent output behavior. The detail view SHALL render called-agent stdout and stderr through the resolved CLI adapter's same headless output, result, and diagnostic filtering used for ordinary headless agent steps, for both successful and failed calls. Filtering the displayed output MUST NOT alter the raw persisted output evidence. The detail view MUST NOT reconstruct full output from `audit.log`.
 
 When the run is inactive, a completed called-agent execution with a known CLI session ID SHALL offer the existing direct session-resume action. The action MUST NOT be available while the run is active or when no session ID is known.
 
@@ -44,7 +44,15 @@ When the run is inactive, a completed called-agent execution with a known CLI se
 
 #### Scenario: Persisted call output is displayed
 - **WHEN** ordinary headless-agent output persistence created stdout or stderr files for the selected call
-- **THEN** the detail pane displays that persisted output
+- **THEN** the detail pane displays the output after applying the resolved CLI adapter's ordinary headless output and diagnostic filtering
+
+#### Scenario: Failed call output uses ordinary filtering
+- **WHEN** a failed called agent produced raw protocol output or diagnostics
+- **THEN** the detail pane displays the same filtered agent response, error, and relevant diagnostics that an ordinary failed headless agent step would display
+
+#### Scenario: Raw persisted evidence remains unchanged
+- **WHEN** the detail pane filters called-agent output for display
+- **THEN** the raw persisted stdout and stderr files remain unchanged for evidence and debugging
 
 #### Scenario: Audit metadata is not treated as full output
 - **WHEN** no persisted output exists for a selected call
