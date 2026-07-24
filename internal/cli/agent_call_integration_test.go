@@ -56,6 +56,23 @@ func TestRegisteredAdaptersProvisionAgentCallProcessLocally(t *testing.T) {
 	}
 }
 
+func TestCodexAgentCallForwardsActiveControlEnvironment(t *testing.T) {
+	adapter, input := agentCallTestInput(t, "codex", ContextAutonomousHeadless)
+	prepared, err := prepareAgentCallTestInvocation(adapter, input)
+	if err != nil {
+		t.Fatalf("prepare invocation: %v", err)
+	}
+	home := envValue(t, prepared.env, "CODEX_HOME")
+	config, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatalf("read private Codex config: %v", err)
+	}
+	want := `env_vars = ["AGENT_RUNNER_CONTROL_SOCKET","AGENT_RUNNER_RUN_ID","AGENT_RUNNER_STEP_ID","AGENT_RUNNER_ATTEMPT_ID","AGENT_RUNNER_CONTROL_TOKEN"]`
+	if !strings.Contains(string(config), want) {
+		t.Fatalf("Codex MCP config does not forward the active control environment:\n%s", config)
+	}
+}
+
 func TestAdaptersDoNotInferAgentCallEligibilityFromPrompt(t *testing.T) {
 	for _, adapterName := range []string{"claude", "codex", "copilot", "cursor", "opencode"} {
 		adapterName := adapterName
