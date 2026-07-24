@@ -171,6 +171,7 @@ func TestInteractiveShellDirectTerminalHandoffE2E(t *testing.T) {
 	}
 	repoRoot := findRepoRoot(t)
 	tmp := t.TempDir()
+	home := t.TempDir()
 	runnerBin := filepath.Join(tmp, "agent-runner")
 	buildAgentRunner(t, repoRoot, runnerBin)
 	workflowPath := writeDirectShellWorkflow(t, tmp, currentTestBinary(t))
@@ -178,6 +179,7 @@ func TestInteractiveShellDirectTerminalHandoffE2E(t *testing.T) {
 	command := exec.Command(currentTestBinary(t), "-test.run=^TestInteractiveShellDirectHandoffFixtureProcess$")
 	command.Dir = repoRoot
 	command.Env = append(os.Environ(),
+		"HOME="+home,
 		directShellFixtureEnv+"=1",
 		directShellRunnerEnv+"="+runnerBin,
 		directShellWorkflowEnv+"="+workflowPath,
@@ -189,6 +191,7 @@ func TestInteractiveShellDirectTerminalHandoffE2E(t *testing.T) {
 	if !strings.Contains(output, "DIRECT_SHELL_TTY_OK") {
 		t.Fatalf("interactive shell did not confirm direct terminal inheritance:\n%s", output)
 	}
+	latestWorkflowRunDir(t, home, repoRoot, "interactive-shell-direct-handoff")
 }
 
 // TestInteractiveShellDirectHandoffFixtureProcess records the outer terminal
