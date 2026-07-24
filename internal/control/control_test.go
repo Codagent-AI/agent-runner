@@ -792,6 +792,18 @@ func TestControlServerRejectsStaleMalformedAndInactiveEvents(t *testing.T) {
 	}
 }
 
+func TestFitsAgentCallPayloadDoesNotAllocateFramedCopy(t *testing.T) {
+	payload := json.RawMessage(`{"call_id":"call-1","result":{"response":"ok"}}`)
+	if !FitsAgentCallPayload(payload) {
+		t.Fatal("small valid payload does not fit")
+	}
+	if allocations := testing.AllocsPerRun(100, func() {
+		FitsAgentCallPayload(payload)
+	}); allocations != 0 {
+		t.Fatalf("FitsAgentCallPayload allocations = %v, want 0", allocations)
+	}
+}
+
 func TestSendControlEventFromEnvironment(t *testing.T) {
 	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
 	defer server.Close()

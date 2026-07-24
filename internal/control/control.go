@@ -630,8 +630,8 @@ func writeControlResponse(writer io.Writer, response controlResponse) error {
 // FitsAgentCallPayload reports whether payload fits in the complete framed
 // control response read by an agent-call client.
 func FitsAgentCallPayload(payload json.RawMessage) bool {
-	encoded, err := json.Marshal(controlResponse{OK: true, Payload: payload})
-	return err == nil && len(encoded)+1 <= MaxControlMessageBytes
+	const responseOverhead = len(`{"ok":true,"payload":}` + "\n")
+	return json.Valid(payload) && len(payload)+responseOverhead <= MaxControlMessageBytes
 }
 
 func (s *ControlServer) reject(connection net.Conn, reason string, request *controlRequest) {
