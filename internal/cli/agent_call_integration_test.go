@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 const (
@@ -226,6 +228,15 @@ func TestOpenCodeAgentCallUsesNativeSpawnEnvironment(t *testing.T) {
 	}
 	if got := envValue(t, prepared.env, "OPENCODE_DISABLE_AUTOUPDATE"); got != "1" {
 		t.Fatalf("OPENCODE_DISABLE_AUTOUPDATE = %q, want 1", got)
+	}
+	var permission map[string]string
+	if got := envValue(t, prepared.env, "OPENCODE_PERMISSION"); got == "" {
+		t.Fatal("OPENCODE_PERMISSION is absent, want process-local call_agent permission")
+	} else if err := json.Unmarshal([]byte(got), &permission); err != nil {
+		t.Fatalf("decode OPENCODE_PERMISSION: %v", err)
+	}
+	if diff := cmp.Diff(map[string]string{"agent-runner_call_agent": "allow"}, permission); diff != "" {
+		t.Fatalf("OPENCODE_PERMISSION mismatch (-want +got):\n%s", diff)
 	}
 	for _, name := range []string{"OPENCODE_CONFIG_CONTENT", "OPENCODE_PERMISSION", "OPENCODE_DISABLE_AUTOUPDATE"} {
 		if !containsString(DropSpawnEnvVars(adapter), name) {

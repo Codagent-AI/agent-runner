@@ -95,10 +95,10 @@ func (a *OpenCodeAdapter) SpawnEnv(input *BuildArgsInput) ([]string, error) {
 	}
 	config := make(map[string]any)
 	env := make([]string, 0, 3)
+	permission := make(map[string]any)
 	if completionEnabled {
 		command := input.CompletionCommand.ShellCommand()
-		permission, _ := json.Marshal(map[string]map[string]string{"bash": {command: "allow"}})
-		env = append(env, "OPENCODE_PERMISSION="+string(permission))
+		permission["bash"] = map[string]string{command: "allow"}
 		config["command"] = map[string]any{
 			"agent-runner:next": map[string]string{
 				"description": "Complete the current Agent Runner workflow step",
@@ -116,14 +116,20 @@ func (a *OpenCodeAdapter) SpawnEnv(input *BuildArgsInput) ([]string, error) {
 		}
 		if invocationContext.IsAutonomous() {
 			config["permission"] = map[string]string{"agent-runner_call_agent": "allow"}
+			permission["agent-runner_call_agent"] = "allow"
 		}
 	}
 	rendered, err := json.Marshal(config)
 	if err != nil {
 		return nil, fmt.Errorf("opencode: encode process-local integration: %w", err)
 	}
+	renderedPermission, err := json.Marshal(permission)
+	if err != nil {
+		return nil, fmt.Errorf("opencode: encode process-local permission: %w", err)
+	}
 	env = append(env,
 		"OPENCODE_CONFIG_CONTENT="+string(rendered),
+		"OPENCODE_PERMISSION="+string(renderedPermission),
 		"OPENCODE_DISABLE_AUTOUPDATE=1",
 	)
 	return env, nil

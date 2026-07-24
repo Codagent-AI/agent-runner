@@ -498,7 +498,7 @@ func TestAgentCallHandlerReturnsStructuredErrorForOversizedSuccessfulResult(t *t
 		},
 	))
 
-	if response.Error == nil || response.Error.Code != "result_too_large" {
+	if response.Error == nil || response.Error.Code != agentcall.CodeResultTooLarge {
 		t.Fatalf("response = %#v, want structured oversized-result error", response)
 	}
 	if response.CallID == "" || response.Result != nil {
