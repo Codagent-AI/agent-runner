@@ -149,7 +149,7 @@ steps:
       - id: fix-acceptance-findings
         session: lead-agent
         mode: autonomous
-        skip_if: 'sh: ! grep -Fxq ACCEPTANCE_FIX_NEEDED "{{session_dir}}/output/acceptance-status.txt"'
+        skip_if: 'sh: test "{{acceptance_status}}" != "ACCEPTANCE_FIX_NEEDED"'
         prompt: |
           Resolve every finding that prevented OpenSpec change "{{change_name}}" from being ready for acceptance. Findings may include implementation defects, actionable current-head CI failures or review comments, revision or PR-state mismatches, test-tooling failures, or environmental problems.
 
@@ -160,22 +160,22 @@ steps:
           Commit repository changes following the project's commit conventions and prepend `[{{step_id}}]`. Do not create an empty commit when resolving a finding requires only operational state, such as pushing an already-committed local revision in the later workflow step.
 
       - id: verify-acceptance-fix
-        skip_if: 'sh: ! grep -Fxq ACCEPTANCE_FIX_NEEDED "{{session_dir}}/output/acceptance-status.txt"'
+        skip_if: 'sh: test "{{acceptance_status}}" != "ACCEPTANCE_FIX_NEEDED"'
         command: |
           test -s "{{session_dir}}/output/acceptance-start-head.txt"
           test -z "$(git status --porcelain --untracked-files=no)"
 
       - id: rerun-validator
         workflow: ../core/run-validator.yaml
-        skip_if: 'sh: ! grep -Fxq ACCEPTANCE_FIX_NEEDED "{{session_dir}}/output/acceptance-status.txt"'
+        skip_if: 'sh: test "{{acceptance_status}}" != "ACCEPTANCE_FIX_NEEDED"'
         continue_on_failure: true
 
       - id: verify-rerun-validator
-        skip_if: 'sh: ! grep -Fxq ACCEPTANCE_FIX_NEEDED "{{session_dir}}/output/acceptance-status.txt"'
+        skip_if: 'sh: test "{{acceptance_status}}" != "ACCEPTANCE_FIX_NEEDED"'
         command: agent-validator run --report
 
       - id: push-validated-acceptance-fixes
-        skip_if: 'sh: ! grep -Fxq ACCEPTANCE_FIX_NEEDED "{{session_dir}}/output/acceptance-status.txt"'
+        skip_if: 'sh: test "{{acceptance_status}}" != "ACCEPTANCE_FIX_NEEDED"'
         command: |
           git push
           local_head=$(git rev-parse HEAD)
