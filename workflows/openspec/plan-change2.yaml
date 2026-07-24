@@ -2,6 +2,10 @@ name: plan-change2
 description: "Autonomously validate an approved OpenSpec definition and produce a reviewed task plan."
 hidden: true
 
+# This workflow consumes proposal/specs/design artifacts produced earlier.
+# Attaching the OpenSpec engine would reject those unmatched artifact step IDs;
+# the task prompt supplies its paths and dependencies explicitly instead.
+
 params:
   - name: change_name
     required: true
@@ -20,18 +24,7 @@ steps:
 
       This is mechanical OpenSpec validation, not an artifact review. Do not invoke `codagent:proposal-review`, `codagent:review-approach`, `codagent:review-spec`, or `codagent:review-tasks`.
 
-      Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports in the existing definition artifacts. Keep running the command and fixing until the existing artifacts pass validation. Do not create task files in this step.
-
-      Do not treat that command alone as proof that requirements are archiveable. Run `openspec show "{{change_name}}" --json` and reconcile its parsed requirements against every `### Requirement:` heading in the source delta files. The parsed and source requirement counts MUST match, every non-empty delta MUST parse at least one requirement, and every source heading MUST map in source order to the corresponding parsed requirement text; OpenSpec's JSON may omit requirement names, so use the normative text immediately following each heading for that mapping. Then verify that every matched parsed requirement contains at least one parsed scenario. OpenSpec can report a change as valid while parsing zero requirements or scenarios when malformed headings, a code fence, a note, or other content disconnects source sections from the parser. Mechanically fix already-approved formatting or move already-approved scenario blocks when the intended mapping is unambiguous. If a missing requirement or scenario requires inventing behavior or deciding where it belongs, stop and route the change back to `define-change`.
-
-      Limit autonomous edits to unambiguously mechanical corrections that do not change the meaning, scope, or behavior approved by the user. If resolving an issue requires changing proposal intent, requirement or scenario semantics, or a design decision, do not make that change and do not proceed to task planning. Report the exact blocker and require the interactive `define-change` workflow to run again.
-
-      Then dry-run the delta apply because `openspec validate` does not verify that MODIFIED, REMOVED, or RENAMED headers exist in the target main spec. For every delta file under `openspec/changes/{{change_name}}/specs/<capability>/spec.md`:
-      - Under `## MODIFIED Requirements` and `## REMOVED Requirements`, each `### Requirement: <name>` header MUST appear verbatim, ignoring whitespace, in `openspec/specs/<capability>/spec.md`.
-      - Under `## RENAMED Requirements`, the FROM header MUST exist in the main spec.
-      - If the main spec does not yet exist, only `## ADDED Requirements` is valid.
-
-      Correct mechanical header mismatches before proceeding. If the correct resolution is semantically ambiguous, do not reinterpret the approved artifacts; stop and route the change back to `define-change`. This phase is autonomous and must not seek approval by silently choosing new semantics.
+      Read and follow `{{session_dir}}/bundled/openspec/definition-validation-checklist.md`, substituting "{{change_name}}" for `<change-name>`. Do not create task files in this step.
 
       End with the exact line `PLANNING_READY` only when validation and the delta dry-run pass without any unresolved semantic blocker. Otherwise end with `PLANNING_BLOCKED:` followed by the reason, and do not include `PLANNING_READY` anywhere in your response.
 
@@ -46,29 +39,35 @@ steps:
     prompt: |
       Create the implementation task breakdown for OpenSpec change "{{change_name}}". Read the approved proposal, specifications, and design under `openspec/changes/{{change_name}}/`, then use the codagent:plan-tasks skill.
 
-      This workflow intentionally makes task planning autonomous because the definition artifacts have already been approved. The workflow instruction overrides the skill's confirmation gate: do NOT ask the user to approve the number or grouping of tasks. Choose a right-sized breakdown using your best judgment and continue directly to writing the task files.
+      Task planning is autonomous because the definition artifacts have already been approved. This instruction overrides the skill's confirmation gate: do NOT ask the user to approve the number or grouping of tasks. Choose a right-sized breakdown using your best judgment and continue directly to writing the task files.
 
-      You MUST create detailed task files under `openspec/changes/{{change_name}}/tasks/*.md` and `openspec/changes/{{change_name}}/tasks.md` as an index linking to them. The implementation workflow requires at least one matching `tasks/*.md` file.
+      You MUST create detailed task files under `openspec/changes/{{change_name}}/tasks/*.md` and `openspec/changes/{{change_name}}/tasks.md` as an index linking to them. At least one non-empty `tasks/*.md` file is required.
 
   - id: review-tasks
-    workflow: review-tasks.yaml
-    params:
-      change_name: "{{change_name}}"
+    session: planning-agent
+    mode: autonomous
+    prompt: |
+      Review and correct the implementation task plan for OpenSpec change "{{change_name}}" without involving the user. Use the Runner-owned `call_agent` tool with a fresh `agent: reviewer`.
+
+      Give the child a complete standalone prompt requiring it to use the codagent:review-tasks skill; read the approved proposal, every specification, and the design under `openspec/changes/{{change_name}}/`; read `openspec/changes/{{change_name}}/tasks.md` and every file under `openspec/changes/{{change_name}}/tasks/`; inspect relevant repository structure when needed; and report only concrete task-plan defects that can be corrected by editing the task index or detailed task files. Require exact task and controlling-artifact citations. The proposal, specifications, and design are immutable approved inputs, not review targets. The child must not report definition or approach concerns, ask for a product, scope, or design decision, or modify any file. The called child receives no surrounding context, so include every instruction and path it needs.
+
+      Independently evaluate every finding against the approved artifacts, current task files, and repository:
+      - Fix every valid task-plan issue, including missing coverage, incorrect fidelity, poor task boundaries, ordering or dependency problems, missing self-contained context, and inadequate done criteria.
+      - Decline findings that are demonstrably incorrect, subjective, or outside task-plan scope. Never edit the approved proposal, specifications, or design in this step.
+      - If a finding exposes an upstream definition concern, treat it as out of scope for task review rather than a planning blocker. Do not guess a new decision or emit `PLANNING_BLOCKED`.
+
+      After material task-plan corrections, you may use `call_agent` once more with a fresh `reviewer` to verify the current task files against the same immutable definition. Use at most two reviewer calls total. Fix any valid task-only issue from the verification response yourself; do not create another reviewer loop.
+
+      Finish only after the task index and detailed task files form a complete, faithful, self-contained execution contract for the approved proposal, specifications, and design. Do not write a status marker or terminal token.
 
   - id: post-review-validate
     session: planning-agent
     mode: autonomous
     capture: post_validation
     prompt: |
-      Run `openspec validate --type change "{{change_name}}"` and fix every issue it reports. Keep running the command and fixing until it passes with no errors.
-
       This is mechanical OpenSpec and task-file validation, not an artifact review. Do not invoke `codagent:proposal-review`, `codagent:review-approach`, `codagent:review-spec`, or `codagent:review-tasks`.
 
-      Run `openspec show "{{change_name}}" --json` again and reconcile its parsed requirements against every source `### Requirement:` heading: require equal nonzero counts for every non-empty delta, map each source heading in order to its parsed normative text, and require at least one parsed scenario for every matched requirement. Fix only unambiguous formatting or placement problems. Treat any missing requirement or scenario semantics, count mismatch without a mechanical cause, or ambiguous attachment as a blocker requiring `define-change`.
-
-      Then repeat the delta-apply dry-run: for every `### Requirement:` header under `## MODIFIED`, `## REMOVED`, or `## RENAMED` FROM sections in `openspec/changes/{{change_name}}/specs/<capability>/spec.md`, confirm the exact header exists in `openspec/specs/<capability>/spec.md`. Fix every mismatch before proceeding.
-
-      Limit autonomous edits to unambiguously mechanical corrections. Do not change approved proposal intent, requirement or scenario semantics, scope, behavior, or design decisions. If validation or the delta dry-run exposes a problem that requires such a change, leave it unresolved, stop planning, and report that the interactive `define-change` workflow must run again.
+      Read and follow `{{session_dir}}/bundled/openspec/definition-validation-checklist.md`, substituting "{{change_name}}" for `<change-name>`.
 
       Finally, verify that `openspec/changes/{{change_name}}/tasks.md` exists, links to every task file, and at least one non-empty file matches `openspec/changes/{{change_name}}/tasks/*.md`.
 
