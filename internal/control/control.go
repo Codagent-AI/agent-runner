@@ -1,6 +1,6 @@
-// Package interactive contains the out-of-band agent control plane and the
-// direct terminal execution primitives shared by agent and shell steps.
-package interactive
+// Package control contains the authenticated, run-scoped control plane used
+// by interactive completion and runner-owned agent integrations.
+package control
 
 import (
 	"bufio"
@@ -29,15 +29,24 @@ const (
 	EnvControlSocket = "AGENT_RUNNER_CONTROL_SOCKET"
 	EnvRunID         = "AGENT_RUNNER_RUN_ID"
 	EnvStepID        = "AGENT_RUNNER_STEP_ID"
+	EnvAttemptID     = "AGENT_RUNNER_ATTEMPT_ID"
 	EnvControlToken  = "AGENT_RUNNER_CONTROL_TOKEN"
 
 	MessageCompleteStep  = "complete_step"
 	MessageTurnCommitted = "turn_committed"
+	MessageAgentCall     = "agent_call"
 
 	ControlSocketPointerFile  = "control-socket"
-	MaxControlMessageBytes    = 4 * 1024
+	MaxControlMessageBytes    = 16 * 1024 * 1024
 	ControlConnectionDeadline = 5 * time.Second
 )
+
+// EnvironmentVariables returns every attempt-scoped credential variable that
+// must be removed from inherited agent environments before selectively adding
+// a fresh active attempt.
+func EnvironmentVariables() []string {
+	return []string{EnvControlSocket, EnvRunID, EnvStepID, EnvAttemptID, EnvControlToken}
+}
 
 // ControlConfig identifies a run-scoped control endpoint. Callers create the
 // server only after acquiring the run lock; that lock is what makes removal of
@@ -58,6 +67,7 @@ type Attempt struct {
 	StepID     string
 	Token      string
 	SocketPath string
+	Context    context.Context
 }
 
 // EnvironmentMap returns the exact control environment injected into a child.
@@ -66,6 +76,7 @@ func (a *Attempt) EnvironmentMap() map[string]string {
 		EnvControlSocket: a.SocketPath,
 		EnvRunID:         a.RunID,
 		EnvStepID:        a.StepID,
+		EnvAttemptID:     a.ID,
 		EnvControlToken:  a.Token,
 	}
 }
@@ -77,6 +88,7 @@ func (a *Attempt) Environment() []string {
 		EnvControlSocket + "=" + values[EnvControlSocket],
 		EnvRunID + "=" + values[EnvRunID],
 		EnvStepID + "=" + values[EnvStepID],
+		EnvAttemptID + "=" + values[EnvAttemptID],
 		EnvControlToken + "=" + values[EnvControlToken],
 	}
 }
@@ -100,11 +112,13 @@ type CommittedTurn struct {
 }
 
 type controlRequest struct {
-	Type      string `json:"type"`
-	RunID     string `json:"run_id"`
-	StepID    string `json:"step_id"`
-	Token     string `json:"token"`
-	RequestID string `json:"request_id"`
+	Type      string          `json:"type"`
+	RunID     string          `json:"run_id"`
+	StepID    string          `json:"step_id"`
+	AttemptID string          `json:"attempt_id,omitempty"`
+	Token     string          `json:"token"`
+	RequestID string          `json:"request_id"`
+	Payload   json.RawMessage `json:"payload,omitempty"`
 }
 
 type controlResponse struct {
@@ -113,8 +127,28 @@ type controlResponse struct {
 	// print a receipt line into the CLI's tool output. Idempotent retries and
 	// duplicate completions repeat the originally accepted receipt. Older
 	// clients ignore the field.
-	Receipt string `json:"receipt,omitempty"`
-	Error   string `json:"error,omitempty"`
+	Receipt string          `json:"receipt,omitempty"`
+	Error   string          `json:"error,omitempty"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+// AgentCallRequest is an authenticated, admitted call envelope. Admission is
+// deliberately distinct from acceptance: the registered supervising handler
+// remains responsible for validation and request-ID reservation.
+type AgentCallRequest struct {
+	AttemptID string
+	RequestID string
+	Payload   json.RawMessage
+}
+
+type AgentCallHandler interface {
+	HandleAgentCall(context.Context, AgentCallRequest) json.RawMessage
+}
+
+type AttemptOptions struct {
+	Checkpoint        func() (cli.Checkpoint, error)
+	AgentCallEligible bool
+	AgentCallHandler  AgentCallHandler
 }
 
 type attemptState struct {
@@ -122,6 +156,9 @@ type attemptState struct {
 	completionAccepted bool
 	acceptedRequestID  string
 	checkpoint         func() (cli.Checkpoint, error)
+	agentCallEligible  bool
+	agentCallHandler   AgentCallHandler
+	cancel             context.CancelFunc
 }
 
 type acceptedCompletion struct {
@@ -134,7 +171,7 @@ type acceptedCompletion struct {
 }
 
 // ControlServer owns one Unix socket for a workflow run and rotates its active
-// credential for each interactive step attempt.
+// credential for each runner-integrated agent attempt.
 type ControlServer struct {
 	runID       string
 	runDir      string
@@ -161,7 +198,7 @@ type ControlServer struct {
 
 // NewControlServer binds the private run endpoint and writes its pointer file.
 func NewControlServer(config *ControlConfig) (*ControlServer, error) {
-	if err := interactivePlatformError(); err != nil {
+	if err := controlPlatformError(); err != nil {
 		return nil, fmt.Errorf("create control endpoint: %w", err)
 	}
 	if strings.TrimSpace(config.RunID) == "" {
@@ -245,24 +282,52 @@ func (s *ControlServer) SocketPath() string { return s.socketPath }
 // ActivateWithCheckpoint rotates the credential and binds the durability
 // checkpoint captured synchronously when completion is accepted.
 func (s *ControlServer) ActivateWithCheckpoint(stepID string, checkpoint func() (cli.Checkpoint, error)) Attempt {
+	return s.Activate(context.Background(), stepID, checkpoint)
+}
+
+// Activate rotates the credential and binds an attempt lifetime plus the
+// durability checkpoint captured synchronously when completion is accepted.
+func (s *ControlServer) Activate(ctx context.Context, stepID string, checkpoint func() (cli.Checkpoint, error)) Attempt {
+	return s.ActivateAttempt(ctx, stepID, AttemptOptions{Checkpoint: checkpoint})
+}
+
+// ActivateAttempt rotates the credential and binds all Runner-owned controls
+// enabled for one parent invocation.
+func (s *ControlServer) ActivateAttempt(ctx context.Context, stepID string, options AttemptOptions) Attempt {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	attemptContext, cancel := context.WithCancel(ctx)
 	attempt := Attempt{
 		ID:         uuid.NewString(),
 		RunID:      s.runID,
 		StepID:     stepID,
 		Token:      strings.ReplaceAll(uuid.NewString(), "-", ""),
 		SocketPath: s.socketPath,
+		Context:    attemptContext,
 	}
 	s.mu.Lock()
-	s.active = &attemptState{Attempt: attempt, checkpoint: checkpoint}
+	previous := s.active
+	s.active = &attemptState{
+		Attempt: attempt, checkpoint: options.Checkpoint, cancel: cancel,
+		agentCallEligible: options.AgentCallEligible, agentCallHandler: options.AgentCallHandler,
+	}
 	s.mu.Unlock()
+	if previous != nil {
+		previous.cancel()
+	}
 	return attempt
 }
 
 // Deactivate invalidates the current credential while leaving the run socket alive.
 func (s *ControlServer) Deactivate() {
 	s.mu.Lock()
+	active := s.active
 	s.active = nil
 	s.mu.Unlock()
+	if active != nil {
+		active.cancel()
+	}
 }
 
 func (s *ControlServer) Completions() <-chan CompletionRequest { return s.completions }
@@ -301,6 +366,7 @@ func (s *ControlServer) SubscribeCommittedTurn(attemptID string) (committed <-ch
 // Close stops the server and removes both the socket and its run-directory pointer.
 func (s *ControlServer) Close() error {
 	s.closeOnce.Do(func() {
+		s.Deactivate()
 		close(s.done)
 		if err := s.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			s.closeErr = err
@@ -358,7 +424,38 @@ func (s *ControlServer) handleConnection(connection net.Conn) {
 		s.handleCompletion(connection, &request, active, cacheKey)
 	case MessageTurnCommitted:
 		s.handleCommittedTurn(connection, &request, active)
+	case MessageAgentCall:
+		s.handleAgentCall(connection, &request, active)
 	}
+}
+
+func (s *ControlServer) handleAgentCall(connection net.Conn, request *controlRequest, active *attemptState) {
+	if !active.agentCallEligible || active.agentCallHandler == nil {
+		s.mu.Unlock()
+		s.reject(connection, "call_agent is not enabled for the active step attempt", request)
+		return
+	}
+	handler := active.agentCallHandler
+	parentContext := active.Context
+	s.mu.Unlock()
+
+	// Calls have no Runner deadline. Once authentication framing is complete,
+	// the connection itself leases the work: EOF, bridge exit, or request
+	// cancellation closes the socket and cancels the handler context.
+	_ = connection.SetDeadline(time.Time{})
+	leaseContext, cancel := context.WithCancel(parentContext)
+	defer cancel()
+	go func() {
+		var one [1]byte
+		_, _ = connection.Read(one[:])
+		cancel()
+	}()
+	payload := handler.HandleAgentCall(leaseContext, AgentCallRequest{
+		AttemptID: request.AttemptID,
+		RequestID: request.RequestID,
+		Payload:   append(json.RawMessage(nil), request.Payload...),
+	})
+	_ = writeControlResponse(connection, controlResponse{OK: true, Payload: payload})
 }
 
 func (s *ControlServer) handleCompletion(connection net.Conn, request *controlRequest, active *attemptState, cacheKey string) {
@@ -442,17 +539,7 @@ func (s *ControlServer) handleCommittedTurn(connection net.Conn, request *contro
 }
 
 func (s *ControlServer) deliverCompletion(request *CompletionRequest) {
-	// The client was already told OK, so prefer delivery over shutdown: only
-	// consult done when the buffer is full and delivery would block.
-	select {
-	case s.completions <- *request:
-		return
-	default:
-	}
-	select {
-	case s.completions <- *request:
-	case <-s.done:
-	}
+	deliverBeforeShutdown(s.completions, *request, s.done)
 }
 
 func (s *ControlServer) deliverCommittedTurn(turn CommittedTurn) {
@@ -463,16 +550,20 @@ func (s *ControlServer) deliverCommittedTurn(turn CommittedTurn) {
 		close(waiter)
 	}
 	s.mu.Unlock()
-	// The client was already told OK, so prefer delivery over shutdown: only
-	// consult done when the buffer is full and delivery would block.
+	deliverBeforeShutdown(s.turns, turn, s.done)
+}
+
+// deliverBeforeShutdown prefers an already-acknowledged event over shutdown.
+// The shutdown channel is consulted only when delivery would otherwise block.
+func deliverBeforeShutdown[T any](destination chan<- T, value T, done <-chan struct{}) {
 	select {
-	case s.turns <- turn:
+	case destination <- value:
 		return
 	default:
 	}
 	select {
-	case s.turns <- turn:
-	case <-s.done:
+	case destination <- value:
+	case <-done:
 	}
 }
 
@@ -513,7 +604,7 @@ func validateControlRequest(request *controlRequest, active *attemptState, runID
 	if active == nil {
 		return errors.New("no interactive step is active")
 	}
-	if request.Type != MessageCompleteStep && request.Type != MessageTurnCommitted {
+	if request.Type != MessageCompleteStep && request.Type != MessageTurnCommitted && request.Type != MessageAgentCall {
 		return fmt.Errorf("unknown control message type %q", request.Type)
 	}
 	if request.RunID == "" || request.StepID == "" || request.Token == "" || request.RequestID == "" {
@@ -522,11 +613,14 @@ func validateControlRequest(request *controlRequest, active *attemptState, runID
 	if request.RunID != runID || request.RunID != active.RunID || request.StepID != active.StepID || request.Token != active.Token {
 		return errors.New("control credential does not match the active step attempt")
 	}
+	if request.Type == MessageAgentCall && request.AttemptID != active.ID {
+		return errors.New("control credential does not match the active step attempt")
+	}
 	return nil
 }
 
 func requestCacheKey(request *controlRequest) string {
-	return strings.Join([]string{request.RunID, request.StepID, request.Token, request.RequestID}, "\x00")
+	return strings.Join([]string{request.Type, request.RunID, request.StepID, request.Token, request.RequestID}, "\x00")
 }
 
 func writeControlResponse(writer io.Writer, response controlResponse) error {
@@ -561,22 +655,15 @@ func (s *ControlServer) emit(eventType audit.EventType, stepID string, data map[
 // same request ID, so the server can answer idempotently and the retry yields
 // the same receipt.
 func SendControlEventFromEnvironment(ctx context.Context, messageType string, getenv func(string) string) (string, error) {
-	if err := interactivePlatformError(); err != nil {
+	if err := controlPlatformError(); err != nil {
 		return "", err
 	}
 	if messageType != MessageCompleteStep && messageType != MessageTurnCommitted {
 		return "", fmt.Errorf("unsupported control message type %q", messageType)
 	}
-	values := map[string]string{
-		EnvControlSocket: getenv(EnvControlSocket),
-		EnvRunID:         getenv(EnvRunID),
-		EnvStepID:        getenv(EnvStepID),
-		EnvControlToken:  getenv(EnvControlToken),
-	}
-	for _, key := range []string{EnvControlSocket, EnvRunID, EnvStepID, EnvControlToken} {
-		if values[key] == "" {
-			return "", fmt.Errorf("%s must run inside an interactive agent step session (missing %s)", controlCommandName(messageType), key)
-		}
+	values, missing := requiredEnvironmentValues(getenv, EnvControlSocket, EnvRunID, EnvStepID, EnvControlToken)
+	if missing != "" {
+		return "", fmt.Errorf("%s must run inside an interactive agent step session (missing %s)", controlCommandName(messageType), missing)
 	}
 	request := controlRequest{
 		Type:      messageType,
@@ -595,6 +682,91 @@ func SendControlEventFromEnvironment(ctx context.Context, messageType string, ge
 		}
 	}
 	return "", errors.New("control request failed")
+}
+
+// SendAgentCallFromEnvironment forwards one typed agent-call payload and
+// keeps the authenticated connection open as the call's lease. It applies no
+// Runner timeout; only the caller's context deadline or cancellation bounds
+// the request.
+func SendAgentCallFromEnvironment(
+	ctx context.Context,
+	requestID string,
+	payload json.RawMessage,
+	getenv func(string) string,
+) (json.RawMessage, error) {
+	if err := controlPlatformError(); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(requestID) == "" || len(payload) == 0 {
+		return nil, errors.New("agent-call control request is missing request ID or payload")
+	}
+	values, missing := requiredEnvironmentValues(getenv, EnvironmentVariables()...)
+	if missing != "" {
+		return nil, fmt.Errorf("agent-runner internal call-agent-mcp must run inside an enabled agent step (missing %s)", missing)
+	}
+	connection, err := (&net.Dialer{}).DialContext(ctx, "unix", values[EnvControlSocket])
+	if err != nil {
+		return nil, fmt.Errorf("connect to agent-call control socket: %w", err)
+	}
+	defer func() { _ = connection.Close() }()
+
+	writeDeadline := time.Now().Add(ControlConnectionDeadline)
+	if deadline, ok := ctx.Deadline(); ok && deadline.Before(writeDeadline) {
+		writeDeadline = deadline
+	}
+	_ = connection.SetWriteDeadline(writeDeadline)
+	request := controlRequest{
+		Type: MessageAgentCall, RunID: values[EnvRunID], StepID: values[EnvStepID],
+		AttemptID: values[EnvAttemptID], Token: values[EnvControlToken],
+		RequestID: requestID, Payload: payload,
+	}
+	if err := json.NewEncoder(connection).Encode(request); err != nil {
+		return nil, fmt.Errorf("send agent-call control request: %w", err)
+	}
+	_ = connection.SetWriteDeadline(time.Time{})
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = connection.SetReadDeadline(deadline)
+	} else {
+		_ = connection.SetReadDeadline(time.Time{})
+	}
+	finished := make(chan struct{})
+	defer close(finished)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = connection.Close()
+		case <-finished:
+		}
+	}()
+	var response controlResponse
+	if err := json.NewDecoder(io.LimitReader(connection, MaxControlMessageBytes+1)).Decode(&response); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("read agent-call control response: %w", err)
+	}
+	if !response.OK {
+		if response.Error == "" {
+			response.Error = "agent-call control request rejected"
+		}
+		return nil, errors.New(response.Error)
+	}
+	if len(response.Payload) == 0 {
+		return nil, errors.New("agent-call control response is missing payload")
+	}
+	return append(json.RawMessage(nil), response.Payload...), nil
+}
+
+func requiredEnvironmentValues(getenv func(string) string, keys ...string) (values map[string]string, missing string) {
+	values = make(map[string]string, len(keys))
+	for _, key := range keys {
+		value := getenv(key)
+		if value == "" {
+			return nil, key
+		}
+		values[key] = value
+	}
+	return values, ""
 }
 
 func sendControlRequest(ctx context.Context, socketPath string, request *controlRequest) (receipt string, retryable bool, err error) {

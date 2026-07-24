@@ -203,6 +203,72 @@ func renderInteractiveBlock(node *StepNode, indent, width int, pulsePhase float6
 	return lines
 }
 
+func renderAgentCallBlock(node *StepNode, indent, width int, loadedFull bool, pulsePhase float64, runActive bool) []string {
+	contentWidth := width - 2*indent
+	if contentWidth <= 0 {
+		return nil
+	}
+
+	lines := []string{renderSeparator(node.callLabel(), blockTypeGlyph(node.Type), indent, contentWidth)}
+	lines = append(lines, blockDimStr("call id", node.CallID))
+	if node.CallRequestID != "" {
+		lines = append(lines, blockDimStr("request id", node.CallRequestID))
+	}
+	if node.ParentAttemptID != "" {
+		lines = append(lines, blockDimStr("parent attempt", node.ParentAttemptID))
+	}
+	lines = append(lines, blockDimStr("target", node.CallTargetKind))
+	if node.AgentProfile != "" {
+		lines = append(lines, blockDimStr("profile", node.AgentProfile))
+	}
+	if node.AgentCLI != "" {
+		lines = append(lines, blockDimStr("cli", node.AgentCLI))
+	}
+	modelName := node.AgentModel
+	if modelName == "" {
+		modelName = "(unknown)"
+	}
+	lines = append(lines, blockDimStr("model", modelName))
+	if node.CallSession != "" {
+		lines = append(lines, blockDimStr("session", node.CallSession))
+	}
+	if node.SessionID != "" {
+		lines = append(lines, blockDimStr("session id", node.SessionID))
+	}
+	lines = append(lines, blockDimStr("session resumed", boolWord(node.CallSessionResumed)))
+	if node.CallWorkdir != "" {
+		lines = append(lines, blockDimStr("workdir", node.CallWorkdir))
+	}
+	prompt := strings.TrimRight(node.InterpolatedPrompt, "\r\n")
+	if prompt != "" {
+		lines = append(lines, "", blockLabelStr("prompt:"))
+		lines = append(lines, renderWrappedText(prompt, contentWidth)...)
+	}
+	if node.Status == StatusPending {
+		return lines
+	}
+	lines = append(lines, blockOutcomeAndDuration(node)...)
+	if node.Status != StatusInProgress {
+		lines = append(lines, blockDimStr("cli launched", boolWord(node.CallCLILaunched)))
+		if node.ExitCode != nil {
+			lines = append(lines, blockDimStr("exit", strconv.Itoa(*node.ExitCode)))
+		}
+	}
+	lines = append(lines, blockAgentMetrics(node)...)
+	if node.CallUsageError != "" {
+		lines = append(lines, blockDimStr("usage error", node.CallUsageError))
+	}
+	if node.ErrorMessage != "" {
+		lines = append(lines, "", blockLabelStr("error:"))
+		lines = append(lines, renderWrappedText(node.ErrorMessage, contentWidth)...)
+	}
+	lines = append(lines, renderAgentOutput(node, contentWidth, loadedFull, pulsePhase, runActive)...)
+	if node.Status == StatusSuccess && node.SessionID != "" && !runActive {
+		lines = append(lines, "", tuistyle.AccentStyle.Render("enter → resume session"))
+	}
+	return lines
+}
+
 func renderSubWorkflowBlock(node *StepNode, indent, width int, resolverCfg ResolverConfig) []string {
 	contentWidth := width - 2*indent
 	if contentWidth <= 0 {
@@ -355,6 +421,8 @@ func blockTypeGlyph(t NodeType) string {
 		return "⚙"
 	case NodeInteractiveAgent:
 		return "❯"
+	case NodeAgentCall:
+		return "↗"
 	case NodeSubWorkflow:
 		return "↳"
 	case NodeLoop:

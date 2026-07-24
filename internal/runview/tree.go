@@ -25,6 +25,8 @@ const (
 	NodeScript
 	NodeUI
 	NodeGroup
+	NodeAgentCall
+	NodeParentTurn
 )
 
 // NodeStatus is the visual status of a StepNode.
@@ -100,6 +102,22 @@ type StepNode struct {
 	Attempts            []AttemptMetrics
 	StartedAt           time.Time // wall-clock start of the current in-flight execution (from step_start); zero when not running
 
+	// Agent-call-only fields. Calls are dynamic executions attached beneath
+	// their workflow-authored parent agent; they are never workflow steps.
+	CallID             string
+	ParentAttemptID    string
+	CallTargetKind     string
+	CallTargetName     string
+	CallRequestID      string
+	CallSession        string
+	CallSessionResumed bool
+	CallCLILaunched    bool
+	CallWorkdir        string
+	CallUsageError     string
+	CallOutputPrefix   string
+	CallOutputLoaded   bool
+	SummaryParentTurn  *StepNode
+
 	// Iteration-only fields (set when the node is an iteration child of a loop).
 	IterationIndex int    // 0-based internal; UI renders as IterationIndex+1
 	BindingValue   string // for-each: the matched value bound to loop.As
@@ -142,6 +160,12 @@ func (n *StepNode) NodeKey() string {
 	parentKey := n.Parent.NodeKey()
 	if n.Type == NodeIteration {
 		return parentKey + "/iter:" + strconv.Itoa(n.IterationIndex)
+	}
+	if n.Type == NodeAgentCall {
+		return parentKey + "/call:" + n.CallID
+	}
+	if n.Type == NodeParentTurn {
+		return parentKey + "/parent-turn"
 	}
 	if idx := indexStepNode(n.Parent.Children, n); idx >= 0 {
 		return parentKey + "/child:" + strconv.Itoa(idx) + ":" + n.ID
@@ -314,8 +338,49 @@ func (n *StepNode) IsContainer() bool {
 	switch n.Type {
 	case NodeRoot, NodeLoop, NodeSubWorkflow, NodeIteration, NodeGroup:
 		return true
+	case NodeHeadlessAgent, NodeInteractiveAgent:
+		return len(n.Children) > 0
 	}
 	return false
+}
+
+func (n *StepNode) callLabel() string {
+	if n == nil || n.Type != NodeAgentCall {
+		return ""
+	}
+	return "call " + n.CallTargetKind + ": " + n.CallTargetName
+}
+
+func callChildByID(parent *StepNode, callID string) *StepNode {
+	if parent == nil || callID == "" {
+		return nil
+	}
+	for _, child := range parent.Children {
+		if child.Type == NodeAgentCall && child.CallID == callID {
+			return child
+		}
+	}
+	return nil
+}
+
+func (n *StepNode) summaryChildren() []*StepNode {
+	if n == nil || (n.Type != NodeHeadlessAgent && n.Type != NodeInteractiveAgent) || len(n.Children) == 0 {
+		return nil
+	}
+	if n.SummaryParentTurn == nil {
+		n.SummaryParentTurn = &StepNode{ID: "parent turn", Type: NodeParentTurn, Parent: n}
+	}
+	turn := n.SummaryParentTurn
+	turn.Status = n.Status
+	turn.Outcome = n.Outcome
+	turn.DurationMs = n.DurationMs
+	turn.StartedAt = n.StartedAt
+	turn.Aborted = n.Aborted
+	turn.Attempts = n.Attempts
+	children := make([]*StepNode, 0, len(n.Children)+1)
+	children = append(children, turn)
+	children = append(children, n.Children...)
+	return children
 }
 
 // childByID returns the first child whose ID matches, or nil.

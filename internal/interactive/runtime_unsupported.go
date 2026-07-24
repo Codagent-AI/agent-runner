@@ -10,6 +10,7 @@ import (
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
+	"github.com/codagent/agent-runner/internal/control"
 )
 
 const DefaultTerminationGrace = 3 * time.Second
@@ -30,7 +31,7 @@ type DirectOptions struct {
 	StepID           string
 	SessionID        string
 	CLI              string
-	Control          *ControlServer
+	Control          *control.ControlServer
 	Probe            cli.TurnDurabilityProbe
 	ResolveSessionID func() string
 	Before           func() error

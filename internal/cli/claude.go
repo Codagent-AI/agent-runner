@@ -46,6 +46,10 @@ func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 func (a *ClaudeAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, error) {
 	args := []string{"claude"}
 	context := input.InvocationContext()
+	agentCall, err := validatedAgentCall(input)
+	if err != nil {
+		return nil, fmt.Errorf("claude: prepare agent-call integration: %w", err)
+	}
 
 	if input.SessionID != "" {
 		if input.Resume {
@@ -82,8 +86,18 @@ func (a *ClaudeAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, err
 	if input.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", input.SystemPrompt)
 	}
+	if agentCall != nil {
+		pluginDir, err := prepareAgentCallPlugin(*agentCall)
+		if err != nil {
+			return nil, fmt.Errorf("claude: create agent-call MCP plugin: %w", err)
+		}
+		args = append(args, "--plugin-dir", pluginDir)
+		if context.IsAutonomous() {
+			args = append(args, "--allowedTools", "mcp__agent-runner__call_agent")
+		}
+	}
 
-	if !context.IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid() {
+	if completionCommandEnabled(input) {
 		command := input.CompletionCommand.ShellCommand()
 		args = append(args, "--allowedTools", "Bash("+command+")")
 		settings, _ := json.Marshal(map[string]any{

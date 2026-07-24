@@ -23,7 +23,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/codagent/agent-runner/internal/audit"
-	"github.com/codagent/agent-runner/internal/interactive"
+	"github.com/codagent/agent-runner/internal/control"
 	"github.com/codagent/agent-runner/internal/liverun"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
@@ -171,6 +171,7 @@ func TestInteractiveShellDirectTerminalHandoffE2E(t *testing.T) {
 	}
 	repoRoot := findRepoRoot(t)
 	tmp := t.TempDir()
+	home := t.TempDir()
 	runnerBin := filepath.Join(tmp, "agent-runner")
 	buildAgentRunner(t, repoRoot, runnerBin)
 	workflowPath := writeDirectShellWorkflow(t, tmp, currentTestBinary(t))
@@ -178,6 +179,7 @@ func TestInteractiveShellDirectTerminalHandoffE2E(t *testing.T) {
 	command := exec.Command(currentTestBinary(t), "-test.run=^TestInteractiveShellDirectHandoffFixtureProcess$")
 	command.Dir = repoRoot
 	command.Env = append(os.Environ(),
+		"HOME="+home,
 		directShellFixtureEnv+"=1",
 		directShellRunnerEnv+"="+runnerBin,
 		directShellWorkflowEnv+"="+workflowPath,
@@ -189,6 +191,7 @@ func TestInteractiveShellDirectTerminalHandoffE2E(t *testing.T) {
 	if !strings.Contains(output, "DIRECT_SHELL_TTY_OK") {
 		t.Fatalf("interactive shell did not confirm direct terminal inheritance:\n%s", output)
 	}
+	latestWorkflowRunDir(t, home, repoRoot, "interactive-shell-direct-handoff")
 }
 
 // TestInteractiveShellDirectHandoffFixtureProcess records the outer terminal
@@ -476,13 +479,13 @@ func runInteractiveAgentFixture() error {
 	}
 	invocationNumber, err := appendInteractiveFixtureInvocation(&interactiveFixtureInvocation{
 		CLI: name, Resume: resume, SessionID: sessionID,
-		Token: os.Getenv(interactive.EnvControlToken), Args: args,
+		Token: os.Getenv(control.EnvControlToken), Args: args,
 	})
 	if err != nil {
 		return err
 	}
 
-	for _, key := range []string{interactive.EnvControlSocket, interactive.EnvRunID, interactive.EnvStepID, interactive.EnvControlToken} {
+	for _, key := range []string{control.EnvControlSocket, control.EnvRunID, control.EnvStepID, control.EnvControlToken} {
 		if os.Getenv(key) == "" {
 			return fmt.Errorf("%s did not receive %s", name, key)
 		}
@@ -491,7 +494,7 @@ func runInteractiveAgentFixture() error {
 	if !resume {
 		_, _ = fmt.Fprintf(os.Stdout, "FAKE_AGENT_READY %s new\r\n", name)
 		if os.Getenv(durabilityRetryFixtureEnv) == "1" && invocationNumber == 1 {
-			if _, err := interactive.SendControlEventFromEnvironment(context.Background(), interactive.MessageCompleteStep, os.Getenv); err != nil {
+			if _, err := control.SendControlEventFromEnvironment(context.Background(), control.MessageCompleteStep, os.Getenv); err != nil {
 				return fmt.Errorf("send completion without committed turn: %w", err)
 			}
 			return waitForFixtureTermination()
@@ -559,10 +562,10 @@ func runJobControlFixture(mode string) error {
 }
 
 func completeInteractiveFixture() error {
-	if _, err := interactive.SendControlEventFromEnvironment(context.Background(), interactive.MessageCompleteStep, os.Getenv); err != nil {
+	if _, err := control.SendControlEventFromEnvironment(context.Background(), control.MessageCompleteStep, os.Getenv); err != nil {
 		return fmt.Errorf("send completion: %w", err)
 	}
-	if _, err := interactive.SendControlEventFromEnvironment(context.Background(), interactive.MessageTurnCommitted, os.Getenv); err != nil {
+	if _, err := control.SendControlEventFromEnvironment(context.Background(), control.MessageTurnCommitted, os.Getenv); err != nil {
 		return fmt.Errorf("send committed turn: %w", err)
 	}
 	return nil

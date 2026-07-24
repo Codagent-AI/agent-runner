@@ -1,7 +1,11 @@
 package runview
 
 import (
+	"errors"
+	"fmt"
+	"io"
 	"math"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -742,6 +746,7 @@ func (m *Model) handleOutputChunkMsg(msg liverun.OutputChunkMsg) {
 
 func (m *Model) handleStepStateMsg(msg liverun.StepStateMsg) {
 	m.activeStepPrefix = msg.ActiveStepPrefix
+	m.refreshData()
 	if m.autoFollow {
 		m.applyAutoFollowCursor()
 	}
@@ -865,11 +870,14 @@ func (m *Model) canLaunchDebug() bool {
 }
 
 func (m *Model) canResumeAgentSession(n *StepNode) bool {
-	return n != nil && n.SessionID != "" && !m.running && !m.active
+	if n == nil || n.SessionID == "" || m.running || m.active {
+		return false
+	}
+	return n.Type != NodeAgentCall || (n.Status != StatusPending && n.Status != StatusInProgress)
 }
 
 func isAgentNode(n *StepNode) bool {
-	return n != nil && (n.Type == NodeHeadlessAgent || n.Type == NodeInteractiveAgent)
+	return n != nil && (n.Type == NodeHeadlessAgent || n.Type == NodeInteractiveAgent || n.Type == NodeAgentCall)
 }
 
 func (m *Model) resumeAgentTargetForSelection() *StepNode {
@@ -1094,6 +1102,7 @@ func (m *Model) handleCopySelectedDetail() tea.Cmd {
 }
 
 func (m *Model) selectedStepDetailText() string {
+	m.loadSelectedAgentCallOutput()
 	selected := m.selectedNode()
 	if selected == nil {
 		return ""
@@ -1176,6 +1185,10 @@ func (m *Model) applyAutoFollowToInProgress() {
 
 func (m *Model) applyAutoFollowToNode(active *StepNode) {
 	if active == nil {
+		return
+	}
+	if active.Type == NodeAgentCall {
+		m.navigateToNode(active)
 		return
 	}
 	target := m.ancestorAtCurrentLevel(active)
@@ -1409,6 +1422,97 @@ func (m *Model) applyOutputChunk(msg liverun.OutputChunkMsg) {
 	}
 }
 
+func (m *Model) loadSelectedAgentCallOutput() {
+	node := m.selectedNode()
+	if node == nil || node.Type != NodeAgentCall || node.CallOutputLoaded || node.CallOutputPrefix == "" || m.sessionDir == "" {
+		return
+	}
+	// A live in-process child is already feeding chunks through OutputChunkMsg.
+	// Reading its still-growing file as well would duplicate bytes.
+	if m.entered == FromLiveRun && node.Status == StatusInProgress {
+		return
+	}
+	base := liverun.SanitizeOutputPrefix(node.CallOutputPrefix)
+	if base == "" || base == "." || base == ".." || strings.Contains(base, "..") {
+		m.loadErr = fmt.Sprintf("load call output: invalid output prefix %q", node.CallOutputPrefix)
+		return
+	}
+	root, err := os.OpenRoot(filepath.Join(m.sessionDir, "output"))
+	if errors.Is(err, os.ErrNotExist) {
+		node.CallOutputLoaded = true
+		m.clearCallOutputLoadError()
+		return
+	}
+	if err != nil {
+		m.loadErr = "load call output: " + err.Error()
+		return
+	}
+
+	stdout, stdoutFound, err := readBoundedCallOutput(root, base+".out")
+	if err != nil {
+		err = errors.Join(err, root.Close())
+		m.loadErr = "load call output: " + err.Error()
+		return
+	}
+	stderr, stderrFound, err := readBoundedCallOutput(root, base+".err")
+	if err != nil {
+		err = errors.Join(err, root.Close())
+		m.loadErr = "load call output: " + err.Error()
+		return
+	}
+	if err := root.Close(); err != nil {
+		m.loadErr = "load call output: " + err.Error()
+		return
+	}
+	if stdoutFound {
+		node.Stdout = stdout
+	}
+	if stderrFound {
+		node.Stderr = stderr
+	}
+	node.CallOutputLoaded = true
+	m.clearCallOutputLoadError()
+}
+
+func readBoundedCallOutput(root *os.Root, name string) (output string, found bool, err error) {
+	file, err := root.Open(name)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("open %s: %w", name, err)
+	}
+	defer func() {
+		err = errors.Join(err, file.Close())
+	}()
+
+	info, err := file.Stat()
+	if err != nil {
+		return "", false, fmt.Errorf("stat %s: %w", name, err)
+	}
+	start := max(info.Size()-int64(maxOutputBytes), 0)
+	if _, err := file.Seek(start, io.SeekStart); err != nil {
+		return "", false, fmt.Errorf("seek %s: %w", name, err)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, int64(maxOutputBytes)))
+	if err != nil {
+		return "", false, fmt.Errorf("read %s: %w", name, err)
+	}
+	output = string(data)
+	if start > 0 {
+		if idx := strings.IndexByte(output, '\n'); idx >= 0 {
+			output = output[idx+1:]
+		}
+	}
+	return tailOutputCap(output), true, nil
+}
+
+func (m *Model) clearCallOutputLoadError() {
+	if strings.HasPrefix(m.loadErr, "load call output: ") {
+		m.loadErr = ""
+	}
+}
+
 // tailOutputCap enforces the maxOutputLines / maxOutputBytes cap on a string,
 // keeping only the tail. This matches the limits in output.go so memory stays
 // bounded even for long-running chatty steps.
@@ -1486,6 +1590,21 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 	}
 
 	switch n.Type {
+	case NodeHeadlessAgent, NodeInteractiveAgent:
+		if n.IsContainer() {
+			m.path = append(m.path, n)
+			m.cursor = 0
+			m.logOffset = 0
+			m.rebuildRanges()
+			return m, nil
+		}
+		if m.canResumeAgentSession(n) {
+			return m, func() tea.Msg {
+				return ResumeMsg{AgentCLI: n.AgentCLI, SessionID: n.SessionID}
+			}
+		}
+		return m, nil
+
 	case NodeLoop, NodeGroup:
 		m.path = append(m.path, n)
 		m.cursor = 0
@@ -1516,7 +1635,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		m.rebuildRanges()
 		return m, nil
 
-	case NodeHeadlessAgent, NodeInteractiveAgent:
+	case NodeAgentCall:
 		if m.canResumeAgentSession(n) {
 			return m, func() tea.Msg {
 				return ResumeMsg{AgentCLI: n.AgentCLI, SessionID: n.SessionID}
@@ -1532,7 +1651,7 @@ func (m *Model) handleLoadFull() {
 	if n == nil {
 		return
 	}
-	if n.Type == NodeShell || n.Type == NodeScript || n.Type == NodeHeadlessAgent {
+	if n.Type == NodeShell || n.Type == NodeScript || n.Type == NodeHeadlessAgent || n.Type == NodeAgentCall {
 		m.loadedFull[n.NodeKey()] = true
 	}
 }
@@ -1627,6 +1746,15 @@ func findFailedLeaf(n *StepNode) *StepNode {
 }
 
 func (m *Model) refreshData() {
+	// Views opened from the run list or inspect command read called-agent output
+	// from files rather than receiving the in-process OutputChunkMsg stream. An
+	// in-progress call's file can grow between refreshes, so make those snapshots
+	// reloadable before applying the next batch of lifecycle events. Resetting
+	// before replay also guarantees one final load when this batch completes the
+	// call or the run lock disappears.
+	if m.active {
+		invalidateInProgressAgentCallOutput(m.tree.Root)
+	}
 	m.active = runlock.Check(m.sessionDir) == runlock.LockActive
 	events, err := m.tailer.ReadSince(m.sessionDir)
 	if err != nil {
@@ -1636,6 +1764,18 @@ func (m *Model) refreshData() {
 	}
 	for _, e := range events {
 		m.tree.ApplyEvent(e)
+	}
+}
+
+func invalidateInProgressAgentCallOutput(node *StepNode) {
+	if node == nil {
+		return
+	}
+	if node.Type == NodeAgentCall && node.Status == StatusInProgress {
+		node.CallOutputLoaded = false
+	}
+	for _, child := range node.Children {
+		invalidateInProgressAgentCallOutput(child)
 	}
 }
 

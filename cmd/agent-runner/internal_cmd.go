@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -10,7 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/codagent/agent-runner/internal/agentcall"
 	agentconfig "github.com/codagent/agent-runner/internal/config"
+	"github.com/codagent/agent-runner/internal/control"
 	"github.com/codagent/agent-runner/internal/interactive"
 	"github.com/codagent/agent-runner/internal/profilewrite"
 	"github.com/codagent/agent-runner/internal/usersettings"
@@ -48,6 +51,8 @@ func handleInternalWithIO(args []string, stdin io.Reader, stderr io.Writer) int 
 		return handleWatchdog(args[1:], stdin, stderr)
 	case "turn-committed":
 		return handleTurnCommitted(args, stderr)
+	case "call-agent-mcp":
+		return handleCallAgentMCP(args, stderr)
 	case "write-profile":
 		if len(args) != 1 {
 			_, _ = fmt.Fprintln(stderr, "agent-runner: internal write-profile accepts no arguments")
@@ -137,6 +142,18 @@ func handleInternalWithIO(args []string, stdin io.Reader, stderr io.Writer) int 
 	}
 }
 
+func handleCallAgentMCP(args []string, stderr io.Writer) int {
+	if len(args) != 1 {
+		_, _ = fmt.Fprintln(stderr, "agent-runner: internal call-agent-mcp accepts no arguments")
+		return 1
+	}
+	if err := agentcall.RunStdio(context.Background(), os.Getenv); err != nil {
+		_, _ = fmt.Fprintf(stderr, "agent-runner: call-agent MCP bridge: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
 func handleWatchdog(args []string, parent io.Reader, stderr io.Writer) int {
 	flags := flag.NewFlagSet("internal watchdog", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -167,7 +184,7 @@ func handleTurnCommitted(args []string, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "agent-runner: internal turn-committed accepts only the optional hook payload")
 		return 1
 	}
-	if _, err := sendControlMessage(interactive.MessageTurnCommitted); err != nil {
+	if _, err := sendControlMessage(control.MessageTurnCommitted); err != nil {
 		_, _ = fmt.Fprintf(stderr, "agent-runner: %v\n", err)
 		return 1
 	}

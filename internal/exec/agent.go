@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,9 +12,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/mattn/go-isatty"
 
+	"github.com/codagent/agent-runner/internal/agentcall"
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/config"
+	"github.com/codagent/agent-runner/internal/control"
 	"github.com/codagent/agent-runner/internal/engine"
 	"github.com/codagent/agent-runner/internal/interactive"
 	"github.com/codagent/agent-runner/internal/model"
@@ -29,19 +30,22 @@ var interactiveRunnerFn = runDirectInteractive
 var osExecutableFn = os.Executable
 
 type directRunOptions struct {
+	context    context.Context
 	workdir    string
 	invocation *directInvocation
 }
 
 type directInvocation struct {
-	ctx              *model.ExecutionContext
-	stepID           string
-	cliName          string
-	sessionID        string
-	probe            cli.TurnDurabilityProbe
-	spawnEnv         []string
-	dropEnv          []string
-	resolveSessionID func() string
+	ctx               *model.ExecutionContext
+	stepID            string
+	cliName           string
+	sessionID         string
+	probe             cli.TurnDurabilityProbe
+	spawnEnv          []string
+	dropEnv           []string
+	resolveSessionID  func() string
+	agentCallEligible bool
+	agentCallHandler  control.AgentCallHandler
 }
 
 var isStdinTerminal = func() bool {
@@ -114,27 +118,6 @@ func resolveStepProfile(step *model.Step, ctx *model.ExecutionContext) (*config.
 	return resolved, nil
 }
 
-// prefixSetter is implemented by liverun.tuiProcessRunner. Type-asserting
-// against this interface lets exec functions set the step prefix before each
-// subprocess launch without importing the liverun package.
-type prefixSetter interface {
-	SetPrefix(string)
-}
-
-// stdoutWrapperSetter is implemented by liverun.tuiProcessRunner. When set,
-// the process runner wraps the TUI stdout writer so adapters that produce
-// structured output (e.g. JSONL) can filter it before display.
-type stdoutWrapperSetter interface {
-	SetStdoutWrapper(func(w io.Writer) io.Writer)
-}
-
-// stderrWrapperSetter is implemented by liverun.tuiProcessRunner. When set,
-// the process runner wraps the TUI stderr writer so adapters can filter known
-// non-actionable diagnostics before display.
-type stderrWrapperSetter interface {
-	SetStderrWrapper(func(w io.Writer) io.Writer)
-}
-
 // ExecuteAgentStep runs an agent step using the resolved CLI adapter.
 func ExecuteAgentStep(
 	step *model.Step,
@@ -145,6 +128,7 @@ func ExecuteAgentStep(
 	if step.Prompt == "" {
 		return OutcomeFailed, nil
 	}
+	agentCallEligible := strings.Contains(step.Prompt, agentcall.ToolName)
 
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 	startTime := time.Now()
@@ -183,64 +167,46 @@ func ExecuteAgentStep(
 
 	emitAgentStart(ctx, prefix, startTime, prompt, mode, step, sessionID, cliName, resolvedModel, enrichment)
 
-	// Set the step prefix on the process runner if it supports it (TUI mode).
-	if ps, ok := runner.(prefixSetter); ok {
-		ps.SetPrefix(prefix)
-	}
-
-	cleanupOutputWrappers := configureAgentOutputWrappers(adapter, runner)
-	defer cleanupOutputWrappers()
-	// Bind the run-scoped endpoint before the terminal lease is released. A
-	// bind or stale-cleanup failure therefore fails without blanking the TUI.
-	if controlErr := ensureInteractiveControl(ctx, invocationContext); controlErr != nil {
+	// Bind the run-scoped endpoint before releasing the terminal lease.
+	if controlErr := ensureRunnerControl(ctx, invocationContext, agentCallEligible); controlErr != nil {
 		extraction := cli.UsageExtraction{Usage: defaultAgentUsage(cliName, invocationContext.IsHeadless())}
 		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, false, "", OutcomeFailed, "", controlErr.Error(), &extraction, nil)
 		return OutcomeFailed, controlErr
 	}
 
-	// Persist session bookkeeping BEFORE spawning the CLI so that if the runner
-	// is killed mid-step (ctrl-c, terminal hangup, crash) resume can reconnect
-	// to the session rather than orphan it. When the session ID is knowable at
-	// spawn — fresh Claude (pre-generated UUID), any resume (ID carried in) —
-	// we can persist it now. Fresh Codex sessions remain the exception since
-	// Codex assigns the ID internally and DiscoverSessionID only succeeds after
-	// the process has run; for those cases we fall back to the post-exit write
-	// below.
+	callHandler, spawnEnv, deactivate, controlErr := prepareAgentCallRuntime(
+		agentCallEligible, invocationContext, step, ctx, adapter, runner, log,
+		cliName, sessionID, prefix, spawnEnv,
+	)
+	if controlErr != nil {
+		extraction := cli.UsageExtraction{Usage: defaultAgentUsage(cliName, invocationContext.IsHeadless())}
+		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, false, "", OutcomeFailed, "", controlErr.Error(), &extraction, nil)
+		return OutcomeFailed, controlErr
+	}
+	if deactivate != nil {
+		defer deactivate()
+	}
+
+	// Persist knowable session IDs before spawn so interruption cannot orphan
+	// the native session. CLI-assigned IDs are stored after discovery instead.
 	recordSessionOnSpawn(step, ctx, sessionID)
 
-	spawnTime := time.Now()
-	probe, _ := adapter.(cli.TurnDurabilityProbe)
-	direct := &directInvocation{
-		ctx: ctx, stepID: step.ID, cliName: cliName, sessionID: sessionID, probe: probe,
-		spawnEnv: spawnEnv, dropEnv: cli.DropSpawnEnvVars(adapter),
-		resolveSessionID: func() string {
-			return adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: spawnTime, Workdir: step.Workdir})
-		},
-	}
-	outcome, result, agentInvoked, runErr := runAgentProcess(runner, adapter, args, invocationContext, step.Workdir, log, ctx.SuspendHook, ctx.ResumeHook, direct)
-	usageExtraction, usageErr := extractAgentUsage(adapter, cliName, invocationContext, result.Stdout)
+	direct := buildWorkflowDirectInvocation(step, ctx, adapter, cliName, sessionID, spawnEnv, agentCallEligible, callHandler)
+	invocationInput := buildWorkflowAgentInvocation(step, ctx, adapter, args, spawnEnv, prefix, invocationContext, cliName, resolvedModel, sessionID, isResume, log, direct)
+	invocation, runErr := InvokeAgent(invocationInput, runner, log)
 	if runErr != nil {
-		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, agentInvoked, "", outcome, "", result.Stderr, &usageExtraction, usageErr)
-		return outcome, runErr
-	}
-
-	// When the adapter produces structured output (e.g. JSONL), extract the
-	// plain-text response for capture variables and TUI display.
-	filteredStdout := result.Stdout
-	if f, ok := adapter.(cli.OutputFilter); ok {
-		filteredStdout = f.FilterOutput(result.Stdout)
+		extraction := cli.UsageExtraction{Usage: invocation.Usage, EstimatedCostUSD: invocation.EstimatedCostUSD}
+		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, invocation.CLILaunched, "", invocation.Outcome, "", invocation.Stderr, &extraction, invocation.UsageError)
+		return invocation.Outcome, runErr
 	}
 
 	if step.Capture != "" {
-		captured := strings.TrimSuffix(filteredStdout, "\r\n")
+		captured := strings.TrimSuffix(invocation.Response, "\r\n")
 		captured = strings.TrimSuffix(captured, "\n")
 		ctx.CapturedVariables[step.Capture] = model.NewCapturedString(captured)
 	}
 
-	// For session-originating steps (new or named), advance LastSessionStepID
-	// and record the profile before discoverAndStoreSession runs, so a subsequent
-	// resume/inherit step can resolve the profile even when the CLI adapter
-	// discovers the session ID post-exit (e.g. Codex).
+	// Record the originating profile before post-exit session discovery.
 	if step.Session == model.SessionNew || model.IsNamedSession(step.Session) {
 		ctx.LastSessionStepID = step.ID
 		if profile := stepProfileName(step, ctx); profile != "" {
@@ -248,11 +214,111 @@ func ExecuteAgentStep(
 		}
 	}
 
-	discoveredID := discoverAndStoreSession(adapter, step, ctx, spawnTime, sessionID, invocationContext.IsHeadless(), result.Stdout, log)
+	discoveredID := storeDiscoveredSession(step, ctx, invocation.DiscoveredSessionID, log)
 
-	emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, true, discoveredID, outcome, filteredStdout, result.Stderr, &usageExtraction, usageErr)
+	extraction := cli.UsageExtraction{Usage: invocation.Usage, EstimatedCostUSD: invocation.EstimatedCostUSD}
+	emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, invocation.CLILaunched, discoveredID, invocation.Outcome, invocation.Response, invocation.Stderr, &extraction, invocation.UsageError)
 
-	return outcome, nil
+	return invocation.Outcome, nil
+}
+
+func buildWorkflowAgentInvocation(
+	step *model.Step,
+	ctx *model.ExecutionContext,
+	adapter cli.Adapter,
+	args, spawnEnv []string,
+	prefix string,
+	invocationContext cli.InvocationContext,
+	cliName, resolvedModel, sessionID string,
+	isResume bool,
+	log Logger,
+	direct *directInvocation,
+) *AgentInvocation {
+	return &AgentInvocation{
+		Context: context.Background(), Adapter: adapter, Args: args,
+		Env: spawnEnv, DropEnv: cli.DropSpawnEnvVars(adapter),
+		Workdir: step.Workdir, Prefix: prefix,
+		InvocationContext: invocationContext, CLI: cliName, Model: resolvedModel,
+		SessionID: sessionID, SessionResumed: isResume,
+		Log: log, SuspendHook: ctx.SuspendHook, ResumeHook: ctx.ResumeHook,
+		direct: direct,
+	}
+}
+
+func prepareAgentCallRuntime(
+	eligible bool,
+	invocationContext cli.InvocationContext,
+	step *model.Step,
+	ctx *model.ExecutionContext,
+	adapter cli.Adapter,
+	runner ProcessRunner,
+	log Logger,
+	cliName, sessionID, prefix string,
+	spawnEnv []string,
+) (handler *AgentCallHandler, env []string, deactivate func(), err error) {
+	if !eligible {
+		return nil, spawnEnv, nil, nil
+	}
+	if ctx.ProjectRoot == "" || ctx.WorkingDir == "" {
+		return nil, spawnEnv, nil, errors.New("agent-call project root is unavailable")
+	}
+	parentWorkdir, workdirErr := resolveAgentCallWorkdir(ctx.ProjectRoot, ctx.WorkingDir, step.Workdir)
+	if workdirErr != nil {
+		return nil, spawnEnv, nil, fmt.Errorf("resolve parent workdir: %w", workdirErr)
+	}
+	parentNamedSession := ""
+	if model.IsNamedSession(step.Session) {
+		parentNamedSession = string(step.Session)
+	}
+	spawnTime := time.Now()
+	options := &AgentCallHandlerOptions{
+		Context: ctx, Runner: runner, Log: log, Eligible: true,
+		Parent: AgentCallParent{
+			CLI: cliName, SessionID: sessionID, NamedSession: parentNamedSession,
+			Worktree: ctx.ProjectRoot, Workdir: parentWorkdir, Prefix: prefix,
+			ResolveSessionID: func() string {
+				return adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: spawnTime, Workdir: parentWorkdir})
+			},
+		},
+	}
+	if notifier, ok := runner.(AgentCallLifecycleNotifier); ok {
+		options.OnAccepted = func(call AgentCallAccepted) { notifier.NotifyAgentCallAccepted(&call) }
+		options.OnFinished = func(call AgentCallAccepted) { notifier.NotifyAgentCallFinished(&call) }
+	}
+	handler = NewAgentCallHandler(options)
+	if !invocationContext.IsHeadless() {
+		return handler, spawnEnv, nil, nil
+	}
+	server, err := controlServerForContext(ctx)
+	if err != nil {
+		return nil, spawnEnv, nil, err
+	}
+	attempt := server.ActivateAttempt(context.Background(), step.ID, control.AttemptOptions{
+		AgentCallEligible: true, AgentCallHandler: handler,
+	})
+	return handler, append(spawnEnv, attempt.Environment()...), server.Deactivate, nil
+}
+
+func buildWorkflowDirectInvocation(
+	step *model.Step,
+	ctx *model.ExecutionContext,
+	adapter cli.Adapter,
+	cliName, sessionID string,
+	spawnEnv []string,
+	agentCallEligible bool,
+	agentCallHandler control.AgentCallHandler,
+) *directInvocation {
+	spawnTime := time.Now()
+	probe, _ := adapter.(cli.TurnDurabilityProbe)
+	return &directInvocation{
+		ctx: ctx, stepID: step.ID, cliName: cliName, sessionID: sessionID, probe: probe,
+		spawnEnv: spawnEnv, dropEnv: cli.DropSpawnEnvVars(adapter),
+		resolveSessionID: func() string {
+			return adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: spawnTime, Workdir: step.Workdir})
+		},
+		agentCallEligible: agentCallEligible,
+		agentCallHandler:  agentCallHandler,
+	}
 }
 
 func interactiveModeError(adapter cli.Adapter, invocationContext cli.InvocationContext) error {
@@ -297,27 +363,6 @@ func resolveInvocationContext(mode model.StepMode, ctx *model.ExecutionContext, 
 		log.Errorf("  autonomous backend requested interactive mode for %s, but stdin is not a TTY; falling back to headless\n", cliName)
 	}
 	return cli.ContextAutonomousHeadless
-}
-
-func configureAgentOutputWrappers(adapter cli.Adapter, runner ProcessRunner) func() {
-	var cleanups []func()
-	if sw, ok := adapter.(cli.StdoutWrapper); ok {
-		if ws, ok2 := runner.(stdoutWrapperSetter); ok2 {
-			ws.SetStdoutWrapper(sw.WrapStdout)
-			cleanups = append(cleanups, func() { ws.SetStdoutWrapper(nil) })
-		}
-	}
-	if sw, ok := adapter.(cli.StderrWrapper); ok {
-		if ws, ok2 := runner.(stderrWrapperSetter); ok2 {
-			ws.SetStderrWrapper(sw.WrapStderr)
-			cleanups = append(cleanups, func() { ws.SetStderrWrapper(nil) })
-		}
-	}
-	return func() {
-		for i := len(cleanups) - 1; i >= 0; i-- {
-			cleanups[i]()
-		}
-	}
 }
 
 // ResolveAgentInvocationContext returns the effective adapter invocation context
@@ -433,6 +478,21 @@ func buildStepInvocation(
 		return nil, nil, "", fmt.Errorf("resolve completion executable: %w", err)
 	}
 	input := buildAdapterInput(step, ctx, profile, adapter, prompt, enrichment, sessionID, isResume, invocationContext, completionExecutable)
+	if strings.Contains(step.Prompt, agentcall.ToolName) {
+		executable := completionExecutable
+		if executable == "" {
+			executable, err = agentRunnerExecutable()
+			if err != nil {
+				return nil, nil, "", fmt.Errorf("resolve agent-call executable: %w", err)
+			}
+		}
+		input.RunnerIntegration = &cli.RunnerIntegration{AgentCall: &cli.MCPServerCommand{
+			Executable: executable, Args: []string{"internal", "call-agent-mcp"},
+		}}
+		if !input.RunnerIntegration.Valid() {
+			return nil, nil, "", errors.New("agent-call invocation has an invalid Runner integration descriptor")
+		}
+	}
 	if err := validateCompletionIntegration(&input); err != nil {
 		return nil, nil, "", err
 	}
@@ -625,6 +685,7 @@ func runDirectInteractive(args []string, options directRunOptions) (interactive.
 		SessionID: invocation.sessionID, CLI: invocation.cliName,
 		Env: invocation.spawnEnv, DropEnv: invocation.dropEnv,
 		Control: server, Probe: invocation.probe, ResolveSessionID: invocation.resolveSessionID, Foreground: true,
+		AgentCallEligible: invocation.agentCallEligible, AgentCallHandler: invocation.agentCallHandler,
 		WatchdogExecutable: executable, Logger: invocation.ctx.AuditLogger,
 		Prefix: audit.BuildPrefix(nestingToAudit(invocation.ctx), invocation.stepID),
 		Persist: func(metadata *interactive.ProcessMetadata) {
@@ -634,16 +695,20 @@ func runDirectInteractive(args []string, options directRunOptions) (interactive.
 			}
 		},
 	})
-	return direct.Run(context.Background())
+	ctx := options.context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return direct.Run(ctx)
 }
 
-func controlServerForContext(ctx *model.ExecutionContext) (*interactive.ControlServer, error) {
+func controlServerForContext(ctx *model.ExecutionContext) (*control.ControlServer, error) {
 	root := ctx
 	for root.ParentContext != nil {
 		root = root.ParentContext
 	}
-	if server, ok := root.InteractiveControl.(*interactive.ControlServer); ok && server != nil {
-		ctx.InteractiveControl = server
+	if server, ok := root.Control.(*control.ControlServer); ok && server != nil {
+		ctx.Control = server
 		return server, nil
 	}
 	if root.SessionDir == "" {
@@ -653,20 +718,26 @@ func controlServerForContext(ctx *model.ExecutionContext) (*interactive.ControlS
 	if err != nil {
 		return nil, err
 	}
-	server, err := interactive.NewControlServer(&interactive.ControlConfig{
+	server, err := control.NewControlServer(&control.ControlConfig{
 		RunID: filepath.Base(root.SessionDir), RunDir: root.SessionDir,
 		LockProof: proof, Logger: root.AuditLogger,
 	})
 	if err != nil {
 		return nil, err
 	}
-	root.InteractiveControl = server
-	ctx.InteractiveControl = server
+	root.Control = server
+	ctx.Control = server
 	return server, nil
 }
 
-func ensureInteractiveControl(ctx *model.ExecutionContext, invocationContext cli.InvocationContext) error {
-	if invocationContext.IsHeadless() || ctx.SessionDir == "" {
+func ensureRunnerControl(ctx *model.ExecutionContext, invocationContext cli.InvocationContext, agentCallEligible bool) error {
+	if invocationContext.IsHeadless() && !agentCallEligible {
+		return nil
+	}
+	if ctx.SessionDir == "" {
+		if agentCallEligible {
+			return errors.New("create agent-call control endpoint: session directory is unavailable")
+		}
 		return nil
 	}
 	_, err := controlServerForContext(ctx)
@@ -689,13 +760,13 @@ func setInteractiveAttempt(ctx *model.ExecutionContext, metadata *interactive.Pr
 	root.InteractiveAttempt = stored
 }
 
-func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, invocationContext cli.InvocationContext, workdir string, log Logger, suspendHook, resumeHook func() error, direct *directInvocation) (StepOutcome, ProcessResult, bool, error) {
+func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, options *AgentProcessOptions, invocationContext cli.InvocationContext, log Logger, suspendHook, resumeHook func() error, direct *directInvocation) (StepOutcome, ProcessResult, bool, error) {
 	if invocationContext.IsHeadless() {
 		// Capture stdout for headless runs so that adapters (e.g. Codex) can
 		// parse session IDs from the process output.
-		result, runErr := runner.RunAgent(args, true, workdir)
+		result, runErr := runner.RunAgent(options)
 		if runErr != nil {
-			return OutcomeFailed, result, false, runErr
+			return OutcomeFailed, result, result.Started, runErr
 		}
 		if f, ok := adapter.(cli.HeadlessResultFilter); ok {
 			result.ExitCode, result.Stderr = f.FilterHeadlessResult(result.ExitCode, result.Stdout, result.Stderr)
@@ -723,7 +794,7 @@ func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, args []string, i
 			return OutcomeFailed, ProcessResult{}, false, err
 		}
 	}
-	directResult, err := interactiveRunnerFn(args, directRunOptions{workdir: workdir, invocation: direct})
+	directResult, err := interactiveRunnerFn(options.Args, directRunOptions{context: options.Context, workdir: options.Workdir, invocation: direct})
 	if resumeHook != nil {
 		if resumeErr := resumeHook(); err == nil && resumeErr != nil {
 			err = resumeErr
@@ -781,23 +852,12 @@ func recordSessionOnSpawn(step *model.Step, ctx *model.ExecutionContext, session
 	}
 }
 
-func discoverAndStoreSession(
-	adapter cli.Adapter,
+func storeDiscoveredSession(
 	step *model.Step,
 	ctx *model.ExecutionContext,
-	spawnTime time.Time,
-	presetID string,
-	headless bool,
-	processOutput string,
+	discoveredID string,
 	log Logger,
 ) string {
-	discoveredID := adapter.DiscoverSessionID(&cli.DiscoverOptions{
-		SpawnTime:     spawnTime,
-		PresetID:      presetID,
-		Headless:      headless,
-		ProcessOutput: processOutput,
-		Workdir:       step.Workdir,
-	})
 	if discoveredID != "" {
 		ctx.SessionIDs[step.ID] = discoveredID
 		// stepProfileName reads from the pre-advance LastSessionStepID, so call

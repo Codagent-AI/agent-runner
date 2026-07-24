@@ -59,6 +59,8 @@ Project config wins over global config.
 > [!NOTE]
 > Only **project** config may set `active_profile`. Global config cannot. This keeps a machine-wide default from silently changing which profile a project runs under.
 
+Built-in agents act only as fallbacks. If your global or project configuration gives a profile set an explicit `extends` parent, that parent's agents replace the built-in agents as the fallback for the child. Agents you declare directly in the child still override its parent normally.
+
 ## User Settings
 
 User settings live in `~/.agent-runner/settings.yaml`. The settings editor in the TUI writes the user-facing preferences:

@@ -23,8 +23,8 @@ Important files:
 | --- | --- |
 | `state.json` | Resume state, current step, session IDs, params, captures, nested progress, and completion flag. |
 | `audit.log` | JSONL event log for the run. |
-| `run-metrics.json` | Versioned per-attempt metrics, execution sessions, and run totals. |
-| `output/` | Per-step output files used by the live run view and workflows. |
+| `run-metrics.json` | Versioned per-execution metrics, execution sessions, and run totals. |
+| `output/` | Per-step and per-agent-call output files used by the live run view and workflows. |
 | `bundled/` | Materialized bundled scripts and assets for built-in workflow runs. |
 
 ## Audit Events
@@ -41,6 +41,8 @@ Audit events include:
 | `iteration_end` | A loop iteration ended. |
 | `sub_workflow_start` | A sub-workflow started. |
 | `sub_workflow_end` | A sub-workflow ended. |
+| `agent_call_start` | An authenticated, validated agent call was accepted. |
+| `agent_call_end` | An accepted agent call succeeded, failed, or was canceled. |
 | `error` | An error was recorded. |
 
 ## Run Metrics
@@ -48,6 +50,7 @@ Audit events include:
 `run-metrics.json` is the supported machine-readable metrics artifact for a run. Schema version 1 records:
 
 - each completed step attempt with its identity, nesting prefix, outcome, duration, usage state, and reported API cost;
+- each terminal accepted agent call as a `kind: "agent-call"` record with call, parent-attempt, target, session, usage, and cost fields;
 - loop iteration completions with identity and duration only, avoiding duplicate usage rollups;
 - execution sessions with observed active duration and clean/open status; and
 - run totals for active duration, token categories, usage coverage, estimated API cost, and cost coverage.
@@ -59,6 +62,8 @@ On resume, Agent Runner reads this artifact directly, retains earlier attempts, 
 ## Run Detail View
 
 The run detail view uses the workflow step tree to show progress, completed steps, pending steps, and the currently selected step. If an agent session can be resumed, the detail pane shows the CLI, model, session name, session ID, prompt, and duration.
+
+Accepted agent calls appear as dynamic child executions beneath their exact parent. Their stdout and stderr are loaded from call-specific files in `output/`; audit metadata is not treated as the child's full response. A completed parent with calls drills into a `parent turn` row and chronological call rows. See [Agent Calls](agent-calls.md) for the rendering and resume contract.
 
 ![Agent Runner run detail view with an inactive resumable OpenSpec workflow](images/workflow-implement.png)
 

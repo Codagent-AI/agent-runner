@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	iexec "github.com/codagent/agent-runner/internal/exec"
 )
 
 func TestResolveWorkflowArg(t *testing.T) {
@@ -314,12 +317,33 @@ func TestRealProcessRunner_RunAgentDoesNotInheritStdin(t *testing.T) {
 		_ = r.Close()
 	}()
 
-	result, err := (&realProcessRunner{}).RunAgent([]string{"sh", "-c", `if read x; then printf "read:%s" "$x"; else printf "eof"; fi`}, true, "")
+	result, err := (&realProcessRunner{}).RunAgent(&iexec.AgentProcessOptions{
+		Context: context.Background(), Args: []string{"sh", "-c", `if read x; then printf "read:%s" "$x"; else printf "eof"; fi`}, CaptureStdout: true,
+	})
 	if err != nil {
 		t.Fatalf("RunAgent returned error: %v", err)
 	}
 	if result.Stdout != "eof" {
 		t.Fatalf("RunAgent inherited stdin, stdout = %q", result.Stdout)
+	}
+}
+
+func TestRealProcessRunner_RunAgentCanceledBeforeStartIsNotLaunched(t *testing.T) {
+	for _, captureStdout := range []bool{false, true} {
+		t.Run(fmt.Sprintf("capture=%t", captureStdout), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			result, err := (&realProcessRunner{}).RunAgent(&iexec.AgentProcessOptions{
+				Context: ctx, Args: []string{"sh", "-c", "exit 0"}, CaptureStdout: captureStdout,
+			})
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("RunAgent() error = %v, want context canceled", err)
+			}
+			if result.Started {
+				t.Fatalf("RunAgent() result = %#v, want Started=false", result)
+			}
+		})
 	}
 }
 
@@ -358,20 +382,20 @@ func TestEnsureAgentRunnerExecutableEnvSetsParentEnvironment(t *testing.T) {
 	}
 }
 
-func TestEnsureAgentRunnerExecutableEnvPreservesExistingValue(t *testing.T) {
+func TestEnsureAgentRunnerExecutableEnvReplacesInheritedValue(t *testing.T) {
 	originalExecutable := currentExecutable
 	t.Cleanup(func() {
 		currentExecutable = originalExecutable
 	})
-	t.Setenv(agentRunnerExecutableEnv, "/already/set/agent-runner")
+	t.Setenv(agentRunnerExecutableEnv, "/outer/agent-runner")
 	currentExecutable = func() (string, error) {
 		return "/tmp/source-build/agent-runner", nil
 	}
 
 	ensureAgentRunnerExecutableEnv()
 
-	if got := os.Getenv(agentRunnerExecutableEnv); got != "/already/set/agent-runner" {
-		t.Fatalf("%s = %q, want existing value preserved", agentRunnerExecutableEnv, got)
+	if got := os.Getenv(agentRunnerExecutableEnv); got != "/tmp/source-build/agent-runner" {
+		t.Fatalf("%s = %q, want current executable", agentRunnerExecutableEnv, got)
 	}
 }
 

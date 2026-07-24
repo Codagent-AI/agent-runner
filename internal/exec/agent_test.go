@@ -26,8 +26,8 @@ type agentErrorRunner struct {
 	err error
 }
 
-func (r *agentErrorRunner) RunAgent(args []string, _ bool, _ string) (ProcessResult, error) {
-	r.calls = append(r.calls, args)
+func (r *agentErrorRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, error) {
+	r.calls = append(r.calls, options.Args)
 	return ProcessResult{}, r.err
 }
 

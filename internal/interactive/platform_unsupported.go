@@ -10,5 +10,3 @@ import (
 func interactivePlatformError() error {
 	return fmt.Errorf("interactive terminal handoff is unsupported on %s", runtime.GOOS)
 }
-
-func platformUserID() string { return "unsupported" }

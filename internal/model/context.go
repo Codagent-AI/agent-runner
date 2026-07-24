@@ -38,9 +38,14 @@ type ExecutionContext struct {
 	NestingPath   []NestingSegment
 	ParentContext *ExecutionContext
 
-	WorkflowFile             string
-	WorkflowName             string
-	WorkflowDescription      string
+	WorkflowFile        string
+	WorkflowName        string
+	WorkflowDescription string
+	// ProjectRoot is the canonical repository/worktree boundary established
+	// when the run starts. WorkingDir is the canonical launch directory used
+	// to resolve relative step workdirs.
+	ProjectRoot              string
+	WorkingDir               string
 	AutonomousBackend        string
 	AutonomousPermissionMode string
 
@@ -62,10 +67,10 @@ type ExecutionContext struct {
 	// AuditLogger writes structured audit events (audit.EventLogger).
 	AuditLogger audit.EventLogger
 
-	// InteractiveControl is the lazily-created run-scoped control server. It is
+	// Control is the lazily-created run-scoped control server. It is
 	// intentionally opaque here to keep core model types independent of runtime
 	// packages.
-	InteractiveControl any
+	Control            any
 	InteractiveAttempt *InteractiveAttemptMetadata
 
 	LastSubWorkflowChild *NestedStepState
@@ -98,6 +103,8 @@ type RootContextOptions struct {
 	WorkflowFile             string
 	WorkflowName             string
 	WorkflowDescription      string
+	ProjectRoot              string
+	WorkingDir               string
 	AutonomousBackend        string
 	AutonomousPermissionMode string
 	SessionDir               string
@@ -155,6 +162,8 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		WorkflowFile:             opts.WorkflowFile,
 		WorkflowName:             opts.WorkflowName,
 		WorkflowDescription:      opts.WorkflowDescription,
+		ProjectRoot:              opts.ProjectRoot,
+		WorkingDir:               opts.WorkingDir,
 		AutonomousBackend:        opts.AutonomousBackend,
 		AutonomousPermissionMode: opts.AutonomousPermissionMode,
 		SessionDir:               opts.SessionDir,
@@ -246,13 +255,15 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		WorkflowFile:             parent.WorkflowFile,
 		WorkflowName:             parent.WorkflowName,
 		WorkflowDescription:      parent.WorkflowDescription,
+		ProjectRoot:              parent.ProjectRoot,
+		WorkingDir:               parent.WorkingDir,
 		AutonomousBackend:        parent.AutonomousBackend,
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
 		SessionDir:               parent.SessionDir,
 		EngineRef:                parent.EngineRef,
 		ProfileStore:             parent.ProfileStore,
 		AuditLogger:              parent.AuditLogger,
-		InteractiveControl:       parent.InteractiveControl,
+		Control:                  parent.Control,
 		InteractiveAttempt:       parent.InteractiveAttempt,
 		WorkflowResumed:          parent.WorkflowResumed,
 		FlushState:               parent.FlushState,
@@ -325,13 +336,15 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		WorkflowFile:             opts.WorkflowFile,
 		WorkflowName:             parent.WorkflowName,
 		WorkflowDescription:      parent.WorkflowDescription,
+		ProjectRoot:              parent.ProjectRoot,
+		WorkingDir:               parent.WorkingDir,
 		AutonomousBackend:        parent.AutonomousBackend,
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
 		SessionDir:               parent.SessionDir,
 		EngineRef:                engineRef,
 		ProfileStore:             parent.ProfileStore,
 		AuditLogger:              parent.AuditLogger,
-		InteractiveControl:       parent.InteractiveControl,
+		Control:                  parent.Control,
 		InteractiveAttempt:       parent.InteractiveAttempt,
 		WorkflowResumed:          parent.WorkflowResumed,
 		FlushState:               parent.FlushState,

@@ -2318,6 +2318,23 @@ func TestSpawnEnvForInvocationDefaultsToNil(t *testing.T) {
 	}
 }
 
+func TestRunnerIntegrationValidatesFixedAgentCallCommand(t *testing.T) {
+	valid := RunnerIntegration{AgentCall: &MCPServerCommand{
+		Executable: "/opt/agent-runner", Args: []string{"internal", "call-agent-mcp"},
+	}}
+	if !valid.Valid() {
+		t.Fatalf("valid integration rejected: %#v", valid)
+	}
+	for _, invalid := range []RunnerIntegration{
+		{AgentCall: &MCPServerCommand{Executable: "agent-runner", Args: []string{"internal", "call-agent-mcp"}}},
+		{AgentCall: &MCPServerCommand{Executable: "/opt/agent-runner", Args: []string{"call-agent-mcp"}}},
+	} {
+		if invalid.Valid() {
+			t.Fatalf("invalid integration accepted: %#v", invalid)
+		}
+	}
+}
+
 func TestClaudeAdapterDropsEnclosingSessionEnv(t *testing.T) {
 	adapter, err := Get("claude")
 	if err != nil {
