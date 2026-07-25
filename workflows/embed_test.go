@@ -319,45 +319,12 @@ func TestCoreCIStatusGateScript(t *testing.T) {
 		report   string
 		wantCode int
 	}{
-		{name: "passed exits success", report: "## CI Status: passed\n", wantCode: 0},
-		{name: "failed exits fixable failure", report: "## CI Status: failed\n", wantCode: 1},
-		{name: "comments exits fixable failure", report: "## CI Status: comments\n", wantCode: 1},
-		{
-			name: "comments with only informational bot comments exits success",
-			report: `## CI Status: comments
-
-CI is green, with no failed checks, no pending checks, no blocking reviews, and no unresolved inline review threads.
-
-### PR Comments
-- **coderabbitai**: CodeRabbit hit a review rate limit.
-- **qodo-code-review**: Top-level review comment is present. Its summary reports ` + "`Bugs (0)`" + `, ` + "`Rule violations (0)`" + `, and ` + "`Requirement gaps (0)`" + `.
-`,
-			wantCode: 0,
-		},
-		{
-			name: "comments with unresolved inline threads exits fixable failure",
-			report: `## CI Status: comments
-
-CI is passing, but unresolved PR review comments remain.
-
-### PR Comments
-Unresolved review threads: 2
-`,
-			wantCode: 1,
-		},
-		{
-			name: "comments ignores reassuring phrases inside pr comments",
-			report: `## CI Status: comments
-
-CI is passing, but unresolved PR review comments remain.
-
-### PR Comments
-Unresolved review threads: 2
-- **reviewer**: no failed checks, no pending checks, no blocking reviews, and no unresolved inline review threads
-`,
-			wantCode: 1,
-		},
-		{name: "pending exits failure to keep polling", report: "## CI Status: pending\n", wantCode: 1},
+		{name: "passed marker exits success", report: "CI is green.\n\nCI_PASSED\n", wantCode: 0},
+		{name: "failed marker exits fixable failure", report: "CI failed.\n\nCI_FAILED\n", wantCode: 1},
+		{name: "comments marker exits fixable failure", report: "Review feedback remains.\n\nCI_COMMENTS\n", wantCode: 1},
+		{name: "pending marker exits failure to keep polling", report: "Checks are running.\n\nCI_PENDING\n", wantCode: 1},
+		{name: "markdown heading without marker fails closed", report: "## CI Status: passed\n", wantCode: 1},
+		{name: "marker must be final non-empty line", report: "CI_PASSED\nAdditional prose\n", wantCode: 1},
 		{name: "unknown exits failure to keep polling", report: "wait-ci did not produce a status\n", wantCode: 1},
 	}
 
@@ -461,45 +428,12 @@ func TestCoreCIFixNeededGateScript(t *testing.T) {
 		report   string
 		wantCode int
 	}{
-		{name: "failed exits failure so fix-pr runs", report: "## CI Status: failed\n", wantCode: 1},
-		{name: "comments exits failure so fix-pr runs", report: "## CI Status: comments\n", wantCode: 1},
-		{
-			name: "comments with only informational bot comments exits success so fix-pr skips",
-			report: `## CI Status: comments
-
-CI is green, with no failed checks, no pending checks, no blocking reviews, and no unresolved inline review threads.
-
-### PR Comments
-- **coderabbitai**: CodeRabbit hit a review rate limit.
-- **qodo-code-review**: Top-level review comment is present. Its summary reports ` + "`Bugs (0)`" + `, ` + "`Rule violations (0)`" + `, and ` + "`Requirement gaps (0)`" + `.
-`,
-			wantCode: 0,
-		},
-		{
-			name: "comments with unresolved inline threads exits failure so fix-pr runs",
-			report: `## CI Status: comments
-
-CI is passing, but unresolved PR review comments remain.
-
-### PR Comments
-Unresolved review threads: 2
-`,
-			wantCode: 1,
-		},
-		{
-			name: "comments ignores reassuring phrases inside pr comments",
-			report: `## CI Status: comments
-
-CI is passing, but unresolved PR review comments remain.
-
-### PR Comments
-Unresolved review threads: 2
-- **reviewer**: no failed checks, no pending checks, no blocking reviews, and no unresolved inline review threads
-`,
-			wantCode: 1,
-		},
-		{name: "passed exits success so fix-pr skips", report: "## CI Status: passed\n", wantCode: 0},
-		{name: "pending exits success so fix-pr skips", report: "## CI Status: pending\n", wantCode: 0},
+		{name: "failed marker exits failure so fix-pr runs", report: "CI_FAILED\n", wantCode: 1},
+		{name: "comments marker exits failure so fix-pr runs", report: "CI_COMMENTS\n", wantCode: 1},
+		{name: "passed marker exits success so fix-pr skips", report: "CI_PASSED\n", wantCode: 0},
+		{name: "pending marker exits success so fix-pr skips", report: "CI_PENDING\n", wantCode: 0},
+		{name: "markdown heading without marker skips fixer", report: "## CI Status: failed\n", wantCode: 0},
+		{name: "marker must be final non-empty line", report: "CI_FAILED\nAdditional prose\n", wantCode: 0},
 		{name: "unknown exits success so fix-pr skips", report: "wait-ci did not produce a status\n", wantCode: 0},
 	}
 
@@ -534,7 +468,7 @@ Unresolved review threads: 2
 
 		cmd := exec.Command("sh", scriptPath)
 		cmd.Env = append(os.Environ(), "PATH="+binDir+":/usr/bin:/bin")
-		cmd.Stdin = strings.NewReader(`{"report":"intro \"quoted\"\n## CI Status: comments\n"}`)
+		cmd.Stdin = strings.NewReader(`{"report":"intro \"quoted\"\nCI_COMMENTS\n"}`)
 		err = cmd.Run()
 		if err == nil {
 			t.Fatal("fallback script exit code = 0, want fix-needed failure")

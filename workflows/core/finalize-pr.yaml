@@ -27,6 +27,14 @@ steps:
         prompt: |
           Invoke codagent:wait-ci to poll CI status and gather review comments. Treat top-level bot summaries, rate-limit notices, and already-resolved reports as informational. Report comments only when actionable unresolved review feedback remains.
 
+          After the human-readable report, end your response with exactly one of these terminal markers as the final non-empty line:
+          - `CI_PASSED` when CI is green and no actionable unresolved feedback or unfinished bot review remains;
+          - `CI_FAILED` when a check failed or a blocking review remains;
+          - `CI_COMMENTS` when CI is green but actionable unresolved feedback remains;
+          - `CI_PENDING` when checks or a review bot are still in progress.
+
+          Do not write anything after the marker. The workflow reads this marker as its control result.
+
       - id: ci-status-gate
         script: ci-status-gate.sh
         script_inputs:
@@ -55,6 +63,14 @@ steps:
     capture: final_ci_report
     prompt: |
       Invoke codagent:wait-ci to verify the final fix cycle made CI green. Treat top-level bot summaries, rate-limit notices, and already-resolved reports as informational. Report comments only when actionable unresolved review feedback remains. Report the final status to the user.
+
+      After the human-readable report, end your response with exactly one of these terminal markers as the final non-empty line:
+      - `CI_PASSED` when CI is green and no actionable unresolved feedback or unfinished bot review remains;
+      - `CI_FAILED` when a check failed or a blocking review remains;
+      - `CI_COMMENTS` when CI is green but actionable unresolved feedback remains;
+      - `CI_PENDING` when checks or a review bot are still in progress.
+
+      Do not write anything after the marker. The workflow reads this marker as its control result.
 
   - id: final-ci-status-gate
     script: ci-status-gate.sh
