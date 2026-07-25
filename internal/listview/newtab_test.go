@@ -138,6 +138,7 @@ func TestNewTab_TabOrderIsNewCurrentDirWorktreesAll(t *testing.T) {
 // TestNewTab_EnterOnValidWorkflow_EmitsViewDefinitionMsg verifies Enter emits ViewDefinitionMsg.
 func TestNewTab_EnterOnValidWorkflow_EmitsViewDefinitionMsg(t *testing.T) {
 	entry := validEntry("core:finalize-pr")
+	entry.SourcePath = "builtin:core/finalize-pr-v2.0.yaml"
 	m := newTabModel([]discovery.WorkflowEntry{entry})
 
 	result, cmd := m.handleEnter()
@@ -153,6 +154,9 @@ func TestNewTab_EnterOnValidWorkflow_EmitsViewDefinitionMsg(t *testing.T) {
 	}
 	if vdm.Entry.CanonicalName != entry.CanonicalName {
 		t.Errorf("ViewDefinitionMsg.Entry.CanonicalName = %q, want %q", vdm.Entry.CanonicalName, entry.CanonicalName)
+	}
+	if vdm.Entry.SourcePath != "builtin:core/finalize-pr-v2.0.yaml" {
+		t.Errorf("ViewDefinitionMsg.Entry.SourcePath = %q, want exact latest path", vdm.Entry.SourcePath)
 	}
 }
 
@@ -170,6 +174,7 @@ func TestNewTab_EnterOnMalformedWorkflow_Ignored(t *testing.T) {
 // TestNewTab_R_EmitsStartRunMsg verifies r on valid workflow emits StartRunMsg.
 func TestNewTab_R_EmitsStartRunMsg(t *testing.T) {
 	entry := validEntry("core:finalize-pr")
+	entry.SourcePath = "builtin:core/finalize-pr-v2.0.yaml"
 	m := newTabModel([]discovery.WorkflowEntry{entry})
 
 	_, cmd := pressKey(m, "r")
@@ -183,6 +188,9 @@ func TestNewTab_R_EmitsStartRunMsg(t *testing.T) {
 	}
 	if srm.Entry.CanonicalName != entry.CanonicalName {
 		t.Errorf("StartRunMsg.Entry.CanonicalName = %q, want %q", srm.Entry.CanonicalName, entry.CanonicalName)
+	}
+	if srm.Entry.SourcePath != "builtin:core/finalize-pr-v2.0.yaml" {
+		t.Errorf("StartRunMsg.Entry.SourcePath = %q, want selected latest entry", srm.Entry.SourcePath)
 	}
 }
 
@@ -211,6 +219,69 @@ func TestNewTab_FilterNarrowsList(t *testing.T) {
 	}
 	if rows[0] != 0 {
 		t.Errorf("first workflow row should be index 0 (implement-task), got %d", rows[0])
+	}
+}
+
+func TestNewTab_VersionQueryDoesNotMatchSelectedPhysicalPath(t *testing.T) {
+	entries := []discovery.WorkflowEntry{
+		{
+			CanonicalName: "team/deploy",
+			Description:   "Deploy the application",
+			SourcePath:    "/workflows/team/deploy-v2.0.yaml",
+			Scope:         discovery.ScopeProject,
+		},
+	}
+
+	filtered := buildFilteredRows(entries, defaultTestGroups(), "v2.0", false)
+
+	if got := workflowRows(filtered); len(got) != 0 {
+		t.Fatalf("version query rows = %v, want no match from physical source path", got)
+	}
+}
+
+func TestNewTab_LogicalNameQueryMatchesSelectedLatestRow(t *testing.T) {
+	entries := []discovery.WorkflowEntry{
+		{
+			CanonicalName: "team/deploy",
+			SourcePath:    "/workflows/team/deploy-v2.0.yaml",
+			Scope:         discovery.ScopeProject,
+		},
+	}
+
+	filtered := buildFilteredRows(entries, defaultTestGroups(), "deploy", false)
+
+	if got := workflowRows(filtered); len(got) != 1 || got[0] != 0 {
+		t.Fatalf("logical-name query rows = %v, want selected latest row", got)
+	}
+}
+
+func TestNewTab_DescriptionRemainsSearchableMetadata(t *testing.T) {
+	entries := []discovery.WorkflowEntry{
+		{
+			CanonicalName: "team/deploy",
+			Description:   "Promote a release to production",
+			SourcePath:    "/workflows/team/deploy-v2.0.yaml",
+			Scope:         discovery.ScopeProject,
+		},
+	}
+
+	filtered := buildFilteredRows(entries, defaultTestGroups(), "production", false)
+
+	if got := workflowRows(filtered); len(got) != 1 || got[0] != 0 {
+		t.Fatalf("description query rows = %v, want selected latest row", got)
+	}
+}
+
+func TestNewTab_InvalidRowRemainsSearchableByLogicalName(t *testing.T) {
+	entry := malformedEntry("deploy")
+	entry.Scope = discovery.ScopeProject
+	entry.Namespace = ""
+	entry.SourcePath = ""
+
+	filtered := buildFilteredRows([]discovery.WorkflowEntry{entry}, defaultTestGroups(), "deploy", false)
+
+	if got := workflowRows(filtered); len(got) != 1 || got[0] != 0 {
+		t.Fatalf("invalid logical-name query rows = %v, want diagnostic row", got)
 	}
 }
 

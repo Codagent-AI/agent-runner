@@ -122,6 +122,9 @@ func TestFromDefinition_Breadcrumb_ShowsCanonicalName(t *testing.T) {
 	if !strings.Contains(view, "core:finalize-pr") {
 		t.Errorf("view should contain %q, got:\n%s", "core:finalize-pr", view)
 	}
+	if strings.Contains(view, "v1.0") {
+		t.Errorf("definition preview should remain version-neutral, got:\n%s", view)
+	}
 }
 
 // TestFromDefinition_NoPolling verifies the model is not active and not running.

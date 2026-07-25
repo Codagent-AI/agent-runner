@@ -22,17 +22,17 @@ func TestEnumerate_AllScopesOrderedWithMetadata(t *testing.T) {
 
 	gotNames := canonicalNames(entries)
 	wantNames := []string{
-		"build-v1.0",
-		"deploy-v1.0",
-		"core:finalize-pr-v1.0",
-		"core:implement-task-v1.0",
-		"spec-driven:change-v1.0",
+		"build",
+		"deploy",
+		"core:finalize-pr",
+		"core:implement-task",
+		"spec-driven:change",
 	}
 	if fmt.Sprint(gotNames) != fmt.Sprint(wantNames) {
 		t.Fatalf("canonical names = %v, want %v", gotNames, wantNames)
 	}
 
-	build := entryByName(t, entries, "build-v1.0")
+	build := entryByName(t, entries, "build")
 	if build.Scope != discovery.ScopeProject {
 		t.Fatalf("build scope = %v, want %v", build.Scope, discovery.ScopeProject)
 	}
@@ -40,7 +40,7 @@ func TestEnumerate_AllScopesOrderedWithMetadata(t *testing.T) {
 		t.Fatalf("build description = %q, want %q", build.Description, "Build the project")
 	}
 
-	deploy := entryByName(t, entries, "deploy-v1.0")
+	deploy := entryByName(t, entries, "deploy")
 	if deploy.Scope != discovery.ScopeUser {
 		t.Fatalf("deploy scope = %v, want %v", deploy.Scope, discovery.ScopeUser)
 	}
@@ -60,7 +60,7 @@ func TestEnumerate_AllScopesOrderedWithMetadata(t *testing.T) {
 		t.Fatalf("deploy second param default = %q, want %q", deploy.Params[1].Default, "main")
 	}
 
-	builtin := entryByName(t, entries, "core:finalize-pr-v1.0")
+	builtin := entryByName(t, entries, "core:finalize-pr")
 	if builtin.Scope != discovery.ScopeBuiltin {
 		t.Fatalf("builtin scope = %v, want %v", builtin.Scope, discovery.ScopeBuiltin)
 	}
@@ -79,12 +79,12 @@ func TestEnumerate_CopiesHiddenField(t *testing.T) {
 	writeWorkflow(t, filepath.Join(projectDir, ".agent-runner", "workflows", "hidden-local-v1.0.yaml"), hiddenWorkflowYAML("Hidden local"))
 	entries := discovery.Enumerate(fakeBuiltinFS(), projectDir, userDir)
 
-	local := entryByName(t, entries, "hidden-local-v1.0")
+	local := entryByName(t, entries, "hidden-local")
 	if !local.Hidden {
 		t.Fatal("local hidden workflow should be marked hidden in discovery")
 	}
 
-	builtin := entryByName(t, entries, "core:implement-task-v1.0")
+	builtin := entryByName(t, entries, "core:implement-task")
 	if !builtin.Hidden {
 		t.Fatal("builtin hidden workflow should be marked hidden in discovery")
 	}
@@ -117,7 +117,7 @@ func TestEnumerate_SkipsTopLevelBuiltinWorkflowFiles(t *testing.T) {
 	if countByName(entries, "top-level") != 0 {
 		t.Fatalf("top-level builtin workflow should not be enumerated: %v", canonicalNames(entries))
 	}
-	if countByName(entries, "core:finalize-pr-v1.0") != 1 {
+	if countByName(entries, "core:finalize-pr") != 1 {
 		t.Fatalf("expected namespaced builtin workflow, got %v", canonicalNames(entries))
 	}
 }
@@ -185,7 +185,7 @@ func TestEnumerate_MissingProjectDirectoryContributesNoEntries(t *testing.T) {
 	}
 
 	gotNames := canonicalNames(entries)
-	wantNames := []string{"deploy-v1.0", "core:finalize-pr-v1.0", "core:implement-task-v1.0", "spec-driven:change-v1.0"}
+	wantNames := []string{"deploy", "core:finalize-pr", "core:implement-task", "spec-driven:change"}
 	if fmt.Sprint(gotNames) != fmt.Sprint(wantNames) {
 		t.Fatalf("canonical names = %v, want %v", gotNames, wantNames)
 	}
@@ -200,11 +200,11 @@ func TestEnumerate_ProjectShadowsUserWorkflow(t *testing.T) {
 
 	entries := discovery.Enumerate(fakeBuiltinFS(), projectDir, userDir)
 
-	if countByName(entries, "deploy-v1.0") != 1 {
-		t.Fatalf("deploy count = %d, want 1", countByName(entries, "deploy-v1.0"))
+	if countByName(entries, "deploy") != 1 {
+		t.Fatalf("deploy count = %d, want 1", countByName(entries, "deploy"))
 	}
 
-	deploy := entryByName(t, entries, "deploy-v1.0")
+	deploy := entryByName(t, entries, "deploy")
 	if deploy.Scope != discovery.ScopeProject {
 		t.Fatalf("deploy scope = %v, want %v", deploy.Scope, discovery.ScopeProject)
 	}
@@ -224,11 +224,11 @@ func TestEnumerate_BuiltinNamesAreNotShadowedByDiskWorkflows(t *testing.T) {
 
 	gotNames := canonicalNames(entries)
 	wantNames := []string{
-		"finalize-pr-v1.0",
-		"core/finalize-pr-v1.0",
-		"core:finalize-pr-v1.0",
-		"core:implement-task-v1.0",
-		"spec-driven:change-v1.0",
+		"finalize-pr",
+		"core/finalize-pr",
+		"core:finalize-pr",
+		"core:implement-task",
+		"spec-driven:change",
 	}
 	if fmt.Sprint(gotNames) != fmt.Sprint(wantNames) {
 		t.Fatalf("canonical names = %v, want %v", gotNames, wantNames)
@@ -246,7 +246,7 @@ func TestEnumerate_ReportsMalformedFilesWithoutBlockingOtherEntries(t *testing.T
 
 	entries := discovery.Enumerate(fakeBuiltinFS(), projectDir, userDir)
 
-	broken := entryByName(t, entries, "broken-v1.0")
+	broken := entryByName(t, entries, "broken")
 	if broken.Scope != discovery.ScopeProject {
 		t.Fatalf("broken scope = %v, want %v", broken.Scope, discovery.ScopeProject)
 	}
@@ -260,7 +260,7 @@ func TestEnumerate_ReportsMalformedFilesWithoutBlockingOtherEntries(t *testing.T
 		t.Fatalf("broken params len = %d, want 0", len(broken.Params))
 	}
 
-	badSyntax := entryByName(t, entries, "bad-syntax-v1.0")
+	badSyntax := entryByName(t, entries, "bad-syntax")
 	if badSyntax.Scope != discovery.ScopeUser {
 		t.Fatalf("bad-syntax scope = %v, want %v", badSyntax.Scope, discovery.ScopeUser)
 	}
@@ -268,12 +268,12 @@ func TestEnumerate_ReportsMalformedFilesWithoutBlockingOtherEntries(t *testing.T
 		t.Fatal("bad-syntax workflow should include a parse error")
 	}
 
-	good := entryByName(t, entries, "good-v1.0")
+	good := entryByName(t, entries, "good")
 	if good.Description != "Good workflow" {
 		t.Fatalf("good description = %q, want %q", good.Description, "Good workflow")
 	}
 
-	alsoGood := entryByName(t, entries, "also-good-v1.0")
+	alsoGood := entryByName(t, entries, "also-good")
 	if alsoGood.Description != "Also good" {
 		t.Fatalf("also-good description = %q, want %q", alsoGood.Description, "Also good")
 	}
@@ -286,7 +286,7 @@ func TestEnumerate_UsesWorkflowLoaderValidation(t *testing.T) {
 
 	entries := discovery.Enumerate(fakeBuiltinFS(), projectDir, "")
 
-	entry := entryByName(t, entries, "needs-agent-v1.0")
+	entry := entryByName(t, entries, "needs-agent")
 	if entry.ParseError == "" {
 		t.Fatal("needs-agent workflow should include a validation error")
 	}
@@ -304,13 +304,13 @@ func TestEnumerate_BuiltinUsesSourceAwareNameValidation(t *testing.T) {
 
 	entries := discovery.Enumerate(fsys, "", "")
 
-	deploy := entryByName(t, entries, "core:deploy-v1.0")
+	deploy := entryByName(t, entries, "core:deploy")
 	if !strings.Contains(deploy.ParseError, `expected "deploy", got "other"`) {
 		t.Fatalf("parse error = %q, want source-aware name mismatch", deploy.ParseError)
 	}
 }
 
-func TestEnumerate_PrefersYAMLOverYMLForDuplicateNames(t *testing.T) {
+func TestEnumerate_DuplicateVersionGroupIsInvalid(t *testing.T) {
 	projectDir := t.TempDir()
 
 	writeWorkflow(t, filepath.Join(projectDir, ".agent-runner", "workflows", "deploy-v1.0.yml"), validWorkflowYAML("from yml"))
@@ -318,16 +318,148 @@ func TestEnumerate_PrefersYAMLOverYMLForDuplicateNames(t *testing.T) {
 
 	entries := discovery.Enumerate(fakeBuiltinFS(), projectDir, "")
 
-	if countByName(entries, "deploy-v1.0") != 1 {
-		t.Fatalf("deploy count = %d, want 1", countByName(entries, "deploy-v1.0"))
+	if countByName(entries, "deploy") != 1 {
+		t.Fatalf("deploy count = %d, want 1", countByName(entries, "deploy"))
 	}
 
-	deploy := entryByName(t, entries, "deploy-v1.0")
-	if deploy.Description != "from yaml" {
-		t.Fatalf("deploy description = %q, want %q", deploy.Description, "from yaml")
+	deploy := entryByName(t, entries, "deploy")
+	for _, filename := range []string{"deploy-v1.0.yaml", "deploy-v1.0.yml"} {
+		if !strings.Contains(deploy.ParseError, filename) {
+			t.Fatalf("deploy parse error = %q, want duplicate diagnostic naming %q", deploy.ParseError, filename)
+		}
 	}
-	if !strings.HasSuffix(filepath.ToSlash(deploy.SourcePath), "deploy-v1.0.yaml") {
-		t.Fatalf("deploy source path = %q, want .yaml file", deploy.SourcePath)
+	if deploy.SourcePath != "" {
+		t.Fatalf("deploy source path = %q, want no launchable path", deploy.SourcePath)
+	}
+}
+
+func TestEnumerate_SelectsLatestVersionMetadataAndExactPath(t *testing.T) {
+	projectDir := t.TempDir()
+	root := filepath.Join(projectDir, ".agent-runner", "workflows")
+	writeWorkflow(t, filepath.Join(root, "deploy-v1.0.yaml"), validWorkflowYAML("Older visible deploy"))
+	writeWorkflow(t, filepath.Join(root, "deploy-v2.0.yaml"), []byte(`name: deploy
+description: Latest hidden deploy
+hidden: true
+params:
+  - name: environment
+    default: production
+steps:
+  - id: run
+    command: echo deploy
+`))
+
+	entries := discovery.Enumerate(nil, projectDir, "")
+
+	if got := canonicalNames(entries); fmt.Sprint(got) != fmt.Sprint([]string{"deploy"}) {
+		t.Fatalf("canonical names = %v, want one version-free deploy row", got)
+	}
+	deploy := entryByName(t, entries, "deploy")
+	if deploy.Description != "Latest hidden deploy" || !deploy.Hidden {
+		t.Fatalf("latest metadata = (%q, hidden=%v), want latest hidden metadata", deploy.Description, deploy.Hidden)
+	}
+	if len(deploy.Params) != 1 || deploy.Params[0].Name != "environment" || deploy.Params[0].Default != "production" {
+		t.Fatalf("latest params = %+v, want environment default production", deploy.Params)
+	}
+	wantPath := filepath.Join(root, "deploy-v2.0.yaml")
+	if deploy.SourcePath != wantPath {
+		t.Fatalf("source path = %q, want exact latest path %q", deploy.SourcePath, wantPath)
+	}
+}
+
+func TestEnumerate_InvalidOlderSiblingMakesLogicalGroupNonLaunchable(t *testing.T) {
+	projectDir := t.TempDir()
+	root := filepath.Join(projectDir, ".agent-runner", "workflows")
+	writeWorkflow(t, filepath.Join(root, "deploy-v1.0.yaml"), malformedYAML())
+	writeWorkflow(t, filepath.Join(root, "deploy-v2.0.yaml"), validWorkflowYAML("Latest deploy"))
+
+	entries := discovery.Enumerate(nil, projectDir, "")
+
+	deploy := entryByName(t, entries, "deploy")
+	if deploy.ParseError == "" || !strings.Contains(deploy.ParseError, "deploy-v1.0.yaml") {
+		t.Fatalf("parse error = %q, want older sibling validation error", deploy.ParseError)
+	}
+	if deploy.SourcePath != "" {
+		t.Fatalf("source path = %q, want invalid group to be non-launchable", deploy.SourcePath)
+	}
+}
+
+func TestEnumerate_InvalidUnversionedSiblingMakesLogicalGroupNonLaunchable(t *testing.T) {
+	projectDir := t.TempDir()
+	root := filepath.Join(projectDir, ".agent-runner", "workflows")
+	writeWorkflow(t, filepath.Join(root, "deploy.yaml"), validWorkflowYAML("Legacy deploy"))
+	writeWorkflow(t, filepath.Join(root, "deploy-v2.0.yaml"), validWorkflowYAML("Latest deploy"))
+
+	entries := discovery.Enumerate(nil, projectDir, "")
+
+	deploy := entryByName(t, entries, "deploy")
+	if deploy.ParseError == "" {
+		t.Fatal("deploy should contain an actionable filename error")
+	}
+	for _, want := range []string{"deploy.yaml", "<logical-name>-v<major>.<minor>.yaml", "deploy-v1.0.yaml"} {
+		if !strings.Contains(deploy.ParseError, want) {
+			t.Fatalf("parse error = %q, want %q", deploy.ParseError, want)
+		}
+	}
+	if deploy.SourcePath != "" {
+		t.Fatalf("source path = %q, want invalid group to be non-launchable", deploy.SourcePath)
+	}
+}
+
+func TestEnumerate_ProjectGroupShadowsNewerUserGroupBeforeVersionSelection(t *testing.T) {
+	projectDir := t.TempDir()
+	userDir := t.TempDir()
+	projectPath := filepath.Join(projectDir, ".agent-runner", "workflows", "deploy-v1.0.yaml")
+	writeWorkflow(t, projectPath, validWorkflowYAML("Project deploy"))
+	writeWorkflow(t, filepath.Join(userDir, "deploy-v9.0.yaml"), validWorkflowYAML("User deploy"))
+
+	entries := discovery.Enumerate(nil, projectDir, userDir)
+
+	if got := canonicalNames(entries); fmt.Sprint(got) != fmt.Sprint([]string{"deploy"}) {
+		t.Fatalf("canonical names = %v, want one shadowed deploy group", got)
+	}
+	deploy := entryByName(t, entries, "deploy")
+	if deploy.Scope != discovery.ScopeProject || deploy.SourcePath != projectPath {
+		t.Fatalf("deploy = %+v, want project v1.0 to shadow user v9.0", deploy)
+	}
+}
+
+func TestEnumerate_BuiltinCatalogSelectsLatestAndKeepsNamespace(t *testing.T) {
+	fsys := fstest.MapFS{
+		"core/team/deploy-v1.0.yaml": {Data: namedWorkflowYAML("deploy", "Older deploy")},
+		"core/team/deploy-v2.0.yml":  {Data: namedWorkflowYAML("deploy", "Latest deploy")},
+	}
+
+	entries := discovery.Enumerate(fsys, "", "")
+
+	if got := canonicalNames(entries); fmt.Sprint(got) != fmt.Sprint([]string{"core:team/deploy"}) {
+		t.Fatalf("canonical names = %v, want namespaced logical name", got)
+	}
+	deploy := entryByName(t, entries, "core:team/deploy")
+	if deploy.Namespace != "core" || deploy.Description != "Latest deploy" {
+		t.Fatalf("builtin deploy = %+v, want latest metadata in core namespace", deploy)
+	}
+	if deploy.SourcePath != "builtin:core/team/deploy-v2.0.yml" {
+		t.Fatalf("source path = %q, want exact latest builtin ref", deploy.SourcePath)
+	}
+}
+
+func TestEnumerate_UnversionedBuiltinSiblingInvalidatesLogicalGroup(t *testing.T) {
+	fsys := fstest.MapFS{
+		"core/deploy.yaml":      {Data: namedWorkflowYAML("deploy", "Legacy deploy")},
+		"core/deploy-v2.0.yaml": {Data: namedWorkflowYAML("deploy", "Latest deploy")},
+	}
+
+	entries := discovery.Enumerate(fsys, "", "")
+
+	if got := canonicalNames(entries); fmt.Sprint(got) != fmt.Sprint([]string{"core:deploy"}) {
+		t.Fatalf("canonical names = %v, want one version-free builtin group", got)
+	}
+	deploy := entryByName(t, entries, "core:deploy")
+	if deploy.ParseError == "" || !strings.Contains(deploy.ParseError, "deploy.yaml") {
+		t.Fatalf("parse error = %q, want unversioned builtin diagnostic", deploy.ParseError)
+	}
+	if deploy.SourcePath != "" {
+		t.Fatalf("source path = %q, want invalid builtin group to be non-launchable", deploy.SourcePath)
 	}
 }
 

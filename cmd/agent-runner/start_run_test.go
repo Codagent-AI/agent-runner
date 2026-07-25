@@ -43,6 +43,7 @@ func TestExecStartRun_ExecsSelfWithCanonicalNameAndOrderedParams(t *testing.T) {
 
 	entry := discovery.WorkflowEntry{
 		CanonicalName: "core:finalize-pr",
+		SourcePath:    "builtin:core/finalize-pr-v2.0.yaml",
 		Params: []model.Param{
 			{Name: "task_file"},
 			{Name: "branch"},
@@ -75,6 +76,27 @@ func TestExecStartRun_ExecsSelfWithCanonicalNameAndOrderedParams(t *testing.T) {
 	}
 	if !envContains(gotEnv, liveRunImmediateAltScreenEnv+"=1") {
 		t.Fatalf("exec env missing %s=1", liveRunImmediateAltScreenEnv)
+	}
+}
+
+func TestSwitcher_ViewDefinitionMsgOpensExactSelectedSourcePath(t *testing.T) {
+	sw := &switcher{mode: showingList}
+	entry := discovery.WorkflowEntry{
+		CanonicalName: "deploy",
+		SourcePath:    "/workflows/deploy-v2.0.yaml",
+	}
+
+	newModel, _ := sw.Update(discovery.ViewDefinitionMsg{Entry: entry})
+
+	sw = newModel.(*switcher)
+	if sw.mode != showingRunView {
+		t.Fatalf("mode = %v, want showingRunView", sw.mode)
+	}
+	if sw.runview == nil {
+		t.Fatal("definition message did not construct a run view")
+	}
+	if got := sw.runview.SessionDir(); got != entry.SourcePath {
+		t.Fatalf("definition source path = %q, want exact selected path %q", got, entry.SourcePath)
 	}
 }
 
