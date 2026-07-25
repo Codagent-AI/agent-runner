@@ -482,3 +482,94 @@ func TestCoreCIFixNeededGateScript(t *testing.T) {
 		}
 	})
 }
+
+func TestOpenSpecV2CallCapableStepsDeclareToolAndCallAgentSkill(t *testing.T) {
+	type workflowStep struct {
+		ID     string   `yaml:"id"`
+		Tools  []string `yaml:"tools"`
+		Prompt string   `yaml:"prompt"`
+	}
+	tests := []struct {
+		workflow string
+		stepID   string
+		retains  []string
+	}{
+		{
+			workflow: "openspec/define-change.yaml",
+			stepID:   "proposal",
+			retains: []string{
+				"codagent:proposal-review", "one adversarial review",
+				"explicit confirmation",
+			},
+		},
+		{
+			workflow: "openspec/define-change.yaml",
+			stepID:   "approach-review",
+			retains: []string{
+				"codagent:review-approach", "every specification",
+				"explicit confirmation",
+			},
+		},
+		{
+			workflow: "openspec/plan-change2.yaml",
+			stepID:   "review-tasks",
+			retains: []string{
+				"codagent:review-tasks", "immutable approved inputs",
+				"at most two reviewer calls",
+			},
+		},
+		{
+			workflow: "openspec/implement-change2.yaml",
+			stepID:   "prepare-acceptance",
+			retains: []string{
+				"codagent:prepare-acceptance", "`full`", "targeted",
+				"`evidence-only`", "at most three acceptance-tester calls",
+				"acceptance-handoff.md",
+			},
+		},
+		{
+			workflow: "openspec/accept-change.yaml",
+			stepID:   "run-reacceptance-testing",
+			retains: []string{
+				"user declined", "codagent:prepare-acceptance", "targeted scope",
+				"at most three tester calls", "reacceptance-status.txt",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.workflow+"/"+tt.stepID, func(t *testing.T) {
+			data, err := FS.ReadFile(tt.workflow)
+			if err != nil {
+				t.Fatalf("read workflow: %v", err)
+			}
+			var workflow struct {
+				Steps []workflowStep `yaml:"steps"`
+			}
+			if err := yaml.Unmarshal(data, &workflow); err != nil {
+				t.Fatalf("parse workflow: %v", err)
+			}
+			var found *workflowStep
+			for i := range workflow.Steps {
+				if workflow.Steps[i].ID == tt.stepID {
+					found = &workflow.Steps[i]
+					break
+				}
+			}
+			if found == nil {
+				t.Fatalf("step %q not found", tt.stepID)
+			}
+			if !slices.Equal(found.Tools, []string{"call_agent"}) {
+				t.Fatalf("tools = %v, want [call_agent]", found.Tools)
+			}
+			if !strings.Contains(found.Prompt, "codagent:call-agent") {
+				t.Fatalf("prompt does not invoke codagent:call-agent:\n%s", found.Prompt)
+			}
+			for _, retained := range tt.retains {
+				if !strings.Contains(found.Prompt, retained) {
+					t.Fatalf("prompt no longer retains %q:\n%s", retained, found.Prompt)
+				}
+			}
+		})
+	}
+}

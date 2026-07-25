@@ -13,19 +13,24 @@ An agent call is a nested execution beneath its parent attempt. It is not a work
 
 ## Enable The Tool
 
-Put the literal, case-sensitive text `call_agent` in the parent step's authored `prompt` template:
+Declare `call_agent` in the parent agent step's static `tools` sequence:
 
 ```yaml
 steps:
   - id: implement
     agent: lead
     mode: autonomous
+    tools: [call_agent]
     prompt: |
-      Implement the requested change. Use call_agent with agent `reviewer`
-      when an independent review would help.
+      Implement the requested change. Use codagent:call-agent with a fresh
+      reviewer when an independent review would help.
 ```
 
-Agent Runner checks the authored template before interpolation or workflow-engine enrichment. Text introduced only by a variable or engine does not enable the tool. A step without the literal token receives no agent-call integration.
+`call_agent` is the only supported Runner-owned tool. The field must be a YAML sequence, is valid only
+on agent steps, and is static: unknown names, duplicates, scalars, and placeholders are rejected while
+loading. Omitting `tools` or declaring `tools: []` enables no Runner-owned tools. Prompt text never
+changes availability, whether it is authored directly, interpolated, added by an engine, or supplied
+later in the conversation.
 
 The integration is process-local for the spawned parent. Agent Runner does not edit global or project CLI configuration. Children started by `call_agent` never receive the tool, even if their prompt mentions it, so delegation is single-level.
 
@@ -116,7 +121,8 @@ The run view reads full child output from the output files. It does not rebuild 
 
 ## Troubleshooting
 
-- If the tool is absent, confirm the authored YAML prompt itself contains the exact text `call_agent`; interpolated text does not count.
+- If the tool is absent, confirm the active parent agent step declares `tools: [call_agent]`. Mentioning
+  `call_agent` in the prompt does not enable it.
 - If an interactive call waits, complete the CLI's normal tool-approval prompt. Autonomous parents pre-authorize only this Runner-owned tool.
 - If a second call reports `call_in_progress`, wait for or cancel the active call. Calls do not queue or run in parallel.
 - If a named target is rejected, confirm it is declared, is not `new`, `resume`, or `inherit`, and does not resolve to the parent's own active session.

@@ -2,18 +2,22 @@
 
 ### Requirement: Private per-run control endpoint
 
-Before the first parent agent step that receives runner control integration spawns, Agent Runner SHALL lazily create a local Unix socket in a user-private directory and retain it for the run. The run directory SHALL point to the socket. Endpoint creation failure SHALL fail the step before spawn; normal run exit SHALL close and unlink it; stale cleanup SHALL require proof of the run lock. Interactive and autonomous-headless parent agent processes SHALL receive the control context required by their enabled runner tools. Agents started by `call_agent` MUST NOT receive usable parent control context.
+Before the first parent agent step that receives runner control integration spawns, Agent Runner SHALL lazily create a local Unix socket in a user-private directory and retain it for the run. The run directory SHALL point to the socket. Endpoint creation failure SHALL fail the step before spawn; normal run exit SHALL close and unlink it; stale cleanup SHALL require proof of the run lock. Interactive and autonomous-headless parent agent processes SHALL receive the control context required by their enabled runner tools. For autonomous parents, `call_agent` control eligibility SHALL be derived solely from the validated tool declaration. Agents started by `call_agent` MUST NOT receive usable parent control context.
 
 #### Scenario: Interactive parent receives control context
 - **WHEN** an interactive parent agent starts
 - **THEN** it receives `AGENT_RUNNER_CONTROL_SOCKET`, `AGENT_RUNNER_RUN_ID`, `AGENT_RUNNER_STEP_ID`, and `AGENT_RUNNER_CONTROL_TOKEN`
 
 #### Scenario: Autonomous parent receives control context
-- **WHEN** an autonomous-headless parent agent whose authored prompt contains `call_agent` starts
+- **WHEN** an autonomous-headless parent agent declaring `tools: [call_agent]` starts
 - **THEN** it receives the control context required to invoke `call_agent`
 
-#### Scenario: Ineligible autonomous parent receives no control context
-- **WHEN** an autonomous-headless parent agent whose authored prompt does not contain `call_agent` and that has no other enabled runner tool starts
+#### Scenario: Prompt token does not create autonomous control context
+- **WHEN** an autonomous-headless parent mentions `call_agent` in its prompt but does not declare it and has no other enabled runner tool
+- **THEN** it does not receive runner control context
+
+#### Scenario: Omitted and empty tools do not create autonomous control context
+- **WHEN** an autonomous-headless parent omits `tools` or declares `tools: []` and has no other enabled runner tool
 - **THEN** it does not receive runner control context
 
 #### Scenario: Called child receives no parent control context

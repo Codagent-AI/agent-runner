@@ -3,6 +3,8 @@ package model
 import (
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func intPtr(n int) *int { return &n }
@@ -132,6 +134,59 @@ func TestStepSchema(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "exactly one") {
 			t.Fatalf("expected 'exactly one' error, got: %v", err)
+		}
+	})
+}
+
+func TestStepTools(t *testing.T) {
+	t.Run("accepts call_agent on an agent step", func(t *testing.T) {
+		step := Step{
+			ID: "review", Agent: "reviewer", Prompt: "Review the change.",
+			Session: SessionNew, Tools: []RunnerTool{RunnerToolCallAgent},
+		}
+		if err := step.Validate(nil); err != nil {
+			t.Fatalf("Validate() error = %v", err)
+		}
+		if !step.HasTool(RunnerToolCallAgent) {
+			t.Fatal("HasTool(call_agent) = false, want true")
+		}
+	})
+
+	for _, tt := range []struct {
+		name  string
+		tools []RunnerTool
+		want  string
+	}{
+		{name: "unknown", tools: []RunnerTool{"other"}, want: "unknown tool"},
+		{
+			name:  "duplicate",
+			tools: []RunnerTool{RunnerToolCallAgent, RunnerToolCallAgent},
+			want:  "duplicate tool",
+		},
+	} {
+		t.Run("rejects "+tt.name, func(t *testing.T) {
+			step := Step{
+				ID: "review", Agent: "reviewer", Prompt: "Review the change.",
+				Session: SessionNew, Tools: tt.tools,
+			}
+			err := step.Validate(nil)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Validate() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+
+	t.Run("retains an explicit empty declaration", func(t *testing.T) {
+		var step Step
+		if err := yaml.Unmarshal([]byte("id: shell\ncommand: echo hi\ntools: []\n"), &step); err != nil {
+			t.Fatalf("yaml.Unmarshal() error = %v", err)
+		}
+		if !step.toolsDeclared {
+			t.Fatal("toolsDeclared = false, want true")
+		}
+		err := step.Validate(nil)
+		if err == nil || !strings.Contains(err.Error(), `"tools" is only allowed on agent steps`) {
+			t.Fatalf("Validate() error = %v, want agent-only error", err)
 		}
 	})
 }

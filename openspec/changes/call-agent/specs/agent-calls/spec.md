@@ -2,31 +2,46 @@
 
 ### Requirement: Agent-call tool availability
 
-Agent Runner SHALL expose a `call_agent` tool to an interactive or autonomous agent step when that step's workflow-authored prompt template contains the literal, case-sensitive substring `call_agent`. Agent Runner SHALL evaluate this condition before prompt interpolation and workflow-engine enrichment. A step whose authored prompt does not contain that substring SHALL NOT receive the tool. An agent started by `call_agent` MUST NOT receive the tool regardless of its prompt.
+Agent Runner SHALL expose `call_agent` to an interactive or autonomous workflow agent step if and
+only if that step statically declares `tools: [call_agent]`. Agent Runner MUST derive availability
+from the validated declaration rather than any authored, interpolated, engine-enriched, system, child,
+or later conversational prompt text. An omitted or empty tools list SHALL provide no agent-call
+integration. An agent started by `call_agent` MUST NOT receive the tool regardless of its prompt,
+profile, or parent's declaration. Eligibility failures SHALL explain that `call_agent` was not enabled
+for the active step declaration and MUST NOT instruct the user to add prompt text.
 
 #### Scenario: Interactive enabled parent receives the tool
-- **WHEN** Agent Runner starts an interactive agent step whose authored prompt contains `call_agent`
+- **WHEN** Agent Runner starts an interactive agent step declaring `tools: [call_agent]`
 - **THEN** the agent can invoke `call_agent`
 
 #### Scenario: Autonomous enabled parent receives the tool
-- **WHEN** Agent Runner starts an autonomous agent step whose authored prompt contains `call_agent`
+- **WHEN** Agent Runner starts an autonomous agent step declaring `tools: [call_agent]`
 - **THEN** the agent can invoke `call_agent`
 
-#### Scenario: Prompt without token receives no tool
-- **WHEN** Agent Runner starts an ordinary agent step whose authored prompt does not contain `call_agent`
+#### Scenario: Declaration works without prompt token
+- **WHEN** an agent step declares `tools: [call_agent]` and its prompt does not contain `call_agent`
+- **THEN** Agent Runner provisions the tool
+
+#### Scenario: Prompt token alone does not enable the tool
+- **WHEN** an agent step's prompt contains `call_agent` but the step omits `tools`
 - **THEN** the agent does not receive the `call_agent` tool
 
 #### Scenario: Autonomous enabled parent receives pre-authorized access
-- **WHEN** Agent Runner provisions `call_agent` for an autonomous agent step whose authored prompt contains `call_agent`
+- **WHEN** Agent Runner provisions `call_agent` for an autonomous agent step that declares it
 - **THEN** only the Runner-owned `call_agent` tool is pre-authorized and its invocation does not wait for interactive approval
 
 #### Scenario: Interactive enabled parent uses normal tool approval
-- **WHEN** Agent Runner provisions `call_agent` for an interactive agent step whose authored prompt contains `call_agent`
+- **WHEN** Agent Runner provisions `call_agent` for an interactive agent step that declares it
 - **THEN** invocation follows that CLI's normal MCP tool-approval flow
 
 #### Scenario: Called child cannot delegate recursively
-- **WHEN** `call_agent` starts a child agent
+- **WHEN** `call_agent` starts a child agent whose supplied prompt mentions `call_agent`
 - **THEN** the child does not receive the `call_agent` tool
+
+#### Scenario: Ineligible error cites declaration
+- **WHEN** a parent without a `call_agent` declaration submits an agent-call request
+- **THEN** Agent Runner rejects it with guidance about the active step declaration rather than prompt
+  contents
 
 ### Requirement: Invocation fields and valid forms
 

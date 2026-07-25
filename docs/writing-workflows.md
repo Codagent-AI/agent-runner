@@ -112,6 +112,7 @@ Workflow parameters and captured variables shadow built-ins with the same name.
   agent: implementor
   session: new
   mode: autonomous
+  tools: [call_agent]
   prompt: "Implement the plan."
 
 - id: review
@@ -121,6 +122,11 @@ Workflow parameters and captured variables shadow built-ins with the same name.
 ```
 
 Supported CLI adapters are `claude`, `codex`, `copilot`, `cursor`, and `opencode`.
+
+Agent steps may declare Runner-owned tools with a static YAML sequence. The only currently supported
+value is `tools: [call_agent]`, which provisions the process-local agent-call integration described in
+[Agent Calls](agent-calls.md). An omitted or empty list enables no Runner-owned tools. `tools` is
+invalid on non-agent steps, and its entries are not interpolated.
 
 Interactive agent steps hand the real terminal directly to the agent CLI. Agent Runner injects an absolute-path completion command into the step prompt; after answering the user, the agent runs that command to send an authenticated event through the run's private control channel. Users can ask the agent to continue or invoke the CLI-native completion command (`/agent-runner:next` in Claude, Copilot, and Cursor; `$agent-runner-next` in Codex). If the CLI exits before completion is accepted, the step is treated as aborted so you can resume the workflow later.
 
