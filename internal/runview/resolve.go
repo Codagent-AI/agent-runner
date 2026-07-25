@@ -146,9 +146,8 @@ func tryDirectFile(workflowFile string, bases []string) (string, bool) {
 
 // findWorkflowByName searches for a workflow matching name under the
 // workflows/ subdir of each base directory. name may be bare ("plan-change")
-// or namespaced ("openspec:plan-change"). The search prefers an exact layout
-// match first, then uses the workflow catalog to select the latest versioned
-// definition, and finally falls back to a recursive legacy filename match.
+// or namespaced ("openspec:plan-change"). Each workflow root is classified by
+// the shared catalog so invalid groups cannot be bypassed by filename probing.
 func findWorkflowByName(name string, bases []string) (string, bool) {
 	if name == "" {
 		return "", false
@@ -162,30 +161,18 @@ func findWorkflowByName(name string, bases []string) (string, bool) {
 				continue
 			}
 
-			// Prefer an exact layout match:
-			//   bare  → workflows/<name>.yaml
-			//   ns:n  → workflows/<ns>/<n>.yaml
-			layout := strings.ReplaceAll(name, ":", string(os.PathSeparator))
-			for _, ext := range []string{".yaml", ".yml"} {
-				direct := filepath.Join(wfRoot, layout+ext)
-				if fileExists(direct) {
-					return direct, true
-				}
-			}
-
-			// Fall back to catalog-backed logical selection, then legacy
-			// recursive filename matching.
-			if p := searchTree(wfRoot, name); p != "" {
-				return p, true
+			if p, matched := searchTree(wfRoot, name); matched {
+				return p, p != ""
 			}
 		}
 	}
 	return "", false
 }
 
-// searchTree selects the latest valid versioned definition for name. It
-// retains a final exact-basename fallback for historical unversioned runs.
-func searchTree(root, name string) string {
+// searchTree selects the latest valid versioned definition for name. matched
+// distinguishes an invalid matching group from an unrelated catalog so callers
+// do not fall through to a lower-priority workflow root.
+func searchTree(root, name string) (workflowPath string, matched bool) {
 	var candidatePaths []string
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -207,38 +194,36 @@ func searchTree(root, name string) string {
 
 	catalog := workflowcatalog.Build(candidatePaths)
 	catalogName := strings.ReplaceAll(name, ":", "/")
-	if selectedPath, ok := selectedCatalogPath(catalog, catalogName); ok {
-		return filepath.Join(root, filepath.FromSlash(selectedPath))
+	if group, found := catalog.Lookup(catalogName); found {
+		if group.Err != nil || group.Selected == nil {
+			return "", true
+		}
+		return filepath.Join(root, filepath.FromSlash(group.Selected.Path)), true
 	}
 
 	if !strings.Contains(name, ":") {
+		var selectedPath string
+		var groupMatched bool
 		for _, group := range catalog.Groups {
-			if filepath.Base(group.CanonicalName) != name || group.Err != nil || group.Selected == nil {
+			if filepath.Base(group.CanonicalName) != name {
 				continue
 			}
-			return filepath.Join(root, filepath.FromSlash(group.Selected.Path))
+			groupMatched = true
+			if group.Err != nil {
+				return "", true
+			}
+			if selectedPath == "" && group.Selected != nil {
+				selectedPath = group.Selected.Path
+			}
+		}
+		if selectedPath != "" {
+			return filepath.Join(root, filepath.FromSlash(selectedPath)), true
+		}
+		if groupMatched {
+			return "", true
 		}
 	}
-
-	bare := name
-	if separator := strings.LastIndexByte(name, ':'); separator >= 0 {
-		bare = name[separator+1:]
-	}
-	for _, candidatePath := range candidatePaths {
-		stem := strings.TrimSuffix(filepath.Base(candidatePath), filepath.Ext(candidatePath))
-		if stem == bare {
-			return filepath.Join(root, filepath.FromSlash(candidatePath))
-		}
-	}
-	return ""
-}
-
-func selectedCatalogPath(catalog workflowcatalog.Catalog, canonicalName string) (string, bool) {
-	group, found := catalog.Lookup(canonicalName)
-	if !found || group.Err != nil || group.Selected == nil {
-		return "", false
-	}
-	return group.Selected.Path, true
+	return "", false
 }
 
 // rootsFor returns the (workflowsRoot, repoRoot) pair appropriate for an

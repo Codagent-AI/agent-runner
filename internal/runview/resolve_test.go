@@ -56,7 +56,7 @@ func scenarioA(t *testing.T) scenarioDirs {
 		projectDir:  filepath.Join(base, "projects", "encoded"),
 		sessionName: "example-2026-04-11T09-14-00-000000000Z",
 	}
-	s.workflow = filepath.Join(s.root, "workflows", "example.yaml")
+	s.workflow = filepath.Join(s.root, "workflows", "example-v1.0.yaml")
 	s.sessionDir = filepath.Join(s.projectDir, "runs", s.sessionName)
 	writeFile(t, s.workflow, minimalWorkflowYAML)
 	if err := os.MkdirAll(s.sessionDir, 0o755); err != nil {
@@ -119,7 +119,7 @@ func TestResolveWorkflow_RelativeViaMetaJSON(t *testing.T) {
 	// Process cwd is elsewhere — forces the resolver to consult meta.json.
 	chdirTo(t, t.TempDir())
 
-	state := model.RunState{WorkflowFile: "workflows/example.yaml", WorkflowName: "example"}
+	state := model.RunState{WorkflowFile: "workflows/example-v1.0.yaml", WorkflowName: "example"}
 	got, ok := ResolveWorkflow(s.sessionDir, s.projectDir, &state)
 	if !ok {
 		t.Fatal("expected ResolveWorkflow to succeed via meta.json")
@@ -149,7 +149,7 @@ func TestResolveWorkflow_RelativeViaProcessCwd(t *testing.T) {
 	// No meta.json this time.
 	chdirTo(t, s.root)
 
-	state := model.RunState{WorkflowFile: "workflows/example.yaml", WorkflowName: "example"}
+	state := model.RunState{WorkflowFile: "workflows/example-v1.0.yaml", WorkflowName: "example"}
 	got, ok := ResolveWorkflow(s.sessionDir, s.projectDir, &state)
 	if !ok {
 		t.Fatal("expected ResolveWorkflow to succeed via process cwd")
@@ -213,6 +213,28 @@ func TestResolveWorkflow_DiscoveryByNamespacedName(t *testing.T) {
 	}
 	if got.AbsPath != filepath.Clean(namespaced) {
 		t.Fatalf("AbsPath = %q, want %q", got.AbsPath, namespaced)
+	}
+}
+
+func TestFindWorkflowByName_InvalidLogicalGroupDoesNotUseLegacyFallback(t *testing.T) {
+	root := t.TempDir()
+	workflowsDir := filepath.Join(root, "workflows")
+	writeFile(t, filepath.Join(workflowsDir, "deploy.yaml"), minimalWorkflowYAML)
+	writeFile(t, filepath.Join(workflowsDir, "deploy.yml"), minimalWorkflowYAML)
+
+	if got, ok := findWorkflowByName("deploy", []string{root}); ok {
+		t.Fatalf("findWorkflowByName returned %q for invalid logical group, want no match", got)
+	}
+}
+
+func TestFindWorkflowByName_InvalidHigherPriorityGroupDoesNotFallThrough(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "workflows", "deploy.yaml"), minimalWorkflowYAML)
+	writeFile(t, filepath.Join(root, "workflows", "deploy.yml"), minimalWorkflowYAML)
+	writeFile(t, filepath.Join(root, ".agent-runner", "workflows", "deploy-v1.0.yaml"), minimalWorkflowYAML)
+
+	if got, ok := findWorkflowByName("deploy", []string{root}); ok {
+		t.Fatalf("findWorkflowByName returned lower-priority %q after invalid group, want no match", got)
 	}
 }
 
@@ -464,7 +486,7 @@ func TestResolveWorkflow_DiscoveryByName_AgentRunnerWorkflowsDir(t *testing.T) {
 	root := filepath.Join(base, "repo")
 
 	// Workflow lives under .agent-runner/workflows/ (user-defined workflows).
-	wfPath := filepath.Join(root, ".agent-runner", "workflows", "smoke-test.yaml")
+	wfPath := filepath.Join(root, ".agent-runner", "workflows", "smoke-test-v1.0.yaml")
 	writeFile(t, wfPath, minimalWorkflowYAML)
 
 	projectDir := filepath.Join(base, "projects", "encoded")
@@ -550,7 +572,7 @@ func TestResolveWorkflow_DiscoveryByName_OldPathFallsBackToAgentRunnerDir(t *tes
 
 	// Workflow is now under .agent-runner/workflows/ but state has the old
 	// workflows/ relative path (from before the builtin workflows migration).
-	wfPath := filepath.Join(root, ".agent-runner", "workflows", "smoke-test.yaml")
+	wfPath := filepath.Join(root, ".agent-runner", "workflows", "smoke-test-v1.0.yaml")
 	writeFile(t, wfPath, minimalWorkflowYAML)
 
 	projectDir := filepath.Join(base, "projects", "encoded")
@@ -561,11 +583,11 @@ func TestResolveWorkflow_DiscoveryByName_OldPathFallsBackToAgentRunnerDir(t *tes
 	writeMeta(t, projectDir, root)
 	chdirTo(t, t.TempDir())
 
-	// Old-style state: file path points to workflows/smoke-test.yaml which
+	// Old-style state: file path points to workflows/smoke-test-v1.0.yaml which
 	// no longer exists. Name-based discovery should find it under
 	// .agent-runner/workflows/.
 	state := model.RunState{
-		WorkflowFile: "workflows/smoke-test.yaml",
+		WorkflowFile: "workflows/smoke-test-v1.0.yaml",
 		WorkflowName: "smoke-test",
 	}
 	got, ok := ResolveWorkflow(sessionDir, projectDir, &state)
