@@ -295,8 +295,9 @@ func exactBuiltinVersionRef(shorthand string, refs []string) (string, bool) {
 	}
 	prefix := builtinworkflows.Ref(matches[1] + "/" + matches[2])
 	for _, ref := range refs {
-		ext := strings.ToLower(pathpkg.Ext(ref))
-		if (ext == ".yaml" || ext == ".yml") && strings.TrimSuffix(ref, pathpkg.Ext(ref)) == prefix {
+		ext := pathpkg.Ext(ref)
+		if (strings.EqualFold(ext, ".yaml") || strings.EqualFold(ext, ".yml")) &&
+			strings.TrimSuffix(ref, ext) == prefix {
 			return ref, true
 		}
 	}

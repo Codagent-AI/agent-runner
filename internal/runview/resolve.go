@@ -201,8 +201,7 @@ func workflowCandidatePaths(root string) []string {
 		if d.IsDir() {
 			return nil
 		}
-		ext := strings.ToLower(filepath.Ext(d.Name()))
-		if ext != ".yaml" && ext != ".yml" {
+		if !workflowcatalog.HasYAMLExtension(d.Name()) {
 			return nil
 		}
 		rel, relErr := filepath.Rel(root, path)

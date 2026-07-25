@@ -1416,8 +1416,7 @@ func handleValidateArgs(args []string) int {
 }
 
 func resolveValidateWorkflowArg(arg string) (string, error) {
-	ext := strings.ToLower(filepath.Ext(arg))
-	if ext == ".yaml" || ext == ".yml" {
+	if workflowcatalog.HasYAMLExtension(arg) {
 		if fileExists(arg) {
 			return arg, nil
 		}
@@ -1520,8 +1519,7 @@ func resolveWorkflowCatalogGroup(root, logicalName string) (resolved string, fou
 		if entry.IsDir() {
 			continue
 		}
-		ext := strings.ToLower(filepath.Ext(entry.Name()))
-		if ext == ".yaml" || ext == ".yml" {
+		if workflowcatalog.HasYAMLExtension(entry.Name()) {
 			candidatePath := entry.Name()
 			if logicalDir != "." {
 				candidatePath = logicalDir + "/" + candidatePath
@@ -1561,8 +1559,7 @@ func qualifyWorkflowGroupError(root string, groupErr *workflowcatalog.GroupError
 
 func versionFreeLaunchHint(arg string) (string, bool) {
 	normalized := filepath.ToSlash(strings.TrimSpace(arg))
-	ext := strings.ToLower(filepath.Ext(normalized))
-	hadYAMLExtension := ext == ".yaml" || ext == ".yml"
+	hadYAMLExtension := workflowcatalog.HasYAMLExtension(normalized)
 	if hadYAMLExtension {
 		normalized = strings.TrimSuffix(normalized, filepath.Ext(normalized))
 	}

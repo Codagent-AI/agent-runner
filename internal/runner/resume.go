@@ -138,20 +138,19 @@ func resumeAlreadyCompleted(stateFilePath string, state *model.RunState) bool {
 	if state.Completed {
 		return true
 	}
-	completed, _ := auditRunCompleted(filepath.Join(filepath.Dir(stateFilePath), "audit.log"))
-	return completed
+	return auditShowsCompleted(filepath.Join(filepath.Dir(stateFilePath), "audit.log"))
 }
 
-func auditRunCompleted(auditPath string) (bool, error) {
+// auditShowsCompleted treats an unreadable or malformed audit as inconclusive;
+// only a successfully parsed run_end can override incomplete persisted state.
+func auditShowsCompleted(auditPath string) bool {
 	file, err := os.Open(auditPath) // #nosec G304 -- audit path is derived from the selected state file.
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
-		}
-		return false, err
+		return false
 	}
 	defer func() { _ = file.Close() }()
-	return audit.LatestRunCompleted(file)
+	completed, err := audit.LatestRunCompleted(file)
+	return err == nil && completed
 }
 
 func loadRecordedWorkflow(workflowFile string) (model.Workflow, error) {

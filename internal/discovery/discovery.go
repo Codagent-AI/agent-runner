@@ -119,8 +119,7 @@ func enumerateLocalDir(dir string, scope Scope) []WorkflowEntry {
 		if strings.HasPrefix(d.Name(), "_") {
 			return nil
 		}
-		ext := strings.ToLower(filepath.Ext(d.Name()))
-		if ext != ".yaml" && ext != ".yml" {
+		if !workflowcatalog.HasYAMLExtension(d.Name()) {
 			return nil
 		}
 
@@ -150,8 +149,7 @@ func enumerateBuiltinFS(fsys fs.FS) []WorkflowEntry {
 		if strings.HasPrefix(path.Base(relPath), "_") || !strings.Contains(relPath, "/") {
 			return nil
 		}
-		ext := strings.ToLower(path.Ext(relPath))
-		if ext != ".yaml" && ext != ".yml" {
+		if !workflowcatalog.HasYAMLExtension(relPath) {
 			return nil
 		}
 
@@ -170,37 +168,22 @@ func loadLocalEntries(dir string, scope Scope, catalog workflowcatalog.Catalog) 
 			Scope:         scope,
 		}
 
-		var problems []string
-		if group.Err != nil {
-			problems = append(problems, group.Err.Error())
-		}
-
-		var selectedWorkflow model.Workflow
+		var loadProblems []string
+		var selectedWorkflow *model.Workflow
 		for _, definition := range group.Definitions {
 			sourcePath := filepath.Join(dir, filepath.FromSlash(definition.Path))
 			workflow, err := loader.LoadWorkflow(sourcePath, loader.Options{})
 			if err != nil {
-				problems = append(problems, fmt.Sprintf("%s: %v", sourcePath, err))
+				loadProblems = append(loadProblems, fmt.Sprintf("%s: %v", sourcePath, err))
 				continue
 			}
 			if group.Selected != nil && definition.Path == group.Selected.Path {
 				entry.SourcePath = sourcePath
-				selectedWorkflow = workflow
+				selectedWorkflow = &workflow
 			}
 		}
 
-		switch {
-		case len(problems) > 0:
-			entry.SourcePath = ""
-			entry.ParseError = strings.Join(problems, "; ")
-		case group.Selected == nil || entry.SourcePath == "":
-			entry.ParseError = fmt.Sprintf("logical workflow %q has no selectable definition", group.CanonicalName)
-		default:
-			entry.Description = selectedWorkflow.Description
-			entry.Hidden = selectedWorkflow.Hidden
-			entry.Params = selectedWorkflow.Params
-		}
-
+		completeWorkflowEntry(&entry, group, selectedWorkflow, loadProblems)
 		entries = append(entries, entry)
 	}
 
@@ -220,46 +203,56 @@ func loadBuiltinEntries(fsys fs.FS, catalog workflowcatalog.Catalog) []WorkflowE
 			Scope:         ScopeBuiltin,
 		}
 
-		var problems []string
-		if group.Err != nil {
-			problems = append(problems, group.Err.Error())
-		}
-
-		var selectedWorkflow model.Workflow
+		var loadProblems []string
+		var selectedWorkflow *model.Workflow
 		for _, definition := range group.Definitions {
 			sourcePath := builtinworkflows.Ref(definition.Path)
 			data, err := fs.ReadFile(fsys, definition.Path)
 			if err != nil {
-				problems = append(problems, fmt.Sprintf("%s: %v", sourcePath, err))
+				loadProblems = append(loadProblems, fmt.Sprintf("%s: %v", sourcePath, err))
 				continue
 			}
 			workflow, err := loader.ParseWorkflowSource(data, sourcePath, loader.Options{})
 			if err != nil {
-				problems = append(problems, fmt.Sprintf("%s: %v", sourcePath, err))
+				loadProblems = append(loadProblems, fmt.Sprintf("%s: %v", sourcePath, err))
 				continue
 			}
 			if group.Selected != nil && definition.Path == group.Selected.Path {
 				entry.SourcePath = sourcePath
-				selectedWorkflow = workflow
+				selectedWorkflow = &workflow
 			}
 		}
 
-		switch {
-		case len(problems) > 0:
-			entry.SourcePath = ""
-			entry.ParseError = strings.Join(problems, "; ")
-		case group.Selected == nil || entry.SourcePath == "":
-			entry.ParseError = fmt.Sprintf("logical workflow %q has no selectable definition", entry.CanonicalName)
-		default:
-			entry.Description = selectedWorkflow.Description
-			entry.Hidden = selectedWorkflow.Hidden
-			entry.Params = selectedWorkflow.Params
-		}
-
+		completeWorkflowEntry(&entry, group, selectedWorkflow, loadProblems)
 		entries = append(entries, entry)
 	}
 
 	return entries
+}
+
+func completeWorkflowEntry(
+	entry *WorkflowEntry,
+	group workflowcatalog.Group,
+	selectedWorkflow *model.Workflow,
+	loadProblems []string,
+) {
+	problems := make([]string, 0, len(loadProblems)+1)
+	if group.Err != nil {
+		problems = append(problems, group.Err.Error())
+	}
+	problems = append(problems, loadProblems...)
+
+	switch {
+	case len(problems) > 0:
+		entry.SourcePath = ""
+		entry.ParseError = strings.Join(problems, "; ")
+	case group.Selected == nil || selectedWorkflow == nil || entry.SourcePath == "":
+		entry.ParseError = fmt.Sprintf("logical workflow %q has no selectable definition", entry.CanonicalName)
+	default:
+		entry.Description = selectedWorkflow.Description
+		entry.Hidden = selectedWorkflow.Hidden
+		entry.Params = selectedWorkflow.Params
+	}
 }
 
 // EnumerateGroups returns display metadata for every scope/namespace group

@@ -270,6 +270,14 @@ func IsExempt(candidatePath string) bool {
 	return strings.HasPrefix(path.Base(slashPath(candidatePath)), "_")
 }
 
+// HasYAMLExtension reports whether candidatePath ends in .yaml or .yml,
+// regardless of extension case. Source adapters use this to decide which
+// files the catalog must validate.
+func HasYAMLExtension(candidatePath string) bool {
+	ext := strings.ToLower(path.Ext(slashPath(candidatePath)))
+	return ext == ".yaml" || ext == ".yml"
+}
+
 // Parse validates a source-relative workflow path and derives its logical
 // identity. Directory segments are retained in CanonicalName.
 func Parse(candidatePath string) (Definition, error) {
