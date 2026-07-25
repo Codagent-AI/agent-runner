@@ -357,6 +357,68 @@ func TestBuildGroupsAndSelectsLatestVersion(t *testing.T) {
 	}
 }
 
+func TestBuildPreservesDirectoryCaseInValidCanonicalNames(t *testing.T) {
+	t.Parallel()
+
+	catalog := Build([]string{
+		"Team/deploy-v1.0.yaml",
+		"team/deploy-v1.0.yaml",
+	})
+
+	if len(catalog.Groups) != 2 {
+		t.Fatalf("group count = %d, want 2; groups = %#v", len(catalog.Groups), catalog.Groups)
+	}
+	for _, canonicalName := range []string{"Team/deploy", "team/deploy"} {
+		group, ok := catalog.Lookup(canonicalName)
+		if !ok {
+			t.Errorf("Lookup(%q) found = false", canonicalName)
+			continue
+		}
+		if group.Err != nil {
+			t.Errorf("Lookup(%q) error = %v", canonicalName, group.Err)
+		}
+		if group.Selected == nil {
+			t.Errorf("Lookup(%q) selected = nil", canonicalName)
+			continue
+		}
+		if diff := cmp.Diff(group.CanonicalName, group.Selected.CanonicalName); diff != "" {
+			t.Errorf("group and selected canonical names differ (-group +selected):\n%s", diff)
+		}
+	}
+}
+
+func TestBuildNormalizesInvalidBasenameWithoutChangingDirectoryIdentity(t *testing.T) {
+	t.Parallel()
+
+	catalog := Build([]string{
+		"Team/Deploy-v1.0.yaml",
+		"Team/deploy-v2.0.yaml",
+		"team/deploy-v1.0.yaml",
+	})
+
+	invalid, ok := catalog.Lookup("Team/deploy")
+	if !ok {
+		t.Fatal("Lookup(\"Team/deploy\") found = false")
+	}
+	if invalid.Err == nil {
+		t.Fatal("Lookup(\"Team/deploy\") error = nil")
+	}
+	if invalid.Selected != nil {
+		t.Errorf("Lookup(\"Team/deploy\") selected = %#v, want nil", invalid.Selected)
+	}
+
+	valid, ok := catalog.Lookup("team/deploy")
+	if !ok {
+		t.Fatal("Lookup(\"team/deploy\") found = false")
+	}
+	if valid.Err != nil {
+		t.Fatalf("Lookup(\"team/deploy\") error = %v", valid.Err)
+	}
+	if valid.Selected == nil || valid.Selected.Path != "team/deploy-v1.0.yaml" {
+		t.Fatalf("Lookup(\"team/deploy\") selected = %#v, want team/deploy-v1.0.yaml", valid.Selected)
+	}
+}
+
 func TestBuildInvalidatesOnlyAssociatedGroup(t *testing.T) {
 	t.Parallel()
 

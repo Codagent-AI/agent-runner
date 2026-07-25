@@ -204,7 +204,7 @@ func Build(candidatePaths []string) Catalog {
 	for _, candidatePath := range orderedPaths {
 		definition, err := Parse(candidatePath)
 		if err == nil {
-			groupName := strings.ToLower(definition.CanonicalName)
+			groupName := definition.CanonicalName
 			builder := builders[groupName]
 			if builder == nil {
 				builder = &groupBuilder{}
@@ -368,13 +368,14 @@ func bestEffortGroup(candidatePath string) string {
 	if matches := malformedVersionAttempt.FindStringSubmatch(stem); matches != nil {
 		stem = matches[1]
 	}
+	stem = strings.ToLower(stem)
 
 	dir := path.Dir(candidatePath)
 	group := stem
 	if dir != "." {
 		group = path.Join(dir, stem)
 	}
-	return strings.ToLower(group)
+	return group
 }
 
 func renameExample(group string) string {
