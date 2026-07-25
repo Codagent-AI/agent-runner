@@ -196,11 +196,11 @@ func TestLatestRunCompletedUsesLatestLifecycle(t *testing.T) {
 	}
 }
 
-func TestLatestRunCompletedHandlesLargeAuditEvents(t *testing.T) {
+func TestLatestRunCompletedHandlesUnboundedAuditEvents(t *testing.T) {
 	log := auditLine(t, Event{
 		Timestamp: "2026-05-24T10:00:00Z",
 		Type:      EventStepStart,
-		Data:      map[string]any{"prompt": strings.Repeat("x", 128*1024)},
+		Data:      map[string]any{"prompt": strings.Repeat("x", 17*1024*1024)},
 	}) + auditLine(t, Event{
 		Timestamp: "2026-05-24T10:00:01Z",
 		Type:      EventRunEnd,

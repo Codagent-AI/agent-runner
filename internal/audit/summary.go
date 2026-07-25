@@ -10,11 +10,6 @@ import (
 	"strings"
 )
 
-// maxAuditLineBytes bounds memory while allowing audit events that embed large
-// prompts or serialized context. The default Scanner limit of 64 KiB is too
-// small for valid audit lines.
-const maxAuditLineBytes = 16 * 1024 * 1024
-
 type Summary struct {
 	Path               string                `json:"path"`
 	SessionDir         string                `json:"session_dir,omitempty"`
@@ -103,23 +98,22 @@ func BuildSummary(r io.Reader, capBytes int) (Summary, error) {
 	}
 
 	used := 0
-	scanner := newAuditScanner(r)
-	for lineNo := 1; scanner.Scan(); lineNo++ {
-		line := scanner.Text()
+	err := visitAuditLines(r, func(lineNo int, line string) error {
 		if strings.TrimSpace(line) == "" {
-			continue
+			return nil
 		}
 		event, err := parseAuditLine(line)
 		if err != nil {
-			return Summary{}, fmt.Errorf("parse audit line %d: %w", lineNo, err)
+			return fmt.Errorf("parse audit line %d: %w", lineNo, err)
 		}
 		event.Data = redactValue(event.Data).(map[string]any)
 		if !appendClassifiedEvent(&summary, event, capBytes, &used) {
 			summary.Truncated = true
 			summary.DroppedEventsCount++
 		}
-	}
-	if err := scanner.Err(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return Summary{}, err
 	}
 	return summary, nil
@@ -129,15 +123,13 @@ func BuildSummary(r io.Reader, capBytes int) (Summary, error) {
 // successfully. A later run_start resets an earlier successful run_end.
 func LatestRunCompleted(r io.Reader) (bool, error) {
 	completed := false
-	scanner := newAuditScanner(r)
-	for lineNo := 1; scanner.Scan(); lineNo++ {
-		line := scanner.Text()
+	err := visitAuditLines(r, func(lineNo int, line string) error {
 		if strings.TrimSpace(line) == "" {
-			continue
+			return nil
 		}
 		event, err := parseAuditLine(line)
 		if err != nil {
-			return false, fmt.Errorf("parse audit line %d: %w", lineNo, err)
+			return fmt.Errorf("parse audit line %d: %w", lineNo, err)
 		}
 		switch event.Type {
 		case EventRunStart:
@@ -145,17 +137,32 @@ func LatestRunCompleted(r io.Reader) (bool, error) {
 		case EventRunEnd:
 			completed = stringField(event.Data, "outcome") == "success"
 		}
-	}
-	if err := scanner.Err(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return false, err
 	}
 	return completed, nil
 }
 
-func newAuditScanner(r io.Reader) *bufio.Scanner {
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxAuditLineBytes)
-	return scanner
+func visitAuditLines(r io.Reader, visit func(lineNo int, line string) error) error {
+	reader := bufio.NewReader(r)
+	for lineNo := 1; ; lineNo++ {
+		line, readErr := reader.ReadString('\n')
+		if line != "" {
+			line = strings.TrimSuffix(line, "\n")
+			line = strings.TrimSuffix(line, "\r")
+			if err := visit(lineNo, line); err != nil {
+				return err
+			}
+		}
+		if readErr == io.EOF {
+			return nil
+		}
+		if readErr != nil {
+			return readErr
+		}
+	}
 }
 
 func appendClassifiedEvent(summary *Summary, event Event, capBytes int, used *int) bool {
