@@ -189,12 +189,13 @@ func loadLocalEntries(dir string, scope Scope, catalog workflowcatalog.Catalog) 
 			}
 		}
 
-		if len(problems) > 0 {
+		switch {
+		case len(problems) > 0:
 			entry.SourcePath = ""
 			entry.ParseError = strings.Join(problems, "; ")
-		} else if group.Selected == nil || entry.SourcePath == "" {
+		case group.Selected == nil || entry.SourcePath == "":
 			entry.ParseError = fmt.Sprintf("logical workflow %q has no selectable definition", group.CanonicalName)
-		} else {
+		default:
 			entry.Description = selectedWorkflow.Description
 			entry.Hidden = selectedWorkflow.Hidden
 			entry.Params = selectedWorkflow.Params
@@ -243,12 +244,13 @@ func loadBuiltinEntries(fsys fs.FS, catalog workflowcatalog.Catalog) []WorkflowE
 			}
 		}
 
-		if len(problems) > 0 {
+		switch {
+		case len(problems) > 0:
 			entry.SourcePath = ""
 			entry.ParseError = strings.Join(problems, "; ")
-		} else if group.Selected == nil || entry.SourcePath == "" {
+		case group.Selected == nil || entry.SourcePath == "":
 			entry.ParseError = fmt.Sprintf("logical workflow %q has no selectable definition", entry.CanonicalName)
-		} else {
+		default:
 			entry.Description = selectedWorkflow.Description
 			entry.Hidden = selectedWorkflow.Hidden
 			entry.Params = selectedWorkflow.Params

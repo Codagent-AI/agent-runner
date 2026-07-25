@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/workflowcatalog"
 	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
@@ -146,16 +147,11 @@ func tryDirectFile(workflowFile string, bases []string) (string, bool) {
 // findWorkflowByName searches for a workflow matching name under the
 // workflows/ subdir of each base directory. name may be bare ("plan-change")
 // or namespaced ("openspec:plan-change"). The search prefers an exact layout
-// match first, then falls back to a recursive walk matching the trailing
-// segment. The first hit wins.
+// match first, then uses the workflow catalog to select the latest versioned
+// definition, and finally falls back to a recursive legacy filename match.
 func findWorkflowByName(name string, bases []string) (string, bool) {
 	if name == "" {
 		return "", false
-	}
-	// bare is the rightmost segment; used for recursive filename matching.
-	bare := name
-	if i := strings.LastIndexByte(name, ':'); i >= 0 {
-		bare = name[i+1:]
 	}
 
 	for _, b := range bases {
@@ -177,8 +173,9 @@ func findWorkflowByName(name string, bases []string) (string, bool) {
 				}
 			}
 
-			// Fall back to a recursive search for the bare filename.
-			if p := searchTree(wfRoot, bare); p != "" {
+			// Fall back to catalog-backed logical selection, then legacy
+			// recursive filename matching.
+			if p := searchTree(wfRoot, name); p != "" {
 				return p, true
 			}
 		}
@@ -186,11 +183,10 @@ func findWorkflowByName(name string, bases []string) (string, bool) {
 	return "", false
 }
 
-// searchTree walks root looking for "name.yaml" or "name.yml" and returns
-// the first match's absolute path.
+// searchTree selects the latest valid versioned definition for name. It
+// retains a final exact-basename fallback for historical unversioned runs.
 func searchTree(root, name string) string {
-	var found string
-	want := map[string]bool{name + ".yaml": true, name + ".yml": true}
+	var candidatePaths []string
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -198,13 +194,51 @@ func searchTree(root, name string) string {
 		if d.IsDir() {
 			return nil
 		}
-		if want[d.Name()] {
-			found = path
-			return fs.SkipAll
+		ext := strings.ToLower(filepath.Ext(d.Name()))
+		if ext != ".yaml" && ext != ".yml" {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr == nil {
+			candidatePaths = append(candidatePaths, filepath.ToSlash(rel))
 		}
 		return nil
 	})
-	return found
+
+	catalog := workflowcatalog.Build(candidatePaths)
+	catalogName := strings.ReplaceAll(name, ":", "/")
+	if selectedPath, ok := selectedCatalogPath(catalog, catalogName); ok {
+		return filepath.Join(root, filepath.FromSlash(selectedPath))
+	}
+
+	if !strings.Contains(name, ":") {
+		for _, group := range catalog.Groups {
+			if filepath.Base(group.CanonicalName) != name || group.Err != nil || group.Selected == nil {
+				continue
+			}
+			return filepath.Join(root, filepath.FromSlash(group.Selected.Path))
+		}
+	}
+
+	bare := name
+	if separator := strings.LastIndexByte(name, ':'); separator >= 0 {
+		bare = name[separator+1:]
+	}
+	for _, candidatePath := range candidatePaths {
+		stem := strings.TrimSuffix(filepath.Base(candidatePath), filepath.Ext(candidatePath))
+		if stem == bare {
+			return filepath.Join(root, filepath.FromSlash(candidatePath))
+		}
+	}
+	return ""
+}
+
+func selectedCatalogPath(catalog workflowcatalog.Catalog, canonicalName string) (string, bool) {
+	group, found := catalog.Lookup(canonicalName)
+	if !found || group.Err != nil || group.Selected == nil {
+		return "", false
+	}
+	return group.Selected.Path, true
 }
 
 // rootsFor returns the (workflowsRoot, repoRoot) pair appropriate for an

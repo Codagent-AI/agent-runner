@@ -177,9 +177,7 @@ func TestResolveWorkflow_DiscoveryByName_WhenFileMoved(t *testing.T) {
 	// ...but state still records the OLD location.
 	state := model.RunState{
 		WorkflowFile: "workflows/plan-change-v1.0.yaml",
-		// Task 04 will make discovery version-neutral. At the task 02
-		// boundary, fallback uses the physical version-bearing name.
-		WorkflowName: "plan-change-v1.0",
+		WorkflowName: "plan-change",
 	}
 	got, ok := ResolveWorkflow(sessionDir, projectDir, &state)
 	if !ok {
@@ -208,7 +206,7 @@ func TestResolveWorkflow_DiscoveryByNamespacedName(t *testing.T) {
 	writeMeta(t, projectDir, root)
 	chdirTo(t, t.TempDir())
 
-	state := model.RunState{WorkflowName: "openspec:plan-change-v1.0"}
+	state := model.RunState{WorkflowName: "openspec:plan-change"}
 	got, ok := ResolveWorkflow(sessionDir, projectDir, &state)
 	if !ok {
 		t.Fatal("expected namespaced discovery to succeed")

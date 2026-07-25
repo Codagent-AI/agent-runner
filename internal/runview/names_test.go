@@ -16,15 +16,13 @@ func TestCanonicalName(t *testing.T) {
 		in   string
 		want string
 	}{
-		// Task 04 will make these canonical names version-free after discovery
-		// consumes the workflow catalog.
-		{"namespaced core builtin under workflows", "/repo/workflows/core/implement-task-v1.0.yaml", "core:implement-task-v1.0"},
-		{"namespaced under workflows", "/repo/workflows/openspec/plan-change-v1.0.yaml", "openspec:plan-change-v1.0"},
+		{"namespaced core builtin under workflows", "/repo/workflows/core/implement-task-v1.0.yaml", "core:implement-task"},
+		{"namespaced under workflows", "/repo/workflows/openspec/plan-change-v1.0.yaml", "openspec:plan-change"},
 		{"namespaced yml extension", "/repo/workflows/openspec/implement-change.yml", "openspec:implement-change"},
 		{"deep subdir falls back to repo-rel", "/repo/workflows/a/b/c.yaml", "workflows/a/b/c.yaml"},
 		{"outside workflows falls back to repo-rel", "/repo/external/other.yaml", "external/other.yaml"},
 		{"outside repo returns abs path", "/elsewhere/thing.yaml", "../elsewhere/thing.yaml"},
-		{"builtin namespaced yaml", "builtin:spec-driven/change-v1.0.yaml", "spec-driven:change-v1.0"},
+		{"builtin namespaced yaml", "builtin:spec-driven/change-v1.0.yaml", "spec-driven:change"},
 		{"builtin namespaced yml", "builtin:core/implement-task.yml", "core:implement-task"},
 		{"builtin top-level", "builtin:simple.yaml", "simple"},
 		{"builtin deep path", "builtin:a/b/c.yaml", "a/b/c"},
