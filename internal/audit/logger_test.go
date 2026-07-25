@@ -180,6 +180,17 @@ func TestLogger(t *testing.T) {
 
 func TestControlAndJobControlEventTypesAreRecognized(t *testing.T) {
 	types := []EventType{
+		EventRunStart,
+		EventRunEnd,
+		EventStepStart,
+		EventStepEnd,
+		EventIterationStart,
+		EventIterationEnd,
+		EventSubWorkflowStart,
+		EventSubWorkflowEnd,
+		EventAgentCallStart,
+		EventAgentCallEnd,
+		EventError,
 		EventCompletionRequested,
 		EventCompletionAcknowledged,
 		EventTurnCommitted,

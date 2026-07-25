@@ -9,10 +9,16 @@ steps:
   - id: shell-capture
     command: echo "smoke-test value"
     capture: greeting
+  - id: claude-call-agent
+    agent: claude_headless_smoke
+    session: new
+    prompt: |
+      Use call_agent exactly once with session `claude-headless` and ask it to remember the value `{{greeting}}`.
+      Return the called agent's response in one short sentence.
 
-  - id: claude-named
+  - id: claude-named-reuse
     session: claude-headless
-    prompt: "Reply with one short sentence echoing this value back to me: {{greeting}}"
+    prompt: "Reply with one short sentence stating the value you were asked to remember in the call that created this named session."
 
   - id: claude-agent-steps
     workflow: smoke-test-agent-steps.yaml

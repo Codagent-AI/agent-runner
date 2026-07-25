@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 const completionPluginName = "agent-runner"
@@ -74,8 +77,18 @@ Run this exact command now, then finish the response:
 }
 
 func prepareCodexCompletionHome(command CompletionCommand, runID string) (string, error) {
-	if !command.Valid() {
+	return prepareCodexRunnerHome(&command, nil, ContextInteractive, runID)
+}
+
+func prepareCodexRunnerHome(completion *CompletionCommand, integration *RunnerIntegration, context InvocationContext, runID string) (string, error) {
+	if completion != nil && !completion.Valid() {
 		return "", fmt.Errorf("invalid completion command")
+	}
+	if integration != nil && !integration.Valid() {
+		return "", fmt.Errorf("invalid Runner agent-call integration descriptor")
+	}
+	if completion == nil && integration == nil {
+		return "", fmt.Errorf("missing Runner integration")
 	}
 	if runID == "" {
 		return "", fmt.Errorf("missing run identity")
@@ -96,7 +109,21 @@ func prepareCodexCompletionHome(command CompletionCommand, runID string) (string
 	if err != nil && !os.IsNotExist(err) {
 		return "", fmt.Errorf("read Codex config: %w", err)
 	}
-	digest := sha256.Sum256([]byte("codex-v5\x00" + runID + "\x00" + sourceHome + "\x00" + string(config) + "\x00" + command.ShellCommand()))
+	completionCommand := ""
+	if completion != nil {
+		completionCommand = completion.ShellCommand()
+	}
+	if integration != nil {
+		conflict, err := codexConfigHasAgentCallConflict(config)
+		if err != nil {
+			return "", err
+		}
+		if conflict {
+			return "", fmt.Errorf("codex config already defines %s; cannot safely install the Runner-owned server", agentCallMCPServerName)
+		}
+		config = appendCodexAgentCallConfig(config, *integration.AgentCall, context.IsAutonomous())
+	}
+	digest := sha256.Sum256([]byte("codex-v6\x00" + runID + "\x00" + sourceHome + "\x00" + string(config) + "\x00" + completionCommand + "\x00" + string(context)))
 	hash := hex.EncodeToString(digest[:6])
 
 	privateHome := filepath.Join(cacheDir, "agent-runner", "codex-homes", hash)
@@ -128,6 +155,9 @@ func prepareCodexCompletionHome(command CompletionCommand, runID string) (string
 	if err := linkCodexSkillEntries(filepath.Join(sourceHome, "skills"), privateSkills); err != nil {
 		return "", err
 	}
+	if completion == nil {
+		return privateHome, nil
+	}
 	next := `---
 name: agent-runner-next
 description: Complete the current Agent Runner workflow step
@@ -135,7 +165,7 @@ description: Complete the current Agent Runner workflow step
 
 Run this exact command now, then finish the response:
 
-` + "`" + command.ShellCommand() + "`" + `
+` + "`" + completion.ShellCommand() + "`" + `
 `
 	nextSkillDir := filepath.Join(privateSkills, "agent-runner-next")
 	if err := os.MkdirAll(nextSkillDir, 0o700); err != nil { // #nosec G703 -- fixed skill path beneath the cache digest directory
@@ -145,6 +175,51 @@ Run this exact command now, then finish the response:
 		return "", fmt.Errorf("write Codex completion skill: %w", err)
 	}
 	return privateHome, nil
+}
+
+func codexConfigHasAgentCallConflict(config []byte) (bool, error) {
+	if strings.TrimSpace(string(config)) == "" {
+		return false, nil
+	}
+	var decoded map[string]any
+	if err := toml.Unmarshal(config, &decoded); err != nil {
+		return false, fmt.Errorf("parse Codex config before installing Runner integration: %w", err)
+	}
+	mcpServers, ok := decoded["mcp_servers"].(map[string]any)
+	if !ok {
+		return false, nil
+	}
+	_, conflict := mcpServers[agentCallMCPServerName]
+	return conflict, nil
+}
+
+func appendCodexAgentCallConfig(config []byte, command MCPServerCommand, autonomous bool) []byte {
+	var result strings.Builder
+	result.Write(config)
+	if len(config) > 0 && config[len(config)-1] != '\n' {
+		result.WriteByte('\n')
+	}
+	result.WriteString("\n[mcp_servers.agent-runner]\n")
+	result.WriteString("command = ")
+	result.WriteString(strconv.Quote(command.Executable))
+	result.WriteByte('\n')
+	args, _ := json.Marshal(command.Args)
+	result.WriteString("args = ")
+	result.Write(args)
+	result.WriteByte('\n')
+	result.WriteString(`enabled_tools = ["call_agent"]`)
+	result.WriteByte('\n')
+	envVars, _ := json.Marshal(agentCallControlEnvironmentVariables)
+	result.WriteString("env_vars = ")
+	result.Write(envVars)
+	result.WriteByte('\n')
+	fmt.Fprintf(&result, "tool_timeout_sec = %d\n", agentCallTimeoutSeconds)
+	if autonomous {
+		result.WriteString("\n[mcp_servers.agent-runner.tools.call_agent]\n")
+		result.WriteString(`approval_mode = "approve"`)
+		result.WriteByte('\n')
+	}
+	return []byte(result.String())
 }
 
 func inheritCodexHookTrust(config []byte, sourceHome, privateHome string) []byte {

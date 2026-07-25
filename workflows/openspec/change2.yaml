@@ -15,7 +15,7 @@ steps:
       fi
 
       default_branch=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name) || {
-        echo "could not determine the repository's default branch" >&2
+        echo "could not determine the repository's default branch; verify that gh is installed and authenticated and that the current directory belongs to a GitHub repository" >&2
         exit 1
       }
       if [ -z "$default_branch" ]; then

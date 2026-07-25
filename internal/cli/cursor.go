@@ -36,6 +36,7 @@ type CursorAdapter struct {
 type cursorPrivateConfig struct {
 	Dir                        string
 	DenyRuleBlockingCompletion string
+	DenyRuleBlockingAgentCall  string
 }
 
 const maxCursorStoreDBSize = 64 * 1024 * 1024
@@ -82,6 +83,10 @@ func (a *CursorAdapter) BuildArgs(input *BuildArgsInput) []string {
 // plugin cannot be created.
 func (a *CursorAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, error) {
 	invocationContext := input.InvocationContext()
+	agentCall, err := validatedAgentCall(input)
+	if err != nil {
+		return nil, fmt.Errorf("cursor: prepare agent-call integration: %w", err)
+	}
 	mode := usersettings.EffectiveAutonomousPermissionMode(input.PermissionMode)
 	args := []string{"agent"}
 	if invocationContext.IsHeadless() {
@@ -98,7 +103,14 @@ func (a *CursorAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, err
 	}
 
 	args = append(args, input.Prompt)
-	if !invocationContext.IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid() {
+	if agentCall != nil {
+		pluginDir, err := prepareAgentCallPlugin(*agentCall)
+		if err != nil {
+			return nil, fmt.Errorf("cursor: create agent-call MCP plugin: %w", err)
+		}
+		args = append([]string{"agent", "--plugin-dir", pluginDir}, args[1:]...)
+	}
+	if completionCommandEnabled(input) {
 		prepare := a.prepareCompletionPlugin
 		if prepare == nil {
 			prepare = prepareCursorCompletionPlugin
@@ -122,18 +134,44 @@ func prepareCursorCompletionPlugin(command CompletionCommand) (string, error) {
 // completion command. The user's own configuration files are never modified.
 func (a *CursorAdapter) SpawnEnv(input *BuildArgsInput) ([]string, error) {
 	invocationContext := input.InvocationContext()
-	if invocationContext.IsHeadless() || input.CompletionCommand == nil || !input.CompletionCommand.Valid() {
+	agentCall, err := validatedAgentCall(input)
+	if err != nil {
+		return nil, fmt.Errorf("cursor: prepare agent-call integration: %w", err)
+	}
+	completionEnabled := completionCommandEnabled(input)
+	if !completionEnabled && agentCall == nil {
 		return nil, nil
 	}
-	prepare := a.prepareConfig
-	if prepare == nil {
-		prepare = prepareCursorPrivateConfig
+	var config cursorPrivateConfig
+	if agentCall == nil {
+		prepare := a.prepareConfig
+		if prepare == nil {
+			prepare = prepareCursorPrivateConfig
+		}
+		config, err = prepare(*input.CompletionCommand)
+	} else {
+		var completion *CompletionCommand
+		if completionEnabled {
+			completion = input.CompletionCommand
+		}
+		config, err = prepareCursorRunnerPrivateConfig(completion, input.RunnerIntegration, invocationContext.IsAutonomous())
 	}
-	config, err := prepare(*input.CompletionCommand)
 	if err != nil {
 		return nil, fmt.Errorf("cursor: prepare private config: %w", err)
 	}
-	if invocationContext == ContextAutonomousInteractive &&
+	if invocationContext.IsAutonomous() && config.DenyRuleBlockingAgentCall != "" {
+		return nil, fmt.Errorf("cursor: unattended call_agent is blocked by your Cursor deny rule %q, which takes precedence over the narrow pre-approval", config.DenyRuleBlockingAgentCall)
+	}
+	if invocationContext.IsAutonomous() && agentCall != nil {
+		rule, path, err := cursorProjectDenyBlockingAgentCall(input.Workdir)
+		if err != nil {
+			return nil, fmt.Errorf("cursor: project permissions: %w", err)
+		}
+		if rule != "" {
+			return nil, fmt.Errorf("cursor: unattended call_agent is blocked by the project-level Cursor deny rule %q in %s, which takes precedence over the narrow pre-approval", rule, path)
+		}
+	}
+	if completionEnabled && invocationContext == ContextAutonomousInteractive &&
 		usersettings.EffectiveAutonomousPermissionMode(input.PermissionMode) != usersettings.PermissionModeYOLO {
 		if config.DenyRuleBlockingCompletion != "" {
 			return nil, cursorDenyBlockedError(fmt.Sprintf("your Cursor deny rule %q", config.DenyRuleBlockingCompletion))
@@ -151,6 +189,32 @@ func (a *CursorAdapter) SpawnEnv(input *BuildArgsInput) ([]string, error) {
 		}
 	}
 	return []string{"CURSOR_CONFIG_DIR=" + config.Dir}, nil
+}
+
+func cursorProjectDenyBlockingAgentCall(workdir string) (rule, path string, err error) {
+	if workdir == "" {
+		workdir, err = os.Getwd()
+		if err != nil {
+			return "", "", fmt.Errorf("resolve step working directory: %w", err)
+		}
+	}
+	path = filepath.Join(workdir, ".cursor", "cli.json")
+	raw, err := os.ReadFile(path) // #nosec G304 -- fixed name under the step's own working directory
+	if os.IsNotExist(err) {
+		return "", path, nil
+	}
+	if err != nil {
+		return "", path, fmt.Errorf("read %s: %w", path, err)
+	}
+	var config struct {
+		Permissions struct {
+			Deny []any `json:"deny"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal(raw, &config); err != nil {
+		return "", path, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return firstBlockingCursorMCPDenyRule(config.Permissions.Deny), path, nil
 }
 
 // cursorDenyBlockedError formats the unattended-run failure for a deny rule
@@ -286,6 +350,21 @@ func prepareCursorPrivateConfig(command CompletionCommand) (cursorPrivateConfig,
 	return prepareCursorPrivateConfigAt(source, filepath.Join(cacheDir, "agent-runner"), command)
 }
 
+func prepareCursorRunnerPrivateConfig(completion *CompletionCommand, integration *RunnerIntegration, autonomous bool) (cursorPrivateConfig, error) {
+	if integration == nil || !integration.Valid() {
+		return cursorPrivateConfig{}, fmt.Errorf("invalid Runner agent-call integration descriptor")
+	}
+	source, err := cursorConfigSourceDir()
+	if err != nil {
+		return cursorPrivateConfig{}, err
+	}
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return cursorPrivateConfig{}, fmt.Errorf("locate user cache: %w", err)
+	}
+	return prepareCursorPrivateConfigWithIntegrationAt(source, filepath.Join(cacheDir, "agent-runner"), completion, integration, autonomous)
+}
+
 // prepareCursorPrivateConfigAt materializes the private configuration
 // directory: the user's cli-config.json with the completion pre-approval
 // appended to permissions.allow (deny rules are preserved and keep
@@ -293,7 +372,11 @@ func prepareCursorPrivateConfig(command CompletionCommand) (cursorPrivateConfig,
 // user's real session store so resume, discovery, and durability keep
 // operating on the shared store.
 func prepareCursorPrivateConfigAt(sourceDir, cacheRoot string, command CompletionCommand) (cursorPrivateConfig, error) {
-	rule, err := cursorCompletionPermission(command)
+	return prepareCursorPrivateConfigWithIntegrationAt(sourceDir, cacheRoot, &command, nil, false)
+}
+
+func prepareCursorPrivateConfigWithIntegrationAt(sourceDir, cacheRoot string, completion *CompletionCommand, integration *RunnerIntegration, autonomous bool) (cursorPrivateConfig, error) {
+	completionRule, agentCallRule, err := cursorPrivateConfigRules(completion, integration, autonomous)
 	if err != nil {
 		return cursorPrivateConfig{}, err
 	}
@@ -315,18 +398,28 @@ func prepareCursorPrivateConfigAt(sourceDir, cacheRoot string, command Completio
 		config["permissions"] = permissions
 	}
 	allow, _ := permissions["allow"].([]any)
-	present := false
-	for _, entry := range allow {
-		if entry == rule {
-			present = true
-			break
+	for _, rule := range []string{completionRule, agentCallRule} {
+		if rule == "" {
+			continue
+		}
+		present := false
+		for _, entry := range allow {
+			if entry == rule {
+				present = true
+				break
+			}
+		}
+		if !present {
+			allow = append(allow, rule)
 		}
 	}
-	if !present {
-		permissions["allow"] = append(allow, rule)
-	}
+	permissions["allow"] = allow
 	deny, _ := permissions["deny"].([]any)
-	blockingDeny := firstBlockingDenyRule(deny, command)
+	blockingCompletion := ""
+	if completion != nil {
+		blockingCompletion = firstBlockingDenyRule(deny, *completion)
+	}
+	blockingAgentCall := firstBlockingCursorMCPDenyRule(deny)
 	rendered, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return cursorPrivateConfig{}, fmt.Errorf("render cursor config: %w", err)
@@ -335,7 +428,7 @@ func prepareCursorPrivateConfigAt(sourceDir, cacheRoot string, command Completio
 	// The source directory participates in the digest because the chats
 	// symlink below is tied to it: identical configs from different sources
 	// must not share a private dir.
-	digest := sha256.Sum256([]byte("cursor-config-v2\x00" + sourceDir + "\x00" + rule + "\x00" + string(raw)))
+	digest := sha256.Sum256([]byte("cursor-config-v3\x00" + sourceDir + "\x00" + completionRule + "\x00" + agentCallRule + "\x00" + string(raw)))
 	dir := filepath.Join(cacheRoot, "cursor-config", hex.EncodeToString(digest[:6]))
 	if err := os.MkdirAll(dir, 0o700); err != nil { // #nosec G703 -- dir combines the local user's cache root with a content digest; creating it is this function's purpose
 		return cursorPrivateConfig{}, fmt.Errorf("create cursor private config dir: %w", err)
@@ -344,7 +437,7 @@ func prepareCursorPrivateConfigAt(sourceDir, cacheRoot string, command Completio
 		return cursorPrivateConfig{}, fmt.Errorf("write cursor private config: %w", err)
 	}
 	evictStaleCursorConfigs(filepath.Join(cacheRoot, "cursor-config"), dir)
-	result := cursorPrivateConfig{Dir: dir, DenyRuleBlockingCompletion: blockingDeny}
+	result := cursorPrivateConfig{Dir: dir, DenyRuleBlockingCompletion: blockingCompletion, DenyRuleBlockingAgentCall: blockingAgentCall}
 
 	// The chat store follows CURSOR_CONFIG_DIR, so without this link every
 	// spawned session would be stranded in the private dir — breaking resume,
@@ -370,6 +463,41 @@ func prepareCursorPrivateConfigAt(sourceDir, cacheRoot string, command Completio
 		return cursorPrivateConfig{}, fmt.Errorf("link cursor chats store: %w", err)
 	}
 	return result, nil
+}
+
+func cursorPrivateConfigRules(completion *CompletionCommand, integration *RunnerIntegration, autonomous bool) (completionRule, agentCallRule string, err error) {
+	if completion != nil {
+		completionRule, err = cursorCompletionPermission(*completion)
+		if err != nil {
+			return "", "", err
+		}
+	}
+	if integration != nil && !integration.Valid() {
+		return "", "", fmt.Errorf("invalid Runner agent-call integration descriptor")
+	}
+	if integration != nil && autonomous {
+		agentCallRule = "Mcp(agent-runner:call_agent)"
+	}
+	return completionRule, agentCallRule, nil
+}
+
+func firstBlockingCursorMCPDenyRule(deny []any) string {
+	for _, entry := range deny {
+		rule, ok := entry.(string)
+		if !ok {
+			continue
+		}
+		inner, ok := strings.CutPrefix(strings.TrimSpace(rule), "Mcp(")
+		if !ok || !strings.HasSuffix(inner, ")") {
+			continue
+		}
+		serverPattern, toolPattern, ok := strings.Cut(strings.TrimSuffix(inner, ")"), ":")
+		if ok && cursorGlobMatch(strings.ToLower(strings.TrimSpace(serverPattern)), agentCallMCPServerName) &&
+			cursorGlobMatch(strings.ToLower(strings.TrimSpace(toolPattern)), agentCallMCPToolName) {
+			return rule
+		}
+	}
+	return ""
 }
 
 // cursorConfigCacheTTL bounds the private-config cache. Every invocation

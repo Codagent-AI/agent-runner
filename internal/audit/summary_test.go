@@ -32,6 +32,7 @@ func TestBuildSummary(t *testing.T) {
 			{Timestamp: "2026-05-24T10:00:01Z", Prefix: "[triage]", Type: EventStepStart, StepType: "agent", Data: map[string]any{"type": "agent"}},
 			{Timestamp: "2026-05-24T10:00:03Z", Prefix: "[triage]", Type: EventStepEnd, Outcome: "failed", Data: map[string]any{"outcome": "failed"}},
 		},
+		AgentCalls: []AgentCallBoundary{},
 		SubWorkflows: []SubWorkflowBoundary{
 			{Timestamp: "2026-05-24T10:00:04Z", Prefix: "[triage, sub:child]", Type: EventSubWorkflowStart, Workflow: "child.yaml", Data: map[string]any{"workflow": "child.yaml"}},
 			{Timestamp: "2026-05-24T10:00:05Z", Prefix: "[triage, sub:child]", Type: EventSubWorkflowEnd, Outcome: "success", Data: map[string]any{"outcome": "success"}},
@@ -48,6 +49,37 @@ func TestBuildSummary(t *testing.T) {
 
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Fatalf("summary mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestBuildSummaryClassifiesAgentCallsSeparatelyFromWorkflowSteps(t *testing.T) {
+	log := auditLine(t, Event{Timestamp: "2026-05-24T10:00:01Z", Prefix: "[parent, call:call-1]", Type: EventAgentCallStart, Data: map[string]any{
+		"call_id": "call-1", "target_kind": "agent", "target_name": "implementor",
+	}}) + auditLine(t, Event{Timestamp: "2026-05-24T10:00:02Z", Prefix: "[parent, call:call-1]", Type: EventAgentCallEnd, Data: map[string]any{
+		"call_id": "call-1", "outcome": "failed", "error": "child failed",
+	}})
+
+	got, err := BuildSummary(strings.NewReader(log), 64*1024)
+	if err != nil {
+		t.Fatalf("BuildSummary returned error: %v", err)
+	}
+	if len(got.Steps) != 0 {
+		t.Fatalf("agent calls were represented as workflow steps: %+v", got.Steps)
+	}
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(encoded, &raw); err != nil {
+		t.Fatal(err)
+	}
+	calls, ok := raw["agent_calls"].([]any)
+	if !ok || len(calls) != 2 {
+		t.Fatalf("agent_calls = %#v, want start/end pair", raw["agent_calls"])
+	}
+	if len(got.Failures) != 1 || got.Failures[0].Type != EventAgentCallEnd {
+		t.Fatalf("failures = %+v, want failed agent call", got.Failures)
 	}
 }
 

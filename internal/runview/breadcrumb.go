@@ -140,6 +140,9 @@ func (m *Model) currentChildren() []*StepNode {
 	if c == nil {
 		return nil
 	}
+	if m.showSummary && (c.Type == NodeHeadlessAgent || c.Type == NodeInteractiveAgent) && len(c.Children) > 0 {
+		return c.summaryChildren()
+	}
 	return c.Children
 }
 

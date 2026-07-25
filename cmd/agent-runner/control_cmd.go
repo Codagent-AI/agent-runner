@@ -6,12 +6,12 @@ import (
 	"io"
 	"os"
 
-	"github.com/codagent/agent-runner/internal/interactive"
+	"github.com/codagent/agent-runner/internal/control"
 )
 
 type controlEventSender func(context.Context, string, func(string) string) (string, error)
 
-var sendControlEvent controlEventSender = interactive.SendControlEventFromEnvironment
+var sendControlEvent controlEventSender = control.SendControlEventFromEnvironment
 
 func handleStep(args []string) int {
 	return handleStepWithIO(args, os.Stdout, os.Stderr)
@@ -30,7 +30,7 @@ func handleStepWithIO(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "agent-runner: step complete accepts no arguments")
 		return 1
 	}
-	receipt, err := sendControlMessage(interactive.MessageCompleteStep)
+	receipt, err := sendControlMessage(control.MessageCompleteStep)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "agent-runner: %v\n", err)
 		return 1
