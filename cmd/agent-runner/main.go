@@ -43,6 +43,7 @@ import (
 	"github.com/codagent/agent-runner/internal/themeprompt"
 	"github.com/codagent/agent-runner/internal/tuistyle"
 	"github.com/codagent/agent-runner/internal/usersettings"
+	"github.com/codagent/agent-runner/internal/workflowcatalog"
 	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
@@ -1426,68 +1427,160 @@ func fileExists(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-var workflowNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+(:[a-zA-Z0-9_-]+|(/[a-zA-Z0-9_-]+)+)?$`)
+var (
+	workflowNamePattern          = regexp.MustCompile(`^[a-z0-9_-]+(:[a-z0-9_-]+|(/[a-z0-9_-]+)+)?$`)
+	uppercaseWorkflowNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+(:[A-Za-z0-9_-]+|(/[A-Za-z0-9_-]+)+)?$`)
+	versionedLaunchPattern       = regexp.MustCompile(`^(.*)-v\d+\.\d+$`)
+	dotlessVersionAttemptPattern = regexp.MustCompile(`^(.*)-v\d+$`)
+)
 
 func resolveWorkflowArg(arg string) (string, error) {
-	ext := strings.ToLower(filepath.Ext(arg))
-	if (ext == ".yaml" || ext == ".yml") && fileExists(arg) {
-		return arg, nil
+	if logicalName, ok := versionFreeLaunchHint(arg); ok {
+		return "", fmt.Errorf(
+			"invalid workflow name %q for execution; launch logical workflow %q so Agent Runner can select the latest version",
+			arg,
+			logicalName,
+		)
 	}
 	if !workflowNamePattern.MatchString(arg) {
+		if uppercaseWorkflowNamePattern.MatchString(arg) && arg != strings.ToLower(arg) {
+			return "", fmt.Errorf("invalid workflow name %q for execution: logical workflow names must be lowercase", arg)
+		}
 		return "", fmt.Errorf("invalid workflow name %q: use a bare name or path under .agent-runner/workflows/ (e.g., 'myworkflow' or 'team/deploy') or a builtin name like 'core:finalize-pr'", arg)
 	}
 	if strings.Contains(arg, ":") {
-		return builtinworkflows.Resolve(arg)
-	}
-	localBase := filepath.Join(".agent-runner", "workflows", filepath.FromSlash(arg))
-	localPaths := []string{localBase + ".yaml", localBase + ".yml"}
-	if resolved, err := resolveWorkflowFile(localPaths...); err != nil {
+		resolved, err := builtinworkflows.Resolve(arg)
+		if err == nil {
+			return resolved, nil
+		}
+		var groupErr *workflowcatalog.GroupError
+		if logicalName, ok := dotlessVersionLaunchHint(arg); ok && !errors.As(err, &groupErr) {
+			return "", fmt.Errorf("%w; launch logical workflow %q to select its latest version", err, logicalName)
+		}
 		return "", err
-	} else if resolved != "" {
+	}
+
+	projectRoot := filepath.Join(".agent-runner", "workflows")
+	if resolved, found, err := resolveWorkflowCatalogGroup(projectRoot, arg); err != nil {
+		return "", err
+	} else if found {
 		return resolved, nil
 	}
 
-	globalPaths := []string{}
+	var globalRoot string
 	var homeErr error
 	if home, err := userHomeDir(); err == nil {
-		globalBase := filepath.Join(home, ".agent-runner", "workflows", filepath.FromSlash(arg))
-		globalPaths = []string{globalBase + ".yaml", globalBase + ".yml"}
-		if resolved, err := resolveWorkflowFile(globalPaths...); err != nil {
+		globalRoot = filepath.Join(home, ".agent-runner", "workflows")
+		if resolved, found, err := resolveWorkflowCatalogGroup(globalRoot, arg); err != nil {
 			return "", err
-		} else if resolved != "" {
+		} else if found {
 			return resolved, nil
 		}
 	} else {
 		homeErr = err
 	}
 
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("workflow %q not found (%s); failed to get cwd: %w", arg, triedWorkflowPaths(localPaths, globalPaths), err)
+	searched := []string{projectRoot}
+	if globalRoot != "" {
+		searched = append(searched, globalRoot)
 	}
+	message := fmt.Sprintf("logical workflow %q not found (searched %s)", arg, strings.Join(searched, ", "))
 	if homeErr != nil {
-		return "", fmt.Errorf("workflow %q not found in %s (%s; home dir lookup failed: %v)", arg, cwd, triedWorkflowPaths(localPaths, globalPaths), homeErr)
+		message += "; global workflow directory was unavailable"
 	}
-	return "", fmt.Errorf("workflow %q not found in %s (%s)", arg, cwd, triedWorkflowPaths(localPaths, globalPaths))
+	if logicalName, ok := dotlessVersionLaunchHint(arg); ok {
+		message += fmt.Sprintf("; launch logical workflow %q to select its latest version", logicalName)
+	}
+	return "", errors.New(message)
 }
 
-func resolveWorkflowFile(paths ...string) (string, error) {
-	for _, path := range paths {
-		if _, err := os.Stat(path); err == nil {
-			return path, nil
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("stat %s: %w", path, err)
+func resolveWorkflowCatalogGroup(root, logicalName string) (resolved string, found bool, err error) {
+	var candidates []string
+	err = fs.WalkDir(os.DirFS(root), ".", func(candidatePath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(candidatePath))
+		if ext == ".yaml" || ext == ".yml" {
+			candidates = append(candidates, filepath.ToSlash(candidatePath))
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("read workflow source %s: %w", root, err)
+	}
+
+	group, found := workflowcatalog.Build(candidates).Lookup(logicalName)
+	if !found {
+		return "", false, nil
+	}
+	if group.Err != nil {
+		return "", true, qualifyWorkflowGroupError(root, group.Err)
+	}
+	if group.Selected == nil {
+		return "", true, fmt.Errorf("logical workflow %q has no selectable definition in %s", logicalName, root)
+	}
+	return filepath.Join(root, filepath.FromSlash(group.Selected.Path)), true, nil
+}
+
+func qualifyWorkflowGroupError(root string, groupErr *workflowcatalog.GroupError) *workflowcatalog.GroupError {
+	qualified := *groupErr
+	qualified.InvalidFilenames = append([]workflowcatalog.FilenameError(nil), groupErr.InvalidFilenames...)
+	for i := range qualified.InvalidFilenames {
+		qualified.InvalidFilenames[i].Path = filepath.Join(root, filepath.FromSlash(qualified.InvalidFilenames[i].Path))
+	}
+	qualified.DuplicateVersions = append([]workflowcatalog.DuplicateVersionError(nil), groupErr.DuplicateVersions...)
+	for i := range qualified.DuplicateVersions {
+		qualified.DuplicateVersions[i].Paths = append([]string(nil), qualified.DuplicateVersions[i].Paths...)
+		for j := range qualified.DuplicateVersions[i].Paths {
+			qualified.DuplicateVersions[i].Paths[j] = filepath.Join(root, filepath.FromSlash(qualified.DuplicateVersions[i].Paths[j]))
 		}
 	}
-	return "", nil
+	return &qualified
 }
 
-func triedWorkflowPaths(groups ...[]string) string {
-	var paths []string
-	for _, group := range groups {
-		paths = append(paths, group...)
+func versionFreeLaunchHint(arg string) (string, bool) {
+	normalized := filepath.ToSlash(strings.TrimSpace(arg))
+	ext := strings.ToLower(filepath.Ext(normalized))
+	hadYAMLExtension := ext == ".yaml" || ext == ".yml"
+	if hadYAMLExtension {
+		normalized = strings.TrimSuffix(normalized, filepath.Ext(normalized))
 	}
-	return "tried " + strings.Join(paths, ", ")
+	matches := versionedLaunchPattern.FindStringSubmatch(normalized)
+	if matches == nil {
+		return "", false
+	}
+	logicalName := matches[1]
+	if hadYAMLExtension && strings.Contains(logicalName, "/") {
+		logicalName = pathBase(logicalName)
+	}
+	return logicalName, logicalName != ""
+}
+
+func dotlessVersionLaunchHint(arg string) (string, bool) {
+	slash := strings.LastIndex(arg, "/")
+	prefix, finalName := "", arg
+	if slash >= 0 {
+		prefix, finalName = arg[:slash+1], arg[slash+1:]
+	}
+	matches := dotlessVersionAttemptPattern.FindStringSubmatch(finalName)
+	if len(matches) < 2 || matches[1] == "" {
+		return "", false
+	}
+	return prefix + matches[1], true
+}
+
+func pathBase(value string) string {
+	if slash := strings.LastIndex(value, "/"); slash >= 0 {
+		return value[slash+1:]
+	}
+	return value
 }
 
 func handleRunWithResult(args []string, liveOpts liveTUIOptions) liveTUIResult {

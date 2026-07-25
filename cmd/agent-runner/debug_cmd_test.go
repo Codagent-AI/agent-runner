@@ -20,16 +20,43 @@ import (
 func TestHandleDebugShowWorkflow(t *testing.T) {
 	t.Run("builtin ref prints embedded bytes", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
-		code := handleDebug([]string{"--show-workflow", "core:finalize-pr"}, &stdout, &stderr)
+		code := handleDebug([]string{"--show-workflow", "openspec:change"}, &stdout, &stderr)
 		if code != 0 {
 			t.Fatalf("handleDebug() = %d, stderr: %s", code, stderr.String())
 		}
-		want, err := builtinworkflows.ReadFile("builtin:core/finalize-pr-v1.0.yaml")
+		want, err := builtinworkflows.ReadFile("builtin:openspec/change-v2.0.yaml")
 		if err != nil {
 			t.Fatalf("read builtin: %v", err)
 		}
 		if diff := cmp.Diff(string(want), stdout.String()); diff != "" {
 			t.Fatalf("stdout mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("exact builtin ref prints historical embedded bytes", func(t *testing.T) {
+		const ref = "builtin:openspec/change-v1.0.yaml"
+		want, err := builtinworkflows.ReadFile(ref)
+		if err != nil {
+			t.Fatalf("read exact builtin: %v", err)
+		}
+		var stdout, stderr bytes.Buffer
+		code := handleDebug([]string{"--show-workflow", ref}, &stdout, &stderr)
+		if code != 0 {
+			t.Fatalf("handleDebug() = %d, stderr: %s", code, stderr.String())
+		}
+		if diff := cmp.Diff(string(want), stdout.String()); diff != "" {
+			t.Fatalf("stdout mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("namespaced version shorthand requires exact builtin ref", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		code := handleDebug([]string{"--show-workflow", "openspec:change-v1.0"}, &stdout, &stderr)
+		if code == 0 {
+			t.Fatal("handleDebug() = 0, want non-zero")
+		}
+		if want := "builtin:openspec/change-v1.0.yaml"; !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr = %q, want exact ref %q", stderr.String(), want)
 		}
 	})
 
@@ -68,6 +95,17 @@ func TestHandleDebugShowWorkflow(t *testing.T) {
 			t.Fatal("handleDebug() = 0, want non-zero")
 		}
 		if !strings.Contains(stderr.String(), "parse") {
+			t.Fatalf("stderr = %q, want parse error", stderr.String())
+		}
+	})
+
+	t.Run("illegal namespaced ref is parse error", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		code := handleDebug([]string{"--show-workflow", "core:team/deploy"}, &stdout, &stderr)
+		if code == 0 {
+			t.Fatal("handleDebug() = 0, want non-zero")
+		}
+		if !strings.Contains(stderr.String(), "parse workflow ref") {
 			t.Fatalf("stderr = %q, want parse error", stderr.String())
 		}
 	})

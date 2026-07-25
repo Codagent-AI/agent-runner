@@ -2,6 +2,7 @@
 package prevalidate
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os/exec"
@@ -330,7 +331,18 @@ func (s *walkState) walkSubWorkflowStep(path string, step *model.Step, params ma
 	if err != nil || subPath == "" {
 		return err
 	}
-	return s.walkFile(subPath, subParams, true, currentOrigin)
+	err = s.walkFile(subPath, subParams, true, currentOrigin)
+	if err == nil {
+		return nil
+	}
+	var validationErr ValidationError
+	if errors.As(err, &validationErr) && validationErr.StepID == "" {
+		validationErr.StepID = step.ID
+		validationErr.Field = "workflow"
+		validationErr.Value = step.Workflow
+		return validationErr
+	}
+	return err
 }
 
 func (s *walkState) walkNestedSteps(path string, step *model.Step, params map[string]string, paramNames, captured map[string]bool, currentOrigin, parentOrigin *agentOrigin) error {

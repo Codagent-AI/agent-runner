@@ -157,6 +157,42 @@ steps:
 		}
 	})
 
+	t.Run("keeps exact versioned child path", func(t *testing.T) {
+		dir := t.TempDir()
+		writeWorkflow(t, dir, "child-v1.0.yaml", `
+name: child
+sessions:
+  - name: planner
+    agent: planner-profile
+steps:
+  - id: leaf
+    prompt: leaf
+    session: planner
+`)
+		writeWorkflow(t, dir, "child-v2.0.yaml", `
+name: child
+sessions:
+  - name: planner
+    agent: conflicting-profile
+steps:
+  - id: leaf
+    prompt: leaf
+    session: planner
+`)
+		root := writeWorkflow(t, dir, "root-v1.0.yaml", `
+name: root
+sessions:
+  - name: planner
+    agent: planner-profile
+steps:
+  - id: call
+    workflow: child-v1.0.yaml
+`)
+		if err := ValidateComposition(root); err != nil {
+			t.Fatalf("ValidateComposition selected a different child version: %v", err)
+		}
+	})
+
 	t.Run("skips interpolated sub-workflow paths", func(t *testing.T) {
 		dir := t.TempDir()
 		root := writeWorkflow(t, dir, "root-v1.0.yaml", `
