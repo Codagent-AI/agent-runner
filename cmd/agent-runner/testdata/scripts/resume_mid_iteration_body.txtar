@@ -10,7 +10,7 @@
 exec sh -c 'mkdir -p items && echo a > items/a.txt && echo b > items/b.txt'
 
 # First run fails at iter 0's fail-once step.
-! exec agent-runner .agent-runner/workflows/workflow-v1.0.yaml
+! exec agent-runner workflow
 stdout 'step "process" failed'
 
 # pass-a ran once in iter 0 (created its marker file).

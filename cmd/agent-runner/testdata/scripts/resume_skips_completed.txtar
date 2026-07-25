@@ -5,7 +5,7 @@
 # and step 2 re-runs (now succeeds because we create the missing file).
 
 # First run: step 1 succeeds, step 2 fails.
-! exec agent-runner .agent-runner/workflows/workflow-v1.0.yaml
+! exec agent-runner workflow
 stdout 'step "fail-once" failed'
 
 # Verify step 1 ran and created its marker.

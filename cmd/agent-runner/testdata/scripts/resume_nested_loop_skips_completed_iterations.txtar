@@ -5,7 +5,7 @@
 exec sh -c 'mkdir -p items && echo a > items/a.txt && echo b > items/b.txt && echo c > items/c.txt'
 
 # First run: iteration 0 succeeds, iteration 1 fails (no trigger).
-! exec agent-runner .agent-runner/workflows/top-v1.0.yaml
+! exec agent-runner top
 stdout 'step "outer" failed'
 
 exec cat counter-a.txt

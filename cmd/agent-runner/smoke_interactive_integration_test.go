@@ -64,9 +64,9 @@ func TestInteractiveDirectHandoffWorkflowIntegration(t *testing.T) {
 
 	buildAgentRunner(t, repoRoot, runnerBin)
 	writeInteractiveAgentFixtures(t, binDir, []string{"claude"})
-	workflowPath := writeInteractiveDirectHandoffWorkflow(t, tmp)
+	writeInteractiveDirectHandoffWorkflow(t, filepath.Join(home, ".agent-runner", "workflows"))
 
-	cmd := exec.Command(runnerBin, "--headless", workflowPath)
+	cmd := exec.Command(runnerBin, "--headless", "interactive-direct-handoff-integration")
 	cmd.Dir = repoRoot
 	cmd.Env = append(os.Environ(),
 		"AGENT_RUNNER_NO_TUI=1",
@@ -115,7 +115,7 @@ func TestInteractiveDirectHandoffJobControl(t *testing.T) {
 	for _, mode := range []string{"cooperative", "external"} {
 		t.Run(mode, func(t *testing.T) {
 			home := filepath.Join(tmp, "home-"+mode)
-			workflow := writeJobControlWorkflow(t, t.TempDir())
+			writeJobControlWorkflow(t, filepath.Join(home, ".agent-runner", "workflows"))
 			command := exec.Command(shell, "-f")
 			command.Dir = repoRoot
 			command.Env = append(os.Environ(), "PS1=JOB_SHELL_READY> ", "HOME="+home,
@@ -129,7 +129,7 @@ func TestInteractiveDirectHandoffJobControl(t *testing.T) {
 			go scanPTYText(ptmx, output)
 			waitForPTYText(t, output, "JOB_SHELL_READY>", 5*time.Second)
 			launch := fmt.Sprintf("AGENT_RUNNER_NO_TUI=1 %s=1 %s=%s %s --headless %s\r",
-				interactiveFixtureEnv, jobControlFixtureEnv, mode, runnerBin, workflow)
+				interactiveFixtureEnv, jobControlFixtureEnv, mode, runnerBin, "interactive-job-control")
 			_, _ = ptmx.WriteString(launch)
 			ready := waitForPTYText(t, output, "JOB_CHILD_READY "+mode+" ", 30*time.Second)
 			match := regexp.MustCompile(`JOB_CHILD_READY ` + mode + ` ([0-9]+)`).FindStringSubmatch(ready)
@@ -174,7 +174,7 @@ func TestInteractiveShellDirectTerminalHandoffE2E(t *testing.T) {
 	home := t.TempDir()
 	runnerBin := filepath.Join(tmp, "agent-runner")
 	buildAgentRunner(t, repoRoot, runnerBin)
-	workflowPath := writeDirectShellWorkflow(t, tmp, currentTestBinary(t))
+	writeDirectShellWorkflow(t, filepath.Join(home, ".agent-runner", "workflows"), currentTestBinary(t))
 
 	command := exec.Command(currentTestBinary(t), "-test.run=^TestInteractiveShellDirectHandoffFixtureProcess$")
 	command.Dir = repoRoot
@@ -182,7 +182,7 @@ func TestInteractiveShellDirectTerminalHandoffE2E(t *testing.T) {
 		"HOME="+home,
 		directShellFixtureEnv+"=1",
 		directShellRunnerEnv+"="+runnerBin,
-		directShellWorkflowEnv+"="+workflowPath,
+		directShellWorkflowEnv+"=interactive-shell-direct-handoff",
 	)
 	output, err := runCommandInPTY(command, 30*time.Second)
 	if err != nil {
@@ -368,9 +368,7 @@ steps:
     session: new
     prompt: "Exercise job control."
 `)
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestFile(t, path, string(data))
 	return path
 }
 
@@ -384,9 +382,7 @@ steps:
       %s=1 %q -test.run='^TestInteractiveShellDirectChildProcess$'
     mode: interactive
 `, directShellChildEnv, testBinary))
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestFile(t, path, string(data))
 	return path
 }
 
@@ -439,9 +435,7 @@ steps:
     session: resume
     prompt: "Wait for the integration controller again."
 `)
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("write direct-handoff integration workflow: %v", err)
-	}
+	writeTestFile(t, path, string(data))
 	return path
 }
 

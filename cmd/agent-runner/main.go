@@ -1495,25 +1495,35 @@ func resolveWorkflowArg(arg string) (string, error) {
 }
 
 func resolveWorkflowCatalogGroup(root, logicalName string) (resolved string, found bool, err error) {
-	var candidates []string
-	err = fs.WalkDir(os.DirFS(root), ".", func(candidatePath string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		ext := strings.ToLower(filepath.Ext(candidatePath))
-		if ext == ".yaml" || ext == ".yml" {
-			candidates = append(candidates, filepath.ToSlash(candidatePath))
-		}
-		return nil
-	})
+	logicalDir := "."
+	if slash := strings.LastIndex(logicalName, "/"); slash >= 0 {
+		logicalDir = logicalName[:slash]
+	}
+	scanRoot := root
+	if logicalDir != "." {
+		scanRoot = filepath.Join(root, filepath.FromSlash(logicalDir))
+	}
+	entries, err := os.ReadDir(scanRoot)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", false, nil
 		}
-		return "", false, fmt.Errorf("read workflow source %s: %w", root, err)
+		return "", false, fmt.Errorf("read workflow source %s: %w", scanRoot, err)
+	}
+
+	var candidates []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(entry.Name()))
+		if ext == ".yaml" || ext == ".yml" {
+			candidatePath := entry.Name()
+			if logicalDir != "." {
+				candidatePath = logicalDir + "/" + candidatePath
+			}
+			candidates = append(candidates, candidatePath)
+		}
 	}
 
 	group, found := workflowcatalog.Build(candidates).Lookup(logicalName)

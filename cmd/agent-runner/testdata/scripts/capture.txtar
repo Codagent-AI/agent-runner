@@ -1,5 +1,5 @@
 # Test that shell step capture + interpolation works.
-exec agent-runner .agent-runner/workflows/workflow-v1.0.yaml
+exec agent-runner workflow
 stdout 'captured:hello'
 
 -- .agent-runner/workflows/workflow-v1.0.yaml --

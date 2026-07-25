@@ -1,5 +1,5 @@
 # Test that a successful workflow preserves state.json with completed=true.
-exec agent-runner .agent-runner/workflows/workflow-v1.0.yaml
+exec agent-runner workflow
 exec find .agent-runner -name state.json
 stdout state\.json
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -119,6 +120,31 @@ func TestResolveWorkflowArgUsesLogicalVersionCatalogs(t *testing.T) {
 		writeLogicalWorkflow(t, filepath.Join(project, want), "deploy-v1")
 
 		got, err := resolveWorkflowArg("deploy-v1")
+		if err != nil {
+			t.Fatalf("resolveWorkflowArg returned error: %v", err)
+		}
+		if got != want {
+			t.Fatalf("resolveWorkflowArg = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("unreadable unrelated directory does not block root group", func(t *testing.T) {
+		project, _ := setupLogicalLaunchDirs(t)
+		want := filepath.Join(".agent-runner", "workflows", "deploy-v1.0.yaml")
+		writeLogicalWorkflow(t, filepath.Join(project, want), "deploy")
+		unrelated := filepath.Join(project, ".agent-runner", "workflows", "unrelated")
+		if err := os.MkdirAll(unrelated, 0o755); err != nil {
+			t.Fatalf("mkdir unrelated workflow directory: %v", err)
+		}
+		if err := os.Chmod(unrelated, 0); err != nil {
+			t.Fatalf("make unrelated workflow directory unreadable: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(unrelated, 0o755) })
+		if _, err := os.ReadDir(unrelated); err == nil {
+			t.Skip("test process can read mode-000 directories")
+		}
+
+		got, err := resolveWorkflowArg("deploy")
 		if err != nil {
 			t.Fatalf("resolveWorkflowArg returned error: %v", err)
 		}
