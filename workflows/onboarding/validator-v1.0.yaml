@@ -59,7 +59,7 @@ steps:
     prompt: |
       Help the user configure Agent Validator for this project.
 
-      You MUST use the agent-validator:validator-setup skill to configure checks and reviews. Explain the choices briefly, keep the setup practical, and complete the step once the validator configuration is ready.
+      You MUST use the agent-validator:validator-setup skill to configure checks and reviews. Explain the choices briefly, keep the setup practical, and complete the step once the validator configuration is ready. For any commit created by the skill, follow the project's commit message conventions and prepend [{{step_id}}].
 
   - id: restore-guided-changes
     command: |

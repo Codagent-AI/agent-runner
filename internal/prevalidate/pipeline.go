@@ -192,6 +192,11 @@ func (s *walkState) walkFile(path string, params map[string]string, isSub bool, 
 	if err != nil {
 		return ValidationError{File: path, Message: err.Error()}
 	}
+	if isSub {
+		if err := validateRequiredSubWorkflowParams(path, workflow.Params, params); err != nil {
+			return err
+		}
+	}
 	if err := createEngine(path, &workflow); err != nil {
 		return err
 	}
@@ -257,6 +262,21 @@ func bindParamDefaults(params []model.Param, bound map[string]string) map[string
 		}
 	}
 	return out
+}
+
+func validateRequiredSubWorkflowParams(path string, declared []model.Param, bound map[string]string) error {
+	for i := range declared {
+		param := &declared[i]
+		if _, ok := bound[param.Name]; ok || param.Default != "" || !param.IsRequired() {
+			continue
+		}
+		return ValidationError{
+			File:    path,
+			Value:   param.Name,
+			Message: fmt.Sprintf("missing required parameter %q", param.Name),
+		}
+	}
+	return nil
 }
 
 func workflowParamNames(params []model.Param) map[string]bool {

@@ -168,6 +168,7 @@ func TestResolveWorkflowArgValidatesFreshLaunchName(t *testing.T) {
 		{name: "versioned filename", arg: "deploy-v1.0.yaml", want: `launch logical workflow "deploy"`},
 		{name: "version-bearing name", arg: "deploy-v2.0", want: `launch logical workflow "deploy"`},
 		{name: "version-bearing path-style name", arg: "team/deploy-v2.0", want: `launch logical workflow "team/deploy"`},
+		{name: "exact builtin reference", arg: "builtin:openspec/change-v1.0.yaml", want: `launch logical workflow "openspec:change"`},
 		{name: "uppercase", arg: "Deploy", want: "must be lowercase"},
 		{name: "mixed namespace and path", arg: "core:team/deploy", want: "invalid workflow name"},
 		{name: "leading slash", arg: "/team/deploy", want: "invalid workflow name"},

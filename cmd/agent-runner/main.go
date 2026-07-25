@@ -1582,6 +1582,11 @@ func versionFreeLaunchHint(arg string) (string, bool) {
 
 func logicalNameFromRejectedPath(candidate string) string {
 	candidate = strings.TrimPrefix(pathpkg.Clean(candidate), "./")
+	if builtinPath := strings.TrimPrefix(candidate, "builtin:"); builtinPath != candidate {
+		if namespace, logicalName, ok := strings.Cut(builtinPath, "/"); ok && namespace != "" && logicalName != "" {
+			return namespace + ":" + logicalName
+		}
+	}
 	parts := strings.Split(candidate, "/")
 	for index := len(parts) - 2; index >= 0; index-- {
 		if parts[index] != "workflows" {

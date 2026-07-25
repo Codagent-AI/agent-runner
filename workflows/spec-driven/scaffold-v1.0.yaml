@@ -81,7 +81,7 @@ steps:
 
       You MUST use the agent-validator:validator-setup skill to configure checks and reviews. Base the setup on the project files, stack, and commands created by the scaffold step. Keep the configuration practical for a brand new project.
 
-      The initial project scaffold has already been committed. If the validator setup skill creates or changes validator configuration, follow that skill's commit guidance.
+      The initial project scaffold has already been committed. If the validator setup skill creates or changes validator configuration, follow that skill's commit guidance, the project's commit message conventions, and prepend [{{step_id}}].
 
   - id: run-validator
     workflow: ../core/run-validator-v1.0.yaml
@@ -114,7 +114,7 @@ steps:
       - run `git remote -v`
       - run `gh auth status`
 
-      If there are uncommitted changes, explain them to the user and ask whether to commit them before publishing. Do not push a dirty working tree without user approval.
+      If there are uncommitted changes, explain them to the user and ask whether to commit them before publishing. If the user approves a commit, follow the project's commit message conventions and prepend [{{step_id}}]. Do not push a dirty working tree without user approval.
 
       If an `origin` remote already exists, confirm with the user that this is the remote to push to, then run `git push -u origin HEAD`.
 

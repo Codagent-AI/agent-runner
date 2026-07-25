@@ -151,6 +151,37 @@ steps:
 	}
 }
 
+func TestPipelineRejectsMissingRequiredSubWorkflowParamByMode(t *testing.T) {
+	dir := t.TempDir()
+	writeWorkflow(t, dir, "child-v1.0.yaml", `
+name: child
+params:
+  - name: release
+steps:
+  - id: use-release
+    command: echo "{{release}}"
+`)
+	root := writeWorkflow(t, dir, "root-v1.0.yaml", `
+name: root
+steps:
+  - id: call-child
+    workflow: child-v1.0.yaml
+`)
+	opts, _, _ := fakeOptions(t, &config.Config{})
+
+	for _, mode := range []Mode{Strict, Lenient} {
+		_, err := Pipeline(root, nil, mode, opts)
+		if err == nil {
+			t.Fatalf("mode %v: Pipeline error = nil, want missing required child parameter", mode)
+		}
+		for _, want := range []string{"child-v1.0.yaml", "call-child", "release", "missing required parameter"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("mode %v: Pipeline error = %q, want substring %q", mode, err, want)
+			}
+		}
+	}
+}
+
 func TestPipelineRejectsCapturedWorkflowPath(t *testing.T) {
 	dir := t.TempDir()
 	root := writeWorkflow(t, dir, "root-v1.0.yaml", `

@@ -105,6 +105,13 @@ func TestResolveSelectsLatestVersionWhileExactReadsRemainAvailable(t *testing.T)
 	if _, err := ReadFile("builtin:openspec/change-v1.0.yaml"); err != nil {
 		t.Fatalf("ReadFile exact older version: %v", err)
 	}
+	latest, err := ReadFile(ref)
+	if err != nil {
+		t.Fatalf("ReadFile latest version: %v", err)
+	}
+	if strings.Contains(string(latest), "openspec:change2") {
+		t.Fatalf("latest openspec:change still contains legacy openspec:change2 user-facing text")
+	}
 	if legacy, err := Resolve("openspec:change2"); err == nil {
 		t.Fatalf("Resolve(openspec:change2) = %q, want not found", legacy)
 	}
