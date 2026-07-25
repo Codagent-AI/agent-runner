@@ -1,0 +1,9 @@
+- [ ] Implement the change described by these files:
+  - [proposal.md](proposal.md)
+  - [design.md](design.md)
+  - [specs/step-model/spec.md](specs/step-model/spec.md)
+  - [specs/agent-calls/spec.md](specs/agent-calls/spec.md)
+  - [specs/cli-adapter/spec.md](specs/cli-adapter/spec.md)
+  - [specs/step-control-channel/spec.md](specs/step-control-channel/spec.md)
+  - [specs/builtin-workflows/spec.md](specs/builtin-workflows/spec.md)
+  - [specs/call-agent-skill/spec.md](specs/call-agent-skill/spec.md)
