@@ -263,7 +263,7 @@ func renderAgentCallBlock(node *StepNode, indent, width int, loadedFull bool, pu
 		lines = append(lines, renderWrappedText(node.ErrorMessage, contentWidth)...)
 	}
 	lines = append(lines, renderAgentOutput(node, contentWidth, loadedFull, pulsePhase, runActive)...)
-	if node.Status == StatusSuccess && node.SessionID != "" && !runActive {
+	if node.Status != StatusPending && node.Status != StatusInProgress && node.SessionID != "" && !runActive {
 		lines = append(lines, "", tuistyle.AccentStyle.Render("enter → resume session"))
 	}
 	return lines

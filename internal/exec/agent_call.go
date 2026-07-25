@@ -172,15 +172,16 @@ func (h *AgentCallHandler) HandleAgentCall(ctx context.Context, envelope control
 	if h.options.OnFinished != nil {
 		h.options.OnFinished(h.lifecycleEvent(record, resolved.target))
 	}
-	raw := marshalAgentCallResponse(execution.response)
-	if execution.response.Result != nil && !control.FitsAgentCallPayload(raw) {
-		execution.response = acceptedFailure(
-			record,
-			agentcall.CodeResultTooLarge,
-			fmt.Sprintf("called agent result exceeds the %d-byte control message limit; inspect the persisted call output", control.MaxControlMessageBytes),
-			resolved.target,
-		)
+	var raw json.RawMessage
+	if successfulAgentCallResponseDefinitelyTooLarge(execution.response) {
+		execution.response = oversizedAgentCallFailure(record, resolved.target)
 		raw = marshalAgentCallResponse(execution.response)
+	} else {
+		raw = marshalAgentCallResponse(execution.response)
+		if execution.response.Result != nil && !control.FitsAgentCallPayload(raw) {
+			execution.response = oversizedAgentCallFailure(record, resolved.target)
+			raw = marshalAgentCallResponse(execution.response)
+		}
 	}
 	h.mu.Lock()
 	record.response = raw
@@ -202,6 +203,11 @@ func waitForAgentCallResponse(ctx context.Context, call *acceptedAgentCall) json
 	case <-call.done:
 		return append(json.RawMessage(nil), call.response...)
 	case <-ctx.Done():
+		select {
+		case <-call.done:
+			return append(json.RawMessage(nil), call.response...)
+		default:
+		}
 		return marshalAgentCallResponse(acceptedFailure(
 			call,
 			agentcall.CodeCallCanceled,
@@ -572,6 +578,23 @@ func acceptedFailure(record *acceptedAgentCall, code, message string, target age
 
 func callFailure(code, message string, target agentcall.Target) *agentcall.Error {
 	return &agentcall.Error{Code: code, Message: message, Target: &target}
+}
+
+func successfulAgentCallResponseDefinitelyTooLarge(response agentcall.Response) bool {
+	if response.Result == nil {
+		return false
+	}
+	const minimumResultEnvelopeBytes = len(`{"result":{"target":{"kind":"","name":""},"response":""}}`)
+	return len(response.Result.Response) > control.MaxControlMessageBytes-minimumResultEnvelopeBytes
+}
+
+func oversizedAgentCallFailure(record *acceptedAgentCall, target agentcall.Target) agentcall.Response {
+	return acceptedFailure(
+		record,
+		agentcall.CodeResultTooLarge,
+		fmt.Sprintf("called agent result exceeds the %d-byte control message limit; inspect the persisted call output", control.MaxControlMessageBytes),
+		target,
+	)
 }
 
 func marshalAgentCallResponse(response agentcall.Response) json.RawMessage {

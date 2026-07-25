@@ -272,6 +272,21 @@ func TestAgentCallResumeRequiresInactiveTerminalKnownSession(t *testing.T) {
 	}
 }
 
+func TestFailedAgentCallDetailOffersResumeForKnownSession(t *testing.T) {
+	tree := agentCallTestTree()
+	tree.ApplyEvent(agentCallStartEvent("call-1", "attempt-1", "agent", "implementor"))
+	tree.ApplyEvent(agentCallEndEvent("call-1", "attempt-1", "agent", "implementor", "failed", true, 1000, nil, nil))
+	call := tree.Root.Children[0].Children[0]
+	call.SessionID = "child-session"
+	call.AgentCLI = "codex"
+
+	lines, _ := buildLogLines([]*StepNode{call}, nil, 100, map[string]bool{call.NodeKey(): true}, 0, false, ResolverConfig{})
+	plain := tuistyle.Sanitize(strings.Join(lines, "\n"))
+	if !strings.Contains(plain, "enter → resume session") {
+		t.Fatalf("resumable failed call detail omitted resume hint:\n%s", plain)
+	}
+}
+
 func TestAgentCallPersistedOutputLoadIsMemoryBounded(t *testing.T) {
 	sessionDir := t.TempDir()
 	tree := agentCallTestTree()

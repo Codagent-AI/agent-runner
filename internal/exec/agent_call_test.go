@@ -28,6 +28,20 @@ type callTestAdapter struct {
 	probeErr   error
 }
 
+type simultaneousDoneContext struct {
+	context.Context
+	done <-chan struct{}
+}
+
+func (c simultaneousDoneContext) Done() <-chan struct{} { return c.done }
+func (c simultaneousDoneContext) Err() error            { return context.Canceled }
+
+type passthroughCallAdapter struct {
+	callTestAdapter
+}
+
+func (a *passthroughCallAdapter) FilterOutput(raw string) string { return raw }
+
 func (a *callTestAdapter) BuildArgs(input *cli.BuildArgsInput) []string {
 	a.mu.Lock()
 	a.inputs = append(a.inputs, *input)
@@ -510,6 +524,28 @@ func TestAgentCallHandlerReturnsStructuredErrorForOversizedSuccessfulResult(t *t
 	}
 }
 
+func TestAgentCallHandlerRejectsObviouslyOversizedResultBeforeEncodingIt(t *testing.T) {
+	largeResult := strings.Repeat("x", control.MaxControlMessageBytes)
+	runner := &callTestRunner{result: ProcessResult{Started: true, Stdout: largeResult}}
+	options := testAgentCallOptions(t.TempDir(), runner, &passthroughCallAdapter{})
+	request := control.AgentCallRequest{
+		RequestID: "oversized-allocation",
+		Payload:   json.RawMessage(`{"prompt":"large result","agent":"implementor"}`),
+	}
+
+	benchmark := testing.Benchmark(func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			response := decodeCallResponse(t, NewAgentCallHandler(options).HandleAgentCall(context.Background(), request))
+			if response.Error == nil || response.Error.Code != agentcall.CodeResultTooLarge {
+				b.Fatalf("response = %#v, want structured oversized-result error", response)
+			}
+		}
+	})
+	if got := benchmark.AllocedBytesPerOp(); got >= control.MaxControlMessageBytes {
+		t.Fatalf("oversized response allocated %d bytes/op, want less than one response-sized buffer (%d bytes)", got, control.MaxControlMessageBytes)
+	}
+}
+
 func TestAgentCallHandlerCachesAcceptedLaunchFailure(t *testing.T) {
 	adapter := &callTestAdapter{}
 	runner := &callTestRunner{err: errors.New("launch failed")}
@@ -714,6 +750,37 @@ func TestAgentCallHandlerCompletedDuplicateWinsOverCanceledContext(t *testing.T)
 	}
 	if runner.calls != 1 {
 		t.Fatalf("duplicate launched %d children, want 1", runner.calls)
+	}
+}
+
+func TestAgentCallHandlerStoredResultWinsWhenCompletionAndCancellationBecomeReadyTogether(t *testing.T) {
+	for range 100 {
+		done := make(chan struct{})
+		stored := agentcall.Response{
+			CallID: "call-1",
+			Result: &agentcall.Result{
+				Target:   agentcall.Target{Kind: agentcall.TargetAgent, Name: "implementor"},
+				Response: "done",
+			},
+		}
+		call := &acceptedAgentCall{
+			callID:   "call-1",
+			target:   agentcall.Target{Kind: agentcall.TargetAgent, Name: "implementor"},
+			done:     done,
+			response: marshalAgentCallResponse(stored),
+		}
+		ctx := simultaneousDoneContext{Context: context.Background(), done: done}
+		result := make(chan agentcall.Response, 1)
+		go func() {
+			result <- decodeCallResponse(t, waitForAgentCallResponse(ctx, call))
+		}()
+		time.Sleep(time.Millisecond)
+		close(done)
+
+		got := <-result
+		if got.Error != nil || got.Result == nil || got.CallID != stored.CallID {
+			t.Fatalf("simultaneous completion/cancellation returned %#v, want stored result %#v", got, stored)
+		}
 	}
 }
 
