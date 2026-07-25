@@ -111,7 +111,10 @@ See [Run State And Audit](run-state-and-audit.md) for the full run-directory lay
 
 Runs created before metrics collection have no structured usage or cost records. They open in the original detail view instead of an empty summary, and their agent blocks omit usage and cost lines.
 
-If the original workflow file was deleted or moved, Agent Runner reconstructs the executed top-level steps from `audit.log`. Audit recovery can show steps that actually ran, but it cannot recreate pending steps that never emitted an event.
+If the exact recorded workflow file was deleted or moved, Agent Runner does not
+substitute a newer logical version. For inspection, it reconstructs the
+executed top-level steps from `audit.log`. Audit recovery can show steps that
+actually ran, but it cannot recreate pending steps that never emitted an event.
 
 ## Testing Cost Collection
 

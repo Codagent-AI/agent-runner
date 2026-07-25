@@ -68,6 +68,11 @@ The TUI opens on the workflow browser, where you can filter workflows, view curr
 
 `-validate` accepts workflow parameters only as `key=value`. Normal runs accept positional parameters, `key=value` parameters, or a mix of both.
 
+Commands use version-free logical workflow names. Authored files use names such
+as `deploy-v1.0.yaml`, but start with `agent-runner deploy`; Agent Runner picks
+the latest version. Sub-workflow references inside YAML pin exact versioned
+filenames.
+
 ## TUI Shortcuts
 
 | Shortcut | Location | Action |

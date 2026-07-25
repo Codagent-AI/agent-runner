@@ -33,8 +33,9 @@ type ResolvedWorkflow struct {
 //  1. state.WorkflowFile as an absolute path;
 //  2. state.WorkflowFile relative to the run's recorded cwd from meta.json;
 //  3. state.WorkflowFile relative to the current process cwd;
-//  4. discovery by state.WorkflowName (or the name parsed from the session
-//     ID) under a discovered workflows/ root.
+//  4. for legacy state with no recorded workflow file, discovery by
+//     state.WorkflowName (or the name parsed from the session ID) under a
+//     discovered workflows/ root.
 //
 // Roots (WorkflowsRoot, RepoRoot) are filled whenever they can be derived
 // from the resolved workflow path or from a discoverable workflows/ dir in
@@ -73,16 +74,19 @@ func ResolveWorkflow(sessionDir, projectDir string, state *model.RunState) (Reso
 		return out, true
 	}
 
-	// (4) — discovery by name.
-	name := state.WorkflowName
-	if name == "" {
-		name = parseWorkflowNameFromID(filepath.Base(sessionDir))
-	}
-	if name != "" {
-		if p, ok := findWorkflowByName(name, bases); ok {
-			out.AbsPath = p
-			out.WorkflowsRoot, out.RepoRoot = rootsFor(p, bases)
-			return out, true
+	// (4) — legacy discovery by name. Once a run records a workflow file,
+	// that exact path is authoritative and a newer sibling must not replace it.
+	if state.WorkflowFile == "" {
+		name := state.WorkflowName
+		if name == "" {
+			name = parseWorkflowNameFromID(filepath.Base(sessionDir))
+		}
+		if name != "" {
+			if p, ok := findWorkflowByName(name, bases); ok {
+				out.AbsPath = p
+				out.WorkflowsRoot, out.RepoRoot = rootsFor(p, bases)
+				return out, true
+			}
 		}
 	}
 

@@ -21,7 +21,7 @@ Important files:
 
 | File | Purpose |
 | --- | --- |
-| `state.json` | Resume state, current step, session IDs, params, captures, nested progress, and completion flag. |
+| `state.json` | Resume state, exact workflow file, workflow hash, current step, session IDs, params, captures, nested progress, and completion flag. |
 | `audit.log` | JSONL event log for the run. |
 | `run-metrics.json` | Versioned per-execution metrics, execution sessions, and run totals. |
 | `output/` | Per-step and per-agent-call output files used by the live run view and workflows. |
@@ -44,6 +44,31 @@ Audit events include:
 | `agent_call_start` | An authenticated, validated agent call was accepted. |
 | `agent_call_end` | An accepted agent call succeeded, failed, or was canceled. |
 | `error` | An error was recorded. |
+
+`run_start` records the exact versioned workflow path selected for the run, its
+version-free YAML name, the content hash, and all params. A sub-workflow
+`step_start` records the exact resolved child path and interpolated params;
+`sub_workflow_start` and `sub_workflow_end` preserve the nested lifecycle.
+
+## Recorded Workflow Versions
+
+`state.json` keeps the selected physical path in `workflowFile`. That filename
+is the run's version authority; there is no separate version field. Resume
+reloads that exact file and never substitutes a newer logical sibling. If the
+file's contents changed in place, the saved `workflowHash` produces a warning
+and resume continues with the current contents. If the recorded version is
+missing, resume fails instead of selecting another version.
+
+Legacy unfinished state that records an unversioned on-disk filename must be
+migrated to a versioned filename. A legacy `builtin:` run cannot be migrated by
+renaming an embedded file: restart it with the current binary or finish it with
+the older binary that created it.
+
+Completed runs are read-only inspection, not resume execution. They remain
+inspectable when the recorded definition is missing or unversioned as long as
+saved state and audit evidence can reconstruct the view. Saved-run breadcrumbs
+show the recorded `v<major>.<minor>` label, or `unversioned` for legacy state;
+live runs and definition previews remain version-neutral.
 
 ## Run Metrics
 

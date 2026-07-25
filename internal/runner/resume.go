@@ -10,6 +10,8 @@ import (
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/stateio"
+	"github.com/codagent/agent-runner/internal/workflowcatalog"
+	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
 // ErrAlreadyCompleted is returned by PrepareResume and ResumeWorkflow when
@@ -30,9 +32,9 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		return nil, ErrAlreadyCompleted
 	}
 
-	workflow, err := loader.LoadWorkflow(state.WorkflowFile, loader.Options{})
+	workflow, err := loadRecordedWorkflow(state.WorkflowFile)
 	if err != nil {
-		return nil, fmt.Errorf("cannot reload workflow: %w", err)
+		return nil, err
 	}
 
 	// Check workflow hash
@@ -128,6 +130,20 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	}
 
 	return PrepareRun(&workflow, state.Params, resumeOpts)
+}
+
+func loadRecordedWorkflow(workflowFile string) (model.Workflow, error) {
+	workflow, err := loader.LoadWorkflow(workflowFile, loader.Options{})
+	if err == nil {
+		return workflow, nil
+	}
+	var filenameErr *workflowcatalog.FilenameError
+	if builtinworkflows.IsRef(workflowFile) && errors.As(err, &filenameErr) {
+		return model.Workflow{}, fmt.Errorf(
+			"cannot reload workflow: run predates workflow versioning and cannot be resumed by the current binary; restart the workflow with the current binary or finish this run using the older binary",
+		)
+	}
+	return model.Workflow{}, fmt.Errorf("cannot reload workflow: %w", err)
 }
 
 func resumeInteractiveAttempt(state *model.RunState) *model.InteractiveAttemptMetadata {

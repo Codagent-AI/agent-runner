@@ -318,6 +318,160 @@ steps:
 	})
 }
 
+func TestExecuteSubWorkflowStep_StepStartIncludesResolvedPathAndParams(t *testing.T) {
+	dir := t.TempDir()
+	childPath := filepath.Join(dir, "child-v1.0.yaml")
+	childYAML := `name: child
+params:
+  - name: task
+steps:
+  - id: run
+    command: echo {{task}}
+`
+	if err := os.WriteFile(childPath, []byte(childYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := &mockAuditLogger{}
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		Params:       map[string]string{"task_file": "tasks/1.md"},
+		WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"),
+		AuditLogger:  recorder,
+	})
+	step := model.Step{
+		ID:       "verify",
+		Workflow: "child-v1.0.yaml",
+		Params:   map[string]string{"task": "{{task_file}}"},
+	}
+
+	outcome, err := ExecuteSubWorkflowStep(
+		&step,
+		ctx,
+		&mockRunner{results: []ProcessResult{{ExitCode: 0}}},
+		&mockGlob{},
+		&mockLogger{},
+	)
+	if err != nil || outcome != OutcomeSuccess {
+		t.Fatalf("ExecuteSubWorkflowStep = %q, %v", outcome, err)
+	}
+	if len(recorder.events) == 0 || recorder.events[0].Type != audit.EventStepStart {
+		t.Fatalf("first audit event = %+v, want step_start", recorder.events)
+	}
+	start := recorder.events[0]
+	if got := start.Data["workflow_path"]; got != childPath {
+		t.Fatalf("workflow_path = %#v, want %q", got, childPath)
+	}
+	params, ok := start.Data["params"].(map[string]string)
+	if !ok || params["task"] != "tasks/1.md" {
+		t.Fatalf("params = %#v, want interpolated task", start.Data["params"])
+	}
+	var subStartIndex, subEndIndex = -1, -1
+	for index, event := range recorder.events {
+		switch event.Type {
+		case audit.EventSubWorkflowStart:
+			subStartIndex = index
+			if got := event.Data["workflow_path"]; got != childPath {
+				t.Fatalf("sub_workflow_start workflow_path = %#v, want %q", got, childPath)
+			}
+		case audit.EventSubWorkflowEnd:
+			subEndIndex = index
+		}
+	}
+	if subStartIndex <= 0 || subEndIndex <= subStartIndex || subEndIndex >= len(recorder.events)-1 {
+		t.Fatalf("sub-workflow lifecycle is not nested inside parent step events: %+v", recorder.events)
+	}
+}
+
+func TestExecuteSubWorkflowStep_LoadsPinnedChildVersion(t *testing.T) {
+	dir := t.TempDir()
+	for filename, command := range map[string]string{
+		"child-v1.0.yaml": "echo pinned",
+		"child-v1.1.yaml": "echo newer",
+	} {
+		source := "name: child\nsteps:\n  - id: run\n    command: " + command + "\n"
+		if err := os.WriteFile(filepath.Join(dir, filename), []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		Params:       map[string]string{},
+		WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"),
+	})
+
+	outcome, err := ExecuteSubWorkflowStep(
+		&model.Step{ID: "child", Workflow: "child-v1.0.yaml"},
+		ctx,
+		runner,
+		&mockGlob{},
+		&mockLogger{},
+	)
+	if err != nil || outcome != OutcomeSuccess {
+		t.Fatalf("ExecuteSubWorkflowStep = %q, %v", outcome, err)
+	}
+	if got := runner.calls[0][2]; got != "echo pinned" {
+		t.Fatalf("executed command = %q, want pinned child version", got)
+	}
+}
+
+func TestExecuteSubWorkflowStep_ReloadsEditedPinnedChildContents(t *testing.T) {
+	dir := t.TempDir()
+	childPath := filepath.Join(dir, "child-v1.0.yaml")
+	writeChild := func(command string) {
+		t.Helper()
+		source := "name: child\nsteps:\n  - id: run\n    command: " + command + "\n"
+		if err := os.WriteFile(childPath, []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeChild("echo before")
+
+	runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}, {ExitCode: 0}}}
+	step := &model.Step{ID: "child", Workflow: "child-v1.0.yaml"}
+	newContext := func() *model.ExecutionContext {
+		return model.NewRootContext(&model.RootContextOptions{
+			Params:       map[string]string{},
+			WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"),
+		})
+	}
+	if outcome, err := ExecuteSubWorkflowStep(step, newContext(), runner, &mockGlob{}, &mockLogger{}); err != nil || outcome != OutcomeSuccess {
+		t.Fatalf("first execution = %q, %v", outcome, err)
+	}
+	writeChild("echo after")
+	if outcome, err := ExecuteSubWorkflowStep(step, newContext(), runner, &mockGlob{}, &mockLogger{}); err != nil || outcome != OutcomeSuccess {
+		t.Fatalf("second execution = %q, %v", outcome, err)
+	}
+	if got := runner.calls[1][2]; got != "echo after" {
+		t.Fatalf("second command = %q, want edited pinned contents", got)
+	}
+}
+
+func TestExecuteSubWorkflowStep_RejectsUnversionedChildReference(t *testing.T) {
+	dir := t.TempDir()
+	childPath := filepath.Join(dir, "child.yaml")
+	if err := os.WriteFile(childPath, []byte("name: child\nsteps:\n  - id: run\n    command: echo child\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		Params:       map[string]string{},
+		WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"),
+	})
+
+	_, err := ExecuteSubWorkflowStep(
+		&model.Step{ID: "child", Workflow: "child.yaml"},
+		ctx,
+		&mockRunner{},
+		&mockGlob{},
+		&mockLogger{},
+	)
+	if err == nil {
+		t.Fatal("ExecuteSubWorkflowStep returned nil error")
+	}
+	if !strings.Contains(err.Error(), "child-v1.0.yaml") || !strings.Contains(strings.ToLower(err.Error()), "rename") {
+		t.Fatalf("error = %q, want actionable versioned-filename guidance", err)
+	}
+}
+
 // Regression: sub-workflow state must preserve LastSessionStepID across
 // recordChildProgress / applyResumeState so that resumed session:resume steps
 // can look up their profile in SessionProfiles. Prior bug dropped the field,

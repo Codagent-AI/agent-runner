@@ -27,9 +27,24 @@ func ExecuteSubWorkflowStep(
 	prefix := audit.BuildPrefix(nestingToAudit(parentCtx), step.ID)
 	startTime := time.Now()
 
-	emitStepStart(parentCtx, prefix, startTime, nil)
+	workflowPath, err := resolveWorkflowPath(step.Workflow, parentCtx, step.ID)
+	if err != nil {
+		emitStepStart(parentCtx, prefix, startTime, nil)
+		emitSubEnd(parentCtx, prefix, startTime, step, "failed", err.Error())
+		return OutcomeFailed, err
+	}
+	resolvedParams, err := resolveParams(step.Params, parentCtx, step.ID)
+	if err != nil {
+		emitStepStart(parentCtx, prefix, startTime, map[string]any{"workflow_path": workflowPath})
+		emitSubEnd(parentCtx, prefix, startTime, step, "failed", err.Error())
+		return OutcomeFailed, err
+	}
+	emitStepStart(parentCtx, prefix, startTime, map[string]any{
+		"workflow_path": workflowPath,
+		"params":        resolvedParams,
+	})
 
-	workflow, workflowPath, childCtx, err := prepareSubWorkflow(step, parentCtx, log)
+	workflow, childCtx, err := prepareSubWorkflow(step, workflowPath, resolvedParams, parentCtx, log)
 	if err != nil {
 		emitSubEnd(parentCtx, prefix, startTime, step, "failed", err.Error())
 		return OutcomeFailed, err
@@ -72,24 +87,20 @@ func ExecuteSubWorkflowStep(
 // params, constructs the child context, and merges its session declarations.
 // Extracted from ExecuteSubWorkflowStep to keep that function under the lint
 // length limit.
-func prepareSubWorkflow(step *model.Step, parentCtx *model.ExecutionContext, log Logger) (model.Workflow, string, *model.ExecutionContext, error) {
-	workflowPath, err := resolveWorkflowPath(step.Workflow, parentCtx, step.ID)
-	if err != nil {
-		return model.Workflow{}, "", nil, err
-	}
-
+func prepareSubWorkflow(
+	step *model.Step,
+	workflowPath string,
+	resolvedParams map[string]string,
+	parentCtx *model.ExecutionContext,
+	log Logger,
+) (model.Workflow, *model.ExecutionContext, error) {
 	workflow, err := loader.LoadWorkflow(workflowPath, loader.Options{IsSubWorkflow: true})
 	if err != nil {
-		return model.Workflow{}, "", nil, err
-	}
-
-	resolvedParams, err := resolveParams(step.Params, parentCtx, step.ID)
-	if err != nil {
-		return model.Workflow{}, "", nil, err
+		return model.Workflow{}, nil, err
 	}
 
 	if err := validateSubWorkflowParams(&workflow, resolvedParams); err != nil {
-		return model.Workflow{}, "", nil, err
+		return model.Workflow{}, nil, err
 	}
 
 	var childEngine interface{}
@@ -100,7 +111,7 @@ func prepareSubWorkflow(step *model.Step, parentCtx *model.ExecutionContext, log
 		}
 		eng, err := engine.Create(engConfig)
 		if err != nil {
-			return model.Workflow{}, "", nil, err
+			return model.Workflow{}, nil, err
 		}
 		childEngine = eng
 	}
@@ -115,10 +126,10 @@ func prepareSubWorkflow(step *model.Step, parentCtx *model.ExecutionContext, log
 	})
 
 	if err := MergeSessionDecls(childCtx, workflow.Sessions, log); err != nil {
-		return model.Workflow{}, "", nil, err
+		return model.Workflow{}, nil, err
 	}
 
-	return workflow, workflowPath, childCtx, nil
+	return workflow, childCtx, nil
 }
 
 func executeChildSteps(

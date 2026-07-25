@@ -159,7 +159,7 @@ func TestResolveWorkflow_RelativeViaProcessCwd(t *testing.T) {
 	}
 }
 
-func TestResolveWorkflow_DiscoveryByName_WhenFileMoved(t *testing.T) {
+func TestResolveWorkflow_LegacyStateWithoutRecordedFileDiscoversByName(t *testing.T) {
 	base := realPath(t, t.TempDir())
 	root := filepath.Join(base, "repo")
 	// Workflow lives under a namespace subdir...
@@ -174,9 +174,8 @@ func TestResolveWorkflow_DiscoveryByName_WhenFileMoved(t *testing.T) {
 	writeMeta(t, projectDir, root)
 	chdirTo(t, t.TempDir())
 
-	// ...but state still records the OLD location.
+	// Legacy state has a name but no recorded file.
 	state := model.RunState{
-		WorkflowFile: "workflows/plan-change-v1.0.yaml",
 		WorkflowName: "plan-change",
 	}
 	got, ok := ResolveWorkflow(sessionDir, projectDir, &state)
@@ -189,6 +188,34 @@ func TestResolveWorkflow_DiscoveryByName_WhenFileMoved(t *testing.T) {
 	wantRoot := filepath.Join(root, "workflows")
 	if got.WorkflowsRoot != wantRoot {
 		t.Fatalf("WorkflowsRoot = %q, want %q", got.WorkflowsRoot, wantRoot)
+	}
+}
+
+func TestResolveWorkflow_MissingRecordedPathDoesNotFallbackByName(t *testing.T) {
+	base := realPath(t, t.TempDir())
+	root := filepath.Join(base, "repo")
+	newerWorkflow := filepath.Join(root, "workflows", "deploy-v2.0.yaml")
+	writeFile(t, newerWorkflow, `name: deploy
+steps:
+  - id: newer
+    command: echo newer
+`)
+
+	projectDir := filepath.Join(base, "projects", "encoded")
+	sessionDir := filepath.Join(projectDir, "runs", "deploy-2026-04-11T09-14-00-000000000Z")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeMeta(t, projectDir, root)
+	chdirTo(t, t.TempDir())
+
+	state := model.RunState{
+		WorkflowFile: "workflows/deploy-v1.0.yaml",
+		WorkflowName: "deploy",
+	}
+	got, ok := ResolveWorkflow(sessionDir, projectDir, &state)
+	if ok {
+		t.Fatalf("ResolveWorkflow substituted %q for missing recorded version, want no match", got.AbsPath)
 	}
 }
 
@@ -361,6 +388,59 @@ steps:
 	}
 }
 
+func TestNew_SavedRunBreadcrumbShowsRecordedVersion(t *testing.T) {
+	base := realPath(t, t.TempDir())
+	root := filepath.Join(base, "repo")
+	workflowPath := filepath.Join(root, "workflows", "deploy-v2.0.yaml")
+	writeFile(t, workflowPath, `name: deploy
+steps:
+  - id: ship
+    command: echo ship
+`)
+
+	projectDir := filepath.Join(base, "projects", "encoded")
+	sessionDir := filepath.Join(projectDir, "runs", "deploy-2026-04-11T09-14-00-000000000Z")
+	state := model.RunState{
+		WorkflowFile: workflowPath,
+		WorkflowName: "deploy",
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(sessionDir, "state.json"), string(data))
+
+	for _, entered := range []Entered{FromList, FromInspect} {
+		m, err := New(sessionDir, projectDir, entered)
+		if err != nil {
+			t.Fatalf("runview.New(%v): %v", entered, err)
+		}
+		breadcrumb := stripANSI(m.renderBreadcrumb())
+		if !strings.Contains(breadcrumb, "deploy · v2.0") {
+			t.Fatalf("breadcrumb = %q, want recorded version next to canonical name", breadcrumb)
+		}
+	}
+
+	live, err := New(sessionDir, projectDir, FromLiveRun)
+	if err != nil {
+		t.Fatalf("runview.New(FromLiveRun): %v", err)
+	}
+	if breadcrumb := stripANSI(live.renderBreadcrumb()); strings.Contains(breadcrumb, "v2.0") {
+		t.Fatalf("live breadcrumb = %q, want version-neutral live view", breadcrumb)
+	}
+
+	m, err := New(sessionDir, projectDir, FromInspect)
+	if err != nil {
+		t.Fatalf("runview.New: %v", err)
+	}
+	loop := &StepNode{ID: "retry", Type: NodeLoop, Parent: m.tree.Root}
+	m.path = append(m.path, loop)
+	breadcrumb := stripANSI(m.renderBreadcrumb())
+	if !strings.Contains(breadcrumb, "deploy · v2.0") || !strings.Contains(breadcrumb, "retry") {
+		t.Fatalf("drilled breadcrumb = %q, want recorded version and entered container", breadcrumb)
+	}
+}
+
 // TestNew_ReportsErrorWhenWorkflowMissing verifies the improved error
 // surfacing: instead of silent "No steps to display", the load error is now
 // populated so the UI can tell the user what went wrong.
@@ -414,19 +494,104 @@ func TestNew_ReconstructsCompletedRunFromAuditWhenWorkflowWasDeleted(t *testing.
 2026-07-18T04:43:36Z run_end {"outcome":"success","totals":{"active_duration_ms":18,"tokens":{},"usage_coverage":"none","estimated_api_cost_usd":null,"cost_coverage":"none"}}
 `)
 
-	m, err := New(sessionDir, projectDir, FromList)
+	for _, entered := range []Entered{FromList, FromInspect} {
+		m, err := New(sessionDir, projectDir, entered)
+		if err != nil {
+			t.Fatalf("runview.New(%v): %v", entered, err)
+		}
+		if m.loadErr != "" {
+			t.Fatalf("recovered run retained missing-workflow error: %s", m.loadErr)
+		}
+		if len(m.tree.Root.Children) != 1 {
+			t.Fatalf("recovered children = %d, want 1", len(m.tree.Root.Children))
+		}
+		step := m.tree.Root.Children[0]
+		if step.ID != "direct-shell" || step.Type != NodeShell || step.Status != StatusSuccess || step.InterpolatedCommand != "echo recovered" {
+			t.Fatalf("recovered step = %#v", step)
+		}
+		if breadcrumb := stripANSI(m.renderBreadcrumb()); !strings.Contains(breadcrumb, "unversioned") {
+			t.Fatalf("breadcrumb = %q, want unversioned recorded label", breadcrumb)
+		}
+	}
+}
+
+func TestNew_MissingRecordedDefinitionPreservesCanonicalNamespace(t *testing.T) {
+	base := realPath(t, t.TempDir())
+	root := filepath.Join(base, "repo")
+	if err := os.MkdirAll(filepath.Join(root, "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	projectDir := filepath.Join(base, "projects", "encoded")
+	sessionDir := filepath.Join(projectDir, "runs", "deploy-2026-07-18T04-43-34-715518Z")
+	state := model.RunState{
+		WorkflowFile: filepath.Join(root, "workflows", "openspec", "deploy-v2.0.yaml"),
+		WorkflowName: "deploy",
+		WorkflowHash: "workflow-hash",
+		Completed:    true,
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(sessionDir, "state.json"), string(data))
+	writeFile(t, filepath.Join(sessionDir, "audit.log"), `2026-07-18T04:43:34Z run_start {"workflow_hash":"workflow-hash","workflow_name":"deploy"}
+2026-07-18T04:43:35Z [ship] step_start {"command":"echo ship"}
+2026-07-18T04:43:36Z [ship] step_end {"outcome":"success"}
+2026-07-18T04:43:36Z run_end {"outcome":"success"}
+`)
+	writeMeta(t, projectDir, root)
+
+	m, err := New(sessionDir, projectDir, FromInspect)
+	if err != nil {
+		t.Fatalf("runview.New: %v", err)
+	}
+	breadcrumb := stripANSI(m.renderBreadcrumb())
+	if !strings.Contains(breadcrumb, "openspec:deploy · v2.0") {
+		t.Fatalf("breadcrumb = %q, want namespace and recorded version from missing path", breadcrumb)
+	}
+}
+
+func TestNew_CompletedUnversionedRunReconstructsWithoutFilenameError(t *testing.T) {
+	base := realPath(t, t.TempDir())
+	root := filepath.Join(base, "repo")
+	workflowPath := filepath.Join(root, "workflows", "legacy.yaml")
+	writeFile(t, workflowPath, `name: legacy
+steps:
+  - id: old
+    command: echo old
+`)
+	projectDir := filepath.Join(base, "projects", "encoded")
+	sessionDir := filepath.Join(projectDir, "runs", "legacy-2026-07-18T04-43-34-715518Z")
+	state := model.RunState{
+		WorkflowFile: workflowPath,
+		WorkflowName: "legacy",
+		WorkflowHash: "workflow-hash",
+		Completed:    true,
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(sessionDir, "state.json"), string(data))
+	writeFile(t, filepath.Join(sessionDir, "audit.log"), `2026-07-18T04:43:34Z run_start {"workflow_hash":"workflow-hash","workflow_name":"legacy"}
+2026-07-18T04:43:35Z [old] step_start {"command":"echo old"}
+2026-07-18T04:43:36Z [old] step_end {"outcome":"success"}
+2026-07-18T04:43:36Z run_end {"outcome":"success"}
+`)
+	writeMeta(t, projectDir, root)
+
+	m, err := New(sessionDir, projectDir, FromInspect)
 	if err != nil {
 		t.Fatalf("runview.New: %v", err)
 	}
 	if m.loadErr != "" {
-		t.Fatalf("recovered run retained missing-workflow error: %s", m.loadErr)
+		t.Fatalf("loadErr = %q, want legacy inspection reconstructed from audit", m.loadErr)
 	}
-	if len(m.tree.Root.Children) != 1 {
-		t.Fatalf("recovered children = %d, want 1", len(m.tree.Root.Children))
+	if len(m.tree.Root.Children) != 1 || m.tree.Root.Children[0].ID != "old" {
+		t.Fatalf("reconstructed children = %#v, want old step", m.tree.Root.Children)
 	}
-	step := m.tree.Root.Children[0]
-	if step.ID != "direct-shell" || step.Type != NodeShell || step.Status != StatusSuccess || step.InterpolatedCommand != "echo recovered" {
-		t.Fatalf("recovered step = %#v", step)
+	if breadcrumb := stripANSI(m.renderBreadcrumb()); !strings.Contains(breadcrumb, "legacy · unversioned") {
+		t.Fatalf("breadcrumb = %q, want legacy unversioned label", breadcrumb)
 	}
 }
 
@@ -434,7 +599,7 @@ func TestNew_PreservesWorkflowLoadErrorWhenAuditCanReconstructSteps(t *testing.T
 	base := realPath(t, t.TempDir())
 	projectDir := filepath.Join(base, "projects", "encoded")
 	sessionDir := filepath.Join(projectDir, "runs", "malformed-2026-07-18T04-43-34-715518Z")
-	workflowPath := filepath.Join(base, "workflows", "malformed.yaml")
+	workflowPath := filepath.Join(base, "workflows", "malformed-v1.0.yaml")
 	writeFile(t, workflowPath, "name: [not valid yaml")
 
 	state := model.RunState{
@@ -580,12 +745,12 @@ func TestNew_BuiltinWorkflowShowsSteps(t *testing.T) {
 	}
 }
 
-func TestResolveWorkflow_DiscoveryByName_OldPathFallsBackToAgentRunnerDir(t *testing.T) {
+func TestResolveWorkflow_LegacyNameFallbackFindsAgentRunnerDir(t *testing.T) {
 	base := realPath(t, t.TempDir())
 	root := filepath.Join(base, "repo")
 
-	// Workflow is now under .agent-runner/workflows/ but state has the old
-	// workflows/ relative path (from before the builtin workflows migration).
+	// Workflow is under .agent-runner/workflows/ and legacy state has no
+	// recorded workflow file.
 	wfPath := filepath.Join(root, ".agent-runner", "workflows", "smoke-test.yaml")
 	writeFile(t, wfPath, minimalWorkflowYAML)
 
@@ -597,11 +762,7 @@ func TestResolveWorkflow_DiscoveryByName_OldPathFallsBackToAgentRunnerDir(t *tes
 	writeMeta(t, projectDir, root)
 	chdirTo(t, t.TempDir())
 
-	// Old-style state: file path points to workflows/smoke-test.yaml which
-	// no longer exists. Name-based discovery should find it under
-	// .agent-runner/workflows/.
 	state := model.RunState{
-		WorkflowFile: "workflows/smoke-test.yaml",
 		WorkflowName: "smoke-test",
 	}
 	got, ok := ResolveWorkflow(sessionDir, projectDir, &state)
