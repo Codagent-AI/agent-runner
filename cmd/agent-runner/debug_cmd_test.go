@@ -60,6 +60,19 @@ func TestHandleDebugShowWorkflow(t *testing.T) {
 		}
 	})
 
+	t.Run("exact builtin guidance preserves yml extension", func(t *testing.T) {
+		got, ok := exactBuiltinVersionRef(
+			"core:deploy-v1.0",
+			[]string{"builtin:core/deploy-v1.0.yml", "builtin:core/deploy-v2.0.yaml"},
+		)
+		if !ok {
+			t.Fatal("exactBuiltinVersionRef found = false, want true")
+		}
+		if want := "builtin:core/deploy-v1.0.yml"; got != want {
+			t.Fatalf("exactBuiltinVersionRef = %q, want %q", got, want)
+		}
+	})
+
 	t.Run("disk ref prints unnormalized bytes", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "workflow.yaml")

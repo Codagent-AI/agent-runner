@@ -312,3 +312,26 @@ steps:
 		t.Fatalf("PrepareResume error = %v, want ErrAlreadyCompleted", err)
 	}
 }
+
+func TestPrepareResume_MissingDefinitionUsesSuccessfulAuditCompletion(t *testing.T) {
+	dir := t.TempDir()
+	state := model.RunState{
+		WorkflowFile: filepath.Join(dir, "missing-v1.0.yaml"),
+		WorkflowName: "missing",
+		CurrentStep: model.CurrentStep{
+			Nested: &model.NestedStepState{StepID: "final-step", Completed: true},
+		},
+	}
+	if err := stateio.WriteState(&state, dir); err != nil {
+		t.Fatal(err)
+	}
+	auditLog := "2026-07-25T00:00:00Z run_end {\"outcome\":\"success\"}\n"
+	if err := os.WriteFile(filepath.Join(dir, "audit.log"), []byte(auditLog), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := PrepareResume(filepath.Join(dir, "state.json"), &Options{})
+	if !errors.Is(err, ErrAlreadyCompleted) {
+		t.Fatalf("PrepareResume error = %v, want ErrAlreadyCompleted from saved audit evidence", err)
+	}
+}

@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"path/filepath"
 
+	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/engine"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
@@ -28,7 +30,7 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		return nil, err
 	}
 
-	if state.Completed {
+	if resumeAlreadyCompleted(stateFilePath, &state) {
 		return nil, ErrAlreadyCompleted
 	}
 
@@ -130,6 +132,26 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	}
 
 	return PrepareRun(&workflow, state.Params, resumeOpts)
+}
+
+func resumeAlreadyCompleted(stateFilePath string, state *model.RunState) bool {
+	if state.Completed {
+		return true
+	}
+	completed, _ := auditRunCompleted(filepath.Join(filepath.Dir(stateFilePath), "audit.log"))
+	return completed
+}
+
+func auditRunCompleted(auditPath string) (bool, error) {
+	file, err := os.Open(auditPath) // #nosec G304 -- audit path is derived from the selected state file.
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer func() { _ = file.Close() }()
+	return audit.LatestRunCompleted(file)
 }
 
 func loadRecordedWorkflow(workflowFile string) (model.Workflow, error) {

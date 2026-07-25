@@ -11,6 +11,7 @@ import (
 	"maps"
 	"os"
 	"os/exec"
+	pathpkg "path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -1416,8 +1417,11 @@ func handleValidateArgs(args []string) int {
 
 func resolveValidateWorkflowArg(arg string) (string, error) {
 	ext := strings.ToLower(filepath.Ext(arg))
-	if (ext == ".yaml" || ext == ".yml") && fileExists(arg) {
-		return arg, nil
+	if ext == ".yaml" || ext == ".yml" {
+		if fileExists(arg) {
+			return arg, nil
+		}
+		return "", fmt.Errorf("workflow file %q does not exist", arg)
 	}
 	return resolveWorkflowArg(arg)
 }
@@ -1568,9 +1572,24 @@ func versionFreeLaunchHint(arg string) (string, bool) {
 	}
 	logicalName := matches[1]
 	if hadYAMLExtension && strings.Contains(logicalName, "/") {
-		logicalName = pathBase(logicalName)
+		logicalName = logicalNameFromRejectedPath(logicalName)
 	}
 	return logicalName, logicalName != ""
+}
+
+func logicalNameFromRejectedPath(candidate string) string {
+	candidate = strings.TrimPrefix(pathpkg.Clean(candidate), "./")
+	parts := strings.Split(candidate, "/")
+	for index := len(parts) - 2; index >= 0; index-- {
+		if parts[index] != "workflows" {
+			continue
+		}
+		logicalName := strings.Join(parts[index+1:], "/")
+		if logicalName != "" {
+			return logicalName
+		}
+	}
+	return pathBase(candidate)
 }
 
 func dotlessVersionLaunchHint(arg string) (string, bool) {

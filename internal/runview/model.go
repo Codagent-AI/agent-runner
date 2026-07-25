@@ -220,6 +220,9 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 		WorkflowsRoot: resolved.WorkflowsRoot,
 		RepoRoot:      resolved.RepoRoot,
 	}
+	if m.resolverCfg.WorkflowsRoot == "" {
+		m.resolverCfg.WorkflowsRoot = recordedWorkflowsRoot(state.WorkflowFile)
+	}
 
 	m.startTime = parseStartTimeFromID(filepath.Base(sessionDir))
 
@@ -307,6 +310,19 @@ func recordedWorkflowDisplayPath(workflowFile, originCwd string) string {
 		return filepath.Join(originCwd, workflowFile)
 	}
 	return filepath.Clean(workflowFile)
+}
+
+func recordedWorkflowsRoot(workflowFile string) string {
+	if workflowFile == "" || strings.HasPrefix(workflowFile, "builtin:") {
+		return ""
+	}
+	parts := strings.Split(filepath.ToSlash(filepath.Clean(workflowFile)), "/")
+	for index := len(parts) - 2; index >= 0; index-- {
+		if parts[index] == "workflows" {
+			return filepath.FromSlash(strings.Join(parts[:index+1], "/"))
+		}
+	}
+	return ""
 }
 
 func currentStepID(state *model.RunState) string {

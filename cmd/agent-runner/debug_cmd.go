@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -260,7 +261,11 @@ func readDebugWorkflowRef(ref string) ([]byte, error) {
 	}
 	if strings.Contains(ref, ":") && !looksLikeWindowsDrivePath(ref) {
 		if matches := namespacedVersionShorthandPattern.FindStringSubmatch(ref); matches != nil {
-			exactRef := builtinworkflows.Ref(matches[1] + "/" + matches[2] + ".yaml")
+			refs, _ := builtinworkflows.List()
+			exactRef, found := exactBuiltinVersionRef(ref, refs)
+			if !found {
+				exactRef = builtinworkflows.Ref(matches[1] + "/" + matches[2] + ".yaml")
+			}
 			return nil, fmt.Errorf("namespaced version shorthand %q is not an exact workflow ref; use %q", ref, exactRef)
 		}
 		if !namespacedLogicalDebugPattern.MatchString(ref) {
@@ -281,6 +286,21 @@ func readDebugWorkflowRef(ref string) ([]byte, error) {
 		return nil, fmt.Errorf("workflow ref %q not found: %w", ref, err)
 	}
 	return data, nil
+}
+
+func exactBuiltinVersionRef(shorthand string, refs []string) (string, bool) {
+	matches := namespacedVersionShorthandPattern.FindStringSubmatch(shorthand)
+	if matches == nil {
+		return "", false
+	}
+	prefix := builtinworkflows.Ref(matches[1] + "/" + matches[2])
+	for _, ref := range refs {
+		ext := strings.ToLower(pathpkg.Ext(ref))
+		if (ext == ".yaml" || ext == ".yml") && strings.TrimSuffix(ref, pathpkg.Ext(ref)) == prefix {
+			return ref, true
+		}
+	}
+	return "", false
 }
 
 func expandDebugWorkflowPath(ref string) (string, error) {

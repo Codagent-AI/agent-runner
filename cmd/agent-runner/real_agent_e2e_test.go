@@ -53,7 +53,6 @@ func TestClaudeAgentCallRealAgentE2E(t *testing.T) {
 	childPath := filepath.Join(workdir, "call-child-response.txt")
 	parentPath := filepath.Join(workdir, "call-parent-response.txt")
 	reusePath := filepath.Join(workdir, "call-reused-session.txt")
-	workflowPath := filepath.Join(workdir, "workflow.yaml")
 	workflow := fmt.Sprintf(`name: %s
 description: "Real Runner-owned call_agent tool and named-session reuse test"
 sessions:
@@ -69,12 +68,12 @@ steps:
     session: called-claude
     prompt: "Write only the exact token you invented in the previous turn into %s, then reply with only that token."
 `, workflowName, childPath, parentPath, reusePath)
-	writeRealAgentTestFile(t, workflowPath, []byte(workflow))
+	writeRealAgentCatalogWorkflow(t, workdir, workflowName, []byte(workflow))
 	cleanupNewRealAgentRuns(t, workdir, workflowName)
 
 	ctx, cancel := context.WithTimeout(context.Background(), realAgentTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, runnerBin, "--headless", workflowPath)
+	cmd := exec.CommandContext(ctx, runnerBin, "--headless", workflowName)
 	cmd.Dir = workdir
 	cmd.Env = realAgentTestEnv(false)
 	output, err := cmd.CombinedOutput()
@@ -130,7 +129,6 @@ func TestCursorInteractiveRealAgentE2E(t *testing.T) {
 func TestOpenCodeInteractiveRealAgentE2E(t *testing.T) {
 	_, workdir, runnerBin := prepareRealAgentE2E(t, "opencode")
 	workflowName := "real-opencode-interactive-e2e"
-	workflowPath := filepath.Join(t.TempDir(), "workflow.yaml")
 	workflow := fmt.Sprintf(`name: %s
 description: "Real opencode interactive rejection test"
 steps:
@@ -139,12 +137,12 @@ steps:
     session: new
     prompt: "Say hello."
 `, workflowName)
-	writeRealAgentTestFile(t, workflowPath, []byte(workflow))
+	writeRealAgentCatalogWorkflow(t, workdir, workflowName, []byte(workflow))
 	cleanupNewRealAgentRuns(t, workdir, workflowName)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, runnerBin, "--headless", workflowPath)
+	cmd := exec.CommandContext(ctx, runnerBin, "--headless", workflowName)
 	cmd.Dir = workdir
 	cmd.Env = realAgentTestEnv(false)
 	output, err := cmd.CombinedOutput()
@@ -360,6 +358,7 @@ func TestDurabilityTimeoutResumeUsesFreshCredentialE2E(t *testing.T) {
 	}
 	repoRoot := findRepoRoot(t)
 	tmp := t.TempDir()
+	workdir := filepath.Join(tmp, "workdir")
 	home := filepath.Join(tmp, "home")
 	binDir := filepath.Join(tmp, "bin")
 	runnerBin := filepath.Join(tmp, "agent-runner")
@@ -367,10 +366,19 @@ func TestDurabilityTimeoutResumeUsesFreshCredentialE2E(t *testing.T) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	configData, err := os.ReadFile(filepath.Join(repoRoot, ".agent-runner", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRealAgentTestFile(t, filepath.Join(workdir, ".agent-runner", "config.yaml"), configData)
 	buildAgentRunner(t, repoRoot, runnerBin)
 	writeInteractiveAgentFixtures(t, binDir, []string{"claude"})
 	workflowName := "durability-timeout-resume-e2e"
-	workflowPath := writeTerminalLeaseWorkflow(t, tmp, workflowName)
+	workflowDir := filepath.Join(workdir, ".agent-runner", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = writeTerminalLeaseWorkflow(t, workflowDir, workflowName)
 	env := append(os.Environ(),
 		"AGENT_RUNNER_NO_TUI=1",
 		"HOME="+home,
@@ -380,15 +388,15 @@ func TestDurabilityTimeoutResumeUsesFreshCredentialE2E(t *testing.T) {
 		durabilityRetryFixtureEnv+"=1",
 	)
 
-	first := exec.Command(runnerBin, "--headless", workflowPath)
-	first.Dir = repoRoot
+	first := exec.Command(runnerBin, "--headless", workflowName)
+	first.Dir = workdir
 	first.Env = env
 	firstOutput, firstErr := runCommandInPTY(first, 45*time.Second)
 	if firstErr == nil {
 		t.Fatalf("first attempt succeeded, want durability timeout\n%s", firstOutput)
 	}
 
-	sessionDir := latestWorkflowRunDir(t, home, repoRoot, workflowName)
+	sessionDir := latestWorkflowRunDir(t, home, workdir, workflowName)
 	auditData, err := os.ReadFile(filepath.Join(sessionDir, "audit.log"))
 	if err != nil {
 		t.Fatal(err)
@@ -397,7 +405,7 @@ func TestDurabilityTimeoutResumeUsesFreshCredentialE2E(t *testing.T) {
 		t.Fatalf("first attempt did not record a durability timeout:\n%s", auditData)
 	}
 	resumed := exec.Command(runnerBin, "--headless", "--resume", filepath.Base(sessionDir))
-	resumed.Dir = repoRoot
+	resumed.Dir = workdir
 	resumed.Env = env
 	resumedOutput, resumedErr := runCommandInPTY(resumed, 30*time.Second)
 	if resumedErr != nil {
@@ -427,7 +435,6 @@ func runRealHeadlessAgentE2E(t *testing.T, agent string) {
 	workflowName := "real-" + agent + "-headless-e2e"
 	freshPath := filepath.Join(workdir, "fresh-token.txt")
 	resumePath := filepath.Join(workdir, "resumed-token.txt")
-	workflowPath := filepath.Join(workdir, "workflow.yaml")
 	workflow := fmt.Sprintf(`name: %s
 description: "Real %s headless compatibility test"
 steps:
@@ -441,11 +448,11 @@ steps:
     session: resume
     prompt: "Using the value you were asked to remember in the previous turn, write that exact value into %s."
 `, workflowName, agent, agent, agent, token, freshPath, freshPath, agent, resumePath)
-	writeRealAgentTestFile(t, workflowPath, []byte(workflow))
+	writeRealAgentCatalogWorkflow(t, workdir, workflowName, []byte(workflow))
 
 	ctx, cancel := context.WithTimeout(context.Background(), realAgentTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, runnerBin, "--headless", workflowPath)
+	cmd := exec.CommandContext(ctx, runnerBin, "--headless", workflowName)
 	cmd.Dir = workdir
 	cmd.Env = realAgentTestEnv(false)
 	output, err := cmd.CombinedOutput()
@@ -486,7 +493,6 @@ func runRealInteractiveAgentE2E(t *testing.T, agent string) {
 	freshPrompt := fmt.Sprintf("Invent a recall phrase made of exactly two unusual lowercase English words that appear nowhere in these instructions. State the phrase exactly once as a single line built from these seven parts joined by single underscores. AR, then %s, then FRESH, then %s, then the first word, then the second word, then END. After stating that line, wait for the user. Do not run the Agent Runner completion command yourself; the user will invoke the native Agent Runner completion command.", upperAgent, nonce)
 	resumePrompt := fmt.Sprintf("Reply with a single line built from these seven parts joined by single underscores. AR, then %s, then RESUME, then %s, then the first word, then the second word of the recall phrase you invented in the previous turn, then END. Then wait for the user without running the Agent Runner completion command yourself.", upperAgent, nonce)
 	workflowName := "real-" + agent + "-interactive-e2e"
-	workflowPath := filepath.Join(t.TempDir(), "workflow.yaml")
 	workflow := fmt.Sprintf(`name: %s
 description: "Real %s interactive compatibility test"
 steps:
@@ -503,10 +509,10 @@ steps:
 		{markerPrefix: resumePrefix, afterReady: "Please continue to the next workflow step now."},
 	}
 	stepIDs := []string{agent + "-interactive-fresh", agent + "-interactive-resume"}
-	writeRealAgentTestFile(t, workflowPath, []byte(workflow))
+	writeRealAgentCatalogWorkflow(t, workdir, workflowName, []byte(workflow))
 	cleanupNewRealAgentRuns(t, workdir, workflowName)
 
-	cmd := exec.Command(runnerBin, "--headless", workflowPath)
+	cmd := exec.Command(runnerBin, "--headless", workflowName)
 	cmd.Dir = workdir
 	cmd.Env = realAgentTestEnv(true)
 	result, err := runRealAgentWorkflowInPTY(cmd, agent, phases, realAgentTimeout)
@@ -664,6 +670,15 @@ func writeRealAgentTestFile(t *testing.T, path string, data []byte) {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+func writeRealAgentCatalogWorkflow(t *testing.T, workdir, logicalName string, data []byte) {
+	t.Helper()
+	writeRealAgentTestFile(
+		t,
+		filepath.Join(workdir, ".agent-runner", "workflows", logicalName+"-v1.0.yaml"),
+		data,
+	)
 }
 
 type realAgentPTYResult struct {

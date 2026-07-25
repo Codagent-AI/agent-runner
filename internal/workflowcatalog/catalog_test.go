@@ -61,6 +61,17 @@ func TestParse(t *testing.T) {
 			},
 		},
 		{
+			name: "windows nested identity",
+			path: `team\deploy-v2.0.yaml`,
+			want: Definition{
+				Path:          `team\deploy-v2.0.yaml`,
+				LogicalName:   "deploy",
+				CanonicalName: "team/deploy",
+				Version:       Version{Major: "2", Minor: "0"},
+				DisplayLabel:  "v2.0",
+			},
+		},
+		{
 			name: "final suffix determines identity",
 			path: "save-v-data-v1.2.yaml",
 			want: Definition{
@@ -252,6 +263,7 @@ func TestIsExempt(t *testing.T) {
 	}{
 		{path: "_group.yaml", want: true},
 		{path: "core/_helpers.yml", want: true},
+		{path: `team\_helpers.yml`, want: true},
 		{path: "team/deploy-v1.0.yaml", want: false},
 		{path: "team/other.txt", want: false},
 	}

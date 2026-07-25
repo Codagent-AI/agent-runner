@@ -120,6 +120,33 @@ func BuildSummary(r io.Reader, capBytes int) (Summary, error) {
 	return summary, nil
 }
 
+// LatestRunCompleted reports whether the latest run lifecycle in r ended
+// successfully. A later run_start resets an earlier successful run_end.
+func LatestRunCompleted(r io.Reader) (bool, error) {
+	completed := false
+	scanner := bufio.NewScanner(r)
+	for lineNo := 1; scanner.Scan(); lineNo++ {
+		line := scanner.Text()
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		event, err := parseAuditLine(line)
+		if err != nil {
+			return false, fmt.Errorf("parse audit line %d: %w", lineNo, err)
+		}
+		switch event.Type {
+		case EventRunStart:
+			completed = false
+		case EventRunEnd:
+			completed = stringField(event.Data, "outcome") == "success"
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return false, err
+	}
+	return completed, nil
+}
+
 func appendClassifiedEvent(summary *Summary, event Event, capBytes int, used *int) bool {
 	switch event.Type {
 	case EventRunStart:

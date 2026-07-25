@@ -182,6 +182,20 @@ func TestBuildSummaryRejectsMalformedAuditLine(t *testing.T) {
 	}
 }
 
+func TestLatestRunCompletedUsesLatestLifecycle(t *testing.T) {
+	log := auditLine(t, Event{Timestamp: "2026-05-24T10:00:00Z", Type: EventRunStart}) +
+		auditLine(t, Event{Timestamp: "2026-05-24T10:00:01Z", Type: EventRunEnd, Data: map[string]any{"outcome": "success"}}) +
+		auditLine(t, Event{Timestamp: "2026-05-24T10:00:02Z", Type: EventRunStart})
+
+	completed, err := LatestRunCompleted(strings.NewReader(log))
+	if err != nil {
+		t.Fatalf("LatestRunCompleted returned error: %v", err)
+	}
+	if completed {
+		t.Fatal("LatestRunCompleted = true after a later run_start, want false")
+	}
+}
+
 func auditLine(t *testing.T, event Event) string {
 	t.Helper()
 	data, err := json.Marshal(event.Data)

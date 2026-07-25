@@ -267,16 +267,17 @@ func Build(candidatePaths []string) Catalog {
 // IsExempt reports whether the final path element begins with an underscore.
 // Source adapters use this to exclude workflow metadata and helper YAML files.
 func IsExempt(candidatePath string) bool {
-	return strings.HasPrefix(path.Base(candidatePath), "_")
+	return strings.HasPrefix(path.Base(slashPath(candidatePath)), "_")
 }
 
 // Parse validates a source-relative workflow path and derives its logical
 // identity. Directory segments are retained in CanonicalName.
 func Parse(candidatePath string) (Definition, error) {
-	base := path.Base(candidatePath)
+	normalizedPath := slashPath(candidatePath)
+	base := path.Base(normalizedPath)
 	ext := path.Ext(base)
 	stem := strings.TrimSuffix(base, ext)
-	group := bestEffortGroup(candidatePath)
+	group := bestEffortGroup(normalizedPath)
 	filenameErr := func(kind FilenameErrorKind) error {
 		return &FilenameError{
 			Path:    candidatePath,
@@ -307,7 +308,7 @@ func Parse(candidatePath string) (Definition, error) {
 	}
 
 	version := Version{Major: major, Minor: minor}
-	dir := path.Dir(candidatePath)
+	dir := path.Dir(normalizedPath)
 	canonicalName := logicalName
 	if dir != "." {
 		canonicalName = path.Join(dir, logicalName)
@@ -319,6 +320,10 @@ func Parse(candidatePath string) (Definition, error) {
 		Version:       version,
 		DisplayLabel:  version.Label(),
 	}, nil
+}
+
+func slashPath(candidatePath string) string {
+	return strings.ReplaceAll(candidatePath, `\`, "/")
 }
 
 func compareDecimal(left, right string) int {

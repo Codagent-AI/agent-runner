@@ -24,6 +24,17 @@ func TestResolveWorkflowArg(t *testing.T) {
 		}
 	})
 
+	t.Run("rejected nested workflow path preserves logical directory", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		path := filepath.Join(".agent-runner", "workflows", "team", "deploy-v1.0.yaml")
+		writeTestFile(t, path, "name: deploy\nsteps:\n  - id: s\n    command: echo ok\n")
+
+		_, err := resolveWorkflowArg(path)
+		if err == nil || !strings.Contains(err.Error(), `launch logical workflow "team/deploy"`) {
+			t.Fatalf("resolveWorkflowArg error = %v, want nested logical-name guidance", err)
+		}
+	})
+
 	t.Run("resolves bare user workflow from dot-agent-runner directory", func(t *testing.T) {
 		t.Chdir(t.TempDir())
 		writeTestFile(t, filepath.Join(".agent-runner", "workflows", "my-workflow-v1.0.yaml"), "name: my-workflow\nsteps:\n  - id: s\n    command: echo ok\n")
@@ -274,6 +285,22 @@ func TestResolveValidateWorkflowArgAcceptsExistingYAMLPath(t *testing.T) {
 	}
 	if got != path {
 		t.Fatalf("resolveValidateWorkflowArg = %q, want %q", got, path)
+	}
+}
+
+func TestResolveValidateWorkflowArgReportsMissingYAMLPath(t *testing.T) {
+	t.Chdir(t.TempDir())
+	path := filepath.Join("workflows", "missing-v1.0.yaml")
+
+	_, err := resolveValidateWorkflowArg(path)
+	if err == nil {
+		t.Fatal("resolveValidateWorkflowArg error = nil, want missing-file error")
+	}
+	if !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("resolveValidateWorkflowArg error = %v, want validation-specific missing-file guidance", err)
+	}
+	if strings.Contains(err.Error(), "for execution") {
+		t.Fatalf("resolveValidateWorkflowArg error = %v, must not describe validation as execution", err)
 	}
 }
 

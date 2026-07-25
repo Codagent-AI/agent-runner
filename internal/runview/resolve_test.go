@@ -551,6 +551,38 @@ func TestNew_MissingRecordedDefinitionPreservesCanonicalNamespace(t *testing.T) 
 	}
 }
 
+func TestNew_MissingRelativeDefinitionPreservesCanonicalNamespaceWithoutMeta(t *testing.T) {
+	base := realPath(t, t.TempDir())
+	projectDir := filepath.Join(base, "projects", "encoded")
+	sessionDir := filepath.Join(projectDir, "runs", "deploy-2026-07-18T04-43-34-715518Z")
+	state := model.RunState{
+		WorkflowFile: filepath.Join("workflows", "openspec", "deploy-v2.0.yaml"),
+		WorkflowName: "deploy",
+		WorkflowHash: "workflow-hash",
+		Completed:    true,
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(sessionDir, "state.json"), string(data))
+	writeFile(t, filepath.Join(sessionDir, "audit.log"), `2026-07-18T04:43:34Z run_start {"workflow_hash":"workflow-hash","workflow_name":"deploy"}
+2026-07-18T04:43:35Z [ship] step_start {"command":"echo ship"}
+2026-07-18T04:43:36Z [ship] step_end {"outcome":"success"}
+2026-07-18T04:43:36Z run_end {"outcome":"success"}
+`)
+	chdirTo(t, realPath(t, t.TempDir()))
+
+	m, err := New(sessionDir, projectDir, FromInspect)
+	if err != nil {
+		t.Fatalf("runview.New: %v", err)
+	}
+	breadcrumb := stripANSI(m.renderBreadcrumb())
+	if !strings.Contains(breadcrumb, "openspec:deploy · v2.0") {
+		t.Fatalf("breadcrumb = %q, want namespace and recorded version without origin metadata", breadcrumb)
+	}
+}
+
 func TestNew_CompletedUnversionedRunReconstructsWithoutFilenameError(t *testing.T) {
 	base := realPath(t, t.TempDir())
 	root := filepath.Join(base, "repo")
