@@ -182,6 +182,20 @@ steps:
 	}
 }
 
+func TestParseWorkflowRejectsUnknownStepField(t *testing.T) {
+	_, err := ParseWorkflow([]byte(`
+name: strict-step-fields
+steps:
+  - id: review
+    agent: reviewer
+    prompt: Review the change.
+    skip_fi: previous_success
+`), Options{})
+	if err == nil || !strings.Contains(err.Error(), "field skip_fi not found") {
+		t.Fatalf("ParseWorkflow() error = %v, want unknown step field error", err)
+	}
+}
+
 func TestParseWorkflowRejectsToolsOnNonAgentSteps(t *testing.T) {
 	for _, tt := range []struct {
 		name        string

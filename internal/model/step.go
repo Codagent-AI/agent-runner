@@ -43,6 +43,26 @@ const (
 	RunnerToolCallAgent RunnerTool = "call_agent"
 )
 
+// RunnerTools is the list of Runner-owned tools enabled for an agent step.
+// Its field-level decoder preserves strict decoding of the enclosing Step.
+type RunnerTools []RunnerTool
+
+// UnmarshalYAML validates the tools field shape while retaining an explicitly
+// empty sequence as a non-nil slice.
+func (t *RunnerTools) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.SequenceNode {
+		return fmt.Errorf(`"tools" must be a sequence`)
+	}
+
+	type plainRunnerTools []RunnerTool
+	decoded := make(plainRunnerTools, 0)
+	if err := value.Decode(&decoded); err != nil {
+		return err
+	}
+	*t = RunnerTools(decoded)
+	return nil
+}
+
 // IsNamedSession reports whether s is a named session reference (not empty and
 // not one of the reserved strategy keywords new/resume/inherit).
 func IsNamedSession(s SessionStrategy) bool {
@@ -153,34 +173,7 @@ type Step struct {
 	Actions           []UIAction        `yaml:"actions,omitempty" json:"actions,omitempty"`
 	Inputs            []UIInput         `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 	OutcomeCapture    string            `yaml:"outcome_capture,omitempty" json:"outcome_capture,omitempty"`
-	Tools             []RunnerTool      `yaml:"tools,omitempty" json:"tools,omitempty"`
-	toolsDeclared     bool
-}
-
-// UnmarshalYAML records whether tools was explicitly present so validation can
-// reject even an empty declaration on a non-agent step.
-func (s *Step) UnmarshalYAML(value *yaml.Node) error {
-	type plainStep Step
-	var decoded plainStep
-	declared := false
-	if value.Kind == yaml.MappingNode {
-		for i := 0; i+1 < len(value.Content); i += 2 {
-			if value.Content[i].Value != "tools" {
-				continue
-			}
-			declared = true
-			if value.Content[i+1].Kind != yaml.SequenceNode {
-				return fmt.Errorf(`"tools" must be a sequence`)
-			}
-			break
-		}
-	}
-	if err := value.Decode(&decoded); err != nil {
-		return err
-	}
-	*s = Step(decoded)
-	s.toolsDeclared = declared
-	return nil
+	Tools             RunnerTools       `yaml:"tools,omitempty" json:"tools,omitempty"`
 }
 
 // HasTool reports whether the step enables a Runner-owned tool.
@@ -443,7 +436,7 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 }
 
 func (s *Step) validateTools(isAgent bool) error {
-	if (s.toolsDeclared || s.Tools != nil) && !isAgent {
+	if s.Tools != nil && !isAgent {
 		return fmt.Errorf(`"tools" is only allowed on agent steps`)
 	}
 	seen := make(map[RunnerTool]struct{}, len(s.Tools))

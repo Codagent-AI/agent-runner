@@ -181,8 +181,8 @@ func TestStepTools(t *testing.T) {
 		if err := yaml.Unmarshal([]byte("id: shell\ncommand: echo hi\ntools: []\n"), &step); err != nil {
 			t.Fatalf("yaml.Unmarshal() error = %v", err)
 		}
-		if !step.toolsDeclared {
-			t.Fatal("toolsDeclared = false, want true")
+		if step.Tools == nil {
+			t.Fatal("Tools = nil, want explicit empty declaration retained")
 		}
 		err := step.Validate(nil)
 		if err == nil || !strings.Contains(err.Error(), `"tools" is only allowed on agent steps`) {

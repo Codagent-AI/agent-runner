@@ -1,6 +1,7 @@
 package loader
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path"
@@ -34,7 +35,9 @@ func LoadWorkflow(filePath string, opts Options) (model.Workflow, error) {
 // ParseWorkflow parses workflow YAML bytes and returns a validated Workflow.
 func ParseWorkflow(data []byte, opts Options) (model.Workflow, error) {
 	var w model.Workflow
-	if err := yaml.Unmarshal(data, &w); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&w); err != nil {
 		return model.Workflow{}, fmt.Errorf("invalid YAML: %w", err)
 	}
 
