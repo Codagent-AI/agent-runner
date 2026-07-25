@@ -196,6 +196,26 @@ func TestLatestRunCompletedUsesLatestLifecycle(t *testing.T) {
 	}
 }
 
+func TestLatestRunCompletedHandlesLargeAuditEvents(t *testing.T) {
+	log := auditLine(t, Event{
+		Timestamp: "2026-05-24T10:00:00Z",
+		Type:      EventStepStart,
+		Data:      map[string]any{"prompt": strings.Repeat("x", 128*1024)},
+	}) + auditLine(t, Event{
+		Timestamp: "2026-05-24T10:00:01Z",
+		Type:      EventRunEnd,
+		Data:      map[string]any{"outcome": "success"},
+	})
+
+	completed, err := LatestRunCompleted(strings.NewReader(log))
+	if err != nil {
+		t.Fatalf("LatestRunCompleted returned error: %v", err)
+	}
+	if !completed {
+		t.Fatal("LatestRunCompleted = false, want true after a large audit event followed by successful run_end")
+	}
+}
+
 func auditLine(t *testing.T, event Event) string {
 	t.Helper()
 	data, err := json.Marshal(event.Data)

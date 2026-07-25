@@ -288,6 +288,18 @@ func TestResolveValidateWorkflowArgAcceptsExistingYAMLPath(t *testing.T) {
 	}
 }
 
+func TestResolveValidateWorkflowArgAcceptsExactBuiltinRef(t *testing.T) {
+	const ref = "builtin:core/debug-v1.0.yaml"
+
+	got, err := resolveValidateWorkflowArg(ref)
+	if err != nil {
+		t.Fatalf("resolveValidateWorkflowArg returned error: %v", err)
+	}
+	if got != ref {
+		t.Fatalf("resolveValidateWorkflowArg = %q, want %q", got, ref)
+	}
+}
+
 func TestResolveValidateWorkflowArgReportsMissingYAMLPath(t *testing.T) {
 	t.Chdir(t.TempDir())
 	path := filepath.Join("workflows", "missing-v1.0.yaml")

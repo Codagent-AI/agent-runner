@@ -1416,6 +1416,12 @@ func handleValidateArgs(args []string) int {
 }
 
 func resolveValidateWorkflowArg(arg string) (string, error) {
+	if builtinworkflows.IsRef(arg) && workflowcatalog.HasYAMLExtension(arg) {
+		if _, err := builtinworkflows.ReadFile(arg); err != nil {
+			return "", fmt.Errorf("workflow file %q does not exist", arg)
+		}
+		return arg, nil
+	}
 	if workflowcatalog.HasYAMLExtension(arg) {
 		if fileExists(arg) {
 			return arg, nil

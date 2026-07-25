@@ -10,6 +10,11 @@ import (
 	"strings"
 )
 
+// maxAuditLineBytes bounds memory while allowing audit events that embed large
+// prompts or serialized context. The default Scanner limit of 64 KiB is too
+// small for valid audit lines.
+const maxAuditLineBytes = 16 * 1024 * 1024
+
 type Summary struct {
 	Path               string                `json:"path"`
 	SessionDir         string                `json:"session_dir,omitempty"`
@@ -98,7 +103,7 @@ func BuildSummary(r io.Reader, capBytes int) (Summary, error) {
 	}
 
 	used := 0
-	scanner := bufio.NewScanner(r)
+	scanner := newAuditScanner(r)
 	for lineNo := 1; scanner.Scan(); lineNo++ {
 		line := scanner.Text()
 		if strings.TrimSpace(line) == "" {
@@ -124,7 +129,7 @@ func BuildSummary(r io.Reader, capBytes int) (Summary, error) {
 // successfully. A later run_start resets an earlier successful run_end.
 func LatestRunCompleted(r io.Reader) (bool, error) {
 	completed := false
-	scanner := bufio.NewScanner(r)
+	scanner := newAuditScanner(r)
 	for lineNo := 1; scanner.Scan(); lineNo++ {
 		line := scanner.Text()
 		if strings.TrimSpace(line) == "" {
@@ -145,6 +150,12 @@ func LatestRunCompleted(r io.Reader) (bool, error) {
 		return false, err
 	}
 	return completed, nil
+}
+
+func newAuditScanner(r io.Reader) *bufio.Scanner {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxAuditLineBytes)
+	return scanner
 }
 
 func appendClassifiedEvent(summary *Summary, event Event, capBytes int, used *int) bool {
