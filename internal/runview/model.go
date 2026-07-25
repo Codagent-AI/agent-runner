@@ -410,7 +410,7 @@ func NewForDefinition(entry *discovery.WorkflowEntry, projectDir string) (*Model
 }
 
 // deriveCanonicalFromPath produces a display name from a workflow source path
-// when no canonical name is available (e.g. builtin:core/finalize-pr.yaml → core:finalize-pr).
+// when no canonical name is available (e.g. builtin:core/finalize-pr-v1.0.yaml → core:finalize-pr).
 func deriveCanonicalFromPath(sourcePath string) string {
 	if rel, ok := strings.CutPrefix(sourcePath, "builtin:"); ok {
 		rel = strings.TrimSuffix(rel, filepath.Ext(rel))

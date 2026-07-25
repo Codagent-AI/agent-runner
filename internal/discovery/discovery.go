@@ -247,7 +247,7 @@ func loadBuiltinEntries(fsys fs.FS, candidates map[string]workflowCandidate) []W
 			continue
 		}
 
-		workflow, err := loader.ParseWorkflow(data, loader.Options{})
+		workflow, err := loader.ParseWorkflowSource(data, candidate.sourcePath, loader.Options{})
 		if err != nil {
 			entry.ParseError = err.Error()
 		} else {
@@ -347,8 +347,9 @@ func extensionPriority(ext string) int {
 	return 1
 }
 
-// builtinCanonical converts a path like "core/finalize-pr.yaml" to
-// canonical name "core:finalize-pr" and namespace "core".
+// builtinCanonical converts a path like "core/finalize-pr-v1.0.yaml" to the
+// intermediate physical canonical name "core:finalize-pr-v1.0" and namespace
+// "core". Task 04 replaces this with catalog-backed logical names.
 func builtinCanonical(relPath string) (name, namespace string) {
 	relPath = path.Clean(filepath.ToSlash(relPath))
 	parts := strings.SplitN(relPath, "/", 2)

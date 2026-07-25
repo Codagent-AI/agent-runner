@@ -15,24 +15,24 @@ func TestEnumerate_AllScopesOrderedWithMetadata(t *testing.T) {
 	projectDir := t.TempDir()
 	userDir := t.TempDir()
 
-	writeWorkflow(t, filepath.Join(projectDir, ".agent-runner", "workflows", "build.yaml"), validWorkflowYAML("Build the project"))
-	writeWorkflow(t, filepath.Join(userDir, "deploy.yaml"), workflowWithParamsYAML("Deploy the app"))
+	writeWorkflow(t, filepath.Join(projectDir, ".agent-runner", "workflows", "build-v1.0.yaml"), validWorkflowYAML("Build the project"))
+	writeWorkflow(t, filepath.Join(userDir, "deploy-v1.0.yaml"), workflowWithParamsYAML("Deploy the app"))
 
 	entries := discovery.Enumerate(fakeBuiltinFS(), projectDir, userDir)
 
 	gotNames := canonicalNames(entries)
 	wantNames := []string{
-		"build",
-		"deploy",
-		"core:finalize-pr",
-		"core:implement-task",
-		"spec-driven:change",
+		"build-v1.0",
+		"deploy-v1.0",
+		"core:finalize-pr-v1.0",
+		"core:implement-task-v1.0",
+		"spec-driven:change-v1.0",
 	}
 	if fmt.Sprint(gotNames) != fmt.Sprint(wantNames) {
 		t.Fatalf("canonical names = %v, want %v", gotNames, wantNames)
 	}
 
-	build := entryByName(t, entries, "build")
+	build := entryByName(t, entries, "build-v1.0")
 	if build.Scope != discovery.ScopeProject {
 		t.Fatalf("build scope = %v, want %v", build.Scope, discovery.ScopeProject)
 	}
@@ -40,7 +40,7 @@ func TestEnumerate_AllScopesOrderedWithMetadata(t *testing.T) {
 		t.Fatalf("build description = %q, want %q", build.Description, "Build the project")
 	}
 
-	deploy := entryByName(t, entries, "deploy")
+	deploy := entryByName(t, entries, "deploy-v1.0")
 	if deploy.Scope != discovery.ScopeUser {
 		t.Fatalf("deploy scope = %v, want %v", deploy.Scope, discovery.ScopeUser)
 	}
@@ -60,7 +60,7 @@ func TestEnumerate_AllScopesOrderedWithMetadata(t *testing.T) {
 		t.Fatalf("deploy second param default = %q, want %q", deploy.Params[1].Default, "main")
 	}
 
-	builtin := entryByName(t, entries, "core:finalize-pr")
+	builtin := entryByName(t, entries, "core:finalize-pr-v1.0")
 	if builtin.Scope != discovery.ScopeBuiltin {
 		t.Fatalf("builtin scope = %v, want %v", builtin.Scope, discovery.ScopeBuiltin)
 	}
@@ -76,15 +76,15 @@ func TestEnumerate_CopiesHiddenField(t *testing.T) {
 	projectDir := t.TempDir()
 	userDir := t.TempDir()
 
-	writeWorkflow(t, filepath.Join(projectDir, ".agent-runner", "workflows", "hidden-local.yaml"), hiddenWorkflowYAML("Hidden local"))
+	writeWorkflow(t, filepath.Join(projectDir, ".agent-runner", "workflows", "hidden-local-v1.0.yaml"), hiddenWorkflowYAML("Hidden local"))
 	entries := discovery.Enumerate(fakeBuiltinFS(), projectDir, userDir)
 
-	local := entryByName(t, entries, "hidden-local")
+	local := entryByName(t, entries, "hidden-local-v1.0")
 	if !local.Hidden {
 		t.Fatal("local hidden workflow should be marked hidden in discovery")
 	}
 
-	builtin := entryByName(t, entries, "core:implement-task")
+	builtin := entryByName(t, entries, "core:implement-task-v1.0")
 	if !builtin.Hidden {
 		t.Fatal("builtin hidden workflow should be marked hidden in discovery")
 	}
@@ -108,8 +108,8 @@ func TestEnumerate_SkipsUnderscorePrefixedWorkflowFiles(t *testing.T) {
 
 func TestEnumerate_SkipsTopLevelBuiltinWorkflowFiles(t *testing.T) {
 	fsys := fstest.MapFS{
-		"top-level.yaml":        {Data: validWorkflowYAML("Top level")},
-		"core/finalize-pr.yaml": {Data: validWorkflowYAML("Finalize")},
+		"top-level.yaml":             {Data: validWorkflowYAML("Top level")},
+		"core/finalize-pr-v1.0.yaml": {Data: namedWorkflowYAML("finalize-pr", "Finalize")},
 	}
 
 	entries := discovery.Enumerate(fsys, "", "")
@@ -117,7 +117,7 @@ func TestEnumerate_SkipsTopLevelBuiltinWorkflowFiles(t *testing.T) {
 	if countByName(entries, "top-level") != 0 {
 		t.Fatalf("top-level builtin workflow should not be enumerated: %v", canonicalNames(entries))
 	}
-	if countByName(entries, "core:finalize-pr") != 1 {
+	if countByName(entries, "core:finalize-pr-v1.0") != 1 {
 		t.Fatalf("expected namespaced builtin workflow, got %v", canonicalNames(entries))
 	}
 }
@@ -138,7 +138,7 @@ func TestEnumerateGroups_LoadsBuiltinMetadata(t *testing.T) {
 
 func TestEnumerateGroups_DefaultsWhenMetadataAbsent(t *testing.T) {
 	fsys := fstest.MapFS{
-		"extra/deploy.yaml": {Data: validWorkflowYAML("Deploy")},
+		"extra/deploy-v1.0.yaml": {Data: namedWorkflowYAML("deploy", "Deploy")},
 	}
 	entries := discovery.Enumerate(fsys, "", "")
 
@@ -155,8 +155,8 @@ func TestEnumerateGroups_DefaultsWhenMetadataAbsent(t *testing.T) {
 
 func TestEnumerateGroups_DefaultsWhenMetadataMalformed(t *testing.T) {
 	fsys := fstest.MapFS{
-		"broken/deploy.yaml": {Data: validWorkflowYAML("Deploy")},
-		"broken/_group.yaml": {Data: malformedYAML()},
+		"broken/deploy-v1.0.yaml": {Data: namedWorkflowYAML("deploy", "Deploy")},
+		"broken/_group.yaml":      {Data: malformedYAML()},
 	}
 	entries := discovery.Enumerate(fsys, "", "")
 
@@ -174,7 +174,7 @@ func TestEnumerateGroups_DefaultsWhenMetadataMalformed(t *testing.T) {
 func TestEnumerate_MissingProjectDirectoryContributesNoEntries(t *testing.T) {
 	projectDir := t.TempDir()
 	userDir := t.TempDir()
-	writeWorkflow(t, filepath.Join(userDir, "deploy.yaml"), validWorkflowYAML("Deploy"))
+	writeWorkflow(t, filepath.Join(userDir, "deploy-v1.0.yaml"), validWorkflowYAML("Deploy"))
 
 	entries := discovery.Enumerate(fakeBuiltinFS(), projectDir, userDir)
 
@@ -185,7 +185,7 @@ func TestEnumerate_MissingProjectDirectoryContributesNoEntries(t *testing.T) {
 	}
 
 	gotNames := canonicalNames(entries)
-	wantNames := []string{"deploy", "core:finalize-pr", "core:implement-task", "spec-driven:change"}
+	wantNames := []string{"deploy-v1.0", "core:finalize-pr-v1.0", "core:implement-task-v1.0", "spec-driven:change-v1.0"}
 	if fmt.Sprint(gotNames) != fmt.Sprint(wantNames) {
 		t.Fatalf("canonical names = %v, want %v", gotNames, wantNames)
 	}
@@ -195,16 +195,16 @@ func TestEnumerate_ProjectShadowsUserWorkflow(t *testing.T) {
 	projectDir := t.TempDir()
 	userDir := t.TempDir()
 
-	writeWorkflow(t, filepath.Join(projectDir, ".agent-runner", "workflows", "deploy.yaml"), validWorkflowYAML("Project deploy"))
-	writeWorkflow(t, filepath.Join(userDir, "deploy.yaml"), validWorkflowYAML("User deploy"))
+	writeWorkflow(t, filepath.Join(projectDir, ".agent-runner", "workflows", "deploy-v1.0.yaml"), validWorkflowYAML("Project deploy"))
+	writeWorkflow(t, filepath.Join(userDir, "deploy-v1.0.yaml"), validWorkflowYAML("User deploy"))
 
 	entries := discovery.Enumerate(fakeBuiltinFS(), projectDir, userDir)
 
-	if countByName(entries, "deploy") != 1 {
-		t.Fatalf("deploy count = %d, want 1", countByName(entries, "deploy"))
+	if countByName(entries, "deploy-v1.0") != 1 {
+		t.Fatalf("deploy count = %d, want 1", countByName(entries, "deploy-v1.0"))
 	}
 
-	deploy := entryByName(t, entries, "deploy")
+	deploy := entryByName(t, entries, "deploy-v1.0")
 	if deploy.Scope != discovery.ScopeProject {
 		t.Fatalf("deploy scope = %v, want %v", deploy.Scope, discovery.ScopeProject)
 	}
@@ -217,18 +217,18 @@ func TestEnumerate_BuiltinNamesAreNotShadowedByDiskWorkflows(t *testing.T) {
 	projectDir := t.TempDir()
 	userDir := t.TempDir()
 
-	writeWorkflow(t, filepath.Join(projectDir, ".agent-runner", "workflows", "finalize-pr.yaml"), validWorkflowYAML("Project finalize"))
-	writeWorkflow(t, filepath.Join(userDir, "core", "finalize-pr.yaml"), validWorkflowYAML("User builtin-style path"))
+	writeWorkflow(t, filepath.Join(projectDir, ".agent-runner", "workflows", "finalize-pr-v1.0.yaml"), validWorkflowYAML("Project finalize"))
+	writeWorkflow(t, filepath.Join(userDir, "core", "finalize-pr-v1.0.yaml"), validWorkflowYAML("User builtin-style path"))
 
 	entries := discovery.Enumerate(fakeBuiltinFS(), projectDir, userDir)
 
 	gotNames := canonicalNames(entries)
 	wantNames := []string{
-		"finalize-pr",
-		"core/finalize-pr",
-		"core:finalize-pr",
-		"core:implement-task",
-		"spec-driven:change",
+		"finalize-pr-v1.0",
+		"core/finalize-pr-v1.0",
+		"core:finalize-pr-v1.0",
+		"core:implement-task-v1.0",
+		"spec-driven:change-v1.0",
 	}
 	if fmt.Sprint(gotNames) != fmt.Sprint(wantNames) {
 		t.Fatalf("canonical names = %v, want %v", gotNames, wantNames)
@@ -239,14 +239,14 @@ func TestEnumerate_ReportsMalformedFilesWithoutBlockingOtherEntries(t *testing.T
 	projectDir := t.TempDir()
 	userDir := t.TempDir()
 
-	writeWorkflow(t, filepath.Join(projectDir, ".agent-runner", "workflows", "broken.yaml"), malformedYAML())
-	writeWorkflow(t, filepath.Join(userDir, "bad-syntax.yaml"), malformedYAML())
-	writeWorkflow(t, filepath.Join(userDir, "good.yaml"), validWorkflowYAML("Good workflow"))
-	writeWorkflow(t, filepath.Join(userDir, "also-good.yaml"), validWorkflowYAML("Also good"))
+	writeWorkflow(t, filepath.Join(projectDir, ".agent-runner", "workflows", "broken-v1.0.yaml"), malformedYAML())
+	writeWorkflow(t, filepath.Join(userDir, "bad-syntax-v1.0.yaml"), malformedYAML())
+	writeWorkflow(t, filepath.Join(userDir, "good-v1.0.yaml"), validWorkflowYAML("Good workflow"))
+	writeWorkflow(t, filepath.Join(userDir, "also-good-v1.0.yaml"), validWorkflowYAML("Also good"))
 
 	entries := discovery.Enumerate(fakeBuiltinFS(), projectDir, userDir)
 
-	broken := entryByName(t, entries, "broken")
+	broken := entryByName(t, entries, "broken-v1.0")
 	if broken.Scope != discovery.ScopeProject {
 		t.Fatalf("broken scope = %v, want %v", broken.Scope, discovery.ScopeProject)
 	}
@@ -260,7 +260,7 @@ func TestEnumerate_ReportsMalformedFilesWithoutBlockingOtherEntries(t *testing.T
 		t.Fatalf("broken params len = %d, want 0", len(broken.Params))
 	}
 
-	badSyntax := entryByName(t, entries, "bad-syntax")
+	badSyntax := entryByName(t, entries, "bad-syntax-v1.0")
 	if badSyntax.Scope != discovery.ScopeUser {
 		t.Fatalf("bad-syntax scope = %v, want %v", badSyntax.Scope, discovery.ScopeUser)
 	}
@@ -268,12 +268,12 @@ func TestEnumerate_ReportsMalformedFilesWithoutBlockingOtherEntries(t *testing.T
 		t.Fatal("bad-syntax workflow should include a parse error")
 	}
 
-	good := entryByName(t, entries, "good")
+	good := entryByName(t, entries, "good-v1.0")
 	if good.Description != "Good workflow" {
 		t.Fatalf("good description = %q, want %q", good.Description, "Good workflow")
 	}
 
-	alsoGood := entryByName(t, entries, "also-good")
+	alsoGood := entryByName(t, entries, "also-good-v1.0")
 	if alsoGood.Description != "Also good" {
 		t.Fatalf("also-good description = %q, want %q", alsoGood.Description, "Also good")
 	}
@@ -282,11 +282,11 @@ func TestEnumerate_ReportsMalformedFilesWithoutBlockingOtherEntries(t *testing.T
 func TestEnumerate_UsesWorkflowLoaderValidation(t *testing.T) {
 	projectDir := t.TempDir()
 
-	writeWorkflow(t, filepath.Join(projectDir, ".agent-runner", "workflows", "needs-agent.yaml"), invalidWorkflowYAML())
+	writeWorkflow(t, filepath.Join(projectDir, ".agent-runner", "workflows", "needs-agent-v1.0.yaml"), invalidWorkflowYAML())
 
 	entries := discovery.Enumerate(fakeBuiltinFS(), projectDir, "")
 
-	entry := entryByName(t, entries, "needs-agent")
+	entry := entryByName(t, entries, "needs-agent-v1.0")
 	if entry.ParseError == "" {
 		t.Fatal("needs-agent workflow should include a validation error")
 	}
@@ -295,34 +295,68 @@ func TestEnumerate_UsesWorkflowLoaderValidation(t *testing.T) {
 	}
 }
 
+func TestEnumerate_BuiltinUsesSourceAwareNameValidation(t *testing.T) {
+	fsys := fstest.MapFS{
+		"core/deploy-v1.0.yml": {
+			Data: []byte("name: other\nsteps:\n  - id: run\n    command: echo ok\n"),
+		},
+	}
+
+	entries := discovery.Enumerate(fsys, "", "")
+
+	deploy := entryByName(t, entries, "core:deploy-v1.0")
+	if !strings.Contains(deploy.ParseError, `expected "deploy", got "other"`) {
+		t.Fatalf("parse error = %q, want source-aware name mismatch", deploy.ParseError)
+	}
+}
+
 func TestEnumerate_PrefersYAMLOverYMLForDuplicateNames(t *testing.T) {
 	projectDir := t.TempDir()
 
-	writeWorkflow(t, filepath.Join(projectDir, ".agent-runner", "workflows", "deploy.yml"), validWorkflowYAML("from yml"))
-	writeWorkflow(t, filepath.Join(projectDir, ".agent-runner", "workflows", "deploy.yaml"), validWorkflowYAML("from yaml"))
+	writeWorkflow(t, filepath.Join(projectDir, ".agent-runner", "workflows", "deploy-v1.0.yml"), validWorkflowYAML("from yml"))
+	writeWorkflow(t, filepath.Join(projectDir, ".agent-runner", "workflows", "deploy-v1.0.yaml"), validWorkflowYAML("from yaml"))
 
 	entries := discovery.Enumerate(fakeBuiltinFS(), projectDir, "")
 
-	if countByName(entries, "deploy") != 1 {
-		t.Fatalf("deploy count = %d, want 1", countByName(entries, "deploy"))
+	if countByName(entries, "deploy-v1.0") != 1 {
+		t.Fatalf("deploy count = %d, want 1", countByName(entries, "deploy-v1.0"))
 	}
 
-	deploy := entryByName(t, entries, "deploy")
+	deploy := entryByName(t, entries, "deploy-v1.0")
 	if deploy.Description != "from yaml" {
 		t.Fatalf("deploy description = %q, want %q", deploy.Description, "from yaml")
 	}
-	if !strings.HasSuffix(filepath.ToSlash(deploy.SourcePath), "deploy.yaml") {
+	if !strings.HasSuffix(filepath.ToSlash(deploy.SourcePath), "deploy-v1.0.yaml") {
 		t.Fatalf("deploy source path = %q, want .yaml file", deploy.SourcePath)
 	}
 }
 
 func fakeBuiltinFS() fstest.MapFS {
 	return fstest.MapFS{
-		"core/finalize-pr.yaml":    {Data: validWorkflowYAML("Finalize a pull request")},
-		"core/implement-task.yaml": {Data: hiddenWorkflowYAML("Implement a task")},
-		"core/_group.yaml":         {Data: []byte("display_name: Core Tools\ndescription: Shared implementation workflows.\n")},
-		"spec-driven/change.yaml":  {Data: validWorkflowYAML("Spec-driven change")},
+		"core/finalize-pr-v1.0.yaml":    {Data: namedWorkflowYAML("finalize-pr", "Finalize a pull request")},
+		"core/implement-task-v1.0.yaml": {Data: namedHiddenWorkflowYAML("implement-task", "Implement a task")},
+		"core/_group.yaml":              {Data: []byte("display_name: Core Tools\ndescription: Shared implementation workflows.\n")},
+		"spec-driven/change-v1.0.yaml":  {Data: namedWorkflowYAML("change", "Spec-driven change")},
 	}
+}
+
+func namedWorkflowYAML(name, description string) []byte {
+	return []byte(fmt.Sprintf(`name: %s
+description: %s
+steps:
+  - id: step1
+    command: echo hello
+`, name, description))
+}
+
+func namedHiddenWorkflowYAML(name, description string) []byte {
+	return []byte(fmt.Sprintf(`name: %s
+description: %s
+hidden: true
+steps:
+  - id: step1
+    command: echo hello
+`, name, description))
 }
 
 func validWorkflowYAML(description string) []byte {
@@ -374,6 +408,13 @@ func malformedYAML() []byte {
 
 func writeWorkflow(t *testing.T, path string, data []byte) {
 	t.Helper()
+	stem := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	if version := strings.LastIndex(stem, "-v"); version >= 0 {
+		stem = stem[:version]
+	}
+	if newline := strings.IndexByte(string(data), '\n'); newline >= 0 && strings.HasPrefix(string(data), "name: ") {
+		data = []byte("name: " + stem + string(data[newline:]))
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
 	}

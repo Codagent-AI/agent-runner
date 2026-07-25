@@ -310,8 +310,9 @@ func TestBuildDescriptor_Builtin(t *testing.T) {
 		workflowFile string
 		wantDisplay  string
 	}{
-		{"builtin:openspec/change.yaml", "openspec:change"},
-		{"builtin:core/finalize-pr.yaml", "core:finalize-pr"},
+		// Task 04 will make canonical display names version-neutral.
+		{"builtin:openspec/change-v1.0.yaml", "openspec:change-v1.0"},
+		{"builtin:core/finalize-pr-v1.0.yaml", "core:finalize-pr-v1.0"},
 		{"builtin:smoke-test.yaml", "smoke-test"},
 	}
 	for _, tt := range tests {

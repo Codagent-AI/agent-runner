@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"gopkg.in/yaml.v3"
 )
@@ -17,42 +18,42 @@ func TestOnboardingWorkflowsResolveAndAssetsList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve(onboarding:onboarding) returned error: %v", err)
 	}
-	if onboarding != "builtin:onboarding/onboarding.yaml" {
+	if onboarding != "builtin:onboarding/onboarding-v1.0.yaml" {
 		t.Fatalf("onboarding ref = %q", onboarding)
 	}
 	demo, err := Resolve("onboarding:step-types-demo")
 	if err != nil {
 		t.Fatalf("Resolve(onboarding:step-types-demo) returned error: %v", err)
 	}
-	if demo != "builtin:onboarding/step-types-demo.yaml" {
+	if demo != "builtin:onboarding/step-types-demo-v1.0.yaml" {
 		t.Fatalf("demo ref = %q", demo)
 	}
 	guided, err := Resolve("onboarding:guided-workflow")
 	if err != nil {
 		t.Fatalf("Resolve(onboarding:guided-workflow) returned error: %v", err)
 	}
-	if guided != "builtin:onboarding/guided-workflow.yaml" {
+	if guided != "builtin:onboarding/guided-workflow-v1.0.yaml" {
 		t.Fatalf("guided ref = %q", guided)
 	}
 	validator, err := Resolve("onboarding:validator")
 	if err != nil {
 		t.Fatalf("Resolve(onboarding:validator) returned error: %v", err)
 	}
-	if validator != "builtin:onboarding/validator.yaml" {
+	if validator != "builtin:onboarding/validator-v1.0.yaml" {
 		t.Fatalf("validator ref = %q", validator)
 	}
 	advanced, err := Resolve("onboarding:advanced")
 	if err != nil {
 		t.Fatalf("Resolve(onboarding:advanced) returned error: %v", err)
 	}
-	if advanced != "builtin:onboarding/advanced.yaml" {
+	if advanced != "builtin:onboarding/advanced-v1.0.yaml" {
 		t.Fatalf("advanced ref = %q", advanced)
 	}
 	help, err := Resolve("onboarding:help")
 	if err != nil {
 		t.Fatalf("Resolve(onboarding:help) returned error: %v", err)
 	}
-	if help != "builtin:onboarding/help.yaml" {
+	if help != "builtin:onboarding/help-v1.0.yaml" {
 		t.Fatalf("help ref = %q", help)
 	}
 
@@ -88,6 +89,137 @@ func TestOnboardingWorkflowsResolveAndAssetsList(t *testing.T) {
 	} {
 		if slices.Contains(assets, removed) {
 			t.Fatalf("removed setup asset %q still embedded in onboarding namespace assets %v", removed, assets)
+		}
+	}
+}
+
+func TestResolveSelectsLatestVersionWhileExactReadsRemainAvailable(t *testing.T) {
+	ref, err := Resolve("openspec:change")
+	if err != nil {
+		t.Fatalf("Resolve(openspec:change): %v", err)
+	}
+	if ref != "builtin:openspec/change-v2.0.yaml" {
+		t.Fatalf("resolved ref = %q, want latest v2.0", ref)
+	}
+
+	if _, err := ReadFile("builtin:openspec/change-v1.0.yaml"); err != nil {
+		t.Fatalf("ReadFile exact older version: %v", err)
+	}
+	if legacy, err := Resolve("openspec:change2"); err == nil {
+		t.Fatalf("Resolve(openspec:change2) = %q, want not found", legacy)
+	}
+
+	refs, err := List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, want := range []string{
+		"builtin:openspec/change-v1.0.yaml",
+		"builtin:openspec/change-v2.0.yaml",
+	} {
+		if !slices.Contains(refs, want) {
+			t.Fatalf("List() missing %q from %v", want, refs)
+		}
+	}
+}
+
+func TestOpenSpecPairsAndSpecDrivenFirstGenerationsAreEmbedded(t *testing.T) {
+	refs, err := List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	for _, logicalName := range []string{"change", "plan-change", "implement-change"} {
+		for _, version := range []string{"v1.0", "v2.0"} {
+			want := "builtin:openspec/" + logicalName + "-" + version + ".yaml"
+			if !slices.Contains(refs, want) {
+				t.Errorf("List() missing paired OpenSpec generation %q", want)
+			}
+		}
+
+		firstGeneration := "builtin:spec-driven/" + logicalName + "-v1.0.yaml"
+		if !slices.Contains(refs, firstGeneration) {
+			t.Errorf("List() missing spec-driven first generation %q", firstGeneration)
+		}
+		unwantedSecondGeneration := "builtin:spec-driven/" + logicalName + "-v2.0.yaml"
+		if slices.Contains(refs, unwantedSecondGeneration) {
+			t.Errorf("List() unexpectedly contains %q", unwantedSecondGeneration)
+		}
+	}
+}
+
+func TestResolveFSRejectsInvalidAndDuplicateLogicalGroups(t *testing.T) {
+	t.Run("unversioned sibling invalidates versioned group", func(t *testing.T) {
+		fsys := fstest.MapFS{
+			"team/deploy.yaml":      {Data: []byte("name: deploy\n")},
+			"team/deploy-v1.0.yaml": {Data: []byte("name: deploy\n")},
+		}
+
+		_, err := resolveFS(fsys, "team:deploy")
+		if err == nil {
+			t.Fatal("resolveFS succeeded, want invalid filename error")
+		}
+		for _, want := range []string{"team/deploy.yaml", "deploy-v1.0.yaml"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error = %v, want text %q", err, want)
+			}
+		}
+	})
+
+	t.Run("yaml and yml duplicate version invalidates group", func(t *testing.T) {
+		fsys := fstest.MapFS{
+			"team/deploy-v1.0.yaml": {Data: []byte("name: deploy\n")},
+			"team/deploy-v1.0.yml":  {Data: []byte("name: deploy\n")},
+		}
+
+		_, err := resolveFS(fsys, "team:deploy")
+		if err == nil || !strings.Contains(err.Error(), "duplicate version v1.0") {
+			t.Fatalf("resolveFS error = %v, want duplicate version", err)
+		}
+	})
+}
+
+func TestDefinitionEnumerationIncludesYMLButExcludesMetadataAndTopLevelFiles(t *testing.T) {
+	fsys := fstest.MapFS{
+		"top-v1.0.yaml":          {Data: []byte("name: top\n")},
+		"core/_group.yaml":       {Data: []byte("display_name: Core\n")},
+		"core/deploy-v1.0.yml":   {Data: []byte("name: deploy\n")},
+		"core/deploy-v2.0.yaml":  {Data: []byte("name: deploy\n")},
+		"core/data.json":         {Data: []byte("{}")},
+		"core/nested/readme.txt": {Data: []byte("docs")},
+	}
+
+	ref, err := resolveFS(fsys, "core:deploy")
+	if err != nil {
+		t.Fatalf("resolveFS: %v", err)
+	}
+	if ref != "builtin:core/deploy-v2.0.yaml" {
+		t.Fatalf("resolveFS ref = %q, want latest YAML definition", ref)
+	}
+
+	refs, err := listFS(fsys)
+	if err != nil {
+		t.Fatalf("listFS: %v", err)
+	}
+	want := []string{"builtin:core/deploy-v1.0.yml", "builtin:core/deploy-v2.0.yaml"}
+	if !slices.Equal(refs, want) {
+		t.Fatalf("listFS refs = %v, want %v", refs, want)
+	}
+
+	if _, err := ReadAsset("core/deploy-v1.0.yml"); err == nil || !strings.Contains(err.Error(), "is a workflow") {
+		t.Fatalf("ReadAsset(YML definition) error = %v, want workflow rejection", err)
+	}
+}
+
+func TestBuiltinReferenceAndAssetPathsStayConfined(t *testing.T) {
+	for _, ref := range []string{"builtin:../core/debug-v1.0.yaml", "builtin:/core/debug-v1.0.yaml"} {
+		if _, err := RefPath(ref); err == nil {
+			t.Fatalf("RefPath(%q) succeeded, want confinement error", ref)
+		}
+	}
+	for _, asset := range []string{"../core/debug/prompt.md", "/core/debug/prompt.md"} {
+		if _, err := ReadAsset(asset); err == nil {
+			t.Fatalf("ReadAsset(%q) succeeded, want confinement error", asset)
 		}
 	}
 }
@@ -143,7 +275,7 @@ func TestNamespaceGroupMetadataEmbedded(t *testing.T) {
 }
 
 func TestOpenSpecPlanningWorkflowsUseSharedCreateScript(t *testing.T) {
-	for _, ref := range []string{"builtin:openspec/plan-change.yaml", "builtin:openspec/simple-change.yaml"} {
+	for _, ref := range []string{"builtin:openspec/plan-change-v1.0.yaml", "builtin:openspec/simple-change-v1.0.yaml"} {
 		t.Run(ref, func(t *testing.T) {
 			data, err := ReadFile(ref)
 			if err != nil {
@@ -182,7 +314,7 @@ func TestOpenSpecPlanningWorkflowsUseSharedCreateScript(t *testing.T) {
 }
 
 func TestCoreReviewProposalUsesReviewerAgentProfile(t *testing.T) {
-	data, err := ReadFile("builtin:core/review-proposal.yaml")
+	data, err := ReadFile("builtin:core/review-proposal-v1.0.yaml")
 	if err != nil {
 		t.Fatalf("ReadFile(core/review-proposal): %v", err)
 	}
@@ -210,7 +342,7 @@ func TestCoreReviewProposalUsesReviewerAgentProfile(t *testing.T) {
 }
 
 func TestCoreFinalizePRUsesCIStatusGate(t *testing.T) {
-	data, err := ReadFile("builtin:core/finalize-pr.yaml")
+	data, err := ReadFile("builtin:core/finalize-pr-v1.0.yaml")
 	if err != nil {
 		t.Fatalf("ReadFile(core/finalize-pr): %v", err)
 	}
@@ -349,7 +481,7 @@ func TestCoreCIStatusGateScript(t *testing.T) {
 }
 
 func TestCoreDebugWorkflowIsSinglePromptStepAndDoesNotUseResumeHandoff(t *testing.T) {
-	data, err := ReadFile("builtin:core/debug.yaml")
+	data, err := ReadFile("builtin:core/debug-v1.0.yaml")
 	if err != nil {
 		t.Fatalf("ReadFile(core/debug): %v", err)
 	}

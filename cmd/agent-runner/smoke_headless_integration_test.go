@@ -36,7 +36,9 @@ func TestSmokeTestHeadlessWorkflowIntegration(t *testing.T) {
 	buildAgentRunner(t, repoRoot, runnerBin)
 	writeFakeAgentCLIs(t, binDir, fakeExecutableNames(t))
 
-	cmd := exec.Command(runnerBin, "--headless", "smoke-test-headless", "smoke_dir="+smokeDir)
+	// Task 03 will replace this temporary direct path with logical-name
+	// resolution once local version catalogs are wired into the CLI.
+	cmd := exec.Command(runnerBin, "--headless", ".agent-runner/workflows/smoke-test-headless-v1.0.yaml", "smoke_dir="+smokeDir)
 	cmd.Dir = repoRoot
 	cmd.Env = append(os.Environ(),
 		"AGENT_RUNNER_NO_TUI=1",

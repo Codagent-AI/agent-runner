@@ -13,7 +13,7 @@ env CLAUDE_STUB_LOG=$WORK/claude-args.log
 mkdir $WORK/home
 env HOME=$WORK/home
 
-exec agent-runner workflow
+exec agent-runner .agent-runner/workflows/workflow-v1.0.yaml
 
 grep 'model haiku' claude-args.log
 ! grep 'model opus' claude-args.log
@@ -41,8 +41,8 @@ profiles:
         cli: claude
         model: haiku
 
--- .agent-runner/workflows/workflow.yaml --
-name: multi-profile-active
+-- .agent-runner/workflows/workflow-v1.0.yaml --
+name: workflow
 steps:
   - id: run-planner
     agent: planner

@@ -163,7 +163,7 @@ func TestResolveWorkflow_DiscoveryByName_WhenFileMoved(t *testing.T) {
 	base := realPath(t, t.TempDir())
 	root := filepath.Join(base, "repo")
 	// Workflow lives under a namespace subdir...
-	movedWorkflow := filepath.Join(root, "workflows", "openspec", "plan-change.yaml")
+	movedWorkflow := filepath.Join(root, "workflows", "openspec", "plan-change-v1.0.yaml")
 	writeFile(t, movedWorkflow, minimalWorkflowYAML)
 
 	projectDir := filepath.Join(base, "projects", "encoded")
@@ -176,8 +176,10 @@ func TestResolveWorkflow_DiscoveryByName_WhenFileMoved(t *testing.T) {
 
 	// ...but state still records the OLD location.
 	state := model.RunState{
-		WorkflowFile: "workflows/plan-change.yaml",
-		WorkflowName: "plan-change",
+		WorkflowFile: "workflows/plan-change-v1.0.yaml",
+		// Task 04 will make discovery version-neutral. At the task 02
+		// boundary, fallback uses the physical version-bearing name.
+		WorkflowName: "plan-change-v1.0",
 	}
 	got, ok := ResolveWorkflow(sessionDir, projectDir, &state)
 	if !ok {
@@ -195,7 +197,7 @@ func TestResolveWorkflow_DiscoveryByName_WhenFileMoved(t *testing.T) {
 func TestResolveWorkflow_DiscoveryByNamespacedName(t *testing.T) {
 	base := realPath(t, t.TempDir())
 	root := filepath.Join(base, "repo")
-	namespaced := filepath.Join(root, "workflows", "openspec", "plan-change.yaml")
+	namespaced := filepath.Join(root, "workflows", "openspec", "plan-change-v1.0.yaml")
 	writeFile(t, namespaced, minimalWorkflowYAML)
 
 	projectDir := filepath.Join(base, "projects", "encoded")
@@ -206,7 +208,7 @@ func TestResolveWorkflow_DiscoveryByNamespacedName(t *testing.T) {
 	writeMeta(t, projectDir, root)
 	chdirTo(t, t.TempDir())
 
-	state := model.RunState{WorkflowName: "openspec:plan-change"}
+	state := model.RunState{WorkflowName: "openspec:plan-change-v1.0"}
 	got, ok := ResolveWorkflow(sessionDir, projectDir, &state)
 	if !ok {
 		t.Fatal("expected namespaced discovery to succeed")
@@ -277,7 +279,7 @@ steps:
   - id: second
     command: echo second
 `
-	wfPath := filepath.Join(root, "workflows", "implement-change.yaml")
+	wfPath := filepath.Join(root, "workflows", "implement-change-v1.0.yaml")
 	writeFile(t, wfPath, workflowYAML)
 
 	projectDir := filepath.Join(base, "projects", "encoded")
@@ -289,7 +291,7 @@ steps:
 
 	// Write state.json with a cwd-RELATIVE workflow path — the bug case.
 	state := model.RunState{
-		WorkflowFile: "workflows/implement-change.yaml",
+		WorkflowFile: "workflows/implement-change-v1.0.yaml",
 		WorkflowName: "implement-change",
 	}
 	data, err := json.Marshal(state)
@@ -503,7 +505,7 @@ func TestResolveWorkflow_BuiltinRef(t *testing.T) {
 	chdirTo(t, realPath(t, t.TempDir()))
 
 	// Pick a builtin workflow that we know is embedded.
-	ref := builtinworkflows.Ref("openspec/change.yaml")
+	ref := builtinworkflows.Ref("openspec/change-v1.0.yaml")
 
 	state := model.RunState{WorkflowFile: ref, WorkflowName: "change"}
 	got, ok := ResolveWorkflow(sessionDir, projectDir, &state)
@@ -523,7 +525,7 @@ func TestNew_BuiltinWorkflowShowsSteps(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	ref := builtinworkflows.Ref("openspec/change.yaml")
+	ref := builtinworkflows.Ref("openspec/change-v1.0.yaml")
 	state := model.RunState{WorkflowFile: ref, WorkflowName: "change"}
 	data, _ := json.Marshal(state)
 	writeFile(t, filepath.Join(sessionDir, "state.json"), string(data))

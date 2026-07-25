@@ -1,0 +1,4 @@
+name: minimal-workflow
+steps:
+  - id: only-step
+    command: echo hello

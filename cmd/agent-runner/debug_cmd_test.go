@@ -24,7 +24,7 @@ func TestHandleDebugShowWorkflow(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("handleDebug() = %d, stderr: %s", code, stderr.String())
 		}
-		want, err := builtinworkflows.ReadFile("builtin:core/finalize-pr.yaml")
+		want, err := builtinworkflows.ReadFile("builtin:core/finalize-pr-v1.0.yaml")
 		if err != nil {
 			t.Fatalf("read builtin: %v", err)
 		}
@@ -36,7 +36,7 @@ func TestHandleDebugShowWorkflow(t *testing.T) {
 	t.Run("disk ref prints unnormalized bytes", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "workflow.yaml")
-		content := "# comment\n\nname: custom\nsteps:\n  - workflow: plan-change.yaml\n"
+		content := "# comment\n\nname: custom\nsteps:\n  - workflow: plan-change-v1.0.yaml\n"
 		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			t.Fatalf("write workflow: %v", err)
 		}
@@ -169,7 +169,7 @@ func TestHandleDebugAuditSummaryDirIncludesMetadataAndFailures(t *testing.T) {
 		Timestamp: "2026-05-24T10:00:00Z",
 		Prefix:    "[validator, sub:onboarding-validator]",
 		Type:      audit.EventSubWorkflowStart,
-		Data:      map[string]any{"workflow_name": "onboarding-validator", "workflow_path": "builtin:onboarding/validator.yaml"},
+		Data:      map[string]any{"workflow_name": "onboarding-validator", "workflow_path": "builtin:onboarding/validator-v1.0.yaml"},
 	}) + auditLineForDebugTest(t, audit.Event{
 		Timestamp: "2026-05-24T10:00:01Z",
 		Prefix:    "[validator, sub:onboarding-validator, init]",
@@ -213,7 +213,7 @@ func TestHandleDebugAuditSummaryDirIncludesMetadataAndFailures(t *testing.T) {
 	if got.ProjectDir != repo {
 		t.Fatalf("project_dir = %q, want %q", got.ProjectDir, repo)
 	}
-	if len(got.SubWorkflows) != 1 || got.SubWorkflows[0].WorkflowPath != "builtin:onboarding/validator.yaml" {
+	if len(got.SubWorkflows) != 1 || got.SubWorkflows[0].WorkflowPath != "builtin:onboarding/validator-v1.0.yaml" {
 		t.Fatalf("sub_workflows = %#v, want workflow_path", got.SubWorkflows)
 	}
 	if len(got.Failures) != 1 {

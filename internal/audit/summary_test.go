@@ -104,9 +104,9 @@ func TestBuildSummaryTruncatesStructuredEvents(t *testing.T) {
 }
 
 func TestBuildSummaryAddsFailureEventsAndSubWorkflowPaths(t *testing.T) {
-	log := auditLine(t, Event{Timestamp: "2026-05-24T10:00:00Z", Prefix: "[validator, sub:onboarding-validator]", Type: EventSubWorkflowStart, Data: map[string]any{"workflow_name": "onboarding-validator", "workflow_path": "builtin:onboarding/validator.yaml"}}) +
+	log := auditLine(t, Event{Timestamp: "2026-05-24T10:00:00Z", Prefix: "[validator, sub:onboarding-validator]", Type: EventSubWorkflowStart, Data: map[string]any{"workflow_name": "onboarding-validator", "workflow_path": "builtin:onboarding/validator-v1.0.yaml"}}) +
 		auditLine(t, Event{Timestamp: "2026-05-24T10:00:01Z", Prefix: "[validator, sub:onboarding-validator, init]", Type: EventStepEnd, Data: map[string]any{"outcome": "failed", "exit_code": float64(127), "stderr": "sh: : command not found\n", "stdout": "secret ghp_AbC123XyZ"}}) +
-		auditLine(t, Event{Timestamp: "2026-05-24T10:00:02Z", Prefix: "[validator, sub:onboarding-validator]", Type: EventSubWorkflowEnd, Data: map[string]any{"outcome": "failed", "workflow_name": "onboarding-validator", "workflow_path": "builtin:onboarding/validator.yaml"}})
+		auditLine(t, Event{Timestamp: "2026-05-24T10:00:02Z", Prefix: "[validator, sub:onboarding-validator]", Type: EventSubWorkflowEnd, Data: map[string]any{"outcome": "failed", "workflow_name": "onboarding-validator", "workflow_path": "builtin:onboarding/validator-v1.0.yaml"}})
 
 	got, err := BuildSummary(strings.NewReader(log), 64*1024)
 	if err != nil {
@@ -116,7 +116,7 @@ func TestBuildSummaryAddsFailureEventsAndSubWorkflowPaths(t *testing.T) {
 	if len(got.SubWorkflows) != 2 {
 		t.Fatalf("len(SubWorkflows) = %d, want 2", len(got.SubWorkflows))
 	}
-	if got.SubWorkflows[0].WorkflowPath != "builtin:onboarding/validator.yaml" {
+	if got.SubWorkflows[0].WorkflowPath != "builtin:onboarding/validator-v1.0.yaml" {
 		t.Fatalf("WorkflowPath = %q, want builtin ref", got.SubWorkflows[0].WorkflowPath)
 	}
 	if len(got.Failures) != 2 {
@@ -130,7 +130,7 @@ func TestBuildSummaryAddsFailureEventsAndSubWorkflowPaths(t *testing.T) {
 		t.Fatalf("Stdout = %q, want redacted stdout", stepFailure.Stdout)
 	}
 	subFailure := got.Failures[1]
-	if subFailure.Type != EventSubWorkflowEnd || subFailure.WorkflowPath != "builtin:onboarding/validator.yaml" {
+	if subFailure.Type != EventSubWorkflowEnd || subFailure.WorkflowPath != "builtin:onboarding/validator-v1.0.yaml" {
 		t.Fatalf("subworkflow failure = %#v, want failed subworkflow with workflow path", subFailure)
 	}
 }

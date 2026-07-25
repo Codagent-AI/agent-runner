@@ -260,7 +260,7 @@ func TestListModel_QuestionMark_EmitsHelpStartRunMsg(t *testing.T) {
 	m := newTestListModel(nil)
 	m.activeTab = tabCurrentDir
 	m.newTab.workflows = []discovery.WorkflowEntry{
-		{CanonicalName: "onboarding:help", SourcePath: "builtin:onboarding/help.yaml", Namespace: "onboarding", Scope: discovery.ScopeBuiltin},
+		{CanonicalName: "onboarding:help", SourcePath: "builtin:onboarding/help-v1.0.yaml", Namespace: "onboarding", Scope: discovery.ScopeBuiltin},
 	}
 
 	_, cmd := pressKey(m, "?")
@@ -275,8 +275,8 @@ func TestListModel_QuestionMark_EmitsHelpStartRunMsg(t *testing.T) {
 	if start.Entry.CanonicalName != "onboarding:help" {
 		t.Fatalf("CanonicalName = %q, want onboarding:help", start.Entry.CanonicalName)
 	}
-	if start.Entry.SourcePath != "builtin:onboarding/help.yaml" {
-		t.Fatalf("SourcePath = %q, want builtin:onboarding/help.yaml", start.Entry.SourcePath)
+	if start.Entry.SourcePath != "builtin:onboarding/help-v1.0.yaml" {
+		t.Fatalf("SourcePath = %q, want builtin:onboarding/help-v1.0.yaml", start.Entry.SourcePath)
 	}
 	if start.Entry.Scope != discovery.ScopeBuiltin {
 		t.Fatalf("Scope = %v, want ScopeBuiltin", start.Entry.Scope)
@@ -894,7 +894,7 @@ func TestListModel_SplashSwallowsListKeys(t *testing.T) {
 	m := newTestListModel([]runs.RunInfo{inactiveRun()})
 	m.cwd = "/repo/project"
 	m.newTab.workflows = []discovery.WorkflowEntry{
-		{CanonicalName: "onboarding:help", SourcePath: "builtin:onboarding/help.yaml", Namespace: "onboarding", Scope: discovery.ScopeBuiltin},
+		{CanonicalName: "onboarding:help", SourcePath: "builtin:onboarding/help-v1.0.yaml", Namespace: "onboarding", Scope: discovery.ScopeBuiltin},
 	}
 	m.splashVisible = true
 	m.splashShown = true
@@ -1278,7 +1278,7 @@ func TestListModel_OnboardingFailureSwallowsListKeys(t *testing.T) {
 	m := newTestListModel([]runs.RunInfo{inactiveRun()})
 	m.cwd = "/repo/project"
 	m.newTab.workflows = []discovery.WorkflowEntry{
-		{CanonicalName: "onboarding:help", SourcePath: "builtin:onboarding/help.yaml", Namespace: "onboarding", Scope: discovery.ScopeBuiltin},
+		{CanonicalName: "onboarding:help", SourcePath: "builtin:onboarding/help-v1.0.yaml", Namespace: "onboarding", Scope: discovery.ScopeBuiltin},
 	}
 	WithOnboardingFailure("/tmp/onboarding-run", "failed")(m)
 	m.loadSettings = func() (usersettings.Settings, error) {

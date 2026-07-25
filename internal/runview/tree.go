@@ -66,7 +66,7 @@ type StepNode struct {
 	StaticCLI                string
 	StaticModel              string
 	StaticSession            model.SessionStrategy
-	StaticWorkflow           string // raw "workflow:" field value, e.g. "../core/implement-task.yaml"
+	StaticWorkflow           string // raw "workflow:" field value, e.g. "../core/implement-task-v1.0.yaml"
 	StaticWorkflowPath       string // resolved absolute path (set at lazy-load time for sub-workflows)
 	StaticLoopMax            *int
 	StaticLoopOver           string

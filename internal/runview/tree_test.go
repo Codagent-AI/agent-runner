@@ -8,7 +8,7 @@ import (
 
 func TestBuildTree_ImplementChange(t *testing.T) {
 	wf := fixtureImplementChange()
-	tree := BuildTree(&wf, fixturePath("openspec/implement-change.yaml"))
+	tree := BuildTree(&wf, fixturePath("openspec/implement-change-v1.0.yaml"))
 
 	if got := tree.Root.ID; got != "implement-change" {
 		t.Errorf("root ID: want implement-change, got %q", got)
@@ -33,7 +33,7 @@ func TestBuildTree_ImplementChange(t *testing.T) {
 	if len(loop.Body) != 1 || loop.Body[0].Type != NodeSubWorkflow {
 		t.Fatalf("loop body must be a single sub-workflow, got %d items", len(loop.Body))
 	}
-	if loop.Body[0].ID != "implement-single-task" || loop.Body[0].StaticWorkflow != "../core/implement-task.yaml" {
+	if loop.Body[0].ID != "implement-single-task" || loop.Body[0].StaticWorkflow != "../core/implement-task-v1.0.yaml" {
 		t.Errorf("sub-workflow body mismatch: id=%q workflow=%q",
 			loop.Body[0].ID, loop.Body[0].StaticWorkflow)
 	}
@@ -74,7 +74,7 @@ func TestBuildTree_ImplementChange(t *testing.T) {
 
 func TestBuildTree_ImplementTask(t *testing.T) {
 	wf := fixtureImplementTask()
-	tree := BuildTree(&wf, fixturePath("core/implement-task.yaml"))
+	tree := BuildTree(&wf, fixturePath("core/implement-task-v1.0.yaml"))
 
 	if tree.Root.ID != "implement-task" {
 		t.Errorf("root ID: got %q", tree.Root.ID)
@@ -158,7 +158,7 @@ func TestBuildTreeClassifiesScriptAndUISteps(t *testing.T) {
 
 func TestEnsureIteration_CreatesAndSeedsBody(t *testing.T) {
 	wf := fixtureImplementChange()
-	tree := BuildTree(&wf, fixturePath("openspec/implement-change.yaml"))
+	tree := BuildTree(&wf, fixturePath("openspec/implement-change-v1.0.yaml"))
 	loop := tree.Root.Children[0]
 
 	iter := ensureIteration(loop, 0)
@@ -192,7 +192,7 @@ func TestEnsureIteration_CreatesAndSeedsBody(t *testing.T) {
 
 func TestDrilldown_AutoFlatten(t *testing.T) {
 	wf := fixtureImplementChange()
-	tree := BuildTree(&wf, fixturePath("openspec/implement-change.yaml"))
+	tree := BuildTree(&wf, fixturePath("openspec/implement-change-v1.0.yaml"))
 	loop := tree.Root.Children[0]
 	iter := ensureIteration(loop, 2)
 

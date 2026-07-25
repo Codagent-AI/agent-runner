@@ -66,7 +66,7 @@ func TestModel_Esc_FromInspectTerminal_StillEmitsExitMsg(t *testing.T) {
 func testDefinitionEntry() discovery.WorkflowEntry {
 	return discovery.WorkflowEntry{
 		CanonicalName: "core:finalize-pr",
-		SourcePath:    "builtin:core/finalize-pr.yaml",
+		SourcePath:    "builtin:core/finalize-pr-v1.0.yaml",
 		Scope:         discovery.ScopeBuiltin,
 	}
 }

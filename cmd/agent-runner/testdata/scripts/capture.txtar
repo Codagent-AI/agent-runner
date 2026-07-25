@@ -1,9 +1,9 @@
 # Test that shell step capture + interpolation works.
-exec agent-runner workflow
+exec agent-runner .agent-runner/workflows/workflow-v1.0.yaml
 stdout 'captured:hello'
 
--- .agent-runner/workflows/workflow.yaml --
-name: e2e-capture
+-- .agent-runner/workflows/workflow-v1.0.yaml --
+name: workflow
 steps:
   - id: capture-step
     command: echo hello

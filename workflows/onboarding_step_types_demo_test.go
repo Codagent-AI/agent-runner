@@ -13,7 +13,7 @@ import (
 )
 
 func TestStepTypesDemoWorkflowShape(t *testing.T) {
-	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/step-types-demo.yaml")
+	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/step-types-demo-v1.0.yaml")
 
 	wantIDs := []string{
 		"intro-ui",
@@ -71,7 +71,7 @@ func TestStepTypesDemoWorkflowShape(t *testing.T) {
 }
 
 func TestStepTypesDemoPromptsUsePackagedDocsAndStayNonDestructive(t *testing.T) {
-	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/step-types-demo.yaml")
+	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/step-types-demo-v1.0.yaml")
 
 	for i := range wf.Steps {
 		step := &wf.Steps[i]
@@ -112,7 +112,7 @@ func TestStepTypesDemoPromptsUsePackagedDocsAndStayNonDestructive(t *testing.T) 
 }
 
 func TestOnboardingRunsStepTypesDemoBeforeCompletion(t *testing.T) {
-	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/onboarding.yaml")
+	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/onboarding-v1.0.yaml")
 
 	wantIDs := []string{"step-types-demo", "guided-workflow", "validator", "advanced", "set-completed"}
 	gotIDs := stepIDs(wf.Steps)
@@ -121,10 +121,10 @@ func TestOnboardingRunsStepTypesDemoBeforeCompletion(t *testing.T) {
 	}
 
 	wantWorkflows := map[string]string{
-		"step-types-demo": "step-types-demo.yaml",
-		"guided-workflow": "guided-workflow.yaml",
-		"validator":       "validator.yaml",
-		"advanced":        "advanced.yaml",
+		"step-types-demo": "step-types-demo-v1.0.yaml",
+		"guided-workflow": "guided-workflow-v1.0.yaml",
+		"validator":       "validator-v1.0.yaml",
+		"advanced":        "advanced-v1.0.yaml",
 	}
 	for id, want := range wantWorkflows {
 		step := stepByID(t, &wf, id)
@@ -140,7 +140,7 @@ func TestOnboardingRunsStepTypesDemoBeforeCompletion(t *testing.T) {
 }
 
 func TestGuidedWorkflowShape(t *testing.T) {
-	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/guided-workflow.yaml")
+	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/guided-workflow-v1.0.yaml")
 
 	wantSessions := map[string]string{
 		"planning-session": "planner",
@@ -244,7 +244,7 @@ func TestGuidedWorkflowExistingProjectCheck(t *testing.T) {
 		t.Skip("git not available")
 	}
 
-	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/guided-workflow.yaml")
+	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/guided-workflow-v1.0.yaml")
 	command := stepByID(t, &wf, "check-existing-project").Command
 
 	tests := []struct {
@@ -303,7 +303,7 @@ func TestGuidedWorkflowExistingProjectCheck(t *testing.T) {
 }
 
 func TestValidatorWorkflowShape(t *testing.T) {
-	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/validator.yaml")
+	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/validator-v1.0.yaml")
 
 	wantSessions := map[string]string{
 		"validator-setup-session": "planner",
@@ -366,8 +366,8 @@ func TestValidatorWorkflowShape(t *testing.T) {
 	}
 	assertAgentStep(t, stepByID(t, &wf, "prepare-fix-context"), "", "impl-session", model.ModeAutonomous)
 	runValidator := stepByID(t, &wf, "run-validator")
-	if runValidator.StepType() != "sub-workflow" || runValidator.Workflow != "../core/run-validator.yaml" {
-		t.Fatalf("run-validator = type %q workflow %q, want sub-workflow ../core/run-validator.yaml", runValidator.StepType(), runValidator.Workflow)
+	if runValidator.StepType() != "sub-workflow" || runValidator.Workflow != "../core/run-validator-v1.0.yaml" {
+		t.Fatalf("run-validator = type %q workflow %q, want sub-workflow ../core/run-validator-v1.0.yaml", runValidator.StepType(), runValidator.Workflow)
 	}
 	review := stepByID(t, &wf, "review-validator-status")
 	assertAgentStep(t, review, "", "tutor-session", model.ModeInteractive)
@@ -380,7 +380,7 @@ func TestValidatorWorkflowShape(t *testing.T) {
 }
 
 func TestAdvancedWorkflowShape(t *testing.T) {
-	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/advanced.yaml")
+	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/advanced-v1.0.yaml")
 
 	wantIDs := []string{"concepts-ui", "help"}
 	gotIDs := stepIDs(wf.Steps)
@@ -400,13 +400,13 @@ func TestAdvancedWorkflowShape(t *testing.T) {
 	if help.StepType() != "sub-workflow" {
 		t.Fatalf("help type = %q, want sub-workflow", help.StepType())
 	}
-	if help.Workflow != "help.yaml" {
-		t.Fatalf("help workflow = %q, want help.yaml", help.Workflow)
+	if help.Workflow != "help-v1.0.yaml" {
+		t.Fatalf("help workflow = %q, want help-v1.0.yaml", help.Workflow)
 	}
 }
 
 func TestHelpWorkflowShape(t *testing.T) {
-	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/help.yaml")
+	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/help-v1.0.yaml")
 
 	if len(wf.Sessions) != 1 {
 		t.Fatalf("sessions len = %d, want 1", len(wf.Sessions))

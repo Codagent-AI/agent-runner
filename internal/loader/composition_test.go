@@ -23,7 +23,7 @@ func writeWorkflow(t *testing.T, dir, name, content string) string {
 func TestValidateComposition(t *testing.T) {
 	t.Run("accepts root with no sub-workflows", func(t *testing.T) {
 		dir := t.TempDir()
-		root := writeWorkflow(t, dir, "root.yaml", `
+		root := writeWorkflow(t, dir, "root-v1.0.yaml", `
 name: root
 sessions:
   - name: planner
@@ -40,7 +40,7 @@ steps:
 
 	t.Run("accepts compatible declarations across files", func(t *testing.T) {
 		dir := t.TempDir()
-		writeWorkflow(t, dir, "sub.yaml", `
+		writeWorkflow(t, dir, "sub-v1.0.yaml", `
 name: sub
 sessions:
   - name: planner
@@ -50,14 +50,14 @@ steps:
     prompt: plan
     session: planner
 `)
-		root := writeWorkflow(t, dir, "root.yaml", `
+		root := writeWorkflow(t, dir, "root-v1.0.yaml", `
 name: root
 sessions:
   - name: planner
     agent: planner-profile
 steps:
   - id: call
-    workflow: sub.yaml
+    workflow: sub-v1.0.yaml
 `)
 		if err := ValidateComposition(root); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -66,18 +66,18 @@ steps:
 
 	t.Run("accepts hidden sub-workflow references", func(t *testing.T) {
 		dir := t.TempDir()
-		writeWorkflow(t, dir, "sub.yaml", `
+		writeWorkflow(t, dir, "sub-v1.0.yaml", `
 name: sub
 hidden: true
 steps:
   - id: inner
     command: echo sub
 `)
-		root := writeWorkflow(t, dir, "root.yaml", `
+		root := writeWorkflow(t, dir, "root-v1.0.yaml", `
 name: root
 steps:
   - id: call
-    workflow: sub.yaml
+    workflow: sub-v1.0.yaml
 `)
 		if err := ValidateComposition(root); err != nil {
 			t.Fatalf("hidden sub-workflow should validate normally: %v", err)
@@ -86,7 +86,7 @@ steps:
 
 	t.Run("rejects incompatible declarations across files", func(t *testing.T) {
 		dir := t.TempDir()
-		writeWorkflow(t, dir, "sub.yaml", `
+		writeWorkflow(t, dir, "sub-v1.0.yaml", `
 name: sub
 sessions:
   - name: planner
@@ -96,14 +96,14 @@ steps:
     prompt: plan
     session: planner
 `)
-		root := writeWorkflow(t, dir, "root.yaml", `
+		root := writeWorkflow(t, dir, "root-v1.0.yaml", `
 name: root
 sessions:
   - name: planner
     agent: planner-profile
 steps:
   - id: call
-    workflow: sub.yaml
+    workflow: sub-v1.0.yaml
 `)
 		err := ValidateComposition(root)
 		if err == nil {
@@ -113,7 +113,7 @@ steps:
 		if !strings.Contains(msg, "planner") {
 			t.Errorf("expected error to name the conflicting session; got: %v", err)
 		}
-		if !strings.Contains(msg, "root.yaml") || !strings.Contains(msg, "sub.yaml") {
+		if !strings.Contains(msg, "root-v1.0.yaml") || !strings.Contains(msg, "sub-v1.0.yaml") {
 			t.Errorf("expected error to reference both source files; got: %v", err)
 		}
 		if !strings.Contains(msg, "planner-profile") || !strings.Contains(msg, "implementor-profile") {
@@ -123,7 +123,7 @@ steps:
 
 	t.Run("walks nested sub-workflows", func(t *testing.T) {
 		dir := t.TempDir()
-		writeWorkflow(t, dir, "inner.yaml", `
+		writeWorkflow(t, dir, "inner-v1.0.yaml", `
 name: inner
 sessions:
   - name: planner
@@ -133,20 +133,20 @@ steps:
     prompt: leaf
     session: planner
 `)
-		writeWorkflow(t, dir, "mid.yaml", `
+		writeWorkflow(t, dir, "mid-v1.0.yaml", `
 name: mid
 steps:
   - id: call-inner
-    workflow: inner.yaml
+    workflow: inner-v1.0.yaml
 `)
-		root := writeWorkflow(t, dir, "root.yaml", `
+		root := writeWorkflow(t, dir, "root-v1.0.yaml", `
 name: root
 sessions:
   - name: planner
     agent: planner-profile
 steps:
   - id: call-mid
-    workflow: mid.yaml
+    workflow: mid-v1.0.yaml
 `)
 		err := ValidateComposition(root)
 		if err == nil {
@@ -159,7 +159,7 @@ steps:
 
 	t.Run("skips interpolated sub-workflow paths", func(t *testing.T) {
 		dir := t.TempDir()
-		root := writeWorkflow(t, dir, "root.yaml", `
+		root := writeWorkflow(t, dir, "root-v1.0.yaml", `
 name: root
 params:
   - name: sub_name
@@ -180,26 +180,26 @@ steps:
 
 	t.Run("does not infinite-loop on cycles", func(t *testing.T) {
 		dir := t.TempDir()
-		writeWorkflow(t, dir, "a.yaml", `
+		writeWorkflow(t, dir, "a-v1.0.yaml", `
 name: a
 steps:
   - id: call-b
-    workflow: b.yaml
+    workflow: b-v1.0.yaml
 `)
-		writeWorkflow(t, dir, "b.yaml", `
+		writeWorkflow(t, dir, "b-v1.0.yaml", `
 name: b
 steps:
   - id: call-a
-    workflow: a.yaml
+    workflow: a-v1.0.yaml
 `)
-		if err := ValidateComposition(filepath.Join(dir, "a.yaml")); err != nil {
+		if err := ValidateComposition(filepath.Join(dir, "a-v1.0.yaml")); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("walks sub-workflows nested in loops", func(t *testing.T) {
 		dir := t.TempDir()
-		writeWorkflow(t, dir, "sub.yaml", `
+		writeWorkflow(t, dir, "sub-v1.0.yaml", `
 name: sub
 sessions:
   - name: planner
@@ -209,7 +209,7 @@ steps:
     prompt: p
     session: planner
 `)
-		root := writeWorkflow(t, dir, "root.yaml", `
+		root := writeWorkflow(t, dir, "root-v1.0.yaml", `
 name: root
 sessions:
   - name: planner
@@ -220,7 +220,7 @@ steps:
       max: 3
     steps:
       - id: call-sub
-        workflow: sub.yaml
+        workflow: sub-v1.0.yaml
 `)
 		err := ValidateComposition(root)
 		if err == nil {
@@ -230,7 +230,7 @@ steps:
 
 	t.Run("returns load error for invalid root", func(t *testing.T) {
 		dir := t.TempDir()
-		root := writeWorkflow(t, dir, "root.yaml", `not: yaml: valid: :`)
+		root := writeWorkflow(t, dir, "root-v1.0.yaml", `not: yaml: valid: :`)
 		err := ValidateComposition(root)
 		if err == nil {
 			t.Fatal("expected error for invalid YAML")

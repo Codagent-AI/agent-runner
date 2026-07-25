@@ -125,8 +125,8 @@ func TestResolveWorkflowArg(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveWorkflowArg returned error: %v", err)
 		}
-		if got != "builtin:core/finalize-pr.yaml" {
-			t.Fatalf("resolveWorkflowArg = %q, want %q", got, "builtin:core/finalize-pr.yaml")
+		if got != "builtin:core/finalize-pr-v1.0.yaml" {
+			t.Fatalf("resolveWorkflowArg = %q, want %q", got, "builtin:core/finalize-pr-v1.0.yaml")
 		}
 	})
 
@@ -283,8 +283,8 @@ func TestResolveValidateWorkflowArgAcceptsExistingYAMLPath(t *testing.T) {
 func TestHandleValidateArgsBindsOptionalParamsForYAMLPath(t *testing.T) {
 	t.Chdir(t.TempDir())
 	t.Setenv("HOME", t.TempDir())
-	writeTestFile(t, filepath.Join("workflows", "green.yaml"), "name: green\nsteps:\n  - id: s\n    command: echo ok\n")
-	root := filepath.Join("workflows", "root.yaml")
+	writeTestFile(t, filepath.Join("workflows", "green-v1.0.yaml"), "name: green\nsteps:\n  - id: s\n    command: echo ok\n")
+	root := filepath.Join("workflows", "root-v1.0.yaml")
 	writeTestFile(t, root, `
 name: root
 params:
@@ -294,7 +294,7 @@ steps:
     workflow: "{{flavor}}.yaml"
 `)
 
-	if code := handleValidateArgs([]string{root, "flavor=green"}); code != 0 {
+	if code := handleValidateArgs([]string{root, "flavor=green-v1.0"}); code != 0 {
 		t.Fatalf("handleValidateArgs returned %d, want 0", code)
 	}
 }

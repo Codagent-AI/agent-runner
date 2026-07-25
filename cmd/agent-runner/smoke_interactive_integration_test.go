@@ -344,7 +344,7 @@ func (p *terminalFaultProgram) RestoreTerminal() error {
 
 func writeTerminalLeaseWorkflow(t *testing.T, dir, name string) string {
 	t.Helper()
-	path := filepath.Join(dir, name+".yaml")
+	path := filepath.Join(dir, name+"-v1.0.yaml")
 	data := []byte(fmt.Sprintf(`name: %s
 steps:
   - id: interactive
@@ -360,7 +360,7 @@ steps:
 
 func writeJobControlWorkflow(t *testing.T, dir string) string {
 	t.Helper()
-	path := filepath.Join(dir, "interactive-job-control.yaml")
+	path := filepath.Join(dir, "interactive-job-control-v1.0.yaml")
 	data := []byte(`name: interactive-job-control
 steps:
   - id: job-control
@@ -376,7 +376,7 @@ steps:
 
 func writeDirectShellWorkflow(t *testing.T, dir, testBinary string) string {
 	t.Helper()
-	path := filepath.Join(dir, "interactive-shell-direct-handoff.yaml")
+	path := filepath.Join(dir, "interactive-shell-direct-handoff-v1.0.yaml")
 	data := []byte(fmt.Sprintf(`name: interactive-shell-direct-handoff
 steps:
   - id: direct-shell
@@ -427,7 +427,7 @@ func waitForPTYText(t *testing.T, output <-chan string, want string, timeout tim
 
 func writeInteractiveDirectHandoffWorkflow(t *testing.T, dir string) string {
 	t.Helper()
-	path := filepath.Join(dir, "interactive-direct-handoff-integration.yaml")
+	path := filepath.Join(dir, "interactive-direct-handoff-integration-v1.0.yaml")
 	data := []byte(`name: interactive-direct-handoff-integration
 description: "Deterministic direct terminal handoff fixture"
 steps:

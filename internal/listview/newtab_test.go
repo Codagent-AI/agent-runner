@@ -312,7 +312,7 @@ func TestNewTab_GroupOrderingUsesCuratedBuiltinOrder(t *testing.T) {
 	entries := []discovery.WorkflowEntry{
 		{CanonicalName: "core:finalize-pr", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/core.yaml"},
 		{CanonicalName: "project-build", Scope: discovery.ScopeProject, SourcePath: "/proj/build.yaml"},
-		{CanonicalName: "onboarding:help", Scope: discovery.ScopeBuiltin, Namespace: "onboarding", SourcePath: "/b/help.yaml"},
+		{CanonicalName: "onboarding:help", Scope: discovery.ScopeBuiltin, Namespace: "onboarding", SourcePath: "/b/help-v1.0.yaml"},
 		{CanonicalName: "user-deploy", Scope: discovery.ScopeUser, SourcePath: "/user/deploy.yaml"},
 		{CanonicalName: "openspec:change", Scope: discovery.ScopeBuiltin, Namespace: "openspec", SourcePath: "/b/open.yaml"},
 		{CanonicalName: "spec-driven:change", Scope: discovery.ScopeBuiltin, Namespace: "spec-driven", SourcePath: "/b/spec.yaml"},
@@ -379,7 +379,7 @@ func TestNewTab_HiddenWorkflowsOmittedByDefaultAndShownWhenToggled(t *testing.T)
 func TestNewTab_HiddenOnlyGroupOmittedWhenToggleOff(t *testing.T) {
 	entries := []discovery.WorkflowEntry{
 		{CanonicalName: "core:hidden", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/hidden.yaml", Hidden: true},
-		{CanonicalName: "openspec:change", Scope: discovery.ScopeBuiltin, Namespace: "openspec", SourcePath: "/b/change.yaml"},
+		{CanonicalName: "openspec:change", Scope: discovery.ScopeBuiltin, Namespace: "openspec", SourcePath: "/b/change-v1.0.yaml"},
 	}
 
 	filtered := buildFilteredRows(entries, defaultTestGroups(), "", false)
@@ -701,7 +701,7 @@ func TestRuneEqualFold(t *testing.T) {
 func TestBuildFilteredRows_MultipleNamespaces(t *testing.T) {
 	entries := []discovery.WorkflowEntry{
 		{CanonicalName: "core:implement", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/impl.yaml"},
-		{CanonicalName: "openspec:change", Scope: discovery.ScopeBuiltin, Namespace: "openspec", SourcePath: "/b/change.yaml"},
+		{CanonicalName: "openspec:change", Scope: discovery.ScopeBuiltin, Namespace: "openspec", SourcePath: "/b/change-v1.0.yaml"},
 	}
 	filtered := buildFilteredRows(entries, defaultTestGroups(), "", false)
 

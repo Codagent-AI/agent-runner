@@ -20,16 +20,16 @@ steps:
   - id: s1
     command: echo hello
 `
-		childPath := filepath.Join(dir, "child.yaml")
+		childPath := filepath.Join(dir, "child-v1.0.yaml")
 		os.WriteFile(childPath, []byte(childYAML), 0o644)
 
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		ctx := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{},
-			WorkflowFile: filepath.Join(dir, "parent.yaml"),
+			WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"),
 		})
 
-		step := model.Step{ID: "sub", Workflow: "child.yaml", Session: model.SessionNew}
+		step := model.Step{ID: "sub", Workflow: "child-v1.0.yaml", Session: model.SessionNew}
 		outcome, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -51,17 +51,17 @@ steps:
   - id: s1
     command: echo {{msg}}
 `
-		childPath := filepath.Join(dir, "child.yaml")
+		childPath := filepath.Join(dir, "child-v1.0.yaml")
 		os.WriteFile(childPath, []byte(childYAML), 0o644)
 
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		ctx := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{"greeting": "hi"},
-			WorkflowFile: filepath.Join(dir, "parent.yaml"),
+			WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"),
 		})
 
 		step := model.Step{
-			ID: "sub", Workflow: "child.yaml", Session: model.SessionNew,
+			ID: "sub", Workflow: "child-v1.0.yaml", Session: model.SessionNew,
 			Params: map[string]string{"msg": "{{greeting}}"},
 		}
 		outcome, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
@@ -97,7 +97,7 @@ steps:
         echo no-task
       fi
 `
-		childPath := filepath.Join(dir, "child.yaml")
+		childPath := filepath.Join(dir, "child-v1.0.yaml")
 		if err := os.WriteFile(childPath, []byte(childYAML), 0o644); err != nil {
 			t.Fatalf("write child workflow: %v", err)
 		}
@@ -105,10 +105,10 @@ steps:
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		ctx := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{},
-			WorkflowFile: filepath.Join(dir, "parent.yaml"),
+			WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"),
 		})
 
-		step := model.Step{ID: "sub", Workflow: "child.yaml", Session: model.SessionNew}
+		step := model.Step{ID: "sub", Workflow: "child-v1.0.yaml", Session: model.SessionNew}
 		outcome, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -131,16 +131,16 @@ steps:
   - id: s1
     command: echo {{parent_secret}}
 `
-		childPath := filepath.Join(dir, "child.yaml")
+		childPath := filepath.Join(dir, "child-v1.0.yaml")
 		os.WriteFile(childPath, []byte(childYAML), 0o644)
 
 		runner := &mockRunner{}
 		ctx := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{"parent_secret": "secret"},
-			WorkflowFile: filepath.Join(dir, "parent.yaml"),
+			WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"),
 		})
 
-		step := model.Step{ID: "sub", Workflow: "child.yaml", Session: model.SessionNew}
+		step := model.Step{ID: "sub", Workflow: "child-v1.0.yaml", Session: model.SessionNew}
 		// Should fail because child doesn't have parent_secret
 		_, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
 		if err == nil {
@@ -152,10 +152,10 @@ steps:
 		runner := &mockRunner{}
 		ctx := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{},
-			WorkflowFile: "/tmp/parent.yaml",
+			WorkflowFile: "/tmp/parent-v1.0.yaml",
 		})
 
-		step := model.Step{ID: "sub", Workflow: "nonexistent.yaml", Session: model.SessionNew}
+		step := model.Step{ID: "sub", Workflow: "nonexistent-v1.0.yaml", Session: model.SessionNew}
 		_, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
 		if err == nil {
 			t.Fatal("expected error")
@@ -171,16 +171,16 @@ steps:
   - id: s1
     command: echo test
 `
-		childPath := filepath.Join(dir, "child.yaml")
+		childPath := filepath.Join(dir, "child-v1.0.yaml")
 		os.WriteFile(childPath, []byte(childYAML), 0o644)
 
 		runner := &mockRunner{}
 		ctx := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{},
-			WorkflowFile: filepath.Join(dir, "parent.yaml"),
+			WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"),
 		})
 
-		step := model.Step{ID: "sub", Workflow: "child.yaml", Session: model.SessionNew}
+		step := model.Step{ID: "sub", Workflow: "child-v1.0.yaml", Session: model.SessionNew}
 		_, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
 		if err == nil {
 			t.Fatal("expected error")
@@ -207,16 +207,16 @@ steps:
   - id: s2
     command: echo world
 `
-		os.WriteFile(filepath.Join(dir, "child.yaml"), []byte(childYAML), 0o644)
+		os.WriteFile(filepath.Join(dir, "child-v1.0.yaml"), []byte(childYAML), 0o644)
 
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}, {ExitCode: 0}}}
 		log := &mockLogger{}
 		ctx := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{},
-			WorkflowFile: filepath.Join(dir, "parent.yaml"),
+			WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"),
 		})
 
-		step := model.Step{ID: "sub", Workflow: "child.yaml", Session: model.SessionNew}
+		step := model.Step{ID: "sub", Workflow: "child-v1.0.yaml", Session: model.SessionNew}
 		outcome, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, log)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -241,17 +241,17 @@ steps:
     command: echo world
     skip_if: previous_success
 `
-		os.WriteFile(filepath.Join(dir, "child.yaml"), []byte(childYAML), 0o644)
+		os.WriteFile(filepath.Join(dir, "child-v1.0.yaml"), []byte(childYAML), 0o644)
 
 		// Only one result needed because s2 is skipped after s1 succeeds.
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		log := &mockLogger{}
 		ctx := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{},
-			WorkflowFile: filepath.Join(dir, "parent.yaml"),
+			WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"),
 		})
 
-		step := model.Step{ID: "sub", Workflow: "child.yaml", Session: model.SessionNew}
+		step := model.Step{ID: "sub", Workflow: "child-v1.0.yaml", Session: model.SessionNew}
 		outcome, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, log)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -278,18 +278,18 @@ steps:
   - id: s3
     command: echo after
 `
-		os.WriteFile(filepath.Join(dir, "child.yaml"), []byte(childYAML), 0o644)
+		os.WriteFile(filepath.Join(dir, "child-v1.0.yaml"), []byte(childYAML), 0o644)
 
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}, {ExitCode: 0}}}
 		log := &mockLogger{}
 		recorder := &mockAuditLogger{}
 		ctx := model.NewRootContext(&model.RootContextOptions{
 			Params:       map[string]string{},
-			WorkflowFile: filepath.Join(dir, "parent.yaml"),
+			WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"),
 			AuditLogger:  recorder,
 		})
 
-		step := model.Step{ID: "sub", Workflow: "child.yaml", Session: model.SessionNew}
+		step := model.Step{ID: "sub", Workflow: "child-v1.0.yaml", Session: model.SessionNew}
 		outcome, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, log)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -363,12 +363,12 @@ steps:
         command: "true"
         continue_on_failure: true
 `
-	childPath := filepath.Join(dir, "child.yaml")
+	childPath := filepath.Join(dir, "child-v1.0.yaml")
 	os.WriteFile(childPath, []byte(childYAML), 0o644)
 
 	parent := model.NewRootContext(&model.RootContextOptions{
 		Params:       map[string]string{},
-		WorkflowFile: filepath.Join(dir, "parent.yaml"),
+		WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"),
 	})
 	iter := 3
 	parent.ResumeChildState = &model.NestedStepState{
@@ -378,7 +378,7 @@ steps:
 	}
 
 	runner := &mockRunner{}
-	step := model.Step{ID: "sub", Workflow: "child.yaml"}
+	step := model.Step{ID: "sub", Workflow: "child-v1.0.yaml"}
 	outcome, err := ExecuteSubWorkflowStep(&step, parent, runner, &mockGlob{}, &mockLogger{})
 	if err != nil {
 		t.Fatalf("ExecuteSubWorkflowStep returned error: %v", err)
@@ -406,20 +406,20 @@ steps:
 func TestResolveWorkflowPath_EmbeddedParentStaysEmbedded(t *testing.T) {
 	ctx := model.NewRootContext(&model.RootContextOptions{
 		Params:       map[string]string{},
-		WorkflowFile: "builtin:spec-driven/change.yaml",
+		WorkflowFile: "builtin:spec-driven/change-v1.0.yaml",
 	})
 
-	got, err := resolveWorkflowPath("plan-change.yaml", ctx, "plan")
+	got, err := resolveWorkflowPath("plan-change-v1.0.yaml", ctx, "plan")
 	if err != nil {
 		t.Fatalf("resolveWorkflowPath returned error: %v", err)
 	}
-	if got != "builtin:spec-driven/plan-change.yaml" {
-		t.Fatalf("resolveWorkflowPath = %q, want %q", got, "builtin:spec-driven/plan-change.yaml")
+	if got != "builtin:spec-driven/plan-change-v1.0.yaml" {
+		t.Fatalf("resolveWorkflowPath = %q, want %q", got, "builtin:spec-driven/plan-change-v1.0.yaml")
 	}
 }
 
 func TestOnboardingStepTypesDemoLearnMoreSkipIfActions(t *testing.T) {
-	workflow, err := loader.LoadWorkflow("builtin:onboarding/step-types-demo.yaml", loader.Options{IsSubWorkflow: true})
+	workflow, err := loader.LoadWorkflow("builtin:onboarding/step-types-demo-v1.0.yaml", loader.Options{IsSubWorkflow: true})
 	if err != nil {
 		t.Fatalf("LoadWorkflow: %v", err)
 	}
@@ -446,7 +446,7 @@ func TestOnboardingStepTypesDemoLearnMoreSkipIfActions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := model.NewRootContext(&model.RootContextOptions{
 				Params:       map[string]string{},
-				WorkflowFile: "builtin:onboarding/step-types-demo.yaml",
+				WorkflowFile: "builtin:onboarding/step-types-demo-v1.0.yaml",
 			})
 			ctx.CapturedVariables["summary_action"] = model.NewCapturedString(tt.action)
 
@@ -462,7 +462,7 @@ func TestOnboardingStepTypesDemoLearnMoreSkipIfActions(t *testing.T) {
 }
 
 func TestBuiltinImplementTaskSessionReportSkipIf(t *testing.T) {
-	workflow, err := loader.LoadWorkflow("builtin:core/implement-task.yaml", loader.Options{IsSubWorkflow: true})
+	workflow, err := loader.LoadWorkflow("builtin:core/implement-task-v1.0.yaml", loader.Options{IsSubWorkflow: true})
 	if err != nil {
 		t.Fatalf("LoadWorkflow: %v", err)
 	}

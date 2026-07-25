@@ -1,0 +1,13 @@
+name: change
+description: "Full plan + implement + validate + PR creation workflow. Use for normal feature development."
+
+sessions:
+  - name: lead-agent
+    agent: planner
+
+steps:
+  - id: plan
+    workflow: plan-change-v1.0.yaml
+
+  - id: implement
+    workflow: implement-change-v1.0.yaml

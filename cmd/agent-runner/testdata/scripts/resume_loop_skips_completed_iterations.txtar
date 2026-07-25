@@ -10,7 +10,7 @@ exec sh -c 'mkdir -p items && echo a > items/a.txt && echo b > items/b.txt && ec
 
 # First run: iteration 0 creates marker-a (success), iteration 1 needs
 # trigger.txt which is absent, so it fails. Iteration 2 never runs.
-! exec agent-runner workflow
+! exec agent-runner .agent-runner/workflows/workflow-v1.0.yaml
 stdout 'step "process" failed'
 
 # Verify iteration 0 ran once (counter = 1).
@@ -38,8 +38,8 @@ stdout '^1$'
 exec cat counter-c.txt
 stdout '^1$'
 
--- .agent-runner/workflows/workflow.yaml --
-name: e2e-loop-resume
+-- .agent-runner/workflows/workflow-v1.0.yaml --
+name: workflow
 steps:
   - id: process
     loop:

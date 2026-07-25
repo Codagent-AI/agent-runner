@@ -183,7 +183,7 @@ func TestCompletedLiveTUIResultIgnoresResumeTargetMarker(t *testing.T) {
 func TestOnboardingDemoPromptFlowNotNowDoesNotPrepareRun(t *testing.T) {
 	m := &onboardingDemoPromptFlow{
 		prompt: nativesetup.NewDemoPromptModel(&nativesetup.Deps{}),
-		ref:    "builtin:onboarding/onboarding.yaml",
+		ref:    "builtin:onboarding/onboarding-v1.0.yaml",
 		opts:   liveTUIOptions{quitOnDone: true, startInAltScreen: true},
 	}
 
@@ -209,7 +209,7 @@ func TestOnboardingDemoPromptFlowNotNowDoesNotPrepareRun(t *testing.T) {
 func TestOnboardingDemoPromptFlowWindowSizeDoesNotCompletePrompt(t *testing.T) {
 	m := &onboardingDemoPromptFlow{
 		prompt: nativesetup.NewDemoPromptModel(&nativesetup.Deps{}),
-		ref:    "builtin:onboarding/onboarding.yaml",
+		ref:    "builtin:onboarding/onboarding-v1.0.yaml",
 		opts:   liveTUIOptions{quitOnDone: true, startInAltScreen: true},
 	}
 
@@ -233,7 +233,7 @@ func TestOnboardingDemoPromptFlowWindowSizeDoesNotCompletePrompt(t *testing.T) {
 func TestOnboardingDemoPromptFlowContinueShowsPreparingState(t *testing.T) {
 	m := &onboardingDemoPromptFlow{
 		prompt: nativesetup.NewDemoPromptModel(&nativesetup.Deps{}),
-		ref:    "builtin:onboarding/onboarding.yaml",
+		ref:    "builtin:onboarding/onboarding-v1.0.yaml",
 		opts:   liveTUIOptions{quitOnDone: true, startInAltScreen: true},
 	}
 
@@ -259,7 +259,7 @@ func TestOnboardingDemoPromptFlowContinueShowsPreparingState(t *testing.T) {
 
 func TestOnboardingDemoLaunchFlowStartsInPreparingState(t *testing.T) {
 	m := &onboardingDemoPromptFlow{
-		ref:          "builtin:onboarding/onboarding.yaml",
+		ref:          "builtin:onboarding/onboarding-v1.0.yaml",
 		opts:         liveTUIOptions{quitOnDone: true, startInAltScreen: true},
 		preparingRun: true,
 	}
@@ -276,7 +276,7 @@ func TestOnboardingDemoLaunchFlowStartsInPreparingState(t *testing.T) {
 
 func TestOnboardingDemoLaunchFlowViewHandlesFailedPreparation(t *testing.T) {
 	m := &onboardingDemoPromptFlow{
-		ref:          "builtin:onboarding/onboarding.yaml",
+		ref:          "builtin:onboarding/onboarding-v1.0.yaml",
 		opts:         liveTUIOptions{quitOnDone: true, startInAltScreen: true},
 		preparingRun: true,
 	}
@@ -296,7 +296,7 @@ func TestOnboardingDemoLaunchFlowViewHandlesFailedPreparation(t *testing.T) {
 }
 
 func TestOnboardingDemoPromptFlowConfirmedLiveRunQuitExitsApp(t *testing.T) {
-	sessionDir := writeRunState(t, t.TempDir(), "onboarding-run", "builtin:onboarding/onboarding.yaml", false)
+	sessionDir := writeRunState(t, t.TempDir(), "onboarding-run", "builtin:onboarding/onboarding-v1.0.yaml", false)
 	rv, err := runview.New(sessionDir, "", runview.FromLiveRun)
 	if err != nil {
 		t.Fatalf("new runview: %v", err)
@@ -341,7 +341,7 @@ func TestFindLatestIncompleteOnboardingRunState(t *testing.T) {
 	}
 	t.Chdir(resumeCwd)
 
-	ref := "builtin:onboarding/onboarding.yaml"
+	ref := "builtin:onboarding/onboarding-v1.0.yaml"
 	runsDir := filepath.Join(home, ".agent-runner", "onboarding", "runs")
 	writeRunState(t, runsDir, "onboarding-onboarding-2026-05-10T10-00-00Z", ref, false)
 	wantDir := writeRunState(t, runsDir, "onboarding-onboarding-2026-05-10T11-00-00Z", ref, false)
@@ -377,7 +377,7 @@ func TestFindLatestIncompleteOnboardingRunStateRepairsEmptyCurrentStepToFirstSte
 	}
 	t.Chdir(repo)
 
-	ref := "builtin:onboarding/onboarding.yaml"
+	ref := "builtin:onboarding/onboarding-v1.0.yaml"
 	runsDir := filepath.Join(home, ".agent-runner", "onboarding", "runs")
 	writeRunState(t, runsDir, "onboarding-onboarding-2026-05-10T10-00-00Z", ref, false)
 	emptyDir := filepath.Join(runsDir, "onboarding-onboarding-2026-05-10T11-00-00Z")
@@ -422,7 +422,7 @@ func TestFindLatestIncompleteOnboardingRunStateRepairsEmptyCurrentStepFromAudit(
 	}
 	t.Chdir(repo)
 
-	ref := "builtin:onboarding/onboarding.yaml"
+	ref := "builtin:onboarding/onboarding-v1.0.yaml"
 	runsDir := filepath.Join(home, ".agent-runner", "onboarding", "runs")
 	writeRunState(t, runsDir, "onboarding-onboarding-2026-05-10T10-00-00Z", ref, false)
 	emptyDir := filepath.Join(runsDir, "onboarding-onboarding-2026-05-10T11-00-00Z")
@@ -474,7 +474,7 @@ func TestFindLatestIncompleteOnboardingRunStateRewindsGuidedDirectoryConfirmatio
 	}
 	t.Chdir(resumeCwd)
 
-	ref := "builtin:onboarding/onboarding.yaml"
+	ref := "builtin:onboarding/onboarding-v1.0.yaml"
 	runsDir := filepath.Join(home, ".agent-runner", "onboarding", "runs")
 	sessionDir := filepath.Join(runsDir, "onboarding-onboarding-2026-05-10T11-00-00Z")
 	if err := stateio.WriteState(&model.RunState{
@@ -536,7 +536,7 @@ func TestFindLatestIncompleteOnboardingRunStateReturnsRepairWriteError(t *testin
 	}
 	t.Chdir(repo)
 
-	ref := "builtin:onboarding/onboarding.yaml"
+	ref := "builtin:onboarding/onboarding-v1.0.yaml"
 	runsDir := filepath.Join(home, ".agent-runner", "onboarding", "runs")
 	sessionDir := filepath.Join(runsDir, "onboarding-onboarding-2026-05-10T11-00-00Z")
 	if err := stateio.WriteState(&model.RunState{
@@ -593,7 +593,7 @@ func TestFindLatestIncompleteOnboardingRunStateMissingRunsDir(t *testing.T) {
 	}
 	t.Chdir(repo)
 
-	got, ok, err := findLatestIncompleteOnboardingRunState("builtin:onboarding/onboarding.yaml")
+	got, ok, err := findLatestIncompleteOnboardingRunState("builtin:onboarding/onboarding-v1.0.yaml")
 	if err != nil {
 		t.Fatalf("findLatestIncompleteOnboardingRunState: %v", err)
 	}
@@ -615,7 +615,7 @@ func TestPrepareBuiltinOnboardingRunStartsFromRequestedTopLevelStep(t *testing.T
 	}
 	t.Chdir(repo)
 
-	ref := "builtin:onboarding/onboarding.yaml"
+	ref := "builtin:onboarding/onboarding-v1.0.yaml"
 	runsDir := filepath.Join(home, ".agent-runner", "onboarding", "runs")
 	writeRunState(t, runsDir, "onboarding-onboarding-2026-05-10T10-00-00Z", ref, false)
 

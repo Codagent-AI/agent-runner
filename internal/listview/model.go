@@ -507,7 +507,7 @@ func (m *Model) debugOnboardingFailure() (tea.Model, tea.Cmd) {
 				CanonicalName: "core:debug",
 				Scope:         discovery.ScopeBuiltin,
 				Namespace:     "core",
-				SourcePath:    "builtin:core/debug.yaml",
+				SourcePath:    "builtin:core/debug-v1.0.yaml",
 			},
 			Params: map[string]string{"failed_session_dir": sessionDir},
 		}

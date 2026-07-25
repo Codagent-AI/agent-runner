@@ -1,0 +1,12 @@
+name: e2e-sub-workflow-resume-child
+description: "Child workflow for sub-workflow resume test"
+
+steps:
+  - id: child-step1
+    command: echo "child-step1-done"
+
+  - id: child-step2
+    command: echo "child-step2-done"
+
+  - id: child-step3
+    command: echo "child-step3-done"
