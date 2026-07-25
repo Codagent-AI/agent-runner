@@ -1,12 +1,12 @@
 //go:build darwin || linux
 
-package interactive
+package control
 
 import (
 	"os"
 	"strconv"
 )
 
-func interactivePlatformError() error { return nil }
+func controlPlatformError() error { return nil }
 
 func platformUserID() string { return strconv.Itoa(os.Getuid()) }

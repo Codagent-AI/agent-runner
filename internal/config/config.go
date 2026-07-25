@@ -257,12 +257,27 @@ func buildConfig(defaults, global, project *parsedFile) (*Config, error) {
 	}, nil
 }
 
-// mergeProfileSets layers parsed files. For each profile set name, agents from
-// later layers override agents of the same name from earlier layers. Profile
-// set names appearing in only one layer pass through.
-func mergeProfileSets(layers ...*parsedFile) map[string]*ProfileSet {
+// mergeProfileSets layers defaults, global, and project config. For each
+// profile set name, agents from later layers override agents of the same name
+// from earlier layers. Built-in agents remain fallbacks unless a user layer
+// explicitly gives that profile set a parent, in which case the selected
+// parent's agents are the fallback instead.
+func mergeProfileSets(defaults *parsedFile, userLayers ...*parsedFile) map[string]*ProfileSet {
+	userExtendedSets := map[string]bool{}
+	for _, layer := range userLayers {
+		if layer == nil {
+			continue
+		}
+		for name, ps := range layer.Profiles {
+			if ps != nil && ps.Extends != "" {
+				userExtendedSets[name] = true
+			}
+		}
+	}
+
+	layers := append([]*parsedFile{defaults}, userLayers...)
 	result := map[string]*ProfileSet{}
-	for _, layer := range layers {
+	for layerIndex, layer := range layers {
 		if layer == nil {
 			continue
 		}
@@ -277,6 +292,9 @@ func mergeProfileSets(layers ...*parsedFile) map[string]*ProfileSet {
 			}
 			if ps.Extends != "" {
 				existing.Extends = ps.Extends
+			}
+			if layerIndex == 0 && userExtendedSets[name] {
+				continue
 			}
 			for agentName, agent := range ps.Agents {
 				existing.Agents[agentName] = agent

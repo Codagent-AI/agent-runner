@@ -30,6 +30,14 @@ func TestInternalWatchdogSkipsReusedPID(t *testing.T) {
 	}
 }
 
+func TestInternalCallAgentMCPRejectsArguments(t *testing.T) {
+	var stderr bytes.Buffer
+	code := handleInternalWithIO([]string{"call-agent-mcp", "extra"}, strings.NewReader(""), &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "accepts no arguments") {
+		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+	}
+}
+
 func TestWriteProfilePayloadValidation(t *testing.T) {
 	var payload writeProfilePayload
 	err := decodeWriteProfilePayload(strings.NewReader(`{"interactive_cli":"claude","headless_cli":"codex","target_path":"config.yaml"}`), &payload)

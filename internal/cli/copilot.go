@@ -48,6 +48,10 @@ func (a *CopilotAdapter) BuildArgs(input *BuildArgsInput) []string {
 func (a *CopilotAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, error) {
 	args := []string{"copilot"}
 	context := input.InvocationContext()
+	agentCall, err := validatedAgentCall(input)
+	if err != nil {
+		return nil, fmt.Errorf("copilot: prepare agent-call integration: %w", err)
+	}
 	if context.IsHeadless() {
 		args = append(args, "-p", input.Prompt, "-s", "--output-format", "json")
 	} else {
@@ -78,7 +82,17 @@ func (a *CopilotAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, er
 	if context.IsAutonomous() && slices.Contains(input.DisallowedTools, "AskUserQuestion") {
 		args = append(args, "--no-ask-user")
 	}
-	if !context.IsHeadless() && input.CompletionCommand != nil && input.CompletionCommand.Valid() {
+	if agentCall != nil {
+		config, err := standardAgentCallMCPConfig(*agentCall, true, agentCallTimeoutMilliseconds, false)
+		if err != nil {
+			return nil, fmt.Errorf("copilot: encode agent-call MCP config: %w", err)
+		}
+		args = append(args, "--additional-mcp-config="+string(config))
+		if context.IsAutonomous() {
+			args = append(args, "--allow-tool=agent-runner(call_agent)")
+		}
+	}
+	if completionCommandEnabled(input) {
 		prepare := a.prepareCompletionPlugin
 		if prepare == nil {
 			prepare = prepareNextCommandPlugin

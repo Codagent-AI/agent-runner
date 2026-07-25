@@ -64,6 +64,10 @@ type StepRecord struct {
 	AgentInvoked        bool               `json:"agent_invoked"`
 	Usage               *model.UsageRecord `json:"usage"`
 	EstimatedAPICostUSD *float64           `json:"estimated_api_cost_usd"`
+	CallID              string             `json:"call_id,omitempty"`
+	ParentAttemptID     string             `json:"parent_attempt_id,omitempty"`
+	TargetKind          string             `json:"target_kind,omitempty"`
+	TargetName          string             `json:"target_name,omitempty"`
 }
 
 type executionKey struct {
@@ -79,6 +83,7 @@ type Collector struct {
 	path           string
 	artifact       Artifact
 	attempts       map[executionKey]int
+	seenCalls      map[string]struct{}
 	baselines      map[string]model.TokenCounts
 	totalBaselines map[string]model.TokenTotals
 	errors         []error
@@ -99,6 +104,7 @@ func NewCollector(sessionDir, runID, workflow string, sessionStart time.Time) *C
 			Sessions: []SessionRecord{}, Steps: []StepRecord{}, Totals: emptyTotals(),
 		},
 		attempts:       make(map[executionKey]int),
+		seenCalls:      make(map[string]struct{}),
 		baselines:      make(map[string]model.TokenCounts),
 		totalBaselines: make(map[string]model.TokenTotals),
 		now:            time.Now,
@@ -121,7 +127,7 @@ func (c *Collector) Process(event audit.Event) audit.Event {
 		if at, ok := c.eventTimestamp(event); ok {
 			c.openSession(at)
 		}
-	case audit.EventStepEnd, audit.EventIterationEnd:
+	case audit.EventStepEnd, audit.EventIterationEnd, audit.EventAgentCallEnd:
 		c.processTerminal(&event)
 		if at, ok := c.eventTimestamp(event); ok {
 			c.observeSession(at, false)
@@ -182,10 +188,22 @@ func (c *Collector) Errors() []error {
 }
 
 func (c *Collector) processTerminal(event *audit.Event) {
+	callID := ""
+	if event.Type == audit.EventAgentCallEnd {
+		callID = stringValue(event.Data["call_id"])
+		if callID != "" {
+			if _, duplicate := c.seenCalls[callID]; duplicate {
+				return
+			}
+		}
+	}
 	identity, ok := event.Data[DataIdentity].(model.ExecutionIdentity)
 	if !ok {
 		c.errors = append(c.errors, fmt.Errorf("run-metrics: %s missing typed execution identity", event.Type))
 		return
+	}
+	if callID != "" {
+		c.seenCalls[callID] = struct{}{}
 	}
 	key := attemptKey(identity.Prefix, identity.StepID, identity.Kind, identity.Iteration)
 	c.attempts[key]++
@@ -197,6 +215,8 @@ func (c *Collector) processTerminal(event *audit.Event) {
 		ID: identity.StepID, Kind: identity.Kind, Type: identity.StepType, Attempt: identity.Attempt,
 		Outcome: stringValue(event.Data["outcome"]), DurationMS: int64Value(event.Data["duration_ms"]),
 		SessionID: identity.SessionID, AgentInvoked: identity.AgentInvoked,
+		CallID: stringValue(event.Data["call_id"]), ParentAttemptID: stringValue(event.Data["parent_attempt_id"]),
+		TargetKind: stringValue(event.Data["target_kind"]), TargetName: stringValue(event.Data["target_name"]),
 	}
 	if identity.Kind == "iteration" {
 		iteration := identity.Iteration
@@ -457,6 +477,9 @@ func (c *Collector) rehydrate(sessionStart time.Time) {
 	c.artifactLoaded = true
 	for i := range artifact.Steps {
 		record := &artifact.Steps[i]
+		if record.CallID != "" {
+			c.seenCalls[record.CallID] = struct{}{}
+		}
 		iteration := 0
 		if record.Iteration != nil {
 			iteration = *record.Iteration

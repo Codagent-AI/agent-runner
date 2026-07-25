@@ -528,6 +528,47 @@ func TestLoad_GlobalOverridesDefaultAgent(t *testing.T) {
 	}
 }
 
+func TestLoad_UserDefaultExtendsProfileWithoutBuiltInAgentsShadowingParent(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repo := filepath.Join(root, "repo")
+	t.Setenv("HOME", home)
+
+	globalPath := filepath.Join(home, ".agent-runner", "config.yaml")
+	projectPath := filepath.Join(repo, ".agent-runner", "config.yaml")
+
+	writeConfigFile(t, globalPath, `profiles:
+  codex:
+    agents:
+      autonomous_base:
+        default_mode: autonomous
+        cli: codex
+        model: gpt-5.6-sol
+      implementor:
+        extends: autonomous_base
+  default:
+    extends: codex
+    agents:
+      planner:
+        default_mode: interactive
+        cli: codex
+        model: gpt-5.6-sol
+`)
+
+	cfg, err := Load(projectPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rp, err := cfg.Resolve("implementor")
+	if err != nil {
+		t.Fatalf("unexpected resolve error: %v", err)
+	}
+	if rp.CLI != "codex" || rp.Model != "gpt-5.6-sol" {
+		t.Fatalf("expected implementor inherited from user-selected parent, got %+v", rp)
+	}
+}
+
 func TestLoad_ProjectExistsStillIncludesDefaultAgents(t *testing.T) {
 	// When a project config defines only a custom agent, the built-in
 	// defaults (planner, implementor, etc.) must still be available so that

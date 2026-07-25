@@ -111,6 +111,41 @@ type BuildArgsInput struct {
 	// CompletionCommand is the in-session control client. Adapters only use
 	// it when it names the absolute-path, fixed `step complete` command.
 	CompletionCommand *CompletionCommand
+	// RunnerIntegration carries trusted, invocation-scoped Runner tool
+	// descriptors. It contains no active attempt credentials; those arrive only
+	// through the sanitized child environment.
+	RunnerIntegration *RunnerIntegration
+}
+
+func completionCommandEnabled(input *BuildArgsInput) bool {
+	return input != nil &&
+		!input.InvocationContext().IsHeadless() &&
+		input.CompletionCommand != nil &&
+		input.CompletionCommand.Valid()
+}
+
+type MCPServerCommand struct {
+	Executable string
+	Args       []string
+}
+
+func (c MCPServerCommand) Valid() bool {
+	return filepath.IsAbs(c.Executable) && slices.Equal(c.Args, []string{"internal", "call-agent-mcp"})
+}
+
+func (c MCPServerCommand) Command() []string {
+	if !c.Valid() {
+		return nil
+	}
+	return append([]string{c.Executable}, c.Args...)
+}
+
+type RunnerIntegration struct {
+	AgentCall *MCPServerCommand
+}
+
+func (i RunnerIntegration) Valid() bool {
+	return i.AgentCall != nil && i.AgentCall.Valid()
 }
 
 // CompletionCommand describes the only runner command an interactive CLI may

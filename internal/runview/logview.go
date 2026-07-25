@@ -88,6 +88,8 @@ func buildLogLinesRecurse(
 				blockLines = renderHeadlessBlock(child, indent, bodyWidth, loadedFull[child.NodeKey()], pulsePhase, runActive)
 			case NodeInteractiveAgent:
 				blockLines = renderInteractiveBlock(child, indent, bodyWidth, pulsePhase, runActive)
+			case NodeAgentCall:
+				blockLines = renderAgentCallBlock(child, indent, bodyWidth, loadedFull[child.NodeKey()], pulsePhase, runActive)
 			case NodeSubWorkflow:
 				blockLines = renderSubWorkflowBlock(child, indent, bodyWidth, resolverCfg)
 			case NodeLoop:
@@ -220,6 +222,8 @@ func renderGhostBlock(node *StepNode, indent, width int, resolverCfg ResolverCon
 		lines = append(lines, tuistyle.DimStyle.Render(blockDimStr("iteration", itNum(node.IterationIndex))))
 	case NodeGroup:
 		lines = append(lines, tuistyle.DimStyle.Render(blockDimStr("steps", fmt.Sprintf("%d", len(node.Children)))))
+	case NodeAgentCall:
+		lines = append(lines, tuistyle.DimStyle.Render(blockDimStr("target", node.CallTargetKind+":"+node.CallTargetName)))
 	}
 
 	return lines

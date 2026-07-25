@@ -61,6 +61,17 @@ func TestCreateRootContext(t *testing.T) {
 }
 
 func TestCreateLoopIterationContext(t *testing.T) {
+	t.Run("shares opaque run control with child contexts", func(t *testing.T) {
+		marker := &struct{ name string }{name: "control"}
+		parent := NewRootContext(&RootContextOptions{WorkflowFile: "test.yaml"})
+		parent.Control = marker
+
+		child := NewLoopIterationContext(parent, LoopIterationOptions{StepID: "loop", Iteration: 1})
+		if child.Control != marker {
+			t.Fatalf("child control = %#v, want shared marker", child.Control)
+		}
+	})
+
 	t.Run("creates child context with loop variable in params", func(t *testing.T) {
 		parent := NewRootContext(&RootContextOptions{
 			Params:       map[string]string{"base": "/src"},

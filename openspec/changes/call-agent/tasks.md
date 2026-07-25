@@ -1,0 +1,5 @@
+- [x] Extract Invocation and Control Core (`tasks/01-extract-invocation-control.md`)
+- [x] Build Agent-Call Runtime (`tasks/02-build-call-runtime.md`)
+- [x] Provision Adapter Integrations (`tasks/03-provision-adapter-integrations.md`)
+- [x] Persist Call Evidence (`tasks/04-persist-call-evidence.md`)
+- [x] Render Call Executions (`tasks/05-render-call-executions.md`)

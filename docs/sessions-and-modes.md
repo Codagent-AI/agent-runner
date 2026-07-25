@@ -47,6 +47,8 @@ steps:
 > [!WARNING]
 > Named session names cannot be `new`, `resume`, or `inherit`. Those words are reserved for built-in session strategies.
 
+Agent calls and workflow steps use the same run-scoped named-session map. A call can create a declared session on first use, resume one created by a workflow step, or leave a session for a later workflow step to resume. Direct profile calls always create fresh sessions and do not add them to this map. See [Agent Calls](agent-calls.md).
+
 ## Modes
 
 Agent Runner uses modes to choose the runtime behavior for a step:

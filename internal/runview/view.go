@@ -39,6 +39,7 @@ func (m *Model) View() string {
 	if m.showSummary {
 		return m.renderSummary()
 	}
+	m.loadSelectedAgentCallOutput()
 
 	var b strings.Builder
 
@@ -330,10 +331,19 @@ func (m *Model) stepRowParts(n *StepNode) (typeCol, label, glyph string) {
 	case NodeIteration:
 		typePrefix = typeGlyph(n.Type)
 		label = fmt.Sprintf("iter %d", n.IterationIndex+1)
+	case NodeAgentCall:
+		typePrefix = typeGlyph(n.Type)
+		label = n.callLabel()
 	default:
 		typePrefix = typeGlyph(n.Type)
 	}
-	label = truncateSidebarName(label) + suffix
+	if (n.Type == NodeHeadlessAgent || n.Type == NodeInteractiveAgent) && len(n.Children) > 0 {
+		suffix = fmt.Sprintf(" (%d calls)", len(n.Children))
+	}
+	if n.Type != NodeAgentCall {
+		label = truncateSidebarName(label)
+	}
+	label += suffix
 
 	typeCol = "   "
 	if typePrefix != "" {
@@ -395,7 +405,7 @@ func typeGlyph(t NodeType) string {
 		return uiGlyphStyle.Render(raw)
 	case NodeLoop, NodeIteration, NodeGroup:
 		return loopGlyphStyle.Render(raw)
-	case NodeHeadlessAgent, NodeInteractiveAgent, NodeSubWorkflow:
+	case NodeHeadlessAgent, NodeInteractiveAgent, NodeSubWorkflow, NodeAgentCall:
 		return subwfGlyphStyle.Render(raw)
 	}
 	return ""
@@ -455,17 +465,7 @@ func (m *Model) helpBarParts() []string {
 		parts = append(parts, "↑↓ step")
 	}
 	parts = append(parts, "j/k scroll")
-
-	if sel != nil {
-		switch sel.Type {
-		case NodeLoop, NodeSubWorkflow, NodeIteration, NodeGroup:
-			parts = append(parts, "enter drill")
-		case NodeHeadlessAgent, NodeInteractiveAgent:
-			if m.canResumeAgentSession(sel) {
-				parts = append(parts, "enter resume")
-			}
-		}
-	}
+	parts = append(parts, m.selectedNodeHelpParts(sel)...)
 
 	if !m.running {
 		parts = append(parts, "esc back")
@@ -496,6 +496,28 @@ func (m *Model) helpBarParts() []string {
 	return parts
 }
 
+func (m *Model) selectedNodeHelpParts(selected *StepNode) []string {
+	if selected == nil {
+		return nil
+	}
+	switch selected.Type {
+	case NodeLoop, NodeSubWorkflow, NodeIteration, NodeGroup:
+		return []string{"enter drill"}
+	case NodeHeadlessAgent, NodeInteractiveAgent:
+		if selected.IsContainer() {
+			return []string{"enter drill"}
+		}
+		if m.canResumeAgentSession(selected) {
+			return []string{"enter resume"}
+		}
+	case NodeAgentCall:
+		if m.canResumeAgentSession(selected) {
+			return []string{"enter resume"}
+		}
+	}
+	return nil
+}
+
 func (m *Model) viewSwitchHelpPart() string {
 	if m.showSummary {
 		return "v view run"
@@ -511,7 +533,7 @@ func (m *Model) selectedNodeHasTruncatedOutput() bool {
 	if m.loadedFull[n.NodeKey()] {
 		return false
 	}
-	if n.Type != NodeShell && n.Type != NodeScript && n.Type != NodeHeadlessAgent {
+	if n.Type != NodeShell && n.Type != NodeScript && n.Type != NodeHeadlessAgent && n.Type != NodeAgentCall {
 		return false
 	}
 	return truncateOutput(n.Stdout).Truncated || truncateOutput(n.Stderr).Truncated

@@ -17,6 +17,7 @@ type Summary struct {
 	RunStart           *EventRef             `json:"run_start,omitempty"`
 	RunEnd             *EventRef             `json:"run_end,omitempty"`
 	Steps              []StepBoundary        `json:"steps"`
+	AgentCalls         []AgentCallBoundary   `json:"agent_calls"`
 	SubWorkflows       []SubWorkflowBoundary `json:"sub_workflows"`
 	Failures           []FailureEvent        `json:"failures"`
 	Errors             []ErrorEvent          `json:"errors"`
@@ -38,6 +39,18 @@ type StepBoundary struct {
 	StepType  string         `json:"step_type,omitempty"`
 	Outcome   string         `json:"outcome,omitempty"`
 	Data      map[string]any `json:"data,omitempty"`
+}
+
+type AgentCallBoundary struct {
+	Timestamp       string         `json:"timestamp,omitempty"`
+	Prefix          string         `json:"prefix,omitempty"`
+	Type            EventType      `json:"type"`
+	CallID          string         `json:"call_id,omitempty"`
+	ParentAttemptID string         `json:"parent_attempt_id,omitempty"`
+	TargetKind      string         `json:"target_kind,omitempty"`
+	TargetName      string         `json:"target_name,omitempty"`
+	Outcome         string         `json:"outcome,omitempty"`
+	Data            map[string]any `json:"data,omitempty"`
 }
 
 type SubWorkflowBoundary struct {
@@ -75,6 +88,7 @@ type ErrorEvent struct {
 func BuildSummary(r io.Reader, capBytes int) (Summary, error) {
 	summary := Summary{
 		Steps:        []StepBoundary{},
+		AgentCalls:   []AgentCallBoundary{},
 		SubWorkflows: []SubWorkflowBoundary{},
 		Failures:     []FailureEvent{},
 		Errors:       []ErrorEvent{},
@@ -134,6 +148,29 @@ func appendClassifiedEvent(summary *Summary, event Event, capBytes int, used *in
 		}
 		summary.Steps = append(summary.Steps, item)
 		if event.Type == EventStepEnd && stringField(event.Data, "outcome") == "failed" {
+			failure := failureEvent(event)
+			if !fitsCap(failure, capBytes, used) {
+				return false
+			}
+			summary.Failures = append(summary.Failures, failure)
+		}
+	case EventAgentCallStart, EventAgentCallEnd:
+		item := AgentCallBoundary{
+			Timestamp:       event.Timestamp,
+			Prefix:          event.Prefix,
+			Type:            event.Type,
+			CallID:          stringField(event.Data, "call_id"),
+			ParentAttemptID: stringField(event.Data, "parent_attempt_id"),
+			TargetKind:      stringField(event.Data, "target_kind"),
+			TargetName:      stringField(event.Data, "target_name"),
+			Outcome:         stringField(event.Data, "outcome"),
+			Data:            event.Data,
+		}
+		if !fitsCap(item, capBytes, used) {
+			return false
+		}
+		summary.AgentCalls = append(summary.AgentCalls, item)
+		if event.Type == EventAgentCallEnd && stringField(event.Data, "outcome") == "failed" {
 			failure := failureEvent(event)
 			if !fitsCap(failure, capBytes, used) {
 				return false
