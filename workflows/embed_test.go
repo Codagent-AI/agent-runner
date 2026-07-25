@@ -179,6 +179,41 @@ func TestOpenSpecReviewTasksWorkflowAndGateRemainEmbedded(t *testing.T) {
 	}
 }
 
+func TestOpenSpecTaskReviewLoopGateHandlesLargeReportWithoutJQ(t *testing.T) {
+	script, err := ReadAsset("openspec/task-review-loop-gate.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(task-review-loop-gate.sh): %v", err)
+	}
+
+	scriptPath := filepath.Join(t.TempDir(), "task-review-loop-gate.sh")
+	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
+		t.Fatalf("write task review gate: %v", err)
+	}
+
+	binDir := t.TempDir()
+	for _, name := range []string{"cat", "python3", "sed", "tail"} {
+		target, err := exec.LookPath(name)
+		if err != nil {
+			t.Skipf("%s not available", name)
+		}
+		if err := os.Symlink(target, filepath.Join(binDir, name)); err != nil {
+			t.Fatalf("symlink %s: %v", name, err)
+		}
+	}
+
+	report := strings.Repeat("x", 3<<20) + "\nREVIEW_RESOLVED\n"
+	cmd := exec.Command("sh", scriptPath)
+	cmd.Env = append(os.Environ(), "PATH="+binDir)
+	cmd.Stdin = strings.NewReader(`{"report":` + strconv.Quote(report) + `}`)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("large report failed without jq: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "Task review loop: resolved") {
+		t.Fatalf("output = %q, want resolved status", out)
+	}
+}
+
 func TestResolveFSRejectsInvalidAndDuplicateLogicalGroups(t *testing.T) {
 	t.Run("unversioned sibling invalidates versioned group", func(t *testing.T) {
 		fsys := fstest.MapFS{

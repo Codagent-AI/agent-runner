@@ -6,19 +6,17 @@ payload=$(cat)
 if command -v jq >/dev/null 2>&1; then
   report=$(printf '%s' "$payload" | jq -r '.report // ""')
 else
-  report=$(PAYLOAD="$payload" python3 - <<'PY'
+  report=$(printf '%s' "$payload" | python3 -c '
 import json
-import os
 import sys
 
 try:
-    parsed = json.loads(os.environ["PAYLOAD"])
+    parsed = json.load(sys.stdin)
 except json.JSONDecodeError as exc:
     print(f"task-review-loop-gate: invalid JSON input: {exc}", file=sys.stderr)
     sys.exit(2)
 print(parsed.get("report") or "", end="")
-PY
-)
+')
 fi
 
 last_line=$(printf '%s\n' "$report" | sed '/^[[:space:]]*$/d' | tail -n 1)
