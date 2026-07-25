@@ -148,6 +148,37 @@ func TestOpenSpecPairsAndSpecDrivenFirstGenerationsAreEmbedded(t *testing.T) {
 	}
 }
 
+func TestOpenSpecReviewTasksWorkflowAndGateRemainEmbedded(t *testing.T) {
+	ref, err := Resolve("openspec:review-tasks")
+	if err != nil {
+		t.Fatalf("Resolve(openspec:review-tasks): %v", err)
+	}
+	if ref != "builtin:openspec/review-tasks-v1.0.yaml" {
+		t.Fatalf("resolved ref = %q, want review-tasks v1.0", ref)
+	}
+
+	assets, err := ListAssets("openspec")
+	if err != nil {
+		t.Fatalf("ListAssets(openspec): %v", err)
+	}
+	if !slices.Contains(assets, "task-review-loop-gate.sh") {
+		t.Fatalf("ListAssets(openspec) missing task-review-loop-gate.sh: %v", assets)
+	}
+	if body, err := ReadAsset("openspec/task-review-loop-gate.sh"); err != nil {
+		t.Fatalf("ReadAsset(task-review-loop-gate.sh): %v", err)
+	} else if len(body) == 0 {
+		t.Fatal("task-review-loop-gate.sh is empty")
+	}
+
+	info, err := os.Stat("openspec/task-review-loop-gate.sh")
+	if err != nil {
+		t.Fatalf("stat task-review-loop-gate.sh: %v", err)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("task-review-loop-gate.sh mode = %v, want executable", info.Mode().Perm())
+	}
+}
+
 func TestResolveFSRejectsInvalidAndDuplicateLogicalGroups(t *testing.T) {
 	t.Run("unversioned sibling invalidates versioned group", func(t *testing.T) {
 		fsys := fstest.MapFS{
