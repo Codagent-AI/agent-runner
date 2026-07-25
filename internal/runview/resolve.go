@@ -173,6 +173,22 @@ func findWorkflowByName(name string, bases []string) (string, bool) {
 // distinguishes an invalid matching group from an unrelated catalog so callers
 // do not fall through to a lower-priority workflow root.
 func searchTree(root, name string) (workflowPath string, matched bool) {
+	catalog := workflowcatalog.Build(workflowCandidatePaths(root))
+	catalogName := strings.ReplaceAll(name, ":", "/")
+	if group, found := catalog.Lookup(catalogName); found {
+		workflowPath, ok := workflowPathForGroup(root, group)
+		if !ok {
+			return "", true
+		}
+		return workflowPath, true
+	}
+	if strings.Contains(name, ":") {
+		return "", false
+	}
+	return selectBareCatalogGroup(root, name, catalog.Groups)
+}
+
+func workflowCandidatePaths(root string) []string {
 	var candidatePaths []string
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -191,39 +207,57 @@ func searchTree(root, name string) (workflowPath string, matched bool) {
 		}
 		return nil
 	})
+	return candidatePaths
+}
 
-	catalog := workflowcatalog.Build(candidatePaths)
-	catalogName := strings.ReplaceAll(name, ":", "/")
-	if group, found := catalog.Lookup(catalogName); found {
-		if group.Err != nil || group.Selected == nil {
+func selectBareCatalogGroup(root, name string, groups []workflowcatalog.Group) (workflowPath string, matched bool) {
+	for _, group := range groups {
+		if filepath.Base(group.CanonicalName) != name {
+			continue
+		}
+		matched = true
+		candidatePath, ok := workflowPathForGroup(root, group)
+		if !ok {
 			return "", true
 		}
-		return filepath.Join(root, filepath.FromSlash(group.Selected.Path)), true
+		if workflowPath == "" {
+			workflowPath = candidatePath
+		}
+	}
+	return workflowPath, matched
+}
+
+func workflowPathForGroup(root string, group workflowcatalog.Group) (string, bool) {
+	if group.Err != nil {
+		legacyPath, ok := uniqueLegacyUnversionedPath(group)
+		if !ok {
+			return "", false
+		}
+		return filepath.Join(root, filepath.FromSlash(legacyPath)), true
+	}
+	if group.Selected == nil {
+		return "", false
+	}
+	return filepath.Join(root, filepath.FromSlash(group.Selected.Path)), true
+}
+
+func uniqueLegacyUnversionedPath(group workflowcatalog.Group) (string, bool) {
+	if group.Err == nil ||
+		len(group.Definitions) != 0 ||
+		len(group.Err.InvalidFilenames) != 1 ||
+		len(group.Err.DuplicateVersions) != 0 {
+		return "", false
 	}
 
-	if !strings.Contains(name, ":") {
-		var selectedPath string
-		var groupMatched bool
-		for _, group := range catalog.Groups {
-			if filepath.Base(group.CanonicalName) != name {
-				continue
-			}
-			groupMatched = true
-			if group.Err != nil {
-				return "", true
-			}
-			if selectedPath == "" && group.Selected != nil {
-				selectedPath = group.Selected.Path
-			}
-		}
-		if selectedPath != "" {
-			return filepath.Join(root, filepath.FromSlash(selectedPath)), true
-		}
-		if groupMatched {
-			return "", true
-		}
+	candidatePath := filepath.ToSlash(group.Err.InvalidFilenames[0].Path)
+	ext := filepath.Ext(candidatePath)
+	if ext != ".yaml" && ext != ".yml" {
+		return "", false
 	}
-	return "", false
+	if strings.TrimSuffix(candidatePath, ext) != group.CanonicalName {
+		return "", false
+	}
+	return candidatePath, true
 }
 
 // rootsFor returns the (workflowsRoot, repoRoot) pair appropriate for an
