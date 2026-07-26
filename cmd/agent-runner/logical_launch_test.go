@@ -158,6 +158,7 @@ func TestResolveWorkflowArgValidatesFreshLaunchName(t *testing.T) {
 	project, _ := setupLogicalLaunchDirs(t)
 	existing := filepath.Join(project, "workflows", "deploy-v1.0.yaml")
 	writeLogicalWorkflow(t, existing, "deploy")
+	writeLogicalWorkflow(t, filepath.Join(project, "team", "deploy-v2.0.yaml"), "deploy")
 
 	tests := []struct {
 		name string
@@ -165,9 +166,12 @@ func TestResolveWorkflowArgValidatesFreshLaunchName(t *testing.T) {
 		want string
 	}{
 		{name: "existing exact path", arg: existing, want: `launch logical workflow "deploy"`},
+		{name: "existing relative exact path", arg: filepath.Join("workflows", "deploy-v1.0.yaml"), want: `launch logical workflow "deploy"`},
 		{name: "versioned filename", arg: "deploy-v1.0.yaml", want: `launch logical workflow "deploy"`},
 		{name: "version-bearing name", arg: "deploy-v2.0", want: `launch logical workflow "deploy"`},
 		{name: "version-bearing path-style name", arg: "team/deploy-v2.0", want: `launch logical workflow "team/deploy"`},
+		{name: "versioned relative logical filename", arg: "team/deploy-v2.0.yaml", want: `launch logical workflow "team/deploy"`},
+		{name: "interior workflows logical segment", arg: "team/workflows/deploy-v2.0.yaml", want: `launch logical workflow "team/workflows/deploy"`},
 		{name: "exact builtin reference", arg: "builtin:openspec/change-v1.0.yaml", want: `launch logical workflow "openspec:change"`},
 		{name: "uppercase", arg: "Deploy", want: "must be lowercase"},
 		{name: "mixed namespace and path", arg: "core:team/deploy", want: "invalid workflow name"},

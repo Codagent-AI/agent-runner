@@ -1564,7 +1564,8 @@ func qualifyWorkflowGroupError(root string, groupErr *workflowcatalog.GroupError
 }
 
 func versionFreeLaunchHint(arg string) (string, bool) {
-	normalized := filepath.ToSlash(strings.TrimSpace(arg))
+	trimmed := strings.TrimSpace(arg)
+	normalized := filepath.ToSlash(trimmed)
 	hadYAMLExtension := workflowcatalog.HasYAMLExtension(normalized)
 	if hadYAMLExtension {
 		normalized = strings.TrimSuffix(normalized, filepath.Ext(normalized))
@@ -1574,10 +1575,23 @@ func versionFreeLaunchHint(arg string) (string, bool) {
 		return "", false
 	}
 	logicalName := matches[1]
-	if hadYAMLExtension && strings.Contains(logicalName, "/") {
+	if hadYAMLExtension &&
+		strings.Contains(logicalName, "/") &&
+		isRejectedFilesystemWorkflowPath(trimmed, logicalName) {
 		logicalName = logicalNameFromRejectedPath(logicalName)
 	}
 	return logicalName, logicalName != ""
+}
+
+func isRejectedFilesystemWorkflowPath(arg, candidate string) bool {
+	if filepath.IsAbs(arg) {
+		return true
+	}
+	if strings.HasPrefix(candidate, "./") || strings.HasPrefix(candidate, "../") || strings.HasPrefix(candidate, "builtin:") {
+		return true
+	}
+	return strings.HasPrefix(candidate, "workflows/") ||
+		strings.HasPrefix(candidate, ".agent-runner/workflows/")
 }
 
 func logicalNameFromRejectedPath(candidate string) string {

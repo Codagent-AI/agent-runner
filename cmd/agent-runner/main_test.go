@@ -19,7 +19,7 @@ func TestResolveWorkflowArg(t *testing.T) {
 		writeTestFile(t, path, "name: workflow\nsteps:\n  - id: s\n    command: echo ok\n")
 
 		_, err := resolveWorkflowArg(path)
-		if err == nil || !strings.Contains(err.Error(), `launch logical workflow "workflow"`) {
+		if err == nil || !strings.Contains(err.Error(), `launch logical workflow "custom/workflow"`) {
 			t.Fatalf("resolveWorkflowArg error = %v, want logical-name guidance", err)
 		}
 	})

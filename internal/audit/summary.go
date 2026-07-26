@@ -10,6 +10,8 @@ import (
 	"strings"
 )
 
+const maxAuditRecordBytes = 32 * 1024 * 1024
+
 type Summary struct {
 	Path               string                `json:"path"`
 	SessionDir         string                `json:"session_dir,omitempty"`
@@ -147,10 +149,26 @@ func LatestRunCompleted(r io.Reader) (bool, error) {
 
 func visitAuditLines(r io.Reader, visit func(lineNo int, line string) error) error {
 	reader := bufio.NewReader(r)
-	for lineNo := 1; ; lineNo++ {
-		line, readErr := reader.ReadString('\n')
-		if line != "" {
-			line = strings.TrimSuffix(line, "\n")
+	var record []byte
+	for lineNo := 1; ; {
+		fragment, readErr := reader.ReadSlice('\n')
+		recordBytes := len(record) + len(fragment)
+		if len(fragment) > 0 && fragment[len(fragment)-1] == '\n' {
+			recordBytes--
+		}
+		if recordBytes > maxAuditRecordBytes {
+			return fmt.Errorf("audit line %d exceeds %d MiB", lineNo, maxAuditRecordBytes/(1024*1024))
+		}
+		record = append(record, fragment...)
+
+		if readErr == bufio.ErrBufferFull {
+			continue
+		}
+		if readErr != nil && readErr != io.EOF {
+			return readErr
+		}
+		if len(record) > 0 {
+			line := strings.TrimSuffix(string(record), "\n")
 			line = strings.TrimSuffix(line, "\r")
 			if err := visit(lineNo, line); err != nil {
 				return err
@@ -159,9 +177,8 @@ func visitAuditLines(r io.Reader, visit func(lineNo int, line string) error) err
 		if readErr == io.EOF {
 			return nil
 		}
-		if readErr != nil {
-			return readErr
-		}
+		record = record[:0]
+		lineNo++
 	}
 }
 

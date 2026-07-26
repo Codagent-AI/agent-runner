@@ -5,6 +5,7 @@ package workflowcatalog
 import (
 	"fmt"
 	"path"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -65,8 +66,8 @@ const (
 	// FilenameErrorPattern means the filename does not match the required
 	// versioned workflow pattern.
 	FilenameErrorPattern FilenameErrorKind = "pattern"
-	// FilenameErrorUppercase means the logical basename contains uppercase
-	// ASCII letters.
+	// FilenameErrorUppercase means the logical basename or one of its
+	// directory qualifiers contains uppercase ASCII letters.
 	FilenameErrorUppercase FilenameErrorKind = "uppercase"
 )
 
@@ -306,20 +307,25 @@ func Parse(candidatePath string) (Definition, error) {
 	}
 
 	logicalName, major, minor := matches[1], matches[2], matches[3]
-	if containsUppercaseASCII(logicalName) {
+	directorySegments := catalogDirectorySegments(candidatePath, normalizedPath)
+	if containsUppercaseASCII(logicalName) || anySegment(directorySegments, containsUppercaseASCII) {
 		return Definition{}, filenameErr(FilenameErrorUppercase)
 	}
 	if !validLogicalNamePattern.MatchString(logicalName) ||
+		anySegment(directorySegments, func(segment string) bool {
+			return !validLogicalNamePattern.MatchString(segment)
+		}) ||
 		!isNormalizedDecimal(major) ||
 		!isNormalizedDecimal(minor) {
 		return Definition{}, filenameErr(FilenameErrorPattern)
 	}
 
 	version := Version{Major: major, Minor: minor}
-	dir := path.Dir(normalizedPath)
+	segments := strings.Split(normalizedPath, "/")
+	canonicalDirectorySegments := segments[:len(segments)-1]
 	canonicalName := logicalName
-	if dir != "." {
-		canonicalName = path.Join(dir, logicalName)
+	if len(canonicalDirectorySegments) > 0 {
+		canonicalName = strings.Join(append(canonicalDirectorySegments, logicalName), "/")
 	}
 	return Definition{
 		Path:          candidatePath,
@@ -383,7 +389,7 @@ func bestEffortGroup(candidatePath string) string {
 	}
 	stem = strings.ToLower(stem)
 
-	dir := path.Dir(candidatePath)
+	dir := strings.ToLower(path.Dir(candidatePath))
 	group := stem
 	if dir != "." {
 		group = path.Join(dir, stem)
@@ -431,6 +437,28 @@ func incrementDecimal(value string) string {
 func containsUppercaseASCII(value string) bool {
 	for _, char := range value {
 		if char >= 'A' && char <= 'Z' {
+			return true
+		}
+	}
+	return false
+}
+
+func catalogDirectorySegments(candidatePath, normalizedPath string) []string {
+	if filepath.IsAbs(candidatePath) ||
+		strings.HasPrefix(normalizedPath, "./") ||
+		strings.HasPrefix(normalizedPath, "../") {
+		return nil
+	}
+	identityPath := strings.TrimPrefix(normalizedPath, "builtin:")
+	identityPath = strings.TrimPrefix(identityPath, ".agent-runner/workflows/")
+	identityPath = strings.TrimPrefix(identityPath, "workflows/")
+	segments := strings.Split(identityPath, "/")
+	return segments[:len(segments)-1]
+}
+
+func anySegment(segments []string, predicate func(string) bool) bool {
+	for _, segment := range segments {
+		if predicate(segment) {
 			return true
 		}
 	}

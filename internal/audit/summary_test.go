@@ -182,6 +182,18 @@ func TestBuildSummaryRejectsMalformedAuditLine(t *testing.T) {
 	}
 }
 
+func TestBuildSummaryRejectsAuditRecordLargerThan32MiB(t *testing.T) {
+	oversizedRecord := strings.Repeat("x", 32*1024*1024+1) + "\n"
+
+	_, err := BuildSummary(strings.NewReader(oversizedRecord), 64*1024)
+	if err == nil {
+		t.Fatal("BuildSummary error = nil, want oversized audit record error")
+	}
+	if !strings.Contains(err.Error(), "audit line 1 exceeds 32 MiB") {
+		t.Fatalf("BuildSummary error = %q, want bounded-record error", err)
+	}
+}
+
 func TestLatestRunCompletedUsesLatestLifecycle(t *testing.T) {
 	log := auditLine(t, Event{Timestamp: "2026-05-24T10:00:00Z", Type: EventRunStart}) +
 		auditLine(t, Event{Timestamp: "2026-05-24T10:00:01Z", Type: EventRunEnd, Data: map[string]any{"outcome": "success"}}) +
