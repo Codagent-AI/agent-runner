@@ -224,14 +224,21 @@ func runOpenCodeCompletionSurfaceE2E(t *testing.T, workdir, runnerBin, input str
 	marker := "AR_OPENCODE_SURFACE_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:10] + "_READY"
 	command := &cli.CompletionCommand{Executable: runnerBin, Args: []string{"step", "complete"}}
 	prompt := fmt.Sprintf("Print %s on its own line, then wait for the user. When the user asks you to continue, run the exact shell command %s and finish the response.", marker, command.ShellCommand())
-	args := (&cli.OpenCodeAdapter{}).BuildArgs(&cli.BuildArgsInput{
+	adapter := &cli.OpenCodeAdapter{}
+	buildInput := &cli.BuildArgsInput{
 		Prompt:            prompt,
 		Context:           cli.ContextInteractive,
 		CompletionCommand: command,
-	})
+	}
+	args := adapter.BuildArgs(buildInput)
+	spawnEnv, err := adapter.SpawnEnv(buildInput)
+	if err != nil {
+		t.Fatalf("build OpenCode process environment: %v", err)
+	}
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Dir = workdir
-	cmd.Env = append(realAgentTestEnv(true),
+	cmd.Env = append(realAgentTestEnv(true), spawnEnv...)
+	cmd.Env = append(cmd.Env,
 		"AGENT_RUNNER_CONTROL_SOCKET="+socketPath,
 		"AGENT_RUNNER_RUN_ID="+runID,
 		"AGENT_RUNNER_STEP_ID="+stepID,
@@ -279,6 +286,9 @@ func runOpenCodeCompletionSurfaceE2E(t *testing.T, workdir, runnerBin, input str
 					_, _ = ptmx.Write([]byte("/"))
 					time.Sleep(200 * time.Millisecond)
 					_, _ = ptmx.Write([]byte(strings.TrimPrefix(input, "/")))
+					time.Sleep(100 * time.Millisecond)
+					_, _ = ptmx.Write([]byte("\r"))
+					time.Sleep(200 * time.Millisecond)
 				} else {
 					_, _ = ptmx.Write([]byte(input))
 				}
