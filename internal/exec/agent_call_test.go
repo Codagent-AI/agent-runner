@@ -149,6 +149,24 @@ func TestAgentCallHandlerRejectsBeforeAcceptance(t *testing.T) {
 	}
 }
 
+func TestAgentCallHandlerIneligibleErrorCitesStepDeclaration(t *testing.T) {
+	options := testAgentCallOptions(t.TempDir(), &callTestRunner{}, &callTestAdapter{})
+	options.Eligible = false
+	response := decodeCallResponse(t, NewAgentCallHandler(options).HandleAgentCall(
+		context.Background(),
+		control.AgentCallRequest{
+			RequestID: "request",
+			Payload:   json.RawMessage(`{"prompt":"x","agent":"implementor"}`),
+		},
+	))
+	if response.Error == nil || response.Error.Code != agentcall.CodeIneligible {
+		t.Fatalf("response = %#v, want ineligible error", response)
+	}
+	if !strings.Contains(response.Error.Message, "step declaration") || strings.Contains(response.Error.Message, "prompt") {
+		t.Fatalf("ineligible message = %q, want step declaration guidance without prompt guidance", response.Error.Message)
+	}
+}
+
 func TestAgentCallHandlerAuditsPreAcceptanceRejection(t *testing.T) {
 	options := testAgentCallOptions(t.TempDir(), &callTestRunner{}, &callTestAdapter{})
 	logger := &recordingAuditLogger{}
@@ -218,7 +236,7 @@ func TestAgentCallHandlerRunsFreshProfileAutonomousHeadless(t *testing.T) {
 	handler := NewAgentCallHandler(options)
 
 	payload, _ := json.Marshal(agentcall.Request{
-		Prompt: "child task", Agent: stringPointer("implementor"), CLI: stringPointer("test"),
+		Prompt: "child task mentioning call_agent", Agent: stringPointer("implementor"), CLI: stringPointer("test"),
 		Model: stringPointer("override-model"), Workdir: stringPointer("child"),
 	})
 	response := decodeCallResponse(t, handler.HandleAgentCall(context.Background(), control.AgentCallRequest{
@@ -237,7 +255,7 @@ func TestAgentCallHandlerRunsFreshProfileAutonomousHeadless(t *testing.T) {
 	if input.Context != cli.ContextAutonomousHeadless || input.Resume || input.Workdir != childWorkdir || input.Model != "override-model" {
 		t.Fatalf("adapter input = %#v", input)
 	}
-	if !strings.Contains(input.Prompt, "system rules") || !strings.Contains(input.Prompt, "child task") || strings.Contains(input.Prompt, "engine enrichment") {
+	if !strings.Contains(input.Prompt, "system rules") || !strings.Contains(input.Prompt, "child task mentioning call_agent") || strings.Contains(input.Prompt, "engine enrichment") {
 		t.Fatalf("child prompt = %q", input.Prompt)
 	}
 	if input.CompletionCommand != nil {
@@ -408,21 +426,46 @@ func TestPrepareAgentCallRuntimeNotifiesLiveRunnerBeforeLaunchAndAfterFinish(t *
 	}
 }
 
-func TestBuildStepInvocationCarriesPreInterpolationAgentCallEligibility(t *testing.T) {
+func TestBuildStepInvocationUsesDeclaredAgentCallTool(t *testing.T) {
 	ctx := model.NewRootContext(&model.RootContextOptions{SessionDir: t.TempDir()})
 	profile := &config.ResolvedAgent{CLI: "test"}
 	for _, tt := range []struct {
 		name            string
+		tools           []model.RunnerTool
 		authoredPrompt  string
 		interpolated    string
 		wantIntegration bool
 	}{
-		{name: "authored token enables", authoredPrompt: "Use call_agent for {{task}}", interpolated: "Use delegated tool for work", wantIntegration: true},
-		{name: "interpolated token does not enable", authoredPrompt: "Do {{task}}", interpolated: "Do call_agent now", wantIntegration: false},
+		{
+			name:            "declaration enables without prompt token",
+			tools:           []model.RunnerTool{model.RunnerToolCallAgent},
+			authoredPrompt:  "Delegate an independent review.",
+			interpolated:    "Delegate an independent review.",
+			wantIntegration: true,
+		},
+		{
+			name:            "prompt token alone does not enable",
+			authoredPrompt:  "Use call_agent for this review.",
+			interpolated:    "Use call_agent for this review.",
+			wantIntegration: false,
+		},
+		{
+			name:            "interpolated and enriched tokens do not enable",
+			authoredPrompt:  "Do {{task}}",
+			interpolated:    "Do call_agent now",
+			wantIntegration: false,
+		},
+		{
+			name:            "empty tools do not enable",
+			tools:           []model.RunnerTool{},
+			authoredPrompt:  "Use call_agent for this review.",
+			interpolated:    "Use call_agent for this review.",
+			wantIntegration: false,
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			adapter := &callTestAdapter{}
-			step := &model.Step{ID: "parent", Prompt: tt.authoredPrompt, Agent: "implementor", Mode: model.ModeAutonomous}
+			step := &model.Step{ID: "parent", Prompt: tt.authoredPrompt, Agent: "implementor", Mode: model.ModeAutonomous, Tools: tt.tools}
 			if _, _, _, err := buildStepInvocation(step, ctx, profile, adapter, tt.interpolated, "engine call_agent", "", false, cli.ContextAutonomousHeadless); err != nil {
 				t.Fatal(err)
 			}
@@ -815,7 +858,7 @@ func TestAgentCallHandlerCancellationIsCachedAndReleasesSlot(t *testing.T) {
 	}
 }
 
-func TestExecuteAgentStepEnablesAuthenticatedCallsOnlyFromAuthoredPrompt(t *testing.T) {
+func TestExecuteAgentStepEnablesAuthenticatedCallsFromDeclaredTool(t *testing.T) {
 	runDir := t.TempDir()
 	if activePID, err := runlock.Acquire(runDir); err != nil || activePID != 0 {
 		t.Fatalf("acquire run lock: active=%d err=%v", activePID, err)
@@ -829,7 +872,11 @@ func TestExecuteAgentStepEnablesAuthenticatedCallsOnlyFromAuthoredPrompt(t *test
 		"implementor": {DefaultMode: "interactive", CLI: "claude", SystemPrompt: "child system"},
 	}}
 	runner := &runtimeCallRunner{t: t}
-	step := &model.Step{ID: "parent", Prompt: "Use call_agent to delegate.", Agent: "parent", Mode: model.ModeAutonomous, Session: model.SessionNew}
+	step := &model.Step{
+		ID: "parent", Prompt: "Delegate an independent review.", Agent: "parent",
+		Mode: model.ModeAutonomous, Session: model.SessionNew,
+		Tools: []model.RunnerTool{model.RunnerToolCallAgent},
+	}
 	outcome, err := ExecuteAgentStep(step, ctx, runner, &mockLogger{})
 	if err != nil || outcome != OutcomeSuccess {
 		t.Fatalf("ExecuteAgentStep() = %q, %v", outcome, err)
@@ -842,6 +889,24 @@ func TestExecuteAgentStepEnablesAuthenticatedCallsOnlyFromAuthoredPrompt(t *test
 	}
 	if server, ok := ctx.Control.(*control.ControlServer); ok {
 		_ = server.Close()
+	}
+}
+
+func TestExecuteAgentStepDoesNotEnableCallFromAuthoredPrompt(t *testing.T) {
+	ctx := model.NewRootContext(&model.RootContextOptions{WorkflowFile: "workflow.yaml"})
+	runner := &callTestRunner{started: make(chan AgentProcessOptions, 1), result: ProcessResult{Started: true}}
+	step := &model.Step{ID: "parent", Prompt: "Use call_agent now", CLI: "claude", Mode: model.ModeAutonomous, Session: model.SessionNew}
+	outcome, err := ExecuteAgentStep(step, ctx, runner, &mockLogger{})
+	if err != nil || outcome != OutcomeSuccess {
+		t.Fatalf("ExecuteAgentStep() = %q, %v", outcome, err)
+	}
+	options := <-runner.started
+	for _, entry := range options.Env {
+		for _, key := range control.EnvironmentVariables() {
+			if strings.HasPrefix(entry, key+"=") {
+				t.Fatalf("ineligible parent received %s", key)
+			}
+		}
 	}
 }
 

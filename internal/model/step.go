@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/codagent/agent-runner/internal/flowctl"
+	"gopkg.in/yaml.v3"
 )
 
 var identifierRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
@@ -32,6 +33,35 @@ const (
 	SessionResume  SessionStrategy = "resume"
 	SessionInherit SessionStrategy = "inherit"
 )
+
+// RunnerTool identifies a Runner-owned tool that may be enabled for an agent
+// step.
+type RunnerTool string
+
+const (
+	// RunnerToolCallAgent enables the process-local call_agent integration.
+	RunnerToolCallAgent RunnerTool = "call_agent"
+)
+
+// RunnerTools is the list of Runner-owned tools enabled for an agent step.
+// Its field-level decoder preserves explicit field presence and validates shape.
+type RunnerTools []RunnerTool
+
+// UnmarshalYAML validates the tools field shape while retaining an explicitly
+// empty sequence as a non-nil slice.
+func (t *RunnerTools) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.SequenceNode {
+		return fmt.Errorf(`"tools" must be a sequence`)
+	}
+
+	type plainRunnerTools []RunnerTool
+	decoded := make(plainRunnerTools, 0)
+	if err := value.Decode(&decoded); err != nil {
+		return err
+	}
+	*t = RunnerTools(decoded)
+	return nil
+}
 
 // IsNamedSession reports whether s is a named session reference (not empty and
 // not one of the reserved strategy keywords new/resume/inherit).
@@ -143,6 +173,12 @@ type Step struct {
 	Actions           []UIAction        `yaml:"actions,omitempty" json:"actions,omitempty"`
 	Inputs            []UIInput         `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 	OutcomeCapture    string            `yaml:"outcome_capture,omitempty" json:"outcome_capture,omitempty"`
+	Tools             RunnerTools       `yaml:"tools,omitempty" json:"tools,omitempty"`
+}
+
+// HasTool reports whether the step enables a Runner-owned tool.
+func (s *Step) HasTool(tool RunnerTool) bool {
+	return s != nil && slices.Contains(s.Tools, tool)
 }
 
 // ApplyDefaults sets default values for fields that were not specified.
@@ -339,6 +375,10 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 	isScript := s.Script != ""
 	isUI := s.Mode == ModeUI
 
+	if err := s.validateTools(isAgent); err != nil {
+		return err
+	}
+
 	if isAgent && s.Prompt == "" {
 		return fmt.Errorf(`agent steps require "prompt"`)
 	}
@@ -392,6 +432,23 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 		return fmt.Errorf(`invalid mode: %q`, s.Mode)
 	}
 
+	return nil
+}
+
+func (s *Step) validateTools(isAgent bool) error {
+	if s.Tools != nil && !isAgent {
+		return fmt.Errorf(`"tools" is only allowed on agent steps`)
+	}
+	seen := make(map[RunnerTool]struct{}, len(s.Tools))
+	for _, tool := range s.Tools {
+		if tool != RunnerToolCallAgent {
+			return fmt.Errorf(`unknown tool in "tools": %q`, tool)
+		}
+		if _, exists := seen[tool]; exists {
+			return fmt.Errorf(`duplicate tool in "tools": %q`, tool)
+		}
+		seen[tool] = struct{}{}
+	}
 	return nil
 }
 

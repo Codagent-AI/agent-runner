@@ -9,6 +9,8 @@ params:
 sessions:
   - name: lead-agent
     agent: planner
+  - name: acceptance-tester
+    agent: reviewer
 
 steps:
   - id: resolve-assumptions
@@ -61,12 +63,13 @@ steps:
   - id: run-reacceptance-testing
     session: lead-agent
     mode: autonomous
+    tools: [call_agent]
     prompt: |
       Follow the user's decision about targeted re-acceptance testing. If no testing was recommended or the user declined it, continue to next step without running anything.
 
       Before testing, inspect fixes committed by final validation after the user agreed to the scope. Widen the targeted scope to cover any additional affected or directly dependent flows.
 
-      If the user agreed, use the Runner-owned `call_agent` tool with a fresh `agent: reviewer`. Give each child a standalone prompt requiring codagent:prepare-acceptance with:
+      If the user agreed, use codagent:call-agent with `session: acceptance-tester`. This resumes the tester that established the full-pass baseline when available; first use creates it when this workflow runs standalone. Supply task-specific child instructions requiring codagent:prepare-acceptance with:
       - approved artifacts: `openspec/changes/{{change_name}}/`;
       - implementation evidence: `{{session_dir}}/output/*session-report*.out` and `{{session_dir}}/audit.log`;
       - evidence directory: `{{session_dir}}/output/`;
@@ -74,11 +77,11 @@ steps:
       - verification scope: the affected and directly dependent flows agreed with the user, with a concise impact rationale;
       - prior full-pass evidence: `{{session_dir}}/output/acceptance-flow-evidence.md`.
 
-      Evaluate the tester's findings rather than performing the acceptance testing yourself. If the targeted pass succeeds, summarize the result and continue to next step.
+      Follow codagent:call-agent's verification and autonomous result-accounting rules rather than performing the acceptance testing yourself. If the targeted pass succeeds, summarize the result and continue to next step.
 
       If it finds an actionable defect, fix it without expanding the approved scope. Before editing, you MUST invoke codagent:implement-with-tdd and follow its red-green-refactor process. Add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
 
-      Run relevant targeted automated checks, validate changed specifications with `openspec validate --type change "{{change_name}}"`, invoke the validator-run skill, incorporate its fixes, commit using the project's conventions and the `[{{step_id}}]` prefix, and push while keeping the pull request in draft. Then call a fresh tester again with a targeted scope covering the fix and directly dependent flows.
+      Run relevant targeted automated checks, validate changed specifications with `openspec validate --type change "{{change_name}}"`, invoke the validator-run skill, incorporate its fixes, commit using the project's conventions and the `[{{step_id}}]` prefix, and push while keeping the pull request in draft. Then resume `acceptance-tester` with explicit re-review instructions to reproduce the prior finding, verify the fix, and exercise only the affected and directly dependent flows. Retain the earlier full-pass evidence for unaffected flows and do not begin a new broad review. It may report a newly introduced defect only when observed within that targeted scope.
 
       Use at most three tester calls. Before continuing to next step, overwrite `{{session_dir}}/output/reacceptance-status.txt` with exactly one line:
       - `REACCEPTANCE_COMPLETE` when testing was not requested or the targeted pass succeeded;

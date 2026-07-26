@@ -1,6 +1,7 @@
 package loader
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -167,6 +168,97 @@ func TestLoadWorkflowEnforcesVersionedSourceIdentity(t *testing.T) {
 	}
 }
 
+func TestParseWorkflowAgentTools(t *testing.T) {
+	t.Run("loads call_agent on an agent step", func(t *testing.T) {
+		w, err := ParseWorkflow([]byte(`
+name: tool-test
+steps:
+  - id: review
+    agent: reviewer
+    tools: [call_agent]
+    prompt: Review the change.
+`), Options{})
+		if err != nil {
+			t.Fatalf("ParseWorkflow() error = %v", err)
+		}
+		encoded, err := json.Marshal(w.Steps[0])
+		if err != nil {
+			t.Fatalf("marshal loaded step: %v", err)
+		}
+		if !strings.Contains(string(encoded), `"tools":["call_agent"]`) {
+			t.Fatalf("loaded step = %s, want call_agent in enabled tools", encoded)
+		}
+	})
+
+	for _, tt := range []struct {
+		name  string
+		tools string
+	}{
+		{name: "omitted tools", tools: ""},
+		{name: "empty tools", tools: "    tools: []\n"},
+	} {
+		t.Run(tt.name+" enables no tools", func(t *testing.T) {
+			w, err := ParseWorkflow([]byte(`
+name: tool-test
+steps:
+  - id: review
+    agent: reviewer
+`+tt.tools+`    prompt: Review the change.
+`), Options{})
+			if err != nil {
+				t.Fatalf("ParseWorkflow() error = %v", err)
+			}
+			encoded, err := json.Marshal(w.Steps[0])
+			if err != nil {
+				t.Fatalf("marshal loaded step: %v", err)
+			}
+			if strings.Contains(string(encoded), `"tools"`) {
+				t.Fatalf("loaded step = %s, want no enabled tools", encoded)
+			}
+		})
+	}
+
+	for _, tt := range []struct {
+		name        string
+		declaration string
+		wantError   string
+	}{
+		{
+			name:        "unknown tool",
+			declaration: "    tools: [other]\n",
+			wantError:   "unknown tool",
+		},
+		{
+			name:        "duplicate tool",
+			declaration: "    tools: [call_agent, call_agent]\n",
+			wantError:   "duplicate tool",
+		},
+		{
+			name:        "scalar declaration",
+			declaration: "    tools: call_agent\n",
+			wantError:   "tools",
+		},
+		{
+			name:        "placeholder declaration",
+			declaration: "    tools: ['{{tool_name}}']\n",
+			wantError:   "unknown tool",
+		},
+	} {
+		t.Run("rejects "+tt.name, func(t *testing.T) {
+			_, err := ParseWorkflow([]byte(`
+name: tool-test
+steps:
+  - id: review
+    agent: reviewer
+`+tt.declaration+`    prompt: Review the change.
+`), Options{})
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("ParseWorkflow() error = %v, want error containing %q", err, tt.wantError)
+			}
+		})
+	}
+}
+
 func TestParseWorkflowSourceEnforcesNameWhileParseWorkflowRemainsContentOnly(t *testing.T) {
 	data := []byte("name: other\nsteps:\n  - id: run\n    command: echo ok\n")
 
@@ -178,6 +270,45 @@ func TestParseWorkflowSourceEnforcesNameWhileParseWorkflowRemainsContentOnly(t *
 	if err == nil || !strings.Contains(err.Error(), `expected "deploy", got "other"`) {
 		t.Fatalf("ParseWorkflowSource error = %v, want name-alignment error", err)
 	}
+}
+
+func TestParseWorkflowRejectsToolsOnNonAgentSteps(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		declaration string
+	}{
+		{name: "call_agent", declaration: "    tools: [call_agent]\n"},
+		{name: "empty sequence", declaration: "    tools: []\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseWorkflow([]byte(`
+name: tool-test
+steps:
+  - id: shell
+    command: echo hi
+`+tt.declaration), Options{})
+			if err == nil || !strings.Contains(err.Error(), `"tools" is only allowed on agent steps`) {
+				t.Fatalf("ParseWorkflow() error = %v, want agent-only tools error", err)
+			}
+		})
+	}
+
+	t.Run("nested shell declaration", func(t *testing.T) {
+		_, err := ParseWorkflow([]byte(`
+name: tool-test
+steps:
+  - id: repeated
+    loop:
+      max: 1
+    steps:
+      - id: shell
+        command: echo hi
+        tools: []
+`), Options{})
+		if err == nil || !strings.Contains(err.Error(), `"tools" is only allowed on agent steps`) {
+			t.Fatalf("ParseWorkflow() error = %v, want nested agent-only tools error", err)
+		}
+	})
 }
 
 func TestInterpolateParams(t *testing.T) {

@@ -62,6 +62,7 @@ steps:
   - id: claude-call-parent
     agent: claude_headless_smoke
     session: new
+    tools: [call_agent]
     prompt: |
       Use call_agent exactly once with the named session called-claude. Ask the called agent to invent a token made of exactly two unusual lowercase words joined by one underscore, write only that token into %s, remember it, and reply with only that token. After call_agent returns, write its exact response into %s and reply with only that same response. Do not use a proprietary subagent tool.
   - id: claude-call-session-reuse

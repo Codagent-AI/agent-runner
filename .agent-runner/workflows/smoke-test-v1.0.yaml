@@ -12,13 +12,15 @@ steps:
   - id: claude-call-agent
     agent: claude_headless_smoke
     session: new
+    tools: [call_agent]
     prompt: |
-      Use call_agent exactly once with session `claude-headless` and ask it to remember the value `{{greeting}}`.
-      Return the called agent's response in one short sentence.
+      Use call_agent exactly once with session `claude-headless`. Give it this bounded task: do not
+      inspect or modify files; remember the value `{{greeting}}`; reply exactly `remembered`.
+      Return only the called agent's response.
 
   - id: claude-named-reuse
     session: claude-headless
-    prompt: "Reply with one short sentence stating the value you were asked to remember in the call that created this named session."
+    prompt: "Do not inspect or modify files. Reply with only the value you were asked to remember in the call that created this named session."
 
   - id: claude-agent-steps
     workflow: smoke-test-agent-steps-v1.0.yaml
