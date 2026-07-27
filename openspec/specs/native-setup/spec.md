@@ -33,15 +33,19 @@ When any condition is false, the runner SHALL proceed to its normal entry point 
 
 ### Requirement: Native setup is mandatory
 
-The native setup TUI SHALL begin with a setup surface that offers progression into profile setup. It SHALL NOT offer skip, not-now, or dismiss actions. A user who cancels setup leaves setup incomplete, and native setup SHALL be offered again on the next eligible launch. Ctrl+C SHALL be treated as a global app-exit request, not as navigation to the normal home TUI.
+Native setup SHALL NOT present a welcome or intro screen. When the native setup trigger fires, the runner SHALL immediately detect available CLI adapters and present the first selection screen (planner CLI). If adapter detection fails, the failure surface SHALL be the first thing the user sees. A user who cancels or interrupts setup leaves setup incomplete, and native setup SHALL be offered again on the next eligible launch.
 
-#### Scenario: Continue enters setup
-- **WHEN** the user chooses the continue action
-- **THEN** the runner proceeds to the native agent profile setup flow
+#### Scenario: Native setup starts at CLI selection
+- **WHEN** native setup fires and adapter detection succeeds
+- **THEN** the first surface is the planner CLI selection screen with detected adapters as options
 
-#### Scenario: Setup cannot be skipped
-- **WHEN** native setup renders its first surface
-- **THEN** no skip, not-now, or dismiss action is available
+#### Scenario: No welcome or intro screen
+- **WHEN** native setup fires
+- **THEN** no introductory, welcome, or continue-gate screen is shown before the first selection
+
+#### Scenario: Adapter detection failure is the first surface
+- **WHEN** native setup fires and adapter detection fails (no CLIs found)
+- **THEN** the failure message is the first surface the user sees
 
 ### Requirement: Native setup implementor CLI billing disclosure
 
@@ -87,45 +91,51 @@ Native setup SHALL NOT persist partially completed wizard progress. If setup is 
 
 ### Requirement: Native setup handoff to onboarding demo
 
-After native setup reaches a terminal state, the runner SHALL continue to the appropriate next application surface. A successful setup SHALL start or resume `onboarding:onboarding` when onboarding demo completion or dismissal has not been recorded. First-run onboarding demo run state SHALL be stored in a user-global onboarding run scope rather than under the current project's run history. Cancellation or failure SHALL transition to the normal TUI entry point without starting the demo. Ctrl+C during native setup SHALL exit the app instead of proceeding to the normal TUI entry point.
+After native setup writes the profile configuration and records `settings.setup.completed_at`, the native setup TUI SHALL present a demo prompt screen with exactly three actions: Continue, Not now, and Dismiss.
 
-#### Scenario: Successful setup starts onboarding demo
-- **WHEN** native setup completes successfully and `settings.onboarding.completed_at` and `settings.onboarding.dismissed` are unset
-- **THEN** the runner starts `onboarding:onboarding`
+The demo prompt actions SHALL render as a horizontal button row rather than as the setup TUI's vertical option list. The Continue button SHALL be left-aligned, the Dismiss button SHALL be right-aligned, and intermediate buttons SHALL be distributed between them when terminal width allows. Left and Right keys SHALL change the focused demo prompt button. Enter SHALL activate the focused button.
 
-#### Scenario: Interrupted onboarding demo resumes
-- **WHEN** `settings.onboarding.completed_at` and `settings.onboarding.dismissed` are unset
-- **AND** the user-global onboarding run scope has an incomplete persisted `onboarding:onboarding` run
-- **THEN** the runner resumes the most recently updated incomplete onboarding run instead of starting a new onboarding run
+- **Continue** SHALL cause native setup to return a result indicating the onboarding demo should run. The caller SHALL then launch `onboarding:onboarding`.
+- **Not now** SHALL leave `settings.onboarding.completed_at` and `settings.onboarding.dismissed` unset. Native setup SHALL return normally without launching the demo.
+- **Dismiss** SHALL write `settings.onboarding.dismissed` with the current RFC3339 timestamp via the settings atomic-write path. Native setup SHALL return normally without launching the demo.
 
-#### Scenario: Onboarding resume is independent of current directory
-- **WHEN** first-run onboarding starts from one working directory and exits before completion
-- **AND** Agent Runner later starts from a different working directory with `settings.onboarding.completed_at` and `settings.onboarding.dismissed` unset
-- **THEN** onboarding resumes from the incomplete user-global onboarding run
+The demo prompt screen SHALL only appear after a successful profile write. Cancelled, interrupted, or failed setup SHALL NOT show the demo prompt.
 
-#### Scenario: Completed onboarding demo returns home
-- **WHEN** the onboarding demo workflow exits successfully without an explicit app-quit request
-- **THEN** the runner proceeds to the normal TUI entry point
+When native setup completes but onboarding demo completion or dismissal is already recorded in settings, the demo prompt screen SHALL be skipped.
 
-#### Scenario: Quitting onboarding demo exits app
-- **WHEN** the user explicitly quits the onboarding demo workflow with `q`, `Ctrl+C`, or confirmed top-level Escape
-- **THEN** the runner exits the app instead of proceeding to the normal TUI entry point
+#### Scenario: Demo prompt appears after successful write
+- **WHEN** native setup writes the profile configuration and records setup.completed_at successfully
+- **THEN** the native setup TUI shows the demo prompt with Continue, Not now, and Dismiss actions as horizontal buttons
 
-#### Scenario: Completed onboarding demo is not repeated
-- **WHEN** native setup completes successfully and `settings.onboarding.completed_at` is already set
-- **THEN** the runner proceeds to the normal TUI entry point without starting `onboarding:onboarding`
+#### Scenario: Demo prompt buttons support horizontal navigation
+- **WHEN** the demo prompt is visible
+- **AND** the user presses Left or Right
+- **THEN** focus moves between the Continue, Not now, and Dismiss buttons
+- **AND** Enter activates the focused button
 
-#### Scenario: Dismissed onboarding demo is not repeated
-- **WHEN** native setup completes successfully and `settings.onboarding.dismissed` is already set
-- **THEN** the runner proceeds to the normal home TUI without starting `onboarding:onboarding`
+#### Scenario: Continue launches onboarding demo
+- **WHEN** the user selects Continue on the demo prompt
+- **THEN** the caller launches `onboarding:onboarding`
 
-#### Scenario: Cancelled setup goes home
-- **WHEN** native setup is cancelled or fails
-- **THEN** the runner proceeds to the normal home TUI without marking setup complete
+#### Scenario: Not now leaves onboarding settings unset
+- **WHEN** the user selects Not now on the demo prompt
+- **THEN** neither `settings.onboarding.completed_at` nor `settings.onboarding.dismissed` is written, and the runner proceeds to the normal home TUI
 
-#### Scenario: Ctrl+C during setup exits app
-- **WHEN** the user presses Ctrl+C during native setup
-- **THEN** the runner exits the app without marking setup complete and without proceeding to the normal home TUI
+#### Scenario: Dismiss writes onboarding.dismissed
+- **WHEN** the user selects Dismiss on the demo prompt
+- **THEN** `settings.onboarding.dismissed` is written with the current RFC3339 timestamp and the runner proceeds to the normal home TUI
+
+#### Scenario: Cancelled setup does not show demo prompt
+- **WHEN** native setup is cancelled before the profile write
+- **THEN** no demo prompt is shown and the runner proceeds to the normal home TUI
+
+#### Scenario: Demo prompt skipped when onboarding already completed
+- **WHEN** native setup completes and `settings.onboarding.completed_at` is already set
+- **THEN** the demo prompt is skipped and the runner proceeds to the normal home TUI
+
+#### Scenario: Demo prompt skipped when onboarding already dismissed
+- **WHEN** native setup completes and `settings.onboarding.dismissed` is already set
+- **THEN** the demo prompt is skipped and the runner proceeds to the normal home TUI
 
 ### Requirement: Skill installation during native setup
 
@@ -236,4 +246,26 @@ The Permission Mode screen SHALL appear before the skill installation step. Canc
 
 - **WHEN** the user selects an Autonomous Permission Mode value but cancels setup before completion
 - **THEN** `~/.agent-runner/settings.yaml` does not contain an `autonomous_permission_mode` key from this setup attempt
+
+### Requirement: Demo prompt re-show on launch
+
+When entering the bare/list TUI entry point, the runner SHALL evaluate whether the demo prompt should be re-shown. The demo prompt re-show trigger SHALL fire when all of the following hold:
+- `settings.setup.completed_at` is set;
+- `settings.onboarding.completed_at` is unset;
+- `settings.onboarding.dismissed` is unset;
+- both stdin and stdout are TTYs.
+
+When the trigger fires, the runner SHALL present the same demo prompt screen (Continue / Not now / Dismiss) with the same behavior as during native setup. This replaces the previous behavior of auto-launching `onboarding:onboarding` directly.
+
+#### Scenario: Demo prompt re-shown after Not now
+- **WHEN** the user previously selected Not now, and the runner starts on an eligible TTY
+- **THEN** the demo prompt screen is shown again with Continue, Not now, and Dismiss
+
+#### Scenario: Demo prompt not re-shown after Dismiss
+- **WHEN** the user previously selected Dismiss
+- **THEN** the demo prompt does not appear on subsequent launches
+
+#### Scenario: Demo prompt not re-shown after completed demo
+- **WHEN** the user previously completed the onboarding demo
+- **THEN** the demo prompt does not appear on subsequent launches
 

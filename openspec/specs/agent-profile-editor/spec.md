@@ -51,25 +51,13 @@ The native setup profile editor SHALL prompt the user to choose `global` or `pro
 - **WHEN** the user picks scope `project` and the cwd has no `.git` directory or other project marker
 - **THEN** the write proceeds without warning and the file is created at `<cwd>/.agent-runner/config.yaml`
 
-### Requirement: Confirmation before write
-
-The native setup profile editor SHALL present a confirmation screen showing the chosen CLIs, models, and scope before invoking the write path. The user MAY cancel from this screen; cancellation SHALL leave profile configuration unchanged and leave native setup incomplete.
-
-#### Scenario: Confirm proceeds to write
-- **WHEN** the user reviews the confirmation screen and selects confirm
-- **THEN** native setup invokes the profile write path
-
-#### Scenario: Cancel from confirmation
-- **WHEN** the user reviews the confirmation screen and selects cancel
-- **THEN** no profile file is created or modified and native setup is not marked complete
-
 ### Requirement: Overwrite confirmation when entries already exist
 
-Before writing, the native setup profile editor SHALL inspect the chosen scope's config file, if it exists, for any of the four entries `interactive_base`, `autonomous_base`, `planner`, or `implementor` under `profiles.default.agents`. If any are present, the editor SHALL display an additional confirmation screen naming the colliding entries and offering an `overwrite` action and a `cancel` action. The `overwrite` action SHALL proceed with the write, replacing those entries. The `cancel` action SHALL leave the file unchanged and leave native setup incomplete.
+Before writing, the native setup profile editor SHALL inspect the chosen scope's config file, if it exists, for either `planner` or `implementor` under `profiles.default.agents`. If any are present, the editor SHALL display an additional confirmation screen naming the colliding entries and offering an `overwrite` action and a `cancel` action. The `overwrite` action SHALL proceed with the write, replacing those entries. The `cancel` action SHALL leave the file unchanged and leave native setup incomplete.
 
 #### Scenario: No collisions, no overwrite screen
-- **WHEN** the chosen config file does not exist or contains no entry named `interactive_base`, `autonomous_base`, `planner`, or `implementor` under `profiles.default.agents`
-- **THEN** the editor proceeds directly from confirmation to write with no overwrite screen
+- **WHEN** the chosen config file does not exist or contains no entry named `planner` or `implementor` under `profiles.default.agents`
+- **THEN** the editor proceeds directly to write with no overwrite screen
 
 #### Scenario: Existing planner triggers overwrite screen
 - **WHEN** the chosen config file already contains a `planner` entry under `profiles.default.agents`
@@ -81,7 +69,7 @@ Before writing, the native setup profile editor SHALL inspect the chosen scope's
 
 #### Scenario: User overwrites
 - **WHEN** the overwrite confirmation screen is shown and the user selects overwrite
-- **THEN** the write proceeds and the four editor-managed entries replace any pre-existing entries of the same name
+- **THEN** the write proceeds and the two editor-managed entries replace any pre-existing entries of the same name
 
 ### Requirement: User-initiated, never auto-generated
 

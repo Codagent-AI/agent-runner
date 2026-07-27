@@ -64,6 +64,8 @@ When native setup completes but onboarding demo completion or dismissal is alrea
 - **WHEN** native setup completes and `settings.onboarding.dismissed` is already set
 - **THEN** the demo prompt is skipped and the runner proceeds to the normal home TUI
 
+## ADDED Requirements
+
 ### Requirement: Demo prompt re-show on launch
 
 When entering the bare/list TUI entry point, the runner SHALL evaluate whether the demo prompt should be re-shown. The demo prompt re-show trigger SHALL fire when all of the following hold:
@@ -85,11 +87,3 @@ When the trigger fires, the runner SHALL present the same demo prompt screen (Co
 #### Scenario: Demo prompt not re-shown after completed demo
 - **WHEN** the user previously completed the onboarding demo
 - **THEN** the demo prompt does not appear on subsequent launches
-
-## REMOVED Requirements
-
-### Requirement: Setup cannot be skipped (scenario removed)
-
-**Reason:** The welcome screen with its Continue-only action list no longer exists. The "cannot be skipped" intent is preserved by the fact that there is no skip, not-now, or dismiss action on any of the CLI/model/scope selection screens — only selection and cancel/esc.
-
-**Migration:** Remove the `TestWelcomeSurfaceHasNoSkipDismissOrNotNow` test or rewrite it to assert that selection screens have no skip/dismiss actions.
