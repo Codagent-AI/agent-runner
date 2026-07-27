@@ -2,6 +2,8 @@
 package model
 
 import (
+	"sync"
+
 	"github.com/codagent/agent-runner/internal/audit"
 )
 
@@ -11,6 +13,29 @@ type NestingSegment struct {
 	Iteration       *int              `json:"iteration,omitempty"`
 	LoopVar         map[string]string `json:"loopVar,omitempty"`
 	SubWorkflowName string            `json:"subWorkflowName,omitempty"`
+}
+
+// AgentDeprecationState is shared by every execution context in one workflow
+// run so concurrent branches can deduplicate legacy profile warnings safely.
+type AgentDeprecationState struct {
+	mu   sync.Mutex
+	seen map[string]bool
+}
+
+// NewAgentDeprecationState creates an empty run-scoped deprecation set.
+func NewAgentDeprecationState() *AgentDeprecationState {
+	return &AgentDeprecationState{seen: make(map[string]bool)}
+}
+
+// Mark records alias and reports whether this is its first occurrence.
+func (s *AgentDeprecationState) Mark(alias string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.seen[alias] {
+		return false
+	}
+	s.seen[alias] = true
+	return true
 }
 
 // ExecutionContext carries state through workflow execution.
@@ -67,8 +92,8 @@ type ExecutionContext struct {
 	// AuditLogger writes structured audit events (audit.EventLogger).
 	AuditLogger audit.EventLogger
 	// AgentDeprecations tracks legacy profile warnings already emitted in this
-	// run. Child contexts share the map so aliases warn at most once.
-	AgentDeprecations map[string]bool
+	// run. Child contexts share the state so aliases warn at most once.
+	AgentDeprecations *AgentDeprecationState
 
 	// Control is the lazily-created run-scoped control server. It is
 	// intentionally opaque here to keep core model types independent of runtime
@@ -173,7 +198,7 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		EngineRef:                opts.EngineRef,
 		ProfileStore:             opts.ProfileStore,
 		AuditLogger:              opts.AuditLogger,
-		AgentDeprecations:        make(map[string]bool),
+		AgentDeprecations:        NewAgentDeprecationState(),
 		NamedSessions:            namedSessions,
 		NamedSessionDecls:        namedSessionDecls,
 		UIStepHandler:            opts.UIStepHandler,

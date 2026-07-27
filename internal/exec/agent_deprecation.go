@@ -15,13 +15,12 @@ func EmitAgentDeprecations(ctx *model.ExecutionContext, log Logger, warnings []c
 		return
 	}
 	if ctx.AgentDeprecations == nil {
-		ctx.AgentDeprecations = make(map[string]bool)
+		ctx.AgentDeprecations = model.NewAgentDeprecationState()
 	}
 	for _, warning := range warnings {
-		if ctx.AgentDeprecations[warning.Alias] {
+		if !ctx.AgentDeprecations.Mark(warning.Alias) {
 			continue
 		}
-		ctx.AgentDeprecations[warning.Alias] = true
 		message := warning.String()
 		if log != nil {
 			log.Printf("agent-runner: warning: %s\n", message)
