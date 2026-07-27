@@ -12,7 +12,7 @@ engine:
 
 sessions:
   - name: lead-agent
-    agent: planner
+    agent: lead
 
 steps:
   - id: create

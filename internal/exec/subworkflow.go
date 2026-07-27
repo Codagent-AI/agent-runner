@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/engine"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
@@ -366,7 +367,20 @@ func MergeSessionDecls(ctx *model.ExecutionContext, sessions []model.SessionDecl
 		return nil
 	}
 	for _, decl := range sessions {
+		canonicalAgent, warning := config.CanonicalAgentName(decl.Agent)
+		if warning != nil {
+			EmitAgentDeprecations(ctx, log, []config.Deprecation{*warning})
+		}
+		decl.Agent = canonicalAgent
 		existing, present := ctx.NamedSessionDecls[decl.Name]
+		if present {
+			canonicalExisting, existingWarning := config.CanonicalAgentName(existing)
+			if existingWarning != nil {
+				EmitAgentDeprecations(ctx, log, []config.Deprecation{*existingWarning})
+				existing = canonicalExisting
+				ctx.NamedSessionDecls[decl.Name] = canonicalExisting
+			}
+		}
 		if !present {
 			ctx.NamedSessionDecls[decl.Name] = decl.Agent
 			continue

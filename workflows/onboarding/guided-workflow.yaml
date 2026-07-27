@@ -4,9 +4,9 @@ hidden: true
 
 sessions:
   - name: planning-session
-    agent: planner
+    agent: lead
   - name: tutor-session
-    agent: planner
+    agent: lead
   - name: impl-session
     agent: implementor
 
@@ -99,7 +99,7 @@ steps:
     mode: ui
     title: Planning Step
     body: |
-      The next step opens an interactive planner. The planner will ask what change you want, help keep it scoped, and write planning artifacts outside the project at {{plan_dir}}.
+      The next step opens an interactive Lead. The Lead will ask what change you want, help keep it scoped, and write planning artifacts outside the project at {{plan_dir}}.
     actions:
       - label: Continue
         outcome: continue

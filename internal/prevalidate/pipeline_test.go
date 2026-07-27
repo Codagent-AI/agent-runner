@@ -35,6 +35,55 @@ steps:
 	}
 }
 
+func TestPipelineAllowsNilProfileStoreForWorkflowWithoutAgents(t *testing.T) {
+	root := writeWorkflow(t, t.TempDir(), "shell.yaml", `
+name: shell
+steps:
+  - id: shell
+    command: echo ok
+`)
+	opts := Options{
+		LoadConfig: func() (*config.Config, []string, error) { return nil, nil, nil },
+		LookPath:   func(string) (string, error) { return "", nil },
+		Adapter:    func(string) (cli.Adapter, error) { return nil, fmt.Errorf("unused") },
+	}
+	if _, err := Pipeline(root, nil, Strict, opts); err != nil {
+		t.Fatalf("Pipeline() error = %v", err)
+	}
+}
+
+func TestPipelineReturnsDeduplicatedLegacyAgentDeprecations(t *testing.T) {
+	dir := t.TempDir()
+	root := writeWorkflow(t, dir, "legacy.yaml", `
+name: legacy
+steps:
+  - id: first
+    agent: planner
+    session: new
+    prompt: first
+  - id: second
+    agent: planner
+    session: new
+    prompt: second
+`)
+	cfg := &config.Config{ActiveAgents: map[string]*config.Agent{
+		"lead": {DefaultMode: "autonomous", CLI: "claude", Model: "sonnet", Effort: "high"},
+	}}
+	opts, _, _ := fakeOptions(t, cfg)
+
+	result, err := Pipeline(root, nil, Strict, opts)
+	if err != nil {
+		t.Fatalf("Pipeline() error = %v", err)
+	}
+	if len(result.AgentDeprecations) != 1 {
+		t.Fatalf("AgentDeprecations length = %d, want 1", len(result.AgentDeprecations))
+	}
+	item := result.AgentDeprecations[0]
+	if item.Alias != "planner" || item.Canonical != "lead" {
+		t.Fatalf("AgentDeprecations[0] = %v, want planner->lead", item)
+	}
+}
+
 func TestPipelineRewalksSameSubWorkflowWithDifferentParams(t *testing.T) {
 	dir := t.TempDir()
 	writeWorkflow(t, dir, "good.yaml", `

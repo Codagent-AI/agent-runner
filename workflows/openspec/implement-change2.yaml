@@ -11,7 +11,7 @@ params:
 
 sessions:
   - name: lead-agent
-    agent: planner
+    agent: lead
 
 steps:
   - id: validate-change-name
@@ -100,7 +100,7 @@ steps:
     prompt: |
       Prepare OpenSpec change "{{change_name}}" for human acceptance by orchestrating fresh, independent acceptance testers. Do not perform the acceptance flow testing yourself.
 
-      Use the Runner-owned `call_agent` tool with a fresh `agent: reviewer` for each pass. Give the child a standalone prompt requiring it to use codagent:prepare-acceptance with these inputs:
+      Use the Runner-owned `call_agent` tool with a fresh `agent: tester` for each pass. Give the child a standalone prompt requiring it to use codagent:prepare-acceptance with these inputs:
       - approved artifacts: `openspec/changes/{{change_name}}/`;
       - implementation evidence: `{{session_dir}}/output/*session-report*.out` and `{{session_dir}}/audit.log`;
       - evidence directory: `{{session_dir}}/output/`;

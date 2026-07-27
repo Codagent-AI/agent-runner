@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/exec"
 	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
@@ -48,6 +49,42 @@ func TestRunWorkflowProducesMetricsWhenAuditLogCannotOpen(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(log.lines, "\n"), "warning: audit trail unavailable") {
 		t.Fatalf("audit logger warning missing from log: %v", log.lines)
+	}
+}
+
+func TestRunWorkflowEmitsLegacyAgentWarningOnceAndRetainsAuditEvidence(t *testing.T) {
+	dir := t.TempDir()
+	log := &mockLog{}
+	profiles := &config.Config{ActiveAgents: map[string]*config.Agent{
+		"lead": {DefaultMode: "autonomous", CLI: "claude", Model: "sonnet", Effort: "high"},
+	}}
+	workflow := &model.Workflow{
+		Name: "legacy-agent-warning",
+		Steps: []model.Step{
+			{ID: "first", Agent: "planner", Prompt: "first", Session: model.SessionNew},
+			{ID: "second", Agent: "planner", Prompt: "second", Session: model.SessionNew},
+		},
+	}
+	workflow.ApplyDefaults()
+
+	result, err := RunWorkflow(workflow, nil, &Options{
+		SessionDir: dir, ProfileStore: profiles,
+		ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: log,
+	})
+	if err != nil || result != ResultSuccess {
+		t.Fatalf("RunWorkflow() = (%q, %v), want success", result, err)
+	}
+	output := strings.Join(log.lines, "\n")
+	const warning = `agent profile "planner" is deprecated; use "lead"`
+	if count := strings.Count(output, warning); count != 1 {
+		t.Fatalf("warning count = %d, want 1; output:\n%s", count, output)
+	}
+	auditBody, err := os.ReadFile(filepath.Join(dir, "audit.log"))
+	if err != nil {
+		t.Fatalf("ReadFile(audit.log) error = %v", err)
+	}
+	if count := strings.Count(string(auditBody), `"alias":"planner"`); count != 1 {
+		t.Fatalf("audit warning count = %d, want 1; audit:\n%s", count, auditBody)
 	}
 }
 

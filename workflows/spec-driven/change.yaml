@@ -3,7 +3,7 @@ description: "Full plan + implement + validate + PR creation workflow. Use for n
 
 sessions:
   - name: lead-agent
-    agent: planner
+    agent: lead
 
 steps:
   - id: plan

@@ -56,22 +56,22 @@ func TestLoad_MissingProjectFileDoesNotWriteDefaults(t *testing.T) {
 	if defaultSet == nil {
 		t.Fatal("expected 'default' profile set")
 	}
-	if len(defaultSet.Agents) != 6 {
-		t.Fatalf("expected 6 agents in default profile set, got %d", len(defaultSet.Agents))
+	if len(defaultSet.Agents) != 7 {
+		t.Fatalf("expected 7 agents in default profile set, got %d", len(defaultSet.Agents))
 	}
 
-	// Active agents should have 6 entries.
-	if len(cfg.ActiveAgents) != 6 {
-		t.Fatalf("expected 6 active agents, got %d", len(cfg.ActiveAgents))
+	// Active agents should have 7 entries.
+	if len(cfg.ActiveAgents) != 7 {
+		t.Fatalf("expected 7 active agents, got %d", len(cfg.ActiveAgents))
 	}
 
-	// Verify planner inherits the interactive base profile.
-	pl := cfg.ActiveAgents["planner"]
+	// Verify lead inherits the interactive base profile.
+	pl := cfg.ActiveAgents["lead"]
 	if pl == nil {
-		t.Fatal("expected planner agent")
+		t.Fatal("expected lead agent")
 	}
 	if pl.Extends != "interactive_base" {
-		t.Fatalf("unexpected planner: %+v", pl)
+		t.Fatalf("unexpected lead: %+v", pl)
 	}
 
 	// Verify implementor inherits the autonomous base profile.
@@ -83,14 +83,14 @@ func TestLoad_MissingProjectFileDoesNotWriteDefaults(t *testing.T) {
 		t.Fatalf("unexpected implementor: %+v", im)
 	}
 
-	// Verify reviewer inherits the interactive base profile so installations
+	// Verify crosscheck inherits the autonomous base profile so installations
 	// can override its CLI/model independently for cross-model review.
-	reviewer := cfg.ActiveAgents["reviewer"]
-	if reviewer == nil {
-		t.Fatal("expected reviewer agent")
+	crosscheck := cfg.ActiveAgents["crosscheck"]
+	if crosscheck == nil {
+		t.Fatal("expected crosscheck agent")
 	}
-	if reviewer.Extends != "interactive_base" {
-		t.Fatalf("unexpected reviewer: %+v", reviewer)
+	if crosscheck.Extends != "autonomous_base" {
+		t.Fatalf("unexpected crosscheck: %+v", crosscheck)
 	}
 
 	// Verify summarizer.
@@ -122,8 +122,8 @@ func TestLoad_SkipsGlobalConfigWhenHomeDirUnavailable(t *testing.T) {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("expected config file to NOT be created on disk")
 	}
-	if len(cfg.ActiveAgents) != 6 {
-		t.Fatalf("expected 6 default active agents, got %d", len(cfg.ActiveAgents))
+	if len(cfg.ActiveAgents) != 7 {
+		t.Fatalf("expected 7 default active agents, got %d", len(cfg.ActiveAgents))
 	}
 }
 
@@ -151,9 +151,9 @@ func TestLoad_LoadsExisting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Built-in defaults (6 agents) layer under the project's 1 custom agent.
-	if len(cfg.ActiveAgents) != 7 {
-		t.Fatalf("expected 7 active agents (6 defaults + 1 custom), got %d", len(cfg.ActiveAgents))
+	// Built-in defaults (7 agents) layer under the project's 1 custom agent.
+	if len(cfg.ActiveAgents) != 8 {
+		t.Fatalf("expected 8 active agents (7 defaults + 1 custom), got %d", len(cfg.ActiveAgents))
 	}
 	p := cfg.ActiveAgents["custom"]
 	if p == nil || p.DefaultMode != "autonomous" || p.CLI != "codex" || p.Model != "o3" {
@@ -475,7 +475,7 @@ func TestLoad_DoesNotCreateGlobalConfigWhenMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(cfg.ActiveAgents) != 6 {
+	if len(cfg.ActiveAgents) != 7 {
 		t.Fatalf("expected default project config, got %d active agents", len(cfg.ActiveAgents))
 	}
 
@@ -549,7 +549,7 @@ func TestLoad_UserDefaultExtendsProfileWithoutBuiltInAgentsShadowingParent(t *te
   default:
     extends: codex
     agents:
-      planner:
+      lead:
         default_mode: interactive
         cli: codex
         model: gpt-5.6-sol
@@ -571,7 +571,7 @@ func TestLoad_UserDefaultExtendsProfileWithoutBuiltInAgentsShadowingParent(t *te
 
 func TestLoad_ProjectExistsStillIncludesDefaultAgents(t *testing.T) {
 	// When a project config defines only a custom agent, the built-in
-	// defaults (planner, implementor, etc.) must still be available so that
+	// defaults (lead, implementor, etc.) must still be available so that
 	// shipped workflows referencing those agents continue to work.
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
@@ -600,7 +600,7 @@ func TestLoad_ProjectExistsStillIncludesDefaultAgents(t *testing.T) {
 	if defaultSet.Agents["custom"] == nil {
 		t.Fatal("expected project-defined custom agent to be present")
 	}
-	for _, name := range []string{"planner", "implementor", "summarizer"} {
+	for _, name := range []string{"lead", "implementor", "summarizer"} {
 		if defaultSet.Agents[name] == nil {
 			t.Fatalf("expected default agent %q to remain available alongside project config", name)
 		}
@@ -636,7 +636,7 @@ func TestLoad_DefaultsAndMergesGlobalProfiles(t *testing.T) {
 	if cfg.ActiveAgents["global_only"] == nil {
 		t.Fatal("expected global agent to be merged into default config")
 	}
-	if cfg.ActiveAgents["planner"] == nil {
+	if cfg.ActiveAgents["lead"] == nil {
 		t.Fatal("expected default agents to be present")
 	}
 }
@@ -648,7 +648,7 @@ func TestLoad_RejectsLegacyFlatShapeProject(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	writeConfigFile(t, path, `profiles:
-  planner:
+  lead:
     extends: interactive_base
     cli: claude
 `)
@@ -693,7 +693,7 @@ func TestLoad_RejectsLegacyMixedShape(t *testing.T) {
 	writeConfigFile(t, path, `profiles:
   default:
     agents:
-      planner:
+      lead:
         default_mode: interactive
         cli: claude
   autonomous_base:
@@ -726,12 +726,12 @@ func TestLoad_ActiveProfileSelects(t *testing.T) {
 profiles:
   default:
     agents:
-      planner:
+      lead:
         default_mode: interactive
         cli: claude
   copilot:
     agents:
-      planner:
+      lead:
         default_mode: autonomous
         cli: copilot
 `)
@@ -740,12 +740,12 @@ profiles:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	p := cfg.ActiveAgents["planner"]
+	p := cfg.ActiveAgents["lead"]
 	if p == nil {
-		t.Fatal("expected planner in active agents")
+		t.Fatal("expected lead in active agents")
 	}
 	if p.CLI != "copilot" {
-		t.Fatalf("expected copilot profile's planner, got %+v", p)
+		t.Fatalf("expected copilot profile's lead, got %+v", p)
 	}
 }
 
@@ -756,7 +756,7 @@ func TestLoad_NoActiveProfileFallsToDefault(t *testing.T) {
 	writeConfigFile(t, path, `profiles:
   default:
     agents:
-      planner:
+      lead:
         default_mode: interactive
         cli: claude
 `)
@@ -765,8 +765,8 @@ func TestLoad_NoActiveProfileFallsToDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.ActiveAgents["planner"] == nil {
-		t.Fatal("expected planner in active agents from default profile set")
+	if cfg.ActiveAgents["lead"] == nil {
+		t.Fatal("expected lead in active agents from default profile set")
 	}
 }
 
@@ -778,7 +778,7 @@ func TestLoad_ActiveProfileMissing(t *testing.T) {
 profiles:
   default:
     agents:
-      planner:
+      lead:
         default_mode: interactive
         cli: claude
 `)
@@ -805,14 +805,14 @@ func TestLoad_ActiveProfileInGlobalConfig(t *testing.T) {
 profiles:
   default:
     agents:
-      planner:
+      lead:
         default_mode: interactive
         cli: claude
 `)
 	writeConfigFile(t, projectPath, `profiles:
   default:
     agents:
-      planner:
+      lead:
         default_mode: interactive
         cli: claude
 `)
@@ -843,7 +843,7 @@ func TestLoad_MergesDisjointProfileSets(t *testing.T) {
 	writeConfigFile(t, globalPath, `profiles:
   work:
     agents:
-      planner:
+      lead:
         default_mode: interactive
         cli: claude
 `)
@@ -851,7 +851,7 @@ func TestLoad_MergesDisjointProfileSets(t *testing.T) {
 profiles:
   personal:
     agents:
-      planner:
+      lead:
         default_mode: autonomous
         cli: codex
 `)
@@ -867,8 +867,8 @@ profiles:
 		t.Fatal("expected 'personal' profile set from project")
 	}
 	// Active agents should come from personal.
-	if cfg.ActiveAgents["planner"] == nil || cfg.ActiveAgents["planner"].CLI != "codex" {
-		t.Fatalf("expected personal planner active, got %+v", cfg.ActiveAgents["planner"])
+	if cfg.ActiveAgents["lead"] == nil || cfg.ActiveAgents["lead"].CLI != "codex" {
+		t.Fatalf("expected personal lead active, got %+v", cfg.ActiveAgents["lead"])
 	}
 }
 
@@ -884,7 +884,7 @@ func TestLoad_MergesSameProfileSetDisjointAgents(t *testing.T) {
 	writeConfigFile(t, globalPath, `profiles:
   default:
     agents:
-      planner:
+      lead:
         default_mode: interactive
         cli: claude
 `)
@@ -900,8 +900,8 @@ func TestLoad_MergesSameProfileSetDisjointAgents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.ActiveAgents["planner"] == nil {
-		t.Fatal("expected planner from global in merged default set")
+	if cfg.ActiveAgents["lead"] == nil {
+		t.Fatal("expected lead from global in merged default set")
 	}
 	if cfg.ActiveAgents["implementor"] == nil {
 		t.Fatal("expected implementor from project in merged default set")
@@ -965,7 +965,7 @@ func TestLoad_ProfileSetExtendsInheritsAgentsAndSupportsAgentLevelExtends(t *tes
         default_mode: autonomous
         cli: claude
         model: sonnet
-      planner:
+      lead:
         default_mode: interactive
         cli: claude
 `)
@@ -987,8 +987,8 @@ profiles:
 	if cfg.ActiveAgents["autonomous_base"] == nil {
 		t.Fatal("expected inherited autonomous_base in active profile")
 	}
-	if cfg.ActiveAgents["planner"] == nil {
-		t.Fatal("expected inherited planner in active profile")
+	if cfg.ActiveAgents["lead"] == nil {
+		t.Fatal("expected inherited lead in active profile")
 	}
 	if cfg.ActiveAgents["implementor"] == nil {
 		t.Fatal("expected local implementor in active profile")
@@ -1106,7 +1106,7 @@ func TestLoad_ProfileSetExtendsMergeThenExtendAcrossGlobalAndProject(t *testing.
         cli: claude
   copilot:
     agents:
-      planner:
+      lead:
         default_mode: interactive
         cli: claude
 `)
@@ -1127,8 +1127,8 @@ profiles:
 	if cfg.ActiveAgents["autonomous_base"] == nil {
 		t.Fatal("expected inherited autonomous_base in active agents")
 	}
-	if cfg.ActiveAgents["planner"] == nil {
-		t.Fatal("expected merged global planner in active agents")
+	if cfg.ActiveAgents["lead"] == nil {
+		t.Fatal("expected merged global lead in active agents")
 	}
 	if cfg.ActiveAgents["implementor"] == nil {
 		t.Fatal("expected project implementor in active agents")
@@ -1149,7 +1149,7 @@ profiles:
   b:
     extends: c
     agents:
-      planner:
+      lead:
         default_mode: interactive
         cli: claude
   a:
@@ -1167,8 +1167,8 @@ profiles:
 	if cfg.ActiveAgents["autonomous_base"] == nil {
 		t.Fatal("expected autonomous_base inherited through chain")
 	}
-	if cfg.ActiveAgents["planner"] == nil {
-		t.Fatal("expected planner inherited through chain")
+	if cfg.ActiveAgents["lead"] == nil {
+		t.Fatal("expected lead inherited through chain")
 	}
 	if cfg.ActiveAgents["implementor"] == nil {
 		t.Fatal("expected implementor in active agents")
@@ -1182,13 +1182,13 @@ func TestLoad_NonActiveProfileSetInheritedInvalidAgentBlocksLoad(t *testing.T) {
 	writeConfigFile(t, path, `profiles:
   shared:
     agents:
-      reviewer:
+      crosscheck:
         default_mode: autonomous
         cli: copilot
         effort: extreme
   default:
     agents:
-      planner:
+      lead:
         default_mode: interactive
         cli: claude
   copilot:
@@ -1203,7 +1203,7 @@ func TestLoad_NonActiveProfileSetInheritedInvalidAgentBlocksLoad(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected validation error for inherited invalid agent in non-active profile set")
 	}
-	if !strings.Contains(err.Error(), "reviewer") || !strings.Contains(err.Error(), "effort") {
+	if !strings.Contains(err.Error(), "crosscheck") || !strings.Contains(err.Error(), "effort") {
 		t.Fatalf("expected inherited invalid agent error, got: %v", err)
 	}
 }
@@ -1267,7 +1267,7 @@ func TestLoad_ProfileSetExtendsCycles(t *testing.T) {
   a:
     extends: b
     agents:
-      planner:
+      lead:
         default_mode: interactive
         cli: claude
   b:
@@ -1285,7 +1285,7 @@ func TestLoad_ProfileSetExtendsCycles(t *testing.T) {
   a:
     extends: a
     agents:
-      planner:
+      lead:
         default_mode: interactive
         cli: claude
 `,
@@ -1297,7 +1297,7 @@ func TestLoad_ProfileSetExtendsCycles(t *testing.T) {
   a:
     extends: b
     agents:
-      planner:
+      lead:
         default_mode: interactive
         cli: claude
   b:
@@ -1309,7 +1309,7 @@ func TestLoad_ProfileSetExtendsCycles(t *testing.T) {
   c:
     extends: a
     agents:
-      reviewer:
+      crosscheck:
         default_mode: autonomous
         cli: copilot
 `,
@@ -1344,12 +1344,12 @@ func TestLoad_NonActiveProfileSetInvalidAgentBlocksLoad(t *testing.T) {
 	writeConfigFile(t, path, `profiles:
   default:
     agents:
-      planner:
+      lead:
         default_mode: interactive
         cli: claude
   copilot:
     agents:
-      reviewer:
+      crosscheck:
         default_mode: autonomous
         cli: copilot
         effort: extreme
@@ -1372,20 +1372,20 @@ func TestLoad_AgentLevelExtendsCannotReachUnrelatedProfileSet(t *testing.T) {
 profiles:
   default:
     agents:
-      planner:
+      lead:
         default_mode: interactive
         cli: claude
   copilot:
     agents:
       implementor:
-        extends: planner
+        extends: lead
 `)
 
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for agent-level extends across unrelated profile sets")
 	}
-	if !strings.Contains(err.Error(), "planner") {
+	if !strings.Contains(err.Error(), "lead") {
 		t.Fatalf("expected error naming missing parent, got: %v", err)
 	}
 }
@@ -1481,7 +1481,7 @@ func TestValidation_XHighEffort(t *testing.T) {
 	writeConfigFile(t, path, `profiles:
   default:
     agents:
-      reviewer:
+      crosscheck:
         default_mode: interactive
         cli: claude
         effort: xhigh
@@ -1826,13 +1826,13 @@ func TestResolve_DefaultConfigAgents(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Planner should resolve to interactive_base values.
-	rp, err := cfg.Resolve("planner")
+	// Lead should resolve to interactive_base values.
+	rp, err := cfg.Resolve("lead")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if rp.DefaultMode != "interactive" || rp.CLI != "claude" || rp.Model != "opus" || rp.Effort != "high" {
-		t.Fatalf("unexpected planner resolution: %+v", rp)
+		t.Fatalf("unexpected lead resolution: %+v", rp)
 	}
 
 	// Implementor should resolve to autonomous_base values (opus per spec).
@@ -1844,14 +1844,14 @@ func TestResolve_DefaultConfigAgents(t *testing.T) {
 		t.Fatalf("unexpected implementor resolution: %+v", rp)
 	}
 
-	// Reviewer should resolve to interactive_base values by default. Global or
+	// Crosscheck should resolve to autonomous_base values by default. Global or
 	// project profile sets can override CLI/model to enforce cross-model review.
-	rp, err = cfg.Resolve("reviewer")
+	rp, err = cfg.Resolve("crosscheck")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if rp.DefaultMode != "interactive" || rp.CLI != "claude" || rp.Model != "opus" || rp.Effort != "high" {
-		t.Fatalf("unexpected reviewer resolution: %+v", rp)
+	if rp.DefaultMode != "autonomous" || rp.CLI != "claude" || rp.Model != "opus" || rp.Effort != "high" {
+		t.Fatalf("unexpected crosscheck resolution: %+v", rp)
 	}
 
 	// Summarizer should resolve to its standalone low-cost defaults.

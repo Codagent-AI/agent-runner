@@ -32,8 +32,9 @@ type Options struct {
 }
 
 type Result struct {
-	DeferredWarnings []ValidationError
-	ProbeResults     []ProbeResult
+	DeferredWarnings  []ValidationError
+	ProbeResults      []ProbeResult
+	AgentDeprecations []config.Deprecation
 }
 
 type ProbeResult struct {
@@ -112,6 +113,9 @@ func Pipeline(rootPath string, boundParams map[string]string, mode Mode, opts Op
 		stack:        map[string]bool{},
 		sessionDecls: map[string]string{},
 		triples:      map[probeKey]probeSource{},
+	}
+	if cfg != nil {
+		state.addAgentDeprecations(cfg.Deprecations...)
 	}
 	if err := state.walkFile(rootPath, boundParams, false, nil); err != nil {
 		return state.result, err
@@ -195,14 +199,18 @@ func (s *walkState) walkFile(path string, params map[string]string, isSub bool, 
 		return err
 	}
 	for _, decl := range workflow.Sessions {
-		if existing, ok := s.sessionDecls[decl.Name]; ok && existing != decl.Agent {
+		canonicalAgent, warning := config.CanonicalAgentName(decl.Agent)
+		if warning != nil {
+			s.addAgentDeprecations(*warning)
+		}
+		if existing, ok := s.sessionDecls[decl.Name]; ok && existing != canonicalAgent {
 			return ValidationError{
 				File:    path,
 				Agent:   decl.Agent,
 				Message: fmt.Sprintf("incompatible named session declaration %q: agent %q conflicts with %q", decl.Name, decl.Agent, existing),
 			}
 		}
-		s.sessionDecls[decl.Name] = decl.Agent
+		s.sessionDecls[decl.Name] = canonicalAgent
 	}
 
 	visibleParams := bindParamDefaults(workflow.Params, params)
@@ -498,6 +506,7 @@ func (s *walkState) resolveTriple(path string, step *model.Step, profileName str
 			Message:    fmt.Sprintf("resolving profile %q: %v", profileName, err),
 		}
 	}
+	s.addAgentDeprecations(resolved.Deprecations...)
 	if step.CLI != "" {
 		resolved.CLI = step.CLI
 	}
@@ -505,6 +514,21 @@ func (s *walkState) resolveTriple(path string, step *model.Step, profileName str
 		resolved.Model = step.Model
 	}
 	return probeKey{cli: resolved.CLI, model: resolved.Model, effort: resolved.Effort}, nil
+}
+
+func (s *walkState) addAgentDeprecations(warnings ...config.Deprecation) {
+	for _, warning := range warnings {
+		found := false
+		for _, existing := range s.result.AgentDeprecations {
+			if existing.Alias == warning.Alias {
+				found = true
+				break
+			}
+		}
+		if !found {
+			s.result.AgentDeprecations = append(s.result.AgentDeprecations, warning)
+		}
+	}
 }
 
 func activeProfileName(cfg *config.Config) string {

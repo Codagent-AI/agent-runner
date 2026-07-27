@@ -3,7 +3,7 @@ description: Interactive Agent Runner help agent backed by bundled onboarding do
 
 sessions:
   - name: help-session
-    agent: planner
+    agent: lead
 
 steps:
   - id: help-agent

@@ -285,6 +285,7 @@ func (h *AgentCallHandler) resolve(raw json.RawMessage) (*resolvedAgentCall, *ag
 	if err != nil {
 		return nil, callFailure(agentcall.CodeUnknownAgent, fmt.Sprintf("resolving profile %q: %v", profileName, err), target)
 	}
+	EmitAgentDeprecations(ctx, h.options.Log, profile.Deprecations)
 	resolvedProfile := *profile
 	if request.CLI != nil {
 		resolvedProfile.CLI = strings.TrimSpace(*request.CLI)

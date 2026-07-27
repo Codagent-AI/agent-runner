@@ -8,7 +8,7 @@ params:
 
 sessions:
   - name: lead-agent
-    agent: planner
+    agent: lead
 
 steps:
   - id: resolve-assumptions
@@ -66,7 +66,7 @@ steps:
 
       Before testing, inspect fixes committed by final validation after the user agreed to the scope. Widen the targeted scope to cover any additional affected or directly dependent flows.
 
-      If the user agreed, use the Runner-owned `call_agent` tool with a fresh `agent: reviewer`. Give each child a standalone prompt requiring codagent:prepare-acceptance with:
+      If the user agreed, use the Runner-owned `call_agent` tool with a fresh `agent: tester`. Give each child a standalone prompt requiring codagent:prepare-acceptance with:
       - approved artifacts: `openspec/changes/{{change_name}}/`;
       - implementation evidence: `{{session_dir}}/output/*session-report*.out` and `{{session_dir}}/audit.log`;
       - evidence directory: `{{session_dir}}/output/`;

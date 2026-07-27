@@ -66,6 +66,9 @@ type ExecutionContext struct {
 
 	// AuditLogger writes structured audit events (audit.EventLogger).
 	AuditLogger audit.EventLogger
+	// AgentDeprecations tracks legacy profile warnings already emitted in this
+	// run. Child contexts share the map so aliases warn at most once.
+	AgentDeprecations map[string]bool
 
 	// Control is the lazily-created run-scoped control server. It is
 	// intentionally opaque here to keep core model types independent of runtime
@@ -170,6 +173,7 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		EngineRef:                opts.EngineRef,
 		ProfileStore:             opts.ProfileStore,
 		AuditLogger:              opts.AuditLogger,
+		AgentDeprecations:        make(map[string]bool),
 		NamedSessions:            namedSessions,
 		NamedSessionDecls:        namedSessionDecls,
 		UIStepHandler:            opts.UIStepHandler,
@@ -263,6 +267,7 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		EngineRef:                parent.EngineRef,
 		ProfileStore:             parent.ProfileStore,
 		AuditLogger:              parent.AuditLogger,
+		AgentDeprecations:        parent.AgentDeprecations,
 		Control:                  parent.Control,
 		InteractiveAttempt:       parent.InteractiveAttempt,
 		WorkflowResumed:          parent.WorkflowResumed,
@@ -344,6 +349,7 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		EngineRef:                engineRef,
 		ProfileStore:             parent.ProfileStore,
 		AuditLogger:              parent.AuditLogger,
+		AgentDeprecations:        parent.AgentDeprecations,
 		Control:                  parent.Control,
 		InteractiveAttempt:       parent.InteractiveAttempt,
 		WorkflowResumed:          parent.WorkflowResumed,
