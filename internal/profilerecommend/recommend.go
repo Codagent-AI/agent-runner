@@ -4,6 +4,7 @@ package profilerecommend
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -365,22 +366,24 @@ func isExcluded(family Family, excludedFamily *Family) bool {
 
 func automaticCandidates(discovery CLIDiscovery, role Role) []candidate {
 	candidates := make([]candidate, 0, len(discovery.Models)+1)
-	for _, model := range discovery.Models {
-		classification, version := classify(discovery.CLI, model)
-		if classification.Tier == UnrecognizedTier {
-			continue
+	if discovery.DiscoveryError == "" {
+		for _, model := range discovery.Models {
+			classification, version := classify(discovery.CLI, model)
+			if classification.Tier == UnrecognizedTier {
+				continue
+			}
+			candidates = append(candidates, candidate{
+				selection: Selection{
+					Role:           role,
+					CLI:            discovery.CLI,
+					Model:          model,
+					Family:         classification.Family,
+					Tier:           classification.Tier,
+					DiscoveryError: discovery.DiscoveryError,
+				},
+				version: version,
+			})
 		}
-		candidates = append(candidates, candidate{
-			selection: Selection{
-				Role:           role,
-				CLI:            discovery.CLI,
-				Model:          model,
-				Family:         classification.Family,
-				Tier:           classification.Tier,
-				DiscoveryError: discovery.DiscoveryError,
-			},
-			version: version,
-		})
 	}
 
 	defaultClassification := Classify(discovery.CLI, "")
@@ -591,10 +594,13 @@ func parseGPTVersion(suffix string) []int {
 
 	var version []int
 	for start < len(suffix) && isASCIIDigit(suffix[start]) {
-		part := 0
+		componentStart := start
 		for start < len(suffix) && isASCIIDigit(suffix[start]) {
-			part = part*10 + int(suffix[start]-'0')
 			start++
+		}
+		part, err := strconv.Atoi(suffix[componentStart:start])
+		if err != nil {
+			return nil
 		}
 		version = append(version, part)
 

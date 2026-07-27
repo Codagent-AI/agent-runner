@@ -372,6 +372,24 @@ func TestRecommendTierFallbacks(t *testing.T) {
 				DiscoveryError: "model query timed out",
 			},
 		},
+		{
+			name: "discovery error ignores partial recognized models",
+			discovery: []CLIDiscovery{
+				{
+					CLI:            "codex",
+					Models:         []string{"gpt-5.7-terra"},
+					DiscoveryError: "model query returned a partial result",
+				},
+			},
+			role: Implementor,
+			want: Selection{
+				Role:           Implementor,
+				CLI:            "codex",
+				Family:         GPT,
+				Fallback:       DefaultDiscoveryError,
+				DiscoveryError: "model query returned a partial result",
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -440,6 +458,12 @@ func TestRecommendGPTVersions(t *testing.T) {
 				t.Fatalf("model = %q, want %q", got.Model, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseGPTVersionRejectsPlatformIntOverflow(t *testing.T) {
+	if got := parseGPTVersion("-999999999999999999999999999999-sol"); got != nil {
+		t.Fatalf("parseGPTVersion() = %v, want nil", got)
 	}
 }
 
