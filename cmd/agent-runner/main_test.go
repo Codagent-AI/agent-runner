@@ -13,29 +13,37 @@ import (
 )
 
 func TestResolveWorkflowArg(t *testing.T) {
-	t.Run("resolves existing workflow YAML path", func(t *testing.T) {
+	t.Run("rejects existing workflow YAML path", func(t *testing.T) {
 		t.Chdir(t.TempDir())
-		path := filepath.Join("custom", "workflow.yaml")
-		writeTestFile(t, path, "name: test\nsteps:\n  - id: s\n    command: echo ok\n")
+		path := filepath.Join("custom", "workflow-v1.0.yaml")
+		writeTestFile(t, path, "name: workflow\nsteps:\n  - id: s\n    command: echo ok\n")
 
-		got, err := resolveWorkflowArg(path)
-		if err != nil {
-			t.Fatalf("resolveWorkflowArg returned error: %v", err)
+		_, err := resolveWorkflowArg(path)
+		if err == nil || !strings.Contains(err.Error(), `launch logical workflow "custom/workflow"`) {
+			t.Fatalf("resolveWorkflowArg error = %v, want logical-name guidance", err)
 		}
-		if got != path {
-			t.Fatalf("resolveWorkflowArg = %q, want %q", got, path)
+	})
+
+	t.Run("rejected nested workflow path preserves logical directory", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		path := filepath.Join(".agent-runner", "workflows", "team", "deploy-v1.0.yaml")
+		writeTestFile(t, path, "name: deploy\nsteps:\n  - id: s\n    command: echo ok\n")
+
+		_, err := resolveWorkflowArg(path)
+		if err == nil || !strings.Contains(err.Error(), `launch logical workflow "team/deploy"`) {
+			t.Fatalf("resolveWorkflowArg error = %v, want nested logical-name guidance", err)
 		}
 	})
 
 	t.Run("resolves bare user workflow from dot-agent-runner directory", func(t *testing.T) {
 		t.Chdir(t.TempDir())
-		writeTestFile(t, filepath.Join(".agent-runner", "workflows", "my-workflow.yaml"), "name: test\nsteps:\n  - id: s\n    command: echo ok\n")
+		writeTestFile(t, filepath.Join(".agent-runner", "workflows", "my-workflow-v1.0.yaml"), "name: my-workflow\nsteps:\n  - id: s\n    command: echo ok\n")
 
 		got, err := resolveWorkflowArg("my-workflow")
 		if err != nil {
 			t.Fatalf("resolveWorkflowArg returned error: %v", err)
 		}
-		want := filepath.Join(".agent-runner", "workflows", "my-workflow.yaml")
+		want := filepath.Join(".agent-runner", "workflows", "my-workflow-v1.0.yaml")
 		if got != want {
 			t.Fatalf("resolveWorkflowArg = %q, want %q", got, want)
 		}
@@ -43,13 +51,13 @@ func TestResolveWorkflowArg(t *testing.T) {
 
 	t.Run("falls back to yml for bare user workflow", func(t *testing.T) {
 		t.Chdir(t.TempDir())
-		writeTestFile(t, filepath.Join(".agent-runner", "workflows", "my-workflow.yml"), "name: test\nsteps:\n  - id: s\n    command: echo ok\n")
+		writeTestFile(t, filepath.Join(".agent-runner", "workflows", "my-workflow-v1.0.yml"), "name: my-workflow\nsteps:\n  - id: s\n    command: echo ok\n")
 
 		got, err := resolveWorkflowArg("my-workflow")
 		if err != nil {
 			t.Fatalf("resolveWorkflowArg returned error: %v", err)
 		}
-		want := filepath.Join(".agent-runner", "workflows", "my-workflow.yml")
+		want := filepath.Join(".agent-runner", "workflows", "my-workflow-v1.0.yml")
 		if got != want {
 			t.Fatalf("resolveWorkflowArg = %q, want %q", got, want)
 		}
@@ -60,13 +68,13 @@ func TestResolveWorkflowArg(t *testing.T) {
 		home := filepath.Join(t.TempDir(), "home")
 		t.Setenv("HOME", home)
 		t.Chdir(repo)
-		writeTestFile(t, filepath.Join(home, ".agent-runner", "workflows", "my-workflow.yaml"), "name: test\nsteps:\n  - id: s\n    command: echo ok\n")
+		writeTestFile(t, filepath.Join(home, ".agent-runner", "workflows", "my-workflow-v1.0.yaml"), "name: my-workflow\nsteps:\n  - id: s\n    command: echo ok\n")
 
 		got, err := resolveWorkflowArg("my-workflow")
 		if err != nil {
 			t.Fatalf("resolveWorkflowArg returned error: %v", err)
 		}
-		want := filepath.Join(home, ".agent-runner", "workflows", "my-workflow.yaml")
+		want := filepath.Join(home, ".agent-runner", "workflows", "my-workflow-v1.0.yaml")
 		if got != want {
 			t.Fatalf("resolveWorkflowArg = %q, want %q", got, want)
 		}
@@ -77,13 +85,13 @@ func TestResolveWorkflowArg(t *testing.T) {
 		home := filepath.Join(t.TempDir(), "home")
 		t.Setenv("HOME", home)
 		t.Chdir(repo)
-		writeTestFile(t, filepath.Join(home, ".agent-runner", "workflows", "my-workflow.yml"), "name: test\nsteps:\n  - id: s\n    command: echo ok\n")
+		writeTestFile(t, filepath.Join(home, ".agent-runner", "workflows", "my-workflow-v1.0.yml"), "name: my-workflow\nsteps:\n  - id: s\n    command: echo ok\n")
 
 		got, err := resolveWorkflowArg("my-workflow")
 		if err != nil {
 			t.Fatalf("resolveWorkflowArg returned error: %v", err)
 		}
-		want := filepath.Join(home, ".agent-runner", "workflows", "my-workflow.yml")
+		want := filepath.Join(home, ".agent-runner", "workflows", "my-workflow-v1.0.yml")
 		if got != want {
 			t.Fatalf("resolveWorkflowArg = %q, want %q", got, want)
 		}
@@ -91,13 +99,13 @@ func TestResolveWorkflowArg(t *testing.T) {
 
 	t.Run("resolves nested bare user workflow", func(t *testing.T) {
 		t.Chdir(t.TempDir())
-		writeTestFile(t, filepath.Join(".agent-runner", "workflows", "team", "deploy.yaml"), "name: test\nsteps:\n  - id: s\n    command: echo ok\n")
+		writeTestFile(t, filepath.Join(".agent-runner", "workflows", "team", "deploy-v1.0.yaml"), "name: deploy\nsteps:\n  - id: s\n    command: echo ok\n")
 
 		got, err := resolveWorkflowArg("team/deploy")
 		if err != nil {
 			t.Fatalf("resolveWorkflowArg returned error: %v", err)
 		}
-		want := filepath.Join(".agent-runner", "workflows", "team", "deploy.yaml")
+		want := filepath.Join(".agent-runner", "workflows", "team", "deploy-v1.0.yaml")
 		if got != want {
 			t.Fatalf("resolveWorkflowArg = %q, want %q", got, want)
 		}
@@ -108,13 +116,13 @@ func TestResolveWorkflowArg(t *testing.T) {
 		home := filepath.Join(t.TempDir(), "home")
 		t.Setenv("HOME", home)
 		t.Chdir(repo)
-		writeTestFile(t, filepath.Join(home, ".agent-runner", "workflows", "team", "deploy.yaml"), "name: test\nsteps:\n  - id: s\n    command: echo ok\n")
+		writeTestFile(t, filepath.Join(home, ".agent-runner", "workflows", "team", "deploy-v1.0.yaml"), "name: deploy\nsteps:\n  - id: s\n    command: echo ok\n")
 
 		got, err := resolveWorkflowArg("team/deploy")
 		if err != nil {
 			t.Fatalf("resolveWorkflowArg returned error: %v", err)
 		}
-		want := filepath.Join(home, ".agent-runner", "workflows", "team", "deploy.yaml")
+		want := filepath.Join(home, ".agent-runner", "workflows", "team", "deploy-v1.0.yaml")
 		if got != want {
 			t.Fatalf("resolveWorkflowArg = %q, want %q", got, want)
 		}
@@ -125,8 +133,8 @@ func TestResolveWorkflowArg(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveWorkflowArg returned error: %v", err)
 		}
-		if got != "builtin:core/finalize-pr.yaml" {
-			t.Fatalf("resolveWorkflowArg = %q, want %q", got, "builtin:core/finalize-pr.yaml")
+		if got != "builtin:core/finalize-pr-v1.0.yaml" {
+			t.Fatalf("resolveWorkflowArg = %q, want %q", got, "builtin:core/finalize-pr-v1.0.yaml")
 		}
 	})
 
@@ -177,14 +185,14 @@ func TestResolveWorkflowArg(t *testing.T) {
 		home := filepath.Join(t.TempDir(), "home")
 		t.Setenv("HOME", home)
 		t.Chdir(repo)
-		writeTestFile(t, filepath.Join(".agent-runner", "workflows", "my-workflow.yaml"), "name: local\nsteps:\n  - id: s\n    command: echo ok\n")
-		writeTestFile(t, filepath.Join(home, ".agent-runner", "workflows", "my-workflow.yaml"), "name: global\nsteps:\n  - id: s\n    command: echo ok\n")
+		writeTestFile(t, filepath.Join(".agent-runner", "workflows", "my-workflow-v1.0.yaml"), "name: my-workflow\nsteps:\n  - id: s\n    command: echo ok\n")
+		writeTestFile(t, filepath.Join(home, ".agent-runner", "workflows", "my-workflow-v2.0.yaml"), "name: my-workflow\nsteps:\n  - id: s\n    command: echo ok\n")
 
 		got, err := resolveWorkflowArg("my-workflow")
 		if err != nil {
 			t.Fatalf("resolveWorkflowArg returned error: %v", err)
 		}
-		want := filepath.Join(".agent-runner", "workflows", "my-workflow.yaml")
+		want := filepath.Join(".agent-runner", "workflows", "my-workflow-v1.0.yaml")
 		if got != want {
 			t.Fatalf("resolveWorkflowArg = %q, want %q", got, want)
 		}
@@ -195,14 +203,14 @@ func TestResolveWorkflowArg(t *testing.T) {
 		home := filepath.Join(t.TempDir(), "home")
 		t.Setenv("HOME", home)
 		t.Chdir(repo)
-		writeTestFile(t, filepath.Join(".agent-runner", "workflows", "team", "deploy.yaml"), "name: local\nsteps:\n  - id: s\n    command: echo ok\n")
-		writeTestFile(t, filepath.Join(home, ".agent-runner", "workflows", "team", "deploy.yaml"), "name: global\nsteps:\n  - id: s\n    command: echo ok\n")
+		writeTestFile(t, filepath.Join(".agent-runner", "workflows", "team", "deploy-v1.0.yaml"), "name: deploy\nsteps:\n  - id: s\n    command: echo ok\n")
+		writeTestFile(t, filepath.Join(home, ".agent-runner", "workflows", "team", "deploy-v2.0.yaml"), "name: deploy\nsteps:\n  - id: s\n    command: echo ok\n")
 
 		got, err := resolveWorkflowArg("team/deploy")
 		if err != nil {
 			t.Fatalf("resolveWorkflowArg returned error: %v", err)
 		}
-		want := filepath.Join(".agent-runner", "workflows", "team", "deploy.yaml")
+		want := filepath.Join(".agent-runner", "workflows", "team", "deploy-v1.0.yaml")
 		if got != want {
 			t.Fatalf("resolveWorkflowArg = %q, want %q", got, want)
 		}
@@ -240,7 +248,7 @@ func TestResolveWorkflowArg(t *testing.T) {
 
 	t.Run("top-level workflows directory is ignored", func(t *testing.T) {
 		t.Chdir(t.TempDir())
-		writeTestFile(t, filepath.Join("workflows", "my-workflow.yaml"), "name: test\nsteps:\n  - id: s\n    command: echo ok\n")
+		writeTestFile(t, filepath.Join("workflows", "my-workflow-v1.0.yaml"), "name: my-workflow\nsteps:\n  - id: s\n    command: echo ok\n")
 
 		_, err := resolveWorkflowArg("my-workflow")
 		if err == nil {
@@ -268,7 +276,7 @@ func TestResolveWorkflowArg(t *testing.T) {
 
 func TestResolveValidateWorkflowArgAcceptsExistingYAMLPath(t *testing.T) {
 	t.Chdir(t.TempDir())
-	path := filepath.Join("workflows", "custom.yaml")
+	path := filepath.Join("workflows", "custom-v1.0.yaml")
 	writeTestFile(t, path, "name: custom\nsteps:\n  - id: s\n    command: echo ok\n")
 
 	got, err := resolveValidateWorkflowArg(path)
@@ -280,11 +288,55 @@ func TestResolveValidateWorkflowArgAcceptsExistingYAMLPath(t *testing.T) {
 	}
 }
 
+func TestResolveValidateWorkflowArgAcceptsExactBuiltinRef(t *testing.T) {
+	const ref = "builtin:core/debug-v1.0.yaml"
+
+	got, err := resolveValidateWorkflowArg(ref)
+	if err != nil {
+		t.Fatalf("resolveValidateWorkflowArg returned error: %v", err)
+	}
+	if got != ref {
+		t.Fatalf("resolveValidateWorkflowArg = %q, want %q", got, ref)
+	}
+}
+
+func TestResolveValidateWorkflowArgReportsMissingYAMLPath(t *testing.T) {
+	t.Chdir(t.TempDir())
+	path := filepath.Join("workflows", "missing-v1.0.yaml")
+
+	_, err := resolveValidateWorkflowArg(path)
+	if err == nil {
+		t.Fatal("resolveValidateWorkflowArg error = nil, want missing-file error")
+	}
+	if !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("resolveValidateWorkflowArg error = %v, want validation-specific missing-file guidance", err)
+	}
+	if strings.Contains(err.Error(), "for execution") {
+		t.Fatalf("resolveValidateWorkflowArg error = %v, must not describe validation as execution", err)
+	}
+}
+
+func TestResolveValidateWorkflowArgResolvesLogicalNameToLatest(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	writeTestFile(t, filepath.Join(".agent-runner", "workflows", "deploy-v1.0.yaml"), "name: deploy\nsteps:\n  - id: old\n    command: echo old\n")
+	want := filepath.Join(".agent-runner", "workflows", "deploy-v2.0.yaml")
+	writeTestFile(t, want, "name: deploy\nsteps:\n  - id: new\n    command: echo new\n")
+
+	got, err := resolveValidateWorkflowArg("deploy")
+	if err != nil {
+		t.Fatalf("resolveValidateWorkflowArg returned error: %v", err)
+	}
+	if got != want {
+		t.Fatalf("resolveValidateWorkflowArg = %q, want %q", got, want)
+	}
+}
+
 func TestHandleValidateArgsBindsOptionalParamsForYAMLPath(t *testing.T) {
 	t.Chdir(t.TempDir())
 	t.Setenv("HOME", t.TempDir())
-	writeTestFile(t, filepath.Join("workflows", "green.yaml"), "name: green\nsteps:\n  - id: s\n    command: echo ok\n")
-	root := filepath.Join("workflows", "root.yaml")
+	writeTestFile(t, filepath.Join("workflows", "green-v1.0.yaml"), "name: green\nsteps:\n  - id: s\n    command: echo ok\n")
+	root := filepath.Join("workflows", "root-v1.0.yaml")
 	writeTestFile(t, root, `
 name: root
 params:
@@ -294,7 +346,7 @@ steps:
     workflow: "{{flavor}}.yaml"
 `)
 
-	if code := handleValidateArgs([]string{root, "flavor=green"}); code != 0 {
+	if code := handleValidateArgs([]string{root, "flavor=green-v1.0"}); code != 0 {
 		t.Fatalf("handleValidateArgs returned %d, want 0", code)
 	}
 }

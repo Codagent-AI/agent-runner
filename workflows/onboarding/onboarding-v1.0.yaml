@@ -1,0 +1,17 @@
+name: onboarding
+description: Optional Agent Runner workflow demo.
+steps:
+  - id: step-types-demo
+    workflow: step-types-demo-v1.0.yaml
+
+  - id: guided-workflow
+    workflow: guided-workflow-v1.0.yaml
+
+  - id: validator
+    workflow: validator-v1.0.yaml
+
+  - id: advanced
+    workflow: advanced-v1.0.yaml
+
+  - id: set-completed
+    command: agent-runner internal write-setting onboarding.completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"

@@ -27,13 +27,13 @@ stdout '^1$'
 exec cat counter-c.txt
 stdout '^1$'
 
--- .agent-runner/workflows/top.yaml --
-name: e2e-nested-loop-resume-top
+-- .agent-runner/workflows/top-v1.0.yaml --
+name: top
 steps:
   - id: outer
-    workflow: inner.yaml
--- .agent-runner/workflows/inner.yaml --
-name: e2e-nested-loop-resume-inner
+    workflow: inner-v1.0.yaml
+-- .agent-runner/workflows/inner-v1.0.yaml --
+name: inner
 steps:
   - id: process
     loop:

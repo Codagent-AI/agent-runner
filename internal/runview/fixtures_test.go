@@ -26,7 +26,7 @@ func fixturePath(rel string) string {
 }
 
 // fixtureImplementChange mirrors the shape of workflows/openspec/
-// implement-change.yaml closely enough to exercise every branch in
+// implement-change-v1.0.yaml closely enough to exercise every branch in
 // BuildTree: a for-each loop with a single-sub-workflow body (AutoFlatten),
 // followed by an agent step, a sub-workflow step, two shell steps, and a
 // final default-mode agent step.
@@ -38,11 +38,11 @@ func fixtureImplementChange() model.Workflow {
 				ID:   "implement-tasks",
 				Loop: &model.Loop{Over: "tasks/*.md", As: "task_file"},
 				Steps: []model.Step{
-					{ID: "implement-single-task", Workflow: "../core/implement-task.yaml"},
+					{ID: "implement-single-task", Workflow: "../core/implement-task-v1.0.yaml"},
 				},
 			},
 			{ID: "review-assumptions", Session: model.SessionResume, Prompt: "review"},
-			{ID: "run-validator", Workflow: "../core/run-validator.yaml"},
+			{ID: "run-validator", Workflow: "../core/run-validator-v1.0.yaml"},
 			{ID: "archive", Command: "echo archive"},
 			{ID: "archive-verify", Command: "echo verify"},
 			{ID: "finalize", Agent: "implementor", Session: model.SessionNew, Prompt: "finalize"},
@@ -50,7 +50,7 @@ func fixtureImplementChange() model.Workflow {
 	}
 }
 
-// fixtureImplementTask mirrors workflows/core/implement-task.yaml: an interactive
+// fixtureImplementTask mirrors workflows/core/implement-task-v1.0.yaml: an interactive
 // agent, a resume agent, a sub-workflow, a shell step, another resume agent,
 // and a trailing shell step — six children by design.
 func fixtureImplementTask() model.Workflow {
@@ -59,7 +59,7 @@ func fixtureImplementTask() model.Workflow {
 		Steps: []model.Step{
 			{ID: "implement", Agent: "implementor", Session: model.SessionNew, Prompt: "implement the task"},
 			{ID: "simplify", Session: model.SessionResume, Prompt: "simplify"},
-			{ID: "run-validator", Workflow: "run-validator.yaml"},
+			{ID: "run-validator", Workflow: "run-validator-v1.0.yaml"},
 			{ID: "check-clean", Command: "test -z \"$(git status --porcelain)\""},
 			{ID: "commit-leftovers", Session: model.SessionResume, Prompt: "commit leftovers"},
 			{ID: "check-flag", Command: "test x = y"},
@@ -67,21 +67,21 @@ func fixtureImplementTask() model.Workflow {
 	}
 }
 
-// fixtureChange mirrors the outer shape of workflows/openspec/change.yaml —
+// fixtureChange mirrors the outer shape of workflows/openspec/change-v1.0.yaml —
 // two sub-workflow steps.
 func fixtureChange() model.Workflow {
 	return model.Workflow{
 		Name: "change",
 		Steps: []model.Step{
-			{ID: "plan", Workflow: "plan-change.yaml"},
-			{ID: "implement", Workflow: "implement-change.yaml"},
+			{ID: "plan", Workflow: "plan-change-v1.0.yaml"},
+			{ID: "implement", Workflow: "implement-change-v1.0.yaml"},
 		},
 	}
 }
 
-// fixturePlanChange is a minimal stand-in for plan-change.yaml. The nested
+// fixturePlanChange is a minimal stand-in for plan-change-v1.0.yaml. The nested
 // sub-workflow test only ever drills into `implement`, but SubWorkflowLoader
-// must still be able to resolve `plan-change.yaml` if something asks for it.
+// must still be able to resolve `plan-change-v1.0.yaml` if something asks for it.
 func fixturePlanChange() model.Workflow {
 	return model.Workflow{Name: "plan-change"}
 }
@@ -93,13 +93,13 @@ func fixturePlanChange() model.Workflow {
 func fixtureSubLoader() func(string) (model.Workflow, error) {
 	return func(path string) (model.Workflow, error) {
 		switch filepath.Base(path) {
-		case "implement-change.yaml":
+		case "implement-change-v1.0.yaml":
 			return fixtureImplementChange(), nil
-		case "implement-task.yaml":
+		case "implement-task-v1.0.yaml":
 			return fixtureImplementTask(), nil
-		case "change.yaml":
+		case "change-v1.0.yaml":
 			return fixtureChange(), nil
-		case "plan-change.yaml":
+		case "plan-change-v1.0.yaml":
 			return fixturePlanChange(), nil
 		}
 		return model.Workflow{}, fmt.Errorf("no fixture registered for %s", path)

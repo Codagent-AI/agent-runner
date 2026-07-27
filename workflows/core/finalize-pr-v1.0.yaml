@@ -1,0 +1,78 @@
+name: finalize-pr
+description: "Push changes, mark a draft PR ready, and fix CI or review failures (max 3 cycles)."
+hidden: true
+
+sessions:
+  - name: lead-agent
+    agent: planner
+
+steps:
+  - id: push-pr
+    session: lead-agent
+    mode: autonomous
+    prompt: |
+      Invoke codagent:push-pr to commit any appropriate remaining changes, push them, and create or update the pull request. Follow the project's commit message conventions and prepend [{{step_id}}] when a commit is needed.
+
+      If there is an existing pull request and it is a draft, mark it as ready for review.
+
+  - id: ci-fix-loop
+    loop:
+      max: 3
+    steps:
+      - id: wait-ci
+        session: resume
+        mode: autonomous
+        capture: ci_report
+        continue_on_failure: true
+        prompt: |
+          Invoke codagent:wait-ci to poll CI status and gather review comments. Treat top-level bot summaries, rate-limit notices, and already-resolved reports as informational. Report comments only when actionable unresolved review feedback remains.
+
+          After the human-readable report, end your response with exactly one of these terminal markers as the final non-empty line:
+          - `CI_PASSED` when CI is green and no actionable unresolved feedback or unfinished bot review remains;
+          - `CI_FAILED` when a check failed or a blocking review remains;
+          - `CI_COMMENTS` when CI is green but actionable unresolved feedback remains;
+          - `CI_PENDING` when checks or a review bot are still in progress.
+
+          Do not write anything after the marker. The workflow reads this marker as its control result.
+
+      - id: ci-status-gate
+        script: ci-status-gate.sh
+        script_inputs:
+          report: "{{ci_report}}"
+        continue_on_failure: true
+        break_if: success
+
+      - id: ci-fix-needed-gate
+        script: ci-fix-needed-gate.sh
+        script_inputs:
+          report: "{{ci_report}}"
+        continue_on_failure: true
+
+      - id: fix-pr
+        session: resume
+        mode: autonomous
+        skip_if: previous_success
+        prompt: |
+          CI has failures or unresolved review comments. Invoke codagent:fix-pr to address only issues that stay within the approved requirements, design, and implementation scope. Follow the project's commit message conventions and prepend [{{step_id}}].
+
+          This workflow boundary overrides any more permissive default in the skill: do not silently treat a requirement, design, or scope change as ordinary review feedback. If a requested fix would change approved product behavior, requirements, design decisions, or materially expand scope, do not make it. Leave the finding unresolved and report that the change must return to its acceptance or planning workflow before finalization can continue.
+
+  - id: verify-final
+    session: resume
+    mode: autonomous
+    capture: final_ci_report
+    prompt: |
+      Invoke codagent:wait-ci to verify the final fix cycle made CI green. Treat top-level bot summaries, rate-limit notices, and already-resolved reports as informational. Report comments only when actionable unresolved review feedback remains. Report the final status to the user.
+
+      After the human-readable report, end your response with exactly one of these terminal markers as the final non-empty line:
+      - `CI_PASSED` when CI is green and no actionable unresolved feedback or unfinished bot review remains;
+      - `CI_FAILED` when a check failed or a blocking review remains;
+      - `CI_COMMENTS` when CI is green but actionable unresolved feedback remains;
+      - `CI_PENDING` when checks or a review bot are still in progress.
+
+      Do not write anything after the marker. The workflow reads this marker as its control result.
+
+  - id: final-ci-status-gate
+    script: ci-status-gate.sh
+    script_inputs:
+      report: "{{final_ci_report}}"

@@ -13,6 +13,7 @@ import (
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/validate"
+	"github.com/codagent/agent-runner/internal/workflowcatalog"
 	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
@@ -23,12 +24,16 @@ type Options struct {
 
 // LoadWorkflow reads a YAML file and returns a validated Workflow.
 func LoadWorkflow(filePath string, opts Options) (model.Workflow, error) {
+	if _, err := workflowcatalog.Parse(filePath); err != nil {
+		return model.Workflow{}, err
+	}
+
 	data, err := ReadWorkflowFile(filePath)
 	if err != nil {
 		return model.Workflow{}, fmt.Errorf("cannot read workflow file: %w", err)
 	}
 
-	return ParseWorkflow(data, opts)
+	return ParseWorkflowSource(data, filePath, opts)
 }
 
 // ParseWorkflow parses workflow YAML bytes and returns a validated Workflow.
@@ -51,6 +56,28 @@ func ParseWorkflow(data []byte, opts Options) (model.Workflow, error) {
 	}
 
 	return w, nil
+}
+
+// ParseWorkflowSource parses workflow YAML bytes and validates them against
+// their exact source filename.
+func ParseWorkflowSource(data []byte, sourcePath string, opts Options) (model.Workflow, error) {
+	definition, err := workflowcatalog.Parse(sourcePath)
+	if err != nil {
+		return model.Workflow{}, err
+	}
+
+	workflow, err := ParseWorkflow(data, opts)
+	if err != nil {
+		return model.Workflow{}, err
+	}
+	if workflow.Name != definition.LogicalName {
+		return model.Workflow{}, fmt.Errorf(
+			"workflow name does not match source filename: expected %q, got %q",
+			definition.LogicalName,
+			workflow.Name,
+		)
+	}
+	return workflow, nil
 }
 
 func ReadWorkflowFile(filePath string) ([]byte, error) {

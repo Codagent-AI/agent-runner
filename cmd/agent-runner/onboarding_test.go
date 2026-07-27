@@ -37,7 +37,7 @@ func TestEnsureFirstRunForTUIRunsNativeSetupThenDemo(t *testing.T) {
 	if setupRuns != 1 {
 		t.Fatalf("setupRuns = %d, want 1", setupRuns)
 	}
-	if diff := cmp.Diff([]string{"builtin:onboarding/onboarding.yaml"}, launched); diff != "" {
+	if diff := cmp.Diff([]string{"builtin:onboarding/onboarding-v1.0.yaml"}, launched); diff != "" {
 		t.Fatalf("launched mismatch (-want +got):\n%s", diff)
 	}
 }
@@ -91,7 +91,7 @@ func TestEnsureFirstRunForTUIShowsDemoPromptWhenSetupAlreadyCompleted(t *testing
 	})
 
 	requireFirstRunExit(t, result, 9)
-	if diff := cmp.Diff([]string{"builtin:onboarding/onboarding.yaml"}, launched); diff != "" {
+	if diff := cmp.Diff([]string{"builtin:onboarding/onboarding-v1.0.yaml"}, launched); diff != "" {
 		t.Fatalf("launched mismatch (-want +got):\n%s", diff)
 	}
 }

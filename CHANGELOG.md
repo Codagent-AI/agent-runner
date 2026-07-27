@@ -1,5 +1,15 @@
 # agent-runner
 
+## 0.3.0
+
+### Minor Changes
+
+- [#51](https://github.com/Codagent-AI/agent-runner/pull/51) Add the second-generation OpenSpec change workflows with explicit define, plan, implement, acceptance, and finalization phases.
+- [#52](https://github.com/Codagent-AI/agent-runner/pull/52) Replace the interactive PTY proxy with direct terminal handoff for more faithful native agent sessions.
+- [#54](https://github.com/Codagent-AI/agent-runner/pull/54) Record durable token usage, estimated cost, and timing metrics across workflow and child-agent execution.
+- [#55](https://github.com/Codagent-AI/agent-runner/pull/55) Add synchronous Runner-owned agent calls with named sessions, audit evidence, cancellation, and usage accounting.
+- [#56](https://github.com/Codagent-AI/agent-runner/pull/56) Add versioned workflow resolution and explicit reusable orchestration for reviews and targeted acceptance verification.
+
 ## 0.2.0
 
 ### Minor Changes

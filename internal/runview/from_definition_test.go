@@ -29,7 +29,7 @@ func TestFromDefinition_New_DoesNotReadAuditLog(t *testing.T) {
 func TestFromDefinition_EnteredIsFromDefinition(t *testing.T) {
 	entry := discovery.WorkflowEntry{
 		CanonicalName: "core:finalize-pr",
-		SourcePath:    "builtin:core/finalize-pr.yaml",
+		SourcePath:    "builtin:core/finalize-pr-v1.0.yaml",
 		Scope:         discovery.ScopeBuiltin,
 	}
 	m := buildFromDefinitionModel(&entry, "")
@@ -42,7 +42,7 @@ func TestFromDefinition_EnteredIsFromDefinition(t *testing.T) {
 func TestFromDefinition_WorkflowEntryStored(t *testing.T) {
 	entry := discovery.WorkflowEntry{
 		CanonicalName: "core:finalize-pr",
-		SourcePath:    "builtin:core/finalize-pr.yaml",
+		SourcePath:    "builtin:core/finalize-pr-v1.0.yaml",
 		Scope:         discovery.ScopeBuiltin,
 	}
 	m := buildFromDefinitionModel(&entry, "")
@@ -56,7 +56,7 @@ func TestFromDefinition_WorkflowEntryStored(t *testing.T) {
 func TestFromDefinition_EscAtTopLevel_EmitsBackMsg(t *testing.T) {
 	entry := discovery.WorkflowEntry{
 		CanonicalName: "core:finalize-pr",
-		SourcePath:    "builtin:core/finalize-pr.yaml",
+		SourcePath:    "builtin:core/finalize-pr-v1.0.yaml",
 		Scope:         discovery.ScopeBuiltin,
 	}
 	m := buildFromDefinitionModel(&entry, "")
@@ -78,7 +78,7 @@ func TestFromDefinition_EscAtTopLevel_EmitsBackMsg(t *testing.T) {
 func TestFromDefinition_R_EmitsStartRunMsg(t *testing.T) {
 	entry := discovery.WorkflowEntry{
 		CanonicalName: "core:finalize-pr",
-		SourcePath:    "builtin:core/finalize-pr.yaml",
+		SourcePath:    "builtin:core/finalize-pr-v1.0.yaml",
 		Scope:         discovery.ScopeBuiltin,
 	}
 	m := buildFromDefinitionModel(&entry, "")
@@ -111,7 +111,7 @@ func TestFromDefinition_CannotResumeRun(t *testing.T) {
 func TestFromDefinition_Breadcrumb_ShowsCanonicalName(t *testing.T) {
 	entry := discovery.WorkflowEntry{
 		CanonicalName: "core:finalize-pr",
-		SourcePath:    "builtin:core/finalize-pr.yaml",
+		SourcePath:    "builtin:core/finalize-pr-v1.0.yaml",
 		Scope:         discovery.ScopeBuiltin,
 	}
 	m := buildFromDefinitionModel(&entry, "")
@@ -121,6 +121,9 @@ func TestFromDefinition_Breadcrumb_ShowsCanonicalName(t *testing.T) {
 	view := tuistyle.Sanitize(m.View())
 	if !strings.Contains(view, "core:finalize-pr") {
 		t.Errorf("view should contain %q, got:\n%s", "core:finalize-pr", view)
+	}
+	if strings.Contains(view, "v1.0") {
+		t.Errorf("definition preview should remain version-neutral, got:\n%s", view)
 	}
 }
 

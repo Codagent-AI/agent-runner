@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/workflowcatalog"
 	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
@@ -32,8 +33,9 @@ type ResolvedWorkflow struct {
 //  1. state.WorkflowFile as an absolute path;
 //  2. state.WorkflowFile relative to the run's recorded cwd from meta.json;
 //  3. state.WorkflowFile relative to the current process cwd;
-//  4. discovery by state.WorkflowName (or the name parsed from the session
-//     ID) under a discovered workflows/ root.
+//  4. for legacy state with no recorded workflow file, discovery by
+//     state.WorkflowName (or the name parsed from the session ID) under a
+//     discovered workflows/ root.
 //
 // Roots (WorkflowsRoot, RepoRoot) are filled whenever they can be derived
 // from the resolved workflow path or from a discoverable workflows/ dir in
@@ -72,16 +74,19 @@ func ResolveWorkflow(sessionDir, projectDir string, state *model.RunState) (Reso
 		return out, true
 	}
 
-	// (4) — discovery by name.
-	name := state.WorkflowName
-	if name == "" {
-		name = parseWorkflowNameFromID(filepath.Base(sessionDir))
-	}
-	if name != "" {
-		if p, ok := findWorkflowByName(name, bases); ok {
-			out.AbsPath = p
-			out.WorkflowsRoot, out.RepoRoot = rootsFor(p, bases)
-			return out, true
+	// (4) — legacy discovery by name. Once a run records a workflow file,
+	// that exact path is authoritative and a newer sibling must not replace it.
+	if state.WorkflowFile == "" {
+		name := state.WorkflowName
+		if name == "" {
+			name = parseWorkflowNameFromID(filepath.Base(sessionDir))
+		}
+		if name != "" {
+			if p, ok := findWorkflowByName(name, bases); ok {
+				out.AbsPath = p
+				out.WorkflowsRoot, out.RepoRoot = rootsFor(p, bases)
+				return out, true
+			}
 		}
 	}
 
@@ -145,17 +150,11 @@ func tryDirectFile(workflowFile string, bases []string) (string, bool) {
 
 // findWorkflowByName searches for a workflow matching name under the
 // workflows/ subdir of each base directory. name may be bare ("plan-change")
-// or namespaced ("openspec:plan-change"). The search prefers an exact layout
-// match first, then falls back to a recursive walk matching the trailing
-// segment. The first hit wins.
+// or namespaced ("openspec:plan-change"). Each workflow root is classified by
+// the shared catalog so invalid groups cannot be bypassed by filename probing.
 func findWorkflowByName(name string, bases []string) (string, bool) {
 	if name == "" {
 		return "", false
-	}
-	// bare is the rightmost segment; used for recursive filename matching.
-	bare := name
-	if i := strings.LastIndexByte(name, ':'); i >= 0 {
-		bare = name[i+1:]
 	}
 
 	for _, b := range bases {
@@ -166,31 +165,35 @@ func findWorkflowByName(name string, bases []string) (string, bool) {
 				continue
 			}
 
-			// Prefer an exact layout match:
-			//   bare  → workflows/<name>.yaml
-			//   ns:n  → workflows/<ns>/<n>.yaml
-			layout := strings.ReplaceAll(name, ":", string(os.PathSeparator))
-			for _, ext := range []string{".yaml", ".yml"} {
-				direct := filepath.Join(wfRoot, layout+ext)
-				if fileExists(direct) {
-					return direct, true
-				}
-			}
-
-			// Fall back to a recursive search for the bare filename.
-			if p := searchTree(wfRoot, bare); p != "" {
-				return p, true
+			if p, matched := searchTree(wfRoot, name); matched {
+				return p, p != ""
 			}
 		}
 	}
 	return "", false
 }
 
-// searchTree walks root looking for "name.yaml" or "name.yml" and returns
-// the first match's absolute path.
-func searchTree(root, name string) string {
-	var found string
-	want := map[string]bool{name + ".yaml": true, name + ".yml": true}
+// searchTree selects the latest valid versioned definition for name. matched
+// distinguishes an invalid matching group from an unrelated catalog so callers
+// do not fall through to a lower-priority workflow root.
+func searchTree(root, name string) (workflowPath string, matched bool) {
+	catalog := workflowcatalog.Build(workflowCandidatePaths(root))
+	catalogName := strings.ReplaceAll(name, ":", "/")
+	if group, found := catalog.Lookup(catalogName); found {
+		workflowPath, ok := workflowPathForGroup(root, group)
+		if !ok {
+			return "", true
+		}
+		return workflowPath, true
+	}
+	if strings.Contains(name, ":") {
+		return "", false
+	}
+	return selectBareCatalogGroup(root, name, catalog.Groups)
+}
+
+func workflowCandidatePaths(root string) []string {
+	var candidatePaths []string
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -198,13 +201,66 @@ func searchTree(root, name string) string {
 		if d.IsDir() {
 			return nil
 		}
-		if want[d.Name()] {
-			found = path
-			return fs.SkipAll
+		if !workflowcatalog.HasYAMLExtension(d.Name()) {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr == nil {
+			candidatePaths = append(candidatePaths, filepath.ToSlash(rel))
 		}
 		return nil
 	})
-	return found
+	return candidatePaths
+}
+
+func selectBareCatalogGroup(root, name string, groups []workflowcatalog.Group) (workflowPath string, matched bool) {
+	for _, group := range groups {
+		if filepath.Base(group.CanonicalName) != name {
+			continue
+		}
+		matched = true
+		candidatePath, ok := workflowPathForGroup(root, group)
+		if !ok {
+			return "", true
+		}
+		if workflowPath == "" {
+			workflowPath = candidatePath
+		}
+	}
+	return workflowPath, matched
+}
+
+func workflowPathForGroup(root string, group workflowcatalog.Group) (string, bool) {
+	if group.Err != nil {
+		legacyPath, ok := uniqueLegacyUnversionedPath(group)
+		if !ok {
+			return "", false
+		}
+		return filepath.Join(root, filepath.FromSlash(legacyPath)), true
+	}
+	if group.Selected == nil {
+		return "", false
+	}
+	return filepath.Join(root, filepath.FromSlash(group.Selected.Path)), true
+}
+
+func uniqueLegacyUnversionedPath(group workflowcatalog.Group) (string, bool) {
+	if group.Err == nil ||
+		len(group.Definitions) != 0 ||
+		len(group.Err.InvalidFilenames) != 1 ||
+		len(group.Err.DuplicateVersions) != 0 {
+		return "", false
+	}
+
+	candidatePath := filepath.ToSlash(group.Err.InvalidFilenames[0].Path)
+	ext := filepath.Ext(candidatePath)
+	if ext != ".yaml" && ext != ".yml" {
+		return "", false
+	}
+	if strings.TrimSuffix(candidatePath, ext) != group.CanonicalName {
+		return "", false
+	}
+	return candidatePath, true
 }
 
 // rootsFor returns the (workflowsRoot, repoRoot) pair appropriate for an

@@ -1,0 +1,27 @@
+name: openspec-sub-workflow
+description: "Sub-workflow with artifact step IDs"
+
+params:
+  - name: change_name
+    required: true
+
+steps:
+  - id: proposal
+    mode: autonomous
+    prompt: "Propose it"
+
+  - id: specs
+    mode: autonomous
+    prompt: "Spec it"
+
+  - id: design
+    mode: autonomous
+    prompt: "Design it"
+
+  - id: tasks
+    mode: autonomous
+    prompt: "Plan it"
+
+  - id: review
+    mode: autonomous
+    prompt: "Review it"

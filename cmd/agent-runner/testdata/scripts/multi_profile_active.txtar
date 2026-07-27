@@ -41,8 +41,8 @@ profiles:
         cli: claude
         model: haiku
 
--- .agent-runner/workflows/workflow.yaml --
-name: multi-profile-active
+-- .agent-runner/workflows/workflow-v1.0.yaml --
+name: workflow
 steps:
   - id: run-planner
     agent: planner

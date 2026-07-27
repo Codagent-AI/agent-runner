@@ -1,0 +1,110 @@
+name: accept-change
+description: "Resolve undecided assumptions, support human review and testing, and apply requested follow-up changes."
+hidden: true
+
+params:
+  - name: change_name
+    required: true
+
+sessions:
+  - name: lead-agent
+    agent: planner
+  - name: acceptance-tester
+    agent: reviewer
+
+steps:
+  - id: resolve-assumptions
+    session: lead-agent
+    mode: interactive
+    prompt: |
+      Resolve undecided assumptions and context gaps for OpenSpec change "{{change_name}}" with the user.
+
+      Read `{{session_dir}}/output/acceptance-assumptions.md`, the acceptance-testing outcome and unresolved-assumptions section of `{{session_dir}}/output/acceptance-handoff.md`, and relevant files under `openspec/changes/{{change_name}}/`. Briefly tell the user whether acceptance testing was ready or ended with remaining impediments.
+
+      For each unresolved item, ask the user how they want to resolve it and explain the options and likely impact. Then implement the resulting code, configuration, documentation, or other changes.
+
+      Decide whether the resolution belongs in the specifications. Update the applicable active delta specifications under `openspec/changes/{{change_name}}/specs/` when it changes or clarifies observable behavior, requirements, scope, or design that should be normative. Do not edit the proposal, design, or tasks, and omit minor technical details from specifications.
+
+      Run relevant targeted checks and, if a specification changed, `openspec validate --type change "{{change_name}}"`. Commit resulting changes using the project's conventions and the `[{{step_id}}]` prefix, then push while keeping the pull request in draft. Do not create an empty commit.
+
+      Continue to next step when the unresolved items and their resulting work are complete and the user says to move on.
+
+  - id: review-and-refine
+    session: lead-agent
+    mode: interactive
+    prompt: |
+      Help the user review, test, and request additional changes for implemented OpenSpec change "{{change_name}}". The pull request must remain a draft.
+
+      Read `{{session_dir}}/output/acceptance-handoff.md` and its evidence. Present a concise implementation summary, validation results, testing instructions, limitations, and relevant screenshots with text equivalents. Give the user room to review and test.
+
+      Implement user-requested fixes and minor enhancements. Confirm changes to behavior, scope, or design before editing. Do not implement requests that materially expand the change's scope or require substantial redesign.
+
+      Before fixing a defect found during acceptance review or testing, you MUST invoke codagent:implement-with-tdd and follow its red-green-refactor process. Add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
+
+      Decide whether a requested change belongs in the specifications. Update the applicable active delta specifications under `openspec/changes/{{change_name}}/specs/` when it changes or clarifies observable behavior, requirements, scope, or design that should be normative. Do not edit the proposal, design, or tasks, and omit minor technical details from specifications.
+
+      Run relevant targeted checks and, if a specification changed, `openspec validate --type change "{{change_name}}"`. Commit completed refinements using the project's conventions and the `[{{step_id}}]` prefix, then push while keeping the pull request in draft. Do not create an empty commit.
+
+      Continue to next step when the user says the requested refinements are complete and the change is ready for final validation.
+
+  - id: recommend-reacceptance-testing
+    session: lead-agent
+    mode: interactive
+    prompt: |
+      Recommend targeted manual re-acceptance testing if changes were made during assumption review or testing and refinement.
+
+      If nothing changed, state that no re-acceptance testing is needed. Otherwise, briefly identify the affected user or client flows and directly dependent flows, recommend a targeted verification scope, and ask whether the user wants it run.
+
+      Continue to next step when the user accepts or declines the recommendation.
+
+  - id: run-validator
+    workflow: ../core/run-validator-v1.0.yaml
+
+  - id: run-reacceptance-testing
+    session: lead-agent
+    mode: autonomous
+    tools: [call_agent]
+    prompt: |
+      Follow the user's decision about targeted re-acceptance testing. If no testing was recommended or the user declined it, continue to next step without running anything.
+
+      Before testing, inspect fixes committed by final validation after the user agreed to the scope. Widen the targeted scope to cover any additional affected or directly dependent flows.
+
+      If the user agreed, use codagent:call-agent with `session: acceptance-tester`. This resumes the tester that established the full-pass baseline when available; first use creates it when this workflow runs standalone. Supply task-specific child instructions requiring codagent:prepare-acceptance with:
+      - approved artifacts: `openspec/changes/{{change_name}}/`;
+      - implementation evidence: `{{session_dir}}/output/*session-report*.out` and `{{session_dir}}/audit.log`;
+      - evidence directory: `{{session_dir}}/output/`;
+      - assumptions ledger: `{{session_dir}}/output/acceptance-assumptions.md`;
+      - verification scope: the affected and directly dependent flows agreed with the user, with a concise impact rationale;
+      - prior full-pass evidence: `{{session_dir}}/output/acceptance-flow-evidence.md`.
+
+      Follow codagent:call-agent's verification and autonomous result-accounting rules rather than performing the acceptance testing yourself. If the targeted pass succeeds, summarize the result and continue to next step.
+
+      If it finds an actionable defect, fix it without expanding the approved scope. Before editing, you MUST invoke codagent:implement-with-tdd and follow its red-green-refactor process. Add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
+
+      Run relevant targeted automated checks, validate changed specifications with `openspec validate --type change "{{change_name}}"`, invoke the validator-run skill, incorporate its fixes, commit using the project's conventions and the `[{{step_id}}]` prefix, and push while keeping the pull request in draft. Then resume `acceptance-tester` with explicit re-review instructions to reproduce the prior finding, verify the fix, and exercise only the affected and directly dependent flows. Retain the earlier full-pass evidence for unaffected flows and do not begin a new broad review. It may report a newly introduced defect only when observed within that targeted scope.
+
+      Use at most three tester calls. Before continuing to next step, overwrite `{{session_dir}}/output/reacceptance-status.txt` with exactly one line:
+      - `REACCEPTANCE_COMPLETE` when testing was not requested or the targeted pass succeeded;
+      - `REACCEPTANCE_FAILED` when three calls do not converge or a finding still requires human judgment.
+
+      For a failed result, preserve and report the remaining findings without claiming that re-acceptance passed.
+
+  - id: reacceptance-gate
+    command: |
+      status_file="{{session_dir}}/output/reacceptance-status.txt"
+      if [ ! -f "$status_file" ]; then
+        echo "re-acceptance testing did not record a result" >&2
+        exit 1
+      fi
+
+      status=$(sed '/^[[:space:]]*$/d' "$status_file" | tail -n 1)
+      if [ "$status" = "REACCEPTANCE_COMPLETE" ]; then
+        exit 0
+      fi
+
+      if [ "$status" = "REACCEPTANCE_FAILED" ]; then
+        echo "targeted re-acceptance testing failed after three tester calls" >&2
+      else
+        echo "invalid re-acceptance result: $status" >&2
+      fi
+      exit 1

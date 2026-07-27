@@ -1,9 +1,0 @@
-name: resume-parent
-description: "Parent workflow for sub-workflow resume test"
-
-steps:
-  - id: run-sub
-    workflow: e2e-sub-workflow-resume-child.yaml
-
-  - id: parent-after
-    command: echo "parent-after-done"

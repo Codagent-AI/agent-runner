@@ -158,7 +158,7 @@ func TestDispatchStepEmitsAuditEnvelopeForEveryStepType(t *testing.T) {
 	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nprintf ok\n"), 0o700); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
-	childPath := filepath.Join(dir, "child.yaml")
+	childPath := filepath.Join(dir, "child-v1.0.yaml")
 	if err := os.WriteFile(childPath, []byte("name: child\nsteps:\n  - id: child-step\n    command: echo child\n"), 0o600); err != nil {
 		t.Fatalf("write child workflow: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestDispatchStepEmitsAuditEnvelopeForEveryStepType(t *testing.T) {
 		},
 		{
 			name:    "sub-workflow",
-			step:    model.Step{ID: "sub", Workflow: "child.yaml"},
+			step:    model.Step{ID: "sub", Workflow: "child-v1.0.yaml"},
 			results: []ProcessResult{{ExitCode: 0}},
 		},
 	}
@@ -223,7 +223,7 @@ func TestDispatchStepEmitsAuditEnvelopeForEveryStepType(t *testing.T) {
 			recorder := &mockAuditLogger{}
 			ctx := model.NewRootContext(&model.RootContextOptions{
 				Params:       map[string]string{},
-				WorkflowFile: filepath.Join(dir, "parent.yaml"),
+				WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"),
 			})
 			ctx.AuditLogger = recorder
 			if tt.setup != nil {

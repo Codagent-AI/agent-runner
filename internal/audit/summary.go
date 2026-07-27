@@ -10,6 +10,8 @@ import (
 	"strings"
 )
 
+const maxAuditRecordBytes = 32 * 1024 * 1024
+
 type Summary struct {
 	Path               string                `json:"path"`
 	SessionDir         string                `json:"session_dir,omitempty"`
@@ -98,26 +100,86 @@ func BuildSummary(r io.Reader, capBytes int) (Summary, error) {
 	}
 
 	used := 0
-	scanner := bufio.NewScanner(r)
-	for lineNo := 1; scanner.Scan(); lineNo++ {
-		line := scanner.Text()
+	err := visitAuditLines(r, func(lineNo int, line string) error {
 		if strings.TrimSpace(line) == "" {
-			continue
+			return nil
 		}
 		event, err := parseAuditLine(line)
 		if err != nil {
-			return Summary{}, fmt.Errorf("parse audit line %d: %w", lineNo, err)
+			return fmt.Errorf("parse audit line %d: %w", lineNo, err)
 		}
 		event.Data = redactValue(event.Data).(map[string]any)
 		if !appendClassifiedEvent(&summary, event, capBytes, &used) {
 			summary.Truncated = true
 			summary.DroppedEventsCount++
 		}
-	}
-	if err := scanner.Err(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return Summary{}, err
 	}
 	return summary, nil
+}
+
+// LatestRunCompleted reports whether the latest run lifecycle in r ended
+// successfully. A later run_start resets an earlier successful run_end.
+func LatestRunCompleted(r io.Reader) (bool, error) {
+	completed := false
+	err := visitAuditLines(r, func(lineNo int, line string) error {
+		if strings.TrimSpace(line) == "" {
+			return nil
+		}
+		event, err := parseAuditLine(line)
+		if err != nil {
+			return fmt.Errorf("parse audit line %d: %w", lineNo, err)
+		}
+		switch event.Type {
+		case EventRunStart:
+			completed = false
+		case EventRunEnd:
+			completed = stringField(event.Data, "outcome") == "success"
+		}
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return completed, nil
+}
+
+func visitAuditLines(r io.Reader, visit func(lineNo int, line string) error) error {
+	reader := bufio.NewReader(r)
+	var record []byte
+	for lineNo := 1; ; {
+		fragment, readErr := reader.ReadSlice('\n')
+		recordBytes := len(record) + len(fragment)
+		if len(fragment) > 0 && fragment[len(fragment)-1] == '\n' {
+			recordBytes--
+		}
+		if recordBytes > maxAuditRecordBytes {
+			return fmt.Errorf("audit line %d exceeds %d MiB", lineNo, maxAuditRecordBytes/(1024*1024))
+		}
+		record = append(record, fragment...)
+
+		if readErr == bufio.ErrBufferFull {
+			continue
+		}
+		if readErr != nil && readErr != io.EOF {
+			return readErr
+		}
+		if len(record) > 0 {
+			line := strings.TrimSuffix(string(record), "\n")
+			line = strings.TrimSuffix(line, "\r")
+			if err := visit(lineNo, line); err != nil {
+				return err
+			}
+		}
+		if readErr == io.EOF {
+			return nil
+		}
+		record = record[:0]
+		lineNo++
+	}
 }
 
 func appendClassifiedEvent(summary *Summary, event Event, capBytes int, used *int) bool {

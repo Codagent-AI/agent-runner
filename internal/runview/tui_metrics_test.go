@@ -639,7 +639,7 @@ func TestNewCompletedRunChoosesDefaultViewFromOutcomeAndMetrics(t *testing.T) {
 
 func TestInspectCompletedRunShowsAuditMetricsEndToEnd(t *testing.T) {
 	dir := t.TempDir()
-	workflowPath := filepath.Join(dir, "workflow.yaml")
+	workflowPath := filepath.Join(dir, "workflow-v1.0.yaml")
 	if err := os.WriteFile(workflowPath, []byte("name: workflow\nsteps:\n  - id: agent\n    agent: test-profile\n    prompt: test\n    mode: autonomous\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

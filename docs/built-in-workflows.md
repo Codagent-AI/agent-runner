@@ -7,7 +7,14 @@ description: Embedded workflow namespaces and workflow purposes.
 
 # Built-In Workflows
 
-Agent Runner embeds namespaced workflows into the binary. Use the TUI or `agent-runner -list` to browse the full embedded set.
+Agent Runner embeds namespaced, versioned workflow files into the binary. Use
+the TUI or `agent-runner -list` to browse one version-neutral row per logical
+workflow.
+
+Launch built-ins with logical names such as `openspec:change`; Agent Runner
+selects the latest embedded version. Exact embedded references such as
+`builtin:openspec/change-v2.0.yaml` are available through read-only debug
+inspection, not fresh execution.
 
 ## Namespaces
 

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"gopkg.in/yaml.v3"
 )
@@ -17,42 +18,42 @@ func TestOnboardingWorkflowsResolveAndAssetsList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve(onboarding:onboarding) returned error: %v", err)
 	}
-	if onboarding != "builtin:onboarding/onboarding.yaml" {
+	if onboarding != "builtin:onboarding/onboarding-v1.0.yaml" {
 		t.Fatalf("onboarding ref = %q", onboarding)
 	}
 	demo, err := Resolve("onboarding:step-types-demo")
 	if err != nil {
 		t.Fatalf("Resolve(onboarding:step-types-demo) returned error: %v", err)
 	}
-	if demo != "builtin:onboarding/step-types-demo.yaml" {
+	if demo != "builtin:onboarding/step-types-demo-v1.0.yaml" {
 		t.Fatalf("demo ref = %q", demo)
 	}
 	guided, err := Resolve("onboarding:guided-workflow")
 	if err != nil {
 		t.Fatalf("Resolve(onboarding:guided-workflow) returned error: %v", err)
 	}
-	if guided != "builtin:onboarding/guided-workflow.yaml" {
+	if guided != "builtin:onboarding/guided-workflow-v1.0.yaml" {
 		t.Fatalf("guided ref = %q", guided)
 	}
 	validator, err := Resolve("onboarding:validator")
 	if err != nil {
 		t.Fatalf("Resolve(onboarding:validator) returned error: %v", err)
 	}
-	if validator != "builtin:onboarding/validator.yaml" {
+	if validator != "builtin:onboarding/validator-v1.0.yaml" {
 		t.Fatalf("validator ref = %q", validator)
 	}
 	advanced, err := Resolve("onboarding:advanced")
 	if err != nil {
 		t.Fatalf("Resolve(onboarding:advanced) returned error: %v", err)
 	}
-	if advanced != "builtin:onboarding/advanced.yaml" {
+	if advanced != "builtin:onboarding/advanced-v1.0.yaml" {
 		t.Fatalf("advanced ref = %q", advanced)
 	}
 	help, err := Resolve("onboarding:help")
 	if err != nil {
 		t.Fatalf("Resolve(onboarding:help) returned error: %v", err)
 	}
-	if help != "builtin:onboarding/help.yaml" {
+	if help != "builtin:onboarding/help-v1.0.yaml" {
 		t.Fatalf("help ref = %q", help)
 	}
 
@@ -88,6 +89,210 @@ func TestOnboardingWorkflowsResolveAndAssetsList(t *testing.T) {
 	} {
 		if slices.Contains(assets, removed) {
 			t.Fatalf("removed setup asset %q still embedded in onboarding namespace assets %v", removed, assets)
+		}
+	}
+}
+
+func TestResolveSelectsLatestVersionWhileExactReadsRemainAvailable(t *testing.T) {
+	ref, err := Resolve("openspec:change")
+	if err != nil {
+		t.Fatalf("Resolve(openspec:change): %v", err)
+	}
+	if ref != "builtin:openspec/change-v2.0.yaml" {
+		t.Fatalf("resolved ref = %q, want latest v2.0", ref)
+	}
+
+	if _, err := ReadFile("builtin:openspec/change-v1.0.yaml"); err != nil {
+		t.Fatalf("ReadFile exact older version: %v", err)
+	}
+	latest, err := ReadFile(ref)
+	if err != nil {
+		t.Fatalf("ReadFile latest version: %v", err)
+	}
+	if strings.Contains(string(latest), "openspec:change2") {
+		t.Fatalf("latest openspec:change still contains legacy openspec:change2 user-facing text")
+	}
+	if legacy, err := Resolve("openspec:change2"); err == nil {
+		t.Fatalf("Resolve(openspec:change2) = %q, want not found", legacy)
+	}
+
+	refs, err := List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, want := range []string{
+		"builtin:openspec/change-v1.0.yaml",
+		"builtin:openspec/change-v2.0.yaml",
+	} {
+		if !slices.Contains(refs, want) {
+			t.Fatalf("List() missing %q from %v", want, refs)
+		}
+	}
+}
+
+func TestOpenSpecPairsAndSpecDrivenFirstGenerationsAreEmbedded(t *testing.T) {
+	refs, err := List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	for _, logicalName := range []string{"change", "plan-change", "implement-change"} {
+		for _, version := range []string{"v1.0", "v2.0"} {
+			want := "builtin:openspec/" + logicalName + "-" + version + ".yaml"
+			if !slices.Contains(refs, want) {
+				t.Errorf("List() missing paired OpenSpec generation %q", want)
+			}
+		}
+
+		firstGeneration := "builtin:spec-driven/" + logicalName + "-v1.0.yaml"
+		if !slices.Contains(refs, firstGeneration) {
+			t.Errorf("List() missing spec-driven first generation %q", firstGeneration)
+		}
+		unwantedSecondGeneration := "builtin:spec-driven/" + logicalName + "-v2.0.yaml"
+		if slices.Contains(refs, unwantedSecondGeneration) {
+			t.Errorf("List() unexpectedly contains %q", unwantedSecondGeneration)
+		}
+	}
+}
+
+func TestOpenSpecReviewTasksWorkflowAndGateRemainEmbedded(t *testing.T) {
+	ref, err := Resolve("openspec:review-tasks")
+	if err != nil {
+		t.Fatalf("Resolve(openspec:review-tasks): %v", err)
+	}
+	if ref != "builtin:openspec/review-tasks-v1.0.yaml" {
+		t.Fatalf("resolved ref = %q, want review-tasks v1.0", ref)
+	}
+
+	assets, err := ListAssets("openspec")
+	if err != nil {
+		t.Fatalf("ListAssets(openspec): %v", err)
+	}
+	if !slices.Contains(assets, "task-review-loop-gate.sh") {
+		t.Fatalf("ListAssets(openspec) missing task-review-loop-gate.sh: %v", assets)
+	}
+	if body, err := ReadAsset("openspec/task-review-loop-gate.sh"); err != nil {
+		t.Fatalf("ReadAsset(task-review-loop-gate.sh): %v", err)
+	} else if len(body) == 0 {
+		t.Fatal("task-review-loop-gate.sh is empty")
+	}
+
+	info, err := os.Stat("openspec/task-review-loop-gate.sh")
+	if err != nil {
+		t.Fatalf("stat task-review-loop-gate.sh: %v", err)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("task-review-loop-gate.sh mode = %v, want executable", info.Mode().Perm())
+	}
+}
+
+func TestOpenSpecTaskReviewLoopGateHandlesLargeReportWithoutJQ(t *testing.T) {
+	script, err := ReadAsset("openspec/task-review-loop-gate.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(task-review-loop-gate.sh): %v", err)
+	}
+
+	scriptPath := filepath.Join(t.TempDir(), "task-review-loop-gate.sh")
+	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
+		t.Fatalf("write task review gate: %v", err)
+	}
+
+	binDir := t.TempDir()
+	for _, name := range []string{"cat", "python3", "sed", "tail"} {
+		target, err := exec.LookPath(name)
+		if err != nil {
+			t.Skipf("%s not available", name)
+		}
+		if err := os.Symlink(target, filepath.Join(binDir, name)); err != nil {
+			t.Fatalf("symlink %s: %v", name, err)
+		}
+	}
+
+	report := strings.Repeat("x", 3<<20) + "\nREVIEW_RESOLVED\n"
+	cmd := exec.Command("sh", scriptPath)
+	cmd.Env = append(os.Environ(), "PATH="+binDir)
+	cmd.Stdin = strings.NewReader(`{"report":` + strconv.Quote(report) + `}`)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("large report failed without jq: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "Task review loop: resolved") {
+		t.Fatalf("output = %q, want resolved status", out)
+	}
+}
+
+func TestResolveFSRejectsInvalidAndDuplicateLogicalGroups(t *testing.T) {
+	t.Run("unversioned sibling invalidates versioned group", func(t *testing.T) {
+		fsys := fstest.MapFS{
+			"team/deploy.yaml":      {Data: []byte("name: deploy\n")},
+			"team/deploy-v1.0.yaml": {Data: []byte("name: deploy\n")},
+		}
+
+		_, err := resolveFS(fsys, "team:deploy")
+		if err == nil {
+			t.Fatal("resolveFS succeeded, want invalid filename error")
+		}
+		for _, want := range []string{"team/deploy.yaml", "deploy-v1.0.yaml"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error = %v, want text %q", err, want)
+			}
+		}
+	})
+
+	t.Run("yaml and yml duplicate version invalidates group", func(t *testing.T) {
+		fsys := fstest.MapFS{
+			"team/deploy-v1.0.yaml": {Data: []byte("name: deploy\n")},
+			"team/deploy-v1.0.yml":  {Data: []byte("name: deploy\n")},
+		}
+
+		_, err := resolveFS(fsys, "team:deploy")
+		if err == nil || !strings.Contains(err.Error(), "duplicate version v1.0") {
+			t.Fatalf("resolveFS error = %v, want duplicate version", err)
+		}
+	})
+}
+
+func TestDefinitionEnumerationIncludesYMLButExcludesMetadataAndTopLevelFiles(t *testing.T) {
+	fsys := fstest.MapFS{
+		"top-v1.0.yaml":          {Data: []byte("name: top\n")},
+		"core/_group.yaml":       {Data: []byte("display_name: Core\n")},
+		"core/deploy-v1.0.yml":   {Data: []byte("name: deploy\n")},
+		"core/deploy-v2.0.yaml":  {Data: []byte("name: deploy\n")},
+		"core/data.json":         {Data: []byte("{}")},
+		"core/nested/readme.txt": {Data: []byte("docs")},
+	}
+
+	ref, err := resolveFS(fsys, "core:deploy")
+	if err != nil {
+		t.Fatalf("resolveFS: %v", err)
+	}
+	if ref != "builtin:core/deploy-v2.0.yaml" {
+		t.Fatalf("resolveFS ref = %q, want latest YAML definition", ref)
+	}
+
+	refs, err := listFS(fsys)
+	if err != nil {
+		t.Fatalf("listFS: %v", err)
+	}
+	want := []string{"builtin:core/deploy-v1.0.yml", "builtin:core/deploy-v2.0.yaml"}
+	if !slices.Equal(refs, want) {
+		t.Fatalf("listFS refs = %v, want %v", refs, want)
+	}
+
+	if _, err := ReadAsset("core/deploy-v1.0.yml"); err == nil || !strings.Contains(err.Error(), "is a workflow") {
+		t.Fatalf("ReadAsset(YML definition) error = %v, want workflow rejection", err)
+	}
+}
+
+func TestBuiltinReferenceAndAssetPathsStayConfined(t *testing.T) {
+	for _, ref := range []string{"builtin:../core/debug-v1.0.yaml", "builtin:/core/debug-v1.0.yaml"} {
+		if _, err := RefPath(ref); err == nil {
+			t.Fatalf("RefPath(%q) succeeded, want confinement error", ref)
+		}
+	}
+	for _, asset := range []string{"../core/debug/prompt.md", "/core/debug/prompt.md"} {
+		if _, err := ReadAsset(asset); err == nil {
+			t.Fatalf("ReadAsset(%q) succeeded, want confinement error", asset)
 		}
 	}
 }
@@ -143,7 +348,7 @@ func TestNamespaceGroupMetadataEmbedded(t *testing.T) {
 }
 
 func TestOpenSpecPlanningWorkflowsUseSharedCreateScript(t *testing.T) {
-	for _, ref := range []string{"builtin:openspec/plan-change.yaml", "builtin:openspec/simple-change.yaml"} {
+	for _, ref := range []string{"builtin:openspec/plan-change-v1.0.yaml", "builtin:openspec/simple-change-v1.0.yaml"} {
 		t.Run(ref, func(t *testing.T) {
 			data, err := ReadFile(ref)
 			if err != nil {
@@ -182,7 +387,7 @@ func TestOpenSpecPlanningWorkflowsUseSharedCreateScript(t *testing.T) {
 }
 
 func TestCoreReviewProposalUsesReviewerAgentProfile(t *testing.T) {
-	data, err := ReadFile("builtin:core/review-proposal.yaml")
+	data, err := ReadFile("builtin:core/review-proposal-v1.0.yaml")
 	if err != nil {
 		t.Fatalf("ReadFile(core/review-proposal): %v", err)
 	}
@@ -210,7 +415,7 @@ func TestCoreReviewProposalUsesReviewerAgentProfile(t *testing.T) {
 }
 
 func TestCoreFinalizePRUsesCIStatusGate(t *testing.T) {
-	data, err := ReadFile("builtin:core/finalize-pr.yaml")
+	data, err := ReadFile("builtin:core/finalize-pr-v1.0.yaml")
 	if err != nil {
 		t.Fatalf("ReadFile(core/finalize-pr): %v", err)
 	}
@@ -319,45 +524,12 @@ func TestCoreCIStatusGateScript(t *testing.T) {
 		report   string
 		wantCode int
 	}{
-		{name: "passed exits success", report: "## CI Status: passed\n", wantCode: 0},
-		{name: "failed exits fixable failure", report: "## CI Status: failed\n", wantCode: 1},
-		{name: "comments exits fixable failure", report: "## CI Status: comments\n", wantCode: 1},
-		{
-			name: "comments with only informational bot comments exits success",
-			report: `## CI Status: comments
-
-CI is green, with no failed checks, no pending checks, no blocking reviews, and no unresolved inline review threads.
-
-### PR Comments
-- **coderabbitai**: CodeRabbit hit a review rate limit.
-- **qodo-code-review**: Top-level review comment is present. Its summary reports ` + "`Bugs (0)`" + `, ` + "`Rule violations (0)`" + `, and ` + "`Requirement gaps (0)`" + `.
-`,
-			wantCode: 0,
-		},
-		{
-			name: "comments with unresolved inline threads exits fixable failure",
-			report: `## CI Status: comments
-
-CI is passing, but unresolved PR review comments remain.
-
-### PR Comments
-Unresolved review threads: 2
-`,
-			wantCode: 1,
-		},
-		{
-			name: "comments ignores reassuring phrases inside pr comments",
-			report: `## CI Status: comments
-
-CI is passing, but unresolved PR review comments remain.
-
-### PR Comments
-Unresolved review threads: 2
-- **reviewer**: no failed checks, no pending checks, no blocking reviews, and no unresolved inline review threads
-`,
-			wantCode: 1,
-		},
-		{name: "pending exits failure to keep polling", report: "## CI Status: pending\n", wantCode: 1},
+		{name: "passed marker exits success", report: "CI is green.\n\nCI_PASSED\n", wantCode: 0},
+		{name: "failed marker exits fixable failure", report: "CI failed.\n\nCI_FAILED\n", wantCode: 1},
+		{name: "comments marker exits fixable failure", report: "Review feedback remains.\n\nCI_COMMENTS\n", wantCode: 1},
+		{name: "pending marker exits failure to keep polling", report: "Checks are running.\n\nCI_PENDING\n", wantCode: 1},
+		{name: "markdown heading without marker fails closed", report: "## CI Status: passed\n", wantCode: 1},
+		{name: "marker must be final non-empty line", report: "CI_PASSED\nAdditional prose\n", wantCode: 1},
 		{name: "unknown exits failure to keep polling", report: "wait-ci did not produce a status\n", wantCode: 1},
 	}
 
@@ -382,7 +554,7 @@ Unresolved review threads: 2
 }
 
 func TestCoreDebugWorkflowIsSinglePromptStepAndDoesNotUseResumeHandoff(t *testing.T) {
-	data, err := ReadFile("builtin:core/debug.yaml")
+	data, err := ReadFile("builtin:core/debug-v1.0.yaml")
 	if err != nil {
 		t.Fatalf("ReadFile(core/debug): %v", err)
 	}
@@ -461,45 +633,12 @@ func TestCoreCIFixNeededGateScript(t *testing.T) {
 		report   string
 		wantCode int
 	}{
-		{name: "failed exits failure so fix-pr runs", report: "## CI Status: failed\n", wantCode: 1},
-		{name: "comments exits failure so fix-pr runs", report: "## CI Status: comments\n", wantCode: 1},
-		{
-			name: "comments with only informational bot comments exits success so fix-pr skips",
-			report: `## CI Status: comments
-
-CI is green, with no failed checks, no pending checks, no blocking reviews, and no unresolved inline review threads.
-
-### PR Comments
-- **coderabbitai**: CodeRabbit hit a review rate limit.
-- **qodo-code-review**: Top-level review comment is present. Its summary reports ` + "`Bugs (0)`" + `, ` + "`Rule violations (0)`" + `, and ` + "`Requirement gaps (0)`" + `.
-`,
-			wantCode: 0,
-		},
-		{
-			name: "comments with unresolved inline threads exits failure so fix-pr runs",
-			report: `## CI Status: comments
-
-CI is passing, but unresolved PR review comments remain.
-
-### PR Comments
-Unresolved review threads: 2
-`,
-			wantCode: 1,
-		},
-		{
-			name: "comments ignores reassuring phrases inside pr comments",
-			report: `## CI Status: comments
-
-CI is passing, but unresolved PR review comments remain.
-
-### PR Comments
-Unresolved review threads: 2
-- **reviewer**: no failed checks, no pending checks, no blocking reviews, and no unresolved inline review threads
-`,
-			wantCode: 1,
-		},
-		{name: "passed exits success so fix-pr skips", report: "## CI Status: passed\n", wantCode: 0},
-		{name: "pending exits success so fix-pr skips", report: "## CI Status: pending\n", wantCode: 0},
+		{name: "failed marker exits failure so fix-pr runs", report: "CI_FAILED\n", wantCode: 1},
+		{name: "comments marker exits failure so fix-pr runs", report: "CI_COMMENTS\n", wantCode: 1},
+		{name: "passed marker exits success so fix-pr skips", report: "CI_PASSED\n", wantCode: 0},
+		{name: "pending marker exits success so fix-pr skips", report: "CI_PENDING\n", wantCode: 0},
+		{name: "markdown heading without marker skips fixer", report: "## CI Status: failed\n", wantCode: 0},
+		{name: "marker must be final non-empty line", report: "CI_FAILED\nAdditional prose\n", wantCode: 0},
 		{name: "unknown exits success so fix-pr skips", report: "wait-ci did not produce a status\n", wantCode: 0},
 	}
 
@@ -534,7 +673,7 @@ Unresolved review threads: 2
 
 		cmd := exec.Command("sh", scriptPath)
 		cmd.Env = append(os.Environ(), "PATH="+binDir+":/usr/bin:/bin")
-		cmd.Stdin = strings.NewReader(`{"report":"intro \"quoted\"\n## CI Status: comments\n"}`)
+		cmd.Stdin = strings.NewReader(`{"report":"intro \"quoted\"\nCI_COMMENTS\n"}`)
 		err = cmd.Run()
 		if err == nil {
 			t.Fatal("fallback script exit code = 0, want fix-needed failure")

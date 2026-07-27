@@ -4,12 +4,16 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"path/filepath"
 
+	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/engine"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/stateio"
+	"github.com/codagent/agent-runner/internal/workflowcatalog"
+	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
 // ErrAlreadyCompleted is returned by PrepareResume and ResumeWorkflow when
@@ -26,13 +30,13 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		return nil, err
 	}
 
-	if state.Completed {
+	if resumeAlreadyCompleted(stateFilePath, &state) {
 		return nil, ErrAlreadyCompleted
 	}
 
-	workflow, err := loader.LoadWorkflow(state.WorkflowFile, loader.Options{})
+	workflow, err := loadRecordedWorkflow(state.WorkflowFile)
 	if err != nil {
-		return nil, fmt.Errorf("cannot reload workflow: %w", err)
+		return nil, err
 	}
 
 	// Check workflow hash
@@ -128,6 +132,39 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	}
 
 	return PrepareRun(&workflow, state.Params, resumeOpts)
+}
+
+func resumeAlreadyCompleted(stateFilePath string, state *model.RunState) bool {
+	if state.Completed {
+		return true
+	}
+	return auditShowsCompleted(filepath.Join(filepath.Dir(stateFilePath), "audit.log"))
+}
+
+// auditShowsCompleted treats an unreadable or malformed audit as inconclusive;
+// only a successfully parsed run_end can override incomplete persisted state.
+func auditShowsCompleted(auditPath string) bool {
+	file, err := os.Open(auditPath) // #nosec G304 -- audit path is derived from the selected state file.
+	if err != nil {
+		return false
+	}
+	defer func() { _ = file.Close() }()
+	completed, err := audit.LatestRunCompleted(file)
+	return err == nil && completed
+}
+
+func loadRecordedWorkflow(workflowFile string) (model.Workflow, error) {
+	workflow, err := loader.LoadWorkflow(workflowFile, loader.Options{})
+	if err == nil {
+		return workflow, nil
+	}
+	var filenameErr *workflowcatalog.FilenameError
+	if builtinworkflows.IsRef(workflowFile) && errors.As(err, &filenameErr) {
+		return model.Workflow{}, fmt.Errorf(
+			"cannot reload workflow: run predates workflow versioning and cannot be resumed by the current binary; restart the workflow with the current binary or finish this run using the older binary",
+		)
+	}
+	return model.Workflow{}, fmt.Errorf("cannot reload workflow: %w", err)
 }
 
 func resumeInteractiveAttempt(state *model.RunState) *model.InteractiveAttemptMetadata {

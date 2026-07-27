@@ -495,7 +495,7 @@ func TestRunWorkflowUntilStopsWhenNamedTopLevelStepIsSkipped(t *testing.T) {
 func TestMaterializeBundledAssetsCreatesMarkerForNamespaceWithoutAssets(t *testing.T) {
 	sessionDir := t.TempDir()
 
-	if err := materializeBundledAssets(sessionDir, "builtin:openspec/change.yaml"); err != nil {
+	if err := materializeBundledAssets(sessionDir, "builtin:openspec/change-v1.0.yaml"); err != nil {
 		t.Fatalf("materialize bundled assets: %v", err)
 	}
 
@@ -508,7 +508,7 @@ func TestMaterializeBundledAssetsCreatesMarkerForNamespaceWithoutAssets(t *testi
 func TestMaterializeBundledAssetsPutsDebugPromptAtPromptPath(t *testing.T) {
 	sessionDir := t.TempDir()
 
-	if err := materializeBundledAssets(sessionDir, "builtin:core/debug.yaml"); err != nil {
+	if err := materializeBundledAssets(sessionDir, "builtin:core/debug-v1.0.yaml"); err != nil {
 		t.Fatalf("materialize bundled assets: %v", err)
 	}
 
@@ -1249,7 +1249,7 @@ func TestPrepareRun_SeedsResumeState(t *testing.T) {
 		Name: "my-workflow",
 		Steps: []model.Step{
 			shellStep("before", "echo before"),
-			{ID: "validator", Workflow: "validator.yaml"},
+			{ID: "validator", Workflow: "validator-v1.0.yaml"},
 		},
 	}
 	w.ApplyDefaults()

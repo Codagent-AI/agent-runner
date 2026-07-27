@@ -2,8 +2,8 @@
 exec agent-runner workflow
 stdout 'captured:hello'
 
--- .agent-runner/workflows/workflow.yaml --
-name: e2e-capture
+-- .agent-runner/workflows/workflow-v1.0.yaml --
+name: workflow
 steps:
   - id: capture-step
     command: echo hello

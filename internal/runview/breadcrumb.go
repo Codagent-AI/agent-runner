@@ -35,6 +35,9 @@ func (m *Model) renderBreadcrumb() string {
 
 	sep := tuistyle.AccentStyle.Render(tuistyle.BreadcrumbSeparator)
 	crumbStr := tuistyle.LabelStyle.Render("← " + crumbs[0])
+	if m.recordedVersion != "" {
+		crumbStr += tuistyle.DimStyle.Render(" · " + m.recordedVersion)
+	}
 	for _, c := range crumbs[1:] {
 		crumbStr += sep + tuistyle.LabelStyle.Render(c)
 	}

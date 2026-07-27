@@ -1,0 +1,57 @@
+name: implement-change
+description: "For-each loop over task files, invoking implement-task per task"
+hidden: true
+
+params:
+  - name: change_name
+    required: true
+
+sessions:
+  - name: lead-agent
+    agent: planner
+
+steps:
+  - id: implement-tasks
+    loop:
+      over: "openspec/changes/{{change_name}}/tasks/*.md"
+      as: task_file
+      require_matches: true
+    steps:
+      - id: implement-single-task
+        workflow: ../core/implement-task-v1.0.yaml
+        params:
+          task_file: "{{task_file}}"
+          run_session_report: "true"
+
+  - id: review-assumptions
+    session: lead-agent
+    prompt: |
+      The implementor iterations for change "{{change_name}}" have completed. Each iteration produced a session report (via codagent:session-report) listing risky and notable assumptions plus any context gaps.
+
+      Session-report output for this run is persisted as one file per iteration at:
+
+          {{session_dir}}/output/*session-report*.out
+
+      The iteration index is embedded in each filename (e.g. `..._implement-tasks_0_...`). Cross-reference the task file for each iteration against the `step_start` event in `{{session_dir}}/audit.log` — audit.log carries event metadata only, not the report text itself.
+
+      You MUST use the codagent:review-assumptions skill to audit those findings. Apply high-confidence fixes directly, ask the user one question at a time for ambiguous findings, and surface context gaps in your final summary. For any commit created in this step, follow the project's commit message conventions and prepend [{{step_id}}].
+
+  - id: simplify
+    session: lead-agent
+    mode: autonomous
+    prompt: |
+      If the /simplify skill is available, run it focusing on code reuse and readability. If it is not available, review all changes for duplicated logic that should be extracted into shared helpers, and readability issues like deep nesting, unclear naming, or overly complex conditionals. Fix and commit anything clear-cut, following the project's commit message conventions and prepending [{{step_id}}].
+
+  - id: run-validator
+    workflow: ../core/run-validator-v1.0.yaml
+    continue_on_failure: true
+
+  - id: archive
+    command: |
+      openspec archive "{{change_name}}" --yes
+      git add openspec
+      git commit -m "[{{step_id}}] chore: archive openspec documents for {{change_name}}"
+      agent-validator skip
+
+  - id: finalize
+    workflow: ../core/finalize-pr-v1.0.yaml
