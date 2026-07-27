@@ -2,9 +2,9 @@
 
 ### Requirement: Recommendation-first setup presentation
 
-Native setup SHALL present a dedicated non-actionable loading state while it detects available CLIs and discovers models for the four standard roles. After discovery completes, native setup SHALL present a single actionable summary containing the recommended planner, reviewer, implementor, and tester selections before asking the user to accept or customize them.
+Native setup SHALL present a dedicated non-actionable loading state while it detects available CLIs and discovers models for the four standard roles. After discovery completes, native setup SHALL present a single actionable summary containing the recommended lead, crosscheck, implementor, and tester selections before asking the user to accept or customize them.
 
-The summary SHALL identify the recommended CLI and model for each role, SHALL disclose any model-discovery failure or fallback that affected a recommendation, and SHALL offer distinct actions to accept all recommendations or customize them. The customization path SHALL visit roles in planner, reviewer, implementor, then tester order.
+The summary SHALL identify the recommended CLI and model for each role, SHALL disclose any model-discovery failure or fallback that affected a recommendation, and SHALL offer distinct actions to accept all recommendations or customize them. The customization path SHALL visit roles in lead, crosscheck, implementor, then tester order.
 
 #### Scenario: Discovery has a dedicated loading state
 - **WHEN** native setup is detecting CLIs or discovering models
@@ -13,7 +13,7 @@ The summary SHALL identify the recommended CLI and model for each role, SHALL di
 
 #### Scenario: Summary presents all recommendations together
 - **WHEN** CLI and model discovery completes
-- **THEN** native setup presents planner, reviewer, implementor, and tester recommendations on one summary screen
+- **THEN** native setup presents lead, crosscheck, implementor, and tester recommendations on one summary screen
 - **AND** each recommendation identifies its CLI and selected model or CLI-default fallback
 - **AND** the screen offers actions to accept all recommendations or customize them
 
@@ -24,7 +24,7 @@ The summary SHALL identify the recommended CLI and model for each role, SHALL di
 
 #### Scenario: Customization follows role order
 - **WHEN** the user chooses to customize the recommendations
-- **THEN** native setup presents role customization in planner, reviewer, implementor, then tester order
+- **THEN** native setup presents role customization in lead, crosscheck, implementor, then tester order
 
 ## MODIFIED Requirements
 
@@ -32,7 +32,7 @@ The summary SHALL identify the recommended CLI and model for each role, SHALL di
 
 Every actionable selection screen in native setup SHALL include a title and a short explanatory paragraph (2-4 sentences) that describes what is being asked and why it matters. The tone SHALL be friendly and informative — not terse, not verbose. The non-actionable recommendation loading state SHALL include concise status copy explaining that Agent Runner is inspecting available CLIs and models.
 
-The recommendation experience SHALL include a brief welcoming sentence acknowledging this is initial setup. Its summary SHALL explain that the four selections configure planning, review, implementation, and acceptance testing. Each role-customization screen SHALL explain what that role does and what its CLI or model selection controls.
+The recommendation experience SHALL include a brief welcoming sentence acknowledging this is initial setup. Its summary SHALL explain that the four selections configure interactive leadership, independent planning crosscheck, implementation, and acceptance testing. Crosscheck copy SHALL explain that it challenges Lead's planning artifacts and looks for omissions, while Agent Validator owns implementation-code review. Each role-customization screen SHALL explain what that role does and what its CLI or model selection controls.
 
 A default-model screen SHALL explain that Agent Runner will use the CLI default and leave the model field unset. The autonomous-backend screen SHALL explain the runtime behavior of the headless, interactive, and interactive-Claude choices, SHALL identify headless as the recommendation, and SHALL NOT make claims about provider billing policy. The scope screen SHALL explain the difference between global and project scope. The demo prompt screen SHALL explain what the onboarding demo is and what the user will see if they continue.
 
@@ -45,6 +45,11 @@ A default-model screen SHALL explain that Agent Runner will use the CLI default 
 - **WHEN** native setup renders a CLI or model selection screen for a role
 - **THEN** the screen explains what the corresponding role does
 - **AND** it explains what the current selection controls
+
+#### Scenario: Crosscheck is distinguished from code review
+- **WHEN** native setup presents the recommendation summary or Crosscheck customization
+- **THEN** the copy describes Crosscheck as an independent challenge to Lead's planning artifacts and completeness
+- **AND** identifies Agent Validator as the implementation-code review system
 
 #### Scenario: Default-model screen explains fallback
 - **WHEN** native setup renders a default-model screen after empty or failed model discovery
@@ -68,7 +73,7 @@ A default-model screen SHALL explain that Agent Runner will use the CLI default 
 
 Native setup SHALL show a compact wizard-style step indicator inside the setup panel on actionable setup screens. The indicator SHALL be centered above the screen heading and SHALL include text in the form `Step N of X` plus a visual progress bar. Recommendation loading SHALL NOT show a wizard step indicator, and the recommendation summary SHALL be the first actionable step.
 
-When the user accepts all recommendations, the wizard total SHALL omit the four role-customization steps. When the user chooses customization, the wizard total SHALL include one semantic step for each role in planner, reviewer, implementor, then tester order. A role's CLI selection, model-loading state, model selection, and default-model fallback SHALL all show the same step number. The total SHALL reflect the selected branch and SHALL include an overwrite-confirmation step only when that confirmation is shown. Demo-prompt-only re-show mode SHALL NOT show native setup progress.
+When the user accepts all recommendations, the wizard total SHALL omit the four role-customization steps. When the user chooses customization, the wizard total SHALL include one semantic step for each role in lead, crosscheck, implementor, then tester order. A role's CLI selection, model selection, and default-model fallback SHALL all show the same step number. The total SHALL reflect the selected branch and SHALL include an overwrite-confirmation step only when that confirmation is shown. Demo-prompt-only re-show mode SHALL NOT show native setup progress.
 
 #### Scenario: Loading state omits progress
 - **WHEN** native setup is loading recommendations
@@ -81,16 +86,16 @@ When the user accepts all recommendations, the wizard total SHALL omit the four 
 
 #### Scenario: Accept-all omits customization steps
 - **WHEN** the user accepts all four recommendations
-- **THEN** the progress total omits planner, reviewer, implementor, and tester customization steps
+- **THEN** the progress total omits lead, crosscheck, implementor, and tester customization steps
 - **AND** the next actionable screen advances from the recommendation-summary step
 
 #### Scenario: Customize adds one step per role
 - **WHEN** the user chooses to customize the recommendations
-- **THEN** the progress total includes one step each for planner, reviewer, implementor, and tester
+- **THEN** the progress total includes one step each for lead, crosscheck, implementor, and tester
 - **AND** those role steps occur in that order
 
 #### Scenario: Role sub-states preserve wizard step
-- **WHEN** native setup moves among CLI selection, model loading, model selection, or default-model fallback for one role
+- **WHEN** native setup moves among CLI selection, model selection, or default-model fallback for one role
 - **THEN** the panel shows the same step number for all of those states
 
 #### Scenario: Overwrite confirmation conditionally adds a step

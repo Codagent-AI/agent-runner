@@ -1,4 +1,20 @@
-## ADDED Requirements
+# Task: Canonicalize Standard Roles
+
+## Goal
+
+Establish `lead`, `crosscheck`, `implementor`, and `tester` as the canonical built-in roles while keeping `planner` and `reviewer` as safe, warning-producing compatibility aliases. Cut built-in workflows over to the canonical names and route acceptance-flow testing through Tester without changing retries, evidence handling, or session behavior.
+
+## Background
+
+Agent Runner currently defines its default agents and layer-merging behavior in `internal/config/config.go`; profile consumers resolve names through `Config.Resolve` from workflow execution, prevalidation, and runtime agent calls. The implementation must canonicalize each global or project layer before ordinary precedence is applied so a legacy override can replace a canonical built-in and a higher-layer synonym still wins. Canonicalization must also cover agent-level `extends` targets and names passed by workflow steps, named-session declarations, and runtime `call_agent` targets.
+
+Do not rewrite legacy configuration on load. Reject a canonical and legacy synonym declared together in one profile layer with an actionable error. Return structured deprecation metadata from configuration/resolution code and emit each distinct alias warning at most once at the command or run boundary; non-TUI paths use stderr, while workflow/TUI paths must retain visible diagnostic or audit evidence.
+
+Replace the six-agent defaults in `internal/config/config.go` with the approved seven-agent shape. Update focused coverage in `internal/config/config_test.go`, `internal/config/autonomous_profiles_test.go`, resolution consumers such as `internal/exec/agent.go`, `internal/exec/agent_call.go`, and `internal/prevalidate/pipeline.go`, plus command/run warning tests.
+
+Update canonical role references throughout embedded workflow YAML and its tests. Planning leadership uses `lead`; independent planning-artifact challenge uses `crosscheck`. In particular, `workflows/openspec/implement-change2.yaml` and `workflows/openspec/accept-change.yaml` must call `tester` for initial and targeted acceptance testing. Preserve acceptance-call freshness, retry limits, verification scopes, evidence paths, and handoff behavior. Update other built-in workflow role references and user-facing workflow prompt terminology consistently, including `workflows/core/`, `workflows/openspec/`, `workflows/spec-driven/`, and `workflows/onboarding/`, with corresponding assertions in `workflows/embed_test.go` and onboarding workflow tests.
+
+## Spec
 
 ### Requirement: Legacy planning-role aliases
 
@@ -38,8 +54,6 @@ A single profile layer that declares both `lead` and `planner`, or both `crossch
 #### Scenario: Legacy file is not rewritten on load
 - **WHEN** the runner loads a valid config file containing only legacy planning-role aliases
 - **THEN** it leaves the file contents unchanged
-
-## MODIFIED Requirements
 
 ### Requirement: Built-in default profile set
 
@@ -83,3 +97,12 @@ The runner SHALL NOT create `.agent-runner/config.yaml` or any other config file
 #### Scenario: Summarizer agent resolves to Claude Haiku
 - **WHEN** a workflow step references `agent: summarizer` with no global or project override
 - **THEN** the resolved summarizer has default_mode=autonomous, cli=claude, model=haiku, and effort=low
+
+## Done When
+
+- Focused configuration, resolver, runtime agent-call, prevalidation, warning, and embedded-workflow tests cover every scenario above and pass.
+- Canonicalization occurs before layer precedence and handles profile entries, `extends`, workflow/session agent references, and runtime agent calls without mutating source files.
+- Same-layer synonym conflicts fail clearly, and each used legacy alias produces one undated warning per command or run with retained workflow diagnostics.
+- The in-memory default profile contains exactly the approved seven agents and creates no files.
+- Built-in workflows use canonical role names; planning review uses Crosscheck, and acceptance passes in `implement-change2` and `accept-change` use Tester while preserving their existing behavioral controls.
+- Targeted package tests pass, followed by `make fmt`, `make test`, and `make lint`.
