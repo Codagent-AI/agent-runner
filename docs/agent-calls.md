@@ -21,7 +21,7 @@ steps:
     agent: lead
     mode: autonomous
     prompt: |
-      Implement the requested change. Use call_agent with agent `reviewer`
+      Implement the requested change. Use call_agent with agent `crosscheck`
       when an independent review would help.
 ```
 
@@ -45,7 +45,7 @@ A typical profile-targeted request is equivalent to:
 ```json
 {
   "prompt": "Review the current diff and report consequential defects.",
-  "agent": "reviewer",
+  "agent": "crosscheck",
   "model": "sonnet",
   "workdir": "."
 }
@@ -95,7 +95,7 @@ Each `agent: <profile>` call is fresh, even when the same profile is called repe
 
 ## Live And Completed Views
 
-An accepted call appears beneath its parent with an `↗` glyph and an explicit label such as `call session: implementor-session` or `call agent: reviewer`. The parent shows its call count. Repeated calls remain separate and are ordered by acceptance time.
+An accepted call appears beneath its parent with an `↗` glyph and an explicit label such as `call session: implementor-session` or `call agent: crosscheck`. The parent shows its call count. Repeated calls remain separate and are ordered by acceptance time.
 
 For an autonomous-headless parent, the live run view follows the active call and streams its stdout and stderr into the child's detail pane, separate from parent output. Manual navigation pauses auto-follow. When an interactive parent owns the terminal, Agent Runner does not interrupt it to draw the TUI; accumulated calls appear when terminal ownership returns.
 

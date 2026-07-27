@@ -21,10 +21,14 @@ import (
 )
 
 type writeProfilePayload struct {
-	InteractiveCLI   string `json:"interactive_cli"`
-	InteractiveModel string `json:"interactive_model"`
-	HeadlessCLI      string `json:"headless_cli"`
-	HeadlessModel    string `json:"headless_model"`
+	LeadCLI          string `json:"lead_cli"`
+	LeadModel        string `json:"lead_model"`
+	CrosscheckCLI    string `json:"crosscheck_cli"`
+	CrosscheckModel  string `json:"crosscheck_model"`
+	ImplementorCLI   string `json:"implementor_cli"`
+	ImplementorModel string `json:"implementor_model"`
+	TesterCLI        string `json:"tester_cli"`
+	TesterModel      string `json:"tester_model"`
 	TargetPath       string `json:"target_path"`
 }
 
@@ -263,11 +267,24 @@ func decodeWriteProfilePayload(r io.Reader, payload *writeProfilePayload) error 
 	if err := dec.Decode(payload); err != nil {
 		return fmt.Errorf("decode write-profile payload: %w", err)
 	}
-	if payload.InteractiveCLI == "" {
-		return fmt.Errorf("write-profile payload missing interactive_cli")
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("write-profile payload must contain a single JSON object")
+		}
+		return fmt.Errorf("decode trailing write-profile payload: %w", err)
 	}
-	if payload.HeadlessCLI == "" {
-		return fmt.Errorf("write-profile payload missing headless_cli")
+	if payload.LeadCLI == "" {
+		return fmt.Errorf("write-profile payload missing lead_cli")
+	}
+	if payload.CrosscheckCLI == "" {
+		return fmt.Errorf("write-profile payload missing crosscheck_cli")
+	}
+	if payload.ImplementorCLI == "" {
+		return fmt.Errorf("write-profile payload missing implementor_cli")
+	}
+	if payload.TesterCLI == "" {
+		return fmt.Errorf("write-profile payload missing tester_cli")
 	}
 	if payload.TargetPath == "" {
 		return fmt.Errorf("write-profile payload missing target_path")
@@ -277,20 +294,28 @@ func decodeWriteProfilePayload(r io.Reader, payload *writeProfilePayload) error 
 
 func writeProfile(payload *writeProfilePayload) error {
 	return profilewrite.Write(&profilewrite.Request{
-		InteractiveCLI:   payload.InteractiveCLI,
-		InteractiveModel: payload.InteractiveModel,
-		HeadlessCLI:      payload.HeadlessCLI,
-		HeadlessModel:    payload.HeadlessModel,
+		LeadCLI:          payload.LeadCLI,
+		LeadModel:        payload.LeadModel,
+		CrosscheckCLI:    payload.CrosscheckCLI,
+		CrosscheckModel:  payload.CrosscheckModel,
+		ImplementorCLI:   payload.ImplementorCLI,
+		ImplementorModel: payload.ImplementorModel,
+		TesterCLI:        payload.TesterCLI,
+		TesterModel:      payload.TesterModel,
 		TargetPath:       payload.TargetPath,
 	})
 }
 
 func mergeProfileAgents(doc *yaml.Node, payload *writeProfilePayload) error {
 	return profilewrite.Merge(doc, &profilewrite.Request{
-		InteractiveCLI:   payload.InteractiveCLI,
-		InteractiveModel: payload.InteractiveModel,
-		HeadlessCLI:      payload.HeadlessCLI,
-		HeadlessModel:    payload.HeadlessModel,
+		LeadCLI:          payload.LeadCLI,
+		LeadModel:        payload.LeadModel,
+		CrosscheckCLI:    payload.CrosscheckCLI,
+		CrosscheckModel:  payload.CrosscheckModel,
+		ImplementorCLI:   payload.ImplementorCLI,
+		ImplementorModel: payload.ImplementorModel,
+		TesterCLI:        payload.TesterCLI,
+		TesterModel:      payload.TesterModel,
 		TargetPath:       payload.TargetPath,
 	})
 }

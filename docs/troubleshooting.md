@@ -41,11 +41,11 @@ Valid step-level `cli` values are:
 
 ## Agent Step Requires Agent
 
-Fresh sessions need an agent profile. Add `agent: planner`, `agent: implementor`, or another configured profile, or use `session: resume`, `session: inherit`, or a declared named session when that is what you intend.
+Fresh sessions need an agent profile. Add `agent: lead`, `agent: implementor`, or another configured profile, or use `session: resume`, `session: inherit`, or a declared named session when that is what you intend.
 
 ```yaml
 - id: plan
-  agent: planner
+  agent: lead
   prompt: "Plan the change."
 ```
 

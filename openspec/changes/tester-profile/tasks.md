@@ -1,3 +1,3 @@
 - [ ] Canonicalize Standard Roles (`tasks/01-canonical-role-migration.md`)
 - [ ] Build Recommendation Engine (`tasks/02-recommendation-engine.md`)
-- [ ] Deliver Four-Role Native Setup (`tasks/03-recommendation-first-setup.md`)
+- [x] Deliver Four-Role Native Setup (`tasks/03-recommendation-first-setup.md`)

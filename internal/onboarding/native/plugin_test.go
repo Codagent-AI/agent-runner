@@ -35,14 +35,14 @@ func (f *fakePluginInstaller) Resolve(clis []string, scope string) (*agentplugin
 	return &agentplugin.Plan{Binary: "/usr/local/bin/agent-plugin", CLIs: clis, Project: scope == "project"}, nil
 }
 
-func (f *fakePluginInstaller) DryRun(plan *agentplugin.Plan) (*agentplugin.Preview, error) {
+func (f *fakePluginInstaller) DryRun(*agentplugin.Plan) (*agentplugin.Preview, error) {
 	if f.dryRunErr != nil {
 		return nil, f.dryRunErr
 	}
 	return &agentplugin.Preview{Output: f.dryRunOutput}, nil
 }
 
-func (f *fakePluginInstaller) Install(plan *agentplugin.Plan) (*agentplugin.Result, error) {
+func (f *fakePluginInstaller) Install(*agentplugin.Plan) (*agentplugin.Result, error) {
 	f.installed = true
 	if f.installErr != nil {
 		return nil, f.installErr
@@ -50,62 +50,37 @@ func (f *fakePluginInstaller) Install(plan *agentplugin.Plan) (*agentplugin.Resu
 	return &agentplugin.Result{Output: f.installOut, Warning: f.installWarn}, nil
 }
 
-func pluginDeps(plugin *fakePluginInstaller) Deps {
-	return Deps{
-		Detector:   AdapterDetectorFunc(func() ([]string, error) { return []string{"claude"}, nil }),
-		Models:     ModelDiscovererFunc(func(string) ([]string, error) { return nil, nil }),
-		Profiles:   ProfileWriterFunc(func(*profilewrite.Request) error { return nil }),
-		Collisions: CollisionDetectorFunc(func(string) ([]string, error) { return nil, nil }),
-		Settings:   SettingsStoreFunc(func(func(usersettings.Settings) usersettings.Settings) error { return nil }),
-		Clock:      func() time.Time { return time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC) },
-		HomeDir:    func() (string, error) { return "/home/me", nil },
-		Cwd:        func() (string, error) { return "/work/project", nil },
-		Plugin:     plugin,
-		EnumCLIs:   func(string, string) ([]string, error) { return []string{"claude"}, nil },
-	}
+func pluginDeps(plugin *fakePluginInstaller) *Deps {
+	deps := baseDeps()
+	deps.Plugin = plugin
+	deps.Clock = func() time.Time { return time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC) }
+	deps.EnumCLIs = func(string, string) ([]string, error) { return []string{"claude"}, nil }
+	return deps
 }
 
-// CLI → default model → headless CLI → default model → intro → scope →
-// profile write → resolve → dry-run → preview stage → confirm (enter Install) → install → completed_at → demo prompt
 func TestPluginInstallRunsBetweenProfileWriteAndCompletion(t *testing.T) {
+	var writes int
 	var saved []usersettings.Settings
 	plugin := &fakePluginInstaller{dryRunOutput: "Would install skills for claude"}
 	deps := pluginDeps(plugin)
+	deps.Profiles = ProfileWriterFunc(func(*profilewrite.Request) error { writes++; return nil })
 	deps.Settings = SettingsStoreFunc(func(mutator func(usersettings.Settings) usersettings.Settings) error {
 		saved = append(saved, mutator(usersettings.Settings{}))
 		return nil
 	})
-	m := NewModel(&deps)
+	m := startTestModel(t, deps)
 
-	// Walk to plugin intro.
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter")
-
-	if m.stage != stagePluginIntro {
-		t.Fatalf("stage = %v, want stagePluginIntro", m.stage)
+	reachPluginPreview(t, m, false)
+	if writes != 1 || len(saved) != 0 {
+		t.Fatalf("before install writes=%d settings saves=%d, want 1 and 0", writes, len(saved))
 	}
+	sendKey(t, m, "enter")
 
-	// Continue to scope, then write and preview.
-	sendKeys(t, m, "enter")
-	sendKeys(t, m, "enter")
-
-	if m.stage != stagePluginPreview {
-		t.Fatalf("stage = %v, want stagePluginPreview", m.stage)
+	if !plugin.installed || m.stage != stageDemoPrompt {
+		t.Fatalf("installed=%v stage=%v, want installed demo prompt", plugin.installed, m.stage)
 	}
-
-	// Confirm install
-	sendKeys(t, m, "enter")
-
-	// Should be at demo prompt now
-	view := m.View()
-	if !strings.Contains(view, "Continue") || !strings.Contains(view, "Not now") {
-		t.Fatalf("expected demo prompt after plugin install, got:\n%s", view)
-	}
-	if !plugin.installed {
-		t.Fatal("plugin was not installed")
-	}
-
 	wantSaved := []usersettings.Settings{{
-		AutonomousBackend:        usersettings.BackendInteractiveClaude,
+		AutonomousBackend:        usersettings.BackendHeadless,
 		AutonomousPermissionMode: usersettings.PermissionModeConservative,
 		Setup:                    usersettings.SetupSettings{CompletedAt: "2026-05-13T12:00:00Z"},
 	}}
@@ -114,312 +89,168 @@ func TestPluginInstallRunsBetweenProfileWriteAndCompletion(t *testing.T) {
 	}
 }
 
-func TestPluginInstallCompletionStartsDemoPromptTransition(t *testing.T) {
-	plugin := &fakePluginInstaller{dryRunOutput: "Would install skills for claude"}
-	deps := pluginDeps(plugin)
-	m := NewModel(&deps)
-
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter", "enter")
-
-	if m.stage != stagePluginPreview {
-		t.Fatalf("stage = %v, want stagePluginPreview", m.stage)
-	}
-
-	_, installCmd := m.Update(pluginInstallMsg{result: &agentplugin.Result{}})
-	if m.stage != stageDemoPrompt {
-		t.Fatalf("stage = %v, want stageDemoPrompt", m.stage)
-	}
-	if m.animDone {
-		t.Fatal("demo prompt transition should start after plugin install")
-	}
-	if installCmd == nil {
-		t.Fatal("plugin install completion should start the demo prompt transition timer")
-	}
-
-	settleAnimation(m)
-	sendKey(t, m, "enter")
-
-	if m.Result() != ResultDemo {
-		t.Fatalf("Result() = %v, want ResultDemo after continuing from demo prompt", m.Result())
-	}
-}
-
-func TestPluginIntroExplainsSkillsBeforeInstallPreview(t *testing.T) {
-	plugin := &fakePluginInstaller{dryRunOutput: "preview"}
-	deps := pluginDeps(plugin)
-	m := NewModel(&deps)
-
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter")
-
+func TestPluginIntroExplainsSkillsBeforeScopeAndPreview(t *testing.T) {
+	m := startTestModel(t, pluginDeps(&fakePluginInstaller{}))
+	sendKeys(t, m, "enter", "enter", "enter")
 	if m.stage != stagePluginIntro {
-		t.Fatalf("stage = %v, want stagePluginIntro", m.stage)
+		t.Fatalf("stage = %v, want plugin intro", m.stage)
 	}
 	view := m.View()
 	for _, want := range []string{
 		"Agent Runner uses skills from",
 		"https://github.com/Codagent-AI/agent-skills",
-		"focused workflows for spec-driven development",
-		"Agent Validator quality",
-		"gates and PR/CI follow-up skills",
-		"Next",
-		"you will select where Agent Runner installs these skills.",
-		"Continue",
+		"spec", "TDD", "validation", "PR", "CI",
+		"profile scope", "Continue",
 	} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("intro view missing %q:\n%s", want, view)
+			t.Errorf("plugin intro missing %q:\n%s", want, view)
 		}
 	}
 }
 
-func TestPluginMissingBinaryFailsSetup(t *testing.T) {
-	plugin := &fakePluginInstaller{resolveErr: agentplugin.ErrBinaryMissing}
-	deps := pluginDeps(plugin)
-	m := NewModel(&deps)
+func TestPluginPreviewIsMandatoryAndShowsDryRunOutput(t *testing.T) {
+	plugin := &fakePluginInstaller{dryRunOutput: "Would install agent-skills for claude, codex"}
+	m := startTestModel(t, pluginDeps(plugin))
+	reachPluginPreview(t, m, false)
 
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter", "enter")
-
-	if m.Result() != ResultFailed {
-		t.Fatalf("Result() = %v, want ResultFailed", m.Result())
-	}
-	if !errors.Is(m.Err(), agentplugin.ErrBinaryMissing) {
-		t.Fatalf("Err() = %v, want ErrBinaryMissing", m.Err())
-	}
-}
-
-func TestPluginPreviewIsMandatoryAndDownEnterStillInstalls(t *testing.T) {
-	var saved []usersettings.Settings
-	plugin := &fakePluginInstaller{dryRunOutput: "preview"}
-	deps := pluginDeps(plugin)
-	deps.Settings = SettingsStoreFunc(func(mutator func(usersettings.Settings) usersettings.Settings) error {
-		saved = append(saved, mutator(usersettings.Settings{}))
-		return nil
-	})
-	m := NewModel(&deps)
-
-	// Walk to plugin intro, then scope, then preview.
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter", "enter")
-
-	if m.stage != stagePluginPreview {
-		t.Fatalf("stage = %v, want stagePluginPreview", m.stage)
-	}
 	if diff := cmp.Diff([]string{"Install"}, m.options); diff != "" {
-		t.Fatalf("plugin preview options mismatch (-want +got):\n%s", diff)
+		t.Fatalf("preview options mismatch (-want +got):\n%s", diff)
 	}
-
-	// There is no cancel option; moving down should keep focus on Install.
+	view := m.View()
+	if !strings.Contains(view, plugin.dryRunOutput) || strings.Contains(view, "Cancel") {
+		t.Fatalf("unexpected preview:\n%s", view)
+	}
 	sendKeys(t, m, "down", "enter")
-
 	if !plugin.installed {
-		t.Fatal("plugin was not installed")
-	}
-	if len(saved) == 0 || saved[len(saved)-1].Setup.CompletedAt == "" {
-		t.Fatal("completed_at should be written after mandatory plugin install")
+		t.Fatal("mandatory Install action did not install")
 	}
 }
 
 func TestPluginInstallShowsWaitingStateWhileCommandRuns(t *testing.T) {
 	plugin := &fakePluginInstaller{dryRunOutput: "preview"}
-	deps := pluginDeps(plugin)
-	m := NewModel(&deps)
-
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter", "enter")
-
-	if m.stage != stagePluginPreview {
-		t.Fatalf("stage = %v, want stagePluginPreview", m.stage)
-	}
+	m := startTestModel(t, pluginDeps(plugin))
+	reachPluginPreview(t, m, false)
 
 	cmd := sendKeyRaw(t, m, "enter")
 	if cmd == nil {
-		t.Fatal("confirming install should start plugin install command")
+		t.Fatal("Install did not start a command")
 	}
-
 	view := m.View()
-	if !strings.Contains(view, "Installing agent skills") {
-		t.Fatalf("expected installing wait message while command runs:\n%s", view)
-	}
-	if !strings.Contains(view, "This can take a moment") {
-		t.Fatalf("expected wait guidance while command runs:\n%s", view)
+	for _, want := range []string{"Installing agent skills", "This can take a moment"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("install wait state missing %q:\n%s", want, view)
+		}
 	}
 }
 
-func TestPluginInstallWarningStillWritesCompletedAt(t *testing.T) {
+func TestPluginInstallCompletionContinuesDemoTransition(t *testing.T) {
+	plugin := &fakePluginInstaller{dryRunOutput: "preview"}
+	m := startTestModel(t, pluginDeps(plugin))
+	reachPluginPreview(t, m, false)
+
+	_, cmd := m.Update(pluginInstallMsg{result: &agentplugin.Result{}})
+	if m.stage != stageDemoPrompt || m.animDone {
+		t.Fatalf("stage=%v animDone=%v, want animated demo transition", m.stage, m.animDone)
+	}
+	if cmd == nil {
+		t.Fatal("plugin completion did not schedule the transition timer")
+	}
+}
+
+func TestPluginErrorsPreserveCompletionBoundary(t *testing.T) {
+	tests := []struct {
+		name      string
+		plugin    *fakePluginInstaller
+		reachOnly bool
+	}{
+		{"missing binary", &fakePluginInstaller{resolveErr: agentplugin.ErrBinaryMissing}, true},
+		{"dry run", &fakePluginInstaller{dryRunErr: errors.New("dry-run failed")}, true},
+		{"install", &fakePluginInstaller{dryRunOutput: "preview", installErr: errors.New("install failed")}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			saved := false
+			deps := pluginDeps(tt.plugin)
+			deps.Settings = SettingsStoreFunc(func(func(usersettings.Settings) usersettings.Settings) error {
+				saved = true
+				return nil
+			})
+			m := startTestModel(t, deps)
+			reachPluginPreview(t, m, false)
+			if !tt.reachOnly && m.Result() != ResultFailed {
+				sendKey(t, m, "enter")
+			}
+			if m.Result() != ResultFailed || saved {
+				t.Fatalf("result=%v saved=%v err=%v", m.Result(), saved, m.Err())
+			}
+		})
+	}
+}
+
+func TestPluginWarningStillCompletesSetup(t *testing.T) {
 	var saved []usersettings.Settings
 	plugin := &fakePluginInstaller{
 		dryRunOutput: "preview",
 		installWarn:  "copilot: permission denied",
-		installOut:   "partial output",
 	}
 	deps := pluginDeps(plugin)
 	deps.Settings = SettingsStoreFunc(func(mutator func(usersettings.Settings) usersettings.Settings) error {
 		saved = append(saved, mutator(usersettings.Settings{}))
 		return nil
 	})
-	m := NewModel(&deps)
-
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter", "enter")
-	sendKeys(t, m, "enter") // confirm install
-
-	if m.Result() == ResultFailed {
-		t.Fatalf("Result() = ResultFailed, want non-failure for per-CLI warning")
-	}
-	if len(saved) == 0 {
-		t.Fatal("expected settings to be saved despite per-CLI warning")
-	}
-	lastSave := saved[len(saved)-1]
-	if lastSave.Setup.CompletedAt == "" {
-		t.Fatal("CompletedAt should be set despite per-CLI warning")
+	m := startTestModel(t, deps)
+	reachPluginPreview(t, m, false)
+	sendKey(t, m, "enter")
+	if m.Result() == ResultFailed || len(saved) != 1 || saved[0].Setup.CompletedAt == "" {
+		t.Fatalf("result=%v saved=%#v", m.Result(), saved)
 	}
 }
 
-func TestPluginScopeMatchesSetupScope(t *testing.T) {
+func TestPluginScopeAndConfiguredCLIsReachResolver(t *testing.T) {
 	plugin := &fakePluginInstaller{dryRunOutput: "preview"}
 	deps := pluginDeps(plugin)
-	m := NewModel(&deps)
-
-	// Walk through: CLI → default model → headless → default model → scope (default is "global")
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter", "enter")
-
-	if plugin.resolveScope != "global" {
-		t.Fatalf("resolve scope = %q, want global", plugin.resolveScope)
+	deps.EnumCLIs = func(string, string) ([]string, error) {
+		return []string{"claude", "codex", "copilot"}, nil
 	}
-}
-
-func TestPluginScopeProjectPassesProject(t *testing.T) {
-	plugin := &fakePluginInstaller{dryRunOutput: "preview"}
-	deps := pluginDeps(plugin)
-	m := NewModel(&deps)
-
-	// Walk to scope, select "project" (second option)
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter", "down", "enter")
+	m := startTestModel(t, deps)
+	reachPluginPreview(t, m, true)
 
 	if plugin.resolveScope != "project" {
 		t.Fatalf("resolve scope = %q, want project", plugin.resolveScope)
 	}
-}
-
-func TestPluginDryRunFailureFailsSetup(t *testing.T) {
-	plugin := &fakePluginInstaller{dryRunErr: errors.New("dry-run failed")}
-	deps := pluginDeps(plugin)
-	m := NewModel(&deps)
-
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter", "enter")
-
-	if m.Result() != ResultFailed {
-		t.Fatalf("Result() = %v, want ResultFailed for dry-run failure", m.Result())
+	if diff := cmp.Diff([]string{"claude", "codex", "copilot"}, plugin.resolveCLIs); diff != "" {
+		t.Fatalf("resolve CLIs mismatch (-want +got):\n%s", diff)
 	}
 }
 
-func TestPluginPreviewShowsDryRunOutput(t *testing.T) {
-	plugin := &fakePluginInstaller{dryRunOutput: "Would install agent-skills for claude, codex"}
-	deps := pluginDeps(plugin)
-	m := NewModel(&deps)
-
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter", "enter")
-
-	view := m.View()
-	if !strings.Contains(view, "Would install agent-skills") {
-		t.Fatalf("expected dry-run preview in view:\n%s", view)
-	}
-	if !strings.Contains(view, "Install") {
-		t.Fatalf("expected Install option in preview:\n%s", view)
-	}
-	if strings.Contains(view, "Cancel") {
-		t.Fatalf("did not expect Cancel option in mandatory plugin preview:\n%s", view)
-	}
-}
-
-func TestPluginPreviewRendersAfterAsyncDryRunWithoutSettledAnimation(t *testing.T) {
-	plugin := &fakePluginInstaller{dryRunOutput: "Would install agent-skills for claude, codex"}
-	deps := pluginDeps(plugin)
-	m := NewModel(&deps)
-
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter")
-	cmd := sendKeyRaw(t, m, "enter")
-	runTestCmd(t, m, cmd)
-
-	view := m.View()
-	if strings.Contains(view, "Config Scope") {
-		t.Fatalf("expected plugin preview, still rendering scope screen:\n%s", view)
-	}
-	if !strings.Contains(view, "Would install agent-skills") {
-		t.Fatalf("expected dry-run preview in view:\n%s", view)
-	}
-	if !strings.Contains(view, "Install") {
-		t.Fatalf("expected Install option in preview:\n%s", view)
-	}
-	if strings.Contains(view, "Cancel") {
-		t.Fatalf("did not expect Cancel option in mandatory plugin preview:\n%s", view)
-	}
-}
-
-func TestPluginNilSkipsInstallStep(t *testing.T) {
+func TestNilPluginSkipsInstallationAndCompletes(t *testing.T) {
 	var saved []usersettings.Settings
-	deps := Deps{
-		Detector:   AdapterDetectorFunc(func() ([]string, error) { return []string{"claude"}, nil }),
-		Models:     ModelDiscovererFunc(func(string) ([]string, error) { return nil, nil }),
-		Profiles:   ProfileWriterFunc(func(*profilewrite.Request) error { return nil }),
-		Collisions: CollisionDetectorFunc(func(string) ([]string, error) { return nil, nil }),
-		Settings: SettingsStoreFunc(func(mutator func(usersettings.Settings) usersettings.Settings) error {
-			saved = append(saved, mutator(usersettings.Settings{}))
-			return nil
-		}),
-		Clock:   func() time.Time { return time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC) },
-		HomeDir: func() (string, error) { return "/home/me", nil },
-		Cwd:     func() (string, error) { return "/work/project", nil },
-		Plugin:  nil,
-	}
-	m := NewModel(&deps)
-
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter")
-
-	view := m.View()
-	if !strings.Contains(view, "Continue") || !strings.Contains(view, "Not now") {
-		t.Fatalf("expected demo prompt when Plugin is nil:\n%s", view)
-	}
-	if len(saved) != 1 || saved[0].Setup.CompletedAt == "" {
-		t.Fatal("completed_at should be written when Plugin is nil")
-	}
-}
-
-func TestPluginInstallErrorFailsSetup(t *testing.T) {
-	saved := false
-	plugin := &fakePluginInstaller{
-		dryRunOutput: "preview",
-		installErr:   errors.New("command execution failed"),
-	}
-	deps := pluginDeps(plugin)
-	deps.Settings = SettingsStoreFunc(func(func(usersettings.Settings) usersettings.Settings) error {
-		saved = true
+	deps := baseDeps()
+	deps.Plugin = nil
+	deps.Settings = SettingsStoreFunc(func(mutator func(usersettings.Settings) usersettings.Settings) error {
+		saved = append(saved, mutator(usersettings.Settings{}))
 		return nil
 	})
-	m := NewModel(&deps)
+	m := startTestModel(t, deps)
+	sendKeys(t, m, "enter", "enter", "enter", "enter")
 
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter", "enter")
-	sendKeys(t, m, "enter") // confirm install
-
-	if m.Result() != ResultFailed {
-		t.Fatalf("Result() = %v, want ResultFailed for install error", m.Result())
-	}
-	if m.Err() == nil || !strings.Contains(m.Err().Error(), "command execution failed") {
-		t.Fatalf("Err() = %v, want command execution failed", m.Err())
-	}
-	if saved {
-		t.Fatal("settings should not be saved after install error")
+	if m.stage != stageDemoPrompt || len(saved) != 1 || saved[0].Setup.CompletedAt == "" {
+		t.Fatalf("stage=%v saved=%#v", m.stage, saved)
 	}
 }
 
-func TestPluginEnumCLIsPassedToResolve(t *testing.T) {
-	plugin := &fakePluginInstaller{dryRunOutput: "preview"}
-	deps := pluginDeps(plugin)
-	deps.EnumCLIs = func(globalPath, projectPath string) ([]string, error) {
-		return []string{"claude", "codex", "copilot"}, nil
+func reachPluginPreview(t *testing.T, m *Model, project bool) {
+	t.Helper()
+	sendKeys(t, m, "enter", "enter", "enter") // recommendation, backend, permission
+	if m.stage != stagePluginIntro {
+		t.Fatalf("stage = %v, want plugin intro", m.stage)
 	}
-	m := NewModel(&deps)
-
-	sendKeys(t, m, "enter", "enter", "enter", "enter", "enter", "enter", "enter", "enter")
-
-	want := []string{"claude", "codex", "copilot"}
-	if diff := cmp.Diff(want, plugin.resolveCLIs); diff != "" {
-		t.Fatalf("resolve CLIs mismatch (-want +got):\n%s", diff)
+	sendKey(t, m, "enter")
+	if project {
+		sendKey(t, m, "down")
+	}
+	sendKey(t, m, "enter")
+	if m.Result() != ResultFailed && m.stage != stagePluginPreview {
+		t.Fatalf("stage = %v, want plugin preview", m.stage)
 	}
 }

@@ -1,4 +1,4 @@
-// Package profilewrite owns the shared two-agent profile writer used by
+// Package profilewrite owns the shared four-agent profile writer used by
 // native setup and the internal write-profile command.
 package profilewrite
 
@@ -7,19 +7,24 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 type Request struct {
-	InteractiveCLI   string
-	InteractiveModel string
-	HeadlessCLI      string
-	HeadlessModel    string
 	TargetPath       string
+	LeadCLI          string
+	LeadModel        string
+	CrosscheckCLI    string
+	CrosscheckModel  string
+	ImplementorCLI   string
+	ImplementorModel string
+	TesterCLI        string
+	TesterModel      string
 }
 
-var managedAgents = []string{"implementor", "planner"}
+var managedAgents = []string{"crosscheck", "implementor", "lead", "planner", "reviewer", "tester"}
 
 func Write(req *Request) error {
 	if err := validate(req); err != nil {
@@ -66,10 +71,19 @@ func Collisions(path string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	agents := mappingAt(root, "profiles", "default", "agents")
-	if agents == nil {
-		return nil, nil
+	current := root
+	for i, key := range []string{"profiles", "default", "agents"} {
+		path := strings.Join([]string{"profiles", "default", "agents"}[:i+1], ".")
+		next, present, err := optionalMapping(current, key, path)
+		if err != nil {
+			return nil, err
+		}
+		if !present {
+			return nil, nil
+		}
+		current = next
 	}
+	agents := current
 	var collisions []string
 	for i := 0; i+1 < len(agents.Content); i += 2 {
 		if slices.Contains(managedAgents, agents.Content[i].Value) {
@@ -101,15 +115,27 @@ func Merge(doc *yaml.Node, req *Request) error {
 		return err
 	}
 
-	setMapping(agents, "planner", map[string]string{
+	deleteMapping(agents, "planner")
+	deleteMapping(agents, "reviewer")
+	setMapping(agents, "lead", map[string]string{
 		"default_mode": "interactive",
-		"cli":          req.InteractiveCLI,
-		"model":        req.InteractiveModel,
+		"cli":          req.LeadCLI,
+		"model":        req.LeadModel,
+	})
+	setMapping(agents, "crosscheck", map[string]string{
+		"default_mode": "autonomous",
+		"cli":          req.CrosscheckCLI,
+		"model":        req.CrosscheckModel,
 	})
 	setMapping(agents, "implementor", map[string]string{
 		"default_mode": "autonomous",
-		"cli":          req.HeadlessCLI,
-		"model":        req.HeadlessModel,
+		"cli":          req.ImplementorCLI,
+		"model":        req.ImplementorModel,
+	})
+	setMapping(agents, "tester", map[string]string{
+		"default_mode": "autonomous",
+		"cli":          req.TesterCLI,
+		"model":        req.TesterModel,
 	})
 	return nil
 }
@@ -118,11 +144,17 @@ func validate(req *Request) error {
 	if req == nil {
 		return fmt.Errorf("write-profile payload is nil")
 	}
-	if req.InteractiveCLI == "" {
-		return fmt.Errorf("write-profile payload missing interactive_cli")
+	if req.LeadCLI == "" {
+		return fmt.Errorf("write-profile payload missing lead_cli")
 	}
-	if req.HeadlessCLI == "" {
-		return fmt.Errorf("write-profile payload missing headless_cli")
+	if req.CrosscheckCLI == "" {
+		return fmt.Errorf("write-profile payload missing crosscheck_cli")
+	}
+	if req.ImplementorCLI == "" {
+		return fmt.Errorf("write-profile payload missing implementor_cli")
+	}
+	if req.TesterCLI == "" {
+		return fmt.Errorf("write-profile payload missing tester_cli")
 	}
 	if req.TargetPath == "" {
 		return fmt.Errorf("write-profile payload missing target_path")
@@ -160,22 +192,27 @@ func ensureMapping(root *yaml.Node, key, path string) (*yaml.Node, error) {
 	return value, nil
 }
 
-func mappingAt(root *yaml.Node, path ...string) *yaml.Node {
-	current := root
-	for _, key := range path {
-		var next *yaml.Node
-		for i := 0; i+1 < len(current.Content); i += 2 {
-			if current.Content[i].Value == key && current.Content[i+1].Kind == yaml.MappingNode {
-				next = current.Content[i+1]
-				break
-			}
+func optionalMapping(root *yaml.Node, key, path string) (*yaml.Node, bool, error) {
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != key {
+			continue
 		}
-		if next == nil {
-			return nil
+		if root.Content[i+1].Kind != yaml.MappingNode {
+			return nil, true, fmt.Errorf("%s must be a mapping", path)
 		}
-		current = next
+		return root.Content[i+1], true, nil
 	}
-	return current
+	return nil, false, nil
+}
+
+func deleteMapping(root *yaml.Node, key string) {
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != key {
+			continue
+		}
+		root.Content = append(root.Content[:i], root.Content[i+2:]...)
+		return
+	}
 }
 
 func setMapping(root *yaml.Node, key string, values map[string]string) {
