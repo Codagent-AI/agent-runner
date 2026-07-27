@@ -981,6 +981,16 @@ func TestDevDockerfileIncludesBrowserAgentTools(t *testing.T) {
 	}
 }
 
+func TestDevDockerfileIncludesGitHubCLIForDeliveryWorkflows(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "docker", "dev", "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read dev Dockerfile: %v", err)
+	}
+	if !strings.Contains(string(data), "\n    gh \\\n") {
+		t.Fatalf("dev Dockerfile should install gh for draft-PR delivery workflows:\n%s", data)
+	}
+}
+
 func TestDevcontainerShellDefaultsToZsh(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "devcontainer-shell.sh"))
 	if err != nil {
