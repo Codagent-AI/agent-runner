@@ -35,7 +35,7 @@ steps:
     prompt: |
       Help the user review, test, and request additional changes for implemented OpenSpec change "{{change_name}}". The pull request must remain a draft.
 
-      Read `{{session_dir}}/output/acceptance-handoff.md` and its evidence. Present a concise implementation summary, validation results, testing instructions, limitations, and relevant screenshots with text equivalents. Give the user room to review and test.
+      Read `{{session_dir}}/output/acceptance-handoff.md` and its evidence. Present a concise implementation summary, validation results, testing instructions, any `HT-*` items reserved for the user, limitations, and relevant screenshots with text equivalents. Give the user room to review and test.
 
       Implement user-requested fixes and minor enhancements. Confirm changes to behavior, scope, or design before editing. Do not implement requests that materially expand the change's scope or require substantial redesign.
 
@@ -53,7 +53,7 @@ steps:
     prompt: |
       Recommend targeted manual re-acceptance testing if changes were made during assumption review or testing and refinement.
 
-      If nothing changed, state that no re-acceptance testing is needed. Otherwise, briefly identify the affected user or client flows and directly dependent flows, recommend a targeted verification scope, and ask whether the user wants it run.
+      If nothing changed, state that no re-acceptance testing is needed. Otherwise, briefly identify the affected `AT-*` obligations or user/client flows and directly dependent flows, recommend a targeted verification scope, and ask whether the user wants it run.
 
       Continue to next step when the user accepts or declines the recommendation.
 
@@ -71,10 +71,11 @@ steps:
 
       If the user agreed, use codagent:call-agent with `session: acceptance-tester`. This resumes the tester that established the full-pass baseline when available; first use creates it when this workflow runs standalone. Supply task-specific child instructions requiring codagent:prepare-acceptance with:
       - approved artifacts: `openspec/changes/{{change_name}}/`;
+      - authoritative test plan: `openspec/changes/{{change_name}}/test-plan.md`;
       - implementation evidence: `{{session_dir}}/output/*session-report*.out` and `{{session_dir}}/audit.log`;
       - evidence directory: `{{session_dir}}/output/`;
       - assumptions ledger: `{{session_dir}}/output/acceptance-assumptions.md`;
-      - verification scope: the affected and directly dependent flows agreed with the user, with a concise impact rationale;
+      - verification scope: the affected `AT-*` obligations and directly dependent flows agreed with the user, with a concise impact rationale;
       - prior full-pass evidence: `{{session_dir}}/output/acceptance-flow-evidence.md`.
 
       Follow codagent:call-agent's verification and autonomous result-accounting rules rather than performing the acceptance testing yourself. If the targeted pass succeeds, summarize the result and continue to next step.

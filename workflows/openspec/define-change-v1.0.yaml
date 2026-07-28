@@ -1,5 +1,5 @@
 name: define-change
-description: "Interactively define an OpenSpec change through proposal, specification, and design."
+description: "Interactively define an OpenSpec change through proposal, specification, design, and testing strategy."
 hidden: true
 
 params:
@@ -49,15 +49,23 @@ steps:
 
       Keep this phase interactive. Do not signal completion until the user has approved the design and the design artifact is complete.
 
+  - id: test-plan
+    session: lead-agent
+    mode: interactive
+    prompt: |
+      Use the codagent:test-plan skill to collaboratively create `openspec/changes/{{change_name}}/test-plan.md`.
+
+      Keep this phase interactive. Continue to the next step once the user has approved the test plan.
+
   - id: approach-review
     session: lead-agent
     mode: interactive
     tools: [call_agent]
     prompt: |
-      Perform the final definition review with the user for OpenSpec change "{{change_name}}". Use codagent:call-agent with a fresh `agent: reviewer`. The task-specific child instructions must require it to use the codagent:review-approach skill and independently review the proposal, every specification, and the design under `openspec/changes/{{change_name}}/` together.
+      Perform the final definition review with the user for OpenSpec change "{{change_name}}". Use codagent:call-agent with a fresh `agent: reviewer`. The task-specific child instructions must require it to use the codagent:review-approach skill and independently review the proposal, every specification, the design, and `test-plan.md` under `openspec/changes/{{change_name}}/` together.
 
-      Require the child to check cross-artifact consistency and testability; find consequential behavioral or architectural gaps, missing decisions, weak tradeoffs, failure modes, and better alternatives; inspect relevant repository patterns; avoid reviewing implementation tasks; and never modify files.
+      Require the child to check cross-artifact consistency and testability; find consequential behavioral, architectural, or testing-strategy gaps, missing decisions, weak tradeoffs, failure modes, and better alternatives; inspect relevant repository patterns; avoid reviewing implementation tasks; and never modify files.
 
-      Follow codagent:call-agent's verification and user-facing reporting rules. Discuss every consequential finding with the user. Do not modify the proposal, specifications, design, or any other file until you have presented your assessment and received the user's explicit confirmation about which changes to make. Apply only the changes the user confirms.
+      Follow codagent:call-agent's verification and user-facing reporting rules. Discuss every consequential finding with the user. Do not modify the proposal, specifications, design, test plan, or any other file until you have presented your assessment and received the user's explicit confirmation about which changes to make. Apply only the changes the user confirms.
 
-      Keep this phase interactive. Do not signal completion until the user has confirmed the final proposal, specifications, and design and all approved changes are complete.
+      Keep this phase interactive. Do not signal completion until the user has confirmed the final proposal, specifications, design, and test plan and all approved changes are complete.

@@ -2,7 +2,7 @@ name: plan-change
 description: "Autonomously validate an approved OpenSpec definition and produce a reviewed task plan."
 hidden: true
 
-# This workflow consumes proposal/specs/design artifacts produced earlier.
+# This workflow consumes proposal/specs/design/test-plan artifacts produced earlier.
 # Attaching the OpenSpec engine would reject those unmatched artifact step IDs;
 # the task prompt supplies its paths and dependencies explicitly instead.
 
@@ -20,7 +20,7 @@ steps:
     mode: autonomous
     capture: definition_validation
     prompt: |
-      Validate the approved proposal, specifications, and design for OpenSpec change "{{change_name}}" before task planning.
+      Validate the approved proposal, specifications, design, and test plan for OpenSpec change "{{change_name}}" before task planning.
 
       This is mechanical OpenSpec validation, not an artifact review. Do not invoke `codagent:proposal-review`, `codagent:review-approach`, `codagent:review-spec`, or `codagent:review-tasks`.
 
@@ -37,7 +37,7 @@ steps:
     session: planning-agent
     mode: autonomous
     prompt: |
-      Create the implementation task breakdown for OpenSpec change "{{change_name}}". Read the approved proposal, specifications, and design under `openspec/changes/{{change_name}}/`, then use the codagent:plan-tasks skill.
+      Create the implementation task breakdown for OpenSpec change "{{change_name}}". Read the approved proposal, specifications, design, and `test-plan.md` under `openspec/changes/{{change_name}}/`, then use the codagent:plan-tasks skill.
 
       Task planning is autonomous because the definition artifacts have already been approved. This instruction overrides the skill's confirmation gate: do NOT ask the user to approve the number or grouping of tasks. Choose a right-sized breakdown using your best judgment and continue directly to writing the task files.
 

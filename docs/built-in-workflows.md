@@ -41,13 +41,18 @@ Some `core:*` workflows are hidden from normal browsing because they are intende
 
 | Workflow | Purpose |
 | --- | --- |
-| `openspec:change` | Run the full plan, implement, validate, and PR creation workflow for normal feature development. |
-| `openspec:implement-change` | Loop over OpenSpec task files and invoke `core:implement-task` for each task. |
-| `openspec:plan-change` | Create and plan an OpenSpec change through proposal, spec, design, task planning, and review. |
+| `openspec:change` | Define, plan, implement, validate, prepare evidence, support human acceptance, and finalize a feature change. |
+| `openspec:implement-change` | Implement reviewed task files, validate the result, open a draft PR, and prepare test-plan-driven acceptance evidence. |
+| `openspec:plan-change` | Validate an approved proposal, specs, design, and test plan, then create and review implementation tasks. |
 | `openspec:scaffold` | Bootstrap a brand new OpenSpec project, configure validation, and optionally publish it to GitHub. |
 | `openspec:simple-change` | Run a quick plan, implement, and validate workflow for small changes. |
 
-The `openspec:change` workflow is a full development flow: it plans the change, implements task files, validates the result, and can continue through PR finalization. `openspec:simple-change` keeps planning and implementation inline for smaller changes. `openspec:scaffold` runs `openspec init --tools none` so the project has OpenSpec directories without installing OpenSpec agent skills or slash commands.
+The `openspec:change` workflow is a full development flow: it collaboratively defines the proposal,
+specifications, design, and test plan; autonomously plans and implements reviewed tasks; validates and
+prepares acceptance evidence; supports human review; and continues through PR finalization.
+`openspec:simple-change` keeps planning and implementation inline for smaller changes.
+`openspec:scaffold` runs `openspec init --tools none` so the project has OpenSpec directories without
+installing OpenSpec agent skills or slash commands.
 
 ## Spec-Driven
 

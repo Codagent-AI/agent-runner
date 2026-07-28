@@ -131,22 +131,25 @@ steps:
 
       Use codagent:call-agent with `session: acceptance-tester`. Its first use creates a fresh independent reviewer session; later calls resume that same tester. Supply task-specific child instructions requiring it to use codagent:prepare-acceptance with these inputs:
       - approved artifacts: `openspec/changes/{{change_name}}/`;
+      - authoritative test plan: `openspec/changes/{{change_name}}/test-plan.md`;
       - implementation evidence: `{{session_dir}}/output/*session-report*.out` and `{{session_dir}}/audit.log`;
       - evidence directory: `{{session_dir}}/output/`;
       - assumptions ledger: `{{session_dir}}/output/acceptance-assumptions.md`;
       - verification scope: `full` for the first pass.
 
-      Follow codagent:call-agent's verification and autonomous result-accounting rules after every pass. Inspect the durable evidence and resolve every high-confidence in-scope finding you can, including implementation, CI, PR-state, tooling, setup, and environmental problems. Preserve approved behavior, scope, and design; append ambiguity to the assumptions ledger instead of deciding it silently.
+      The first pass must exercise every required `AT-*` and every conditional `AT-*` whose activation condition holds. A flow may use a substitute only when that obligation explicitly permits it. Missing applicable-flow evidence is an impediment, not a limitation, and cannot produce `ACCEPTANCE_COMPLETE`.
+
+      Follow codagent:call-agent's verification and autonomous result-accounting rules after every pass. Inspect the durable evidence and resolve every high-confidence in-scope finding you can, including implementation, CI, PR-state, tooling, setup, and environmental problems. Preserve approved behavior, scope, design, and testing strategy; append ambiguity to the assumptions ledger instead of deciding it silently.
 
       Before fixing an implementation defect found by acceptance testing, you MUST invoke codagent:implement-with-tdd and follow its red-green-refactor process. Add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
 
       If a tracked file changes, run the narrowest relevant automated checks, run `openspec validate --type change "{{change_name}}"` when an approved artifact changed, then invoke the validator-run skill and require it to pass. Incorporate any Validator fixes, commit all related changes following project conventions with the `[{{step_id}}]` prefix, push, and verify local `HEAD` equals the draft PR head.
 
-      Before each post-fix tester call, write `{{session_dir}}/output/acceptance-impact-scope.md`. Name the user or client flows affected by the complete fix, any directly dependent flows that could regress, and a concise rationale bounding why other surfaces or subsystems are unaffected. Resume `acceptance-tester` with explicit re-review instructions: reproduce the prior finding against the fix, exercise only those affected and directly dependent flows, retain the prior full-pass evidence for unaffected flows, and do not begin a new broad review. It may report a newly introduced defect only when observed within that targeted scope. Give it `{{session_dir}}/output/acceptance-flow-evidence.md` as the prior full-pass baseline.
+      Before each post-fix tester call, write `{{session_dir}}/output/acceptance-impact-scope.md`. Name the affected `AT-*` obligations and any directly dependent flows, plus a concise rationale bounding why other surfaces or subsystems are unaffected. Resume `acceptance-tester` with explicit re-review instructions: reproduce the prior finding against the fix, exercise only those affected and directly dependent flows, retain the prior full-pass evidence for unaffected flows, and do not begin a new broad review. It may report a newly introduced defect only when observed within that targeted scope. Give it `{{session_dir}}/output/acceptance-flow-evidence.md` as the prior full-pass baseline.
 
       If no tracked product contents changed and only PR alignment, pushing, CI availability, tooling, or another external condition was corrected, give the child an `evidence-only` scope with `acceptance-flow-evidence.md`. A Validator run that makes no tracked change does not invalidate the existing flow evidence. The child should wait for current-head CI and produce the final evidence without exercising product flows again.
 
-      Use at most three acceptance-tester calls. Stop when the skill produces complete acceptance evidence for the current revision with no clear defect or impediment. Verify its referenced evidence exists and summarize the ready SHA, PR URL, full-baseline and targeted-pass provenance, evidence paths, unresolved-assumption count, CI status, and known limitations.
+      Use at most three acceptance-tester calls. Stop when the skill produces complete acceptance evidence for the current revision with no clear defect or impediment. Verify that every required or activated conditional `AT-*` has passing evidence, referenced evidence exists, and any `HT-*` is reserved for the user. Summarize the ready SHA, PR URL, full-baseline and targeted-pass provenance, evidence paths, unresolved-assumption count, CI status, and known limitations.
 
       If three calls do not converge, preserve the latest findings and assumptions under `{{session_dir}}/output/` and write `{{session_dir}}/output/acceptance-handoff.md` with an honest summary of the remaining impediments and available evidence. Do not call another tester for the same unchanged impediment.
 
