@@ -73,7 +73,7 @@ func (m *Model) View() string {
 	for _, warning := range m.tree.Warnings {
 		b.WriteString("\n")
 		b.WriteString(tuistyle.ScreenMargin)
-		b.WriteString(tuistyle.DimStyle.Render("Warning: " + warning))
+		b.WriteString(renderWarning(warning))
 	}
 	if m.loadErr != "" {
 		b.WriteString("\n")
@@ -670,4 +670,8 @@ func (m *Model) renderLegend() string {
 	b.WriteString("\n")
 
 	return b.String()
+}
+
+func renderWarning(message string) string {
+	return tuistyle.DimStyle.Render("Warning: " + message)
 }

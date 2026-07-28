@@ -261,17 +261,6 @@ func yamlScalar(value string) *yaml.Node {
 	return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
 }
 
-func writeAtomic0600(path string, payload []byte) error {
-	staged, err := stageAtomic0600(path, payload)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = staged.Discard()
-	}()
-	return staged.Commit()
-}
-
 func stageAtomic0600(path string, payload []byte) (Staged, error) {
 	dir := filepath.Dir(path)
 	info, err := os.Stat(dir)

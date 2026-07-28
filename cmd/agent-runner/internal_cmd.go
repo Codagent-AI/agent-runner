@@ -32,6 +32,20 @@ type writeProfilePayload struct {
 	TargetPath       string `json:"target_path"`
 }
 
+func (p *writeProfilePayload) request() *profilewrite.Request {
+	return &profilewrite.Request{
+		LeadCLI:          p.LeadCLI,
+		LeadModel:        p.LeadModel,
+		CrosscheckCLI:    p.CrosscheckCLI,
+		CrosscheckModel:  p.CrosscheckModel,
+		ImplementorCLI:   p.ImplementorCLI,
+		ImplementorModel: p.ImplementorModel,
+		TesterCLI:        p.TesterCLI,
+		TesterModel:      p.TesterModel,
+		TargetPath:       p.TargetPath,
+	}
+}
+
 func handleInternal(args []string) int {
 	if len(args) > 0 && args[0] == "watchdog" {
 		parent := os.NewFile(3, "agent-runner-watchdog-parent")
@@ -293,31 +307,11 @@ func decodeWriteProfilePayload(r io.Reader, payload *writeProfilePayload) error 
 }
 
 func writeProfile(payload *writeProfilePayload) error {
-	return profilewrite.Write(&profilewrite.Request{
-		LeadCLI:          payload.LeadCLI,
-		LeadModel:        payload.LeadModel,
-		CrosscheckCLI:    payload.CrosscheckCLI,
-		CrosscheckModel:  payload.CrosscheckModel,
-		ImplementorCLI:   payload.ImplementorCLI,
-		ImplementorModel: payload.ImplementorModel,
-		TesterCLI:        payload.TesterCLI,
-		TesterModel:      payload.TesterModel,
-		TargetPath:       payload.TargetPath,
-	})
+	return profilewrite.Write(payload.request())
 }
 
 func mergeProfileAgents(doc *yaml.Node, payload *writeProfilePayload) error {
-	return profilewrite.Merge(doc, &profilewrite.Request{
-		LeadCLI:          payload.LeadCLI,
-		LeadModel:        payload.LeadModel,
-		CrosscheckCLI:    payload.CrosscheckCLI,
-		CrosscheckModel:  payload.CrosscheckModel,
-		ImplementorCLI:   payload.ImplementorCLI,
-		ImplementorModel: payload.ImplementorModel,
-		TesterCLI:        payload.TesterCLI,
-		TesterModel:      payload.TesterModel,
-		TargetPath:       payload.TargetPath,
-	})
+	return profilewrite.Merge(doc, payload.request())
 }
 
 func writeSetting(key, value string) error {

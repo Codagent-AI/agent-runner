@@ -517,18 +517,10 @@ func (s *walkState) resolveTriple(path string, step *model.Step, profileName str
 }
 
 func (s *walkState) addAgentDeprecations(warnings ...config.Deprecation) {
-	for _, warning := range warnings {
-		found := false
-		for _, existing := range s.result.AgentDeprecations {
-			if existing.Alias == warning.Alias {
-				found = true
-				break
-			}
-		}
-		if !found {
-			s.result.AgentDeprecations = append(s.result.AgentDeprecations, warning)
-		}
-	}
+	s.result.AgentDeprecations = config.AppendDeprecations(
+		s.result.AgentDeprecations,
+		warnings...,
+	)
 }
 
 func activeProfileName(cfg *config.Config) string {

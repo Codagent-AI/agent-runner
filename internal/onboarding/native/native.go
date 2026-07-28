@@ -1018,12 +1018,7 @@ func (m *Model) renderOptions(width, textWidth int) string {
 	var b strings.Builder
 	for i, option := range m.options {
 		label := m.optionLabel(option)
-		prefix := "  "
-		style := setupOptionStyle
-		if i == m.focus {
-			prefix = tuistyle.FocusedSelectorPrefix + " "
-			style = setupFocusedOptionStyle
-		}
+		prefix, style := m.optionPresentation(i)
 		for _, line := range wrapTextLine(prefix+label, textWidth) {
 			b.WriteString(style.Render(line))
 			b.WriteByte('\n')
@@ -1036,12 +1031,7 @@ func (m *Model) renderWindowedOptions(textWidth int) string {
 	start, end := optionWindow(m.focus, len(m.options), m.maxVisibleOptions())
 	var b strings.Builder
 	for i := start; i < end; i++ {
-		prefix := "  "
-		style := setupOptionStyle
-		if i == m.focus {
-			prefix = tuistyle.FocusedSelectorPrefix + " "
-			style = setupFocusedOptionStyle
-		}
+		prefix, style := m.optionPresentation(i)
 		b.WriteString(style.Render(runewidth.Truncate(prefix+m.optionLabel(m.options[i]), textWidth, "...")))
 		b.WriteByte('\n')
 	}
@@ -1051,6 +1041,13 @@ func (m *Model) renderWindowedOptions(textWidth int) string {
 		)))
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m *Model) optionPresentation(index int) (string, lipgloss.Style) {
+	if index == m.focus {
+		return tuistyle.FocusedSelectorPrefix + " ", setupFocusedOptionStyle
+	}
+	return "  ", setupOptionStyle
 }
 
 func (m *Model) maxVisibleOptions() int {

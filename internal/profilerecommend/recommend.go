@@ -179,9 +179,8 @@ func (r *Recommendation) PairStatuses() [2]PairStatus {
 	return r.pairs
 }
 
-var leadCrosscheckCLIOrder = [...]string{"claude", "codex", "opencode", "copilot", "cursor"}
+var leadCrosscheckTesterCLIOrder = [...]string{"claude", "codex", "opencode", "copilot", "cursor"}
 var implementorCLIOrder = [...]string{"codex", "cursor", "opencode", "claude", "copilot"}
-var testerCLIOrder = [...]string{"claude", "codex", "opencode", "copilot", "cursor"}
 
 var claudeFirst = [...]Family{Claude, GPT, Other}
 var gptFirst = [...]Family{GPT, Claude, Other}
@@ -197,12 +196,12 @@ func policyFor(role Role) (policy, bool) {
 	switch role {
 	case Lead:
 		return policy{
-			cliOrder: leadCrosscheckCLIOrder[:], familyOrder: claudeFirst[:],
+			cliOrder: leadCrosscheckTesterCLIOrder[:], familyOrder: claudeFirst[:],
 			preferredTier: Flagship, alternateTier: Balanced,
 		}, true
 	case Crosscheck:
 		return policy{
-			cliOrder: leadCrosscheckCLIOrder[:], familyOrder: gptFirst[:],
+			cliOrder: leadCrosscheckTesterCLIOrder[:], familyOrder: gptFirst[:],
 			preferredTier: Flagship, alternateTier: Balanced,
 		}, true
 	case Implementor:
@@ -212,7 +211,7 @@ func policyFor(role Role) (policy, bool) {
 		}, true
 	case Tester:
 		return policy{
-			cliOrder: testerCLIOrder[:], familyOrder: claudeFirst[:],
+			cliOrder: leadCrosscheckTesterCLIOrder[:], familyOrder: claudeFirst[:],
 			preferredTier: Balanced, alternateTier: Flagship,
 		}, true
 	default:
@@ -494,15 +493,6 @@ func classify(cli, model string) (classification Classification, version []int) 
 		family = Claude
 	case "codex":
 		family = GPT
-	case "opencode", "copilot", "cursor":
-		switch {
-		case hasWholeToken(lowerModel, "claude"):
-			family = Claude
-		case hasGPT:
-			family = GPT
-		default:
-			family = Other
-		}
 	default:
 		switch {
 		case hasWholeToken(lowerModel, "claude"):

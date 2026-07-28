@@ -332,16 +332,23 @@ func TestWriteRejectsMalformedOrNonMappingYAMLWithoutChangingOriginal(t *testing
 	}
 }
 
-func TestAtomicWriteFailureLeavesTargetAndNoTemporaryFile(t *testing.T) {
+func TestStagedCommitFailureLeavesTargetAndCanDiscardTemporaryFile(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "config.yaml")
 	if err := os.Mkdir(target, 0o755); err != nil {
 		t.Fatalf("mkdir target collision: %v", err)
 	}
 
-	err := writeAtomic0600(target, []byte("replacement"))
+	staged, err := stageAtomic0600(target, []byte("replacement"))
+	if err != nil {
+		t.Fatalf("stageAtomic0600() error = %v", err)
+	}
+	err = staged.Commit()
 	if err == nil || !strings.Contains(err.Error(), "rename temporary file") {
-		t.Fatalf("writeAtomic0600() error = %v, want rename failure", err)
+		t.Fatalf("Commit() error = %v, want rename failure", err)
+	}
+	if err := staged.Discard(); err != nil {
+		t.Fatalf("Discard() error = %v", err)
 	}
 	info, statErr := os.Stat(target)
 	if statErr != nil || !info.IsDir() {

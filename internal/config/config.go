@@ -257,7 +257,7 @@ func buildConfig(defaults, global, project *parsedFile) (*Config, error) {
 			return nil, err
 		}
 		layers[i] = canonical
-		deprecations = appendDeprecations(deprecations, warnings...)
+		deprecations = AppendDeprecations(deprecations, warnings...)
 	}
 	defaults, global, project = layers[0], layers[1], layers[2]
 
@@ -327,7 +327,7 @@ func canonicalizeLayer(layer *parsedFile) (*parsedFile, []Deprecation, error) {
 		for name, agent := range agents {
 			canonicalName, warning := CanonicalAgentName(name)
 			if warning != nil {
-				deprecations = appendDeprecations(deprecations, *warning)
+				deprecations = AppendDeprecations(deprecations, *warning)
 			}
 			if agent == nil {
 				canonicalAgents[canonicalName] = nil
@@ -337,7 +337,7 @@ func canonicalizeLayer(layer *parsedFile) (*parsedFile, []Deprecation, error) {
 			if cloned.Extends != "" {
 				cloned.Extends, warning = CanonicalAgentName(cloned.Extends)
 				if warning != nil {
-					deprecations = appendDeprecations(deprecations, *warning)
+					deprecations = AppendDeprecations(deprecations, *warning)
 				}
 			}
 			canonicalAgents[canonicalName] = &cloned
@@ -350,7 +350,8 @@ func canonicalizeLayer(layer *parsedFile) (*parsedFile, []Deprecation, error) {
 	return canonical, deprecations, nil
 }
 
-func appendDeprecations(existing []Deprecation, additions ...Deprecation) []Deprecation {
+// AppendDeprecations adds deprecations whose aliases are not already present.
+func AppendDeprecations(existing []Deprecation, additions ...Deprecation) []Deprecation {
 	for _, addition := range additions {
 		seen := false
 		for _, current := range existing {
