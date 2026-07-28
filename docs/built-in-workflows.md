@@ -29,13 +29,18 @@ inspection, not fresh execution.
 
 | Workflow | Purpose |
 | --- | --- |
+| `core:accept-change` | Run the shared human acceptance, refinement, and targeted re-testing phases for a structured change. |
 | `core:debug` | Debug a failed Agent Runner run and optionally file an issue. |
+| `core:define-change` | Run the shared proposal, specification, design, test-plan, and approach-review phases. |
 | `core:finalize-pr` | Push PR, wait for CI, fix failures, and repeat until green, with a maximum of three fix cycles. |
+| `core:implement-change` | Run the shared task implementation, validation, draft-PR, and acceptance-preparation phases. |
 | `core:implement-task` | Implement a single task with an agent step followed by a validator retry loop. |
+| `core:plan-change` | Run the shared definition validation, task planning, and task-review phases. |
 | `core:review-proposal` | Run adversarial proposal review, lead response, and up to three discussion rounds. |
+| `core:review-tasks` | Independently review and autonomously correct a structured task plan. |
 | `core:run-validator` | Run Agent Validator with a counted retry loop and fix-on-failure step. |
 
-Some `core:*` workflows are hidden from normal browsing because they are intended to be invoked by higher-level workflows.
+Some `core:*` workflows are hidden from normal browsing because they are intended to be invoked by higher-level workflows. The shared change-lifecycle workflows accept an artifact directory and validation instructions; the OpenSpec and spec-driven namespaces provide those backend-specific values.
 
 ## OpenSpec
 
@@ -58,13 +63,13 @@ installing OpenSpec agent skills or slash commands.
 
 | Workflow | Purpose |
 | --- | --- |
-| `spec-driven:change` | Run the full plan, implement, validate, and PR creation workflow for normal feature development. |
-| `spec-driven:implement-change` | Locate task files and invoke `core:implement-task` for each task. |
-| `spec-driven:plan-change` | Plan a change through proposal, spec, design, task planning, and review without OpenSpec. |
+| `spec-driven:change` | Define, plan, implement, prepare acceptance evidence, support human acceptance, and finalize a feature change without OpenSpec. |
+| `spec-driven:implement-change` | Implement reviewed task files, validate the result, open a draft PR, and prepare test-plan-driven acceptance evidence. |
+| `spec-driven:plan-change` | Validate an approved proposal, specs, design, and test plan, then create and review implementation tasks without OpenSpec. |
 | `spec-driven:scaffold` | Bootstrap a brand new project, configure validation, and optionally publish it to GitHub. |
 | `spec-driven:simple-change` | Run a quick plan, implement, and validate workflow for small changes. |
 
-The `spec-driven:change` workflow is a full development flow without an OpenSpec dependency. `spec-driven:simple-change` keeps planning and implementation inline for smaller changes. The `scaffold` variant is for new project setup.
+The latest `spec-driven:change` workflow mirrors the full OpenSpec change lifecycle except for OpenSpec creation, CLI validation, and archival. It requires `change_name` and stores its tracked artifacts under `specs/changes/<change_name>/`. `spec-driven:simple-change` keeps planning and implementation inline for smaller changes. The `scaffold` variant is for new project setup.
 
 ## Onboarding
 

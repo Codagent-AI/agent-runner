@@ -1,9 +1,13 @@
 name: review-tasks
-description: "Independent review and autonomous correction of an OpenSpec task plan."
+description: "Independent review and autonomous correction of a change task plan."
 hidden: true
 
 params:
   - name: change_name
+    required: true
+  - name: change_dir
+    required: true
+  - name: change_label
     required: true
 
 sessions:
@@ -16,9 +20,9 @@ steps:
     mode: autonomous
     tools: [call_agent]
     prompt: |
-      Review and correct the implementation task plan for OpenSpec change "{{change_name}}" without involving the user. Use codagent:call-agent with a fresh `agent: crosscheck`.
+      Review and correct the implementation task plan for {{change_label}} "{{change_name}}" without involving the user. Use codagent:call-agent with a fresh `agent: crosscheck`.
 
-      The task-specific child instructions must require it to use the codagent:review-tasks skill; read the approved proposal, every specification, the design, and `test-plan.md` under `openspec/changes/{{change_name}}/`; read `openspec/changes/{{change_name}}/tasks.md` and every file under `openspec/changes/{{change_name}}/tasks/`; inspect relevant repository structure when needed; and report only concrete task-plan defects that can be corrected by editing the task index or detailed task files. Require exact task and controlling-artifact citations. The proposal, specifications, design, and test plan are immutable approved inputs, not review targets. The child must not report definition or approach concerns, ask for a product, scope, design, or testing-strategy decision, or modify any file.
+      The task-specific child instructions must require it to use the codagent:review-tasks skill; read the approved proposal, every specification, the design, and `test-plan.md` under `{{change_dir}}/`; read `{{change_dir}}/tasks.md` and every file under `{{change_dir}}/tasks/`; inspect relevant repository structure when needed; and report only concrete task-plan defects that can be corrected by editing the task index or detailed task files. Require exact task and controlling-artifact citations. The proposal, specifications, design, and test plan are immutable approved inputs, not review targets. The child must not report definition or approach concerns, ask for a product, scope, design, or testing-strategy decision, or modify any file.
 
       Follow codagent:call-agent's verification and autonomous result-accounting rules. Evaluate each finding against the approved artifacts, current task files, and repository:
       - Fix valid task-plan issues, including missing coverage, incorrect fidelity, poor task boundaries, ordering or dependency problems, missing self-contained context, and inadequate done criteria.

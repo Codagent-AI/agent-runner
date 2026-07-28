@@ -1,14 +1,10 @@
 name: define-change
-description: "Create and interactively define an OpenSpec change."
+description: "Create and interactively define a spec-driven change."
 hidden: true
 
 params:
   - name: change_name
     required: true
-
-engine:
-  type: openspec
-  change_param: change_name
 
 steps:
   - id: create
@@ -20,5 +16,5 @@ steps:
     workflow: ../core/define-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
-      change_dir: "openspec/changes/{{change_name}}"
-      change_label: "OpenSpec change"
+      change_dir: "specs/changes/{{change_name}}"
+      change_label: "spec-driven change"

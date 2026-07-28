@@ -1,0 +1,77 @@
+name: plan-change
+description: "Autonomously validate an approved change definition and produce a reviewed task plan."
+hidden: true
+
+params:
+  - name: change_name
+    required: true
+  - name: change_dir
+    required: true
+  - name: change_label
+    required: true
+  - name: definition_validation_checklist
+    required: true
+
+sessions:
+  - name: planning-agent
+    agent: lead
+
+steps:
+  - id: validate-definition
+    session: planning-agent
+    mode: autonomous
+    capture: definition_validation
+    prompt: |
+      Validate the approved proposal, specifications, design, and test plan for {{change_label}} "{{change_name}}" before task planning.
+
+      This is mechanical artifact validation, not an artifact review. Do not invoke `codagent:proposal-review`, `codagent:review-approach`, `codagent:review-spec`, or `codagent:review-tasks`.
+
+      Read and follow `{{definition_validation_checklist}}`, substituting "{{change_name}}" for `<change-name>` and "{{change_dir}}" for `<change-dir>`. Do not create task files in this step.
+
+      End with the exact line `PLANNING_READY` only when every checklist item passes without any unresolved semantic blocker. Otherwise end with `PLANNING_BLOCKED:` followed by the reason, and do not include `PLANNING_READY` anywhere in your response.
+
+  - id: definition-status-gate
+    script: planning-status-gate.sh
+    script_inputs:
+      report: "{{definition_validation}}"
+
+  - id: tasks
+    session: planning-agent
+    mode: autonomous
+    prompt: |
+      Create the implementation task breakdown for {{change_label}} "{{change_name}}". Read the approved proposal, specifications, design, and `test-plan.md` under `{{change_dir}}/`, then use the codagent:plan-tasks skill.
+
+      Task planning is autonomous because the definition artifacts have already been approved. This instruction overrides the skill's confirmation gate: do NOT ask the user to approve the number or grouping of tasks. Choose a right-sized breakdown using your best judgment and continue directly to writing the task files.
+
+      You MUST create detailed task files under `{{change_dir}}/tasks/*.md` and `{{change_dir}}/tasks.md` as an index linking to them. At least one non-empty `tasks/*.md` file is required.
+
+  - id: review-tasks
+    workflow: review-tasks-v1.0.yaml
+    params:
+      change_name: "{{change_name}}"
+      change_dir: "{{change_dir}}"
+      change_label: "{{change_label}}"
+
+  - id: post-review-validate
+    session: planning-agent
+    mode: autonomous
+    capture: post_validation
+    prompt: |
+      This is mechanical artifact and task-file validation, not an artifact review. Do not invoke `codagent:proposal-review`, `codagent:review-approach`, `codagent:review-spec`, or `codagent:review-tasks`.
+
+      Read and follow `{{definition_validation_checklist}}`, substituting "{{change_name}}" for `<change-name>` and "{{change_dir}}" for `<change-dir>`.
+
+      Finally, verify that `{{change_dir}}/tasks.md` exists, links to every task file, and at least one non-empty file matches `{{change_dir}}/tasks/*.md`.
+
+      End with the exact line `PLANNING_READY` only when all validation, delta, and task-file checks pass without an unresolved semantic blocker. Otherwise end with `PLANNING_BLOCKED:` followed by the reason, and do not include `PLANNING_READY` anywhere in your response.
+
+  - id: post-validation-status-gate
+    script: planning-status-gate.sh
+    script_inputs:
+      report: "{{post_validation}}"
+
+  - id: commit-plan
+    script: commit-change-plan.sh
+    script_inputs:
+      change_name: "{{change_name}}"
+      change_dir: "{{change_dir}}"

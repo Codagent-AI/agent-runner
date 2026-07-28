@@ -1,5 +1,5 @@
 name: change
-description: "Define, plan, implement, accept, archive, and finalize an OpenSpec change."
+description: "Define, plan, implement, accept, and finalize a spec-driven change."
 
 params:
   - name: change_name
@@ -9,7 +9,7 @@ steps:
   - id: validate-feature-branch
     workflow: ../core/validate-feature-branch-v1.0.yaml
     params:
-      workflow_name: "openspec:change"
+      workflow_name: "spec-driven:change"
 
   - id: define
     workflow: define-change-v1.0.yaml
@@ -30,14 +30,9 @@ steps:
     workflow: ../core/accept-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
-      change_dir: "openspec/changes/{{change_name}}"
-      change_label: "OpenSpec change"
-      artifact_validation_instruction: 'If a specification changed, run `openspec validate --type change "{{change_name}}"`.'
-
-  - id: archive
-    workflow: archive-change-v1.0.yaml
-    params:
-      change_name: "{{change_name}}"
+      change_dir: "specs/changes/{{change_name}}"
+      change_label: "spec-driven change"
+      artifact_validation_instruction: 'If a specification changed, read and follow `{{session_dir}}/bundled/spec-driven/definition-validation-checklist.md` for "{{change_name}}".'
 
   - id: finalize
     workflow: ../core/finalize-pr-v1.0.yaml

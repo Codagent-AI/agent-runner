@@ -1,0 +1,20 @@
+name: implement-change
+description: "Implement and validate spec-driven tasks, then prepare completion evidence and a draft pull request for human acceptance."
+hidden: true
+
+params:
+  - name: change_name
+    required: true
+  - name: skip_validator
+    required: false
+    default: "false"
+
+steps:
+  - id: implement
+    workflow: ../core/implement-change-v1.0.yaml
+    params:
+      change_name: "{{change_name}}"
+      change_dir: "specs/changes/{{change_name}}"
+      change_label: "spec-driven change"
+      artifact_validation_instruction: 'When an approved artifact changed, read and follow `{{session_dir}}/bundled/spec-driven/definition-validation-checklist.md` for "{{change_name}}".'
+      skip_validator: "{{skip_validator}}"
