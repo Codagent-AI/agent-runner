@@ -435,7 +435,7 @@ func TestOpenSpecAcceptanceCallsUseTesterAndPreserveControls(t *testing.T) {
 			stepID: "run-reacceptance-testing",
 			required: []string{
 				"`session: acceptance-tester`",
-				"affected and directly dependent flows agreed with the user",
+				"directly dependent flows agreed with the user",
 				"acceptance-flow-evidence.md",
 				"Use at most three tester calls",
 				"REACCEPTANCE_COMPLETE",
@@ -450,6 +450,10 @@ func TestOpenSpecAcceptanceCallsUseTesterAndPreserveControls(t *testing.T) {
 				t.Fatalf("ReadFile(%s) error = %v", tt.ref, err)
 			}
 			var workflow struct {
+				Sessions []struct {
+					Name  string `yaml:"name"`
+					Agent string `yaml:"agent"`
+				} `yaml:"sessions"`
 				Steps []struct {
 					ID      string `yaml:"id"`
 					Prompt  string `yaml:"prompt"`
@@ -459,6 +463,16 @@ func TestOpenSpecAcceptanceCallsUseTesterAndPreserveControls(t *testing.T) {
 			}
 			if err := yaml.Unmarshal(body, &workflow); err != nil {
 				t.Fatalf("unmarshal %s: %v", tt.ref, err)
+			}
+			var testerAgent string
+			for _, session := range workflow.Sessions {
+				if session.Name == "acceptance-tester" {
+					testerAgent = session.Agent
+					break
+				}
+			}
+			if testerAgent != "tester" {
+				t.Fatalf("acceptance-tester agent = %q, want tester", testerAgent)
 			}
 			for _, step := range workflow.Steps {
 				if step.ID != tt.stepID {

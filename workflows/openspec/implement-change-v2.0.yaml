@@ -129,7 +129,7 @@ steps:
     prompt: |
       Prepare OpenSpec change "{{change_name}}" for human acceptance by orchestrating an independent acceptance tester. Do not perform the acceptance flow testing yourself.
 
-      Use codagent:call-agent with `session: acceptance-tester`. Its first use creates a fresh independent reviewer session; later calls resume that same tester. Supply task-specific child instructions requiring it to use codagent:prepare-acceptance with these inputs:
+      Use codagent:call-agent with `session: acceptance-tester`. Its first use creates a fresh independent tester session; later calls resume that same tester. Supply task-specific child instructions requiring it to use codagent:prepare-acceptance with these inputs:
       - approved artifacts: `openspec/changes/{{change_name}}/`;
       - authoritative test plan: `openspec/changes/{{change_name}}/test-plan.md`;
       - implementation evidence: `{{session_dir}}/output/*session-report*.out` and `{{session_dir}}/audit.log`;
