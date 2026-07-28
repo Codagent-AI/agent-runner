@@ -1,0 +1,72 @@
+name: plan-change
+description: "Autonomously validate an approved OpenSpec definition and produce a reviewed task plan."
+hidden: true
+
+# This workflow consumes proposal/specs/design artifacts produced earlier.
+# Attaching the OpenSpec engine would reject those unmatched artifact step IDs;
+# the task prompt supplies its paths and dependencies explicitly instead.
+
+params:
+  - name: change_name
+    required: true
+
+sessions:
+  - name: planning-agent
+    agent: lead
+
+steps:
+  - id: validate-definition
+    session: planning-agent
+    mode: autonomous
+    capture: definition_validation
+    prompt: |
+      Validate the approved proposal, specifications, and design for OpenSpec change "{{change_name}}" before task planning.
+
+      This is mechanical OpenSpec validation, not an artifact review. Do not invoke `codagent:proposal-review`, `codagent:review-approach`, `codagent:review-spec`, or `codagent:review-tasks`.
+
+      Read and follow `{{session_dir}}/bundled/openspec/definition-validation-checklist.md`, substituting "{{change_name}}" for `<change-name>`. Do not create task files in this step.
+
+      End with the exact line `PLANNING_READY` only when validation and the delta dry-run pass without any unresolved semantic blocker. Otherwise end with `PLANNING_BLOCKED:` followed by the reason, and do not include `PLANNING_READY` anywhere in your response.
+
+  - id: definition-status-gate
+    script: planning-status-gate.sh
+    script_inputs:
+      report: "{{definition_validation}}"
+
+  - id: tasks
+    session: planning-agent
+    mode: autonomous
+    prompt: |
+      Create the implementation task breakdown for OpenSpec change "{{change_name}}". Read the approved proposal, specifications, and design under `openspec/changes/{{change_name}}/`, then use the codagent:plan-tasks skill.
+
+      Task planning is autonomous because the definition artifacts have already been approved. This instruction overrides the skill's confirmation gate: do NOT ask the user to approve the number or grouping of tasks. Choose a right-sized breakdown using your best judgment and continue directly to writing the task files.
+
+      You MUST create detailed task files under `openspec/changes/{{change_name}}/tasks/*.md` and `openspec/changes/{{change_name}}/tasks.md` as an index linking to them. At least one non-empty `tasks/*.md` file is required.
+
+  - id: review-tasks
+    workflow: review-tasks-v1.0.yaml
+    params:
+      change_name: "{{change_name}}"
+
+  - id: post-review-validate
+    session: planning-agent
+    mode: autonomous
+    capture: post_validation
+    prompt: |
+      This is mechanical OpenSpec and task-file validation, not an artifact review. Do not invoke `codagent:proposal-review`, `codagent:review-approach`, `codagent:review-spec`, or `codagent:review-tasks`.
+
+      Read and follow `{{session_dir}}/bundled/openspec/definition-validation-checklist.md`, substituting "{{change_name}}" for `<change-name>`.
+
+      Finally, verify that `openspec/changes/{{change_name}}/tasks.md` exists, links to every task file, and at least one non-empty file matches `openspec/changes/{{change_name}}/tasks/*.md`.
+
+      End with the exact line `PLANNING_READY` only when all validation, delta, and task-file checks pass without an unresolved semantic blocker. Otherwise end with `PLANNING_BLOCKED:` followed by the reason, and do not include `PLANNING_READY` anywhere in your response.
+
+  - id: post-validation-status-gate
+    script: planning-status-gate.sh
+    script_inputs:
+      report: "{{post_validation}}"
+
+  - id: commit-openspec
+    script: commit-change-plan.sh
+    script_inputs:
+      change_name: "{{change_name}}"

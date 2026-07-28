@@ -1,7 +1,7 @@
 # native-setup-ux Specification
 
 ## Purpose
-TBD - created by archiving change native-setup-fixes. Update Purpose after archive.
+Define the native first-run setup experience, including responsive TUI behavior, role configuration, plugin installation, deferred persistence, and completion flows.
 ## Requirements
 ### Requirement: Centered layout with graceful fallback
 
@@ -159,4 +159,3 @@ The summary SHALL identify the recommended CLI and model for each role, SHALL di
 #### Scenario: Customization follows role order
 - **WHEN** the user chooses to customize the recommendations
 - **THEN** native setup presents role customization in lead, crosscheck, implementor, then tester order
-

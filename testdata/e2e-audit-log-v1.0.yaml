@@ -1,0 +1,7 @@
+name: e2e-audit-log
+params: []
+steps:
+  - id: greet
+    command: echo hello
+  - id: warn
+    command: echo "warning msg" >&2

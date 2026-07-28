@@ -1,4 +1,0 @@
-name: broken-agent
-steps:
-  - id: bad-step
-    prompt: "missing agent field"

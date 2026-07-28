@@ -1,0 +1,165 @@
+name: implement-change
+description: "Implement and validate OpenSpec tasks, then prepare completion evidence and a draft pull request for human acceptance."
+hidden: true
+
+params:
+  - name: change_name
+    required: true
+  - name: skip_validator
+    required: false
+    default: "false"
+
+sessions:
+  - name: lead-agent
+    agent: lead
+  - name: acceptance-tester
+    agent: tester
+
+steps:
+  - id: validate-change-name
+    script: validate-change-name.sh
+    script_inputs:
+      change_name: "{{change_name}}"
+
+  - id: implement-tasks
+    loop:
+      over: "openspec/changes/{{change_name}}/tasks/*.md"
+      as: task_file
+      require_matches: true
+    steps:
+      - id: implement-single-task
+        workflow: ../core/implement-task-v1.0.yaml
+        params:
+          task_file: "{{task_file}}"
+          run_session_report: "true"
+          skip_validator: "{{skip_validator}}"
+
+  - id: complete-task-index
+    session: lead-agent
+    mode: autonomous
+    prompt: |
+      Every implementation task for OpenSpec change "{{change_name}}" has now completed successfully, including its implementation commit and, unless `skip_validator` is `true`, task-compliance validation.
+
+      Update `openspec/changes/{{change_name}}/tasks.md` so each checklist entry corresponding to a task file under `openspec/changes/{{change_name}}/tasks/*.md` is checked. Do not change task wording, task-file content, requirements, design, or implementation. Verify the index still links to every task file and contains no unchecked task entry.
+
+      If the index changed, commit only that file following the project's commit message conventions and prepend `[{{step_id}}]`. If it was already correct, do not create an empty commit.
+
+  - id: verify-task-index
+    command: |
+      if grep -Eq '^[[:space:]]*-[[:space:]]+\[[[:space:]]\]' "openspec/changes/{{change_name}}/tasks.md"; then
+        echo "tasks.md still contains incomplete task entries" >&2
+        exit 1
+      fi
+
+  - id: review-assumptions
+    session: lead-agent
+    mode: autonomous
+    prompt: |
+      The implementation iterations for OpenSpec change "{{change_name}}" have completed. Audit the risky and notable assumptions plus context gaps in their session reports.
+
+      Session-report output for this run is persisted as one file per iteration at:
+
+          {{session_dir}}/output/*session-report*.out
+
+      The iteration index is embedded in each filename. Cross-reference each report with the matching task file in the `step_start` or `iteration_start` metadata in `{{session_dir}}/audit.log`; the audit log contains metadata, not report text.
+
+      Build a complete finding ledger. Fix and commit high-confidence implementation issues directly, following the project's commit message conventions and prepending `[{{step_id}}]`. For ambiguous findings or context gaps, do not ask the user during this autonomous phase and do not silently resolve product, scope, or design ambiguity.
+
+      Always write `{{session_dir}}/output/acceptance-assumptions.md`. List every unresolved finding or context gap concisely, with its source task or session report, why it is undecided, the decision needed from the user, and the likely impact of each option. If none remain, write an explicit `No unresolved assumptions or context gaps.` statement. This file is the canonical handoff for the first phase of human acceptance.
+
+  - id: verify-assumptions-handoff
+    command: test -s "{{session_dir}}/output/acceptance-assumptions.md"
+
+  - id: simplify
+    session: lead-agent
+    mode: autonomous
+    prompt: |
+      If the /simplify skill is available, run it focusing on code reuse and readability. If it is not available, review all changes for duplicated logic that should be extracted into shared helpers and readability problems such as deep nesting, unclear naming, or overly complex conditionals.
+
+      Fix and commit clear-cut issues, following the project's commit message conventions and prepending [{{step_id}}]. Do not expand the accepted scope.
+
+  - id: run-validator
+    workflow: ../core/run-validator-v1.0.yaml
+
+  - id: verify-clean-for-pr
+    command: |
+      if [ -n "$(git status --porcelain)" ]; then
+        echo "working tree changes remain after validation; commit or remove them before opening the draft pull request" >&2
+        exit 1
+      fi
+
+  - id: open-draft-pr
+    session: lead-agent
+    mode: autonomous
+    prompt: |
+      Final validation is complete, and no tracked changes may remain uncommitted. Invoke codagent:push-pr to push the current branch and create or update its pull request. Do not create a new implementation or artifact commit here; if tracked changes remain, stop and report them instead of opening the pull request.
+
+      The pull request MUST be a draft so the user can review it during the acceptance phase. This requirement intentionally overrides the skill's default non-draft creation command:
+      - preserve the base branch of an existing pull request;
+      - when creating a pull request, use the repository's configured default base branch;
+      - when creating a pull request, create it as a draft;
+      - when updating an existing open pull request that is not a draft, convert it back to draft;
+      - do not mark the pull request ready for review in this step.
+
+      Verify the final state by querying the open pull request for the current head branch. Do not signal completion unless it is open, its base branch is non-empty, it is a draft, and its head SHA equals local `HEAD`. Report the pull request URL and actual base branch.
+
+  - id: verify-draft-pr
+    command: |
+      branch=$(git branch --show-current)
+      local_head=$(git rev-parse HEAD)
+      pr_json=$(gh pr list --head "$branch" --state open --json number,url,state,isDraft,baseRefName,headRefOid --limit 2)
+      count=$(printf '%s' "$pr_json" | jq 'length')
+      if [ "$count" -ne 1 ]; then
+        echo "expected exactly one open pull request for branch '$branch', found $count" >&2
+        exit 1
+      fi
+      state=$(printf '%s' "$pr_json" | jq -r '.[0].state')
+      is_draft=$(printf '%s' "$pr_json" | jq -r '.[0].isDraft')
+      base=$(printf '%s' "$pr_json" | jq -r '.[0].baseRefName')
+      pr_head=$(printf '%s' "$pr_json" | jq -r '.[0].headRefOid')
+      if [ "$state" != "OPEN" ] || [ "$is_draft" != "true" ] || [ -z "$base" ] || [ "$local_head" != "$pr_head" ]; then
+        echo "open pull request does not match required draft state or local HEAD" >&2
+        exit 1
+      fi
+
+  - id: prepare-acceptance
+    session: lead-agent
+    mode: autonomous
+    tools: [call_agent]
+    prompt: |
+      Prepare OpenSpec change "{{change_name}}" for human acceptance by orchestrating an independent acceptance tester. Do not perform the acceptance flow testing yourself.
+
+      Use codagent:call-agent with `session: acceptance-tester`. Its first use creates a fresh independent reviewer session; later calls resume that same tester. Supply task-specific child instructions requiring it to use codagent:prepare-acceptance with these inputs:
+      - approved artifacts: `openspec/changes/{{change_name}}/`;
+      - implementation evidence: `{{session_dir}}/output/*session-report*.out` and `{{session_dir}}/audit.log`;
+      - evidence directory: `{{session_dir}}/output/`;
+      - assumptions ledger: `{{session_dir}}/output/acceptance-assumptions.md`;
+      - verification scope: `full` for the first pass.
+
+      Follow codagent:call-agent's verification and autonomous result-accounting rules after every pass. Inspect the durable evidence and resolve every high-confidence in-scope finding you can, including implementation, CI, PR-state, tooling, setup, and environmental problems. Preserve approved behavior, scope, and design; append ambiguity to the assumptions ledger instead of deciding it silently.
+
+      Before fixing an implementation defect found by acceptance testing, you MUST invoke codagent:implement-with-tdd and follow its red-green-refactor process. Add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
+
+      If a tracked file changes, run the narrowest relevant automated checks, run `openspec validate --type change "{{change_name}}"` when an approved artifact changed, then invoke the validator-run skill and require it to pass. Incorporate any Validator fixes, commit all related changes following project conventions with the `[{{step_id}}]` prefix, push, and verify local `HEAD` equals the draft PR head.
+
+      Before each post-fix tester call, write `{{session_dir}}/output/acceptance-impact-scope.md`. Name the user or client flows affected by the complete fix, any directly dependent flows that could regress, and a concise rationale bounding why other surfaces or subsystems are unaffected. Resume `acceptance-tester` with explicit re-review instructions: reproduce the prior finding against the fix, exercise only those affected and directly dependent flows, retain the prior full-pass evidence for unaffected flows, and do not begin a new broad review. It may report a newly introduced defect only when observed within that targeted scope. Give it `{{session_dir}}/output/acceptance-flow-evidence.md` as the prior full-pass baseline.
+
+      If no tracked product contents changed and only PR alignment, pushing, CI availability, tooling, or another external condition was corrected, give the child an `evidence-only` scope with `acceptance-flow-evidence.md`. A Validator run that makes no tracked change does not invalidate the existing flow evidence. The child should wait for current-head CI and produce the final evidence without exercising product flows again.
+
+      Use at most three acceptance-tester calls. Stop when the skill produces complete acceptance evidence for the current revision with no clear defect or impediment. Verify its referenced evidence exists and summarize the ready SHA, PR URL, full-baseline and targeted-pass provenance, evidence paths, unresolved-assumption count, CI status, and known limitations.
+
+      If three calls do not converge, preserve the latest findings and assumptions under `{{session_dir}}/output/` and write `{{session_dir}}/output/acceptance-handoff.md` with an honest summary of the remaining impediments and available evidence. Do not call another tester for the same unchanged impediment.
+
+      Whether testing converges or not, verify that `acceptance-handoff.md` exists and clearly states the current acceptance-testing outcome. Overwrite `{{session_dir}}/output/acceptance-preparation-status.txt` with exactly one line: `ACCEPTANCE_COMPLETE` after convergence, or `ACCEPTANCE_FAILED` after three unsuccessful calls.
+
+  - id: verify-acceptance-handoff
+    command: |
+      if [ ! -s "{{session_dir}}/output/acceptance-handoff.md" ]; then
+        echo "acceptance handoff is missing or empty" >&2
+        exit 1
+      fi
+      status=$(sed '/^[[:space:]]*$/d' "{{session_dir}}/output/acceptance-preparation-status.txt" | tail -n 1)
+      if [ "$status" != "ACCEPTANCE_COMPLETE" ]; then
+        echo "acceptance preparation failed after three tester calls" >&2
+        exit 1
+      fi

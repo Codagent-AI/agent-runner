@@ -241,7 +241,7 @@ func TestWriteProfileCommandRoundTripCreates0600File(t *testing.T) {
 		}
 	}
 	if strings.Contains(string(body), "extends:") {
-		t.Fatalf("written config missing expected agents:\n%s", body)
+		t.Fatalf("written config unexpectedly contains extends:\n%s", body)
 	}
 }
 

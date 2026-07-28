@@ -2180,21 +2180,21 @@ func TestModel_FromList_DefaultFlags(t *testing.T) {
 
 func TestModel_NewRewoundStateFocusesPersistedCurrentStep(t *testing.T) {
 	dir := t.TempDir()
-	topPath := filepath.Join(dir, "onboarding.yaml")
-	guidedPath := filepath.Join(dir, "guided-workflow.yaml")
-	validatorPath := filepath.Join(dir, "validator.yaml")
-	writeFile(t, topPath, `name: onboarding-onboarding
+	topPath := filepath.Join(dir, "onboarding-v1.0.yaml")
+	guidedPath := filepath.Join(dir, "guided-workflow-v1.0.yaml")
+	validatorPath := filepath.Join(dir, "validator-v1.0.yaml")
+	writeFile(t, topPath, `name: onboarding
 steps:
   - id: step-types-demo
     command: echo demo
   - id: guided-workflow
-    workflow: guided-workflow.yaml
+    workflow: guided-workflow-v1.0.yaml
   - id: validator
-    workflow: validator.yaml
+    workflow: validator-v1.0.yaml
   - id: advanced
     command: echo advanced
 `)
-	writeFile(t, guidedPath, `name: onboarding-guided-workflow
+	writeFile(t, guidedPath, `name: guided-workflow
 steps:
   - id: implement
     command: echo implement
@@ -2206,7 +2206,7 @@ steps:
       - label: Continue
         outcome: continue
 `)
-	writeFile(t, validatorPath, `name: onboarding-validator
+	writeFile(t, validatorPath, `name: validator
 steps:
   - id: review-validator-status
     mode: ui
@@ -2223,7 +2223,7 @@ steps:
 	}
 	state := model.RunState{
 		WorkflowFile: topPath,
-		WorkflowName: "onboarding-onboarding",
+		WorkflowName: "onboarding",
 		WorkflowHash: "hash-1",
 		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
 			StepID:            "guided-workflow",
@@ -2247,13 +2247,13 @@ steps:
 		`2026-05-17T00:00:01Z [step-types-demo] step_start {}`,
 		`2026-05-17T00:00:02Z [step-types-demo] step_end {"outcome":"success"}`,
 		`2026-05-17T00:00:03Z [guided-workflow] step_start {}`,
-		`2026-05-17T00:00:04Z [guided-workflow, sub:onboarding-guided-workflow, implement] step_start {}`,
-		`2026-05-17T00:00:05Z [guided-workflow, sub:onboarding-guided-workflow, implement] step_end {"outcome":"success"}`,
-		`2026-05-17T00:00:06Z [guided-workflow, sub:onboarding-guided-workflow, summary] step_start {}`,
-		`2026-05-17T00:00:07Z [guided-workflow, sub:onboarding-guided-workflow, summary] step_end {"outcome":"success"}`,
+		`2026-05-17T00:00:04Z [guided-workflow, sub:guided-workflow, implement] step_start {}`,
+		`2026-05-17T00:00:05Z [guided-workflow, sub:guided-workflow, implement] step_end {"outcome":"success"}`,
+		`2026-05-17T00:00:06Z [guided-workflow, sub:guided-workflow, summary] step_start {}`,
+		`2026-05-17T00:00:07Z [guided-workflow, sub:guided-workflow, summary] step_end {"outcome":"success"}`,
 		`2026-05-17T00:00:08Z [guided-workflow] sub_workflow_end {"outcome":"success"}`,
 		`2026-05-17T00:00:09Z [validator] step_start {}`,
-		`2026-05-17T00:00:10Z [validator, sub:onboarding-validator, review-validator-status] step_start {}`,
+		`2026-05-17T00:00:10Z [validator, sub:validator, review-validator-status] step_start {}`,
 		"",
 	}, "\n"))
 
@@ -2454,8 +2454,8 @@ func TestModel_StepStateMsg_AutoFollowScrollsDetailToActiveSelection(t *testing.
 		Type:                NodeSubWorkflow,
 		Status:              StatusInProgress,
 		Parent:              root,
-		StaticWorkflow:      "run-validator.yaml",
-		StaticWorkflowPath:  "/fixtures/workflows/core/run-validator.yaml",
+		StaticWorkflow:      "run-validator-v1.0.yaml",
+		StaticWorkflowPath:  "/fixtures/workflows/core/run-validator-v1.0.yaml",
 		InterpolatedCommand: "agent-validator run --report",
 	}
 	review := &StepNode{

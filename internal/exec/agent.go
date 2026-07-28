@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/mattn/go-isatty"
 
-	"github.com/codagent/agent-runner/internal/agentcall"
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/config"
@@ -128,7 +127,7 @@ func ExecuteAgentStep(
 	if step.Prompt == "" {
 		return OutcomeFailed, nil
 	}
-	agentCallEligible := strings.Contains(step.Prompt, agentcall.ToolName)
+	agentCallEligible := step.HasTool(model.RunnerToolCallAgent)
 
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 	startTime := time.Now()
@@ -479,7 +478,7 @@ func buildStepInvocation(
 		return nil, nil, "", fmt.Errorf("resolve completion executable: %w", err)
 	}
 	input := buildAdapterInput(step, ctx, profile, adapter, prompt, enrichment, sessionID, isResume, invocationContext, completionExecutable)
-	if strings.Contains(step.Prompt, agentcall.ToolName) {
+	if step.HasTool(model.RunnerToolCallAgent) {
 		executable := completionExecutable
 		if executable == "" {
 			executable, err = agentRunnerExecutable()

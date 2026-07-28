@@ -21,7 +21,7 @@ The editor SHALL NOT create or replace `interactive_base`, `autonomous_base`, `s
 - **WHEN** the selected config already contains `interactive_base`, `autonomous_base`, `summarizer`, or another unmanaged agent
 - **THEN** the editor leaves every unmanaged entry unchanged while writing the four managed roles
 
-### Requirement: User chooses CLI and model for each base agent
+### Requirement: User chooses CLI and model for each role
 
 The native setup profile editor SHALL first present a summary of its four-role recommendation with exactly two profile-selection actions: accept the complete recommendation or customize the roles individually. Accepting the recommendation SHALL retain all four recommended role selections without showing individual role-selection screens.
 
@@ -269,4 +269,3 @@ For a role whose preferred recognized tier is unavailable, the editor SHALL pref
 #### Scenario: No models are discoverable
 - **WHEN** a recommended CLI returns no models
 - **THEN** the recommendation identifies that CLI's adapter default and leaves its model unset
-

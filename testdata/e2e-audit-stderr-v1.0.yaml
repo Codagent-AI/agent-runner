@@ -1,0 +1,5 @@
+name: e2e-audit-stderr
+params: []
+steps:
+  - id: noisy
+    command: echo "stderr content" >&2 && echo "stdout content"

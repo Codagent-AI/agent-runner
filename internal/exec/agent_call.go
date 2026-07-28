@@ -256,7 +256,7 @@ type resolvedAgentCall struct {
 
 func (h *AgentCallHandler) resolve(raw json.RawMessage) (*resolvedAgentCall, *agentcall.Error) {
 	if !h.options.Eligible {
-		return nil, &agentcall.Error{Code: agentcall.CodeIneligible, Message: "call_agent is not enabled for this parent prompt"}
+		return nil, &agentcall.Error{Code: agentcall.CodeIneligible, Message: "call_agent is not enabled in the active step declaration"}
 	}
 	request, failure := agentcall.DecodeRequest(raw)
 	if failure != nil {

@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"sort"
 	"strings"
+
+	"github.com/codagent/agent-runner/internal/workflowcatalog"
 )
 
 const RefPrefix = "builtin:"
@@ -39,6 +42,10 @@ func RefPath(workflowFile string) (string, error) {
 }
 
 func Resolve(name string) (string, error) {
+	return resolveFS(FS, name)
+}
+
+func resolveFS(fsys fs.FS, name string) (string, error) {
 	ns, workflowName, ok := strings.Cut(name, ":")
 	if !ok || ns == "" || workflowName == "" {
 		return "", fmt.Errorf("workflow %q not found", name)
@@ -46,20 +53,22 @@ func Resolve(name string) (string, error) {
 	if isMetadataBasename(workflowName) {
 		return "", fmt.Errorf("workflow %q not found", name)
 	}
-	for _, ext := range []string{".yaml", ".yml"} {
-		candidate := path.Join(ns, workflowName+ext)
-		info, err := fs.Stat(FS, candidate)
-		if err == nil {
-			if info.IsDir() {
-				continue
-			}
-			return Ref(candidate), nil
-		}
-		if !isNotExist(err) {
-			return "", fmt.Errorf("workflow %q not found", name)
-		}
+
+	paths, err := definitionPaths(fsys)
+	if err != nil {
+		return "", err
 	}
-	return "", fmt.Errorf("workflow %q not found", name)
+	group, found := workflowcatalog.Build(paths).Lookup(path.Join(ns, workflowName))
+	if !found {
+		return "", fmt.Errorf("workflow %q not found", name)
+	}
+	if group.Err != nil {
+		return "", group.Err
+	}
+	if group.Selected == nil {
+		return "", fmt.Errorf("workflow %q not found", name)
+	}
+	return Ref(group.Selected.Path), nil
 }
 
 // isMetadataBasename reports whether the basename of name starts with `_`,
@@ -122,8 +131,24 @@ func ReadAsset(assetPath string) ([]byte, error) {
 }
 
 func List() ([]string, error) {
-	var refs []string
-	err := fs.WalkDir(FS, ".", func(p string, d fs.DirEntry, err error) error {
+	return listFS(FS)
+}
+
+func listFS(fsys fs.FS) ([]string, error) {
+	paths, err := definitionPaths(fsys)
+	if err != nil {
+		return nil, err
+	}
+	refs := make([]string, len(paths))
+	for index, candidatePath := range paths {
+		refs[index] = Ref(candidatePath)
+	}
+	return refs, nil
+}
+
+func definitionPaths(fsys fs.FS) ([]string, error) {
+	var paths []string
+	err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -135,16 +160,13 @@ func List() ([]string, error) {
 		}
 		ext := path.Ext(p)
 		if ext == ".yaml" || ext == ".yml" {
-			refs = append(refs, Ref(p))
+			paths = append(paths, p)
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return refs, nil
-}
-
-func isNotExist(err error) bool {
-	return errors.Is(err, fs.ErrNotExist)
+	sort.Strings(paths)
+	return paths, nil
 }

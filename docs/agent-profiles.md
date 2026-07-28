@@ -96,7 +96,7 @@ profiles:
         model: sonnet
 ```
 
-An adapter-default selection omits the `model` field. Setup preserves other profile sets, top-level settings, and unmanaged agents such as bases, Summarizer, or team-specific profiles.
+An adapter-default selection omits the `model` field. Setup preserves other profile sets, top-level settings, and unmanaged agents such as bases, `summarizer`, or team-specific profiles.
 
 ## Configuration Layers
 

@@ -1,6 +1,9 @@
 package runview
 
-import "github.com/codagent/agent-runner/internal/model"
+import (
+	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/workflowcatalog"
+)
 
 // ResolverConfig is a type alias for model.ResolverConfig.
 type ResolverConfig = model.ResolverConfig
@@ -13,4 +16,12 @@ func CanonicalName(resolvedPath string, cfg ResolverConfig) string {
 // DiscoverWorkflowsRoot delegates to model.DiscoverWorkflowsRoot.
 func DiscoverWorkflowsRoot(start string) (string, bool) {
 	return model.DiscoverWorkflowsRoot(start)
+}
+
+func recordedWorkflowVersion(workflowFile string) string {
+	definition, err := workflowcatalog.Parse(workflowFile)
+	if err != nil {
+		return "unversioned"
+	}
+	return definition.DisplayLabel
 }

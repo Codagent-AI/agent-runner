@@ -865,7 +865,7 @@ func wrapLine(s string, width int) []string {
 
 // bareWorkflowName strips directory segments and .yaml/.yml suffix from a raw
 // workflow reference so fallbacks display "implement-task" rather than
-// "workflows/core/implement-task.yaml".
+// "workflows/core/implement-task-v1.0.yaml".
 func bareWorkflowName(s string) string {
 	if s == "" {
 		return ""

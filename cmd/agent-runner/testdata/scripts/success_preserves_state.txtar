@@ -6,8 +6,8 @@ stdout state\.json
 exec sh -c 'cat $(find .agent-runner -name state.json)'
 stdout '"completed": true'
 
--- .agent-runner/workflows/workflow.yaml --
-name: e2e-success
+-- .agent-runner/workflows/workflow-v1.0.yaml --
+name: workflow
 steps:
   - id: only
     command: echo ok

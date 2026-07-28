@@ -3,10 +3,11 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestLoadCanonicalizesLegacyOverrideBeforeLayerPrecedence(t *testing.T) {
@@ -35,8 +36,8 @@ func TestLoadCanonicalizesLegacyOverrideBeforeLayerPrecedence(t *testing.T) {
 	if resolved.CLI != "codex" || resolved.Model != "gpt-5.6-sol" {
 		t.Fatalf("Resolve(lead) = %+v, want legacy planner override", resolved)
 	}
-	if got := deprecationPairs(cfg.Deprecations); !reflect.DeepEqual(got, []string{"planner->lead"}) {
-		t.Fatalf("config deprecations = %v, want [planner->lead]", got)
+	if diff := cmp.Diff([]string{"planner->lead"}, deprecationPairs(cfg.Deprecations)); diff != "" {
+		t.Fatalf("config deprecations mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -61,8 +62,8 @@ func TestDefaultProfileContainsApprovedSevenCanonicalAgents(t *testing.T) {
 		gotNames = append(gotNames, name)
 	}
 	slices.Sort(gotNames)
-	if !reflect.DeepEqual(gotNames, wantNames) {
-		t.Fatalf("default agents = %v, want %v", gotNames, wantNames)
+	if diff := cmp.Diff(wantNames, gotNames); diff != "" {
+		t.Fatalf("default agents mismatch (-want +got):\n%s", diff)
 	}
 
 	tester, err := cfg.Resolve("tester")
@@ -88,8 +89,8 @@ func TestResolveCanonicalizesLegacyReference(t *testing.T) {
 	if resolved.DefaultMode != "interactive" || resolved.CLI != "claude" || resolved.Model != "opus" || resolved.Effort != "high" {
 		t.Fatalf("Resolve(planner) = %+v, want canonical Lead defaults", resolved)
 	}
-	if got := deprecationPairs(resolved.Deprecations); !reflect.DeepEqual(got, []string{"planner->lead"}) {
-		t.Fatalf("resolution deprecations = %v, want [planner->lead]", got)
+	if diff := cmp.Diff([]string{"planner->lead"}, deprecationPairs(resolved.Deprecations)); diff != "" {
+		t.Fatalf("resolution deprecations mismatch (-want +got):\n%s", diff)
 	}
 
 	reviewer, err := cfg.Resolve("reviewer")
@@ -99,8 +100,8 @@ func TestResolveCanonicalizesLegacyReference(t *testing.T) {
 	if reviewer.DefaultMode != "autonomous" || reviewer.CLI != "claude" || reviewer.Model != "opus" || reviewer.Effort != "high" {
 		t.Fatalf("Resolve(reviewer) = %+v, want canonical Crosscheck defaults", reviewer)
 	}
-	if got := deprecationPairs(reviewer.Deprecations); !reflect.DeepEqual(got, []string{"reviewer->crosscheck"}) {
-		t.Fatalf("resolution deprecations = %v, want [reviewer->crosscheck]", got)
+	if diff := cmp.Diff([]string{"reviewer->crosscheck"}, deprecationPairs(reviewer.Deprecations)); diff != "" {
+		t.Fatalf("resolution deprecations mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -126,8 +127,8 @@ func TestLoadCanonicalizesLegacyExtendsTarget(t *testing.T) {
 	if resolved.DefaultMode != "autonomous" || resolved.CLI != "claude" || resolved.Model != "opus" || resolved.Effort != "high" {
 		t.Fatalf("Resolve(child) = %+v, want canonical Crosscheck defaults", resolved)
 	}
-	if got := deprecationPairs(cfg.Deprecations); !reflect.DeepEqual(got, []string{"reviewer->crosscheck"}) {
-		t.Fatalf("config deprecations = %v, want [reviewer->crosscheck]", got)
+	if diff := cmp.Diff([]string{"reviewer->crosscheck"}, deprecationPairs(cfg.Deprecations)); diff != "" {
+		t.Fatalf("config deprecations mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -156,8 +157,8 @@ profiles:
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got := deprecationPairs(cfg.Deprecations); !reflect.DeepEqual(got, []string{"reviewer->crosscheck"}) {
-		t.Fatalf("config deprecations = %v, want active-chain warning only", got)
+	if diff := cmp.Diff([]string{"reviewer->crosscheck"}, deprecationPairs(cfg.Deprecations)); diff != "" {
+		t.Fatalf("config deprecations mismatch (-want +got):\n%s", diff)
 	}
 	if _, ok := cfg.Profiles["inactive"].Agents["lead"]; !ok {
 		t.Fatal("inactive planner alias was not canonicalized to lead")
@@ -262,8 +263,8 @@ func TestLoadLegacyAliasesDoesNotRewriteFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	if !reflect.DeepEqual(after, contents) {
-		t.Fatalf("config file changed on load:\n%s", after)
+	if diff := cmp.Diff(contents, after); diff != "" {
+		t.Fatalf("config file changed on load (-want +got):\n%s", diff)
 	}
 }
 

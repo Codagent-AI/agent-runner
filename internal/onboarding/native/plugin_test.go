@@ -42,9 +42,14 @@ func (f *fakeProfileWriter) StageProfile(*profilewrite.Request) (profilewrite.St
 }
 
 type fakeStagedProfile struct {
-	commitErr error
-	committed bool
-	discarded bool
+	previewPath string
+	commitErr   error
+	committed   bool
+	discarded   bool
+}
+
+func (f *fakeStagedProfile) PreviewPath() string {
+	return f.previewPath
 }
 
 func (f *fakeStagedProfile) Commit() error {
@@ -58,6 +63,14 @@ func (f *fakeStagedProfile) Commit() error {
 func (f *fakeStagedProfile) Discard() error {
 	f.discarded = true
 	return nil
+}
+
+func requireStagedProfile(t *testing.T, writer *fakeProfileWriter) *fakeStagedProfile {
+	t.Helper()
+	if writer.staged == nil {
+		t.Fatalf("profile writer did not retain a staged write: %#v", writer)
+	}
+	return writer.staged
 }
 
 func (f *fakePluginInstaller) Resolve(clis []string, scope string) (*agentplugin.Plan, error) {
@@ -141,10 +154,11 @@ func TestPluginPreviewCancellationDoesNotPersistProfileOrSettings(t *testing.T) 
 
 	sendKey(t, m, "esc")
 
-	if m.Result() != ResultCancelled || profiles.staged.committed || !profiles.staged.discarded || saves != 0 {
+	staged := requireStagedProfile(t, profiles)
+	if m.Result() != ResultCancelled || staged.committed || !staged.discarded || saves != 0 {
 		t.Fatalf(
 			"result=%v committed=%v discarded=%v settings saves=%d",
-			m.Result(), profiles.staged.committed, profiles.staged.discarded, saves,
+			m.Result(), staged.committed, staged.discarded, saves,
 		)
 	}
 }
@@ -242,11 +256,12 @@ func TestPluginErrorsPreserveCompletionBoundary(t *testing.T) {
 			if !tt.reachOnly && m.Result() != ResultFailed {
 				sendKey(t, m, "enter")
 			}
-			if m.Result() != ResultFailed || profiles.staged.committed ||
-				!profiles.staged.discarded || saved {
+			staged := requireStagedProfile(t, profiles)
+			if m.Result() != ResultFailed || staged.committed ||
+				!staged.discarded || saved {
 				t.Fatalf(
 					"result=%v committed=%v discarded=%v saved=%v err=%v",
-					m.Result(), profiles.staged.committed, profiles.staged.discarded, saved, m.Err(),
+					m.Result(), staged.committed, staged.discarded, saved, m.Err(),
 				)
 			}
 		})
@@ -318,6 +333,31 @@ func TestDeferredProfileSelectionsReachPluginResolver(t *testing.T) {
 	reachPluginPreview(t, m, false)
 
 	if diff := cmp.Diff([]string{"claude", "codex"}, plugin.resolveCLIs); diff != "" {
+		t.Fatalf("resolve CLIs mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestStagedProfileStateDrivesPluginCLIResolution(t *testing.T) {
+	const projectedPath = "/tmp/projected-config.yaml"
+	plugin := &fakePluginInstaller{dryRunOutput: "preview"}
+	profiles := &fakeProfileWriter{staged: &fakeStagedProfile{previewPath: projectedPath}}
+	deps := pluginDeps(plugin)
+	deps.Profiles = profiles
+	var enumeratedGlobal string
+	deps.EnumCLIs = func(globalPath, _ string) ([]string, error) {
+		enumeratedGlobal = globalPath
+		if globalPath == projectedPath {
+			return []string{"copilot"}, nil
+		}
+		return []string{"legacy-cli"}, nil
+	}
+	m := startTestModel(t, deps)
+	reachPluginPreview(t, m, false)
+
+	if enumeratedGlobal != projectedPath {
+		t.Fatalf("EnumCLIs global path = %q, want staged profile %q", enumeratedGlobal, projectedPath)
+	}
+	if diff := cmp.Diff([]string{"copilot", "claude", "codex"}, plugin.resolveCLIs); diff != "" {
 		t.Fatalf("resolve CLIs mismatch (-want +got):\n%s", diff)
 	}
 }

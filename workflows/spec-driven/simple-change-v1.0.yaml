@@ -1,0 +1,47 @@
+name: simple-change
+description: "Quick plan + implement + validate workflow, okay for small changes"
+
+sessions:
+  - name: lead-agent
+    agent: lead
+
+steps:
+  - id: guard-clean-tree
+    # agent-validator detect: exit 0 = unvalidated changes present, exit 2 = clean (no changes)
+    command: |
+      agent-validator detect; status=$?; if [ $status -eq 0 ]; then echo 'Unvalidated changes detected. Run agent-validator before planning.' >&2; exit 1; elif [ $status -ne 2 ]; then exit $status; fi
+
+  - id: plan
+    session: lead-agent
+    prompt: |
+      Help the user plan the change. First, ask the user what the change is about. DO NOT attempt to guess. Then, you MUST use the codagent:simple-plan skill.
+
+  - id: locate-task
+    session: lead-agent
+    mode: autonomous
+    capture: task_file
+    prompt: |
+      You just planned a simple change that produced a single task file. Output the path to that task file on a single line with NO other text, NO markdown fences, and NO explanation.
+
+      Example valid output: some/path/tasks/001-do-the-thing.md
+
+  - id: check-planning-artifacts
+    command: |
+      if [ ! -s "{{task_file}}" ]; then
+        echo "ERROR: planning did not produce a task file at: {{task_file}}" >&2
+        echo "The plan step may have written to the wrong directory or failed silently. Re-run planning before retrying." >&2
+        exit 1
+      fi
+
+  - id: generate-code
+    agent: implementor
+    session: new
+    mode: autonomous
+    prompt: |
+      Implement the task described in {{task_file}}. You MUST use the codagent:implement-with-tdd skill. When you are done implementing, commit your changes following the project's commit message conventions and prepend [{{step_id}}]. Then summarize to the user what you changed.
+
+  - id: run-validator
+    workflow: ../core/run-validator-v1.0.yaml
+    params:
+      task_file: "{{task_file}}"
+    continue_on_failure: true

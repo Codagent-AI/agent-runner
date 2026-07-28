@@ -1,0 +1,4 @@
+name: invalid-shell-no-command
+steps:
+  - id: bad-step
+    prompt: "missing agent field"

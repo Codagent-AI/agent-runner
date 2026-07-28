@@ -13,13 +13,13 @@ stdout 'step "outer" failed'
 exec cat attempts.txt
 stdout '^3$'
 
--- .agent-runner/workflows/top.yaml --
-name: e2e-sub-workflow-exhausted-loop-top
+-- .agent-runner/workflows/top-v1.0.yaml --
+name: top
 steps:
   - id: outer
-    workflow: inner.yaml
--- .agent-runner/workflows/inner.yaml --
-name: e2e-sub-workflow-exhausted-loop-inner
+    workflow: inner-v1.0.yaml
+-- .agent-runner/workflows/inner-v1.0.yaml --
+name: inner
 steps:
   - id: retry
     loop:

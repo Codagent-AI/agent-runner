@@ -15,8 +15,8 @@ Workflow names resolve in this order:
 
 | Order | Location |
 | --- | --- |
-| 1 | `.agent-runner/workflows/<name>.yaml` or `.agent-runner/workflows/<name>.yml` in the current project |
-| 2 | `~/.agent-runner/workflows/<name>.yaml` or `~/.agent-runner/workflows/<name>.yml` |
+| 1 | `.agent-runner/workflows/<name>-v<major>.<minor>.yaml` or `.yml` in the current project |
+| 2 | `~/.agent-runner/workflows/<name>-v<major>.<minor>.yaml` or `.yml` |
 | 3 | Built-ins using `<namespace>:<name>` |
 
 Examples:
@@ -31,13 +31,24 @@ agent-runner spec-driven:simple-change
 
 Built-in namespaces currently include `core`, `openspec`, `spec-driven`, and `onboarding`.
 
-Project workflows shadow user workflows with the same name. Built-ins are embedded into the binary from [`workflows/`](../workflows/).
+Workflow filenames are versioned, but launch names are not. For example,
+`.agent-runner/workflows/team/deploy-v2.0.yaml` has YAML `name: deploy` and
+launches as `agent-runner team/deploy`. Agent Runner selects the numerically
+highest valid major/minor version in the winning source. Do not pass a filename,
+version suffix, or filesystem path to start a run.
+
+Project workflow groups shadow user workflow groups with the same logical name.
+Built-ins are embedded into the binary from [`workflows/`](../workflows/).
+Versions distinguish definitions that need to coexist; editing a versioned file
+in place is supported and does not require a version bump.
 
 In the TUI, open a workflow to inspect its step tree before starting a run. Nested workflow and loop steps are shown in the left pane, while the right pane shows the selected step's details.
 
 ![Agent Runner workflow detail view for spec-driven:change](images/workflow-plan.png)
 
 ## Basic Workflow
+
+Save this as `.agent-runner/workflows/hello-v1.0.yaml`:
 
 ```yaml
 name: hello
@@ -112,6 +123,7 @@ Workflow parameters and captured variables shadow built-ins with the same name.
   agent: implementor
   session: new
   mode: autonomous
+  tools: [call_agent]
   prompt: "Implement the plan."
 
 - id: review
@@ -121,6 +133,11 @@ Workflow parameters and captured variables shadow built-ins with the same name.
 ```
 
 Supported CLI adapters are `claude`, `codex`, `copilot`, `cursor`, and `opencode`.
+
+Agent steps may declare Runner-owned tools with a static YAML sequence. The only currently supported
+value is `tools: [call_agent]`, which provisions the process-local agent-call integration described in
+[Agent Calls](agent-calls.md). An omitted or empty list enables no Runner-owned tools. `tools` is
+invalid on non-agent steps, and its entries are not interpolated.
 
 Interactive agent steps hand the real terminal directly to the agent CLI. Agent Runner injects an absolute-path completion command into the step prompt; after answering the user, the agent runs that command to send an authenticated event through the run's private control channel. Users can ask the agent to continue or invoke the CLI-native completion command (`/agent-runner:next` in Claude, Copilot, and Cursor; `$agent-runner-next` in Codex). If the CLI exits before completion is accepted, the step is treated as aborted so you can resume the workflow later.
 
@@ -156,6 +173,11 @@ Script steps run static workflow-local or bundled scripts.
 ```
 
 `script` must be a static relative path and cannot use interpolation or path traversal. `script_inputs` are passed to the script as JSON on `stdin`. `capture_format` may be `text` or `json`; JSON captures must be either an array of strings or an object whose values are strings.
+
+For an on-disk workflow, the script resolves only relative to that workflow
+file's directory. For a built-in workflow, it resolves only inside the
+containing embedded namespace. Agent Runner never falls back from an embedded
+script to a similarly named file in a project or user workflow directory.
 
 ## UI Steps
 
@@ -226,12 +248,17 @@ For-each loop:
 
 ```yaml
 - id: implement-task
-  workflow: ../core/implement-task.yaml
+  workflow: ../core/implement-task-v1.0.yaml
   params:
     task_file: "{{task_file}}"
 ```
 
-Sub-workflow paths resolve relative to the parent workflow. Built-in workflows can call scripts and child workflows bundled in the same namespace. Sub-workflows get their own execution context, receive only explicitly passed parameters plus defaults, and may use `session: inherit` to continue the parent session.
+Sub-workflow references must resolve to a versioned filename. Paths resolve
+relative to the parent workflow, and the exact referenced version remains
+pinned even when a newer sibling exists. Built-in workflows can call scripts
+and child workflows bundled in the same namespace. Sub-workflows get their own
+execution context, receive only explicitly passed parameters plus defaults, and
+may use `session: inherit` to continue the parent session.
 
 ## Flow Control
 
@@ -276,7 +303,10 @@ Shell and autonomous agent captures are strings. Script JSON captures can produc
 
 ## Validate, Fix, Retry
 
-This workflow runs Agent Validator, captures its report, asks the agent to fix failures, and retries up to three times.
+Save this example as
+`.agent-runner/workflows/validate-and-fix-v1.0.yaml`. It runs Agent Validator,
+captures its report, asks the agent to fix failures, and retries up to three
+times.
 
 ```yaml
 name: validate-and-fix

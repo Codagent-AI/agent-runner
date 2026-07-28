@@ -20,12 +20,43 @@ agent-runner review-pr pr_number=42
 
 ## Unknown Workflow
 
-Use a project/user workflow name, a path-like name under `.agent-runner/workflows`, or a built-in name such as `core:run-validator`.
+Use a version-free project/user logical name, a path-like logical name under
+`.agent-runner/workflows`, or a built-in name such as `core:run-validator`.
 
 ```bash
 agent-runner core:run-validator
 agent-runner openspec:plan-change my-change
 ```
+
+Do not launch `deploy-v1.0`, `deploy-v1.0.yaml`, or a filesystem path. Author
+the file as `deploy-v1.0.yaml`, keep its YAML name as `deploy`, and launch it as
+`agent-runner deploy`.
+
+## Workflow Filename Must Be Versioned
+
+Rename authored workflow files to
+`<logical-name>-v<major>.<minor>.yaml` (or `.yml`) while keeping the YAML
+`name:` version-free. Update every parent workflow to pin the exact versioned
+child reference.
+
+An unfinished legacy on-disk run whose state records `deploy.yaml` cannot
+silently move to `deploy-v1.0.yaml`; start a new run after the rename. If the
+state records an unversioned `builtin:` reference, restart with the current
+binary or finish the old run with the older binary. Embedded files cannot be
+renamed by the user.
+
+## Recorded Workflow Version Is Missing
+
+Resume intentionally does not replace a missing recorded version with a newer
+sibling. Restore the exact recorded file to its original path, or inspect the
+run without resuming it. Completed runs can still open from saved state and
+audit evidence.
+
+Workflow versions are not immutable archives. Editing a versioned file in
+place is supported, and resume warns on a hash change but continues. Fresh runs
+always select the latest logical version, so rolling new runs back requires
+publishing a numerically newer definition containing the rollback—not launching
+an older filename directly.
 
 ## Unknown CLI Adapter
 
@@ -111,3 +142,6 @@ Or resume a specific run ID from the current project:
 run_id="replace-with-run-id"
 agent-runner -resume "$run_id"
 ```
+
+If that run is complete, the command opens the same read-only view as
+`agent-runner -inspect "$run_id"`.

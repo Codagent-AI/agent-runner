@@ -133,7 +133,7 @@ func iptr(v int) *int { return &v }
 func buildImplementChangeTree(t *testing.T) *Tree {
 	t.Helper()
 	wf := fixtureImplementChange()
-	tree := BuildTree(&wf, fixturePath("openspec/implement-change.yaml"))
+	tree := BuildTree(&wf, fixturePath("openspec/implement-change-v1.0.yaml"))
 	tree.SubWorkflowLoader = fixtureSubLoader()
 	return tree
 }
@@ -142,14 +142,14 @@ func TestFilterAuditEventsForWorkflowState_DropsFutureEventsFromOldWorkflowHash(
 	wf := model.Workflow{
 		Name: "onboarding",
 		Steps: []model.Step{
-			{ID: "step-types-demo", Workflow: "step-types-demo.yaml"},
-			{ID: "guided-workflow", Workflow: "guided-workflow.yaml"},
-			{ID: "validator", Workflow: "validator.yaml"},
-			{ID: "advanced", Workflow: "advanced.yaml"},
+			{ID: "step-types-demo", Workflow: "step-types-demo-v1.0.yaml"},
+			{ID: "guided-workflow", Workflow: "guided-workflow-v1.0.yaml"},
+			{ID: "validator", Workflow: "validator-v1.0.yaml"},
+			{ID: "advanced", Workflow: "advanced-v1.0.yaml"},
 			{ID: "set-completed", Command: "agent-runner internal write-setting onboarding.completed_at now"},
 		},
 	}
-	tree := BuildTree(&wf, fixturePath("onboarding/onboarding.yaml"))
+	tree := BuildTree(&wf, fixturePath("onboarding/onboarding-v1.0.yaml"))
 	events := []RawEvent{
 		{Type: "run_start", Data: map[string]any{"workflow_hash": "old"}},
 		{Prefix: "[step-types-demo]", Type: "step_start", Data: map[string]any{}},
@@ -180,11 +180,11 @@ func TestFilterAuditEventsForWorkflowState_DropsRunEndWhenResumeIsInProgress(t *
 	wf := model.Workflow{
 		Name: "onboarding",
 		Steps: []model.Step{
-			{ID: "step-types-demo", Workflow: "step-types-demo.yaml"},
-			{ID: "guided-workflow", Workflow: "guided-workflow.yaml"},
+			{ID: "step-types-demo", Workflow: "step-types-demo-v1.0.yaml"},
+			{ID: "guided-workflow", Workflow: "guided-workflow-v1.0.yaml"},
 		},
 	}
-	tree := BuildTree(&wf, fixturePath("onboarding/onboarding.yaml"))
+	tree := BuildTree(&wf, fixturePath("onboarding/onboarding-v1.0.yaml"))
 	events := []RawEvent{
 		{Type: "run_start", Data: map[string]any{"workflow_hash": "new"}},
 		{Prefix: "[guided-workflow]", Type: "step_start", Data: map[string]any{}},
@@ -205,11 +205,11 @@ func TestFilterAuditEventsForWorkflowState_KeepsRunEndForCompletedMatchingWorkfl
 	wf := model.Workflow{
 		Name: "onboarding",
 		Steps: []model.Step{
-			{ID: "step-types-demo", Workflow: "step-types-demo.yaml"},
-			{ID: "guided-workflow", Workflow: "guided-workflow.yaml"},
+			{ID: "step-types-demo", Workflow: "step-types-demo-v1.0.yaml"},
+			{ID: "guided-workflow", Workflow: "guided-workflow-v1.0.yaml"},
 		},
 	}
-	tree := BuildTree(&wf, fixturePath("onboarding/onboarding.yaml"))
+	tree := BuildTree(&wf, fixturePath("onboarding/onboarding-v1.0.yaml"))
 	events := []RawEvent{
 		{Type: "run_start", Data: map[string]any{"workflow_hash": "new"}},
 		{Prefix: "[guided-workflow]", Type: "step_start", Data: map[string]any{}},
@@ -448,7 +448,7 @@ func TestApplyEvent_SubWorkflowLazyLoad(t *testing.T) {
 		Type:   "sub_workflow_start",
 		Data: map[string]any{
 			"workflow_name": "implement-task",
-			"workflow_path": "/tmp/implement-task.yaml",
+			"workflow_path": "/tmp/implement-task-v1.0.yaml",
 			"context": map[string]any{
 				"params": map[string]any{"task_file": "tasks/01.md"},
 			},
@@ -468,7 +468,7 @@ func TestApplyEvent_SubWorkflowLazyLoad(t *testing.T) {
 	// ensureSubWorkflowLoaded set the absolute path before applySubWorkflowStart
 	// ran, so the event's workflow_path does not clobber it.
 	if !filepath.IsAbs(sub.StaticWorkflowPath) ||
-		!strings.HasSuffix(sub.StaticWorkflowPath, "workflows/core/implement-task.yaml") {
+		!strings.HasSuffix(sub.StaticWorkflowPath, "workflows/core/implement-task-v1.0.yaml") {
 		t.Errorf("workflow path: got %q", sub.StaticWorkflowPath)
 	}
 	if sub.InterpolatedParams["task_file"] != "tasks/01.md" {
@@ -510,12 +510,12 @@ func TestApplyEvent_SubWorkflowLazyLoad(t *testing.T) {
 // path from the event, corrupting the parent-dir resolution for descendants.
 func TestApplyEvent_NestedSubWorkflowUnderLoop(t *testing.T) {
 	// Top-level workflow: one sub-workflow step "implement" that points at
-	// implement-change.yaml.
+	// implement-change-v1.0.yaml.
 	wf := fixtureChange()
-	tree := BuildTree(&wf, fixturePath("openspec/change.yaml"))
+	tree := BuildTree(&wf, fixturePath("openspec/change-v1.0.yaml"))
 	tree.SubWorkflowLoader = fixtureSubLoader()
 
-	// Outer sub-workflow start (implement → implement-change.yaml). Audit
+	// Outer sub-workflow start (implement → implement-change-v1.0.yaml). Audit
 	// events carry whatever path the executor used, which in practice is
 	// relative to the invocation CWD.
 	tree.ApplyEvent(RawEvent{
@@ -523,7 +523,7 @@ func TestApplyEvent_NestedSubWorkflowUnderLoop(t *testing.T) {
 		Type:   "sub_workflow_start",
 		Data: map[string]any{
 			"workflow_name": "implement-change",
-			"workflow_path": "workflows/openspec/implement-change.yaml",
+			"workflow_path": "workflows/openspec/implement-change-v1.0.yaml",
 		},
 	})
 	// Loop step_start pre-creates iteration placeholders.
@@ -543,13 +543,13 @@ func TestApplyEvent_NestedSubWorkflowUnderLoop(t *testing.T) {
 			"loop_var":  map[string]any{"task_file": "tasks/01.md"},
 		},
 	})
-	// Inner sub-workflow start (implement-single-task → ../core/implement-task.yaml).
+	// Inner sub-workflow start (implement-single-task → ../core/implement-task-v1.0.yaml).
 	tree.ApplyEvent(RawEvent{
 		Prefix: "[implement, sub:implement-change, implement-tasks:0, implement-single-task, sub:implement-task]",
 		Type:   "sub_workflow_start",
 		Data: map[string]any{
 			"workflow_name": "implement-task",
-			"workflow_path": "workflows/core/implement-task.yaml",
+			"workflow_path": "workflows/core/implement-task-v1.0.yaml",
 		},
 	})
 
@@ -576,7 +576,7 @@ func TestApplyEvent_NestedSubWorkflowUnderLoop(t *testing.T) {
 
 func TestApplyEvent_NestedSubWorkflowUnderLoop_BuiltinPaths(t *testing.T) {
 	wf := fixtureChange()
-	tree := BuildTree(&wf, "builtin:spec-driven/change.yaml")
+	tree := BuildTree(&wf, "builtin:spec-driven/change-v1.0.yaml")
 	// Use a loader that requires the builtin: prefix (like the real loader),
 	// unlike fixtureSubLoader which matches by basename only.
 	tree.SubWorkflowLoader = func(path string) (model.Workflow, error) {
@@ -585,11 +585,11 @@ func TestApplyEvent_NestedSubWorkflowUnderLoop_BuiltinPaths(t *testing.T) {
 		}
 		base := filepath.Base(path)
 		switch base {
-		case "implement-change.yaml":
+		case "implement-change-v1.0.yaml":
 			return fixtureImplementChange(), nil
-		case "implement-task.yaml":
+		case "implement-task-v1.0.yaml":
 			return fixtureImplementTask(), nil
-		case "plan-change.yaml":
+		case "plan-change-v1.0.yaml":
 			return fixturePlanChange(), nil
 		}
 		return model.Workflow{}, fmt.Errorf("no fixture for %s", path)
@@ -600,7 +600,7 @@ func TestApplyEvent_NestedSubWorkflowUnderLoop_BuiltinPaths(t *testing.T) {
 		Type:   "sub_workflow_start",
 		Data: map[string]any{
 			"workflow_name": "implement-change",
-			"workflow_path": "builtin:spec-driven/implement-change.yaml",
+			"workflow_path": "builtin:spec-driven/implement-change-v1.0.yaml",
 		},
 	})
 	tree.ApplyEvent(RawEvent{
@@ -624,7 +624,7 @@ func TestApplyEvent_NestedSubWorkflowUnderLoop_BuiltinPaths(t *testing.T) {
 		Type:   "sub_workflow_start",
 		Data: map[string]any{
 			"workflow_name": "implement-task",
-			"workflow_path": "builtin:core/implement-task.yaml",
+			"workflow_path": "builtin:core/implement-task-v1.0.yaml",
 		},
 	})
 

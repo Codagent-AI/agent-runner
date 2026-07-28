@@ -14,13 +14,13 @@ import (
 
 func TestPipelineResolvesParamBoundSubWorkflow(t *testing.T) {
 	dir := t.TempDir()
-	writeWorkflow(t, dir, "green.yaml", `
+	writeWorkflow(t, dir, "green-v1.0.yaml", `
 name: green
 steps:
   - id: ok
     command: echo ok
 `)
-	root := writeWorkflow(t, dir, "root.yaml", `
+	root := writeWorkflow(t, dir, "root-v1.0.yaml", `
 name: root
 params:
   - name: flavor
@@ -30,13 +30,53 @@ steps:
 `)
 
 	opts, _, _ := fakeOptions(t, &config.Config{})
-	if _, err := Pipeline(root, map[string]string{"flavor": "green"}, Strict, opts); err != nil {
+	if _, err := Pipeline(root, map[string]string{"flavor": "green-v1.0"}, Strict, opts); err != nil {
 		t.Fatalf("Pipeline returned error: %v", err)
 	}
 }
 
+func TestPipelineHandlesUnboundSubWorkflowParamByMode(t *testing.T) {
+	dir := t.TempDir()
+	root := writeWorkflow(t, dir, "root-v1.0.yaml", `
+name: root
+params:
+  - name: flavor
+steps:
+  - id: call
+    workflow: "{{flavor}}-v1.0.yaml"
+`)
+	opts, _, _ := fakeOptions(t, &config.Config{})
+
+	t.Run("strict rejects", func(t *testing.T) {
+		_, err := Pipeline(root, nil, Strict, opts)
+		if err == nil {
+			t.Fatal("Pipeline error = nil, want unbound parameter failure")
+		}
+		for _, want := range []string{"call", "flavor", "unresolved workflow parameter"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("Pipeline error = %q, want substring %q", err, want)
+			}
+		}
+	})
+
+	t.Run("lenient defers", func(t *testing.T) {
+		result, err := Pipeline(root, nil, Lenient, opts)
+		if err != nil {
+			t.Fatalf("Pipeline returned error: %v", err)
+		}
+		if len(result.DeferredWarnings) != 1 {
+			t.Fatalf("DeferredWarnings = %v, want one", result.DeferredWarnings)
+		}
+		for _, want := range []string{"call", "flavor", "checked at run time"} {
+			if !strings.Contains(result.DeferredWarnings[0].Error(), want) {
+				t.Fatalf("warning = %q, want substring %q", result.DeferredWarnings[0], want)
+			}
+		}
+	})
+}
+
 func TestPipelineAllowsNilProfileStoreForWorkflowWithoutAgents(t *testing.T) {
-	root := writeWorkflow(t, t.TempDir(), "shell.yaml", `
+	root := writeWorkflow(t, t.TempDir(), "shell-v1.0.yaml", `
 name: shell
 steps:
   - id: shell
@@ -54,7 +94,7 @@ steps:
 
 func TestPipelineReturnsDeduplicatedLegacyAgentDeprecations(t *testing.T) {
 	dir := t.TempDir()
-	root := writeWorkflow(t, dir, "legacy.yaml", `
+	root := writeWorkflow(t, dir, "legacy-v1.0.yaml", `
 name: legacy
 steps:
   - id: first
@@ -86,13 +126,13 @@ steps:
 
 func TestPipelineRewalksSameSubWorkflowWithDifferentParams(t *testing.T) {
 	dir := t.TempDir()
-	writeWorkflow(t, dir, "good.yaml", `
+	writeWorkflow(t, dir, "good-v1.0.yaml", `
 name: good
 steps:
   - id: ok
     command: echo ok
 `)
-	writeWorkflow(t, dir, "switch.yaml", `
+	writeWorkflow(t, dir, "switch-v1.0.yaml", `
 name: switch
 params:
   - name: target
@@ -100,17 +140,17 @@ steps:
   - id: call-target
     workflow: "{{target}}.yaml"
 `)
-	root := writeWorkflow(t, dir, "root.yaml", `
+	root := writeWorkflow(t, dir, "root-v1.0.yaml", `
 name: root
 steps:
   - id: first
-    workflow: switch.yaml
+    workflow: switch-v1.0.yaml
     params:
-      target: good
+      target: good-v1.0
   - id: second
-    workflow: switch.yaml
+    workflow: switch-v1.0.yaml
     params:
-      target: missing
+      target: missing-v1.0
 `)
 
 	opts, _, _ := fakeOptions(t, &config.Config{})
@@ -118,37 +158,158 @@ steps:
 	if err == nil {
 		t.Fatal("expected second parameter set to validate and fail")
 	}
-	if !strings.Contains(err.Error(), "missing.yaml") {
+	if !strings.Contains(err.Error(), "missing-v1.0.yaml") {
 		t.Fatalf("expected missing nested workflow error, got: %v", err)
+	}
+}
+
+func TestPipelineSubWorkflowLoadFailureNamesReferencingStep(t *testing.T) {
+	tests := []struct {
+		name       string
+		childName  string
+		childBody  string
+		wantDetail string
+	}{
+		{name: "missing", childName: "missing-v1.0.yaml", wantDetail: "cannot read workflow file"},
+		{name: "malformed", childName: "broken-v1.0.yaml", childBody: "not: yaml: valid: :", wantDetail: "invalid YAML"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tt.childBody != "" {
+				writeWorkflow(t, dir, tt.childName, tt.childBody)
+			}
+			root := writeWorkflow(t, dir, "root-v1.0.yaml", `
+name: root
+steps:
+  - id: call-child
+    workflow: `+tt.childName+`
+`)
+			opts, _, _ := fakeOptions(t, &config.Config{})
+
+			_, err := Pipeline(root, nil, Strict, opts)
+			if err == nil {
+				t.Fatal("Pipeline error = nil, want child load failure")
+			}
+			for _, want := range []string{"call-child", tt.childName, tt.wantDetail} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("Pipeline error = %q, want substring %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+func TestPipelineRejectsMissingRequiredSubWorkflowParamByMode(t *testing.T) {
+	dir := t.TempDir()
+	writeWorkflow(t, dir, "child-v1.0.yaml", `
+name: child
+params:
+  - name: release
+steps:
+  - id: use-release
+    command: echo "{{release}}"
+`)
+	root := writeWorkflow(t, dir, "root-v1.0.yaml", `
+name: root
+steps:
+  - id: call-child
+    workflow: child-v1.0.yaml
+`)
+	opts, _, _ := fakeOptions(t, &config.Config{})
+
+	for _, mode := range []Mode{Strict, Lenient} {
+		_, err := Pipeline(root, nil, mode, opts)
+		if err == nil {
+			t.Fatalf("mode %v: Pipeline error = nil, want missing required child parameter", mode)
+		}
+		for _, want := range []string{"child-v1.0.yaml", "call-child", "release", "missing required parameter"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("mode %v: Pipeline error = %q, want substring %q", mode, err, want)
+			}
+		}
 	}
 }
 
 func TestPipelineRejectsCapturedWorkflowPath(t *testing.T) {
 	dir := t.TempDir()
-	root := writeWorkflow(t, dir, "root.yaml", `
+	root := writeWorkflow(t, dir, "root-v1.0.yaml", `
 name: root
 steps:
   - id: choose
-    command: echo child.yaml
+    command: echo child-v1.0.yaml
     capture: detected_target
   - id: call
     workflow: "{{detected_target}}"
 `)
 
 	opts, _, _ := fakeOptions(t, &config.Config{})
-	_, err := Pipeline(root, nil, Lenient, opts)
-	if err == nil {
-		t.Fatal("expected captured workflow path error")
+	for _, mode := range []Mode{Strict, Lenient} {
+		_, err := Pipeline(root, nil, mode, opts)
+		if err == nil {
+			t.Fatalf("mode %v: expected captured workflow path error", mode)
+		}
+		if !strings.Contains(err.Error(), "call") || !strings.Contains(err.Error(), "captured") {
+			t.Fatalf("mode %v: expected error to name step and captured variable, got: %v", mode, err)
+		}
 	}
-	if !strings.Contains(err.Error(), "call") || !strings.Contains(err.Error(), "captured") {
-		t.Fatalf("expected error to name step and captured variable, got: %v", err)
+}
+
+func TestPipelineRejectsMissingNamedSessionInChild(t *testing.T) {
+	dir := t.TempDir()
+	writeWorkflow(t, dir, "child-v1.0.yaml", `
+name: child
+steps:
+  - id: continue-work
+    prompt: continue
+    session: implementor
+`)
+	root := writeWorkflow(t, dir, "root-v1.0.yaml", `
+name: root
+steps:
+  - id: call-child
+    workflow: child-v1.0.yaml
+`)
+	opts, _, _ := fakeOptions(t, &config.Config{})
+
+	_, err := Pipeline(root, nil, Strict, opts)
+	if err == nil {
+		t.Fatal("Pipeline error = nil, want missing session declaration")
+	}
+	for _, want := range []string{"child-v1.0.yaml", "continue-work", "implementor", "not declared"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Pipeline error = %q, want substring %q", err, want)
+		}
+	}
+}
+
+func TestPipelineMissingParamBoundChildNamesTemplateAndResolvedPath(t *testing.T) {
+	dir := t.TempDir()
+	root := writeWorkflow(t, dir, "root-v1.0.yaml", `
+name: root
+params:
+  - name: flavor
+steps:
+  - id: call
+    workflow: "{{flavor}}-v1.0.yaml"
+`)
+	opts, _, _ := fakeOptions(t, &config.Config{})
+
+	_, err := Pipeline(root, map[string]string{"flavor": "green"}, Strict, opts)
+	if err == nil {
+		t.Fatal("Pipeline error = nil, want missing resolved child")
+	}
+	for _, want := range []string{"call", "{{flavor}}-v1.0.yaml", "green-v1.0.yaml"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Pipeline error = %q, want substring %q", err, want)
+		}
 	}
 }
 
 func TestPipelineChecksInterpolatedVariableReferences(t *testing.T) {
 	t.Run("rejects undefined prompt variable", func(t *testing.T) {
 		dir := t.TempDir()
-		root := writeWorkflow(t, dir, "root.yaml", `
+		root := writeWorkflow(t, dir, "root-v1.0.yaml", `
 name: root
 steps:
   - id: ask
@@ -173,7 +334,7 @@ steps:
 
 	t.Run("allows variables captured by an earlier step", func(t *testing.T) {
 		dir := t.TempDir()
-		root := writeWorkflow(t, dir, "root.yaml", `
+		root := writeWorkflow(t, dir, "root-v1.0.yaml", `
 name: root
 steps:
   - id: discover
@@ -192,14 +353,14 @@ steps:
 
 func TestPipelineDedupesSessionAwareProbeTriples(t *testing.T) {
 	dir := t.TempDir()
-	writeWorkflow(t, dir, "child.yaml", `
+	writeWorkflow(t, dir, "child-v1.0.yaml", `
 name: child
 steps:
   - id: inherited
     prompt: continue
     session: inherit
 `)
-	root := writeWorkflow(t, dir, "root.yaml", `
+	root := writeWorkflow(t, dir, "root-v1.0.yaml", `
 name: root
 steps:
   - id: origin
@@ -210,7 +371,7 @@ steps:
     session: resume
     model: sonnet
   - id: call
-    workflow: child.yaml
+    workflow: child-v1.0.yaml
 `)
 	cfg := &config.Config{
 		ActiveProfile: "default",
@@ -240,7 +401,7 @@ steps:
 
 func TestPipelineRewalksSubWorkflowForEachInheritedOrigin(t *testing.T) {
 	dir := t.TempDir()
-	writeWorkflow(t, dir, "child.yaml", `
+	writeWorkflow(t, dir, "child-v1.0.yaml", `
 name: child
 steps:
   - id: inherited
@@ -248,7 +409,7 @@ steps:
     session: inherit
     model: opus
 `)
-	root := writeWorkflow(t, dir, "root.yaml", `
+	root := writeWorkflow(t, dir, "root-v1.0.yaml", `
 name: root
 steps:
   - id: origin-a
@@ -256,13 +417,13 @@ steps:
     session: new
     prompt: start
   - id: call-a
-    workflow: child.yaml
+    workflow: child-v1.0.yaml
   - id: origin-b
     agent: implementor-b
     session: new
     prompt: start
   - id: call-b
-    workflow: child.yaml
+    workflow: child-v1.0.yaml
 `)
 	cfg := &config.Config{
 		ActiveProfile: "default",
@@ -297,7 +458,7 @@ steps:
 
 func TestPipelineProbesAdapterExecutableName(t *testing.T) {
 	dir := t.TempDir()
-	root := writeWorkflow(t, dir, "root.yaml", `
+	root := writeWorkflow(t, dir, "root-v1.0.yaml", `
 name: root
 steps:
   - id: ask
@@ -361,7 +522,7 @@ func TestValidationErrorReportsProbeStrengthForProbeFailures(t *testing.T) {
 
 func TestValidationErrorRejectsInvalidLoopAsIndex(t *testing.T) {
 	dir := t.TempDir()
-	root := writeWorkflow(t, dir, "root.yaml", `
+	root := writeWorkflow(t, dir, "root-v1.0.yaml", `
 name: root
 steps:
   - id: bad-loop

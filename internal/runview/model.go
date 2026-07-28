@@ -22,6 +22,7 @@ import (
 	"github.com/codagent/agent-runner/internal/stateio"
 	"github.com/codagent/agent-runner/internal/tuistyle"
 	"github.com/codagent/agent-runner/internal/uistep"
+	"github.com/codagent/agent-runner/internal/workflowcatalog"
 )
 
 // Messages emitted by the runview Model to the parent switcher.
@@ -100,9 +101,10 @@ type Model struct {
 	loadErr       string
 	notice        string // transient message shown below the step list (e.g. spawn error)
 
-	resolverCfg   ResolverConfig
-	startTime     time.Time
-	workflowEntry discovery.WorkflowEntry // set when entered == FromDefinition
+	resolverCfg     ResolverConfig
+	startTime       time.Time
+	recordedVersion string
+	workflowEntry   discovery.WorkflowEntry // set when entered == FromDefinition
 
 	// Live-run fields (FromLiveRun mode only).
 	running          bool   // true until ExecDoneMsg arrives
@@ -188,39 +190,7 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 
 	state, _ := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
 	resolved, _ := ResolveWorkflow(sessionDir, projectDir, &state)
-
-	var (
-		tree            *Tree
-		loadErr         string
-		workflowMissing bool
-	)
-	if resolved.AbsPath != "" {
-		wf, err := loader.LoadWorkflow(resolved.AbsPath, loader.Options{})
-		if err != nil {
-			loadErr = "load workflow: " + err.Error()
-		} else {
-			tree = BuildTree(&wf, resolved.AbsPath)
-		}
-	} else if state.WorkflowFile != "" || state.WorkflowName != "" {
-		loadErr = "workflow file not found (state: " + describeWorkflowHint(&state, sessionDir) + ")"
-		workflowMissing = true
-	}
-	if tree == nil {
-		rootName := state.WorkflowName
-		if rootName == "" {
-			rootName = parseWorkflowNameFromID(filepath.Base(sessionDir))
-		}
-		if rootName == "" {
-			rootName = filepath.Base(sessionDir)
-		}
-		tree = &Tree{
-			Root: &StepNode{
-				ID:     rootName,
-				Type:   NodeRoot,
-				Status: StatusPending,
-			},
-		}
-	}
+	tree, loadErr, workflowMissing := loadRunTree(sessionDir, entered, &state, resolved)
 
 	m := &Model{
 		tree:       tree,
@@ -235,6 +205,9 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 		autoFollow: entered == FromLiveRun,
 		altScreen:  entered != FromLiveRun,
 	}
+	if entered == FromList || entered == FromInspect {
+		m.recordedVersion = recordedWorkflowVersion(state.WorkflowFile)
+	}
 
 	if entered != FromLiveRun {
 		m.active = runlock.Check(sessionDir) == runlock.LockActive
@@ -246,6 +219,9 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	m.resolverCfg = ResolverConfig{
 		WorkflowsRoot: resolved.WorkflowsRoot,
 		RepoRoot:      resolved.RepoRoot,
+	}
+	if m.resolverCfg.WorkflowsRoot == "" {
+		m.resolverCfg.WorkflowsRoot = recordedWorkflowsRoot(state.WorkflowFile)
 	}
 
 	m.startTime = parseStartTimeFromID(filepath.Base(sessionDir))
@@ -284,6 +260,69 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	}
 
 	return m, nil
+}
+
+func loadRunTree(
+	sessionDir string,
+	entered Entered,
+	state *model.RunState,
+	resolved ResolvedWorkflow,
+) (*Tree, string, bool) {
+	if resolved.AbsPath != "" {
+		workflow, err := loader.LoadWorkflow(resolved.AbsPath, loader.Options{})
+		if err == nil {
+			return BuildTree(&workflow, resolved.AbsPath), "", false
+		}
+		var filenameErr *workflowcatalog.FilenameError
+		reconstructable := (entered == FromList || entered == FromInspect) && errors.As(err, &filenameErr)
+		return fallbackRunTree(sessionDir, state, resolved.OriginCwd), "load workflow: " + err.Error(), reconstructable
+	}
+	if state.WorkflowFile != "" || state.WorkflowName != "" {
+		loadErr := "workflow file not found (state: " + describeWorkflowHint(state, sessionDir) + ")"
+		return fallbackRunTree(sessionDir, state, resolved.OriginCwd), loadErr, true
+	}
+	return fallbackRunTree(sessionDir, state, resolved.OriginCwd), "", false
+}
+
+func fallbackRunTree(sessionDir string, state *model.RunState, originCwd string) *Tree {
+	rootName := state.WorkflowName
+	if rootName == "" {
+		rootName = parseWorkflowNameFromID(filepath.Base(sessionDir))
+	}
+	if rootName == "" {
+		rootName = filepath.Base(sessionDir)
+	}
+	return &Tree{
+		Root: &StepNode{
+			ID:     rootName,
+			Type:   NodeRoot,
+			Status: StatusPending,
+		},
+		WorkflowPath: recordedWorkflowDisplayPath(state.WorkflowFile, originCwd),
+	}
+}
+
+func recordedWorkflowDisplayPath(workflowFile, originCwd string) string {
+	if workflowFile == "" || strings.HasPrefix(workflowFile, "builtin:") || filepath.IsAbs(workflowFile) {
+		return workflowFile
+	}
+	if originCwd != "" {
+		return filepath.Join(originCwd, workflowFile)
+	}
+	return filepath.Clean(workflowFile)
+}
+
+func recordedWorkflowsRoot(workflowFile string) string {
+	if workflowFile == "" || strings.HasPrefix(workflowFile, "builtin:") {
+		return ""
+	}
+	parts := strings.Split(filepath.ToSlash(filepath.Clean(workflowFile)), "/")
+	for index := len(parts) - 2; index >= 0; index-- {
+		if parts[index] == "workflows" {
+			return filepath.FromSlash(strings.Join(parts[:index+1], "/"))
+		}
+	}
+	return ""
 }
 
 func currentStepID(state *model.RunState) string {
@@ -410,7 +449,7 @@ func NewForDefinition(entry *discovery.WorkflowEntry, projectDir string) (*Model
 }
 
 // deriveCanonicalFromPath produces a display name from a workflow source path
-// when no canonical name is available (e.g. builtin:core/finalize-pr.yaml → core:finalize-pr).
+// when no canonical name is available (e.g. builtin:core/finalize-pr-v1.0.yaml → core:finalize-pr).
 func deriveCanonicalFromPath(sourcePath string) string {
 	if rel, ok := strings.CutPrefix(sourcePath, "builtin:"); ok {
 		rel = strings.TrimSuffix(rel, filepath.Ext(rel))

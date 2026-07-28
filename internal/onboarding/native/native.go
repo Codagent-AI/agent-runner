@@ -57,30 +57,6 @@ type ProfileWriter interface {
 	StageProfile(*profilewrite.Request) (profilewrite.Staged, error)
 }
 
-type ProfileWriterFunc func(*profilewrite.Request) error
-
-func (f ProfileWriterFunc) StageProfile(req *profilewrite.Request) (profilewrite.Staged, error) {
-	return &stagedProfileFunc{commit: func() error { return f(req) }}, nil
-}
-
-type stagedProfileFunc struct {
-	commit func() error
-}
-
-func (s *stagedProfileFunc) Commit() error {
-	if s.commit == nil {
-		return fmt.Errorf("staged profile write is already finalized")
-	}
-	commit := s.commit
-	s.commit = nil
-	return commit()
-}
-
-func (s *stagedProfileFunc) Discard() error {
-	s.commit = nil
-	return nil
-}
-
 type sharedProfileWriter struct{}
 
 func (sharedProfileWriter) StageProfile(req *profilewrite.Request) (profilewrite.Staged, error) {
@@ -841,10 +817,15 @@ func (m *Model) enumerateCLIs() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	clis, err := m.deps.EnumCLIs(
-		filepath.Join(home, ".agent-runner", "config.yaml"),
-		filepath.Join(cwd, ".agent-runner", "config.yaml"),
-	)
+	globalPath := filepath.Join(home, ".agent-runner", "config.yaml")
+	projectPath := filepath.Join(cwd, ".agent-runner", "config.yaml")
+	switch m.scope {
+	case "global":
+		globalPath = m.pendingProfile.PreviewPath()
+	case "project":
+		projectPath = m.pendingProfile.PreviewPath()
+	}
+	clis, err := m.deps.EnumCLIs(globalPath, projectPath)
 	if err != nil {
 		return nil, err
 	}

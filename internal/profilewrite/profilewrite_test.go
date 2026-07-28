@@ -114,6 +114,35 @@ func TestStageDiscardRemovesTemporaryFileAndPreservesOriginal(t *testing.T) {
 	}
 }
 
+func TestStagedCommitRejectsExternalTargetEdit(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "config.yaml")
+	mustWrite(t, target, "original: true\n", 0o600)
+	req := validRequest(target)
+
+	staged, err := Stage(&req)
+	if err != nil {
+		t.Fatalf("Stage() returned error: %v", err)
+	}
+	const external = "external: edit\n"
+	mustWrite(t, target, external, 0o600)
+
+	err = staged.Commit()
+	if err == nil || !strings.Contains(err.Error(), "changed after profile staging") {
+		t.Fatalf("Commit() error = %v, want stale-stage rejection", err)
+	}
+	body, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatalf("read externally edited target: %v", readErr)
+	}
+	if string(body) != external {
+		t.Fatalf("Commit() overwrote external edit:\n%s", body)
+	}
+	if err := staged.Discard(); err != nil {
+		t.Fatalf("Discard() returned error: %v", err)
+	}
+}
+
 func TestWriteMergesCanonicalRolesAndPreservesUnmanagedContent(t *testing.T) {
 	target := filepath.Join(t.TempDir(), ".agent-runner", "config.yaml")
 	mustWrite(t, target, `
@@ -339,7 +368,7 @@ func TestStagedCommitFailureLeavesTargetAndCanDiscardTemporaryFile(t *testing.T)
 		t.Fatalf("mkdir target collision: %v", err)
 	}
 
-	staged, err := stageAtomic0600(target, []byte("replacement"))
+	staged, err := stageAtomic0600(target, []byte("replacement"), nil)
 	if err != nil {
 		t.Fatalf("stageAtomic0600() error = %v", err)
 	}

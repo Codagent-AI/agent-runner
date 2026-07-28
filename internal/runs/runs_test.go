@@ -310,8 +310,8 @@ func TestBuildDescriptor_Builtin(t *testing.T) {
 		workflowFile string
 		wantDisplay  string
 	}{
-		{"builtin:openspec/change.yaml", "openspec:change"},
-		{"builtin:core/finalize-pr.yaml", "core:finalize-pr"},
+		{"builtin:openspec/change-v1.0.yaml", "openspec:change"},
+		{"builtin:core/finalize-pr-v1.0.yaml", "core:finalize-pr"},
 		{"builtin:smoke-test.yaml", "smoke-test"},
 	}
 	for _, tt := range tests {

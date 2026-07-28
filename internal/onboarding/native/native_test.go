@@ -2,6 +2,7 @@ package native
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -17,6 +18,38 @@ import (
 	"github.com/codagent/agent-runner/internal/tuistyle"
 	"github.com/codagent/agent-runner/internal/usersettings"
 )
+
+type ProfileWriterFunc func(*profilewrite.Request) error
+
+func (f ProfileWriterFunc) StageProfile(req *profilewrite.Request) (profilewrite.Staged, error) {
+	return &stagedProfileFunc{
+		previewPath: req.TargetPath,
+		commit:      func() error { return f(req) },
+	}, nil
+}
+
+type stagedProfileFunc struct {
+	previewPath string
+	commit      func() error
+}
+
+func (s *stagedProfileFunc) PreviewPath() string {
+	return s.previewPath
+}
+
+func (s *stagedProfileFunc) Commit() error {
+	if s.commit == nil {
+		return fmt.Errorf("staged profile write is already finalized")
+	}
+	commit := s.commit
+	s.commit = nil
+	return commit()
+}
+
+func (s *stagedProfileFunc) Discard() error {
+	s.commit = nil
+	return nil
+}
 
 func TestRecommendationDiscoveryHasDedicatedNonActionableLoadingState(t *testing.T) {
 	m := NewModel(&Deps{
@@ -454,6 +487,9 @@ func TestNativeSetupUsesSharedWriterInsteadOfShellSideYAML(t *testing.T) {
 	}
 	if strings.Contains(source, `"gopkg.in/yaml.v3"`) || strings.Contains(source, "yaml.Marshal") {
 		t.Fatal("native setup constructs YAML instead of using shared writer")
+	}
+	if strings.Contains(source, "ProfileWriterFunc") {
+		t.Fatal("native setup production code contains the test-only profile writer")
 	}
 }
 

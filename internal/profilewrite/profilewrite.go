@@ -3,6 +3,7 @@
 package profilewrite
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,16 +28,24 @@ type Request struct {
 var managedAgents = []string{"crosscheck", "implementor", "lead", "planner", "reviewer", "tester"}
 
 type Staged interface {
+	PreviewPath() string
 	Commit() error
 	Discard() error
 }
 
 func Stage(req *Request) (Staged, error) {
+	if err := validate(req); err != nil {
+		return nil, err
+	}
+	snapshot, err := snapshotTarget(req.TargetPath)
+	if err != nil {
+		return nil, err
+	}
 	payload, err := render(req)
 	if err != nil {
 		return nil, err
 	}
-	return stageAtomic0600(req.TargetPath, payload)
+	return stageAtomic0600(req.TargetPath, payload, &snapshot)
 }
 
 func Write(req *Request) error {
@@ -97,8 +106,8 @@ func Collisions(path string) ([]string, error) {
 	}
 	current := root
 	for i, key := range []string{"profiles", "default", "agents"} {
-		path := strings.Join([]string{"profiles", "default", "agents"}[:i+1], ".")
-		next, present, err := optionalMapping(current, key, path)
+		fieldPath := strings.Join([]string{"profiles", "default", "agents"}[:i+1], ".")
+		next, present, err := optionalMapping(current, key, fieldPath)
 		if err != nil {
 			return nil, err
 		}
@@ -261,7 +270,24 @@ func yamlScalar(value string) *yaml.Node {
 	return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
 }
 
-func stageAtomic0600(path string, payload []byte) (Staged, error) {
+type targetSnapshot struct {
+	exists bool
+	body   []byte
+}
+
+func snapshotTarget(path string) (targetSnapshot, error) {
+	body, err := os.ReadFile(path) // #nosec G304 -- explicit config path selected by setup.
+	switch {
+	case err == nil:
+		return targetSnapshot{exists: true, body: body}, nil
+	case os.IsNotExist(err):
+		return targetSnapshot{}, nil
+	default:
+		return targetSnapshot{}, fmt.Errorf("read %s: %w", path, err)
+	}
+}
+
+func stageAtomic0600(path string, payload []byte, expected *targetSnapshot) (Staged, error) {
 	dir := filepath.Dir(path)
 	info, err := os.Stat(dir)
 	switch {
@@ -304,17 +330,31 @@ func stageAtomic0600(path string, payload []byte) (Staged, error) {
 		return nil, fmt.Errorf("close temporary file %s: %w", tmpName, err)
 	}
 	cleanup = false
-	return &stagedFile{targetPath: path, tempPath: tmpName}, nil
+	return &stagedFile{targetPath: path, tempPath: tmpName, expected: expected}, nil
 }
 
 type stagedFile struct {
 	targetPath string
 	tempPath   string
+	expected   *targetSnapshot
+}
+
+func (s *stagedFile) PreviewPath() string {
+	return s.tempPath
 }
 
 func (s *stagedFile) Commit() error {
 	if s.tempPath == "" {
 		return fmt.Errorf("staged profile write is already finalized")
+	}
+	if s.expected != nil {
+		current, err := snapshotTarget(s.targetPath)
+		if err != nil {
+			return fmt.Errorf("check staged profile target: %w", err)
+		}
+		if current.exists != s.expected.exists || !bytes.Equal(current.body, s.expected.body) {
+			return fmt.Errorf("target %s changed after profile staging; refusing to overwrite it", s.targetPath)
+		}
 	}
 	if err := os.Rename(s.tempPath, s.targetPath); err != nil {
 		return fmt.Errorf("rename temporary file %s to %s: %w", s.tempPath, s.targetPath, err)

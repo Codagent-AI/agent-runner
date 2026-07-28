@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/codagent/agent-runner/internal/workflowcatalog"
 )
 
 // WorkflowDescriptor identifies a workflow and carries its human-friendly display name.
@@ -60,7 +62,11 @@ func CanonicalName(resolvedPath string, cfg ResolverConfig) string {
 }
 
 func canonicalFromRelPath(rel string) string {
-	rel = strings.TrimSuffix(rel, filepath.Ext(rel))
+	if definition, err := workflowcatalog.Parse(filepath.ToSlash(rel)); err == nil {
+		rel = definition.CanonicalName
+	} else {
+		rel = strings.TrimSuffix(rel, filepath.Ext(rel))
+	}
 	parts := strings.Split(filepath.ToSlash(rel), "/")
 	switch len(parts) {
 	case 1:
@@ -82,9 +88,13 @@ func canonicalFromWorkflowsRoot(clean, root string) (string, bool) {
 		return "", false
 	}
 	base := rel
-	ext := strings.ToLower(filepath.Ext(base))
-	if ext == ".yaml" || ext == ".yml" {
-		base = strings.TrimSuffix(base, filepath.Ext(base))
+	if definition, parseErr := workflowcatalog.Parse(base); parseErr == nil {
+		base = definition.CanonicalName
+	} else {
+		ext := strings.ToLower(filepath.Ext(base))
+		if ext == ".yaml" || ext == ".yml" {
+			base = strings.TrimSuffix(base, filepath.Ext(base))
+		}
 	}
 	parts := strings.Split(base, "/")
 	switch len(parts) {

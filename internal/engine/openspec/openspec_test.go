@@ -112,8 +112,8 @@ func TestOpenSpecEngine(t *testing.T) {
 		w := model.Workflow{
 			Name: "parent",
 			Steps: []model.Step{
-				{ID: "plan", Workflow: "plan-change.yaml"},
-				{ID: "implement", Workflow: "implement-change.yaml"},
+				{ID: "plan", Workflow: "plan-change-v1.0.yaml"},
+				{ID: "implement", Workflow: "implement-change-v1.0.yaml"},
 			},
 		}
 		err := eng.ValidateWorkflow(&w, map[string]string{"change_name": "my-change"}, "")

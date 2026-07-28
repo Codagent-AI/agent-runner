@@ -1,4 +1,0 @@
-name: minimal
-steps:
-  - id: only-step
-    command: echo hello

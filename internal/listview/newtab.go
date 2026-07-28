@@ -85,7 +85,8 @@ func (m *Model) rebuildNewTabFiltered() {
 // buildFilteredRows computes the filtered slice for the new tab.
 // Each element is tagged as a workflow, group header, or separator.
 // Groups with no visible matching entries are collapsed.
-// Filter is case-insensitive substring match against CanonicalName or SourcePath.
+// Filter is a case-insensitive substring match against version-neutral row
+// identity and metadata.
 func buildFilteredRows(workflows []discovery.WorkflowEntry, groups []discovery.GroupMetadata, filter string, showHidden bool) []filteredRow {
 	filter = strings.ToLower(filter)
 
@@ -171,7 +172,7 @@ func orderedGroupKeys(groups map[groupKey]*workflowGroup) []groupKey {
 
 func matchesFilter(e *discovery.WorkflowEntry, lowerFilter string) bool {
 	return strings.Contains(strings.ToLower(e.CanonicalName), lowerFilter) ||
-		strings.Contains(strings.ToLower(e.SourcePath), lowerFilter)
+		strings.Contains(strings.ToLower(e.Description), lowerFilter)
 }
 
 // firstSelectableRow returns the index of the first workflow row in filtered,
