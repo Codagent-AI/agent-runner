@@ -443,7 +443,8 @@ func TestNativeSetupUsesSharedWriterInsteadOfShellSideYAML(t *testing.T) {
 		t.Fatalf("read native.go: %v", err)
 	}
 	source := string(body)
-	if !strings.Contains(source, "Profiles.WriteProfile(&profilewrite.Request{") {
+	if !strings.Contains(source, "pendingProfile = &profilewrite.Request{") ||
+		!strings.Contains(source, "Profiles.WriteProfile(m.pendingProfile)") {
 		t.Fatal("native setup does not call shared profile writer")
 	}
 	if strings.Contains(source, `"gopkg.in/yaml.v3"`) || strings.Contains(source, "yaml.Marshal") {

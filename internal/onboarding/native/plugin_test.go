@@ -58,7 +58,7 @@ func pluginDeps(plugin *fakePluginInstaller) *Deps {
 	return deps
 }
 
-func TestPluginInstallRunsBetweenProfileWriteAndCompletion(t *testing.T) {
+func TestPluginInstallCompletesBeforeProfileAndSettingsPersistence(t *testing.T) {
 	var writes int
 	var saved []usersettings.Settings
 	plugin := &fakePluginInstaller{dryRunOutput: "Would install skills for claude"}
@@ -71,13 +71,16 @@ func TestPluginInstallRunsBetweenProfileWriteAndCompletion(t *testing.T) {
 	m := startTestModel(t, deps)
 
 	reachPluginPreview(t, m, false)
-	if writes != 1 || len(saved) != 0 {
-		t.Fatalf("before install writes=%d settings saves=%d, want 1 and 0", writes, len(saved))
+	if writes != 0 || len(saved) != 0 {
+		t.Fatalf("before install writes=%d settings saves=%d, want 0 and 0", writes, len(saved))
 	}
 	sendKey(t, m, "enter")
 
 	if !plugin.installed || m.stage != stageDemoPrompt {
 		t.Fatalf("installed=%v stage=%v, want installed demo prompt", plugin.installed, m.stage)
+	}
+	if writes != 1 {
+		t.Fatalf("profile writes after install = %d, want 1", writes)
 	}
 	wantSaved := []usersettings.Settings{{
 		AutonomousBackend:        usersettings.BackendHeadless,
@@ -86,6 +89,25 @@ func TestPluginInstallRunsBetweenProfileWriteAndCompletion(t *testing.T) {
 	}}
 	if diff := cmp.Diff(wantSaved, saved, cmpopts.IgnoreUnexported(usersettings.Settings{})); diff != "" {
 		t.Fatalf("saved settings mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPluginPreviewCancellationDoesNotPersistProfileOrSettings(t *testing.T) {
+	writes, saves := 0, 0
+	plugin := &fakePluginInstaller{dryRunOutput: "preview"}
+	deps := pluginDeps(plugin)
+	deps.Profiles = ProfileWriterFunc(func(*profilewrite.Request) error { writes++; return nil })
+	deps.Settings = SettingsStoreFunc(func(func(usersettings.Settings) usersettings.Settings) error {
+		saves++
+		return nil
+	})
+	m := startTestModel(t, deps)
+	reachPluginPreview(t, m, false)
+
+	sendKey(t, m, "esc")
+
+	if m.Result() != ResultCancelled || writes != 0 || saves != 0 {
+		t.Fatalf("result=%v profile writes=%d settings saves=%d", m.Result(), writes, saves)
 	}
 }
 
@@ -170,7 +192,12 @@ func TestPluginErrorsPreserveCompletionBoundary(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			saved := false
+			wrote := false
 			deps := pluginDeps(tt.plugin)
+			deps.Profiles = ProfileWriterFunc(func(*profilewrite.Request) error {
+				wrote = true
+				return nil
+			})
 			deps.Settings = SettingsStoreFunc(func(func(usersettings.Settings) usersettings.Settings) error {
 				saved = true
 				return nil
@@ -180,8 +207,8 @@ func TestPluginErrorsPreserveCompletionBoundary(t *testing.T) {
 			if !tt.reachOnly && m.Result() != ResultFailed {
 				sendKey(t, m, "enter")
 			}
-			if m.Result() != ResultFailed || saved {
-				t.Fatalf("result=%v saved=%v err=%v", m.Result(), saved, m.Err())
+			if m.Result() != ResultFailed || wrote || saved {
+				t.Fatalf("result=%v wrote=%v saved=%v err=%v", m.Result(), wrote, saved, m.Err())
 			}
 		})
 	}
@@ -219,6 +246,18 @@ func TestPluginScopeAndConfiguredCLIsReachResolver(t *testing.T) {
 		t.Fatalf("resolve scope = %q, want project", plugin.resolveScope)
 	}
 	if diff := cmp.Diff([]string{"claude", "codex", "copilot"}, plugin.resolveCLIs); diff != "" {
+		t.Fatalf("resolve CLIs mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestDeferredProfileSelectionsReachPluginResolver(t *testing.T) {
+	plugin := &fakePluginInstaller{dryRunOutput: "preview"}
+	deps := pluginDeps(plugin)
+	deps.EnumCLIs = func(string, string) ([]string, error) { return nil, nil }
+	m := startTestModel(t, deps)
+	reachPluginPreview(t, m, false)
+
+	if diff := cmp.Diff([]string{"claude", "codex"}, plugin.resolveCLIs); diff != "" {
 		t.Fatalf("resolve CLIs mismatch (-want +got):\n%s", diff)
 	}
 }

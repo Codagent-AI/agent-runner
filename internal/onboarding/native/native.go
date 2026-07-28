@@ -225,6 +225,7 @@ type Model struct {
 	scope                    string
 	targetPath               string
 	collisions               []string
+	pendingProfile           *profilewrite.Request
 
 	width    int
 	height   int
@@ -547,13 +548,13 @@ func (m *Model) enter() (bool, tea.Cmd) {
 			m.setStageAnimated(stageOverwrite, overwriteOptions)
 			return false, nil
 		}
-		return m.write()
+		return m.prepareCompletion()
 	case stageOverwrite:
 		if selected == "Cancel" {
 			m.cancel()
 			return true, nil
 		}
-		return m.write()
+		return m.prepareCompletion()
 	case stagePluginPreview:
 		m.startPluginInstallLoading()
 		return false, tea.Batch(m.tickLoading(), m.runPluginInstall())
@@ -740,8 +741,8 @@ func (m *Model) resolveTarget() error {
 	return nil
 }
 
-func (m *Model) write() (bool, tea.Cmd) {
-	err := m.deps.Profiles.WriteProfile(&profilewrite.Request{
+func (m *Model) prepareCompletion() (bool, tea.Cmd) {
+	m.pendingProfile = &profilewrite.Request{
 		TargetPath:       m.targetPath,
 		LeadCLI:          m.selections[0].CLI,
 		LeadModel:        m.selections[0].Model,
@@ -751,9 +752,6 @@ func (m *Model) write() (bool, tea.Cmd) {
 		ImplementorModel: m.selections[2].Model,
 		TesterCLI:        m.selections[3].CLI,
 		TesterModel:      m.selections[3].Model,
-	})
-	if err != nil {
-		return m.fail(err), nil
 	}
 	if m.deps.Plugin == nil {
 		return m.complete()
@@ -776,6 +774,14 @@ func (m *Model) write() (bool, tea.Cmd) {
 }
 
 func (m *Model) complete() (bool, tea.Cmd) {
+	if m.pendingProfile == nil {
+		return m.fail(fmt.Errorf("setup profile request is unavailable")), nil
+	}
+	if err := m.deps.Profiles.WriteProfile(m.pendingProfile); err != nil {
+		return m.fail(err), nil
+	}
+	m.pendingProfile = nil
+
 	stamp := m.deps.Clock().UTC().Format(time.RFC3339)
 	if err := m.deps.Settings.Update(func(settings usersettings.Settings) usersettings.Settings {
 		settings.AutonomousBackend = m.autonomousBackend
@@ -804,10 +810,19 @@ func (m *Model) enumerateCLIs() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return m.deps.EnumCLIs(
+	clis, err := m.deps.EnumCLIs(
 		filepath.Join(home, ".agent-runner", "config.yaml"),
 		filepath.Join(cwd, ".agent-runner", "config.yaml"),
 	)
+	if err != nil {
+		return nil, err
+	}
+	for _, selection := range m.selections {
+		if selection.CLI != "" && !slices.Contains(clis, selection.CLI) {
+			clis = append(clis, selection.CLI)
+		}
+	}
+	return clis, nil
 }
 
 func (m *Model) runPluginDryRun() tea.Cmd {
