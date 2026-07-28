@@ -31,7 +31,7 @@ steps:
 
       Follow codagent:call-agent's verification and user-facing reporting rules. Discuss every consequential finding with the user. Do not modify the proposal or any other file in response to review feedback until you have presented your assessment and received the user's explicit confirmation about which changes to make. Apply only the changes the user confirms.
 
-      Keep this phase interactive. Do not signal completion until the user has confirmed the final proposal and all approved changes are complete.
+      Keep this phase interactive through the proposal review. Once the user approves the final proposal content or tells you to write it, complete the approved edits and continue to the next step without asking them to review the written artifact again.
 
   - id: specs
     session: lead-agent
@@ -39,7 +39,7 @@ steps:
     prompt: |
       Help the user write the specifications for OpenSpec change "{{change_name}}". You MUST use the codagent:spec skill.
 
-      Keep this phase interactive. Do not signal completion until the user has approved the specifications and all specification artifacts are complete.
+      Keep this phase interactive while developing the specifications. Once the user approves the content or tells you to write it, complete the specification artifacts and continue to the next step without asking them to review the written artifacts again.
 
   - id: design
     session: lead-agent
@@ -47,7 +47,7 @@ steps:
     prompt: |
       Help the user design OpenSpec change "{{change_name}}". You MUST use the codagent:design skill.
 
-      Keep this phase interactive. Do not signal completion until the user has approved the design and the design artifact is complete.
+      Keep this phase interactive while developing the design. Once the user approves the content or tells you to write it, complete the design artifact and continue to the next step without asking them to review the written artifact again.
 
   - id: test-plan
     session: lead-agent
@@ -55,7 +55,7 @@ steps:
     prompt: |
       Use the codagent:test-plan skill to collaboratively create `openspec/changes/{{change_name}}/test-plan.md`.
 
-      Keep this phase interactive. Continue to the next step once the user has approved the test plan.
+      Keep this phase interactive while developing the test plan. Once the user approves the content or tells you to write it, complete the test plan and continue to the next step without asking them to review the written artifact again.
 
   - id: approach-review
     session: lead-agent
@@ -68,4 +68,4 @@ steps:
 
       Follow codagent:call-agent's verification and user-facing reporting rules. Discuss every consequential finding with the user. Do not modify the proposal, specifications, design, test plan, or any other file until you have presented your assessment and received the user's explicit confirmation about which changes to make. Apply only the changes the user confirms.
 
-      Keep this phase interactive. Do not signal completion until the user has confirmed the final proposal, specifications, design, and test plan and all approved changes are complete.
+      Keep this phase interactive through the review discussion. Once the user approves the resulting changes, apply them and continue to the next step without asking them to review the updated artifacts again.
