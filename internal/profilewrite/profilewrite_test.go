@@ -33,6 +33,87 @@ func TestRequestExposesCanonicalFourRoleContract(t *testing.T) {
 	}
 }
 
+func TestStagePreservesOriginalUntilAtomicCommit(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "config.yaml")
+	original := "profiles:\n  default:\n    agents:\n      existing: {}\n"
+	mustWrite(t, target, original, 0o640)
+	req := validRequest(target)
+
+	staged, err := Stage(&req)
+	if err != nil {
+		t.Fatalf("Stage() returned error: %v", err)
+	}
+	body, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read original: %v", err)
+	}
+	if string(body) != original {
+		t.Fatalf("Stage() modified target before commit:\n%s", body)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, ".agent-runner-*.tmp"))
+	if err != nil {
+		t.Fatalf("glob staged files: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("staged files = %v, want one", matches)
+	}
+	info, err := os.Stat(matches[0])
+	if err != nil {
+		t.Fatalf("stat staged file: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("staged file mode = %o, want 600", got)
+	}
+
+	if err := staged.Commit(); err != nil {
+		t.Fatalf("Commit() returned error: %v", err)
+	}
+	agents := readYAMLMap(t, target)["profiles"].(map[string]any)["default"].(map[string]any)["agents"].(map[string]any)
+	for _, role := range []string{"lead", "crosscheck", "implementor", "tester"} {
+		if _, ok := agents[role]; !ok {
+			t.Errorf("committed profile missing %s", role)
+		}
+	}
+	matches, err = filepath.Glob(filepath.Join(dir, ".agent-runner-*.tmp"))
+	if err != nil {
+		t.Fatalf("glob staged files after commit: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("staged files remain after commit: %v", matches)
+	}
+}
+
+func TestStageDiscardRemovesTemporaryFileAndPreservesOriginal(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "config.yaml")
+	original := "unrelated: true\n"
+	mustWrite(t, target, original, 0o600)
+	req := validRequest(target)
+
+	staged, err := Stage(&req)
+	if err != nil {
+		t.Fatalf("Stage() returned error: %v", err)
+	}
+	if err := staged.Discard(); err != nil {
+		t.Fatalf("Discard() returned error: %v", err)
+	}
+	body, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read original: %v", err)
+	}
+	if string(body) != original {
+		t.Fatalf("Discard() changed target:\n%s", body)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, ".agent-runner-*.tmp"))
+	if err != nil {
+		t.Fatalf("glob staged files: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("staged files remain after discard: %v", matches)
+	}
+}
+
 func TestWriteMergesCanonicalRolesAndPreservesUnmanagedContent(t *testing.T) {
 	target := filepath.Join(t.TempDir(), ".agent-runner", "config.yaml")
 	mustWrite(t, target, `
@@ -305,11 +386,16 @@ func TestWriteCreatesMissingParentAndPreservesExistingParentMode(t *testing.T) {
 
 func writeValid(t *testing.T, target string) {
 	t.Helper()
-	if err := Write(&Request{
+	req := validRequest(target)
+	if err := Write(&req); err != nil {
+		t.Fatalf("Write() returned error: %v", err)
+	}
+}
+
+func validRequest(target string) Request {
+	return Request{
 		TargetPath: target, LeadCLI: "claude", CrosscheckCLI: "codex",
 		ImplementorCLI: "codex", TesterCLI: "claude",
-	}); err != nil {
-		t.Fatalf("Write() returned error: %v", err)
 	}
 }
 

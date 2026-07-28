@@ -26,9 +26,33 @@ type Request struct {
 
 var managedAgents = []string{"crosscheck", "implementor", "lead", "planner", "reviewer", "tester"}
 
+type Staged interface {
+	Commit() error
+	Discard() error
+}
+
+func Stage(req *Request) (Staged, error) {
+	payload, err := render(req)
+	if err != nil {
+		return nil, err
+	}
+	return stageAtomic0600(req.TargetPath, payload)
+}
+
 func Write(req *Request) error {
-	if err := validate(req); err != nil {
+	staged, err := Stage(req)
+	if err != nil {
 		return err
+	}
+	defer func() {
+		_ = staged.Discard()
+	}()
+	return staged.Commit()
+}
+
+func render(req *Request) ([]byte, error) {
+	if err := validate(req); err != nil {
+		return nil, err
 	}
 
 	var doc yaml.Node
@@ -36,23 +60,23 @@ func Write(req *Request) error {
 	switch {
 	case err == nil:
 		if err := yaml.Unmarshal(body, &doc); err != nil {
-			return fmt.Errorf("parse %s: %w", req.TargetPath, err)
+			return nil, fmt.Errorf("parse %s: %w", req.TargetPath, err)
 		}
 	case os.IsNotExist(err):
 		doc.Kind = yaml.DocumentNode
 		doc.Content = []*yaml.Node{{Kind: yaml.MappingNode}}
 	default:
-		return fmt.Errorf("read %s: %w", req.TargetPath, err)
+		return nil, fmt.Errorf("read %s: %w", req.TargetPath, err)
 	}
 
 	if err := Merge(&doc, req); err != nil {
-		return err
+		return nil, err
 	}
 	out, err := yaml.Marshal(&doc)
 	if err != nil {
-		return fmt.Errorf("marshal profile config: %w", err)
+		return nil, fmt.Errorf("marshal profile config: %w", err)
 	}
-	return writeAtomic0600(req.TargetPath, out)
+	return out, nil
 }
 
 func Collisions(path string) ([]string, error) {
@@ -238,28 +262,39 @@ func yamlScalar(value string) *yaml.Node {
 }
 
 func writeAtomic0600(path string, payload []byte) error {
+	staged, err := stageAtomic0600(path, payload)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = staged.Discard()
+	}()
+	return staged.Commit()
+}
+
+func stageAtomic0600(path string, payload []byte) (Staged, error) {
 	dir := filepath.Dir(path)
 	info, err := os.Stat(dir)
 	switch {
 	case err == nil:
 		if !info.IsDir() {
-			return fmt.Errorf("parent path %s is not a directory", dir)
+			return nil, fmt.Errorf("parent path %s is not a directory", dir)
 		}
 	case os.IsNotExist(err):
 		// #nosec G301 -- the setup spec requires newly-created config dirs to be 0755.
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("create parent directory %s: %w", dir, err)
+			return nil, fmt.Errorf("create parent directory %s: %w", dir, err)
 		}
 		// #nosec G302 -- normalizes only newly-created config directories.
 		if err := os.Chmod(dir, 0o755); err != nil {
-			return fmt.Errorf("chmod parent directory %s: %w", dir, err)
+			return nil, fmt.Errorf("chmod parent directory %s: %w", dir, err)
 		}
 	default:
-		return fmt.Errorf("stat parent directory %s: %w", dir, err)
+		return nil, fmt.Errorf("stat parent directory %s: %w", dir, err)
 	}
 	tmp, err := os.CreateTemp(dir, ".agent-runner-*.tmp")
 	if err != nil {
-		return fmt.Errorf("create temporary file in %s: %w", dir, err)
+		return nil, fmt.Errorf("create temporary file in %s: %w", dir, err)
 	}
 	tmpName := tmp.Name()
 	cleanup := true
@@ -270,18 +305,43 @@ func writeAtomic0600(path string, payload []byte) error {
 	}()
 	if err := os.Chmod(tmpName, 0o600); err != nil {
 		_ = tmp.Close()
-		return fmt.Errorf("chmod temporary file %s: %w", tmpName, err)
+		return nil, fmt.Errorf("chmod temporary file %s: %w", tmpName, err)
 	}
 	if _, err := tmp.Write(payload); err != nil {
 		_ = tmp.Close()
-		return fmt.Errorf("write temporary file %s: %w", tmpName, err)
+		return nil, fmt.Errorf("write temporary file %s: %w", tmpName, err)
 	}
 	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temporary file %s: %w", tmpName, err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("rename temporary file %s to %s: %w", tmpName, path, err)
+		return nil, fmt.Errorf("close temporary file %s: %w", tmpName, err)
 	}
 	cleanup = false
+	return &stagedFile{targetPath: path, tempPath: tmpName}, nil
+}
+
+type stagedFile struct {
+	targetPath string
+	tempPath   string
+}
+
+func (s *stagedFile) Commit() error {
+	if s.tempPath == "" {
+		return fmt.Errorf("staged profile write is already finalized")
+	}
+	if err := os.Rename(s.tempPath, s.targetPath); err != nil {
+		return fmt.Errorf("rename temporary file %s to %s: %w", s.tempPath, s.targetPath, err)
+	}
+	s.tempPath = ""
+	return nil
+}
+
+func (s *stagedFile) Discard() error {
+	if s.tempPath == "" {
+		return nil
+	}
+	err := os.Remove(s.tempPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove temporary file %s: %w", s.tempPath, err)
+	}
+	s.tempPath = ""
 	return nil
 }

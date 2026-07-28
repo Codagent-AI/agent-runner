@@ -26,6 +26,40 @@ type fakePluginInstaller struct {
 	installed    bool
 }
 
+type fakeProfileWriter struct {
+	stageErr error
+	staged   *fakeStagedProfile
+}
+
+func (f *fakeProfileWriter) StageProfile(*profilewrite.Request) (profilewrite.Staged, error) {
+	if f.stageErr != nil {
+		return nil, f.stageErr
+	}
+	if f.staged == nil {
+		f.staged = &fakeStagedProfile{}
+	}
+	return f.staged, nil
+}
+
+type fakeStagedProfile struct {
+	commitErr error
+	committed bool
+	discarded bool
+}
+
+func (f *fakeStagedProfile) Commit() error {
+	if f.commitErr != nil {
+		return f.commitErr
+	}
+	f.committed = true
+	return nil
+}
+
+func (f *fakeStagedProfile) Discard() error {
+	f.discarded = true
+	return nil
+}
+
 func (f *fakePluginInstaller) Resolve(clis []string, scope string) (*agentplugin.Plan, error) {
 	f.resolveCLIs = clis
 	f.resolveScope = scope
@@ -93,10 +127,11 @@ func TestPluginInstallCompletesBeforeProfileAndSettingsPersistence(t *testing.T)
 }
 
 func TestPluginPreviewCancellationDoesNotPersistProfileOrSettings(t *testing.T) {
-	writes, saves := 0, 0
+	saves := 0
 	plugin := &fakePluginInstaller{dryRunOutput: "preview"}
 	deps := pluginDeps(plugin)
-	deps.Profiles = ProfileWriterFunc(func(*profilewrite.Request) error { writes++; return nil })
+	profiles := &fakeProfileWriter{}
+	deps.Profiles = profiles
 	deps.Settings = SettingsStoreFunc(func(func(usersettings.Settings) usersettings.Settings) error {
 		saves++
 		return nil
@@ -106,8 +141,11 @@ func TestPluginPreviewCancellationDoesNotPersistProfileOrSettings(t *testing.T) 
 
 	sendKey(t, m, "esc")
 
-	if m.Result() != ResultCancelled || writes != 0 || saves != 0 {
-		t.Fatalf("result=%v profile writes=%d settings saves=%d", m.Result(), writes, saves)
+	if m.Result() != ResultCancelled || profiles.staged.committed || !profiles.staged.discarded || saves != 0 {
+		t.Fatalf(
+			"result=%v committed=%v discarded=%v settings saves=%d",
+			m.Result(), profiles.staged.committed, profiles.staged.discarded, saves,
+		)
 	}
 }
 
@@ -192,12 +230,9 @@ func TestPluginErrorsPreserveCompletionBoundary(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			saved := false
-			wrote := false
 			deps := pluginDeps(tt.plugin)
-			deps.Profiles = ProfileWriterFunc(func(*profilewrite.Request) error {
-				wrote = true
-				return nil
-			})
+			profiles := &fakeProfileWriter{}
+			deps.Profiles = profiles
 			deps.Settings = SettingsStoreFunc(func(func(usersettings.Settings) usersettings.Settings) error {
 				saved = true
 				return nil
@@ -207,10 +242,35 @@ func TestPluginErrorsPreserveCompletionBoundary(t *testing.T) {
 			if !tt.reachOnly && m.Result() != ResultFailed {
 				sendKey(t, m, "enter")
 			}
-			if m.Result() != ResultFailed || wrote || saved {
-				t.Fatalf("result=%v wrote=%v saved=%v err=%v", m.Result(), wrote, saved, m.Err())
+			if m.Result() != ResultFailed || profiles.staged.committed ||
+				!profiles.staged.discarded || saved {
+				t.Fatalf(
+					"result=%v committed=%v discarded=%v saved=%v err=%v",
+					m.Result(), profiles.staged.committed, profiles.staged.discarded, saved, m.Err(),
+				)
 			}
 		})
+	}
+}
+
+func TestProfileStagingFailurePreventsPluginSideEffects(t *testing.T) {
+	plugin := &fakePluginInstaller{dryRunOutput: "preview"}
+	deps := pluginDeps(plugin)
+	deps.Profiles = &fakeProfileWriter{stageErr: errors.New("stage profile failed")}
+	saved := false
+	deps.Settings = SettingsStoreFunc(func(func(usersettings.Settings) usersettings.Settings) error {
+		saved = true
+		return nil
+	})
+	m := startTestModel(t, deps)
+
+	reachPluginPreview(t, m, false)
+
+	if m.Result() != ResultFailed || plugin.resolveScope != "" || plugin.installed || saved {
+		t.Fatalf(
+			"result=%v resolve scope=%q installed=%v saved=%v err=%v",
+			m.Result(), plugin.resolveScope, plugin.installed, saved, m.Err(),
+		)
 	}
 }
 

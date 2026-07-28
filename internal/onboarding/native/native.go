@@ -54,12 +54,38 @@ type ModelDiscovererFunc func(string) ([]string, error)
 func (f ModelDiscovererFunc) ModelsFor(adapter string) ([]string, error) { return f(adapter) }
 
 type ProfileWriter interface {
-	WriteProfile(*profilewrite.Request) error
+	StageProfile(*profilewrite.Request) (profilewrite.Staged, error)
 }
 
 type ProfileWriterFunc func(*profilewrite.Request) error
 
-func (f ProfileWriterFunc) WriteProfile(req *profilewrite.Request) error { return f(req) }
+func (f ProfileWriterFunc) StageProfile(req *profilewrite.Request) (profilewrite.Staged, error) {
+	return &stagedProfileFunc{commit: func() error { return f(req) }}, nil
+}
+
+type stagedProfileFunc struct {
+	commit func() error
+}
+
+func (s *stagedProfileFunc) Commit() error {
+	if s.commit == nil {
+		return fmt.Errorf("staged profile write is already finalized")
+	}
+	commit := s.commit
+	s.commit = nil
+	return commit()
+}
+
+func (s *stagedProfileFunc) Discard() error {
+	s.commit = nil
+	return nil
+}
+
+type sharedProfileWriter struct{}
+
+func (sharedProfileWriter) StageProfile(req *profilewrite.Request) (profilewrite.Staged, error) {
+	return profilewrite.Stage(req)
+}
 
 type CollisionDetector interface {
 	Collisions(path string) ([]string, error)
@@ -225,7 +251,7 @@ type Model struct {
 	scope                    string
 	targetPath               string
 	collisions               []string
-	pendingProfile           *profilewrite.Request
+	pendingProfile           profilewrite.Staged
 
 	width    int
 	height   int
@@ -282,7 +308,7 @@ func fillDefaults(deps *Deps) *Deps {
 		deps.Models = SubprocessModels{}
 	}
 	if deps.Profiles == nil {
-		deps.Profiles = ProfileWriterFunc(profilewrite.Write)
+		deps.Profiles = sharedProfileWriter{}
 	}
 	if deps.Collisions == nil {
 		deps.Collisions = CollisionDetectorFunc(profilewrite.Collisions)
@@ -742,7 +768,7 @@ func (m *Model) resolveTarget() error {
 }
 
 func (m *Model) prepareCompletion() (bool, tea.Cmd) {
-	m.pendingProfile = &profilewrite.Request{
+	req := &profilewrite.Request{
 		TargetPath:       m.targetPath,
 		LeadCLI:          m.selections[0].CLI,
 		LeadModel:        m.selections[0].Model,
@@ -753,6 +779,11 @@ func (m *Model) prepareCompletion() (bool, tea.Cmd) {
 		TesterCLI:        m.selections[3].CLI,
 		TesterModel:      m.selections[3].Model,
 	}
+	staged, err := m.deps.Profiles.StageProfile(req)
+	if err != nil {
+		return m.fail(err), nil
+	}
+	m.pendingProfile = staged
 	if m.deps.Plugin == nil {
 		return m.complete()
 	}
@@ -777,7 +808,7 @@ func (m *Model) complete() (bool, tea.Cmd) {
 	if m.pendingProfile == nil {
 		return m.fail(fmt.Errorf("setup profile request is unavailable")), nil
 	}
-	if err := m.deps.Profiles.WriteProfile(m.pendingProfile); err != nil {
+	if err := m.pendingProfile.Commit(); err != nil {
 		return m.fail(err), nil
 	}
 	m.pendingProfile = nil
@@ -846,6 +877,14 @@ func (m *Model) startPluginInstallLoading() {
 	m.focus = 0
 }
 
+func (m *Model) discardPendingProfile() {
+	if m.pendingProfile == nil {
+		return
+	}
+	_ = m.pendingProfile.Discard()
+	m.pendingProfile = nil
+}
+
 func (m *Model) setStage(next stage, options []string) {
 	m.stage = next
 	m.options = slices.Clone(options)
@@ -858,18 +897,21 @@ func (m *Model) setStageAnimated(next stage, options []string) {
 }
 
 func (m *Model) cancel() {
+	m.discardPendingProfile()
 	m.result = ResultCancelled
 	m.terminal = true
 	m.stage = stageDone
 }
 
 func (m *Model) exitRequested() {
+	m.discardPendingProfile()
 	m.result = ResultExitRequested
 	m.terminal = true
 	m.stage = stageDone
 }
 
 func (m *Model) fail(err error) bool {
+	m.discardPendingProfile()
 	m.err = err
 	m.result = ResultFailed
 	m.terminal = true
