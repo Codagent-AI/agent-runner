@@ -1411,6 +1411,9 @@ func handleValidateArgs(args []string) int {
 	for i := range result.DeferredWarnings {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", result.DeferredWarnings[i])
 	}
+	for _, warning := range result.AgentDeprecations {
+		fmt.Fprintf(os.Stderr, "agent-runner: warning: %s\n", warning)
+	}
 	fmt.Println("workflow is valid")
 	return 0
 }

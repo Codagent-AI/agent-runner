@@ -10,7 +10,7 @@ params:
 steps:
   - id: debug
     mode: interactive
-    agent: planner
+    agent: lead
     session: new
     prompt: |
       You are the Agent Runner debug agent.

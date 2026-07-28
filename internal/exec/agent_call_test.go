@@ -167,6 +167,44 @@ func TestAgentCallHandlerIneligibleErrorCitesStepDeclaration(t *testing.T) {
 	}
 }
 
+func TestAgentCallHandlerCanonicalizesLegacyTargetAndWarnsOnce(t *testing.T) {
+	workdir := t.TempDir()
+	adapter := &callTestAdapter{}
+	options := testAgentCallOptions(workdir, &callTestRunner{result: ProcessResult{Started: true, ExitCode: 0, Stdout: "ok"}}, adapter)
+	options.Context.ProfileStore = &config.Config{ActiveAgents: map[string]*config.Agent{
+		"lead": {DefaultMode: "autonomous", CLI: "test", Model: "base-model", Effort: "high"},
+	}}
+	log := &mockLogger{}
+	auditLog := &recordingAuditLogger{}
+	options.Log = log
+	options.Context.AuditLogger = auditLog
+	handler := NewAgentCallHandler(options)
+
+	for _, requestID := range []string{"legacy-1", "legacy-2"} {
+		response := decodeCallResponse(t, handler.HandleAgentCall(context.Background(), control.AgentCallRequest{
+			RequestID: requestID,
+			AttemptID: "attempt",
+			Payload:   json.RawMessage(`{"prompt":"check","agent":"planner"}`),
+		}))
+		if response.Error != nil {
+			t.Fatalf("HandleAgentCall(%s) error = %#v", requestID, response.Error)
+		}
+	}
+	const warning = `agent profile "planner" is deprecated; use "lead"`
+	if count := strings.Count(strings.Join(log.lines, "\n"), warning); count != 1 {
+		t.Fatalf("warning count = %d, want 1; log=%v", count, log.lines)
+	}
+	warningEvents := 0
+	for _, event := range auditLog.events {
+		if event.Type == audit.EventWarning && event.Data["alias"] == "planner" {
+			warningEvents++
+		}
+	}
+	if warningEvents != 1 {
+		t.Fatalf("warning audit events = %d, want 1; events=%v", warningEvents, auditLog.events)
+	}
+}
+
 func TestAgentCallHandlerAuditsPreAcceptanceRejection(t *testing.T) {
 	options := testAgentCallOptions(t.TempDir(), &callTestRunner{}, &callTestAdapter{})
 	logger := &recordingAuditLogger{}

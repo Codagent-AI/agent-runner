@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -434,13 +435,9 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 			t.RunTotals = totals
 		}
 	case "error":
-		target := t.Root
-		if len(tokens) > 0 {
-			if n := t.resolve(tokens, false); n != nil {
-				target = n
-			}
-		}
-		setErrorMessage(target, e.Data)
+		t.applyError(tokens, e.Data)
+	case "warning":
+		t.addWarning(e.Data)
 	case "step_start":
 		n := t.resolve(tokens, true)
 		if n == nil {
@@ -487,6 +484,24 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 			return
 		}
 		applySubWorkflowEnd(n, e.Data)
+	}
+}
+
+func (t *Tree) applyError(tokens []prefixToken, data map[string]any) {
+	target := t.Root
+	if len(tokens) > 0 {
+		if n := t.resolve(tokens, false); n != nil {
+			target = n
+		}
+	}
+	setErrorMessage(target, data)
+}
+
+func (t *Tree) addWarning(data map[string]any) {
+	if message, ok := stringField(data, "message"); ok &&
+		message != "" &&
+		!slices.Contains(t.Warnings, message) {
+		t.Warnings = append(t.Warnings, message)
 	}
 }
 

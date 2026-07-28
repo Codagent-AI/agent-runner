@@ -1,6 +1,7 @@
 package builtinworkflows
 
 import (
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -386,7 +387,99 @@ func TestOpenSpecPlanningWorkflowsUseSharedCreateScript(t *testing.T) {
 	}
 }
 
-func TestCoreReviewProposalUsesReviewerAgentProfile(t *testing.T) {
+func TestBuiltInWorkflowAgentReferencesUseCanonicalRoles(t *testing.T) {
+	err := fs.WalkDir(FS, ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".yaml") {
+			return nil
+		}
+		body, err := FS.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, legacy := range []string{"agent: planner", "agent: reviewer"} {
+			if strings.Contains(string(body), legacy) {
+				t.Errorf("%s still contains legacy role reference %q", path, legacy)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk embedded workflows: %v", err)
+	}
+}
+
+func TestOpenSpecAcceptanceCallsUseTesterAndPreserveControls(t *testing.T) {
+	tests := []struct {
+		ref      string
+		stepID   string
+		required []string
+	}{
+		{
+			ref:    "builtin:openspec/implement-change-v2.0.yaml",
+			stepID: "prepare-acceptance",
+			required: []string{
+				"`session: acceptance-tester`",
+				"verification scope: `full` for the first pass",
+				"acceptance-assumptions.md",
+				"acceptance-impact-scope.md",
+				"acceptance-flow-evidence.md",
+				"Use at most three acceptance-tester calls",
+				"acceptance-handoff.md",
+			},
+		},
+		{
+			ref:    "builtin:openspec/accept-change-v1.0.yaml",
+			stepID: "run-reacceptance-testing",
+			required: []string{
+				"`session: acceptance-tester`",
+				"affected and directly dependent flows agreed with the user",
+				"acceptance-flow-evidence.md",
+				"Use at most three tester calls",
+				"REACCEPTANCE_COMPLETE",
+				"REACCEPTANCE_FAILED",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ref, func(t *testing.T) {
+			body, err := ReadFile(tt.ref)
+			if err != nil {
+				t.Fatalf("ReadFile(%s) error = %v", tt.ref, err)
+			}
+			var workflow struct {
+				Steps []struct {
+					ID      string `yaml:"id"`
+					Prompt  string `yaml:"prompt"`
+					Session string `yaml:"session"`
+					Mode    string `yaml:"mode"`
+				} `yaml:"steps"`
+			}
+			if err := yaml.Unmarshal(body, &workflow); err != nil {
+				t.Fatalf("unmarshal %s: %v", tt.ref, err)
+			}
+			for _, step := range workflow.Steps {
+				if step.ID != tt.stepID {
+					continue
+				}
+				if step.Session != "lead-agent" || step.Mode != "autonomous" {
+					t.Fatalf("%s shape = session:%q mode:%q, want lead-agent/autonomous", tt.stepID, step.Session, step.Mode)
+				}
+				for _, required := range tt.required {
+					if !strings.Contains(step.Prompt, required) {
+						t.Errorf("%s prompt missing preserved control %q", tt.stepID, required)
+					}
+				}
+				return
+			}
+			t.Fatalf("%s has no step %q", tt.ref, tt.stepID)
+		})
+	}
+}
+
+func TestCoreReviewProposalUsesCrosscheckAgentProfile(t *testing.T) {
 	data, err := ReadFile("builtin:core/review-proposal-v1.0.yaml")
 	if err != nil {
 		t.Fatalf("ReadFile(core/review-proposal): %v", err)
@@ -403,15 +496,15 @@ func TestCoreReviewProposalUsesReviewerAgentProfile(t *testing.T) {
 	}
 
 	for _, session := range workflow.Sessions {
-		if session.Name != "reviewer-agent" {
+		if session.Name != "crosscheck-agent" {
 			continue
 		}
-		if session.Agent != "reviewer" {
-			t.Fatalf("reviewer-agent profile = %q, want reviewer", session.Agent)
+		if session.Agent != "crosscheck" {
+			t.Fatalf("crosscheck-agent profile = %q, want crosscheck", session.Agent)
 		}
 		return
 	}
-	t.Fatal("review-proposal workflow has no reviewer-agent session")
+	t.Fatal("review-proposal workflow has no crosscheck-agent session")
 }
 
 func TestCoreFinalizePRUsesCIStatusGate(t *testing.T) {
@@ -575,7 +668,7 @@ func TestCoreDebugWorkflowIsSinglePromptStepAndDoesNotUseResumeHandoff(t *testin
 		t.Fatalf("debug workflow should be a single prompt step, got %#v", workflow.Steps)
 	}
 	step := workflow.Steps[0]
-	if step.ID != "debug" || step.Mode != "interactive" || step.Agent != "planner" || step.Session != "new" {
+	if step.ID != "debug" || step.Mode != "interactive" || step.Agent != "lead" || step.Session != "new" {
 		t.Fatalf("debug step shape = %#v", step)
 	}
 	if !strings.Contains(step.Prompt, "{{session_dir}}/bundled/core/debug/prompt.md") {

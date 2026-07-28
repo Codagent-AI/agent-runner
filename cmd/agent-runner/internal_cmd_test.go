@@ -40,17 +40,29 @@ func TestInternalCallAgentMCPRejectsArguments(t *testing.T) {
 
 func TestWriteProfilePayloadValidation(t *testing.T) {
 	var payload writeProfilePayload
-	err := decodeWriteProfilePayload(strings.NewReader(`{"interactive_cli":"claude","headless_cli":"codex","target_path":"config.yaml"}`), &payload)
+	err := decodeWriteProfilePayload(strings.NewReader(`{"lead_cli":"claude","crosscheck_cli":"codex","implementor_cli":"codex","tester_cli":"claude","target_path":"config.yaml"}`), &payload)
 	if err != nil {
 		t.Fatalf("decodeWriteProfilePayload() returned error: %v", err)
 	}
-	if payload.InteractiveCLI != "claude" || payload.HeadlessCLI != "codex" || payload.TargetPath != "config.yaml" {
+	if payload.LeadCLI != "claude" || payload.CrosscheckCLI != "codex" ||
+		payload.ImplementorCLI != "codex" || payload.TesterCLI != "claude" ||
+		payload.TargetPath != "config.yaml" {
 		t.Fatalf("decoded payload = %#v", payload)
 	}
 
-	err = decodeWriteProfilePayload(strings.NewReader(`{"interactive_cli":"","headless_cli":"codex","target_path":"config.yaml"}`), &payload)
-	if err == nil || !strings.Contains(err.Error(), "interactive_cli") {
-		t.Fatalf("missing interactive_cli error = %v, want field name", err)
+	err = decodeWriteProfilePayload(strings.NewReader(`{"lead_cli":"claude","crosscheck_cli":"codex","implementor_cli":"codex","tester_cli":"","target_path":"config.yaml"}`), &payload)
+	if err == nil || !strings.Contains(err.Error(), "tester_cli") {
+		t.Fatalf("missing tester_cli error = %v, want field name", err)
+	}
+
+	err = decodeWriteProfilePayload(strings.NewReader(`{"lead_cli":"claude","crosscheck_cli":"codex","implementor_cli":"codex","tester_cli":"claude","target_path":"config.yaml","unknown":true}`), &payload)
+	if err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("unknown field error = %v", err)
+	}
+
+	err = decodeWriteProfilePayload(strings.NewReader(`{"lead_cli":"claude","crosscheck_cli":"codex","implementor_cli":"codex","tester_cli":"claude","target_path":"config.yaml"} {}`), &payload)
+	if err == nil || !strings.Contains(err.Error(), "single JSON object") {
+		t.Fatalf("trailing JSON error = %v", err)
 	}
 }
 
@@ -75,10 +87,14 @@ other_top_level: true
 	}
 
 	err := mergeProfileAgents(&doc, &writeProfilePayload{
-		InteractiveCLI:   "claude",
-		InteractiveModel: "opus",
-		HeadlessCLI:      "codex",
-		HeadlessModel:    "",
+		LeadCLI:          "claude",
+		LeadModel:        "opus",
+		CrosscheckCLI:    "codex",
+		CrosscheckModel:  "gpt-5.6-sol",
+		ImplementorCLI:   "codex",
+		ImplementorModel: "",
+		TesterCLI:        "claude",
+		TesterModel:      "sonnet",
 		TargetPath:       "ignored.yaml",
 	})
 	if err != nil {
@@ -105,9 +121,16 @@ other_top_level: true
 		t.Fatal("merge wrote unexpected summarizer agent")
 	}
 
-	planner := defaultAgents["planner"].(map[string]any)
-	if planner["default_mode"] != "interactive" || planner["cli"] != "claude" || planner["model"] != "opus" {
-		t.Fatalf("planner = %#v", planner)
+	if _, ok := defaultAgents["planner"]; ok {
+		t.Fatal("legacy planner was not removed")
+	}
+	lead := defaultAgents["lead"].(map[string]any)
+	if lead["default_mode"] != "interactive" || lead["cli"] != "claude" || lead["model"] != "opus" {
+		t.Fatalf("lead = %#v", lead)
+	}
+	crosscheck := defaultAgents["crosscheck"].(map[string]any)
+	if crosscheck["default_mode"] != "autonomous" || crosscheck["cli"] != "codex" || crosscheck["model"] != "gpt-5.6-sol" {
+		t.Fatalf("crosscheck = %#v", crosscheck)
 	}
 	implementor := defaultAgents["implementor"].(map[string]any)
 	if implementor["default_mode"] != "autonomous" || implementor["cli"] != "codex" {
@@ -115,6 +138,10 @@ other_top_level: true
 	}
 	if _, ok := implementor["model"]; ok {
 		t.Fatalf("implementor included empty model: %#v", implementor)
+	}
+	tester := defaultAgents["tester"].(map[string]any)
+	if tester["default_mode"] != "autonomous" || tester["cli"] != "claude" || tester["model"] != "sonnet" {
+		t.Fatalf("tester = %#v", tester)
 	}
 	for _, absent := range []string{"interactive_base", "autonomous_base"} {
 		if _, ok := defaultAgents[absent]; ok {
@@ -130,9 +157,8 @@ func TestMergeProfileAgentsRejectsNonMappingDocumentRoot(t *testing.T) {
 	}
 
 	err := mergeProfileAgents(&doc, &writeProfilePayload{
-		InteractiveCLI: "claude",
-		HeadlessCLI:    "codex",
-		TargetPath:     "ignored.yaml",
+		LeadCLI: "claude", CrosscheckCLI: "codex",
+		ImplementorCLI: "codex", TesterCLI: "claude", TargetPath: "ignored.yaml",
 	})
 	if err == nil || !strings.Contains(err.Error(), "config root must be a mapping") {
 		t.Fatalf("mergeProfileAgents() error = %v, want config root mapping error", err)
@@ -170,9 +196,8 @@ func TestMergeProfileAgentsRejectsNonMappingProfilePath(t *testing.T) {
 			}
 
 			err := mergeProfileAgents(&doc, &writeProfilePayload{
-				InteractiveCLI: "claude",
-				HeadlessCLI:    "codex",
-				TargetPath:     "ignored.yaml",
+				LeadCLI: "claude", CrosscheckCLI: "codex",
+				ImplementorCLI: "codex", TesterCLI: "claude", TargetPath: "ignored.yaml",
 			})
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("mergeProfileAgents() error = %v, want %q", err, tt.wantErr)
@@ -183,7 +208,7 @@ func TestMergeProfileAgentsRejectsNonMappingProfilePath(t *testing.T) {
 
 func TestWriteProfileCommandRoundTripCreates0600File(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "home", ".agent-runner", "config.yaml")
-	stdin := strings.NewReader(`{"interactive_cli":"claude","interactive_model":"opus","headless_cli":"codex","headless_model":"gpt-5","target_path":` + quoteJSON(target) + `}`)
+	stdin := strings.NewReader(`{"lead_cli":"claude","lead_model":"opus","crosscheck_cli":"codex","crosscheck_model":"gpt-5.6-sol","implementor_cli":"codex","implementor_model":"gpt-5.6-terra","tester_cli":"claude","tester_model":"sonnet","target_path":` + quoteJSON(target) + `}`)
 	var stderr bytes.Buffer
 
 	code := handleInternalWithIO([]string{"write-profile"}, stdin, &stderr)
@@ -210,8 +235,13 @@ func TestWriteProfileCommandRoundTripCreates0600File(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read target: %v", err)
 	}
-	if !strings.Contains(string(body), "planner:") || !strings.Contains(string(body), "implementor:") {
-		t.Fatalf("written config missing expected agents:\n%s", body)
+	for _, role := range []string{"lead:", "crosscheck:", "implementor:", "tester:"} {
+		if !strings.Contains(string(body), role) {
+			t.Fatalf("written config missing %s:\n%s", role, body)
+		}
+	}
+	if strings.Contains(string(body), "extends:") {
+		t.Fatalf("written config unexpectedly contains extends:\n%s", body)
 	}
 }
 
@@ -221,7 +251,7 @@ func TestWriteProfileCommandDoesNotRelaxExistingParentDirectory(t *testing.T) {
 		t.Fatalf("create parent dir: %v", err)
 	}
 	target := filepath.Join(dir, "config.yaml")
-	stdin := strings.NewReader(`{"interactive_cli":"claude","headless_cli":"codex","target_path":` + quoteJSON(target) + `}`)
+	stdin := strings.NewReader(`{"lead_cli":"claude","crosscheck_cli":"codex","implementor_cli":"codex","tester_cli":"claude","target_path":` + quoteJSON(target) + `}`)
 	var stderr bytes.Buffer
 
 	code := handleInternalWithIO([]string{"write-profile"}, stdin, &stderr)

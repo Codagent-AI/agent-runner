@@ -44,6 +44,25 @@ func findAuditEvent(events []audit.Event, typ audit.EventType) *audit.Event {
 	return nil
 }
 
+func TestResolveStepProfileCrosscheckInteractiveOverrideKeepsResolvedBackend(t *testing.T) {
+	ctx := makeCtx()
+	ctx.ProfileStore = &config.Config{ActiveAgents: map[string]*config.Agent{
+		"crosscheck": {DefaultMode: "autonomous", CLI: "claude", Model: "opus", Effort: "high"},
+	}}
+	step := &model.Step{
+		ID: "crosscheck", Agent: "crosscheck", Session: model.SessionNew,
+		Mode: model.ModeInteractive,
+	}
+
+	resolved, err := resolveStepProfile(step, ctx)
+	if err != nil {
+		t.Fatalf("resolveStepProfile() error = %v", err)
+	}
+	if resolved.DefaultMode != "interactive" || resolved.CLI != "claude" || resolved.Model != "opus" || resolved.Effort != "high" {
+		t.Fatalf("resolveStepProfile() = %+v, want interactive override with Crosscheck backend", resolved)
+	}
+}
+
 func TestExecuteAgentStep(t *testing.T) {
 	t.Run("adapter without extraction keeps unsupported usage unavailable", func(t *testing.T) {
 		got, err := extractAgentUsage(&spawnEnvAdapter{}, "fake", cli.ContextAutonomousHeadless, `{"type":"result"}`+"\n")
@@ -550,7 +569,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		ctx.AuditLogger = auditLog
 		ctx.ProfileStore = &config.Config{
 			ActiveAgents: map[string]*config.Agent{
-				"planner": {
+				"lead": {
 					DefaultMode: "autonomous",
 					CLI:         "claude",
 					Model:       "opus",

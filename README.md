@@ -55,7 +55,7 @@ The agent handles judgment and code. Agent Runner handles order, state, and enfo
 - **TUI-first run management**: browse workflow definitions, start runs, inspect run history, and resume interrupted runs.
 - **Multiple agent CLIs**: built-in adapters for `claude`, `codex`, `copilot`, `cursor`, and `opencode`.
 - **Existing CLI auth**: Agent Runner launches installed CLI tools as subprocesses, so workflows can use your existing subscriptions and local credentials.
-- **Agent profiles**: configure named agents such as `planner`, `implementor`, and `summarizer`.
+- **Agent profiles**: configure canonical `lead`, `crosscheck`, `implementor`, and `tester` roles.
 - **Session control**: start fresh agent sessions, resume prior ones, or inherit context across sub-workflows.
 - **Workflow control**: retry validation loops, skip fix steps when checks pass, stop loops on success, and fan out over files or tasks.
 - **Output capture**: pass test results, validator reports, generated plans, or user input from one step into the next.

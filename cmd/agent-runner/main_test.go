@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -348,6 +349,45 @@ steps:
 
 	if code := handleValidateArgs([]string{root, "flavor=green-v1.0"}); code != 0 {
 		t.Fatalf("handleValidateArgs returned %d, want 0", code)
+	}
+}
+
+func TestHandleValidateArgsPrintsLegacyAgentDeprecationToStderr(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	writeTestFile(t, filepath.Join(".agent-runner", "config.yaml"), `profiles:
+  default:
+    agents:
+      planner:
+        default_mode: interactive
+        cli: claude
+`)
+	workflow := filepath.Join("workflows", "shell-v1.0.yaml")
+	writeTestFile(t, workflow, "name: shell\nsteps:\n  - id: s\n    command: echo ok\n")
+
+	originalStderr := os.Stderr
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+	os.Stderr = writer
+	t.Cleanup(func() { os.Stderr = originalStderr })
+
+	code := handleValidateArgs([]string{workflow})
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close stderr writer: %v", err)
+	}
+	stderr, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read stderr: %v", err)
+	}
+	if code != 0 {
+		t.Fatalf("handleValidateArgs() = %d, want 0; stderr:\n%s", code, stderr)
+	}
+	const warning = `agent profile "planner" is deprecated; use "lead"`
+	if count := strings.Count(string(stderr), warning); count != 1 {
+		t.Fatalf("warning count = %d, want 1; stderr:\n%s", count, stderr)
 	}
 }
 

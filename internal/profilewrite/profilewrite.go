@@ -1,29 +1,67 @@
-// Package profilewrite owns the shared two-agent profile writer used by
+// Package profilewrite owns the shared four-agent profile writer used by
 // native setup and the internal write-profile command.
 package profilewrite
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 type Request struct {
-	InteractiveCLI   string
-	InteractiveModel string
-	HeadlessCLI      string
-	HeadlessModel    string
 	TargetPath       string
+	LeadCLI          string
+	LeadModel        string
+	CrosscheckCLI    string
+	CrosscheckModel  string
+	ImplementorCLI   string
+	ImplementorModel string
+	TesterCLI        string
+	TesterModel      string
 }
 
-var managedAgents = []string{"implementor", "planner"}
+var managedAgents = []string{"crosscheck", "implementor", "lead", "planner", "reviewer", "tester"}
+
+type Staged interface {
+	PreviewPath() string
+	Commit() error
+	Discard() error
+}
+
+func Stage(req *Request) (Staged, error) {
+	if err := validate(req); err != nil {
+		return nil, err
+	}
+	snapshot, err := snapshotTarget(req.TargetPath)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := render(req)
+	if err != nil {
+		return nil, err
+	}
+	return stageAtomic0600(req.TargetPath, payload, &snapshot)
+}
 
 func Write(req *Request) error {
-	if err := validate(req); err != nil {
+	staged, err := Stage(req)
+	if err != nil {
 		return err
+	}
+	defer func() {
+		_ = staged.Discard()
+	}()
+	return staged.Commit()
+}
+
+func render(req *Request) ([]byte, error) {
+	if err := validate(req); err != nil {
+		return nil, err
 	}
 
 	var doc yaml.Node
@@ -31,23 +69,23 @@ func Write(req *Request) error {
 	switch {
 	case err == nil:
 		if err := yaml.Unmarshal(body, &doc); err != nil {
-			return fmt.Errorf("parse %s: %w", req.TargetPath, err)
+			return nil, fmt.Errorf("parse %s: %w", req.TargetPath, err)
 		}
 	case os.IsNotExist(err):
 		doc.Kind = yaml.DocumentNode
 		doc.Content = []*yaml.Node{{Kind: yaml.MappingNode}}
 	default:
-		return fmt.Errorf("read %s: %w", req.TargetPath, err)
+		return nil, fmt.Errorf("read %s: %w", req.TargetPath, err)
 	}
 
 	if err := Merge(&doc, req); err != nil {
-		return err
+		return nil, err
 	}
 	out, err := yaml.Marshal(&doc)
 	if err != nil {
-		return fmt.Errorf("marshal profile config: %w", err)
+		return nil, fmt.Errorf("marshal profile config: %w", err)
 	}
-	return writeAtomic0600(req.TargetPath, out)
+	return out, nil
 }
 
 func Collisions(path string) ([]string, error) {
@@ -66,10 +104,19 @@ func Collisions(path string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	agents := mappingAt(root, "profiles", "default", "agents")
-	if agents == nil {
-		return nil, nil
+	current := root
+	for i, key := range []string{"profiles", "default", "agents"} {
+		fieldPath := strings.Join([]string{"profiles", "default", "agents"}[:i+1], ".")
+		next, present, err := optionalMapping(current, key, fieldPath)
+		if err != nil {
+			return nil, err
+		}
+		if !present {
+			return nil, nil
+		}
+		current = next
 	}
+	agents := current
 	var collisions []string
 	for i := 0; i+1 < len(agents.Content); i += 2 {
 		if slices.Contains(managedAgents, agents.Content[i].Value) {
@@ -101,15 +148,27 @@ func Merge(doc *yaml.Node, req *Request) error {
 		return err
 	}
 
-	setMapping(agents, "planner", map[string]string{
+	deleteMapping(agents, "planner")
+	deleteMapping(agents, "reviewer")
+	setMapping(agents, "lead", map[string]string{
 		"default_mode": "interactive",
-		"cli":          req.InteractiveCLI,
-		"model":        req.InteractiveModel,
+		"cli":          req.LeadCLI,
+		"model":        req.LeadModel,
+	})
+	setMapping(agents, "crosscheck", map[string]string{
+		"default_mode": "autonomous",
+		"cli":          req.CrosscheckCLI,
+		"model":        req.CrosscheckModel,
 	})
 	setMapping(agents, "implementor", map[string]string{
 		"default_mode": "autonomous",
-		"cli":          req.HeadlessCLI,
-		"model":        req.HeadlessModel,
+		"cli":          req.ImplementorCLI,
+		"model":        req.ImplementorModel,
+	})
+	setMapping(agents, "tester", map[string]string{
+		"default_mode": "autonomous",
+		"cli":          req.TesterCLI,
+		"model":        req.TesterModel,
 	})
 	return nil
 }
@@ -118,11 +177,17 @@ func validate(req *Request) error {
 	if req == nil {
 		return fmt.Errorf("write-profile payload is nil")
 	}
-	if req.InteractiveCLI == "" {
-		return fmt.Errorf("write-profile payload missing interactive_cli")
+	if req.LeadCLI == "" {
+		return fmt.Errorf("write-profile payload missing lead_cli")
 	}
-	if req.HeadlessCLI == "" {
-		return fmt.Errorf("write-profile payload missing headless_cli")
+	if req.CrosscheckCLI == "" {
+		return fmt.Errorf("write-profile payload missing crosscheck_cli")
+	}
+	if req.ImplementorCLI == "" {
+		return fmt.Errorf("write-profile payload missing implementor_cli")
+	}
+	if req.TesterCLI == "" {
+		return fmt.Errorf("write-profile payload missing tester_cli")
 	}
 	if req.TargetPath == "" {
 		return fmt.Errorf("write-profile payload missing target_path")
@@ -160,22 +225,27 @@ func ensureMapping(root *yaml.Node, key, path string) (*yaml.Node, error) {
 	return value, nil
 }
 
-func mappingAt(root *yaml.Node, path ...string) *yaml.Node {
-	current := root
-	for _, key := range path {
-		var next *yaml.Node
-		for i := 0; i+1 < len(current.Content); i += 2 {
-			if current.Content[i].Value == key && current.Content[i+1].Kind == yaml.MappingNode {
-				next = current.Content[i+1]
-				break
-			}
+func optionalMapping(root *yaml.Node, key, path string) (*yaml.Node, bool, error) {
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != key {
+			continue
 		}
-		if next == nil {
-			return nil
+		if root.Content[i+1].Kind != yaml.MappingNode {
+			return nil, true, fmt.Errorf("%s must be a mapping", path)
 		}
-		current = next
+		return root.Content[i+1], true, nil
 	}
-	return current
+	return nil, false, nil
+}
+
+func deleteMapping(root *yaml.Node, key string) {
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != key {
+			continue
+		}
+		root.Content = append(root.Content[:i], root.Content[i+2:]...)
+		return
+	}
 }
 
 func setMapping(root *yaml.Node, key string, values map[string]string) {
@@ -200,29 +270,46 @@ func yamlScalar(value string) *yaml.Node {
 	return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
 }
 
-func writeAtomic0600(path string, payload []byte) error {
+type targetSnapshot struct {
+	exists bool
+	body   []byte
+}
+
+func snapshotTarget(path string) (targetSnapshot, error) {
+	body, err := os.ReadFile(path) // #nosec G304 -- explicit config path selected by setup.
+	switch {
+	case err == nil:
+		return targetSnapshot{exists: true, body: body}, nil
+	case os.IsNotExist(err):
+		return targetSnapshot{}, nil
+	default:
+		return targetSnapshot{}, fmt.Errorf("read %s: %w", path, err)
+	}
+}
+
+func stageAtomic0600(path string, payload []byte, expected *targetSnapshot) (Staged, error) {
 	dir := filepath.Dir(path)
 	info, err := os.Stat(dir)
 	switch {
 	case err == nil:
 		if !info.IsDir() {
-			return fmt.Errorf("parent path %s is not a directory", dir)
+			return nil, fmt.Errorf("parent path %s is not a directory", dir)
 		}
 	case os.IsNotExist(err):
 		// #nosec G301 -- the setup spec requires newly-created config dirs to be 0755.
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("create parent directory %s: %w", dir, err)
+			return nil, fmt.Errorf("create parent directory %s: %w", dir, err)
 		}
 		// #nosec G302 -- normalizes only newly-created config directories.
 		if err := os.Chmod(dir, 0o755); err != nil {
-			return fmt.Errorf("chmod parent directory %s: %w", dir, err)
+			return nil, fmt.Errorf("chmod parent directory %s: %w", dir, err)
 		}
 	default:
-		return fmt.Errorf("stat parent directory %s: %w", dir, err)
+		return nil, fmt.Errorf("stat parent directory %s: %w", dir, err)
 	}
 	tmp, err := os.CreateTemp(dir, ".agent-runner-*.tmp")
 	if err != nil {
-		return fmt.Errorf("create temporary file in %s: %w", dir, err)
+		return nil, fmt.Errorf("create temporary file in %s: %w", dir, err)
 	}
 	tmpName := tmp.Name()
 	cleanup := true
@@ -233,18 +320,57 @@ func writeAtomic0600(path string, payload []byte) error {
 	}()
 	if err := os.Chmod(tmpName, 0o600); err != nil {
 		_ = tmp.Close()
-		return fmt.Errorf("chmod temporary file %s: %w", tmpName, err)
+		return nil, fmt.Errorf("chmod temporary file %s: %w", tmpName, err)
 	}
 	if _, err := tmp.Write(payload); err != nil {
 		_ = tmp.Close()
-		return fmt.Errorf("write temporary file %s: %w", tmpName, err)
+		return nil, fmt.Errorf("write temporary file %s: %w", tmpName, err)
 	}
 	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temporary file %s: %w", tmpName, err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("rename temporary file %s to %s: %w", tmpName, path, err)
+		return nil, fmt.Errorf("close temporary file %s: %w", tmpName, err)
 	}
 	cleanup = false
+	return &stagedFile{targetPath: path, tempPath: tmpName, expected: expected}, nil
+}
+
+type stagedFile struct {
+	targetPath string
+	tempPath   string
+	expected   *targetSnapshot
+}
+
+func (s *stagedFile) PreviewPath() string {
+	return s.tempPath
+}
+
+func (s *stagedFile) Commit() error {
+	if s.tempPath == "" {
+		return fmt.Errorf("staged profile write is already finalized")
+	}
+	if s.expected != nil {
+		current, err := snapshotTarget(s.targetPath)
+		if err != nil {
+			return fmt.Errorf("check staged profile target: %w", err)
+		}
+		if current.exists != s.expected.exists || !bytes.Equal(current.body, s.expected.body) {
+			return fmt.Errorf("target %s changed after profile staging; refusing to overwrite it", s.targetPath)
+		}
+	}
+	if err := os.Rename(s.tempPath, s.targetPath); err != nil {
+		return fmt.Errorf("rename temporary file %s to %s: %w", s.tempPath, s.targetPath, err)
+	}
+	s.tempPath = ""
+	return nil
+}
+
+func (s *stagedFile) Discard() error {
+	if s.tempPath == "" {
+		return nil
+	}
+	err := os.Remove(s.tempPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove temporary file %s: %w", s.tempPath, err)
+	}
+	s.tempPath = ""
 	return nil
 }

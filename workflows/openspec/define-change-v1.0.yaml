@@ -12,7 +12,7 @@ engine:
 
 sessions:
   - name: lead-agent
-    agent: planner
+    agent: lead
 
 steps:
   - id: create
@@ -27,7 +27,7 @@ steps:
     prompt: |
       Help the user write the proposal for OpenSpec change "{{change_name}}". First ask what the change is about; do not guess. You MUST use the codagent:propose skill.
 
-      Once the proposal draft is complete, use codagent:call-agent with a fresh `agent: reviewer` to obtain one adversarial review. The task-specific child instructions must require it to use the codagent:proposal-review skill, read the proposal at `openspec/changes/{{change_name}}/`, inspect relevant repository context, provide clear actionable feedback with recommended resolutions, and never modify files.
+      Once the proposal draft is complete, use codagent:call-agent with a fresh `agent: crosscheck` to obtain one adversarial review. The task-specific child instructions must require it to use the codagent:proposal-review skill, read the proposal at `openspec/changes/{{change_name}}/`, inspect relevant repository context, provide clear actionable feedback with recommended resolutions, and never modify files.
 
       Follow codagent:call-agent's verification and user-facing reporting rules. Discuss every consequential finding with the user. Do not modify the proposal or any other file in response to review feedback until you have presented your assessment and received the user's explicit confirmation about which changes to make. Apply only the changes the user confirms.
 
@@ -54,7 +54,7 @@ steps:
     mode: interactive
     tools: [call_agent]
     prompt: |
-      Perform the final definition review with the user for OpenSpec change "{{change_name}}". Use codagent:call-agent with a fresh `agent: reviewer`. The task-specific child instructions must require it to use the codagent:review-approach skill and independently review the proposal, every specification, and the design under `openspec/changes/{{change_name}}/` together.
+      Perform the final definition review with the user for OpenSpec change "{{change_name}}". Use codagent:call-agent with a fresh `agent: crosscheck`. The task-specific child instructions must require it to use the codagent:review-approach skill and independently review the proposal, every specification, and the design under `openspec/changes/{{change_name}}/` together.
 
       Require the child to check cross-artifact consistency and testability; find consequential behavioral or architectural gaps, missing decisions, weak tradeoffs, failure modes, and better alternatives; inspect relevant repository patterns; avoid reviewing implementation tasks; and never modify files.
 

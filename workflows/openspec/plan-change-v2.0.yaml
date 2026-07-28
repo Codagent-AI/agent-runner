@@ -12,7 +12,7 @@ params:
 
 sessions:
   - name: planning-agent
-    agent: planner
+    agent: lead
 
 steps:
   - id: validate-definition

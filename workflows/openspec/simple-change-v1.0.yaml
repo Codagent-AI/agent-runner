@@ -16,7 +16,7 @@ steps:
       change_name: "{{change_name}}"
 
   - id: plan
-    agent: planner
+    agent: lead
     prompt: |
       Help the user plan the change. First, ask the user what the change is about. DO NOT attempt to guess. Then, you MUST use the codagent:simple-plan skill.
 

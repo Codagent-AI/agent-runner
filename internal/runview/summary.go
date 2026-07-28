@@ -139,6 +139,9 @@ func (m *Model) summaryFooterLines(totals *model.RunTotals, columns summaryColum
 		tuistyle.ScreenMargin+"  "+tuistyle.DimStyle.Render(formatProcessedTokenTotals(totals)),
 		tuistyle.ScreenMargin+"  "+tuistyle.DimStyle.Render(
 			"usage "+string(totals.UsageCoverage)+"  ·  cost "+string(totals.CostCoverage)))
+	for _, warning := range m.tree.Warnings {
+		footer = append(footer, "", tuistyle.ScreenMargin+renderWarning(warning))
+	}
 	if m.loadErr != "" {
 		footer = append(footer, "", tuistyle.ScreenMargin+tuistyle.DimStyle.Render("Error: "+m.loadErr))
 	}

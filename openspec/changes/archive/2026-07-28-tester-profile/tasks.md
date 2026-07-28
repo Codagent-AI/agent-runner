@@ -1,0 +1,3 @@
+- [x] Canonicalize Standard Roles (`tasks/01-canonical-role-migration.md`)
+- [x] Build Recommendation Engine (`tasks/02-recommendation-engine.md`)
+- [x] Deliver Four-Role Native Setup (`tasks/03-recommendation-first-setup.md`)

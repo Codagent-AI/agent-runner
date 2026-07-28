@@ -23,7 +23,7 @@ steps:
     tools: [call_agent]
     prompt: |
       Implement the requested change. Use codagent:call-agent with a fresh
-      reviewer when an independent review would help.
+      `agent: crosscheck` when an independent review would help.
 ```
 
 `call_agent` is the only supported Runner-owned tool. The field must be a YAML sequence, is valid only

@@ -52,7 +52,7 @@ It is the workflow layer around those tools. You keep using the agent CLIs you a
 | TUI-first run management | Browse workflow definitions, start runs, inspect run history, and resume interrupted runs. |
 | Multiple agent CLIs | Built-in adapters for `claude`, `codex`, `copilot`, `cursor`, and `opencode`. |
 | Existing CLI auth | Agent Runner launches installed CLI tools as subprocesses, so workflows can use existing subscriptions and local credentials. |
-| Agent profiles | Configure named agents such as `planner`, `implementor`, and `summarizer` in global or project config. |
+| Agent profiles | Configure canonical `lead`, `crosscheck`, `implementor`, and `tester` roles in global or project config. |
 | Session control | Start fresh agent sessions, resume prior ones, or inherit context across sub-workflows. |
 | Workflow control | Retry validation loops, skip fix steps when checks pass, stop loops on success, and fan out over files or tasks. |
 | Output capture | Pass test results, validator reports, generated plans, or user input from one step into the next. |

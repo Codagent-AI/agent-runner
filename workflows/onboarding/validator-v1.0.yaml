@@ -4,9 +4,9 @@ hidden: true
 
 sessions:
   - name: validator-setup-session
-    agent: planner
+    agent: lead
   - name: tutor-session
-    agent: planner
+    agent: lead
   - name: impl-session
     agent: implementor
 

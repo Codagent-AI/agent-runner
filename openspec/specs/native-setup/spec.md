@@ -33,23 +33,35 @@ When any condition is false, the runner SHALL proceed to its normal entry point 
 
 ### Requirement: Native setup is mandatory
 
-The native setup TUI SHALL begin with a setup surface that offers progression into profile setup. It SHALL NOT offer skip, not-now, or dismiss actions. A user who cancels setup leaves setup incomplete, and native setup SHALL be offered again on the next eligible launch. Ctrl+C SHALL be treated as a global app-exit request, not as navigation to the normal home TUI.
+Native setup SHALL detect supported CLI adapters and discover their available models before presenting an actionable profile-selection surface. While recommendation inputs are being collected, setup SHALL display a non-actionable loading state. When at least one supported CLI is detected, the first actionable profile surface SHALL be the four-role recommendation summary defined by the agent-profile-editor capability rather than an individual lead CLI screen.
 
-#### Scenario: Continue enters setup
-- **WHEN** the user chooses the continue action
-- **THEN** the runner proceeds to the native agent profile setup flow
+Native setup SHALL NOT offer skip, not-now, or dismiss actions during required profile setup. A user who cancels or interrupts recommendation, customization, backend, permission, scope, overwrite, or skill-installation stages SHALL leave setup incomplete, and native setup SHALL be offered again on the next eligible launch.
+
+Failure to discover models from one detected CLI SHALL NOT fail setup; setup SHALL retain that CLI with its adapter default, carry the discovery limitation into the recommendation summary, and continue. Failure to detect any supported CLI SHALL present a blocking failure as the first actionable result.
+
+#### Scenario: Recommendation summary is the first actionable profile surface
+- **WHEN** native setup detects at least one supported CLI and finishes recommendation discovery
+- **THEN** setup presents the four-role recommendation summary without first presenting an individual lead CLI screen
+
+#### Scenario: Recommendation discovery shows loading state
+- **WHEN** native setup is still detecting adapters or discovering models needed for the recommendation
+- **THEN** setup displays a non-actionable loading state and does not permit accepting an incomplete recommendation
+
+#### Scenario: Individual discovery failure remains usable
+- **WHEN** model discovery fails for one detected CLI and at least one supported CLI was detected
+- **THEN** setup presents the recommendation summary with that CLI eligible at its adapter default and visibly identifies the discovery limitation
+
+#### Scenario: Adapter detection failure is blocking
+- **WHEN** native setup detects no supported CLI adapters
+- **THEN** the failure message is the first actionable result and no profile recommendation can be accepted
 
 #### Scenario: Setup cannot be skipped
-- **WHEN** native setup renders its first surface
+- **WHEN** native setup renders recommendation, customization, backend, permission, scope, overwrite, or skill-installation stages
 - **THEN** no skip, not-now, or dismiss action is available
 
-### Requirement: Native setup implementor CLI billing disclosure
-
-The native setup implementor CLI selection SHALL disclose Claude programmatic usage billing next to the Claude option. The disclosure SHALL appear before the user confirms the implementor CLI choice so users can choose the default implementor backend with that cost context visible.
-
-#### Scenario: Claude implementor option shows programmatic billing disclosure
-- **WHEN** native setup renders the implementor CLI selection and `claude` is an available option
-- **THEN** the `claude` option includes a visible programmatic credits/API-rate billing disclosure
+#### Scenario: Cancel leaves setup incomplete
+- **WHEN** the user cancels or interrupts native setup before all required setup actions complete
+- **THEN** setup completion is not recorded and native setup is offered again on the next eligible launch
 
 ### Requirement: Native setup completion tracking
 
@@ -87,45 +99,51 @@ Native setup SHALL NOT persist partially completed wizard progress. If setup is 
 
 ### Requirement: Native setup handoff to onboarding demo
 
-After native setup reaches a terminal state, the runner SHALL continue to the appropriate next application surface. A successful setup SHALL start or resume `onboarding:onboarding` when onboarding demo completion or dismissal has not been recorded. First-run onboarding demo run state SHALL be stored in a user-global onboarding run scope rather than under the current project's run history. Cancellation or failure SHALL transition to the normal TUI entry point without starting the demo. Ctrl+C during native setup SHALL exit the app instead of proceeding to the normal TUI entry point.
+After native setup writes the profile configuration and records `settings.setup.completed_at`, the native setup TUI SHALL present a demo prompt screen with exactly three actions: Continue, Not now, and Dismiss.
 
-#### Scenario: Successful setup starts onboarding demo
-- **WHEN** native setup completes successfully and `settings.onboarding.completed_at` and `settings.onboarding.dismissed` are unset
-- **THEN** the runner starts `onboarding:onboarding`
+The demo prompt actions SHALL render as a horizontal button row rather than as the setup TUI's vertical option list. The Continue button SHALL be left-aligned, the Dismiss button SHALL be right-aligned, and intermediate buttons SHALL be distributed between them when terminal width allows. Left and Right keys SHALL change the focused demo prompt button. Enter SHALL activate the focused button.
 
-#### Scenario: Interrupted onboarding demo resumes
-- **WHEN** `settings.onboarding.completed_at` and `settings.onboarding.dismissed` are unset
-- **AND** the user-global onboarding run scope has an incomplete persisted `onboarding:onboarding` run
-- **THEN** the runner resumes the most recently updated incomplete onboarding run instead of starting a new onboarding run
+- **Continue** SHALL cause native setup to return a result indicating the onboarding demo should run. The caller SHALL then launch `onboarding:onboarding`.
+- **Not now** SHALL leave `settings.onboarding.completed_at` and `settings.onboarding.dismissed` unset. Native setup SHALL return normally without launching the demo.
+- **Dismiss** SHALL write `settings.onboarding.dismissed` with the current RFC3339 timestamp via the settings atomic-write path. Native setup SHALL return normally without launching the demo.
 
-#### Scenario: Onboarding resume is independent of current directory
-- **WHEN** first-run onboarding starts from one working directory and exits before completion
-- **AND** Agent Runner later starts from a different working directory with `settings.onboarding.completed_at` and `settings.onboarding.dismissed` unset
-- **THEN** onboarding resumes from the incomplete user-global onboarding run
+The demo prompt screen SHALL only appear after a successful profile write. Cancelled, interrupted, or failed setup SHALL NOT show the demo prompt.
 
-#### Scenario: Completed onboarding demo returns home
-- **WHEN** the onboarding demo workflow exits successfully without an explicit app-quit request
-- **THEN** the runner proceeds to the normal TUI entry point
+When native setup completes but onboarding demo completion or dismissal is already recorded in settings, the demo prompt screen SHALL be skipped.
 
-#### Scenario: Quitting onboarding demo exits app
-- **WHEN** the user explicitly quits the onboarding demo workflow with `q`, `Ctrl+C`, or confirmed top-level Escape
-- **THEN** the runner exits the app instead of proceeding to the normal TUI entry point
+#### Scenario: Demo prompt appears after successful write
+- **WHEN** native setup writes the profile configuration and records setup.completed_at successfully
+- **THEN** the native setup TUI shows the demo prompt with Continue, Not now, and Dismiss actions as horizontal buttons
 
-#### Scenario: Completed onboarding demo is not repeated
-- **WHEN** native setup completes successfully and `settings.onboarding.completed_at` is already set
-- **THEN** the runner proceeds to the normal TUI entry point without starting `onboarding:onboarding`
+#### Scenario: Demo prompt buttons support horizontal navigation
+- **WHEN** the demo prompt is visible
+- **AND** the user presses Left or Right
+- **THEN** focus moves between the Continue, Not now, and Dismiss buttons
+- **AND** Enter activates the focused button
 
-#### Scenario: Dismissed onboarding demo is not repeated
-- **WHEN** native setup completes successfully and `settings.onboarding.dismissed` is already set
-- **THEN** the runner proceeds to the normal home TUI without starting `onboarding:onboarding`
+#### Scenario: Continue launches onboarding demo
+- **WHEN** the user selects Continue on the demo prompt
+- **THEN** the caller launches `onboarding:onboarding`
 
-#### Scenario: Cancelled setup goes home
-- **WHEN** native setup is cancelled or fails
-- **THEN** the runner proceeds to the normal home TUI without marking setup complete
+#### Scenario: Not now leaves onboarding settings unset
+- **WHEN** the user selects Not now on the demo prompt
+- **THEN** neither `settings.onboarding.completed_at` nor `settings.onboarding.dismissed` is written, and the runner proceeds to the normal home TUI
 
-#### Scenario: Ctrl+C during setup exits app
-- **WHEN** the user presses Ctrl+C during native setup
-- **THEN** the runner exits the app without marking setup complete and without proceeding to the normal home TUI
+#### Scenario: Dismiss writes onboarding.dismissed
+- **WHEN** the user selects Dismiss on the demo prompt
+- **THEN** `settings.onboarding.dismissed` is written with the current RFC3339 timestamp and the runner proceeds to the normal home TUI
+
+#### Scenario: Cancelled setup does not show demo prompt
+- **WHEN** native setup is cancelled before the profile write
+- **THEN** no demo prompt is shown and the runner proceeds to the normal home TUI
+
+#### Scenario: Demo prompt skipped when onboarding already completed
+- **WHEN** native setup completes and `settings.onboarding.completed_at` is already set
+- **THEN** the demo prompt is skipped and the runner proceeds to the normal home TUI
+
+#### Scenario: Demo prompt skipped when onboarding already dismissed
+- **WHEN** native setup completes and `settings.onboarding.dismissed` is already set
+- **THEN** the demo prompt is skipped and the runner proceeds to the normal home TUI
 
 ### Requirement: Skill installation during native setup
 
@@ -179,27 +197,41 @@ If `agent-plugin` is not installed on the system PATH, native setup SHALL treat 
 
 ### Requirement: Autonomous backend selection during setup
 
-After the implementor CLI selection step (where the programmatic billing disclosure is shown), native setup SHALL present an "Autonomous Backend" selection screen. The screen SHALL display the three `autonomous_backend` options — Headless, Interactive, and Interactive for Claude — each with a one-sentence explanation of what the option means. The `Interactive for Claude` option SHALL be pre-selected as the recommended default. The selected value SHALL be written to `~/.agent-runner/settings.yaml` as `autonomous_backend` when setup completes successfully.
+After the user accepts the complete four-role recommendation or finishes lead, crosscheck, implementor, and tester customization, native setup SHALL present an "Autonomous Backend" selection screen. The screen SHALL display the three `autonomous_backend` options Headless, Interactive, and Interactive for Claude, each with a one-sentence explanation of invocation behavior. `Headless` SHALL be preselected and labeled as the recommended default. Backend descriptions SHALL NOT claim that one invocation mode avoids API billing.
 
-#### Scenario: Autonomous backend screen appears after implementor CLI selection
-- **WHEN** the user completes the implementor CLI selection step of native setup
-- **THEN** the setup presents an autonomous backend selection screen before proceeding to the next setup step
+After the user selects an autonomous backend, setup SHALL present the existing Autonomous Permission Mode selection screen. The selected backend SHALL be written to `~/.agent-runner/settings.yaml` only when setup completes successfully. Changing the setup recommendation SHALL NOT migrate or rewrite an already persisted backend outside a completed setup flow.
 
-#### Scenario: Interactive for Claude is pre-selected
-- **WHEN** the autonomous backend selection screen is presented
-- **THEN** the `Interactive for Claude` option is pre-selected
+#### Scenario: Accept-all proceeds to backend selection
+- **WHEN** the user accepts the complete four-role recommendation
+- **THEN** setup presents the Autonomous Backend screen without showing individual role-selection screens
 
-#### Scenario: Each option has an explanation
-- **WHEN** the autonomous backend selection screen is presented
-- **THEN** each of the three options displays a one-sentence explanation of what the option means
+#### Scenario: Customization proceeds to backend selection
+- **WHEN** the user completes tester customization after lead, crosscheck, and implementor
+- **THEN** setup presents the Autonomous Backend screen
+
+#### Scenario: Headless is preselected
+- **WHEN** the Autonomous Backend screen is presented
+- **THEN** `Headless` is focused and labeled as the recommended default
+
+#### Scenario: Every backend option has behavioral copy
+- **WHEN** the Autonomous Backend screen is presented
+- **THEN** Headless, Interactive, and Interactive for Claude are all available with explanations of invocation behavior and without provider-billing claims
+
+#### Scenario: Permission mode follows backend
+- **WHEN** the user selects an Autonomous Backend option
+- **THEN** setup presents the Autonomous Permission Mode screen before scope and skill installation complete
 
 #### Scenario: Selected backend is persisted on setup completion
-- **WHEN** the user selects an autonomous backend value and setup completes successfully
+- **WHEN** the user selects an autonomous backend and setup completes successfully
 - **THEN** `~/.agent-runner/settings.yaml` contains the selected `autonomous_backend` value
 
 #### Scenario: Cancelled setup does not persist backend
-- **WHEN** the user selects an autonomous backend value but cancels setup before completion
-- **THEN** `~/.agent-runner/settings.yaml` does not contain an `autonomous_backend` key from this setup attempt
+- **WHEN** the user selects an autonomous backend but cancels setup before completion
+- **THEN** `~/.agent-runner/settings.yaml` does not contain an `autonomous_backend` value from the canceled attempt
+
+#### Scenario: Existing backend is not migrated automatically
+- **WHEN** a user already has `autonomous_backend: interactive-claude` and native setup does not complete a new setup flow
+- **THEN** the runner leaves that persisted value unchanged
 
 ### Requirement: Autonomous permission mode selection during setup
 
@@ -236,4 +268,26 @@ The Permission Mode screen SHALL appear before the skill installation step. Canc
 
 - **WHEN** the user selects an Autonomous Permission Mode value but cancels setup before completion
 - **THEN** `~/.agent-runner/settings.yaml` does not contain an `autonomous_permission_mode` key from this setup attempt
+
+### Requirement: Demo prompt re-show on launch
+
+When entering the bare/list TUI entry point, the runner SHALL evaluate whether the demo prompt should be re-shown. The demo prompt re-show trigger SHALL fire when all of the following hold:
+- `settings.setup.completed_at` is set;
+- `settings.onboarding.completed_at` is unset;
+- `settings.onboarding.dismissed` is unset;
+- both stdin and stdout are TTYs.
+
+When the trigger fires, the runner SHALL present the same demo prompt screen (Continue / Not now / Dismiss) with the same behavior as during native setup. This replaces the previous behavior of auto-launching `onboarding:onboarding` directly.
+
+#### Scenario: Demo prompt re-shown after Not now
+- **WHEN** the user previously selected Not now, and the runner starts on an eligible TTY
+- **THEN** the demo prompt screen is shown again with Continue, Not now, and Dismiss
+
+#### Scenario: Demo prompt not re-shown after Dismiss
+- **WHEN** the user previously selected Dismiss
+- **THEN** the demo prompt does not appear on subsequent launches
+
+#### Scenario: Demo prompt not re-shown after completed demo
+- **WHEN** the user previously completed the onboarding demo
+- **THEN** the demo prompt does not appear on subsequent launches
 

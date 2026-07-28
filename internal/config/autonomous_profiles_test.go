@@ -46,6 +46,22 @@ func TestDefaultProfileSetUsesAutonomousBase(t *testing.T) {
 		t.Fatalf("unexpected implementor profile: %+v", implementor)
 	}
 
+	crosscheck, err := cfg.Resolve("crosscheck")
+	if err != nil {
+		t.Fatalf("Resolve(crosscheck) returned error: %v", err)
+	}
+	if crosscheck.DefaultMode != "autonomous" || crosscheck.CLI != "claude" || crosscheck.Model != "opus" || crosscheck.Effort != "high" {
+		t.Fatalf("unexpected crosscheck profile: %+v", crosscheck)
+	}
+
+	tester, err := cfg.Resolve("tester")
+	if err != nil {
+		t.Fatalf("Resolve(tester) returned error: %v", err)
+	}
+	if tester.DefaultMode != "autonomous" || tester.CLI != "claude" || tester.Model != "sonnet" || tester.Effort != "high" {
+		t.Fatalf("unexpected tester profile: %+v", tester)
+	}
+
 	summarizer, err := cfg.Resolve("summarizer")
 	if err != nil {
 		t.Fatalf("Resolve(summarizer) returned error: %v", err)

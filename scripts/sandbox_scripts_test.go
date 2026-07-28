@@ -981,6 +981,23 @@ func TestDevDockerfileIncludesBrowserAgentTools(t *testing.T) {
 	}
 }
 
+func TestDockerFirstRunSmokeTrustsConfiguredBrewTapBeforeInstalling(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "docker-first-run-smoke.sh"))
+	if err != nil {
+		t.Fatalf("read docker-first-run-smoke.sh: %v", err)
+	}
+	text := string(data)
+	tapAt := strings.Index(text, `brew tap "$BREW_TAP"`)
+	trustAt := strings.Index(text, `brew trust "$BREW_TAP"`)
+	installDispatchAt := strings.Index(text, `case "$INSTALL_FROM" in`)
+	if tapAt < 0 || trustAt < 0 || installDispatchAt < 0 {
+		t.Fatalf("docker-first-run-smoke.sh must tap and trust BREW_TAP before dispatching installation")
+	}
+	if tapAt >= trustAt || trustAt >= installDispatchAt {
+		t.Fatalf("docker-first-run-smoke.sh must trust BREW_TAP after tapping and before installing")
+	}
+}
+
 func TestDevcontainerShellDefaultsToZsh(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "devcontainer-shell.sh"))
 	if err != nil {
