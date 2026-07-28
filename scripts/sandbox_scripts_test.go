@@ -993,7 +993,7 @@ func TestDockerFirstRunSmokeTrustsConfiguredBrewTapBeforeInstalling(t *testing.T
 	if tapAt < 0 || trustAt < 0 || installDispatchAt < 0 {
 		t.Fatalf("docker-first-run-smoke.sh must tap and trust BREW_TAP before dispatching installation")
 	}
-	if !(tapAt < trustAt && trustAt < installDispatchAt) {
+	if tapAt >= trustAt || trustAt >= installDispatchAt {
 		t.Fatalf("docker-first-run-smoke.sh must trust BREW_TAP after tapping and before installing")
 	}
 }
