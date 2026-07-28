@@ -11,9 +11,9 @@ params:
 
 sessions:
   - name: lead-agent
-    agent: planner
+    agent: lead
   - name: acceptance-tester
-    agent: reviewer
+    agent: tester
 
 steps:
   - id: validate-change-name

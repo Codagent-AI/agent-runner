@@ -33,6 +33,18 @@ type ResolvedAgent struct {
 	Model        string
 	Effort       string
 	SystemPrompt string
+	Deprecations []Deprecation
+}
+
+// Deprecation describes a supported legacy agent name and its canonical
+// replacement. Callers decide how and where to surface this metadata.
+type Deprecation struct {
+	Alias     string
+	Canonical string
+}
+
+func (d Deprecation) String() string {
+	return fmt.Sprintf("agent profile %q is deprecated; use %q", d.Alias, d.Canonical)
 }
 
 // ProfileSet is a named collection of agents, optionally inheriting from
@@ -48,6 +60,7 @@ type Config struct {
 	ActiveProfile string
 	Profiles      map[string]*ProfileSet
 	ActiveAgents  map[string]*Agent
+	Deprecations  []Deprecation
 }
 
 // parsedFile is the internal representation of one loaded config file.
@@ -71,6 +84,21 @@ var validDefaultMode = map[string]bool{"interactive": true, "autonomous": true}
 var validCLI = map[string]bool{"claude": true, "codex": true, "copilot": true, "cursor": true, "opencode": true}
 
 var userHomeDir = os.UserHomeDir
+
+var canonicalAgentAliases = map[string]string{
+	"planner":  "lead",
+	"reviewer": "crosscheck",
+}
+
+// CanonicalAgentName returns the canonical name accepted by profile
+// resolution, plus deprecation metadata when name is a supported alias.
+func CanonicalAgentName(name string) (string, *Deprecation) {
+	canonical, ok := canonicalAgentAliases[name]
+	if !ok {
+		return name, nil
+	}
+	return canonical, &Deprecation{Alias: name, Canonical: canonical}
+}
 
 // Load returns a configuration by layering three sources: built-in defaults,
 // an optional global config at ~/.agent-runner/config.yaml, and an optional
@@ -221,6 +249,23 @@ func isLegacyAgentMap(m map[string]interface{}) bool {
 // fully-populated Config. nil layers are skipped. active_profile is read
 // only from the last layer (project).
 func buildConfig(defaults, global, project *parsedFile) (*Config, error) {
+	layers := []*parsedFile{defaults, global, project}
+	deprecationsByProfile := map[string][]Deprecation{}
+	for i, layer := range layers {
+		canonical, warnings, err := canonicalizeLayer(layer)
+		if err != nil {
+			return nil, err
+		}
+		layers[i] = canonical
+		for profileName, profileWarnings := range warnings {
+			deprecationsByProfile[profileName] = AppendDeprecations(
+				deprecationsByProfile[profileName],
+				profileWarnings...,
+			)
+		}
+	}
+	defaults, global, project = layers[0], layers[1], layers[2]
+
 	merged := mergeProfileSets(defaults, global, project)
 	resolved, err := resolveProfileSetExtends(merged)
 	if err != nil {
@@ -254,7 +299,96 @@ func buildConfig(defaults, global, project *parsedFile) (*Config, error) {
 		ActiveProfile: activeProfile,
 		Profiles:      resolved,
 		ActiveAgents:  activeAgents,
+		Deprecations:  activeProfileDeprecations(merged, selectedName, deprecationsByProfile),
 	}, nil
+}
+
+func canonicalizeLayer(layer *parsedFile) (*parsedFile, map[string][]Deprecation, error) {
+	if layer == nil {
+		return nil, nil, nil
+	}
+	canonical := &parsedFile{
+		ActiveProfile: layer.ActiveProfile,
+		Profiles:      make(map[string]*ProfileSet, len(layer.Profiles)),
+	}
+	deprecations := map[string][]Deprecation{}
+	for setName, profileSet := range layer.Profiles {
+		if profileSet == nil {
+			canonical.Profiles[setName] = &ProfileSet{}
+			continue
+		}
+		agents := profileSet.Agents
+		for alias, canonicalName := range canonicalAgentAliases {
+			_, hasAlias := agents[alias]
+			_, hasCanonical := agents[canonicalName]
+			if hasAlias && hasCanonical {
+				return nil, nil, fmt.Errorf(
+					"profile set %q declares both %q and its deprecated alias %q; keep %q and remove %q",
+					setName, canonicalName, alias, canonicalName, alias,
+				)
+			}
+		}
+		canonicalAgents := make(map[string]*Agent, len(agents))
+		for name, agent := range agents {
+			canonicalName, warning := CanonicalAgentName(name)
+			if warning != nil {
+				deprecations[setName] = AppendDeprecations(deprecations[setName], *warning)
+			}
+			if agent == nil {
+				canonicalAgents[canonicalName] = nil
+				continue
+			}
+			cloned := *agent
+			if cloned.Extends != "" {
+				cloned.Extends, warning = CanonicalAgentName(cloned.Extends)
+				if warning != nil {
+					deprecations[setName] = AppendDeprecations(deprecations[setName], *warning)
+				}
+			}
+			canonicalAgents[canonicalName] = &cloned
+		}
+		canonical.Profiles[setName] = &ProfileSet{
+			Extends: profileSet.Extends,
+			Agents:  canonicalAgents,
+		}
+	}
+	return canonical, deprecations, nil
+}
+
+func activeProfileDeprecations(
+	profileSets map[string]*ProfileSet,
+	selectedName string,
+	deprecationsByProfile map[string][]Deprecation,
+) []Deprecation {
+	var deprecations []Deprecation
+	visited := map[string]bool{}
+	for selectedName != "" && !visited[selectedName] {
+		visited[selectedName] = true
+		deprecations = AppendDeprecations(deprecations, deprecationsByProfile[selectedName]...)
+		profileSet := profileSets[selectedName]
+		if profileSet == nil {
+			break
+		}
+		selectedName = profileSet.Extends
+	}
+	return deprecations
+}
+
+// AppendDeprecations adds deprecations whose aliases are not already present.
+func AppendDeprecations(existing []Deprecation, additions ...Deprecation) []Deprecation {
+	for _, addition := range additions {
+		seen := false
+		for _, current := range existing {
+			if current.Alias == addition.Alias {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			existing = append(existing, addition)
+		}
+	}
+	return existing
 }
 
 // mergeProfileSets layers defaults, global, and project config. For each
@@ -371,13 +505,14 @@ func pathIndex(path []string, target string) int {
 // Resolve walks the extends chain for the named agent in the active profile set
 // and returns a fully-merged ResolvedAgent. Child fields override parent fields.
 func (c *Config) Resolve(name string) (*ResolvedAgent, error) {
-	if _, ok := c.ActiveAgents[name]; !ok {
+	canonicalName, warning := CanonicalAgentName(name)
+	if _, ok := c.ActiveAgents[canonicalName]; !ok {
 		return nil, fmt.Errorf("agent %q not found in active profile", name)
 	}
 
 	var chain []string
 	visited := map[string]bool{}
-	cur := name
+	cur := canonicalName
 	for cur != "" {
 		if visited[cur] {
 			return nil, fmt.Errorf("cycle in extends chain: %s", strings.Join(append(chain, cur), " -> "))
@@ -396,6 +531,9 @@ func (c *Config) Resolve(name string) (*ResolvedAgent, error) {
 	}
 
 	ra := &ResolvedAgent{}
+	if warning != nil {
+		ra.Deprecations = []Deprecation{*warning}
+	}
 	for i := len(chain) - 1; i >= 0; i-- {
 		a := c.ActiveAgents[chain[i]]
 		if a.DefaultMode != "" {
@@ -493,9 +631,10 @@ func defaultParsedFile() *parsedFile {
 	agents := map[string]*Agent{
 		"interactive_base": {DefaultMode: "interactive", CLI: "claude", Model: "opus", Effort: "high"},
 		"autonomous_base":  {DefaultMode: "autonomous", CLI: "claude", Model: "opus", Effort: "high"},
-		"planner":          {Extends: "interactive_base"},
-		"reviewer":         {Extends: "interactive_base"},
+		"lead":             {Extends: "interactive_base"},
+		"crosscheck":       {Extends: "autonomous_base"},
 		"implementor":      {Extends: "autonomous_base"},
+		"tester":           {DefaultMode: "autonomous", CLI: "claude", Model: "sonnet", Effort: "high"},
 		"summarizer":       {DefaultMode: "autonomous", CLI: "claude", Model: "haiku", Effort: "low"},
 	}
 	return &parsedFile{

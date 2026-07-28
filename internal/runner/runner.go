@@ -727,6 +727,9 @@ func PrepareRun(workflow *model.Workflow, params map[string]string, opts *Option
 	}
 
 	emitRunStart(rs, opts)
+	if cfg, ok := rs.ctx.ProfileStore.(*config.Config); ok {
+		exec.EmitAgentDeprecations(rs.ctx, rs.log, cfg.Deprecations)
+	}
 	rs.log.Printf("\nagent-runner: running workflow %q\n\n", workflow.Name)
 
 	projectDir := filepath.Dir(filepath.Dir(rs.sessionDir)) // parent of runs/

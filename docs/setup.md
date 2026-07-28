@@ -113,14 +113,24 @@ Run Agent Runner from the project root:
 agent-runner
 ```
 
-On first launch, native setup walks through:
+On first launch, native setup:
 
-1. Choosing the planner CLI and model for interactive workflow steps.
-2. Choosing the implementor CLI and model for autonomous implementation steps.
-3. Choosing the autonomous backend and permission mode.
-4. Choosing global or project config scope.
-5. Installing Codagent agent skills through `agent-plugin`.
-6. Choosing whether to run the onboarding workflow demo.
+1. Shows a loading screen while it detects every supported CLI and queries their models concurrently.
+2. Presents one recommendation summary for Lead, Crosscheck, Implementor, and Tester.
+3. Lets you accept the complete recommendation or customize the four roles in that order.
+4. Asks how autonomous agents should be invoked and what permission mode they receive.
+5. Asks whether the direct four-role profile belongs in global or project config.
+6. Confirms replacement if canonical or legacy managed entries already exist.
+7. Installs Codagent agent skills through `agent-plugin`.
+8. Offers the onboarding workflow demo.
+
+Discovery happens once per setup session. Customization reuses that fixed snapshot, so changing Lead can immediately recompute Crosscheck and changing Implementor can recompute Tester without launching more subprocesses.
+
+Model discovery failure for one CLI does not remove it. Setup keeps the adapter available, shows the discovery limitation, and offers the CLI default with no `model` field. If discovered models do not match a recognized recommendation tier, setup focuses `Use CLI default` while leaving every discovered model available for manual selection. Setup cannot continue when no supported CLI is found on `$PATH`.
+
+The recommendation tries to give Lead/Crosscheck and Implementor/Tester different known model families. When that is not possible, the summary names the affected pair and explains that normal precedence was used. See [Agent Profiles](agent-profiles.md) for the role policy, rationale, and worked examples.
+
+The Autonomous Backend screen recommends **Headless**, which launches autonomous steps in non-interactive print mode. **Interactive** opens every autonomous step in an interactive session with autonomy instructions, while **Interactive for Claude** does so only for Claude and uses headless invocation for other CLIs.
 
 Global setup writes user-level Agent Runner config. Project setup writes `.agent-runner/config.yaml` in the current repository and installs project-scoped agent skills.
 

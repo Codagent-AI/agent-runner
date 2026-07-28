@@ -175,6 +175,7 @@ docker run "${docker_args[@]}" \
 
     require_cmd brew
     brew tap "$BREW_TAP"
+    brew trust "$BREW_TAP"
     case "$INSTALL_FROM" in
       brew)
         install_agent_runner_from_brew

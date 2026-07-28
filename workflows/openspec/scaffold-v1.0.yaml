@@ -5,9 +5,9 @@ sessions:
   - name: scaffold-agent
     agent: implementor
   - name: validator-setup-session
-    agent: planner
+    agent: lead
   - name: publish-agent
-    agent: planner
+    agent: lead
 
 steps:
   - id: prepare-repo

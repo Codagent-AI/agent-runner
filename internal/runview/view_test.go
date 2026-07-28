@@ -101,6 +101,33 @@ func TestView_FailedActiveRunHidesDebugHint(t *testing.T) {
 	}
 }
 
+func TestView_ShowsDeduplicatedAuditWarnings(t *testing.T) {
+	root := &StepNode{ID: "legacy-agents", Type: NodeRoot, Status: StatusInProgress}
+	tree := &Tree{Root: root}
+	warning := RawEvent{
+		Type: "warning",
+		Data: map[string]any{
+			"message": `agent profile "planner" is deprecated; use "lead"`,
+		},
+	}
+	tree.ApplyEvent(warning)
+	tree.ApplyEvent(warning)
+
+	m := newTestModel(tree, FromList)
+	view := tuistyle.Sanitize(m.View())
+
+	const want = `Warning: agent profile "planner" is deprecated; use "lead"`
+	if count := strings.Count(view, want); count != 1 {
+		t.Fatalf("warning count = %d, want 1; view:\n%s", count, view)
+	}
+
+	m.showSummary = true
+	summary := tuistyle.Sanitize(m.View())
+	if count := strings.Count(summary, want); count != 1 {
+		t.Fatalf("summary warning count = %d, want 1; view:\n%s", count, summary)
+	}
+}
+
 // TestFitDetailLine_TruncatesWithoutManglingEscape verifies that when a line
 // genuinely overflows, the truncation does not split an ANSI escape
 // sequence mid-stream (which would bleed styles into later output).

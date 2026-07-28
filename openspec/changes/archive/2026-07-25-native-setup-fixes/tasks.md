@@ -1,4 +1,4 @@
-- [ ] Implement the change described by these files:
+- [x] Implement the change described by these files:
   - [proposal.md](proposal.md)
   - [design.md](design.md)
   - [specs/native-setup/spec.md](specs/native-setup/spec.md)

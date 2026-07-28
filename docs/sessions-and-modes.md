@@ -29,9 +29,9 @@ Named sessions are declared at the workflow top level:
 ```yaml
 sessions:
   - name: lead-agent
-    agent: planner
-  - name: reviewer-agent
-    agent: reviewer
+    agent: lead
+  - name: crosscheck-agent
+    agent: crosscheck
 
 steps:
   - id: draft
@@ -39,7 +39,7 @@ steps:
     prompt: "Draft the proposal."
 
   - id: review
-    session: reviewer-agent
+    session: crosscheck-agent
     mode: autonomous
     prompt: "Review the proposal."
 ```

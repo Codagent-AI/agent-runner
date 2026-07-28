@@ -35,7 +35,7 @@ func TestStepTypesDemoWorkflowShape(t *testing.T) {
 
 	assertUIStep(t, &wf.Steps[0], "UI")
 	assertUIStep(t, &wf.Steps[1], "interactive")
-	assertAgentStep(t, &wf.Steps[2], "planner", "", model.ModeInteractive)
+	assertAgentStep(t, &wf.Steps[2], "lead", "", model.ModeInteractive)
 	assertUIStep(t, &wf.Steps[3], "TUI")
 	assertUIStep(t, &wf.Steps[4], "autonomous")
 	assertAgentStep(t, &wf.Steps[5], "implementor", "", model.ModeAutonomous)
@@ -64,7 +64,7 @@ func TestStepTypesDemoWorkflowShape(t *testing.T) {
 	}
 
 	learnMore := wf.Steps[10]
-	assertAgentStep(t, &learnMore, "planner", "", model.ModeInteractive)
+	assertAgentStep(t, &learnMore, "lead", "", model.ModeInteractive)
 	if learnMore.SkipIf != `sh: [ "x{{summary_action}}" != "xlearn_more" ]` {
 		t.Fatalf("learn-more-qa skip_if = %q", learnMore.SkipIf)
 	}
@@ -143,8 +143,8 @@ func TestGuidedWorkflowShape(t *testing.T) {
 	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/guided-workflow-v1.0.yaml")
 
 	wantSessions := map[string]string{
-		"planning-session": "planner",
-		"tutor-session":    "planner",
+		"planning-session": "lead",
+		"tutor-session":    "lead",
 		"impl-session":     "implementor",
 	}
 	assertSessions(t, wf.Sessions, wantSessions)
@@ -306,8 +306,8 @@ func TestValidatorWorkflowShape(t *testing.T) {
 	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/validator-v1.0.yaml")
 
 	wantSessions := map[string]string{
-		"validator-setup-session": "planner",
-		"tutor-session":           "planner",
+		"validator-setup-session": "lead",
+		"tutor-session":           "lead",
 		"impl-session":            "implementor",
 	}
 	assertSessions(t, wf.Sessions, wantSessions)
@@ -412,8 +412,8 @@ func TestHelpWorkflowShape(t *testing.T) {
 		t.Fatalf("sessions len = %d, want 1", len(wf.Sessions))
 	}
 	session := wf.Sessions[0]
-	if session.Name != "help-session" || session.Agent != "planner" {
-		t.Fatalf("session = %#v, want help-session/planner", session)
+	if session.Name != "help-session" || session.Agent != "lead" {
+		t.Fatalf("session = %#v, want help-session/lead", session)
 	}
 
 	wantIDs := []string{"help-agent"}

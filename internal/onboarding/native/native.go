@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -20,6 +21,7 @@ import (
 
 	"github.com/codagent/agent-runner/internal/agentplugin"
 	"github.com/codagent/agent-runner/internal/config"
+	"github.com/codagent/agent-runner/internal/profilerecommend"
 	"github.com/codagent/agent-runner/internal/profilewrite"
 	"github.com/codagent/agent-runner/internal/tuistyle"
 	"github.com/codagent/agent-runner/internal/usersettings"
@@ -52,12 +54,14 @@ type ModelDiscovererFunc func(string) ([]string, error)
 func (f ModelDiscovererFunc) ModelsFor(adapter string) ([]string, error) { return f(adapter) }
 
 type ProfileWriter interface {
-	WriteProfile(*profilewrite.Request) error
+	StageProfile(*profilewrite.Request) (profilewrite.Staged, error)
 }
 
-type ProfileWriterFunc func(*profilewrite.Request) error
+type sharedProfileWriter struct{}
 
-func (f ProfileWriterFunc) WriteProfile(req *profilewrite.Request) error { return f(req) }
+func (sharedProfileWriter) StageProfile(req *profilewrite.Request) (profilewrite.Staged, error) {
+	return profilewrite.Stage(req)
+}
 
 type CollisionDetector interface {
 	Collisions(path string) ([]string, error)
@@ -126,28 +130,30 @@ func RunDemoPrompt(deps *Deps) (Result, error) {
 type stage int
 
 const (
-	stageInteractiveCLI stage = iota
-	stageInteractiveModelDefault
-	stageInteractiveModel
-	stageHeadlessCLI
+	stageLoading stage = iota
+	stageRecommendation
+	stageRoleCLI
+	stageRoleModelDefault
+	stageRoleModel
 	stageAutonomousBackend
 	stageAutonomousPermissionMode
-	stageHeadlessModelDefault
-	stageHeadlessModel
+	stagePluginIntro
 	stageScope
 	stageOverwrite
-	stagePluginIntro
 	stagePluginPreview
 	stageDemoPrompt
 	stageDone
 )
 
+const useCLIDefaultOption = "Use CLI default"
+
 var (
-	scopeOptions         = []string{"global", "project"}
-	overwriteOptions     = []string{"Overwrite", "Cancel"}
-	pluginConfirmOptions = []string{"Install"}
-	demoPromptOptions    = []string{"Continue", "Not now", "Dismiss"}
-	continueOptions      = []string{"Continue"}
+	recommendationOptions = []string{"Accept all recommendations", "Customize roles"}
+	scopeOptions          = []string{"global", "project"}
+	overwriteOptions      = []string{"Overwrite", "Cancel"}
+	pluginConfirmOptions  = []string{"Install"}
+	demoPromptOptions     = []string{"Continue", "Not now", "Dismiss"}
+	continueOptions       = []string{"Continue"}
 )
 
 func autonomousBackendOptions() []string {
@@ -188,10 +194,9 @@ var (
 type animTick struct{}
 type loadingTick struct{}
 
-type modelsLoadedMsg struct {
-	next   stage
-	models []string
-	err    error
+type discoveryLoadedMsg struct {
+	discoveries []profilerecommend.CLIDiscovery
+	err         error
 }
 
 type pluginDryRunMsg struct {
@@ -205,51 +210,54 @@ type pluginInstallMsg struct {
 }
 
 type Model struct {
-	deps                     Deps
-	stage                    stage
-	focus                    int
-	options                  []string
-	adapters                 []string
-	interactiveCLI           string
-	interactiveModel         string
-	headlessCLI              string
-	headlessModel            string
+	deps Deps
+
+	stage          stage
+	focus          int
+	options        []string
+	snapshot       profilerecommend.Snapshot
+	recommendation profilerecommend.Recommendation
+	selections     [4]profilerecommend.Selection
+	pairStatuses   [2]profilerecommend.PairStatus
+	roleCursor     int
+	customizing    bool
+
 	autonomousBackend        usersettings.AutonomousBackend
 	autonomousPermissionMode usersettings.AutonomousPermissionMode
 	scope                    string
 	targetPath               string
 	collisions               []string
-	width                    int
-	height                   int
-	result                   Result
-	err                      error
-	terminal                 bool
-	demoOnly                 bool
+	pendingProfile           profilewrite.Staged
+
+	width    int
+	height   int
+	result   Result
+	err      error
+	terminal bool
+	demoOnly bool
 
 	pluginPlan       *agentplugin.Plan
 	pluginPreview    *agentplugin.Preview
 	pluginResult     *agentplugin.Result
 	pluginInstalling bool
 
-	animDone  bool
-	animFrame int
-	prevView  string
-	pending   *modelsLoadedMsg
-
-	modelsLoading bool
-	loadingPhase  float64
+	discoveryLoading bool
+	loadingPhase     float64
+	animDone         bool
+	animFrame        int
+	prevView         string
 }
 
 func NewModel(deps *Deps) *Model {
 	deps = fillDefaults(deps)
-	m := &Model{
-		deps:     *deps,
-		width:    80,
-		height:   24,
-		animDone: true,
+	return &Model{
+		deps:             *deps,
+		stage:            stageLoading,
+		width:            80,
+		height:           24,
+		discoveryLoading: true,
+		animDone:         true,
 	}
-	m.loadAdapters()
-	return m
 }
 
 func NewDemoPromptModel(deps *Deps) *Model {
@@ -276,7 +284,7 @@ func fillDefaults(deps *Deps) *Deps {
 		deps.Models = SubprocessModels{}
 	}
 	if deps.Profiles == nil {
-		deps.Profiles = ProfileWriterFunc(profilewrite.Write)
+		deps.Profiles = sharedProfileWriter{}
 	}
 	if deps.Collisions == nil {
 		deps.Collisions = CollisionDetectorFunc(profilewrite.Collisions)
@@ -305,7 +313,56 @@ func fillDefaults(deps *Deps) *Deps {
 	return deps
 }
 
-func (m *Model) Init() tea.Cmd { return nil }
+func (m *Model) Init() tea.Cmd {
+	if m.demoOnly {
+		return nil
+	}
+	return tea.Batch(m.tickLoading(), m.discoverRecommendation())
+}
+
+func (m *Model) discoverRecommendation() tea.Cmd {
+	return func() tea.Msg {
+		adapters, err := m.deps.Detector.DetectAdapters()
+		if err != nil {
+			return discoveryLoadedMsg{err: err}
+		}
+		adapters = supportedAdapters(adapters)
+		if len(adapters) == 0 {
+			return discoveryLoadedMsg{err: fmt.Errorf("no supported CLI adapters were found on $PATH")}
+		}
+
+		discoveries := make([]profilerecommend.CLIDiscovery, len(adapters))
+		var wg sync.WaitGroup
+		wg.Add(len(adapters))
+		for i, adapter := range adapters {
+			go func() {
+				defer wg.Done()
+				models, discoveryErr := m.deps.Models.ModelsFor(adapter)
+				discoveries[i] = profilerecommend.CLIDiscovery{
+					CLI:    adapter,
+					Models: slices.Clone(models),
+				}
+				if discoveryErr != nil {
+					discoveries[i].DiscoveryError = discoveryErr.Error()
+				}
+			}()
+		}
+		wg.Wait()
+		return discoveryLoadedMsg{discoveries: discoveries}
+	}
+}
+
+func supportedAdapters(adapters []string) []string {
+	var supported []string
+	for _, adapter := range adapters {
+		if !slices.Contains([]string{"claude", "codex", "copilot", "cursor", "opencode"}, adapter) ||
+			slices.Contains(supported, adapter) {
+			continue
+		}
+		supported = append(supported, adapter)
+	}
+	return supported
+}
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -318,33 +375,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.animFrame++
 		if m.animFrame >= animFrames {
-			m.animDone = true
-			m.animFrame = 0
-			m.prevView = ""
-			if m.pending != nil {
-				pending := *m.pending
-				m.pending = nil
-				cmd := m.applyModelsLoaded(pending)
-				return m, cmd
-			}
+			m.clearAnimation()
 			return m, nil
 		}
 		cmd := m.tickAnim()
 		return m, cmd
 	case loadingTick:
-		if !m.modelsLoading && !m.pluginInstalling {
+		if !m.discoveryLoading && !m.pluginInstalling {
 			return m, nil
 		}
 		m.loadingPhase++
 		cmd := m.tickLoading()
 		return m, cmd
-	case modelsLoadedMsg:
-		if !m.animDone {
-			m.pending = &msg
-			return m, nil
+	case discoveryLoadedMsg:
+		m.discoveryLoading = false
+		m.loadingPhase = 0
+		if msg.err != nil {
+			m.fail(msg.err)
+			return m, tea.Quit
 		}
-		cmd := m.applyModelsLoaded(msg)
-		return m, cmd
+		m.snapshot = profilerecommend.NewSnapshot(msg.discoveries)
+		m.recommendation = profilerecommend.Recommend(m.snapshot)
+		m.selections = m.recommendation.Selections()
+		m.pairStatuses = m.recommendation.PairStatuses()
+		m.setStage(stageRecommendation, recommendationOptions)
 	case pluginDryRunMsg:
 		if msg.err != nil {
 			m.fail(msg.err)
@@ -353,7 +407,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clearAnimation()
 		m.pluginPreview = msg.preview
 		m.setStage(stagePluginPreview, pluginConfirmOptions)
-		return m, nil
 	case pluginInstallMsg:
 		m.pluginInstalling = false
 		m.loadingPhase = 0
@@ -370,10 +423,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		if !m.animDone {
-			cmd := m.tickAnim()
-			return m, cmd
+			transitionCmd := m.tickAnim()
+			return m, transitionCmd
 		}
-		return m, nil
+		return m, cmd
 	case tea.KeyMsg:
 		return m.handleKeyMsg(msg)
 	}
@@ -382,13 +435,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
-	if !m.animDone && key != "ctrl+c" && key != "esc" {
-		return m, nil
-	}
-	if m.modelsLoading && key != "ctrl+c" && key != "esc" {
-		return m, nil
-	}
-	if m.pluginInstalling && key != "ctrl+c" && key != "esc" {
+	if (!m.animDone || m.discoveryLoading || m.pluginInstalling) && key != "ctrl+c" && key != "esc" {
 		return m, nil
 	}
 	switch key {
@@ -398,13 +445,9 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.cancel()
 		return m, tea.Quit
-	case "up", "k":
+	case "up", "k", "left", "h":
 		m.move(-1)
-	case "down", "j", "tab":
-		m.move(1)
-	case "left", "h":
-		m.move(-1)
-	case "right", "l":
+	case "down", "j", "tab", "right", "l":
 		m.move(1)
 	case "enter":
 		done, cmd := m.enter()
@@ -423,15 +466,11 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) tickAnim() tea.Cmd {
-	return tea.Tick(animFrameTime, func(time.Time) tea.Msg {
-		return animTick{}
-	})
+	return tea.Tick(animFrameTime, func(time.Time) tea.Msg { return animTick{} })
 }
 
 func (m *Model) tickLoading() tea.Cmd {
-	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg {
-		return loadingTick{}
-	})
+	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return loadingTick{} })
 }
 
 func (m *Model) startAnim() {
@@ -445,29 +484,9 @@ func (m *Model) clearAnimation() {
 	m.prevView = ""
 }
 
-func (m *Model) discoverModels(next stage, adapter string) tea.Cmd {
-	return func() tea.Msg {
-		models, err := m.deps.Models.ModelsFor(adapter)
-		return modelsLoadedMsg{next: next, models: models, err: err}
-	}
-}
-
-func (m *Model) applyModelsLoaded(msg modelsLoadedMsg) tea.Cmd {
-	m.modelsLoading = false
-	m.loadingPhase = 0
-	if msg.err != nil || len(msg.models) == 0 {
-		m.skipModelSelection(msg.next)
-		return nil
-	}
-	m.setStage(msg.next, msg.models)
-	return nil
-}
-
 func (m *Model) Result() Result { return m.result }
-
-func (m *Model) Err() error { return m.err }
-
-func (m *Model) Done() bool { return m.terminal }
+func (m *Model) Err() error     { return m.err }
+func (m *Model) Done() bool     { return m.terminal }
 
 func (m *Model) move(delta int) {
 	if len(m.options) <= 1 {
@@ -477,42 +496,46 @@ func (m *Model) move(delta int) {
 }
 
 func (m *Model) enter() (bool, tea.Cmd) {
-	if m.terminal {
-		return true, nil
+	if m.terminal || m.stage == stageLoading {
+		return m.terminal, nil
 	}
 	selected := ""
 	if len(m.options) > 0 {
 		selected = m.options[m.focus]
 	}
 	switch m.stage {
-	case stageInteractiveCLI:
-		m.interactiveCLI = selected
-		m.startModelLoading()
-		m.setStageAnimated(stageInteractiveModel, nil)
-		return false, tea.Batch(m.tickAnim(), m.tickLoading(), m.discoverModels(stageInteractiveModel, selected))
-	case stageInteractiveModel:
-		m.interactiveModel = selected
-		m.setStageAnimated(stageHeadlessCLI, m.adapters)
-	case stageInteractiveModelDefault:
-		m.interactiveModel = ""
-		m.setStageAnimated(stageHeadlessCLI, m.adapters)
-	case stageHeadlessCLI:
-		m.headlessCLI = selected
-		m.setStageAnimated(stageAutonomousBackend, autonomousBackendOptions())
+	case stageRecommendation:
+		if selected == recommendationOptions[1] {
+			m.customizing = true
+			m.roleCursor = 0
+			m.openRoleCLI()
+		} else {
+			m.setStageAnimated(stageAutonomousBackend, autonomousBackendOptions())
+		}
+	case stageRoleCLI:
+		m.prepareRoleModel(selected)
+	case stageRoleModel:
+		if selected == useCLIDefaultOption {
+			m.selections[m.roleCursor] = m.defaultSelectionForCurrentCLI()
+		} else {
+			m.selections[m.roleCursor] = selectionForModel(m.currentRole(), m.currentCLI(), selected)
+		}
+		m.finalizeRole()
+	case stageRoleModelDefault:
+		m.selections[m.roleCursor] = m.defaultSelectionForCurrentCLI()
+		m.finalizeRole()
 	case stageAutonomousBackend:
 		m.autonomousBackend = usersettings.AutonomousBackend(selected)
 		m.setStageAnimated(stageAutonomousPermissionMode, autonomousPermissionModeOptions())
 	case stageAutonomousPermissionMode:
 		m.autonomousPermissionMode = usersettings.AutonomousPermissionMode(selected)
-		m.startModelLoading()
-		m.setStageAnimated(stageHeadlessModel, nil)
-		return false, tea.Batch(m.tickAnim(), m.tickLoading(), m.discoverModels(stageHeadlessModel, m.headlessCLI))
-	case stageHeadlessModel:
-		m.headlessModel = selected
-		m.setStageAfterModelSelection()
-	case stageHeadlessModelDefault:
-		m.headlessModel = ""
-		m.setStageAfterModelSelection()
+		if m.deps.Plugin != nil {
+			m.setStageAnimated(stagePluginIntro, continueOptions)
+		} else {
+			m.setStageAnimated(stageScope, scopeOptions)
+		}
+	case stagePluginIntro:
+		m.setStageAnimated(stageScope, scopeOptions)
 	case stageScope:
 		m.scope = selected
 		if err := m.resolveTarget(); err != nil {
@@ -527,15 +550,13 @@ func (m *Model) enter() (bool, tea.Cmd) {
 			m.setStageAnimated(stageOverwrite, overwriteOptions)
 			return false, nil
 		}
-		return m.write()
+		return m.prepareCompletion()
 	case stageOverwrite:
 		if selected == "Cancel" {
 			m.cancel()
 			return true, nil
 		}
-		return m.write()
-	case stagePluginIntro:
-		m.setStageAnimated(stageScope, scopeOptions)
+		return m.prepareCompletion()
 	case stagePluginPreview:
 		m.startPluginInstallLoading()
 		return false, tea.Batch(m.tickLoading(), m.runPluginInstall())
@@ -545,18 +566,146 @@ func (m *Model) enter() (bool, tea.Cmd) {
 	return false, nil
 }
 
+func (m *Model) openRoleCLI() {
+	discoveries := m.snapshot.Discoveries()
+	options := make([]string, len(discoveries))
+	for i := range discoveries {
+		options[i] = discoveries[i].CLI
+	}
+	m.setStageAnimated(stageRoleCLI, options)
+	m.focusOption(m.selections[m.roleCursor].CLI)
+}
+
+func (m *Model) prepareRoleModel(cli string) {
+	selection := m.recommendForCLI(m.currentRole(), cli)
+	m.selections[m.roleCursor] = selection
+	discovery, _ := m.snapshot.Discovery(cli)
+	if discovery.DiscoveryError != "" || len(discovery.Models) == 0 {
+		m.setStageAnimated(stageRoleModelDefault, continueOptions)
+		return
+	}
+
+	options := slices.Clone(discovery.Models)
+	if selection.Model == "" {
+		options = append([]string{useCLIDefaultOption}, options...)
+	} else {
+		options = moveFirst(options, selection.Model)
+	}
+	m.setStageAnimated(stageRoleModel, options)
+	m.focusOption(selection.Model)
+	if selection.Model == "" {
+		m.focusOption(useCLIDefaultOption)
+	}
+}
+
+func moveFirst(options []string, value string) []string {
+	index := slices.Index(options, value)
+	if index <= 0 {
+		return options
+	}
+	return append([]string{value}, append(options[:index], options[index+1:]...)...)
+}
+
+func (m *Model) recommendForCLI(role profilerecommend.Role, cli string) profilerecommend.Selection {
+	discovery, ok := m.snapshot.Discovery(cli)
+	if !ok {
+		return profilerecommend.Selection{Role: role, CLI: cli}
+	}
+	snapshot := profilerecommend.NewSnapshot([]profilerecommend.CLIDiscovery{discovery})
+	switch role {
+	case profilerecommend.Crosscheck:
+		selection, _ := profilerecommend.RecommendEvaluator(
+			snapshot, role, &m.selections[roleIndex(profilerecommend.Lead)],
+		)
+		return selection
+	case profilerecommend.Tester:
+		selection, _ := profilerecommend.RecommendEvaluator(
+			snapshot, role, &m.selections[roleIndex(profilerecommend.Implementor)],
+		)
+		return selection
+	default:
+		return profilerecommend.RecommendRole(snapshot, role)
+	}
+}
+
+func selectionForModel(role profilerecommend.Role, cli, model string) profilerecommend.Selection {
+	snapshot := profilerecommend.NewSnapshot([]profilerecommend.CLIDiscovery{{CLI: cli, Models: []string{model}}})
+	selection := profilerecommend.RecommendRole(snapshot, role)
+	if selection.Model == model {
+		return selection
+	}
+	return profilerecommend.Selection{
+		Role: role, CLI: cli, Model: model, Family: selection.Family,
+	}
+}
+
+func (m *Model) defaultSelectionForCurrentCLI() profilerecommend.Selection {
+	selection := m.recommendForCLI(m.currentRole(), m.currentCLI())
+	selection.Model = ""
+	selection.Tier = profilerecommend.UnrecognizedTier
+	return selection
+}
+
+func (m *Model) finalizeRole() {
+	role := m.currentRole()
+	switch role {
+	case profilerecommend.Lead:
+		selection, status := profilerecommend.RecommendEvaluator(
+			m.snapshot, profilerecommend.Crosscheck, &m.selections[m.roleCursor],
+		)
+		m.selections[roleIndex(profilerecommend.Crosscheck)] = selection
+		m.pairStatuses[0] = status
+	case profilerecommend.Implementor:
+		selection, status := profilerecommend.RecommendEvaluator(
+			m.snapshot, profilerecommend.Tester, &m.selections[m.roleCursor],
+		)
+		m.selections[roleIndex(profilerecommend.Tester)] = selection
+		m.pairStatuses[1] = status
+	}
+	if m.roleCursor == len(profilerecommend.Roles())-1 {
+		m.setStageAnimated(stageAutonomousBackend, autonomousBackendOptions())
+		return
+	}
+	m.roleCursor++
+	m.openRoleCLI()
+}
+
+func (m *Model) currentRole() profilerecommend.Role {
+	roles := profilerecommend.Roles()
+	if m.roleCursor < 0 || m.roleCursor >= len(roles) {
+		return ""
+	}
+	return roles[m.roleCursor]
+}
+
+func roleIndex(role profilerecommend.Role) int {
+	for i, candidate := range profilerecommend.Roles() {
+		if candidate == role {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m *Model) currentCLI() string {
+	return m.selections[m.roleCursor].CLI
+}
+
+func (m *Model) focusOption(value string) {
+	for i, option := range m.options {
+		if option == value {
+			m.focus = i
+			return
+		}
+	}
+}
+
 func (m *Model) handleDemoPrompt(selected string) bool {
 	switch selected {
 	case "Continue":
 		m.result = ResultDemo
-		m.terminal = true
-		m.stage = stageDone
-		return true
 	case "Not now":
 		m.result = ResultCompleted
-		m.terminal = true
-		m.stage = stageDone
-		return true
 	case "Dismiss":
 		stamp := m.deps.Clock().UTC().Format(time.RFC3339)
 		if err := m.deps.Settings.Update(func(settings usersettings.Settings) usersettings.Settings {
@@ -566,44 +715,12 @@ func (m *Model) handleDemoPrompt(selected string) bool {
 			return m.fail(err)
 		}
 		m.result = ResultCompleted
-		m.terminal = true
-		m.stage = stageDone
-		return true
+	default:
+		return false
 	}
-	return false
-}
-
-func (m *Model) loadAdapters() bool {
-	adapters, err := m.deps.Detector.DetectAdapters()
-	if err != nil {
-		return m.fail(err)
-	}
-	if len(adapters) == 0 {
-		return m.fail(fmt.Errorf("no supported CLI adapters were found on $PATH"))
-	}
-	m.adapters = adapters
-	m.setStage(stageInteractiveCLI, adapters)
-	return false
-}
-
-func (m *Model) skipModelSelection(next stage) {
-	if next == stageInteractiveModel {
-		m.setStage(stageInteractiveModelDefault, continueOptions)
-		return
-	}
-	m.setStage(stageHeadlessModelDefault, continueOptions)
-}
-
-func (m *Model) startModelLoading() {
-	m.modelsLoading = true
-	m.loadingPhase = 0
-}
-
-func (m *Model) startPluginInstallLoading() {
-	m.pluginInstalling = true
-	m.loadingPhase = 0
-	m.options = nil
-	m.focus = 0
+	m.terminal = true
+	m.stage = stageDone
+	return true
 }
 
 func (m *Model) resolveTarget() error {
@@ -626,18 +743,23 @@ func (m *Model) resolveTarget() error {
 	return nil
 }
 
-func (m *Model) write() (bool, tea.Cmd) {
-	err := m.deps.Profiles.WriteProfile(&profilewrite.Request{
+func (m *Model) prepareCompletion() (bool, tea.Cmd) {
+	req := &profilewrite.Request{
 		TargetPath:       m.targetPath,
-		InteractiveCLI:   m.interactiveCLI,
-		InteractiveModel: m.interactiveModel,
-		HeadlessCLI:      m.headlessCLI,
-		HeadlessModel:    m.headlessModel,
-	})
+		LeadCLI:          m.selections[0].CLI,
+		LeadModel:        m.selections[0].Model,
+		CrosscheckCLI:    m.selections[1].CLI,
+		CrosscheckModel:  m.selections[1].Model,
+		ImplementorCLI:   m.selections[2].CLI,
+		ImplementorModel: m.selections[2].Model,
+		TesterCLI:        m.selections[3].CLI,
+		TesterModel:      m.selections[3].Model,
+	}
+	staged, err := m.deps.Profiles.StageProfile(req)
 	if err != nil {
 		return m.fail(err), nil
 	}
-
+	m.pendingProfile = staged
 	if m.deps.Plugin == nil {
 		return m.complete()
 	}
@@ -653,21 +775,20 @@ func (m *Model) write() (bool, tea.Cmd) {
 	if plan == nil {
 		return m.complete()
 	}
-
 	m.pluginPlan = plan
 	m.setStageAnimated(stagePluginPreview, nil)
 	return false, m.runPluginDryRun()
 }
 
-func (m *Model) setStageAfterModelSelection() {
-	if m.deps.Plugin != nil {
-		m.setStageAnimated(stagePluginIntro, continueOptions)
-		return
-	}
-	m.setStageAnimated(stageScope, scopeOptions)
-}
-
 func (m *Model) complete() (bool, tea.Cmd) {
+	if m.pendingProfile == nil {
+		return m.fail(fmt.Errorf("setup profile request is unavailable")), nil
+	}
+	if err := m.pendingProfile.Commit(); err != nil {
+		return m.fail(err), nil
+	}
+	m.pendingProfile = nil
+
 	stamp := m.deps.Clock().UTC().Format(time.RFC3339)
 	if err := m.deps.Settings.Update(func(settings usersettings.Settings) usersettings.Settings {
 		settings.AutonomousBackend = m.autonomousBackend
@@ -677,14 +798,12 @@ func (m *Model) complete() (bool, tea.Cmd) {
 	}); err != nil {
 		return m.fail(err), nil
 	}
-
 	if m.deps.OnboardingCompleted {
 		m.result = ResultCompleted
 		m.terminal = true
 		m.stage = stageDone
 		return true, nil
 	}
-
 	m.setStageAnimated(stageDemoPrompt, demoPromptOptions)
 	return false, nil
 }
@@ -694,13 +813,28 @@ func (m *Model) enumerateCLIs() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	globalPath := filepath.Join(home, ".agent-runner", "config.yaml")
 	cwd, err := m.deps.Cwd()
 	if err != nil {
 		return nil, err
 	}
+	globalPath := filepath.Join(home, ".agent-runner", "config.yaml")
 	projectPath := filepath.Join(cwd, ".agent-runner", "config.yaml")
-	return m.deps.EnumCLIs(globalPath, projectPath)
+	switch m.scope {
+	case "global":
+		globalPath = m.pendingProfile.PreviewPath()
+	case "project":
+		projectPath = m.pendingProfile.PreviewPath()
+	}
+	clis, err := m.deps.EnumCLIs(globalPath, projectPath)
+	if err != nil {
+		return nil, err
+	}
+	for _, selection := range m.selections {
+		if selection.CLI != "" && !slices.Contains(clis, selection.CLI) {
+			clis = append(clis, selection.CLI)
+		}
+	}
+	return clis, nil
 }
 
 func (m *Model) runPluginDryRun() tea.Cmd {
@@ -713,16 +847,28 @@ func (m *Model) runPluginDryRun() tea.Cmd {
 func (m *Model) runPluginInstall() tea.Cmd {
 	return func() tea.Msg {
 		result, err := m.deps.Plugin.Install(m.pluginPlan)
-		if err != nil {
-			return pluginInstallMsg{err: err}
-		}
-		return pluginInstallMsg{result: result}
+		return pluginInstallMsg{result: result, err: err}
 	}
+}
+
+func (m *Model) startPluginInstallLoading() {
+	m.pluginInstalling = true
+	m.loadingPhase = 0
+	m.options = nil
+	m.focus = 0
+}
+
+func (m *Model) discardPendingProfile() {
+	if m.pendingProfile == nil {
+		return
+	}
+	_ = m.pendingProfile.Discard()
+	m.pendingProfile = nil
 }
 
 func (m *Model) setStage(next stage, options []string) {
 	m.stage = next
-	m.options = append([]string(nil), options...)
+	m.options = slices.Clone(options)
 	m.focus = m.defaultFocus(next, m.options)
 }
 
@@ -732,32 +878,34 @@ func (m *Model) setStageAnimated(next stage, options []string) {
 }
 
 func (m *Model) cancel() {
+	m.discardPendingProfile()
 	m.result = ResultCancelled
 	m.terminal = true
 	m.stage = stageDone
 }
 
 func (m *Model) exitRequested() {
+	m.discardPendingProfile()
 	m.result = ResultExitRequested
 	m.terminal = true
 	m.stage = stageDone
 }
 
 func (m *Model) fail(err error) bool {
+	m.discardPendingProfile()
 	m.err = err
 	m.result = ResultFailed
 	m.terminal = true
 	m.stage = stageDone
+	m.options = nil
 	return true
 }
 
 func (m *Model) View() string {
 	content := m.renderPanel()
-
 	if m.width >= minCenterWidth && m.height >= minCenterHeight {
-		content = renderCenteredSetup(content, m.width, m.height, m.animDone, m.animFrame)
+		return renderCenteredSetup(content, m.width, m.height, m.animDone, m.animFrame)
 	}
-
 	return content
 }
 
@@ -787,7 +935,6 @@ func (m *Model) renderPanel() string {
 		}
 		b.WriteString(m.renderOptions(contentWidth, textWidth))
 	}
-
 	return lipgloss.NewStyle().
 		Width(contentWidth).
 		Border(lipgloss.RoundedBorder()).
@@ -805,29 +952,19 @@ func renderCenteredSetup(content string, width, height int, animDone bool, frame
 	if animDone {
 		return rendered
 	}
-
 	lines := strings.Split(rendered, "\n")
 	panelHeight := lipgloss.Height(renderedContent)
 	panelWidth := lipgloss.Width(renderedContent)
-	panelTop := max((height-panelHeight)/2, 0)
-	panelLeft := max((width-panelWidth)/2, 0)
-	statusRow := panelTop + panelHeight
+	statusRow := max((height-panelHeight)/2, 0) + panelHeight
 	if statusRow >= len(lines) {
 		return rendered
 	}
-	lines[statusRow] = strings.Repeat(" ", panelLeft) + renderSetupTransitionStatus(frame)
+	lines[statusRow] = strings.Repeat(" ", max((width-panelWidth)/2, 0)) + renderSetupTransitionStatus(frame)
 	return strings.Join(lines, "\n")
 }
 
 func renderSetupTransitionStatus(frame int) string {
 	return setupTransitionStatusStyle.Render(tuistyle.SpinnerGlyph(float64(frame)) + " Preparing next step...")
-}
-
-func modelSelectionPrompt(loading bool, phase float64, cliName, readyPrompt string) string {
-	if loading {
-		return tuistyle.SpinnerGlyph(phase) + " Checking available models for " + cliName + "."
-	}
-	return readyPrompt
 }
 
 func setupPanelWidth(termWidth int) int {
@@ -845,7 +982,6 @@ func setupPanelWidth(termWidth int) int {
 }
 
 func setupContentWidth(termWidth int) int {
-	// Account for two border cells and two columns of horizontal padding.
 	return max(10, setupPanelWidth(termWidth)-panelFrameWidth)
 }
 
@@ -855,23 +991,16 @@ func setupTextWidth(contentWidth int) int {
 
 func (m *Model) renderOptions(width, textWidth int) string {
 	if m.stage == stageDemoPrompt {
-		return m.renderButtonRow(width)
+		return tuistyle.RenderButtonRow(m.options, m.focus, width)
 	}
-	if m.isModelSelectionStage() {
+	if m.stage == stageRoleModel {
 		return m.renderWindowedOptions(textWidth)
 	}
-
 	var b strings.Builder
 	for i, option := range m.options {
 		label := m.optionLabel(option)
-		prefix := "  "
-		style := setupOptionStyle
-		if i == m.focus {
-			prefix = tuistyle.FocusedSelectorPrefix + " "
-			style = setupFocusedOptionStyle
-		}
-		lines := wrapTextLine(prefix+label, textWidth)
-		for _, line := range lines {
+		prefix, style := m.optionPresentation(i)
+		for _, line := range wrapTextLine(prefix+label, textWidth) {
 			b.WriteString(style.Render(line))
 			b.WriteByte('\n')
 		}
@@ -881,29 +1010,25 @@ func (m *Model) renderOptions(width, textWidth int) string {
 
 func (m *Model) renderWindowedOptions(textWidth int) string {
 	start, end := optionWindow(m.focus, len(m.options), m.maxVisibleOptions())
-
 	var b strings.Builder
 	for i := start; i < end; i++ {
-		label := m.optionLabel(m.options[i])
-		prefix := "  "
-		style := setupOptionStyle
-		if i == m.focus {
-			prefix = tuistyle.FocusedSelectorPrefix + " "
-			style = setupFocusedOptionStyle
-		}
-		line := runewidth.Truncate(prefix+label, textWidth, "...")
-		b.WriteString(style.Render(line))
+		prefix, style := m.optionPresentation(i)
+		b.WriteString(style.Render(runewidth.Truncate(prefix+m.optionLabel(m.options[i]), textWidth, "...")))
 		b.WriteByte('\n')
 	}
 	if start > 0 || end < len(m.options) {
-		b.WriteString(tuistyle.DimStyle.Render(fmt.Sprintf("Showing %d-%d of %d. Use up/down to choose.", start+1, end, len(m.options))))
-		b.WriteByte('\n')
+		b.WriteString(tuistyle.DimStyle.Render(fmt.Sprintf(
+			"Showing %d-%d of %d. Use up/down to choose.", start+1, end, len(m.options),
+		)))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func (m *Model) isModelSelectionStage() bool {
-	return m.stage == stageInteractiveModel || m.stage == stageHeadlessModel
+func (m *Model) optionPresentation(index int) (string, lipgloss.Style) {
+	if index == m.focus {
+		return tuistyle.FocusedSelectorPrefix + " ", setupFocusedOptionStyle
+	}
+	return "  ", setupOptionStyle
 }
 
 func (m *Model) maxVisibleOptions() int {
@@ -931,10 +1056,6 @@ func optionWindow(focus, total, maxVisible int) (start, end int) {
 	return start, start + maxVisible
 }
 
-func (m *Model) renderButtonRow(width int) string {
-	return tuistyle.RenderButtonRow(m.options, m.focus, width)
-}
-
 func (m *Model) renderProgress(width int) string {
 	current, total, ok := m.setupProgress()
 	if !ok {
@@ -943,113 +1064,289 @@ func (m *Model) renderProgress(width int) string {
 	return tuistyle.RenderStepIndicator(current, total, width)
 }
 
+type semanticStep string
+
+const (
+	stepRecommendation semanticStep = "recommendation"
+	stepBackend        semanticStep = "backend"
+	stepPermission     semanticStep = "permission"
+	stepPluginIntro    semanticStep = "plugin-intro"
+	stepScope          semanticStep = "scope"
+	stepOverwrite      semanticStep = "overwrite"
+	stepPluginPreview  semanticStep = "plugin-preview"
+	stepDemo           semanticStep = "demo"
+)
+
+func roleStep(role profilerecommend.Role) semanticStep {
+	return semanticStep("role-" + role)
+}
+
+func (m *Model) stepPlan() []semanticStep {
+	plan := []semanticStep{stepRecommendation}
+	if m.customizing {
+		for _, role := range profilerecommend.Roles() {
+			plan = append(plan, roleStep(role))
+		}
+	}
+	plan = append(plan, stepBackend, stepPermission)
+	if m.deps.Plugin != nil {
+		plan = append(plan, stepPluginIntro)
+	}
+	plan = append(plan, stepScope)
+	if len(m.collisions) > 0 || m.stage == stageOverwrite {
+		plan = append(plan, stepOverwrite)
+	}
+	if m.deps.Plugin != nil {
+		plan = append(plan, stepPluginPreview)
+	}
+	if !m.deps.OnboardingCompleted {
+		plan = append(plan, stepDemo)
+	}
+	return plan
+}
+
 func (m *Model) setupProgress() (current, total int, ok bool) {
-	if m.demoOnly {
+	if m.demoOnly || m.stage == stageLoading || m.stage == stageDone {
 		return 0, 0, false
 	}
-	total = 8
-	hasOverwrite := m.stage == stageOverwrite || len(m.collisions) > 0
-	hasPlugin := m.deps.Plugin != nil
-	if hasOverwrite {
-		total++
-	}
-	if hasPlugin {
-		total += 2
-	}
-
+	var currentStep semanticStep
 	switch m.stage {
-	case stageInteractiveCLI:
-		return 1, total, true
-	case stageInteractiveModelDefault, stageInteractiveModel:
-		return 2, total, true
-	case stageHeadlessCLI:
-		return 3, total, true
+	case stageRecommendation:
+		currentStep = stepRecommendation
+	case stageRoleCLI, stageRoleModelDefault, stageRoleModel:
+		currentStep = roleStep(m.currentRole())
 	case stageAutonomousBackend:
-		return 4, total, true
+		currentStep = stepBackend
 	case stageAutonomousPermissionMode:
-		return 5, total, true
-	case stageHeadlessModelDefault, stageHeadlessModel:
-		return 6, total, true
+		currentStep = stepPermission
 	case stagePluginIntro:
-		return 7, total, true
+		currentStep = stepPluginIntro
 	case stageScope:
-		step := 7
-		if hasPlugin {
-			step = 8
-		}
-		return step, total, true
+		currentStep = stepScope
 	case stageOverwrite:
-		step := 8
-		if hasPlugin {
-			step = 9
-		}
-		return step, total, true
+		currentStep = stepOverwrite
 	case stagePluginPreview:
-		step := 9
-		if hasOverwrite {
-			step = 10
-		}
-		return step, total, true
+		currentStep = stepPluginPreview
 	case stageDemoPrompt:
-		return total, total, true
+		currentStep = stepDemo
 	default:
 		return 0, 0, false
 	}
+	plan := m.stepPlan()
+	for i, step := range plan {
+		if step == currentStep {
+			return i + 1, len(plan), true
+		}
+	}
+	return 0, 0, false
 }
 
 func (m *Model) defaultFocus(next stage, options []string) int {
 	preferred := ""
 	switch next {
-	case stageInteractiveCLI:
-		preferred = "claude"
-	case stageHeadlessCLI:
-		preferred = "codex"
 	case stageAutonomousBackend:
-		preferred = string(usersettings.BackendInteractiveClaude)
+		preferred = string(usersettings.BackendHeadless)
 	case stageAutonomousPermissionMode:
 		preferred = string(usersettings.PermissionModeConservative)
 	default:
 		return 0
 	}
-	for i, option := range options {
-		if option == preferred {
-			return i
-		}
+	if index := slices.Index(options, preferred); index >= 0 {
+		return index
 	}
 	return 0
 }
 
 func (m *Model) optionLabel(option string) string {
 	switch m.stage {
-	case stageInteractiveCLI:
-		if option == "claude" {
-			return option + " (recommended)"
-		}
-	case stageHeadlessCLI:
-		if option == "claude" {
-			return option + " (programmatic use may be billed at API rates)"
-		}
-		if option == "codex" {
-			return option + " (recommended)"
-		}
 	case stageAutonomousBackend:
 		switch usersettings.AutonomousBackend(option) {
 		case usersettings.BackendHeadless:
-			return "Headless - Runs the agent in non-interactive print mode (default, uses API billing for Claude)"
+			return "Headless - Runs each autonomous step in non-interactive print mode (recommended)"
 		case usersettings.BackendInteractive:
-			return "Interactive - Runs the agent in an interactive session with autonomy instructions"
+			return "Interactive - Opens every autonomous step in an interactive session with autonomy instructions"
 		case usersettings.BackendInteractiveClaude:
-			return "Interactive for Claude - Uses interactive mode for Claude only; other CLIs use headless (recommended, avoids API billing)"
+			return "Interactive for Claude - Opens Claude interactively while other CLIs use non-interactive print mode"
 		}
 	case stageAutonomousPermissionMode:
 		switch usersettings.AutonomousPermissionMode(option) {
 		case usersettings.PermissionModeConservative:
-			return "Conservative - Use each CLI's default permission flags. Some commands may not work unless the CLI already has needed tool access."
+			return "Conservative - Use each CLI's default permission flags; unavailable tools may stop unattended work"
 		case usersettings.PermissionModeYOLO:
-			return "YOLO - Allow autonomous agents to run shell, file, and network actions without per-command approval. Recommended only inside an external sandbox such as Docker."
+			return "YOLO - Pre-approve shell, file, and network actions; use only inside an external sandbox"
+		}
+	case stageScope:
+		if option == "global" {
+			return "Global - Use this profile in every project"
+		}
+		if option == "project" {
+			return "Project - Use this profile only in the current repository"
 		}
 	}
 	return option
+}
+
+func (m *Model) screenContent() (title, body, prompt string) {
+	switch m.stage {
+	case stageLoading:
+		title = "Set Up Agent Runner"
+		body = "Welcome to initial setup. Agent Runner is inspecting the available CLIs and their models so it can prepare a four-role profile recommendation."
+		prompt = tuistyle.SpinnerGlyph(m.loadingPhase) + " Discovering available CLIs and models..."
+	case stageRecommendation:
+		title = "Recommended Agent Profile"
+		body = m.recommendationSummary()
+		prompt = "Accept the complete profile or customize each role in order."
+	case stageRoleCLI:
+		role := m.currentRole()
+		title = roleTitle(role) + " CLI"
+		body = roleExplanation(role) + " This choice controls which installed CLI launches the role."
+		prompt = "Choose the CLI for " + roleTitle(role) + "."
+	case stageRoleModel:
+		role := m.currentRole()
+		title = roleTitle(role) + " Model"
+		body = roleExplanation(role) + " This choice controls the model used when that role runs through " + m.currentCLI() + "."
+		prompt = "Choose the model for " + roleTitle(role) + "."
+	case stageRoleModelDefault:
+		role := m.currentRole()
+		discovery, _ := m.snapshot.Discovery(m.currentCLI())
+		title = roleTitle(role) + " Model"
+		body = roleExplanation(role) + " Agent Runner will use the CLI default and leave the model field unset."
+		if discovery.DiscoveryError != "" {
+			body += " Model discovery reported: " + discovery.DiscoveryError + "."
+		} else {
+			body += " No selectable models were returned by this CLI."
+		}
+		prompt = "Continue with the CLI default?"
+	case stageAutonomousBackend:
+		title = "Autonomous Backend"
+		body = "Choose how autonomous steps are invoked at runtime. Headless uses non-interactive print mode and is the recommended default; Interactive opens every CLI in a session, while Interactive for Claude does so only for Claude."
+		prompt = "Choose the backend for autonomous steps."
+	case stageAutonomousPermissionMode:
+		title = "Autonomous Permission Mode"
+		body = "Choose how much tool authority autonomous steps receive. Conservative keeps each CLI's normal permission behavior, while YOLO pre-approves actions for externally sandboxed runs."
+		prompt = "Choose the permission mode for autonomous steps."
+	case stagePluginIntro:
+		title = "Agent Skills"
+		body = "Agent Runner uses skills from https://github.com/Codagent-AI/agent-skills. They provide focused spec, TDD, validation, PR, and CI workflows for the CLIs in this profile.\n\nNext you will choose the profile scope, which also controls where these skills are installed."
+		prompt = "Continue to profile scope."
+	case stageScope:
+		title = "Config Scope"
+		body = "Global saves the profile to ~/.agent-runner/config.yaml for every project. Project saves it to .agent-runner/config.yaml in the current repository, where it applies only to that project."
+		prompt = "Where should Agent Runner save the profile and install skills?"
+	case stageOverwrite:
+		title = "Existing Agent Profiles"
+		body = "These managed entries already exist and will be replaced: " + strings.Join(m.collisions, ", ") + ". Unmanaged agents and unrelated configuration will be preserved."
+		prompt = "Overwrite the existing managed entries?"
+	case stagePluginPreview:
+		title = "Install Agent Skills"
+		body, prompt = m.pluginPreviewContent()
+	case stageDemoPrompt:
+		title = "Agent Runner Workflow Demo"
+		body = "Agent Runner includes a short interactive demo showing UI prompts, interactive and autonomous agents, shell commands, and captured data. It takes about two minutes and runs real workflow steps."
+		prompt = "Run the demo now?"
+	case stageDone:
+		title, body = m.doneContent()
+	default:
+		title = "Set Up Agent Runner"
+	}
+	return title, body, prompt
+}
+
+func (m *Model) recommendationSummary() string {
+	var b strings.Builder
+	b.WriteString("Your four-role profile configures interactive leadership, an independent planning crosscheck, implementation, and acceptance testing. Crosscheck challenges Lead's planning artifacts for omissions and completeness; Agent Validator remains responsible for implementation-code review.\n\n")
+	for _, selection := range m.selections {
+		model := selection.Model
+		if model == "" {
+			model = "CLI default"
+		}
+		fmt.Fprintf(&b, "%s: %s / %s\n", roleTitle(selection.Role), selection.CLI, model)
+	}
+	for _, discovery := range m.snapshot.Discoveries() {
+		if discovery.DiscoveryError != "" {
+			fmt.Fprintf(&b, "\n%s model discovery was limited (%s); affected recommendations use the CLI default.", discovery.CLI, discovery.DiscoveryError)
+		}
+	}
+	for _, status := range m.pairStatuses {
+		if !status.Limited {
+			continue
+		}
+		fmt.Fprintf(
+			&b,
+			"\n%s could not establish known model-family diversity, so normal recommendation precedence was used.",
+			pairTitle(status.Pair),
+		)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func roleTitle(role profilerecommend.Role) string {
+	switch role {
+	case profilerecommend.Lead:
+		return "Lead"
+	case profilerecommend.Crosscheck:
+		return "Crosscheck"
+	case profilerecommend.Implementor:
+		return "Implementor"
+	case profilerecommend.Tester:
+		return "Tester"
+	default:
+		return string(role)
+	}
+}
+
+func roleExplanation(role profilerecommend.Role) string {
+	switch role {
+	case profilerecommend.Lead:
+		return "Lead works with you interactively to shape goals, decisions, plans, and specifications."
+	case profilerecommend.Crosscheck:
+		return "Crosscheck independently challenges Lead's planning artifacts and looks for omissions; Agent Validator reviews implementation code."
+	case profilerecommend.Implementor:
+		return "Implementor carries out code changes and focused validation autonomously."
+	case profilerecommend.Tester:
+		return "Tester exercises completed work against acceptance expectations independently."
+	default:
+		return ""
+	}
+}
+
+func pairTitle(pair profilerecommend.Pair) string {
+	switch pair {
+	case profilerecommend.LeadCrosscheck:
+		return "Lead/Crosscheck"
+	case profilerecommend.ImplementorTester:
+		return "Implementor/Tester"
+	default:
+		return string(pair)
+	}
+}
+
+func (m *Model) doneContent() (title, body string) {
+	switch {
+	case m.result == ResultCancelled:
+		return "Setup Cancelled", ""
+	case m.result == ResultExitRequested:
+		return "Setup Interrupted", ""
+	case m.err != nil:
+		return "Setup Failed", m.err.Error()
+	default:
+		return "Setup Complete", ""
+	}
+}
+
+func (m *Model) pluginPreviewContent() (body, prompt string) {
+	switch {
+	case m.pluginInstalling:
+		return tuistyle.SpinnerGlyph(m.loadingPhase) + " Installing agent skills.\n\nThis can take a moment.", ""
+	case m.pluginPreview == nil:
+		return "Preparing skill installation...", ""
+	default:
+		body = m.pluginPreview.Output
+		if m.pluginResult != nil && m.pluginResult.Warning != "" {
+			body += "\n\nWarning: " + m.pluginResult.Warning
+		}
+		return body, "Install skills for your configured CLIs?"
+	}
 }
 
 func renderWrapped(text string, width int, render func(...string) string) string {
@@ -1136,96 +1433,6 @@ func wrapTextLine(s string, width int) []string {
 		return []string{s}
 	}
 	return out
-}
-
-func (m *Model) screenContent() (title, body, prompt string) {
-	switch m.stage {
-	case stageInteractiveCLI:
-		title = "Set Up Agent Runner"
-		body = "Welcome. Agent Runner uses a planner for interactive work and an implementor for unattended implementation tasks. The choices here become your default agent profile."
-		prompt = "Choose the CLI for the planner agent."
-	case stageInteractiveModelDefault:
-		title = "Planner Model"
-		body = "No selectable models were found for " + m.interactiveCLI + ". Agent Runner will use the CLI default and leave the model field unset."
-		prompt = "Continue with the CLI default?"
-	case stageInteractiveModel:
-		title = "Planner Model"
-		body = "The planner handles conversations, planning, and decisions that need your input. Pick the model that " + m.interactiveCLI + " should use for those interactive workflow steps."
-		prompt = modelSelectionPrompt(m.modelsLoading, m.loadingPhase, m.interactiveCLI, "Choose the planner model.")
-	case stageHeadlessCLI:
-		title = "Implementor CLI"
-		body = "The implementor runs headless tasks such as code generation, edits, and validation follow-ups. This CLI is used when Agent Runner needs work to continue without an interactive session."
-		prompt = "Choose the CLI for the implementor agent."
-	case stageAutonomousBackend:
-		title = "Autonomous Backend"
-		body = "Choose how autonomous agent steps are launched. This controls whether Agent Runner uses non-interactive print mode or an interactive session with autonomy instructions."
-		prompt = "Choose the backend for autonomous steps."
-	case stageAutonomousPermissionMode:
-		title = "Autonomous Permission Mode"
-		body = "Choose how much authority autonomous agent steps have when they run. This controls whether Agent Runner pre-approves shell, file, and network actions for unattended work."
-		prompt = "Choose the permission mode for autonomous steps."
-	case stageHeadlessModelDefault:
-		title = "Implementor Model"
-		body = "No selectable models were found for " + m.headlessCLI + ". Agent Runner will use the CLI default and leave the model field unset."
-		prompt = "Continue with the CLI default?"
-	case stageHeadlessModel:
-		title = "Implementor Model"
-		body = "The implementor model is used for unattended implementation steps in your workflows. Pick the model that " + m.headlessCLI + " should use for that work."
-		prompt = modelSelectionPrompt(m.modelsLoading, m.loadingPhase, m.headlessCLI, "Choose the implementor model.")
-	case stageScope:
-		title = "Config Scope"
-		body = "Choose where to save this profile and install agent skills. Global applies everywhere from ~/.agent-runner/config.yaml. Project applies only in the current repository via .agent-runner/config.yaml."
-		prompt = "Where should Agent Runner save the profile and install skills?"
-	case stageOverwrite:
-		title = "Existing Agent Profiles"
-		body = "These entries already exist and will be replaced: " + strings.Join(m.collisions, ", ")
-		prompt = "Overwrite the existing entries?"
-	case stagePluginIntro:
-		title = "Agent Skills"
-		body = "Agent Runner uses skills from https://github.com/Codagent-AI/agent-skills. These skills provide focused workflows for spec-driven development, from evaluating ideas and writing specs to planning right-sized tasks and implementing changes with TDD.\n\nThey also connect implementation work to Agent Validator quality gates and PR/CI follow-up skills, so agents can validate changes, fix failures, and shepherd work through review. Next you will select where Agent Runner installs these skills."
-		prompt = "Continue to skill location."
-	case stagePluginPreview:
-		title = "Install Agent Skills"
-		body, prompt = m.pluginPreviewContent()
-	case stageDemoPrompt:
-		title = "Agent Runner Workflow Demo"
-		body = "Agent Runner includes a short interactive demo that walks through UI prompts, interactive agents, headless agents, shell commands, and data capture. It takes about two minutes and runs real workflow steps."
-		prompt = "Run the demo now?"
-	case stageDone:
-		title, body = m.doneContent()
-	default:
-		title = "Set Up Agent Runner"
-		body = ""
-	}
-	return title, body, prompt
-}
-
-func (m *Model) doneContent() (title, body string) {
-	switch {
-	case m.result == ResultCancelled:
-		return "Setup Cancelled", ""
-	case m.result == ResultExitRequested:
-		return "Setup Interrupted", ""
-	case m.err != nil:
-		return "Setup Failed", m.err.Error()
-	default:
-		return "Setup Complete", ""
-	}
-}
-
-func (m *Model) pluginPreviewContent() (body, prompt string) {
-	switch {
-	case m.pluginInstalling:
-		return tuistyle.SpinnerGlyph(m.loadingPhase) + " Installing agent skills.\n\nThis can take a moment.", ""
-	case m.pluginPreview == nil:
-		return "Preparing skill installation...", ""
-	default:
-		body = m.pluginPreview.Output
-		if m.pluginResult != nil && m.pluginResult.Warning != "" {
-			body += "\n\nWarning: " + m.pluginResult.Warning
-		}
-		return body, "Install skills for your configured CLIs?"
-	}
 }
 
 type PathDetector struct{}

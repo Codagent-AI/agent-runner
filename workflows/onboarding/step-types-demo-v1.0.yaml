@@ -43,7 +43,7 @@ steps:
         outcome: continue
 
   - id: interactive-qa
-    agent: planner
+    agent: lead
     mode: interactive
     session: new
     prompt: |
@@ -133,7 +133,7 @@ steps:
     outcome_capture: summary_action
 
   - id: learn-more-qa
-    agent: planner
+    agent: lead
     mode: interactive
     session: new
     prompt: |

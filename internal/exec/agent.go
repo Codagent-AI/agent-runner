@@ -136,6 +136,7 @@ func ExecuteAgentStep(
 		emitAgentFailure(ctx, prefix, startTime, "", step, profileErr.Error(), log)
 		return OutcomeFailed, nil
 	}
+	EmitAgentDeprecations(ctx, log, profile.Deprecations)
 
 	mode := resolveModeFromProfile(step, profile)
 

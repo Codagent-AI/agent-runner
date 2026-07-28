@@ -189,6 +189,10 @@ func indexStepNode(nodes []*StepNode, target *StepNode) int {
 type Tree struct {
 	Root *StepNode
 
+	// Warnings contains distinct user-visible warning messages retained from
+	// the run's audit stream.
+	Warnings []string
+
 	// MetricsCaptured reports whether the audit stream contains the structured
 	// metrics fields introduced with run metrics. It stays false for legacy
 	// audit logs so those runs retain the pre-metrics viewing experience.

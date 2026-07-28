@@ -21,11 +21,29 @@ import (
 )
 
 type writeProfilePayload struct {
-	InteractiveCLI   string `json:"interactive_cli"`
-	InteractiveModel string `json:"interactive_model"`
-	HeadlessCLI      string `json:"headless_cli"`
-	HeadlessModel    string `json:"headless_model"`
+	LeadCLI          string `json:"lead_cli"`
+	LeadModel        string `json:"lead_model"`
+	CrosscheckCLI    string `json:"crosscheck_cli"`
+	CrosscheckModel  string `json:"crosscheck_model"`
+	ImplementorCLI   string `json:"implementor_cli"`
+	ImplementorModel string `json:"implementor_model"`
+	TesterCLI        string `json:"tester_cli"`
+	TesterModel      string `json:"tester_model"`
 	TargetPath       string `json:"target_path"`
+}
+
+func (p *writeProfilePayload) request() *profilewrite.Request {
+	return &profilewrite.Request{
+		LeadCLI:          p.LeadCLI,
+		LeadModel:        p.LeadModel,
+		CrosscheckCLI:    p.CrosscheckCLI,
+		CrosscheckModel:  p.CrosscheckModel,
+		ImplementorCLI:   p.ImplementorCLI,
+		ImplementorModel: p.ImplementorModel,
+		TesterCLI:        p.TesterCLI,
+		TesterModel:      p.TesterModel,
+		TargetPath:       p.TargetPath,
+	}
 }
 
 func handleInternal(args []string) int {
@@ -263,11 +281,24 @@ func decodeWriteProfilePayload(r io.Reader, payload *writeProfilePayload) error 
 	if err := dec.Decode(payload); err != nil {
 		return fmt.Errorf("decode write-profile payload: %w", err)
 	}
-	if payload.InteractiveCLI == "" {
-		return fmt.Errorf("write-profile payload missing interactive_cli")
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("write-profile payload must contain a single JSON object")
+		}
+		return fmt.Errorf("decode trailing write-profile payload: %w", err)
 	}
-	if payload.HeadlessCLI == "" {
-		return fmt.Errorf("write-profile payload missing headless_cli")
+	if payload.LeadCLI == "" {
+		return fmt.Errorf("write-profile payload missing lead_cli")
+	}
+	if payload.CrosscheckCLI == "" {
+		return fmt.Errorf("write-profile payload missing crosscheck_cli")
+	}
+	if payload.ImplementorCLI == "" {
+		return fmt.Errorf("write-profile payload missing implementor_cli")
+	}
+	if payload.TesterCLI == "" {
+		return fmt.Errorf("write-profile payload missing tester_cli")
 	}
 	if payload.TargetPath == "" {
 		return fmt.Errorf("write-profile payload missing target_path")
@@ -276,23 +307,11 @@ func decodeWriteProfilePayload(r io.Reader, payload *writeProfilePayload) error 
 }
 
 func writeProfile(payload *writeProfilePayload) error {
-	return profilewrite.Write(&profilewrite.Request{
-		InteractiveCLI:   payload.InteractiveCLI,
-		InteractiveModel: payload.InteractiveModel,
-		HeadlessCLI:      payload.HeadlessCLI,
-		HeadlessModel:    payload.HeadlessModel,
-		TargetPath:       payload.TargetPath,
-	})
+	return profilewrite.Write(payload.request())
 }
 
 func mergeProfileAgents(doc *yaml.Node, payload *writeProfilePayload) error {
-	return profilewrite.Merge(doc, &profilewrite.Request{
-		InteractiveCLI:   payload.InteractiveCLI,
-		InteractiveModel: payload.InteractiveModel,
-		HeadlessCLI:      payload.HeadlessCLI,
-		HeadlessModel:    payload.HeadlessModel,
-		TargetPath:       payload.TargetPath,
-	})
+	return profilewrite.Merge(doc, payload.request())
 }
 
 func writeSetting(key, value string) error {

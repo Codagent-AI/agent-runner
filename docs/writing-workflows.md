@@ -56,7 +56,7 @@ description: "A simple two-step workflow"
 
 steps:
   - id: greet
-    agent: planner
+    agent: lead
     prompt: "Say hello and list the files in the current directory."
 
   - id: summarize
@@ -88,7 +88,7 @@ steps:
     command: gh pr checkout {{pr_number}}
 
   - id: review
-    agent: planner
+    agent: lead
     prompt: "Review PR {{pr_number}}."
 ```
 
@@ -116,7 +116,7 @@ Workflow parameters and captured variables shadow built-ins with the same name.
 
 ```yaml
 - id: plan
-  agent: planner
+  agent: lead
   prompt: "Plan the change."
 
 - id: implement
