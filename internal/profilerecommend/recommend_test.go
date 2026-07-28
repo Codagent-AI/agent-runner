@@ -210,6 +210,26 @@ func TestRecommendEvaluatorRecomputesForCreator(t *testing.T) {
 			},
 		},
 		{
+			name:      "crosscheck derives creator family from customized CLI and model",
+			evaluator: Crosscheck,
+			creator: Selection{
+				Role: Lead, CLI: "opencode", Model: "openai/gpt-5.7-sol",
+				Family: Claude, Tier: Flagship,
+			},
+			want: Selection{
+				Role: Crosscheck, CLI: "opencode", Model: "anthropic/claude-opus",
+				Family: Claude, Tier: Flagship,
+			},
+			wantPair: PairStatus{
+				Pair:            LeadCrosscheck,
+				Creator:         Lead,
+				Evaluator:       Crosscheck,
+				CreatorFamily:   GPT,
+				EvaluatorFamily: Claude,
+				Diverse:         true,
+			},
+		},
+		{
 			name:      "tester differs from GPT implementor on same multi-provider CLI",
 			evaluator: Tester,
 			creator: Selection{
@@ -547,6 +567,9 @@ func TestClassifyRejectsFalsePositiveBoundaries(t *testing.T) {
 		{name: "GPT has no right boundary or version", model: "gptastic-sol"},
 		{name: "Opus is part of larger token", model: "claude-opusmax"},
 		{name: "Sonnet is part of larger token", model: "claude-sonnetish"},
+		{name: "GPT has no left boundary after Unicode letter", model: "égpt-5.7-sol"},
+		{name: "Sol has no right boundary before Unicode letter", model: "gpt-5.7-solé"},
+		{name: "Opus has no right boundary before Unicode letter", model: "claude-opusé"},
 	}
 
 	for _, tt := range tests {

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Role is one of the four canonical setup-managed agent roles.
@@ -259,18 +260,19 @@ func RecommendEvaluator(
 	}
 
 	status := pairStatusFor(evaluator)
-	status.CreatorFamily = creator.Family
+	creatorFamily := Classify(creator.CLI, creator.Model).Family
+	status.CreatorFamily = creatorFamily
 
 	filterFamily := Family("")
-	if creator.Family.known() && hasDifferentKnownCandidate(snapshot, &rolePolicy, creator.Family) {
-		filterFamily = creator.Family
+	if creatorFamily.known() && hasDifferentKnownCandidate(snapshot, &rolePolicy, creatorFamily) {
+		filterFamily = creatorFamily
 	}
 
 	selection := selectCandidate(snapshot, evaluator, &rolePolicy, &filterFamily)
 	status.EvaluatorFamily = selection.Family
 	status.Diverse = filterFamily.known() &&
 		selection.Family.known() &&
-		selection.Family != creator.Family
+		selection.Family != creatorFamily
 	status.Limited = !status.Diverse
 	return selection, status
 }
@@ -545,12 +547,12 @@ func findGPTMarker(value string) (end int, found bool) {
 		if value[start:start+3] != "gpt" {
 			continue
 		}
-		if start > 0 && isAlphaNumeric(rune(value[start-1])) {
+		if isAlphaNumericBefore(value, start) {
 			continue
 		}
 		end = start + 3
 		if end == len(value) ||
-			!isAlphaNumeric(rune(value[end])) ||
+			!isAlphaNumericAt(value, end) ||
 			isASCIIDigit(value[end]) {
 			return end, true
 		}
@@ -563,11 +565,11 @@ func hasWholeToken(value, token string) bool {
 		if value[start:start+len(token)] != token {
 			continue
 		}
-		if start > 0 && isAlphaNumeric(rune(value[start-1])) {
+		if isAlphaNumericBefore(value, start) {
 			continue
 		}
 		end := start + len(token)
-		if end < len(value) && isAlphaNumeric(rune(value[end])) {
+		if isAlphaNumericAt(value, end) {
 			continue
 		}
 		return true
@@ -579,14 +581,34 @@ func isAlphaNumeric(char rune) bool {
 	return unicode.IsLetter(char) || unicode.IsDigit(char)
 }
 
+func isAlphaNumericBefore(value string, offset int) bool {
+	if offset <= 0 {
+		return false
+	}
+	char, _ := utf8.DecodeLastRuneInString(value[:offset])
+	return isAlphaNumeric(char)
+}
+
+func isAlphaNumericAt(value string, offset int) bool {
+	if offset >= len(value) {
+		return false
+	}
+	char, _ := utf8.DecodeRuneInString(value[offset:])
+	return isAlphaNumeric(char)
+}
+
 func isASCIIDigit(char byte) bool {
 	return char >= '0' && char <= '9'
 }
 
 func parseGPTVersion(suffix string) []int {
 	start := 0
-	for start < len(suffix) && !isAlphaNumeric(rune(suffix[start])) {
-		start++
+	for start < len(suffix) {
+		char, size := utf8.DecodeRuneInString(suffix[start:])
+		if isAlphaNumeric(char) {
+			break
+		}
+		start += size
 	}
 	if start == len(suffix) || !isASCIIDigit(suffix[start]) {
 		return nil
@@ -605,8 +627,12 @@ func parseGPTVersion(suffix string) []int {
 		version = append(version, part)
 
 		next := start
-		for next < len(suffix) && !isAlphaNumeric(rune(suffix[next])) {
-			next++
+		for next < len(suffix) {
+			char, size := utf8.DecodeRuneInString(suffix[next:])
+			if isAlphaNumeric(char) {
+				break
+			}
+			next += size
 		}
 		if next == len(suffix) || !isASCIIDigit(suffix[next]) {
 			break

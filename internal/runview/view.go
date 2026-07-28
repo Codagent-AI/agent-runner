@@ -70,6 +70,11 @@ func (m *Model) View() string {
 		b.WriteString(m.renderTwoColumn(children))
 	}
 
+	for _, warning := range m.tree.Warnings {
+		b.WriteString("\n")
+		b.WriteString(tuistyle.ScreenMargin)
+		b.WriteString(tuistyle.DimStyle.Render("Warning: " + warning))
+	}
 	if m.loadErr != "" {
 		b.WriteString("\n")
 		b.WriteString(tuistyle.ScreenMargin)
