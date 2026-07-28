@@ -250,14 +250,19 @@ func isLegacyAgentMap(m map[string]interface{}) bool {
 // only from the last layer (project).
 func buildConfig(defaults, global, project *parsedFile) (*Config, error) {
 	layers := []*parsedFile{defaults, global, project}
-	deprecations := []Deprecation{}
+	deprecationsByProfile := map[string][]Deprecation{}
 	for i, layer := range layers {
 		canonical, warnings, err := canonicalizeLayer(layer)
 		if err != nil {
 			return nil, err
 		}
 		layers[i] = canonical
-		deprecations = AppendDeprecations(deprecations, warnings...)
+		for profileName, profileWarnings := range warnings {
+			deprecationsByProfile[profileName] = AppendDeprecations(
+				deprecationsByProfile[profileName],
+				profileWarnings...,
+			)
+		}
 	}
 	defaults, global, project = layers[0], layers[1], layers[2]
 
@@ -294,11 +299,11 @@ func buildConfig(defaults, global, project *parsedFile) (*Config, error) {
 		ActiveProfile: activeProfile,
 		Profiles:      resolved,
 		ActiveAgents:  activeAgents,
-		Deprecations:  deprecations,
+		Deprecations:  activeProfileDeprecations(merged, selectedName, deprecationsByProfile),
 	}, nil
 }
 
-func canonicalizeLayer(layer *parsedFile) (*parsedFile, []Deprecation, error) {
+func canonicalizeLayer(layer *parsedFile) (*parsedFile, map[string][]Deprecation, error) {
 	if layer == nil {
 		return nil, nil, nil
 	}
@@ -306,7 +311,7 @@ func canonicalizeLayer(layer *parsedFile) (*parsedFile, []Deprecation, error) {
 		ActiveProfile: layer.ActiveProfile,
 		Profiles:      make(map[string]*ProfileSet, len(layer.Profiles)),
 	}
-	var deprecations []Deprecation
+	deprecations := map[string][]Deprecation{}
 	for setName, profileSet := range layer.Profiles {
 		if profileSet == nil {
 			canonical.Profiles[setName] = &ProfileSet{}
@@ -327,7 +332,7 @@ func canonicalizeLayer(layer *parsedFile) (*parsedFile, []Deprecation, error) {
 		for name, agent := range agents {
 			canonicalName, warning := CanonicalAgentName(name)
 			if warning != nil {
-				deprecations = AppendDeprecations(deprecations, *warning)
+				deprecations[setName] = AppendDeprecations(deprecations[setName], *warning)
 			}
 			if agent == nil {
 				canonicalAgents[canonicalName] = nil
@@ -337,7 +342,7 @@ func canonicalizeLayer(layer *parsedFile) (*parsedFile, []Deprecation, error) {
 			if cloned.Extends != "" {
 				cloned.Extends, warning = CanonicalAgentName(cloned.Extends)
 				if warning != nil {
-					deprecations = AppendDeprecations(deprecations, *warning)
+					deprecations[setName] = AppendDeprecations(deprecations[setName], *warning)
 				}
 			}
 			canonicalAgents[canonicalName] = &cloned
@@ -348,6 +353,25 @@ func canonicalizeLayer(layer *parsedFile) (*parsedFile, []Deprecation, error) {
 		}
 	}
 	return canonical, deprecations, nil
+}
+
+func activeProfileDeprecations(
+	profileSets map[string]*ProfileSet,
+	selectedName string,
+	deprecationsByProfile map[string][]Deprecation,
+) []Deprecation {
+	var deprecations []Deprecation
+	visited := map[string]bool{}
+	for selectedName != "" && !visited[selectedName] {
+		visited[selectedName] = true
+		deprecations = AppendDeprecations(deprecations, deprecationsByProfile[selectedName]...)
+		profileSet := profileSets[selectedName]
+		if profileSet == nil {
+			break
+		}
+		selectedName = profileSet.Extends
+	}
+	return deprecations
 }
 
 // AppendDeprecations adds deprecations whose aliases are not already present.

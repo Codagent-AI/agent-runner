@@ -114,7 +114,7 @@ Built-in agents act as fallbacks. An explicit `extends` parent in a global or pr
 
 ## Legacy Aliases
 
-`planner` remains an undated compatibility alias for `lead`, and `reviewer` remains an undated compatibility alias for `crosscheck`. Existing configurations and workflows continue to resolve those names with deprecation warnings. There is no scheduled removal date.
+`planner` remains an undated compatibility alias for `lead`, and `reviewer` remains an undated compatibility alias for `crosscheck`. Existing configurations and workflows continue to resolve those names with deprecation warnings. Warnings are limited to aliases in the active profile inheritance chain or aliases referenced explicitly; dormant profiles do not warn merely because their configuration was loaded. There is no scheduled removal date.
 
 Loading a legacy file never rewrites it. If you explicitly confirm native setup's overwrite prompt, setup removes `planner` and `reviewer` from `profiles.default.agents` in the selected file and writes the four canonical roles. Unrelated layers and agents are preserved.
 

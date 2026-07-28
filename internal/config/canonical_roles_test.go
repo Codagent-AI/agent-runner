@@ -131,6 +131,39 @@ func TestLoadCanonicalizesLegacyExtendsTarget(t *testing.T) {
 	}
 }
 
+func TestLoadDeprecationsExcludeInactiveProfileSets(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	path := filepath.Join(t.TempDir(), ".agent-runner", "config.yaml")
+	writeConfigFile(t, path, `active_profile: active
+profiles:
+  active:
+    extends: base
+  base:
+    agents:
+      reviewer:
+        default_mode: autonomous
+        cli: claude
+        model: opus
+  inactive:
+    agents:
+      planner:
+        default_mode: interactive
+        cli: codex
+        model: gpt-5.6-sol
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := deprecationPairs(cfg.Deprecations); !reflect.DeepEqual(got, []string{"reviewer->crosscheck"}) {
+		t.Fatalf("config deprecations = %v, want active-chain warning only", got)
+	}
+	if _, ok := cfg.Profiles["inactive"].Agents["lead"]; !ok {
+		t.Fatal("inactive planner alias was not canonicalized to lead")
+	}
+}
+
 func TestLoadHigherLayerCanonicalNameOverridesLegacySynonym(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")

@@ -4,7 +4,7 @@
 
 The runner SHALL treat `planner` as a deprecated alias for `lead` and `reviewer` as a deprecated alias for `crosscheck` wherever agent profile names are accepted, including profile entries, `extends` targets, workflow agent references, and runtime agent-call targets. Each global or project configuration layer SHALL be canonicalized before normal layer precedence is applied, so a legacy override remains effective for a canonical built-in workflow and a higher-layer alias overrides a lower-layer synonym.
 
-Using either legacy alias SHALL surface a non-fatal, user-visible deprecation warning that names its canonical replacement and SHALL remain supported without a scheduled removal date. Each distinct alias warning SHALL appear at most once per command or workflow run. Loading legacy configuration SHALL NOT rewrite its source file.
+Using either legacy alias in the active profile-set inheritance chain or explicitly referencing the alias SHALL surface a non-fatal, user-visible deprecation warning that names its canonical replacement and SHALL remain supported without a scheduled removal date. An alias declared only in an inactive, uninherited profile set SHALL NOT emit a warning solely because configuration is loaded. Each distinct alias warning SHALL appear at most once per command or workflow run. Loading legacy configuration SHALL NOT rewrite its source file.
 
 A single profile layer that declares both `lead` and `planner`, or both `crosscheck` and `reviewer`, SHALL fail validation with an actionable ambiguity error. Native setup migration after explicit overwrite confirmation is governed by the agent-profile-editor capability.
 
@@ -30,6 +30,11 @@ A single profile layer that declares both `lead` and `planner`, or both `crossch
 #### Scenario: Alias warning is deduplicated
 - **WHEN** one command or workflow run resolves `planner` multiple times
 - **THEN** it emits one `planner`-to-`lead` deprecation warning
+
+#### Scenario: Inactive profile alias does not warn
+- **WHEN** configuration declares `planner` only in a profile set outside the active profile-set inheritance chain
+- **AND** the command or workflow does not explicitly reference `planner`
+- **THEN** the runner canonicalizes the inactive declaration without emitting its deprecation warning
 
 #### Scenario: Same-layer alias pair is rejected
 - **WHEN** one profile layer defines both `crosscheck` and `reviewer`

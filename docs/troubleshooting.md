@@ -39,6 +39,14 @@ Valid step-level `cli` values are:
 | `cursor` |
 | `opencode` |
 
+## Native Setup Fails or Is Interrupted
+
+Profile and settings files are each written atomically, but native setup does not provide a transaction across those files and external skill installation. A late settings failure can therefore leave the selected profile in place while setup remains incomplete. Inspect the selected profile and `~/.agent-runner/settings.yaml`, then rerun setup to complete the missing state.
+
+Avoid editing the selected profile file while setup is open, especially while skills are being installed, because setup assumes exclusive ownership until its staged profile is committed.
+
+Cancellation and failure cleanup is best effort. If no setup process is running and a mode-`0600` `.agent-runner-*.tmp` file remains beside the selected config, remove that temporary file before retrying.
+
 ## Agent Step Requires Agent
 
 Fresh sessions need an agent profile. Add `agent: lead`, `agent: implementor`, or another configured profile, or use `session: resume`, `session: inherit`, or a declared named session when that is what you intend.
