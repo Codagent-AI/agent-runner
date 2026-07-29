@@ -521,6 +521,7 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 
 		// Fresh chain for each top-level step; writeStepState intentionally
 		// does not clear it so the mid-step and post-step writes can share.
+		resumeChild := rs.ctx.ResumeChildState
 		rs.ctx.LastSubWorkflowChild = nil
 
 		stepRef := step // capture for closure
@@ -532,6 +533,13 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 		rs.ctx.FlushState = nil
 
 		completed := stepErr == nil && outcome != exec.OutcomeAborted && outcome != exec.OutcomeFailed
+		if !completed && rs.ctx.LastSubWorkflowChild == nil && resumeChild != nil {
+			// A resume can fail before any child step starts, for example when
+			// the persisted child ID no longer exists in a sub-workflow. Keep
+			// the prior chain so this failed attempt does not erase the last
+			// recoverable resume position.
+			rs.ctx.LastSubWorkflowChild = resumeChild
+		}
 		writeStepState(step, rs.ctx, &rs.workflow, rs.workflowHash, rs.sessionDir, loopResult, completed)
 
 		if stepErr != nil {
@@ -828,8 +836,9 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 	// When the loop executor wrote iteration metadata onto ctx.LastSubWorkflowChild
 	// (top-level loop case), promote Iteration onto the top-level NestedStepState
 	// instead of wrapping in a duplicated child entry. Only do this if the stored
-	// StepID matches the step we are writing for — otherwise the child is
-	// genuinely a nested step.
+	// StepID matches the step we are writing for and iteration metadata is
+	// present — otherwise the entry is genuinely a nested step whose ID may
+	// happen to match its parent.
 	//
 	// Note: we intentionally do not clear ctx.LastSubWorkflowChild here. The
 	// mid-step FlushState callback and the post-step write both read it, and
@@ -837,7 +846,9 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 	// mid-step flush consumed it. executeSteps resets the chain at the top of
 	// the next iteration.
 	switch {
-	case ctx.LastSubWorkflowChild != nil && ctx.LastSubWorkflowChild.StepID == step.ID:
+	case ctx.LastSubWorkflowChild != nil &&
+		ctx.LastSubWorkflowChild.StepID == step.ID &&
+		ctx.LastSubWorkflowChild.Iteration != nil:
 		iteration = ctx.LastSubWorkflowChild.Iteration
 		child = ctx.LastSubWorkflowChild.Child
 	case ctx.LastSubWorkflowChild != nil:

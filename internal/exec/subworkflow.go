@@ -70,17 +70,23 @@ func ExecuteSubWorkflowStep(
 
 	outcome, err := executeChildSteps(&workflow, childCtx, runner, glob, log, startFromStepID, startCompleted)
 
+	endData := map[string]any{
+		"outcome":     string(outcome),
+		"duration_ms": time.Since(subStart).Milliseconds(),
+	}
+	errMsg := ""
+	if err != nil {
+		errMsg = err.Error()
+		endData["error"] = errMsg
+	}
 	emitAudit(childCtx, audit.Event{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Prefix:    childPrefix,
 		Type:      audit.EventSubWorkflowEnd,
-		Data: map[string]any{
-			"outcome":     string(outcome),
-			"duration_ms": time.Since(subStart).Milliseconds(),
-		},
+		Data:      endData,
 	})
 
-	emitSubEnd(parentCtx, prefix, startTime, step, string(outcome), "")
+	emitSubEnd(parentCtx, prefix, startTime, step, string(outcome), errMsg)
 	return outcome, err
 }
 
@@ -247,7 +253,9 @@ func recordChildProgress(childCtx *model.ExecutionContext, childStepID string, c
 	// When the deeper state already describes this same step (e.g. a loop step
 	// that has written its own iteration metadata into childCtx.LastSubWorkflowChild),
 	// promote its Iteration/Child so we do not produce a duplicated wrapper.
-	if nestedChild != nil && nestedChild.StepID == childStepID {
+	// Matching IDs alone are insufficient because nested sub-workflows may
+	// legitimately reuse their parent's step ID.
+	if nestedChild != nil && nestedChild.StepID == childStepID && nestedChild.Iteration != nil {
 		entry.Iteration = nestedChild.Iteration
 		entry.Child = nestedChild.Child
 	} else {

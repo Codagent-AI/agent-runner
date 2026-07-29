@@ -382,6 +382,52 @@ steps:
 	}
 }
 
+func TestExecuteSubWorkflowStep_ResumeErrorIsAudited(t *testing.T) {
+	dir := t.TempDir()
+	childPath := filepath.Join(dir, "child-v1.0.yaml")
+	childYAML := `name: child
+steps:
+  - id: create
+    command: echo create
+  - id: define
+    command: echo define
+`
+	if err := os.WriteFile(childPath, []byte(childYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := &mockAuditLogger{}
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		Params:       map[string]string{},
+		WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"),
+		AuditLogger:  recorder,
+	})
+	ctx.ResumeChildState = &model.NestedStepState{StepID: "proposal"}
+
+	outcome, err := ExecuteSubWorkflowStep(
+		&model.Step{ID: "define", Workflow: "child-v1.0.yaml"},
+		ctx,
+		&mockRunner{},
+		&mockGlob{},
+		&mockLogger{},
+	)
+	if err == nil || outcome != OutcomeFailed {
+		t.Fatalf("ExecuteSubWorkflowStep = %q, %v; want failed resume error", outcome, err)
+	}
+
+	for _, event := range recorder.events {
+		if event.Type != audit.EventSubWorkflowEnd {
+			continue
+		}
+		got, _ := event.Data["error"].(string)
+		if !strings.Contains(got, `resume step "proposal" not found`) {
+			t.Fatalf("sub_workflow_end error = %q, want resume error", got)
+		}
+		return
+	}
+	t.Fatal("sub_workflow_end audit event not found")
+}
+
 func TestExecuteSubWorkflowStep_LoadsPinnedChildVersion(t *testing.T) {
 	dir := t.TempDir()
 	for filename, command := range map[string]string{
@@ -498,6 +544,31 @@ func TestSubWorkflowState_PreservesLastSessionStepID(t *testing.T) {
 	applyResumeState(parent, resumedChild)
 	if resumedChild.LastSessionStepID != "proposal" {
 		t.Fatalf("resumedChild.LastSessionStepID = %q, want %q", resumedChild.LastSessionStepID, "proposal")
+	}
+}
+
+func TestRecordChildProgressPreservesSameIDSubWorkflowNesting(t *testing.T) {
+	parent := model.NewRootContext(&model.RootContextOptions{Params: map[string]string{}})
+	child := model.NewSubWorkflowContext(parent, &model.SubWorkflowContextOptions{StepID: "define"})
+	child.LastSubWorkflowChild = &model.NestedStepState{
+		StepID: "define",
+		Child: &model.NestedStepState{
+			StepID:    "proposal",
+			Completed: false,
+		},
+	}
+
+	recordChildProgress(child, "define", false)
+
+	got := parent.LastSubWorkflowChild
+	if got == nil || got.StepID != "define" {
+		t.Fatalf("recorded step = %#v, want define", got)
+	}
+	if got.Child == nil || got.Child.StepID != "define" {
+		t.Fatalf("recorded child = %#v, want define", got.Child)
+	}
+	if got.Child.Child == nil || got.Child.Child.StepID != "proposal" {
+		t.Fatalf("recorded grandchild = %#v, want proposal", got.Child.Child)
 	}
 }
 

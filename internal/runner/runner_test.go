@@ -15,6 +15,7 @@ import (
 	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/stateio"
+	"github.com/google/go-cmp/cmp"
 )
 
 type delayedRunner struct{ mockRunner }
@@ -1335,6 +1336,107 @@ func TestPrepareRun_SeedsResumeState(t *testing.T) {
 	}
 	if got := state.CurrentStep.Nested.NamedSessions["validator-setup"]; got != "session-2" {
 		t.Fatalf("CurrentStep.NamedSessions[validator-setup] = %q, want session-2", got)
+	}
+}
+
+func TestWriteStepStatePreservesSameIDSubWorkflowNesting(t *testing.T) {
+	sessionDir := t.TempDir()
+	workflow := model.Workflow{Name: "parent"}
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		Params:       map[string]string{},
+		WorkflowFile: "parent-v1.0.yaml",
+	})
+	ctx.LastSubWorkflowChild = &model.NestedStepState{
+		StepID: "define",
+		Child: &model.NestedStepState{
+			StepID:    "proposal",
+			Completed: false,
+		},
+	}
+
+	writeStepState(
+		&model.Step{ID: "define"},
+		ctx,
+		&workflow,
+		"workflow-hash",
+		sessionDir,
+		nil,
+		false,
+	)
+
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatalf("ReadState: %v", err)
+	}
+	want := &model.NestedStepState{
+		StepID:            "define",
+		SessionIDs:        map[string]string{},
+		CapturedVariables: map[string]model.CapturedValue{},
+		Child: &model.NestedStepState{
+			StepID: "define",
+			Child: &model.NestedStepState{
+				StepID:    "proposal",
+				Completed: false,
+			},
+		},
+	}
+	if diff := cmp.Diff(want, state.CurrentStep.Nested); diff != "" {
+		t.Fatalf("persisted child chain mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestRunWorkflowFailedResumePreservesPriorChildState(t *testing.T) {
+	dir := t.TempDir()
+	childPath := filepath.Join(dir, "child-v1.0.yaml")
+	childYAML := `name: child
+steps:
+  - id: create
+    command: echo create
+  - id: define
+    command: echo define
+`
+	if err := os.WriteFile(childPath, []byte(childYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	workflow := model.Workflow{
+		Name: "parent",
+		Steps: []model.Step{
+			{ID: "define", Workflow: "child-v1.0.yaml"},
+		},
+	}
+	workflow.ApplyDefaults()
+	sessionDir := t.TempDir()
+	childState := &model.NestedStepState{
+		StepID:    "proposal",
+		Completed: false,
+	}
+
+	result, err := RunWorkflow(&workflow, nil, &Options{
+		From:          "define",
+		WorkflowFile:  filepath.Join(dir, "parent-v1.0.yaml"),
+		SessionDir:    sessionDir,
+		ChildState:    childState,
+		ProcessRunner: &mockRunner{},
+		GlobExpander:  &mockGlob{},
+		Log:           &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("RunWorkflow: %v", err)
+	}
+	if result != ResultFailed {
+		t.Fatalf("result = %q, want %q", result, ResultFailed)
+	}
+
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatalf("ReadState: %v", err)
+	}
+	if state.CurrentStep.Nested == nil || state.CurrentStep.Nested.Child == nil {
+		t.Fatalf("current step = %#v, want preserved child state", state.CurrentStep.Nested)
+	}
+	if diff := cmp.Diff(childState, state.CurrentStep.Nested.Child); diff != "" {
+		t.Fatalf("preserved child state mismatch (-want +got):\n%s", diff)
 	}
 }
 
