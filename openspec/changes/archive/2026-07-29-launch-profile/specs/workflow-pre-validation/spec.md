@@ -31,6 +31,29 @@ pre-validation contexts that run today: fresh runs and explicit `--validate` inv
 - **WHEN** `agent-runner --validate --profile copilot my-workflow` succeeds
 - **THEN** the validation output names `copilot` as the profile set the workflow was validated against
 
+### Requirement: Validate always names the profile set it used
+
+A successful `--validate` invocation SHALL name the resolved profile set whether or not the caller supplied
+an override, because a profile set is resolved for every invocation (see the `config-profiles` capability).
+The reported name SHALL be the set actually used for resolution, so the output distinguishes a run that
+consulted `active_profile` from one that fell back to `default`.
+
+#### Scenario: No override supplied
+
+- **WHEN** `agent-runner --validate my-workflow` succeeds in a project that sets no `active_profile`
+- **THEN** the validation output names `default` as the profile set the workflow was validated against
+
+#### Scenario: Profile set selected by project config
+
+- **WHEN** `agent-runner --validate my-workflow` succeeds in a project whose config sets `active_profile: work`
+- **THEN** the validation output names `work`, not `default`
+
+#### Scenario: Override supplied
+
+- **WHEN** `agent-runner --validate --profile copilot my-workflow` succeeds in a project whose config sets
+  `active_profile: work`
+- **THEN** the validation output names `copilot`
+
 ### Requirement: Pre-validation errors report the overridden profile set
 
 When pre-validation reports a failure whose structured profile-set context identifies the profile set used

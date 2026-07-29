@@ -56,6 +56,41 @@ from an otherwise non-empty value before it is used for selection.
   exists
 - **THEN** the run uses the `copilot` profile set
 
+### Requirement: Profile flag may be given only once
+
+`--profile` SHALL be rejected when it appears more than once in a single invocation, with an error stating
+that it may only be specified once. Rejection SHALL NOT depend on where the occurrences sit relative to
+positional arguments or on which accepted spelling is used, so every combination of the space-separated,
+`=`, single-dash, and double-dash forms is rejected alike. Silently accepting one of the named profile sets
+would run the workflow under agents the caller did not unambiguously request.
+
+#### Scenario: Both occurrences before the positional argument
+
+- **WHEN** `agent-runner --profile aaa --profile bbb my-workflow` is invoked
+- **THEN** the CLI exits non-zero with an error stating that `--profile` may only be specified once, and no
+  run starts
+
+#### Scenario: Both occurrences after the positional argument
+
+- **WHEN** `agent-runner my-workflow --profile aaa --profile bbb` is invoked
+- **THEN** the CLI exits non-zero with the same error, and no run starts
+
+#### Scenario: One occurrence on each side of the positional argument
+
+- **WHEN** `agent-runner --profile aaa my-workflow --profile bbb` is invoked
+- **THEN** the CLI exits non-zero with the same error, and no run starts
+
+#### Scenario: Mixed spellings still count as duplicates
+
+- **WHEN** `agent-runner --profile=aaa -profile bbb my-workflow` is invoked
+- **THEN** the CLI exits non-zero with the same error, and no run starts
+
+#### Scenario: A single occurrence is accepted in any position
+
+- **WHEN** `--profile copilot` is given exactly once, whether before or after the positional argument and in
+  either the space-separated or `=` form
+- **THEN** the invocation proceeds with the `copilot` profile set
+
 ### Requirement: Unknown profile set fails fast
 
 When `--profile` names a profile set that does not exist in the merged config, the CLI SHALL exit
