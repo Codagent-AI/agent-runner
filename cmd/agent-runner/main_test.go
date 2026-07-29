@@ -354,6 +354,13 @@ func TestExtractProfileArgs_RejectsDuplicateProfileFlag(t *testing.T) {
 	}
 }
 
+func TestExtractProfileArgs_RejectsOptionAsProfileValue(t *testing.T) {
+	_, _, _, err := extractProfileArgs([]string{"workflow", "--profile", "--until", "step"})
+	if err == nil || !strings.Contains(err.Error(), "requires a profile set name") {
+		t.Fatalf("extractProfileArgs() error = %v, want missing profile value error", err)
+	}
+}
+
 func TestHandleValidateArgsBindsOptionalParamsForYAMLPath(t *testing.T) {
 	t.Chdir(t.TempDir())
 	t.Setenv("HOME", t.TempDir())

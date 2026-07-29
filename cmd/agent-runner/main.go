@@ -367,24 +367,10 @@ func run() int {
 		}
 	})
 	*profileFlag = strings.TrimSpace(*profileFlag)
-	var trailingProfile string
-	var trailingProfileSet bool
 	var profileErr error
-	args, trailingProfile, trailingProfileSet, profileErr = extractProfileArgs(args)
+	args, *profileFlag, profileSet, profileErr = resolveProfileFlag(args, *profileFlag, profileSet)
 	if profileErr != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", profileErr)
-		return 1
-	}
-	if profileSet && trailingProfileSet {
-		fmt.Fprintln(os.Stderr, "agent-runner: --profile may only be specified once")
-		return 1
-	}
-	if trailingProfileSet {
-		*profileFlag = trailingProfile
-		profileSet = true
-	}
-	if profileSet && *profileFlag == "" {
-		fmt.Fprintln(os.Stderr, "agent-runner: --profile requires a profile set name")
 		return 1
 	}
 	if handled, code := routeDebugCommand(args, os.Stdout, os.Stderr); handled {
@@ -437,10 +423,25 @@ func run() int {
 
 // extractProfileArgs accepts profile flags after positional arguments, which
 // the standard flag package intentionally leaves in flag.Args().
-func extractProfileArgs(args []string) ([]string, string, bool, error) {
-	filtered := make([]string, 0, len(args))
-	var profile string
-	var set bool
+func resolveProfileFlag(args []string, parsedProfile string, parsedSet bool) (remaining []string, profile string, set bool, err error) {
+	args, trailingProfile, trailingSet, err := extractProfileArgs(args)
+	if err != nil {
+		return nil, "", false, err
+	}
+	if parsedSet && trailingSet {
+		return nil, "", false, fmt.Errorf("--profile may only be specified once")
+	}
+	if trailingSet {
+		return args, trailingProfile, true, nil
+	}
+	if parsedSet && parsedProfile == "" {
+		return nil, "", false, fmt.Errorf("--profile requires a profile set name")
+	}
+	return args, parsedProfile, parsedSet, nil
+}
+
+func extractProfileArgs(args []string) (filtered []string, profile string, set bool, err error) {
+	filtered = make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		value := ""
@@ -448,7 +449,7 @@ func extractProfileArgs(args []string) ([]string, string, bool, error) {
 		switch {
 		case arg == "--profile" || arg == "-profile":
 			hasProfile = true
-			if i+1 >= len(args) {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
 				return nil, "", false, fmt.Errorf("--profile requires a profile set name")
 			}
 			i++
