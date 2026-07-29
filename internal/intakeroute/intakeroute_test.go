@@ -372,3 +372,16 @@ func assertNoTemporarySnapshots(t *testing.T, runDir string) {
 		}
 	}
 }
+
+func TestLoadStrictRejectsUnknownFields(t *testing.T) {
+	runDir := t.TempDir()
+	path := filepath.Join(runDir, "intake-route.json")
+	if err := os.WriteFile(path, []byte(`{"state":"frozen","parent_run_id":"intake","workflow":"target","source_ref":"builtin:core/target-v1.0.yaml","params":{},"handoff_path":"/tmp/handoff","staged_at":"now","unexpected":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadStrict(path)
+	if err == nil || !strings.Contains(err.Error(), "decode intake route sidecar") {
+		t.Fatalf("LoadStrict() error = %v, want strict decode error", err)
+	}
+}

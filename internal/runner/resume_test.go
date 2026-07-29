@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/stateio"
@@ -126,6 +127,68 @@ steps:
 	params, ok := context["params"].(map[string]any)
 	if !ok || params["env"] != "staging" {
 		t.Fatalf("run_start params = %#v", context["params"])
+	}
+}
+
+func TestPrepareRunCleansUpFreshRunWhenHandoffCopyFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	project := t.TempDir()
+	t.Chdir(project)
+
+	workflow := model.Workflow{Name: "target", Steps: []model.Step{{ID: "done", Command: "echo done"}}}
+	workflow.ApplyDefaults()
+	_, err := PrepareRun(&workflow, nil, &Options{
+		WorkflowFile:        "builtin:core/target-v1.0.yaml",
+		IntakeHandoffSource: filepath.Join(project, "missing-handoff.md"),
+		ProcessRunner:       &mockRunner{},
+		GlobExpander:        &mockGlob{},
+		Log:                 &mockLog{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "open intake handoff source") {
+		t.Fatalf("PrepareRun() error = %v, want missing handoff error", err)
+	}
+
+	runsDir := filepath.Join(home, ".agent-runner", "projects", audit.EncodePath(project), "runs")
+	entries, readErr := os.ReadDir(runsDir)
+	if readErr == nil && len(entries) != 0 {
+		t.Fatalf("fresh preparation left run directories: %v", entries)
+	}
+	if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatalf("read runs directory: %v", readErr)
+	}
+}
+
+func TestPrepareRunCleansUpFreshRunWhenSessionSetupFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	project := t.TempDir()
+	t.Chdir(project)
+
+	workflow := model.Workflow{
+		Name:     "target",
+		Sessions: []model.SessionDecl{{Name: "lead", Agent: "lead-profile"}},
+		Steps:    []model.Step{{ID: "done", Command: "echo done"}},
+	}
+	workflow.ApplyDefaults()
+	_, err := PrepareRun(&workflow, nil, &Options{
+		WorkflowFile:      "builtin:core/target-v1.0.yaml",
+		NamedSessionDecls: map[string]string{"lead": "different-profile"},
+		ProcessRunner:     &mockRunner{},
+		GlobExpander:      &mockGlob{},
+		Log:               &mockLog{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "session declaration") {
+		t.Fatalf("PrepareRun() error = %v, want session setup error", err)
+	}
+
+	runsDir := filepath.Join(home, ".agent-runner", "projects", audit.EncodePath(project), "runs")
+	entries, readErr := os.ReadDir(runsDir)
+	if readErr == nil && len(entries) != 0 {
+		t.Fatalf("fresh preparation left run directories: %v", entries)
+	}
+	if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatalf("read runs directory: %v", readErr)
 	}
 }
 

@@ -337,7 +337,17 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	if err := os.MkdirAll(sessionDir, 0o750); err != nil {
 		return nil, fmt.Errorf("create session dir: %w", err)
 	}
+	cleanupSession := func(auditLogger *audit.Logger) {
+		runlock.Delete(sessionDir)
+		if auditLogger != nil {
+			auditLogger.Close()
+		}
+		if opts.SessionDir == "" {
+			_ = os.RemoveAll(sessionDir)
+		}
+	}
 	if err := materializeBundledAssets(sessionDir, opts.WorkflowFile); err != nil {
+		cleanupSession(nil)
 		return nil, err
 	}
 
@@ -346,12 +356,13 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	case lockErr != nil:
 		// Genuine I/O error inspecting or writing the lock — refuse rather
 		// than risk a second runner racing the same state file.
+		cleanupSession(nil)
 		return nil, fmt.Errorf("acquire run lock in %s: %w", sessionDir, lockErr)
 	case activePID > 0:
 		return nil, fmt.Errorf("run already in progress (PID %d) in %s; wait for it to finish or kill the process before resuming", activePID, sessionDir)
 	}
 	if err := cleanupCrashedInteractiveAttempt(sessionDir, opts); err != nil {
-		runlock.Delete(sessionDir)
+		cleanupSession(nil)
 		return nil, err
 	}
 
@@ -362,10 +373,7 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 
 	auditLogger, metricsCollector, ctx, err := buildExecutionContext(workflow, params, opts, sessionDir, sessionID, now)
 	if err != nil {
-		runlock.Delete(sessionDir)
-		if auditLogger != nil {
-			auditLogger.Close()
-		}
+		cleanupSession(auditLogger)
 		return nil, err
 	}
 
@@ -378,6 +386,7 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	// On fresh runs this populates the map from scratch. On resume, previously
 	// persisted entries are already present; mergeSessionDecls handles drift.
 	if err := exec.MergeSessionDecls(ctx, workflow.Sessions, log); err != nil {
+		cleanupSession(auditLogger)
 		return nil, err
 	}
 
@@ -714,10 +723,7 @@ func PrepareRun(workflow *model.Workflow, params map[string]string, opts *Option
 		return nil, err
 	}
 	if err := copyIntakeHandoff(opts.IntakeHandoffSource, rs); err != nil {
-		runlock.Delete(rs.sessionDir)
-		if rs.auditLogger != nil {
-			rs.auditLogger.Close()
-		}
+		cleanupFailedFreshPreparation(rs, opts)
 		return nil, err
 	}
 
@@ -725,10 +731,7 @@ func PrepareRun(workflow *model.Workflow, params map[string]string, opts *Option
 	if err != nil {
 		// initRunState already created the session dir, lock file, and audit
 		// logger — release them so a failed prepare doesn't leave a ghost run.
-		runlock.Delete(rs.sessionDir)
-		if rs.auditLogger != nil {
-			rs.auditLogger.Close()
-		}
+		cleanupFailedFreshPreparation(rs, opts)
 		return nil, err
 	}
 
@@ -737,10 +740,7 @@ func PrepareRun(workflow *model.Workflow, params map[string]string, opts *Option
 	// can resolve the workflow file immediately instead of falling back to
 	// name-based discovery that does not know about .agent-runner/workflows/.
 	if err := stateio.WriteState(initialRunState(workflow, rs, opts), rs.sessionDir); err != nil {
-		runlock.Delete(rs.sessionDir)
-		if rs.auditLogger != nil {
-			rs.auditLogger.Close()
-		}
+		cleanupFailedFreshPreparation(rs, opts)
 		return nil, fmt.Errorf("seed initial state: %w", err)
 	}
 
@@ -757,6 +757,19 @@ func PrepareRun(workflow *model.Workflow, params map[string]string, opts *Option
 		SessionDir: rs.sessionDir,
 		ProjectDir: projectDir,
 	}, nil
+}
+
+func cleanupFailedFreshPreparation(rs *runState, opts *Options) {
+	runlock.Delete(rs.sessionDir)
+	if rs.auditLogger != nil {
+		rs.auditLogger.Close()
+	}
+	// A caller-provided session directory may contain pre-existing state (for
+	// example a test fixture or a resume-adjacent embedding), so only remove a
+	// directory that this fresh run allocated itself.
+	if opts.SessionDir == "" {
+		_ = os.RemoveAll(rs.sessionDir)
+	}
 }
 
 func initialRunState(workflow *model.Workflow, rs *runState, opts *Options) *model.RunState {

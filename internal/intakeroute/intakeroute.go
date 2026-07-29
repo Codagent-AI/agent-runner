@@ -257,6 +257,32 @@ func (s *Store) Load() (*Sealed, error) {
 	return &sealed, nil
 }
 
+// LoadStrict reads a sealed route from an explicit sidecar path. It rejects
+// unknown fields and trailing JSON so process-boundary consumers never act on
+// a partially written or malformed launch plan.
+func LoadStrict(path string) (*Sealed, error) {
+	file, err := os.Open(path) // #nosec G304 -- path is supplied by the internal launcher and validated by its caller.
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+
+	decoder := json.NewDecoder(file)
+	decoder.DisallowUnknownFields()
+	var sealed Sealed
+	if err := decoder.Decode(&sealed); err != nil {
+		return nil, fmt.Errorf("decode intake route sidecar: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return nil, errors.New("decode intake route sidecar: multiple JSON values")
+		}
+		return nil, fmt.Errorf("decode intake route sidecar: %w", err)
+	}
+	sealed.Params = cloneParams(sealed.Params)
+	return &sealed, nil
+}
+
 // Stage publishes a prepared route. It does no catalog resolution or reads of
 // agent-writable input, making it safe for a caller to hold its ordering lock.
 func (s *Store) Stage(prepared *Prepared) (err error) {

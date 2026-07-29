@@ -30,6 +30,7 @@ import (
 	"github.com/codagent/agent-runner/internal/engine"
 	_ "github.com/codagent/agent-runner/internal/engine/openspec"
 	iexec "github.com/codagent/agent-runner/internal/exec"
+	"github.com/codagent/agent-runner/internal/intakeroute"
 	"github.com/codagent/agent-runner/internal/listview"
 	"github.com/codagent/agent-runner/internal/liverun"
 	"github.com/codagent/agent-runner/internal/loader"
@@ -636,7 +637,7 @@ func handleResumeWithOptions(sessionID string, liveOpts liveTUIOptions) int {
 		if result != runner.ResultSuccess {
 			return 1
 		}
-		return 0
+		return launchFrozenIntakeRoute(result, filepath.Dir(stateFilePath))
 	}
 
 	if code := ensureThemeForTUI(defaultThemeDeps); code != 0 {
@@ -657,7 +658,7 @@ func handleResumeWithOptions(sessionID string, liveOpts liveTUIOptions) int {
 		return 1
 	}
 
-	return runLiveTUIWithOptions(h, liveOpts)
+	return launchResultAfterRun(runLiveTUIWithResult(h, liveOpts), false).exitCode
 }
 
 // resumeInspectPaths maps a resume state-file path to the session and project
@@ -860,10 +861,6 @@ func (opts liveTUIOptions) withEnv() liveTUIOptions {
 	return opts
 }
 
-func runLiveTUIWithOptions(h *runner.RunHandle, opts liveTUIOptions) int {
-	return runLiveTUIWithResult(h, opts).exitCode
-}
-
 type liveTUIResult struct {
 	exitCode       int
 	exitRequested  bool
@@ -906,7 +903,7 @@ func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResul
 			} else {
 				resultCh <- result
 			}
-			if opts.quitOnDone {
+			if opts.quitOnDone || shouldExitAfterFrozenIntakeRoute(result, h.SessionDir) {
 				p.Send(runview.ExitMsg{})
 			}
 		}()
@@ -1046,6 +1043,84 @@ func execSelfWithEnv(extraEnv []string, args ...string) int {
 		return 1
 	}
 	return 0
+}
+
+// launchFrozenIntakeRoute performs the final gate after a top-level run has
+// finalized. The exec itself deliberately happens only after the parent's
+// control socket, lock, state, and audit logger have all been closed.
+func launchFrozenIntakeRoute(result runner.WorkflowResult, sessionDir string) int {
+	if result != runner.ResultSuccess {
+		return 0
+	}
+
+	routePath, err := filepath.Abs(filepath.Join(sessionDir, "intake-route.json"))
+	if err != nil {
+		return 0
+	}
+	sealed, err := intakeroute.LoadStrict(routePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: read intake route: %v\n", err)
+		return 1
+	}
+	if sealed.State != intakeroute.Frozen {
+		return 0
+	}
+
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil || !state.Completed {
+		return 0
+	}
+	if err := appendRouteLaunchEvent(sessionDir, audit.EventRouteLaunchAttempted, sealed, nil); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: record intake route launch: %v\n", err)
+		return 1
+	}
+
+	code := execSelfWithEnv([]string{liveRunImmediateAltScreenEnv + "=1"}, "internal", "launch-intake-route", routePath)
+	if code != 0 {
+		launchErr := fmt.Errorf("exec launch-intake-route exited with code %d", code)
+		if err := appendRouteLaunchEvent(sessionDir, audit.EventRouteLaunchFailed, sealed, launchErr); err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: record failed intake route launch: %v\n", err)
+		}
+	}
+	return code
+}
+
+func shouldExitAfterFrozenIntakeRoute(result runner.WorkflowResult, sessionDir string) bool {
+	if result != runner.ResultSuccess {
+		return false
+	}
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil || !state.Completed {
+		return false
+	}
+	sealed, err := intakeroute.LoadStrict(filepath.Join(sessionDir, "intake-route.json"))
+	return err == nil && sealed.State == intakeroute.Frozen
+}
+
+func appendRouteLaunchEvent(sessionDir string, eventType audit.EventType, sealed *intakeroute.Sealed, launchErr error) error {
+	logger, err := audit.NewLogger(filepath.Join(sessionDir, "audit.log"))
+	if err != nil {
+		return err
+	}
+	defer logger.Close()
+	data := map[string]any{
+		"workflow":     sealed.Workflow,
+		"source_ref":   sealed.SourceRef,
+		"params":       sealed.Params,
+		"handoff_path": sealed.HandoffPath,
+	}
+	if launchErr != nil {
+		data["error"] = launchErr.Error()
+	}
+	logger.Emit(audit.Event{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Type:      eventType,
+		Data:      data,
+	})
+	return nil
 }
 
 func envWithOverrides(base []string, overrides ...string) []string {
@@ -1736,6 +1811,63 @@ type runCommandOptions struct {
 	agentOverride *model.AgentOverride
 }
 
+// freshRunRequest contains everything needed to prepare a new top-level run.
+// Both direct CLI launches and sealed intake routes use this exact sequence so
+// validation and engine setup cannot drift between the two entry points.
+type freshRunRequest struct {
+	SourceRef           string
+	Positional          []string
+	Keyed               map[string]string
+	From                string
+	Until               string
+	AgentOverride       *model.AgentOverride
+	IntakeParentRunID   string
+	IntakeHandoffSource string
+	Log                 iexec.Logger
+}
+
+func prepareFreshRun(req *freshRunRequest) (*runner.RunHandle, error) {
+	workflow, err := loader.LoadWorkflow(req.SourceRef, loader.Options{})
+	if err != nil {
+		return nil, fmt.Errorf("load workflow: %w", err)
+	}
+	params, err := matchParams(&workflow, req.Positional, req.Keyed)
+	if err != nil {
+		return nil, err
+	}
+	if !builtinworkflows.IsRef(req.SourceRef) {
+		if _, err := prevalidate.Pipeline(req.SourceRef, params, prevalidate.Strict, prevalidate.Options{}); err != nil {
+			return nil, err
+		}
+	}
+
+	var eng engine.Engine
+	if workflow.Engine != nil {
+		engConfig := map[string]any{"type": workflow.Engine.Type}
+		maps.Copy(engConfig, workflow.Engine.Extras)
+		eng, err = engine.Create(engConfig)
+		if err != nil {
+			return nil, fmt.Errorf("create engine: %w", err)
+		}
+	}
+	log := req.Log
+	if log == nil {
+		log = &realLogger{}
+	}
+	return runner.PrepareRun(&workflow, params, &runner.Options{
+		WorkflowFile:        req.SourceRef,
+		From:                req.From,
+		Until:               req.Until,
+		AgentOverride:       req.AgentOverride,
+		IntakeParentRunID:   req.IntakeParentRunID,
+		IntakeHandoffSource: req.IntakeHandoffSource,
+		Engine:              eng,
+		ProcessRunner:       &realProcessRunner{},
+		GlobExpander:        &realGlobExpander{},
+		Log:                 log,
+	})
+}
+
 func isIntakeWorkflow(workflowFile string) bool {
 	return workflowFile == builtinworkflows.Ref("core/intake-v1.0.yaml")
 }
@@ -1755,28 +1887,10 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 		return liveTUIResult{exitCode: 1}
 	}
 
-	workflow, err := loader.LoadWorkflow(workflowFile, loader.Options{})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-runner: load workflow: %v\n", err)
-		return liveTUIResult{exitCode: 1}
-	}
-
 	positional, keyed, err := parseParams(args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return liveTUIResult{exitCode: 1}
-	}
-	params, err := matchParams(&workflow, positional, keyed)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-		return liveTUIResult{exitCode: 1}
-	}
-
-	if !builtinworkflows.IsRef(workflowFile) {
-		if _, err := prevalidate.Pipeline(workflowFile, params, prevalidate.Strict, prevalidate.Options{}); err != nil {
-			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-			return liveTUIResult{exitCode: 1}
-		}
 	}
 	if isIntakeWorkflow(workflowFile) {
 		if err := requireIntakeTTY(); err != nil {
@@ -1790,28 +1904,16 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 		return liveTUIResult{exitCode: 1}
 	}
 
-	var eng engine.Engine
-	if workflow.Engine != nil {
-		engConfig := map[string]any{"type": workflow.Engine.Type}
-		maps.Copy(engConfig, workflow.Engine.Extras)
-		eng, err = engine.Create(engConfig)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "agent-runner: create engine: %v\n", err)
-			return liveTUIResult{exitCode: 1}
-		}
+	prepare := func(log iexec.Logger) (*runner.RunHandle, error) {
+		return prepareFreshRun(&freshRunRequest{
+			SourceRef: workflowFile, Positional: positional, Keyed: keyed,
+			From: runOpts.from, Until: runOpts.until, AgentOverride: runOpts.agentOverride,
+			Log: log,
+		})
 	}
 
 	if os.Getenv("AGENT_RUNNER_NO_TUI") == "1" {
-		h, err := runner.PrepareRun(&workflow, params, &runner.Options{
-			WorkflowFile:  workflowFile,
-			From:          runOpts.from,
-			Until:         runOpts.until,
-			AgentOverride: runOpts.agentOverride,
-			Engine:        eng,
-			ProcessRunner: &realProcessRunner{},
-			GlobExpander:  &realGlobExpander{},
-			Log:           &realLogger{},
-		})
+		h, err := prepare(&realLogger{})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 			return liveTUIResult{exitCode: 1}
@@ -1821,32 +1923,59 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 			GlobExpander:  &realGlobExpander{},
 			Log:           &realLogger{},
 		})
-		if result != runner.ResultSuccess {
-			return liveTUIResult{exitCode: 1, workflowResult: result, sessionDir: h.SessionDir}
-		}
-		return liveTUIResult{workflowResult: result, sessionDir: h.SessionDir}
+		return launchResultAfterRun(liveTUIResult{workflowResult: result, sessionDir: h.SessionDir, exitCode: resultExitCode(result)}, isIntakeWorkflow(workflowFile))
 	}
 
 	if code := ensureThemeForTUI(defaultThemeDeps); code != 0 {
 		return liveTUIResult{exitCode: code}
 	}
 
-	h, err := runner.PrepareRun(&workflow, params, &runner.Options{
-		WorkflowFile:  workflowFile,
-		From:          runOpts.from,
-		Until:         runOpts.until,
-		AgentOverride: runOpts.agentOverride,
-		Engine:        eng,
-		ProcessRunner: &realProcessRunner{},
-		GlobExpander:  &realGlobExpander{},
-		Log:           &runner.DiscardLogger{},
-	})
+	h, err := prepare(&runner.DiscardLogger{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return liveTUIResult{exitCode: 1}
 	}
 
-	return runLiveTUIWithResult(h, liveOpts)
+	return launchResultAfterRun(runLiveTUIWithResult(h, liveOpts), isIntakeWorkflow(workflowFile))
+}
+
+func resultExitCode(result runner.WorkflowResult) int {
+	if result != runner.ResultSuccess {
+		return 1
+	}
+	return 0
+}
+
+func launchResultAfterRun(result liveTUIResult, reportExplorationHandoff bool) liveTUIResult {
+	if result.exitRequested || result.workflowResult != runner.ResultSuccess || result.sessionDir == "" {
+		return result
+	}
+	if code := launchFrozenIntakeRoute(result.workflowResult, result.sessionDir); code != 0 {
+		result.exitCode = code
+		return result
+	}
+	if reportExplorationHandoff {
+		if handoff := explorationHandoffPath(result.sessionDir); handoff != "" {
+			fmt.Printf("agent-runner: intake handoff preserved at %s\n", handoff)
+		}
+	}
+	return result
+}
+
+func explorationHandoffPath(sessionDir string) string {
+	if _, err := os.Stat(filepath.Join(sessionDir, "intake-route.json")); err == nil {
+		return ""
+	}
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil || !state.Completed || !isIntakeWorkflow(state.WorkflowFile) {
+		return ""
+	}
+	handoff := filepath.Join(sessionDir, "intake-handoff.md")
+	info, err := os.Stat(handoff)
+	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+		return ""
+	}
+	return handoff
 }
 
 func handleOnboardingFromRun(workflowFile, from string, args ...string) int {
