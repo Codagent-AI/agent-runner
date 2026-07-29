@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	stdexec "os/exec"
 	"testing"
 	"time"
 
@@ -92,6 +93,52 @@ func TestInvokeAgentRetainsLaunchEvidenceWhenRunningProcessIsCanceled(t *testing
 		t.Fatalf("InvokeAgent() result = %#v", got)
 	}
 }
+
+func TestInvokeAgentAcceptsCopilotWaitDelayAfterCompleteTerminalOutput(t *testing.T) {
+	raw := `{"type":"session.task_complete","data":{"summary":"recovered review","success":true}}` + "\n" +
+		`{"type":"result","exitCode":0}` + "\n"
+	runner := &invocationRecordingRunner{
+		options: make(chan AgentProcessOptions, 1),
+		result:  ProcessResult{Started: true, ExitCode: -1, Stdout: raw},
+		err:     stdexec.ErrWaitDelay,
+	}
+
+	got, err := InvokeAgent(&AgentInvocation{
+		Context: context.Background(), Adapter: &cli.CopilotAdapter{},
+		Args: []string{"copilot"}, InvocationContext: cli.ContextAutonomousHeadless,
+		CLI: "copilot",
+	}, runner, &mockLogger{})
+	if err != nil {
+		t.Fatalf("InvokeAgent() error = %v, want successful terminal output recovery", err)
+	}
+	if got.Outcome != OutcomeSuccess || got.ExitCode != 0 || got.Response != "recovered review" {
+		t.Fatalf("InvokeAgent() result = %#v", got)
+	}
+}
+
+func TestInvokeAgentPreservesCopilotWaitDelayWithoutTerminalResult(t *testing.T) {
+	runner := &invocationRecordingRunner{
+		options: make(chan AgentProcessOptions, 1),
+		result: ProcessResult{
+			Started: true, ExitCode: -1,
+			Stdout: `{"type":"session.task_complete","data":{"summary":"possibly truncated","success":true}}` + "\n",
+		},
+		err: stdexec.ErrWaitDelay,
+	}
+
+	got, err := InvokeAgent(&AgentInvocation{
+		Context: context.Background(), Adapter: &cli.CopilotAdapter{},
+		Args: []string{"copilot"}, InvocationContext: cli.ContextAutonomousHeadless,
+		CLI: "copilot",
+	}, runner, &mockLogger{})
+	if !errors.Is(err, stdexec.ErrWaitDelay) {
+		t.Fatalf("InvokeAgent() error = %v, want exec.ErrWaitDelay", err)
+	}
+	if got.Outcome != OutcomeFailed || got.Response != "" {
+		t.Fatalf("InvokeAgent() result = %#v", got)
+	}
+}
+
 func (r *invocationRecordingRunner) RunScript(string, []byte, bool, string) (ProcessResult, error) {
 	return ProcessResult{}, nil
 }
