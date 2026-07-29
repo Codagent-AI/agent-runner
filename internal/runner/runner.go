@@ -316,36 +316,15 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	opts.WorkingDir = workingDir
 	opts.ProjectRoot = projectRoot
 
-	// Build session ID and directory.
-	safeName := audit.SanitizeWorkflowName(workflow.Name)
-	now := time.Now()
-	timestamp := strings.NewReplacer(":", "-", ".", "-").Replace(now.UTC().Format(time.RFC3339Nano))
-	sessionID := safeName + "-" + timestamp
-
-	sessionDir := opts.SessionDir
-	if sessionDir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, fmt.Errorf("cannot determine home directory: %w", err)
-		}
-		encoded := audit.EncodePath(workingDir)
-		sessionDir = filepath.Join(home, ".agent-runner", "projects", encoded, "runs", sessionID)
-	} else {
-		sessionID = filepath.Base(sessionDir)
+	sessionDir, sessionID, now, err := freshSessionLocation(workflow.Name, workingDir, opts)
+	if err != nil {
+		return nil, err
 	}
 
 	if err := os.MkdirAll(sessionDir, 0o750); err != nil {
 		return nil, fmt.Errorf("create session dir: %w", err)
 	}
-	cleanupSession := func(auditLogger *audit.Logger) {
-		runlock.Delete(sessionDir)
-		if auditLogger != nil {
-			auditLogger.Close()
-		}
-		if opts.SessionDir == "" {
-			_ = os.RemoveAll(sessionDir)
-		}
-	}
+	cleanupSession := newRunSessionCleanup(sessionDir, opts)
 	if err := materializeBundledAssets(sessionDir, opts.WorkflowFile); err != nil {
 		cleanupSession(nil)
 		return nil, err
@@ -404,6 +383,34 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		runner:           opts.ProcessRunner,
 		glob:             opts.GlobExpander,
 	}, nil
+}
+
+func freshSessionLocation(workflowName, workingDir string, opts *Options) (sessionDir, sessionID string, now time.Time, err error) {
+	now = time.Now()
+	safeName := audit.SanitizeWorkflowName(workflowName)
+	timestamp := strings.NewReplacer(":", "-", ".", "-").Replace(now.UTC().Format(time.RFC3339Nano))
+	sessionID = safeName + "-" + timestamp
+	sessionDir = opts.SessionDir
+	if sessionDir != "" {
+		return sessionDir, filepath.Base(sessionDir), now, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", "", time.Time{}, fmt.Errorf("cannot determine home directory: %w", err)
+	}
+	return filepath.Join(home, ".agent-runner", "projects", audit.EncodePath(workingDir), "runs", sessionID), sessionID, now, nil
+}
+
+func newRunSessionCleanup(sessionDir string, opts *Options) func(*audit.Logger) {
+	return func(auditLogger *audit.Logger) {
+		runlock.Delete(sessionDir)
+		if auditLogger != nil {
+			auditLogger.Close()
+		}
+		if opts.SessionDir == "" {
+			_ = os.RemoveAll(sessionDir)
+		}
+	}
 }
 
 func cleanupCrashedInteractiveAttempt(sessionDir string, opts *Options) error {

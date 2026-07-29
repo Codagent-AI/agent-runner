@@ -176,20 +176,20 @@ func handleLaunchIntakeRoute(args []string, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "agent-runner: launch intake route: %v\n", err)
 		return 1
 	}
-	if sealed.State != intakeroute.Frozen {
-		return reportIntakeLaunchError(stderr, sealed, fmt.Errorf("intake route must be frozen (got %q)", sealed.State))
+	if err := intakeroute.ValidateLaunchSealed(sealed); err != nil {
+		return reportIntakeLaunchError(stderr, sealed, err)
 	}
 	if _, err := loader.LoadWorkflow(sealed.SourceRef, loader.Options{}); err != nil {
 		return reportIntakeLaunchError(stderr, sealed, fmt.Errorf("load sealed workflow source: %w", err))
 	}
-	info, err := os.Stat(sealed.HandoffPath)
+	info, err := os.Stat(sealed.HandoffPath) // #nosec G703 -- handoff is validated as a sealed run-owned artifact before launch.
 	if err != nil {
 		return reportIntakeLaunchError(stderr, sealed, fmt.Errorf("stat sealed handoff: %w", err))
 	}
 	if !info.Mode().IsRegular() || info.Size() == 0 {
 		return reportIntakeLaunchError(stderr, sealed, fmt.Errorf("sealed handoff must be a non-empty regular file"))
 	}
-	file, err := os.Open(sealed.HandoffPath) // #nosec G304 -- path is validated as a sealed route artifact above.
+	file, err := os.Open(sealed.HandoffPath) // #nosec G304,G703 -- handoff is validated as a sealed run-owned artifact before launch.
 	if err != nil {
 		return reportIntakeLaunchError(stderr, sealed, fmt.Errorf("open sealed handoff: %w", err))
 	}

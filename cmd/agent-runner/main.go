@@ -1070,7 +1070,11 @@ func launchFrozenIntakeRoute(result runner.WorkflowResult, sessionDir string) in
 	}
 
 	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
-	if err != nil || !state.Completed {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: read completed intake state: %v\n", err)
+		return 1
+	}
+	if !state.Completed {
 		return 0
 	}
 	if err := appendRouteLaunchEvent(sessionDir, audit.EventRouteLaunchAttempted, sealed, nil); err != nil {
@@ -1081,6 +1085,7 @@ func launchFrozenIntakeRoute(result runner.WorkflowResult, sessionDir string) in
 	code := execSelfWithEnv([]string{liveRunImmediateAltScreenEnv + "=1"}, "internal", "launch-intake-route", routePath)
 	if code != 0 {
 		launchErr := fmt.Errorf("exec launch-intake-route exited with code %d", code)
+		fmt.Fprintf(os.Stderr, "agent-runner: intake route launch failed: %v\nagent-runner: sealed handoff: %s\n", launchErr, sealed.HandoffPath)
 		if err := appendRouteLaunchEvent(sessionDir, audit.EventRouteLaunchFailed, sealed, launchErr); err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: record failed intake route launch: %v\n", err)
 		}
@@ -1947,7 +1952,7 @@ func resultExitCode(result runner.WorkflowResult) int {
 }
 
 func launchResultAfterRun(result liveTUIResult, reportExplorationHandoff bool) liveTUIResult {
-	if result.exitRequested || result.workflowResult != runner.ResultSuccess || result.sessionDir == "" {
+	if result.workflowResult != runner.ResultSuccess || result.sessionDir == "" {
 		return result
 	}
 	if code := launchFrozenIntakeRoute(result.workflowResult, result.sessionDir); code != 0 {

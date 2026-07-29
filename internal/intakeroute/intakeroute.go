@@ -283,6 +283,36 @@ func LoadStrict(path string) (*Sealed, error) {
 	return &sealed, nil
 }
 
+// ValidateLaunchSealed verifies the persisted data that the process-boundary
+// launcher relies on before it creates a child run.
+func ValidateLaunchSealed(sealed *Sealed) error {
+	if sealed == nil {
+		return errors.New("sealed intake route is required")
+	}
+	if sealed.State != Frozen {
+		return fmt.Errorf("intake route must be frozen (got %q)", sealed.State)
+	}
+	if strings.TrimSpace(sealed.ParentRunID) == "" {
+		return errors.New("intake route parent run ID is required")
+	}
+	if strings.TrimSpace(sealed.Workflow) == "" {
+		return errors.New("intake route workflow is required")
+	}
+	if strings.TrimSpace(sealed.SourceRef) == "" {
+		return errors.New("intake route source reference is required")
+	}
+	if sealed.Params == nil {
+		return errors.New("intake route parameters are required")
+	}
+	if strings.TrimSpace(sealed.HandoffPath) == "" {
+		return errors.New("intake route handoff path is required")
+	}
+	if strings.TrimSpace(sealed.StagedAt) == "" || strings.TrimSpace(sealed.FrozenAt) == "" {
+		return errors.New("intake route staging and freeze timestamps are required")
+	}
+	return nil
+}
+
 // Stage publishes a prepared route. It does no catalog resolution or reads of
 // agent-writable input, making it safe for a caller to hold its ordering lock.
 func (s *Store) Stage(prepared *Prepared) (err error) {

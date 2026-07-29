@@ -90,6 +90,47 @@ func TestLaunchFrozenIntakeRouteDoesNotLaunchFailedOrIncompleteRuns(t *testing.T
 	}
 }
 
+func TestLaunchFrozenIntakeRouteFailsWhenCompletedStateCannotBeRead(t *testing.T) {
+	sessionDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sessionDir, "intake-route.json"), []byte(`{"state":"frozen"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(sessionDir, "state.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if code := launchFrozenIntakeRoute(runner.ResultSuccess, sessionDir); code != 1 {
+		t.Fatalf("launchFrozenIntakeRoute() = %d, want state-read failure", code)
+	}
+}
+
+func TestLaunchResultAfterRunLaunchesFrozenRouteDespiteAutomaticExit(t *testing.T) {
+	sessionDir := t.TempDir()
+	handoff := filepath.Join(sessionDir, "sealed-handoff.md")
+	if err := os.WriteFile(handoff, []byte("context"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sealed := intakeroute.Sealed{State: intakeroute.Frozen, ParentRunID: "parent", Workflow: "target", SourceRef: "builtin:core/target-v1.0.yaml", Params: map[string]string{}, HandoffPath: handoff, StagedAt: "now", FrozenAt: "now"}
+	data, err := json.Marshal(sealed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "intake-route.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := stateio.WriteState(&model.RunState{Completed: true}, sessionDir); err != nil {
+		t.Fatal(err)
+	}
+	originalExecutable, originalExec := currentExecutable, execProcess
+	t.Cleanup(func() { currentExecutable, execProcess = originalExecutable, originalExec })
+	currentExecutable = func() (string, error) { return "/tmp/agent-runner", nil }
+	execProcess = func(_ string, _ []string, _ []string) error { return errors.New("exec failed") }
+
+	result := launchResultAfterRun(liveTUIResult{exitRequested: true, workflowResult: runner.ResultSuccess, sessionDir: sessionDir}, false)
+	if result.exitCode != 1 {
+		t.Fatalf("launchResultAfterRun() = %#v, want failed launch result", result)
+	}
+}
+
 func TestShouldExitAfterFrozenIntakeRouteForCompletedSuccess(t *testing.T) {
 	sessionDir := t.TempDir()
 	if err := stateio.WriteState(&model.RunState{Completed: true}, sessionDir); err != nil {
@@ -160,7 +201,7 @@ func TestInternalLaunchIntakeRoutePreparesSealedSourceWithCopiedHandoff(t *testi
 	if err := os.WriteFile(handoff, []byte("intake conclusions"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	sealed := intakeroute.Sealed{State: intakeroute.Frozen, ParentRunID: "intake-parent", Workflow: "target", SourceRef: target, Params: map[string]string{}, HandoffPath: handoff, StagedAt: "2026-07-28T00:00:00Z"}
+	sealed := intakeroute.Sealed{State: intakeroute.Frozen, ParentRunID: "intake-parent", Workflow: "target", SourceRef: target, Params: map[string]string{}, HandoffPath: handoff, StagedAt: "2026-07-28T00:00:00Z", FrozenAt: "2026-07-28T00:01:00Z"}
 	data, err := json.Marshal(sealed)
 	if err != nil {
 		t.Fatal(err)
@@ -195,5 +236,29 @@ func TestInternalLaunchIntakeRoutePreparesSealedSourceWithCopiedHandoff(t *testi
 	contents, err := os.ReadFile(childState.IntakeHandoff)
 	if err != nil || string(contents) != "intake conclusions" {
 		t.Fatalf("copied handoff = %q, %v", contents, err)
+	}
+}
+
+func TestInternalLaunchIntakeRouteRejectsMissingParentProvenance(t *testing.T) {
+	parent := t.TempDir()
+	handoff := filepath.Join(parent, "sealed-handoff.md")
+	if err := os.WriteFile(handoff, []byte("context"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sealed := intakeroute.Sealed{State: intakeroute.Frozen, Workflow: "target", SourceRef: "builtin:core/target-v1.0.yaml", Params: map[string]string{}, HandoffPath: handoff, StagedAt: "now", FrozenAt: "now"}
+	data, err := json.Marshal(sealed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sidecar := filepath.Join(parent, "intake-route.json")
+	if err := os.WriteFile(sidecar, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	if code := handleInternalWithIO([]string{"launch-intake-route", sidecar}, strings.NewReader(""), &stderr); code != 1 {
+		t.Fatalf("internal launch = %d, want invariant rejection", code)
+	}
+	if !strings.Contains(stderr.String(), "parent run ID") {
+		t.Fatalf("stderr = %q, want parent provenance error", stderr.String())
 	}
 }
