@@ -1,0 +1,38 @@
+name: simple-change
+description: "Plan, crosscheck, implement, validate, flow-test, and review a small branch-local spec-driven change."
+
+params:
+  - name: change_name
+    required: true
+
+steps:
+  - id: validate-feature-branch
+    workflow: ../core/validate-feature-branch-v1.0.yaml
+    params:
+      workflow_name: "spec-driven:simple-change"
+
+  - id: create
+    script: create-change.sh
+    script_inputs:
+      change_name: "{{change_name}}"
+
+  - id: plan
+    workflow: ../core/plan-simple-change-v1.0.yaml
+    params:
+      change_name: "{{change_name}}"
+      change_dir: "specs/changes/{{change_name}}"
+      change_label: "spec-driven change"
+      plan_validation_instruction: 'Validate spec-driven change "{{change_name}}" by reading and following `{{session_dir}}/bundled/spec-driven/simple-change-validation-checklist.md`, substituting "specs/changes/{{change_name}}" for `<change-dir>`.'
+
+  - id: commit-plan
+    workflow: ../core/commit-change-plan-v1.0.yaml
+    params:
+      change_name: "{{change_name}}"
+      change_dir: "specs/changes/{{change_name}}"
+
+  - id: complete
+    workflow: ../core/complete-simple-change-v1.0.yaml
+    params:
+      change_name: "{{change_name}}"
+      change_dir: "specs/changes/{{change_name}}"
+      change_label: "spec-driven change"

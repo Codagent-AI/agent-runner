@@ -137,7 +137,7 @@ func TestOpenSpecAndSpecDrivenChangeGenerationsAreEmbedded(t *testing.T) {
 		t.Fatalf("List: %v", err)
 	}
 
-	for _, logicalName := range []string{"change", "plan-change", "implement-change"} {
+	for _, logicalName := range []string{"change", "plan-change", "implement-change", "simple-change"} {
 		for _, namespace := range []string{"openspec", "spec-driven"} {
 			for _, version := range []string{"v1.0", "v2.0"} {
 				want := "builtin:" + namespace + "/" + logicalName + "-" + version + ".yaml"
@@ -154,6 +154,14 @@ func TestOpenSpecAndSpecDrivenChangeGenerationsAreEmbedded(t *testing.T) {
 	}
 	if ref != "builtin:spec-driven/change-v2.0.yaml" {
 		t.Fatalf("Resolve(spec-driven:change) = %q, want spec-driven v2.0", ref)
+	}
+
+	ref, err = Resolve("spec-driven:simple-change")
+	if err != nil {
+		t.Fatalf("Resolve(spec-driven:simple-change): %v", err)
+	}
+	if ref != "builtin:spec-driven/simple-change-v2.0.yaml" {
+		t.Fatalf("Resolve(spec-driven:simple-change) = %q, want spec-driven v2.0", ref)
 	}
 }
 
@@ -286,6 +294,120 @@ func TestV2NamespaceAdaptersConfigureSharedCorePhases(t *testing.T) {
 			}
 			if step.Params["change_dir"] != tt.wantChangeDir {
 				t.Fatalf("%s change_dir = %q, want %q", tt.ref, step.Params["change_dir"], tt.wantChangeDir)
+			}
+		})
+	}
+}
+
+func TestV2SimpleChangeWorkflowsShareCorePhases(t *testing.T) {
+	for _, ref := range []string{
+		"builtin:core/plan-simple-change-v1.0.yaml",
+		"builtin:core/complete-simple-change-v1.0.yaml",
+	} {
+		body, err := ReadFile(ref)
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", ref, err)
+		}
+		for _, forbidden := range []string{"openspec/changes/", "specs/changes/", "OpenSpec change", "openspec validate"} {
+			if strings.Contains(string(body), forbidden) {
+				t.Errorf("%s contains provider-specific text %q", ref, forbidden)
+			}
+		}
+	}
+
+	tests := []struct {
+		ref                    string
+		wantChangeDir          string
+		wantLabel              string
+		wantValidationText     string
+		wantOpenSpecValidation bool
+		wantArchive            bool
+	}{
+		{
+			ref:                    "builtin:openspec/simple-change-v2.0.yaml",
+			wantChangeDir:          "openspec/changes/{{change_name}}",
+			wantLabel:              "OpenSpec change",
+			wantValidationText:     "openspec validate",
+			wantOpenSpecValidation: true,
+			wantArchive:            true,
+		},
+		{
+			ref:                "builtin:spec-driven/simple-change-v2.0.yaml",
+			wantChangeDir:      "specs/changes/{{change_name}}",
+			wantLabel:          "spec-driven change",
+			wantValidationText: "simple-change-validation-checklist.md",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ref, func(t *testing.T) {
+			body, err := ReadFile(tt.ref)
+			if err != nil {
+				t.Fatalf("ReadFile(%s): %v", tt.ref, err)
+			}
+			var workflow struct {
+				Params []struct {
+					Name     string `yaml:"name"`
+					Required *bool  `yaml:"required"`
+				} `yaml:"params"`
+				Steps []struct {
+					ID       string            `yaml:"id"`
+					Workflow string            `yaml:"workflow"`
+					Script   string            `yaml:"script"`
+					Params   map[string]string `yaml:"params"`
+				} `yaml:"steps"`
+			}
+			if err := yaml.Unmarshal(body, &workflow); err != nil {
+				t.Fatalf("unmarshal %s: %v", tt.ref, err)
+			}
+			if len(workflow.Params) == 0 || workflow.Params[0].Name != "change_name" ||
+				workflow.Params[0].Required == nil || !*workflow.Params[0].Required {
+				t.Fatalf("%s must require change_name, got %#v", tt.ref, workflow.Params)
+			}
+
+			steps := make(map[string]struct {
+				workflow string
+				script   string
+				params   map[string]string
+			}, len(workflow.Steps))
+			for _, step := range workflow.Steps {
+				steps[step.ID] = struct {
+					workflow string
+					script   string
+					params   map[string]string
+				}{workflow: step.Workflow, script: step.Script, params: step.Params}
+			}
+
+			if got := steps["validate-feature-branch"].workflow; got != "../core/validate-feature-branch-v1.0.yaml" {
+				t.Errorf("branch guard workflow = %q", got)
+			}
+			if got := steps["plan"].workflow; got != "../core/plan-simple-change-v1.0.yaml" {
+				t.Errorf("plan workflow = %q", got)
+			}
+			if got := steps["plan"].params["change_dir"]; got != tt.wantChangeDir {
+				t.Errorf("plan change_dir = %q, want %q", got, tt.wantChangeDir)
+			}
+			if got := steps["plan"].params["change_label"]; got != tt.wantLabel {
+				t.Errorf("plan change_label = %q, want %q", got, tt.wantLabel)
+			}
+			if got := steps["plan"].params["plan_validation_instruction"]; !strings.Contains(got, tt.wantValidationText) {
+				t.Errorf("plan validation instruction = %q, want text %q", got, tt.wantValidationText)
+			}
+			if got := steps["commit-plan"].workflow; got != "../core/commit-change-plan-v1.0.yaml" {
+				t.Errorf("commit workflow = %q", got)
+			}
+			if got := steps["complete"].workflow; got != "../core/complete-simple-change-v1.0.yaml" {
+				t.Errorf("complete workflow = %q", got)
+			}
+			if got := steps["complete"].params["change_dir"]; got != tt.wantChangeDir {
+				t.Errorf("complete change_dir = %q, want %q", got, tt.wantChangeDir)
+			}
+			_, hasValidation := steps["validate-openspec"]
+			if hasValidation != tt.wantOpenSpecValidation {
+				t.Errorf("OpenSpec validation presence = %t, want %t", hasValidation, tt.wantOpenSpecValidation)
+			}
+			_, hasArchive := steps["archive"]
+			if hasArchive != tt.wantArchive {
+				t.Errorf("archive presence = %t, want %t", hasArchive, tt.wantArchive)
 			}
 		})
 	}

@@ -26,7 +26,7 @@ agent-runner deploy
 agent-runner team/deploy prod
 agent-runner core:run-validator
 agent-runner openspec:plan-change my-change
-agent-runner spec-driven:simple-change
+agent-runner spec-driven:simple-change my-change
 ```
 
 Built-in namespaces currently include `core`, `openspec`, `spec-driven`, and `onboarding`.
