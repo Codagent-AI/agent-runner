@@ -52,21 +52,16 @@ steps:
       Validate OpenSpec change "{{change_name}}" with `openspec validate --type change "{{change_name}}"`. Fix mechanical artifact errors and rerun validation until it passes. Do not invent a product, scope, or design decision; report an unresolved semantic ambiguity instead of silently choosing one.
 
   - id: check-planning-artifacts
-    command: |
-      change_dir="openspec/changes/{{change_name}}"
-      missing=""
-      for file in proposal.md tasks.md; do
-        [ -s "$change_dir/$file" ] || missing="$missing $file"
-      done
-      if [ -n "$missing" ]; then
-        echo "planning did not produce required artifacts in $change_dir:$missing" >&2
-        exit 1
-      fi
-      if [ ! -d "$change_dir/specs" ] || ! find "$change_dir/specs" -type f -name spec.md -size +0c -print -quit | grep -q .; then
-        echo "planning did not produce a non-empty specification under $change_dir/specs/" >&2
-        exit 1
-      fi
-      openspec validate --type change "{{change_name}}"
+    workflow: ../core/check-planning-artifacts-v1.0.yaml
+    params:
+      change_dir: "openspec/changes/{{change_name}}"
+      required_files: "proposal.md,tasks.md"
+      require_specs: "true"
+
+  - id: validate-openspec
+    script: validate-change.sh
+    script_inputs:
+      change_name: "{{change_name}}"
 
   - id: commit-plan
     workflow: ../core/commit-change-plan-v1.0.yaml

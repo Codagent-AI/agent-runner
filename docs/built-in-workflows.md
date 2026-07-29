@@ -30,6 +30,7 @@ inspection, not fresh execution.
 | Workflow | Purpose |
 | --- | --- |
 | `core:accept-change` | Run the shared human acceptance, refinement, and targeted re-testing phases for a structured change. |
+| `core:check-planning-artifacts` | Verify required files and optional specifications in a confined planning-artifact directory. |
 | `core:commit-change-plan` | Commit one structured change plan and advance its Validator baseline. |
 | `core:debug` | Debug a failed Agent Runner run and optionally file an issue. |
 | `core:define-change` | Run the shared proposal, specification, design, test-plan, and approach-review phases. |

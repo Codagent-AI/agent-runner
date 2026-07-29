@@ -1,0 +1,21 @@
+name: check-planning-artifacts
+description: "Verify required files and optional specifications in a confined planning-artifact directory."
+hidden: true
+
+params:
+  - name: change_dir
+    required: true
+  - name: required_files
+    required: false
+    default: "proposal.md,tasks.md"
+  - name: require_specs
+    required: false
+    default: "false"
+
+steps:
+  - id: check-planning-artifacts
+    script: check-planning-artifacts.sh
+    script_inputs:
+      change_dir: "{{change_dir}}"
+      required_files: "{{required_files}}"
+      require_specs: "{{require_specs}}"
