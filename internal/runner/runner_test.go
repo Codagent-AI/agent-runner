@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,11 +12,56 @@ import (
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/config"
+	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/exec"
+	"github.com/codagent/agent-runner/internal/intakeroute"
 	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
+
+// TestWriteStepStateDoesNotClobberIntakeRoute is the regression guard for the
+// sidecar boundary: writeStepState rebuilds state.json from context, so route
+// state must remain independently owned by its run sidecar.
+func TestWriteStepStateDoesNotClobberIntakeRoute(t *testing.T) {
+	runDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(runDir, "handoff.md"), []byte("sealed notes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target","handoff":"handoff.md"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := intakeroute.Validate(&intakeroute.ValidateOptions{
+		RunDir: runDir, ParentRunID: "parent", IntakeWorkflow: "core:intake",
+		Catalog: intakeroute.NewCatalog([]discovery.WorkflowEntry{{CanonicalName: "target", SourcePath: "builtin:core/target-v1.0.yaml"}}),
+	})
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	store := intakeroute.NewStore(runDir)
+	if err := store.Stage(prepared); err != nil {
+		t.Fatalf("Stage() error = %v", err)
+	}
+	before, err := os.ReadFile(filepath.Join(runDir, "intake-route.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	workflow := &model.Workflow{Name: "intake", Steps: []model.Step{{ID: "step"}}}
+	ctx := &model.ExecutionContext{WorkflowFile: "builtin:core/intake-v1.0.yaml", Params: map[string]string{}}
+	writeStepState(&workflow.Steps[0], ctx, workflow, "workflow-hash", runDir, nil, true)
+
+	after, err := os.ReadFile(filepath.Join(runDir, "intake-route.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("route sidecar changed after state write:\n got %s\nwant %s", after, before)
+	}
+	if _, err := stateio.ReadState(filepath.Join(runDir, "state.json")); err != nil {
+		t.Fatalf("rewritten state is invalid: %v", err)
+	}
+}
 
 type delayedRunner struct{ mockRunner }
 
