@@ -33,7 +33,8 @@ func TestWriteStepStateDoesNotClobberIntakeRoute(t *testing.T) {
 	}
 	prepared, err := intakeroute.Validate(&intakeroute.ValidateOptions{
 		RunDir: runDir, ParentRunID: "parent", IntakeWorkflow: "core:intake",
-		Catalog: intakeroute.NewCatalog([]discovery.WorkflowEntry{{CanonicalName: "target", SourcePath: "builtin:core/target-v1.0.yaml"}}),
+		HandoffPath: filepath.Join(runDir, "handoff.md"),
+		Catalog:     intakeroute.NewCatalog([]discovery.WorkflowEntry{{CanonicalName: "target", SourcePath: "builtin:core/target-v1.0.yaml"}}),
 	})
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)

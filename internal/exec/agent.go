@@ -347,6 +347,7 @@ func routeValidationOptions(ctx *model.ExecutionContext) *intakeroute.ValidateOp
 	return &intakeroute.ValidateOptions{
 		RunDir: ctx.SessionDir, ParentRunID: filepath.Base(ctx.SessionDir), IntakeWorkflow: "core:intake",
 		RequestPath: filepath.Join(ctx.SessionDir, "route-request.json"),
+		HandoffPath: filepath.Join(ctx.SessionDir, "intake-handoff.md"),
 		Catalog:     intakeroute.NewCatalog(discovery.Enumerate(builtinworkflows.FS, ctx.ProjectRoot, "")),
 	}
 }

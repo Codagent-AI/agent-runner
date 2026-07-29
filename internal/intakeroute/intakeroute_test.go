@@ -16,6 +16,7 @@ func TestValidateRejectsInvalidRequests(t *testing.T) {
 		name    string
 		request string
 		setup   func(t *testing.T, runDir string)
+		handoff string
 		wantErr string
 	}{
 		{name: "malformed JSON", request: "{", wantErr: "decode route request"},
@@ -26,7 +27,7 @@ func TestValidateRejectsInvalidRequests(t *testing.T) {
 		{name: "outside handoff", request: `{"workflow":"build","params":{"change_name":"x"},"handoff":"../outside.md"}`, wantErr: "handoff must live inside the run directory"},
 		{name: "missing handoff", request: `{"workflow":"build","params":{"change_name":"x"},"handoff":"missing.md"}`, wantErr: "open handoff"},
 		{name: "empty handoff", request: `{"workflow":"build","params":{"change_name":"x"},"handoff":"handoff.md"}`, setup: writeHandoff("handoff.md", ""), wantErr: "handoff is empty"},
-		{name: "directory handoff", request: `{"workflow":"build","params":{"change_name":"x"},"handoff":"directory"}`, setup: func(t *testing.T, runDir string) {
+		{name: "directory handoff", request: `{"workflow":"build","params":{"change_name":"x"},"handoff":"directory"}`, handoff: "directory", setup: func(t *testing.T, runDir string) {
 			if err := os.Mkdir(filepath.Join(runDir, "directory"), 0o700); err != nil {
 				t.Fatal(err)
 			}
@@ -47,7 +48,13 @@ func TestValidateRejectsInvalidRequests(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			_, err := Validate(&ValidateOptions{RunDir: runDir, ParentRunID: "intake-run", IntakeWorkflow: "core:intake", RequestPath: requestPath, Catalog: testCatalog()})
+			handoff := tt.handoff
+			if handoff == "" {
+				handoff = "handoff.md"
+			}
+			opts := testValidateOptions(runDir, handoff)
+			opts.RequestPath = requestPath
+			_, err := Validate(opts)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("Validate() error = %v, want containing %q", err, tt.wantErr)
 			}
@@ -61,7 +68,7 @@ func TestValidateStagesExactResolvedRouteAndSealsHandoff(t *testing.T) {
 	writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"intake"},"handoff":"handoff.md"}`)
 	writeFile(t, filepath.Join(runDir, "handoff.md"), "original handoff")
 
-	prepared, err := Validate(&ValidateOptions{RunDir: runDir, ParentRunID: "intake-run", IntakeWorkflow: "core:intake", Catalog: testCatalog()})
+	prepared, err := Validate(testValidateOptions(runDir, "handoff.md"))
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
@@ -91,6 +98,22 @@ func TestValidateStagesExactResolvedRouteAndSealsHandoff(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsHandoffOtherThanRunnerOwnedPath(t *testing.T) {
+	runDir := t.TempDir()
+	writeFile(t, filepath.Join(runDir, "intake-handoff.md"), "agreed notes")
+	writeFile(t, filepath.Join(runDir, "other.md"), "untrusted notes")
+	writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"intake"},"handoff":"other.md"}`)
+
+	_, err := Validate(&ValidateOptions{
+		RunDir: runDir, ParentRunID: "intake-run", IntakeWorkflow: "core:intake",
+		HandoffPath: filepath.Join(runDir, "intake-handoff.md"), Catalog: testCatalog(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "runner-owned handoff") {
+		t.Fatalf("Validate() error = %v, want runner-owned handoff rejection", err)
+	}
+	assertNoRouteArtifacts(t, runDir)
+}
+
 func TestValidateReturnsStructuredErrors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -110,7 +133,7 @@ func TestValidateReturnsStructuredErrors(t *testing.T) {
 				tt.setup(t, runDir)
 			}
 			writeRequest(t, runDir, tt.request)
-			_, err := Validate(&ValidateOptions{RunDir: runDir, ParentRunID: "intake-run", IntakeWorkflow: "core:intake", Catalog: testCatalog()})
+			_, err := Validate(testValidateOptions(runDir, "handoff.md"))
 			structured, ok := err.(interface{ ViolationCode() string })
 			if !ok {
 				t.Fatalf("Validate() error = %T %v, want structured validation error", err, err)
@@ -126,7 +149,7 @@ func TestPreparedSealedCopyCannotChangePublishedParams(t *testing.T) {
 	runDir := t.TempDir()
 	writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"intake"},"handoff":"handoff.md"}`)
 	writeFile(t, filepath.Join(runDir, "handoff.md"), "notes")
-	prepared, err := Validate(&ValidateOptions{RunDir: runDir, ParentRunID: "intake-run", IntakeWorkflow: "core:intake", Catalog: testCatalog()})
+	prepared, err := Validate(testValidateOptions(runDir, "handoff.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +172,7 @@ func TestPreparedDiscardLeavesRunUnchanged(t *testing.T) {
 	writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"intake"},"handoff":"handoff.md"}`)
 	writeFile(t, filepath.Join(runDir, "handoff.md"), "notes")
 
-	prepared, err := Validate(&ValidateOptions{RunDir: runDir, ParentRunID: "intake-run", IntakeWorkflow: "core:intake", Catalog: testCatalog()})
+	prepared, err := Validate(testValidateOptions(runDir, "handoff.md"))
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
@@ -164,7 +187,7 @@ func TestRejectedOrUnpublishableRoutePreservesExistingSidecar(t *testing.T) {
 	store := NewStore(runDir)
 	writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"first"},"handoff":"handoff.md"}`)
 	writeFile(t, filepath.Join(runDir, "handoff.md"), "first notes")
-	prepared, err := Validate(&ValidateOptions{RunDir: runDir, ParentRunID: "intake-run", IntakeWorkflow: "core:intake", Catalog: testCatalog()})
+	prepared, err := Validate(testValidateOptions(runDir, "handoff.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +197,7 @@ func TestRejectedOrUnpublishableRoutePreservesExistingSidecar(t *testing.T) {
 	before := readFile(t, filepath.Join(runDir, "intake-route.json"))
 
 	writeRequest(t, runDir, `{"workflow":"missing","handoff":"handoff.md"}`)
-	if _, err := Validate(&ValidateOptions{RunDir: runDir, ParentRunID: "intake-run", IntakeWorkflow: "core:intake", Catalog: testCatalog()}); err == nil {
+	if _, err := Validate(testValidateOptions(runDir, "handoff.md")); err == nil {
 		t.Fatal("Validate() error = nil, want rejection")
 	}
 	if got := readFile(t, filepath.Join(runDir, "intake-route.json")); got != before {
@@ -182,7 +205,7 @@ func TestRejectedOrUnpublishableRoutePreservesExistingSidecar(t *testing.T) {
 	}
 
 	writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"replacement"},"handoff":"handoff.md"}`)
-	prepared, err = Validate(&ValidateOptions{RunDir: runDir, ParentRunID: "intake-run", IntakeWorkflow: "core:intake", Catalog: testCatalog()})
+	prepared, err = Validate(testValidateOptions(runDir, "handoff.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +225,7 @@ func TestStoreReplacesStagedRouteButNeverFrozenRoute(t *testing.T) {
 	stage := func(handoff, contents string) {
 		writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"`+handoff+`"},"handoff":"`+handoff+`.md"}`)
 		writeFile(t, filepath.Join(runDir, handoff+".md"), contents)
-		prepared, err := Validate(&ValidateOptions{RunDir: runDir, ParentRunID: "intake-run", IntakeWorkflow: "core:intake", Catalog: testCatalog()})
+		prepared, err := Validate(testValidateOptions(runDir, handoff+".md"))
 		if err != nil {
 			t.Fatalf("Validate() error = %v", err)
 		}
@@ -232,7 +255,7 @@ func TestStoreReplacesStagedRouteButNeverFrozenRoute(t *testing.T) {
 	if err := store.Freeze(); err != nil {
 		t.Fatalf("second Freeze() error = %v", err)
 	}
-	stagePrepared, err := Validate(&ValidateOptions{RunDir: runDir, ParentRunID: "intake-run", IntakeWorkflow: "core:intake", Catalog: testCatalog()})
+	stagePrepared, err := Validate(testValidateOptions(runDir, "second.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +276,7 @@ func TestStoreStageIsIdempotentForPublishedPreparedRoute(t *testing.T) {
 	runDir := t.TempDir()
 	writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"intake"},"handoff":"handoff.md"}`)
 	writeFile(t, filepath.Join(runDir, "handoff.md"), "notes")
-	prepared, err := Validate(&ValidateOptions{RunDir: runDir, ParentRunID: "intake-run", IntakeWorkflow: "core:intake", Catalog: testCatalog()})
+	prepared, err := Validate(testValidateOptions(runDir, "handoff.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,6 +305,13 @@ func testCatalog() Catalog {
 		}
 		return entry, nil
 	})
+}
+
+func testValidateOptions(runDir, handoff string) *ValidateOptions {
+	return &ValidateOptions{
+		RunDir: runDir, ParentRunID: "intake-run", IntakeWorkflow: "core:intake",
+		HandoffPath: filepath.Join(runDir, handoff), Catalog: testCatalog(),
+	}
 }
 
 func writeHandoff(name, content string) func(*testing.T, string) {

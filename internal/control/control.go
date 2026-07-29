@@ -469,6 +469,9 @@ func (s *ControlServer) handleRouteSubmission(connection net.Conn, request *cont
 		s.reject(connection, err.Error(), request)
 		return
 	}
+	// Stage takes ownership only on success. Keep every failed publication and
+	// lost ordering race from retaining its temporary handoff snapshot.
+	defer func() { _ = prepared.Discard() }()
 
 	s.mu.Lock()
 	if active != s.active || !active.routeEligible || active.completionAccepted {
@@ -488,14 +491,12 @@ func (s *ControlServer) handleRouteSubmission(connection net.Conn, request *cont
 	}
 	response := controlResponse{OK: true, Receipt: request.RequestID}
 	s.routes[cacheKey] = response
+	sealed := prepared.Sealed()
 	s.mu.Unlock()
-	sealed, err := store.Load()
-	if err == nil {
-		s.emit(audit.EventRouteAccepted, request.StepID, map[string]any{
-			"request_id": request.RequestID, "attempt_id": active.ID, "workflow": sealed.Workflow,
-			"source_ref": sealed.SourceRef, "params": sealed.Params, "handoff_path": sealed.HandoffPath,
-		})
-	}
+	s.emit(audit.EventRouteAccepted, request.StepID, map[string]any{
+		"request_id": request.RequestID, "attempt_id": active.ID, "workflow": sealed.Workflow,
+		"source_ref": sealed.SourceRef, "params": sealed.Params, "handoff_path": sealed.HandoffPath,
+	})
 	_ = writeControlResponse(connection, response)
 }
 

@@ -134,6 +134,7 @@ func TestControlServerStagesRouteThenFreezesItBeforeCompletionAcknowledgement(t 
 		RouteValidation: &intakeroute.ValidateOptions{
 			RunDir: runDir, ParentRunID: "run", IntakeWorkflow: "core:intake",
 			RequestPath: filepath.Join(runDir, "route-request.json"),
+			HandoffPath: filepath.Join(runDir, "intake-handoff.md"),
 			Catalog:     intakeroute.NewCatalog([]discovery.WorkflowEntry{{CanonicalName: "target", SourcePath: "builtin:core/target-v1.0.yaml"}}),
 		},
 	})
@@ -157,6 +158,60 @@ func TestControlServerStagesRouteThenFreezesItBeforeCompletionAcknowledgement(t 
 	if late.OK || !strings.Contains(late.Error, "already frozen") {
 		t.Fatalf("late route response = %#v", late)
 	}
+}
+
+func TestControlServerDiscardsPreparedRouteWhenPublicationFails(t *testing.T) {
+	runDir := t.TempDir()
+	server := newTestControlServer(t, runDir, &recordingEventLogger{})
+	defer server.Close()
+	handoff := filepath.Join(runDir, "intake-handoff.md")
+	if err := os.WriteFile(handoff, []byte("notes\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target","handoff":"`+handoff+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := intakeroute.NewStore(runDir)
+	if err := store.Stage(mustPrepareRoute(t, runDir, handoff)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Freeze(); err != nil {
+		t.Fatal(err)
+	}
+	attempt := server.ActivateAttempt(context.Background(), "plan", testRouteAttemptOptions(runDir, store))
+	response := exchange(t, server.SocketPath(), &controlRequest{Type: MessageSubmitRoute, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "frozen"})
+	if response.OK || !strings.Contains(response.Error, "already frozen") {
+		t.Fatalf("response = %#v", response)
+	}
+	entries, err := os.ReadDir(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".intake-route-") {
+			t.Fatalf("temporary snapshot remained after rejected publication: %s", entry.Name())
+		}
+	}
+}
+
+func testRouteAttemptOptions(runDir string, store *intakeroute.Store) AttemptOptions {
+	return AttemptOptions{RouteEligible: true, RouteStore: store, RouteValidation: &intakeroute.ValidateOptions{
+		RunDir: runDir, ParentRunID: "run", IntakeWorkflow: "core:intake",
+		RequestPath: filepath.Join(runDir, "route-request.json"), HandoffPath: filepath.Join(runDir, "intake-handoff.md"),
+		Catalog: intakeroute.NewCatalog([]discovery.WorkflowEntry{{CanonicalName: "target", SourcePath: "builtin:core/target-v1.0.yaml"}}),
+	}}
+}
+
+func mustPrepareRoute(t *testing.T, runDir, handoff string) *intakeroute.Prepared {
+	t.Helper()
+	prepared, err := intakeroute.Validate(&intakeroute.ValidateOptions{
+		RunDir: runDir, ParentRunID: "run", IntakeWorkflow: "core:intake", HandoffPath: handoff,
+		Catalog: intakeroute.NewCatalog([]discovery.WorkflowEntry{{CanonicalName: "target", SourcePath: "builtin:core/target-v1.0.yaml"}}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return prepared
 }
 
 func TestControlServerRejectsAgentCallWithWrongAttemptIdentity(t *testing.T) {

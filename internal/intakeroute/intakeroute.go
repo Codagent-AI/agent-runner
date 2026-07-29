@@ -130,9 +130,12 @@ type ValidateOptions struct {
 	ParentRunID    string
 	IntakeWorkflow string
 	RequestPath    string
-	Request        []byte
-	Catalog        Catalog
-	Now            func() time.Time
+	// HandoffPath is the one runner-owned path the agent is allowed to seal.
+	// A request may not select another file beneath the run directory.
+	HandoffPath string
+	Request     []byte
+	Catalog     Catalog
+	Now         func() time.Time
 }
 
 // Prepared is a validated route whose handoff has been copied to a temporary,
@@ -191,6 +194,9 @@ func Validate(opts *ValidateOptions) (*Prepared, error) {
 	if opts.Catalog == nil {
 		return nil, validationFailure(ViolationConfiguration, errors.New("route workflow catalog is required"), request.Workflow, "", "")
 	}
+	if strings.TrimSpace(opts.HandoffPath) == "" {
+		return nil, validationFailure(ViolationConfiguration, errors.New("runner-owned handoff path is required"), request.Workflow, "", "")
+	}
 	entry, err := opts.Catalog.ResolveWorkflow(request.Workflow)
 	if err != nil {
 		if errors.Is(err, ErrWorkflowNotFound) {
@@ -207,7 +213,7 @@ func Validate(opts *ValidateOptions) (*Prepared, error) {
 	if err := validateParams(&entry, request.Params); err != nil {
 		return nil, validationFailure(ViolationParameter, err, entry.CanonicalName, "", "")
 	}
-	temporaryPath, err := snapshotHandoff(runDir, request.Handoff)
+	temporaryPath, err := snapshotHandoff(runDir, request.Handoff, opts.HandoffPath)
 	if err != nil {
 		return nil, validationFailure(ViolationHandoff, err, entry.CanonicalName, "", request.Handoff)
 	}
@@ -421,7 +427,7 @@ func validateParams(entry *discovery.WorkflowEntry, supplied map[string]string) 
 	return nil
 }
 
-func snapshotHandoff(runDir, handoff string) (string, error) {
+func snapshotHandoff(runDir, handoff, expectedHandoff string) (string, error) {
 	path := handoff
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(runDir, path)
@@ -445,6 +451,17 @@ func snapshotHandoff(runDir, handoff string) (string, error) {
 	}
 	if !within(runDir, resolved) {
 		return "", errors.New("handoff must live inside the run directory")
+	}
+	expected, err := filepath.Abs(expectedHandoff)
+	if err != nil {
+		return "", fmt.Errorf("resolve runner-owned handoff: %w", err)
+	}
+	expected, err = filepath.EvalSymlinks(expected)
+	if err != nil {
+		return "", fmt.Errorf("resolve runner-owned handoff: %w", err)
+	}
+	if resolved != expected {
+		return "", errors.New("handoff must be the runner-owned handoff path")
 	}
 	input, err := os.Open(resolved) // #nosec G304 -- validated route handoff within the run directory.
 	if err != nil {
