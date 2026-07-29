@@ -38,6 +38,9 @@ func (m *Model) renderBreadcrumb() string {
 	if m.recordedVersion != "" {
 		crumbStr += tuistyle.DimStyle.Render(" · " + m.recordedVersion)
 	}
+	if m.profileSet != "" && m.profileSet != "default" {
+		crumbStr += tuistyle.DimStyle.Render(" · profile: " + m.profileSet)
+	}
 	for _, c := range crumbs[1:] {
 		crumbStr += sep + tuistyle.LabelStyle.Render(c)
 	}

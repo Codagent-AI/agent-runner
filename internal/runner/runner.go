@@ -46,6 +46,7 @@ type Options struct {
 	SessionDir         string // Override session directory (for testing); computed automatically if empty.
 	Engine             engine.Engine
 	ProfileStore       *config.Config
+	ProfileOverride    config.ProfileOverride
 	SessionIDs         map[string]string
 	SessionProfiles    map[string]string
 	CapturedVariables  map[string]model.CapturedValue
@@ -261,23 +262,6 @@ type runState struct {
 	glob                 exec.GlobExpander
 }
 
-// workflowNeedsAgentProfiles returns true if any step in the tree is an agent
-// step (has a Prompt or Agent field) or delegates to a sub-workflow (Workflow
-// field set). Sub-workflows are assumed to potentially contain agent steps
-// since the referenced YAML isn't parsed here; loading profiles eagerly is
-// cheap and avoids silently falling back to an empty profile at dispatch time.
-func workflowNeedsAgentProfiles(steps []model.Step) bool {
-	for i := range steps {
-		if steps[i].Prompt != "" || steps[i].Agent != "" || steps[i].Workflow != "" {
-			return true
-		}
-		if len(steps[i].Steps) > 0 && workflowNeedsAgentProfiles(steps[i].Steps) {
-			return true
-		}
-	}
-	return false
-}
-
 func initRunState(workflow *model.Workflow, params map[string]string, opts *Options) (*runState, error) {
 	if params == nil {
 		params = map[string]string{}
@@ -286,9 +270,10 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		return nil, err
 	}
 
-	// Load agent profiles if not already provided and the workflow has agent steps.
-	if opts.ProfileStore == nil && workflowNeedsAgentProfiles(workflow.Steps) {
-		cfg, err := config.Load(".agent-runner/config.yaml")
+	// Every run resolves a profile set so it can be validated, persisted, and
+	// reported even when the workflow has no agent steps.
+	if opts.ProfileStore == nil {
+		cfg, err := config.LoadWithProfile(".agent-runner/config.yaml", opts.ProfileOverride)
 		if err != nil {
 			return nil, fmt.Errorf("loading agent profiles: %w", err)
 		}
@@ -488,6 +473,10 @@ func emitRunStart(rs *runState, opts *Options) {
 			"sessionIds":        rs.ctx.SessionIDs,
 		},
 	}
+	if cfg, ok := rs.ctx.ProfileStore.(*config.Config); ok {
+		auditData["profile_set"] = cfg.ResolvedProfile
+		auditData["profile_source"] = auditProfileSource(cfg)
+	}
 	if opts.From != "" {
 		auditData["resumed"] = true
 		auditData["resume_from"] = opts.From
@@ -497,6 +486,22 @@ func emitRunStart(rs *runState, opts *Options) {
 		Type:      audit.EventRunStart,
 		Data:      auditData,
 	})
+}
+
+func auditProfileSource(cfg *config.Config) string {
+	switch cfg.ProfileSource {
+	case config.ProfileSourceConfig:
+		return "config"
+	case config.ProfileSourceDefault:
+		return "default"
+	case config.ProfileSourceOverride:
+		if cfg.ProfileOverrideOrigin == "run state file" {
+			return "state"
+		}
+		return "flag"
+	default:
+		return ""
+	}
 }
 
 func executeSteps(rs *runState, startIndex int) WorkflowResult {
@@ -760,6 +765,7 @@ func initialRunState(workflow *model.Workflow, rs *runState, opts *Options) *mod
 		WorkflowName: workflow.Name,
 		Params:       rs.ctx.Params,
 		WorkflowHash: rs.workflowHash,
+		ProfileSet:   resolvedProfileSet(rs.ctx),
 	}
 	if stepID == "" {
 		return state
@@ -882,8 +888,16 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 		CurrentStep:  model.CurrentStep{Nested: nested},
 		Params:       ctx.Params,
 		WorkflowHash: workflowHash,
+		ProfileSet:   resolvedProfileSet(ctx),
 	}
 	_ = stateio.WriteState(&state, stateDir)
+}
+
+func resolvedProfileSet(ctx *model.ExecutionContext) string {
+	if cfg, ok := ctx.ProfileStore.(*config.Config); ok {
+		return cfg.ResolvedProfile
+	}
+	return ""
 }
 
 func contextSnapshot(ctx *model.ExecutionContext) map[string]any {

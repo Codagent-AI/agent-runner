@@ -749,6 +749,60 @@ profiles:
 	}
 }
 
+func TestLoadWithProfile_OverrideSelectsProfileAndReportsOrigin(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeConfigFile(t, path, `active_profile: default
+profiles:
+  default:
+    agents:
+      lead:
+        default_mode: interactive
+        cli: claude
+  copilot:
+    agents:
+      lead:
+        default_mode: autonomous
+        cli: copilot
+`)
+
+	cfg, err := LoadWithProfile(path, ProfileOverride{Name: "copilot", Origin: "--profile flag"})
+	if err != nil {
+		t.Fatalf("LoadWithProfile() error = %v", err)
+	}
+	if got := cfg.ActiveAgents["lead"].CLI; got != "copilot" {
+		t.Fatalf("active lead CLI = %q, want copilot", got)
+	}
+	if got := cfg.ResolvedProfile; got != "copilot" {
+		t.Fatalf("ResolvedProfile = %q, want copilot", got)
+	}
+	if got := cfg.ProfileSource; got != ProfileSourceOverride {
+		t.Fatalf("ProfileSource = %q, want %q", got, ProfileSourceOverride)
+	}
+	if got := cfg.ProfileOverrideOrigin; got != "--profile flag" {
+		t.Fatalf("ProfileOverrideOrigin = %q, want --profile flag", got)
+	}
+}
+
+func TestLoadWithProfile_UnknownOverrideListsSortedProfiles(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeConfigFile(t, path, `profiles:
+  default:
+    agents: {}
+  copilot:
+    agents: {}
+`)
+
+	_, err := LoadWithProfile(path, ProfileOverride{Name: "missing", Origin: "--profile flag"})
+	if err == nil {
+		t.Fatal("LoadWithProfile() error = nil, want unknown profile error")
+	}
+	if got := err.Error(); !strings.Contains(got, "--profile flag") || !strings.Contains(got, "missing") || !strings.Contains(got, "copilot, default") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestLoad_NoActiveProfileFallsToDefault(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()

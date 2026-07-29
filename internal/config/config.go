@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -57,10 +58,29 @@ type ProfileSet struct {
 // Config is the top-level configuration after loading, merging, and active-profile
 // selection. ActiveAgents holds the agents for the selected profile set.
 type Config struct {
-	ActiveProfile string
-	Profiles      map[string]*ProfileSet
-	ActiveAgents  map[string]*Agent
-	Deprecations  []Deprecation
+	ActiveProfile         string
+	ResolvedProfile       string
+	ProfileSource         ProfileSource
+	ProfileOverrideOrigin string
+	Profiles              map[string]*ProfileSet
+	ActiveAgents          map[string]*Agent
+	Deprecations          []Deprecation
+}
+
+// ProfileSource identifies how the selected profile set was chosen.
+type ProfileSource string
+
+const (
+	ProfileSourceOverride ProfileSource = "override"
+	ProfileSourceConfig   ProfileSource = "config"
+	ProfileSourceDefault  ProfileSource = "default"
+)
+
+// ProfileOverride selects a profile set for one config load. Origin is a
+// caller-provided human-readable label used in errors and reporting.
+type ProfileOverride struct {
+	Name   string
+	Origin string
 }
 
 // parsedFile is the internal representation of one loaded config file.
@@ -109,6 +129,12 @@ func CanonicalAgentName(name string) (string, *Deprecation) {
 // higher layer replaces the lower-layer agent wholesale (no field-level
 // merge). Legacy flat shapes are rejected with an actionable error.
 func Load(path string) (*Config, error) {
+	return LoadWithProfile(path, ProfileOverride{})
+}
+
+// LoadWithProfile loads layered config and optionally selects a profile set
+// supplied by the caller rather than active_profile or the default fallback.
+func LoadWithProfile(path string, override ProfileOverride) (*Config, error) {
 	var globalFile *parsedFile
 	if globalPath, err := globalConfigPath(); err == nil {
 		gf, gErr := loadFileOptional(globalPath, true)
@@ -123,7 +149,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("loading project config %s: %w", path, err)
 	}
 
-	cfg, err := buildConfig(defaultParsedFile(), globalFile, projectFile)
+	cfg, err := buildConfig(defaultParsedFile(), globalFile, projectFile, override)
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +274,7 @@ func isLegacyAgentMap(m map[string]interface{}) bool {
 // selects the active profile set from the project layer, and returns a
 // fully-populated Config. nil layers are skipped. active_profile is read
 // only from the last layer (project).
-func buildConfig(defaults, global, project *parsedFile) (*Config, error) {
+func buildConfig(defaults, global, project *parsedFile, overrides ...ProfileOverride) (*Config, error) {
 	layers := []*parsedFile{defaults, global, project}
 	deprecationsByProfile := map[string][]Deprecation{}
 	for i, layer := range layers {
@@ -277,13 +303,35 @@ func buildConfig(defaults, global, project *parsedFile) (*Config, error) {
 		activeProfile = project.ActiveProfile
 	}
 
-	selectedName := activeProfile
+	override := ProfileOverride{}
+	if len(overrides) > 0 {
+		override = overrides[0]
+	}
+	selectedName := override.Name
+	source := ProfileSourceOverride
+	if selectedName == "" {
+		selectedName = activeProfile
+		source = ProfileSourceConfig
+	}
 	if selectedName == "" {
 		selectedName = "default"
+		source = ProfileSourceDefault
 	}
 
 	selectedSet, ok := resolved[selectedName]
 	if !ok {
+		if override.Name != "" {
+			available := make([]string, 0, len(resolved))
+			for name := range resolved {
+				available = append(available, name)
+			}
+			sort.Strings(available)
+			origin := override.Origin
+			if origin == "" {
+				origin = "caller-supplied profile override"
+			}
+			return nil, fmt.Errorf("profile set %q requested by %s does not exist in the merged config; available profile sets: %s", selectedName, origin, strings.Join(available, ", "))
+		}
 		if activeProfile != "" {
 			return nil, fmt.Errorf("active_profile %q does not exist in the merged config", selectedName)
 		}
@@ -296,10 +344,13 @@ func buildConfig(defaults, global, project *parsedFile) (*Config, error) {
 	}
 
 	return &Config{
-		ActiveProfile: activeProfile,
-		Profiles:      resolved,
-		ActiveAgents:  activeAgents,
-		Deprecations:  activeProfileDeprecations(merged, selectedName, deprecationsByProfile),
+		ActiveProfile:         activeProfile,
+		ResolvedProfile:       selectedName,
+		ProfileSource:         source,
+		ProfileOverrideOrigin: override.Origin,
+		Profiles:              resolved,
+		ActiveAgents:          activeAgents,
+		Deprecations:          activeProfileDeprecations(merged, selectedName, deprecationsByProfile),
 	}, nil
 }
 

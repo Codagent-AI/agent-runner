@@ -104,6 +104,7 @@ type Model struct {
 	resolverCfg     ResolverConfig
 	startTime       time.Time
 	recordedVersion string
+	profileSet      string
 	workflowEntry   discovery.WorkflowEntry // set when entered == FromDefinition
 
 	// Live-run fields (FromLiveRun mode only).
@@ -208,6 +209,7 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	if entered == FromList || entered == FromInspect {
 		m.recordedVersion = recordedWorkflowVersion(state.WorkflowFile)
 	}
+	m.profileSet = state.ProfileSet
 
 	if entered != FromLiveRun {
 		m.active = runlock.Check(sessionDir) == runlock.LockActive

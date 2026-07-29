@@ -1281,6 +1281,40 @@ func TestPrepareRun_SeedsInitialState(t *testing.T) {
 	}
 }
 
+func TestPrepareRun_RecordsResolvedProfileInStateAndAudit(t *testing.T) {
+	w := model.Workflow{Name: "profiled", Steps: []model.Step{shellStep("s1", "echo hi")}}
+	w.ApplyDefaults()
+	sessionDir := t.TempDir()
+	h, err := PrepareRun(&w, nil, &Options{
+		SessionDir: sessionDir,
+		ProfileStore: &config.Config{
+			ResolvedProfile:       "copilot",
+			ProfileSource:         config.ProfileSourceOverride,
+			ProfileOverrideOrigin: "--profile flag",
+		},
+		ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareRun() error = %v", err)
+	}
+	defer finalizeRun(h.rs, ResultStopped)
+
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := state.ProfileSet; got != "copilot" {
+		t.Fatalf("ProfileSet = %q, want copilot", got)
+	}
+	auditData, err := os.ReadFile(filepath.Join(sessionDir, "audit.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(auditData), `"profile_set":"copilot"`) || !strings.Contains(string(auditData), `"profile_source":"flag"`) {
+		t.Fatalf("run_start missing profile data: %s", auditData)
+	}
+}
+
 func TestPrepareRun_SeedsResumeState(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	w := model.Workflow{

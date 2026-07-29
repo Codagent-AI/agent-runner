@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/engine"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
@@ -33,6 +34,8 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	if resumeAlreadyCompleted(stateFilePath, &state) {
 		return nil, ErrAlreadyCompleted
 	}
+
+	profileOverride := resumeProfileOverride(opts.ProfileOverride, state.ProfileSet)
 
 	workflow, err := loadRecordedWorkflow(state.WorkflowFile)
 	if err != nil {
@@ -129,9 +132,18 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		ResumeHook:         opts.ResumeHook,
 		PrepareStepHook:    opts.PrepareStepHook,
 		UIStepHandler:      opts.UIStepHandler,
+		ProfileStore:       opts.ProfileStore,
+		ProfileOverride:    profileOverride,
 	}
 
 	return PrepareRun(&workflow, state.Params, resumeOpts)
+}
+
+func resumeProfileOverride(override config.ProfileOverride, recorded string) config.ProfileOverride {
+	if override.Name == "" && recorded != "" {
+		return config.ProfileOverride{Name: recorded, Origin: "run state file"}
+	}
+	return override
 }
 
 func resumeAlreadyCompleted(stateFilePath string, state *model.RunState) bool {

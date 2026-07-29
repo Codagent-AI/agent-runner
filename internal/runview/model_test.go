@@ -739,6 +739,22 @@ func TestModel_Breadcrumb_ShowsAffordance_WhenInactive(t *testing.T) {
 	}
 }
 
+func TestModel_Breadcrumb_ShowsRecordedNonDefaultProfileDuringLiveRun(t *testing.T) {
+	m := newTestModel(simpleTree(), FromLiveRun)
+	m.profileSet = "copilot"
+	if got := stripANSI(m.renderBreadcrumb()); !strings.Contains(got, "profile: copilot") {
+		t.Fatalf("breadcrumb = %q, want recorded profile", got)
+	}
+}
+
+func TestModel_Breadcrumb_HidesDefaultProfile(t *testing.T) {
+	m := newTestModel(simpleTree(), FromLiveRun)
+	m.profileSet = "default"
+	if got := stripANSI(m.renderBreadcrumb()); strings.Contains(got, "profile:") {
+		t.Fatalf("breadcrumb = %q, want no default profile segment", got)
+	}
+}
+
 func TestModel_Breadcrumb_ShowsStartRun_WhenFromDefinition(t *testing.T) {
 	tree := simpleTree()
 	tree.Root.Status = StatusInProgress

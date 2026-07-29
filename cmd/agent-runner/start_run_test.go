@@ -163,6 +163,30 @@ func TestExecRunnerResume_RunIDRequestsImmediateAltScreen(t *testing.T) {
 	}
 }
 
+func TestExecRunnerResumeWithProfile_PreservesProfileBeforeRunID(t *testing.T) {
+	originalExecutable := currentExecutable
+	originalExec := execProcess
+	t.Cleanup(func() {
+		currentExecutable = originalExecutable
+		execProcess = originalExec
+	})
+	currentExecutable = func() (string, error) { return "/tmp/agent-runner", nil }
+
+	var gotArgs []string
+	execProcess = func(path string, args []string, env []string) error {
+		gotArgs = append([]string(nil), args...)
+		return nil
+	}
+
+	if code := execRunnerResumeWithProfile("run-123", "", "copilot"); code != 0 {
+		t.Fatalf("execRunnerResumeWithProfile() = %d, want 0", code)
+	}
+	wantArgs := []string{filepath.Base("/tmp/agent-runner"), "--resume", "--profile", "copilot", "run-123"}
+	if diff := cmp.Diff(wantArgs, gotArgs); diff != "" {
+		t.Fatalf("exec args mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestLiveTUIOptionsReadsImmediateAltScreenEnv(t *testing.T) {
 	t.Setenv(liveRunImmediateAltScreenEnv, "1")
 

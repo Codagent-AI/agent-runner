@@ -25,6 +25,7 @@ import (
 	"github.com/muesli/termenv"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/engine"
 	_ "github.com/codagent/agent-runner/internal/engine/openspec"
@@ -316,6 +317,7 @@ func run() int {
 	listFlag := flag.Bool("list", false, "Launch the run list TUI")
 	inspectFlag := flag.String("inspect", "", "Launch the run view TUI for a specific `run-id`")
 	validateFlag := flag.Bool("validate", false, "Validate a workflow file without executing")
+	profileFlag := flag.String("profile", "", "Select the profile set for this invocation")
 	resetOnboardingFlag := flag.Bool("reset-onboarding", false, "Clear onboarding settings, project validator state, and saved onboarding runs before launching")
 	onboardingFromFlag := flag.String("onboarding-from", "", "Start the built-in onboarding workflow from top-level `step-id`")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
@@ -334,6 +336,7 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "  -resume [session-id]\n\tResume an interrupted workflow; launches TUI if no session ID given\n")
 		fmt.Fprintf(os.Stderr, "  -reset-onboarding\n\tClear onboarding settings, project .validator/, and saved onboarding runs before launching\n")
 		fmt.Fprintf(os.Stderr, "  -onboarding-from <step-id>\n\tStart the built-in onboarding workflow from a top-level step\n")
+		fmt.Fprintf(os.Stderr, "  -profile <name>\n\tSelect the profile set for this invocation\n")
 		fmt.Fprintf(os.Stderr, "  -validate\n\tValidate a workflow file without executing\n")
 		fmt.Fprintf(os.Stderr, "  -v, -version\n\tPrint version and exit\n")
 	}
@@ -357,6 +360,17 @@ func run() int {
 	}
 
 	args := flag.Args()
+	profileSet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "profile" {
+			profileSet = true
+		}
+	})
+	*profileFlag = strings.TrimSpace(*profileFlag)
+	if profileSet && *profileFlag == "" {
+		fmt.Fprintln(os.Stderr, "agent-runner: --profile requires a profile set name")
+		return 1
+	}
 	if handled, code := routeDebugCommand(args, os.Stdout, os.Stderr); handled {
 		return code
 	}
@@ -378,6 +392,14 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "agent-runner: --inspect is mutually exclusive with --list and --resume")
 		return 1
 	}
+	if profileSet && *listFlag {
+		fmt.Fprintln(os.Stderr, "agent-runner: --profile and --list are mutually exclusive")
+		return 1
+	}
+	if profileSet && *inspectFlag != "" {
+		fmt.Fprintln(os.Stderr, "agent-runner: --profile and --inspect are mutually exclusive")
+		return 1
+	}
 
 	if *resetOnboardingFlag {
 		if err := resetOnboardingState(); err != nil {
@@ -391,6 +413,8 @@ func run() int {
 		inspect:        *inspectFlag,
 		list:           *listFlag,
 		resume:         *resumeFlag,
+		profile:        *profileFlag,
+		profileSet:     profileSet,
 		onboardingFrom: strings.TrimSpace(*onboardingFromFlag),
 	})
 }
@@ -400,6 +424,8 @@ type commandFlags struct {
 	inspect        string
 	list           bool
 	resume         bool
+	profile        string
+	profileSet     bool
 	onboardingFrom string
 }
 
@@ -418,7 +444,7 @@ func dispatchRunCommand(args []string, opts commandFlags) int {
 	}
 
 	if opts.validate {
-		return handleValidateArgs(args)
+		return handleValidateArgs(args, opts.profileOverride())
 	}
 
 	if opts.inspect != "" {
@@ -435,9 +461,9 @@ func dispatchRunCommand(args []string, opts commandFlags) int {
 			return 1
 		}
 		if len(args) == 1 {
-			return handleResume(args[0])
+			return handleResume(args[0], opts.profileOverride())
 		}
-		return handleList()
+		return handleListWithProfile(opts.profileOverride())
 	}
 
 	if len(args) < 1 {
@@ -469,7 +495,15 @@ func dispatchRunCommand(args []string, opts commandFlags) int {
 		}
 		return handleOnboardingFromRun(workflowFile, opts.onboardingFrom, args[1:]...)
 	}
+	runOpts.profileOverride = opts.profileOverride()
 	return handleRunWithRunOptions(append([]string{workflowFile}, args[1:]...), runOpts).exitCode
+}
+
+func (opts commandFlags) profileOverride() config.ProfileOverride {
+	if !opts.profileSet {
+		return config.ProfileOverride{}
+	}
+	return config.ProfileOverride{Name: opts.profile, Origin: "--profile flag"}
 }
 
 func isRunCommandHelp(args []string) bool {
@@ -531,11 +565,11 @@ func parseRunCommandArgs(args []string) ([]string, runCommandOptions, error) {
 	return normalized, opts, nil
 }
 
-func handleResume(sessionID string) int {
-	return handleResumeWithOptions(sessionID, liveTUIOptions{})
+func handleResume(sessionID string, profile ...config.ProfileOverride) int {
+	return handleResumeWithOptions(sessionID, liveTUIOptions{}, profile...)
 }
 
-func handleResumeWithOptions(sessionID string, liveOpts liveTUIOptions) int {
+func handleResumeWithOptions(sessionID string, liveOpts liveTUIOptions, profile ...config.ProfileOverride) int {
 	liveOpts = liveOpts.withEnv()
 	if err := requireTTY(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -547,9 +581,27 @@ func handleResumeWithOptions(sessionID string, liveOpts liveTUIOptions) int {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
 	}
+	override := config.ProfileOverride{}
+	if len(profile) > 0 {
+		override = profile[0]
+	}
+	state, err := stateio.ReadState(stateFilePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
+	if override.Name == "" && state.ProfileSet != "" {
+		override = config.ProfileOverride{Name: state.ProfileSet, Origin: "run state file"}
+	}
+	profiles, err := config.LoadWithProfile(filepath.Join(".agent-runner", "config.yaml"), override)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
 
 	if os.Getenv("AGENT_RUNNER_NO_TUI") == "1" {
 		result, runErr := runner.ResumeWorkflow(stateFilePath, &runner.Options{
+			ProfileStore: profiles, ProfileOverride: override,
 			ProcessRunner: &realProcessRunner{},
 			GlobExpander:  &realGlobExpander{},
 			Log:           &realLogger{},
@@ -569,6 +621,7 @@ func handleResumeWithOptions(sessionID string, liveOpts liveTUIOptions) int {
 	}
 
 	h, err := runner.PrepareResume(stateFilePath, &runner.Options{
+		ProfileStore: profiles, ProfileOverride: override,
 		ProcessRunner: &realProcessRunner{},
 		GlobExpander:  &realGlobExpander{},
 		Log:           &runner.DiscardLogger{},
@@ -634,16 +687,15 @@ func openInspectTUI(runID, sessionDir, projectDir string) int {
 	return runSwitcher(sw)
 }
 
-// handleList opens the list TUI starting on the current-dir tab (--list / --resume no-arg).
-func handleList() int {
-	return handleListWithTab(listview.InitialTabCurrentDir)
-}
-
-func handleListWithTab(initialTab listview.InitialTab) int {
-	return handleListWithDeps(initialTab, defaultFirstRunDeps)
+func handleListWithProfile(profile config.ProfileOverride) int {
+	return handleListWithDepsProfile(listview.InitialTabCurrentDir, defaultFirstRunDeps, profile)
 }
 
 func handleListWithDeps(initialTab listview.InitialTab, firstRun firstRunDeps) int {
+	return handleListWithDepsProfile(initialTab, firstRun, config.ProfileOverride{})
+}
+
+func handleListWithDepsProfile(initialTab listview.InitialTab, firstRun firstRunDeps, profile config.ProfileOverride) int {
 	if err := requireTTY(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -655,13 +707,17 @@ func handleListWithDeps(initialTab listview.InitialTab, firstRun firstRunDeps) i
 	if result := ensureFirstRunForTUI(firstRun); !result.continueToList {
 		return result.exitCode
 	} else if len(result.listOptions) > 0 {
-		return handleListAfterFirstRun(initialTab, firstRun, result.listOptions)
+		return handleListAfterFirstRunWithProfile(initialTab, firstRun, result.listOptions, profile)
 	}
 
-	return handleListAfterFirstRun(initialTab, firstRun, nil)
+	return handleListAfterFirstRunWithProfile(initialTab, firstRun, nil, profile)
 }
 
 func handleListAfterFirstRun(initialTab listview.InitialTab, firstRun firstRunDeps, extraOptions []func(*listview.Model)) int {
+	return handleListAfterFirstRunWithProfile(initialTab, firstRun, extraOptions, config.ProfileOverride{})
+}
+
+func handleListAfterFirstRunWithProfile(initialTab listview.InitialTab, firstRun firstRunDeps, extraOptions []func(*listview.Model), profile config.ProfileOverride) int {
 	settings := loadSplashSettingsForList(firstRun.load, os.Stderr)
 
 	options := []func(*listview.Model){
@@ -678,7 +734,7 @@ func handleListAfterFirstRun(initialTab listview.InitialTab, firstRun firstRunDe
 	}
 
 	sw := &switcher{list: m, mode: showingList}
-	return runSwitcher(sw)
+	return runSwitcherWithProfile(sw, profile.Name)
 }
 
 func shouldShowSplash(settings *usersettings.Settings, stdinTTY, stdoutTTY bool) bool {
@@ -705,6 +761,10 @@ func shouldShowOnboardingFailureModal(result liveTUIResult, settings *usersettin
 }
 
 func runSwitcher(sw *switcher) int {
+	return runSwitcherWithProfile(sw, "")
+}
+
+func runSwitcherWithProfile(sw *switcher, profile string) int {
 	for {
 		p := tea.NewProgram(sw, tea.WithAltScreen(), tea.WithMouseCellMotion())
 		result, err := p.Run()
@@ -718,7 +778,7 @@ func runSwitcher(sw *switcher) int {
 			return 0
 		}
 		if final.resumeRunID != "" {
-			return execRunnerResume(final.resumeRunID, final.resumeRunProjectDir)
+			return execRunnerResumeWithProfile(final.resumeRunID, final.resumeRunProjectDir, profile)
 		}
 		if final.launchDebugRunID != "" || final.launchDebugSessionDir != "" {
 			return execRunnerDebug(final.launchDebugRunID, final.launchDebugSessionDir, final.launchDebugProjectDir)
@@ -727,7 +787,7 @@ func runSwitcher(sw *switcher) int {
 			return execStartRun(final.startRunEntry, final.startRunParams)
 		}
 		if final.resumeListProjectDir != "" {
-			return execRunnerResume("", final.resumeListProjectDir)
+			return execRunnerResumeWithProfile("", final.resumeListProjectDir, profile)
 		}
 		if final.resumeSessionID == "" {
 			return 0
@@ -1051,6 +1111,10 @@ func spawnAgentResume(cli, sessionID string) error {
 // non-empty, the process chdirs there first so that resolveResumeStatePath
 // looks in the correct project tree when the run belongs to a different project.
 func execRunnerResume(runID, projectDir string) int {
+	return execRunnerResumeWithProfile(runID, projectDir, "")
+}
+
+func execRunnerResumeWithProfile(runID, projectDir, profile string) int {
 	if projectDir != "" {
 		if err := os.Chdir(projectDir); err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: chdir %s: %v\n", projectDir, err)
@@ -1058,6 +1122,9 @@ func execRunnerResume(runID, projectDir string) int {
 		}
 	}
 	args := []string{"--resume"}
+	if profile != "" {
+		args = append(args, "--profile", profile)
+	}
 	if runID != "" {
 		args = append(args, runID)
 		return execSelfWithEnv([]string{liveRunImmediateAltScreenEnv + "=1"}, args...)
@@ -1384,7 +1451,7 @@ func resolveResumeStatePath(sessionID string) (string, error) {
 	return stateFile, nil
 }
 
-func handleValidateArgs(args []string) int {
+func handleValidateArgs(args []string, profile ...config.ProfileOverride) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "agent-runner: --validate requires a workflow name or YAML file path")
 		return 1
@@ -1403,7 +1470,11 @@ func handleValidateArgs(args []string) int {
 		fmt.Fprintln(os.Stderr, "agent-runner: --validate parameters must use key=value syntax")
 		return 1
 	}
-	result, err := prevalidate.Pipeline(workflowFile, keyed, prevalidate.Lenient, prevalidate.Options{})
+	override := config.ProfileOverride{}
+	if len(profile) > 0 {
+		override = profile[0]
+	}
+	result, err := prevalidate.Pipeline(workflowFile, keyed, prevalidate.Lenient, prevalidate.Options{ProfileOverride: override})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
@@ -1414,7 +1485,11 @@ func handleValidateArgs(args []string) int {
 	for _, warning := range result.AgentDeprecations {
 		fmt.Fprintf(os.Stderr, "agent-runner: warning: %s\n", warning)
 	}
-	fmt.Println("workflow is valid")
+	if override.Name != "" {
+		fmt.Printf("workflow is valid (profile set: %s)\n", override.Name)
+	} else {
+		fmt.Println("workflow is valid")
+	}
 	return 0
 }
 
@@ -1642,9 +1717,10 @@ func handleRunWithResult(args []string, liveOpts liveTUIOptions) liveTUIResult {
 }
 
 type runCommandOptions struct {
-	liveOpts liveTUIOptions
-	from     string
-	until    string
+	liveOpts        liveTUIOptions
+	from            string
+	until           string
+	profileOverride config.ProfileOverride
 }
 
 func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIResult {
@@ -1667,9 +1743,14 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return liveTUIResult{exitCode: 1}
 	}
+	profileStore, err := config.LoadWithProfile(filepath.Join(".agent-runner", "config.yaml"), runOpts.profileOverride)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return liveTUIResult{exitCode: 1}
+	}
 
 	if !builtinworkflows.IsRef(workflowFile) {
-		if _, err := prevalidate.Pipeline(workflowFile, params, prevalidate.Strict, prevalidate.Options{}); err != nil {
+		if _, err := prevalidate.Pipeline(workflowFile, params, prevalidate.Strict, prevalidate.Options{ProfileOverride: runOpts.profileOverride}); err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 			return liveTUIResult{exitCode: 1}
 		}
@@ -1693,13 +1774,15 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 
 	if os.Getenv("AGENT_RUNNER_NO_TUI") == "1" {
 		h, err := runner.PrepareRun(&workflow, params, &runner.Options{
-			WorkflowFile:  workflowFile,
-			From:          runOpts.from,
-			Until:         runOpts.until,
-			Engine:        eng,
-			ProcessRunner: &realProcessRunner{},
-			GlobExpander:  &realGlobExpander{},
-			Log:           &realLogger{},
+			ProfileOverride: runOpts.profileOverride,
+			ProfileStore:    profileStore,
+			WorkflowFile:    workflowFile,
+			From:            runOpts.from,
+			Until:           runOpts.until,
+			Engine:          eng,
+			ProcessRunner:   &realProcessRunner{},
+			GlobExpander:    &realGlobExpander{},
+			Log:             &realLogger{},
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
@@ -1721,13 +1804,15 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 	}
 
 	h, err := runner.PrepareRun(&workflow, params, &runner.Options{
-		WorkflowFile:  workflowFile,
-		From:          runOpts.from,
-		Until:         runOpts.until,
-		Engine:        eng,
-		ProcessRunner: &realProcessRunner{},
-		GlobExpander:  &realGlobExpander{},
-		Log:           &runner.DiscardLogger{},
+		ProfileOverride: runOpts.profileOverride,
+		ProfileStore:    profileStore,
+		WorkflowFile:    workflowFile,
+		From:            runOpts.from,
+		Until:           runOpts.until,
+		Engine:          eng,
+		ProcessRunner:   &realProcessRunner{},
+		GlobExpander:    &realGlobExpander{},
+		Log:             &runner.DiscardLogger{},
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
