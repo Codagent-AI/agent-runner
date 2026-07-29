@@ -30,6 +30,7 @@ inspection, not fresh execution.
 | Workflow | Purpose |
 | --- | --- |
 | `core:accept-change` | Run the shared human acceptance, refinement, and targeted re-testing phases for a structured change. |
+| `core:commit-change-plan` | Commit one structured change plan and advance its Validator baseline. |
 | `core:debug` | Debug a failed Agent Runner run and optionally file an issue. |
 | `core:define-change` | Run the shared proposal, specification, design, test-plan, and approach-review phases. |
 | `core:finalize-pr` | Push PR, wait for CI, fix failures, and repeat until green, with a maximum of three fix cycles. |
@@ -50,12 +51,16 @@ Some `core:*` workflows are hidden from normal browsing because they are intende
 | `openspec:implement-change` | Implement reviewed task files, validate the result, open a draft PR, and prepare test-plan-driven acceptance evidence. |
 | `openspec:plan-change` | Validate an approved proposal, specs, design, and test plan, then create and review implementation tasks. |
 | `openspec:scaffold` | Bootstrap a brand new OpenSpec project, configure validation, and optionally publish it to GitHub. |
-| `openspec:simple-change` | Run a quick plan, implement, and validate workflow for small changes. |
+| `openspec:simple-change` | Plan, independently crosscheck, implement, validate, flow-test, review, and archive a small branch-local change without creating a PR. |
 
 The `openspec:change` workflow is a full development flow: it collaboratively defines the proposal,
 specifications, design, and test plan; autonomously plans and implements reviewed tasks; validates and
 prepares acceptance evidence; supports human review; and continues through PR finalization.
-`openspec:simple-change` keeps planning and implementation inline for smaller changes.
+`openspec:simple-change` keeps one lightweight plan and one implementation unit for smaller changes.
+It adds a separate independent plan-crosscheck step and a lightweight Tester flow-check step before
+human review. The user—not a status-file protocol—decides when testing and refinements are complete. The
+workflow does not push, create a pull request, wait for CI, or finalize the branch, so several
+independently archived small changes can accumulate on one feature branch.
 `openspec:scaffold` runs `openspec init --tools none` so the project has OpenSpec directories without
 installing OpenSpec agent skills or slash commands.
 

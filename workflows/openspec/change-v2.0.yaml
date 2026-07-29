@@ -11,20 +11,34 @@ steps:
     params:
       workflow_name: "openspec:change"
 
+  - id: create
+    script: create-change.sh
+    script_inputs:
+      change_name: "{{change_name}}"
+
   - id: define
-    workflow: define-change-v1.0.yaml
+    workflow: ../core/define-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
+      change_dir: "openspec/changes/{{change_name}}"
+      change_label: "OpenSpec change"
 
   - id: plan
-    workflow: plan-change-v2.0.yaml
+    workflow: ../core/plan-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
+      change_dir: "openspec/changes/{{change_name}}"
+      change_label: "OpenSpec change"
+      definition_validation_checklist: "{{session_dir}}/bundled/openspec/definition-validation-checklist.md"
 
   - id: implement
-    workflow: implement-change-v2.0.yaml
+    workflow: ../core/implement-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
+      change_dir: "openspec/changes/{{change_name}}"
+      change_label: "OpenSpec change"
+      artifact_validation_instruction: 'When an approved artifact changed, run `openspec validate --type change "{{change_name}}"`.'
+      skip_validator: "false"
 
   - id: accept
     workflow: ../core/accept-change-v1.0.yaml
@@ -35,8 +49,8 @@ steps:
       artifact_validation_instruction: 'If a specification changed, run `openspec validate --type change "{{change_name}}"`.'
 
   - id: archive
-    workflow: archive-change-v1.0.yaml
-    params:
+    script: archive-change.sh
+    script_inputs:
       change_name: "{{change_name}}"
 
   - id: finalize

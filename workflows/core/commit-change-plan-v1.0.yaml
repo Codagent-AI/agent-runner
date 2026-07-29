@@ -1,0 +1,16 @@
+name: commit-change-plan
+description: "Commit a structured change plan and advance the Validator baseline."
+hidden: true
+
+params:
+  - name: change_name
+    required: true
+  - name: change_dir
+    required: true
+
+steps:
+  - id: commit-plan
+    script: commit-change-plan.sh
+    script_inputs:
+      change_name: "{{change_name}}"
+      change_dir: "{{change_dir}}"

@@ -1,0 +1,113 @@
+name: simple-change
+description: "Plan, crosscheck, implement, validate, flow-test, review, and archive a small branch-local OpenSpec change."
+
+params:
+  - name: change_name
+    required: true
+
+engine:
+  type: openspec
+  change_param: change_name
+
+sessions:
+  - name: lead-agent
+    agent: lead
+  - name: flow-tester
+    agent: tester
+
+steps:
+  - id: validate-feature-branch
+    workflow: ../core/validate-feature-branch-v1.0.yaml
+    params:
+      workflow_name: "openspec:simple-change"
+
+  - id: create
+    script: create-change.sh
+    script_inputs:
+      change_name: "{{change_name}}"
+
+  - id: plan
+    session: lead-agent
+    mode: interactive
+    prompt: |
+      Help the user plan OpenSpec change "{{change_name}}". First ask what the change is about; do not guess. You MUST use codagent:simple-plan and write its artifacts under `openspec/changes/{{change_name}}/`.
+
+      Once the user approves writing the plan, write it and continue to the next step without asking the user to review the written artifacts again.
+
+  - id: review-plan
+    session: lead-agent
+    mode: interactive
+    tools: [call_agent]
+    prompt: |
+      Review the completed plan for OpenSpec change "{{change_name}}" with the user.
+
+      Use codagent:call-agent with a fresh `agent: crosscheck` for one read-only artifact review. Give the child a standalone prompt requiring it to use codagent:review-spec and read the proposal, specifications, optional design, and `tasks.md` under `openspec/changes/{{change_name}}/`. It must treat missing optional artifact types as intentional, keep the review proportional to a small change, cite exact artifact sections for findings, and never modify files.
+
+      Follow codagent:call-agent's verification and user-facing reporting rules. Present the child's material findings and your assessment to the user. Do not change an approved artifact in response until the user confirms the desired resolution. Apply confirmed edits, then continue to the next step without asking the user to review the written artifacts again.
+
+  - id: validate-plan
+    session: lead-agent
+    mode: autonomous
+    prompt: |
+      Validate OpenSpec change "{{change_name}}" with `openspec validate --type change "{{change_name}}"`. Fix mechanical artifact errors and rerun validation until it passes. Do not invent a product, scope, or design decision; report an unresolved semantic ambiguity instead of silently choosing one.
+
+  - id: check-planning-artifacts
+    command: |
+      change_dir="openspec/changes/{{change_name}}"
+      missing=""
+      for file in proposal.md tasks.md; do
+        [ -s "$change_dir/$file" ] || missing="$missing $file"
+      done
+      if [ -n "$missing" ]; then
+        echo "planning did not produce required artifacts in $change_dir:$missing" >&2
+        exit 1
+      fi
+      if [ ! -d "$change_dir/specs" ] || ! find "$change_dir/specs" -type f -name spec.md -size +0c -print -quit | grep -q .; then
+        echo "planning did not produce a non-empty specification under $change_dir/specs/" >&2
+        exit 1
+      fi
+      openspec validate --type change "{{change_name}}"
+
+  - id: commit-plan
+    workflow: ../core/commit-change-plan-v1.0.yaml
+    params:
+      change_name: "{{change_name}}"
+      change_dir: "openspec/changes/{{change_name}}"
+
+  - id: implement
+    workflow: ../core/implement-task-v1.0.yaml
+    params:
+      task_file: "openspec/changes/{{change_name}}/tasks.md"
+      run_session_report: "true"
+      skip_validator: "false"
+
+  - id: test
+    session: lead-agent
+    mode: autonomous
+    tools: [call_agent]
+    prompt: |
+      Run a lightweight branch-local flow test for implemented OpenSpec change "{{change_name}}". Do not perform the flow testing yourself or modify tracked files.
+
+      Use codagent:call-agent with `session: flow-tester`. Give the child a standalone prompt requiring codagent:test-flows, the approved artifacts under `openspec/changes/{{change_name}}/`, a concise verified implementation summary, representative full scope, and evidence directory `{{session_dir}}/output/`. Require it to write a concise report to `{{session_dir}}/output/test-flows.md` and place any UI screenshots beneath that output directory. It must not modify files.
+
+      Follow codagent:call-agent's verification and autonomous result-accounting rules. Verify the child's cited evidence and ensure `test-flows.md` accurately preserves its material findings, evidence, ambiguities, and limitations. Do not fix findings in this step.
+
+  - id: review
+    session: lead-agent
+    mode: interactive
+    tools: [call_agent]
+    prompt: |
+      Help the user review implemented OpenSpec change "{{change_name}}".
+
+      Read `{{session_dir}}/output/test-flows.md`. Show the tester's material findings, evidence, and limitations before your own assessment. Also inspect the implementation session report under `{{session_dir}}/output/` and discuss any consequential unresolved assumption with the user.
+
+      Help the user review and request fixes or minor enhancements without material scope expansion. Confirm consequential behavioral or design changes before editing. Before fixing a defect, invoke codagent:implement-with-tdd and follow red-green-refactor; add unit coverage where applicable and a practical integration or end-to-end regression test when it meaningfully protects the affected public flow. Update active specifications only when a decision changes or clarifies normative observable behavior.
+
+      After tracked changes, run relevant targeted checks, invoke validator-run, and commit related changes following project conventions with the `[{{step_id}}]` prefix. If a changed public flow warrants another hands-on check, recommend a targeted verification. When the user agrees, resume `flow-tester` once with the prior finding, affected flow, and direct dependencies; require codagent:test-flows in targeted scope rather than a new broad pass, then present its exact result. Do not create status files or hide an unresolved result behind a success claim.
+
+      Continue to the next step only when the user says testing and review are complete.
+
+  - id: archive
+    script: archive-change.sh
+    script_inputs:
+      change_name: "{{change_name}}"

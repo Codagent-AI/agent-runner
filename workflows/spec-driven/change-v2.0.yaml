@@ -11,20 +11,34 @@ steps:
     params:
       workflow_name: "spec-driven:change"
 
+  - id: create
+    script: create-change.sh
+    script_inputs:
+      change_name: "{{change_name}}"
+
   - id: define
-    workflow: define-change-v1.0.yaml
+    workflow: ../core/define-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
+      change_dir: "specs/changes/{{change_name}}"
+      change_label: "spec-driven change"
 
   - id: plan
-    workflow: plan-change-v2.0.yaml
+    workflow: ../core/plan-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
+      change_dir: "specs/changes/{{change_name}}"
+      change_label: "spec-driven change"
+      definition_validation_checklist: "{{session_dir}}/bundled/spec-driven/definition-validation-checklist.md"
 
   - id: implement
-    workflow: implement-change-v2.0.yaml
+    workflow: ../core/implement-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
+      change_dir: "specs/changes/{{change_name}}"
+      change_label: "spec-driven change"
+      artifact_validation_instruction: 'When an approved artifact changed, read and follow `{{session_dir}}/bundled/spec-driven/definition-validation-checklist.md` for "{{change_name}}".'
+      skip_validator: "false"
 
   - id: accept
     workflow: ../core/accept-change-v1.0.yaml
