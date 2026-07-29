@@ -245,19 +245,22 @@ func TestV2ChangeWorkflowsShareCoreLifecyclePhases(t *testing.T) {
 
 func TestV2NamespaceAdaptersConfigureSharedCorePhases(t *testing.T) {
 	tests := []struct {
-		ref           string
-		wantWorkflow  string
-		wantChangeDir string
+		ref            string
+		wantWorkflow   string
+		wantChangeDir  string
+		wantChangeKind string
 	}{
 		{
-			ref:           "builtin:openspec/plan-change-v2.0.yaml",
-			wantWorkflow:  "../core/plan-change-v1.0.yaml",
-			wantChangeDir: "openspec/changes/{{change_name}}",
+			ref:            "builtin:openspec/plan-change-v2.0.yaml",
+			wantWorkflow:   "../core/plan-change-v1.0.yaml",
+			wantChangeDir:  "openspec/changes/{{change_name}}",
+			wantChangeKind: "openspec",
 		},
 		{
-			ref:           "builtin:spec-driven/plan-change-v2.0.yaml",
-			wantWorkflow:  "../core/plan-change-v1.0.yaml",
-			wantChangeDir: "specs/changes/{{change_name}}",
+			ref:            "builtin:spec-driven/plan-change-v2.0.yaml",
+			wantWorkflow:   "../core/plan-change-v1.0.yaml",
+			wantChangeDir:  "specs/changes/{{change_name}}",
+			wantChangeKind: "spec-driven",
 		},
 		{
 			ref:           "builtin:openspec/implement-change-v2.0.yaml",
@@ -295,7 +298,135 @@ func TestV2NamespaceAdaptersConfigureSharedCorePhases(t *testing.T) {
 			if step.Params["change_dir"] != tt.wantChangeDir {
 				t.Fatalf("%s change_dir = %q, want %q", tt.ref, step.Params["change_dir"], tt.wantChangeDir)
 			}
+			if tt.wantChangeKind != "" && step.Params["change_kind"] != tt.wantChangeKind {
+				t.Fatalf("%s change_kind = %q, want %q", tt.ref, step.Params["change_kind"], tt.wantChangeKind)
+			}
 		})
+	}
+}
+
+func TestCorePlanChangeUsesDeterministicValidation(t *testing.T) {
+	body, err := ReadFile("builtin:core/plan-change-v1.0.yaml")
+	if err != nil {
+		t.Fatalf("ReadFile(core plan-change): %v", err)
+	}
+
+	var workflow struct {
+		Params []struct {
+			Name string `yaml:"name"`
+		} `yaml:"params"`
+		Steps []struct {
+			ID           string            `yaml:"id"`
+			Script       string            `yaml:"script"`
+			Prompt       string            `yaml:"prompt"`
+			ScriptInputs map[string]string `yaml:"script_inputs"`
+		} `yaml:"steps"`
+	}
+	if err := yaml.Unmarshal(body, &workflow); err != nil {
+		t.Fatalf("unmarshal core plan-change: %v", err)
+	}
+
+	if strings.Contains(string(body), "PLANNING_READY") ||
+		strings.Contains(string(body), "definition_validation_checklist") ||
+		strings.Contains(string(body), "planning-status-gate.sh") {
+		t.Fatalf("core plan-change still contains agent-owned validation protocol:\n%s", body)
+	}
+
+	steps := make(map[string]struct {
+		script       string
+		prompt       string
+		scriptInputs map[string]string
+	}, len(workflow.Steps))
+	for _, step := range workflow.Steps {
+		steps[step.ID] = struct {
+			script       string
+			prompt       string
+			scriptInputs map[string]string
+		}{script: step.Script, prompt: step.Prompt, scriptInputs: step.ScriptInputs}
+	}
+	for _, id := range []string{"check-definition", "check-plan"} {
+		step, ok := steps[id]
+		if !ok {
+			t.Fatalf("core plan-change missing %s", id)
+		}
+		if step.script != "validate-planning-artifacts.sh" {
+			t.Errorf("%s script = %q, want validate-planning-artifacts.sh", id, step.script)
+		}
+		if step.prompt != "" {
+			t.Errorf("%s unexpectedly invokes an agent prompt", id)
+		}
+	}
+	if got := steps["check-definition"].scriptInputs["require_tasks"]; got != "false" {
+		t.Errorf("check-definition require_tasks = %q, want false", got)
+	}
+	if got := steps["check-plan"].scriptInputs["require_tasks"]; got != "true" {
+		t.Errorf("check-plan require_tasks = %q, want true", got)
+	}
+}
+
+func TestCoreValidatePlanningArtifactsScript(t *testing.T) {
+	script, err := ReadAsset("core/validate-planning-artifacts.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(core/validate-planning-artifacts.sh): %v", err)
+	}
+
+	tempDir := t.TempDir()
+	scriptPath := filepath.Join(tempDir, "validate-planning-artifacts.sh")
+	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
+		t.Fatalf("write validator script: %v", err)
+	}
+	fakeBin := filepath.Join(tempDir, "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatalf("create fake bin: %v", err)
+	}
+	fakeOpenSpec := filepath.Join(fakeBin, "openspec")
+	if err := os.WriteFile(fakeOpenSpec, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write fake openspec: %v", err)
+	}
+
+	projectDir := filepath.Join(tempDir, "project")
+	changeDir := filepath.Join(projectDir, "openspec", "changes", "demo")
+	for _, dir := range []string{filepath.Join(changeDir, "specs", "widgets"), filepath.Join(changeDir, "tasks")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("create %s: %v", dir, err)
+		}
+	}
+	for name, content := range map[string]string{
+		"proposal.md":           "# Proposal\n",
+		"design.md":             "# Design\n",
+		"test-plan.md":          "# Test plan\n",
+		"specs/widgets/spec.md": "## ADDED Requirements\n### Requirement: Widget\nThe system SHALL work.\n#### Scenario: Works\n- **WHEN** used\n- **THEN** it works\n",
+	} {
+		path := filepath.Join(changeDir, filepath.FromSlash(name))
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	run := func(requireTasks bool) error {
+		t.Helper()
+		cmd := exec.Command("sh", scriptPath)
+		cmd.Dir = projectDir
+		cmd.Env = append(os.Environ(), "PATH="+fakeBin+":"+os.Getenv("PATH"))
+		cmd.Stdin = strings.NewReader(`{"change_name":"demo","change_dir":"openspec/changes/demo","change_kind":"openspec","require_tasks":"` + strconv.FormatBool(requireTasks) + `"}`)
+		return cmd.Run()
+	}
+
+	if err := run(false); err != nil {
+		t.Fatalf("definition validation failed: %v", err)
+	}
+	if err := run(true); err == nil {
+		t.Fatal("task-plan validation passed without a task file")
+	}
+
+	if err := os.WriteFile(filepath.Join(changeDir, "tasks", "one.md"), []byte("# Task one\n"), 0o600); err != nil {
+		t.Fatalf("write task file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(changeDir, "tasks.md"), []byte("- [Task one](tasks/one.md)\n"), 0o600); err != nil {
+		t.Fatalf("write task index: %v", err)
+	}
+	if err := run(true); err != nil {
+		t.Fatalf("task-plan validation failed: %v", err)
 	}
 }
 

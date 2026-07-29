@@ -29,7 +29,7 @@ steps:
       change_name: "{{change_name}}"
       change_dir: "specs/changes/{{change_name}}"
       change_label: "spec-driven change"
-      definition_validation_checklist: "{{session_dir}}/bundled/spec-driven/definition-validation-checklist.md"
+      change_kind: "spec-driven"
 
   - id: implement
     workflow: ../core/implement-change-v1.0.yaml

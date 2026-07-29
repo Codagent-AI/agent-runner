@@ -29,7 +29,7 @@ steps:
       change_name: "{{change_name}}"
       change_dir: "openspec/changes/{{change_name}}"
       change_label: "OpenSpec change"
-      definition_validation_checklist: "{{session_dir}}/bundled/openspec/definition-validation-checklist.md"
+      change_kind: "openspec"
 
   - id: implement
     workflow: ../core/implement-change-v1.0.yaml
