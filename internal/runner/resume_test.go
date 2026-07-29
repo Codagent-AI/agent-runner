@@ -129,6 +129,60 @@ steps:
 	}
 }
 
+func TestPrepareResume_RestoresAgentOverride(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workflowPath := filepath.Join(t.TempDir(), "intake-v1.0.yaml")
+	workflowSource := "name: intake\nsteps:\n  - id: plan\n    command: echo plan\n"
+	if err := os.WriteFile(workflowPath, []byte(workflowSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := t.TempDir()
+	state := model.RunState{
+		WorkflowFile:  workflowPath,
+		WorkflowName:  "intake",
+		WorkflowHash:  stateio.ComputeWorkflowHash(workflowSource),
+		AgentOverride: &model.AgentOverride{CLI: "codex", Model: "gpt-5.2"},
+		CurrentStep:   model.CurrentStep{Nested: &model.NestedStepState{StepID: "plan"}},
+	}
+	if err := stateio.WriteState(&state, sessionDir); err != nil {
+		t.Fatal(err)
+	}
+
+	handle, err := PrepareResume(filepath.Join(sessionDir, "state.json"), &Options{
+		ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareResume() error = %v", err)
+	}
+	defer finalizeRun(handle.rs, ResultStopped)
+	if got := handle.rs.ctx.AgentOverride; got == nil || got.CLI != "codex" || got.Model != "gpt-5.2" {
+		t.Fatalf("resumed override = %#v, want codex/gpt-5.2", got)
+	}
+}
+
+func TestPrepareRun_PersistsAgentOverride(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workflow := model.Workflow{Name: "intake", Steps: []model.Step{{ID: "plan", Command: "echo plan"}}}
+	workflow.ApplyDefaults()
+	sessionDir := t.TempDir()
+	handle, err := PrepareRun(&workflow, map[string]string{}, &Options{
+		WorkflowFile: "builtin:core/intake-v1.0.yaml", SessionDir: sessionDir,
+		AgentOverride: &model.AgentOverride{CLI: "codex", Model: "gpt-5.2"},
+		ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareRun() error = %v", err)
+	}
+	defer finalizeRun(handle.rs, ResultStopped)
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := state.AgentOverride; got == nil || got.CLI != "codex" || got.Model != "gpt-5.2" {
+		t.Fatalf("recorded override = %#v, want codex/gpt-5.2", got)
+	}
+}
+
 func TestPrepareRunCopiesIntakeHandoffAndPrepareResumeRestoresProvenance(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	sourceDir := t.TempDir()

@@ -25,6 +25,7 @@ import (
 	"github.com/muesli/termenv"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/engine"
 	_ "github.com/codagent/agent-runner/internal/engine/openspec"
@@ -318,6 +319,9 @@ func run() int {
 	validateFlag := flag.Bool("validate", false, "Validate a workflow file without executing")
 	resetOnboardingFlag := flag.Bool("reset-onboarding", false, "Clear onboarding settings, project validator state, and saved onboarding runs before launching")
 	onboardingFromFlag := flag.String("onboarding-from", "", "Start the built-in onboarding workflow from top-level `step-id`")
+	intakeFlag := flag.Bool("i", false, "Start the built-in intake workflow")
+	cliFlag := flag.String("cli", "", "CLI override for intake")
+	modelFlag := flag.String("model", "", "Model override for intake")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	vFlag := flag.Bool("v", false, "Print version and exit (shorthand)")
 	// Undocumented: internal escape hatch for running without the TUI when
@@ -334,6 +338,9 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "  -resume [session-id]\n\tResume an interrupted workflow; launches TUI if no session ID given\n")
 		fmt.Fprintf(os.Stderr, "  -reset-onboarding\n\tClear onboarding settings, project .validator/, and saved onboarding runs before launching\n")
 		fmt.Fprintf(os.Stderr, "  -onboarding-from <step-id>\n\tStart the built-in onboarding workflow from a top-level step\n")
+		fmt.Fprintf(os.Stderr, "  -i\n\tStart the built-in intake workflow\n")
+		fmt.Fprintf(os.Stderr, "  -cli <name>\n\tCLI override for intake\n")
+		fmt.Fprintf(os.Stderr, "  -model <name>\n\tModel override for intake\n")
 		fmt.Fprintf(os.Stderr, "  -validate\n\tValidate a workflow file without executing\n")
 		fmt.Fprintf(os.Stderr, "  -v, -version\n\tPrint version and exit\n")
 	}
@@ -378,6 +385,14 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "agent-runner: --inspect is mutually exclusive with --list and --resume")
 		return 1
 	}
+	if err := validateIntakeInvocation(&intakeInvocationOptions{
+		intake: *intakeFlag, headless: *headlessFlag, list: *listFlag, resume: *resumeFlag,
+		inspect: *inspectFlag, validate: *validateFlag, onboardingFrom: strings.TrimSpace(*onboardingFromFlag),
+		args: args, cli: strings.TrimSpace(*cliFlag), model: strings.TrimSpace(*modelFlag),
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
 
 	if *resetOnboardingFlag {
 		if err := resetOnboardingState(); err != nil {
@@ -392,6 +407,10 @@ func run() int {
 		list:           *listFlag,
 		resume:         *resumeFlag,
 		onboardingFrom: strings.TrimSpace(*onboardingFromFlag),
+		intake:         *intakeFlag,
+		agentOverride: &model.AgentOverride{
+			CLI: strings.TrimSpace(*cliFlag), Model: strings.TrimSpace(*modelFlag),
+		},
 	})
 }
 
@@ -401,6 +420,51 @@ type commandFlags struct {
 	list           bool
 	resume         bool
 	onboardingFrom string
+	intake         bool
+	agentOverride  *model.AgentOverride
+}
+
+type intakeInvocationOptions struct {
+	intake         bool
+	headless       bool
+	list           bool
+	resume         bool
+	inspect        string
+	validate       bool
+	onboardingFrom string
+	args           []string
+	cli            string
+	model          string
+}
+
+func validateIntakeInvocation(opts *intakeInvocationOptions) error {
+	if (opts.cli != "" || opts.model != "") && !opts.intake {
+		return fmt.Errorf("--cli and --model require -i")
+	}
+	if !opts.intake {
+		return nil
+	}
+	if opts.headless || opts.list || opts.resume || opts.inspect != "" || opts.validate || opts.onboardingFrom != "" {
+		return fmt.Errorf("-i is mutually exclusive with --headless, --list, --resume, --inspect, --validate, and --onboarding-from")
+	}
+	if len(opts.args) > 0 {
+		return fmt.Errorf("-i cannot be combined with an explicit workflow")
+	}
+	if opts.cli == "" {
+		return nil
+	}
+	adapter, err := cli.Get(opts.cli)
+	if err != nil {
+		known := cli.KnownCLIs()
+		sort.Strings(known)
+		return fmt.Errorf("invalid --cli %q; accepted values: %s", opts.cli, strings.Join(known, ", "))
+	}
+	if rejector, ok := adapter.(cli.InteractiveRejector); ok {
+		if err := rejector.InteractiveModeError(); err != nil {
+			return fmt.Errorf("--cli %q cannot be used for intake: intake requires an interactive-capable CLI: %w", opts.cli, err)
+		}
+	}
+	return nil
 }
 
 func dispatchRunCommand(args []string, opts commandFlags) int {
@@ -419,6 +483,14 @@ func dispatchRunCommand(args []string, opts commandFlags) int {
 
 	if opts.validate {
 		return handleValidateArgs(args)
+	}
+	if opts.intake {
+		workflowFile, err := builtinworkflows.Resolve("core:intake")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+			return 1
+		}
+		return handleRunWithRunOptions([]string{workflowFile}, runCommandOptions{agentOverride: opts.agentOverride}).exitCode
 	}
 
 	if opts.inspect != "" {
@@ -726,6 +798,9 @@ func runSwitcher(sw *switcher) int {
 		if final.startRunReady && final.startRunEntry != nil {
 			return execStartRun(final.startRunEntry, final.startRunParams)
 		}
+		if final.startIntakeReady {
+			return execStartIntake()
+		}
 		if final.resumeListProjectDir != "" {
 			return execRunnerResume("", final.resumeListProjectDir)
 		}
@@ -1009,18 +1084,18 @@ var allowedResumeCLIs = map[string]bool{
 // it to an absolute path via PATH lookup. Callers must treat the returned path
 // as safe to pass to syscall.Exec / exec.Command even though the surrounding
 // arguments originate from audit logs.
-func resolveResumeCLI(cli string) (resolvedCLI, path string, err error) {
-	if cli == "" {
-		cli = "claude"
+func resolveResumeCLI(cliName string) (resolvedCLI, path string, err error) {
+	if cliName == "" {
+		cliName = "claude"
 	}
-	if strings.ContainsAny(cli, `/\`) || !allowedResumeCLIs[cli] {
-		return cli, "", fmt.Errorf("refusing to resume: unsupported agent CLI %q", cli)
+	if strings.ContainsAny(cliName, `/\`) || !allowedResumeCLIs[cliName] {
+		return cliName, "", fmt.Errorf("refusing to resume: unsupported agent CLI %q", cliName)
 	}
-	path, err = exec.LookPath(cli)
+	path, err = exec.LookPath(cliName)
 	if err != nil {
-		return cli, "", fmt.Errorf("cannot find agent CLI %q in PATH: %w", cli, err)
+		return cliName, "", fmt.Errorf("cannot find agent CLI %q in PATH: %w", cliName, err)
 	}
-	return cli, path, nil
+	return cliName, path, nil
 }
 
 // spawnAgentResume spawns `<cli> --resume <session-id>` as a subprocess and
@@ -1029,8 +1104,8 @@ func resolveResumeCLI(cli string) (resolvedCLI, path string, err error) {
 // code is not treated as an error — the user may have typed /exit or /quit.
 // Only spawn failures (binary not found, permission error, etc.) are
 // returned as errors.
-func spawnAgentResume(cli, sessionID string) error {
-	resolved, path, err := resolveResumeCLI(cli)
+func spawnAgentResume(cliName, sessionID string) error {
+	resolved, path, err := resolveResumeCLI(cliName)
 	if err != nil {
 		return err
 	}
@@ -1115,6 +1190,10 @@ func execStartRun(entry *discovery.WorkflowEntry, values map[string]string) int 
 	return execSelfWithEnv([]string{liveRunImmediateAltScreenEnv + "=1"}, args...)
 }
 
+func execStartIntake() int {
+	return execSelfWithEnv([]string{liveRunImmediateAltScreenEnv + "=1"}, "-i")
+}
+
 // resolveInspectSession resolves a run ID to its session and project
 // directories, using the same rules as --resume (cwd's project dir only).
 func resolveInspectSession(runID string) (sessionDir, projectDir string, err error) {
@@ -1175,6 +1254,7 @@ type switcher struct {
 	startRunEntry         *discovery.WorkflowEntry
 	startRunParams        map[string]string
 	startRunReady         bool
+	startIntakeReady      bool
 	viewErr               string
 }
 
@@ -1259,6 +1339,10 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.paramform = paramform.New(&entry).WithWidth(s.termWidth)
 		s.mode = showingParamForm
 		return s, nil
+
+	case discovery.StartIntakeMsg:
+		s.startIntakeReady = true
+		return s, tea.Quit
 
 	case paramform.SubmittedMsg:
 		if s.startRunEntry == nil {
@@ -1642,9 +1726,14 @@ func handleRunWithResult(args []string, liveOpts liveTUIOptions) liveTUIResult {
 }
 
 type runCommandOptions struct {
-	liveOpts liveTUIOptions
-	from     string
-	until    string
+	liveOpts      liveTUIOptions
+	from          string
+	until         string
+	agentOverride *model.AgentOverride
+}
+
+func isIntakeWorkflow(workflowFile string) bool {
+	return workflowFile == builtinworkflows.Ref("core/intake-v1.0.yaml")
 }
 
 func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIResult {
@@ -1674,6 +1763,12 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 			return liveTUIResult{exitCode: 1}
 		}
 	}
+	if isIntakeWorkflow(workflowFile) {
+		if err := requireIntakeTTY(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return liveTUIResult{exitCode: 1}
+		}
+	}
 
 	if err := requireTTY(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -1696,6 +1791,7 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 			WorkflowFile:  workflowFile,
 			From:          runOpts.from,
 			Until:         runOpts.until,
+			AgentOverride: runOpts.agentOverride,
 			Engine:        eng,
 			ProcessRunner: &realProcessRunner{},
 			GlobExpander:  &realGlobExpander{},
@@ -1724,6 +1820,7 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 		WorkflowFile:  workflowFile,
 		From:          runOpts.from,
 		Until:         runOpts.until,
+		AgentOverride: runOpts.agentOverride,
 		Engine:        eng,
 		ProcessRunner: &realProcessRunner{},
 		GlobExpander:  &realGlobExpander{},

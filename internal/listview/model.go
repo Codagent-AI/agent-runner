@@ -819,14 +819,14 @@ func (m *Model) moveNewTabCursor(delta int) {
 
 	// Advance and skip non-selectable rows.
 	pos := m.newTab.cursor + delta
-	for pos >= 0 && pos < len(filtered) && filtered[pos].kind != workflowRow {
+	for pos >= 0 && pos < len(filtered) && filtered[pos].kind != workflowRow && filtered[pos].kind != intakeRow {
 		if delta > 0 {
 			pos++
 		} else {
 			pos--
 		}
 	}
-	if pos >= 0 && pos < len(filtered) && filtered[pos].kind == workflowRow {
+	if pos >= 0 && pos < len(filtered) && (filtered[pos].kind == workflowRow || filtered[pos].kind == intakeRow) {
 		m.newTab.cursor = pos
 	}
 }

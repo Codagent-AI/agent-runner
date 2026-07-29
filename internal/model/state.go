@@ -79,8 +79,9 @@ type RunState struct {
 	WorkflowHash string            `json:"workflowHash"`
 	// IntakeHandoff and IntakeParentRunID are immutable provenance seeded at
 	// run preparation and restored unchanged on resume.
-	IntakeHandoff     string `json:"intakeHandoff,omitempty"`
-	IntakeParentRunID string `json:"intakeParentRunId,omitempty"`
+	IntakeHandoff     string         `json:"intakeHandoff,omitempty"`
+	IntakeParentRunID string         `json:"intakeParentRunId,omitempty"`
+	AgentOverride     *AgentOverride `json:"agentOverride,omitempty"`
 	// Completed is set to true when the workflow has finished successfully.
 	// The state file is preserved (not deleted) so the TUI can still display
 	// the run's metadata after completion.

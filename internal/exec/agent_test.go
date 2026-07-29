@@ -63,6 +63,38 @@ func TestResolveStepProfileCrosscheckInteractiveOverrideKeepsResolvedBackend(t *
 	}
 }
 
+func TestResolveStepProfile_RunAgentOverrideBeatsStepAndProfile(t *testing.T) {
+	ctx := makeCtx()
+	ctx.ProfileStore = &config.Config{ActiveAgents: map[string]*config.Agent{
+		"lead": {DefaultMode: "interactive", CLI: "claude", Model: "profile-model"},
+	}}
+	ctx.AgentOverride = &model.AgentOverride{CLI: "codex", Model: "command-model"}
+	step := &model.Step{ID: "plan", Agent: "lead", Session: model.SessionNew, CLI: "cursor", Model: "step-model"}
+
+	resolved, err := resolveStepProfile(step, ctx)
+	if err != nil {
+		t.Fatalf("resolveStepProfile() error = %v", err)
+	}
+	if resolved.CLI != "codex" || resolved.Model != "command-model" {
+		t.Fatalf("resolveStepProfile() = %+v, want command overrides", resolved)
+	}
+}
+
+func TestResolveStepProfile_RunAgentOverrideAppliesWithoutProfileStore(t *testing.T) {
+	ctx := makeCtx()
+	ctx.ProfileStore = nil
+	ctx.AgentOverride = &model.AgentOverride{CLI: "codex", Model: "gpt-5.2"}
+	step := &model.Step{ID: "plan", Session: model.SessionNew, CLI: "claude", Model: "step-model"}
+
+	resolved, err := resolveStepProfile(step, ctx)
+	if err != nil {
+		t.Fatalf("resolveStepProfile() error = %v", err)
+	}
+	if resolved.CLI != "codex" || resolved.Model != "gpt-5.2" {
+		t.Fatalf("resolveStepProfile() = %+v, want command overrides", resolved)
+	}
+}
+
 func TestExecuteAgentStep(t *testing.T) {
 	t.Run("adapter without extraction keeps unsupported usage unavailable", func(t *testing.T) {
 		got, err := extractAgentUsage(&spawnEnvAdapter{}, "fake", cli.ContextAutonomousHeadless, `{"type":"result"}`+"\n")

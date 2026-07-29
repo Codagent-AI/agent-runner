@@ -135,11 +135,56 @@ func TestNewTab_TabOrderIsNewCurrentDirWorktreesAll(t *testing.T) {
 	}
 }
 
+func TestNewTab_PlanWithAnAgentEntryRemainsVisibleWithoutWorkflows(t *testing.T) {
+	m := newTabModel(nil)
+
+	rendered := sanitize(m.renderNewTab())
+	if !strings.Contains(rendered, "Plan with an agent") {
+		t.Fatalf("new tab = %q, want dedicated intake entry", rendered)
+	}
+}
+
+func TestNewTab_PlanWithAnAgentEntryRemainsVisibleWhenFilterMatchesNothing(t *testing.T) {
+	m := newTabModel([]discovery.WorkflowEntry{validEntry("core:finalize-pr")})
+	m.newTab.searchText = "does-not-match"
+	m.rebuildNewTabFiltered()
+
+	rendered := sanitize(m.renderNewTab())
+	if !strings.Contains(rendered, "Plan with an agent") {
+		t.Fatalf("filtered new tab = %q, want dedicated intake entry", rendered)
+	}
+}
+
+func TestNewTab_SelectingPlanWithAnAgentEmitsStartIntakeMsg(t *testing.T) {
+	m := newTabModel([]discovery.WorkflowEntry{validEntry("core:finalize-pr")})
+
+	_, cmd := m.handleEnter()
+	if cmd == nil {
+		t.Fatal("Enter on intake entry should produce a command")
+	}
+	if _, ok := cmd().(discovery.StartIntakeMsg); !ok {
+		t.Fatalf("Enter message = %T, want discovery.StartIntakeMsg", cmd())
+	}
+}
+
+func TestNewTab_PlanWithAnAgentEntryIsUnaffectedByHiddenToggle(t *testing.T) {
+	entries := []discovery.WorkflowEntry{{
+		CanonicalName: "core:hidden", Scope: discovery.ScopeBuiltin, Namespace: "core", Hidden: true,
+	}}
+	for _, showHidden := range []bool{false, true} {
+		filtered := buildFilteredRows(entries, defaultTestGroups(), "", showHidden)
+		if len(filtered) == 0 || filtered[0].kind != intakeRow {
+			t.Fatalf("showHidden=%t filtered rows = %+v, want leading intake row", showHidden, filtered)
+		}
+	}
+}
+
 // TestNewTab_EnterOnValidWorkflow_EmitsViewDefinitionMsg verifies Enter emits ViewDefinitionMsg.
 func TestNewTab_EnterOnValidWorkflow_EmitsViewDefinitionMsg(t *testing.T) {
 	entry := validEntry("core:finalize-pr")
 	entry.SourcePath = "builtin:core/finalize-pr-v2.0.yaml"
 	m := newTabModel([]discovery.WorkflowEntry{entry})
+	m.moveNewTabCursor(1)
 
 	result, cmd := m.handleEnter()
 	_ = result
@@ -164,6 +209,7 @@ func TestNewTab_EnterOnValidWorkflow_EmitsViewDefinitionMsg(t *testing.T) {
 func TestNewTab_EnterOnMalformedWorkflow_Ignored(t *testing.T) {
 	entry := malformedEntry("core:broken")
 	m := newTabModel([]discovery.WorkflowEntry{entry})
+	m.moveNewTabCursor(1)
 
 	_, cmd := m.handleEnter()
 	if cmd != nil {
@@ -176,6 +222,7 @@ func TestNewTab_R_EmitsStartRunMsg(t *testing.T) {
 	entry := validEntry("core:finalize-pr")
 	entry.SourcePath = "builtin:core/finalize-pr-v2.0.yaml"
 	m := newTabModel([]discovery.WorkflowEntry{entry})
+	m.moveNewTabCursor(1)
 
 	_, cmd := pressKey(m, "r")
 	if cmd == nil {
@@ -480,8 +527,8 @@ func TestNewTab_SearchDoesNotSurfaceHiddenWhenToggleOff(t *testing.T) {
 func TestNewTab_InitialCursorSkipsLeadingHeader(t *testing.T) {
 	m := newTabModel([]discovery.WorkflowEntry{validEntry("core:finalize-pr")})
 
-	if m.newTab.filtered[m.newTab.cursor].kind != workflowRow {
-		t.Fatalf("initial cursor landed on %+v, want workflow row", m.newTab.filtered[m.newTab.cursor])
+	if m.newTab.filtered[m.newTab.cursor].kind != intakeRow {
+		t.Fatalf("initial cursor landed on %+v, want intake row", m.newTab.filtered[m.newTab.cursor])
 	}
 }
 
@@ -492,8 +539,9 @@ func TestNewTab_CursorSkipsSeparators(t *testing.T) {
 		{CanonicalName: "core:finalize-pr", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/fin.yaml"},
 	}
 	m := newTabModel(entries)
-	// Put cursor at first entry (proj-wf), move down — should skip separator and land on builtin.
+	// Put cursor at the project entry, move down — should skip separator and land on builtin.
 	m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
+	m.moveCursor(1)
 
 	m.moveCursor(1)
 

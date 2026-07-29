@@ -79,6 +79,7 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		SessionDir:         filepath.Dir(stateFilePath),
 		IntakeHandoff:      state.IntakeHandoff,
 		IntakeParentRunID:  state.IntakeParentRunID,
+		AgentOverride:      state.AgentOverride,
 		Engine:             eng,
 		SessionIDs:         resumeState.sessionIDs,
 		SessionProfiles:    resumeState.sessionProfiles,

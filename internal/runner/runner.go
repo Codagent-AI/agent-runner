@@ -46,6 +46,7 @@ type Options struct {
 	IntakeHandoffSource string
 	IntakeHandoff       string
 	IntakeParentRunID   string
+	AgentOverride       *model.AgentOverride
 	// ProjectRoot and WorkingDir may be supplied by embedding callers. When
 	// empty, PrepareRun discovers and canonicalizes them once for the run.
 	ProjectRoot        string
@@ -463,6 +464,7 @@ func buildExecutionContext(
 		SessionDir:               sessionDir,
 		IntakeHandoff:            opts.IntakeHandoff,
 		IntakeParentRunID:        opts.IntakeParentRunID,
+		AgentOverride:            opts.AgentOverride,
 		EngineRef:                engineRef,
 		ProfileStore:             profileStore,
 		SessionIDs:               opts.SessionIDs,
@@ -771,6 +773,7 @@ func initialRunState(workflow *model.Workflow, rs *runState, opts *Options) *mod
 		WorkflowHash:      rs.workflowHash,
 		IntakeHandoff:     rs.ctx.IntakeHandoff,
 		IntakeParentRunID: rs.ctx.IntakeParentRunID,
+		AgentOverride:     rs.ctx.AgentOverride,
 	}
 	if stepID == "" {
 		return state
@@ -893,6 +896,7 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 		WorkflowHash:      workflowHash,
 		IntakeHandoff:     ctx.IntakeHandoff,
 		IntakeParentRunID: ctx.IntakeParentRunID,
+		AgentOverride:     ctx.AgentOverride,
 	}
 	_ = stateio.WriteState(&state, stateDir)
 }

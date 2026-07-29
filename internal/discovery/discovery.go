@@ -60,6 +60,10 @@ type ViewDefinitionMsg struct {
 	Entry WorkflowEntry
 }
 
+// StartIntakeMsg asks the top-level workflow browser to start the built-in
+// intake workflow directly.
+type StartIntakeMsg struct{}
+
 // Enumerate discovers workflows from three sources in order:
 //  1. Project-local: <projectDir>/.agent-runner/workflows/
 //  2. User-home: userWorkflowsDir (e.g. ~/.agent-runner/workflows/)

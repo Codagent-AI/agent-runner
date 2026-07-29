@@ -87,26 +87,28 @@ func stepProfileName(step *model.Step, ctx *model.ExecutionContext) string {
 // Step-level overrides (Mode, Model, CLI) are applied on top of the profile.
 func resolveStepProfile(step *model.Step, ctx *model.ExecutionContext) (*config.ResolvedAgent, error) {
 	cfg, _ := ctx.ProfileStore.(*config.Config)
+	var resolved *config.ResolvedAgent
 	if cfg == nil {
 		// No profile store — return a minimal profile using step-level values.
-		return &config.ResolvedAgent{
+		resolved = &config.ResolvedAgent{
 			DefaultMode: string(step.Mode),
 			CLI:         step.CLI,
 			Model:       step.Model,
-		}, nil
-	}
-
-	profileName := stepProfileName(step, ctx)
-	if profileName == "" {
-		if model.IsNamedSession(step.Session) {
-			return nil, fmt.Errorf("no declaration found for named session %q", step.Session)
 		}
-		return nil, fmt.Errorf("no profile found for session-originating step %q", ctx.LastSessionStepID)
-	}
+	} else {
+		profileName := stepProfileName(step, ctx)
+		if profileName == "" {
+			if model.IsNamedSession(step.Session) {
+				return nil, fmt.Errorf("no declaration found for named session %q", step.Session)
+			}
+			return nil, fmt.Errorf("no profile found for session-originating step %q", ctx.LastSessionStepID)
+		}
 
-	resolved, err := cfg.Resolve(profileName)
-	if err != nil {
-		return nil, fmt.Errorf("resolving profile %q: %w", profileName, err)
+		var err error
+		resolved, err = cfg.Resolve(profileName)
+		if err != nil {
+			return nil, fmt.Errorf("resolving profile %q: %w", profileName, err)
+		}
 	}
 
 	// Apply step-level overrides.
@@ -118,6 +120,14 @@ func resolveStepProfile(step *model.Step, ctx *model.ExecutionContext) (*config.
 	}
 	if step.CLI != "" {
 		resolved.CLI = step.CLI
+	}
+	if override := ctx.AgentOverride; override != nil {
+		if override.Model != "" {
+			resolved.Model = override.Model
+		}
+		if override.CLI != "" {
+			resolved.CLI = override.CLI
+		}
 	}
 
 	return resolved, nil

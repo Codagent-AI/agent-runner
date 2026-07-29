@@ -22,6 +22,13 @@ type AgentDeprecationState struct {
 	seen map[string]bool
 }
 
+// AgentOverride is a run-scoped CLI and model selection that takes precedence
+// over both the workflow step and its resolved agent profile.
+type AgentOverride struct {
+	CLI   string `json:"cli,omitempty"`
+	Model string `json:"model,omitempty"`
+}
+
 // NewAgentDeprecationState creates an empty run-scoped deprecation set.
 func NewAgentDeprecationState() *AgentDeprecationState {
 	return &AgentDeprecationState{seen: make(map[string]bool)}
@@ -86,6 +93,10 @@ type ExecutionContext struct {
 	// IntakeParentRunID identifies the intake run that launched this run. It is
 	// empty for direct runs.
 	IntakeParentRunID string
+	// AgentOverride applies only within this workflow run. It is intentionally
+	// not represented as a workflow parameter so independently launched runs do
+	// not inherit it.
+	AgentOverride *AgentOverride
 
 	// EngineRef holds the workflow engine implementation (internal/engine.Engine).
 	// Stored as interface{} to avoid circular imports.
@@ -145,6 +156,7 @@ type RootContextOptions struct {
 	SessionDir               string
 	IntakeHandoff            string
 	IntakeParentRunID        string
+	AgentOverride            *AgentOverride
 	EngineRef                interface{} // internal/engine.Engine
 	ProfileStore             interface{} // *config.Config
 	SessionIDs               map[string]string
@@ -206,6 +218,7 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		SessionDir:               opts.SessionDir,
 		IntakeHandoff:            opts.IntakeHandoff,
 		IntakeParentRunID:        opts.IntakeParentRunID,
+		AgentOverride:            opts.AgentOverride,
 		EngineRef:                opts.EngineRef,
 		ProfileStore:             opts.ProfileStore,
 		AuditLogger:              opts.AuditLogger,
@@ -302,6 +315,7 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		SessionDir:               parent.SessionDir,
 		IntakeHandoff:            parent.IntakeHandoff,
 		IntakeParentRunID:        parent.IntakeParentRunID,
+		AgentOverride:            parent.AgentOverride,
 		EngineRef:                parent.EngineRef,
 		ProfileStore:             parent.ProfileStore,
 		AuditLogger:              parent.AuditLogger,
@@ -386,6 +400,7 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		SessionDir:               parent.SessionDir,
 		IntakeHandoff:            parent.IntakeHandoff,
 		IntakeParentRunID:        parent.IntakeParentRunID,
+		AgentOverride:            parent.AgentOverride,
 		EngineRef:                engineRef,
 		ProfileStore:             parent.ProfileStore,
 		AuditLogger:              parent.AuditLogger,

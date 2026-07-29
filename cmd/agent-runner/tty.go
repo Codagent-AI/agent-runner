@@ -23,3 +23,16 @@ func requireTTY() error {
 	}
 	return nil
 }
+
+// requireIntakeTTY enforces the terminal requirement for intake itself. Unlike
+// requireTTY, it intentionally ignores AGENT_RUNNER_NO_TUI so intake cannot be
+// started headlessly through an explicit workflow name.
+func requireIntakeTTY() error {
+	if !isatty.IsTerminal(os.Stdout.Fd()) {
+		return errors.New("agent-runner: intake requires an interactive terminal; stdout is not a TTY")
+	}
+	if !isatty.IsTerminal(os.Stdin.Fd()) {
+		return errors.New("agent-runner: intake requires an interactive terminal; stdin is not a TTY")
+	}
+	return nil
+}
