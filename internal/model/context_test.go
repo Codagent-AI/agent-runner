@@ -170,10 +170,11 @@ func TestBuiltinVarsForStep(t *testing.T) {
 		}
 	})
 
-	t.Run("returns nil when no builtins available", func(t *testing.T) {
+	t.Run("always exposes intake_handoff even when empty", func(t *testing.T) {
 		ctx := NewRootContext(&RootContextOptions{WorkflowFile: "test.yaml"})
-		if ctx.BuiltinVarsForStep("") != nil {
-			t.Fatal("expected nil when no builtins available")
+		vars := ctx.BuiltinVarsForStep("")
+		if got, ok := vars["intake_handoff"]; !ok || got != "" {
+			t.Fatalf("intake_handoff = %q, present = %v; want present empty value", got, ok)
 		}
 	})
 
@@ -187,6 +188,22 @@ func TestBuiltinVarsForStep(t *testing.T) {
 			t.Fatal("expected session_dir to be absent")
 		}
 	})
+}
+
+func TestIntakeHandoffPropagatesToNestedContexts(t *testing.T) {
+	root := NewRootContext(&RootContextOptions{WorkflowFile: "root.yaml"})
+	root.IntakeHandoff = "/tmp/runs/child/intake-handoff.md"
+	root.IntakeParentRunID = "intake-run"
+
+	loop := NewLoopIterationContext(root, LoopIterationOptions{StepID: "loop", Iteration: 0})
+	sub := NewSubWorkflowContext(root, &SubWorkflowContextOptions{
+		StepID: "sub", WorkflowFile: "sub.yaml", SubWorkflowName: "sub",
+	})
+	for name, ctx := range map[string]*ExecutionContext{"loop": loop, "sub-workflow": sub} {
+		if ctx.IntakeHandoff != root.IntakeHandoff || ctx.IntakeParentRunID != root.IntakeParentRunID {
+			t.Fatalf("%s provenance = (%q, %q), want (%q, %q)", name, ctx.IntakeHandoff, ctx.IntakeParentRunID, root.IntakeHandoff, root.IntakeParentRunID)
+		}
+	}
 }
 
 func TestSessionDirBuiltin(t *testing.T) {

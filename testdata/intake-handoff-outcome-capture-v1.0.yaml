@@ -1,0 +1,9 @@
+name: intake-handoff-outcome-capture
+steps:
+  - id: handoff
+    mode: ui
+    title: Choose an action
+    actions:
+      - label: Continue
+        outcome: continue
+    outcome_capture: intake_handoff

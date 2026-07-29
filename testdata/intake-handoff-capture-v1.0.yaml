@@ -1,0 +1,5 @@
+name: intake-handoff-capture
+steps:
+  - id: handoff
+    command: echo should-not-load
+    capture: intake_handoff

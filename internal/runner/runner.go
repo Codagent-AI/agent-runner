@@ -3,6 +3,7 @@ package runner
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -39,6 +40,12 @@ type Options struct {
 	From         string
 	Until        string
 	WorkflowFile string
+	// IntakeHandoffSource is the sealed handoff to copy into a newly prepared
+	// intake-launched run. IntakeHandoff restores that copied destination on
+	// resume and is never copied again.
+	IntakeHandoffSource string
+	IntakeHandoff       string
+	IntakeParentRunID   string
 	// ProjectRoot and WorkingDir may be supplied by embedding callers. When
 	// empty, PrepareRun discovers and canonicalizes them once for the run.
 	ProjectRoot        string
@@ -454,6 +461,8 @@ func buildExecutionContext(
 		AutonomousBackend:        string(settings.AutonomousBackend),
 		AutonomousPermissionMode: string(usersettings.EffectiveAutonomousPermissionMode(settings.AutonomousPermissionMode)),
 		SessionDir:               sessionDir,
+		IntakeHandoff:            opts.IntakeHandoff,
+		IntakeParentRunID:        opts.IntakeParentRunID,
 		EngineRef:                engineRef,
 		ProfileStore:             profileStore,
 		SessionIDs:               opts.SessionIDs,
@@ -702,6 +711,13 @@ func PrepareRun(workflow *model.Workflow, params map[string]string, opts *Option
 	if err != nil {
 		return nil, err
 	}
+	if err := copyIntakeHandoff(opts.IntakeHandoffSource, rs); err != nil {
+		runlock.Delete(rs.sessionDir)
+		if rs.auditLogger != nil {
+			rs.auditLogger.Close()
+		}
+		return nil, err
+	}
 
 	startIndex, err := resolveStartIndex(workflow, opts.From)
 	if err != nil {
@@ -748,10 +764,13 @@ func initialRunState(workflow *model.Workflow, rs *runState, opts *Options) *mod
 	}
 
 	state := &model.RunState{
-		WorkflowFile: opts.WorkflowFile,
-		WorkflowName: workflow.Name,
-		Params:       rs.ctx.Params,
-		WorkflowHash: rs.workflowHash,
+		RunID:             rs.sessionID,
+		WorkflowFile:      opts.WorkflowFile,
+		WorkflowName:      workflow.Name,
+		Params:            rs.ctx.Params,
+		WorkflowHash:      rs.workflowHash,
+		IntakeHandoff:     rs.ctx.IntakeHandoff,
+		IntakeParentRunID: rs.ctx.IntakeParentRunID,
 	}
 	if stepID == "" {
 		return state
@@ -866,13 +885,48 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 	}
 
 	state := model.RunState{
-		WorkflowFile: ctx.WorkflowFile,
-		WorkflowName: workflow.Name,
-		CurrentStep:  model.CurrentStep{Nested: nested},
-		Params:       ctx.Params,
-		WorkflowHash: workflowHash,
+		RunID:             filepath.Base(stateDir),
+		WorkflowFile:      ctx.WorkflowFile,
+		WorkflowName:      workflow.Name,
+		CurrentStep:       model.CurrentStep{Nested: nested},
+		Params:            ctx.Params,
+		WorkflowHash:      workflowHash,
+		IntakeHandoff:     ctx.IntakeHandoff,
+		IntakeParentRunID: ctx.IntakeParentRunID,
 	}
 	_ = stateio.WriteState(&state, stateDir)
+}
+
+func copyIntakeHandoff(source string, rs *runState) error {
+	if source == "" {
+		return nil
+	}
+
+	destination, err := filepath.Abs(filepath.Join(rs.sessionDir, "intake-handoff.md"))
+	if err != nil {
+		return fmt.Errorf("resolve intake handoff destination: %w", err)
+	}
+	input, err := os.Open(source) // #nosec G304 -- source is a sealed intake artifact supplied by the launcher.
+	if err != nil {
+		return fmt.Errorf("open intake handoff source: %w", err)
+	}
+	defer func() { _ = input.Close() }()
+
+	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- destination is fixed beneath the new session directory.
+	if err != nil {
+		return fmt.Errorf("create intake handoff copy: %w", err)
+	}
+	if _, err := io.Copy(output, input); err != nil {
+		_ = output.Close()
+		_ = os.Remove(destination)
+		return fmt.Errorf("copy intake handoff: %w", err)
+	}
+	if err := output.Close(); err != nil {
+		_ = os.Remove(destination)
+		return fmt.Errorf("close intake handoff copy: %w", err)
+	}
+	rs.ctx.IntakeHandoff = destination
+	return nil
 }
 
 func contextSnapshot(ctx *model.ExecutionContext) map[string]any {

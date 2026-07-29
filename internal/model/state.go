@@ -71,11 +71,16 @@ func (cs *CurrentStep) UnmarshalJSON(data []byte) error {
 
 // RunState is the serialized workflow execution state.
 type RunState struct {
+	RunID        string            `json:"runId,omitempty"`
 	WorkflowFile string            `json:"workflowFile"`
 	WorkflowName string            `json:"workflowName"`
 	CurrentStep  CurrentStep       `json:"currentStep"`
 	Params       map[string]string `json:"params"`
 	WorkflowHash string            `json:"workflowHash"`
+	// IntakeHandoff and IntakeParentRunID are immutable provenance seeded at
+	// run preparation and restored unchanged on resume.
+	IntakeHandoff     string `json:"intakeHandoff,omitempty"`
+	IntakeParentRunID string `json:"intakeParentRunId,omitempty"`
 	// Completed is set to true when the workflow has finished successfully.
 	// The state file is preserved (not deleted) so the TUI can still display
 	// the run's metadata after completion.

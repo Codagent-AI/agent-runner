@@ -339,6 +339,9 @@ func (s *Step) validateAgentField(isAgent, isShell bool) error {
 
 // validateCaptureFields checks capture and capture_stderr constraints.
 func (s *Step) validateCaptureFields(isAgent, isShell bool) error {
+	if s.Capture == "intake_handoff" {
+		return fmt.Errorf(`"capture" name "intake_handoff" is reserved`)
+	}
 	if s.Capture != "" {
 		if isShell && s.Mode == ModeInteractive {
 			return fmt.Errorf(`"capture" cannot be combined with "mode: interactive" on shell steps`)
@@ -541,6 +544,9 @@ func (s *Step) validateUIFields(isUI bool) error {
 	if s.OutcomeCapture != "" && !isUI {
 		return fmt.Errorf(`"outcome_capture" is only allowed on ui steps`)
 	}
+	if s.OutcomeCapture == "intake_handoff" {
+		return fmt.Errorf(`"outcome_capture" name "intake_handoff" is reserved`)
+	}
 	if !isUI {
 		if s.Title != "" || s.Body != "" || len(s.Actions) > 0 || len(s.Inputs) > 0 {
 			return fmt.Errorf(`ui fields are only allowed on ui steps`)
@@ -715,6 +721,11 @@ func (w *Workflow) Validate(knownCLIs []string) error {
 
 	if w.Engine != nil && w.Engine.Type == "" {
 		return fmt.Errorf("engine type is required")
+	}
+	for _, param := range w.Params {
+		if param.Name == "intake_handoff" {
+			return fmt.Errorf(`parameter name "intake_handoff" is reserved`)
+		}
 	}
 
 	var errs []string

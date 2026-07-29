@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
@@ -125,6 +126,143 @@ steps:
 	params, ok := context["params"].(map[string]any)
 	if !ok || params["env"] != "staging" {
 		t.Fatalf("run_start params = %#v", context["params"])
+	}
+}
+
+func TestPrepareRunCopiesIntakeHandoffAndPrepareResumeRestoresProvenance(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	sourceDir := t.TempDir()
+	workflowPath, err := filepath.Abs(filepath.Join("..", "..", "testdata", "intake-handoff-reference-v1.0.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := loader.LoadWorkflow(workflowPath, loader.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handoffSource := filepath.Join(sourceDir, "sealed-handoff.md")
+	if err := os.WriteFile(handoffSource, []byte("sealed context"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := t.TempDir()
+	runner := &mockRunner{}
+
+	handle, err := PrepareRun(&workflow, nil, &Options{
+		WorkflowFile:        workflowPath,
+		SessionDir:          sessionDir,
+		IntakeHandoffSource: handoffSource,
+		IntakeParentRunID:   "intake-parent-run",
+		ProcessRunner:       runner,
+		GlobExpander:        &mockGlob{},
+		Log:                 &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareRun() error = %v", err)
+	}
+	handoffCopy := handle.rs.ctx.IntakeHandoff
+	if handoffCopy == handoffSource || filepath.Dir(handoffCopy) != sessionDir {
+		t.Fatalf("handoff copy = %q, want a distinct path in %q", handoffCopy, sessionDir)
+	}
+	if contents, err := os.ReadFile(handoffCopy); err != nil || string(contents) != "sealed context" {
+		t.Fatalf("copied handoff = %q, %v", contents, err)
+	}
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.IntakeHandoff != handoffCopy || state.IntakeParentRunID != "intake-parent-run" || state.RunID != filepath.Base(sessionDir) {
+		t.Fatalf("initial state provenance = %#v", state)
+	}
+
+	finalizeRun(handle.rs, ResultStopped)
+	if err := os.Remove(handoffSource); err != nil {
+		t.Fatal(err)
+	}
+	resumedRunner := &mockRunner{}
+	resumed, err := PrepareResume(filepath.Join(sessionDir, "state.json"), &Options{
+		ProcessRunner: resumedRunner,
+		GlobExpander:  &mockGlob{},
+		Log:           &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareResume() error = %v", err)
+	}
+	if resumed.rs.ctx.IntakeHandoff != handoffCopy || resumed.rs.ctx.IntakeParentRunID != "intake-parent-run" {
+		t.Fatalf("resumed provenance = (%q, %q)", resumed.rs.ctx.IntakeHandoff, resumed.rs.ctx.IntakeParentRunID)
+	}
+	if result := ExecuteFromHandle(resumed, nil); result != ResultSuccess {
+		t.Fatalf("resumed result = %q, want success", result)
+	}
+	if len(resumedRunner.calls) != 1 || !strings.Contains(resumedRunner.calls[0][2], handoffCopy) {
+		t.Fatalf("resumed interpolated command = %#v, want copied handoff path", resumedRunner.calls)
+	}
+	state, err = stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.IntakeHandoff != handoffCopy || state.IntakeParentRunID != "intake-parent-run" {
+		t.Fatalf("rewritten state provenance = (%q, %q)", state.IntakeHandoff, state.IntakeParentRunID)
+	}
+}
+
+func TestRunWorkflowInterpolatesEmptyIntakeHandoff(t *testing.T) {
+	workflowPath, err := filepath.Abs(filepath.Join("..", "..", "testdata", "intake-handoff-reference-v1.0.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := loader.LoadWorkflow(workflowPath, loader.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	processRunner := &mockRunner{}
+	result, err := RunWorkflow(&workflow, nil, &Options{
+		SessionDir:    t.TempDir(),
+		WorkflowFile:  workflowPath,
+		ProcessRunner: processRunner,
+		GlobExpander:  &mockGlob{},
+		Log:           &mockLog{},
+	})
+	if err != nil || result != ResultSuccess {
+		t.Fatalf("RunWorkflow() = (%q, %v), want success", result, err)
+	}
+	if len(processRunner.calls) != 1 || processRunner.calls[0][2] != `printf "%s" ""` {
+		t.Fatalf("interpolated command = %#v, want empty intake handoff", processRunner.calls)
+	}
+}
+
+func TestPrepareResumeKeepsDirectRunIntakeProvenanceEmpty(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workflowDir := t.TempDir()
+	workflowPath := filepath.Join(workflowDir, "direct-v1.0.yaml")
+	workflowSource := `name: direct
+steps:
+  - id: handoff
+    command: 'printf "%s" "{{intake_handoff}}"'
+`
+	if err := os.WriteFile(workflowPath, []byte(workflowSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workflow := model.Workflow{Name: "direct", Steps: []model.Step{{ID: "handoff", Command: `printf "%s" "{{intake_handoff}}"`}}}
+	workflow.ApplyDefaults()
+	sessionDir := t.TempDir()
+	handle, err := PrepareRun(&workflow, nil, &Options{
+		WorkflowFile: workflowPath, SessionDir: sessionDir,
+		ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalizeRun(handle.rs, ResultStopped)
+
+	resumed, err := PrepareResume(filepath.Join(sessionDir, "state.json"), &Options{
+		ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer finalizeRun(resumed.rs, ResultStopped)
+	if resumed.rs.ctx.IntakeParentRunID != "" || resumed.rs.ctx.BuiltinVars()["intake_handoff"] != "" {
+		t.Fatalf("resumed direct provenance = (%q, %q)", resumed.rs.ctx.IntakeParentRunID, resumed.rs.ctx.BuiltinVars()["intake_handoff"])
 	}
 }
 

@@ -80,6 +80,13 @@ type ExecutionContext struct {
 	// agents at per-run output files.
 	SessionDir string
 
+	// IntakeHandoff is the absolute path of the sealed handoff copied into this
+	// run when it was launched from intake. It is empty for direct runs.
+	IntakeHandoff string
+	// IntakeParentRunID identifies the intake run that launched this run. It is
+	// empty for direct runs.
+	IntakeParentRunID string
+
 	// EngineRef holds the workflow engine implementation (internal/engine.Engine).
 	// Stored as interface{} to avoid circular imports.
 	// Callers should type-assert to engine.Engine before use.
@@ -136,6 +143,8 @@ type RootContextOptions struct {
 	AutonomousBackend        string
 	AutonomousPermissionMode string
 	SessionDir               string
+	IntakeHandoff            string
+	IntakeParentRunID        string
 	EngineRef                interface{} // internal/engine.Engine
 	ProfileStore             interface{} // *config.Config
 	SessionIDs               map[string]string
@@ -195,6 +204,8 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		AutonomousBackend:        opts.AutonomousBackend,
 		AutonomousPermissionMode: opts.AutonomousPermissionMode,
 		SessionDir:               opts.SessionDir,
+		IntakeHandoff:            opts.IntakeHandoff,
+		IntakeParentRunID:        opts.IntakeParentRunID,
 		EngineRef:                opts.EngineRef,
 		ProfileStore:             opts.ProfileStore,
 		AuditLogger:              opts.AuditLogger,
@@ -224,9 +235,9 @@ func (c *ExecutionContext) BuiltinVarsForStep(stepID string) map[string]string {
 	if stepID != "" {
 		m["step_id"] = stepID
 	}
-	if len(m) == 0 {
-		return nil
-	}
+	// Unlike the surrounding built-ins, this must be present even when empty:
+	// direct runs must resolve {{intake_handoff}} rather than fail interpolation.
+	m["intake_handoff"] = c.IntakeHandoff
 	return m
 }
 
@@ -289,6 +300,8 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		AutonomousBackend:        parent.AutonomousBackend,
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
 		SessionDir:               parent.SessionDir,
+		IntakeHandoff:            parent.IntakeHandoff,
+		IntakeParentRunID:        parent.IntakeParentRunID,
 		EngineRef:                parent.EngineRef,
 		ProfileStore:             parent.ProfileStore,
 		AuditLogger:              parent.AuditLogger,
@@ -371,6 +384,8 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		AutonomousBackend:        parent.AutonomousBackend,
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
 		SessionDir:               parent.SessionDir,
+		IntakeHandoff:            parent.IntakeHandoff,
+		IntakeParentRunID:        parent.IntakeParentRunID,
 		EngineRef:                engineRef,
 		ProfileStore:             parent.ProfileStore,
 		AuditLogger:              parent.AuditLogger,
