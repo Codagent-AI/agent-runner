@@ -41,6 +41,9 @@ type RunnerTool string
 const (
 	// RunnerToolCallAgent enables the process-local call_agent integration.
 	RunnerToolCallAgent RunnerTool = "call_agent"
+	// RunnerToolSubmitRoute enables the runner-owned intake route client. Its
+	// workflow identity eligibility is enforced by the loader and executor.
+	RunnerToolSubmitRoute RunnerTool = "submit_route"
 )
 
 // RunnerTools is the list of Runner-owned tools enabled for an agent step.
@@ -444,7 +447,7 @@ func (s *Step) validateTools(isAgent bool) error {
 	}
 	seen := make(map[RunnerTool]struct{}, len(s.Tools))
 	for _, tool := range s.Tools {
-		if tool != RunnerToolCallAgent {
+		if tool != RunnerToolCallAgent && tool != RunnerToolSubmitRoute {
 			return fmt.Errorf(`unknown tool in "tools": %q`, tool)
 		}
 		if _, exists := seen[tool]; exists {

@@ -18,6 +18,8 @@ import (
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
+	"github.com/codagent/agent-runner/internal/discovery"
+	"github.com/codagent/agent-runner/internal/intakeroute"
 	"github.com/codagent/agent-runner/internal/runlock"
 )
 
@@ -109,6 +111,51 @@ func TestControlServerAdmitsAgentCallToActiveAttemptHandler(t *testing.T) {
 	got := <-handler.requests
 	if got.RequestID != "call-1" || string(got.Payload) != `{"prompt":"do it","agent":"implementor"}` {
 		t.Fatalf("handler request = %#v", got)
+	}
+}
+
+func TestControlServerStagesRouteThenFreezesItBeforeCompletionAcknowledgement(t *testing.T) {
+	runDir := t.TempDir()
+	logger := &recordingEventLogger{}
+	server := newTestControlServer(t, runDir, logger)
+	defer server.Close()
+
+	handoff := filepath.Join(runDir, "intake-handoff.md")
+	if err := os.WriteFile(handoff, []byte("agreed plan\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target","handoff":"`+handoff+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := intakeroute.NewStore(runDir)
+	attempt := server.ActivateAttempt(context.Background(), "plan", AttemptOptions{
+		RouteEligible: true,
+		RouteStore:    store,
+		RouteValidation: &intakeroute.ValidateOptions{
+			RunDir: runDir, ParentRunID: "run", IntakeWorkflow: "core:intake",
+			RequestPath: filepath.Join(runDir, "route-request.json"),
+			Catalog:     intakeroute.NewCatalog([]discovery.WorkflowEntry{{CanonicalName: "target", SourcePath: "builtin:core/target-v1.0.yaml"}}),
+		},
+	})
+
+	route := exchange(t, server.SocketPath(), &controlRequest{Type: MessageSubmitRoute, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "route"})
+	if !route.OK {
+		t.Fatalf("submit route response = %#v", route)
+	}
+	completion := exchange(t, server.SocketPath(), &controlRequest{Type: MessageCompleteStep, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "complete"})
+	if !completion.OK {
+		t.Fatalf("completion response = %#v", completion)
+	}
+	sealed, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sealed.State != intakeroute.Frozen {
+		t.Fatalf("route state = %q, want frozen", sealed.State)
+	}
+	late := exchange(t, server.SocketPath(), &controlRequest{Type: MessageSubmitRoute, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "late"})
+	if late.OK || !strings.Contains(late.Error, "already frozen") {
+		t.Fatalf("late route response = %#v", late)
 	}
 }
 

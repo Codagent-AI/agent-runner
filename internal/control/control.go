@@ -22,6 +22,7 @@ import (
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
+	"github.com/codagent/agent-runner/internal/intakeroute"
 	"github.com/codagent/agent-runner/internal/runlock"
 )
 
@@ -35,6 +36,7 @@ const (
 	MessageCompleteStep  = "complete_step"
 	MessageTurnCommitted = "turn_committed"
 	MessageAgentCall     = "agent_call"
+	MessageSubmitRoute   = "submit_route"
 
 	ControlSocketPointerFile  = "control-socket"
 	MaxControlMessageBytes    = 16 * 1024 * 1024
@@ -149,6 +151,11 @@ type AttemptOptions struct {
 	Checkpoint        func() (cli.Checkpoint, error)
 	AgentCallEligible bool
 	AgentCallHandler  AgentCallHandler
+	// RouteEligible is set only by the runner after establishing that this is
+	// the top-level built-in intake step. The request itself never grants it.
+	RouteEligible   bool
+	RouteStore      *intakeroute.Store
+	RouteValidation *intakeroute.ValidateOptions
 }
 
 type attemptState struct {
@@ -158,6 +165,9 @@ type attemptState struct {
 	checkpoint         func() (cli.Checkpoint, error)
 	agentCallEligible  bool
 	agentCallHandler   AgentCallHandler
+	routeEligible      bool
+	routeStore         *intakeroute.Store
+	routeValidation    *intakeroute.ValidateOptions
 	cancel             context.CancelFunc
 }
 
@@ -184,6 +194,7 @@ type ControlServer struct {
 	mu          sync.Mutex
 	active      *attemptState
 	accepted    map[string]*acceptedCompletion
+	routes      map[string]controlResponse
 	committed   map[string]struct{}
 	turnWaiters map[string]map[uint64]chan struct{}
 	nextWaiter  uint64
@@ -266,6 +277,7 @@ func NewControlServer(config *ControlConfig) (*ControlServer, error) {
 		logger:      config.Logger,
 		now:         now,
 		accepted:    make(map[string]*acceptedCompletion),
+		routes:      make(map[string]controlResponse),
 		committed:   make(map[string]struct{}),
 		turnWaiters: make(map[string]map[uint64]chan struct{}),
 		completions: make(chan CompletionRequest, 1),
@@ -311,6 +323,7 @@ func (s *ControlServer) ActivateAttempt(ctx context.Context, stepID string, opti
 	s.active = &attemptState{
 		Attempt: attempt, checkpoint: options.Checkpoint, cancel: cancel,
 		agentCallEligible: options.AgentCallEligible, agentCallHandler: options.AgentCallHandler,
+		routeEligible: options.RouteEligible, routeStore: options.RouteStore, routeValidation: options.RouteValidation,
 	}
 	s.mu.Unlock()
 	if previous != nil {
@@ -412,6 +425,11 @@ func (s *ControlServer) handleConnection(connection net.Conn) {
 		s.acknowledgeCompletion(connection, cached)
 		return
 	}
+	if cached, ok := s.routes[cacheKey]; ok {
+		s.mu.Unlock()
+		_ = writeControlResponse(connection, cached)
+		return
+	}
 	active := s.active
 	if err := validateControlRequest(&request, active, s.runID); err != nil {
 		s.mu.Unlock()
@@ -426,7 +444,59 @@ func (s *ControlServer) handleConnection(connection net.Conn) {
 		s.handleCommittedTurn(connection, &request, active)
 	case MessageAgentCall:
 		s.handleAgentCall(connection, &request, active)
+	case MessageSubmitRoute:
+		s.handleRouteSubmission(connection, &request, active, cacheKey)
 	}
+}
+
+// handleRouteSubmission deliberately prepares the route outside the server
+// mutex. Publication then rechecks eligibility while holding that same mutex
+// used for completion acceptance, so a prepared route cannot land after
+// completion has frozen the sidecar.
+func (s *ControlServer) handleRouteSubmission(connection net.Conn, request *controlRequest, active *attemptState, cacheKey string) {
+	if !active.routeEligible || active.routeStore == nil || active.routeValidation == nil {
+		s.mu.Unlock()
+		s.reject(connection, "route submission is unavailable for the active step", request)
+		return
+	}
+	validation := *active.routeValidation
+	store := active.routeStore
+	s.mu.Unlock()
+
+	s.emit(audit.EventRouteSubmitted, request.StepID, map[string]any{"request_id": request.RequestID, "attempt_id": active.ID})
+	prepared, err := intakeroute.Validate(&validation)
+	if err != nil {
+		s.reject(connection, err.Error(), request)
+		return
+	}
+
+	s.mu.Lock()
+	if active != s.active || !active.routeEligible || active.completionAccepted {
+		s.mu.Unlock()
+		_ = prepared.Discard()
+		s.reject(connection, "route is already frozen after completion acceptance", request)
+		return
+	}
+	if err := store.Stage(prepared); err != nil {
+		s.mu.Unlock()
+		if errors.Is(err, intakeroute.ErrFrozen) {
+			s.reject(connection, "route is already frozen", request)
+			return
+		}
+		s.reject(connection, err.Error(), request)
+		return
+	}
+	response := controlResponse{OK: true, Receipt: request.RequestID}
+	s.routes[cacheKey] = response
+	s.mu.Unlock()
+	sealed, err := store.Load()
+	if err == nil {
+		s.emit(audit.EventRouteAccepted, request.StepID, map[string]any{
+			"request_id": request.RequestID, "attempt_id": active.ID, "workflow": sealed.Workflow,
+			"source_ref": sealed.SourceRef, "params": sealed.Params, "handoff_path": sealed.HandoffPath,
+		})
+	}
+	_ = writeControlResponse(connection, response)
 }
 
 func (s *ControlServer) handleAgentCall(connection net.Conn, request *controlRequest, active *attemptState) {
@@ -464,6 +534,18 @@ func (s *ControlServer) handleCompletion(connection net.Conn, request *controlRe
 		s.mu.Unlock()
 		_ = writeControlResponse(connection, controlResponse{OK: true, Receipt: receipt})
 		return
+	}
+	// The route store has its own no-route result: ordinary interactive steps
+	// retain the pre-route completion behavior. A real freeze failure leaves
+	// completion unaccepted, allowing the client to retry safely.
+	if active.routeStore != nil {
+		if err := active.routeStore.Freeze(); err != nil && !errors.Is(err, intakeroute.ErrNoRoute) {
+			s.mu.Unlock()
+			s.reject(connection, fmt.Sprintf("freeze intake route before completion: %v", err), request)
+			return
+		} else if err == nil {
+			s.emit(audit.EventRouteFrozen, request.StepID, map[string]any{"request_id": request.RequestID, "attempt_id": active.ID})
+		}
 	}
 	active.completionAccepted = true
 	active.acceptedRequestID = request.RequestID
@@ -604,7 +686,7 @@ func validateControlRequest(request *controlRequest, active *attemptState, runID
 	if active == nil {
 		return errors.New("no interactive step is active")
 	}
-	if request.Type != MessageCompleteStep && request.Type != MessageTurnCommitted && request.Type != MessageAgentCall {
+	if request.Type != MessageCompleteStep && request.Type != MessageTurnCommitted && request.Type != MessageAgentCall && request.Type != MessageSubmitRoute {
 		return fmt.Errorf("unknown control message type %q", request.Type)
 	}
 	if request.RunID == "" || request.StepID == "" || request.Token == "" || request.RequestID == "" {
@@ -636,6 +718,9 @@ func FitsAgentCallPayload(payload json.RawMessage) bool {
 
 func (s *ControlServer) reject(connection net.Conn, reason string, request *controlRequest) {
 	s.emit(audit.EventControlRejected, request.StepID, map[string]any{"reason": reason, "message_type": request.Type, "request_id": request.RequestID})
+	if request.Type == MessageSubmitRoute {
+		s.emit(audit.EventRouteRejected, request.StepID, map[string]any{"reason": reason, "request_id": request.RequestID})
+	}
 	_ = writeControlResponse(connection, controlResponse{OK: false, Error: reason})
 }
 
@@ -665,7 +750,7 @@ func SendControlEventFromEnvironment(ctx context.Context, messageType string, ge
 	if err := controlPlatformError(); err != nil {
 		return "", err
 	}
-	if messageType != MessageCompleteStep && messageType != MessageTurnCommitted {
+	if messageType != MessageCompleteStep && messageType != MessageTurnCommitted && messageType != MessageSubmitRoute {
 		return "", fmt.Errorf("unsupported control message type %q", messageType)
 	}
 	values, missing := requiredEnvironmentValues(getenv, EnvControlSocket, EnvRunID, EnvStepID, EnvControlToken)
@@ -812,6 +897,9 @@ func sendControlRequest(ctx context.Context, socketPath string, request *control
 func controlCommandName(messageType string) string {
 	if messageType == MessageTurnCommitted {
 		return "agent-runner internal turn-committed"
+	}
+	if messageType == MessageSubmitRoute {
+		return "agent-runner step submit-route"
 	}
 	return "agent-runner step complete"
 }

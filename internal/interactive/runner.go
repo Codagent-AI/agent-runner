@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/control"
+	"github.com/codagent/agent-runner/internal/intakeroute"
 )
 
 type DirectOptions struct {
@@ -34,6 +36,9 @@ type DirectOptions struct {
 	Control           *control.ControlServer
 	AgentCallEligible bool
 	AgentCallHandler  control.AgentCallHandler
+	RouteEligible     bool
+	RouteStore        *intakeroute.Store
+	RouteValidation   *intakeroute.ValidateOptions
 	Probe             cli.TurnDurabilityProbe
 	// ResolveSessionID discovers a CLI-assigned fresh session after spawn and
 	// before the completion checkpoint is captured.
@@ -101,6 +106,9 @@ func (r *DirectRunner) Run(ctx context.Context) (result DirectResult, err error)
 	attempt := options.Control.ActivateAttempt(ctx, options.StepID, control.AttemptOptions{
 		AgentCallEligible: options.AgentCallEligible,
 		AgentCallHandler:  options.AgentCallHandler,
+		RouteEligible:     options.RouteEligible,
+		RouteStore:        options.RouteStore,
+		RouteValidation:   options.RouteValidation,
 		Checkpoint: func() (cli.Checkpoint, error) {
 			if options.SessionID == "" && options.ResolveSessionID != nil {
 				options.SessionID = resolveFreshSessionID(ctx, options.ResolveSessionID)
@@ -218,11 +226,18 @@ func pruneEnvironment(env, drop []string) []string {
 }
 
 func startDirectChild(options *DirectOptions, attempt *control.Attempt) (*exec.Cmd, *os.File, *unix.Termios, error) {
+	attemptEnv := attempt.Environment()
+	if options.RouteEligible && options.RouteValidation != nil {
+		attemptEnv = append(attemptEnv,
+			"AGENT_RUNNER_ROUTE_REQUEST="+options.RouteValidation.RequestPath,
+			"AGENT_RUNNER_INTAKE_HANDOFF="+filepath.Join(options.RouteValidation.RunDir, "intake-handoff.md"),
+		)
+	}
 	return startTerminalChild(&childLaunchOptions{
 		Args: options.Args, Env: options.Env, DropEnv: options.DropEnv,
 		Workdir: options.Workdir, Stdin: options.Stdin, Stdout: options.Stdout,
 		Stderr: options.Stderr, TTY: options.TTY, Foreground: options.Foreground,
-	}, attempt.Environment())
+	}, attemptEnv)
 }
 
 type childLaunchOptions struct {

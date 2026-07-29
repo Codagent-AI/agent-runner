@@ -64,6 +64,32 @@ func TestStepCommandRejectsCrossTerminalArguments(t *testing.T) {
 	}
 }
 
+func TestStepSubmitRouteSendsPayloadFreeControlEvent(t *testing.T) {
+	replaceControlSender(t, func(_ context.Context, messageType string, _ func(string) string) (string, error) {
+		if messageType != control.MessageSubmitRoute {
+			t.Fatalf("message type = %q", messageType)
+		}
+		return "route-receipt", nil
+	})
+	var stdout, stderr bytes.Buffer
+	if code := handleStepWithIO([]string{"submit-route"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("code = %d, stderr = %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "route submitted") {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestStepSubmitRouteRejectsArguments(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := handleStepWithIO([]string{"submit-route", "target"}, &stdout, &stderr); code == 0 {
+		t.Fatal("command unexpectedly accepted arguments")
+	}
+	if !strings.Contains(stderr.String(), "accepts no arguments") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
 func TestInternalTurnCommittedSendsHookEvent(t *testing.T) {
 	replaceControlSender(t, func(_ context.Context, messageType string, _ func(string) string) (string, error) {
 		if messageType != control.MessageTurnCommitted {

@@ -22,21 +22,27 @@ func handleStepWithIO(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "agent-runner: missing step command")
 		return 1
 	}
-	if args[0] != "complete" {
+	var messageType, action string
+	switch args[0] {
+	case "complete":
+		messageType, action = control.MessageCompleteStep, "completion requested"
+	case "submit-route":
+		messageType, action = control.MessageSubmitRoute, "route submitted"
+	default:
 		_, _ = fmt.Fprintf(stderr, "agent-runner: unknown step command %q\n", args[0])
 		return 1
 	}
 	if len(args) != 1 {
-		_, _ = fmt.Fprintln(stderr, "agent-runner: step complete accepts no arguments")
+		_, _ = fmt.Fprintf(stderr, "agent-runner: step %s accepts no arguments\n", args[0])
 		return 1
 	}
-	receipt, err := sendControlMessage(control.MessageCompleteStep)
+	receipt, err := sendControlMessage(messageType)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "agent-runner: %v\n", err)
 		return 1
 	}
-	_, _ = fmt.Fprintln(stdout, "agent-runner: step completion requested")
-	if receipt != "" {
+	_, _ = fmt.Fprintf(stdout, "agent-runner: step %s\n", action)
+	if receipt != "" && messageType == control.MessageCompleteStep {
 		// The receipt line lands in the CLI's recorded tool output; durability
 		// probes without a terminal committed-turn marker (Cursor) search the
 		// native store for this exact receipt as committed-turn evidence.

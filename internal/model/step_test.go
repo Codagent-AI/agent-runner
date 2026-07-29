@@ -152,6 +152,19 @@ func TestStepTools(t *testing.T) {
 		}
 	})
 
+	t.Run("accepts submit_route on an agent step", func(t *testing.T) {
+		step := Step{
+			ID: "plan", Agent: "lead", Prompt: "Plan the change.",
+			Session: SessionNew, Tools: []RunnerTool{RunnerToolSubmitRoute},
+		}
+		if err := step.Validate(nil); err != nil {
+			t.Fatalf("Validate() error = %v", err)
+		}
+		if !step.HasTool(RunnerToolSubmitRoute) {
+			t.Fatal("HasTool(submit_route) = false, want true")
+		}
+	})
+
 	for _, tt := range []struct {
 		name  string
 		tools []RunnerTool

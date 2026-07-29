@@ -1,0 +1,17 @@
+name: intake
+description: "Explore a change with an agent and choose an appropriate workflow together."
+hidden: true
+
+sessions:
+  - name: intake-planner
+    agent: lead
+
+steps:
+  - id: plan
+    session: intake-planner
+    mode: interactive
+    tools: [submit_route]
+    prompt: |
+      Explore the user's problem collaboratively. Inspect the repository, research where useful, brainstorm alternatives, clarify scope and non-goals, and recommend whether implementation is warranted and which workflow should handle it. You recommend; the human decides. Do not submit a route until the user has agreed to it in this conversation.
+
+      Write the agreed context and recommendation to the runner-owned handoff path in `AGENT_RUNNER_INTAKE_HANDOFF`. Once the user agrees, write a strict JSON route request to `AGENT_RUNNER_ROUTE_REQUEST`, using that same handoff path, then run `agent-runner step submit-route`. Surface any submission error in the conversation and correct it before completing the step.

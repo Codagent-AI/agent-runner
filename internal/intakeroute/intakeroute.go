@@ -430,6 +430,12 @@ func snapshotHandoff(runDir, handoff string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve handoff: %w", err)
 	}
+	// The run directory was canonicalized by Validate. Canonicalize the
+	// candidate before the lexical containment check as well (notably /var is
+	// a symlink to /private/var on macOS).
+	if resolvedPath, resolveErr := filepath.EvalSymlinks(absPath); resolveErr == nil {
+		absPath = resolvedPath
+	}
 	if !within(runDir, filepath.Clean(absPath)) {
 		return "", errors.New("handoff must live inside the run directory")
 	}

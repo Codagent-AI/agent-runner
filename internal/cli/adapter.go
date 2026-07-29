@@ -111,17 +111,91 @@ type BuildArgsInput struct {
 	// CompletionCommand is the in-session control client. Adapters only use
 	// it when it names the absolute-path, fixed `step complete` command.
 	CompletionCommand *CompletionCommand
+	// RunnerCommands are fixed, runner-owned commands that can be granted
+	// exactly by interactive adapters. CompletionCommand remains temporarily
+	// supported for callers compiled against the previous descriptor.
+	RunnerCommands []RunnerCommand
 	// RunnerIntegration carries trusted, invocation-scoped Runner tool
 	// descriptors. It contains no active attempt credentials; those arrive only
 	// through the sanitized child environment.
 	RunnerIntegration *RunnerIntegration
 }
 
+// RunnerCommandKind selects a fixed argv; callers never supply argv directly.
+type RunnerCommandKind int
+
+const (
+	RunnerCommandCompleteStep RunnerCommandKind = iota
+	RunnerCommandSubmitRoute
+)
+
+// RunnerCommand describes one exact runner executable invocation.
+type RunnerCommand struct {
+	Kind       RunnerCommandKind
+	Executable string
+}
+
+func (c RunnerCommand) Args() []string {
+	switch c.Kind {
+	case RunnerCommandCompleteStep:
+		return []string{"step", "complete"}
+	case RunnerCommandSubmitRoute:
+		return []string{"step", "submit-route"}
+	default:
+		return nil
+	}
+}
+
+func (c RunnerCommand) Valid() bool { return filepath.IsAbs(c.Executable) && c.Args() != nil }
+
+func (c RunnerCommand) ShellCommand() string {
+	if !c.Valid() {
+		return ""
+	}
+	parts := []string{shellQuote(c.Executable)}
+	for _, arg := range c.Args() {
+		parts = append(parts, shellQuote(arg))
+	}
+	return strings.Join(parts, " ")
+}
+
+func (c RunnerCommand) hookCommand() string {
+	if c.Kind != RunnerCommandCompleteStep || !c.Valid() {
+		return ""
+	}
+	return strings.Join([]string{shellQuote(c.Executable), "internal", "turn-committed"}, " ")
+}
+
+func runnerCommands(input *BuildArgsInput) []RunnerCommand {
+	if input == nil || input.InvocationContext().IsHeadless() {
+		return nil
+	}
+	if len(input.RunnerCommands) > 0 {
+		commands := make([]RunnerCommand, 0, len(input.RunnerCommands))
+		for _, command := range input.RunnerCommands {
+			if command.Valid() {
+				commands = append(commands, command)
+			}
+		}
+		return commands
+	}
+	if input.CompletionCommand != nil && input.CompletionCommand.Valid() {
+		return []RunnerCommand{{Kind: RunnerCommandCompleteStep, Executable: input.CompletionCommand.Executable}}
+	}
+	return nil
+}
+
+func completionRunnerCommand(input *BuildArgsInput) *RunnerCommand {
+	for _, command := range runnerCommands(input) {
+		if command.Kind == RunnerCommandCompleteStep {
+			return &command
+		}
+	}
+	return nil
+}
+
 func completionCommandEnabled(input *BuildArgsInput) bool {
-	return input != nil &&
-		!input.InvocationContext().IsHeadless() &&
-		input.CompletionCommand != nil &&
-		input.CompletionCommand.Valid()
+	return completionRunnerCommand(input) != nil
 }
 
 type MCPServerCommand struct {
@@ -172,13 +246,6 @@ func (c CompletionCommand) ShellCommand() string {
 		parts = append(parts, shellQuote(arg))
 	}
 	return strings.Join(parts, " ")
-}
-
-func (c CompletionCommand) hookCommand() string {
-	if !c.Valid() {
-		return ""
-	}
-	return strings.Join([]string{shellQuote(c.Executable), "internal", "turn-committed"}, " ")
 }
 
 func shellQuote(value string) string {

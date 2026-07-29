@@ -16,13 +16,16 @@ import (
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/control"
+	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/engine"
+	"github.com/codagent/agent-runner/internal/intakeroute"
 	"github.com/codagent/agent-runner/internal/interactive"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/session"
 	"github.com/codagent/agent-runner/internal/textfmt"
 	"github.com/codagent/agent-runner/internal/usersettings"
+	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
 var interactiveRunnerFn = runDirectInteractive
@@ -45,6 +48,9 @@ type directInvocation struct {
 	resolveSessionID  func() string
 	agentCallEligible bool
 	agentCallHandler  control.AgentCallHandler
+	routeEligible     bool
+	routeStore        *intakeroute.Store
+	routeValidation   *intakeroute.ValidateOptions
 }
 
 var isStdinTerminal = func() bool {
@@ -128,6 +134,7 @@ func ExecuteAgentStep(
 		return OutcomeFailed, nil
 	}
 	agentCallEligible := step.HasTool(model.RunnerToolCallAgent)
+	routeEligible := isRouteEligible(step, ctx)
 
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 	startTime := time.Now()
@@ -191,7 +198,7 @@ func ExecuteAgentStep(
 	// the native session. CLI-assigned IDs are stored after discovery instead.
 	recordSessionOnSpawn(step, ctx, sessionID)
 
-	direct := buildWorkflowDirectInvocation(step, ctx, adapter, cliName, sessionID, spawnEnv, agentCallEligible, callHandler)
+	direct := buildWorkflowDirectInvocation(step, ctx, adapter, cliName, sessionID, spawnEnv, agentCallEligible, callHandler, routeEligible)
 	invocationInput := buildWorkflowAgentInvocation(step, ctx, adapter, args, spawnEnv, prefix, invocationContext, cliName, resolvedModel, sessionID, isResume, log, direct)
 	invocation, runErr := InvokeAgent(invocationInput, runner, log)
 	if runErr != nil {
@@ -307,10 +314,11 @@ func buildWorkflowDirectInvocation(
 	spawnEnv []string,
 	agentCallEligible bool,
 	agentCallHandler control.AgentCallHandler,
+	routeEligible bool,
 ) *directInvocation {
 	spawnTime := time.Now()
 	probe, _ := adapter.(cli.TurnDurabilityProbe)
-	return &directInvocation{
+	invocation := &directInvocation{
 		ctx: ctx, stepID: step.ID, cliName: cliName, sessionID: sessionID, probe: probe,
 		spawnEnv: spawnEnv, dropEnv: cli.DropSpawnEnvVars(adapter),
 		resolveSessionID: func() string {
@@ -318,6 +326,28 @@ func buildWorkflowDirectInvocation(
 		},
 		agentCallEligible: agentCallEligible,
 		agentCallHandler:  agentCallHandler,
+	}
+	if routeEligible {
+		invocation.routeStore = intakeroute.NewStore(ctx.SessionDir)
+		invocation.routeEligible = true
+		invocation.routeValidation = routeValidationOptions(ctx)
+	}
+	return invocation
+}
+
+func isRouteEligible(step *model.Step, ctx *model.ExecutionContext) bool {
+	return step != nil && ctx != nil && step.HasTool(model.RunnerToolSubmitRoute) &&
+		ctx.ParentContext == nil && ctx.WorkflowFile == builtinworkflows.Ref("core/intake-v1.0.yaml") && step.ID == "plan"
+}
+
+func routeValidationOptions(ctx *model.ExecutionContext) *intakeroute.ValidateOptions {
+	if ctx == nil || ctx.SessionDir == "" {
+		return nil
+	}
+	return &intakeroute.ValidateOptions{
+		RunDir: ctx.SessionDir, ParentRunID: filepath.Base(ctx.SessionDir), IntakeWorkflow: "core:intake",
+		RequestPath: filepath.Join(ctx.SessionDir, "route-request.json"),
+		Catalog:     intakeroute.NewCatalog(discovery.Enumerate(builtinworkflows.FS, ctx.ProjectRoot, "")),
 	}
 }
 
@@ -560,6 +590,10 @@ func buildAdapterInput(
 	}
 	if completionExecutable != "" {
 		input.CompletionCommand = &cli.CompletionCommand{Executable: completionExecutable, Args: []string{"step", "complete"}}
+		input.RunnerCommands = []cli.RunnerCommand{{Kind: cli.RunnerCommandCompleteStep, Executable: completionExecutable}}
+		if isRouteEligible(step, ctx) {
+			input.RunnerCommands = append(input.RunnerCommands, cli.RunnerCommand{Kind: cli.RunnerCommandSubmitRoute, Executable: completionExecutable})
+		}
 	}
 
 	switch {
@@ -686,6 +720,7 @@ func runDirectInteractive(args []string, options directRunOptions) (interactive.
 		Env: invocation.spawnEnv, DropEnv: invocation.dropEnv,
 		Control: server, Probe: invocation.probe, ResolveSessionID: invocation.resolveSessionID, Foreground: true,
 		AgentCallEligible: invocation.agentCallEligible, AgentCallHandler: invocation.agentCallHandler,
+		RouteEligible: invocation.routeEligible, RouteStore: invocation.routeStore, RouteValidation: invocation.routeValidation,
 		WatchdogExecutable: executable, Logger: invocation.ctx.AuditLogger,
 		Prefix: audit.BuildPrefix(nestingToAudit(invocation.ctx), invocation.stepID),
 		Persist: func(metadata *interactive.ProcessMetadata) {
