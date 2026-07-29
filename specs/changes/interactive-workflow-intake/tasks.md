@@ -1,0 +1,5 @@
+- [ ] `intake_handoff` built-in, reserved name, and intake run provenance (`tasks/01-handoff-builtin-and-provenance.md`)
+- [ ] Intake route sidecar package with validation and sealing (`tasks/02-intake-route-sidecar.md`)
+- [ ] Route submission over the control channel, adapter grants, and the embedded intake workflow (`tasks/03-route-submission-control-channel.md`)
+- [ ] Intake entry points — `-i`, run-scoped overrides, TTY gate, and the New tab entry (`tasks/04-intake-entry-points.md`)
+- [ ] Launch across the process boundary, shared fresh-run preparation, and handoff consumers (`tasks/05-launch-and-handoff-consumers.md`)
