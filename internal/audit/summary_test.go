@@ -38,10 +38,10 @@ func TestBuildSummary(t *testing.T) {
 			{Timestamp: "2026-05-24T10:00:05Z", Prefix: "[triage, sub:child]", Type: EventSubWorkflowEnd, Outcome: "success", Data: map[string]any{"outcome": "success"}},
 		},
 		Failures: []FailureEvent{
-			{Timestamp: "2026-05-24T10:00:03Z", Prefix: "[triage]", Type: EventStepEnd, Outcome: "failed", Data: map[string]any{"outcome": "failed"}},
+			{Timestamp: "2026-05-24T10:00:03Z", Prefix: "[triage]", Type: EventStepEnd, Outcome: "failed"},
 		},
 		Errors: []ErrorEvent{
-			{Timestamp: "2026-05-24T10:00:02Z", Prefix: "[triage]", Message: "failed with <REDACTED>", Data: map[string]any{"message": "failed with <REDACTED>"}},
+			{Timestamp: "2026-05-24T10:00:02Z", Prefix: "[triage]", Message: "failed with <REDACTED>"},
 		},
 		Truncated:          false,
 		DroppedEventsCount: 0,
@@ -100,6 +100,140 @@ func TestBuildSummaryTruncatesStructuredEvents(t *testing.T) {
 	}
 	if len(got.Steps) != 0 {
 		t.Fatalf("len(Steps) = %d, want 0", len(got.Steps))
+	}
+}
+
+func TestBuildSummaryPreservesLateFailureAndRunEndWhenBoundariesAreTruncated(t *testing.T) {
+	var log strings.Builder
+	log.WriteString(auditLine(t, Event{
+		Timestamp: "2026-05-24T10:00:00Z",
+		Type:      EventRunStart,
+		Data:      map[string]any{"workflow_name": "long-run"},
+	}))
+	for i := range 20 {
+		log.WriteString(auditLine(t, Event{
+			Timestamp: "2026-05-24T10:00:01Z",
+			Prefix:    "[early]",
+			Type:      EventStepStart,
+			Data:      map[string]any{"type": "agent", "prompt": strings.Repeat("x", 80), "index": i},
+		}))
+	}
+	log.WriteString(auditLine(t, Event{
+		Timestamp: "2026-05-24T10:00:02Z",
+		Prefix:    "[final-gate]",
+		Type:      EventStepEnd,
+		Data: map[string]any{
+			"type":      "shell",
+			"outcome":   "failed",
+			"exit_code": 1,
+			"stderr":    "CI did not pass",
+		},
+	}))
+	log.WriteString(auditLine(t, Event{
+		Timestamp: "2026-05-24T10:00:03Z",
+		Type:      EventRunEnd,
+		Data:      map[string]any{"outcome": "failed"},
+	}))
+
+	got, err := BuildSummary(strings.NewReader(log.String()), 1024)
+	if err != nil {
+		t.Fatalf("BuildSummary returned error: %v", err)
+	}
+	if !got.Truncated {
+		t.Fatal("Truncated = false, want true")
+	}
+	if got.RunEnd == nil || stringField(got.RunEnd.Data, "outcome") != "failed" {
+		t.Fatalf("RunEnd = %#v, want failed run_end despite boundary truncation", got.RunEnd)
+	}
+	if len(got.Failures) != 1 || got.Failures[0].Prefix != "[final-gate]" {
+		t.Fatalf("Failures = %#v, want final-gate failure despite boundary truncation", got.Failures)
+	}
+	if len(got.Steps) == 0 || got.Steps[len(got.Steps)-1].Prefix != "[final-gate]" {
+		t.Fatalf("last step = %#v, want recent final-gate boundary", got.Steps)
+	}
+	used := encodedSize(*got.RunStart) + encodedSize(*got.RunEnd)
+	for _, step := range got.Steps {
+		used += encodedSize(step)
+	}
+	for _, call := range got.AgentCalls {
+		used += encodedSize(call)
+	}
+	for _, subWorkflow := range got.SubWorkflows {
+		used += encodedSize(subWorkflow)
+	}
+	for _, failure := range got.Failures {
+		used += encodedSize(failure)
+	}
+	for _, auditError := range got.Errors {
+		used += encodedSize(auditError)
+	}
+	if used > 1024 {
+		t.Fatalf("structured event bytes = %d, want at most 1024", used)
+	}
+}
+
+func TestBuildSummaryDoesNotEvictEvidenceForAggregateThatCannotFit(t *testing.T) {
+	stepEvent := Event{
+		Timestamp: "2026-05-24T10:00:00Z",
+		Prefix:    "[kept]",
+		Type:      EventStepStart,
+		Data:      map[string]any{"type": "shell"},
+	}
+	errorEvent := Event{
+		Timestamp: "2026-05-24T10:00:01Z",
+		Prefix:    "[oversized]",
+		Type:      EventError,
+		Data:      map[string]any{"message": strings.Repeat("x", 500)},
+	}
+	capBytes := encodedSize(StepBoundary{
+		Timestamp: stepEvent.Timestamp,
+		Prefix:    stepEvent.Prefix,
+		Type:      stepEvent.Type,
+		StepType:  "shell",
+		Data:      stepEvent.Data,
+	})
+
+	got, err := BuildSummary(strings.NewReader(auditLine(t, stepEvent)+auditLine(t, errorEvent)), capBytes)
+	if err != nil {
+		t.Fatalf("BuildSummary returned error: %v", err)
+	}
+	if len(got.Steps) != 1 || got.Steps[0].Prefix != "[kept]" {
+		t.Fatalf("Steps = %#v, want existing evidence retained when new aggregate cannot fit", got.Steps)
+	}
+	if len(got.Errors) != 0 {
+		t.Fatalf("Errors = %#v, want oversized aggregate omitted", got.Errors)
+	}
+}
+
+func TestBuildSummaryEvictsRunStartForLateDiagnostic(t *testing.T) {
+	startEvent := Event{
+		Timestamp: "2026-05-24T10:00:00Z",
+		Type:      EventRunStart,
+		Data:      map[string]any{"workflow_name": strings.Repeat("x", 300)},
+	}
+	errorEvent := Event{
+		Timestamp: "2026-05-24T10:00:01Z",
+		Prefix:    "[late]",
+		Type:      EventError,
+		Data:      map[string]any{"message": "terminal failure"},
+	}
+	startSize := encodedSize(eventRef(startEvent))
+	errorSize := encodedSize(ErrorEvent{
+		Timestamp: errorEvent.Timestamp,
+		Prefix:    errorEvent.Prefix,
+		Message:   "terminal failure",
+	})
+	capBytes := startSize + errorSize - 1
+
+	got, err := BuildSummary(strings.NewReader(auditLine(t, startEvent)+auditLine(t, errorEvent)), capBytes)
+	if err != nil {
+		t.Fatalf("BuildSummary returned error: %v", err)
+	}
+	if got.RunStart != nil {
+		t.Fatalf("RunStart = %#v, want lower-priority run_start evicted", got.RunStart)
+	}
+	if len(got.Errors) != 1 || got.Errors[0].Prefix != "[late]" {
+		t.Fatalf("Errors = %#v, want late diagnostic retained", got.Errors)
 	}
 }
 

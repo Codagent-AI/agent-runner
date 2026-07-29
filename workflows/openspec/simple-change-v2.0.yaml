@@ -77,15 +77,12 @@ steps:
       skip_validator: "false"
 
   - id: test
-    session: lead-agent
+    session: flow-tester
     mode: autonomous
-    tools: [call_agent]
     prompt: |
-      Run a lightweight branch-local flow test for implemented OpenSpec change "{{change_name}}". Do not perform the flow testing yourself or modify tracked files.
+      Use codagent:test-flows to perform lightweight branch-local flow testing for implemented OpenSpec change "{{change_name}}".
 
-      Use codagent:call-agent with `session: flow-tester`. Give the child a standalone prompt requiring codagent:test-flows, the approved artifacts under `openspec/changes/{{change_name}}/`, a concise verified implementation summary, representative full scope, and evidence directory `{{session_dir}}/output/`. Require it to write a concise report to `{{session_dir}}/output/test-flows.md` and place any UI screenshots beneath that output directory. It must not modify files.
-
-      Follow codagent:call-agent's verification and autonomous result-accounting rules. Verify the child's cited evidence and ensure `test-flows.md` accurately preserves its material findings, evidence, ambiguities, and limitations. Do not fix findings in this step.
+      Read the approved artifacts under `openspec/changes/{{change_name}}/` and relevant implementation evidence under `{{session_dir}}/output/`. Exercise representative public flows proportionally to this small change. Write a concise evidence report to `{{session_dir}}/output/test-flows.md` and place any UI screenshots beneath that output directory. Preserve material findings, evidence, ambiguities, and limitations accurately. Do not modify tracked files or fix findings.
 
   - id: review
     session: lead-agent
@@ -98,7 +95,7 @@ steps:
 
       Help the user review and request fixes or minor enhancements without material scope expansion. Confirm consequential behavioral or design changes before editing. Before fixing a defect, invoke codagent:implement-with-tdd and follow red-green-refactor; add unit coverage where applicable and a practical integration or end-to-end regression test when it meaningfully protects the affected public flow. Update active specifications only when a decision changes or clarifies normative observable behavior.
 
-      After tracked changes, run relevant targeted checks, invoke validator-run, and commit related changes following project conventions with the `[{{step_id}}]` prefix. If a changed public flow warrants another hands-on check, recommend a targeted verification. When the user agrees, resume `flow-tester` once with the prior finding, affected flow, and direct dependencies; require codagent:test-flows in targeted scope rather than a new broad pass, then present its exact result. Do not create status files or hide an unresolved result behind a success claim.
+      After tracked changes, run relevant targeted checks, invoke validator-run, and commit related changes following project conventions with the `[{{step_id}}]` prefix. If a changed public flow warrants another hands-on check, recommend targeted verification. When the user agrees, resume `flow-tester` with the prior finding, affected flow, and direct dependencies; require codagent:test-flows in targeted scope rather than a new broad pass, then present its exact result. Address approved actionable findings and repeat targeted verification when warranted until the user says review is complete. Do not create status files or hide an unresolved result behind a success claim.
 
       Continue to the next step only when the user says testing and review are complete.
 

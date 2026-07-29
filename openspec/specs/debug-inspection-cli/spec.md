@@ -76,7 +76,7 @@ The `agent-runner debug --audit-summary <run-id>` command SHALL parse `<sessionD
 - the session directory and project directory for the inspected run;
 - the **absolute path** to the full `audit.log` (in a `path` or equivalent field) so the caller can grep, tail, or otherwise inspect the file for additional detail.
 
-The summary SHALL be capped at a configurable maximum byte size with a default of 64 KB. When the cap is reached, the output SHALL include an explicit boolean `truncated: true` flag and a `dropped_events_count` integer indicating how many events were not represented. When the cap is not reached, the output SHALL include `truncated: false`. The cap SHALL apply to the structured event list only; the audit-log `path` field SHALL be present even on truncation. When the audit log is missing entirely (e.g. the run crashed before any audit event was written), the command SHALL exit 0 with a summary object indicating no events, `truncated: false`, `dropped_events_count: 0`, plus the path where the audit log would have been.
+The summary SHALL be capped at a configurable maximum byte size with a default of 64 KB. When the cap is reached, the output SHALL include an explicit boolean `truncated: true` flag and a `dropped_events_count` integer indicating how many event representations were omitted. When the cap is not reached, the output SHALL include `truncated: false`. The cap SHALL apply to the structured event list only; the audit-log `path` field SHALL be present even on truncation. Truncation SHALL prioritize the latest run lifecycle result and compact failure/error aggregates over older chronological boundary detail so a failed long-running workflow does not appear to have no failure or terminal result. When the audit log is missing entirely (e.g. the run crashed before any audit event was written), the command SHALL exit 0 with a summary object indicating no events, `truncated: false`, `dropped_events_count: 0`, plus the path where the audit log would have been.
 
 #### Scenario: Known run id with audit log
 - **WHEN** `agent-runner debug --audit-summary <run-id>` is invoked for a known run with a populated audit log
@@ -97,6 +97,10 @@ The summary SHALL be capped at a configurable maximum byte size with a default o
 #### Scenario: Summary exceeds cap
 - **WHEN** the structured event list would exceed the configured cap
 - **THEN** the output JSON includes `truncated: true`, a `dropped_events_count` integer, and the audit-log `path` field; the events that are included are bounded by the cap
+
+#### Scenario: Failed run exceeds cap
+- **WHEN** older boundary events exhaust the summary budget before a failed step and failed `run_end` near the end of the audit log
+- **THEN** the output retains the compact failure aggregate and failed `run_end`, omits older boundary detail as needed, and reports truncation
 
 #### Scenario: Missing audit log
 - **WHEN** the run's session directory exists but `<sessionDir>/audit.log` does not exist

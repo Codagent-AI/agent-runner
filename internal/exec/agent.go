@@ -170,7 +170,7 @@ func ExecuteAgentStep(
 	// Bind the run-scoped endpoint before releasing the terminal lease.
 	if controlErr := ensureRunnerControl(ctx, invocationContext, agentCallEligible); controlErr != nil {
 		extraction := cli.UsageExtraction{Usage: defaultAgentUsage(cliName, invocationContext.IsHeadless())}
-		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, false, "", OutcomeFailed, "", controlErr.Error(), &extraction, nil)
+		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, false, "", OutcomeFailed, "", controlErr.Error(), nil, controlErr, &extraction, nil)
 		return OutcomeFailed, controlErr
 	}
 
@@ -180,7 +180,7 @@ func ExecuteAgentStep(
 	)
 	if controlErr != nil {
 		extraction := cli.UsageExtraction{Usage: defaultAgentUsage(cliName, invocationContext.IsHeadless())}
-		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, false, "", OutcomeFailed, "", controlErr.Error(), &extraction, nil)
+		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, false, "", OutcomeFailed, "", controlErr.Error(), nil, controlErr, &extraction, nil)
 		return OutcomeFailed, controlErr
 	}
 	if deactivate != nil {
@@ -196,7 +196,7 @@ func ExecuteAgentStep(
 	invocation, runErr := InvokeAgent(invocationInput, runner, log)
 	if runErr != nil {
 		extraction := cli.UsageExtraction{Usage: invocation.Usage, EstimatedCostUSD: invocation.EstimatedCostUSD}
-		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, invocation.CLILaunched, "", invocation.Outcome, "", invocation.Stderr, &extraction, invocation.UsageError)
+		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, invocation.CLILaunched, "", invocation.Outcome, "", invocation.Stderr, &invocation.ExitCode, runErr, &extraction, invocation.UsageError)
 		return invocation.Outcome, runErr
 	}
 
@@ -217,7 +217,7 @@ func ExecuteAgentStep(
 	discoveredID := storeDiscoveredSession(step, ctx, invocation.DiscoveredSessionID, log)
 
 	extraction := cli.UsageExtraction{Usage: invocation.Usage, EstimatedCostUSD: invocation.EstimatedCostUSD}
-	emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, invocation.CLILaunched, discoveredID, invocation.Outcome, invocation.Response, invocation.Stderr, &extraction, invocation.UsageError)
+	emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, invocation.CLILaunched, discoveredID, invocation.Outcome, invocation.Response, invocation.Stderr, &invocation.ExitCode, nil, &extraction, invocation.UsageError)
 
 	return invocation.Outcome, nil
 }
@@ -907,6 +907,8 @@ func emitAgentEnd(
 	discoveredID string,
 	outcome StepOutcome,
 	stdout, stderr string,
+	exitCode *int,
+	runErr error,
 	extraction *cli.UsageExtraction,
 	usageErr error,
 ) {
@@ -927,6 +929,12 @@ func emitAgentEnd(
 	}
 	if stderr != "" {
 		data["stderr"] = stderr
+	}
+	if exitCode != nil {
+		data["exit_code"] = *exitCode
+	}
+	if runErr != nil {
+		data["error"] = runErr.Error()
 	}
 	if usageErr != nil {
 		data["usage_error"] = usageErr.Error()

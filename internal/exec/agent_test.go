@@ -247,6 +247,35 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("interactive post-spawn failure records diagnostic evidence", func(t *testing.T) {
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(_ []string, _ directRunOptions) (interactive.DirectResult, error) {
+			return interactive.DirectResult{Started: true, ExitCode: 1}, errors.New("reclaim terminal foreground: inappropriate ioctl")
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		auditLog := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		step := model.Step{ID: "review", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew}
+
+		outcome, err := ExecuteAgentStep(&step, ctx, &mockRunner{}, &mockLogger{})
+		if err == nil || outcome != OutcomeFailed {
+			t.Fatalf("ExecuteAgentStep() = (%q, %v), want failed post-spawn error", outcome, err)
+		}
+		end := findAuditEvent(auditLog.events, audit.EventStepEnd)
+		if got := end.Data["error"]; got != err.Error() {
+			t.Fatalf("error = %#v, want %q", got, err)
+		}
+		if got := end.Data["exit_code"]; got != 1 {
+			t.Fatalf("exit_code = %#v, want 1", got)
+		}
+		identity, ok := end.Data["identity"].(model.ExecutionIdentity)
+		if !ok || !identity.AgentInvoked {
+			t.Fatalf("identity = %#v, want agent_invoked=true", end.Data["identity"])
+		}
+	})
+
 	t.Run("interactive terminal event reports pty usage unavailable", func(t *testing.T) {
 		oldFn := interactiveRunnerFn
 		interactiveRunnerFn = func(_ []string, _ directRunOptions) (interactive.DirectResult, error) {
