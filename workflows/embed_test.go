@@ -392,9 +392,55 @@ func TestCoreValidatePlanningArtifactsScript(t *testing.T) {
 		}
 	}
 	for name, content := range map[string]string{
-		"proposal.md":           "# Proposal\n",
-		"design.md":             "# Design\n",
-		"test-plan.md":          "# Test plan\n",
+		"proposal.md": "# Proposal\n",
+		"design.md":   "# Design\n",
+		"test-plan.md": `## Coverage Strategy
+
+Use the lowest reliable layer.
+
+## Integration Tests
+
+### INT-001: Widget boundary
+- Covers: Widget behavior
+- Boundary: CLI and service
+- Setup: Controlled fixture
+- Action: Invoke the CLI
+- Assertions: Stable output
+- Execution: Integration suite
+
+## End-to-End Tests
+
+### E2E-001: Widget journey
+- Covers: Widget behavior
+- Surface: CLI
+- Setup: Isolated workspace
+- Journey: Create a widget
+- Assertions: Widget is reported
+- Execution: End-to-end suite
+
+## Agent Acceptance Tests
+
+### AT-001: Use a widget
+- Classification: Required
+- Covers: Widget behavior
+- Actor and surface: User through the CLI
+- Setup: Isolated workspace
+- Steps: Create and inspect a widget
+- Expected: The widget is visible
+- Evidence: Captured terminal output
+- Effects and cleanup: Remove the workspace
+- Permitted substitutes: None
+
+## Human-Only Testing
+
+None.
+
+## Coverage Map
+
+| Requirement or journey | INT | E2E | AT | HT |
+| --- | --- | --- | --- | --- |
+| Widget behavior | INT-001 | E2E-001 | AT-001 | — |
+`,
 		"specs/widgets/spec.md": "## ADDED Requirements\n### Requirement: Widget\nThe system SHALL work.\n#### Scenario: Works\n- **WHEN** used\n- **THEN** it works\n",
 	} {
 		path := filepath.Join(changeDir, filepath.FromSlash(name))
@@ -415,6 +461,38 @@ func TestCoreValidatePlanningArtifactsScript(t *testing.T) {
 	if err := run(false); err != nil {
 		t.Fatalf("definition validation failed: %v", err)
 	}
+
+	validTestPlan, err := os.ReadFile(filepath.Join(changeDir, "test-plan.md"))
+	if err != nil {
+		t.Fatalf("read valid test plan: %v", err)
+	}
+	for name, content := range map[string]string{
+		"missing required section": strings.ReplaceAll(string(validTestPlan), "## Coverage Map", "## Traceability"),
+		"dangling coverage id":     strings.ReplaceAll(string(validTestPlan), "AT-001 | —", "AT-999 | —"),
+		"duplicate obligation id":  string(validTestPlan) + "\n### AT-001: Duplicate\n",
+		"missing integration field": strings.ReplaceAll(
+			string(validTestPlan),
+			"- Boundary: CLI and service\n",
+			"",
+		),
+		"missing acceptance field":       strings.ReplaceAll(string(validTestPlan), "- Evidence: Captured terminal output\n", ""),
+		"empty conditional trigger":      strings.ReplaceAll(string(validTestPlan), "- Classification: Required", "- Classification: Conditional:"),
+		"missing human-only disposition": strings.ReplaceAll(string(validTestPlan), "\nNone.\n\n## Coverage Map", "\nNot applicable.\n\n## Coverage Map"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			testPlanPath := filepath.Join(changeDir, "test-plan.md")
+			if err := os.WriteFile(testPlanPath, []byte(content), 0o600); err != nil {
+				t.Fatalf("write invalid test plan: %v", err)
+			}
+			if err := run(false); err == nil {
+				t.Fatal("definition validation passed malformed test plan")
+			}
+			if err := os.WriteFile(testPlanPath, validTestPlan, 0o600); err != nil {
+				t.Fatalf("restore valid test plan: %v", err)
+			}
+		})
+	}
+
 	if err := run(true); err == nil {
 		t.Fatal("task-plan validation passed without a task file")
 	}

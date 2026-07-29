@@ -96,6 +96,117 @@ for required in ("proposal.md", "design.md", "test-plan.md"):
     if not path.is_file() or path.stat().st_size == 0:
         failures.append(f"missing or empty {path}")
 
+test_plan_path = change_dir / "test-plan.md"
+if test_plan_path.is_file() and test_plan_path.stat().st_size > 0:
+    test_plan = test_plan_path.read_text(encoding="utf-8")
+    section_names = (
+        "Coverage Strategy",
+        "Integration Tests",
+        "End-to-End Tests",
+        "Agent Acceptance Tests",
+        "Human-Only Testing",
+        "Coverage Map",
+    )
+    section_pattern = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
+    section_matches = list(section_pattern.finditer(test_plan))
+    sections = {}
+    for index, match in enumerate(section_matches):
+        name = match.group(1)
+        end = section_matches[index + 1].start() if index + 1 < len(section_matches) else len(test_plan)
+        if name in section_names:
+            if name in sections:
+                failures.append(f"{test_plan_path} contains duplicate section '## {name}'")
+            else:
+                sections[name] = (match.end(), end)
+
+    for name in section_names:
+        if name not in sections:
+            failures.append(f"{test_plan_path} is missing '## {name}'")
+
+    present_sections = [match.group(1) for match in section_matches if match.group(1) in section_names]
+    expected_present_sections = [name for name in section_names if name in sections]
+    if present_sections != expected_present_sections:
+        failures.append(f"{test_plan_path} test-plan sections are out of order")
+
+    obligation_pattern = re.compile(
+        r"^###\s+((?:INT|E2E|AT|HT)-[A-Za-z0-9][A-Za-z0-9._-]*):\s*(.+?)\s*$",
+        re.MULTILINE,
+    )
+    obligation_matches = list(obligation_pattern.finditer(test_plan))
+    obligations = {}
+    for match in obligation_matches:
+        obligation_id = match.group(1)
+        if obligation_id in obligations:
+            failures.append(f"{test_plan_path} contains duplicate obligation ID {obligation_id}")
+        else:
+            obligations[obligation_id] = match
+
+    required_fields = {
+        "INT": ("Covers", "Boundary", "Setup", "Action", "Assertions", "Execution"),
+        "E2E": ("Covers", "Surface", "Setup", "Journey", "Assertions", "Execution"),
+        "AT": (
+            "Classification",
+            "Covers",
+            "Actor and surface",
+            "Setup",
+            "Steps",
+            "Expected",
+            "Evidence",
+            "Effects and cleanup",
+            "Permitted substitutes",
+        ),
+        "HT": ("Reason", "Prerequisites", "Instructions", "Required decision or observation"),
+    }
+    expected_sections = {
+        "INT": "Integration Tests",
+        "E2E": "End-to-End Tests",
+        "AT": "Agent Acceptance Tests",
+        "HT": "Human-Only Testing",
+    }
+    heading_boundary_pattern = re.compile(r"^#{2,3}\s+", re.MULTILINE)
+    for match in obligation_matches:
+        obligation_id = match.group(1)
+        prefix = obligation_id.split("-", 1)[0]
+        next_heading = heading_boundary_pattern.search(test_plan, match.end())
+        end = next_heading.start() if next_heading else len(test_plan)
+        body = test_plan[match.end():end]
+        section_name = expected_sections[prefix]
+        section_range = sections.get(section_name)
+        if section_range is not None and not (section_range[0] <= match.start() < section_range[1]):
+            failures.append(f"{test_plan_path} places {obligation_id} outside '## {section_name}'")
+        for field in required_fields[prefix]:
+            field_pattern = re.compile(rf"^-\s+{re.escape(field)}:\s*(\S.*?)\s*$", re.MULTILINE)
+            if not field_pattern.search(body):
+                failures.append(f"{test_plan_path} obligation {obligation_id} is missing non-empty '{field}'")
+        if prefix == "AT":
+            classification = re.search(r"^-\s+Classification:\s*(.*?)\s*$", body, re.MULTILINE)
+            value = classification.group(1).strip() if classification else ""
+            if value != "Required" and not (
+                value.startswith("Conditional:") and value.removeprefix("Conditional:").strip()
+            ):
+                failures.append(
+                    f"{test_plan_path} obligation {obligation_id} classification must be "
+                    "'Required' or 'Conditional: <condition>'"
+                )
+
+    human_only_range = sections.get("Human-Only Testing")
+    if human_only_range is not None and not any(key.startswith("HT-") for key in obligations):
+        human_only = test_plan[human_only_range[0]:human_only_range[1]]
+        if not re.search(r"(?im)^\s*None\.\s*$", human_only):
+            failures.append(
+                f"{test_plan_path} human-only testing must say 'None.' or define at least one HT-* obligation"
+            )
+
+    coverage_map_range = sections.get("Coverage Map")
+    if coverage_map_range is not None:
+        coverage_map = test_plan[coverage_map_range[0]:coverage_map_range[1]]
+        referenced_ids = set(
+            re.findall(r"\b(?:INT|E2E|AT|HT)-[A-Za-z0-9][A-Za-z0-9._-]*\b", coverage_map)
+        )
+        for obligation_id in sorted(referenced_ids):
+            if obligation_id not in obligations:
+                failures.append(f"{test_plan_path} coverage map references undefined {obligation_id}")
+
 spec_paths = sorted(change_dir.glob("specs/*/spec.md"))
 spec_paths = [path for path in spec_paths if path.is_file() and path.stat().st_size > 0]
 if not spec_paths:
