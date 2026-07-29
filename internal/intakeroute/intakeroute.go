@@ -41,6 +41,41 @@ const (
 	Frozen State = "frozen"
 )
 
+// ViolationCode identifies the validation rule a submitted route violated.
+type ViolationCode string
+
+const (
+	ViolationConfiguration      ViolationCode = "configuration"
+	ViolationRunDirectory       ViolationCode = "run_directory"
+	ViolationRequest            ViolationCode = "request"
+	ViolationDecode             ViolationCode = "decode"
+	ViolationWorkflowResolution ViolationCode = "workflow_resolution"
+	ViolationSelfRoute          ViolationCode = "self_route"
+	ViolationParameter          ViolationCode = "parameter"
+	ViolationHandoff            ViolationCode = "handoff"
+)
+
+// ValidationError is an actionable, transport-independent route validation
+// failure. Code is stable for clients; the optional context fields identify the
+// relevant request value while Message remains suitable for immediate display.
+type ValidationError struct {
+	Code      ViolationCode
+	Message   string
+	Workflow  string
+	Parameter string
+	Path      string
+	Err       error
+}
+
+func (e *ValidationError) Error() string { return e.Message }
+
+// Unwrap exposes the underlying filesystem, decoding, or catalog error.
+func (e *ValidationError) Unwrap() error { return e.Err }
+
+// ViolationCode returns the stable code without requiring callers to parse the
+// human-facing Error string.
+func (e *ValidationError) ViolationCode() string { return string(e.Code) }
+
 // Request is the strict, agent-written route request.
 type Request struct {
 	Workflow string            `json:"workflow"`
@@ -106,6 +141,7 @@ type Prepared struct {
 	sealed        Sealed
 	temporaryPath string
 	discarded     bool
+	published     bool
 }
 
 // Sealed returns a copy of the metadata that will be published. HandoffPath is
@@ -114,8 +150,9 @@ func (p *Prepared) Sealed() Sealed {
 	if p == nil {
 		return Sealed{}
 	}
-	p.sealed.Params = cloneParams(p.sealed.Params)
-	return p.sealed
+	sealed := p.sealed
+	sealed.Params = cloneParams(p.sealed.Params)
+	return sealed
 }
 
 // Discard removes the unpublished snapshot. It is safe to call repeatedly and
@@ -137,42 +174,42 @@ func (p *Prepared) Discard() error {
 // the same validated open handle into an unpublished temporary snapshot.
 func Validate(opts *ValidateOptions) (*Prepared, error) {
 	if opts == nil {
-		return nil, errors.New("route validation options are required")
+		return nil, validationFailure(ViolationConfiguration, errors.New("route validation options are required"), "", "", "")
 	}
 	runDir, err := canonicalRunDir(opts.RunDir)
 	if err != nil {
-		return nil, err
+		return nil, validationFailure(ViolationRunDirectory, err, "", "", opts.RunDir)
 	}
 	requestBytes, err := readRequest(opts, runDir)
 	if err != nil {
-		return nil, err
+		return nil, validationFailure(ViolationRequest, err, "", "", opts.RequestPath)
 	}
 	request, err := decodeRequest(requestBytes)
 	if err != nil {
-		return nil, err
+		return nil, validationFailure(ViolationDecode, err, "", "", "")
 	}
 	if opts.Catalog == nil {
-		return nil, errors.New("route workflow catalog is required")
+		return nil, validationFailure(ViolationConfiguration, errors.New("route workflow catalog is required"), request.Workflow, "", "")
 	}
 	entry, err := opts.Catalog.ResolveWorkflow(request.Workflow)
 	if err != nil {
 		if errors.Is(err, ErrWorkflowNotFound) {
-			return nil, fmt.Errorf("workflow %q not found", request.Workflow)
+			return nil, validationFailure(ViolationWorkflowResolution, fmt.Errorf("workflow %q not found", request.Workflow), request.Workflow, "", "")
 		}
-		return nil, fmt.Errorf("resolve workflow %q: %w", request.Workflow, err)
+		return nil, validationFailure(ViolationWorkflowResolution, fmt.Errorf("resolve workflow %q: %w", request.Workflow, err), request.Workflow, "", "")
 	}
 	if entry.CanonicalName == "" || entry.SourcePath == "" || entry.ParseError != "" {
-		return nil, fmt.Errorf("workflow %q not found", request.Workflow)
+		return nil, validationFailure(ViolationWorkflowResolution, fmt.Errorf("workflow %q not found", request.Workflow), request.Workflow, "", "")
 	}
 	if request.Workflow == opts.IntakeWorkflow {
-		return nil, errors.New("intake cannot route to itself")
+		return nil, validationFailure(ViolationSelfRoute, errors.New("intake cannot route to itself"), request.Workflow, "", "")
 	}
 	if err := validateParams(&entry, request.Params); err != nil {
-		return nil, err
+		return nil, validationFailure(ViolationParameter, err, entry.CanonicalName, "", "")
 	}
 	temporaryPath, err := snapshotHandoff(runDir, request.Handoff)
 	if err != nil {
-		return nil, err
+		return nil, validationFailure(ViolationHandoff, err, entry.CanonicalName, "", request.Handoff)
 	}
 	now := time.Now
 	if opts.Now != nil {
@@ -217,7 +254,26 @@ func (s *Store) Load() (*Sealed, error) {
 // Stage publishes a prepared route. It does no catalog resolution or reads of
 // agent-writable input, making it safe for a caller to hold its ordering lock.
 func (s *Store) Stage(prepared *Prepared) (err error) {
-	if prepared == nil || prepared.discarded || prepared.temporaryPath == "" {
+	if s == nil || s.path == "" {
+		return errors.New("intake route store is required")
+	}
+	if prepared == nil {
+		return errors.New("prepared intake route is no longer available")
+	}
+	if prepared.published {
+		current, loadErr := s.Load()
+		if loadErr != nil {
+			return fmt.Errorf("load published intake route: %w", loadErr)
+		}
+		if current.State == Frozen {
+			return ErrFrozen
+		}
+		if current.State == Staged && current.HandoffPath == prepared.sealed.HandoffPath {
+			return nil
+		}
+		return errors.New("prepared intake route was published by a different store")
+	}
+	if prepared.discarded || prepared.temporaryPath == "" {
 		return errors.New("prepared intake route is no longer available")
 	}
 	defer func() {
@@ -225,10 +281,12 @@ func (s *Store) Stage(prepared *Prepared) (err error) {
 			_ = prepared.Discard()
 		}
 	}()
+	var previous *Sealed
 	if current, loadErr := s.Load(); loadErr == nil {
 		if current.State == Frozen {
 			return ErrFrozen
 		}
+		previous = current
 	} else if !os.IsNotExist(loadErr) {
 		return fmt.Errorf("load current intake route: %w", loadErr)
 	}
@@ -248,6 +306,10 @@ func (s *Store) Stage(prepared *Prepared) (err error) {
 		return fmt.Errorf("write intake route sidecar: %w", err)
 	}
 	prepared.discarded = true
+	prepared.published = true
+	if previous != nil && previous.HandoffPath != finalPath {
+		removeOwnedSnapshot(filepath.Dir(s.path), previous.HandoffPath)
+	}
 	return nil
 }
 
@@ -449,4 +511,31 @@ func cloneParams(params map[string]string) map[string]string {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func validationFailure(code ViolationCode, cause error, workflow, parameter, path string) *ValidationError {
+	return &ValidationError{
+		Code:      code,
+		Message:   cause.Error(),
+		Workflow:  workflow,
+		Parameter: parameter,
+		Path:      path,
+		Err:       cause,
+	}
+}
+
+func removeOwnedSnapshot(runDir, snapshot string) {
+	runDir, err := filepath.Abs(runDir)
+	if err != nil {
+		return
+	}
+	snapshot, err = filepath.Abs(snapshot)
+	if err != nil || filepath.Dir(snapshot) != filepath.Clean(runDir) {
+		return
+	}
+	base := filepath.Base(snapshot)
+	if !strings.HasPrefix(base, "intake-handoff-") || !strings.HasSuffix(base, ".md") {
+		return
+	}
+	_ = os.Remove(snapshot)
 }

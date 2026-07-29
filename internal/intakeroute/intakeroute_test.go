@@ -91,6 +91,59 @@ func TestValidateStagesExactResolvedRouteAndSealsHandoff(t *testing.T) {
 	}
 }
 
+func TestValidateReturnsStructuredErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		request string
+		setup   func(t *testing.T, runDir string)
+		want    string
+	}{
+		{name: "decoding", request: `{`, want: "decode"},
+		{name: "resolution", request: `{"workflow":"missing","handoff":"handoff.md"}`, setup: writeHandoff("handoff.md", "notes"), want: "workflow_resolution"},
+		{name: "parameters", request: `{"workflow":"build","handoff":"handoff.md"}`, setup: writeHandoff("handoff.md", "notes"), want: "parameter"},
+		{name: "containment", request: `{"workflow":"build","params":{"change_name":"x"},"handoff":"../outside.md"}`, want: "handoff"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runDir := t.TempDir()
+			if tt.setup != nil {
+				tt.setup(t, runDir)
+			}
+			writeRequest(t, runDir, tt.request)
+			_, err := Validate(&ValidateOptions{RunDir: runDir, ParentRunID: "intake-run", IntakeWorkflow: "core:intake", Catalog: testCatalog()})
+			structured, ok := err.(interface{ ViolationCode() string })
+			if !ok {
+				t.Fatalf("Validate() error = %T %v, want structured validation error", err, err)
+			}
+			if got := structured.ViolationCode(); got != tt.want {
+				t.Fatalf("ViolationCode() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPreparedSealedCopyCannotChangePublishedParams(t *testing.T) {
+	runDir := t.TempDir()
+	writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"intake"},"handoff":"handoff.md"}`)
+	writeFile(t, filepath.Join(runDir, "handoff.md"), "notes")
+	prepared, err := Validate(&ValidateOptions{RunDir: runDir, ParentRunID: "intake-run", IntakeWorkflow: "core:intake", Catalog: testCatalog()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealedCopy := prepared.Sealed()
+	sealedCopy.Params["unexpected"] = "must not leak"
+	if err := NewStore(runDir).Stage(prepared); err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := NewStore(runDir).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := sealed.Params, map[string]string{"change_name": "intake"}; !mapsEqual(got, want) {
+		t.Fatalf("published Params = %#v, want %#v", got, want)
+	}
+}
+
 func TestPreparedDiscardLeavesRunUnchanged(t *testing.T) {
 	runDir := t.TempDir()
 	writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"intake"},"handoff":"handoff.md"}`)
@@ -158,6 +211,10 @@ func TestStoreReplacesStagedRouteButNeverFrozenRoute(t *testing.T) {
 		}
 	}
 	stage("first", "first notes")
+	first, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
 	stage("second", "second notes")
 	sealed, err := store.Load()
 	if err != nil {
@@ -165,6 +222,9 @@ func TestStoreReplacesStagedRouteButNeverFrozenRoute(t *testing.T) {
 	}
 	if got := readFile(t, sealed.HandoffPath); got != "second notes" {
 		t.Fatalf("replacement snapshot = %q", got)
+	}
+	if _, err := os.Stat(first.HandoffPath); !os.IsNotExist(err) {
+		t.Fatalf("replaced snapshot still exists: stat error = %v", err)
 	}
 	if err := store.Freeze(); err != nil {
 		t.Fatalf("Freeze() error = %v", err)
@@ -186,6 +246,27 @@ func TestStoreReplacesStagedRouteButNeverFrozenRoute(t *testing.T) {
 	}
 	if frozen.State != Frozen || frozen.FrozenAt == "" {
 		t.Fatalf("frozen route = %#v, want frozen with timestamp", frozen)
+	}
+}
+
+func TestStoreStageIsIdempotentForPublishedPreparedRoute(t *testing.T) {
+	runDir := t.TempDir()
+	writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"intake"},"handoff":"handoff.md"}`)
+	writeFile(t, filepath.Join(runDir, "handoff.md"), "notes")
+	prepared, err := Validate(&ValidateOptions{RunDir: runDir, ParentRunID: "intake-run", IntakeWorkflow: "core:intake", Catalog: testCatalog()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(runDir)
+	if err := store.Stage(prepared); err != nil {
+		t.Fatal(err)
+	}
+	before := readFile(t, filepath.Join(runDir, "intake-route.json"))
+	if err := store.Stage(prepared); err != nil {
+		t.Fatalf("second Stage() error = %v", err)
+	}
+	if got := readFile(t, filepath.Join(runDir, "intake-route.json")); got != before {
+		t.Fatalf("sidecar after idempotent Stage = %s, want %s", got, before)
 	}
 }
 
