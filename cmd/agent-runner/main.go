@@ -408,6 +408,7 @@ func run() int {
 		resume:         *resumeFlag,
 		onboardingFrom: strings.TrimSpace(*onboardingFromFlag),
 		intake:         *intakeFlag,
+		headless:       *headlessFlag,
 		agentOverride: &model.AgentOverride{
 			CLI: strings.TrimSpace(*cliFlag), Model: strings.TrimSpace(*modelFlag),
 		},
@@ -421,6 +422,7 @@ type commandFlags struct {
 	resume         bool
 	onboardingFrom string
 	intake         bool
+	headless       bool
 	agentOverride  *model.AgentOverride
 }
 
@@ -480,6 +482,7 @@ func dispatchRunCommand(args []string, opts commandFlags) int {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
 	}
+	runOpts.headless = opts.headless
 
 	if opts.validate {
 		return handleValidateArgs(args)
@@ -490,7 +493,7 @@ func dispatchRunCommand(args []string, opts commandFlags) int {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 			return 1
 		}
-		return handleRunWithRunOptions([]string{workflowFile}, runCommandOptions{agentOverride: opts.agentOverride}).exitCode
+		return handleRunWithRunOptions([]string{workflowFile}, runCommandOptions{headless: opts.headless, agentOverride: opts.agentOverride}).exitCode
 	}
 
 	if opts.inspect != "" {
@@ -1729,6 +1732,7 @@ type runCommandOptions struct {
 	liveOpts      liveTUIOptions
 	from          string
 	until         string
+	headless      bool
 	agentOverride *model.AgentOverride
 }
 
@@ -1736,9 +1740,20 @@ func isIntakeWorkflow(workflowFile string) bool {
 	return workflowFile == builtinworkflows.Ref("core/intake-v1.0.yaml")
 }
 
+func validateIntakeRunInvocation(workflowFile string, headless bool) error {
+	if isIntakeWorkflow(workflowFile) && headless {
+		return fmt.Errorf("agent-runner: intake requires an interactive terminal and cannot run with --headless")
+	}
+	return nil
+}
+
 func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIResult {
 	liveOpts := runOpts.liveOpts.withEnv()
 	workflowFile := args[0]
+	if err := validateIntakeRunInvocation(workflowFile, runOpts.headless); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return liveTUIResult{exitCode: 1}
+	}
 
 	workflow, err := loader.LoadWorkflow(workflowFile, loader.Options{})
 	if err != nil {

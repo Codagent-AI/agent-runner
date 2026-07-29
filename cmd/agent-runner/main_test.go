@@ -310,6 +310,15 @@ func TestValidateIntakeInvocation(t *testing.T) {
 	}
 }
 
+func TestValidateIntakeRunInvocationRejectsHeadlessByName(t *testing.T) {
+	if err := validateIntakeRunInvocation("builtin:core/intake-v1.0.yaml", true); err == nil || !strings.Contains(err.Error(), "interactive terminal") {
+		t.Fatalf("headless intake error = %v, want interactive-terminal rejection", err)
+	}
+	if err := validateIntakeRunInvocation("builtin:core/finalize-pr-v1.0.yaml", true); err != nil {
+		t.Fatalf("headless non-intake error = %v, want nil", err)
+	}
+}
+
 func TestResolveValidateWorkflowArgAcceptsExistingYAMLPath(t *testing.T) {
 	t.Chdir(t.TempDir())
 	path := filepath.Join("workflows", "custom-v1.0.yaml")

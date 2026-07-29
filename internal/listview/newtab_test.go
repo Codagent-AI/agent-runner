@@ -532,6 +532,26 @@ func TestNewTab_InitialCursorSkipsLeadingHeader(t *testing.T) {
 	}
 }
 
+func TestNewTab_NavigationAroundIntakeEntry(t *testing.T) {
+	m := newTabModel([]discovery.WorkflowEntry{
+		{CanonicalName: "project-build", Scope: discovery.ScopeProject, SourcePath: "/project/build.yaml"},
+		{CanonicalName: "core:finalize", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/builtin/finalize.yaml"},
+	})
+
+	m.moveCursor(1)
+	if row := m.newTab.filtered[m.newTab.cursor]; row.kind != workflowRow || row.index != 0 {
+		t.Fatalf("down from intake = %+v, want first workflow after its header", row)
+	}
+	m.moveCursor(-1)
+	if row := m.newTab.filtered[m.newTab.cursor]; row.kind != intakeRow {
+		t.Fatalf("up from first workflow = %+v, want intake entry", row)
+	}
+	m.moveCursor(-1)
+	if !m.newTab.searchFocused {
+		t.Fatal("up from intake should focus the search box")
+	}
+}
+
 // TestNewTab_CursorSkipsSeparators verifies moveCursor skips blank-line separators.
 func TestNewTab_CursorSkipsSeparators(t *testing.T) {
 	entries := []discovery.WorkflowEntry{
