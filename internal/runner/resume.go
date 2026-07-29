@@ -139,7 +139,7 @@ func warnIfWorkflowHashChanged(state *model.RunState, log interface{ Printf(stri
 
 func resumeProfileOverride(override config.ProfileOverride, recorded string) config.ProfileOverride {
 	if override.Name == "" && recorded != "" {
-		return config.ProfileOverride{Name: recorded, Origin: "run state file"}
+		return config.ProfileOverride{Name: recorded, Origin: config.OriginState}
 	}
 	return override
 }

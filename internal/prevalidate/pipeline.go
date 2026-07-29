@@ -37,6 +37,9 @@ type Result struct {
 	DeferredWarnings  []ValidationError
 	ProbeResults      []ProbeResult
 	AgentDeprecations []config.Deprecation
+	// ResolvedProfile names the profile set the workflow was validated
+	// against, whichever selection input produced it.
+	ResolvedProfile string
 }
 
 type ProbeResult struct {
@@ -118,6 +121,7 @@ func Pipeline(rootPath string, boundParams map[string]string, mode Mode, opts Op
 	}
 	if cfg != nil {
 		state.addAgentDeprecations(cfg.Deprecations...)
+		state.result.ResolvedProfile = activeProfileName(cfg)
 	}
 	if err := state.walkFile(rootPath, boundParams, false, nil); err != nil {
 		return state.result, err

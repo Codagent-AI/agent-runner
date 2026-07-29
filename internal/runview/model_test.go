@@ -1312,11 +1312,8 @@ func TestModel_Enter_AgentStep_InSubWorkflow_LiveRunAfterCompletion(t *testing.T
 	// Simulate run completion
 	m.Update(liverun.ExecDoneMsg{Result: "success"})
 
-	// Completion auto-shows the summary; dismiss it to return to the detail
-	// view before navigating (the summary is a modal screen).
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
 	if m.showSummary {
-		t.Fatal("s did not dismiss the auto-shown summary")
+		t.Fatal("successful completion unexpectedly showed summary")
 	}
 
 	// Drill into the sub-workflow

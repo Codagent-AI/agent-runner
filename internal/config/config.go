@@ -61,7 +61,7 @@ type Config struct {
 	ActiveProfile         string
 	ResolvedProfile       string
 	ProfileSource         ProfileSource
-	ProfileOverrideOrigin string
+	ProfileOverrideOrigin ProfileOrigin
 	Profiles              map[string]*ProfileSet
 	ActiveAgents          map[string]*Agent
 	Deprecations          []Deprecation
@@ -76,11 +76,27 @@ const (
 	ProfileSourceDefault  ProfileSource = "default"
 )
 
-// ProfileOverride selects a profile set for one config load. Origin is a
-// caller-provided human-readable label used in errors and reporting.
+// ProfileOrigin identifies which caller supplied a profile-set override. Its
+// value doubles as the human-readable label used in error messages, but callers
+// and consumers MUST compare against these constants rather than the literal
+// text, so that adding an origin is a deliberate, greppable change.
+//
+// Any code that maps an origin onto reported values (see the audit run_start
+// entry) must handle every constant declared here.
+type ProfileOrigin string
+
+const (
+	// OriginFlag marks an override supplied by the --profile CLI flag.
+	OriginFlag ProfileOrigin = "--profile flag"
+	// OriginState marks an override read back from a resumed run's state file.
+	OriginState ProfileOrigin = "run state file"
+)
+
+// ProfileOverride selects a profile set for one config load. Origin identifies
+// the caller that supplied it and is used in errors and reporting.
 type ProfileOverride struct {
 	Name   string
-	Origin string
+	Origin ProfileOrigin
 }
 
 // parsedFile is the internal representation of one loaded config file.

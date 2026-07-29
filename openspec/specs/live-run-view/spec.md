@@ -43,13 +43,13 @@ Any agent-runner invocation that launches the TUI — workflow execution, `--res
 
 When the workflow reaches a terminal state (success or failure), the run-view TUI SHALL remain active. Exit SHALL require explicit user input (`q`, `Ctrl+C`, or Escape at the top level).
 
-On a successful (`completed`) terminal state, the TUI SHALL display the run summary screen as the post-completion view, per the `run-complete-screen` capability; the `s` key toggles to the detailed run view. On a `failed` terminal state, the TUI SHALL show the detailed view with the cursor on the failed step, and the summary is available via `s`.
+On a successful (`completed`) terminal state, the TUI SHALL keep the detailed run view and focus the final top-level step; the summary is available via `s`. On a `failed` terminal state, the TUI SHALL show the detailed view with the cursor on the failed step, and the summary is likewise available via `s`.
 
 Once in the post-completion detailed view, the run view SHALL behave identically to a run opened via `--inspect` — the user can navigate the step list, drill in and out, scroll output, trigger the resume action on agent steps, and invoke the legend overlay.
 
-#### Scenario: Successful completion shows summary screen
+#### Scenario: Successful completion keeps detailed view
 - **WHEN** the last step in the workflow completes successfully
-- **THEN** the TUI remains open displaying the run summary screen, with the breadcrumb status showing `completed`
+- **THEN** the TUI remains open displaying the detailed run view focused on the final top-level step, with the breadcrumb status showing `completed`; the summary is not auto-shown
 
 #### Scenario: Failure keeps TUI open in detailed view
 - **WHEN** a step fails and the workflow halts
@@ -324,4 +324,3 @@ the run list or from `--inspect`; the profile segment SHALL NOT inherit that res
 - **WHEN** the terminal is too narrow to render the breadcrumb and the profile segment alongside the chrome
   logo
 - **THEN** the breadcrumb line truncates as it does today without wrapping or overflowing the chrome
-

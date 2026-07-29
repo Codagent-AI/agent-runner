@@ -1,4 +1,9 @@
-## MODIFIED Requirements
+# list-runs Specification
+
+## Purpose
+Define run-list navigation, run actions, filtering, and transitions into run inspection.
+
+## Requirements
 
 ### Requirement: Open run from TUI
 Pressing Enter on a run in the TUI SHALL navigate from the list view to the run view for that run. The list view's state (cursor, tab, scroll offsets) SHALL be preserved so that returning from the run view restores it. Runs of any status (active, inactive, completed) SHALL be selectable. Resume is no longer triggered directly from the list — it becomes an action inside the run view (see `view-run` spec).

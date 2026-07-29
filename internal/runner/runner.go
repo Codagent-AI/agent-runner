@@ -495,10 +495,14 @@ func auditProfileSource(cfg *config.Config) string {
 	case config.ProfileSourceDefault:
 		return "default"
 	case config.ProfileSourceOverride:
-		if cfg.ProfileOverrideOrigin == "run state file" {
+		switch cfg.ProfileOverrideOrigin {
+		case config.OriginState:
 			return "state"
+		case config.OriginFlag:
+			return "flag"
+		default:
+			return "flag"
 		}
-		return "flag"
 	default:
 		return ""
 	}

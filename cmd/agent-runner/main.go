@@ -317,7 +317,6 @@ func run() int {
 	listFlag := flag.Bool("list", false, "Launch the run list TUI")
 	inspectFlag := flag.String("inspect", "", "Launch the run view TUI for a specific `run-id`")
 	validateFlag := flag.Bool("validate", false, "Validate a workflow file without executing")
-	profileFlag := flag.String("profile", "", "Select the profile set for this invocation")
 	resetOnboardingFlag := flag.Bool("reset-onboarding", false, "Clear onboarding settings, project validator state, and saved onboarding runs before launching")
 	onboardingFromFlag := flag.String("onboarding-from", "", "Start the built-in onboarding workflow from top-level `step-id`")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
@@ -341,7 +340,17 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "  -v, -version\n\tPrint version and exit\n")
 	}
 
-	flag.Parse()
+	// --profile is extracted from the full argv before flag parsing so a single
+	// parser owns every occurrence. The standard flag package would otherwise
+	// consume (and silently merge) occurrences appearing before the first
+	// positional argument, leaving extractProfileArgs unable to see them.
+	profileArgs, profileValue, profileSet, profileErr := extractProfileArgs(os.Args[1:])
+	if profileErr != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", profileErr)
+		return 1
+	}
+
+	_ = flag.CommandLine.Parse(profileArgs)
 
 	if *headlessFlag {
 		_ = os.Setenv("AGENT_RUNNER_NO_TUI", "1")
@@ -360,19 +369,6 @@ func run() int {
 	}
 
 	args := flag.Args()
-	profileSet := false
-	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "profile" {
-			profileSet = true
-		}
-	})
-	*profileFlag = strings.TrimSpace(*profileFlag)
-	var profileErr error
-	args, *profileFlag, profileSet, profileErr = resolveProfileFlag(args, *profileFlag, profileSet)
-	if profileErr != nil {
-		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", profileErr)
-		return 1
-	}
 	if handled, code := routeDebugCommand(args, os.Stdout, os.Stderr); handled {
 		return code
 	}
@@ -415,31 +411,17 @@ func run() int {
 		inspect:        *inspectFlag,
 		list:           *listFlag,
 		resume:         *resumeFlag,
-		profile:        *profileFlag,
+		profile:        profileValue,
 		profileSet:     profileSet,
 		onboardingFrom: strings.TrimSpace(*onboardingFromFlag),
 	})
 }
 
-// extractProfileArgs accepts profile flags after positional arguments, which
-// the standard flag package intentionally leaves in flag.Args().
-func resolveProfileFlag(args []string, parsedProfile string, parsedSet bool) (remaining []string, profile string, set bool, err error) {
-	args, trailingProfile, trailingSet, err := extractProfileArgs(args)
-	if err != nil {
-		return nil, "", false, err
-	}
-	if parsedSet && trailingSet {
-		return nil, "", false, fmt.Errorf("--profile may only be specified once")
-	}
-	if trailingSet {
-		return args, trailingProfile, true, nil
-	}
-	if parsedSet && parsedProfile == "" {
-		return nil, "", false, fmt.Errorf("--profile requires a profile set name")
-	}
-	return args, parsedProfile, parsedSet, nil
-}
-
+// extractProfileArgs pulls every --profile occurrence out of the given argv,
+// in both the space-separated and `=` forms and with either dash prefix, and
+// returns the remaining arguments for the standard flag parser. It is the sole
+// owner of --profile parsing, so a duplicate is rejected regardless of where
+// the occurrences sit relative to positional arguments.
 func extractProfileArgs(args []string) (filtered []string, profile string, set bool, err error) {
 	filtered = make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
@@ -562,7 +544,7 @@ func (opts commandFlags) profileOverride() config.ProfileOverride {
 	if !opts.profileSet {
 		return config.ProfileOverride{}
 	}
-	return config.ProfileOverride{Name: opts.profile, Origin: "--profile flag"}
+	return config.ProfileOverride{Name: opts.profile, Origin: config.OriginFlag}
 }
 
 func isRunCommandHelp(args []string) bool {
@@ -650,7 +632,7 @@ func handleResumeWithOptions(sessionID string, liveOpts liveTUIOptions, profile 
 		return 1
 	}
 	if override.Name == "" && state.ProfileSet != "" {
-		override = config.ProfileOverride{Name: state.ProfileSet, Origin: "run state file"}
+		override = config.ProfileOverride{Name: state.ProfileSet, Origin: config.OriginState}
 	}
 	profiles, err := config.LoadWithProfile(filepath.Join(".agent-runner", "config.yaml"), override)
 	if err != nil {
@@ -1544,8 +1526,8 @@ func handleValidateArgs(args []string, profile ...config.ProfileOverride) int {
 	for _, warning := range result.AgentDeprecations {
 		fmt.Fprintf(os.Stderr, "agent-runner: warning: %s\n", warning)
 	}
-	if override.Name != "" {
-		fmt.Printf("workflow is valid (profile set: %s)\n", override.Name)
+	if result.ResolvedProfile != "" {
+		fmt.Printf("workflow is valid (profile set: %s)\n", result.ResolvedProfile)
 	} else {
 		fmt.Println("workflow is valid")
 	}

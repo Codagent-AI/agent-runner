@@ -1315,6 +1315,45 @@ func TestPrepareRun_RecordsResolvedProfileInStateAndAudit(t *testing.T) {
 	}
 }
 
+// The audit source is derived from the override's typed origin rather than a
+// prose comparison, so a new origin cannot silently be reported as "flag".
+func TestAuditProfileSourceMapsOverrideOrigins(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *config.Config
+		want string
+	}{
+		{
+			name: "flag origin",
+			cfg:  &config.Config{ProfileSource: config.ProfileSourceOverride, ProfileOverrideOrigin: config.OriginFlag},
+			want: "flag",
+		},
+		{
+			name: "state origin",
+			cfg:  &config.Config{ProfileSource: config.ProfileSourceOverride, ProfileOverrideOrigin: config.OriginState},
+			want: "state",
+		},
+		{
+			name: "config selection",
+			cfg:  &config.Config{ProfileSource: config.ProfileSourceConfig},
+			want: "config",
+		},
+		{
+			name: "default fallback",
+			cfg:  &config.Config{ProfileSource: config.ProfileSourceDefault},
+			want: "default",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := auditProfileSource(tc.cfg); got != tc.want {
+				t.Fatalf("auditProfileSource() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPrepareRun_SeedsResumeState(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	w := model.Workflow{

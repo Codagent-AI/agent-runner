@@ -249,9 +249,6 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	for _, e := range events {
 		tree.ApplyEvent(e)
 	}
-	if entered != FromLiveRun && tree.MetricsCaptured && tree.Root.Status != StatusFailed && (state.Completed || tree.Root.Status == StatusSuccess) {
-		m.showSummary = true
-	}
 	current := m.applyCurrentStepState(&state)
 	if m.autoFollow {
 		if current != nil {
@@ -817,7 +814,6 @@ func (m *Model) handleExecDoneMsg(msg liverun.ExecDoneMsg) {
 			m.navigateToNode(failed)
 		}
 	case "success":
-		m.showSummary = m.tree.MetricsCaptured
 		// Land on the final top-level step so the user sees the workflow's
 		// end state. Loop iterations and other deep leaves emit StepStateMsg
 		// before their tree nodes exist (audit replay runs lazily), so cursor

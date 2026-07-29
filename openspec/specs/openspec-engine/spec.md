@@ -1,3 +1,8 @@
+# openspec-engine Specification
+
+## Purpose
+Define how the OpenSpec workflow engine resolves changes, validates workflows, enriches prompts, and tracks artifact state.
+
 ## Requirements
 
 ### Requirement: Change parameter resolution

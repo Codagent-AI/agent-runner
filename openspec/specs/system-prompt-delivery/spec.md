@@ -1,3 +1,8 @@
+# system-prompt-delivery Specification
+
+## Purpose
+Define how agent prompts and engine enrichment are routed through native and fallback system-prompt mechanisms.
+
 ## Requirements
 
 ### Requirement: System prompt routing
