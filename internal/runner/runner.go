@@ -15,6 +15,7 @@ import (
 	"github.com/codagent/agent-runner/internal/control"
 	"github.com/codagent/agent-runner/internal/engine"
 	"github.com/codagent/agent-runner/internal/exec"
+	"github.com/codagent/agent-runner/internal/intakeroute"
 	"github.com/codagent/agent-runner/internal/interactive"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/metrics"
@@ -407,6 +408,9 @@ func newRunSessionCleanup(sessionDir string, opts *Options) func(*audit.Logger) 
 		if auditLogger != nil {
 			auditLogger.Close()
 		}
+		// A caller-provided session directory may contain pre-existing state (for
+		// example a test fixture or a resume-adjacent embedding), so only remove a
+		// directory that this fresh run allocated itself.
 		if opts.SessionDir == "" {
 			_ = os.RemoveAll(sessionDir)
 		}
@@ -730,7 +734,7 @@ func PrepareRun(workflow *model.Workflow, params map[string]string, opts *Option
 		return nil, err
 	}
 	if err := copyIntakeHandoff(opts.IntakeHandoffSource, rs); err != nil {
-		cleanupFailedFreshPreparation(rs, opts)
+		newRunSessionCleanup(rs.sessionDir, opts)(rs.auditLogger)
 		return nil, err
 	}
 
@@ -738,7 +742,7 @@ func PrepareRun(workflow *model.Workflow, params map[string]string, opts *Option
 	if err != nil {
 		// initRunState already created the session dir, lock file, and audit
 		// logger — release them so a failed prepare doesn't leave a ghost run.
-		cleanupFailedFreshPreparation(rs, opts)
+		newRunSessionCleanup(rs.sessionDir, opts)(rs.auditLogger)
 		return nil, err
 	}
 
@@ -747,7 +751,7 @@ func PrepareRun(workflow *model.Workflow, params map[string]string, opts *Option
 	// can resolve the workflow file immediately instead of falling back to
 	// name-based discovery that does not know about .agent-runner/workflows/.
 	if err := stateio.WriteState(initialRunState(workflow, rs, opts), rs.sessionDir); err != nil {
-		cleanupFailedFreshPreparation(rs, opts)
+		newRunSessionCleanup(rs.sessionDir, opts)(rs.auditLogger)
 		return nil, fmt.Errorf("seed initial state: %w", err)
 	}
 
@@ -764,19 +768,6 @@ func PrepareRun(workflow *model.Workflow, params map[string]string, opts *Option
 		SessionDir: rs.sessionDir,
 		ProjectDir: projectDir,
 	}, nil
-}
-
-func cleanupFailedFreshPreparation(rs *runState, opts *Options) {
-	runlock.Delete(rs.sessionDir)
-	if rs.auditLogger != nil {
-		rs.auditLogger.Close()
-	}
-	// A caller-provided session directory may contain pre-existing state (for
-	// example a test fixture or a resume-adjacent embedding), so only remove a
-	// directory that this fresh run allocated itself.
-	if opts.SessionDir == "" {
-		_ = os.RemoveAll(rs.sessionDir)
-	}
 }
 
 func initialRunState(workflow *model.Workflow, rs *runState, opts *Options) *model.RunState {
@@ -926,7 +917,7 @@ func copyIntakeHandoff(source string, rs *runState) error {
 		return nil
 	}
 
-	destination, err := filepath.Abs(filepath.Join(rs.sessionDir, "intake-handoff.md"))
+	destination, err := filepath.Abs(intakeroute.HandoffPathFor(rs.sessionDir))
 	if err != nil {
 		return fmt.Errorf("resolve intake handoff destination: %w", err)
 	}

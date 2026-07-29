@@ -347,7 +347,7 @@ func buildWorkflowDirectInvocation(
 
 func isRouteEligible(step *model.Step, ctx *model.ExecutionContext) bool {
 	return step != nil && ctx != nil && step.HasTool(model.RunnerToolSubmitRoute) &&
-		ctx.ParentContext == nil && ctx.WorkflowFile == builtinworkflows.Ref("core/intake-v1.0.yaml") && step.ID == "plan"
+		ctx.ParentContext == nil && builtinworkflows.IsIntakeRef(ctx.WorkflowFile) && step.ID == builtinworkflows.IntakeStepID
 }
 
 func routeValidationOptions(ctx *model.ExecutionContext) *intakeroute.ValidateOptions {
@@ -355,25 +355,11 @@ func routeValidationOptions(ctx *model.ExecutionContext) *intakeroute.ValidateOp
 		return nil
 	}
 	return &intakeroute.ValidateOptions{
-		RunDir: ctx.SessionDir, ParentRunID: filepath.Base(ctx.SessionDir), IntakeWorkflow: "core:intake",
-		RequestPath: filepath.Join(ctx.SessionDir, "route-request.json"),
-		HandoffPath: filepath.Join(ctx.SessionDir, "intake-handoff.md"),
-		Catalog:     intakeroute.NewCatalog(discovery.Enumerate(builtinworkflows.FS, ctx.ProjectRoot, userWorkflowsDir())),
+		RunDir: ctx.SessionDir, ParentRunID: filepath.Base(ctx.SessionDir), IntakeWorkflow: builtinworkflows.IntakeCanonicalName,
+		RequestPath: intakeroute.RequestPathFor(ctx.SessionDir),
+		HandoffPath: intakeroute.HandoffPathFor(ctx.SessionDir),
+		Catalog:     intakeroute.NewCatalog(discovery.EnumerateForProject(ctx.ProjectRoot)),
 	}
-}
-
-// userWorkflowsDir returns the user-scope workflow directory the workflow
-// browser enumerates. Intake must resolve routes against the same catalog the
-// user can launch from by hand; omitting this scope would make a user-installed
-// workflow unroutable even though it is visible and launchable in the New tab.
-// An unresolvable home directory yields an empty path, which Enumerate treats
-// as "no user scope" rather than an error.
-func userWorkflowsDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".agent-runner", "workflows")
 }
 
 func interactiveModeError(adapter cli.Adapter, invocationContext cli.InvocationContext) error {

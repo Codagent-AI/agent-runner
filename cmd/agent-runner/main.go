@@ -489,7 +489,7 @@ func dispatchRunCommand(args []string, opts commandFlags) int {
 		return handleValidateArgs(args)
 	}
 	if opts.intake {
-		workflowFile, err := builtinworkflows.Resolve("core:intake")
+		workflowFile, err := builtinworkflows.Resolve(builtinworkflows.IntakeCanonicalName)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 			return 1
@@ -1053,7 +1053,7 @@ func launchFrozenIntakeRoute(result runner.WorkflowResult, sessionDir string) in
 		return 0
 	}
 
-	routePath, err := filepath.Abs(filepath.Join(sessionDir, "intake-route.json"))
+	routePath, err := filepath.Abs(intakeroute.SidecarPath(sessionDir))
 	if err != nil {
 		return 0
 	}
@@ -1097,12 +1097,14 @@ func shouldExitAfterFrozenIntakeRoute(result runner.WorkflowResult, sessionDir s
 	if result != runner.ResultSuccess {
 		return false
 	}
-	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
-	if err != nil || !state.Completed {
+	// Probe the sidecar first: it is absent for every non-intake run, so the
+	// common path costs one failed open rather than a full state.json read.
+	sealed, err := intakeroute.LoadStrict(intakeroute.SidecarPath(sessionDir))
+	if err != nil || sealed.State != intakeroute.Frozen {
 		return false
 	}
-	sealed, err := intakeroute.LoadStrict(filepath.Join(sessionDir, "intake-route.json"))
-	return err == nil && sealed.State == intakeroute.Frozen
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	return err == nil && state.Completed
 }
 
 func appendRouteLaunchEvent(sessionDir string, eventType audit.EventType, sealed *intakeroute.Sealed, launchErr error) error {
@@ -1874,7 +1876,7 @@ func prepareFreshRun(req *freshRunRequest) (*runner.RunHandle, error) {
 }
 
 func isIntakeWorkflow(workflowFile string) bool {
-	return workflowFile == builtinworkflows.Ref("core/intake-v1.0.yaml")
+	return builtinworkflows.IsIntakeRef(workflowFile)
 }
 
 func validateIntakeRunInvocation(workflowFile string, headless bool) error {
@@ -1968,14 +1970,14 @@ func launchResultAfterRun(result liveTUIResult, reportExplorationHandoff bool) l
 }
 
 func explorationHandoffPath(sessionDir string) string {
-	if _, err := os.Stat(filepath.Join(sessionDir, "intake-route.json")); err == nil {
+	if _, err := os.Stat(intakeroute.SidecarPath(sessionDir)); err == nil {
 		return ""
 	}
 	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
 	if err != nil || !state.Completed || !isIntakeWorkflow(state.WorkflowFile) {
 		return ""
 	}
-	handoff := filepath.Join(sessionDir, "intake-handoff.md")
+	handoff := intakeroute.HandoffPathFor(sessionDir)
 	info, err := os.Stat(handoff)
 	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
 		return ""

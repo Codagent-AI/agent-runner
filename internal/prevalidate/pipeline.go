@@ -348,12 +348,14 @@ func (s *walkState) walkStep(path string, step *model.Step, params map[string]st
 }
 
 func validateReservedCaptureNames(path string, step *model.Step) error {
-	for field, value := range map[string]string{
-		"capture":         step.Capture,
-		"outcome_capture": step.OutcomeCapture,
-	} {
-		if value == "intake_handoff" {
-			return ValidationError{File: path, StepID: step.ID, Field: field, Value: value, Message: fmt.Sprintf("%s name %q is reserved", field, value)}
+	// Ordered so a step setting both sinks always reports the same field.
+	sinks := [...]struct{ field, value string }{
+		{"capture", step.Capture},
+		{"outcome_capture", step.OutcomeCapture},
+	}
+	for _, sink := range sinks {
+		if sink.value == model.IntakeHandoffVar {
+			return ValidationError{File: path, StepID: step.ID, Field: sink.field, Value: sink.value, Message: fmt.Sprintf("%s name %q is reserved", sink.field, sink.value)}
 		}
 	}
 	return nil
@@ -684,7 +686,7 @@ func isBuiltin(name string) bool {
 }
 
 func builtinNamesMap() map[string]string {
-	return map[string]string{"session_dir": "", "step_id": "", "intake_handoff": ""}
+	return map[string]string{"session_dir": "", "step_id": "", model.IntakeHandoffVar: ""}
 }
 
 func (s *walkState) probeTriples() error {

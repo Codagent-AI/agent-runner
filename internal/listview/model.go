@@ -198,9 +198,7 @@ func New(opts ...func(*Model)) (*Model, error) {
 	projectsRoot := filepath.Join(home, ".agent-runner", "projects")
 	encoded := audit.EncodePath(cwd)
 	projectDir := filepath.Join(projectsRoot, encoded)
-	userWorkflowsDir := filepath.Join(home, ".agent-runner", "workflows")
-
-	workflows := discovery.Enumerate(builtinworkflows.FS, cwd, userWorkflowsDir)
+	workflows := discovery.EnumerateForProject(cwd)
 	groups := discovery.EnumerateGroups(builtinworkflows.FS, workflows)
 
 	m := &Model{

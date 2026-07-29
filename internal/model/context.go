@@ -250,7 +250,7 @@ func (c *ExecutionContext) BuiltinVarsForStep(stepID string) map[string]string {
 	}
 	// Unlike the surrounding built-ins, this must be present even when empty:
 	// direct runs must resolve {{intake_handoff}} rather than fail interpolation.
-	m["intake_handoff"] = c.IntakeHandoff
+	m[IntakeHandoffVar] = c.IntakeHandoff
 	return m
 }
 

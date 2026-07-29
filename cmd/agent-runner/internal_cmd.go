@@ -17,7 +17,6 @@ import (
 	iexec "github.com/codagent/agent-runner/internal/exec"
 	"github.com/codagent/agent-runner/internal/intakeroute"
 	"github.com/codagent/agent-runner/internal/interactive"
-	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/profilewrite"
 	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/usersettings"
@@ -179,9 +178,8 @@ func handleLaunchIntakeRoute(args []string, stderr io.Writer) int {
 	if err := intakeroute.ValidateLaunchSealed(sealed); err != nil {
 		return reportIntakeLaunchError(stderr, sealed, err)
 	}
-	if _, err := loader.LoadWorkflow(sealed.SourceRef, loader.Options{}); err != nil {
-		return reportIntakeLaunchError(stderr, sealed, fmt.Errorf("load sealed workflow source: %w", err))
-	}
+	// prepareFreshRun loads the sealed source itself and reports through the same
+	// error path, so no pre-flight load is needed here.
 	info, err := os.Stat(sealed.HandoffPath) // #nosec G703 -- handoff is validated as a sealed run-owned artifact before launch.
 	if err != nil {
 		return reportIntakeLaunchError(stderr, sealed, fmt.Errorf("stat sealed handoff: %w", err))
@@ -189,11 +187,6 @@ func handleLaunchIntakeRoute(args []string, stderr io.Writer) int {
 	if !info.Mode().IsRegular() || info.Size() == 0 {
 		return reportIntakeLaunchError(stderr, sealed, fmt.Errorf("sealed handoff must be a non-empty regular file"))
 	}
-	file, err := os.Open(sealed.HandoffPath) // #nosec G304,G703 -- handoff is validated as a sealed run-owned artifact before launch.
-	if err != nil {
-		return reportIntakeLaunchError(stderr, sealed, fmt.Errorf("open sealed handoff: %w", err))
-	}
-	_ = file.Close()
 
 	launchLog := iexec.Logger(&runner.DiscardLogger{})
 	if os.Getenv("AGENT_RUNNER_NO_TUI") == "1" {

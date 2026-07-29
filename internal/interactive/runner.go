@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -230,7 +229,7 @@ func startDirectChild(options *DirectOptions, attempt *control.Attempt) (*exec.C
 	if options.RouteEligible && options.RouteValidation != nil {
 		attemptEnv = append(attemptEnv,
 			"AGENT_RUNNER_ROUTE_REQUEST="+options.RouteValidation.RequestPath,
-			"AGENT_RUNNER_INTAKE_HANDOFF="+filepath.Join(options.RouteValidation.RunDir, "intake-handoff.md"),
+			"AGENT_RUNNER_INTAKE_HANDOFF="+options.RouteValidation.HandoffPath,
 		)
 	}
 	return startTerminalChild(&childLaunchOptions{

@@ -77,7 +77,7 @@ func ParseWorkflowSource(data []byte, sourcePath string, opts Options) (model.Wo
 			workflow.Name,
 		)
 	}
-	if workflowUsesSubmitRoute(&workflow) && (opts.IsSubWorkflow || sourcePath != builtinworkflows.Ref("core/intake-v1.0.yaml") || !isIntakeRouteStep(&workflow)) {
+	if workflowUsesSubmitRoute(&workflow) && (opts.IsSubWorkflow || !builtinworkflows.IsIntakeRef(sourcePath) || !isIntakeRouteStep(&workflow)) {
 		return model.Workflow{}, fmt.Errorf("submit_route is reserved for the top-level built-in core:intake plan step")
 	}
 	return workflow, nil

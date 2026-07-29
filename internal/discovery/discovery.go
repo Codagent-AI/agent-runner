@@ -64,6 +64,26 @@ type ViewDefinitionMsg struct {
 // intake workflow directly.
 type StartIntakeMsg struct{}
 
+// UserWorkflowsDir returns the user-scope workflow directory. An unresolvable
+// home directory yields an empty path, which Enumerate treats as "no user
+// scope" rather than an error.
+func UserWorkflowsDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".agent-runner", "workflows")
+}
+
+// EnumerateForProject discovers workflows across every scope the user can
+// launch from. Callers that must agree on what is launchable — the workflow
+// browser and intake route resolution — share this rather than assembling the
+// scope list themselves, so a scope added here cannot reach one and not the
+// other.
+func EnumerateForProject(projectDir string) []WorkflowEntry {
+	return Enumerate(builtinworkflows.FS, projectDir, UserWorkflowsDir())
+}
+
 // Enumerate discovers workflows from three sources in order:
 //  1. Project-local: <projectDir>/.agent-runner/workflows/
 //  2. User-home: userWorkflowsDir (e.g. ~/.agent-runner/workflows/)

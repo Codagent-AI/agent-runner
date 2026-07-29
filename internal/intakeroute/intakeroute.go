@@ -2,6 +2,7 @@
 package intakeroute
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,7 +23,21 @@ const (
 	MaxHandoffBytes = 1 << 20
 
 	sidecarName = "intake-route.json"
+	handoffName = "intake-handoff.md"
+	requestName = "route-request.json"
 )
+
+// SidecarPath returns the route sidecar for a run directory.
+func SidecarPath(runDir string) string { return filepath.Join(runDir, sidecarName) }
+
+// HandoffPathFor returns the runner-owned handoff path for a run directory.
+// The path the agent is told to write and the path the validator enforces must
+// be the same bytes, so both resolve it here rather than joining the name
+// themselves.
+func HandoffPathFor(runDir string) string { return filepath.Join(runDir, handoffName) }
+
+// RequestPathFor returns the runner-owned route request path for a run directory.
+func RequestPathFor(runDir string) string { return filepath.Join(runDir, requestName) }
 
 var (
 	// ErrWorkflowNotFound lets catalog implementations distinguish a missing target.
@@ -238,7 +253,7 @@ func Validate(opts *ValidateOptions) (*Prepared, error) {
 type Store struct{ path string }
 
 // NewStore creates a sidecar store rooted in runDir.
-func NewStore(runDir string) *Store { return &Store{path: filepath.Join(runDir, sidecarName)} }
+func NewStore(runDir string) *Store { return &Store{path: SidecarPath(runDir)} }
 
 // Load reads the persisted route record.
 func (s *Store) Load() (*Sealed, error) {
@@ -267,20 +282,31 @@ func LoadStrict(path string) (*Sealed, error) {
 	}
 	defer func() { _ = file.Close() }()
 
-	decoder := json.NewDecoder(file)
-	decoder.DisallowUnknownFields()
 	var sealed Sealed
-	if err := decoder.Decode(&sealed); err != nil {
-		return nil, fmt.Errorf("decode intake route sidecar: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		if err == nil {
-			return nil, errors.New("decode intake route sidecar: multiple JSON values")
-		}
-		return nil, fmt.Errorf("decode intake route sidecar: %w", err)
+	if err := decodeSingleJSON(file, &sealed, "intake route sidecar"); err != nil {
+		return nil, err
 	}
 	sealed.Params = cloneParams(sealed.Params)
 	return &sealed, nil
+}
+
+// decodeSingleJSON decodes exactly one JSON value into target, rejecting
+// unknown fields and any trailing value. Both the sidecar and the agent-written
+// request need identical strictness, so they share this rather than each
+// spelling out the decode-then-assert-EOF dance.
+func decodeSingleJSON(reader io.Reader, target any, subject string) error {
+	decoder := json.NewDecoder(reader)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return fmt.Errorf("decode %s: %w", subject, err)
+	}
+	switch err := decoder.Decode(&struct{}{}); {
+	case err == nil:
+		return fmt.Errorf("decode %s: multiple JSON values", subject)
+	case !errors.Is(err, io.EOF):
+		return fmt.Errorf("decode %s: %w", subject, err)
+	}
+	return nil
 }
 
 // ValidateLaunchSealed verifies the persisted data that the process-boundary
@@ -429,7 +455,7 @@ func readRequest(opts *ValidateOptions, runDir string) ([]byte, error) {
 	}
 	path := opts.RequestPath
 	if path == "" {
-		path = filepath.Join(runDir, "route-request.json")
+		path = RequestPathFor(runDir)
 	}
 	file, err := os.Open(path) // #nosec G304 -- agent input is intentionally validated here.
 	if err != nil {
@@ -448,13 +474,8 @@ func readRequest(opts *ValidateOptions, runDir string) ([]byte, error) {
 
 func decodeRequest(data []byte) (Request, error) {
 	var request Request
-	decoder := json.NewDecoder(strings.NewReader(string(data)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil {
-		return Request{}, fmt.Errorf("decode route request: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return Request{}, errors.New("decode route request: multiple JSON values")
+	if err := decodeSingleJSON(bytes.NewReader(data), &request, "route request"); err != nil {
+		return Request{}, err
 	}
 	if request.Workflow == "" {
 		return Request{}, errors.New("route workflow is required")
