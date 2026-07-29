@@ -85,7 +85,7 @@ Intake SHALL require that both stdin and stdout are real interactive terminals, 
 
 ### Requirement: Intake agent overrides
 
-`--cli` and `--model` SHALL apply only to the intake agent, resolved with precedence *command override → step declaration → agent profile*. The overrides SHALL NOT be inherited by the workflow that intake subsequently launches. An override SHALL be rejected before the intake run starts when it names an unknown CLI, or when it names a known CLI that does not support interactive steps, since intake cannot execute under such an adapter. The overrides SHALL be persisted with the intake run and restored on resume, so a resumed intake continues under the same CLI and model it started with.
+`--cli` and `--model` SHALL apply to every agent within the intake run, resolved with precedence *command override → step declaration → agent profile*. Choosing a CLI applies to the intake conversation as a whole, so an agent the intake workflow may later run in a nested step inherits the same choice. The overrides SHALL NOT be inherited by the workflow that intake subsequently launches. An override SHALL be rejected before the intake run starts when it names an unknown CLI, when it names a known CLI that does not support interactive steps, or when `--cli` is supplied without `--model` and the model inherited from the intake agent's profile is not accepted by that CLI. The last case exists because a builtin workflow's own agent triple is validated when the binary is built, whereas an override composes a CLI and model pair that existed nowhere at build time. The overrides SHALL be persisted with the intake run and restored on resume, so a resumed intake continues under the same CLI and model it started with.
 
 #### Scenario: Command override beats the profile
 - **WHEN** the user runs `agent-runner -i --cli codex` and the intake agent's profile declares a different CLI
@@ -107,6 +107,11 @@ Intake SHALL require that both stdin and stdout are real interactive terminals, 
 #### Scenario: CLI that cannot run interactive steps is rejected
 - **WHEN** the user overrides the CLI with a known adapter that rejects interactive steps
 - **THEN** Agent Runner exits nonzero explaining that intake requires an interactive-capable CLI
+- **AND** no intake run is created
+
+#### Scenario: Inherited model invalid for the overridden CLI is rejected
+- **WHEN** the user overrides the CLI without also overriding the model, and the model inherited from the intake agent's profile is not accepted by that CLI
+- **THEN** Agent Runner exits nonzero naming the inherited model and the overridden CLI, and stating that `--model` must accompany `--cli`
 - **AND** no intake run is created
 
 #### Scenario: Overrides survive resume

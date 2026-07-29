@@ -209,8 +209,8 @@ func (m *Model) newTabCurrentEntry() *discovery.WorkflowEntry {
 // newTabEnterCmd returns a tea.Cmd that emits ViewDefinitionMsg for the
 // currently selected workflow, or nil if none is selected or the entry is malformed.
 func (m *Model) newTabEnterCmd() tea.Cmd {
-	if len(m.newTab.filtered) > 0 && m.newTab.cursor >= 0 && m.newTab.cursor < len(m.newTab.filtered) && m.newTab.filtered[m.newTab.cursor].kind == intakeRow {
-		return func() tea.Msg { return discovery.StartIntakeMsg{} }
+	if cmd := m.newTabIntakeCmd(); cmd != nil {
+		return cmd
 	}
 	e := m.newTabCurrentEntry()
 	if e == nil || e.ParseError != "" {
@@ -224,7 +224,24 @@ func (m *Model) newTabEnterCmd() tea.Cmd {
 
 // newTabStartRunCmd returns a tea.Cmd that emits StartRunMsg for the currently
 // selected workflow, or nil if none is selected or the entry is malformed.
+// newTabIntakeCmd returns the start-intake command when the cursor is on the
+// "Plan with an agent" entry, or nil otherwise. Enter and the run shortcut both
+// consult it so the entry cannot activate on one key and silently ignore the
+// other — it is the default cursor position, so a dead keypress there is the
+// first thing a user would hit.
+func (m *Model) newTabIntakeCmd() tea.Cmd {
+	f := m.newTab.filtered
+	pos := m.newTab.cursor
+	if pos < 0 || pos >= len(f) || f[pos].kind != intakeRow {
+		return nil
+	}
+	return func() tea.Msg { return discovery.StartIntakeMsg{} }
+}
+
 func (m *Model) newTabStartRunCmd() tea.Cmd {
+	if cmd := m.newTabIntakeCmd(); cmd != nil {
+		return cmd
+	}
 	e := m.newTabCurrentEntry()
 	if e == nil || e.ParseError != "" {
 		return nil

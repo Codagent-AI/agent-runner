@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -1104,4 +1105,58 @@ func (l *recordingEventLogger) types() []audit.EventType {
 		types[index] = events[index].Type
 	}
 	return types
+}
+
+// failingFreezeStore stages normally but fails to freeze, so the test can drive
+// the branch that guards a run from acknowledging a completion while its route
+// is in an indeterminate state.
+type failingFreezeStore struct {
+	inner     *intakeroute.Store
+	freezeErr error
+}
+
+func (s *failingFreezeStore) Stage(p *intakeroute.Prepared) error { return s.inner.Stage(p) }
+func (s *failingFreezeStore) Freeze() error                       { return s.freezeErr }
+
+// TestControlServerRejectsCompletionWhenFreezeFails proves the normative
+// scenario "failed freeze rejects the completion": when a route is staged and
+// Freeze fails, the completion must be rejected rather than acknowledged, so
+// the client can retry instead of the run advancing on an indeterminate route.
+func TestControlServerRejectsCompletionWhenFreezeFails(t *testing.T) {
+	runDir := t.TempDir()
+	server := newTestControlServer(t, runDir, &recordingEventLogger{})
+	defer server.Close()
+
+	handoff := filepath.Join(runDir, "intake-handoff.md")
+	if err := os.WriteFile(handoff, []byte("agreed plan\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target","handoff":"`+handoff+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store := &failingFreezeStore{inner: intakeroute.NewStore(runDir), freezeErr: errors.New("disk failure")}
+	attempt := server.ActivateAttempt(context.Background(), "plan", AttemptOptions{
+		RouteEligible: true,
+		RouteStore:    store,
+		RouteValidation: &intakeroute.ValidateOptions{
+			RunDir: runDir, ParentRunID: "run", IntakeWorkflow: "core:intake",
+			RequestPath: filepath.Join(runDir, "route-request.json"),
+			HandoffPath: handoff,
+			Catalog:     intakeroute.NewCatalog([]discovery.WorkflowEntry{{CanonicalName: "target", SourcePath: "builtin:core/target-v1.0.yaml"}}),
+		},
+	})
+
+	route := exchange(t, server.SocketPath(), &controlRequest{Type: MessageSubmitRoute, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "route"})
+	if !route.OK {
+		t.Fatalf("submit route response = %#v", route)
+	}
+
+	completion := exchange(t, server.SocketPath(), &controlRequest{Type: MessageCompleteStep, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "complete"})
+	if completion.OK {
+		t.Fatal("completion was acknowledged despite a failed freeze; the route is indeterminate and the step must not advance")
+	}
+	if !strings.Contains(completion.Error, "disk failure") {
+		t.Fatalf("completion error = %q, want it to surface the freeze failure", completion.Error)
+	}
 }

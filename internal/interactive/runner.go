@@ -36,7 +36,7 @@ type DirectOptions struct {
 	AgentCallEligible bool
 	AgentCallHandler  control.AgentCallHandler
 	RouteEligible     bool
-	RouteStore        *intakeroute.Store
+	RouteStore        control.RouteStore
 	RouteValidation   *intakeroute.ValidateOptions
 	Probe             cli.TurnDurabilityProbe
 	// ResolveSessionID discovers a CLI-assigned fresh session after spawn and

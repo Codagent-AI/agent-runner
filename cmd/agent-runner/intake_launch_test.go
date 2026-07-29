@@ -262,3 +262,77 @@ func TestInternalLaunchIntakeRouteRejectsMissingParentProvenance(t *testing.T) {
 		t.Fatalf("stderr = %q, want parent provenance error", stderr.String())
 	}
 }
+
+// TestInternalLaunchIntakeRouteIgnoresNewerVersionAtLaunch is the E2E-003
+// obligation: the sealed source reference selected at acceptance is what runs,
+// even when a newer version of the same logical workflow appears before launch.
+//
+// This is the one guarantee no other test covers. resolveWorkflowArg
+// deliberately rejects versioned names and selects the latest version, so a
+// launcher that re-resolved the logical name would silently run a definition
+// the user never agreed to.
+func TestInternalLaunchIntakeRouteIgnoresNewerVersionAtLaunch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("AGENT_RUNNER_NO_TUI", "1")
+	project := t.TempDir()
+	t.Chdir(project)
+
+	catalog := filepath.Join(project, ".agent-runner", "workflows")
+	if err := os.MkdirAll(catalog, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sealedVersion := filepath.Join(catalog, "target-v1.0.yaml")
+	if err := os.WriteFile(sealedVersion, []byte("name: target\nsteps:\n  - id: done\n    command: echo SEALED_V1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	parent := t.TempDir()
+	handoff := filepath.Join(parent, "sealed-handoff.md")
+	if err := os.WriteFile(handoff, []byte("intake conclusions"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sealed := intakeroute.Sealed{
+		State: intakeroute.Frozen, ParentRunID: "intake-parent", Workflow: "target",
+		SourceRef: sealedVersion, Params: map[string]string{}, HandoffPath: handoff,
+		StagedAt: "2026-07-28T00:00:00Z", FrozenAt: "2026-07-28T00:01:00Z",
+	}
+	data, err := json.Marshal(sealed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sidecar := filepath.Join(parent, "intake-route.json")
+	if err := os.WriteFile(sidecar, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A newer sibling version appears between acceptance and launch. Latest-version
+	// selection would pick this one; the sealed reference must win.
+	newerVersion := filepath.Join(catalog, "target-v1.1.yaml")
+	if err := os.WriteFile(newerVersion, []byte("name: target\nsteps:\n  - id: done\n    command: echo NEWER_V11\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stderr bytes.Buffer
+	if code := handleInternalWithIO([]string{"launch-intake-route", sidecar}, strings.NewReader(""), &stderr); code != 0 {
+		t.Fatalf("internal launch = %d, stderr: %s", code, stderr.String())
+	}
+
+	var launched string
+	if err := filepath.WalkDir(filepath.Join(home, ".agent-runner", "projects"), func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || entry.Name() != "state.json" {
+			return err
+		}
+		state, readErr := stateio.ReadState(path)
+		if readErr != nil {
+			return readErr
+		}
+		launched = state.WorkflowFile
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if launched != sealedVersion {
+		t.Fatalf("launched workflow = %q, want the sealed reference %q (a newer version was selected instead)", launched, sealedVersion)
+	}
+}

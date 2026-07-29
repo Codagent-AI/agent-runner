@@ -246,6 +246,9 @@ func TestNewTab_R_OnMalformedWorkflow_Ignored(t *testing.T) {
 	entry := malformedEntry("core:broken")
 	m := newTabModel([]discovery.WorkflowEntry{entry})
 
+	// The intake entry holds the initial cursor, so step onto the workflow row
+	// before asserting that r is ignored there.
+	m, _ = pressKey(m, "down")
 	_, cmd := pressKey(m, "r")
 	if cmd != nil {
 		t.Fatal("r on malformed workflow should produce no cmd")
@@ -849,5 +852,20 @@ func TestBuildFilteredRows_MultipleNamespaces(t *testing.T) {
 	}
 	if got := headerNames(filtered, defaultTestGroups()); strings.Join(got, ",") != "OpenSpec,Core" {
 		t.Fatalf("headers = %v, want OpenSpec then Core", got)
+	}
+}
+
+// TestNewTab_R_OnIntakeEntry_StartsIntake verifies the run shortcut activates
+// the intake entry, which holds the initial cursor. Enter already did; r
+// previously did nothing on the very row the cursor lands on by default.
+func TestNewTab_R_OnIntakeEntry_StartsIntake(t *testing.T) {
+	m := newTabModel([]discovery.WorkflowEntry{validEntry("core:finalize-pr")})
+
+	_, cmd := pressKey(m, "r")
+	if cmd == nil {
+		t.Fatal("r on the intake entry should produce a command")
+	}
+	if _, ok := cmd().(discovery.StartIntakeMsg); !ok {
+		t.Fatalf("r on the intake entry produced %T, want discovery.StartIntakeMsg", cmd())
 	}
 }

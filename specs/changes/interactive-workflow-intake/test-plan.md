@@ -31,6 +31,54 @@ No new obligation is recorded for backward compatibility. Direct and headless in
 exercised throughout the existing suite, which would fail if intake provenance leaked or if the
 `intake_handoff` built-in were absent on a direct run.
 
+## Scope Decisions (resolve-assumptions)
+
+The obligations below were reviewed after implementation. Where an obligation's
+property turned out to be covered by a cheaper existing test, it is narrowed here with
+its rationale rather than silently dropped.
+
+**Built as specified:**
+
+- **E2E-003** — implemented as `TestInternalLaunchIntakeRouteIgnoresNewerVersionAtLaunch`
+  (`cmd/agent-runner/intake_launch_test.go`). This was the only genuinely uncovered
+  guarantee: a newer sibling version appearing between acceptance and launch must not be
+  selected. The test writes `target-v1.1.yaml` after sealing `target-v1.0.yaml` and asserts
+  the sealed reference ran.
+- **INT-002 (freeze ordering), extended** — `TestControlServerRejectsCompletionWhenFreezeFails`
+  now covers the failed-freeze branch, enabled by the `control.RouteStore` seam.
+
+**Narrowed, with rationale:**
+
+- **INT-006** — its launch-gating half is covered by
+  `TestLaunchFrozenIntakeRouteGatesOnSuccessfulCompletedRunAndAppendsEvidence` and
+  `TestLaunchFrozenIntakeRouteDoesNotLaunchFailedOrIncompleteRuns`, which assert that a
+  frozen route on a failed or incomplete run does not launch. The durability-failure
+  trigger itself lives in `internal/interactive` and is exercised by the existing
+  durability suite; reproducing a real 30-second durability timeout in a launch test
+  would add runtime without adding a distinct assertion.
+- **INT-008** — `TestPrepareFreshRunPrevalidationFailureLeavesNoRunDirectory` covers the
+  consequential half (a non-builtin target failing strict pre-validation is rejected and
+  leaves no run directory). Engine-creation parity is structurally guaranteed because both
+  launch paths call the same `prepareFreshRun`, so a divergence is not expressible.
+- **INT-009** — route lifecycle audit events are asserted in
+  `TestLaunchFrozenIntakeRouteGatesOnSuccessfulCompletedRunAndAppendsEvidence`, including
+  that launch evidence is appended after `run_end` once the run logger is closed.
+- **E2E-001, E2E-002, E2E-006** — the substance is covered by
+  `TestInternalLaunchIntakeRoutePreparesSealedSourceWithCopiedHandoff` (sealed source,
+  copied handoff, child provenance), `TestExplorationHandoffPathReturnsNonEmptyIntakeHandoff`
+  (exploration-only), and the embedded-workflow tests. A fake-CLI PTY harness would
+  re-assert these through a slower surface. **Live coverage exists instead:** acceptance
+  flows AT-001 through AT-005 exercised all of these journeys against real agents, with evidence in
+  the run's `acceptance-flow-evidence.md`.
+
+**Left open, tracked as an assumption:**
+
+- **E2E-004** — a real Cursor session asserting `commandApprovals == 0`. The underlying
+  defect it guards is now fixed (Cursor emits the exact `step submit-route` grant, unit-tested
+  in `internal/cli/cursor_route_test.go`), but the end-to-end proof that a live Cursor session
+  runs the command unprompted still requires the `e2e_agents` suite and live credentials.
+  This remains the one obligation without equivalent coverage.
+
 ## Integration Tests
 
 ### INT-001: Authenticated route submission stages a sealed route

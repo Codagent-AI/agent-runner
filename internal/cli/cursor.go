@@ -26,7 +26,7 @@ import (
 type CursorAdapter struct {
 	runStoreQuery           func(context.Context, string) ([]byte, error)
 	prepareCompletionPlugin func(CompletionCommand) (string, error)              // test seam; nil uses prepareCursorCompletionPlugin
-	prepareConfig           func(CompletionCommand) (cursorPrivateConfig, error) // test seam; nil uses prepareCursorPrivateConfig
+	prepareConfig           func(CompletionCommand) (cursorPrivateConfig, error) // test seam; nil uses prepareCursorPrivateConfigCommands
 }
 
 // cursorPrivateConfig describes the materialized per-invocation configuration
@@ -144,17 +144,14 @@ func (a *CursorAdapter) SpawnEnv(input *BuildArgsInput) ([]string, error) {
 	}
 	var config cursorPrivateConfig
 	if agentCall == nil {
-		prepare := a.prepareConfig
-		if prepare == nil {
-			prepare = prepareCursorPrivateConfig
+		if prepare := a.prepareConfig; prepare != nil {
+			// Test seam retained on the completion descriptor.
+			config, err = prepare(*input.CompletionCommand)
+		} else {
+			config, err = prepareCursorPrivateConfigCommands(runnerCommands(input))
 		}
-		config, err = prepare(*input.CompletionCommand)
 	} else {
-		var completion *CompletionCommand
-		if completionEnabled {
-			completion = input.CompletionCommand
-		}
-		config, err = prepareCursorRunnerPrivateConfig(completion, input.RunnerIntegration, invocationContext.IsAutonomous())
+		config, err = prepareCursorRunnerPrivateConfig(runnerCommands(input), input.RunnerIntegration, invocationContext.IsAutonomous())
 	}
 	if err != nil {
 		return nil, fmt.Errorf("cursor: prepare private config: %w", err)
@@ -314,31 +311,31 @@ func cursorChatsRoot() (string, error) {
 	return filepath.Join(source, "chats"), nil
 }
 
-// cursorCompletionPermission renders the narrow pre-approval rule: Cursor
+// cursorRunnerPermission renders the narrow pre-approval rule: Cursor
 // matches the command and argument patterns separately, so this covers
-// exactly the absolute-path completion client with its fixed arguments —
+// exactly the absolute-path runner command with its fixed arguments —
 // never other arguments, chaining, or other agent-runner subcommands. A
 // command containing Cursor permission metacharacters is rejected: wildcards
 // would silently broaden the rule to other executables and delimiters would
 // malform it, and Cursor documents no literal-escaping mechanism.
-func cursorCompletionPermission(command CompletionCommand) (string, error) {
-	for _, part := range append([]string{command.Executable}, command.Args...) {
+func cursorRunnerPermission(executable string, args []string) (string, error) {
+	for _, part := range append([]string{executable}, args...) {
 		if strings.ContainsAny(part, "*?:()") {
-			return "", fmt.Errorf("completion command part %q contains Cursor permission metacharacters; a safe narrow pre-approval cannot be expressed", part)
+			return "", fmt.Errorf("runner command part %q contains Cursor permission metacharacters; a safe narrow pre-approval cannot be expressed", part)
 		}
 		for _, r := range part {
 			if r < 0x20 || r == 0x7f {
-				return "", fmt.Errorf("completion command part %q contains control characters; a safe narrow pre-approval cannot be expressed", part)
+				return "", fmt.Errorf("runner command part %q contains control characters; a safe narrow pre-approval cannot be expressed", part)
 			}
 		}
 	}
-	return "Shell(" + command.Executable + ":" + strings.Join(command.Args, " ") + ")", nil
+	return "Shell(" + executable + ":" + strings.Join(args, " ") + ")", nil
 }
 
-func prepareCursorPrivateConfig(command CompletionCommand) (cursorPrivateConfig, error) {
-	if !command.Valid() {
-		return cursorPrivateConfig{}, fmt.Errorf("invalid completion command")
-	}
+// prepareCursorPrivateConfigCommands grants every fixed runner command for a
+// step with no agent-call integration, so a route-eligible intake step gets its
+// `step submit-route` rule alongside the completion rule.
+func prepareCursorPrivateConfigCommands(commands []RunnerCommand) (cursorPrivateConfig, error) {
 	source, err := cursorConfigSourceDir()
 	if err != nil {
 		return cursorPrivateConfig{}, err
@@ -347,10 +344,10 @@ func prepareCursorPrivateConfig(command CompletionCommand) (cursorPrivateConfig,
 	if err != nil {
 		return cursorPrivateConfig{}, fmt.Errorf("locate user cache: %w", err)
 	}
-	return prepareCursorPrivateConfigAt(source, filepath.Join(cacheDir, "agent-runner"), command)
+	return prepareCursorPrivateConfigWithIntegrationAt(source, filepath.Join(cacheDir, "agent-runner"), commands, nil, false)
 }
 
-func prepareCursorRunnerPrivateConfig(completion *CompletionCommand, integration *RunnerIntegration, autonomous bool) (cursorPrivateConfig, error) {
+func prepareCursorRunnerPrivateConfig(commands []RunnerCommand, integration *RunnerIntegration, autonomous bool) (cursorPrivateConfig, error) {
 	if integration == nil || !integration.Valid() {
 		return cursorPrivateConfig{}, fmt.Errorf("invalid Runner agent-call integration descriptor")
 	}
@@ -362,7 +359,7 @@ func prepareCursorRunnerPrivateConfig(completion *CompletionCommand, integration
 	if err != nil {
 		return cursorPrivateConfig{}, fmt.Errorf("locate user cache: %w", err)
 	}
-	return prepareCursorPrivateConfigWithIntegrationAt(source, filepath.Join(cacheDir, "agent-runner"), completion, integration, autonomous)
+	return prepareCursorPrivateConfigWithIntegrationAt(source, filepath.Join(cacheDir, "agent-runner"), commands, integration, autonomous)
 }
 
 // prepareCursorPrivateConfigAt materializes the private configuration
@@ -372,11 +369,12 @@ func prepareCursorRunnerPrivateConfig(completion *CompletionCommand, integration
 // user's real session store so resume, discovery, and durability keep
 // operating on the shared store.
 func prepareCursorPrivateConfigAt(sourceDir, cacheRoot string, command CompletionCommand) (cursorPrivateConfig, error) {
-	return prepareCursorPrivateConfigWithIntegrationAt(sourceDir, cacheRoot, &command, nil, false)
+	return prepareCursorPrivateConfigWithIntegrationAt(sourceDir, cacheRoot,
+		[]RunnerCommand{{Kind: RunnerCommandCompleteStep, Executable: command.Executable}}, nil, false)
 }
 
-func prepareCursorPrivateConfigWithIntegrationAt(sourceDir, cacheRoot string, completion *CompletionCommand, integration *RunnerIntegration, autonomous bool) (cursorPrivateConfig, error) {
-	completionRule, agentCallRule, err := cursorPrivateConfigRules(completion, integration, autonomous)
+func prepareCursorPrivateConfigWithIntegrationAt(sourceDir, cacheRoot string, commands []RunnerCommand, integration *RunnerIntegration, autonomous bool) (cursorPrivateConfig, error) {
+	shellRules, agentCallRule, err := cursorPrivateConfigRules(commands, integration, autonomous)
 	if err != nil {
 		return cursorPrivateConfig{}, err
 	}
@@ -398,7 +396,7 @@ func prepareCursorPrivateConfigWithIntegrationAt(sourceDir, cacheRoot string, co
 		config["permissions"] = permissions
 	}
 	allow, _ := permissions["allow"].([]any)
-	for _, rule := range []string{completionRule, agentCallRule} {
+	for _, rule := range append(append([]string{}, shellRules...), agentCallRule) {
 		if rule == "" {
 			continue
 		}
@@ -415,9 +413,15 @@ func prepareCursorPrivateConfigWithIntegrationAt(sourceDir, cacheRoot string, co
 	}
 	permissions["allow"] = allow
 	deny, _ := permissions["deny"].([]any)
+	// Only the completion command carries unattended fail-early semantics, so
+	// only its deny rule is surfaced here. A deny blocking `step submit-route`
+	// makes Cursor prompt, and intake always has a human present to answer.
 	blockingCompletion := ""
-	if completion != nil {
-		blockingCompletion = firstBlockingDenyRule(deny, *completion)
+	for _, command := range commands {
+		if command.Kind == RunnerCommandCompleteStep && command.Valid() {
+			blockingCompletion = firstBlockingDenyRule(deny, CompletionCommand{Executable: command.Executable, Args: command.Args()})
+			break
+		}
 	}
 	blockingAgentCall := firstBlockingCursorMCPDenyRule(deny)
 	rendered, err := json.MarshalIndent(config, "", "  ")
@@ -428,7 +432,7 @@ func prepareCursorPrivateConfigWithIntegrationAt(sourceDir, cacheRoot string, co
 	// The source directory participates in the digest because the chats
 	// symlink below is tied to it: identical configs from different sources
 	// must not share a private dir.
-	digest := sha256.Sum256([]byte("cursor-config-v3\x00" + sourceDir + "\x00" + completionRule + "\x00" + agentCallRule + "\x00" + string(raw)))
+	digest := sha256.Sum256([]byte("cursor-config-v4\x00" + sourceDir + "\x00" + strings.Join(shellRules, "\x00") + "\x00" + agentCallRule + "\x00" + string(raw)))
 	dir := filepath.Join(cacheRoot, "cursor-config", hex.EncodeToString(digest[:6]))
 	if err := os.MkdirAll(dir, 0o700); err != nil { // #nosec G703 -- dir combines the local user's cache root with a content digest; creating it is this function's purpose
 		return cursorPrivateConfig{}, fmt.Errorf("create cursor private config dir: %w", err)
@@ -465,20 +469,27 @@ func prepareCursorPrivateConfigWithIntegrationAt(sourceDir, cacheRoot string, co
 	return result, nil
 }
 
-func cursorPrivateConfigRules(completion *CompletionCommand, integration *RunnerIntegration, autonomous bool) (completionRule, agentCallRule string, err error) {
-	if completion != nil {
-		completionRule, err = cursorCompletionPermission(*completion)
-		if err != nil {
-			return "", "", err
+func cursorPrivateConfigRules(commands []RunnerCommand, integration *RunnerIntegration, autonomous bool) (shellRules []string, agentCallRule string, err error) {
+	// One narrow rule per granted runner command. Cursor is the only adapter
+	// with a real shell allow-list, so this is where the exact-string guarantee
+	// for `step submit-route` is actually expressed.
+	for _, command := range commands {
+		if !command.Valid() {
+			continue
 		}
+		rule, ruleErr := cursorRunnerPermission(command.Executable, command.Args())
+		if ruleErr != nil {
+			return nil, "", ruleErr
+		}
+		shellRules = append(shellRules, rule)
 	}
 	if integration != nil && !integration.Valid() {
-		return "", "", fmt.Errorf("invalid Runner agent-call integration descriptor")
+		return nil, "", fmt.Errorf("invalid Runner agent-call integration descriptor")
 	}
 	if integration != nil && autonomous {
 		agentCallRule = "Mcp(agent-runner:call_agent)"
 	}
-	return completionRule, agentCallRule, nil
+	return shellRules, agentCallRule, nil
 }
 
 func firstBlockingCursorMCPDenyRule(deny []any) string {

@@ -49,7 +49,7 @@ type directInvocation struct {
 	agentCallEligible bool
 	agentCallHandler  control.AgentCallHandler
 	routeEligible     bool
-	routeStore        *intakeroute.Store
+	routeStore        control.RouteStore
 	routeValidation   *intakeroute.ValidateOptions
 }
 

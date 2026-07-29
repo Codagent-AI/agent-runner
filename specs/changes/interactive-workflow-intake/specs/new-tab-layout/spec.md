@@ -24,6 +24,10 @@ The new tab SHALL render a selectable "Plan with an agent" entry above every wor
 - **WHEN** the user presses `h` to toggle hidden workflow visibility
 - **THEN** the intake entry's presence is unchanged
 
+#### Scenario: Run shortcut activates the entry
+- **WHEN** the cursor is on the intake entry and the user presses the run shortcut `r`
+- **THEN** Agent Runner starts a run of the built-in intake workflow, exactly as activating it with Enter does
+
 #### Scenario: Downward navigation leaves the entry
 - **WHEN** the cursor is on the intake entry and the user presses `down`
 - **THEN** the cursor moves to the first workflow row of the first visible group, skipping that group's header

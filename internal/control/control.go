@@ -147,6 +147,17 @@ type AgentCallHandler interface {
 	HandleAgentCall(context.Context, AgentCallRequest) json.RawMessage
 }
 
+// RouteStore is the minimal route-sidecar surface the control server needs.
+// Declaring the dependency as an interface here, rather than taking a concrete
+// *intakeroute.Store, is what makes "a failed freeze rejects the completion"
+// testable: without an injectable Freeze there is no way to exercise that
+// branch, and it guards the run from acknowledging a completion while the route
+// is in an indeterminate state.
+type RouteStore interface {
+	Stage(*intakeroute.Prepared) error
+	Freeze() error
+}
+
 type AttemptOptions struct {
 	Checkpoint        func() (cli.Checkpoint, error)
 	AgentCallEligible bool
@@ -154,7 +165,7 @@ type AttemptOptions struct {
 	// RouteEligible is set only by the runner after establishing that this is
 	// the top-level built-in intake step. The request itself never grants it.
 	RouteEligible   bool
-	RouteStore      *intakeroute.Store
+	RouteStore      RouteStore
 	RouteValidation *intakeroute.ValidateOptions
 }
 
@@ -166,7 +177,7 @@ type attemptState struct {
 	agentCallEligible  bool
 	agentCallHandler   AgentCallHandler
 	routeEligible      bool
-	routeStore         *intakeroute.Store
+	routeStore         RouteStore
 	routeValidation    *intakeroute.ValidateOptions
 	cancel             context.CancelFunc
 }

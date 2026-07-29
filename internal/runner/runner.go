@@ -44,6 +44,15 @@ type Options struct {
 	// IntakeHandoffSource is the sealed handoff to copy into a newly prepared
 	// intake-launched run. IntakeHandoff restores that copied destination on
 	// resume and is never copied again.
+	//
+	// Precedence when both are set: IntakeHandoffSource wins, because a fresh
+	// preparation always copies and then overwrites IntakeHandoff with the
+	// destination it just wrote. Set exactly one — Source for a fresh launch,
+	// IntakeHandoff for resume.
+	//
+	// The copy uses exclusive creation, so preparing into a caller-supplied
+	// session directory that already holds an intake handoff fails rather than
+	// silently replacing provenance from an earlier preparation.
 	IntakeHandoffSource string
 	IntakeHandoff       string
 	IntakeParentRunID   string

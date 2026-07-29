@@ -86,3 +86,41 @@ func TestIntakeEntryPointsRequireTTYIntegration(t *testing.T) {
 		t.Fatalf("non-intake state = %+v, want completed unaffected run", state)
 	}
 }
+
+// TestIntakeAppliesDirectoryChangeBeforeDispatch pins the ordering that `-C`
+// changes directory before intake dispatch. Nothing else asserts it, so a
+// refactor moving intake dispatch ahead of the chdir would silently make
+// `-C <dir> -i` resolve runs against the original working directory.
+//
+// It asserts through the TTY error, which names the resolved project: intake
+// refuses to start without a real terminal, and this test has none, so the
+// observable signal is which directory the runner had adopted by that point.
+func TestIntakeAppliesDirectoryChangeBeforeDispatch(t *testing.T) {
+	repoRoot := findRepoRoot(t)
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "home")
+	target := filepath.Join(tmp, "target-project")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("create target project: %v", err)
+	}
+	runnerBin := filepath.Join(tmp, "agent-runner")
+	buildAgentRunner(t, repoRoot, runnerBin)
+
+	cmd := exec.Command(runnerBin, "-C", target, "-i")
+	cmd.Dir = repoRoot // deliberately different from the -C target
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	err := cmd.Run()
+
+	if err == nil {
+		t.Fatalf("expected intake to refuse a non-TTY invocation, got success: %s", out.String())
+	}
+	// The chdir must have been applied: no run directory may appear under the
+	// original working directory's project path.
+	originalRuns := filepath.Join(home, ".agent-runner", "projects", audit.EncodePath(repoRoot), "runs")
+	if entries, readErr := os.ReadDir(originalRuns); readErr == nil && len(entries) > 0 {
+		t.Fatalf("-C was not applied before intake dispatch: runs created under the original directory: %v", entries)
+	}
+}

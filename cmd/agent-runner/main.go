@@ -26,6 +26,7 @@ import (
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
+	agentconfig "github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/engine"
 	_ "github.com/codagent/agent-runner/internal/engine/openspec"
@@ -467,7 +468,56 @@ func validateIntakeInvocation(opts *intakeInvocationOptions) error {
 			return fmt.Errorf("--cli %q cannot be used for intake: intake requires an interactive-capable CLI: %w", opts.cli, err)
 		}
 	}
+	return validateIntakeOverrideModel(adapter, opts.cli, opts.model)
+}
+
+// intakeAgentProfile is the agent profile core:intake declares for its session.
+const intakeAgentProfile = "lead"
+
+// validateIntakeOverrideModel probes the effective model when --cli is given
+// without --model.
+//
+// Fresh builtin runs deliberately skip pre-validation because builtins are
+// validated at the agent-runner repo's build time. That justification does not
+// extend to a runtime override: pairing a new CLI with a model name inherited
+// from the intake agent's profile produces a (cli, model) pair that existed
+// nowhere at build time. Without this check the mismatch surfaces only as an
+// opaque provider-side error partway into the conversation — for example Codex
+// rejecting the Claude-specific name "opus" with a 400.
+func validateIntakeOverrideModel(adapter cli.Adapter, cliName, modelOverride string) error {
+	if modelOverride != "" {
+		// An explicit --model is the user's own choice for this adapter and is
+		// probed by the normal step path; nothing is inherited across providers.
+		return nil
+	}
+	inherited, err := intakeProfileModel()
+	if err != nil || inherited == "" {
+		// No resolvable profile model means nothing is inherited, so there is
+		// no cross-provider mismatch to report here.
+		return nil
+	}
+	if _, probeErr := adapter.ProbeModel(inherited, ""); probeErr != nil {
+		return fmt.Errorf(
+			"model %q comes from the intake agent's profile and is not valid for --cli %q; pass --model with --cli: %w",
+			inherited, cliName, probeErr,
+		)
+	}
 	return nil
+}
+
+// intakeProfileModel resolves the model the intake agent would inherit from its
+// configured profile. A missing or unreadable configuration is not an error
+// here: it simply means there is no inherited model to validate.
+func intakeProfileModel() (string, error) {
+	cfg, err := agentconfig.Load(filepath.Join(".agent-runner", "config.yaml"))
+	if err != nil {
+		return "", err
+	}
+	resolved, err := cfg.Resolve(intakeAgentProfile)
+	if err != nil {
+		return "", err
+	}
+	return resolved.Model, nil
 }
 
 func dispatchRunCommand(args []string, opts commandFlags) int {
