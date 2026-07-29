@@ -116,23 +116,59 @@ func (a *CopilotAdapter) ProbeModel(modelName, effort string) (ProbeStrength, er
 	return BinaryOnly, nil
 }
 
-// FilterOutput extracts the last non-empty assistant response from Copilot's
-// JSONL stream.
+// FilterOutput extracts Copilot's task-completion summary, falling back to the
+// last non-empty assistant response used by older event streams.
 func (a *CopilotAdapter) FilterOutput(stdout string) string {
-	var result string
+	var assistantResponse, taskSummary string
 	scanner := newStreamScanner(strings.NewReader(stdout))
 	for scanner.Scan() {
 		var event struct {
 			Type string `json:"type"`
 			Data *struct {
 				Content string `json:"content"`
+				Summary string `json:"summary"`
 			} `json:"data"`
 		}
-		if json.Unmarshal(scanner.Bytes(), &event) == nil && event.Type == "assistant.message" && event.Data != nil && event.Data.Content != "" {
-			result = event.Data.Content
+		if json.Unmarshal(scanner.Bytes(), &event) != nil || event.Data == nil {
+			continue
+		}
+		switch event.Type {
+		case "assistant.message":
+			if event.Data.Content != "" {
+				assistantResponse = event.Data.Content
+			}
+		case "session.task_complete":
+			if event.Data.Summary != "" {
+				taskSummary = event.Data.Summary
+			}
 		}
 	}
-	return result
+	if taskSummary != "" {
+		return taskSummary
+	}
+	return assistantResponse
+}
+
+// HasCompletedHeadlessOutput reports whether Copilot emitted both a complete
+// response and its successful terminal result event.
+func (a *CopilotAdapter) HasCompletedHeadlessOutput(stdout string) bool {
+	if a.FilterOutput(stdout) == "" {
+		return false
+	}
+	scanner := newStreamScanner(strings.NewReader(stdout))
+	for scanner.Scan() {
+		var event struct {
+			Type     string `json:"type"`
+			ExitCode *int   `json:"exitCode"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &event) == nil &&
+			event.Type == "result" &&
+			event.ExitCode != nil &&
+			*event.ExitCode == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // ExtractUsage sums the incremental token metrics on assistant.message

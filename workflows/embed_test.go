@@ -670,6 +670,13 @@ func TestOpenSpecTaskReviewLoopGateHandlesLargeReportWithoutJQ(t *testing.T) {
 		if err != nil {
 			t.Skipf("%s not available", name)
 		}
+		if name == "python3" {
+			out, err := exec.Command(target, "-c", "import sys; print(sys.executable)").Output()
+			if err != nil {
+				t.Skipf("resolve python3 executable: %v", err)
+			}
+			target = strings.TrimSpace(string(out))
+		}
 		if err := os.Symlink(target, filepath.Join(binDir, name)); err != nil {
 			t.Fatalf("symlink %s: %v", name, err)
 		}

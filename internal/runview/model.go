@@ -109,6 +109,9 @@ type Model struct {
 
 	// Live-run fields (FromLiveRun mode only).
 	running          bool   // true until ExecDoneMsg arrives
+	suspended        bool   // true while an interactive step owns the terminal
+	pulseStopped     bool   // true when suspension consumed the scheduled pulse tick
+	refreshStopped   bool   // true when suspension consumed the scheduled refresh tick
 	quitConfirming   bool   // quit-confirmation modal is visible
 	liveResult       string // set on ExecDoneMsg ("success"/"failed"/"stopped")
 	autoFollow       bool   // cursor tracks activeStep; enabled by default in FromLiveRun
@@ -562,9 +565,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case liverun.ResumedMsg:
-		// BubbleTea's RestoreTerminal does not re-enable mouse mode after
-		// ReleaseTerminal disables it, so we re-enable it explicitly.
-		return m, tea.EnableMouseCellMotion
+		cmd := m.handleResumedMsg()
+		return m, cmd
 
 	case ResumeMsg:
 		// Top-level live-run model: no switcher intercepts this, so stash the
@@ -645,6 +647,7 @@ func (m *Model) handleShowTUIMsg() (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleSuspendedMsg() {
+	m.suspended = true
 	// Re-enter follow mode whenever a step transitions into interactive: the
 	// user can't see the run view during the PTY hand-off, so by the time the
 	// TUI restores they should be tracking the live step instead of pinned to
@@ -664,6 +667,25 @@ func (m *Model) handleSuspendedMsg() {
 	if !m.altScreen {
 		m.suppressAltScreen = true
 	}
+}
+
+func (m *Model) handleResumedMsg() tea.Cmd {
+	m.suspended = false
+	// BubbleTea's RestoreTerminal does not re-enable mouse mode after
+	// ReleaseTerminal disables it, so we re-enable it explicitly.
+	cmds := []tea.Cmd{tea.EnableMouseCellMotion}
+	if m.pulseStopped && m.hasLiveUpdates() {
+		cmds = append(cmds, tuistyle.DoPulse())
+	}
+	if m.refreshStopped && m.hasLiveUpdates() {
+		cmds = append(cmds, tuistyle.DoRefresh())
+	}
+	m.pulseStopped = false
+	m.refreshStopped = false
+	if len(cmds) == 1 {
+		return cmds[0]
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) handleLiveUIKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -857,6 +879,10 @@ func (m *Model) handleMouse(msg tea.MouseMsg) {
 }
 
 func (m *Model) handleRefreshMsg() tea.Cmd {
+	if m.suspended {
+		m.refreshStopped = true
+		return nil
+	}
 	// FromLiveRun leaves m.active=false because no runlock is held, but the
 	// in-process runner is still emitting audit events we need to pick up so
 	// step statuses stay current.
@@ -883,6 +909,10 @@ func (m *Model) shouldSyncAutoFollowDetail() bool {
 }
 
 func (m *Model) handlePulseMsg() tea.Cmd {
+	if m.suspended {
+		m.pulseStopped = true
+		return nil
+	}
 	if !m.hasLiveUpdates() {
 		return nil
 	}

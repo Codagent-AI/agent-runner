@@ -27,7 +27,7 @@ type renderedStepRow struct {
 }
 
 func (m *Model) View() string {
-	if !m.altScreen {
+	if m.suspended || !m.altScreen {
 		return ""
 	}
 	if m.showLegend {

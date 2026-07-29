@@ -245,6 +245,17 @@ func TestCopilotStructuredHeadlessOutput(t *testing.T) {
 			t.Fatalf("FilterOutput() = %q, want fixture-ok", got)
 		}
 	})
+
+	t.Run("capture filter returns task completion summary", func(t *testing.T) {
+		filter := any(adapter).(OutputFilter)
+		raw := `{"type":"assistant.message","data":{"content":"","toolRequests":[{"name":"task_complete"}]}}` + "\n" +
+			`{"type":"session.task_complete","data":{"summary":"recovered review","success":true}}` + "\n" +
+			`{"type":"result","exitCode":0}` + "\n"
+
+		if got := filter.FilterOutput(raw); got != "recovered review" {
+			t.Fatalf("FilterOutput() = %q, want task completion summary", got)
+		}
+	})
 }
 
 func TestCursorUsageExtraction(t *testing.T) {

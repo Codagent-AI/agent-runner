@@ -2748,6 +2748,73 @@ func TestModel_ResumedMsg_ReEnablesMouse(t *testing.T) {
 	}
 }
 
+func TestModel_SuspendedMsg_StopsHiddenPulseRendering(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.pulsePhase = 1.25
+
+	m.Update(liverun.SuspendedMsg{})
+
+	if got := m.View(); got != "" {
+		t.Fatalf("View() while suspended = %q, want empty output", got)
+	}
+	_, cmd := m.Update(tuistyle.PulseMsg{})
+	if cmd != nil {
+		t.Fatal("suspended run view should stop the pulse chain")
+	}
+	if m.pulsePhase != 1.25 {
+		t.Fatalf("pulsePhase = %v, want 1.25", m.pulsePhase)
+	}
+}
+
+func TestModel_SuspendedMsg_StopsHiddenRefresh(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.Update(liverun.SuspendedMsg{})
+
+	_, cmd := m.Update(tuistyle.RefreshMsg{})
+
+	if cmd != nil {
+		t.Fatal("suspended run view should stop the refresh chain")
+	}
+}
+
+func TestModel_ResumedMsg_RestartsStoppedPulseChain(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.Update(liverun.SuspendedMsg{})
+	m.Update(tuistyle.PulseMsg{})
+
+	_, cmd := m.Update(liverun.ResumedMsg{})
+	if cmd == nil {
+		t.Fatal("ResumedMsg should restart a pulse chain stopped during suspension")
+	}
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("ResumedMsg command = %T, want tea.BatchMsg", msg)
+	}
+	if len(batch) != 2 {
+		t.Fatalf("ResumedMsg batch has %d commands, want mouse enable and pulse", len(batch))
+	}
+}
+
+func TestModel_ResumedMsg_RestartsStoppedRefreshChain(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.Update(liverun.SuspendedMsg{})
+	m.Update(tuistyle.RefreshMsg{})
+
+	_, cmd := m.Update(liverun.ResumedMsg{})
+	if cmd == nil {
+		t.Fatal("ResumedMsg should restart a refresh chain stopped during suspension")
+	}
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("ResumedMsg command = %T, want tea.BatchMsg", msg)
+	}
+	if len(batch) != 2 {
+		t.Fatalf("ResumedMsg batch has %d commands, want mouse enable and refresh", len(batch))
+	}
+}
+
 func TestModel_ExecDone_Failed_JumpsToFailedStep(t *testing.T) {
 	tree := simpleTree()
 	// Mark the first step (shell "build") as failed

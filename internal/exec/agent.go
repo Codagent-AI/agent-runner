@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	stdexec "os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -765,6 +766,13 @@ func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, options *AgentPr
 		// Capture stdout for headless runs so that adapters (e.g. Codex) can
 		// parse session IDs from the process output.
 		result, runErr := runner.RunAgent(options)
+		if errors.Is(runErr, stdexec.ErrWaitDelay) {
+			if detector, ok := adapter.(cli.HeadlessCompletionDetector); ok &&
+				detector.HasCompletedHeadlessOutput(result.Stdout) {
+				result.ExitCode = 0
+				runErr = nil
+			}
+		}
 		if runErr != nil {
 			return OutcomeFailed, result, result.Started, runErr
 		}
