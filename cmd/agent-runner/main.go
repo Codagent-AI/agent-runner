@@ -336,7 +336,7 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "  -resume [session-id]\n\tResume an interrupted workflow; launches TUI if no session ID given\n")
 		fmt.Fprintf(os.Stderr, "  -reset-onboarding\n\tClear onboarding settings, project .validator/, and saved onboarding runs before launching\n")
 		fmt.Fprintf(os.Stderr, "  -onboarding-from <step-id>\n\tStart the built-in onboarding workflow from a top-level step\n")
-		fmt.Fprintf(os.Stderr, "  -profile <name>\n\tSelect the profile set for this invocation\n")
+		fmt.Fprintf(os.Stderr, "  --profile <name>\n\tSelect the profile set for this invocation\n")
 		fmt.Fprintf(os.Stderr, "  -validate\n\tValidate a workflow file without executing\n")
 		fmt.Fprintf(os.Stderr, "  -v, -version\n\tPrint version and exit\n")
 	}
@@ -367,6 +367,22 @@ func run() int {
 		}
 	})
 	*profileFlag = strings.TrimSpace(*profileFlag)
+	var trailingProfile string
+	var trailingProfileSet bool
+	var profileErr error
+	args, trailingProfile, trailingProfileSet, profileErr = extractProfileArgs(args)
+	if profileErr != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", profileErr)
+		return 1
+	}
+	if profileSet && trailingProfileSet {
+		fmt.Fprintln(os.Stderr, "agent-runner: --profile may only be specified once")
+		return 1
+	}
+	if trailingProfileSet {
+		*profileFlag = trailingProfile
+		profileSet = true
+	}
 	if profileSet && *profileFlag == "" {
 		fmt.Fprintln(os.Stderr, "agent-runner: --profile requires a profile set name")
 		return 1
@@ -417,6 +433,47 @@ func run() int {
 		profileSet:     profileSet,
 		onboardingFrom: strings.TrimSpace(*onboardingFromFlag),
 	})
+}
+
+// extractProfileArgs accepts profile flags after positional arguments, which
+// the standard flag package intentionally leaves in flag.Args().
+func extractProfileArgs(args []string) ([]string, string, bool, error) {
+	filtered := make([]string, 0, len(args))
+	var profile string
+	var set bool
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		value := ""
+		hasProfile := false
+		switch {
+		case arg == "--profile" || arg == "-profile":
+			hasProfile = true
+			if i+1 >= len(args) {
+				return nil, "", false, fmt.Errorf("--profile requires a profile set name")
+			}
+			i++
+			value = args[i]
+		case strings.HasPrefix(arg, "--profile="):
+			hasProfile = true
+			value = strings.TrimPrefix(arg, "--profile=")
+		case strings.HasPrefix(arg, "-profile="):
+			hasProfile = true
+			value = strings.TrimPrefix(arg, "-profile=")
+		}
+		if !hasProfile {
+			filtered = append(filtered, arg)
+			continue
+		}
+		if set {
+			return nil, "", false, fmt.Errorf("--profile may only be specified once")
+		}
+		profile = strings.TrimSpace(value)
+		if profile == "" {
+			return nil, "", false, fmt.Errorf("--profile requires a profile set name")
+		}
+		set = true
+	}
+	return filtered, profile, set, nil
 }
 
 type commandFlags struct {
@@ -473,7 +530,7 @@ func dispatchRunCommand(args []string, opts commandFlags) int {
 				fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 				return 1
 			}
-			return handleOnboardingFromRun(ref, opts.onboardingFrom)
+			return handleOnboardingFromRun(ref, opts.onboardingFrom, runCommandOptions{profileOverride: opts.profileOverride()})
 		}
 		return handleListWithDeps(listview.InitialTabNew, defaultFirstRunDeps)
 	}
@@ -493,7 +550,8 @@ func dispatchRunCommand(args []string, opts commandFlags) int {
 			fmt.Fprintln(os.Stderr, "agent-runner: --until cannot be combined with --onboarding-from")
 			return 1
 		}
-		return handleOnboardingFromRun(workflowFile, opts.onboardingFrom, args[1:]...)
+		runOpts.profileOverride = opts.profileOverride()
+		return handleOnboardingFromRun(workflowFile, opts.onboardingFrom, runOpts, args[1:]...)
 	}
 	runOpts.profileOverride = opts.profileOverride()
 	return handleRunWithRunOptions(append([]string{workflowFile}, args[1:]...), runOpts).exitCode
@@ -1822,9 +1880,10 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 	return runLiveTUIWithResult(h, liveOpts)
 }
 
-func handleOnboardingFromRun(workflowFile, from string, args ...string) int {
+func handleOnboardingFromRun(workflowFile, from string, runOpts runCommandOptions, args ...string) int {
 	runArgs := append([]string{workflowFile}, args...)
-	result := handleRunWithRunOptions(runArgs, runCommandOptions{from: from})
+	runOpts.from = from
+	result := handleRunWithRunOptions(runArgs, runOpts)
 	settings, err := usersettings.Load()
 	if err != nil {
 		settings = usersettings.Settings{}

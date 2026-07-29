@@ -42,16 +42,7 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		return nil, err
 	}
 
-	// Check workflow hash
-	content, readErr := loader.ReadWorkflowFile(state.WorkflowFile)
-	if readErr == nil {
-		currentHash := stateio.ComputeWorkflowHash(string(content))
-		if currentHash != state.WorkflowHash {
-			if opts.Log != nil {
-				opts.Log.Printf("agent-runner: warning: workflow file has changed since last run\n")
-			}
-		}
-	}
+	warnIfWorkflowHashChanged(&state, opts.Log)
 
 	// Resolve the step to resume from
 	var fromStep string
@@ -137,6 +128,13 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	}
 
 	return PrepareRun(&workflow, state.Params, resumeOpts)
+}
+
+func warnIfWorkflowHashChanged(state *model.RunState, log interface{ Printf(string, ...any) }) {
+	content, err := loader.ReadWorkflowFile(state.WorkflowFile)
+	if err == nil && stateio.ComputeWorkflowHash(string(content)) != state.WorkflowHash && log != nil {
+		log.Printf("agent-runner: warning: workflow file has changed since last run\n")
+	}
 }
 
 func resumeProfileOverride(override config.ProfileOverride, recorded string) config.ProfileOverride {
