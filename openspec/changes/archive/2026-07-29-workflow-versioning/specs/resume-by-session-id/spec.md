@@ -79,7 +79,7 @@ The `--validate` flag SHALL accept either a version-free logical workflow name o
 - **WHEN** `agent-runner run deploy-v1.0.yaml` is invoked
 - **THEN** the runner rejects the workflow filename and instructs the user to launch logical workflow `deploy`
 
-#### Scenario: Validate logical workflow via flag
+#### Scenario: Validate via flag
 - **WHEN** `agent-runner --validate deploy` is invoked
 - **THEN** the runner resolves and validates the latest `deploy` workflow without executing it
 

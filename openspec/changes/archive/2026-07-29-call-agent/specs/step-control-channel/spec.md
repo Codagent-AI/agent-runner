@@ -4,7 +4,7 @@
 
 Before the first parent agent step that receives runner control integration spawns, Agent Runner SHALL lazily create a local Unix socket in a user-private directory and retain it for the run. The run directory SHALL point to the socket. Endpoint creation failure SHALL fail the step before spawn; normal run exit SHALL close and unlink it; stale cleanup SHALL require proof of the run lock. Interactive and autonomous-headless parent agent processes SHALL receive the control context required by their enabled runner tools. For autonomous parents, `call_agent` control eligibility SHALL be derived solely from the validated tool declaration. Agents started by `call_agent` MUST NOT receive usable parent control context.
 
-#### Scenario: Interactive parent receives control context
+#### Scenario: Child receives control context
 - **WHEN** an interactive parent agent starts
 - **THEN** it receives `AGENT_RUNNER_CONTROL_SOCKET`, `AGENT_RUNNER_RUN_ID`, `AGENT_RUNNER_STEP_ID`, and `AGENT_RUNNER_CONTROL_TOKEN`
 
@@ -44,7 +44,7 @@ Every parent agent step attempt that receives runner control integration SHALL r
 - **WHEN** a request carries an earlier attempt's credential
 - **THEN** the server rejects and audits it without changing workflow state
 
-#### Scenario: Completion acknowledgement retry is idempotent
+#### Scenario: Acknowledgement retry is idempotent
 - **WHEN** the same accepted completion request ID is retried after a lost response
 - **THEN** the server returns the original successful acknowledgement
 

@@ -21,7 +21,7 @@ Pre-validation SHALL NOT run on `agent-runner --resume` invocations; resume cont
 - **WHEN** `agent-runner --validate my-workflow` is invoked
 - **THEN** the logical argument is resolved to its latest version and the same pre-validation pipeline runs in lenient mode, printing `workflow is valid` on success or the structured error on failure
 
-#### Scenario: --validate accepts a versioned YAML file path
+#### Scenario: --validate accepts a YAML file path
 - **WHEN** `agent-runner --validate workflows/core/finalize-pr-v1.0.yaml` is invoked and that file exists
 - **THEN** the argument is treated as a literal exact file path and the pre-validation pipeline runs against that version in lenient mode
 

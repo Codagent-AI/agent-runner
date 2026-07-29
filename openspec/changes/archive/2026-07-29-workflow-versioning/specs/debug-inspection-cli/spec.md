@@ -6,7 +6,7 @@ The `agent-runner debug --show-workflow <ref>` command SHALL print the YAML for 
 
 Non-builtin refs (relative paths, absolute paths, `~`-prefixed paths) SHALL be resolved from disk and MAY identify an exact historical version. The output SHALL be the YAML for the **named ref only** — composed sub-workflow references SHALL NOT be inlined, expanded, or followed; they SHALL appear in the output exactly as they appear in the source. The output SHALL be the bytes as embedded or stored, with no normalization, reformatting, or comment stripping. Read-only acceptance of an exact path or embedded ref MUST NOT make that historical version launchable as a new run.
 
-#### Scenario: Builtin logical ref returns latest embedded YAML
+#### Scenario: Builtin ref returns embedded YAML
 - **WHEN** `agent-runner debug --show-workflow core:finalize-pr` is invoked and versions `v1.0` and `v2.0` are embedded
 - **THEN** the bytes for embedded `workflows/core/finalize-pr-v2.0.yaml` are printed to stdout verbatim and the command exits 0
 

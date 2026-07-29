@@ -63,22 +63,22 @@ Both `.yaml` and `.yml` versioned definitions SHALL be eligible. Duplicate logic
 
 When a syntactically valid logical-name lookup fails and the final name segment ends in a terminal `-v<digits>` attempt, the workflow-not-found error SHALL additionally suggest the version-free logical name. This hint MUST NOT prevent a real logical workflow whose name ends in `-v<digits>` from resolving normally when that group exists.
 
-#### Scenario: Resolve bare name to latest project YAML
+#### Scenario: Resolve bare name to user YAML file
 - **WHEN** the user runs `agent-runner run my-workflow`
 - **AND** `.agent-runner/workflows/my-workflow-v1.0.yaml` and `.agent-runner/workflows/my-workflow-v1.2.yaml` exist
 - **THEN** the workflow is loaded from `.agent-runner/workflows/my-workflow-v1.2.yaml`
 
-#### Scenario: Resolve bare name to project YML
+#### Scenario: Resolve bare name to user YML file
 - **WHEN** the user runs `agent-runner run my-workflow`
 - **AND** `.agent-runner/workflows/my-workflow-v1.0.yml` exists
 - **THEN** the workflow is loaded from `.agent-runner/workflows/my-workflow-v1.0.yml`
 
-#### Scenario: Resolve path-style name to latest nested project file
+#### Scenario: Resolve path-style name to nested user file
 - **WHEN** the user runs `agent-runner run team/deploy`
 - **AND** `.agent-runner/workflows/team/deploy-v2.9.yaml` and `.agent-runner/workflows/team/deploy-v2.10.yaml` exist
 - **THEN** the workflow is loaded from `.agent-runner/workflows/team/deploy-v2.10.yaml`
 
-#### Scenario: Resolve namespaced name to latest embedded builtin
+#### Scenario: Resolve namespaced name to embedded builtin
 - **WHEN** the user runs `agent-runner run core:finalize-pr`
 - **AND** the embedded set contains `core/finalize-pr-v1.0.yaml` and `core/finalize-pr-v2.0.yaml`
 - **THEN** the workflow is loaded from the embedded `core/finalize-pr-v2.0.yaml`
@@ -101,25 +101,25 @@ When a syntactically valid logical-name lookup fails and the final name segment 
 - **AND** the binary contains an embedded `core:finalize-pr` workflow
 - **THEN** the command fails with a workflow-not-found error; the builtin is not used
 
-#### Scenario: Bare name falls back to latest global YAML
+#### Scenario: Bare name falls back to global YAML file
 - **WHEN** the user runs `agent-runner run my-workflow`
 - **AND** no project-local `my-workflow` group exists
 - **AND** `~/.agent-runner/workflows/my-workflow-v1.0.yaml` and `~/.agent-runner/workflows/my-workflow-v1.3.yaml` exist
 - **THEN** the workflow is loaded from `~/.agent-runner/workflows/my-workflow-v1.3.yaml`
 
-#### Scenario: Bare name falls back to global YML
+#### Scenario: Bare name falls back to global YML file
 - **WHEN** the user runs `agent-runner run my-workflow`
 - **AND** no project-local `my-workflow` group exists
 - **AND** `~/.agent-runner/workflows/my-workflow-v1.0.yml` exists
 - **THEN** the workflow is loaded from `~/.agent-runner/workflows/my-workflow-v1.0.yml`
 
-#### Scenario: Project workflow shadows newer global workflow
+#### Scenario: Project workflow shadows global workflow with same name
 - **WHEN** the user runs `agent-runner run my-workflow`
 - **AND** `.agent-runner/workflows/my-workflow-v1.0.yaml` exists
 - **AND** `~/.agent-runner/workflows/my-workflow-v3.0.yaml` exists
 - **THEN** the workflow is loaded from `.agent-runner/workflows/my-workflow-v1.0.yaml`
 
-#### Scenario: Project path-style workflow shadows global workflow
+#### Scenario: Project path-style workflow shadows global workflow with same path
 - **WHEN** the user runs `agent-runner run team/deploy`
 - **AND** `.agent-runner/workflows/team/deploy-v1.0.yaml` exists
 - **AND** `~/.agent-runner/workflows/team/deploy-v2.0.yaml` exists

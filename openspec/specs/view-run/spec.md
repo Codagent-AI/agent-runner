@@ -92,13 +92,42 @@ Status glyphs SHALL be: `●` running, `○` pending, `✓` success, `✗` faile
 - **THEN** the log block's separator displays the full untruncated step name
 
 ### Requirement: Drill-in navigation with breadcrumbs
+
 The run view SHALL support drilling into sub-workflows and loops via a drill-in model. Enter on a drillable row SHALL scope both the step list AND the log to that container's subtree: the step list shows that container's children, and the log shows those children's blocks (with descendants inline). A breadcrumb line at the top SHALL show the current depth path (run name, then each entered container in order).
+
+When a saved run is opened for non-live inspection from the run list or through `--inspect`, the top-level breadcrumb SHALL show the recorded workflow version next to the version-free canonical runnable name using a `v<major>.<minor>` label. The version label SHALL remain present at every drill depth and for every saved-run status. A saved run whose recorded workflow file is unversioned SHALL remain inspectable and SHALL display `unversioned` instead of a numeric version.
+
+The live run view and the pre-run definition preview MUST NOT show a workflow version. The exact separator and styling of the non-live version label are design details.
 
 Drillable rows SHALL be: sub-workflow steps and loop steps. Drill-in SHALL be available on `pending` containers (children read from the workflow file or resolved statically) as well as executed ones.
 
 #### Scenario: Top-level breadcrumb rendering
 - **WHEN** the run view is at the top level (no drill-in)
-- **THEN** the breadcrumb shows the workflow's canonical runnable name, the start time, and the run status (active/failed/completed/inactive)
+- **THEN** the breadcrumb shows the workflow's version-free canonical runnable name, the start time, and the run status (active/failed/completed/inactive)
+
+#### Scenario: Non-live saved run shows recorded version
+- **WHEN** a saved run recorded `deploy-v2.0.yaml` and is opened from the run list or through `--inspect`
+- **THEN** the top-level breadcrumb shows canonical name `deploy` with version label `v2.0`
+
+#### Scenario: Saved-run status does not suppress version
+- **WHEN** a saved run is opened for non-live inspection with status inactive, failed, or completed
+- **THEN** the breadcrumb shows its recorded version alongside the status
+
+#### Scenario: Version remains visible after drill-in
+- **WHEN** the user drills into a sub-workflow, loop, or iteration while inspecting a saved versioned run
+- **THEN** the breadcrumb retains the top-level workflow's recorded version while appending the entered container
+
+#### Scenario: Live run omits version
+- **WHEN** a workflow is executing in the live run view
+- **THEN** the breadcrumb shows the version-free canonical workflow name without a version label
+
+#### Scenario: Definition preview omits version
+- **WHEN** the user opens a workflow's pre-run definition preview
+- **THEN** the breadcrumb shows the version-free canonical workflow name without a version label
+
+#### Scenario: Legacy saved run displays unversioned
+- **WHEN** a saved run recorded an unversioned workflow file and is opened for non-live inspection
+- **THEN** the breadcrumb displays `unversioned` and inspection continues without a filename-version error
 
 #### Scenario: Enter on sub-workflow drills in and scopes log
 - **WHEN** the user presses Enter on a sub-workflow step row
@@ -583,3 +612,69 @@ When the step transitions out of `in-progress` (to `success`, `failed`, `skipped
 #### Scenario: Spinner absent for aborted step without active run
 - **WHEN** an agent step was interrupted by an earlier run and no run is currently active
 - **THEN** the log block shows no animated progress indicator (matching the step-list rule that `in-progress` does not blink outside an active run)
+
+### Requirement: Agent-call hierarchy rendering
+
+A parent agent row with accepted agent calls SHALL display its call count and become expandable through the existing nested-row interaction. When expanded, each call SHALL appear as a dynamic child execution row rather than a workflow step, ordered by invocation time. A named-session target SHALL be labeled `call session: <name>` and a profile target SHALL be labeled `call agent: <profile>`. Each call row SHALL display its own status and an agent-call type glyph; the exact glyph is a design choice. An accepted call whose child CLI fails to launch SHALL remain visible as a failed call row.
+
+#### Scenario: Parent displays call count
+- **WHEN** a parent agent attempt has two accepted calls
+- **THEN** its row displays `(2 calls)`
+
+#### Scenario: Expanded parent shows chronological calls
+- **WHEN** the user expands a parent with multiple calls
+- **THEN** the run view shows one child execution row per call in invocation order
+
+#### Scenario: Target form is explicit
+- **WHEN** one call targets a named session and another targets an agent profile
+- **THEN** their rows use `call session: <name>` and `call agent: <profile>` labels respectively
+
+#### Scenario: Call status is independent
+- **WHEN** a parent recovers from a failed call and later succeeds
+- **THEN** the failed call remains visible with failed status beneath the successful parent
+
+#### Scenario: CLI launch failure remains visible
+- **WHEN** an accepted call fails while launching its child CLI
+- **THEN** the run view displays that call as a failed child row beneath its parent
+
+#### Scenario: Repeated target calls remain distinct
+- **WHEN** a parent calls the same target multiple times
+- **THEN** each invocation appears as a separate child row
+
+#### Scenario: Inspect reconstructs call hierarchy
+- **WHEN** a completed run containing agent calls is opened for inspection
+- **THEN** the run view reconstructs the parent call count and child rows from persisted run evidence
+
+### Requirement: Agent-call detail and resume
+
+Selecting an agent-call row SHALL show the target kind and name; resolved profile, CLI, model, session metadata, and working directory; prompt, outcome, duration, usage, cost, and error; and stdout and stderr retained through ordinary headless-agent output behavior. The detail view SHALL render called-agent stdout and stderr through the resolved CLI adapter's same headless output, result, and diagnostic filtering used for ordinary headless agent steps, for both successful and failed calls. Filtering the displayed output MUST NOT alter the raw persisted output evidence. The detail view MUST NOT reconstruct full output from `audit.log`.
+
+When the run is inactive, a completed called-agent execution with a known CLI session ID SHALL offer the existing direct session-resume action. The action MUST NOT be available while the run is active or when no session ID is known.
+
+#### Scenario: Selected call shows execution detail
+- **WHEN** the user selects a running or completed agent-call row
+- **THEN** the detail pane shows the call's target, resolved agent metadata, prompt, status, timing, metrics, and error information available for that execution
+
+#### Scenario: Persisted call output is displayed
+- **WHEN** ordinary headless-agent output persistence created stdout or stderr files for the selected call
+- **THEN** the detail pane displays the output after applying the resolved CLI adapter's ordinary headless output and diagnostic filtering
+
+#### Scenario: Failed call output uses ordinary filtering
+- **WHEN** a failed called agent produced raw protocol output or diagnostics
+- **THEN** the detail pane displays the same filtered agent response, error, and relevant diagnostics that an ordinary failed headless agent step would display
+
+#### Scenario: Raw persisted evidence remains unchanged
+- **WHEN** the detail pane filters called-agent output for display
+- **THEN** the raw persisted stdout and stderr files remain unchanged for evidence and debugging
+
+#### Scenario: Audit metadata is not treated as full output
+- **WHEN** no persisted output exists for a selected call
+- **THEN** the run view does not reconstruct or display a full child response from `audit.log`
+
+#### Scenario: Inactive call session can be resumed
+- **WHEN** the run is inactive and the selected completed call has a known CLI session ID
+- **THEN** the existing direct resume action is available for that called-agent session
+
+#### Scenario: Resume unavailable during active run
+- **WHEN** the run is active or the selected call has no known CLI session ID
+- **THEN** the direct resume action is unavailable for that call
