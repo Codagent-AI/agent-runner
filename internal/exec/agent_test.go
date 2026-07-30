@@ -1188,6 +1188,15 @@ func TestExecuteAgentStep(t *testing.T) {
 		if !strings.Contains(systemPrompt, "explore the problem") {
 			t.Fatalf("system prompt = %q, want it to carry the step instructions", systemPrompt)
 		}
+		// Replacing the visible announcement is pointless if the agent is still
+		// told to announce the step: it just says "I'm starting the plan step"
+		// itself, which is the workflow machinery the greeting hides.
+		if strings.Contains(systemPrompt, "announce that you are starting this step") {
+			t.Error("intake system prompt still instructs the agent to announce the step")
+		}
+		if strings.Contains(systemPrompt, `The current step is "plan"`) {
+			t.Error("intake system prompt still frames the conversation as a workflow step")
+		}
 	})
 
 	t.Run("interactive claude resume includes current completion instruction in positional prompt", func(t *testing.T) {

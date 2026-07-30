@@ -587,7 +587,17 @@ func buildAdapterInput(
 			fullPrompt += completionInstruction(completionExecutable)
 		}
 	} else {
-		fullPrompt = buildStepPrefix(step.ID, ctx, ctx.WorkflowResumed, isResume) + fullPrompt + completionInstruction(completionExecutable)
+		// Intake is a conversation, not an announced step. Framing it as one
+		// makes the agent open with "I'm starting the plan step", which is the
+		// machinery the greeting is there to keep out of the user's way.
+		// Resumed intake keeps the prefix, which tells the agent to pick up
+		// where it left off; only the opening turn drops it.
+		freshIntake := isIntakePlanStep(step, ctx) && !ctx.WorkflowResumed && !isResume
+		prefix := ""
+		if !freshIntake {
+			prefix = buildStepPrefix(step.ID, ctx, ctx.WorkflowResumed, isResume)
+		}
+		fullPrompt = prefix + fullPrompt + completionInstruction(completionExecutable)
 	}
 
 	input := cli.BuildArgsInput{
