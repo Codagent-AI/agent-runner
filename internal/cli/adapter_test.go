@@ -874,13 +874,13 @@ func TestCopilotAdapter(t *testing.T) {
 		assertArgs(t, expected, args)
 	})
 
-	t.Run("yolo autonomous adds all tools flag", func(t *testing.T) {
+	t.Run("yolo autonomous allows all tools and paths", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:         "do something",
 			Context:        ContextAutonomousHeadless,
 			PermissionMode: "yolo",
 		})
-		expected := []string{"copilot", "-p", "do something", "-s", "--output-format", "json", "--allow-tool=write", "--autopilot", "--allow-all-tools"}
+		expected := []string{"copilot", "-p", "do something", "-s", "--output-format", "json", "--allow-tool=write", "--autopilot", "--allow-all-tools", "--allow-all-paths"}
 		assertArgs(t, expected, args)
 	})
 
@@ -890,20 +890,20 @@ func TestCopilotAdapter(t *testing.T) {
 			Context:        ContextInteractive,
 			PermissionMode: "yolo",
 		})
-		for _, disallowed := range []string{"--allow-tool=write", "--autopilot", "--allow-all-tools"} {
+		for _, disallowed := range []string{"--allow-tool=write", "--autopilot", "--allow-all-tools", "--allow-all-paths"} {
 			if containsString(args, disallowed) {
 				t.Fatalf("did not expect %s in interactive args, got %v", disallowed, args)
 			}
 		}
 	})
 
-	t.Run("yolo autonomous-interactive adds all tools flag", func(t *testing.T) {
+	t.Run("yolo autonomous-interactive allows all tools and paths", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:         "do something",
 			Context:        ContextAutonomousInteractive,
 			PermissionMode: "yolo",
 		})
-		for _, want := range []string{"--allow-tool=write", "--autopilot", "--allow-all-tools"} {
+		for _, want := range []string{"--allow-tool=write", "--autopilot", "--allow-all-tools", "--allow-all-paths"} {
 			if !containsString(args, want) {
 				t.Fatalf("expected %s in autonomous-interactive yolo args, got %v", want, args)
 			}

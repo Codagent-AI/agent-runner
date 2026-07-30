@@ -60,7 +60,7 @@ func (a *CopilotAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, er
 	if context.IsAutonomous() {
 		args = append(args, "--allow-tool=write", "--autopilot")
 		if usersettings.EffectiveAutonomousPermissionMode(input.PermissionMode) == usersettings.PermissionModeYOLO {
-			args = append(args, "--allow-all-tools")
+			args = append(args, "--allow-all-tools", "--allow-all-paths")
 		}
 	}
 

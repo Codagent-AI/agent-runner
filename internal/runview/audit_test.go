@@ -299,6 +299,33 @@ func TestApplyEvent_StepStartAfterFailure(t *testing.T) {
 	}
 }
 
+func TestApplyEvent_StepStartAfterFailureClearsPreviousOutput(t *testing.T) {
+	tree := buildImplementChangeTree(t)
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[archive]",
+		Type:   "step_end",
+		Data: map[string]any{
+			"outcome": "failed",
+			"stdout":  "previous stdout",
+			"stderr":  "previous stderr",
+		},
+	})
+
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[archive]",
+		Type:   "step_start",
+		Data:   map[string]any{"command": "openspec archive view-run"},
+	})
+
+	archive := childByID(tree.Root, "archive")
+	if archive.Stdout != "" {
+		t.Errorf("Stdout after restart = %q, want empty", archive.Stdout)
+	}
+	if archive.Stderr != "" {
+		t.Errorf("Stderr after restart = %q, want empty", archive.Stderr)
+	}
+}
+
 func TestApplyEvent_RunStartAfterFailureClearsRootFailure(t *testing.T) {
 	tree := buildImplementChangeTree(t)
 	tree.ApplyEvent(RawEvent{

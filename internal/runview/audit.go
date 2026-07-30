@@ -449,6 +449,8 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 		n.Status = StatusInProgress
 		n.Aborted = false
 		n.Outcome = ""
+		n.Stdout = ""
+		n.Stderr = ""
 		n.StartedAt = parseEventTime(e.Timestamp)
 		applyStepStart(n, e.Data)
 	case "step_end":
