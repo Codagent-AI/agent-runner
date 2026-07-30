@@ -2,6 +2,7 @@ package intakeroute
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -293,17 +294,79 @@ func TestStoreStageIsIdempotentForPublishedPreparedRoute(t *testing.T) {
 	}
 }
 
+func TestValidateUnknownWorkflowListsRoutableWorkflows(t *testing.T) {
+	runDir := t.TempDir()
+	writeFile(t, filepath.Join(runDir, "handoff.md"), "notes")
+	writeRequest(t, runDir, `{"workflow":"guess","handoff":"handoff.md"}`)
+
+	opts := testValidateOptions(runDir, "handoff.md")
+	opts.Catalog = NewCatalog([]discovery.WorkflowEntry{
+		{CanonicalName: "spec-driven:change", SourcePath: "builtin:spec-driven/change-v2.0.yaml"},
+		{CanonicalName: "core:debug", SourcePath: "builtin:core/debug-v1.0.yaml"},
+		{CanonicalName: "core:intake", SourcePath: "builtin:core/intake-v1.0.yaml", Hidden: true},
+		{CanonicalName: "core:finalize-pr", SourcePath: "builtin:core/finalize-pr-v1.0.yaml", Hidden: true},
+		{CanonicalName: "broken", SourcePath: "project:broken.yaml", ParseError: "bad yaml"},
+	})
+
+	_, err := Validate(opts)
+	if err == nil {
+		t.Fatal("Validate() error = nil, want workflow resolution failure")
+	}
+	want := `workflow "guess" not found; routable workflows: core:debug, spec-driven:change`
+	if got := err.Error(); got != want {
+		t.Fatalf("Validate() error = %q, want %q", got, want)
+	}
+	assertNoRouteArtifacts(t, runDir)
+}
+
+func TestValidateUnknownWorkflowTruncatesLongRoutableList(t *testing.T) {
+	runDir := t.TempDir()
+	writeFile(t, filepath.Join(runDir, "handoff.md"), "notes")
+	writeRequest(t, runDir, `{"workflow":"guess","handoff":"handoff.md"}`)
+
+	entries := make([]discovery.WorkflowEntry, 0, maxListedWorkflows+3)
+	for i := 0; i < maxListedWorkflows+3; i++ {
+		name := fmt.Sprintf("user:w%03d", i)
+		entries = append(entries, discovery.WorkflowEntry{CanonicalName: name, SourcePath: "user:" + name + ".yaml"})
+	}
+	opts := testValidateOptions(runDir, "handoff.md")
+	opts.Catalog = NewCatalog(entries)
+
+	_, err := Validate(opts)
+	if err == nil {
+		t.Fatal("Validate() error = nil, want workflow resolution failure")
+	}
+	if got := err.Error(); !strings.HasSuffix(got, " (+3 more)") {
+		t.Fatalf("Validate() error = %q, want a truncated routable list", got)
+	}
+	if got, notWant := err.Error(), fmt.Sprintf("user:w%03d", maxListedWorkflows); strings.Contains(got, notWant) {
+		t.Fatalf("Validate() error = %q, want it to omit %q", got, notWant)
+	}
+}
+
+func TestValidateUnknownWorkflowOmitsListWhenNothingIsRoutable(t *testing.T) {
+	runDir := t.TempDir()
+	writeFile(t, filepath.Join(runDir, "handoff.md"), "notes")
+	writeRequest(t, runDir, `{"workflow":"guess","handoff":"handoff.md"}`)
+
+	opts := testValidateOptions(runDir, "handoff.md")
+	opts.Catalog = NewCatalog([]discovery.WorkflowEntry{
+		{CanonicalName: "core:intake", SourcePath: "builtin:core/intake-v1.0.yaml", Hidden: true},
+	})
+
+	_, err := Validate(opts)
+	if err == nil {
+		t.Fatal("Validate() error = nil, want workflow resolution failure")
+	}
+	if got, want := err.Error(), `workflow "guess" not found`; got != want {
+		t.Fatalf("Validate() error = %q, want %q", got, want)
+	}
+}
+
 func testCatalog() Catalog {
-	return CatalogFunc(func(name string) (discovery.WorkflowEntry, error) {
-		entries := map[string]discovery.WorkflowEntry{
-			"build":       {CanonicalName: "build", SourcePath: "builtin:core/build-v2.0.yaml", Params: []model.Param{{Name: "change_name"}, {Name: "optional", Required: boolPtr(false)}}},
-			"core:intake": {CanonicalName: "core:intake", SourcePath: "builtin:core/intake-v1.0.yaml"},
-		}
-		entry, ok := entries[name]
-		if !ok {
-			return discovery.WorkflowEntry{}, ErrWorkflowNotFound
-		}
-		return entry, nil
+	return NewCatalog([]discovery.WorkflowEntry{
+		{CanonicalName: "build", SourcePath: "builtin:core/build-v2.0.yaml", Params: []model.Param{{Name: "change_name"}, {Name: "optional", Required: boolPtr(false)}}},
+		{CanonicalName: "core:intake", SourcePath: "builtin:core/intake-v1.0.yaml", Hidden: true},
 	})
 }
 

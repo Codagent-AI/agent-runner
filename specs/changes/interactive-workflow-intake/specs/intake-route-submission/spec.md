@@ -46,12 +46,17 @@ Submissions from any other step SHALL be rejected with an actionable error and a
 
 ### Requirement: Route request validation
 
-On submission, Agent Runner SHALL validate that: the request decodes as strict JSON with unknown fields rejected; the request and referenced handoff are within bounded sizes; the named workflow resolves through the normal workflow catalog; every parameter the workflow declares as required is supplied; no parameter the workflow does not declare is supplied; the referenced handoff resolves to a readable, non-empty regular file contained within the run directory; and the named workflow is not the intake workflow itself. Any failure SHALL return an actionable error to the submitting agent while its session is still active, and SHALL leave any previously staged route unchanged.
+On submission, Agent Runner SHALL validate that: the request decodes as strict JSON with unknown fields rejected; the request and referenced handoff are within bounded sizes; the named workflow resolves through the normal workflow catalog; every parameter the workflow declares as required is supplied; no parameter the workflow does not declare is supplied; the referenced handoff resolves to a readable, non-empty regular file contained within the run directory; and the named workflow is not the intake workflow itself. Any failure SHALL return an actionable error to the submitting agent while its session is still active, and SHALL leave any previously staged route unchanged. When the named workflow does not resolve, the error SHALL also name the workflows that are available to route to: those that resolve through the catalog, excluding hidden workflows and the intake workflow itself.
 
 #### Scenario: Unknown workflow is rejected inline
 - **WHEN** the route request names a workflow that does not resolve through the catalog
 - **THEN** the client receives an error naming the unresolved workflow
+- **AND** the error names the workflows that are available to route to
 - **AND** no route is staged
+
+#### Scenario: Resolution failure omits workflows that are not routable
+- **WHEN** the route request names a workflow that does not resolve, and the catalog also contains hidden workflows and the intake workflow itself
+- **THEN** the names offered in the error exclude the hidden workflows and the intake workflow
 
 #### Scenario: Missing required parameter is rejected inline
 - **WHEN** the route request omits a parameter the selected workflow declares as required

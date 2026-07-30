@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -21,6 +22,10 @@ const (
 	MaxRequestBytes = 64 << 10
 	// MaxHandoffBytes bounds the handoff snapshot retained in a run.
 	MaxHandoffBytes = 1 << 20
+
+	// maxListedWorkflows bounds how many routable names a resolution failure
+	// names, so a large user catalog cannot flood the agent's context.
+	maxListedWorkflows = 40
 
 	sidecarName = "intake-route.json"
 	handoffName = "intake-handoff.md"
@@ -117,24 +122,50 @@ type Catalog interface {
 	ResolveWorkflow(string) (discovery.WorkflowEntry, error)
 }
 
-// CatalogFunc adapts a resolver function into a Catalog.
-type CatalogFunc func(string) (discovery.WorkflowEntry, error)
-
-func (f CatalogFunc) ResolveWorkflow(name string) (discovery.WorkflowEntry, error) { return f(name) }
+// RoutableCatalog is an optional Catalog capability. When a catalog implements
+// it, a resolution failure names the workflows the agent may route to instead,
+// so one rejected attempt teaches the catalog rather than inviting a guess.
+type RoutableCatalog interface {
+	RoutableWorkflows() []string
+}
 
 // NewCatalog returns a catalog backed by entries produced by discovery.Enumerate.
 func NewCatalog(entries []discovery.WorkflowEntry) Catalog {
-	byName := make(map[string]discovery.WorkflowEntry, len(entries))
+	catalog := &entryCatalog{byName: make(map[string]discovery.WorkflowEntry, len(entries))}
 	for _, entry := range entries {
-		byName[entry.CanonicalName] = entry
+		catalog.byName[entry.CanonicalName] = entry
 	}
-	return CatalogFunc(func(name string) (discovery.WorkflowEntry, error) {
-		entry, ok := byName[name]
-		if !ok || entry.ParseError != "" || entry.SourcePath == "" {
-			return discovery.WorkflowEntry{}, ErrWorkflowNotFound
+	return catalog
+}
+
+type entryCatalog struct {
+	byName map[string]discovery.WorkflowEntry
+}
+
+func (c *entryCatalog) ResolveWorkflow(name string) (discovery.WorkflowEntry, error) {
+	entry, ok := c.byName[name]
+	if !ok || entry.ParseError != "" || entry.SourcePath == "" {
+		return discovery.WorkflowEntry{}, ErrWorkflowNotFound
+	}
+	return entry, nil
+}
+
+// RoutableWorkflows lists the resolvable, non-hidden canonical names in sorted
+// order. Hidden workflows are omitted because they are sub-workflow building
+// blocks rather than routes a user would start.
+func (c *entryCatalog) RoutableWorkflows() []string {
+	names := make([]string, 0, len(c.byName))
+	for name, entry := range c.byName {
+		if entry.Hidden {
+			continue
 		}
-		return entry, nil
-	})
+		if _, err := c.ResolveWorkflow(name); err != nil {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // ValidateOptions supplies the transport-independent validation dependencies.
@@ -215,12 +246,12 @@ func Validate(opts *ValidateOptions) (*Prepared, error) {
 	entry, err := opts.Catalog.ResolveWorkflow(request.Workflow)
 	if err != nil {
 		if errors.Is(err, ErrWorkflowNotFound) {
-			return nil, validationFailure(ViolationWorkflowResolution, fmt.Errorf("workflow %q not found", request.Workflow), request.Workflow, "", "")
+			return nil, validationFailure(ViolationWorkflowResolution, workflowNotFoundError(opts, request.Workflow), request.Workflow, "", "")
 		}
 		return nil, validationFailure(ViolationWorkflowResolution, fmt.Errorf("resolve workflow %q: %w", request.Workflow, err), request.Workflow, "", "")
 	}
 	if entry.CanonicalName == "" || entry.SourcePath == "" || entry.ParseError != "" {
-		return nil, validationFailure(ViolationWorkflowResolution, fmt.Errorf("workflow %q not found", request.Workflow), request.Workflow, "", "")
+		return nil, validationFailure(ViolationWorkflowResolution, workflowNotFoundError(opts, request.Workflow), request.Workflow, "", "")
 	}
 	if request.Workflow == opts.IntakeWorkflow {
 		return nil, validationFailure(ViolationSelfRoute, errors.New("intake cannot route to itself"), request.Workflow, "", "")
@@ -484,6 +515,40 @@ func decodeRequest(data []byte) (Request, error) {
 		return Request{}, errors.New("route handoff is required")
 	}
 	return request, nil
+}
+
+// workflowNotFoundError names the unresolved workflow and, when the catalog can
+// enumerate itself, the alternatives. The submitting agent sees this inline, so
+// listing the catalog turns a failed guess into a correctable choice.
+func workflowNotFoundError(opts *ValidateOptions, requested string) error {
+	names := routableWorkflows(opts)
+	if len(names) == 0 {
+		return fmt.Errorf("workflow %q not found", requested)
+	}
+	truncated := ""
+	if len(names) > maxListedWorkflows {
+		truncated = fmt.Sprintf(" (+%d more)", len(names)-maxListedWorkflows)
+		names = names[:maxListedWorkflows]
+	}
+	return fmt.Errorf("workflow %q not found; routable workflows: %s%s", requested, strings.Join(names, ", "), truncated)
+}
+
+// routableWorkflows returns the catalog's routable names minus intake itself,
+// which is rejected as a self-route.
+func routableWorkflows(opts *ValidateOptions) []string {
+	lister, ok := opts.Catalog.(RoutableCatalog)
+	if !ok {
+		return nil
+	}
+	routable := lister.RoutableWorkflows()
+	names := make([]string, 0, len(routable))
+	for _, name := range routable {
+		if name == opts.IntakeWorkflow {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names
 }
 
 func validateParams(entry *discovery.WorkflowEntry, supplied map[string]string) error {
