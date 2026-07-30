@@ -412,3 +412,69 @@ func TestExecuteLoopStep(t *testing.T) {
 		}
 	})
 }
+
+func TestBuildIterationFlushChainLeavesTopLevelStepForRunner(t *testing.T) {
+	root := model.NewRootContext(&model.RootContextOptions{Params: map[string]string{}})
+	implement := model.NewSubWorkflowContext(root, &model.SubWorkflowContextOptions{
+		StepID:          "implement",
+		SubWorkflowName: "implement-change",
+	})
+	iteration := 1
+	iterCtx := model.NewLoopIterationContext(implement, model.LoopIterationOptions{
+		StepID:    "implement-tasks",
+		Iteration: iteration,
+	})
+	iterCtx.LastSubWorkflowChild = &model.NestedStepState{
+		StepID: "implement-single-task",
+		Child:  &model.NestedStepState{StepID: "run-validator"},
+	}
+
+	gotRoot, gotChain := buildIterationFlushChain(
+		iterCtx,
+		"implement-tasks",
+		&iteration,
+		"implement-single-task",
+		false,
+	)
+
+	if gotRoot != root {
+		t.Fatalf("root = %p, want %p", gotRoot, root)
+	}
+	if gotChain == nil || gotChain.StepID != "implement-tasks" {
+		t.Fatalf("chain root = %#v, want implement-tasks", gotChain)
+	}
+	if gotChain.Child == nil || gotChain.Child.StepID != "implement-single-task" {
+		t.Fatalf("chain child = %#v, want implement-single-task", gotChain.Child)
+	}
+	if gotChain.Child.Child == nil || gotChain.Child.Child.StepID != "run-validator" {
+		t.Fatalf("chain grandchild = %#v, want run-validator", gotChain.Child.Child)
+	}
+}
+
+func TestFlushLoopStateLeavesTopLevelStepForRunner(t *testing.T) {
+	root := model.NewRootContext(&model.RootContextOptions{Params: map[string]string{}})
+	var flushed *model.NestedStepState
+	root.FlushState = func() {
+		flushed = root.LastSubWorkflowChild
+	}
+	implement := model.NewSubWorkflowContext(root, &model.SubWorkflowContextOptions{
+		StepID:          "implement",
+		SubWorkflowName: "implement-change",
+	})
+	iteration := 1
+	implement.LastSubWorkflowChild = newLoopStepMarker(
+		implement,
+		"implement-tasks",
+		iteration,
+		&model.NestedStepState{StepID: "implement-single-task"},
+	)
+
+	flushLoopState(implement)
+
+	if flushed == nil || flushed.StepID != "implement-tasks" {
+		t.Fatalf("flushed chain = %#v, want implement-tasks", flushed)
+	}
+	if flushed.Child == nil || flushed.Child.StepID != "implement-single-task" {
+		t.Fatalf("flushed child = %#v, want implement-single-task", flushed.Child)
+	}
+}

@@ -296,6 +296,13 @@ func newIterationBodyEntry(iterCtx *model.ExecutionContext, bodyStepID string, b
 func flushLoopState(ctx *model.ExecutionContext) {
 	cur := ctx
 	for cur.ParentContext != nil {
+		if cur.ParentContext.ParentContext == nil {
+			// The runner writes the top-level step wrapper. Propagate only the
+			// state beneath that step or the wrapper will be persisted twice.
+			cur.ParentContext.LastSubWorkflowChild = cur.LastSubWorkflowChild
+			cur.LastSubWorkflowChild = nil
+			break
+		}
 		if len(cur.NestingPath) == 0 {
 			break
 		}
@@ -606,9 +613,10 @@ func loopSegmentOf(iterCtx *model.ExecutionContext) (loopStepID string, iteratio
 // buildIterationFlushChain constructs, non-destructively, the full nested
 // state chain for a mid-iteration flush. It snapshots iterCtx and its
 // ancestors' NestingPath segments to produce a fresh *NestedStepState tree
-// rooted at the outermost ancestor (runner top-level context). The returned
-// root context's LastSubWorkflowChild should be temporarily replaced with
-// the returned chain for the duration of the outer flush.
+// beneath the runner-owned top-level step. The returned root context's
+// LastSubWorkflowChild should be temporarily replaced with the returned chain
+// for the duration of the outer flush; runner.writeStepState adds the
+// top-level step itself.
 //
 // Returns (nil, nil) if the chain cannot be walked all the way up to a root
 // (no ParentContext) — e.g. because a context along the way has an empty
@@ -631,6 +639,13 @@ func buildIterationFlushChain(
 
 	cur := iterCtx.ParentContext
 	for cur != nil && cur.ParentContext != nil {
+		parent := cur.ParentContext
+		if parent.ParentContext == nil {
+			// Do not include the runner-owned top-level step. writeStepState
+			// wraps this chain with that step when it serializes state.json.
+			cur = parent
+			break
+		}
 		if len(cur.NestingPath) == 0 {
 			return nil, nil
 		}
@@ -638,7 +653,6 @@ func buildIterationFlushChain(
 		if seg.StepID == "" {
 			return nil, nil
 		}
-		parent := cur.ParentContext
 		entry := &model.NestedStepState{
 			StepID:            seg.StepID,
 			SessionIDs:        copyMap(parent.SessionIDs),
