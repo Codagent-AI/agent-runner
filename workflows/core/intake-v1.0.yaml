@@ -12,14 +12,18 @@ steps:
     mode: interactive
     tools: [submit_route]
     prompt: |
-      Explore the user's problem collaboratively. Inspect the repository, research where useful, brainstorm alternatives, clarify scope and non-goals, and recommend whether implementation is warranted and which workflow should handle it. You recommend; the human decides. Do not submit a route until the user has agreed to it in this conversation.
+      Hand the turn back immediately. Answer the opening greeting in a sentence or two and stop. Do not inspect the repository, read files, run commands, or ask a list of questions before the user has told you what they want. The user knows how to use an agent and will say what they need; being available fast matters more than arriving prepared.
+
+      After that, follow the user. Explore collaboratively once you have something concrete to work with: inspect the repository, research where useful, brainstorm alternatives, clarify scope and non-goals. Look at only as much as the current question needs. Not every conversation should end in a workflow.
+
+      When the discussion turns toward actually building something, recommend whether implementation is warranted and which workflow should handle it. Read the workflow catalog at `AGENT_RUNNER_ROUTE_CATALOG` at that point, not before: it lists every workflow you can route to, what each one does, and the parameters each one declares. Choose from it and discuss the realistic options with the user rather than naming a workflow from memory. You recommend; the human decides. Do not submit a route until the user has agreed to it in this conversation.
 
       Write the agreed context and recommendation to the runner-owned handoff path in `AGENT_RUNNER_INTAKE_HANDOFF`.
 
       Once the user agrees, write the route request to the path in `AGENT_RUNNER_ROUTE_REQUEST`, then run `agent-runner step submit-route`. The request is strict JSON with exactly these fields; any other field is rejected:
 
-      - `workflow` (required, string): the canonical workflow name, such as `spec-driven:change`. Naming a workflow that does not resolve returns an error listing the names you can choose from.
-      - `params` (optional, object of string to string): every parameter the workflow declares as required, and no parameter it does not declare.
+      - `workflow` (required, string): the canonical name of one of the workflows in the catalog, such as `spec-driven:change`. Naming a workflow that does not resolve returns an error listing what you can choose from.
+      - `params` (optional, object of string to string): every parameter the catalog lists as required for that workflow, and no parameter it does not list.
       - `handoff` (required, string): the same path you were given in `AGENT_RUNNER_INTAKE_HANDOFF`.
 
       For example:

@@ -347,7 +347,16 @@ func buildWorkflowDirectInvocation(
 
 func isRouteEligible(step *model.Step, ctx *model.ExecutionContext) bool {
 	return step != nil && ctx != nil && step.HasTool(model.RunnerToolSubmitRoute) &&
-		ctx.ParentContext == nil && builtinworkflows.IsIntakeRef(ctx.WorkflowFile) && step.ID == builtinworkflows.IntakeStepID
+		ctx.ParentContext == nil && isIntakePlanStep(step, ctx)
+}
+
+// isIntakePlanStep reports whether this is the built-in intake conversation.
+// Unlike route eligibility it does not require the tool declaration or the
+// top-level position, because how the conversation opens does not depend on
+// whether this particular attempt may seal a route.
+func isIntakePlanStep(step *model.Step, ctx *model.ExecutionContext) bool {
+	return step != nil && ctx != nil &&
+		builtinworkflows.IsIntakeRef(ctx.WorkflowFile) && step.ID == builtinworkflows.IntakeStepID
 }
 
 func routeValidationOptions(ctx *model.ExecutionContext) *intakeroute.ValidateOptions {
@@ -617,6 +626,10 @@ func buildAdapterInput(
 			input.Prompt = fmt.Sprintf("Resume the %s step.", step.ID)
 		case isResume:
 			input.Prompt = fmt.Sprintf("Let's continue to the %s step", step.ID)
+		case isIntakePlanStep(step, ctx):
+			// Intake is a conversation the user drives from its first turn, so
+			// it opens with a greeting rather than a step announcement.
+			input.Prompt = "Let's go"
 		default:
 			input.Prompt = fmt.Sprintf("Let's start the %s step", step.ID)
 		}

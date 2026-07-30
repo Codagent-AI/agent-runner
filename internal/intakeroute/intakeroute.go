@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/codagent/agent-runner/internal/discovery"
+	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
 
@@ -30,6 +31,7 @@ const (
 	sidecarName = "intake-route.json"
 	handoffName = "intake-handoff.md"
 	requestName = "route-request.json"
+	catalogName = "route-catalog.md"
 )
 
 // SidecarPath returns the route sidecar for a run directory.
@@ -43,6 +45,83 @@ func HandoffPathFor(runDir string) string { return filepath.Join(runDir, handoff
 
 // RequestPathFor returns the runner-owned route request path for a run directory.
 func RequestPathFor(runDir string) string { return filepath.Join(runDir, requestName) }
+
+// CatalogPathFor returns the runner-owned workflow catalog path for a run
+// directory. The catalog is what the intake agent reads to recommend a route.
+func CatalogPathFor(runDir string) string { return filepath.Join(runDir, catalogName) }
+
+// RenderCatalog describes every workflow the agent may route to, so the route
+// is chosen from the same catalog the validator will accept rather than from
+// whatever the agent inferred about the repository.
+func RenderCatalog(catalog Catalog, intakeWorkflow string) string {
+	var out strings.Builder
+	out.WriteString("# Workflows you can route to\n\n")
+	out.WriteString("Put the canonical name in the route request's `workflow` field. Supply every required\n")
+	out.WriteString("parameter and no parameter that is not listed here.\n")
+	for _, entry := range routableEntries(catalog, intakeWorkflow) {
+		out.WriteString("\n## " + entry.CanonicalName + "\n")
+		if description := strings.TrimSpace(entry.Description); description != "" {
+			out.WriteString(description + "\n")
+		}
+		required, optional := partitionParams(entry.Params)
+		out.WriteString("Required parameters: " + joinOrNone(required) + "\n")
+		out.WriteString("Optional parameters: " + joinOrNone(optional) + "\n")
+	}
+	return out.String()
+}
+
+// WriteCatalog publishes the catalog for a run and returns its path. It is
+// written before the agent starts and never read back by the runner: the
+// validator resolves the request against the catalog directly, so a stale or
+// tampered file cannot widen what the agent may route to.
+func WriteCatalog(opts *ValidateOptions) (string, error) {
+	if opts == nil || opts.RunDir == "" {
+		return "", errors.New("route catalog requires a run directory")
+	}
+	temporary, err := os.CreateTemp(opts.RunDir, ".route-catalog-*")
+	if err != nil {
+		return "", fmt.Errorf("create route catalog: %w", err)
+	}
+	defer func() {
+		_ = temporary.Close()
+		_ = os.Remove(temporary.Name())
+	}()
+	if err := temporary.Chmod(0o600); err != nil {
+		return "", fmt.Errorf("secure route catalog: %w", err)
+	}
+	if _, err := temporary.WriteString(RenderCatalog(opts.Catalog, opts.IntakeWorkflow)); err != nil {
+		return "", fmt.Errorf("write route catalog: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return "", fmt.Errorf("write route catalog: %w", err)
+	}
+	// Rename replaces whatever occupies the path without following it, so an
+	// agent that swapped the catalog for a symbolic link between attempts
+	// cannot redirect this write outside the run directory.
+	path := CatalogPathFor(opts.RunDir)
+	if err := os.Rename(temporary.Name(), path); err != nil {
+		return "", fmt.Errorf("publish route catalog: %w", err)
+	}
+	return path, nil
+}
+
+func partitionParams(params []model.Param) (required, optional []string) {
+	for _, param := range params {
+		if param.IsRequired() {
+			required = append(required, param.Name)
+			continue
+		}
+		optional = append(optional, param.Name)
+	}
+	return required, optional
+}
+
+func joinOrNone(names []string) string {
+	if len(names) == 0 {
+		return "none"
+	}
+	return strings.Join(names, ", ")
+}
 
 var (
 	// ErrWorkflowNotFound lets catalog implementations distinguish a missing target.
@@ -126,7 +205,7 @@ type Catalog interface {
 // it, a resolution failure names the workflows the agent may route to instead,
 // so one rejected attempt teaches the catalog rather than inviting a guess.
 type RoutableCatalog interface {
-	RoutableWorkflows() []string
+	RoutableWorkflows() []discovery.WorkflowEntry
 }
 
 // NewCatalog returns a catalog backed by entries produced by discovery.Enumerate.
@@ -150,11 +229,12 @@ func (c *entryCatalog) ResolveWorkflow(name string) (discovery.WorkflowEntry, er
 	return entry, nil
 }
 
-// RoutableWorkflows lists the resolvable, non-hidden canonical names in sorted
-// order. Hidden workflows are omitted because they are sub-workflow building
-// blocks rather than routes a user would start.
-func (c *entryCatalog) RoutableWorkflows() []string {
-	names := make([]string, 0, len(c.byName))
+// RoutableWorkflows lists the resolvable, non-hidden entries by canonical name.
+// Hidden workflows are omitted because they are sub-workflow building blocks
+// rather than routes a user would start, which is also why the new tab keeps
+// them behind its show-hidden toggle.
+func (c *entryCatalog) RoutableWorkflows() []discovery.WorkflowEntry {
+	entries := make([]discovery.WorkflowEntry, 0, len(c.byName))
 	for name, entry := range c.byName {
 		if entry.Hidden {
 			continue
@@ -162,10 +242,10 @@ func (c *entryCatalog) RoutableWorkflows() []string {
 		if _, err := c.ResolveWorkflow(name); err != nil {
 			continue
 		}
-		names = append(names, name)
+		entries = append(entries, entry)
 	}
-	sort.Strings(names)
-	return names
+	sort.Slice(entries, func(i, j int) bool { return entries[i].CanonicalName < entries[j].CanonicalName })
+	return entries
 }
 
 // ValidateOptions supplies the transport-independent validation dependencies.
@@ -521,34 +601,43 @@ func decodeRequest(data []byte) (Request, error) {
 // enumerate itself, the alternatives. The submitting agent sees this inline, so
 // listing the catalog turns a failed guess into a correctable choice.
 func workflowNotFoundError(opts *ValidateOptions, requested string) error {
-	names := routableWorkflows(opts)
-	if len(names) == 0 {
+	entries := routableEntries(opts.Catalog, opts.IntakeWorkflow)
+	if len(entries) == 0 {
 		return fmt.Errorf("workflow %q not found", requested)
 	}
 	truncated := ""
-	if len(names) > maxListedWorkflows {
-		truncated = fmt.Sprintf(" (+%d more)", len(names)-maxListedWorkflows)
-		names = names[:maxListedWorkflows]
+	if len(entries) > maxListedWorkflows {
+		truncated = fmt.Sprintf("\n  (+%d more)", len(entries)-maxListedWorkflows)
+		entries = entries[:maxListedWorkflows]
 	}
-	return fmt.Errorf("workflow %q not found; routable workflows: %s%s", requested, strings.Join(names, ", "), truncated)
+	lines := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		line := "  " + entry.CanonicalName
+		if description := strings.TrimSpace(entry.Description); description != "" {
+			line += " - " + description
+		}
+		lines = append(lines, line)
+	}
+	return fmt.Errorf("workflow %q not found; routable workflows:\n%s%s", requested, strings.Join(lines, "\n"), truncated)
 }
 
-// routableWorkflows returns the catalog's routable names minus intake itself,
-// which is rejected as a self-route.
-func routableWorkflows(opts *ValidateOptions) []string {
-	lister, ok := opts.Catalog.(RoutableCatalog)
+// routableEntries returns the catalog's routable entries minus intake itself,
+// which is rejected as a self-route. A catalog that cannot enumerate itself
+// yields nothing, leaving callers to fall back to names alone.
+func routableEntries(catalog Catalog, intakeWorkflow string) []discovery.WorkflowEntry {
+	lister, ok := catalog.(RoutableCatalog)
 	if !ok {
 		return nil
 	}
 	routable := lister.RoutableWorkflows()
-	names := make([]string, 0, len(routable))
-	for _, name := range routable {
-		if name == opts.IntakeWorkflow {
+	entries := make([]discovery.WorkflowEntry, 0, len(routable))
+	for _, entry := range routable {
+		if entry.CanonicalName == intakeWorkflow {
 			continue
 		}
-		names = append(names, name)
+		entries = append(entries, entry)
 	}
-	return names
+	return entries
 }
 
 func validateParams(entry *discovery.WorkflowEntry, supplied map[string]string) error {

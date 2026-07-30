@@ -2,7 +2,7 @@
 
 ### Requirement: Intake conversation responsibilities
 
-The intake workflow SHALL present the user with an interactive agent session that is able to inspect the repository, research the problem, and recommend a course of action, and that is enabled to submit a route. The agent SHALL recommend; the human SHALL decide, and the agent SHALL NOT commit the user to an implementation path without the user's agreement in the conversation. Agent Runner SHALL supply a run-owned path at which the agent writes the handoff, so that its location is known to the runner whether or not a route is ever submitted.
+The intake workflow SHALL present the user with an interactive agent session that is able to inspect the repository, research the problem, and recommend a course of action, and that is enabled to submit a route. The session SHALL become usable immediately: the agent SHALL return the first turn to the user rather than orienting itself first, and SHALL begin inspecting the repository or the workflow catalog only once the user has asked for something that requires it. Where the agent CLI accepts the step's instructions as a system prompt, the message visible in the conversation SHALL be a greeting rather than a generated step announcement. The agent SHALL recommend; the human SHALL decide, and the agent SHALL NOT commit the user to an implementation path without the user's agreement in the conversation. Agent Runner SHALL supply a run-owned path at which the agent writes the handoff, so that its location is known to the runner whether or not a route is ever submitted.
 
 #### Scenario: Intake presents a capable conversational agent
 - **WHEN** an intake run reaches its agent step
@@ -11,6 +11,16 @@ The intake workflow SHALL present the user with an interactive agent session tha
 #### Scenario: Agent recommends and the user decides
 - **WHEN** the intake agent identifies a suitable workflow
 - **THEN** it presents the recommendation to the user and submits a route only after the user agrees in the conversation
+
+#### Scenario: Intake yields to the user before doing any work
+- **WHEN** the intake agent's session opens
+- **THEN** it returns the turn to the user without first inspecting the repository, reading the workflow catalog, or requiring the user to answer questions
+- **AND** it begins exploring only once the user has described what they want
+
+#### Scenario: The opening message invites the user rather than announcing a step
+- **WHEN** the intake agent's session opens on an agent CLI that accepts step instructions as a system prompt
+- **THEN** the message visible in the conversation is a short greeting rather than a generated step announcement
+- **AND** the step's instructions still reach the agent
 
 #### Scenario: Handoff location is runner-owned
 - **WHEN** the intake agent writes a handoff

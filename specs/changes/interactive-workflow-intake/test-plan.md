@@ -416,6 +416,7 @@ requirement is deliberately covered by unit tests alone, with the reason given i
 | workflow-intake: Launch failure and interruption recovery | INT-006, INT-008 | — | — | — |
 | workflow-intake: Invocations naming another workflow bypass intake | — | E2E-005 | — | — |
 | intake-route-submission: Route request location and submission client | INT-001 | E2E-004 | — | — |
+| intake-route-submission: Routable workflow catalog | — | — | AT-001 | — |
 | intake-route-submission: Route eligibility | INT-001, INT-010 | — | — | — |
 | intake-route-submission: Route request validation | INT-001 | — | AT-003 | — |
 | intake-route-submission: Sealing on acceptance | INT-001 | E2E-003 | — | — |

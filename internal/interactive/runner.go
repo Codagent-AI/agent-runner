@@ -225,18 +225,34 @@ func pruneEnvironment(env, drop []string) []string {
 }
 
 func startDirectChild(options *DirectOptions, attempt *control.Attempt) (*exec.Cmd, *os.File, *unix.Termios, error) {
-	attemptEnv := attempt.Environment()
-	if options.RouteEligible && options.RouteValidation != nil {
-		attemptEnv = append(attemptEnv,
-			"AGENT_RUNNER_ROUTE_REQUEST="+options.RouteValidation.RequestPath,
-			"AGENT_RUNNER_INTAKE_HANDOFF="+options.RouteValidation.HandoffPath,
-		)
+	routeEnv, err := routeEnvironment(options)
+	if err != nil {
+		return nil, nil, nil, err
 	}
+	attemptEnv := append(attempt.Environment(), routeEnv...)
 	return startTerminalChild(&childLaunchOptions{
 		Args: options.Args, Env: options.Env, DropEnv: options.DropEnv,
 		Workdir: options.Workdir, Stdin: options.Stdin, Stdout: options.Stdout,
 		Stderr: options.Stderr, TTY: options.TTY, Foreground: options.Foreground,
 	}, attemptEnv)
+}
+
+// routeEnvironment publishes the workflow catalog for a route-eligible step and
+// returns the runner-owned paths the child agent needs: where to write its route
+// request, which handoff it may seal, and which workflows it may choose from.
+func routeEnvironment(options *DirectOptions) ([]string, error) {
+	if options == nil || !options.RouteEligible || options.RouteValidation == nil {
+		return nil, nil
+	}
+	catalogPath, err := intakeroute.WriteCatalog(options.RouteValidation)
+	if err != nil {
+		return nil, err
+	}
+	return []string{
+		"AGENT_RUNNER_ROUTE_REQUEST=" + options.RouteValidation.RequestPath,
+		"AGENT_RUNNER_INTAKE_HANDOFF=" + options.RouteValidation.HandoffPath,
+		"AGENT_RUNNER_ROUTE_CATALOG=" + catalogPath,
+	}, nil
 }
 
 type childLaunchOptions struct {

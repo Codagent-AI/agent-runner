@@ -301,8 +301,8 @@ func TestValidateUnknownWorkflowListsRoutableWorkflows(t *testing.T) {
 
 	opts := testValidateOptions(runDir, "handoff.md")
 	opts.Catalog = NewCatalog([]discovery.WorkflowEntry{
-		{CanonicalName: "spec-driven:change", SourcePath: "builtin:spec-driven/change-v2.0.yaml"},
-		{CanonicalName: "core:debug", SourcePath: "builtin:core/debug-v1.0.yaml"},
+		{CanonicalName: "spec-driven:change", SourcePath: "builtin:spec-driven/change-v2.0.yaml", Description: "Define, plan, and implement a change."},
+		{CanonicalName: "core:debug", SourcePath: "builtin:core/debug-v1.0.yaml", Description: "Debug a failed run."},
 		{CanonicalName: "core:intake", SourcePath: "builtin:core/intake-v1.0.yaml", Hidden: true},
 		{CanonicalName: "core:finalize-pr", SourcePath: "builtin:core/finalize-pr-v1.0.yaml", Hidden: true},
 		{CanonicalName: "broken", SourcePath: "project:broken.yaml", ParseError: "bad yaml"},
@@ -312,11 +312,124 @@ func TestValidateUnknownWorkflowListsRoutableWorkflows(t *testing.T) {
 	if err == nil {
 		t.Fatal("Validate() error = nil, want workflow resolution failure")
 	}
-	want := `workflow "guess" not found; routable workflows: core:debug, spec-driven:change`
+	want := strings.Join([]string{
+		`workflow "guess" not found; routable workflows:`,
+		"  core:debug - Debug a failed run.",
+		"  spec-driven:change - Define, plan, and implement a change.",
+	}, "\n")
 	if got := err.Error(); got != want {
 		t.Fatalf("Validate() error = %q, want %q", got, want)
 	}
 	assertNoRouteArtifacts(t, runDir)
+}
+
+func TestRenderCatalogDescribesOnlyRoutableWorkflows(t *testing.T) {
+	catalog := NewCatalog([]discovery.WorkflowEntry{
+		{CanonicalName: "spec-driven:change", SourcePath: "builtin:spec-driven/change-v2.0.yaml",
+			Description: "Define, plan, and implement a change.",
+			Params:      []model.Param{{Name: "change_name"}, {Name: "base_branch", Required: boolPtr(false)}}},
+		{CanonicalName: "core:debug", SourcePath: "builtin:core/debug-v1.0.yaml",
+			Description: "Debug a failed run.",
+			Params:      []model.Param{{Name: "failed_run_id", Required: boolPtr(false)}}},
+		{CanonicalName: "local", SourcePath: "project:local.yaml"},
+		{CanonicalName: "core:intake", SourcePath: "builtin:core/intake-v1.0.yaml", Description: "Plan with an agent.", Hidden: true},
+		{CanonicalName: "core:finalize-pr", SourcePath: "builtin:core/finalize-pr-v1.0.yaml", Description: "Finalize a PR.", Hidden: true},
+		{CanonicalName: "broken", SourcePath: "project:broken.yaml", ParseError: "bad yaml"},
+	})
+
+	want := strings.Join([]string{
+		"# Workflows you can route to",
+		"",
+		"Put the canonical name in the route request's `workflow` field. Supply every required",
+		"parameter and no parameter that is not listed here.",
+		"",
+		"## core:debug",
+		"Debug a failed run.",
+		"Required parameters: none",
+		"Optional parameters: failed_run_id",
+		"",
+		"## local",
+		"Required parameters: none",
+		"Optional parameters: none",
+		"",
+		"## spec-driven:change",
+		"Define, plan, and implement a change.",
+		"Required parameters: change_name",
+		"Optional parameters: base_branch",
+		"",
+	}, "\n")
+	if got := RenderCatalog(catalog, "core:intake"); got != want {
+		t.Fatalf("RenderCatalog() =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestWriteCatalogPublishesRunOwnedCatalogFile(t *testing.T) {
+	runDir := t.TempDir()
+	opts := testValidateOptions(runDir, "handoff.md")
+
+	path, err := WriteCatalog(opts)
+	if err != nil {
+		t.Fatalf("WriteCatalog() error = %v", err)
+	}
+	if want := CatalogPathFor(runDir); path != want {
+		t.Fatalf("WriteCatalog() path = %q, want %q", path, want)
+	}
+	if got, want := readFile(t, path), RenderCatalog(opts.Catalog, opts.IntakeWorkflow); got != want {
+		t.Fatalf("catalog file =\n%s\nwant\n%s", got, want)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := info.Mode().Perm(), os.FileMode(0o600); got != want {
+		t.Fatalf("catalog mode = %v, want %v", got, want)
+	}
+}
+
+// The agent writes its handoff and route request into the run directory, so it
+// can also replace the catalog path with a symbolic link before a retried
+// attempt republishes it. Publishing must not follow that link out of the run.
+func TestWriteCatalogDoesNotFollowASymlinkAtItsPath(t *testing.T) {
+	runDir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "precious.txt")
+	writeFile(t, outside, "untouched")
+	if err := os.Symlink(outside, CatalogPathFor(runDir)); err != nil {
+		t.Fatal(err)
+	}
+
+	path, err := WriteCatalog(testValidateOptions(runDir, "handoff.md"))
+	if err != nil {
+		t.Fatalf("WriteCatalog() error = %v", err)
+	}
+	if got := readFile(t, outside); got != "untouched" {
+		t.Fatalf("file outside the run directory = %q, want it untouched", got)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("catalog path mode = %v, want a regular file replacing the symlink", info.Mode())
+	}
+	if got, want := readFile(t, path), RenderCatalog(testCatalog(), "core:intake"); got != want {
+		t.Fatalf("catalog file =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestValidateIgnoresThePublishedCatalogFile(t *testing.T) {
+	runDir := t.TempDir()
+	writeFile(t, filepath.Join(runDir, "handoff.md"), "notes")
+	writeRequest(t, runDir, `{"workflow":"guess","handoff":"handoff.md"}`)
+	// The agent can write anywhere in the run directory, so the published
+	// catalog is advisory only. Validation must resolve against the real
+	// catalog, never against this file.
+	writeFile(t, CatalogPathFor(runDir), "# Workflows you can route to\n\n## guess\nAnything I like.\n")
+
+	if _, err := Validate(testValidateOptions(runDir, "handoff.md")); err == nil {
+		t.Fatal("Validate() error = nil, want the forged catalog entry rejected")
+	} else if !strings.Contains(err.Error(), `workflow "guess" not found`) {
+		t.Fatalf("Validate() error = %v, want workflow resolution failure", err)
+	}
 }
 
 func TestValidateUnknownWorkflowTruncatesLongRoutableList(t *testing.T) {
@@ -336,7 +449,7 @@ func TestValidateUnknownWorkflowTruncatesLongRoutableList(t *testing.T) {
 	if err == nil {
 		t.Fatal("Validate() error = nil, want workflow resolution failure")
 	}
-	if got := err.Error(); !strings.HasSuffix(got, " (+3 more)") {
+	if got := err.Error(); !strings.HasSuffix(got, "\n  (+3 more)") {
 		t.Fatalf("Validate() error = %q, want a truncated routable list", got)
 	}
 	if got, notWant := err.Error(), fmt.Sprintf("user:w%03d", maxListedWorkflows); strings.Contains(got, notWant) {

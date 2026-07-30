@@ -21,6 +21,31 @@ Agent Runner SHALL provide the intake agent with the path of a run-owned route r
 - **WHEN** the control environment is absent
 - **THEN** the client exits nonzero and does not target any run
 
+### Requirement: Routable workflow catalog
+
+Before the intake agent starts, Agent Runner SHALL publish a run-owned catalog of the workflows the agent may route to and SHALL provide its path through the attempt environment. The catalog SHALL describe each workflow by its canonical name, its description, and which of its declared parameters are required and which are optional, so the agent can present real options to the user and supply correct parameters without guessing. It SHALL list exactly the workflows that resolve through the normal workflow catalog, excluding hidden workflows and the intake workflow itself: the same set the user can browse, and a subset of what validation will accept. Agent Runner SHALL NOT read the published file back when validating a submission, so modifying it cannot widen what may be routed to. Publishing SHALL replace whatever occupies the catalog path without following it, since the agent can write in the run directory between attempts.
+
+#### Scenario: Catalog is available before the agent chooses
+- **WHEN** a route-eligible intake step starts
+- **THEN** the run-owned catalog already exists and its path is present in the agent's environment
+
+#### Scenario: Catalog describes each workflow's parameters
+- **WHEN** the catalog lists a workflow that declares both required and optional parameters
+- **THEN** the entry names the workflow, describes what it does, and separates its required parameters from its optional ones
+
+#### Scenario: Catalog omits workflows the user cannot start
+- **WHEN** the workflow catalog contains hidden workflows, unresolvable workflows, and the intake workflow itself
+- **THEN** none of them appear in the published catalog
+
+#### Scenario: Republishing does not follow a redirected catalog path
+- **WHEN** the catalog path has been replaced with a symbolic link targeting a file outside the run directory, and a later attempt republishes the catalog
+- **THEN** the file outside the run directory is unchanged
+- **AND** the catalog path holds the newly published catalog
+
+#### Scenario: Modifying the published catalog does not widen validation
+- **WHEN** the published catalog is modified to name a workflow that does not resolve, and a route request names that workflow
+- **THEN** the submission is still rejected as unresolved
+
 ### Requirement: Route eligibility
 
 A route submission SHALL be accepted only for a step attempt that Agent Runner has marked route-eligible. Eligibility SHALL require runner-established intake identity and SHALL NOT be conferred by a workflow declaration alone: the attempt must belong to the built-in intake workflow running as the top-level workflow, at its designated step, un-nested. A workflow that merely declares the route-submission tool SHALL NOT thereby gain the ability to launch another workflow, since that would amount to general dynamic workflow chaining from arbitrary agents, which this change excludes.
