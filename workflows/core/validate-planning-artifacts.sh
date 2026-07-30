@@ -210,6 +210,8 @@ if test_plan_path.is_file() and test_plan_path.stat().st_size > 0:
         for obligation_id in sorted(referenced_ids):
             if obligation_id not in obligations:
                 failures.append(f"{test_plan_path} coverage map references undefined {obligation_id}")
+        for obligation_id in sorted(set(obligations) - referenced_ids):
+            failures.append(f"{test_plan_path} coverage map does not reference {obligation_id}")
 
 spec_paths = sorted(change_dir.glob("specs/*/spec.md"))
 spec_paths = [path for path in spec_paths if path.is_file() and path.stat().st_size > 0]

@@ -469,6 +469,7 @@ None.
 	for name, content := range map[string]string{
 		"missing required section": strings.ReplaceAll(string(validTestPlan), "## Coverage Map", "## Traceability"),
 		"dangling coverage id":     strings.ReplaceAll(string(validTestPlan), "AT-001 | —", "AT-999 | —"),
+		"unmapped obligation id":   strings.ReplaceAll(string(validTestPlan), "E2E-001 | AT-001", "— | AT-001"),
 		"duplicate obligation id":  string(validTestPlan) + "\n### AT-001: Duplicate\n",
 		"missing integration field": strings.ReplaceAll(
 			string(validTestPlan),
