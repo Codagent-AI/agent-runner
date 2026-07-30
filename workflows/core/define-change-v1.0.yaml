@@ -9,6 +9,8 @@ params:
     required: true
   - name: change_label
     required: true
+  - name: artifact_location_instruction
+    required: true
 
 sessions:
   - name: lead-agent
@@ -21,6 +23,8 @@ steps:
     tools: [call_agent]
     prompt: |
       Help the user write the proposal for {{change_label}} "{{change_name}}". First ask what the change is about; do not guess. You MUST use the codagent:propose skill and write the proposal to `{{change_dir}}/proposal.md`.
+
+      {{artifact_location_instruction}}
 
       Once the proposal draft is complete, use codagent:call-agent with a fresh `agent: crosscheck` to obtain one adversarial review. The task-specific child instructions must require it to use the codagent:proposal-review skill, read the proposal under `{{change_dir}}/`, inspect relevant repository context, provide clear actionable feedback with recommended resolutions, and never modify files.
 

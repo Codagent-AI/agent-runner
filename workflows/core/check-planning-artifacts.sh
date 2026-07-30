@@ -36,12 +36,10 @@ PY
   require_specs=$(printf '%s\n' "$parsed" | sed -n '3p')
 fi
 
-case "$change_dir" in
-  ""|/*|..|../*|*/../*|*/..)
-    printf 'check-planning-artifacts: change_dir must be a confined relative path: %s\n' "$change_dir" >&2
-    exit 1
-    ;;
-esac
+if [ -z "$change_dir" ]; then
+  printf 'check-planning-artifacts: change_dir must not be empty\n' >&2
+  exit 1
+fi
 
 case "$require_specs" in
   true|false)

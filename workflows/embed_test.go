@@ -259,7 +259,7 @@ func TestV2NamespaceAdaptersConfigureSharedCorePhases(t *testing.T) {
 		{
 			ref:            "builtin:spec-driven/plan-change-v2.0.yaml",
 			wantWorkflow:   "../core/plan-change-v1.0.yaml",
-			wantChangeDir:  "specs/changes/{{change_name}}",
+			wantChangeDir:  "{{change_dir}}",
 			wantChangeKind: "spec-driven",
 		},
 		{
@@ -270,7 +270,7 @@ func TestV2NamespaceAdaptersConfigureSharedCorePhases(t *testing.T) {
 		{
 			ref:           "builtin:spec-driven/implement-change-v2.0.yaml",
 			wantWorkflow:  "../core/implement-change-v1.0.yaml",
-			wantChangeDir: "specs/changes/{{change_name}}",
+			wantChangeDir: "{{change_dir}}",
 		},
 	}
 	for _, tt := range tests {
@@ -510,7 +510,6 @@ None.
 
 func TestV2SimpleChangeWorkflowsShareCorePhases(t *testing.T) {
 	for _, ref := range []string{
-		"builtin:core/plan-simple-change-v1.0.yaml",
 		"builtin:core/complete-simple-change-v1.0.yaml",
 	} {
 		body, err := ReadFile(ref)
@@ -527,24 +526,23 @@ func TestV2SimpleChangeWorkflowsShareCorePhases(t *testing.T) {
 	tests := []struct {
 		ref                    string
 		wantChangeDir          string
-		wantLabel              string
 		wantValidationText     string
 		wantOpenSpecValidation bool
 		wantArchive            bool
+		discoverChangeDir      bool
 	}{
 		{
 			ref:                    "builtin:openspec/simple-change-v2.0.yaml",
 			wantChangeDir:          "openspec/changes/{{change_name}}",
-			wantLabel:              "OpenSpec change",
 			wantValidationText:     "openspec validate",
 			wantOpenSpecValidation: true,
 			wantArchive:            true,
 		},
 		{
 			ref:                "builtin:spec-driven/simple-change-v2.0.yaml",
-			wantChangeDir:      "specs/changes/{{change_name}}",
-			wantLabel:          "spec-driven change",
+			wantChangeDir:      "{{change_dir}}",
 			wantValidationText: "simple-change-validation-checklist.md",
+			discoverChangeDir:  true,
 		},
 	}
 	for _, tt := range tests {
@@ -589,20 +587,29 @@ func TestV2SimpleChangeWorkflowsShareCorePhases(t *testing.T) {
 			if got := steps["validate-feature-branch"].workflow; got != "../core/validate-feature-branch-v1.0.yaml" {
 				t.Errorf("branch guard workflow = %q", got)
 			}
-			if got := steps["plan"].workflow; got != "../core/plan-simple-change-v1.0.yaml" {
-				t.Errorf("plan workflow = %q", got)
+			if got := steps["plan"].workflow; got != "" {
+				t.Errorf("plan unexpectedly delegates to %q", got)
 			}
-			if got := steps["plan"].params["change_dir"]; got != tt.wantChangeDir {
-				t.Errorf("plan change_dir = %q, want %q", got, tt.wantChangeDir)
+			if got := steps["review-plan"].workflow; got != "" {
+				t.Errorf("review unexpectedly delegates to %q", got)
 			}
-			if got := steps["plan"].params["change_label"]; got != tt.wantLabel {
-				t.Errorf("plan change_label = %q, want %q", got, tt.wantLabel)
+			if got := steps["check-planning-artifacts"].workflow; got != "../core/check-planning-artifacts-v1.0.yaml" {
+				t.Errorf("artifact check workflow = %q", got)
 			}
-			if got := steps["plan"].params["plan_validation_instruction"]; !strings.Contains(got, tt.wantValidationText) {
-				t.Errorf("plan validation instruction = %q, want text %q", got, tt.wantValidationText)
+			if got := steps["check-planning-artifacts"].params["change_dir"]; got != tt.wantChangeDir {
+				t.Errorf("artifact check change_dir = %q, want %q", got, tt.wantChangeDir)
 			}
-			if got := steps["commit-plan"].workflow; got != "../core/commit-change-plan-v1.0.yaml" {
-				t.Errorf("commit workflow = %q", got)
+			if !strings.Contains(string(body), tt.wantValidationText) {
+				t.Errorf("workflow does not contain validation text %q", tt.wantValidationText)
+			}
+			if tt.discoverChangeDir {
+				if _, ok := steps["commit-plan"]; ok {
+					t.Error("dynamic plan should not commit artifacts that may live outside the project repository")
+				}
+			} else {
+				if got := steps["commit-plan"].workflow; got != "../core/commit-change-plan-v1.0.yaml" {
+					t.Errorf("commit workflow = %q", got)
+				}
 			}
 			if got := steps["complete"].workflow; got != "../core/complete-simple-change-v1.0.yaml" {
 				t.Errorf("complete workflow = %q", got)

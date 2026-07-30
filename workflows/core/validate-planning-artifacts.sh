@@ -48,7 +48,6 @@ case "$change_kind" in
     expected_dir="openspec/changes/$change_name"
     ;;
   spec-driven)
-    expected_dir="specs/changes/$change_name"
     ;;
   *)
     printf 'validate-planning-artifacts: unsupported change_kind: %s\n' "$change_kind" >&2
@@ -56,7 +55,12 @@ case "$change_kind" in
     ;;
 esac
 
-if [ "$change_dir" != "$expected_dir" ]; then
+if [ -z "$change_dir" ]; then
+  printf 'validate-planning-artifacts: change_dir must not be empty\n' >&2
+  exit 1
+fi
+
+if [ "$change_kind" = "openspec" ] && [ "$change_dir" != "$expected_dir" ]; then
   printf 'validate-planning-artifacts: change_dir must be %s for %s: %s\n' "$expected_dir" "$change_kind" "$change_dir" >&2
   exit 1
 fi

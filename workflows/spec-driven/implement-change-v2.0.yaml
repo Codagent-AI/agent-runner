@@ -5,6 +5,8 @@ hidden: true
 params:
   - name: change_name
     required: true
+  - name: change_dir
+    required: true
   - name: skip_validator
     required: false
     default: "false"
@@ -14,7 +16,7 @@ steps:
     workflow: ../core/implement-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
-      change_dir: "specs/changes/{{change_name}}"
+      change_dir: "{{change_dir}}"
       change_label: "spec-driven change"
-      artifact_validation_instruction: 'When an approved artifact changed, read and follow `{{session_dir}}/bundled/spec-driven/definition-validation-checklist.md` for "{{change_name}}".'
+      artifact_validation_instruction: 'When an approved artifact changed, read and follow `{{session_dir}}/bundled/spec-driven/definition-validation-checklist.md`, substituting "{{change_dir}}" for `<change-dir>` when validating "{{change_name}}".'
       skip_validator: "{{skip_validator}}"

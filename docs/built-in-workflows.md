@@ -30,7 +30,7 @@ inspection, not fresh execution.
 | Workflow | Purpose |
 | --- | --- |
 | `core:accept-change` | Run the shared human acceptance, refinement, and targeted re-testing phases for a structured change. |
-| `core:check-planning-artifacts` | Verify required files and optional specifications in a confined planning-artifact directory. |
+| `core:check-planning-artifacts` | Verify required files and optional specifications in a planning-artifact directory. |
 | `core:commit-change-plan` | Commit one structured change plan and advance its Validator baseline. |
 | `core:complete-simple-change` | Implement, flow-test, and interactively review a shared small-change plan. |
 | `core:debug` | Debug a failed Agent Runner run and optionally file an issue. |
@@ -39,7 +39,6 @@ inspection, not fresh execution.
 | `core:implement-change` | Run the shared task implementation, validation, draft-PR, and acceptance-preparation phases. |
 | `core:implement-task` | Implement a single task with an agent step followed by a validator retry loop. |
 | `core:plan-change` | Run the shared definition validation, task planning, and task-review phases. |
-| `core:plan-simple-change` | Interactively plan, independently crosscheck, and validate a shared small change. |
 | `core:review-proposal` | Run adversarial proposal review, lead response, and up to three discussion rounds. |
 | `core:review-tasks` | Independently review and autonomously correct a structured task plan. |
 | `core:run-validator` | Run Agent Validator with a counted retry loop and fix-on-failure step. |
@@ -77,7 +76,7 @@ installing OpenSpec agent skills or slash commands.
 | `spec-driven:scaffold` | Bootstrap a brand new project, configure validation, and optionally publish it to GitHub. |
 | `spec-driven:simple-change` | Plan, independently crosscheck, implement, validate, flow-test, and review a small branch-local change without OpenSpec. |
 
-The latest `spec-driven:change` workflow mirrors the full OpenSpec change lifecycle except for OpenSpec creation, CLI validation, and archival. It requires `change_name` and stores its tracked artifacts under `specs/changes/<change_name>/`. `spec-driven:simple-change` mirrors the OpenSpec small-change flow except for the OpenSpec engine, CLI validation, and archival. It uses the same shared planning, crosscheck, implementation, flow-testing, and review phases, and stores artifacts under `specs/changes/<change_name>/`. The `scaffold` variant is for new project setup.
+The latest `spec-driven:change` workflow mirrors the full OpenSpec change lifecycle except for OpenSpec-specific artifact handling, CLI validation, and archival. It requires `change_name` and `change_dir`; that directory is expected to live outside the project repository, and the workflow does not commit those external artifacts. `spec-driven:plan-change` and `spec-driven:implement-change` accept the same explicit external artifact directory when run independently. `spec-driven:simple-change` asks the planning session to write artifacts outside the project repository, discovers that directory, uses it for crosscheck and validation, then passes it through the shared implementation, flow-testing, and review phase. The `scaffold` variant is for new project setup.
 
 ## Onboarding
 

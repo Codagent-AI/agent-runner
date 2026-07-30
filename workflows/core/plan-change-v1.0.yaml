@@ -55,3 +55,4 @@ steps:
     script_inputs:
       change_name: "{{change_name}}"
       change_dir: "{{change_dir}}"
+    skip_if: 'sh: test {{change_kind}} = spec-driven'

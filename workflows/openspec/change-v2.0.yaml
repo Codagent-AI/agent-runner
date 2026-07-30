@@ -1,5 +1,5 @@
 name: change
-description: "Define, plan, implement, accept, archive, and finalize an OpenSpec change."
+description: "Use for a substantial or higher-risk change in an OpenSpec project when you need the full proposal, specification, design, test plan, task breakdown, and acceptance lifecycle. It manages repository-local OpenSpec artifacts while guiding implementation, evidence-based acceptance, human review, archival, and pull-request finalization."
 
 params:
   - name: change_name
@@ -22,6 +22,7 @@ steps:
       change_name: "{{change_name}}"
       change_dir: "openspec/changes/{{change_name}}"
       change_label: "OpenSpec change"
+      artifact_location_instruction: "Keep every OpenSpec definition and planning artifact under the repository-local `openspec/changes/{{change_name}}/` directory."
 
   - id: plan
     workflow: ../core/plan-change-v1.0.yaml

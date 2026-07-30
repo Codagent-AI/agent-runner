@@ -89,8 +89,8 @@ Examples:
 
 ```bash
 agent-runner run openspec:plan-change --param change_name=my-change
-agent-runner run spec-driven:change --param change_name=my-change
-agent-runner run spec-driven:change --param change_name=my-change --until accept
+agent-runner run spec-driven:change --param change_name=my-change --param change_dir=../change-artifacts/my-change
+agent-runner run spec-driven:change --param change_name=my-change --param change_dir=../change-artifacts/my-change --until accept
 ```
 
 ## Debug Command

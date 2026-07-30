@@ -146,7 +146,7 @@ agent-runner run spec-driven:simple-change my-change
 
 Use a short kebab-case change name, such as `add-user-search` or `fix-login-copy`.
 The workflow will ask what change you want to make, create and independently crosscheck a focused
-plan under `specs/changes/my-change/`, run an autonomous implementor and Agent Validator, perform a
+plan under an artifact directory outside the project repository selected during planning, run an autonomous implementor and Agent Validator, perform a
 lightweight Tester flow check, and guide you through final review.
 
 Keep the first task small: fix a typo, add a log line, rename a variable, or make another scoped change. The workflow expects a feature branch and a clean, validated state; if `agent-validator detect` reports unvalidated changes, validate or commit those changes before starting.
