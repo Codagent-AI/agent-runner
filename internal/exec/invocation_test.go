@@ -116,6 +116,28 @@ func TestInvokeAgentAcceptsCopilotWaitDelayAfterCompleteTerminalOutput(t *testin
 	}
 }
 
+func TestInvokeAgentPreservesCopilotWaitDelayAfterUnsuccessfulTaskCompletion(t *testing.T) {
+	raw := `{"type":"session.task_complete","data":{"summary":"incomplete review","success":false}}` + "\n" +
+		`{"type":"result","exitCode":0}` + "\n"
+	runner := &invocationRecordingRunner{
+		options: make(chan AgentProcessOptions, 1),
+		result:  ProcessResult{Started: true, ExitCode: -1, Stdout: raw},
+		err:     stdexec.ErrWaitDelay,
+	}
+
+	got, err := InvokeAgent(&AgentInvocation{
+		Context: context.Background(), Adapter: &cli.CopilotAdapter{},
+		Args: []string{"copilot"}, InvocationContext: cli.ContextAutonomousHeadless,
+		CLI: "copilot",
+	}, runner, &mockLogger{})
+	if !errors.Is(err, stdexec.ErrWaitDelay) {
+		t.Fatalf("InvokeAgent() error = %v, want exec.ErrWaitDelay", err)
+	}
+	if got.Outcome != OutcomeFailed || got.Response != "" {
+		t.Fatalf("InvokeAgent() result = %#v", got)
+	}
+}
+
 func TestInvokeAgentPreservesCopilotWaitDelayWithoutTerminalResult(t *testing.T) {
 	runner := &invocationRecordingRunner{
 		options: make(chan AgentProcessOptions, 1),

@@ -149,26 +149,35 @@ func (a *CopilotAdapter) FilterOutput(stdout string) string {
 	return assistantResponse
 }
 
-// HasCompletedHeadlessOutput reports whether Copilot emitted both a complete
-// response and its successful terminal result event.
+// HasCompletedHeadlessOutput reports whether Copilot emitted a successful task
+// completion with a summary and its successful terminal result event.
 func (a *CopilotAdapter) HasCompletedHeadlessOutput(stdout string) bool {
-	if a.FilterOutput(stdout) == "" {
-		return false
-	}
+	taskCompleted := false
+	resultSucceeded := false
 	scanner := newStreamScanner(strings.NewReader(stdout))
 	for scanner.Scan() {
 		var event struct {
-			Type     string `json:"type"`
-			ExitCode *int   `json:"exitCode"`
+			Type string `json:"type"`
+			Data *struct {
+				Summary string `json:"summary"`
+				Success *bool  `json:"success"`
+			} `json:"data"`
+			ExitCode *int `json:"exitCode"`
 		}
-		if json.Unmarshal(scanner.Bytes(), &event) == nil &&
-			event.Type == "result" &&
-			event.ExitCode != nil &&
-			*event.ExitCode == 0 {
-			return true
+		if json.Unmarshal(scanner.Bytes(), &event) != nil {
+			continue
+		}
+		switch event.Type {
+		case "session.task_complete":
+			taskCompleted = event.Data != nil &&
+				event.Data.Summary != "" &&
+				event.Data.Success != nil &&
+				*event.Data.Success
+		case "result":
+			resultSucceeded = event.ExitCode != nil && *event.ExitCode == 0
 		}
 	}
-	return false
+	return taskCompleted && resultSucceeded
 }
 
 // ExtractUsage sums the incremental token metrics on assistant.message
