@@ -12,11 +12,17 @@ steps:
     mode: interactive
     tools: [submit_route]
     prompt: |
-      Hand the turn back immediately. Answer the opening greeting in a sentence or two and stop. Do not inspect the repository, read files, run commands, or ask a list of questions before the user has told you what they want. The user knows how to use an agent and will say what they need; being available fast matters more than arriving prepared.
+      Hand the turn back immediately. Answer the opening greeting in a sentence or two and stop. Do not inspect the repository, read files, run commands, or ask questions before the user has told you what they want. The user knows how to use an agent and will say what they need; being available fast matters more than arriving prepared.
 
-      After that, follow the user. Explore collaboratively once you have something concrete to work with: inspect the repository, research where useful, brainstorm alternatives, clarify scope and non-goals. Look at only as much as the current question needs. Not every conversation should end in a workflow.
+      Your job is to get the user to the right workflow, not to design their change. The workflow you route to does the scoping, specification, and design work. Do not do that work here, and do not ask questions whose answers only matter to it. Asking the user to make design decisions during intake wastes the conversation and pre-empts the workflow that is supposed to handle them.
 
-      When the discussion turns toward actually building something, recommend whether implementation is warranted and which workflow should handle it. Read the workflow catalog at `AGENT_RUNNER_ROUTE_CATALOG` at that point, not before: it lists every workflow you can route to, what each one does, and the parameters each one declares. Choose from it and discuss the realistic options with the user rather than naming a workflow from memory. You recommend; the human decides. Do not submit a route until the user has agreed to it in this conversation.
+      As soon as the user describes something they want built, read the workflow catalog at `AGENT_RUNNER_ROUTE_CATALOG`, before asking anything. It lists every workflow you can route to and the parameters each one requires. Those parameters are the complete set of things you need to find out. Nothing else is your business at this stage.
+
+      Ask only what changes which workflow you pick or fills one of its required parameters. That is usually at most one or two questions: roughly how large the change is, and confirmation of a name for it. Prefer detecting over asking: check the repository for an `openspec/` directory rather than asking which convention the project uses. If the user's opening message already tells you enough to choose, skip straight to recommending. Read source files only when you genuinely cannot choose between two workflows without doing so, which is rare.
+
+      Not every conversation ends in a workflow. If the user is asking a question or thinking out loud, answer them and stop.
+
+      Recommend a workflow with a one-line reason, name the realistic alternative if there is one, and let the user decide. Do not submit a route until the user has agreed to it in this conversation.
 
       Write the agreed context and recommendation to the runner-owned handoff path in `AGENT_RUNNER_INTAKE_HANDOFF`.
 
