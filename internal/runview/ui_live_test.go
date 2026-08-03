@@ -81,7 +81,6 @@ func TestINT002LiveCoordinatorPreservesOutputAndUIOwnership(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("deterministic call fixture: %v", err)
 	}
-	m = program.model
 	if call.Stdout != "call output" || parent.Stdout != "" {
 		t.Fatalf("parent/call output ownership leaked: parent=%q call=%q", parent.Stdout, call.Stdout)
 	}
@@ -117,6 +116,9 @@ uiForwarded:
 	m = updated.(*Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(*Model)
+	if m.liveUI != nil {
+		t.Fatal("selected form action should resolve the embedded UI")
+	}
 	select {
 	case got := <-result:
 		if got.Outcome != "continue" {
