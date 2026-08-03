@@ -91,6 +91,9 @@ type Model struct {
 	logLineCount int
 
 	loadedFull map[string]bool
+	// inputExpanded stores the user's current-input choice by stable node key.
+	// It deliberately survives selection changes and width recalculation.
+	inputExpanded map[string]bool
 
 	stepRanges []stepLineRange
 	logAnchor  stepLineAnchor
@@ -197,17 +200,18 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	tree, loadErr, workflowMissing := loadRunTree(sessionDir, entered, &state, resolved)
 
 	m := &Model{
-		tree:       tree,
-		sessionDir: sessionDir,
-		projectDir: projectDir,
-		originCwd:  resolved.OriginCwd,
-		entered:    entered,
-		path:       []*StepNode{tree.Root},
-		loadedFull: make(map[string]bool),
-		loadErr:    loadErr,
-		running:    entered == FromLiveRun,
-		autoFollow: entered == FromLiveRun,
-		altScreen:  entered != FromLiveRun,
+		tree:          tree,
+		sessionDir:    sessionDir,
+		projectDir:    projectDir,
+		originCwd:     resolved.OriginCwd,
+		entered:       entered,
+		path:          []*StepNode{tree.Root},
+		loadedFull:    make(map[string]bool),
+		inputExpanded: make(map[string]bool),
+		loadErr:       loadErr,
+		running:       entered == FromLiveRun,
+		autoFollow:    entered == FromLiveRun,
+		altScreen:     entered != FromLiveRun,
 	}
 	m.setSelected(firstRealChild(m.currentContainer()))
 	if entered == FromList || entered == FromInspect {
@@ -446,6 +450,7 @@ func NewForDefinition(entry *discovery.WorkflowEntry, projectDir string) (*Model
 		entered:       FromDefinition,
 		path:          []*StepNode{tree.Root},
 		loadedFull:    make(map[string]bool),
+		inputExpanded: make(map[string]bool),
 		loadErr:       loadErr,
 		altScreen:     true,
 		workflowEntry: *entry,
@@ -834,7 +839,6 @@ func (m *Model) scrollLogUp() {
 	if m.logOffset < 0 {
 		m.logOffset = 0
 	}
-	m.syncSelectionToLog()
 }
 
 func (m *Model) handleMouse(msg tea.MouseMsg) {
@@ -848,11 +852,9 @@ func (m *Model) handleMouse(msg tea.MouseMsg) {
 		if m.logOffset < 0 {
 			m.logOffset = 0
 		}
-		m.syncSelectionToLog()
 	case tea.MouseButtonWheelDown:
 		m.autoFollow = false
 		m.logOffset += 3
-		m.syncSelectionToLog()
 	}
 }
 
@@ -1045,7 +1047,6 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "j":
 		m.autoFollow = false
 		m.logOffset++
-		m.syncSelectionToLog()
 	case "l":
 		m.handleFollowKey()
 	case "r":
@@ -1055,6 +1056,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "g":
 		m.handleLoadFull()
 		m.rebuildRanges()
+	case "i":
+		m.toggleSelectedInputExpansion()
 	case "c":
 		cmd := m.handleCopySelectedDetail()
 		return m, cmd
@@ -1143,24 +1146,53 @@ func (m *Model) handleCopySelectedDetail() tea.Cmd {
 
 func (m *Model) selectedStepDetailText() string {
 	m.loadSelectedAgentCallOutput()
-	selected := m.selectedNode()
-	if selected == nil {
+	doc := m.selectedDetailDocument(m.rightPaneWidth())
+	if len(doc.header) == 0 {
 		return ""
 	}
-	lines, ranges := buildSelectedDetailLines(
-		m.selectedNode(),
-		m.rightPaneWidth(),
-		m.loadedFull,
-		m.pulsePhase,
-		m.running || m.active,
-		m.resolverCfg,
-	)
-	for _, r := range ranges {
-		if r.node == selected {
-			return m.copyTextWithContext(plainTextLines(lines[r.startLine:r.endLine]))
-		}
+	return m.copyTextWithContext(doc.renderCopy())
+}
+
+func (m *Model) selectedDetailDocument(width int) detailDocument {
+	node := m.selectedNode()
+	expanded := false
+	if node != nil && m.inputExpanded != nil {
+		expanded = m.inputExpanded[node.NodeKey()]
 	}
-	return ""
+	return buildDetailDocument(node, detailBuildOptions{
+		width:         width,
+		loadedFull:    node != nil && m.loadedFull[node.NodeKey()],
+		inputExpanded: expanded,
+		pulsePhase:    m.pulsePhase,
+		runActive:     m.running || m.active,
+		resumeReady:   m.canResumeAgentSession(node),
+		resolverCfg:   m.resolverCfg,
+	})
+}
+
+func (m *Model) toggleSelectedInputExpansion() {
+	node := m.selectedNode()
+	if node == nil {
+		return
+	}
+	input := ""
+	switch node.Type {
+	case NodeShell:
+		input = currentCommand(node)
+	case NodeScript:
+		input = node.StaticScript
+	case NodeHeadlessAgent, NodeInteractiveAgent, NodeAgentCall:
+		input = currentPrompt(node)
+	}
+	if len(wrappedPlainLines(input, m.rightPaneWidth()-3)) <= 3 {
+		return
+	}
+	if m.inputExpanded == nil {
+		m.inputExpanded = make(map[string]bool)
+	}
+	key := node.NodeKey()
+	m.inputExpanded[key] = !m.inputExpanded[key]
+	m.rebuildRanges()
 }
 
 func (m *Model) copyTextWithContext(detail string) string {
@@ -1187,19 +1219,11 @@ func (m *Model) copyDirectory() string {
 	return m.projectDir
 }
 
-func plainTextLines(lines []string) string {
-	plain := make([]string, 0, len(lines))
-	for _, line := range lines {
-		plain = append(plain, tuistyle.Sanitize(line))
-	}
-	return strings.TrimRight(strings.Join(plain, "\n"), "\n")
-}
-
 func (m *Model) handleStepNavigation(delta int) tea.Cmd {
 	m.autoFollow = false
 	m.moveCursor(delta)
+	m.logOffset = 0
 	m.rebuildRanges()
-	m.syncLogToSelection()
 	return nil
 }
 
@@ -1277,15 +1301,12 @@ func findDeepestInProgressUI(n *StepNode, stepID string) *StepNode {
 // rebuildRanges recomputes m.stepRanges from the current tree state and
 // selection. Called after any mutation that changes log content or width.
 func (m *Model) rebuildRanges() int {
-	lines, ranges := buildSelectedDetailLines(
-		m.selectedNode(),
-		m.rightPaneWidth(),
-		m.loadedFull,
-		m.pulsePhase,
-		m.running || m.active,
-		m.resolverCfg,
-	)
-	m.stepRanges = ranges
+	selected := m.selectedNode()
+	lines := m.selectedDetailDocument(m.rightPaneWidth()).renderScreen()
+	m.stepRanges = nil
+	if selected != nil {
+		m.stepRanges = []stepLineRange{{node: selected, startLine: 0, endLine: len(lines)}}
+	}
 	m.logLineCount = len(lines)
 	return len(lines)
 }

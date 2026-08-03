@@ -128,16 +128,19 @@ func TestSelectedAgentCallShowsResolvedExecutionDetail(t *testing.T) {
 	call := tree.Root.Children[0].Children[0]
 	call.ErrorMessage = "child failed"
 
-	lines, _ := buildLogLines([]*StepNode{call}, nil, 100, map[string]bool{call.NodeKey(): true}, 0, false, ResolverConfig{})
-	plain := tuistyle.Sanitize(strings.Join(lines, "\n"))
+	plain := buildDetailDocument(call, detailBuildOptions{width: 100, loadedFull: true, resumeReady: true}).renderCopy()
 	for _, want := range []string{
-		"call session: implementor-session", "call id: call-1", "request id: request-call-1", "parent attempt: attempt-1",
-		"target: session", "profile: implementor", "cli: codex", "model: gpt-5", "cli launched: yes", "exit: 7",
-		"session: implementor-session", "session id: child-session", "session resumed: yes", "workdir: /repo/packages/api", "review the implementation",
-		"failed", "duration: 1.5s", "input 12", "output 4", "cost: $0.08", "usage error: usage parser failed", "child failed",
+		"target: session implementor-session", "profile: implementor", "cli: codex", "model: gpt-5",
+		"session: child-session", "Current prompt", "review the implementation", "failed", "duration: 1.5s",
+		"input 12", "output 4", "cost: $0.08", "Current response", "Error", "child failed",
 	} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("call detail missing %q:\n%s", want, plain)
+		}
+	}
+	for _, hidden := range []string{"request id:", "workdir:", "session resumed:", "cli launched:"} {
+		if strings.Contains(plain, hidden) {
+			t.Errorf("primary call detail exposed hidden diagnostic %q:\n%s", hidden, plain)
 		}
 	}
 }
@@ -280,8 +283,7 @@ func TestFailedAgentCallDetailOffersResumeForKnownSession(t *testing.T) {
 	call.SessionID = "child-session"
 	call.AgentCLI = "codex"
 
-	lines, _ := buildLogLines([]*StepNode{call}, nil, 100, map[string]bool{call.NodeKey(): true}, 0, false, ResolverConfig{})
-	plain := tuistyle.Sanitize(strings.Join(lines, "\n"))
+	plain := buildDetailDocument(call, detailBuildOptions{width: 100, loadedFull: true, resumeReady: true}).renderCopy()
 	if !strings.Contains(plain, "enter → resume session") {
 		t.Fatalf("resumable failed call detail omitted resume hint:\n%s", plain)
 	}

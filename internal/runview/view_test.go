@@ -188,11 +188,11 @@ func TestRenderTwoColumn_PromptWraps(t *testing.T) {
 	if strings.Contains(plain, "| ") {
 		t.Errorf("prompt should not use `| ` quote notation, got:\n%s", plain)
 	}
-	// The long line must be present uncut (all words appear) because wrapping
-	// preserves the content where truncation would drop the tail.
-	for _, word := range []string{"substantially", "wrapping", "several", "rows."} {
-		if !strings.Contains(plain, word) {
-			t.Errorf("expected wrapped prompt to contain %q, missing from output:\n%s", word, plain)
+	// Long input previews are bounded to three visual rows and advertise the
+	// expansion key; the complete prompt belongs to semantic copy output.
+	for _, want := range []string{"substantially", "i expand", "…"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("expected collapsed prompt to contain %q, missing from output:\n%s", want, plain)
 		}
 	}
 }

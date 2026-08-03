@@ -153,14 +153,7 @@ func (m *Model) renderTwoColumn() string {
 		m.liveUI.SetWidth(rightWidth)
 		logLines = strings.Split(m.liveUI.View(), "\n")
 	} else {
-		logLines, _ = buildSelectedDetailLines(
-			m.selectedNode(),
-			rightWidth,
-			m.loadedFull,
-			m.pulsePhase,
-			m.running || m.active,
-			m.resolverCfg,
-		)
+		logLines = m.selectedDetailDocument(rightWidth).renderScreen()
 	}
 
 	maxOffset := max(0, len(logLines)-bodyHeight)
@@ -564,6 +557,13 @@ func (m *Model) helpBarParts() []string {
 	if m.selectedNodeHasTruncatedOutput() {
 		parts = append(parts, "g full output")
 	}
+	if m.selectedInputIsExpandable() {
+		if m.inputExpanded[m.selectedNode().NodeKey()] {
+			parts = append(parts, "i collapse")
+		} else {
+			parts = append(parts, "i expand")
+		}
+	}
 
 	parts = append(parts, "c copy")
 
@@ -574,6 +574,23 @@ func (m *Model) helpBarParts() []string {
 	parts = append(parts, m.viewSwitchHelpPart(), "? legend", "q quit")
 
 	return parts
+}
+
+func (m *Model) selectedInputIsExpandable() bool {
+	node := m.selectedNode()
+	if node == nil {
+		return false
+	}
+	input := ""
+	switch node.Type {
+	case NodeShell:
+		input = currentCommand(node)
+	case NodeScript:
+		input = node.StaticScript
+	case NodeHeadlessAgent, NodeInteractiveAgent, NodeAgentCall:
+		input = currentPrompt(node)
+	}
+	return len(wrappedPlainLines(input, m.rightPaneWidth()-3)) > 3
 }
 
 func (m *Model) selectedNodeHelpParts(selected *StepNode) []string {

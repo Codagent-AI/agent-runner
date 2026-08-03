@@ -290,7 +290,7 @@ func TestModel_C_CopiesSelectedStepDetail(t *testing.T) {
 	if copied == "" {
 		t.Fatal("expected selected step detail to be copied")
 	}
-	for _, want := range []string{"directory: /repo/project", "breadcrumb:", "test-workflow", "build", "$ go build ./...", "stdout:", "build ok", "next line"} {
+	for _, want := range []string{"directory: /repo/project", "breadcrumb:", "test-workflow", "build", "Current command", "go build ./...", "Current output", "stdout:", "build ok", "next line"} {
 		if !strings.Contains(copied, want) {
 			t.Fatalf("copied detail missing %q:\n%s", want, copied)
 		}
@@ -2455,15 +2455,9 @@ func TestModel_StepStateMsg_AutoFollowScrollsDetailToActiveSelection(t *testing.
 	if selected := m.selectedNode(); selected != runValidator {
 		t.Fatalf("selected node = %#v, want run-validator", selected)
 	}
-	for _, r := range m.stepRanges {
-		if r.node == runValidator {
-			if m.logOffset != r.startLine {
-				t.Fatalf("logOffset = %d, want active run-validator startLine %d", m.logOffset, r.startLine)
-			}
-			return
-		}
+	if len(m.stepRanges) != 1 || m.stepRanges[0].node != runValidator {
+		t.Fatalf("selected detail should own one range, got %#v", m.stepRanges)
 	}
-	t.Fatal("missing run-validator detail range")
 }
 
 func TestModel_StepStateMsg_AutoFollowOff_NoNavigation(t *testing.T) {

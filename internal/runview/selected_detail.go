@@ -1,0 +1,461 @@
+package runview
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/tuistyle"
+)
+
+// detailDocument is the selected-node presentation source. Screen and
+// clipboard renderers deliberately share this structure so visual truncation
+// never changes what is copied.
+type detailDocument struct {
+	width    int
+	header   []string
+	sections []detailSection
+}
+
+type detailRailKind int
+
+const (
+	detailRailPrevious detailRailKind = iota
+	detailRailInput
+	detailRailOutput
+	detailRailError
+)
+
+type detailSection struct {
+	label string
+	kind  detailRailKind
+	body  string
+	copy  string
+}
+
+type detailBuildOptions struct {
+	width         int
+	loadedFull    bool
+	inputExpanded bool
+	pulsePhase    float64
+	runActive     bool
+	resumeReady   bool
+	resolverCfg   ResolverConfig
+}
+
+func buildDetailDocument(node *StepNode, options detailBuildOptions) detailDocument {
+	if options.width < 12 {
+		options.width = 12
+	}
+	doc := detailDocument{width: options.width, header: detailHeader(node, options)}
+	if node == nil {
+		return doc
+	}
+
+	if node.Status == StatusPending {
+		buildPendingDetail(&doc, node, options)
+		return doc
+	}
+
+	switch node.Type {
+	case NodeShell:
+		doc.addInput("Current command", currentCommand(node), options)
+		doc.addOutput("Current output", streamsText(node.Stdout, node.Stderr, options.loadedFull))
+	case NodeScript:
+		doc.addInput("Current script", node.StaticScript, options)
+		doc.addOutput("Current output", streamsText(node.Stdout, node.Stderr, options.loadedFull))
+	case NodeHeadlessAgent, NodeAgentCall:
+		doc.addInput("Current prompt", currentPrompt(node), options)
+		doc.addOutput("Current response", agentResponseText(node, options))
+	case NodeInteractiveAgent:
+		doc.addInput("Current prompt", currentPrompt(node), options)
+	case NodeUI:
+		doc.addOutput("Current form", "UI form")
+		doc.addOutput("Current outcome", outcomeText(node))
+	case NodeSubWorkflow, NodeLoop, NodeIteration, NodeGroup:
+		doc.addOutput("Current status", containerStatusText(node))
+	}
+
+	if node.ErrorMessage != "" {
+		doc.sections = append(doc.sections, detailSection{label: "Error", kind: detailRailError, body: node.ErrorMessage, copy: node.ErrorMessage})
+	}
+	return doc
+}
+
+func buildPendingDetail(doc *detailDocument, node *StepNode, options detailBuildOptions) {
+	switch node.Type {
+	case NodeShell:
+		doc.addInput("Current command", node.StaticCommand, options)
+	case NodeScript:
+		doc.addInput("Current script", node.StaticScript, options)
+	case NodeHeadlessAgent, NodeInteractiveAgent:
+		doc.addInput("Current prompt", node.StaticPrompt, options)
+	case NodeAgentCall:
+		doc.addInput("Current prompt", node.InterpolatedPrompt, options)
+	case NodeUI:
+		doc.addOutput("Current form", "Configured UI form")
+	case NodeSubWorkflow:
+		var body []string
+		if workflow := CanonicalName(node.StaticWorkflowPath, options.resolverCfg); workflow != "" {
+			body = append(body, "workflow: "+workflow)
+		} else if node.StaticWorkflow != "" {
+			body = append(body, "workflow: "+node.StaticWorkflow)
+		}
+		body = append(body, plainParams(node.StaticParams)...)
+		doc.addOutput("Current status", strings.Join(body, "\n"))
+	case NodeLoop, NodeIteration, NodeGroup:
+		doc.addOutput("Current status", staticContainerText(node))
+	}
+}
+
+func detailHeader(node *StepNode, options detailBuildOptions) []string {
+	if node == nil {
+		return nil
+	}
+	parts := []string{node.ID, nodeTypeLabel(node.Type), statusLabel(node.Status)}
+	if node.Outcome != "" && node.Outcome != statusLabel(node.Status) {
+		parts = append(parts, node.Outcome)
+	}
+	if node.DurationMs != nil && node.Status != StatusPending {
+		parts = append(parts, "duration: "+formatDuration(*node.DurationMs))
+	}
+	lines := []string{strings.Join(parts, " · ")}
+	if node.Status == StatusPending {
+		return lines
+	}
+	lines = append(lines, detailExecutionMetadata(node)...)
+	if isAgentNode(node) {
+		lines = append(lines, detailAgentMetadata(node, options)...)
+	}
+	return lines
+}
+
+func detailExecutionMetadata(node *StepNode) []string {
+	var lines []string
+	if node.Type == NodeShell || node.Type == NodeScript {
+		if node.ExitCode != nil {
+			lines = append(lines, fmt.Sprintf("exit: %d", *node.ExitCode))
+		}
+	}
+	if node.CaptureName != "" {
+		lines = append(lines, "capture: "+node.CaptureName)
+	}
+	if node.Status == StatusSkipped && node.StaticSkipIf != "" {
+		lines = append(lines, "skip_if: "+node.StaticSkipIf)
+	}
+	if node.BreakTriggered && node.StaticBreakIf != "" {
+		lines = append(lines, "break_if: "+node.StaticBreakIf)
+	}
+	return lines
+}
+
+func detailAgentMetadata(node *StepNode, options detailBuildOptions) []string {
+	var lines []string
+	if node.Type == NodeAgentCall {
+		target := strings.TrimSpace(node.CallTargetKind + " " + node.CallTargetName)
+		if target != "" {
+			lines = append(lines, "target: "+target)
+		}
+	}
+	if profile := firstNonEmpty(node.AgentProfile, node.StaticAgent); profile != "" {
+		lines = append(lines, "profile: "+profile)
+	}
+	if cliName := firstNonEmpty(node.AgentCLI, node.StaticCLI); cliName != "" {
+		lines = append(lines, "cli: "+cliName)
+	}
+	modelName := firstNonEmpty(node.AgentModel, node.StaticModel)
+	if modelName == "" {
+		modelName = "(unknown)"
+	}
+	lines = append(lines, "model: "+modelName)
+	lines = append(lines, detailMetrics(node)...)
+	if options.resumeReady && node.SessionID != "" {
+		lines = append(lines, "session: "+node.SessionID, "enter → resume session")
+	}
+	return lines
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func detailMetrics(node *StepNode) []string {
+	if node.Status == StatusPending || node.Status == StatusInProgress || len(node.Attempts) == 0 {
+		return nil
+	}
+	latest := node.Attempts[len(node.Attempts)-1]
+	var lines []string
+	if latest.Attempt > 1 {
+		lines = append(lines, fmt.Sprintf("attempt: %d", latest.Attempt))
+	}
+	if latest.Usage == nil || latest.Usage.Status != model.UsageCollected {
+		reason := ""
+		if latest.Usage != nil && latest.Usage.Reason != "" {
+			reason = " (" + string(latest.Usage.Reason) + ")"
+		}
+		lines = append(lines, "usage: ?"+reason)
+	} else {
+		lines = append(lines, "tokens: "+formatTokenCounts(latest.Usage.Tokens))
+	}
+	if latest.CostUSD == nil {
+		lines = append(lines, "cost: ?")
+	} else {
+		lines = append(lines, "cost: "+formatUSD(*latest.CostUSD))
+	}
+	return lines
+}
+
+func (doc *detailDocument) addInput(label, input string, options detailBuildOptions) {
+	input = strings.TrimRight(input, "\r\n")
+	if input == "" {
+		return
+	}
+	preview, expandable := previewInput(input, doc.width-3, options.inputExpanded)
+	if expandable {
+		if options.inputExpanded {
+			preview += "\n i collapse"
+		} else {
+			preview += "\n…\n i expand"
+		}
+	}
+	doc.sections = append(doc.sections, detailSection{label: label, kind: detailRailInput, body: preview, copy: input})
+}
+
+func (doc *detailDocument) addOutput(label, body string) {
+	body = strings.TrimRight(body, "\n")
+	if body == "" {
+		body = "(empty)"
+	}
+	doc.sections = append(doc.sections, detailSection{label: label, kind: detailRailOutput, body: body, copy: body})
+}
+
+func previewInput(input string, width int, expanded bool) (string, bool) {
+	lines := wrappedPlainLines(input, width)
+	if len(lines) <= 3 || expanded {
+		return strings.Join(lines, "\n"), len(lines) > 3
+	}
+	return strings.Join(lines[:3], "\n"), true
+}
+
+func streamsText(stdout, stderr string, loadedFull bool) string {
+	var parts []string
+	if stdout != "" {
+		parts = append(parts, "stdout:\n"+boundedOutput(stdout, loadedFull))
+	}
+	if stderr != "" {
+		parts = append(parts, "stderr:\n"+boundedOutput(stderr, loadedFull))
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func agentResponseText(node *StepNode, options detailBuildOptions) string {
+	response := streamsText(node.Stdout, node.Stderr, options.loadedFull)
+	progress := node.Status == StatusInProgress && options.runActive && !node.Aborted
+	if response == "" && progress {
+		return "Working " + tuistyle.SpinnerGlyph(options.pulsePhase)
+	}
+	if response != "" && progress {
+		return response + "\n\nWorking " + tuistyle.SpinnerGlyph(options.pulsePhase)
+	}
+	return response
+}
+
+func boundedOutput(output string, loadedFull bool) string {
+	output = sanitizeUTF8(output)
+	if loadedFull {
+		return output
+	}
+	t := truncateOutput(output)
+	lines := t.Lines
+	if banner := t.banner(); banner != "" {
+		lines = append([]string{banner}, lines...)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func outcomeText(node *StepNode) string {
+	var lines []string
+	if node.Outcome != "" {
+		lines = append(lines, "outcome: "+node.Outcome)
+	} else {
+		lines = append(lines, "status: "+statusLabel(node.Status))
+	}
+	if node.DurationMs != nil {
+		lines = append(lines, "duration: "+formatDuration(*node.DurationMs))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func containerStatusText(node *StepNode) string {
+	lines := []string{"status: " + statusLabel(node.Status)}
+	if node.Type == NodeSubWorkflow {
+		if node.StaticWorkflowPath != "" {
+			lines = append(lines, "workflow: "+node.StaticWorkflowPath)
+		} else if node.StaticWorkflow != "" {
+			lines = append(lines, "workflow: "+node.StaticWorkflow)
+		}
+		lines = append(lines, plainParams(node.InterpolatedParams)...)
+	}
+	if node.Type == NodeLoop {
+		if total := loopTotal(node); total > 0 {
+			lines = append(lines, fmt.Sprintf("iterations: %d of %d", node.IterationsCompleted, total))
+		}
+	}
+	if node.Type == NodeIteration {
+		lines = append(lines, "iteration: "+itNum(node.IterationIndex))
+	}
+	lines = append(lines, aggregateChildStatuses(node.Children)...)
+	return strings.Join(lines, "\n")
+}
+
+func staticContainerText(node *StepNode) string {
+	switch node.Type {
+	case NodeLoop:
+		if node.StaticLoopOver != "" {
+			return "loop: for-each\nover: " + node.StaticLoopOver
+		}
+		if node.StaticLoopMax != nil {
+			return fmt.Sprintf("loop: counted\nmax: %d", *node.StaticLoopMax)
+		}
+	case NodeIteration:
+		return "iteration: " + itNum(node.IterationIndex)
+	case NodeGroup:
+		return fmt.Sprintf("configured steps: %d", len(node.Children))
+	}
+	return "pending"
+}
+
+func aggregateChildStatuses(children []*StepNode) []string {
+	counts := map[NodeStatus]int{}
+	for _, child := range children {
+		counts[child.Status]++
+	}
+	var lines []string
+	for _, status := range []NodeStatus{StatusSuccess, StatusInProgress, StatusPending, StatusSkipped, StatusFailed} {
+		if counts[status] > 0 {
+			lines = append(lines, fmt.Sprintf("%d %s", counts[status], statusLabel(status)))
+		}
+	}
+	return lines
+}
+
+func plainParams(params map[string]string) []string {
+	keys := make([]string, 0, len(params))
+	for key := range params {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	lines := make([]string, 0, len(keys))
+	for _, key := range keys {
+		lines = append(lines, key+": "+params[key])
+	}
+	return lines
+}
+
+func currentCommand(node *StepNode) string {
+	if node.InterpolatedCommand != "" {
+		return node.InterpolatedCommand
+	}
+	return node.StaticCommand
+}
+
+func currentPrompt(node *StepNode) string {
+	if node.InterpolatedPrompt != "" {
+		return node.InterpolatedPrompt
+	}
+	return node.StaticPrompt
+}
+
+func nodeTypeLabel(t NodeType) string {
+	switch t {
+	case NodeShell:
+		return "shell"
+	case NodeScript:
+		return "script"
+	case NodeUI:
+		return "ui"
+	case NodeHeadlessAgent:
+		return "agent"
+	case NodeInteractiveAgent:
+		return "interactive agent"
+	case NodeAgentCall:
+		return "agent call"
+	case NodeSubWorkflow:
+		return "sub-workflow"
+	case NodeLoop:
+		return "loop"
+	case NodeIteration:
+		return "iteration"
+	case NodeGroup:
+		return "group"
+	}
+	return "step"
+}
+
+func (doc detailDocument) renderScreen() []string {
+	var lines []string
+	for _, header := range doc.header {
+		lines = append(lines, tuistyle.NormalStyle.Render(header))
+	}
+	for _, section := range doc.sections {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		style := detailRailStyle(section.kind)
+		lines = append(lines, style.Render("▎ "+section.label))
+		for _, line := range wrappedPlainLines(section.body, doc.width-3) {
+			lines = append(lines, style.Render("▎ ")+tuistyle.NormalStyle.Render(line))
+		}
+	}
+	return lines
+}
+
+func (doc detailDocument) renderCopy() string {
+	var lines []string
+	lines = append(lines, doc.header...)
+	for _, section := range doc.sections {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, section.label)
+		if section.copy != "" {
+			lines = append(lines, section.copy)
+		}
+	}
+	return strings.TrimRight(strings.Join(lines, "\n"), "\n")
+}
+
+func detailRailStyle(kind detailRailKind) lipgloss.Style {
+	switch kind {
+	case detailRailPrevious:
+		return lipgloss.NewStyle().Foreground(tuistyle.InactiveAmber)
+	case detailRailInput:
+		return lipgloss.NewStyle().Foreground(tuistyle.AccentCyan)
+	case detailRailError:
+		return lipgloss.NewStyle().Foreground(tuistyle.FailedRed)
+	default:
+		return lipgloss.NewStyle().Foreground(tuistyle.SuccessGreen)
+	}
+}
+
+func wrappedPlainLines(text string, width int) []string {
+	if width < 1 {
+		width = 1
+	}
+	var lines []string
+	for _, line := range strings.Split(tuistyle.Sanitize(text), "\n") {
+		if line == "" {
+			lines = append(lines, "")
+			continue
+		}
+		lines = append(lines, wrapLine(line, width)...)
+	}
+	return lines
+}
