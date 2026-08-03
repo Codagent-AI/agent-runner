@@ -63,8 +63,7 @@ func TestView_FailedRunShowsFailureReasonBelowBreadcrumb(t *testing.T) {
 	m.termWidth = 125
 	m.termHeight = 30
 	m.sessionDir = "/runs/failed-run"
-	m.rebuildRanges()
-	m.syncLogToSelection()
+	m.rebuildDetail()
 
 	view := tuistyle.Sanitize(m.View())
 	reasonIdx := strings.Index(view, "reason: ci-fix-loop exhausted after 3 of 3 iterations without reaching a passing break condition")

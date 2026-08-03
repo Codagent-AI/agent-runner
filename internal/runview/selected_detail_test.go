@@ -145,6 +145,83 @@ func TestDetailDocumentAgentMetricsPreserveUnavailableAndLegacySemantics(t *test
 	}
 }
 
+func TestDetailDocumentUsesLatestAttemptForOutcomeDurationAndMetrics(t *testing.T) {
+	firstDuration := int64(3_000)
+	latestDuration := int64(500)
+	firstCost, latestCost := 1.00, 0.20
+	node := &StepNode{
+		ID:         "retry",
+		Type:       NodeHeadlessAgent,
+		Status:     StatusSuccess,
+		Outcome:    "failed",
+		DurationMs: &firstDuration,
+		Attempts: []AttemptMetrics{
+			{Attempt: 1, Outcome: "failed", DurationMs: &firstDuration, Usage: collectedUsageRecord(100, 10), CostUSD: &firstCost},
+			{Attempt: 2, Outcome: "success", DurationMs: &latestDuration, Usage: collectedUsageRecord(20, 4), CostUSD: &latestCost},
+		},
+	}
+	plain := buildDetailDocument(node, detailBuildOptions{width: 80}).renderCopy()
+	for _, want := range []string{"success", "duration: 500ms", "attempt: 2", "input 20", "output 4", "cost: $0.20"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("latest attempt detail missing %q:\n%s", want, plain)
+		}
+	}
+	for _, stale := range []string{"failed", "3.0s", "input 100", "$1.00"} {
+		if strings.Contains(plain, stale) {
+			t.Errorf("detail retained stale attempt value %q:\n%s", stale, plain)
+		}
+	}
+}
+
+func TestDetailDocumentCurrentFormUsesStaticUIConfiguration(t *testing.T) {
+	node := &StepNode{
+		ID:              "choose",
+		Type:            NodeUI,
+		Status:          StatusPending,
+		StaticUITitle:   "Choose scope",
+		StaticUIBody:    "Pick the work to run.",
+		StaticUIActions: []model.UIAction{{Label: "Continue", Outcome: "continue"}},
+		StaticUIInputs:  []model.UIInput{{Kind: "select", ID: "scope", Prompt: "Scope", Options: []string{"all", "changed"}, Default: "changed"}},
+	}
+	plain := buildDetailDocument(node, detailBuildOptions{width: 80}).renderCopy()
+	for _, want := range []string{"Current form", "Choose scope", "Pick the work to run.", "Scope", "all", "changed", "Continue"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("configured form missing %q:\n%s", want, plain)
+		}
+	}
+	if strings.Contains(plain, "Current outcome") {
+		t.Fatalf("pending form invented runtime outcome:\n%s", plain)
+	}
+}
+
+func TestDetailDocumentContainerStatusRetainsMetadataAndStaticParamsFallback(t *testing.T) {
+	duration := int64(1200)
+	node := &StepNode{
+		ID:                 "nested",
+		Type:               NodeSubWorkflow,
+		Status:             StatusSuccess,
+		Outcome:            "success",
+		DurationMs:         &duration,
+		StaticWorkflow:     "child.yaml",
+		StaticParams:       map[string]string{"task": "{{task}}"},
+		InterpolatedParams: nil,
+	}
+	plain := buildDetailDocument(node, detailBuildOptions{width: 80}).renderCopy()
+	for _, want := range []string{"Current status", "identity: nested", "outcome: success", "duration: 1.2s", "task: {{task}}"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("container status missing %q:\n%s", want, plain)
+		}
+	}
+}
+
+func TestDetailDocumentSanitizesHeaderValuesBeforeScreenRendering(t *testing.T) {
+	node := &StepNode{ID: "safe\x1b]52;c;forged\a", Type: NodeHeadlessAgent, Status: StatusSuccess, AgentProfile: "profile\x1b[31m"}
+	screen := strings.Join(buildDetailDocument(node, detailBuildOptions{width: 80}).renderScreen(), "\n")
+	if strings.Contains(screen, "\x1b]52") || strings.Contains(screen, "\x1b[31m") {
+		t.Fatalf("screen renderer retained terminal escape sequence: %q", screen)
+	}
+}
+
 func TestModelInputExpansionIsStableByNodeKeyAndResetsDetailScrollOnSelection(t *testing.T) {
 	root := &StepNode{ID: "wf", Type: NodeRoot}
 	long := &StepNode{ID: "long", Type: NodeShell, Status: StatusSuccess, Parent: root, StaticCommand: strings.Repeat("wrapped command ", 20)}

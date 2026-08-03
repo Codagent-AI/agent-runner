@@ -206,10 +206,11 @@ func TestModel_Navigation_SelectsInlineExpansionRows(t *testing.T) {
 	}
 }
 
-// j and k scroll the log pane offset; with empty stepRanges the cursor stays put.
+// j and k scroll the selected detail offset without moving tree selection.
 func TestModel_JK_ScrollsLogPane(t *testing.T) {
 	m := newTestModel(simpleTree(), FromList)
 	m.cursor = 1
+	selected := m.selectedNode()
 	initial := m.logOffset
 
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
@@ -228,6 +229,9 @@ func TestModel_JK_ScrollsLogPane(t *testing.T) {
 	}
 	if m.autoFollow {
 		t.Error("k should clear autoFollow")
+	}
+	if m.selectedNode() != selected {
+		t.Fatalf("detail scrolling changed selected node from %v to %v", selected, m.selectedNode())
 	}
 }
 
@@ -1851,7 +1855,7 @@ func TestModel_KScroll_AfterAutoScroll_IsEffective(t *testing.T) {
 
 	// Simulate the auto-scroll sentinel (as set by handleOutputChunkMsg).
 	m.logOffset = math.MaxInt32
-	lineCount := m.rebuildRanges()
+	lineCount := m.rebuildDetail()
 	m.clampLogOffset(lineCount) // fix should ensure this runs in the real code path too
 
 	preK := m.logOffset
@@ -2405,18 +2409,12 @@ func TestModel_OutputChunk_AutoFollowTailsActiveStep(t *testing.T) {
 		Bytes:      []byte(generateLargeOutput(80)),
 	})
 
-	active := m.tree.FindByPrefix("[build]")
-	r, ok := rangeForNode(m.stepRanges, active)
-	if !ok {
-		t.Fatal("missing active step range")
-	}
-	want := max(r.startLine, r.endLine-m.bodyHeight())
-	want = min(want, m.maxLogOffset())
+	want := m.maxLogOffset()
 	if m.logOffset != want {
-		t.Fatalf("logOffset = %d, want active tail offset %d (range=%+v body=%d)", m.logOffset, want, r, m.bodyHeight())
+		t.Fatalf("logOffset = %d, want selected detail tail offset %d", m.logOffset, want)
 	}
-	if m.logOffset == r.startLine {
-		t.Fatalf("auto-follow pinned active step header at %d instead of tailing output", r.startLine)
+	if m.logOffset == 0 {
+		t.Fatal("auto-follow pinned selected detail at its header instead of tailing output")
 	}
 }
 
@@ -2455,8 +2453,8 @@ func TestModel_StepStateMsg_AutoFollowScrollsDetailToActiveSelection(t *testing.
 	if selected := m.selectedNode(); selected != runValidator {
 		t.Fatalf("selected node = %#v, want run-validator", selected)
 	}
-	if len(m.stepRanges) != 1 || m.stepRanges[0].node != runValidator {
-		t.Fatalf("selected detail should own one range, got %#v", m.stepRanges)
+	if m.logLineCount == 0 {
+		t.Fatal("selected detail should have measured content")
 	}
 }
 
@@ -2494,7 +2492,7 @@ func TestModel_ManualNavigation_ClearsAutoFollow(t *testing.T) {
 	}
 }
 
-func TestModel_ArrowToPendingStep_RebuildsGhostRangeAndSyncsLog(t *testing.T) {
+func TestModel_ArrowToPendingStepRebuildsSelectedDetailAtTop(t *testing.T) {
 	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
 	done := &StepNode{
 		ID:            "setup",
@@ -2514,21 +2512,18 @@ func TestModel_ArrowToPendingStep_RebuildsGhostRangeAndSyncsLog(t *testing.T) {
 	root.Children = []*StepNode{done, pending}
 
 	m := newTestModel(&Tree{Root: root}, FromList)
-	m.rebuildRanges()
+	m.rebuildDetail()
 
 	m.Update(tea.KeyMsg{Type: tea.KeyDown})
 
 	if m.cursor != 1 {
 		t.Fatalf("cursor = %d, want 1", m.cursor)
 	}
-	if len(m.stepRanges) != 1 {
-		t.Fatalf("expected selected pending ghost range, got %d ranges", len(m.stepRanges))
+	if m.logLineCount == 0 {
+		t.Fatal("pending selected detail was not rebuilt")
 	}
-	if m.stepRanges[0].node != pending {
-		t.Fatalf("stepRanges[0] = %v, want pending node", m.stepRanges[0].node)
-	}
-	if m.logOffset != m.stepRanges[0].startLine {
-		t.Fatalf("logOffset = %d, want ghost startLine %d", m.logOffset, m.stepRanges[0].startLine)
+	if m.logOffset != 0 {
+		t.Fatalf("logOffset = %d, want selected detail top", m.logOffset)
 	}
 }
 
@@ -2578,18 +2573,12 @@ func TestModel_LKey_ReengagesAutoFollowAtActiveTail(t *testing.T) {
 	m.autoFollow = false
 	m.activeStepPrefix = "[build]"
 	m.tree.Root.Children[0].Stdout = generateLargeOutput(80)
-	m.rebuildRanges()
+	m.rebuildDetail()
 	m.logOffset = 0
 
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
 
-	active := m.tree.FindByPrefix("[build]")
-	r, ok := rangeForNode(m.stepRanges, active)
-	if !ok {
-		t.Fatal("missing active step range")
-	}
-	want := max(r.startLine, r.endLine-m.bodyHeight())
-	want = min(want, m.maxLogOffset())
+	want := m.maxLogOffset()
 	if m.logOffset != want {
 		t.Fatalf("logOffset = %d, want active tail offset %d", m.logOffset, want)
 	}
@@ -2668,7 +2657,7 @@ func TestModel_LiveRun_OutputChunk_DoesNotTailWhenAutoFollowOff(t *testing.T) {
 	m.termHeight = 10
 	shell := m.tree.Root.Children[0]
 	shell.Stdout = generateLargeOutput(100)
-	lineCount := m.rebuildRanges()
+	lineCount := m.rebuildDetail()
 	m.clampLogOffset(lineCount)
 	m.logOffset = m.maxLogOffset()
 
@@ -3048,201 +3037,6 @@ func TestFindFailedLeaf(t *testing.T) {
 			t.Fatalf("expected deepest failed shell %v, got %v", shell, found)
 		}
 	})
-}
-
-// ---- Scroll sync tests ----
-
-func makeRanges(nodes []*StepNode, lineSize int) []stepLineRange {
-	ranges := make([]stepLineRange, len(nodes))
-	for i, n := range nodes {
-		ranges[i] = stepLineRange{node: n, startLine: i * lineSize, endLine: (i + 1) * lineSize}
-	}
-	return ranges
-}
-
-func rangeForNode(ranges []stepLineRange, node *StepNode) (stepLineRange, bool) {
-	for _, r := range ranges {
-		if r.node == node {
-			return r, true
-		}
-	}
-	return stepLineRange{}, false
-}
-
-func TestScrollSync_SyncLogToSelection_SetsOffset(t *testing.T) {
-	root := &StepNode{ID: "root", Type: NodeRoot}
-	steps := []*StepNode{
-		{ID: "a", Type: NodeShell, Status: StatusSuccess, Parent: root},
-		{ID: "b", Type: NodeShell, Status: StatusSuccess, Parent: root},
-		{ID: "c", Type: NodeShell, Status: StatusSuccess, Parent: root},
-	}
-	root.Children = steps
-	tree := &Tree{Root: root}
-	m := newTestModel(tree, FromList)
-	m.cursor = 1
-	// Set up stepRanges with 10 lines per step.
-	m.stepRanges = makeRanges(steps, 10)
-
-	m.syncLogToSelection()
-
-	// logOffset should jump to start of step "b" (index 1 → startLine=10)
-	if m.logOffset != 10 {
-		t.Fatalf("logOffset = %d, want 10", m.logOffset)
-	}
-	if m.logAnchor.stepKey != steps[1].NodeKey() {
-		t.Fatalf("logAnchor.stepKey = %q, want %q", m.logAnchor.stepKey, steps[1].NodeKey())
-	}
-}
-
-func TestScrollSync_SyncSelectionToLog_PicksLatestInViewport(t *testing.T) {
-	root := &StepNode{ID: "root", Type: NodeRoot}
-	steps := []*StepNode{
-		{ID: "a", Type: NodeShell, Status: StatusSuccess, Parent: root},
-		{ID: "b", Type: NodeShell, Status: StatusSuccess, Parent: root},
-		{ID: "c", Type: NodeShell, Status: StatusSuccess, Parent: root},
-	}
-	root.Children = steps
-	tree := &Tree{Root: root}
-	m := newTestModel(tree, FromList)
-	m.termHeight = 40 // bodyHeight ≈ 30
-	// logOffset = 5, bodyH ≈ 30 → viewport [5, 35)
-	// Step a: [0,10) — overlaps [5,35), startLine=0
-	// Step b: [10,20) — overlaps [5,35), startLine=10
-	// Step c: [20,30) — overlaps [5,35), startLine=20
-	// Winner = c (latest startLine)
-	m.stepRanges = makeRanges(steps, 10)
-	m.logOffset = 5
-
-	m.syncSelectionToLog()
-
-	if m.cursor != 2 {
-		t.Fatalf("cursor = %d, want 2 (step c has latest startLine in viewport)", m.cursor)
-	}
-}
-
-func TestScrollSync_NestedWinner_MapsToAncestor(t *testing.T) {
-	// Build a tree: root → loop → iter → child
-	root := &StepNode{ID: "root", Type: NodeRoot}
-	loop := &StepNode{ID: "loop", Type: NodeLoop, Status: StatusInProgress, Parent: root}
-	iter := &StepNode{ID: "loop", Type: NodeIteration, Status: StatusInProgress, Parent: loop}
-	child := &StepNode{ID: "child-step", Type: NodeShell, Status: StatusInProgress, Parent: iter}
-	iter.Children = []*StepNode{child}
-	loop.Children = []*StepNode{iter}
-	root.Children = []*StepNode{loop}
-	tree := &Tree{Root: root}
-
-	m := newTestModel(tree, FromList)
-	m.termHeight = 40
-
-	// stepRanges has entries for loop, iter, and child (as buildLogLines would produce).
-	m.stepRanges = []stepLineRange{
-		{node: loop, startLine: 0, endLine: 30},
-		{node: iter, startLine: 1, endLine: 25},
-		{node: child, startLine: 2, endLine: 20},
-	}
-	m.logOffset = 5
-
-	m.syncSelectionToLog()
-
-	// All three ranges overlap [5, 35). Winner is loop (startLine=0 < iter/child start lines).
-	// Wait, actually syncSelectionToLog picks the LATEST startLine in viewport.
-	// So winner should be child (startLine=2 > iter startLine=1 > loop startLine=0).
-	if m.selectedNode() != child {
-		t.Fatalf("selected = %v, want nested child", m.selectedNode())
-	}
-}
-
-func TestScrollSync_BuildLogLinesChildViewport_SelectsChildAncestor(t *testing.T) {
-	root := &StepNode{ID: "root", Type: NodeRoot}
-	loop := &StepNode{ID: "loop", Type: NodeLoop, Status: StatusInProgress, Parent: root}
-	iter := &StepNode{ID: "loop", Type: NodeIteration, Status: StatusInProgress, Parent: loop, IterationIndex: 0}
-	child := &StepNode{
-		ID:            "child-step",
-		Type:          NodeShell,
-		Status:        StatusSuccess,
-		Parent:        iter,
-		StaticCommand: "echo hi",
-		ExitCode:      intPtr(0),
-	}
-	iter.Children = []*StepNode{child}
-	loop.Children = []*StepNode{iter}
-	root.Children = []*StepNode{loop}
-
-	m := newTestModel(&Tree{Root: root}, FromList)
-	m.setSelected(child)
-	m.rebuildRanges()
-	if len(m.stepRanges) != 1 {
-		t.Fatalf("expected one selected-detail range, got %d", len(m.stepRanges))
-	}
-
-	childRange := m.stepRanges[0]
-	m.logOffset = childRange.startLine
-	m.syncSelectionToLog()
-
-	if m.selectedNode() != child {
-		t.Fatalf("selected = %v, want nested child", m.selectedNode())
-	}
-	if m.logAnchor.stepKey != child.NodeKey() {
-		t.Fatalf("logAnchor.stepKey = %q, want %q", m.logAnchor.stepKey, child.NodeKey())
-	}
-}
-
-func TestHandleWindowSize_ReanchorsAcrossEquivalentTreeRebuild(t *testing.T) {
-	build := func() (*Tree, []*StepNode) {
-		root := &StepNode{ID: "root", Type: NodeRoot, Status: StatusInProgress}
-		step0 := &StepNode{
-			ID:            "setup",
-			Type:          NodeShell,
-			Status:        StatusSuccess,
-			Parent:        root,
-			StaticCommand: "echo " + strings.Repeat("very-long-command ", 12),
-			Stdout:        generateLargeOutput(40),
-			ExitCode:      intPtr(0),
-		}
-		step1 := &StepNode{
-			ID:            "deploy",
-			Type:          NodeShell,
-			Status:        StatusSuccess,
-			Parent:        root,
-			StaticCommand: "echo done",
-			ExitCode:      intPtr(0),
-		}
-		root.Children = []*StepNode{step0, step1}
-		return &Tree{Root: root}, root.Children
-	}
-
-	tree1, steps1 := build()
-	m := newTestModel(tree1, FromList)
-	m.termWidth = 160
-	m.termHeight = 24
-	m.cursor = 1
-	m.rebuildRanges()
-	m.syncLogToSelection()
-
-	if m.logAnchor.stepKey != steps1[1].NodeKey() {
-		t.Fatalf("logAnchor.stepKey = %q, want %q before rebuild", m.logAnchor.stepKey, steps1[1].NodeKey())
-	}
-
-	tree2, steps2 := build()
-	m.tree = tree2
-	m.path = []*StepNode{tree2.Root}
-	m.cursor = 1
-
-	m.handleWindowSize(tea.WindowSizeMsg{Width: 80, Height: 24})
-
-	expected := -1
-	for _, r := range m.stepRanges {
-		if r.node.NodeKey() == steps2[1].NodeKey() {
-			expected = min(r.startLine, m.maxLogOffset())
-			break
-		}
-	}
-	if expected < 0 {
-		t.Fatal("expected to find rebuilt range for selected step")
-	}
-	if m.logOffset != expected {
-		t.Fatalf("logOffset = %d, want %d after re-anchoring rebuilt tree", m.logOffset, expected)
-	}
 }
 
 // ---- Deferred alt-screen tests ----

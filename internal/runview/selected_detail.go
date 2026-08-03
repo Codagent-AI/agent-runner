@@ -72,7 +72,7 @@ func buildDetailDocument(node *StepNode, options detailBuildOptions) detailDocum
 	case NodeInteractiveAgent:
 		doc.addInput("Current prompt", currentPrompt(node), options)
 	case NodeUI:
-		doc.addOutput("Current form", "UI form")
+		doc.addOutput("Current form", uiFormText(node))
 		doc.addOutput("Current outcome", outcomeText(node))
 	case NodeSubWorkflow, NodeLoop, NodeIteration, NodeGroup:
 		doc.addOutput("Current status", containerStatusText(node))
@@ -95,7 +95,7 @@ func buildPendingDetail(doc *detailDocument, node *StepNode, options detailBuild
 	case NodeAgentCall:
 		doc.addInput("Current prompt", node.InterpolatedPrompt, options)
 	case NodeUI:
-		doc.addOutput("Current form", "Configured UI form")
+		doc.addOutput("Current form", uiFormText(node))
 	case NodeSubWorkflow:
 		var body []string
 		if workflow := CanonicalName(node.StaticWorkflowPath, options.resolverCfg); workflow != "" {
@@ -115,11 +115,11 @@ func detailHeader(node *StepNode, options detailBuildOptions) []string {
 		return nil
 	}
 	parts := []string{node.ID, nodeTypeLabel(node.Type), statusLabel(node.Status)}
-	if node.Outcome != "" && node.Outcome != statusLabel(node.Status) {
-		parts = append(parts, node.Outcome)
+	if outcome := selectedOutcome(node); outcome != "" && outcome != statusLabel(node.Status) {
+		parts = append(parts, outcome)
 	}
-	if node.DurationMs != nil && node.Status != StatusPending {
-		parts = append(parts, "duration: "+formatDuration(*node.DurationMs))
+	if duration := selectedDuration(node); duration != nil && node.Status != StatusPending {
+		parts = append(parts, "duration: "+formatDuration(*duration))
 	}
 	lines := []string{strings.Join(parts, " · ")}
 	if node.Status == StatusPending {
@@ -212,6 +212,24 @@ func detailMetrics(node *StepNode) []string {
 	return lines
 }
 
+func selectedOutcome(node *StepNode) string {
+	if len(node.Attempts) > 0 {
+		if outcome := node.Attempts[len(node.Attempts)-1].Outcome; outcome != "" {
+			return outcome
+		}
+	}
+	return node.Outcome
+}
+
+func selectedDuration(node *StepNode) *int64 {
+	if len(node.Attempts) > 0 {
+		if duration := node.Attempts[len(node.Attempts)-1].DurationMs; duration != nil {
+			return duration
+		}
+	}
+	return node.DurationMs
+}
+
 func (doc *detailDocument) addInput(label, input string, options detailBuildOptions) {
 	input = strings.TrimRight(input, "\r\n")
 	if input == "" {
@@ -282,26 +300,36 @@ func boundedOutput(output string, loadedFull bool) string {
 
 func outcomeText(node *StepNode) string {
 	var lines []string
-	if node.Outcome != "" {
-		lines = append(lines, "outcome: "+node.Outcome)
+	if outcome := selectedOutcome(node); outcome != "" {
+		lines = append(lines, "outcome: "+outcome)
 	} else {
 		lines = append(lines, "status: "+statusLabel(node.Status))
 	}
-	if node.DurationMs != nil {
-		lines = append(lines, "duration: "+formatDuration(*node.DurationMs))
+	if duration := selectedDuration(node); duration != nil {
+		lines = append(lines, "duration: "+formatDuration(*duration))
 	}
 	return strings.Join(lines, "\n")
 }
 
 func containerStatusText(node *StepNode) string {
-	lines := []string{"status: " + statusLabel(node.Status)}
+	lines := []string{"identity: " + node.ID, "status: " + statusLabel(node.Status)}
+	if outcome := selectedOutcome(node); outcome != "" {
+		lines = append(lines, "outcome: "+outcome)
+	}
+	if duration := selectedDuration(node); duration != nil {
+		lines = append(lines, "duration: "+formatDuration(*duration))
+	}
 	if node.Type == NodeSubWorkflow {
 		if node.StaticWorkflowPath != "" {
 			lines = append(lines, "workflow: "+node.StaticWorkflowPath)
 		} else if node.StaticWorkflow != "" {
 			lines = append(lines, "workflow: "+node.StaticWorkflow)
 		}
-		lines = append(lines, plainParams(node.InterpolatedParams)...)
+		params := node.InterpolatedParams
+		if params == nil {
+			params = node.StaticParams
+		}
+		lines = append(lines, plainParams(params)...)
 	}
 	if node.Type == NodeLoop {
 		if total := loopTotal(node); total > 0 {
@@ -312,6 +340,39 @@ func containerStatusText(node *StepNode) string {
 		lines = append(lines, "iteration: "+itNum(node.IterationIndex))
 	}
 	lines = append(lines, aggregateChildStatuses(node.Children)...)
+	return strings.Join(lines, "\n")
+}
+
+func uiFormText(node *StepNode) string {
+	var lines []string
+	if node.StaticUITitle != "" {
+		lines = append(lines, node.StaticUITitle)
+	}
+	if node.StaticUIBody != "" {
+		lines = append(lines, node.StaticUIBody)
+	}
+	for _, input := range node.StaticUIInputs {
+		line := input.Prompt
+		if line == "" {
+			line = input.ID
+		}
+		if len(input.Options) > 0 {
+			line += ": " + strings.Join(input.Options, ", ")
+		}
+		if input.Default != "" {
+			line += " (default: " + input.Default + ")"
+		}
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	if len(node.StaticUIActions) > 0 {
+		actions := make([]string, 0, len(node.StaticUIActions))
+		for _, action := range node.StaticUIActions {
+			actions = append(actions, action.Label)
+		}
+		lines = append(lines, "actions: "+strings.Join(actions, ", "))
+	}
 	return strings.Join(lines, "\n")
 }
 
@@ -402,14 +463,14 @@ func nodeTypeLabel(t NodeType) string {
 func (doc detailDocument) renderScreen() []string {
 	var lines []string
 	for _, header := range doc.header {
-		lines = append(lines, tuistyle.NormalStyle.Render(header))
+		lines = append(lines, tuistyle.NormalStyle.Render(tuistyle.Sanitize(header)))
 	}
 	for _, section := range doc.sections {
 		if len(lines) > 0 {
 			lines = append(lines, "")
 		}
 		style := detailRailStyle(section.kind)
-		lines = append(lines, style.Render("▎ "+section.label))
+		lines = append(lines, style.Render("▎ "+tuistyle.Sanitize(section.label)))
 		for _, line := range wrappedPlainLines(section.body, doc.width-3) {
 			lines = append(lines, style.Render("▎ ")+tuistyle.NormalStyle.Render(line))
 		}

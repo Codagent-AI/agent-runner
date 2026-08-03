@@ -129,16 +129,16 @@ func TestModelRestoresNodeSelectionByKeyAfterTreeReplacement(t *testing.T) {
 	}
 }
 
-func TestBuildSelectedDetailLinesDoesNotIncludeContainerDescendants(t *testing.T) {
+func TestSelectedDetailDocumentDoesNotIncludeContainerDescendants(t *testing.T) {
 	root := &StepNode{ID: "root", Type: NodeRoot}
 	group := &StepNode{ID: "group", Type: NodeGroup, Status: StatusSuccess, Parent: root}
 	leaf := &StepNode{ID: "leaf", Type: NodeShell, Status: StatusSuccess, Parent: group, StaticCommand: "echo leaf"}
 	group.Children = []*StepNode{leaf}
 	root.Children = []*StepNode{group}
 
-	_, ranges := buildSelectedDetailLines(group, 80, map[string]bool{}, 0, false, ResolverConfig{})
-	if len(ranges) != 1 || ranges[0].node != group {
-		t.Fatalf("selected detail ranges = %#v, want only group", ranges)
+	plain := buildDetailDocument(group, detailBuildOptions{width: 80}).renderCopy()
+	if strings.Contains(plain, "echo leaf") || strings.Contains(plain, "leaf\n") {
+		t.Fatalf("selected container detail included descendant detail:\n%s", plain)
 	}
 }
 

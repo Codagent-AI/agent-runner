@@ -86,17 +86,14 @@ type Model struct {
 	treeOffset   int
 	sidebarWidth int // widest settled width for this run-view entry
 	logOffset    int
-	// logLineCount is the total number of log lines from the last rebuildRanges call.
-	// It is used to compute maxLogOffset for clamping and scroll normalization.
+	// logLineCount is the total number of lines in the selected detail document.
+	// It is used to clamp the selected detail's independent scroll offset.
 	logLineCount int
 
 	loadedFull map[string]bool
 	// inputExpanded stores the user's current-input choice by stable node key.
 	// It deliberately survives selection changes and width recalculation.
 	inputExpanded map[string]bool
-
-	stepRanges []stepLineRange
-	logAnchor  stepLineAnchor
 
 	active        bool
 	pulsePhase    float64
@@ -642,7 +639,7 @@ func (m *Model) handleUIRequestMsg(msg *liverun.UIRequestMsg) (tea.Model, tea.Cm
 	m.autoFollow = true
 	m.refreshData()
 	m.applyAutoFollowToInProgress()
-	m.rebuildRanges()
+	m.rebuildDetail()
 	return m.handleShowTUIMsg()
 }
 
@@ -660,7 +657,7 @@ func (m *Model) handleSuspendedMsg() {
 	// hand-off is not an implicit drill-out.
 	m.autoFollow = true
 	m.applyAutoFollowCursor()
-	m.rebuildRanges()
+	m.rebuildDetail()
 	if !m.altScreen {
 		m.suppressAltScreen = true
 	}
@@ -763,24 +760,15 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) {
 	// A resize establishes a new layout measurement rather than preserving an
 	// old width that was settled for a different terminal.
 	m.sidebarWidth = 0
-	lineCount := m.rebuildRanges()
-	// Re-resolve anchor so the same block stays in view after resize.
-	if m.logAnchor.stepKey != "" {
-		for _, r := range m.stepRanges {
-			if r.node.NodeKey() == m.logAnchor.stepKey {
-				m.logOffset = max(0, r.startLine+m.logAnchor.lineOffsetInBlock)
-				break
-			}
-		}
-	}
+	lineCount := m.rebuildDetail()
 	m.clampLogOffset(lineCount)
 }
 
 func (m *Model) handleOutputChunkMsg(msg liverun.OutputChunkMsg) {
 	m.applyOutputChunk(msg)
-	lineCount := m.rebuildRanges()
+	lineCount := m.rebuildDetail()
 	if m.shouldSyncAutoFollowDetail() {
-		m.syncLogToAutoFollowTail()
+		m.scrollSelectedDetailToTail()
 	}
 	m.clampLogOffset(lineCount)
 }
@@ -791,9 +779,9 @@ func (m *Model) handleStepStateMsg(msg liverun.StepStateMsg) {
 	if m.autoFollow {
 		m.applyAutoFollowCursor()
 	}
-	lineCount := m.rebuildRanges()
+	lineCount := m.rebuildDetail()
 	if m.shouldSyncAutoFollowDetail() {
-		m.syncLogToAutoFollowTail()
+		m.scrollSelectedDetailToTail()
 	}
 	m.clampLogOffset(lineCount)
 }
@@ -828,7 +816,7 @@ func (m *Model) handleExecDoneMsg(msg liverun.ExecDoneMsg) {
 			m.navigateToNode(last)
 		}
 	}
-	m.rebuildRanges()
+	m.rebuildDetail()
 }
 
 func (m *Model) scrollLogUp() {
@@ -869,9 +857,9 @@ func (m *Model) handleRefreshMsg() tea.Cmd {
 	if m.autoFollow {
 		m.applyAutoFollowCursor()
 	}
-	lineCount := m.rebuildRanges()
+	lineCount := m.rebuildDetail()
 	if m.shouldSyncAutoFollowDetail() {
-		m.syncLogToAutoFollowTail()
+		m.scrollSelectedDetailToTail()
 	}
 	m.clampLogOffset(lineCount)
 	if !m.hasLiveUpdates() {
@@ -1055,7 +1043,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleDebugKey()
 	case "g":
 		m.handleLoadFull()
-		m.rebuildRanges()
+		m.rebuildDetail()
 	case "i":
 		m.toggleSelectedInputExpansion()
 	case "c":
@@ -1088,9 +1076,9 @@ func (m *Model) handleFollowKey() {
 	m.path = []*StepNode{m.tree.Root}
 	m.treeOffset = 0
 	m.applyAutoFollowCursor()
-	lineCount := m.rebuildRanges()
+	lineCount := m.rebuildDetail()
 	if m.shouldSyncAutoFollowDetail() {
-		m.syncLogToAutoFollowTail()
+		m.scrollSelectedDetailToTail()
 	}
 	m.clampLogOffset(lineCount)
 }
@@ -1192,7 +1180,7 @@ func (m *Model) toggleSelectedInputExpansion() {
 	}
 	key := node.NodeKey()
 	m.inputExpanded[key] = !m.inputExpanded[key]
-	m.rebuildRanges()
+	m.rebuildDetail()
 }
 
 func (m *Model) copyTextWithContext(detail string) string {
@@ -1223,7 +1211,7 @@ func (m *Model) handleStepNavigation(delta int) tea.Cmd {
 	m.autoFollow = false
 	m.moveCursor(delta)
 	m.logOffset = 0
-	m.rebuildRanges()
+	m.rebuildDetail()
 	return nil
 }
 
@@ -1298,15 +1286,10 @@ func findDeepestInProgressUI(n *StepNode, stepID string) *StepNode {
 	return nil
 }
 
-// rebuildRanges recomputes m.stepRanges from the current tree state and
-// selection. Called after any mutation that changes log content or width.
-func (m *Model) rebuildRanges() int {
-	selected := m.selectedNode()
+// rebuildDetail recomputes the selected detail's line count after a change to
+// its content or width. Tree selection is intentionally not derived from it.
+func (m *Model) rebuildDetail() int {
 	lines := m.selectedDetailDocument(m.rightPaneWidth()).renderScreen()
-	m.stepRanges = nil
-	if selected != nil {
-		m.stepRanges = []stepLineRange{{node: selected, startLine: 0, endLine: len(lines)}}
-	}
 	m.logLineCount = len(lines)
 	return len(lines)
 }
@@ -1325,82 +1308,18 @@ func (m *Model) rightPaneLineCount(fallback int) int {
 	return len(strings.Split(m.liveUI.View(), "\n"))
 }
 
-// rightPaneWidth estimates the right-pane width for range computation.
-// Uses the same formula as renderTwoColumn but with a conservative list-
-// column estimate so ranges are close enough for scroll sync.
+// rightPaneWidth estimates the right-pane width for selected-detail line
+// calculation using the same tree layout measurement as rendering.
 func (m *Model) rightPaneWidth() int {
 	layout := measureTreePaneLayout(m.termWidth, rowTexts(m.buildProjectedRenderedRows()), m.sidebarWidth)
 	return layout.detail
 }
 
-// syncLogToSelection sets logOffset so the selected step's block is in view.
-func (m *Model) syncLogToSelection() {
-	sel := m.selectedNode()
-	if sel == nil {
+func (m *Model) scrollSelectedDetailToTail() {
+	if active := m.tree.FindByPrefix(m.activeStepPrefix); active != nil && active != m.selectedNode() {
 		return
 	}
-	for _, r := range m.stepRanges {
-		if r.node == sel {
-			m.logOffset = r.startLine
-			m.logAnchor = stepLineAnchor{stepKey: sel.NodeKey(), lineOffsetInBlock: 0}
-			return
-		}
-	}
-}
-
-func (m *Model) syncLogToAutoFollowTail() {
-	if m.syncLogToNodeTail(m.autoFollowDetailNode()) {
-		return
-	}
-	m.syncLogToSelection()
-}
-
-func (m *Model) autoFollowDetailNode() *StepNode {
-	if active := m.tree.FindByPrefix(m.activeStepPrefix); active != nil {
-		return active
-	}
-	return m.selectedNode()
-}
-
-func (m *Model) syncLogToNodeTail(node *StepNode) bool {
-	if node == nil {
-		return false
-	}
-	bodyH := m.bodyHeight()
-	for _, r := range m.stepRanges {
-		if r.node == node {
-			m.logOffset = min(max(r.startLine, r.endLine-bodyH), m.maxLogOffset())
-			m.logAnchor = stepLineAnchor{
-				stepKey:           node.NodeKey(),
-				lineOffsetInBlock: m.logOffset - r.startLine,
-			}
-			return true
-		}
-	}
-	return false
-}
-
-// syncSelectionToLog updates the step-list cursor to the latest started step
-// whose block overlaps the current log viewport.
-func (m *Model) syncSelectionToLog() {
-	bodyH := m.bodyHeight()
-	var winner *StepNode
-	winnerStart := 0
-	for _, r := range m.stepRanges {
-		if r.startLine < m.logOffset+bodyH && r.endLine > m.logOffset {
-			if winner == nil || r.startLine > winnerStart {
-				winner = r.node
-				winnerStart = r.startLine
-			}
-		}
-	}
-	if winner != nil {
-		m.setSelected(winner)
-		m.logAnchor = stepLineAnchor{
-			stepKey:           winner.NodeKey(),
-			lineOffsetInBlock: m.logOffset - winnerStart,
-		}
-	}
+	m.logOffset = m.maxLogOffset()
 }
 
 func (m *Model) clampLogOffset(lineCount int) {
@@ -1617,7 +1536,7 @@ func (m *Model) handleEsc() (tea.Model, tea.Cmd) {
 		m.setSelected(leaving)
 		m.treeOffset = 0
 		m.logOffset = 0
-		m.rebuildRanges()
+		m.rebuildDetail()
 		return m, nil
 	}
 	// At top level: show quit-confirm while running, otherwise navigate back.
@@ -1647,7 +1566,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 			m.setSelected(firstRealChild(n.Drilldown()))
 			m.treeOffset = 0
 			m.logOffset = 0
-			m.rebuildRanges()
+			m.rebuildDetail()
 			return m, nil
 		}
 		if m.canResumeAgentSession(n) {
@@ -1662,7 +1581,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		m.setSelected(firstRealChild(n.Drilldown()))
 		m.treeOffset = 0
 		m.logOffset = 0
-		m.rebuildRanges()
+		m.rebuildDetail()
 		return m, nil
 
 	case NodeSubWorkflow:
@@ -1673,7 +1592,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		m.setSelected(firstRealChild(n.Drilldown()))
 		m.treeOffset = 0
 		m.logOffset = 0
-		m.rebuildRanges()
+		m.rebuildDetail()
 		return m, nil
 
 	case NodeIteration:
@@ -1687,7 +1606,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		m.setSelected(firstRealChild(n.Drilldown()))
 		m.treeOffset = 0
 		m.logOffset = 0
-		m.rebuildRanges()
+		m.rebuildDetail()
 		return m, nil
 
 	case NodeAgentCall:

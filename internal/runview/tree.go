@@ -78,6 +78,10 @@ type StepNode struct {
 	StaticWorkdir            string
 	StaticContinueOnFailure  bool
 	StaticCaptureStderr      bool
+	StaticUITitle            string
+	StaticUIBody             string
+	StaticUIActions          []model.UIAction
+	StaticUIInputs           []model.UIInput
 
 	// Runtime fields (populated from audit events).
 	InterpolatedCommand string
@@ -263,6 +267,10 @@ func buildStepNode(s *model.Step, parent *StepNode) *StepNode {
 		n.Type = NodeUI
 		n.StaticMode = s.Mode
 		n.CaptureName = s.Capture
+		n.StaticUITitle = s.Title
+		n.StaticUIBody = s.Body
+		n.StaticUIActions = append([]model.UIAction(nil), s.Actions...)
+		n.StaticUIInputs = append([]model.UIInput(nil), s.Inputs...)
 	case s.Loop != nil && len(s.Steps) > 0:
 		n.Type = NodeLoop
 		if s.Loop.Max != nil {
@@ -463,6 +471,10 @@ func cloneTemplate(src, parent *StepNode) *StepNode {
 		StaticWorkdir:           src.StaticWorkdir,
 		StaticContinueOnFailure: src.StaticContinueOnFailure,
 		StaticCaptureStderr:     src.StaticCaptureStderr,
+		StaticUITitle:           src.StaticUITitle,
+		StaticUIBody:            src.StaticUIBody,
+		StaticUIActions:         append([]model.UIAction(nil), src.StaticUIActions...),
+		StaticUIInputs:          append([]model.UIInput(nil), src.StaticUIInputs...),
 		CaptureName:             src.CaptureName,
 		AutoFlatten:             src.AutoFlatten,
 	}
