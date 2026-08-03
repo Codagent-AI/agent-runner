@@ -29,15 +29,15 @@ The intake workflow SHALL present the user with an interactive agent session tha
 
 ### Requirement: Shipped workflows consume the handoff
 
-The built-in workflows that intake most commonly routes to SHALL read the handoff when one is present. Specifically, the first agent step of the shared change-definition workflow and of the simple-change workflow SHALL instruct the agent to read `{{intake_handoff}}` before asking the user for context when that value is non-empty, and SHALL behave exactly as they do today when it is empty. Exact prompt wording is an implementation detail.
+The built-in workflows that intake most commonly routes to SHALL receive the handoff when one is present. Specifically, the first agent step of the shared change-definition workflow and of the simple-change workflow SHALL carry the handoff contents in its prompt through `{{intake_handoff}}`, and SHALL behave exactly as they do today when that value is empty. Because the contents arrive in the prompt, these workflows SHALL NOT direct the agent to open a handoff file, so consuming the handoff does not depend on the agent electing to read one. Exact prompt wording is an implementation detail.
 
-#### Scenario: Change definition reads an intake handoff
+#### Scenario: Change definition receives an intake handoff
 - **WHEN** the shared change-definition workflow is launched from intake
-- **THEN** its first agent step is instructed to read the handoff before asking the user what the change is about
+- **THEN** its first agent step's prompt carries the handoff contents, without instructing the agent to read a file
 
-#### Scenario: Simple change reads an intake handoff
+#### Scenario: Simple change receives an intake handoff
 - **WHEN** the simple-change workflow is launched from intake
-- **THEN** its first agent step is instructed to read the handoff before asking the user what the change is about
+- **THEN** its first agent step's prompt carries the handoff contents, without instructing the agent to read a file
 
 #### Scenario: Direct invocation is unchanged
 - **WHEN** either workflow is invoked directly, so the handoff value is empty

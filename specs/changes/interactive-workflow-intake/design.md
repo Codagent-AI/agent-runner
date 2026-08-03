@@ -41,10 +41,10 @@ The relevant existing machinery, all of which this design reuses rather than rep
 | `internal/intakeroute` (new) | Sidecar store, sealed-route record, transport-independent validation |
 | `internal/control` | `submit_route` message type, route eligibility, freeze-on-completion |
 | `internal/exec` | `submit_route` tool wiring, route handler, adapter command grants, run-scoped agent override |
-| `internal/model` | `RunnerToolSubmitRoute`, `intake_handoff` built-in and reserved name, ctx fields, `RunState` provenance |
+| `internal/model` | `RunnerToolSubmitRoute`, `intake_handoff` and `intake_handoff_path` built-ins and reserved names, ctx fields, `RunState` provenance |
 | `internal/cli` | `RunnerCommand` replacing `CompletionCommand`; adapters grant a list |
 | `internal/runner` | Options for provenance and override; handoff copy in `PrepareRun`; restore on resume; shared `prepareFreshRun` service |
-| `internal/prevalidate` | Recognize `intake_handoff`; reject reserved-name params and captures |
+| `internal/prevalidate` | Recognize both handoff built-ins; reject reserved-name params and captures |
 | `internal/listview` | "Plan with an agent" entry |
 | `cmd/agent-runner` | `-i`/`--cli`/`--model`, `step submit-route`, `internal launch-intake-route` |
 | `workflows/core/intake-v1.0.yaml` (new) | The intake workflow |
@@ -85,7 +85,8 @@ func (s *Store) Freeze() error         // atomic staged -> frozen
 
 **Bounds:** the route request is read under a 64 KiB limit and the handoff under 1 MiB. Both are
 generous for their purpose and small enough that a runaway write fails fast rather than filling the
-run directory.
+run directory. These are durability bounds and are not the bound that applies when the handoff is
+inlined into a prompt, which is far smaller; see *Built-in variable and provenance propagation*.
 
 **Parameter normalization:** `Params` records exactly the key/value pairs the agent supplied, after
 validation confirms every required parameter is present and no undeclared parameter appears. Defaults
@@ -246,13 +247,19 @@ The subcommand is dispatched in `run()` before flag parsing, alongside the exist
 
 ### Built-in variable and provenance propagation
 
-`{{intake_handoff}}` is added to `BuiltinVarsForStep`, with one deliberate departure from the surrounding code. That function currently omits empty values and returns `nil` for an empty map. `intake_handoff` must be set **unconditionally, including to the empty string**, because interpolation treats an unresolved reference as a hard error. If it were omitted on direct runs, every direct invocation of a workflow referencing it would fail. The implementation needs a comment saying so, because the surrounding lines model the opposite convention.
+`{{intake_handoff}}` and `{{intake_handoff_path}}` are added to `BuiltinVarsForStep`, with one deliberate departure from the surrounding code. That function currently omits empty values and returns `nil` for an empty map. Both must be set **unconditionally, including to the empty string**, because interpolation treats an unresolved reference as a hard error. If they were omitted on direct runs, every direct invocation of a workflow referencing them would fail. The implementation needs a comment saying so, because the surrounding lines model the opposite convention.
 
-Since built-ins have the lowest precedence and would be shadowed by a same-named param or capture, `intake_handoff` is a **reserved name**: `Workflow.Validate` rejects a param of that name, step validation rejects a capture into it, and `internal/prevalidate` reports the same violation statically. Prevalidate's built-in set is currently the hardcoded pair `session_dir`/`step_id` and must gain the new name, or every prompt referencing it fails reference checking.
+**`intake_handoff` carries contents; `intake_handoff_path` carries the location.** Handing a workflow a path makes consumption optional: the prompt can ask the agent to read the file, but nothing makes it do so, and an agent that skips the read starts the conversation with none of the context intake spent the whole session establishing. Interpolating the contents removes the choice, and removes the "read the handoff first" preamble from every consumer prompt along with it. The path stays available under its own name for the narrower case of addressing the file itself.
 
-**Reservation must cover every capture sink, not just `capture:`.** Steps write captured variables through both `step.Capture` and a UI step's `OutcomeCapture`, but prevalidate's walk currently records only `step.Capture`. Enforcing the reserved name against `capture:` alone would leave `outcome_capture: intake_handoff` as a working way to shadow the sealed path.
+**The inline value is bounded separately from the file.** `MaxHandoffBytes` (1 MiB) is a durability bound and is far too large for a prompt. Inlining uses `MaxInlineHandoffBytes` at 8 KiB, roughly 2,000 tokens: several times what a distilled handoff needs, and small enough that it cannot crowd out a step's own instructions. Over the limit, the value is the leading portion cut at a line boundary plus a marker naming the full path, rather than an error. A handoff that exceeds four pages means the agent pasted its conversation instead of distilling it, which is a content problem to see in review, not a reason to fail a launch. Rejecting at submission would also be wrong, because the same handoff is written on the exploration-only path where nothing is ever inlined.
 
-Both `ctx.IntakeHandoff` and the parent run ID propagate through `NewLoopIterationContext` and the sub-workflow context constructor. Both constructors copy run-scoped fields by explicit assignment, so these are deliberate additions rather than something inherited automatically. They are persisted in `RunState` and restored by `PrepareResume`, which likewise copies an explicit field list.
+**Reading happens in the runner, not in `internal/model`.** Model types stay free of filesystem access, so `PrepareRun` reads the copied handoff when it sets the destination path and seeds both the contents and the path onto the execution context. Interpolation then remains a pure map lookup.
+
+Since built-ins have the lowest precedence and would be shadowed by a same-named param or capture, both names are **reserved**: `Workflow.Validate` rejects a param of either name, step validation rejects a capture into either, and `internal/prevalidate` reports the same violation statically. Prevalidate's built-in set is currently the hardcoded pair `session_dir`/`step_id` and must gain both names, or every prompt referencing them fails reference checking.
+
+**Reservation must cover every capture sink, not just `capture:`.** Steps write captured variables through both `step.Capture` and a UI step's `OutcomeCapture`, but prevalidate's walk currently records only `step.Capture`. Enforcing the reserved names against `capture:` alone would leave `outcome_capture: intake_handoff` as a working way to shadow the sealed handoff.
+
+The handoff contents, the handoff path, and the parent run ID all propagate through `NewLoopIterationContext` and the sub-workflow context constructor. Both constructors copy run-scoped fields by explicit assignment, so these are deliberate additions rather than something inherited automatically. The path and parent run ID are persisted in `RunState` and restored by `PrepareResume`, which likewise copies an explicit field list; the contents are re-read from the restored path rather than persisted twice.
 
 ### Run-scoped agent override
 
@@ -347,7 +354,9 @@ In the TUI, the "Plan with an agent" entry renders above every group, is the ini
 
 **Provenance is child-owned.** The child's run ID is generated inside `runner.Start` after the parent process has been replaced and its audit log closed, so the parent structurally cannot record it. The child records its parent instead.
 
-**`intake_handoff` is reserved rather than merely defined.** Built-ins have the lowest precedence, so without reservation a workflow could declare a param of that name and silently receive its own value in place of the sealed path, defeating the feature's provenance guarantee.
+**`intake_handoff` is reserved rather than merely defined.** Built-ins have the lowest precedence, so without reservation a workflow could declare a param of that name and silently receive its own value in place of the sealed handoff, defeating the feature's provenance guarantee. `intake_handoff_path` is reserved on the same grounds.
+
+**The handoff is delivered as contents, not as a path.** A path leaves consumption to the agent's discretion, which makes the whole sealing and copying pipeline end in a suggestion. Contents in the prompt make the handoff unconditional. The path remains available as a separate built-in for workflows that genuinely need the file rather than the text.
 
 ## Risks / Trade-offs
 
@@ -365,7 +374,7 @@ In the TUI, the "Plan with an agent" entry renders above every group, is the ini
 
 No data migration and no config migration. The intake agent reuses the existing `lead` profile, so custom profile sets keep working untouched.
 
-Ordering matters in one place: `{{intake_handoff}}` must exist as a built-in, and prevalidate must recognize it, **before** any workflow prompt references it. Otherwise every run of the edited workflows fails reference checking. So the built-in and prevalidate changes land before the `core:define-change` and `spec-driven:simple-change` prompt edits.
+Ordering matters in one place: `{{intake_handoff}}` and `{{intake_handoff_path}}` must exist as built-ins, and prevalidate must recognize both, **before** any workflow prompt references them. Otherwise every run of the edited workflows fails reference checking. So the built-in and prevalidate changes land before the `core:define-change` and `spec-driven:simple-change` prompt edits.
 
 Rollback is removing the entry point: without `-i` and the New tab entry, no intake run is ever created, no sidecar is ever written, and `{{intake_handoff}}` is empty everywhere. Every other path is unchanged by construction.
 
@@ -375,7 +384,9 @@ Rollback is removing the entry point: without `-i` and the New tab entry, no int
 - **`internal/control`**: freeze-before-acknowledge ordering; submission after accepted completion rejected; completion with no staged route accepted; completion rejected when freeze fails; stale credential rejected; ineligible step rejected; both concurrent orderings of submission versus completion driven under a barrier; retry of an accepted request ID returns the original acknowledgement without staging twice.
 - **`internal/runner`**: a step-state write after staging leaves the sidecar intact — the regression this design exists to prevent; provenance and agent override round-trip through `PrepareResume`; `PrepareRun` copies the handoff into the new session directory; `prepareFreshRun` refuses a non-builtin target that fails strict pre-validation and creates the engine for an engine-backed target; a launch-preparation failure leaves no run directory behind.
 - **Launch gating**: a frozen route on a failed run does not launch; a durability failure after freeze retains the route and launches nothing; a resumed attempt that completes successfully launches the original frozen route.
-- **`internal/model`**: `intake_handoff` present and empty on a direct run; reserved-name rejection for params, `capture`, and `outcome_capture`.
+- **`internal/model`**: `intake_handoff` and `intake_handoff_path` present and empty on a direct run; reserved-name rejection for params, `capture`, and `outcome_capture` against both names.
+
+- **Inlining**: a handoff under the limit interpolates verbatim; one over it is cut at a line boundary and carries a marker naming the full path; the path built-in addresses the same file either way.
 - **`internal/exec`**: override precedence command > step > profile; `submit_route` grant present only for a route-eligible step; a user workflow declaring the tool is rejected, and intake reached as a sub-workflow is not eligible.
 - **`internal/cli`**: the exact grant string each of the five adapters emits for a route-eligible step, and its absence otherwise.
 - **`cmd/agent-runner`**: flag rejection matrix for `-i`, including `--cli` naming an adapter that rejects interactive steps; TTY check not bypassed by `AGENT_RUNNER_NO_TUI`, for both `-i` and by-name invocation; launcher rejects a non-frozen or invariant-violating artifact; launch-attempt and launch-failure records are appended after `run_end`.
