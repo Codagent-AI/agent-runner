@@ -1,15 +1,153 @@
 package runview
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	iexec "github.com/codagent/agent-runner/internal/exec"
 	"github.com/codagent/agent-runner/internal/liverun"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/tuistyle"
 )
+
+// forwardingLiveProgram exercises the same Coordinator-to-Bubble-Tea message
+// boundary as a live run while keeping the integration fixture deterministic.
+type forwardingLiveProgram struct {
+	model *Model
+	sent  chan tea.Msg
+}
+
+func (p *forwardingLiveProgram) ReleaseTerminal() error { return nil }
+func (p *forwardingLiveProgram) RestoreTerminal() error { return nil }
+func (p *forwardingLiveProgram) Send(msg tea.Msg) {
+	updated, _ := p.model.Update(msg)
+	p.model = updated.(*Model)
+	if p.sent != nil {
+		p.sent <- msg
+	}
+}
+
+func TestINT002LiveCoordinatorPreservesOutputAndUIOwnership(t *testing.T) {
+	sessionDir := t.TempDir()
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusInProgress}
+	parent := &StepNode{ID: "parent", Type: NodeHeadlessAgent, Status: StatusInProgress, Parent: root}
+	work := &StepNode{ID: "work", Type: NodeShell, Status: StatusInProgress, Parent: parent}
+	call := &StepNode{ID: "call", Type: NodeAgentCall, Status: StatusInProgress, Parent: parent, CallID: "call-1"}
+	ui := &StepNode{ID: "choose", Type: NodeUI, Status: StatusInProgress, Parent: parent}
+	parent.Children = []*StepNode{work, call, ui}
+	root.Children = []*StepNode{parent}
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.sessionDir = sessionDir
+	m.running = true
+	m.altScreen = true
+	m.followActive = true
+	m.followTail = true
+
+	program := &forwardingLiveProgram{model: m, sent: make(chan tea.Msg, 32)}
+	coordinator := liverun.NewCoordinator(program, sessionDir)
+	runner := coordinator.TUIProcessRunner(nil)
+	prefixes, ok := runner.(liverun.PrefixSetter)
+	if !ok {
+		t.Fatal("live process runner must expose prefix ownership")
+	}
+
+	prefix := "[parent, work]"
+	prefixes.SetPrefix(prefix)
+	started := time.Now()
+	if _, err := runner.RunShell("printf '\\033[31mfirst'; sleep 0.02; printf ' second'; printf 'warning' >&2", true, ""); err != nil {
+		t.Fatalf("deterministic shell fixture: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("first-byte fixture exceeded 100ms target: %s", elapsed)
+	}
+	m = program.model
+	if strings.Contains(m.selectedNode().Stdout, "\x1b") || !strings.Contains(m.selectedNode().Stdout, "first second") {
+		t.Fatalf("display output was not sanitized: %q", m.selectedNode().Stdout)
+	}
+	raw, err := os.ReadFile(filepath.Join(sessionDir, "output", liverun.SanitizeOutputPrefix(prefix)+".out"))
+	if err != nil || !strings.Contains(string(raw), "\x1b[31mfirst") {
+		t.Fatalf("raw output was not persisted at escaped path: %q, %v", raw, err)
+	}
+
+	callPrefix := "[parent, call:call-1]"
+	if _, err := runner.RunAgent(&iexec.AgentProcessOptions{
+		Context: context.Background(), Args: []string{"sh", "-c", "printf 'call output'"}, CaptureStdout: true, Prefix: callPrefix,
+	}); err != nil {
+		t.Fatalf("deterministic call fixture: %v", err)
+	}
+	m = program.model
+	if call.Stdout != "call output" || parent.Stdout != "" {
+		t.Fatalf("parent/call output ownership leaked: parent=%q call=%q", parent.Stdout, call.Stdout)
+	}
+
+	result := make(chan model.UIStepResult, 1)
+	go func() {
+		got, err := coordinator.HandleUIStep(&model.UIStepRequest{StepID: "choose", Title: "Choose", Body: strings.Repeat("scroll ", 80), Actions: []model.UIAction{{Label: "Continue", Outcome: "continue"}}})
+		if err != nil {
+			t.Errorf("HandleUIStep: %v", err)
+		}
+		result <- got
+	}()
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case msg := <-program.sent:
+			if _, ok := msg.(*liverun.UIRequestMsg); ok {
+				goto uiForwarded
+			}
+		case <-deadline:
+			t.Fatal("coordinator did not forward UI request")
+		}
+	}
+
+uiForwarded:
+	m = program.model
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m = updated.(*Model)
+	if m.liveUI == nil || m.selectedNode() == ui {
+		t.Fatal("tree navigation should leave the UI request pending")
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	m = updated.(*Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(*Model)
+	select {
+	case got := <-result:
+		if got.Outcome != "continue" {
+			t.Fatalf("UI outcome = %q", got.Outcome)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("resolved UI did not release coordinator")
+	}
+
+	if err := coordinator.NotifyDone("success", nil); err != nil {
+		t.Fatalf("NotifyDone success: %v", err)
+	}
+	if !program.model.showSummary {
+		t.Fatal("successful coordinator completion should retain the summary")
+	}
+
+	failedRoot := &StepNode{ID: "failed-workflow", Type: NodeRoot, Status: StatusInProgress}
+	nested := &StepNode{ID: "nested", Type: NodeSubWorkflow, Status: StatusFailed, Parent: failedRoot}
+	failedLeaf := &StepNode{ID: "failed-leaf", Type: NodeShell, Status: StatusFailed, Parent: nested}
+	nested.Children = []*StepNode{failedLeaf}
+	failedRoot.Children = []*StepNode{nested}
+	failedModel := newTestModel(&Tree{Root: failedRoot}, FromLiveRun)
+	failedModel.running = true
+	failedProgram := &forwardingLiveProgram{model: failedModel}
+	if err := liverun.NewCoordinator(failedProgram, t.TempDir()).NotifyDone("failed", nil); err != nil {
+		t.Fatalf("NotifyDone failure: %v", err)
+	}
+	if got := failedProgram.model.selectedNode(); got != failedLeaf || len(failedProgram.model.path) != 1 {
+		t.Fatalf("failed completion should select nested failed leaf at root: selected=%v path=%d", got, len(failedProgram.model.path))
+	}
+}
 
 func TestLiveUIRequestRendersInsideRunViewChromeAndReturnsAction(t *testing.T) {
 	root := &StepNode{ID: "onboarding-welcome", Type: NodeRoot, Status: StatusInProgress}
