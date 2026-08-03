@@ -17,6 +17,7 @@ import (
 
 	"github.com/codagent/agent-runner/internal/liverun"
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/tuistyle"
 )
 
@@ -264,7 +265,7 @@ func TestModel_Navigation_SelectsInlineExpansionRows(t *testing.T) {
 
 // j and k scroll the selected detail offset without moving tree selection.
 func TestModel_JK_ScrollsLogPane(t *testing.T) {
-	m := newTestModel(simpleTree(), FromList)
+	m := newLiveModelWithFlags()
 	m.cursor = 1
 	selected := m.selectedNode()
 	initial := m.logOffset
@@ -273,9 +274,8 @@ func TestModel_JK_ScrollsLogPane(t *testing.T) {
 	if m.logOffset <= initial {
 		t.Fatal("j should increase logOffset")
 	}
-	// j clears autoFollow
-	if m.autoFollow {
-		t.Error("j should clear autoFollow")
+	if !m.followActive {
+		t.Error("j should preserve active follow")
 	}
 
 	scrolled := m.logOffset
@@ -283,8 +283,8 @@ func TestModel_JK_ScrollsLogPane(t *testing.T) {
 	if m.logOffset >= scrolled {
 		t.Fatal("k should decrease logOffset")
 	}
-	if m.autoFollow {
-		t.Error("k should clear autoFollow")
+	if m.followTail {
+		t.Error("k should clear tail follow")
 	}
 	if m.selectedNode() != selected {
 		t.Fatalf("detail scrolling changed selected node from %v to %v", selected, m.selectedNode())
@@ -2187,20 +2187,21 @@ func generateLargeOutput(lines int) string {
 	return string(b)
 }
 
-// ---- autoFollow / navigateToNode / lockout tests ----
+// ---- live follow / navigateToNode / lockout tests ----
 
 func newLiveModelWithFlags() *Model {
 	tree := liveTree()
 	return &Model{
-		tree:       tree,
-		entered:    FromLiveRun,
-		path:       []*StepNode{tree.Root},
-		loadedFull: make(map[string]bool),
-		termWidth:  120,
-		termHeight: 40,
-		running:    true,
-		autoFollow: true,
-		altScreen:  true,
+		tree:         tree,
+		entered:      FromLiveRun,
+		path:         []*StepNode{tree.Root},
+		loadedFull:   make(map[string]bool),
+		termWidth:    120,
+		termHeight:   40,
+		running:      true,
+		followActive: true,
+		followTail:   true,
+		altScreen:    true,
 	}
 }
 
@@ -2217,8 +2218,8 @@ func TestModel_FromLiveRun_DefaultFlags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if !m.autoFollow {
-		t.Error("autoFollow should be true in FromLiveRun")
+	if !m.followActive || !m.followTail {
+		t.Errorf("live follow flags = active:%v tail:%v, want both true", m.followActive, m.followTail)
 	}
 	if !m.running {
 		t.Error("running should be true in FromLiveRun")
@@ -2227,8 +2228,8 @@ func TestModel_FromLiveRun_DefaultFlags(t *testing.T) {
 
 func TestModel_FromList_DefaultFlags(t *testing.T) {
 	m := newTestModel(simpleTree(), FromList)
-	if m.autoFollow {
-		t.Error("autoFollow should be false in FromList")
+	if m.followActive || m.followTail {
+		t.Errorf("historical follow flags = active:%v tail:%v, want both false", m.followActive, m.followTail)
 	}
 }
 
@@ -2520,31 +2521,96 @@ func TestModel_StepStateMsg_AutoFollowOff_NoNavigation(t *testing.T) {
 	m.tree = tree
 	m.path = []*StepNode{tree.Root}
 	m.cursor = 0
-	m.autoFollow = false
+	m.followActive = false
 
 	m.Update(liverun.StepStateMsg{ActiveStepPrefix: "[implement]"})
 
-	// cursor should stay at 0 since autoFollow is off
+	// cursor should stay at 0 since active follow is off
 	if m.cursor != 0 {
-		t.Fatalf("cursor = %d, want 0 when autoFollow is disabled", m.cursor)
+		t.Fatalf("cursor = %d, want 0 when active follow is disabled", m.cursor)
 	}
 }
 
-func TestModel_ManualNavigation_ClearsAutoFollow(t *testing.T) {
+func TestModel_StepStateMsgDoesNotMovePausedSelectedViewport(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.termHeight = 10
+	selected := m.tree.Root.Children[0]
+	selected.Stdout = generateLargeOutput(80)
+	m.followActive = false
+	m.followTail = true
+	m.rebuildDetail()
+	m.logOffset = 0
+
+	m.Update(liverun.StepStateMsg{ActiveStepPrefix: "[implement]"})
+
+	if m.selectedNode() != selected {
+		t.Fatalf("paused selection changed to %v, want %v", m.selectedNode(), selected)
+	}
+	if m.logOffset != 0 {
+		t.Fatalf("later execution moved paused viewport to %d, want 0", m.logOffset)
+	}
+}
+
+func TestModel_RefreshDoesNotMovePausedSelectedViewportWithoutNewOutput(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.termHeight = 10
+	m.tree.Root.Children[0].Stdout = generateLargeOutput(80)
+	m.followActive = false
+	m.followTail = true
+	m.rebuildDetail()
+	m.logOffset = 0
+
+	m.Update(tuistyle.RefreshMsg{})
+
+	if m.logOffset != 0 {
+		t.Fatalf("refresh moved paused viewport to %d, want 0", m.logOffset)
+	}
+}
+
+func TestModel_ManualNavigationPausesOnlyActiveFollow(t *testing.T) {
 	m := newLiveModelWithFlags()
 
-	// up/down arrow keys, j, and k all clear autoFollow.
+	// Tree navigation pauses active follow. Scrolling upward pauses both modes,
+	// while scrolling downward leaves both engaged.
 	for _, key := range []tea.Msg{
 		tea.KeyMsg{Type: tea.KeyUp},
 		tea.KeyMsg{Type: tea.KeyDown},
-		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")},
-		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")},
 	} {
-		m.autoFollow = true
+		m.followActive = true
+		m.followTail = true
 		m.Update(key)
-		if m.autoFollow {
-			t.Errorf("key %v should clear autoFollow", key)
+		if m.followActive {
+			t.Errorf("key %v should clear active follow", key)
 		}
+		if !m.followTail {
+			t.Errorf("key %v should preserve tail follow", key)
+		}
+	}
+	m.followActive = true
+	m.followTail = true
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	if !m.followActive || !m.followTail {
+		t.Fatalf("j follow flags = active:%v tail:%v, want both true", m.followActive, m.followTail)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	if m.followActive || m.followTail {
+		t.Fatalf("k follow flags = active:%v tail:%v, want both false", m.followActive, m.followTail)
+	}
+}
+
+func TestModel_SummaryNavigationPausesActiveFollow(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.showSummary = true
+	m.followActive = true
+	m.followTail = true
+
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+
+	if m.followActive {
+		t.Fatal("summary navigation should pause active follow")
+	}
+	if !m.followTail {
+		t.Fatal("summary navigation should preserve tail follow")
 	}
 }
 
@@ -2590,18 +2656,18 @@ func TestModel_EnterEsc_ClearAutoFollow(t *testing.T) {
 	m.tree.Root.Children = append(m.tree.Root.Children, loop)
 	m.cursor = len(m.tree.Root.Children) - 1 // select loop
 
-	// Enter should clear autoFollow
-	m.autoFollow = true
+	// Enter should clear active follow.
+	m.followActive = true
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if m.autoFollow {
-		t.Error("Enter should clear autoFollow")
+	if m.followActive {
+		t.Error("Enter should clear active follow")
 	}
 
-	// Esc should clear autoFollow
-	m.autoFollow = true
+	// Esc should clear active follow.
+	m.followActive = true
 	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	if m.autoFollow {
-		t.Error("Esc should clear autoFollow")
+	if m.followActive {
+		t.Error("Esc should clear active follow")
 	}
 }
 
@@ -2610,13 +2676,13 @@ func TestModel_LKey_ReengagesAutoFollow(t *testing.T) {
 	m := newLiveModelWithFlags()
 	m.tree = tree
 	m.path = []*StepNode{tree.Root}
-	m.autoFollow = false
+	m.followActive = false
 	m.activeStepPrefix = "[implement]" // agent step at index 1
 
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
 
-	if !m.autoFollow {
-		t.Error("l key should re-engage autoFollow")
+	if !m.followActive || !m.followTail {
+		t.Errorf("l follow flags = active:%v tail:%v, want both true", m.followActive, m.followTail)
 	}
 	if m.cursor != 1 {
 		t.Fatalf("cursor = %d, want 1 after l key", m.cursor)
@@ -2626,7 +2692,8 @@ func TestModel_LKey_ReengagesAutoFollow(t *testing.T) {
 func TestModel_LKey_ReengagesAutoFollowAtActiveTail(t *testing.T) {
 	m := newLiveModelWithFlags()
 	m.termHeight = 15
-	m.autoFollow = false
+	m.followActive = false
+	m.followTail = false
 	m.activeStepPrefix = "[build]"
 	m.tree.Root.Children[0].Stdout = generateLargeOutput(80)
 	m.rebuildDetail()
@@ -2640,21 +2707,21 @@ func TestModel_LKey_ReengagesAutoFollowAtActiveTail(t *testing.T) {
 	}
 }
 
-// TestModel_LKey_NoDrillIn verifies that pressing l re-engages auto-follow
+// TestModel_LKey_NoDrillIn verifies that pressing l re-engages active follow
 // at the current drill level without drilling into sub-workflows or loops.
 func TestModel_LKey_NoDrillIn(t *testing.T) {
 	tree := simpleTree()
 	m := newLiveModelWithFlags()
 	m.tree = tree
 	m.path = []*StepNode{tree.Root}
-	m.autoFollow = false
+	m.followActive = false
 	// Active step is nested inside the tasks loop iteration
 	m.activeStepPrefix = "[tasks:0, run-task]"
 
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
 
-	if !m.autoFollow {
-		t.Error("l key should re-engage autoFollow")
+	if !m.followActive || !m.followTail {
+		t.Errorf("l follow flags = active:%v tail:%v, want both true", m.followActive, m.followTail)
 	}
 	if got := m.selectedNode(); got == nil || got.ID != "run-task" {
 		t.Fatalf("selected = %#v, want active nested run-task leaf", got)
@@ -2664,25 +2731,27 @@ func TestModel_LKey_NoDrillIn(t *testing.T) {
 	}
 }
 
-func TestModel_MouseWheelUp_ClearsAutoFollow(t *testing.T) {
+func TestModel_MouseWheelUpPausesBothFollowModes(t *testing.T) {
 	m := newLiveModelWithFlags()
-	m.autoFollow = true
+	m.followActive = true
+	m.followTail = true
 
 	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp})
 
-	if m.autoFollow {
-		t.Error("mouse wheel up should clear autoFollow")
+	if m.followActive || m.followTail {
+		t.Errorf("mouse wheel up follow flags = active:%v tail:%v, want both false", m.followActive, m.followTail)
 	}
 }
 
-func TestModel_MouseWheelDown_ClearsAutoFollow(t *testing.T) {
+func TestModel_MouseWheelDownPreservesFollowModes(t *testing.T) {
 	m := newLiveModelWithFlags()
-	m.autoFollow = true
+	m.followActive = true
+	m.followTail = true
 
 	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown})
 
-	if m.autoFollow {
-		t.Error("mouse wheel down should clear autoFollow")
+	if !m.followActive || !m.followTail {
+		t.Errorf("mouse wheel down follow flags = active:%v tail:%v, want both true", m.followActive, m.followTail)
 	}
 }
 
@@ -2708,7 +2777,7 @@ func TestModel_MouseWheelUp_ChangesLogOffset(t *testing.T) {
 	}
 }
 
-func TestModel_LiveRun_OutputChunk_DoesNotTailWhenAutoFollowOff(t *testing.T) {
+func TestModel_LiveRun_OutputChunk_DoesNotTailWhenTailFollowOff(t *testing.T) {
 	m := newLiveModelWithFlags()
 	m.termHeight = 10
 	shell := m.tree.Root.Children[0]
@@ -2718,15 +2787,47 @@ func TestModel_LiveRun_OutputChunk_DoesNotTailWhenAutoFollowOff(t *testing.T) {
 	m.logOffset = m.maxLogOffset()
 
 	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp})
-	if m.autoFollow {
-		t.Fatal("test setup: mouse wheel up should clear autoFollow")
+	if m.followTail {
+		t.Fatal("test setup: mouse wheel up should clear tail follow")
 	}
 	scrolledOffset := m.logOffset
 
 	m.Update(liverun.OutputChunkMsg{StepPrefix: "[build]", Stream: "stdout", Bytes: []byte("new output\n")})
 
 	if m.logOffset != scrolledOffset {
-		t.Fatalf("output chunk should not tail when autoFollow is off: before=%d after=%d", scrolledOffset, m.logOffset)
+		t.Fatalf("output chunk should not tail when tail follow is off: before=%d after=%d", scrolledOffset, m.logOffset)
+	}
+}
+
+func TestModel_TKeyFollowsOnlySelectedExecution(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.termHeight = 10
+	selected := m.tree.Root.Children[0]
+	selected.Stdout = generateLargeOutput(80)
+	m.activeStepPrefix = "[implement]"
+	m.followActive = false
+	m.followTail = false
+	m.rebuildDetail()
+	m.logOffset = 0
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+
+	if m.selectedNode() != selected {
+		t.Fatalf("t changed selection to %v, want selected execution %v", m.selectedNode(), selected)
+	}
+	if m.followActive {
+		t.Fatal("t re-engaged active follow")
+	}
+	if !m.followTail {
+		t.Fatal("t did not engage tail follow")
+	}
+	if m.logOffset != m.maxLogOffset() {
+		t.Fatalf("t offset = %d, want selected tail %d", m.logOffset, m.maxLogOffset())
+	}
+
+	m.Update(liverun.OutputChunkMsg{StepPrefix: "[build]", Stream: "stdout", Bytes: []byte("later selected output\n")})
+	if m.logOffset != m.maxLogOffset() {
+		t.Fatalf("selected later output did not stay tailed: offset=%d tail=%d", m.logOffset, m.maxLogOffset())
 	}
 }
 
@@ -2776,7 +2877,7 @@ func TestModel_ExecDone_Failed_NoFailedStep_NoChange(t *testing.T) {
 	}
 }
 
-func TestModel_ExecDone_Success_JumpsToLastTopLevelStep(t *testing.T) {
+func TestModel_ExecDone_SuccessStaysOpenOnSummary(t *testing.T) {
 	tree := simpleTree()
 	for _, c := range tree.Root.Children {
 		c.Status = StatusSuccess
@@ -2786,21 +2887,32 @@ func TestModel_ExecDone_Success_JumpsToLastTopLevelStep(t *testing.T) {
 	m.tree = tree
 	m.path = []*StepNode{tree.Root}
 	m.cursor = 1 // somewhere other than the last child
+	m.sessionDir = t.TempDir()
+	if err := runlock.Write(m.sessionDir); err != nil {
+		t.Fatalf("write run lock: %v", err)
+	}
+	m.active = true
 
 	m.Update(liverun.ExecDoneMsg{Result: "success"})
 
-	if got := m.selectedNode(); got != lastTopLevelChild(tree.Root) {
-		t.Fatalf("selected = %v, want final top-level child", got)
+	if !m.showSummary {
+		t.Fatal("successful live completion should open the summary")
 	}
 	if len(m.path) != 1 || m.path[0] != tree.Root {
 		t.Fatalf("path should remain at root, got %d segments", len(m.path))
 	}
+	if m.followActive || m.followTail {
+		t.Errorf("terminal follow flags = active:%v tail:%v, want both false", m.followActive, m.followTail)
+	}
+	if m.active || m.running {
+		t.Errorf("terminal live state = active:%v running:%v, want both false", m.active, m.running)
+	}
 }
 
-func TestModel_HelpBar_ShowsLiveHint_WhenAutoFollowOff(t *testing.T) {
+func TestModel_HelpBar_ShowsLiveHint_WhenActiveFollowOff(t *testing.T) {
 	m := newLiveModelWithFlags()
 	m.running = true
-	m.autoFollow = false
+	m.followActive = false
 
 	help := m.renderHelpBar()
 	if !containsString(help, "l follow") {
@@ -2808,14 +2920,14 @@ func TestModel_HelpBar_ShowsLiveHint_WhenAutoFollowOff(t *testing.T) {
 	}
 }
 
-func TestModel_HelpBar_HidesLiveHint_WhenAutoFollowOn(t *testing.T) {
+func TestModel_HelpBar_HidesLiveHint_WhenActiveFollowOn(t *testing.T) {
 	m := newLiveModelWithFlags()
 	m.running = true
-	m.autoFollow = true
+	m.followActive = true
 
 	help := m.renderHelpBar()
 	if containsString(help, "l follow") {
-		t.Errorf("help bar should not show 'l follow' when autoFollow is on: %q", help)
+		t.Errorf("help bar should not show 'l follow' when active follow is on: %q", help)
 	}
 }
 
@@ -2829,9 +2941,10 @@ func TestModel_Legend_ContainsLiveNavKeys(t *testing.T) {
 			t.Errorf("legend missing %q", want)
 		}
 	}
-	// t key is removed from legend
-	if containsString(legend, "t  jump") || containsString(legend, "t tail") {
-		t.Errorf("legend should not mention removed 't' tail key")
+	for _, want := range []string{"t  follow selected response", "l  jump to active step"} {
+		if !containsString(legend, want) {
+			t.Errorf("legend missing %q:\n%s", want, legend)
+		}
 	}
 }
 
@@ -2906,8 +3019,8 @@ func TestNewForReentry_HasCorrectState(t *testing.T) {
 	if m.running {
 		t.Error("running should be false in NewForReentry model")
 	}
-	if m.autoFollow {
-		t.Error("autoFollow should be false in NewForReentry model")
+	if m.followActive || m.followTail {
+		t.Errorf("reentry follow flags = active:%v tail:%v, want both false", m.followActive, m.followTail)
 	}
 	if m.entered != FromLiveRun {
 		t.Errorf("entered = %d, want FromLiveRun (%d)", m.entered, FromLiveRun)
@@ -3199,7 +3312,7 @@ func TestSuspendedMsg_PreservesManualDrillInWhenActiveOutside(t *testing.T) {
 	m.running = true
 	m.path = []*StepNode{root, subwf}
 	m.cursor = 0
-	m.autoFollow = false
+	m.followActive = false
 	m.activeStepPrefix = "[stepC]"
 
 	m.Update(liverun.SuspendedMsg{})
@@ -3207,8 +3320,8 @@ func TestSuspendedMsg_PreservesManualDrillInWhenActiveOutside(t *testing.T) {
 	if len(m.path) != 2 || m.path[1] != subwf {
 		t.Fatalf("path should retain explicit drill scope, got %d segments", len(m.path))
 	}
-	if !m.autoFollow {
-		t.Fatal("autoFollow should be re-enabled on suspend")
+	if !m.followActive || !m.followTail {
+		t.Fatalf("suspend follow flags = active:%v tail:%v, want both true", m.followActive, m.followTail)
 	}
 	if m.selectedNode() != stepB {
 		t.Fatalf("selected = %v, want scoped stepB", m.selectedNode())
@@ -3217,7 +3330,7 @@ func TestSuspendedMsg_PreservesManualDrillInWhenActiveOutside(t *testing.T) {
 
 // TestSuspendedMsg_KeepsDrillInWhenActiveInside verifies the looser policy:
 // if the active step lives inside the drilled container, the drill-in is
-// preserved (autoFollow re-enables and the cursor follows within the
+// preserved (active follow re-enables and the cursor follows within the
 // container).
 func TestSuspendedMsg_KeepsDrillInWhenActiveInside(t *testing.T) {
 	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
@@ -3232,7 +3345,7 @@ func TestSuspendedMsg_KeepsDrillInWhenActiveInside(t *testing.T) {
 	m.running = true
 	m.path = []*StepNode{root, subwf}
 	m.cursor = 0
-	m.autoFollow = false
+	m.followActive = false
 	m.activeStepPrefix = "[subwf, stepB2]"
 
 	m.Update(liverun.SuspendedMsg{})
@@ -3243,8 +3356,8 @@ func TestSuspendedMsg_KeepsDrillInWhenActiveInside(t *testing.T) {
 	if m.path[1] != subwf {
 		t.Fatal("path[1] should still be subwf")
 	}
-	if !m.autoFollow {
-		t.Fatal("autoFollow should be re-enabled on suspend")
+	if !m.followActive || !m.followTail {
+		t.Fatalf("suspend follow flags = active:%v tail:%v, want both true", m.followActive, m.followTail)
 	}
 	if m.cursor != 1 {
 		t.Fatalf("cursor = %d, want 1 (stepB2 index inside subwf)", m.cursor)

@@ -95,3 +95,16 @@ func TestFailureReason_IgnoresNonLoopExhaustedOutcome(t *testing.T) {
 		t.Fatalf("failureReason() = %q, want %q", got, want)
 	}
 }
+
+func TestFindFailedLeafPrefersDeepestFailedExecution(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusFailed}
+	shallow := &StepNode{ID: "shallow", Type: NodeShell, Status: StatusFailed, Parent: root}
+	container := &StepNode{ID: "nested", Type: NodeSubWorkflow, Status: StatusFailed, Parent: root}
+	deep := &StepNode{ID: "deep", Type: NodeScript, Status: StatusFailed, Parent: container}
+	container.Children = []*StepNode{deep}
+	root.Children = []*StepNode{shallow, container}
+
+	if got := findFailedLeaf(root); got != deep {
+		t.Fatalf("failed leaf = %v, want deepest %v", got, deep)
+	}
+}

@@ -104,10 +104,9 @@ func (r *tuiProcessRunner) cancelDelayedStepLocked() {
 }
 
 // sanitizePrefix converts an audit-log prefix into a safe filesystem name.
-// Maps '/' → "--" (nesting) and ':' → "_" (iteration); underscores pass
-// through unchanged so identifiers that contain '_' do not collide with
-// the nesting separator. Example: audit prefix loop-b:2/step-c becomes
-// loop-b_2--step-c. Any other character outside the allowlist
+// Maps '/' → "__" (nesting) and ':' → "_" (iteration). Example: audit
+// prefix loop-b:2/step-c becomes
+// loop-b_2__step-c. Any other character outside the allowlist
 // [A-Za-z0-9._\-] is replaced with a single '_'. Separator replacement
 // blocks path traversal on every platform (including '\' on Windows);
 // the containment check in openOutputFile rejects any residual '..'
@@ -129,7 +128,7 @@ func SanitizeOutputPrefix(prefix string) string {
 			ch == '.' || ch == '-' || ch == '_':
 			b.WriteRune(ch)
 		case ch == '/':
-			b.WriteString("--")
+			b.WriteString("__")
 		default:
 			b.WriteByte('_')
 		}

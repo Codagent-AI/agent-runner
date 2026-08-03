@@ -89,7 +89,7 @@ func TestLiveUIRequestAutoFollowsInProgressTopLevelStep(t *testing.T) {
 
 	m := newTestModel(&Tree{Root: root}, FromLiveRun)
 	m.running = true
-	m.autoFollow = false
+	m.followActive = false
 	m.cursor = 0
 
 	reply := make(chan model.UIStepResult, 1)
@@ -103,7 +103,7 @@ func TestLiveUIRequestAutoFollowsInProgressTopLevelStep(t *testing.T) {
 	})
 	m = updated.(*Model)
 
-	if !m.autoFollow {
+	if !m.followActive || !m.followTail {
 		t.Fatal("live UI request should re-enable auto-follow")
 	}
 	if got := m.selectedNode(); got != pickScope {
@@ -119,7 +119,7 @@ func TestLiveUIFollowSurvivesRefreshWithStaleActiveStepPrefix(t *testing.T) {
 
 	m := newTestModel(&Tree{Root: root}, FromLiveRun)
 	m.running = true
-	m.autoFollow = false
+	m.followActive = false
 	m.cursor = 0
 	m.activeStepPrefix = "[autonomous-demo]"
 
@@ -133,7 +133,7 @@ func TestLiveUIFollowSurvivesRefreshWithStaleActiveStepPrefix(t *testing.T) {
 		Reply: reply,
 	})
 	m = updated.(*Model)
-	m.autoFollow = false
+	m.followActive = false
 	m.cursor = 0
 
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
@@ -162,7 +162,7 @@ func TestLiveUIRequestLeavesCompletedDrillInForSiblingSubWorkflow(t *testing.T) 
 	m.running = true
 	m.path = []*StepNode{root, guided}
 	m.cursor = 0
-	m.autoFollow = false
+	m.followActive = false
 
 	reply := make(chan model.UIStepResult, 1)
 	updated, _ := m.Update(&liverun.UIRequestMsg{
@@ -175,7 +175,7 @@ func TestLiveUIRequestLeavesCompletedDrillInForSiblingSubWorkflow(t *testing.T) 
 	})
 	m = updated.(*Model)
 
-	if !m.autoFollow {
+	if !m.followActive || !m.followTail {
 		t.Fatal("live UI request should re-enable auto-follow")
 	}
 	if len(m.path) != 2 || m.path[1] != guided {
@@ -679,7 +679,7 @@ func TestLiveUIRequestLFollowReturnsToActiveUIAcrossDrillDepth(t *testing.T) {
 	if got := m.currentContainer(); got != root {
 		t.Fatalf("l should return to root manual scope, got %v", got)
 	}
-	if !m.autoFollow {
+	if !m.followActive || !m.followTail {
 		t.Fatal("l should re-enable auto-follow")
 	}
 	if view := tuistyle.Sanitize(m.View()); !strings.Contains(view, "Pick Scope") {
@@ -693,7 +693,7 @@ func TestLiveUIRequestLFollowWorksWhileUIVisible(t *testing.T) {
 	root.Children = []*StepNode{pick}
 	m := newTestModel(&Tree{Root: root}, FromLiveRun)
 	m.altScreen = true
-	m.autoFollow = false
+	m.followActive = false
 
 	updated, _ := m.Update(&liverun.UIRequestMsg{
 		Request: model.UIStepRequest{
@@ -704,7 +704,7 @@ func TestLiveUIRequestLFollowWorksWhileUIVisible(t *testing.T) {
 		Reply: make(chan model.UIStepResult, 1),
 	})
 	m = updated.(*Model)
-	m.autoFollow = false
+	m.followActive = false
 
 	if view := tuistyle.Sanitize(m.View()); !strings.Contains(view, "l follow") {
 		t.Fatalf("live UI help should show l follow when auto-follow is off:\n%s", view)
@@ -712,7 +712,7 @@ func TestLiveUIRequestLFollowWorksWhileUIVisible(t *testing.T) {
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
 	m = updated.(*Model)
-	if !m.autoFollow {
+	if !m.followActive || !m.followTail {
 		t.Fatal("l should re-enable auto-follow while live UI is visible")
 	}
 }

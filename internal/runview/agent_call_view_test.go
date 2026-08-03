@@ -431,7 +431,8 @@ func TestLiveAgentCallAppearsStreamsSeparatelyAndAutoFollows(t *testing.T) {
 	m := newTestModel(tree, FromLiveRun)
 	m.sessionDir = sessionDir
 	m.running = true
-	m.autoFollow = true
+	m.followActive = true
+	m.followTail = true
 	appendAuditTestEvent(t, sessionDir, agentCallStartEvent("call-1", "attempt-1", "agent", "implementor"))
 
 	m.Update(liverun.StepStateMsg{ActiveStepPrefix: "[parent, call:call-1]"})
@@ -459,7 +460,7 @@ func TestManualNavigationPausesAgentCallAutoFollow(t *testing.T) {
 	tree.ApplyEvent(agentCallStartEvent("call-1", "attempt-1", "agent", "implementor"))
 	m := newTestModel(tree, FromLiveRun)
 	m.running = true
-	m.autoFollow = false
+	m.followActive = false
 	m.cursor = 0
 
 	m.Update(liverun.StepStateMsg{ActiveStepPrefix: "[parent, call:call-1]"})
@@ -612,7 +613,7 @@ func sanitizeOutputPrefixForTest(prefix string) string {
 		case ch >= 'A' && ch <= 'Z', ch >= 'a' && ch <= 'z', ch >= '0' && ch <= '9', ch == '.' || ch == '-' || ch == '_':
 			b.WriteRune(ch)
 		case ch == '/':
-			b.WriteString("--")
+			b.WriteString("__")
 		default:
 			b.WriteByte('_')
 		}

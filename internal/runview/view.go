@@ -521,7 +521,7 @@ func (m *Model) helpBarParts() []string {
 		} else {
 			parts = append(parts, "esc quit")
 		}
-		if !m.autoFollow {
+		if !m.followActive {
 			parts = append(parts, "l follow")
 		}
 		parts = append(parts, "q quit")
@@ -567,7 +567,10 @@ func (m *Model) helpBarParts() []string {
 
 	parts = append(parts, "c copy")
 
-	if !m.autoFollow && (m.active || m.running) {
+	if !m.followTail && (m.active || m.running) {
+		parts = append(parts, "t tail")
+	}
+	if !m.followActive && (m.active || m.running) {
 		parts = append(parts, "l follow")
 	}
 
@@ -748,6 +751,7 @@ func (m *Model) renderLegend() string {
 	b.WriteString("\n  ")
 	b.WriteString(tuistyle.SelectedStyle.Render("Live Navigation"))
 	b.WriteString("\n\n")
+	b.WriteString("  t  follow selected response\n")
 	b.WriteString("  l  jump to active step and resume auto-follow\n")
 
 	b.WriteString("\n\n  ")
