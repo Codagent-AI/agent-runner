@@ -186,9 +186,11 @@ func previousOutputExcerpt(node *StepNode, width int) string {
 		return strings.Join(rows, "\n")
 	}
 	first := rows[len(rows)-2]
-	maxFirstWidth := max(1, width-1)
-	if runewidth.StringWidth(first) > maxFirstWidth {
-		first = runewidth.Truncate(first, maxFirstWidth, "")
+	ellipsisWidth := runewidth.StringWidth("…")
+	if width <= ellipsisWidth {
+		first = ""
+	} else if runewidth.StringWidth(first) > width-ellipsisWidth {
+		first = runewidth.Truncate(first, width-ellipsisWidth, "")
 	}
 	return "…" + first + "\n" + rows[len(rows)-1]
 }

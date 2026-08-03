@@ -173,6 +173,16 @@ func TestPreviousOutputExcerptKeepsOnlyTwoVisualRowsWhenTruncated(t *testing.T) 
 	}
 }
 
+func TestPreviousOutputExcerptStaysWithinTwoRowsAtTinyWidths(t *testing.T) {
+	node := &StepNode{Type: NodeShell, Status: StatusSuccess, Stdout: "first\nsecond\nthird"}
+	for _, width := range []int{0, 1} {
+		excerpt := previousOutputExcerpt(node, width)
+		if got := len(wrappedPlainLines(excerpt, width)); got > 2 {
+			t.Errorf("width %d excerpt uses %d visual rows: %q", width, got, excerpt)
+		}
+	}
+}
+
 func TestDetailDocumentPendingContainsOnlyStaticData(t *testing.T) {
 	node := &StepNode{
 		ID:           "future",
