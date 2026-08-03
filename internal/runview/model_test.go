@@ -125,6 +125,62 @@ func TestModel_Navigation_UpDown(t *testing.T) {
 	}
 }
 
+func TestResumeAgentTargetUsesNearestSelectedWorkflowAncestor(t *testing.T) {
+	root := &StepNode{ID: "root", Type: NodeRoot, Status: StatusSuccess}
+	rootAgent := &StepNode{ID: "root-agent", Type: NodeHeadlessAgent, Status: StatusSuccess, Parent: root, SessionID: "root-session"}
+	nested := &StepNode{ID: "nested", Type: NodeSubWorkflow, Status: StatusSuccess, Parent: root}
+	nestedAgent := &StepNode{ID: "nested-agent", Type: NodeHeadlessAgent, Status: StatusSuccess, Parent: nested, SessionID: "nested-session"}
+	selectedShell := &StepNode{ID: "selected-shell", Type: NodeShell, Status: StatusSuccess, Parent: nested}
+	directCall := &StepNode{ID: "direct", Type: NodeAgentCall, Status: StatusSuccess, Parent: root, SessionID: "call-session"}
+	nested.Children = []*StepNode{nestedAgent, selectedShell}
+	root.Children = []*StepNode{rootAgent, nested, directCall}
+
+	m := newTestModel(&Tree{Root: root}, FromInspect)
+	// The user has not drilled into nested; selection arrived through inline
+	// expansion, so manual scope remains root.
+	m.setSelected(selectedShell)
+	if got := m.resumeAgentTargetForSelection(); got != nestedAgent {
+		t.Fatalf("inline nested fallback = %v, want nested workflow agent", got)
+	}
+	m.setSelected(directCall)
+	if got := m.resumeAgentTargetForSelection(); got != directCall {
+		t.Fatalf("direct selected resume = %v, want selected call", got)
+	}
+}
+
+func TestNewHistoricalFailedRunSelectsFailedLeafAtRootScope(t *testing.T) {
+	base := t.TempDir()
+	workflowPath := filepath.Join(base, "workflows", "root.yaml")
+	writeFile(t, workflowPath, "name: root\nsteps:\n  - id: passes\n    command: true\n  - id: fails\n    command: false\n")
+	projectDir := filepath.Join(base, "project")
+	sessionDir := filepath.Join(projectDir, "runs", "root-2026-08-03T00-00-00-000000000Z")
+	state, err := json.Marshal(model.RunState{WorkflowFile: workflowPath, WorkflowName: "root", Completed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(sessionDir, "state.json"), string(state))
+	writeFile(t, filepath.Join(sessionDir, "audit.log"), "2026-08-03T00:00:00Z run_start {}\n"+
+		"2026-08-03T00:00:01Z [passes] step_start {\"command\":\"true\"}\n"+
+		"2026-08-03T00:00:02Z [passes] step_end {\"outcome\":\"success\"}\n"+
+		"2026-08-03T00:00:03Z [fails] step_start {\"command\":\"false\"}\n"+
+		"2026-08-03T00:00:04Z [fails] step_end {\"outcome\":\"failed\",\"exit_code\":1}\n"+
+		"2026-08-03T00:00:05Z run_end {\"outcome\":\"failed\"}\n")
+
+	m, err := New(sessionDir, projectDir, FromInspect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.selectedNode(); got == nil || got.ID != "fails" {
+		t.Fatalf("historical failed selection = %v, want failed leaf", got)
+	}
+	if len(m.path) != 1 || m.path[0] != m.tree.Root {
+		t.Fatalf("historical failed path = %#v, want root scope", m.path)
+	}
+	if m.showSummary {
+		t.Fatal("failed historical run opened summary instead of detail")
+	}
+}
+
 func TestModel_Navigation_UpDownDoesNotClearScreen(t *testing.T) {
 	m := newTestModel(simpleTree(), FromList)
 

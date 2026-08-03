@@ -256,6 +256,12 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	if entered != FromLiveRun && tree.MetricsCaptured && tree.Root.Status != StatusFailed && (state.Completed || tree.Root.Status == StatusSuccess) {
 		m.showSummary = true
 	}
+	if entered != FromLiveRun && tree.Root.Status == StatusFailed {
+		// Historical failure inspection starts at root scope but selects the
+		// concrete failed execution. The projection expands its ancestry without
+		// turning that inline navigation into a manual drill path.
+		m.setSelected(findFailedLeaf(tree.Root))
+	}
 	current := m.applyCurrentStepState(&state)
 	if m.autoFollow {
 		if current != nil {
@@ -916,12 +922,18 @@ func (m *Model) resumeAgentTargetForSelection() *StepNode {
 	if isAgentNode(selected) && m.canResumeAgentSession(selected) {
 		return selected
 	}
-
-	scope := m.currentContainer()
-	if selected != nil && selected.Type == NodeSubWorkflow {
-		scope = selected.Drilldown()
+	// Resume scope follows the selected execution's structural ancestry, not
+	// the optional manual drill path. Inline-expanded nested rows therefore
+	// resume within their own sub-workflow before considering root.
+	for ancestor := selected; ancestor != nil; ancestor = ancestor.Parent {
+		if ancestor.Type != NodeSubWorkflow && ancestor.Type != NodeRoot {
+			continue
+		}
+		if target := m.lastResumableAgentInWorkflow(ancestor); target != nil {
+			return target
+		}
 	}
-	return m.lastResumableAgentInWorkflow(scope)
+	return nil
 }
 
 func (m *Model) lastResumableAgentInWorkflow(scope *StepNode) *StepNode {
@@ -1143,6 +1155,12 @@ func (m *Model) selectedStepDetailText() string {
 
 func (m *Model) selectedDetailDocument(width int) detailDocument {
 	node := m.selectedNode()
+	m.loadHistoricalOutput(node)
+	var previous *StepNode
+	if m.tree != nil {
+		previous = m.tree.PreviousExecution(node)
+		m.loadHistoricalOutput(previous)
+	}
 	expanded := false
 	if node != nil && m.inputExpanded != nil {
 		expanded = m.inputExpanded[node.NodeKey()]
@@ -1151,6 +1169,7 @@ func (m *Model) selectedDetailDocument(width int) detailDocument {
 		width:         width,
 		loadedFull:    node != nil && m.loadedFull[node.NodeKey()],
 		inputExpanded: expanded,
+		previous:      previous,
 		pulsePhase:    m.pulsePhase,
 		runActive:     m.running || m.active,
 		resumeReady:   m.canResumeAgentSession(node),
@@ -1351,8 +1370,24 @@ func (m *Model) applyOutputChunk(msg liverun.OutputChunkMsg) {
 }
 
 func (m *Model) loadSelectedAgentCallOutput() {
-	node := m.selectedNode()
-	if node == nil || node.Type != NodeAgentCall || node.CallOutputLoaded || node.CallOutputPrefix == "" || m.sessionDir == "" {
+	m.loadHistoricalOutput(m.selectedNode())
+}
+
+// loadHistoricalOutput loads an execution's bounded persisted evidence. Calls
+// and ordinary autonomous steps use the same source, while only agents pass
+// raw output through their normal CLI filter before it reaches selected detail.
+func (m *Model) loadHistoricalOutput(node *StepNode) {
+	if node == nil || m.sessionDir == "" || !historicalOutputNode(node) || node.OutputLoaded {
+		return
+	}
+	prefix := node.OutputPrefix
+	if node.Type == NodeAgentCall {
+		prefix = node.CallOutputPrefix
+		if node.CallOutputLoaded {
+			return
+		}
+	}
+	if prefix == "" {
 		return
 	}
 	// A live in-process child is already feeding chunks through OutputChunkMsg.
@@ -1360,47 +1395,74 @@ func (m *Model) loadSelectedAgentCallOutput() {
 	if m.entered == FromLiveRun && node.Status == StatusInProgress {
 		return
 	}
-	base := liverun.SanitizeOutputPrefix(node.CallOutputPrefix)
+	base := liverun.SanitizeOutputPrefix(prefix)
 	if base == "" || base == "." || base == ".." || strings.Contains(base, "..") {
-		m.loadErr = fmt.Sprintf("load call output: invalid output prefix %q", node.CallOutputPrefix)
+		m.loadErr = fmt.Sprintf("%s: invalid output prefix %q", outputLoadLabel(node), prefix)
 		return
 	}
 	root, err := os.OpenRoot(filepath.Join(m.sessionDir, "output"))
 	if errors.Is(err, os.ErrNotExist) {
-		node.CallOutputLoaded = true
-		m.clearCallOutputLoadError()
+		node.OutputLoaded = true
+		if node.Type == NodeAgentCall {
+			node.CallOutputLoaded = true
+		}
+		m.clearOutputLoadError(node)
 		return
 	}
 	if err != nil {
-		m.loadErr = "load call output: " + err.Error()
+		m.loadErr = outputLoadLabel(node) + ": " + err.Error()
 		return
 	}
 
 	stdout, stdoutFound, err := readBoundedCallOutput(root, base+".out")
 	if err != nil {
 		err = errors.Join(err, root.Close())
-		m.loadErr = "load call output: " + err.Error()
+		m.loadErr = outputLoadLabel(node) + ": " + err.Error()
 		return
 	}
 	stderr, stderrFound, err := readBoundedCallOutput(root, base+".err")
 	if err != nil {
 		err = errors.Join(err, root.Close())
-		m.loadErr = "load call output: " + err.Error()
+		m.loadErr = outputLoadLabel(node) + ": " + err.Error()
 		return
 	}
 	if err := root.Close(); err != nil {
-		m.loadErr = "load call output: " + err.Error()
+		m.loadErr = outputLoadLabel(node) + ": " + err.Error()
 		return
 	}
-	stdout, stderr = filterAgentCallOutput(node, stdout, stderr)
+	if node.Type == NodeHeadlessAgent || node.Type == NodeAgentCall {
+		stdout, stderr = filterAgentCallOutput(node, stdout, stderr)
+	}
 	if stdoutFound {
 		node.Stdout = stdout
 	}
 	if stderrFound {
 		node.Stderr = stderr
 	}
-	node.CallOutputLoaded = true
-	m.clearCallOutputLoadError()
+	node.OutputLoaded = true
+	if node.Type == NodeAgentCall {
+		node.CallOutputLoaded = true
+	}
+	m.clearOutputLoadError(node)
+}
+
+func historicalOutputNode(node *StepNode) bool {
+	if node == nil || isInteractiveExecution(node) {
+		return false
+	}
+	switch node.Type {
+	case NodeShell, NodeScript, NodeHeadlessAgent, NodeAgentCall:
+		return true
+	default:
+		return false
+	}
+}
+
+func outputLoadLabel(node *StepNode) string {
+	if node != nil && node.Type == NodeAgentCall {
+		return "load call output"
+	}
+	return "load output"
 }
 
 func filterAgentCallOutput(node *StepNode, rawStdout, rawStderr string) (stdout, stderr string) {
@@ -1455,8 +1517,8 @@ func readBoundedCallOutput(root *os.Root, name string) (output string, found boo
 	return tailOutputCap(output), true, nil
 }
 
-func (m *Model) clearCallOutputLoadError() {
-	if strings.HasPrefix(m.loadErr, "load call output: ") {
+func (m *Model) clearOutputLoadError(node *StepNode) {
+	if strings.HasPrefix(m.loadErr, outputLoadLabel(node)+": ") {
 		m.loadErr = ""
 	}
 }
@@ -1700,6 +1762,7 @@ func invalidateInProgressAgentCallOutput(node *StepNode) {
 	}
 	if node.Type == NodeAgentCall && node.Status == StatusInProgress {
 		node.CallOutputLoaded = false
+		node.OutputLoaded = false
 	}
 	for _, child := range node.Children {
 		invalidateInProgressAgentCallOutput(child)

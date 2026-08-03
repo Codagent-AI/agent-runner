@@ -197,6 +197,39 @@ func TestAgentCallLoadsPersistedOutputAndIgnoresAuditResponse(t *testing.T) {
 	}
 }
 
+func TestSelectedDetailLoadsPreviousAgentCallEvidence(t *testing.T) {
+	sessionDir := t.TempDir()
+	tree := agentCallTestTree()
+	after := &StepNode{ID: "after-call", Type: NodeShell, Status: StatusPending, Parent: tree.Root, StaticCommand: "echo after"}
+	tree.Root.Children = append(tree.Root.Children, after)
+	tree.ApplyEvent(agentCallStartEvent("call-1", "attempt-1", "agent", "implementor"))
+	tree.ApplyEvent(agentCallEndEvent("call-1", "attempt-1", "agent", "implementor", "success", true, 1000, nil, nil))
+	tree.ApplyEvent(RawEvent{Prefix: "[after-call]", Type: "step_start"})
+
+	outputDir := filepath.Join(sessionDir, "output")
+	if err := os.MkdirAll(outputDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	prefix := sanitizeOutputPrefixForTest("[parent, call:call-1]")
+	raw := `{"type":"result","subtype":"success","result":"persisted prior response one\npersisted prior response two\npersisted prior response three"}` + "\n"
+	if err := os.WriteFile(filepath.Join(outputDir, prefix+".out"), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newTestModel(tree, FromInspect)
+	m.sessionDir = sessionDir
+	m.setSelected(after)
+	plain := tuistyle.Sanitize(m.selectedStepDetailText())
+	for _, want := range []string{"Previous: call agent: implementor", "persisted prior response two", "persisted prior response three"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("previous-call detail missing %q:\n%s", want, plain)
+		}
+	}
+	if strings.Contains(plain, "audit response") {
+		t.Fatalf("previous call used audit output:\n%s", plain)
+	}
+}
+
 func TestFailedAgentCallLoadsOrdinaryFilteredOutputAndDiagnostics(t *testing.T) {
 	sessionDir := t.TempDir()
 	tree := agentCallTestTree()

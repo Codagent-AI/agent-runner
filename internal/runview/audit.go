@@ -443,6 +443,11 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 		if n == nil {
 			return
 		}
+		t.assignStartOrdinal(n)
+		n.OutputPrefix = e.Prefix
+		n.OutputLoaded = false
+		n.Stdout = ""
+		n.Stderr = ""
 		// Always transition to in-progress — on resume, a step restarted after
 		// a prior failed/aborted/skipped/success outcome must lose its stale
 		// terminal status so the TUI renders the "running" indicator.
@@ -457,11 +462,17 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 			return
 		}
 		applyStepEnd(n, e.Data)
+		// Skipped steps are represented by an end event only. That decision is
+		// still an ordered terminal execution for selected-detail context.
+		if n.Status == StatusSkipped {
+			t.assignStartOrdinal(n)
+		}
 	case "iteration_start":
 		n := t.resolve(tokens, true)
 		if n == nil {
 			return
 		}
+		t.assignStartOrdinal(n)
 		n.Status = StatusInProgress
 		n.Outcome = ""
 		n.Aborted = false
@@ -477,6 +488,7 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 		if n == nil {
 			return
 		}
+		t.assignStartOrdinal(n)
 		applySubWorkflowStart(n, e.Data)
 	case "sub_workflow_end":
 		n := t.resolve(tokens, true)
@@ -485,6 +497,14 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 		}
 		applySubWorkflowEnd(n, e.Data)
 	}
+}
+
+func (t *Tree) assignStartOrdinal(node *StepNode) {
+	if t == nil || node == nil {
+		return
+	}
+	t.nextStartOrdinal++
+	node.StartOrdinal = t.nextStartOrdinal
 }
 
 func (t *Tree) applyError(tokens []prefixToken, data map[string]any) {
@@ -577,11 +597,17 @@ func (t *Tree) applyAgentCallStart(event RawEvent, tokens []prefixToken) {
 		return
 	}
 	call := ensureAgentCallChild(parent, callID)
+	t.assignStartOrdinal(call)
+	call.OutputLoaded = false
+	call.CallOutputLoaded = false
+	call.Stdout = ""
+	call.Stderr = ""
 	call.Status = StatusInProgress
 	call.Outcome = ""
 	call.Aborted = false
 	call.StartedAt = parseEventTime(event.Timestamp)
 	call.CallOutputPrefix = event.Prefix
+	call.OutputPrefix = event.Prefix
 	applyAgentCallFields(call, event.Data)
 }
 
@@ -592,6 +618,7 @@ func (t *Tree) applyAgentCallEnd(event RawEvent, tokens []prefixToken) {
 	}
 	call := ensureAgentCallChild(parent, callID)
 	call.CallOutputPrefix = event.Prefix
+	call.OutputPrefix = event.Prefix
 	applyAgentCallFields(call, event.Data)
 	outcome, _ := stringField(event.Data, "outcome")
 	applyOutcome(call, outcome)
@@ -964,6 +991,9 @@ func applyStepEnd(n *StepNode, data map[string]any) {
 	}
 	if s, ok := stringField(data, "stderr"); ok {
 		n.Stderr = s
+	}
+	if s, ok := stringField(data, "skip_if"); ok {
+		n.TriggeredSkipIf = s
 	}
 	if s, ok := stringField(data, "error"); ok {
 		n.ErrorMessage = s

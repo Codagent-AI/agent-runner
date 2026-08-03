@@ -1,6 +1,8 @@
 package runview
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -61,6 +63,106 @@ func TestDetailDocumentCopyUsesFullInputAndOptionalPreviousSection(t *testing.T)
 		if !strings.Contains(copied, want) {
 			t.Errorf("copy missing %q:\n%s", want, copied)
 		}
+	}
+}
+
+func TestDetailDocumentBuildsPreviousExecutionRailFromBoundedResponse(t *testing.T) {
+	duration := int64(1200)
+	previous := &StepNode{
+		ID:           "plan",
+		Type:         NodeHeadlessAgent,
+		Status:       StatusSuccess,
+		StartOrdinal: 1,
+		DurationMs:   &duration,
+		Stdout:       "first response row\nsecond response row\nthird response row\n\n",
+	}
+	selected := &StepNode{ID: "build", Type: NodeShell, Status: StatusSuccess, StartOrdinal: 2, StaticCommand: "make build"}
+
+	doc := buildDetailDocument(selected, detailBuildOptions{width: 80, previous: previous})
+	plain := tuistyle.Sanitize(strings.Join(doc.renderScreen(), "\n"))
+	copy := doc.renderCopy()
+	for _, text := range []string{
+		"Previous: plan", "agent · success · duration: 1.2s", "…", "second response row", "third response row",
+		"Current command", "make build",
+	} {
+		if !strings.Contains(plain, text) {
+			t.Errorf("screen detail missing %q:\n%s", text, plain)
+		}
+		if !strings.Contains(copy, text) {
+			t.Errorf("copy detail missing %q:\n%s", text, copy)
+		}
+	}
+	if strings.Contains(plain, "first response row") {
+		t.Fatalf("previous rail exceeded its two-row tail:\n%s", plain)
+	}
+}
+
+func TestSelectedDetailLoadsPersistedHistoricalShellOutput(t *testing.T) {
+	sessionDir := t.TempDir()
+	wf := model.Workflow{Name: "history", Steps: []model.Step{{ID: "script", Script: "echo historical"}}}
+	tree := BuildTree(&wf, "history.yaml")
+	tree.ApplyEvent(RawEvent{Prefix: "[script]", Type: "step_start"})
+	tree.ApplyEvent(RawEvent{Prefix: "[script]", Type: "step_end", Data: map[string]any{"outcome": "success"}})
+	if err := os.MkdirAll(filepath.Join(sessionDir, "output"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	prefix := sanitizeOutputPrefixForTest("[script]")
+	if err := os.WriteFile(filepath.Join(sessionDir, "output", prefix+".out"), []byte("persisted historical output\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newTestModel(tree, FromInspect)
+	m.sessionDir = sessionDir
+	m.setSelected(childByID(tree.Root, "script"))
+	if detail := m.selectedStepDetailText(); !strings.Contains(detail, "persisted historical output") {
+		t.Fatalf("historical selected detail did not load persisted output:\n%s", detail)
+	}
+}
+
+func TestPreviousExecutionRailUsesTypeSpecificEvidenceAndTwoRowBound(t *testing.T) {
+	duration := int64(25)
+	cases := []struct {
+		name     string
+		node     *StepNode
+		contains []string
+		absent   []string
+	}{
+		{
+			name:     "failed script prefers stderr",
+			node:     &StepNode{ID: "script", Type: NodeScript, Status: StatusFailed, DurationMs: &duration, Stdout: "stdout must not be used", Stderr: "error one\nerror two\nerror three"},
+			contains: []string{"error two", "error three", "…"},
+			absent:   []string{"stdout must not be used", "error one"},
+		},
+		{
+			name:     "interactive agent has no transcript",
+			node:     &StepNode{ID: "terminal", Type: NodeInteractiveAgent, Status: StatusSuccess, DurationMs: &duration, Stdout: "must not be shown"},
+			contains: []string{"interactive agent", "No transcript captured"},
+			absent:   []string{"must not be shown"},
+		},
+		{
+			name:     "skipped explains triggering expression without output",
+			node:     &StepNode{ID: "skip", Type: NodeShell, Status: StatusSkipped, DurationMs: &duration, TriggeredSkipIf: "previous_success", Stdout: "must not be shown"},
+			contains: []string{"skipped", "skip_if: previous_success"},
+			absent:   []string{"must not be shown"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			section, ok := previousExecutionSection(tc.node, 80)
+			if !ok {
+				t.Fatal("previous section was omitted")
+			}
+			for _, want := range tc.contains {
+				if !strings.Contains(section.body, want) {
+					t.Errorf("previous body missing %q: %q", want, section.body)
+				}
+			}
+			for _, unwanted := range tc.absent {
+				if strings.Contains(section.body, unwanted) {
+					t.Errorf("previous body included %q: %q", unwanted, section.body)
+				}
+			}
+		})
 	}
 }
 

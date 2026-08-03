@@ -39,6 +39,7 @@ type detailBuildOptions struct {
 	width         int
 	loadedFull    bool
 	inputExpanded bool
+	previous      *StepNode
 	pulsePhase    float64
 	runActive     bool
 	resumeReady   bool
@@ -52,6 +53,9 @@ func buildDetailDocument(node *StepNode, options detailBuildOptions) detailDocum
 	doc := detailDocument{width: options.width, header: detailHeader(node, options)}
 	if node == nil {
 		return doc
+	}
+	if previous, ok := previousExecutionSection(options.previous, options.width); ok {
+		doc.sections = append(doc.sections, previous)
 	}
 
 	if node.Status == StatusPending {
@@ -82,6 +86,85 @@ func buildDetailDocument(node *StepNode, options detailBuildOptions) detailDocum
 		doc.sections = append(doc.sections, detailSection{label: "Error", kind: detailRailError, body: node.ErrorMessage, copy: node.ErrorMessage})
 	}
 	return doc
+}
+
+func previousExecutionSection(node *StepNode, width int) (detailSection, bool) {
+	if node == nil {
+		return detailSection{}, false
+	}
+	name := node.ID
+	if node.Type == NodeAgentCall && node.callLabel() != "" {
+		name = node.callLabel()
+	}
+	metadata := []string{nodeTypeLabel(node.Type), statusLabel(node.Status)}
+	if outcome := selectedOutcome(node); outcome != "" && outcome != statusLabel(node.Status) {
+		metadata = append(metadata, outcome)
+	}
+	if (node.Type == NodeShell || node.Type == NodeScript) && node.ExitCode != nil {
+		metadata = append(metadata, fmt.Sprintf("exit: %d", *node.ExitCode))
+	}
+	if duration := selectedDuration(node); duration != nil {
+		metadata = append(metadata, "duration: "+formatDuration(*duration))
+	}
+	body := strings.Join(metadata, " · ")
+	switch {
+	case node.Status == StatusSkipped:
+		if skipIf := firstNonEmpty(node.TriggeredSkipIf, node.StaticSkipIf); skipIf != "" {
+			body += "\nskip_if: " + skipIf
+		}
+	case isInteractiveExecution(node):
+		body += "\nNo transcript captured"
+	case node.Type == NodeUI:
+		// The compact metadata above is the recorded UI outcome. Never include
+		// form values in historical context.
+	default:
+		if excerpt := previousOutputExcerpt(node, width-3); excerpt != "" {
+			body += "\n" + excerpt
+		}
+	}
+	return detailSection{label: "Previous: " + name, kind: detailRailPrevious, body: body, copy: body}, true
+}
+
+func isInteractiveExecution(node *StepNode) bool {
+	if node == nil {
+		return false
+	}
+	return node.Type == NodeInteractiveAgent ||
+		((node.Type == NodeShell || node.Type == NodeScript) && node.StaticMode == model.ModeInteractive)
+}
+
+func previousOutputExcerpt(node *StepNode, width int) string {
+	if node == nil {
+		return ""
+	}
+	var output string
+	switch node.Type {
+	case NodeHeadlessAgent, NodeAgentCall:
+		output = firstNonEmpty(node.Stdout, node.Stderr)
+	case NodeShell, NodeScript:
+		if node.Status == StatusFailed {
+			output = firstNonEmpty(node.Stderr, node.Stdout)
+		} else {
+			output = node.Stdout
+		}
+	default:
+		return ""
+	}
+	output = strings.TrimRight(sanitizeUTF8(output), "\r\n")
+	if output == "" {
+		return ""
+	}
+	rows := wrappedPlainLines(output, max(1, width))
+	for len(rows) > 0 && strings.TrimSpace(rows[len(rows)-1]) == "" {
+		rows = rows[:len(rows)-1]
+	}
+	if len(rows) == 0 {
+		return ""
+	}
+	if len(rows) <= 2 {
+		return strings.Join(rows, "\n")
+	}
+	return "…\n" + strings.Join(rows[len(rows)-2:], "\n")
 }
 
 func buildPendingDetail(doc *detailDocument, node *StepNode, options detailBuildOptions) {
