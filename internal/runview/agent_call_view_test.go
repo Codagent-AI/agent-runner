@@ -352,6 +352,37 @@ func TestAgentCallPersistedOutputLoadIsMemoryBounded(t *testing.T) {
 	}
 }
 
+func TestHistoricalOutputFallsBackToLegacyUnderscoreFilename(t *testing.T) {
+	sessionDir := t.TempDir()
+	tree := agentCallTestTree()
+	tree.ApplyEvent(agentCallStartEvent("call-1", "attempt-1", "agent", "implementor"))
+	tree.ApplyEvent(agentCallEndEvent("call-1", "attempt-1", "agent", "implementor", "success", true, 1000, nil, nil))
+	call := tree.Root.Children[0].Children[0]
+	call.AgentCLI = "unfiltered-test"
+	call.CallOutputPrefix = "[parent_with_underscores, call:call-1]"
+
+	currentBase := liverun.SanitizeOutputPrefix(call.CallOutputPrefix)
+	legacyBase := liverun.LegacySanitizeOutputPrefix(call.CallOutputPrefix)
+	if currentBase == legacyBase {
+		t.Fatalf("test requires distinct current and legacy basenames, got %q", currentBase)
+	}
+	legacyPath := filepath.Join(sessionDir, "output", legacyBase+".out")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, []byte("legacy output"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newTestModel(tree, FromInspect)
+	m.sessionDir = sessionDir
+	m.loadHistoricalOutput(call)
+
+	if call.Stdout != "legacy output" || !call.CallOutputLoaded {
+		t.Fatalf("legacy output=%q loaded=%v", call.Stdout, call.CallOutputLoaded)
+	}
+}
+
 func TestAgentCallOutputReadFailureRemainsRetryableAndVisible(t *testing.T) {
 	sessionDir := t.TempDir()
 	tree := agentCallTestTree()

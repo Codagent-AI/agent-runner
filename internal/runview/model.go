@@ -1468,13 +1468,13 @@ func (m *Model) loadHistoricalOutput(node *StepNode) {
 		return
 	}
 
-	stdout, stdoutFound, err := readBoundedOutput(root, base+".out")
-	if err != nil {
-		err = errors.Join(err, root.Close())
-		m.loadErr = outputLoadLabel(node) + ": " + err.Error()
-		return
+	stdout, stdoutFound, stderr, stderrFound, err := readBoundedOutputs(root, base)
+	if err == nil && !stdoutFound && !stderrFound {
+		legacyBase := liverun.LegacySanitizeOutputPrefix(prefix)
+		if legacyBase != base {
+			stdout, stdoutFound, stderr, stderrFound, err = readBoundedOutputs(root, legacyBase)
+		}
 	}
-	stderr, stderrFound, err := readBoundedOutput(root, base+".err")
 	if err != nil {
 		err = errors.Join(err, root.Close())
 		m.loadErr = outputLoadLabel(node) + ": " + err.Error()
@@ -1540,6 +1540,15 @@ func filterAgentOutput(node *StepNode, rawStdout, rawStderr string) (stdout, std
 		stdout = filter.FilterOutput(stdout)
 	}
 	return stdout, stderr
+}
+
+func readBoundedOutputs(root *os.Root, base string) (stdout string, stdoutFound bool, stderr string, stderrFound bool, err error) {
+	stdout, stdoutFound, err = readBoundedOutput(root, base+".out")
+	if err != nil {
+		return "", false, "", false, err
+	}
+	stderr, stderrFound, err = readBoundedOutput(root, base+".err")
+	return stdout, stdoutFound, stderr, stderrFound, err
 }
 
 func readBoundedOutput(root *os.Root, name string) (output string, found bool, err error) {
