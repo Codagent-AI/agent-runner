@@ -438,65 +438,70 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 		t.applyError(tokens, e.Data)
 	case "warning":
 		t.addWarning(e.Data)
-	case "step_start":
-		n := t.resolve(tokens, true)
-		if n == nil {
-			return
-		}
-		t.assignStartOrdinal(n)
-		n.OutputPrefix = e.Prefix
-		n.OutputLoaded = false
-		n.Stdout = ""
-		n.Stderr = ""
-		// Always transition to in-progress — on resume, a step restarted after
-		// a prior failed/aborted/skipped/success outcome must lose its stale
-		// terminal status so the TUI renders the "running" indicator.
-		n.Status = StatusInProgress
-		n.Aborted = false
-		n.Outcome = ""
-		n.StartedAt = parseEventTime(e.Timestamp)
-		applyStepStart(n, e.Data)
-	case "step_end":
-		n := t.resolve(tokens, true)
-		if n == nil {
-			return
-		}
-		applyStepEnd(n, e.Data)
+	case "step_start", "step_end":
+		t.applyStepEvent(e, tokens)
+	case "iteration_start", "iteration_end":
+		t.applyIterationEvent(e, tokens)
+	case "sub_workflow_start", "sub_workflow_end":
+		t.applySubWorkflowEvent(e, tokens)
+	}
+}
+
+func (t *Tree) applyStepEvent(event RawEvent, tokens []prefixToken) {
+	n := t.resolve(tokens, true)
+	if n == nil {
+		return
+	}
+	if event.Type == "step_end" {
+		applyStepEnd(n, event.Data)
 		// Skipped steps are represented by an end event only. That decision is
 		// still an ordered terminal execution for selected-detail context.
 		if n.Status == StatusSkipped {
 			t.assignStartOrdinal(n)
 		}
-	case "iteration_start":
-		n := t.resolve(tokens, true)
-		if n == nil {
-			return
-		}
-		t.assignStartOrdinal(n)
-		n.Status = StatusInProgress
-		n.Outcome = ""
-		n.Aborted = false
-		applyIterationStart(n, e.Data)
-	case "iteration_end":
-		n := t.resolve(tokens, true)
-		if n == nil {
-			return
-		}
-		applyIterationEnd(n, e.Data)
-	case "sub_workflow_start":
-		n := t.resolve(tokens, true)
-		if n == nil {
-			return
-		}
-		t.assignStartOrdinal(n)
-		applySubWorkflowStart(n, e.Data)
-	case "sub_workflow_end":
-		n := t.resolve(tokens, true)
-		if n == nil {
-			return
-		}
-		applySubWorkflowEnd(n, e.Data)
+		return
 	}
+	t.assignStartOrdinal(n)
+	n.OutputPrefix = event.Prefix
+	n.OutputLoaded = false
+	n.Stdout = ""
+	n.Stderr = ""
+	// Always transition to in-progress — on resume, a step restarted after a
+	// terminal outcome must lose its stale status so the TUI renders running.
+	n.Status = StatusInProgress
+	n.Aborted = false
+	n.Outcome = ""
+	n.StartedAt = parseEventTime(event.Timestamp)
+	applyStepStart(n, event.Data)
+}
+
+func (t *Tree) applyIterationEvent(event RawEvent, tokens []prefixToken) {
+	n := t.resolve(tokens, true)
+	if n == nil {
+		return
+	}
+	if event.Type == "iteration_end" {
+		applyIterationEnd(n, event.Data)
+		return
+	}
+	t.assignStartOrdinal(n)
+	n.Status = StatusInProgress
+	n.Outcome = ""
+	n.Aborted = false
+	applyIterationStart(n, event.Data)
+}
+
+func (t *Tree) applySubWorkflowEvent(event RawEvent, tokens []prefixToken) {
+	n := t.resolve(tokens, true)
+	if n == nil {
+		return
+	}
+	if event.Type == "sub_workflow_end" {
+		applySubWorkflowEnd(n, event.Data)
+		return
+	}
+	t.assignStartOrdinal(n)
+	applySubWorkflowStart(n, event.Data)
 }
 
 func (t *Tree) assignStartOrdinal(node *StepNode) {

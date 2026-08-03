@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/tuistyle"
+	"github.com/mattn/go-runewidth"
 )
 
 // detailDocument is the selected-node presentation source. Screen and
@@ -113,6 +114,9 @@ func previousExecutionSection(node *StepNode, width int) (detailSection, bool) {
 			body += "\nskip_if: " + skipIf
 		}
 	case isInteractiveExecution(node):
+		if node.Type == NodeInteractiveAgent {
+			body += previousInteractiveAgentMetadata(node)
+		}
 		body += "\nNo transcript captured"
 	case node.Type == NodeUI:
 		// The compact metadata above is the recorded UI outcome. Never include
@@ -123,6 +127,23 @@ func previousExecutionSection(node *StepNode, width int) (detailSection, bool) {
 		}
 	}
 	return detailSection{label: "Previous: " + name, kind: detailRailPrevious, body: body, copy: body}, true
+}
+
+func previousInteractiveAgentMetadata(node *StepNode) string {
+	var lines []string
+	if profile := firstNonEmpty(node.AgentProfile, node.StaticAgent); profile != "" {
+		lines = append(lines, "profile: "+profile)
+	}
+	if cliName := firstNonEmpty(node.AgentCLI, node.StaticCLI); cliName != "" {
+		lines = append(lines, "cli: "+cliName)
+	}
+	if modelName := firstNonEmpty(node.AgentModel, node.StaticModel); modelName != "" {
+		lines = append(lines, "model: "+modelName)
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "\n" + strings.Join(lines, "\n")
 }
 
 func isInteractiveExecution(node *StepNode) bool {
@@ -164,7 +185,12 @@ func previousOutputExcerpt(node *StepNode, width int) string {
 	if len(rows) <= 2 {
 		return strings.Join(rows, "\n")
 	}
-	return "…\n" + strings.Join(rows[len(rows)-2:], "\n")
+	first := rows[len(rows)-2]
+	maxFirstWidth := max(1, width-1)
+	if runewidth.StringWidth(first) > maxFirstWidth {
+		first = runewidth.Truncate(first, maxFirstWidth, "")
+	}
+	return "…" + first + "\n" + rows[len(rows)-1]
 }
 
 func buildPendingDetail(doc *detailDocument, node *StepNode, options detailBuildOptions) {

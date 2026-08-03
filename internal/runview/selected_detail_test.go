@@ -80,7 +80,7 @@ func TestDetailDocumentBuildsPreviousExecutionRailFromBoundedResponse(t *testing
 
 	doc := buildDetailDocument(selected, detailBuildOptions{width: 80, previous: previous})
 	plain := tuistyle.Sanitize(strings.Join(doc.renderScreen(), "\n"))
-	copy := doc.renderCopy()
+	copied := doc.renderCopy()
 	for _, text := range []string{
 		"Previous: plan", "agent · success · duration: 1.2s", "…", "second response row", "third response row",
 		"Current command", "make build",
@@ -88,8 +88,8 @@ func TestDetailDocumentBuildsPreviousExecutionRailFromBoundedResponse(t *testing
 		if !strings.Contains(plain, text) {
 			t.Errorf("screen detail missing %q:\n%s", text, plain)
 		}
-		if !strings.Contains(copy, text) {
-			t.Errorf("copy detail missing %q:\n%s", text, copy)
+		if !strings.Contains(copied, text) {
+			t.Errorf("copy detail missing %q:\n%s", text, copied)
 		}
 	}
 	if strings.Contains(plain, "first response row") {
@@ -135,8 +135,8 @@ func TestPreviousExecutionRailUsesTypeSpecificEvidenceAndTwoRowBound(t *testing.
 		},
 		{
 			name:     "interactive agent has no transcript",
-			node:     &StepNode{ID: "terminal", Type: NodeInteractiveAgent, Status: StatusSuccess, DurationMs: &duration, Stdout: "must not be shown"},
-			contains: []string{"interactive agent", "No transcript captured"},
+			node:     &StepNode{ID: "terminal", Type: NodeInteractiveAgent, Status: StatusSuccess, DurationMs: &duration, AgentProfile: "planner", AgentCLI: "codex", AgentModel: "gpt-5.6", Stdout: "must not be shown"},
+			contains: []string{"interactive agent", "profile: planner", "cli: codex", "model: gpt-5.6", "No transcript captured"},
 			absent:   []string{"must not be shown"},
 		},
 		{
@@ -163,6 +163,13 @@ func TestPreviousExecutionRailUsesTypeSpecificEvidenceAndTwoRowBound(t *testing.
 				}
 			}
 		})
+	}
+}
+
+func TestPreviousOutputExcerptKeepsOnlyTwoVisualRowsWhenTruncated(t *testing.T) {
+	node := &StepNode{Type: NodeShell, Status: StatusSuccess, Stdout: "first row\nsecond row\nthird row"}
+	if got, want := previousOutputExcerpt(node, 80), "…second row\nthird row"; got != want {
+		t.Fatalf("previous excerpt = %q, want %q", got, want)
 	}
 }
 
