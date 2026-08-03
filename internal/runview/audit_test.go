@@ -313,6 +313,38 @@ func TestAuditReplayAssignsLatestStartOrderAndFindsPreviousTerminalLeaf(t *testi
 	}
 }
 
+func TestPreviousExecutionExcludesAgentContainerWithCalls(t *testing.T) {
+	root := &StepNode{ID: "root", Type: NodeRoot}
+	parent := &StepNode{
+		ID:           "parent",
+		Type:         NodeHeadlessAgent,
+		Status:       StatusSuccess,
+		StartOrdinal: 3,
+		Parent:       root,
+	}
+	call := &StepNode{
+		ID:           "call",
+		CallID:       "call",
+		Type:         NodeAgentCall,
+		Status:       StatusSuccess,
+		StartOrdinal: 2,
+		Parent:       parent,
+	}
+	selected := &StepNode{
+		ID:           "selected",
+		Type:         NodeShell,
+		Status:       StatusSuccess,
+		StartOrdinal: 4,
+		Parent:       root,
+	}
+	parent.Children = []*StepNode{call}
+	root.Children = []*StepNode{parent, selected}
+
+	if previous := (&Tree{Root: root}).PreviousExecution(selected); previous != call {
+		t.Fatalf("previous execution = %v, want call leaf %v", previous, call)
+	}
+}
+
 // TestApplyEvent_StepStartAfterFailure covers resume-after-failure: when a
 // prior run's step_end set the node to StatusFailed, a subsequent step_start
 // for the same node must flip it back to StatusInProgress so the TUI renders

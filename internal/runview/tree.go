@@ -260,7 +260,7 @@ func (t *Tree) PreviousExecution(selected *StepNode) *StepNode {
 }
 
 func isTerminalExecution(node *StepNode) bool {
-	if node == nil || node.StartOrdinal == 0 {
+	if node == nil || node.StartOrdinal == 0 || node.IsContainer() {
 		return false
 	}
 	switch node.Type {

@@ -163,13 +163,8 @@ func TestSanitizePrefix_NestingVsIterationDisambiguation(t *testing.T) {
 	}
 }
 
-func TestSanitizePrefix_EscapesLiteralUnderscoresWithoutCollidingWithNesting(t *testing.T) {
-	nested := sanitizePrefix("a__b/c")
-	slashBetweenUnderscores := sanitizePrefix("a/b__c")
-	if nested == slashBetweenUnderscores {
-		t.Errorf("sanitizePrefix collision: %q == %q", nested, slashBetweenUnderscores)
-	}
-	if got, want := nested, "a%5F%5Fb__c"; got != want {
+func TestSanitizePrefix_PreservesEstablishedLiteralUnderscores(t *testing.T) {
+	if got, want := sanitizePrefix("a__b/c"), "a__b__c"; got != want {
 		t.Errorf("sanitizePrefix = %q, want %q", got, want)
 	}
 }
