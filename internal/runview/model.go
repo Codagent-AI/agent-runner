@@ -647,10 +647,10 @@ func (m *Model) handleUIRequestMsg(msg *liverun.UIRequestMsg) (tea.Model, tea.Cm
 	m.liveUI = uistep.NewModel(&msg.Request)
 	m.liveUIStepID = msg.Request.StepID
 	m.liveUIReply = msg.Reply
-	m.followActive = true
-	m.followTail = true
 	m.refreshData()
-	m.applyAutoFollowToInProgress()
+	if m.followActive {
+		m.applyAutoFollowToInProgress()
+	}
 	m.rebuildDetail()
 	return m.handleShowTUIMsg()
 }
@@ -707,6 +707,9 @@ func (m *Model) handleLiveUIKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "l":
 		m.followLiveUI()
 		return m, nil
+	}
+	if !m.liveUI.HandlesKey(msg.String()) {
+		return m.handleKey(msg)
 	}
 
 	next, _ := m.liveUI.Update(msg)
@@ -1376,8 +1379,25 @@ func (m *Model) rightPaneLineCount(fallback int) int {
 	if !m.liveUIVisible() {
 		return fallback
 	}
-	m.liveUI.SetWidth(m.rightPaneWidth())
-	return len(strings.Split(m.liveUI.View(), "\n"))
+	return len(m.liveUIDetailLines(m.rightPaneWidth()))
+}
+
+func (m *Model) liveUIDetailLines(width int) []string {
+	if m.liveUI == nil {
+		return nil
+	}
+	// The rail consumes three columns, so give the embedded form only the
+	// remaining selected-detail width before the document wraps it.
+	m.liveUI.SetWidth(max(1, width-3))
+	doc := m.selectedDetailDocument(width)
+	for i := range doc.sections {
+		if doc.sections[i].label == "Current form" {
+			doc.sections[i].body = m.liveUI.View()
+			doc.sections[i].copy = ""
+			break
+		}
+	}
+	return doc.renderScreen()
 }
 
 // rightPaneWidth estimates the right-pane width for selected-detail line

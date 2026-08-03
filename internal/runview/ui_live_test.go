@@ -17,6 +17,8 @@ func TestLiveUIRequestRendersInsideRunViewChromeAndReturnsAction(t *testing.T) {
 	root.Children = []*StepNode{ui}
 	m := newTestModel(&Tree{Root: root}, FromLiveRun)
 	m.altScreen = true
+	m.followActive = true
+	m.followTail = true
 
 	reply := make(chan model.UIStepResult, 1)
 	updated, _ := m.Update(&liverun.UIRequestMsg{
@@ -35,7 +37,7 @@ func TestLiveUIRequestRendersInsideRunViewChromeAndReturnsAction(t *testing.T) {
 	m = updated.(*Model)
 
 	view := tuistyle.Sanitize(m.View())
-	for _, want := range []string{"Agent Runner", "onboarding-welcome", "welcome", "Welcome to Agent Runner"} {
+	for _, want := range []string{"Agent Runner", "onboarding-welcome", "welcome", "Current form", "Welcome to Agent Runner"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("run view missing %q while rendering live UI:\n%s", want, view)
 		}
@@ -89,7 +91,8 @@ func TestLiveUIRequestAutoFollowsInProgressTopLevelStep(t *testing.T) {
 
 	m := newTestModel(&Tree{Root: root}, FromLiveRun)
 	m.running = true
-	m.followActive = false
+	m.followActive = true
+	m.followTail = true
 	m.cursor = 0
 
 	reply := make(chan model.UIStepResult, 1)
@@ -104,10 +107,45 @@ func TestLiveUIRequestAutoFollowsInProgressTopLevelStep(t *testing.T) {
 	m = updated.(*Model)
 
 	if !m.followActive || !m.followTail {
-		t.Fatal("live UI request should re-enable auto-follow")
+		t.Fatal("live UI request should preserve engaged auto-follow")
 	}
 	if got := m.selectedNode(); got != pickScope {
 		t.Fatalf("selected node = %v, want active UI leaf", got)
+	}
+}
+
+func TestLiveUIRequestPreservesPausedSelectionUntilJumpToLive(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusInProgress}
+	setup := &StepNode{ID: "setup", Type: NodeSubWorkflow, Status: StatusInProgress, Parent: root, SubLoaded: true}
+	intro := &StepNode{ID: "intro", Type: NodeShell, Status: StatusInProgress, Parent: setup}
+	pick := &StepNode{ID: "pick-scope", Type: NodeUI, Status: StatusInProgress, Parent: setup}
+	setup.Children = []*StepNode{intro, pick}
+	root.Children = []*StepNode{setup}
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.running = true
+	m.path = []*StepNode{root, setup}
+	m.setSelected(intro)
+	m.followActive = false
+	m.followTail = false
+
+	updated, _ := m.Update(&liverun.UIRequestMsg{
+		Request: model.UIStepRequest{
+			StepID:  "pick-scope",
+			Title:   "Pick Scope",
+			Actions: []model.UIAction{{Label: "Continue", Outcome: "continue"}},
+		},
+		Reply: make(chan model.UIStepResult, 1),
+	})
+	m = updated.(*Model)
+
+	if got := m.selectedNode(); got != intro {
+		t.Fatalf("pending UI stole paused selection: got %v, want %v", got, intro)
+	}
+	if m.followActive || m.followTail {
+		t.Fatalf("pending UI re-engaged paused follow: active=%v tail=%v", m.followActive, m.followTail)
+	}
+	if len(m.path) != 2 || m.path[1] != setup {
+		t.Fatalf("pending UI changed manual scope: %#v", m.path)
 	}
 }
 
@@ -148,7 +186,7 @@ func TestLiveUIFollowSurvivesRefreshWithStaleActiveStepPrefix(t *testing.T) {
 	}
 }
 
-func TestLiveUIRequestLeavesCompletedDrillInForSiblingSubWorkflow(t *testing.T) {
+func TestLiveUIRequestPreservesManualDrillForSiblingSubWorkflow(t *testing.T) {
 	root := &StepNode{ID: "onboarding", Type: NodeRoot, Status: StatusInProgress}
 	guided := &StepNode{ID: "guided-workflow", Type: NodeSubWorkflow, Status: StatusSuccess, Parent: root, SubLoaded: true}
 	final := &StepNode{ID: "summary", Type: NodeUI, Status: StatusSuccess, Parent: guided}
@@ -175,8 +213,8 @@ func TestLiveUIRequestLeavesCompletedDrillInForSiblingSubWorkflow(t *testing.T) 
 	})
 	m = updated.(*Model)
 
-	if !m.followActive || !m.followTail {
-		t.Fatal("live UI request should re-enable auto-follow")
+	if m.followActive {
+		t.Fatal("pending UI should not re-enable paused active follow")
 	}
 	if len(m.path) != 2 || m.path[1] != guided {
 		t.Fatalf("auto-follow should preserve manual scope, got %d segments", len(m.path))
@@ -195,6 +233,8 @@ func TestLiveUIRequestUsesRunViewSpecificInputHelp(t *testing.T) {
 	root.Children = []*StepNode{pick}
 	m := newTestModel(&Tree{Root: root}, FromLiveRun)
 	m.altScreen = true
+	m.followActive = true
+	m.followTail = true
 
 	updated, _ := m.Update(&liverun.UIRequestMsg{
 		Request: model.UIStepRequest{
@@ -221,6 +261,33 @@ func TestLiveUIRequestUsesRunViewSpecificInputHelp(t *testing.T) {
 	}
 	if strings.Contains(view, "↑↓ option") || strings.Contains(view, "pgup") || strings.Contains(view, "pgdn") {
 		t.Fatalf("live UI help should not claim arrows move options or page keys scroll in run view:\n%s", view)
+	}
+}
+
+func TestLiveUIRequestLeavesInapplicableKeysWithRunViewChrome(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusInProgress}
+	pick := &StepNode{ID: "pick-scope", Type: NodeUI, Status: StatusInProgress, Parent: root}
+	root.Children = []*StepNode{pick}
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.altScreen = true
+
+	updated, _ := m.Update(&liverun.UIRequestMsg{
+		Request: model.UIStepRequest{
+			StepID:  "pick-scope",
+			Title:   "Pick Scope",
+			Actions: []model.UIAction{{Label: "Continue", Outcome: "continue"}},
+		},
+		Reply: make(chan model.UIStepResult, 1),
+	})
+	m = updated.(*Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})
+	m = updated.(*Model)
+	if !m.showLegend {
+		t.Fatal("inapplicable form key should remain available to run-view chrome")
+	}
+	if m.liveUI == nil {
+		t.Fatal("inapplicable form key should not resolve the pending UI step")
 	}
 }
 
@@ -522,6 +589,8 @@ func TestNestedLiveUIRequestUsesRunViewNavigationOutsideActiveAncestor(t *testin
 	root.Children = []*StepNode{setup, done}
 	m := newTestModel(&Tree{Root: root}, FromLiveRun)
 	m.altScreen = true
+	m.followActive = true
+	m.followTail = true
 
 	reply := make(chan model.UIStepResult, 1)
 	updated, _ := m.Update(&liverun.UIRequestMsg{
@@ -649,6 +718,8 @@ func TestLiveUIRequestLFollowReturnsToActiveUIAcrossDrillDepth(t *testing.T) {
 	root.Children = []*StepNode{setup, other}
 	m := newTestModel(&Tree{Root: root}, FromLiveRun)
 	m.altScreen = true
+	m.followActive = true
+	m.followTail = true
 
 	updated, _ := m.Update(&liverun.UIRequestMsg{
 		Request: model.UIStepRequest{

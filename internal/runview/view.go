@@ -150,8 +150,7 @@ func (m *Model) renderTwoColumn() string {
 	// Build log lines for the right pane.
 	var logLines []string
 	if m.liveUIVisible() {
-		m.liveUI.SetWidth(rightWidth)
-		logLines = strings.Split(m.liveUI.View(), "\n")
+		logLines = m.liveUIDetailLines(rightWidth)
 	} else {
 		logLines = m.selectedDetailDocument(rightWidth).renderScreen()
 	}
