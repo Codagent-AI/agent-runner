@@ -844,15 +844,15 @@ func TestStepRowParts_LoopShowsGlyphAndCounter(t *testing.T) {
 	}
 }
 
-func TestStepRowParts_TruncatesLongSidebarName(t *testing.T) {
+func TestStepRowParts_KeepsLongSidebarNameForPaneMeasurement(t *testing.T) {
 	m := newTestModel(&Tree{Root: &StepNode{ID: "wf", Type: NodeRoot}}, FromList)
 	_, label, _ := m.stepRowParts(&StepNode{
 		ID:     "abcdefghijklmnopqrstuvw",
 		Type:   NodeShell,
 		Status: StatusPending,
 	})
-	if label != "abcdefghijklmnopq…" {
-		t.Fatalf("truncated label = %q, want %q", label, "abcdefghijklmnopq…")
+	if label != "abcdefghijklmnopqrstuvw" {
+		t.Fatalf("label = %q, want complete name before pane measurement", label)
 	}
 }
 

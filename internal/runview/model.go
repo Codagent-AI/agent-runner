@@ -79,9 +79,13 @@ type Model struct {
 	originCwd  string
 	entered    Entered
 
-	path      []*StepNode
-	cursor    int
-	logOffset int
+	path         []*StepNode
+	cursor       int // cached projected-row index; selected is authoritative
+	selected     *StepNode
+	selectedKey  string
+	treeOffset   int
+	sidebarWidth int // widest settled width for this run-view entry
+	logOffset    int
 	// logLineCount is the total number of log lines from the last rebuildRanges call.
 	// It is used to compute maxLogOffset for clamping and scroll normalization.
 	logLineCount int
@@ -205,6 +209,7 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 		autoFollow: entered == FromLiveRun,
 		altScreen:  entered != FromLiveRun,
 	}
+	m.setSelected(firstRealChild(m.currentContainer()))
 	if entered == FromList || entered == FromInspect {
 		m.recordedVersion = recordedWorkflowVersion(state.WorkflowFile)
 	}
@@ -646,20 +651,9 @@ func (m *Model) handleShowTUIMsg() (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleSuspendedMsg() {
-	// Re-enter follow mode whenever a step transitions into interactive: the
-	// user can't see the run view during the PTY hand-off, so by the time the
-	// TUI restores they should be tracking the live step instead of pinned to
-	// wherever they previously drilled in.
+	// Re-enter following without changing the user's manual scope. A terminal
+	// hand-off is not an implicit drill-out.
 	m.autoFollow = true
-	if len(m.path) > 1 && m.activeStepPrefix != "" {
-		if active := m.tree.FindByPrefix(m.activeStepPrefix); active != nil {
-			if m.ancestorAtCurrentLevel(active) == nil {
-				m.path = m.path[:1]
-				m.cursor = 0
-				m.logOffset = 0
-			}
-		}
-	}
 	m.applyAutoFollowCursor()
 	m.rebuildRanges()
 	if !m.altScreen {
@@ -671,9 +665,6 @@ func (m *Model) handleLiveUIKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "up", "down":
 		return m.handleKey(msg)
-	case "d":
-		m.autoFollow = false
-		return m.handleEnter()
 	case "k":
 		m.scrollLiveUI(-1)
 		return m, nil
@@ -740,7 +731,7 @@ func (m *Model) liveUIVisible() bool {
 	if active == nil {
 		return true
 	}
-	return m.selectedNode() == m.ancestorAtCurrentLevel(active)
+	return m.selectedNode() == active
 }
 
 func (m *Model) liveUINode() *StepNode {
@@ -756,12 +747,17 @@ func (m *Model) followLiveUI() {
 		return
 	}
 	m.autoFollow = true
+	m.path = []*StepNode{m.tree.Root}
+	m.treeOffset = 0
 	m.navigateToNode(active)
 }
 
 func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) {
 	m.termWidth = msg.Width
 	m.termHeight = msg.Height
+	// A resize establishes a new layout measurement rather than preserving an
+	// old width that was settled for a different terminal.
+	m.sidebarWidth = 0
 	lineCount := m.rebuildRanges()
 	// Re-resolve anchor so the same block stays in view after resize.
 	if m.logAnchor.stepKey != "" {
@@ -812,6 +808,8 @@ func (m *Model) handleExecDoneMsg(msg liverun.ExecDoneMsg) {
 	case "failed":
 		m.showSummary = false
 		if failed := findFailedLeaf(m.tree.Root); failed != nil {
+			m.path = []*StepNode{m.tree.Root}
+			m.treeOffset = 0
 			m.navigateToNode(failed)
 		}
 	case "success":
@@ -1084,6 +1082,8 @@ func (m *Model) handleFollowKey() {
 		return
 	}
 	m.autoFollow = true
+	m.path = []*StepNode{m.tree.Root}
+	m.treeOffset = 0
 	m.applyAutoFollowCursor()
 	lineCount := m.rebuildRanges()
 	if m.shouldSyncAutoFollowDetail() {
@@ -1147,9 +1147,8 @@ func (m *Model) selectedStepDetailText() string {
 	if selected == nil {
 		return ""
 	}
-	lines, ranges := buildLogLines(
-		m.currentChildren(),
-		m.pendingSelected(),
+	lines, ranges := buildSelectedDetailLines(
+		m.selectedNode(),
 		m.rightPaneWidth(),
 		m.loadedFull,
 		m.pulsePhase,
@@ -1227,51 +1226,11 @@ func (m *Model) applyAutoFollowToNode(active *StepNode) {
 	if active == nil {
 		return
 	}
-	if active.Type == NodeAgentCall {
-		m.navigateToNode(active)
-		return
-	}
-	target := m.ancestorAtCurrentLevel(active)
-	if target == nil && len(m.path) > 1 {
-		m.path = m.path[:1]
-		m.cursor = 0
-		m.logOffset = 0
-		target = m.ancestorAtCurrentLevel(active)
-	}
-	if target == nil {
-		return
-	}
-	if idx := m.indexOfChild(target); idx >= 0 {
-		m.cursor = idx
-	}
-}
-
-// ancestorAtCurrentLevel walks node.Parent until it finds a node whose parent
-// is m.currentContainer(), returning that node. Returns nil if not found.
-func (m *Model) ancestorAtCurrentLevel(node *StepNode) *StepNode {
-	if node == nil {
-		return nil
-	}
-	cc := m.currentContainer()
-	for n := node; n != nil; n = n.Parent {
-		if n.Parent == cc {
-			return n
-		}
-	}
-	return nil
-}
-
-// indexOfChild returns the index of node in m.currentChildren(), or -1.
-func (m *Model) indexOfChild(node *StepNode) int {
-	if node == nil {
-		return -1
-	}
-	for i, c := range m.currentChildren() {
-		if c == node {
-			return i
-		}
-	}
-	return -1
+	// Following changes selection only. It deliberately leaves the manual
+	// breadcrumb scope untouched; the projector exposes the active ancestry
+	// whenever it lies under that scope.
+	m.setSelected(active)
+	m.ensureTreeSelectionVisible(m.cursor)
 }
 
 func deepestInProgressNode(n *StepNode) *StepNode {
@@ -1312,21 +1271,11 @@ func findDeepestInProgressUI(n *StepNode, stepID string) *StepNode {
 	return nil
 }
 
-// pendingSelected returns the selected node if it is pending, else nil.
-func (m *Model) pendingSelected() *StepNode {
-	n := m.selectedNode()
-	if n != nil && n.Status == StatusPending {
-		return n
-	}
-	return nil
-}
-
 // rebuildRanges recomputes m.stepRanges from the current tree state and
 // selection. Called after any mutation that changes log content or width.
 func (m *Model) rebuildRanges() int {
-	lines, ranges := buildLogLines(
-		m.currentChildren(),
-		m.pendingSelected(),
+	lines, ranges := buildSelectedDetailLines(
+		m.selectedNode(),
 		m.rightPaneWidth(),
 		m.loadedFull,
 		m.pulsePhase,
@@ -1356,17 +1305,16 @@ func (m *Model) rightPaneLineCount(fallback int) int {
 // Uses the same formula as renderTwoColumn but with a conservative list-
 // column estimate so ranges are close enough for scroll sync.
 func (m *Model) rightPaneWidth() int {
-	_, rightWidth, _ := twoColumnPaneWidths(m.termWidth, m.buildStepRows(m.currentChildren()))
+	_, rightWidth, _ := twoColumnPaneWidths(m.termWidth, rowTexts(m.buildProjectedRenderedRows()))
 	return rightWidth
 }
 
 // syncLogToSelection sets logOffset so the selected step's block is in view.
 func (m *Model) syncLogToSelection() {
-	children := m.currentChildren()
-	if m.cursor < 0 || m.cursor >= len(children) {
+	sel := m.selectedNode()
+	if sel == nil {
 		return
 	}
-	sel := children[m.cursor]
 	for _, r := range m.stepRanges {
 		if r.node == sel {
 			m.logOffset = r.startLine
@@ -1423,10 +1371,7 @@ func (m *Model) syncSelectionToLog() {
 		}
 	}
 	if winner != nil {
-		target := m.ancestorAtCurrentLevel(winner)
-		if idx := m.indexOfChild(target); idx >= 0 {
-			m.cursor = idx
-		}
+		m.setSelected(winner)
 		m.logAnchor = stepLineAnchor{
 			stepKey:           winner.NodeKey(),
 			lineOffsetInBlock: m.logOffset - winnerStart,
@@ -1600,17 +1545,44 @@ func tailOutputCap(s string) string {
 }
 
 func (m *Model) moveCursor(delta int) {
-	children := m.currentChildren()
-	n := len(children)
-	if n == 0 {
+	rows := m.projectedRows()
+	if len(rows) == 0 {
 		return
 	}
-	m.cursor += delta
-	if m.cursor < 0 {
-		m.cursor = 0
+	index := -1
+	for i, row := range rows {
+		if row.selectable() && row.node == m.selectedNode() {
+			index = i
+			break
+		}
 	}
-	if m.cursor >= n {
-		m.cursor = n - 1
+	if index < 0 {
+		for _, row := range rows {
+			if row.selectable() {
+				m.setSelected(row.node)
+				return
+			}
+		}
+		return
+	}
+	for index += delta; index >= 0 && index < len(rows); index += delta {
+		if rows[index].selectable() {
+			m.setSelected(rows[index].node)
+			m.ensureTreeSelectionVisible(index)
+			return
+		}
+	}
+}
+
+func (m *Model) ensureTreeSelectionVisible(row int) {
+	height := m.bodyHeight()
+	if row < m.treeOffset {
+		m.treeOffset = row
+	} else if row >= m.treeOffset+height {
+		m.treeOffset = row - height + 1
+	}
+	if m.treeOffset < 0 {
+		m.treeOffset = 0
 	}
 }
 
@@ -1618,13 +1590,8 @@ func (m *Model) handleEsc() (tea.Model, tea.Cmd) {
 	if len(m.path) > 1 {
 		leaving := m.path[len(m.path)-1]
 		m.path = m.path[:len(m.path)-1]
-		parent := m.currentContainer()
-		for i, c := range parent.Children {
-			if c == leaving {
-				m.cursor = i
-				break
-			}
-		}
+		m.setSelected(leaving)
+		m.treeOffset = 0
 		m.logOffset = 0
 		m.rebuildRanges()
 		return m, nil
@@ -1653,7 +1620,8 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 	case NodeHeadlessAgent, NodeInteractiveAgent:
 		if n.IsContainer() {
 			m.path = append(m.path, n)
-			m.cursor = 0
+			m.setSelected(firstRealChild(n.Drilldown()))
+			m.treeOffset = 0
 			m.logOffset = 0
 			m.rebuildRanges()
 			return m, nil
@@ -1667,7 +1635,8 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 
 	case NodeLoop, NodeGroup:
 		m.path = append(m.path, n)
-		m.cursor = 0
+		m.setSelected(firstRealChild(n.Drilldown()))
+		m.treeOffset = 0
 		m.logOffset = 0
 		m.rebuildRanges()
 		return m, nil
@@ -1677,7 +1646,8 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 			n.ErrorMessage = err.Error()
 		}
 		m.path = append(m.path, n)
-		m.cursor = 0
+		m.setSelected(firstRealChild(n.Drilldown()))
+		m.treeOffset = 0
 		m.logOffset = 0
 		m.rebuildRanges()
 		return m, nil
@@ -1690,7 +1660,8 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 			}
 		}
 		m.path = append(m.path, n)
-		m.cursor = 0
+		m.setSelected(firstRealChild(n.Drilldown()))
+		m.treeOffset = 0
 		m.logOffset = 0
 		m.rebuildRanges()
 		return m, nil
@@ -1726,55 +1697,8 @@ func (m *Model) navigateToNode(target *StepNode) {
 	if target == nil {
 		return
 	}
-	// Collect ancestors from target.Parent up to (but not including) root.
-	var ancestors []*StepNode
-	for n := target.Parent; n != nil && n != m.tree.Root; n = n.Parent {
-		ancestors = append(ancestors, n)
-	}
-	// Reverse so ancestors are in root-first order.
-	for i, j := 0, len(ancestors)-1; i < j; i, j = i+1, j-1 {
-		ancestors[i], ancestors[j] = ancestors[j], ancestors[i]
-	}
-
-	// Build the path, omitting FlattenTarget nodes (their parent iteration
-	// stays in the path and provides the container via Drilldown()).
-	newPath := []*StepNode{m.tree.Root}
-	for _, anc := range ancestors {
-		if p := anc.Parent; p != nil && p.Type == NodeIteration && p.FlattenTarget == anc {
-			continue
-		}
-		newPath = append(newPath, anc)
-	}
-
-	// Ensure any sub-workflows in the path are loaded.
-	for _, pathNode := range newPath[1:] {
-		if pathNode.Type == NodeSubWorkflow && !pathNode.SubLoaded {
-			if err := m.tree.EnsureSubWorkflowLoaded(pathNode); err != nil && pathNode.ErrorMessage == "" {
-				pathNode.ErrorMessage = err.Error()
-			}
-		}
-	}
-
-	// Resolve target's cursor index in the proposed container before
-	// mutating state — a miss would otherwise leave path out of sync with
-	// cursor. Temporarily swap in newPath to reuse currentChildren().
-	savedPath := m.path
-	m.path = newPath
-	children := m.currentChildren()
-	cursor := -1
-	for i, c := range children {
-		if c == target {
-			cursor = i
-			break
-		}
-	}
-	if cursor < 0 {
-		// Target not in visible children; revert and bail out.
-		m.path = savedPath
-		return
-	}
-
-	m.cursor = cursor
+	m.ensureProjectionContainersLoaded(target)
+	m.setSelected(target)
 	m.logOffset = 0
 }
 

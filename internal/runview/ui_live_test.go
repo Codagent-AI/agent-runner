@@ -106,11 +106,8 @@ func TestLiveUIRequestAutoFollowsInProgressTopLevelStep(t *testing.T) {
 	if !m.autoFollow {
 		t.Fatal("live UI request should re-enable auto-follow")
 	}
-	if m.cursor != 2 {
-		t.Fatalf("cursor = %d, want 2 (setup)", m.cursor)
-	}
-	if got := m.selectedNode(); got != setup {
-		t.Fatalf("selected node = %v, want setup", got)
+	if got := m.selectedNode(); got != pickScope {
+		t.Fatalf("selected node = %v, want active UI leaf", got)
 	}
 }
 
@@ -181,11 +178,11 @@ func TestLiveUIRequestLeavesCompletedDrillInForSiblingSubWorkflow(t *testing.T) 
 	if !m.autoFollow {
 		t.Fatal("live UI request should re-enable auto-follow")
 	}
-	if len(m.path) != 1 || m.path[0] != root {
-		t.Fatalf("path should return to root for sibling sub-workflow, got %d segments", len(m.path))
+	if len(m.path) != 2 || m.path[1] != guided {
+		t.Fatalf("auto-follow should preserve manual scope, got %d segments", len(m.path))
 	}
-	if got := m.selectedNode(); got != validator {
-		t.Fatalf("selected node = %v, want validator sub-workflow", got)
+	if got := m.selectedNode(); got != intro {
+		t.Fatalf("selected node = %v, want active UI leaf", got)
 	}
 	if !m.liveUIVisible() {
 		t.Fatal("live UI should be visible after following sibling sub-workflow")
@@ -537,20 +534,22 @@ func TestNestedLiveUIRequestUsesRunViewNavigationOutsideActiveAncestor(t *testin
 	})
 	m = updated.(*Model)
 
-	if got := m.selectedNode(); got != setup {
-		t.Fatalf("selected node = %v, want setup ancestor for nested UI", got)
+	if got := m.selectedNode(); got != pick {
+		t.Fatalf("selected node = %v, want nested active UI leaf", got)
 	}
 	if view := tuistyle.Sanitize(m.View()); !strings.Contains(view, "Pick Scope") {
 		t.Fatalf("active UI should render while its current-level ancestor is selected:\n%s", view)
 	}
-	if view := tuistyle.Sanitize(m.View()); !strings.Contains(view, "d drill down") {
-		t.Fatalf("active UI ancestor should advertise the live UI drill shortcut:\n%s", view)
+	if view := tuistyle.Sanitize(m.View()); strings.Contains(view, "d drill") {
+		t.Fatalf("live UI help must not advertise d as drill:\n%s", view)
 	}
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m = updated.(*Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(*Model)
 	if got := m.currentContainer(); got != setup {
-		t.Fatalf("d should drill into selected sub-workflow while live UI is active, got %v", got)
+		t.Fatalf("enter should drill into selected sub-workflow while live UI is active, got %v", got)
 	}
 	if m.liveUI == nil {
 		t.Fatal("live UI should remain pending after drilling into its parent")
@@ -567,6 +566,10 @@ func TestNestedLiveUIRequestUsesRunViewNavigationOutsideActiveAncestor(t *testin
 		t.Fatalf("esc should navigate back after selecting away from nested live UI, got %v", got)
 	}
 
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(*Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(*Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(*Model)
 	if got := m.selectedNode(); got != done {
@@ -604,10 +607,12 @@ func TestNestedLiveUIRequestEscDrillsOutWhenVisible(t *testing.T) {
 	})
 	m = updated.(*Model)
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m = updated.(*Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(*Model)
 	if got := m.currentContainer(); got != setup {
-		t.Fatalf("d should drill into setup, got %v", got)
+		t.Fatalf("enter should drill into setup, got %v", got)
 	}
 	view := tuistyle.Sanitize(m.View())
 	if !strings.Contains(view, "esc back") {
@@ -657,6 +662,8 @@ func TestLiveUIRequestLFollowReturnsToActiveUIAcrossDrillDepth(t *testing.T) {
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(*Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(*Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(*Model)
 	if got := m.currentContainer(); got != other {
@@ -669,8 +676,8 @@ func TestLiveUIRequestLFollowReturnsToActiveUIAcrossDrillDepth(t *testing.T) {
 	if got := m.selectedNode(); got != pick {
 		t.Fatalf("l should select active UI step, got %v", got)
 	}
-	if got := m.currentContainer(); got != setup {
-		t.Fatalf("l should drill to active UI parent, got %v", got)
+	if got := m.currentContainer(); got != root {
+		t.Fatalf("l should return to root manual scope, got %v", got)
 	}
 	if !m.autoFollow {
 		t.Fatal("l should re-enable auto-follow")

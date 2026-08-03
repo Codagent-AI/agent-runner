@@ -403,8 +403,8 @@ func TestLiveAgentCallAppearsStreamsSeparatelyAndAutoFollows(t *testing.T) {
 	if len(parent.Children) != 1 || parent.Children[0].Status != StatusInProgress {
 		t.Fatalf("accepted live call was not inserted: %#v", parent.Children)
 	}
-	if len(m.path) != 2 || m.selectedNode() != parent.Children[0] {
-		t.Fatalf("auto-follow did not enter call: path=%d selected=%#v", len(m.path), m.selectedNode())
+	if len(m.path) != 1 || m.selectedNode() != parent.Children[0] {
+		t.Fatalf("auto-follow should keep root scope while selecting call: path=%d selected=%#v", len(m.path), m.selectedNode())
 	}
 	m.Update(liverun.OutputChunkMsg{StepPrefix: "[parent, call:call-1]", Stream: "stdout", Bytes: []byte("child output")})
 	if parent.Children[0].Stdout != "child output" || parent.Stdout != "" {

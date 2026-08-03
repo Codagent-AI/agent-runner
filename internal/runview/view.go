@@ -21,9 +21,17 @@ var (
 )
 
 type renderedStepRow struct {
-	text       string
-	node       *StepNode
-	selectable bool
+	text           string
+	node           *StepNode
+	selectable     bool
+	depth          int
+	suppressStatus bool
+}
+
+type treePaneLayout struct {
+	sidebar int
+	detail  int
+	rows    []string
 }
 
 func (m *Model) View() string {
@@ -61,13 +69,12 @@ func (m *Model) View() string {
 		b.WriteString("\n")
 	}
 
-	children := m.currentChildren()
-	if len(children) == 0 {
+	if len(m.currentChildren()) == 0 {
 		b.WriteString(tuistyle.ScreenMargin)
 		b.WriteString(tuistyle.DimStyle.Render("No steps to display."))
 		b.WriteString("\n")
 	} else {
-		b.WriteString(m.renderTwoColumn(children))
+		b.WriteString(m.renderTwoColumn())
 	}
 
 	for _, warning := range m.tree.Warnings {
@@ -123,12 +130,17 @@ func (m *Model) renderFailedRunDebugHint() string {
 	return tuistyle.ScreenMargin + tuistyle.StatusFailed.Bold(true).Render("press d to debug")
 }
 
-func (m *Model) renderTwoColumn(children []*StepNode) string {
-	renderedRows := m.buildRenderedStepRows(children)
+func (m *Model) renderTwoColumn() string {
+	renderedRows := m.buildProjectedRenderedRows()
 	rows := rowTexts(renderedRows)
-	listWidth, rightWidth, rows := twoColumnPaneWidths(m.termWidth, rows)
-
-	divider := tuistyle.DividerStyle.Render("│ ")
+	layout := measureTreePaneLayout(m.termWidth, rows, m.sidebarWidth)
+	m.sidebarWidth = max(m.sidebarWidth, layout.sidebar)
+	listWidth, rightWidth, rows := layout.sidebar, layout.detail, layout.rows
+	for i, row := range renderedRows {
+		if row.selectable && lipgloss.Width(row.text) > listWidth {
+			rows[i] = m.fitTreeRow(row, listWidth)
+		}
+	}
 
 	bodyHeight := m.bodyHeight()
 	if bodyHeight <= 0 {
@@ -141,9 +153,8 @@ func (m *Model) renderTwoColumn(children []*StepNode) string {
 		m.liveUI.SetWidth(rightWidth)
 		logLines = strings.Split(m.liveUI.View(), "\n")
 	} else {
-		logLines, _ = buildLogLines(
-			children,
-			m.pendingSelected(),
+		logLines, _ = buildSelectedDetailLines(
+			m.selectedNode(),
 			rightWidth,
 			m.loadedFull,
 			m.pulsePhase,
@@ -165,7 +176,8 @@ func (m *Model) renderTwoColumn(children []*StepNode) string {
 	}
 
 	selectedRow := renderedRowIndexForNode(renderedRows, m.selectedNode())
-	leftOffset := leftPaneOffset(selectedRow, len(renderedRows), bodyHeight)
+	m.ensureTreeSelectionVisible(selectedRow)
+	leftOffset := min(m.treeOffset, max(0, len(renderedRows)-bodyHeight))
 	visibleRows := rows
 	if leftOffset > 0 && leftOffset <= len(rows) {
 		visibleRows = rows[leftOffset:]
@@ -189,7 +201,7 @@ func (m *Model) renderTwoColumn(children []*StepNode) string {
 
 		b.WriteString(leftPart)
 		b.WriteString(strings.Repeat(" ", leftPad))
-		b.WriteString(divider)
+		b.WriteString("    ")
 		b.WriteString(rightPart)
 		b.WriteString("\n")
 	}
@@ -218,6 +230,61 @@ func (m *Model) buildRenderedStepRows(children []*StepNode) []renderedStepRow {
 		rows = append(rows, expansion...)
 	}
 	return rows
+}
+
+func (m *Model) buildProjectedRenderedRows() []renderedStepRow {
+	projected := m.projectedRows()
+	rows := make([]renderedStepRow, 0, len(projected))
+	deepestActive := m.activeNode()
+	for _, row := range projected {
+		if row.kind == treeRowOmission {
+			rows = append(rows, renderedStepRow{text: "   " + strings.Repeat("  ", row.depth) + tuistyle.DimStyle.Render(row.omissionLabel())})
+			continue
+		}
+		suppress := row.node.Status == StatusInProgress && deepestActive != nil && row.node != deepestActive && isDescendantOf(deepestActive, row.node)
+		rows = append(rows, renderedStepRow{
+			text: m.renderTreeRow(row.node, row.node == m.selectedNode(), suppress, row.depth),
+			node: row.node, selectable: true, depth: row.depth, suppressStatus: suppress,
+		})
+	}
+	return rows
+}
+
+func (m *Model) renderTreeRow(n *StepNode, selected, suppressStatus bool, depth int) string {
+	_, label, _ := m.stepRowParts(n)
+	return m.renderTreeRowLabel(n, selected, suppressStatus, depth, label)
+}
+
+func (m *Model) renderTreeRowLabel(n *StepNode, selected, suppressStatus bool, depth int, label string) string {
+	prefix := "   "
+	if selected {
+		prefix = tuistyle.CursorStyle.Render("▶") + "  "
+	}
+	typeCol, _, glyph := m.stepRowParts(n)
+	if suppressStatus {
+		glyph = " "
+	}
+	style := defaultTextStyle
+	if selected {
+		style = selectedStepStyle
+	}
+	if n.Status == StatusFailed {
+		style = tuistyle.StatusFailed
+	}
+	return prefix + strings.Repeat("  ", depth) + glyph + "  " + style.Render(label) + "  " + typeCol
+}
+
+// fitTreeRow clips only the name portion of a node row. Cursor, indentation,
+// status, suffix and type glyph are fixed chrome and survive narrow layouts.
+func (m *Model) fitTreeRow(row renderedStepRow, width int) string {
+	if row.node == nil {
+		return runewidth.Truncate(tuistyle.Sanitize(row.text), max(0, width), "…")
+	}
+	base, suffix := stepRowLabel(row.node)
+	fixed := lipgloss.Width(m.renderTreeRowLabel(row.node, row.node == m.selectedNode(), row.suppressStatus, row.depth, suffix))
+	nameWidth := max(1, width-fixed)
+	label := runewidth.Truncate(base, nameWidth, "…") + suffix
+	return m.renderTreeRowLabel(row.node, row.node == m.selectedNode(), row.suppressStatus, row.depth, label)
 }
 
 // expansionHasInProgressChild reports whether any expansion row refers to a
@@ -322,31 +389,18 @@ func leftPaneOffset(selectedRow, totalRows, bodyHeight int) int {
 
 func (m *Model) stepRowParts(n *StepNode) (typeCol, label, glyph string) {
 	glyph = m.statusGlyph(n)
-	label = n.ID
-	suffix := ""
+	label, suffix := stepRowLabel(n)
 	typePrefix := ""
 
 	switch n.Type {
 	case NodeLoop:
 		typePrefix = typeGlyph(n.Type)
-		total := loopTotal(n)
-		if total > 0 {
-			suffix = fmt.Sprintf(" (%d/%d)", n.IterationsCompleted, total)
-		}
 	case NodeIteration:
 		typePrefix = typeGlyph(n.Type)
-		label = fmt.Sprintf("iter %d", n.IterationIndex+1)
 	case NodeAgentCall:
 		typePrefix = typeGlyph(n.Type)
-		label = n.callLabel()
 	default:
 		typePrefix = typeGlyph(n.Type)
-	}
-	if (n.Type == NodeHeadlessAgent || n.Type == NodeInteractiveAgent) && len(n.Children) > 0 {
-		suffix = fmt.Sprintf(" (%d calls)", len(n.Children))
-	}
-	if n.Type != NodeAgentCall {
-		label = truncateSidebarName(label)
 	}
 	label += suffix
 
@@ -356,6 +410,27 @@ func (m *Model) stepRowParts(n *StepNode) (typeCol, label, glyph string) {
 	}
 
 	return typeCol, label, glyph
+}
+
+func stepRowLabel(n *StepNode) (label, suffix string) {
+	if n == nil {
+		return "", ""
+	}
+	label = n.ID
+	switch n.Type {
+	case NodeLoop:
+		if total := loopTotal(n); total > 0 {
+			suffix = fmt.Sprintf(" (%d/%d)", n.IterationsCompleted, total)
+		}
+	case NodeIteration:
+		label = fmt.Sprintf("iter %d", n.IterationIndex+1)
+	case NodeAgentCall:
+		label = n.callLabel()
+	}
+	if (n.Type == NodeHeadlessAgent || n.Type == NodeInteractiveAgent) && len(n.Children) > 0 {
+		suffix = fmt.Sprintf(" (%d calls)", len(n.Children))
+	}
+	return label, suffix
 }
 
 func (m *Model) statusGlyph(n *StepNode) string {
@@ -416,13 +491,6 @@ func typeGlyph(t NodeType) string {
 	return ""
 }
 
-func truncateSidebarName(name string) string {
-	if runewidth.StringWidth(name) <= 20 {
-		return name
-	}
-	return runewidth.Truncate(name, 18, "…")
-}
-
 func (m *Model) renderHelpBar() string {
 	return tuistyle.ScreenMargin + tuistyle.HelpStyle.Render(strings.Join(m.helpBarParts(), "   "))
 }
@@ -436,9 +504,6 @@ func (m *Model) renderHelpBarWithCwd() string {
 func (m *Model) helpBarParts() []string {
 	if m.liveUIVisible() {
 		parts := []string{"↑↓ step", "j/k scroll", "s summary"}
-		if sel := m.selectedNode(); sel != nil && sel.IsContainer() {
-			parts = append(parts, "d drill down")
-		}
 		for _, part := range m.liveUI.HelpParts() {
 			if part == "↑↓ option" {
 				part = "←→ option"
@@ -545,44 +610,42 @@ func (m *Model) selectedNodeHasTruncatedOutput() bool {
 }
 
 func twoColumnPaneWidths(termWidth int, rows []string) (listWidth, rightWidth int, displayRows []string) {
+	layout := measureTreePaneLayout(termWidth, rows, 0)
+	return layout.sidebar, layout.detail, layout.rows
+}
+
+// measureTreePaneLayout measures complete rows before any name/content is
+// clipped. It has no proportional sidebar cap: the normal 20-column detail
+// minimum is the only constraint until the terminal is physically too narrow.
+func measureTreePaneLayout(termWidth int, rows []string, settled int) treePaneLayout {
 	if termWidth <= 0 {
-		return 4, 80, rows
+		return treePaneLayout{sidebar: 4, detail: 80, rows: rows}
 	}
-
-	// Cap the list column so one pathologically long row can't starve the
-	// log pane. Prefer at most ~45% of the terminal for the list.
-	listCap := termWidth / 2
-	if listCap < 30 {
-		listCap = 30
+	const gap, margins, normalDetail = 4, 4, 20
+	available := max(0, termWidth-margins)
+	maxRow := 0
+	for _, row := range rows {
+		maxRow = max(maxRow, lipgloss.Width(row))
 	}
-
-	maxRowWidth := 0
-	for _, r := range rows {
-		w := lipgloss.Width(r)
-		if w > maxRowWidth {
-			maxRowWidth = w
+	maxWithDetail := max(0, available-gap-normalDetail)
+	sidebar := max(maxRow, settled)
+	if available >= gap+normalDetail {
+		sidebar = min(sidebar, maxWithDetail)
+	} else {
+		// Names/content have already yielded; preserve as much fixed tree
+		// chrome as possible and let detail absorb the unavoidable shortfall.
+		sidebar = min(sidebar, max(0, available-gap))
+	}
+	detail := max(0, available-gap-sidebar)
+	display := make([]string, len(rows))
+	for i, row := range rows {
+		if lipgloss.Width(row) > sidebar {
+			display[i] = runewidth.Truncate(tuistyle.Sanitize(row), max(0, sidebar), "…")
+		} else {
+			display[i] = row
 		}
 	}
-	displayRows = rows
-	if maxRowWidth > listCap {
-		maxRowWidth = listCap
-		displayRows = make([]string, len(rows))
-		for i, r := range rows {
-			if lipgloss.Width(r) > listCap {
-				displayRows[i] = runewidth.Truncate(tuistyle.Sanitize(r), listCap, "…")
-			} else {
-				displayRows[i] = r
-			}
-		}
-	}
-
-	listWidth = maxRowWidth + 4
-	// Divider "│ " consumes 2 columns between the panes.
-	rightWidth = termWidth - listWidth - 2 - 4
-	if rightWidth < 20 {
-		rightWidth = 20
-	}
-	return listWidth, rightWidth, displayRows
+	return treePaneLayout{sidebar: sidebar, detail: detail, rows: display}
 }
 
 func (m *Model) bodyHeight() int {

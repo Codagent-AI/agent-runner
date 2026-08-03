@@ -150,11 +150,120 @@ func (m *Model) currentChildren() []*StepNode {
 }
 
 func (m *Model) selectedNode() *StepNode {
+	m.restoreSelectedNode()
+	if m.selected != nil {
+		return m.selected
+	}
 	children := m.currentChildren()
 	if m.cursor < 0 || m.cursor >= len(children) {
 		return nil
 	}
 	return children[m.cursor]
+}
+
+func firstRealChild(container *StepNode) *StepNode {
+	if container == nil {
+		return nil
+	}
+	return firstNode(container.Children)
+}
+
+func firstNode(nodes []*StepNode) *StepNode {
+	if len(nodes) == 0 {
+		return nil
+	}
+	return nodes[0]
+}
+
+func (m *Model) setSelected(node *StepNode) {
+	m.selected = node
+	if node == nil {
+		m.selectedKey = ""
+		return
+	}
+	m.selectedKey = node.NodeKey()
+	m.syncProjectedCursor()
+}
+
+func (m *Model) projectedRows() []treeRow {
+	m.restoreSelectedNode()
+	m.ensureProjectionContainersLoaded(m.selected)
+	m.ensureProjectionContainersLoaded(m.activeNode())
+	return projectTree(m.manualScope(), m.selectedNode(), m.activeNode())
+}
+
+func (m *Model) restoreSelectedNode() {
+	if m.selected == nil || m.tree == nil || m.tree.Root == nil {
+		return
+	}
+	if isDescendantOf(m.selected, m.tree.Root) {
+		return
+	}
+	if restored := findNodeByKey(m.tree.Root, m.selectedKey); restored != nil {
+		m.selected = restored
+		return
+	}
+	m.selected = firstRealChild(m.currentContainer())
+	if m.selected != nil {
+		m.selectedKey = m.selected.NodeKey()
+	}
+}
+
+func findNodeByKey(root *StepNode, key string) *StepNode {
+	if root == nil || key == "" {
+		return nil
+	}
+	if root.NodeKey() == key {
+		return root
+	}
+	for _, child := range root.Children {
+		if found := findNodeByKey(child, key); found != nil {
+			return found
+		}
+	}
+	for _, child := range root.Body {
+		if found := findNodeByKey(child, key); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+func (m *Model) manualScope() *StepNode {
+	if len(m.path) == 0 {
+		return m.tree.Root
+	}
+	return m.path[len(m.path)-1]
+}
+
+func (m *Model) activeNode() *StepNode {
+	if m.tree == nil {
+		return nil
+	}
+	if node := m.tree.FindByPrefix(m.activeStepPrefix); node != nil {
+		return node
+	}
+	return deepestInProgressNode(m.tree.Root)
+}
+
+func (m *Model) ensureProjectionContainersLoaded(node *StepNode) {
+	for current := node; current != nil; current = current.Parent {
+		target := current.Drilldown()
+		if target != nil && target.Type == NodeSubWorkflow && !target.SubLoaded && target.ErrorMessage == "" {
+			if err := m.tree.EnsureSubWorkflowLoaded(target); err != nil {
+				target.ErrorMessage = err.Error()
+			}
+		}
+	}
+}
+
+func (m *Model) syncProjectedCursor() {
+	for i, row := range m.projectedRows() {
+		if row.node == m.selected {
+			m.cursor = i
+			return
+		}
+	}
 }
 
 func (m *Model) renderSubWorkflowHeader() string {

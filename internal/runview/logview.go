@@ -43,7 +43,29 @@ func buildLogLines(
 	runActive bool,
 	resolverCfg ResolverConfig,
 ) (lines []string, ranges []stepLineRange) {
-	buildLogLinesRecurse(children, pendingSelected, bodyWidth, loadedFull, pulsePhase, runActive, resolverCfg, 0, &lines, &ranges)
+	buildLogLinesRecurse(children, pendingSelected, bodyWidth, loadedFull, pulsePhase, runActive, resolverCfg, 0, true, &lines, &ranges)
+	return
+}
+
+// buildSelectedDetailLines renders one selected execution without recursively
+// appending its descendants. Container metadata remains available through its
+// own renderer, while navigation owns traversal of the workflow tree.
+func buildSelectedDetailLines(
+	selected *StepNode,
+	bodyWidth int,
+	loadedFull map[string]bool,
+	pulsePhase float64,
+	runActive bool,
+	resolverCfg ResolverConfig,
+) (lines []string, ranges []stepLineRange) {
+	if selected == nil {
+		return nil, nil
+	}
+	pendingSelected := (*StepNode)(nil)
+	if selected.Status == StatusPending {
+		pendingSelected = selected
+	}
+	buildLogLinesRecurse([]*StepNode{selected}, pendingSelected, bodyWidth, loadedFull, pulsePhase, runActive, resolverCfg, 0, false, &lines, &ranges)
 	return
 }
 
@@ -56,6 +78,7 @@ func buildLogLinesRecurse(
 	runActive bool,
 	resolverCfg ResolverConfig,
 	indent int,
+	recurse bool,
 	lines *[]string,
 	ranges *[]stepLineRange,
 ) {
@@ -108,7 +131,7 @@ func buildLogLinesRecurse(
 		*ranges = append(*ranges, stepLineRange{node: child, startLine: startLine, endLine: len(*lines)})
 
 		// Recurse for container types (not ghost blocks).
-		if !isGhost && child.IsContainer() {
+		if recurse && !isGhost && child.IsContainer() {
 			var nested []*StepNode
 			if child.Type == NodeIteration {
 				nested = child.Drilldown().Children
@@ -116,7 +139,7 @@ func buildLogLinesRecurse(
 				nested = child.Children
 			}
 			if len(nested) > 0 {
-				buildLogLinesRecurse(nested, pendingSelected, bodyWidth, loadedFull, pulsePhase, runActive, resolverCfg, indent+1, lines, ranges)
+				buildLogLinesRecurse(nested, pendingSelected, bodyWidth, loadedFull, pulsePhase, runActive, resolverCfg, indent+1, true, lines, ranges)
 			}
 		}
 
