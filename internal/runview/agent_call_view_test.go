@@ -342,7 +342,7 @@ func TestAgentCallPersistedOutputLoadIsMemoryBounded(t *testing.T) {
 	m.sessionDir = sessionDir
 	m.path = []*StepNode{tree.Root, tree.Root.Children[0]}
 
-	m.loadSelectedAgentCallOutput()
+	m.loadHistoricalOutput(m.selectedNode())
 
 	if len(call.Stdout) > maxOutputBytes {
 		t.Fatalf("loaded output bytes = %d, want at most %d", len(call.Stdout), maxOutputBytes)
@@ -371,7 +371,7 @@ func TestAgentCallOutputReadFailureRemainsRetryableAndVisible(t *testing.T) {
 	m.sessionDir = sessionDir
 	m.path = []*StepNode{tree.Root, tree.Root.Children[0]}
 
-	m.loadSelectedAgentCallOutput()
+	m.loadHistoricalOutput(m.selectedNode())
 	if call.CallOutputLoaded || !strings.Contains(m.loadErr, "load call output") {
 		t.Fatalf("read failure loaded=%v error=%q, want retryable surfaced error", call.CallOutputLoaded, m.loadErr)
 	}
@@ -382,7 +382,7 @@ func TestAgentCallOutputReadFailureRemainsRetryableAndVisible(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m.loadSelectedAgentCallOutput()
+	m.loadHistoricalOutput(m.selectedNode())
 	if !call.CallOutputLoaded || call.Stdout != "recovered output" || strings.Contains(m.loadErr, "load call output") {
 		t.Fatalf("retry loaded=%v stdout=%q error=%q", call.CallOutputLoaded, call.Stdout, m.loadErr)
 	}
@@ -407,7 +407,7 @@ func TestActiveExternalViewRefreshesGrowingAgentCallOutput(t *testing.T) {
 	m.path = []*StepNode{tree.Root, tree.Root.Children[0]}
 	m.active = true
 
-	m.loadSelectedAgentCallOutput()
+	m.loadHistoricalOutput(m.selectedNode())
 	if call.Stdout != "first chunk" || !call.CallOutputLoaded {
 		t.Fatalf("initial output=%q loaded=%v", call.Stdout, call.CallOutputLoaded)
 	}
@@ -416,7 +416,7 @@ func TestActiveExternalViewRefreshesGrowingAgentCallOutput(t *testing.T) {
 	}
 
 	m.refreshData()
-	m.loadSelectedAgentCallOutput()
+	m.loadHistoricalOutput(m.selectedNode())
 
 	if call.Stdout != "first chunk\nsecond chunk" {
 		t.Fatalf("refreshed output=%q, want growing persisted output", call.Stdout)

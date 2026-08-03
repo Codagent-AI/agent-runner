@@ -349,14 +349,14 @@ func TestModelInputExpansionIsStableByNodeKeyAndResetsDetailScrollOnSelection(t 
 	m := newTestModel(&Tree{Root: root}, FromInspect)
 	m.termWidth = 42
 	m.setSelected(long)
-	m.logOffset = 4
+	m.detailOffset = 4
 	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
 	if !m.inputExpanded[long.NodeKey()] {
 		t.Fatal("i did not expand the selected long input")
 	}
 	m.handleStepNavigation(1)
-	if m.logOffset != 0 {
-		t.Fatalf("selection detail scroll = %d, want reset to top", m.logOffset)
+	if m.detailOffset != 0 {
+		t.Fatalf("selection detail scroll = %d, want reset to top", m.detailOffset)
 	}
 	m.handleStepNavigation(-1)
 	if !m.inputExpanded[long.NodeKey()] {

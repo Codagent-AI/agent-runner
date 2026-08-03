@@ -47,7 +47,6 @@ func (m *Model) View() string {
 	if m.showSummary {
 		return m.renderSummary()
 	}
-	m.loadSelectedAgentCallOutput()
 
 	var b strings.Builder
 
@@ -135,10 +134,11 @@ func (m *Model) renderTwoColumn() string {
 	rows := rowTexts(renderedRows)
 	layout := measureTreePaneLayout(m.termWidth, rows, m.sidebarWidth)
 	m.sidebarWidth = max(m.sidebarWidth, layout.sidebar)
-	listWidth, rightWidth, rows := layout.sidebar, layout.detail, layout.rows
+	listWidth, rightWidth := layout.sidebar, layout.detail
+	treeLines := layout.rows
 	for i, row := range renderedRows {
 		if row.selectable && lipgloss.Width(row.text) > listWidth {
-			rows[i] = m.fitTreeRow(row, listWidth)
+			treeLines[i] = m.fitTreeRow(row, listWidth)
 		}
 	}
 
@@ -147,39 +147,38 @@ func (m *Model) renderTwoColumn() string {
 		bodyHeight = 20
 	}
 
-	// Build log lines for the right pane.
-	var logLines []string
+	var detailLines []string
 	if m.liveUIVisible() {
-		logLines = m.liveUIDetailLines(rightWidth)
+		detailLines = m.liveUIDetailLines(rightWidth)
 	} else {
-		logLines = m.selectedDetailDocument(rightWidth).renderScreen()
+		detailLines = m.selectedDetailDocument(rightWidth).renderScreen()
 	}
 
-	maxOffset := max(0, len(logLines)-bodyHeight)
-	offset := m.logOffset
+	maxOffset := max(0, len(detailLines)-bodyHeight)
+	offset := m.detailOffset
 	if offset > maxOffset {
 		offset = maxOffset
 	}
-	var visibleLines []string
-	if offset > 0 && offset <= len(logLines) {
-		visibleLines = logLines[offset:]
+	var visibleDetailLines []string
+	if offset > 0 && offset <= len(detailLines) {
+		visibleDetailLines = detailLines[offset:]
 	} else {
-		visibleLines = logLines
+		visibleDetailLines = detailLines
 	}
 
 	selectedRow := renderedRowIndexForNode(renderedRows, m.selectedNode())
 	m.ensureTreeSelectionVisible(selectedRow)
 	leftOffset := min(m.treeOffset, max(0, len(renderedRows)-bodyHeight))
-	visibleRows := rows
-	if leftOffset > 0 && leftOffset <= len(rows) {
-		visibleRows = rows[leftOffset:]
+	visibleTreeLines := treeLines
+	if leftOffset > 0 && leftOffset <= len(treeLines) {
+		visibleTreeLines = treeLines[leftOffset:]
 	}
 
 	var b strings.Builder
 	for i := 0; i < bodyHeight; i++ {
 		leftPart := ""
-		if i < len(visibleRows) {
-			leftPart = visibleRows[i]
+		if i < len(visibleTreeLines) {
+			leftPart = visibleTreeLines[i]
 		}
 		leftPad := listWidth - lipgloss.Width(leftPart)
 		if leftPad < 0 {
@@ -187,8 +186,8 @@ func (m *Model) renderTwoColumn() string {
 		}
 
 		rightPart := ""
-		if i < len(visibleLines) {
-			rightPart = fitDetailLine(visibleLines[i], rightWidth)
+		if i < len(visibleDetailLines) {
+			rightPart = fitDetailLine(visibleDetailLines[i], rightWidth)
 		}
 
 		b.WriteString(leftPart)

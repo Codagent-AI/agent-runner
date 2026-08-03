@@ -268,20 +268,20 @@ func TestModel_JK_ScrollsLogPane(t *testing.T) {
 	m := newLiveModelWithFlags()
 	m.cursor = 1
 	selected := m.selectedNode()
-	initial := m.logOffset
+	initial := m.detailOffset
 
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	if m.logOffset <= initial {
-		t.Fatal("j should increase logOffset")
+	if m.detailOffset <= initial {
+		t.Fatal("j should increase detailOffset")
 	}
 	if !m.followActive {
 		t.Error("j should preserve active follow")
 	}
 
-	scrolled := m.logOffset
+	scrolled := m.detailOffset
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
-	if m.logOffset >= scrolled {
-		t.Fatal("k should decrease logOffset")
+	if m.detailOffset >= scrolled {
+		t.Fatal("k should decrease detailOffset")
 	}
 	if m.followTail {
 		t.Error("k should clear tail follow")
@@ -294,35 +294,35 @@ func TestModel_JK_ScrollsLogPane(t *testing.T) {
 // PgUp and PgDown are not bound; they must be no-ops.
 func TestModel_PgUpPgDown_NoOp(t *testing.T) {
 	m := newTestModel(simpleTree(), FromList)
-	m.logOffset = 0
+	m.detailOffset = 0
 
 	m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
-	if m.logOffset != 0 {
-		t.Fatal("PgDown should not change logOffset (unbound)")
+	if m.detailOffset != 0 {
+		t.Fatal("PgDown should not change detailOffset (unbound)")
 	}
 
 	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
-	if m.logOffset != 0 {
-		t.Fatal("PgUp should not change logOffset (unbound)")
+	if m.detailOffset != 0 {
+		t.Fatal("PgUp should not change detailOffset (unbound)")
 	}
 }
 
 func TestModel_EndKey_NoOp(t *testing.T) {
 	m := newLiveModelWithFlags()
 
-	initial := m.logOffset
+	initial := m.detailOffset
 	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
-	if m.logOffset != initial {
+	if m.detailOffset != initial {
 		t.Error("End key should be a no-op")
 	}
 }
 
 func TestModel_GKey_NoOp(t *testing.T) {
 	m := newLiveModelWithFlags()
-	initial := m.logOffset
+	initial := m.detailOffset
 
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("G")})
-	if m.logOffset != initial {
+	if m.detailOffset != initial {
 		t.Error("G key should be a no-op (not bound)")
 	}
 }
@@ -1894,8 +1894,8 @@ func TestModel_LoadFull_PersistsAcrossEquivalentTreeRebuild(t *testing.T) {
 }
 
 // TestModel_KScroll_AfterAutoScroll_IsEffective verifies that pressing k after
-// an auto-scroll (which sets logOffset to math.MaxInt32) produces a meaningful
-// decrease in logOffset — not just MaxInt32 − 1.
+// an auto-scroll (which sets detailOffset to math.MaxInt32) produces a meaningful
+// decrease in detailOffset — not just MaxInt32 − 1.
 func TestModel_KScroll_AfterAutoScroll_IsEffective(t *testing.T) {
 	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
 	step := &StepNode{
@@ -1910,19 +1910,19 @@ func TestModel_KScroll_AfterAutoScroll_IsEffective(t *testing.T) {
 	m.termHeight = 20 // small height so maxOffset > 0
 
 	// Simulate the auto-scroll sentinel (as set by handleOutputChunkMsg).
-	m.logOffset = math.MaxInt32
+	m.detailOffset = math.MaxInt32
 	lineCount := m.rebuildDetail()
-	m.clampLogOffset(lineCount) // fix should ensure this runs in the real code path too
+	m.clampDetailOffset(lineCount) // fix should ensure this runs in the real code path too
 
-	preK := m.logOffset
+	preK := m.detailOffset
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
 
-	if m.logOffset >= preK {
-		t.Fatalf("k did not decrease logOffset: before=%d after=%d", preK, m.logOffset)
+	if m.detailOffset >= preK {
+		t.Fatalf("k did not decrease detailOffset: before=%d after=%d", preK, m.detailOffset)
 	}
 	// After fix the offset should be well below the MaxInt32 range.
-	if m.logOffset > 10_000 {
-		t.Fatalf("logOffset still huge after k (%d); MaxInt32 sentinel was not clamped", m.logOffset)
+	if m.detailOffset > 10_000 {
+		t.Fatalf("detailOffset still huge after k (%d); MaxInt32 sentinel was not clamped", m.detailOffset)
 	}
 }
 
@@ -2440,17 +2440,17 @@ func TestModel_StepStateMsg_ActiveRunAutoScrollsLog(t *testing.T) {
 	m := newLiveModelWithFlags()
 	m.tree = tree
 	m.path = []*StepNode{tree.Root}
-	m.logOffset = 7
+	m.detailOffset = 7
 
 	m.Update(liverun.StepStateMsg{ActiveStepPrefix: "[implement]"})
 
-	// After the fix, logOffset is clamped to [0, maxOffset] immediately after
+	// After the fix, detailOffset is clamped to [0, maxOffset] immediately after
 	// rebuild, so it should be well below the MaxInt32 sentinel value.
-	if m.logOffset == 7 {
-		t.Fatal("logOffset should have changed (auto-scroll should fire)")
+	if m.detailOffset == 7 {
+		t.Fatal("detailOffset should have changed (auto-scroll should fire)")
 	}
-	if m.logOffset > 10_000 {
-		t.Fatalf("logOffset too large (%d); auto-scroll should clamp to real maxOffset", m.logOffset)
+	if m.detailOffset > 10_000 {
+		t.Fatalf("detailOffset too large (%d); auto-scroll should clamp to real maxOffset", m.detailOffset)
 	}
 }
 
@@ -2466,11 +2466,11 @@ func TestModel_OutputChunk_AutoFollowTailsActiveStep(t *testing.T) {
 		Bytes:      []byte(generateLargeOutput(80)),
 	})
 
-	want := m.maxLogOffset()
-	if m.logOffset != want {
-		t.Fatalf("logOffset = %d, want selected detail tail offset %d", m.logOffset, want)
+	want := m.maxDetailOffset()
+	if m.detailOffset != want {
+		t.Fatalf("detailOffset = %d, want selected detail tail offset %d", m.detailOffset, want)
 	}
-	if m.logOffset == 0 {
+	if m.detailOffset == 0 {
 		t.Fatal("auto-follow pinned selected detail at its header instead of tailing output")
 	}
 }
@@ -2503,14 +2503,14 @@ func TestModel_StepStateMsg_AutoFollowScrollsDetailToActiveSelection(t *testing.
 	m.path = []*StepNode{root}
 	m.termHeight = 15
 	m.cursor = 1
-	m.logOffset = 0
+	m.detailOffset = 0
 
 	m.Update(liverun.StepStateMsg{ActiveStepPrefix: "[run-validator]"})
 
 	if selected := m.selectedNode(); selected != runValidator {
 		t.Fatalf("selected node = %#v, want run-validator", selected)
 	}
-	if m.logLineCount == 0 {
+	if m.detailLineCount == 0 {
 		t.Fatal("selected detail should have measured content")
 	}
 }
@@ -2539,15 +2539,15 @@ func TestModel_StepStateMsgDoesNotMovePausedSelectedViewport(t *testing.T) {
 	m.followActive = false
 	m.followTail = true
 	m.rebuildDetail()
-	m.logOffset = 0
+	m.detailOffset = 0
 
 	m.Update(liverun.StepStateMsg{ActiveStepPrefix: "[implement]"})
 
 	if m.selectedNode() != selected {
 		t.Fatalf("paused selection changed to %v, want %v", m.selectedNode(), selected)
 	}
-	if m.logOffset != 0 {
-		t.Fatalf("later execution moved paused viewport to %d, want 0", m.logOffset)
+	if m.detailOffset != 0 {
+		t.Fatalf("later execution moved paused viewport to %d, want 0", m.detailOffset)
 	}
 }
 
@@ -2558,12 +2558,12 @@ func TestModel_RefreshDoesNotMovePausedSelectedViewportWithoutNewOutput(t *testi
 	m.followActive = false
 	m.followTail = true
 	m.rebuildDetail()
-	m.logOffset = 0
+	m.detailOffset = 0
 
 	m.Update(tuistyle.RefreshMsg{})
 
-	if m.logOffset != 0 {
-		t.Fatalf("refresh moved paused viewport to %d, want 0", m.logOffset)
+	if m.detailOffset != 0 {
+		t.Fatalf("refresh moved paused viewport to %d, want 0", m.detailOffset)
 	}
 }
 
@@ -2641,11 +2641,11 @@ func TestModel_ArrowToPendingStepRebuildsSelectedDetailAtTop(t *testing.T) {
 	if m.cursor != 1 {
 		t.Fatalf("cursor = %d, want 1", m.cursor)
 	}
-	if m.logLineCount == 0 {
+	if m.detailLineCount == 0 {
 		t.Fatal("pending selected detail was not rebuilt")
 	}
-	if m.logOffset != 0 {
-		t.Fatalf("logOffset = %d, want selected detail top", m.logOffset)
+	if m.detailOffset != 0 {
+		t.Fatalf("detailOffset = %d, want selected detail top", m.detailOffset)
 	}
 }
 
@@ -2697,13 +2697,13 @@ func TestModel_LKey_ReengagesAutoFollowAtActiveTail(t *testing.T) {
 	m.activeStepPrefix = "[build]"
 	m.tree.Root.Children[0].Stdout = generateLargeOutput(80)
 	m.rebuildDetail()
-	m.logOffset = 0
+	m.detailOffset = 0
 
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
 
-	want := m.maxLogOffset()
-	if m.logOffset != want {
-		t.Fatalf("logOffset = %d, want active tail offset %d", m.logOffset, want)
+	want := m.maxDetailOffset()
+	if m.detailOffset != want {
+		t.Fatalf("detailOffset = %d, want active tail offset %d", m.detailOffset, want)
 	}
 }
 
@@ -2757,23 +2757,23 @@ func TestModel_MouseWheelDownPreservesFollowModes(t *testing.T) {
 
 func TestModel_MouseWheelDown_ChangesLogOffset(t *testing.T) {
 	m := newTestModel(simpleTree(), FromList)
-	m.logLineCount = 100
-	initial := m.logOffset
+	m.detailLineCount = 100
+	initial := m.detailOffset
 
 	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown})
-	if m.logOffset <= initial {
-		t.Fatalf("mouse wheel down should increase logOffset: got %d, want > %d", m.logOffset, initial)
+	if m.detailOffset <= initial {
+		t.Fatalf("mouse wheel down should increase detailOffset: got %d, want > %d", m.detailOffset, initial)
 	}
 }
 
 func TestModel_MouseWheelUp_ChangesLogOffset(t *testing.T) {
 	m := newTestModel(simpleTree(), FromList)
-	m.logLineCount = 100
-	m.logOffset = 10
+	m.detailLineCount = 100
+	m.detailOffset = 10
 
 	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp})
-	if m.logOffset >= 10 {
-		t.Fatalf("mouse wheel up should decrease logOffset: got %d, want < 10", m.logOffset)
+	if m.detailOffset >= 10 {
+		t.Fatalf("mouse wheel up should decrease detailOffset: got %d, want < 10", m.detailOffset)
 	}
 }
 
@@ -2783,19 +2783,19 @@ func TestModel_LiveRun_OutputChunk_DoesNotTailWhenTailFollowOff(t *testing.T) {
 	shell := m.tree.Root.Children[0]
 	shell.Stdout = generateLargeOutput(100)
 	lineCount := m.rebuildDetail()
-	m.clampLogOffset(lineCount)
-	m.logOffset = m.maxLogOffset()
+	m.clampDetailOffset(lineCount)
+	m.detailOffset = m.maxDetailOffset()
 
 	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp})
 	if m.followTail {
 		t.Fatal("test setup: mouse wheel up should clear tail follow")
 	}
-	scrolledOffset := m.logOffset
+	scrolledOffset := m.detailOffset
 
 	m.Update(liverun.OutputChunkMsg{StepPrefix: "[build]", Stream: "stdout", Bytes: []byte("new output\n")})
 
-	if m.logOffset != scrolledOffset {
-		t.Fatalf("output chunk should not tail when tail follow is off: before=%d after=%d", scrolledOffset, m.logOffset)
+	if m.detailOffset != scrolledOffset {
+		t.Fatalf("output chunk should not tail when tail follow is off: before=%d after=%d", scrolledOffset, m.detailOffset)
 	}
 }
 
@@ -2808,7 +2808,7 @@ func TestModel_TKeyFollowsOnlySelectedExecution(t *testing.T) {
 	m.followActive = false
 	m.followTail = false
 	m.rebuildDetail()
-	m.logOffset = 0
+	m.detailOffset = 0
 
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
 
@@ -2821,13 +2821,13 @@ func TestModel_TKeyFollowsOnlySelectedExecution(t *testing.T) {
 	if !m.followTail {
 		t.Fatal("t did not engage tail follow")
 	}
-	if m.logOffset != m.maxLogOffset() {
-		t.Fatalf("t offset = %d, want selected tail %d", m.logOffset, m.maxLogOffset())
+	if m.detailOffset != m.maxDetailOffset() {
+		t.Fatalf("t offset = %d, want selected tail %d", m.detailOffset, m.maxDetailOffset())
 	}
 
 	m.Update(liverun.OutputChunkMsg{StepPrefix: "[build]", Stream: "stdout", Bytes: []byte("later selected output\n")})
-	if m.logOffset != m.maxLogOffset() {
-		t.Fatalf("selected later output did not stay tailed: offset=%d tail=%d", m.logOffset, m.maxLogOffset())
+	if m.detailOffset != m.maxDetailOffset() {
+		t.Fatalf("selected later output did not stay tailed: offset=%d tail=%d", m.detailOffset, m.maxDetailOffset())
 	}
 }
 

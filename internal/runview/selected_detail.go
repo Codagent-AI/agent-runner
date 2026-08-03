@@ -29,6 +29,8 @@ const (
 	detailRailError
 )
 
+const currentFormLabel = "Current form"
+
 type detailSection struct {
 	label string
 	kind  detailRailKind
@@ -77,7 +79,7 @@ func buildDetailDocument(node *StepNode, options detailBuildOptions) detailDocum
 	case NodeInteractiveAgent:
 		doc.addInput("Current prompt", currentPrompt(node), options)
 	case NodeUI:
-		doc.addOutput("Current form", uiFormText(node))
+		doc.addOutput(currentFormLabel, uiFormText(node))
 		doc.addOutput("Current outcome", outcomeText(node))
 	case NodeSubWorkflow, NodeLoop, NodeIteration, NodeGroup:
 		doc.addOutput("Current status", containerStatusText(node))
@@ -206,7 +208,7 @@ func buildPendingDetail(doc *detailDocument, node *StepNode, options detailBuild
 	case NodeAgentCall:
 		doc.addInput("Current prompt", node.InterpolatedPrompt, options)
 	case NodeUI:
-		doc.addOutput("Current form", uiFormText(node))
+		doc.addOutput(currentFormLabel, uiFormText(node))
 	case NodeSubWorkflow:
 		var body []string
 		if workflow := CanonicalName(node.StaticWorkflowPath, options.resolverCfg); workflow != "" {

@@ -462,17 +462,17 @@ func TestLiveUIRequestJKKeysScrollText(t *testing.T) {
 	})
 	m = updated.(*Model)
 
-	before := m.logOffset
+	before := m.detailOffset
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 	m = updated.(*Model)
-	if m.logOffset <= before {
-		t.Fatalf("j should increase live UI scroll offset: before=%d after=%d", before, m.logOffset)
+	if m.detailOffset <= before {
+		t.Fatalf("j should increase live UI scroll offset: before=%d after=%d", before, m.detailOffset)
 	}
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
 	m = updated.(*Model)
-	if m.logOffset != 0 {
-		t.Fatalf("k should scroll live UI back to top, got offset %d", m.logOffset)
+	if m.detailOffset != 0 {
+		t.Fatalf("k should scroll live UI back to top, got offset %d", m.detailOffset)
 	}
 }
 
@@ -510,15 +510,15 @@ func TestLiveUIRequestManualScrollSurvivesRefresh(t *testing.T) {
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 	m = updated.(*Model)
-	scrolled := m.logOffset
+	scrolled := m.detailOffset
 	if scrolled == 0 {
 		t.Fatal("j should scroll the live UI before refresh")
 	}
 
 	m.handleRefreshMsg()
 
-	if m.logOffset != scrolled {
-		t.Fatalf("refresh should preserve manual live UI scroll: before=%d after=%d", scrolled, m.logOffset)
+	if m.detailOffset != scrolled {
+		t.Fatalf("refresh should preserve manual live UI scroll: before=%d after=%d", scrolled, m.detailOffset)
 	}
 }
 

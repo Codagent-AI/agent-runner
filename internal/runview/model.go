@@ -85,10 +85,10 @@ type Model struct {
 	selectedKey  string
 	treeOffset   int
 	sidebarWidth int // widest settled width for this run-view entry
-	logOffset    int
-	// logLineCount is the total number of lines in the selected detail document.
+	detailOffset int
+	// detailLineCount is the total number of lines in the selected detail document.
 	// It is used to clamp the selected detail's independent scroll offset.
-	logLineCount int
+	detailLineCount int
 
 	loadedFull map[string]bool
 	// inputExpanded stores the user's current-input choice by stable node key.
@@ -678,7 +678,7 @@ func (m *Model) handleResumedMsg() {
 		return
 	}
 	selectedBefore := m.selectedNode()
-	previousLineCount := m.logLineCount
+	previousLineCount := m.detailLineCount
 	m.refreshData()
 	if m.followActive {
 		m.applyAutoFollowCursor()
@@ -687,7 +687,7 @@ func (m *Model) handleResumedMsg() {
 	if m.shouldFollowTail() && (m.selectedNode() != selectedBefore || lineCount != previousLineCount) {
 		m.scrollSelectedDetailToTail()
 	}
-	m.clampLogOffset(lineCount)
+	m.clampDetailOffset(lineCount)
 }
 
 func (m *Model) handleLiveUIKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -734,9 +734,9 @@ func (m *Model) scrollLiveUI(delta int) {
 		m.followActive = false
 		m.followTail = false
 	}
-	m.logOffset += delta
-	if m.logOffset < 0 {
-		m.logOffset = 0
+	m.detailOffset += delta
+	if m.detailOffset < 0 {
+		m.detailOffset = 0
 	}
 }
 
@@ -753,7 +753,7 @@ func (m *Model) requestQuit() (tea.Model, tea.Cmd) {
 
 // scrollSummary adjusts the summary scroll offset. The lower bound is applied
 // here; the upper bound depends on rendered row count vs. available height and
-// is clamped at render time (see renderSummary), matching the log-offset model.
+// is clamped at render time (see renderSummary), matching the detail-offset model.
 func (m *Model) scrollSummary(delta int) {
 	m.moveCursor(delta)
 }
@@ -795,7 +795,7 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) {
 	// old width that was settled for a different terminal.
 	m.sidebarWidth = 0
 	lineCount := m.rebuildDetail()
-	m.clampLogOffset(lineCount)
+	m.clampDetailOffset(lineCount)
 }
 
 func (m *Model) handleOutputChunkMsg(msg liverun.OutputChunkMsg) {
@@ -804,7 +804,7 @@ func (m *Model) handleOutputChunkMsg(msg liverun.OutputChunkMsg) {
 	if m.shouldFollowSelectedTail(msg.StepPrefix) {
 		m.scrollSelectedDetailToTail()
 	}
-	m.clampLogOffset(lineCount)
+	m.clampDetailOffset(lineCount)
 }
 
 func (m *Model) handleStepStateMsg(msg liverun.StepStateMsg) {
@@ -818,7 +818,7 @@ func (m *Model) handleStepStateMsg(msg liverun.StepStateMsg) {
 	if m.shouldFollowTail() && m.selectedNode() != selectedBefore {
 		m.scrollSelectedDetailToTail()
 	}
-	m.clampLogOffset(lineCount)
+	m.clampDetailOffset(lineCount)
 }
 
 func (m *Model) handleExecDoneMsg(msg liverun.ExecDoneMsg) {
@@ -851,13 +851,13 @@ func (m *Model) handleExecDoneMsg(msg liverun.ExecDoneMsg) {
 	m.rebuildDetail()
 }
 
-func (m *Model) scrollLogUp() {
-	if m.logOffset > m.maxLogOffset() {
-		m.logOffset = m.maxLogOffset()
+func (m *Model) scrollDetailUp() {
+	if m.detailOffset > m.maxDetailOffset() {
+		m.detailOffset = m.maxDetailOffset()
 	}
-	m.logOffset--
-	if m.logOffset < 0 {
-		m.logOffset = 0
+	m.detailOffset--
+	if m.detailOffset < 0 {
+		m.detailOffset = 0
 	}
 }
 
@@ -866,15 +866,15 @@ func (m *Model) handleMouse(msg tea.MouseMsg) {
 	case tea.MouseButtonWheelUp:
 		m.followActive = false
 		m.followTail = false
-		if m.logOffset > m.maxLogOffset() {
-			m.logOffset = m.maxLogOffset()
+		if m.detailOffset > m.maxDetailOffset() {
+			m.detailOffset = m.maxDetailOffset()
 		}
-		m.logOffset -= 3
-		if m.logOffset < 0 {
-			m.logOffset = 0
+		m.detailOffset -= 3
+		if m.detailOffset < 0 {
+			m.detailOffset = 0
 		}
 	case tea.MouseButtonWheelDown:
-		m.logOffset += 3
+		m.detailOffset += 3
 	}
 }
 
@@ -886,7 +886,7 @@ func (m *Model) handleRefreshMsg() tea.Cmd {
 		return nil
 	}
 	selectedBefore := m.selectedNode()
-	previousLineCount := m.logLineCount
+	previousLineCount := m.detailLineCount
 	m.refreshData()
 	if m.followActive {
 		m.applyAutoFollowCursor()
@@ -895,7 +895,7 @@ func (m *Model) handleRefreshMsg() tea.Cmd {
 	if m.shouldFollowTail() && (m.selectedNode() != selectedBefore || lineCount != previousLineCount) {
 		m.scrollSelectedDetailToTail()
 	}
-	m.clampLogOffset(lineCount)
+	m.clampDetailOffset(lineCount)
 	if !m.hasLiveUpdates() {
 		return nil
 	}
@@ -1086,9 +1086,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "k":
 		m.followActive = false
 		m.followTail = false
-		m.scrollLogUp()
+		m.scrollDetailUp()
 	case "j":
-		m.logOffset++
+		m.detailOffset++
 	case "t":
 		m.handleTailFollowKey()
 	case "l":
@@ -1138,7 +1138,7 @@ func (m *Model) handleFollowKey() {
 	m.applyAutoFollowCursor()
 	lineCount := m.rebuildDetail()
 	m.scrollSelectedDetailToTail()
-	m.clampLogOffset(lineCount)
+	m.clampDetailOffset(lineCount)
 }
 
 func (m *Model) handleTailFollowKey() {
@@ -1148,7 +1148,7 @@ func (m *Model) handleTailFollowKey() {
 	m.followTail = true
 	lineCount := m.rebuildDetail()
 	m.scrollSelectedDetailToTail()
-	m.clampLogOffset(lineCount)
+	m.clampDetailOffset(lineCount)
 }
 
 func (m *Model) handleResumeKey() (tea.Model, tea.Cmd) {
@@ -1201,7 +1201,6 @@ func (m *Model) handleCopySelectedDetail() tea.Cmd {
 }
 
 func (m *Model) selectedStepDetailText() string {
-	m.loadSelectedAgentCallOutput()
 	doc := m.selectedDetailDocument(m.rightPaneWidth())
 	if len(doc.header) == 0 {
 		return ""
@@ -1285,14 +1284,13 @@ func (m *Model) copyDirectory() string {
 func (m *Model) handleStepNavigation(delta int) tea.Cmd {
 	m.followActive = false
 	m.moveCursor(delta)
-	m.logOffset = 0
+	m.detailOffset = 0
 	m.rebuildDetail()
 	return nil
 }
 
-// applyAutoFollowCursor moves the cursor to the ancestor-at-current-level of
-// the currently active step. This is the new auto-follow logic that does NOT
-// drill into sub-workflows or loops.
+// applyAutoFollowCursor selects the current active leaf without changing the
+// manual drill scope.
 func (m *Model) applyAutoFollowCursor() {
 	if active := m.liveUINode(); active != nil {
 		m.applyAutoFollowToNode(active)
@@ -1324,38 +1322,31 @@ func (m *Model) applyAutoFollowToNode(active *StepNode) {
 }
 
 func deepestInProgressNode(n *StepNode) *StepNode {
-	if n == nil {
-		return nil
-	}
-	var found *StepNode
-	for _, child := range n.Children {
-		if candidate := deepestInProgressNode(child); candidate != nil {
-			found = candidate
-		}
-	}
-	if found != nil {
-		return found
-	}
-	if n.Parent != nil && n.Status == StatusInProgress {
-		return n
-	}
-	return nil
+	return deepestMatchingNode(n, func(node *StepNode) bool {
+		return node.Parent != nil && node.Status == StatusInProgress
+	})
 }
 
 func findDeepestInProgressUI(n *StepNode, stepID string) *StepNode {
+	return deepestMatchingNode(n, func(node *StepNode) bool {
+		return node.ID == stepID && node.Type == NodeUI && node.Status == StatusInProgress
+	})
+}
+
+func deepestMatchingNode(n *StepNode, matches func(*StepNode) bool) *StepNode {
 	if n == nil {
 		return nil
 	}
 	var found *StepNode
 	for _, child := range n.Children {
-		if candidate := findDeepestInProgressUI(child, stepID); candidate != nil {
+		if candidate := deepestMatchingNode(child, matches); candidate != nil {
 			found = candidate
 		}
 	}
 	if found != nil {
 		return found
 	}
-	if n.ID == stepID && n.Type == NodeUI && n.Status == StatusInProgress {
+	if matches(n) {
 		return n
 	}
 	return nil
@@ -1365,14 +1356,14 @@ func findDeepestInProgressUI(n *StepNode, stepID string) *StepNode {
 // its content or width. Tree selection is intentionally not derived from it.
 func (m *Model) rebuildDetail() int {
 	lines := m.selectedDetailDocument(m.rightPaneWidth()).renderScreen()
-	m.logLineCount = len(lines)
+	m.detailLineCount = len(lines)
 	return len(lines)
 }
 
-// maxLogOffset returns the maximum valid offset for the currently visible
+// maxDetailOffset returns the maximum valid offset for the currently visible
 // right-pane content.
-func (m *Model) maxLogOffset() int {
-	return max(0, m.rightPaneLineCount(m.logLineCount)-m.bodyHeight())
+func (m *Model) maxDetailOffset() int {
+	return max(0, m.rightPaneLineCount(m.detailLineCount)-m.bodyHeight())
 }
 
 func (m *Model) rightPaneLineCount(fallback int) int {
@@ -1391,7 +1382,7 @@ func (m *Model) liveUIDetailLines(width int) []string {
 	m.liveUI.SetWidth(max(1, width-3))
 	doc := m.selectedDetailDocument(width)
 	for i := range doc.sections {
-		if doc.sections[i].label == "Current form" {
+		if doc.sections[i].label == currentFormLabel {
 			doc.sections[i].body = m.liveUI.View()
 			doc.sections[i].copy = ""
 			break
@@ -1408,17 +1399,17 @@ func (m *Model) rightPaneWidth() int {
 }
 
 func (m *Model) scrollSelectedDetailToTail() {
-	m.logOffset = m.maxLogOffset()
+	m.detailOffset = m.maxDetailOffset()
 }
 
-func (m *Model) clampLogOffset(lineCount int) {
+func (m *Model) clampDetailOffset(lineCount int) {
 	lineCount = m.rightPaneLineCount(lineCount)
 	maxOffset := max(0, lineCount-m.bodyHeight())
-	if m.logOffset < 0 {
-		m.logOffset = 0
+	if m.detailOffset < 0 {
+		m.detailOffset = 0
 	}
-	if m.logOffset > maxOffset {
-		m.logOffset = maxOffset
+	if m.detailOffset > maxOffset {
+		m.detailOffset = maxOffset
 	}
 }
 
@@ -1437,10 +1428,6 @@ func (m *Model) applyOutputChunk(msg liverun.OutputChunkMsg) {
 	case "stderr":
 		node.Stderr = tailOutputCap(node.Stderr + string(msg.Bytes))
 	}
-}
-
-func (m *Model) loadSelectedAgentCallOutput() {
-	m.loadHistoricalOutput(m.selectedNode())
 }
 
 // loadHistoricalOutput loads an execution's bounded persisted evidence. Calls
@@ -1472,10 +1459,7 @@ func (m *Model) loadHistoricalOutput(node *StepNode) {
 	}
 	root, err := os.OpenRoot(filepath.Join(m.sessionDir, "output"))
 	if errors.Is(err, os.ErrNotExist) {
-		node.OutputLoaded = true
-		if node.Type == NodeAgentCall {
-			node.CallOutputLoaded = true
-		}
+		markHistoricalOutputLoaded(node)
 		m.clearOutputLoadError(node)
 		return
 	}
@@ -1484,13 +1468,13 @@ func (m *Model) loadHistoricalOutput(node *StepNode) {
 		return
 	}
 
-	stdout, stdoutFound, err := readBoundedCallOutput(root, base+".out")
+	stdout, stdoutFound, err := readBoundedOutput(root, base+".out")
 	if err != nil {
 		err = errors.Join(err, root.Close())
 		m.loadErr = outputLoadLabel(node) + ": " + err.Error()
 		return
 	}
-	stderr, stderrFound, err := readBoundedCallOutput(root, base+".err")
+	stderr, stderrFound, err := readBoundedOutput(root, base+".err")
 	if err != nil {
 		err = errors.Join(err, root.Close())
 		m.loadErr = outputLoadLabel(node) + ": " + err.Error()
@@ -1501,7 +1485,7 @@ func (m *Model) loadHistoricalOutput(node *StepNode) {
 		return
 	}
 	if node.Type == NodeHeadlessAgent || node.Type == NodeAgentCall {
-		stdout, stderr = filterAgentCallOutput(node, stdout, stderr)
+		stdout, stderr = filterAgentOutput(node, stdout, stderr)
 	}
 	if stdoutFound {
 		node.Stdout = stdout
@@ -1509,11 +1493,15 @@ func (m *Model) loadHistoricalOutput(node *StepNode) {
 	if stderrFound {
 		node.Stderr = stderr
 	}
+	markHistoricalOutputLoaded(node)
+	m.clearOutputLoadError(node)
+}
+
+func markHistoricalOutputLoaded(node *StepNode) {
 	node.OutputLoaded = true
 	if node.Type == NodeAgentCall {
 		node.CallOutputLoaded = true
 	}
-	m.clearOutputLoadError(node)
 }
 
 func historicalOutputNode(node *StepNode) bool {
@@ -1535,7 +1523,7 @@ func outputLoadLabel(node *StepNode) string {
 	return "load output"
 }
 
-func filterAgentCallOutput(node *StepNode, rawStdout, rawStderr string) (stdout, stderr string) {
+func filterAgentOutput(node *StepNode, rawStdout, rawStderr string) (stdout, stderr string) {
 	stdout, stderr = rawStdout, rawStderr
 	adapter, err := cli.Get(node.AgentCLI)
 	if err != nil {
@@ -1554,7 +1542,7 @@ func filterAgentCallOutput(node *StepNode, rawStdout, rawStderr string) (stdout,
 	return stdout, stderr
 }
 
-func readBoundedCallOutput(root *os.Root, name string) (output string, found bool, err error) {
+func readBoundedOutput(root *os.Root, name string) (output string, found bool, err error) {
 	file, err := root.Open(name)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", false, nil
@@ -1667,7 +1655,7 @@ func (m *Model) handleEsc() (tea.Model, tea.Cmd) {
 		m.path = m.path[:len(m.path)-1]
 		m.setSelected(leaving)
 		m.treeOffset = 0
-		m.logOffset = 0
+		m.detailOffset = 0
 		m.rebuildDetail()
 		return m, nil
 	}
@@ -1697,7 +1685,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 			m.path = append(m.path, n)
 			m.setSelected(firstRealChild(n.Drilldown()))
 			m.treeOffset = 0
-			m.logOffset = 0
+			m.detailOffset = 0
 			m.rebuildDetail()
 			return m, nil
 		}
@@ -1712,7 +1700,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		m.path = append(m.path, n)
 		m.setSelected(firstRealChild(n.Drilldown()))
 		m.treeOffset = 0
-		m.logOffset = 0
+		m.detailOffset = 0
 		m.rebuildDetail()
 		return m, nil
 
@@ -1723,7 +1711,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		m.path = append(m.path, n)
 		m.setSelected(firstRealChild(n.Drilldown()))
 		m.treeOffset = 0
-		m.logOffset = 0
+		m.detailOffset = 0
 		m.rebuildDetail()
 		return m, nil
 
@@ -1737,7 +1725,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		m.path = append(m.path, n)
 		m.setSelected(firstRealChild(n.Drilldown()))
 		m.treeOffset = 0
-		m.logOffset = 0
+		m.detailOffset = 0
 		m.rebuildDetail()
 		return m, nil
 
@@ -1774,7 +1762,7 @@ func (m *Model) navigateToNode(target *StepNode) {
 	}
 	m.ensureProjectionContainersLoaded(target)
 	m.setSelected(target)
-	m.logOffset = 0
+	m.detailOffset = 0
 }
 
 // findFailedLeaf returns the deepest non-container StepNode with StatusFailed,
