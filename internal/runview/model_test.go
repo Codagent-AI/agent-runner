@@ -2847,6 +2847,31 @@ func TestModel_ResumedMsg_ReEnablesMouse(t *testing.T) {
 	}
 }
 
+func TestModel_ResumedMsgRefreshesCallsWithoutReengagingPausedFollow(t *testing.T) {
+	tree := agentCallTestTree()
+	parent := tree.Root.Children[0]
+	parent.Status = StatusInProgress
+	m := newTestModel(tree, FromLiveRun)
+	m.sessionDir = t.TempDir()
+	m.running = true
+	m.followActive = false
+	m.followTail = false
+	m.setSelected(parent)
+	appendAuditTestEvent(t, m.sessionDir, agentCallStartEvent("call-1", "attempt-1", "agent", "implementor"))
+
+	m.Update(liverun.ResumedMsg{})
+
+	if len(parent.Children) != 1 {
+		t.Fatalf("recorded call was not reconstructed: %#v", parent.Children)
+	}
+	if m.selectedNode() != parent {
+		t.Fatalf("paused selection changed to %v, want parent", m.selectedNode())
+	}
+	if m.followActive || m.followTail {
+		t.Fatalf("resumed follow flags = active:%v tail:%v, want both false", m.followActive, m.followTail)
+	}
+}
+
 func TestModel_ExecDone_Failed_JumpsToFailedStep(t *testing.T) {
 	tree := simpleTree()
 	// Mark the first step (shell "build") as failed
@@ -3313,6 +3338,7 @@ func TestSuspendedMsg_PreservesManualDrillInWhenActiveOutside(t *testing.T) {
 	m.path = []*StepNode{root, subwf}
 	m.cursor = 0
 	m.followActive = false
+	m.followTail = true
 	m.activeStepPrefix = "[stepC]"
 
 	m.Update(liverun.SuspendedMsg{})
@@ -3320,19 +3346,15 @@ func TestSuspendedMsg_PreservesManualDrillInWhenActiveOutside(t *testing.T) {
 	if len(m.path) != 2 || m.path[1] != subwf {
 		t.Fatalf("path should retain explicit drill scope, got %d segments", len(m.path))
 	}
-	if !m.followActive || !m.followTail {
-		t.Fatalf("suspend follow flags = active:%v tail:%v, want both true", m.followActive, m.followTail)
+	if m.followActive || !m.followTail {
+		t.Fatalf("suspend follow flags = active:%v tail:%v, want active:false tail:true", m.followActive, m.followTail)
 	}
 	if m.selectedNode() != stepB {
 		t.Fatalf("selected = %v, want scoped stepB", m.selectedNode())
 	}
 }
 
-// TestSuspendedMsg_KeepsDrillInWhenActiveInside verifies the looser policy:
-// if the active step lives inside the drilled container, the drill-in is
-// preserved (active follow re-enables and the cursor follows within the
-// container).
-func TestSuspendedMsg_KeepsDrillInWhenActiveInside(t *testing.T) {
+func TestSuspendedMsg_PreservesPausedSelectionWhenActiveInside(t *testing.T) {
 	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
 	stepA := &StepNode{ID: "stepA", Type: NodeShell, Status: StatusSuccess, Parent: root}
 	subwf := &StepNode{ID: "subwf", Type: NodeSubWorkflow, Status: StatusInProgress, Parent: root, SubLoaded: true}
@@ -3356,10 +3378,10 @@ func TestSuspendedMsg_KeepsDrillInWhenActiveInside(t *testing.T) {
 	if m.path[1] != subwf {
 		t.Fatal("path[1] should still be subwf")
 	}
-	if !m.followActive || !m.followTail {
-		t.Fatalf("suspend follow flags = active:%v tail:%v, want both true", m.followActive, m.followTail)
+	if m.followActive || m.followTail {
+		t.Fatalf("suspend follow flags = active:%v tail:%v, want both false", m.followActive, m.followTail)
 	}
-	if m.cursor != 1 {
-		t.Fatalf("cursor = %d, want 1 (stepB2 index inside subwf)", m.cursor)
+	if m.cursor != 0 {
+		t.Fatalf("cursor = %d, want 0 (manual selection preserved)", m.cursor)
 	}
 }

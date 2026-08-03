@@ -582,6 +582,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case liverun.ResumedMsg:
 		// BubbleTea's RestoreTerminal does not re-enable mouse mode after
 		// ReleaseTerminal disables it, so we re-enable it explicitly.
+		m.handleResumedMsg()
 		return m, tea.EnableMouseCellMotion
 
 	case ResumeMsg:
@@ -664,15 +665,29 @@ func (m *Model) handleShowTUIMsg() (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleSuspendedMsg() {
-	// Re-enter following without changing the user's manual scope. A terminal
-	// hand-off is not an implicit drill-out.
-	m.followActive = true
-	m.followTail = true
-	m.applyAutoFollowCursor()
+	// Terminal ownership is not an input gesture. In particular, it cannot
+	// re-enable follow after the user deliberately paused exploration.
 	m.rebuildDetail()
 	if !m.altScreen {
 		m.suppressAltScreen = true
 	}
+}
+
+func (m *Model) handleResumedMsg() {
+	if !m.hasLiveUpdates() {
+		return
+	}
+	selectedBefore := m.selectedNode()
+	previousLineCount := m.logLineCount
+	m.refreshData()
+	if m.followActive {
+		m.applyAutoFollowCursor()
+	}
+	lineCount := m.rebuildDetail()
+	if m.shouldFollowTail() && (m.selectedNode() != selectedBefore || lineCount != previousLineCount) {
+		m.scrollSelectedDetailToTail()
+	}
+	m.clampLogOffset(lineCount)
 }
 
 func (m *Model) handleLiveUIKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

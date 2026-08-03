@@ -607,16 +607,5 @@ func appendAuditTestEvent(t *testing.T, sessionDir string, event RawEvent) {
 func modelTimeZero() (zeroTime time.Time) { return zeroTime }
 
 func sanitizeOutputPrefixForTest(prefix string) string {
-	var b strings.Builder
-	for _, ch := range prefix {
-		switch {
-		case ch >= 'A' && ch <= 'Z', ch >= 'a' && ch <= 'z', ch >= '0' && ch <= '9', ch == '.' || ch == '-' || ch == '_':
-			b.WriteRune(ch)
-		case ch == '/':
-			b.WriteString("__")
-		default:
-			b.WriteByte('_')
-		}
-	}
-	return b.String()
+	return liverun.SanitizeOutputPrefix(prefix)
 }
