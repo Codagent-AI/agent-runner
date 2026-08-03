@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/codagent/agent-runner/internal/tuistyle"
 )
 
@@ -138,5 +139,69 @@ func TestBuildSelectedDetailLinesDoesNotIncludeContainerDescendants(t *testing.T
 	_, ranges := buildSelectedDetailLines(group, 80, map[string]bool{}, 0, false, ResolverConfig{})
 	if len(ranges) != 1 || ranges[0].node != group {
 		t.Fatalf("selected detail ranges = %#v, want only group", ranges)
+	}
+}
+
+func TestFitTreeRowNeverExceedsExtremelyNarrowSidebar(t *testing.T) {
+	root := &StepNode{ID: "root", Type: NodeRoot}
+	loop := &StepNode{ID: "very-long-loop-name", Type: NodeLoop, Parent: root, IterationsCompleted: 3, LoopMatches: []string{"a", "b", "c", "d"}}
+	root.Children = []*StepNode{loop}
+	m := newTestModel(&Tree{Root: root}, FromInspect)
+	m.setSelected(loop)
+	row := renderedStepRow{node: loop, selectable: true, depth: 8}
+	for _, width := range []int{0, 1, 2, 5} {
+		if got := lipgloss.Width(m.fitTreeRow(row, width)); got > width {
+			t.Fatalf("width %d rendered %d columns", width, got)
+		}
+	}
+}
+
+func TestSelectionSurvivesInsertionThatChangesNodeKey(t *testing.T) {
+	root := &StepNode{ID: "root", Type: NodeRoot}
+	first := &StepNode{ID: "first", Type: NodeShell, Parent: root}
+	selected := &StepNode{ID: "selected", Type: NodeShell, Parent: root}
+	root.Children = []*StepNode{first, selected}
+	m := newTestModel(&Tree{Root: root}, FromInspect)
+	m.setSelected(selected)
+	oldKey := m.selectedKey
+
+	inserted := &StepNode{ID: "inserted", Type: NodeShell, Parent: root}
+	root.Children = append([]*StepNode{inserted}, root.Children...)
+	m.projectedRows()
+
+	if m.selectedNode() != selected {
+		t.Fatalf("selection moved to %v after insertion", m.selectedNode())
+	}
+	if m.selectedKey == oldKey {
+		t.Fatalf("selection key %q was not refreshed after insertion", m.selectedKey)
+	}
+}
+
+func TestAutoFollowOutsideManualScopeKeepsVisibleSelection(t *testing.T) {
+	root := &StepNode{ID: "root", Type: NodeRoot}
+	scope := &StepNode{ID: "scope", Type: NodeGroup, Parent: root}
+	inside := &StepNode{ID: "inside", Type: NodeShell, Parent: scope}
+	active := &StepNode{ID: "active", Type: NodeShell, Status: StatusInProgress, Parent: root}
+	scope.Children = []*StepNode{inside}
+	root.Children = []*StepNode{scope, active}
+	m := newTestModel(&Tree{Root: root}, FromLiveRun)
+	m.path = []*StepNode{root, scope}
+	m.setSelected(inside)
+	m.applyAutoFollowToNode(active)
+	if m.selectedNode() != inside {
+		t.Fatalf("outside active step replaced scoped selection with %v", m.selectedNode())
+	}
+}
+
+func TestRightPaneWidthUsesSettledSidebarWidth(t *testing.T) {
+	root := &StepNode{ID: "root", Type: NodeRoot}
+	step := &StepNode{ID: "short", Type: NodeShell, Parent: root}
+	root.Children = []*StepNode{step}
+	m := newTestModel(&Tree{Root: root}, FromInspect)
+	m.termWidth = 100
+	m.sidebarWidth = 60
+	want := measureTreePaneLayout(m.termWidth, rowTexts(m.buildProjectedRenderedRows()), m.sidebarWidth).detail
+	if got := m.rightPaneWidth(); got != want {
+		t.Fatalf("right pane width = %d, want settled layout width %d", got, want)
 	}
 }

@@ -189,24 +189,59 @@ func (m *Model) projectedRows() []treeRow {
 	m.restoreSelectedNode()
 	m.ensureProjectionContainersLoaded(m.selected)
 	m.ensureProjectionContainersLoaded(m.activeNode())
-	return projectTree(m.manualScope(), m.selectedNode(), m.activeNode())
+	rows := projectTree(m.manualScope(), m.selectedNode(), m.activeNode())
+	m.syncProjectedCursorFromRows(rows)
+	return rows
 }
 
 func (m *Model) restoreSelectedNode() {
-	if m.selected == nil || m.tree == nil || m.tree.Root == nil {
+	if m.tree == nil || m.tree.Root == nil {
 		return
 	}
-	if isDescendantOf(m.selected, m.tree.Root) {
+	m.restoreManualPath()
+	if m.selected == nil && m.selectedKey == "" {
 		return
 	}
-	if restored := findNodeByKey(m.tree.Root, m.selectedKey); restored != nil {
+	inTree := m.selected != nil && isDescendantOf(m.selected, m.tree.Root)
+	if restored := findNodeByKey(m.tree.Root, m.selectedKey); !inTree {
 		m.selected = restored
+	} else if m.selected.NodeKey() == m.selectedKey && restored != nil {
+		// A rebuilt tree has no surviving pointer, so a stable key is the
+		// primary way to restore its corresponding node.
+		m.selected = restored
+	} else if m.selected != nil {
+		// Dynamic insertion can change an index-based key without replacing the
+		// node pointer. Keep that real selected execution and refresh its key.
+		m.selectedKey = m.selected.NodeKey()
+	}
+
+	scope := m.currentContainer()
+	if m.selected != nil && scope != nil && isDescendantOf(m.selected, scope) {
 		return
 	}
-	m.selected = firstRealChild(m.currentContainer())
+	m.selected = firstRealChild(scope)
 	if m.selected != nil {
 		m.selectedKey = m.selected.NodeKey()
 	}
+}
+
+func (m *Model) restoreManualPath() {
+	if len(m.path) == 0 {
+		m.path = []*StepNode{m.tree.Root}
+		return
+	}
+	if m.path[0] == m.tree.Root {
+		return
+	}
+	restored := []*StepNode{m.tree.Root}
+	for _, old := range m.path[1:] {
+		current := findNodeByKey(m.tree.Root, old.NodeKey())
+		if current == nil {
+			break
+		}
+		restored = append(restored, current)
+	}
+	m.path = restored
 }
 
 func findNodeByKey(root *StepNode, key string) *StepNode {
@@ -258,7 +293,11 @@ func (m *Model) ensureProjectionContainersLoaded(node *StepNode) {
 }
 
 func (m *Model) syncProjectedCursor() {
-	for i, row := range m.projectedRows() {
+	m.syncProjectedCursorFromRows(m.projectedRows())
+}
+
+func (m *Model) syncProjectedCursorFromRows(rows []treeRow) {
+	for i, row := range rows {
 		if row.node == m.selected {
 			m.cursor = i
 			return

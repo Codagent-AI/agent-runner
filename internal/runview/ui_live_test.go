@@ -181,11 +181,11 @@ func TestLiveUIRequestLeavesCompletedDrillInForSiblingSubWorkflow(t *testing.T) 
 	if len(m.path) != 2 || m.path[1] != guided {
 		t.Fatalf("auto-follow should preserve manual scope, got %d segments", len(m.path))
 	}
-	if got := m.selectedNode(); got != intro {
-		t.Fatalf("selected node = %v, want active UI leaf", got)
+	if got := m.selectedNode(); got != final {
+		t.Fatalf("selected node = %v, want scoped selection", got)
 	}
-	if !m.liveUIVisible() {
-		t.Fatal("live UI should be visible after following sibling sub-workflow")
+	if m.liveUIVisible() {
+		t.Fatal("out-of-scope live UI should not replace scoped detail")
 	}
 }
 

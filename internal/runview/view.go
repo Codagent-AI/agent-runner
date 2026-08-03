@@ -277,14 +277,24 @@ func (m *Model) renderTreeRowLabel(n *StepNode, selected, suppressStatus bool, d
 // fitTreeRow clips only the name portion of a node row. Cursor, indentation,
 // status, suffix and type glyph are fixed chrome and survive narrow layouts.
 func (m *Model) fitTreeRow(row renderedStepRow, width int) string {
+	if width <= 0 {
+		return ""
+	}
 	if row.node == nil {
-		return runewidth.Truncate(tuistyle.Sanitize(row.text), max(0, width), "…")
+		return runewidth.Truncate(tuistyle.Sanitize(row.text), width, "…")
 	}
 	base, suffix := stepRowLabel(row.node)
 	fixed := lipgloss.Width(m.renderTreeRowLabel(row.node, row.node == m.selectedNode(), row.suppressStatus, row.depth, suffix))
-	nameWidth := max(1, width-fixed)
-	label := runewidth.Truncate(base, nameWidth, "…") + suffix
-	return m.renderTreeRowLabel(row.node, row.node == m.selectedNode(), row.suppressStatus, row.depth, label)
+	nameWidth := max(0, width-fixed)
+	label := suffix
+	if nameWidth > 0 {
+		label = runewidth.Truncate(base, nameWidth, "…") + suffix
+	}
+	fitted := m.renderTreeRowLabel(row.node, row.node == m.selectedNode(), row.suppressStatus, row.depth, label)
+	if lipgloss.Width(fitted) > width {
+		return runewidth.Truncate(tuistyle.Sanitize(fitted), width, "…")
+	}
+	return fitted
 }
 
 // expansionHasInProgressChild reports whether any expansion row refers to a
@@ -607,11 +617,6 @@ func (m *Model) selectedNodeHasTruncatedOutput() bool {
 		return false
 	}
 	return truncateOutput(n.Stdout).Truncated || truncateOutput(n.Stderr).Truncated
-}
-
-func twoColumnPaneWidths(termWidth int, rows []string) (listWidth, rightWidth int, displayRows []string) {
-	layout := measureTreePaneLayout(termWidth, rows, 0)
-	return layout.sidebar, layout.detail, layout.rows
 }
 
 // measureTreePaneLayout measures complete rows before any name/content is

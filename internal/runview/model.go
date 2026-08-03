@@ -1229,6 +1229,9 @@ func (m *Model) applyAutoFollowToNode(active *StepNode) {
 	// Following changes selection only. It deliberately leaves the manual
 	// breadcrumb scope untouched; the projector exposes the active ancestry
 	// whenever it lies under that scope.
+	if scope := m.currentContainer(); scope == nil || !isDescendantOf(active, scope) {
+		return
+	}
 	m.setSelected(active)
 	m.ensureTreeSelectionVisible(m.cursor)
 }
@@ -1305,8 +1308,8 @@ func (m *Model) rightPaneLineCount(fallback int) int {
 // Uses the same formula as renderTwoColumn but with a conservative list-
 // column estimate so ranges are close enough for scroll sync.
 func (m *Model) rightPaneWidth() int {
-	_, rightWidth, _ := twoColumnPaneWidths(m.termWidth, rowTexts(m.buildProjectedRenderedRows()))
-	return rightWidth
+	layout := measureTreePaneLayout(m.termWidth, rowTexts(m.buildProjectedRenderedRows()), m.sidebarWidth)
+	return layout.detail
 }
 
 // syncLogToSelection sets logOffset so the selected step's block is in view.

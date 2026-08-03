@@ -3366,8 +3366,8 @@ func TestSuspendedMsg_PreservesManualDrillInWhenActiveOutside(t *testing.T) {
 	if !m.autoFollow {
 		t.Fatal("autoFollow should be re-enabled on suspend")
 	}
-	if m.selectedNode() != stepC {
-		t.Fatalf("selected = %v, want active stepC", m.selectedNode())
+	if m.selectedNode() != stepB {
+		t.Fatalf("selected = %v, want scoped stepB", m.selectedNode())
 	}
 }
 
