@@ -24,21 +24,19 @@ steps:
 
       Recommend a workflow with a one-line reason, name the realistic alternative if there is one, and let the user decide. Do not submit a route until the user has agreed to it in this conversation.
 
-      Write the agreed context and recommendation to the runner-owned handoff path in `AGENT_RUNNER_INTAKE_HANDOFF`.
+      Write the agreed context and recommendation to the runner-owned handoff path in `AGENT_RUNNER_INTAKE_HANDOFF`. The workflow you route to receives this text directly in its opening prompt, so write it for that agent: the goal, the constraints and non-goals you settled on, what you ruled out and why, and anything the user told you that it would otherwise have to ask for again. Keep it under a few hundred lines; only the leading portion is carried across.
 
       Once the user agrees, write the route request to the path in `AGENT_RUNNER_ROUTE_REQUEST`, then run `agent-runner step submit-route`. The request is strict JSON with exactly these fields; any other field is rejected:
 
       - `workflow` (required, string): the canonical name of one of the workflows in the catalog, such as `spec-driven:change`. Naming a workflow that does not resolve returns an error listing what you can choose from.
       - `params` (optional, object of string to string): every parameter the catalog lists as required for that workflow, and no parameter it does not list.
-      - `handoff` (required, string): the same path you were given in `AGENT_RUNNER_INTAKE_HANDOFF`.
 
       For example:
 
       ```json
       {
         "workflow": "spec-driven:change",
-        "params": {"change_name": "add-retry-budget"},
-        "handoff": "/<the exact value of AGENT_RUNNER_INTAKE_HANDOFF>"
+        "params": {"change_name": "add-retry-budget"}
       }
       ```
 

@@ -6,7 +6,7 @@ Resuming a run SHALL restore the intake provenance the run was created with. A r
 
 #### Scenario: Resumed intake-launched run restores its handoff
 - **WHEN** a run launched from intake is interrupted and resumed with `--resume <id>`
-- **THEN** the resumed run's steps see the same sealed handoff they saw before the interruption, both its contents and its path
+- **THEN** the resumed run's steps see the same sealed handoff contents they saw before the interruption
 
 #### Scenario: Resumed intake-launched run restores its parent
 - **WHEN** a run launched from intake is resumed

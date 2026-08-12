@@ -28,7 +28,7 @@ func TestWriteStepStateDoesNotClobberIntakeRoute(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(runDir, "handoff.md"), []byte("sealed notes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target","handoff":"handoff.md"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	prepared, err := intakeroute.Validate(&intakeroute.ValidateOptions{

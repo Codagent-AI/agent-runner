@@ -20,7 +20,11 @@ steps:
     mode: interactive
     tools: [call_agent]
     prompt: |
-      Help the user write the proposal for {{change_label}} "{{change_name}}". When `{{intake_handoff}}` is non-empty, read that handoff file before asking the user for context; otherwise, first ask what the change is about and do not guess. You MUST use the codagent:propose skill and write the proposal to `{{change_dir}}/proposal.md`.
+      Help the user write the proposal for {{change_label}} "{{change_name}}". When the intake context below is non-empty, treat it as what the user already told an agent and do not ask them to repeat it; otherwise, first ask what the change is about and do not guess. You MUST use the codagent:propose skill and write the proposal to `{{change_dir}}/proposal.md`.
+
+      <intake_context>
+      {{intake_handoff}}
+      </intake_context>
 
       Once the proposal draft is complete, use codagent:call-agent with a fresh `agent: crosscheck` to obtain one adversarial review. The task-specific child instructions must require it to use the codagent:proposal-review skill, read the proposal under `{{change_dir}}/`, inspect relevant repository context, provide clear actionable feedback with recommended resolutions, and never modify files.
 

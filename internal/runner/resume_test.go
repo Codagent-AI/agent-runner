@@ -283,6 +283,9 @@ func TestPrepareRunCopiesIntakeHandoffAndPrepareResumeRestoresProvenance(t *test
 	if contents, err := os.ReadFile(handoffCopy); err != nil || string(contents) != "sealed context" {
 		t.Fatalf("copied handoff = %q, %v", contents, err)
 	}
+	if handle.rs.ctx.IntakeHandoffContents != "sealed context" {
+		t.Fatalf("prepared handoff contents = %q, want the copied handoff text", handle.rs.ctx.IntakeHandoffContents)
+	}
 	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -307,11 +310,17 @@ func TestPrepareRunCopiesIntakeHandoffAndPrepareResumeRestoresProvenance(t *test
 	if resumed.rs.ctx.IntakeHandoff != handoffCopy || resumed.rs.ctx.IntakeParentRunID != "intake-parent-run" {
 		t.Fatalf("resumed provenance = (%q, %q)", resumed.rs.ctx.IntakeHandoff, resumed.rs.ctx.IntakeParentRunID)
 	}
+	if resumed.rs.ctx.IntakeHandoffContents != "sealed context" {
+		t.Fatalf("resumed handoff contents = %q, want the copied handoff text", resumed.rs.ctx.IntakeHandoffContents)
+	}
 	if result := ExecuteFromHandle(resumed, nil); result != ResultSuccess {
 		t.Fatalf("resumed result = %q, want success", result)
 	}
-	if len(resumedRunner.calls) != 1 || !strings.Contains(resumedRunner.calls[0][2], handoffCopy) {
-		t.Fatalf("resumed interpolated command = %#v, want copied handoff path", resumedRunner.calls)
+	if len(resumedRunner.calls) != 1 || !strings.Contains(resumedRunner.calls[0][2], "sealed context") {
+		t.Fatalf("resumed interpolated command = %#v, want handoff contents", resumedRunner.calls)
+	}
+	if strings.Contains(resumedRunner.calls[0][2], handoffCopy) {
+		t.Fatalf("resumed interpolated command leaked the handoff path: %#v", resumedRunner.calls)
 	}
 	state, err = stateio.ReadState(filepath.Join(sessionDir, "state.json"))
 	if err != nil {
@@ -588,5 +597,66 @@ func TestPrepareResume_MissingDefinitionUsesSuccessfulAuditCompletion(t *testing
 	_, err := PrepareResume(filepath.Join(dir, "state.json"), &Options{})
 	if !errors.Is(err, ErrAlreadyCompleted) {
 		t.Fatalf("PrepareResume error = %v, want ErrAlreadyCompleted from saved audit evidence", err)
+	}
+}
+
+// A resumed run must interpolate the value its original invocation had. The
+// copied handoff lives in the run's own directory and nothing stops the agent
+// from rewriting it, so re-reading at resume time would silently swap the
+// context out from under the workflow.
+func TestResumeKeepsOriginalHandoffContentsWhenTheCopyIsRewritten(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	sourceDir := t.TempDir()
+	workflowPath, err := filepath.Abs(filepath.Join("..", "..", "testdata", "intake-handoff-reference-v1.0.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := loader.LoadWorkflow(workflowPath, loader.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handoffSource := filepath.Join(sourceDir, "sealed-handoff.md")
+	if err := os.WriteFile(handoffSource, []byte("agreed context"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := t.TempDir()
+
+	handle, err := PrepareRun(&workflow, nil, &Options{
+		WorkflowFile:        workflowPath,
+		SessionDir:          sessionDir,
+		IntakeHandoffSource: handoffSource,
+		IntakeParentRunID:   "intake-parent-run",
+		ProcessRunner:       &mockRunner{},
+		GlobExpander:        &mockGlob{},
+		Log:                 &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareRun() error = %v", err)
+	}
+	handoffCopy := handle.rs.ctx.IntakeHandoff
+	finalizeRun(handle.rs, ResultStopped)
+
+	// The agent rewrites its own run's handoff copy before the resume.
+	if err := os.WriteFile(handoffCopy, []byte("tampered context"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	resumedRunner := &mockRunner{}
+	resumed, err := PrepareResume(filepath.Join(sessionDir, "state.json"), &Options{
+		ProcessRunner: resumedRunner,
+		GlobExpander:  &mockGlob{},
+		Log:           &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareResume() error = %v", err)
+	}
+	if got := resumed.rs.ctx.IntakeHandoffContents; got != "agreed context" {
+		t.Fatalf("resumed handoff contents = %q, want the contents the original invocation saw", got)
+	}
+	if result := ExecuteFromHandle(resumed, nil); result != ResultSuccess {
+		t.Fatalf("resumed result = %q, want success", result)
+	}
+	if len(resumedRunner.calls) != 1 || strings.Contains(resumedRunner.calls[0][2], "tampered") {
+		t.Fatalf("resumed interpolated the rewritten handoff: %#v", resumedRunner.calls)
 	}
 }

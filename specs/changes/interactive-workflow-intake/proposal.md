@@ -30,7 +30,6 @@ This is the default entry point, so it sits in front of everyone starting work i
 - On acceptance, the runner **seals a snapshot** of the route and handoff into a run-owned sidecar. The sealed route records the **exact resolved workflow source path**, not just the canonical name, so the definition that was validated is the definition that runs. Subsequent reads never re-read the agent-writable originals.
 - **Acceptance of `complete_step` freezes the staged route under the same lock**, so a `submit_route` arriving after an accepted completion is rejected. While the step is still active, a later valid submission replaces an earlier one, and identical retries deduplicate by request ID.
 - Expose **`{{intake_handoff}}`** as a built-in template variable defined on **every** run: the **contents** of the sealed handoff on an intake launch, and the empty string on every direct or headless launch. Delivering the text rather than a location is what makes the handoff unconditional; a path is consumed only if the agent elects to read it. The inlined text is bounded well below the handoff file's own limit, and an oversized handoff is truncated at a line boundary with a marker naming the full path rather than failing the run. A run resumes with the same value it originally had, so a resumed intake child still sees its sealed handoff.
-- Expose **`{{intake_handoff_path}}`** alongside it, carrying the sealed handoff's absolute path under the same always-defined and preserved-across-resume rules, for workflows that need to address the file rather than read the text.
 - **Reserve both names** as parameter and capture names. Built-ins otherwise have the lowest interpolation precedence, so a workflow declaring a parameter of either name would silently replace the sealed handoff and break the provenance guarantee the feature rests on.
 - Update the first agent prompt in **`core:define-change`** and in `spec-driven:simple-change` to carry `{{intake_handoff}}` directly, replacing an instruction to go read a file. `core:define-change` is shared by both the spec-driven and OpenSpec change flows, so both gain the behavior.
 - **Launch the selected workflow as a new top-level run** after the intake run finalizes, passing the sealed route through a private internal launch path. Provenance is **child-owned**: the launched run records its parent intake run ID, its own run ID, and the workflow version it actually ran. The parent records the frozen route and that a launch was attempted, but cannot record the child's run ID, because that ID is generated only after the process has been replaced and the parent's audit log is already closed.
@@ -48,7 +47,7 @@ This is the default entry point, so it sits in front of everyone starting work i
 ### Modified Capabilities
 
 - `step-control-channel`: Add a fourth authenticated message type alongside completion, committed-turn evidence, and agent calls, with its own acceptance state. Completion acceptance changes: it now also freezes the staged route under the same ordering lock before acknowledging.
-- `builtin-vars`: Add `{{intake_handoff}}`, carrying the sealed handoff's contents under a bound sized for a prompt, and `{{intake_handoff_path}}`, carrying its location. Both, unlike existing built-ins, are defined unconditionally, including as the empty string, and both are reserved against workflow parameters and captures.
+- `builtin-vars`: Add `{{intake_handoff}}`, carrying the sealed handoff's contents under a bound sized for a prompt. Unlike existing built-ins it is defined unconditionally, including as the empty string, and it is reserved against workflow parameters and captures.
 - `new-tab-layout`: Add the "Plan with an agent" entry and its relationship to the existing grouped workflow list.
 - `builtin-workflows`: Ship the intake workflow as an embedded built-in.
 - `resume-by-session-id`: Preserve a run's original intake provenance across resume, so a resumed intake child restores its sealed handoff path and a resumed intake parent restores its staged route.
@@ -65,8 +64,7 @@ The intake experience is an ordinary interactive agent step inside a built-in wo
 env:  AGENT_RUNNER_ROUTE_REQUEST=<run-dir>/route-request.json
 
       { "workflow": "spec-driven:change",
-        "params":   { "change_name": "interactive-workflow-intake" },
-        "handoff":  "<run-dir>/intake-handoff.md" }
+        "params":   { "change_name": "interactive-workflow-intake" } }
 
 run:  agent-runner step submit-route
 ```
@@ -111,7 +109,7 @@ Workflow resolution, version selection, and parameter validation reuse the exist
 - `cmd/agent-runner/` gains the `step submit-route` subcommand, the `-i`, `--cli`, and `--model` flags with their mutual-exclusivity rules and a TTY check that does not honor the `AGENT_RUNNER_NO_TUI` bypass, and a private internal launch path that accepts a sealed workflow source path rather than a canonical name.
 - `internal/cli/` needs the new command added to the pre-approved runner commands for interactive adapters. This touches the adapter descriptor and each adapter that materializes command permissions, and is the main reason the command's text must be fixed.
 - `internal/exec/` and `internal/model/` gain the run-scoped agent override consulted during agent resolution, with precedence above the step declaration and profile. Loader validation, prevalidation, and probing are untouched by this choice.
-- `internal/model/` gains the `intake_handoff` and `intake_handoff_path` built-ins and their reservation against parameters and captures; `internal/prevalidate/` must recognize both, since its built-in set is currently the hardcoded pair `session_dir` and `step_id`; `internal/audit/` records the route lifecycle. `BuiltinVarsForStep` changes shape slightly, since it currently omits empty values and returns nil for an empty map.
+- `internal/model/` gains the `intake_handoff` built-in and its reservation against parameters and captures; `internal/prevalidate/` must recognize it, since its built-in set is currently the hardcoded pair `session_dir` and `step_id`; `internal/audit/` records the route lifecycle. `BuiltinVarsForStep` changes shape slightly, since it currently omits empty values and returns nil for an empty map.
 - `internal/runner/` records parent provenance and the sealed handoff path in the launched run's state, and restores both on resume. Resume currently copies an explicit field list, so these need deliberate addition.
 - `internal/listview/` gains the "Plan with an agent" entry and its selection behavior on the New tab.
 - `workflows/` gains the embedded intake workflow. The prompt edit lands in the shared `core:define-change` sub-workflow, so it reaches both the spec-driven and OpenSpec change flows; `spec-driven:simple-change` is edited separately. Because prompts referencing `{{intake_handoff}}` fail to interpolate when the variable is undefined, the built-in must be in place before those prompts ship.

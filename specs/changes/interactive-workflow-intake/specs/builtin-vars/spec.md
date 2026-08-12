@@ -33,33 +33,13 @@ Unlike other built-ins, it SHALL be present even when its value is empty, so tha
 - **WHEN** a directly invoked run is resumed and a step interpolates `{{intake_handoff}}`
 - **THEN** it resolves to the empty string
 
-### Requirement: intake_handoff_path built-in variable
-
-The runner SHALL expose `{{intake_handoff_path}}` as a built-in template variable in every run. Its value SHALL be the absolute path of the sealed handoff when the run was launched from intake, and the empty string otherwise. It exists for workflows that need to address the handoff file itself rather than read its contents. It SHALL follow the same rules as `{{intake_handoff}}`: always present even when empty, preserved across resume, and reserved against shadowing.
-
-#### Scenario: Intake-launched run resolves the sealed path
-- **WHEN** a run launched from intake interpolates `{{intake_handoff_path}}`
-- **THEN** the runner replaces it with the absolute path of that run's sealed handoff
-
-#### Scenario: Path addresses the same handoff that was inlined
-- **WHEN** a step interpolates both `{{intake_handoff}}` and `{{intake_handoff_path}}`
-- **THEN** the path names the file whose contents produced the inlined value
-
-#### Scenario: Direct run resolves to empty
-- **WHEN** a directly invoked run interpolates `{{intake_handoff_path}}`
-- **THEN** the runner replaces it with the empty string and interpolation succeeds
-
-#### Scenario: Resumed intake-launched run keeps its handoff path
-- **WHEN** a run launched from intake is resumed and a step interpolates `{{intake_handoff_path}}`
-- **THEN** it resolves to the same sealed handoff path it had before the interruption
-
 ## MODIFIED Requirements
 
 ### Requirement: Built-in precedence
 
 Built-in variables have the **lowest** interpolation precedence. A workflow `params` entry or a captured variable with the same name as a built-in SHALL shadow the built-in.
 
-`intake_handoff` and `intake_handoff_path` are exempt: both are reserved names. A workflow SHALL NOT declare a parameter with either name, and a step SHALL NOT capture into either name through **any** capture sink, including both ordinary output capture and UI-step outcome capture. Such a workflow SHALL be rejected, so the sealed handoff can never be shadowed by workflow-supplied data.
+`intake_handoff` is exempt: it is a reserved name. A workflow SHALL NOT declare a parameter with that name, and a step SHALL NOT capture into it through **any** capture sink, including both ordinary output capture and UI-step outcome capture. Such a workflow SHALL be rejected, so the sealed handoff can never be shadowed by workflow-supplied data.
 
 #### Scenario: Param shadows built-in
 - **WHEN** a workflow declares `params: [step_id]` and a caller passes `step_id: custom-value`
@@ -79,8 +59,4 @@ Built-in variables have the **lowest** interpolation precedence. A workflow `par
 
 #### Scenario: UI outcome capture named intake_handoff is rejected
 - **WHEN** a UI step captures its outcome into a variable named `intake_handoff`
-- **THEN** the workflow is rejected with an error stating the name is reserved
-
-#### Scenario: The handoff path name is reserved the same way
-- **WHEN** a workflow declares a parameter named `intake_handoff_path`, or a step captures into that name through any capture sink
 - **THEN** the workflow is rejected with an error stating the name is reserved

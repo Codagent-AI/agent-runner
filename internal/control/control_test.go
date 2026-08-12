@@ -125,7 +125,7 @@ func TestControlServerStagesRouteThenFreezesItBeforeCompletionAcknowledgement(t 
 	if err := os.WriteFile(handoff, []byte("agreed plan\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target","handoff":"`+handoff+`"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store := intakeroute.NewStore(runDir)
@@ -169,7 +169,7 @@ func TestControlServerDiscardsPreparedRouteWhenPublicationFails(t *testing.T) {
 	if err := os.WriteFile(handoff, []byte("notes\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target","handoff":"`+handoff+`"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store := intakeroute.NewStore(runDir)
@@ -1131,7 +1131,7 @@ func TestControlServerRejectsCompletionWhenFreezeFails(t *testing.T) {
 	if err := os.WriteFile(handoff, []byte("agreed plan\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target","handoff":"`+handoff+`"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

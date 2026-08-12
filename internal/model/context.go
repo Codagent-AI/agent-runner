@@ -88,8 +88,15 @@ type ExecutionContext struct {
 	SessionDir string
 
 	// IntakeHandoff is the absolute path of the sealed handoff copied into this
-	// run when it was launched from intake. It is empty for direct runs.
+	// run when it was launched from intake. It is empty for direct runs. It is
+	// run provenance, persisted to state and restored on resume; it is not what
+	// {{intake_handoff}} resolves to.
 	IntakeHandoff string
+	// IntakeHandoffContents is the handoff text interpolated into prompts as
+	// {{intake_handoff}}, already bounded for inlining. It is derived from the
+	// file at IntakeHandoff by the runner rather than persisted, so this package
+	// stays free of filesystem access.
+	IntakeHandoffContents string
 	// IntakeParentRunID identifies the intake run that launched this run. It is
 	// empty for direct runs.
 	IntakeParentRunID string
@@ -155,6 +162,7 @@ type RootContextOptions struct {
 	AutonomousPermissionMode string
 	SessionDir               string
 	IntakeHandoff            string
+	IntakeHandoffContents    string
 	IntakeParentRunID        string
 	AgentOverride            *AgentOverride
 	EngineRef                interface{} // internal/engine.Engine
@@ -217,6 +225,7 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		AutonomousPermissionMode: opts.AutonomousPermissionMode,
 		SessionDir:               opts.SessionDir,
 		IntakeHandoff:            opts.IntakeHandoff,
+		IntakeHandoffContents:    opts.IntakeHandoffContents,
 		IntakeParentRunID:        opts.IntakeParentRunID,
 		AgentOverride:            opts.AgentOverride,
 		EngineRef:                opts.EngineRef,
@@ -250,7 +259,9 @@ func (c *ExecutionContext) BuiltinVarsForStep(stepID string) map[string]string {
 	}
 	// Unlike the surrounding built-ins, this must be present even when empty:
 	// direct runs must resolve {{intake_handoff}} rather than fail interpolation.
-	m[IntakeHandoffVar] = c.IntakeHandoff
+	// It carries the handoff text, not its path, so a consumer workflow receives
+	// the context in its prompt instead of having to elect to read a file.
+	m[IntakeHandoffVar] = c.IntakeHandoffContents
 	return m
 }
 
@@ -314,6 +325,7 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
 		SessionDir:               parent.SessionDir,
 		IntakeHandoff:            parent.IntakeHandoff,
+		IntakeHandoffContents:    parent.IntakeHandoffContents,
 		IntakeParentRunID:        parent.IntakeParentRunID,
 		AgentOverride:            parent.AgentOverride,
 		EngineRef:                parent.EngineRef,
@@ -399,6 +411,7 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
 		SessionDir:               parent.SessionDir,
 		IntakeHandoff:            parent.IntakeHandoff,
+		IntakeHandoffContents:    parent.IntakeHandoffContents,
 		IntakeParentRunID:        parent.IntakeParentRunID,
 		AgentOverride:            parent.AgentOverride,
 		EngineRef:                engineRef,

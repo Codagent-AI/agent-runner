@@ -2,7 +2,7 @@
 
 ### Requirement: Route request location and submission client
 
-Agent Runner SHALL provide the intake agent with the path of a run-owned route request file through the attempt environment. The binary SHALL expose `agent-runner step submit-route`, a fixed command that accepts no arguments and reads endpoint and credential data only from the inherited control environment. The command SHALL transmit no route request content: Agent Runner SHALL read the request from the path it supplied, so the submitting client cannot select or influence which file is read. The command SHALL NOT accept workflow, parameter, handoff, run, step, socket, or token values on the command line. It SHALL exit nonzero with guidance when the control environment is absent.
+Agent Runner SHALL provide the intake agent with the path of a run-owned route request file through the attempt environment. The binary SHALL expose `agent-runner step submit-route`, a fixed command that accepts no arguments and reads endpoint and credential data only from the inherited control environment. The command SHALL transmit no route request content: Agent Runner SHALL read the request from the path it supplied, so the submitting client cannot select or influence which file is read. The command SHALL NOT accept workflow, parameter, handoff, run, step, socket, or token values on the command line. The request schema SHALL NOT include a handoff location either: Agent Runner tells the agent where to write the handoff and validates that same path, so a request-supplied location could only echo a constant back and is rejected as an unknown field. It SHALL exit nonzero with guidance when the control environment is absent.
 
 #### Scenario: Agent submits a route
 - **WHEN** the intake agent writes a valid route request to the runner-provided path and runs the exact absolute-path client inside its session
@@ -71,7 +71,7 @@ Submissions from any other step SHALL be rejected with an actionable error and a
 
 ### Requirement: Route request validation
 
-On submission, Agent Runner SHALL validate that: the request decodes as strict JSON with unknown fields rejected; the request and referenced handoff are within bounded sizes; the named workflow resolves through the normal workflow catalog; every parameter the workflow declares as required is supplied; no parameter the workflow does not declare is supplied; the referenced handoff resolves to a readable, non-empty regular file contained within the run directory; and the named workflow is not the intake workflow itself. Any failure SHALL return an actionable error to the submitting agent while its session is still active, and SHALL leave any previously staged route unchanged. When the named workflow does not resolve, the error SHALL also name the workflows that are available to route to: those that resolve through the catalog, excluding hidden workflows and the intake workflow itself.
+On submission, Agent Runner SHALL validate that: the request decodes as strict JSON with unknown fields rejected; the request and the run-owned handoff are within bounded sizes; the named workflow resolves through the normal workflow catalog; every parameter the workflow declares as required is supplied; no parameter the workflow does not declare is supplied; the run-owned handoff resolves to a readable, non-empty regular file; and the named workflow is not the intake workflow itself. Any failure SHALL return an actionable error to the submitting agent while its session is still active, and SHALL leave any previously staged route unchanged. When the named workflow does not resolve, the error SHALL also name the workflows that are available to route to: those that resolve through the catalog, excluding hidden workflows and the intake workflow itself.
 
 #### Scenario: Unknown workflow is rejected inline
 - **WHEN** the route request names a workflow that does not resolve through the catalog
@@ -98,18 +98,13 @@ On submission, Agent Runner SHALL validate that: the request decodes as strict J
 - **THEN** the client receives an error describing the decoding failure
 - **AND** no route is staged
 
-#### Scenario: Handoff outside the run directory is rejected
-- **WHEN** the referenced handoff path resolves outside the run's own directory
-- **THEN** the client receives an error stating the handoff must live inside the run directory
-- **AND** no route is staged
-
 #### Scenario: Unreadable or empty handoff is rejected
-- **WHEN** the referenced handoff does not exist, is not a regular file, or is empty
+- **WHEN** the run-owned handoff does not exist, is not a regular file, or is empty
 - **THEN** the client receives an error describing the problem
 - **AND** no route is staged
 
 #### Scenario: Oversized input is rejected
-- **WHEN** the route request or the referenced handoff exceeds its size bound
+- **WHEN** the route request or the run-owned handoff exceeds its size bound
 - **THEN** the client receives an error stating the bound
 - **AND** no route is staged
 

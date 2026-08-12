@@ -179,7 +179,6 @@ func (e *ValidationError) ViolationCode() string { return string(e.Code) }
 type Request struct {
 	Workflow string            `json:"workflow"`
 	Params   map[string]string `json:"params,omitempty"`
-	Handoff  string            `json:"handoff"`
 }
 
 // Sealed is the run-owned record persisted in intake-route.json.
@@ -339,9 +338,9 @@ func Validate(opts *ValidateOptions) (*Prepared, error) {
 	if err := validateParams(&entry, request.Params); err != nil {
 		return nil, validationFailure(ViolationParameter, err, entry.CanonicalName, "", "")
 	}
-	temporaryPath, err := snapshotHandoff(runDir, request.Handoff, opts.HandoffPath)
+	temporaryPath, err := snapshotHandoff(runDir, opts.HandoffPath)
 	if err != nil {
-		return nil, validationFailure(ViolationHandoff, err, entry.CanonicalName, "", request.Handoff)
+		return nil, validationFailure(ViolationHandoff, err, entry.CanonicalName, "", opts.HandoffPath)
 	}
 	now := time.Now
 	if opts.Now != nil {
@@ -591,9 +590,6 @@ func decodeRequest(data []byte) (Request, error) {
 	if request.Workflow == "" {
 		return Request{}, errors.New("route workflow is required")
 	}
-	if request.Handoff == "" {
-		return Request{}, errors.New("route handoff is required")
-	}
 	return request, nil
 }
 
@@ -658,43 +654,20 @@ func validateParams(entry *discovery.WorkflowEntry, supplied map[string]string) 
 	return nil
 }
 
-func snapshotHandoff(runDir, handoff, expectedHandoff string) (string, error) {
-	path := handoff
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(runDir, path)
-	}
-	absPath, err := filepath.Abs(path)
+// snapshotHandoff copies the runner-owned handoff as it stands right now, so
+// the sealed route keeps the text the user agreed to even if the file is
+// rewritten afterwards. handoffPath comes from the runner, never from the
+// request, which is why there is nothing here to contain or cross-check.
+func snapshotHandoff(runDir, handoffPath string) (string, error) {
+	resolved, err := filepath.Abs(handoffPath)
 	if err != nil {
-		return "", fmt.Errorf("resolve handoff: %w", err)
+		return "", fmt.Errorf("resolve runner-owned handoff: %w", err)
 	}
-	// The run directory was canonicalized by Validate. Canonicalize the
-	// candidate before the lexical containment check as well (notably /var is
-	// a symlink to /private/var on macOS).
-	if resolvedPath, resolveErr := filepath.EvalSymlinks(absPath); resolveErr == nil {
-		absPath = resolvedPath
-	}
-	if !within(runDir, filepath.Clean(absPath)) {
-		return "", errors.New("handoff must live inside the run directory")
-	}
-	resolved, err := filepath.EvalSymlinks(absPath)
+	resolved, err = filepath.EvalSymlinks(resolved)
 	if err != nil {
 		return "", fmt.Errorf("open handoff: %w", err)
 	}
-	if !within(runDir, resolved) {
-		return "", errors.New("handoff must live inside the run directory")
-	}
-	expected, err := filepath.Abs(expectedHandoff)
-	if err != nil {
-		return "", fmt.Errorf("resolve runner-owned handoff: %w", err)
-	}
-	expected, err = filepath.EvalSymlinks(expected)
-	if err != nil {
-		return "", fmt.Errorf("resolve runner-owned handoff: %w", err)
-	}
-	if resolved != expected {
-		return "", errors.New("handoff must be the runner-owned handoff path")
-	}
-	input, err := os.Open(resolved) // #nosec G304 -- validated route handoff within the run directory.
+	input, err := os.Open(resolved) // #nosec G304 -- runner-owned handoff path, not agent-supplied.
 	if err != nil {
 		return "", fmt.Errorf("open handoff: %w", err)
 	}
@@ -752,11 +725,6 @@ func snapshotPath(runDir string) (string, error) {
 		return "", fmt.Errorf("reserve handoff snapshot path: %w", err)
 	}
 	return path, nil
-}
-
-func within(root, candidate string) bool {
-	rel, err := filepath.Rel(root, candidate)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 func cloneParams(params map[string]string) map[string]string {

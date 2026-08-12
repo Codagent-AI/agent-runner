@@ -55,8 +55,11 @@ type Options struct {
 	// silently replacing provenance from an earlier preparation.
 	IntakeHandoffSource string
 	IntakeHandoff       string
-	IntakeParentRunID   string
-	AgentOverride       *model.AgentOverride
+	// IntakeHandoffContents restores the already-bounded handoff text on resume.
+	// Leave empty for a fresh launch; preparation reads it from the copied file.
+	IntakeHandoffContents string
+	IntakeParentRunID     string
+	AgentOverride         *model.AgentOverride
 	// ProjectRoot and WorkingDir may be supplied by embedding callers. When
 	// empty, PrepareRun discovers and canonicalizes them once for the run.
 	ProjectRoot        string
@@ -492,6 +495,7 @@ func buildExecutionContext(
 		AutonomousPermissionMode: string(usersettings.EffectiveAutonomousPermissionMode(settings.AutonomousPermissionMode)),
 		SessionDir:               sessionDir,
 		IntakeHandoff:            opts.IntakeHandoff,
+		IntakeHandoffContents:    opts.IntakeHandoffContents,
 		IntakeParentRunID:        opts.IntakeParentRunID,
 		AgentOverride:            opts.AgentOverride,
 		EngineRef:                engineRef,
@@ -746,6 +750,13 @@ func PrepareRun(workflow *model.Workflow, params map[string]string, opts *Option
 		newRunSessionCleanup(rs.sessionDir, opts)(rs.auditLogger)
 		return nil, err
 	}
+	// Runs on both fresh launches and resumes: copyIntakeHandoff has just set the
+	// destination for the former, and initRunState restored it from state for the
+	// latter, so this reads whichever handoff this run actually owns.
+	if err := loadIntakeHandoffContents(rs); err != nil {
+		newRunSessionCleanup(rs.sessionDir, opts)(rs.auditLogger)
+		return nil, err
+	}
 
 	startIndex, err := resolveStartIndex(workflow, opts.From)
 	if err != nil {
@@ -786,14 +797,15 @@ func initialRunState(workflow *model.Workflow, rs *runState, opts *Options) *mod
 	}
 
 	state := &model.RunState{
-		RunID:             rs.sessionID,
-		WorkflowFile:      opts.WorkflowFile,
-		WorkflowName:      workflow.Name,
-		Params:            rs.ctx.Params,
-		WorkflowHash:      rs.workflowHash,
-		IntakeHandoff:     rs.ctx.IntakeHandoff,
-		IntakeParentRunID: rs.ctx.IntakeParentRunID,
-		AgentOverride:     rs.ctx.AgentOverride,
+		RunID:                 rs.sessionID,
+		WorkflowFile:          opts.WorkflowFile,
+		WorkflowName:          workflow.Name,
+		Params:                rs.ctx.Params,
+		WorkflowHash:          rs.workflowHash,
+		IntakeHandoff:         rs.ctx.IntakeHandoff,
+		IntakeHandoffContents: rs.ctx.IntakeHandoffContents,
+		IntakeParentRunID:     rs.ctx.IntakeParentRunID,
+		AgentOverride:         rs.ctx.AgentOverride,
 	}
 	if stepID == "" {
 		return state
@@ -950,6 +962,25 @@ func copyIntakeHandoff(source string, rs *runState) error {
 		return fmt.Errorf("close intake handoff copy: %w", err)
 	}
 	rs.ctx.IntakeHandoff = destination
+	return nil
+}
+
+// loadIntakeHandoffContents reads the run's own handoff copy once, at first
+// preparation, and seeds the text that {{intake_handoff}} interpolates to.
+//
+// It deliberately does nothing when the value is already present: on resume the
+// contents come back from state, and re-reading the file would let a rewrite of
+// the run's own handoff copy change what a resumed step sees.
+func loadIntakeHandoffContents(rs *runState) error {
+	handoffPath := rs.ctx.IntakeHandoff
+	if handoffPath == "" || rs.ctx.IntakeHandoffContents != "" {
+		return nil
+	}
+	raw, err := os.ReadFile(handoffPath) // #nosec G304 -- run-owned handoff copy beneath the session directory.
+	if err != nil {
+		return fmt.Errorf("read intake handoff: %w", err)
+	}
+	rs.ctx.IntakeHandoffContents = intakeroute.InlineHandoffValue(raw, handoffPath)
 	return nil
 }
 

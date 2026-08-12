@@ -66,7 +66,11 @@ its rationale rather than silently dropped.
 - **E2E-001, E2E-002, E2E-006** — the substance is covered by
   `TestInternalLaunchIntakeRoutePreparesSealedSourceWithCopiedHandoff` (sealed source,
   copied handoff, child provenance), `TestExplorationHandoffPathReturnsNonEmptyIntakeHandoff`
-  (exploration-only), and the embedded-workflow tests. A fake-CLI PTY harness would
+  (exploration-only), and the embedded-workflow tests. The shipped-prompt half of E2E-006 is
+  asserted directly by `TestShippedIntakePromptTeachesTheRealRouteRequestSchema`, which decodes
+  the intake prompt's own JSON example through the real `intakeroute.Request` decoder, and by
+  `TestShippedHandoffConsumersReceiveContentsRatherThanAPath`, which fails if a consumer prompt
+  goes back to directing the agent at a handoff file. A fake-CLI PTY harness would
   re-assert these through a slower surface. **Live coverage exists instead:** acceptance
   flows AT-001 through AT-005 exercised all of these journeys against real agents, with evidence in
   the run's `acceptance-flow-evidence.md`.
@@ -122,19 +126,19 @@ its rationale rather than silently dropped.
   moved into `RunState`, this test is what should fail.
 
 ### INT-004: Handoff built-in resolves through validation and runtime
-- Covers: `builtin-vars` — `intake_handoff` and `intake_handoff_path` built-ins and built-in
+- Covers: `builtin-vars` — the `intake_handoff` built-in and built-in
   precedence; `workflow-pre-validation` — pipeline scope
 - Boundary: `internal/prevalidate`, `internal/loader`, `internal/model` built-ins, runtime interpolation
-- Setup: fixture workflows under `testdata/` — one whose prompt references both handoff built-ins, one
-  declaring a parameter of each name, one capturing into each name; sealed handoffs both under and
-  over the inline limit
+- Setup: fixture workflows under `testdata/` — one whose prompt references the handoff built-in, one
+  declaring a parameter of that name, one capturing into it; sealed handoffs both under and over the
+  inline limit
 - Action: pre-validate and run each fixture, both as a direct run and as an intake-launched run
 - Assertions: the referencing workflow pre-validates and, when launched from intake, interpolates
-  `{{intake_handoff}}` to the sealed handoff's contents and `{{intake_handoff_path}}` to the file those
-  contents came from; both resolve to the empty string on a direct run, without an unresolved-variable
+  `{{intake_handoff}}` to the sealed handoff's contents, and that no variable exposes the file those
+  contents came from; it resolves to the empty string on a direct run, without an unresolved-variable
   failure; a handoff over the inline limit interpolates as a line-boundary-truncated prefix carrying a
   marker that names the full path, and the step still runs; the parameter and capture fixtures are
-  rejected at load and reported by pre-validation as a reserved name, for both built-in names
+  rejected at load and reported by pre-validation as a reserved name
 - Execution: `internal/prevalidate` and `internal/runner` package tests, `go test ./...`
 
 ### INT-005: Handoff copy and provenance round-trip
@@ -430,7 +434,6 @@ requirement is deliberately covered by unit tests alone, with the reason given i
 | step-control-channel: Acknowledgement precedes termination | INT-002 | — | — | — |
 | step-control-channel: Completion integration preserves supervision | — | E2E-004 | — | — |
 | builtin-vars: intake_handoff built-in variable | INT-004 | E2E-001 | — | — |
-| builtin-vars: intake_handoff_path built-in variable | INT-004 | — | — | — |
 | builtin-vars: Built-in precedence | INT-004 | — | — | — |
 | new-tab-layout: Plan with an agent entry | — | — | AT-002 | — |
 | new-tab-layout: Workflow groups render with header and description | — | — | AT-002 | — |
