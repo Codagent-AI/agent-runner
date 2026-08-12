@@ -314,11 +314,17 @@ func (s *walkState) walkSteps(path string, steps []model.Step, params map[string
 		if step.Capture != "" {
 			captured[step.Capture] = true
 		}
+		if step.OutcomeCapture != "" {
+			captured[step.OutcomeCapture] = true
+		}
 	}
 	return currentOrigin, nil
 }
 
 func (s *walkState) walkStep(path string, step *model.Step, params map[string]string, paramNames, captured map[string]bool, currentOrigin, parentOrigin *agentOrigin) (*agentOrigin, error) {
+	if err := validateReservedCaptureNames(path, step); err != nil {
+		return nil, err
+	}
 	if err := checkStepReferences(path, step, params, paramNames, captured); err != nil {
 		return nil, err
 	}
@@ -344,6 +350,20 @@ func (s *walkState) walkStep(path string, step *model.Step, params map[string]st
 		return nil, err
 	}
 	return nextOrigin, nil
+}
+
+func validateReservedCaptureNames(path string, step *model.Step) error {
+	// Ordered so a step setting both sinks always reports the same field.
+	sinks := [...]struct{ field, value string }{
+		{"capture", step.Capture},
+		{"outcome_capture", step.OutcomeCapture},
+	}
+	for _, sink := range sinks {
+		if sink.value == model.IntakeHandoffVar {
+			return ValidationError{File: path, StepID: step.ID, Field: sink.field, Value: sink.value, Message: fmt.Sprintf("%s name %q is reserved", sink.field, sink.value)}
+		}
+	}
+	return nil
 }
 
 func validateLoopReferences(path string, step *model.Step, params map[string]string, paramNames, captured map[string]bool) error {
@@ -674,7 +694,7 @@ func isBuiltin(name string) bool {
 }
 
 func builtinNamesMap() map[string]string {
-	return map[string]string{"session_dir": "", "step_id": ""}
+	return map[string]string{"session_dir": "", "step_id": "", model.IntakeHandoffVar: ""}
 }
 
 func (s *walkState) probeTriples() error {

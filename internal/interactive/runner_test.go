@@ -15,6 +15,8 @@ import (
 
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/control"
+	"github.com/codagent/agent-runner/internal/discovery"
+	"github.com/codagent/agent-runner/internal/intakeroute"
 )
 
 func TestStartDirectChildDropsConfiguredEnvVars(t *testing.T) {
@@ -38,6 +40,52 @@ func TestStartDirectChildDropsConfiguredEnvVars(t *testing.T) {
 	}
 	if got := string(data); got != "absent" {
 		t.Fatalf("child saw AGENT_RUNNER_TEST_LEAK = %q, want it dropped", got)
+	}
+}
+
+func TestRouteEnvironmentPublishesCatalogTheAgentCanRead(t *testing.T) {
+	runDir := t.TempDir()
+	options := &DirectOptions{
+		RouteEligible: true,
+		RouteValidation: &intakeroute.ValidateOptions{
+			RunDir: runDir, ParentRunID: "intake-run", IntakeWorkflow: "core:intake",
+			RequestPath: intakeroute.RequestPathFor(runDir),
+			HandoffPath: intakeroute.HandoffPathFor(runDir),
+			Catalog: intakeroute.NewCatalog([]discovery.WorkflowEntry{
+				{CanonicalName: "spec-driven:change", SourcePath: "builtin:spec-driven/change-v2.0.yaml", Description: "Define, plan, and implement a change."},
+				{CanonicalName: "core:intake", SourcePath: "builtin:core/intake-v1.0.yaml", Hidden: true},
+			}),
+		},
+	}
+
+	env, err := routeEnvironment(options)
+	if err != nil {
+		t.Fatalf("routeEnvironment() error = %v", err)
+	}
+	want := []string{
+		"AGENT_RUNNER_ROUTE_REQUEST=" + intakeroute.RequestPathFor(runDir),
+		"AGENT_RUNNER_INTAKE_HANDOFF=" + intakeroute.HandoffPathFor(runDir),
+		"AGENT_RUNNER_ROUTE_CATALOG=" + intakeroute.CatalogPathFor(runDir),
+	}
+	if diff := cmp.Diff(want, env); diff != "" {
+		t.Fatalf("routeEnvironment mismatch (-want +got):\n%s", diff)
+	}
+	data, err := os.ReadFile(intakeroute.CatalogPathFor(runDir))
+	if err != nil {
+		t.Fatalf("read published catalog: %v", err)
+	}
+	if got := string(data); !strings.Contains(got, "## spec-driven:change") || strings.Contains(got, "core:intake") {
+		t.Fatalf("published catalog = %q, want the routable workflow and not intake itself", got)
+	}
+}
+
+func TestRouteEnvironmentIsEmptyForIneligibleStep(t *testing.T) {
+	env, err := routeEnvironment(&DirectOptions{})
+	if err != nil {
+		t.Fatalf("routeEnvironment() error = %v", err)
+	}
+	if len(env) != 0 {
+		t.Fatalf("routeEnvironment() = %v, want no route environment", env)
 	}
 }
 

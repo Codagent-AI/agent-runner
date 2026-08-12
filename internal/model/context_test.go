@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/audit"
@@ -170,10 +171,11 @@ func TestBuiltinVarsForStep(t *testing.T) {
 		}
 	})
 
-	t.Run("returns nil when no builtins available", func(t *testing.T) {
+	t.Run("always exposes intake_handoff even when empty", func(t *testing.T) {
 		ctx := NewRootContext(&RootContextOptions{WorkflowFile: "test.yaml"})
-		if ctx.BuiltinVarsForStep("") != nil {
-			t.Fatal("expected nil when no builtins available")
+		vars := ctx.BuiltinVarsForStep("")
+		if got, ok := vars["intake_handoff"]; !ok || got != "" {
+			t.Fatalf("intake_handoff = %q, present = %v; want present empty value", got, ok)
 		}
 	})
 
@@ -185,6 +187,57 @@ func TestBuiltinVarsForStep(t *testing.T) {
 		}
 		if _, ok := vars["session_dir"]; ok {
 			t.Fatal("expected session_dir to be absent")
+		}
+	})
+}
+
+func TestIntakeHandoffPropagatesToNestedContexts(t *testing.T) {
+	root := NewRootContext(&RootContextOptions{WorkflowFile: "root.yaml"})
+	root.IntakeHandoff = "/tmp/runs/child/intake-handoff.md"
+	root.IntakeHandoffContents = "goal: add a flag\n"
+	root.IntakeParentRunID = "intake-run"
+
+	loop := NewLoopIterationContext(root, LoopIterationOptions{StepID: "loop", Iteration: 0})
+	sub := NewSubWorkflowContext(root, &SubWorkflowContextOptions{
+		StepID: "sub", WorkflowFile: "sub.yaml", SubWorkflowName: "sub",
+	})
+	for name, ctx := range map[string]*ExecutionContext{"loop": loop, "sub-workflow": sub} {
+		if ctx.IntakeHandoff != root.IntakeHandoff || ctx.IntakeParentRunID != root.IntakeParentRunID {
+			t.Fatalf("%s provenance = (%q, %q), want (%q, %q)", name, ctx.IntakeHandoff, ctx.IntakeParentRunID, root.IntakeHandoff, root.IntakeParentRunID)
+		}
+		if ctx.IntakeHandoffContents != root.IntakeHandoffContents {
+			t.Fatalf("%s handoff contents = %q, want %q", name, ctx.IntakeHandoffContents, root.IntakeHandoffContents)
+		}
+	}
+}
+
+func TestIntakeHandoffBuiltinResolvesToContentsNotPath(t *testing.T) {
+	t.Run("intake-launched run resolves the handoff contents", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{WorkflowFile: "root.yaml"})
+		ctx.IntakeHandoff = "/tmp/runs/child/intake-handoff.md"
+		ctx.IntakeHandoffContents = "goal: add a flag\ndecision: reuse the parser\n"
+
+		got := ctx.BuiltinVarsForStep("step")[IntakeHandoffVar]
+
+		if got != ctx.IntakeHandoffContents {
+			t.Fatalf("{{%s}} = %q, want the handoff contents", IntakeHandoffVar, got)
+		}
+		if strings.Contains(got, ctx.IntakeHandoff) {
+			t.Fatalf("{{%s}} leaked the handoff path: %q", IntakeHandoffVar, got)
+		}
+	})
+
+	t.Run("direct run resolves to empty but stays present", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{WorkflowFile: "root.yaml"})
+
+		vars := ctx.BuiltinVarsForStep("step")
+
+		value, ok := vars[IntakeHandoffVar]
+		if !ok {
+			t.Fatalf("{{%s}} must be present even on a direct run", IntakeHandoffVar)
+		}
+		if value != "" {
+			t.Fatalf("{{%s}} = %q, want empty", IntakeHandoffVar, value)
 		}
 	})
 }

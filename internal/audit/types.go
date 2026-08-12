@@ -24,6 +24,12 @@ const (
 	EventControlRejected        EventType = "control_rejected"
 	EventChildStopped           EventType = "child_stopped"
 	EventChildContinued         EventType = "child_continued"
+	EventRouteSubmitted         EventType = "route_submitted"
+	EventRouteAccepted          EventType = "route_accepted"
+	EventRouteRejected          EventType = "route_rejected"
+	EventRouteFrozen            EventType = "route_frozen"
+	EventRouteLaunchAttempted   EventType = "route_launch_attempted"
+	EventRouteLaunchFailed      EventType = "route_launch_failed"
 )
 
 // Event is a single audit log entry.

@@ -20,6 +20,7 @@ const (
 	workflowRow rowKind = iota
 	headerRow
 	separatorRow
+	intakeRow
 )
 
 type filteredRow struct {
@@ -112,7 +113,7 @@ func buildFilteredRows(workflows []discovery.WorkflowEntry, groups []discovery.G
 		groupIndices[groupKey{scope: group.Scope, ns: group.Namespace}] = i
 	}
 
-	var result []filteredRow
+	result := []filteredRow{{kind: intakeRow}}
 	first := true
 	for _, key := range orderedGroupKeys(groupRows) {
 		g := groupRows[key]
@@ -179,7 +180,7 @@ func matchesFilter(e *discovery.WorkflowEntry, lowerFilter string) bool {
 // or 0 if there are none.
 func firstSelectableRow(filtered []filteredRow) int {
 	for i, row := range filtered {
-		if row.kind == workflowRow {
+		if row.kind == workflowRow || row.kind == intakeRow {
 			return i
 		}
 	}
@@ -208,6 +209,9 @@ func (m *Model) newTabCurrentEntry() *discovery.WorkflowEntry {
 // newTabEnterCmd returns a tea.Cmd that emits ViewDefinitionMsg for the
 // currently selected workflow, or nil if none is selected or the entry is malformed.
 func (m *Model) newTabEnterCmd() tea.Cmd {
+	if cmd := m.newTabIntakeCmd(); cmd != nil {
+		return cmd
+	}
 	e := m.newTabCurrentEntry()
 	if e == nil || e.ParseError != "" {
 		return nil
@@ -220,7 +224,24 @@ func (m *Model) newTabEnterCmd() tea.Cmd {
 
 // newTabStartRunCmd returns a tea.Cmd that emits StartRunMsg for the currently
 // selected workflow, or nil if none is selected or the entry is malformed.
+// newTabIntakeCmd returns the start-intake command when the cursor is on the
+// "Plan with an agent" entry, or nil otherwise. Enter and the run shortcut both
+// consult it so the entry cannot activate on one key and silently ignore the
+// other — it is the default cursor position, so a dead keypress there is the
+// first thing a user would hit.
+func (m *Model) newTabIntakeCmd() tea.Cmd {
+	f := m.newTab.filtered
+	pos := m.newTab.cursor
+	if pos < 0 || pos >= len(f) || f[pos].kind != intakeRow {
+		return nil
+	}
+	return func() tea.Msg { return discovery.StartIntakeMsg{} }
+}
+
 func (m *Model) newTabStartRunCmd() tea.Cmd {
+	if cmd := m.newTabIntakeCmd(); cmd != nil {
+		return cmd
+	}
 	e := m.newTabCurrentEntry()
 	if e == nil || e.ParseError != "" {
 		return nil
@@ -240,21 +261,7 @@ func (m *Model) renderNewTab() string {
 	b.WriteString("\n\n")
 
 	workflows := m.newTab.workflows
-	if len(workflows) == 0 {
-		return b.String() + tuistyle.ScreenMargin + dimStyle.Render("No workflows found.")
-	}
-
 	filtered := m.newTab.filtered
-	count := 0
-	for _, row := range filtered {
-		if row.kind == workflowRow {
-			count++
-		}
-	}
-	if count == 0 {
-		return b.String() + tuistyle.ScreenMargin + dimStyle.Render("No workflows match the filter.")
-	}
-
 	// Compute available width for descriptions.
 	maxWidth := m.termWidth
 	if maxWidth <= 0 {
@@ -284,6 +291,9 @@ func (m *Model) renderNewTab() string {
 			groupIndex := groupIndexForEntry(m.newTab.groups, entry)
 			groupColor := tuistyle.GroupColors[groupIndex%len(tuistyle.GroupColors)]
 			rendered[i] = m.renderNewTabRow(entry, isSel, maxWidth, groupColor)
+		case intakeRow:
+			isSel := i == m.newTab.cursor && !m.newTab.searchFocused
+			rendered[i] = renderIntakeRow(isSel)
 		}
 		heights[i] = max(1, strings.Count(rendered[i], "\n"))
 	}
@@ -305,6 +315,14 @@ func (m *Model) renderNewTab() string {
 		}
 	}
 	return b.String()
+}
+
+func renderIntakeRow(selected bool) string {
+	prefix := tuistyle.ScreenMargin + "  "
+	if selected {
+		prefix = tuistyle.ScreenMargin + cursorStyle.Render("▶") + " "
+	}
+	return prefix + tuistyle.AccentStyle.Render("Plan with an agent") + "\n"
 }
 
 // adjustOffsetByVisualHeight returns an offset that keeps the cursor row

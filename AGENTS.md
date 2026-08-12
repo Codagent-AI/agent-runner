@@ -40,9 +40,19 @@ For broader Codagent workspace context, read the workspace-level `AGENTS.md` whe
 - Keep tests next to the source package. Use local stubs and small fakes instead of adding a mocking framework.
 - Prefer `google/go-cmp` for structured comparisons in tests.
 - Run targeted tests while iterating, then broader checks before finishing.
+- Do not run `make build` after making changes unless explicitly asked. Local changes are normally exercised with `./dev.sh`, which runs the CLI from source and picks them up without a build.
 - Format Go code with `goimports` through `make fmt`.
 - Use the Go version declared in `go.mod`.
 - When creating git worktrees for this repository, create them under `./worktrees`.
+
+## Exercising the TUI From an Agent Session
+
+The workflow browser and `agent-runner -i` both refuse to start without a TTY, so an agent session cannot drive them directly. Allocating a PTY with Python's `pty.fork` makes most of the terminal UI testable without a human, which is enough for acceptance flows that only navigate and render.
+
+- Reconstruct the screen with a terminal emulator such as `pyte`. Bubble Tea repaints differentially, so scraping raw PTY bytes yields partial frames. A row can look missing when it is actually on screen, which reads as a defect that is not there.
+- First paint through `./dev.sh` takes several seconds because it compiles first. Wait for a sentinel string rather than an idle timeout, or the reader gives up before the app has drawn anything.
+- Bare letters in the browser are hotkeys, not text: `s` settings, `h` hidden, `n`/`c`/`w`/`a` tabs, `q` quit. Focus the search box first (up from the first row) before typing a filter, or the keystrokes fire commands instead.
+- Starting a run with `r` does not take effect under a synthetic PTY, on the New tab entry or on an ordinary workflow row. Flows that must actually launch a run, and any flow needing a real conversation with an agent, still require a human at a real terminal.
 
 ## Common Commands
 

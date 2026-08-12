@@ -25,11 +25,13 @@ import (
 	"github.com/muesli/termenv"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/engine"
 	_ "github.com/codagent/agent-runner/internal/engine/openspec"
 	iexec "github.com/codagent/agent-runner/internal/exec"
+	"github.com/codagent/agent-runner/internal/intakeroute"
 	"github.com/codagent/agent-runner/internal/listview"
 	"github.com/codagent/agent-runner/internal/liverun"
 	"github.com/codagent/agent-runner/internal/loader"
@@ -319,6 +321,9 @@ func run() int {
 	validateFlag := flag.Bool("validate", false, "Validate a workflow file without executing")
 	resetOnboardingFlag := flag.Bool("reset-onboarding", false, "Clear onboarding settings, project validator state, and saved onboarding runs before launching")
 	onboardingFromFlag := flag.String("onboarding-from", "", "Start the built-in onboarding workflow from top-level `step-id`")
+	intakeFlag := flag.Bool("i", false, "Start the built-in intake workflow")
+	cliFlag := flag.String("cli", "", "CLI override for intake")
+	modelFlag := flag.String("model", "", "Model override for intake")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	vFlag := flag.Bool("v", false, "Print version and exit (shorthand)")
 	// Undocumented: internal escape hatch for running without the TUI when
@@ -336,6 +341,9 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "  -reset-onboarding\n\tClear onboarding settings, project .validator/, and saved onboarding runs before launching\n")
 		fmt.Fprintf(os.Stderr, "  -onboarding-from <step-id>\n\tStart the built-in onboarding workflow from a top-level step\n")
 		fmt.Fprintf(os.Stderr, "  --profile <name>\n\tSelect the profile set for this invocation\n")
+		fmt.Fprintf(os.Stderr, "  -i\n\tStart the built-in intake workflow\n")
+		fmt.Fprintf(os.Stderr, "  -cli <name>\n\tCLI override for intake\n")
+		fmt.Fprintf(os.Stderr, "  -model <name>\n\tModel override for intake\n")
 		fmt.Fprintf(os.Stderr, "  -validate\n\tValidate a workflow file without executing\n")
 		fmt.Fprintf(os.Stderr, "  -v, -version\n\tPrint version and exit\n")
 	}
@@ -398,6 +406,15 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "agent-runner: --profile and --inspect are mutually exclusive")
 		return 1
 	}
+	if err := validateIntakeInvocation(&intakeInvocationOptions{
+		intake: *intakeFlag, headless: *headlessFlag, list: *listFlag, resume: *resumeFlag,
+		inspect: *inspectFlag, validate: *validateFlag, onboardingFrom: strings.TrimSpace(*onboardingFromFlag),
+		args: args, cli: strings.TrimSpace(*cliFlag), model: strings.TrimSpace(*modelFlag),
+		profileOverride: commandFlags{profile: profileValue, profileSet: profileSet}.profileOverride(),
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
 
 	if *resetOnboardingFlag {
 		if err := resetOnboardingState(); err != nil {
@@ -414,6 +431,11 @@ func run() int {
 		profile:        profileValue,
 		profileSet:     profileSet,
 		onboardingFrom: strings.TrimSpace(*onboardingFromFlag),
+		intake:         *intakeFlag,
+		headless:       *headlessFlag,
+		agentOverride: &model.AgentOverride{
+			CLI: strings.TrimSpace(*cliFlag), Model: strings.TrimSpace(*modelFlag),
+		},
 	})
 }
 
@@ -467,6 +489,102 @@ type commandFlags struct {
 	profile        string
 	profileSet     bool
 	onboardingFrom string
+	intake         bool
+	headless       bool
+	agentOverride  *model.AgentOverride
+}
+
+type intakeInvocationOptions struct {
+	intake          bool
+	headless        bool
+	list            bool
+	resume          bool
+	inspect         string
+	validate        bool
+	onboardingFrom  string
+	args            []string
+	cli             string
+	model           string
+	profileOverride config.ProfileOverride
+}
+
+func validateIntakeInvocation(opts *intakeInvocationOptions) error {
+	if (opts.cli != "" || opts.model != "") && !opts.intake {
+		return fmt.Errorf("--cli and --model require -i")
+	}
+	if !opts.intake {
+		return nil
+	}
+	if opts.headless || opts.list || opts.resume || opts.inspect != "" || opts.validate || opts.onboardingFrom != "" {
+		return fmt.Errorf("-i is mutually exclusive with --headless, --list, --resume, --inspect, --validate, and --onboarding-from")
+	}
+	if len(opts.args) > 0 {
+		return fmt.Errorf("-i cannot be combined with an explicit workflow")
+	}
+	if opts.cli == "" {
+		return nil
+	}
+	adapter, err := cli.Get(opts.cli)
+	if err != nil {
+		known := cli.KnownCLIs()
+		sort.Strings(known)
+		return fmt.Errorf("invalid --cli %q; accepted values: %s", opts.cli, strings.Join(known, ", "))
+	}
+	if rejector, ok := adapter.(cli.InteractiveRejector); ok {
+		if err := rejector.InteractiveModeError(); err != nil {
+			return fmt.Errorf("--cli %q cannot be used for intake: intake requires an interactive-capable CLI: %w", opts.cli, err)
+		}
+	}
+	return validateIntakeOverrideModel(adapter, opts.cli, opts.model, opts.profileOverride)
+}
+
+// intakeAgentProfile is the agent profile core:intake declares for its session.
+const intakeAgentProfile = "lead"
+
+// validateIntakeOverrideModel probes the effective model when --cli is given
+// without --model.
+//
+// Fresh builtin runs deliberately skip pre-validation because builtins are
+// validated at the agent-runner repo's build time. That justification does not
+// extend to a runtime override: pairing a new CLI with a model name inherited
+// from the intake agent's profile produces a (cli, model) pair that existed
+// nowhere at build time. Without this check the mismatch surfaces only as an
+// opaque provider-side error partway into the conversation — for example Codex
+// rejecting the Claude-specific name "opus" with a 400.
+func validateIntakeOverrideModel(adapter cli.Adapter, cliName, modelOverride string, profileOverride config.ProfileOverride) error {
+	if modelOverride != "" {
+		// An explicit --model is the user's own choice for this adapter and is
+		// probed by the normal step path; nothing is inherited across providers.
+		return nil
+	}
+	inherited, err := intakeProfileModel(profileOverride)
+	if err != nil || inherited == "" {
+		// No resolvable profile model means nothing is inherited, so there is
+		// no cross-provider mismatch to report here.
+		return nil
+	}
+	if _, probeErr := adapter.ProbeModel(inherited, ""); probeErr != nil {
+		return fmt.Errorf(
+			"model %q comes from the intake agent's profile and is not valid for --cli %q; pass --model with --cli: %w",
+			inherited, cliName, probeErr,
+		)
+	}
+	return nil
+}
+
+// intakeProfileModel resolves the model the intake agent would inherit from its
+// configured profile. A missing or unreadable configuration is not an error
+// here: it simply means there is no inherited model to validate.
+func intakeProfileModel(profileOverride config.ProfileOverride) (string, error) {
+	cfg, err := config.LoadWithProfile(filepath.Join(".agent-runner", "config.yaml"), profileOverride)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := cfg.Resolve(intakeAgentProfile)
+	if err != nil {
+		return "", err
+	}
+	return resolved.Model, nil
 }
 
 func dispatchRunCommand(args []string, opts commandFlags) int {
@@ -482,9 +600,20 @@ func dispatchRunCommand(args []string, opts commandFlags) int {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
 	}
+	runOpts.headless = opts.headless
 
 	if opts.validate {
 		return handleValidateArgs(args, opts.profileOverride())
+	}
+	if opts.intake {
+		workflowFile, err := builtinworkflows.Resolve(builtinworkflows.IntakeCanonicalName)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+			return 1
+		}
+		return handleRunWithRunOptions([]string{workflowFile}, runCommandOptions{
+			headless: opts.headless, agentOverride: opts.agentOverride, profileOverride: opts.profileOverride(),
+		}).exitCode
 	}
 
 	if opts.inspect != "" {
@@ -654,7 +783,7 @@ func handleResumeWithOptions(sessionID string, liveOpts liveTUIOptions, profile 
 		if result != runner.ResultSuccess {
 			return 1
 		}
-		return 0
+		return launchFrozenIntakeRoute(result, filepath.Dir(stateFilePath))
 	}
 
 	if code := ensureThemeForTUI(defaultThemeDeps); code != 0 {
@@ -676,7 +805,7 @@ func handleResumeWithOptions(sessionID string, liveOpts liveTUIOptions, profile 
 		return 1
 	}
 
-	return runLiveTUIWithOptions(h, liveOpts)
+	return launchResultAfterRun(runLiveTUIWithResult(h, liveOpts), false).exitCode
 }
 
 // resumeInspectPaths maps a resume state-file path to the session and project
@@ -827,6 +956,9 @@ func runSwitcherWithProfile(sw *switcher, profile string) int {
 		if final.startRunReady && final.startRunEntry != nil {
 			return execStartRun(final.startRunEntry, final.startRunParams)
 		}
+		if final.startIntakeReady {
+			return execStartIntake()
+		}
 		if final.resumeListProjectDir != "" {
 			return execRunnerResumeWithProfile("", final.resumeListProjectDir, profile)
 		}
@@ -883,10 +1015,6 @@ func (opts liveTUIOptions) withEnv() liveTUIOptions {
 	return opts
 }
 
-func runLiveTUIWithOptions(h *runner.RunHandle, opts liveTUIOptions) int {
-	return runLiveTUIWithResult(h, opts).exitCode
-}
-
 type liveTUIResult struct {
 	exitCode       int
 	exitRequested  bool
@@ -929,7 +1057,7 @@ func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResul
 			} else {
 				resultCh <- result
 			}
-			if opts.quitOnDone {
+			if opts.quitOnDone || shouldExitAfterFrozenIntakeRoute(result, h.SessionDir) {
 				p.Send(runview.ExitMsg{})
 			}
 		}()
@@ -1071,6 +1199,91 @@ func execSelfWithEnv(extraEnv []string, args ...string) int {
 	return 0
 }
 
+// launchFrozenIntakeRoute performs the final gate after a top-level run has
+// finalized. The exec itself deliberately happens only after the parent's
+// control socket, lock, state, and audit logger have all been closed.
+func launchFrozenIntakeRoute(result runner.WorkflowResult, sessionDir string) int {
+	if result != runner.ResultSuccess {
+		return 0
+	}
+
+	routePath, err := filepath.Abs(intakeroute.SidecarPath(sessionDir))
+	if err != nil {
+		return 0
+	}
+	sealed, err := intakeroute.LoadStrict(routePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: read intake route: %v\n", err)
+		return 1
+	}
+	if sealed.State != intakeroute.Frozen {
+		return 0
+	}
+
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: read completed intake state: %v\n", err)
+		return 1
+	}
+	if !state.Completed {
+		return 0
+	}
+	if err := appendRouteLaunchEvent(sessionDir, audit.EventRouteLaunchAttempted, sealed, nil); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: record intake route launch: %v\n", err)
+		return 1
+	}
+
+	code := execSelfWithEnv([]string{liveRunImmediateAltScreenEnv + "=1"}, "internal", "launch-intake-route", routePath)
+	if code != 0 {
+		launchErr := fmt.Errorf("exec launch-intake-route exited with code %d", code)
+		fmt.Fprintf(os.Stderr, "agent-runner: intake route launch failed: %v\nagent-runner: sealed handoff: %s\n", launchErr, sealed.HandoffPath)
+		if err := appendRouteLaunchEvent(sessionDir, audit.EventRouteLaunchFailed, sealed, launchErr); err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: record failed intake route launch: %v\n", err)
+		}
+	}
+	return code
+}
+
+func shouldExitAfterFrozenIntakeRoute(result runner.WorkflowResult, sessionDir string) bool {
+	if result != runner.ResultSuccess {
+		return false
+	}
+	// Probe the sidecar first: it is absent for every non-intake run, so the
+	// common path costs one failed open rather than a full state.json read.
+	sealed, err := intakeroute.LoadStrict(intakeroute.SidecarPath(sessionDir))
+	if err != nil || sealed.State != intakeroute.Frozen {
+		return false
+	}
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	return err == nil && state.Completed
+}
+
+func appendRouteLaunchEvent(sessionDir string, eventType audit.EventType, sealed *intakeroute.Sealed, launchErr error) error {
+	logger, err := audit.NewLogger(filepath.Join(sessionDir, "audit.log"))
+	if err != nil {
+		return err
+	}
+	defer logger.Close()
+	data := map[string]any{
+		"workflow":     sealed.Workflow,
+		"source_ref":   sealed.SourceRef,
+		"params":       sealed.Params,
+		"handoff_path": sealed.HandoffPath,
+	}
+	if launchErr != nil {
+		data["error"] = launchErr.Error()
+	}
+	logger.Emit(audit.Event{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Type:      eventType,
+		Data:      data,
+	})
+	return nil
+}
+
 func envWithOverrides(base []string, overrides ...string) []string {
 	if len(overrides) == 0 {
 		return base
@@ -1110,18 +1323,18 @@ var allowedResumeCLIs = map[string]bool{
 // it to an absolute path via PATH lookup. Callers must treat the returned path
 // as safe to pass to syscall.Exec / exec.Command even though the surrounding
 // arguments originate from audit logs.
-func resolveResumeCLI(cli string) (resolvedCLI, path string, err error) {
-	if cli == "" {
-		cli = "claude"
+func resolveResumeCLI(cliName string) (resolvedCLI, path string, err error) {
+	if cliName == "" {
+		cliName = "claude"
 	}
-	if strings.ContainsAny(cli, `/\`) || !allowedResumeCLIs[cli] {
-		return cli, "", fmt.Errorf("refusing to resume: unsupported agent CLI %q", cli)
+	if strings.ContainsAny(cliName, `/\`) || !allowedResumeCLIs[cliName] {
+		return cliName, "", fmt.Errorf("refusing to resume: unsupported agent CLI %q", cliName)
 	}
-	path, err = exec.LookPath(cli)
+	path, err = exec.LookPath(cliName)
 	if err != nil {
-		return cli, "", fmt.Errorf("cannot find agent CLI %q in PATH: %w", cli, err)
+		return cliName, "", fmt.Errorf("cannot find agent CLI %q in PATH: %w", cliName, err)
 	}
-	return cli, path, nil
+	return cliName, path, nil
 }
 
 // spawnAgentResume spawns `<cli> --resume <session-id>` as a subprocess and
@@ -1130,8 +1343,8 @@ func resolveResumeCLI(cli string) (resolvedCLI, path string, err error) {
 // code is not treated as an error — the user may have typed /exit or /quit.
 // Only spawn failures (binary not found, permission error, etc.) are
 // returned as errors.
-func spawnAgentResume(cli, sessionID string) error {
-	resolved, path, err := resolveResumeCLI(cli)
+func spawnAgentResume(cliName, sessionID string) error {
+	resolved, path, err := resolveResumeCLI(cliName)
 	if err != nil {
 		return err
 	}
@@ -1223,6 +1436,10 @@ func execStartRun(entry *discovery.WorkflowEntry, values map[string]string) int 
 	return execSelfWithEnv([]string{liveRunImmediateAltScreenEnv + "=1"}, args...)
 }
 
+func execStartIntake() int {
+	return execSelfWithEnv([]string{liveRunImmediateAltScreenEnv + "=1"}, "-i")
+}
+
 // resolveInspectSession resolves a run ID to its session and project
 // directories, using the same rules as --resume (cwd's project dir only).
 func resolveInspectSession(runID string) (sessionDir, projectDir string, err error) {
@@ -1283,6 +1500,7 @@ type switcher struct {
 	startRunEntry         *discovery.WorkflowEntry
 	startRunParams        map[string]string
 	startRunReady         bool
+	startIntakeReady      bool
 	viewErr               string
 }
 
@@ -1367,6 +1585,10 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.paramform = paramform.New(&entry).WithWidth(s.termWidth)
 		s.mode = showingParamForm
 		return s, nil
+
+	case discovery.StartIntakeMsg:
+		s.startIntakeReady = true
+		return s, tea.Quit
 
 	case paramform.SubmittedMsg:
 		if s.startRunEntry == nil {
@@ -1762,15 +1984,90 @@ type runCommandOptions struct {
 	from            string
 	until           string
 	profileOverride config.ProfileOverride
+	headless        bool
+	agentOverride   *model.AgentOverride
+}
+
+// freshRunRequest contains everything needed to prepare a new top-level run.
+// Both direct CLI launches and sealed intake routes use this exact sequence so
+// validation and engine setup cannot drift between the two entry points.
+type freshRunRequest struct {
+	SourceRef           string
+	Positional          []string
+	Keyed               map[string]string
+	From                string
+	Until               string
+	AgentOverride       *model.AgentOverride
+	ProfileOverride     config.ProfileOverride
+	IntakeParentRunID   string
+	IntakeHandoffSource string
+	Log                 iexec.Logger
+}
+
+func prepareFreshRun(req *freshRunRequest) (*runner.RunHandle, error) {
+	workflow, err := loader.LoadWorkflow(req.SourceRef, loader.Options{})
+	if err != nil {
+		return nil, fmt.Errorf("load workflow: %w", err)
+	}
+	params, err := matchParams(&workflow, req.Positional, req.Keyed)
+	if err != nil {
+		return nil, err
+	}
+	profileStore, err := config.LoadWithProfile(filepath.Join(".agent-runner", "config.yaml"), req.ProfileOverride)
+	if err != nil {
+		return nil, err
+	}
+	if !builtinworkflows.IsRef(req.SourceRef) {
+		if _, err := prevalidate.Pipeline(req.SourceRef, params, prevalidate.Strict, prevalidate.Options{ProfileOverride: req.ProfileOverride}); err != nil {
+			return nil, err
+		}
+	}
+
+	var eng engine.Engine
+	if workflow.Engine != nil {
+		engConfig := map[string]any{"type": workflow.Engine.Type}
+		maps.Copy(engConfig, workflow.Engine.Extras)
+		eng, err = engine.Create(engConfig)
+		if err != nil {
+			return nil, fmt.Errorf("create engine: %w", err)
+		}
+	}
+	log := req.Log
+	if log == nil {
+		log = &realLogger{}
+	}
+	return runner.PrepareRun(&workflow, params, &runner.Options{
+		ProfileOverride:     req.ProfileOverride,
+		ProfileStore:        profileStore,
+		WorkflowFile:        req.SourceRef,
+		From:                req.From,
+		Until:               req.Until,
+		AgentOverride:       req.AgentOverride,
+		IntakeParentRunID:   req.IntakeParentRunID,
+		IntakeHandoffSource: req.IntakeHandoffSource,
+		Engine:              eng,
+		ProcessRunner:       &realProcessRunner{},
+		GlobExpander:        &realGlobExpander{},
+		Log:                 log,
+	})
+}
+
+func isIntakeWorkflow(workflowFile string) bool {
+	return builtinworkflows.IsIntakeRef(workflowFile)
+}
+
+func validateIntakeRunInvocation(workflowFile string, headless bool) error {
+	if isIntakeWorkflow(workflowFile) && headless {
+		return fmt.Errorf("agent-runner: intake requires an interactive terminal and cannot run with --headless")
+	}
+	return nil
 }
 
 func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIResult {
 	liveOpts := runOpts.liveOpts.withEnv()
 	workflowFile := args[0]
-
-	workflow, err := loader.LoadWorkflow(workflowFile, loader.Options{})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-runner: load workflow: %v\n", err)
+	if err := validateIntakeRunInvocation(workflowFile, runOpts.headless); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		return liveTUIResult{exitCode: 1}
 	}
 
@@ -1779,20 +2076,9 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return liveTUIResult{exitCode: 1}
 	}
-	params, err := matchParams(&workflow, positional, keyed)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-		return liveTUIResult{exitCode: 1}
-	}
-	profileStore, err := config.LoadWithProfile(filepath.Join(".agent-runner", "config.yaml"), runOpts.profileOverride)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
-		return liveTUIResult{exitCode: 1}
-	}
-
-	if !builtinworkflows.IsRef(workflowFile) {
-		if _, err := prevalidate.Pipeline(workflowFile, params, prevalidate.Strict, prevalidate.Options{ProfileOverride: runOpts.profileOverride}); err != nil {
-			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+	if isIntakeWorkflow(workflowFile) {
+		if err := requireIntakeTTY(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			return liveTUIResult{exitCode: 1}
 		}
 	}
@@ -1802,29 +2088,16 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 		return liveTUIResult{exitCode: 1}
 	}
 
-	var eng engine.Engine
-	if workflow.Engine != nil {
-		engConfig := map[string]any{"type": workflow.Engine.Type}
-		maps.Copy(engConfig, workflow.Engine.Extras)
-		eng, err = engine.Create(engConfig)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "agent-runner: create engine: %v\n", err)
-			return liveTUIResult{exitCode: 1}
-		}
+	prepare := func(log iexec.Logger) (*runner.RunHandle, error) {
+		return prepareFreshRun(&freshRunRequest{
+			SourceRef: workflowFile, Positional: positional, Keyed: keyed,
+			From: runOpts.from, Until: runOpts.until, AgentOverride: runOpts.agentOverride,
+			ProfileOverride: runOpts.profileOverride, Log: log,
+		})
 	}
 
 	if os.Getenv("AGENT_RUNNER_NO_TUI") == "1" {
-		h, err := runner.PrepareRun(&workflow, params, &runner.Options{
-			ProfileOverride: runOpts.profileOverride,
-			ProfileStore:    profileStore,
-			WorkflowFile:    workflowFile,
-			From:            runOpts.from,
-			Until:           runOpts.until,
-			Engine:          eng,
-			ProcessRunner:   &realProcessRunner{},
-			GlobExpander:    &realGlobExpander{},
-			Log:             &realLogger{},
-		})
+		h, err := prepare(&realLogger{})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 			return liveTUIResult{exitCode: 1}
@@ -1834,33 +2107,59 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 			GlobExpander:  &realGlobExpander{},
 			Log:           &realLogger{},
 		})
-		if result != runner.ResultSuccess {
-			return liveTUIResult{exitCode: 1, workflowResult: result, sessionDir: h.SessionDir}
-		}
-		return liveTUIResult{workflowResult: result, sessionDir: h.SessionDir}
+		return launchResultAfterRun(liveTUIResult{workflowResult: result, sessionDir: h.SessionDir, exitCode: resultExitCode(result)}, isIntakeWorkflow(workflowFile))
 	}
 
 	if code := ensureThemeForTUI(defaultThemeDeps); code != 0 {
 		return liveTUIResult{exitCode: code}
 	}
 
-	h, err := runner.PrepareRun(&workflow, params, &runner.Options{
-		ProfileOverride: runOpts.profileOverride,
-		ProfileStore:    profileStore,
-		WorkflowFile:    workflowFile,
-		From:            runOpts.from,
-		Until:           runOpts.until,
-		Engine:          eng,
-		ProcessRunner:   &realProcessRunner{},
-		GlobExpander:    &realGlobExpander{},
-		Log:             &runner.DiscardLogger{},
-	})
+	h, err := prepare(&runner.DiscardLogger{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return liveTUIResult{exitCode: 1}
 	}
 
-	return runLiveTUIWithResult(h, liveOpts)
+	return launchResultAfterRun(runLiveTUIWithResult(h, liveOpts), isIntakeWorkflow(workflowFile))
+}
+
+func resultExitCode(result runner.WorkflowResult) int {
+	if result != runner.ResultSuccess {
+		return 1
+	}
+	return 0
+}
+
+func launchResultAfterRun(result liveTUIResult, reportExplorationHandoff bool) liveTUIResult {
+	if result.workflowResult != runner.ResultSuccess || result.sessionDir == "" {
+		return result
+	}
+	if code := launchFrozenIntakeRoute(result.workflowResult, result.sessionDir); code != 0 {
+		result.exitCode = code
+		return result
+	}
+	if reportExplorationHandoff {
+		if handoff := explorationHandoffPath(result.sessionDir); handoff != "" {
+			fmt.Printf("agent-runner: intake handoff preserved at %s\n", handoff)
+		}
+	}
+	return result
+}
+
+func explorationHandoffPath(sessionDir string) string {
+	if _, err := os.Stat(intakeroute.SidecarPath(sessionDir)); err == nil {
+		return ""
+	}
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil || !state.Completed || !isIntakeWorkflow(state.WorkflowFile) {
+		return ""
+	}
+	handoff := intakeroute.HandoffPathFor(sessionDir)
+	info, err := os.Stat(handoff)
+	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+		return ""
+	}
+	return handoff
 }
 
 func handleOnboardingFromRun(workflowFile, from string, runOpts runCommandOptions, args ...string) int {

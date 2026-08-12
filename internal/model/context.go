@@ -22,6 +22,13 @@ type AgentDeprecationState struct {
 	seen map[string]bool
 }
 
+// AgentOverride is a run-scoped CLI and model selection that takes precedence
+// over both the workflow step and its resolved agent profile.
+type AgentOverride struct {
+	CLI   string `json:"cli,omitempty"`
+	Model string `json:"model,omitempty"`
+}
+
 // NewAgentDeprecationState creates an empty run-scoped deprecation set.
 func NewAgentDeprecationState() *AgentDeprecationState {
 	return &AgentDeprecationState{seen: make(map[string]bool)}
@@ -80,6 +87,24 @@ type ExecutionContext struct {
 	// agents at per-run output files.
 	SessionDir string
 
+	// IntakeHandoff is the absolute path of the sealed handoff copied into this
+	// run when it was launched from intake. It is empty for direct runs. It is
+	// run provenance, persisted to state and restored on resume; it is not what
+	// {{intake_handoff}} resolves to.
+	IntakeHandoff string
+	// IntakeHandoffContents is the handoff text interpolated into prompts as
+	// {{intake_handoff}}, already bounded for inlining. It is derived from the
+	// file at IntakeHandoff by the runner rather than persisted, so this package
+	// stays free of filesystem access.
+	IntakeHandoffContents string
+	// IntakeParentRunID identifies the intake run that launched this run. It is
+	// empty for direct runs.
+	IntakeParentRunID string
+	// AgentOverride applies only within this workflow run. It is intentionally
+	// not represented as a workflow parameter so independently launched runs do
+	// not inherit it.
+	AgentOverride *AgentOverride
+
 	// EngineRef holds the workflow engine implementation (internal/engine.Engine).
 	// Stored as interface{} to avoid circular imports.
 	// Callers should type-assert to engine.Engine before use.
@@ -136,6 +161,10 @@ type RootContextOptions struct {
 	AutonomousBackend        string
 	AutonomousPermissionMode string
 	SessionDir               string
+	IntakeHandoff            string
+	IntakeHandoffContents    string
+	IntakeParentRunID        string
+	AgentOverride            *AgentOverride
 	EngineRef                interface{} // internal/engine.Engine
 	ProfileStore             interface{} // *config.Config
 	SessionIDs               map[string]string
@@ -195,6 +224,10 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		AutonomousBackend:        opts.AutonomousBackend,
 		AutonomousPermissionMode: opts.AutonomousPermissionMode,
 		SessionDir:               opts.SessionDir,
+		IntakeHandoff:            opts.IntakeHandoff,
+		IntakeHandoffContents:    opts.IntakeHandoffContents,
+		IntakeParentRunID:        opts.IntakeParentRunID,
+		AgentOverride:            opts.AgentOverride,
 		EngineRef:                opts.EngineRef,
 		ProfileStore:             opts.ProfileStore,
 		AuditLogger:              opts.AuditLogger,
@@ -224,9 +257,11 @@ func (c *ExecutionContext) BuiltinVarsForStep(stepID string) map[string]string {
 	if stepID != "" {
 		m["step_id"] = stepID
 	}
-	if len(m) == 0 {
-		return nil
-	}
+	// Unlike the surrounding built-ins, this must be present even when empty:
+	// direct runs must resolve {{intake_handoff}} rather than fail interpolation.
+	// It carries the handoff text, not its path, so a consumer workflow receives
+	// the context in its prompt instead of having to elect to read a file.
+	m[IntakeHandoffVar] = c.IntakeHandoffContents
 	return m
 }
 
@@ -289,6 +324,10 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		AutonomousBackend:        parent.AutonomousBackend,
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
 		SessionDir:               parent.SessionDir,
+		IntakeHandoff:            parent.IntakeHandoff,
+		IntakeHandoffContents:    parent.IntakeHandoffContents,
+		IntakeParentRunID:        parent.IntakeParentRunID,
+		AgentOverride:            parent.AgentOverride,
 		EngineRef:                parent.EngineRef,
 		ProfileStore:             parent.ProfileStore,
 		AuditLogger:              parent.AuditLogger,
@@ -371,6 +410,10 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		AutonomousBackend:        parent.AutonomousBackend,
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
 		SessionDir:               parent.SessionDir,
+		IntakeHandoff:            parent.IntakeHandoff,
+		IntakeHandoffContents:    parent.IntakeHandoffContents,
+		IntakeParentRunID:        parent.IntakeParentRunID,
+		AgentOverride:            parent.AgentOverride,
 		EngineRef:                engineRef,
 		ProfileStore:             parent.ProfileStore,
 		AuditLogger:              parent.AuditLogger,

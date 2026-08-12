@@ -77,7 +77,30 @@ func ParseWorkflowSource(data []byte, sourcePath string, opts Options) (model.Wo
 			workflow.Name,
 		)
 	}
+	if workflowUsesSubmitRoute(&workflow) && (opts.IsSubWorkflow || !builtinworkflows.IsIntakeRef(sourcePath) || !isIntakeRouteStep(&workflow)) {
+		return model.Workflow{}, fmt.Errorf("submit_route is reserved for the top-level built-in core:intake plan step")
+	}
 	return workflow, nil
+}
+
+func workflowUsesSubmitRoute(workflow *model.Workflow) bool {
+	if workflow == nil {
+		return false
+	}
+	for index := range workflow.Steps {
+		if workflow.Steps[index].HasTool(model.RunnerToolSubmitRoute) {
+			return true
+		}
+	}
+	return false
+}
+
+func isIntakeRouteStep(workflow *model.Workflow) bool {
+	if workflow == nil || len(workflow.Steps) != 1 {
+		return false
+	}
+	step := workflow.Steps[0]
+	return step.ID == "plan" && step.HasTool(model.RunnerToolSubmitRoute)
 }
 
 func ReadWorkflowFile(filePath string) ([]byte, error) {

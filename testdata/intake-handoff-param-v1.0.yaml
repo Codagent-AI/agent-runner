@@ -1,0 +1,6 @@
+name: intake-handoff-param
+params:
+  - name: intake_handoff
+steps:
+  - id: handoff
+    command: echo should-not-load

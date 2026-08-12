@@ -44,53 +44,17 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 
 	warnIfWorkflowHashChanged(&state, opts.Log)
 
-	// Resolve the step to resume from
-	var fromStep string
-	var sessionIDs map[string]string
-	var sessionProfiles map[string]string
-	var capturedVars map[string]model.CapturedValue
-	var lastSessionStepID string
-	var namedSessions map[string]string
-	var namedSessionDecls map[string]string
-	var childState *model.NestedStepState
-
-	var completed bool
-
-	if state.CurrentStep.Nested != nil {
-		nested := state.CurrentStep.Nested
-		fromStep = nested.StepID
-		sessionIDs = nested.SessionIDs
-		sessionProfiles = nested.SessionProfiles
-		capturedVars = nested.CapturedVariables
-		lastSessionStepID = nested.LastSessionStepID
-		namedSessions = nested.NamedSessions
-		namedSessionDecls = nested.NamedSessionDecls
-		completed = nested.Completed
-		if nested.Iteration != nil {
-			// Top-level loop step captured mid-iteration. Carry the iteration
-			// (and any deeper chain) through as ChildState so ExecuteLoopStep's
-			// consumeLoopResume can pick it up when the step is dispatched.
-			childState = &model.NestedStepState{
-				StepID:    nested.StepID,
-				Iteration: nested.Iteration,
-				Child:     nested.Child,
-			}
-		} else if nested.Child != nil {
-			childState = nested.Child
-		}
-	} else {
-		fromStep = state.CurrentStep.StepID
-	}
+	resumeState := restoreResumeContext(&state)
 
 	// Resolve which step to actually resume from — advance past completed steps.
-	resolved, err := model.ResolveResumeStep(workflow.Steps, fromStep, completed)
+	resolved, err := model.ResolveResumeStep(workflow.Steps, resumeState.fromStep, resumeState.completed)
 	if err != nil {
-		return nil, fmt.Errorf("step %q no longer exists in workflow", fromStep)
+		return nil, fmt.Errorf("step %q no longer exists in workflow", resumeState.fromStep)
 	}
 	if resolved.AllDone {
 		return nil, ErrAlreadyCompleted
 	}
-	fromStep = resolved.StepID
+	resumeState.fromStep = resolved.StepID
 
 	// Create engine if configured
 	var eng engine.Engine
@@ -104,27 +68,31 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	}
 
 	resumeOpts := &Options{
-		From:               fromStep,
-		WorkflowFile:       state.WorkflowFile,
-		SessionDir:         filepath.Dir(stateFilePath),
-		Engine:             eng,
-		SessionIDs:         sessionIDs,
-		SessionProfiles:    sessionProfiles,
-		CapturedVariables:  capturedVars,
-		LastSessionStepID:  lastSessionStepID,
-		NamedSessions:      namedSessions,
-		NamedSessionDecls:  namedSessionDecls,
-		ChildState:         childState,
-		InteractiveAttempt: resumeInteractiveAttempt(&state),
-		ProcessRunner:      opts.ProcessRunner,
-		GlobExpander:       opts.GlobExpander,
-		Log:                opts.Log,
-		SuspendHook:        opts.SuspendHook,
-		ResumeHook:         opts.ResumeHook,
-		PrepareStepHook:    opts.PrepareStepHook,
-		UIStepHandler:      opts.UIStepHandler,
-		ProfileStore:       opts.ProfileStore,
-		ProfileOverride:    profileOverride,
+		From:                  resumeState.fromStep,
+		WorkflowFile:          state.WorkflowFile,
+		SessionDir:            filepath.Dir(stateFilePath),
+		IntakeHandoff:         state.IntakeHandoff,
+		IntakeHandoffContents: state.IntakeHandoffContents,
+		IntakeParentRunID:     state.IntakeParentRunID,
+		AgentOverride:         state.AgentOverride,
+		Engine:                eng,
+		SessionIDs:            resumeState.sessionIDs,
+		SessionProfiles:       resumeState.sessionProfiles,
+		CapturedVariables:     resumeState.capturedVars,
+		LastSessionStepID:     resumeState.lastSessionStepID,
+		NamedSessions:         resumeState.namedSessions,
+		NamedSessionDecls:     resumeState.namedSessionDecls,
+		ChildState:            resumeState.childState,
+		InteractiveAttempt:    resumeInteractiveAttempt(&state),
+		ProcessRunner:         opts.ProcessRunner,
+		GlobExpander:          opts.GlobExpander,
+		Log:                   opts.Log,
+		SuspendHook:           opts.SuspendHook,
+		ResumeHook:            opts.ResumeHook,
+		PrepareStepHook:       opts.PrepareStepHook,
+		UIStepHandler:         opts.UIStepHandler,
+		ProfileStore:          opts.ProfileStore,
+		ProfileOverride:       profileOverride,
 	}
 
 	return PrepareRun(&workflow, state.Params, resumeOpts)
@@ -142,6 +110,45 @@ func resumeProfileOverride(override config.ProfileOverride, recorded string) con
 		return config.ProfileOverride{Name: recorded, Origin: config.OriginState}
 	}
 	return override
+}
+
+type restoredResumeContext struct {
+	fromStep          string
+	sessionIDs        map[string]string
+	sessionProfiles   map[string]string
+	capturedVars      map[string]model.CapturedValue
+	lastSessionStepID string
+	namedSessions     map[string]string
+	namedSessionDecls map[string]string
+	childState        *model.NestedStepState
+	completed         bool
+}
+
+func restoreResumeContext(state *model.RunState) restoredResumeContext {
+	if state.CurrentStep.Nested == nil {
+		return restoredResumeContext{fromStep: state.CurrentStep.StepID}
+	}
+	nested := state.CurrentStep.Nested
+	result := restoredResumeContext{
+		fromStep:          nested.StepID,
+		sessionIDs:        nested.SessionIDs,
+		sessionProfiles:   nested.SessionProfiles,
+		capturedVars:      nested.CapturedVariables,
+		lastSessionStepID: nested.LastSessionStepID,
+		namedSessions:     nested.NamedSessions,
+		namedSessionDecls: nested.NamedSessionDecls,
+		completed:         nested.Completed,
+	}
+	if nested.Iteration != nil {
+		// Top-level loop step captured mid-iteration. Carry the iteration (and
+		// any deeper chain) through as ChildState for ExecuteLoopStep to resume.
+		result.childState = &model.NestedStepState{
+			StepID: nested.StepID, Iteration: nested.Iteration, Child: nested.Child,
+		}
+	} else {
+		result.childState = nested.Child
+	}
+	return result
 }
 
 func resumeAlreadyCompleted(stateFilePath string, state *model.RunState) bool {

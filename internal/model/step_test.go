@@ -152,6 +152,19 @@ func TestStepTools(t *testing.T) {
 		}
 	})
 
+	t.Run("accepts submit_route on an agent step", func(t *testing.T) {
+		step := Step{
+			ID: "plan", Agent: "lead", Prompt: "Plan the change.",
+			Session: SessionNew, Tools: []RunnerTool{RunnerToolSubmitRoute},
+		}
+		if err := step.Validate(nil); err != nil {
+			t.Fatalf("Validate() error = %v", err)
+		}
+		if !step.HasTool(RunnerToolSubmitRoute) {
+			t.Fatal("HasTool(submit_route) = false, want true")
+		}
+	})
+
 	for _, tt := range []struct {
 		name  string
 		tools []RunnerTool
@@ -558,6 +571,32 @@ func TestParamSchema(t *testing.T) {
 }
 
 func TestWorkflowSchema(t *testing.T) {
+	t.Run("rejects intake_handoff as a workflow parameter", func(t *testing.T) {
+		w := Workflow{
+			Name:   "test",
+			Params: []Param{{Name: "intake_handoff"}},
+			Steps:  []Step{{ID: "s", Command: "echo hi"}},
+		}
+		if err := w.Validate(nil); err == nil || !strings.Contains(err.Error(), "reserved") {
+			t.Fatalf("Validate() error = %v, want reserved-name error", err)
+		}
+	})
+
+	t.Run("rejects intake_handoff through every capture sink", func(t *testing.T) {
+		steps := []Step{
+			{ID: "shell", Command: "echo hi", Capture: "intake_handoff"},
+			{
+				ID: "ui", Mode: ModeUI, Title: "Choose", OutcomeCapture: "intake_handoff",
+				Actions: []UIAction{{Label: "Continue", Outcome: "continue"}},
+			},
+		}
+		for _, step := range steps {
+			if err := step.Validate(nil); err == nil || !strings.Contains(err.Error(), "reserved") {
+				t.Fatalf("Validate(%q) error = %v, want reserved-name error", step.ID, err)
+			}
+		}
+	})
+
 	t.Run("parses a full workflow", func(t *testing.T) {
 		w := Workflow{
 			Name:        "test",
