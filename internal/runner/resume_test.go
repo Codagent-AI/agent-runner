@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/config"
+	"github.com/codagent/agent-runner/internal/exec"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/stateio"
@@ -284,6 +286,81 @@ func TestPrepareRunPersistsIntakeHandoffAndPrepareResumeRestoresProvenance(t *te
 	}
 	if state.IntakeHandoffContents != "sealed context" {
 		t.Fatalf("rewritten handoff contents = %q, want sealed context", state.IntakeHandoffContents)
+	}
+}
+
+func TestResumeAfterPreAgentFailureDeliversIntakeHandoffToFirstAgent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workflowPath := filepath.Join(t.TempDir(), "routed-v1.0.yaml")
+	workflowSource := `name: routed
+steps:
+  - id: prerequisite
+    command: false
+  - id: plan
+    agent: lead
+    session: new
+    mode: autonomous
+    prompt: Plan the routed change.
+`
+	if err := os.WriteFile(workflowPath, []byte(workflowSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := loader.LoadWorkflow(workflowPath, loader.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profiles := &config.Config{ActiveAgents: map[string]*config.Agent{
+		"lead": {DefaultMode: "autonomous", CLI: "claude", Model: "sonnet", Effort: "high"},
+	}}
+	sessionDir := t.TempDir()
+	firstRunner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 1}}}
+	handle, err := PrepareRun(&workflow, nil, &Options{
+		WorkflowFile:          workflowPath,
+		SessionDir:            sessionDir,
+		IntakeHandoffContents: "Goal: preserve this routed context.",
+		IntakeParentRunID:     "intake-parent-run",
+		ProfileStore:          profiles,
+		ProcessRunner:         firstRunner,
+		GlobExpander:          &mockGlob{},
+		Log:                   &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareRun() error = %v", err)
+	}
+	if result := ExecuteFromHandle(handle, nil); result != ResultFailed {
+		t.Fatalf("initial result = %q, want failure before the agent", result)
+	}
+	if len(firstRunner.calls) != 1 {
+		t.Fatalf("initial calls = %#v, want prerequisite only", firstRunner.calls)
+	}
+
+	resumedRunner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}, {ExitCode: 0}}}
+	resumed, err := PrepareResume(filepath.Join(sessionDir, "state.json"), &Options{
+		ProfileStore:  profiles,
+		ProcessRunner: resumedRunner,
+		GlobExpander:  &mockGlob{},
+		Log:           &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareResume() error = %v", err)
+	}
+	if result := ExecuteFromHandle(resumed, nil); result != ResultSuccess {
+		t.Fatalf("resumed result = %q, want success", result)
+	}
+	if len(resumedRunner.calls) != 2 {
+		t.Fatalf("resumed calls = %#v, want prerequisite and first agent", resumedRunner.calls)
+	}
+
+	auditData, err := os.ReadFile(filepath.Join(sessionDir, "audit.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const handoff = "Goal: preserve this routed context."
+	if count := strings.Count(string(auditData), handoff); count != 1 {
+		t.Fatalf("handoff occurrence count = %d, want exactly one first-agent delivery; audit:\n%s", count, auditData)
+	}
+	if !strings.Contains(string(auditData), "Context from the intake conversation") {
+		t.Fatalf("resumed first-agent prompt omitted intake framing; audit:\n%s", auditData)
 	}
 }
 

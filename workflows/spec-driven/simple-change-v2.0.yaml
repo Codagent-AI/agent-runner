@@ -24,7 +24,7 @@ steps:
     session: lead-agent
     mode: interactive
     prompt: |
-      Help the user plan spec-driven change "{{change_name}}". First ask what the change is about; do not guess. You MUST use codagent:simple-plan.
+      Help the user plan spec-driven change "{{change_name}}". Use any intake context supplied above as what the user already told an agent; if none was supplied, first ask what the change is about and do not guess. You MUST use codagent:simple-plan.
 
       Spec-driven planning artifacts are expected to live outside the current project repository and remain independent of its commits. Help the user choose an appropriate external artifact directory and write the plan there.
 
