@@ -4,7 +4,7 @@ hidden: true
 
 sessions:
   - name: intake-planner
-    agent: lead
+    agent: implementor
 
 steps:
   - id: plan
