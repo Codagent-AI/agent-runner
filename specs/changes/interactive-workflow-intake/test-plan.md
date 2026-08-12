@@ -148,9 +148,9 @@ its rationale rather than silently dropped.
 - Setup: `Options` carrying `IntakeHandoffSource`, an intake parent run ID, and an agent override; plus
   an intake-parent run with a staged sidecar
 - Action: `PrepareRun`, then interrupt and `PrepareResume`, for both a launched run and an intake parent
-- Assertions: the handoff is copied into the new session directory and `{{intake_handoff}}` addresses
-  the copy rather than the source; the copy survives deletion of the source; the resumed run restores
-  the same handoff path and parent run ID; the launched run's persisted state records its own run ID
+- Assertions: the handoff is copied into the new session directory and `{{intake_handoff}}` carries the
+  copy's contents rather than the source's; the copy survives deletion of the source; the resumed run
+  restores the same handoff contents and parent run ID, even if the copy is rewritten before resume; the launched run's persisted state records its own run ID
   and the workflow version it executed; a resumed intake parent restores its staged route and can
   replace it; a resumed intake run restores its `--cli` and `--model` override rather than reverting to
   the profile; a directly prepared run resumes with no parent and an empty handoff

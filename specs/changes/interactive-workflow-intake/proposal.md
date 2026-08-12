@@ -18,7 +18,7 @@ This is the default entry point, so it sits in front of everyone starting work i
 - Add **"Plan with an agent"** as a highlighted first entry on the New tab, above the existing workflow browser. Selecting it starts the intake workflow. The manual browser and parameter form remain unchanged and fully usable for users who already know what they want.
 - Add **`agent-runner -i`** as a direct entry point that starts intake immediately, skipping the New tab:
 
-  ```
+  ```bash
   agent-runner -i
   agent-runner -i --cli codex --model gpt-5.2
   ```
@@ -60,7 +60,7 @@ The intake experience is an ordinary interactive agent step inside a built-in wo
 
 **Route submission is file-backed behind a fixed command.** The agent writes its choice to a JSON file at a runner-provided path and then runs a command whose text never varies:
 
-```
+```text
 env:  AGENT_RUNNER_ROUTE_REQUEST=<run-dir>/route-request.json
 
       { "workflow": "spec-driven:change",

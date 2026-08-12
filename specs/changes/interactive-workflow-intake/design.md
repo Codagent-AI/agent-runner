@@ -146,7 +146,7 @@ Failures return an actionable message through `controlResponse.Error`, which `st
 
 `handleCompletion` gains one step, under the mutex it already holds, before it marks the completion accepted:
 
-```
+```text
 handleCompletion:
   if a route is staged:
       Freeze()
@@ -182,7 +182,7 @@ Launching from inside the control handler would bypass `finalizeRun`, which clos
 
 **The check belongs to the run, not to the entry point.** The intake workflow is an ordinary embedded workflow, so `agent-runner core:intake` starts it too, and `builtin-workflows` requires that invocation to work. If the frozen-route check lived only in the `-i` path, starting intake by name would hold the whole conversation, freeze a route, and then silently discard it — the agent would tell the user it was launching something and nothing would happen. So the check sits on the shared path every top-level run returns through:
 
-```
+```text
 after any top-level run completes:
     if result != ResultSuccess:      return result   // durability failure, step failure, ...
     sealed := intakeroute.Load(<run-dir>)            // single stat; absent for every non-intake run
@@ -208,7 +208,7 @@ Recording the attempt *before* `exec` rather than after is deliberate: after a s
 
 The subcommand takes **only** the absolute sidecar path. The complete launch plan lives in that one artifact, so nothing is inherited through the environment and nothing is re-derived.
 
-```
+```text
 handleLaunchIntakeRoute(path):
     sealed := strict-decode(path)
     verify invariants: state == frozen, SourceRef resolves,
@@ -227,7 +227,7 @@ handleLaunchIntakeRoute(path):
 
 So that sequence is extracted into one internal service used by **both** the ordinary CLI launch and the intake launcher:
 
-```
+```text
 prepareFreshRun(req) :=
     workflow := LoadWorkflow(req.SourceRef)
     params   := bindAndDefault(workflow, req.Params)

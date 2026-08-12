@@ -99,14 +99,15 @@ func TestIntakeAppliesDirectoryChangeBeforeDispatch(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	tmp := t.TempDir()
 	home := filepath.Join(tmp, "home")
-	target := filepath.Join(tmp, "target-project")
-	if err := os.MkdirAll(target, 0o755); err != nil {
-		t.Fatalf("create target project: %v", err)
-	}
 	runnerBin := filepath.Join(tmp, "agent-runner")
 	buildAgentRunner(t, repoRoot, runnerBin)
 
-	cmd := exec.Command(runnerBin, "-C", target, "-i")
+	// A -C target that cannot be entered is what makes the ordering observable.
+	// Intake refuses every non-TTY invocation, so asserting that no run
+	// directory appears proves nothing: none appears either way. Only which of
+	// the two errors comes back distinguishes the orderings.
+	missing := filepath.Join(tmp, "no-such-project")
+	cmd := exec.Command(runnerBin, "-C", missing, "-i")
 	cmd.Dir = repoRoot // deliberately different from the -C target
 	cmd.Env = append(os.Environ(), "HOME="+home)
 	var out bytes.Buffer
@@ -115,12 +116,13 @@ func TestIntakeAppliesDirectoryChangeBeforeDispatch(t *testing.T) {
 	err := cmd.Run()
 
 	if err == nil {
-		t.Fatalf("expected intake to refuse a non-TTY invocation, got success: %s", out.String())
+		t.Fatalf("expected failure, got success: %s", out.String())
 	}
-	// The chdir must have been applied: no run directory may appear under the
-	// original working directory's project path.
-	originalRuns := filepath.Join(home, ".agent-runner", "projects", audit.EncodePath(repoRoot), "runs")
-	if entries, readErr := os.ReadDir(originalRuns); readErr == nil && len(entries) > 0 {
-		t.Fatalf("-C was not applied before intake dispatch: runs created under the original directory: %v", entries)
+	output := out.String()
+	if !strings.Contains(output, missing) {
+		t.Fatalf("error does not name the -C target, so the chdir was not attempted first: %s", output)
+	}
+	if strings.Contains(output, "interactive terminal") {
+		t.Fatalf("intake dispatched before -C was applied: %s", output)
 	}
 }
