@@ -8,11 +8,11 @@ On successful completion, the TUI SHALL display the run summary screen per `run-
 
 Once execution is terminal, detailed behavior SHALL match an inactive historical run opened through `--inspect`, including manual tree navigation, optional drill scope, selected-detail scrolling, resume, and the legend.
 
-#### Scenario: Successful completion shows summary
+#### Scenario: Successful completion shows summary screen
 - **WHEN** the final workflow execution completes successfully
 - **THEN** the TUI remains open on the summary screen with completed status
 
-#### Scenario: Failure selects failed leaf without drilling
+#### Scenario: Failure keeps TUI open in detailed view
 - **WHEN** an execution fails and the workflow halts
 - **THEN** the TUI remains in detail, expands the failed ancestry, selects the failed leaf, and retains root manual scope
 
@@ -20,11 +20,11 @@ Once execution is terminal, detailed behavior SHALL match an inactive historical
 - **WHEN** terminal failure contains multiple failed leaves at the greatest depth
 - **THEN** the TUI selects the most recently recorded failure, or the first in workflow order when durable failure ordering is unavailable
 
-#### Scenario: Post-completion detail matches inspect
+#### Scenario: Post-completion navigation matches inspect mode
 - **WHEN** the workflow is terminal and the user opens or remains in detail
 - **THEN** navigation and selected-detail behavior match an inactive `view-run`
 
-#### Scenario: Resume remains available after completion
+#### Scenario: Resume action available after completion
 - **WHEN** a terminal run has a selected resumable agent execution and the user invokes resume
 - **THEN** the existing `view-run` resume behavior applies
 
