@@ -182,6 +182,51 @@ func TestNewHistoricalFailedRunSelectsFailedLeafAtRootScope(t *testing.T) {
 	}
 }
 
+func TestNewHistoricalFailedNestedRunSelectsFailedLeafAfterLoadingSavedScope(t *testing.T) {
+	base := t.TempDir()
+	workflowDir := filepath.Join(base, "workflows")
+	workflowPath := filepath.Join(workflowDir, "root-v1.0.yaml")
+	childWorkflowPath := filepath.Join(workflowDir, "child-v1.0.yaml")
+	writeFile(t, workflowPath, "name: root\nsteps:\n  - id: earlier\n    command: true\n  - id: nested\n    workflow: child-v1.0.yaml\n")
+	writeFile(t, childWorkflowPath, "name: child\nsteps:\n  - id: failing-leaf\n    command: false\n")
+	projectDir := filepath.Join(base, "project")
+	sessionDir := filepath.Join(projectDir, "runs", "root-2026-08-03T00-00-00-000000000Z")
+	state, err := json.Marshal(model.RunState{
+		WorkflowFile: workflowPath,
+		WorkflowName: "root",
+		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+			StepID: "nested",
+			Child:  &model.NestedStepState{StepID: "failing-leaf"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(sessionDir, "state.json"), string(state))
+	writeFile(t, filepath.Join(sessionDir, "audit.log"), "2026-08-03T00:00:00Z run_start {}\n"+
+		"2026-08-03T00:00:01Z [earlier] step_start {\"command\":\"true\"}\n"+
+		"2026-08-03T00:00:02Z [earlier] step_end {\"outcome\":\"success\"}\n"+
+		"2026-08-03T00:00:03Z [nested] step_start {\"workflow_path\":\""+childWorkflowPath+"\"}\n"+
+		"2026-08-03T00:00:04Z [nested, sub:child] sub_workflow_start {\"workflow_name\":\"child\",\"workflow_path\":\""+childWorkflowPath+"\"}\n"+
+		"2026-08-03T00:00:05Z [nested, sub:child, failing-leaf] step_start {\"command\":\"false\"}\n"+
+		"2026-08-03T00:00:06Z [nested, sub:child, failing-leaf] step_end {\"outcome\":\"failed\",\"exit_code\":7}\n"+
+		"2026-08-03T00:00:07Z [nested, sub:child] sub_workflow_end {\"outcome\":\"failed\"}\n"+
+		"2026-08-03T00:00:08Z [nested] step_end {\"outcome\":\"failed\"}\n"+
+		"2026-08-03T00:00:09Z run_end {\"outcome\":\"failed\"}\n")
+
+	m, err := New(sessionDir, projectDir, FromInspect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.selectedNode(); got == nil || got.ID != "failing-leaf" {
+		nested := childByID(m.tree.Root, "nested")
+		t.Fatalf("historical nested failed selection = %v, want failing-leaf (root=%v nested=%v loaded=%v children=%v failed=%v)", got, m.tree.Root.Status, nested.Status, nested.SubLoaded, nested.Children, findFailedLeaf(m.tree.Root))
+	}
+	if len(m.path) != 1 || m.path[0] != m.tree.Root {
+		t.Fatalf("historical nested failed path = %#v, want root scope", m.path)
+	}
+}
+
 func TestModel_Navigation_UpDownDoesNotClearScreen(t *testing.T) {
 	m := newTestModel(simpleTree(), FromList)
 
@@ -1801,6 +1846,38 @@ func TestModel_LoadFull(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
 	if !m.loadedFull[step.NodeKey()] {
 		t.Fatal("g should mark step as loaded full")
+	}
+}
+
+func TestModel_LoadFullReloadsCompletePersistedOutput(t *testing.T) {
+	sessionDir := t.TempDir()
+	step := &StepNode{
+		ID:           "large-output",
+		Type:         NodeScript,
+		Status:       StatusSuccess,
+		OutputPrefix: "[large-output]",
+	}
+	root := &StepNode{ID: "root", Type: NodeRoot, Status: StatusSuccess, Children: []*StepNode{step}}
+	step.Parent = root
+	prefix := sanitizeOutputPrefixForTest(step.OutputPrefix)
+	fullOutput := "first persisted line\n" + strings.Repeat("middle persisted output\n", maxOutputLines+100) + "last persisted line\n"
+	writeFile(t, filepath.Join(sessionDir, "output", prefix+".out"), fullOutput)
+
+	m := newTestModel(&Tree{Root: root}, FromInspect)
+	m.sessionDir = sessionDir
+	m.setSelected(step)
+	_ = m.selectedStepDetailText()
+	if strings.Contains(step.Stdout, "first persisted line") {
+		t.Fatal("bounded historical read unexpectedly retained the oldest output")
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+
+	if !m.loadedFull[step.NodeKey()] {
+		t.Fatal("g should mark step as loaded full")
+	}
+	if !strings.Contains(step.Stdout, "first persisted line") || !strings.Contains(step.Stdout, "last persisted line") {
+		t.Fatalf("g did not reload complete persisted output: bytes=%d", len(step.Stdout))
 	}
 }
 

@@ -246,6 +246,7 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 			m.loadErr = "audit log: " + err.Error()
 		}
 	}
+	failedHistoricalRun := entered != FromLiveRun && auditRunFailed(events)
 	events = filterAuditEventsForWorkflowState(events, state.WorkflowHash, tree.Root, currentStepID(&state), state.Completed)
 	if workflowMissing && len(tree.Root.Children) == 0 && reconstructTopLevelStepsFromAudit(tree.Root, events) {
 		m.loadErr = ""
@@ -259,13 +260,14 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	if entered != FromLiveRun && tree.MetricsCaptured && tree.Root.Status != StatusFailed && (state.Completed || tree.Root.Status == StatusSuccess) {
 		m.showSummary = true
 	}
-	if entered != FromLiveRun && tree.Root.Status == StatusFailed {
-		// Historical failure inspection starts at root scope but selects the
-		// concrete failed execution. The projection expands its ancestry without
-		// turning that inline navigation into a manual drill path.
+	failedHistoricalRun = failedHistoricalRun || entered != FromLiveRun && findFailedLeaf(tree.Root) != nil
+	current := m.applyCurrentStepState(&state, !failedHistoricalRun)
+	if failedHistoricalRun {
+		// Applying the saved position first ensures lazy nested workflows are
+		// available to the failure search. Preserve their terminal audit status
+		// and select the concrete failed execution at root scope.
 		m.setSelected(findFailedLeaf(tree.Root))
 	}
-	current := m.applyCurrentStepState(&state)
 	if m.followActive {
 		if current != nil {
 			m.applyAutoFollowToNode(current)
@@ -275,6 +277,17 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	}
 
 	return m, nil
+}
+
+func auditRunFailed(events []RawEvent) bool {
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type != "run_end" {
+			continue
+		}
+		outcome, _ := stringField(events[i].Data, "outcome")
+		return outcome == "failed"
+	}
+	return false
 }
 
 func loadRunTree(
@@ -350,22 +363,22 @@ func currentStepID(state *model.RunState) string {
 	return state.CurrentStep.StepID
 }
 
-func (m *Model) applyCurrentStepState(state *model.RunState) *StepNode {
+func (m *Model) applyCurrentStepState(state *model.RunState, markInProgress bool) *StepNode {
 	if state == nil {
 		return nil
 	}
 	if state.CurrentStep.Nested != nil {
-		return m.applyNestedCurrentStepState(m.tree.Root, state.CurrentStep.Nested)
+		return m.applyNestedCurrentStepState(m.tree.Root, state.CurrentStep.Nested, markInProgress)
 	}
 	if state.CurrentStep.StepID == "" {
 		return nil
 	}
 	node := childByID(m.tree.Root, state.CurrentStep.StepID)
-	markCurrentNode(node, false)
+	markCurrentNode(node, !markInProgress)
 	return node
 }
 
-func (m *Model) applyNestedCurrentStepState(container *StepNode, current *model.NestedStepState) *StepNode {
+func (m *Model) applyNestedCurrentStepState(container *StepNode, current *model.NestedStepState, markInProgress bool) *StepNode {
 	if container == nil || current == nil || current.StepID == "" {
 		return nil
 	}
@@ -377,16 +390,16 @@ func (m *Model) applyNestedCurrentStepState(container *StepNode, current *model.
 	if node == nil {
 		return nil
 	}
-	markCurrentNode(node, current.Completed && current.Child == nil)
+	markCurrentNode(node, !markInProgress || current.Completed && current.Child == nil)
 
 	if current.Iteration != nil {
 		iter := findIteration(node, *current.Iteration)
 		if iter == nil {
 			iter = ensureIteration(node, *current.Iteration)
 		}
-		markCurrentNode(iter, current.Completed && current.Child == nil)
+		markCurrentNode(iter, !markInProgress || current.Completed && current.Child == nil)
 		if current.Child != nil {
-			if child := m.applyNestedCurrentStepState(iter, current.Child); child != nil {
+			if child := m.applyNestedCurrentStepState(iter, current.Child, markInProgress); child != nil {
 				return child
 			}
 		}
@@ -399,7 +412,7 @@ func (m *Model) applyNestedCurrentStepState(container *StepNode, current *model.
 				node.ErrorMessage = err.Error()
 			}
 		}
-		if child := m.applyNestedCurrentStepState(node, current.Child); child != nil {
+		if child := m.applyNestedCurrentStepState(node, current.Child, markInProgress); child != nil {
 			return child
 		}
 	}
@@ -1434,55 +1447,59 @@ func (m *Model) applyOutputChunk(msg liverun.OutputChunkMsg) {
 // and ordinary autonomous steps use the same source, while only agents pass
 // raw output through their normal CLI filter before it reaches selected detail.
 func (m *Model) loadHistoricalOutput(node *StepNode) {
-	if node == nil || m.sessionDir == "" || !historicalOutputNode(node) || node.OutputLoaded {
-		return
-	}
-	prefix := node.OutputPrefix
-	if node.Type == NodeAgentCall {
-		prefix = node.CallOutputPrefix
-		if node.CallOutputLoaded {
-			return
-		}
-	}
-	if prefix == "" {
-		return
+	m.loadHistoricalOutputFromDisk(node, false)
+}
+
+func (m *Model) loadHistoricalOutputFromDisk(node *StepNode, full bool) bool {
+	if node == nil || m.sessionDir == "" || !historicalOutputNode(node) || (!full && node.OutputLoaded) {
+		return false
 	}
 	// A live in-process child is already feeding chunks through OutputChunkMsg.
 	// Reading its still-growing file as well would duplicate bytes.
 	if m.entered == FromLiveRun && node.Status == StatusInProgress {
-		return
+		return false
+	}
+	prefix := node.OutputPrefix
+	if node.Type == NodeAgentCall {
+		prefix = node.CallOutputPrefix
+		if !full && node.CallOutputLoaded {
+			return false
+		}
+	}
+	if prefix == "" {
+		return false
 	}
 	base := liverun.SanitizeOutputPrefix(prefix)
 	if base == "" || base == "." || base == ".." || strings.Contains(base, "..") {
 		m.loadErr = fmt.Sprintf("%s: invalid output prefix %q", outputLoadLabel(node), prefix)
-		return
+		return false
 	}
 	root, err := os.OpenRoot(filepath.Join(m.sessionDir, "output"))
 	if errors.Is(err, os.ErrNotExist) {
 		markHistoricalOutputLoaded(node)
 		m.clearOutputLoadError(node)
-		return
+		return true
 	}
 	if err != nil {
 		m.loadErr = outputLoadLabel(node) + ": " + err.Error()
-		return
+		return false
 	}
 
-	stdout, stdoutFound, stderr, stderrFound, err := readBoundedOutputs(root, base)
+	stdout, stdoutFound, stderr, stderrFound, err := readOutputs(root, base, full)
 	if err == nil && !stdoutFound && !stderrFound {
 		legacyBase := liverun.LegacySanitizeOutputPrefix(prefix)
 		if legacyBase != base {
-			stdout, stdoutFound, stderr, stderrFound, err = readBoundedOutputs(root, legacyBase)
+			stdout, stdoutFound, stderr, stderrFound, err = readOutputs(root, legacyBase, full)
 		}
 	}
 	if err != nil {
 		err = errors.Join(err, root.Close())
 		m.loadErr = outputLoadLabel(node) + ": " + err.Error()
-		return
+		return false
 	}
 	if err := root.Close(); err != nil {
 		m.loadErr = outputLoadLabel(node) + ": " + err.Error()
-		return
+		return false
 	}
 	if node.Type == NodeHeadlessAgent || node.Type == NodeAgentCall {
 		stdout, stderr = filterAgentOutput(node, stdout, stderr)
@@ -1495,6 +1512,7 @@ func (m *Model) loadHistoricalOutput(node *StepNode) {
 	}
 	markHistoricalOutputLoaded(node)
 	m.clearOutputLoadError(node)
+	return true
 }
 
 func markHistoricalOutputLoaded(node *StepNode) {
@@ -1542,16 +1560,16 @@ func filterAgentOutput(node *StepNode, rawStdout, rawStderr string) (stdout, std
 	return stdout, stderr
 }
 
-func readBoundedOutputs(root *os.Root, base string) (stdout string, stdoutFound bool, stderr string, stderrFound bool, err error) {
-	stdout, stdoutFound, err = readBoundedOutput(root, base+".out")
+func readOutputs(root *os.Root, base string, full bool) (stdout string, stdoutFound bool, stderr string, stderrFound bool, err error) {
+	stdout, stdoutFound, err = readOutput(root, base+".out", full)
 	if err != nil {
 		return "", false, "", false, err
 	}
-	stderr, stderrFound, err = readBoundedOutput(root, base+".err")
+	stderr, stderrFound, err = readOutput(root, base+".err", full)
 	return stdout, stdoutFound, stderr, stderrFound, err
 }
 
-func readBoundedOutput(root *os.Root, name string) (output string, found bool, err error) {
+func readOutput(root *os.Root, name string, full bool) (output string, found bool, err error) {
 	file, err := root.Open(name)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", false, nil
@@ -1562,6 +1580,14 @@ func readBoundedOutput(root *os.Root, name string) (output string, found bool, e
 	defer func() {
 		err = errors.Join(err, file.Close())
 	}()
+
+	if full {
+		data, err := io.ReadAll(file)
+		if err != nil {
+			return "", false, fmt.Errorf("read %s: %w", name, err)
+		}
+		return string(data), true, nil
+	}
 
 	info, err := file.Stat()
 	if err != nil {
@@ -1755,7 +1781,13 @@ func (m *Model) handleLoadFull() {
 		return
 	}
 	if n.Type == NodeShell || n.Type == NodeScript || n.Type == NodeHeadlessAgent || n.Type == NodeAgentCall {
-		m.loadedFull[n.NodeKey()] = true
+		prefix := n.OutputPrefix
+		if n.Type == NodeAgentCall {
+			prefix = n.CallOutputPrefix
+		}
+		if m.sessionDir == "" || prefix == "" || m.loadHistoricalOutputFromDisk(n, true) {
+			m.loadedFull[n.NodeKey()] = true
+		}
 	}
 }
 
