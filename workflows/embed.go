@@ -14,6 +14,25 @@ import (
 
 const RefPrefix = "builtin:"
 
+const (
+	// IntakeCanonicalName is the catalog name of the built-in intake workflow.
+	IntakeCanonicalName = "core:intake"
+	// IntakeStepID is the intake workflow's route-eligible step.
+	IntakeStepID = "plan"
+
+	intakeRelPath = "core/intake-v1.0.yaml"
+)
+
+// IntakeRef returns the builtin reference of the intake workflow. Route
+// eligibility, the submit_route reservation, and the interactive-terminal gate
+// are three independent checks keyed off this one fact, so they resolve it from
+// here rather than each spelling out the path. A version bump then moves all of
+// them together instead of silently disabling one.
+func IntakeRef() string { return Ref(intakeRelPath) }
+
+// IsIntakeRef reports whether workflowFile is the built-in intake workflow.
+func IsIntakeRef(workflowFile string) bool { return workflowFile == IntakeRef() }
+
 // FS contains the builtin workflows embedded at build time from the repository's
 // workflows/ directory. The `all:` prefix is required so that `_group.yaml`
 // namespace metadata files are embedded — Go's default embed behaviour excludes

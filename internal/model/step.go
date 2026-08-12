@@ -41,7 +41,16 @@ type RunnerTool string
 const (
 	// RunnerToolCallAgent enables the process-local call_agent integration.
 	RunnerToolCallAgent RunnerTool = "call_agent"
+	// RunnerToolSubmitRoute enables the runner-owned intake route client. Its
+	// workflow identity eligibility is enforced by the loader and executor.
+	RunnerToolSubmitRoute RunnerTool = "submit_route"
 )
+
+// IntakeHandoffVar is the built-in template variable carrying the sealed intake
+// handoff path. Unlike other built-ins it is reserved: params and every capture
+// sink reject it, so the sealed path cannot be shadowed. Reservation checks and
+// the built-in itself share this name rather than repeating the literal.
+const IntakeHandoffVar = "intake_handoff"
 
 // RunnerTools is the list of Runner-owned tools enabled for an agent step.
 // Its field-level decoder preserves explicit field presence and validates shape.
@@ -339,6 +348,9 @@ func (s *Step) validateAgentField(isAgent, isShell bool) error {
 
 // validateCaptureFields checks capture and capture_stderr constraints.
 func (s *Step) validateCaptureFields(isAgent, isShell bool) error {
+	if s.Capture == IntakeHandoffVar {
+		return fmt.Errorf(`"capture" name %q is reserved`, IntakeHandoffVar)
+	}
 	if s.Capture != "" {
 		if isShell && s.Mode == ModeInteractive {
 			return fmt.Errorf(`"capture" cannot be combined with "mode: interactive" on shell steps`)
@@ -441,7 +453,7 @@ func (s *Step) validateTools(isAgent bool) error {
 	}
 	seen := make(map[RunnerTool]struct{}, len(s.Tools))
 	for _, tool := range s.Tools {
-		if tool != RunnerToolCallAgent {
+		if tool != RunnerToolCallAgent && tool != RunnerToolSubmitRoute {
 			return fmt.Errorf(`unknown tool in "tools": %q`, tool)
 		}
 		if _, exists := seen[tool]; exists {
@@ -540,6 +552,9 @@ func validateScriptPath(script string) error {
 func (s *Step) validateUIFields(isUI bool) error {
 	if s.OutcomeCapture != "" && !isUI {
 		return fmt.Errorf(`"outcome_capture" is only allowed on ui steps`)
+	}
+	if s.OutcomeCapture == IntakeHandoffVar {
+		return fmt.Errorf(`"outcome_capture" name %q is reserved`, IntakeHandoffVar)
 	}
 	if !isUI {
 		if s.Title != "" || s.Body != "" || len(s.Actions) > 0 || len(s.Inputs) > 0 {
@@ -715,6 +730,11 @@ func (w *Workflow) Validate(knownCLIs []string) error {
 
 	if w.Engine != nil && w.Engine.Type == "" {
 		return fmt.Errorf("engine type is required")
+	}
+	for _, param := range w.Params {
+		if param.Name == IntakeHandoffVar {
+			return fmt.Errorf(`parameter name %q is reserved`, IntakeHandoffVar)
+		}
 	}
 
 	var errs []string

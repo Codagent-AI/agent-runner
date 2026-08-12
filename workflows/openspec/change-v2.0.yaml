@@ -7,26 +7,9 @@ params:
 
 steps:
   - id: validate-feature-branch
-    command: |
-      current_branch=$(git branch --show-current)
-      if [ -z "$current_branch" ]; then
-        echo "openspec:change requires a named feature branch; HEAD is detached" >&2
-        exit 1
-      fi
-
-      default_branch=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name) || {
-        echo "could not determine the repository's default branch; verify that gh is installed and authenticated and that the current directory belongs to a GitHub repository" >&2
-        exit 1
-      }
-      if [ -z "$default_branch" ]; then
-        echo "repository default branch is empty" >&2
-        exit 1
-      fi
-
-      if [ "$current_branch" = "$default_branch" ]; then
-        echo "openspec:change cannot run on the default branch '$default_branch'; create or switch to a feature branch first" >&2
-        exit 1
-      fi
+    workflow: ../core/validate-feature-branch-v1.0.yaml
+    params:
+      workflow_name: "openspec:change"
 
   - id: define
     workflow: define-change-v1.0.yaml
@@ -44,9 +27,12 @@ steps:
       change_name: "{{change_name}}"
 
   - id: accept
-    workflow: accept-change-v1.0.yaml
+    workflow: ../core/accept-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
+      change_dir: "openspec/changes/{{change_name}}"
+      change_label: "OpenSpec change"
+      artifact_validation_instruction: 'If a specification changed, run `openspec validate --type change "{{change_name}}"`.'
 
   - id: archive
     workflow: archive-change-v1.0.yaml

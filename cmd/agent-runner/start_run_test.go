@@ -100,6 +100,44 @@ func TestSwitcher_ViewDefinitionMsgOpensExactSelectedSourcePath(t *testing.T) {
 	}
 }
 
+func TestSwitcher_StartIntakeMsgExitsToImmediateIntakeLaunch(t *testing.T) {
+	sw := &switcher{mode: showingList}
+
+	newModel, _ := sw.Update(discovery.StartIntakeMsg{})
+	sw = newModel.(*switcher)
+
+	if !sw.startIntakeReady {
+		t.Fatal("startIntakeReady = false, want intake launch")
+	}
+}
+
+func TestExecStartIntake_ExecsSelfWithImmediateAltScreen(t *testing.T) {
+	originalExecutable := currentExecutable
+	originalExec := execProcess
+	t.Cleanup(func() {
+		currentExecutable = originalExecutable
+		execProcess = originalExec
+	})
+	currentExecutable = func() (string, error) { return "/tmp/agent-runner", nil }
+	var gotArgs, gotEnv []string
+	execProcess = func(_ string, args []string, env []string) error {
+		gotArgs = append([]string(nil), args...)
+		gotEnv = append([]string(nil), env...)
+		return nil
+	}
+
+	if code := execStartIntake(); code != 0 {
+		t.Fatalf("execStartIntake() = %d, want 0", code)
+	}
+	want := []string{"agent-runner", "-i"}
+	if diff := cmp.Diff(want, gotArgs); diff != "" {
+		t.Fatalf("exec args mismatch (-want +got):\n%s", diff)
+	}
+	if !envContains(gotEnv, liveRunImmediateAltScreenEnv+"=1") {
+		t.Fatalf("exec env missing %s=1", liveRunImmediateAltScreenEnv)
+	}
+}
+
 func TestExecRunnerResume_EmptyRunIDOmitExtraArg(t *testing.T) {
 	originalExecutable := currentExecutable
 	originalExec := execProcess

@@ -15,6 +15,7 @@ import (
 	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/interactive"
 	"github.com/codagent/agent-runner/internal/model"
+	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
 type recordingAuditLogger struct {
@@ -60,6 +61,38 @@ func TestResolveStepProfileCrosscheckInteractiveOverrideKeepsResolvedBackend(t *
 	}
 	if resolved.DefaultMode != "interactive" || resolved.CLI != "claude" || resolved.Model != "opus" || resolved.Effort != "high" {
 		t.Fatalf("resolveStepProfile() = %+v, want interactive override with Crosscheck backend", resolved)
+	}
+}
+
+func TestResolveStepProfile_RunAgentOverrideBeatsStepAndProfile(t *testing.T) {
+	ctx := makeCtx()
+	ctx.ProfileStore = &config.Config{ActiveAgents: map[string]*config.Agent{
+		"lead": {DefaultMode: "interactive", CLI: "claude", Model: "profile-model"},
+	}}
+	ctx.AgentOverride = &model.AgentOverride{CLI: "codex", Model: "command-model"}
+	step := &model.Step{ID: "plan", Agent: "lead", Session: model.SessionNew, CLI: "cursor", Model: "step-model"}
+
+	resolved, err := resolveStepProfile(step, ctx)
+	if err != nil {
+		t.Fatalf("resolveStepProfile() error = %v", err)
+	}
+	if resolved.CLI != "codex" || resolved.Model != "command-model" {
+		t.Fatalf("resolveStepProfile() = %+v, want command overrides", resolved)
+	}
+}
+
+func TestResolveStepProfile_RunAgentOverrideAppliesWithoutProfileStore(t *testing.T) {
+	ctx := makeCtx()
+	ctx.ProfileStore = nil
+	ctx.AgentOverride = &model.AgentOverride{CLI: "codex", Model: "gpt-5.2"}
+	step := &model.Step{ID: "plan", Session: model.SessionNew, CLI: "claude", Model: "step-model"}
+
+	resolved, err := resolveStepProfile(step, ctx)
+	if err != nil {
+		t.Fatalf("resolveStepProfile() error = %v", err)
+	}
+	if resolved.CLI != "codex" || resolved.Model != "gpt-5.2" {
+		t.Fatalf("resolveStepProfile() = %+v, want command overrides", resolved)
 	}
 }
 
@@ -1120,6 +1153,52 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	// Intake opens a conversation the user drives, so the visible first message
+	// is a bare greeting rather than a generated step announcement. The step's
+	// instructions still reach the agent through the system prompt.
+	t.Run("interactive intake greets the user instead of announcing the step", func(t *testing.T) {
+		var interactiveCalls [][]string
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(args []string, _ directRunOptions) (interactive.DirectResult, error) {
+			interactiveCalls = append(interactiveCalls, args)
+			return interactive.DirectResult{Completed: true}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		ctx := makeCtx()
+		ctx.WorkflowFile = builtinworkflows.IntakeRef()
+		step := model.Step{
+			ID: builtinworkflows.IntakeStepID, Mode: model.ModeInteractive,
+			Prompt: "explore the problem", Session: model.SessionNew,
+		}
+		if _, err := ExecuteAgentStep(&step, ctx, &mockRunner{}, &mockLogger{}); err != nil {
+			t.Fatalf("ExecuteAgentStep: %v", err)
+		}
+		if len(interactiveCalls) == 0 {
+			t.Fatal("expected direct interactive runner to be called")
+		}
+		args := interactiveCalls[0]
+		if got := args[len(args)-1]; got != "Let's go" {
+			t.Fatalf("intake positional prompt = %q, want %q", got, "Let's go")
+		}
+		systemPrompt, ok := argValue(args, "--append-system-prompt")
+		if !ok {
+			t.Fatal("expected --append-system-prompt for the intake step")
+		}
+		if !strings.Contains(systemPrompt, "explore the problem") {
+			t.Fatalf("system prompt = %q, want it to carry the step instructions", systemPrompt)
+		}
+		// Replacing the visible announcement is pointless if the agent is still
+		// told to announce the step: it just says "I'm starting the plan step"
+		// itself, which is the workflow machinery the greeting hides.
+		if strings.Contains(systemPrompt, "announce that you are starting this step") {
+			t.Error("intake system prompt still instructs the agent to announce the step")
+		}
+		if strings.Contains(systemPrompt, `The current step is "plan"`) {
+			t.Error("intake system prompt still frames the conversation as a workflow step")
+		}
+	})
+
 	t.Run("interactive claude resume includes current completion instruction in positional prompt", func(t *testing.T) {
 		var interactiveCalls [][]string
 		var directOpts []directRunOptions
@@ -1878,6 +1957,15 @@ func withFakeClaudeSession(t *testing.T, sessionID string) {
 	if err := os.WriteFile(transcript, nil, 0o600); err != nil {
 		t.Fatalf("write transcript: %v", err)
 	}
+}
+
+func argValue(args []string, flag string) (string, bool) {
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			return args[i+1], true
+		}
+	}
+	return "", false
 }
 
 func containsArg(args []string, target string) bool {

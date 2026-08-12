@@ -63,7 +63,7 @@ The TUI opens on the workflow browser, where you can filter workflows, view curr
 | `agent-runner -resume <run-id>` | Resume a specific interrupted run. |
 | `agent-runner -validate openspec:plan-change change_name=my-change` | Validate a workflow without executing it. |
 | `agent-runner openspec:plan-change my-change` | Run a built-in workflow with a positional parameter. |
-| `agent-runner -C /path/to/project spec-driven:change` | Change directories before resolving and running a workflow. |
+| `agent-runner -C /path/to/project spec-driven:change change_name=my-change` | Change directories before resolving and running a named spec-driven change workflow. |
 | `agent-runner -version` | Print the version and exit. |
 
 `-validate` accepts workflow parameters only as `key=value`. Normal runs accept positional parameters, `key=value` parameters, or a mix of both.

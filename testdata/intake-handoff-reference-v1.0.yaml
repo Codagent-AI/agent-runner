@@ -1,0 +1,4 @@
+name: intake-handoff-reference
+steps:
+  - id: handoff
+    command: 'printf "%s" "{{intake_handoff}}"'

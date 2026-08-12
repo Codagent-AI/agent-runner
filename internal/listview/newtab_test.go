@@ -135,11 +135,56 @@ func TestNewTab_TabOrderIsNewCurrentDirWorktreesAll(t *testing.T) {
 	}
 }
 
+func TestNewTab_PlanWithAnAgentEntryRemainsVisibleWithoutWorkflows(t *testing.T) {
+	m := newTabModel(nil)
+
+	rendered := sanitize(m.renderNewTab())
+	if !strings.Contains(rendered, "Plan with an agent") {
+		t.Fatalf("new tab = %q, want dedicated intake entry", rendered)
+	}
+}
+
+func TestNewTab_PlanWithAnAgentEntryRemainsVisibleWhenFilterMatchesNothing(t *testing.T) {
+	m := newTabModel([]discovery.WorkflowEntry{validEntry("core:finalize-pr")})
+	m.newTab.searchText = "does-not-match"
+	m.rebuildNewTabFiltered()
+
+	rendered := sanitize(m.renderNewTab())
+	if !strings.Contains(rendered, "Plan with an agent") {
+		t.Fatalf("filtered new tab = %q, want dedicated intake entry", rendered)
+	}
+}
+
+func TestNewTab_SelectingPlanWithAnAgentEmitsStartIntakeMsg(t *testing.T) {
+	m := newTabModel([]discovery.WorkflowEntry{validEntry("core:finalize-pr")})
+
+	_, cmd := m.handleEnter()
+	if cmd == nil {
+		t.Fatal("Enter on intake entry should produce a command")
+	}
+	if _, ok := cmd().(discovery.StartIntakeMsg); !ok {
+		t.Fatalf("Enter message = %T, want discovery.StartIntakeMsg", cmd())
+	}
+}
+
+func TestNewTab_PlanWithAnAgentEntryIsUnaffectedByHiddenToggle(t *testing.T) {
+	entries := []discovery.WorkflowEntry{{
+		CanonicalName: "core:hidden", Scope: discovery.ScopeBuiltin, Namespace: "core", Hidden: true,
+	}}
+	for _, showHidden := range []bool{false, true} {
+		filtered := buildFilteredRows(entries, defaultTestGroups(), "", showHidden)
+		if len(filtered) == 0 || filtered[0].kind != intakeRow {
+			t.Fatalf("showHidden=%t filtered rows = %+v, want leading intake row", showHidden, filtered)
+		}
+	}
+}
+
 // TestNewTab_EnterOnValidWorkflow_EmitsViewDefinitionMsg verifies Enter emits ViewDefinitionMsg.
 func TestNewTab_EnterOnValidWorkflow_EmitsViewDefinitionMsg(t *testing.T) {
 	entry := validEntry("core:finalize-pr")
 	entry.SourcePath = "builtin:core/finalize-pr-v2.0.yaml"
 	m := newTabModel([]discovery.WorkflowEntry{entry})
+	m.moveNewTabCursor(1)
 
 	result, cmd := m.handleEnter()
 	_ = result
@@ -164,6 +209,7 @@ func TestNewTab_EnterOnValidWorkflow_EmitsViewDefinitionMsg(t *testing.T) {
 func TestNewTab_EnterOnMalformedWorkflow_Ignored(t *testing.T) {
 	entry := malformedEntry("core:broken")
 	m := newTabModel([]discovery.WorkflowEntry{entry})
+	m.moveNewTabCursor(1)
 
 	_, cmd := m.handleEnter()
 	if cmd != nil {
@@ -176,6 +222,7 @@ func TestNewTab_R_EmitsStartRunMsg(t *testing.T) {
 	entry := validEntry("core:finalize-pr")
 	entry.SourcePath = "builtin:core/finalize-pr-v2.0.yaml"
 	m := newTabModel([]discovery.WorkflowEntry{entry})
+	m.moveNewTabCursor(1)
 
 	_, cmd := pressKey(m, "r")
 	if cmd == nil {
@@ -199,6 +246,9 @@ func TestNewTab_R_OnMalformedWorkflow_Ignored(t *testing.T) {
 	entry := malformedEntry("core:broken")
 	m := newTabModel([]discovery.WorkflowEntry{entry})
 
+	// The intake entry holds the initial cursor, so step onto the workflow row
+	// before asserting that r is ignored there.
+	m, _ = pressKey(m, "down")
 	_, cmd := pressKey(m, "r")
 	if cmd != nil {
 		t.Fatal("r on malformed workflow should produce no cmd")
@@ -480,8 +530,28 @@ func TestNewTab_SearchDoesNotSurfaceHiddenWhenToggleOff(t *testing.T) {
 func TestNewTab_InitialCursorSkipsLeadingHeader(t *testing.T) {
 	m := newTabModel([]discovery.WorkflowEntry{validEntry("core:finalize-pr")})
 
-	if m.newTab.filtered[m.newTab.cursor].kind != workflowRow {
-		t.Fatalf("initial cursor landed on %+v, want workflow row", m.newTab.filtered[m.newTab.cursor])
+	if m.newTab.filtered[m.newTab.cursor].kind != intakeRow {
+		t.Fatalf("initial cursor landed on %+v, want intake row", m.newTab.filtered[m.newTab.cursor])
+	}
+}
+
+func TestNewTab_NavigationAroundIntakeEntry(t *testing.T) {
+	m := newTabModel([]discovery.WorkflowEntry{
+		{CanonicalName: "project-build", Scope: discovery.ScopeProject, SourcePath: "/project/build.yaml"},
+		{CanonicalName: "core:finalize", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/builtin/finalize.yaml"},
+	})
+
+	m.moveCursor(1)
+	if row := m.newTab.filtered[m.newTab.cursor]; row.kind != workflowRow || row.index != 0 {
+		t.Fatalf("down from intake = %+v, want first workflow after its header", row)
+	}
+	m.moveCursor(-1)
+	if row := m.newTab.filtered[m.newTab.cursor]; row.kind != intakeRow {
+		t.Fatalf("up from first workflow = %+v, want intake entry", row)
+	}
+	m.moveCursor(-1)
+	if !m.newTab.searchFocused {
+		t.Fatal("up from intake should focus the search box")
 	}
 }
 
@@ -492,8 +562,9 @@ func TestNewTab_CursorSkipsSeparators(t *testing.T) {
 		{CanonicalName: "core:finalize-pr", Scope: discovery.ScopeBuiltin, Namespace: "core", SourcePath: "/b/fin.yaml"},
 	}
 	m := newTabModel(entries)
-	// Put cursor at first entry (proj-wf), move down — should skip separator and land on builtin.
+	// Put cursor at the project entry, move down — should skip separator and land on builtin.
 	m.newTab.cursor = firstSelectableRow(m.newTab.filtered)
+	m.moveCursor(1)
 
 	m.moveCursor(1)
 
@@ -781,5 +852,20 @@ func TestBuildFilteredRows_MultipleNamespaces(t *testing.T) {
 	}
 	if got := headerNames(filtered, defaultTestGroups()); strings.Join(got, ",") != "OpenSpec,Core" {
 		t.Fatalf("headers = %v, want OpenSpec then Core", got)
+	}
+}
+
+// TestNewTab_R_OnIntakeEntry_StartsIntake verifies the run shortcut activates
+// the intake entry, which holds the initial cursor. Enter already did; r
+// previously did nothing on the very row the cursor lands on by default.
+func TestNewTab_R_OnIntakeEntry_StartsIntake(t *testing.T) {
+	m := newTabModel([]discovery.WorkflowEntry{validEntry("core:finalize-pr")})
+
+	_, cmd := pressKey(m, "r")
+	if cmd == nil {
+		t.Fatal("r on the intake entry should produce a command")
+	}
+	if _, ok := cmd().(discovery.StartIntakeMsg); !ok {
+		t.Fatalf("r on the intake entry produced %T, want discovery.StartIntakeMsg", cmd())
 	}
 }

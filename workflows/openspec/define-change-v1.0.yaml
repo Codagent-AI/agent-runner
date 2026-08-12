@@ -1,5 +1,5 @@
 name: define-change
-description: "Interactively define an OpenSpec change through proposal, specification, and design."
+description: "Create and interactively define an OpenSpec change."
 hidden: true
 
 params:
@@ -10,54 +10,15 @@ engine:
   type: openspec
   change_param: change_name
 
-sessions:
-  - name: lead-agent
-    agent: lead
-
 steps:
   - id: create
     script: create-change.sh
     script_inputs:
       change_name: "{{change_name}}"
 
-  - id: proposal
-    session: lead-agent
-    mode: interactive
-    tools: [call_agent]
-    prompt: |
-      Help the user write the proposal for OpenSpec change "{{change_name}}". First ask what the change is about; do not guess. You MUST use the codagent:propose skill.
-
-      Once the proposal draft is complete, use codagent:call-agent with a fresh `agent: crosscheck` to obtain one adversarial review. The task-specific child instructions must require it to use the codagent:proposal-review skill, read the proposal at `openspec/changes/{{change_name}}/`, inspect relevant repository context, provide clear actionable feedback with recommended resolutions, and never modify files.
-
-      Follow codagent:call-agent's verification and user-facing reporting rules. Discuss every consequential finding with the user. Do not modify the proposal or any other file in response to review feedback until you have presented your assessment and received the user's explicit confirmation about which changes to make. Apply only the changes the user confirms.
-
-      Keep this phase interactive. Do not signal completion until the user has confirmed the final proposal and all approved changes are complete.
-
-  - id: specs
-    session: lead-agent
-    mode: interactive
-    prompt: |
-      Help the user write the specifications for OpenSpec change "{{change_name}}". You MUST use the codagent:spec skill.
-
-      Keep this phase interactive. Do not signal completion until the user has approved the specifications and all specification artifacts are complete.
-
-  - id: design
-    session: lead-agent
-    mode: interactive
-    prompt: |
-      Help the user design OpenSpec change "{{change_name}}". You MUST use the codagent:design skill.
-
-      Keep this phase interactive. Do not signal completion until the user has approved the design and the design artifact is complete.
-
-  - id: approach-review
-    session: lead-agent
-    mode: interactive
-    tools: [call_agent]
-    prompt: |
-      Perform the final definition review with the user for OpenSpec change "{{change_name}}". Use codagent:call-agent with a fresh `agent: crosscheck`. The task-specific child instructions must require it to use the codagent:review-approach skill and independently review the proposal, every specification, and the design under `openspec/changes/{{change_name}}/` together.
-
-      Require the child to check cross-artifact consistency and testability; find consequential behavioral or architectural gaps, missing decisions, weak tradeoffs, failure modes, and better alternatives; inspect relevant repository patterns; avoid reviewing implementation tasks; and never modify files.
-
-      Follow codagent:call-agent's verification and user-facing reporting rules. Discuss every consequential finding with the user. Do not modify the proposal, specifications, design, or any other file until you have presented your assessment and received the user's explicit confirmation about which changes to make. Apply only the changes the user confirms.
-
-      Keep this phase interactive. Do not signal completion until the user has confirmed the final proposal, specifications, and design and all approved changes are complete.
+  - id: define
+    workflow: ../core/define-change-v1.0.yaml
+    params:
+      change_name: "{{change_name}}"
+      change_dir: "openspec/changes/{{change_name}}"
+      change_label: "OpenSpec change"

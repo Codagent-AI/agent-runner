@@ -1,0 +1,16 @@
+name: plan-change
+description: "Autonomously validate an approved spec-driven definition and produce a reviewed task plan."
+hidden: true
+
+params:
+  - name: change_name
+    required: true
+
+steps:
+  - id: plan
+    workflow: ../core/plan-change-v1.0.yaml
+    params:
+      change_name: "{{change_name}}"
+      change_dir: "specs/changes/{{change_name}}"
+      change_label: "spec-driven change"
+      definition_validation_checklist: "{{session_dir}}/bundled/spec-driven/definition-validation-checklist.md"

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -18,6 +19,8 @@ import (
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
+	"github.com/codagent/agent-runner/internal/discovery"
+	"github.com/codagent/agent-runner/internal/intakeroute"
 	"github.com/codagent/agent-runner/internal/runlock"
 )
 
@@ -110,6 +113,106 @@ func TestControlServerAdmitsAgentCallToActiveAttemptHandler(t *testing.T) {
 	if got.RequestID != "call-1" || string(got.Payload) != `{"prompt":"do it","agent":"implementor"}` {
 		t.Fatalf("handler request = %#v", got)
 	}
+}
+
+func TestControlServerStagesRouteThenFreezesItBeforeCompletionAcknowledgement(t *testing.T) {
+	runDir := t.TempDir()
+	logger := &recordingEventLogger{}
+	server := newTestControlServer(t, runDir, logger)
+	defer server.Close()
+
+	handoff := filepath.Join(runDir, "intake-handoff.md")
+	if err := os.WriteFile(handoff, []byte("agreed plan\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := intakeroute.NewStore(runDir)
+	attempt := server.ActivateAttempt(context.Background(), "plan", AttemptOptions{
+		RouteEligible: true,
+		RouteStore:    store,
+		RouteValidation: &intakeroute.ValidateOptions{
+			RunDir: runDir, ParentRunID: "run", IntakeWorkflow: "core:intake",
+			RequestPath: filepath.Join(runDir, "route-request.json"),
+			HandoffPath: filepath.Join(runDir, "intake-handoff.md"),
+			Catalog:     intakeroute.NewCatalog([]discovery.WorkflowEntry{{CanonicalName: "target", SourcePath: "builtin:core/target-v1.0.yaml"}}),
+		},
+	})
+
+	route := exchange(t, server.SocketPath(), &controlRequest{Type: MessageSubmitRoute, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "route"})
+	if !route.OK {
+		t.Fatalf("submit route response = %#v", route)
+	}
+	completion := exchange(t, server.SocketPath(), &controlRequest{Type: MessageCompleteStep, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "complete"})
+	if !completion.OK {
+		t.Fatalf("completion response = %#v", completion)
+	}
+	sealed, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sealed.State != intakeroute.Frozen {
+		t.Fatalf("route state = %q, want frozen", sealed.State)
+	}
+	late := exchange(t, server.SocketPath(), &controlRequest{Type: MessageSubmitRoute, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "late"})
+	if late.OK || !strings.Contains(late.Error, "already frozen") {
+		t.Fatalf("late route response = %#v", late)
+	}
+}
+
+func TestControlServerDiscardsPreparedRouteWhenPublicationFails(t *testing.T) {
+	runDir := t.TempDir()
+	server := newTestControlServer(t, runDir, &recordingEventLogger{})
+	defer server.Close()
+	handoff := filepath.Join(runDir, "intake-handoff.md")
+	if err := os.WriteFile(handoff, []byte("notes\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := intakeroute.NewStore(runDir)
+	if err := store.Stage(mustPrepareRoute(t, runDir, handoff)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Freeze(); err != nil {
+		t.Fatal(err)
+	}
+	attempt := server.ActivateAttempt(context.Background(), "plan", testRouteAttemptOptions(runDir, store))
+	response := exchange(t, server.SocketPath(), &controlRequest{Type: MessageSubmitRoute, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "frozen"})
+	if response.OK || !strings.Contains(response.Error, "already frozen") {
+		t.Fatalf("response = %#v", response)
+	}
+	entries, err := os.ReadDir(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".intake-route-") {
+			t.Fatalf("temporary snapshot remained after rejected publication: %s", entry.Name())
+		}
+	}
+}
+
+func testRouteAttemptOptions(runDir string, store *intakeroute.Store) AttemptOptions {
+	return AttemptOptions{RouteEligible: true, RouteStore: store, RouteValidation: &intakeroute.ValidateOptions{
+		RunDir: runDir, ParentRunID: "run", IntakeWorkflow: "core:intake",
+		RequestPath: filepath.Join(runDir, "route-request.json"), HandoffPath: filepath.Join(runDir, "intake-handoff.md"),
+		Catalog: intakeroute.NewCatalog([]discovery.WorkflowEntry{{CanonicalName: "target", SourcePath: "builtin:core/target-v1.0.yaml"}}),
+	}}
+}
+
+func mustPrepareRoute(t *testing.T, runDir, handoff string) *intakeroute.Prepared {
+	t.Helper()
+	prepared, err := intakeroute.Validate(&intakeroute.ValidateOptions{
+		RunDir: runDir, ParentRunID: "run", IntakeWorkflow: "core:intake", HandoffPath: handoff,
+		Catalog: intakeroute.NewCatalog([]discovery.WorkflowEntry{{CanonicalName: "target", SourcePath: "builtin:core/target-v1.0.yaml"}}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return prepared
 }
 
 func TestControlServerRejectsAgentCallWithWrongAttemptIdentity(t *testing.T) {
@@ -1002,4 +1105,58 @@ func (l *recordingEventLogger) types() []audit.EventType {
 		types[index] = events[index].Type
 	}
 	return types
+}
+
+// failingFreezeStore stages normally but fails to freeze, so the test can drive
+// the branch that guards a run from acknowledging a completion while its route
+// is in an indeterminate state.
+type failingFreezeStore struct {
+	inner     *intakeroute.Store
+	freezeErr error
+}
+
+func (s *failingFreezeStore) Stage(p *intakeroute.Prepared) error { return s.inner.Stage(p) }
+func (s *failingFreezeStore) Freeze() error                       { return s.freezeErr }
+
+// TestControlServerRejectsCompletionWhenFreezeFails proves the normative
+// scenario "failed freeze rejects the completion": when a route is staged and
+// Freeze fails, the completion must be rejected rather than acknowledged, so
+// the client can retry instead of the run advancing on an indeterminate route.
+func TestControlServerRejectsCompletionWhenFreezeFails(t *testing.T) {
+	runDir := t.TempDir()
+	server := newTestControlServer(t, runDir, &recordingEventLogger{})
+	defer server.Close()
+
+	handoff := filepath.Join(runDir, "intake-handoff.md")
+	if err := os.WriteFile(handoff, []byte("agreed plan\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store := &failingFreezeStore{inner: intakeroute.NewStore(runDir), freezeErr: errors.New("disk failure")}
+	attempt := server.ActivateAttempt(context.Background(), "plan", AttemptOptions{
+		RouteEligible: true,
+		RouteStore:    store,
+		RouteValidation: &intakeroute.ValidateOptions{
+			RunDir: runDir, ParentRunID: "run", IntakeWorkflow: "core:intake",
+			RequestPath: filepath.Join(runDir, "route-request.json"),
+			HandoffPath: handoff,
+			Catalog:     intakeroute.NewCatalog([]discovery.WorkflowEntry{{CanonicalName: "target", SourcePath: "builtin:core/target-v1.0.yaml"}}),
+		},
+	})
+
+	route := exchange(t, server.SocketPath(), &controlRequest{Type: MessageSubmitRoute, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "route"})
+	if !route.OK {
+		t.Fatalf("submit route response = %#v", route)
+	}
+
+	completion := exchange(t, server.SocketPath(), &controlRequest{Type: MessageCompleteStep, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "complete"})
+	if completion.OK {
+		t.Fatal("completion was acknowledged despite a failed freeze; the route is indeterminate and the step must not advance")
+	}
+	if !strings.Contains(completion.Error, "disk failure") {
+		t.Fatalf("completion error = %q, want it to surface the freeze failure", completion.Error)
+	}
 }

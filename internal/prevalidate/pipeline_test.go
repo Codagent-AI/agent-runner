@@ -92,6 +92,26 @@ steps:
 	}
 }
 
+func TestPipelineRecognizesAndReservesIntakeHandoff(t *testing.T) {
+	opts, _, _ := fakeOptions(t, &config.Config{})
+	fixtures := filepath.Join("..", "..", "testdata")
+	referencing := filepath.Join(fixtures, "intake-handoff-reference-v1.0.yaml")
+	if _, err := Pipeline(referencing, nil, Strict, opts); err != nil {
+		t.Fatalf("Pipeline() reference error = %v, want intake_handoff builtin accepted", err)
+	}
+
+	for name, fixture := range map[string]string{
+		"parameter":       "intake-handoff-param-v1.0.yaml",
+		"capture":         "intake-handoff-capture-v1.0.yaml",
+		"outcome capture": "intake-handoff-outcome-capture-v1.0.yaml",
+	} {
+		path := filepath.Join(fixtures, fixture)
+		if _, err := Pipeline(path, nil, Strict, opts); err == nil || !strings.Contains(err.Error(), "reserved") {
+			t.Fatalf("Pipeline() %s error = %v, want reserved-name error", name, err)
+		}
+	}
+}
+
 func TestPipelineReturnsDeduplicatedLegacyAgentDeprecations(t *testing.T) {
 	dir := t.TempDir()
 	root := writeWorkflow(t, dir, "legacy-v1.0.yaml", `

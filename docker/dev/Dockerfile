@@ -13,6 +13,7 @@ RUN apt-get update \
     ca-certificates \
     curl \
     git \
+    gh \
     jq \
     make \
     socat \

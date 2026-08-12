@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
@@ -125,6 +127,268 @@ steps:
 	params, ok := context["params"].(map[string]any)
 	if !ok || params["env"] != "staging" {
 		t.Fatalf("run_start params = %#v", context["params"])
+	}
+}
+
+func TestPrepareRunCleansUpFreshRunWhenHandoffCopyFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	project := t.TempDir()
+	t.Chdir(project)
+
+	workflow := model.Workflow{Name: "target", Steps: []model.Step{{ID: "done", Command: "echo done"}}}
+	workflow.ApplyDefaults()
+	_, err := PrepareRun(&workflow, nil, &Options{
+		WorkflowFile:        "builtin:core/target-v1.0.yaml",
+		IntakeHandoffSource: filepath.Join(project, "missing-handoff.md"),
+		ProcessRunner:       &mockRunner{},
+		GlobExpander:        &mockGlob{},
+		Log:                 &mockLog{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "open intake handoff source") {
+		t.Fatalf("PrepareRun() error = %v, want missing handoff error", err)
+	}
+
+	runsDir := filepath.Join(home, ".agent-runner", "projects", audit.EncodePath(project), "runs")
+	entries, readErr := os.ReadDir(runsDir)
+	if readErr == nil && len(entries) != 0 {
+		t.Fatalf("fresh preparation left run directories: %v", entries)
+	}
+	if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatalf("read runs directory: %v", readErr)
+	}
+}
+
+func TestPrepareRunCleansUpFreshRunWhenSessionSetupFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	project := t.TempDir()
+	t.Chdir(project)
+
+	workflow := model.Workflow{
+		Name:     "target",
+		Sessions: []model.SessionDecl{{Name: "lead", Agent: "lead-profile"}},
+		Steps:    []model.Step{{ID: "done", Command: "echo done"}},
+	}
+	workflow.ApplyDefaults()
+	_, err := PrepareRun(&workflow, nil, &Options{
+		WorkflowFile:      "builtin:core/target-v1.0.yaml",
+		NamedSessionDecls: map[string]string{"lead": "different-profile"},
+		ProcessRunner:     &mockRunner{},
+		GlobExpander:      &mockGlob{},
+		Log:               &mockLog{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "session declaration") {
+		t.Fatalf("PrepareRun() error = %v, want session setup error", err)
+	}
+
+	runsDir := filepath.Join(home, ".agent-runner", "projects", audit.EncodePath(project), "runs")
+	entries, readErr := os.ReadDir(runsDir)
+	if readErr == nil && len(entries) != 0 {
+		t.Fatalf("fresh preparation left run directories: %v", entries)
+	}
+	if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatalf("read runs directory: %v", readErr)
+	}
+}
+
+func TestPrepareResume_RestoresAgentOverride(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workflowPath := filepath.Join(t.TempDir(), "intake-v1.0.yaml")
+	workflowSource := "name: intake\nsteps:\n  - id: plan\n    command: echo plan\n"
+	if err := os.WriteFile(workflowPath, []byte(workflowSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := t.TempDir()
+	state := model.RunState{
+		WorkflowFile:  workflowPath,
+		WorkflowName:  "intake",
+		WorkflowHash:  stateio.ComputeWorkflowHash(workflowSource),
+		AgentOverride: &model.AgentOverride{CLI: "codex", Model: "gpt-5.2"},
+		CurrentStep:   model.CurrentStep{Nested: &model.NestedStepState{StepID: "plan"}},
+	}
+	if err := stateio.WriteState(&state, sessionDir); err != nil {
+		t.Fatal(err)
+	}
+
+	handle, err := PrepareResume(filepath.Join(sessionDir, "state.json"), &Options{
+		ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareResume() error = %v", err)
+	}
+	defer finalizeRun(handle.rs, ResultStopped)
+	if got := handle.rs.ctx.AgentOverride; got == nil || got.CLI != "codex" || got.Model != "gpt-5.2" {
+		t.Fatalf("resumed override = %#v, want codex/gpt-5.2", got)
+	}
+}
+
+func TestPrepareRun_PersistsAgentOverride(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workflow := model.Workflow{Name: "intake", Steps: []model.Step{{ID: "plan", Command: "echo plan"}}}
+	workflow.ApplyDefaults()
+	sessionDir := t.TempDir()
+	handle, err := PrepareRun(&workflow, map[string]string{}, &Options{
+		WorkflowFile: "builtin:core/intake-v1.0.yaml", SessionDir: sessionDir,
+		AgentOverride: &model.AgentOverride{CLI: "codex", Model: "gpt-5.2"},
+		ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareRun() error = %v", err)
+	}
+	defer finalizeRun(handle.rs, ResultStopped)
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := state.AgentOverride; got == nil || got.CLI != "codex" || got.Model != "gpt-5.2" {
+		t.Fatalf("recorded override = %#v, want codex/gpt-5.2", got)
+	}
+}
+
+func TestPrepareRunCopiesIntakeHandoffAndPrepareResumeRestoresProvenance(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	sourceDir := t.TempDir()
+	workflowPath, err := filepath.Abs(filepath.Join("..", "..", "testdata", "intake-handoff-reference-v1.0.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := loader.LoadWorkflow(workflowPath, loader.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handoffSource := filepath.Join(sourceDir, "sealed-handoff.md")
+	if err := os.WriteFile(handoffSource, []byte("sealed context"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := t.TempDir()
+	runner := &mockRunner{}
+
+	handle, err := PrepareRun(&workflow, nil, &Options{
+		WorkflowFile:        workflowPath,
+		SessionDir:          sessionDir,
+		IntakeHandoffSource: handoffSource,
+		IntakeParentRunID:   "intake-parent-run",
+		ProcessRunner:       runner,
+		GlobExpander:        &mockGlob{},
+		Log:                 &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareRun() error = %v", err)
+	}
+	handoffCopy := handle.rs.ctx.IntakeHandoff
+	if handoffCopy == handoffSource || filepath.Dir(handoffCopy) != sessionDir {
+		t.Fatalf("handoff copy = %q, want a distinct path in %q", handoffCopy, sessionDir)
+	}
+	if contents, err := os.ReadFile(handoffCopy); err != nil || string(contents) != "sealed context" {
+		t.Fatalf("copied handoff = %q, %v", contents, err)
+	}
+	if handle.rs.ctx.IntakeHandoffContents != "sealed context" {
+		t.Fatalf("prepared handoff contents = %q, want the copied handoff text", handle.rs.ctx.IntakeHandoffContents)
+	}
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.IntakeHandoff != handoffCopy || state.IntakeParentRunID != "intake-parent-run" || state.RunID != filepath.Base(sessionDir) {
+		t.Fatalf("initial state provenance = %#v", state)
+	}
+
+	finalizeRun(handle.rs, ResultStopped)
+	if err := os.Remove(handoffSource); err != nil {
+		t.Fatal(err)
+	}
+	resumedRunner := &mockRunner{}
+	resumed, err := PrepareResume(filepath.Join(sessionDir, "state.json"), &Options{
+		ProcessRunner: resumedRunner,
+		GlobExpander:  &mockGlob{},
+		Log:           &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareResume() error = %v", err)
+	}
+	if resumed.rs.ctx.IntakeHandoff != handoffCopy || resumed.rs.ctx.IntakeParentRunID != "intake-parent-run" {
+		t.Fatalf("resumed provenance = (%q, %q)", resumed.rs.ctx.IntakeHandoff, resumed.rs.ctx.IntakeParentRunID)
+	}
+	if resumed.rs.ctx.IntakeHandoffContents != "sealed context" {
+		t.Fatalf("resumed handoff contents = %q, want the copied handoff text", resumed.rs.ctx.IntakeHandoffContents)
+	}
+	if result := ExecuteFromHandle(resumed, nil); result != ResultSuccess {
+		t.Fatalf("resumed result = %q, want success", result)
+	}
+	if len(resumedRunner.calls) != 1 || !strings.Contains(resumedRunner.calls[0][2], "sealed context") {
+		t.Fatalf("resumed interpolated command = %#v, want handoff contents", resumedRunner.calls)
+	}
+	if strings.Contains(resumedRunner.calls[0][2], handoffCopy) {
+		t.Fatalf("resumed interpolated command leaked the handoff path: %#v", resumedRunner.calls)
+	}
+	state, err = stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.IntakeHandoff != handoffCopy || state.IntakeParentRunID != "intake-parent-run" {
+		t.Fatalf("rewritten state provenance = (%q, %q)", state.IntakeHandoff, state.IntakeParentRunID)
+	}
+}
+
+func TestRunWorkflowInterpolatesEmptyIntakeHandoff(t *testing.T) {
+	workflowPath, err := filepath.Abs(filepath.Join("..", "..", "testdata", "intake-handoff-reference-v1.0.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := loader.LoadWorkflow(workflowPath, loader.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	processRunner := &mockRunner{}
+	result, err := RunWorkflow(&workflow, nil, &Options{
+		SessionDir:    t.TempDir(),
+		WorkflowFile:  workflowPath,
+		ProcessRunner: processRunner,
+		GlobExpander:  &mockGlob{},
+		Log:           &mockLog{},
+	})
+	if err != nil || result != ResultSuccess {
+		t.Fatalf("RunWorkflow() = (%q, %v), want success", result, err)
+	}
+	if len(processRunner.calls) != 1 || processRunner.calls[0][2] != `printf "%s" ""` {
+		t.Fatalf("interpolated command = %#v, want empty intake handoff", processRunner.calls)
+	}
+}
+
+func TestPrepareResumeKeepsDirectRunIntakeProvenanceEmpty(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workflowDir := t.TempDir()
+	workflowPath := filepath.Join(workflowDir, "direct-v1.0.yaml")
+	workflowSource := `name: direct
+steps:
+  - id: handoff
+    command: 'printf "%s" "{{intake_handoff}}"'
+`
+	if err := os.WriteFile(workflowPath, []byte(workflowSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workflow := model.Workflow{Name: "direct", Steps: []model.Step{{ID: "handoff", Command: `printf "%s" "{{intake_handoff}}"`}}}
+	workflow.ApplyDefaults()
+	sessionDir := t.TempDir()
+	handle, err := PrepareRun(&workflow, nil, &Options{
+		WorkflowFile: workflowPath, SessionDir: sessionDir,
+		ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalizeRun(handle.rs, ResultStopped)
+
+	resumed, err := PrepareResume(filepath.Join(sessionDir, "state.json"), &Options{
+		ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer finalizeRun(resumed.rs, ResultStopped)
+	if resumed.rs.ctx.IntakeParentRunID != "" || resumed.rs.ctx.BuiltinVars()["intake_handoff"] != "" {
+		t.Fatalf("resumed direct provenance = (%q, %q)", resumed.rs.ctx.IntakeParentRunID, resumed.rs.ctx.BuiltinVars()["intake_handoff"])
 	}
 }
 
@@ -333,5 +597,66 @@ func TestPrepareResume_MissingDefinitionUsesSuccessfulAuditCompletion(t *testing
 	_, err := PrepareResume(filepath.Join(dir, "state.json"), &Options{})
 	if !errors.Is(err, ErrAlreadyCompleted) {
 		t.Fatalf("PrepareResume error = %v, want ErrAlreadyCompleted from saved audit evidence", err)
+	}
+}
+
+// A resumed run must interpolate the value its original invocation had. The
+// copied handoff lives in the run's own directory and nothing stops the agent
+// from rewriting it, so re-reading at resume time would silently swap the
+// context out from under the workflow.
+func TestResumeKeepsOriginalHandoffContentsWhenTheCopyIsRewritten(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	sourceDir := t.TempDir()
+	workflowPath, err := filepath.Abs(filepath.Join("..", "..", "testdata", "intake-handoff-reference-v1.0.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := loader.LoadWorkflow(workflowPath, loader.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handoffSource := filepath.Join(sourceDir, "sealed-handoff.md")
+	if err := os.WriteFile(handoffSource, []byte("agreed context"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := t.TempDir()
+
+	handle, err := PrepareRun(&workflow, nil, &Options{
+		WorkflowFile:        workflowPath,
+		SessionDir:          sessionDir,
+		IntakeHandoffSource: handoffSource,
+		IntakeParentRunID:   "intake-parent-run",
+		ProcessRunner:       &mockRunner{},
+		GlobExpander:        &mockGlob{},
+		Log:                 &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareRun() error = %v", err)
+	}
+	handoffCopy := handle.rs.ctx.IntakeHandoff
+	finalizeRun(handle.rs, ResultStopped)
+
+	// The agent rewrites its own run's handoff copy before the resume.
+	if err := os.WriteFile(handoffCopy, []byte("tampered context"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	resumedRunner := &mockRunner{}
+	resumed, err := PrepareResume(filepath.Join(sessionDir, "state.json"), &Options{
+		ProcessRunner: resumedRunner,
+		GlobExpander:  &mockGlob{},
+		Log:           &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareResume() error = %v", err)
+	}
+	if got := resumed.rs.ctx.IntakeHandoffContents; got != "agreed context" {
+		t.Fatalf("resumed handoff contents = %q, want the contents the original invocation saw", got)
+	}
+	if result := ExecuteFromHandle(resumed, nil); result != ResultSuccess {
+		t.Fatalf("resumed result = %q, want success", result)
+	}
+	if len(resumedRunner.calls) != 1 || strings.Contains(resumedRunner.calls[0][2], "tampered") {
+		t.Fatalf("resumed interpolated the rewritten handoff: %#v", resumedRunner.calls)
 	}
 }

@@ -97,15 +97,17 @@ func (a *ClaudeAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, err
 		}
 	}
 
-	if completionCommandEnabled(input) {
-		command := input.CompletionCommand.ShellCommand()
-		args = append(args, "--allowedTools", "Bash("+command+")")
+	commands := runnerCommands(input)
+	for _, runnerCommand := range commands {
+		args = append(args, "--allowedTools", "Bash("+runnerCommand.ShellCommand()+")")
+	}
+	if completion := completionRunnerCommand(input); completion != nil {
 		settings, _ := json.Marshal(map[string]any{
 			"hooks": map[string]any{
 				"Stop": []any{map[string]any{
 					"hooks": []any{map[string]string{
 						"type":    "command",
-						"command": input.CompletionCommand.hookCommand(),
+						"command": completion.hookCommand(),
 					}},
 				}},
 			},
@@ -115,7 +117,7 @@ func (a *ClaudeAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, err
 		if prepare == nil {
 			prepare = prepareNextCommandPlugin
 		}
-		pluginDir, err := prepare(*input.CompletionCommand)
+		pluginDir, err := prepare(CompletionCommand{Executable: completion.Executable, Args: completion.Args()})
 		if err != nil {
 			return nil, fmt.Errorf("claude: create completion plugin: %w", err)
 		}

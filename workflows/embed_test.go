@@ -131,38 +131,173 @@ func TestResolveSelectsLatestVersionWhileExactReadsRemainAvailable(t *testing.T)
 	}
 }
 
-func TestOpenSpecPairsAndSpecDrivenFirstGenerationsAreEmbedded(t *testing.T) {
+func TestOpenSpecAndSpecDrivenChangeGenerationsAreEmbedded(t *testing.T) {
 	refs, err := List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
 
 	for _, logicalName := range []string{"change", "plan-change", "implement-change"} {
-		for _, version := range []string{"v1.0", "v2.0"} {
-			want := "builtin:openspec/" + logicalName + "-" + version + ".yaml"
-			if !slices.Contains(refs, want) {
-				t.Errorf("List() missing paired OpenSpec generation %q", want)
+		for _, namespace := range []string{"openspec", "spec-driven"} {
+			for _, version := range []string{"v1.0", "v2.0"} {
+				want := "builtin:" + namespace + "/" + logicalName + "-" + version + ".yaml"
+				if !slices.Contains(refs, want) {
+					t.Errorf("List() missing %q", want)
+				}
 			}
 		}
+	}
 
-		firstGeneration := "builtin:spec-driven/" + logicalName + "-v1.0.yaml"
-		if !slices.Contains(refs, firstGeneration) {
-			t.Errorf("List() missing spec-driven first generation %q", firstGeneration)
-		}
-		unwantedSecondGeneration := "builtin:spec-driven/" + logicalName + "-v2.0.yaml"
-		if slices.Contains(refs, unwantedSecondGeneration) {
-			t.Errorf("List() unexpectedly contains %q", unwantedSecondGeneration)
-		}
+	ref, err := Resolve("spec-driven:change")
+	if err != nil {
+		t.Fatalf("Resolve(spec-driven:change): %v", err)
+	}
+	if ref != "builtin:spec-driven/change-v2.0.yaml" {
+		t.Fatalf("Resolve(spec-driven:change) = %q, want spec-driven v2.0", ref)
 	}
 }
 
-func TestOpenSpecReviewTasksWorkflowAndGateRemainEmbedded(t *testing.T) {
-	ref, err := Resolve("openspec:review-tasks")
-	if err != nil {
-		t.Fatalf("Resolve(openspec:review-tasks): %v", err)
+func TestV2ChangeWorkflowsShareCoreLifecyclePhases(t *testing.T) {
+	for _, logicalName := range []string{
+		"define-change",
+		"plan-change",
+		"review-tasks",
+		"implement-change",
+		"accept-change",
+		"validate-feature-branch",
+	} {
+		ref := "builtin:core/" + logicalName + "-v1.0.yaml"
+		body, err := ReadFile(ref)
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", ref, err)
+		}
+		for _, forbidden := range []string{"openspec/changes/", "OpenSpec change", "openspec validate"} {
+			if strings.Contains(string(body), forbidden) {
+				t.Errorf("%s contains provider-specific text %q", ref, forbidden)
+			}
+		}
 	}
-	if ref != "builtin:openspec/review-tasks-v1.0.yaml" {
-		t.Fatalf("resolved ref = %q, want review-tasks v1.0", ref)
+
+	tests := []struct {
+		ref         string
+		wantArchive bool
+	}{
+		{ref: "builtin:openspec/change-v2.0.yaml", wantArchive: true},
+		{ref: "builtin:spec-driven/change-v2.0.yaml", wantArchive: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ref, func(t *testing.T) {
+			body, err := ReadFile(tt.ref)
+			if err != nil {
+				t.Fatalf("ReadFile(%s): %v", tt.ref, err)
+			}
+			var workflow struct {
+				Params []struct {
+					Name     string `yaml:"name"`
+					Required *bool  `yaml:"required"`
+				} `yaml:"params"`
+				Steps []struct {
+					ID       string            `yaml:"id"`
+					Workflow string            `yaml:"workflow"`
+					Params   map[string]string `yaml:"params"`
+				} `yaml:"steps"`
+			}
+			if err := yaml.Unmarshal(body, &workflow); err != nil {
+				t.Fatalf("unmarshal %s: %v", tt.ref, err)
+			}
+			if len(workflow.Params) == 0 || workflow.Params[0].Name != "change_name" ||
+				workflow.Params[0].Required == nil || !*workflow.Params[0].Required {
+				t.Fatalf("%s must require change_name, got %#v", tt.ref, workflow.Params)
+			}
+
+			var hasArchive bool
+			for _, step := range workflow.Steps {
+				switch step.ID {
+				case "validate-feature-branch":
+					if step.Workflow != "../core/validate-feature-branch-v1.0.yaml" {
+						t.Errorf("%s branch guard workflow = %q", tt.ref, step.Workflow)
+					}
+				case "accept":
+					if step.Workflow != "../core/accept-change-v1.0.yaml" {
+						t.Errorf("%s accept workflow = %q", tt.ref, step.Workflow)
+					}
+					if step.Params["change_dir"] == "" {
+						t.Errorf("%s accept step does not pass change_dir", tt.ref)
+					}
+				case "archive":
+					hasArchive = true
+				}
+			}
+			if hasArchive != tt.wantArchive {
+				t.Fatalf("%s archive presence = %t, want %t", tt.ref, hasArchive, tt.wantArchive)
+			}
+		})
+	}
+}
+
+func TestV2NamespaceAdaptersConfigureSharedCorePhases(t *testing.T) {
+	tests := []struct {
+		ref           string
+		wantWorkflow  string
+		wantChangeDir string
+	}{
+		{
+			ref:           "builtin:openspec/plan-change-v2.0.yaml",
+			wantWorkflow:  "../core/plan-change-v1.0.yaml",
+			wantChangeDir: "openspec/changes/{{change_name}}",
+		},
+		{
+			ref:           "builtin:spec-driven/plan-change-v2.0.yaml",
+			wantWorkflow:  "../core/plan-change-v1.0.yaml",
+			wantChangeDir: "specs/changes/{{change_name}}",
+		},
+		{
+			ref:           "builtin:openspec/implement-change-v2.0.yaml",
+			wantWorkflow:  "../core/implement-change-v1.0.yaml",
+			wantChangeDir: "openspec/changes/{{change_name}}",
+		},
+		{
+			ref:           "builtin:spec-driven/implement-change-v2.0.yaml",
+			wantWorkflow:  "../core/implement-change-v1.0.yaml",
+			wantChangeDir: "specs/changes/{{change_name}}",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ref, func(t *testing.T) {
+			body, err := ReadFile(tt.ref)
+			if err != nil {
+				t.Fatalf("ReadFile(%s): %v", tt.ref, err)
+			}
+			var workflow struct {
+				Steps []struct {
+					Workflow string            `yaml:"workflow"`
+					Params   map[string]string `yaml:"params"`
+				} `yaml:"steps"`
+			}
+			if err := yaml.Unmarshal(body, &workflow); err != nil {
+				t.Fatalf("unmarshal %s: %v", tt.ref, err)
+			}
+			if len(workflow.Steps) != 1 {
+				t.Fatalf("%s has %d steps, want one shared-core adapter step", tt.ref, len(workflow.Steps))
+			}
+			step := workflow.Steps[0]
+			if step.Workflow != tt.wantWorkflow {
+				t.Fatalf("%s workflow = %q, want %q", tt.ref, step.Workflow, tt.wantWorkflow)
+			}
+			if step.Params["change_dir"] != tt.wantChangeDir {
+				t.Fatalf("%s change_dir = %q, want %q", tt.ref, step.Params["change_dir"], tt.wantChangeDir)
+			}
+		})
+	}
+}
+
+func TestCoreReviewTasksWorkflowAndOpenSpecGateRemainEmbedded(t *testing.T) {
+	ref, err := Resolve("core:review-tasks")
+	if err != nil {
+		t.Fatalf("Resolve(core:review-tasks): %v", err)
+	}
+	if ref != "builtin:core/review-tasks-v1.0.yaml" {
+		t.Fatalf("resolved ref = %q, want core review-tasks v1.0", ref)
 	}
 
 	assets, err := ListAssets("openspec")
@@ -411,14 +546,14 @@ func TestBuiltInWorkflowAgentReferencesUseCanonicalRoles(t *testing.T) {
 	}
 }
 
-func TestOpenSpecAcceptanceCallsUseTesterAndPreserveControls(t *testing.T) {
+func TestSharedAcceptanceCallsUseTesterAndPreserveControls(t *testing.T) {
 	tests := []struct {
 		ref      string
 		stepID   string
 		required []string
 	}{
 		{
-			ref:    "builtin:openspec/implement-change-v2.0.yaml",
+			ref:    "builtin:core/implement-change-v1.0.yaml",
 			stepID: "prepare-acceptance",
 			required: []string{
 				"`session: acceptance-tester`",
@@ -431,11 +566,11 @@ func TestOpenSpecAcceptanceCallsUseTesterAndPreserveControls(t *testing.T) {
 			},
 		},
 		{
-			ref:    "builtin:openspec/accept-change-v1.0.yaml",
+			ref:    "builtin:core/accept-change-v1.0.yaml",
 			stepID: "run-reacceptance-testing",
 			required: []string{
 				"`session: acceptance-tester`",
-				"affected and directly dependent flows agreed with the user",
+				"directly dependent flows agreed with the user",
 				"acceptance-flow-evidence.md",
 				"Use at most three tester calls",
 				"REACCEPTANCE_COMPLETE",
@@ -450,6 +585,10 @@ func TestOpenSpecAcceptanceCallsUseTesterAndPreserveControls(t *testing.T) {
 				t.Fatalf("ReadFile(%s) error = %v", tt.ref, err)
 			}
 			var workflow struct {
+				Sessions []struct {
+					Name  string `yaml:"name"`
+					Agent string `yaml:"agent"`
+				} `yaml:"sessions"`
 				Steps []struct {
 					ID      string `yaml:"id"`
 					Prompt  string `yaml:"prompt"`
@@ -459,6 +598,16 @@ func TestOpenSpecAcceptanceCallsUseTesterAndPreserveControls(t *testing.T) {
 			}
 			if err := yaml.Unmarshal(body, &workflow); err != nil {
 				t.Fatalf("unmarshal %s: %v", tt.ref, err)
+			}
+			var testerAgent string
+			for _, session := range workflow.Sessions {
+				if session.Name == "acceptance-tester" {
+					testerAgent = session.Agent
+					break
+				}
+			}
+			if testerAgent != "tester" {
+				t.Fatalf("acceptance-tester agent = %q, want tester", testerAgent)
 			}
 			for _, step := range workflow.Steps {
 				if step.ID != tt.stepID {
@@ -598,6 +747,18 @@ func TestCoreFinalizePRUsesCIStatusGate(t *testing.T) {
 	}
 	if fixPR.SkipIf != "previous_success" {
 		t.Fatalf("fix-pr skip_if = %q, want previous_success", fixPR.SkipIf)
+	}
+}
+
+func TestCoreCommitChangePlanRestrictsCommitToChangeDirectory(t *testing.T) {
+	script, err := ReadAsset("core/commit-change-plan.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(core/commit-change-plan.sh): %v", err)
+	}
+
+	commit := `git commit -m "[commit-plan] chore: add change documents for $change_name" -- "$change_dir"`
+	if !strings.Contains(string(script), commit) {
+		t.Fatal("commit-change-plan.sh must restrict git commit to change_dir")
 	}
 }
 

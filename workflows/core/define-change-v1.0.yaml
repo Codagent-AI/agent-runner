@@ -1,0 +1,70 @@
+name: define-change
+description: "Interactively define a structured change through proposal, specification, design, and testing strategy."
+hidden: true
+
+params:
+  - name: change_name
+    required: true
+  - name: change_dir
+    required: true
+  - name: change_label
+    required: true
+
+sessions:
+  - name: lead-agent
+    agent: lead
+
+steps:
+  - id: proposal
+    session: lead-agent
+    mode: interactive
+    tools: [call_agent]
+    prompt: |
+      Help the user write the proposal for {{change_label}} "{{change_name}}". When the intake context below is non-empty, treat it as what the user already told an agent and do not ask them to repeat it; otherwise, first ask what the change is about and do not guess. You MUST use the codagent:propose skill and write the proposal to `{{change_dir}}/proposal.md`.
+
+      <intake_context>
+      {{intake_handoff}}
+      </intake_context>
+
+      Once the proposal draft is complete, use codagent:call-agent with a fresh `agent: crosscheck` to obtain one adversarial review. The task-specific child instructions must require it to use the codagent:proposal-review skill, read the proposal under `{{change_dir}}/`, inspect relevant repository context, provide clear actionable feedback with recommended resolutions, and never modify files.
+
+      Follow codagent:call-agent's verification and user-facing reporting rules. Discuss every consequential finding with the user. Do not modify the proposal or any other file in response to review feedback until you have presented your assessment and received the user's explicit confirmation about which changes to make. Apply only the changes the user confirms.
+
+      Keep this phase interactive through the proposal review. Once the user approves the final proposal content or tells you to write it, complete the approved edits and continue to the next step without asking them to review the written artifact again.
+
+  - id: specs
+    session: lead-agent
+    mode: interactive
+    prompt: |
+      Help the user write the specifications for {{change_label}} "{{change_name}}". You MUST use the codagent:spec skill and write the specifications under `{{change_dir}}/specs/`.
+
+      Keep this phase interactive while developing the specifications. Once the user approves the content or tells you to write it, complete the specification artifacts and continue to the next step without asking them to review the written artifacts again.
+
+  - id: design
+    session: lead-agent
+    mode: interactive
+    prompt: |
+      Help the user design {{change_label}} "{{change_name}}". You MUST use the codagent:design skill and write the design to `{{change_dir}}/design.md`.
+
+      Keep this phase interactive while developing the design. Once the user approves the content or tells you to write it, complete the design artifact and continue to the next step without asking them to review the written artifact again.
+
+  - id: test-plan
+    session: lead-agent
+    mode: interactive
+    prompt: |
+      Use the codagent:test-plan skill to collaboratively create `{{change_dir}}/test-plan.md`.
+
+      Keep this phase interactive while developing the test plan. Once the user approves the content or tells you to write it, complete the test plan and continue to the next step without asking them to review the written artifact again.
+
+  - id: approach-review
+    session: lead-agent
+    mode: interactive
+    tools: [call_agent]
+    prompt: |
+      Perform the final definition review with the user for {{change_label}} "{{change_name}}". Use codagent:call-agent with a fresh `agent: crosscheck`. The task-specific child instructions must require it to use the codagent:review-approach skill and independently review the proposal, every specification, the design, and `test-plan.md` under `{{change_dir}}/` together.
+
+      Require the child to check cross-artifact consistency and testability; find consequential behavioral, architectural, or testing-strategy gaps, missing decisions, weak tradeoffs, failure modes, and better alternatives; inspect relevant repository patterns; avoid reviewing implementation tasks; and never modify files.
+
+      Follow codagent:call-agent's verification and user-facing reporting rules. Discuss every consequential finding with the user. Do not modify the proposal, specifications, design, test plan, or any other file until you have presented your assessment and received the user's explicit confirmation about which changes to make. Apply only the changes the user confirms.
+
+      Keep this phase interactive through the review discussion. Once the user approves the resulting changes, apply them and continue to the next step without asking them to review the updated artifacts again.

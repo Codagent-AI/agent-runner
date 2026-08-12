@@ -16,13 +16,16 @@ import (
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/control"
+	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/engine"
+	"github.com/codagent/agent-runner/internal/intakeroute"
 	"github.com/codagent/agent-runner/internal/interactive"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/session"
 	"github.com/codagent/agent-runner/internal/textfmt"
 	"github.com/codagent/agent-runner/internal/usersettings"
+	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
 var interactiveRunnerFn = runDirectInteractive
@@ -45,6 +48,9 @@ type directInvocation struct {
 	resolveSessionID  func() string
 	agentCallEligible bool
 	agentCallHandler  control.AgentCallHandler
+	routeEligible     bool
+	routeStore        control.RouteStore
+	routeValidation   *intakeroute.ValidateOptions
 }
 
 var isStdinTerminal = func() bool {
@@ -81,26 +87,28 @@ func stepProfileName(step *model.Step, ctx *model.ExecutionContext) string {
 // Step-level overrides (Mode, Model, CLI) are applied on top of the profile.
 func resolveStepProfile(step *model.Step, ctx *model.ExecutionContext) (*config.ResolvedAgent, error) {
 	cfg, _ := ctx.ProfileStore.(*config.Config)
+	var resolved *config.ResolvedAgent
 	if cfg == nil {
 		// No profile store — return a minimal profile using step-level values.
-		return &config.ResolvedAgent{
+		resolved = &config.ResolvedAgent{
 			DefaultMode: string(step.Mode),
 			CLI:         step.CLI,
 			Model:       step.Model,
-		}, nil
-	}
-
-	profileName := stepProfileName(step, ctx)
-	if profileName == "" {
-		if model.IsNamedSession(step.Session) {
-			return nil, fmt.Errorf("no declaration found for named session %q", step.Session)
 		}
-		return nil, fmt.Errorf("no profile found for session-originating step %q", ctx.LastSessionStepID)
-	}
+	} else {
+		profileName := stepProfileName(step, ctx)
+		if profileName == "" {
+			if model.IsNamedSession(step.Session) {
+				return nil, fmt.Errorf("no declaration found for named session %q", step.Session)
+			}
+			return nil, fmt.Errorf("no profile found for session-originating step %q", ctx.LastSessionStepID)
+		}
 
-	resolved, err := cfg.Resolve(profileName)
-	if err != nil {
-		return nil, fmt.Errorf("resolving profile %q: %w", profileName, err)
+		var err error
+		resolved, err = cfg.Resolve(profileName)
+		if err != nil {
+			return nil, fmt.Errorf("resolving profile %q: %w", profileName, err)
+		}
 	}
 
 	// Apply step-level overrides.
@@ -112,6 +120,14 @@ func resolveStepProfile(step *model.Step, ctx *model.ExecutionContext) (*config.
 	}
 	if step.CLI != "" {
 		resolved.CLI = step.CLI
+	}
+	if override := ctx.AgentOverride; override != nil {
+		if override.Model != "" {
+			resolved.Model = override.Model
+		}
+		if override.CLI != "" {
+			resolved.CLI = override.CLI
+		}
 	}
 
 	return resolved, nil
@@ -128,6 +144,7 @@ func ExecuteAgentStep(
 		return OutcomeFailed, nil
 	}
 	agentCallEligible := step.HasTool(model.RunnerToolCallAgent)
+	routeEligible := isRouteEligible(step, ctx)
 
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 	startTime := time.Now()
@@ -191,7 +208,7 @@ func ExecuteAgentStep(
 	// the native session. CLI-assigned IDs are stored after discovery instead.
 	recordSessionOnSpawn(step, ctx, sessionID)
 
-	direct := buildWorkflowDirectInvocation(step, ctx, adapter, cliName, sessionID, spawnEnv, agentCallEligible, callHandler)
+	direct := buildWorkflowDirectInvocation(step, ctx, adapter, cliName, sessionID, spawnEnv, agentCallEligible, callHandler, routeEligible)
 	invocationInput := buildWorkflowAgentInvocation(step, ctx, adapter, args, spawnEnv, prefix, invocationContext, cliName, resolvedModel, sessionID, isResume, log, direct)
 	invocation, runErr := InvokeAgent(invocationInput, runner, log)
 	if runErr != nil {
@@ -307,10 +324,11 @@ func buildWorkflowDirectInvocation(
 	spawnEnv []string,
 	agentCallEligible bool,
 	agentCallHandler control.AgentCallHandler,
+	routeEligible bool,
 ) *directInvocation {
 	spawnTime := time.Now()
 	probe, _ := adapter.(cli.TurnDurabilityProbe)
-	return &directInvocation{
+	invocation := &directInvocation{
 		ctx: ctx, stepID: step.ID, cliName: cliName, sessionID: sessionID, probe: probe,
 		spawnEnv: spawnEnv, dropEnv: cli.DropSpawnEnvVars(adapter),
 		resolveSessionID: func() string {
@@ -318,6 +336,38 @@ func buildWorkflowDirectInvocation(
 		},
 		agentCallEligible: agentCallEligible,
 		agentCallHandler:  agentCallHandler,
+	}
+	if routeEligible {
+		invocation.routeStore = intakeroute.NewStore(ctx.SessionDir)
+		invocation.routeEligible = true
+		invocation.routeValidation = routeValidationOptions(ctx)
+	}
+	return invocation
+}
+
+func isRouteEligible(step *model.Step, ctx *model.ExecutionContext) bool {
+	return step != nil && ctx != nil && step.HasTool(model.RunnerToolSubmitRoute) &&
+		ctx.ParentContext == nil && isIntakePlanStep(step, ctx)
+}
+
+// isIntakePlanStep reports whether this is the built-in intake conversation.
+// Unlike route eligibility it does not require the tool declaration or the
+// top-level position, because how the conversation opens does not depend on
+// whether this particular attempt may seal a route.
+func isIntakePlanStep(step *model.Step, ctx *model.ExecutionContext) bool {
+	return step != nil && ctx != nil &&
+		builtinworkflows.IsIntakeRef(ctx.WorkflowFile) && step.ID == builtinworkflows.IntakeStepID
+}
+
+func routeValidationOptions(ctx *model.ExecutionContext) *intakeroute.ValidateOptions {
+	if ctx == nil || ctx.SessionDir == "" {
+		return nil
+	}
+	return &intakeroute.ValidateOptions{
+		RunDir: ctx.SessionDir, ParentRunID: filepath.Base(ctx.SessionDir), IntakeWorkflow: builtinworkflows.IntakeCanonicalName,
+		RequestPath: intakeroute.RequestPathFor(ctx.SessionDir),
+		HandoffPath: intakeroute.HandoffPathFor(ctx.SessionDir),
+		Catalog:     intakeroute.NewCatalog(discovery.EnumerateForProject(ctx.ProjectRoot)),
 	}
 }
 
@@ -537,7 +587,17 @@ func buildAdapterInput(
 			fullPrompt += completionInstruction(completionExecutable)
 		}
 	} else {
-		fullPrompt = buildStepPrefix(step.ID, ctx, ctx.WorkflowResumed, isResume) + fullPrompt + completionInstruction(completionExecutable)
+		// Intake is a conversation, not an announced step. Framing it as one
+		// makes the agent open with "I'm starting the plan step", which is the
+		// machinery the greeting is there to keep out of the user's way.
+		// Resumed intake keeps the prefix, which tells the agent to pick up
+		// where it left off; only the opening turn drops it.
+		freshIntake := isIntakePlanStep(step, ctx) && !ctx.WorkflowResumed && !isResume
+		prefix := ""
+		if !freshIntake {
+			prefix = buildStepPrefix(step.ID, ctx, ctx.WorkflowResumed, isResume)
+		}
+		fullPrompt = prefix + fullPrompt + completionInstruction(completionExecutable)
 	}
 
 	input := cli.BuildArgsInput{
@@ -560,6 +620,10 @@ func buildAdapterInput(
 	}
 	if completionExecutable != "" {
 		input.CompletionCommand = &cli.CompletionCommand{Executable: completionExecutable, Args: []string{"step", "complete"}}
+		input.RunnerCommands = []cli.RunnerCommand{{Kind: cli.RunnerCommandCompleteStep, Executable: completionExecutable}}
+		if isRouteEligible(step, ctx) {
+			input.RunnerCommands = append(input.RunnerCommands, cli.RunnerCommand{Kind: cli.RunnerCommandSubmitRoute, Executable: completionExecutable})
+		}
 	}
 
 	switch {
@@ -572,6 +636,10 @@ func buildAdapterInput(
 			input.Prompt = fmt.Sprintf("Resume the %s step.", step.ID)
 		case isResume:
 			input.Prompt = fmt.Sprintf("Let's continue to the %s step", step.ID)
+		case isIntakePlanStep(step, ctx):
+			// Intake is a conversation the user drives from its first turn, so
+			// it opens with a greeting rather than a step announcement.
+			input.Prompt = "Let's go"
 		default:
 			input.Prompt = fmt.Sprintf("Let's start the %s step", step.ID)
 		}
@@ -686,6 +754,7 @@ func runDirectInteractive(args []string, options directRunOptions) (interactive.
 		Env: invocation.spawnEnv, DropEnv: invocation.dropEnv,
 		Control: server, Probe: invocation.probe, ResolveSessionID: invocation.resolveSessionID, Foreground: true,
 		AgentCallEligible: invocation.agentCallEligible, AgentCallHandler: invocation.agentCallHandler,
+		RouteEligible: invocation.routeEligible, RouteStore: invocation.routeStore, RouteValidation: invocation.routeValidation,
 		WatchdogExecutable: executable, Logger: invocation.ctx.AuditLogger,
 		Prefix: audit.BuildPrefix(nestingToAudit(invocation.ctx), invocation.stepID),
 		Persist: func(metadata *interactive.ProcessMetadata) {

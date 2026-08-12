@@ -388,3 +388,11 @@ steps:
 		t.Fatalf("expected embedded composition to resolve embedded sub-workflows, got %v", err)
 	}
 }
+
+func TestParseWorkflowSourceRejectsSubmitRouteOutsideBuiltInIntake(t *testing.T) {
+	data := []byte("name: example\nsteps:\n  - id: plan\n    agent: lead\n    prompt: route\n    tools: [submit_route]\n")
+	_, err := ParseWorkflowSource(data, "example-v1.0.yaml", Options{})
+	if err == nil || !strings.Contains(err.Error(), "submit_route") {
+		t.Fatalf("ParseWorkflowSource() error = %v, want submit_route eligibility failure", err)
+	}
+}
