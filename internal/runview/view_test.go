@@ -2,6 +2,7 @@ package runview
 
 import (
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -63,8 +64,7 @@ func TestView_FailedRunShowsFailureReasonBelowBreadcrumb(t *testing.T) {
 	m.termWidth = 125
 	m.termHeight = 30
 	m.sessionDir = "/runs/failed-run"
-	m.rebuildRanges()
-	m.syncLogToSelection()
+	m.rebuildDetail()
 
 	view := tuistyle.Sanitize(m.View())
 	reasonIdx := strings.Index(view, "reason: ci-fix-loop exhausted after 3 of 3 iterations without reaching a passing break condition")
@@ -188,11 +188,11 @@ func TestRenderTwoColumn_PromptWraps(t *testing.T) {
 	if strings.Contains(plain, "| ") {
 		t.Errorf("prompt should not use `| ` quote notation, got:\n%s", plain)
 	}
-	// The long line must be present uncut (all words appear) because wrapping
-	// preserves the content where truncation would drop the tail.
-	for _, word := range []string{"substantially", "wrapping", "several", "rows."} {
-		if !strings.Contains(plain, word) {
-			t.Errorf("expected wrapped prompt to contain %q, missing from output:\n%s", word, plain)
+	// Long input previews are bounded to three visual rows and advertise the
+	// expansion key; the complete prompt belongs to semantic copy output.
+	for _, want := range []string{"substantially", "i expand", "…"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("expected collapsed prompt to contain %q, missing from output:\n%s", want, plain)
 		}
 	}
 }
@@ -329,11 +329,7 @@ func TestBuildStepRows_SelectedLoopShowsIterationsWithoutBindingValues(t *testin
 	}
 }
 
-// TestBuildStepRows_SelectedContainerWithActiveChildSuppressesOwnIndicator
-// verifies that when a selected container step (sub-workflow, loop, iteration)
-// has at least one in-progress child in its expansion rows, the parent's own
-// "●" indicator is suppressed so only one blinking indicator is rendered.
-func TestBuildStepRows_SelectedContainerWithActiveChildSuppressesOwnIndicator(t *testing.T) {
+func TestBuildStepRows_LiveActiveAncestorStaysStaticWhileLeafBlinks(t *testing.T) {
 	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
 	review := &StepNode{ID: "review", Type: NodeSubWorkflow, Status: StatusInProgress, Parent: root}
 	root.Children = []*StepNode{review}
@@ -342,6 +338,8 @@ func TestBuildStepRows_SelectedContainerWithActiveChildSuppressesOwnIndicator(t 
 
 	m := newTestModel(&Tree{Root: root}, FromList)
 	m.cursor = 0
+	m.active = true
+	m.pulsePhase = 1.5 * math.Pi
 	rows := m.buildStepRows(root.Children)
 	if len(rows) != 2 {
 		t.Fatalf("expected selected sub-workflow row plus one expansion row, got %d", len(rows))
@@ -349,28 +347,21 @@ func TestBuildStepRows_SelectedContainerWithActiveChildSuppressesOwnIndicator(t 
 
 	parent := stripANSI(rows[0])
 	child := stripANSI(rows[1])
-	if strings.Contains(parent, "●") {
-		t.Fatalf("selected in-progress container with active child should hide its own '●' indicator, got parent=%q", parent)
+	if !strings.Contains(parent, "●") {
+		t.Fatalf("in-progress ancestor should keep a static '●' while the leaf blink is off, got parent=%q", parent)
 	}
-	if !strings.Contains(child, "●") {
-		t.Fatalf("in-progress expansion child should show a '●' indicator, got child=%q", child)
+	if strings.Contains(child, "●") {
+		t.Fatalf("active leaf should hide its '●' during the off phase, got child=%q", child)
 	}
 
-	// Column alignment must be preserved: the parent row's visible width must
-	// remain stable (as if the indicator were still there).
-	withActive := lipgloss.Width(rows[0])
-	active.Status = StatusPending
-	rowsNoActive := m.buildStepRows(root.Children)
-	withoutActive := lipgloss.Width(rowsNoActive[0])
-	if withActive != withoutActive {
-		t.Fatalf("parent row width should not change when indicator is suppressed: active=%d, pending=%d", withActive, withoutActive)
+	m.pulsePhase = 0
+	rows = m.buildStepRows(root.Children)
+	if child = stripANSI(rows[1]); !strings.Contains(child, "●") {
+		t.Fatalf("active leaf should show its '●' during the on phase, got child=%q", child)
 	}
 }
 
-// TestBuildStepRows_SelectedLoopWithActiveIterationSuppressesOwnIndicator
-// verifies the same "only one in-progress indicator" rule applies when the
-// selected container is a loop whose active child is an iteration.
-func TestBuildStepRows_SelectedLoopWithActiveIterationSuppressesOwnIndicator(t *testing.T) {
+func TestBuildStepRows_StoppedAncestorAndInterruptedLeafBothShowStatus(t *testing.T) {
 	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
 	loop := &StepNode{
 		ID:                  "fanout",
@@ -406,11 +397,11 @@ func TestBuildStepRows_SelectedLoopWithActiveIterationSuppressesOwnIndicator(t *
 
 	parent := stripANSI(rows[0])
 	iter2Row := stripANSI(rows[2])
-	if strings.Contains(parent, "●") {
-		t.Fatalf("selected in-progress loop with active iteration should hide its own '●', got parent=%q", parent)
+	if !strings.Contains(parent, "●") {
+		t.Fatalf("stopped in-progress ancestor should show its static '●', got parent=%q", parent)
 	}
 	if !strings.Contains(iter2Row, "●") {
-		t.Fatalf("active iteration expansion row should show '●', got iter2=%q", iter2Row)
+		t.Fatalf("stopped interrupted leaf should show its static '●', got iter2=%q", iter2Row)
 	}
 }
 
@@ -844,15 +835,15 @@ func TestStepRowParts_LoopShowsGlyphAndCounter(t *testing.T) {
 	}
 }
 
-func TestStepRowParts_TruncatesLongSidebarName(t *testing.T) {
+func TestStepRowParts_KeepsLongSidebarNameForPaneMeasurement(t *testing.T) {
 	m := newTestModel(&Tree{Root: &StepNode{ID: "wf", Type: NodeRoot}}, FromList)
 	_, label, _ := m.stepRowParts(&StepNode{
 		ID:     "abcdefghijklmnopqrstuvw",
 		Type:   NodeShell,
 		Status: StatusPending,
 	})
-	if label != "abcdefghijklmnopq…" {
-		t.Fatalf("truncated label = %q, want %q", label, "abcdefghijklmnopq…")
+	if label != "abcdefghijklmnopqrstuvw" {
+		t.Fatalf("label = %q, want complete name before pane measurement", label)
 	}
 }
 

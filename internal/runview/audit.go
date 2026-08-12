@@ -438,53 +438,94 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 		t.applyError(tokens, e.Data)
 	case "warning":
 		t.addWarning(e.Data)
-	case "step_start":
-		n := t.resolve(tokens, true)
-		if n == nil {
-			return
-		}
-		// Always transition to in-progress — on resume, a step restarted after
-		// a prior failed/aborted/skipped/success outcome must lose its stale
-		// terminal status so the TUI renders the "running" indicator.
-		n.Status = StatusInProgress
-		n.Aborted = false
-		n.Outcome = ""
-		n.StartedAt = parseEventTime(e.Timestamp)
-		applyStepStart(n, e.Data)
-	case "step_end":
-		n := t.resolve(tokens, true)
-		if n == nil {
-			return
-		}
-		applyStepEnd(n, e.Data)
-	case "iteration_start":
-		n := t.resolve(tokens, true)
-		if n == nil {
-			return
-		}
-		n.Status = StatusInProgress
-		n.Outcome = ""
-		n.Aborted = false
-		applyIterationStart(n, e.Data)
-	case "iteration_end":
-		n := t.resolve(tokens, true)
-		if n == nil {
-			return
-		}
-		applyIterationEnd(n, e.Data)
-	case "sub_workflow_start":
-		n := t.resolve(tokens, true)
-		if n == nil {
-			return
-		}
-		applySubWorkflowStart(n, e.Data)
-	case "sub_workflow_end":
-		n := t.resolve(tokens, true)
-		if n == nil {
-			return
-		}
-		applySubWorkflowEnd(n, e.Data)
+	case "step_start", "step_end":
+		t.applyStepEvent(e, tokens)
+	case "iteration_start", "iteration_end":
+		t.applyIterationEvent(e, tokens)
+	case "sub_workflow_start", "sub_workflow_end":
+		t.applySubWorkflowEvent(e, tokens)
 	}
+}
+
+func (t *Tree) applyStepEvent(event RawEvent, tokens []prefixToken) {
+	n := t.resolve(tokens, true)
+	if n == nil {
+		return
+	}
+	if event.Type == "step_end" {
+		applyStepEnd(n, event.Data)
+		t.recordFailedLeaf(n)
+		// Skipped steps are represented by an end event only. That decision is
+		// still an ordered terminal execution for selected-detail context.
+		if n.Status == StatusSkipped {
+			t.assignStartOrdinal(n)
+		}
+		return
+	}
+	t.assignStartOrdinal(n)
+	n.OutputPrefix = event.Prefix
+	n.OutputLoaded = false
+	n.Stdout = ""
+	n.Stderr = ""
+	// Always transition to in-progress — on resume, a step restarted after a
+	// terminal outcome must lose its stale status so the TUI renders running.
+	n.Status = StatusInProgress
+	n.Aborted = false
+	n.Outcome = ""
+	n.StartedAt = parseEventTime(event.Timestamp)
+	applyStepStart(n, event.Data)
+}
+
+func (t *Tree) applyIterationEvent(event RawEvent, tokens []prefixToken) {
+	n := t.resolve(tokens, true)
+	if n == nil {
+		return
+	}
+	if event.Type == "iteration_end" {
+		applyIterationEnd(n, event.Data)
+		return
+	}
+	t.assignStartOrdinal(n)
+	n.Status = StatusInProgress
+	n.Outcome = ""
+	n.Aborted = false
+	applyIterationStart(n, event.Data)
+}
+
+func (t *Tree) applySubWorkflowEvent(event RawEvent, tokens []prefixToken) {
+	n := t.resolve(tokens, true)
+	if n == nil {
+		return
+	}
+	if event.Type == "sub_workflow_end" {
+		applySubWorkflowEnd(n, event.Data)
+		return
+	}
+	t.assignStartOrdinal(n)
+	applySubWorkflowStart(n, event.Data)
+}
+
+func (t *Tree) assignStartOrdinal(node *StepNode) {
+	if t == nil || node == nil {
+		return
+	}
+	t.nextStartOrdinal++
+	node.StartOrdinal = t.nextStartOrdinal
+}
+
+func (t *Tree) assignFailureOrdinal(node *StepNode) {
+	if t == nil || node == nil {
+		return
+	}
+	t.nextFailureOrdinal++
+	node.FailureOrdinal = t.nextFailureOrdinal
+}
+
+func (t *Tree) recordFailedLeaf(node *StepNode) {
+	if node == nil || node.Status != StatusFailed || node.IsContainer() {
+		return
+	}
+	t.assignFailureOrdinal(node)
 }
 
 func (t *Tree) applyError(tokens []prefixToken, data map[string]any) {
@@ -495,6 +536,7 @@ func (t *Tree) applyError(tokens []prefixToken, data map[string]any) {
 		}
 	}
 	setErrorMessage(target, data)
+	t.recordFailedLeaf(target)
 }
 
 func (t *Tree) addWarning(data map[string]any) {
@@ -577,11 +619,17 @@ func (t *Tree) applyAgentCallStart(event RawEvent, tokens []prefixToken) {
 		return
 	}
 	call := ensureAgentCallChild(parent, callID)
+	t.assignStartOrdinal(call)
+	call.OutputLoaded = false
+	call.CallOutputLoaded = false
+	call.Stdout = ""
+	call.Stderr = ""
 	call.Status = StatusInProgress
 	call.Outcome = ""
 	call.Aborted = false
 	call.StartedAt = parseEventTime(event.Timestamp)
 	call.CallOutputPrefix = event.Prefix
+	call.OutputPrefix = event.Prefix
 	applyAgentCallFields(call, event.Data)
 }
 
@@ -592,9 +640,11 @@ func (t *Tree) applyAgentCallEnd(event RawEvent, tokens []prefixToken) {
 	}
 	call := ensureAgentCallChild(parent, callID)
 	call.CallOutputPrefix = event.Prefix
+	call.OutputPrefix = event.Prefix
 	applyAgentCallFields(call, event.Data)
 	outcome, _ := stringField(event.Data, "outcome")
 	applyOutcome(call, outcome)
+	t.recordFailedLeaf(call)
 	if value, ok := intField(event.Data, "exit_code"); ok {
 		call.ExitCode = &value
 	}
@@ -964,6 +1014,9 @@ func applyStepEnd(n *StepNode, data map[string]any) {
 	}
 	if s, ok := stringField(data, "stderr"); ok {
 		n.Stderr = s
+	}
+	if s, ok := stringField(data, "skip_if"); ok {
+		n.TriggeredSkipIf = s
 	}
 	if s, ok := stringField(data, "error"); ok {
 		n.ErrorMessage = s

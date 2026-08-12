@@ -62,7 +62,7 @@ Other built-in workflows present at migration time SHALL start at `v1.0`.
 
 A builtin workflow that references another workflow via a relative path SHALL reference a valid versioned filename and SHALL load that exact embedded file. A newer version of the referenced logical workflow MUST NOT replace the explicit target. Relative references within one namespace and relative cross-namespace references SHALL remain inside the embedded built-in set and MUST NOT fall back to the user's `.agent-runner/workflows/` directory. An unversioned built-in sub-workflow reference SHALL fail with the actionable versioned-filename error.
 
-#### Scenario: Relative reference resolves exact version within namespace
+#### Scenario: Relative reference resolves within embedded namespace
 - **WHEN** embedded `openspec/change-v2.0.yaml` contains `workflow: plan-change-v2.0.yaml`
 - **AND** the user invokes `agent-runner run openspec:change`
 - **THEN** the sub-workflow loads from embedded `openspec/plan-change-v2.0.yaml`

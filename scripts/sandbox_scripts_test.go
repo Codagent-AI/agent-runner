@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -986,7 +987,7 @@ func TestDevDockerfileIncludesGitHubCLIForDeliveryWorkflows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read dev Dockerfile: %v", err)
 	}
-	if !strings.Contains(string(data), "\n    gh \\\n") {
+	if !regexp.MustCompile(`(?m)^\s*gh(?:\s*\\)?\s*$`).Match(data) {
 		t.Fatalf("dev Dockerfile should install gh for draft-PR delivery workflows:\n%s", data)
 	}
 }

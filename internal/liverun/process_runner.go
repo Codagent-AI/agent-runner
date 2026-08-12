@@ -104,11 +104,11 @@ func (r *tuiProcessRunner) cancelDelayedStepLocked() {
 }
 
 // sanitizePrefix converts an audit-log prefix into a safe filesystem name.
-// Maps '/' → "--" (nesting) and ':' → "_" (iteration); underscores pass
-// through unchanged so identifiers that contain '_' do not collide with
-// the nesting separator. Example: audit prefix loop-b:2/step-c becomes
-// loop-b_2--step-c. Any other character outside the allowlist
-// [A-Za-z0-9._\-] is replaced with a single '_'. Separator replacement
+// Maps '/' → "__" (nesting) and ':' → "_" (iteration). Example: audit
+// prefix loop-b:2/step-c becomes
+// loop-b_2__step-c. Literal underscores are percent-escaped so they cannot
+// collide with the nesting separator. Any other character outside the
+// allowlist [A-Za-z0-9.\-] is replaced with a single '_'. Separator replacement
 // blocks path traversal on every platform (including '\' on Windows);
 // the containment check in openOutputFile rejects any residual '..'
 // substring.
@@ -120,16 +120,31 @@ func sanitizePrefix(prefix string) string {
 // persisted stdout and stderr. Run inspection uses the same mapping to load
 // execution-specific output without consulting audit metadata.
 func SanitizeOutputPrefix(prefix string) string {
+	return sanitizeOutputPrefix(prefix, true)
+}
+
+// LegacySanitizeOutputPrefix returns the ambiguous output basename used before
+// literal underscores were escaped. It exists only so run inspection can read
+// established artifacts; new output must use SanitizeOutputPrefix.
+func LegacySanitizeOutputPrefix(prefix string) string {
+	return sanitizeOutputPrefix(prefix, false)
+}
+
+func sanitizeOutputPrefix(prefix string, escapeLiteralUnderscores bool) string {
 	var b strings.Builder
 	for _, ch := range prefix {
 		switch {
 		case ch >= 'A' && ch <= 'Z',
 			ch >= 'a' && ch <= 'z',
 			ch >= '0' && ch <= '9',
-			ch == '.' || ch == '-' || ch == '_':
+			ch == '.' || ch == '-':
+			b.WriteRune(ch)
+		case ch == '_' && escapeLiteralUnderscores:
+			b.WriteString("%5F")
+		case ch == '_':
 			b.WriteRune(ch)
 		case ch == '/':
-			b.WriteString("--")
+			b.WriteString("__")
 		default:
 			b.WriteByte('_')
 		}

@@ -78,6 +78,10 @@ type StepNode struct {
 	StaticWorkdir            string
 	StaticContinueOnFailure  bool
 	StaticCaptureStderr      bool
+	StaticUITitle            string
+	StaticUIBody             string
+	StaticUIActions          []model.UIAction
+	StaticUIInputs           []model.UIInput
 
 	// Runtime fields (populated from audit events).
 	InterpolatedCommand string
@@ -101,6 +105,20 @@ type StepNode struct {
 	Aborted             bool // aborted mid-execution; UI suppresses blink when no run is active
 	Attempts            []AttemptMetrics
 	StartedAt           time.Time // wall-clock start of the current in-flight execution (from step_start); zero when not running
+	OutputPrefix        string    // audit prefix used for this execution's persisted stdout/stderr files
+	OutputLoaded        bool      // bounded persisted output has been read for this historical execution
+	// StartOrdinal is the replay-order position of this logical node's latest
+	// execution start. It is intentionally in-memory only: replay and live
+	// tailing both derive it from the durable audit stream.
+	StartOrdinal uint64
+	// FailureOrdinal is the replay-order position of this logical node's latest
+	// durable failure record. Equal-depth failure selection uses it when both
+	// candidates have ordering evidence; zero preserves workflow-order fallback.
+	FailureOrdinal uint64
+	// TriggeredSkipIf is the recorded skip expression that caused a skipped
+	// execution. StaticSkipIf is the configured expression and may differ after
+	// interpolation.
+	TriggeredSkipIf string
 
 	// Agent-call-only fields. Calls are dynamic executions attached beneath
 	// their workflow-authored parent agent; they are never workflow steps.
@@ -189,6 +207,13 @@ func indexStepNode(nodes []*StepNode, target *StepNode) int {
 type Tree struct {
 	Root *StepNode
 
+	// nextStartOrdinal assigns a deterministic replay order to execution
+	// starts. It is not persisted because it is reconstructed from audit order.
+	nextStartOrdinal uint64
+	// nextFailureOrdinal assigns replay order to durable failed-leaf events.
+	// It is reconstructed from the same durable audit stream.
+	nextFailureOrdinal uint64
+
 	// Warnings contains distinct user-visible warning messages retained from
 	// the run's audit stream.
 	Warnings []string
@@ -214,6 +239,43 @@ type Tree struct {
 	// relative "workflow:" field. Defaults to filepath.Dir of the parent
 	// sub-workflow's StaticWorkflowPath, falling back to WorkflowPath's dir.
 	ParentDirOf func(n *StepNode) string
+}
+
+// PreviousExecution returns the most recently started terminal leaf before
+// selected's latest start. Container lifecycle events are deliberately not
+// candidates; calls and skipped leaves are ordinary terminal executions.
+func (t *Tree) PreviousExecution(selected *StepNode) *StepNode {
+	if t == nil || t.Root == nil || selected == nil || selected.StartOrdinal == 0 {
+		return nil
+	}
+	var previous *StepNode
+	var visit func(*StepNode)
+	visit = func(node *StepNode) {
+		if node == nil {
+			return
+		}
+		if isTerminalExecution(node) && node.StartOrdinal < selected.StartOrdinal &&
+			(previous == nil || node.StartOrdinal > previous.StartOrdinal) {
+			previous = node
+		}
+		for _, child := range node.Children {
+			visit(child)
+		}
+	}
+	visit(t.Root)
+	return previous
+}
+
+func isTerminalExecution(node *StepNode) bool {
+	if node == nil || node.StartOrdinal == 0 || node.IsContainer() {
+		return false
+	}
+	switch node.Type {
+	case NodeShell, NodeScript, NodeHeadlessAgent, NodeInteractiveAgent, NodeAgentCall, NodeUI:
+		return node.Aborted || node.Status == StatusSuccess || node.Status == StatusFailed || node.Status == StatusSkipped
+	default:
+		return false
+	}
 }
 
 // BuildTree constructs a static tree from the top-level workflow.
@@ -243,6 +305,7 @@ func buildStepNode(s *model.Step, parent *StepNode) *StepNode {
 		ID:                      s.ID,
 		Parent:                  parent,
 		Status:                  StatusPending,
+		StaticMode:              s.Mode,
 		StaticSession:           s.Session,
 		StaticSkipIf:            s.SkipIf,
 		StaticBreakIf:           s.BreakIf,
@@ -263,6 +326,10 @@ func buildStepNode(s *model.Step, parent *StepNode) *StepNode {
 		n.Type = NodeUI
 		n.StaticMode = s.Mode
 		n.CaptureName = s.Capture
+		n.StaticUITitle = s.Title
+		n.StaticUIBody = s.Body
+		n.StaticUIActions = append([]model.UIAction(nil), s.Actions...)
+		n.StaticUIInputs = append([]model.UIInput(nil), s.Inputs...)
 	case s.Loop != nil && len(s.Steps) > 0:
 		n.Type = NodeLoop
 		if s.Loop.Max != nil {
@@ -463,6 +530,10 @@ func cloneTemplate(src, parent *StepNode) *StepNode {
 		StaticWorkdir:           src.StaticWorkdir,
 		StaticContinueOnFailure: src.StaticContinueOnFailure,
 		StaticCaptureStderr:     src.StaticCaptureStderr,
+		StaticUITitle:           src.StaticUITitle,
+		StaticUIBody:            src.StaticUIBody,
+		StaticUIActions:         append([]model.UIAction(nil), src.StaticUIActions...),
+		StaticUIInputs:          append([]model.UIInput(nil), src.StaticUIInputs...),
 		CaptureName:             src.CaptureName,
 		AutoFlatten:             src.AutoFlatten,
 	}

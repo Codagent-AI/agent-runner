@@ -1,0 +1,5 @@
+- [x] [Project the selectable workflow tree and responsive layout](tasks/01-project-selectable-workflow-tree.md)
+- [x] [Build the selected-execution detail document](tasks/02-build-selected-execution-detail.md)
+- [x] [Reconstruct historical execution context and resume behavior](tasks/03-reconstruct-historical-execution-context.md)
+- [x] [Coordinate live follow, streaming, calls, and completion](tasks/04-coordinate-live-run-behavior.md)
+- [x] [Integrate live UI ownership and verify the complete run view](tasks/05-integrate-live-ui-and-verify.md)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -254,6 +255,120 @@ func TestApplyEvent_StepStartStepEnd(t *testing.T) {
 	}
 	if archive.DurationMs == nil || *archive.DurationMs != 2400 {
 		t.Errorf("duration not recorded: %v", archive.DurationMs)
+	}
+}
+
+func TestAuditReplayAssignsLatestStartOrderAndFindsPreviousTerminalLeaf(t *testing.T) {
+	wf := model.Workflow{
+		Name: "ordered",
+		Steps: []model.Step{
+			{ID: "retry", Command: "echo retry"},
+			{ID: "agent", Prompt: "work", Mode: model.ModeAutonomous},
+			{ID: "nested", Workflow: "child.yaml"},
+			{ID: "skipped", Command: "echo skipped", SkipIf: "previous_success"},
+			{ID: "selected", Command: "echo selected"},
+		},
+	}
+	tree := BuildTree(&wf, "ordered.yaml")
+	events := []RawEvent{
+		{Prefix: "[retry]", Type: "step_start"},
+		{Prefix: "[agent]", Type: "step_start", Data: map[string]any{"mode": "autonomous"}},
+		{Prefix: "[agent, call:review]", Type: "agent_call_start", Data: map[string]any{"call_id": "review"}},
+		{Prefix: "[nested]", Type: "sub_workflow_start"},
+		// Skipped steps do not have a step_start event, but remain ordered
+		// terminal executions for previous-execution context.
+		{Prefix: "[skipped]", Type: "step_end", Data: map[string]any{"outcome": "skipped", "skip_if": "previous_success"}},
+		{Prefix: "[selected]", Type: "step_start"},
+	}
+	for _, event := range events {
+		tree.ApplyEvent(event)
+	}
+
+	retry := childByID(tree.Root, "retry")
+	agent := childByID(tree.Root, "agent")
+	call := callChildByID(agent, "review")
+	nested := childByID(tree.Root, "nested")
+	skipped := childByID(tree.Root, "skipped")
+	selected := childByID(tree.Root, "selected")
+	if got, want := []uint64{retry.StartOrdinal, agent.StartOrdinal, call.StartOrdinal, nested.StartOrdinal, skipped.StartOrdinal, selected.StartOrdinal}, []uint64{1, 2, 3, 4, 5, 6}; !slices.Equal(got, want) {
+		t.Fatalf("start ordinals = %v, want %v", got, want)
+	}
+	if previous := tree.PreviousExecution(selected); previous != skipped {
+		t.Fatalf("previous execution = %v, want skipped leaf", previous)
+	}
+
+	// A retry replaces its prior start order and becomes the immediately
+	// preceding logical execution after selected is restarted.
+	tree.ApplyEvent(RawEvent{Prefix: "[retry]", Type: "step_start"})
+	tree.ApplyEvent(RawEvent{Prefix: "[retry]", Type: "step_end", Data: map[string]any{"outcome": "success"}})
+	tree.ApplyEvent(RawEvent{Prefix: "[selected]", Type: "step_start"})
+	if retry.StartOrdinal != 7 || selected.StartOrdinal != 8 {
+		t.Fatalf("latest attempt ordinals = retry %d, selected %d; want 7, 8", retry.StartOrdinal, selected.StartOrdinal)
+	}
+	if previous := tree.PreviousExecution(selected); previous != retry {
+		t.Fatalf("previous execution after retry = %v, want retry", previous)
+	}
+	if previous := tree.PreviousExecution(&StepNode{ID: "pending", Type: NodeShell}); previous != nil {
+		t.Fatalf("pending execution previous = %v, want nil", previous)
+	}
+}
+
+func TestPreviousExecutionIncludesAbortedLeaf(t *testing.T) {
+	wf := model.Workflow{
+		Name: "aborted-previous",
+		Steps: []model.Step{
+			{ID: "older", Command: "echo older"},
+			{ID: "aborted", Command: "echo aborted"},
+			{ID: "selected", Command: "echo selected"},
+		},
+	}
+	tree := BuildTree(&wf, "aborted-previous.yaml")
+	for _, event := range []RawEvent{
+		{Prefix: "[older]", Type: "step_start"},
+		{Prefix: "[older]", Type: "step_end", Data: map[string]any{"outcome": "success"}},
+		{Prefix: "[aborted]", Type: "step_start"},
+		{Prefix: "[aborted]", Type: "step_end", Data: map[string]any{"outcome": "aborted"}},
+		{Prefix: "[selected]", Type: "step_start"},
+	} {
+		tree.ApplyEvent(event)
+	}
+
+	aborted := childByID(tree.Root, "aborted")
+	selected := childByID(tree.Root, "selected")
+	if previous := tree.PreviousExecution(selected); previous != aborted {
+		t.Fatalf("previous execution = %v, want aborted leaf", previous)
+	}
+}
+
+func TestPreviousExecutionExcludesAgentContainerWithCalls(t *testing.T) {
+	root := &StepNode{ID: "root", Type: NodeRoot}
+	parent := &StepNode{
+		ID:           "parent",
+		Type:         NodeHeadlessAgent,
+		Status:       StatusSuccess,
+		StartOrdinal: 3,
+		Parent:       root,
+	}
+	call := &StepNode{
+		ID:           "call",
+		CallID:       "call",
+		Type:         NodeAgentCall,
+		Status:       StatusSuccess,
+		StartOrdinal: 2,
+		Parent:       parent,
+	}
+	selected := &StepNode{
+		ID:           "selected",
+		Type:         NodeShell,
+		Status:       StatusSuccess,
+		StartOrdinal: 4,
+		Parent:       root,
+	}
+	parent.Children = []*StepNode{call}
+	root.Children = []*StepNode{parent, selected}
+
+	if previous := (&Tree{Root: root}).PreviousExecution(selected); previous != call {
+		t.Fatalf("previous execution = %v, want call leaf %v", previous, call)
 	}
 }
 

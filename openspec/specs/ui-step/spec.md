@@ -239,47 +239,51 @@ A UI step with `actions` and no `inputs` SHALL render its actions as the only in
 
 ### Requirement: Live run-view navigation remains available during UI steps
 
-When a `mode: ui` step is rendered inside the live run view, the UI step SHALL NOT behave as a modal that blocks the run view's existing step navigation. The user SHALL be able to move the selected step away from the active UI step while the UI step remains pending. When the selected step is not the active UI step, the run view SHALL render normal details for the selected step and route navigation keys through the run-view key handler.
+When a `mode: ui` step is rendered inside the live run view, it SHALL NOT behave as a modal that blocks workflow-tree navigation. The user SHALL be able to select another real tree row while the UI step remains pending. Navigating away SHALL pause active-step auto-follow, preserve the active ancestry whenever it remains inside the current manual scope, and show ordinary selected detail for the chosen row.
 
-When the selected step is the active UI step, keys that operate the UI form itself, including Tab/Shift-Tab, arrow-left/arrow-right, and Enter, SHALL continue to be handled by the UI step. Escape SHALL be handled by the live run view while a UI step is embedded there: Escape drills out one level when drilled into a sub-workflow, loop, or iteration, and otherwise follows the live run view's top-level Escape behavior. The live run view SHALL provide `d` ("drill down") as a separate shortcut to drill into a selected loop, sub-workflow, or iteration while the UI step is active. The live run view SHALL use the existing run-view scroll shortcuts, `j` and `k`, for UI content that exceeds the detail pane height. The live run view's jump-to-live shortcut `l` SHALL remain available while a UI step is active; pressing `l` SHALL navigate back to the active UI step, drilling in or out as needed, and re-engage auto-follow without resolving the UI step. The run-view quit shortcut `q` SHALL remain available while a UI step is active. Live UI single-select inputs SHALL use arrow-left/arrow-right for option navigation because arrow-up/arrow-down are owned by step navigation. Standalone UI-step rendering outside the live run view MAY keep using arrow-up and arrow-down for single-select inputs.
+When the active UI row is selected, Left/Right, Tab, Shift-Tab, Enter, and other keys SHALL be routed to the UI form only when applicable to the focused control. Up/Down SHALL remain owned by workflow-tree navigation. Escape SHALL drill out one manually entered scope or perform the live run view's top-level Escape behavior. `j` and `k` SHALL scroll overflowing selected UI content without resolving it.
+
+Enter SHALL remain the ordinary run-view drill action when selection is on a non-UI drillable container, including while a different UI step remains pending. The separate `d` drill shortcut SHALL be removed and SHALL NOT appear in help.
+
+The jump-to-live action `l` SHALL return to root manual scope when necessary, expand the active UI ancestry inline, select the UI leaf, and re-engage auto-follow without drilling into the UI step or resolving it. The run-view `q` and Ctrl+C behavior SHALL remain available. Standalone UI rendering outside the live run view MAY retain its existing input navigation.
 
 #### Scenario: Step navigation leaves UI step pending
-- **WHEN** the live run view is displaying a pending UI step and another step is selectable in the current step list
-- **AND** the user navigates to another step
-- **THEN** the selected run-view step changes and the UI step remains pending
+- **WHEN** a UI step is pending and the user selects another real tree row
+- **THEN** selected detail changes, auto-follow pauses, and the UI step remains unresolved
 
 #### Scenario: Run-view navigation works away from active UI step
-- **WHEN** the live run view has a pending UI step
-- **AND** the user has navigated selection away from the active UI step
-- **THEN** run-view navigation keys operate on the selected step rather than being captured by the UI step
+- **WHEN** selection is away from a pending active UI step
+- **THEN** workflow-tree and selected-detail keys operate on the chosen row rather than the form
 
 #### Scenario: Drill shortcut opens selected container during active UI step
-- **WHEN** the live run view selection is on a loop, sub-workflow, or iteration containing the active UI step
-- **AND** the user presses `d`
-- **THEN** the run view drills into the selected container and the UI step remains pending
+- **WHEN** the user selects a non-UI drillable container and presses Enter while a UI step is pending
+- **THEN** the run view manually drills into that container and leaves the UI step unresolved
 
 #### Scenario: Escape drills out during active UI step
-- **WHEN** the live run view is drilled into a sub-workflow, loop, or iteration and the active UI step is visible
-- **AND** the user presses Escape
-- **THEN** the run view drills out one level and the UI step remains pending
+- **WHEN** the user is manually drilled into a container and presses Escape while a UI step is pending
+- **THEN** the run view returns to the parent manual scope without resolving the UI step
 
 #### Scenario: Existing run-view scroll keys scroll overflowing UI content
-- **WHEN** the live run view selection is on a pending UI step whose content exceeds the detail pane height
-- **AND** the user presses `j` or `k`
-- **THEN** the visible UI content scrolls without changing the selected step or resolving the UI step
+- **WHEN** the active UI row is selected and its content exceeds the detail height
+- **THEN** `j` and `k` scroll that content without changing selection or resolving the form
 
 #### Scenario: Follow shortcut returns to active UI step
-- **WHEN** a UI step is pending in the live run view and auto-follow is paused
-- **AND** the user has navigated or drilled away from that UI step
-- **AND** the user presses `l`
-- **THEN** the run view navigates back to the active UI step, drilling in or out as needed, re-engages auto-follow, and leaves the UI step pending
+- **WHEN** a UI step is active and auto-follow is paused
+- **THEN** pressing `l` returns to root scope, expands and selects the UI leaf, re-engages follow, and leaves the form unresolved
 
 #### Scenario: Quit shortcut remains available during active UI step
-- **WHEN** the live run view selection is on a pending UI step
-- **AND** the user presses `q`
-- **THEN** the run view starts its normal quit flow rather than routing `q` to the UI step
+- **WHEN** the active UI row is selected and the user presses `q`
+- **THEN** the live run view starts its ordinary quit flow rather than routing `q` to the form
 
 #### Scenario: UI action keys still resolve the active UI step
-- **WHEN** the live run view selection is on a pending UI step with actions
-- **AND** the user presses arrow-left/arrow-right and Enter
-- **THEN** the UI step moves action focus and returns the selected outcome
+- **WHEN** an active UI form is selected and the user operates Left/Right, Tab, Shift-Tab, or Enter on a control to which that key applies
+- **THEN** the form handles the applicable action without triggering tree navigation
+
+#### Scenario: Inapplicable form key is not consumed
+- **WHEN** the active UI row is selected and a key is not applicable to the focused form control
+- **THEN** the UI model does not consume it or accidentally resolve the form
+
+#### Scenario: d is not a drill shortcut
+- **WHEN** the user presses `d` while a UI step is pending
+- **THEN** the run view does not treat `d` as drill-in
+

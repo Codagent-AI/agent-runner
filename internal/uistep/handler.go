@@ -120,6 +120,26 @@ func (m *Model) Done() bool {
 	return m.done
 }
 
+// HandlesKey reports whether key applies to the currently focused form
+// control. Embedding callers use it to retain ownership of their own chrome
+// shortcuts when a form cannot act on a key.
+func (m *Model) HandlesKey(key string) bool {
+	switch key {
+	case "left", "h", "right", "l":
+		if idx, ok := m.focusedInputIndex(); ok {
+			return len(m.req.Inputs[idx].Options) > 1
+		}
+		return len(m.req.Actions) > 1
+	case "tab", "shift+tab":
+		return m.elementCount() > 1
+	case "enter":
+		_, inputFocused := m.focusedInputIndex()
+		_, actionFocused := m.focusedActionIndex()
+		return inputFocused || actionFocused
+	}
+	return false
+}
+
 func (m *Model) Result() model.UIStepResult {
 	return m.result
 }

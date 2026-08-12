@@ -2,6 +2,7 @@ package runview
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,16 +129,19 @@ func TestSelectedAgentCallShowsResolvedExecutionDetail(t *testing.T) {
 	call := tree.Root.Children[0].Children[0]
 	call.ErrorMessage = "child failed"
 
-	lines, _ := buildLogLines([]*StepNode{call}, nil, 100, map[string]bool{call.NodeKey(): true}, 0, false, ResolverConfig{})
-	plain := tuistyle.Sanitize(strings.Join(lines, "\n"))
+	plain := buildDetailDocument(call, detailBuildOptions{width: 100, loadedFull: true, resumeReady: true}).renderCopy()
 	for _, want := range []string{
-		"call session: implementor-session", "call id: call-1", "request id: request-call-1", "parent attempt: attempt-1",
-		"target: session", "profile: implementor", "cli: codex", "model: gpt-5", "cli launched: yes", "exit: 7",
-		"session: implementor-session", "session id: child-session", "session resumed: yes", "workdir: /repo/packages/api", "review the implementation",
-		"failed", "duration: 1.5s", "input 12", "output 4", "cost: $0.08", "usage error: usage parser failed", "child failed",
+		"target: session implementor-session", "profile: implementor", "cli: codex", "model: gpt-5",
+		"session: child-session", "Current prompt", "review the implementation", "failed", "duration: 1.5s",
+		"input 12", "output 4", "cost: $0.08", "Current response", "Error", "child failed",
 	} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("call detail missing %q:\n%s", want, plain)
+		}
+	}
+	for _, hidden := range []string{"request id:", "workdir:", "session resumed:", "cli launched:"} {
+		if strings.Contains(plain, hidden) {
+			t.Errorf("primary call detail exposed hidden diagnostic %q:\n%s", hidden, plain)
 		}
 	}
 }
@@ -191,6 +195,39 @@ func TestAgentCallLoadsPersistedOutputAndIgnoresAuditResponse(t *testing.T) {
 	}
 	if string(persisted) != rawStdout {
 		t.Fatalf("display filtering changed persisted evidence:\n%s", persisted)
+	}
+}
+
+func TestSelectedDetailLoadsPreviousAgentCallEvidence(t *testing.T) {
+	sessionDir := t.TempDir()
+	tree := agentCallTestTree()
+	after := &StepNode{ID: "after-call", Type: NodeShell, Status: StatusPending, Parent: tree.Root, StaticCommand: "echo after"}
+	tree.Root.Children = append(tree.Root.Children, after)
+	tree.ApplyEvent(agentCallStartEvent("call-1", "attempt-1", "agent", "implementor"))
+	tree.ApplyEvent(agentCallEndEvent("call-1", "attempt-1", "agent", "implementor", "success", true, 1000, nil, nil))
+	tree.ApplyEvent(RawEvent{Prefix: "[after-call]", Type: "step_start"})
+
+	outputDir := filepath.Join(sessionDir, "output")
+	if err := os.MkdirAll(outputDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	prefix := sanitizeOutputPrefixForTest("[parent, call:call-1]")
+	raw := `{"type":"result","subtype":"success","result":"persisted prior response one\npersisted prior response two\npersisted prior response three"}` + "\n"
+	if err := os.WriteFile(filepath.Join(outputDir, prefix+".out"), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newTestModel(tree, FromInspect)
+	m.sessionDir = sessionDir
+	m.setSelected(after)
+	plain := tuistyle.Sanitize(m.selectedStepDetailText())
+	for _, want := range []string{"Previous: call agent: implementor", "persisted prior response two", "persisted prior response three"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("previous-call detail missing %q:\n%s", want, plain)
+		}
+	}
+	if strings.Contains(plain, "audit response") {
+		t.Fatalf("previous call used audit output:\n%s", plain)
 	}
 }
 
@@ -280,8 +317,7 @@ func TestFailedAgentCallDetailOffersResumeForKnownSession(t *testing.T) {
 	call.SessionID = "child-session"
 	call.AgentCLI = "codex"
 
-	lines, _ := buildLogLines([]*StepNode{call}, nil, 100, map[string]bool{call.NodeKey(): true}, 0, false, ResolverConfig{})
-	plain := tuistyle.Sanitize(strings.Join(lines, "\n"))
+	plain := buildDetailDocument(call, detailBuildOptions{width: 100, loadedFull: true, resumeReady: true}).renderCopy()
 	if !strings.Contains(plain, "enter → resume session") {
 		t.Fatalf("resumable failed call detail omitted resume hint:\n%s", plain)
 	}
@@ -307,13 +343,44 @@ func TestAgentCallPersistedOutputLoadIsMemoryBounded(t *testing.T) {
 	m.sessionDir = sessionDir
 	m.path = []*StepNode{tree.Root, tree.Root.Children[0]}
 
-	m.loadSelectedAgentCallOutput()
+	m.loadHistoricalOutput(m.selectedNode())
 
 	if len(call.Stdout) > maxOutputBytes {
 		t.Fatalf("loaded output bytes = %d, want at most %d", len(call.Stdout), maxOutputBytes)
 	}
 	if strings.Count(call.Stdout, "\n") > maxOutputLines || !strings.Contains(call.Stdout, "retained-tail") {
 		t.Fatalf("bounded output did not retain the expected tail: bytes=%d lines=%d", len(call.Stdout), strings.Count(call.Stdout, "\n"))
+	}
+}
+
+func TestHistoricalOutputFallsBackToLegacyUnderscoreFilename(t *testing.T) {
+	sessionDir := t.TempDir()
+	tree := agentCallTestTree()
+	tree.ApplyEvent(agentCallStartEvent("call-1", "attempt-1", "agent", "implementor"))
+	tree.ApplyEvent(agentCallEndEvent("call-1", "attempt-1", "agent", "implementor", "success", true, 1000, nil, nil))
+	call := tree.Root.Children[0].Children[0]
+	call.AgentCLI = "unfiltered-test"
+	call.CallOutputPrefix = "[parent_with_underscores, call:call-1]"
+
+	currentBase := liverun.SanitizeOutputPrefix(call.CallOutputPrefix)
+	legacyBase := liverun.LegacySanitizeOutputPrefix(call.CallOutputPrefix)
+	if currentBase == legacyBase {
+		t.Fatalf("test requires distinct current and legacy basenames, got %q", currentBase)
+	}
+	legacyPath := filepath.Join(sessionDir, "output", legacyBase+".out")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, []byte("legacy output"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newTestModel(tree, FromInspect)
+	m.sessionDir = sessionDir
+	m.loadHistoricalOutput(call)
+
+	if call.Stdout != "legacy output" || !call.CallOutputLoaded {
+		t.Fatalf("legacy output=%q loaded=%v", call.Stdout, call.CallOutputLoaded)
 	}
 }
 
@@ -336,7 +403,7 @@ func TestAgentCallOutputReadFailureRemainsRetryableAndVisible(t *testing.T) {
 	m.sessionDir = sessionDir
 	m.path = []*StepNode{tree.Root, tree.Root.Children[0]}
 
-	m.loadSelectedAgentCallOutput()
+	m.loadHistoricalOutput(m.selectedNode())
 	if call.CallOutputLoaded || !strings.Contains(m.loadErr, "load call output") {
 		t.Fatalf("read failure loaded=%v error=%q, want retryable surfaced error", call.CallOutputLoaded, m.loadErr)
 	}
@@ -347,7 +414,7 @@ func TestAgentCallOutputReadFailureRemainsRetryableAndVisible(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m.loadSelectedAgentCallOutput()
+	m.loadHistoricalOutput(m.selectedNode())
 	if !call.CallOutputLoaded || call.Stdout != "recovered output" || strings.Contains(m.loadErr, "load call output") {
 		t.Fatalf("retry loaded=%v stdout=%q error=%q", call.CallOutputLoaded, call.Stdout, m.loadErr)
 	}
@@ -372,7 +439,7 @@ func TestActiveExternalViewRefreshesGrowingAgentCallOutput(t *testing.T) {
 	m.path = []*StepNode{tree.Root, tree.Root.Children[0]}
 	m.active = true
 
-	m.loadSelectedAgentCallOutput()
+	m.loadHistoricalOutput(m.selectedNode())
 	if call.Stdout != "first chunk" || !call.CallOutputLoaded {
 		t.Fatalf("initial output=%q loaded=%v", call.Stdout, call.CallOutputLoaded)
 	}
@@ -381,7 +448,7 @@ func TestActiveExternalViewRefreshesGrowingAgentCallOutput(t *testing.T) {
 	}
 
 	m.refreshData()
-	m.loadSelectedAgentCallOutput()
+	m.loadHistoricalOutput(m.selectedNode())
 
 	if call.Stdout != "first chunk\nsecond chunk" {
 		t.Fatalf("refreshed output=%q, want growing persisted output", call.Stdout)
@@ -396,15 +463,16 @@ func TestLiveAgentCallAppearsStreamsSeparatelyAndAutoFollows(t *testing.T) {
 	m := newTestModel(tree, FromLiveRun)
 	m.sessionDir = sessionDir
 	m.running = true
-	m.autoFollow = true
+	m.followActive = true
+	m.followTail = true
 	appendAuditTestEvent(t, sessionDir, agentCallStartEvent("call-1", "attempt-1", "agent", "implementor"))
 
 	m.Update(liverun.StepStateMsg{ActiveStepPrefix: "[parent, call:call-1]"})
 	if len(parent.Children) != 1 || parent.Children[0].Status != StatusInProgress {
 		t.Fatalf("accepted live call was not inserted: %#v", parent.Children)
 	}
-	if len(m.path) != 2 || m.selectedNode() != parent.Children[0] {
-		t.Fatalf("auto-follow did not enter call: path=%d selected=%#v", len(m.path), m.selectedNode())
+	if len(m.path) != 1 || m.selectedNode() != parent.Children[0] {
+		t.Fatalf("auto-follow should keep root scope while selecting call: path=%d selected=%#v", len(m.path), m.selectedNode())
 	}
 	m.Update(liverun.OutputChunkMsg{StepPrefix: "[parent, call:call-1]", Stream: "stdout", Bytes: []byte("child output")})
 	if parent.Children[0].Stdout != "child output" || parent.Stdout != "" {
@@ -424,7 +492,7 @@ func TestManualNavigationPausesAgentCallAutoFollow(t *testing.T) {
 	tree.ApplyEvent(agentCallStartEvent("call-1", "attempt-1", "agent", "implementor"))
 	m := newTestModel(tree, FromLiveRun)
 	m.running = true
-	m.autoFollow = false
+	m.followActive = false
 	m.cursor = 0
 
 	m.Update(liverun.StepStateMsg{ActiveStepPrefix: "[parent, call:call-1]"})
@@ -433,21 +501,21 @@ func TestManualNavigationPausesAgentCallAutoFollow(t *testing.T) {
 	}
 }
 
-func TestExpandedParentSuppressesDuplicateRunningIndicatorForCall(t *testing.T) {
+func TestExpandedCallParentStaysStaticWhileCallLeafBlinks(t *testing.T) {
 	tree := agentCallTestTree()
 	tree.Root.Children[0].Status = StatusInProgress
 	tree.ApplyEvent(agentCallStartEvent("call-1", "attempt-1", "agent", "implementor"))
 	m := newTestModel(tree, FromLiveRun)
 	m.running = true
-	m.pulsePhase = 0
+	m.pulsePhase = 1.5 * math.Pi
 
 	rows := rowTexts(m.buildRenderedStepRows(tree.Root.Children))
 	plain := make([]string, len(rows))
 	for i := range rows {
 		plain[i] = tuistyle.Sanitize(rows[i])
 	}
-	if len(plain) != 2 || strings.Contains(plain[0], "●") || !strings.Contains(plain[1], "●") {
-		t.Fatalf("running indicators should belong only to call child: %#v", plain)
+	if len(plain) != 2 || !strings.Contains(plain[0], "●") || strings.Contains(plain[1], "●") {
+		t.Fatalf("call parent should stay static while the call leaf blink is off: %#v", plain)
 	}
 }
 
@@ -571,16 +639,5 @@ func appendAuditTestEvent(t *testing.T, sessionDir string, event RawEvent) {
 func modelTimeZero() (zeroTime time.Time) { return zeroTime }
 
 func sanitizeOutputPrefixForTest(prefix string) string {
-	var b strings.Builder
-	for _, ch := range prefix {
-		switch {
-		case ch >= 'A' && ch <= 'Z', ch >= 'a' && ch <= 'z', ch >= '0' && ch <= '9', ch == '.' || ch == '-' || ch == '_':
-			b.WriteRune(ch)
-		case ch == '/':
-			b.WriteString("--")
-		default:
-			b.WriteByte('_')
-		}
-	}
-	return b.String()
+	return liverun.SanitizeOutputPrefix(prefix)
 }
