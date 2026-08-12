@@ -20,39 +20,51 @@ Status glyphs SHALL remain `●` running, `○` pending, `✓` success, `✗` fa
 - **WHEN** a shell step is rendered in the workflow tree
 - **THEN** its row shows indentation, a status indicator, the step name, and the shell type glyph
 
-#### Scenario: Loop row shows iteration counter
+#### Scenario: Loop step row shows iteration counter and type glyph
 - **WHEN** a counted or for-each loop has completed 3 of 5 iterations
 - **THEN** its row shows the loop type glyph and `(3/5)` after the name
 
-#### Scenario: Active leaf carries the running indicator
+#### Scenario: For-each loop row shows iteration counter and type glyph
+- **WHEN** a for-each loop has resolved five matches and completed three iterations
+- **THEN** its row shows the loop type glyph and `(3/5)` after the name
+
+#### Scenario: Active step blinks
 - **WHEN** an expanded active ancestry contains an in-progress leaf
 - **THEN** the leaf displays the blinking running indicator and every visible in-progress ancestor displays a static running indicator
+
+#### Scenario: Selected container with active child suppresses its own indicator
+- **WHEN** a selected in-progress container has a visible in-progress child while the run is active
+- **THEN** the child owns the blinking indicator while the container retains a static running indicator
+
+#### Scenario: Selected container with no active child keeps its indicator
+- **WHEN** a selected in-progress container has no visible in-progress child
+- **THEN** its running indicator remains visible and blinks only while it is the deepest active row of an active run
 
 #### Scenario: Stopped active ancestry retains status indicators
 - **WHEN** a run stops while an expanded container and its visible descendant retain `in-progress` status
 - **THEN** both rows display static running indicators
 
-#### Scenario: Aborted step does not blink
+#### Scenario: Aborted step does not blink when no run is active
 - **WHEN** a step retained `in-progress` status from an interrupted run and the run is no longer active
 - **THEN** its indicator is static
 
-#### Scenario: Pending steps render before execution
+#### Scenario: Pending steps from workflow file before execution
 - **WHEN** the workflow definition is known but the run has no audit entries
 - **THEN** the tree shows every defined top-level row with pending status
 
-#### Scenario: Executed steps recover without workflow file
+#### Scenario: Executed steps recovered when the workflow file is gone
 - **WHEN** a saved run's workflow file is unavailable but audit history identifies executed top-level steps
 - **THEN** the tree reconstructs those executed rows and does not report a missing-workflow error
 
-#### Scenario: Missing workflow and history reports an error
+#### Scenario: Missing workflow and audit history still reports an error
 - **WHEN** neither the workflow definition nor recoverable audit history is available
 - **THEN** the run view reports the missing-workflow error
 
-#### Scenario: Long name remains visible when space permits
+#### Scenario: Long step name not truncated in log separator
 - **WHEN** a row name exceeds 20 visual characters and the terminal can fit the complete measured tree row plus the minimum detail width
 - **THEN** the complete name is shown without truncation
 
-#### Scenario: Constrained name truncates at pane cap
+#### Scenario: Long step name truncated in sidebar
 - **WHEN** the preferred sidebar and minimum detail pane do not fit together
 - **THEN** the sidebar truncates the name with an ellipsis while retaining the row's indentation, status, and type glyph
 
@@ -120,15 +132,15 @@ The existing auto-flatten special case SHALL remain: when an iteration contains 
 - **WHEN** a saved run recorded an unversioned workflow file and is opened for non-live inspection
 - **THEN** the breadcrumb displays `unversioned` and inspection continues without a filename-version error
 
-#### Scenario: Enter on sub-workflow drills in
+#### Scenario: Enter on sub-workflow drills in and scopes log
 - **WHEN** the user presses Enter on a sub-workflow row
 - **THEN** the tree shows all direct children of that workflow, the breadcrumb appends the workflow, and the first real direct child is selected rather than rendering a recursive container log
 
-#### Scenario: Enter on loop shows every iteration
+#### Scenario: Enter on loop drills into iteration list and scopes log
 - **WHEN** the user presses Enter on a loop row
 - **THEN** the tree shows all known iteration rows without applying the five-child inline window
 
-#### Scenario: Enter on iteration shows every child
+#### Scenario: Enter on iteration drills into iteration children
 - **WHEN** the user presses Enter on an iteration row
 - **THEN** the tree shows every direct child step and the breadcrumb appends the iteration identifier
 
@@ -140,7 +152,7 @@ The existing auto-flatten special case SHALL remain: when an iteration contains 
 - **WHEN** an iteration has exactly one sub-workflow child and the user presses Enter on the iteration
 - **THEN** the view selects the first real child of that sub-workflow, keeps the iteration as the deepest crumb, and shows the sub-workflow path and params in the header
 
-#### Scenario: Drill into pending sub-workflow
+#### Scenario: Drill in to pending sub-workflow
 - **WHEN** the user drills into a statically resolvable pending sub-workflow
 - **THEN** all direct children appear with pending status and selected pending detail contains only statically knowable data
 
@@ -148,8 +160,12 @@ The existing auto-flatten special case SHALL remain: when an iteration contains 
 - **WHEN** the user selects an inline nested row with the arrow keys
 - **THEN** the selected detail changes without changing the breadcrumb or manual drill scope
 
-#### Scenario: Enter on non-container leaf is a no-op
+#### Scenario: Enter on shell step is a no-op
 - **WHEN** the user presses Enter on a shell, script, UI, or agent leaf with no applicable resume action
+- **THEN** the manual drill scope does not change
+
+#### Scenario: Enter on agent step without session ID is a no-op
+- **WHEN** the user presses Enter on an agent leaf without accepted calls or another drillable child
 - **THEN** the manual drill scope does not change
 
 ### Requirement: Detail pane per step type
@@ -177,15 +193,15 @@ Agent metadata SHALL retain the existing model rules: the model line follows the
 
 Completed agent and call detail SHALL retain explicit metrics semantics. Collected usage and reported cost appear beside duration. Unavailable usage displays `?` and its reason when known; absent cost displays `?`, never `$0.00`. Legacy audit entries with no structured metric fields omit usage and cost lines instead of inventing unavailable values.
 
-#### Scenario: Selection replaces detail
+#### Scenario: Selecting a step scrolls log to its block
 - **WHEN** the user moves from one real tree row to another
 - **THEN** the right pane replaces the prior content with detail for the newly selected row
 
-#### Scenario: Headless agent detail
+#### Scenario: Headless agent block
 - **WHEN** a headless agent row is selected
 - **THEN** the pane shows profile, CLI, model, status and timing, metrics when available, `Current prompt`, and its full recorded filtered response
 
-#### Scenario: Interactive agent detail has no fabricated transcript
+#### Scenario: Interactive agent block
 - **WHEN** a completed interactive agent row is selected and no terminal transcript was captured
 - **THEN** the pane shows known agent metadata, prompt, outcome, and duration without a `Current response` transcript
 
@@ -197,7 +213,7 @@ Completed agent and call detail SHALL retain explicit metrics semantics. Collect
 - **WHEN** an inactive selected call has a known resumable CLI session
 - **THEN** the resume action is available and the session information needed for that action may appear
 
-#### Scenario: Shell detail
+#### Scenario: Shell step block
 - **WHEN** a shell row is selected
 - **THEN** the pane shows `Current command`, exit and duration when available, capture metadata when present, and full recorded stdout and stderr under `Current output`
 
@@ -217,6 +233,18 @@ Completed agent and call detail SHALL retain explicit metrics semantics. Collect
 - **WHEN** a sub-workflow, loop, iteration, or group row is selected
 - **THEN** `Current status` shows the container's own metadata and aggregate direct-child status counts without listing child detail rows
 
+#### Scenario: Sub-workflow block contains children inline
+- **WHEN** a sub-workflow row is selected
+- **THEN** its selected detail shows aggregate status and does not embed its children's detail blocks
+
+#### Scenario: Loop block contains iterations inline
+- **WHEN** a loop row is selected
+- **THEN** its selected detail shows aggregate status and does not embed iteration detail blocks
+
+#### Scenario: Pending step detail is suppressed unless selected
+- **WHEN** a pending step exists but another real tree row is selected
+- **THEN** the right pane contains only the selected row's detail and no block for the unselected pending step
+
 #### Scenario: Triggered condition is explanatory metadata
 - **WHEN** `skip_if` caused a selected step to skip or `break_if` caused a selected loop to stop
 - **THEN** the expression responsible for that recorded outcome appears in the primary detail
@@ -225,7 +253,7 @@ Completed agent and call detail SHALL retain explicit metrics semantics. Collect
 - **WHEN** session strategy, workdir, request ID, or an untriggered modifier is recorded but is not needed for resume or an error
 - **THEN** it is absent from the primary detail presentation
 
-#### Scenario: Re-executed step uses latest attempt
+#### Scenario: Re-executed step block shows latest attempt
 - **WHEN** a logical step has multiple attempts
 - **THEN** selected detail shows the latest attempt and its attempt number while earlier attempts remain in run aggregates
 
@@ -263,7 +291,7 @@ The run view SHALL provide a `c` keybinding that copies the current directory, c
 
 Copied response/output SHALL reflect the selected output's current large-output loading state. A previous-execution rail that is visible for the selected row SHALL be included. Existing success notice, two-second clearing behavior, and clipboard failure notice SHALL remain.
 
-#### Scenario: Copy includes full collapsed input
+#### Scenario: Copy selected step detail
 - **WHEN** the selected input exceeds three visual rows, its preview is collapsed, and the user presses `c`
 - **THEN** the copied text contains the complete input rather than only the three-row preview
 
@@ -279,7 +307,7 @@ Copied response/output SHALL reflect the selected output's current large-output 
 - **WHEN** a copy succeeds and its notice is still visible two seconds later
 - **THEN** the notice clears
 
-#### Scenario: Copy failure remains non-destructive
+#### Scenario: Copy clipboard failure
 - **WHEN** the clipboard write fails
 - **THEN** the run view remains open and shows a transient failure notice
 
@@ -291,7 +319,7 @@ The tree SHALL have an independent vertical viewport. While active-step follow i
 
 Selecting a different row manually SHALL show the new detail from its top. `i` SHALL control current-input expansion as defined by the input-preview requirement. `PgUp` and `PgDown` SHALL remain unbound. The legend/help SHALL advertise the actions applicable to the current state, including selectable nested-row navigation, Enter drill-in, `i` input expansion, `g` full-output loading, `t` selected-response tail-follow, `l` jump-to-live, agent-call selection, and group/container rows. It SHALL NOT advertise `d` as a drill action.
 
-#### Scenario: Up and Down traverse nested rows
+#### Scenario: Up/down navigates step list and scrolls log
 - **WHEN** inline expansion exposes selectable descendants
 - **THEN** Up and Down traverse parent and descendant rows in their visible order
 
@@ -299,11 +327,11 @@ Selecting a different row manually SHALL show the new detail from its top. `i` S
 - **WHEN** `… N earlier` or `… N later` appears in an inline expansion
 - **THEN** arrow navigation never places selection on that indicator
 
-#### Scenario: j and k scroll only selected detail
+#### Scenario: j/k scrolls log and updates cursor
 - **WHEN** the user presses `j` or `k`
 - **THEN** the right pane scrolls and tree selection remains unchanged
 
-#### Scenario: Mouse wheel scrolls only selected detail
+#### Scenario: Mouse wheel scrolls log and updates cursor
 - **WHEN** the user uses the mouse wheel over the run view
 - **THEN** the right pane scrolls and tree selection remains unchanged
 
@@ -311,7 +339,11 @@ Selecting a different row manually SHALL show the new detail from its top. `i` S
 - **WHEN** the user selects a different row with Up or Down
 - **THEN** the new row's detail opens at its top
 
-#### Scenario: Active-follow viewport keeps active row visible
+#### Scenario: Cursor maps nested step to ancestor-at-current-level
+- **WHEN** inline expansion exposes a nested real row at the current manual scope
+- **THEN** the cursor selects that nested row directly rather than mapping it to an ancestor
+
+#### Scenario: Cursor follows latest step in viewport
 - **WHEN** active-step follow is engaged and execution advances beyond the current tree viewport
 - **THEN** the tree scrolls only enough to reveal the newly active selected row
 
@@ -323,7 +355,7 @@ Selecting a different row manually SHALL show the new detail from its top. `i` S
 - **WHEN** the detailed run view renders its legend
 - **THEN** it describes the applicable Enter, input, output, tail, live-follow, agent-call, and group actions without a `d` drill shortcut
 
-#### Scenario: PgUp and PgDown remain unbound
+#### Scenario: PgUp and PgDown are not bound
 - **WHEN** the user presses `PgUp` or `PgDown`
 - **THEN** neither pane reacts
 
@@ -343,23 +375,39 @@ While the viewed run is active, the run view SHALL poll run state every two seco
 - **WHEN** the audit log is missing or empty but the workflow definition is available
 - **THEN** the tree shows the defined pending rows without an error
 
+#### Scenario: Auto-follow tracks active step at top level
+- **WHEN** the viewed run is active and active-step follow is engaged
+- **THEN** the root tree expands the active ancestry and selects the active leaf without creating manual drill scope
+
+#### Scenario: Manual navigation disengages auto-follow
+- **WHEN** the user changes tree selection, drill scope, or scrolls upward in selected detail
+- **THEN** refresh continues without stealing the user's selection or scroll position
+
+#### Scenario: Pressing l re-engages auto-follow
+- **WHEN** the user presses `l` while active-step follow is paused
+- **THEN** the view returns to root active-leaf selection and resumes active-step and detail-tail follow
+
 ### Requirement: Temporary detail for selected pending step
 
 Selecting a pending row SHALL replace the right pane with visually pending detail containing only statically knowable fields. The pane SHALL show identity, type, and the configured command, script, prompt, form, workflow path, or raw template params as applicable. It SHALL NOT show runtime outcome, duration, metrics, response, output, or a previous execution that cannot be established from recorded execution order.
 
 Pending input SHALL use the same labeled rail and three-row preview/expansion behavior as executed input.
 
-#### Scenario: Pending leaf shows static input
+#### Scenario: Temporary block appears on pending selection
 - **WHEN** the user selects a pending shell, script, agent, or UI row
 - **THEN** the pane shows its statically configured input and no runtime result fields
 
-#### Scenario: Pending container shows raw params
+#### Scenario: Pending sub-workflow shows raw params
 - **WHEN** the user selects a pending sub-workflow
 - **THEN** the pane shows its resolved workflow path and raw template params
 
-#### Scenario: Pending detail is visibly pending
+#### Scenario: Temporary block is visually distinguished
 - **WHEN** selected detail belongs to an unexecuted row
 - **THEN** its treatment clearly distinguishes configured data from recorded execution data
+
+#### Scenario: Temporary block disappears on deselection
+- **WHEN** the user moves selection from a pending row to another real row
+- **THEN** the right pane replaces the pending detail with detail for the new selection
 
 #### Scenario: Pending input can expand
 - **WHEN** a pending configured input exceeds three visual rows
@@ -377,9 +425,17 @@ If children are omitted before, between, or after the visible real children, the
 
 Every real expansion row SHALL be selectable. Selecting a nested real row SHALL change selected detail without changing manual drill scope. When selection leaves a non-active expanded branch, that branch SHALL collapse; an active ancestry inside the current manual scope SHALL remain expanded while the user explores another row in that scope.
 
-#### Scenario: Five or fewer children all appear
+#### Scenario: Selected sub-workflow expands to its direct children only
 - **WHEN** an expanded container has five or fewer direct children
 - **THEN** every child appears as a selectable row and no overflow indicator appears
+
+#### Scenario: Selected loop expands to iteration rows without params
+- **WHEN** a selected loop expands inline
+- **THEN** its visible direct children are iteration rows that omit params and binding values
+
+#### Scenario: Expansion indent is positive under parent
+- **WHEN** direct children are shown inline beneath an expanded container
+- **THEN** each child row is indented more deeply than its parent row
 
 #### Scenario: Active child is centered
 - **WHEN** an expanded container has at least two children before and after the direct child containing the active leaf
@@ -405,13 +461,17 @@ Every real expansion row SHALL be selectable. Selecting a nested real row SHALL 
 - **WHEN** an earlier, between, or later overflow indicator is visible
 - **THEN** it cannot receive tree selection or selected detail
 
-#### Scenario: Nested real row is selectable
+#### Scenario: Expansion rows are read-only
 - **WHEN** the user moves selection onto an inline child
 - **THEN** the right pane shows that child's detail without drilling in
 
-#### Scenario: Inactive branch collapses after selection leaves
+#### Scenario: Non-selected container collapses
 - **WHEN** selection leaves an expanded branch that does not contain the active leaf
 - **THEN** the branch collapses to its container row
+
+#### Scenario: Selected leaf step has no expansion
+- **WHEN** the selected row is a non-container leaf
+- **THEN** no inline child rows appear beneath it
 
 #### Scenario: Active ancestry remains expanded during exploration
 - **WHEN** auto-follow is paused and the user selects another row in a scope that still contains the active leaf
@@ -421,7 +481,7 @@ Every real expansion row SHALL be selectable. Selecting a nested real row SHALL 
 - **WHEN** the user manually drills into a container with more than five direct children
 - **THEN** all direct children are available through the tree viewport
 
-#### Scenario: Iteration rows hide binding data
+#### Scenario: Drilled-in iteration row hides params
 - **WHEN** an iteration appears inline or directly inside a drilled loop
 - **THEN** its row omits binding values, params, and arguments
 
@@ -431,19 +491,19 @@ A selected in-progress headless agent or agent call SHALL display an animated pr
 
 The indicator SHALL disappear when the execution reaches a terminal status or when an interrupted in-progress execution is viewed without an active run. Exact animation frames and colors are design decisions.
 
-#### Scenario: Spinner shown before response
+#### Scenario: Spinner shown while agent has not produced output
 - **WHEN** a selected headless agent or call is running and has no response text
 - **THEN** `Current response` contains an animated progress indicator
 
-#### Scenario: Spinner follows streaming response
+#### Scenario: Spinner shown below streaming output
 - **WHEN** a selected headless agent or call is running and response text is visible
 - **THEN** an animated indicator appears below the response
 
-#### Scenario: Spinner removed on completion
+#### Scenario: Spinner removed on step completion
 - **WHEN** the selected execution reaches success, failure, or skipped status
 - **THEN** its response rail no longer shows the progress indicator
 
-#### Scenario: Spinner absent for inactive interrupted run
+#### Scenario: Spinner absent for aborted step without active run
 - **WHEN** an interrupted step retains in-progress status but the run is inactive
 - **THEN** selected detail shows no animation
 

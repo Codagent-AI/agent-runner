@@ -36,7 +36,7 @@ Raw output SHALL continue to be written to `<sessionDir>/output/<step-prefix>.ou
 
 If the user manually selects another row, incoming output SHALL continue accumulating and persisting without changing selection. Selecting the producing row again SHALL show all output accumulated so far, subject to the existing large-output loading threshold.
 
-#### Scenario: Selected shell output streams
+#### Scenario: Long-running shell step output streams
 - **WHEN** a selected autonomous shell execution produces stdout or stderr
 - **THEN** its `Current output` rail updates without waiting for completion
 
@@ -44,7 +44,7 @@ If the user manually selects another row, incoming output SHALL continue accumul
 - **WHEN** a selected script execution produces output
 - **THEN** its `Current output` rail updates without waiting for completion
 
-#### Scenario: Selected headless response streams
+#### Scenario: Headless agent output streams
 - **WHEN** a selected headless agent produces filtered response output
 - **THEN** its `Current response` rail updates without waiting for completion
 
@@ -60,7 +60,7 @@ If the user manually selects another row, incoming output SHALL continue accumul
 - **WHEN** the user reselects an execution after output accumulated while it was not selected
 - **THEN** its current detail includes all accumulated output subject to lazy loading
 
-#### Scenario: ANSI output is sanitized for display
+#### Scenario: ANSI sequences are stripped in the detail pane
 - **WHEN** streamed output contains ANSI color or cursor sequences
 - **THEN** the selected detail renders sanitized text without corrupting the TUI
 
@@ -72,15 +72,15 @@ If the user manually selects another row, incoming output SHALL continue accumul
 - **WHEN** a selected autonomous execution produces its first output byte
 - **THEN** the run view targets displaying it within 100 ms
 
-#### Scenario: Output persists past completion
+#### Scenario: Output persists past step completion
 - **WHEN** an autonomous shell, script, headless agent, or call completes
 - **THEN** its full raw stdout and stderr remain available through the established escaped-prefix output path
 
-#### Scenario: Historical detail loads persisted output
+#### Scenario: Post-completion detail pane reads from output files
 - **WHEN** a terminal run's recorded execution is selected
 - **THEN** the pane reads its output files and applies the existing large-output threshold
 
-#### Scenario: Interactive execution has no transcript
+#### Scenario: Interactive agent step has no output files
 - **WHEN** an interactive agent or interactive shell exits
 - **THEN** Agent Runner creates no transcript output files and selected detail fabricates no response
 
@@ -98,11 +98,11 @@ Pressing `l` SHALL return to root manual scope when needed, expand the current a
 - **WHEN** auto-follow is engaged and execution moves to a peer
 - **THEN** selection moves to that peer and its selected detail is shown
 
-#### Scenario: Active step enters sub-workflow without drilling
+#### Scenario: Active step enters a sub-workflow
 - **WHEN** auto-follow is engaged and execution enters a nested sub-workflow
 - **THEN** the sub-workflow ancestry expands inline, the active leaf is selected, and the breadcrumb scope does not change
 
-#### Scenario: Active step enters loop iteration without drilling
+#### Scenario: Active step enters a loop iteration
 - **WHEN** auto-follow is engaged and execution enters a loop iteration
 - **THEN** the loop and iteration ancestry expand inline, the active leaf is selected, and the breadcrumb scope does not change
 
@@ -110,11 +110,11 @@ Pressing `l` SHALL return to root manual scope when needed, expand the current a
 - **WHEN** an accepted agent call becomes the active execution frontier
 - **THEN** its parent expands inline and the call row becomes selected without drill-in
 
-#### Scenario: Leaving container does not drill out
+#### Scenario: Active step leaves a sub-workflow
 - **WHEN** execution leaves nested work and advances elsewhere
 - **THEN** inline active expansion updates without changing manual drill scope
 
-#### Scenario: Arrow navigation pauses auto-follow
+#### Scenario: Manual navigation pauses auto-follow
 - **WHEN** the user moves tree selection with Up or Down
 - **THEN** auto-follow pauses and execution progress does not steal selection
 
@@ -130,11 +130,11 @@ Pressing `l` SHALL return to root manual scope when needed, expand the current a
 - **WHEN** auto-follow is paused, the user selects another row, and the active leaf remains inside the current scope
 - **THEN** the active ancestry remains expanded while selection stays where the user placed it
 
-#### Scenario: Jump-to-live returns to root active leaf
+#### Scenario: Jump-to-live re-engages auto-follow
 - **WHEN** the user presses `l` while follow is paused
 - **THEN** the view returns to root scope if needed, expands and selects the active leaf, moves its response to the tail, and resumes both follow modes without drilling
 
-#### Scenario: Failure selects failed leaf
+#### Scenario: Failure jumps cursor to the failed step
 - **WHEN** the workflow reaches failed terminal state
 - **THEN** the root tree expands and selects the failed leaf without creating a drill scope, regardless of the prior follow state
 
@@ -146,11 +146,11 @@ Pressing `k` or scrolling upward with the mouse SHALL expose earlier visual rows
 
 Pressing `t` SHALL move to the tail of the same selected execution and re-engage response tail-follow only. It SHALL NOT change tree selection or re-engage active-step auto-follow. Pressing `l` SHALL perform the jump-to-live behavior and re-engage both. `End` and uppercase `G` SHALL remain unbound.
 
-#### Scenario: Streaming response stays at tail
+#### Scenario: Streaming output auto-tails
 - **WHEN** new bytes arrive for the selected producing execution while response tail-follow is engaged
 - **THEN** the newest response/output remains visible
 
-#### Scenario: Scroll-up pauses both follow modes
+#### Scenario: User scroll pauses tail-follow
 - **WHEN** the user scrolls to earlier rows of the current response
 - **THEN** the viewport and selected row remain where the user placed them as output and workflow execution continue
 
@@ -158,7 +158,7 @@ Pressing `t` SHALL move to the tail of the same selected execution and re-engage
 - **WHEN** new bytes arrive after response tail-follow was paused
 - **THEN** the user's selected row and scroll position do not change
 
-#### Scenario: t follows selected execution only
+#### Scenario: t re-engages tail-follow
 - **WHEN** the user presses `t` while follow is paused
 - **THEN** the viewport moves to the selected execution's tail, re-engages continuous tail-follow for that selected execution, and does not select the workflow's active leaf
 
@@ -166,7 +166,7 @@ Pressing `t` SHALL move to the tail of the same selected execution and re-engage
 - **WHEN** the user presses `l` while either follow mode is paused
 - **THEN** the current active leaf is selected at its response tail and both follow modes resume
 
-#### Scenario: End and G remain unbound
+#### Scenario: End and G are not bound
 - **WHEN** the user presses `End` or uppercase `G`
 - **THEN** neither key changes selection or detail scrolling
 
@@ -180,11 +180,11 @@ When auto-follow is paused because the user navigated or manually drilled elsewh
 
 Existing UI input routing and quit behavior SHALL remain: Left/Right, Tab, Shift-Tab, Enter, and other keys operate the selected form only when applicable to its focused control; Up/Down remain tree navigation; Ctrl+C exits immediately; and keys consumed by the form SHALL NOT trigger chrome actions. Enter SHALL drill only when a non-UI drillable container is selected. The live run view SHALL NOT retain a separate `d` drill shortcut.
 
-#### Scenario: Workflow tree remains visible during UI step
+#### Scenario: Workflow name and sidebar visible during a UI step
 - **WHEN** a UI step is selected and active
 - **THEN** the workflow breadcrumb, inline active tree, and UI form are visible together
 
-#### Scenario: UI body wraps within detail pane
+#### Scenario: UI step body wraps within the content area
 - **WHEN** UI content exceeds the available detail width
 - **THEN** it wraps within that pane rather than extending beyond the chrome
 
@@ -192,7 +192,11 @@ Existing UI input routing and quit behavior SHALL remain: Left/Right, Tab, Shift
 - **WHEN** auto-follow is engaged and execution enters a nested UI step
 - **THEN** the root tree expands and selects the UI leaf without changing breadcrumb scope
 
-#### Scenario: Paused manual scope is preserved
+#### Scenario: Sidebar reflects the active UI step
+- **WHEN** the active execution is a UI step and auto-follow is engaged
+- **THEN** the tree highlights that UI leaf as in-progress and retains final statuses on prior steps
+
+#### Scenario: UI step in sibling sub-workflow leaves stale drill-in
 - **WHEN** the user manually navigated or drilled away before a UI step becomes active
 - **THEN** the UI step remains pending without forcing a scope or selection change
 
@@ -200,11 +204,11 @@ Existing UI input routing and quit behavior SHALL remain: Left/Right, Tab, Shift
 - **WHEN** a UI step is active and the user presses `l`
 - **THEN** the view returns to root scope, expands and selects the UI leaf, and leaves the form unresolved
 
-#### Scenario: UI controls do not trigger chrome actions
+#### Scenario: UI step input does not trigger chrome quit
 - **WHEN** a selected UI control consumes Left, Right, Tab, Shift-Tab, or Enter
 - **THEN** the form handles the key without triggering navigation or quit
 
-#### Scenario: Ctrl+C during selected UI exits
+#### Scenario: Ctrl+C during focused UI step exits immediately
 - **WHEN** the user presses Ctrl+C while a UI step is selected
 - **THEN** the application exits immediately and the UI step remains unresolved
 
@@ -212,11 +216,11 @@ Existing UI input routing and quit behavior SHALL remain: Left/Right, Tab, Shift
 
 While the workflow runs, completed executions SHALL expose collected usage and cost immediately through their selected detail. Run-so-far metrics SHALL remain available through the summary. A re-executed step SHALL show its latest attempt in selected detail while run totals include every attempt.
 
-#### Scenario: Completed execution exposes metrics mid-run
+#### Scenario: Completed step shows metrics mid-run
 - **WHEN** an agent step or call completes while later work remains active
 - **THEN** selecting it shows its collected usage and cost without waiting for run completion
 
-#### Scenario: Re-executed step uses latest metrics
+#### Scenario: Re-executed step shows latest attempt mid-run
 - **WHEN** a logical step completes another attempt during the run
 - **THEN** selected detail shows the latest attempt while run-so-far totals include all attempts
 
@@ -248,7 +252,7 @@ An active call SHALL participate in active-leaf expansion and selection. Its res
 
 #### Scenario: Active call carries running indicator
 - **WHEN** a parent and its active call both have in-progress status
-- **THEN** the call displays the running indicator and the parent suppresses its duplicate indicator
+- **THEN** the call displays the blinking running indicator and the parent retains a static running indicator
 
 #### Scenario: Call completion is independent of parent
 - **WHEN** a called child succeeds or fails while its parent remains active

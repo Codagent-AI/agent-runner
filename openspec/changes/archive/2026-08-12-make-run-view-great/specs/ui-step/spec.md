@@ -10,35 +10,35 @@ Enter SHALL remain the ordinary run-view drill action when selection is on a non
 
 The jump-to-live action `l` SHALL return to root manual scope when necessary, expand the active UI ancestry inline, select the UI leaf, and re-engage auto-follow without drilling into the UI step or resolving it. The run-view `q` and Ctrl+C behavior SHALL remain available. Standalone UI rendering outside the live run view MAY retain its existing input navigation.
 
-#### Scenario: Tree navigation leaves UI pending
+#### Scenario: Step navigation leaves UI step pending
 - **WHEN** a UI step is pending and the user selects another real tree row
 - **THEN** selected detail changes, auto-follow pauses, and the UI step remains unresolved
 
-#### Scenario: Navigation works away from active UI
+#### Scenario: Run-view navigation works away from active UI step
 - **WHEN** selection is away from a pending active UI step
 - **THEN** workflow-tree and selected-detail keys operate on the chosen row rather than the form
 
-#### Scenario: Enter drills selected non-UI container
+#### Scenario: Drill shortcut opens selected container during active UI step
 - **WHEN** the user selects a non-UI drillable container and presses Enter while a UI step is pending
 - **THEN** the run view manually drills into that container and leaves the UI step unresolved
 
-#### Scenario: Escape drills out during pending UI
+#### Scenario: Escape drills out during active UI step
 - **WHEN** the user is manually drilled into a container and presses Escape while a UI step is pending
 - **THEN** the run view returns to the parent manual scope without resolving the UI step
 
-#### Scenario: j and k scroll selected UI content
+#### Scenario: Existing run-view scroll keys scroll overflowing UI content
 - **WHEN** the active UI row is selected and its content exceeds the detail height
 - **THEN** `j` and `k` scroll that content without changing selection or resolving the form
 
-#### Scenario: Jump-to-live returns without drilling
+#### Scenario: Follow shortcut returns to active UI step
 - **WHEN** a UI step is active and auto-follow is paused
 - **THEN** pressing `l` returns to root scope, expands and selects the UI leaf, re-engages follow, and leaves the form unresolved
 
-#### Scenario: Quit remains available
+#### Scenario: Quit shortcut remains available during active UI step
 - **WHEN** the active UI row is selected and the user presses `q`
 - **THEN** the live run view starts its ordinary quit flow rather than routing `q` to the form
 
-#### Scenario: Form action keys remain routed
+#### Scenario: UI action keys still resolve the active UI step
 - **WHEN** an active UI form is selected and the user operates Left/Right, Tab, Shift-Tab, or Enter on a control to which that key applies
 - **THEN** the form handles the applicable action without triggering tree navigation
 
