@@ -6,7 +6,7 @@ The run view SHALL render the current manual drill scope as a selectable workflo
 
 Each real tree row SHALL display, in order: indentation for its tree depth, a status indicator, the step name, and the type glyph. Loop rows SHALL additionally display an iteration counter in the form `(N/M)`. Iteration rows SHALL NOT display binding values, per-iteration parameters, or arguments.
 
-Step statuses SHALL remain `pending`, `in-progress`, `success`, `failed`, and `skipped`. The `in-progress` indicator SHALL blink only while the run is active; an interrupted step in an inactive run SHALL render a static in-progress indicator. Loop exhaustion SHALL render as success. When an expanded container and a visible descendant both have `in-progress` status, only the deepest visible active row SHALL display the running indicator; ancestor rows SHALL preserve alignment with blank indicator space.
+Step statuses SHALL remain `pending`, `in-progress`, `success`, `failed`, and `skipped`. The deepest visible active row's `in-progress` indicator SHALL blink only while the run is active. Visible in-progress ancestor containers SHALL retain a static in-progress indicator while the active leaf blinks. An interrupted step in an inactive run SHALL render a static in-progress indicator. Loop exhaustion SHALL render as success.
 
 The sidebar SHALL measure complete visible rows, including indentation, before truncating names. A name SHALL remain untruncated whenever the preferred sidebar width and a usable detail pane fit within the terminal. When they do not fit, the sidebar SHALL truncate names with an ellipsis while preserving indentation, status, suffixes, and type glyphs. The detail pane SHALL retain at least 20 visual columns whenever the terminal can accommodate the minimum tree chrome, whitespace gap, and that width. The sidebar SHALL NOT have a proportional-width ceiling.
 
@@ -26,7 +26,11 @@ Status glyphs SHALL remain `●` running, `○` pending, `✓` success, `✗` fa
 
 #### Scenario: Active leaf carries the running indicator
 - **WHEN** an expanded active ancestry contains an in-progress leaf
-- **THEN** the leaf displays the running indicator and its visible in-progress ancestors preserve the indicator column with blank space
+- **THEN** the leaf displays the blinking running indicator and every visible in-progress ancestor displays a static running indicator
+
+#### Scenario: Stopped active ancestry retains status indicators
+- **WHEN** a run stops while an expanded container and its visible descendant retain `in-progress` status
+- **THEN** both rows display static running indicators
 
 #### Scenario: Aborted step does not blink
 - **WHEN** a step retained `in-progress` status from an interrupted run and the run is no longer active

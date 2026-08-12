@@ -2,6 +2,7 @@ package runview
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -500,21 +501,21 @@ func TestManualNavigationPausesAgentCallAutoFollow(t *testing.T) {
 	}
 }
 
-func TestExpandedParentSuppressesDuplicateRunningIndicatorForCall(t *testing.T) {
+func TestExpandedCallParentStaysStaticWhileCallLeafBlinks(t *testing.T) {
 	tree := agentCallTestTree()
 	tree.Root.Children[0].Status = StatusInProgress
 	tree.ApplyEvent(agentCallStartEvent("call-1", "attempt-1", "agent", "implementor"))
 	m := newTestModel(tree, FromLiveRun)
 	m.running = true
-	m.pulsePhase = 0
+	m.pulsePhase = 1.5 * math.Pi
 
 	rows := rowTexts(m.buildRenderedStepRows(tree.Root.Children))
 	plain := make([]string, len(rows))
 	for i := range rows {
 		plain[i] = tuistyle.Sanitize(rows[i])
 	}
-	if len(plain) != 2 || strings.Contains(plain[0], "●") || !strings.Contains(plain[1], "●") {
-		t.Fatalf("running indicators should belong only to call child: %#v", plain)
+	if len(plain) != 2 || !strings.Contains(plain[0], "●") || strings.Contains(plain[1], "●") {
+		t.Fatalf("call parent should stay static while the call leaf blink is off: %#v", plain)
 	}
 }
 

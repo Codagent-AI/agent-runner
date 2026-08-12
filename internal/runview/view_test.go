@@ -2,6 +2,7 @@ package runview
 
 import (
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -328,11 +329,7 @@ func TestBuildStepRows_SelectedLoopShowsIterationsWithoutBindingValues(t *testin
 	}
 }
 
-// TestBuildStepRows_SelectedContainerWithActiveChildSuppressesOwnIndicator
-// verifies that when a selected container step (sub-workflow, loop, iteration)
-// has at least one in-progress child in its expansion rows, the parent's own
-// "●" indicator is suppressed so only one blinking indicator is rendered.
-func TestBuildStepRows_SelectedContainerWithActiveChildSuppressesOwnIndicator(t *testing.T) {
+func TestBuildStepRows_LiveActiveAncestorStaysStaticWhileLeafBlinks(t *testing.T) {
 	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
 	review := &StepNode{ID: "review", Type: NodeSubWorkflow, Status: StatusInProgress, Parent: root}
 	root.Children = []*StepNode{review}
@@ -341,6 +338,8 @@ func TestBuildStepRows_SelectedContainerWithActiveChildSuppressesOwnIndicator(t 
 
 	m := newTestModel(&Tree{Root: root}, FromList)
 	m.cursor = 0
+	m.active = true
+	m.pulsePhase = 1.5 * math.Pi
 	rows := m.buildStepRows(root.Children)
 	if len(rows) != 2 {
 		t.Fatalf("expected selected sub-workflow row plus one expansion row, got %d", len(rows))
@@ -348,28 +347,21 @@ func TestBuildStepRows_SelectedContainerWithActiveChildSuppressesOwnIndicator(t 
 
 	parent := stripANSI(rows[0])
 	child := stripANSI(rows[1])
-	if strings.Contains(parent, "●") {
-		t.Fatalf("selected in-progress container with active child should hide its own '●' indicator, got parent=%q", parent)
+	if !strings.Contains(parent, "●") {
+		t.Fatalf("in-progress ancestor should keep a static '●' while the leaf blink is off, got parent=%q", parent)
 	}
-	if !strings.Contains(child, "●") {
-		t.Fatalf("in-progress expansion child should show a '●' indicator, got child=%q", child)
+	if strings.Contains(child, "●") {
+		t.Fatalf("active leaf should hide its '●' during the off phase, got child=%q", child)
 	}
 
-	// Column alignment must be preserved: the parent row's visible width must
-	// remain stable (as if the indicator were still there).
-	withActive := lipgloss.Width(rows[0])
-	active.Status = StatusPending
-	rowsNoActive := m.buildStepRows(root.Children)
-	withoutActive := lipgloss.Width(rowsNoActive[0])
-	if withActive != withoutActive {
-		t.Fatalf("parent row width should not change when indicator is suppressed: active=%d, pending=%d", withActive, withoutActive)
+	m.pulsePhase = 0
+	rows = m.buildStepRows(root.Children)
+	if child = stripANSI(rows[1]); !strings.Contains(child, "●") {
+		t.Fatalf("active leaf should show its '●' during the on phase, got child=%q", child)
 	}
 }
 
-// TestBuildStepRows_SelectedLoopWithActiveIterationSuppressesOwnIndicator
-// verifies the same "only one in-progress indicator" rule applies when the
-// selected container is a loop whose active child is an iteration.
-func TestBuildStepRows_SelectedLoopWithActiveIterationSuppressesOwnIndicator(t *testing.T) {
+func TestBuildStepRows_StoppedAncestorAndInterruptedLeafBothShowStatus(t *testing.T) {
 	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusInProgress}
 	loop := &StepNode{
 		ID:                  "fanout",
@@ -405,11 +397,11 @@ func TestBuildStepRows_SelectedLoopWithActiveIterationSuppressesOwnIndicator(t *
 
 	parent := stripANSI(rows[0])
 	iter2Row := stripANSI(rows[2])
-	if strings.Contains(parent, "●") {
-		t.Fatalf("selected in-progress loop with active iteration should hide its own '●', got parent=%q", parent)
+	if !strings.Contains(parent, "●") {
+		t.Fatalf("stopped in-progress ancestor should show its static '●', got parent=%q", parent)
 	}
 	if !strings.Contains(iter2Row, "●") {
-		t.Fatalf("active iteration expansion row should show '●', got iter2=%q", iter2Row)
+		t.Fatalf("stopped interrupted leaf should show its static '●', got iter2=%q", iter2Row)
 	}
 }
 

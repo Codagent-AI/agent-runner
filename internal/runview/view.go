@@ -21,11 +21,11 @@ var (
 )
 
 type renderedStepRow struct {
-	text           string
-	node           *StepNode
-	selectable     bool
-	depth          int
-	suppressStatus bool
+	text             string
+	node             *StepNode
+	selectable       bool
+	depth            int
+	staticInProgress bool
 }
 
 type treePaneLayout struct {
@@ -207,14 +207,14 @@ func (m *Model) buildRenderedStepRows(children []*StepNode) []renderedStepRow {
 	rows := make([]renderedStepRow, 0, len(children))
 	for i, n := range children {
 		isSel := i == m.cursor
-		suppressStatus := false
+		staticInProgress := false
 		var expansion []renderedStepRow
 		if isSel {
 			expansion = m.buildExpansionRows(n)
-			suppressStatus = n.Status == StatusInProgress && expansionHasInProgressChild(expansion)
+			staticInProgress = n.Status == StatusInProgress && expansionHasInProgressChild(expansion)
 		}
 		rows = append(rows, renderedStepRow{
-			text:       m.renderStepRow(n, isSel, suppressStatus),
+			text:       m.renderStepRow(n, isSel, staticInProgress),
 			node:       n,
 			selectable: true,
 		})
@@ -232,28 +232,28 @@ func (m *Model) buildProjectedRenderedRows() []renderedStepRow {
 			rows = append(rows, renderedStepRow{text: "   " + strings.Repeat("  ", row.depth) + tuistyle.DimStyle.Render(row.omissionLabel())})
 			continue
 		}
-		suppress := row.node.Status == StatusInProgress && deepestActive != nil && row.node != deepestActive && isDescendantOf(deepestActive, row.node)
+		staticInProgress := row.node.Status == StatusInProgress && deepestActive != nil && row.node != deepestActive && isDescendantOf(deepestActive, row.node)
 		rows = append(rows, renderedStepRow{
-			text: m.renderTreeRow(row.node, row.node == m.selectedNode(), suppress, row.depth),
-			node: row.node, selectable: true, depth: row.depth, suppressStatus: suppress,
+			text: m.renderTreeRow(row.node, row.node == m.selectedNode(), staticInProgress, row.depth),
+			node: row.node, selectable: true, depth: row.depth, staticInProgress: staticInProgress,
 		})
 	}
 	return rows
 }
 
-func (m *Model) renderTreeRow(n *StepNode, selected, suppressStatus bool, depth int) string {
+func (m *Model) renderTreeRow(n *StepNode, selected, staticInProgress bool, depth int) string {
 	_, label, _ := m.stepRowParts(n)
-	return m.renderTreeRowLabel(n, selected, suppressStatus, depth, label)
+	return m.renderTreeRowLabel(n, selected, staticInProgress, depth, label)
 }
 
-func (m *Model) renderTreeRowLabel(n *StepNode, selected, suppressStatus bool, depth int, label string) string {
+func (m *Model) renderTreeRowLabel(n *StepNode, selected, staticInProgress bool, depth int, label string) string {
 	prefix := "   "
 	if selected {
 		prefix = tuistyle.CursorStyle.Render("▶") + "  "
 	}
 	typeCol, _, glyph := m.stepRowParts(n)
-	if suppressStatus {
-		glyph = " "
+	if staticInProgress {
+		glyph = styledStatusGlyph(StatusInProgress)
 	}
 	style := defaultTextStyle
 	if selected {
@@ -275,13 +275,13 @@ func (m *Model) fitTreeRow(row renderedStepRow, width int) string {
 		return runewidth.Truncate(tuistyle.Sanitize(row.text), width, "…")
 	}
 	base, suffix := stepRowLabel(row.node)
-	fixed := lipgloss.Width(m.renderTreeRowLabel(row.node, row.node == m.selectedNode(), row.suppressStatus, row.depth, suffix))
+	fixed := lipgloss.Width(m.renderTreeRowLabel(row.node, row.node == m.selectedNode(), row.staticInProgress, row.depth, suffix))
 	nameWidth := max(0, width-fixed)
 	label := suffix
 	if nameWidth > 0 {
 		label = runewidth.Truncate(base, nameWidth, "…") + suffix
 	}
-	fitted := m.renderTreeRowLabel(row.node, row.node == m.selectedNode(), row.suppressStatus, row.depth, label)
+	fitted := m.renderTreeRowLabel(row.node, row.node == m.selectedNode(), row.staticInProgress, row.depth, label)
 	if lipgloss.Width(fitted) > width {
 		return runewidth.Truncate(tuistyle.Sanitize(fitted), width, "…")
 	}
@@ -289,8 +289,8 @@ func (m *Model) fitTreeRow(row renderedStepRow, width int) string {
 }
 
 // expansionHasInProgressChild reports whether any expansion row refers to a
-// node whose status is in-progress. Used to suppress the parent's own
-// status indicator so only one in-progress glyph renders at a time.
+// node whose status is in-progress. The parent then keeps a static indicator
+// while the active descendant owns the live blink.
 func expansionHasInProgressChild(rows []renderedStepRow) bool {
 	for _, r := range rows {
 		if r.node != nil && r.node.Status == StatusInProgress {
@@ -300,15 +300,15 @@ func expansionHasInProgressChild(rows []renderedStepRow) bool {
 	return false
 }
 
-func (m *Model) renderStepRow(n *StepNode, selected, suppressStatus bool) string {
+func (m *Model) renderStepRow(n *StepNode, selected, staticInProgress bool) string {
 	prefix := "   "
 	if selected {
 		prefix = tuistyle.CursorStyle.Render("▶") + "  "
 	}
 
 	typeCol, label, glyph := m.stepRowParts(n)
-	if suppressStatus {
-		glyph = " "
+	if staticInProgress {
+		glyph = styledStatusGlyph(StatusInProgress)
 	}
 
 	style := defaultTextStyle
