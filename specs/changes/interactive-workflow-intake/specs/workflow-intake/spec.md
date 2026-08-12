@@ -2,7 +2,7 @@
 
 ### Requirement: Intake conversation responsibilities
 
-The intake workflow SHALL present the user with an interactive agent session that is able to inspect the repository, research the problem, and recommend a course of action, and that is enabled to submit a route. The session SHALL become usable immediately: the agent SHALL return the first turn to the user rather than orienting itself first, and SHALL begin inspecting the repository or the workflow catalog only once the user has asked for something that requires it. Where the agent CLI accepts the step's instructions as a system prompt, the message visible in the conversation SHALL be a greeting rather than a generated step announcement. The agent SHALL recommend; the human SHALL decide, and the agent SHALL NOT commit the user to an implementation path without the user's agreement in the conversation. Agent Runner SHALL supply a run-owned path at which the agent writes the handoff, so that its location is known to the runner whether or not a route is ever submitted.
+The intake workflow SHALL present the user with an interactive agent session that is able to inspect the repository, research the problem, and recommend a course of action, and that is enabled to submit a route. The session SHALL become usable immediately: the agent SHALL return the first turn to the user rather than orienting itself first, and SHALL begin inspecting the repository or the workflow catalog only once the user has asked for something that requires it. Where the agent CLI accepts the step's instructions as a system prompt, the message visible in the conversation SHALL be a greeting rather than a generated step announcement. The agent SHALL recommend; the human SHALL decide, and the agent SHALL NOT commit the user to an implementation path without the user's agreement in the conversation. The agent SHALL write its chosen route, parameters, and concise handoff text in the single route request supplied by Agent Runner.
 
 #### Scenario: Intake presents a capable conversational agent
 - **WHEN** an intake run reaches its agent step
@@ -22,22 +22,22 @@ The intake workflow SHALL present the user with an interactive agent session tha
 - **THEN** the message visible in the conversation is a short greeting rather than a generated step announcement
 - **AND** the step's instructions still reach the agent
 
-#### Scenario: Handoff location is runner-owned
-- **WHEN** the intake agent writes a handoff
-- **THEN** it writes to the run-owned path Agent Runner supplied
-- **AND** Agent Runner can report that path even when no route was ever submitted
+#### Scenario: Intake writes one submission artifact
+- **WHEN** the user approves a route
+- **THEN** the intake agent writes the route and handoff text to the runner-provided route request
+- **AND** it does not write a separate handoff file
 
-### Requirement: Shipped workflows consume the handoff
+### Requirement: Launched workflows receive the handoff
 
-The built-in workflows that intake most commonly routes to SHALL receive the handoff when one is present. Specifically, the first agent step of the shared change-definition workflow and of the simple-change workflow SHALL carry the handoff contents in its prompt through `{{intake_handoff}}`, and SHALL behave exactly as they do today when that value is empty. Because the contents arrive in the prompt, these workflows SHALL NOT direct the agent to open a handoff file, so consuming the handoff does not depend on the agent electing to read one. Exact prompt wording is an implementation detail.
+Every workflow launched from intake SHALL receive the handoff in its first agent prompt without workflow-specific interpolation or file-reading instructions. A directly invoked workflow SHALL behave as it does today because it has no intake handoff.
 
 #### Scenario: Change definition receives an intake handoff
 - **WHEN** the shared change-definition workflow is launched from intake
-- **THEN** its first agent step's prompt carries the handoff contents, without instructing the agent to read a file
+- **THEN** its first agent step's prompt carries the handoff contents automatically
 
 #### Scenario: Simple change receives an intake handoff
 - **WHEN** the simple-change workflow is launched from intake
-- **THEN** its first agent step's prompt carries the handoff contents, without instructing the agent to read a file
+- **THEN** its first agent step's prompt carries the handoff contents automatically
 
 #### Scenario: Direct invocation is unchanged
 - **WHEN** either workflow is invoked directly, so the handoff value is empty
@@ -130,17 +130,12 @@ Intake SHALL require that both stdin and stdout are real interactive terminals, 
 
 ### Requirement: Exploration-only completion
 
-An intake run whose agent step completes without an accepted route SHALL finish successfully, SHALL NOT launch any workflow, and SHALL preserve any handoff the agent wrote. Because the handoff path is runner-owned rather than supplied by the agent, Agent Runner SHALL be able to report that location whenever the file exists and is non-empty, even though no route request was ever submitted.
+An intake run whose agent step completes without an accepted route SHALL finish successfully and SHALL NOT launch any workflow.
 
 #### Scenario: Completing with no route launches nothing
 - **WHEN** the intake agent completes its step and no route was ever accepted
 - **THEN** the intake run finishes with a success outcome
 - **AND** no new run is created
-
-#### Scenario: Handoff written without a route is preserved
-- **WHEN** the intake agent wrote a handoff but completed the step without submitting a route
-- **THEN** the handoff file remains readable after the run finishes
-- **AND** Agent Runner reports its path
 
 ### Requirement: Launching the selected workflow
 
@@ -150,7 +145,7 @@ When those conditions hold, Agent Runner SHALL start exactly one new top-level r
 
 Launching SHALL be a property of the intake run rather than of the entry point used to start it, so an intake run started by workflow name launches identically to one started through `-i` or the New tab entry, and the transition SHALL occur without requiring the user to dismiss a completed-run view first.
 
-The launched run's first agent session SHALL be fresh and SHALL NOT inherit the intake conversation. The sealed handoff SHALL be copied into the launched run's own directory so the launched run does not depend on the intake run's directory surviving.
+The launched run's first agent session SHALL be fresh and SHALL NOT inherit the intake conversation. Its state SHALL contain the sealed handoff text so the launched run does not depend on the intake run's directory surviving.
 
 #### Scenario: Exactly one run is launched
 - **WHEN** an intake run finishes successfully with a frozen route and completed state
@@ -201,7 +196,7 @@ The launched run SHALL record the intake run's ID, its own run ID, and the workf
 
 ### Requirement: Launch failure and interruption recovery
 
-If starting the launched run fails, Agent Runner SHALL exit nonzero, report the failure and the sealed handoff path, and SHALL NOT leave a partially created run behind.
+If starting the launched run fails, Agent Runner SHALL exit nonzero, report the failure, and SHALL NOT leave a partially created run behind.
 
 A frozen route SHALL be immutable: it survives interruption and failure, and no later submission may replace it. When an intake run freezes a route but then fails — most commonly because turn durability could not be confirmed after completion was accepted — Agent Runner SHALL retain the frozen route, launch nothing, and allow the run to be resumed. A resumed attempt SHALL retry completion against that same frozen route, and a successful resumed attempt SHALL launch it. This preserves a decision the user actually made without acting on a turn that was never durably recorded.
 
@@ -209,7 +204,7 @@ If the process is terminated after the route freezes and after the run completed
 
 #### Scenario: Launch failure leaves no partial run
 - **WHEN** starting the launched run fails
-- **THEN** Agent Runner exits nonzero, reports the cause and the sealed handoff path
+- **THEN** Agent Runner exits nonzero and reports the cause
 - **AND** no new run directory is left behind
 
 #### Scenario: Durability failure after freeze does not launch

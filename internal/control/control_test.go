@@ -121,11 +121,7 @@ func TestControlServerStagesRouteThenFreezesItBeforeCompletionAcknowledgement(t 
 	server := newTestControlServer(t, runDir, logger)
 	defer server.Close()
 
-	handoff := filepath.Join(runDir, "intake-handoff.md")
-	if err := os.WriteFile(handoff, []byte("agreed plan\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target","handoff":"agreed plan"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store := intakeroute.NewStore(runDir)
@@ -135,7 +131,6 @@ func TestControlServerStagesRouteThenFreezesItBeforeCompletionAcknowledgement(t 
 		RouteValidation: &intakeroute.ValidateOptions{
 			RunDir: runDir, ParentRunID: "run", IntakeWorkflow: "core:intake",
 			RequestPath: filepath.Join(runDir, "route-request.json"),
-			HandoffPath: filepath.Join(runDir, "intake-handoff.md"),
 			Catalog:     intakeroute.NewCatalog([]discovery.WorkflowEntry{{CanonicalName: "target", SourcePath: "builtin:core/target-v1.0.yaml"}}),
 		},
 	})
@@ -161,19 +156,75 @@ func TestControlServerStagesRouteThenFreezesItBeforeCompletionAcknowledgement(t 
 	}
 }
 
+func TestControlServerCoalescesConcurrentRouteRetries(t *testing.T) {
+	runDir := t.TempDir()
+	logger := &recordingEventLogger{}
+	server := newTestControlServer(t, runDir, logger)
+	defer server.Close()
+	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target","handoff":"agreed plan"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	catalog := &barrierCatalog{
+		inner: intakeroute.NewCatalog([]discovery.WorkflowEntry{{CanonicalName: "target", SourcePath: "builtin:core/target-v1.0.yaml"}}),
+		ready: make(chan struct{}),
+	}
+	store := &countingRouteStore{inner: intakeroute.NewStore(runDir)}
+	attempt := server.ActivateAttempt(context.Background(), "plan", AttemptOptions{
+		RouteEligible: true,
+		RouteStore:    store,
+		RouteValidation: &intakeroute.ValidateOptions{
+			RunDir: runDir, ParentRunID: "run", IntakeWorkflow: "core:intake",
+			RequestPath: filepath.Join(runDir, "route-request.json"), Catalog: catalog,
+		},
+	})
+	request := controlRequest{
+		Type: MessageSubmitRoute, RunID: attempt.RunID, StepID: attempt.StepID,
+		Token: attempt.Token, RequestID: "route",
+	}
+	responses := make(chan controlResponse, 2)
+	go func() { responses <- exchange(t, server.SocketPath(), &request) }()
+	waitFor(t, func() bool { return catalog.arrivals.Load() == 1 }, "first route validation")
+	go func() { responses <- exchange(t, server.SocketPath(), &request) }()
+	waitFor(t, func() bool {
+		server.mu.Lock()
+		defer server.mu.Unlock()
+		pending := server.routePending[requestCacheKey(&request)]
+		return pending != nil && pending.waiters == 1
+	}, "concurrent route retry")
+	close(catalog.ready)
+	for range 2 {
+		if response := <-responses; !response.OK || response.Receipt != "route" {
+			t.Fatalf("submit route response = %#v", response)
+		}
+	}
+
+	if got := store.stages.Load(); got != 1 {
+		t.Fatalf("route stage calls = %d, want 1", got)
+	}
+	var submitted, accepted int
+	for _, event := range logger.snapshot() {
+		switch event.Type {
+		case audit.EventRouteSubmitted:
+			submitted++
+		case audit.EventRouteAccepted:
+			accepted++
+		}
+	}
+	if submitted != 1 || accepted != 1 {
+		t.Fatalf("route audit events: submitted=%d accepted=%d, want one each", submitted, accepted)
+	}
+}
+
 func TestControlServerDiscardsPreparedRouteWhenPublicationFails(t *testing.T) {
 	runDir := t.TempDir()
 	server := newTestControlServer(t, runDir, &recordingEventLogger{})
 	defer server.Close()
-	handoff := filepath.Join(runDir, "intake-handoff.md")
-	if err := os.WriteFile(handoff, []byte("notes\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target","handoff":"notes"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store := intakeroute.NewStore(runDir)
-	if err := store.Stage(mustPrepareRoute(t, runDir, handoff)); err != nil {
+	if err := store.Stage(mustPrepareRoute(t, runDir)); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Freeze(); err != nil {
@@ -184,29 +235,20 @@ func TestControlServerDiscardsPreparedRouteWhenPublicationFails(t *testing.T) {
 	if response.OK || !strings.Contains(response.Error, "already frozen") {
 		t.Fatalf("response = %#v", response)
 	}
-	entries, err := os.ReadDir(runDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".intake-route-") {
-			t.Fatalf("temporary snapshot remained after rejected publication: %s", entry.Name())
-		}
-	}
 }
 
 func testRouteAttemptOptions(runDir string, store *intakeroute.Store) AttemptOptions {
 	return AttemptOptions{RouteEligible: true, RouteStore: store, RouteValidation: &intakeroute.ValidateOptions{
 		RunDir: runDir, ParentRunID: "run", IntakeWorkflow: "core:intake",
-		RequestPath: filepath.Join(runDir, "route-request.json"), HandoffPath: filepath.Join(runDir, "intake-handoff.md"),
-		Catalog: intakeroute.NewCatalog([]discovery.WorkflowEntry{{CanonicalName: "target", SourcePath: "builtin:core/target-v1.0.yaml"}}),
+		RequestPath: filepath.Join(runDir, "route-request.json"),
+		Catalog:     intakeroute.NewCatalog([]discovery.WorkflowEntry{{CanonicalName: "target", SourcePath: "builtin:core/target-v1.0.yaml"}}),
 	}}
 }
 
-func mustPrepareRoute(t *testing.T, runDir, handoff string) *intakeroute.Prepared {
+func mustPrepareRoute(t *testing.T, runDir string) *intakeroute.Prepared {
 	t.Helper()
 	prepared, err := intakeroute.Validate(&intakeroute.ValidateOptions{
-		RunDir: runDir, ParentRunID: "run", IntakeWorkflow: "core:intake", HandoffPath: handoff,
+		RunDir: runDir, ParentRunID: "run", IntakeWorkflow: "core:intake",
 		Catalog: intakeroute.NewCatalog([]discovery.WorkflowEntry{{CanonicalName: "target", SourcePath: "builtin:core/target-v1.0.yaml"}}),
 	})
 	if err != nil {
@@ -1115,6 +1157,41 @@ type failingFreezeStore struct {
 	freezeErr error
 }
 
+type countingRouteStore struct {
+	inner  *intakeroute.Store
+	stages atomic.Int32
+}
+
+func (s *countingRouteStore) Stage(route *intakeroute.Prepared) error {
+	s.stages.Add(1)
+	return s.inner.Stage(route)
+}
+
+func (s *countingRouteStore) Freeze() error { return s.inner.Freeze() }
+
+type barrierCatalog struct {
+	inner    intakeroute.Catalog
+	arrivals atomic.Int32
+	ready    chan struct{}
+}
+
+func (c *barrierCatalog) ResolveWorkflow(name string) (discovery.WorkflowEntry, error) {
+	c.arrivals.Add(1)
+	<-c.ready
+	return c.inner.ResolveWorkflow(name)
+}
+
+func waitFor(t *testing.T, condition func() bool, description string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for !condition() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", description)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func (s *failingFreezeStore) Stage(p *intakeroute.Prepared) error { return s.inner.Stage(p) }
 func (s *failingFreezeStore) Freeze() error                       { return s.freezeErr }
 
@@ -1127,11 +1204,7 @@ func TestControlServerRejectsCompletionWhenFreezeFails(t *testing.T) {
 	server := newTestControlServer(t, runDir, &recordingEventLogger{})
 	defer server.Close()
 
-	handoff := filepath.Join(runDir, "intake-handoff.md")
-	if err := os.WriteFile(handoff, []byte("agreed plan\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target","handoff":"agreed plan"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1142,7 +1215,6 @@ func TestControlServerRejectsCompletionWhenFreezeFails(t *testing.T) {
 		RouteValidation: &intakeroute.ValidateOptions{
 			RunDir: runDir, ParentRunID: "run", IntakeWorkflow: "core:intake",
 			RequestPath: filepath.Join(runDir, "route-request.json"),
-			HandoffPath: handoff,
 			Catalog:     intakeroute.NewCatalog([]discovery.WorkflowEntry{{CanonicalName: "target", SourcePath: "builtin:core/target-v1.0.yaml"}}),
 		},
 	})

@@ -410,7 +410,7 @@ func run() int {
 		intake: *intakeFlag, headless: *headlessFlag, list: *listFlag, resume: *resumeFlag,
 		inspect: *inspectFlag, validate: *validateFlag, onboardingFrom: strings.TrimSpace(*onboardingFromFlag),
 		args: args, cli: strings.TrimSpace(*cliFlag), model: strings.TrimSpace(*modelFlag),
-		profileOverride: commandFlags{profile: profileValue, profileSet: profileSet}.profileOverride(),
+		profileOverride: (&commandFlags{profile: profileValue, profileSet: profileSet}).profileOverride(),
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
@@ -423,7 +423,7 @@ func run() int {
 		}
 	}
 
-	return dispatchRunCommand(args, commandFlags{
+	return dispatchRunCommand(args, &commandFlags{
 		validate:       *validateFlag,
 		inspect:        *inspectFlag,
 		list:           *listFlag,
@@ -587,7 +587,7 @@ func intakeProfileModel(profileOverride config.ProfileOverride) (string, error) 
 	return resolved.Model, nil
 }
 
-func dispatchRunCommand(args []string, opts commandFlags) int {
+func dispatchRunCommand(args []string, opts *commandFlags) int {
 	if isRunCommandHelp(args) {
 		printRunUsage(os.Stderr)
 		return 0
@@ -611,7 +611,7 @@ func dispatchRunCommand(args []string, opts commandFlags) int {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 			return 1
 		}
-		return handleRunWithRunOptions([]string{workflowFile}, runCommandOptions{
+		return handleRunWithRunOptions([]string{workflowFile}, &runCommandOptions{
 			headless: opts.headless, agentOverride: opts.agentOverride, profileOverride: opts.profileOverride(),
 		}).exitCode
 	}
@@ -642,7 +642,7 @@ func dispatchRunCommand(args []string, opts commandFlags) int {
 				fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 				return 1
 			}
-			return handleOnboardingFromRun(ref, opts.onboardingFrom, runCommandOptions{profileOverride: opts.profileOverride()})
+			return handleOnboardingFromRun(ref, opts.onboardingFrom, &runCommandOptions{profileOverride: opts.profileOverride()})
 		}
 		return handleListWithDeps(listview.InitialTabNew, defaultFirstRunDeps)
 	}
@@ -663,13 +663,13 @@ func dispatchRunCommand(args []string, opts commandFlags) int {
 			return 1
 		}
 		runOpts.profileOverride = opts.profileOverride()
-		return handleOnboardingFromRun(workflowFile, opts.onboardingFrom, runOpts, args[1:]...)
+		return handleOnboardingFromRun(workflowFile, opts.onboardingFrom, &runOpts, args[1:]...)
 	}
 	runOpts.profileOverride = opts.profileOverride()
-	return handleRunWithRunOptions(append([]string{workflowFile}, args[1:]...), runOpts).exitCode
+	return handleRunWithRunOptions(append([]string{workflowFile}, args[1:]...), &runOpts).exitCode
 }
 
-func (opts commandFlags) profileOverride() config.ProfileOverride {
+func (opts *commandFlags) profileOverride() config.ProfileOverride {
 	if !opts.profileSet {
 		return config.ProfileOverride{}
 	}
@@ -805,7 +805,7 @@ func handleResumeWithOptions(sessionID string, liveOpts liveTUIOptions, profile 
 		return 1
 	}
 
-	return launchResultAfterRun(runLiveTUIWithResult(h, liveOpts), false).exitCode
+	return launchResultAfterRun(runLiveTUIWithResult(h, liveOpts)).exitCode
 }
 
 // resumeInspectPaths maps a resume state-file path to the session and project
@@ -1239,7 +1239,7 @@ func launchFrozenIntakeRoute(result runner.WorkflowResult, sessionDir string) in
 	code := execSelfWithEnv([]string{liveRunImmediateAltScreenEnv + "=1"}, "internal", "launch-intake-route", routePath)
 	if code != 0 {
 		launchErr := fmt.Errorf("exec launch-intake-route exited with code %d", code)
-		fmt.Fprintf(os.Stderr, "agent-runner: intake route launch failed: %v\nagent-runner: sealed handoff: %s\n", launchErr, sealed.HandoffPath)
+		fmt.Fprintf(os.Stderr, "agent-runner: intake route launch failed: %v\n", launchErr)
 		if err := appendRouteLaunchEvent(sessionDir, audit.EventRouteLaunchFailed, sealed, launchErr); err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: record failed intake route launch: %v\n", err)
 		}
@@ -1268,10 +1268,10 @@ func appendRouteLaunchEvent(sessionDir string, eventType audit.EventType, sealed
 	}
 	defer logger.Close()
 	data := map[string]any{
-		"workflow":     sealed.Workflow,
-		"source_ref":   sealed.SourceRef,
-		"params":       sealed.Params,
-		"handoff_path": sealed.HandoffPath,
+		"workflow":      sealed.Workflow,
+		"source_ref":    sealed.SourceRef,
+		"params":        sealed.Params,
+		"handoff_bytes": len(sealed.Handoff),
 	}
 	if launchErr != nil {
 		data["error"] = launchErr.Error()
@@ -1976,7 +1976,7 @@ func pathBase(value string) string {
 }
 
 func handleRunWithResult(args []string, liveOpts liveTUIOptions) liveTUIResult {
-	return handleRunWithRunOptions(args, runCommandOptions{liveOpts: liveOpts})
+	return handleRunWithRunOptions(args, &runCommandOptions{liveOpts: liveOpts})
 }
 
 type runCommandOptions struct {
@@ -1992,16 +1992,16 @@ type runCommandOptions struct {
 // Both direct CLI launches and sealed intake routes use this exact sequence so
 // validation and engine setup cannot drift between the two entry points.
 type freshRunRequest struct {
-	SourceRef           string
-	Positional          []string
-	Keyed               map[string]string
-	From                string
-	Until               string
-	AgentOverride       *model.AgentOverride
-	ProfileOverride     config.ProfileOverride
-	IntakeParentRunID   string
-	IntakeHandoffSource string
-	Log                 iexec.Logger
+	SourceRef             string
+	Positional            []string
+	Keyed                 map[string]string
+	From                  string
+	Until                 string
+	AgentOverride         *model.AgentOverride
+	ProfileOverride       config.ProfileOverride
+	IntakeParentRunID     string
+	IntakeHandoffContents string
+	Log                   iexec.Logger
 }
 
 func prepareFreshRun(req *freshRunRequest) (*runner.RunHandle, error) {
@@ -2037,18 +2037,18 @@ func prepareFreshRun(req *freshRunRequest) (*runner.RunHandle, error) {
 		log = &realLogger{}
 	}
 	return runner.PrepareRun(&workflow, params, &runner.Options{
-		ProfileOverride:     req.ProfileOverride,
-		ProfileStore:        profileStore,
-		WorkflowFile:        req.SourceRef,
-		From:                req.From,
-		Until:               req.Until,
-		AgentOverride:       req.AgentOverride,
-		IntakeParentRunID:   req.IntakeParentRunID,
-		IntakeHandoffSource: req.IntakeHandoffSource,
-		Engine:              eng,
-		ProcessRunner:       &realProcessRunner{},
-		GlobExpander:        &realGlobExpander{},
-		Log:                 log,
+		ProfileOverride:       req.ProfileOverride,
+		ProfileStore:          profileStore,
+		WorkflowFile:          req.SourceRef,
+		From:                  req.From,
+		Until:                 req.Until,
+		AgentOverride:         req.AgentOverride,
+		IntakeParentRunID:     req.IntakeParentRunID,
+		IntakeHandoffContents: req.IntakeHandoffContents,
+		Engine:                eng,
+		ProcessRunner:         &realProcessRunner{},
+		GlobExpander:          &realGlobExpander{},
+		Log:                   log,
 	})
 }
 
@@ -2063,7 +2063,7 @@ func validateIntakeRunInvocation(workflowFile string, headless bool) error {
 	return nil
 }
 
-func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIResult {
+func handleRunWithRunOptions(args []string, runOpts *runCommandOptions) liveTUIResult {
 	liveOpts := runOpts.liveOpts.withEnv()
 	workflowFile := args[0]
 	if err := validateIntakeRunInvocation(workflowFile, runOpts.headless); err != nil {
@@ -2107,7 +2107,7 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 			GlobExpander:  &realGlobExpander{},
 			Log:           &realLogger{},
 		})
-		return launchResultAfterRun(liveTUIResult{workflowResult: result, sessionDir: h.SessionDir, exitCode: resultExitCode(result)}, isIntakeWorkflow(workflowFile))
+		return launchResultAfterRun(liveTUIResult{workflowResult: result, sessionDir: h.SessionDir, exitCode: resultExitCode(result)})
 	}
 
 	if code := ensureThemeForTUI(defaultThemeDeps); code != 0 {
@@ -2120,7 +2120,7 @@ func handleRunWithRunOptions(args []string, runOpts runCommandOptions) liveTUIRe
 		return liveTUIResult{exitCode: 1}
 	}
 
-	return launchResultAfterRun(runLiveTUIWithResult(h, liveOpts), isIntakeWorkflow(workflowFile))
+	return launchResultAfterRun(runLiveTUIWithResult(h, liveOpts))
 }
 
 func resultExitCode(result runner.WorkflowResult) int {
@@ -2130,7 +2130,7 @@ func resultExitCode(result runner.WorkflowResult) int {
 	return 0
 }
 
-func launchResultAfterRun(result liveTUIResult, reportExplorationHandoff bool) liveTUIResult {
+func launchResultAfterRun(result liveTUIResult) liveTUIResult {
 	if result.workflowResult != runner.ResultSuccess || result.sessionDir == "" {
 		return result
 	}
@@ -2138,31 +2138,10 @@ func launchResultAfterRun(result liveTUIResult, reportExplorationHandoff bool) l
 		result.exitCode = code
 		return result
 	}
-	if reportExplorationHandoff {
-		if handoff := explorationHandoffPath(result.sessionDir); handoff != "" {
-			fmt.Printf("agent-runner: intake handoff preserved at %s\n", handoff)
-		}
-	}
 	return result
 }
 
-func explorationHandoffPath(sessionDir string) string {
-	if _, err := os.Stat(intakeroute.SidecarPath(sessionDir)); err == nil {
-		return ""
-	}
-	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
-	if err != nil || !state.Completed || !isIntakeWorkflow(state.WorkflowFile) {
-		return ""
-	}
-	handoff := intakeroute.HandoffPathFor(sessionDir)
-	info, err := os.Stat(handoff)
-	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
-		return ""
-	}
-	return handoff
-}
-
-func handleOnboardingFromRun(workflowFile, from string, runOpts runCommandOptions, args ...string) int {
+func handleOnboardingFromRun(workflowFile, from string, runOpts *runCommandOptions, args ...string) int {
 	runArgs := append([]string{workflowFile}, args...)
 	runOpts.from = from
 	result := handleRunWithRunOptions(runArgs, runOpts)
@@ -2292,7 +2271,7 @@ func firstRunDepsWithOnboardingFrom(from string) firstRunDeps {
 		return runOnboardingDemoLaunchFlowFrom(from)
 	}
 	deps.runWorkflow = func(ref string) firstRunWorkflowResult {
-		result := handleRunWithRunOptions([]string{ref}, runCommandOptions{
+		result := handleRunWithRunOptions([]string{ref}, &runCommandOptions{
 			liveOpts: liveTUIOptions{quitOnDone: true, startInAltScreen: true},
 			from:     from,
 		})

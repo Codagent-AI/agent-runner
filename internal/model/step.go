@@ -46,8 +46,8 @@ const (
 	RunnerToolSubmitRoute RunnerTool = "submit_route"
 )
 
-// IntakeHandoffVar is the built-in template variable carrying the sealed intake
-// handoff path. Unlike other built-ins it is reserved: params and every capture
+// IntakeHandoffVar is the built-in template variable carrying sealed intake
+// handoff text. Unlike other built-ins it is reserved: params and every capture
 // sink reject it, so the sealed path cannot be shadowed. Reservation checks and
 // the built-in itself share this name rather than repeating the literal.
 const IntakeHandoffVar = "intake_handoff"

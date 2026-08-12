@@ -3,7 +3,6 @@ package runner
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -15,7 +14,6 @@ import (
 	"github.com/codagent/agent-runner/internal/control"
 	"github.com/codagent/agent-runner/internal/engine"
 	"github.com/codagent/agent-runner/internal/exec"
-	"github.com/codagent/agent-runner/internal/intakeroute"
 	"github.com/codagent/agent-runner/internal/interactive"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/metrics"
@@ -41,22 +39,8 @@ type Options struct {
 	From         string
 	Until        string
 	WorkflowFile string
-	// IntakeHandoffSource is the sealed handoff to copy into a newly prepared
-	// intake-launched run. IntakeHandoff restores that copied destination on
-	// resume and is never copied again.
-	//
-	// Precedence when both are set: IntakeHandoffSource wins, because a fresh
-	// preparation always copies and then overwrites IntakeHandoff with the
-	// destination it just wrote. Set exactly one — Source for a fresh launch,
-	// IntakeHandoff for resume.
-	//
-	// The copy uses exclusive creation, so preparing into a caller-supplied
-	// session directory that already holds an intake handoff fails rather than
-	// silently replacing provenance from an earlier preparation.
-	IntakeHandoffSource string
-	IntakeHandoff       string
-	// IntakeHandoffContents restores the already-bounded handoff text on resume.
-	// Leave empty for a fresh launch; preparation reads it from the copied file.
+	// IntakeHandoffContents carries the sealed intake handoff into a fresh run or
+	// restores it on resume. It is internal provenance, not a user parameter.
 	IntakeHandoffContents string
 	IntakeParentRunID     string
 	AgentOverride         *model.AgentOverride
@@ -479,7 +463,6 @@ func buildExecutionContext(
 		AutonomousBackend:        string(settings.AutonomousBackend),
 		AutonomousPermissionMode: string(usersettings.EffectiveAutonomousPermissionMode(settings.AutonomousPermissionMode)),
 		SessionDir:               sessionDir,
-		IntakeHandoff:            opts.IntakeHandoff,
 		IntakeHandoffContents:    opts.IntakeHandoffContents,
 		IntakeParentRunID:        opts.IntakeParentRunID,
 		AgentOverride:            opts.AgentOverride,
@@ -763,18 +746,6 @@ func PrepareRun(workflow *model.Workflow, params map[string]string, opts *Option
 	if err != nil {
 		return nil, err
 	}
-	if err := copyIntakeHandoff(opts.IntakeHandoffSource, rs); err != nil {
-		newRunSessionCleanup(rs.sessionDir, opts)(rs.auditLogger)
-		return nil, err
-	}
-	// Runs on both fresh launches and resumes: copyIntakeHandoff has just set the
-	// destination for the former, and initRunState restored it from state for the
-	// latter, so this reads whichever handoff this run actually owns.
-	if err := loadIntakeHandoffContents(rs); err != nil {
-		newRunSessionCleanup(rs.sessionDir, opts)(rs.auditLogger)
-		return nil, err
-	}
-
 	startIndex, err := resolveStartIndex(workflow, opts.From)
 	if err != nil {
 		// initRunState already created the session dir, lock file, and audit
@@ -819,7 +790,6 @@ func initialRunState(workflow *model.Workflow, rs *runState, opts *Options) *mod
 		WorkflowName:          workflow.Name,
 		Params:                rs.ctx.Params,
 		WorkflowHash:          rs.workflowHash,
-		IntakeHandoff:         rs.ctx.IntakeHandoff,
 		IntakeHandoffContents: rs.ctx.IntakeHandoffContents,
 		IntakeParentRunID:     rs.ctx.IntakeParentRunID,
 		AgentOverride:         rs.ctx.AgentOverride,
@@ -947,7 +917,6 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 		CurrentStep:           model.CurrentStep{Nested: nested},
 		Params:                ctx.Params,
 		WorkflowHash:          workflowHash,
-		IntakeHandoff:         ctx.IntakeHandoff,
 		IntakeHandoffContents: ctx.IntakeHandoffContents,
 		IntakeParentRunID:     ctx.IntakeParentRunID,
 		AgentOverride:         ctx.AgentOverride,
@@ -961,57 +930,6 @@ func resolvedProfileSet(ctx *model.ExecutionContext) string {
 		return cfg.ResolvedProfile
 	}
 	return ""
-}
-
-func copyIntakeHandoff(source string, rs *runState) error {
-	if source == "" {
-		return nil
-	}
-
-	destination, err := filepath.Abs(intakeroute.HandoffPathFor(rs.sessionDir))
-	if err != nil {
-		return fmt.Errorf("resolve intake handoff destination: %w", err)
-	}
-	input, err := os.Open(source) // #nosec G304 -- source is a sealed intake artifact supplied by the launcher.
-	if err != nil {
-		return fmt.Errorf("open intake handoff source: %w", err)
-	}
-	defer func() { _ = input.Close() }()
-
-	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- destination is fixed beneath the new session directory.
-	if err != nil {
-		return fmt.Errorf("create intake handoff copy: %w", err)
-	}
-	if _, err := io.Copy(output, input); err != nil {
-		_ = output.Close()
-		_ = os.Remove(destination)
-		return fmt.Errorf("copy intake handoff: %w", err)
-	}
-	if err := output.Close(); err != nil {
-		_ = os.Remove(destination)
-		return fmt.Errorf("close intake handoff copy: %w", err)
-	}
-	rs.ctx.IntakeHandoff = destination
-	return nil
-}
-
-// loadIntakeHandoffContents reads the run's own handoff copy once, at first
-// preparation, and seeds the text that {{intake_handoff}} interpolates to.
-//
-// It deliberately does nothing when the value is already present: on resume the
-// contents come back from state, and re-reading the file would let a rewrite of
-// the run's own handoff copy change what a resumed step sees.
-func loadIntakeHandoffContents(rs *runState) error {
-	handoffPath := rs.ctx.IntakeHandoff
-	if handoffPath == "" || rs.ctx.IntakeHandoffContents != "" {
-		return nil
-	}
-	raw, err := os.ReadFile(handoffPath) // #nosec G304 -- run-owned handoff copy beneath the session directory.
-	if err != nil {
-		return fmt.Errorf("read intake handoff: %w", err)
-	}
-	rs.ctx.IntakeHandoffContents = intakeroute.InlineHandoffValue(raw, handoffPath)
-	return nil
 }
 
 func contextSnapshot(ctx *model.ExecutionContext) map[string]any {

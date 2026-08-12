@@ -26,16 +26,12 @@ import (
 // state must remain independently owned by its run sidecar.
 func TestWriteStepStateDoesNotClobberIntakeRoute(t *testing.T) {
 	runDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(runDir, "handoff.md"), []byte("sealed notes"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target","handoff":"sealed notes"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	prepared, err := intakeroute.Validate(&intakeroute.ValidateOptions{
 		RunDir: runDir, ParentRunID: "parent", IntakeWorkflow: "core:intake",
-		HandoffPath: filepath.Join(runDir, "handoff.md"),
-		Catalog:     intakeroute.NewCatalog([]discovery.WorkflowEntry{{CanonicalName: "target", SourcePath: "builtin:core/target-v1.0.yaml"}}),
+		Catalog: intakeroute.NewCatalog([]discovery.WorkflowEntry{{CanonicalName: "target", SourcePath: "builtin:core/target-v1.0.yaml"}}),
 	})
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)

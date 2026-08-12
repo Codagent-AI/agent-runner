@@ -2225,3 +2225,49 @@ func assertControlCompletionInstruction(t *testing.T, prompt string) {
 		}
 	}
 }
+
+func TestBuildAgentPromptAutomaticallyPrependsIntakeHandoffToFirstAgent(t *testing.T) {
+	t.Parallel()
+
+	step := &model.Step{ID: "plan", Prompt: "Plan the change."}
+	ctx := &model.ExecutionContext{
+		Params:                map[string]string{},
+		CapturedVariables:     map[string]model.CapturedValue{},
+		IntakeHandoffContents: "Goal: update the harness.\nConstraint: keep the change small.",
+	}
+
+	prompt, _, err := buildAgentPrompt(step, ctx)
+	if err != nil {
+		t.Fatalf("buildAgentPrompt() error = %v", err)
+	}
+	for _, want := range []string{
+		"Context from the intake conversation",
+		"Goal: update the harness.",
+		"Constraint: keep the change small.",
+		"Plan the change.",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt = %q, want %q", prompt, want)
+		}
+	}
+}
+
+func TestBuildAgentPromptDoesNotRepeatIntakeHandoffAfterAnAgentSessionStarted(t *testing.T) {
+	t.Parallel()
+
+	step := &model.Step{ID: "review", Prompt: "Review the change."}
+	ctx := &model.ExecutionContext{
+		Params:                map[string]string{},
+		CapturedVariables:     map[string]model.CapturedValue{},
+		IntakeHandoffContents: "Goal: update the harness.",
+		LastSessionStepID:     "plan",
+	}
+
+	prompt, _, err := buildAgentPrompt(step, ctx)
+	if err != nil {
+		t.Fatalf("buildAgentPrompt() error = %v", err)
+	}
+	if strings.Contains(prompt, ctx.IntakeHandoffContents) {
+		t.Fatalf("later prompt repeated intake handoff: %q", prompt)
+	}
+}

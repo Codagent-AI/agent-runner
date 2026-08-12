@@ -78,14 +78,8 @@ type RunState struct {
 	Params       map[string]string `json:"params"`
 	WorkflowHash string            `json:"workflowHash"`
 	ProfileSet   string            `json:"profileSet,omitempty"`
-	// IntakeHandoff and IntakeParentRunID are immutable provenance seeded at
-	// run preparation and restored unchanged on resume.
-	IntakeHandoff string `json:"intakeHandoff,omitempty"`
-	// IntakeHandoffContents is the bounded handoff text as it was read when this
-	// run was first prepared. It is persisted rather than re-derived because the
-	// handoff copy lives in the run's own writable directory: re-reading it at
-	// resume time would let a later rewrite change what a resumed step sees,
-	// breaking the guarantee that resume restores the original value.
+	// IntakeHandoffContents and IntakeParentRunID are immutable provenance seeded
+	// from a frozen intake route and restored unchanged on resume.
 	IntakeHandoffContents string         `json:"intakeHandoffContents,omitempty"`
 	IntakeParentRunID     string         `json:"intakeParentRunId,omitempty"`
 	AgentOverride         *AgentOverride `json:"agentOverride,omitempty"`

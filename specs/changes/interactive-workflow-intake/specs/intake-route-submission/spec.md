@@ -2,7 +2,7 @@
 
 ### Requirement: Route request location and submission client
 
-Agent Runner SHALL provide the intake agent with the path of a run-owned route request file through the attempt environment. The binary SHALL expose `agent-runner step submit-route`, a fixed command that accepts no arguments and reads endpoint and credential data only from the inherited control environment. The command SHALL transmit no route request content: Agent Runner SHALL read the request from the path it supplied, so the submitting client cannot select or influence which file is read. The command SHALL NOT accept workflow, parameter, handoff, run, step, socket, or token values on the command line. The request schema SHALL NOT include a handoff location either: Agent Runner tells the agent where to write the handoff and validates that same path, so a request-supplied location could only echo a constant back and is rejected as an unknown field. It SHALL exit nonzero with guidance when the control environment is absent.
+Agent Runner SHALL provide the intake agent with the path of one run-owned route request file through the attempt environment. The request SHALL contain the selected workflow, its parameters, and the handoff text for the launched workflow's first agent prompt. The binary SHALL expose `agent-runner step submit-route`, a fixed command that accepts no arguments and reads endpoint and credential data only from the inherited control environment. The command SHALL transmit no route request content: Agent Runner SHALL read the request from the path it supplied, so the submitting client cannot select or influence which file is read. The command SHALL NOT accept workflow, parameter, handoff, run, step, socket, or token values on the command line. It SHALL exit nonzero with guidance when the control environment is absent.
 
 #### Scenario: Agent submits a route
 - **WHEN** the intake agent writes a valid route request to the runner-provided path and runs the exact absolute-path client inside its session
@@ -71,7 +71,7 @@ Submissions from any other step SHALL be rejected with an actionable error and a
 
 ### Requirement: Route request validation
 
-On submission, Agent Runner SHALL validate that: the request decodes as strict JSON with unknown fields rejected; the request and the run-owned handoff are within bounded sizes; the named workflow resolves through the normal workflow catalog; every parameter the workflow declares as required is supplied; no parameter the workflow does not declare is supplied; the run-owned handoff resolves to a readable, non-empty regular file; and the named workflow is not the intake workflow itself. Any failure SHALL return an actionable error to the submitting agent while its session is still active, and SHALL leave any previously staged route unchanged. When the named workflow does not resolve, the error SHALL also name the workflows that are available to route to: those that resolve through the catalog, excluding hidden workflows and the intake workflow itself.
+On submission, Agent Runner SHALL validate that: the request decodes as strict JSON with unknown fields rejected; the request and its non-empty handoff text are within bounded sizes; the named workflow resolves through the normal workflow catalog; every parameter the workflow declares as required is supplied; no parameter the workflow does not declare is supplied; and the named workflow is not the intake workflow itself. Any failure SHALL return an actionable error to the submitting agent while its session is still active, and SHALL leave any previously staged route unchanged. When the named workflow does not resolve, the error SHALL also name the workflows that are available to route to: those that resolve through the catalog, excluding hidden workflows and the intake workflow itself.
 
 #### Scenario: Unknown workflow is rejected inline
 - **WHEN** the route request names a workflow that does not resolve through the catalog
@@ -98,13 +98,13 @@ On submission, Agent Runner SHALL validate that: the request decodes as strict J
 - **THEN** the client receives an error describing the decoding failure
 - **AND** no route is staged
 
-#### Scenario: Unreadable or empty handoff is rejected
-- **WHEN** the run-owned handoff does not exist, is not a regular file, or is empty
+#### Scenario: Missing or empty handoff is rejected
+- **WHEN** the route request omits the handoff text or supplies an empty value
 - **THEN** the client receives an error describing the problem
 - **AND** no route is staged
 
 #### Scenario: Oversized input is rejected
-- **WHEN** the route request or the run-owned handoff exceeds its size bound
+- **WHEN** the route request or its handoff text exceeds its size bound
 - **THEN** the client receives an error stating the bound
 - **AND** no route is staged
 
@@ -119,13 +119,13 @@ On submission, Agent Runner SHALL validate that: the request decodes as strict J
 
 ### Requirement: Sealing on acceptance
 
-On acceptance, Agent Runner SHALL seal a snapshot of the route: it SHALL copy the handoff bytes from the same opened handle it validated, record the exact resolved workflow source reference and the normalized parameters, and publish the snapshot atomically. Later modification of the agent-writable handoff original SHALL NOT change what is launched.
+On acceptance, Agent Runner SHALL seal the route request's handoff text together with the exact resolved workflow source reference and normalized parameters, and SHALL publish that record atomically. There is no separate handoff file.
 
 The workflow guarantee is scoped to **reference** rather than **content**: the exact source reference selected at acceptance is used at launch without re-resolving the logical name, so a newer version appearing in the meantime is not selected. Editing the bytes at that same path between acceptance and launch is **not** detected, because no content snapshot or hash of the workflow definition is taken.
 
-#### Scenario: Handoff edited after acceptance does not change the launch
-- **WHEN** the agent modifies the original handoff file after its route was accepted
-- **THEN** the launched run receives the bytes sealed at acceptance, not the modified content
+#### Scenario: Handoff is part of the sealed route
+- **WHEN** a route is accepted
+- **THEN** its handoff text is persisted in the sealed route record
 
 #### Scenario: Sealed record names the exact workflow definition
 - **WHEN** a route is accepted

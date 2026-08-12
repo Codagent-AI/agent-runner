@@ -367,7 +367,6 @@ func routeValidationOptions(ctx *model.ExecutionContext) *intakeroute.ValidateOp
 	return &intakeroute.ValidateOptions{
 		RunDir: ctx.SessionDir, ParentRunID: filepath.Base(ctx.SessionDir), IntakeWorkflow: builtinworkflows.IntakeCanonicalName,
 		RequestPath: intakeroute.RequestPathFor(ctx.SessionDir),
-		HandoffPath: intakeroute.HandoffPathFor(ctx.SessionDir),
 		Catalog:     intakeroute.NewCatalog(discovery.EnumerateForProject(ctx.ProjectRoot)),
 	}
 }
@@ -1088,6 +1087,9 @@ func buildAgentPrompt(step *model.Step, ctx *model.ExecutionContext) (prompt, en
 		if result != "" {
 			enrichment = result
 		}
+	}
+	if ctx.IntakeHandoffContents != "" && ctx.LastSessionStepID == "" && !strings.Contains(prompt, ctx.IntakeHandoffContents) {
+		prompt = "Context from the intake conversation (already provided by the user; do not ask them to repeat it):\n\n" + ctx.IntakeHandoffContents + "\n\n---\n\n" + prompt
 	}
 
 	return prompt, enrichment, nil

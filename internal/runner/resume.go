@@ -71,7 +71,6 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		From:                  resumeState.fromStep,
 		WorkflowFile:          state.WorkflowFile,
 		SessionDir:            filepath.Dir(stateFilePath),
-		IntakeHandoff:         state.IntakeHandoff,
 		IntakeHandoffContents: state.IntakeHandoffContents,
 		IntakeParentRunID:     state.IntakeParentRunID,
 		AgentOverride:         state.AgentOverride,

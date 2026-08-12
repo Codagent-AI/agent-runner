@@ -48,21 +48,23 @@ func TestShippedIntakePromptTeachesTheRealRouteRequestSchema(t *testing.T) {
 	if request.Workflow == "" {
 		t.Fatal("intake prompt's example omits the required workflow field")
 	}
+	if strings.TrimSpace(request.Handoff) == "" {
+		t.Fatal("intake prompt's example omits the required handoff text")
+	}
 }
 
-func TestShippedIntakePromptDoesNotAskForARemovedHandoffField(t *testing.T) {
+func TestShippedIntakePromptCarriesHandoffInTheRouteRequest(t *testing.T) {
 	prompt := readBuiltin(t, builtinworkflows.IntakeRef())
 
-	if strings.Contains(prompt, "`handoff` (required") || strings.Contains(prompt, `"handoff":`) {
-		t.Fatal("intake prompt still documents a handoff field in the route request; the validator rejects it")
+	if !strings.Contains(prompt, "`handoff` (required") || !strings.Contains(prompt, `"handoff":`) {
+		t.Fatal("intake prompt does not teach the agent to include handoff text in the route request")
 	}
-	// The agent must still be told to write the handoff itself.
-	if !strings.Contains(prompt, "AGENT_RUNNER_INTAKE_HANDOFF") {
-		t.Fatal("intake prompt no longer tells the agent where to write the handoff")
+	if strings.Contains(prompt, "AGENT_RUNNER_INTAKE_HANDOFF") {
+		t.Fatal("intake prompt still asks the agent to write a separate handoff file")
 	}
 }
 
-func TestShippedHandoffConsumersReceiveContentsRatherThanAPath(t *testing.T) {
+func TestShippedHandoffConsumersDoNotManuallyInterpolateIntakeContext(t *testing.T) {
 	consumers := []string{
 		"builtin:core/define-change-v1.0.yaml",
 		"builtin:spec-driven/simple-change-v1.0.yaml",
@@ -72,8 +74,8 @@ func TestShippedHandoffConsumersReceiveContentsRatherThanAPath(t *testing.T) {
 		t.Run(ref, func(t *testing.T) {
 			body := readBuiltin(t, ref)
 
-			if !strings.Contains(body, "{{intake_handoff}}") {
-				t.Fatal("consumer does not reference {{intake_handoff}}, so intake context cannot reach it")
+			if strings.Contains(body, "{{intake_handoff}}") {
+				t.Fatal("consumer manually interpolates intake context instead of relying on runner prompt delivery")
 			}
 			for _, forbidden := range []string{"handoff file", "read that handoff", "handoff path"} {
 				if strings.Contains(body, forbidden) {
