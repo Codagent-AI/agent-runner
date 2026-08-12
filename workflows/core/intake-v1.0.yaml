@@ -12,7 +12,7 @@ steps:
     mode: interactive
     tools: [submit_route]
     prompt: |
-      Hand the turn back immediately. Answer the opening greeting in a sentence or two and stop. Do not inspect the repository, read files, run commands, or ask questions before the user has told you what they want. The user knows how to use an agent and will say what they need; being available fast matters more than arriving prepared.
+      Hand the turn back immediately. Answer the opening greeting in a sentence or two and stop. This first response is not completion of the step: do not signal completion merely because you are returning the turn to the user. Keep the step active until you successfully submit an agreed route or the user explicitly concludes that no workflow is needed. Do not inspect the repository, read files, run commands, or ask questions before the user has told you what they want. The user knows how to use an agent and will say what they need; being available fast matters more than arriving prepared.
 
       Your job is to get the user to the right workflow, not to design their change. The workflow you route to does the scoping, specification, and design work. Do not do that work here, and do not ask questions whose answers only matter to it. Asking the user to make design decisions during intake wastes the conversation and pre-empts the workflow that is supposed to handle them.
 
