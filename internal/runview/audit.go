@@ -454,9 +454,7 @@ func (t *Tree) applyStepEvent(event RawEvent, tokens []prefixToken) {
 	}
 	if event.Type == "step_end" {
 		applyStepEnd(n, event.Data)
-		if n.Status == StatusFailed {
-			t.assignFailureOrdinal(n)
-		}
+		t.recordFailedLeaf(n)
 		// Skipped steps are represented by an end event only. That decision is
 		// still an ordered terminal execution for selected-detail context.
 		if n.Status == StatusSkipped {
@@ -523,6 +521,13 @@ func (t *Tree) assignFailureOrdinal(node *StepNode) {
 	node.FailureOrdinal = t.nextFailureOrdinal
 }
 
+func (t *Tree) recordFailedLeaf(node *StepNode) {
+	if node == nil || node.Status != StatusFailed || node.IsContainer() {
+		return
+	}
+	t.assignFailureOrdinal(node)
+}
+
 func (t *Tree) applyError(tokens []prefixToken, data map[string]any) {
 	target := t.Root
 	if len(tokens) > 0 {
@@ -531,6 +536,7 @@ func (t *Tree) applyError(tokens []prefixToken, data map[string]any) {
 		}
 	}
 	setErrorMessage(target, data)
+	t.recordFailedLeaf(target)
 }
 
 func (t *Tree) addWarning(data map[string]any) {
@@ -638,9 +644,7 @@ func (t *Tree) applyAgentCallEnd(event RawEvent, tokens []prefixToken) {
 	applyAgentCallFields(call, event.Data)
 	outcome, _ := stringField(event.Data, "outcome")
 	applyOutcome(call, outcome)
-	if call.Status == StatusFailed {
-		t.assignFailureOrdinal(call)
-	}
+	t.recordFailedLeaf(call)
 	if value, ok := intField(event.Data, "exit_code"); ok {
 		call.ExitCode = &value
 	}
