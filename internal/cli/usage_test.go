@@ -256,6 +256,61 @@ func TestCopilotStructuredHeadlessOutput(t *testing.T) {
 			t.Fatalf("FilterOutput() = %q, want task completion summary", got)
 		}
 	})
+
+	t.Run("live stream filters copilot event JSON", func(t *testing.T) {
+		wrapper, ok := any(adapter).(StdoutWrapper)
+		if !ok {
+			t.Fatal("CopilotAdapter does not implement StdoutWrapper")
+		}
+		var display bytes.Buffer
+		writer := wrapper.WrapStdout(&display)
+		raw := `{"type":"session.mcp_servers_loaded","data":{"servers":[]},"ephemeral":true}` + "\n" +
+			`{"type":"assistant.tool_call_delta","data":{"toolName":"bash","inputDelta":"echo noisy"},"ephemeral":true}` + "\n" +
+			`{"type":"assistant.message","data":{"content":"copilot-stream-fixture","model":"gpt-5.4-mini"}}` + "\n" +
+			`{"type":"session.task_complete","data":{"summary":"duplicate completion summary","success":true}}` + "\n" +
+			`{"type":"result","exitCode":0}` + "\n"
+		if _, err := io.WriteString(writer, raw); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+		if closer, ok := writer.(io.Closer); ok {
+			if err := closer.Close(); err != nil {
+				t.Fatalf("Close() error = %v", err)
+			}
+		}
+		if got := display.String(); got != "copilot-stream-fixture" {
+			t.Fatalf("display = %q, want filtered assistant text", got)
+		}
+	})
+
+	t.Run("live stream falls back to task completion summary", func(t *testing.T) {
+		wrapper := any(adapter).(StdoutWrapper)
+		var display bytes.Buffer
+		writer := wrapper.WrapStdout(&display)
+		raw := `{"type":"assistant.tool_call_delta","data":{"toolName":"task_complete","inputDelta":"{\\\"summary\\\":"},"ephemeral":true}` + "\n" +
+			`{"type":"assistant.message","data":{"content":"","toolRequests":[{"name":"task_complete"}]}}` + "\n" +
+			`{"type":"session.task_complete","data":{"summary":"completed through tool call","success":true}}` + "\n"
+		if _, err := io.WriteString(writer, raw); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+		if got := display.String(); got != "completed through tool call" {
+			t.Fatalf("display = %q, want task completion summary", got)
+		}
+	})
+
+	t.Run("live stream preserves repeated assistant messages", func(t *testing.T) {
+		wrapper := any(adapter).(StdoutWrapper)
+		var display bytes.Buffer
+		writer := wrapper.WrapStdout(&display)
+		raw := `{"type":"assistant.message","data":{"content":"same message"}}` + "\n" +
+			`{"type":"assistant.tool_call_delta","data":{"toolName":"bash","inputDelta":"true"},"ephemeral":true}` + "\n" +
+			`{"type":"assistant.message","data":{"content":"same message"}}` + "\n"
+		if _, err := io.WriteString(writer, raw); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+		if got := display.String(); got != "same message\nsame message" {
+			t.Fatalf("display = %q, want both assistant messages", got)
+		}
+	})
 }
 
 func TestCursorUsageExtraction(t *testing.T) {

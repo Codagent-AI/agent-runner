@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -147,6 +148,63 @@ func (a *CopilotAdapter) FilterOutput(stdout string) string {
 		return taskSummary
 	}
 	return assistantResponse
+}
+
+// WrapStdout parses Copilot JSONL and forwards only meaningful assistant text
+// to the TUI. Lifecycle, reasoning, and tool-delta events remain available in
+// the raw captured stdout without flooding the live display.
+func (a *CopilotAdapter) WrapStdout(downstream io.Writer) io.Writer {
+	filter := &copilotStreamFilter{}
+	filter.downstream = downstream
+	filter.onLine = filter.processLine
+	return filter
+}
+
+type copilotStreamFilter struct {
+	lineBufferedWriter
+	wroteText     bool
+	assistantSeen bool
+	endedNewline  bool
+}
+
+func (f *copilotStreamFilter) processLine(line []byte) error {
+	var event struct {
+		Type string `json:"type"`
+		Data *struct {
+			Content string `json:"content"`
+			Summary string `json:"summary"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(line, &event) != nil || event.Data == nil {
+		return nil
+	}
+
+	var text string
+	switch event.Type {
+	case "assistant.message":
+		text = event.Data.Content
+		if text != "" {
+			f.assistantSeen = true
+		}
+	case "session.task_complete":
+		if !f.assistantSeen {
+			text = event.Data.Summary
+		}
+	}
+	if text == "" {
+		return nil
+	}
+	if f.wroteText && !f.endedNewline {
+		if err := f.writeDownstream([]byte("\n")); err != nil {
+			return err
+		}
+	}
+	if err := f.writeDownstream([]byte(text)); err != nil {
+		return err
+	}
+	f.wroteText = true
+	f.endedNewline = strings.HasSuffix(text, "\n")
+	return nil
 }
 
 // HasCompletedHeadlessOutput reports whether Copilot emitted a successful task
