@@ -272,7 +272,7 @@ func isTerminalExecution(node *StepNode) bool {
 	}
 	switch node.Type {
 	case NodeShell, NodeScript, NodeHeadlessAgent, NodeInteractiveAgent, NodeAgentCall, NodeUI:
-		return node.Status == StatusSuccess || node.Status == StatusFailed || node.Status == StatusSkipped
+		return node.Aborted || node.Status == StatusSuccess || node.Status == StatusFailed || node.Status == StatusSkipped
 	default:
 		return false
 	}

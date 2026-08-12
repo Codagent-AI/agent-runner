@@ -313,6 +313,33 @@ func TestAuditReplayAssignsLatestStartOrderAndFindsPreviousTerminalLeaf(t *testi
 	}
 }
 
+func TestPreviousExecutionIncludesAbortedLeaf(t *testing.T) {
+	wf := model.Workflow{
+		Name: "aborted-previous",
+		Steps: []model.Step{
+			{ID: "older", Command: "echo older"},
+			{ID: "aborted", Command: "echo aborted"},
+			{ID: "selected", Command: "echo selected"},
+		},
+	}
+	tree := BuildTree(&wf, "aborted-previous.yaml")
+	for _, event := range []RawEvent{
+		{Prefix: "[older]", Type: "step_start"},
+		{Prefix: "[older]", Type: "step_end", Data: map[string]any{"outcome": "success"}},
+		{Prefix: "[aborted]", Type: "step_start"},
+		{Prefix: "[aborted]", Type: "step_end", Data: map[string]any{"outcome": "aborted"}},
+		{Prefix: "[selected]", Type: "step_start"},
+	} {
+		tree.ApplyEvent(event)
+	}
+
+	aborted := childByID(tree.Root, "aborted")
+	selected := childByID(tree.Root, "selected")
+	if previous := tree.PreviousExecution(selected); previous != aborted {
+		t.Fatalf("previous execution = %v, want aborted leaf", previous)
+	}
+}
+
 func TestPreviousExecutionExcludesAgentContainerWithCalls(t *testing.T) {
 	root := &StepNode{ID: "root", Type: NodeRoot}
 	parent := &StepNode{
