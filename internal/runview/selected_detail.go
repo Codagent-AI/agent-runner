@@ -486,6 +486,9 @@ func uiFormText(node *StepNode) string {
 		}
 		lines = append(lines, "actions: "+strings.Join(actions, ", "))
 	}
+	if len(lines) == 0 && node.StaticMode != model.ModeUI {
+		return "definition unavailable"
+	}
 	return strings.Join(lines, "\n")
 }
 

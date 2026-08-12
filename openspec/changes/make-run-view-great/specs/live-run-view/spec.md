@@ -4,7 +4,7 @@
 
 When the workflow reaches a terminal state, the run-view TUI SHALL remain active until explicit user exit.
 
-On successful completion, the TUI SHALL display the run summary screen per `run-complete-screen`; `s` SHALL toggle to the detailed run view. On failure, the TUI SHALL remain in detail, expand the failed leaf's ancestry in the root tree, and select the failed leaf without creating a manual drill scope. The summary SHALL remain available through `s`.
+On successful completion, the TUI SHALL display the run summary screen per `run-complete-screen`; `s` SHALL toggle to the detailed run view. On failure, the TUI SHALL remain in detail, expand the failed leaf's ancestry in the root tree, and select the failed leaf without creating a manual drill scope. If multiple failed leaves share the greatest depth, the TUI SHALL select the leaf whose failure was recorded most recently, falling back to workflow order when durable failure ordering is unavailable. The summary SHALL remain available through `s`.
 
 Once execution is terminal, detailed behavior SHALL match an inactive historical run opened through `--inspect`, including manual tree navigation, optional drill scope, selected-detail scrolling, resume, and the legend.
 
@@ -15,6 +15,10 @@ Once execution is terminal, detailed behavior SHALL match an inactive historical
 #### Scenario: Failure selects failed leaf without drilling
 - **WHEN** an execution fails and the workflow halts
 - **THEN** the TUI remains in detail, expands the failed ancestry, selects the failed leaf, and retains root manual scope
+
+#### Scenario: Equally deep failures select the latest failure
+- **WHEN** terminal failure contains multiple failed leaves at the greatest depth
+- **THEN** the TUI selects the most recently recorded failure, or the first in workflow order when durable failure ordering is unavailable
 
 #### Scenario: Post-completion detail matches inspect
 - **WHEN** the workflow is terminal and the user opens or remains in detail

@@ -108,3 +108,24 @@ func TestFindFailedLeafPrefersDeepestFailedExecution(t *testing.T) {
 		t.Fatalf("failed leaf = %v, want deepest %v", got, deep)
 	}
 }
+
+func TestFindFailedLeafPrefersMostRecentlyRecordedFailureAtEqualDepth(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusInProgress}
+	first := &StepNode{ID: "first", Type: NodeShell, Status: StatusPending, Parent: root}
+	latest := &StepNode{ID: "latest", Type: NodeShell, Status: StatusPending, Parent: root}
+	root.Children = []*StepNode{first, latest}
+	tree := &Tree{Root: root}
+
+	for _, event := range []RawEvent{
+		{Timestamp: "2026-08-12T00:00:01Z", Prefix: "[first]", Type: "step_start", Data: map[string]any{"command": "false"}},
+		{Timestamp: "2026-08-12T00:00:02Z", Prefix: "[first]", Type: "step_end", Data: map[string]any{"outcome": "failed"}},
+		{Timestamp: "2026-08-12T00:00:03Z", Prefix: "[latest]", Type: "step_start", Data: map[string]any{"command": "false"}},
+		{Timestamp: "2026-08-12T00:00:04Z", Prefix: "[latest]", Type: "step_end", Data: map[string]any{"outcome": "failed"}},
+	} {
+		tree.ApplyEvent(event)
+	}
+
+	if got := findFailedLeaf(root); got != latest {
+		t.Fatalf("equal-depth failed leaf = %v, want latest recorded failure %v", got, latest)
+	}
+}

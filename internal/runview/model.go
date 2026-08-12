@@ -1806,8 +1806,9 @@ func (m *Model) navigateToNode(target *StepNode) {
 	m.detailOffset = 0
 }
 
-// findFailedLeaf returns the deepest non-container StepNode with StatusFailed,
-// or nil if none exists.
+// findFailedLeaf returns the deepest non-container StepNode with StatusFailed.
+// Equal-depth failures use durable terminal-event order when both candidates
+// have it, otherwise traversal preserves workflow order.
 func findFailedLeaf(n *StepNode) *StepNode {
 	if n == nil {
 		return nil
@@ -1822,9 +1823,15 @@ func findFailedLeaf(n *StepNode) *StepNode {
 		for _, child := range node.Children {
 			visit(child, depth+1)
 		}
-		if node.Status == StatusFailed && !node.IsContainer() && depth > bestDepth {
-			best = node
-			bestDepth = depth
+		if node.Status == StatusFailed && !node.IsContainer() {
+			deeper := depth > bestDepth
+			moreRecent := depth == bestDepth && best != nil &&
+				node.FailureOrdinal > 0 && best.FailureOrdinal > 0 &&
+				node.FailureOrdinal > best.FailureOrdinal
+			if deeper || moreRecent {
+				best = node
+				bestDepth = depth
+			}
 		}
 	}
 	visit(n, 0)

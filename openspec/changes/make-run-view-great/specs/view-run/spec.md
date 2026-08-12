@@ -162,7 +162,7 @@ Current-step content SHALL be grouped into visually distinct, labeled rail secti
 - **Interactive agent**: `Current prompt`; no response transcript SHALL be fabricated when terminal output was not captured.
 - **Shell**: `Current command` and `Current output`, with stdout and stderr distinguishable.
 - **Script**: `Current script` and `Current output`, with stdout and stderr distinguishable.
-- **UI**: `Current form` and `Current outcome`, integrated with the existing live UI behavior.
+- **UI**: `Current form` and `Current outcome`, integrated with the existing live UI behavior. When durable audit evidence identifies a historical UI execution but its workflow definition is unavailable, `Current form` SHALL explicitly state `definition unavailable` while `Current outcome` continues to show the recorded outcome.
 - **Sub-workflow, loop, iteration, and group**: `Current status`, containing identity, workflow params or loop counters, outcome, duration, and aggregate direct-child counts by status. Container detail SHALL NOT list child rows or render descendant detail.
 
 The exact rail glyph, rail color, padding, and label styling are design decisions, but every section SHALL have its semantic label.
@@ -204,6 +204,10 @@ Completed agent and call detail SHALL retain explicit metrics semantics. Collect
 #### Scenario: UI detail
 - **WHEN** a UI row is selected
 - **THEN** the pane groups its form and recorded outcome under `Current form` and `Current outcome`
+
+#### Scenario: Historical UI definition is unavailable
+- **WHEN** audit-only recovery identifies a historical UI execution but the workflow definition containing its form is unavailable
+- **THEN** `Current form` states `definition unavailable` and `Current outcome` shows the recorded outcome without inventing form content
 
 #### Scenario: Container detail is aggregate only
 - **WHEN** a sub-workflow, loop, iteration, or group row is selected
@@ -603,11 +607,15 @@ For a completed inactive run, direct resume of the selected resumable agent or a
 
 An inactive historical detail view SHALL use the same selectable tree and selected-step detail without live auto-follow, jump-to-live, response streaming, tail-follow, or animated progress.
 
-When a failed run opens directly in detailed view, the tree SHALL expand the failed leaf's ancestry and select that leaf. Other historical detail entries SHALL expand the ancestry of the selection established by their existing entry behavior. Completed runs with structured metrics SHALL continue to open on the summary screen before the user switches to detail.
+When a failed run opens directly in detailed view, the tree SHALL expand the failed leaf's ancestry and select that leaf. If multiple failed leaves share the greatest depth, the view SHALL select the leaf whose failure was recorded most recently. When durable failure ordering is unavailable, workflow order SHALL be the deterministic fallback. Other historical detail entries SHALL expand the ancestry of the selection established by their existing entry behavior. Completed runs with structured metrics SHALL continue to open on the summary screen before the user switches to detail.
 
 #### Scenario: Failed historical run selects failed leaf
 - **WHEN** a failed run is opened for inspection
 - **THEN** the detailed view expands the failed ancestry and selects the failed leaf
+
+#### Scenario: Equally deep historical failures select the latest failure
+- **WHEN** a failed historical run contains multiple failed leaves at the greatest depth
+- **THEN** the view selects the most recently recorded failure, or the first in workflow order when durable failure ordering is unavailable
 
 #### Scenario: Completed metrics run still opens summary
 - **WHEN** a completed run with structured metrics is opened

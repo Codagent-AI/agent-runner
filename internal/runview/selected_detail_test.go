@@ -313,6 +313,25 @@ func TestDetailDocumentCurrentFormUsesStaticUIConfiguration(t *testing.T) {
 	}
 }
 
+func TestDetailDocumentRecoveredUIWithoutDefinitionExplainsUnavailableForm(t *testing.T) {
+	node := &StepNode{
+		ID:      "choose",
+		Type:    NodeUI,
+		Status:  StatusSuccess,
+		Outcome: "continue",
+	}
+
+	plain := buildDetailDocument(node, detailBuildOptions{width: 80}).renderCopy()
+	for _, want := range []string{"Current form", "definition unavailable", "Current outcome", "continue"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("recovered UI detail missing %q:\n%s", want, plain)
+		}
+	}
+	if strings.Contains(plain, "Current form\n(empty)") {
+		t.Fatalf("recovered UI detail silently rendered an empty form:\n%s", plain)
+	}
+}
+
 func TestDetailDocumentContainerStatusRetainsMetadataAndStaticParamsFallback(t *testing.T) {
 	duration := int64(1200)
 	node := &StepNode{

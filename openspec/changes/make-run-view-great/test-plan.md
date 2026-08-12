@@ -28,6 +28,8 @@ credentials, or API cost.
 
 ### INT-001: Historical view projects durable run artifacts
 
+`INT-001` is satisfied collectively by the production-boundary historical integration fixture and focused tests for its listed variants. No single serialized fixture is required to combine every variant when the focused coverage exercises the same production behavior and the complete historical user flow remains covered by acceptance testing.
+
 - Covers: historical selected-step initialization; previous execution context;
   latest-attempt ordering and metadata; selected detail for shell, script,
   interactive agent, headless agent, agent call, and containers; persisted
@@ -87,6 +89,8 @@ credentials, or API cost.
   `go test ./...` and CI.
 
 ### INT-002: Live coordinator messages and output preserve view ownership
+
+`INT-002` is satisfied collectively by the real coordinator integration journey and focused model/UI tests for scrolling, follow-state, and paused-offset transitions. The coordinator journey is not required to repeat every focused interaction when it already crosses the real process, message, persistence, tree, detail, and UI boundaries and the assembled live flows remain covered by acceptance testing.
 
 - Covers: real-time output; active-leaf expansion and selection; independent
   active-step and detail-tail follow; live agent-call integration; ANSI

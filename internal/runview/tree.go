@@ -111,6 +111,10 @@ type StepNode struct {
 	// execution start. It is intentionally in-memory only: replay and live
 	// tailing both derive it from the durable audit stream.
 	StartOrdinal uint64
+	// FailureOrdinal is the replay-order position of this logical node's latest
+	// failed terminal event. Equal-depth failure selection uses it when both
+	// candidates have ordering evidence; zero preserves workflow-order fallback.
+	FailureOrdinal uint64
 	// TriggeredSkipIf is the recorded skip expression that caused a skipped
 	// execution. StaticSkipIf is the configured expression and may differ after
 	// interpolation.
@@ -206,6 +210,9 @@ type Tree struct {
 	// nextStartOrdinal assigns a deterministic replay order to execution
 	// starts. It is not persisted because it is reconstructed from audit order.
 	nextStartOrdinal uint64
+	// nextFailureOrdinal assigns replay order to failed terminal leaf events.
+	// It is reconstructed from the same durable audit stream.
+	nextFailureOrdinal uint64
 
 	// Warnings contains distinct user-visible warning messages retained from
 	// the run's audit stream.
