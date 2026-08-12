@@ -1108,6 +1108,106 @@ func TestCoreCommitChangePlanRestrictsCommitToChangeDirectory(t *testing.T) {
 	}
 }
 
+func TestCoreCommitChangePlanRejectsRepositoryRoot(t *testing.T) {
+	script, err := ReadAsset("core/commit-change-plan.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(core/commit-change-plan.sh): %v", err)
+	}
+
+	tempDir := t.TempDir()
+	scriptPath := filepath.Join(tempDir, "commit-change-plan.sh")
+	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	binDir := filepath.Join(tempDir, "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatalf("create bin dir: %v", err)
+	}
+	pythonPath, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 not available")
+	}
+	if err := os.Symlink(pythonPath, filepath.Join(binDir, "python3")); err != nil {
+		t.Fatalf("symlink python3: %v", err)
+	}
+	gitMarker := filepath.Join(tempDir, "git-called")
+	fakeGit := "#!/bin/sh\n: > " + strconv.Quote(gitMarker) + "\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(binDir, "git"), []byte(fakeGit), 0o700); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+
+	cmd := exec.Command("sh", scriptPath)
+	cmd.Dir = tempDir
+	cmd.Env = append(os.Environ(), "PATH="+binDir+":/usr/bin:/bin")
+	cmd.Stdin = strings.NewReader(`{"change_name":"demo","change_dir":"."}`)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("script accepted repository root")
+	}
+	if !strings.Contains(string(out), "change_dir must be a confined relative path") {
+		t.Fatalf("output = %q, want confined-path error", out)
+	}
+	if _, err := os.Stat(gitMarker); !os.IsNotExist(err) {
+		t.Fatalf("git was invoked for repository-root path: %v", err)
+	}
+}
+
+func TestCreateChangeScriptsExplainMissingAgentValidator(t *testing.T) {
+	for _, asset := range []string{"openspec/create-change.sh", "spec-driven/create-change.sh"} {
+		t.Run(asset, func(t *testing.T) {
+			script, err := ReadAsset(asset)
+			if err != nil {
+				t.Fatalf("ReadAsset(%s): %v", asset, err)
+			}
+
+			tempDir := t.TempDir()
+			scriptPath := filepath.Join(tempDir, "create-change.sh")
+			if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
+				t.Fatalf("write script: %v", err)
+			}
+			if strings.HasPrefix(asset, "openspec/") {
+				validator, err := ReadAsset("openspec/validate-change-name.sh")
+				if err != nil {
+					t.Fatalf("ReadAsset(openspec/validate-change-name.sh): %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(tempDir, "validate-change-name.sh"), validator, 0o700); err != nil {
+					t.Fatalf("write name validator: %v", err)
+				}
+			}
+			binDir := filepath.Join(tempDir, "bin")
+			if err := os.Mkdir(binDir, 0o755); err != nil {
+				t.Fatalf("create bin dir: %v", err)
+			}
+			pythonPath, err := exec.LookPath("python3")
+			if err != nil {
+				t.Skip("python3 not available")
+			}
+			if err := os.Symlink(pythonPath, filepath.Join(binDir, "python3")); err != nil {
+				t.Fatalf("symlink python3: %v", err)
+			}
+
+			cmd := exec.Command("sh", scriptPath)
+			cmd.Dir = tempDir
+			cmd.Env = append(os.Environ(), "PATH="+binDir+":/usr/bin:/bin")
+			cmd.Stdin = strings.NewReader(`{"change_name":"demo","change_dir":"changes/demo"}`)
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatal("script succeeded without agent-validator")
+			}
+			exitErr, ok := err.(*exec.ExitError)
+			if !ok {
+				t.Fatalf("run script: %v", err)
+			}
+			if exitErr.ExitCode() != 127 {
+				t.Fatalf("exit code = %d, want 127; output: %s", exitErr.ExitCode(), out)
+			}
+			if !strings.Contains(string(out), "agent-validator is not installed") {
+				t.Fatalf("output = %q, want missing-validator explanation", out)
+			}
+		})
+	}
+}
+
 func TestCoreCIStatusGateScript(t *testing.T) {
 	script, err := ReadAsset("core/ci-status-gate.sh")
 	if err != nil {

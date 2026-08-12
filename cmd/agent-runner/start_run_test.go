@@ -1010,6 +1010,32 @@ func TestTerminalLiveTUIResult_LaunchDebugExecsSelectedRun(t *testing.T) {
 	}
 }
 
+func TestTerminalLiveTUIResult_AutomaticExitPreservesCompletedWorkflowResult(t *testing.T) {
+	rv, err := runview.NewForDefinition(&discovery.WorkflowEntry{CanonicalName: "wf"}, "/current/project")
+	if err != nil {
+		t.Fatalf("NewForDefinition: %v", err)
+	}
+	next, cmd := rv.Update(runview.ExitMsg{})
+	if cmd == nil {
+		t.Fatal("automatic ExitMsg should quit the run view")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("expected tea.QuitMsg, got %T", cmd())
+	}
+	rv = next.(*runview.Model)
+
+	resultCh := make(chan runner.WorkflowResult, 1)
+	resultCh <- runner.ResultSuccess
+
+	result, ok := terminalLiveTUIResult(rv, resultCh, "/current/project", "/runs/run-123", liveTUIOptions{})
+	if !ok {
+		t.Fatal("terminalLiveTUIResult did not handle automatic exit")
+	}
+	if result.workflowResult != runner.ResultSuccess || result.sessionDir != "/runs/run-123" || result.exitRequested {
+		t.Fatalf("terminalLiveTUIResult = %#v, want completed success without user exit", result)
+	}
+}
+
 func TestNormalizeRunCommandArgs_SupportsRunSubcommandParamFlag(t *testing.T) {
 	got, err := normalizeRunCommandArgs([]string{"run", "core:debug", "--param", "failed_run_id=run-123"})
 	if err != nil {
