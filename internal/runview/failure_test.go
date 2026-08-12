@@ -95,3 +95,56 @@ func TestFailureReason_IgnoresNonLoopExhaustedOutcome(t *testing.T) {
 		t.Fatalf("failureReason() = %q, want %q", got, want)
 	}
 }
+
+func TestFindFailedLeafPrefersDeepestFailedExecution(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusFailed}
+	shallow := &StepNode{ID: "shallow", Type: NodeShell, Status: StatusFailed, Parent: root}
+	container := &StepNode{ID: "nested", Type: NodeSubWorkflow, Status: StatusFailed, Parent: root}
+	deep := &StepNode{ID: "deep", Type: NodeScript, Status: StatusFailed, Parent: container}
+	container.Children = []*StepNode{deep}
+	root.Children = []*StepNode{shallow, container}
+
+	if got := findFailedLeaf(root); got != deep {
+		t.Fatalf("failed leaf = %v, want deepest %v", got, deep)
+	}
+}
+
+func TestFindFailedLeafPrefersMostRecentlyRecordedFailureAtEqualDepth(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusInProgress}
+	first := &StepNode{ID: "first", Type: NodeShell, Status: StatusPending, Parent: root}
+	latest := &StepNode{ID: "latest", Type: NodeShell, Status: StatusPending, Parent: root}
+	root.Children = []*StepNode{first, latest}
+	tree := &Tree{Root: root}
+
+	for _, event := range []RawEvent{
+		{Timestamp: "2026-08-12T00:00:01Z", Prefix: "[first]", Type: "step_start", Data: map[string]any{"command": "false"}},
+		{Timestamp: "2026-08-12T00:00:02Z", Prefix: "[first]", Type: "step_end", Data: map[string]any{"outcome": "failed"}},
+		{Timestamp: "2026-08-12T00:00:03Z", Prefix: "[latest]", Type: "step_start", Data: map[string]any{"command": "false"}},
+		{Timestamp: "2026-08-12T00:00:04Z", Prefix: "[latest]", Type: "step_end", Data: map[string]any{"outcome": "failed"}},
+	} {
+		tree.ApplyEvent(event)
+	}
+
+	if got := findFailedLeaf(root); got != latest {
+		t.Fatalf("equal-depth failed leaf = %v, want latest recorded failure %v", got, latest)
+	}
+}
+
+func TestFindFailedLeafPrefersLatestDurableErrorAtEqualDepth(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusFailed}
+	first := &StepNode{ID: "first", Type: NodeShell, Status: StatusFailed, Parent: root}
+	latest := &StepNode{ID: "latest", Type: NodeShell, Status: StatusFailed, Parent: root}
+	root.Children = []*StepNode{first, latest}
+	tree := &Tree{Root: root}
+
+	for _, event := range []RawEvent{
+		{Timestamp: "2026-08-12T00:00:01Z", Prefix: "[first]", Type: "error", Data: map[string]any{"message": "first failed"}},
+		{Timestamp: "2026-08-12T00:00:02Z", Prefix: "[latest]", Type: "error", Data: map[string]any{"message": "latest failed"}},
+	} {
+		tree.ApplyEvent(event)
+	}
+
+	if got := findFailedLeaf(root); got != latest {
+		t.Fatalf("equal-depth failed leaf = %v, want latest durable error %v", got, latest)
+	}
+}

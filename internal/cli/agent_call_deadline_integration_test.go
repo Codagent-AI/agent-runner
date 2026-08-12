@@ -19,6 +19,7 @@ func TestProvisionedAgentCallPreservesExplicitClientDeadline(t *testing.T) {
 		t.Run(adapterName, func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
+			t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 			t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
 			runner := filepath.Join(t.TempDir(), "agent-runner")
 			if err := os.WriteFile(runner, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {

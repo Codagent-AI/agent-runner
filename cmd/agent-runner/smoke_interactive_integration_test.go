@@ -61,6 +61,7 @@ func TestInteractiveDirectHandoffWorkflowIntegration(t *testing.T) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatalf("create fake bin dir: %v", err)
 	}
+	writeSmokeProfileConfig(t, home)
 
 	buildAgentRunner(t, repoRoot, runnerBin)
 	writeInteractiveAgentFixtures(t, binDir, []string{"claude"})
@@ -68,7 +69,7 @@ func TestInteractiveDirectHandoffWorkflowIntegration(t *testing.T) {
 
 	cmd := exec.Command(runnerBin, "--headless", "interactive-direct-handoff-integration")
 	cmd.Dir = repoRoot
-	cmd.Env = append(os.Environ(),
+	cmd.Env = smokeCommandEnv(os.Environ(),
 		"AGENT_RUNNER_NO_TUI=1",
 		"HOME="+home,
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
@@ -115,10 +116,11 @@ func TestInteractiveDirectHandoffJobControl(t *testing.T) {
 	for _, mode := range []string{"cooperative", "external"} {
 		t.Run(mode, func(t *testing.T) {
 			home := filepath.Join(tmp, "home-"+mode)
+			writeSmokeProfileConfig(t, home)
 			writeJobControlWorkflow(t, filepath.Join(home, ".agent-runner", "workflows"))
 			command := exec.Command(shell, "-f")
 			command.Dir = repoRoot
-			command.Env = append(os.Environ(), "PS1=JOB_SHELL_READY> ", "HOME="+home,
+			command.Env = smokeCommandEnv(os.Environ(), "PS1=JOB_SHELL_READY> ", "HOME="+home,
 				"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 			ptmx, err := gopty.StartWithSize(command, &gopty.Winsize{Rows: 40, Cols: 120})
 			if err != nil {
@@ -172,13 +174,14 @@ func TestInteractiveShellDirectTerminalHandoffE2E(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	tmp := t.TempDir()
 	home := t.TempDir()
+	writeSmokeProfileConfig(t, home)
 	runnerBin := filepath.Join(tmp, "agent-runner")
 	buildAgentRunner(t, repoRoot, runnerBin)
 	writeDirectShellWorkflow(t, filepath.Join(home, ".agent-runner", "workflows"), currentTestBinary(t))
 
 	command := exec.Command(currentTestBinary(t), "-test.run=^TestInteractiveShellDirectHandoffFixtureProcess$")
 	command.Dir = repoRoot
-	command.Env = append(os.Environ(),
+	command.Env = smokeCommandEnv(os.Environ(),
 		"HOME="+home,
 		directShellFixtureEnv+"=1",
 		directShellRunnerEnv+"="+runnerBin,
@@ -208,7 +211,7 @@ func TestInteractiveShellDirectHandoffFixtureProcess(t *testing.T) {
 	}
 	command := exec.Command(os.Getenv(directShellRunnerEnv), "--headless", os.Getenv(directShellWorkflowEnv))
 	command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
-	command.Env = append(os.Environ(), directShellTTYDeviceEnv+"="+device)
+	command.Env = smokeCommandEnv(os.Environ(), directShellTTYDeviceEnv+"="+device)
 	if err := command.Run(); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "run direct-shell workflow: %v\n", err)
 		os.Exit(2)
@@ -254,6 +257,7 @@ func TestInteractiveTerminalLeaseFailures(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			tmp := t.TempDir()
 			home := filepath.Join(tmp, "home")
+			writeSmokeProfileConfig(t, home)
 			binDir := filepath.Join(tmp, "bin")
 			fixtureLog := filepath.Join(tmp, "interactive-fixture.jsonl")
 			if err := os.MkdirAll(binDir, 0o755); err != nil {
@@ -271,7 +275,7 @@ func TestInteractiveTerminalLeaseFailures(t *testing.T) {
 
 			cmd := exec.Command(currentTestBinary(t), "-test.run=^TestInteractiveTerminalLeaseFixtureProcess$")
 			cmd.Dir = repoRoot
-			cmd.Env = append(os.Environ(),
+			cmd.Env = smokeCommandEnv(os.Environ(),
 				"HOME="+home,
 				"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 				"TERM=xterm-256color",

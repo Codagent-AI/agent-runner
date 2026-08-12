@@ -113,7 +113,7 @@ func TestAgentDetailMetricsRenderCollectedUnavailableAndLatestAttempt(t *testing
 			node := &StepNode{ID: "agent", Type: NodeHeadlessAgent, Status: StatusSuccess, Attempts: tt.attempts}
 			latest := tt.attempts[len(tt.attempts)-1]
 			node.DurationMs = latest.DurationMs
-			plain := tuistyle.Sanitize(strings.Join(renderHeadlessBlock(node, 0, 100, true, 0, false), "\n"))
+			plain := buildDetailDocument(node, detailBuildOptions{width: 100, loadedFull: true}).renderCopy()
 			for _, want := range tt.want {
 				if !strings.Contains(plain, want) {
 					t.Errorf("detail missing %q:\n%s", want, plain)
@@ -130,7 +130,7 @@ func TestAgentDetailMetricsRenderCollectedUnavailableAndLatestAttempt(t *testing
 
 func TestAgentDetailLegacyAuditWithoutMetricsKeepsClassicDisplay(t *testing.T) {
 	node := &StepNode{ID: "agent", Type: NodeHeadlessAgent, Status: StatusSuccess, DurationMs: int64Pointer(1500)}
-	plain := tuistyle.Sanitize(strings.Join(renderHeadlessBlock(node, 0, 100, true, 0, false), "\n"))
+	plain := buildDetailDocument(node, detailBuildOptions{width: 100, loadedFull: true}).renderCopy()
 
 	for _, unwanted := range []string{"usage:", "tokens:", "cost:"} {
 		if strings.Contains(plain, unwanted) {
@@ -145,7 +145,7 @@ func TestInteractiveAgentDetailRendersUsageAndCost(t *testing.T) {
 		ID: "interactive", Type: NodeInteractiveAgent, Status: StatusSuccess, DurationMs: int64Pointer(900),
 		Attempts: []AttemptMetrics{{Attempt: 1, Usage: usage, CostUSD: float64Pointer(0.08), DurationMs: int64Pointer(900), Outcome: "success"}},
 	}
-	plain := tuistyle.Sanitize(strings.Join(renderInteractiveBlock(node, 0, 100, 0, false), "\n"))
+	plain := buildDetailDocument(node, detailBuildOptions{width: 100, loadedFull: true}).renderCopy()
 	for _, want := range []string{"duration: 900ms", "tokens: input 80", "output 12", "cost: $0.08"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("interactive detail missing %q:\n%s", want, plain)

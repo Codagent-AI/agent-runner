@@ -32,13 +32,14 @@ func TestSmokeTestHeadlessWorkflowIntegration(t *testing.T) {
 	if err := os.MkdirAll(smokeDir, 0o755); err != nil {
 		t.Fatalf("create smoke dir: %v", err)
 	}
+	writeSmokeProfileConfig(t, home)
 
 	buildAgentRunner(t, repoRoot, runnerBin)
 	writeFakeAgentCLIs(t, binDir, fakeExecutableNames(t))
 
 	cmd := exec.Command(runnerBin, "--headless", "smoke-test-headless", "smoke_dir="+smokeDir)
 	cmd.Dir = repoRoot
-	cmd.Env = append(os.Environ(),
+	cmd.Env = smokeCommandEnv(os.Environ(),
 		"AGENT_RUNNER_NO_TUI=1",
 		"HOME="+home,
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
@@ -72,6 +73,57 @@ func TestSmokeTestHeadlessWorkflowIntegration(t *testing.T) {
 	}
 
 	assertSuccessfulHeadlessSteps(t, filepath.Join(sessionDir, "audit.log"), wantSteps)
+}
+
+func TestSmokeCommandEnvOverridesInheritedValues(t *testing.T) {
+	env := smokeCommandEnv([]string{"HOME=/developer", "PATH=/original", "KEEP=value"}, "HOME=/sandbox", "PATH=/fake:/original")
+	got := map[string]string{}
+	for _, entry := range env {
+		name, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			t.Fatalf("malformed environment entry %q", entry)
+		}
+		if _, exists := got[name]; exists {
+			t.Fatalf("duplicate environment variable %q", name)
+		}
+		got[name] = value
+	}
+	if got["HOME"] != "/sandbox" || got["PATH"] != "/fake:/original" || got["KEEP"] != "value" {
+		t.Fatalf("environment = %#v", got)
+	}
+}
+
+// smokeCommandEnv replaces inherited variables instead of appending duplicate
+// entries. A child process can otherwise resolve the first HOME entry and read
+// a developer's config rather than the test sandbox.
+func smokeCommandEnv(base []string, overrides ...string) []string {
+	overrideNames := make(map[string]struct{}, len(overrides))
+	for _, entry := range overrides {
+		name, _, _ := strings.Cut(entry, "=")
+		overrideNames[name] = struct{}{}
+	}
+	result := make([]string, 0, len(base)+len(overrides))
+	for _, entry := range base {
+		name, _, _ := strings.Cut(entry, "=")
+		if _, replaced := overrideNames[name]; !replaced {
+			result = append(result, entry)
+		}
+	}
+	return append(result, overrides...)
+}
+
+// writeSmokeProfileConfig completes the project-local smoke profile without
+// relying on a developer's global Agent Runner config. The checked-in project
+// config selects codex-kimi while defining the test-only smoke_test profile.
+func writeSmokeProfileConfig(t *testing.T, home string) {
+	t.Helper()
+	path := filepath.Join(home, ".agent-runner", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create smoke config directory: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("profiles:\n  codex-kimi:\n    extends: smoke_test\n"), 0o600); err != nil {
+		t.Fatalf("write smoke config: %v", err)
+	}
 }
 
 func buildAgentRunner(t *testing.T, repoRoot, runnerBin string) {

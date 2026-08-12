@@ -77,8 +77,8 @@ func (m *Model) renderSummary() string {
 	totals := m.summaryScopeTotals(now)
 	children := m.currentChildren()
 	rows := make([]summaryRow, 0, len(children))
-	for i, child := range children {
-		rows = append(rows, makeSummaryRow(child, i == m.cursor, now))
+	for _, child := range children {
+		rows = append(rows, makeSummaryRow(child, child == m.selectedNode(), now))
 	}
 	columns := measureSummaryColumns(rows, &totals, m.termWidth)
 	header = append(header, renderSummaryHeader(columns))

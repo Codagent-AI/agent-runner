@@ -79,17 +79,21 @@ type Model struct {
 	originCwd  string
 	entered    Entered
 
-	path      []*StepNode
-	cursor    int
-	logOffset int
-	// logLineCount is the total number of log lines from the last rebuildRanges call.
-	// It is used to compute maxLogOffset for clamping and scroll normalization.
-	logLineCount int
+	path         []*StepNode
+	cursor       int // cached projected-row index; selected is authoritative
+	selected     *StepNode
+	selectedKey  string
+	treeOffset   int
+	sidebarWidth int // widest settled width for this run-view entry
+	detailOffset int
+	// detailLineCount is the total number of lines in the selected detail document.
+	// It is used to clamp the selected detail's independent scroll offset.
+	detailLineCount int
 
 	loadedFull map[string]bool
-
-	stepRanges []stepLineRange
-	logAnchor  stepLineAnchor
+	// inputExpanded stores the user's current-input choice by stable node key.
+	// It deliberately survives selection changes and width recalculation.
+	inputExpanded map[string]bool
 
 	active        bool
 	pulsePhase    float64
@@ -114,7 +118,8 @@ type Model struct {
 	refreshStopped   bool   // true when suspension consumed the scheduled refresh tick
 	quitConfirming   bool   // quit-confirmation modal is visible
 	liveResult       string // set on ExecDoneMsg ("success"/"failed"/"stopped")
-	autoFollow       bool   // cursor tracks activeStep; enabled by default in FromLiveRun
+	followActive     bool   // execution may move selection to the active leaf
+	followTail       bool   // selected streaming detail stays pinned to its tail
 	activeStepPrefix string // last known active step prefix from StepStateMsg
 	copyNoticeSeq    int    // increments on successful copy so stale clear timers are ignored
 
@@ -197,18 +202,21 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	tree, loadErr, workflowMissing := loadRunTree(sessionDir, entered, &state, resolved)
 
 	m := &Model{
-		tree:       tree,
-		sessionDir: sessionDir,
-		projectDir: projectDir,
-		originCwd:  resolved.OriginCwd,
-		entered:    entered,
-		path:       []*StepNode{tree.Root},
-		loadedFull: make(map[string]bool),
-		loadErr:    loadErr,
-		running:    entered == FromLiveRun,
-		autoFollow: entered == FromLiveRun,
-		altScreen:  entered != FromLiveRun,
+		tree:          tree,
+		sessionDir:    sessionDir,
+		projectDir:    projectDir,
+		originCwd:     resolved.OriginCwd,
+		entered:       entered,
+		path:          []*StepNode{tree.Root},
+		loadedFull:    make(map[string]bool),
+		inputExpanded: make(map[string]bool),
+		loadErr:       loadErr,
+		running:       entered == FromLiveRun,
+		followActive:  entered == FromLiveRun,
+		followTail:    entered == FromLiveRun,
+		altScreen:     entered != FromLiveRun,
 	}
+	m.setSelected(firstRealChild(m.currentContainer()))
 	if entered == FromList || entered == FromInspect {
 		m.recordedVersion = recordedWorkflowVersion(state.WorkflowFile)
 	}
@@ -217,7 +225,8 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	if entered != FromLiveRun {
 		m.active = runlock.Check(sessionDir) == runlock.LockActive
 		if m.active {
-			m.autoFollow = true
+			m.followActive = true
+			m.followTail = true
 		}
 	}
 
@@ -242,6 +251,7 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 			m.loadErr = "audit log: " + err.Error()
 		}
 	}
+	failedHistoricalRun := entered != FromLiveRun && auditRunFailed(events)
 	events = filterAuditEventsForWorkflowState(events, state.WorkflowHash, tree.Root, currentStepID(&state), state.Completed)
 	if workflowMissing && len(tree.Root.Children) == 0 && reconstructTopLevelStepsFromAudit(tree.Root, events) {
 		m.loadErr = ""
@@ -252,8 +262,15 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	for _, e := range events {
 		tree.ApplyEvent(e)
 	}
-	current := m.applyCurrentStepState(&state)
-	if m.autoFollow {
+	failedHistoricalRun = failedHistoricalRun || entered != FromLiveRun && findFailedLeaf(tree.Root) != nil
+	current := m.applyCurrentStepState(&state, !failedHistoricalRun)
+	if failedHistoricalRun {
+		// Applying the saved position first ensures lazy nested workflows are
+		// available to the failure search. Preserve their terminal audit status
+		// and select the concrete failed execution at root scope.
+		m.setSelected(findFailedLeaf(tree.Root))
+	}
+	if m.followActive {
 		if current != nil {
 			m.applyAutoFollowToNode(current)
 		} else {
@@ -262,6 +279,17 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	}
 
 	return m, nil
+}
+
+func auditRunFailed(events []RawEvent) bool {
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type != "run_end" {
+			continue
+		}
+		outcome, _ := stringField(events[i].Data, "outcome")
+		return outcome == "failed"
+	}
+	return false
 }
 
 func loadRunTree(
@@ -337,22 +365,22 @@ func currentStepID(state *model.RunState) string {
 	return state.CurrentStep.StepID
 }
 
-func (m *Model) applyCurrentStepState(state *model.RunState) *StepNode {
+func (m *Model) applyCurrentStepState(state *model.RunState, markInProgress bool) *StepNode {
 	if state == nil {
 		return nil
 	}
 	if state.CurrentStep.Nested != nil {
-		return m.applyNestedCurrentStepState(m.tree.Root, state.CurrentStep.Nested)
+		return m.applyNestedCurrentStepState(m.tree.Root, state.CurrentStep.Nested, markInProgress)
 	}
 	if state.CurrentStep.StepID == "" {
 		return nil
 	}
 	node := childByID(m.tree.Root, state.CurrentStep.StepID)
-	markCurrentNode(node, false)
+	markCurrentNode(node, !markInProgress)
 	return node
 }
 
-func (m *Model) applyNestedCurrentStepState(container *StepNode, current *model.NestedStepState) *StepNode {
+func (m *Model) applyNestedCurrentStepState(container *StepNode, current *model.NestedStepState, markInProgress bool) *StepNode {
 	if container == nil || current == nil || current.StepID == "" {
 		return nil
 	}
@@ -364,16 +392,16 @@ func (m *Model) applyNestedCurrentStepState(container *StepNode, current *model.
 	if node == nil {
 		return nil
 	}
-	markCurrentNode(node, current.Completed && current.Child == nil)
+	markCurrentNode(node, !markInProgress || current.Completed && current.Child == nil)
 
 	if current.Iteration != nil {
 		iter := findIteration(node, *current.Iteration)
 		if iter == nil {
 			iter = ensureIteration(node, *current.Iteration)
 		}
-		markCurrentNode(iter, current.Completed && current.Child == nil)
+		markCurrentNode(iter, !markInProgress || current.Completed && current.Child == nil)
 		if current.Child != nil {
-			if child := m.applyNestedCurrentStepState(iter, current.Child); child != nil {
+			if child := m.applyNestedCurrentStepState(iter, current.Child, markInProgress); child != nil {
 				return child
 			}
 		}
@@ -386,7 +414,7 @@ func (m *Model) applyNestedCurrentStepState(container *StepNode, current *model.
 				node.ErrorMessage = err.Error()
 			}
 		}
-		if child := m.applyNestedCurrentStepState(node, current.Child); child != nil {
+		if child := m.applyNestedCurrentStepState(node, current.Child, markInProgress); child != nil {
 			return child
 		}
 	}
@@ -443,6 +471,7 @@ func NewForDefinition(entry *discovery.WorkflowEntry, projectDir string) (*Model
 		entered:       FromDefinition,
 		path:          []*StepNode{tree.Root},
 		loadedFull:    make(map[string]bool),
+		inputExpanded: make(map[string]bool),
 		loadErr:       loadErr,
 		altScreen:     true,
 		workflowEntry: *entry,
@@ -477,7 +506,8 @@ func NewForReentry(sessionDir, projectDir string, entered Entered, spawnErr erro
 		return nil, err
 	}
 	m.running = false
-	m.autoFollow = false
+	m.followActive = false
+	m.followTail = false
 	m.altScreen = true
 	if spawnErr != nil {
 		m.notice = spawnErr.Error()
@@ -630,10 +660,11 @@ func (m *Model) handleUIRequestMsg(msg *liverun.UIRequestMsg) (tea.Model, tea.Cm
 	m.liveUI = uistep.NewModel(&msg.Request)
 	m.liveUIStepID = msg.Request.StepID
 	m.liveUIReply = msg.Reply
-	m.autoFollow = true
 	m.refreshData()
-	m.applyAutoFollowToInProgress()
-	m.rebuildRanges()
+	if m.followActive {
+		m.applyAutoFollowToInProgress()
+	}
+	m.rebuildDetail()
 	return m.handleShowTUIMsg()
 }
 
@@ -648,22 +679,9 @@ func (m *Model) handleShowTUIMsg() (tea.Model, tea.Cmd) {
 
 func (m *Model) handleSuspendedMsg() {
 	m.suspended = true
-	// Re-enter follow mode whenever a step transitions into interactive: the
-	// user can't see the run view during the PTY hand-off, so by the time the
-	// TUI restores they should be tracking the live step instead of pinned to
-	// wherever they previously drilled in.
-	m.autoFollow = true
-	if len(m.path) > 1 && m.activeStepPrefix != "" {
-		if active := m.tree.FindByPrefix(m.activeStepPrefix); active != nil {
-			if m.ancestorAtCurrentLevel(active) == nil {
-				m.path = m.path[:1]
-				m.cursor = 0
-				m.logOffset = 0
-			}
-		}
-	}
-	m.applyAutoFollowCursor()
-	m.rebuildRanges()
+	// Terminal ownership is not an input gesture. In particular, it cannot
+	// re-enable follow after the user deliberately paused exploration.
+	m.rebuildDetail()
 	if !m.altScreen {
 		m.suppressAltScreen = true
 	}
@@ -671,6 +689,19 @@ func (m *Model) handleSuspendedMsg() {
 
 func (m *Model) handleResumedMsg() tea.Cmd {
 	m.suspended = false
+	if m.hasLiveUpdates() {
+		selectedBefore := m.selectedNode()
+		previousLineCount := m.detailLineCount
+		m.refreshData()
+		if m.followActive {
+			m.applyAutoFollowCursor()
+		}
+		lineCount := m.rebuildDetail()
+		if m.shouldFollowTail() && (m.selectedNode() != selectedBefore || lineCount != previousLineCount) {
+			m.scrollSelectedDetailToTail()
+		}
+		m.clampDetailOffset(lineCount)
+	}
 	// BubbleTea's RestoreTerminal does not re-enable mouse mode after
 	// ReleaseTerminal disables it, so we re-enable it explicitly.
 	cmds := []tea.Cmd{tea.EnableMouseCellMotion}
@@ -692,9 +723,6 @@ func (m *Model) handleLiveUIKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "up", "down":
 		return m.handleKey(msg)
-	case "d":
-		m.autoFollow = false
-		return m.handleEnter()
 	case "k":
 		m.scrollLiveUI(-1)
 		return m, nil
@@ -708,6 +736,9 @@ func (m *Model) handleLiveUIKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "l":
 		m.followLiveUI()
 		return m, nil
+	}
+	if !m.liveUI.HandlesKey(msg.String()) {
+		return m.handleKey(msg)
 	}
 
 	next, _ := m.liveUI.Update(msg)
@@ -728,10 +759,13 @@ func (m *Model) handleLiveUIKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) scrollLiveUI(delta int) {
-	m.autoFollow = false
-	m.logOffset += delta
-	if m.logOffset < 0 {
-		m.logOffset = 0
+	if delta < 0 {
+		m.followActive = false
+		m.followTail = false
+	}
+	m.detailOffset += delta
+	if m.detailOffset < 0 {
+		m.detailOffset = 0
 	}
 }
 
@@ -748,7 +782,7 @@ func (m *Model) requestQuit() (tea.Model, tea.Cmd) {
 
 // scrollSummary adjusts the summary scroll offset. The lower bound is applied
 // here; the upper bound depends on rendered row count vs. available height and
-// is clamped at render time (see renderSummary), matching the log-offset model.
+// is clamped at render time (see renderSummary), matching the detail-offset model.
 func (m *Model) scrollSummary(delta int) {
 	m.moveCursor(delta)
 }
@@ -761,7 +795,7 @@ func (m *Model) liveUIVisible() bool {
 	if active == nil {
 		return true
 	}
-	return m.selectedNode() == m.ancestorAtCurrentLevel(active)
+	return m.selectedNode() == active
 }
 
 func (m *Model) liveUINode() *StepNode {
@@ -776,46 +810,44 @@ func (m *Model) followLiveUI() {
 	if active == nil {
 		return
 	}
-	m.autoFollow = true
+	m.followActive = true
+	m.followTail = true
+	m.path = []*StepNode{m.tree.Root}
+	m.treeOffset = 0
 	m.navigateToNode(active)
 }
 
 func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) {
 	m.termWidth = msg.Width
 	m.termHeight = msg.Height
-	lineCount := m.rebuildRanges()
-	// Re-resolve anchor so the same block stays in view after resize.
-	if m.logAnchor.stepKey != "" {
-		for _, r := range m.stepRanges {
-			if r.node.NodeKey() == m.logAnchor.stepKey {
-				m.logOffset = max(0, r.startLine+m.logAnchor.lineOffsetInBlock)
-				break
-			}
-		}
-	}
-	m.clampLogOffset(lineCount)
+	// A resize establishes a new layout measurement rather than preserving an
+	// old width that was settled for a different terminal.
+	m.sidebarWidth = 0
+	lineCount := m.rebuildDetail()
+	m.clampDetailOffset(lineCount)
 }
 
 func (m *Model) handleOutputChunkMsg(msg liverun.OutputChunkMsg) {
 	m.applyOutputChunk(msg)
-	lineCount := m.rebuildRanges()
-	if m.shouldSyncAutoFollowDetail() {
-		m.syncLogToAutoFollowTail()
+	lineCount := m.rebuildDetail()
+	if m.shouldFollowSelectedTail(msg.StepPrefix) {
+		m.scrollSelectedDetailToTail()
 	}
-	m.clampLogOffset(lineCount)
+	m.clampDetailOffset(lineCount)
 }
 
 func (m *Model) handleStepStateMsg(msg liverun.StepStateMsg) {
 	m.activeStepPrefix = msg.ActiveStepPrefix
 	m.refreshData()
-	if m.autoFollow {
+	selectedBefore := m.selectedNode()
+	if m.followActive {
 		m.applyAutoFollowCursor()
 	}
-	lineCount := m.rebuildRanges()
-	if m.shouldSyncAutoFollowDetail() {
-		m.syncLogToAutoFollowTail()
+	lineCount := m.rebuildDetail()
+	if m.shouldFollowTail() && m.selectedNode() != selectedBefore {
+		m.scrollSelectedDetailToTail()
 	}
-	m.clampLogOffset(lineCount)
+	m.clampDetailOffset(lineCount)
 }
 
 func (m *Model) handleExecDoneMsg(msg liverun.ExecDoneMsg) {
@@ -825,6 +857,7 @@ func (m *Model) handleExecDoneMsg(msg liverun.ExecDoneMsg) {
 	// just before ExecDoneMsg.
 	m.refreshData()
 	m.running = false
+	m.active = false
 	m.liveResult = msg.Result
 	if msg.Err != nil {
 		m.notice = msg.Err.Error()
@@ -833,6 +866,8 @@ func (m *Model) handleExecDoneMsg(msg liverun.ExecDoneMsg) {
 	case "failed":
 		m.showSummary = false
 		if failed := findFailedLeaf(m.tree.Root); failed != nil {
+			m.path = []*StepNode{m.tree.Root}
+			m.treeOffset = 0
 			m.navigateToNode(failed)
 		}
 	case "success":
@@ -845,36 +880,37 @@ func (m *Model) handleExecDoneMsg(msg liverun.ExecDoneMsg) {
 			m.navigateToNode(last)
 		}
 	}
-	m.rebuildRanges()
+	// Terminal detail is historical inspection: live updates may no longer
+	// change a user's selection or detail viewport.
+	m.followActive = false
+	m.followTail = false
+	m.rebuildDetail()
 }
 
-func (m *Model) scrollLogUp() {
-	if m.logOffset > m.maxLogOffset() {
-		m.logOffset = m.maxLogOffset()
+func (m *Model) scrollDetailUp() {
+	if m.detailOffset > m.maxDetailOffset() {
+		m.detailOffset = m.maxDetailOffset()
 	}
-	m.logOffset--
-	if m.logOffset < 0 {
-		m.logOffset = 0
+	m.detailOffset--
+	if m.detailOffset < 0 {
+		m.detailOffset = 0
 	}
-	m.syncSelectionToLog()
 }
 
 func (m *Model) handleMouse(msg tea.MouseMsg) {
 	switch msg.Button {
 	case tea.MouseButtonWheelUp:
-		m.autoFollow = false
-		if m.logOffset > m.maxLogOffset() {
-			m.logOffset = m.maxLogOffset()
+		m.followActive = false
+		m.followTail = false
+		if m.detailOffset > m.maxDetailOffset() {
+			m.detailOffset = m.maxDetailOffset()
 		}
-		m.logOffset -= 3
-		if m.logOffset < 0 {
-			m.logOffset = 0
+		m.detailOffset -= 3
+		if m.detailOffset < 0 {
+			m.detailOffset = 0
 		}
-		m.syncSelectionToLog()
 	case tea.MouseButtonWheelDown:
-		m.autoFollow = false
-		m.logOffset += 3
-		m.syncSelectionToLog()
+		m.detailOffset += 3
 	}
 }
 
@@ -889,23 +925,32 @@ func (m *Model) handleRefreshMsg() tea.Cmd {
 	if !m.hasLiveUpdates() {
 		return nil
 	}
+	selectedBefore := m.selectedNode()
+	previousLineCount := m.detailLineCount
 	m.refreshData()
-	if m.autoFollow {
+	if m.followActive {
 		m.applyAutoFollowCursor()
 	}
-	lineCount := m.rebuildRanges()
-	if m.shouldSyncAutoFollowDetail() {
-		m.syncLogToAutoFollowTail()
+	lineCount := m.rebuildDetail()
+	if m.shouldFollowTail() && (m.selectedNode() != selectedBefore || lineCount != previousLineCount) {
+		m.scrollSelectedDetailToTail()
 	}
-	m.clampLogOffset(lineCount)
+	m.clampDetailOffset(lineCount)
 	if !m.hasLiveUpdates() {
 		return nil
 	}
 	return tuistyle.DoRefresh()
 }
 
-func (m *Model) shouldSyncAutoFollowDetail() bool {
-	return (m.active || m.running) && m.autoFollow && !m.liveUIVisible()
+func (m *Model) shouldFollowTail() bool {
+	return (m.active || m.running) && m.followTail && !m.liveUIVisible()
+}
+
+func (m *Model) shouldFollowSelectedTail(prefix string) bool {
+	if !m.shouldFollowTail() {
+		return false
+	}
+	return m.tree.FindByPrefix(prefix) == m.selectedNode()
 }
 
 func (m *Model) handlePulseMsg() tea.Cmd {
@@ -956,12 +1001,18 @@ func (m *Model) resumeAgentTargetForSelection() *StepNode {
 	if isAgentNode(selected) && m.canResumeAgentSession(selected) {
 		return selected
 	}
-
-	scope := m.currentContainer()
-	if selected != nil && selected.Type == NodeSubWorkflow {
-		scope = selected.Drilldown()
+	// Resume scope follows the selected execution's structural ancestry, not
+	// the optional manual drill path. Inline-expanded nested rows therefore
+	// resume within their own sub-workflow before considering root.
+	for ancestor := selected; ancestor != nil; ancestor = ancestor.Parent {
+		if ancestor.Type != NodeSubWorkflow && ancestor.Type != NodeRoot {
+			continue
+		}
+		if target := m.lastResumableAgentInWorkflow(ancestor); target != nil {
+			return target
+		}
 	}
-	return m.lastResumableAgentInWorkflow(scope)
+	return nil
 }
 
 func (m *Model) lastResumableAgentInWorkflow(scope *StepNode) *StepNode {
@@ -1013,8 +1064,15 @@ func (m *Model) handleOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			mdl, cmd := m.requestQuit()
 			return mdl, cmd, true
 		case "up", "k":
+			m.followActive = false
+			if msg.String() == "k" {
+				m.followTail = false
+			}
 			m.scrollSummary(-1)
 		case "down", "j":
+			if msg.String() == "down" {
+				m.followActive = false
+			}
 			m.scrollSummary(1)
 		case "enter":
 			if selected := m.selectedNode(); selected != nil && selected.IsContainer() {
@@ -1058,10 +1116,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.showSummary = !m.showSummary
 		m.summaryOffset = 0
 	case "esc":
-		m.autoFollow = false
+		m.followActive = false
 		return m.handleEsc()
 	case "enter":
-		m.autoFollow = false
+		m.followActive = false
 		return m.handleEnter()
 	case "up":
 		cmd := m.handleStepNavigation(-1)
@@ -1070,12 +1128,13 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		cmd := m.handleStepNavigation(1)
 		return m, cmd
 	case "k":
-		m.autoFollow = false
-		m.scrollLogUp()
+		m.followActive = false
+		m.followTail = false
+		m.scrollDetailUp()
 	case "j":
-		m.autoFollow = false
-		m.logOffset++
-		m.syncSelectionToLog()
+		m.detailOffset++
+	case "t":
+		m.handleTailFollowKey()
 	case "l":
 		m.handleFollowKey()
 	case "r":
@@ -1084,7 +1143,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleDebugKey()
 	case "g":
 		m.handleLoadFull()
-		m.rebuildRanges()
+		m.rebuildDetail()
+	case "i":
+		m.toggleSelectedInputExpansion()
 	case "c":
 		cmd := m.handleCopySelectedDetail()
 		return m, cmd
@@ -1107,17 +1168,31 @@ func (m *Model) handleDebugKey() (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleFollowKey() {
+	if !m.hasLiveUpdates() && m.liveUI == nil {
+		return
+	}
 	if m.liveUI != nil {
 		m.followLiveUI()
 		return
 	}
-	m.autoFollow = true
+	m.followActive = true
+	m.followTail = true
+	m.path = []*StepNode{m.tree.Root}
+	m.treeOffset = 0
 	m.applyAutoFollowCursor()
-	lineCount := m.rebuildRanges()
-	if m.shouldSyncAutoFollowDetail() {
-		m.syncLogToAutoFollowTail()
+	lineCount := m.rebuildDetail()
+	m.scrollSelectedDetailToTail()
+	m.clampDetailOffset(lineCount)
+}
+
+func (m *Model) handleTailFollowKey() {
+	if !m.hasLiveUpdates() {
+		return
 	}
-	m.clampLogOffset(lineCount)
+	m.followTail = true
+	lineCount := m.rebuildDetail()
+	m.scrollSelectedDetailToTail()
+	m.clampDetailOffset(lineCount)
 }
 
 func (m *Model) handleResumeKey() (tea.Model, tea.Cmd) {
@@ -1170,26 +1245,60 @@ func (m *Model) handleCopySelectedDetail() tea.Cmd {
 }
 
 func (m *Model) selectedStepDetailText() string {
-	m.loadSelectedAgentCallOutput()
-	selected := m.selectedNode()
-	if selected == nil {
+	doc := m.selectedDetailDocument(m.rightPaneWidth())
+	if len(doc.header) == 0 {
 		return ""
 	}
-	lines, ranges := buildLogLines(
-		m.currentChildren(),
-		m.pendingSelected(),
-		m.rightPaneWidth(),
-		m.loadedFull,
-		m.pulsePhase,
-		m.running || m.active,
-		m.resolverCfg,
-	)
-	for _, r := range ranges {
-		if r.node == selected {
-			return m.copyTextWithContext(plainTextLines(lines[r.startLine:r.endLine]))
-		}
+	return m.copyTextWithContext(doc.renderCopy())
+}
+
+func (m *Model) selectedDetailDocument(width int) detailDocument {
+	node := m.selectedNode()
+	m.loadHistoricalOutput(node)
+	var previous *StepNode
+	if m.tree != nil {
+		previous = m.tree.PreviousExecution(node)
+		m.loadHistoricalOutput(previous)
 	}
-	return ""
+	expanded := false
+	if node != nil && m.inputExpanded != nil {
+		expanded = m.inputExpanded[node.NodeKey()]
+	}
+	return buildDetailDocument(node, detailBuildOptions{
+		width:         width,
+		loadedFull:    node != nil && m.loadedFull[node.NodeKey()],
+		inputExpanded: expanded,
+		previous:      previous,
+		pulsePhase:    m.pulsePhase,
+		runActive:     m.running || m.active,
+		resumeReady:   m.canResumeAgentSession(node),
+		resolverCfg:   m.resolverCfg,
+	})
+}
+
+func (m *Model) toggleSelectedInputExpansion() {
+	node := m.selectedNode()
+	if node == nil {
+		return
+	}
+	input := ""
+	switch node.Type {
+	case NodeShell:
+		input = currentCommand(node)
+	case NodeScript:
+		input = node.StaticScript
+	case NodeHeadlessAgent, NodeInteractiveAgent, NodeAgentCall:
+		input = currentPrompt(node)
+	}
+	if len(wrappedPlainLines(input, m.rightPaneWidth()-3)) <= 3 {
+		return
+	}
+	if m.inputExpanded == nil {
+		m.inputExpanded = make(map[string]bool)
+	}
+	key := node.NodeKey()
+	m.inputExpanded[key] = !m.inputExpanded[key]
+	m.rebuildDetail()
 }
 
 func (m *Model) copyTextWithContext(detail string) string {
@@ -1216,25 +1325,16 @@ func (m *Model) copyDirectory() string {
 	return m.projectDir
 }
 
-func plainTextLines(lines []string) string {
-	plain := make([]string, 0, len(lines))
-	for _, line := range lines {
-		plain = append(plain, tuistyle.Sanitize(line))
-	}
-	return strings.TrimRight(strings.Join(plain, "\n"), "\n")
-}
-
 func (m *Model) handleStepNavigation(delta int) tea.Cmd {
-	m.autoFollow = false
+	m.followActive = false
 	m.moveCursor(delta)
-	m.rebuildRanges()
-	m.syncLogToSelection()
+	m.detailOffset = 0
+	m.rebuildDetail()
 	return nil
 }
 
-// applyAutoFollowCursor moves the cursor to the ancestor-at-current-level of
-// the currently active step. This is the new auto-follow logic that does NOT
-// drill into sub-workflows or loops.
+// applyAutoFollowCursor selects the current active leaf without changing the
+// manual drill scope.
 func (m *Model) applyAutoFollowCursor() {
 	if active := m.liveUINode(); active != nil {
 		m.applyAutoFollowToNode(active)
@@ -1255,221 +1355,105 @@ func (m *Model) applyAutoFollowToNode(active *StepNode) {
 	if active == nil {
 		return
 	}
-	if active.Type == NodeAgentCall {
-		m.navigateToNode(active)
+	// Following changes selection only. It deliberately leaves the manual
+	// breadcrumb scope untouched; the projector exposes the active ancestry
+	// whenever it lies under that scope.
+	if scope := m.currentContainer(); scope == nil || !isDescendantOf(active, scope) {
 		return
 	}
-	target := m.ancestorAtCurrentLevel(active)
-	if target == nil && len(m.path) > 1 {
-		m.path = m.path[:1]
-		m.cursor = 0
-		m.logOffset = 0
-		target = m.ancestorAtCurrentLevel(active)
-	}
-	if target == nil {
-		return
-	}
-	if idx := m.indexOfChild(target); idx >= 0 {
-		m.cursor = idx
-	}
-}
-
-// ancestorAtCurrentLevel walks node.Parent until it finds a node whose parent
-// is m.currentContainer(), returning that node. Returns nil if not found.
-func (m *Model) ancestorAtCurrentLevel(node *StepNode) *StepNode {
-	if node == nil {
-		return nil
-	}
-	cc := m.currentContainer()
-	for n := node; n != nil; n = n.Parent {
-		if n.Parent == cc {
-			return n
-		}
-	}
-	return nil
-}
-
-// indexOfChild returns the index of node in m.currentChildren(), or -1.
-func (m *Model) indexOfChild(node *StepNode) int {
-	if node == nil {
-		return -1
-	}
-	for i, c := range m.currentChildren() {
-		if c == node {
-			return i
-		}
-	}
-	return -1
+	m.setSelected(active)
+	m.ensureTreeSelectionVisible(m.cursor)
 }
 
 func deepestInProgressNode(n *StepNode) *StepNode {
-	if n == nil {
-		return nil
-	}
-	var found *StepNode
-	for _, child := range n.Children {
-		if candidate := deepestInProgressNode(child); candidate != nil {
-			found = candidate
-		}
-	}
-	if found != nil {
-		return found
-	}
-	if n.Parent != nil && n.Status == StatusInProgress {
-		return n
-	}
-	return nil
+	return deepestMatchingNode(n, func(node *StepNode) bool {
+		return node.Parent != nil && node.Status == StatusInProgress
+	})
 }
 
 func findDeepestInProgressUI(n *StepNode, stepID string) *StepNode {
+	return deepestMatchingNode(n, func(node *StepNode) bool {
+		return node.ID == stepID && node.Type == NodeUI && node.Status == StatusInProgress
+	})
+}
+
+func deepestMatchingNode(n *StepNode, matches func(*StepNode) bool) *StepNode {
 	if n == nil {
 		return nil
 	}
 	var found *StepNode
 	for _, child := range n.Children {
-		if candidate := findDeepestInProgressUI(child, stepID); candidate != nil {
+		if candidate := deepestMatchingNode(child, matches); candidate != nil {
 			found = candidate
 		}
 	}
 	if found != nil {
 		return found
 	}
-	if n.ID == stepID && n.Type == NodeUI && n.Status == StatusInProgress {
+	if matches(n) {
 		return n
 	}
 	return nil
 }
 
-// pendingSelected returns the selected node if it is pending, else nil.
-func (m *Model) pendingSelected() *StepNode {
-	n := m.selectedNode()
-	if n != nil && n.Status == StatusPending {
-		return n
-	}
-	return nil
-}
-
-// rebuildRanges recomputes m.stepRanges from the current tree state and
-// selection. Called after any mutation that changes log content or width.
-func (m *Model) rebuildRanges() int {
-	lines, ranges := buildLogLines(
-		m.currentChildren(),
-		m.pendingSelected(),
-		m.rightPaneWidth(),
-		m.loadedFull,
-		m.pulsePhase,
-		m.running || m.active,
-		m.resolverCfg,
-	)
-	m.stepRanges = ranges
-	m.logLineCount = len(lines)
+// rebuildDetail recomputes the selected detail's line count after a change to
+// its content or width. Tree selection is intentionally not derived from it.
+func (m *Model) rebuildDetail() int {
+	lines := m.selectedDetailDocument(m.rightPaneWidth()).renderScreen()
+	m.detailLineCount = len(lines)
 	return len(lines)
 }
 
-// maxLogOffset returns the maximum valid offset for the currently visible
+// maxDetailOffset returns the maximum valid offset for the currently visible
 // right-pane content.
-func (m *Model) maxLogOffset() int {
-	return max(0, m.rightPaneLineCount(m.logLineCount)-m.bodyHeight())
+func (m *Model) maxDetailOffset() int {
+	return max(0, m.rightPaneLineCount(m.detailLineCount)-m.bodyHeight())
 }
 
 func (m *Model) rightPaneLineCount(fallback int) int {
 	if !m.liveUIVisible() {
 		return fallback
 	}
-	m.liveUI.SetWidth(m.rightPaneWidth())
-	return len(strings.Split(m.liveUI.View(), "\n"))
+	return len(m.liveUIDetailLines(m.rightPaneWidth()))
 }
 
-// rightPaneWidth estimates the right-pane width for range computation.
-// Uses the same formula as renderTwoColumn but with a conservative list-
-// column estimate so ranges are close enough for scroll sync.
+func (m *Model) liveUIDetailLines(width int) []string {
+	if m.liveUI == nil {
+		return nil
+	}
+	// The rail consumes three columns, so give the embedded form only the
+	// remaining selected-detail width before the document wraps it.
+	m.liveUI.SetWidth(max(1, width-3))
+	doc := m.selectedDetailDocument(width)
+	for i := range doc.sections {
+		if doc.sections[i].label == currentFormLabel {
+			doc.sections[i].body = m.liveUI.View()
+			doc.sections[i].copy = ""
+			break
+		}
+	}
+	return doc.renderScreen()
+}
+
+// rightPaneWidth estimates the right-pane width for selected-detail line
+// calculation using the same tree layout measurement as rendering.
 func (m *Model) rightPaneWidth() int {
-	_, rightWidth, _ := twoColumnPaneWidths(m.termWidth, m.buildStepRows(m.currentChildren()))
-	return rightWidth
+	layout := measureTreePaneLayout(m.termWidth, rowTexts(m.buildProjectedRenderedRows()), m.sidebarWidth)
+	return layout.detail
 }
 
-// syncLogToSelection sets logOffset so the selected step's block is in view.
-func (m *Model) syncLogToSelection() {
-	children := m.currentChildren()
-	if m.cursor < 0 || m.cursor >= len(children) {
-		return
-	}
-	sel := children[m.cursor]
-	for _, r := range m.stepRanges {
-		if r.node == sel {
-			m.logOffset = r.startLine
-			m.logAnchor = stepLineAnchor{stepKey: sel.NodeKey(), lineOffsetInBlock: 0}
-			return
-		}
-	}
+func (m *Model) scrollSelectedDetailToTail() {
+	m.detailOffset = m.maxDetailOffset()
 }
 
-func (m *Model) syncLogToAutoFollowTail() {
-	if m.syncLogToNodeTail(m.autoFollowDetailNode()) {
-		return
-	}
-	m.syncLogToSelection()
-}
-
-func (m *Model) autoFollowDetailNode() *StepNode {
-	if active := m.tree.FindByPrefix(m.activeStepPrefix); active != nil {
-		return active
-	}
-	return m.selectedNode()
-}
-
-func (m *Model) syncLogToNodeTail(node *StepNode) bool {
-	if node == nil {
-		return false
-	}
-	bodyH := m.bodyHeight()
-	for _, r := range m.stepRanges {
-		if r.node == node {
-			m.logOffset = min(max(r.startLine, r.endLine-bodyH), m.maxLogOffset())
-			m.logAnchor = stepLineAnchor{
-				stepKey:           node.NodeKey(),
-				lineOffsetInBlock: m.logOffset - r.startLine,
-			}
-			return true
-		}
-	}
-	return false
-}
-
-// syncSelectionToLog updates the step-list cursor to the latest started step
-// whose block overlaps the current log viewport.
-func (m *Model) syncSelectionToLog() {
-	bodyH := m.bodyHeight()
-	var winner *StepNode
-	winnerStart := 0
-	for _, r := range m.stepRanges {
-		if r.startLine < m.logOffset+bodyH && r.endLine > m.logOffset {
-			if winner == nil || r.startLine > winnerStart {
-				winner = r.node
-				winnerStart = r.startLine
-			}
-		}
-	}
-	if winner != nil {
-		target := m.ancestorAtCurrentLevel(winner)
-		if idx := m.indexOfChild(target); idx >= 0 {
-			m.cursor = idx
-		}
-		m.logAnchor = stepLineAnchor{
-			stepKey:           winner.NodeKey(),
-			lineOffsetInBlock: m.logOffset - winnerStart,
-		}
-	}
-}
-
-func (m *Model) clampLogOffset(lineCount int) {
+func (m *Model) clampDetailOffset(lineCount int) {
 	lineCount = m.rightPaneLineCount(lineCount)
 	maxOffset := max(0, lineCount-m.bodyHeight())
-	if m.logOffset < 0 {
-		m.logOffset = 0
+	if m.detailOffset < 0 {
+		m.detailOffset = 0
 	}
-	if m.logOffset > maxOffset {
-		m.logOffset = maxOffset
+	if m.detailOffset > maxOffset {
+		m.detailOffset = maxOffset
 	}
 }
 
@@ -1490,60 +1474,105 @@ func (m *Model) applyOutputChunk(msg liverun.OutputChunkMsg) {
 	}
 }
 
-func (m *Model) loadSelectedAgentCallOutput() {
-	node := m.selectedNode()
-	if node == nil || node.Type != NodeAgentCall || node.CallOutputLoaded || node.CallOutputPrefix == "" || m.sessionDir == "" {
-		return
+// loadHistoricalOutput loads an execution's bounded persisted evidence. Calls
+// and ordinary autonomous steps use the same source, while only agents pass
+// raw output through their normal CLI filter before it reaches selected detail.
+func (m *Model) loadHistoricalOutput(node *StepNode) {
+	m.loadHistoricalOutputFromDisk(node, false)
+}
+
+func (m *Model) loadHistoricalOutputFromDisk(node *StepNode, full bool) bool {
+	if node == nil || m.sessionDir == "" || !historicalOutputNode(node) || (!full && node.OutputLoaded) {
+		return false
 	}
 	// A live in-process child is already feeding chunks through OutputChunkMsg.
 	// Reading its still-growing file as well would duplicate bytes.
 	if m.entered == FromLiveRun && node.Status == StatusInProgress {
-		return
+		return false
 	}
-	base := liverun.SanitizeOutputPrefix(node.CallOutputPrefix)
+	prefix := node.OutputPrefix
+	if node.Type == NodeAgentCall {
+		prefix = node.CallOutputPrefix
+		if !full && node.CallOutputLoaded {
+			return false
+		}
+	}
+	if prefix == "" {
+		return false
+	}
+	base := liverun.SanitizeOutputPrefix(prefix)
 	if base == "" || base == "." || base == ".." || strings.Contains(base, "..") {
-		m.loadErr = fmt.Sprintf("load call output: invalid output prefix %q", node.CallOutputPrefix)
-		return
+		m.loadErr = fmt.Sprintf("%s: invalid output prefix %q", outputLoadLabel(node), prefix)
+		return false
 	}
 	root, err := os.OpenRoot(filepath.Join(m.sessionDir, "output"))
 	if errors.Is(err, os.ErrNotExist) {
-		node.CallOutputLoaded = true
-		m.clearCallOutputLoadError()
-		return
+		markHistoricalOutputLoaded(node)
+		m.clearOutputLoadError(node)
+		return true
 	}
 	if err != nil {
-		m.loadErr = "load call output: " + err.Error()
-		return
+		m.loadErr = outputLoadLabel(node) + ": " + err.Error()
+		return false
 	}
 
-	stdout, stdoutFound, err := readBoundedCallOutput(root, base+".out")
-	if err != nil {
-		err = errors.Join(err, root.Close())
-		m.loadErr = "load call output: " + err.Error()
-		return
+	stdout, stdoutFound, stderr, stderrFound, err := readOutputs(root, base, full)
+	if err == nil && !stdoutFound && !stderrFound {
+		legacyBase := liverun.LegacySanitizeOutputPrefix(prefix)
+		if legacyBase != base {
+			stdout, stdoutFound, stderr, stderrFound, err = readOutputs(root, legacyBase, full)
+		}
 	}
-	stderr, stderrFound, err := readBoundedCallOutput(root, base+".err")
 	if err != nil {
 		err = errors.Join(err, root.Close())
-		m.loadErr = "load call output: " + err.Error()
-		return
+		m.loadErr = outputLoadLabel(node) + ": " + err.Error()
+		return false
 	}
 	if err := root.Close(); err != nil {
-		m.loadErr = "load call output: " + err.Error()
-		return
+		m.loadErr = outputLoadLabel(node) + ": " + err.Error()
+		return false
 	}
-	stdout, stderr = filterAgentCallOutput(node, stdout, stderr)
+	if node.Type == NodeHeadlessAgent || node.Type == NodeAgentCall {
+		stdout, stderr = filterAgentOutput(node, stdout, stderr)
+	}
 	if stdoutFound {
 		node.Stdout = stdout
 	}
 	if stderrFound {
 		node.Stderr = stderr
 	}
-	node.CallOutputLoaded = true
-	m.clearCallOutputLoadError()
+	markHistoricalOutputLoaded(node)
+	m.clearOutputLoadError(node)
+	return true
 }
 
-func filterAgentCallOutput(node *StepNode, rawStdout, rawStderr string) (stdout, stderr string) {
+func markHistoricalOutputLoaded(node *StepNode) {
+	node.OutputLoaded = true
+	if node.Type == NodeAgentCall {
+		node.CallOutputLoaded = true
+	}
+}
+
+func historicalOutputNode(node *StepNode) bool {
+	if node == nil || isInteractiveExecution(node) {
+		return false
+	}
+	switch node.Type {
+	case NodeShell, NodeScript, NodeHeadlessAgent, NodeAgentCall:
+		return true
+	default:
+		return false
+	}
+}
+
+func outputLoadLabel(node *StepNode) string {
+	if node != nil && node.Type == NodeAgentCall {
+		return "load call output"
+	}
+	return "load output"
+}
+
+func filterAgentOutput(node *StepNode, rawStdout, rawStderr string) (stdout, stderr string) {
 	stdout, stderr = rawStdout, rawStderr
 	adapter, err := cli.Get(node.AgentCLI)
 	if err != nil {
@@ -1562,7 +1591,16 @@ func filterAgentCallOutput(node *StepNode, rawStdout, rawStderr string) (stdout,
 	return stdout, stderr
 }
 
-func readBoundedCallOutput(root *os.Root, name string) (output string, found bool, err error) {
+func readOutputs(root *os.Root, base string, full bool) (stdout string, stdoutFound bool, stderr string, stderrFound bool, err error) {
+	stdout, stdoutFound, err = readOutput(root, base+".out", full)
+	if err != nil {
+		return "", false, "", false, err
+	}
+	stderr, stderrFound, err = readOutput(root, base+".err", full)
+	return stdout, stdoutFound, stderr, stderrFound, err
+}
+
+func readOutput(root *os.Root, name string, full bool) (output string, found bool, err error) {
 	file, err := root.Open(name)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", false, nil
@@ -1573,6 +1611,14 @@ func readBoundedCallOutput(root *os.Root, name string) (output string, found boo
 	defer func() {
 		err = errors.Join(err, file.Close())
 	}()
+
+	if full {
+		data, err := io.ReadAll(file)
+		if err != nil {
+			return "", false, fmt.Errorf("read %s: %w", name, err)
+		}
+		return string(data), true, nil
+	}
 
 	info, err := file.Stat()
 	if err != nil {
@@ -1595,8 +1641,8 @@ func readBoundedCallOutput(root *os.Root, name string) (output string, found boo
 	return tailOutputCap(output), true, nil
 }
 
-func (m *Model) clearCallOutputLoadError() {
-	if strings.HasPrefix(m.loadErr, "load call output: ") {
+func (m *Model) clearOutputLoadError(node *StepNode) {
+	if strings.HasPrefix(m.loadErr, outputLoadLabel(node)+": ") {
 		m.loadErr = ""
 	}
 }
@@ -1628,17 +1674,44 @@ func tailOutputCap(s string) string {
 }
 
 func (m *Model) moveCursor(delta int) {
-	children := m.currentChildren()
-	n := len(children)
-	if n == 0 {
+	rows := m.projectedRows()
+	if len(rows) == 0 {
 		return
 	}
-	m.cursor += delta
-	if m.cursor < 0 {
-		m.cursor = 0
+	index := -1
+	for i, row := range rows {
+		if row.selectable() && row.node == m.selectedNode() {
+			index = i
+			break
+		}
 	}
-	if m.cursor >= n {
-		m.cursor = n - 1
+	if index < 0 {
+		for _, row := range rows {
+			if row.selectable() {
+				m.setSelected(row.node)
+				return
+			}
+		}
+		return
+	}
+	for index += delta; index >= 0 && index < len(rows); index += delta {
+		if rows[index].selectable() {
+			m.setSelected(rows[index].node)
+			m.ensureTreeSelectionVisible(index)
+			return
+		}
+	}
+}
+
+func (m *Model) ensureTreeSelectionVisible(row int) {
+	height := m.bodyHeight()
+	if row < m.treeOffset {
+		m.treeOffset = row
+	} else if row >= m.treeOffset+height {
+		m.treeOffset = row - height + 1
+	}
+	if m.treeOffset < 0 {
+		m.treeOffset = 0
 	}
 }
 
@@ -1646,15 +1719,10 @@ func (m *Model) handleEsc() (tea.Model, tea.Cmd) {
 	if len(m.path) > 1 {
 		leaving := m.path[len(m.path)-1]
 		m.path = m.path[:len(m.path)-1]
-		parent := m.currentContainer()
-		for i, c := range parent.Children {
-			if c == leaving {
-				m.cursor = i
-				break
-			}
-		}
-		m.logOffset = 0
-		m.rebuildRanges()
+		m.setSelected(leaving)
+		m.treeOffset = 0
+		m.detailOffset = 0
+		m.rebuildDetail()
 		return m, nil
 	}
 	// At top level: show quit-confirm while running, otherwise navigate back.
@@ -1681,9 +1749,10 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 	case NodeHeadlessAgent, NodeInteractiveAgent:
 		if n.IsContainer() {
 			m.path = append(m.path, n)
-			m.cursor = 0
-			m.logOffset = 0
-			m.rebuildRanges()
+			m.setSelected(firstRealChild(n.Drilldown()))
+			m.treeOffset = 0
+			m.detailOffset = 0
+			m.rebuildDetail()
 			return m, nil
 		}
 		if m.canResumeAgentSession(n) {
@@ -1695,9 +1764,10 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 
 	case NodeLoop, NodeGroup:
 		m.path = append(m.path, n)
-		m.cursor = 0
-		m.logOffset = 0
-		m.rebuildRanges()
+		m.setSelected(firstRealChild(n.Drilldown()))
+		m.treeOffset = 0
+		m.detailOffset = 0
+		m.rebuildDetail()
 		return m, nil
 
 	case NodeSubWorkflow:
@@ -1705,9 +1775,10 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 			n.ErrorMessage = err.Error()
 		}
 		m.path = append(m.path, n)
-		m.cursor = 0
-		m.logOffset = 0
-		m.rebuildRanges()
+		m.setSelected(firstRealChild(n.Drilldown()))
+		m.treeOffset = 0
+		m.detailOffset = 0
+		m.rebuildDetail()
 		return m, nil
 
 	case NodeIteration:
@@ -1718,9 +1789,10 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 			}
 		}
 		m.path = append(m.path, n)
-		m.cursor = 0
-		m.logOffset = 0
-		m.rebuildRanges()
+		m.setSelected(firstRealChild(n.Drilldown()))
+		m.treeOffset = 0
+		m.detailOffset = 0
+		m.rebuildDetail()
 		return m, nil
 
 	case NodeAgentCall:
@@ -1740,7 +1812,13 @@ func (m *Model) handleLoadFull() {
 		return
 	}
 	if n.Type == NodeShell || n.Type == NodeScript || n.Type == NodeHeadlessAgent || n.Type == NodeAgentCall {
-		m.loadedFull[n.NodeKey()] = true
+		prefix := n.OutputPrefix
+		if n.Type == NodeAgentCall {
+			prefix = n.CallOutputPrefix
+		}
+		if m.sessionDir == "" || prefix == "" || m.loadHistoricalOutputFromDisk(n, true) {
+			m.loadedFull[n.NodeKey()] = true
+		}
 	}
 }
 
@@ -1754,61 +1832,14 @@ func (m *Model) navigateToNode(target *StepNode) {
 	if target == nil {
 		return
 	}
-	// Collect ancestors from target.Parent up to (but not including) root.
-	var ancestors []*StepNode
-	for n := target.Parent; n != nil && n != m.tree.Root; n = n.Parent {
-		ancestors = append(ancestors, n)
-	}
-	// Reverse so ancestors are in root-first order.
-	for i, j := 0, len(ancestors)-1; i < j; i, j = i+1, j-1 {
-		ancestors[i], ancestors[j] = ancestors[j], ancestors[i]
-	}
-
-	// Build the path, omitting FlattenTarget nodes (their parent iteration
-	// stays in the path and provides the container via Drilldown()).
-	newPath := []*StepNode{m.tree.Root}
-	for _, anc := range ancestors {
-		if p := anc.Parent; p != nil && p.Type == NodeIteration && p.FlattenTarget == anc {
-			continue
-		}
-		newPath = append(newPath, anc)
-	}
-
-	// Ensure any sub-workflows in the path are loaded.
-	for _, pathNode := range newPath[1:] {
-		if pathNode.Type == NodeSubWorkflow && !pathNode.SubLoaded {
-			if err := m.tree.EnsureSubWorkflowLoaded(pathNode); err != nil && pathNode.ErrorMessage == "" {
-				pathNode.ErrorMessage = err.Error()
-			}
-		}
-	}
-
-	// Resolve target's cursor index in the proposed container before
-	// mutating state — a miss would otherwise leave path out of sync with
-	// cursor. Temporarily swap in newPath to reuse currentChildren().
-	savedPath := m.path
-	m.path = newPath
-	children := m.currentChildren()
-	cursor := -1
-	for i, c := range children {
-		if c == target {
-			cursor = i
-			break
-		}
-	}
-	if cursor < 0 {
-		// Target not in visible children; revert and bail out.
-		m.path = savedPath
-		return
-	}
-
-	m.cursor = cursor
-	m.logOffset = 0
+	m.ensureProjectionContainersLoaded(target)
+	m.setSelected(target)
+	m.detailOffset = 0
 }
 
-// lastTopLevelChild returns the final direct child of root, or nil when
-// root has no children. Used to park the cursor on the last workflow step
-// after a successful run.
+// lastTopLevelChild returns the final direct child of root, or nil when root
+// has no children. Successful live runs use it to focus the final workflow
+// step without opening the optional summary screen.
 func lastTopLevelChild(root *StepNode) *StepNode {
 	if root == nil || len(root.Children) == 0 {
 		return nil
@@ -1816,21 +1847,36 @@ func lastTopLevelChild(root *StepNode) *StepNode {
 	return root.Children[len(root.Children)-1]
 }
 
-// findFailedLeaf returns the deepest non-container StepNode with StatusFailed,
-// or nil if none exists.
+// findFailedLeaf returns the deepest non-container StepNode with StatusFailed.
+// Equal-depth failures use durable terminal-event order when both candidates
+// have it, otherwise traversal preserves workflow order.
 func findFailedLeaf(n *StepNode) *StepNode {
 	if n == nil {
 		return nil
 	}
-	for _, c := range n.Children {
-		if found := findFailedLeaf(c); found != nil {
-			return found
+	var best *StepNode
+	bestDepth := -1
+	var visit func(*StepNode, int)
+	visit = func(node *StepNode, depth int) {
+		if node == nil {
+			return
+		}
+		for _, child := range node.Children {
+			visit(child, depth+1)
+		}
+		if node.Status == StatusFailed && !node.IsContainer() {
+			deeper := depth > bestDepth
+			moreRecent := depth == bestDepth && best != nil &&
+				node.FailureOrdinal > 0 && best.FailureOrdinal > 0 &&
+				node.FailureOrdinal > best.FailureOrdinal
+			if deeper || moreRecent {
+				best = node
+				bestDepth = depth
+			}
 		}
 	}
-	if n.Status == StatusFailed && !n.IsContainer() {
-		return n
-	}
-	return nil
+	visit(n, 0)
+	return best
 }
 
 func (m *Model) refreshData() {
@@ -1861,6 +1907,7 @@ func invalidateInProgressAgentCallOutput(node *StepNode) {
 	}
 	if node.Type == NodeAgentCall && node.Status == StatusInProgress {
 		node.CallOutputLoaded = false
+		node.OutputLoaded = false
 	}
 	for _, child := range node.Children {
 		invalidateInProgressAgentCallOutput(child)
