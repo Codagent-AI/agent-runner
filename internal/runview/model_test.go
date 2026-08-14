@@ -854,6 +854,21 @@ func TestModel_Breadcrumb_HidesDefaultProfile(t *testing.T) {
 	}
 }
 
+func TestModel_Breadcrumb_ShowsRecordedPullRequestLink(t *testing.T) {
+	m := newTestModel(simpleTree(), FromInspect)
+	url := "https://github.com/Codagent-AI/agent-runner/pull/62"
+	m.tree.ApplyEvent(RawEvent{Type: "pull_request_recorded", Data: map[string]any{"url": url}})
+
+	breadcrumb := m.renderBreadcrumb()
+	if got := tuistyle.Sanitize(breadcrumb); !strings.Contains(got, "PR #62") {
+		t.Fatalf("breadcrumb = %q, want PR label", got)
+	}
+	wantLink := "\x1b]8;;" + url + "\x1b\\PR #62\x1b]8;;\x1b\\"
+	if !strings.Contains(breadcrumb, wantLink) {
+		t.Fatalf("breadcrumb = %q, want OSC 8 link %q", breadcrumb, wantLink)
+	}
+}
+
 func TestModel_Breadcrumb_ShowsStartRun_WhenFromDefinition(t *testing.T) {
 	tree := simpleTree()
 	tree.Root.Status = StatusInProgress

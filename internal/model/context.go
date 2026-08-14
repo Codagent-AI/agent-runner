@@ -52,6 +52,10 @@ type ExecutionContext struct {
 	SessionProfiles   map[string]string // maps session-originating step ID → profile name
 	CapturedVariables map[string]CapturedValue
 	LastStepOutcome   *string // nil, "success", or "failed"
+	// LastRecordedPullRequestURL suppresses duplicate PR audit observations in
+	// one execution context. It is intentionally transient; captured variables
+	// remain the durable resume mechanism.
+	LastRecordedPullRequestURL string
 
 	// LastSessionStepID tracks the most recently stored session key
 	// (Go maps are unordered, so we can't rely on insertion order).

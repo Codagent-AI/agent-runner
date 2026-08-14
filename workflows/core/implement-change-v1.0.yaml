@@ -110,6 +110,7 @@ steps:
       Verify the final state by querying the open pull request for the current head branch. Do not signal completion unless it is open, its base branch is non-empty, it is a draft, and its head SHA equals local `HEAD`. Report the pull request URL and actual base branch.
 
   - id: verify-draft-pr
+    capture: pr_url
     command: |
       branch=$(git branch --show-current)
       local_head=$(git rev-parse HEAD)
@@ -127,6 +128,7 @@ steps:
         echo "open pull request does not match required draft state or local HEAD" >&2
         exit 1
       fi
+      printf '%s\n' "$(printf '%s' "$pr_json" | jq -r '.[0].url')"
 
   - id: prepare-acceptance
     session: lead-agent

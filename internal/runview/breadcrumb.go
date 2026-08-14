@@ -2,12 +2,16 @@ package runview
 
 import (
 	"fmt"
+	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/codagent/agent-runner/internal/tuistyle"
 )
+
+var githubPullRequestPath = regexp.MustCompile(`^/[^/]+/[^/]+/pull/(\d+)$`)
 
 func (m *Model) renderBreadcrumb() string {
 	var crumbs []string
@@ -55,9 +59,29 @@ func (m *Model) renderBreadcrumb() string {
 	}
 	suffix += "  ·  "
 
-	return tuistyle.ScreenMargin + crumbStr +
+	result := tuistyle.ScreenMargin + crumbStr +
 		tuistyle.DimStyle.Render(suffix) +
 		m.styledRunStatus()
+	if m.tree.PullRequestURL != "" {
+		result += tuistyle.DimStyle.Render(" · " + osc8Hyperlink(m.tree.PullRequestURL, pullRequestLabel(m.tree.PullRequestURL)))
+	}
+	return result
+}
+
+func pullRequestLabel(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || !strings.EqualFold(parsed.Hostname(), "github.com") {
+		return "PR"
+	}
+	matches := githubPullRequestPath.FindStringSubmatch(parsed.Path)
+	if len(matches) != 2 {
+		return "PR"
+	}
+	return "PR #" + matches[1]
+}
+
+func osc8Hyperlink(target, label string) string {
+	return "\x1b]8;;" + target + "\x1b\\" + label + "\x1b]8;;\x1b\\"
 }
 
 func (m *Model) styledRunStatus() string {

@@ -221,7 +221,9 @@ func ExecuteAgentStep(
 	if step.Capture != "" {
 		captured := strings.TrimSuffix(invocation.Response, "\r\n")
 		captured = strings.TrimSuffix(captured, "\n")
-		ctx.CapturedVariables[step.Capture] = model.NewCapturedString(captured)
+		value := model.NewCapturedString(captured)
+		ctx.CapturedVariables[step.Capture] = value
+		recordPullRequestCapture(ctx, step.ID, step.Capture, value)
 	}
 
 	// Record the originating profile before post-exit session discovery.

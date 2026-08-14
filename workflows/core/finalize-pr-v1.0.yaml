@@ -15,6 +15,16 @@ steps:
 
       If there is an existing pull request and it is a draft, mark it as ready for review.
 
+  - id: record-pull-request
+    capture: pr_url
+    continue_on_failure: true
+    command: |
+      if ! command -v gh >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+        exit 0
+      fi
+      branch=$(git branch --show-current) || exit 0
+      gh pr list --head "$branch" --state open --json url --limit 1 | jq -r '.[0].url // empty' || true
+
   - id: ci-fix-loop
     loop:
       max: 3

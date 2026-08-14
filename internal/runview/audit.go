@@ -422,6 +422,10 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 	}
 
 	switch e.Type {
+	case "pull_request_recorded":
+		if url, ok := stringField(e.Data, "url"); ok && strings.TrimSpace(url) != "" {
+			t.PullRequestURL = strings.TrimSpace(url)
+		}
 	case "run_start":
 		t.Root.Status = StatusInProgress
 		t.Root.Aborted = false
