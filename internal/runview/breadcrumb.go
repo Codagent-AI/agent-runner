@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/codagent/agent-runner/internal/tuistyle"
 )
@@ -63,23 +64,37 @@ func (m *Model) renderBreadcrumb() string {
 		tuistyle.DimStyle.Render(suffix) +
 		m.styledRunStatus()
 	if m.tree.PullRequestURL != "" {
-		result += tuistyle.DimStyle.Render(" · " + osc8Hyperlink(m.tree.PullRequestURL, pullRequestLabel(m.tree.PullRequestURL)))
+		result += pullRequestBreadcrumbSegment(m.tree.PullRequestURL)
 	}
 	return result
 }
 
-func pullRequestLabel(rawURL string) string {
+func pullRequestBreadcrumbSegment(rawURL string) string {
+	canonicalURL, label, ok := validatedPullRequestURL(rawURL)
+	if !ok {
+		return tuistyle.DimStyle.Render(" · PR")
+	}
+	return tuistyle.DimStyle.Render(" · " + osc8Hyperlink(canonicalURL, label))
+}
+
+func validatedPullRequestURL(rawURL string) (canonicalURL, label string, ok bool) {
+	if strings.ContainsFunc(rawURL, unicode.IsControl) {
+		return "", "", false
+	}
 	parsed, err := url.Parse(rawURL)
-	if err != nil || !strings.EqualFold(parsed.Hostname(), "github.com") {
-		return "PR"
+	if err != nil || !strings.EqualFold(parsed.Scheme, "https") || !strings.EqualFold(parsed.Host, "github.com") ||
+		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawPath != "" {
+		return "", "", false
 	}
 	matches := githubPullRequestPath.FindStringSubmatch(parsed.Path)
 	if len(matches) != 2 {
-		return "PR"
+		return "", "", false
 	}
-	return "PR #" + matches[1]
+	canonical := (&url.URL{Scheme: "https", Host: "github.com", Path: parsed.Path}).String()
+	return canonical, "PR #" + matches[1], true
 }
 
+// osc8Hyperlink accepts only a URL returned by validatedPullRequestURL.
 func osc8Hyperlink(target, label string) string {
 	return "\x1b]8;;" + target + "\x1b\\" + label + "\x1b]8;;\x1b\\"
 }

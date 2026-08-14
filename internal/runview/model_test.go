@@ -869,6 +869,21 @@ func TestModel_Breadcrumb_ShowsRecordedPullRequestLink(t *testing.T) {
 	}
 }
 
+func TestModel_Breadcrumb_DoesNotLinkUntrustedPullRequestURL(t *testing.T) {
+	m := newTestModel(simpleTree(), FromInspect)
+	m.tree.ApplyEvent(RawEvent{Type: "pull_request_recorded", Data: map[string]any{
+		"url": "https://github.com/Codagent-AI/agent-runner/pull/62\x1b]8;;https://evil.example\x1b\\",
+	}})
+
+	breadcrumb := m.renderBreadcrumb()
+	if strings.Contains(breadcrumb, "\x1b]8;;") {
+		t.Fatalf("breadcrumb contains OSC 8 sequence for untrusted URL: %q", breadcrumb)
+	}
+	if got := tuistyle.Sanitize(breadcrumb); !strings.Contains(got, "PR") {
+		t.Fatalf("breadcrumb = %q, want plain PR label", got)
+	}
+}
+
 func TestModel_Breadcrumb_ShowsStartRun_WhenFromDefinition(t *testing.T) {
 	tree := simpleTree()
 	tree.Root.Status = StatusInProgress

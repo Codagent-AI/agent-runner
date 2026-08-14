@@ -219,11 +219,7 @@ func ExecuteAgentStep(
 	}
 
 	if step.Capture != "" {
-		captured := strings.TrimSuffix(invocation.Response, "\r\n")
-		captured = strings.TrimSuffix(captured, "\n")
-		value := model.NewCapturedString(captured)
-		ctx.CapturedVariables[step.Capture] = value
-		recordPullRequestCapture(ctx, step.ID, step.Capture, value)
+		captureAgentResponse(step, ctx, invocation.Response)
 	}
 
 	// Record the originating profile before post-exit session discovery.
@@ -240,6 +236,14 @@ func ExecuteAgentStep(
 	emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, invocation.CLILaunched, discoveredID, invocation.Outcome, invocation.Response, invocation.Stderr, &invocation.ExitCode, nil, &extraction, invocation.UsageError)
 
 	return invocation.Outcome, nil
+}
+
+func captureAgentResponse(step *model.Step, ctx *model.ExecutionContext, response string) {
+	captured := strings.TrimSuffix(response, "\r\n")
+	captured = strings.TrimSuffix(captured, "\n")
+	value := model.NewCapturedString(captured)
+	ctx.CapturedVariables[step.Capture] = value
+	recordPullRequestCapture(ctx, step.ID, step.Capture, value)
 }
 
 func buildWorkflowAgentInvocation(

@@ -45,6 +45,29 @@ func (s *AgentDeprecationState) Mark(alias string) bool {
 	return true
 }
 
+// PullRequestCaptureState tracks the most recently observed pull-request URL
+// for one workflow run. All nested execution contexts share this state.
+type PullRequestCaptureState struct {
+	mu      sync.Mutex
+	lastURL string
+}
+
+// NewPullRequestCaptureState creates empty run-scoped PR capture state.
+func NewPullRequestCaptureState() *PullRequestCaptureState {
+	return &PullRequestCaptureState{}
+}
+
+// Mark records url and reports whether it differs from the last observation.
+func (s *PullRequestCaptureState) Mark(url string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if url == s.lastURL {
+		return false
+	}
+	s.lastURL = url
+	return true
+}
+
 // ExecutionContext carries state through workflow execution.
 type ExecutionContext struct {
 	Params            map[string]string
@@ -52,10 +75,10 @@ type ExecutionContext struct {
 	SessionProfiles   map[string]string // maps session-originating step ID → profile name
 	CapturedVariables map[string]CapturedValue
 	LastStepOutcome   *string // nil, "success", or "failed"
-	// LastRecordedPullRequestURL suppresses duplicate PR audit observations in
-	// one execution context. It is intentionally transient; captured variables
+	// PullRequestCaptureState suppresses duplicate PR audit observations for
+	// the complete run. It is intentionally transient; captured variables
 	// remain the durable resume mechanism.
-	LastRecordedPullRequestURL string
+	PullRequestCaptureState *PullRequestCaptureState
 
 	// LastSessionStepID tracks the most recently stored session key
 	// (Go maps are unordered, so we can't rely on insertion order).
@@ -228,6 +251,7 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		ProfileStore:             opts.ProfileStore,
 		AuditLogger:              opts.AuditLogger,
 		AgentDeprecations:        NewAgentDeprecationState(),
+		PullRequestCaptureState:  NewPullRequestCaptureState(),
 		NamedSessions:            namedSessions,
 		NamedSessionDecls:        namedSessionDecls,
 		UIStepHandler:            opts.UIStepHandler,
@@ -327,6 +351,7 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		ProfileStore:             parent.ProfileStore,
 		AuditLogger:              parent.AuditLogger,
 		AgentDeprecations:        parent.AgentDeprecations,
+		PullRequestCaptureState:  parent.PullRequestCaptureState,
 		Control:                  parent.Control,
 		InteractiveAttempt:       parent.InteractiveAttempt,
 		WorkflowResumed:          parent.WorkflowResumed,
@@ -412,6 +437,7 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		ProfileStore:             parent.ProfileStore,
 		AuditLogger:              parent.AuditLogger,
 		AgentDeprecations:        parent.AgentDeprecations,
+		PullRequestCaptureState:  parent.PullRequestCaptureState,
 		Control:                  parent.Control,
 		InteractiveAttempt:       parent.InteractiveAttempt,
 		WorkflowResumed:          parent.WorkflowResumed,

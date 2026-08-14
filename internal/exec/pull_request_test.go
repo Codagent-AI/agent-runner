@@ -30,3 +30,29 @@ func TestExecuteShellStepRecordsPullRequestCapture(t *testing.T) {
 		t.Fatalf("recorded events (-want +got):\n%s", diff)
 	}
 }
+
+func TestRecordPullRequestCaptureDeduplicatesAcrossNestedContexts(t *testing.T) {
+	root := makeCtx()
+	recorder := &mockAuditLogger{}
+	root.AuditLogger = recorder
+	child := model.NewSubWorkflowContext(root, &model.SubWorkflowContextOptions{
+		StepID:          "implement",
+		Params:          map[string]string{},
+		WorkflowFile:    "child.yaml",
+		SubWorkflowName: "child",
+	})
+	url := model.NewCapturedString("https://github.com/Codagent-AI/agent-runner/pull/62")
+
+	recordPullRequestCapture(root, "root-step", "pr_url", url)
+	recordPullRequestCapture(child, "child-step", "pr_url", url)
+
+	var recorded int
+	for _, event := range recorder.events {
+		if event.Type == "pull_request_recorded" {
+			recorded++
+		}
+	}
+	if recorded != 1 {
+		t.Fatalf("pull_request_recorded events = %d, want 1", recorded)
+	}
+}

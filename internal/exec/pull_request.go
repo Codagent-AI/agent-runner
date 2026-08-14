@@ -22,14 +22,28 @@ func recordPullRequestCapture(ctx *model.ExecutionContext, stepID, name string, 
 		return
 	}
 	url = strings.TrimSpace(url)
-	if url == "" || url == ctx.LastRecordedPullRequestURL {
+	if url == "" || !pullRequestCaptureState(ctx).Mark(url) {
 		return
 	}
-	ctx.LastRecordedPullRequestURL = url
 	emitAudit(ctx, audit.Event{
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		Prefix:    audit.BuildPrefix(nestingToAudit(ctx), stepID),
 		Type:      audit.EventPullRequestRecorded,
 		Data:      map[string]any{"url": url},
 	})
+}
+
+func pullRequestCaptureState(ctx *model.ExecutionContext) *model.PullRequestCaptureState {
+	if ctx.PullRequestCaptureState != nil {
+		return ctx.PullRequestCaptureState
+	}
+	root := ctx
+	for root.ParentContext != nil {
+		root = root.ParentContext
+	}
+	if root.PullRequestCaptureState == nil {
+		root.PullRequestCaptureState = model.NewPullRequestCaptureState()
+	}
+	ctx.PullRequestCaptureState = root.PullRequestCaptureState
+	return ctx.PullRequestCaptureState
 }
