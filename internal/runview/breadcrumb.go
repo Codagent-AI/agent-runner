@@ -70,31 +70,37 @@ func (m *Model) renderBreadcrumb() string {
 }
 
 func pullRequestBreadcrumbSegment(rawURL string) string {
-	canonicalURL, label, ok := validatedPullRequestURL(rawURL)
+	target, label, ok := linkablePullRequestURL(rawURL)
 	if !ok {
 		return tuistyle.DimStyle.Render(" · PR")
 	}
-	return tuistyle.DimStyle.Render(" · " + osc8Hyperlink(canonicalURL, label))
+	return tuistyle.DimStyle.Render(" · " + osc8Hyperlink(target, label))
 }
 
-func validatedPullRequestURL(rawURL string) (canonicalURL, label string, ok bool) {
+// linkablePullRequestURL decides whether rawURL may be used as an OSC 8 target
+// and what the segment should be labelled.
+//
+// These are deliberately separate properties. Safety is about what can break
+// out of the escape sequence, so it turns on control characters, scheme, and
+// userinfo — not on which forge hosts the pull request. The label is about
+// what we can say about the URL: only a `/pull/<number>` path yields a number,
+// and every other safe URL still links behind a bare "PR".
+func linkablePullRequestURL(rawURL string) (target, label string, ok bool) {
 	if strings.ContainsFunc(rawURL, unicode.IsControl) {
 		return "", "", false
 	}
 	parsed, err := url.Parse(rawURL)
-	if err != nil || !strings.EqualFold(parsed.Scheme, "https") || !strings.EqualFold(parsed.Host, "github.com") ||
-		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawPath != "" {
+	if err != nil || !strings.EqualFold(parsed.Scheme, "https") || parsed.Host == "" || parsed.User != nil {
 		return "", "", false
 	}
-	matches := githubPullRequestPath.FindStringSubmatch(parsed.Path)
-	if len(matches) != 2 {
-		return "", "", false
+	label = "PR"
+	if matches := githubPullRequestPath.FindStringSubmatch(parsed.Path); len(matches) == 2 {
+		label += " #" + matches[1]
 	}
-	canonical := (&url.URL{Scheme: "https", Host: "github.com", Path: parsed.Path}).String()
-	return canonical, "PR #" + matches[1], true
+	return rawURL, label, true
 }
 
-// osc8Hyperlink accepts only a URL returned by validatedPullRequestURL.
+// osc8Hyperlink accepts only a URL returned by linkablePullRequestURL.
 func osc8Hyperlink(target, label string) string {
 	return "\x1b]8;;" + target + "\x1b\\" + label + "\x1b]8;;\x1b\\"
 }

@@ -884,6 +884,68 @@ func TestModel_Breadcrumb_DoesNotLinkUntrustedPullRequestURL(t *testing.T) {
 	}
 }
 
+// linkedBreadcrumb renders the breadcrumb for a recorded pull request URL.
+func linkedBreadcrumb(t *testing.T, url string) string {
+	t.Helper()
+	m := newTestModel(simpleTree(), FromInspect)
+	m.tree.ApplyEvent(RawEvent{Type: "pull_request_recorded", Data: map[string]any{"url": url}})
+	return m.renderBreadcrumb()
+}
+
+func TestModel_Breadcrumb_LinksNonGitHubPullRequestURL(t *testing.T) {
+	url := "https://gitlab.com/example/project/-/merge_requests/42"
+	breadcrumb := linkedBreadcrumb(t, url)
+
+	wantLink := "\x1b]8;;" + url + "\x1b\\PR\x1b]8;;\x1b\\"
+	if !strings.Contains(breadcrumb, wantLink) {
+		t.Fatalf("breadcrumb = %q, want OSC 8 link %q", breadcrumb, wantLink)
+	}
+}
+
+func TestModel_Breadcrumb_NumbersEnterprisePullRequestPath(t *testing.T) {
+	url := "https://github.example.com/team/repo/pull/17"
+	breadcrumb := linkedBreadcrumb(t, url)
+
+	if got := tuistyle.Sanitize(breadcrumb); !strings.Contains(got, "PR #17") {
+		t.Fatalf("breadcrumb = %q, want numbered label for a /pull/<n> path", got)
+	}
+	if !strings.Contains(breadcrumb, "\x1b]8;;"+url+"\x1b\\") {
+		t.Fatalf("breadcrumb = %q, want OSC 8 link to %q", breadcrumb, url)
+	}
+}
+
+func TestModel_Breadcrumb_LinksGitHubURLWithQueryAndFragment(t *testing.T) {
+	url := "https://github.com/Codagent-AI/agent-runner/pull/62#discussion_r1"
+	breadcrumb := linkedBreadcrumb(t, url)
+
+	if !strings.Contains(breadcrumb, "\x1b]8;;"+url+"\x1b\\") {
+		t.Fatalf("breadcrumb = %q, want the recorded URL linked verbatim", breadcrumb)
+	}
+}
+
+func TestModel_Breadcrumb_DoesNotLinkNonHTTPSURL(t *testing.T) {
+	for _, url := range []string{
+		"http://github.com/Codagent-AI/agent-runner/pull/62",
+		"javascript:alert(1)",
+		"file:///etc/passwd",
+	} {
+		breadcrumb := linkedBreadcrumb(t, url)
+		if strings.Contains(breadcrumb, "\x1b]8;;") {
+			t.Errorf("url %q: breadcrumb contains OSC 8 sequence, want none: %q", url, breadcrumb)
+		}
+		if got := tuistyle.Sanitize(breadcrumb); !strings.Contains(got, "PR") {
+			t.Errorf("url %q: breadcrumb = %q, want plain PR label", url, got)
+		}
+	}
+}
+
+func TestModel_Breadcrumb_DoesNotLinkURLWithUserinfo(t *testing.T) {
+	breadcrumb := linkedBreadcrumb(t, "https://user:pass@evil.example/team/repo/pull/1")
+	if strings.Contains(breadcrumb, "\x1b]8;;") {
+		t.Fatalf("breadcrumb contains OSC 8 sequence for userinfo URL: %q", breadcrumb)
+	}
+}
+
 func TestModel_Breadcrumb_ShowsStartRun_WhenFromDefinition(t *testing.T) {
 	tree := simpleTree()
 	tree.Root.Status = StatusInProgress

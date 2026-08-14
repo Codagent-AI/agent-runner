@@ -58,7 +58,9 @@ The reserved name SHALL behave as an ordinary captured variable in every other r
 
 When a run has a recorded pull request URL, the run-view breadcrumb SHALL include a pull-request segment after the run status, rendered in the same dim style and separated by the same `·` separator as the existing recorded-version and profile-set segments. When a run has no recorded URL, the breadcrumb SHALL be unchanged from its current form.
 
-The segment SHALL be an OSC 8 terminal hyperlink whose target is the complete recorded URL and whose visible text is a short label. The label SHALL be `PR #<number>` when the URL ends in a GitHub pull-request path of the form `/pull/<number>`, and SHALL be `PR` for any other URL, so a non-GitHub or unparseable URL still renders and still links rather than showing a malformed number.
+The segment SHALL be an OSC 8 terminal hyperlink whose target is the complete recorded URL and whose visible text is a short label. The label SHALL be `PR #<number>` when the URL's path has the form `/<owner>/<repo>/pull/<number>`, and SHALL be `PR` for any other URL, so a non-GitHub or unparseable URL still renders and still links rather than showing a malformed number. The label is derived from the path shape alone, so a self-hosted GitHub Enterprise pull request is numbered like a `github.com` one.
+
+Whether a URL may be linked and how it is labelled SHALL be independent decisions. A recorded URL SHALL be linked when it is safe to embed as a hyperlink target — that is, when it contains no control characters, uses the `https` scheme, has a non-empty host, and carries no userinfo component. Host and path SHALL NOT affect linkability. A recorded URL failing any safety condition SHALL render the plain `PR` label with no OSC 8 escape sequence at all, so a hostile captured value can neither break out of the escape sequence nor become clickable.
 
 The run view SHALL render the segment for every entry mode that displays a run, including a live run in progress, `--inspect`, and entry from the run list. During a live run the segment SHALL appear as soon as the URL is recorded, without the user re-entering the run view. Because the metrics summary screen renders the same chrome, the segment SHALL be present there as well, at every manual drill depth.
 
@@ -85,8 +87,20 @@ Width measurement for chrome layout SHALL count only the visible label, not the 
 - **THEN** the summary screen's breadcrumb shows the same pull-request segment
 
 #### Scenario: Non-GitHub URL still links
-- **WHEN** a run records a URL that does not match a `/pull/<number>` path, such as a GitLab merge-request URL
-- **THEN** the breadcrumb shows a `PR` segment hyperlinked to the complete recorded URL
+- **WHEN** a run records `https://gitlab.com/example/project/-/merge_requests/42`
+- **THEN** the breadcrumb shows a `PR` segment hyperlinked to that complete URL
+
+#### Scenario: Enterprise pull request keeps its number
+- **WHEN** a run records `https://github.example.com/team/repo/pull/17`
+- **THEN** the breadcrumb shows a `PR #17` segment hyperlinked to that complete URL
+
+#### Scenario: Query and fragment are preserved in the link
+- **WHEN** a run records a pull-request URL carrying a query string or fragment
+- **THEN** the breadcrumb links to the recorded URL verbatim, including the query and fragment
+
+#### Scenario: Unsafe URL renders unlinked
+- **WHEN** a run records a URL that contains control characters, uses a scheme other than `https`, or carries a userinfo component
+- **THEN** the breadcrumb shows a plain `PR` label containing no OSC 8 escape sequence
 
 #### Scenario: Chrome alignment unaffected by escapes
 - **WHEN** the breadcrumb includes a hyperlinked pull-request segment
