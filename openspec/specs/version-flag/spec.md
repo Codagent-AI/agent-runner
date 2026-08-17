@@ -1,3 +1,8 @@
+# version-flag Specification
+
+## Purpose
+Define the CLI flags and output contract for reporting the Agent Runner binary version.
+
 ## Requirements
 
 ### Requirement: Version flag output

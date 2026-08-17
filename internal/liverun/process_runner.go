@@ -316,6 +316,11 @@ func (r *tuiProcessRunner) RunAgent(options *iexec.AgentProcessOptions) (iexec.P
 		return iexec.ProcessResult{}, err
 	}
 	err := c.Wait()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		if c.Cancel != nil {
+			_ = c.Cancel()
+		}
+	}
 	result := iexec.ProcessResult{Started: true, ExitCode: -1, Stdout: stdoutBuf.String(), Stderr: stderrBuf.String()}
 	exitCode := 0
 	if err != nil {

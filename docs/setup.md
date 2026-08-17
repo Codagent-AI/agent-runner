@@ -141,20 +141,25 @@ Start with `spec-driven:simple-change`. It is the smallest built-in workflow for
 Run it from the project root:
 
 ```bash
-agent-runner run spec-driven:simple-change
+agent-runner run spec-driven:simple-change my-change
 ```
 
-The workflow will ask what change you want to make, create a focused task, run an autonomous implementor, and then run Agent Validator through the validation loop.
+Use a short kebab-case change name, such as `add-user-search` or `fix-login-copy`.
+The workflow will ask what change you want to make, create and independently crosscheck a focused
+plan under an artifact directory outside the project repository selected during planning, run an autonomous implementor and Agent Validator, perform a
+lightweight Tester flow check, and guide you through final review.
 
-Keep the first task small: fix a typo, add a log line, rename a variable, or make another scoped change. The workflow expects the project to start from a clean, validated state; if `agent-validator detect` reports unvalidated changes, validate or commit those changes before starting.
+Keep the first task small: fix a typo, add a log line, rename a variable, or make another scoped change. The workflow expects a feature branch and a clean, validated state; if `agent-validator detect` reports unvalidated changes, validate or commit those changes before starting.
 
-If you set up OpenSpec, use the OpenSpec variant for the same small-change flow:
+If you set up OpenSpec, use its branch-local small-change flow:
 
 ```bash
 agent-runner run openspec:simple-change my-change
 ```
 
-Use a short kebab-case change name, such as `add-user-search` or `fix-login-copy`.
+The OpenSpec workflow adds an independent plan crosscheck, one lightweight Tester flow check, human
+review, and archival. It does not create or finalize a pull request, so several small changes can
+accumulate on the same feature branch.
 
 To browse other workflows:
 

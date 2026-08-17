@@ -156,7 +156,9 @@ func captureShellOutput(step *model.Step, ctx *model.ExecutionContext, result Pr
 	if step.CaptureStderr && result.ExitCode != 0 && result.Stderr != "" {
 		captured = captured + "\n\nSTDERR:\n" + result.Stderr
 	}
-	ctx.CapturedVariables[step.Capture] = model.NewCapturedString(captured)
+	value := model.NewCapturedString(captured)
+	ctx.CapturedVariables[step.Capture] = value
+	recordPullRequestCapture(ctx, step.ID, step.Capture, value)
 }
 
 // ExecuteShellStep runs a shell command step.

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -340,6 +341,29 @@ func TestTUIProcessRunner_RunAgentCanceledBeforeStartIsNotLaunched(t *testing.T)
 	}
 	if result.Started {
 		t.Fatalf("RunAgent() result = %#v, want Started=false", result)
+	}
+}
+
+func TestTUIProcessRunner_RunAgentRetainsOutputAndWaitDelayForLingeringPipe(t *testing.T) {
+	runner := NewCoordinator(&captureProgram{}, "").TUIProcessRunner(unusedRunner{}).(*tuiProcessRunner)
+
+	result, err := runner.RunAgent(&iexec.AgentProcessOptions{
+		Context: context.Background(),
+		Args: []string{
+			"sh", "-c",
+			`printf complete; sh -c 'sleep 0.2' &`,
+		},
+		CaptureStdout: true,
+		Supervision: iexec.AgentProcessSupervision{
+			ProcessGroup:     true,
+			TerminationGrace: 10 * time.Millisecond,
+		},
+	})
+	if !errors.Is(err, exec.ErrWaitDelay) {
+		t.Fatalf("RunAgent() error = %v, want exec.ErrWaitDelay", err)
+	}
+	if result.Stdout != "complete" {
+		t.Fatalf("RunAgent() result = %#v, want retained output", result)
 	}
 }
 

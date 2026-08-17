@@ -37,10 +37,14 @@ func ExecuteUIStep(step *model.Step, ctx *model.ExecutionContext, log Logger) (S
 		return OutcomeAborted, nil
 	}
 	if step.OutcomeCapture != "" {
-		ctx.CapturedVariables[step.OutcomeCapture] = model.NewCapturedString(result.Outcome)
+		value := model.NewCapturedString(result.Outcome)
+		ctx.CapturedVariables[step.OutcomeCapture] = value
+		recordPullRequestCapture(ctx, step.ID, step.OutcomeCapture, value)
 	}
 	if step.Capture != "" {
-		ctx.CapturedVariables[step.Capture] = model.NewCapturedMap(result.Inputs)
+		value := model.NewCapturedMap(result.Inputs)
+		ctx.CapturedVariables[step.Capture] = value
+		recordPullRequestCapture(ctx, step.ID, step.Capture, value)
 	}
 	log.Printf("  ui outcome: %s\n", result.Outcome)
 	emitUIEnd(ctx, prefix, startTime, step, "success", result.Outcome, nil)

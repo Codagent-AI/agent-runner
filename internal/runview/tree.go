@@ -207,6 +207,11 @@ func indexStepNode(nodes []*StepNode, target *StepNode) int {
 type Tree struct {
 	Root *StepNode
 
+	// PullRequestURL is the most recently recorded pull-request link from the
+	// audit stream. Keeping it with the replayed tree makes historical and live
+	// run views use the same update path.
+	PullRequestURL string
+
 	// nextStartOrdinal assigns a deterministic replay order to execution
 	// starts. It is not persisted because it is reconstructed from audit order.
 	nextStartOrdinal uint64

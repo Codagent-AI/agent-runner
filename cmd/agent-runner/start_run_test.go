@@ -201,6 +201,30 @@ func TestExecRunnerResume_RunIDRequestsImmediateAltScreen(t *testing.T) {
 	}
 }
 
+func TestExecRunnerResumeWithProfile_PreservesProfileBeforeRunID(t *testing.T) {
+	originalExecutable := currentExecutable
+	originalExec := execProcess
+	t.Cleanup(func() {
+		currentExecutable = originalExecutable
+		execProcess = originalExec
+	})
+	currentExecutable = func() (string, error) { return "/tmp/agent-runner", nil }
+
+	var gotArgs []string
+	execProcess = func(path string, args []string, env []string) error {
+		gotArgs = append([]string(nil), args...)
+		return nil
+	}
+
+	if code := execRunnerResumeWithProfile("run-123", "", "copilot"); code != 0 {
+		t.Fatalf("execRunnerResumeWithProfile() = %d, want 0", code)
+	}
+	wantArgs := []string{filepath.Base("/tmp/agent-runner"), "--resume", "--profile", "copilot", "run-123"}
+	if diff := cmp.Diff(wantArgs, gotArgs); diff != "" {
+		t.Fatalf("exec args mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestLiveTUIOptionsReadsImmediateAltScreenEnv(t *testing.T) {
 	t.Setenv(liveRunImmediateAltScreenEnv, "1")
 
@@ -983,6 +1007,32 @@ func TestTerminalLiveTUIResult_LaunchDebugExecsSelectedRun(t *testing.T) {
 	}
 	if gotRunID != "run-123" || gotSessionDir != "/state/runs/run-123" || gotProjectDir != "/failed/project" {
 		t.Fatalf("debug target = (%q, %q, %q), want (run-123, /state/runs/run-123, /failed/project)", gotRunID, gotSessionDir, gotProjectDir)
+	}
+}
+
+func TestTerminalLiveTUIResult_AutomaticExitPreservesCompletedWorkflowResult(t *testing.T) {
+	rv, err := runview.NewForDefinition(&discovery.WorkflowEntry{CanonicalName: "wf"}, "/current/project")
+	if err != nil {
+		t.Fatalf("NewForDefinition: %v", err)
+	}
+	next, cmd := rv.Update(runview.ExitMsg{})
+	if cmd == nil {
+		t.Fatal("automatic ExitMsg should quit the run view")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("expected tea.QuitMsg, got %T", cmd())
+	}
+	rv = next.(*runview.Model)
+
+	resultCh := make(chan runner.WorkflowResult, 1)
+	resultCh <- runner.ResultSuccess
+
+	result, ok := terminalLiveTUIResult(rv, resultCh, "/current/project", "/runs/run-123", liveTUIOptions{})
+	if !ok {
+		t.Fatal("terminalLiveTUIResult did not handle automatic exit")
+	}
+	if result.workflowResult != runner.ResultSuccess || result.sessionDir != "/runs/run-123" || result.exitRequested {
+		t.Fatalf("terminalLiveTUIResult = %#v, want completed success without user exit", result)
 	}
 }
 

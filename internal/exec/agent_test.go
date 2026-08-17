@@ -280,6 +280,35 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("interactive post-spawn failure records diagnostic evidence", func(t *testing.T) {
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(_ []string, _ directRunOptions) (interactive.DirectResult, error) {
+			return interactive.DirectResult{Started: true, ExitCode: 1}, errors.New("reclaim terminal foreground: inappropriate ioctl")
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		auditLog := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		step := model.Step{ID: "review", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew}
+
+		outcome, err := ExecuteAgentStep(&step, ctx, &mockRunner{}, &mockLogger{})
+		if err == nil || outcome != OutcomeFailed {
+			t.Fatalf("ExecuteAgentStep() = (%q, %v), want failed post-spawn error", outcome, err)
+		}
+		end := findAuditEvent(auditLog.events, audit.EventStepEnd)
+		if got := end.Data["error"]; got != err.Error() {
+			t.Fatalf("error = %#v, want %q", got, err)
+		}
+		if got := end.Data["exit_code"]; got != 1 {
+			t.Fatalf("exit_code = %#v, want 1", got)
+		}
+		identity, ok := end.Data["identity"].(model.ExecutionIdentity)
+		if !ok || !identity.AgentInvoked {
+			t.Fatalf("identity = %#v, want agent_invoked=true", end.Data["identity"])
+		}
+	})
+
 	t.Run("interactive terminal event reports pty usage unavailable", func(t *testing.T) {
 		oldFn := interactiveRunnerFn
 		interactiveRunnerFn = func(_ []string, _ directRunOptions) (interactive.DirectResult, error) {
@@ -2194,5 +2223,51 @@ func assertControlCompletionInstruction(t *testing.T, prompt string) {
 		if strings.Contains(prompt, disallowed) {
 			t.Fatalf("completion instruction should use the control client, got %q", prompt)
 		}
+	}
+}
+
+func TestBuildAgentPromptAutomaticallyPrependsIntakeHandoffToFirstAgent(t *testing.T) {
+	t.Parallel()
+
+	step := &model.Step{ID: "plan", Prompt: "Plan the change."}
+	ctx := &model.ExecutionContext{
+		Params:                map[string]string{},
+		CapturedVariables:     map[string]model.CapturedValue{},
+		IntakeHandoffContents: "Goal: update the harness.\nConstraint: keep the change small.",
+	}
+
+	prompt, _, err := buildAgentPrompt(step, ctx)
+	if err != nil {
+		t.Fatalf("buildAgentPrompt() error = %v", err)
+	}
+	for _, want := range []string{
+		"Context from the intake conversation",
+		"Goal: update the harness.",
+		"Constraint: keep the change small.",
+		"Plan the change.",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt = %q, want %q", prompt, want)
+		}
+	}
+}
+
+func TestBuildAgentPromptDoesNotRepeatIntakeHandoffAfterAnAgentSessionStarted(t *testing.T) {
+	t.Parallel()
+
+	step := &model.Step{ID: "review", Prompt: "Review the change."}
+	ctx := &model.ExecutionContext{
+		Params:                map[string]string{},
+		CapturedVariables:     map[string]model.CapturedValue{},
+		IntakeHandoffContents: "Goal: update the harness.",
+		LastSessionStepID:     "plan",
+	}
+
+	prompt, _, err := buildAgentPrompt(step, ctx)
+	if err != nil {
+		t.Fatalf("buildAgentPrompt() error = %v", err)
+	}
+	if strings.Contains(prompt, ctx.IntakeHandoffContents) {
+		t.Fatalf("later prompt repeated intake handoff: %q", prompt)
 	}
 }

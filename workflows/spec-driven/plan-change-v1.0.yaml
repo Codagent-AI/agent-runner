@@ -24,7 +24,7 @@ steps:
     prompt: |
       You just wrote a proposal. Output the directory containing the proposal document on a single line with NO other text, NO markdown fences, and NO explanation.
 
-      Example valid output: specs/changes/my-change
+      Example valid output: path/to/change
 
   - id: proposal-review
     workflow: ../core/review-proposal-v1.0.yaml

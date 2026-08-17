@@ -1,5 +1,5 @@
 name: change
-description: "Define, plan, implement, accept, archive, and finalize an OpenSpec change."
+description: "Use for a substantial or higher-risk change in an OpenSpec project when you need the full proposal, specification, design, test plan, task breakdown, and acceptance lifecycle. It manages repository-local OpenSpec artifacts while guiding implementation, evidence-based acceptance, human review, archival, and pull-request finalization."
 
 params:
   - name: change_name
@@ -11,20 +11,35 @@ steps:
     params:
       workflow_name: "openspec:change"
 
+  - id: create
+    script: create-change.sh
+    script_inputs:
+      change_name: "{{change_name}}"
+
   - id: define
-    workflow: define-change-v1.0.yaml
+    workflow: ../core/define-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
+      change_dir: "openspec/changes/{{change_name}}"
+      change_label: "OpenSpec change"
+      artifact_location_instruction: "Keep every OpenSpec definition and planning artifact under the repository-local `openspec/changes/{{change_name}}/` directory."
 
   - id: plan
-    workflow: plan-change-v2.0.yaml
+    workflow: ../core/plan-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
+      change_dir: "openspec/changes/{{change_name}}"
+      change_label: "OpenSpec change"
+      change_kind: "openspec"
 
   - id: implement
-    workflow: implement-change-v2.0.yaml
+    workflow: ../core/implement-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
+      change_dir: "openspec/changes/{{change_name}}"
+      change_label: "OpenSpec change"
+      artifact_validation_instruction: 'When an approved artifact changed, run `openspec validate --type change "{{change_name}}"`.'
+      skip_validator: "false"
 
   - id: accept
     workflow: ../core/accept-change-v1.0.yaml
@@ -35,8 +50,8 @@ steps:
       artifact_validation_instruction: 'If a specification changed, run `openspec validate --type change "{{change_name}}"`.'
 
   - id: archive
-    workflow: archive-change-v1.0.yaml
-    params:
+    script: archive-change.sh
+    script_inputs:
       change_name: "{{change_name}}"
 
   - id: finalize

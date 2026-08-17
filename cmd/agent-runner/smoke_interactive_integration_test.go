@@ -23,6 +23,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/control"
 	"github.com/codagent/agent-runner/internal/liverun"
 	"github.com/codagent/agent-runner/internal/stateio"
@@ -67,7 +68,7 @@ func TestInteractiveDirectHandoffWorkflowIntegration(t *testing.T) {
 	writeInteractiveAgentFixtures(t, binDir, []string{"claude"})
 	writeInteractiveDirectHandoffWorkflow(t, filepath.Join(home, ".agent-runner", "workflows"))
 
-	cmd := exec.Command(runnerBin, "--headless", "interactive-direct-handoff-integration")
+	cmd := exec.Command(runnerBin, "--headless", "--profile", "smoke_test", "interactive-direct-handoff-integration")
 	cmd.Dir = repoRoot
 	cmd.Env = smokeCommandEnv(os.Environ(),
 		"AGENT_RUNNER_NO_TUI=1",
@@ -130,7 +131,7 @@ func TestInteractiveDirectHandoffJobControl(t *testing.T) {
 			output := make(chan string, 64)
 			go scanPTYText(ptmx, output)
 			waitForPTYText(t, output, "JOB_SHELL_READY>", 5*time.Second)
-			launch := fmt.Sprintf("AGENT_RUNNER_NO_TUI=1 %s=1 %s=%s %s --headless %s\r",
+			launch := fmt.Sprintf("AGENT_RUNNER_NO_TUI=1 %s=1 %s=%s %s --headless --profile smoke_test %s\r",
 				interactiveFixtureEnv, jobControlFixtureEnv, mode, runnerBin, "interactive-job-control")
 			_, _ = ptmx.WriteString(launch)
 			ready := waitForPTYText(t, output, "JOB_CHILD_READY "+mode+" ", 30*time.Second)
@@ -322,7 +323,10 @@ func TestInteractiveTerminalLeaseFixtureProcess(t *testing.T) {
 	liveRunCoordinatorFactory = func(program *tea.Program, sessionDir string) *liverun.Coordinator {
 		return liverun.NewCoordinator(&terminalFaultProgram{Program: program, mode: mode}, sessionDir)
 	}
-	result := handleRunWithResult([]string{os.Getenv(terminalLeaseWorkflowEnv)}, liveTUIOptions{quitOnDone: true, startInAltScreen: true})
+	result := handleRunWithRunOptions([]string{os.Getenv(terminalLeaseWorkflowEnv)}, &runCommandOptions{
+		liveOpts:        liveTUIOptions{quitOnDone: true, startInAltScreen: true},
+		profileOverride: config.ProfileOverride{Name: "smoke_test", Origin: config.OriginFlag},
+	})
 	os.Exit(result.exitCode)
 }
 

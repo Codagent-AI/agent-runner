@@ -60,6 +60,7 @@ func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner Pro
 			return OutcomeFailed, err
 		}
 		ctx.CapturedVariables[step.Capture] = captured
+		recordPullRequestCapture(ctx, step.ID, step.Capture, captured)
 	}
 	emitScriptEnd(ctx, prefix, startTime, step, "success", &result, nil)
 	return OutcomeSuccess, nil

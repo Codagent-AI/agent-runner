@@ -14,11 +14,7 @@ steps:
   - id: plan
     session: lead-agent
     prompt: |
-      Help the user plan the change. When the intake context below is non-empty, treat it as what the user already told an agent and do not ask them to repeat it; otherwise, first ask the user what the change is about and DO NOT attempt to guess. Then, you MUST use the codagent:simple-plan skill.
-
-      <intake_context>
-      {{intake_handoff}}
-      </intake_context>
+      Help the user plan the change. Use any intake context supplied above as what the user already told an agent; if none was supplied, first ask the user what the change is about and DO NOT attempt to guess. Then, you MUST use the codagent:simple-plan skill.
 
   - id: locate-task
     session: lead-agent

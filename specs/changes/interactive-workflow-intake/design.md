@@ -61,6 +61,7 @@ type State string // "staged" | "frozen"
 type Request struct {
     Workflow string            `json:"workflow"`          // required, canonical name
     Params   map[string]string `json:"params,omitempty"`  // optional
+    Handoff  string            `json:"handoff"`           // required prompt context
 }
 
 // Sealed is the sidecar at <run-dir>/intake-route.json.
@@ -70,7 +71,7 @@ type Sealed struct {
     Workflow     string            `json:"workflow"`       // canonical name; display and audit only
     SourceRef    string            `json:"source_ref"`     // exact resolved reference; this is what launches
     Params       map[string]string `json:"params"`         // exactly as supplied; see normalization below
-    HandoffPath  string            `json:"handoff_path"`   // sealed snapshot, never the agent's source
+    Handoff      string            `json:"handoff"`        // sealed prompt context
     StagedAt     string            `json:"staged_at"`
     FrozenAt     string            `json:"frozen_at,omitempty"`
 }
@@ -82,10 +83,8 @@ func (s *Store) Stage(*Sealed) error   // atomic replace
 func (s *Store) Freeze() error         // atomic staged -> frozen
 ```
 
-**Bounds:** the route request is read under a 64 KiB limit and the handoff under 1 MiB. Both are
-generous for their purpose and small enough that a runaway write fails fast rather than filling the
-run directory. These are durability bounds and are not the bound that applies when the handoff is
-inlined into a prompt, which is far smaller; see *Built-in variable and provenance propagation*.
+**Bounds:** the route request is read under a 64 KiB limit and its handoff text under an 8 KiB
+prompt-safe limit.
 
 **Parameter normalization:** `Params` records exactly the key/value pairs the agent supplied, after
 validation confirms every required parameter is present and no undeclared parameter appears. Defaults
@@ -101,7 +100,7 @@ out of scope. The specifications state the guarantee in those terms.
 
 The reason this is not a field on `RunState` is specific and worth stating for anyone tempted to simplify it later. `writeStepState` constructs a fresh `model.RunState` from the execution context after every step and writes it wholesale. Anything **derived from the execution context** reconstructs correctly on each write and is safe to keep in `RunState`. The staged route is **not** ctx-derived: it is written out-of-band by a control-server goroutine while the step is still running. Putting it in `RunState` would mean the next step-state write silently destroys an acknowledged, durable route.
 
-This is also why intake *provenance* (parent run ID, handoff path) **is** kept in `RunState`: those values are seeded onto the execution context at `PrepareRun` and are therefore reconstructed on every write.
+This is also why intake *provenance* (parent run ID and handoff contents) **is** kept in `RunState`: those values are seeded onto the execution context at `PrepareRun` and are therefore reconstructed on every write.
 
 ### Route submission path
 
@@ -124,9 +123,7 @@ routeEligible := step.HasTool(model.RunnerToolSubmitRoute) &&
 
 Static validation rejects the declaration outright on any step that cannot satisfy those conditions, so a user workflow fails at load rather than silently never working.
 
-`ExecuteAgentStep` passes the result into `control.AttemptOptions` alongside a route handler, the same shape `RunnerToolCallAgent` uses today. When route-eligible, the child's environment gains `AGENT_RUNNER_ROUTE_REQUEST=<run-dir>/route-request.json` and `AGENT_RUNNER_INTAKE_HANDOFF=<run-dir>/intake-handoff.md`.
-
-**The handoff path is runner-owned.** The agent is told where to write rather than choosing. Besides removing a class of validation, this is what makes exploration-only reportable: when no route request is ever submitted, the runner still knows where the handoff would be and can report it if the file exists and is non-empty. The route request carries no handoff field at all: since validation would only accept the one path the runner already supplied, the field could carry no information, and every byte an agent can get wrong is a failure mode. Supplying one is rejected as an unknown field.
+`ExecuteAgentStep` passes the result into `control.AttemptOptions` alongside a route handler, the same shape `RunnerToolCallAgent` uses today. When route-eligible, the child's environment gains `AGENT_RUNNER_ROUTE_REQUEST=<run-dir>/route-request.json` and the workflow-catalog path. The route request carries the handoff text, so the intake agent writes one submission artifact.
 
 **The runner reads the request; the client never transmits it.** `agent-runner step submit-route` sends a payload-free `submit_route` control message. The runner then reads the request from the path it created and advertised. This is deliberate: the path cannot be redirected by the agent, size bounds are enforced at read time, and the control message stays payload-free so no new framing concerns arise.
 
@@ -136,9 +133,9 @@ Validation, in `intakeroute.Validate`, is transport-independent so the launcher 
 2. Workflow resolves through the normal catalog; capture `WorkflowEntry.SourcePath`.
 3. Target is not the intake workflow itself.
 4. Every declared-required parameter present; no undeclared parameter supplied.
-5. Handoff path is canonicalized, contained within the run directory, opens as a regular file, and is non-empty, under a size bound.
+5. Handoff text is non-empty and within its prompt-safe size bound.
 
-On success, **`Stage` copies the handoff bytes immediately**, from the same handle that was validated, into a run-owned snapshot path. `Sealed.HandoffPath` references that snapshot and never the agent-written source. Editing the original afterward cannot change what launches, and there is no window between validation and copying.
+On success, **`Stage` persists the validated handoff text** in the route sidecar with the resolved source reference and parameters.
 
 Failures return an actionable message through `controlResponse.Error`, which `step submit-route` prints to stderr and exits nonzero on. The agent sees it in its own tool output and can correct the file and retry inside the same conversation. A failed submission leaves any previously staged route untouched.
 
@@ -166,7 +163,7 @@ Two consequences are load-bearing:
 - Validation — decoding, catalog resolution, parameter checks, handoff reading and copying — happens **outside** the mutex, since it does filesystem work and must not block the server.
 - The **final eligibility recheck and the `Stage` write** happen **inside** the same mutex that guards completion acceptance.
 
-That yields exactly two possible outcomes for any interleaving: the submission stages and is later frozen, or it observes an accepted completion and is rejected. A submission can never be staged after a freeze. Note that the handoff copy performed during validation is written to a temporary path and only published into `HandoffPath` by the staging write, so a submission that loses the race leaves nothing behind.
+That yields exactly two possible outcomes for any interleaving: the submission stages and is later frozen, or it observes an accepted completion and is rejected. A submission can never be staged after a freeze.
 
 ### Frozen does not mean successful
 
@@ -211,13 +208,12 @@ The subcommand takes **only** the absolute sidecar path. The complete launch pla
 ```text
 handleLaunchIntakeRoute(path):
     sealed := strict-decode(path)
-    verify invariants: state == frozen, SourceRef resolves,
-                       HandoffPath readable and non-empty
+    verify invariants: state == frozen, SourceRef and Handoff are non-empty
     prepareFreshRun(FreshRunRequest{
         SourceRef:           sealed.SourceRef,   // already resolved; never re-resolved
         Params:              sealed.Params,
-        IntakeParentRunID:   sealed.ParentRunID,
-        IntakeHandoffSource: sealed.HandoffPath,
+        IntakeParentRunID:     sealed.ParentRunID,
+        IntakeHandoffContents: sealed.Handoff,
     })
 ```
 
@@ -238,29 +234,23 @@ prepareFreshRun(req) :=
 
 The difference between the two callers is only the front end: the CLI resolves a logical name into a reference first, while the launcher already has one. Extracting the service rather than reusing `discovery.WorkflowEntry` for launch validation also avoids a behavioral mismatch — discovery models the browser's view of a catalog and does not resolve exactly as the CLI launch path does.
 
-A failure anywhere in `prepareFreshRun` exits nonzero reporting the cause and the sealed handoff path, and must not leave a partially created run directory behind.
+A failure anywhere in `prepareFreshRun` exits nonzero reporting the cause and must not leave a partially created run directory behind.
 
 The subcommand is dispatched in `run()` before flag parsing, alongside the existing `step` and `internal` handlers, and is excluded from help output and completions. It is hidden and unsupported, not a security boundary.
 
-**Handoff copy ordering.** The launched run's directory does not exist until `PrepareRun` creates it, so the copy cannot precede the launch. `Options.IntakeHandoffSource` carries the sealed snapshot path in; `PrepareRun` copies it into the new session directory and sets `ctx.IntakeHandoff` to the destination. The launched run is then self-contained: deleting the intake run later does not break it.
+**Handoff propagation.** `Options.IntakeHandoffContents` carries the sealed text into `PrepareRun`, which persists it in the launched run's state. The launched run is self-contained: deleting the intake run later does not break it.
 
 ### Built-in variable and provenance propagation
 
 `{{intake_handoff}}` is added to `BuiltinVarsForStep`, with one deliberate departure from the surrounding code. That function currently omits empty values and returns `nil` for an empty map. It must be set **unconditionally, including to the empty string**, because interpolation treats an unresolved reference as a hard error. If it were omitted on direct runs, every direct invocation of a workflow referencing it would fail. The implementation needs a comment saying so, because the surrounding lines model the opposite convention.
 
-**`intake_handoff` carries contents, and only contents.** Handing a workflow a path makes consumption optional: the prompt can ask the agent to read the file, but nothing makes it do so, and an agent that skips the read starts the conversation with none of the context intake spent the whole session establishing. Interpolating the contents removes the choice, and removes the "read the handoff first" preamble from every consumer prompt along with it. No second variable exposes the location: no workflow needs to address the file, and the truncation marker already names it in the one case where that matters. The path remains on the execution context and in `RunState` as provenance, which is what resume restores.
-
-**The inline value is bounded separately from the file.** `MaxHandoffBytes` (1 MiB) is a durability bound and is far too large for a prompt. Inlining uses `MaxInlineHandoffBytes` at 8 KiB, roughly 2,000 tokens: several times what a distilled handoff needs, and small enough that it cannot crowd out a step's own instructions. Over the limit, the value is the leading portion cut at a line boundary plus a marker naming the full path, rather than an error. A handoff that exceeds four pages means the agent pasted its conversation instead of distilling it, which is a content problem to see in review, not a reason to fail a launch. Rejecting at submission would also be wrong, because the same handoff is written on the exploration-only path where nothing is ever inlined.
-
-**Reading happens in the runner, not in `internal/model`.** Model types stay free of filesystem access, so `PrepareRun` reads the copied handoff when it sets the destination path and seeds the contents onto the execution context. Interpolation then remains a pure map lookup.
-
-**The bounded contents are persisted in `RunState`, and resume restores them rather than re-reading.** The obvious alternative, re-reading the copied handoff on every resume, keeps one copy of the text on disk but does not satisfy the resume guarantee. The copy lives inside the run's own writable directory, and the agent can rewrite it; a resumed step would then interpolate whatever the file says now instead of what the original invocation saw. Persisting the already-bounded value makes "resume sees the same value" mechanical rather than dependent on nobody having touched the file. `PrepareRun` therefore reads the file only when the restored value is empty, which is exactly the fresh-launch case.
+**`intake_handoff` carries contents, and only contents.** The handoff is validated at submission under an 8 KiB prompt-safe bound, persisted in `RunState`, and restored unchanged on resume. Agent execution automatically prepends it to the first agent prompt when no workflow agent session has started. The built-in remains available for explicit interpolation, and duplicate delivery is avoided when a workflow already interpolates the same contents.
 
 Since built-ins have the lowest precedence and would be shadowed by a same-named param or capture, both names are **reserved**: `Workflow.Validate` rejects a param of either name, step validation rejects a capture into either, and `internal/prevalidate` reports the same violation statically. Prevalidate's built-in set is currently the hardcoded pair `session_dir`/`step_id` and must gain both names, or every prompt referencing them fails reference checking.
 
 **Reservation must cover every capture sink, not just `capture:`.** Steps write captured variables through both `step.Capture` and a UI step's `OutcomeCapture`, but prevalidate's walk currently records only `step.Capture`. Enforcing the reserved names against `capture:` alone would leave `outcome_capture: intake_handoff` as a working way to shadow the sealed handoff.
 
-The handoff contents, the handoff path, and the parent run ID all propagate through `NewLoopIterationContext` and the sub-workflow context constructor. Both constructors copy run-scoped fields by explicit assignment, so these are deliberate additions rather than something inherited automatically. The path and parent run ID are persisted in `RunState` and restored by `PrepareResume`, which likewise copies an explicit field list; the contents are re-read from the restored path rather than persisted twice.
+The handoff contents and parent run ID propagate through `NewLoopIterationContext` and the sub-workflow context constructor. Both are persisted in `RunState` and restored by `PrepareResume`.
 
 ### Run-scoped agent override
 
@@ -334,20 +324,20 @@ In the TUI, the "Plan with an agent" entry renders above every group, is the ini
 | Submission from a non-route-eligible step | Rejected and audited; workflow state unchanged |
 | Submission after accepted completion | Rejected and audited |
 | Freeze fails during completion | Completion rejected; agent may retry `step complete` |
-| Completion with no staged route | Success; nothing launches; runner-owned handoff path reported if the file is non-empty |
+| Completion with no staged route | Success; nothing launches |
 | Interrupted before completion, route staged | Staged route persists; resumed attempt may replace it |
 | Durability fails after freeze | Step and run fail; frozen route retained; nothing launches; resume retries completion against the same immutable route, and success launches it |
 | Killed after a successful run froze its route, before exec | Intake run is complete, so `--resume` opens inspect mode; sealed handoff preserved; user restarts intake |
 | Sealed artifact fails invariant checks at launch | Launcher exits nonzero naming the violation; no run created |
-| Load, parameter binding, pre-validation, or engine creation fails at launch | Launcher exits nonzero reporting the cause and the sealed handoff path; no partial run directory left behind |
-| `exec` fails | Parent still alive; appends `route_launch_failed`; exits nonzero reporting the cause and the sealed handoff path |
+| Load, parameter binding, pre-validation, or engine creation fails at launch | Launcher exits nonzero reporting the cause; no partial run directory left behind |
+| `exec` fails | Parent still alive; appends `route_launch_failed`; exits nonzero reporting the cause |
 | Intake invoked without a real terminal, by flag or by name | Rejected before any run is created |
 
 ## Decisions
 
 **Runner reads the request rather than the client sending it.** Single source of truth for the path, no spoofing, bounds enforced at read time, and the control message stays payload-free.
 
-**Stage copies the handoff immediately.** Validating and copying from the same open handle removes any window in which the validated bytes and the launched bytes could differ, and makes `Sealed.HandoffPath` unambiguously a snapshot.
+**Stage seals the handoff text.** The validated request value is written atomically into the route sidecar with the resolved workflow and parameters.
 
 **Freeze under the completion mutex, and reject completion if it fails.** Ordering the freeze before acceptance is what makes "the frozen route is what launches" true under concurrency. Rejecting on failure is what keeps the run from ever acknowledging completion with an indeterminate route.
 
@@ -381,7 +371,7 @@ Rollback is removing the entry point: without `-i` and the New tab entry, no int
 
 ## Testing
 
-- **`internal/intakeroute`**: table tests over validation — unknown workflow, missing and undeclared params, malformed JSON, unknown fields, handoff outside the run directory, non-regular file, empty file, oversized input, self-routing. Plus staging idempotency, replacement, and that `Stage` snapshots bytes such that mutating the source afterward does not change `HandoffPath` contents.
+- **`internal/intakeroute`**: table tests over validation — unknown workflow, missing and undeclared params, malformed JSON, unknown fields, missing or empty handoff text, oversized input, and self-routing. Plus staging idempotency and replacement.
 - **`internal/control`**: freeze-before-acknowledge ordering; submission after accepted completion rejected; completion with no staged route accepted; completion rejected when freeze fails; stale credential rejected; ineligible step rejected; both concurrent orderings of submission versus completion driven under a barrier; retry of an accepted request ID returns the original acknowledgement without staging twice.
 - **`internal/runner`**: a step-state write after staging leaves the sidecar intact — the regression this design exists to prevent; provenance and agent override round-trip through `PrepareResume`; `PrepareRun` copies the handoff into the new session directory; `prepareFreshRun` refuses a non-builtin target that fails strict pre-validation and creates the engine for an engine-backed target; a launch-preparation failure leaves no run directory behind.
 - **Launch gating**: a frozen route on a failed run does not launch; a durability failure after freeze retains the route and launches nothing; a resumed attempt that completes successfully launches the original frozen route.

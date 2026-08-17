@@ -238,8 +238,7 @@ func startDirectChild(options *DirectOptions, attempt *control.Attempt) (*exec.C
 }
 
 // routeEnvironment publishes the workflow catalog for a route-eligible step and
-// returns the runner-owned paths the child agent needs: where to write its route
-// request, which handoff it may seal, and which workflows it may choose from.
+// returns the runner-owned route-request path and workflow catalog.
 func routeEnvironment(options *DirectOptions) ([]string, error) {
 	if options == nil || !options.RouteEligible || options.RouteValidation == nil {
 		return nil, nil
@@ -250,7 +249,6 @@ func routeEnvironment(options *DirectOptions) ([]string, error) {
 	}
 	return []string{
 		"AGENT_RUNNER_ROUTE_REQUEST=" + options.RouteValidation.RequestPath,
-		"AGENT_RUNNER_INTAKE_HANDOFF=" + options.RouteValidation.HandoffPath,
 		"AGENT_RUNNER_ROUTE_CATALOG=" + catalogPath,
 	}, nil
 }

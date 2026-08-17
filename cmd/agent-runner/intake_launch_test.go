@@ -17,16 +17,12 @@ import (
 
 func TestLaunchFrozenIntakeRouteGatesOnSuccessfulCompletedRunAndAppendsEvidence(t *testing.T) {
 	sessionDir := t.TempDir()
-	handoff := filepath.Join(sessionDir, "sealed-handoff.md")
-	if err := os.WriteFile(handoff, []byte("selected context"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	sidecar := filepath.Join(sessionDir, "intake-route.json")
 	sealed := intakeroute.Sealed{
 		State: intakeroute.Frozen, ParentRunID: "intake-parent", Workflow: "define-change",
-		SourceRef:   "builtin:core/define-change-v1.0.yaml",
-		Params:      map[string]string{"change_name": "intake", "change_dir": "specs/changes/intake", "change_label": "change"},
-		HandoffPath: handoff, StagedAt: "2026-07-28T00:00:00Z", FrozenAt: "2026-07-28T00:01:00Z",
+		SourceRef: "builtin:core/define-change-v1.0.yaml",
+		Params:    map[string]string{"change_name": "intake", "change_dir": "specs/changes/intake", "change_label": "change"},
+		Handoff:   "selected context", StagedAt: "2026-07-28T00:00:00Z", FrozenAt: "2026-07-28T00:01:00Z",
 	}
 	data, err := json.Marshal(sealed)
 	if err != nil {
@@ -105,11 +101,7 @@ func TestLaunchFrozenIntakeRouteFailsWhenCompletedStateCannotBeRead(t *testing.T
 
 func TestLaunchResultAfterRunLaunchesFrozenRouteDespiteAutomaticExit(t *testing.T) {
 	sessionDir := t.TempDir()
-	handoff := filepath.Join(sessionDir, "sealed-handoff.md")
-	if err := os.WriteFile(handoff, []byte("context"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sealed := intakeroute.Sealed{State: intakeroute.Frozen, ParentRunID: "parent", Workflow: "target", SourceRef: "builtin:core/target-v1.0.yaml", Params: map[string]string{}, HandoffPath: handoff, StagedAt: "now", FrozenAt: "now"}
+	sealed := intakeroute.Sealed{State: intakeroute.Frozen, ParentRunID: "parent", Workflow: "target", SourceRef: "builtin:core/target-v1.0.yaml", Params: map[string]string{}, Handoff: "context", StagedAt: "now", FrozenAt: "now"}
 	data, err := json.Marshal(sealed)
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +117,7 @@ func TestLaunchResultAfterRunLaunchesFrozenRouteDespiteAutomaticExit(t *testing.
 	currentExecutable = func() (string, error) { return "/tmp/agent-runner", nil }
 	execProcess = func(_ string, _ []string, _ []string) error { return errors.New("exec failed") }
 
-	result := launchResultAfterRun(liveTUIResult{exitRequested: true, workflowResult: runner.ResultSuccess, sessionDir: sessionDir}, false)
+	result := launchResultAfterRun(liveTUIResult{exitRequested: true, workflowResult: runner.ResultSuccess, sessionDir: sessionDir})
 	if result.exitCode != 1 {
 		t.Fatalf("launchResultAfterRun() = %#v, want failed launch result", result)
 	}
@@ -136,25 +128,11 @@ func TestShouldExitAfterFrozenIntakeRouteForCompletedSuccess(t *testing.T) {
 	if err := stateio.WriteState(&model.RunState{Completed: true}, sessionDir); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "intake-route.json"), []byte(`{"state":"frozen","parent_run_id":"parent","workflow":"target","source_ref":"builtin:core/target-v1.0.yaml","params":{},"handoff_path":"/tmp/handoff","staged_at":"now"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(sessionDir, "intake-route.json"), []byte(`{"state":"frozen","parent_run_id":"parent","workflow":"target","source_ref":"builtin:core/target-v1.0.yaml","params":{},"handoff":"context","staged_at":"now"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if !shouldExitAfterFrozenIntakeRoute(runner.ResultSuccess, sessionDir) {
 		t.Fatal("completed frozen intake route did not request live TUI exit")
-	}
-}
-
-func TestExplorationHandoffPathReturnsNonEmptyIntakeHandoff(t *testing.T) {
-	sessionDir := t.TempDir()
-	handoff := filepath.Join(sessionDir, "intake-handoff.md")
-	if err := os.WriteFile(handoff, []byte("exploration notes"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := stateio.WriteState(&model.RunState{WorkflowFile: "builtin:core/intake-v1.0.yaml", Completed: true}, sessionDir); err != nil {
-		t.Fatal(err)
-	}
-	if got := explorationHandoffPath(sessionDir); got != handoff {
-		t.Fatalf("explorationHandoffPath() = %q, want %q", got, handoff)
 	}
 }
 
@@ -186,7 +164,7 @@ func TestPrepareFreshRunPrevalidationFailureLeavesNoRunDirectory(t *testing.T) {
 	}
 }
 
-func TestInternalLaunchIntakeRoutePreparesSealedSourceWithCopiedHandoff(t *testing.T) {
+func TestInternalLaunchIntakeRoutePreparesSealedSourceWithPromptHandoff(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("AGENT_RUNNER_NO_TUI", "1")
@@ -197,11 +175,7 @@ func TestInternalLaunchIntakeRoutePreparesSealedSourceWithCopiedHandoff(t *testi
 		t.Fatal(err)
 	}
 	parent := t.TempDir()
-	handoff := filepath.Join(parent, "sealed-handoff.md")
-	if err := os.WriteFile(handoff, []byte("intake conclusions"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sealed := intakeroute.Sealed{State: intakeroute.Frozen, ParentRunID: "intake-parent", Workflow: "target", SourceRef: target, Params: map[string]string{}, HandoffPath: handoff, StagedAt: "2026-07-28T00:00:00Z", FrozenAt: "2026-07-28T00:01:00Z"}
+	sealed := intakeroute.Sealed{State: intakeroute.Frozen, ParentRunID: "intake-parent", Workflow: "target", SourceRef: target, Params: map[string]string{}, Handoff: "intake conclusions", StagedAt: "2026-07-28T00:00:00Z", FrozenAt: "2026-07-28T00:01:00Z"}
 	data, err := json.Marshal(sealed)
 	if err != nil {
 		t.Fatal(err)
@@ -217,6 +191,7 @@ func TestInternalLaunchIntakeRoutePreparesSealedSourceWithCopiedHandoff(t *testi
 	}
 	runsDir := filepath.Join(home, ".agent-runner", "projects")
 	var childState *model.RunState
+	var childRunDir string
 	if err := filepath.WalkDir(runsDir, func(path string, entry os.DirEntry, err error) error {
 		if err != nil || entry.IsDir() || entry.Name() != "state.json" {
 			return err
@@ -226,26 +201,25 @@ func TestInternalLaunchIntakeRoutePreparesSealedSourceWithCopiedHandoff(t *testi
 			return err
 		}
 		childState = &state
+		childRunDir = filepath.Dir(path)
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if childState == nil || childState.IntakeParentRunID != "intake-parent" || childState.IntakeHandoff == "" {
+	if childState == nil || childState.IntakeParentRunID != "intake-parent" {
 		t.Fatalf("child provenance = %#v", childState)
 	}
-	contents, err := os.ReadFile(childState.IntakeHandoff)
-	if err != nil || string(contents) != "intake conclusions" {
-		t.Fatalf("copied handoff = %q, %v", contents, err)
+	if childState.IntakeHandoffContents != "intake conclusions" {
+		t.Fatalf("child handoff = %q", childState.IntakeHandoffContents)
+	}
+	if _, err := os.Stat(filepath.Join(childRunDir, "intake-handoff.md")); !os.IsNotExist(err) {
+		t.Fatalf("launched run created a handoff file: %v", err)
 	}
 }
 
 func TestInternalLaunchIntakeRouteRejectsMissingParentProvenance(t *testing.T) {
 	parent := t.TempDir()
-	handoff := filepath.Join(parent, "sealed-handoff.md")
-	if err := os.WriteFile(handoff, []byte("context"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sealed := intakeroute.Sealed{State: intakeroute.Frozen, Workflow: "target", SourceRef: "builtin:core/target-v1.0.yaml", Params: map[string]string{}, HandoffPath: handoff, StagedAt: "now", FrozenAt: "now"}
+	sealed := intakeroute.Sealed{State: intakeroute.Frozen, Workflow: "target", SourceRef: "builtin:core/target-v1.0.yaml", Params: map[string]string{}, Handoff: "context", StagedAt: "now", FrozenAt: "now"}
 	data, err := json.Marshal(sealed)
 	if err != nil {
 		t.Fatal(err)
@@ -288,13 +262,9 @@ func TestInternalLaunchIntakeRouteIgnoresNewerVersionAtLaunch(t *testing.T) {
 	}
 
 	parent := t.TempDir()
-	handoff := filepath.Join(parent, "sealed-handoff.md")
-	if err := os.WriteFile(handoff, []byte("intake conclusions"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	sealed := intakeroute.Sealed{
 		State: intakeroute.Frozen, ParentRunID: "intake-parent", Workflow: "target",
-		SourceRef: sealedVersion, Params: map[string]string{}, HandoffPath: handoff,
+		SourceRef: sealedVersion, Params: map[string]string{}, Handoff: "intake conclusions",
 		StagedAt: "2026-07-28T00:00:00Z", FrozenAt: "2026-07-28T00:01:00Z",
 	}
 	data, err := json.Marshal(sealed)

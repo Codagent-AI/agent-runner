@@ -1,15 +1,15 @@
 # run-complete-screen Specification
 
 ## Purpose
-Define the completed-run summary experience, including when it appears, how users navigate metric scopes, and how duration, token, and cost values are aligned and labeled.
+Define the optional completed-run metrics summary, including how users open it, navigate metric scopes, and interpret aligned duration, token, and cost values.
 ## Requirements
-### Requirement: Summary is the post-completion view on success
+### Requirement: Detailed run view remains the post-completion default
 
-When a live workflow run reaches the `completed` (successful) terminal state, the run-view TUI SHALL display the run summary screen as the post-completion view, replacing the step-list/log layout. When a run reaches the `failed` terminal state, the TUI SHALL keep today's behavior — the detailed view with the cursor on the failed step — and SHALL NOT auto-show the summary.
+When a live workflow run reaches a terminal state, the run-view TUI SHALL display the detailed run view rather than automatically opening the metrics summary. On successful completion, the detailed view SHALL focus the workflow's final top-level step. On failure, it SHALL focus the failed step. The metrics summary SHALL remain available on demand.
 
-#### Scenario: Successful completion shows summary
+#### Scenario: Successful completion keeps the detailed view
 - **WHEN** the last step of a live run completes successfully
-- **THEN** the TUI displays the run summary screen
+- **THEN** the TUI displays the detailed run view focused on the final top-level step; the metrics summary is not auto-shown
 
 #### Scenario: Failure keeps the detailed view
 - **WHEN** a step fails and the workflow halts
@@ -31,13 +31,13 @@ The detailed run view SHALL bind `s` to open the summary screen, and the summary
 - **WHEN** a run has failed and the user presses `s`
 - **THEN** the summary screen is shown for the failed run
 
-### Requirement: Default view for inspected completed runs
+### Requirement: Detailed view is the default for inspected runs
 
-When a run whose status is `completed` is opened via `--inspect` or from the run list and its audit stream contains structured run metrics, the run view SHALL open showing the summary screen. Runs in any other status (failed, interrupted/inactive, active), and legacy completed runs whose audit stream predates structured metrics, SHALL open in the detailed view as before.
+When a run is opened via `--inspect` or from the run list, the run view SHALL open showing the detailed view regardless of run status or whether structured metrics are available. For runs with structured metrics, the summary SHALL remain available via `s`.
 
-#### Scenario: Inspect completed run opens summary
+#### Scenario: Inspect completed run opens detail
 - **WHEN** `agent-runner --inspect <run-id>` opens a run with status `completed` whose audit stream contains structured run metrics
-- **THEN** the summary screen is displayed first; `v` switches to the detailed run view
+- **THEN** the detailed run view is displayed first; `s` opens the metrics summary
 
 #### Scenario: Legacy completed run opens the original detail view
 - **WHEN** a completed run whose audit events contain no structured usage, cost, identity, or run-total fields is opened via `--inspect` or the run list

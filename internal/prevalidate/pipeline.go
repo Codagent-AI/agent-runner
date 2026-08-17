@@ -27,15 +27,19 @@ const (
 )
 
 type Options struct {
-	LoadConfig func() (*config.Config, []string, error)
-	LookPath   func(string) (string, error)
-	Adapter    func(string) (cli.Adapter, error)
+	LoadConfig      func() (*config.Config, []string, error)
+	ProfileOverride config.ProfileOverride
+	LookPath        func(string) (string, error)
+	Adapter         func(string) (cli.Adapter, error)
 }
 
 type Result struct {
 	DeferredWarnings  []ValidationError
 	ProbeResults      []ProbeResult
 	AgentDeprecations []config.Deprecation
+	// ResolvedProfile names the profile set the workflow was validated
+	// against, whichever selection input produced it.
+	ResolvedProfile string
 }
 
 type ProbeResult struct {
@@ -117,6 +121,7 @@ func Pipeline(rootPath string, boundParams map[string]string, mode Mode, opts Op
 	}
 	if cfg != nil {
 		state.addAgentDeprecations(cfg.Deprecations...)
+		state.result.ResolvedProfile = activeProfileName(cfg)
 	}
 	if err := state.walkFile(rootPath, boundParams, false, nil); err != nil {
 		return state.result, err
@@ -130,7 +135,7 @@ func Pipeline(rootPath string, boundParams map[string]string, mode Mode, opts Op
 func (o Options) withDefaults() Options {
 	if o.LoadConfig == nil {
 		o.LoadConfig = func() (*config.Config, []string, error) {
-			cfg, err := config.Load(filepath.Join(".agent-runner", "config.yaml"))
+			cfg, err := config.LoadWithProfile(filepath.Join(".agent-runner", "config.yaml"), o.ProfileOverride)
 			return cfg, defaultLayerFiles(), err
 		}
 	}
@@ -576,6 +581,9 @@ func (s *walkState) addAgentDeprecations(warnings ...config.Deprecation) {
 }
 
 func activeProfileName(cfg *config.Config) string {
+	if cfg.ResolvedProfile != "" {
+		return cfg.ResolvedProfile
+	}
 	if cfg.ActiveProfile != "" {
 		return cfg.ActiveProfile
 	}

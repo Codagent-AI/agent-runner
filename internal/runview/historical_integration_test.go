@@ -12,7 +12,7 @@ import (
 
 // TestHistoricalProjectionINT001 exercises the persisted inspection boundary:
 // workflow resolution, state, audit replay, metrics, output files, call
-// filtering, skipped context, copy construction, and summary-first entry.
+// filtering, skipped context, copy construction, and detail-first entry.
 func TestHistoricalProjectionINT001(t *testing.T) {
 	base := t.TempDir()
 	workflowDir := filepath.Join(base, "workflows")
@@ -77,8 +77,8 @@ steps:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !m.showSummary {
-		t.Fatal("completed metrics run did not open summary first")
+	if m.showSummary {
+		t.Fatal("completed metrics run opened summary instead of detail")
 	}
 	// New replays through FileTailer. Compare it with a direct ordered replay
 	// of the same serialized audit artifact so start ordinals are deterministic
@@ -98,7 +98,6 @@ steps:
 	if got, want := direct.FindByPrefix("[selected]").StartOrdinal, m.tree.FindByPrefix("[selected]").StartOrdinal; got != want {
 		t.Fatalf("direct replay selected ordinal = %d, New replay ordinal = %d", got, want)
 	}
-	m.showSummary = false
 	selected := childByID(m.tree.Root, "selected")
 	if selected == nil {
 		t.Fatalf("selected step missing: loadErr=%q children=%#v", m.loadErr, m.tree.Root.Children)

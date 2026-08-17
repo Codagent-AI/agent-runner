@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	iexec "github.com/codagent/agent-runner/internal/exec"
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestResolveWorkflowArg(t *testing.T) {
@@ -374,6 +375,33 @@ func TestResolveValidateWorkflowArgResolvesLogicalNameToLatest(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("resolveValidateWorkflowArg = %q, want %q", got, want)
+	}
+}
+
+func TestExtractProfileArgs_AcceptsProfileAfterResumeID(t *testing.T) {
+	args, profile, set, err := extractProfileArgs([]string{"run-123", "--profile", " copilot "})
+	if err != nil {
+		t.Fatalf("extractProfileArgs() error = %v", err)
+	}
+	if diff := cmp.Diff([]string{"run-123"}, args); diff != "" {
+		t.Fatalf("args mismatch (-want +got):\n%s", diff)
+	}
+	if !set || profile != "copilot" {
+		t.Fatalf("profile = %q, set = %t; want copilot, true", profile, set)
+	}
+}
+
+func TestExtractProfileArgs_RejectsDuplicateProfileFlag(t *testing.T) {
+	_, _, _, err := extractProfileArgs([]string{"workflow", "--profile=copilot", "-profile", "work"})
+	if err == nil || !strings.Contains(err.Error(), "may only be specified once") {
+		t.Fatalf("extractProfileArgs() error = %v, want duplicate profile error", err)
+	}
+}
+
+func TestExtractProfileArgs_RejectsOptionAsProfileValue(t *testing.T) {
+	_, _, _, err := extractProfileArgs([]string{"workflow", "--profile", "--until", "step"})
+	if err == nil || !strings.Contains(err.Error(), "requires a profile set name") {
+		t.Fatalf("extractProfileArgs() error = %v, want missing profile value error", err)
 	}
 }
 

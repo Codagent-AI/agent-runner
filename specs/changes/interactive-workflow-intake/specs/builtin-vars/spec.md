@@ -2,9 +2,9 @@
 
 ### Requirement: intake_handoff built-in variable
 
-The runner SHALL expose `{{intake_handoff}}` as a built-in template variable in every run, without exception. Its value SHALL be the **contents** of the sealed handoff when the run was launched from intake, and the empty string otherwise. Supplying the contents rather than a location is what makes the handoff actually reach the agent: a path reaches it only if the agent chooses to read the file, which no workflow can guarantee.
+The runner SHALL expose `{{intake_handoff}}` as a built-in template variable in every run, without exception. Its value SHALL be the **contents** of the sealed handoff when the run was launched from intake, and the empty string otherwise. The handoff SHALL be bounded to a prompt-safe size when the route is submitted.
 
-The runner SHALL bound the inlined contents by a limit separate from, and much smaller than, the limit bounding the handoff file itself. When the sealed handoff exceeds that limit, the runner SHALL supply the leading portion cut at a line boundary followed by a marker naming the full handoff path, so that a verbose handoff degrades the prompt rather than failing the run.
+For an intake-launched run, Agent Runner SHALL also prepend the handoff to the first agent prompt automatically. Workflow definitions SHALL NOT need to reference the built-in to receive it. The automatic prefix SHALL tell the agent that the context was already provided by the user and that the user should not be asked to repeat it.
 
 Unlike other built-ins, it SHALL be present even when its value is empty, so that a workflow referencing it never fails interpolation on a directly invoked run. Its value SHALL be preserved across resume, so a resumed run sees the same value its original invocation had.
 
@@ -12,10 +12,14 @@ Unlike other built-ins, it SHALL be present even when its value is empty, so tha
 - **WHEN** a run launched from intake interpolates `{{intake_handoff}}`
 - **THEN** the runner replaces it with the contents of that run's sealed handoff
 
-#### Scenario: Oversized handoff is truncated rather than rejected
-- **WHEN** a sealed handoff longer than the inline limit is interpolated
-- **THEN** the value is its leading portion cut at a line boundary, followed by a marker naming the full handoff path
-- **AND** the step runs
+#### Scenario: First agent receives intake context automatically
+- **WHEN** a workflow launched from intake reaches its first agent step
+- **THEN** the runner prepends the sealed handoff contents to that step's prompt
+- **AND** the workflow need not reference `{{intake_handoff}}`
+
+#### Scenario: Later agent prompts do not repeat intake context
+- **WHEN** an intake-launched workflow reaches an agent step after an agent session has already started
+- **THEN** the runner does not prepend the intake handoff again
 
 #### Scenario: Direct run resolves to empty
 - **WHEN** a run invoked directly from the CLI or the workflow browser interpolates `{{intake_handoff}}`

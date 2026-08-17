@@ -31,7 +31,7 @@ steps:
 
       Decide whether the resolution belongs in the specifications. Update the applicable active specifications under `{{change_dir}}/specs/` when it changes or clarifies observable behavior, requirements, scope, or design that should be normative. Do not edit the proposal, design, or tasks, and omit minor technical details from specifications.
 
-      Run relevant targeted checks. {{artifact_validation_instruction}} Commit resulting changes using the project's conventions and the `[{{step_id}}]` prefix, then push while keeping the pull request in draft. Do not create an empty commit.
+      Run relevant targeted checks. {{artifact_validation_instruction}} Commit resulting changes that belong to the current project repository using the project's conventions and the `[{{step_id}}]` prefix, then push while keeping the pull request in draft. Leave artifacts outside the repository uncommitted. Do not create an empty commit.
 
       Continue to next step when the unresolved items and their resulting work are complete and the user says to move on.
 
@@ -49,7 +49,7 @@ steps:
 
       Decide whether a requested change belongs in the specifications. Update the applicable active specifications under `{{change_dir}}/specs/` when it changes or clarifies observable behavior, requirements, scope, or design that should be normative. Do not edit the proposal, design, or tasks, and omit minor technical details from specifications.
 
-      Run relevant targeted checks. {{artifact_validation_instruction}} Commit completed refinements using the project's conventions and the `[{{step_id}}]` prefix, then push while keeping the pull request in draft. Do not create an empty commit.
+      Run relevant targeted checks. {{artifact_validation_instruction}} Commit completed refinements that belong to the current project repository using the project's conventions and the `[{{step_id}}]` prefix, then push while keeping the pull request in draft. Leave artifacts outside the repository uncommitted. Do not create an empty commit.
 
       Continue to next step when the user says the requested refinements are complete and the change is ready for final validation.
 
@@ -88,7 +88,7 @@ steps:
 
       If it finds an actionable defect, fix it without expanding the approved scope. Before editing, you MUST invoke codagent:implement-with-tdd and follow its red-green-refactor process. Add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
 
-      Run relevant targeted automated checks. {{artifact_validation_instruction}} Invoke the validator-run skill, incorporate its fixes, commit using the project's conventions and the `[{{step_id}}]` prefix, and push while keeping the pull request in draft. Then resume `acceptance-tester` with explicit re-review instructions to reproduce the prior finding, verify the fix, and exercise only the affected and directly dependent flows. Retain the earlier full-pass evidence for unaffected flows and do not begin a new broad review. It may report a newly introduced defect only when observed within that targeted scope.
+      Run relevant targeted automated checks. {{artifact_validation_instruction}} Invoke the validator-run skill, incorporate its fixes, commit changes that belong to the current project repository using the project's conventions and the `[{{step_id}}]` prefix, leave artifacts outside the repository uncommitted, and push while keeping the pull request in draft. Then resume `acceptance-tester` with explicit re-review instructions to reproduce the prior finding, verify the fix, and exercise only the affected and directly dependent flows. Retain the earlier full-pass evidence for unaffected flows and do not begin a new broad review. It may report a newly introduced defect only when observed within that targeted scope.
 
       Use at most three tester calls. Before continuing to next step, overwrite `{{session_dir}}/output/reacceptance-status.txt` with exactly one line:
       - `REACCEPTANCE_COMPLETE` when testing was not requested or the targeted pass succeeded;

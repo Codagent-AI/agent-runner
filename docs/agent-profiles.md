@@ -110,6 +110,48 @@ Configuration resolves in this order:
 
 Project config wins over global config. Only project config may set `active_profile`, which prevents a machine-wide setting from silently selecting a project's profile set.
 
+## Selecting a Profile Set
+
+Set `active_profile` in the project config to choose the profile set used by default:
+
+```yaml
+active_profile: work
+```
+
+For one invocation, use `--profile <name>` instead. It takes precedence over
+`active_profile`, does not modify configuration, and is also honored by
+`--validate` and `--resume`:
+
+```bash
+agent-runner --profile copilot implement-feature
+agent-runner --validate --profile copilot implement-feature
+agent-runner --resume run-123 --profile copilot
+```
+
+`--profile` may be given only once per invocation. Repeating it fails with
+`--profile may only be specified once` rather than silently picking one of the
+named sets, which would run the workflow under agents you did not unambiguously
+ask for.
+
+The selected profile set is recorded with the run. A later `--resume` without
+`--profile` continues with that recorded set even if `active_profile` has
+changed; an explicit `--profile` on resume replaces it for the remaining steps.
+
+Every run resolves a profile set, including workflows made only of shell steps.
+That means a malformed config file fails any run, not just runs that reference
+agents. A missing config file is fine; the built-in defaults supply `default`.
+
+`--validate` reports the profile set it validated against, whether that came
+from `--profile`, from `active_profile`, or from the `default` fallback:
+
+```text
+$ agent-runner --validate implement-feature
+workflow is valid (profile set: work)
+
+$ agent-runner --validate --profile copilot implement-feature
+workflow is valid (profile set: copilot)
+```
+
 Built-in agents act as fallbacks. An explicit `extends` parent in a global or project profile set replaces built-in agents as the child set's inherited fallback; direct child entries still override that parent.
 
 ## Legacy Aliases

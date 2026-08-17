@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	stdexec "os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -187,7 +188,7 @@ func ExecuteAgentStep(
 	// Bind the run-scoped endpoint before releasing the terminal lease.
 	if controlErr := ensureRunnerControl(ctx, invocationContext, agentCallEligible); controlErr != nil {
 		extraction := cli.UsageExtraction{Usage: defaultAgentUsage(cliName, invocationContext.IsHeadless())}
-		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, false, "", OutcomeFailed, "", controlErr.Error(), &extraction, nil)
+		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, false, "", OutcomeFailed, "", controlErr.Error(), nil, controlErr, &extraction, nil)
 		return OutcomeFailed, controlErr
 	}
 
@@ -197,7 +198,7 @@ func ExecuteAgentStep(
 	)
 	if controlErr != nil {
 		extraction := cli.UsageExtraction{Usage: defaultAgentUsage(cliName, invocationContext.IsHeadless())}
-		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, false, "", OutcomeFailed, "", controlErr.Error(), &extraction, nil)
+		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, false, "", OutcomeFailed, "", controlErr.Error(), nil, controlErr, &extraction, nil)
 		return OutcomeFailed, controlErr
 	}
 	if deactivate != nil {
@@ -213,14 +214,12 @@ func ExecuteAgentStep(
 	invocation, runErr := InvokeAgent(invocationInput, runner, log)
 	if runErr != nil {
 		extraction := cli.UsageExtraction{Usage: invocation.Usage, EstimatedCostUSD: invocation.EstimatedCostUSD}
-		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, invocation.CLILaunched, "", invocation.Outcome, "", invocation.Stderr, &extraction, invocation.UsageError)
+		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, invocation.CLILaunched, "", invocation.Outcome, "", invocation.Stderr, &invocation.ExitCode, runErr, &extraction, invocation.UsageError)
 		return invocation.Outcome, runErr
 	}
 
 	if step.Capture != "" {
-		captured := strings.TrimSuffix(invocation.Response, "\r\n")
-		captured = strings.TrimSuffix(captured, "\n")
-		ctx.CapturedVariables[step.Capture] = model.NewCapturedString(captured)
+		captureAgentResponse(step, ctx, invocation.Response)
 	}
 
 	// Record the originating profile before post-exit session discovery.
@@ -234,9 +233,17 @@ func ExecuteAgentStep(
 	discoveredID := storeDiscoveredSession(step, ctx, invocation.DiscoveredSessionID, log)
 
 	extraction := cli.UsageExtraction{Usage: invocation.Usage, EstimatedCostUSD: invocation.EstimatedCostUSD}
-	emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, invocation.CLILaunched, discoveredID, invocation.Outcome, invocation.Response, invocation.Stderr, &extraction, invocation.UsageError)
+	emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, invocation.CLILaunched, discoveredID, invocation.Outcome, invocation.Response, invocation.Stderr, &invocation.ExitCode, nil, &extraction, invocation.UsageError)
 
 	return invocation.Outcome, nil
+}
+
+func captureAgentResponse(step *model.Step, ctx *model.ExecutionContext, response string) {
+	captured := strings.TrimSuffix(response, "\r\n")
+	captured = strings.TrimSuffix(captured, "\n")
+	value := model.NewCapturedString(captured)
+	ctx.CapturedVariables[step.Capture] = value
+	recordPullRequestCapture(ctx, step.ID, step.Capture, value)
 }
 
 func buildWorkflowAgentInvocation(
@@ -366,7 +373,6 @@ func routeValidationOptions(ctx *model.ExecutionContext) *intakeroute.ValidateOp
 	return &intakeroute.ValidateOptions{
 		RunDir: ctx.SessionDir, ParentRunID: filepath.Base(ctx.SessionDir), IntakeWorkflow: builtinworkflows.IntakeCanonicalName,
 		RequestPath: intakeroute.RequestPathFor(ctx.SessionDir),
-		HandoffPath: intakeroute.HandoffPathFor(ctx.SessionDir),
 		Catalog:     intakeroute.NewCatalog(discovery.EnumerateForProject(ctx.ProjectRoot)),
 	}
 }
@@ -834,6 +840,13 @@ func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, options *AgentPr
 		// Capture stdout for headless runs so that adapters (e.g. Codex) can
 		// parse session IDs from the process output.
 		result, runErr := runner.RunAgent(options)
+		if errors.Is(runErr, stdexec.ErrWaitDelay) {
+			if detector, ok := adapter.(cli.HeadlessCompletionDetector); ok &&
+				detector.HasCompletedHeadlessOutput(result.Stdout) {
+				result.ExitCode = 0
+				runErr = nil
+			}
+		}
 		if runErr != nil {
 			return OutcomeFailed, result, result.Started, runErr
 		}
@@ -976,6 +989,8 @@ func emitAgentEnd(
 	discoveredID string,
 	outcome StepOutcome,
 	stdout, stderr string,
+	exitCode *int,
+	runErr error,
 	extraction *cli.UsageExtraction,
 	usageErr error,
 ) {
@@ -996,6 +1011,12 @@ func emitAgentEnd(
 	}
 	if stderr != "" {
 		data["stderr"] = stderr
+	}
+	if exitCode != nil {
+		data["exit_code"] = *exitCode
+	}
+	if runErr != nil {
+		data["error"] = runErr.Error()
 	}
 	if usageErr != nil {
 		data["usage_error"] = usageErr.Error()
@@ -1072,6 +1093,9 @@ func buildAgentPrompt(step *model.Step, ctx *model.ExecutionContext) (prompt, en
 		if result != "" {
 			enrichment = result
 		}
+	}
+	if ctx.IntakeHandoffContents != "" && ctx.LastSessionStepID == "" && !strings.Contains(prompt, ctx.IntakeHandoffContents) {
+		prompt = "Context from the intake conversation (already provided by the user; do not ask them to repeat it):\n\n" + ctx.IntakeHandoffContents + "\n\n---\n\n" + prompt
 	}
 
 	return prompt, enrichment, nil

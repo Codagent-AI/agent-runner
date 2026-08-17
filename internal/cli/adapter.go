@@ -401,6 +401,13 @@ type HeadlessResultFilter interface {
 	FilterHeadlessResult(exitCode int, stdout, stderr string) (filteredExitCode int, filteredStderr string)
 }
 
+// HeadlessCompletionDetector is an optional interface for structured-output
+// adapters that can prove a successful response was fully captured even when
+// the process runner reports an I/O pipe shutdown error.
+type HeadlessCompletionDetector interface {
+	HasCompletedHeadlessOutput(stdout string) bool
+}
+
 // StdoutWrapper is an optional interface adapters may implement to wrap the
 // stdout io.Writer used by the process runner. This allows adapters that
 // produce structured output (e.g. JSONL) to filter bytes in-flight so the

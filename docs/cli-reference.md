@@ -32,9 +32,45 @@ paths.
 | `-resume` | optional `session-id` | Resume an interrupted workflow; launches TUI if no session ID is given. |
 | `-reset-onboarding` | none | Clear onboarding settings, project `.validator/`, and saved onboarding runs before launching. |
 | `-onboarding-from` | `<step-id>` | Start the built-in onboarding workflow from a top-level step. |
+| `--profile` | `<name>` | Select the profile set for this invocation, overriding `active_profile`. |
 | `-validate` | none | Validate a logical workflow or exact versioned workflow file without executing. |
 | `-v` | none | Print version and exit. |
 | `-version` | none | Print version and exit. |
+
+### Selecting a profile set
+
+`--profile <name>` chooses which profile set resolves the run's agents, for that
+invocation only. It never writes configuration. See
+[Agent Profiles](agent-profiles.md) for how it interacts with `active_profile`
+and with resumed runs.
+
+Unlike the other global flags, `--profile` may appear after the workflow name and
+works with the `run` command form:
+
+```bash
+agent-runner --profile copilot implement-feature
+agent-runner implement-feature --profile copilot
+agent-runner run implement-feature --profile copilot
+```
+
+It may be given only once. Repeating it fails rather than silently choosing one
+of the named sets:
+
+```text
+$ agent-runner --profile copilot --profile work implement-feature
+agent-runner: --profile may only be specified once
+```
+
+Naming a profile set that does not exist fails before the run starts, and lists
+what is available:
+
+```text
+$ agent-runner --profile missing implement-feature
+agent-runner: profile set "missing" requested by --profile flag does not exist in the merged config; available profile sets: copilot, default
+```
+
+`--profile` is mutually exclusive with `-list` and `-inspect`, which display
+existing runs and resolve no agents.
 
 ## Run Command
 
@@ -53,8 +89,8 @@ Examples:
 
 ```bash
 agent-runner run openspec:plan-change --param change_name=my-change
-agent-runner run spec-driven:change --param change_name=my-change
-agent-runner run spec-driven:change --param change_name=my-change --until accept
+agent-runner run spec-driven:change --param change_name=my-change --param change_dir=../change-artifacts/my-change
+agent-runner run spec-driven:change --param change_name=my-change --param change_dir=../change-artifacts/my-change --until accept
 ```
 
 ## Debug Command
