@@ -8,6 +8,7 @@ validator_logs/
 .validator/cache/
 agent-runner-state.json
 worktrees/
+/.agent-runner-e2e-*/
 artifacts/
 .sandbox-secrets.env
 .eval-secrets.env
