@@ -28,7 +28,7 @@ steps:
     session: lead-agent
     mode: interactive
     prompt: |
-      Help the user plan OpenSpec change "{{change_name}}". Use any intake context supplied above as what the user already told an agent; if none was supplied, first ask what the change is about and do not guess. You MUST use codagent:simple-plan and write its artifacts under `openspec/changes/{{change_name}}/`.
+      Help the user plan OpenSpec change "{{change_name}}". Use any intake context supplied above as what the user already told an agent; if none was supplied, first ask what the change is about and do not guess. Intake context is prior factual context only: it is not approval of a direction, authorization to write, or a substitute for confirmation required by codagent:simple-plan. You MUST use codagent:simple-plan and write its artifacts under `openspec/changes/{{change_name}}/`.
 
       Once the user approves writing the plan, write it and continue to the next step without asking the user to review the written artifacts again.
 
