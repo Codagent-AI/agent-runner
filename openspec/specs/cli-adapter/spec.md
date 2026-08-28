@@ -275,6 +275,8 @@ The adapter contract SHALL gain an optional usage-extraction capability. After a
 
 An adapter's extraction SHALL report only what its CLI actually provides: token categories the CLI does not emit are absent, and cost is included only when the CLI reports a USD value (per `cost-capture`). Which adapters support extraction, and what each extracts from where, is a design/implementation concern.
 
+Codex `turn.completed.usage` SHALL be treated as usage during that completed turn, not as a cross-turn session counter. Its cache-read and reasoning categories SHALL remain raw detail while canonical input and output totals use the already-inclusive input and output fields.
+
 Extraction failures SHALL NOT fail the step: a step whose CLI exited successfully but whose usage cannot be parsed completes normally with unavailable usage.
 
 #### Scenario: Runner invokes extraction after headless exit
@@ -288,6 +290,10 @@ Extraction failures SHALL NOT fail the step: a step whose CLI exited successfull
 #### Scenario: Adapter supports usage but not cost
 - **WHEN** an adapter's CLI reports token usage but no USD cost
 - **THEN** the extracted usage record carries the token categories and no cost value
+
+#### Scenario: Codex resumed turn is not subtracted
+- **WHEN** Codex emits `turn.completed.usage` after Runner resumes a session
+- **THEN** the adapter returns those counts as per-turn tokens and canonical totals, with no cumulative-session marker
 
 #### Scenario: Extraction failure does not fail the step
 - **WHEN** a CLI exits with code 0 but its output cannot be parsed for usage
@@ -364,4 +370,3 @@ When a supported CLI exposes process-local control over MCP tool-execution timeo
 #### Scenario: Adapter without timeout control adds no Runner deadline
 - **WHEN** an enabled parent uses a CLI without a supported MCP tool-execution timeout setting
 - **THEN** Agent Runner preserves the host's native behavior and introduces no fixed call duration limit of its own
-

@@ -145,12 +145,12 @@ func TestCodexUsageExtraction(t *testing.T) {
 	extractor := requireUsageExtractor(t, &CodexAdapter{})
 	want := UsageExtraction{Usage: model.UsageRecord{
 		Status: model.UsageCollected, CLI: "codex", Provider: "openai",
-		RawCumulative: model.TokenCounts{
+		Tokens: model.TokenCounts{
 			model.TokenInput: 2521, model.TokenCachedInput: 2432,
 			model.TokenOutput: 3, model.TokenReasoning: 19,
 		},
-		RawCumulativeTokenTotals: &model.TokenTotals{Input: 2521, Output: 3, Total: 2524},
-		Source:                   "codex:turn.completed", Completeness: model.CompletenessComplete,
+		TokenTotals: &model.TokenTotals{Input: 2521, Output: 3, Total: 2524},
+		Source:      "codex:turn.completed", Completeness: model.CompletenessComplete,
 	}}
 	got, err := extractor.ExtractUsage(readUsageFixture(t, "codex.jsonl"))
 	if err != nil {
@@ -159,10 +159,10 @@ func TestCodexUsageExtraction(t *testing.T) {
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Fatalf("ExtractUsage() mismatch (-want +got):\n%s", diff)
 	}
-	if got.Usage.Tokens != nil {
-		t.Fatalf("cumulative Codex usage must leave Tokens empty, got %#v", got.Usage.Tokens)
+	if got.Usage.RawCumulative != nil {
+		t.Fatalf("per-turn Codex usage must not be marked cumulative, got %#v", got.Usage.RawCumulative)
 	}
-	assertUsageJSONField(t, &got.Usage, "raw_cumulative_token_totals", map[string]any{
+	assertUsageJSONField(t, &got.Usage, "token_totals", map[string]any{
 		"input": float64(2521), "output": float64(3), "total": float64(2524),
 	})
 }

@@ -53,7 +53,9 @@ Failed agent steps still count. If a CLI process consumes tokens, reports metric
 
 Accepted agent calls receive their own execution records. Their usage and cost contribute to run totals exactly once and remain attributable to the call. A parent summary row rolls up its own attempts plus its calls, while its duration remains the parent's wall-clock duration instead of adding synchronous child durations. A call that fails before its CLI launches remains a failed metric record but does not reduce usage or cost coverage.
 
-Shell, script, UI, loop, group, and sub-workflow steps do not call an agent CLI themselves. Their token and cost cells show a dash. Container rows roll up metrics from agent steps below them.
+A shell step can declare `metrics_source: agent-validator` when the launched tool may invoke models. Runner gives that process an `AGENT_RUNNER_NESTED_METRICS_PATH` JSONL sink and records each valid child as a distinct `nested-agent` attempt with role `implementation-validator` and tool `agent-validator`. If the declared producer writes no records or writes an invalid record, Runner adds an explicit unavailable gap attempt; the invocation cannot silently disappear from coverage.
+
+Other shell, script, UI, loop, group, and sub-workflow steps do not call an agent CLI themselves. Their token and cost cells show a dash. Container rows roll up metrics from agent steps below them.
 
 ## Reading The Summary
 
@@ -85,7 +87,7 @@ Each execution attempt gets its own metrics record. If a step fails and runs aga
 
 Resuming an Agent Runner run appends to the same metrics artifact. Active duration excludes time spent paused between invocations.
 
-Codex reports cumulative session usage. Agent Runner subtracts the last trusted total for that Codex session so each step receives only its own usage. If a resumed session has no trusted baseline, or its counters reset, that step shows `?` rather than claiming the session's lifetime usage. The new cumulative value becomes the baseline for the next invocation.
+Codex defines `turn.completed.usage` as the usage during that completed turn. Agent Runner therefore records that snapshot directly for new and resumed turns; it does not subtract the preceding turn. Cache and reasoning values remain detail categories within the canonical input/output totals and are not added to those totals again.
 
 ## The Metrics Artifact
 
@@ -97,8 +99,9 @@ Each run stores a versioned file beside `state.json` and `audit.log`:
 
 `run-metrics.json` is the supported input for evaluation tools and other automated consumers. It contains:
 
-- one append-only record per step attempt or accepted agent-call execution;
-- duration, outcome, nesting identity, usage provenance, token categories, canonical totals, and reported cost;
+- one append-only record per step attempt, accepted agent call, or structured nested model invocation;
+- stable role/tool identity and separate requested/effective CLI, model, and effort identity with provenance;
+- duration, outcome, nesting identity, usage provenance, raw token categories, canonical non-overlapping totals, and reported cost;
 - execution-session durations for interrupted and resumed runs;
 - run totals and coverage values; and
 - `history_complete`, which tells consumers whether earlier metrics were lost during recovery.

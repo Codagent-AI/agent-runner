@@ -56,9 +56,16 @@ func emitStepEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time
 }
 
 func executionIdentity(ctx *model.ExecutionContext, step *model.Step, kind string, iteration int, agentInvoked bool, cliName, sessionID string) model.ExecutionIdentity {
+	role := ""
+	tool := ""
+	if step.StepType() == "agent" {
+		role = stepProfileName(step, ctx)
+		tool = "agent-runner"
+	}
 	return model.ExecutionIdentity{
 		StepID: step.ID, Prefix: executionIdentityPrefix(ctx), StepType: step.StepType(), Kind: kind,
 		Iteration: iteration, CLI: cliName, SessionID: sessionID, SessionStrategy: string(step.Session), AgentInvoked: agentInvoked,
+		Role: role, Tool: tool,
 	}
 }
 

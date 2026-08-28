@@ -64,6 +64,19 @@ func TestResolveStepProfileCrosscheckInteractiveOverrideKeepsResolvedBackend(t *
 	}
 }
 
+func TestExecutionIdentityPreservesCrosscheckRole(t *testing.T) {
+	ctx := makeCtx()
+	ctx.ProfileStore = &config.Config{ActiveAgents: map[string]*config.Agent{
+		"crosscheck": {DefaultMode: "autonomous", CLI: "claude", Model: "opus", Effort: "high"},
+	}}
+	step := &model.Step{ID: "review", Agent: "crosscheck", Session: model.SessionNew, Prompt: "review"}
+
+	got := executionIdentity(ctx, step, "step", 0, true, "claude", "session")
+	if got.Role != "crosscheck" || got.Tool != "agent-runner" {
+		t.Fatalf("execution role/tool = %+v", got)
+	}
+}
+
 func TestResolveStepProfile_RunAgentOverrideBeatsStepAndProfile(t *testing.T) {
 	ctx := makeCtx()
 	ctx.ProfileStore = &config.Config{ActiveAgents: map[string]*config.Agent{
@@ -125,6 +138,11 @@ func TestExecuteAgentStep(t *testing.T) {
 		end := findAuditEvent(auditLog.events, audit.EventStepEnd)
 		wantUsage := model.UsageRecord{
 			Status: model.UsageCollected, CLI: "claude", Provider: "anthropic", Model: "claude-sonnet-4-6",
+			Identity: model.InvocationIdentity{
+				RequestedCLI: "claude", EffectiveCLI: "claude", EffectiveProvider: "anthropic", EffectiveModel: "claude-sonnet-4-6",
+				ProviderSource: model.IdentitySourceAdapter,
+				ModelSource:    model.IdentitySourceTelemetry,
+			},
 			Tokens: model.TokenCounts{
 				model.TokenInput: 10, model.TokenCachedInput: 20,
 				model.TokenCacheWrite: 3, model.TokenOutput: 4,

@@ -82,7 +82,7 @@ func TestInvokeAgentRetainsLaunchEvidenceWhenRunningProcessIsCanceled(t *testing
 	}
 
 	got, err := InvokeAgent(&AgentInvocation{
-		Context: context.Background(), Adapter: &invocationTestAdapter{},
+		Context: context.Background(), Adapter: &usageIdentityTestAdapter{cli: "codex"},
 		Args: []string{"test-agent"}, InvocationContext: cli.ContextAutonomousHeadless,
 		CLI: "test",
 	}, runner, &mockLogger{})
@@ -92,6 +92,70 @@ func TestInvokeAgentRetainsLaunchEvidenceWhenRunningProcessIsCanceled(t *testing
 	if !got.CLILaunched || got.Outcome != OutcomeFailed || got.Stderr != "canceled" {
 		t.Fatalf("InvokeAgent() result = %#v", got)
 	}
+}
+
+func TestInvokeAgentAttachesRequestedIdentityAndFallsBackToInvocationModel(t *testing.T) {
+	runner := &invocationRecordingRunner{
+		options: make(chan AgentProcessOptions, 1),
+		result:  ProcessResult{Started: true, ExitCode: 0, Stdout: "usage"},
+	}
+
+	got, err := InvokeAgent(&AgentInvocation{
+		Context: context.Background(), Adapter: &usageIdentityTestAdapter{cli: "codex"},
+		Args: []string{"test-agent"}, InvocationContext: cli.ContextAutonomousHeadless,
+		CLI: "codex", Model: "gpt-5.6-terra", Effort: "high",
+	}, runner, &mockLogger{})
+	if err != nil {
+		t.Fatalf("InvokeAgent() error = %v", err)
+	}
+	want := model.InvocationIdentity{
+		RequestedCLI: "codex", RequestedModel: "gpt-5.6-terra", RequestedEffort: "high",
+		EffectiveCLI: "codex", EffectiveProvider: "openai", EffectiveModel: "gpt-5.6-terra", EffectiveEffort: "high",
+		ProviderSource: model.IdentitySourceInvocation,
+		ModelSource:    model.IdentitySourceInvocation, EffortSource: model.IdentitySourceInvocation,
+	}
+	if diff := cmp.Diff(want, got.Usage.Identity); diff != "" {
+		t.Fatalf("usage identity mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestInvokeAgentPreservesTelemetryObservedModel(t *testing.T) {
+	adapter := &usageIdentityTestAdapter{cli: "claude", provider: "anthropic", model: "claude-sonnet-5"}
+	runner := &invocationRecordingRunner{
+		options: make(chan AgentProcessOptions, 1),
+		result:  ProcessResult{Started: true, ExitCode: 0, Stdout: "usage"},
+	}
+
+	got, err := InvokeAgent(&AgentInvocation{
+		Context: context.Background(), Adapter: adapter,
+		Args: []string{"claude"}, InvocationContext: cli.ContextAutonomousHeadless,
+		CLI: "claude", Model: "sonnet", Effort: "high",
+	}, runner, &mockLogger{})
+	if err != nil {
+		t.Fatalf("InvokeAgent() error = %v", err)
+	}
+	if got.Usage.Identity.RequestedModel != "sonnet" || got.Usage.Identity.EffectiveModel != "claude-sonnet-5" || got.Usage.Identity.ModelSource != model.IdentitySourceTelemetry {
+		t.Fatalf("usage identity = %+v", got.Usage.Identity)
+	}
+}
+
+type usageIdentityTestAdapter struct {
+	cli, provider, model string
+}
+
+func (*usageIdentityTestAdapter) BuildArgs(*cli.BuildArgsInput) []string { return nil }
+func (*usageIdentityTestAdapter) DiscoverSessionID(*cli.DiscoverOptions) string {
+	return ""
+}
+func (*usageIdentityTestAdapter) SupportsSystemPrompt() bool { return false }
+func (*usageIdentityTestAdapter) ProbeModel(string, string) (cli.ProbeStrength, error) {
+	return cli.BinaryOnly, nil
+}
+func (a *usageIdentityTestAdapter) ExtractUsage(string) (cli.UsageExtraction, error) {
+	return cli.UsageExtraction{Usage: model.UsageRecord{
+		Status: model.UsageCollected, CLI: a.cli, Provider: a.provider, Model: a.model,
+		Tokens: model.TokenCounts{model.TokenInput: 1}, Source: "claude:result-event",
+	}}, nil
 }
 
 func TestInvokeAgentAcceptsCopilotWaitDelayAfterCompleteTerminalOutput(t *testing.T) {
@@ -198,7 +262,11 @@ func TestInvokeAgentReturnsTypedInvocationEvidence(t *testing.T) {
 		CLI: "test", Model: "test-model", SessionID: "preset-session",
 		DiscoveredSessionID: "discovered-session", SessionResumed: true,
 		Usage: model.UsageRecord{
-			Status: model.UsageCollected, CLI: "test", Source: "test",
+			Status: model.UsageCollected, CLI: "test", Model: "test-model", Source: "test",
+			Identity: model.InvocationIdentity{
+				RequestedCLI: "test", RequestedModel: "test-model", EffectiveCLI: "test", EffectiveModel: "test-model",
+				ModelSource: model.IdentitySourceInvocation,
+			},
 			Tokens: model.TokenCounts{model.TokenInput: 12},
 		},
 		EstimatedCostUSD: float64Pointer(0.25),

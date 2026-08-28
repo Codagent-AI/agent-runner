@@ -428,7 +428,7 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 		Env: spawnEnv, DropEnv: cli.DropSpawnEnvVars(call.adapter),
 		Workdir: call.workdir, Prefix: agentCallPrefix(h.options.Parent.Prefix, record.callID),
 		InvocationContext: cli.ContextAutonomousHeadless,
-		CLI:               call.cliName, Model: call.model, SessionID: sessionID, SessionResumed: call.resume,
+		CLI:               call.cliName, Model: call.model, Effort: call.profile.Effort, SessionID: sessionID, SessionResumed: call.resume,
 		Log: h.options.Log, Now: h.options.Now,
 	}, h.options.Runner, h.options.Log)
 	if runErr != nil {
@@ -508,6 +508,7 @@ func (h *AgentCallHandler) emitAgentCallEnd(record *acceptedAgentCall, call *res
 		StepID: record.callID, Prefix: agentCallIdentityPrefix(h.options.Parent.Prefix), StepType: "agent", Kind: "agent-call",
 		CLI: call.cliName, SessionID: resolvedSessionID, SessionStrategy: agentCallSessionStrategy(call),
 		SessionResumed: call.resume, AgentInvoked: invocation.CLILaunched,
+		Role: call.profileName, Tool: "agent-runner",
 	}
 	data := agentCallAuditData(record, call)
 	data["outcome"] = string(invocation.Outcome)

@@ -210,7 +210,7 @@ func ExecuteAgentStep(
 	recordSessionOnSpawn(step, ctx, sessionID)
 
 	direct := buildWorkflowDirectInvocation(step, ctx, adapter, cliName, sessionID, spawnEnv, agentCallEligible, callHandler, routeEligible)
-	invocationInput := buildWorkflowAgentInvocation(step, ctx, adapter, args, spawnEnv, prefix, invocationContext, cliName, resolvedModel, sessionID, isResume, log, direct)
+	invocationInput := buildWorkflowAgentInvocation(step, ctx, adapter, args, spawnEnv, prefix, invocationContext, cliName, resolvedModel, profile.Effort, sessionID, isResume, log, direct)
 	invocation, runErr := InvokeAgent(invocationInput, runner, log)
 	if runErr != nil {
 		extraction := cli.UsageExtraction{Usage: invocation.Usage, EstimatedCostUSD: invocation.EstimatedCostUSD}
@@ -253,7 +253,7 @@ func buildWorkflowAgentInvocation(
 	args, spawnEnv []string,
 	prefix string,
 	invocationContext cli.InvocationContext,
-	cliName, resolvedModel, sessionID string,
+	cliName, resolvedModel, resolvedEffort, sessionID string,
 	isResume bool,
 	log Logger,
 	direct *directInvocation,
@@ -263,6 +263,7 @@ func buildWorkflowAgentInvocation(
 		Env: spawnEnv, DropEnv: cli.DropSpawnEnvVars(adapter),
 		Workdir: step.Workdir, Prefix: prefix,
 		InvocationContext: invocationContext, CLI: cliName, Model: resolvedModel,
+		Effort:    resolvedEffort,
 		SessionID: sessionID, SessionResumed: isResume,
 		Log: log, SuspendHook: ctx.SuspendHook, ResumeHook: ctx.ResumeHook,
 		direct: direct,
