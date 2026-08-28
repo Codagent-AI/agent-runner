@@ -375,11 +375,14 @@ func TestCoreImplementChangePreflightsValidatedPlanBeforeAgentWork(t *testing.T)
 			Name string `yaml:"name"`
 		} `yaml:"params"`
 		Steps []struct {
-			ID           string            `yaml:"id"`
-			Script       string            `yaml:"script"`
-			ScriptInputs map[string]string `yaml:"script_inputs"`
-			Prompt       string            `yaml:"prompt"`
-			Workflow     string            `yaml:"workflow"`
+			ID                string            `yaml:"id"`
+			Command           string            `yaml:"command"`
+			Script            string            `yaml:"script"`
+			ScriptInputs      map[string]string `yaml:"script_inputs"`
+			Prompt            string            `yaml:"prompt"`
+			Workflow          string            `yaml:"workflow"`
+			Loop              map[string]any    `yaml:"loop"`
+			ContinueOnFailure bool              `yaml:"continue_on_failure"`
 		} `yaml:"steps"`
 	}
 	if err := yaml.Unmarshal(body, &workflow); err != nil {
@@ -423,16 +426,26 @@ func TestCoreImplementChangePreflightsValidatedPlanBeforeAgentWork(t *testing.T)
 	if implementTasksIndex < 0 {
 		t.Fatal("core implement-change has no implement-tasks step")
 	}
-	if checkPlanIndex >= implementTasksIndex {
-		t.Fatalf("check-plan index = %d, want before implement-tasks index %d", checkPlanIndex, implementTasksIndex)
-	}
-	if checkPlanIndex != implementTasksIndex-1 {
-		t.Fatalf("check-plan index = %d, want immediately before implement-tasks index %d", checkPlanIndex, implementTasksIndex)
+	if checkPlanIndex != 1 || implementTasksIndex != 2 {
+		t.Fatalf(
+			"preflight/task indexes = (%d, %d), want check-plan at 1 immediately before implement-tasks at 2",
+			checkPlanIndex,
+			implementTasksIndex,
+		)
 	}
 	for _, step := range workflow.Steps[:checkPlanIndex+1] {
-		if step.Prompt != "" || step.Workflow != "" {
-			t.Fatalf("preflight step %q can invoke an agent or sub-workflow before plan validation", step.ID)
+		if step.Prompt != "" || step.Workflow != "" || step.Command != "" || step.Loop != nil {
+			t.Fatalf("preflight step %q has work beyond deterministic script validation", step.ID)
 		}
+		if step.ContinueOnFailure {
+			t.Fatalf("preflight step %q permits later implementation or delivery work after failure", step.ID)
+		}
+	}
+	if got := workflow.Steps[0].Script; got != "validate-change-name.sh" {
+		t.Fatalf("first preflight script = %q, want validate-change-name.sh", got)
+	}
+	if workflow.Steps[implementTasksIndex].Loop == nil {
+		t.Fatal("valid plan does not continue directly into the implementation task loop")
 	}
 }
 
@@ -577,11 +590,33 @@ None.
 	if err != nil {
 		t.Fatalf("read valid test plan: %v", err)
 	}
+	emptyAcceptanceInventory := strings.ReplaceAll(
+		string(validTestPlan),
+		`### AT-001: Use a widget
+- Classification: Required
+- Covers: Widget behavior
+- Actor and surface: User through the CLI
+- Setup: Isolated workspace
+- Steps: Create and inspect a widget
+- Expected: The widget is visible
+- Evidence: Captured terminal output
+- Effects and cleanup: Remove the workspace
+- Permitted substitutes: None
+
+`,
+		"",
+	)
+	emptyAcceptanceInventory = strings.ReplaceAll(
+		emptyAcceptanceInventory,
+		"| Widget behavior | INT-001 | E2E-001 | AT-001 | — |",
+		"| Widget behavior | INT-001 | E2E-001 | — | — |",
+	)
 	for name, content := range map[string]string{
-		"missing required section": strings.ReplaceAll(string(validTestPlan), "## Coverage Map", "## Traceability"),
-		"dangling coverage id":     strings.ReplaceAll(string(validTestPlan), "AT-001 | —", "AT-999 | —"),
-		"unmapped obligation id":   strings.ReplaceAll(string(validTestPlan), "E2E-001 | AT-001", "— | AT-001"),
-		"duplicate obligation id":  string(validTestPlan) + "\n### AT-001: Duplicate\n",
+		"missing required section":   strings.ReplaceAll(string(validTestPlan), "## Coverage Map", "## Traceability"),
+		"dangling coverage id":       strings.ReplaceAll(string(validTestPlan), "AT-001 | —", "AT-999 | —"),
+		"unmapped obligation id":     strings.ReplaceAll(string(validTestPlan), "E2E-001 | AT-001", "— | AT-001"),
+		"duplicate obligation id":    string(validTestPlan) + "\n### AT-001: Duplicate\n",
+		"empty acceptance inventory": emptyAcceptanceInventory,
 		"missing integration field": strings.ReplaceAll(
 			string(validTestPlan),
 			"- Boundary: CLI and service\n",

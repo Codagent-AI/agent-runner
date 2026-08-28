@@ -155,7 +155,7 @@ steps:
       - assumptions ledger: `{{session_dir}}/output/acceptance-assumptions.md`;
       - verification scope: `full` for the first pass.
 
-      The authoritative test plan was structurally validated before implementation. Use it with the required skill; do not replace it or add a conflicting no-plan policy.
+      The authoritative test plan was structurally validated before implementation. Instruct the tester to execute its applicable `AT-*` inventory under the required skill.
 
       The first pass must exercise every required `AT-*` and every conditional `AT-*` whose activation condition holds. A flow may use a substitute only when that obligation explicitly permits it. Missing applicable-flow evidence is an impediment, not a limitation, and cannot produce `ACCEPTANCE_COMPLETE`.
 
