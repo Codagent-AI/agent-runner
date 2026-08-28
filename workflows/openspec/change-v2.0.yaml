@@ -38,6 +38,7 @@ steps:
       change_name: "{{change_name}}"
       change_dir: "openspec/changes/{{change_name}}"
       change_label: "OpenSpec change"
+      change_kind: "openspec"
       artifact_validation_instruction: 'When an approved artifact changed, run `openspec validate --type change "{{change_name}}"`.'
       skip_validator: "false"
 

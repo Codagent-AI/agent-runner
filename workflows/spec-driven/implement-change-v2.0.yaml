@@ -18,5 +18,6 @@ steps:
       change_name: "{{change_name}}"
       change_dir: "{{change_dir}}"
       change_label: "spec-driven change"
+      change_kind: "spec-driven"
       artifact_validation_instruction: 'When an approved artifact changed, read and follow `{{session_dir}}/bundled/spec-driven/definition-validation-checklist.md`, substituting "{{change_dir}}" for `<change-dir>` when validating "{{change_name}}".'
       skip_validator: "{{skip_validator}}"

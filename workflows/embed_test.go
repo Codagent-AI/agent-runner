@@ -364,6 +364,117 @@ func TestCorePlanChangeUsesDeterministicValidation(t *testing.T) {
 	}
 }
 
+func TestCoreImplementChangePreflightsValidatedPlanBeforeAgentWork(t *testing.T) {
+	body, err := ReadFile("builtin:core/implement-change-v1.0.yaml")
+	if err != nil {
+		t.Fatalf("ReadFile(core implement-change): %v", err)
+	}
+
+	var workflow struct {
+		Params []struct {
+			Name string `yaml:"name"`
+		} `yaml:"params"`
+		Steps []struct {
+			ID           string            `yaml:"id"`
+			Script       string            `yaml:"script"`
+			ScriptInputs map[string]string `yaml:"script_inputs"`
+			Prompt       string            `yaml:"prompt"`
+			Workflow     string            `yaml:"workflow"`
+		} `yaml:"steps"`
+	}
+	if err := yaml.Unmarshal(body, &workflow); err != nil {
+		t.Fatalf("unmarshal core implement-change: %v", err)
+	}
+
+	if !slices.ContainsFunc(workflow.Params, func(param struct {
+		Name string `yaml:"name"`
+	}) bool {
+		return param.Name == "change_kind"
+	}) {
+		t.Fatal("core implement-change does not require change_kind for deterministic planning-artifact validation")
+	}
+
+	var checkPlanIndex, implementTasksIndex = -1, -1
+	for index, step := range workflow.Steps {
+		switch step.ID {
+		case "check-plan":
+			checkPlanIndex = index
+			if step.Script != "validate-planning-artifacts.sh" {
+				t.Errorf("check-plan script = %q, want validate-planning-artifacts.sh", step.Script)
+			}
+			wantInputs := map[string]string{
+				"change_name":   "{{change_name}}",
+				"change_dir":    "{{change_dir}}",
+				"change_kind":   "{{change_kind}}",
+				"require_tasks": "true",
+			}
+			for name, want := range wantInputs {
+				if got := step.ScriptInputs[name]; got != want {
+					t.Errorf("check-plan script input %s = %q, want %q", name, got, want)
+				}
+			}
+		case "implement-tasks":
+			implementTasksIndex = index
+		}
+	}
+	if checkPlanIndex < 0 {
+		t.Fatal("core implement-change has no check-plan preflight")
+	}
+	if implementTasksIndex < 0 {
+		t.Fatal("core implement-change has no implement-tasks step")
+	}
+	if checkPlanIndex >= implementTasksIndex {
+		t.Fatalf("check-plan index = %d, want before implement-tasks index %d", checkPlanIndex, implementTasksIndex)
+	}
+	if checkPlanIndex != implementTasksIndex-1 {
+		t.Fatalf("check-plan index = %d, want immediately before implement-tasks index %d", checkPlanIndex, implementTasksIndex)
+	}
+	for _, step := range workflow.Steps[:checkPlanIndex+1] {
+		if step.Prompt != "" || step.Workflow != "" {
+			t.Fatalf("preflight step %q can invoke an agent or sub-workflow before plan validation", step.ID)
+		}
+	}
+}
+
+func TestV2ImplementChangeCallersProvideChangeKind(t *testing.T) {
+	tests := []struct {
+		ref  string
+		want string
+	}{
+		{ref: "builtin:openspec/change-v2.0.yaml", want: "openspec"},
+		{ref: "builtin:openspec/implement-change-v2.0.yaml", want: "openspec"},
+		{ref: "builtin:spec-driven/change-v2.0.yaml", want: "spec-driven"},
+		{ref: "builtin:spec-driven/implement-change-v2.0.yaml", want: "spec-driven"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ref, func(t *testing.T) {
+			body, err := ReadFile(tt.ref)
+			if err != nil {
+				t.Fatalf("ReadFile(%s): %v", tt.ref, err)
+			}
+			var workflow struct {
+				Steps []struct {
+					Workflow string            `yaml:"workflow"`
+					Params   map[string]string `yaml:"params"`
+				} `yaml:"steps"`
+			}
+			if err := yaml.Unmarshal(body, &workflow); err != nil {
+				t.Fatalf("unmarshal %s: %v", tt.ref, err)
+			}
+			for _, step := range workflow.Steps {
+				if step.Workflow != "../core/implement-change-v1.0.yaml" {
+					continue
+				}
+				if got := step.Params["change_kind"]; got != tt.want {
+					t.Fatalf("implement change_kind = %q, want %q", got, tt.want)
+				}
+				return
+			}
+			t.Fatal("no shared core implement-change step")
+		})
+	}
+}
+
 func TestCoreValidatePlanningArtifactsScript(t *testing.T) {
 	script, err := ReadAsset("core/validate-planning-artifacts.sh")
 	if err != nil {
@@ -493,6 +604,19 @@ None.
 			}
 		})
 	}
+
+	t.Run("missing test plan", func(t *testing.T) {
+		testPlanPath := filepath.Join(changeDir, "test-plan.md")
+		if err := os.Remove(testPlanPath); err != nil {
+			t.Fatalf("remove test plan: %v", err)
+		}
+		if err := run(false); err == nil {
+			t.Fatal("definition validation passed without test-plan.md")
+		}
+		if err := os.WriteFile(testPlanPath, validTestPlan, 0o600); err != nil {
+			t.Fatalf("restore valid test plan: %v", err)
+		}
+	})
 
 	if err := run(true); err == nil {
 		t.Fatal("task-plan validation passed without a task file")
@@ -904,6 +1028,7 @@ func TestSharedAcceptanceCallsUseTesterAndPreserveControls(t *testing.T) {
 			required: []string{
 				"`session: acceptance-tester`",
 				"verification scope: `full` for the first pass",
+				"test plan was structurally validated before implementation",
 				"acceptance-assumptions.md",
 				"acceptance-impact-scope.md",
 				"acceptance-flow-evidence.md",

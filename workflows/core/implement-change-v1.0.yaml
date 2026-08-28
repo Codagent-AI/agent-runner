@@ -9,6 +9,8 @@ params:
     required: true
   - name: change_label
     required: true
+  - name: change_kind
+    required: true
   - name: artifact_validation_instruction
     required: true
   - name: skip_validator
@@ -26,6 +28,14 @@ steps:
     script: validate-change-name.sh
     script_inputs:
       change_name: "{{change_name}}"
+
+  - id: check-plan
+    script: validate-planning-artifacts.sh
+    script_inputs:
+      change_name: "{{change_name}}"
+      change_dir: "{{change_dir}}"
+      change_kind: "{{change_kind}}"
+      require_tasks: "true"
 
   - id: implement-tasks
     loop:
@@ -145,6 +155,8 @@ steps:
       - assumptions ledger: `{{session_dir}}/output/acceptance-assumptions.md`;
       - verification scope: `full` for the first pass.
 
+      The authoritative test plan was structurally validated before implementation. Use it with the required skill; do not replace it or add a conflicting no-plan policy.
+
       The first pass must exercise every required `AT-*` and every conditional `AT-*` whose activation condition holds. A flow may use a substitute only when that obligation explicitly permits it. Missing applicable-flow evidence is an impediment, not a limitation, and cannot produce `ACCEPTANCE_COMPLETE`.
 
       Follow codagent:call-agent's verification and autonomous result-accounting rules after every pass. Inspect the durable evidence and resolve every high-confidence in-scope finding you can, including implementation, CI, PR-state, tooling, setup, and environmental problems. Preserve approved behavior, scope, design, and testing strategy; append ambiguity to the assumptions ledger instead of deciding it silently.
@@ -171,6 +183,6 @@ steps:
       fi
       status=$(sed '/^[[:space:]]*$/d' "{{session_dir}}/output/acceptance-preparation-status.txt" | tail -n 1)
       if [ "$status" != "ACCEPTANCE_COMPLETE" ]; then
-        echo "acceptance preparation failed after three tester calls" >&2
+        echo "acceptance preparation did not complete successfully" >&2
         exit 1
       fi
