@@ -1099,6 +1099,13 @@ func (m *Model) handleOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 // message switch within funlen limits.
 func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" {
+		if m.entered == FromLiveRun && m.running && m.suspended {
+			// An interactive child owns Ctrl-C while it has the terminal. Ignore
+			// any copy of the key Bubble Tea read during a release/restore race so
+			// it cannot tear down the supervising runner behind that child.
+			m.quitConfirming = false
+			return m, nil
+		}
 		m.exitRequested = true
 		return m, tea.Quit
 	}

@@ -122,7 +122,7 @@ func (s *Supervisor) waitLoop() {
 		event, stopSignal := classifyWaitStatus(status)
 		switch event {
 		case waitStopped:
-			if stopSignal == unix.SIGTTIN && s.tty != nil {
+			if (stopSignal == unix.SIGTTIN || stopSignal == unix.SIGTTOU) && s.tty != nil {
 				fd, fdErr := checkedTerminalFD(s.tty.Fd())
 				if fdErr != nil {
 					result.err = fdErr

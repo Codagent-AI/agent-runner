@@ -2232,21 +2232,35 @@ func TestModel_LiveRun_QuitConfirm_Shown(t *testing.T) {
 	}
 }
 
-func TestModel_LiveRun_QuitConfirm_CtrlC(t *testing.T) {
+func TestModel_LiveRun_CtrlCDoesNotExitWhileInteractiveChildOwnsTerminal(t *testing.T) {
 	m := newLiveModel()
+	m.Update(liverun.SuspendedMsg{})
 	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	m = m2.(*Model)
 	if m.quitConfirming {
-		t.Fatal("Ctrl+C should exit immediately without opening quit confirmation")
+		t.Fatal("Ctrl+C should not open quit confirmation")
 	}
+	if cmd != nil {
+		t.Fatalf("Ctrl+C command = %T, want nil while a live run is active", cmd)
+	}
+	if m.ExitRequested() {
+		t.Fatal("Ctrl+C should not mark exit requested while a live run is active")
+	}
+}
+
+func TestModel_LiveRun_CtrlCExitsWhileTUIOwnsTerminal(t *testing.T) {
+	m := newLiveModel()
+
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = m2.(*Model)
 	if cmd == nil {
-		t.Fatal("Ctrl+C should return a quit command")
+		t.Fatal("Ctrl+C should quit while the live-run TUI owns the terminal")
 	}
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Fatalf("expected Ctrl+C command to quit, got %T", cmd())
 	}
 	if !m.ExitRequested() {
-		t.Fatal("Ctrl+C should mark exit requested")
+		t.Fatal("Ctrl+C should mark exit requested while the live-run TUI owns the terminal")
 	}
 }
 
@@ -2305,25 +2319,27 @@ func TestModel_LiveRun_QuitConfirm_AcceptMarksExitRequested(t *testing.T) {
 	}
 }
 
-func TestModel_LiveRun_CtrlCExitsFromQuitConfirmation(t *testing.T) {
+func TestModel_LiveRun_CtrlCCancelsQuitConfirmationDuringTerminalHandoff(t *testing.T) {
 	m := newLiveModel()
+	m.Update(liverun.SuspendedMsg{})
 	m.quitConfirming = true
 
 	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	m = m2.(*Model)
-	if cmd == nil {
-		t.Fatal("Ctrl+C should quit while confirmation is open")
+	if cmd != nil {
+		t.Fatalf("Ctrl+C command = %T, want nil while a live run is active", cmd)
 	}
-	if _, ok := cmd().(tea.QuitMsg); !ok {
-		t.Fatalf("expected Ctrl+C command to quit, got %T", cmd())
+	if m.ExitRequested() {
+		t.Fatal("Ctrl+C should not mark exit requested while a live run is active")
 	}
-	if !m.ExitRequested() {
-		t.Fatal("Ctrl+C should mark exit requested while confirmation is open")
+	if m.quitConfirming {
+		t.Fatal("Ctrl+C should dismiss the quit confirmation")
 	}
 }
 
-func TestModel_CtrlCExitsFromLegend(t *testing.T) {
+func TestModel_CtrlCExitsFromLegendAfterRun(t *testing.T) {
 	m := newLiveModel()
+	m.running = false
 	m.showLegend = true
 
 	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
