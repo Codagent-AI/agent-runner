@@ -101,7 +101,7 @@ func Parse(options Options) (Plan, error) {
 }
 
 func declaresRepositoryGroups(changeDir string) bool {
-	index, err := os.ReadFile(filepath.Join(changeDir, "tasks.md"))
+	index, err := os.ReadFile(filepath.Join(changeDir, "tasks.md")) // #nosec G304 -- changeDir is canonicalized and contained by Parse before this fixed filename is read.
 	if err != nil {
 		return false
 	}
@@ -195,7 +195,7 @@ func parseConfigured(changeDir string, repositories []string) (Plan, error) {
 		allowed[repository] = true
 	}
 	indexPath := filepath.Join(changeDir, "tasks.md")
-	index, err := os.ReadFile(indexPath)
+	index, err := os.ReadFile(indexPath) // #nosec G304 -- changeDir is canonicalized and contained by Parse before this fixed filename is read.
 	if err != nil {
 		return Plan{}, fmt.Errorf("read task index: %w", err)
 	}
