@@ -52,7 +52,7 @@ type SnapshotGroup struct {
 	Tasks      []string `json:"tasks"`
 }
 
-func (p Plan) TaskPattern(repository string) string {
+func (p *Plan) TaskPattern(repository string) string {
 	for _, group := range p.Groups {
 		if group.Repository == repository && len(group.Tasks) > 0 {
 			if filepath.Base(group.Tasks[0]) == "tasks.md" && len(group.Tasks) == 1 {
@@ -69,7 +69,7 @@ func literalGlobPath(path string) string {
 }
 
 var (
-	repositoryHeading = regexp.MustCompile(`^## Repository: ([^\s]+)\s*$`)
+	repositoryHeading = regexp.MustCompile(`^## Repository: (\S+)\s*$`)
 	taskLink          = regexp.MustCompile(`(?m)^\s*-\s+\[[ xX]\]\s+\[[^]]+\]\(([^)]+)\)\s*$`)
 )
 
@@ -88,10 +88,29 @@ func Parse(options Options) (Plan, error) {
 	if !isWithin(workspaceDir, changeDir) {
 		return Plan{}, fmt.Errorf("change directory %s is outside workspace %s", changeDir, workspaceDir)
 	}
+	if options.PlanKind == Simple {
+		if len(options.Repositories) == 0 || !declaresRepositoryGroups(changeDir) {
+			return parseImplicit(changeDir, Simple)
+		}
+		return parseConfigured(changeDir, options.Repositories)
+	}
 	if len(options.Repositories) == 0 {
-		return parseImplicit(changeDir, options.PlanKind)
+		return parseImplicit(changeDir, Full)
 	}
 	return parseConfigured(changeDir, options.Repositories)
+}
+
+func declaresRepositoryGroups(changeDir string) bool {
+	index, err := os.ReadFile(filepath.Join(changeDir, "tasks.md"))
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(index), "\n") {
+		if strings.HasPrefix(line, "## Repository") {
+			return true
+		}
+	}
+	return false
 }
 
 func parseImplicit(changeDir string, kind PlanKind) (Plan, error) {
@@ -145,7 +164,7 @@ func numericTaskNameLess(left, right string) bool {
 	return left < right
 }
 
-func numericPrefix(name string) (string, string) {
+func numericPrefix(name string) (number, remainder string) {
 	for i, r := range name {
 		if r < '0' || r > '9' {
 			return normalizedNumber(name[:i]), name[i:]
@@ -224,7 +243,22 @@ func parseConfigured(changeDir string, repositories []string) (Plan, error) {
 	if err := validateConfiguredTaskFiles(changeDir, groups); err != nil {
 		return Plan{}, err
 	}
+	if err := validateGroupTaskDirectories(groups); err != nil {
+		return Plan{}, err
+	}
 	return newPlan(changeDir, groups)
+}
+
+func validateGroupTaskDirectories(groups []Group) error {
+	for _, group := range groups {
+		directory := filepath.Dir(group.Tasks[0])
+		for _, task := range group.Tasks[1:] {
+			if filepath.Dir(task) != directory {
+				return fmt.Errorf("task group %q must keep all tasks in the same directory for its loop pattern", group.Repository)
+			}
+		}
+	}
+	return nil
 }
 
 func resolveConfiguredTask(changeDir, repository, destination string) (string, error) {

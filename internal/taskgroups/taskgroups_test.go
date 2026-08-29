@@ -133,6 +133,50 @@ func TestTaskPatternEscapesLiteralWorkspacePath(t *testing.T) {
 	}
 }
 
+func TestParseConfiguredGroupRejectsTasksFromDifferentDirectories(t *testing.T) {
+	workspace := t.TempDir()
+	changeDir := filepath.Join(workspace, "openspec", "changes", "demo")
+	writeTaskGroupFile(t, filepath.Join(changeDir, "tasks.md"), `## Repository: backend
+
+- [ ] [API](tasks/backend/api/01-api.md)
+- [ ] [Database](tasks/backend/db/02-database.md)
+`)
+	writeTaskGroupFile(t, filepath.Join(changeDir, "tasks", "backend", "api", "01-api.md"), "# API\n")
+	writeTaskGroupFile(t, filepath.Join(changeDir, "tasks", "backend", "db", "02-database.md"), "# Database\n")
+
+	_, err := Parse(Options{
+		WorkspaceDir: workspace,
+		ChangeDir:    changeDir,
+		PlanKind:     Full,
+		Repositories: []string{"backend"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "same directory") {
+		t.Fatalf("Parse() error = %v, want single-directory task group failure", err)
+	}
+}
+
+func TestParseConfiguredSimplePlanAcceptsMonolithicTaskFile(t *testing.T) {
+	workspace := t.TempDir()
+	changeDir := filepath.Join(workspace, "openspec", "changes", "demo")
+	writeTaskGroupFile(t, filepath.Join(changeDir, "tasks.md"), "# Small change\n")
+
+	plan, err := Parse(Options{
+		WorkspaceDir: workspace,
+		ChangeDir:    changeDir,
+		PlanKind:     Simple,
+		Repositories: []string{"backend"},
+	})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if diff := cmp.Diff([]string{"default"}, plan.Repositories); diff != "" {
+		t.Fatalf("repositories mismatch (-want +got):\n%s", diff)
+	}
+	if got, want := filepath.Base(plan.Groups[0].Tasks[0]), "tasks.md"; got != want {
+		t.Fatalf("task file = %q, want %q", got, want)
+	}
+}
+
 func TestParseConfiguredGroupsRejectsInvalidOwnership(t *testing.T) {
 	tests := []struct {
 		name         string
