@@ -108,6 +108,14 @@ func prepareSubWorkflow(
 	if parentCtx.WorkflowScope == model.ScopeRepositories && workflow.Scope == model.ScopeWorkspace {
 		return model.Workflow{}, nil, fmt.Errorf("repository-scoped workflows cannot invoke a workspace-scoped child; invoke the workspace child from a workspace-scoped parent")
 	}
+	if workflow.Scope == model.ScopeRepositories && parentCtx.Workspace != nil && len(parentCtx.Workspace.Repositories) == 1 {
+		if _, implicit := parentCtx.Workspace.Repositories["default"]; implicit {
+			if _, supplied := resolvedParams[model.RepositoriesParam]; !supplied {
+				resolvedParams = copyMap(resolvedParams)
+				resolvedParams[model.RepositoriesParam] = "default"
+			}
+		}
+	}
 
 	if err := validateSubWorkflowParams(&workflow, resolvedParams); err != nil {
 		return model.Workflow{}, nil, err

@@ -432,34 +432,48 @@ func childScopeForStep(step *model.Step, params map[string]string, paramNames ma
 }
 
 func checkStepReferences(path string, step *model.Step, params map[string]string, paramNames, captured map[string]bool) error {
-	fields := map[string]string{
-		"prompt":  step.Prompt,
-		"command": step.Command,
-	}
-	for field, value := range fields {
+	for _, item := range interpolatedStepFields(step) {
+		field, value := item.field, item.value
 		if err := checkReferences(path, step.ID, field, value, params, paramNames, captured, false); err != nil {
-			return err
-		}
-	}
-	for key, value := range step.Params {
-		if err := checkReferences(path, step.ID, "params."+key, value, params, paramNames, captured, false); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateScopedBuiltinAvailability(path string, step *model.Step, scope model.Scope) error {
-	values := []struct{ field, value string }{
+type interpolationField struct{ field, value string }
+
+func interpolatedStepFields(step *model.Step) []interpolationField {
+	fields := []interpolationField{
 		{"prompt", step.Prompt}, {"command", step.Command}, {"workdir", step.Workdir},
+		{"skip_if", step.SkipIf}, {"break_if", step.BreakIf}, {"title", step.Title}, {"body", step.Body},
 	}
 	for key, value := range step.Params {
-		values = append(values, struct{ field, value string }{"params." + key, value})
+		fields = append(fields, interpolationField{"params." + key, value})
+	}
+	for key, value := range step.ScriptInputs {
+		fields = append(fields, interpolationField{"script_inputs." + key, value})
 	}
 	if step.Loop != nil {
-		values = append(values, struct{ field, value string }{"loop.over", step.Loop.Over})
+		fields = append(fields, interpolationField{"loop.over", step.Loop.Over})
 	}
-	for _, item := range values {
+	for i := range step.Actions {
+		fields = append(fields, interpolationField{fmt.Sprintf("actions[%d].label", i), step.Actions[i].Label})
+	}
+	for i := range step.Inputs {
+		fields = append(fields,
+			interpolationField{fmt.Sprintf("inputs[%d].prompt", i), step.Inputs[i].Prompt},
+			interpolationField{fmt.Sprintf("inputs[%d].default", i), step.Inputs[i].Default},
+		)
+		for j, option := range step.Inputs[i].Options {
+			fields = append(fields, interpolationField{fmt.Sprintf("inputs[%d].options[%d]", i, j), option})
+		}
+	}
+	return fields
+}
+
+func validateScopedBuiltinAvailability(path string, step *model.Step, scope model.Scope) error {
+	for _, item := range interpolatedStepFields(step) {
 		for _, ref := range placeholders(item.value) {
 			if isRepositoryBuiltin(ref) && scope != model.ScopeRepositories {
 				return ValidationError{File: path, StepID: step.ID, Field: item.field, Value: ref, Message: fmt.Sprintf("repository built-in {{%s}} is unavailable in workspace scope", ref)}

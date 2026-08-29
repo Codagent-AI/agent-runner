@@ -47,6 +47,8 @@ steps:
 	repositoryOverride := writeWorkflow(t, dir, "repository-override-v1.0.yaml", `
 name: repository-override
 scope: workspace
+params:
+  - name: repositories
 steps:
   - id: valid
     scope: repositories

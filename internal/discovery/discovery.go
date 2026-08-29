@@ -46,7 +46,7 @@ type WorkflowEntry struct {
 // VisibleParams returns the parameters a launch UI must ask the user for.
 // The implicit default repository target is runner-owned control state, not a
 // user-entered value.
-func (e WorkflowEntry) VisibleParams() []model.Param {
+func (e *WorkflowEntry) VisibleParams() []model.Param {
 	if !e.HideImplicitRepositoryTargets {
 		return e.Params
 	}
@@ -138,16 +138,16 @@ func Enumerate(builtinFS fs.FS, projectDir, userWorkflowsDir string) []WorkflowE
 
 	if len(projectEntries) != 0 && len(userEntries) != 0 {
 		shadowed := make(map[string]struct{}, len(projectEntries))
-		for _, entry := range projectEntries {
-			shadowed[entry.CanonicalName] = struct{}{}
+		for i := range projectEntries {
+			shadowed[projectEntries[i].CanonicalName] = struct{}{}
 		}
 
 		filtered := userEntries[:0]
-		for _, entry := range userEntries {
-			if _, ok := shadowed[entry.CanonicalName]; ok {
+		for i := range userEntries {
+			if _, ok := shadowed[userEntries[i].CanonicalName]; ok {
 				continue
 			}
-			filtered = append(filtered, entry)
+			filtered = append(filtered, userEntries[i])
 		}
 		userEntries = filtered
 	}
@@ -322,7 +322,8 @@ func EnumerateGroups(builtinFS fs.FS, entries []WorkflowEntry) []GroupMetadata {
 
 	seen := make(map[groupKey]bool)
 	var keys []groupKey
-	for _, entry := range entries {
+	for i := range entries {
+		entry := &entries[i]
 		key := groupKey{scope: entry.Scope, ns: entry.Namespace}
 		if seen[key] {
 			continue

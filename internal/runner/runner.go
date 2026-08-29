@@ -156,9 +156,13 @@ func resolveExecutionRoots(opts *Options) (workingDir, projectRoot string, err e
 		return "", "", fmt.Errorf("resolve working directory: %w", err)
 	}
 	if opts.WorkflowScope != model.ScopeLegacy {
-		workspace, err := prepareWorkspace(opts.WorkflowScope, workingDir, opts.ProfileStore)
-		if err != nil {
-			return "", "", err
+		workspace := opts.Workspace
+		if workspace == nil {
+			var workspaceErr error
+			workspace, workspaceErr = prepareWorkspace(opts.WorkflowScope, workingDir, opts.ProfileStore)
+			if workspaceErr != nil {
+				return "", "", workspaceErr
+			}
 		}
 		opts.Workspace = workspace
 		return workspace.Dir, workspace.Dir, nil
@@ -177,6 +181,20 @@ func resolveExecutionRoots(opts *Options) (workingDir, projectRoot string, err e
 	return workingDir, projectRoot, nil
 }
 
+// PrepareWorkspaceForLaunch establishes the scoped workspace before workflow
+// prevalidation or engine setup. It is used by CLI launch wiring and can be
+// passed through Options so PrepareRun does not repeat discovery.
+func PrepareWorkspaceForLaunch(scope model.Scope, launchDir string) (*model.WorkspaceContext, error) {
+	if scope == model.ScopeLegacy {
+		return nil, nil
+	}
+	cfg, err := config.Load(filepath.Join(launchDir, ".agent-runner", "config.yaml"))
+	if err != nil {
+		return nil, fmt.Errorf("load workspace configuration: %w", err)
+	}
+	return prepareWorkspace(scope, launchDir, cfg)
+}
+
 // prepareWorkspace validates the immutable workspace/repository contract for
 // a scope-aware run. Legacy workflows do not call this function: they retain
 // their existing non-Git launch behavior.
@@ -188,8 +206,11 @@ func prepareWorkspace(scope model.Scope, launchDir string, cfg *config.Config) (
 	if err != nil {
 		return nil, fmt.Errorf("resolve workspace directory: %w", err)
 	}
-	workspaceRoot, ok := gitWorktreeRoot(canonicalLaunch)
-	if !ok {
+	workspaceRoot, err := gitWorktreeRoot(canonicalLaunch)
+	if err != nil {
+		return nil, err
+	}
+	if workspaceRoot == "" {
 		return nil, fmt.Errorf("scope-aware workflows must launch from a canonical workspace root of a Git worktree")
 	}
 	if canonicalLaunch != workspaceRoot {
@@ -218,8 +239,11 @@ func prepareWorkspace(scope model.Scope, launchDir string, cfg *config.Config) (
 		if err != nil {
 			return nil, fmt.Errorf("repository %q path %q: %w", name, declaration.Path, err)
 		}
-		gitRoot, ok := gitWorktreeRoot(repositoryDir)
-		if !ok || gitRoot != repositoryDir {
+		gitRoot, rootErr := gitWorktreeRoot(repositoryDir)
+		if rootErr != nil {
+			return nil, fmt.Errorf("repository %q path %q: %w", name, declaration.Path, rootErr)
+		}
+		if gitRoot == "" || gitRoot != repositoryDir {
 			return nil, fmt.Errorf("repository %q path %q must resolve to a Git worktree root", name, declaration.Path)
 		}
 		if repositoryDir == workspaceRoot {
@@ -267,7 +291,7 @@ func discoverProjectRoot(workflowFile, workingDir string) (string, error) {
 }
 
 func findRepositoryRoot(start string) (string, bool) {
-	if root, ok := gitWorktreeRoot(start); ok {
+	if root, err := gitWorktreeRoot(start); err == nil && root != "" {
 		return root, true
 	}
 	// Preserve the legacy discovery contract for callers and tests which only
@@ -289,25 +313,32 @@ func findRepositoryRoot(start string) (string, bool) {
 	}
 }
 
-func gitWorktreeRoot(start string) (string, bool) {
+func gitWorktreeRoot(start string) (string, error) {
 	dir, err := filepath.Abs(start)
 	if err != nil {
-		return "", false
+		return "", err
 	}
 	dir, err = filepath.EvalSymlinks(dir)
 	if err != nil {
-		return "", false
+		return "", err
 	}
 	cmd := osexec.Command("git", "-C", dir, "rev-parse", "--show-toplevel") // #nosec G204 -- canonical local directory is an argument, never a shell command.
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", false
+		diagnostic := strings.TrimSpace(string(output))
+		if strings.Contains(diagnostic, "not a git repository") {
+			return "", nil
+		}
+		if diagnostic == "" {
+			return "", fmt.Errorf("git rev-parse in %s: %w", dir, err)
+		}
+		return "", fmt.Errorf("git rev-parse in %s: %w: %s", dir, err, diagnostic)
 	}
 	root, err := canonicalDirectory(strings.TrimSpace(string(output)))
 	if err != nil {
-		return "", false
+		return "", err
 	}
-	return root, true
+	return root, nil
 }
 
 func canonicalDirectory(dirPath string) (string, error) {
@@ -391,28 +422,9 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		opts.ProfileStore = cfg
 	}
 
-	workingDir, projectRoot, rootErr := resolveExecutionRoots(opts)
-	if rootErr != nil {
-		return nil, rootErr
-	}
-	opts.WorkingDir = workingDir
-	opts.ProjectRoot = projectRoot
-	if workflow.Scope == model.ScopeRepositories && opts.Workspace != nil && len(opts.Workspace.Repositories) == 1 {
-		if _, implicit := opts.Workspace.Repositories["default"]; implicit {
-			if _, supplied := params[model.RepositoriesParam]; !supplied {
-				params[model.RepositoriesParam] = "default"
-			}
-		}
-	}
-	if err := validateParams(workflow, params); err != nil {
+	workingDir, err := prepareScopeAndParams(workflow, params, opts)
+	if err != nil {
 		return nil, err
-	}
-	if workflow.Scope == model.ScopeRepositories && opts.Workspace != nil {
-		selected, err := model.ParseRepositoryTargets(params[model.RepositoriesParam], opts.Workspace.Repositories)
-		if err != nil {
-			return nil, err
-		}
-		opts.Workspace.Selected = selected
 	}
 
 	if opts.Engine != nil {
@@ -488,6 +500,33 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		runner:           opts.ProcessRunner,
 		glob:             opts.GlobExpander,
 	}, nil
+}
+
+func prepareScopeAndParams(workflow *model.Workflow, params map[string]string, opts *Options) (string, error) {
+	workingDir, projectRoot, err := resolveExecutionRoots(opts)
+	if err != nil {
+		return "", err
+	}
+	opts.WorkingDir = workingDir
+	opts.ProjectRoot = projectRoot
+	if workflow.RequiresRepositoryTargets() && opts.Workspace != nil && len(opts.Workspace.Repositories) == 1 {
+		if _, implicit := opts.Workspace.Repositories["default"]; implicit {
+			if _, supplied := params[model.RepositoriesParam]; !supplied {
+				params[model.RepositoriesParam] = "default"
+			}
+		}
+	}
+	if err := validateParams(workflow, params); err != nil {
+		return "", err
+	}
+	if workflow.RequiresRepositoryTargets() && opts.Workspace != nil {
+		selected, err := model.ParseRepositoryTargets(params[model.RepositoriesParam], opts.Workspace.Repositories)
+		if err != nil {
+			return "", err
+		}
+		opts.Workspace.Selected = selected
+	}
+	return workingDir, nil
 }
 
 func freshSessionLocation(workflowName, workingDir string, opts *Options) (sessionDir, sessionID string, now time.Time, err error) {
@@ -575,6 +614,12 @@ func buildExecutionContext(
 	if err != nil {
 		return auditLogger, metricsCollector, nil, err
 	}
+	var activeRepository *model.Repository
+	if workflow.Scope == model.ScopeRepositories && opts.Workspace != nil && len(opts.Workspace.Repositories) == 1 {
+		if repository, ok := opts.Workspace.Repositories["default"]; ok {
+			activeRepository = &repository
+		}
+	}
 
 	ctx := model.NewRootContext(&model.RootContextOptions{
 		Params:                   params,
@@ -585,6 +630,7 @@ func buildExecutionContext(
 		ProjectRoot:              opts.ProjectRoot,
 		WorkingDir:               opts.WorkingDir,
 		Workspace:                opts.Workspace,
+		ActiveRepository:         activeRepository,
 		AutonomousBackend:        string(settings.AutonomousBackend),
 		AutonomousPermissionMode: string(usersettings.EffectiveAutonomousPermissionMode(settings.AutonomousPermissionMode)),
 		SessionDir:               sessionDir,
@@ -799,12 +845,49 @@ func skippedStepUsage(step *model.Step) model.UsageRecord {
 }
 
 func runStep(step *model.Step, rs *runState) (exec.StepOutcome, *exec.LoopResult, error) {
-	if step.Loop != nil && len(step.Steps) > 0 {
-		lr, err := exec.ExecuteLoopStep(step, rs.ctx, rs.runner, rs.glob, rs.log, exec.LoopExecuteOptions{})
-		return exec.MapLoopOutcomeForRunner(step, lr.Outcome), &lr, err
+	if step.Scope == model.ScopeRepositories && rs.ctx.ActiveRepository == nil {
+		var outcome exec.StepOutcome
+		var loopResult *exec.LoopResult
+		result := executeRepositoryFanout(rs, func() WorkflowResult {
+			var err error
+			outcome, loopResult, err = runStepOnce(step, rs)
+			if err != nil || outcome == exec.OutcomeFailed || outcome == exec.OutcomeAborted {
+				return ResultFailed
+			}
+			return ResultSuccess
+		})
+		if result != ResultSuccess && outcome == "" {
+			outcome = exec.OutcomeFailed
+		}
+		return outcome, loopResult, nil
 	}
-	outcome, err := exec.DispatchStep(step, rs.ctx, rs.runner, rs.glob, rs.log)
+	return runStepOnce(step, rs)
+}
+
+func runStepOnce(step *model.Step, rs *runState) (exec.StepOutcome, *exec.LoopResult, error) {
+	executable := stepForExecution(step, rs.ctx.WorkingDir)
+	if step.Loop != nil && len(step.Steps) > 0 {
+		lr, err := exec.ExecuteLoopStep(&executable, rs.ctx, rs.runner, rs.glob, rs.log, exec.LoopExecuteOptions{})
+		return exec.MapLoopOutcomeForRunner(&executable, lr.Outcome), &lr, err
+	}
+	outcome, err := exec.DispatchStep(&executable, rs.ctx, rs.runner, rs.glob, rs.log)
 	return outcome, nil, err
+}
+
+func stepForExecution(step *model.Step, root string) model.Step {
+	executable := *step
+	if executable.Workdir == "" {
+		executable.Workdir = root
+	} else if !filepath.IsAbs(executable.Workdir) {
+		executable.Workdir = filepath.Join(root, executable.Workdir)
+	}
+	if len(step.Steps) > 0 {
+		executable.Steps = make([]model.Step, len(step.Steps))
+		for i := range step.Steps {
+			executable.Steps[i] = stepForExecution(&step.Steps[i], root)
+		}
+	}
+	return executable
 }
 
 func finalizeRun(rs *runState, result WorkflowResult) {
@@ -968,9 +1051,49 @@ func ExecuteFromHandle(h *RunHandle, opts *Options) WorkflowResult {
 			h.rs.ctx.UIStepHandler = opts.UIStepHandler
 		}
 	}
-	result := executeSteps(h.rs, h.startIndex)
+	result := executeWorkflow(h.rs, h.startIndex)
 	finalizeRun(h.rs, result)
 	return result
+}
+
+func executeWorkflow(rs *runState, startIndex int) WorkflowResult {
+	if rs.workflow.Scope == model.ScopeRepositories && rs.ctx.ActiveRepository == nil {
+		return executeRepositoryFanout(rs, func() WorkflowResult {
+			return executeSteps(rs, startIndex)
+		})
+	}
+	return executeSteps(rs, startIndex)
+}
+
+func executeRepositoryFanout(rs *runState, executeBody func() WorkflowResult) WorkflowResult {
+	if rs.ctx.Workspace == nil || len(rs.ctx.Workspace.Selected) == 0 {
+		return ResultFailed
+	}
+	parent := rs.ctx
+	defer func() { rs.ctx = parent }()
+	for _, name := range parent.Workspace.Selected {
+		repository, ok := parent.Workspace.Repositories[name]
+		if !ok {
+			rs.log.Printf("agent-runner: selected repository %q is no longer configured\n", name)
+			return ResultFailed
+		}
+		rs.ctx = repositoryExecutionContext(parent, repository)
+		if result := executeBody(); result != ResultSuccess {
+			return result
+		}
+	}
+	return ResultSuccess
+}
+
+func repositoryExecutionContext(parent *model.ExecutionContext, repository model.Repository) *model.ExecutionContext {
+	child := *parent
+	child.ProjectRoot = repository.Dir
+	child.WorkingDir = repository.Dir
+	child.ActiveRepository = &repository
+	child.CapturedVariables = copyCapturedMap(parent.CapturedVariables)
+	child.SessionIDs = copyMap(parent.SessionIDs)
+	child.SessionProfiles = copyMap(parent.SessionProfiles)
+	return &child
 }
 
 // RunWorkflow executes a workflow with the given parameters.

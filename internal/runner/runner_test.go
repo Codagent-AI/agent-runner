@@ -180,6 +180,61 @@ func TestRunWorkflow_ScopedLaunchContracts(t *testing.T) {
 	})
 }
 
+type repositorySpyRunner struct {
+	workdirs []string
+	commands []string
+}
+
+func (r *repositorySpyRunner) RunShell(command string, _ bool, workdir string) (exec.ProcessResult, error) {
+	r.commands = append(r.commands, command)
+	r.workdirs = append(r.workdirs, workdir)
+	return exec.ProcessResult{ExitCode: 0}, nil
+}
+
+func (r *repositorySpyRunner) RunAgent(*exec.AgentProcessOptions) (exec.ProcessResult, error) {
+	return exec.ProcessResult{ExitCode: 0}, nil
+}
+
+func (r *repositorySpyRunner) RunScript(string, []byte, bool, string) (exec.ProcessResult, error) {
+	return exec.ProcessResult{ExitCode: 0}, nil
+}
+
+func TestRunWorkflow_FansRepositoryScopeOutInTargetOrder(t *testing.T) {
+	workspace, backend, frontend := t.TempDir(), t.TempDir(), t.TempDir()
+	initGitWorktree(t, workspace)
+	initGitWorktree(t, backend)
+	initGitWorktree(t, frontend)
+	workflow := &model.Workflow{
+		Name: "repo", Scope: model.ScopeRepositories,
+		Params: []model.Param{{Name: model.RepositoriesParam}},
+		Steps:  []model.Step{{ID: "run", Command: "echo {{repository_name}}"}},
+	}
+	workflow.ApplyDefaults()
+	spy := &repositorySpyRunner{}
+	result, err := RunWorkflow(workflow, map[string]string{model.RepositoriesParam: "frontend,backend"}, &Options{
+		WorkingDir: workspace, SessionDir: t.TempDir(), ProfileStore: &config.Config{Repositories: map[string]config.Repository{
+			"backend": {Path: backend}, "frontend": {Path: frontend},
+		}}, ProcessRunner: spy, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil || result != ResultSuccess {
+		t.Fatalf("RunWorkflow() = %q, %v", result, err)
+	}
+	canonicalFrontend, err := filepath.EvalSymlinks(frontend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalBackend, err := filepath.EvalSymlinks(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff([]string{canonicalFrontend, canonicalBackend}, spy.workdirs); diff != "" {
+		t.Fatalf("workdirs mismatch (-want +got):\n%s", diff)
+	}
+	if len(spy.commands) != 2 || !strings.Contains(spy.commands[0], "frontend") || !strings.Contains(spy.commands[1], "backend") {
+		t.Fatalf("commands = %#v", spy.commands)
+	}
+}
+
 type delayedRunner struct{ mockRunner }
 
 func (r *delayedRunner) RunShell(cmd string, capture bool, workdir string) (exec.ProcessResult, error) {

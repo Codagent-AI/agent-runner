@@ -557,16 +557,16 @@ func writeWorkflow(t *testing.T, path string, data []byte) {
 
 func canonicalNames(entries []discovery.WorkflowEntry) []string {
 	names := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		names = append(names, entry.CanonicalName)
+	for i := range entries {
+		names = append(names, entries[i].CanonicalName)
 	}
 	return names
 }
 
 func countByName(entries []discovery.WorkflowEntry, name string) int {
 	count := 0
-	for _, entry := range entries {
-		if entry.CanonicalName == name {
+	for i := range entries {
+		if entries[i].CanonicalName == name {
 			count++
 		}
 	}
@@ -575,9 +575,9 @@ func countByName(entries []discovery.WorkflowEntry, name string) int {
 
 func entryByName(t *testing.T, entries []discovery.WorkflowEntry, name string) discovery.WorkflowEntry {
 	t.Helper()
-	for _, entry := range entries {
-		if entry.CanonicalName == name {
-			return entry
+	for i := range entries {
+		if entries[i].CanonicalName == name {
+			return entries[i]
 		}
 	}
 	t.Fatalf("entry %q not found in %v", name, canonicalNames(entries))

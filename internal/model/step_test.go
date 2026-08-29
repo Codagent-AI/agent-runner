@@ -595,7 +595,7 @@ func TestWorkflowSchema(t *testing.T) {
 		}{
 			{
 				name: "workspace step may target repositories",
-				workflow: Workflow{Name: "workspace", Scope: ScopeWorkspace, Steps: []Step{
+				workflow: Workflow{Name: "workspace", Scope: ScopeWorkspace, Params: []Param{{Name: RepositoriesParam, Required: &required}}, Steps: []Step{
 					{ID: "repo-work", Command: "true", Scope: ScopeRepositories},
 				}},
 			},
@@ -616,7 +616,7 @@ func TestWorkflowSchema(t *testing.T) {
 			},
 			{
 				name:     "sub workflow cannot override scope",
-				workflow: Workflow{Name: "workspace", Scope: ScopeWorkspace, Steps: []Step{{ID: "child", Workflow: "child.yaml", Scope: ScopeRepositories}}},
+				workflow: Workflow{Name: "workspace", Scope: ScopeWorkspace, Params: []Param{{Name: RepositoriesParam, Required: &required}}, Steps: []Step{{ID: "child", Workflow: "child.yaml", Scope: ScopeRepositories}}},
 				wantErr:  "referenced workflow",
 			},
 			{

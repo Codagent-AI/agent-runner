@@ -2009,11 +2009,22 @@ func prepareFreshRun(req *freshRunRequest) (*runner.RunHandle, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load workflow: %w", err)
 	}
+	var workspace *model.WorkspaceContext
+	if workflow.Scope != model.ScopeLegacy {
+		launchDir, err := os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("determine launch directory: %w", err)
+		}
+		workspace, err = runner.PrepareWorkspaceForLaunch(workflow.Scope, launchDir)
+		if err != nil {
+			return nil, err
+		}
+	}
 	profileStore, err := config.LoadWithProfile(filepath.Join(".agent-runner", "config.yaml"), req.ProfileOverride)
 	if err != nil {
 		return nil, err
 	}
-	params, err := matchParamsForLaunch(&workflow, req.Positional, req.Keyed, workflow.Scope == model.ScopeRepositories && len(profileStore.Repositories) == 0)
+	params, err := matchParamsForLaunch(&workflow, req.Positional, req.Keyed, workflow.RequiresRepositoryTargets() && len(profileStore.Repositories) == 0)
 	if err != nil {
 		return nil, err
 	}
@@ -2040,6 +2051,9 @@ func prepareFreshRun(req *freshRunRequest) (*runner.RunHandle, error) {
 		ProfileOverride:       req.ProfileOverride,
 		ProfileStore:          profileStore,
 		WorkflowFile:          req.SourceRef,
+		WorkingDir:            workspaceDir(workspace),
+		ProjectRoot:           workspaceDir(workspace),
+		Workspace:             workspace,
 		From:                  req.From,
 		Until:                 req.Until,
 		AgentOverride:         req.AgentOverride,
@@ -2050,6 +2064,13 @@ func prepareFreshRun(req *freshRunRequest) (*runner.RunHandle, error) {
 		GlobExpander:          &realGlobExpander{},
 		Log:                   log,
 	})
+}
+
+func workspaceDir(workspace *model.WorkspaceContext) string {
+	if workspace == nil {
+		return ""
+	}
+	return workspace.Dir
 }
 
 func isIntakeWorkflow(workflowFile string) bool {
@@ -3039,12 +3060,6 @@ func parseParams(args []string) (positional []string, keyed map[string]string, e
 	}
 
 	return positional, keyed, nil
-}
-
-// matchParams maps CLI args to workflow parameters, validating required params.
-// Supports positional args (mapped to params in order) and key=value overrides.
-func matchParams(workflow *model.Workflow, positional []string, keyed map[string]string) (map[string]string, error) {
-	return matchParamsForLaunch(workflow, positional, keyed, false)
 }
 
 // matchParamsForLaunch keeps the internal implicit repository target out of

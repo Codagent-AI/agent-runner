@@ -790,7 +790,7 @@ func (w *Workflow) Validate(knownCLIs []string) error {
 			hasRepositoryTargets = param.IsRequired()
 		}
 	}
-	if w.Scope == ScopeRepositories && !hasRepositoryTargets {
+	if w.RequiresRepositoryTargets() && !hasRepositoryTargets {
 		return fmt.Errorf(`repository-scoped workflows require a required repositories parameter`)
 	}
 
@@ -808,6 +808,21 @@ func (w *Workflow) Validate(knownCLIs []string) error {
 		return err
 	}
 	return nil
+}
+
+// RequiresRepositoryTargets reports whether this workflow includes any
+// repository-scoped execution boundary.
+func (w *Workflow) RequiresRepositoryTargets() bool {
+	return w.Scope == ScopeRepositories || stepsRequireRepositoryTargets(w.Steps)
+}
+
+func stepsRequireRepositoryTargets(steps []Step) bool {
+	for i := range steps {
+		if steps[i].Scope == ScopeRepositories || stepsRequireRepositoryTargets(steps[i].Steps) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateWorkflowScopes(workflowScope Scope, steps []Step) error {
