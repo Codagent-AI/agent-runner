@@ -1186,78 +1186,117 @@ func executeRepositoryFanout(rs *runState, startIndex int, executeBody func(repo
 		resumeRepository = rs.repositoryStartIndex
 	}
 	for repositoryIndex, name := range parent.Workspace.Selected {
-		if repositoryIndex < resumeRepository {
+		if skipRepositoryExecution(parent, repositoryIndex, resumeRepository) {
 			continue
 		}
-		if repositoryEntry(parent.RepositoryFrame, repositoryIndex) != nil && repositoryEntry(parent.RepositoryFrame, repositoryIndex).Status == model.RepositoryCompleted {
-			continue
-		}
-		repository, ok := parent.Workspace.Repositories[name]
-		if !ok {
-			rs.log.Printf("agent-runner: selected repository %q is no longer configured\n", name)
-			return ResultFailed
-		}
-		activeIndex := repositoryIndex
-		parent.RepositoryIndex = &activeIndex
-		rs.ctx = repositoryExecutionContext(parent, repository, repositoryIndex)
-		started := time.Now()
-		if entry := repositoryEntry(parent.RepositoryFrame, repositoryIndex); entry != nil {
-			entry.Status = model.RepositoryActive
-			if err := persistRepositoryFrame(rs.sessionDir, parent); err != nil {
-				rs.log.Printf("agent-runner: persist repository %q active state: %v\n", name, err)
-				return ResultFailed
-			}
-		}
-		if repository.Name != "default" {
-			emitAudit(rs.ctx, audit.Event{
-				Timestamp: started.UTC().Format(time.RFC3339Nano),
-				Prefix:    "[repo:" + repository.Name + "]",
-				Type:      audit.EventRepositoryStart,
-				Data: map[string]any{
-					"position": repositoryIndex,
-					"total":    len(parent.Workspace.Selected),
-					"context":  contextSnapshot(rs.ctx),
-				},
-			})
-		}
-		repositoryStart := 0
-		if repositoryIndex == resumeRepository {
-			repositoryStart = startIndex
-		}
-		if executionResult := executeBody(repositoryStart); executionResult != ResultSuccess {
-			if repository.Name != "default" {
-				emitAudit(rs.ctx, audit.Event{
-					Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
-					Prefix:    "[repo:" + repository.Name + "]",
-					Type:      audit.EventRepositoryEnd,
-					Data:      map[string]any{"outcome": string(executionResult), "duration_ms": time.Since(started).Milliseconds()},
-				})
-			}
-			if entry := repositoryEntry(parent.RepositoryFrame, repositoryIndex); entry != nil {
-				entry.Status = model.RepositoryFailed
-				if err := persistRepositoryFrame(rs.sessionDir, parent); err != nil {
-					rs.log.Printf("agent-runner: persist repository %q failed state: %v\n", name, err)
-				}
-			}
-			return executionResult
-		}
-		if repository.Name != "default" {
-			emitAudit(rs.ctx, audit.Event{
-				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
-				Prefix:    "[repo:" + repository.Name + "]",
-				Type:      audit.EventRepositoryEnd,
-				Data:      map[string]any{"outcome": string(ResultSuccess), "duration_ms": time.Since(started).Milliseconds()},
-			})
-		}
-		if entry := repositoryEntry(parent.RepositoryFrame, repositoryIndex); entry != nil {
-			entry.Status = model.RepositoryCompleted
-			if err := persistRepositoryFrame(rs.sessionDir, parent); err != nil {
-				rs.log.Printf("agent-runner: persist repository %q completed state: %v\n", name, err)
-				return ResultFailed
-			}
+		if result := executeRepositoryTarget(rs, parent, repositoryIndex, name, startIndex, resumeRepository, executeBody); result != ResultSuccess {
+			return result
 		}
 	}
 	return ResultSuccess
+}
+
+func skipRepositoryExecution(parent *model.ExecutionContext, index, resumeIndex int) bool {
+	if index < resumeIndex {
+		return true
+	}
+	entry := repositoryEntry(parent.RepositoryFrame, index)
+	return entry != nil && entry.Status == model.RepositoryCompleted
+}
+
+func executeRepositoryTarget(
+	rs *runState,
+	parent *model.ExecutionContext,
+	index int,
+	name string,
+	startIndex int,
+	resumeIndex int,
+	executeBody func(repositoryStart int) WorkflowResult,
+) WorkflowResult {
+	repository, ok := parent.Workspace.Repositories[name]
+	if !ok {
+		rs.log.Printf("agent-runner: selected repository %q is no longer configured\n", name)
+		return ResultFailed
+	}
+	activeIndex := index
+	parent.RepositoryIndex = &activeIndex
+	rs.ctx = repositoryExecutionContext(parent, repository, index)
+	started := time.Now()
+	if err := markRepositoryActive(rs, parent, index, name); err != nil {
+		return ResultFailed
+	}
+	emitRepositoryStart(rs, repository, index, len(parent.Workspace.Selected), started)
+	repositoryStart := 0
+	if index == resumeIndex {
+		repositoryStart = startIndex
+	}
+	result := executeBody(repositoryStart)
+	emitRepositoryEnd(rs, repository, result, started)
+	if result != ResultSuccess {
+		markRepositoryFailed(rs, parent, index, name)
+		return result
+	}
+	if err := markRepositoryCompleted(rs, parent, index, name); err != nil {
+		return ResultFailed
+	}
+	return ResultSuccess
+}
+
+func markRepositoryActive(rs *runState, parent *model.ExecutionContext, index int, name string) error {
+	entry := repositoryEntry(parent.RepositoryFrame, index)
+	if entry == nil {
+		return nil
+	}
+	entry.Status = model.RepositoryActive
+	if err := persistRepositoryFrame(rs.sessionDir, parent); err != nil {
+		rs.log.Printf("agent-runner: persist repository %q active state: %v\n", name, err)
+		return err
+	}
+	return nil
+}
+
+func markRepositoryFailed(rs *runState, parent *model.ExecutionContext, index int, name string) {
+	entry := repositoryEntry(parent.RepositoryFrame, index)
+	if entry == nil {
+		return
+	}
+	entry.Status = model.RepositoryFailed
+	if err := persistRepositoryFrame(rs.sessionDir, parent); err != nil {
+		rs.log.Printf("agent-runner: persist repository %q failed state: %v\n", name, err)
+	}
+}
+
+func markRepositoryCompleted(rs *runState, parent *model.ExecutionContext, index int, name string) error {
+	entry := repositoryEntry(parent.RepositoryFrame, index)
+	if entry == nil {
+		return nil
+	}
+	entry.Status = model.RepositoryCompleted
+	if err := persistRepositoryFrame(rs.sessionDir, parent); err != nil {
+		rs.log.Printf("agent-runner: persist repository %q completed state: %v\n", name, err)
+		return err
+	}
+	return nil
+}
+
+func emitRepositoryStart(rs *runState, repository model.Repository, index, total int, started time.Time) {
+	if repository.Name == "default" {
+		return
+	}
+	emitAudit(rs.ctx, audit.Event{
+		Timestamp: started.UTC().Format(time.RFC3339Nano), Prefix: "[repo:" + repository.Name + "]", Type: audit.EventRepositoryStart,
+		Data: map[string]any{"position": index, "total": total, "context": contextSnapshot(rs.ctx)},
+	})
+}
+
+func emitRepositoryEnd(rs *runState, repository model.Repository, result WorkflowResult, started time.Time) {
+	if repository.Name == "default" {
+		return
+	}
+	emitAudit(rs.ctx, audit.Event{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano), Prefix: "[repo:" + repository.Name + "]", Type: audit.EventRepositoryEnd,
+		Data: map[string]any{"outcome": string(result), "duration_ms": time.Since(started).Milliseconds()},
+	})
 }
 
 func repositoryExecutionContext(parent *model.ExecutionContext, repository model.Repository, index int) *model.ExecutionContext {

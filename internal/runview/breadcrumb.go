@@ -78,8 +78,8 @@ func (m *Model) pullRequestURLs() []string {
 		urls = append(urls, m.tree.PullRequestURL)
 	}
 	for _, name := range m.tree.RepositoryOrder {
-		if url := m.tree.RepositoryPullRequestURLs[name]; url != "" {
-			urls = append(urls, url)
+		if repositoryURL := m.tree.RepositoryPullRequestURLs[name]; repositoryURL != "" {
+			urls = append(urls, repositoryURL)
 		}
 	}
 	return urls

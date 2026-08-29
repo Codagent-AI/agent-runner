@@ -277,6 +277,26 @@ func TestApplyEvent_ProjectsExplicitRepositoryAsContainer(t *testing.T) {
 	}
 }
 
+func TestApplyEvent_RepositoryContainerClonesNestedWorkflowStructure(t *testing.T) {
+	tree := BuildTree(&model.Workflow{Name: "run", Steps: []model.Step{{
+		ID: "tasks", Loop: &model.Loop{Max: intPtr(1)}, Steps: []model.Step{{
+			ID: "child", Workflow: "child-v1.0.yaml",
+		}},
+	}}}, "workflow.yaml")
+	tree.ApplyEvent(RawEvent{Prefix: "[repo:backend]", Type: "repository_start", Data: map[string]any{"repository_name": "backend"}})
+	tree.ApplyEvent(RawEvent{Prefix: "[repo:backend, tasks:0]", Type: "iteration_start"})
+	tree.ApplyEvent(RawEvent{Prefix: "[repo:backend, tasks:0, child]", Type: "step_start"})
+
+	iteration := tree.FindByPrefix("[repo:backend, tasks:0]")
+	if iteration == nil || iteration.Type != NodeIteration {
+		t.Fatalf("repository loop iteration = %#v, want iteration node", iteration)
+	}
+	child := tree.FindByPrefix("[repo:backend, tasks:0, child]")
+	if child == nil || child.Type != NodeSubWorkflow || child.Parent != iteration {
+		t.Fatalf("repository child = %#v, want nested sub-workflow", child)
+	}
+}
+
 func TestApplyPersistedRepositoriesKeepsPendingOrderAndPullRequests(t *testing.T) {
 	tree := BuildTree(&model.Workflow{Name: "run"}, "workflow.yaml")
 	tree.ApplyPersistedRepositories(&model.RunState{
@@ -295,6 +315,10 @@ func TestApplyPersistedRepositoriesKeepsPendingOrderAndPullRequests(t *testing.T
 	}
 	if got, want := tree.RepositoryOrder, []string{"backend", "frontend"}; !cmp.Equal(got, want) {
 		t.Fatalf("persisted order = %v, want %v", got, want)
+	}
+	tree.ApplyEvent(RawEvent{Prefix: "[repo:backend]", Type: "repository_end", Data: map[string]any{"repository_name": "backend", "outcome": "success"}})
+	if got, want := tree.Root.Children[0].Status, StatusSuccess; got != want {
+		t.Fatalf("terminal audit state = %v, want %v", got, want)
 	}
 }
 

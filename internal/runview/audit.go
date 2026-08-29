@@ -510,6 +510,11 @@ func (t *Tree) ensureRepository(name string, data map[string]any) *StepNode {
 	if total, ok := intField(data, "total"); ok {
 		node.RepositoryTotal = total
 	}
+	for _, template := range t.Root.Children {
+		if template.Type != NodeRepository {
+			node.Children = append(node.Children, cloneTemplate(template, node))
+		}
+	}
 	t.Root.Children = append(t.Root.Children, node)
 	return node
 }
@@ -643,61 +648,58 @@ func (t *Tree) applyAgentCallEvent(event RawEvent, tokens []prefixToken) bool {
 func (t *Tree) resolve(tokens []prefixToken, createIterations bool) *StepNode {
 	current := t.Root
 	for _, tok := range tokens {
-		switch {
-		case tok.repoName != "":
-			current = repositoryChildByName(current, tok.repoName)
-			if current == nil {
-				return nil
-			}
-		case tok.callID != "":
-			current = callChildByID(current, tok.callID)
-			if current == nil {
-				return nil
-			}
-		case tok.subName != "":
-			if err := t.ensureSubWorkflowLoaded(current); err != nil {
-				// Lazy-load failure: record on the node so the UI can display it;
-				// resolution stays here so the node itself remains targetable, but
-				// further descent will yield nil (no children).
-				if current.ErrorMessage == "" {
-					current.ErrorMessage = err.Error()
-				}
-			}
-			// Stay at the sub-workflow node — its children now hold the body.
-		case tok.iteration != nil:
-			loop := childByID(current, tok.stepID)
-			if loop == nil {
-				return nil
-			}
-			iter := findIteration(loop, *tok.iteration)
-			if iter == nil {
-				if !createIterations {
-					return nil
-				}
-				iter = ensureIteration(loop, *tok.iteration)
-			}
-			current = iter
-		default:
-			child := groupDescendantByID(current, tok.stepID, true)
-			if child == nil {
-				child = childByID(current, tok.stepID)
-			}
-			if child == nil {
-				child = groupDescendantByID(current, tok.stepID, false)
-			}
-			if child == nil {
-				if current.Type == NodeRepository && createIterations {
-					child = &StepNode{ID: tok.stepID, Type: NodeShell, Status: StatusPending, Parent: current}
-					current.Children = append(current.Children, child)
-				}
-			}
-			if child == nil {
-				return nil
-			}
-			current = child
+		current = t.resolveToken(current, tok, createIterations)
+		if current == nil {
+			return nil
 		}
 	}
 	return current
+}
+
+func (t *Tree) resolveToken(current *StepNode, tok prefixToken, createIterations bool) *StepNode {
+	switch {
+	case tok.repoName != "":
+		return repositoryChildByName(current, tok.repoName)
+	case tok.callID != "":
+		return callChildByID(current, tok.callID)
+	case tok.subName != "":
+		t.loadSubWorkflowForResolution(current)
+		return current
+	case tok.iteration != nil:
+		return resolveIterationToken(current, tok, createIterations)
+	default:
+		return resolveStepToken(current, tok.stepID)
+	}
+}
+
+func (t *Tree) loadSubWorkflowForResolution(node *StepNode) {
+	if err := t.ensureSubWorkflowLoaded(node); err != nil && node.ErrorMessage == "" {
+		node.ErrorMessage = err.Error()
+	}
+}
+
+func resolveIterationToken(current *StepNode, tok prefixToken, createIterations bool) *StepNode {
+	loop := childByID(current, tok.stepID)
+	if loop == nil {
+		return nil
+	}
+	if iteration := findIteration(loop, *tok.iteration); iteration != nil {
+		return iteration
+	}
+	if !createIterations {
+		return nil
+	}
+	return ensureIteration(loop, *tok.iteration)
+}
+
+func resolveStepToken(current *StepNode, id string) *StepNode {
+	if child := groupDescendantByID(current, id, true); child != nil {
+		return child
+	}
+	if child := childByID(current, id); child != nil {
+		return child
+	}
+	return groupDescendantByID(current, id, false)
 }
 
 func (t *Tree) applyAgentCallStart(event RawEvent, tokens []prefixToken) {
