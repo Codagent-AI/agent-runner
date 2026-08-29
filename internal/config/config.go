@@ -65,6 +65,16 @@ type Config struct {
 	Profiles              map[string]*ProfileSet
 	ActiveAgents          map[string]*Agent
 	Deprecations          []Deprecation
+	// Repositories are project-local declarations keyed by stable logical name.
+	// Their paths remain unresolved here; run preparation canonicalizes them
+	// against the coordination workspace exactly once.
+	Repositories map[string]Repository `yaml:"repositories,omitempty"`
+}
+
+// Repository declares one executable Git worktree relative to the
+// coordination workspace.
+type Repository struct {
+	Path string `yaml:"path"`
 }
 
 // ProfileSource identifies how the selected profile set was chosen.
@@ -103,6 +113,7 @@ type ProfileOverride struct {
 type parsedFile struct {
 	ActiveProfile string
 	Profiles      map[string]*ProfileSet
+	Repositories  map[string]Repository
 }
 
 // legacyAgentKeys are direct fields of the old flat agent bundle shape.
@@ -202,7 +213,8 @@ func parseConfigFile(data []byte, path string, isGlobal bool) (*parsedFile, erro
 
 	// Extract active_profile and enforce project-only rule.
 	var header struct {
-		ActiveProfile string `yaml:"active_profile"`
+		ActiveProfile string                `yaml:"active_profile"`
+		Repositories  map[string]Repository `yaml:"repositories"`
 	}
 	if err := yaml.Unmarshal(data, &header); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
@@ -210,10 +222,14 @@ func parseConfigFile(data []byte, path string, isGlobal bool) (*parsedFile, erro
 	if isGlobal && header.ActiveProfile != "" {
 		return nil, fmt.Errorf("active_profile is not allowed in the global config")
 	}
+	if isGlobal && header.Repositories != nil {
+		return nil, fmt.Errorf("repositories is not allowed in the global config")
+	}
 
 	// Second pass: parse into typed struct.
 	var raw struct {
-		Profiles map[string]*ProfileSet `yaml:"profiles"`
+		Profiles     map[string]*ProfileSet `yaml:"profiles"`
+		Repositories map[string]Repository  `yaml:"repositories"`
 	}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
@@ -229,6 +245,7 @@ func parseConfigFile(data []byte, path string, isGlobal bool) (*parsedFile, erro
 	return &parsedFile{
 		ActiveProfile: header.ActiveProfile,
 		Profiles:      raw.Profiles,
+		Repositories:  raw.Repositories,
 	}, nil
 }
 
@@ -367,6 +384,7 @@ func buildConfig(defaults, global, project *parsedFile, overrides ...ProfileOver
 		Profiles:              resolved,
 		ActiveAgents:          activeAgents,
 		Deprecations:          activeProfileDeprecations(merged, selectedName, deprecationsByProfile),
+		Repositories:          repositoriesFromProject(project),
 	}, nil
 }
 
@@ -377,6 +395,7 @@ func canonicalizeLayer(layer *parsedFile) (*parsedFile, map[string][]Deprecation
 	canonical := &parsedFile{
 		ActiveProfile: layer.ActiveProfile,
 		Profiles:      make(map[string]*ProfileSet, len(layer.Profiles)),
+		Repositories:  cloneRepositories(layer.Repositories),
 	}
 	deprecations := map[string][]Deprecation{}
 	for setName, profileSet := range layer.Profiles {
@@ -420,6 +439,24 @@ func canonicalizeLayer(layer *parsedFile) (*parsedFile, map[string][]Deprecation
 		}
 	}
 	return canonical, deprecations, nil
+}
+
+func repositoriesFromProject(project *parsedFile) map[string]Repository {
+	if project == nil {
+		return nil
+	}
+	return cloneRepositories(project.Repositories)
+}
+
+func cloneRepositories(repositories map[string]Repository) map[string]Repository {
+	if repositories == nil {
+		return nil
+	}
+	cloned := make(map[string]Repository, len(repositories))
+	for name, repository := range repositories {
+		cloned[name] = repository
+	}
+	return cloned
 }
 
 func activeProfileDeprecations(

@@ -40,6 +40,23 @@ Agent Runner workflows operate on real projects. The onboarding workflow refuses
 
 Start from a real project directory that has already been initialized as a Git repository. Agent Runner's guided workflow operates on the current project, and its implementation and validation phases depend on Git status, diffs, stashes, and staged changes.
 
+For a coordination repository that owns workflows and shared planning while
+work is performed in sibling repositories, declare the executable checkouts in
+the coordination repository's `.agent-runner/config.yaml`:
+
+```yaml
+repositories:
+  backend:
+    path: ../backend
+  frontend:
+    path: ../frontend
+```
+
+Launch scoped workflows from the canonical root of that coordination Git
+worktree. Each declared path is resolved relative to it and must itself be the
+root of an independent Git worktree. Repository declarations are project-local;
+they are not allowed in global configuration.
+
 If the directory is empty or is not a Git repository yet, initialize the repository before continuing. The exact commands depend on the project and Git workflow, so use the normal setup path for that project.
 
 ## Install Agent Runner

@@ -2,10 +2,56 @@
 package model
 
 import (
+	"fmt"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/codagent/agent-runner/internal/audit"
 )
+
+// Repository is a stable logical repository identity paired with its canonical
+// Git worktree root. It deliberately belongs to model so execution, engines,
+// and persistence can share the contract without depending on one another.
+type Repository struct {
+	Name string `json:"name"`
+	Dir  string `json:"dir"`
+}
+
+// WorkspaceContext is the immutable coordination-workspace identity for one
+// run. Repositories is keyed by stable configured name; Selected retains the
+// caller-supplied order and must never be derived by iterating that map.
+type WorkspaceContext struct {
+	Dir          string                `json:"dir"`
+	Repositories map[string]Repository `json:"repositories,omitempty"`
+	Selected     []string              `json:"selected,omitempty"`
+}
+
+// ParseRepositoryTargets validates the ordered public repositories control
+// parameter without deriving any target from declaration order.
+func ParseRepositoryTargets(value string, repositories map[string]Repository) ([]string, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, fmt.Errorf("repositories parameter must name at least one repository")
+	}
+	parts := strings.Split(value, ",")
+	targets := make([]string, 0, len(parts))
+	seen := make(map[string]bool, len(parts))
+	for _, part := range parts {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			return nil, fmt.Errorf("repositories parameter contains an empty repository name")
+		}
+		if seen[name] {
+			return nil, fmt.Errorf("repositories parameter names repository %q more than once", name)
+		}
+		if _, exists := repositories[name]; !exists {
+			return nil, fmt.Errorf("repositories parameter names unknown repository %q", name)
+		}
+		seen[name] = true
+		targets = append(targets, name)
+	}
+	return targets, nil
+}
 
 // NestingSegment records one level of nesting in the execution path.
 type NestingSegment struct {
@@ -100,11 +146,14 @@ type ExecutionContext struct {
 	WorkflowFile        string
 	WorkflowName        string
 	WorkflowDescription string
+	WorkflowScope       Scope
 	// ProjectRoot is the canonical repository/worktree boundary established
 	// when the run starts. WorkingDir is the canonical launch directory used
 	// to resolve relative step workdirs.
 	ProjectRoot              string
 	WorkingDir               string
+	Workspace                *WorkspaceContext
+	ActiveRepository         *Repository
 	AutonomousBackend        string
 	AutonomousPermissionMode string
 
@@ -177,8 +226,11 @@ type RootContextOptions struct {
 	WorkflowFile             string
 	WorkflowName             string
 	WorkflowDescription      string
+	WorkflowScope            Scope
 	ProjectRoot              string
 	WorkingDir               string
+	Workspace                *WorkspaceContext
+	ActiveRepository         *Repository
 	AutonomousBackend        string
 	AutonomousPermissionMode string
 	SessionDir               string
@@ -239,8 +291,11 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		WorkflowFile:             opts.WorkflowFile,
 		WorkflowName:             opts.WorkflowName,
 		WorkflowDescription:      opts.WorkflowDescription,
+		WorkflowScope:            opts.WorkflowScope,
 		ProjectRoot:              opts.ProjectRoot,
 		WorkingDir:               opts.WorkingDir,
+		Workspace:                opts.Workspace,
+		ActiveRepository:         opts.ActiveRepository,
 		AutonomousBackend:        opts.AutonomousBackend,
 		AutonomousPermissionMode: opts.AutonomousPermissionMode,
 		SessionDir:               opts.SessionDir,
@@ -273,6 +328,23 @@ func (c *ExecutionContext) BuiltinVarsForStep(stepID string) map[string]string {
 	m := make(map[string]string)
 	if c.SessionDir != "" {
 		m["session_dir"] = c.SessionDir
+	}
+	if c.Workspace != nil && c.Workspace.Dir != "" {
+		m["workspace_dir"] = c.Workspace.Dir
+	} else if c.WorkingDir != "" {
+		// Legacy contexts preserve their pre-scope launch directory.
+		m["workspace_dir"] = c.WorkingDir
+	}
+	if c.ActiveRepository != nil {
+		m["repository_name"] = c.ActiveRepository.Name
+		m["repository_dir"] = c.ActiveRepository.Dir
+		if c.SessionDir != "" {
+			if c.ActiveRepository.Name == "default" {
+				m["repository_output_dir"] = filepath.Join(c.SessionDir, "output")
+			} else {
+				m["repository_output_dir"] = filepath.Join(c.SessionDir, "output", "repositories", c.ActiveRepository.Name)
+			}
+		}
 	}
 	if stepID != "" {
 		m["step_id"] = stepID
@@ -339,8 +411,11 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		WorkflowFile:             parent.WorkflowFile,
 		WorkflowName:             parent.WorkflowName,
 		WorkflowDescription:      parent.WorkflowDescription,
+		WorkflowScope:            parent.WorkflowScope,
 		ProjectRoot:              parent.ProjectRoot,
 		WorkingDir:               parent.WorkingDir,
+		Workspace:                parent.Workspace,
+		ActiveRepository:         parent.ActiveRepository,
 		AutonomousBackend:        parent.AutonomousBackend,
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
 		SessionDir:               parent.SessionDir,
@@ -373,6 +448,7 @@ type SubWorkflowContextOptions struct {
 	Params          map[string]string
 	WorkflowFile    string
 	SubWorkflowName string
+	WorkflowScope   Scope
 	EngineRef       interface{} // internal/engine.Engine
 	EngineSet       bool        // true if EngineRef was explicitly provided (even if nil)
 }
@@ -425,8 +501,11 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		WorkflowFile:             opts.WorkflowFile,
 		WorkflowName:             parent.WorkflowName,
 		WorkflowDescription:      parent.WorkflowDescription,
+		WorkflowScope:            opts.WorkflowScope,
 		ProjectRoot:              parent.ProjectRoot,
 		WorkingDir:               parent.WorkingDir,
+		Workspace:                parent.Workspace,
+		ActiveRepository:         parent.ActiveRepository,
 		AutonomousBackend:        parent.AutonomousBackend,
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
 		SessionDir:               parent.SessionDir,

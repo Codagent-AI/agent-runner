@@ -2009,11 +2009,11 @@ func prepareFreshRun(req *freshRunRequest) (*runner.RunHandle, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load workflow: %w", err)
 	}
-	params, err := matchParams(&workflow, req.Positional, req.Keyed)
+	profileStore, err := config.LoadWithProfile(filepath.Join(".agent-runner", "config.yaml"), req.ProfileOverride)
 	if err != nil {
 		return nil, err
 	}
-	profileStore, err := config.LoadWithProfile(filepath.Join(".agent-runner", "config.yaml"), req.ProfileOverride)
+	params, err := matchParamsForLaunch(&workflow, req.Positional, req.Keyed, workflow.Scope == model.ScopeRepositories && len(profileStore.Repositories) == 0)
 	if err != nil {
 		return nil, err
 	}
@@ -3044,21 +3044,39 @@ func parseParams(args []string) (positional []string, keyed map[string]string, e
 // matchParams maps CLI args to workflow parameters, validating required params.
 // Supports positional args (mapped to params in order) and key=value overrides.
 func matchParams(workflow *model.Workflow, positional []string, keyed map[string]string) (map[string]string, error) {
+	return matchParamsForLaunch(workflow, positional, keyed, false)
+}
+
+// matchParamsForLaunch keeps the internal implicit repository target out of
+// both positional argument accounting and required-parameter prompts. A
+// configured workspace deliberately receives no substitution.
+func matchParamsForLaunch(workflow *model.Workflow, positional []string, keyed map[string]string, implicitRepository bool) (map[string]string, error) {
 	result := make(map[string]string)
+	params := workflow.Params
+	if implicitRepository && workflow.Scope == model.ScopeRepositories {
+		params = make([]model.Param, 0, len(workflow.Params)-1)
+		for _, param := range workflow.Params {
+			if param.Name == model.RepositoriesParam {
+				result[model.RepositoriesParam] = "default"
+				continue
+			}
+			params = append(params, param)
+		}
+	}
 
 	// Apply positional arguments to workflow params in order.
-	if len(positional) > len(workflow.Params) {
-		return nil, fmt.Errorf("too many arguments: expected %d, got %d", len(workflow.Params), len(positional))
+	if len(positional) > len(params) {
+		return nil, fmt.Errorf("too many arguments: expected %d, got %d", len(params), len(positional))
 	}
 
 	for i, val := range positional {
-		result[workflow.Params[i].Name] = val
+		result[params[i].Name] = val
 	}
 
 	// Apply key=value overrides.
 	for key, val := range keyed {
 		found := false
-		for _, p := range workflow.Params {
+		for _, p := range params {
 			if p.Name == key {
 				found = true
 				break
@@ -3071,7 +3089,7 @@ func matchParams(workflow *model.Workflow, positional []string, keyed map[string
 	}
 
 	// Check for required parameters (default to required if not specified).
-	for _, p := range workflow.Params {
+	for _, p := range params {
 		required := p.Required == nil || *p.Required
 		if required {
 			if _, ok := result[p.Name]; !ok {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -20,6 +21,14 @@ import (
 	"github.com/codagent/agent-runner/internal/stateio"
 	"github.com/google/go-cmp/cmp"
 )
+
+func initGitWorktree(t *testing.T, dir string) {
+	t.Helper()
+	cmd := osexec.Command("git", "init", "-q", dir)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init %s: %v\n%s", dir, err, output)
+	}
+}
 
 // TestWriteStepStateDoesNotClobberIntakeRoute is the regression guard for the
 // sidecar boundary: writeStepState rebuilds state.json from context, so route
@@ -59,6 +68,116 @@ func TestWriteStepStateDoesNotClobberIntakeRoute(t *testing.T) {
 	if _, err := stateio.ReadState(filepath.Join(runDir, "state.json")); err != nil {
 		t.Fatalf("rewritten state is invalid: %v", err)
 	}
+}
+
+func TestPrepareWorkspace_ValidatesScopedRepositoryDeclarations(t *testing.T) {
+	workspace := t.TempDir()
+	backend := t.TempDir()
+	initGitWorktree(t, workspace)
+	initGitWorktree(t, backend)
+	profiles := &config.Config{Repositories: map[string]config.Repository{
+		"backend": {Path: backend},
+	}}
+
+	ctx, err := prepareWorkspace(model.ScopeWorkspace, workspace, profiles)
+	if err != nil {
+		t.Fatalf("prepareWorkspace() error = %v", err)
+	}
+	canonicalWorkspace, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalBackend, err := filepath.EvalSymlinks(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx.Dir != canonicalWorkspace || ctx.Repositories["backend"].Dir != canonicalBackend {
+		t.Fatalf("workspace = %#v", ctx)
+	}
+}
+
+func TestPrepareWorkspace_RejectsScopedLaunchBelowRootAndInvalidRepositories(t *testing.T) {
+	workspace := t.TempDir()
+	backend := t.TempDir()
+	initGitWorktree(t, workspace)
+	initGitWorktree(t, backend)
+	subdir := filepath.Join(workspace, "nested")
+	if err := os.Mkdir(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prepareWorkspace(model.ScopeWorkspace, subdir, &config.Config{}); err == nil || !strings.Contains(err.Error(), "canonical workspace root") {
+		t.Fatalf("prepareWorkspace(subdir) error = %v", err)
+	}
+
+	cases := []struct {
+		name  string
+		repos map[string]config.Repository
+	}{
+		{"reserved name", map[string]config.Repository{"default": {Path: backend}}},
+		{"workspace root", map[string]config.Repository{"backend": {Path: workspace}}},
+		{"not root", map[string]config.Repository{"backend": {Path: filepath.Join(backend, "nested")}}},
+	}
+	if err := os.Mkdir(filepath.Join(backend, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := prepareWorkspace(model.ScopeWorkspace, workspace, &config.Config{Repositories: tc.repos})
+			if err == nil {
+				t.Fatal("prepareWorkspace() succeeded, want error")
+			}
+		})
+	}
+}
+
+func TestPrepareWorkspace_UsesTransparentImplicitRepository(t *testing.T) {
+	workspace := t.TempDir()
+	initGitWorktree(t, workspace)
+	ctx, err := prepareWorkspace(model.ScopeRepositories, workspace, &config.Config{})
+	if err != nil {
+		t.Fatalf("prepareWorkspace() error = %v", err)
+	}
+	canonicalWorkspace, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ctx.Repositories["default"]; got.Name != "default" || got.Dir != canonicalWorkspace {
+		t.Fatalf("implicit repository = %#v", got)
+	}
+}
+
+func TestRunWorkflow_ScopedLaunchContracts(t *testing.T) {
+	t.Run("rejects a scope-aware non-git launch", func(t *testing.T) {
+		workingDir := t.TempDir()
+		workflow := &model.Workflow{Name: "scoped", Scope: model.ScopeWorkspace, Steps: []model.Step{{ID: "run", Command: "true"}}}
+		workflow.ApplyDefaults()
+		_, err := RunWorkflow(workflow, nil, &Options{
+			WorkingDir: workingDir, SessionDir: t.TempDir(), ProfileStore: &config.Config{},
+			ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+		})
+		if err == nil || !strings.Contains(err.Error(), "Git worktree") {
+			t.Fatalf("RunWorkflow() error = %v", err)
+		}
+	})
+
+	t.Run("injects implicit target and exposes active repository builtins", func(t *testing.T) {
+		workingDir := t.TempDir()
+		initGitWorktree(t, workingDir)
+		sessionDir := t.TempDir()
+		workflow := &model.Workflow{
+			Name: "scoped", Scope: model.ScopeRepositories,
+			Params: []model.Param{{Name: model.RepositoriesParam}},
+			Steps:  []model.Step{{ID: "run", Command: "echo {{repository_name}}"}},
+		}
+		workflow.ApplyDefaults()
+		_, err := PrepareRun(workflow, nil, &Options{
+			WorkingDir: workingDir, SessionDir: sessionDir, ProfileStore: &config.Config{},
+			ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+		})
+		if err != nil {
+			t.Fatalf("PrepareRun() error = %v", err)
+		}
+	})
 }
 
 type delayedRunner struct{ mockRunner }

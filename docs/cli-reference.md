@@ -80,6 +80,12 @@ agent-runner run <workflow> [--until <step-id>] [--param key=value] [key=value .
 
 `agent-runner run` is a command-form alias for starting a workflow. `--param key=value` and `--param=key=value` are normalized into workflow parameters before execution.
 
+For a `scope: repositories` workflow in a configured workspace, pass an
+explicit ordered target list, for example `repositories=backend,frontend`.
+Scope-aware launches must start at the canonical root of the coordination Git
+worktree. Traditional projects with no repository declarations receive their
+single implicit target internally and do not need `repositories=default`.
+
 The `<workflow>` argument is a version-free logical name such as `deploy`,
 `team/deploy`, or `openspec:plan-change`. It is not a filename or path.
 

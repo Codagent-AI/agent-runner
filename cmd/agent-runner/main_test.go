@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	iexec "github.com/codagent/agent-runner/internal/exec"
+	"github.com/codagent/agent-runner/internal/model"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -421,6 +422,23 @@ steps:
 
 	if code := handleValidateArgs([]string{root, "flavor=green-v1.0"}); code != 0 {
 		t.Fatalf("handleValidateArgs returned %d, want 0", code)
+	}
+}
+
+func TestMatchParamsForLaunch_InjectsImplicitRepositoryTarget(t *testing.T) {
+	workflow := &model.Workflow{
+		Name: "repo", Scope: model.ScopeRepositories,
+		Params: []model.Param{{Name: model.RepositoriesParam}},
+	}
+	params, err := matchParamsForLaunch(workflow, nil, nil, true)
+	if err != nil {
+		t.Fatalf("matchParamsForLaunch() error = %v", err)
+	}
+	if got := params[model.RepositoriesParam]; got != "default" {
+		t.Fatalf("repositories = %q, want implicit default", got)
+	}
+	if _, err := matchParamsForLaunch(workflow, nil, nil, false); err == nil {
+		t.Fatal("configured workspace accepted missing repositories")
 	}
 }
 

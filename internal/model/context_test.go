@@ -148,6 +148,40 @@ func TestCreateLoopIterationContext(t *testing.T) {
 }
 
 func TestBuiltinVarsForStep(t *testing.T) {
+	t.Run("binds workspace and active repository builtins", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{
+			WorkflowFile: "test.yaml",
+			SessionDir:   "/tmp/runs/abc",
+			Workspace: &WorkspaceContext{
+				Dir: "/workspace",
+				Repositories: map[string]Repository{
+					"backend": {Name: "backend", Dir: "/repos/backend"},
+				},
+			},
+		})
+		vars := ctx.BuiltinVars()
+		if vars["workspace_dir"] != "/workspace" {
+			t.Fatalf("workspace_dir = %q", vars["workspace_dir"])
+		}
+		if _, ok := vars["repository_dir"]; ok {
+			t.Fatal("repository builtins available without an active repository")
+		}
+
+		ctx.ActiveRepository = &Repository{Name: "backend", Dir: "/repos/backend"}
+		vars = ctx.BuiltinVars()
+		if vars["repository_name"] != "backend" || vars["repository_dir"] != "/repos/backend" {
+			t.Fatalf("repository vars = %#v", vars)
+		}
+		if vars["repository_output_dir"] != "/tmp/runs/abc/output/repositories/backend" {
+			t.Fatalf("repository_output_dir = %q", vars["repository_output_dir"])
+		}
+
+		ctx.ActiveRepository = &Repository{Name: "default", Dir: "/workspace"}
+		if got := ctx.BuiltinVars()["repository_output_dir"]; got != "/tmp/runs/abc/output" {
+			t.Fatalf("implicit repository output = %q", got)
+		}
+	})
+
 	t.Run("includes step_id when provided", func(t *testing.T) {
 		ctx := NewRootContext(&RootContextOptions{
 			WorkflowFile: "test.yaml",
@@ -188,6 +222,25 @@ func TestBuiltinVarsForStep(t *testing.T) {
 			t.Fatal("expected session_dir to be absent")
 		}
 	})
+}
+
+func TestParseRepositoryTargets(t *testing.T) {
+	repositories := map[string]Repository{
+		"backend":  {Name: "backend", Dir: "/backend"},
+		"frontend": {Name: "frontend", Dir: "/frontend"},
+	}
+	targets, err := ParseRepositoryTargets(" frontend, backend ", repositories)
+	if err != nil {
+		t.Fatalf("ParseRepositoryTargets() error = %v", err)
+	}
+	if diff := cmp.Diff([]string{"frontend", "backend"}, targets); diff != "" {
+		t.Fatalf("targets mismatch (-want +got):\n%s", diff)
+	}
+	for _, value := range []string{"", "backend,,frontend", "backend,backend", "unknown"} {
+		if _, err := ParseRepositoryTargets(value, repositories); err == nil {
+			t.Fatalf("ParseRepositoryTargets(%q) succeeded, want error", value)
+		}
+	}
 }
 
 func TestIntakeHandoffPropagatesToNestedContexts(t *testing.T) {

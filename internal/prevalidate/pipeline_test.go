@@ -35,6 +35,32 @@ steps:
 	}
 }
 
+func TestPipeline_ValidatesRepositoryBuiltinsAgainstStepScope(t *testing.T) {
+	dir := t.TempDir()
+	workspace := writeWorkflow(t, dir, "workspace-v1.0.yaml", `
+name: workspace
+scope: workspace
+steps:
+  - id: invalid
+    command: echo {{repository_name}}
+`)
+	repositoryOverride := writeWorkflow(t, dir, "repository-override-v1.0.yaml", `
+name: repository-override
+scope: workspace
+steps:
+  - id: valid
+    scope: repositories
+    command: echo {{repository_name}}
+`)
+	opts, _, _ := fakeOptions(t, &config.Config{})
+	if _, err := Pipeline(workspace, nil, Strict, opts); err == nil || !strings.Contains(err.Error(), "unavailable in workspace scope") {
+		t.Fatalf("workspace Pipeline() error = %v", err)
+	}
+	if _, err := Pipeline(repositoryOverride, nil, Strict, opts); err != nil {
+		t.Fatalf("repository override Pipeline() error = %v", err)
+	}
+}
+
 func TestPipelineHandlesUnboundSubWorkflowParamByMode(t *testing.T) {
 	dir := t.TempDir()
 	root := writeWorkflow(t, dir, "root-v1.0.yaml", `

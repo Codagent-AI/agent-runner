@@ -21,6 +21,30 @@ func writeWorkflow(t *testing.T, dir, name, content string) string {
 }
 
 func TestValidateComposition(t *testing.T) {
+	t.Run("enforces scoped parent child matrix", func(t *testing.T) {
+		dir := t.TempDir()
+		writeWorkflow(t, dir, "workspace-child-v1.0.yaml", `
+name: workspace-child
+scope: workspace
+steps:
+  - id: run
+    command: true
+`)
+		root := writeWorkflow(t, dir, "repository-parent-v1.0.yaml", `
+name: repository-parent
+scope: repositories
+params:
+  - name: repositories
+steps:
+  - id: call
+    workflow: workspace-child-v1.0.yaml
+`)
+		err := ValidateComposition(root)
+		if err == nil || !strings.Contains(err.Error(), "workspace-scoped child") {
+			t.Fatalf("ValidateComposition() error = %v, want scope matrix error", err)
+		}
+	})
+
 	t.Run("accepts root with no sub-workflows", func(t *testing.T) {
 		dir := t.TempDir()
 		root := writeWorkflow(t, dir, "root-v1.0.yaml", `

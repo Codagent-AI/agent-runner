@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	osexec "os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -39,6 +41,10 @@ type Options struct {
 	From         string
 	Until        string
 	WorkflowFile string
+	// WorkflowScope is copied from the loaded workflow before root preparation
+	// so scope-aware runs can enforce their Git-backed workspace contract.
+	WorkflowScope model.Scope
+	Workspace     *model.WorkspaceContext
 	// IntakeHandoffContents carries the sealed intake handoff into a fresh run or
 	// restores it on resume. It is internal provenance, not a user parameter.
 	IntakeHandoffContents string
@@ -79,6 +85,8 @@ type Options struct {
 
 	UIStepHandler func(*model.UIStepRequest) (model.UIStepResult, error)
 }
+
+var repositoryNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
 // RunHandle is returned by PrepareRun and PrepareResume. It holds all state
 // needed to call ExecuteFromHandle and exposes the session directory so callers
@@ -147,6 +155,14 @@ func resolveExecutionRoots(opts *Options) (workingDir, projectRoot string, err e
 	if err != nil {
 		return "", "", fmt.Errorf("resolve working directory: %w", err)
 	}
+	if opts.WorkflowScope != model.ScopeLegacy {
+		workspace, err := prepareWorkspace(opts.WorkflowScope, workingDir, opts.ProfileStore)
+		if err != nil {
+			return "", "", err
+		}
+		opts.Workspace = workspace
+		return workspace.Dir, workspace.Dir, nil
+	}
 	if opts.ProjectRoot != "" {
 		projectRoot, err = canonicalDirectory(opts.ProjectRoot)
 		if err != nil {
@@ -159,6 +175,75 @@ func resolveExecutionRoots(opts *Options) (workingDir, projectRoot string, err e
 		return "", "", err
 	}
 	return workingDir, projectRoot, nil
+}
+
+// prepareWorkspace validates the immutable workspace/repository contract for
+// a scope-aware run. Legacy workflows do not call this function: they retain
+// their existing non-Git launch behavior.
+func prepareWorkspace(scope model.Scope, launchDir string, cfg *config.Config) (*model.WorkspaceContext, error) {
+	if scope == model.ScopeLegacy {
+		return nil, nil
+	}
+	canonicalLaunch, err := canonicalDirectory(launchDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve workspace directory: %w", err)
+	}
+	workspaceRoot, ok := gitWorktreeRoot(canonicalLaunch)
+	if !ok {
+		return nil, fmt.Errorf("scope-aware workflows must launch from a canonical workspace root of a Git worktree")
+	}
+	if canonicalLaunch != workspaceRoot {
+		return nil, fmt.Errorf("scope-aware workflows must launch from the canonical workspace root %s, not %s", workspaceRoot, canonicalLaunch)
+	}
+
+	workspace := &model.WorkspaceContext{Dir: workspaceRoot, Repositories: map[string]model.Repository{}}
+	if cfg == nil || len(cfg.Repositories) == 0 {
+		workspace.Repositories["default"] = model.Repository{Name: "default", Dir: workspaceRoot}
+		return workspace, nil
+	}
+
+	roots := make(map[string]string, len(cfg.Repositories))
+	for name, declaration := range cfg.Repositories {
+		if err := validateRepositoryName(name); err != nil {
+			return nil, err
+		}
+		if declaration.Path == "" {
+			return nil, fmt.Errorf("repository %q path is required", name)
+		}
+		declaredPath := declaration.Path
+		if !filepath.IsAbs(declaredPath) {
+			declaredPath = filepath.Join(workspaceRoot, declaredPath)
+		}
+		repositoryDir, err := canonicalDirectory(declaredPath)
+		if err != nil {
+			return nil, fmt.Errorf("repository %q path %q: %w", name, declaration.Path, err)
+		}
+		gitRoot, ok := gitWorktreeRoot(repositoryDir)
+		if !ok || gitRoot != repositoryDir {
+			return nil, fmt.Errorf("repository %q path %q must resolve to a Git worktree root", name, declaration.Path)
+		}
+		if repositoryDir == workspaceRoot {
+			return nil, fmt.Errorf("repository %q must not resolve to the workspace root", name)
+		}
+		if other, exists := roots[repositoryDir]; exists {
+			return nil, fmt.Errorf("repositories %q and %q resolve to the same Git worktree root %s", other, name, repositoryDir)
+		}
+		roots[repositoryDir] = name
+		workspace.Repositories[name] = model.Repository{Name: name, Dir: repositoryDir}
+	}
+	return workspace, nil
+}
+
+func validateRepositoryName(name string) error {
+	switch {
+	case name == "default":
+		return fmt.Errorf("repository name %q is reserved", name)
+	case len(name) > 63:
+		return fmt.Errorf("repository name %q must be at most 63 characters", name)
+	case !repositoryNameRe.MatchString(name):
+		return fmt.Errorf("repository name %q must match %s", name, repositoryNameRe.String())
+	}
+	return nil
 }
 
 func discoverProjectRoot(workflowFile, workingDir string) (string, error) {
@@ -182,11 +267,13 @@ func discoverProjectRoot(workflowFile, workingDir string) (string, error) {
 }
 
 func findRepositoryRoot(start string) (string, bool) {
-	dir, err := filepath.Abs(start)
-	if err != nil {
-		return "", false
+	if root, ok := gitWorktreeRoot(start); ok {
+		return root, true
 	}
-	dir, err = filepath.EvalSymlinks(dir)
+	// Preserve the legacy discovery contract for callers and tests which only
+	// need the historical project-root heuristic. Scope-aware preparation uses
+	// gitWorktreeRoot directly and therefore never accepts this fallback.
+	dir, err := canonicalDirectory(start)
 	if err != nil {
 		return "", false
 	}
@@ -200,6 +287,27 @@ func findRepositoryRoot(start string) (string, bool) {
 		}
 		dir = parent
 	}
+}
+
+func gitWorktreeRoot(start string) (string, bool) {
+	dir, err := filepath.Abs(start)
+	if err != nil {
+		return "", false
+	}
+	dir, err = filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", false
+	}
+	cmd := osexec.Command("git", "-C", dir, "rev-parse", "--show-toplevel") // #nosec G204 -- canonical local directory is an argument, never a shell command.
+	output, err := cmd.Output()
+	if err != nil {
+		return "", false
+	}
+	root, err := canonicalDirectory(strings.TrimSpace(string(output)))
+	if err != nil {
+		return "", false
+	}
+	return root, true
 }
 
 func canonicalDirectory(dirPath string) (string, error) {
@@ -271,9 +379,7 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	if params == nil {
 		params = map[string]string{}
 	}
-	if err := validateParams(workflow, params); err != nil {
-		return nil, err
-	}
+	opts.WorkflowScope = workflow.Scope
 
 	// Every run resolves a profile set so it can be validated, persisted, and
 	// reported even when the workflow has no agent steps.
@@ -285,18 +391,35 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		opts.ProfileStore = cfg
 	}
 
-	if opts.Engine != nil {
-		if err := opts.Engine.ValidateWorkflow(workflow, params, opts.WorkflowFile); err != nil {
-			return nil, err
-		}
-	}
-
 	workingDir, projectRoot, rootErr := resolveExecutionRoots(opts)
 	if rootErr != nil {
 		return nil, rootErr
 	}
 	opts.WorkingDir = workingDir
 	opts.ProjectRoot = projectRoot
+	if workflow.Scope == model.ScopeRepositories && opts.Workspace != nil && len(opts.Workspace.Repositories) == 1 {
+		if _, implicit := opts.Workspace.Repositories["default"]; implicit {
+			if _, supplied := params[model.RepositoriesParam]; !supplied {
+				params[model.RepositoriesParam] = "default"
+			}
+		}
+	}
+	if err := validateParams(workflow, params); err != nil {
+		return nil, err
+	}
+	if workflow.Scope == model.ScopeRepositories && opts.Workspace != nil {
+		selected, err := model.ParseRepositoryTargets(params[model.RepositoriesParam], opts.Workspace.Repositories)
+		if err != nil {
+			return nil, err
+		}
+		opts.Workspace.Selected = selected
+	}
+
+	if opts.Engine != nil {
+		if err := opts.Engine.ValidateWorkflow(workflow, params, opts.WorkflowFile); err != nil {
+			return nil, err
+		}
+	}
 
 	sessionDir, sessionID, now, err := freshSessionLocation(workflow.Name, workingDir, opts)
 	if err != nil {
@@ -458,8 +581,10 @@ func buildExecutionContext(
 		WorkflowFile:             opts.WorkflowFile,
 		WorkflowName:             workflow.Name,
 		WorkflowDescription:      workflow.Description,
+		WorkflowScope:            workflow.Scope,
 		ProjectRoot:              opts.ProjectRoot,
 		WorkingDir:               opts.WorkingDir,
+		Workspace:                opts.Workspace,
 		AutonomousBackend:        string(settings.AutonomousBackend),
 		AutonomousPermissionMode: string(usersettings.EffectiveAutonomousPermissionMode(settings.AutonomousPermissionMode)),
 		SessionDir:               sessionDir,

@@ -105,6 +105,9 @@ func prepareSubWorkflow(
 	if err != nil {
 		return model.Workflow{}, nil, err
 	}
+	if parentCtx.WorkflowScope == model.ScopeRepositories && workflow.Scope == model.ScopeWorkspace {
+		return model.Workflow{}, nil, fmt.Errorf("repository-scoped workflows cannot invoke a workspace-scoped child; invoke the workspace child from a workspace-scoped parent")
+	}
 
 	if err := validateSubWorkflowParams(&workflow, resolvedParams); err != nil {
 		return model.Workflow{}, nil, err
@@ -128,6 +131,7 @@ func prepareSubWorkflow(
 		Params:          resolvedParams,
 		WorkflowFile:    workflowPath,
 		SubWorkflowName: workflow.Name,
+		WorkflowScope:   workflow.Scope,
 		EngineRef:       childEngine,
 		EngineSet:       workflow.Engine != nil,
 	})

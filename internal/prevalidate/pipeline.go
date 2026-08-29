@@ -226,7 +226,7 @@ func (s *walkState) walkFile(path string, params map[string]string, isSub bool, 
 
 	visibleParams := bindParamDefaults(workflow.Params, params)
 	paramNames := workflowParamNames(workflow.Params)
-	_, err = s.walkSteps(path, workflow.Steps, visibleParams, paramNames, map[string]bool{}, nil, parentOrigin)
+	_, err = s.walkSteps(path, workflow.Steps, visibleParams, paramNames, map[string]bool{}, nil, parentOrigin, workflow.Scope)
 	if err != nil {
 		return err
 	}
@@ -300,11 +300,11 @@ func workflowParamNames(params []model.Param) map[string]bool {
 	return out
 }
 
-func (s *walkState) walkSteps(path string, steps []model.Step, params map[string]string, paramNames, captured map[string]bool, initialOrigin, parentOrigin *agentOrigin) (*agentOrigin, error) {
+func (s *walkState) walkSteps(path string, steps []model.Step, params map[string]string, paramNames, captured map[string]bool, initialOrigin, parentOrigin *agentOrigin, workflowScope model.Scope) (*agentOrigin, error) {
 	currentOrigin := initialOrigin
 	for i := range steps {
 		step := &steps[i]
-		nextOrigin, err := s.walkStep(path, step, params, paramNames, captured, currentOrigin, parentOrigin)
+		nextOrigin, err := s.walkStep(path, step, params, paramNames, captured, currentOrigin, parentOrigin, workflowScope)
 		if err != nil {
 			return currentOrigin, err
 		}
@@ -321,8 +321,15 @@ func (s *walkState) walkSteps(path string, steps []model.Step, params map[string
 	return currentOrigin, nil
 }
 
-func (s *walkState) walkStep(path string, step *model.Step, params map[string]string, paramNames, captured map[string]bool, currentOrigin, parentOrigin *agentOrigin) (*agentOrigin, error) {
+func (s *walkState) walkStep(path string, step *model.Step, params map[string]string, paramNames, captured map[string]bool, currentOrigin, parentOrigin *agentOrigin, workflowScope model.Scope) (*agentOrigin, error) {
 	if err := validateReservedCaptureNames(path, step); err != nil {
+		return nil, err
+	}
+	effectiveScope := workflowScope
+	if step.Scope != model.ScopeLegacy {
+		effectiveScope = step.Scope
+	}
+	if err := validateScopedBuiltinAvailability(path, step, effectiveScope); err != nil {
 		return nil, err
 	}
 	if err := checkStepReferences(path, step, params, paramNames, captured); err != nil {
@@ -346,7 +353,7 @@ func (s *walkState) walkStep(path string, step *model.Step, params map[string]st
 	if err := s.walkSubWorkflowStep(path, step, params, paramNames, captured, nextOrigin); err != nil {
 		return nil, err
 	}
-	if err := s.walkNestedSteps(path, step, params, paramNames, captured, nextOrigin, parentOrigin); err != nil {
+	if err := s.walkNestedSteps(path, step, params, paramNames, captured, nextOrigin, parentOrigin, effectiveScope); err != nil {
 		return nil, err
 	}
 	return nextOrigin, nil
@@ -398,12 +405,12 @@ func (s *walkState) walkSubWorkflowStep(path string, step *model.Step, params ma
 	return err
 }
 
-func (s *walkState) walkNestedSteps(path string, step *model.Step, params map[string]string, paramNames, captured map[string]bool, currentOrigin, parentOrigin *agentOrigin) error {
+func (s *walkState) walkNestedSteps(path string, step *model.Step, params map[string]string, paramNames, captured map[string]bool, currentOrigin, parentOrigin *agentOrigin, workflowScope model.Scope) error {
 	if len(step.Steps) == 0 {
 		return nil
 	}
 	childParams, childParamNames := childScopeForStep(step, params, paramNames)
-	_, err := s.walkSteps(path, step.Steps, childParams, childParamNames, copyBoolMap(captured), currentOrigin, parentOrigin)
+	_, err := s.walkSteps(path, step.Steps, childParams, childParamNames, copyBoolMap(captured), currentOrigin, parentOrigin, workflowScope)
 	return err
 }
 
@@ -437,6 +444,26 @@ func checkStepReferences(path string, step *model.Step, params map[string]string
 	for key, value := range step.Params {
 		if err := checkReferences(path, step.ID, "params."+key, value, params, paramNames, captured, false); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validateScopedBuiltinAvailability(path string, step *model.Step, scope model.Scope) error {
+	values := []struct{ field, value string }{
+		{"prompt", step.Prompt}, {"command", step.Command}, {"workdir", step.Workdir},
+	}
+	for key, value := range step.Params {
+		values = append(values, struct{ field, value string }{"params." + key, value})
+	}
+	if step.Loop != nil {
+		values = append(values, struct{ field, value string }{"loop.over", step.Loop.Over})
+	}
+	for _, item := range values {
+		for _, ref := range placeholders(item.value) {
+			if isRepositoryBuiltin(ref) && scope != model.ScopeRepositories {
+				return ValidationError{File: path, StepID: step.ID, Field: item.field, Value: ref, Message: fmt.Sprintf("repository built-in {{%s}} is unavailable in workspace scope", ref)}
+			}
 		}
 	}
 	return nil
@@ -694,7 +721,14 @@ func isBuiltin(name string) bool {
 }
 
 func builtinNamesMap() map[string]string {
-	return map[string]string{"session_dir": "", "step_id": "", model.IntakeHandoffVar: ""}
+	return map[string]string{
+		"session_dir": "", "step_id": "", model.IntakeHandoffVar: "", "workspace_dir": "",
+		"repository_name": "", "repository_dir": "", "repository_output_dir": "",
+	}
+}
+
+func isRepositoryBuiltin(name string) bool {
+	return name == "repository_name" || name == "repository_dir" || name == "repository_output_dir"
 }
 
 func (s *walkState) probeTriples() error {
