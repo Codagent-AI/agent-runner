@@ -48,6 +48,7 @@ steps:
     workflow: run-validator-v1.0.yaml
     params:
       task_file: "{{task_file}}"
+      task_base_ref: "{{task_start_head}}"
     # skip_if parameters are shell-quoted by InterpolateShellSafeTyped. The
     # validation step above additionally constrains this value to true|false.
     skip_if: 'sh: test {{skip_validator}} = true'

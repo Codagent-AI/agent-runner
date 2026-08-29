@@ -6,6 +6,9 @@ params:
   - name: task_file
     required: false
     default: ""
+  - name: task_base_ref
+    required: false
+    default: ""
 
 steps:
   - id: validator-retry
@@ -15,7 +18,11 @@ steps:
       - id: run-validator
         command: |
           if [ -n "{{task_file}}" ]; then
-            agent-validator run --report --enable-review task-compliance --context-file "{{task_file}}"
+            if [ -n "{{task_base_ref}}" ]; then
+              agent-validator run --report --base-branch "{{task_base_ref}}" --enable-review task-compliance --context-file "{{task_file}}"
+            else
+              agent-validator run --report --enable-review task-compliance --context-file "{{task_file}}"
+            fi
           else
             agent-validator run --report
           fi
