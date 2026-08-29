@@ -394,6 +394,9 @@ func nestingToAuditInfo(ctx *model.ExecutionContext) []audit.NestingInfo {
 
 func emitAudit(ctx *model.ExecutionContext, event audit.Event) {
 	if ctx.AuditLogger != nil {
+		if ctx.ActiveRepository != nil {
+			event = audit.WithRepository(event, ctx.ActiveRepository.Name, ctx.ActiveRepository.Dir)
+		}
 		ctx.AuditLogger.Emit(event)
 	}
 }
@@ -908,10 +911,7 @@ func emitSkippedStep(rs *runState, step *model.Step, index int) {
 		Type:      audit.EventStepEnd,
 		Data: map[string]any{
 			"outcome": "skipped", "skip_if": step.SkipIf, "duration_ms": int64(0),
-			metrics.DataIdentity: model.ExecutionIdentity{
-				StepID: step.ID, Prefix: metricsIdentityPrefix(rs.ctx), StepType: step.StepType(), Kind: "step", CLI: step.CLI,
-				SessionStrategy: string(step.Session), AgentInvoked: false,
-			},
+			metrics.DataIdentity:            repositoryExecutionIdentity(rs.ctx, step),
 			metrics.DataUsage:               skippedStepUsage(step),
 			metrics.DataEstimatedAPICostUSD: (*float64)(nil),
 		},
@@ -920,6 +920,9 @@ func emitSkippedStep(rs *runState, step *model.Step, index int) {
 
 func metricsIdentityPrefix(ctx *model.ExecutionContext) string {
 	parts := make([]string, 0, len(ctx.NestingPath)*2)
+	if ctx.ActiveRepository != nil && ctx.ActiveRepository.Name != "default" {
+		parts = append(parts, "repo:"+ctx.ActiveRepository.Name)
+	}
 	for _, segment := range ctx.NestingPath {
 		stepID := segment.StepID
 		if segment.Iteration != nil {
@@ -933,6 +936,18 @@ func metricsIdentityPrefix(ctx *model.ExecutionContext) string {
 		}
 	}
 	return strings.Join(parts, "/")
+}
+
+func repositoryExecutionIdentity(ctx *model.ExecutionContext, step *model.Step) model.ExecutionIdentity {
+	identity := model.ExecutionIdentity{
+		StepID: step.ID, Prefix: metricsIdentityPrefix(ctx), StepType: step.StepType(), Kind: "step", CLI: step.CLI,
+		SessionStrategy: string(step.Session), AgentInvoked: false,
+	}
+	if ctx.ActiveRepository != nil && ctx.ActiveRepository.Name != "default" {
+		identity.RepositoryName = ctx.ActiveRepository.Name
+		identity.RepositoryDir = ctx.ActiveRepository.Dir
+	}
+	return identity
 }
 
 func skippedStepUsage(step *model.Step) model.UsageRecord {
@@ -1185,6 +1200,7 @@ func executeRepositoryFanout(rs *runState, startIndex int, executeBody func(repo
 		activeIndex := repositoryIndex
 		parent.RepositoryIndex = &activeIndex
 		rs.ctx = repositoryExecutionContext(parent, repository, repositoryIndex)
+		started := time.Now()
 		if entry := repositoryEntry(parent.RepositoryFrame, repositoryIndex); entry != nil {
 			entry.Status = model.RepositoryActive
 			if err := persistRepositoryFrame(rs.sessionDir, parent); err != nil {
@@ -1192,18 +1208,46 @@ func executeRepositoryFanout(rs *runState, startIndex int, executeBody func(repo
 				return ResultFailed
 			}
 		}
+		if repository.Name != "default" {
+			emitAudit(rs.ctx, audit.Event{
+				Timestamp: started.UTC().Format(time.RFC3339Nano),
+				Prefix:    "[repo:" + repository.Name + "]",
+				Type:      audit.EventRepositoryStart,
+				Data: map[string]any{
+					"position": repositoryIndex,
+					"total":    len(parent.Workspace.Selected),
+					"context":  contextSnapshot(rs.ctx),
+				},
+			})
+		}
 		repositoryStart := 0
 		if repositoryIndex == resumeRepository {
 			repositoryStart = startIndex
 		}
-		if result := executeBody(repositoryStart); result != ResultSuccess {
+		if executionResult := executeBody(repositoryStart); executionResult != ResultSuccess {
+			if repository.Name != "default" {
+				emitAudit(rs.ctx, audit.Event{
+					Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+					Prefix:    "[repo:" + repository.Name + "]",
+					Type:      audit.EventRepositoryEnd,
+					Data:      map[string]any{"outcome": string(executionResult), "duration_ms": time.Since(started).Milliseconds()},
+				})
+			}
 			if entry := repositoryEntry(parent.RepositoryFrame, repositoryIndex); entry != nil {
 				entry.Status = model.RepositoryFailed
 				if err := persistRepositoryFrame(rs.sessionDir, parent); err != nil {
 					rs.log.Printf("agent-runner: persist repository %q failed state: %v\n", name, err)
 				}
 			}
-			return result
+			return executionResult
+		}
+		if repository.Name != "default" {
+			emitAudit(rs.ctx, audit.Event{
+				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				Prefix:    "[repo:" + repository.Name + "]",
+				Type:      audit.EventRepositoryEnd,
+				Data:      map[string]any{"outcome": string(ResultSuccess), "duration_ms": time.Since(started).Milliseconds()},
+			})
 		}
 		if entry := repositoryEntry(parent.RepositoryFrame, repositoryIndex); entry != nil {
 			entry.Status = model.RepositoryCompleted

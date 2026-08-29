@@ -182,6 +182,8 @@ func TestControlAndJobControlEventTypesAreRecognized(t *testing.T) {
 	types := []EventType{
 		EventRunStart,
 		EventRunEnd,
+		EventRepositoryStart,
+		EventRepositoryEnd,
 		EventStepStart,
 		EventStepEnd,
 		EventIterationStart,

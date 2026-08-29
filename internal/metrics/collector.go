@@ -68,6 +68,8 @@ type StepRecord struct {
 	ParentAttemptID     string             `json:"parent_attempt_id,omitempty"`
 	TargetKind          string             `json:"target_kind,omitempty"`
 	TargetName          string             `json:"target_name,omitempty"`
+	RepositoryName      string             `json:"repository_name,omitempty"`
+	RepositoryDir       string             `json:"repository_dir,omitempty"`
 }
 
 type executionKey struct {
@@ -217,6 +219,7 @@ func (c *Collector) processTerminal(event *audit.Event) {
 		SessionID: identity.SessionID, AgentInvoked: identity.AgentInvoked,
 		CallID: stringValue(event.Data["call_id"]), ParentAttemptID: stringValue(event.Data["parent_attempt_id"]),
 		TargetKind: stringValue(event.Data["target_kind"]), TargetName: stringValue(event.Data["target_name"]),
+		RepositoryName: identity.RepositoryName, RepositoryDir: identity.RepositoryDir,
 	}
 	if identity.Kind == "iteration" {
 		iteration := identity.Iteration

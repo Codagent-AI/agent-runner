@@ -80,6 +80,7 @@ type prefixToken struct {
 	iteration *int
 	subName   string
 	callID    string
+	repoName  string
 }
 
 // parsePrefix splits a bracketed prefix like "[task-loop:2, verify, sub:verify-task, check]"
@@ -104,6 +105,10 @@ func parsePrefix(prefix string) []prefixToken {
 		}
 		if strings.HasPrefix(p, "call:") {
 			tokens = append(tokens, prefixToken{callID: strings.TrimPrefix(p, "call:")})
+			continue
+		}
+		if strings.HasPrefix(p, "repo:") {
+			tokens = append(tokens, prefixToken{repoName: strings.TrimPrefix(p, "repo:")})
 			continue
 		}
 		if colon := strings.LastIndexByte(p, ':'); colon > 0 {
@@ -422,9 +427,22 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 	}
 
 	switch e.Type {
+	case "repository_start", "repository_end":
+		t.applyRepositoryEvent(e, tokens)
 	case "pull_request_recorded":
 		if url, ok := stringField(e.Data, "url"); ok && strings.TrimSpace(url) != "" {
-			t.PullRequestURL = strings.TrimSpace(url)
+			name, _ := stringField(e.Data, "repository_name")
+			if name == "" && len(tokens) > 0 {
+				name = tokens[0].repoName
+			}
+			if name == "" || name == "default" {
+				t.PullRequestURL = strings.TrimSpace(url)
+			} else {
+				if t.RepositoryPullRequestURLs == nil {
+					t.RepositoryPullRequestURLs = map[string]string{}
+				}
+				t.RepositoryPullRequestURLs[name] = strings.TrimSpace(url)
+			}
 		}
 	case "run_start":
 		t.Root.Status = StatusInProgress
@@ -449,6 +467,60 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 	case "sub_workflow_start", "sub_workflow_end":
 		t.applySubWorkflowEvent(e, tokens)
 	}
+}
+
+func (t *Tree) applyRepositoryEvent(event RawEvent, tokens []prefixToken) {
+	name, _ := stringField(event.Data, "repository_name")
+	if name == "" && len(tokens) > 0 {
+		name = tokens[0].repoName
+	}
+	if name == "" || name == "default" {
+		return
+	}
+	repository := t.ensureRepository(name, event.Data)
+	if repository == nil {
+		return
+	}
+	if event.Type == "repository_start" {
+		repository.Status = StatusInProgress
+		repository.Outcome = ""
+		repository.Aborted = false
+		repository.StartedAt = parseEventTime(event.Timestamp)
+		return
+	}
+	outcome, _ := stringField(event.Data, "outcome")
+	applyOutcome(repository, outcome)
+	if duration, ok := int64Field(event.Data, "duration_ms"); ok {
+		repository.DurationMs = &duration
+	}
+}
+
+func (t *Tree) ensureRepository(name string, data map[string]any) *StepNode {
+	if t == nil || t.Root == nil || name == "" {
+		return nil
+	}
+	if node := repositoryChildByName(t.Root, name); node != nil {
+		return node
+	}
+	node := &StepNode{ID: name, Type: NodeRepository, Status: StatusPending, Parent: t.Root, RepositoryName: name}
+	node.RepositoryDir, _ = stringField(data, "repository_dir")
+	if position, ok := intField(data, "position"); ok {
+		node.RepositoryPosition = position
+	}
+	if total, ok := intField(data, "total"); ok {
+		node.RepositoryTotal = total
+	}
+	t.Root.Children = append(t.Root.Children, node)
+	return node
+}
+
+func repositoryChildByName(parent *StepNode, name string) *StepNode {
+	for _, child := range parent.Children {
+		if child.Type == NodeRepository && child.RepositoryName == name {
+			return child
+		}
+	}
+	return nil
 }
 
 func (t *Tree) applyStepEvent(event RawEvent, tokens []prefixToken) {
@@ -572,6 +644,11 @@ func (t *Tree) resolve(tokens []prefixToken, createIterations bool) *StepNode {
 	current := t.Root
 	for _, tok := range tokens {
 		switch {
+		case tok.repoName != "":
+			current = repositoryChildByName(current, tok.repoName)
+			if current == nil {
+				return nil
+			}
 		case tok.callID != "":
 			current = callChildByID(current, tok.callID)
 			if current == nil {
@@ -607,6 +684,12 @@ func (t *Tree) resolve(tokens []prefixToken, createIterations bool) *StepNode {
 			}
 			if child == nil {
 				child = groupDescendantByID(current, tok.stepID, false)
+			}
+			if child == nil {
+				if current.Type == NodeRepository && createIterations {
+					child = &StepNode{ID: tok.stepID, Type: NodeShell, Status: StatusPending, Parent: current}
+					current.Children = append(current.Children, child)
+				}
 			}
 			if child == nil {
 				return nil

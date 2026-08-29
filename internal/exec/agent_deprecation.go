@@ -26,7 +26,7 @@ func EmitAgentDeprecations(ctx *model.ExecutionContext, log Logger, warnings []c
 			log.Printf("agent-runner: warning: %s\n", message)
 		}
 		if ctx.AuditLogger != nil {
-			ctx.AuditLogger.Emit(audit.Event{
+			emitAudit(ctx, audit.Event{
 				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 				Type:      audit.EventWarning,
 				Data: map[string]any{

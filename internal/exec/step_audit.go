@@ -56,14 +56,22 @@ func emitStepEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time
 }
 
 func executionIdentity(ctx *model.ExecutionContext, step *model.Step, kind string, iteration int, agentInvoked bool, cliName, sessionID string) model.ExecutionIdentity {
-	return model.ExecutionIdentity{
+	identity := model.ExecutionIdentity{
 		StepID: step.ID, Prefix: executionIdentityPrefix(ctx), StepType: step.StepType(), Kind: kind,
 		Iteration: iteration, CLI: cliName, SessionID: sessionID, SessionStrategy: string(step.Session), AgentInvoked: agentInvoked,
 	}
+	if ctx.ActiveRepository != nil && ctx.ActiveRepository.Name != "default" {
+		identity.RepositoryName = ctx.ActiveRepository.Name
+		identity.RepositoryDir = ctx.ActiveRepository.Dir
+	}
+	return identity
 }
 
 func executionIdentityPrefix(ctx *model.ExecutionContext) string {
 	parts := make([]string, 0, len(ctx.NestingPath)*2)
+	if ctx.ActiveRepository != nil && ctx.ActiveRepository.Name != "default" {
+		parts = append(parts, "repo:"+ctx.ActiveRepository.Name)
+	}
 	for _, segment := range ctx.NestingPath {
 		stepID := segment.StepID
 		if segment.Iteration != nil {

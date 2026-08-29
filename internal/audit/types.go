@@ -7,6 +7,8 @@ type EventType string
 const (
 	EventRunStart               EventType = "run_start"
 	EventRunEnd                 EventType = "run_end"
+	EventRepositoryStart        EventType = "repository_start"
+	EventRepositoryEnd          EventType = "repository_end"
 	EventStepStart              EventType = "step_start"
 	EventStepEnd                EventType = "step_end"
 	EventIterationStart         EventType = "iteration_start"

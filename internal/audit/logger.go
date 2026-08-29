@@ -80,6 +80,26 @@ func BuildPrefix(nestingPath []NestingInfo, stepID string) string {
 	return "[" + strings.Join(tokens, ", ") + "]"
 }
 
+// WithRepository adds explicit repository identity to an event emitted while
+// that repository is active. The transparent default repository deliberately
+// keeps the legacy audit shape. Root-scoped events retain their empty prefix
+// but still carry the explicit repository fields.
+func WithRepository(event Event, name, dir string) Event {
+	if name == "" || name == "default" {
+		return event
+	}
+	if event.Data == nil {
+		event.Data = map[string]any{}
+	}
+	event.Data["repository_name"] = name
+	event.Data["repository_dir"] = dir
+	if event.Prefix == "" || strings.HasPrefix(event.Prefix, "[repo:") {
+		return event
+	}
+	event.Prefix = "[repo:" + name + ", " + strings.TrimPrefix(strings.TrimSuffix(event.Prefix, "]"), "[") + "]"
+	return event
+}
+
 var pathUnsafeRe = regexp.MustCompile(`[/._]`)
 var fileUnsafeRe = regexp.MustCompile(`[\\/:*?"<>|]`)
 

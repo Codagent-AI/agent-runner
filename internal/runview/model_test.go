@@ -869,6 +869,21 @@ func TestModel_Breadcrumb_ShowsRecordedPullRequestLink(t *testing.T) {
 	}
 }
 
+func TestModel_Breadcrumb_OrdersRepositoryPullRequestsByPersistedSelection(t *testing.T) {
+	m := newTestModel(simpleTree(), FromInspect)
+	m.tree.RepositoryOrder = []string{"backend", "frontend"}
+	m.tree.RepositoryPullRequestURLs = map[string]string{
+		"backend":  "https://github.com/acme/backend/pull/62",
+		"frontend": "https://github.com/acme/frontend/pull/17",
+	}
+	got := m.renderBreadcrumb()
+	backend := strings.Index(got, "PR #62")
+	frontend := strings.Index(got, "PR #17")
+	if backend < 0 || frontend < 0 || backend >= frontend {
+		t.Fatalf("breadcrumb did not retain persisted repository PR order: %q", got)
+	}
+}
+
 func TestModel_Breadcrumb_DoesNotLinkUntrustedPullRequestURL(t *testing.T) {
 	m := newTestModel(simpleTree(), FromInspect)
 	m.tree.ApplyEvent(RawEvent{Type: "pull_request_recorded", Data: map[string]any{

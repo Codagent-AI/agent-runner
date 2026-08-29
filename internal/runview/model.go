@@ -200,6 +200,7 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	state, _ := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
 	resolved, _ := ResolveWorkflow(sessionDir, projectDir, &state)
 	tree, loadErr, workflowMissing := loadRunTree(sessionDir, entered, &state, resolved)
+	tree.ApplyPersistedRepositories(&state)
 
 	m := &Model{
 		tree:          tree,

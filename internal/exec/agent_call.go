@@ -227,7 +227,7 @@ func (h *AgentCallHandler) lifecycleEvent(record *acceptedAgentCall, target agen
 
 func (h *AgentCallHandler) reject(envelope control.AgentCallRequest, failure *agentcall.Error) json.RawMessage {
 	if h.options.Context != nil && h.options.Context.AuditLogger != nil {
-		h.options.Context.AuditLogger.Emit(audit.Event{
+		emitAudit(h.options.Context, audit.Event{
 			Timestamp: h.options.Now().UTC().Format(time.RFC3339Nano),
 			Prefix:    h.options.Parent.Prefix,
 			Type:      audit.EventControlRejected,
@@ -508,6 +508,14 @@ func (h *AgentCallHandler) emitAgentCallEnd(record *acceptedAgentCall, call *res
 		StepID: record.callID, Prefix: agentCallIdentityPrefix(h.options.Parent.Prefix), StepType: "agent", Kind: "agent-call",
 		CLI: call.cliName, SessionID: resolvedSessionID, SessionStrategy: agentCallSessionStrategy(call),
 		SessionResumed: call.resume, AgentInvoked: invocation.CLILaunched,
+	}
+	if h.options.Context.ActiveRepository != nil && h.options.Context.ActiveRepository.Name != "default" {
+		identity.Prefix = "repo:" + h.options.Context.ActiveRepository.Name
+		if parentPrefix := agentCallIdentityPrefix(h.options.Parent.Prefix); parentPrefix != "" {
+			identity.Prefix += "/" + parentPrefix
+		}
+		identity.RepositoryName = h.options.Context.ActiveRepository.Name
+		identity.RepositoryDir = h.options.Context.ActiveRepository.Dir
 	}
 	data := agentCallAuditData(record, call)
 	data["outcome"] = string(invocation.Outcome)

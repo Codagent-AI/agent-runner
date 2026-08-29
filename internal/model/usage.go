@@ -79,6 +79,8 @@ type ExecutionIdentity struct {
 	SessionStrategy string `json:"session_strategy,omitempty"`
 	SessionResumed  bool   `json:"session_resumed"`
 	AgentInvoked    bool   `json:"agent_invoked"`
+	RepositoryName  string `json:"repository_name,omitempty"`
+	RepositoryDir   string `json:"repository_dir,omitempty"`
 }
 
 // Coverage describes how much of the eligible agent-step population reported

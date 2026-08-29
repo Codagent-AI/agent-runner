@@ -27,6 +27,7 @@ const (
 	NodeGroup
 	NodeAgentCall
 	NodeParentTurn
+	NodeRepository
 )
 
 // NodeStatus is the visual status of a StepNode.
@@ -102,6 +103,10 @@ type StepNode struct {
 	IterationsCompleted int
 	BreakTriggered      bool
 	ErrorMessage        string
+	RepositoryName      string
+	RepositoryDir       string
+	RepositoryPosition  int
+	RepositoryTotal     int
 	Aborted             bool // aborted mid-execution; UI suppresses blink when no run is active
 	Attempts            []AttemptMetrics
 	StartedAt           time.Time // wall-clock start of the current in-flight execution (from step_start); zero when not running
@@ -211,6 +216,10 @@ type Tree struct {
 	// audit stream. Keeping it with the replayed tree makes historical and live
 	// run views use the same update path.
 	PullRequestURL string
+	// RepositoryOrder and RepositoryPullRequestURLs retain persisted selection
+	// order independently from event arrival order.
+	RepositoryOrder           []string
+	RepositoryPullRequestURLs map[string]string
 
 	// nextStartOrdinal assigns a deterministic replay order to execution
 	// starts. It is not persisted because it is reconstructed from audit order.
@@ -244,6 +253,49 @@ type Tree struct {
 	// relative "workflow:" field. Defaults to filepath.Dir of the parent
 	// sub-workflow's StaticWorkflowPath, falling back to WorkflowPath's dir.
 	ParentDirOf func(n *StepNode) string
+}
+
+// ApplyPersistedRepositories seeds explicit repository containers from state
+// before audit replay. This keeps a never-started selected repository visible
+// as pending and preserves the user's persisted selection order.
+func (t *Tree) ApplyPersistedRepositories(state *model.RunState) {
+	if t == nil || t.Root == nil || state == nil {
+		return
+	}
+	identities := state.SelectedRepositories
+	if len(identities) == 0 && state.RepositoryFrame != nil {
+		identities = make([]model.RepositoryIdentity, 0, len(state.RepositoryFrame.Repositories))
+		for _, entry := range state.RepositoryFrame.Repositories {
+			identities = append(identities, entry.Identity)
+		}
+	}
+	for index, identity := range identities {
+		if identity.Name == "" || identity.Name == "default" {
+			continue
+		}
+		name := identity.Name
+		t.RepositoryOrder = append(t.RepositoryOrder, name)
+		node := t.ensureRepository(name, map[string]any{"repository_dir": identity.Dir, "position": index, "total": len(identities)})
+		if state.RepositoryFrame != nil && index < len(state.RepositoryFrame.Repositories) {
+			switch state.RepositoryFrame.Repositories[index].Status {
+			case model.RepositoryActive:
+				node.Status = StatusInProgress
+			case model.RepositoryCompleted:
+				node.Status = StatusSuccess
+			case model.RepositoryFailed:
+				node.Status = StatusFailed
+			}
+		}
+	}
+	if state.RepositoryPullRequestURLs != nil {
+		t.RepositoryPullRequestURLs = make(map[string]string, len(state.RepositoryPullRequestURLs))
+		for name, url := range state.RepositoryPullRequestURLs {
+			t.RepositoryPullRequestURLs[name] = url
+		}
+	}
+	if state.WorkspacePullRequestURL != "" {
+		t.PullRequestURL = state.WorkspacePullRequestURL
+	}
 }
 
 // PreviousExecution returns the most recently started terminal leaf before
@@ -412,7 +464,7 @@ func (n *StepNode) IsContainer() bool {
 		return false
 	}
 	switch n.Type {
-	case NodeRoot, NodeLoop, NodeSubWorkflow, NodeIteration, NodeGroup:
+	case NodeRoot, NodeLoop, NodeSubWorkflow, NodeIteration, NodeGroup, NodeRepository:
 		return true
 	case NodeHeadlessAgent, NodeInteractiveAgent:
 		return len(n.Children) > 0

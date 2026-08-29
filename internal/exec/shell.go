@@ -106,6 +106,9 @@ func contextSnapshot(ctx *model.ExecutionContext) map[string]any {
 
 func emitAudit(ctx *model.ExecutionContext, event audit.Event) {
 	if ctx.AuditLogger != nil {
+		if ctx.ActiveRepository != nil {
+			event = audit.WithRepository(event, ctx.ActiveRepository.Name, ctx.ActiveRepository.Dir)
+		}
 		ctx.AuditLogger.Emit(event)
 	}
 }

@@ -311,6 +311,46 @@ func TestRunWorkflow_FansRepositoryScopeOutInTargetOrder(t *testing.T) {
 	}
 }
 
+func TestRunWorkflow_EmitsExplicitRepositoryBoundariesAndIdentity(t *testing.T) {
+	workspace, backend, frontend := t.TempDir(), t.TempDir(), t.TempDir()
+	initGitWorktree(t, workspace)
+	initGitWorktree(t, backend)
+	initGitWorktree(t, frontend)
+	workflow := &model.Workflow{
+		Name: "repo", Scope: model.ScopeRepositories,
+		Params: []model.Param{{Name: model.RepositoriesParam}},
+		Steps:  []model.Step{{ID: "run", Command: "echo {{repository_name}}"}},
+	}
+	workflow.ApplyDefaults()
+	sessionDir := t.TempDir()
+	result, err := RunWorkflow(workflow, map[string]string{model.RepositoriesParam: "backend,frontend"}, &Options{
+		WorkingDir: workspace, SessionDir: sessionDir, ProfileStore: &config.Config{Repositories: map[string]config.Repository{
+			"backend": {Path: backend}, "frontend": {Path: frontend},
+		}}, ProcessRunner: &repositorySpyRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil || result != ResultSuccess {
+		t.Fatalf("RunWorkflow() = %q, %v", result, err)
+	}
+	data, err := os.ReadFile(filepath.Join(sessionDir, "audit.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalBackend, err := filepath.EvalSymlinks(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(data)
+	for _, want := range []string{
+		`[repo:backend] repository_start`, `"repository_name":"backend"`, `"position":0`, `"total":2`,
+		`[repo:backend, run] step_start`, `"repository_dir":"` + canonicalBackend + `"`,
+		`[repo:backend] repository_end`, `[repo:frontend] repository_start`, `[repo:frontend] repository_end`,
+	} {
+		if !strings.Contains(log, want) {
+			t.Errorf("audit log missing %q:\n%s", want, log)
+		}
+	}
+}
+
 func TestRunWorkflow_AcquiresProcessLifetimeLocksForSelectedRepositories(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspace, backend := t.TempDir(), t.TempDir()
