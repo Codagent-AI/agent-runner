@@ -334,6 +334,22 @@ func TestParseConfiguredGroupsRejectsTaskSymlinkOutsideGroup(t *testing.T) {
 	}
 }
 
+func TestParseConfiguredGroupsRejectsTaskIndexSymlinkOutsideChange(t *testing.T) {
+	workspace := t.TempDir()
+	changeDir := filepath.Join(workspace, "openspec", "changes", "demo")
+	outsideIndex := filepath.Join(workspace, "outside-tasks.md")
+	writeTaskGroupFile(t, outsideIndex, "## Repository: backend\n\n- [ ] [API](tasks/backend/01-api.md)\n")
+	writeTaskGroupFile(t, filepath.Join(changeDir, "tasks", "backend", "01-api.md"), "# API\n")
+	if err := os.Symlink(outsideIndex, filepath.Join(changeDir, "tasks.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Parse(Options{WorkspaceDir: workspace, ChangeDir: changeDir, PlanKind: Full, Repositories: []string{"backend"}})
+	if err == nil || !strings.Contains(err.Error(), "task index") {
+		t.Fatalf("Parse() error = %v, want task index symlink failure", err)
+	}
+}
+
 func writeTaskGroupFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

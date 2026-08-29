@@ -26,7 +26,7 @@ entry_points:
       - test:
           command: ./.validator/go-offline.sh go test ./...
       - security-code:
-          command: ./.validator/go-offline.sh gosec -exclude-dir=.claude -exclude-dir=.validator -exclude-dir=worktrees -exclude-dir=internal/taskgroups ./... && ./.validator/go-offline.sh gosec -exclude=G703 ./internal/taskgroups
+          command: ./.validator/go-offline.sh gosec -exclude-dir=.claude -exclude-dir=.validator -exclude-dir=worktrees ./...
     reviews:
       - all-reviewers:
           builtin: all-reviewers

@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -101,7 +103,7 @@ func Parse(options Options) (Plan, error) {
 }
 
 func declaresRepositoryGroups(changeDir string) bool {
-	index, err := os.ReadFile(filepath.Join(changeDir, "tasks.md")) // #nosec G304 -- changeDir is canonicalized and contained by Parse before this fixed filename is read.
+	index, err := readTaskIndex(changeDir)
 	if err != nil {
 		return false
 	}
@@ -111,6 +113,21 @@ func declaresRepositoryGroups(changeDir string) bool {
 		}
 	}
 	return false
+}
+
+func readTaskIndex(changeDir string) ([]byte, error) {
+	root, err := os.OpenRoot(changeDir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+
+	index, err := root.Open("tasks.md")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = index.Close() }()
+	return io.ReadAll(index)
 }
 
 func parseImplicit(changeDir string, kind PlanKind) (Plan, error) {
@@ -182,7 +199,7 @@ func normalizedNumber(value string) string {
 }
 
 func requireNonEmpty(path string) error {
-	info, err := os.Stat(path)
+	info, err := fileInfo(path)
 	if err != nil || info.Size() == 0 {
 		return fmt.Errorf("task file %s is missing or empty", path)
 	}
@@ -194,8 +211,7 @@ func parseConfigured(changeDir string, repositories []string) (Plan, error) {
 	for _, repository := range repositories {
 		allowed[repository] = true
 	}
-	indexPath := filepath.Join(changeDir, "tasks.md")
-	index, err := os.ReadFile(indexPath) // #nosec G304 -- changeDir is canonicalized and contained by Parse before this fixed filename is read.
+	index, err := readTaskIndex(changeDir)
 	if err != nil {
 		return Plan{}, fmt.Errorf("read task index: %w", err)
 	}
@@ -281,7 +297,7 @@ func resolveConfiguredTask(changeDir, repository, destination string) (string, e
 	if !isWithin(root, canonical) {
 		return "", fmt.Errorf("task link %q is outside tasks/%s", destination, repository)
 	}
-	info, err := os.Stat(canonical)
+	info, err := fileInfo(canonical)
 	if err != nil || info.Size() == 0 {
 		return "", fmt.Errorf("task link %q is missing or empty", destination)
 	}
@@ -302,21 +318,26 @@ func validateConfiguredTaskFiles(changeDir string, groups []Group) error {
 	if err != nil {
 		return fmt.Errorf("task directory: %w", err)
 	}
-	return filepath.WalkDir(tasksDir, func(path string, entry os.DirEntry, walkErr error) error {
+	root, err := os.OpenRoot(tasksDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	return fs.WalkDir(root.FS(), ".", func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".md" {
 			return nil
 		}
-		canonical, err := canonicalFile(path)
+		canonical, err := canonicalFile(filepath.Join(tasksDir, path))
 		if err != nil {
 			return err
 		}
 		if !isWithin(tasksDir, canonical) {
 			return fmt.Errorf("task file %s resolves outside the task directory", path)
 		}
-		info, err := os.Stat(canonical)
+		info, err := fileInfo(canonical)
 		if err != nil {
 			return err
 		}
@@ -382,7 +403,7 @@ func canonicalDirectory(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	info, err := os.Stat(canonical)
+	info, err := fileInfo(canonical)
 	if err != nil {
 		return "", err
 	}
@@ -397,7 +418,7 @@ func canonicalFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	info, err := os.Stat(canonical)
+	info, err := fileInfo(canonical)
 	if err != nil {
 		return "", err
 	}
@@ -405,6 +426,15 @@ func canonicalFile(path string) (string, error) {
 		return "", fmt.Errorf("is a directory")
 	}
 	return canonical, nil
+}
+
+func fileInfo(path string) (os.FileInfo, error) {
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	return root.Stat(filepath.Base(path))
 }
 
 func isWithin(root, path string) bool {
