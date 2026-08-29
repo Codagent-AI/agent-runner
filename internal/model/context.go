@@ -22,6 +22,15 @@ type AgentDeprecationState struct {
 	seen map[string]bool
 }
 
+// IntakeHandoffState coordinates the one-time automatic intake delivery for a
+// complete workflow run. Every nested execution context shares one instance.
+type IntakeHandoffState struct {
+	mu        sync.Mutex
+	cond      *sync.Cond
+	claimed   bool
+	delivered bool
+}
+
 // AgentOverride is a run-scoped CLI and model selection that takes precedence
 // over both the workflow step and its resolved agent profile.
 type AgentOverride struct {
@@ -32,6 +41,46 @@ type AgentOverride struct {
 // NewAgentDeprecationState creates an empty run-scoped deprecation set.
 func NewAgentDeprecationState() *AgentDeprecationState {
 	return &AgentDeprecationState{seen: make(map[string]bool)}
+}
+
+// NewIntakeHandoffState creates run-scoped intake delivery state.
+func NewIntakeHandoffState(delivered bool) *IntakeHandoffState {
+	state := &IntakeHandoffState{delivered: delivered}
+	state.cond = sync.NewCond(&state.mu)
+	return state
+}
+
+// Claim reserves automatic delivery for one agent invocation. A competing
+// invocation waits until the pending claim either launches or is released.
+func (s *IntakeHandoffState) Claim() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for s.claimed && !s.delivered {
+		s.cond.Wait()
+	}
+	if s.delivered {
+		return false
+	}
+	s.claimed = true
+	return true
+}
+
+// Complete records whether the claimed invocation actually launched.
+func (s *IntakeHandoffState) Complete(launched bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if launched {
+		s.delivered = true
+	}
+	s.claimed = false
+	s.cond.Broadcast()
+}
+
+// Delivered reports whether an agent has received the automatic handoff.
+func (s *IntakeHandoffState) Delivered() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.delivered
 }
 
 // Mark records alias and reports whether this is its first occurrence.
@@ -118,6 +167,7 @@ type ExecutionContext struct {
 	// {{intake_handoff}} and automatically delivered to the first agent prompt.
 	// It is sealed in the route request and persisted across resume.
 	IntakeHandoffContents string
+	intakeHandoffState    *IntakeHandoffState
 	// IntakeParentRunID identifies the intake run that launched this run. It is
 	// empty for direct runs.
 	IntakeParentRunID string
@@ -183,6 +233,7 @@ type RootContextOptions struct {
 	AutonomousPermissionMode string
 	SessionDir               string
 	IntakeHandoffContents    string
+	IntakeHandoffDelivered   bool
 	IntakeParentRunID        string
 	AgentOverride            *AgentOverride
 	EngineRef                interface{} // internal/engine.Engine
@@ -245,6 +296,7 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		AutonomousPermissionMode: opts.AutonomousPermissionMode,
 		SessionDir:               opts.SessionDir,
 		IntakeHandoffContents:    opts.IntakeHandoffContents,
+		intakeHandoffState:       NewIntakeHandoffState(opts.IntakeHandoffDelivered),
 		IntakeParentRunID:        opts.IntakeParentRunID,
 		AgentOverride:            opts.AgentOverride,
 		EngineRef:                opts.EngineRef,
@@ -256,6 +308,23 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		NamedSessionDecls:        namedSessionDecls,
 		UIStepHandler:            opts.UIStepHandler,
 	}
+}
+
+// ClaimIntakeHandoff reserves the automatic handoff for this invocation.
+func (c *ExecutionContext) ClaimIntakeHandoff() bool {
+	return c != nil && c.IntakeHandoffContents != "" && c.intakeHandoffState != nil && c.intakeHandoffState.Claim()
+}
+
+// CompleteIntakeHandoff records whether the claiming invocation launched.
+func (c *ExecutionContext) CompleteIntakeHandoff(launched bool) {
+	if c != nil && c.intakeHandoffState != nil {
+		c.intakeHandoffState.Complete(launched)
+	}
+}
+
+// IntakeHandoffDelivered reports whether an agent received the automatic handoff.
+func (c *ExecutionContext) IntakeHandoffDelivered() bool {
+	return c != nil && c.intakeHandoffState != nil && c.intakeHandoffState.Delivered()
 }
 
 // BuiltinVars returns the map of runner-provided template variables that are
@@ -345,6 +414,7 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
 		SessionDir:               parent.SessionDir,
 		IntakeHandoffContents:    parent.IntakeHandoffContents,
+		intakeHandoffState:       parent.intakeHandoffState,
 		IntakeParentRunID:        parent.IntakeParentRunID,
 		AgentOverride:            parent.AgentOverride,
 		EngineRef:                parent.EngineRef,
@@ -431,6 +501,7 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
 		SessionDir:               parent.SessionDir,
 		IntakeHandoffContents:    parent.IntakeHandoffContents,
+		intakeHandoffState:       parent.intakeHandoffState,
 		IntakeParentRunID:        parent.IntakeParentRunID,
 		AgentOverride:            parent.AgentOverride,
 		EngineRef:                engineRef,

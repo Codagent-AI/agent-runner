@@ -168,6 +168,7 @@ func (r *realProcessRunner) RunAgent(options *iexec.AgentProcessOptions) (iexec.
 		if err := c.Start(); err != nil {
 			return iexec.ProcessResult{}, err
 		}
+		options.NotifyStarted()
 		err := c.Wait()
 		result := iexec.ProcessResult{Started: true, ExitCode: -1, Stdout: stdoutBuf.String(), Stderr: stderrBuf.String()}
 		exitCode := 0
@@ -196,6 +197,7 @@ func (r *realProcessRunner) RunAgent(options *iexec.AgentProcessOptions) (iexec.
 	if err := c.Start(); err != nil {
 		return iexec.ProcessResult{}, err
 	}
+	options.NotifyStarted()
 	err := c.Wait()
 	result := iexec.ProcessResult{Started: true, ExitCode: -1}
 	exitCode := 0

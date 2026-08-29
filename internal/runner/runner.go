@@ -41,9 +41,10 @@ type Options struct {
 	WorkflowFile string
 	// IntakeHandoffContents carries the sealed intake handoff into a fresh run or
 	// restores it on resume. It is internal provenance, not a user parameter.
-	IntakeHandoffContents string
-	IntakeParentRunID     string
-	AgentOverride         *model.AgentOverride
+	IntakeHandoffContents  string
+	IntakeHandoffDelivered bool
+	IntakeParentRunID      string
+	AgentOverride          *model.AgentOverride
 	// ProjectRoot and WorkingDir may be supplied by embedding callers. When
 	// empty, PrepareRun discovers and canonicalizes them once for the run.
 	ProjectRoot        string
@@ -464,6 +465,7 @@ func buildExecutionContext(
 		AutonomousPermissionMode: string(usersettings.EffectiveAutonomousPermissionMode(settings.AutonomousPermissionMode)),
 		SessionDir:               sessionDir,
 		IntakeHandoffContents:    opts.IntakeHandoffContents,
+		IntakeHandoffDelivered:   opts.IntakeHandoffDelivered,
 		IntakeParentRunID:        opts.IntakeParentRunID,
 		AgentOverride:            opts.AgentOverride,
 		EngineRef:                engineRef,
@@ -785,15 +787,16 @@ func initialRunState(workflow *model.Workflow, rs *runState, opts *Options) *mod
 	}
 
 	state := &model.RunState{
-		RunID:                 rs.sessionID,
-		WorkflowFile:          opts.WorkflowFile,
-		WorkflowName:          workflow.Name,
-		Params:                rs.ctx.Params,
-		WorkflowHash:          rs.workflowHash,
-		IntakeHandoffContents: rs.ctx.IntakeHandoffContents,
-		IntakeParentRunID:     rs.ctx.IntakeParentRunID,
-		AgentOverride:         rs.ctx.AgentOverride,
-		ProfileSet:            resolvedProfileSet(rs.ctx),
+		RunID:                  rs.sessionID,
+		WorkflowFile:           opts.WorkflowFile,
+		WorkflowName:           workflow.Name,
+		Params:                 rs.ctx.Params,
+		WorkflowHash:           rs.workflowHash,
+		IntakeHandoffContents:  rs.ctx.IntakeHandoffContents,
+		IntakeHandoffDelivered: rs.ctx.IntakeHandoffDelivered(),
+		IntakeParentRunID:      rs.ctx.IntakeParentRunID,
+		AgentOverride:          rs.ctx.AgentOverride,
+		ProfileSet:             resolvedProfileSet(rs.ctx),
 	}
 	if stepID == "" {
 		return state
@@ -911,16 +914,17 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 	}
 
 	state := model.RunState{
-		RunID:                 filepath.Base(stateDir),
-		WorkflowFile:          ctx.WorkflowFile,
-		WorkflowName:          workflow.Name,
-		CurrentStep:           model.CurrentStep{Nested: nested},
-		Params:                ctx.Params,
-		WorkflowHash:          workflowHash,
-		IntakeHandoffContents: ctx.IntakeHandoffContents,
-		IntakeParentRunID:     ctx.IntakeParentRunID,
-		AgentOverride:         ctx.AgentOverride,
-		ProfileSet:            resolvedProfileSet(ctx),
+		RunID:                  filepath.Base(stateDir),
+		WorkflowFile:           ctx.WorkflowFile,
+		WorkflowName:           workflow.Name,
+		CurrentStep:            model.CurrentStep{Nested: nested},
+		Params:                 ctx.Params,
+		WorkflowHash:           workflowHash,
+		IntakeHandoffContents:  ctx.IntakeHandoffContents,
+		IntakeHandoffDelivered: ctx.IntakeHandoffDelivered(),
+		IntakeParentRunID:      ctx.IntakeParentRunID,
+		AgentOverride:          ctx.AgentOverride,
+		ProfileSet:             resolvedProfileSet(ctx),
 	}
 	_ = stateio.WriteState(&state, stateDir)
 }

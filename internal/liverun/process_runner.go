@@ -315,6 +315,7 @@ func (r *tuiProcessRunner) RunAgent(options *iexec.AgentProcessOptions) (iexec.P
 	if err := c.Start(); err != nil {
 		return iexec.ProcessResult{}, err
 	}
+	options.NotifyStarted()
 	err := c.Wait()
 	if errors.Is(err, exec.ErrWaitDelay) {
 		if c.Cancel != nil {

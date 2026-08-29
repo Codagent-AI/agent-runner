@@ -67,34 +67,49 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		}
 	}
 
+	intakeHandoffDelivered := state.IntakeHandoffDelivered
+	if !intakeHandoffDelivered && state.IntakeHandoffContents != "" {
+		intakeHandoffDelivered = nestedStateHasAgentSession(state.CurrentStep.Nested)
+	}
 	resumeOpts := &Options{
-		From:                  resumeState.fromStep,
-		WorkflowFile:          state.WorkflowFile,
-		SessionDir:            filepath.Dir(stateFilePath),
-		IntakeHandoffContents: state.IntakeHandoffContents,
-		IntakeParentRunID:     state.IntakeParentRunID,
-		AgentOverride:         state.AgentOverride,
-		Engine:                eng,
-		SessionIDs:            resumeState.sessionIDs,
-		SessionProfiles:       resumeState.sessionProfiles,
-		CapturedVariables:     resumeState.capturedVars,
-		LastSessionStepID:     resumeState.lastSessionStepID,
-		NamedSessions:         resumeState.namedSessions,
-		NamedSessionDecls:     resumeState.namedSessionDecls,
-		ChildState:            resumeState.childState,
-		InteractiveAttempt:    resumeInteractiveAttempt(&state),
-		ProcessRunner:         opts.ProcessRunner,
-		GlobExpander:          opts.GlobExpander,
-		Log:                   opts.Log,
-		SuspendHook:           opts.SuspendHook,
-		ResumeHook:            opts.ResumeHook,
-		PrepareStepHook:       opts.PrepareStepHook,
-		UIStepHandler:         opts.UIStepHandler,
-		ProfileStore:          opts.ProfileStore,
-		ProfileOverride:       profileOverride,
+		From:                   resumeState.fromStep,
+		WorkflowFile:           state.WorkflowFile,
+		SessionDir:             filepath.Dir(stateFilePath),
+		IntakeHandoffContents:  state.IntakeHandoffContents,
+		IntakeHandoffDelivered: intakeHandoffDelivered,
+		IntakeParentRunID:      state.IntakeParentRunID,
+		AgentOverride:          state.AgentOverride,
+		Engine:                 eng,
+		SessionIDs:             resumeState.sessionIDs,
+		SessionProfiles:        resumeState.sessionProfiles,
+		CapturedVariables:      resumeState.capturedVars,
+		LastSessionStepID:      resumeState.lastSessionStepID,
+		NamedSessions:          resumeState.namedSessions,
+		NamedSessionDecls:      resumeState.namedSessionDecls,
+		ChildState:             resumeState.childState,
+		InteractiveAttempt:     resumeInteractiveAttempt(&state),
+		ProcessRunner:          opts.ProcessRunner,
+		GlobExpander:           opts.GlobExpander,
+		Log:                    opts.Log,
+		SuspendHook:            opts.SuspendHook,
+		ResumeHook:             opts.ResumeHook,
+		PrepareStepHook:        opts.PrepareStepHook,
+		UIStepHandler:          opts.UIStepHandler,
+		ProfileStore:           opts.ProfileStore,
+		ProfileOverride:        profileOverride,
 	}
 
 	return PrepareRun(&workflow, state.Params, resumeOpts)
+}
+
+func nestedStateHasAgentSession(state *model.NestedStepState) bool {
+	if state == nil {
+		return false
+	}
+	if state.LastSessionStepID != "" || len(state.SessionIDs) != 0 || len(state.NamedSessions) != 0 {
+		return true
+	}
+	return nestedStateHasAgentSession(state.Child)
 }
 
 func warnIfWorkflowHashChanged(state *model.RunState, log interface{ Printf(string, ...any) }) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/codagent/agent-runner/internal/cli"
@@ -37,6 +38,7 @@ type AgentInvocation struct {
 	Log         Logger
 	SuspendHook func() error
 	ResumeHook  func() error
+	OnStarted   func()
 	direct      *directInvocation
 	Now         func() time.Time
 }
@@ -104,19 +106,23 @@ func InvokeAgent(input *AgentInvocation, runner ProcessRunner, fallbackLog Logge
 		Context: ctx, Args: input.Args, CaptureStdout: true,
 		Env: input.Env, DropEnv: dropEnv, Workdir: input.Workdir,
 		Prefix: input.Prefix, StdoutWrapper: stdoutWrapper,
-		StderrWrapper: stderrWrapper, Supervision: supervision,
+		StderrWrapper: stderrWrapper, Supervision: supervision, OnStarted: input.OnStarted, startedOnce: &sync.Once{},
 	}
 	direct := input.direct
 	if direct != nil {
 		invocationCopy := *direct
 		invocationCopy.spawnEnv = append([]string(nil), input.Env...)
 		invocationCopy.dropEnv = append([]string(nil), dropEnv...)
+		invocationCopy.onStarted = processOptions.NotifyStarted
 		direct = &invocationCopy
 	}
 	outcome, processResult, launched, runErr := runAgentProcess(
 		runner, input.Adapter, &processOptions, input.InvocationContext, log,
 		input.SuspendHook, input.ResumeHook, direct,
 	)
+	if launched {
+		processOptions.NotifyStarted()
+	}
 	extraction, usageErr := extractAgentUsage(input.Adapter, input.CLI, input.InvocationContext, processResult.Stdout)
 	attachInvocationIdentity(&extraction.Usage, input.CLI, input.Model, input.Effort)
 	result := AgentInvocationResult{

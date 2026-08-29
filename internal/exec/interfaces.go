@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -41,6 +42,19 @@ type AgentProcessOptions struct {
 	StdoutWrapper func(io.Writer) io.Writer
 	StderrWrapper func(io.Writer) io.Writer
 	Supervision   AgentProcessSupervision
+	OnStarted     func()
+	startedOnce   *sync.Once
+}
+
+// NotifyStarted reports successful process launch exactly once.
+func (o *AgentProcessOptions) NotifyStarted() {
+	if o != nil && o.OnStarted != nil {
+		if o.startedOnce == nil {
+			o.OnStarted()
+			return
+		}
+		o.startedOnce.Do(o.OnStarted)
+	}
 }
 
 // AgentProcessSupervision describes invocation-scoped process cleanup.
