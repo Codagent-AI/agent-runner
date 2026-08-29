@@ -154,6 +154,7 @@ type ExecutionContext struct {
 	WorkingDir               string
 	Workspace                *WorkspaceContext
 	ActiveRepository         *Repository
+	RepositoryIndex          *int
 	AutonomousBackend        string
 	AutonomousPermissionMode string
 
@@ -231,6 +232,7 @@ type RootContextOptions struct {
 	WorkingDir               string
 	Workspace                *WorkspaceContext
 	ActiveRepository         *Repository
+	RepositoryIndex          *int
 	AutonomousBackend        string
 	AutonomousPermissionMode string
 	SessionDir               string
@@ -296,6 +298,7 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		WorkingDir:               opts.WorkingDir,
 		Workspace:                opts.Workspace,
 		ActiveRepository:         opts.ActiveRepository,
+		RepositoryIndex:          opts.RepositoryIndex,
 		AutonomousBackend:        opts.AutonomousBackend,
 		AutonomousPermissionMode: opts.AutonomousPermissionMode,
 		SessionDir:               opts.SessionDir,
@@ -416,6 +419,7 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		WorkingDir:               parent.WorkingDir,
 		Workspace:                parent.Workspace,
 		ActiveRepository:         parent.ActiveRepository,
+		RepositoryIndex:          parent.RepositoryIndex,
 		AutonomousBackend:        parent.AutonomousBackend,
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
 		SessionDir:               parent.SessionDir,
@@ -506,6 +510,7 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		WorkingDir:               parent.WorkingDir,
 		Workspace:                parent.Workspace,
 		ActiveRepository:         parent.ActiveRepository,
+		RepositoryIndex:          parent.RepositoryIndex,
 		AutonomousBackend:        parent.AutonomousBackend,
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
 		SessionDir:               parent.SessionDir,

@@ -14,6 +14,7 @@ import (
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/stateio"
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestPrepareResume_LoadsExactRecordedVersion(t *testing.T) {
@@ -607,6 +608,64 @@ steps:
 	_, err := PrepareResume(filepath.Join(dir, "state.json"), &Options{})
 	if !errors.Is(err, ErrAlreadyCompleted) {
 		t.Fatalf("PrepareResume error = %v, want ErrAlreadyCompleted", err)
+	}
+}
+
+func TestPrepareResume_RepositoryFanoutSkipsCompletedRepositories(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace, backend, frontend, docs := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
+	initGitWorktree(t, workspace)
+	initGitWorktree(t, backend)
+	initGitWorktree(t, frontend)
+	initGitWorktree(t, docs)
+	workflowPath := filepath.Join(workspace, "resume-repositories-v1.0.yaml")
+	workflowYAML := `name: resume-repositories
+scope: repositories
+params:
+  - name: repositories
+steps:
+  - id: setup
+    command: setup {{repository_name}}
+  - id: deploy
+    command: deploy {{repository_name}}
+`
+	if err := os.WriteFile(workflowPath, []byte(workflowYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	failedRepository := 1
+	sessionDir := t.TempDir()
+	state := model.RunState{
+		WorkflowFile:    workflowPath,
+		WorkflowName:    "resume-repositories",
+		Params:          map[string]string{model.RepositoriesParam: "backend,frontend,docs"},
+		WorkflowHash:    stateio.ComputeWorkflowHash(workflowYAML),
+		RepositoryIndex: &failedRepository,
+		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+			StepID: "deploy", Completed: false,
+			SessionIDs: map[string]string{}, SessionProfiles: map[string]string{}, CapturedVariables: map[string]model.CapturedValue{},
+		}},
+	}
+	if err := stateio.WriteState(&state, sessionDir); err != nil {
+		t.Fatal(err)
+	}
+	spy := &repositorySpyRunner{}
+	handle, err := PrepareResume(filepath.Join(sessionDir, "state.json"), &Options{
+		WorkingDir: workspace,
+		ProfileStore: &config.Config{Repositories: map[string]config.Repository{
+			"backend": {Path: backend}, "frontend": {Path: frontend}, "docs": {Path: docs},
+		}},
+		ProcessRunner: spy,
+		GlobExpander:  &mockGlob{},
+		Log:           &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareResume() error = %v", err)
+	}
+	if result := ExecuteFromHandle(handle, nil); result != ResultSuccess {
+		t.Fatalf("ExecuteFromHandle() = %q, want success", result)
+	}
+	if diff := cmp.Diff([]string{"deploy 'frontend'", "setup 'docs'", "deploy 'docs'"}, spy.commands); diff != "" {
+		t.Fatalf("resumed commands mismatch (-want +got):\n%s", diff)
 	}
 }
 

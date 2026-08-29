@@ -87,6 +87,9 @@ type RunState struct {
 	// The state file is preserved (not deleted) so the TUI can still display
 	// the run's metadata after completion.
 	Completed bool `json:"completed,omitempty"`
+	// RepositoryIndex is the selected repository currently being executed at
+	// the persisted step boundary. It is absent for legacy runs.
+	RepositoryIndex *int `json:"repositoryIndex,omitempty"`
 }
 
 // ResolveResumeStepResult holds the outcome of resolving which step to resume from.

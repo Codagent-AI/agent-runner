@@ -3,6 +3,7 @@ package runner
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	osexec "os/exec"
@@ -181,13 +182,18 @@ func TestRunWorkflow_ScopedLaunchContracts(t *testing.T) {
 }
 
 type repositorySpyRunner struct {
-	workdirs []string
-	commands []string
+	workdirs    []string
+	commands    []string
+	err         error
+	failCommand string
 }
 
 func (r *repositorySpyRunner) RunShell(command string, _ bool, workdir string) (exec.ProcessResult, error) {
 	r.commands = append(r.commands, command)
 	r.workdirs = append(r.workdirs, workdir)
+	if r.err != nil && (r.failCommand == "" || strings.Contains(command, r.failCommand)) {
+		return exec.ProcessResult{ExitCode: 1}, r.err
+	}
 	return exec.ProcessResult{ExitCode: 0}, nil
 }
 
@@ -232,6 +238,81 @@ func TestRunWorkflow_FansRepositoryScopeOutInTargetOrder(t *testing.T) {
 	}
 	if len(spy.commands) != 2 || !strings.Contains(spy.commands[0], "frontend") || !strings.Contains(spy.commands[1], "backend") {
 		t.Fatalf("commands = %#v", spy.commands)
+	}
+}
+
+func TestRunStep_RepositoryFanoutPreservesExecutorErrorAndResumeCursor(t *testing.T) {
+	workspace := &model.WorkspaceContext{
+		Dir: "/coordination",
+		Repositories: map[string]model.Repository{
+			"backend":  {Name: "backend", Dir: "/repos/backend"},
+			"frontend": {Name: "frontend", Dir: "/repos/frontend"},
+			"docs":     {Name: "docs", Dir: "/repos/docs"},
+		},
+		Selected: []string{"backend", "frontend", "docs"},
+	}
+	ctx := &model.ExecutionContext{
+		Workspace:         workspace,
+		WorkingDir:        workspace.Dir,
+		ProjectRoot:       workspace.Dir,
+		Params:            map[string]string{},
+		SessionIDs:        map[string]string{},
+		SessionProfiles:   map[string]string{},
+		CapturedVariables: map[string]model.CapturedValue{},
+	}
+	wantErr := errors.New("frontend executor failed")
+	spy := &repositorySpyRunner{err: wantErr, failCommand: "frontend"}
+	rs := &runState{ctx: ctx, runner: spy, glob: &mockGlob{}, log: &mockLog{}}
+	step := &model.Step{ID: "deploy", Command: "deploy {{repository_name}}", Scope: model.ScopeRepositories}
+
+	outcome, _, err := runStep(step, rs)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("runStep() error = %v, want %v", err, wantErr)
+	}
+	if outcome != exec.OutcomeFailed {
+		t.Fatalf("runStep() outcome = %q, want failed", outcome)
+	}
+	if diff := cmp.Diff([]string{"deploy 'backend'", "deploy 'frontend'"}, spy.commands); diff != "" {
+		t.Fatalf("fan-out commands mismatch (-want +got):\n%s", diff)
+	}
+	if ctx.RepositoryIndex == nil || *ctx.RepositoryIndex != 1 {
+		t.Fatalf("persisted repository cursor = %v, want frontend index 1", ctx.RepositoryIndex)
+	}
+
+	stateDir := t.TempDir()
+	workflow := &model.Workflow{Name: "deploy", Steps: []model.Step{*step}}
+	writeStepState(step, ctx, workflow, "hash", stateDir, nil, false)
+	state, err := stateio.ReadState(filepath.Join(stateDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resume := restoreResumeContext(&state)
+	if !resume.repositoryIndexSet || resume.repositoryIndex != 1 {
+		t.Fatalf("restored repository cursor = (%d, %t), want (1, true)", resume.repositoryIndex, resume.repositoryIndexSet)
+	}
+
+	resumedCtx := &model.ExecutionContext{Workspace: workspace, WorkingDir: workspace.Dir, ProjectRoot: workspace.Dir}
+	resumed := &runState{
+		ctx:                  resumedCtx,
+		log:                  &mockLog{},
+		repositoryStartIndex: resume.repositoryIndex,
+		repositoryStartSet:   resume.repositoryIndexSet,
+	}
+	var repositories []string
+	var starts []int
+	result := executeRepositoryFanout(resumed, 4, func(start int) WorkflowResult {
+		repositories = append(repositories, resumed.ctx.ActiveRepository.Name)
+		starts = append(starts, start)
+		return ResultSuccess
+	})
+	if result != ResultSuccess {
+		t.Fatalf("executeRepositoryFanout() = %q", result)
+	}
+	if diff := cmp.Diff([]string{"frontend", "docs"}, repositories); diff != "" {
+		t.Fatalf("resumed repositories mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]int{4, 0}, starts); diff != "" {
+		t.Fatalf("resumed start indexes mismatch (-want +got):\n%s", diff)
 	}
 }
 

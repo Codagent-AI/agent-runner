@@ -45,6 +45,11 @@ type Options struct {
 	// so scope-aware runs can enforce their Git-backed workspace contract.
 	WorkflowScope model.Scope
 	Workspace     *model.WorkspaceContext
+	// RepositoryStartIndex resumes a repository fan-out at the persisted
+	// repository boundary. RepositoryStartSet distinguishes it from a fresh
+	// run's zero value.
+	RepositoryStartIndex int
+	RepositoryStartSet   bool
 	// IntakeHandoffContents carries the sealed intake handoff into a fresh run or
 	// restores it on resume. It is internal provenance, not a user parameter.
 	IntakeHandoffContents string
@@ -404,6 +409,8 @@ type runState struct {
 	log                  exec.Logger
 	runner               exec.ProcessRunner
 	glob                 exec.GlobExpander
+	repositoryStartIndex int
+	repositoryStartSet   bool
 }
 
 func initRunState(workflow *model.Workflow, params map[string]string, opts *Options) (*runState, error) {
@@ -487,18 +494,20 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	}
 
 	return &runState{
-		workflow:         *workflow,
-		ctx:              ctx,
-		until:            opts.Until,
-		sessionDir:       sessionDir,
-		sessionID:        sessionID,
-		workflowHash:     computeHash(opts.WorkflowFile),
-		auditLogger:      auditLogger,
-		metricsCollector: metricsCollector,
-		runStartTime:     now,
-		log:              log,
-		runner:           opts.ProcessRunner,
-		glob:             opts.GlobExpander,
+		workflow:             *workflow,
+		ctx:                  ctx,
+		until:                opts.Until,
+		sessionDir:           sessionDir,
+		sessionID:            sessionID,
+		workflowHash:         computeHash(opts.WorkflowFile),
+		auditLogger:          auditLogger,
+		metricsCollector:     metricsCollector,
+		runStartTime:         now,
+		log:                  log,
+		runner:               opts.ProcessRunner,
+		glob:                 opts.GlobExpander,
+		repositoryStartIndex: opts.RepositoryStartIndex,
+		repositoryStartSet:   opts.RepositoryStartSet,
 	}, nil
 }
 
@@ -615,9 +624,15 @@ func buildExecutionContext(
 		return auditLogger, metricsCollector, nil, err
 	}
 	var activeRepository *model.Repository
-	if workflow.Scope == model.ScopeRepositories && opts.Workspace != nil && len(opts.Workspace.Repositories) == 1 {
+	var repositoryIndex *int
+	if opts.RepositoryStartSet {
+		index := opts.RepositoryStartIndex
+		repositoryIndex = &index
+	} else if workflow.Scope == model.ScopeRepositories && opts.Workspace != nil && len(opts.Workspace.Repositories) == 1 {
 		if repository, ok := opts.Workspace.Repositories["default"]; ok {
 			activeRepository = &repository
+			index := 0
+			repositoryIndex = &index
 		}
 	}
 
@@ -631,6 +646,7 @@ func buildExecutionContext(
 		WorkingDir:               opts.WorkingDir,
 		Workspace:                opts.Workspace,
 		ActiveRepository:         activeRepository,
+		RepositoryIndex:          repositoryIndex,
 		AutonomousBackend:        string(settings.AutonomousBackend),
 		AutonomousPermissionMode: string(usersettings.EffectiveAutonomousPermissionMode(settings.AutonomousPermissionMode)),
 		SessionDir:               sessionDir,
@@ -848,10 +864,10 @@ func runStep(step *model.Step, rs *runState) (exec.StepOutcome, *exec.LoopResult
 	if step.Scope == model.ScopeRepositories && rs.ctx.ActiveRepository == nil {
 		var outcome exec.StepOutcome
 		var loopResult *exec.LoopResult
-		result := executeRepositoryFanout(rs, func() WorkflowResult {
-			var err error
-			outcome, loopResult, err = runStepOnce(step, rs)
-			if err != nil || outcome == exec.OutcomeFailed || outcome == exec.OutcomeAborted {
+		var executionErr error
+		result := executeRepositoryFanout(rs, 0, func(_ int) WorkflowResult {
+			outcome, loopResult, executionErr = runStepOnce(step, rs)
+			if executionErr != nil || outcome == exec.OutcomeFailed || outcome == exec.OutcomeAborted {
 				return ResultFailed
 			}
 			return ResultSuccess
@@ -859,7 +875,7 @@ func runStep(step *model.Step, rs *runState) (exec.StepOutcome, *exec.LoopResult
 		if result != ResultSuccess && outcome == "" {
 			outcome = exec.OutcomeFailed
 		}
-		return outcome, loopResult, nil
+		return outcome, loopResult, executionErr
 	}
 	return runStepOnce(step, rs)
 }
@@ -1002,6 +1018,7 @@ func initialRunState(workflow *model.Workflow, rs *runState, opts *Options) *mod
 		IntakeParentRunID:     rs.ctx.IntakeParentRunID,
 		AgentOverride:         rs.ctx.AgentOverride,
 		ProfileSet:            resolvedProfileSet(rs.ctx),
+		RepositoryIndex:       rs.ctx.RepositoryIndex,
 	}
 	if stepID == "" {
 		return state
@@ -1058,38 +1075,60 @@ func ExecuteFromHandle(h *RunHandle, opts *Options) WorkflowResult {
 
 func executeWorkflow(rs *runState, startIndex int) WorkflowResult {
 	if rs.workflow.Scope == model.ScopeRepositories && rs.ctx.ActiveRepository == nil {
-		return executeRepositoryFanout(rs, func() WorkflowResult {
-			return executeSteps(rs, startIndex)
+		return executeRepositoryFanout(rs, startIndex, func(repositoryStart int) WorkflowResult {
+			return executeSteps(rs, repositoryStart)
 		})
 	}
 	return executeSteps(rs, startIndex)
 }
 
-func executeRepositoryFanout(rs *runState, executeBody func() WorkflowResult) WorkflowResult {
+func executeRepositoryFanout(rs *runState, startIndex int, executeBody func(repositoryStart int) WorkflowResult) (result WorkflowResult) {
 	if rs.ctx.Workspace == nil || len(rs.ctx.Workspace.Selected) == 0 {
 		return ResultFailed
 	}
 	parent := rs.ctx
-	defer func() { rs.ctx = parent }()
-	for _, name := range parent.Workspace.Selected {
+	previousRepositoryIndex := parent.RepositoryIndex
+	defer func() {
+		rs.ctx = parent
+		rs.repositoryStartIndex = 0
+		rs.repositoryStartSet = false
+		if result == ResultSuccess {
+			parent.RepositoryIndex = previousRepositoryIndex
+		}
+	}()
+	resumeRepository := 0
+	if rs.repositoryStartSet {
+		resumeRepository = rs.repositoryStartIndex
+	}
+	for repositoryIndex, name := range parent.Workspace.Selected {
+		if repositoryIndex < resumeRepository {
+			continue
+		}
 		repository, ok := parent.Workspace.Repositories[name]
 		if !ok {
 			rs.log.Printf("agent-runner: selected repository %q is no longer configured\n", name)
 			return ResultFailed
 		}
-		rs.ctx = repositoryExecutionContext(parent, repository)
-		if result := executeBody(); result != ResultSuccess {
+		activeIndex := repositoryIndex
+		parent.RepositoryIndex = &activeIndex
+		rs.ctx = repositoryExecutionContext(parent, repository, repositoryIndex)
+		repositoryStart := 0
+		if repositoryIndex == resumeRepository {
+			repositoryStart = startIndex
+		}
+		if result := executeBody(repositoryStart); result != ResultSuccess {
 			return result
 		}
 	}
 	return ResultSuccess
 }
 
-func repositoryExecutionContext(parent *model.ExecutionContext, repository model.Repository) *model.ExecutionContext {
+func repositoryExecutionContext(parent *model.ExecutionContext, repository model.Repository, index int) *model.ExecutionContext {
 	child := *parent
 	child.ProjectRoot = repository.Dir
 	child.WorkingDir = repository.Dir
 	child.ActiveRepository = &repository
+	child.RepositoryIndex = &index
 	child.CapturedVariables = copyCapturedMap(parent.CapturedVariables)
 	child.SessionIDs = copyMap(parent.SessionIDs)
 	child.SessionProfiles = copyMap(parent.SessionProfiles)
@@ -1169,6 +1208,7 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 		IntakeParentRunID:     ctx.IntakeParentRunID,
 		AgentOverride:         ctx.AgentOverride,
 		ProfileSet:            resolvedProfileSet(ctx),
+		RepositoryIndex:       ctx.RepositoryIndex,
 	}
 	_ = stateio.WriteState(&state, stateDir)
 }

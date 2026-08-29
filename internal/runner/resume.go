@@ -70,6 +70,10 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	resumeOpts := &Options{
 		From:                  resumeState.fromStep,
 		WorkflowFile:          state.WorkflowFile,
+		WorkflowScope:         workflow.Scope,
+		Workspace:             opts.Workspace,
+		ProjectRoot:           opts.ProjectRoot,
+		WorkingDir:            opts.WorkingDir,
 		SessionDir:            filepath.Dir(stateFilePath),
 		IntakeHandoffContents: state.IntakeHandoffContents,
 		IntakeParentRunID:     state.IntakeParentRunID,
@@ -92,6 +96,8 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		UIStepHandler:         opts.UIStepHandler,
 		ProfileStore:          opts.ProfileStore,
 		ProfileOverride:       profileOverride,
+		RepositoryStartIndex:  resumeState.repositoryIndex,
+		RepositoryStartSet:    resumeState.repositoryIndexSet,
 	}
 
 	return PrepareRun(&workflow, state.Params, resumeOpts)
@@ -112,15 +118,17 @@ func resumeProfileOverride(override config.ProfileOverride, recorded string) con
 }
 
 type restoredResumeContext struct {
-	fromStep          string
-	sessionIDs        map[string]string
-	sessionProfiles   map[string]string
-	capturedVars      map[string]model.CapturedValue
-	lastSessionStepID string
-	namedSessions     map[string]string
-	namedSessionDecls map[string]string
-	childState        *model.NestedStepState
-	completed         bool
+	fromStep           string
+	sessionIDs         map[string]string
+	sessionProfiles    map[string]string
+	capturedVars       map[string]model.CapturedValue
+	lastSessionStepID  string
+	namedSessions      map[string]string
+	namedSessionDecls  map[string]string
+	childState         *model.NestedStepState
+	completed          bool
+	repositoryIndex    int
+	repositoryIndexSet bool
 }
 
 func restoreResumeContext(state *model.RunState) restoredResumeContext {
@@ -129,14 +137,16 @@ func restoreResumeContext(state *model.RunState) restoredResumeContext {
 	}
 	nested := state.CurrentStep.Nested
 	result := restoredResumeContext{
-		fromStep:          nested.StepID,
-		sessionIDs:        nested.SessionIDs,
-		sessionProfiles:   nested.SessionProfiles,
-		capturedVars:      nested.CapturedVariables,
-		lastSessionStepID: nested.LastSessionStepID,
-		namedSessions:     nested.NamedSessions,
-		namedSessionDecls: nested.NamedSessionDecls,
-		completed:         nested.Completed,
+		fromStep:           nested.StepID,
+		sessionIDs:         nested.SessionIDs,
+		sessionProfiles:    nested.SessionProfiles,
+		capturedVars:       nested.CapturedVariables,
+		lastSessionStepID:  nested.LastSessionStepID,
+		namedSessions:      nested.NamedSessions,
+		namedSessionDecls:  nested.NamedSessionDecls,
+		completed:          nested.Completed,
+		repositoryIndex:    dereferenceRepositoryIndex(state.RepositoryIndex),
+		repositoryIndexSet: state.RepositoryIndex != nil,
 	}
 	if nested.Iteration != nil {
 		// Top-level loop step captured mid-iteration. Carry the iteration (and
@@ -148,6 +158,13 @@ func restoreResumeContext(state *model.RunState) restoredResumeContext {
 		result.childState = nested.Child
 	}
 	return result
+}
+
+func dereferenceRepositoryIndex(index *int) int {
+	if index == nil {
+		return 0
+	}
+	return *index
 }
 
 func resumeAlreadyCompleted(stateFilePath string, state *model.RunState) bool {
