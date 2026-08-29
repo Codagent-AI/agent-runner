@@ -1,5 +1,5 @@
 # Test that resuming a parent workflow after a sub-workflow retry loop exhausts
-# preserves the exhausted loop position instead of restarting the loop body.
+# starts a fresh bounded retry cycle instead of immediately failing again.
 
 ! exec agent-runner top
 stdout 'step "outer" failed'
@@ -11,7 +11,7 @@ stdout '^3$'
 stdout 'step "outer" failed'
 
 exec cat attempts.txt
-stdout '^3$'
+stdout '^6$'
 
 -- .agent-runner/workflows/top-v1.0.yaml --
 name: top

@@ -58,6 +58,11 @@ func executeCountedLoop(
 	startTime := time.Now()
 
 	resumeIter, resumeBody, resumed := consumeLoopResume(ctx, stepID)
+	if resumed && resumeIter >= maxIter && hasBreakCondition(steps) {
+		resumeIter = 0
+		resumeBody = nil
+		opts.ResumeFromIteration = 0
+	}
 	if resumeIter > opts.ResumeFromIteration {
 		opts.ResumeFromIteration = resumeIter
 	}

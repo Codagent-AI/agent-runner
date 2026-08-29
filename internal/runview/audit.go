@@ -1026,7 +1026,7 @@ func applyStepEnd(n *StepNode, data map[string]any) {
 		n.ErrorMessage = s
 	}
 	if v, ok := intField(data, "iterations_completed"); ok {
-		n.IterationsCompleted = v
+		n.IterationsCompleted = cumulativeLoopProgress(n, v)
 	}
 	if v, ok := boolField(data, "break_triggered"); ok {
 		n.BreakTriggered = v
@@ -1138,6 +1138,29 @@ func float64FieldValue(value any) (float64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// cumulativeLoopProgress converts the executor's attempt-local completion
+// count into the absolute position shown by the run view. On resume, iteration
+// starts belonging to the current attempt have a later replay ordinal than the
+// loop's latest step_start, so their lowest index is the attempt's offset.
+func cumulativeLoopProgress(loop *StepNode, attemptCompleted int) int {
+	startIndex := -1
+	for _, child := range loop.Children {
+		if child.Type != NodeIteration || child.StartOrdinal <= loop.StartOrdinal {
+			continue
+		}
+		if startIndex < 0 || child.IterationIndex < startIndex {
+			startIndex = child.IterationIndex
+		}
+	}
+	if startIndex > 0 {
+		attemptCompleted += startIndex
+	}
+	if total := loopTotal(loop); total > 0 && attemptCompleted > total {
+		return total
+	}
+	return attemptCompleted
 }
 
 func applyIterationStart(n *StepNode, data map[string]any) {
