@@ -42,6 +42,15 @@ func TestNew_InputsCreatedForEachParam(t *testing.T) {
 	}
 }
 
+func TestNew_HidesImplicitRepositoryTarget(t *testing.T) {
+	entry := entryWithParams([]model.Param{{Name: model.RepositoriesParam}, {Name: "change_name"}})
+	entry.HideImplicitRepositoryTargets = true
+	m := paramform.New(&entry)
+	if m.InputCount() != 1 || m.InputName(0) != "change_name" {
+		t.Fatalf("visible inputs = %d/%q, want only change_name", m.InputCount(), m.InputName(0))
+	}
+}
+
 // TestNew_DefaultPrePopulated verifies params with Default have their input pre-populated.
 func TestNew_DefaultPrePopulated(t *testing.T) {
 	entry := entryWithParams([]model.Param{

@@ -1577,7 +1577,7 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.startRunReady = true
 			return s, tea.Quit
 		}
-		if len(entry.Params) == 0 {
+		if len(entry.VisibleParams()) == 0 {
 			s.startRunReady = true
 			return s, tea.Quit
 		}

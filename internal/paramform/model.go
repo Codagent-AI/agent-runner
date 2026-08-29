@@ -28,9 +28,11 @@ type Model struct {
 
 // New constructs a param form for the workflow entry.
 func New(entry *discovery.WorkflowEntry) *Model {
-	inputs := make([]textinput.Model, 0, len(entry.Params))
-	errors := make([]string, len(entry.Params))
-	for i, param := range entry.Params {
+	visibleEntry := *entry
+	visibleEntry.Params = entry.VisibleParams()
+	inputs := make([]textinput.Model, 0, len(visibleEntry.Params))
+	errors := make([]string, len(visibleEntry.Params))
+	for i, param := range visibleEntry.Params {
 		input := textinput.New()
 		input.Prompt = ""
 		input.SetValue(param.Default)
@@ -49,7 +51,7 @@ func New(entry *discovery.WorkflowEntry) *Model {
 	}
 
 	return &Model{
-		entry:   *entry,
+		entry:   visibleEntry,
 		inputs:  inputs,
 		focused: focused,
 		errors:  errors,

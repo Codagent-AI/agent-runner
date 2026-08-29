@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/workflowcatalog"
@@ -35,7 +36,27 @@ type WorkflowEntry struct {
 	SourcePath    string        // exact selected workflow path
 	Namespace     string        // builtin namespace (e.g. "core"), empty for project/user
 	Scope         Scope
-	ParseError    string // non-empty if the file could not be loaded or parsed
+	WorkflowScope model.Scope
+	// HideImplicitRepositoryTargets tells launch UIs that a repository-scoped
+	// workflow will receive the transparent default target internally.
+	HideImplicitRepositoryTargets bool
+	ParseError                    string // non-empty if the file could not be loaded or parsed
+}
+
+// VisibleParams returns the parameters a launch UI must ask the user for.
+// The implicit default repository target is runner-owned control state, not a
+// user-entered value.
+func (e WorkflowEntry) VisibleParams() []model.Param {
+	if !e.HideImplicitRepositoryTargets {
+		return e.Params
+	}
+	visible := make([]model.Param, 0, len(e.Params)-1)
+	for _, param := range e.Params {
+		if param.Name != model.RepositoriesParam {
+			visible = append(visible, param)
+		}
+	}
+	return visible
 }
 
 // GroupMetadata describes the display metadata for a workflow group.
@@ -81,7 +102,18 @@ func UserWorkflowsDir() string {
 // scope list themselves, so a scope added here cannot reach one and not the
 // other.
 func EnumerateForProject(projectDir string) []WorkflowEntry {
-	return Enumerate(builtinworkflows.FS, projectDir, UserWorkflowsDir())
+	entries := Enumerate(builtinworkflows.FS, projectDir, UserWorkflowsDir())
+	if projectDir == "" {
+		return entries
+	}
+	cfg, err := config.Load(filepath.Join(projectDir, ".agent-runner", "config.yaml"))
+	if err != nil || len(cfg.Repositories) != 0 {
+		return entries
+	}
+	for i := range entries {
+		entries[i].HideImplicitRepositoryTargets = entries[i].WorkflowScope == model.ScopeRepositories
+	}
+	return entries
 }
 
 // Enumerate discovers workflows from three sources in order:
@@ -276,6 +308,7 @@ func completeWorkflowEntry(
 		entry.Description = selectedWorkflow.Description
 		entry.Hidden = selectedWorkflow.Hidden
 		entry.Params = selectedWorkflow.Params
+		entry.WorkflowScope = selectedWorkflow.Scope
 	}
 }
 
