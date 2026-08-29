@@ -469,20 +469,9 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		cleanupSession(nil)
 		return nil, err
 	}
-	if opts.Workspace != nil && len(opts.Workspace.Selected) > 0 {
-		targets := make([]repositorylock.Target, 0, len(opts.Workspace.Selected))
-		for _, name := range opts.Workspace.Selected {
-			repository, ok := opts.Workspace.Repositories[name]
-			if !ok {
-				cleanupSession(nil)
-				return nil, fmt.Errorf("selected repository %q is no longer configured", name)
-			}
-			targets = append(targets, repositorylock.Target{Root: repository.Dir, RunID: sessionID})
-		}
-		if err := repositorylock.AcquireAll(targets); err != nil {
-			cleanupSession(nil)
-			return nil, fmt.Errorf("acquire selected repository locks: %w", err)
-		}
+	if err := acquireWorkspaceRepositoryLocks(opts.Workspace, sessionID); err != nil {
+		cleanupSession(nil)
+		return nil, err
 	}
 
 	if opts.SessionDir == "" {
@@ -525,6 +514,24 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		repositoryStartIndex: opts.RepositoryStartIndex,
 		repositoryStartSet:   opts.RepositoryStartSet,
 	}, nil
+}
+
+func acquireWorkspaceRepositoryLocks(workspace *model.WorkspaceContext, runID string) error {
+	if workspace == nil || len(workspace.Selected) == 0 {
+		return nil
+	}
+	targets := make([]repositorylock.Target, 0, len(workspace.Selected))
+	for _, name := range workspace.Selected {
+		repository, ok := workspace.Repositories[name]
+		if !ok {
+			return fmt.Errorf("selected repository %q is no longer configured", name)
+		}
+		targets = append(targets, repositorylock.Target{Root: repository.Dir, RunID: runID})
+	}
+	if err := repositorylock.AcquireAll(targets); err != nil {
+		return fmt.Errorf("acquire selected repository locks: %w", err)
+	}
+	return nil
 }
 
 func prepareScopeAndParams(workflow *model.Workflow, params map[string]string, opts *Options) (string, error) {

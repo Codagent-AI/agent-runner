@@ -58,3 +58,33 @@ func TestAcquireAll_RecoversStaleOwner(t *testing.T) {
 		t.Fatalf("lock metadata = %s, want recovered owner", contents)
 	}
 }
+
+func TestAcquireAll_DoesNotReleaseExistingSameRunLockWhenLaterTargetFails(t *testing.T) {
+	root := t.TempDir()
+	lockRoot = func() (string, error) { return root, nil }
+	t.Cleanup(func() { lockRoot = defaultLockRoot })
+
+	held := t.TempDir()
+	contended := t.TempDir()
+	if err := AcquireAll([]Target{{Root: held, RunID: "run-a"}}); err != nil {
+		t.Fatalf("acquire held lock: %v", err)
+	}
+	if err := AcquireAll([]Target{{Root: contended, RunID: "run-b"}}); err != nil {
+		t.Fatalf("acquire contended lock: %v", err)
+	}
+	if err := AcquireAll([]Target{{Root: held, RunID: "run-a"}, {Root: contended, RunID: "run-a"}}); err == nil {
+		t.Fatal("AcquireAll() succeeded despite later contended repository")
+	}
+
+	canonicalHeld, err := canonicalRoot(held)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(root, lockDirectory, lockName(canonicalHeld)))
+	if err != nil {
+		t.Fatalf("read original lock after failed group acquisition: %v", err)
+	}
+	if !strings.Contains(string(contents), `"run_id":"run-a"`) {
+		t.Fatalf("original lock metadata = %s, want run-a owner", contents)
+	}
+}

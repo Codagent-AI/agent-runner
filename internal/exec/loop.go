@@ -139,9 +139,7 @@ func executeForEachLoop(
 	if err != nil {
 		return LoopResult{Outcome: OutcomeFailed, LastIteration: -1}, err
 	}
-	if ctx.WorkflowScope != model.ScopeLegacy && !filepath.IsAbs(pattern) {
-		pattern = filepath.Join(ctx.WorkingDir, pattern)
-	}
+	pattern = resolveLoopGlob(pattern, ctx)
 
 	matches, err := globExp.Expand(pattern)
 	if err != nil {
@@ -225,6 +223,13 @@ func executeForEachLoop(
 
 	emitLoopEnd(ctx, prefix, startTime, step, completed, false, "success")
 	return LoopResult{Outcome: OutcomeSuccess, LastIteration: lastIter}, nil
+}
+
+func resolveLoopGlob(pattern string, ctx *model.ExecutionContext) string {
+	if ctx.WorkflowScope != model.ScopeLegacy && !filepath.IsAbs(pattern) {
+		return filepath.Join(ctx.WorkingDir, pattern)
+	}
+	return pattern
 }
 
 // recordLoopIterationProgress stores the loop step's current iteration index

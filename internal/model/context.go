@@ -464,19 +464,19 @@ func NewRepositoryExecutionContext(parent *ExecutionContext, repository Reposito
 }
 
 func copyStringMap(source map[string]string) map[string]string {
-	copy := make(map[string]string, len(source))
+	cloned := make(map[string]string, len(source))
 	for key, value := range source {
-		copy[key] = value
+		cloned[key] = value
 	}
-	return copy
+	return cloned
 }
 
 func copyCapturedValues(source map[string]CapturedValue) map[string]CapturedValue {
-	copy := make(map[string]CapturedValue, len(source))
+	cloned := make(map[string]CapturedValue, len(source))
 	for key, value := range source {
-		copy[key] = value
+		cloned[key] = value
 	}
-	return copy
+	return cloned
 }
 
 // SubWorkflowContextOptions configures a new sub-workflow context.

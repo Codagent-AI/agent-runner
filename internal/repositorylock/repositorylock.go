@@ -85,13 +85,16 @@ func AcquireAll(targets []Target) error {
 	acquired := make([]string, 0, len(canonicalTargets))
 	for _, target := range canonicalTargets {
 		path := filepath.Join(directory, lockName(target.Root))
-		if err := acquireOne(path, target); err != nil {
+		created, err := acquireOne(path, target)
+		if err != nil {
 			for _, acquiredPath := range acquired {
 				_ = os.Remove(acquiredPath)
 			}
 			return err
 		}
-		acquired = append(acquired, path)
+		if created {
+			acquired = append(acquired, path)
+		}
 	}
 	return nil
 }
@@ -139,34 +142,34 @@ func acquireTransientGuard(path string) error {
 	return errors.New("repository lock registry is busy")
 }
 
-func acquireOne(path string, target Target) error {
+func acquireOne(path string, target Target) (bool, error) {
 	owner := metadata{Root: target.Root, RunID: target.RunID, PID: os.Getpid(), CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	if err := createLock(path, owner); err == nil {
-		return nil
+		return true, nil
 	} else if !errors.Is(err, fs.ErrExist) {
-		return fmt.Errorf("acquire repository lock for %s: %w", target.Root, err)
+		return false, fmt.Errorf("acquire repository lock for %s: %w", target.Root, err)
 	}
 
 	existing, err := readMetadata(path)
 	if err == nil && processLive(existing.PID) {
 		if existing.PID == os.Getpid() && existing.RunID == target.RunID {
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("repository %s is locked by run %q (PID %d)", existing.Root, existing.RunID, existing.PID)
+		return false, fmt.Errorf("repository %s is locked by run %q (PID %d)", existing.Root, existing.RunID, existing.PID)
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("recover stale lock for repository %s: %w", target.Root, err)
+		return false, fmt.Errorf("recover stale lock for repository %s: %w", target.Root, err)
 	}
 	if err := createLock(path, owner); err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			latest, readErr := readMetadata(path)
 			if readErr == nil {
-				return fmt.Errorf("repository %s is locked by run %q (PID %d)", latest.Root, latest.RunID, latest.PID)
+				return false, fmt.Errorf("repository %s is locked by run %q (PID %d)", latest.Root, latest.RunID, latest.PID)
 			}
 		}
-		return fmt.Errorf("acquire recovered repository lock for %s: %w", target.Root, err)
+		return false, fmt.Errorf("acquire recovered repository lock for %s: %w", target.Root, err)
 	}
-	return nil
+	return true, nil
 }
 
 func createLock(path string, owner metadata) error {
@@ -191,7 +194,7 @@ func createLock(path string, owner metadata) error {
 }
 
 func readMetadata(path string) (metadata, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path is a lock filename derived from a SHA-256 digest in the private lock registry.
 	if err != nil {
 		return metadata{}, err
 	}
