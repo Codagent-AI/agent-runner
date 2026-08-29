@@ -177,6 +177,25 @@ func TestParseConfiguredSimplePlanAcceptsMonolithicTaskFile(t *testing.T) {
 	}
 }
 
+func TestParseConfiguredSimplePlanIgnoresOrdinaryRepositorySectionHeading(t *testing.T) {
+	workspace := t.TempDir()
+	changeDir := filepath.Join(workspace, "openspec", "changes", "demo")
+	writeTaskGroupFile(t, filepath.Join(changeDir, "tasks.md"), "## Repository setup\n\n# Small change\n")
+
+	plan, err := Parse(Options{
+		WorkspaceDir: workspace,
+		ChangeDir:    changeDir,
+		PlanKind:     Simple,
+		Repositories: []string{"backend"},
+	})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if got, want := filepath.Base(plan.Groups[0].Tasks[0]), "tasks.md"; got != want {
+		t.Fatalf("task file = %q, want %q", got, want)
+	}
+}
+
 func TestParseConfiguredGroupsRejectsInvalidOwnership(t *testing.T) {
 	tests := []struct {
 		name         string

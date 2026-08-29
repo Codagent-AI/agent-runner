@@ -106,7 +106,7 @@ func declaresRepositoryGroups(changeDir string) bool {
 		return false
 	}
 	for _, line := range strings.Split(string(index), "\n") {
-		if strings.HasPrefix(line, "## Repository") {
+		if repositoryHeading.MatchString(line) {
 			return true
 		}
 	}
