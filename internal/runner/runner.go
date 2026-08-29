@@ -49,8 +49,11 @@ type Options struct {
 	// RepositoryStartIndex resumes a repository fan-out at the persisted
 	// repository boundary. RepositoryStartSet distinguishes it from a fresh
 	// run's zero value.
-	RepositoryStartIndex int
-	RepositoryStartSet   bool
+	RepositoryStartIndex      int
+	RepositoryStartSet        bool
+	RepositoryFrame           *model.RepositoryFrame
+	WorkspacePullRequestURL   string
+	RepositoryPullRequestURLs map[string]string
 	// IntakeHandoffContents carries the sealed intake handoff into a fresh run or
 	// restores it on resume. It is internal provenance, not a user parameter.
 	IntakeHandoffContents string
@@ -434,6 +437,9 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	if err != nil {
 		return nil, err
 	}
+	if opts.RepositoryFrame == nil && opts.Workspace != nil && len(opts.Workspace.Selected) > 0 {
+		opts.RepositoryFrame = newRepositoryFrame(opts.Workspace)
+	}
 
 	if opts.Engine != nil {
 		if err := opts.Engine.ValidateWorkflow(workflow, params, opts.WorkflowFile); err != nil {
@@ -451,6 +457,10 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	}
 	cleanupSession := newRunSessionCleanup(sessionDir, opts)
 	if err := materializeBundledAssets(sessionDir, opts.WorkflowFile); err != nil {
+		cleanupSession(nil)
+		return nil, err
+	}
+	if err := writeRepositoryEvidenceIndex(sessionDir, opts.Workspace); err != nil {
 		cleanupSession(nil)
 		return nil, err
 	}
@@ -530,6 +540,57 @@ func acquireWorkspaceRepositoryLocks(workspace *model.WorkspaceContext, runID st
 	}
 	if err := repositorylock.AcquireAll(targets); err != nil {
 		return fmt.Errorf("acquire selected repository locks: %w", err)
+	}
+	return nil
+}
+
+func newRepositoryFrame(workspace *model.WorkspaceContext) *model.RepositoryFrame {
+	frame := &model.RepositoryFrame{Repositories: make([]model.RepositoryExecutionState, 0, len(workspace.Selected))}
+	for _, name := range workspace.Selected {
+		repository := workspace.Repositories[name]
+		frame.Repositories = append(frame.Repositories, model.RepositoryExecutionState{
+			Identity: model.RepositoryIdentity{Name: repository.Name, Dir: repository.Dir},
+			Status:   model.RepositoryPending,
+		})
+	}
+	return frame
+}
+
+type repositoryEvidenceIndex struct {
+	Repositories []repositoryEvidenceEntry `json:"repositories"`
+}
+
+type repositoryEvidenceEntry struct {
+	Name      string `json:"name"`
+	OutputDir string `json:"output_dir"`
+}
+
+// writeRepositoryEvidenceIndex establishes stable, workspace-readable output
+// locations before any scoped body runs. The array preserves repository
+// selection order; the transparent implicit repository deliberately keeps the
+// historical output directory.
+func writeRepositoryEvidenceIndex(sessionDir string, workspace *model.WorkspaceContext) error {
+	if workspace == nil || len(workspace.Selected) == 0 {
+		return nil
+	}
+	outputDir := filepath.Join(sessionDir, "output")
+	index := repositoryEvidenceIndex{Repositories: make([]repositoryEvidenceEntry, 0, len(workspace.Selected))}
+	for _, name := range workspace.Selected {
+		repository, ok := workspace.Repositories[name]
+		if !ok {
+			return fmt.Errorf("selected repository %q is no longer configured", name)
+		}
+		repositoryOutputDir := outputDir
+		if repository.Name != "default" {
+			repositoryOutputDir = filepath.Join(outputDir, "repositories", repository.Name)
+		}
+		if err := os.MkdirAll(repositoryOutputDir, 0o750); err != nil {
+			return fmt.Errorf("create repository output directory for %q: %w", repository.Name, err)
+		}
+		index.Repositories = append(index.Repositories, repositoryEvidenceEntry{Name: repository.Name, OutputDir: repositoryOutputDir})
+	}
+	if err := stateio.WriteJSONAtomic(filepath.Join(outputDir, "repository-evidence-index.json"), index); err != nil {
+		return fmt.Errorf("write repository evidence index: %w", err)
 	}
 	return nil
 }
@@ -670,6 +731,7 @@ func buildExecutionContext(
 		Workspace:                opts.Workspace,
 		ActiveRepository:         activeRepository,
 		RepositoryIndex:          repositoryIndex,
+		RepositoryFrame:          opts.RepositoryFrame,
 		AutonomousBackend:        string(settings.AutonomousBackend),
 		AutonomousPermissionMode: string(usersettings.EffectiveAutonomousPermissionMode(settings.AutonomousPermissionMode)),
 		SessionDir:               sessionDir,
@@ -693,6 +755,7 @@ func buildExecutionContext(
 		ctx.LastSessionStepID = opts.LastSessionStepID
 	}
 	ctx.InteractiveAttempt = opts.InteractiveAttempt
+	ctx.PullRequestCaptureState.RestorePullRequestURLs(opts.WorkspacePullRequestURL, opts.RepositoryPullRequestURLs)
 	if opts.From != "" {
 		ctx.WorkflowResumed = true
 	}
@@ -1026,6 +1089,7 @@ func initialRunState(workflow *model.Workflow, rs *runState, opts *Options) *mod
 		ProfileSet:            resolvedProfileSet(rs.ctx),
 		RepositoryIndex:       rs.ctx.RepositoryIndex,
 	}
+	persistRepositoryIdentity(state, rs.ctx)
 	if stepID == "" {
 		return state
 	}
@@ -1110,6 +1174,9 @@ func executeRepositoryFanout(rs *runState, startIndex int, executeBody func(repo
 		if repositoryIndex < resumeRepository {
 			continue
 		}
+		if repositoryEntry(parent.RepositoryFrame, repositoryIndex) != nil && repositoryEntry(parent.RepositoryFrame, repositoryIndex).Status == model.RepositoryCompleted {
+			continue
+		}
 		repository, ok := parent.Workspace.Repositories[name]
 		if !ok {
 			rs.log.Printf("agent-runner: selected repository %q is no longer configured\n", name)
@@ -1118,12 +1185,24 @@ func executeRepositoryFanout(rs *runState, startIndex int, executeBody func(repo
 		activeIndex := repositoryIndex
 		parent.RepositoryIndex = &activeIndex
 		rs.ctx = repositoryExecutionContext(parent, repository, repositoryIndex)
+		if entry := repositoryEntry(parent.RepositoryFrame, repositoryIndex); entry != nil {
+			entry.Status = model.RepositoryActive
+			persistRepositoryFrame(rs.sessionDir, parent)
+		}
 		repositoryStart := 0
 		if repositoryIndex == resumeRepository {
 			repositoryStart = startIndex
 		}
 		if result := executeBody(repositoryStart); result != ResultSuccess {
+			if entry := repositoryEntry(parent.RepositoryFrame, repositoryIndex); entry != nil {
+				entry.Status = model.RepositoryFailed
+				persistRepositoryFrame(rs.sessionDir, parent)
+			}
 			return result
+		}
+		if entry := repositoryEntry(parent.RepositoryFrame, repositoryIndex); entry != nil {
+			entry.Status = model.RepositoryCompleted
+			persistRepositoryFrame(rs.sessionDir, parent)
 		}
 	}
 	return ResultSuccess
@@ -1131,6 +1210,22 @@ func executeRepositoryFanout(rs *runState, startIndex int, executeBody func(repo
 
 func repositoryExecutionContext(parent *model.ExecutionContext, repository model.Repository, index int) *model.ExecutionContext {
 	return model.NewRepositoryExecutionContext(parent, repository, index)
+}
+
+func repositoryEntry(frame *model.RepositoryFrame, index int) *model.RepositoryExecutionState {
+	if frame == nil || index < 0 || index >= len(frame.Repositories) {
+		return nil
+	}
+	return &frame.Repositories[index]
+}
+
+func persistRepositoryFrame(stateDir string, ctx *model.ExecutionContext) {
+	state, err := stateio.ReadState(filepath.Join(stateDir, "state.json"))
+	if err != nil {
+		return
+	}
+	persistRepositoryIdentity(&state, ctx)
+	_ = stateio.WriteState(&state, stateDir)
 }
 
 // RunWorkflow executes a workflow with the given parameters.
@@ -1194,6 +1289,14 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 		Child:              child,
 		InteractiveAttempt: ctx.InteractiveAttempt,
 	}
+	if ctx.ActiveRepository != nil && ctx.RepositoryIndex != nil {
+		if entry := repositoryEntry(ctx.RepositoryFrame, *ctx.RepositoryIndex); entry != nil {
+			entry.Nested = nested
+			if completed {
+				entry.Status = model.RepositoryActive
+			}
+		}
+	}
 
 	state := model.RunState{
 		RunID:                 filepath.Base(stateDir),
@@ -1208,7 +1311,43 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 		ProfileSet:            resolvedProfileSet(ctx),
 		RepositoryIndex:       ctx.RepositoryIndex,
 	}
+	persistRepositoryIdentity(&state, ctx)
 	_ = stateio.WriteState(&state, stateDir)
+}
+
+func persistRepositoryIdentity(state *model.RunState, ctx *model.ExecutionContext) {
+	if ctx.PullRequestCaptureState != nil {
+		state.WorkspacePullRequestURL, state.RepositoryPullRequestURLs = ctx.PullRequestCaptureState.PullRequestURLs()
+	}
+	if ctx.Workspace == nil || len(ctx.Workspace.Selected) == 0 {
+		return
+	}
+	state.WorkspaceNamespace = workspaceNamespaceState(ctx)
+	state.WorkspaceDir = ctx.Workspace.Dir
+	state.SelectedRepositories = repositoryIdentities(ctx.Workspace)
+	state.RepositoryFrame = ctx.RepositoryFrame
+}
+
+func workspaceNamespaceState(ctx *model.ExecutionContext) *model.NamespaceState {
+	workspace := ctx
+	for workspace.ParentContext != nil {
+		workspace = workspace.ParentContext
+	}
+	return &model.NamespaceState{
+		SessionIDs: copyMap(workspace.SessionIDs), SessionProfiles: copyMap(workspace.SessionProfiles),
+		CapturedVariables: copyCapturedMap(workspace.CapturedVariables), LastSessionStepID: workspace.LastSessionStepID,
+		NamedSessions: copyMap(workspace.NamedSessions), NamedSessionDecls: copyMap(workspace.NamedSessionDecls),
+	}
+}
+
+func repositoryIdentities(workspace *model.WorkspaceContext) []model.RepositoryIdentity {
+	identities := make([]model.RepositoryIdentity, 0, len(workspace.Selected))
+	for _, name := range workspace.Selected {
+		if repository, ok := workspace.Repositories[name]; ok {
+			identities = append(identities, model.RepositoryIdentity{Name: repository.Name, Dir: repository.Dir})
+		}
+	}
+	return identities
 }
 
 func resolvedProfileSet(ctx *model.ExecutionContext) string {

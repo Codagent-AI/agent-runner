@@ -91,27 +91,59 @@ func (s *AgentDeprecationState) Mark(alias string) bool {
 	return true
 }
 
-// PullRequestCaptureState tracks the most recently observed pull-request URL
-// for one workflow run. All nested execution contexts share this state.
+// PullRequestCaptureState tracks pull-request URLs by execution namespace.
+// Workspace and explicit repositories intentionally have separate last values,
+// so recording a frontend URL cannot suppress or replace a backend URL.
 type PullRequestCaptureState struct {
-	mu      sync.Mutex
-	lastURL string
+	mu             sync.Mutex
+	workspaceURL   string
+	repositoryURLs map[string]string
 }
 
 // NewPullRequestCaptureState creates empty run-scoped PR capture state.
 func NewPullRequestCaptureState() *PullRequestCaptureState {
-	return &PullRequestCaptureState{}
+	return &PullRequestCaptureState{repositoryURLs: make(map[string]string)}
 }
 
-// Mark records url and reports whether it differs from the last observation.
-func (s *PullRequestCaptureState) Mark(url string) bool {
+// Mark records url in its scope and reports whether it differs from that
+// scope's last observation.
+func (s *PullRequestCaptureState) Mark(repositoryName, url string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if url == s.lastURL {
+	if repositoryName == "" {
+		if url == s.workspaceURL {
+			return false
+		}
+		s.workspaceURL = url
+		return true
+	}
+	if url == s.repositoryURLs[repositoryName] {
 		return false
 	}
-	s.lastURL = url
+	s.repositoryURLs[repositoryName] = url
 	return true
+}
+
+// PullRequestURLs returns a detached persistence snapshot.
+func (s *PullRequestCaptureState) PullRequestURLs() (string, map[string]string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	repositories := make(map[string]string, len(s.repositoryURLs))
+	for name, url := range s.repositoryURLs {
+		repositories[name] = url
+	}
+	return s.workspaceURL, repositories
+}
+
+// RestorePullRequestURLs replaces the durable values before resume begins.
+func (s *PullRequestCaptureState) RestorePullRequestURLs(workspaceURL string, repositoryURLs map[string]string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.workspaceURL = workspaceURL
+	s.repositoryURLs = make(map[string]string, len(repositoryURLs))
+	for name, url := range repositoryURLs {
+		s.repositoryURLs[name] = url
+	}
 }
 
 // ExecutionContext carries state through workflow execution.
@@ -150,11 +182,15 @@ type ExecutionContext struct {
 	// ProjectRoot is the canonical repository/worktree boundary established
 	// when the run starts. WorkingDir is the canonical launch directory used
 	// to resolve relative step workdirs.
-	ProjectRoot              string
-	WorkingDir               string
-	Workspace                *WorkspaceContext
-	ActiveRepository         *Repository
-	RepositoryIndex          *int
+	ProjectRoot      string
+	WorkingDir       string
+	Workspace        *WorkspaceContext
+	ActiveRepository *Repository
+	RepositoryIndex  *int
+	// RepositoryFrame is shared by the workspace context and its active
+	// repository children. It is the durable fan-out boundary around ordinary
+	// nested execution state; nil preserves legacy single-repository behavior.
+	RepositoryFrame          *RepositoryFrame
 	AutonomousBackend        string
 	AutonomousPermissionMode string
 
@@ -221,6 +257,45 @@ type ExecutionContext struct {
 	UIStepHandler func(*UIStepRequest) (UIStepResult, error)
 }
 
+// LookupNamedSession resolves a named binding through execution ancestry.
+// Repository contexts carry a fresh local map, while structural children share
+// that local map; this makes first use local to a repository but leaves
+// workspace-created bindings visible to it.
+func (c *ExecutionContext) LookupNamedSession(name string) string {
+	for current := c; current != nil; current = current.ParentContext {
+		if sessionID := current.NamedSessions[name]; sessionID != "" {
+			return sessionID
+		}
+	}
+	return ""
+}
+
+// LookupNamedSessionDecl resolves a named declaration through ancestry.
+func (c *ExecutionContext) LookupNamedSessionDecl(name string) string {
+	for current := c; current != nil; current = current.ParentContext {
+		if profile := current.NamedSessionDecls[name]; profile != "" {
+			return profile
+		}
+	}
+	return ""
+}
+
+// SetNamedSession writes into the current execution namespace.
+func (c *ExecutionContext) SetNamedSession(name, sessionID string) {
+	if c.NamedSessions == nil {
+		c.NamedSessions = make(map[string]string)
+	}
+	c.NamedSessions[name] = sessionID
+}
+
+// SetNamedSessionDecl writes a declaration into the current execution namespace.
+func (c *ExecutionContext) SetNamedSessionDecl(name, profile string) {
+	if c.NamedSessionDecls == nil {
+		c.NamedSessionDecls = make(map[string]string)
+	}
+	c.NamedSessionDecls[name] = profile
+}
+
 // RootContextOptions configures a new root execution context.
 type RootContextOptions struct {
 	Params                   map[string]string
@@ -233,6 +308,7 @@ type RootContextOptions struct {
 	Workspace                *WorkspaceContext
 	ActiveRepository         *Repository
 	RepositoryIndex          *int
+	RepositoryFrame          *RepositoryFrame
 	AutonomousBackend        string
 	AutonomousPermissionMode string
 	SessionDir               string
@@ -299,6 +375,7 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		Workspace:                opts.Workspace,
 		ActiveRepository:         opts.ActiveRepository,
 		RepositoryIndex:          opts.RepositoryIndex,
+		RepositoryFrame:          opts.RepositoryFrame,
 		AutonomousBackend:        opts.AutonomousBackend,
 		AutonomousPermissionMode: opts.AutonomousPermissionMode,
 		SessionDir:               opts.SessionDir,
@@ -420,6 +497,7 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		Workspace:                parent.Workspace,
 		ActiveRepository:         parent.ActiveRepository,
 		RepositoryIndex:          parent.RepositoryIndex,
+		RepositoryFrame:          parent.RepositoryFrame,
 		AutonomousBackend:        parent.AutonomousBackend,
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
 		SessionDir:               parent.SessionDir,
@@ -460,7 +538,39 @@ func NewRepositoryExecutionContext(parent *ExecutionContext, repository Reposito
 	child.SessionIDs = copyStringMap(parent.SessionIDs)
 	child.SessionProfiles = copyStringMap(parent.SessionProfiles)
 	child.CapturedVariables = copyCapturedValues(parent.CapturedVariables)
+	// Unnamed session history is repository-local. The only time the root
+	// context carries it into a repository child is the active repository being
+	// reconstructed during resume; fresh sibling entries must not inherit a
+	// workspace or sibling conversation as their most-recent session.
+	if parent.ResumeChildState == nil || parent.RepositoryIndex == nil || *parent.RepositoryIndex != index {
+		child.SessionIDs = make(map[string]string)
+		child.SessionProfiles = make(map[string]string)
+		child.LastSessionStepID = ""
+	} else if entry := repositoryStateForResume(parent, index); entry != nil {
+		child.SessionIDs = copyStringMap(entry.SessionIDs)
+		child.SessionProfiles = copyStringMap(entry.SessionProfiles)
+		child.CapturedVariables = copyCapturedValues(entry.CapturedVariables)
+		child.LastSessionStepID = entry.LastSessionStepID
+	}
+	// A fan-out boundary is the only context boundary that does not share
+	// named-session maps. Lookups still walk ParentContext, but first use writes
+	// into these overlays and cannot leak to sibling repositories.
+	child.NamedSessions = make(map[string]string)
+	child.NamedSessionDecls = make(map[string]string)
+	if parent.ResumeChildState != nil && parent.RepositoryIndex != nil && *parent.RepositoryIndex == index {
+		if entry := repositoryStateForResume(parent, index); entry != nil {
+			child.NamedSessions = copyStringMap(entry.NamedSessions)
+			child.NamedSessionDecls = copyStringMap(entry.NamedSessionDecls)
+		}
+	}
 	return &child
+}
+
+func repositoryStateForResume(parent *ExecutionContext, index int) *NestedStepState {
+	if parent.RepositoryFrame == nil || index < 0 || index >= len(parent.RepositoryFrame.Repositories) {
+		return nil
+	}
+	return parent.RepositoryFrame.Repositories[index].Nested
 }
 
 func copyStringMap(source map[string]string) map[string]string {
@@ -544,6 +654,7 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		Workspace:                parent.Workspace,
 		ActiveRepository:         parent.ActiveRepository,
 		RepositoryIndex:          parent.RepositoryIndex,
+		RepositoryFrame:          parent.RepositoryFrame,
 		AutonomousBackend:        parent.AutonomousBackend,
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
 		SessionDir:               parent.SessionDir,

@@ -35,6 +35,7 @@ func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner Pro
 	}
 
 	log.Printf("  script: %s\n", step.Script)
+	setRunnerOutputDirectory(runner, ctx)
 	switch ps := runner.(type) {
 	case interface {
 		SetScriptPrefix(string, time.Duration)

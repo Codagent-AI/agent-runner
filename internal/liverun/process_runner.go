@@ -27,6 +27,7 @@ type tuiProcessRunner struct {
 	base          iexec.ProcessRunner
 	coord         *Coordinator
 	stepPrefix    string // set via SetPrefix before each step
+	outputDir     string // set by the executor for explicit repository work
 	stdoutWrapper func(w io.Writer) io.Writer
 	stderrWrapper func(w io.Writer) io.Writer
 
@@ -37,6 +38,7 @@ type tuiProcessRunner struct {
 
 type outputScope struct {
 	prefix        string
+	outputDir     string
 	stdoutWrapper func(io.Writer) io.Writer
 	stderrWrapper func(io.Writer) io.Writer
 }
@@ -74,6 +76,14 @@ func (r *tuiProcessRunner) SetPrefix(prefix string) {
 	r.stepPrefix = prefix
 	r.mu.Unlock()
 	r.coord.NotifyStepChange(prefix)
+}
+
+// SetOutputDirectory routes automatic process output for the next step. An
+// empty value restores the workspace's historical <session>/output location.
+func (r *tuiProcessRunner) SetOutputDirectory(dir string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.outputDir = filepath.Clean(dir)
 }
 
 func (r *tuiProcessRunner) SetScriptPrefix(prefix string, delay time.Duration) {
@@ -155,11 +165,14 @@ func sanitizeOutputPrefix(prefix string, escapeLiteralUnderscores bool) string {
 // openOutputFile creates (or truncates) an output file under
 // <sessionDir>/output/<sanitizedPrefix>.<ext>. Returns nil on any error —
 // callers treat a nil file as "no persistence" and continue without it.
-func (r *tuiProcessRunner) openOutputFile(prefix, ext string) *os.File {
+func (r *tuiProcessRunner) openOutputFile(outputDir, prefix, ext string) *os.File {
 	if r.coord.sessionDir == "" || prefix == "" {
 		return nil
 	}
-	dir := filepath.Join(r.coord.sessionDir, "output")
+	dir := outputDir
+	if dir == "" || dir == "." {
+		dir = filepath.Join(r.coord.sessionDir, "output")
+	}
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil
 	}
@@ -194,7 +207,7 @@ func (r *tuiProcessRunner) openOutputFile(prefix, ext string) *os.File {
 // the chunk writer so adapters can filter output before display.
 func (r *tuiProcessRunner) compositeWriter(stream, ext string, buf *bytes.Buffer) (w io.Writer, cleanup func()) {
 	r.mu.Lock()
-	scope := outputScope{prefix: r.stepPrefix, stdoutWrapper: r.stdoutWrapper, stderrWrapper: r.stderrWrapper}
+	scope := outputScope{prefix: r.stepPrefix, outputDir: r.outputDir, stdoutWrapper: r.stdoutWrapper, stderrWrapper: r.stderrWrapper}
 	r.mu.Unlock()
 	return r.compositeWriterFor(scope, stream, ext, buf)
 }
@@ -218,7 +231,7 @@ func (r *tuiProcessRunner) compositeWriterFor(scope outputScope, stream, ext str
 	}
 	stripped := NewANSIStripper(tuiTarget)
 
-	f := r.openOutputFile(scope.prefix, ext)
+	f := r.openOutputFile(scope.outputDir, scope.prefix, ext)
 
 	writers := []io.Writer{stripped}
 	if f != nil {
@@ -300,7 +313,10 @@ func (r *tuiProcessRunner) RunAgent(options *iexec.AgentProcessOptions) (iexec.P
 	}
 
 	var stdoutBuf, stderrBuf bytes.Buffer
-	scope := outputScope{prefix: options.Prefix, stdoutWrapper: options.StdoutWrapper, stderrWrapper: options.StderrWrapper}
+	r.mu.Lock()
+	outputDir := r.outputDir
+	r.mu.Unlock()
+	scope := outputScope{prefix: options.Prefix, outputDir: outputDir, stdoutWrapper: options.StdoutWrapper, stderrWrapper: options.StderrWrapper}
 	if options.Prefix != "" {
 		r.coord.NotifyStepChange(options.Prefix)
 	}

@@ -147,6 +147,76 @@ func TestPrepareWorkspace_UsesTransparentImplicitRepository(t *testing.T) {
 	}
 }
 
+func TestPrepareRun_PersistsOrderedRepositoryFrameBeforeExecution(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace, backend, frontend := t.TempDir(), t.TempDir(), t.TempDir()
+	initGitWorktree(t, workspace)
+	initGitWorktree(t, backend)
+	initGitWorktree(t, frontend)
+	workflow := &model.Workflow{
+		Name: "repository-frame", Scope: model.ScopeRepositories,
+		Params: []model.Param{{Name: model.RepositoriesParam}},
+		Steps:  []model.Step{{ID: "work", Command: "true"}},
+	}
+	sessionDir := t.TempDir()
+	_, err := PrepareRun(workflow, map[string]string{model.RepositoriesParam: "backend,frontend"}, &Options{
+		WorkflowFile: filepath.Join(workspace, "repository-frame-v1.0.yaml"),
+		WorkingDir:   workspace,
+		SessionDir:   sessionDir,
+		ProfileStore: &config.Config{Repositories: map[string]config.Repository{
+			"backend": {Path: backend}, "frontend": {Path: frontend},
+		}},
+		ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareRun() error = %v", err)
+	}
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.WorkspaceDir == "" {
+		t.Fatal("state did not persist workspace identity")
+	}
+	if diff := cmp.Diff([]model.RepositoryIdentity{
+		{Name: "backend", Dir: canonicalTestDir(t, backend)}, {Name: "frontend", Dir: canonicalTestDir(t, frontend)},
+	}, state.SelectedRepositories); diff != "" {
+		t.Fatalf("selected repositories mismatch (-want +got):\n%s", diff)
+	}
+	if state.RepositoryFrame == nil {
+		t.Fatal("state did not persist repository frame")
+	}
+	if diff := cmp.Diff([]model.RepositoryStatus{model.RepositoryPending, model.RepositoryPending}, []model.RepositoryStatus{
+		state.RepositoryFrame.Repositories[0].Status, state.RepositoryFrame.Repositories[1].Status,
+	}); diff != "" {
+		t.Fatalf("initial repository statuses mismatch (-want +got):\n%s", diff)
+	}
+	indexData, err := os.ReadFile(filepath.Join(sessionDir, "output", "repository-evidence-index.json"))
+	if err != nil {
+		t.Fatalf("read repository evidence index: %v", err)
+	}
+	var index repositoryEvidenceIndex
+	if err := json.Unmarshal(indexData, &index); err != nil {
+		t.Fatalf("decode repository evidence index: %v", err)
+	}
+	wantIndex := repositoryEvidenceIndex{Repositories: []repositoryEvidenceEntry{
+		{Name: "backend", OutputDir: filepath.Join(sessionDir, "output", "repositories", "backend")},
+		{Name: "frontend", OutputDir: filepath.Join(sessionDir, "output", "repositories", "frontend")},
+	}}
+	if diff := cmp.Diff(wantIndex, index); diff != "" {
+		t.Fatalf("repository evidence index mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func canonicalTestDir(t *testing.T, dir string) string {
+	t.Helper()
+	canonical, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
+}
+
 func TestRunWorkflow_ScopedLaunchContracts(t *testing.T) {
 	t.Run("rejects a scope-aware non-git launch", func(t *testing.T) {
 		workingDir := t.TempDir()
@@ -378,6 +448,48 @@ func TestRunStep_RepositoryFanoutPreservesExecutorErrorAndResumeCursor(t *testin
 	}
 	if diff := cmp.Diff([]int{4, 0}, starts); diff != "" {
 		t.Fatalf("resumed start indexes mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestRepositoryFanoutPersistsCompletedSiblingRuntimeState(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace, backend, frontend := t.TempDir(), t.TempDir(), t.TempDir()
+	initGitWorktree(t, workspace)
+	initGitWorktree(t, backend)
+	initGitWorktree(t, frontend)
+	workflow := &model.Workflow{
+		Name: "repository-progress", Scope: model.ScopeRepositories,
+		Params: []model.Param{{Name: model.RepositoriesParam}},
+		Steps:  []model.Step{{ID: "capture", Command: "echo {{repository_name}}"}},
+	}
+	workflow.ApplyDefaults()
+	sessionDir := t.TempDir()
+	spy := &repositorySpyRunner{failCommand: "frontend", err: errors.New("frontend failure")}
+	handle, err := PrepareRun(workflow, map[string]string{model.RepositoriesParam: "backend,frontend"}, &Options{
+		WorkflowFile: filepath.Join(workspace, "repository-progress-v1.0.yaml"), WorkingDir: workspace, SessionDir: sessionDir,
+		ProfileStore:  &config.Config{Repositories: map[string]config.Repository{"backend": {Path: backend}, "frontend": {Path: frontend}}},
+		ProcessRunner: spy, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ExecuteFromHandle(handle, nil); got != ResultFailed {
+		t.Fatalf("ExecuteFromHandle() = %q, want failed", got)
+	}
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.RepositoryFrame == nil {
+		t.Fatal("state missing repository frame")
+	}
+	backendState := state.RepositoryFrame.Repositories[0]
+	frontendState := state.RepositoryFrame.Repositories[1]
+	if backendState.Status != model.RepositoryCompleted || backendState.Nested == nil || backendState.Nested.StepID != "capture" {
+		t.Fatalf("backend persisted state = %#v, want completed runtime state", backendState)
+	}
+	if frontendState.Status != model.RepositoryFailed {
+		t.Fatalf("frontend status = %q, want failed", frontendState.Status)
 	}
 }
 

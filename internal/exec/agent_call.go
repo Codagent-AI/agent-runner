@@ -276,7 +276,7 @@ func (h *AgentCallHandler) resolve(raw json.RawMessage) (*resolvedAgentCall, *ag
 	}
 	profileName := target.Name
 	if target.Kind == agentcall.TargetSession {
-		profileName = ctx.NamedSessionDecls[target.Name]
+		profileName = ctx.LookupNamedSessionDecl(target.Name)
 		if profileName == "" {
 			return nil, callFailure(agentcall.CodeUnknownSession, fmt.Sprintf("named session %q is not declared", target.Name), target)
 		}
@@ -311,7 +311,7 @@ func (h *AgentCallHandler) resolve(raw json.RawMessage) (*resolvedAgentCall, *ag
 	}
 	sessionID := ""
 	if target.Kind == agentcall.TargetSession {
-		sessionID = ctx.NamedSessions[target.Name]
+		sessionID = ctx.LookupNamedSession(target.Name)
 		sameCLI := h.options.Parent.CLI == resolvedProfile.CLI
 		sameNamedSession := h.options.Parent.NamedSession != "" && h.options.Parent.NamedSession == target.Name
 		sameResolvedSession := sessionID != "" && h.activeParentSessionID() == sessionID
@@ -450,7 +450,7 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 			discovered = sessionID
 		}
 		if discovered != "" {
-			h.options.Context.NamedSessions[call.target.Name] = discovered
+			h.options.Context.SetNamedSession(call.target.Name, discovered)
 			if h.options.Context.FlushState != nil {
 				h.options.Context.FlushState()
 			}

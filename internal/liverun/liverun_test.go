@@ -413,6 +413,23 @@ func TestTUIProcessRunnerPersistsRepeatedAgentCallOutputByCallIdentity(t *testin
 	}
 }
 
+func TestTUIProcessRunnerRoutesRepositoryOutputDirectory(t *testing.T) {
+	sessionDir := t.TempDir()
+	outputDir := filepath.Join(sessionDir, "output", "repositories", "backend")
+	runner := NewCoordinator(&captureProgram{}, sessionDir).TUIProcessRunner(unusedRunner{}).(*tuiProcessRunner)
+	runner.SetOutputDirectory(outputDir)
+	runner.SetPrefix("[backend-step]")
+	if _, err := runner.RunShell("printf backend", true, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(outputDir, sanitizePrefix("[backend-step]")+".out")); err != nil {
+		t.Fatalf("repository output was not written beneath its directory: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(sessionDir, "output", sanitizePrefix("[backend-step]")+".out")); !os.IsNotExist(err) {
+		t.Fatalf("repository output leaked into workspace output: %v", err)
+	}
+}
+
 func TestChunkWriter_SizeFlush(t *testing.T) {
 	// Writing more than chunkMaxBytes should flush complete chunks immediately.
 	// Any bytes that don't fill a complete chunk remain buffered.

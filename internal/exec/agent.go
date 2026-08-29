@@ -73,7 +73,7 @@ func stepProfileName(step *model.Step, ctx *model.ExecutionContext) string {
 	case step.Session == model.SessionNew:
 		return step.Agent
 	case model.IsNamedSession(step.Session):
-		return ctx.NamedSessionDecls[string(step.Session)]
+		return ctx.LookupNamedSessionDecl(string(step.Session))
 	default: // resume / inherit
 		if ctx.LastSessionStepID == "" {
 			return ""
@@ -148,6 +148,7 @@ func ExecuteAgentStep(
 	routeEligible := isRouteEligible(step, ctx)
 
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
+	setRunnerOutputDirectory(runner, ctx)
 	startTime := time.Now()
 	profile, profileErr := resolveStepProfile(step, ctx)
 	if profileErr != nil {
@@ -926,7 +927,7 @@ func recordSessionOnSpawn(step *model.Step, ctx *model.ExecutionContext, session
 		ctx.SessionProfiles[step.ID] = profile
 	}
 	if model.IsNamedSession(step.Session) {
-		ctx.NamedSessions[string(step.Session)] = sessionID
+		ctx.SetNamedSession(string(step.Session), sessionID)
 	}
 	ctx.LastSessionStepID = step.ID
 	if ctx.FlushState != nil {
@@ -949,7 +950,7 @@ func storeDiscoveredSession(
 			ctx.SessionProfiles[step.ID] = profile
 		}
 		if model.IsNamedSession(step.Session) {
-			ctx.NamedSessions[string(step.Session)] = discoveredID
+			ctx.SetNamedSession(string(step.Session), discoveredID)
 		}
 		ctx.LastSessionStepID = step.ID
 		log.Printf("  session: %s\n", discoveredID)

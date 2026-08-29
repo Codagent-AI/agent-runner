@@ -451,23 +451,24 @@ func MergeSessionDecls(ctx *model.ExecutionContext, sessions []model.SessionDecl
 			EmitAgentDeprecations(ctx, log, []config.Deprecation{*warning})
 		}
 		decl.Agent = canonicalAgent
-		existing, present := ctx.NamedSessionDecls[decl.Name]
+		existing := ctx.LookupNamedSessionDecl(decl.Name)
+		present := existing != ""
 		if present {
 			canonicalExisting, existingWarning := config.CanonicalAgentName(existing)
 			if existingWarning != nil {
 				EmitAgentDeprecations(ctx, log, []config.Deprecation{*existingWarning})
 				existing = canonicalExisting
-				ctx.NamedSessionDecls[decl.Name] = canonicalExisting
+				ctx.SetNamedSessionDecl(decl.Name, canonicalExisting)
 			}
 		}
 		if !present {
-			ctx.NamedSessionDecls[decl.Name] = decl.Agent
+			ctx.SetNamedSessionDecl(decl.Name, decl.Agent)
 			continue
 		}
 		if existing == decl.Agent {
 			continue
 		}
-		if ctx.NamedSessions[decl.Name] != "" {
+		if ctx.LookupNamedSession(decl.Name) != "" {
 			log.Printf("warning: named session %q: declared agent changed from %q to %q; continuing with original agent\n",
 				decl.Name, existing, decl.Agent)
 			continue

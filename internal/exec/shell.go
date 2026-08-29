@@ -110,6 +110,14 @@ func emitAudit(ctx *model.ExecutionContext, event audit.Event) {
 	}
 }
 
+func setRunnerOutputDirectory(runner ProcessRunner, ctx *model.ExecutionContext) {
+	setter, ok := runner.(interface{ SetOutputDirectory(string) })
+	if !ok {
+		return
+	}
+	setter.SetOutputDirectory(ctx.BuiltinVars()["repository_output_dir"])
+}
+
 func emitShellInterpolationFailure(ctx *model.ExecutionContext, step *model.Step, err error) {
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 	startTime := time.Now()
@@ -184,6 +192,7 @@ func ExecuteShellStep(
 	startTime := time.Now()
 
 	// Set the step prefix on the process runner if it supports it (TUI mode).
+	setRunnerOutputDirectory(runner, ctx)
 	if ps, ok := runner.(interface{ SetPrefix(string) }); ok {
 		ps.SetPrefix(prefix)
 	}

@@ -22,7 +22,11 @@ func recordPullRequestCapture(ctx *model.ExecutionContext, stepID, name string, 
 		return
 	}
 	url = strings.TrimSpace(url)
-	if url == "" || !pullRequestCaptureState(ctx).Mark(url) {
+	repositoryName := ""
+	if ctx.ActiveRepository != nil && ctx.ActiveRepository.Name != "default" {
+		repositoryName = ctx.ActiveRepository.Name
+	}
+	if url == "" || !pullRequestCaptureState(ctx).Mark(repositoryName, url) {
 		return
 	}
 	emitAudit(ctx, audit.Event{

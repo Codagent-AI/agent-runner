@@ -120,6 +120,22 @@ func TestResolveInheritSession(t *testing.T) {
 	})
 }
 
+func TestResolveInheritSessionDoesNotCrossRepositoryBoundary(t *testing.T) {
+	workspace := model.NewRootContext(&model.RootContextOptions{
+		WorkflowFile: "workspace.yaml",
+		SessionIDs:   map[string]string{"plan": "workspace-session"},
+	})
+	workspace.LastSessionStepID = "plan"
+	repository := model.NewRepositoryExecutionContext(workspace, model.Repository{Name: "backend", Dir: "/repos/backend"}, 0)
+	child := model.NewSubWorkflowContext(repository, &model.SubWorkflowContextOptions{
+		StepID: "implement", Params: map[string]string{}, WorkflowFile: "repository-child.yaml",
+	})
+
+	if _, err := ResolveInheritSession(child); err == nil {
+		t.Fatal("ResolveInheritSession() succeeded with a workspace session across repository boundary")
+	}
+}
+
 func TestResolveNamedSession(t *testing.T) {
 	t.Run("returns session ID when named session exists", func(t *testing.T) {
 		ctx := model.NewRootContext(&model.RootContextOptions{

@@ -220,6 +220,116 @@ func TestPrepareRun_PersistsAgentOverride(t *testing.T) {
 	}
 }
 
+func TestPrepareResume_RestoresRepositoryFrameAndValidatesIdentity(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace, backend, frontend := t.TempDir(), t.TempDir(), t.TempDir()
+	initGitWorktree(t, workspace)
+	initGitWorktree(t, backend)
+	initGitWorktree(t, frontend)
+	workflowPath := filepath.Join(workspace, "repository-resume-v1.0.yaml")
+	workflowSource := `name: repository-resume
+scope: repositories
+params:
+  - name: repositories
+steps:
+  - id: implement
+    command: echo implement
+`
+	if err := os.WriteFile(workflowPath, []byte(workflowSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backendRoot := canonicalTestDir(t, backend)
+	frontendRoot := canonicalTestDir(t, frontend)
+	active := 1
+	state := model.RunState{
+		WorkflowFile:    workflowPath,
+		WorkflowName:    "repository-resume",
+		WorkflowHash:    stateio.ComputeWorkflowHash(workflowSource),
+		WorkspaceDir:    canonicalTestDir(t, workspace),
+		Params:          map[string]string{model.RepositoriesParam: "backend,frontend"},
+		RepositoryIndex: &active,
+		SelectedRepositories: []model.RepositoryIdentity{
+			{Name: "backend", Dir: backendRoot},
+			{Name: "frontend", Dir: frontendRoot},
+		},
+		RepositoryFrame: &model.RepositoryFrame{Repositories: []model.RepositoryExecutionState{
+			{Identity: model.RepositoryIdentity{Name: "backend", Dir: backendRoot}, Status: model.RepositoryCompleted, Nested: &model.NestedStepState{StepID: "implement", CapturedVariables: map[string]model.CapturedValue{"output": model.NewCapturedString("backend")}}},
+			{Identity: model.RepositoryIdentity{Name: "frontend", Dir: frontendRoot}, Status: model.RepositoryFailed, Nested: &model.NestedStepState{StepID: "implement", CapturedVariables: map[string]model.CapturedValue{"output": model.NewCapturedString("frontend")}, NamedSessions: map[string]string{"worker": "frontend-worker"}, NamedSessionDecls: map[string]string{"worker": "implementor"}, Child: &model.NestedStepState{StepID: "inner"}}},
+		}},
+		WorkspaceNamespace:      &model.NamespaceState{NamedSessions: map[string]string{"planner": "workspace-planner"}, NamedSessionDecls: map[string]string{"planner": "lead"}, CapturedVariables: map[string]model.CapturedValue{"shared": model.NewCapturedString("workspace")}},
+		WorkspacePullRequestURL: "https://github.com/acme/workspace/pull/1",
+		RepositoryPullRequestURLs: map[string]string{
+			"backend":  "https://github.com/acme/backend/pull/2",
+			"frontend": "https://github.com/acme/frontend/pull/3",
+		},
+		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{StepID: "implement"}},
+	}
+	sessionDir := t.TempDir()
+	if err := stateio.WriteState(&state, sessionDir); err != nil {
+		t.Fatal(err)
+	}
+	profiles := &config.Config{Repositories: map[string]config.Repository{
+		"backend": {Path: backend}, "frontend": {Path: frontend},
+	}}
+	handle, err := PrepareResume(filepath.Join(sessionDir, "state.json"), &Options{
+		WorkingDir: workspace, ProfileStore: profiles,
+		ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareResume() error = %v", err)
+	}
+	defer finalizeRun(handle.rs, ResultStopped)
+	if diff := cmp.Diff(state.RepositoryFrame, handle.rs.ctx.RepositoryFrame); diff != "" {
+		t.Fatalf("restored repository frame mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(model.NewCapturedString("workspace"), handle.rs.ctx.CapturedVariables["shared"]); diff != "" {
+		t.Fatalf("workspace capture mismatch (-want +got):\n%s", diff)
+	}
+	if got := handle.rs.ctx.ResumeChildState; got == nil || got.StepID != "inner" {
+		t.Fatalf("active repository child state = %#v, want inner", got)
+	}
+	if got := handle.rs.ctx.LookupNamedSession("planner"); got != "workspace-planner" {
+		t.Fatalf("workspace named session = %q", got)
+	}
+	frontendContext := model.NewRepositoryExecutionContext(handle.rs.ctx, model.Repository{Name: "frontend", Dir: frontendRoot}, 1)
+	if diff := cmp.Diff(model.NewCapturedString("frontend"), frontendContext.CapturedVariables["output"]); diff != "" {
+		t.Fatalf("restored repository capture mismatch (-want +got):\n%s", diff)
+	}
+	if got := frontendContext.LookupNamedSession("worker"); got != "frontend-worker" {
+		t.Fatalf("restored repository-local session = %q", got)
+	}
+	workspacePR, repositoryPRs := handle.rs.ctx.PullRequestCaptureState.PullRequestURLs()
+	if diff := cmp.Diff(state.RepositoryPullRequestURLs, repositoryPRs); workspacePR != state.WorkspacePullRequestURL || diff != "" {
+		t.Fatalf("restored pull-request state = (%q, %#v), want (%q, %#v)", workspacePR, repositoryPRs, state.WorkspacePullRequestURL, state.RepositoryPullRequestURLs)
+	}
+
+	t.Run("rejects changed root before execution", func(t *testing.T) {
+		moved := t.TempDir()
+		initGitWorktree(t, moved)
+		changed := *profiles
+		changed.Repositories = map[string]config.Repository{"backend": {Path: moved}, "frontend": {Path: frontend}}
+		_, err := PrepareResume(filepath.Join(sessionDir, "state.json"), &Options{
+			WorkingDir: workspace, ProfileStore: &changed,
+			ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+		})
+		if err == nil || !strings.Contains(err.Error(), "backend") || !strings.Contains(err.Error(), "identity") {
+			t.Fatalf("PrepareResume() error = %v, want backend identity mismatch", err)
+		}
+	})
+
+	t.Run("rejects launch outside persisted workspace", func(t *testing.T) {
+		otherWorkspace := t.TempDir()
+		initGitWorktree(t, otherWorkspace)
+		_, err := PrepareResume(filepath.Join(sessionDir, "state.json"), &Options{
+			WorkingDir: otherWorkspace, ProfileStore: profiles,
+			ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+		})
+		if err == nil || !strings.Contains(err.Error(), "workspace") || !strings.Contains(err.Error(), "does not match") {
+			t.Fatalf("PrepareResume() error = %v, want workspace identity mismatch", err)
+		}
+	})
+}
+
 func TestPrepareRunPersistsIntakeHandoffAndPrepareResumeRestoresProvenance(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workflowPath, err := filepath.Abs(filepath.Join("..", "..", "testdata", "intake-handoff-reference-v1.0.yaml"))

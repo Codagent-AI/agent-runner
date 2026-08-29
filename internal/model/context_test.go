@@ -506,6 +506,40 @@ func TestWorkflowResumedPropagation(t *testing.T) {
 }
 
 func TestNamedSessionSharing(t *testing.T) {
+	t.Run("repository namespace inherits workspace bindings without sharing new bindings", func(t *testing.T) {
+		workspace := NewRootContext(&RootContextOptions{
+			Params:            map[string]string{},
+			WorkflowFile:      "workspace.yaml",
+			NamedSessions:     map[string]string{"planner": "workspace-planner"},
+			NamedSessionDecls: map[string]string{"planner": "lead"},
+		})
+		backend := NewRepositoryExecutionContext(workspace, Repository{Name: "backend", Dir: "/repos/backend"}, 0)
+		backend.SetNamedSession("implementor", "backend-implementor")
+		backend.SetNamedSessionDecl("implementor", "implementor-agent")
+		if got := backend.LookupNamedSession("planner"); got != "workspace-planner" {
+			t.Fatalf("inherited workspace named session = %q", got)
+		}
+		if got := backend.LookupNamedSessionDecl("planner"); got != "lead" {
+			t.Fatalf("inherited workspace declaration = %q", got)
+		}
+
+		backendChild := NewSubWorkflowContext(backend, &SubWorkflowContextOptions{StepID: "child", Params: map[string]string{}, WorkflowFile: "child.yaml"})
+		if got := backendChild.LookupNamedSession("implementor"); got != "backend-implementor" {
+			t.Fatalf("repository child binding = %q", got)
+		}
+
+		frontend := NewRepositoryExecutionContext(workspace, Repository{Name: "frontend", Dir: "/repos/frontend"}, 1)
+		if got := frontend.LookupNamedSession("implementor"); got != "" {
+			t.Fatalf("sibling repository inherited local binding %q", got)
+		}
+		if got := frontend.LookupNamedSession("planner"); got != "workspace-planner" {
+			t.Fatalf("sibling repository did not inherit workspace binding: %q", got)
+		}
+		if got := frontend.LookupNamedSessionDecl("implementor"); got != "" {
+			t.Fatalf("sibling repository inherited local declaration %q", got)
+		}
+	})
+
 	t.Run("sub-workflow context shares NamedSessions pointer with parent", func(t *testing.T) {
 		parent := NewRootContext(&RootContextOptions{
 			Params:       map[string]string{},

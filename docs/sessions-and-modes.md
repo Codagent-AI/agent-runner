@@ -17,7 +17,7 @@ Agent steps support these session strategies:
 | --- | --- |
 | `new` | Start a fresh session using the step's `agent` profile. |
 | `resume` | Resume the most recent session in the current workflow context. |
-| `inherit` | In a sub-workflow, resume the parent workflow's most recent session. |
+| `inherit` | In a sub-workflow, resume the parent workflow's most recent compatible session in the active execution namespace. |
 | named session | Resume or create a declared session such as `lead-agent`. |
 
 The first agent step defaults to `session: new`, so it must specify an `agent` profile. Later agent steps default to `session: resume` and continue the most recent session unless you set a different session.
@@ -47,7 +47,11 @@ steps:
 > [!WARNING]
 > Named session names cannot be `new`, `resume`, or `inherit`. Those words are reserved for built-in session strategies.
 
-Agent calls and workflow steps use the same run-scoped named-session map. A call can create a declared session on first use, resume one created by a workflow step, or leave a session for a later workflow step to resume. Direct profile calls always create fresh sessions and do not add them to this map. See [Agent Calls](agent-calls.md).
+Agent calls and workflow steps use the same named-session namespace. A call can create a declared session on first use, resume one created by a workflow step, or leave a session for a later workflow step to resume. Direct profile calls always create fresh sessions and do not add them to this map. See [Agent Calls](agent-calls.md).
+
+In a multi-repository workflow, namespaces are inherited through the execution tree. A named session created in workspace work is visible to every repository. A name first created while an explicit repository is active is stored only in that repository's overlay: later backend work can reuse it, while frontend and workspace work cannot. Those workspace and repository-local bindings are persisted in the run state and restored on resume. Ordinary loop and sub-workflow children remain in their parent namespace, so their first-use bindings stay available to later siblings.
+
+`session: inherit` is structural rather than a cross-repository fallback. Inside repository work it may inherit a compatible parent session from that repository's active context, but it never resumes an unrelated workspace or sibling-repository session.
 
 ## Modes
 

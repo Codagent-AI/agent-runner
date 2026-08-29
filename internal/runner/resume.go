@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/config"
@@ -44,7 +45,26 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 
 	warnIfWorkflowHashChanged(&state, opts.Log)
 
+	// Repository state is additive. A state file without a persisted selection
+	// predates fan-out and must retain the legacy resume path even when the
+	// current project has repository declarations.
+	if len(state.SelectedRepositories) > 0 {
+		workspace, err := prepareRepositoryResumeWorkspace(&state, workflow.Scope, opts, profileOverride)
+		if err != nil {
+			return nil, err
+		}
+		opts.Workspace = workspace
+	}
+
 	resumeState := restoreResumeContext(&state)
+	workspaceState := state.WorkspaceNamespace
+	if workspaceState == nil {
+		workspaceState = &model.NamespaceState{
+			SessionIDs: resumeState.sessionIDs, SessionProfiles: resumeState.sessionProfiles,
+			CapturedVariables: resumeState.capturedVars, LastSessionStepID: resumeState.lastSessionStepID,
+			NamedSessions: resumeState.namedSessions, NamedSessionDecls: resumeState.namedSessionDecls,
+		}
+	}
 
 	// Resolve which step to actually resume from — advance past completed steps.
 	resolved, err := model.ResolveResumeStep(workflow.Steps, resumeState.fromStep, resumeState.completed)
@@ -68,39 +88,104 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	}
 
 	resumeOpts := &Options{
-		From:                  resumeState.fromStep,
-		WorkflowFile:          state.WorkflowFile,
-		WorkflowScope:         workflow.Scope,
-		Workspace:             opts.Workspace,
-		ProjectRoot:           opts.ProjectRoot,
-		WorkingDir:            opts.WorkingDir,
-		SessionDir:            filepath.Dir(stateFilePath),
-		IntakeHandoffContents: state.IntakeHandoffContents,
-		IntakeParentRunID:     state.IntakeParentRunID,
-		AgentOverride:         state.AgentOverride,
-		Engine:                eng,
-		SessionIDs:            resumeState.sessionIDs,
-		SessionProfiles:       resumeState.sessionProfiles,
-		CapturedVariables:     resumeState.capturedVars,
-		LastSessionStepID:     resumeState.lastSessionStepID,
-		NamedSessions:         resumeState.namedSessions,
-		NamedSessionDecls:     resumeState.namedSessionDecls,
-		ChildState:            resumeState.childState,
-		InteractiveAttempt:    resumeInteractiveAttempt(&state),
-		ProcessRunner:         opts.ProcessRunner,
-		GlobExpander:          opts.GlobExpander,
-		Log:                   opts.Log,
-		SuspendHook:           opts.SuspendHook,
-		ResumeHook:            opts.ResumeHook,
-		PrepareStepHook:       opts.PrepareStepHook,
-		UIStepHandler:         opts.UIStepHandler,
-		ProfileStore:          opts.ProfileStore,
-		ProfileOverride:       profileOverride,
-		RepositoryStartIndex:  resumeState.repositoryIndex,
-		RepositoryStartSet:    resumeState.repositoryIndexSet,
+		From:                      resumeState.fromStep,
+		WorkflowFile:              state.WorkflowFile,
+		WorkflowScope:             workflow.Scope,
+		Workspace:                 opts.Workspace,
+		RepositoryFrame:           state.RepositoryFrame,
+		WorkspacePullRequestURL:   state.WorkspacePullRequestURL,
+		RepositoryPullRequestURLs: state.RepositoryPullRequestURLs,
+		ProjectRoot:               opts.ProjectRoot,
+		WorkingDir:                opts.WorkingDir,
+		SessionDir:                filepath.Dir(stateFilePath),
+		IntakeHandoffContents:     state.IntakeHandoffContents,
+		IntakeParentRunID:         state.IntakeParentRunID,
+		AgentOverride:             state.AgentOverride,
+		Engine:                    eng,
+		SessionIDs:                workspaceState.SessionIDs,
+		SessionProfiles:           workspaceState.SessionProfiles,
+		CapturedVariables:         workspaceState.CapturedVariables,
+		LastSessionStepID:         workspaceState.LastSessionStepID,
+		NamedSessions:             workspaceState.NamedSessions,
+		NamedSessionDecls:         workspaceState.NamedSessionDecls,
+		ChildState:                resumeState.childState,
+		InteractiveAttempt:        resumeInteractiveAttempt(&state),
+		ProcessRunner:             opts.ProcessRunner,
+		GlobExpander:              opts.GlobExpander,
+		Log:                       opts.Log,
+		SuspendHook:               opts.SuspendHook,
+		ResumeHook:                opts.ResumeHook,
+		PrepareStepHook:           opts.PrepareStepHook,
+		UIStepHandler:             opts.UIStepHandler,
+		ProfileStore:              opts.ProfileStore,
+		ProfileOverride:           profileOverride,
+		RepositoryStartIndex:      resumeState.repositoryIndex,
+		RepositoryStartSet:        resumeState.repositoryIndexSet,
 	}
 
 	return PrepareRun(&workflow, state.Params, resumeOpts)
+}
+
+// prepareRepositoryResumeWorkspace reconstructs the current configuration
+// then compares it to the immutable state identity before a command can be
+// dispatched. State owns selection order; the current configuration only
+// proves that those named checkouts still identify the same roots.
+func prepareRepositoryResumeWorkspace(state *model.RunState, scope model.Scope, opts *Options, profileOverride config.ProfileOverride) (*model.WorkspaceContext, error) {
+	launchDir := opts.WorkingDir
+	if launchDir == "" {
+		var err error
+		launchDir, err = os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("determine resume workspace: %w", err)
+		}
+	}
+	launchDir, err := canonicalDirectory(launchDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve resume workspace: %w", err)
+	}
+	if launchDir != state.WorkspaceDir {
+		return nil, fmt.Errorf("resume workspace %s does not match persisted workspace %s", launchDir, state.WorkspaceDir)
+	}
+
+	if opts.ProfileStore == nil {
+		profiles, loadErr := config.LoadWithProfile(filepath.Join(launchDir, ".agent-runner", "config.yaml"), profileOverride)
+		if loadErr != nil {
+			return nil, fmt.Errorf("load resume workspace configuration: %w", loadErr)
+		}
+		opts.ProfileStore = profiles
+	}
+	workspace, err := prepareWorkspace(scope, launchDir, opts.ProfileStore)
+	if err != nil {
+		return nil, err
+	}
+
+	persistedNames := make([]string, 0, len(state.SelectedRepositories))
+	for _, persisted := range state.SelectedRepositories {
+		current, ok := workspace.Repositories[persisted.Name]
+		if !ok {
+			return nil, fmt.Errorf("persisted selected repository %q is no longer configured", persisted.Name)
+		}
+		if current.Dir != persisted.Dir {
+			return nil, fmt.Errorf("repository %q identity mismatch: persisted root %s, current root %s", persisted.Name, persisted.Dir, current.Dir)
+		}
+		persistedNames = append(persistedNames, persisted.Name)
+	}
+	if len(state.Params) > 0 {
+		if supplied, ok := state.Params[model.RepositoriesParam]; ok {
+			selected, parseErr := model.ParseRepositoryTargets(supplied, workspace.Repositories)
+			if parseErr != nil {
+				return nil, fmt.Errorf("persisted repository selection: %w", parseErr)
+			}
+			if !slices.Equal(selected, persistedNames) {
+				return nil, fmt.Errorf("persisted repository selection order does not match selected repository identity")
+			}
+		}
+	}
+	if opts.Workspace != nil && len(opts.Workspace.Selected) > 0 && !slices.Equal(opts.Workspace.Selected, persistedNames) {
+		return nil, fmt.Errorf("resume repository selection %v does not match persisted selection %v", opts.Workspace.Selected, persistedNames)
+	}
+	workspace.Selected = append([]string(nil), persistedNames...)
+	return workspace, nil
 }
 
 func warnIfWorkflowHashChanged(state *model.RunState, log interface{ Printf(string, ...any) }) {
@@ -132,10 +217,10 @@ type restoredResumeContext struct {
 }
 
 func restoreResumeContext(state *model.RunState) restoredResumeContext {
-	if state.CurrentStep.Nested == nil {
+	nested := resumeNestedState(state)
+	if nested == nil {
 		return restoredResumeContext{fromStep: state.CurrentStep.StepID}
 	}
-	nested := state.CurrentStep.Nested
 	result := restoredResumeContext{
 		fromStep:           nested.StepID,
 		sessionIDs:         nested.SessionIDs,
@@ -145,8 +230,8 @@ func restoreResumeContext(state *model.RunState) restoredResumeContext {
 		namedSessions:      nested.NamedSessions,
 		namedSessionDecls:  nested.NamedSessionDecls,
 		completed:          nested.Completed,
-		repositoryIndex:    dereferenceRepositoryIndex(state.RepositoryIndex),
-		repositoryIndexSet: state.RepositoryIndex != nil,
+		repositoryIndex:    resumeRepositoryIndex(state),
+		repositoryIndexSet: state.RepositoryFrame != nil || state.RepositoryIndex != nil,
 	}
 	if nested.Iteration != nil {
 		// Top-level loop step captured mid-iteration. Carry the iteration (and
@@ -158,6 +243,40 @@ func restoreResumeContext(state *model.RunState) restoredResumeContext {
 		result.childState = nested.Child
 	}
 	return result
+}
+
+func resumeNestedState(state *model.RunState) *model.NestedStepState {
+	if index, ok := activeRepositoryFrameIndex(state); ok {
+		if nested := state.RepositoryFrame.Repositories[index].Nested; nested != nil {
+			return nested
+		}
+	}
+	return state.CurrentStep.Nested
+}
+
+func resumeRepositoryIndex(state *model.RunState) int {
+	if index, ok := activeRepositoryFrameIndex(state); ok {
+		return index
+	}
+	return dereferenceRepositoryIndex(state.RepositoryIndex)
+}
+
+func activeRepositoryFrameIndex(state *model.RunState) (int, bool) {
+	if state.RepositoryFrame == nil {
+		return 0, false
+	}
+	if state.RepositoryIndex != nil {
+		index := *state.RepositoryIndex
+		if index >= 0 && index < len(state.RepositoryFrame.Repositories) && state.RepositoryFrame.Repositories[index].Status != model.RepositoryCompleted {
+			return index, true
+		}
+	}
+	for index, entry := range state.RepositoryFrame.Repositories {
+		if entry.Status != model.RepositoryCompleted {
+			return index, true
+		}
+	}
+	return 0, false
 }
 
 func dereferenceRepositoryIndex(index *int) int {
@@ -201,10 +320,11 @@ func loadRecordedWorkflow(workflowFile string) (model.Workflow, error) {
 }
 
 func resumeInteractiveAttempt(state *model.RunState) *model.InteractiveAttemptMetadata {
-	if state.CurrentStep.Nested == nil {
+	nested := resumeNestedState(state)
+	if nested == nil {
 		return nil
 	}
-	return state.CurrentStep.Nested.InteractiveAttempt
+	return nested.InteractiveAttempt
 }
 
 // ResumeWorkflow resumes a workflow from a state file.
