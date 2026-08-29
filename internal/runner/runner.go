@@ -549,7 +549,7 @@ func newRepositoryFrame(workspace *model.WorkspaceContext) *model.RepositoryFram
 	for _, name := range workspace.Selected {
 		repository := workspace.Repositories[name]
 		frame.Repositories = append(frame.Repositories, model.RepositoryExecutionState{
-			Identity: model.RepositoryIdentity{Name: repository.Name, Dir: repository.Dir},
+			Identity: model.RepositoryIdentity(repository),
 			Status:   model.RepositoryPending,
 		})
 	}
@@ -1187,7 +1187,10 @@ func executeRepositoryFanout(rs *runState, startIndex int, executeBody func(repo
 		rs.ctx = repositoryExecutionContext(parent, repository, repositoryIndex)
 		if entry := repositoryEntry(parent.RepositoryFrame, repositoryIndex); entry != nil {
 			entry.Status = model.RepositoryActive
-			persistRepositoryFrame(rs.sessionDir, parent)
+			if err := persistRepositoryFrame(rs.sessionDir, parent); err != nil {
+				rs.log.Printf("agent-runner: persist repository %q active state: %v\n", name, err)
+				return ResultFailed
+			}
 		}
 		repositoryStart := 0
 		if repositoryIndex == resumeRepository {
@@ -1196,13 +1199,18 @@ func executeRepositoryFanout(rs *runState, startIndex int, executeBody func(repo
 		if result := executeBody(repositoryStart); result != ResultSuccess {
 			if entry := repositoryEntry(parent.RepositoryFrame, repositoryIndex); entry != nil {
 				entry.Status = model.RepositoryFailed
-				persistRepositoryFrame(rs.sessionDir, parent)
+				if err := persistRepositoryFrame(rs.sessionDir, parent); err != nil {
+					rs.log.Printf("agent-runner: persist repository %q failed state: %v\n", name, err)
+				}
 			}
 			return result
 		}
 		if entry := repositoryEntry(parent.RepositoryFrame, repositoryIndex); entry != nil {
 			entry.Status = model.RepositoryCompleted
-			persistRepositoryFrame(rs.sessionDir, parent)
+			if err := persistRepositoryFrame(rs.sessionDir, parent); err != nil {
+				rs.log.Printf("agent-runner: persist repository %q completed state: %v\n", name, err)
+				return ResultFailed
+			}
 		}
 	}
 	return ResultSuccess
@@ -1219,13 +1227,16 @@ func repositoryEntry(frame *model.RepositoryFrame, index int) *model.RepositoryE
 	return &frame.Repositories[index]
 }
 
-func persistRepositoryFrame(stateDir string, ctx *model.ExecutionContext) {
+func persistRepositoryFrame(stateDir string, ctx *model.ExecutionContext) error {
 	state, err := stateio.ReadState(filepath.Join(stateDir, "state.json"))
 	if err != nil {
-		return
+		return fmt.Errorf("read state: %w", err)
 	}
 	persistRepositoryIdentity(&state, ctx)
-	_ = stateio.WriteState(&state, stateDir)
+	if err := stateio.WriteState(&state, stateDir); err != nil {
+		return fmt.Errorf("write state: %w", err)
+	}
+	return nil
 }
 
 // RunWorkflow executes a workflow with the given parameters.
@@ -1344,7 +1355,7 @@ func repositoryIdentities(workspace *model.WorkspaceContext) []model.RepositoryI
 	identities := make([]model.RepositoryIdentity, 0, len(workspace.Selected))
 	for _, name := range workspace.Selected {
 		if repository, ok := workspace.Repositories[name]; ok {
-			identities = append(identities, model.RepositoryIdentity{Name: repository.Name, Dir: repository.Dir})
+			identities = append(identities, model.RepositoryIdentity(repository))
 		}
 	}
 	return identities

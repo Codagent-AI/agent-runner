@@ -540,6 +540,32 @@ func TestNamedSessionSharing(t *testing.T) {
 		}
 	})
 
+	t.Run("repository resume restores local state without a nested child", func(t *testing.T) {
+		index := 0
+		parent := NewRootContext(&RootContextOptions{WorkflowFile: "workspace.yaml"})
+		parent.RepositoryIndex = &index
+		parent.RepositoryFrame = &RepositoryFrame{Repositories: []RepositoryExecutionState{{
+			Identity: RepositoryIdentity{Name: "backend", Dir: "/repos/backend"},
+			Status:   RepositoryFailed,
+			Nested: &NestedStepState{
+				StepID: "implement", SessionIDs: map[string]string{"agent": "backend-agent"},
+				CapturedVariables: map[string]CapturedValue{"result": NewCapturedString("backend")},
+				NamedSessions:     map[string]string{"planner": "backend-planner"},
+			},
+		}}}
+
+		child := NewRepositoryExecutionContext(parent, Repository{Name: "backend", Dir: "/repos/backend"}, index)
+		if got := child.SessionIDs["agent"]; got != "backend-agent" {
+			t.Fatalf("restored unnamed session = %q", got)
+		}
+		if got := child.CapturedVariables["result"]; !cmp.Equal(got, NewCapturedString("backend")) {
+			t.Fatalf("restored capture = %#v", got)
+		}
+		if got := child.LookupNamedSession("planner"); got != "backend-planner" {
+			t.Fatalf("restored named session = %q", got)
+		}
+	})
+
 	t.Run("sub-workflow context shares NamedSessions pointer with parent", func(t *testing.T) {
 		parent := NewRootContext(&RootContextOptions{
 			Params:       map[string]string{},

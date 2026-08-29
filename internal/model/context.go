@@ -125,7 +125,7 @@ func (s *PullRequestCaptureState) Mark(repositoryName, url string) bool {
 }
 
 // PullRequestURLs returns a detached persistence snapshot.
-func (s *PullRequestCaptureState) PullRequestURLs() (string, map[string]string) {
+func (s *PullRequestCaptureState) PullRequestURLs() (workspaceURL string, repositoryURLs map[string]string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	repositories := make(map[string]string, len(s.repositoryURLs))
@@ -538,15 +538,16 @@ func NewRepositoryExecutionContext(parent *ExecutionContext, repository Reposito
 	child.SessionIDs = copyStringMap(parent.SessionIDs)
 	child.SessionProfiles = copyStringMap(parent.SessionProfiles)
 	child.CapturedVariables = copyCapturedValues(parent.CapturedVariables)
+	entry := repositoryStateForResume(parent, index)
 	// Unnamed session history is repository-local. The only time the root
 	// context carries it into a repository child is the active repository being
 	// reconstructed during resume; fresh sibling entries must not inherit a
 	// workspace or sibling conversation as their most-recent session.
-	if parent.ResumeChildState == nil || parent.RepositoryIndex == nil || *parent.RepositoryIndex != index {
+	if entry == nil {
 		child.SessionIDs = make(map[string]string)
 		child.SessionProfiles = make(map[string]string)
 		child.LastSessionStepID = ""
-	} else if entry := repositoryStateForResume(parent, index); entry != nil {
+	} else {
 		child.SessionIDs = copyStringMap(entry.SessionIDs)
 		child.SessionProfiles = copyStringMap(entry.SessionProfiles)
 		child.CapturedVariables = copyCapturedValues(entry.CapturedVariables)
@@ -557,17 +558,15 @@ func NewRepositoryExecutionContext(parent *ExecutionContext, repository Reposito
 	// into these overlays and cannot leak to sibling repositories.
 	child.NamedSessions = make(map[string]string)
 	child.NamedSessionDecls = make(map[string]string)
-	if parent.ResumeChildState != nil && parent.RepositoryIndex != nil && *parent.RepositoryIndex == index {
-		if entry := repositoryStateForResume(parent, index); entry != nil {
-			child.NamedSessions = copyStringMap(entry.NamedSessions)
-			child.NamedSessionDecls = copyStringMap(entry.NamedSessionDecls)
-		}
+	if entry != nil {
+		child.NamedSessions = copyStringMap(entry.NamedSessions)
+		child.NamedSessionDecls = copyStringMap(entry.NamedSessionDecls)
 	}
 	return &child
 }
 
 func repositoryStateForResume(parent *ExecutionContext, index int) *NestedStepState {
-	if parent.RepositoryFrame == nil || index < 0 || index >= len(parent.RepositoryFrame.Repositories) {
+	if parent.RepositoryIndex == nil || *parent.RepositoryIndex != index || parent.RepositoryFrame == nil || index < 0 || index >= len(parent.RepositoryFrame.Repositories) {
 		return nil
 	}
 	return parent.RepositoryFrame.Repositories[index].Nested

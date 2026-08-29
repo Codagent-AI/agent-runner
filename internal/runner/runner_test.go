@@ -493,6 +493,16 @@ func TestRepositoryFanoutPersistsCompletedSiblingRuntimeState(t *testing.T) {
 	}
 }
 
+func TestPersistRepositoryFrameReportsStateReadFailure(t *testing.T) {
+	ctx := model.NewRootContext(&model.RootContextOptions{Workspace: &model.WorkspaceContext{
+		Dir: "/workspace", Selected: []string{"backend"},
+		Repositories: map[string]model.Repository{"backend": {Name: "backend", Dir: "/repos/backend"}},
+	}})
+	if err := persistRepositoryFrame(t.TempDir(), ctx); err == nil {
+		t.Fatal("persistRepositoryFrame() succeeded without state.json")
+	}
+}
+
 type delayedRunner struct{ mockRunner }
 
 func (r *delayedRunner) RunShell(cmd string, capture bool, workdir string) (exec.ProcessResult, error) {
