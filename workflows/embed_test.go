@@ -494,6 +494,11 @@ func TestCoreValidatePlanningArtifactsScript(t *testing.T) {
 	if err := os.WriteFile(fakeOpenSpec, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 		t.Fatalf("write fake openspec: %v", err)
 	}
+	taskGroupLog := filepath.Join(tempDir, "task-groups.log")
+	fakeAgentRunner := filepath.Join(fakeBin, "agent-runner")
+	if err := os.WriteFile(fakeAgentRunner, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$TASK_GROUP_LOG\"\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --change-dir ]; then\n    shift\n    change_dir=$1\n    break\n  fi\n  shift\ndone\ntest -s \"$change_dir/tasks/one.md\"\n"), 0o700); err != nil {
+		t.Fatalf("write fake agent-runner: %v", err)
+	}
 
 	projectDir := filepath.Join(tempDir, "project")
 	changeDir := filepath.Join(projectDir, "openspec", "changes", "demo")
@@ -564,7 +569,7 @@ None.
 		t.Helper()
 		cmd := exec.Command("sh", scriptPath)
 		cmd.Dir = projectDir
-		cmd.Env = append(os.Environ(), "PATH="+fakeBin+":"+os.Getenv("PATH"))
+		cmd.Env = append(os.Environ(), "PATH="+fakeBin+":"+os.Getenv("PATH"), "TASK_GROUP_LOG="+taskGroupLog, "AGENT_RUNNER_EXECUTABLE="+fakeAgentRunner)
 		cmd.Stdin = strings.NewReader(`{"change_name":"demo","change_dir":"openspec/changes/demo","change_kind":"openspec","require_tasks":"` + strconv.FormatBool(requireTasks) + `"}`)
 		return cmd.Run()
 	}
@@ -630,6 +635,13 @@ None.
 	}
 	if err := run(true); err != nil {
 		t.Fatalf("task-plan validation failed: %v", err)
+	}
+	called, err := os.ReadFile(taskGroupLog)
+	if err != nil {
+		t.Fatalf("read task-group delegation log: %v", err)
+	}
+	if got := string(called); !strings.Contains(got, "internal task-groups") || !strings.Contains(got, "--plan-kind full") {
+		t.Fatalf("task validation did not delegate to task-groups: %q", got)
 	}
 }
 

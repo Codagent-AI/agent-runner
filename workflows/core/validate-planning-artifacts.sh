@@ -83,11 +83,9 @@ VALIDATION_CHANGE_DIR="$change_dir" \
   VALIDATION_REQUIRE_TASKS="$require_tasks" \
   python3 - <<'PY'
 import os
-import posixpath
 import re
 import sys
 from pathlib import Path
-from urllib.parse import unquote
 
 change_dir = Path(os.environ["VALIDATION_CHANGE_DIR"])
 change_kind = os.environ["VALIDATION_CHANGE_KIND"]
@@ -246,27 +244,6 @@ if change_kind == "spec-driven":
                 if not re.search(r"\*\*THEN\*\*", scenario_body):
                     failures.append(f"{scenario_label} lacks THEN behavior")
 
-if require_tasks:
-    task_index = change_dir / "tasks.md"
-    if not task_index.is_file() or task_index.stat().st_size == 0:
-        failures.append(f"missing or empty {task_index}")
-    task_paths = sorted(
-        path for path in (change_dir / "tasks").glob("*.md")
-        if path.is_file() and path.stat().st_size > 0
-    )
-    if not task_paths:
-        failures.append(f"no non-empty task file under {change_dir}/tasks/")
-    elif task_index.is_file():
-        index_text = task_index.read_text(encoding="utf-8")
-        destinations = set()
-        for raw in re.findall(r"(?<!!)\[[^\]]+\]\(([^)]+)\)", index_text):
-            destination = raw.strip().strip("<>").split("#", 1)[0].split("?", 1)[0]
-            destinations.add(posixpath.normpath(unquote(destination)))
-        for task_path in task_paths:
-            relative = task_path.relative_to(change_dir).as_posix()
-            if relative not in destinations:
-                failures.append(f"{task_index} does not link to {relative}")
-
 if failures:
     for failure in failures:
         print(f"validate-planning-artifacts: {failure}", file=sys.stderr)
@@ -274,3 +251,13 @@ if failures:
 
 print(f"validated planning artifacts in {change_dir}")
 PY
+
+if [ "$require_tasks" = "true" ]; then
+  workspace_dir=$(pwd -P)
+  change_dir_absolute=$(CDPATH= cd -- "$change_dir" && pwd -P)
+  "${AGENT_RUNNER_EXECUTABLE:-agent-runner}" internal task-groups \
+    --workspace-dir "$workspace_dir" \
+    --change-dir "$change_dir_absolute" \
+    --plan-kind full \
+    --output repositories >/dev/null
+fi
