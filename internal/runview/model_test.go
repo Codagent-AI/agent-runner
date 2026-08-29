@@ -799,25 +799,18 @@ func TestModel_R_CompletedRun_NoAgentSession_NoOp(t *testing.T) {
 	}
 }
 
-// r resumes a failed workflow run even when no individual agent session is resumable.
-func TestModel_R_FailedRun_EmitsResumeRunMsg(t *testing.T) {
+// r is ignored on failed runs with no resumable agent session.
+func TestModel_R_IgnoredOnFailedRunWithNoAgentSession(t *testing.T) {
 	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusFailed}
 	root.Children = []*StepNode{{ID: "archive", Type: NodeShell, Status: StatusFailed, Parent: root}}
 	tree := &Tree{Root: root}
+	tree.Root.Status = StatusFailed
 	m := newTestModel(tree, FromList)
 	m.sessionDir = "/runs/my-run-id"
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
-	if cmd == nil {
-		t.Fatal("r on failed run should produce a cmd")
-	}
-	msg := cmd()
-	resume, ok := msg.(ResumeRunMsg)
-	if !ok {
-		t.Fatalf("expected ResumeRunMsg, got %T", msg)
-	}
-	if resume.RunID != "my-run-id" {
-		t.Fatalf("RunID = %q, want %q", resume.RunID, "my-run-id")
+	if cmd != nil {
+		t.Fatalf("r on failed run should be no-op, got cmd %v", cmd)
 	}
 }
 
@@ -978,15 +971,14 @@ func TestModel_Breadcrumb_HidesAffordance_WhenCompleted(t *testing.T) {
 	}
 }
 
-func TestModel_Breadcrumb_ShowsAffordance_WhenFailed(t *testing.T) {
+func TestModel_Breadcrumb_HidesAffordance_WhenFailed(t *testing.T) {
 	tree := simpleTree()
 	tree.Root.Status = StatusFailed
 	m := newTestModel(tree, FromList)
-	m.sessionDir = "/runs/my-run-id"
 
 	bc := m.renderBreadcrumb()
-	if !containsString(bc, "r to resume") {
-		t.Errorf("breadcrumb should show '(r to resume)' for failed run: %q", bc)
+	if containsString(bc, "r to resume") {
+		t.Errorf("breadcrumb should not show '(r to resume)' for failed run: %q", bc)
 	}
 }
 
@@ -1116,18 +1108,6 @@ func TestModel_HelpBar_HidesRBinding_WhenCompletedRunHasNoAgentSession(t *testin
 	help := m.renderHelpBar()
 	if containsString(help, "r resume") {
 		t.Errorf("help bar should not show 'r resume' for completed run with no agent session: %q", help)
-	}
-}
-
-func TestModel_HelpBar_ShowsRBinding_WhenFailedRunHasNoAgentSession(t *testing.T) {
-	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusFailed}
-	root.Children = []*StepNode{{ID: "archive", Type: NodeShell, Status: StatusFailed, Parent: root}}
-	m := newTestModel(&Tree{Root: root}, FromList)
-	m.sessionDir = "/runs/my-run-id"
-
-	help := m.renderHelpBar()
-	if !containsString(help, "r resume") {
-		t.Errorf("help bar should show 'r resume' for failed run: %q", help)
 	}
 }
 

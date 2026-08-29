@@ -967,14 +967,13 @@ func (m *Model) handlePulseMsg() tea.Cmd {
 
 // canResumeRun reports whether the `r` resume-run action is available.
 // True only when the run is inactive (interrupted, not active elsewhere, not
-// a just-finished live run, and not successfully completed). Failed runs retain
-// resumable workflow state and may be continued from their failed step.
+// a just-finished live run, and not in a terminal completed/failed state).
 // Always false in FromDefinition mode (r emits StartRunMsg instead).
 func (m *Model) canResumeRun() bool {
 	return m.entered != FromDefinition &&
 		m.sessionDir != "" &&
 		!m.running && !m.active && m.liveResult == "" &&
-		m.rootStatus() != StatusSuccess
+		m.rootStatus() != StatusFailed && m.rootStatus() != StatusSuccess
 }
 
 func (m *Model) canLaunchDebug() bool {
