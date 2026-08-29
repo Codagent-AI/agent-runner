@@ -9,9 +9,58 @@ import (
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestExecuteSubWorkflowStep(t *testing.T) {
+	t.Run("fans a repository-scoped child workflow out once per selected repository", func(t *testing.T) {
+		dir := t.TempDir()
+		backend := t.TempDir()
+		frontend := t.TempDir()
+		childPath := filepath.Join(dir, "child-v1.0.yaml")
+		childYAML := `name: child
+scope: repositories
+params:
+  - name: repositories
+steps:
+  - id: first
+    command: first {{repository_name}}
+  - id: second
+    command: second {{repository_name}}
+`
+		if err := os.WriteFile(childPath, []byte(childYAML), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		ctx := model.NewRootContext(&model.RootContextOptions{
+			Params:       map[string]string{},
+			WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"),
+			WorkingDir:   dir,
+			ProjectRoot:  dir,
+			Workspace: &model.WorkspaceContext{
+				Dir: dir,
+				Repositories: map[string]model.Repository{
+					"backend":  {Name: "backend", Dir: backend},
+					"frontend": {Name: "frontend", Dir: frontend},
+				},
+			},
+		})
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}, {ExitCode: 0}, {ExitCode: 0}, {ExitCode: 0}}}
+		step := model.Step{ID: "child", Workflow: "child-v1.0.yaml", Params: map[string]string{"repositories": "backend,frontend"}}
+
+		outcome, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+		if err != nil || outcome != OutcomeSuccess {
+			t.Fatalf("ExecuteSubWorkflowStep() = %q, %v", outcome, err)
+		}
+		want := []string{"first 'backend'", "second 'backend'", "first 'frontend'", "second 'frontend'"}
+		got := make([]string, len(runner.calls))
+		for i, call := range runner.calls {
+			got[i] = call[2]
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Fatalf("commands mismatch (-want +got):\n%s", diff)
+		}
+	})
+
 	t.Run("executes child workflow steps", func(t *testing.T) {
 		// Create a temp workflow file
 		dir := t.TempDir()

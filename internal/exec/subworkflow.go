@@ -68,7 +68,7 @@ func ExecuteSubWorkflowStep(
 
 	log.Printf("  sub-workflow: %s (%s)\n", workflow.Name, workflowPath)
 
-	outcome, err := executeChildSteps(&workflow, childCtx, runner, glob, log, startFromStepID, startCompleted)
+	outcome, err := executeScopedChildWorkflow(&workflow, childCtx, runner, glob, log, startFromStepID, startCompleted)
 
 	endData := map[string]any{
 		"outcome":     string(outcome),
@@ -88,6 +88,45 @@ func ExecuteSubWorkflowStep(
 
 	emitSubEnd(parentCtx, prefix, startTime, step, string(outcome), errMsg)
 	return outcome, err
+}
+
+// executeScopedChildWorkflow supplies the same repository boundary to a
+// complete child workflow body that DispatchStep supplies to nested groups and
+// loops. An already-active repository deliberately suppresses another fan-out
+// while preserving the parent's complete repositories parameter.
+func executeScopedChildWorkflow(
+	workflow *model.Workflow,
+	ctx *model.ExecutionContext,
+	runner ProcessRunner,
+	glob GlobExpander,
+	log Logger,
+	startFromStepID string,
+	startCompleted bool,
+) (StepOutcome, error) {
+	if workflow.Scope != model.ScopeRepositories || ctx.ActiveRepository != nil {
+		return executeChildSteps(workflow, ctx, runner, glob, log, startFromStepID, startCompleted)
+	}
+	if ctx.Workspace == nil || len(ctx.Workspace.Selected) == 0 {
+		return OutcomeFailed, fmt.Errorf("repository-scoped workflow %q has no selected repositories", workflow.Name)
+	}
+	if err := acquireSelectedRepositoryLocks(ctx); err != nil {
+		return OutcomeFailed, err
+	}
+	for index, name := range ctx.Workspace.Selected {
+		repository, ok := ctx.Workspace.Repositories[name]
+		if !ok {
+			return OutcomeFailed, fmt.Errorf("selected repository %q is no longer configured", name)
+		}
+		repositoryCtx := model.NewRepositoryExecutionContext(ctx, repository, index)
+		outcome, err := executeChildSteps(workflow, repositoryCtx, runner, glob, log, startFromStepID, startCompleted)
+		if err != nil {
+			return OutcomeFailed, err
+		}
+		if outcome == OutcomeFailed || outcome == OutcomeAborted {
+			return outcome, nil
+		}
+	}
+	return OutcomeSuccess, nil
 }
 
 // prepareSubWorkflow resolves the sub-workflow path, loads it, validates its
@@ -143,6 +182,15 @@ func prepareSubWorkflow(
 		EngineRef:       childEngine,
 		EngineSet:       workflow.Engine != nil,
 	})
+	if workflow.Scope == model.ScopeRepositories && childCtx.Workspace != nil {
+		selected, err := model.ParseRepositoryTargets(resolvedParams[model.RepositoriesParam], childCtx.Workspace.Repositories)
+		if err != nil {
+			return model.Workflow{}, nil, err
+		}
+		workspace := *childCtx.Workspace
+		workspace.Selected = append([]string(nil), selected...)
+		childCtx.Workspace = &workspace
+	}
 
 	if err := MergeSessionDecls(childCtx, workflow.Sessions, log); err != nil {
 		return model.Workflow{}, nil, err

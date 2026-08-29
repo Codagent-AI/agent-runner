@@ -1,6 +1,7 @@
 package exec
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/audit"
@@ -8,6 +9,36 @@ import (
 )
 
 func boolPtr(b bool) *bool { return &b }
+
+type recordingGlob struct {
+	pattern string
+	matches []string
+}
+
+func (g *recordingGlob) Expand(pattern string) ([]string, error) {
+	g.pattern = pattern
+	return g.matches, nil
+}
+
+func TestExecuteLoopStep_ResolvesRelativeGlobFromEffectiveScopeRoot(t *testing.T) {
+	root := t.TempDir()
+	ctx := makeCtx()
+	ctx.WorkingDir = root
+	ctx.WorkflowScope = model.ScopeWorkspace
+	glob := &recordingGlob{matches: []string{filepath.Join(root, "task.md")}}
+	step := model.Step{
+		ID: "tasks", Loop: &model.Loop{Over: "tasks/*.md", As: "task"},
+		Steps: []model.Step{{ID: "run", Command: "echo {{task}}"}},
+	}
+
+	result, err := ExecuteLoopStep(&step, ctx, &mockRunner{results: []ProcessResult{{ExitCode: 0}}}, glob, &mockLogger{}, LoopExecuteOptions{})
+	if err != nil || result.Outcome != OutcomeSuccess {
+		t.Fatalf("ExecuteLoopStep() = %#v, %v", result, err)
+	}
+	if want := filepath.Join(root, "tasks", "*.md"); glob.pattern != want {
+		t.Fatalf("glob pattern = %q, want %q", glob.pattern, want)
+	}
+}
 
 func TestExecuteLoopStep(t *testing.T) {
 	t.Run("iteration end carries duration-only identity", func(t *testing.T) {

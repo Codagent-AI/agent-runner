@@ -20,6 +20,7 @@ import (
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/repositorylock"
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/stateio"
 	"github.com/codagent/agent-runner/internal/usersettings"
@@ -468,6 +469,21 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		cleanupSession(nil)
 		return nil, err
 	}
+	if opts.Workspace != nil && len(opts.Workspace.Selected) > 0 {
+		targets := make([]repositorylock.Target, 0, len(opts.Workspace.Selected))
+		for _, name := range opts.Workspace.Selected {
+			repository, ok := opts.Workspace.Repositories[name]
+			if !ok {
+				cleanupSession(nil)
+				return nil, fmt.Errorf("selected repository %q is no longer configured", name)
+			}
+			targets = append(targets, repositorylock.Target{Root: repository.Dir, RunID: sessionID})
+		}
+		if err := repositorylock.AcquireAll(targets); err != nil {
+			cleanupSession(nil)
+			return nil, fmt.Errorf("acquire selected repository locks: %w", err)
+		}
+	}
 
 	if opts.SessionDir == "" {
 		projectDir := filepath.Dir(filepath.Dir(sessionDir)) // parent of runs/
@@ -881,29 +897,12 @@ func runStep(step *model.Step, rs *runState) (exec.StepOutcome, *exec.LoopResult
 }
 
 func runStepOnce(step *model.Step, rs *runState) (exec.StepOutcome, *exec.LoopResult, error) {
-	executable := stepForExecution(step, rs.ctx.WorkingDir)
 	if step.Loop != nil && len(step.Steps) > 0 {
-		lr, err := exec.ExecuteLoopStep(&executable, rs.ctx, rs.runner, rs.glob, rs.log, exec.LoopExecuteOptions{})
-		return exec.MapLoopOutcomeForRunner(&executable, lr.Outcome), &lr, err
+		lr, err := exec.ExecuteLoopStep(step, rs.ctx, rs.runner, rs.glob, rs.log, exec.LoopExecuteOptions{})
+		return exec.MapLoopOutcomeForRunner(step, lr.Outcome), &lr, err
 	}
-	outcome, err := exec.DispatchStep(&executable, rs.ctx, rs.runner, rs.glob, rs.log)
+	outcome, err := exec.DispatchStep(step, rs.ctx, rs.runner, rs.glob, rs.log)
 	return outcome, nil, err
-}
-
-func stepForExecution(step *model.Step, root string) model.Step {
-	executable := *step
-	if executable.Workdir == "" {
-		executable.Workdir = root
-	} else if !filepath.IsAbs(executable.Workdir) {
-		executable.Workdir = filepath.Join(root, executable.Workdir)
-	}
-	if len(step.Steps) > 0 {
-		executable.Steps = make([]model.Step, len(step.Steps))
-		for i := range step.Steps {
-			executable.Steps[i] = stepForExecution(&step.Steps[i], root)
-		}
-	}
-	return executable
 }
 
 func finalizeRun(rs *runState, result WorkflowResult) {
@@ -1124,15 +1123,7 @@ func executeRepositoryFanout(rs *runState, startIndex int, executeBody func(repo
 }
 
 func repositoryExecutionContext(parent *model.ExecutionContext, repository model.Repository, index int) *model.ExecutionContext {
-	child := *parent
-	child.ProjectRoot = repository.Dir
-	child.WorkingDir = repository.Dir
-	child.ActiveRepository = &repository
-	child.RepositoryIndex = &index
-	child.CapturedVariables = copyCapturedMap(parent.CapturedVariables)
-	child.SessionIDs = copyMap(parent.SessionIDs)
-	child.SessionProfiles = copyMap(parent.SessionProfiles)
-	return &child
+	return model.NewRepositoryExecutionContext(parent, repository, index)
 }
 
 // RunWorkflow executes a workflow with the given parameters.

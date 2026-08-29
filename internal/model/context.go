@@ -446,6 +446,39 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 	}
 }
 
+// NewRepositoryExecutionContext creates the execution context used for one
+// repository member of a scoped fan-out. The workspace run identity remains
+// shared, while process roots and mutable per-repository execution state are
+// isolated from sibling repositories.
+func NewRepositoryExecutionContext(parent *ExecutionContext, repository Repository, index int) *ExecutionContext {
+	child := *parent
+	child.ParentContext = parent
+	child.ProjectRoot = repository.Dir
+	child.WorkingDir = repository.Dir
+	child.ActiveRepository = &repository
+	child.RepositoryIndex = &index
+	child.SessionIDs = copyStringMap(parent.SessionIDs)
+	child.SessionProfiles = copyStringMap(parent.SessionProfiles)
+	child.CapturedVariables = copyCapturedValues(parent.CapturedVariables)
+	return &child
+}
+
+func copyStringMap(source map[string]string) map[string]string {
+	copy := make(map[string]string, len(source))
+	for key, value := range source {
+		copy[key] = value
+	}
+	return copy
+}
+
+func copyCapturedValues(source map[string]CapturedValue) map[string]CapturedValue {
+	copy := make(map[string]CapturedValue, len(source))
+	for key, value := range source {
+		copy[key] = value
+	}
+	return copy
+}
+
 // SubWorkflowContextOptions configures a new sub-workflow context.
 type SubWorkflowContextOptions struct {
 	StepID          string

@@ -7,6 +7,7 @@ import (
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/google/go-cmp/cmp"
 )
 
 type mockGlob struct {
@@ -15,6 +16,85 @@ type mockGlob struct {
 
 func (g *mockGlob) Expand(_ string) ([]string, error) {
 	return g.matches, nil
+}
+
+func TestDispatchStep_FansRepositoryScopedGroupOutWithRepositoryWorkdirs(t *testing.T) {
+	workspace := t.TempDir()
+	backend := t.TempDir()
+	frontend := t.TempDir()
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		Params:      map[string]string{},
+		WorkingDir:  workspace,
+		ProjectRoot: workspace,
+		Workspace: &model.WorkspaceContext{
+			Dir: workspace,
+			Repositories: map[string]model.Repository{
+				"backend":  {Name: "backend", Dir: backend},
+				"frontend": {Name: "frontend", Dir: frontend},
+			},
+			Selected: []string{"backend", "frontend"},
+		},
+	})
+	runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}, {ExitCode: 0}, {ExitCode: 0}, {ExitCode: 0}}}
+	step := model.Step{
+		ID: "implement", Scope: model.ScopeRepositories,
+		Steps: []model.Step{
+			{ID: "first", Command: "first {{repository_name}}", Workdir: "first"},
+			{ID: "second", Command: "second {{repository_name}}", Workdir: "second"},
+		},
+	}
+
+	outcome, err := DispatchStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+	if err != nil || outcome != OutcomeSuccess {
+		t.Fatalf("DispatchStep() = %q, %v", outcome, err)
+	}
+	wantCalls := [][]string{
+		{"sh", "-c", "first 'backend'"},
+		{"sh", "-c", "second 'backend'"},
+		{"sh", "-c", "first 'frontend'"},
+		{"sh", "-c", "second 'frontend'"},
+	}
+	if diff := cmp.Diff(wantCalls, runner.calls); diff != "" {
+		t.Fatalf("calls mismatch (-want +got):\n%s", diff)
+	}
+	wantWorkdirs := []string{
+		filepath.Join(backend, "first"), filepath.Join(backend, "second"),
+		filepath.Join(frontend, "first"), filepath.Join(frontend, "second"),
+	}
+	if diff := cmp.Diff(wantWorkdirs, runner.workdirs); diff != "" {
+		t.Fatalf("workdirs mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestDispatchStep_EvaluatesGroupChildSkipIfInsideEachRepository(t *testing.T) {
+	workspace, backend, frontend := t.TempDir(), t.TempDir(), t.TempDir()
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		Params: map[string]string{}, WorkingDir: workspace, ProjectRoot: workspace,
+		Workspace: &model.WorkspaceContext{
+			Dir: workspace,
+			Repositories: map[string]model.Repository{
+				"backend": {Name: "backend", Dir: backend}, "frontend": {Name: "frontend", Dir: frontend},
+			},
+			Selected: []string{"backend", "frontend"},
+		},
+	})
+	runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}, {ExitCode: 0}}}
+	step := model.Step{ID: "scoped", Scope: model.ScopeRepositories, Steps: []model.Step{
+		{ID: "first", Command: "first {{repository_name}}"},
+		{ID: "second", Command: "second {{repository_name}}", SkipIf: "previous_success"},
+	}}
+
+	outcome, err := DispatchStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+	if err != nil || outcome != OutcomeSuccess {
+		t.Fatalf("DispatchStep() = %q, %v", outcome, err)
+	}
+	got := make([]string, len(runner.calls))
+	for i, call := range runner.calls {
+		got[i] = call[2]
+	}
+	if diff := cmp.Diff([]string{"first 'backend'", "first 'frontend'"}, got); diff != "" {
+		t.Fatalf("commands mismatch (-want +got):\n%s", diff)
+	}
 }
 
 func TestDispatchStep(t *testing.T) {

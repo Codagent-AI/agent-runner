@@ -1,10 +1,13 @@
 package exec
 
 import (
+	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/repositorylock"
 )
 
 // DispatchStep routes a step to the correct executor based on its type.
@@ -15,8 +18,76 @@ func DispatchStep(
 	glob GlobExpander,
 	log Logger,
 ) (StepOutcome, error) {
+	if step.Scope == model.ScopeRepositories && ctx.ActiveRepository == nil {
+		return dispatchRepositoryScopedStep(step, ctx, runner, glob, log)
+	}
+	return dispatchStepOnce(step, ctx, runner, glob, log)
+}
+
+// dispatchRepositoryScopedStep is the non-top-level repository fan-out
+// boundary. The runner owns top-level workflow dispatch; this keeps groups,
+// loops, and child workflow bodies from falling back to workspace execution.
+func dispatchRepositoryScopedStep(
+	step *model.Step,
+	ctx *model.ExecutionContext,
+	runner ProcessRunner,
+	glob GlobExpander,
+	log Logger,
+) (StepOutcome, error) {
+	if ctx.Workspace == nil || len(ctx.Workspace.Selected) == 0 {
+		return OutcomeFailed, fmt.Errorf("repository-scoped step %q has no selected repositories", step.ID)
+	}
+	if err := acquireSelectedRepositoryLocks(ctx); err != nil {
+		return OutcomeFailed, err
+	}
+	for index, name := range ctx.Workspace.Selected {
+		repository, ok := ctx.Workspace.Repositories[name]
+		if !ok {
+			return OutcomeFailed, fmt.Errorf("selected repository %q is no longer configured", name)
+		}
+		repositoryCtx := model.NewRepositoryExecutionContext(ctx, repository, index)
+		outcome, err := dispatchStepOnce(step, repositoryCtx, runner, glob, log)
+		if err != nil {
+			return OutcomeFailed, err
+		}
+		if outcome == OutcomeFailed || outcome == OutcomeAborted {
+			return outcome, nil
+		}
+	}
+	return OutcomeSuccess, nil
+}
+
+func acquireSelectedRepositoryLocks(ctx *model.ExecutionContext) error {
+	// Direct executor callers do not create a run identity. Production runs
+	// always carry SessionDir, which makes this safe to call from both runner
+	// and child-workflow dispatch without weakening the process-lifetime lock.
+	if ctx.SessionDir == "" || ctx.Workspace == nil || len(ctx.Workspace.Selected) == 0 {
+		return nil
+	}
+	targets := make([]repositorylock.Target, 0, len(ctx.Workspace.Selected))
+	for _, name := range ctx.Workspace.Selected {
+		repository, ok := ctx.Workspace.Repositories[name]
+		if !ok {
+			return fmt.Errorf("selected repository %q is no longer configured", name)
+		}
+		targets = append(targets, repositorylock.Target{Root: repository.Dir, RunID: filepath.Base(filepath.Clean(ctx.SessionDir))})
+	}
+	if err := repositorylock.AcquireAll(targets); err != nil {
+		return fmt.Errorf("acquire selected repository locks: %w", err)
+	}
+	return nil
+}
+
+func dispatchStepOnce(
+	step *model.Step,
+	ctx *model.ExecutionContext,
+	runner ProcessRunner,
+	glob GlobExpander,
+	log Logger,
+) (StepOutcome, error) {
+	executable := stepForExecution(step, ctx.WorkingDir)
 	if step.Loop != nil && len(step.Steps) > 0 {
-		result, err := ExecuteLoopStep(step, ctx, runner, glob, log, LoopExecuteOptions{})
+		result, err := ExecuteLoopStep(&executable, ctx, runner, glob, log, LoopExecuteOptions{})
 		if err != nil {
 			return OutcomeFailed, err
 		}
@@ -24,32 +95,32 @@ func DispatchStep(
 	}
 
 	if step.Workflow != "" {
-		return ExecuteSubWorkflowStep(step, ctx, runner, glob, log)
+		return ExecuteSubWorkflowStep(&executable, ctx, runner, glob, log)
 	}
 
 	if len(step.Steps) > 0 {
-		return executeGroupStep(step, step.Steps, ctx, runner, glob, log)
+		return executeGroupStep(&executable, executable.Steps, ctx, runner, glob, log)
 	}
 
 	if step.Command != "" {
 		if ctx.PrepareStepHook != nil {
 			ctx.PrepareStepHook(step.Mode == model.ModeInteractive)
 		}
-		return ExecuteShellStep(step, ctx, runner, log)
+		return ExecuteShellStep(&executable, ctx, runner, log)
 	}
 
 	if step.Script != "" {
 		if ctx.PrepareStepHook != nil {
 			ctx.PrepareStepHook(false)
 		}
-		return ExecuteScriptStep(step, ctx, runner, log)
+		return ExecuteScriptStep(&executable, ctx, runner, log)
 	}
 
 	if step.Mode == model.ModeUI {
 		if ctx.PrepareStepHook != nil {
 			ctx.PrepareStepHook(false)
 		}
-		return ExecuteUIStep(step, ctx, log)
+		return ExecuteUIStep(&executable, ctx, log)
 	}
 
 	if step.Agent != "" || step.Prompt != "" {
@@ -57,10 +128,23 @@ func DispatchStep(
 			invocationContext := ResolveAgentInvocationContext(step, ctx)
 			ctx.PrepareStepHook(!invocationContext.IsHeadless())
 		}
-		return ExecuteAgentStep(step, ctx, runner, log)
+		return ExecuteAgentStep(&executable, ctx, runner, log)
 	}
 
 	return OutcomeFailed, nil
+}
+
+// stepForExecution resolves a process starting directory only at the point a
+// step is dispatched. Keeping nested bodies raw until then makes a repository
+// container switch their relative roots rather than baking in the workspace.
+func stepForExecution(step *model.Step, root string) model.Step {
+	executable := *step
+	if executable.Workdir == "" {
+		executable.Workdir = root
+	} else if !filepath.IsAbs(executable.Workdir) {
+		executable.Workdir = filepath.Join(root, executable.Workdir)
+	}
+	return executable
 }
 
 // MapLoopOutcomeForRunner maps loop outcomes for the runner's step dispatch.
@@ -108,6 +192,17 @@ func executeGroupStep(
 	ctx.NestingPath = childNestingPath
 	defer func() { ctx.NestingPath = originalNestingPath }()
 	for i := range steps {
+		skip, skipErr := ShouldSkipStep(steps[i].SkipIf, ctx.LastStepOutcome, ctx, steps[i].ID)
+		if skipErr != nil {
+			ctx.NestingPath = originalNestingPath
+			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), map[string]any{"error": skipErr.Error()}, step)
+			return OutcomeFailed, fmt.Errorf("step %q skip_if evaluation failed: %w", steps[i].ID, skipErr)
+		}
+		if skip {
+			emitSkippedChildStep(ctx, &steps[i])
+			recordLastStepOutcome(ctx, OutcomeSkipped)
+			continue
+		}
 		outcome, err := DispatchStep(&steps[i], ctx, runner, glob, log)
 		if err != nil {
 			ctx.NestingPath = originalNestingPath

@@ -2,6 +2,7 @@ package exec
 
 import (
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -137,6 +138,9 @@ func executeForEachLoop(
 	pattern, err := textfmt.InterpolateTyped(overPattern, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
 	if err != nil {
 		return LoopResult{Outcome: OutcomeFailed, LastIteration: -1}, err
+	}
+	if ctx.WorkflowScope != model.ScopeLegacy && !filepath.IsAbs(pattern) {
+		pattern = filepath.Join(ctx.WorkingDir, pattern)
 	}
 
 	matches, err := globExp.Expand(pattern)

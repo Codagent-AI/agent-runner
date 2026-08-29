@@ -241,6 +241,71 @@ func TestRunWorkflow_FansRepositoryScopeOutInTargetOrder(t *testing.T) {
 	}
 }
 
+func TestRunWorkflow_AcquiresProcessLifetimeLocksForSelectedRepositories(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace, backend := t.TempDir(), t.TempDir()
+	initGitWorktree(t, workspace)
+	initGitWorktree(t, backend)
+	workflow := &model.Workflow{
+		Name: "repo", Scope: model.ScopeRepositories,
+		Params: []model.Param{{Name: model.RepositoriesParam}},
+		Steps:  []model.Step{{ID: "run", Command: "echo {{repository_name}}"}},
+	}
+	workflow.ApplyDefaults()
+	options := func() *Options {
+		return &Options{
+			WorkingDir: workspace, SessionDir: t.TempDir(), ProfileStore: &config.Config{Repositories: map[string]config.Repository{
+				"backend": {Path: backend},
+			}}, ProcessRunner: &repositorySpyRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+		}
+	}
+	if result, err := RunWorkflow(workflow, map[string]string{model.RepositoriesParam: "backend"}, options()); err != nil || result != ResultSuccess {
+		t.Fatalf("first RunWorkflow() = %q, %v", result, err)
+	}
+	if _, err := RunWorkflow(workflow, map[string]string{model.RepositoriesParam: "backend"}, options()); err == nil || !strings.Contains(err.Error(), "locked by run") {
+		t.Fatalf("second RunWorkflow() error = %v, want repository lock contention", err)
+	}
+}
+
+func TestRunWorkflow_LocksRepositoryTargetsSelectedByChildWorkflow(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace, backend := t.TempDir(), t.TempDir()
+	initGitWorktree(t, workspace)
+	initGitWorktree(t, backend)
+	childPath := filepath.Join(workspace, "child-v1.0.yaml")
+	child := `name: child
+scope: repositories
+params:
+  - name: repositories
+steps:
+  - id: run
+    command: echo {{repository_name}}
+`
+	if err := os.WriteFile(childPath, []byte(child), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workflow := &model.Workflow{
+		Name: "parent", Scope: model.ScopeWorkspace,
+		Steps: []model.Step{{ID: "child", Workflow: "child-v1.0.yaml", Params: map[string]string{model.RepositoriesParam: "backend"}}},
+	}
+	workflow.ApplyDefaults()
+	options := func() *Options {
+		return &Options{
+			WorkingDir: workspace, WorkflowFile: filepath.Join(workspace, "parent-v1.0.yaml"), SessionDir: t.TempDir(),
+			ProfileStore:  &config.Config{Repositories: map[string]config.Repository{"backend": {Path: backend}}},
+			ProcessRunner: &repositorySpyRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+		}
+	}
+	firstOptions := options()
+	if result, err := RunWorkflow(workflow, nil, firstOptions); err != nil || result != ResultSuccess {
+		t.Fatalf("first RunWorkflow() = %q, %v", result, err)
+	}
+	secondOptions := options()
+	if result, err := RunWorkflow(workflow, nil, secondOptions); err != nil || result != ResultFailed {
+		t.Fatalf("second RunWorkflow() = %q, %v, want failed locked repository dispatch", result, err)
+	}
+}
+
 func TestRunStep_RepositoryFanoutPreservesExecutorErrorAndResumeCursor(t *testing.T) {
 	workspace := &model.WorkspaceContext{
 		Dir: "/coordination",

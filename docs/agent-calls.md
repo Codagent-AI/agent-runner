@@ -69,7 +69,9 @@ The agent CLI presents `call_agent` as a tool; these objects document its fields
 
 ## Execution And Safety
 
-Called children always run autonomous-headless through the resolved profile and CLI adapter. They receive the profile system prompt and the call's `prompt`, but not workflow-step enrichment. An omitted `workdir` inherits the parent's effective directory; an override must remain valid under the normal agent-step workdir rules and within the same worktree.
+Called children always run autonomous-headless through the resolved profile and CLI adapter. They receive the profile system prompt and the call's `prompt`, but not workflow-step enrichment. An omitted `workdir` inherits the parent's effective directory. In a scope-aware workspace, the child must start within the canonical coordination worktree; during repository-scoped work, it must start within the active repository instead, including a configured sibling repository outside the workspace tree. Relative paths resolve from the parent's effective directory, and paths that escape through a symbolic link are rejected before launch.
+
+This is a starting-directory boundary, not a filesystem sandbox. Once started, a child may still access other paths when its CLI, operating-system permissions, and project instructions allow it.
 
 Calls are synchronous and serial per parent attempt:
 
