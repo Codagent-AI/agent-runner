@@ -500,6 +500,7 @@ func (t *Tree) ensureRepository(name string, data map[string]any) *StepNode {
 		return nil
 	}
 	if node := repositoryChildByName(t.Root, name); node != nil {
+		t.populateRepositoryChildren(node)
 		return node
 	}
 	node := &StepNode{ID: name, Type: NodeRepository, Status: StatusPending, Parent: t.Root, RepositoryName: name}
@@ -510,13 +511,25 @@ func (t *Tree) ensureRepository(name string, data map[string]any) *StepNode {
 	if total, ok := intField(data, "total"); ok {
 		node.RepositoryTotal = total
 	}
-	for _, template := range t.Root.Children {
-		if template.Type != NodeRepository {
-			node.Children = append(node.Children, cloneTemplate(template, node))
-		}
-	}
+	t.populateRepositoryChildren(node)
 	t.Root.Children = append(t.Root.Children, node)
 	return node
+}
+
+// populateRepositoryChildren makes repository initialization idempotent. A
+// container can originate from persisted state or from replayed lifecycle
+// evidence, so both paths need the workflow-defined children before nested
+// audit prefixes are resolved.
+func (t *Tree) populateRepositoryChildren(repository *StepNode) {
+	if t == nil || t.Root == nil || repository == nil {
+		return
+	}
+	for _, template := range t.Root.Children {
+		if template.Type == NodeRepository || childByID(repository, template.ID) != nil {
+			continue
+		}
+		repository.Children = append(repository.Children, cloneTemplate(template, repository))
+	}
 }
 
 func repositoryChildByName(parent *StepNode, name string) *StepNode {

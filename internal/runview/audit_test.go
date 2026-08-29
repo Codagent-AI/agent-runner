@@ -297,6 +297,34 @@ func TestApplyEvent_RepositoryContainerClonesNestedWorkflowStructure(t *testing.
 	}
 }
 
+func TestApplyPersistedRepositoriesClonesNestedWorkflowStructure(t *testing.T) {
+	tree := BuildTree(&model.Workflow{Name: "run", Steps: []model.Step{{
+		ID: "tasks", Loop: &model.Loop{Max: intPtr(1)}, Steps: []model.Step{{ID: "child", Command: "echo child"}},
+	}}}, "workflow.yaml")
+	tree.ApplyPersistedRepositories(&model.RunState{SelectedRepositories: []model.RepositoryIdentity{{Name: "backend", Dir: "/repos/backend"}}})
+	tree.ApplyEvent(RawEvent{Prefix: "[repo:backend, tasks:0]", Type: "iteration_start"})
+
+	iteration := tree.FindByPrefix("[repo:backend, tasks:0]")
+	if iteration == nil || iteration.Type != NodeIteration {
+		t.Fatalf("persisted repository loop iteration = %#v, want iteration node", iteration)
+	}
+	child := tree.FindByPrefix("[repo:backend, tasks:0, child]")
+	if child == nil || child.Type != NodeShell || child.Parent != iteration {
+		t.Fatalf("persisted repository child = %#v, want nested shell", child)
+	}
+}
+
+func TestApplyEvent_ExistingRepositoryContainerGetsWorkflowStructure(t *testing.T) {
+	tree := BuildTree(&model.Workflow{Name: "run", Steps: []model.Step{{ID: "tasks", Loop: &model.Loop{Max: intPtr(1)}, Steps: []model.Step{{ID: "child", Command: "echo child"}}}}}, "workflow.yaml")
+	tree.Root.Children = append(tree.Root.Children, &StepNode{ID: "backend", Type: NodeRepository, Parent: tree.Root, RepositoryName: "backend"})
+	tree.ApplyEvent(RawEvent{Prefix: "[repo:backend]", Type: "repository_start", Data: map[string]any{"repository_name": "backend"}})
+	tree.ApplyEvent(RawEvent{Prefix: "[repo:backend, tasks:0]", Type: "iteration_start"})
+
+	if iteration := tree.FindByPrefix("[repo:backend, tasks:0]"); iteration == nil || iteration.Type != NodeIteration {
+		t.Fatalf("existing repository loop iteration = %#v, want iteration node", iteration)
+	}
+}
+
 func TestApplyPersistedRepositoriesKeepsPendingOrderAndPullRequests(t *testing.T) {
 	tree := BuildTree(&model.Workflow{Name: "run"}, "workflow.yaml")
 	tree.ApplyPersistedRepositories(&model.RunState{
