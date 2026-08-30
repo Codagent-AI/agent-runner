@@ -1451,9 +1451,9 @@ func resolveInspectSession(runID string) (sessionDir, projectDir string, err err
 	if err != nil {
 		return "", "", fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	cwd, err := os.Getwd()
+	cwd, err := canonicalWorkingDirectory()
 	if err != nil {
-		return "", "", fmt.Errorf("cannot determine working directory: %w", err)
+		return "", "", err
 	}
 
 	encoded := audit.EncodePath(cwd)
@@ -1693,9 +1693,9 @@ func resolveResumeStatePath(sessionID string) (string, error) {
 		return "", fmt.Errorf("cannot determine home directory: %w", err)
 	}
 
-	cwd, err := os.Getwd()
+	cwd, err := canonicalWorkingDirectory()
 	if err != nil {
-		return "", fmt.Errorf("cannot determine working directory: %w", err)
+		return "", err
 	}
 
 	encoded := audit.EncodePath(cwd)
@@ -1712,6 +1712,18 @@ func resolveResumeStatePath(sessionID string) (string, error) {
 		return "", fmt.Errorf("session not found: %s", sessionID)
 	}
 	return stateFile, nil
+}
+
+func canonicalWorkingDirectory() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine working directory: %w", err)
+	}
+	canonical, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return "", fmt.Errorf("cannot canonicalize working directory: %w", err)
+	}
+	return canonical, nil
 }
 
 func handleValidateArgs(args []string, profile ...config.ProfileOverride) int {

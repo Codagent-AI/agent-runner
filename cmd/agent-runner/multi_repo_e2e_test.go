@@ -183,11 +183,12 @@ func TestMultiRepositoryNestedResumePublicCLI(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	temp := t.TempDir()
 	home := filepath.Join(temp, "home")
-	workspace := filepath.Join(temp, "foo")
+	workspaceRoot := symlinkedE2EWorkspaceRoot(t, temp)
+	workspace := filepath.Join(workspaceRoot, "foo")
 	repositories := map[string]string{
-		"backend":  filepath.Join(temp, "backend"),
-		"frontend": filepath.Join(temp, "frontend"),
-		"docs":     filepath.Join(temp, "docs"),
+		"backend":  filepath.Join(workspaceRoot, "backend"),
+		"frontend": filepath.Join(workspaceRoot, "frontend"),
+		"docs":     filepath.Join(workspaceRoot, "docs"),
 	}
 	initE2EGitRepository(t, workspace)
 	for _, dir := range repositories {
@@ -255,7 +256,7 @@ steps:
 
 	runnerBin := filepath.Join(temp, "agent-runner")
 	buildAgentRunner(t, repoRoot, runnerBin)
-	env := smokeCommandEnv(os.Environ(), "AGENT_RUNNER_NO_TUI=1", "HOME="+home)
+	env := smokeCommandEnv(os.Environ(), "AGENT_RUNNER_NO_TUI=1", "HOME="+home, "PWD="+workspace)
 	first := exec.Command(runnerBin, "--headless", "nested-repository-resume", "repositories=backend,frontend,docs")
 	first.Dir = workspace
 	first.Env = env
@@ -303,9 +304,10 @@ func TestMultiRepositoryRunViewPublicPTY(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	temp := t.TempDir()
 	home := filepath.Join(temp, "home")
-	workspace := filepath.Join(temp, "foo")
-	backend := filepath.Join(temp, "backend")
-	frontend := filepath.Join(temp, "frontend")
+	workspaceRoot := symlinkedE2EWorkspaceRoot(t, temp)
+	workspace := filepath.Join(workspaceRoot, "foo")
+	backend := filepath.Join(workspaceRoot, "backend")
+	frontend := filepath.Join(workspaceRoot, "frontend")
 	for _, dir := range []string{workspace, backend, frontend} {
 		initE2EGitRepository(t, dir)
 	}
@@ -342,7 +344,7 @@ steps:
 	}
 	runnerBin := filepath.Join(temp, "agent-runner")
 	buildAgentRunner(t, repoRoot, runnerBin)
-	env := smokeCommandEnv(os.Environ(), "HOME="+home, "TERM=xterm-256color")
+	env := smokeCommandEnv(os.Environ(), "HOME="+home, "PWD="+workspace, "TERM=xterm-256color")
 
 	live := exec.Command(runnerBin, "multi-repo-run-view", "repositories=backend,frontend")
 	live.Dir, live.Env = workspace, env
@@ -363,6 +365,19 @@ func assertRepositoryRunViewScreen(t *testing.T, phase, screen string) {
 			t.Errorf("%s run-view screen missing %q:\n%s", phase, marker, screen)
 		}
 	}
+}
+
+func symlinkedE2EWorkspaceRoot(t *testing.T, temp string) string {
+	t.Helper()
+	realRoot := filepath.Join(temp, "workspace-real")
+	logicalRoot := filepath.Join(temp, "workspace-logical")
+	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realRoot, logicalRoot); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	return logicalRoot
 }
 
 func runPTYUntilRepositoryScreen(t *testing.T, command *exec.Cmd) string {
