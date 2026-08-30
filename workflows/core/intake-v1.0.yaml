@@ -1,6 +1,7 @@
 name: intake
 description: "Explore a change with an agent and choose an appropriate workflow together."
 hidden: true
+scope: workspace
 
 sessions:
   - name: intake-planner

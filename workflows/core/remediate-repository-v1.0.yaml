@@ -1,0 +1,20 @@
+name: remediate-repository
+description: "Apply only the active repository's approved acceptance remediation."
+hidden: true
+
+params:
+  - name: change_dir
+    required: true
+
+sessions:
+  - name: lead-agent
+    agent: lead
+
+steps:
+  - id: apply-approved-remediation
+    session: lead-agent
+    mode: autonomous
+    prompt: |
+      For repository {{repository_name}} at {{repository_dir}}, with shared workspace {{workspace_dir}}, read only this repository's entry in `{{session_dir}}/output/acceptance-remediation.json`.
+
+      If there is no entry, make no change, run no Validator, create no commit, push nothing, and do not refresh a pull request. Otherwise apply only its approved changes, use codagent:implement-with-tdd for defects, run the active repository's Validator, commit and push the result, then verify that its draft pull request head matches local HEAD. Write any repository-local evidence below `{{repository_output_dir}}`.

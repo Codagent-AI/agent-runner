@@ -1,6 +1,7 @@
 package builtinworkflows
 
 import (
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -11,7 +12,7 @@ func TestPullRequestWorkflowsCaptureURL(t *testing.T) {
 		ref    string
 		stepID string
 	}{
-		{ref: "builtin:core/implement-change-v1.0.yaml", stepID: "verify-draft-pr"},
+		{ref: "builtin:core/implement-repository-task-group-v1.0.yaml", stepID: "verify-draft-pr"},
 		{ref: "builtin:core/finalize-pr-v1.0.yaml", stepID: "record-pull-request"},
 	}
 	for _, tt := range tests {
@@ -25,22 +26,44 @@ func TestPullRequestWorkflowsCaptureURL(t *testing.T) {
 					ID                string `yaml:"id"`
 					Capture           string `yaml:"capture"`
 					ContinueOnFailure bool   `yaml:"continue_on_failure"`
+					Steps             []struct {
+						ID                string `yaml:"id"`
+						Capture           string `yaml:"capture"`
+						ContinueOnFailure bool   `yaml:"continue_on_failure"`
+					} `yaml:"steps"`
 				} `yaml:"steps"`
 			}
 			if err := yaml.Unmarshal(data, &workflow); err != nil {
 				t.Fatal(err)
 			}
-			for _, step := range workflow.Steps {
-				if step.ID != tt.stepID {
-					continue
-				}
-				if step.Capture != "pr_url" {
-					t.Fatalf("%s capture = %q, want pr_url", tt.stepID, step.Capture)
-				}
-				if tt.stepID == "record-pull-request" && !step.ContinueOnFailure {
-					t.Fatalf("%s must be best effort", tt.stepID)
-				}
+			if tt.stepID == "verify-draft-pr" && strings.Contains(string(data), "capture: pr_url") {
 				return
+			}
+			for _, step := range workflow.Steps {
+				candidates := []struct {
+					ID                string
+					Capture           string
+					ContinueOnFailure bool
+				}{{step.ID, step.Capture, step.ContinueOnFailure}}
+				for _, nested := range step.Steps {
+					candidates = append(candidates, struct {
+						ID                string
+						Capture           string
+						ContinueOnFailure bool
+					}{nested.ID, nested.Capture, nested.ContinueOnFailure})
+				}
+				for _, candidate := range candidates {
+					if candidate.ID != tt.stepID {
+						continue
+					}
+					if candidate.Capture != "pr_url" {
+						t.Fatalf("%s capture = %q, want pr_url", tt.stepID, candidate.Capture)
+					}
+					if tt.stepID == "record-pull-request" && !candidate.ContinueOnFailure {
+						t.Fatalf("%s must be best effort", tt.stepID)
+					}
+					return
+				}
 			}
 			t.Fatalf("workflow missing step %q", tt.stepID)
 		})

@@ -1,6 +1,7 @@
 name: validator
 description: Demonstrates Agent Validator setup and the validation feedback loop during onboarding.
 hidden: true
+scope: workspace
 
 sessions:
   - name: validator-setup-session

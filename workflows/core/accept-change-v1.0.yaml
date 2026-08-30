@@ -1,6 +1,7 @@
 name: accept-change
 description: "Resolve undecided assumptions, support human review and testing, and apply requested follow-up changes."
 hidden: true
+scope: workspace
 
 params:
   - name: change_name
@@ -10,6 +11,8 @@ params:
   - name: change_label
     required: true
   - name: artifact_validation_instruction
+    required: true
+  - name: repositories
     required: true
 
 sessions:
@@ -115,3 +118,31 @@ steps:
         echo "invalid re-acceptance result: $status" >&2
       fi
       exit 1
+
+  - id: validate-remediation-ledger
+    command: |
+      ledger="{{session_dir}}/output/acceptance-remediation.json"
+      if [ ! -f "$ledger" ]; then
+        printf '%s\n' '{"workspace":[],"repositories":{}}' > "$ledger"
+      fi
+      python3 - "$ledger" "{{repositories}}" <<'PY'
+      import json, sys
+      path, selected = sys.argv[1:]
+      with open(path, encoding="utf-8") as f:
+          ledger = json.load(f)
+      entries = ledger.get("repositories")
+      if not isinstance(entries, dict):
+          raise SystemExit("acceptance remediation ledger must contain a repositories object")
+      allowed = set(selected.split(","))
+      unknown = set(entries) - allowed
+      if unknown:
+          raise SystemExit("acceptance remediation ledger names unselected repositories: " + ", ".join(sorted(unknown)))
+      PY
+
+  - id: remediate-repositories
+    scope: repositories
+    steps:
+      - id: remediate-repository
+        workflow: ../core/remediate-repository-v1.0.yaml
+        params:
+          change_dir: "{{change_dir}}"

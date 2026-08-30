@@ -1,5 +1,6 @@
 name: change
 description: "Use for a substantial or higher-risk change in an OpenSpec project when you need the full proposal, specification, design, test plan, task breakdown, and acceptance lifecycle. It manages repository-local OpenSpec artifacts while guiding implementation, evidence-based acceptance, human review, archival, and pull-request finalization."
+scope: workspace
 
 params:
   - name: change_name
@@ -20,7 +21,7 @@ steps:
     workflow: ../core/define-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
-      change_dir: "openspec/changes/{{change_name}}"
+      change_dir: "{{workspace_dir}}/openspec/changes/{{change_name}}"
       change_label: "OpenSpec change"
       artifact_location_instruction: "Keep every OpenSpec definition and planning artifact under the repository-local `openspec/changes/{{change_name}}/` directory."
 
@@ -28,27 +29,38 @@ steps:
     workflow: ../core/plan-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
-      change_dir: "openspec/changes/{{change_name}}"
+      change_dir: "{{workspace_dir}}/openspec/changes/{{change_name}}"
       change_label: "OpenSpec change"
       change_kind: "openspec"
+
+  - id: resolve-affected-repositories
+    script: resolve-task-group.sh
+    capture: affected_repositories
+    script_inputs:
+      workspace_dir: "{{workspace_dir}}"
+      change_dir: "{{workspace_dir}}/openspec/changes/{{change_name}}"
+      plan_kind: "full"
+      output: "repositories"
 
   - id: implement
     workflow: ../core/implement-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
-      change_dir: "openspec/changes/{{change_name}}"
+      change_dir: "{{workspace_dir}}/openspec/changes/{{change_name}}"
       change_label: "OpenSpec change"
       change_kind: "openspec"
       artifact_validation_instruction: 'When an approved artifact changed, run `openspec validate --type change "{{change_name}}"`.'
       skip_validator: "false"
+      repositories: "{{affected_repositories}}"
 
   - id: accept
     workflow: ../core/accept-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
-      change_dir: "openspec/changes/{{change_name}}"
+      change_dir: "{{workspace_dir}}/openspec/changes/{{change_name}}"
       change_label: "OpenSpec change"
       artifact_validation_instruction: 'If a specification changed, run `openspec validate --type change "{{change_name}}"`.'
+      repositories: "{{affected_repositories}}"
 
   - id: archive
     script: archive-change.sh
@@ -57,3 +69,8 @@ steps:
 
   - id: finalize
     workflow: ../core/finalize-pr-v1.0.yaml
+
+  - id: finalize-repositories
+    workflow: ../core/finalize-repositories-v1.0.yaml
+    params:
+      repositories: "{{affected_repositories}}"

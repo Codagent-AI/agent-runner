@@ -1,6 +1,7 @@
 name: commit-change-plan
 description: "Commit a structured change plan and advance the Validator baseline."
 hidden: true
+scope: workspace
 
 params:
   - name: change_name

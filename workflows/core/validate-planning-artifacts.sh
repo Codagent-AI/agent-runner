@@ -60,10 +60,16 @@ if [ -z "$change_dir" ]; then
   exit 1
 fi
 
-if [ "$change_kind" = "openspec" ] && [ "$change_dir" != "$expected_dir" ]; then
-  printf 'validate-planning-artifacts: change_dir must be %s for %s: %s\n' "$expected_dir" "$change_kind" "$change_dir" >&2
-  exit 1
+workspace_dir=$(pwd -P)
+change_dir_absolute=$(CDPATH= cd -- "$change_dir" && pwd -P)
+if [ "$change_kind" = "openspec" ]; then
+  expected_dir="$workspace_dir/$expected_dir"
+  if [ "$change_dir_absolute" != "$expected_dir" ]; then
+    printf 'validate-planning-artifacts: change_dir must resolve to %s for %s: %s\n' "$expected_dir" "$change_kind" "$change_dir" >&2
+    exit 1
+  fi
 fi
+change_dir=$change_dir_absolute
 
 case "$require_tasks" in
   true|false)
@@ -253,8 +259,6 @@ print(f"validated planning artifacts in {change_dir}")
 PY
 
 if [ "$require_tasks" = "true" ]; then
-  workspace_dir=$(pwd -P)
-  change_dir_absolute=$(CDPATH= cd -- "$change_dir" && pwd -P)
   "${AGENT_RUNNER_EXECUTABLE:-agent-runner}" internal task-groups \
     --workspace-dir "$workspace_dir" \
     --change-dir "$change_dir_absolute" \

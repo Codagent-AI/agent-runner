@@ -1,5 +1,6 @@
 name: simple-change
 description: "Quick plan + implement + validate workflow, okay for small changes"
+scope: workspace
 
 sessions:
   - name: lead-agent

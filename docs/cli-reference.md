@@ -86,6 +86,8 @@ Scope-aware launches must start at the canonical root of the coordination Git
 worktree. Traditional projects with no repository declarations receive their
 single implicit target internally and do not need `repositories=default`.
 
+Built-in change workflows derive their selected repositories from the approved task groups rather than from a command-line repository list. Their `tasks.md` index uses `## Repository: <name>` headings and links to `tasks/<name>/` task files; the run persists that selected order for resume, evidence aggregation, and independent implementation PR links.
+
 The `<workflow>` argument is a version-free logical name such as `deploy`,
 `team/deploy`, or `openspec:plan-change`. It is not a filename or path.
 

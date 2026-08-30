@@ -11,6 +11,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/codagent/agent-runner/internal/model"
 	"gopkg.in/yaml.v3"
 )
 
@@ -253,24 +254,24 @@ func TestV2NamespaceAdaptersConfigureSharedCorePhases(t *testing.T) {
 		{
 			ref:            "builtin:openspec/plan-change-v2.0.yaml",
 			wantWorkflow:   "../core/plan-change-v1.0.yaml",
-			wantChangeDir:  "openspec/changes/{{change_name}}",
+			wantChangeDir:  "{{workspace_dir}}/openspec/changes/{{change_name}}",
 			wantChangeKind: "openspec",
 		},
 		{
 			ref:            "builtin:spec-driven/plan-change-v2.0.yaml",
 			wantWorkflow:   "../core/plan-change-v1.0.yaml",
-			wantChangeDir:  "{{change_dir}}",
+			wantChangeDir:  "{{canonical_change_dir}}",
 			wantChangeKind: "spec-driven",
 		},
 		{
 			ref:           "builtin:openspec/implement-change-v2.0.yaml",
 			wantWorkflow:  "../core/implement-change-v1.0.yaml",
-			wantChangeDir: "openspec/changes/{{change_name}}",
+			wantChangeDir: "{{workspace_dir}}/openspec/changes/{{change_name}}",
 		},
 		{
 			ref:           "builtin:spec-driven/implement-change-v2.0.yaml",
 			wantWorkflow:  "../core/implement-change-v1.0.yaml",
-			wantChangeDir: "{{change_dir}}",
+			wantChangeDir: "{{canonical_change_dir}}",
 		},
 	}
 	for _, tt := range tests {
@@ -288,10 +289,20 @@ func TestV2NamespaceAdaptersConfigureSharedCorePhases(t *testing.T) {
 			if err := yaml.Unmarshal(body, &workflow); err != nil {
 				t.Fatalf("unmarshal %s: %v", tt.ref, err)
 			}
-			if len(workflow.Steps) != 1 {
-				t.Fatalf("%s has %d steps, want one shared-core adapter step", tt.ref, len(workflow.Steps))
+			var step struct {
+				Workflow string            `yaml:"workflow"`
+				Params   map[string]string `yaml:"params"`
 			}
-			step := workflow.Steps[0]
+			found := false
+			for _, candidate := range workflow.Steps {
+				if candidate.Workflow == tt.wantWorkflow {
+					step, found = candidate, true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("%s has no shared-core adapter step %q", tt.ref, tt.wantWorkflow)
+			}
 			if step.Workflow != tt.wantWorkflow {
 				t.Fatalf("%s workflow = %q, want %q", tt.ref, step.Workflow, tt.wantWorkflow)
 			}
@@ -394,7 +405,7 @@ func TestCoreImplementChangePreflightsValidatedPlanBeforeAgentWork(t *testing.T)
 		t.Fatal("core implement-change does not require change_kind for deterministic planning-artifact validation")
 	}
 
-	var checkPlanIndex, implementTasksIndex = -1, -1
+	var checkPlanIndex, repositoryGroupIndex = -1, -1
 	for index, step := range workflow.Steps {
 		switch step.ID {
 		case "check-plan":
@@ -413,21 +424,21 @@ func TestCoreImplementChangePreflightsValidatedPlanBeforeAgentWork(t *testing.T)
 					t.Errorf("check-plan script input %s = %q, want %q", name, got, want)
 				}
 			}
-		case "implement-tasks":
-			implementTasksIndex = index
+		case "implement-task-groups":
+			repositoryGroupIndex = index
 		}
 	}
 	if checkPlanIndex < 0 {
 		t.Fatal("core implement-change has no check-plan preflight")
 	}
-	if implementTasksIndex < 0 {
-		t.Fatal("core implement-change has no implement-tasks step")
+	if repositoryGroupIndex < 0 {
+		t.Fatal("core implement-change has no repository task group")
 	}
-	if checkPlanIndex >= implementTasksIndex {
-		t.Fatalf("check-plan index = %d, want before implement-tasks index %d", checkPlanIndex, implementTasksIndex)
+	if checkPlanIndex >= repositoryGroupIndex {
+		t.Fatalf("check-plan index = %d, want before repository group index %d", checkPlanIndex, repositoryGroupIndex)
 	}
-	if checkPlanIndex != implementTasksIndex-1 {
-		t.Fatalf("check-plan index = %d, want immediately before implement-tasks index %d", checkPlanIndex, implementTasksIndex)
+	if checkPlanIndex != repositoryGroupIndex-1 {
+		t.Fatalf("check-plan index = %d, want immediately before repository group index %d", checkPlanIndex, repositoryGroupIndex)
 	}
 	for _, step := range workflow.Steps[:checkPlanIndex+1] {
 		if step.Prompt != "" || step.Workflow != "" {
@@ -472,6 +483,134 @@ func TestV2ImplementChangeCallersProvideChangeKind(t *testing.T) {
 			}
 			t.Fatal("no shared core implement-change step")
 		})
+	}
+}
+
+func TestBuiltInPlanningUsesTaskGroupResolverAndScopedRepositoryLifecycle(t *testing.T) {
+	plan, err := ReadFile("builtin:core/plan-change-v1.0.yaml")
+	if err != nil {
+		t.Fatalf("ReadFile(core plan-change): %v", err)
+	}
+	var planWorkflow struct {
+		Scope string `yaml:"scope"`
+		Steps []struct {
+			ID      string `yaml:"id"`
+			Script  string `yaml:"script"`
+			Capture string `yaml:"capture"`
+		} `yaml:"steps"`
+	}
+	if err := yaml.Unmarshal(plan, &planWorkflow); err != nil {
+		t.Fatalf("unmarshal core plan-change: %v", err)
+	}
+	if planWorkflow.Scope != "workspace" {
+		t.Fatalf("core plan-change scope = %q, want workspace", planWorkflow.Scope)
+	}
+	var selected bool
+	for _, step := range planWorkflow.Steps {
+		if step.ID == "resolve-affected-repositories" && step.Script == "resolve-task-group.sh" && step.Capture == "affected_repositories" {
+			selected = true
+		}
+	}
+	if !selected {
+		t.Fatal("core plan-change must capture affected_repositories through resolve-task-group.sh")
+	}
+
+	implementation, err := ReadFile("builtin:core/implement-change-v1.0.yaml")
+	if err != nil {
+		t.Fatalf("ReadFile(core implement-change): %v", err)
+	}
+	var implementWorkflow struct {
+		Scope  string `yaml:"scope"`
+		Params []struct {
+			Name string `yaml:"name"`
+		} `yaml:"params"`
+		Steps []struct {
+			ID       string `yaml:"id"`
+			Scope    string `yaml:"scope"`
+			Script   string `yaml:"script"`
+			Workflow string `yaml:"workflow"`
+			Steps    []struct {
+				ID      string `yaml:"id"`
+				Script  string `yaml:"script"`
+				Capture string `yaml:"capture"`
+			} `yaml:"steps"`
+		} `yaml:"steps"`
+	}
+	if err := yaml.Unmarshal(implementation, &implementWorkflow); err != nil {
+		t.Fatalf("unmarshal core implement-change: %v", err)
+	}
+	if implementWorkflow.Scope != "workspace" {
+		t.Fatalf("core implement-change scope = %q, want workspace", implementWorkflow.Scope)
+	}
+	if !slices.ContainsFunc(implementWorkflow.Params, func(param struct {
+		Name string `yaml:"name"`
+	}) bool {
+		return param.Name == "repositories"
+	}) {
+		t.Fatal("core implement-change must accept selected repositories")
+	}
+	var repositoryGroup bool
+	for _, step := range implementWorkflow.Steps {
+		if step.ID != "implement-task-groups" {
+			continue
+		}
+		if step.Workflow == "implement-repository-task-group-v1.0.yaml" {
+			repositoryGroup = true
+		}
+	}
+	if !repositoryGroup {
+		t.Fatal("core implement-change must invoke its repository-scoped task group")
+	}
+
+	asset, err := ReadAsset("core/resolve-task-group.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(core/resolve-task-group.sh): %v", err)
+	}
+	for _, want := range []string{"internal task-groups", "--output repositories", "--output task-pattern"} {
+		if !strings.Contains(string(asset), want) {
+			t.Errorf("task-group resolver does not delegate %q", want)
+		}
+	}
+}
+
+func TestEveryShippedWorkflowExplicitlyClassifiesScope(t *testing.T) {
+	contextNeutral := map[string]bool{
+		"core/run-validator-v1.0.yaml":           true,
+		"core/validate-feature-branch-v1.0.yaml": true,
+		"core/implement-task-v1.0.yaml":          true,
+		"core/finalize-pr-v1.0.yaml":             true,
+		"core/remediate-repository-v1.0.yaml":    true,
+	}
+	err := fs.WalkDir(FS, ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".yaml") || strings.HasPrefix(filepath.Base(path), "_") {
+			return nil
+		}
+		body, err := FS.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var workflow model.Workflow
+		if err := yaml.Unmarshal(body, &workflow); err != nil {
+			t.Errorf("unmarshal %s: %v", path, err)
+			return nil
+		}
+		if contextNeutral[path] {
+			if workflow.Scope != model.ScopeLegacy {
+				t.Errorf("context-neutral %s scope = %q, want omitted", path, workflow.Scope)
+			}
+		} else if workflow.Scope != model.ScopeWorkspace && workflow.Scope != model.ScopeRepositories {
+			t.Errorf("orchestration workflow %s has no explicit scope", path)
+		}
+		if err := workflow.Validate(nil); err != nil {
+			t.Errorf("validate %s: %v", path, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk embedded workflows: %v", err)
 	}
 }
 
@@ -565,16 +704,16 @@ None.
 		}
 	}
 
-	run := func(requireTasks bool) error {
+	run := func(requireTasks bool, changeDirInput string) error {
 		t.Helper()
 		cmd := exec.Command("sh", scriptPath)
 		cmd.Dir = projectDir
 		cmd.Env = append(os.Environ(), "PATH="+fakeBin+":"+os.Getenv("PATH"), "TASK_GROUP_LOG="+taskGroupLog, "AGENT_RUNNER_EXECUTABLE="+fakeAgentRunner)
-		cmd.Stdin = strings.NewReader(`{"change_name":"demo","change_dir":"openspec/changes/demo","change_kind":"openspec","require_tasks":"` + strconv.FormatBool(requireTasks) + `"}`)
+		cmd.Stdin = strings.NewReader(`{"change_name":"demo","change_dir":"` + changeDirInput + `","change_kind":"openspec","require_tasks":"` + strconv.FormatBool(requireTasks) + `"}`)
 		return cmd.Run()
 	}
 
-	if err := run(false); err != nil {
+	if err := run(false, "openspec/changes/demo"); err != nil {
 		t.Fatalf("definition validation failed: %v", err)
 	}
 
@@ -601,7 +740,7 @@ None.
 			if err := os.WriteFile(testPlanPath, []byte(content), 0o600); err != nil {
 				t.Fatalf("write invalid test plan: %v", err)
 			}
-			if err := run(false); err == nil {
+			if err := run(false, "openspec/changes/demo"); err == nil {
 				t.Fatal("definition validation passed malformed test plan")
 			}
 			if err := os.WriteFile(testPlanPath, validTestPlan, 0o600); err != nil {
@@ -615,7 +754,7 @@ None.
 		if err := os.Remove(testPlanPath); err != nil {
 			t.Fatalf("remove test plan: %v", err)
 		}
-		if err := run(false); err == nil {
+		if err := run(false, "openspec/changes/demo"); err == nil {
 			t.Fatal("definition validation passed without test-plan.md")
 		}
 		if err := os.WriteFile(testPlanPath, validTestPlan, 0o600); err != nil {
@@ -623,7 +762,7 @@ None.
 		}
 	})
 
-	if err := run(true); err == nil {
+	if err := run(true, "openspec/changes/demo"); err == nil {
 		t.Fatal("task-plan validation passed without a task file")
 	}
 
@@ -633,8 +772,11 @@ None.
 	if err := os.WriteFile(filepath.Join(changeDir, "tasks.md"), []byte("- [Task one](tasks/one.md)\n"), 0o600); err != nil {
 		t.Fatalf("write task index: %v", err)
 	}
-	if err := run(true); err != nil {
+	if err := run(true, "openspec/changes/demo"); err != nil {
 		t.Fatalf("task-plan validation failed: %v", err)
+	}
+	if err := run(true, changeDir); err != nil {
+		t.Fatalf("task-plan validation rejected canonical OpenSpec change path: %v", err)
 	}
 	called, err := os.ReadFile(taskGroupLog)
 	if err != nil {
@@ -670,14 +812,14 @@ func TestV2SimpleChangeWorkflowsShareCorePhases(t *testing.T) {
 	}{
 		{
 			ref:                    "builtin:openspec/simple-change-v2.0.yaml",
-			wantChangeDir:          "openspec/changes/{{change_name}}",
+			wantChangeDir:          "{{workspace_dir}}/openspec/changes/{{change_name}}",
 			wantValidationText:     "openspec validate",
 			wantOpenSpecValidation: true,
 			wantArchive:            true,
 		},
 		{
 			ref:                "builtin:spec-driven/simple-change-v2.0.yaml",
-			wantChangeDir:      "{{change_dir}}",
+			wantChangeDir:      "{{canonical_change_dir}}",
 			wantValidationText: "simple-change-validation-checklist.md",
 			discoverChangeDir:  true,
 		},

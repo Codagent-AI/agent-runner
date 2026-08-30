@@ -1,0 +1,75 @@
+name: implement-repository-task-group
+description: "Complete one selected repository's implementation lifecycle."
+hidden: true
+scope: repositories
+
+params:
+  - name: repositories
+    required: true
+  - name: change_dir
+    required: true
+  - name: change_label
+    required: true
+  - name: skip_validator
+    required: true
+
+sessions:
+  - name: lead-agent
+    agent: lead
+
+steps:
+  - id: repository-preflight
+    workflow: ../core/validate-feature-branch-v1.0.yaml
+    params:
+      workflow_name: "{{change_label}} implementation for {{repository_name}}"
+  - id: resolve-repository-tasks
+    script: resolve-task-group.sh
+    capture: repository_task_glob
+    script_inputs:
+      workspace_dir: "{{workspace_dir}}"
+      change_dir: "{{change_dir}}"
+      plan_kind: "full"
+      output: "task-pattern"
+      repository_name: "{{repository_name}}"
+  - id: implement-tasks
+    loop:
+      over: "{{repository_task_glob}}"
+      as: task_file
+      require_matches: true
+    steps:
+      - id: implement-single-task
+        workflow: ../core/implement-task-v1.0.yaml
+        params:
+          task_file: "{{task_file}}"
+          run_session_report: "true"
+          skip_validator: "{{skip_validator}}"
+  - id: review-assumptions
+    session: lead-agent
+    mode: autonomous
+    prompt: |
+      For repository {{repository_name}} at {{repository_dir}}, with shared workspace {{workspace_dir}}, review only `{{repository_output_dir}}/*session-report*.out`. Write `{{repository_output_dir}}/acceptance-assumptions.md`, fix high-confidence local issues, and do not read sibling evidence.
+  - id: verify-assumptions-handoff
+    command: test -s "{{repository_output_dir}}/acceptance-assumptions.md"
+  - id: simplify
+    session: lead-agent
+    mode: autonomous
+    prompt: "For repository {{repository_name}} at {{repository_dir}}, with shared workspace {{workspace_dir}}, simplify only the active repository and commit clear-cut improvements."
+  - id: run-validator
+    workflow: ../core/run-validator-v1.0.yaml
+  - id: verify-clean-for-pr
+    command: test -z "$(git status --porcelain)"
+  - id: open-draft-pr
+    session: lead-agent
+    mode: autonomous
+    prompt: "For repository {{repository_name}} at {{repository_dir}}, with shared workspace {{workspace_dir}}, invoke codagent:push-pr and maintain its draft pull request."
+  - id: verify-draft-pr
+    capture: pr_url
+    command: |
+      branch=$(git branch --show-current); local_head=$(git rev-parse HEAD)
+      pr_json=$(gh pr list --head "$branch" --state open --json url,state,isDraft,baseRefName,headRefOid --limit 2)
+      test "$(printf '%s' "$pr_json" | jq length)" -eq 1
+      test "$(printf '%s' "$pr_json" | jq -r '.[0].state')" = OPEN
+      test "$(printf '%s' "$pr_json" | jq -r '.[0].isDraft')" = true
+      test -n "$(printf '%s' "$pr_json" | jq -r '.[0].baseRefName')"
+      test "$local_head" = "$(printf '%s' "$pr_json" | jq -r '.[0].headRefOid')"
+      printf '%s\n' "$(printf '%s' "$pr_json" | jq -r '.[0].url')"

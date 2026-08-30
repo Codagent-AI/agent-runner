@@ -1,5 +1,6 @@
 name: help
 description: Interactive Agent Runner help agent backed by bundled onboarding documentation.
+scope: workspace
 
 sessions:
   - name: help-session

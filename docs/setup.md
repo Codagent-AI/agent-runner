@@ -57,6 +57,8 @@ worktree. Each declared path is resolved relative to it and must itself be the
 root of an independent Git worktree. Repository declarations are project-local;
 they are not allowed in global configuration.
 
+For built-in changes in this layout, create repository-owned task groups in the shared change's `tasks.md` and put their linked task files under `tasks/<repository>/`. Planning and OpenSpec artifacts remain in the coordination repository, while implementation, Validator runs, commits, and pull requests occur independently in each selected checkout.
+
 If the directory is empty or is not a Git repository yet, initialize the repository before continuing. The exact commands depend on the project and Git workflow, so use the normal setup path for that project.
 
 ## Install Agent Runner
