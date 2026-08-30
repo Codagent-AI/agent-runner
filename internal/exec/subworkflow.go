@@ -56,7 +56,7 @@ func ExecuteSubWorkflowStep(
 
 	subStart := time.Now()
 	emitAudit(childCtx, audit.Event{
-		Timestamp: subStart.UTC().Format(time.RFC3339),
+		Timestamp: formatAuditTimestamp(subStart),
 		Prefix:    childPrefix,
 		Type:      audit.EventSubWorkflowStart,
 		Data: map[string]any{
@@ -80,7 +80,7 @@ func ExecuteSubWorkflowStep(
 		endData["error"] = errMsg
 	}
 	emitAudit(childCtx, audit.Event{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: formatAuditTimestamp(time.Now()),
 		Prefix:    childPrefix,
 		Type:      audit.EventSubWorkflowEnd,
 		Data:      endData,

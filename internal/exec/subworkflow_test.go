@@ -5,11 +5,19 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 )
+
+func TestAuditTimestampPreservesSubsecondPrecision(t *testing.T) {
+	at := time.Date(2026, time.August, 29, 20, 46, 3, 456789123, time.FixedZone("test", -4*60*60))
+	if got, want := formatAuditTimestamp(at), "2026-08-30T00:46:03.456789123Z"; got != want {
+		t.Fatalf("formatAuditTimestamp() = %q, want %q", got, want)
+	}
+}
 
 func TestExecuteSubWorkflowStep(t *testing.T) {
 	t.Run("executes child workflow steps", func(t *testing.T) {

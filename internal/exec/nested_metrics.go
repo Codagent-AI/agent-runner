@@ -152,7 +152,7 @@ func emitNestedMetricCapture(ctx *model.ExecutionContext, step *model.Step, pref
 			SessionID: record.SessionID, AgentInvoked: true, Role: record.Role, Tool: record.Tool,
 		}
 		emitAudit(ctx, audit.Event{
-			Timestamp: time.Now().UTC().Format(time.RFC3339Nano), Prefix: prefix,
+			Timestamp: formatAuditTimestamp(time.Now()), Prefix: prefix,
 			Type: audit.EventNestedAgentEnd, Data: map[string]any{
 				"identity": identity, "usage": record.Usage,
 				"estimated_api_cost_usd": record.EstimatedAPICostUSD,
@@ -172,7 +172,7 @@ func emitNestedMetricCapture(ctx *model.ExecutionContext, step *model.Step, pref
 			Role: "implementation-validator", Tool: step.MetricsSource,
 		}
 		emitAudit(ctx, audit.Event{
-			Timestamp: time.Now().UTC().Format(time.RFC3339Nano), Prefix: prefix,
+			Timestamp: formatAuditTimestamp(time.Now()), Prefix: prefix,
 			Type: audit.EventNestedAgentEnd, Data: map[string]any{
 				"identity":               identity,
 				"usage":                  model.UsageRecord{Status: model.UsageUnavailable, Reason: reason, CLI: step.MetricsSource, Source: "agent-runner:nested-metrics"},

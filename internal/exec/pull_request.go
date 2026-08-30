@@ -26,7 +26,7 @@ func recordPullRequestCapture(ctx *model.ExecutionContext, stepID, name string, 
 		return
 	}
 	emitAudit(ctx, audit.Event{
-		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Timestamp: formatAuditTimestamp(time.Now()),
 		Prefix:    audit.BuildPrefix(nestingToAudit(ctx), stepID),
 		Type:      audit.EventPullRequestRecorded,
 		Data:      map[string]any{"url": url},

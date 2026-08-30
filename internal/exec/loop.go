@@ -384,7 +384,7 @@ func executeIterationWithAudit(
 	}
 
 	emitAudit(iterCtx, audit.Event{
-		Timestamp: iterStart.UTC().Format(time.RFC3339Nano),
+		Timestamp: formatAuditTimestamp(iterStart),
 		Prefix:    prefix,
 		Type:      audit.EventIterationStart,
 		Data:      startData,
@@ -400,7 +400,7 @@ func executeIterationWithAudit(
 	}
 
 	emitAudit(iterCtx, audit.Event{
-		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Timestamp: formatAuditTimestamp(time.Now()),
 		Prefix:    prefix,
 		Type:      audit.EventIterationEnd,
 		Data: map[string]any{
@@ -557,7 +557,7 @@ func installIterationFlush(
 			// normal workflow execution. Emit an error event so a resume
 			// landing at the wrong position is debuggable rather than silent.
 			emitAudit(iterCtx, audit.Event{
-				Timestamp: time.Now().UTC().Format(time.RFC3339),
+				Timestamp: formatAuditTimestamp(time.Now()),
 				Type:      audit.EventError,
 				Data: map[string]any{
 					"error":      "iteration flush chain construction failed",
