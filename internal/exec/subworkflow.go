@@ -106,37 +106,20 @@ func executeScopedChildWorkflow(
 	if workflow.Scope != model.ScopeRepositories || ctx.ActiveRepository != nil {
 		return executeChildSteps(workflow, ctx, runner, glob, log, startFromStepID, startCompleted)
 	}
-	if ctx.Workspace == nil || len(ctx.Workspace.Selected) == 0 {
-		return OutcomeFailed, fmt.Errorf("repository-scoped workflow %q has no selected repositories", workflow.Name)
-	}
-	if err := acquireSelectedRepositoryLocks(ctx); err != nil {
-		return OutcomeFailed, err
-	}
-	for index, name := range ctx.Workspace.Selected {
-		repository, ok := ctx.Workspace.Repositories[name]
-		if !ok {
-			return OutcomeFailed, fmt.Errorf("selected repository %q is no longer configured", name)
-		}
-		repositoryCtx := model.NewRepositoryExecutionContext(ctx, repository, index)
+	boundaryPrefix := buildNestingPrefix(ctx.NestingPath)
+	return executeNestedRepositoryFanout(ctx, boundaryPrefix, func(repositoryCtx *model.ExecutionContext, index int) (StepOutcome, error) {
 		// The invoking step remains outside the repository-owned child body.
 		repositoryCtx.RepositoryPrefixDepth = ctx.AuditPrefixTokenCount()
 		if len(ctx.NestingPath) > 0 && ctx.NestingPath[len(ctx.NestingPath)-1].SubWorkflowName != "" {
 			repositoryCtx.RepositoryPrefixDepth--
 		}
-		started := time.Now()
-		boundaryPrefix := buildNestingPrefix(ctx.NestingPath)
-		emitRepositoryBoundaryStart(repositoryCtx, boundaryPrefix, index, len(ctx.Workspace.Selected), started)
-		outcome, err := executeChildSteps(workflow, repositoryCtx, runner, glob, log, startFromStepID, startCompleted)
-		if err != nil {
-			emitRepositoryBoundaryEnd(repositoryCtx, boundaryPrefix, OutcomeFailed, started)
-			return OutcomeFailed, err
+		entry := nestedRepositoryEntry(ctx.RepositoryFrame, index)
+		resumeStepID, resumeCompleted := "", false
+		if entry != nil && entry.Nested != nil {
+			resumeStepID, resumeCompleted = startFromStepID, startCompleted
 		}
-		emitRepositoryBoundaryEnd(repositoryCtx, boundaryPrefix, outcome, started)
-		if outcome == OutcomeFailed || outcome == OutcomeAborted {
-			return outcome, nil
-		}
-	}
-	return OutcomeSuccess, nil
+		return executeChildSteps(workflow, repositoryCtx, runner, glob, log, resumeStepID, resumeCompleted)
+	})
 }
 
 // prepareSubWorkflow resolves the sub-workflow path, loads it, validates its
@@ -332,6 +315,11 @@ func recordChildProgress(childCtx *model.ExecutionContext, childStepID string, c
 		entry.Child = nestedChild.Child
 	} else {
 		entry.Child = nestedChild
+	}
+	if childCtx.ActiveRepository != nil && childCtx.RepositoryIndex != nil {
+		if repositoryState := nestedRepositoryEntry(childCtx.RepositoryFrame, *childCtx.RepositoryIndex); repositoryState != nil {
+			repositoryState.Nested = entry
+		}
 	}
 	parent.LastSubWorkflowChild = entry
 }

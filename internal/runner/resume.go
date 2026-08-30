@@ -252,10 +252,31 @@ func restoreResumeContext(state *model.RunState) restoredResumeContext {
 func resumeNestedState(state *model.RunState) *model.NestedStepState {
 	if index, ok := activeRepositoryFrameIndex(state); ok {
 		if nested := state.RepositoryFrame.Repositories[index].Nested; nested != nil {
-			return nested
+			if state.RepositoryFrame.BoundaryID == "" {
+				return nested
+			}
+			attachNestedRepositoryResume(state.CurrentStep.Nested, nested)
+			return state.CurrentStep.Nested
 		}
 	}
 	return state.CurrentStep.Nested
+}
+
+func attachNestedRepositoryResume(root, repository *model.NestedStepState) {
+	if root == nil || repository == nil {
+		return
+	}
+	current := root
+	for {
+		if current == repository {
+			return
+		}
+		if current.Child == nil {
+			current.Child = repository
+			return
+		}
+		current = current.Child
+	}
 }
 
 func resumeRepositoryIndex(state *model.RunState) int {

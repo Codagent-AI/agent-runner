@@ -1,6 +1,7 @@
 package exec
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +10,32 @@ import (
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/google/go-cmp/cmp"
 )
+
+func TestNestedRepositoryFanoutNormalizesCallbackErrorsToFailure(t *testing.T) {
+	workspace, backend := t.TempDir(), t.TempDir()
+	auditLog := &mockAuditLogger{}
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		WorkingDir: workspace, AuditLogger: auditLog,
+		Workspace: &model.WorkspaceContext{Dir: workspace, Repositories: map[string]model.Repository{
+			"backend": {Name: "backend", Dir: backend},
+		}, Selected: []string{"backend"}},
+	})
+	wantErr := errors.New("callback failed")
+	outcome, err := executeNestedRepositoryFanout(ctx, "[nested]", func(*model.ExecutionContext, int) (StepOutcome, error) {
+		return OutcomeSuccess, wantErr
+	})
+	if !errors.Is(err, wantErr) || outcome != OutcomeFailed {
+		t.Fatalf("executeNestedRepositoryFanout() = %q, %v; want failed, %v", outcome, err, wantErr)
+	}
+	if got := ctx.RepositoryFrame.Repositories[0].Status; got != model.RepositoryFailed {
+		t.Fatalf("repository status = %q, want %q", got, model.RepositoryFailed)
+	}
+	for _, event := range auditLog.events {
+		if event.Type == audit.EventRepositoryEnd && event.Data["outcome"] != string(OutcomeFailed) {
+			t.Fatalf("repository end outcome = %v, want failed", event.Data["outcome"])
+		}
+	}
+}
 
 type mockGlob struct {
 	matches []string

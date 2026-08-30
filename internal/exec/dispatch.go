@@ -41,43 +41,113 @@ func dispatchRepositoryScopedStep(
 	glob GlobExpander,
 	log Logger,
 ) (StepOutcome, error) {
+	boundaryPrefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
+	return executeNestedRepositoryFanout(ctx, boundaryPrefix, func(repositoryCtx *model.ExecutionContext, index int) (StepOutcome, error) {
+		repositoryCtx.RepositoryPrefixDepth = ctx.AuditPrefixTokenCount() + 1
+		skip, skipErr := ShouldSkipStep(step.SkipIf, repositoryCtx.LastStepOutcome, repositoryCtx, step.ID)
+		if skipErr != nil {
+			return OutcomeFailed, fmt.Errorf("step %q skip_if evaluation failed for repository %q: %w", step.ID, repositoryCtx.ActiveRepository.Name, skipErr)
+		}
+		if skip {
+			emitSkippedChildStep(repositoryCtx, step)
+			return OutcomeSuccess, nil
+		}
+		return dispatchStepOnce(step, repositoryCtx, runner, glob, log)
+	})
+}
+
+func executeNestedRepositoryFanout(
+	ctx *model.ExecutionContext,
+	boundaryPrefix string,
+	execute func(*model.ExecutionContext, int) (StepOutcome, error),
+) (StepOutcome, error) {
 	if ctx.Workspace == nil || len(ctx.Workspace.Selected) == 0 {
-		return OutcomeFailed, fmt.Errorf("repository-scoped step %q has no selected repositories", step.ID)
+		return OutcomeFailed, fmt.Errorf("repository boundary %q has no selected repositories", boundaryPrefix)
 	}
 	if err := acquireSelectedRepositoryLocks(ctx); err != nil {
 		return OutcomeFailed, err
 	}
+	ensureNestedRepositoryFrame(ctx, boundaryPrefix)
+	previousIndex := ctx.RepositoryIndex
+	defer func() { ctx.RepositoryIndex = previousIndex }()
 	for index, name := range ctx.Workspace.Selected {
+		entry := nestedRepositoryEntry(ctx.RepositoryFrame, index)
+		if entry != nil && entry.Status == model.RepositoryCompleted {
+			continue
+		}
 		repository, ok := ctx.Workspace.Repositories[name]
 		if !ok {
 			return OutcomeFailed, fmt.Errorf("selected repository %q is no longer configured", name)
 		}
+		activeIndex := index
+		ctx.RepositoryIndex = &activeIndex
+		if entry != nil {
+			entry.Status = model.RepositoryActive
+			flushRepositoryProgress(ctx)
+		}
 		repositoryCtx := model.NewRepositoryExecutionContext(ctx, repository, index)
-		repositoryCtx.RepositoryPrefixDepth = ctx.AuditPrefixTokenCount() + 1
 		started := time.Now()
-		boundaryPrefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 		emitRepositoryBoundaryStart(repositoryCtx, boundaryPrefix, index, len(ctx.Workspace.Selected), started)
-		skip, skipErr := ShouldSkipStep(step.SkipIf, repositoryCtx.LastStepOutcome, repositoryCtx, step.ID)
-		if skipErr != nil {
-			emitRepositoryBoundaryEnd(repositoryCtx, boundaryPrefix, OutcomeFailed, started)
-			return OutcomeFailed, fmt.Errorf("step %q skip_if evaluation failed for repository %q: %w", step.ID, name, skipErr)
-		}
-		if skip {
-			emitSkippedChildStep(repositoryCtx, step)
-			emitRepositoryBoundaryEnd(repositoryCtx, boundaryPrefix, OutcomeSuccess, started)
-			continue
-		}
-		outcome, err := dispatchStepOnce(step, repositoryCtx, runner, glob, log)
+		outcome, err := execute(repositoryCtx, index)
 		if err != nil {
+			if entry != nil {
+				entry.Status = model.RepositoryFailed
+				flushRepositoryProgress(ctx)
+			}
 			emitRepositoryBoundaryEnd(repositoryCtx, boundaryPrefix, OutcomeFailed, started)
 			return OutcomeFailed, err
 		}
-		emitRepositoryBoundaryEnd(repositoryCtx, boundaryPrefix, outcome, started)
 		if outcome == OutcomeFailed || outcome == OutcomeAborted {
+			if entry != nil {
+				entry.Status = model.RepositoryFailed
+				flushRepositoryProgress(ctx)
+			}
+			emitRepositoryBoundaryEnd(repositoryCtx, boundaryPrefix, outcome, started)
 			return outcome, nil
 		}
+		if entry != nil {
+			entry.Status = model.RepositoryCompleted
+			flushRepositoryProgress(ctx)
+		}
+		emitRepositoryBoundaryEnd(repositoryCtx, boundaryPrefix, outcome, started)
 	}
 	return OutcomeSuccess, nil
+}
+
+func ensureNestedRepositoryFrame(ctx *model.ExecutionContext, boundaryPrefix string) {
+	if ctx.RepositoryFrame != nil && ctx.RepositoryFrame.BoundaryID == boundaryPrefix {
+		return
+	}
+	frame := &model.RepositoryFrame{BoundaryID: boundaryPrefix, Repositories: make([]model.RepositoryExecutionState, 0, len(ctx.Workspace.Selected))}
+	for _, name := range ctx.Workspace.Selected {
+		repository := ctx.Workspace.Repositories[name]
+		frame.Repositories = append(frame.Repositories, model.RepositoryExecutionState{
+			Identity: model.RepositoryIdentity(repository),
+			Status:   model.RepositoryPending,
+		})
+	}
+	for current := ctx; current != nil; current = current.ParentContext {
+		if current.Workspace != nil {
+			workspace := *current.Workspace
+			workspace.Selected = append([]string(nil), ctx.Workspace.Selected...)
+			current.Workspace = &workspace
+		}
+		current.RepositoryFrame = frame
+	}
+	flushRepositoryProgress(ctx)
+}
+
+func nestedRepositoryEntry(frame *model.RepositoryFrame, index int) *model.RepositoryExecutionState {
+	if frame == nil || index < 0 || index >= len(frame.Repositories) {
+		return nil
+	}
+	return &frame.Repositories[index]
+}
+
+func flushRepositoryProgress(ctx *model.ExecutionContext) {
+	if ctx.FlushState != nil {
+		ctx.FlushState()
+	}
 }
 
 func emitRepositoryBoundaryStart(ctx *model.ExecutionContext, prefix string, index, total int, started time.Time) {
