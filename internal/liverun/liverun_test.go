@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -410,6 +411,131 @@ func TestTUIProcessRunnerPersistsRepeatedAgentCallOutputByCallIdentity(t *testin
 	}
 	if stdoutFiles != 2 {
 		t.Fatalf("persisted stdout files = %d, want one per call; entries=%v", stdoutFiles, entries)
+	}
+}
+
+func TestTUIProcessRunnerPreservesOutputWhenPrefixIsReplayed(t *testing.T) {
+	sessionDir := t.TempDir()
+	runner := NewCoordinator(&captureProgram{}, sessionDir).TUIProcessRunner(unusedRunner{}).(*tuiProcessRunner)
+	prefix := "[implement, generate-code]"
+
+	runner.SetPrefix(prefix)
+	first, firstCleanup := runner.compositeWriter("stdout", "out", nil)
+	if _, err := first.Write([]byte("interrupted attempt")); err != nil {
+		t.Fatalf("write first attempt: %v", err)
+	}
+
+	second, secondCleanup := runner.compositeWriter("stdout", "out", nil)
+	if _, err := second.Write([]byte("resumed attempt")); err != nil {
+		t.Fatalf("write resumed attempt: %v", err)
+	}
+	if _, err := first.Write([]byte(" still exiting")); err != nil {
+		t.Fatalf("write exiting first attempt: %v", err)
+	}
+	firstCleanup()
+	secondCleanup()
+
+	currentPath := filepath.Join(sessionDir, "output", sanitizePrefix(prefix)+".out")
+	current, err := os.ReadFile(currentPath)
+	if err != nil {
+		t.Fatalf("read current output: %v", err)
+	}
+	if got, want := string(current), "resumed attempt"; got != want {
+		t.Fatalf("current output = %q, want %q", got, want)
+	}
+
+	archives, err := filepath.Glob(currentPath + ".bak-*")
+	if err != nil {
+		t.Fatalf("glob archived output: %v", err)
+	}
+	if len(archives) != 1 {
+		t.Fatalf("archived outputs = %v, want one preserved attempt", archives)
+	}
+	archived, err := os.ReadFile(archives[0])
+	if err != nil {
+		t.Fatalf("read archived output: %v", err)
+	}
+	if got, want := string(archived), "interrupted attempt still exiting"; got != want {
+		t.Fatalf("archived output = %q, want %q", got, want)
+	}
+}
+
+func TestTUIProcessRunnerBoundsReplayedOutputArchives(t *testing.T) {
+	const wantArchives = 8
+
+	sessionDir := t.TempDir()
+	runner := NewCoordinator(&captureProgram{}, sessionDir).TUIProcessRunner(unusedRunner{}).(*tuiProcessRunner)
+	prefix := "[implement, generate-code]"
+	runner.SetPrefix(prefix)
+
+	for attempt := range wantArchives + 4 {
+		writer, cleanup := runner.compositeWriter("stdout", "out", nil)
+		if _, err := fmt.Fprintf(writer, "attempt %d", attempt); err != nil {
+			t.Fatalf("write attempt %d: %v", attempt, err)
+		}
+		cleanup()
+	}
+
+	currentPath := filepath.Join(sessionDir, "output", sanitizePrefix(prefix)+".out")
+	archives, err := filepath.Glob(currentPath + ".bak-*")
+	if err != nil {
+		t.Fatalf("glob archived output: %v", err)
+	}
+	if len(archives) != wantArchives {
+		t.Fatalf("archived outputs = %d, want bounded retention of %d", len(archives), wantArchives)
+	}
+}
+
+func TestTUIProcessRunnerKeepsCurrentOutputWhenArchivePruningFails(t *testing.T) {
+	sessionDir := t.TempDir()
+	program := &captureProgram{}
+	runner := NewCoordinator(program, sessionDir).TUIProcessRunner(unusedRunner{}).(*tuiProcessRunner)
+	prefix := "[implement, generate-code]"
+	currentPath := filepath.Join(sessionDir, "output", sanitizePrefix(prefix)+".out")
+	if err := os.MkdirAll(filepath.Dir(currentPath), 0o750); err != nil {
+		t.Fatalf("create output directory: %v", err)
+	}
+	if err := os.WriteFile(currentPath, []byte("interrupted"), 0o600); err != nil {
+		t.Fatalf("write current output: %v", err)
+	}
+
+	unremovable := currentPath + ".bak-0000"
+	if err := os.MkdirAll(unremovable, 0o750); err != nil {
+		t.Fatalf("create unremovable archive: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(unremovable, "child"), []byte("keep"), 0o600); err != nil {
+		t.Fatalf("write unremovable archive child: %v", err)
+	}
+	for i := 1; i < maxArchivedOutputAttempts; i++ {
+		archive := fmt.Sprintf("%s.bak-%04d", currentPath, i)
+		if err := os.WriteFile(archive, []byte("old"), 0o600); err != nil {
+			t.Fatalf("write archive %d: %v", i, err)
+		}
+	}
+
+	runner.SetPrefix(prefix)
+	writer, cleanup := runner.compositeWriter("stdout", "out", nil)
+	if _, err := writer.Write([]byte("resumed")); err != nil {
+		t.Fatalf("write resumed output: %v", err)
+	}
+	cleanup()
+
+	current, err := os.ReadFile(currentPath)
+	if err != nil {
+		t.Fatalf("read resumed output: %v", err)
+	}
+	if got, want := string(current), "resumed"; got != want {
+		t.Fatalf("current output = %q, want %q", got, want)
+	}
+
+	var warning string
+	for _, msg := range program.messages() {
+		if chunk, ok := msg.(OutputChunkMsg); ok && chunk.Stream == "stderr" {
+			warning += string(chunk.Bytes)
+		}
+	}
+	if !strings.Contains(warning, "could not prune archived output") {
+		t.Fatalf("persistence warning = %q, want archive pruning failure", warning)
 	}
 }
 

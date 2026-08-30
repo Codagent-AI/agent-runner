@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	iexec "github.com/codagent/agent-runner/internal/exec"
@@ -40,6 +43,10 @@ type outputScope struct {
 	stdoutWrapper func(io.Writer) io.Writer
 	stderrWrapper func(io.Writer) io.Writer
 }
+
+var outputArchiveSequence atomic.Uint64
+
+const maxArchivedOutputAttempts = 8
 
 func (r *tuiProcessRunner) NotifyAgentCallAccepted(call *iexec.AgentCallAccepted) {
 	r.coord.NotifyStepChange(call.Prefix)
@@ -152,9 +159,11 @@ func sanitizeOutputPrefix(prefix string, escapeLiteralUnderscores bool) string {
 	return b.String()
 }
 
-// openOutputFile creates (or truncates) an output file under
-// <sessionDir>/output/<sanitizedPrefix>.<ext>. Returns nil on any error —
-// callers treat a nil file as "no persistence" and continue without it.
+// openOutputFile creates an output file under
+// <sessionDir>/output/<sanitizedPrefix>.<ext>. When a replay or resume reuses a
+// prefix, the previous file is renamed first so neither its evidence nor writes
+// from a still-exiting process are truncated. Returns nil on any error — callers
+// treat a nil file as "no persistence" and continue without it.
 func (r *tuiProcessRunner) openOutputFile(prefix, ext string) *os.File {
 	if r.coord.sessionDir == "" || prefix == "" {
 		return nil
@@ -174,12 +183,73 @@ func (r *tuiProcessRunner) openOutputFile(prefix, ext string) *os.File {
 	if !strings.HasPrefix(name, cleanDir+string(filepath.Separator)) {
 		return nil
 	}
-	// #nosec G304 — name is allowlist-sanitized and containment-checked above.
-	f, err := os.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	archivedExisting := false
+	for range 16 {
+		// #nosec G304 — name is allowlist-sanitized and containment-checked above.
+		f, err := os.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			if archivedExisting {
+				if err := pruneOutputArchives(name); err != nil {
+					r.reportOutputPersistenceWarning(prefix, err)
+				}
+			}
+			return f
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return nil
+		}
+
+		archive := fmt.Sprintf(
+			"%s.bak-%s-%d-%020d",
+			name,
+			time.Now().UTC().Format("20060102T150405.000000000Z"),
+			os.Getpid(),
+			outputArchiveSequence.Add(1),
+		)
+		if err := os.Rename(name, archive); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil
+		}
+		archivedExisting = true
+	}
+	return nil
+}
+
+func (r *tuiProcessRunner) reportOutputPersistenceWarning(prefix string, err error) {
+	message := fmt.Sprintf("agent-runner: warning: could not prune archived output for %s: %v", prefix, err)
+	r.coord.send(OutputChunkMsg{StepPrefix: prefix, Stream: "stderr", Bytes: []byte(message + "\n")})
+
+	if r.coord.sessionDir == "" {
+		return
+	}
+	warningPath := filepath.Join(r.coord.sessionDir, "output", "persistence-warnings.log")
+	// #nosec G304 — warningPath is constructed from the internally managed session directory.
+	f, openErr := os.OpenFile(warningPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if openErr != nil {
+		return
+	}
+	_, _ = fmt.Fprintf(f, "%s %s\n", time.Now().UTC().Format(time.RFC3339Nano), message)
+	_ = f.Close()
+}
+
+func pruneOutputArchives(name string) error {
+	archives, err := filepath.Glob(name + ".bak-*")
 	if err != nil {
+		return err
+	}
+	if len(archives) <= maxArchivedOutputAttempts {
 		return nil
 	}
-	return f
+
+	sort.Strings(archives)
+	for _, archive := range archives[:len(archives)-maxArchivedOutputAttempts] {
+		if err := os.Remove(archive); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
 }
 
 // compositeWriter builds the three-way tee:
