@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -240,9 +241,9 @@ params:
   - name: repositories
 steps:
   - id: first
-    command: printf '%s:first\n' {{repository_name}} >> {{workspace_dir}}/trace.log
+    command: if [ {{repository_name}} = frontend ]; then sleep 5; fi; printf '%s:first\n' {{repository_name}} >> {{workspace_dir}}/trace.log
   - id: second
-    command: printf '%s:second\n' {{repository_name}} >> {{workspace_dir}}/trace.log; if [ {{repository_name}} = frontend ] && [ ! -e {{workspace_dir}}/failed-once ]; then touch {{workspace_dir}}/failed-once; exit 1; fi
+    command: printf '%s:second\n' {{repository_name}} >> {{workspace_dir}}/trace.log
 `
 	for name, contents := range map[string]string{
 		"nested-repository-resume-v1.0.yaml": parentWorkflow,
@@ -260,11 +261,19 @@ steps:
 	first := exec.Command(runnerBin, "--headless", "nested-repository-resume", "repositories=backend,frontend,docs")
 	first.Dir = workspace
 	first.Env = env
-	firstOutput, firstErr := first.CombinedOutput()
-	if firstErr == nil {
-		t.Fatalf("first run succeeded, want controlled frontend failure\n%s", firstOutput)
+	first.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var firstOutput bytes.Buffer
+	first.Stdout, first.Stderr = &firstOutput, &firstOutput
+	if err := first.Start(); err != nil {
+		t.Fatal(err)
 	}
-	sessionDir := latestNamedRunDir(t, home, canonicalWorkspace, "nested-repository-resume-")
+	sessionDir := waitForRepositoryAuditBoundary(t, home, canonicalWorkspace, "nested-repository-resume-", "repo:frontend")
+	if err := syscall.Kill(-first.Process.Pid, syscall.SIGTERM); err != nil {
+		t.Fatalf("interrupt first run: %v", err)
+	}
+	if firstErr := first.Wait(); firstErr == nil {
+		t.Fatalf("first run succeeded, want controlled frontend-boundary interruption\n%s", firstOutput.String())
+	}
 
 	resumed := exec.Command(runnerBin, "--headless", "--resume", filepath.Base(sessionDir))
 	resumed.Dir = workspace
@@ -280,7 +289,7 @@ steps:
 	got := strings.Split(strings.TrimSpace(string(traceData)), "\n")
 	want := []string{
 		"backend:first", "backend:second",
-		"frontend:first", "frontend:second", "frontend:second",
+		"frontend:first", "frontend:second",
 		"docs:first", "docs:second",
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
@@ -293,6 +302,27 @@ steps:
 	if !state.Completed {
 		t.Fatalf("resumed workflow did not complete: %#v", state)
 	}
+}
+
+func waitForRepositoryAuditBoundary(t *testing.T, home, workspace, runPrefix, repositoryMarker string) string {
+	t.Helper()
+	projectRuns := filepath.Join(home, ".agent-runner", "projects", audit.EncodePath(workspace), "runs")
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		matches, err := filepath.Glob(filepath.Join(projectRuns, runPrefix+"*"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, sessionDir := range matches {
+			data, readErr := os.ReadFile(filepath.Join(sessionDir, "audit.log"))
+			if readErr == nil && bytes.Contains(data, []byte(repositoryMarker)) && bytes.Contains(data, []byte("repository_start")) {
+				return sessionDir
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s repository boundary", repositoryMarker)
+	return ""
 }
 
 // E2E-003 proves both the live and saved public run views expose the same

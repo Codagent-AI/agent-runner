@@ -655,6 +655,76 @@ func TestRecordChildProgressPreservesSameIDSubWorkflowNesting(t *testing.T) {
 	}
 }
 
+func TestRecordChildProgressPersistsCompleteRepositoryChainBeforeUnwind(t *testing.T) {
+	workspace, repositoryDir := t.TempDir(), t.TempDir()
+	root := model.NewRootContext(&model.RootContextOptions{
+		Params: map[string]string{},
+		Workspace: &model.WorkspaceContext{
+			Dir: workspace,
+			Repositories: map[string]model.Repository{
+				"frontend": {Name: "frontend", Dir: repositoryDir},
+			},
+			Selected: []string{"frontend"},
+		},
+		RepositoryFrame: &model.RepositoryFrame{Repositories: []model.RepositoryExecutionState{{
+			Identity: model.RepositoryIdentity{Name: "frontend", Dir: repositoryDir},
+			Status:   model.RepositoryActive,
+		}}},
+	})
+	repository := model.NewRepositoryExecutionContext(root, root.Workspace.Repositories["frontend"], 0)
+	implementation := model.NewSubWorkflowContext(repository, &model.SubWorkflowContextOptions{StepID: "implement-repository-task-group"})
+	preflight := model.NewSubWorkflowContext(implementation, &model.SubWorkflowContextOptions{StepID: "repository-preflight"})
+	validation := model.NewSubWorkflowContext(preflight, &model.SubWorkflowContextOptions{StepID: "validate-feature-branch"})
+	preflight.SessionIDs = map[string]string{"agent": "preflight-session"}
+	preflight.SessionProfiles = map[string]string{"agent": "preflight-profile"}
+	preflight.CapturedVariables = map[string]model.CapturedValue{"result": model.NewCapturedString("preflight-result")}
+	preflight.LastSessionStepID = "preflight-agent"
+	validation.SessionIDs = map[string]string{"agent": "validation-session"}
+	validation.SessionProfiles = map[string]string{"agent": "validation-profile"}
+	validation.CapturedVariables = map[string]model.CapturedValue{"result": model.NewCapturedString("validation-result")}
+	validation.LastSessionStepID = "validation-agent"
+
+	recordChildProgress(validation, "validate-feature-branch", false)
+
+	entry := root.RepositoryFrame.Repositories[0].Nested
+	type progressState struct {
+		StepID            string
+		SessionIDs        map[string]string
+		SessionProfiles   map[string]string
+		CapturedVariables map[string]model.CapturedValue
+		LastSessionStepID string
+	}
+	var got []progressState
+	for entry != nil {
+		got = append(got, progressState{
+			StepID:            entry.StepID,
+			SessionIDs:        entry.SessionIDs,
+			SessionProfiles:   entry.SessionProfiles,
+			CapturedVariables: entry.CapturedVariables,
+			LastSessionStepID: entry.LastSessionStepID,
+		})
+		entry = entry.Child
+	}
+	preflightState := progressState{
+		StepID:            "repository-preflight",
+		SessionIDs:        map[string]string{"agent": "preflight-session"},
+		SessionProfiles:   map[string]string{"agent": "preflight-profile"},
+		CapturedVariables: map[string]model.CapturedValue{"result": model.NewCapturedString("preflight-result")},
+		LastSessionStepID: "preflight-agent",
+	}
+	validationState := progressState{
+		StepID:            "validate-feature-branch",
+		SessionIDs:        map[string]string{"agent": "validation-session"},
+		SessionProfiles:   map[string]string{"agent": "validation-profile"},
+		CapturedVariables: map[string]model.CapturedValue{"result": model.NewCapturedString("validation-result")},
+		LastSessionStepID: "validation-agent",
+	}
+	want := []progressState{preflightState, validationState, validationState}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("repository resume chain mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestExecuteSubWorkflowStep_PreservesExhaustedLoopResumeState(t *testing.T) {
 	dir := t.TempDir()
 	childYAML := `name: child

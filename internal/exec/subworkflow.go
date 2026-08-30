@@ -318,10 +318,44 @@ func recordChildProgress(childCtx *model.ExecutionContext, childStepID string, c
 	}
 	if childCtx.ActiveRepository != nil && childCtx.RepositoryIndex != nil {
 		if repositoryState := nestedRepositoryEntry(childCtx.RepositoryFrame, *childCtx.RepositoryIndex); repositoryState != nil {
-			repositoryState.Nested = entry
+			repositoryState.Nested = repositoryProgressChain(childCtx, entry)
 		}
 	}
 	parent.LastSubWorkflowChild = entry
+}
+
+// repositoryProgressChain returns the complete state below a repository
+// fan-out boundary even when a deep child flushes before its sub-workflows
+// unwind. Workspace-owned wrappers stay in the ordinary root chain.
+func repositoryProgressChain(childCtx *model.ExecutionContext, leaf *model.NestedStepState) *model.NestedStepState {
+	chain := leaf
+	for current := childCtx; current != nil && current.ParentContext != nil; current = current.ParentContext {
+		parent := current.ParentContext
+		if parent.ActiveRepository == nil || parent.ParentContext == nil || parent.ParentContext.ActiveRepository == nil {
+			break
+		}
+		if len(current.NestingPath) == 0 {
+			break
+		}
+		segment := current.NestingPath[len(current.NestingPath)-1]
+		if segment.StepID == "" {
+			break
+		}
+		entry := &model.NestedStepState{
+			StepID:            segment.StepID,
+			SessionIDs:        copyMap(current.SessionIDs),
+			SessionProfiles:   copyMap(current.SessionProfiles),
+			CapturedVariables: copyMap(current.CapturedVariables),
+			LastSessionStepID: current.LastSessionStepID,
+			Child:             chain,
+		}
+		if segment.Iteration != nil {
+			iteration := *segment.Iteration
+			entry.Iteration = &iteration
+		}
+		chain = entry
+	}
+	return chain
 }
 
 func applyResumeState(parentCtx, childCtx *model.ExecutionContext) (string, bool) {
