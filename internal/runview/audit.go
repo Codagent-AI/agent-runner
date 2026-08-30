@@ -537,11 +537,8 @@ func (t *Tree) populateRepositoryChildren(repository *StepNode) {
 	}
 	parent := repository.Parent
 	templates := parent.Children
-	switch parent.Type {
-	case NodeLoop:
+	if parent.Type == NodeLoop {
 		templates = parent.Body
-	case NodeGroup, NodeSubWorkflow:
-		// These boundaries project their existing children into each repository.
 	}
 	for _, template := range templates {
 		if template.Type == NodeRepository || childByID(repository, template.ID) != nil {

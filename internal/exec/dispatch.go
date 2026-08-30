@@ -24,6 +24,13 @@ func DispatchStep(
 	return dispatchStepOnce(step, ctx, runner, glob, log)
 }
 
+// shouldEvaluateSkipBeforeDispatch reports whether skip_if can be evaluated in
+// the current context. A repository fan-out evaluates it inside each repository
+// so repository interpolation and previous-step state are iteration-specific.
+func shouldEvaluateSkipBeforeDispatch(step *model.Step, ctx *model.ExecutionContext) bool {
+	return step.Scope != model.ScopeRepositories || ctx.ActiveRepository != nil
+}
+
 // dispatchRepositoryScopedStep is the non-top-level repository fan-out
 // boundary. The runner owns top-level workflow dispatch; this keeps groups,
 // loops, and child workflow bodies from falling back to workspace execution.
@@ -228,7 +235,7 @@ func executeGroupStep(
 	ctx.NestingPath = childNestingPath
 	defer func() { ctx.NestingPath = originalNestingPath }()
 	for i := range steps {
-		if steps[i].Scope != model.ScopeRepositories || ctx.ActiveRepository != nil {
+		if shouldEvaluateSkipBeforeDispatch(&steps[i], ctx) {
 			skip, skipErr := ShouldSkipStep(steps[i].SkipIf, ctx.LastStepOutcome, ctx, steps[i].ID)
 			if skipErr != nil {
 				ctx.NestingPath = originalNestingPath

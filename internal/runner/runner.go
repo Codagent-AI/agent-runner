@@ -951,16 +951,7 @@ func metricsIdentityPrefix(ctx *model.ExecutionContext) string {
 		}
 	}
 	if ctx.ActiveRepository != nil && ctx.ActiveRepository.Name != "default" {
-		depth := ctx.RepositoryPrefixDepth
-		if depth < 0 {
-			depth = 0
-		}
-		if depth > len(parts) {
-			depth = len(parts)
-		}
-		parts = append(parts, "")
-		copy(parts[depth+1:], parts[depth:])
-		parts[depth] = "repo:" + ctx.ActiveRepository.Name
+		parts = audit.InsertRepositoryToken(parts, ctx.ActiveRepository.Name, ctx.RepositoryPrefixDepth)
 	}
 	return strings.Join(parts, "/")
 }

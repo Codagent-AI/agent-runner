@@ -665,7 +665,63 @@ func TestAcceptanceAndSimpleChangeRemediateBeforeReacceptanceOrFinalization(t *t
 					t.Fatalf("%s scope = %q, want repositories", boundary, workflow.Steps[position].Scope)
 				}
 			}
+			ledgerStep := workflow.Steps[positions["validate-remediation-ledger"]]
+			if ledgerStep.Script != "validate-remediation-ledger.sh" {
+				t.Fatalf("validate-remediation-ledger script = %q, want shared validator", ledgerStep.Script)
+			}
+			wantInputs := map[string]string{
+				"ledger":       "{{session_dir}}/output/acceptance-remediation.json",
+				"repositories": "{{repositories}}",
+			}
+			for name, want := range wantInputs {
+				if got := ledgerStep.ScriptInputs[name]; got != want {
+					t.Errorf("validate-remediation-ledger input %s = %q, want %q", name, got, want)
+				}
+			}
 		})
+	}
+}
+
+func TestCoreValidateRemediationLedgerScript(t *testing.T) {
+	script, err := ReadAsset("core/validate-remediation-ledger.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(core/validate-remediation-ledger.sh): %v", err)
+	}
+	scriptPath := filepath.Join(t.TempDir(), "validate-remediation-ledger.sh")
+	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
+		t.Fatalf("write validator script: %v", err)
+	}
+
+	run := func(ledger, repositories string) (string, error) {
+		t.Helper()
+		payload := `{"ledger":` + strconv.Quote(ledger) + `,"repositories":` + strconv.Quote(repositories) + `}`
+		cmd := exec.Command("sh", scriptPath)
+		cmd.Stdin = strings.NewReader(payload)
+		output, runErr := cmd.CombinedOutput()
+		return string(output), runErr
+	}
+
+	ledger := filepath.Join(t.TempDir(), "acceptance-remediation.json")
+	if output, err := run(ledger, "backend,frontend"); err != nil {
+		t.Fatalf("missing ledger validation failed: %v\n%s", err, output)
+	}
+	contents, err := os.ReadFile(ledger)
+	if err != nil {
+		t.Fatalf("read initialized ledger: %v", err)
+	}
+	if got, want := strings.TrimSpace(string(contents)), `{"workspace":[],"repositories":{}}`; got != want {
+		t.Fatalf("initialized ledger = %q, want %q", got, want)
+	}
+
+	if err := os.WriteFile(ledger, []byte(`{"workspace":[],"repositories":{"docs":[]}}`), 0o600); err != nil {
+		t.Fatalf("write invalid ledger: %v", err)
+	}
+	output, err := run(ledger, "backend,frontend")
+	if err == nil {
+		t.Fatal("validator accepted an unselected repository")
+	}
+	if !strings.Contains(output, "names unselected repositories: docs") {
+		t.Fatalf("unexpected validation failure: %s", output)
 	}
 }
 

@@ -5,6 +5,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -395,7 +396,7 @@ func canonicalizeLayer(layer *parsedFile) (*parsedFile, map[string][]Deprecation
 	canonical := &parsedFile{
 		ActiveProfile: layer.ActiveProfile,
 		Profiles:      make(map[string]*ProfileSet, len(layer.Profiles)),
-		Repositories:  cloneRepositories(layer.Repositories),
+		Repositories:  maps.Clone(layer.Repositories),
 	}
 	deprecations := map[string][]Deprecation{}
 	for setName, profileSet := range layer.Profiles {
@@ -445,18 +446,7 @@ func repositoriesFromProject(project *parsedFile) map[string]Repository {
 	if project == nil {
 		return nil
 	}
-	return cloneRepositories(project.Repositories)
-}
-
-func cloneRepositories(repositories map[string]Repository) map[string]Repository {
-	if repositories == nil {
-		return nil
-	}
-	cloned := make(map[string]Repository, len(repositories))
-	for name, repository := range repositories {
-		cloned[name] = repository
-	}
-	return cloned
+	return maps.Clone(project.Repositories)
 }
 
 func activeProfileDeprecations(

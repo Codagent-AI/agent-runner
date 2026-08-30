@@ -502,7 +502,7 @@ func handleIterationBodySkip(
 	iteration *int,
 	setBody func(string, bool),
 ) (bool, error) {
-	if step.Scope == model.ScopeRepositories && ctx.ActiveRepository == nil {
+	if !shouldEvaluateSkipBeforeDispatch(step, ctx) {
 		return false, nil
 	}
 	skip, err := ShouldSkipStep(step.SkipIf, ctx.LastStepOutcome, ctx, step.ID)

@@ -242,7 +242,7 @@ func executeChildSteps(
 			}
 		}
 
-		if workflow.Steps[i].Scope != model.ScopeRepositories || childCtx.ActiveRepository != nil {
+		if shouldEvaluateSkipBeforeDispatch(&workflow.Steps[i], childCtx) {
 			skip, skipErr := ShouldSkipStep(workflow.Steps[i].SkipIf, childCtx.LastStepOutcome, childCtx, workflow.Steps[i].ID)
 			if skipErr != nil {
 				return OutcomeFailed, fmt.Errorf("step %q skip_if evaluation failed: %w", workflow.Steps[i].ID, skipErr)

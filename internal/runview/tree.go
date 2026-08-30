@@ -4,6 +4,7 @@
 package runview
 
 import (
+	"maps"
 	"slices"
 	"strconv"
 	"time"
@@ -264,13 +265,7 @@ func (t *Tree) ApplyPersistedRepositories(state *model.RunState) {
 	if t == nil || t.Root == nil || state == nil {
 		return
 	}
-	identities := state.SelectedRepositories
-	if len(identities) == 0 && state.RepositoryFrame != nil {
-		identities = make([]model.RepositoryIdentity, 0, len(state.RepositoryFrame.Repositories))
-		for _, entry := range state.RepositoryFrame.Repositories {
-			identities = append(identities, entry.Identity)
-		}
-	}
+	identities := persistedRepositoryIdentities(state)
 	boundaries := repositoryBoundaryNodes(t.Root)
 	if len(boundaries) == 0 {
 		boundaries = []*StepNode{t.Root}
@@ -285,26 +280,43 @@ func (t *Tree) ApplyPersistedRepositories(state *model.RunState) {
 		}
 		for _, boundary := range boundaries {
 			node := t.ensureRepositoryBelow(boundary, name, map[string]any{"repository_dir": identity.Dir, "position": index, "total": len(identities)})
-			if state.RepositoryFrame != nil && index < len(state.RepositoryFrame.Repositories) {
-				switch state.RepositoryFrame.Repositories[index].Status {
-				case model.RepositoryActive:
-					node.Status = StatusInProgress
-				case model.RepositoryCompleted:
-					node.Status = StatusSuccess
-				case model.RepositoryFailed:
-					node.Status = StatusFailed
-				}
-			}
+			applyPersistedRepositoryStatus(node, state.RepositoryFrame, index)
 		}
 	}
+	t.applyPersistedPullRequestURLs(state)
+}
+
+func (t *Tree) applyPersistedPullRequestURLs(state *model.RunState) {
 	if state.RepositoryPullRequestURLs != nil {
-		t.RepositoryPullRequestURLs = make(map[string]string, len(state.RepositoryPullRequestURLs))
-		for name, url := range state.RepositoryPullRequestURLs {
-			t.RepositoryPullRequestURLs[name] = url
-		}
+		t.RepositoryPullRequestURLs = maps.Clone(state.RepositoryPullRequestURLs)
 	}
 	if state.WorkspacePullRequestURL != "" {
 		t.PullRequestURL = state.WorkspacePullRequestURL
+	}
+}
+
+func persistedRepositoryIdentities(state *model.RunState) []model.RepositoryIdentity {
+	if len(state.SelectedRepositories) > 0 || state.RepositoryFrame == nil {
+		return state.SelectedRepositories
+	}
+	identities := make([]model.RepositoryIdentity, 0, len(state.RepositoryFrame.Repositories))
+	for _, entry := range state.RepositoryFrame.Repositories {
+		identities = append(identities, entry.Identity)
+	}
+	return identities
+}
+
+func applyPersistedRepositoryStatus(node *StepNode, frame *model.RepositoryFrame, index int) {
+	if frame == nil || index >= len(frame.Repositories) {
+		return
+	}
+	switch frame.Repositories[index].Status {
+	case model.RepositoryActive:
+		node.Status = StatusInProgress
+	case model.RepositoryCompleted:
+		node.Status = StatusSuccess
+	case model.RepositoryFailed:
+		node.Status = StatusFailed
 	}
 }
 

@@ -108,6 +108,13 @@ func RepositoryPrefix(prefix, name string, prefixDepth int) string {
 	if raw != "" {
 		tokens = strings.Split(raw, ", ")
 	}
+	tokens = InsertRepositoryToken(tokens, name, prefixDepth)
+	return "[" + strings.Join(tokens, ", ") + "]"
+}
+
+// InsertRepositoryToken adds a repository identity at the execution boundary
+// shared by audit prefixes and metrics identities.
+func InsertRepositoryToken(tokens []string, name string, prefixDepth int) []string {
 	if prefixDepth < 0 {
 		prefixDepth = 0
 	}
@@ -117,7 +124,7 @@ func RepositoryPrefix(prefix, name string, prefixDepth int) string {
 	tokens = append(tokens, "")
 	copy(tokens[prefixDepth+1:], tokens[prefixDepth:])
 	tokens[prefixDepth] = "repo:" + name
-	return "[" + strings.Join(tokens, ", ") + "]"
+	return tokens
 }
 
 var pathUnsafeRe = regexp.MustCompile(`[/._]`)

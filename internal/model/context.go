@@ -543,9 +543,9 @@ func NewRepositoryExecutionContext(parent *ExecutionContext, repository Reposito
 	child.WorkingDir = repository.Dir
 	child.ActiveRepository = &repository
 	child.RepositoryIndex = &index
-	child.SessionIDs = copyStringMap(parent.SessionIDs)
-	child.SessionProfiles = copyStringMap(parent.SessionProfiles)
-	child.CapturedVariables = copyCapturedValues(parent.CapturedVariables)
+	child.SessionIDs = cloneMap(parent.SessionIDs)
+	child.SessionProfiles = cloneMap(parent.SessionProfiles)
+	child.CapturedVariables = cloneMap(parent.CapturedVariables)
 	entry := repositoryStateForResume(parent, index)
 	// Unnamed session history is repository-local. The only time the root
 	// context carries it into a repository child is the active repository being
@@ -556,9 +556,9 @@ func NewRepositoryExecutionContext(parent *ExecutionContext, repository Reposito
 		child.SessionProfiles = make(map[string]string)
 		child.LastSessionStepID = ""
 	} else {
-		child.SessionIDs = copyStringMap(entry.SessionIDs)
-		child.SessionProfiles = copyStringMap(entry.SessionProfiles)
-		child.CapturedVariables = copyCapturedValues(entry.CapturedVariables)
+		child.SessionIDs = cloneMap(entry.SessionIDs)
+		child.SessionProfiles = cloneMap(entry.SessionProfiles)
+		child.CapturedVariables = cloneMap(entry.CapturedVariables)
 		child.LastSessionStepID = entry.LastSessionStepID
 	}
 	// A fan-out boundary is the only context boundary that does not share
@@ -567,8 +567,8 @@ func NewRepositoryExecutionContext(parent *ExecutionContext, repository Reposito
 	child.NamedSessions = make(map[string]string)
 	child.NamedSessionDecls = make(map[string]string)
 	if entry != nil {
-		child.NamedSessions = copyStringMap(entry.NamedSessions)
-		child.NamedSessionDecls = copyStringMap(entry.NamedSessionDecls)
+		child.NamedSessions = cloneMap(entry.NamedSessions)
+		child.NamedSessionDecls = cloneMap(entry.NamedSessionDecls)
 	}
 	return &child
 }
@@ -595,16 +595,8 @@ func repositoryStateForResume(parent *ExecutionContext, index int) *NestedStepSt
 	return parent.RepositoryFrame.Repositories[index].Nested
 }
 
-func copyStringMap(source map[string]string) map[string]string {
-	cloned := make(map[string]string, len(source))
-	for key, value := range source {
-		cloned[key] = value
-	}
-	return cloned
-}
-
-func copyCapturedValues(source map[string]CapturedValue) map[string]CapturedValue {
-	cloned := make(map[string]CapturedValue, len(source))
+func cloneMap[K comparable, V any](source map[K]V) map[K]V {
+	cloned := make(map[K]V, len(source))
 	for key, value := range source {
 		cloned[key] = value
 	}
