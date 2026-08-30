@@ -182,7 +182,11 @@ steps:
         exit 1
       fi
       status=$(sed '/^[[:space:]]*$/d' "{{session_dir}}/output/acceptance-preparation-status.txt" | tail -n 1)
-      if [ "$status" != "ACCEPTANCE_COMPLETE" ]; then
-        echo "acceptance preparation did not complete successfully" >&2
-        exit 1
-      fi
+      case "$status" in
+        ACCEPTANCE_COMPLETE|ACCEPTANCE_FAILED)
+          ;;
+        *)
+          echo "invalid acceptance preparation status: $status" >&2
+          exit 1
+          ;;
+      esac

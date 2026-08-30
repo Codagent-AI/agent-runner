@@ -1134,6 +1134,70 @@ func TestSharedAcceptanceCallsUseTesterAndPreserveControls(t *testing.T) {
 	}
 }
 
+func TestImplementChangeAcceptanceHandoffAllowsFailedTestingForHumanReview(t *testing.T) {
+	body, err := ReadFile("builtin:core/implement-change-v1.0.yaml")
+	if err != nil {
+		t.Fatalf("ReadFile(implement-change): %v", err)
+	}
+	var workflow struct {
+		Steps []struct {
+			ID      string `yaml:"id"`
+			Command string `yaml:"command"`
+		} `yaml:"steps"`
+	}
+	if err := yaml.Unmarshal(body, &workflow); err != nil {
+		t.Fatalf("unmarshal implement-change: %v", err)
+	}
+
+	var command string
+	for _, step := range workflow.Steps {
+		if step.ID == "verify-acceptance-handoff" {
+			command = step.Command
+			break
+		}
+	}
+	if command == "" {
+		t.Fatal("implement-change has no verify-acceptance-handoff command")
+	}
+
+	for _, tt := range []struct {
+		name       string
+		status     string
+		wantPass   bool
+		writeFiles bool
+	}{
+		{name: "complete", status: "ACCEPTANCE_COMPLETE", wantPass: true, writeFiles: true},
+		{name: "failed testing", status: "ACCEPTANCE_FAILED", wantPass: true, writeFiles: true},
+		{name: "invalid status", status: "ACCEPTANCE_PENDING", writeFiles: true},
+		{name: "missing handoff"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sessionDir := t.TempDir()
+			if tt.writeFiles {
+				outputDir := filepath.Join(sessionDir, "output")
+				if err := os.MkdirAll(outputDir, 0o750); err != nil {
+					t.Fatalf("create output dir: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(outputDir, "acceptance-handoff.md"), []byte("handoff\n"), 0o600); err != nil {
+					t.Fatalf("write handoff: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(outputDir, "acceptance-preparation-status.txt"), []byte(tt.status+"\n"), 0o600); err != nil {
+					t.Fatalf("write status: %v", err)
+				}
+			}
+
+			resolved := strings.ReplaceAll(command, "{{session_dir}}", sessionDir)
+			err := exec.Command("sh", "-c", resolved).Run()
+			if tt.wantPass && err != nil {
+				t.Fatalf("verify handoff returned %v, want success", err)
+			}
+			if !tt.wantPass && err == nil {
+				t.Fatal("verify handoff succeeded, want failure")
+			}
+		})
+	}
+}
+
 func TestCoreReviewProposalUsesCrosscheckAgentProfile(t *testing.T) {
 	data, err := ReadFile("builtin:core/review-proposal-v1.0.yaml")
 	if err != nil {
