@@ -277,6 +277,31 @@ func TestApplyEvent_ProjectsExplicitRepositoryAsContainer(t *testing.T) {
 	}
 }
 
+func TestApplyEvent_ProjectsRepositoryAtScopedGroupBoundary(t *testing.T) {
+	tree := BuildTree(&model.Workflow{Name: "run", Scope: model.ScopeWorkspace, Steps: []model.Step{
+		{ID: "plan", Command: "plan"},
+		{ID: "implement-task-groups", Scope: model.ScopeRepositories, Steps: []model.Step{{
+			ID: "task-loop", Loop: &model.Loop{Max: intPtr(1)}, Steps: []model.Step{{ID: "implement-task", Command: "work"}},
+		}}},
+	}}, "workflow.yaml")
+	tree.ApplyPersistedRepositories(&model.RunState{SelectedRepositories: []model.RepositoryIdentity{{Name: "backend", Dir: "/repos/backend"}}})
+	tree.ApplyEvent(RawEvent{Prefix: "[implement-task-groups, repo:backend]", Type: "repository_start", Data: map[string]any{"repository_name": "backend"}})
+	tree.ApplyEvent(RawEvent{Prefix: "[implement-task-groups, repo:backend, task-loop:0]", Type: "iteration_start"})
+	tree.ApplyEvent(RawEvent{Prefix: "[implement-task-groups, repo:backend, task-loop:0, implement-task]", Type: "step_start"})
+
+	backend := tree.FindByPrefix("[implement-task-groups, repo:backend]")
+	if backend == nil || backend.Type != NodeRepository || backend.Parent == nil || backend.Parent.ID != "implement-task-groups" {
+		t.Fatalf("repository boundary = %#v", backend)
+	}
+	implementation := tree.FindByPrefix("[implement-task-groups, repo:backend, task-loop:0, implement-task]")
+	if implementation == nil || implementation.Parent == nil || implementation.Parent.Type != NodeIteration {
+		t.Fatalf("nested implementation = %#v", implementation)
+	}
+	if repositoryChildByName(tree.Root, "backend") != nil {
+		t.Fatal("repository was also projected at workspace root")
+	}
+}
+
 func TestApplyEvent_RepositoryContainerClonesNestedWorkflowStructure(t *testing.T) {
 	tree := BuildTree(&model.Workflow{Name: "run", Steps: []model.Step{{
 		ID: "tasks", Loop: &model.Loop{Max: intPtr(1)}, Steps: []model.Step{{

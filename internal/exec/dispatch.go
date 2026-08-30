@@ -46,15 +46,51 @@ func dispatchRepositoryScopedStep(
 			return OutcomeFailed, fmt.Errorf("selected repository %q is no longer configured", name)
 		}
 		repositoryCtx := model.NewRepositoryExecutionContext(ctx, repository, index)
+		repositoryCtx.RepositoryPrefixDepth = ctx.AuditPrefixTokenCount() + 1
+		started := time.Now()
+		boundaryPrefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
+		emitRepositoryBoundaryStart(repositoryCtx, boundaryPrefix, index, len(ctx.Workspace.Selected), started)
+		skip, skipErr := ShouldSkipStep(step.SkipIf, repositoryCtx.LastStepOutcome, repositoryCtx, step.ID)
+		if skipErr != nil {
+			emitRepositoryBoundaryEnd(repositoryCtx, boundaryPrefix, OutcomeFailed, started)
+			return OutcomeFailed, fmt.Errorf("step %q skip_if evaluation failed for repository %q: %w", step.ID, name, skipErr)
+		}
+		if skip {
+			emitSkippedChildStep(repositoryCtx, step)
+			emitRepositoryBoundaryEnd(repositoryCtx, boundaryPrefix, OutcomeSuccess, started)
+			continue
+		}
 		outcome, err := dispatchStepOnce(step, repositoryCtx, runner, glob, log)
 		if err != nil {
+			emitRepositoryBoundaryEnd(repositoryCtx, boundaryPrefix, OutcomeFailed, started)
 			return OutcomeFailed, err
 		}
+		emitRepositoryBoundaryEnd(repositoryCtx, boundaryPrefix, outcome, started)
 		if outcome == OutcomeFailed || outcome == OutcomeAborted {
 			return outcome, nil
 		}
 	}
 	return OutcomeSuccess, nil
+}
+
+func emitRepositoryBoundaryStart(ctx *model.ExecutionContext, prefix string, index, total int, started time.Time) {
+	if ctx.ActiveRepository == nil || ctx.ActiveRepository.Name == "default" {
+		return
+	}
+	emitAudit(ctx, audit.Event{
+		Timestamp: started.UTC().Format(time.RFC3339Nano), Prefix: prefix, Type: audit.EventRepositoryStart,
+		Data: map[string]any{"position": index, "total": total, "context": contextSnapshot(ctx)},
+	})
+}
+
+func emitRepositoryBoundaryEnd(ctx *model.ExecutionContext, prefix string, outcome StepOutcome, started time.Time) {
+	if ctx.ActiveRepository == nil || ctx.ActiveRepository.Name == "default" {
+		return
+	}
+	emitAudit(ctx, audit.Event{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano), Prefix: prefix, Type: audit.EventRepositoryEnd,
+		Data: map[string]any{"outcome": string(outcome), "duration_ms": time.Since(started).Milliseconds()},
+	})
 }
 
 func acquireSelectedRepositoryLocks(ctx *model.ExecutionContext) error {
@@ -192,16 +228,18 @@ func executeGroupStep(
 	ctx.NestingPath = childNestingPath
 	defer func() { ctx.NestingPath = originalNestingPath }()
 	for i := range steps {
-		skip, skipErr := ShouldSkipStep(steps[i].SkipIf, ctx.LastStepOutcome, ctx, steps[i].ID)
-		if skipErr != nil {
-			ctx.NestingPath = originalNestingPath
-			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), map[string]any{"error": skipErr.Error()}, step)
-			return OutcomeFailed, fmt.Errorf("step %q skip_if evaluation failed: %w", steps[i].ID, skipErr)
-		}
-		if skip {
-			emitSkippedChildStep(ctx, &steps[i])
-			recordLastStepOutcome(ctx, OutcomeSkipped)
-			continue
+		if steps[i].Scope != model.ScopeRepositories || ctx.ActiveRepository != nil {
+			skip, skipErr := ShouldSkipStep(steps[i].SkipIf, ctx.LastStepOutcome, ctx, steps[i].ID)
+			if skipErr != nil {
+				ctx.NestingPath = originalNestingPath
+				emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), map[string]any{"error": skipErr.Error()}, step)
+				return OutcomeFailed, fmt.Errorf("step %q skip_if evaluation failed: %w", steps[i].ID, skipErr)
+			}
+			if skip {
+				emitSkippedChildStep(ctx, &steps[i])
+				recordLastStepOutcome(ctx, OutcomeSkipped)
+				continue
+			}
 		}
 		outcome, err := DispatchStep(&steps[i], ctx, runner, glob, log)
 		if err != nil {

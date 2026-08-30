@@ -123,7 +123,7 @@ func Pipeline(rootPath string, boundParams map[string]string, mode Mode, opts Op
 		state.addAgentDeprecations(cfg.Deprecations...)
 		state.result.ResolvedProfile = activeProfileName(cfg)
 	}
-	if err := state.walkFile(rootPath, boundParams, false, nil); err != nil {
+	if err := state.walkFile(rootPath, boundParams, false, nil, model.ScopeLegacy); err != nil {
 		return state.result, err
 	}
 	if err := state.probeTriples(); err != nil {
@@ -181,7 +181,7 @@ type probeSource struct {
 	agent  string
 }
 
-func (s *walkState) walkFile(path string, params map[string]string, isSub bool, parentOrigin *agentOrigin) error {
+func (s *walkState) walkFile(path string, params map[string]string, isSub bool, parentOrigin *agentOrigin, callerScope model.Scope) error {
 	sourceID := loader.SourceID(path)
 	if s.stack[sourceID] {
 		return nil
@@ -190,17 +190,20 @@ func (s *walkState) walkFile(path string, params map[string]string, isSub bool, 
 	if parentOrigin != nil {
 		parentKey = parentOrigin.profile + "\x00" + parentOrigin.triple.cli + "\x00" + parentOrigin.triple.model + "\x00" + parentOrigin.triple.effort
 	}
-	visitKey := sourceID + "\x00" + stableParamKey(params) + "\x00" + parentKey
+	workflow, err := loader.LoadWorkflow(path, loader.Options{IsSubWorkflow: isSub})
+	if err != nil {
+		return ValidationError{File: path, Message: err.Error()}
+	}
+	effectiveScope := workflow.Scope
+	if effectiveScope == model.ScopeLegacy {
+		effectiveScope = callerScope
+	}
+	visitKey := sourceID + "\x00" + stableParamKey(params) + "\x00" + parentKey + "\x00" + string(effectiveScope)
 	if s.completed[visitKey] {
 		return nil
 	}
 	s.stack[sourceID] = true
 	defer delete(s.stack, sourceID)
-
-	workflow, err := loader.LoadWorkflow(path, loader.Options{IsSubWorkflow: isSub})
-	if err != nil {
-		return ValidationError{File: path, Message: err.Error()}
-	}
 	if isSub {
 		if err := validateRequiredSubWorkflowParams(path, workflow.Params, params); err != nil {
 			return err
@@ -226,7 +229,7 @@ func (s *walkState) walkFile(path string, params map[string]string, isSub bool, 
 
 	visibleParams := bindParamDefaults(workflow.Params, params)
 	paramNames := workflowParamNames(workflow.Params)
-	_, err = s.walkSteps(path, workflow.Steps, visibleParams, paramNames, map[string]bool{}, nil, parentOrigin, workflow.Scope)
+	_, err = s.walkSteps(path, workflow.Steps, visibleParams, paramNames, map[string]bool{}, nil, parentOrigin, effectiveScope)
 	if err != nil {
 		return err
 	}
@@ -350,7 +353,7 @@ func (s *walkState) walkStep(path string, step *model.Step, params map[string]st
 		}
 	}
 
-	if err := s.walkSubWorkflowStep(path, step, params, paramNames, captured, nextOrigin); err != nil {
+	if err := s.walkSubWorkflowStep(path, step, params, paramNames, captured, nextOrigin, effectiveScope); err != nil {
 		return nil, err
 	}
 	if err := s.walkNestedSteps(path, step, params, paramNames, captured, nextOrigin, parentOrigin, effectiveScope); err != nil {
@@ -383,7 +386,7 @@ func validateLoopReferences(path string, step *model.Step, params map[string]str
 	return validateLoop(path, step)
 }
 
-func (s *walkState) walkSubWorkflowStep(path string, step *model.Step, params map[string]string, paramNames, captured map[string]bool, currentOrigin *agentOrigin) error {
+func (s *walkState) walkSubWorkflowStep(path string, step *model.Step, params map[string]string, paramNames, captured map[string]bool, currentOrigin *agentOrigin, callerScope model.Scope) error {
 	if step.Workflow == "" {
 		return nil
 	}
@@ -391,7 +394,7 @@ func (s *walkState) walkSubWorkflowStep(path string, step *model.Step, params ma
 	if err != nil || subPath == "" {
 		return err
 	}
-	err = s.walkFile(subPath, subParams, true, currentOrigin)
+	err = s.walkFile(subPath, subParams, true, currentOrigin, callerScope)
 	if err == nil {
 		return nil
 	}
@@ -475,7 +478,7 @@ func interpolatedStepFields(step *model.Step) []interpolationField {
 func validateScopedBuiltinAvailability(path string, step *model.Step, scope model.Scope) error {
 	for _, item := range interpolatedStepFields(step) {
 		for _, ref := range placeholders(item.value) {
-			if isRepositoryBuiltin(ref) && scope != model.ScopeRepositories {
+			if isRepositoryBuiltin(ref) && scope == model.ScopeWorkspace {
 				return ValidationError{File: path, StepID: step.ID, Field: item.field, Value: ref, Message: fmt.Sprintf("repository built-in {{%s}} is unavailable in workspace scope", ref)}
 			}
 		}

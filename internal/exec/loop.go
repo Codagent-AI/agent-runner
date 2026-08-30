@@ -454,18 +454,11 @@ func executeIterationBody(
 		}
 
 		bodyStepID := steps[i].ID
-		skip, skipErr := ShouldSkipStep(steps[i].SkipIf, iterCtx.LastStepOutcome, iterCtx, bodyStepID)
+		skipped, skipErr := handleIterationBodySkip(&steps[i], iterCtx, loopStepID, iteration, setBody)
 		if skipErr != nil {
-			persistIterationFailState(iterCtx, loopStepID, iteration, bodyStepID, false)
-			return iterationResult{failed: true}, fmt.Errorf("step %q skip_if evaluation failed: %w", bodyStepID, skipErr)
+			return iterationResult{failed: true}, skipErr
 		}
-		if skip {
-			setBody(bodyStepID, true)
-			emitSkippedChildStep(iterCtx, &steps[i])
-			recordLastStepOutcome(iterCtx, OutcomeSkipped)
-			if iterCtx.FlushState != nil {
-				iterCtx.FlushState()
-			}
+		if skipped {
 			continue
 		}
 
@@ -500,6 +493,33 @@ func executeIterationBody(
 		}
 	}
 	return iterationResult{}, nil
+}
+
+func handleIterationBodySkip(
+	step *model.Step,
+	ctx *model.ExecutionContext,
+	loopStepID string,
+	iteration *int,
+	setBody func(string, bool),
+) (bool, error) {
+	if step.Scope == model.ScopeRepositories && ctx.ActiveRepository == nil {
+		return false, nil
+	}
+	skip, err := ShouldSkipStep(step.SkipIf, ctx.LastStepOutcome, ctx, step.ID)
+	if err != nil {
+		persistIterationFailState(ctx, loopStepID, iteration, step.ID, false)
+		return false, fmt.Errorf("step %q skip_if evaluation failed: %w", step.ID, err)
+	}
+	if !skip {
+		return false, nil
+	}
+	setBody(step.ID, true)
+	emitSkippedChildStep(ctx, step)
+	recordLastStepOutcome(ctx, OutcomeSkipped)
+	if ctx.FlushState != nil {
+		ctx.FlushState()
+	}
+	return true, nil
 }
 
 // resolveIterationResume extracts any resume state from iterCtx and resolves

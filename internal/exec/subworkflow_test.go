@@ -61,6 +61,40 @@ steps:
 		}
 	})
 
+	t.Run("threads repository targets into a mixed-scope workspace child", func(t *testing.T) {
+		dir, backend, frontend := t.TempDir(), t.TempDir(), t.TempDir()
+		childYAML := `name: child
+scope: workspace
+params:
+  - name: repositories
+steps:
+  - id: repository-work
+    scope: repositories
+    steps:
+      - id: run
+        command: run {{repository_name}}
+`
+		if err := os.WriteFile(filepath.Join(dir, "child-v1.0.yaml"), []byte(childYAML), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		ctx := model.NewRootContext(&model.RootContextOptions{
+			WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"), WorkingDir: dir, ProjectRoot: dir,
+			Workspace: &model.WorkspaceContext{Dir: dir, Repositories: map[string]model.Repository{
+				"backend": {Name: "backend", Dir: backend}, "frontend": {Name: "frontend", Dir: frontend},
+			}},
+		})
+		runner := &mockRunner{}
+		step := model.Step{ID: "child", Workflow: "child-v1.0.yaml", Params: map[string]string{"repositories": "backend,frontend"}}
+		outcome, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+		if err != nil || outcome != OutcomeSuccess {
+			t.Fatalf("ExecuteSubWorkflowStep() = %q, %v", outcome, err)
+		}
+		got := []string{runner.calls[0][2], runner.calls[1][2]}
+		if diff := cmp.Diff([]string{"run 'backend'", "run 'frontend'"}, got); diff != "" {
+			t.Fatalf("commands mismatch (-want +got):\n%s", diff)
+		}
+	})
+
 	t.Run("executes child workflow steps", func(t *testing.T) {
 		// Create a temp workflow file
 		dir := t.TempDir()

@@ -63,6 +63,39 @@ steps:
 	}
 }
 
+func TestPipeline_UnscopedChildUsesRepositoryCallerScopeForBuiltins(t *testing.T) {
+	dir := t.TempDir()
+	writeWorkflow(t, dir, "context-neutral-v1.0.yaml", `
+name: context-neutral
+steps:
+  - id: active-repository
+    command: echo {{repository_name}} {{repository_dir}}
+`)
+	repositoryParent := writeWorkflow(t, dir, "repository-parent-v1.0.yaml", `
+name: repository-parent
+scope: repositories
+params:
+  - name: repositories
+steps:
+  - id: call
+    workflow: context-neutral-v1.0.yaml
+`)
+	workspaceParent := writeWorkflow(t, dir, "workspace-parent-v1.0.yaml", `
+name: workspace-parent
+scope: workspace
+steps:
+  - id: call
+    workflow: context-neutral-v1.0.yaml
+`)
+	opts, _, _ := fakeOptions(t, &config.Config{})
+	if _, err := Pipeline(repositoryParent, map[string]string{"repositories": "backend"}, Strict, opts); err != nil {
+		t.Fatalf("repository parent Pipeline() error = %v", err)
+	}
+	if _, err := Pipeline(workspaceParent, nil, Strict, opts); err == nil || !strings.Contains(err.Error(), "unavailable in workspace scope") {
+		t.Fatalf("workspace parent Pipeline() error = %v", err)
+	}
+}
+
 func TestPipelineHandlesUnboundSubWorkflowParamByMode(t *testing.T) {
 	dir := t.TempDir()
 	root := writeWorkflow(t, dir, "root-v1.0.yaml", `

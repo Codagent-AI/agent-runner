@@ -8,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -23,6 +24,8 @@ import (
 	"github.com/codagent/agent-runner/internal/repositorylock"
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/stateio"
+	"github.com/codagent/agent-runner/internal/taskgroups"
+	"github.com/codagent/agent-runner/internal/textfmt"
 	"github.com/codagent/agent-runner/internal/usersettings"
 	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
@@ -52,6 +55,7 @@ type Options struct {
 	RepositoryStartIndex      int
 	RepositoryStartSet        bool
 	RepositoryFrame           *model.RepositoryFrame
+	TaskPlan                  *model.TaskPlanState
 	WorkspacePullRequestURL   string
 	RepositoryPullRequestURLs map[string]string
 	// IntakeHandoffContents carries the sealed intake handoff into a fresh run or
@@ -395,7 +399,7 @@ func nestingToAuditInfo(ctx *model.ExecutionContext) []audit.NestingInfo {
 func emitAudit(ctx *model.ExecutionContext, event audit.Event) {
 	if ctx.AuditLogger != nil {
 		if ctx.ActiveRepository != nil {
-			event = audit.WithRepository(event, ctx.ActiveRepository.Name, ctx.ActiveRepository.Dir)
+			event = audit.WithRepository(event, ctx.ActiveRepository.Name, ctx.ActiveRepository.Dir, ctx.RepositoryPrefixDepth)
 		}
 		ctx.AuditLogger.Emit(event)
 	}
@@ -735,6 +739,7 @@ func buildExecutionContext(
 		ActiveRepository:         activeRepository,
 		RepositoryIndex:          repositoryIndex,
 		RepositoryFrame:          opts.RepositoryFrame,
+		TaskPlan:                 opts.TaskPlan,
 		AutonomousBackend:        string(settings.AutonomousBackend),
 		AutonomousPermissionMode: string(usersettings.EffectiveAutonomousPermissionMode(settings.AutonomousPermissionMode)),
 		SessionDir:               sessionDir,
@@ -814,20 +819,11 @@ func auditProfileSource(cfg *config.Config) string {
 func executeSteps(rs *runState, startIndex int) WorkflowResult {
 	for i := startIndex; i < len(rs.workflow.Steps); i++ {
 		step := &rs.workflow.Steps[i]
-
-		skip, skipErr := exec.ShouldSkipStep(step.SkipIf, rs.ctx.LastStepOutcome, rs.ctx, step.ID)
-		if skipErr != nil {
-			rs.log.Printf("\nagent-runner: step %q skip_if evaluation failed: %v\n", step.ID, skipErr)
-			return ResultFailed
+		skipped, skipResult := handleTopLevelSkip(rs, step, i)
+		if skipResult != "" {
+			return skipResult
 		}
-		if skip {
-			emitSkippedStep(rs, step, i)
-			if step.ID == rs.until {
-				writeStepState(step, rs.ctx, &rs.workflow, rs.workflowHash, rs.sessionDir, nil, true)
-			}
-			if stopAfterUntil(rs, step.ID, i) {
-				return ResultSuccess
-			}
+		if skipped {
 			continue
 		}
 
@@ -888,6 +884,28 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 	return ResultSuccess
 }
 
+func handleTopLevelSkip(rs *runState, step *model.Step, index int) (bool, WorkflowResult) {
+	if step.Scope == model.ScopeRepositories && rs.ctx.ActiveRepository == nil {
+		return false, ""
+	}
+	skip, err := exec.ShouldSkipStep(step.SkipIf, rs.ctx.LastStepOutcome, rs.ctx, step.ID)
+	if err != nil {
+		rs.log.Printf("\nagent-runner: step %q skip_if evaluation failed: %v\n", step.ID, err)
+		return false, ResultFailed
+	}
+	if !skip {
+		return false, ""
+	}
+	emitSkippedStep(rs, step, index)
+	if step.ID == rs.until {
+		writeStepState(step, rs.ctx, &rs.workflow, rs.workflowHash, rs.sessionDir, nil, true)
+	}
+	if stopAfterUntil(rs, step.ID, index) {
+		return true, ResultSuccess
+	}
+	return true, ""
+}
+
 func stopAfterUntil(rs *runState, stepID string, stepIndex int) bool {
 	if rs.until == "" || stepID != rs.until {
 		return false
@@ -920,9 +938,6 @@ func emitSkippedStep(rs *runState, step *model.Step, index int) {
 
 func metricsIdentityPrefix(ctx *model.ExecutionContext) string {
 	parts := make([]string, 0, len(ctx.NestingPath)*2)
-	if ctx.ActiveRepository != nil && ctx.ActiveRepository.Name != "default" {
-		parts = append(parts, "repo:"+ctx.ActiveRepository.Name)
-	}
 	for _, segment := range ctx.NestingPath {
 		stepID := segment.StepID
 		if segment.Iteration != nil {
@@ -934,6 +949,18 @@ func metricsIdentityPrefix(ctx *model.ExecutionContext) string {
 		if segment.SubWorkflowName != "" {
 			parts = append(parts, "sub:"+segment.SubWorkflowName)
 		}
+	}
+	if ctx.ActiveRepository != nil && ctx.ActiveRepository.Name != "default" {
+		depth := ctx.RepositoryPrefixDepth
+		if depth < 0 {
+			depth = 0
+		}
+		if depth > len(parts) {
+			depth = len(parts)
+		}
+		parts = append(parts, "")
+		copy(parts[depth+1:], parts[depth:])
+		parts[depth] = "repo:" + ctx.ActiveRepository.Name
 	}
 	return strings.Join(parts, "/")
 }
@@ -966,7 +993,19 @@ func runStep(step *model.Step, rs *runState) (exec.StepOutcome, *exec.LoopResult
 		var outcome exec.StepOutcome
 		var loopResult *exec.LoopResult
 		var executionErr error
-		result := executeRepositoryFanout(rs, 0, func(_ int) WorkflowResult {
+		anyExecuted := false
+		result := executeRepositoryFanout(rs, 0, audit.BuildPrefix(nil, step.ID), 1, func(_ int) WorkflowResult {
+			skip, skipErr := exec.ShouldSkipStep(step.SkipIf, rs.ctx.LastStepOutcome, rs.ctx, step.ID)
+			if skipErr != nil {
+				executionErr = fmt.Errorf("step %q skip_if evaluation failed: %w", step.ID, skipErr)
+				return ResultFailed
+			}
+			if skip {
+				outcome = exec.OutcomeSkipped
+				emitSkippedStep(rs, step, 0)
+				return ResultSuccess
+			}
+			anyExecuted = true
 			outcome, loopResult, executionErr = runStepOnce(step, rs)
 			if executionErr != nil || outcome == exec.OutcomeFailed || outcome == exec.OutcomeAborted {
 				return ResultFailed
@@ -975,6 +1014,9 @@ func runStep(step *model.Step, rs *runState) (exec.StepOutcome, *exec.LoopResult
 		})
 		if result != ResultSuccess && outcome == "" {
 			outcome = exec.OutcomeFailed
+		}
+		if result == ResultSuccess && !anyExecuted {
+			outcome = exec.OutcomeSkipped
 		}
 		return outcome, loopResult, executionErr
 	}
@@ -987,7 +1029,93 @@ func runStepOnce(step *model.Step, rs *runState) (exec.StepOutcome, *exec.LoopRe
 		return exec.MapLoopOutcomeForRunner(step, lr.Outcome), &lr, err
 	}
 	outcome, err := exec.DispatchStep(step, rs.ctx, rs.runner, rs.glob, rs.log)
+	if err == nil && outcome != exec.OutcomeFailed && outcome != exec.OutcomeAborted {
+		if captureErr := captureTaskPlanState(step, rs.ctx); captureErr != nil {
+			return exec.OutcomeFailed, nil, captureErr
+		}
+	}
 	return outcome, nil, err
+}
+
+func captureTaskPlanState(step *model.Step, ctx *model.ExecutionContext) error {
+	if filepath.Base(step.Script) != "resolve-task-group.sh" || step.Capture != "affected_repositories" || step.ScriptInputs["output"] != "repositories" {
+		return nil
+	}
+	resolve := func(name string) (string, error) {
+		value := step.ScriptInputs[name]
+		if value == "" {
+			return "", fmt.Errorf("task plan resolver step %q is missing %s", step.ID, name)
+		}
+		return textfmt.InterpolateTyped(value, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(step.ID))
+	}
+	workspaceDir, err := resolve("workspace_dir")
+	if err != nil {
+		return err
+	}
+	changeDir, err := resolve("change_dir")
+	if err != nil {
+		return err
+	}
+	planKind, err := resolve("plan_kind")
+	if err != nil {
+		return err
+	}
+	repositories := configuredRepositoryNames(ctx.Workspace)
+	plan, err := taskgroups.Parse(taskgroups.Options{
+		WorkspaceDir: workspaceDir,
+		ChangeDir:    changeDir,
+		PlanKind:     taskgroups.PlanKind(planKind),
+		Repositories: repositories,
+	})
+	if err != nil {
+		return fmt.Errorf("capture task plan: %w", err)
+	}
+	snapshot, err := json.Marshal(plan.Snapshot)
+	if err != nil {
+		return fmt.Errorf("encode task plan snapshot: %w", err)
+	}
+	canonicalChangeDir, err := canonicalDirectory(changeDir)
+	if err != nil {
+		return fmt.Errorf("resolve task plan change directory: %w", err)
+	}
+	ctx.TaskPlan = &model.TaskPlanState{
+		Snapshot: snapshot, Fingerprint: plan.Fingerprint,
+		ChangeDir: canonicalChangeDir, PlanKind: planKind,
+	}
+	return nil
+}
+
+func configuredRepositoryNames(workspace *model.WorkspaceContext) []string {
+	if workspace == nil {
+		return nil
+	}
+	names := make([]string, 0, len(workspace.Repositories))
+	for name := range workspace.Repositories {
+		if name != "default" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func validateTaskPlanResume(state *model.TaskPlanState, workspace *model.WorkspaceContext) error {
+	if state == nil {
+		return nil
+	}
+	plan, err := taskgroups.Parse(taskgroups.Options{
+		WorkspaceDir: workspace.Dir,
+		ChangeDir:    state.ChangeDir,
+		PlanKind:     taskgroups.PlanKind(state.PlanKind),
+		Repositories: configuredRepositoryNames(workspace),
+	})
+	if err != nil {
+		return fmt.Errorf("validate persisted task plan: %w", err)
+	}
+	if plan.Fingerprint != state.Fingerprint {
+		return fmt.Errorf("task plan changed since repository execution began")
+	}
+	return nil
 }
 
 func finalizeRun(rs *runState, result WorkflowResult) {
@@ -1103,6 +1231,7 @@ func initialRunState(workflow *model.Workflow, rs *runState, opts *Options) *mod
 		AgentOverride:         rs.ctx.AgentOverride,
 		ProfileSet:            resolvedProfileSet(rs.ctx),
 		RepositoryIndex:       rs.ctx.RepositoryIndex,
+		TaskPlan:              rs.ctx.TaskPlan,
 	}
 	persistRepositoryIdentity(state, rs.ctx)
 	if stepID == "" {
@@ -1160,18 +1289,27 @@ func ExecuteFromHandle(h *RunHandle, opts *Options) WorkflowResult {
 
 func executeWorkflow(rs *runState, startIndex int) WorkflowResult {
 	if rs.workflow.Scope == model.ScopeRepositories && rs.ctx.ActiveRepository == nil {
-		return executeRepositoryFanout(rs, startIndex, func(repositoryStart int) WorkflowResult {
+		return executeRepositoryFanout(rs, startIndex, "", 0, func(repositoryStart int) WorkflowResult {
 			return executeSteps(rs, repositoryStart)
 		})
 	}
 	return executeSteps(rs, startIndex)
 }
 
-func executeRepositoryFanout(rs *runState, startIndex int, executeBody func(repositoryStart int) WorkflowResult) (result WorkflowResult) {
+func executeRepositoryFanout(rs *runState, startIndex int, boundaryPrefix string, prefixDepth int, executeBody func(repositoryStart int) WorkflowResult) (result WorkflowResult) {
 	if rs.ctx.Workspace == nil || len(rs.ctx.Workspace.Selected) == 0 {
 		return ResultFailed
 	}
 	parent := rs.ctx
+	if rs.sessionDir != "" && boundaryPrefix != "" && (parent.RepositoryFrame == nil || parent.RepositoryFrame.BoundaryID != boundaryPrefix) {
+		parent.RepositoryFrame = newRepositoryFrame(parent.Workspace)
+		parent.RepositoryFrame.BoundaryID = boundaryPrefix
+		parent.RepositoryIndex = nil
+		if err := persistRepositoryFrame(rs.sessionDir, parent); err != nil {
+			rs.log.Printf("agent-runner: persist repository boundary %q: %v\n", boundaryPrefix, err)
+			return ResultFailed
+		}
+	}
 	previousRepositoryIndex := parent.RepositoryIndex
 	defer func() {
 		rs.ctx = parent
@@ -1189,7 +1327,7 @@ func executeRepositoryFanout(rs *runState, startIndex int, executeBody func(repo
 		if skipRepositoryExecution(parent, repositoryIndex, resumeRepository) {
 			continue
 		}
-		if result := executeRepositoryTarget(rs, parent, repositoryIndex, name, startIndex, resumeRepository, executeBody); result != ResultSuccess {
+		if result := executeRepositoryTarget(rs, parent, repositoryIndex, name, startIndex, resumeRepository, boundaryPrefix, prefixDepth, executeBody); result != ResultSuccess {
 			return result
 		}
 	}
@@ -1211,6 +1349,8 @@ func executeRepositoryTarget(
 	name string,
 	startIndex int,
 	resumeIndex int,
+	boundaryPrefix string,
+	prefixDepth int,
 	executeBody func(repositoryStart int) WorkflowResult,
 ) WorkflowResult {
 	repository, ok := parent.Workspace.Repositories[name]
@@ -1221,17 +1361,18 @@ func executeRepositoryTarget(
 	activeIndex := index
 	parent.RepositoryIndex = &activeIndex
 	rs.ctx = repositoryExecutionContext(parent, repository, index)
+	rs.ctx.RepositoryPrefixDepth = prefixDepth
 	started := time.Now()
 	if err := markRepositoryActive(rs, parent, index, name); err != nil {
 		return ResultFailed
 	}
-	emitRepositoryStart(rs, repository, index, len(parent.Workspace.Selected), started)
+	emitRepositoryStart(rs, repository, index, len(parent.Workspace.Selected), boundaryPrefix, prefixDepth, started)
 	repositoryStart := 0
 	if index == resumeIndex {
 		repositoryStart = startIndex
 	}
 	result := executeBody(repositoryStart)
-	emitRepositoryEnd(rs, repository, result, started)
+	emitRepositoryEnd(rs, repository, result, boundaryPrefix, prefixDepth, started)
 	if result != ResultSuccess {
 		markRepositoryFailed(rs, parent, index, name)
 		return result
@@ -1279,22 +1420,22 @@ func markRepositoryCompleted(rs *runState, parent *model.ExecutionContext, index
 	return nil
 }
 
-func emitRepositoryStart(rs *runState, repository model.Repository, index, total int, started time.Time) {
+func emitRepositoryStart(rs *runState, repository model.Repository, index, total int, boundaryPrefix string, prefixDepth int, started time.Time) {
 	if repository.Name == "default" {
 		return
 	}
 	emitAudit(rs.ctx, audit.Event{
-		Timestamp: started.UTC().Format(time.RFC3339Nano), Prefix: "[repo:" + repository.Name + "]", Type: audit.EventRepositoryStart,
+		Timestamp: started.UTC().Format(time.RFC3339Nano), Prefix: audit.RepositoryPrefix(boundaryPrefix, repository.Name, prefixDepth), Type: audit.EventRepositoryStart,
 		Data: map[string]any{"position": index, "total": total, "context": contextSnapshot(rs.ctx)},
 	})
 }
 
-func emitRepositoryEnd(rs *runState, repository model.Repository, result WorkflowResult, started time.Time) {
+func emitRepositoryEnd(rs *runState, repository model.Repository, result WorkflowResult, boundaryPrefix string, prefixDepth int, started time.Time) {
 	if repository.Name == "default" {
 		return
 	}
 	emitAudit(rs.ctx, audit.Event{
-		Timestamp: time.Now().UTC().Format(time.RFC3339Nano), Prefix: "[repo:" + repository.Name + "]", Type: audit.EventRepositoryEnd,
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano), Prefix: audit.RepositoryPrefix(boundaryPrefix, repository.Name, prefixDepth), Type: audit.EventRepositoryEnd,
 		Data: map[string]any{"outcome": string(result), "duration_ms": time.Since(started).Milliseconds()},
 	})
 }
@@ -1404,12 +1545,14 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 		AgentOverride:         ctx.AgentOverride,
 		ProfileSet:            resolvedProfileSet(ctx),
 		RepositoryIndex:       ctx.RepositoryIndex,
+		TaskPlan:              ctx.TaskPlan,
 	}
 	persistRepositoryIdentity(&state, ctx)
 	_ = stateio.WriteState(&state, stateDir)
 }
 
 func persistRepositoryIdentity(state *model.RunState, ctx *model.ExecutionContext) {
+	state.TaskPlan = ctx.TaskPlan
 	if ctx.PullRequestCaptureState != nil {
 		state.WorkspacePullRequestURL, state.RepositoryPullRequestURLs = ctx.PullRequestCaptureState.PullRequestURLs()
 	}

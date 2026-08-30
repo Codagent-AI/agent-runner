@@ -97,6 +97,55 @@ func TestDispatchStep_EvaluatesGroupChildSkipIfInsideEachRepository(t *testing.T
 	}
 }
 
+func TestDispatchStep_EvaluatesRepositoryBoundarySkipForEachRepository(t *testing.T) {
+	workspace, backend, frontend := t.TempDir(), t.TempDir(), t.TempDir()
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		WorkingDir: workspace,
+		Workspace: &model.WorkspaceContext{Dir: workspace, Repositories: map[string]model.Repository{
+			"backend": {Name: "backend", Dir: backend}, "frontend": {Name: "frontend", Dir: frontend},
+		}, Selected: []string{"backend", "frontend"}},
+	})
+	runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+	step := model.Step{
+		ID: "conditional", Scope: model.ScopeRepositories,
+		SkipIf:  "sh: test {{repository_name}} = backend",
+		Command: "run {{repository_name}}",
+	}
+
+	outcome, err := DispatchStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+	if err != nil || outcome != OutcomeSuccess {
+		t.Fatalf("DispatchStep() = %q, %v", outcome, err)
+	}
+	if diff := cmp.Diff([][]string{{"sh", "-c", "run 'frontend'"}}, runner.calls); diff != "" {
+		t.Fatalf("calls mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestDispatchStep_InsertsRepositoryAtScopedGroupAuditBoundary(t *testing.T) {
+	workspace, backend := t.TempDir(), t.TempDir()
+	auditLog := &mockAuditLogger{}
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		WorkingDir: workspace, AuditLogger: auditLog,
+		Workspace: &model.WorkspaceContext{Dir: workspace, Repositories: map[string]model.Repository{
+			"backend": {Name: "backend", Dir: backend},
+		}, Selected: []string{"backend"}},
+	})
+	iterationLimit := 1
+	step := model.Step{ID: "implement-task-groups", Scope: model.ScopeRepositories, Steps: []model.Step{{
+		ID: "task-loop", Loop: &model.Loop{Max: &iterationLimit}, Steps: []model.Step{{ID: "implement-task", Command: "work"}},
+	}}}
+	if outcome, err := DispatchStep(&step, ctx, &mockRunner{}, &mockGlob{}, &mockLogger{}); err != nil || outcome != OutcomeSuccess {
+		t.Fatalf("DispatchStep() = %q, %v", outcome, err)
+	}
+	want := "[implement-task-groups, repo:backend, task-loop:0, implement-task]"
+	for _, event := range auditLog.events {
+		if event.Type == audit.EventStepStart && event.Prefix == want {
+			return
+		}
+	}
+	t.Fatalf("audit did not contain %s; events = %#v", want, auditLog.events)
+}
+
 func TestDispatchStep(t *testing.T) {
 	t.Run("dispatches shell step", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}

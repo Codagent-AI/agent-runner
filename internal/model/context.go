@@ -190,7 +190,11 @@ type ExecutionContext struct {
 	// RepositoryFrame is shared by the workspace context and its active
 	// repository children. It is the durable fan-out boundary around ordinary
 	// nested execution state; nil preserves legacy single-repository behavior.
-	RepositoryFrame          *RepositoryFrame
+	RepositoryFrame *RepositoryFrame
+	TaskPlan        *TaskPlanState
+	// RepositoryPrefixDepth is the number of audit-prefix tokens that precede
+	// the active repository boundary. Zero places the repository at the root.
+	RepositoryPrefixDepth    int
 	AutonomousBackend        string
 	AutonomousPermissionMode string
 
@@ -309,6 +313,7 @@ type RootContextOptions struct {
 	ActiveRepository         *Repository
 	RepositoryIndex          *int
 	RepositoryFrame          *RepositoryFrame
+	TaskPlan                 *TaskPlanState
 	AutonomousBackend        string
 	AutonomousPermissionMode string
 	SessionDir               string
@@ -376,6 +381,7 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		ActiveRepository:         opts.ActiveRepository,
 		RepositoryIndex:          opts.RepositoryIndex,
 		RepositoryFrame:          opts.RepositoryFrame,
+		TaskPlan:                 opts.TaskPlan,
 		AutonomousBackend:        opts.AutonomousBackend,
 		AutonomousPermissionMode: opts.AutonomousPermissionMode,
 		SessionDir:               opts.SessionDir,
@@ -498,6 +504,8 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		ActiveRepository:         parent.ActiveRepository,
 		RepositoryIndex:          parent.RepositoryIndex,
 		RepositoryFrame:          parent.RepositoryFrame,
+		TaskPlan:                 parent.TaskPlan,
+		RepositoryPrefixDepth:    parent.RepositoryPrefixDepth,
 		AutonomousBackend:        parent.AutonomousBackend,
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
 		SessionDir:               parent.SessionDir,
@@ -563,6 +571,21 @@ func NewRepositoryExecutionContext(parent *ExecutionContext, repository Reposito
 		child.NamedSessionDecls = copyStringMap(entry.NamedSessionDecls)
 	}
 	return &child
+}
+
+// AuditPrefixTokenCount returns the number of tokens contributed by the
+// current structural nesting path.
+func (c *ExecutionContext) AuditPrefixTokenCount() int {
+	count := 0
+	for _, segment := range c.NestingPath {
+		if segment.StepID != "" {
+			count++
+		}
+		if segment.SubWorkflowName != "" {
+			count++
+		}
+	}
+	return count
 }
 
 func repositoryStateForResume(parent *ExecutionContext, index int) *NestedStepState {
@@ -654,6 +677,8 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		ActiveRepository:         parent.ActiveRepository,
 		RepositoryIndex:          parent.RepositoryIndex,
 		RepositoryFrame:          parent.RepositoryFrame,
+		TaskPlan:                 parent.TaskPlan,
+		RepositoryPrefixDepth:    parent.RepositoryPrefixDepth,
 		AutonomousBackend:        parent.AutonomousBackend,
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
 		SessionDir:               parent.SessionDir,

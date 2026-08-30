@@ -41,18 +41,25 @@ steps:
       require_tasks: "true"
 
   - id: implement-task-groups
-    workflow: implement-repository-task-group-v1.0.yaml
-    params:
-      repositories: "{{repositories}}"
-      change_dir: "{{change_dir}}"
-      change_label: "{{change_label}}"
-      skip_validator: "{{skip_validator}}"
+    scope: repositories
+    steps:
+      - id: implement-repository-task-group
+        workflow: implement-repository-task-group-v1.0.yaml
+        params:
+          repositories: "{{repositories}}"
+          change_dir: "{{change_dir}}"
+          change_label: "{{change_label}}"
+          skip_validator: "{{skip_validator}}"
 
   - id: complete-task-index
     session: lead-agent
     mode: autonomous
     prompt: |
-      All repository task groups for {{change_label}} "{{change_name}}" completed. From workspace {{workspace_dir}}, update only `{{change_dir}}/tasks.md` to check every completed entry. Preserve ordered repository groups and links. Commit this workspace-owned index when it is tracked here.
+      Every implementation task for {{change_label}} "{{change_name}}" has completed successfully, including its implementation commit and, unless `skip_validator` is `true`, task-compliance validation.
+
+      Update `{{change_dir}}/tasks.md` so each checklist entry corresponding to a task file under `{{change_dir}}/tasks/*.md` is checked. Do not change task wording, task-file content, requirements, design, or implementation. Verify the index still links to every task file and contains no unchecked task entry. Preserve ordered repository task groups.
+
+      If the index changed and belongs to the current project repository, commit only that file following the project's commit message conventions and prepend `[{{step_id}}]`. If it lives outside the repository, leave it uncommitted. If it was already correct, do not create an empty commit.
 
   - id: verify-task-index
     command: |
@@ -66,11 +73,26 @@ steps:
     mode: autonomous
     tools: [call_agent]
     prompt: |
-      Prepare aggregate acceptance for {{change_label}} "{{change_name}}" from workspace {{workspace_dir}}. Read repository evidence only in the persisted order from `{{session_dir}}/output/repository-evidence-index.json`; do not glob repository directories. Aggregate handoffs belong under `{{session_dir}}/output/`.
+      Prepare {{change_label}} "{{change_name}}" for human acceptance by orchestrating an independent acceptance tester. Do not perform acceptance flow testing yourself and do not directly modify implementation repositories in this workspace-scoped step.
 
-      Use codagent:call-agent with `session: acceptance-tester`. Give it the approved artifacts under `{{change_dir}}/`, the evidence index, and aggregate output directory. The test plan was structurally validated before implementation. Require codagent:prepare-acceptance with verification scope: `full` for the first pass. It must write `acceptance-assumptions.md`, `acceptance-impact-scope.md`, `acceptance-flow-evidence.md`, and `acceptance-handoff.md` in the aggregate output directory.
+      Use codagent:call-agent with `session: acceptance-tester`. Its first use creates a fresh independent tester; later calls resume it. Require codagent:prepare-acceptance with:
+      - approved artifacts under `{{change_dir}}/` and authoritative test plan `{{change_dir}}/test-plan.md`;
+      - implementation reports and other repository evidence read only in persisted order through `{{session_dir}}/output/repository-evidence-index.json` (never by globbing repository directories);
+      - run metadata from `{{session_dir}}/audit.log`;
+      - aggregate evidence directory `{{session_dir}}/output/`;
+      - verification scope: `full` for the first pass.
 
-      Use at most three acceptance-tester calls. Do not directly modify implementation repositories in this workspace step. Record approved implementation remediation in `{{session_dir}}/output/acceptance-remediation.json`, with a workspace section and selected-repository-keyed entries. Mark `ACCEPTANCE_COMPLETE` only with complete current evidence; otherwise preserve an honest handoff.
+      The authoritative test plan was structurally validated before implementation. The first pass must exercise every required `AT-*` and every conditional `AT-*` whose activation condition holds. A substitute is allowed only when that obligation explicitly permits it. Missing applicable-flow evidence is an impediment and cannot produce `ACCEPTANCE_COMPLETE`.
+
+      Follow codagent:call-agent's verification and autonomous result-accounting rules after every pass. Inspect durable evidence and account for every in-scope finding. Preserve approved behavior, scope, design, and testing strategy. Record product, scope, or design ambiguity in `{{session_dir}}/output/acceptance-assumptions.md` rather than deciding it silently.
+
+      Because implementation repositories are isolated behind a later remediation fan-out, do not fix repository findings here. Record actionable fixes in `{{session_dir}}/output/acceptance-remediation.json` using a separate workspace section and selected-repository-keyed entries. The file must exist even when empty and must never name an unselected repository.
+
+      Use at most three acceptance-tester calls. A later call must reproduce the prior finding and exercise only affected and directly dependent flows, retaining the earlier full-pass evidence for unaffected flows. Before it, write `acceptance-impact-scope.md` naming the affected `AT-*` obligations and rationale. Do not repeat an unchanged impediment indefinitely.
+
+      The tester must preserve `acceptance-flow-evidence.md`, `acceptance-assumptions.md`, and `acceptance-handoff.md` under the aggregate output directory. Verify referenced evidence exists and every required or activated conditional `AT-*` has passing evidence before claiming completion. Reserve `HT-*` items for the user.
+
+      Whether testing converges or not, ensure `acceptance-handoff.md` clearly states the current outcome. Overwrite `{{session_dir}}/output/acceptance-preparation-status.txt` with exactly `ACCEPTANCE_COMPLETE` after convergence or `ACCEPTANCE_FAILED` after three unsuccessful calls. Preserve an honest handoff and remaining findings on failure.
 
   - id: verify-acceptance-handoff
     command: |

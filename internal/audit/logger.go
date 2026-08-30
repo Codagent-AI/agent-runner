@@ -84,7 +84,7 @@ func BuildPrefix(nestingPath []NestingInfo, stepID string) string {
 // that repository is active. The transparent default repository deliberately
 // keeps the legacy audit shape. Root-scoped events retain their empty prefix
 // but still carry the explicit repository fields.
-func WithRepository(event Event, name, dir string) Event {
+func WithRepository(event Event, name, dir string, prefixDepth int) Event {
 	if name == "" || name == "default" {
 		return event
 	}
@@ -93,11 +93,31 @@ func WithRepository(event Event, name, dir string) Event {
 	}
 	event.Data["repository_name"] = name
 	event.Data["repository_dir"] = dir
-	if event.Prefix == "" || strings.HasPrefix(event.Prefix, "[repo:") {
+	if event.Prefix == "" || strings.Contains(event.Prefix, "repo:"+name) {
 		return event
 	}
-	event.Prefix = "[repo:" + name + ", " + strings.TrimPrefix(strings.TrimSuffix(event.Prefix, "]"), "[") + "]"
+	event.Prefix = RepositoryPrefix(event.Prefix, name, prefixDepth)
 	return event
+}
+
+// RepositoryPrefix inserts a repository token at its execution boundary.
+// An empty base produces the root repository prefix used by lifecycle events.
+func RepositoryPrefix(prefix, name string, prefixDepth int) string {
+	raw := strings.TrimPrefix(strings.TrimSuffix(prefix, "]"), "[")
+	var tokens []string
+	if raw != "" {
+		tokens = strings.Split(raw, ", ")
+	}
+	if prefixDepth < 0 {
+		prefixDepth = 0
+	}
+	if prefixDepth > len(tokens) {
+		prefixDepth = len(tokens)
+	}
+	tokens = append(tokens, "")
+	copy(tokens[prefixDepth+1:], tokens[prefixDepth:])
+	tokens[prefixDepth] = "repo:" + name
+	return "[" + strings.Join(tokens, ", ") + "]"
 }
 
 var pathUnsafeRe = regexp.MustCompile(`[/._]`)

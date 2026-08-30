@@ -471,13 +471,24 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 
 func (t *Tree) applyRepositoryEvent(event RawEvent, tokens []prefixToken) {
 	name, _ := stringField(event.Data, "repository_name")
-	if name == "" && len(tokens) > 0 {
-		name = tokens[0].repoName
+	repositoryToken := -1
+	for index, token := range tokens {
+		if token.repoName != "" {
+			repositoryToken = index
+			if name == "" {
+				name = token.repoName
+			}
+			break
+		}
 	}
 	if name == "" || name == "default" {
 		return
 	}
-	repository := t.ensureRepository(name, event.Data)
+	parent := t.Root
+	if repositoryToken > 0 {
+		parent = t.resolve(tokens[:repositoryToken], true)
+	}
+	repository := t.ensureRepositoryBelow(parent, name, event.Data)
 	if repository == nil {
 		return
 	}
@@ -495,15 +506,15 @@ func (t *Tree) applyRepositoryEvent(event RawEvent, tokens []prefixToken) {
 	}
 }
 
-func (t *Tree) ensureRepository(name string, data map[string]any) *StepNode {
-	if t == nil || t.Root == nil || name == "" {
+func (t *Tree) ensureRepositoryBelow(parent *StepNode, name string, data map[string]any) *StepNode {
+	if t == nil || t.Root == nil || parent == nil || name == "" {
 		return nil
 	}
-	if node := repositoryChildByName(t.Root, name); node != nil {
+	if node := repositoryChildByName(parent, name); node != nil {
 		t.populateRepositoryChildren(node)
 		return node
 	}
-	node := &StepNode{ID: name, Type: NodeRepository, Status: StatusPending, Parent: t.Root, RepositoryName: name}
+	node := &StepNode{ID: name, Type: NodeRepository, Status: StatusPending, Parent: parent, RepositoryName: name}
 	node.RepositoryDir, _ = stringField(data, "repository_dir")
 	if position, ok := intField(data, "position"); ok {
 		node.RepositoryPosition = position
@@ -512,7 +523,7 @@ func (t *Tree) ensureRepository(name string, data map[string]any) *StepNode {
 		node.RepositoryTotal = total
 	}
 	t.populateRepositoryChildren(node)
-	t.Root.Children = append(t.Root.Children, node)
+	parent.Children = append(parent.Children, node)
 	return node
 }
 
@@ -524,7 +535,15 @@ func (t *Tree) populateRepositoryChildren(repository *StepNode) {
 	if t == nil || t.Root == nil || repository == nil {
 		return
 	}
-	for _, template := range t.Root.Children {
+	parent := repository.Parent
+	templates := parent.Children
+	switch parent.Type {
+	case NodeLoop:
+		templates = parent.Body
+	case NodeGroup, NodeSubWorkflow:
+		// These boundaries project their existing children into each repository.
+	}
+	for _, template := range templates {
 		if template.Type == NodeRepository || childByID(repository, template.ID) != nil {
 			continue
 		}
@@ -672,7 +691,7 @@ func (t *Tree) resolve(tokens []prefixToken, createIterations bool) *StepNode {
 func (t *Tree) resolveToken(current *StepNode, tok prefixToken, createIterations bool) *StepNode {
 	switch {
 	case tok.repoName != "":
-		return repositoryChildByName(current, tok.repoName)
+		return t.ensureRepositoryBelow(current, tok.repoName, nil)
 	case tok.callID != "":
 		return callChildByID(current, tok.callID)
 	case tok.subName != "":

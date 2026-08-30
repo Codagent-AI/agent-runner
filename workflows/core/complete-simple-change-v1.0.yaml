@@ -51,19 +51,58 @@ steps:
               run_session_report: "true"
               skip_validator: "false"
 
-      - id: test
-        session: flow-tester
-        mode: autonomous
-        prompt: |
-          For repository {{repository_name}} at {{repository_dir}}, with shared workspace {{workspace_dir}}, use codagent:test-flows for the active repository only. Read artifacts under `{{change_dir}}/`, write `{{repository_output_dir}}/test-flows.md`, and store screenshots only under `{{repository_output_dir}}`.
+  - id: test
+    session: flow-tester
+    mode: autonomous
+    prompt: |
+      Use codagent:test-flows to perform lightweight branch-local flow testing for implemented {{change_label}} "{{change_name}}" from workspace {{workspace_dir}}.
 
-      - id: review
-        session: lead-agent
-        mode: interactive
-        prompt: |
-          Review {{change_label}} "{{change_name}}" with the user for repository {{repository_name}} at {{repository_dir}}, with shared workspace {{workspace_dir}}. Read only `{{repository_output_dir}}/test-flows.md` and active-repository session reports. Apply approved local fixes with codagent:implement-with-tdd, validate, commit, and retain a draft PR.
+      Read the approved artifacts under `{{change_dir}}/`. Read implementation evidence only in persisted repository order through `{{session_dir}}/output/repository-evidence-index.json`; do not glob repository directories. Exercise representative public flows proportionally to this small change across every affected repository and their integration points. Write a concise aggregate report to `{{session_dir}}/output/test-flows.md` and place screenshots beneath that aggregate output directory. Preserve findings, evidence, ambiguities, and limitations accurately. Do not modify tracked files or fix findings.
+
+  - id: review
+    session: lead-agent
+    mode: interactive
+    tools: [call_agent]
+    prompt: |
+      Help the user review implemented {{change_label}} "{{change_name}}" from workspace {{workspace_dir}}.
+
+      Read `{{session_dir}}/output/test-flows.md` and repository implementation reports only through `{{session_dir}}/output/repository-evidence-index.json`. Present the tester's material findings, evidence, limitations, and consequential unresolved assumptions before your own assessment.
+
+      Confirm consequential behavioral or design decisions and avoid material scope expansion. Apply workspace-owned artifact changes directly. Record every approved implementation-repository fix in `{{session_dir}}/output/acceptance-remediation.json`, using a separate workspace section and entries keyed only by selected repository names. Include codagent:implement-with-tdd, unit coverage where applicable, practical integration/end-to-end regression coverage, validation, commit, push, and draft-PR-head verification in each repository remediation instruction. Do not directly modify an implementation repository here.
+
+      Continue only when the user says testing and review are complete.
+
+  - id: validate-remediation-ledger
+    command: |
+      ledger="{{session_dir}}/output/acceptance-remediation.json"
+      if [ ! -f "$ledger" ]; then
+        printf '%s\n' '{"workspace":[],"repositories":{}}' > "$ledger"
+      fi
+      python3 - "$ledger" "{{repositories}}" <<'PY'
+      import json, sys
+      path, selected = sys.argv[1:]
+      with open(path, encoding="utf-8") as f:
+          ledger = json.load(f)
+      entries = ledger.get("repositories")
+      if not isinstance(entries, dict):
+          raise SystemExit("acceptance remediation ledger must contain a repositories object")
+      unknown = set(entries) - set(selected.split(","))
+      if unknown:
+          raise SystemExit("acceptance remediation ledger names unselected repositories: " + ", ".join(sorted(unknown)))
+      PY
+
+  - id: remediate-repositories
+    scope: repositories
+    steps:
+      - id: remediate-repository
+        workflow: ../core/remediate-repository-v1.0.yaml
+        params:
+          change_dir: "{{change_dir}}"
 
   - id: finalize-repositories
-    workflow: finalize-repositories-v1.0.yaml
-    params:
-      repositories: "{{repositories}}"
+    scope: repositories
+    steps:
+      - id: finalize-repository-group
+        workflow: finalize-repositories-v1.0.yaml
+        params:
+          repositories: "{{repositories}}"

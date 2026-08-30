@@ -91,7 +91,7 @@ func Parse(options Options) (Plan, error) {
 		return Plan{}, fmt.Errorf("change directory %s is outside workspace %s", changeDir, workspaceDir)
 	}
 	if options.PlanKind == Simple {
-		if len(options.Repositories) == 0 || !declaresRepositoryGroups(changeDir) {
+		if len(options.Repositories) == 0 {
 			return parseImplicit(changeDir, Simple)
 		}
 		return parseConfigured(changeDir, options.Repositories)
@@ -100,19 +100,6 @@ func Parse(options Options) (Plan, error) {
 		return parseImplicit(changeDir, Full)
 	}
 	return parseConfigured(changeDir, options.Repositories)
-}
-
-func declaresRepositoryGroups(changeDir string) bool {
-	index, err := readTaskIndex(changeDir)
-	if err != nil {
-		return false
-	}
-	for _, line := range strings.Split(string(index), "\n") {
-		if repositoryHeading.MatchString(line) {
-			return true
-		}
-	}
-	return false
 }
 
 func readTaskIndex(changeDir string) ([]byte, error) {

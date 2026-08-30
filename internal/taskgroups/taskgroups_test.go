@@ -155,44 +155,35 @@ func TestParseConfiguredGroupRejectsTasksFromDifferentDirectories(t *testing.T) 
 	}
 }
 
-func TestParseConfiguredSimplePlanAcceptsMonolithicTaskFile(t *testing.T) {
+func TestParseConfiguredSimplePlanRequiresRepositoryGroups(t *testing.T) {
 	workspace := t.TempDir()
 	changeDir := filepath.Join(workspace, "openspec", "changes", "demo")
 	writeTaskGroupFile(t, filepath.Join(changeDir, "tasks.md"), "# Small change\n")
 
-	plan, err := Parse(Options{
+	_, err := Parse(Options{
 		WorkspaceDir: workspace,
 		ChangeDir:    changeDir,
 		PlanKind:     Simple,
 		Repositories: []string{"backend"},
 	})
-	if err != nil {
-		t.Fatalf("Parse() error = %v", err)
-	}
-	if diff := cmp.Diff([]string{"default"}, plan.Repositories); diff != "" {
-		t.Fatalf("repositories mismatch (-want +got):\n%s", diff)
-	}
-	if got, want := filepath.Base(plan.Groups[0].Tasks[0]), "tasks.md"; got != want {
-		t.Fatalf("task file = %q, want %q", got, want)
+	if err == nil || !strings.Contains(err.Error(), "repository") {
+		t.Fatalf("Parse() error = %v, want configured repository-group failure", err)
 	}
 }
 
-func TestParseConfiguredSimplePlanIgnoresOrdinaryRepositorySectionHeading(t *testing.T) {
+func TestParseConfiguredSimplePlanDoesNotTreatOrdinaryHeadingAsRepositoryGroup(t *testing.T) {
 	workspace := t.TempDir()
 	changeDir := filepath.Join(workspace, "openspec", "changes", "demo")
 	writeTaskGroupFile(t, filepath.Join(changeDir, "tasks.md"), "## Repository setup\n\n# Small change\n")
 
-	plan, err := Parse(Options{
+	_, err := Parse(Options{
 		WorkspaceDir: workspace,
 		ChangeDir:    changeDir,
 		PlanKind:     Simple,
 		Repositories: []string{"backend"},
 	})
-	if err != nil {
-		t.Fatalf("Parse() error = %v", err)
-	}
-	if got, want := filepath.Base(plan.Groups[0].Tasks[0]), "tasks.md"; got != want {
-		t.Fatalf("task file = %q, want %q", got, want)
+	if err == nil || !strings.Contains(err.Error(), "repository") {
+		t.Fatalf("Parse() error = %v, want configured repository-group failure", err)
 	}
 }
 

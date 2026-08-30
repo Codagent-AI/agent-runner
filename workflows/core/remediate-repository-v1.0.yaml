@@ -1,11 +1,8 @@
 name: remediate-repository
 description: "Apply only the active repository's approved acceptance remediation."
 hidden: true
-scope: repositories
 
 params:
-  - name: repositories
-    required: true
   - name: change_dir
     required: true
 

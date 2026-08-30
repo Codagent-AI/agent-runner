@@ -54,6 +54,9 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 			return nil, err
 		}
 		opts.Workspace = workspace
+		if err := validateTaskPlanResume(state.TaskPlan, workspace); err != nil {
+			return nil, err
+		}
 	}
 
 	resumeState := restoreResumeContext(&state)
@@ -93,6 +96,7 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		WorkflowScope:             workflow.Scope,
 		Workspace:                 opts.Workspace,
 		RepositoryFrame:           state.RepositoryFrame,
+		TaskPlan:                  state.TaskPlan,
 		WorkspacePullRequestURL:   state.WorkspacePullRequestURL,
 		RepositoryPullRequestURLs: state.RepositoryPullRequestURLs,
 		ProjectRoot:               opts.ProjectRoot,

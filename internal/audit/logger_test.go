@@ -46,6 +46,12 @@ func TestBuildPrefix(t *testing.T) {
 	})
 }
 
+func TestRepositoryPrefixInsertsAtScopedBoundary(t *testing.T) {
+	if got, want := RepositoryPrefix("[implement-task-groups, task-loop:0, implement-task]", "backend", 1), "[implement-task-groups, repo:backend, task-loop:0, implement-task]"; got != want {
+		t.Fatalf("RepositoryPrefix() = %q, want %q", got, want)
+	}
+}
+
 func TestEncodePath(t *testing.T) {
 	t.Run("replaces slashes dots and underscores with dashes", func(t *testing.T) {
 		result := EncodePath("/Users/paul/codagent/agent-runner")

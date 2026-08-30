@@ -118,10 +118,20 @@ func executeScopedChildWorkflow(
 			return OutcomeFailed, fmt.Errorf("selected repository %q is no longer configured", name)
 		}
 		repositoryCtx := model.NewRepositoryExecutionContext(ctx, repository, index)
+		// The invoking step remains outside the repository-owned child body.
+		repositoryCtx.RepositoryPrefixDepth = ctx.AuditPrefixTokenCount()
+		if len(ctx.NestingPath) > 0 && ctx.NestingPath[len(ctx.NestingPath)-1].SubWorkflowName != "" {
+			repositoryCtx.RepositoryPrefixDepth--
+		}
+		started := time.Now()
+		boundaryPrefix := buildNestingPrefix(ctx.NestingPath)
+		emitRepositoryBoundaryStart(repositoryCtx, boundaryPrefix, index, len(ctx.Workspace.Selected), started)
 		outcome, err := executeChildSteps(workflow, repositoryCtx, runner, glob, log, startFromStepID, startCompleted)
 		if err != nil {
+			emitRepositoryBoundaryEnd(repositoryCtx, boundaryPrefix, OutcomeFailed, started)
 			return OutcomeFailed, err
 		}
+		emitRepositoryBoundaryEnd(repositoryCtx, boundaryPrefix, outcome, started)
 		if outcome == OutcomeFailed || outcome == OutcomeAborted {
 			return outcome, nil
 		}
@@ -147,7 +157,7 @@ func prepareSubWorkflow(
 	if parentCtx.WorkflowScope == model.ScopeRepositories && workflow.Scope == model.ScopeWorkspace {
 		return model.Workflow{}, nil, fmt.Errorf("repository-scoped workflows cannot invoke a workspace-scoped child; invoke the workspace child from a workspace-scoped parent")
 	}
-	if workflow.Scope == model.ScopeRepositories && parentCtx.Workspace != nil && len(parentCtx.Workspace.Repositories) == 1 {
+	if workflow.RequiresRepositoryTargets() && parentCtx.Workspace != nil && len(parentCtx.Workspace.Repositories) == 1 {
 		if _, implicit := parentCtx.Workspace.Repositories["default"]; implicit {
 			if _, supplied := resolvedParams[model.RepositoriesParam]; !supplied {
 				resolvedParams = copyMap(resolvedParams)
@@ -182,7 +192,7 @@ func prepareSubWorkflow(
 		EngineRef:       childEngine,
 		EngineSet:       workflow.Engine != nil,
 	})
-	if workflow.Scope == model.ScopeRepositories && childCtx.Workspace != nil {
+	if workflow.RequiresRepositoryTargets() && childCtx.Workspace != nil {
 		selected, err := model.ParseRepositoryTargets(resolvedParams[model.RepositoriesParam], childCtx.Workspace.Repositories)
 		if err != nil {
 			return model.Workflow{}, nil, err
@@ -232,13 +242,15 @@ func executeChildSteps(
 			}
 		}
 
-		skip, skipErr := ShouldSkipStep(workflow.Steps[i].SkipIf, childCtx.LastStepOutcome, childCtx, workflow.Steps[i].ID)
-		if skipErr != nil {
-			return OutcomeFailed, fmt.Errorf("step %q skip_if evaluation failed: %w", workflow.Steps[i].ID, skipErr)
-		}
-		if skip {
-			skipChildStep(childCtx, &workflow.Steps[i])
-			continue
+		if workflow.Steps[i].Scope != model.ScopeRepositories || childCtx.ActiveRepository != nil {
+			skip, skipErr := ShouldSkipStep(workflow.Steps[i].SkipIf, childCtx.LastStepOutcome, childCtx, workflow.Steps[i].ID)
+			if skipErr != nil {
+				return OutcomeFailed, fmt.Errorf("step %q skip_if evaluation failed: %w", workflow.Steps[i].ID, skipErr)
+			}
+			if skip {
+				skipChildStep(childCtx, &workflow.Steps[i])
+				continue
+			}
 		}
 
 		updateChildProgress(childCtx, workflow.Steps[i].ID, false)

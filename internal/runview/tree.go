@@ -4,6 +4,7 @@
 package runview
 
 import (
+	"slices"
 	"strconv"
 	"time"
 
@@ -78,6 +79,7 @@ type StepNode struct {
 	StaticBreakIf            string
 	StaticWorkdir            string
 	StaticContinueOnFailure  bool
+	StaticScope              model.Scope
 	StaticCaptureStderr      bool
 	StaticUITitle            string
 	StaticUIBody             string
@@ -269,21 +271,29 @@ func (t *Tree) ApplyPersistedRepositories(state *model.RunState) {
 			identities = append(identities, entry.Identity)
 		}
 	}
+	boundaries := repositoryBoundaryNodes(t.Root)
+	if len(boundaries) == 0 {
+		boundaries = []*StepNode{t.Root}
+	}
 	for index, identity := range identities {
 		if identity.Name == "" || identity.Name == "default" {
 			continue
 		}
 		name := identity.Name
-		t.RepositoryOrder = append(t.RepositoryOrder, name)
-		node := t.ensureRepository(name, map[string]any{"repository_dir": identity.Dir, "position": index, "total": len(identities)})
-		if state.RepositoryFrame != nil && index < len(state.RepositoryFrame.Repositories) {
-			switch state.RepositoryFrame.Repositories[index].Status {
-			case model.RepositoryActive:
-				node.Status = StatusInProgress
-			case model.RepositoryCompleted:
-				node.Status = StatusSuccess
-			case model.RepositoryFailed:
-				node.Status = StatusFailed
+		if !slices.Contains(t.RepositoryOrder, name) {
+			t.RepositoryOrder = append(t.RepositoryOrder, name)
+		}
+		for _, boundary := range boundaries {
+			node := t.ensureRepositoryBelow(boundary, name, map[string]any{"repository_dir": identity.Dir, "position": index, "total": len(identities)})
+			if state.RepositoryFrame != nil && index < len(state.RepositoryFrame.Repositories) {
+				switch state.RepositoryFrame.Repositories[index].Status {
+				case model.RepositoryActive:
+					node.Status = StatusInProgress
+				case model.RepositoryCompleted:
+					node.Status = StatusSuccess
+				case model.RepositoryFailed:
+					node.Status = StatusFailed
+				}
 			}
 		}
 	}
@@ -296,6 +306,31 @@ func (t *Tree) ApplyPersistedRepositories(state *model.RunState) {
 	if state.WorkspacePullRequestURL != "" {
 		t.PullRequestURL = state.WorkspacePullRequestURL
 	}
+}
+
+func repositoryBoundaryNodes(root *StepNode) []*StepNode {
+	if root == nil {
+		return nil
+	}
+	if root.StaticScope == model.ScopeRepositories {
+		return []*StepNode{root}
+	}
+	var result []*StepNode
+	var visit func(*StepNode)
+	visit = func(node *StepNode) {
+		for _, child := range node.Children {
+			if child.Type == NodeRepository {
+				continue
+			}
+			if child.StaticScope == model.ScopeRepositories {
+				result = append(result, child)
+				continue
+			}
+			visit(child)
+		}
+	}
+	visit(root)
+	return result
 }
 
 // PreviousExecution returns the most recently started terminal leaf before
@@ -344,6 +379,7 @@ func BuildTree(wf *model.Workflow, workflowPath string) *Tree {
 		Status:             StatusPending,
 		StaticWorkflowPath: workflowPath,
 		SubLoaded:          true,
+		StaticScope:        wf.Scope,
 	}
 	for i := range wf.Steps {
 		child := buildStepNode(&wf.Steps[i], root)
@@ -368,6 +404,7 @@ func buildStepNode(s *model.Step, parent *StepNode) *StepNode {
 		StaticBreakIf:           s.BreakIf,
 		StaticWorkdir:           s.Workdir,
 		StaticContinueOnFailure: s.ContinueOnFailure,
+		StaticScope:             s.Scope,
 		StaticCaptureStderr:     s.CaptureStderr,
 	}
 	switch {
@@ -586,6 +623,7 @@ func cloneTemplate(src, parent *StepNode) *StepNode {
 		StaticBreakIf:           src.StaticBreakIf,
 		StaticWorkdir:           src.StaticWorkdir,
 		StaticContinueOnFailure: src.StaticContinueOnFailure,
+		StaticScope:             src.StaticScope,
 		StaticCaptureStderr:     src.StaticCaptureStderr,
 		StaticUITitle:           src.StaticUITitle,
 		StaticUIBody:            src.StaticUIBody,

@@ -530,9 +530,10 @@ func TestBuiltInPlanningUsesTaskGroupResolverAndScopedRepositoryLifecycle(t *tes
 			Script   string `yaml:"script"`
 			Workflow string `yaml:"workflow"`
 			Steps    []struct {
-				ID      string `yaml:"id"`
-				Script  string `yaml:"script"`
-				Capture string `yaml:"capture"`
+				ID       string `yaml:"id"`
+				Script   string `yaml:"script"`
+				Capture  string `yaml:"capture"`
+				Workflow string `yaml:"workflow"`
 			} `yaml:"steps"`
 		} `yaml:"steps"`
 	}
@@ -554,7 +555,7 @@ func TestBuiltInPlanningUsesTaskGroupResolverAndScopedRepositoryLifecycle(t *tes
 		if step.ID != "implement-task-groups" {
 			continue
 		}
-		if step.Workflow == "implement-repository-task-group-v1.0.yaml" {
+		if step.Scope == "repositories" && len(step.Steps) == 1 && step.Steps[0].Workflow == "implement-repository-task-group-v1.0.yaml" {
 			repositoryGroup = true
 		}
 	}
@@ -579,6 +580,7 @@ func TestEveryShippedWorkflowExplicitlyClassifiesScope(t *testing.T) {
 		"core/validate-feature-branch-v1.0.yaml": true,
 		"core/implement-task-v1.0.yaml":          true,
 		"core/finalize-pr-v1.0.yaml":             true,
+		"core/remediate-repository-v1.0.yaml":    true,
 	}
 	err := fs.WalkDir(FS, ".", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -628,6 +630,42 @@ func TestRepositoryFinalizationSkipsWorkspaceCheckoutAndAcceptanceRequiresComple
 	}
 	if !strings.Contains(string(implementation), "ACCEPTANCE_COMPLETE") || !strings.Contains(string(implementation), "acceptance-preparation-status.txt") {
 		t.Fatal("implementation acceptance handoff gate must require successful acceptance preparation")
+	}
+}
+
+func TestAcceptanceAndSimpleChangeRemediateBeforeReacceptanceOrFinalization(t *testing.T) {
+	tests := []struct {
+		ref  string
+		want []string
+	}{
+		{ref: "builtin:core/accept-change-v1.0.yaml", want: []string{"review-and-refine", "validate-remediation-ledger", "remediate-repositories", "recommend-reacceptance-testing", "run-reacceptance-testing"}},
+		{ref: "builtin:core/complete-simple-change-v1.0.yaml", want: []string{"implement-task-groups", "test", "review", "validate-remediation-ledger", "remediate-repositories", "finalize-repositories"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ref, func(t *testing.T) {
+			body, err := ReadFile(tt.ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var workflow model.Workflow
+			if err := yaml.Unmarshal(body, &workflow); err != nil {
+				t.Fatal(err)
+			}
+			positions := make(map[string]int, len(workflow.Steps))
+			for index := range workflow.Steps {
+				positions[workflow.Steps[index].ID] = index
+			}
+			for index := 1; index < len(tt.want); index++ {
+				if positions[tt.want[index-1]] >= positions[tt.want[index]] {
+					t.Fatalf("step order %v does not preserve %s before %s", positions, tt.want[index-1], tt.want[index])
+				}
+			}
+			for _, boundary := range []string{"implement-task-groups", "remediate-repositories"} {
+				if position, ok := positions[boundary]; ok && workflow.Steps[position].Scope != model.ScopeRepositories {
+					t.Fatalf("%s scope = %q, want repositories", boundary, workflow.Steps[position].Scope)
+				}
+			}
+		})
 	}
 }
 

@@ -136,6 +136,7 @@ const (
 // repository, allowing a restart to skip completed siblings and restore only
 // the active sibling's deepest loop/sub-workflow position.
 type RepositoryFrame struct {
+	BoundaryID   string                     `json:"boundaryId,omitempty"`
 	Repositories []RepositoryExecutionState `json:"repositories"`
 }
 
@@ -151,6 +152,8 @@ type RepositoryExecutionState struct {
 type TaskPlanState struct {
 	Snapshot    json.RawMessage `json:"snapshot"`
 	Fingerprint string          `json:"fingerprint"`
+	ChangeDir   string          `json:"changeDir"`
+	PlanKind    string          `json:"planKind"`
 }
 
 // ResolveResumeStepResult holds the outcome of resolving which step to resume from.
