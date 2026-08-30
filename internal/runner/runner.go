@@ -1518,6 +1518,8 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 	if ctx.ActiveRepository != nil && ctx.RepositoryIndex != nil {
 		if entry := repositoryEntry(ctx.RepositoryFrame, *ctx.RepositoryIndex); entry != nil {
 			entry.Nested = nested
+			atBoundaryChild := true
+			entry.NestedAtBoundaryChild = &atBoundaryChild
 			if completed {
 				entry.Status = model.RepositoryActive
 			}

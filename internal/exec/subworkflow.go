@@ -319,9 +319,22 @@ func recordChildProgress(childCtx *model.ExecutionContext, childStepID string, c
 	if childCtx.ActiveRepository != nil && childCtx.RepositoryIndex != nil {
 		if repositoryState := nestedRepositoryEntry(childCtx.RepositoryFrame, *childCtx.RepositoryIndex); repositoryState != nil {
 			repositoryState.Nested = repositoryProgressChain(childCtx, entry)
+			atBoundaryChild := repositoryProgressStartsAtBoundaryChild(childCtx)
+			repositoryState.NestedAtBoundaryChild = &atBoundaryChild
 		}
 	}
 	parent.LastSubWorkflowChild = entry
+}
+
+// repositoryProgressStartsAtBoundaryChild reports whether the persisted chain
+// begins at the repository fan-out boundary's direct child. A deeper child
+// leaves the first repository-local sub-workflow invocation in the ordinary
+// root chain, so resume must attach the authoritative repository progress
+// beneath that wrapper instead.
+func repositoryProgressStartsAtBoundaryChild(childCtx *model.ExecutionContext) bool {
+	parent := childCtx.ParentContext
+	return parent != nil && parent.ActiveRepository != nil &&
+		(parent.ParentContext == nil || parent.ParentContext.ActiveRepository == nil)
 }
 
 // repositoryProgressChain returns the complete state below a repository

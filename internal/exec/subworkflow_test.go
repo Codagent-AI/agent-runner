@@ -686,6 +686,9 @@ func TestRecordChildProgressPersistsCompleteRepositoryChainBeforeUnwind(t *testi
 
 	recordChildProgress(validation, "validate-feature-branch", false)
 
+	if got := root.RepositoryFrame.Repositories[0].NestedAtBoundaryChild; got == nil || *got {
+		t.Fatalf("NestedAtBoundaryChild = %v, want false", got)
+	}
 	entry := root.RepositoryFrame.Repositories[0].Nested
 	type progressState struct {
 		StepID            string
@@ -722,6 +725,33 @@ func TestRecordChildProgressPersistsCompleteRepositoryChainBeforeUnwind(t *testi
 	want := []progressState{preflightState, validationState, validationState}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Fatalf("repository resume chain mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestRecordChildProgressMarksDirectRepositoryBoundaryChild(t *testing.T) {
+	workspace, repositoryDir := t.TempDir(), t.TempDir()
+	root := model.NewRootContext(&model.RootContextOptions{
+		Params: map[string]string{},
+		Workspace: &model.WorkspaceContext{
+			Dir: workspace,
+			Repositories: map[string]model.Repository{
+				"frontend": {Name: "frontend", Dir: repositoryDir},
+			},
+			Selected: []string{"frontend"},
+		},
+		RepositoryFrame: &model.RepositoryFrame{Repositories: []model.RepositoryExecutionState{{
+			Identity: model.RepositoryIdentity{Name: "frontend", Dir: repositoryDir},
+			Status:   model.RepositoryActive,
+		}}},
+	})
+	repository := model.NewRepositoryExecutionContext(root, root.Workspace.Repositories["frontend"], 0)
+	directChild := model.NewSubWorkflowContext(repository, &model.SubWorkflowContextOptions{StepID: "repository-child"})
+
+	recordChildProgress(directChild, "run", false)
+
+	entry := root.RepositoryFrame.Repositories[0]
+	if entry.NestedAtBoundaryChild == nil || !*entry.NestedAtBoundaryChild {
+		t.Fatalf("NestedAtBoundaryChild = %v, want true", entry.NestedAtBoundaryChild)
 	}
 }
 

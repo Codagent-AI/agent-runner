@@ -6,7 +6,9 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
+	"strings"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/config"
@@ -34,6 +36,9 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 
 	if resumeAlreadyCompleted(stateFilePath, &state) {
 		return nil, ErrAlreadyCompleted
+	}
+	if err := resolveLegacyRepositoryAttachment(&state); err != nil {
+		return nil, err
 	}
 
 	profileOverride := resumeProfileOverride(opts.ProfileOverride, state.ProfileSet)
@@ -251,32 +256,122 @@ func restoreResumeContext(state *model.RunState) restoredResumeContext {
 
 func resumeNestedState(state *model.RunState) *model.NestedStepState {
 	if index, ok := activeRepositoryFrameIndex(state); ok {
-		if nested := state.RepositoryFrame.Repositories[index].Nested; nested != nil {
+		if repository := &state.RepositoryFrame.Repositories[index]; repository.Nested != nil {
 			if state.RepositoryFrame.BoundaryID == "" {
-				return nested
+				return repository.Nested
 			}
-			attachNestedRepositoryResume(state.CurrentStep.Nested, nested)
+			attachNestedRepositoryResume(state.CurrentStep.Nested, repository, state.RepositoryFrame.BoundaryID)
 			return state.CurrentStep.Nested
 		}
 	}
 	return state.CurrentStep.Nested
 }
 
-func attachNestedRepositoryResume(root, repository *model.NestedStepState) {
-	if root == nil || repository == nil {
+// resolveLegacyRepositoryAttachment migrates repository state written before
+// NestedAtBoundaryChild made its attachment point explicit. Different step IDs
+// prove that the ordinary root owns a wrapper; structurally identical chains
+// prove a direct child. A reused ID with different progress is genuinely
+// ambiguous, so fail instead of risking work being rerun or skipped.
+func resolveLegacyRepositoryAttachment(state *model.RunState) error {
+	index, ok := activeRepositoryFrameIndex(state)
+	if !ok || state.RepositoryFrame.BoundaryID == "" {
+		return nil
+	}
+	repository := &state.RepositoryFrame.Repositories[index]
+	if repository.Nested == nil || repository.NestedAtBoundaryChild != nil {
+		return nil
+	}
+	boundary := nestedStateAtPrefix(state.CurrentStep.Nested, state.RepositoryFrame.BoundaryID)
+	if boundary == nil {
+		return fmt.Errorf(
+			"cannot safely resume legacy repository state: boundary %q no longer matches persisted workflow progress; restart the workflow",
+			state.RepositoryFrame.BoundaryID,
+		)
+	}
+
+	atBoundaryChild := false
+	switch {
+	case boundary.Child == nil:
+		atBoundaryChild = true
+	case boundary.Child == repository.Nested || reflect.DeepEqual(boundary.Child, repository.Nested):
+		atBoundaryChild = true
+	case boundary.Child.StepID != repository.Nested.StepID:
+		atBoundaryChild = false
+	default:
+		return fmt.Errorf(
+			"cannot safely resume legacy repository state at boundary %q: step %q could be either the boundary child or a repository-local wrapper; restart the workflow",
+			state.RepositoryFrame.BoundaryID,
+			repository.Nested.StepID,
+		)
+	}
+	repository.NestedAtBoundaryChild = &atBoundaryChild
+	return nil
+}
+
+func attachNestedRepositoryResume(root *model.NestedStepState, repository *model.RepositoryExecutionState, boundaryID string) {
+	if root == nil || repository == nil || repository.Nested == nil {
 		return
 	}
+	if nestedStateContains(root, repository.Nested) {
+		return
+	}
+	boundary := nestedStateAtPrefix(root, boundaryID)
+	if boundary != nil {
+		switch {
+		case repository.NestedAtBoundaryChild != nil && *repository.NestedAtBoundaryChild:
+			boundary.Child = repository.Nested
+		case boundary.Child == nil:
+			boundary.Child = repository.Nested
+		default:
+			// The boundary owns a repository-local sub-workflow step. Keep that
+			// invocation but replace any stale descendants with the repository
+			// frame's authoritative progress.
+			boundary.Child.Child = repository.Nested
+		}
+		return
+	}
+
 	current := root
 	for {
-		if current == repository {
+		if current == repository.Nested {
 			return
 		}
 		if current.Child == nil {
-			current.Child = repository
+			current.Child = repository.Nested
 			return
 		}
 		current = current.Child
 	}
+}
+
+func nestedStateContains(root, target *model.NestedStepState) bool {
+	for current := root; current != nil; current = current.Child {
+		if current == target {
+			return true
+		}
+	}
+	return false
+}
+
+func nestedStateAtPrefix(root *model.NestedStepState, prefix string) *model.NestedStepState {
+	raw := strings.TrimPrefix(strings.TrimSuffix(prefix, "]"), "[")
+	tokens := strings.Split(raw, ", ")
+	current := root
+	var matched *model.NestedStepState
+	for _, token := range tokens {
+		if token == "" || strings.HasPrefix(token, "sub:") || strings.HasPrefix(token, "repo:") {
+			continue
+		}
+		if separator := strings.LastIndexByte(token, ':'); separator >= 0 {
+			token = token[:separator]
+		}
+		if current == nil || current.StepID != token {
+			return nil
+		}
+		matched = current
+		current = current.Child
+	}
+	return matched
 }
 
 func resumeRepositoryIndex(state *model.RunState) int {

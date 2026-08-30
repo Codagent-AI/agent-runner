@@ -141,9 +141,10 @@ type RepositoryFrame struct {
 }
 
 type RepositoryExecutionState struct {
-	Identity RepositoryIdentity `json:"identity"`
-	Status   RepositoryStatus   `json:"status"`
-	Nested   *NestedStepState   `json:"nested,omitempty"`
+	Identity              RepositoryIdentity `json:"identity"`
+	Status                RepositoryStatus   `json:"status"`
+	Nested                *NestedStepState   `json:"nested,omitempty"`
+	NestedAtBoundaryChild *bool              `json:"nestedAtBoundaryChild,omitempty"`
 }
 
 // TaskPlanState is produced by the authoritative taskgroups parser. Keeping

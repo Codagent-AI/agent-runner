@@ -779,6 +779,224 @@ steps:
 	}
 }
 
+func TestResumeNestedStateReplacesStaleRepositoryDescendantsAtBoundary(t *testing.T) {
+	active := 1
+	state := model.RunState{
+		RepositoryIndex: &active,
+		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+			StepID: "implement",
+			Child: &model.NestedStepState{
+				StepID: "implement-task-groups",
+				Child: &model.NestedStepState{
+					StepID: "implement-repository-task-group",
+					Child:  &model.NestedStepState{StepID: "stale-implement-tasks"},
+				},
+			},
+		}},
+		RepositoryFrame: &model.RepositoryFrame{
+			BoundaryID: "[implement, sub:implement-change, implement-task-groups]",
+			Repositories: []model.RepositoryExecutionState{
+				{Status: model.RepositoryCompleted},
+				{Status: model.RepositoryActive, Nested: &model.NestedStepState{
+					StepID: "simplify",
+					Child:  &model.NestedStepState{StepID: "run-validator"},
+				}},
+			},
+		},
+	}
+
+	nested := resumeNestedState(&state)
+	var got []string
+	for current := nested; current != nil; current = current.Child {
+		got = append(got, current.StepID)
+	}
+	want := []string{
+		"implement",
+		"implement-task-groups",
+		"implement-repository-task-group",
+		"simplify",
+		"run-validator",
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("resume chain mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestResumeNestedStateUsesFullBoundaryPathWhenStepIDsRepeat(t *testing.T) {
+	active := 0
+	atBoundaryChild := false
+	state := model.RunState{
+		RepositoryIndex: &active,
+		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+			StepID: "coordinate",
+			Child: &model.NestedStepState{
+				StepID: "task-groups",
+				Child: &model.NestedStepState{
+					StepID: "simplify",
+					Child:  &model.NestedStepState{StepID: "task-groups"},
+				},
+			},
+		}},
+		RepositoryFrame: &model.RepositoryFrame{
+			BoundaryID: "[coordinate, sub:workspace-child, task-groups]",
+			Repositories: []model.RepositoryExecutionState{{
+				Status:                model.RepositoryActive,
+				NestedAtBoundaryChild: &atBoundaryChild,
+				Nested: &model.NestedStepState{
+					StepID: "simplify",
+					Child:  &model.NestedStepState{StepID: "run-validator"},
+				},
+			}},
+		},
+	}
+
+	nested := resumeNestedState(&state)
+	var got []string
+	for current := nested; current != nil; current = current.Child {
+		got = append(got, current.StepID)
+	}
+	want := []string{"coordinate", "task-groups", "simplify", "simplify", "run-validator"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("resume chain mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestResumeNestedStateReplacesBoundaryChildWhenRepositoryProgressStartsThere(t *testing.T) {
+	active := 0
+	atBoundaryChild := true
+	state := model.RunState{
+		RepositoryIndex: &active,
+		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+			StepID: "coordinate",
+			Child:  &model.NestedStepState{StepID: "stale-repository-step"},
+		}},
+		RepositoryFrame: &model.RepositoryFrame{
+			BoundaryID: "[coordinate]",
+			Repositories: []model.RepositoryExecutionState{{
+				Status:                model.RepositoryActive,
+				NestedAtBoundaryChild: &atBoundaryChild,
+				Nested: &model.NestedStepState{
+					StepID: "repository-step",
+					Child:  &model.NestedStepState{StepID: "repository-child"},
+				},
+			}},
+		},
+	}
+
+	nested := resumeNestedState(&state)
+	var got []string
+	for current := nested; current != nil; current = current.Child {
+		got = append(got, current.StepID)
+	}
+	want := []string{"coordinate", "repository-step", "repository-child"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("resume chain mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestResumeNestedStateDoesNotReattachRepositoryChainAlreadyInRoot(t *testing.T) {
+	active := 0
+	atBoundaryChild := false
+	repositoryNested := &model.NestedStepState{
+		StepID: "repository-step",
+		Child:  &model.NestedStepState{StepID: "repository-child"},
+	}
+	state := model.RunState{
+		RepositoryIndex: &active,
+		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+			StepID: "coordinate",
+			Child:  repositoryNested,
+		}},
+		RepositoryFrame: &model.RepositoryFrame{
+			BoundaryID: "[coordinate]",
+			Repositories: []model.RepositoryExecutionState{{
+				Status:                model.RepositoryActive,
+				NestedAtBoundaryChild: &atBoundaryChild,
+				Nested:                repositoryNested,
+			}},
+		},
+	}
+
+	nested := resumeNestedState(&state)
+	var got []string
+	for current := nested; current != nil && len(got) < 4; current = current.Child {
+		got = append(got, current.StepID)
+	}
+	want := []string{"coordinate", "repository-step", "repository-child"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("resume chain mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestResolveLegacyRepositoryAttachment(t *testing.T) {
+	tests := []struct {
+		name         string
+		boundary     *model.NestedStepState
+		repository   *model.NestedStepState
+		wantAttached bool
+		wantErr      string
+	}{
+		{
+			name: "direct boundary child",
+			boundary: &model.NestedStepState{
+				StepID: "boundary",
+				Child:  &model.NestedStepState{StepID: "run", Child: &model.NestedStepState{StepID: "validate"}},
+			},
+			repository:   &model.NestedStepState{StepID: "run", Child: &model.NestedStepState{StepID: "validate"}},
+			wantAttached: true,
+		},
+		{
+			name: "repository local wrapper",
+			boundary: &model.NestedStepState{
+				StepID: "boundary",
+				Child:  &model.NestedStepState{StepID: "wrapper", Child: &model.NestedStepState{StepID: "stale"}},
+			},
+			repository: &model.NestedStepState{StepID: "run", Child: &model.NestedStepState{StepID: "validate"}},
+		},
+		{
+			name: "ambiguous reused step id",
+			boundary: &model.NestedStepState{
+				StepID: "boundary",
+				Child:  &model.NestedStepState{StepID: "run", Child: &model.NestedStepState{StepID: "stale"}},
+			},
+			repository: &model.NestedStepState{StepID: "run", Child: &model.NestedStepState{StepID: "validate"}},
+			wantErr:    "cannot safely resume legacy repository state",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			active := 0
+			state := model.RunState{
+				RepositoryIndex: &active,
+				CurrentStep:     model.CurrentStep{Nested: tt.boundary},
+				RepositoryFrame: &model.RepositoryFrame{
+					BoundaryID: "[boundary]",
+					Repositories: []model.RepositoryExecutionState{{
+						Status: model.RepositoryActive,
+						Nested: tt.repository,
+					}},
+				},
+			}
+
+			err := resolveLegacyRepositoryAttachment(&state)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("resolveLegacyRepositoryAttachment() error = %v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := state.RepositoryFrame.Repositories[0].NestedAtBoundaryChild
+			if got == nil || *got != tt.wantAttached {
+				t.Fatalf("NestedAtBoundaryChild = %v, want %t", got, tt.wantAttached)
+			}
+		})
+	}
+}
+
 func TestPrepareResume_MissingDefinitionUsesSuccessfulAuditCompletion(t *testing.T) {
 	dir := t.TempDir()
 	state := model.RunState{
