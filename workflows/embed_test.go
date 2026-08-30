@@ -579,7 +579,6 @@ func TestEveryShippedWorkflowExplicitlyClassifiesScope(t *testing.T) {
 		"core/validate-feature-branch-v1.0.yaml": true,
 		"core/implement-task-v1.0.yaml":          true,
 		"core/finalize-pr-v1.0.yaml":             true,
-		"core/remediate-repository-v1.0.yaml":    true,
 	}
 	err := fs.WalkDir(FS, ".", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -611,6 +610,24 @@ func TestEveryShippedWorkflowExplicitlyClassifiesScope(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("walk embedded workflows: %v", err)
+	}
+}
+
+func TestRepositoryFinalizationSkipsWorkspaceCheckoutAndAcceptanceRequiresCompletion(t *testing.T) {
+	finalizers, err := ReadFile("builtin:core/finalize-repositories-v1.0.yaml")
+	if err != nil {
+		t.Fatalf("ReadFile(finalize repositories): %v", err)
+	}
+	if !strings.Contains(string(finalizers), `test "{{repository_dir}}" = "{{workspace_dir}}"`) {
+		t.Fatal("repository finalization must skip the workspace checkout to avoid duplicate implicit-repository PR finalization")
+	}
+
+	implementation, err := ReadFile("builtin:core/implement-change-v1.0.yaml")
+	if err != nil {
+		t.Fatalf("ReadFile(implement change): %v", err)
+	}
+	if !strings.Contains(string(implementation), "ACCEPTANCE_COMPLETE") || !strings.Contains(string(implementation), "acceptance-preparation-status.txt") {
+		t.Fatal("implementation acceptance handoff gate must require successful acceptance preparation")
 	}
 }
 

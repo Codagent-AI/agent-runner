@@ -73,4 +73,13 @@ steps:
       Use at most three acceptance-tester calls. Do not directly modify implementation repositories in this workspace step. Record approved implementation remediation in `{{session_dir}}/output/acceptance-remediation.json`, with a workspace section and selected-repository-keyed entries. Mark `ACCEPTANCE_COMPLETE` only with complete current evidence; otherwise preserve an honest handoff.
 
   - id: verify-acceptance-handoff
-    command: test -s "{{session_dir}}/output/acceptance-handoff.md"
+    command: |
+      if [ ! -s "{{session_dir}}/output/acceptance-handoff.md" ]; then
+        echo "acceptance handoff is missing or empty" >&2
+        exit 1
+      fi
+      status=$(sed '/^[[:space:]]*$/d' "{{session_dir}}/output/acceptance-preparation-status.txt" | tail -n 1)
+      if [ "$status" != "ACCEPTANCE_COMPLETE" ]; then
+        echo "acceptance preparation did not complete successfully" >&2
+        exit 1
+      fi

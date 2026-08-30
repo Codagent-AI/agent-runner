@@ -10,3 +10,4 @@ params:
 steps:
   - id: finalize-repository
     workflow: ../core/finalize-pr-v1.0.yaml
+    skip_if: 'sh: test "{{repository_dir}}" = "{{workspace_dir}}"'

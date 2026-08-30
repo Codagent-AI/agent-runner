@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -696,6 +697,9 @@ func TestPrepareBuiltinOnboardingRunStartsFromRequestedTopLevelStep(t *testing.T
 	repo := filepath.Join(t.TempDir(), "repo")
 	if err := os.MkdirAll(repo, 0o750); err != nil {
 		t.Fatalf("mkdir repo: %v", err)
+	}
+	if output, err := exec.Command("git", "init", repo).CombinedOutput(); err != nil {
+		t.Fatalf("git init %s: %v\n%s", repo, err, output)
 	}
 	t.Chdir(repo)
 

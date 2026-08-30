@@ -140,9 +140,7 @@ steps:
       PY
 
   - id: remediate-repositories
-    scope: repositories
-    steps:
-      - id: remediate-repository
-        workflow: ../core/remediate-repository-v1.0.yaml
-        params:
-          change_dir: "{{change_dir}}"
+    workflow: ../core/remediate-repository-v1.0.yaml
+    params:
+      repositories: "{{repositories}}"
+      change_dir: "{{change_dir}}"
