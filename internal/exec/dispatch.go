@@ -304,7 +304,23 @@ func executeGroupStep(
 	childNestingPath[len(originalNestingPath)] = model.NestingSegment{StepID: step.ID}
 	ctx.NestingPath = childNestingPath
 	defer func() { ctx.NestingPath = originalNestingPath }()
+	resumeStepID, resumeChild, allDone, err := consumeGroupResume(ctx, steps)
+	if err != nil {
+		emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), map[string]any{"error": err.Error()}, step)
+		return OutcomeFailed, err
+	}
+	if allDone {
+		emitStepEnd(ctx, prefix, startTime, string(OutcomeSuccess), nil, step)
+		return OutcomeSuccess, nil
+	}
+	reached := resumeStepID == ""
 	for i := range steps {
+		if !reached {
+			if steps[i].ID != resumeStepID {
+				continue
+			}
+			reached = true
+		}
 		if shouldEvaluateSkipBeforeDispatch(&steps[i], ctx) {
 			skip, skipErr := ShouldSkipStep(steps[i].SkipIf, ctx.LastStepOutcome, ctx, steps[i].ID)
 			if skipErr != nil {
@@ -313,12 +329,16 @@ func executeGroupStep(
 				return OutcomeFailed, fmt.Errorf("step %q skip_if evaluation failed: %w", steps[i].ID, skipErr)
 			}
 			if skip {
+				ctx.ResumeChildState = nil
 				emitSkippedChildStep(ctx, &steps[i])
 				recordLastStepOutcome(ctx, OutcomeSkipped)
 				continue
 			}
 		}
+		ctx.ResumeChildState = resumeChild
+		resumeChild = nil
 		outcome, err := DispatchStep(&steps[i], ctx, runner, glob, log)
+		ctx.ResumeChildState = nil
 		if err != nil {
 			ctx.NestingPath = originalNestingPath
 			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), map[string]any{"error": err.Error()}, step)
@@ -339,4 +359,33 @@ func executeGroupStep(
 	ctx.NestingPath = originalNestingPath
 	emitStepEnd(ctx, prefix, startTime, string(OutcomeSuccess), nil, step)
 	return OutcomeSuccess, nil
+}
+
+// consumeGroupResume resolves the group member that owns persisted progress
+// and removes that member's wrapper before dispatching it. Unlike a
+// sub-workflow, a group does not create an execution context of its own, so it
+// must perform this resume layer explicitly.
+func consumeGroupResume(
+	ctx *model.ExecutionContext,
+	steps []model.Step,
+) (stepID string, child *model.NestedStepState, allDone bool, err error) {
+	resume := ctx.ResumeChildState
+	if resume == nil {
+		return "", nil, false, nil
+	}
+	ctx.ResumeChildState = nil
+	resolved, err := model.ResolveResumeStep(steps, resume.StepID, resume.Completed)
+	if err != nil {
+		return "", nil, false, fmt.Errorf("resume step %q not found in group", resume.StepID)
+	}
+	if resolved.AllDone {
+		return "", nil, true, nil
+	}
+	if resolved.StepID != resume.StepID {
+		return resolved.StepID, nil, false, nil
+	}
+	if resume.Iteration != nil {
+		return resolved.StepID, resume, false, nil
+	}
+	return resolved.StepID, resume.Child, false, nil
 }

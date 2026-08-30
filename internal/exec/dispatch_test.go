@@ -124,6 +124,43 @@ func TestDispatchStep_EvaluatesGroupChildSkipIfInsideEachRepository(t *testing.T
 	}
 }
 
+func TestDispatchStep_ResumesSubWorkflowInsideGroupFromChildProgress(t *testing.T) {
+	dir := t.TempDir()
+	childPath := filepath.Join(dir, "repository-child-v1.0.yaml")
+	childWorkflow := `name: repository-child
+steps:
+  - id: repository-preflight
+    command: preflight
+  - id: implement
+    command: implement
+`
+	if err := os.WriteFile(childPath, []byte(childWorkflow), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		Params:       map[string]string{},
+		WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"),
+		WorkingDir:   dir,
+	})
+	ctx.ResumeChildState = &model.NestedStepState{
+		StepID: "implement-repository-task-group",
+		Child:  &model.NestedStepState{StepID: "repository-preflight"},
+	}
+	runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}, {ExitCode: 0}}}
+	step := model.Step{ID: "implement-task-groups", Steps: []model.Step{{
+		ID: "implement-repository-task-group", Workflow: "repository-child-v1.0.yaml",
+	}}}
+
+	outcome, err := DispatchStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+	if err != nil || outcome != OutcomeSuccess {
+		t.Fatalf("DispatchStep() = %q, %v", outcome, err)
+	}
+	want := [][]string{{"sh", "-c", "preflight"}, {"sh", "-c", "implement"}}
+	if diff := cmp.Diff(want, runner.calls); diff != "" {
+		t.Fatalf("calls mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestDispatchStep_EvaluatesRepositoryBoundarySkipForEachRepository(t *testing.T) {
 	workspace, backend, frontend := t.TempDir(), t.TempDir(), t.TempDir()
 	ctx := model.NewRootContext(&model.RootContextOptions{
