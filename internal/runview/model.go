@@ -1869,6 +1869,13 @@ func findFailedLeaf(n *StepNode) *StepNode {
 		if node == nil {
 			return
 		}
+		// A container's terminal success or skip supersedes failures retained
+		// beneath it for attempt history. Those descendants remain inspectable,
+		// but they are not candidates for the run's current failure focus.
+		if node != n && node.IsContainer() &&
+			(node.Status == StatusSuccess || node.Status == StatusSkipped) {
+			return
+		}
 		for _, child := range node.Children {
 			visit(child, depth+1)
 		}
