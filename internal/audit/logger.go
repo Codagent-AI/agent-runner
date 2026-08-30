@@ -93,7 +93,7 @@ func WithRepository(event Event, name, dir string, prefixDepth int) Event {
 	}
 	event.Data["repository_name"] = name
 	event.Data["repository_dir"] = dir
-	if event.Prefix == "" || strings.Contains(event.Prefix, "repo:"+name) {
+	if event.Prefix == "" || hasRepositoryToken(event.Prefix, name) {
 		return event
 	}
 	event.Prefix = RepositoryPrefix(event.Prefix, name, prefixDepth)
@@ -103,13 +103,27 @@ func WithRepository(event Event, name, dir string, prefixDepth int) Event {
 // RepositoryPrefix inserts a repository token at its execution boundary.
 // An empty base produces the root repository prefix used by lifecycle events.
 func RepositoryPrefix(prefix, name string, prefixDepth int) string {
-	raw := strings.TrimPrefix(strings.TrimSuffix(prefix, "]"), "[")
-	var tokens []string
-	if raw != "" {
-		tokens = strings.Split(raw, ", ")
-	}
+	tokens := prefixTokens(prefix)
 	tokens = InsertRepositoryToken(tokens, name, prefixDepth)
 	return "[" + strings.Join(tokens, ", ") + "]"
+}
+
+func hasRepositoryToken(prefix, name string) bool {
+	want := "repo:" + name
+	for _, token := range prefixTokens(prefix) {
+		if token == want {
+			return true
+		}
+	}
+	return false
+}
+
+func prefixTokens(prefix string) []string {
+	raw := strings.TrimPrefix(strings.TrimSuffix(prefix, "]"), "[")
+	if raw == "" {
+		return nil
+	}
+	return strings.Split(raw, ", ")
 }
 
 // InsertRepositoryToken adds a repository identity at the execution boundary
