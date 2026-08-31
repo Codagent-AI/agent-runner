@@ -128,11 +128,22 @@ func emitShellInterpolationFailure(ctx *model.ExecutionContext, step *model.Step
 	emitStepEnd(ctx, prefix, startTime, "failed", map[string]any{"error": err.Error()}, step)
 }
 
-func runShellProcess(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, command string) (ProcessResult, bool, error) {
+func runShellProcess(
+	step *model.Step,
+	ctx *model.ExecutionContext,
+	runner ProcessRunner,
+	command, prefix string,
+) (ProcessResult, bool, error) {
 	isInteractive := step.Mode == model.ModeInteractive
 	useCapture := step.Capture != "" && !isInteractive
 
 	if !isInteractive {
+		if scoped, ok := runner.(interface {
+			RunShellWithPrefix(string, string, bool, string) (ProcessResult, error)
+		}); ok {
+			result, err := scoped.RunShellWithPrefix(prefix, command, useCapture, step.Workdir)
+			return result, useCapture, err
+		}
 		result, err := runner.RunShell(command, useCapture, step.Workdir)
 		return result, useCapture, err
 	}
@@ -203,13 +214,16 @@ func ExecuteShellStep(
 
 	// Set the step prefix on the process runner if it supports it (TUI mode).
 	setRunnerOutputDirectory(runner, ctx)
-	if ps, ok := runner.(interface{ SetPrefix(string) }); ok {
+	_, hasScopedPrefix := runner.(interface {
+		RunShellWithPrefix(string, string, bool, string) (ProcessResult, error)
+	})
+	if ps, ok := runner.(interface{ SetPrefix(string) }); ok && !hasScopedPrefix {
 		ps.SetPrefix(prefix)
 	}
 
 	emitStepStart(ctx, prefix, startTime, map[string]any{"command": truncateForAudit(auditCommand)})
 
-	result, useCapture, runErr := runShellProcess(step, ctx, runner, command)
+	result, useCapture, runErr := runShellProcess(step, ctx, runner, command, prefix)
 	if step.MetricsSource != "" {
 		// Nested metric records are emitted even when the tool exits unsuccessfully:
 		// model usage is billable independently of the shell outcome.

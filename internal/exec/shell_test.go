@@ -517,3 +517,25 @@ func TestExecuteShellStepRejectsInvalidNestedMetricValues(t *testing.T) {
 		})
 	}
 }
+
+func TestExecuteShellStepReportsDuplicateNestedInvocationID(t *testing.T) {
+	valid := `{"schema_version":1,"invocation_id":"review-1","role":"implementation-validator","tool":"agent-validator","outcome":"success","duration_ms":25,"usage":{"status":"collected","cli":"codex","provider":"openai","model":"gpt-5.6-sol","identity":{"requested_cli":"codex","requested_model":"gpt-5.6-sol","effective_cli":"codex","effective_provider":"openai","effective_model":"gpt-5.6-sol","provider_source":"adapter","model_source":"invocation"},"tokens":{"input":7,"output":2},"token_totals":{"input":7,"output":2,"total":9},"source":"agent-validator:codex"}}`
+	auditLog := &mockAuditLogger{}
+	ctx := makeCtx()
+	ctx.SessionDir = t.TempDir()
+	ctx.AuditLogger = auditLog
+	step := model.Step{ID: "validate", Command: "agent-validator run", MetricsSource: "agent-validator"}
+	if _, err := ExecuteShellStep(&step, ctx, &nestedMetricsRunner{contents: valid + "\n" + valid + "\n"}, &mockLogger{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var usages []model.UsageRecord
+	for _, event := range auditLog.events {
+		if event.Type == audit.EventNestedAgentEnd {
+			usages = append(usages, event.Data["usage"].(model.UsageRecord))
+		}
+	}
+	if len(usages) != 2 || usages[0].Status != model.UsageCollected || usages[1].Reason != model.UnavailableNestedMetricsInvalid {
+		t.Fatalf("duplicate nested invocation usage = %+v, want retained record plus invalid gap", usages)
+	}
+}

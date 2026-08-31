@@ -66,6 +66,7 @@ func readNestedMetrics(path, expectedRole, expectedTool string) (records []neste
 	defer func() { _ = file.Close() }()
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	seen := make(map[string]struct{})
 	for scanner.Scan() {
 		if strings.TrimSpace(scanner.Text()) == "" {
 			continue
@@ -75,6 +76,11 @@ func readNestedMetrics(path, expectedRole, expectedTool string) (records []neste
 			invalid = true
 			continue
 		}
+		if _, duplicate := seen[record.InvocationID]; duplicate {
+			invalid = true
+			continue
+		}
+		seen[record.InvocationID] = struct{}{}
 		records = append(records, record)
 	}
 	return records, invalid || scanner.Err() != nil

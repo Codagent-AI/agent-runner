@@ -93,8 +93,8 @@ type headlessOutputProgram struct {
 	stdout io.Writer
 	stderr io.Writer
 
-	mu  sync.Mutex
-	err error
+	mu     sync.Mutex
+	errors map[string]error
 }
 
 func (*headlessOutputProgram) ReleaseTerminal() error { return nil }
@@ -116,50 +116,108 @@ func (p *headlessOutputProgram) Send(msg tea.Msg) {
 		}
 		if err != nil {
 			p.mu.Lock()
-			if p.err == nil {
-				p.err = err
+			if p.errors == nil {
+				p.errors = make(map[string]error)
+			}
+			if p.errors[chunk.StepPrefix] == nil {
+				p.errors[chunk.StepPrefix] = err
 			}
 			p.mu.Unlock()
 		}
 	}
 }
 
-func (p *headlessOutputProgram) outputError() error {
+func (p *headlessOutputProgram) takeOutputError(prefix string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.err
+	err := p.errors[prefix]
+	delete(p.errors, prefix)
+	return err
 }
 
 type headlessProcessRunner struct {
 	iexec.ProcessRunner
 	output *headlessOutputProgram
+
+	mu           sync.Mutex
+	stepPrefix   string
+	invocationMu sync.Mutex
 }
 
 func (r *headlessProcessRunner) RunShell(command string, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
+	prefix := r.currentPrefix()
 	result, err := r.ProcessRunner.RunShell(command, captureStdout, workdir)
-	return result, errors.Join(err, r.output.outputError())
+	return result, errors.Join(err, r.output.takeOutputError(prefix))
+}
+
+func (r *headlessProcessRunner) RunShellWithPrefix(
+	prefix, command string,
+	captureStdout bool,
+	workdir string,
+) (iexec.ProcessResult, error) {
+	r.invocationMu.Lock()
+	defer r.invocationMu.Unlock()
+	r.setPrefix(prefix)
+	result, err := r.ProcessRunner.RunShell(command, captureStdout, workdir)
+	return result, errors.Join(err, r.output.takeOutputError(prefix))
 }
 
 func (r *headlessProcessRunner) RunAgent(options *iexec.AgentProcessOptions) (iexec.ProcessResult, error) {
 	result, err := r.ProcessRunner.RunAgent(options)
-	return result, errors.Join(err, r.output.outputError())
+	return result, errors.Join(err, r.output.takeOutputError(options.Prefix))
 }
 
 func (r *headlessProcessRunner) RunScript(path string, stdin []byte, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
+	prefix := r.currentPrefix()
 	result, err := r.ProcessRunner.RunScript(path, stdin, captureStdout, workdir)
-	return result, errors.Join(err, r.output.outputError())
+	return result, errors.Join(err, r.output.takeOutputError(prefix))
+}
+
+func (r *headlessProcessRunner) RunScriptWithPrefix(
+	prefix string,
+	delay time.Duration,
+	path string,
+	stdin []byte,
+	captureStdout bool,
+	workdir string,
+) (iexec.ProcessResult, error) {
+	r.invocationMu.Lock()
+	defer r.invocationMu.Unlock()
+	r.setScriptPrefix(prefix, delay)
+	result, err := r.ProcessRunner.RunScript(path, stdin, captureStdout, workdir)
+	return result, errors.Join(err, r.output.takeOutputError(prefix))
 }
 
 func (r *headlessProcessRunner) SetPrefix(prefix string) {
+	r.mu.Lock()
+	r.stepPrefix = prefix
+	r.mu.Unlock()
+	r.setPrefix(prefix)
+}
+
+func (r *headlessProcessRunner) setPrefix(prefix string) {
 	if setter, ok := r.ProcessRunner.(interface{ SetPrefix(string) }); ok {
 		setter.SetPrefix(prefix)
 	}
 }
 
 func (r *headlessProcessRunner) SetScriptPrefix(prefix string, delay time.Duration) {
+	r.mu.Lock()
+	r.stepPrefix = prefix
+	r.mu.Unlock()
+	r.setScriptPrefix(prefix, delay)
+}
+
+func (r *headlessProcessRunner) setScriptPrefix(prefix string, delay time.Duration) {
 	if setter, ok := r.ProcessRunner.(interface{ SetScriptPrefix(string, time.Duration) }); ok {
 		setter.SetScriptPrefix(prefix, delay)
 	}
+}
+
+func (r *headlessProcessRunner) currentPrefix() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stepPrefix
 }
 
 func (r *headlessProcessRunner) SetOutputDirectory(dir string) {
