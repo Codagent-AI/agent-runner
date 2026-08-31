@@ -47,6 +47,40 @@ type outputScope struct {
 var outputArchiveSequence atomic.Uint64
 
 const maxArchivedOutputAttempts = 8
+const maxFailureDiagnosticBytes = 64 * 1024
+
+type textBuffer interface {
+	io.Writer
+	String() string
+}
+
+type tailBuffer struct {
+	data []byte
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	written := len(p)
+	if len(p) >= maxFailureDiagnosticBytes {
+		b.data = append(b.data[:0], p[len(p)-maxFailureDiagnosticBytes:]...)
+		return written, nil
+	}
+	overflow := len(b.data) + len(p) - maxFailureDiagnosticBytes
+	if overflow > 0 {
+		copy(b.data, b.data[overflow:])
+		b.data = b.data[:len(b.data)-overflow]
+	}
+	b.data = append(b.data, p...)
+	return written, nil
+}
+
+func (b *tailBuffer) String() string { return string(b.data) }
+
+func diagnosticBuffer(full bool) textBuffer {
+	if full {
+		return &bytes.Buffer{}
+	}
+	return &tailBuffer{}
+}
 
 func (r *tuiProcessRunner) NotifyAgentCallAccepted(call *iexec.AgentCallAccepted) {
 	r.coord.NotifyStepChange(call.Prefix)
@@ -262,14 +296,14 @@ func pruneOutputArchives(name string) error {
 //
 // When a stream wrapper is set, it is inserted between the ANSI stripper and
 // the chunk writer so adapters can filter output before display.
-func (r *tuiProcessRunner) compositeWriter(stream, ext string, buf *bytes.Buffer) (w io.Writer, cleanup func()) {
+func (r *tuiProcessRunner) compositeWriter(stream, ext string, buf io.Writer) (w io.Writer, cleanup func()) {
 	r.mu.Lock()
 	scope := outputScope{prefix: r.stepPrefix, stdoutWrapper: r.stdoutWrapper, stderrWrapper: r.stderrWrapper}
 	r.mu.Unlock()
 	return r.compositeWriterFor(scope, stream, ext, buf)
 }
 
-func (r *tuiProcessRunner) compositeWriterFor(scope outputScope, stream, ext string, buf *bytes.Buffer) (w io.Writer, cleanup func()) {
+func (r *tuiProcessRunner) compositeWriterFor(scope outputScope, stream, ext string, buf io.Writer) (w io.Writer, cleanup func()) {
 	chunk := newChunkWriter(r.coord, scope.prefix, stream)
 
 	var tuiTarget io.Writer = chunk
@@ -321,10 +355,11 @@ func (r *tuiProcessRunner) RunShell(cmd string, captureStdout bool, workdir stri
 		c.Dir = filepath.Clean(workdir) // #nosec G304
 	}
 
-	var stdoutBuf, stderrBuf bytes.Buffer
+	stdoutBuf := diagnosticBuffer(captureStdout)
+	stderrBuf := diagnosticBuffer(false)
 
-	stdoutW, stdoutCleanup := r.compositeWriter("stdout", "out", &stdoutBuf)
-	stderrW, stderrCleanup := r.compositeWriter("stderr", "err", &stderrBuf)
+	stdoutW, stdoutCleanup := r.compositeWriter("stdout", "out", stdoutBuf)
+	stderrW, stderrCleanup := r.compositeWriter("stderr", "err", stderrBuf)
 	defer stdoutCleanup()
 	defer stderrCleanup()
 
@@ -436,9 +471,10 @@ func (r *tuiProcessRunner) RunScript(path string, stdin []byte, captureStdout bo
 		c.Dir = filepath.Clean(workdir) // #nosec G304
 	}
 
-	var stdoutBuf, stderrBuf bytes.Buffer
-	stdoutW, stdoutCleanup := r.compositeWriter("stdout", "out", &stdoutBuf)
-	stderrW, stderrCleanup := r.compositeWriter("stderr", "err", &stderrBuf)
+	stdoutBuf := diagnosticBuffer(captureStdout)
+	stderrBuf := diagnosticBuffer(false)
+	stdoutW, stdoutCleanup := r.compositeWriter("stdout", "out", stdoutBuf)
+	stderrW, stderrCleanup := r.compositeWriter("stderr", "err", stderrBuf)
 	defer stdoutCleanup()
 	defer stderrCleanup()
 
@@ -457,7 +493,7 @@ func (r *tuiProcessRunner) RunScript(path string, stdin []byte, captureStdout bo
 	}
 
 	stdout := stdoutBuf.String()
-	if !captureStdout {
+	if !captureStdout && exitCode == 0 {
 		stdout = ""
 	}
 	return iexec.ProcessResult{ExitCode: exitCode, Stdout: stdout, Stderr: stderrBuf.String()}, nil

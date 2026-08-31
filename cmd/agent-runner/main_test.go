@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	iexec "github.com/codagent/agent-runner/internal/exec"
+	"github.com/codagent/agent-runner/internal/liverun"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -601,6 +603,68 @@ func TestRealProcessRunner_RunScriptPreservesCapturedStdout(t *testing.T) {
 	if result.Stdout != "  value\n\n" {
 		t.Fatalf("stdout = %q, want preserved bytes", result.Stdout)
 	}
+}
+
+func TestHeadlessProcessRunnerPersistsAgentOutput(t *testing.T) {
+	sessionDir := t.TempDir()
+	runner := newHeadlessProcessRunner(sessionDir)
+	prefix := "implement/review"
+
+	result, err := runner.RunAgent(&iexec.AgentProcessOptions{
+		Context:       context.Background(),
+		Args:          []string{"sh", "-c", "printf 'agent evidence'"},
+		CaptureStdout: true,
+		Prefix:        prefix,
+	})
+	if err != nil {
+		t.Fatalf("RunAgent returned error: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", result.ExitCode)
+	}
+
+	outputPath := filepath.Join(sessionDir, "output", liverun.SanitizeOutputPrefix(prefix)+".out")
+	output, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read persisted output: %v", err)
+	}
+	if string(output) != "agent evidence" {
+		t.Fatalf("persisted output = %q, want agent evidence", output)
+	}
+}
+
+func TestHeadlessProcessRunnerWritesUncapturedOutputToConsole(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	runner := newHeadlessProcessRunnerWithWriters(t.TempDir(), &stdout, &stderr)
+
+	result, err := runner.RunShell("printf 'visible output'; printf 'visible error' >&2", false, "")
+	if err != nil {
+		t.Fatalf("RunShell returned error: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", result.ExitCode)
+	}
+	if stdout.String() != "visible output" {
+		t.Fatalf("console stdout = %q, want visible output", stdout.String())
+	}
+	if stderr.String() != "visible error" {
+		t.Fatalf("console stderr = %q, want visible error", stderr.String())
+	}
+}
+
+func TestHeadlessProcessRunnerReturnsConsoleWriteFailure(t *testing.T) {
+	runner := newHeadlessProcessRunnerWithWriters(t.TempDir(), failingOutputWriter{}, io.Discard)
+
+	_, err := runner.RunShell("printf 'unreadable output'", false, "")
+	if err == nil || !strings.Contains(err.Error(), "console output failed") {
+		t.Fatalf("RunShell error = %v, want console output failure", err)
+	}
+}
+
+type failingOutputWriter struct{}
+
+func (failingOutputWriter) Write([]byte) (int, error) {
+	return 0, errors.New("console output failed")
 }
 
 func writeTestFile(t *testing.T, path, content string) {

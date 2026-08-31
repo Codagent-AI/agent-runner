@@ -290,6 +290,43 @@ func TestTUIProcessRunner_RunScriptCancelsDelayedStepState(t *testing.T) {
 	}
 }
 
+func TestTUIProcessRunner_RunScriptRetainsFailureDiagnosticsWithoutCapture(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fail.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf 'archive conflict\\n'\nprintf 'details\\n' >&2\nexit 1\n"), 0o700); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	runner := NewCoordinator(&captureProgram{}, "").TUIProcessRunner(unusedRunner{}).(*tuiProcessRunner)
+	result, err := runner.RunScript(script, nil, false, "")
+	if err != nil {
+		t.Fatalf("RunScript returned error: %v", err)
+	}
+	if result.ExitCode != 1 {
+		t.Fatalf("exit code = %d, want 1", result.ExitCode)
+	}
+	if result.Stdout != "archive conflict\n" {
+		t.Fatalf("stdout = %q, want failure diagnostics", result.Stdout)
+	}
+	if result.Stderr != "details\n" {
+		t.Fatalf("stderr = %q, want failure diagnostics", result.Stderr)
+	}
+}
+
+func TestTailBufferBoundsFailureDiagnostics(t *testing.T) {
+	buffer := &tailBuffer{}
+	prefix := strings.Repeat("x", maxFailureDiagnosticBytes+1024)
+	if _, err := buffer.Write([]byte(prefix + "final diagnostic")); err != nil {
+		t.Fatalf("Write returned error: %v", err)
+	}
+	if got := len(buffer.String()); got != maxFailureDiagnosticBytes {
+		t.Fatalf("buffer length = %d, want %d", got, maxFailureDiagnosticBytes)
+	}
+	if !strings.HasSuffix(buffer.String(), "final diagnostic") {
+		t.Fatalf("buffer did not retain diagnostic tail")
+	}
+}
+
 func hasStepState(messages []tea.Msg, prefix string) bool {
 	for _, msg := range messages {
 		if state, ok := msg.(StepStateMsg); ok && state.ActiveStepPrefix == prefix {
