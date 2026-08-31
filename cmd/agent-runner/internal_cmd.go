@@ -178,26 +178,16 @@ func handleLaunchIntakeRoute(args []string, stderr io.Writer) int {
 	if err := intakeroute.ValidateLaunchSealed(sealed); err != nil {
 		return reportIntakeLaunchError(stderr, sealed, err)
 	}
-	// prepareFreshRun loads the sealed source itself and reports through the same
-	// error path, so no pre-flight load is needed here.
-	info, err := os.Stat(sealed.HandoffPath) // #nosec G703 -- handoff is validated as a sealed run-owned artifact before launch.
-	if err != nil {
-		return reportIntakeLaunchError(stderr, sealed, fmt.Errorf("stat sealed handoff: %w", err))
-	}
-	if !info.Mode().IsRegular() || info.Size() == 0 {
-		return reportIntakeLaunchError(stderr, sealed, fmt.Errorf("sealed handoff must be a non-empty regular file"))
-	}
-
 	launchLog := iexec.Logger(&runner.DiscardLogger{})
 	if os.Getenv("AGENT_RUNNER_NO_TUI") == "1" {
 		launchLog = &realLogger{}
 	}
 	h, err := prepareFreshRun(&freshRunRequest{
-		SourceRef:           sealed.SourceRef,
-		Keyed:               sealed.Params,
-		IntakeParentRunID:   sealed.ParentRunID,
-		IntakeHandoffSource: sealed.HandoffPath,
-		Log:                 launchLog,
+		SourceRef:             sealed.SourceRef,
+		Keyed:                 sealed.Params,
+		IntakeParentRunID:     sealed.ParentRunID,
+		IntakeHandoffContents: sealed.Handoff,
+		Log:                   launchLog,
 	})
 	if err != nil {
 		return reportIntakeLaunchError(stderr, sealed, err)
@@ -218,9 +208,6 @@ func handleLaunchIntakeRoute(args []string, stderr io.Writer) int {
 
 func reportIntakeLaunchError(stderr io.Writer, sealed *intakeroute.Sealed, err error) int {
 	_, _ = fmt.Fprintf(stderr, "agent-runner: launch intake route: %v\n", err)
-	if sealed != nil && sealed.HandoffPath != "" {
-		_, _ = fmt.Fprintf(stderr, "agent-runner: sealed handoff: %s\n", sealed.HandoffPath)
-	}
 	return 1
 }
 

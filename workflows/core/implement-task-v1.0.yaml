@@ -1,5 +1,5 @@
 name: implement-task
-description: "Implement a single task: agent step then optional validator retry"
+description: "Implement a single task, require committed progress, and optionally retry task-compliance validation."
 hidden: true
 
 params:
@@ -27,6 +27,17 @@ steps:
         exit 1
       fi
 
+  - id: check-clean-before-task
+    command: |
+      if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+        echo "tracked worktree changes exist before task implementation; commit or remove them before continuing" >&2
+        exit 1
+      fi
+
+  - id: record-task-start
+    command: git rev-parse --verify HEAD
+    capture: task_start_head
+
   - id: generate-code
     agent: implementor
     session: new
@@ -37,7 +48,6 @@ steps:
     workflow: run-validator-v1.0.yaml
     params:
       task_file: "{{task_file}}"
-    continue_on_failure: true
     # skip_if parameters are shell-quoted by InterpolateShellSafeTyped. The
     # validation step above additionally constrains this value to true|false.
     skip_if: 'sh: test {{skip_validator}} = true'
@@ -51,6 +61,11 @@ steps:
     prompt: |
       There are uncommitted changes leftover after implementing the task described in {{task_file}}. Run git status and git diff to review them. Only stage and commit files that are related to this task and appropriate to check into git — ignore unrelated changes, generated artifacts, or files that should be gitignored. Follow the project's commit message conventions and prepend [{{step_id}}]. Summarize which files you committed and which you left out, and why.
     skip_if: previous_success
+
+  - id: verify-task-commit
+    script: verify-task-commit.sh
+    script_inputs:
+      starting_head: "{{task_start_head}}"
 
   - id: session-report
     session: resume

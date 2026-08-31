@@ -50,7 +50,6 @@ func TestRouteEnvironmentPublishesCatalogTheAgentCanRead(t *testing.T) {
 		RouteValidation: &intakeroute.ValidateOptions{
 			RunDir: runDir, ParentRunID: "intake-run", IntakeWorkflow: "core:intake",
 			RequestPath: intakeroute.RequestPathFor(runDir),
-			HandoffPath: intakeroute.HandoffPathFor(runDir),
 			Catalog: intakeroute.NewCatalog([]discovery.WorkflowEntry{
 				{CanonicalName: "spec-driven:change", SourcePath: "builtin:spec-driven/change-v2.0.yaml", Description: "Define, plan, and implement a change."},
 				{CanonicalName: "core:intake", SourcePath: "builtin:core/intake-v1.0.yaml", Hidden: true},
@@ -64,7 +63,6 @@ func TestRouteEnvironmentPublishesCatalogTheAgentCanRead(t *testing.T) {
 	}
 	want := []string{
 		"AGENT_RUNNER_ROUTE_REQUEST=" + intakeroute.RequestPathFor(runDir),
-		"AGENT_RUNNER_INTAKE_HANDOFF=" + intakeroute.HandoffPathFor(runDir),
 		"AGENT_RUNNER_ROUTE_CATALOG=" + intakeroute.CatalogPathFor(runDir),
 	}
 	if diff := cmp.Diff(want, env); diff != "" {

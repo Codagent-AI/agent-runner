@@ -15,9 +15,11 @@ import (
 	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/exec"
 	"github.com/codagent/agent-runner/internal/intakeroute"
+	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/stateio"
+	"github.com/google/go-cmp/cmp"
 )
 
 // TestWriteStepStateDoesNotClobberIntakeRoute is the regression guard for the
@@ -25,16 +27,12 @@ import (
 // state must remain independently owned by its run sidecar.
 func TestWriteStepStateDoesNotClobberIntakeRoute(t *testing.T) {
 	runDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(runDir, "handoff.md"), []byte("sealed notes"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(runDir, "route-request.json"), []byte(`{"workflow":"target","handoff":"sealed notes"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	prepared, err := intakeroute.Validate(&intakeroute.ValidateOptions{
 		RunDir: runDir, ParentRunID: "parent", IntakeWorkflow: "core:intake",
-		HandoffPath: filepath.Join(runDir, "handoff.md"),
-		Catalog:     intakeroute.NewCatalog([]discovery.WorkflowEntry{{CanonicalName: "target", SourcePath: "builtin:core/target-v1.0.yaml"}}),
+		Catalog: intakeroute.NewCatalog([]discovery.WorkflowEntry{{CanonicalName: "target", SourcePath: "builtin:core/target-v1.0.yaml"}}),
 	})
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
@@ -156,6 +154,78 @@ func TestDiscoverProjectRootUsesWorkflowRepositoryFromAncestor(t *testing.T) {
 	}
 	if got != repo {
 		t.Fatalf("project root = %q, want %q", got, repo)
+	}
+}
+
+func TestRunWorkflowDeliversIntakeHandoffOnlyOnceAcrossSubWorkflows(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	childOnePath := filepath.Join(dir, "child-one-v1.0.yaml")
+	childTwoPath := filepath.Join(dir, "child-two-v1.0.yaml")
+	for path, prompt := range map[string]string{
+		childOnePath: "Plan the change.",
+		childTwoPath: "Implement the change.",
+	} {
+		name := strings.TrimSuffix(filepath.Base(path), "-v1.0.yaml")
+		source := fmt.Sprintf(`name: %s
+steps:
+  - id: work
+    agent: lead
+    session: new
+    mode: autonomous
+    prompt: %s
+`, name, prompt)
+		if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	parentPath := filepath.Join(dir, "parent-v1.0.yaml")
+	parentSource := fmt.Sprintf(`name: parent
+steps:
+  - id: define
+    workflow: %s
+  - id: implement
+    workflow: %s
+`, filepath.Base(childOnePath), filepath.Base(childTwoPath))
+	if err := os.WriteFile(parentPath, []byte(parentSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := loader.LoadWorkflow(parentPath, loader.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profiles := &config.Config{ActiveAgents: map[string]*config.Agent{
+		"lead": {DefaultMode: "autonomous", CLI: "claude", Model: "sonnet"},
+	}}
+	sessionDir := t.TempDir()
+	log := &mockLog{}
+	result, err := RunWorkflow(&workflow, nil, &Options{
+		WorkflowFile:          parentPath,
+		SessionDir:            sessionDir,
+		IntakeHandoffContents: "Goal: add repository selection.",
+		IntakeParentRunID:     "intake-parent-run",
+		ProfileStore:          profiles,
+		ProcessRunner:         &mockRunner{},
+		GlobExpander:          &mockGlob{},
+		Log:                   log,
+	})
+	if err != nil || result != ResultSuccess {
+		t.Fatalf("RunWorkflow() = (%q, %v), want success; log:\n%s", result, err, strings.Join(log.lines, "\n"))
+	}
+	auditData, err := os.ReadFile(filepath.Join(sessionDir, "audit.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const handoff = "Goal: add repository selection."
+	if count := strings.Count(string(auditData), handoff); count != 1 {
+		t.Fatalf("handoff occurrence count = %d, want exactly one delivery; audit:\n%s", count, auditData)
+	}
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.IntakeHandoffDelivered {
+		t.Fatal("completed run did not persist intake handoff delivery")
 	}
 }
 
@@ -1327,6 +1397,79 @@ func TestPrepareRun_SeedsInitialState(t *testing.T) {
 	}
 }
 
+func TestPrepareRun_RecordsResolvedProfileInStateAndAudit(t *testing.T) {
+	w := model.Workflow{Name: "profiled", Steps: []model.Step{shellStep("s1", "echo hi")}}
+	w.ApplyDefaults()
+	sessionDir := t.TempDir()
+	h, err := PrepareRun(&w, nil, &Options{
+		SessionDir: sessionDir,
+		ProfileStore: &config.Config{
+			ResolvedProfile:       "copilot",
+			ProfileSource:         config.ProfileSourceOverride,
+			ProfileOverrideOrigin: "--profile flag",
+		},
+		ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareRun() error = %v", err)
+	}
+	defer finalizeRun(h.rs, ResultStopped)
+
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := state.ProfileSet; got != "copilot" {
+		t.Fatalf("ProfileSet = %q, want copilot", got)
+	}
+	auditData, err := os.ReadFile(filepath.Join(sessionDir, "audit.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(auditData), `"profile_set":"copilot"`) || !strings.Contains(string(auditData), `"profile_source":"flag"`) {
+		t.Fatalf("run_start missing profile data: %s", auditData)
+	}
+}
+
+// The audit source is derived from the override's typed origin rather than a
+// prose comparison, so a new origin cannot silently be reported as "flag".
+func TestAuditProfileSourceMapsOverrideOrigins(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *config.Config
+		want string
+	}{
+		{
+			name: "flag origin",
+			cfg:  &config.Config{ProfileSource: config.ProfileSourceOverride, ProfileOverrideOrigin: config.OriginFlag},
+			want: "flag",
+		},
+		{
+			name: "state origin",
+			cfg:  &config.Config{ProfileSource: config.ProfileSourceOverride, ProfileOverrideOrigin: config.OriginState},
+			want: "state",
+		},
+		{
+			name: "config selection",
+			cfg:  &config.Config{ProfileSource: config.ProfileSourceConfig},
+			want: "config",
+		},
+		{
+			name: "default fallback",
+			cfg:  &config.Config{ProfileSource: config.ProfileSourceDefault},
+			want: "default",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := auditProfileSource(tc.cfg); got != tc.want {
+				t.Fatalf("auditProfileSource() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPrepareRun_SeedsResumeState(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	w := model.Workflow{
@@ -1382,6 +1525,107 @@ func TestPrepareRun_SeedsResumeState(t *testing.T) {
 	}
 	if got := state.CurrentStep.Nested.NamedSessions["validator-setup"]; got != "session-2" {
 		t.Fatalf("CurrentStep.NamedSessions[validator-setup] = %q, want session-2", got)
+	}
+}
+
+func TestWriteStepStatePreservesSameIDSubWorkflowNesting(t *testing.T) {
+	sessionDir := t.TempDir()
+	workflow := model.Workflow{Name: "parent"}
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		Params:       map[string]string{},
+		WorkflowFile: "parent-v1.0.yaml",
+	})
+	ctx.LastSubWorkflowChild = &model.NestedStepState{
+		StepID: "define",
+		Child: &model.NestedStepState{
+			StepID:    "proposal",
+			Completed: false,
+		},
+	}
+
+	writeStepState(
+		&model.Step{ID: "define"},
+		ctx,
+		&workflow,
+		"workflow-hash",
+		sessionDir,
+		nil,
+		false,
+	)
+
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatalf("ReadState: %v", err)
+	}
+	want := &model.NestedStepState{
+		StepID:            "define",
+		SessionIDs:        map[string]string{},
+		CapturedVariables: map[string]model.CapturedValue{},
+		Child: &model.NestedStepState{
+			StepID: "define",
+			Child: &model.NestedStepState{
+				StepID:    "proposal",
+				Completed: false,
+			},
+		},
+	}
+	if diff := cmp.Diff(want, state.CurrentStep.Nested); diff != "" {
+		t.Fatalf("persisted child chain mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestRunWorkflowFailedResumePreservesPriorChildState(t *testing.T) {
+	dir := t.TempDir()
+	childPath := filepath.Join(dir, "child-v1.0.yaml")
+	childYAML := `name: child
+steps:
+  - id: create
+    command: echo create
+  - id: define
+    command: echo define
+`
+	if err := os.WriteFile(childPath, []byte(childYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	workflow := model.Workflow{
+		Name: "parent",
+		Steps: []model.Step{
+			{ID: "define", Workflow: "child-v1.0.yaml"},
+		},
+	}
+	workflow.ApplyDefaults()
+	sessionDir := t.TempDir()
+	childState := &model.NestedStepState{
+		StepID:    "proposal",
+		Completed: false,
+	}
+
+	result, err := RunWorkflow(&workflow, nil, &Options{
+		From:          "define",
+		WorkflowFile:  filepath.Join(dir, "parent-v1.0.yaml"),
+		SessionDir:    sessionDir,
+		ChildState:    childState,
+		ProcessRunner: &mockRunner{},
+		GlobExpander:  &mockGlob{},
+		Log:           &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("RunWorkflow: %v", err)
+	}
+	if result != ResultFailed {
+		t.Fatalf("result = %q, want %q", result, ResultFailed)
+	}
+
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatalf("ReadState: %v", err)
+	}
+	if state.CurrentStep.Nested == nil || state.CurrentStep.Nested.Child == nil {
+		t.Fatalf("current step = %#v, want preserved child state", state.CurrentStep.Nested)
+	}
+	if diff := cmp.Diff(childState, state.CurrentStep.Nested.Child); diff != "" {
+		t.Fatalf("preserved child state mismatch (-want +got):\n%s", diff)
 	}
 }
 

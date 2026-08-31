@@ -99,7 +99,8 @@ func BuildSummary(r io.Reader, capBytes int) (Summary, error) {
 		capBytes = 0
 	}
 
-	used := 0
+	boundaryBytes := 0
+	aggregateBytes := 0
 	err := visitAuditLines(r, func(lineNo int, line string) error {
 		if strings.TrimSpace(line) == "" {
 			return nil
@@ -109,9 +110,11 @@ func BuildSummary(r io.Reader, capBytes int) (Summary, error) {
 			return fmt.Errorf("parse audit line %d: %w", lineNo, err)
 		}
 		event.Data = redactValue(event.Data).(map[string]any)
-		if !appendClassifiedEvent(&summary, event, capBytes, &used) {
+		dropped := appendAggregateEvent(&summary, event, capBytes, &boundaryBytes, &aggregateBytes)
+		dropped += appendBoundaryEvent(&summary, event, capBytes, &boundaryBytes, aggregateBytes)
+		if dropped > 0 {
 			summary.Truncated = true
-			summary.DroppedEventsCount++
+			summary.DroppedEventsCount += dropped
 		}
 		return nil
 	})
@@ -182,22 +185,146 @@ func visitAuditLines(r io.Reader, visit func(lineNo int, line string) error) err
 	}
 }
 
-func appendClassifiedEvent(summary *Summary, event Event, capBytes int, used *int) bool {
+// appendAggregateEvent gives lifecycle and diagnostic results priority over
+// older chronological boundaries while keeping the whole structured event
+// payload within the configured cap.
+func appendAggregateEvent(summary *Summary, event Event, capBytes int, boundaryBytes, aggregateBytes *int) int {
 	switch event.Type {
 	case EventRunStart:
 		ref := eventRef(event)
-		if !fitsCap(ref, capBytes, used) {
-			return false
+		if summary.RunStart != nil {
+			*aggregateBytes -= encodedSize(*summary.RunStart)
+		}
+		dropped, ok := reserveAggregateSpace(summary, encodedSize(ref), capBytes, boundaryBytes, aggregateBytes, false)
+		if !ok {
+			summary.RunStart = nil
+			return 1
+		}
+		if *boundaryBytes+*aggregateBytes+encodedSize(ref) > capBytes {
+			summary.RunStart = nil
+			return dropped + 1
 		}
 		summary.RunStart = &ref
+		*aggregateBytes += encodedSize(ref)
+		return dropped
 	case EventRunEnd:
 		ref := eventRef(event)
-		if !fitsCap(ref, capBytes, used) {
-			return false
+		if summary.RunEnd != nil {
+			*aggregateBytes -= encodedSize(*summary.RunEnd)
+		}
+		dropped, ok := reserveAggregateSpace(summary, encodedSize(ref), capBytes, boundaryBytes, aggregateBytes, true)
+		if !ok {
+			summary.RunEnd = nil
+			return 1
 		}
 		summary.RunEnd = &ref
+		*aggregateBytes += encodedSize(ref)
+		return dropped
+	case EventStepEnd:
+		if stringField(event.Data, "outcome") == "failed" {
+			item := failureEvent(event)
+			return appendFailureAggregate(summary, &item, capBytes, boundaryBytes, aggregateBytes)
+		}
+	case EventAgentCallEnd:
+		if stringField(event.Data, "outcome") == "failed" {
+			item := failureEvent(event)
+			return appendFailureAggregate(summary, &item, capBytes, boundaryBytes, aggregateBytes)
+		}
+	case EventSubWorkflowEnd:
+		if stringField(event.Data, "outcome") == "failed" {
+			item := failureEvent(event)
+			return appendFailureAggregate(summary, &item, capBytes, boundaryBytes, aggregateBytes)
+		}
+	case EventError:
+		item := ErrorEvent{
+			Timestamp: event.Timestamp,
+			Prefix:    event.Prefix,
+			Message:   snippetStringField(event.Data, "message"),
+		}
+		size := encodedSize(item)
+		dropped, ok := reserveAggregateSpace(summary, size, capBytes, boundaryBytes, aggregateBytes, true)
+		if !ok {
+			return 1
+		}
+		summary.Errors = append(summary.Errors, item)
+		*aggregateBytes += size
+		return dropped
+	}
+	return 0
+}
+
+func appendFailureAggregate(summary *Summary, item *FailureEvent, capBytes int, boundaryBytes, aggregateBytes *int) int {
+	size := encodedSize(item)
+	dropped, ok := reserveAggregateSpace(summary, size, capBytes, boundaryBytes, aggregateBytes, true)
+	if !ok {
+		return 1
+	}
+	summary.Failures = append(summary.Failures, *item)
+	*aggregateBytes += size
+	return dropped
+}
+
+func reserveAggregateSpace(
+	summary *Summary,
+	size, capBytes int,
+	boundaryBytes, aggregateBytes *int,
+	evictRunStart bool,
+) (int, bool) {
+	required := *boundaryBytes + *aggregateBytes + size - capBytes
+	if required <= 0 {
+		return 0, true
+	}
+	reclaimable := *boundaryBytes + diagnosticBytes(summary)
+	if evictRunStart && summary.RunStart != nil {
+		reclaimable += encodedSize(*summary.RunStart)
+	}
+	if reclaimable < required {
+		return 0, false
+	}
+
+	dropped := 0
+	for *boundaryBytes+*aggregateBytes+size > capBytes {
+		removed, ok := evictOldestBoundary(summary)
+		if ok {
+			*boundaryBytes -= removed
+			dropped++
+			continue
+		}
+		removed, ok = evictOldestDiagnostic(summary)
+		if ok {
+			*aggregateBytes -= removed
+			dropped++
+			continue
+		}
+		if evictRunStart && summary.RunStart != nil {
+			*aggregateBytes -= encodedSize(*summary.RunStart)
+			summary.RunStart = nil
+			dropped++
+			continue
+		}
+		return dropped, false
+	}
+	return dropped, true
+}
+
+func diagnosticBytes(summary *Summary) int {
+	total := 0
+	for i := range summary.Failures {
+		total += encodedSize(summary.Failures[i])
+	}
+	for i := range summary.Errors {
+		total += encodedSize(summary.Errors[i])
+	}
+	return total
+}
+
+// appendBoundaryEvent retains the newest chronological boundaries that fit
+// around the authoritative aggregate fields.
+func appendBoundaryEvent(summary *Summary, event Event, capBytes int, boundaryBytes *int, aggregateBytes int) int {
+	var item any
+	switch event.Type {
 	case EventStepStart, EventStepEnd:
-		item := StepBoundary{
+		item = StepBoundary{
 			Timestamp: event.Timestamp,
 			Prefix:    event.Prefix,
 			Type:      event.Type,
@@ -205,19 +332,8 @@ func appendClassifiedEvent(summary *Summary, event Event, capBytes int, used *in
 			Outcome:   stringField(event.Data, "outcome"),
 			Data:      event.Data,
 		}
-		if !fitsCap(item, capBytes, used) {
-			return false
-		}
-		summary.Steps = append(summary.Steps, item)
-		if event.Type == EventStepEnd && stringField(event.Data, "outcome") == "failed" {
-			failure := failureEvent(event)
-			if !fitsCap(failure, capBytes, used) {
-				return false
-			}
-			summary.Failures = append(summary.Failures, failure)
-		}
 	case EventAgentCallStart, EventAgentCallEnd:
-		item := AgentCallBoundary{
+		item = AgentCallBoundary{
 			Timestamp:       event.Timestamp,
 			Prefix:          event.Prefix,
 			Type:            event.Type,
@@ -228,19 +344,8 @@ func appendClassifiedEvent(summary *Summary, event Event, capBytes int, used *in
 			Outcome:         stringField(event.Data, "outcome"),
 			Data:            event.Data,
 		}
-		if !fitsCap(item, capBytes, used) {
-			return false
-		}
-		summary.AgentCalls = append(summary.AgentCalls, item)
-		if event.Type == EventAgentCallEnd && stringField(event.Data, "outcome") == "failed" {
-			failure := failureEvent(event)
-			if !fitsCap(failure, capBytes, used) {
-				return false
-			}
-			summary.Failures = append(summary.Failures, failure)
-		}
 	case EventSubWorkflowStart, EventSubWorkflowEnd:
-		item := SubWorkflowBoundary{
+		item = SubWorkflowBoundary{
 			Timestamp:    event.Timestamp,
 			Prefix:       event.Prefix,
 			Type:         event.Type,
@@ -249,30 +354,90 @@ func appendClassifiedEvent(summary *Summary, event Event, capBytes int, used *in
 			Outcome:      stringField(event.Data, "outcome"),
 			Data:         event.Data,
 		}
-		if !fitsCap(item, capBytes, used) {
-			return false
-		}
-		summary.SubWorkflows = append(summary.SubWorkflows, item)
-		if event.Type == EventSubWorkflowEnd && stringField(event.Data, "outcome") == "failed" {
-			failure := failureEvent(event)
-			if !fitsCap(failure, capBytes, used) {
-				return false
-			}
-			summary.Failures = append(summary.Failures, failure)
-		}
-	case EventError:
-		item := ErrorEvent{
-			Timestamp: event.Timestamp,
-			Prefix:    event.Prefix,
-			Message:   stringField(event.Data, "message"),
-			Data:      event.Data,
-		}
-		if !fitsCap(item, capBytes, used) {
-			return false
-		}
-		summary.Errors = append(summary.Errors, item)
+	default:
+		return 0
 	}
-	return true
+
+	size := encodedSize(item)
+	if size > capBytes-aggregateBytes {
+		return 1
+	}
+	dropped := 0
+	for *boundaryBytes+aggregateBytes+size > capBytes {
+		removed, ok := evictOldestBoundary(summary)
+		if !ok {
+			return dropped + 1
+		}
+		*boundaryBytes -= removed
+		dropped++
+	}
+	switch value := item.(type) {
+	case StepBoundary:
+		summary.Steps = append(summary.Steps, value)
+	case AgentCallBoundary:
+		summary.AgentCalls = append(summary.AgentCalls, value)
+	case SubWorkflowBoundary:
+		summary.SubWorkflows = append(summary.SubWorkflows, value)
+	}
+	*boundaryBytes += size
+	return dropped
+}
+
+func evictOldestBoundary(summary *Summary) (int, bool) {
+	const (
+		none = iota
+		step
+		call
+		subWorkflow
+	)
+	kind := none
+	oldest := ""
+	consider := func(candidateKind int, timestamp string) {
+		if kind == none || timestamp < oldest {
+			kind = candidateKind
+			oldest = timestamp
+		}
+	}
+	if len(summary.Steps) > 0 {
+		consider(step, summary.Steps[0].Timestamp)
+	}
+	if len(summary.AgentCalls) > 0 {
+		consider(call, summary.AgentCalls[0].Timestamp)
+	}
+	if len(summary.SubWorkflows) > 0 {
+		consider(subWorkflow, summary.SubWorkflows[0].Timestamp)
+	}
+	switch kind {
+	case step:
+		size := encodedSize(summary.Steps[0])
+		summary.Steps = summary.Steps[1:]
+		return size, true
+	case call:
+		size := encodedSize(summary.AgentCalls[0])
+		summary.AgentCalls = summary.AgentCalls[1:]
+		return size, true
+	case subWorkflow:
+		size := encodedSize(summary.SubWorkflows[0])
+		summary.SubWorkflows = summary.SubWorkflows[1:]
+		return size, true
+	default:
+		return 0, false
+	}
+}
+
+func evictOldestDiagnostic(summary *Summary) (int, bool) {
+	if len(summary.Failures) == 0 && len(summary.Errors) == 0 {
+		return 0, false
+	}
+	if len(summary.Errors) == 0 ||
+		(len(summary.Failures) > 0 && summary.Failures[0].Timestamp <= summary.Errors[0].Timestamp) {
+		size := encodedSize(summary.Failures[0])
+		summary.Failures = summary.Failures[1:]
+		return size, true
+	}
+	size := encodedSize(summary.Errors[0])
+	summary.Errors = summary.Errors[1:]
+	return size, true
 }
 
 const failureSnippetLimit = 2000
@@ -290,7 +455,6 @@ func failureEvent(event Event) FailureEvent {
 		Error:        stringField(event.Data, "error"),
 		Stderr:       snippetStringField(event.Data, "stderr"),
 		Stdout:       snippetStringField(event.Data, "stdout"),
-		Data:         event.Data,
 	}
 }
 
@@ -298,16 +462,12 @@ func eventRef(event Event) EventRef {
 	return EventRef(event)
 }
 
-func fitsCap(v any, capBytes int, used *int) bool {
+func encodedSize(v any) int {
 	data, err := json.Marshal(v)
 	if err != nil {
-		return false
+		return 0
 	}
-	if *used+len(data) > capBytes {
-		return false
-	}
-	*used += len(data)
-	return true
+	return len(data)
 }
 
 func parseAuditLine(line string) (Event, error) {

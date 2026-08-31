@@ -554,12 +554,12 @@ func TestSummaryAndRunViewKeysWorkInEveryRunStateAndAtDrillDepth(t *testing.T) {
 }
 
 func TestSummaryCompletionDefaultsAndHelp(t *testing.T) {
-	t.Run("successful live completion auto shows summary", func(t *testing.T) {
+	t.Run("successful live completion keeps detail", func(t *testing.T) {
 		m := newLiveModelWithFlags()
 		m.tree.MetricsCaptured = true
 		m.Update(liverun.ExecDoneMsg{Result: "success"})
-		if !m.showSummary {
-			t.Fatal("successful completion did not show summary")
+		if m.showSummary {
+			t.Fatal("successful completion unexpectedly showed summary")
 		}
 	})
 
@@ -637,7 +637,7 @@ func TestNewCompletedRunChoosesDefaultViewFromOutcomeAndMetrics(t *testing.T) {
 	}
 }
 
-func TestInspectCompletedRunShowsAuditMetricsEndToEnd(t *testing.T) {
+func TestInspectCompletedRunKeepsDetailWithOptionalAuditMetricsSummary(t *testing.T) {
 	dir := t.TempDir()
 	workflowPath := filepath.Join(dir, "workflow-v1.0.yaml")
 	if err := os.WriteFile(workflowPath, []byte("name: workflow\nsteps:\n  - id: agent\n    agent: test-profile\n    prompt: test\n    mode: autonomous\n"), 0o644); err != nil {
@@ -684,18 +684,18 @@ func TestInspectCompletedRunShowsAuditMetricsEndToEnd(t *testing.T) {
 	}
 	m.termWidth = 120
 	m.termHeight = 40
-	summary := tuistyle.Sanitize(m.View())
-	for _, want := range []string{"Run summary", "agent", "1.5s", "$0.42", "1,234", "56"} {
-		if !strings.Contains(summary, want) {
-			t.Errorf("inspect summary missing %q:\n%s", want, summary)
-		}
-	}
-
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
 	detail := tuistyle.Sanitize(m.View())
 	for _, want := range []string{"tokens: input 1,234", "output 56", "cost: $0.42"} {
 		if !strings.Contains(detail, want) {
 			t.Errorf("inspect detail missing %q:\n%s", want, detail)
+		}
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	summary := tuistyle.Sanitize(m.View())
+	for _, want := range []string{"Run summary", "agent", "1.5s", "$0.42", "1,234", "56"} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("inspect summary missing %q:\n%s", want, summary)
 		}
 	}
 }

@@ -156,7 +156,9 @@ func captureShellOutput(step *model.Step, ctx *model.ExecutionContext, result Pr
 	if step.CaptureStderr && result.ExitCode != 0 && result.Stderr != "" {
 		captured = captured + "\n\nSTDERR:\n" + result.Stderr
 	}
-	ctx.CapturedVariables[step.Capture] = model.NewCapturedString(captured)
+	value := model.NewCapturedString(captured)
+	ctx.CapturedVariables[step.Capture] = value
+	recordPullRequestCapture(ctx, step.ID, step.Capture, value)
 }
 
 // ExecuteShellStep runs a shell command step.
@@ -175,8 +177,15 @@ func ExecuteShellStep(
 		emitShellInterpolationFailure(ctx, step, err)
 		return OutcomeFailed, err
 	}
+	auditCommand := command
+	metricsCapture, err := prepareNestedMetrics(step, ctx, command)
+	if err != nil {
+		emitShellInterpolationFailure(ctx, step, err)
+		return OutcomeFailed, err
+	}
+	command = metricsCapture.command
 
-	log.Printf("  command: %s\n", command)
+	log.Printf("  command: %s\n", auditCommand)
 
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 	startTime := time.Now()
@@ -186,9 +195,14 @@ func ExecuteShellStep(
 		ps.SetPrefix(prefix)
 	}
 
-	emitStepStart(ctx, prefix, startTime, map[string]any{"command": truncateForAudit(command)})
+	emitStepStart(ctx, prefix, startTime, map[string]any{"command": truncateForAudit(auditCommand)})
 
 	result, useCapture, runErr := runShellProcess(step, ctx, runner, command)
+	if step.MetricsSource != "" {
+		// Nested metric records are emitted even when the tool exits unsuccessfully:
+		// model usage is billable independently of the shell outcome.
+		emitNestedMetricCapture(ctx, step, prefix, metricsCapture)
+	}
 	if runErr != nil {
 		emitStepEnd(ctx, prefix, startTime, "failed", map[string]any{"error": runErr.Error()}, step)
 		return OutcomeFailed, runErr

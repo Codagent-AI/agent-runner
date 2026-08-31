@@ -77,17 +77,13 @@ type RunState struct {
 	CurrentStep  CurrentStep       `json:"currentStep"`
 	Params       map[string]string `json:"params"`
 	WorkflowHash string            `json:"workflowHash"`
-	// IntakeHandoff and IntakeParentRunID are immutable provenance seeded at
-	// run preparation and restored unchanged on resume.
-	IntakeHandoff string `json:"intakeHandoff,omitempty"`
-	// IntakeHandoffContents is the bounded handoff text as it was read when this
-	// run was first prepared. It is persisted rather than re-derived because the
-	// handoff copy lives in the run's own writable directory: re-reading it at
-	// resume time would let a later rewrite change what a resumed step sees,
-	// breaking the guarantee that resume restores the original value.
-	IntakeHandoffContents string         `json:"intakeHandoffContents,omitempty"`
-	IntakeParentRunID     string         `json:"intakeParentRunId,omitempty"`
-	AgentOverride         *AgentOverride `json:"agentOverride,omitempty"`
+	ProfileSet   string            `json:"profileSet,omitempty"`
+	// IntakeHandoffContents and IntakeParentRunID are immutable provenance seeded
+	// from a frozen intake route and restored unchanged on resume.
+	IntakeHandoffContents  string         `json:"intakeHandoffContents,omitempty"`
+	IntakeHandoffDelivered bool           `json:"intakeHandoffDelivered,omitempty"`
+	IntakeParentRunID      string         `json:"intakeParentRunId,omitempty"`
+	AgentOverride          *AgentOverride `json:"agentOverride,omitempty"`
 	// Completed is set to true when the workflow has finished successfully.
 	// The state file is preserved (not deleted) so the TUI can still display
 	// the run's metadata after completion.

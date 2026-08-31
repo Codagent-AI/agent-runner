@@ -22,6 +22,15 @@ type AgentDeprecationState struct {
 	seen map[string]bool
 }
 
+// IntakeHandoffState coordinates the one-time automatic intake delivery for a
+// complete workflow run. Every nested execution context shares one instance.
+type IntakeHandoffState struct {
+	mu        sync.Mutex
+	cond      *sync.Cond
+	claimed   bool
+	delivered bool
+}
+
 // AgentOverride is a run-scoped CLI and model selection that takes precedence
 // over both the workflow step and its resolved agent profile.
 type AgentOverride struct {
@@ -32,6 +41,46 @@ type AgentOverride struct {
 // NewAgentDeprecationState creates an empty run-scoped deprecation set.
 func NewAgentDeprecationState() *AgentDeprecationState {
 	return &AgentDeprecationState{seen: make(map[string]bool)}
+}
+
+// NewIntakeHandoffState creates run-scoped intake delivery state.
+func NewIntakeHandoffState(delivered bool) *IntakeHandoffState {
+	state := &IntakeHandoffState{delivered: delivered}
+	state.cond = sync.NewCond(&state.mu)
+	return state
+}
+
+// Claim reserves automatic delivery for one agent invocation. A competing
+// invocation waits until the pending claim either launches or is released.
+func (s *IntakeHandoffState) Claim() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for s.claimed && !s.delivered {
+		s.cond.Wait()
+	}
+	if s.delivered {
+		return false
+	}
+	s.claimed = true
+	return true
+}
+
+// Complete records whether the claimed invocation actually launched.
+func (s *IntakeHandoffState) Complete(launched bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if launched {
+		s.delivered = true
+	}
+	s.claimed = false
+	s.cond.Broadcast()
+}
+
+// Delivered reports whether an agent has received the automatic handoff.
+func (s *IntakeHandoffState) Delivered() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.delivered
 }
 
 // Mark records alias and reports whether this is its first occurrence.
@@ -45,6 +94,29 @@ func (s *AgentDeprecationState) Mark(alias string) bool {
 	return true
 }
 
+// PullRequestCaptureState tracks the most recently observed pull-request URL
+// for one workflow run. All nested execution contexts share this state.
+type PullRequestCaptureState struct {
+	mu      sync.Mutex
+	lastURL string
+}
+
+// NewPullRequestCaptureState creates empty run-scoped PR capture state.
+func NewPullRequestCaptureState() *PullRequestCaptureState {
+	return &PullRequestCaptureState{}
+}
+
+// Mark records url and reports whether it differs from the last observation.
+func (s *PullRequestCaptureState) Mark(url string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if url == s.lastURL {
+		return false
+	}
+	s.lastURL = url
+	return true
+}
+
 // ExecutionContext carries state through workflow execution.
 type ExecutionContext struct {
 	Params            map[string]string
@@ -52,6 +124,10 @@ type ExecutionContext struct {
 	SessionProfiles   map[string]string // maps session-originating step ID → profile name
 	CapturedVariables map[string]CapturedValue
 	LastStepOutcome   *string // nil, "success", or "failed"
+	// PullRequestCaptureState suppresses duplicate PR audit observations for
+	// the complete run. It is intentionally transient; captured variables
+	// remain the durable resume mechanism.
+	PullRequestCaptureState *PullRequestCaptureState
 
 	// LastSessionStepID tracks the most recently stored session key
 	// (Go maps are unordered, so we can't rely on insertion order).
@@ -87,16 +163,11 @@ type ExecutionContext struct {
 	// agents at per-run output files.
 	SessionDir string
 
-	// IntakeHandoff is the absolute path of the sealed handoff copied into this
-	// run when it was launched from intake. It is empty for direct runs. It is
-	// run provenance, persisted to state and restored on resume; it is not what
-	// {{intake_handoff}} resolves to.
-	IntakeHandoff string
 	// IntakeHandoffContents is the handoff text interpolated into prompts as
-	// {{intake_handoff}}, already bounded for inlining. It is derived from the
-	// file at IntakeHandoff by the runner rather than persisted, so this package
-	// stays free of filesystem access.
+	// {{intake_handoff}} and automatically delivered to the first agent prompt.
+	// It is sealed in the route request and persisted across resume.
 	IntakeHandoffContents string
+	intakeHandoffState    *IntakeHandoffState
 	// IntakeParentRunID identifies the intake run that launched this run. It is
 	// empty for direct runs.
 	IntakeParentRunID string
@@ -161,8 +232,8 @@ type RootContextOptions struct {
 	AutonomousBackend        string
 	AutonomousPermissionMode string
 	SessionDir               string
-	IntakeHandoff            string
 	IntakeHandoffContents    string
+	IntakeHandoffDelivered   bool
 	IntakeParentRunID        string
 	AgentOverride            *AgentOverride
 	EngineRef                interface{} // internal/engine.Engine
@@ -224,18 +295,36 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		AutonomousBackend:        opts.AutonomousBackend,
 		AutonomousPermissionMode: opts.AutonomousPermissionMode,
 		SessionDir:               opts.SessionDir,
-		IntakeHandoff:            opts.IntakeHandoff,
 		IntakeHandoffContents:    opts.IntakeHandoffContents,
+		intakeHandoffState:       NewIntakeHandoffState(opts.IntakeHandoffDelivered),
 		IntakeParentRunID:        opts.IntakeParentRunID,
 		AgentOverride:            opts.AgentOverride,
 		EngineRef:                opts.EngineRef,
 		ProfileStore:             opts.ProfileStore,
 		AuditLogger:              opts.AuditLogger,
 		AgentDeprecations:        NewAgentDeprecationState(),
+		PullRequestCaptureState:  NewPullRequestCaptureState(),
 		NamedSessions:            namedSessions,
 		NamedSessionDecls:        namedSessionDecls,
 		UIStepHandler:            opts.UIStepHandler,
 	}
+}
+
+// ClaimIntakeHandoff reserves the automatic handoff for this invocation.
+func (c *ExecutionContext) ClaimIntakeHandoff() bool {
+	return c != nil && c.IntakeHandoffContents != "" && c.intakeHandoffState != nil && c.intakeHandoffState.Claim()
+}
+
+// CompleteIntakeHandoff records whether the claiming invocation launched.
+func (c *ExecutionContext) CompleteIntakeHandoff(launched bool) {
+	if c != nil && c.intakeHandoffState != nil {
+		c.intakeHandoffState.Complete(launched)
+	}
+}
+
+// IntakeHandoffDelivered reports whether an agent received the automatic handoff.
+func (c *ExecutionContext) IntakeHandoffDelivered() bool {
+	return c != nil && c.intakeHandoffState != nil && c.intakeHandoffState.Delivered()
 }
 
 // BuiltinVars returns the map of runner-provided template variables that are
@@ -324,14 +413,15 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		AutonomousBackend:        parent.AutonomousBackend,
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
 		SessionDir:               parent.SessionDir,
-		IntakeHandoff:            parent.IntakeHandoff,
 		IntakeHandoffContents:    parent.IntakeHandoffContents,
+		intakeHandoffState:       parent.intakeHandoffState,
 		IntakeParentRunID:        parent.IntakeParentRunID,
 		AgentOverride:            parent.AgentOverride,
 		EngineRef:                parent.EngineRef,
 		ProfileStore:             parent.ProfileStore,
 		AuditLogger:              parent.AuditLogger,
 		AgentDeprecations:        parent.AgentDeprecations,
+		PullRequestCaptureState:  parent.PullRequestCaptureState,
 		Control:                  parent.Control,
 		InteractiveAttempt:       parent.InteractiveAttempt,
 		WorkflowResumed:          parent.WorkflowResumed,
@@ -410,14 +500,15 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		AutonomousBackend:        parent.AutonomousBackend,
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
 		SessionDir:               parent.SessionDir,
-		IntakeHandoff:            parent.IntakeHandoff,
 		IntakeHandoffContents:    parent.IntakeHandoffContents,
+		intakeHandoffState:       parent.intakeHandoffState,
 		IntakeParentRunID:        parent.IntakeParentRunID,
 		AgentOverride:            parent.AgentOverride,
 		EngineRef:                engineRef,
 		ProfileStore:             parent.ProfileStore,
 		AuditLogger:              parent.AuditLogger,
 		AgentDeprecations:        parent.AgentDeprecations,
+		PullRequestCaptureState:  parent.PullRequestCaptureState,
 		Control:                  parent.Control,
 		InteractiveAttempt:       parent.InteractiveAttempt,
 		WorkflowResumed:          parent.WorkflowResumed,

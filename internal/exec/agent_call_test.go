@@ -361,6 +361,13 @@ func TestAgentCallHandlerEmitsSuccessfulEvidencePairWithoutResponse(t *testing.T
 	if !ok || usage.Tokens[model.TokenInput] != 7 || end.Data["estimated_api_cost_usd"] != adapter.extraction.EstimatedCostUSD {
 		t.Fatalf("end metrics = %+v", end.Data)
 	}
+	identity := end.Data["identity"].(model.ExecutionIdentity)
+	if identity.Role != "implementor" || identity.Tool != "agent-runner" {
+		t.Fatalf("end role/tool identity = %+v", identity)
+	}
+	if usage.Identity.RequestedModel != "base-model" || usage.Identity.EffectiveModel != "base-model" {
+		t.Fatalf("end requested/effective identity = %+v", usage.Identity)
+	}
 	if end.Data["outcome"] != string(OutcomeSuccess) || end.Data["exit_code"] != 0 || end.Data["discovered_session_id"] != "child-session" || end.Data["parent_attempt_id"] != "attempt-1" {
 		t.Fatalf("terminal metadata = %+v", end.Data)
 	}

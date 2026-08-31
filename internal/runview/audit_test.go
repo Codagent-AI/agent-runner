@@ -414,6 +414,33 @@ func TestApplyEvent_StepStartAfterFailure(t *testing.T) {
 	}
 }
 
+func TestApplyEvent_StepStartAfterFailureClearsPreviousOutput(t *testing.T) {
+	tree := buildImplementChangeTree(t)
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[archive]",
+		Type:   "step_end",
+		Data: map[string]any{
+			"outcome": "failed",
+			"stdout":  "previous stdout",
+			"stderr":  "previous stderr",
+		},
+	})
+
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[archive]",
+		Type:   "step_start",
+		Data:   map[string]any{"command": "openspec archive view-run"},
+	})
+
+	archive := childByID(tree.Root, "archive")
+	if archive.Stdout != "" {
+		t.Errorf("Stdout after restart = %q, want empty", archive.Stdout)
+	}
+	if archive.Stderr != "" {
+		t.Errorf("Stderr after restart = %q, want empty", archive.Stderr)
+	}
+}
+
 func TestApplyEvent_RunStartAfterFailureClearsRootFailure(t *testing.T) {
 	tree := buildImplementChangeTree(t)
 	tree.ApplyEvent(RawEvent{
@@ -551,6 +578,64 @@ func TestApplyEvent_IterationStart_CreatesChildWithBinding(t *testing.T) {
 	}
 	if loop.IterationsCompleted != 1 {
 		t.Errorf("iterations completed: %d", loop.IterationsCompleted)
+	}
+}
+
+func TestApplyEvent_ResumedLoopProgressUsesHighestObservedIteration(t *testing.T) {
+	tree := buildImplementChangeTree(t)
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[implement-tasks]",
+		Type:   "step_start",
+		Data: map[string]any{
+			"loop_type":        "for-each",
+			"resolved_matches": []any{"tasks/01.md", "tasks/02.md", "tasks/03.md", "tasks/04.md", "tasks/05.md", "tasks/06.md"},
+		},
+	})
+	for i := 0; i < 2; i++ {
+		tree.ApplyEvent(RawEvent{
+			Prefix: fmt.Sprintf("[implement-tasks:%d]", i),
+			Type:   "iteration_start",
+			Data:   map[string]any{"iteration": float64(i)},
+		})
+		tree.ApplyEvent(RawEvent{
+			Prefix: fmt.Sprintf("[implement-tasks:%d]", i),
+			Type:   "iteration_end",
+			Data:   map[string]any{"iteration": float64(i), "outcome": "success"},
+		})
+	}
+
+	// A resumed invocation starts at iteration index 2, then reports one
+	// iteration completed during this invocation.
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[implement-tasks]",
+		Type:   "step_start",
+		Data: map[string]any{
+			"loop_type":        "for-each",
+			"resolved_matches": []any{"tasks/01.md", "tasks/02.md", "tasks/03.md", "tasks/04.md", "tasks/05.md", "tasks/06.md"},
+		},
+	})
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[implement-tasks:2]",
+		Type:   "iteration_start",
+		Data:   map[string]any{"iteration": float64(2)},
+	})
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[implement-tasks:2]",
+		Type:   "iteration_end",
+		Data:   map[string]any{"iteration": float64(2), "outcome": "failed"},
+	})
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[implement-tasks]",
+		Type:   "step_end",
+		Data: map[string]any{
+			"outcome":              "failed",
+			"iterations_completed": float64(1),
+		},
+	})
+
+	loop := childByID(tree.Root, "implement-tasks")
+	if loop.IterationsCompleted != 3 {
+		t.Fatalf("iterations completed = %d, want 3", loop.IterationsCompleted)
 	}
 }
 

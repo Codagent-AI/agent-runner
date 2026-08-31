@@ -1,6 +1,7 @@
 package builtinworkflows
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -137,7 +138,7 @@ func TestOpenSpecAndSpecDrivenChangeGenerationsAreEmbedded(t *testing.T) {
 		t.Fatalf("List: %v", err)
 	}
 
-	for _, logicalName := range []string{"change", "plan-change", "implement-change"} {
+	for _, logicalName := range []string{"change", "plan-change", "implement-change", "simple-change"} {
 		for _, namespace := range []string{"openspec", "spec-driven"} {
 			for _, version := range []string{"v1.0", "v2.0"} {
 				want := "builtin:" + namespace + "/" + logicalName + "-" + version + ".yaml"
@@ -154,6 +155,14 @@ func TestOpenSpecAndSpecDrivenChangeGenerationsAreEmbedded(t *testing.T) {
 	}
 	if ref != "builtin:spec-driven/change-v2.0.yaml" {
 		t.Fatalf("Resolve(spec-driven:change) = %q, want spec-driven v2.0", ref)
+	}
+
+	ref, err = Resolve("spec-driven:simple-change")
+	if err != nil {
+		t.Fatalf("Resolve(spec-driven:simple-change): %v", err)
+	}
+	if ref != "builtin:spec-driven/simple-change-v2.0.yaml" {
+		t.Fatalf("Resolve(spec-driven:simple-change) = %q, want spec-driven v2.0", ref)
 	}
 }
 
@@ -237,19 +246,22 @@ func TestV2ChangeWorkflowsShareCoreLifecyclePhases(t *testing.T) {
 
 func TestV2NamespaceAdaptersConfigureSharedCorePhases(t *testing.T) {
 	tests := []struct {
-		ref           string
-		wantWorkflow  string
-		wantChangeDir string
+		ref            string
+		wantWorkflow   string
+		wantChangeDir  string
+		wantChangeKind string
 	}{
 		{
-			ref:           "builtin:openspec/plan-change-v2.0.yaml",
-			wantWorkflow:  "../core/plan-change-v1.0.yaml",
-			wantChangeDir: "openspec/changes/{{change_name}}",
+			ref:            "builtin:openspec/plan-change-v2.0.yaml",
+			wantWorkflow:   "../core/plan-change-v1.0.yaml",
+			wantChangeDir:  "openspec/changes/{{change_name}}",
+			wantChangeKind: "openspec",
 		},
 		{
-			ref:           "builtin:spec-driven/plan-change-v2.0.yaml",
-			wantWorkflow:  "../core/plan-change-v1.0.yaml",
-			wantChangeDir: "specs/changes/{{change_name}}",
+			ref:            "builtin:spec-driven/plan-change-v2.0.yaml",
+			wantWorkflow:   "../core/plan-change-v1.0.yaml",
+			wantChangeDir:  "{{change_dir}}",
+			wantChangeKind: "spec-driven",
 		},
 		{
 			ref:           "builtin:openspec/implement-change-v2.0.yaml",
@@ -259,7 +271,7 @@ func TestV2NamespaceAdaptersConfigureSharedCorePhases(t *testing.T) {
 		{
 			ref:           "builtin:spec-driven/implement-change-v2.0.yaml",
 			wantWorkflow:  "../core/implement-change-v1.0.yaml",
-			wantChangeDir: "specs/changes/{{change_name}}",
+			wantChangeDir: "{{change_dir}}",
 		},
 	}
 	for _, tt := range tests {
@@ -286,6 +298,493 @@ func TestV2NamespaceAdaptersConfigureSharedCorePhases(t *testing.T) {
 			}
 			if step.Params["change_dir"] != tt.wantChangeDir {
 				t.Fatalf("%s change_dir = %q, want %q", tt.ref, step.Params["change_dir"], tt.wantChangeDir)
+			}
+			if tt.wantChangeKind != "" && step.Params["change_kind"] != tt.wantChangeKind {
+				t.Fatalf("%s change_kind = %q, want %q", tt.ref, step.Params["change_kind"], tt.wantChangeKind)
+			}
+		})
+	}
+}
+
+func TestCorePlanChangeUsesDeterministicValidation(t *testing.T) {
+	body, err := ReadFile("builtin:core/plan-change-v1.0.yaml")
+	if err != nil {
+		t.Fatalf("ReadFile(core plan-change): %v", err)
+	}
+
+	var workflow struct {
+		Params []struct {
+			Name string `yaml:"name"`
+		} `yaml:"params"`
+		Steps []struct {
+			ID           string            `yaml:"id"`
+			Script       string            `yaml:"script"`
+			Prompt       string            `yaml:"prompt"`
+			ScriptInputs map[string]string `yaml:"script_inputs"`
+		} `yaml:"steps"`
+	}
+	if err := yaml.Unmarshal(body, &workflow); err != nil {
+		t.Fatalf("unmarshal core plan-change: %v", err)
+	}
+
+	if strings.Contains(string(body), "PLANNING_READY") ||
+		strings.Contains(string(body), "definition_validation_checklist") ||
+		strings.Contains(string(body), "planning-status-gate.sh") {
+		t.Fatalf("core plan-change still contains agent-owned validation protocol:\n%s", body)
+	}
+
+	steps := make(map[string]struct {
+		script       string
+		prompt       string
+		scriptInputs map[string]string
+	}, len(workflow.Steps))
+	for _, step := range workflow.Steps {
+		steps[step.ID] = struct {
+			script       string
+			prompt       string
+			scriptInputs map[string]string
+		}{script: step.Script, prompt: step.Prompt, scriptInputs: step.ScriptInputs}
+	}
+	for _, id := range []string{"check-definition", "check-plan"} {
+		step, ok := steps[id]
+		if !ok {
+			t.Fatalf("core plan-change missing %s", id)
+		}
+		if step.script != "validate-planning-artifacts.sh" {
+			t.Errorf("%s script = %q, want validate-planning-artifacts.sh", id, step.script)
+		}
+		if step.prompt != "" {
+			t.Errorf("%s unexpectedly invokes an agent prompt", id)
+		}
+	}
+	if got := steps["check-definition"].scriptInputs["require_tasks"]; got != "false" {
+		t.Errorf("check-definition require_tasks = %q, want false", got)
+	}
+	if got := steps["check-plan"].scriptInputs["require_tasks"]; got != "true" {
+		t.Errorf("check-plan require_tasks = %q, want true", got)
+	}
+}
+
+func TestCoreImplementChangePreflightsValidatedPlanBeforeAgentWork(t *testing.T) {
+	body, err := ReadFile("builtin:core/implement-change-v1.0.yaml")
+	if err != nil {
+		t.Fatalf("ReadFile(core implement-change): %v", err)
+	}
+
+	var workflow struct {
+		Params []struct {
+			Name string `yaml:"name"`
+		} `yaml:"params"`
+		Steps []struct {
+			ID                string            `yaml:"id"`
+			Command           string            `yaml:"command"`
+			Script            string            `yaml:"script"`
+			ScriptInputs      map[string]string `yaml:"script_inputs"`
+			Prompt            string            `yaml:"prompt"`
+			Workflow          string            `yaml:"workflow"`
+			Loop              map[string]any    `yaml:"loop"`
+			ContinueOnFailure bool              `yaml:"continue_on_failure"`
+		} `yaml:"steps"`
+	}
+	if err := yaml.Unmarshal(body, &workflow); err != nil {
+		t.Fatalf("unmarshal core implement-change: %v", err)
+	}
+
+	if !slices.ContainsFunc(workflow.Params, func(param struct {
+		Name string `yaml:"name"`
+	}) bool {
+		return param.Name == "change_kind"
+	}) {
+		t.Fatal("core implement-change does not require change_kind for deterministic planning-artifact validation")
+	}
+
+	var checkPlanIndex, implementTasksIndex = -1, -1
+	for index, step := range workflow.Steps {
+		switch step.ID {
+		case "check-plan":
+			checkPlanIndex = index
+			if step.Script != "validate-planning-artifacts.sh" {
+				t.Errorf("check-plan script = %q, want validate-planning-artifacts.sh", step.Script)
+			}
+			wantInputs := map[string]string{
+				"change_name":   "{{change_name}}",
+				"change_dir":    "{{change_dir}}",
+				"change_kind":   "{{change_kind}}",
+				"require_tasks": "true",
+			}
+			for name, want := range wantInputs {
+				if got := step.ScriptInputs[name]; got != want {
+					t.Errorf("check-plan script input %s = %q, want %q", name, got, want)
+				}
+			}
+		case "implement-tasks":
+			implementTasksIndex = index
+		}
+	}
+	if checkPlanIndex < 0 {
+		t.Fatal("core implement-change has no check-plan preflight")
+	}
+	if implementTasksIndex < 0 {
+		t.Fatal("core implement-change has no implement-tasks step")
+	}
+	if checkPlanIndex != 1 || implementTasksIndex != 2 {
+		t.Fatalf(
+			"preflight/task indexes = (%d, %d), want check-plan at 1 immediately before implement-tasks at 2",
+			checkPlanIndex,
+			implementTasksIndex,
+		)
+	}
+	for _, step := range workflow.Steps[:checkPlanIndex+1] {
+		if step.Prompt != "" || step.Workflow != "" || step.Command != "" || step.Loop != nil {
+			t.Fatalf("preflight step %q has work beyond deterministic script validation", step.ID)
+		}
+		if step.ContinueOnFailure {
+			t.Fatalf("preflight step %q permits later implementation or delivery work after failure", step.ID)
+		}
+	}
+	if got := workflow.Steps[0].Script; got != "validate-change-name.sh" {
+		t.Fatalf("first preflight script = %q, want validate-change-name.sh", got)
+	}
+	if workflow.Steps[implementTasksIndex].Loop == nil {
+		t.Fatal("valid plan does not continue directly into the implementation task loop")
+	}
+}
+
+func TestV2ImplementChangeCallersProvideChangeKind(t *testing.T) {
+	tests := []struct {
+		ref  string
+		want string
+	}{
+		{ref: "builtin:openspec/change-v2.0.yaml", want: "openspec"},
+		{ref: "builtin:openspec/implement-change-v2.0.yaml", want: "openspec"},
+		{ref: "builtin:spec-driven/change-v2.0.yaml", want: "spec-driven"},
+		{ref: "builtin:spec-driven/implement-change-v2.0.yaml", want: "spec-driven"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ref, func(t *testing.T) {
+			body, err := ReadFile(tt.ref)
+			if err != nil {
+				t.Fatalf("ReadFile(%s): %v", tt.ref, err)
+			}
+			var workflow struct {
+				Steps []struct {
+					Workflow string            `yaml:"workflow"`
+					Params   map[string]string `yaml:"params"`
+				} `yaml:"steps"`
+			}
+			if err := yaml.Unmarshal(body, &workflow); err != nil {
+				t.Fatalf("unmarshal %s: %v", tt.ref, err)
+			}
+			for _, step := range workflow.Steps {
+				if step.Workflow != "../core/implement-change-v1.0.yaml" {
+					continue
+				}
+				if got := step.Params["change_kind"]; got != tt.want {
+					t.Fatalf("implement change_kind = %q, want %q", got, tt.want)
+				}
+				return
+			}
+			t.Fatal("no shared core implement-change step")
+		})
+	}
+}
+
+func TestCoreValidatePlanningArtifactsScript(t *testing.T) {
+	script, err := ReadAsset("core/validate-planning-artifacts.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(core/validate-planning-artifacts.sh): %v", err)
+	}
+
+	tempDir := t.TempDir()
+	scriptPath := filepath.Join(tempDir, "validate-planning-artifacts.sh")
+	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
+		t.Fatalf("write validator script: %v", err)
+	}
+	fakeBin := filepath.Join(tempDir, "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatalf("create fake bin: %v", err)
+	}
+	fakeOpenSpec := filepath.Join(fakeBin, "openspec")
+	if err := os.WriteFile(fakeOpenSpec, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write fake openspec: %v", err)
+	}
+
+	projectDir := filepath.Join(tempDir, "project")
+	changeDir := filepath.Join(projectDir, "openspec", "changes", "demo")
+	for _, dir := range []string{filepath.Join(changeDir, "specs", "widgets"), filepath.Join(changeDir, "tasks")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("create %s: %v", dir, err)
+		}
+	}
+	for name, content := range map[string]string{
+		"proposal.md": "# Proposal\n",
+		"design.md":   "# Design\n",
+		"test-plan.md": `## Coverage Strategy
+
+Use the lowest reliable layer.
+
+## Integration Tests
+
+### INT-001: Widget boundary
+- Covers: Widget behavior
+- Boundary: CLI and service
+- Setup: Controlled fixture
+- Action: Invoke the CLI
+- Assertions: Stable output
+- Execution: Integration suite
+
+## End-to-End Tests
+
+### E2E-001: Widget journey
+- Covers: Widget behavior
+- Surface: CLI
+- Setup: Isolated workspace
+- Journey: Create a widget
+- Assertions: Widget is reported
+- Execution: End-to-end suite
+
+## Agent Acceptance Tests
+
+### AT-001: Use a widget
+- Classification: Required
+- Covers: Widget behavior
+- Actor and surface: User through the CLI
+- Setup: Isolated workspace
+- Steps: Create and inspect a widget
+- Expected: The widget is visible
+- Evidence: Captured terminal output
+- Effects and cleanup: Remove the workspace
+- Permitted substitutes: None
+
+## Human-Only Testing
+
+None.
+
+## Coverage Map
+
+| Requirement or journey | INT | E2E | AT | HT |
+| --- | --- | --- | --- | --- |
+| Widget behavior | INT-001 | E2E-001 | AT-001 | — |
+`,
+		"specs/widgets/spec.md": "## ADDED Requirements\n### Requirement: Widget\nThe system SHALL work.\n#### Scenario: Works\n- **WHEN** used\n- **THEN** it works\n",
+	} {
+		path := filepath.Join(changeDir, filepath.FromSlash(name))
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	run := func(requireTasks bool) error {
+		t.Helper()
+		cmd := exec.Command("sh", scriptPath)
+		cmd.Dir = projectDir
+		cmd.Env = append(os.Environ(), "PATH="+fakeBin+":"+os.Getenv("PATH"))
+		cmd.Stdin = strings.NewReader(`{"change_name":"demo","change_dir":"openspec/changes/demo","change_kind":"openspec","require_tasks":"` + strconv.FormatBool(requireTasks) + `"}`)
+		return cmd.Run()
+	}
+
+	if err := run(false); err != nil {
+		t.Fatalf("definition validation failed: %v", err)
+	}
+
+	validTestPlan, err := os.ReadFile(filepath.Join(changeDir, "test-plan.md"))
+	if err != nil {
+		t.Fatalf("read valid test plan: %v", err)
+	}
+	emptyAcceptanceInventory := strings.ReplaceAll(
+		string(validTestPlan),
+		`### AT-001: Use a widget
+- Classification: Required
+- Covers: Widget behavior
+- Actor and surface: User through the CLI
+- Setup: Isolated workspace
+- Steps: Create and inspect a widget
+- Expected: The widget is visible
+- Evidence: Captured terminal output
+- Effects and cleanup: Remove the workspace
+- Permitted substitutes: None
+
+`,
+		"",
+	)
+	emptyAcceptanceInventory = strings.ReplaceAll(
+		emptyAcceptanceInventory,
+		"| Widget behavior | INT-001 | E2E-001 | AT-001 | — |",
+		"| Widget behavior | INT-001 | E2E-001 | — | — |",
+	)
+	for name, content := range map[string]string{
+		"missing required section":   strings.ReplaceAll(string(validTestPlan), "## Coverage Map", "## Traceability"),
+		"dangling coverage id":       strings.ReplaceAll(string(validTestPlan), "AT-001 | —", "AT-999 | —"),
+		"unmapped obligation id":     strings.ReplaceAll(string(validTestPlan), "E2E-001 | AT-001", "— | AT-001"),
+		"duplicate obligation id":    string(validTestPlan) + "\n### AT-001: Duplicate\n",
+		"empty acceptance inventory": emptyAcceptanceInventory,
+		"missing integration field": strings.ReplaceAll(
+			string(validTestPlan),
+			"- Boundary: CLI and service\n",
+			"",
+		),
+		"missing acceptance field":       strings.ReplaceAll(string(validTestPlan), "- Evidence: Captured terminal output\n", ""),
+		"empty conditional trigger":      strings.ReplaceAll(string(validTestPlan), "- Classification: Required", "- Classification: Conditional:"),
+		"missing human-only disposition": strings.ReplaceAll(string(validTestPlan), "\nNone.\n\n## Coverage Map", "\nNot applicable.\n\n## Coverage Map"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			testPlanPath := filepath.Join(changeDir, "test-plan.md")
+			if err := os.WriteFile(testPlanPath, []byte(content), 0o600); err != nil {
+				t.Fatalf("write invalid test plan: %v", err)
+			}
+			if err := run(false); err == nil {
+				t.Fatal("definition validation passed malformed test plan")
+			}
+			if err := os.WriteFile(testPlanPath, validTestPlan, 0o600); err != nil {
+				t.Fatalf("restore valid test plan: %v", err)
+			}
+		})
+	}
+
+	t.Run("missing test plan", func(t *testing.T) {
+		testPlanPath := filepath.Join(changeDir, "test-plan.md")
+		if err := os.Remove(testPlanPath); err != nil {
+			t.Fatalf("remove test plan: %v", err)
+		}
+		if err := run(false); err == nil {
+			t.Fatal("definition validation passed without test-plan.md")
+		}
+		if err := os.WriteFile(testPlanPath, validTestPlan, 0o600); err != nil {
+			t.Fatalf("restore valid test plan: %v", err)
+		}
+	})
+
+	if err := run(true); err == nil {
+		t.Fatal("task-plan validation passed without a task file")
+	}
+
+	if err := os.WriteFile(filepath.Join(changeDir, "tasks", "one.md"), []byte("# Task one\n"), 0o600); err != nil {
+		t.Fatalf("write task file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(changeDir, "tasks.md"), []byte("- [Task one](tasks/one.md)\n"), 0o600); err != nil {
+		t.Fatalf("write task index: %v", err)
+	}
+	if err := run(true); err != nil {
+		t.Fatalf("task-plan validation failed: %v", err)
+	}
+}
+
+func TestV2SimpleChangeWorkflowsShareCorePhases(t *testing.T) {
+	for _, ref := range []string{
+		"builtin:core/complete-simple-change-v1.0.yaml",
+	} {
+		body, err := ReadFile(ref)
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", ref, err)
+		}
+		for _, forbidden := range []string{"openspec/changes/", "specs/changes/", "OpenSpec change", "openspec validate"} {
+			if strings.Contains(string(body), forbidden) {
+				t.Errorf("%s contains provider-specific text %q", ref, forbidden)
+			}
+		}
+	}
+
+	tests := []struct {
+		ref                    string
+		wantChangeDir          string
+		wantValidationText     string
+		wantOpenSpecValidation bool
+		wantArchive            bool
+		discoverChangeDir      bool
+	}{
+		{
+			ref:                    "builtin:openspec/simple-change-v2.0.yaml",
+			wantChangeDir:          "openspec/changes/{{change_name}}",
+			wantValidationText:     "openspec validate",
+			wantOpenSpecValidation: true,
+			wantArchive:            true,
+		},
+		{
+			ref:                "builtin:spec-driven/simple-change-v2.0.yaml",
+			wantChangeDir:      "{{change_dir}}",
+			wantValidationText: "simple-change-validation-checklist.md",
+			discoverChangeDir:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ref, func(t *testing.T) {
+			body, err := ReadFile(tt.ref)
+			if err != nil {
+				t.Fatalf("ReadFile(%s): %v", tt.ref, err)
+			}
+			var workflow struct {
+				Params []struct {
+					Name     string `yaml:"name"`
+					Required *bool  `yaml:"required"`
+				} `yaml:"params"`
+				Steps []struct {
+					ID       string            `yaml:"id"`
+					Workflow string            `yaml:"workflow"`
+					Script   string            `yaml:"script"`
+					Params   map[string]string `yaml:"params"`
+				} `yaml:"steps"`
+			}
+			if err := yaml.Unmarshal(body, &workflow); err != nil {
+				t.Fatalf("unmarshal %s: %v", tt.ref, err)
+			}
+			if len(workflow.Params) == 0 || workflow.Params[0].Name != "change_name" ||
+				workflow.Params[0].Required == nil || !*workflow.Params[0].Required {
+				t.Fatalf("%s must require change_name, got %#v", tt.ref, workflow.Params)
+			}
+
+			steps := make(map[string]struct {
+				workflow string
+				script   string
+				params   map[string]string
+			}, len(workflow.Steps))
+			for _, step := range workflow.Steps {
+				steps[step.ID] = struct {
+					workflow string
+					script   string
+					params   map[string]string
+				}{workflow: step.Workflow, script: step.Script, params: step.Params}
+			}
+
+			if got := steps["validate-feature-branch"].workflow; got != "../core/validate-feature-branch-v1.0.yaml" {
+				t.Errorf("branch guard workflow = %q", got)
+			}
+			if got := steps["plan"].workflow; got != "" {
+				t.Errorf("plan unexpectedly delegates to %q", got)
+			}
+			if got := steps["review-plan"].workflow; got != "" {
+				t.Errorf("review unexpectedly delegates to %q", got)
+			}
+			if got := steps["check-planning-artifacts"].workflow; got != "../core/check-planning-artifacts-v1.0.yaml" {
+				t.Errorf("artifact check workflow = %q", got)
+			}
+			if got := steps["check-planning-artifacts"].params["change_dir"]; got != tt.wantChangeDir {
+				t.Errorf("artifact check change_dir = %q, want %q", got, tt.wantChangeDir)
+			}
+			if !strings.Contains(string(body), tt.wantValidationText) {
+				t.Errorf("workflow does not contain validation text %q", tt.wantValidationText)
+			}
+			if tt.discoverChangeDir {
+				if _, ok := steps["commit-plan"]; ok {
+					t.Error("dynamic plan should not commit artifacts that may live outside the project repository")
+				}
+			} else {
+				if got := steps["commit-plan"].workflow; got != "../core/commit-change-plan-v1.0.yaml" {
+					t.Errorf("commit workflow = %q", got)
+				}
+			}
+			if got := steps["complete"].workflow; got != "../core/complete-simple-change-v1.0.yaml" {
+				t.Errorf("complete workflow = %q", got)
+			}
+			if got := steps["complete"].params["change_dir"]; got != tt.wantChangeDir {
+				t.Errorf("complete change_dir = %q, want %q", got, tt.wantChangeDir)
+			}
+			_, hasValidation := steps["validate-openspec"]
+			if hasValidation != tt.wantOpenSpecValidation {
+				t.Errorf("OpenSpec validation presence = %t, want %t", hasValidation, tt.wantOpenSpecValidation)
+			}
+			_, hasArchive := steps["archive"]
+			if hasArchive != tt.wantArchive {
+				t.Errorf("archive presence = %t, want %t", hasArchive, tt.wantArchive)
 			}
 		})
 	}
@@ -338,6 +837,13 @@ func TestOpenSpecTaskReviewLoopGateHandlesLargeReportWithoutJQ(t *testing.T) {
 		target, err := exec.LookPath(name)
 		if err != nil {
 			t.Skipf("%s not available", name)
+		}
+		if name == "python3" {
+			out, err := exec.Command(target, "-c", "import sys; print(sys.executable)").Output()
+			if err != nil {
+				t.Skipf("resolve python3 executable: %v", err)
+			}
+			target = strings.TrimSpace(string(out))
 		}
 		if err := os.Symlink(target, filepath.Join(binDir, name)); err != nil {
 			t.Fatalf("symlink %s: %v", name, err)
@@ -558,6 +1064,7 @@ func TestSharedAcceptanceCallsUseTesterAndPreserveControls(t *testing.T) {
 			required: []string{
 				"`session: acceptance-tester`",
 				"verification scope: `full` for the first pass",
+				"test plan was structurally validated before implementation",
 				"acceptance-assumptions.md",
 				"acceptance-impact-scope.md",
 				"acceptance-flow-evidence.md",
@@ -624,6 +1131,70 @@ func TestSharedAcceptanceCallsUseTesterAndPreserveControls(t *testing.T) {
 				return
 			}
 			t.Fatalf("%s has no step %q", tt.ref, tt.stepID)
+		})
+	}
+}
+
+func TestImplementChangeAcceptanceHandoffAllowsFailedTestingForHumanReview(t *testing.T) {
+	body, err := ReadFile("builtin:core/implement-change-v1.0.yaml")
+	if err != nil {
+		t.Fatalf("ReadFile(implement-change): %v", err)
+	}
+	var workflow struct {
+		Steps []struct {
+			ID      string `yaml:"id"`
+			Command string `yaml:"command"`
+		} `yaml:"steps"`
+	}
+	if err := yaml.Unmarshal(body, &workflow); err != nil {
+		t.Fatalf("unmarshal implement-change: %v", err)
+	}
+
+	var command string
+	for _, step := range workflow.Steps {
+		if step.ID == "verify-acceptance-handoff" {
+			command = step.Command
+			break
+		}
+	}
+	if command == "" {
+		t.Fatal("implement-change has no verify-acceptance-handoff command")
+	}
+
+	for _, tt := range []struct {
+		name       string
+		status     string
+		wantPass   bool
+		writeFiles bool
+	}{
+		{name: "complete", status: "ACCEPTANCE_COMPLETE", wantPass: true, writeFiles: true},
+		{name: "failed testing", status: "ACCEPTANCE_FAILED", wantPass: true, writeFiles: true},
+		{name: "invalid status", status: "ACCEPTANCE_PENDING", writeFiles: true},
+		{name: "missing handoff"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sessionDir := t.TempDir()
+			if tt.writeFiles {
+				outputDir := filepath.Join(sessionDir, "output")
+				if err := os.MkdirAll(outputDir, 0o750); err != nil {
+					t.Fatalf("create output dir: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(outputDir, "acceptance-handoff.md"), []byte("handoff\n"), 0o600); err != nil {
+					t.Fatalf("write handoff: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(outputDir, "acceptance-preparation-status.txt"), []byte(tt.status+"\n"), 0o600); err != nil {
+					t.Fatalf("write status: %v", err)
+				}
+			}
+
+			resolved := strings.ReplaceAll(command, "{{session_dir}}", sessionDir)
+			err := exec.Command("sh", "-c", resolved).Run()
+			if tt.wantPass && err != nil {
+				t.Fatalf("verify handoff returned %v, want success", err)
+			}
+			if !tt.wantPass && err == nil {
+				t.Fatal("verify handoff succeeded, want failure")
+			}
 		})
 	}
 }
@@ -759,6 +1330,156 @@ func TestCoreCommitChangePlanRestrictsCommitToChangeDirectory(t *testing.T) {
 	commit := `git commit -m "[commit-plan] chore: add change documents for $change_name" -- "$change_dir"`
 	if !strings.Contains(string(script), commit) {
 		t.Fatal("commit-change-plan.sh must restrict git commit to change_dir")
+	}
+}
+
+func TestCoreCommitChangePlanRejectsRepositoryRoot(t *testing.T) {
+	script, err := ReadAsset("core/commit-change-plan.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(core/commit-change-plan.sh): %v", err)
+	}
+
+	tempDir := t.TempDir()
+	scriptPath := filepath.Join(tempDir, "commit-change-plan.sh")
+	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	binDir := filepath.Join(tempDir, "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatalf("create bin dir: %v", err)
+	}
+	pythonPath, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 not available")
+	}
+	if err := os.Symlink(pythonPath, filepath.Join(binDir, "python3")); err != nil {
+		t.Fatalf("symlink python3: %v", err)
+	}
+	gitMarker := filepath.Join(tempDir, "git-called")
+	fakeGit := "#!/bin/sh\n: > " + strconv.Quote(gitMarker) + "\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(binDir, "git"), []byte(fakeGit), 0o700); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+
+	cmd := exec.Command("sh", scriptPath)
+	cmd.Dir = tempDir
+	cmd.Env = append(os.Environ(), "PATH="+binDir+":/usr/bin:/bin")
+	cmd.Stdin = strings.NewReader(`{"change_name":"demo","change_dir":"."}`)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("script accepted repository root")
+	}
+	if !strings.Contains(string(out), "change_dir must be a confined relative path") {
+		t.Fatalf("output = %q, want confined-path error", out)
+	}
+	if _, err := os.Stat(gitMarker); !os.IsNotExist(err) {
+		t.Fatalf("git was invoked for repository-root path: %v", err)
+	}
+}
+
+func TestCoreCheckPlanningArtifactsRejectsDotSegments(t *testing.T) {
+	script, err := ReadAsset("core/check-planning-artifacts.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(core/check-planning-artifacts.sh): %v", err)
+	}
+
+	tempDir := t.TempDir()
+	scriptPath := filepath.Join(tempDir, "check-planning-artifacts.sh")
+	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tempDir, "change", "nested"), 0o755); err != nil {
+		t.Fatalf("create change directory: %v", err)
+	}
+	for _, path := range []string{
+		filepath.Join(tempDir, "change", "proposal.md"),
+		filepath.Join(tempDir, "change", "nested", "tasks.md"),
+	} {
+		if err := os.WriteFile(path, []byte("content\n"), 0o600); err != nil {
+			t.Fatalf("write artifact: %v", err)
+		}
+	}
+	valid := exec.Command("sh", scriptPath)
+	valid.Dir = tempDir
+	valid.Stdin = strings.NewReader(
+		`{"change_dir":"change","required_files":"proposal.md,nested/tasks.md","require_specs":"false"}`,
+	)
+	if out, err := valid.CombinedOutput(); err != nil {
+		t.Fatalf("script rejected confined artifact paths: %v\n%s", err, out)
+	}
+
+	for _, requiredFiles := range []string{".", "./proposal.md", "nested/./tasks.md", "nested/."} {
+		t.Run(requiredFiles, func(t *testing.T) {
+			cmd := exec.Command("sh", scriptPath)
+			cmd.Dir = tempDir
+			cmd.Stdin = strings.NewReader(fmt.Sprintf(
+				`{"change_dir":"change","required_files":%q,"require_specs":"false"}`,
+				requiredFiles,
+			))
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("script accepted required_files=%q", requiredFiles)
+			}
+			if !strings.Contains(string(out), "required file must be a confined relative path") {
+				t.Fatalf("output = %q, want confined-path error", out)
+			}
+		})
+	}
+}
+
+func TestCreateChangeScriptsExplainMissingAgentValidator(t *testing.T) {
+	for _, asset := range []string{"openspec/create-change.sh", "spec-driven/create-change.sh"} {
+		t.Run(asset, func(t *testing.T) {
+			script, err := ReadAsset(asset)
+			if err != nil {
+				t.Fatalf("ReadAsset(%s): %v", asset, err)
+			}
+
+			tempDir := t.TempDir()
+			scriptPath := filepath.Join(tempDir, "create-change.sh")
+			if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
+				t.Fatalf("write script: %v", err)
+			}
+			if strings.HasPrefix(asset, "openspec/") {
+				validator, err := ReadAsset("openspec/validate-change-name.sh")
+				if err != nil {
+					t.Fatalf("ReadAsset(openspec/validate-change-name.sh): %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(tempDir, "validate-change-name.sh"), validator, 0o700); err != nil {
+					t.Fatalf("write name validator: %v", err)
+				}
+			}
+			binDir := filepath.Join(tempDir, "bin")
+			if err := os.Mkdir(binDir, 0o755); err != nil {
+				t.Fatalf("create bin dir: %v", err)
+			}
+			pythonPath, err := exec.LookPath("python3")
+			if err != nil {
+				t.Skip("python3 not available")
+			}
+			if err := os.Symlink(pythonPath, filepath.Join(binDir, "python3")); err != nil {
+				t.Fatalf("symlink python3: %v", err)
+			}
+
+			cmd := exec.Command("sh", scriptPath)
+			cmd.Dir = tempDir
+			cmd.Env = append(os.Environ(), "PATH="+binDir+":/usr/bin:/bin")
+			cmd.Stdin = strings.NewReader(`{"change_name":"demo","change_dir":"changes/demo"}`)
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatal("script succeeded without agent-validator")
+			}
+			exitErr, ok := err.(*exec.ExitError)
+			if !ok {
+				t.Fatalf("run script: %v", err)
+			}
+			if exitErr.ExitCode() != 127 {
+				t.Fatalf("exit code = %d, want 127; output: %s", exitErr.ExitCode(), out)
+			}
+			if !strings.Contains(string(out), "agent-validator is not installed") {
+				t.Fatalf("output = %q, want missing-validator explanation", out)
+			}
+		})
 	}
 }
 

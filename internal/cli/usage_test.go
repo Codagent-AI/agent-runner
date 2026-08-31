@@ -145,12 +145,12 @@ func TestCodexUsageExtraction(t *testing.T) {
 	extractor := requireUsageExtractor(t, &CodexAdapter{})
 	want := UsageExtraction{Usage: model.UsageRecord{
 		Status: model.UsageCollected, CLI: "codex", Provider: "openai",
-		RawCumulative: model.TokenCounts{
+		Tokens: model.TokenCounts{
 			model.TokenInput: 2521, model.TokenCachedInput: 2432,
 			model.TokenOutput: 3, model.TokenReasoning: 19,
 		},
-		RawCumulativeTokenTotals: &model.TokenTotals{Input: 2521, Output: 3, Total: 2524},
-		Source:                   "codex:turn.completed", Completeness: model.CompletenessComplete,
+		TokenTotals: &model.TokenTotals{Input: 2521, Output: 3, Total: 2524},
+		Source:      "codex:turn.completed", Completeness: model.CompletenessComplete,
 	}}
 	got, err := extractor.ExtractUsage(readUsageFixture(t, "codex.jsonl"))
 	if err != nil {
@@ -159,10 +159,10 @@ func TestCodexUsageExtraction(t *testing.T) {
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Fatalf("ExtractUsage() mismatch (-want +got):\n%s", diff)
 	}
-	if got.Usage.Tokens != nil {
-		t.Fatalf("cumulative Codex usage must leave Tokens empty, got %#v", got.Usage.Tokens)
+	if got.Usage.RawCumulative != nil {
+		t.Fatalf("per-turn Codex usage must not be marked cumulative, got %#v", got.Usage.RawCumulative)
 	}
-	assertUsageJSONField(t, &got.Usage, "raw_cumulative_token_totals", map[string]any{
+	assertUsageJSONField(t, &got.Usage, "token_totals", map[string]any{
 		"input": float64(2521), "output": float64(3), "total": float64(2524),
 	})
 }
@@ -243,6 +243,72 @@ func TestCopilotStructuredHeadlessOutput(t *testing.T) {
 		}
 		if got := filter.FilterOutput(readUsageFixture(t, "copilot.jsonl")); got != "fixture-ok" {
 			t.Fatalf("FilterOutput() = %q, want fixture-ok", got)
+		}
+	})
+
+	t.Run("capture filter returns task completion summary", func(t *testing.T) {
+		filter := any(adapter).(OutputFilter)
+		raw := `{"type":"assistant.message","data":{"content":"","toolRequests":[{"name":"task_complete"}]}}` + "\n" +
+			`{"type":"session.task_complete","data":{"summary":"recovered review","success":true}}` + "\n" +
+			`{"type":"result","exitCode":0}` + "\n"
+
+		if got := filter.FilterOutput(raw); got != "recovered review" {
+			t.Fatalf("FilterOutput() = %q, want task completion summary", got)
+		}
+	})
+
+	t.Run("live stream filters copilot event JSON", func(t *testing.T) {
+		wrapper, ok := any(adapter).(StdoutWrapper)
+		if !ok {
+			t.Fatal("CopilotAdapter does not implement StdoutWrapper")
+		}
+		var display bytes.Buffer
+		writer := wrapper.WrapStdout(&display)
+		raw := `{"type":"session.mcp_servers_loaded","data":{"servers":[]},"ephemeral":true}` + "\n" +
+			`{"type":"assistant.tool_call_delta","data":{"toolName":"bash","inputDelta":"echo noisy"},"ephemeral":true}` + "\n" +
+			`{"type":"assistant.message","data":{"content":"copilot-stream-fixture","model":"gpt-5.4-mini"}}` + "\n" +
+			`{"type":"session.task_complete","data":{"summary":"duplicate completion summary","success":true}}` + "\n" +
+			`{"type":"result","exitCode":0}` + "\n"
+		if _, err := io.WriteString(writer, raw); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+		if closer, ok := writer.(io.Closer); ok {
+			if err := closer.Close(); err != nil {
+				t.Fatalf("Close() error = %v", err)
+			}
+		}
+		if got := display.String(); got != "copilot-stream-fixture" {
+			t.Fatalf("display = %q, want filtered assistant text", got)
+		}
+	})
+
+	t.Run("live stream falls back to task completion summary", func(t *testing.T) {
+		wrapper := any(adapter).(StdoutWrapper)
+		var display bytes.Buffer
+		writer := wrapper.WrapStdout(&display)
+		raw := `{"type":"assistant.tool_call_delta","data":{"toolName":"task_complete","inputDelta":"{\\\"summary\\\":"},"ephemeral":true}` + "\n" +
+			`{"type":"assistant.message","data":{"content":"","toolRequests":[{"name":"task_complete"}]}}` + "\n" +
+			`{"type":"session.task_complete","data":{"summary":"completed through tool call","success":true}}` + "\n"
+		if _, err := io.WriteString(writer, raw); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+		if got := display.String(); got != "completed through tool call" {
+			t.Fatalf("display = %q, want task completion summary", got)
+		}
+	})
+
+	t.Run("live stream preserves repeated assistant messages", func(t *testing.T) {
+		wrapper := any(adapter).(StdoutWrapper)
+		var display bytes.Buffer
+		writer := wrapper.WrapStdout(&display)
+		raw := `{"type":"assistant.message","data":{"content":"same message"}}` + "\n" +
+			`{"type":"assistant.tool_call_delta","data":{"toolName":"bash","inputDelta":"true"},"ephemeral":true}` + "\n" +
+			`{"type":"assistant.message","data":{"content":"same message"}}` + "\n"
+		if _, err := io.WriteString(writer, raw); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+		if got := display.String(); got != "same message\nsame message" {
+			t.Fatalf("display = %q, want both assistant messages", got)
 		}
 	})
 }

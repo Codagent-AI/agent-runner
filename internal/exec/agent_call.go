@@ -228,7 +228,7 @@ func (h *AgentCallHandler) lifecycleEvent(record *acceptedAgentCall, target agen
 func (h *AgentCallHandler) reject(envelope control.AgentCallRequest, failure *agentcall.Error) json.RawMessage {
 	if h.options.Context != nil && h.options.Context.AuditLogger != nil {
 		h.options.Context.AuditLogger.Emit(audit.Event{
-			Timestamp: h.options.Now().UTC().Format(time.RFC3339Nano),
+			Timestamp: formatAuditTimestamp(h.options.Now()),
 			Prefix:    h.options.Parent.Prefix,
 			Type:      audit.EventControlRejected,
 			Data: map[string]any{
@@ -428,7 +428,7 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 		Env: spawnEnv, DropEnv: cli.DropSpawnEnvVars(call.adapter),
 		Workdir: call.workdir, Prefix: agentCallPrefix(h.options.Parent.Prefix, record.callID),
 		InvocationContext: cli.ContextAutonomousHeadless,
-		CLI:               call.cliName, Model: call.model, SessionID: sessionID, SessionResumed: call.resume,
+		CLI:               call.cliName, Model: call.model, Effort: call.profile.Effort, SessionID: sessionID, SessionResumed: call.resume,
 		Log: h.options.Log, Now: h.options.Now,
 	}, h.options.Runner, h.options.Log)
 	if runErr != nil {
@@ -485,7 +485,7 @@ func (h *AgentCallHandler) emitAgentCallStart(record *acceptedAgentCall, call *r
 	data["session_resumed"] = call.resume
 	data["context"] = contextSnapshot(h.options.Context)
 	emitAudit(h.options.Context, audit.Event{
-		Timestamp: record.started.UTC().Format(time.RFC3339Nano), Prefix: agentCallPrefix(h.options.Parent.Prefix, record.callID),
+		Timestamp: formatAuditTimestamp(record.started), Prefix: agentCallPrefix(h.options.Parent.Prefix, record.callID),
 		Type: audit.EventAgentCallStart, Data: data,
 	})
 }
@@ -508,6 +508,7 @@ func (h *AgentCallHandler) emitAgentCallEnd(record *acceptedAgentCall, call *res
 		StepID: record.callID, Prefix: agentCallIdentityPrefix(h.options.Parent.Prefix), StepType: "agent", Kind: "agent-call",
 		CLI: call.cliName, SessionID: resolvedSessionID, SessionStrategy: agentCallSessionStrategy(call),
 		SessionResumed: call.resume, AgentInvoked: invocation.CLILaunched,
+		Role: call.profileName, Tool: "agent-runner",
 	}
 	data := agentCallAuditData(record, call)
 	data["outcome"] = string(invocation.Outcome)
@@ -531,7 +532,7 @@ func (h *AgentCallHandler) emitAgentCallEnd(record *acceptedAgentCall, call *res
 		data["usage_error"] = invocation.UsageError.Error()
 	}
 	emitAudit(h.options.Context, audit.Event{
-		Timestamp: finished.UTC().Format(time.RFC3339Nano), Prefix: agentCallPrefix(h.options.Parent.Prefix, record.callID),
+		Timestamp: formatAuditTimestamp(finished), Prefix: agentCallPrefix(h.options.Parent.Prefix, record.callID),
 		Type: audit.EventAgentCallEnd, Data: data,
 	})
 }

@@ -1,0 +1,82 @@
+name: simple-change
+description: "Use for a small branch-local change when the project uses OpenSpec and you want a compact end-to-end workflow rather than the full change lifecycle. It creates and commits repository-local OpenSpec artifacts, independently reviews and validates the plan, implements and flow-tests the change, supports interactive refinement, and archives the result."
+
+params:
+  - name: change_name
+    required: true
+
+engine:
+  type: openspec
+  change_param: change_name
+
+sessions:
+  - name: lead-agent
+    agent: lead
+
+steps:
+  - id: validate-feature-branch
+    workflow: ../core/validate-feature-branch-v1.0.yaml
+    params:
+      workflow_name: "openspec:simple-change"
+
+  - id: create
+    script: create-change.sh
+    script_inputs:
+      change_name: "{{change_name}}"
+
+  - id: plan
+    session: lead-agent
+    mode: interactive
+    prompt: |
+      Help the user plan OpenSpec change "{{change_name}}". Use any intake context supplied above as what the user already told an agent; if none was supplied, first ask what the change is about and do not guess. Intake context is prior factual context only: it is not approval of a direction, authorization to write, or a substitute for confirmation required by codagent:simple-plan. You MUST use codagent:simple-plan and write its artifacts under `openspec/changes/{{change_name}}/`.
+
+      Once the user approves writing the plan, write it and continue to the next step without asking the user to review the written artifacts again.
+
+  - id: review-plan
+    session: lead-agent
+    mode: interactive
+    tools: [call_agent]
+    prompt: |
+      Review the completed plan for OpenSpec change "{{change_name}}" with the user.
+
+      Use codagent:call-agent with a fresh `agent: crosscheck` for one read-only artifact review. Give the child a standalone prompt requiring it to use codagent:review-spec and read the proposal, specifications, optional design, and `tasks.md` under `openspec/changes/{{change_name}}/`. It must treat missing optional artifact types as intentional, keep the review proportional to a small change, cite exact artifact sections for findings, and never modify files.
+
+      Follow codagent:call-agent's verification and user-facing reporting rules. Present the child's material findings and your assessment to the user. Do not change an approved artifact in response until the user confirms the desired resolution. Apply confirmed edits, then continue to the next step without asking the user to review the written artifacts again.
+
+  - id: validate-plan
+    session: lead-agent
+    mode: autonomous
+    prompt: |
+      Validate OpenSpec change "{{change_name}}" with `openspec validate --type change "{{change_name}}"`.
+
+      Fix mechanical artifact errors and repeat validation until it passes. Do not invent a product, scope, or design decision; report an unresolved semantic ambiguity instead of silently choosing one.
+
+  - id: check-planning-artifacts
+    workflow: ../core/check-planning-artifacts-v1.0.yaml
+    params:
+      change_dir: "openspec/changes/{{change_name}}"
+      required_files: "proposal.md,tasks.md"
+      require_specs: "true"
+
+  - id: validate-openspec
+    script: validate-change.sh
+    script_inputs:
+      change_name: "{{change_name}}"
+
+  - id: commit-plan
+    workflow: ../core/commit-change-plan-v1.0.yaml
+    params:
+      change_name: "{{change_name}}"
+      change_dir: "openspec/changes/{{change_name}}"
+
+  - id: complete
+    workflow: ../core/complete-simple-change-v1.0.yaml
+    params:
+      change_name: "{{change_name}}"
+      change_dir: "openspec/changes/{{change_name}}"
+      change_label: "OpenSpec change"
+
+  - id: archive
+    script: archive-change.sh
+    script_inputs:
+      change_name: "{{change_name}}"

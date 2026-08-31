@@ -72,17 +72,18 @@ live runs and definition previews remain version-neutral.
 
 ## Run Metrics
 
-`run-metrics.json` is the supported machine-readable metrics artifact for a run. Schema version 1 records:
+`run-metrics.json` is the supported machine-readable metrics artifact for a run. Schema version 2 records:
 
-- each completed step attempt with its identity, nesting prefix, outcome, duration, usage state, and reported API cost;
+- each completed model attempt with stable role/tool identity, separate requested and effective invocation identity, nesting prefix, outcome, duration, usage state, and reported API cost;
 - each terminal accepted agent call as a `kind: "agent-call"` record with call, parent-attempt, target, session, usage, and cost fields;
+- structured nested model invocations from declared metrics-producing tools as `kind: "nested-agent"` records;
 - loop iteration completions with identity and duration only, avoiding duplicate usage rollups;
 - execution sessions with observed active duration and clean/open status; and
 - run totals for active duration, token categories, usage coverage, estimated API cost, and cost coverage.
 
 The artifact is rewritten atomically after every terminal step or iteration event and finalized at `run_end`. An interrupted run therefore retains every completion already observed without exposing a partially written JSON document.
 
-On resume, Agent Runner reads this artifact directly, retains earlier attempts, restores cumulative-usage baselines, and appends a new execution session. Paused time between invocations is excluded from active duration. If the existing artifact is corrupt or uses an unsupported schema version, Agent Runner preserves it under a unique `run-metrics.json.bak-<timestamp>` name, starts a fresh artifact with `history_complete: false`, and prints a warning.
+On resume, Agent Runner reads this artifact directly, retains earlier attempts, and appends a new execution session. Schema-v1 artifacts are migrated in memory and rewritten as schema v2 on the next terminal event. Derivable CLI, provider, model, and tool values are preserved; identity that v1 never recorded is represented explicitly as `unknown` with `legacy` provenance rather than inferred. Paused time between invocations is excluded from active duration. If the existing artifact is corrupt or uses an unsupported schema version, Agent Runner preserves it under a unique `run-metrics.json.bak-<timestamp>` name, starts a fresh artifact with `history_complete: false`, and prints a warning.
 
 ## Run Detail View
 

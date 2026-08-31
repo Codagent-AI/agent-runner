@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -25,6 +26,38 @@ type recordingAuditLogger struct {
 type agentErrorRunner struct {
 	mockRunner
 	err error
+}
+
+type synchronizedAgentRunner struct {
+	mu      sync.Mutex
+	calls   [][]string
+	release chan struct{}
+	once    sync.Once
+}
+
+func newSynchronizedAgentRunner() *synchronizedAgentRunner {
+	return &synchronizedAgentRunner{release: make(chan struct{})}
+}
+
+func (r *synchronizedAgentRunner) RunShell(string, bool, string) (ProcessResult, error) {
+	return ProcessResult{ExitCode: 0}, nil
+}
+
+func (r *synchronizedAgentRunner) RunScript(string, []byte, bool, string) (ProcessResult, error) {
+	return ProcessResult{ExitCode: 0}, nil
+}
+
+func (r *synchronizedAgentRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, error) {
+	options.NotifyStarted()
+	r.mu.Lock()
+	r.calls = append(r.calls, append([]string(nil), options.Args...))
+	ready := len(r.calls) == 2
+	r.mu.Unlock()
+	if ready {
+		r.once.Do(func() { close(r.release) })
+	}
+	<-r.release
+	return ProcessResult{ExitCode: 0}, nil
 }
 
 func (r *agentErrorRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, error) {
@@ -61,6 +94,19 @@ func TestResolveStepProfileCrosscheckInteractiveOverrideKeepsResolvedBackend(t *
 	}
 	if resolved.DefaultMode != "interactive" || resolved.CLI != "claude" || resolved.Model != "opus" || resolved.Effort != "high" {
 		t.Fatalf("resolveStepProfile() = %+v, want interactive override with Crosscheck backend", resolved)
+	}
+}
+
+func TestExecutionIdentityPreservesCrosscheckRole(t *testing.T) {
+	ctx := makeCtx()
+	ctx.ProfileStore = &config.Config{ActiveAgents: map[string]*config.Agent{
+		"crosscheck": {DefaultMode: "autonomous", CLI: "claude", Model: "opus", Effort: "high"},
+	}}
+	step := &model.Step{ID: "review", Agent: "crosscheck", Session: model.SessionNew, Prompt: "review"}
+
+	got := executionIdentity(ctx, step, "step", 0, true, "claude", "session")
+	if got.Role != "crosscheck" || got.Tool != "agent-runner" {
+		t.Fatalf("execution role/tool = %+v", got)
 	}
 }
 
@@ -125,6 +171,11 @@ func TestExecuteAgentStep(t *testing.T) {
 		end := findAuditEvent(auditLog.events, audit.EventStepEnd)
 		wantUsage := model.UsageRecord{
 			Status: model.UsageCollected, CLI: "claude", Provider: "anthropic", Model: "claude-sonnet-4-6",
+			Identity: model.InvocationIdentity{
+				RequestedCLI: "claude", EffectiveCLI: "claude", EffectiveProvider: "anthropic", EffectiveModel: "claude-sonnet-4-6",
+				ProviderSource: model.IdentitySourceAdapter,
+				ModelSource:    model.IdentitySourceTelemetry,
+			},
 			Tokens: model.TokenCounts{
 				model.TokenInput: 10, model.TokenCachedInput: 20,
 				model.TokenCacheWrite: 3, model.TokenOutput: 4,
@@ -277,6 +328,35 @@ func TestExecuteAgentStep(t *testing.T) {
 		identity, ok := end.Data["identity"].(model.ExecutionIdentity)
 		if !ok || identity.AgentInvoked {
 			t.Fatalf("identity = %#v, want agent_invoked=false", end.Data["identity"])
+		}
+	})
+
+	t.Run("interactive post-spawn failure records diagnostic evidence", func(t *testing.T) {
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(_ []string, _ directRunOptions) (interactive.DirectResult, error) {
+			return interactive.DirectResult{Started: true, ExitCode: 1}, errors.New("reclaim terminal foreground: inappropriate ioctl")
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		auditLog := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		step := model.Step{ID: "review", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew}
+
+		outcome, err := ExecuteAgentStep(&step, ctx, &mockRunner{}, &mockLogger{})
+		if err == nil || outcome != OutcomeFailed {
+			t.Fatalf("ExecuteAgentStep() = (%q, %v), want failed post-spawn error", outcome, err)
+		}
+		end := findAuditEvent(auditLog.events, audit.EventStepEnd)
+		if got := end.Data["error"]; got != err.Error() {
+			t.Fatalf("error = %#v, want %q", got, err)
+		}
+		if got := end.Data["exit_code"]; got != 1 {
+			t.Fatalf("exit_code = %#v, want 1", got)
+		}
+		identity, ok := end.Data["identity"].(model.ExecutionIdentity)
+		if !ok || !identity.AgentInvoked {
+			t.Fatalf("identity = %#v, want agent_invoked=true", end.Data["identity"])
 		}
 	})
 
@@ -2194,5 +2274,93 @@ func assertControlCompletionInstruction(t *testing.T, prompt string) {
 		if strings.Contains(prompt, disallowed) {
 			t.Fatalf("completion instruction should use the control client, got %q", prompt)
 		}
+	}
+}
+
+func TestBuildAgentPromptAutomaticallyPrependsIntakeHandoffToFirstAgent(t *testing.T) {
+	t.Parallel()
+
+	step := &model.Step{ID: "plan", Prompt: "Plan the change."}
+	ctx := &model.ExecutionContext{
+		Params:                map[string]string{},
+		CapturedVariables:     map[string]model.CapturedValue{},
+		IntakeHandoffContents: "Goal: update the harness.\nConstraint: keep the change small.",
+	}
+
+	prompt, _, err := buildAgentPrompt(step, ctx, true)
+	if err != nil {
+		t.Fatalf("buildAgentPrompt() error = %v", err)
+	}
+	for _, want := range []string{
+		"Context from the intake conversation",
+		"Goal: update the harness.",
+		"Constraint: keep the change small.",
+		"Plan the change.",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt = %q, want %q", prompt, want)
+		}
+	}
+}
+
+func TestBuildAgentPromptDoesNotRepeatDeliveredIntakeHandoff(t *testing.T) {
+	t.Parallel()
+
+	step := &model.Step{ID: "review", Prompt: "Review the change."}
+	ctx := &model.ExecutionContext{
+		Params:                map[string]string{},
+		CapturedVariables:     map[string]model.CapturedValue{},
+		IntakeHandoffContents: "Goal: update the harness.",
+	}
+
+	prompt, _, err := buildAgentPrompt(step, ctx, false)
+	if err != nil {
+		t.Fatalf("buildAgentPrompt() error = %v", err)
+	}
+	if strings.Contains(prompt, ctx.IntakeHandoffContents) {
+		t.Fatalf("later prompt repeated intake handoff: %q", prompt)
+	}
+}
+
+func TestExecuteAgentStepCoordinatesIntakeHandoffAcrossConcurrentContexts(t *testing.T) {
+	t.Parallel()
+	root := makeCtx()
+	root.IntakeHandoffContents = "Goal: update the harness."
+	root.ProfileStore = &config.Config{ActiveAgents: map[string]*config.Agent{
+		"lead": {DefaultMode: "autonomous", CLI: "claude", Model: "sonnet"},
+	}}
+	first := model.NewSubWorkflowContext(root, &model.SubWorkflowContextOptions{StepID: "first"})
+	second := model.NewSubWorkflowContext(root, &model.SubWorkflowContextOptions{StepID: "second"})
+	// Isolate unrelated one-shot parent bookkeeping while retaining the shared
+	// run-scoped intake tracker that this test exercises.
+	first.ParentContext = nil
+	second.ParentContext = nil
+	runner := newSynchronizedAgentRunner()
+	steps := []model.Step{
+		{ID: "first", Agent: "lead", Session: model.SessionNew, Mode: model.ModeAutonomous, Prompt: "First task."},
+		{ID: "second", Agent: "lead", Session: model.SessionNew, Mode: model.ModeAutonomous, Prompt: "Second task."},
+	}
+	contexts := []*model.ExecutionContext{first, second}
+	var workers sync.WaitGroup
+	for i := range steps {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			outcome, err := ExecuteAgentStep(&steps[i], contexts[i], runner, &mockLogger{})
+			if err != nil || outcome != OutcomeSuccess {
+				t.Errorf("ExecuteAgentStep() = (%q, %v), want success", outcome, err)
+			}
+		}()
+	}
+	workers.Wait()
+
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	count := 0
+	for _, args := range runner.calls {
+		count += strings.Count(strings.Join(args, "\n"), root.IntakeHandoffContents)
+	}
+	if count != 1 {
+		t.Fatalf("intake handoff delivery count = %d, want 1; calls: %#v", count, runner.calls)
 	}
 }

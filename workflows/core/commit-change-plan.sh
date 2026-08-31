@@ -38,7 +38,7 @@ case "$change_name" in
 esac
 
 case "$change_dir" in
-  ""|/*|..|../*|*/../*|*/..)
+  ""|.|./*|*/./*|*/.|/*|..|../*|*/../*|*/..)
     printf 'commit-change-plan: change_dir must be a confined relative path: %s\n' "$change_dir" >&2
     exit 1
     ;;

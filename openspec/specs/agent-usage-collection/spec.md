@@ -65,11 +65,19 @@ When usage cannot be collected for an agent step, Agent Runner SHALL record an e
 
 ### Requirement: Usage record provenance
 
-Every usage record SHALL retain provenance alongside the token counts: the CLI (adapter) that produced it, the provider where available, the actual model reported by the CLI where available, the measurement source (e.g. which output event supplied the data), and a completeness indicator distinguishing full, partial, and unavailable measurements.
+Every usage record SHALL retain provenance alongside the token counts: the requested CLI, model alias, and effort; the effective CLI, provider, model, and effort used for attribution; whether model/effort identity came from observed telemetry or Runner's resolved invocation; the measurement source; and a completeness indicator distinguishing full, partial, and unavailable measurements. An observed canonical model SHALL remain distinct from the requested alias. When telemetry omits model or effort, Runner SHALL fill the effective field from the resolved invocation without claiming that value was telemetry-observed.
 
 #### Scenario: Provenance recorded with usage
 - **WHEN** a usage record is collected from a completed agent step
-- **THEN** the record includes the CLI name, the provider and reported model (when the CLI provides them), the measurement source, and a completeness indicator
+- **THEN** the record includes requested and effective identity, identity provenance, the measurement source, and a completeness indicator
+
+#### Scenario: Observed model preserves requested alias
+- **WHEN** a user requests Claude model alias `sonnet` and terminal telemetry reports `claude-sonnet-5`
+- **THEN** requested model remains `sonnet`, effective model is `claude-sonnet-5`, and model identity provenance is telemetry
+
+#### Scenario: Invocation identity fills omitted telemetry model
+- **WHEN** Runner invokes Codex model `gpt-5.6-terra` and `turn.completed` omits a model field
+- **THEN** requested and effective model identify `gpt-5.6-terra`, with effective model provenance marked as invocation metadata
 
 #### Scenario: Partial measurement flagged
 - **WHEN** a CLI reports only a subset of the token categories its adapter expects it to provide
@@ -82,6 +90,14 @@ Non-agent steps (shell, UI, and other step types that invoke no agent CLI) SHALL
 #### Scenario: Shell step reports zero usage
 - **WHEN** a shell step completes
 - **THEN** its metrics carry zero token usage and the step's duration in milliseconds
+
+### Requirement: Attribution follows source counter semantics
+
+Agent Runner SHALL distinguish per-turn reports from cumulative session counters. A per-turn report SHALL be recorded directly for every invocation, including resumed sessions; it MUST NOT be subtracted from a prior turn. When an adapter explicitly identifies a report as cumulative, the existing baseline/delta safeguards apply and missing baselines or resets remain unavailable rather than fabricated.
+
+#### Scenario: Resumed Codex turn is recorded directly
+- **WHEN** a resumed Codex invocation emits `turn.completed.usage`
+- **THEN** the complete reported snapshot is attributed to that invocation without comparing it to or subtracting the preceding turn
 
 ### Requirement: Per-step attribution for cumulative usage sources
 

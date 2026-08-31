@@ -1,12 +1,36 @@
 package model
 
 import (
-	"strings"
 	"testing"
+	"time"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/google/go-cmp/cmp"
 )
+
+func TestIntakeHandoffStateRetriesClaimAfterPendingInvocationDoesNotLaunch(t *testing.T) {
+	state := NewIntakeHandoffState(false)
+	if !state.Claim() {
+		t.Fatal("first invocation did not claim the intake handoff")
+	}
+	secondClaim := make(chan bool, 1)
+	go func() { secondClaim <- state.Claim() }()
+	select {
+	case claimed := <-secondClaim:
+		t.Fatalf("competing claim returned %t before the pending invocation completed", claimed)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	state.Complete(false)
+	select {
+	case claimed := <-secondClaim:
+		if !claimed {
+			t.Fatal("competing invocation did not claim the released handoff")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("competing claim remained blocked after the handoff was released")
+	}
+}
 
 type stubAuditLogger struct{}
 
@@ -193,7 +217,6 @@ func TestBuiltinVarsForStep(t *testing.T) {
 
 func TestIntakeHandoffPropagatesToNestedContexts(t *testing.T) {
 	root := NewRootContext(&RootContextOptions{WorkflowFile: "root.yaml"})
-	root.IntakeHandoff = "/tmp/runs/child/intake-handoff.md"
 	root.IntakeHandoffContents = "goal: add a flag\n"
 	root.IntakeParentRunID = "intake-run"
 
@@ -202,8 +225,8 @@ func TestIntakeHandoffPropagatesToNestedContexts(t *testing.T) {
 		StepID: "sub", WorkflowFile: "sub.yaml", SubWorkflowName: "sub",
 	})
 	for name, ctx := range map[string]*ExecutionContext{"loop": loop, "sub-workflow": sub} {
-		if ctx.IntakeHandoff != root.IntakeHandoff || ctx.IntakeParentRunID != root.IntakeParentRunID {
-			t.Fatalf("%s provenance = (%q, %q), want (%q, %q)", name, ctx.IntakeHandoff, ctx.IntakeParentRunID, root.IntakeHandoff, root.IntakeParentRunID)
+		if ctx.IntakeParentRunID != root.IntakeParentRunID {
+			t.Fatalf("%s parent provenance = %q, want %q", name, ctx.IntakeParentRunID, root.IntakeParentRunID)
 		}
 		if ctx.IntakeHandoffContents != root.IntakeHandoffContents {
 			t.Fatalf("%s handoff contents = %q, want %q", name, ctx.IntakeHandoffContents, root.IntakeHandoffContents)
@@ -214,16 +237,12 @@ func TestIntakeHandoffPropagatesToNestedContexts(t *testing.T) {
 func TestIntakeHandoffBuiltinResolvesToContentsNotPath(t *testing.T) {
 	t.Run("intake-launched run resolves the handoff contents", func(t *testing.T) {
 		ctx := NewRootContext(&RootContextOptions{WorkflowFile: "root.yaml"})
-		ctx.IntakeHandoff = "/tmp/runs/child/intake-handoff.md"
 		ctx.IntakeHandoffContents = "goal: add a flag\ndecision: reuse the parser\n"
 
 		got := ctx.BuiltinVarsForStep("step")[IntakeHandoffVar]
 
 		if got != ctx.IntakeHandoffContents {
 			t.Fatalf("{{%s}} = %q, want the handoff contents", IntakeHandoffVar, got)
-		}
-		if strings.Contains(got, ctx.IntakeHandoff) {
-			t.Fatalf("{{%s}} leaked the handoff path: %q", IntakeHandoffVar, got)
 		}
 	})
 

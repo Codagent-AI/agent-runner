@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -60,7 +61,7 @@ func (a *CopilotAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, er
 	if context.IsAutonomous() {
 		args = append(args, "--allow-tool=write", "--autopilot")
 		if usersettings.EffectiveAutonomousPermissionMode(input.PermissionMode) == usersettings.PermissionModeYOLO {
-			args = append(args, "--allow-all-tools")
+			args = append(args, "--allow-all-tools", "--allow-all-paths")
 		}
 	}
 
@@ -116,23 +117,125 @@ func (a *CopilotAdapter) ProbeModel(modelName, effort string) (ProbeStrength, er
 	return BinaryOnly, nil
 }
 
-// FilterOutput extracts the last non-empty assistant response from Copilot's
-// JSONL stream.
+// FilterOutput extracts Copilot's task-completion summary, falling back to the
+// last non-empty assistant response used by older event streams.
 func (a *CopilotAdapter) FilterOutput(stdout string) string {
-	var result string
+	var assistantResponse, taskSummary string
 	scanner := newStreamScanner(strings.NewReader(stdout))
 	for scanner.Scan() {
 		var event struct {
 			Type string `json:"type"`
 			Data *struct {
 				Content string `json:"content"`
+				Summary string `json:"summary"`
 			} `json:"data"`
 		}
-		if json.Unmarshal(scanner.Bytes(), &event) == nil && event.Type == "assistant.message" && event.Data != nil && event.Data.Content != "" {
-			result = event.Data.Content
+		if json.Unmarshal(scanner.Bytes(), &event) != nil || event.Data == nil {
+			continue
+		}
+		switch event.Type {
+		case "assistant.message":
+			if event.Data.Content != "" {
+				assistantResponse = event.Data.Content
+			}
+		case "session.task_complete":
+			if event.Data.Summary != "" {
+				taskSummary = event.Data.Summary
+			}
 		}
 	}
-	return result
+	if taskSummary != "" {
+		return taskSummary
+	}
+	return assistantResponse
+}
+
+// WrapStdout parses Copilot JSONL and forwards only meaningful assistant text
+// to the TUI. Lifecycle, reasoning, and tool-delta events remain available in
+// the raw captured stdout without flooding the live display.
+func (a *CopilotAdapter) WrapStdout(downstream io.Writer) io.Writer {
+	filter := &copilotStreamFilter{}
+	filter.downstream = downstream
+	filter.onLine = filter.processLine
+	return filter
+}
+
+type copilotStreamFilter struct {
+	lineBufferedWriter
+	wroteText     bool
+	assistantSeen bool
+	endedNewline  bool
+}
+
+func (f *copilotStreamFilter) processLine(line []byte) error {
+	var event struct {
+		Type string `json:"type"`
+		Data *struct {
+			Content string `json:"content"`
+			Summary string `json:"summary"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(line, &event) != nil || event.Data == nil {
+		return nil
+	}
+
+	var text string
+	switch event.Type {
+	case "assistant.message":
+		text = event.Data.Content
+		if text != "" {
+			f.assistantSeen = true
+		}
+	case "session.task_complete":
+		if !f.assistantSeen {
+			text = event.Data.Summary
+		}
+	}
+	if text == "" {
+		return nil
+	}
+	if f.wroteText && !f.endedNewline {
+		if err := f.writeDownstream([]byte("\n")); err != nil {
+			return err
+		}
+	}
+	if err := f.writeDownstream([]byte(text)); err != nil {
+		return err
+	}
+	f.wroteText = true
+	f.endedNewline = strings.HasSuffix(text, "\n")
+	return nil
+}
+
+// HasCompletedHeadlessOutput reports whether Copilot emitted a successful task
+// completion with a summary and its successful terminal result event.
+func (a *CopilotAdapter) HasCompletedHeadlessOutput(stdout string) bool {
+	taskCompleted := false
+	resultSucceeded := false
+	scanner := newStreamScanner(strings.NewReader(stdout))
+	for scanner.Scan() {
+		var event struct {
+			Type string `json:"type"`
+			Data *struct {
+				Summary string `json:"summary"`
+				Success *bool  `json:"success"`
+			} `json:"data"`
+			ExitCode *int `json:"exitCode"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &event) != nil {
+			continue
+		}
+		switch event.Type {
+		case "session.task_complete":
+			taskCompleted = event.Data != nil &&
+				event.Data.Summary != "" &&
+				event.Data.Success != nil &&
+				*event.Data.Success
+		case "result":
+			resultSucceeded = event.ExitCode != nil && *event.ExitCode == 0
+		}
+	}
+	return taskCompleted && resultSucceeded
 }
 
 // ExtractUsage sums the incremental token metrics on assistant.message

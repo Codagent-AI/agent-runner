@@ -37,7 +37,7 @@ func TestSmokeTestHeadlessWorkflowIntegration(t *testing.T) {
 	buildAgentRunner(t, repoRoot, runnerBin)
 	writeFakeAgentCLIs(t, binDir, fakeExecutableNames(t))
 
-	cmd := exec.Command(runnerBin, "--headless", "smoke-test-headless", "smoke_dir="+smokeDir)
+	cmd := exec.Command(runnerBin, "--headless", "--profile", "smoke_test", "smoke-test-headless", "smoke_dir="+smokeDir)
 	cmd.Dir = repoRoot
 	cmd.Env = smokeCommandEnv(os.Environ(),
 		"AGENT_RUNNER_NO_TUI=1",
@@ -112,16 +112,16 @@ func smokeCommandEnv(base []string, overrides ...string) []string {
 	return append(result, overrides...)
 }
 
-// writeSmokeProfileConfig completes the project-local smoke profile without
-// relying on a developer's global Agent Runner config. The checked-in project
-// config selects codex-kimi while defining the test-only smoke_test profile.
+// writeSmokeProfileConfig provides an isolated global layer without relying on
+// a developer's Agent Runner config. Tests select the project-local smoke_test
+// profile explicitly.
 func writeSmokeProfileConfig(t *testing.T, home string) {
 	t.Helper()
 	path := filepath.Join(home, ".agent-runner", "config.yaml")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("create smoke config directory: %v", err)
 	}
-	if err := os.WriteFile(path, []byte("profiles:\n  codex-kimi:\n    extends: smoke_test\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("profiles: {}\n"), 0o600); err != nil {
 		t.Fatalf("write smoke config: %v", err)
 	}
 }

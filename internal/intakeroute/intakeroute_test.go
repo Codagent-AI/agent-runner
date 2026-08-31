@@ -16,43 +16,29 @@ func TestValidateRejectsInvalidRequests(t *testing.T) {
 	tests := []struct {
 		name    string
 		request string
-		setup   func(t *testing.T, runDir string)
-		handoff string
 		wantErr string
 	}{
 		{name: "malformed JSON", request: "{", wantErr: "decode route request"},
 		{name: "unknown field", request: `{"workflow":"build","extra":true}`, wantErr: "decode route request"},
-		{name: "unknown workflow", request: `{"workflow":"missing"}`, setup: writeHandoff("handoff.md", "notes"), wantErr: `workflow "missing" not found`},
-		{name: "missing required parameter", request: `{"workflow":"build"}`, setup: writeHandoff("handoff.md", "notes"), wantErr: `missing required parameter "change_name"`},
-		{name: "undeclared parameter", request: `{"workflow":"build","params":{"extra":"x","change_name":"x"}}`, setup: writeHandoff("handoff.md", "notes"), wantErr: `unexpected parameter "extra"`},
-		{name: "missing handoff", request: `{"workflow":"build","params":{"change_name":"x"}}`, wantErr: "open handoff"},
-		{name: "empty handoff", request: `{"workflow":"build","params":{"change_name":"x"}}`, setup: writeHandoff("handoff.md", ""), wantErr: "handoff is empty"},
-		{name: "directory handoff", request: `{"workflow":"build","params":{"change_name":"x"}}`, handoff: "directory", setup: func(t *testing.T, runDir string) {
-			if err := os.Mkdir(filepath.Join(runDir, "directory"), 0o700); err != nil {
-				t.Fatal(err)
-			}
-		}, wantErr: "handoff must be a regular file"},
+		{name: "unknown workflow", request: `{"workflow":"missing","handoff":"notes"}`, wantErr: `workflow "missing" not found`},
+		{name: "missing required parameter", request: `{"workflow":"build","handoff":"notes"}`, wantErr: `missing required parameter "change_name"`},
+		{name: "undeclared parameter", request: `{"workflow":"build","params":{"extra":"x","change_name":"x"},"handoff":"notes"}`, wantErr: `unexpected parameter "extra"`},
+		{name: "missing handoff", request: `{"workflow":"build","params":{"change_name":"x"}}`, wantErr: "route handoff is required"},
+		{name: "empty handoff", request: `{"workflow":"build","params":{"change_name":"x"},"handoff":""}`, wantErr: "route handoff is required"},
 		{name: "oversized request", request: `{"workflow":"build","params":{"change_name":"` + strings.Repeat("x", MaxRequestBytes) + `"}}`, wantErr: "route request exceeds 64 KiB"},
-		{name: "oversized handoff", request: `{"workflow":"build","params":{"change_name":"x"}}`, setup: writeHandoff("handoff.md", strings.Repeat("x", MaxHandoffBytes+1)), wantErr: "handoff exceeds 1 MiB"},
-		{name: "intake routes to itself", request: `{"workflow":"core:intake"}`, setup: writeHandoff("handoff.md", "notes"), wantErr: "intake cannot route to itself"},
+		{name: "oversized handoff", request: `{"workflow":"build","params":{"change_name":"x"},"handoff":"` + strings.Repeat("x", MaxHandoffBytes+1) + `"}`, wantErr: "route handoff exceeds 8 KiB"},
+		{name: "intake routes to itself", request: `{"workflow":"core:intake","handoff":"notes"}`, wantErr: "intake cannot route to itself"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			runDir := t.TempDir()
-			if tt.setup != nil {
-				tt.setup(t, runDir)
-			}
 			requestPath := filepath.Join(runDir, "route-request.json")
 			if err := os.WriteFile(requestPath, []byte(tt.request), 0o600); err != nil {
 				t.Fatal(err)
 			}
 
-			handoff := tt.handoff
-			if handoff == "" {
-				handoff = "handoff.md"
-			}
-			opts := testValidateOptions(runDir, handoff)
+			opts := testValidateOptions(runDir, "")
 			opts.RequestPath = requestPath
 			_, err := Validate(opts)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
@@ -63,10 +49,23 @@ func TestValidateRejectsInvalidRequests(t *testing.T) {
 	}
 }
 
+func TestValidateLaunchSealedRejectsOversizedHandoff(t *testing.T) {
+	sealed := &Sealed{
+		State: Frozen, ParentRunID: "parent", Workflow: "build",
+		SourceRef: "builtin:core/build-v2.0.yaml", Params: map[string]string{},
+		Handoff:  strings.Repeat("x", MaxHandoffBytes+1),
+		StagedAt: "2026-08-12T00:00:00Z", FrozenAt: "2026-08-12T00:00:01Z",
+	}
+
+	err := ValidateLaunchSealed(sealed)
+	if err == nil || !strings.Contains(err.Error(), "handoff exceeds 8 KiB") {
+		t.Fatalf("ValidateLaunchSealed() error = %v, want oversized handoff rejection", err)
+	}
+}
+
 func TestValidateStagesExactResolvedRouteAndSealsHandoff(t *testing.T) {
 	runDir := t.TempDir()
-	writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"intake"}}`)
-	writeFile(t, filepath.Join(runDir, "handoff.md"), "original handoff")
+	writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"intake"},"handoff":"original handoff"}`)
 
 	prepared, err := Validate(testValidateOptions(runDir, "handoff.md"))
 	if err != nil {
@@ -84,8 +83,6 @@ func TestValidateStagesExactResolvedRouteAndSealsHandoff(t *testing.T) {
 	if err := store.Stage(prepared); err != nil {
 		t.Fatalf("Stage() error = %v", err)
 	}
-	writeFile(t, filepath.Join(runDir, "handoff.md"), "modified source")
-
 	sealed, err := store.Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -93,8 +90,8 @@ func TestValidateStagesExactResolvedRouteAndSealsHandoff(t *testing.T) {
 	if sealed.State != Staged {
 		t.Fatalf("State = %q, want %q", sealed.State, Staged)
 	}
-	if got := readFile(t, sealed.HandoffPath); got != "original handoff" {
-		t.Fatalf("snapshot = %q, want original handoff", got)
+	if got := sealed.Handoff; got != "original handoff" {
+		t.Fatalf("sealed handoff = %q, want original handoff", got)
 	}
 }
 
@@ -102,20 +99,16 @@ func TestValidateReturnsStructuredErrors(t *testing.T) {
 	tests := []struct {
 		name    string
 		request string
-		setup   func(t *testing.T, runDir string)
 		want    string
 	}{
 		{name: "decoding", request: `{`, want: "decode"},
-		{name: "resolution", request: `{"workflow":"missing"}`, setup: writeHandoff("handoff.md", "notes"), want: "workflow_resolution"},
-		{name: "parameters", request: `{"workflow":"build"}`, setup: writeHandoff("handoff.md", "notes"), want: "parameter"},
-		{name: "unreadable handoff", request: `{"workflow":"build","params":{"change_name":"x"}}`, want: "handoff"},
+		{name: "resolution", request: `{"workflow":"missing","handoff":"notes"}`, want: "workflow_resolution"},
+		{name: "parameters", request: `{"workflow":"build","handoff":"notes"}`, want: "parameter"},
+		{name: "missing handoff", request: `{"workflow":"build","params":{"change_name":"x"}}`, want: "handoff"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			runDir := t.TempDir()
-			if tt.setup != nil {
-				tt.setup(t, runDir)
-			}
 			writeRequest(t, runDir, tt.request)
 			_, err := Validate(testValidateOptions(runDir, "handoff.md"))
 			structured, ok := err.(interface{ ViolationCode() string })
@@ -131,7 +124,7 @@ func TestValidateReturnsStructuredErrors(t *testing.T) {
 
 func TestPreparedSealedCopyCannotChangePublishedParams(t *testing.T) {
 	runDir := t.TempDir()
-	writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"intake"}}`)
+	writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"intake"},"handoff":"notes"}`)
 	writeFile(t, filepath.Join(runDir, "handoff.md"), "notes")
 	prepared, err := Validate(testValidateOptions(runDir, "handoff.md"))
 	if err != nil {
@@ -153,7 +146,7 @@ func TestPreparedSealedCopyCannotChangePublishedParams(t *testing.T) {
 
 func TestPreparedDiscardLeavesRunUnchanged(t *testing.T) {
 	runDir := t.TempDir()
-	writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"intake"}}`)
+	writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"intake"},"handoff":"notes"}`)
 	writeFile(t, filepath.Join(runDir, "handoff.md"), "notes")
 
 	prepared, err := Validate(testValidateOptions(runDir, "handoff.md"))
@@ -169,7 +162,7 @@ func TestPreparedDiscardLeavesRunUnchanged(t *testing.T) {
 func TestRejectedOrUnpublishableRoutePreservesExistingSidecar(t *testing.T) {
 	runDir := t.TempDir()
 	store := NewStore(runDir)
-	writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"first"}}`)
+	writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"first"},"handoff":"first notes"}`)
 	writeFile(t, filepath.Join(runDir, "handoff.md"), "first notes")
 	prepared, err := Validate(testValidateOptions(runDir, "handoff.md"))
 	if err != nil {
@@ -180,7 +173,7 @@ func TestRejectedOrUnpublishableRoutePreservesExistingSidecar(t *testing.T) {
 	}
 	before := readFile(t, filepath.Join(runDir, "intake-route.json"))
 
-	writeRequest(t, runDir, `{"workflow":"missing"}`)
+	writeRequest(t, runDir, `{"workflow":"missing","handoff":"notes"}`)
 	if _, err := Validate(testValidateOptions(runDir, "handoff.md")); err == nil {
 		t.Fatal("Validate() error = nil, want rejection")
 	}
@@ -188,7 +181,7 @@ func TestRejectedOrUnpublishableRoutePreservesExistingSidecar(t *testing.T) {
 		t.Fatalf("sidecar after rejected request = %s, want %s", got, before)
 	}
 
-	writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"replacement"}}`)
+	writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"replacement"},"handoff":"replacement notes"}`)
 	prepared, err = Validate(testValidateOptions(runDir, "handoff.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -207,8 +200,7 @@ func TestStoreReplacesStagedRouteButNeverFrozenRoute(t *testing.T) {
 	runDir := t.TempDir()
 	store := NewStore(runDir)
 	stage := func(handoff, contents string) {
-		writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"`+handoff+`"}}`)
-		writeFile(t, filepath.Join(runDir, handoff+".md"), contents)
+		writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"`+handoff+`"},"handoff":"`+contents+`"}`)
 		prepared, err := Validate(testValidateOptions(runDir, handoff+".md"))
 		if err != nil {
 			t.Fatalf("Validate() error = %v", err)
@@ -218,20 +210,13 @@ func TestStoreReplacesStagedRouteButNeverFrozenRoute(t *testing.T) {
 		}
 	}
 	stage("first", "first notes")
-	first, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
 	stage("second", "second notes")
 	sealed, err := store.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := readFile(t, sealed.HandoffPath); got != "second notes" {
-		t.Fatalf("replacement snapshot = %q", got)
-	}
-	if _, err := os.Stat(first.HandoffPath); !os.IsNotExist(err) {
-		t.Fatalf("replaced snapshot still exists: stat error = %v", err)
+	if got := sealed.Handoff; got != "second notes" {
+		t.Fatalf("replacement handoff = %q", got)
 	}
 	if err := store.Freeze(); err != nil {
 		t.Fatalf("Freeze() error = %v", err)
@@ -258,7 +243,7 @@ func TestStoreReplacesStagedRouteButNeverFrozenRoute(t *testing.T) {
 
 func TestStoreStageIsIdempotentForPublishedPreparedRoute(t *testing.T) {
 	runDir := t.TempDir()
-	writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"intake"}}`)
+	writeRequest(t, runDir, `{"workflow":"build","params":{"change_name":"intake"},"handoff":"notes"}`)
 	writeFile(t, filepath.Join(runDir, "handoff.md"), "notes")
 	prepared, err := Validate(testValidateOptions(runDir, "handoff.md"))
 	if err != nil {
@@ -280,7 +265,7 @@ func TestStoreStageIsIdempotentForPublishedPreparedRoute(t *testing.T) {
 func TestValidateUnknownWorkflowListsRoutableWorkflows(t *testing.T) {
 	runDir := t.TempDir()
 	writeFile(t, filepath.Join(runDir, "handoff.md"), "notes")
-	writeRequest(t, runDir, `{"workflow":"guess"}`)
+	writeRequest(t, runDir, `{"workflow":"guess","handoff":"notes"}`)
 
 	opts := testValidateOptions(runDir, "handoff.md")
 	opts.Catalog = NewCatalog([]discovery.WorkflowEntry{
@@ -402,7 +387,7 @@ func TestWriteCatalogDoesNotFollowASymlinkAtItsPath(t *testing.T) {
 func TestValidateIgnoresThePublishedCatalogFile(t *testing.T) {
 	runDir := t.TempDir()
 	writeFile(t, filepath.Join(runDir, "handoff.md"), "notes")
-	writeRequest(t, runDir, `{"workflow":"guess"}`)
+	writeRequest(t, runDir, `{"workflow":"guess","handoff":"notes"}`)
 	// The agent can write anywhere in the run directory, so the published
 	// catalog is advisory only. Validation must resolve against the real
 	// catalog, never against this file.
@@ -418,7 +403,7 @@ func TestValidateIgnoresThePublishedCatalogFile(t *testing.T) {
 func TestValidateUnknownWorkflowTruncatesLongRoutableList(t *testing.T) {
 	runDir := t.TempDir()
 	writeFile(t, filepath.Join(runDir, "handoff.md"), "notes")
-	writeRequest(t, runDir, `{"workflow":"guess"}`)
+	writeRequest(t, runDir, `{"workflow":"guess","handoff":"notes"}`)
 
 	entries := make([]discovery.WorkflowEntry, 0, maxListedWorkflows+3)
 	for i := 0; i < maxListedWorkflows+3; i++ {
@@ -443,7 +428,7 @@ func TestValidateUnknownWorkflowTruncatesLongRoutableList(t *testing.T) {
 func TestValidateUnknownWorkflowOmitsListWhenNothingIsRoutable(t *testing.T) {
 	runDir := t.TempDir()
 	writeFile(t, filepath.Join(runDir, "handoff.md"), "notes")
-	writeRequest(t, runDir, `{"workflow":"guess"}`)
+	writeRequest(t, runDir, `{"workflow":"guess","handoff":"notes"}`)
 
 	opts := testValidateOptions(runDir, "handoff.md")
 	opts.Catalog = NewCatalog([]discovery.WorkflowEntry{
@@ -467,14 +452,11 @@ func testCatalog() Catalog {
 }
 
 func testValidateOptions(runDir, handoff string) *ValidateOptions {
+	_ = handoff
 	return &ValidateOptions{
 		RunDir: runDir, ParentRunID: "intake-run", IntakeWorkflow: "core:intake",
-		HandoffPath: filepath.Join(runDir, handoff), Catalog: testCatalog(),
+		Catalog: testCatalog(),
 	}
-}
-
-func writeHandoff(name, content string) func(*testing.T, string) {
-	return func(t *testing.T, runDir string) { writeFile(t, filepath.Join(runDir, name), content) }
 }
 func writeRequest(t *testing.T, runDir, request string) {
 	t.Helper()
@@ -535,7 +517,7 @@ func assertNoTemporarySnapshots(t *testing.T, runDir string) {
 func TestLoadStrictRejectsUnknownFields(t *testing.T) {
 	runDir := t.TempDir()
 	path := filepath.Join(runDir, "intake-route.json")
-	if err := os.WriteFile(path, []byte(`{"state":"frozen","parent_run_id":"intake","workflow":"target","source_ref":"builtin:core/target-v1.0.yaml","params":{},"handoff_path":"/tmp/handoff","staged_at":"now","unexpected":true}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"state":"frozen","parent_run_id":"intake","workflow":"target","source_ref":"builtin:core/target-v1.0.yaml","params":{},"handoff":"context","staged_at":"now","unexpected":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

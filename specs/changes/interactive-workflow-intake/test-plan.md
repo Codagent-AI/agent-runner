@@ -64,13 +64,12 @@ its rationale rather than silently dropped.
   `TestLaunchFrozenIntakeRouteGatesOnSuccessfulCompletedRunAndAppendsEvidence`, including
   that launch evidence is appended after `run_end` once the run logger is closed.
 - **E2E-001, E2E-002, E2E-006** — the substance is covered by
-  `TestInternalLaunchIntakeRoutePreparesSealedSourceWithCopiedHandoff` (sealed source,
-  copied handoff, child provenance), `TestExplorationHandoffPathReturnsNonEmptyIntakeHandoff`
-  (exploration-only), and the embedded-workflow tests. The shipped-prompt half of E2E-006 is
+  `TestInternalLaunchIntakeRoutePreparesSealedSourceWithPromptHandoff` (sealed source,
+  prompt handoff, child provenance and no handoff file) and the embedded-workflow tests. The shipped-prompt half of E2E-006 is
   asserted directly by `TestShippedIntakePromptTeachesTheRealRouteRequestSchema`, which decodes
   the intake prompt's own JSON example through the real `intakeroute.Request` decoder, and by
-  `TestShippedHandoffConsumersReceiveContentsRatherThanAPath`, which fails if a consumer prompt
-  goes back to directing the agent at a handoff file. A fake-CLI PTY harness would
+  `TestShippedHandoffConsumersDoNotManuallyInterpolateIntakeContext`, which fails if a consumer
+  manually handles what the runner delivers. A fake-CLI PTY harness would
   re-assert these through a slower surface. **Live coverage exists instead:** acceptance
   flows AT-001 through AT-005 exercised all of these journeys against real agents, with evidence in
   the run's `acceptance-flow-evidence.md`.
@@ -90,12 +89,11 @@ its rationale rather than silently dropped.
   request validation, sealing on acceptance
 - Boundary: real `control.ControlServer` over a real Unix socket, `internal/intakeroute`, real filesystem
 - Setup: a control server with a route-eligible active attempt; a run directory containing a valid
-  `route-request.json` and a non-empty handoff; a workflow catalog resolving the named workflow
+  `route-request.json` with non-empty handoff text; a workflow catalog resolving the named workflow
 - Action: send a payload-free `submit_route` message carrying the active attempt's credential
 - Assertions: the response is a success acknowledgement; `<run-dir>/intake-route.json` exists with
   state `staged`; `Sealed.SourceRef` is the exact resolved definition reference rather than the canonical
-  name; `Sealed.HandoffPath` addresses a snapshot whose bytes match the source at submission time;
-  mutating the agent-written handoff afterwards does not change the snapshot's contents; a submission
+  name; `Sealed.Handoff` matches the request text; a submission
   from a non-route-eligible attempt is rejected and audited with workflow state unchanged
 - Execution: `internal/control` and `internal/intakeroute` package tests, `go test ./...`
 
@@ -229,17 +227,16 @@ its rationale rather than silently dropped.
   provenance; `intake-route-submission` end to end
 - Surface: the `agent-runner` binary
 - Setup: isolated `HOME` and working directory following the existing smoke-test pattern; a fake CLI
-  shell stub that writes a route request and a handoff, runs `agent-runner step submit-route`, then
-  `agent-runner step complete`; a target workflow in the catalog whose prompt references
-  `{{intake_handoff}}`
+  shell stub that writes one route request containing handoff text, runs `agent-runner step submit-route`,
+  then `agent-runner step complete`; a target workflow in the catalog
 - Journey: start intake; the stubbed agent selects the target workflow with valid parameters; intake
   finalizes and the selected workflow launches
 - Assertions: exactly one new run directory beyond the intake run; the launched run executed the
-  definition at the sealed `SourceRef`; its `{{intake_handoff}}` resolved to a file inside its own
-  directory whose contents match the sealed snapshot; its first agent session is fresh, containing no
+  definition at the sealed `SourceRef`; its first agent prompt contains the sealed handoff text without
+  workflow-specific interpolation; its first agent session is fresh, containing no
   turn from the intake conversation; its state records the intake run as parent plus its own run ID and
   executed version; the intake run records the route and a launch attempt but no child run ID; deleting
-  the intake run afterwards leaves the launched run's handoff readable; starting intake **by workflow
+  the intake run afterwards leaves the launched run's handoff in state; starting intake **by workflow
   name** launches identically to starting it with `-i`, without requiring the completed-run view to be
   dismissed first
 - Execution: `cmd/agent-runner` integration test alongside the existing smoke tests, `go test ./...`
@@ -247,13 +244,9 @@ its rationale rather than silently dropped.
 ### E2E-002: Exploration-only intake launches nothing
 - Covers: `workflow-intake` — exploration-only completion
 - Surface: the `agent-runner` binary
-- Setup: as E2E-001, with a stub that writes a handoff and calls `agent-runner step complete` without
-  ever submitting a route
-- Journey: start intake; the stubbed agent explores, writes a handoff to the runner-provided path, and
-  finishes without selecting a workflow
-- Assertions: the intake run finishes with a success outcome; no additional run directory is created;
-  the handoff file remains readable and its path appears in the run's output, proving the runner can
-  report a handoff location even though no route request was ever submitted to name it
+- Setup: as E2E-001, with a stub that calls `agent-runner step complete` without submitting a route
+- Journey: start intake; the stubbed agent explores and finishes without selecting a workflow
+- Assertions: the intake run finishes with a success outcome and no additional run directory is created
 - Execution: `cmd/agent-runner` integration test, `go test ./...`
 
 ### E2E-003: The sealed definition wins over a newer version
@@ -331,7 +324,7 @@ its rationale rather than silently dropped.
   demonstrably has the intake context, referring to conclusions from the intake conversation rather
   than asking from scratch
 - Evidence: captured terminal output spanning both runs; the two run directories; the launched run's
-  state showing the intake run as parent; the copied handoff inside the launched run's directory
+  state showing the intake run as parent and containing the sealed handoff text
 - Effects and cleanup: creates two runs and consumes agent API budget; delete the created run
   directories afterwards. No repository mutation is required — stop the launched workflow at its first
   step

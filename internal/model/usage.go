@@ -41,28 +41,58 @@ const (
 type UnavailableReason string
 
 const (
-	UnavailablePTYContext         UnavailableReason = "pty-context"
-	UnavailableParseFailure       UnavailableReason = "parse-failure"
-	UnavailableNoUsageEvent       UnavailableReason = "no-usage-event"
-	UnavailableNoBaseline         UnavailableReason = "no-baseline"
-	UnavailableCounterReset       UnavailableReason = "counter-reset"
-	UnavailableUnsupportedAdapter UnavailableReason = "unsupported-adapter"
+	UnavailablePTYContext           UnavailableReason = "pty-context"
+	UnavailableParseFailure         UnavailableReason = "parse-failure"
+	UnavailableNoUsageEvent         UnavailableReason = "no-usage-event"
+	UnavailableNoBaseline           UnavailableReason = "no-baseline"
+	UnavailableCounterReset         UnavailableReason = "counter-reset"
+	UnavailableUnsupportedAdapter   UnavailableReason = "unsupported-adapter"
+	UnavailableNestedMetricsMissing UnavailableReason = "nested-metrics-missing"
+	UnavailableNestedMetricsInvalid UnavailableReason = "nested-metrics-invalid"
 )
+
+// IdentitySource identifies where an effective invocation identity field came
+// from. Telemetry is preferred; invocation means Runner filled a field from
+// the resolved command it launched because the CLI did not repeat it.
+type IdentitySource string
+
+const (
+	IdentitySourceAdapter    IdentitySource = "adapter"
+	IdentitySourceInvocation IdentitySource = "invocation"
+	IdentitySourceLegacy     IdentitySource = "legacy"
+	IdentitySourceTelemetry  IdentitySource = "telemetry"
+)
+
+// InvocationIdentity keeps requested configuration separate from the
+// effective identity used to attribute and price an invocation.
+type InvocationIdentity struct {
+	RequestedCLI      string         `json:"requested_cli,omitempty"`
+	RequestedModel    string         `json:"requested_model,omitempty"`
+	RequestedEffort   string         `json:"requested_effort,omitempty"`
+	EffectiveCLI      string         `json:"effective_cli,omitempty"`
+	EffectiveProvider string         `json:"effective_provider,omitempty"`
+	EffectiveModel    string         `json:"effective_model,omitempty"`
+	EffectiveEffort   string         `json:"effective_effort,omitempty"`
+	ProviderSource    IdentitySource `json:"provider_source,omitempty"`
+	ModelSource       IdentitySource `json:"model_source,omitempty"`
+	EffortSource      IdentitySource `json:"effort_source,omitempty"`
+}
 
 // UsageRecord is the typed usage value passed through audit events and stored
 // in the metrics artifact.
 type UsageRecord struct {
-	Status                   UsageStatus       `json:"status"`
-	Reason                   UnavailableReason `json:"reason,omitempty"`
-	CLI                      string            `json:"cli"`
-	Provider                 string            `json:"provider,omitempty"`
-	Model                    string            `json:"model,omitempty"`
-	Tokens                   TokenCounts       `json:"tokens,omitempty"`
-	RawCumulative            TokenCounts       `json:"raw_cumulative,omitempty"`
-	TokenTotals              *TokenTotals      `json:"token_totals,omitempty"`
-	RawCumulativeTokenTotals *TokenTotals      `json:"raw_cumulative_token_totals,omitempty"`
-	Source                   string            `json:"source"`
-	Completeness             Completeness      `json:"completeness,omitempty"`
+	Status                   UsageStatus        `json:"status"`
+	Reason                   UnavailableReason  `json:"reason,omitempty"`
+	CLI                      string             `json:"cli"`
+	Provider                 string             `json:"provider,omitempty"`
+	Model                    string             `json:"model,omitempty"`
+	Identity                 InvocationIdentity `json:"identity"`
+	Tokens                   TokenCounts        `json:"tokens,omitempty"`
+	RawCumulative            TokenCounts        `json:"raw_cumulative,omitempty"`
+	TokenTotals              *TokenTotals       `json:"token_totals,omitempty"`
+	RawCumulativeTokenTotals *TokenTotals       `json:"raw_cumulative_token_totals,omitempty"`
+	Source                   string             `json:"source"`
+	Completeness             Completeness       `json:"completeness,omitempty"`
 }
 
 // ExecutionIdentity identifies one terminal step or loop-iteration event.
@@ -79,6 +109,8 @@ type ExecutionIdentity struct {
 	SessionStrategy string `json:"session_strategy,omitempty"`
 	SessionResumed  bool   `json:"session_resumed"`
 	AgentInvoked    bool   `json:"agent_invoked"`
+	Role            string `json:"role,omitempty"`
+	Tool            string `json:"tool,omitempty"`
 }
 
 // Coverage describes how much of the eligible agent-step population reported

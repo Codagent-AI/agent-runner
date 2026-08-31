@@ -300,6 +300,37 @@ func TestExecuteLoopStep(t *testing.T) {
 		}
 	})
 
+	t.Run("resume exhausted retry loop starts a fresh retry cycle", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		step := model.Step{
+			ID: "retry", Session: model.SessionNew,
+			Loop: &model.Loop{Max: intPtr(3)},
+			Steps: []model.Step{{
+				ID: "run", Command: "check", Session: model.SessionNew,
+				ContinueOnFailure: true,
+				BreakIf:           "success",
+			}},
+		}
+		exhausted := 3
+		ctx := makeCtx()
+		ctx.ResumeChildState = &model.NestedStepState{
+			StepID:    "retry",
+			Iteration: &exhausted,
+			Completed: false,
+		}
+
+		result, err := ExecuteLoopStep(&step, ctx, runner, &mockGlob{}, &mockLogger{}, LoopExecuteOptions{ResumeFromIteration: exhausted})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Outcome != OutcomeSuccess {
+			t.Fatalf("expected resumed retry to succeed, got %q", result.Outcome)
+		}
+		if len(runner.calls) != 1 {
+			t.Fatalf("expected resumed retry to run once, got %d calls", len(runner.calls))
+		}
+	})
+
 	t.Run("resume enters iteration at mid body step", func(t *testing.T) {
 		// Iteration 0 had body step "a" completed and body step "b" in progress
 		// when the run failed. Resume should skip "a" and start at "b".
@@ -411,4 +442,70 @@ func TestExecuteLoopStep(t *testing.T) {
 			t.Fatalf("expected 2 iterations to run; got %d call(s)", len(runner.calls))
 		}
 	})
+}
+
+func TestBuildIterationFlushChainLeavesTopLevelStepForRunner(t *testing.T) {
+	root := model.NewRootContext(&model.RootContextOptions{Params: map[string]string{}})
+	implement := model.NewSubWorkflowContext(root, &model.SubWorkflowContextOptions{
+		StepID:          "implement",
+		SubWorkflowName: "implement-change",
+	})
+	iteration := 1
+	iterCtx := model.NewLoopIterationContext(implement, model.LoopIterationOptions{
+		StepID:    "implement-tasks",
+		Iteration: iteration,
+	})
+	iterCtx.LastSubWorkflowChild = &model.NestedStepState{
+		StepID: "implement-single-task",
+		Child:  &model.NestedStepState{StepID: "run-validator"},
+	}
+
+	gotRoot, gotChain := buildIterationFlushChain(
+		iterCtx,
+		"implement-tasks",
+		&iteration,
+		"implement-single-task",
+		false,
+	)
+
+	if gotRoot != root {
+		t.Fatalf("root = %p, want %p", gotRoot, root)
+	}
+	if gotChain == nil || gotChain.StepID != "implement-tasks" {
+		t.Fatalf("chain root = %#v, want implement-tasks", gotChain)
+	}
+	if gotChain.Child == nil || gotChain.Child.StepID != "implement-single-task" {
+		t.Fatalf("chain child = %#v, want implement-single-task", gotChain.Child)
+	}
+	if gotChain.Child.Child == nil || gotChain.Child.Child.StepID != "run-validator" {
+		t.Fatalf("chain grandchild = %#v, want run-validator", gotChain.Child.Child)
+	}
+}
+
+func TestFlushLoopStateLeavesTopLevelStepForRunner(t *testing.T) {
+	root := model.NewRootContext(&model.RootContextOptions{Params: map[string]string{}})
+	var flushed *model.NestedStepState
+	root.FlushState = func() {
+		flushed = root.LastSubWorkflowChild
+	}
+	implement := model.NewSubWorkflowContext(root, &model.SubWorkflowContextOptions{
+		StepID:          "implement",
+		SubWorkflowName: "implement-change",
+	})
+	iteration := 1
+	implement.LastSubWorkflowChild = newLoopStepMarker(
+		implement,
+		"implement-tasks",
+		iteration,
+		&model.NestedStepState{StepID: "implement-single-task"},
+	)
+
+	flushLoopState(implement)
+
+	if flushed == nil || flushed.StepID != "implement-tasks" {
+		t.Fatalf("flushed chain = %#v, want implement-tasks", flushed)
+	}
+	if flushed.Child == nil || flushed.Child.StepID != "implement-single-task" {
+		t.Fatalf("flushed child = %#v, want implement-single-task", flushed.Child)
+	}
 }

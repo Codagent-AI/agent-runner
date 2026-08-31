@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/engine"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
@@ -34,21 +35,14 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		return nil, ErrAlreadyCompleted
 	}
 
+	profileOverride := resumeProfileOverride(opts.ProfileOverride, state.ProfileSet)
+
 	workflow, err := loadRecordedWorkflow(state.WorkflowFile)
 	if err != nil {
 		return nil, err
 	}
 
-	// Check workflow hash
-	content, readErr := loader.ReadWorkflowFile(state.WorkflowFile)
-	if readErr == nil {
-		currentHash := stateio.ComputeWorkflowHash(string(content))
-		if currentHash != state.WorkflowHash {
-			if opts.Log != nil {
-				opts.Log.Printf("agent-runner: warning: workflow file has changed since last run\n")
-			}
-		}
-	}
+	warnIfWorkflowHashChanged(&state, opts.Log)
 
 	resumeState := restoreResumeContext(&state)
 
@@ -73,33 +67,63 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		}
 	}
 
+	intakeHandoffDelivered := state.IntakeHandoffDelivered
+	if !intakeHandoffDelivered && state.IntakeHandoffContents != "" {
+		intakeHandoffDelivered = nestedStateHasAgentSession(state.CurrentStep.Nested)
+	}
 	resumeOpts := &Options{
-		From:                  resumeState.fromStep,
-		WorkflowFile:          state.WorkflowFile,
-		SessionDir:            filepath.Dir(stateFilePath),
-		IntakeHandoff:         state.IntakeHandoff,
-		IntakeHandoffContents: state.IntakeHandoffContents,
-		IntakeParentRunID:     state.IntakeParentRunID,
-		AgentOverride:         state.AgentOverride,
-		Engine:                eng,
-		SessionIDs:            resumeState.sessionIDs,
-		SessionProfiles:       resumeState.sessionProfiles,
-		CapturedVariables:     resumeState.capturedVars,
-		LastSessionStepID:     resumeState.lastSessionStepID,
-		NamedSessions:         resumeState.namedSessions,
-		NamedSessionDecls:     resumeState.namedSessionDecls,
-		ChildState:            resumeState.childState,
-		InteractiveAttempt:    resumeInteractiveAttempt(&state),
-		ProcessRunner:         opts.ProcessRunner,
-		GlobExpander:          opts.GlobExpander,
-		Log:                   opts.Log,
-		SuspendHook:           opts.SuspendHook,
-		ResumeHook:            opts.ResumeHook,
-		PrepareStepHook:       opts.PrepareStepHook,
-		UIStepHandler:         opts.UIStepHandler,
+		From:                   resumeState.fromStep,
+		WorkflowFile:           state.WorkflowFile,
+		SessionDir:             filepath.Dir(stateFilePath),
+		IntakeHandoffContents:  state.IntakeHandoffContents,
+		IntakeHandoffDelivered: intakeHandoffDelivered,
+		IntakeParentRunID:      state.IntakeParentRunID,
+		AgentOverride:          state.AgentOverride,
+		Engine:                 eng,
+		SessionIDs:             resumeState.sessionIDs,
+		SessionProfiles:        resumeState.sessionProfiles,
+		CapturedVariables:      resumeState.capturedVars,
+		LastSessionStepID:      resumeState.lastSessionStepID,
+		NamedSessions:          resumeState.namedSessions,
+		NamedSessionDecls:      resumeState.namedSessionDecls,
+		ChildState:             resumeState.childState,
+		InteractiveAttempt:     resumeInteractiveAttempt(&state),
+		ProcessRunner:          opts.ProcessRunner,
+		GlobExpander:           opts.GlobExpander,
+		Log:                    opts.Log,
+		SuspendHook:            opts.SuspendHook,
+		ResumeHook:             opts.ResumeHook,
+		PrepareStepHook:        opts.PrepareStepHook,
+		UIStepHandler:          opts.UIStepHandler,
+		ProfileStore:           opts.ProfileStore,
+		ProfileOverride:        profileOverride,
 	}
 
 	return PrepareRun(&workflow, state.Params, resumeOpts)
+}
+
+func nestedStateHasAgentSession(state *model.NestedStepState) bool {
+	if state == nil {
+		return false
+	}
+	if state.LastSessionStepID != "" || len(state.SessionIDs) != 0 || len(state.NamedSessions) != 0 {
+		return true
+	}
+	return nestedStateHasAgentSession(state.Child)
+}
+
+func warnIfWorkflowHashChanged(state *model.RunState, log interface{ Printf(string, ...any) }) {
+	content, err := loader.ReadWorkflowFile(state.WorkflowFile)
+	if err == nil && stateio.ComputeWorkflowHash(string(content)) != state.WorkflowHash && log != nil {
+		log.Printf("agent-runner: warning: workflow file has changed since last run\n")
+	}
+}
+
+func resumeProfileOverride(override config.ProfileOverride, recorded string) config.ProfileOverride {
+	if override.Name == "" && recorded != "" {
+		return config.ProfileOverride{Name: recorded, Origin: config.OriginState}
+	}
+	return override
 }
 
 type restoredResumeContext struct {

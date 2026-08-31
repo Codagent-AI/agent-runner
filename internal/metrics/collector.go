@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	SchemaVersion = 1
+	SchemaVersion = 2
 	FileName      = "run-metrics.json"
 	// Compact UTC with fixed nanoseconds is sortable, collision-resistant, and
 	// safe on Windows (unlike RFC3339, which contains colons).
@@ -62,9 +62,12 @@ type StepRecord struct {
 	DurationMS          int64              `json:"duration_ms"`
 	SessionID           string             `json:"session_id,omitempty"`
 	AgentInvoked        bool               `json:"agent_invoked"`
+	Role                string             `json:"role,omitempty"`
+	Tool                string             `json:"tool,omitempty"`
 	Usage               *model.UsageRecord `json:"usage"`
 	EstimatedAPICostUSD *float64           `json:"estimated_api_cost_usd"`
 	CallID              string             `json:"call_id,omitempty"`
+	InvocationID        string             `json:"invocation_id,omitempty"`
 	ParentAttemptID     string             `json:"parent_attempt_id,omitempty"`
 	TargetKind          string             `json:"target_kind,omitempty"`
 	TargetName          string             `json:"target_name,omitempty"`
@@ -127,7 +130,7 @@ func (c *Collector) Process(event audit.Event) audit.Event {
 		if at, ok := c.eventTimestamp(event); ok {
 			c.openSession(at)
 		}
-	case audit.EventStepEnd, audit.EventIterationEnd, audit.EventAgentCallEnd:
+	case audit.EventStepEnd, audit.EventIterationEnd, audit.EventAgentCallEnd, audit.EventNestedAgentEnd:
 		c.processTerminal(&event)
 		if at, ok := c.eventTimestamp(event); ok {
 			c.observeSession(at, false)
@@ -188,22 +191,26 @@ func (c *Collector) Errors() []error {
 }
 
 func (c *Collector) processTerminal(event *audit.Event) {
-	callID := ""
-	if event.Type == audit.EventAgentCallEnd {
-		callID = stringValue(event.Data["call_id"])
-		if callID != "" {
-			if _, duplicate := c.seenCalls[callID]; duplicate {
-				return
-			}
-		}
-	}
 	identity, ok := event.Data[DataIdentity].(model.ExecutionIdentity)
 	if !ok {
 		c.errors = append(c.errors, fmt.Errorf("run-metrics: %s missing typed execution identity", event.Type))
 		return
 	}
-	if callID != "" {
-		c.seenCalls[callID] = struct{}{}
+	dedupID := ""
+	if event.Type == audit.EventAgentCallEnd || event.Type == audit.EventNestedAgentEnd {
+		id := stringValue(event.Data["call_id"])
+		if event.Type == audit.EventNestedAgentEnd {
+			id = stringValue(event.Data["invocation_id"])
+		}
+		if id != "" {
+			dedupID = terminalDedupKey(event.Type, identity.Prefix, stringValue(event.Data["parent_attempt_id"]), id)
+			if _, duplicate := c.seenCalls[dedupID]; duplicate {
+				return
+			}
+		}
+	}
+	if dedupID != "" {
+		c.seenCalls[dedupID] = struct{}{}
 	}
 	key := attemptKey(identity.Prefix, identity.StepID, identity.Kind, identity.Iteration)
 	c.attempts[key]++
@@ -215,8 +222,12 @@ func (c *Collector) processTerminal(event *audit.Event) {
 		ID: identity.StepID, Kind: identity.Kind, Type: identity.StepType, Attempt: identity.Attempt,
 		Outcome: stringValue(event.Data["outcome"]), DurationMS: int64Value(event.Data["duration_ms"]),
 		SessionID: identity.SessionID, AgentInvoked: identity.AgentInvoked,
+		Role: identity.Role, Tool: identity.Tool,
 		CallID: stringValue(event.Data["call_id"]), ParentAttemptID: stringValue(event.Data["parent_attempt_id"]),
 		TargetKind: stringValue(event.Data["target_kind"]), TargetName: stringValue(event.Data["target_name"]),
+	}
+	if event.Type == audit.EventNestedAgentEnd {
+		record.InvocationID = stringValue(event.Data["invocation_id"])
 	}
 	if identity.Kind == "iteration" {
 		iteration := identity.Iteration
@@ -231,6 +242,13 @@ func (c *Collector) processTerminal(event *audit.Event) {
 		}
 	}
 	c.artifact.Steps = append(c.artifact.Steps, record)
+}
+
+func terminalDedupKey(eventType audit.EventType, prefix, parentAttemptID, id string) string {
+	if eventType == audit.EventNestedAgentEnd {
+		return string(eventType) + "\x00" + prefix + "\x00" + parentAttemptID + "\x00" + id
+	}
+	return string(eventType) + "\x00" + id
 }
 
 func (c *Collector) attribute(identity *model.ExecutionIdentity, input *model.UsageRecord) model.UsageRecord {
@@ -452,7 +470,7 @@ func (c *Collector) rehydrate(sessionStart time.Time) {
 		c.recoverArtifact(sessionStart, fmt.Errorf("parse existing artifact: %w", err))
 		return
 	}
-	if artifact.SchemaVersion != SchemaVersion {
+	if artifact.SchemaVersion != 1 && artifact.SchemaVersion != SchemaVersion {
 		c.recoverArtifact(sessionStart, fmt.Errorf("unsupported schema version %d", artifact.SchemaVersion))
 		return
 	}
@@ -473,12 +491,19 @@ func (c *Collector) rehydrate(sessionStart time.Time) {
 	if artifact.Steps == nil {
 		artifact.Steps = []StepRecord{}
 	}
+	if artifact.SchemaVersion == 1 {
+		migrateSchemaV1(&artifact)
+	}
 	c.artifact = artifact
+	c.artifact.SchemaVersion = SchemaVersion
 	c.artifactLoaded = true
 	for i := range artifact.Steps {
 		record := &artifact.Steps[i]
 		if record.CallID != "" {
-			c.seenCalls[record.CallID] = struct{}{}
+			c.seenCalls[terminalDedupKey(audit.EventAgentCallEnd, record.Prefix, record.ParentAttemptID, record.CallID)] = struct{}{}
+		}
+		if record.InvocationID != "" {
+			c.seenCalls[terminalDedupKey(audit.EventNestedAgentEnd, record.Prefix, record.ParentAttemptID, record.InvocationID)] = struct{}{}
 		}
 		iteration := 0
 		if record.Iteration != nil {
@@ -504,6 +529,63 @@ func (c *Collector) rehydrate(sessionStart time.Time) {
 			delete(c.totalBaselines, baseline)
 		}
 	}
+}
+
+func migrateSchemaV1(artifact *Artifact) {
+	for i := range artifact.Steps {
+		record := &artifact.Steps[i]
+		if record.Usage == nil || (record.Type != "agent" && record.Usage.CLI == "") {
+			continue
+		}
+		if record.Role == "" {
+			record.Role = "legacy-unknown"
+		}
+		if record.Tool == "" {
+			record.Tool = "agent-runner"
+		}
+		migrateLegacyUsageIdentity(record.Usage)
+	}
+}
+
+func migrateLegacyUsageIdentity(usage *model.UsageRecord) {
+	identity := &usage.Identity
+	if identity.RequestedCLI == "" {
+		identity.RequestedCLI = valueOrUnknown(usage.CLI)
+	}
+	if identity.RequestedModel == "" {
+		identity.RequestedModel = "unknown"
+	}
+	if identity.RequestedEffort == "" {
+		identity.RequestedEffort = "unknown"
+	}
+	if identity.EffectiveCLI == "" {
+		identity.EffectiveCLI = valueOrUnknown(usage.CLI)
+	}
+	if identity.EffectiveProvider == "" {
+		identity.EffectiveProvider = valueOrUnknown(usage.Provider)
+	}
+	if identity.EffectiveModel == "" {
+		identity.EffectiveModel = valueOrUnknown(usage.Model)
+	}
+	if identity.EffectiveEffort == "" {
+		identity.EffectiveEffort = "unknown"
+	}
+	if identity.ProviderSource == "" {
+		identity.ProviderSource = model.IdentitySourceLegacy
+	}
+	if identity.ModelSource == "" {
+		identity.ModelSource = model.IdentitySourceLegacy
+	}
+	if identity.EffortSource == "" {
+		identity.EffortSource = model.IdentitySourceLegacy
+	}
+}
+
+func valueOrUnknown(value string) string {
+	if value == "" {
+		return "unknown"
+	}
+	return value
 }
 
 func (c *Collector) recoverArtifact(sessionStart time.Time, cause error) {

@@ -9,6 +9,8 @@ params:
     required: true
   - name: change_label
     required: true
+  - name: change_kind
+    required: true
   - name: artifact_validation_instruction
     required: true
   - name: skip_validator
@@ -26,6 +28,14 @@ steps:
     script: validate-change-name.sh
     script_inputs:
       change_name: "{{change_name}}"
+
+  - id: check-plan
+    script: validate-planning-artifacts.sh
+    script_inputs:
+      change_name: "{{change_name}}"
+      change_dir: "{{change_dir}}"
+      change_kind: "{{change_kind}}"
+      require_tasks: "true"
 
   - id: implement-tasks
     loop:
@@ -48,7 +58,7 @@ steps:
 
       Update `{{change_dir}}/tasks.md` so each checklist entry corresponding to a task file under `{{change_dir}}/tasks/*.md` is checked. Do not change task wording, task-file content, requirements, design, or implementation. Verify the index still links to every task file and contains no unchecked task entry.
 
-      If the index changed, commit only that file following the project's commit message conventions and prepend `[{{step_id}}]`. If it was already correct, do not create an empty commit.
+      If the index changed and belongs to the current project repository, commit only that file following the project's commit message conventions and prepend `[{{step_id}}]`. If it lives outside the repository, leave it uncommitted. If it was already correct, do not create an empty commit.
 
   - id: verify-task-index
     command: |
@@ -110,6 +120,7 @@ steps:
       Verify the final state by querying the open pull request for the current head branch. Do not signal completion unless it is open, its base branch is non-empty, it is a draft, and its head SHA equals local `HEAD`. Report the pull request URL and actual base branch.
 
   - id: verify-draft-pr
+    capture: pr_url
     command: |
       branch=$(git branch --show-current)
       local_head=$(git rev-parse HEAD)
@@ -127,6 +138,7 @@ steps:
         echo "open pull request does not match required draft state or local HEAD" >&2
         exit 1
       fi
+      printf '%s\n' "$(printf '%s' "$pr_json" | jq -r '.[0].url')"
 
   - id: prepare-acceptance
     session: lead-agent
@@ -142,6 +154,8 @@ steps:
       - evidence directory: `{{session_dir}}/output/`;
       - assumptions ledger: `{{session_dir}}/output/acceptance-assumptions.md`;
       - verification scope: `full` for the first pass.
+
+      The authoritative test plan was structurally validated before implementation. Instruct the tester to execute its applicable `AT-*` inventory under the required skill.
 
       The first pass must exercise every required `AT-*` and every conditional `AT-*` whose activation condition holds. A flow may use a substitute only when that obligation explicitly permits it. Missing applicable-flow evidence is an impediment, not a limitation, and cannot produce `ACCEPTANCE_COMPLETE`.
 
@@ -168,7 +182,11 @@ steps:
         exit 1
       fi
       status=$(sed '/^[[:space:]]*$/d' "{{session_dir}}/output/acceptance-preparation-status.txt" | tail -n 1)
-      if [ "$status" != "ACCEPTANCE_COMPLETE" ]; then
-        echo "acceptance preparation failed after three tester calls" >&2
-        exit 1
-      fi
+      case "$status" in
+        ACCEPTANCE_COMPLETE|ACCEPTANCE_FAILED)
+          ;;
+        *)
+          echo "invalid acceptance preparation status: $status" >&2
+          exit 1
+          ;;
+      esac

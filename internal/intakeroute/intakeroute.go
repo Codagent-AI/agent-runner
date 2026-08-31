@@ -21,27 +21,21 @@ import (
 const (
 	// MaxRequestBytes bounds agent-written route requests.
 	MaxRequestBytes = 64 << 10
-	// MaxHandoffBytes bounds the handoff snapshot retained in a run.
-	MaxHandoffBytes = 1 << 20
+	// MaxHandoffBytes bounds the handoff text carried into a launched run's
+	// first agent prompt.
+	MaxHandoffBytes = 8 << 10
 
 	// maxListedWorkflows bounds how many routable names a resolution failure
 	// names, so a large user catalog cannot flood the agent's context.
 	maxListedWorkflows = 40
 
 	sidecarName = "intake-route.json"
-	handoffName = "intake-handoff.md"
 	requestName = "route-request.json"
 	catalogName = "route-catalog.md"
 )
 
 // SidecarPath returns the route sidecar for a run directory.
 func SidecarPath(runDir string) string { return filepath.Join(runDir, sidecarName) }
-
-// HandoffPathFor returns the runner-owned handoff path for a run directory.
-// The path the agent is told to write and the path the validator enforces must
-// be the same bytes, so both resolve it here rather than joining the name
-// themselves.
-func HandoffPathFor(runDir string) string { return filepath.Join(runDir, handoffName) }
 
 // RequestPathFor returns the runner-owned route request path for a run directory.
 func RequestPathFor(runDir string) string { return filepath.Join(runDir, requestName) }
@@ -179,6 +173,7 @@ func (e *ValidationError) ViolationCode() string { return string(e.Code) }
 type Request struct {
 	Workflow string            `json:"workflow"`
 	Params   map[string]string `json:"params,omitempty"`
+	Handoff  string            `json:"handoff"`
 }
 
 // Sealed is the run-owned record persisted in intake-route.json.
@@ -188,7 +183,7 @@ type Sealed struct {
 	Workflow    string            `json:"workflow"`
 	SourceRef   string            `json:"source_ref"`
 	Params      map[string]string `json:"params"`
-	HandoffPath string            `json:"handoff_path"`
+	Handoff     string            `json:"handoff"`
 	StagedAt    string            `json:"staged_at"`
 	FrozenAt    string            `json:"frozen_at,omitempty"`
 }
@@ -255,25 +250,19 @@ type ValidateOptions struct {
 	ParentRunID    string
 	IntakeWorkflow string
 	RequestPath    string
-	// HandoffPath is the one runner-owned path the agent is allowed to seal.
-	// A request may not select another file beneath the run directory.
-	HandoffPath string
-	Request     []byte
-	Catalog     Catalog
-	Now         func() time.Time
+	Request        []byte
+	Catalog        Catalog
+	Now            func() time.Time
 }
 
-// Prepared is a validated route whose handoff has been copied to a temporary,
-// unpublished run-owned path. It must be staged or discarded.
+// Prepared is a validated, unpublished route. It must be staged or discarded.
 type Prepared struct {
-	sealed        Sealed
-	temporaryPath string
-	discarded     bool
-	published     bool
+	sealed    Sealed
+	discarded bool
+	published bool
 }
 
-// Sealed returns a copy of the metadata that will be published. HandoffPath is
-// intentionally empty until Stage assigns the final run-owned snapshot path.
+// Sealed returns a copy of the metadata that will be published.
 func (p *Prepared) Sealed() Sealed {
 	if p == nil {
 		return Sealed{}
@@ -283,23 +272,16 @@ func (p *Prepared) Sealed() Sealed {
 	return sealed
 }
 
-// Discard removes the unpublished snapshot. It is safe to call repeatedly and
-// does nothing after successful publication.
+// Discard marks an unpublished route unavailable. It is safe to call repeatedly.
 func (p *Prepared) Discard() error {
-	if p == nil || p.discarded || p.temporaryPath == "" {
+	if p == nil || p.discarded || p.published {
 		return nil
 	}
-	err := os.Remove(p.temporaryPath)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("discard temporary handoff snapshot: %w", err)
-	}
 	p.discarded = true
-	p.temporaryPath = ""
 	return nil
 }
 
-// Validate resolves and validates a route request, then copies the handoff from
-// the same validated open handle into an unpublished temporary snapshot.
+// Validate resolves and validates a route request, including the prompt handoff.
 func Validate(opts *ValidateOptions) (*Prepared, error) {
 	if opts == nil {
 		return nil, validationFailure(ViolationConfiguration, errors.New("route validation options are required"), "", "", "")
@@ -319,9 +301,6 @@ func Validate(opts *ValidateOptions) (*Prepared, error) {
 	if opts.Catalog == nil {
 		return nil, validationFailure(ViolationConfiguration, errors.New("route workflow catalog is required"), request.Workflow, "", "")
 	}
-	if strings.TrimSpace(opts.HandoffPath) == "" {
-		return nil, validationFailure(ViolationConfiguration, errors.New("runner-owned handoff path is required"), request.Workflow, "", "")
-	}
 	entry, err := opts.Catalog.ResolveWorkflow(request.Workflow)
 	if err != nil {
 		if errors.Is(err, ErrWorkflowNotFound) {
@@ -338,9 +317,11 @@ func Validate(opts *ValidateOptions) (*Prepared, error) {
 	if err := validateParams(&entry, request.Params); err != nil {
 		return nil, validationFailure(ViolationParameter, err, entry.CanonicalName, "", "")
 	}
-	temporaryPath, err := snapshotHandoff(runDir, opts.HandoffPath)
-	if err != nil {
-		return nil, validationFailure(ViolationHandoff, err, entry.CanonicalName, "", opts.HandoffPath)
+	if strings.TrimSpace(request.Handoff) == "" {
+		return nil, validationFailure(ViolationHandoff, errors.New("route handoff is required"), entry.CanonicalName, "", "")
+	}
+	if len(request.Handoff) > MaxHandoffBytes {
+		return nil, validationFailure(ViolationHandoff, fmt.Errorf("route handoff exceeds %d KiB", MaxHandoffBytes>>10), entry.CanonicalName, "", "")
 	}
 	now := time.Now
 	if opts.Now != nil {
@@ -353,9 +334,9 @@ func Validate(opts *ValidateOptions) (*Prepared, error) {
 			Workflow:    entry.CanonicalName,
 			SourceRef:   entry.SourcePath,
 			Params:      cloneParams(request.Params),
+			Handoff:     request.Handoff,
 			StagedAt:    now().UTC().Format(time.RFC3339Nano),
 		},
-		temporaryPath: temporaryPath,
 	}, nil
 }
 
@@ -440,8 +421,11 @@ func ValidateLaunchSealed(sealed *Sealed) error {
 	if sealed.Params == nil {
 		return errors.New("intake route parameters are required")
 	}
-	if strings.TrimSpace(sealed.HandoffPath) == "" {
-		return errors.New("intake route handoff path is required")
+	if strings.TrimSpace(sealed.Handoff) == "" {
+		return errors.New("intake route handoff is required")
+	}
+	if len(sealed.Handoff) > MaxHandoffBytes {
+		return fmt.Errorf("intake route handoff exceeds %d KiB", MaxHandoffBytes>>10)
 	}
 	if strings.TrimSpace(sealed.StagedAt) == "" || strings.TrimSpace(sealed.FrozenAt) == "" {
 		return errors.New("intake route staging and freeze timestamps are required")
@@ -466,48 +450,27 @@ func (s *Store) Stage(prepared *Prepared) (err error) {
 		if current.State == Frozen {
 			return ErrFrozen
 		}
-		if current.State == Staged && current.HandoffPath == prepared.sealed.HandoffPath {
+		if current.State == Staged && current.StagedAt == prepared.sealed.StagedAt {
 			return nil
 		}
 		return errors.New("prepared intake route was published by a different store")
 	}
-	if prepared.discarded || prepared.temporaryPath == "" {
+	if prepared.discarded {
 		return errors.New("prepared intake route is no longer available")
 	}
-	defer func() {
-		if err != nil {
-			_ = prepared.Discard()
-		}
-	}()
-	var previous *Sealed
 	if current, loadErr := s.Load(); loadErr == nil {
 		if current.State == Frozen {
 			return ErrFrozen
 		}
-		previous = current
 	} else if !os.IsNotExist(loadErr) {
 		return fmt.Errorf("load current intake route: %w", loadErr)
 	}
-
-	finalPath, err := snapshotPath(filepath.Dir(s.path))
-	if err != nil {
-		return err
-	}
-	if err := os.Rename(prepared.temporaryPath, finalPath); err != nil {
-		return fmt.Errorf("publish handoff snapshot: %w", err)
-	}
-	prepared.temporaryPath = ""
-	prepared.sealed.HandoffPath = finalPath
 	prepared.sealed.Params = cloneParams(prepared.sealed.Params)
 	if err := stateio.WriteJSONAtomic(s.path, &prepared.sealed); err != nil {
-		_ = os.Remove(finalPath)
 		return fmt.Errorf("write intake route sidecar: %w", err)
 	}
 	prepared.discarded = true
 	prepared.published = true
-	if previous != nil && previous.HandoffPath != finalPath {
-		removeOwnedSnapshot(filepath.Dir(s.path), previous.HandoffPath)
-	}
 	return nil
 }
 
@@ -654,79 +617,6 @@ func validateParams(entry *discovery.WorkflowEntry, supplied map[string]string) 
 	return nil
 }
 
-// snapshotHandoff copies the runner-owned handoff as it stands right now, so
-// the sealed route keeps the text the user agreed to even if the file is
-// rewritten afterwards. handoffPath comes from the runner, never from the
-// request, which is why there is nothing here to contain or cross-check.
-func snapshotHandoff(runDir, handoffPath string) (string, error) {
-	resolved, err := filepath.Abs(handoffPath)
-	if err != nil {
-		return "", fmt.Errorf("resolve runner-owned handoff: %w", err)
-	}
-	resolved, err = filepath.EvalSymlinks(resolved)
-	if err != nil {
-		return "", fmt.Errorf("open handoff: %w", err)
-	}
-	input, err := os.Open(resolved) // #nosec G304 -- runner-owned handoff path, not agent-supplied.
-	if err != nil {
-		return "", fmt.Errorf("open handoff: %w", err)
-	}
-	defer func() { _ = input.Close() }()
-	info, err := input.Stat()
-	if err != nil {
-		return "", fmt.Errorf("stat handoff: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return "", errors.New("handoff must be a regular file")
-	}
-	if info.Size() == 0 {
-		return "", errors.New("handoff is empty")
-	}
-	if info.Size() > MaxHandoffBytes {
-		return "", errors.New("handoff exceeds 1 MiB")
-	}
-	temporary, err := os.CreateTemp(runDir, ".intake-route-*.tmp")
-	if err != nil {
-		return "", fmt.Errorf("create temporary handoff snapshot: %w", err)
-	}
-	temporaryPath := temporary.Name()
-	if err := temporary.Chmod(0o600); err != nil {
-		_ = temporary.Close()
-		_ = os.Remove(temporaryPath)
-		return "", fmt.Errorf("secure temporary handoff snapshot: %w", err)
-	}
-	written, err := io.Copy(temporary, io.LimitReader(input, MaxHandoffBytes+1))
-	if err != nil || written > MaxHandoffBytes {
-		_ = temporary.Close()
-		_ = os.Remove(temporaryPath)
-		if written > MaxHandoffBytes {
-			return "", errors.New("handoff exceeds 1 MiB")
-		}
-		return "", fmt.Errorf("copy handoff snapshot: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		_ = os.Remove(temporaryPath)
-		return "", fmt.Errorf("close temporary handoff snapshot: %w", err)
-	}
-	return temporaryPath, nil
-}
-
-func snapshotPath(runDir string) (string, error) {
-	temporary, err := os.CreateTemp(runDir, "intake-handoff-*.md")
-	if err != nil {
-		return "", fmt.Errorf("reserve handoff snapshot path: %w", err)
-	}
-	path := temporary.Name()
-	if err := temporary.Close(); err != nil {
-		_ = os.Remove(path)
-		return "", fmt.Errorf("reserve handoff snapshot path: %w", err)
-	}
-	if err := os.Remove(path); err != nil {
-		return "", fmt.Errorf("reserve handoff snapshot path: %w", err)
-	}
-	return path, nil
-}
-
 func cloneParams(params map[string]string) map[string]string {
 	cloned := make(map[string]string, len(params))
 	for key, value := range params {
@@ -744,20 +634,4 @@ func validationFailure(code ViolationCode, cause error, workflow, parameter, pat
 		Path:      path,
 		Err:       cause,
 	}
-}
-
-func removeOwnedSnapshot(runDir, snapshot string) {
-	runDir, err := filepath.Abs(runDir)
-	if err != nil {
-		return
-	}
-	snapshot, err = filepath.Abs(snapshot)
-	if err != nil || filepath.Dir(snapshot) != filepath.Clean(runDir) {
-		return
-	}
-	base := filepath.Base(snapshot)
-	if !strings.HasPrefix(base, "intake-handoff-") || !strings.HasSuffix(base, ".md") {
-		return
-	}
-	_ = os.Remove(snapshot)
 }

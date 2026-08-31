@@ -1,4 +1,3 @@
-active_profile: smoke_test
 profiles:
   smoke_test:
     extends: default

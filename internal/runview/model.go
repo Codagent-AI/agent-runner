@@ -108,10 +108,14 @@ type Model struct {
 	resolverCfg     ResolverConfig
 	startTime       time.Time
 	recordedVersion string
+	profileSet      string
 	workflowEntry   discovery.WorkflowEntry // set when entered == FromDefinition
 
 	// Live-run fields (FromLiveRun mode only).
 	running          bool   // true until ExecDoneMsg arrives
+	suspended        bool   // true while an interactive step owns the terminal
+	pulseStopped     bool   // true when suspension consumed the scheduled pulse tick
+	refreshStopped   bool   // true when suspension consumed the scheduled refresh tick
 	quitConfirming   bool   // quit-confirmation modal is visible
 	liveResult       string // set on ExecDoneMsg ("success"/"failed"/"stopped")
 	followActive     bool   // execution may move selection to the active leaf
@@ -216,6 +220,7 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	if entered == FromList || entered == FromInspect {
 		m.recordedVersion = recordedWorkflowVersion(state.WorkflowFile)
 	}
+	m.profileSet = state.ProfileSet
 
 	if entered != FromLiveRun {
 		m.active = runlock.Check(sessionDir) == runlock.LockActive
@@ -256,9 +261,6 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	}
 	for _, e := range events {
 		tree.ApplyEvent(e)
-	}
-	if entered != FromLiveRun && tree.MetricsCaptured && tree.Root.Status != StatusFailed && (state.Completed || tree.Root.Status == StatusSuccess) {
-		m.showSummary = true
 	}
 	failedHistoricalRun = failedHistoricalRun || entered != FromLiveRun && findFailedLeaf(tree.Root) != nil
 	current := m.applyCurrentStepState(&state, !failedHistoricalRun)
@@ -593,10 +595,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case liverun.ResumedMsg:
-		// BubbleTea's RestoreTerminal does not re-enable mouse mode after
-		// ReleaseTerminal disables it, so we re-enable it explicitly.
-		m.handleResumedMsg()
-		return m, tea.EnableMouseCellMotion
+		cmd := m.handleResumedMsg()
+		return m, cmd
 
 	case ResumeMsg:
 		// Top-level live-run model: no switcher intercepts this, so stash the
@@ -678,6 +678,7 @@ func (m *Model) handleShowTUIMsg() (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleSuspendedMsg() {
+	m.suspended = true
 	// Terminal ownership is not an input gesture. In particular, it cannot
 	// re-enable follow after the user deliberately paused exploration.
 	m.rebuildDetail()
@@ -686,21 +687,36 @@ func (m *Model) handleSuspendedMsg() {
 	}
 }
 
-func (m *Model) handleResumedMsg() {
-	if !m.hasLiveUpdates() {
-		return
+func (m *Model) handleResumedMsg() tea.Cmd {
+	m.suspended = false
+	if m.hasLiveUpdates() {
+		selectedBefore := m.selectedNode()
+		previousLineCount := m.detailLineCount
+		m.refreshData()
+		if m.followActive {
+			m.applyAutoFollowCursor()
+		}
+		lineCount := m.rebuildDetail()
+		if m.shouldFollowTail() && (m.selectedNode() != selectedBefore || lineCount != previousLineCount) {
+			m.scrollSelectedDetailToTail()
+		}
+		m.clampDetailOffset(lineCount)
 	}
-	selectedBefore := m.selectedNode()
-	previousLineCount := m.detailLineCount
-	m.refreshData()
-	if m.followActive {
-		m.applyAutoFollowCursor()
+	// BubbleTea's RestoreTerminal does not re-enable mouse mode after
+	// ReleaseTerminal disables it, so we re-enable it explicitly.
+	cmds := []tea.Cmd{tea.EnableMouseCellMotion}
+	if m.pulseStopped && m.hasLiveUpdates() {
+		cmds = append(cmds, tuistyle.DoPulse())
 	}
-	lineCount := m.rebuildDetail()
-	if m.shouldFollowTail() && (m.selectedNode() != selectedBefore || lineCount != previousLineCount) {
-		m.scrollSelectedDetailToTail()
+	if m.refreshStopped && m.hasLiveUpdates() {
+		cmds = append(cmds, tuistyle.DoRefresh())
 	}
-	m.clampDetailOffset(lineCount)
+	m.pulseStopped = false
+	m.refreshStopped = false
+	if len(cmds) == 1 {
+		return cmds[0]
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) handleLiveUIKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -855,7 +871,14 @@ func (m *Model) handleExecDoneMsg(msg liverun.ExecDoneMsg) {
 			m.navigateToNode(failed)
 		}
 	case "success":
-		m.showSummary = true
+		// Land on the final top-level step so the user sees the workflow's
+		// end state. Loop iterations and other deep leaves emit StepStateMsg
+		// before their tree nodes exist (audit replay runs lazily), so cursor
+		// often gets stuck on the last step whose node was already in the tree
+		// — not the actual last step that ran.
+		if last := lastTopLevelChild(m.tree.Root); last != nil {
+			m.navigateToNode(last)
+		}
 	}
 	// Terminal detail is historical inspection: live updates may no longer
 	// change a user's selection or detail viewport.
@@ -892,6 +915,10 @@ func (m *Model) handleMouse(msg tea.MouseMsg) {
 }
 
 func (m *Model) handleRefreshMsg() tea.Cmd {
+	if m.suspended {
+		m.refreshStopped = true
+		return nil
+	}
 	// FromLiveRun leaves m.active=false because no runlock is held, but the
 	// in-process runner is still emitting audit events we need to pick up so
 	// step statuses stay current.
@@ -927,6 +954,10 @@ func (m *Model) shouldFollowSelectedTail(prefix string) bool {
 }
 
 func (m *Model) handlePulseMsg() tea.Cmd {
+	if m.suspended {
+		m.pulseStopped = true
+		return nil
+	}
 	if !m.hasLiveUpdates() {
 		return nil
 	}
@@ -936,13 +967,14 @@ func (m *Model) handlePulseMsg() tea.Cmd {
 
 // canResumeRun reports whether the `r` resume-run action is available.
 // True only when the run is inactive (interrupted, not active elsewhere, not
-// a just-finished live run, and not in a terminal completed/failed state).
+// a just-finished live run, and not successfully completed). Failed runs retain
+// resumable workflow state and may be continued from their failed step.
 // Always false in FromDefinition mode (r emits StartRunMsg instead).
 func (m *Model) canResumeRun() bool {
 	return m.entered != FromDefinition &&
 		m.sessionDir != "" &&
 		!m.running && !m.active && m.liveResult == "" &&
-		m.rootStatus() != StatusFailed && m.rootStatus() != StatusSuccess
+		m.rootStatus() != StatusSuccess
 }
 
 func (m *Model) canLaunchDebug() bool {
@@ -1068,6 +1100,13 @@ func (m *Model) handleOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 // message switch within funlen limits.
 func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" {
+		if m.entered == FromLiveRun && m.running && m.suspended {
+			// An interactive child owns Ctrl-C while it has the terminal. Ignore
+			// any copy of the key Bubble Tea read during a release/restore race so
+			// it cannot tear down the supervising runner behind that child.
+			m.quitConfirming = false
+			return m, nil
+		}
 		m.exitRequested = true
 		return m, tea.Quit
 	}
@@ -1806,6 +1845,16 @@ func (m *Model) navigateToNode(target *StepNode) {
 	m.detailOffset = 0
 }
 
+// lastTopLevelChild returns the final direct child of root, or nil when root
+// has no children. Successful live runs use it to focus the final workflow
+// step without opening the optional summary screen.
+func lastTopLevelChild(root *StepNode) *StepNode {
+	if root == nil || len(root.Children) == 0 {
+		return nil
+	}
+	return root.Children[len(root.Children)-1]
+}
+
 // findFailedLeaf returns the deepest non-container StepNode with StatusFailed.
 // Equal-depth failures use durable terminal-event order when both candidates
 // have it, otherwise traversal preserves workflow order.
@@ -1818,6 +1867,13 @@ func findFailedLeaf(n *StepNode) *StepNode {
 	var visit func(*StepNode, int)
 	visit = func(node *StepNode, depth int) {
 		if node == nil {
+			return
+		}
+		// A container's terminal success or skip supersedes failures retained
+		// beneath it for attempt history. Those descendants remain inspectable,
+		// but they are not candidates for the run's current failure focus.
+		if node != n && node.IsContainer() &&
+			(node.Status == StatusSuccess || node.Status == StatusSkipped) {
 			return
 		}
 		for _, child := range node.Children {

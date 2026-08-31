@@ -148,3 +148,25 @@ func TestFindFailedLeafPrefersLatestDurableErrorAtEqualDepth(t *testing.T) {
 		t.Fatalf("equal-depth failed leaf = %v, want latest durable error %v", got, latest)
 	}
 }
+
+func TestFindFailedLeafIgnoresSupersededFailureUnderSuccessfulContainer(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusFailed}
+	implement := &StepNode{ID: "implement", Type: NodeSubWorkflow, Status: StatusSuccess, Parent: root}
+	validator := &StepNode{ID: "run-validator", Type: NodeSubWorkflow, Status: StatusSuccess, Parent: implement}
+	retry := &StepNode{ID: "validator-retry", Type: NodeLoop, Status: StatusSuccess, Parent: validator}
+	failedAttempt := &StepNode{ID: "iter-1", Type: NodeIteration, Status: StatusFailed, Parent: retry}
+	oldFailure := &StepNode{ID: "run-validator", Type: NodeShell, Status: StatusFailed, Parent: failedAttempt}
+	failedAttempt.Children = []*StepNode{oldFailure}
+	retry.Children = []*StepNode{failedAttempt}
+	validator.Children = []*StepNode{retry}
+	implement.Children = []*StepNode{validator}
+
+	accept := &StepNode{ID: "accept", Type: NodeSubWorkflow, Status: StatusFailed, Parent: root}
+	gate := &StepNode{ID: "reacceptance-gate", Type: NodeShell, Status: StatusFailed, Parent: accept}
+	accept.Children = []*StepNode{gate}
+	root.Children = []*StepNode{implement, accept}
+
+	if got := findFailedLeaf(root); got != gate {
+		t.Fatalf("failed leaf = %v, want current failed gate %v", got, gate)
+	}
+}

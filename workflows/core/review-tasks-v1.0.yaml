@@ -27,7 +27,7 @@ steps:
       Follow codagent:call-agent's verification and autonomous result-accounting rules. Evaluate each finding against the approved artifacts, current task files, and repository:
       - Fix valid task-plan issues, including missing coverage, incorrect fidelity, poor task boundaries, ordering or dependency problems, missing self-contained context, and inadequate done criteria.
       - Decline findings that are demonstrably incorrect, subjective, or outside task-plan scope. Never edit the approved proposal, specifications, or design in this step.
-      - If a finding exposes an upstream definition concern, treat it as out of scope for task review rather than a planning blocker. Do not guess a new decision or emit `PLANNING_BLOCKED`.
+      - If a finding exposes an upstream definition concern, treat it as out of scope for task review rather than a task-plan defect. Do not guess a new decision.
 
       After material task-plan corrections, you may use codagent:call-agent once more with a fresh `agent: crosscheck` to verify the current task files against the same immutable definition. Use at most two crosscheck calls total. Fix any valid task-only issue from the verification response yourself; do not create another crosscheck loop.
 

@@ -74,7 +74,7 @@ steps:
 
 	ctx, cancel := context.WithTimeout(context.Background(), realAgentTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, runnerBin, "--headless", workflowName)
+	cmd := exec.CommandContext(ctx, runnerBin, "--headless", "--profile", "smoke_test", workflowName)
 	cmd.Dir = workdir
 	cmd.Env = realAgentTestEnv(false)
 	output, err := cmd.CombinedOutput()
@@ -143,7 +143,7 @@ steps:
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, runnerBin, "--headless", workflowName)
+	cmd := exec.CommandContext(ctx, runnerBin, "--headless", "--profile", "smoke_test", workflowName)
 	cmd.Dir = workdir
 	cmd.Env = realAgentTestEnv(false)
 	output, err := cmd.CombinedOutput()
@@ -399,7 +399,7 @@ func TestDurabilityTimeoutResumeUsesFreshCredentialE2E(t *testing.T) {
 		durabilityRetryFixtureEnv+"=1",
 	)
 
-	first := exec.Command(runnerBin, "--headless", workflowName)
+	first := exec.Command(runnerBin, "--headless", "--profile", "smoke_test", workflowName)
 	first.Dir = workdir
 	first.Env = env
 	firstOutput, firstErr := runCommandInPTY(first, 45*time.Second)
@@ -415,7 +415,7 @@ func TestDurabilityTimeoutResumeUsesFreshCredentialE2E(t *testing.T) {
 	if !strings.Contains(string(auditData), "durability_failure") {
 		t.Fatalf("first attempt did not record a durability timeout:\n%s", auditData)
 	}
-	resumed := exec.Command(runnerBin, "--headless", "--resume", filepath.Base(sessionDir))
+	resumed := exec.Command(runnerBin, "--headless", "--profile", "smoke_test", "--resume", filepath.Base(sessionDir))
 	resumed.Dir = workdir
 	resumed.Env = env
 	resumedOutput, resumedErr := runCommandInPTY(resumed, 30*time.Second)
@@ -463,7 +463,7 @@ steps:
 
 	ctx, cancel := context.WithTimeout(context.Background(), realAgentTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, runnerBin, "--headless", workflowName)
+	cmd := exec.CommandContext(ctx, runnerBin, "--headless", "--profile", "smoke_test", workflowName)
 	cmd.Dir = workdir
 	cmd.Env = realAgentTestEnv(false)
 	output, err := cmd.CombinedOutput()
@@ -523,7 +523,7 @@ steps:
 	writeRealAgentCatalogWorkflow(t, workdir, workflowName, []byte(workflow))
 	cleanupNewRealAgentRuns(t, workdir, workflowName)
 
-	cmd := exec.Command(runnerBin, "--headless", workflowName)
+	cmd := exec.Command(runnerBin, "--headless", "--profile", "smoke_test", workflowName)
 	cmd.Dir = workdir
 	cmd.Env = realAgentTestEnv(true)
 	result, err := runRealAgentWorkflowInPTY(cmd, agent, phases, realAgentTimeout)

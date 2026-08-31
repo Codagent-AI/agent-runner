@@ -191,6 +191,12 @@ type acceptedCompletion struct {
 	delivered bool
 }
 
+type pendingRouteSubmission struct {
+	ready    chan struct{}
+	response controlResponse
+	waiters  int
+}
+
 // ControlServer owns one Unix socket for a workflow run and rotates its active
 // credential for each runner-integrated agent attempt.
 type ControlServer struct {
@@ -202,16 +208,17 @@ type ControlServer struct {
 	logger      audit.EventLogger
 	now         func() time.Time
 
-	mu          sync.Mutex
-	active      *attemptState
-	accepted    map[string]*acceptedCompletion
-	routes      map[string]controlResponse
-	committed   map[string]struct{}
-	turnWaiters map[string]map[uint64]chan struct{}
-	nextWaiter  uint64
-	completions chan CompletionRequest
-	turns       chan CommittedTurn
-	done        chan struct{}
+	mu           sync.Mutex
+	active       *attemptState
+	accepted     map[string]*acceptedCompletion
+	routes       map[string]controlResponse
+	routePending map[string]*pendingRouteSubmission
+	committed    map[string]struct{}
+	turnWaiters  map[string]map[uint64]chan struct{}
+	nextWaiter   uint64
+	completions  chan CompletionRequest
+	turns        chan CommittedTurn
+	done         chan struct{}
 
 	closeOnce sync.Once
 	closeErr  error
@@ -280,20 +287,21 @@ func NewControlServer(config *ControlConfig) (*ControlServer, error) {
 		now = time.Now
 	}
 	server := &ControlServer{
-		runID:       config.RunID,
-		runDir:      config.RunDir,
-		socketPath:  socketPath,
-		pointerPath: pointerPath,
-		listener:    listener,
-		logger:      config.Logger,
-		now:         now,
-		accepted:    make(map[string]*acceptedCompletion),
-		routes:      make(map[string]controlResponse),
-		committed:   make(map[string]struct{}),
-		turnWaiters: make(map[string]map[uint64]chan struct{}),
-		completions: make(chan CompletionRequest, 1),
-		turns:       make(chan CommittedTurn, 1),
-		done:        make(chan struct{}),
+		runID:        config.RunID,
+		runDir:       config.RunDir,
+		socketPath:   socketPath,
+		pointerPath:  pointerPath,
+		listener:     listener,
+		logger:       config.Logger,
+		now:          now,
+		accepted:     make(map[string]*acceptedCompletion),
+		routes:       make(map[string]controlResponse),
+		routePending: make(map[string]*pendingRouteSubmission),
+		committed:    make(map[string]struct{}),
+		turnWaiters:  make(map[string]map[uint64]chan struct{}),
+		completions:  make(chan CompletionRequest, 1),
+		turns:        make(chan CommittedTurn, 1),
+		done:         make(chan struct{}),
 	}
 	server.wg.Add(1)
 	go server.acceptLoop()
@@ -447,6 +455,18 @@ func (s *ControlServer) handleConnection(connection net.Conn) {
 		s.reject(connection, err.Error(), &request)
 		return
 	}
+	var pendingRoute *pendingRouteSubmission
+	if request.Type == MessageSubmitRoute {
+		if pending, ok := s.routePending[cacheKey]; ok {
+			pending.waiters++
+			s.mu.Unlock()
+			<-pending.ready
+			_ = writeControlResponse(connection, pending.response)
+			return
+		}
+		pendingRoute = &pendingRouteSubmission{ready: make(chan struct{})}
+		s.routePending[cacheKey] = pendingRoute
+	}
 
 	switch request.Type {
 	case MessageCompleteStep:
@@ -456,7 +476,7 @@ func (s *ControlServer) handleConnection(connection net.Conn) {
 	case MessageAgentCall:
 		s.handleAgentCall(connection, &request, active)
 	case MessageSubmitRoute:
-		s.handleRouteSubmission(connection, &request, active, cacheKey)
+		s.handleRouteSubmission(connection, &request, active, cacheKey, pendingRoute)
 	}
 }
 
@@ -464,10 +484,10 @@ func (s *ControlServer) handleConnection(connection net.Conn) {
 // mutex. Publication then rechecks eligibility while holding that same mutex
 // used for completion acceptance, so a prepared route cannot land after
 // completion has frozen the sidecar.
-func (s *ControlServer) handleRouteSubmission(connection net.Conn, request *controlRequest, active *attemptState, cacheKey string) {
+func (s *ControlServer) handleRouteSubmission(connection net.Conn, request *controlRequest, active *attemptState, cacheKey string, pending *pendingRouteSubmission) {
 	if !active.routeEligible || active.routeStore == nil || active.routeValidation == nil {
 		s.mu.Unlock()
-		s.reject(connection, "route submission is unavailable for the active step", request)
+		s.rejectRouteSubmission(connection, "route submission is unavailable for the active step", request, cacheKey, pending)
 		return
 	}
 	validation := *active.routeValidation
@@ -477,38 +497,50 @@ func (s *ControlServer) handleRouteSubmission(connection net.Conn, request *cont
 	s.emit(audit.EventRouteSubmitted, request.StepID, map[string]any{"request_id": request.RequestID, "attempt_id": active.ID})
 	prepared, err := intakeroute.Validate(&validation)
 	if err != nil {
-		s.reject(connection, err.Error(), request)
+		s.rejectRouteSubmission(connection, err.Error(), request, cacheKey, pending)
 		return
 	}
-	// Stage takes ownership only on success. Keep every failed publication and
-	// lost ordering race from retaining its temporary handoff snapshot.
+	// Stage takes ownership only on success.
 	defer func() { _ = prepared.Discard() }()
 
 	s.mu.Lock()
 	if active != s.active || !active.routeEligible || active.completionAccepted {
 		s.mu.Unlock()
 		_ = prepared.Discard()
-		s.reject(connection, "route is already frozen after completion acceptance", request)
+		s.rejectRouteSubmission(connection, "route is already frozen after completion acceptance", request, cacheKey, pending)
 		return
 	}
 	if err := store.Stage(prepared); err != nil {
 		s.mu.Unlock()
 		if errors.Is(err, intakeroute.ErrFrozen) {
-			s.reject(connection, "route is already frozen", request)
+			s.rejectRouteSubmission(connection, "route is already frozen", request, cacheKey, pending)
 			return
 		}
-		s.reject(connection, err.Error(), request)
+		s.rejectRouteSubmission(connection, err.Error(), request, cacheKey, pending)
 		return
 	}
 	response := controlResponse{OK: true, Receipt: request.RequestID}
 	s.routes[cacheKey] = response
+	pending.response = response
+	delete(s.routePending, cacheKey)
+	close(pending.ready)
 	sealed := prepared.Sealed()
 	s.mu.Unlock()
 	s.emit(audit.EventRouteAccepted, request.StepID, map[string]any{
 		"request_id": request.RequestID, "attempt_id": active.ID, "workflow": sealed.Workflow,
-		"source_ref": sealed.SourceRef, "params": sealed.Params, "handoff_path": sealed.HandoffPath,
+		"source_ref": sealed.SourceRef, "params": sealed.Params, "handoff_bytes": len(sealed.Handoff),
 	})
 	_ = writeControlResponse(connection, response)
+}
+
+func (s *ControlServer) rejectRouteSubmission(connection net.Conn, reason string, request *controlRequest, cacheKey string, pending *pendingRouteSubmission) {
+	response := controlResponse{OK: false, Error: reason}
+	s.mu.Lock()
+	pending.response = response
+	delete(s.routePending, cacheKey)
+	close(pending.ready)
+	s.mu.Unlock()
+	s.reject(connection, reason, request)
 }
 
 func (s *ControlServer) handleAgentCall(connection net.Conn, request *controlRequest, active *attemptState) {

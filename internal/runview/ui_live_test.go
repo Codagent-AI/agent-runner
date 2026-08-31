@@ -131,8 +131,8 @@ uiForwarded:
 	if err := coordinator.NotifyDone("success", nil); err != nil {
 		t.Fatalf("NotifyDone success: %v", err)
 	}
-	if !program.model.showSummary {
-		t.Fatal("successful coordinator completion should retain the summary")
+	if program.model.showSummary {
+		t.Fatal("successful coordinator completion should retain the detailed view")
 	}
 
 	failedRoot := &StepNode{ID: "failed-workflow", Type: NodeRoot, Status: StatusInProgress}

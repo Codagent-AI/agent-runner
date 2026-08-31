@@ -46,8 +46,8 @@ const (
 	RunnerToolSubmitRoute RunnerTool = "submit_route"
 )
 
-// IntakeHandoffVar is the built-in template variable carrying the sealed intake
-// handoff path. Unlike other built-ins it is reserved: params and every capture
+// IntakeHandoffVar is the built-in template variable carrying sealed intake
+// handoff text. Unlike other built-ins it is reserved: params and every capture
 // sink reject it, so the sealed path cannot be shadowed. Reservation checks and
 // the built-in itself share this name rather than repeating the literal.
 const IntakeHandoffVar = "intake_handoff"
@@ -183,6 +183,9 @@ type Step struct {
 	Inputs            []UIInput         `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 	OutcomeCapture    string            `yaml:"outcome_capture,omitempty" json:"outcome_capture,omitempty"`
 	Tools             RunnerTools       `yaml:"tools,omitempty" json:"tools,omitempty"`
+	// MetricsSource declares that a shell step launches a tool which may invoke
+	// nested models and will write the Runner structured metrics handoff.
+	MetricsSource string `yaml:"metrics_source,omitempty" json:"metrics_source,omitempty"`
 }
 
 // HasTool reports whether the step enables a Runner-owned tool.
@@ -389,6 +392,14 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 
 	if err := s.validateTools(isAgent); err != nil {
 		return err
+	}
+	if s.MetricsSource != "" {
+		if !isShell {
+			return fmt.Errorf(`"metrics_source" is only allowed on shell steps`)
+		}
+		if s.MetricsSource != "agent-validator" {
+			return fmt.Errorf(`unknown metrics_source %q`, s.MetricsSource)
+		}
 	}
 
 	if isAgent && s.Prompt == "" {

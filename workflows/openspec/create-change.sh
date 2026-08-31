@@ -5,6 +5,11 @@ payload=$(cat)
 script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 change_name=$(printf '%s' "$payload" | "$script_dir/validate-change-name.sh")
 
+if ! command -v agent-validator >/dev/null 2>&1; then
+  printf 'create-change: agent-validator is not installed; install it before creating a change\n' >&2
+  exit 127
+fi
+
 set +e
 agent-validator detect
 status=$?

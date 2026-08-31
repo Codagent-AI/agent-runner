@@ -5,12 +5,14 @@ hidden: true
 params:
   - name: change_name
     required: true
+  - name: change_dir
+    required: true
 
 steps:
   - id: plan
     workflow: ../core/plan-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
-      change_dir: "specs/changes/{{change_name}}"
+      change_dir: "{{change_dir}}"
       change_label: "spec-driven change"
-      definition_validation_checklist: "{{session_dir}}/bundled/spec-driven/definition-validation-checklist.md"
+      change_kind: "spec-driven"

@@ -2,7 +2,7 @@
 
 ### Requirement: Intake provenance survives resume
 
-Resuming a run SHALL restore the intake provenance the run was created with. A run launched from intake SHALL resume with its intake parent run ID and its sealed handoff path intact. A run invoked directly SHALL resume with no intake provenance. Resume SHALL NOT infer, re-derive, or discard provenance based on how the resume itself was invoked.
+Resuming a run SHALL restore the intake provenance the run was created with. A run launched from intake SHALL resume with its intake parent run ID and sealed handoff contents intact. A run invoked directly SHALL resume with no intake provenance. Resume SHALL NOT infer, re-derive, or discard provenance based on how the resume itself was invoked.
 
 #### Scenario: Resumed intake-launched run restores its handoff
 - **WHEN** a run launched from intake is interrupted and resumed with `--resume <id>`

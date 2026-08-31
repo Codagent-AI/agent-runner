@@ -15,6 +15,7 @@ const (
 	EventSubWorkflowEnd         EventType = "sub_workflow_end"
 	EventAgentCallStart         EventType = "agent_call_start"
 	EventAgentCallEnd           EventType = "agent_call_end"
+	EventNestedAgentEnd         EventType = "nested_agent_end"
 	EventWarning                EventType = "warning"
 	EventError                  EventType = "error"
 	EventCompletionRequested    EventType = "completion_requested"
@@ -30,6 +31,7 @@ const (
 	EventRouteFrozen            EventType = "route_frozen"
 	EventRouteLaunchAttempted   EventType = "route_launch_attempted"
 	EventRouteLaunchFailed      EventType = "route_launch_failed"
+	EventPullRequestRecorded    EventType = "pull_request_recorded"
 )
 
 // Event is a single audit log entry.

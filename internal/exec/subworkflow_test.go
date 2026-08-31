@@ -5,11 +5,19 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 )
+
+func TestAuditTimestampPreservesSubsecondPrecision(t *testing.T) {
+	at := time.Date(2026, time.August, 29, 20, 46, 3, 456789123, time.FixedZone("test", -4*60*60))
+	if got, want := formatAuditTimestamp(at), "2026-08-30T00:46:03.456789123Z"; got != want {
+		t.Fatalf("formatAuditTimestamp() = %q, want %q", got, want)
+	}
+}
 
 func TestExecuteSubWorkflowStep(t *testing.T) {
 	t.Run("executes child workflow steps", func(t *testing.T) {
@@ -382,6 +390,52 @@ steps:
 	}
 }
 
+func TestExecuteSubWorkflowStep_ResumeErrorIsAudited(t *testing.T) {
+	dir := t.TempDir()
+	childPath := filepath.Join(dir, "child-v1.0.yaml")
+	childYAML := `name: child
+steps:
+  - id: create
+    command: echo create
+  - id: define
+    command: echo define
+`
+	if err := os.WriteFile(childPath, []byte(childYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := &mockAuditLogger{}
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		Params:       map[string]string{},
+		WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"),
+		AuditLogger:  recorder,
+	})
+	ctx.ResumeChildState = &model.NestedStepState{StepID: "proposal"}
+
+	outcome, err := ExecuteSubWorkflowStep(
+		&model.Step{ID: "define", Workflow: "child-v1.0.yaml"},
+		ctx,
+		&mockRunner{},
+		&mockGlob{},
+		&mockLogger{},
+	)
+	if err == nil || outcome != OutcomeFailed {
+		t.Fatalf("ExecuteSubWorkflowStep = %q, %v; want failed resume error", outcome, err)
+	}
+
+	for _, event := range recorder.events {
+		if event.Type != audit.EventSubWorkflowEnd {
+			continue
+		}
+		got, _ := event.Data["error"].(string)
+		if !strings.Contains(got, `resume step "proposal" not found`) {
+			t.Fatalf("sub_workflow_end error = %q, want resume error", got)
+		}
+		return
+	}
+	t.Fatal("sub_workflow_end audit event not found")
+}
+
 func TestExecuteSubWorkflowStep_LoadsPinnedChildVersion(t *testing.T) {
 	dir := t.TempDir()
 	for filename, command := range map[string]string{
@@ -501,7 +555,32 @@ func TestSubWorkflowState_PreservesLastSessionStepID(t *testing.T) {
 	}
 }
 
-func TestExecuteSubWorkflowStep_PreservesExhaustedLoopResumeState(t *testing.T) {
+func TestRecordChildProgressPreservesSameIDSubWorkflowNesting(t *testing.T) {
+	parent := model.NewRootContext(&model.RootContextOptions{Params: map[string]string{}})
+	child := model.NewSubWorkflowContext(parent, &model.SubWorkflowContextOptions{StepID: "define"})
+	child.LastSubWorkflowChild = &model.NestedStepState{
+		StepID: "define",
+		Child: &model.NestedStepState{
+			StepID:    "proposal",
+			Completed: false,
+		},
+	}
+
+	recordChildProgress(child, "define", false)
+
+	got := parent.LastSubWorkflowChild
+	if got == nil || got.StepID != "define" {
+		t.Fatalf("recorded step = %#v, want define", got)
+	}
+	if got.Child == nil || got.Child.StepID != "define" {
+		t.Fatalf("recorded child = %#v, want define", got.Child)
+	}
+	if got.Child.Child == nil || got.Child.Child.StepID != "proposal" {
+		t.Fatalf("recorded grandchild = %#v, want proposal", got.Child.Child)
+	}
+}
+
+func TestExecuteSubWorkflowStep_RestartsExhaustedRetryLoopOnResume(t *testing.T) {
 	dir := t.TempDir()
 	childYAML := `name: child
 steps:
@@ -531,17 +610,17 @@ steps:
 		Completed: false,
 	}
 
-	runner := &mockRunner{}
+	runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 	step := model.Step{ID: "sub", Workflow: "child-v1.0.yaml"}
 	outcome, err := ExecuteSubWorkflowStep(&step, parent, runner, &mockGlob{}, &mockLogger{})
 	if err != nil {
 		t.Fatalf("ExecuteSubWorkflowStep returned error: %v", err)
 	}
-	if outcome != OutcomeFailed {
-		t.Fatalf("outcome = %q, want %q", outcome, OutcomeFailed)
+	if outcome != OutcomeSuccess {
+		t.Fatalf("outcome = %q, want %q", outcome, OutcomeSuccess)
 	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("expected exhausted resume to run no loop body steps, got %d calls", len(runner.calls))
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected exhausted retry to start a fresh cycle, got %d calls", len(runner.calls))
 	}
 	if parent.LastSubWorkflowChild == nil {
 		t.Fatal("expected sub-workflow progress to be recorded")
@@ -549,11 +628,11 @@ steps:
 	if parent.LastSubWorkflowChild.StepID != "retry" {
 		t.Fatalf("LastSubWorkflowChild.StepID = %q, want retry", parent.LastSubWorkflowChild.StepID)
 	}
-	if parent.LastSubWorkflowChild.Iteration == nil || *parent.LastSubWorkflowChild.Iteration != 3 {
-		t.Fatalf("LastSubWorkflowChild.Iteration = %v, want 3", parent.LastSubWorkflowChild.Iteration)
+	if parent.LastSubWorkflowChild.Iteration == nil || *parent.LastSubWorkflowChild.Iteration != 1 {
+		t.Fatalf("LastSubWorkflowChild.Iteration = %v, want 1", parent.LastSubWorkflowChild.Iteration)
 	}
-	if parent.LastSubWorkflowChild.Completed {
-		t.Fatal("expected exhausted retry loop to remain incomplete")
+	if !parent.LastSubWorkflowChild.Completed {
+		t.Fatal("expected successful resumed retry loop to be complete")
 	}
 }
 

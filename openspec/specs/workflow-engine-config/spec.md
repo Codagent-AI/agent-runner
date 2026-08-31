@@ -1,3 +1,8 @@
+# workflow-engine-config Specification
+
+## Purpose
+Define workflow schema configuration for selecting an engine and routing engine-managed step hooks.
+
 ## Requirements
 
 ### Requirement: Engine block in workflow schema

@@ -23,6 +23,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/control"
 	"github.com/codagent/agent-runner/internal/liverun"
 	"github.com/codagent/agent-runner/internal/stateio"
@@ -67,7 +68,7 @@ func TestInteractiveDirectHandoffWorkflowIntegration(t *testing.T) {
 	writeInteractiveAgentFixtures(t, binDir, []string{"claude"})
 	writeInteractiveDirectHandoffWorkflow(t, filepath.Join(home, ".agent-runner", "workflows"))
 
-	cmd := exec.Command(runnerBin, "--headless", "interactive-direct-handoff-integration")
+	cmd := exec.Command(runnerBin, "--headless", "--profile", "smoke_test", "interactive-direct-handoff-integration")
 	cmd.Dir = repoRoot
 	cmd.Env = smokeCommandEnv(os.Environ(),
 		"AGENT_RUNNER_NO_TUI=1",
@@ -113,7 +114,7 @@ func TestInteractiveDirectHandoffJobControl(t *testing.T) {
 	buildAgentRunner(t, repoRoot, runnerBin)
 	writeInteractiveAgentFixtures(t, binDir, []string{"claude"})
 
-	for _, mode := range []string{"cooperative", "external"} {
+	for _, mode := range []string{"cooperative", "external", "terminal-output"} {
 		t.Run(mode, func(t *testing.T) {
 			home := filepath.Join(tmp, "home-"+mode)
 			writeSmokeProfileConfig(t, home)
@@ -130,7 +131,7 @@ func TestInteractiveDirectHandoffJobControl(t *testing.T) {
 			output := make(chan string, 64)
 			go scanPTYText(ptmx, output)
 			waitForPTYText(t, output, "JOB_SHELL_READY>", 5*time.Second)
-			launch := fmt.Sprintf("AGENT_RUNNER_NO_TUI=1 %s=1 %s=%s %s --headless %s\r",
+			launch := fmt.Sprintf("AGENT_RUNNER_NO_TUI=1 %s=1 %s=%s %s --headless --profile smoke_test %s\r",
 				interactiveFixtureEnv, jobControlFixtureEnv, mode, runnerBin, "interactive-job-control")
 			_, _ = ptmx.WriteString(launch)
 			ready := waitForPTYText(t, output, "JOB_CHILD_READY "+mode+" ", 30*time.Second)
@@ -146,6 +147,30 @@ func TestInteractiveDirectHandoffJobControl(t *testing.T) {
 				if err := unix.Kill(pid, unix.SIGSTOP); err != nil {
 					t.Fatalf("stop child: %v", err)
 				}
+			}
+			if mode == "terminal-output" {
+				if err := unix.Kill(-pid, unix.SIGTTOU); err != nil {
+					t.Fatalf("stop child for terminal output: %v", err)
+				}
+				time.Sleep(250 * time.Millisecond)
+				state, stateErr := exec.Command("ps", "-o", "state=", "-p", strconv.Itoa(pid)).Output()
+				if stateErr != nil || strings.HasPrefix(strings.TrimSpace(string(state)), "T") {
+					// Unstick the fixture before failing so the test never leaves the
+					// same stopped runner/child tree that this regression covers.
+					_, _ = ptmx.WriteString("fg\r")
+					time.Sleep(100 * time.Millisecond)
+					_, _ = ptmx.WriteString("R")
+					waitForPTYText(t, output, "JOB_SHELL_READY>", 15*time.Second)
+					_, _ = ptmx.WriteString("exit\r")
+					_ = command.Wait()
+					t.Fatalf("child state after SIGTTOU = %q, err %v; want automatic recovery", state, stateErr)
+				}
+				_, _ = ptmx.WriteString("R")
+				waitForPTYText(t, output, "JOB_CHILD_RESUMED "+mode, 10*time.Second)
+				waitForPTYText(t, output, "JOB_SHELL_READY>", 15*time.Second)
+				_, _ = ptmx.WriteString("exit\r")
+				_ = command.Wait()
+				return
 			}
 			waitForPTYText(t, output, "suspended", 10*time.Second)
 			if mode == "cooperative" {
@@ -322,7 +347,10 @@ func TestInteractiveTerminalLeaseFixtureProcess(t *testing.T) {
 	liveRunCoordinatorFactory = func(program *tea.Program, sessionDir string) *liverun.Coordinator {
 		return liverun.NewCoordinator(&terminalFaultProgram{Program: program, mode: mode}, sessionDir)
 	}
-	result := handleRunWithResult([]string{os.Getenv(terminalLeaseWorkflowEnv)}, liveTUIOptions{quitOnDone: true, startInAltScreen: true})
+	result := handleRunWithRunOptions([]string{os.Getenv(terminalLeaseWorkflowEnv)}, &runCommandOptions{
+		liveOpts:        liveTUIOptions{quitOnDone: true, startInAltScreen: true},
+		profileOverride: config.ProfileOverride{Name: "smoke_test", Origin: config.OriginFlag},
+	})
 	os.Exit(result.exitCode)
 }
 

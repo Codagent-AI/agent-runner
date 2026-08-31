@@ -1,3 +1,8 @@
+# engine-interface Specification
+
+## Purpose
+Define the lifecycle hooks and persistence contract between workflow execution and pluggable engines.
+
 ## Requirements
 
 ### Requirement: Engine loading

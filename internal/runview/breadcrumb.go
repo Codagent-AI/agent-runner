@@ -2,12 +2,17 @@ package runview
 
 import (
 	"fmt"
+	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/codagent/agent-runner/internal/tuistyle"
 )
+
+var githubPullRequestPath = regexp.MustCompile(`^/[^/]+/[^/]+/pull/(\d+)$`)
 
 func (m *Model) renderBreadcrumb() string {
 	var crumbs []string
@@ -38,6 +43,9 @@ func (m *Model) renderBreadcrumb() string {
 	if m.recordedVersion != "" {
 		crumbStr += tuistyle.DimStyle.Render(" · " + m.recordedVersion)
 	}
+	if m.profileSet != "" && m.profileSet != "default" {
+		crumbStr += tuistyle.DimStyle.Render(" · profile: " + m.profileSet)
+	}
 	for _, c := range crumbs[1:] {
 		crumbStr += sep + tuistyle.LabelStyle.Render(c)
 	}
@@ -52,9 +60,49 @@ func (m *Model) renderBreadcrumb() string {
 	}
 	suffix += "  ·  "
 
-	return tuistyle.ScreenMargin + crumbStr +
+	result := tuistyle.ScreenMargin + crumbStr +
 		tuistyle.DimStyle.Render(suffix) +
 		m.styledRunStatus()
+	if m.tree.PullRequestURL != "" {
+		result += pullRequestBreadcrumbSegment(m.tree.PullRequestURL)
+	}
+	return result
+}
+
+func pullRequestBreadcrumbSegment(rawURL string) string {
+	target, label, ok := linkablePullRequestURL(rawURL)
+	if !ok {
+		return tuistyle.DimStyle.Render(" · PR")
+	}
+	return tuistyle.DimStyle.Render(" · " + osc8Hyperlink(target, label))
+}
+
+// linkablePullRequestURL decides whether rawURL may be used as an OSC 8 target
+// and what the segment should be labelled.
+//
+// These are deliberately separate properties. Safety is about what can break
+// out of the escape sequence, so it turns on control characters, scheme, and
+// userinfo — not on which forge hosts the pull request. The label is about
+// what we can say about the URL: only a `/pull/<number>` path yields a number,
+// and every other safe URL still links behind a bare "PR".
+func linkablePullRequestURL(rawURL string) (target, label string, ok bool) {
+	if strings.ContainsFunc(rawURL, unicode.IsControl) {
+		return "", "", false
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || !strings.EqualFold(parsed.Scheme, "https") || parsed.Host == "" || parsed.User != nil {
+		return "", "", false
+	}
+	label = "PR"
+	if matches := githubPullRequestPath.FindStringSubmatch(parsed.Path); len(matches) == 2 {
+		label += " #" + matches[1]
+	}
+	return rawURL, label, true
+}
+
+// osc8Hyperlink accepts only a URL returned by linkablePullRequestURL.
+func osc8Hyperlink(target, label string) string {
+	return "\x1b]8;;" + target + "\x1b\\" + label + "\x1b]8;;\x1b\\"
 }
 
 func (m *Model) styledRunStatus() string {
@@ -77,7 +125,11 @@ func (m *Model) styledRunStatus() string {
 	status := m.rootStatus()
 	switch status {
 	case StatusFailed:
-		return tuistyle.StatusFailed.Bold(true).Render("failed")
+		result := tuistyle.StatusFailed.Bold(true).Render("failed")
+		if m.canResumeRun() {
+			result += tuistyle.DimStyle.Render(" (r to resume)")
+		}
+		return result
 	case StatusSuccess:
 		return tuistyle.StatusSuccess.Render("completed")
 	default:

@@ -3,7 +3,6 @@ package runner
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -15,7 +14,6 @@ import (
 	"github.com/codagent/agent-runner/internal/control"
 	"github.com/codagent/agent-runner/internal/engine"
 	"github.com/codagent/agent-runner/internal/exec"
-	"github.com/codagent/agent-runner/internal/intakeroute"
 	"github.com/codagent/agent-runner/internal/interactive"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/metrics"
@@ -41,25 +39,12 @@ type Options struct {
 	From         string
 	Until        string
 	WorkflowFile string
-	// IntakeHandoffSource is the sealed handoff to copy into a newly prepared
-	// intake-launched run. IntakeHandoff restores that copied destination on
-	// resume and is never copied again.
-	//
-	// Precedence when both are set: IntakeHandoffSource wins, because a fresh
-	// preparation always copies and then overwrites IntakeHandoff with the
-	// destination it just wrote. Set exactly one — Source for a fresh launch,
-	// IntakeHandoff for resume.
-	//
-	// The copy uses exclusive creation, so preparing into a caller-supplied
-	// session directory that already holds an intake handoff fails rather than
-	// silently replacing provenance from an earlier preparation.
-	IntakeHandoffSource string
-	IntakeHandoff       string
-	// IntakeHandoffContents restores the already-bounded handoff text on resume.
-	// Leave empty for a fresh launch; preparation reads it from the copied file.
-	IntakeHandoffContents string
-	IntakeParentRunID     string
-	AgentOverride         *model.AgentOverride
+	// IntakeHandoffContents carries the sealed intake handoff into a fresh run or
+	// restores it on resume. It is internal provenance, not a user parameter.
+	IntakeHandoffContents  string
+	IntakeHandoffDelivered bool
+	IntakeParentRunID      string
+	AgentOverride          *model.AgentOverride
 	// ProjectRoot and WorkingDir may be supplied by embedding callers. When
 	// empty, PrepareRun discovers and canonicalizes them once for the run.
 	ProjectRoot        string
@@ -67,6 +52,7 @@ type Options struct {
 	SessionDir         string // Override session directory (for testing); computed automatically if empty.
 	Engine             engine.Engine
 	ProfileStore       *config.Config
+	ProfileOverride    config.ProfileOverride
 	SessionIDs         map[string]string
 	SessionProfiles    map[string]string
 	CapturedVariables  map[string]model.CapturedValue
@@ -282,23 +268,6 @@ type runState struct {
 	glob                 exec.GlobExpander
 }
 
-// workflowNeedsAgentProfiles returns true if any step in the tree is an agent
-// step (has a Prompt or Agent field) or delegates to a sub-workflow (Workflow
-// field set). Sub-workflows are assumed to potentially contain agent steps
-// since the referenced YAML isn't parsed here; loading profiles eagerly is
-// cheap and avoids silently falling back to an empty profile at dispatch time.
-func workflowNeedsAgentProfiles(steps []model.Step) bool {
-	for i := range steps {
-		if steps[i].Prompt != "" || steps[i].Agent != "" || steps[i].Workflow != "" {
-			return true
-		}
-		if len(steps[i].Steps) > 0 && workflowNeedsAgentProfiles(steps[i].Steps) {
-			return true
-		}
-	}
-	return false
-}
-
 func initRunState(workflow *model.Workflow, params map[string]string, opts *Options) (*runState, error) {
 	if params == nil {
 		params = map[string]string{}
@@ -307,9 +276,10 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		return nil, err
 	}
 
-	// Load agent profiles if not already provided and the workflow has agent steps.
-	if opts.ProfileStore == nil && workflowNeedsAgentProfiles(workflow.Steps) {
-		cfg, err := config.Load(".agent-runner/config.yaml")
+	// Every run resolves a profile set so it can be validated, persisted, and
+	// reported even when the workflow has no agent steps.
+	if opts.ProfileStore == nil {
+		cfg, err := config.LoadWithProfile(".agent-runner/config.yaml", opts.ProfileOverride)
 		if err != nil {
 			return nil, fmt.Errorf("loading agent profiles: %w", err)
 		}
@@ -494,8 +464,8 @@ func buildExecutionContext(
 		AutonomousBackend:        string(settings.AutonomousBackend),
 		AutonomousPermissionMode: string(usersettings.EffectiveAutonomousPermissionMode(settings.AutonomousPermissionMode)),
 		SessionDir:               sessionDir,
-		IntakeHandoff:            opts.IntakeHandoff,
 		IntakeHandoffContents:    opts.IntakeHandoffContents,
+		IntakeHandoffDelivered:   opts.IntakeHandoffDelivered,
 		IntakeParentRunID:        opts.IntakeParentRunID,
 		AgentOverride:            opts.AgentOverride,
 		EngineRef:                engineRef,
@@ -532,6 +502,10 @@ func emitRunStart(rs *runState, opts *Options) {
 			"sessionIds":        rs.ctx.SessionIDs,
 		},
 	}
+	if cfg, ok := rs.ctx.ProfileStore.(*config.Config); ok {
+		auditData["profile_set"] = cfg.ResolvedProfile
+		auditData["profile_source"] = auditProfileSource(cfg)
+	}
 	if opts.From != "" {
 		auditData["resumed"] = true
 		auditData["resume_from"] = opts.From
@@ -541,6 +515,26 @@ func emitRunStart(rs *runState, opts *Options) {
 		Type:      audit.EventRunStart,
 		Data:      auditData,
 	})
+}
+
+func auditProfileSource(cfg *config.Config) string {
+	switch cfg.ProfileSource {
+	case config.ProfileSourceConfig:
+		return "config"
+	case config.ProfileSourceDefault:
+		return "default"
+	case config.ProfileSourceOverride:
+		switch cfg.ProfileOverrideOrigin {
+		case config.OriginState:
+			return "state"
+		case config.OriginFlag:
+			return "flag"
+		default:
+			return "flag"
+		}
+	default:
+		return ""
+	}
 }
 
 func executeSteps(rs *runState, startIndex int) WorkflowResult {
@@ -565,6 +559,7 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 
 		// Fresh chain for each top-level step; writeStepState intentionally
 		// does not clear it so the mid-step and post-step writes can share.
+		resumeChild := rs.ctx.ResumeChildState
 		rs.ctx.LastSubWorkflowChild = nil
 
 		stepRef := step // capture for closure
@@ -576,6 +571,13 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 		rs.ctx.FlushState = nil
 
 		completed := stepErr == nil && outcome != exec.OutcomeAborted && outcome != exec.OutcomeFailed
+		if !completed && rs.ctx.LastSubWorkflowChild == nil && resumeChild != nil {
+			// A resume can fail before any child step starts, for example when
+			// the persisted child ID no longer exists in a sub-workflow. Keep
+			// the prior chain so this failed attempt does not erase the last
+			// recoverable resume position.
+			rs.ctx.LastSubWorkflowChild = resumeChild
+		}
 		writeStepState(step, rs.ctx, &rs.workflow, rs.workflowHash, rs.sessionDir, loopResult, completed)
 
 		if stepErr != nil {
@@ -746,18 +748,6 @@ func PrepareRun(workflow *model.Workflow, params map[string]string, opts *Option
 	if err != nil {
 		return nil, err
 	}
-	if err := copyIntakeHandoff(opts.IntakeHandoffSource, rs); err != nil {
-		newRunSessionCleanup(rs.sessionDir, opts)(rs.auditLogger)
-		return nil, err
-	}
-	// Runs on both fresh launches and resumes: copyIntakeHandoff has just set the
-	// destination for the former, and initRunState restored it from state for the
-	// latter, so this reads whichever handoff this run actually owns.
-	if err := loadIntakeHandoffContents(rs); err != nil {
-		newRunSessionCleanup(rs.sessionDir, opts)(rs.auditLogger)
-		return nil, err
-	}
-
 	startIndex, err := resolveStartIndex(workflow, opts.From)
 	if err != nil {
 		// initRunState already created the session dir, lock file, and audit
@@ -797,15 +787,16 @@ func initialRunState(workflow *model.Workflow, rs *runState, opts *Options) *mod
 	}
 
 	state := &model.RunState{
-		RunID:                 rs.sessionID,
-		WorkflowFile:          opts.WorkflowFile,
-		WorkflowName:          workflow.Name,
-		Params:                rs.ctx.Params,
-		WorkflowHash:          rs.workflowHash,
-		IntakeHandoff:         rs.ctx.IntakeHandoff,
-		IntakeHandoffContents: rs.ctx.IntakeHandoffContents,
-		IntakeParentRunID:     rs.ctx.IntakeParentRunID,
-		AgentOverride:         rs.ctx.AgentOverride,
+		RunID:                  rs.sessionID,
+		WorkflowFile:           opts.WorkflowFile,
+		WorkflowName:           workflow.Name,
+		Params:                 rs.ctx.Params,
+		WorkflowHash:           rs.workflowHash,
+		IntakeHandoffContents:  rs.ctx.IntakeHandoffContents,
+		IntakeHandoffDelivered: rs.ctx.IntakeHandoffDelivered(),
+		IntakeParentRunID:      rs.ctx.IntakeParentRunID,
+		AgentOverride:          rs.ctx.AgentOverride,
+		ProfileSet:             resolvedProfileSet(rs.ctx),
 	}
 	if stepID == "" {
 		return state
@@ -882,8 +873,9 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 	// When the loop executor wrote iteration metadata onto ctx.LastSubWorkflowChild
 	// (top-level loop case), promote Iteration onto the top-level NestedStepState
 	// instead of wrapping in a duplicated child entry. Only do this if the stored
-	// StepID matches the step we are writing for — otherwise the child is
-	// genuinely a nested step.
+	// StepID matches the step we are writing for and iteration metadata is
+	// present — otherwise the entry is genuinely a nested step whose ID may
+	// happen to match its parent.
 	//
 	// Note: we intentionally do not clear ctx.LastSubWorkflowChild here. The
 	// mid-step FlushState callback and the post-step write both read it, and
@@ -891,7 +883,9 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 	// mid-step flush consumed it. executeSteps resets the chain at the top of
 	// the next iteration.
 	switch {
-	case ctx.LastSubWorkflowChild != nil && ctx.LastSubWorkflowChild.StepID == step.ID:
+	case ctx.LastSubWorkflowChild != nil &&
+		ctx.LastSubWorkflowChild.StepID == step.ID &&
+		ctx.LastSubWorkflowChild.Iteration != nil:
 		iteration = ctx.LastSubWorkflowChild.Iteration
 		child = ctx.LastSubWorkflowChild.Child
 	case ctx.LastSubWorkflowChild != nil:
@@ -920,68 +914,26 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 	}
 
 	state := model.RunState{
-		RunID:             filepath.Base(stateDir),
-		WorkflowFile:      ctx.WorkflowFile,
-		WorkflowName:      workflow.Name,
-		CurrentStep:       model.CurrentStep{Nested: nested},
-		Params:            ctx.Params,
-		WorkflowHash:      workflowHash,
-		IntakeHandoff:     ctx.IntakeHandoff,
-		IntakeParentRunID: ctx.IntakeParentRunID,
-		AgentOverride:     ctx.AgentOverride,
+		RunID:                  filepath.Base(stateDir),
+		WorkflowFile:           ctx.WorkflowFile,
+		WorkflowName:           workflow.Name,
+		CurrentStep:            model.CurrentStep{Nested: nested},
+		Params:                 ctx.Params,
+		WorkflowHash:           workflowHash,
+		IntakeHandoffContents:  ctx.IntakeHandoffContents,
+		IntakeHandoffDelivered: ctx.IntakeHandoffDelivered(),
+		IntakeParentRunID:      ctx.IntakeParentRunID,
+		AgentOverride:          ctx.AgentOverride,
+		ProfileSet:             resolvedProfileSet(ctx),
 	}
 	_ = stateio.WriteState(&state, stateDir)
 }
 
-func copyIntakeHandoff(source string, rs *runState) error {
-	if source == "" {
-		return nil
+func resolvedProfileSet(ctx *model.ExecutionContext) string {
+	if cfg, ok := ctx.ProfileStore.(*config.Config); ok {
+		return cfg.ResolvedProfile
 	}
-
-	destination, err := filepath.Abs(intakeroute.HandoffPathFor(rs.sessionDir))
-	if err != nil {
-		return fmt.Errorf("resolve intake handoff destination: %w", err)
-	}
-	input, err := os.Open(source) // #nosec G304 -- source is a sealed intake artifact supplied by the launcher.
-	if err != nil {
-		return fmt.Errorf("open intake handoff source: %w", err)
-	}
-	defer func() { _ = input.Close() }()
-
-	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- destination is fixed beneath the new session directory.
-	if err != nil {
-		return fmt.Errorf("create intake handoff copy: %w", err)
-	}
-	if _, err := io.Copy(output, input); err != nil {
-		_ = output.Close()
-		_ = os.Remove(destination)
-		return fmt.Errorf("copy intake handoff: %w", err)
-	}
-	if err := output.Close(); err != nil {
-		_ = os.Remove(destination)
-		return fmt.Errorf("close intake handoff copy: %w", err)
-	}
-	rs.ctx.IntakeHandoff = destination
-	return nil
-}
-
-// loadIntakeHandoffContents reads the run's own handoff copy once, at first
-// preparation, and seeds the text that {{intake_handoff}} interpolates to.
-//
-// It deliberately does nothing when the value is already present: on resume the
-// contents come back from state, and re-reading the file would let a rewrite of
-// the run's own handoff copy change what a resumed step sees.
-func loadIntakeHandoffContents(rs *runState) error {
-	handoffPath := rs.ctx.IntakeHandoff
-	if handoffPath == "" || rs.ctx.IntakeHandoffContents != "" {
-		return nil
-	}
-	raw, err := os.ReadFile(handoffPath) // #nosec G304 -- run-owned handoff copy beneath the session directory.
-	if err != nil {
-		return fmt.Errorf("read intake handoff: %w", err)
-	}
-	rs.ctx.IntakeHandoffContents = intakeroute.InlineHandoffValue(raw, handoffPath)
-	return nil
+	return ""
 }
 
 func contextSnapshot(ctx *model.ExecutionContext) map[string]any {

@@ -110,6 +110,72 @@ func TestCollectorProjectsTerminalEventsAndNormalizesAttempts(t *testing.T) {
 	}
 }
 
+func TestCollectorPreservesStableRoleAndToolIdentity(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(dir, "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, nil))
+	c.Process(stepEvent(started.Add(time.Second), model.ExecutionIdentity{
+		StepID: "review", StepType: "agent", Kind: "step", AgentInvoked: true,
+		Role: "crosscheck", Tool: "agent-runner",
+	}, collectedUsage(2), nil, "success", 10))
+
+	a := readArtifact(t, dir)
+	if len(a.Steps) != 1 || a.Steps[0].Role != "crosscheck" || a.Steps[0].Tool != "agent-runner" {
+		t.Fatalf("step role/tool identity = %+v", a.Steps)
+	}
+}
+
+func TestCollectorNestedMetricsGapMakesCoveragePartial(t *testing.T) {
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(t.TempDir(), "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, nil))
+	c.Process(audit.Event{Timestamp: started.Add(time.Second).Format(time.RFC3339Nano), Type: audit.EventNestedAgentEnd, Data: map[string]any{
+		DataIdentity: model.ExecutionIdentity{StepID: "review-1", StepType: "agent", Kind: "nested-agent", AgentInvoked: true, Role: "implementation-validator", Tool: "agent-validator"},
+		DataUsage:    collectedUsage(4), "invocation_id": "review-1", "outcome": "success", "duration_ms": int64(10),
+	}})
+	c.Process(audit.Event{Timestamp: started.Add(2 * time.Second).Format(time.RFC3339Nano), Type: audit.EventNestedAgentEnd, Data: map[string]any{
+		DataIdentity: model.ExecutionIdentity{StepID: "metrics-gap", StepType: "agent", Kind: "nested-agent", AgentInvoked: true, Role: "implementation-validator", Tool: "agent-validator"},
+		DataUsage:    model.UsageRecord{Status: model.UsageUnavailable, Reason: model.UnavailableNestedMetricsInvalid, CLI: "agent-validator", Source: "agent-runner:nested-metrics"},
+		"outcome":    "unavailable", "duration_ms": int64(0),
+	}})
+
+	totals := c.Totals()
+	if totals.UsageCoverage != model.CoveragePartial || totals.Tokens[model.TokenInput] != 4 {
+		t.Fatalf("nested gap totals = %+v", totals)
+	}
+}
+
+func TestCollectorScopesNestedInvocationDeduplicationToParentExecution(t *testing.T) {
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(t.TempDir(), "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, nil))
+	for i, parentAttemptID := range []string{"validate-attempt-1", "validate-attempt-2"} {
+		c.Process(audit.Event{Timestamp: started.Add(time.Duration(i+1) * time.Second).Format(time.RFC3339Nano), Type: audit.EventNestedAgentEnd, Data: map[string]any{
+			DataIdentity: model.ExecutionIdentity{StepID: "review-1", Prefix: "[validate]", StepType: "agent", Kind: "nested-agent", AgentInvoked: true, Role: "implementation-validator", Tool: "agent-validator"},
+			DataUsage:    collectedUsage(3), "invocation_id": "review-1", "parent_attempt_id": parentAttemptID, "outcome": "success", "duration_ms": int64(10),
+		}})
+	}
+
+	a := readArtifact(t, filepath.Dir(c.path))
+	if len(a.Steps) != 2 || a.Totals.Tokens[model.TokenInput] != 6 {
+		t.Fatalf("nested records with producer-local IDs = %+v totals=%+v", a.Steps, a.Totals)
+	}
+}
+
+func TestMigrateSchemaV1MigratesUnavailablePreLaunchModelRecord(t *testing.T) {
+	artifact := Artifact{SchemaVersion: 1, Steps: []StepRecord{{
+		ID: "failed-agent", Kind: "step", Type: "agent", AgentInvoked: false,
+		Usage: &model.UsageRecord{Status: model.UsageUnavailable, CLI: "claude", Provider: "anthropic", Source: "agent-runner"},
+	}}}
+
+	migrateSchemaV1(&artifact)
+	record := artifact.Steps[0]
+	if record.Role != "legacy-unknown" || record.Tool != "agent-runner" || record.Usage.Identity.EffectiveCLI != "claude" || record.Usage.Identity.EffectiveProvider != "anthropic" {
+		t.Fatalf("migrated pre-launch record = %+v", record)
+	}
+}
+
 func TestCollectorProjectsAgentCallAndAggregatesParentAndChildOnce(t *testing.T) {
 	dir := t.TempDir()
 	started := mustTime(t, "2026-07-17T10:00:00Z")
@@ -258,7 +324,7 @@ func TestCollectorRehydratesAgentCallsAcrossResumeAndReadsOlderSchemaV1(t *testi
 	}
 
 	legacyDir := t.TempDir()
-	legacy := `{"schema_version":1,"run_id":"run","workflow":"workflow","history_complete":true,"sessions":[],"steps":[{"record_id":"old#1","prefix":"","id":"old","kind":"step","type":"shell","attempt":1,"iteration":null,"outcome":"success","duration_ms":1,"agent_invoked":false,"usage":null,"estimated_api_cost_usd":null}],"totals":{"active_duration_ms":0,"tokens":{},"usage_coverage":"none","token_totals":null,"token_total_coverage":"none","estimated_api_cost_usd":null,"cost_coverage":"none"}}`
+	legacy := `{"schema_version":1,"run_id":"run","workflow":"workflow","history_complete":true,"sessions":[],"steps":[{"record_id":"old#1","prefix":"","id":"old","kind":"step","type":"agent","attempt":1,"iteration":null,"outcome":"success","duration_ms":1,"agent_invoked":true,"usage":{"status":"collected","cli":"codex","provider":"openai","model":"gpt-old","tokens":{"input":1},"source":"codex:turn.completed"},"estimated_api_cost_usd":null}],"totals":{"active_duration_ms":0,"tokens":{"input":1},"usage_coverage":"complete","token_totals":null,"token_total_coverage":"none","estimated_api_cost_usd":null,"cost_coverage":"none"}}`
 	if err := os.WriteFile(filepath.Join(legacyDir, FileName), []byte(legacy), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -266,8 +332,73 @@ func TestCollectorRehydratesAgentCallsAcrossResumeAndReadsOlderSchemaV1(t *testi
 	legacyCollector.Process(event(audit.EventRunStart, resumedAt, map[string]any{"resumed": true}))
 	legacyCollector.Process(agentCallEvent(resumedAt.Add(time.Second), "call-new", false, unavailableUsage(), nil, "failed", 10))
 	legacyArtifact := readArtifact(t, legacyDir)
-	if len(legacyArtifact.Steps) != 2 || legacyArtifact.Steps[0].ID != "old" || legacyArtifact.Steps[1].CallID != "call-new" {
+	if legacyArtifact.SchemaVersion != SchemaVersion || len(legacyArtifact.Steps) != 2 || legacyArtifact.Steps[0].ID != "old" || legacyArtifact.Steps[1].CallID != "call-new" {
 		t.Fatalf("legacy schema-v1 rehydration = %+v", legacyArtifact.Steps)
+	}
+	migrated := legacyArtifact.Steps[0]
+	if migrated.Role != "legacy-unknown" || migrated.Tool != "agent-runner" {
+		t.Fatalf("legacy role/tool migration = %+v", migrated)
+	}
+	wantIdentity := model.InvocationIdentity{
+		RequestedCLI: "codex", RequestedModel: "unknown", RequestedEffort: "unknown",
+		EffectiveCLI: "codex", EffectiveProvider: "openai", EffectiveModel: "gpt-old", EffectiveEffort: "unknown",
+		ProviderSource: model.IdentitySourceLegacy, ModelSource: model.IdentitySourceLegacy, EffortSource: model.IdentitySourceLegacy,
+	}
+	if diff := cmp.Diff(wantIdentity, migrated.Usage.Identity); diff != "" {
+		t.Fatalf("legacy identity migration mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestCollectorMixedModelRolesSumToCanonicalTotals(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(dir, "run", "implementation", started)
+	c.Process(event(audit.EventRunStart, started, nil))
+	roles := []struct {
+		role, tool, cliName, provider, modelName string
+		input, output                            int64
+	}{
+		{role: "lead-agent", tool: "agent-runner", cliName: "codex", provider: "openai", modelName: "gpt-5.6-sol", input: 3, output: 1},
+		{role: "task-implementor", tool: "agent-runner", cliName: "codex", provider: "openai", modelName: "gpt-5.6-terra", input: 5, output: 2},
+		{role: "acceptance-reviewer", tool: "agent-runner", cliName: "claude", provider: "anthropic", modelName: "claude-sonnet-5", input: 7, output: 3},
+		{role: "crosscheck", tool: "agent-runner", cliName: "claude", provider: "anthropic", modelName: "claude-opus-5", input: 11, output: 4},
+		{role: "implementation-validator", tool: "agent-validator", cliName: "codex", provider: "openai", modelName: "gpt-5.6-sol", input: 13, output: 5},
+	}
+	for i, row := range roles {
+		usage := model.UsageRecord{
+			Status: model.UsageCollected, CLI: row.cliName, Provider: row.provider, Model: row.modelName,
+			Identity:    model.InvocationIdentity{RequestedCLI: row.cliName, RequestedModel: row.modelName, EffectiveCLI: row.cliName, EffectiveProvider: row.provider, EffectiveModel: row.modelName},
+			Tokens:      model.TokenCounts{model.TokenInput: row.input, model.TokenOutput: row.output},
+			TokenTotals: &model.TokenTotals{Input: row.input, Output: row.output, Total: row.input + row.output}, Source: "test", Completeness: model.CompletenessComplete,
+		}
+		kind := "step"
+		data := stepEvent(started.Add(time.Duration(i+1)*time.Second), model.ExecutionIdentity{
+			StepID: row.role, StepType: "agent", Kind: kind, AgentInvoked: true, Role: row.role, Tool: row.tool,
+		}, usage, nil, "success", 10)
+		if row.tool == "agent-validator" {
+			data.Type = audit.EventNestedAgentEnd
+			data.Data["invocation_id"] = "validator-1"
+			identity := data.Data[DataIdentity].(model.ExecutionIdentity)
+			identity.Kind = "nested-agent"
+			data.Data[DataIdentity] = identity
+		}
+		c.Process(data)
+	}
+
+	a := readArtifact(t, dir)
+	if len(a.Steps) != len(roles) {
+		t.Fatalf("records = %d, want %d", len(a.Steps), len(roles))
+	}
+	if a.Steps[len(a.Steps)-1].InvocationID != "validator-1" || a.Steps[len(a.Steps)-1].CallID != "" {
+		t.Fatalf("nested invocation identity = %+v", a.Steps[len(a.Steps)-1])
+	}
+	if a.Totals.TokenTotals == nil || *a.Totals.TokenTotals != (model.TokenTotals{Input: 39, Output: 15, Total: 54}) || a.Totals.TokenTotalCoverage != model.CoverageComplete {
+		t.Fatalf("canonical totals = %+v coverage=%q", a.Totals.TokenTotals, a.Totals.TokenTotalCoverage)
+	}
+	for i, row := range roles {
+		if a.Steps[i].Role != row.role || a.Steps[i].Tool != row.tool || a.Steps[i].Usage.Identity.EffectiveModel != row.modelName {
+			t.Fatalf("record %d identity = %+v", i, a.Steps[i])
+		}
 	}
 }
 
@@ -471,6 +602,26 @@ func TestCollectorAttributesCumulativeUsage(t *testing.T) {
 				t.Fatalf("attributed usage = %+v, want status=%q reason=%q tokens=%v raw=%v", got, tt.wantStatus, tt.wantReason, tt.wantTokens, tt.reported)
 			}
 		})
+	}
+}
+
+func TestCollectorKeepsResumedPerTurnUsageWithoutSessionDelta(t *testing.T) {
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(t.TempDir(), "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, nil))
+	c.Process(stepEvent(started.Add(time.Second), model.ExecutionIdentity{
+		StepID: "first", StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", SessionStrategy: "new", AgentInvoked: true,
+	}, model.UsageRecord{Status: model.UsageCollected, CLI: "codex", Tokens: model.TokenCounts{model.TokenInput: 100}, Source: "codex:turn.completed"}, nil, "completed", 1))
+
+	gotEvent := c.Process(stepEvent(started.Add(2*time.Second), model.ExecutionIdentity{
+		StepID: "resumed", StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", SessionStrategy: "resume", SessionResumed: true, AgentInvoked: true,
+	}, model.UsageRecord{Status: model.UsageCollected, CLI: "codex", Tokens: model.TokenCounts{model.TokenInput: 3}, Source: "codex:turn.completed"}, nil, "completed", 1))
+	got := gotEvent.Data[DataUsage].(model.UsageRecord)
+	if diff := cmp.Diff(model.TokenCounts{model.TokenInput: 3}, got.Tokens); diff != "" {
+		t.Fatalf("resumed per-turn usage mismatch (-want +got):\n%s", diff)
+	}
+	if got.Status != model.UsageCollected || got.Reason != "" {
+		t.Fatalf("resumed per-turn status = %q reason = %q", got.Status, got.Reason)
 	}
 }
 
@@ -779,7 +930,7 @@ func TestCollectorClosesSessionAndEmbedsFinalTotals(t *testing.T) {
 func TestCollectorRecoversCorruptAndUnsupportedArtifacts(t *testing.T) {
 	for _, tc := range []struct{ name, contents string }{
 		{name: "corrupt", contents: "not-json"},
-		{name: "newer schema", contents: `{"schema_version":2}`},
+		{name: "newer schema", contents: `{"schema_version":3}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()

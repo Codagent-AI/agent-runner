@@ -799,18 +799,25 @@ func TestModel_R_CompletedRun_NoAgentSession_NoOp(t *testing.T) {
 	}
 }
 
-// r is ignored on failed runs with no resumable agent session.
-func TestModel_R_IgnoredOnFailedRunWithNoAgentSession(t *testing.T) {
+// r resumes a failed workflow run even when no individual agent session is resumable.
+func TestModel_R_FailedRun_EmitsResumeRunMsg(t *testing.T) {
 	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusFailed}
 	root.Children = []*StepNode{{ID: "archive", Type: NodeShell, Status: StatusFailed, Parent: root}}
 	tree := &Tree{Root: root}
-	tree.Root.Status = StatusFailed
 	m := newTestModel(tree, FromList)
 	m.sessionDir = "/runs/my-run-id"
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
-	if cmd != nil {
-		t.Fatalf("r on failed run should be no-op, got cmd %v", cmd)
+	if cmd == nil {
+		t.Fatal("r on failed run should produce a cmd")
+	}
+	msg := cmd()
+	resume, ok := msg.(ResumeRunMsg)
+	if !ok {
+		t.Fatalf("expected ResumeRunMsg, got %T", msg)
+	}
+	if resume.RunID != "my-run-id" {
+		t.Fatalf("RunID = %q, want %q", resume.RunID, "my-run-id")
 	}
 }
 
@@ -835,6 +842,114 @@ func TestModel_Breadcrumb_ShowsAffordance_WhenInactive(t *testing.T) {
 	bc := m.renderBreadcrumb()
 	if !containsString(bc, "r to resume") {
 		t.Errorf("breadcrumb should show '(r to resume)' for inactive run: %q", bc)
+	}
+}
+
+func TestModel_Breadcrumb_ShowsRecordedNonDefaultProfileDuringLiveRun(t *testing.T) {
+	m := newTestModel(simpleTree(), FromLiveRun)
+	m.profileSet = "copilot"
+	if got := stripANSI(m.renderBreadcrumb()); !strings.Contains(got, "profile: copilot") {
+		t.Fatalf("breadcrumb = %q, want recorded profile", got)
+	}
+}
+
+func TestModel_Breadcrumb_HidesDefaultProfile(t *testing.T) {
+	m := newTestModel(simpleTree(), FromLiveRun)
+	m.profileSet = "default"
+	if got := stripANSI(m.renderBreadcrumb()); strings.Contains(got, "profile:") {
+		t.Fatalf("breadcrumb = %q, want no default profile segment", got)
+	}
+}
+
+func TestModel_Breadcrumb_ShowsRecordedPullRequestLink(t *testing.T) {
+	m := newTestModel(simpleTree(), FromInspect)
+	url := "https://github.com/Codagent-AI/agent-runner/pull/62"
+	m.tree.ApplyEvent(RawEvent{Type: "pull_request_recorded", Data: map[string]any{"url": url}})
+
+	breadcrumb := m.renderBreadcrumb()
+	if got := tuistyle.Sanitize(breadcrumb); !strings.Contains(got, "PR #62") {
+		t.Fatalf("breadcrumb = %q, want PR label", got)
+	}
+	wantLink := "\x1b]8;;" + url + "\x1b\\PR #62\x1b]8;;\x1b\\"
+	if !strings.Contains(breadcrumb, wantLink) {
+		t.Fatalf("breadcrumb = %q, want OSC 8 link %q", breadcrumb, wantLink)
+	}
+}
+
+func TestModel_Breadcrumb_DoesNotLinkUntrustedPullRequestURL(t *testing.T) {
+	m := newTestModel(simpleTree(), FromInspect)
+	m.tree.ApplyEvent(RawEvent{Type: "pull_request_recorded", Data: map[string]any{
+		"url": "https://github.com/Codagent-AI/agent-runner/pull/62\x1b]8;;https://evil.example\x1b\\",
+	}})
+
+	breadcrumb := m.renderBreadcrumb()
+	if strings.Contains(breadcrumb, "\x1b]8;;") {
+		t.Fatalf("breadcrumb contains OSC 8 sequence for untrusted URL: %q", breadcrumb)
+	}
+	if got := tuistyle.Sanitize(breadcrumb); !strings.Contains(got, "PR") {
+		t.Fatalf("breadcrumb = %q, want plain PR label", got)
+	}
+}
+
+// linkedBreadcrumb renders the breadcrumb for a recorded pull request URL.
+func linkedBreadcrumb(t *testing.T, url string) string {
+	t.Helper()
+	m := newTestModel(simpleTree(), FromInspect)
+	m.tree.ApplyEvent(RawEvent{Type: "pull_request_recorded", Data: map[string]any{"url": url}})
+	return m.renderBreadcrumb()
+}
+
+func TestModel_Breadcrumb_LinksNonGitHubPullRequestURL(t *testing.T) {
+	url := "https://gitlab.com/example/project/-/merge_requests/42"
+	breadcrumb := linkedBreadcrumb(t, url)
+
+	wantLink := "\x1b]8;;" + url + "\x1b\\PR\x1b]8;;\x1b\\"
+	if !strings.Contains(breadcrumb, wantLink) {
+		t.Fatalf("breadcrumb = %q, want OSC 8 link %q", breadcrumb, wantLink)
+	}
+}
+
+func TestModel_Breadcrumb_NumbersEnterprisePullRequestPath(t *testing.T) {
+	url := "https://github.example.com/team/repo/pull/17"
+	breadcrumb := linkedBreadcrumb(t, url)
+
+	if got := tuistyle.Sanitize(breadcrumb); !strings.Contains(got, "PR #17") {
+		t.Fatalf("breadcrumb = %q, want numbered label for a /pull/<n> path", got)
+	}
+	if !strings.Contains(breadcrumb, "\x1b]8;;"+url+"\x1b\\") {
+		t.Fatalf("breadcrumb = %q, want OSC 8 link to %q", breadcrumb, url)
+	}
+}
+
+func TestModel_Breadcrumb_LinksGitHubURLWithQueryAndFragment(t *testing.T) {
+	url := "https://github.com/Codagent-AI/agent-runner/pull/62#discussion_r1"
+	breadcrumb := linkedBreadcrumb(t, url)
+
+	if !strings.Contains(breadcrumb, "\x1b]8;;"+url+"\x1b\\") {
+		t.Fatalf("breadcrumb = %q, want the recorded URL linked verbatim", breadcrumb)
+	}
+}
+
+func TestModel_Breadcrumb_DoesNotLinkNonHTTPSURL(t *testing.T) {
+	for _, url := range []string{
+		"http://github.com/Codagent-AI/agent-runner/pull/62",
+		"javascript:alert(1)",
+		"file:///etc/passwd",
+	} {
+		breadcrumb := linkedBreadcrumb(t, url)
+		if strings.Contains(breadcrumb, "\x1b]8;;") {
+			t.Errorf("url %q: breadcrumb contains OSC 8 sequence, want none: %q", url, breadcrumb)
+		}
+		if got := tuistyle.Sanitize(breadcrumb); !strings.Contains(got, "PR") {
+			t.Errorf("url %q: breadcrumb = %q, want plain PR label", url, got)
+		}
+	}
+}
+
+func TestModel_Breadcrumb_DoesNotLinkURLWithUserinfo(t *testing.T) {
+	breadcrumb := linkedBreadcrumb(t, "https://user:pass@evil.example/team/repo/pull/1")
+	if strings.Contains(breadcrumb, "\x1b]8;;") {
+		t.Fatalf("breadcrumb contains OSC 8 sequence for userinfo URL: %q", breadcrumb)
 	}
 }
 
@@ -863,14 +978,15 @@ func TestModel_Breadcrumb_HidesAffordance_WhenCompleted(t *testing.T) {
 	}
 }
 
-func TestModel_Breadcrumb_HidesAffordance_WhenFailed(t *testing.T) {
+func TestModel_Breadcrumb_ShowsAffordance_WhenFailed(t *testing.T) {
 	tree := simpleTree()
 	tree.Root.Status = StatusFailed
 	m := newTestModel(tree, FromList)
+	m.sessionDir = "/runs/my-run-id"
 
 	bc := m.renderBreadcrumb()
-	if containsString(bc, "r to resume") {
-		t.Errorf("breadcrumb should not show '(r to resume)' for failed run: %q", bc)
+	if !containsString(bc, "r to resume") {
+		t.Errorf("breadcrumb should show '(r to resume)' for failed run: %q", bc)
 	}
 }
 
@@ -1000,6 +1116,18 @@ func TestModel_HelpBar_HidesRBinding_WhenCompletedRunHasNoAgentSession(t *testin
 	help := m.renderHelpBar()
 	if containsString(help, "r resume") {
 		t.Errorf("help bar should not show 'r resume' for completed run with no agent session: %q", help)
+	}
+}
+
+func TestModel_HelpBar_ShowsRBinding_WhenFailedRunHasNoAgentSession(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusFailed}
+	root.Children = []*StepNode{{ID: "archive", Type: NodeShell, Status: StatusFailed, Parent: root}}
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.sessionDir = "/runs/my-run-id"
+
+	help := m.renderHelpBar()
+	if !containsString(help, "r resume") {
+		t.Errorf("help bar should show 'r resume' for failed run: %q", help)
 	}
 }
 
@@ -1395,11 +1523,8 @@ func TestModel_Enter_AgentStep_InSubWorkflow_LiveRunAfterCompletion(t *testing.T
 	// Simulate run completion
 	m.Update(liverun.ExecDoneMsg{Result: "success"})
 
-	// Completion auto-shows the summary; dismiss it to return to the detail
-	// view before navigating (the summary is a modal screen).
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
 	if m.showSummary {
-		t.Fatal("s did not dismiss the auto-shown summary")
+		t.Fatal("successful completion unexpectedly showed summary")
 	}
 
 	// Drill into the sub-workflow
@@ -2127,21 +2252,35 @@ func TestModel_LiveRun_QuitConfirm_Shown(t *testing.T) {
 	}
 }
 
-func TestModel_LiveRun_QuitConfirm_CtrlC(t *testing.T) {
+func TestModel_LiveRun_CtrlCDoesNotExitWhileInteractiveChildOwnsTerminal(t *testing.T) {
 	m := newLiveModel()
+	m.Update(liverun.SuspendedMsg{})
 	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	m = m2.(*Model)
 	if m.quitConfirming {
-		t.Fatal("Ctrl+C should exit immediately without opening quit confirmation")
+		t.Fatal("Ctrl+C should not open quit confirmation")
 	}
+	if cmd != nil {
+		t.Fatalf("Ctrl+C command = %T, want nil while a live run is active", cmd)
+	}
+	if m.ExitRequested() {
+		t.Fatal("Ctrl+C should not mark exit requested while a live run is active")
+	}
+}
+
+func TestModel_LiveRun_CtrlCExitsWhileTUIOwnsTerminal(t *testing.T) {
+	m := newLiveModel()
+
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = m2.(*Model)
 	if cmd == nil {
-		t.Fatal("Ctrl+C should return a quit command")
+		t.Fatal("Ctrl+C should quit while the live-run TUI owns the terminal")
 	}
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Fatalf("expected Ctrl+C command to quit, got %T", cmd())
 	}
 	if !m.ExitRequested() {
-		t.Fatal("Ctrl+C should mark exit requested")
+		t.Fatal("Ctrl+C should mark exit requested while the live-run TUI owns the terminal")
 	}
 }
 
@@ -2200,25 +2339,27 @@ func TestModel_LiveRun_QuitConfirm_AcceptMarksExitRequested(t *testing.T) {
 	}
 }
 
-func TestModel_LiveRun_CtrlCExitsFromQuitConfirmation(t *testing.T) {
+func TestModel_LiveRun_CtrlCCancelsQuitConfirmationDuringTerminalHandoff(t *testing.T) {
 	m := newLiveModel()
+	m.Update(liverun.SuspendedMsg{})
 	m.quitConfirming = true
 
 	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	m = m2.(*Model)
-	if cmd == nil {
-		t.Fatal("Ctrl+C should quit while confirmation is open")
+	if cmd != nil {
+		t.Fatalf("Ctrl+C command = %T, want nil while a live run is active", cmd)
 	}
-	if _, ok := cmd().(tea.QuitMsg); !ok {
-		t.Fatalf("expected Ctrl+C command to quit, got %T", cmd())
+	if m.ExitRequested() {
+		t.Fatal("Ctrl+C should not mark exit requested while a live run is active")
 	}
-	if !m.ExitRequested() {
-		t.Fatal("Ctrl+C should mark exit requested while confirmation is open")
+	if m.quitConfirming {
+		t.Fatal("Ctrl+C should dismiss the quit confirmation")
 	}
 }
 
-func TestModel_CtrlCExitsFromLegend(t *testing.T) {
+func TestModel_CtrlCExitsFromLegendAfterRun(t *testing.T) {
 	m := newLiveModel()
+	m.running = false
 	m.showLegend = true
 
 	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
@@ -2924,6 +3065,73 @@ func TestModel_ResumedMsg_ReEnablesMouse(t *testing.T) {
 	}
 }
 
+func TestModel_SuspendedMsg_StopsHiddenPulseRendering(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.pulsePhase = 1.25
+
+	m.Update(liverun.SuspendedMsg{})
+
+	if got := m.View(); got != "" {
+		t.Fatalf("View() while suspended = %q, want empty output", got)
+	}
+	_, cmd := m.Update(tuistyle.PulseMsg{})
+	if cmd != nil {
+		t.Fatal("suspended run view should stop the pulse chain")
+	}
+	if m.pulsePhase != 1.25 {
+		t.Fatalf("pulsePhase = %v, want 1.25", m.pulsePhase)
+	}
+}
+
+func TestModel_SuspendedMsg_StopsHiddenRefresh(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.Update(liverun.SuspendedMsg{})
+
+	_, cmd := m.Update(tuistyle.RefreshMsg{})
+
+	if cmd != nil {
+		t.Fatal("suspended run view should stop the refresh chain")
+	}
+}
+
+func TestModel_ResumedMsg_RestartsStoppedPulseChain(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.Update(liverun.SuspendedMsg{})
+	m.Update(tuistyle.PulseMsg{})
+
+	_, cmd := m.Update(liverun.ResumedMsg{})
+	if cmd == nil {
+		t.Fatal("ResumedMsg should restart a pulse chain stopped during suspension")
+	}
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("ResumedMsg command = %T, want tea.BatchMsg", msg)
+	}
+	if len(batch) != 2 {
+		t.Fatalf("ResumedMsg batch has %d commands, want mouse enable and pulse", len(batch))
+	}
+}
+
+func TestModel_ResumedMsg_RestartsStoppedRefreshChain(t *testing.T) {
+	m := newLiveModelWithFlags()
+	m.Update(liverun.SuspendedMsg{})
+	m.Update(tuistyle.RefreshMsg{})
+
+	_, cmd := m.Update(liverun.ResumedMsg{})
+	if cmd == nil {
+		t.Fatal("ResumedMsg should restart a refresh chain stopped during suspension")
+	}
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("ResumedMsg command = %T, want tea.BatchMsg", msg)
+	}
+	if len(batch) != 2 {
+		t.Fatalf("ResumedMsg batch has %d commands, want mouse enable and refresh", len(batch))
+	}
+}
+
 func TestModel_ResumedMsgRefreshesCallsWithoutReengagingPausedFollow(t *testing.T) {
 	tree := agentCallTestTree()
 	parent := tree.Root.Children[0]
@@ -2979,7 +3187,7 @@ func TestModel_ExecDone_Failed_NoFailedStep_NoChange(t *testing.T) {
 	}
 }
 
-func TestModel_ExecDone_SuccessStaysOpenOnSummary(t *testing.T) {
+func TestModel_ExecDone_SuccessStaysOpenOnFinalStep(t *testing.T) {
 	tree := simpleTree()
 	for _, c := range tree.Root.Children {
 		c.Status = StatusSuccess
@@ -2997,11 +3205,14 @@ func TestModel_ExecDone_SuccessStaysOpenOnSummary(t *testing.T) {
 
 	m.Update(liverun.ExecDoneMsg{Result: "success"})
 
-	if !m.showSummary {
-		t.Fatal("successful live completion should open the summary")
+	if m.showSummary {
+		t.Fatal("successful live completion should keep the detailed view")
 	}
 	if len(m.path) != 1 || m.path[0] != tree.Root {
 		t.Fatalf("path should remain at root, got %d segments", len(m.path))
+	}
+	if got, want := m.selectedNode(), tree.Root.Children[len(tree.Root.Children)-1]; got != want {
+		t.Fatalf("selected node = %v, want final top-level step %v", got, want)
 	}
 	if m.followActive || m.followTail {
 		t.Errorf("terminal follow flags = active:%v tail:%v, want both false", m.followActive, m.followTail)
