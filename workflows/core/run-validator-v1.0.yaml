@@ -19,6 +19,7 @@ steps:
           task_file: "{{task_file}}"
         capture: validator_output
         capture_stderr: true
+        metrics_source: agent-validator
         continue_on_failure: true
         break_if: success
 
@@ -58,5 +59,6 @@ steps:
       task_file: "{{task_file}}"
     capture: validator_output
     capture_stderr: true
+    metrics_source: agent-validator
     skip_if: previous_success
     warn_on_failure: true

@@ -18,6 +18,10 @@ import (
 
 const scriptStepRevealDelay = 2 * time.Second
 
+type scriptEnvironmentRunner interface {
+	RunScriptWithEnv(path string, stdin []byte, captureStdout bool, workdir string, environment []string) (ProcessResult, error)
+}
+
 func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, log Logger) (StepOutcome, error) {
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 	startTime := time.Now()
@@ -43,15 +47,25 @@ func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner Pro
 	case interface{ SetPrefix(string) }:
 		ps.SetPrefix(prefix)
 	}
-	var result ProcessResult
-	result, err = runner.RunScript(scriptPath, stdin, step.Capture != "", step.Workdir)
+	metricsCapture, environment, err := prepareNestedMetricsEnvironment(step, ctx)
 	if err != nil {
 		emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err)
 		return OutcomeFailed, err
 	}
-	if result.ExitCode != 0 {
-		emitScriptEnd(ctx, prefix, startTime, step, "failed", &result, nil)
-		return OutcomeFailed, nil
+	var result ProcessResult
+	if len(environment) == 0 {
+		result, err = runner.RunScript(scriptPath, stdin, step.Capture != "", step.Workdir)
+	} else if environmentRunner, ok := runner.(scriptEnvironmentRunner); ok {
+		result, err = environmentRunner.RunScriptWithEnv(scriptPath, stdin, step.Capture != "", step.Workdir, environment)
+	} else {
+		err = fmt.Errorf("process runner does not support script environments")
+	}
+	if step.MetricsSource != "" {
+		emitNestedMetricCapture(ctx, step, prefix, metricsCapture)
+	}
+	if err != nil {
+		emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err)
+		return OutcomeFailed, err
 	}
 	if step.Capture != "" {
 		capturedOutput := result.Stdout
@@ -65,6 +79,10 @@ func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner Pro
 		}
 		ctx.CapturedVariables[step.Capture] = captured
 		recordPullRequestCapture(ctx, step.ID, step.Capture, captured)
+	}
+	if result.ExitCode != 0 {
+		emitScriptEnd(ctx, prefix, startTime, step, "failed", &result, nil)
+		return OutcomeFailed, nil
 	}
 	emitScriptEnd(ctx, prefix, startTime, step, "success", &result, nil)
 	return OutcomeSuccess, nil

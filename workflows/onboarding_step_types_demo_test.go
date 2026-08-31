@@ -149,11 +149,11 @@ func TestRunValidatorVerifiesThirdRepairWithoutAFourthRepair(t *testing.T) {
 		t.Fatal("validator retry must continue to final verification after exhausting repair budget")
 	}
 	final := stepByID(t, &wf, "verify-final-validator")
-	if final.Script != "run-validator.sh" || final.Command != "" || !final.WarnOnFailure || final.SkipIf != "previous_success" {
+	if final.Script != "run-validator.sh" || final.Command != "" || final.MetricsSource != "agent-validator" || !final.WarnOnFailure || final.SkipIf != "previous_success" {
 		t.Fatalf("final verification = %#v, want warning-on-failure verification after exhausted retry", final)
 	}
 	initial := retry.Steps[0]
-	if initial.Script != "run-validator.sh" || initial.Command != "" {
+	if initial.Script != "run-validator.sh" || initial.Command != "" || initial.MetricsSource != "agent-validator" {
 		t.Fatalf("retry validator = %#v, want shared validator script", initial)
 	}
 }

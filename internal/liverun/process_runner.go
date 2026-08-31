@@ -458,6 +458,14 @@ func (r *tuiProcessRunner) RunAgent(options *iexec.AgentProcessOptions) (iexec.P
 }
 
 func (r *tuiProcessRunner) RunScript(path string, stdin []byte, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
+	return r.runScript(path, stdin, captureStdout, workdir, nil)
+}
+
+func (r *tuiProcessRunner) RunScriptWithEnv(path string, stdin []byte, captureStdout bool, workdir string, environment []string) (iexec.ProcessResult, error) {
+	return r.runScript(path, stdin, captureStdout, workdir, environment)
+}
+
+func (r *tuiProcessRunner) runScript(path string, stdin []byte, captureStdout bool, workdir string, environment []string) (iexec.ProcessResult, error) {
 	defer func() {
 		r.mu.Lock()
 		r.cancelDelayedStepLocked()
@@ -466,7 +474,7 @@ func (r *tuiProcessRunner) RunScript(path string, stdin []byte, captureStdout bo
 
 	c := exec.Command(path) // #nosec G204
 	c.Stdin = bytes.NewReader(stdin)
-	c.Env = append(os.Environ(), "AGENT_RUNNER_BUNDLE_DIR="+scriptBundleDir(path))
+	c.Env = iexec.BuildAgentEnvironment(os.Environ(), nil, append(environment, "AGENT_RUNNER_BUNDLE_DIR="+scriptBundleDir(path)))
 	if workdir != "" {
 		c.Dir = filepath.Clean(workdir) // #nosec G304
 	}

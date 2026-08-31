@@ -186,7 +186,7 @@ type Step struct {
 	Inputs         []UIInput         `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 	OutcomeCapture string            `yaml:"outcome_capture,omitempty" json:"outcome_capture,omitempty"`
 	Tools          RunnerTools       `yaml:"tools,omitempty" json:"tools,omitempty"`
-	// MetricsSource declares that a shell step launches a tool which may invoke
+	// MetricsSource declares that a shell or script step launches a tool which may invoke
 	// nested models and will write the Runner structured metrics handoff.
 	MetricsSource string `yaml:"metrics_source,omitempty" json:"metrics_source,omitempty"`
 }
@@ -397,8 +397,8 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 		return err
 	}
 	if s.MetricsSource != "" {
-		if !isShell {
-			return fmt.Errorf(`"metrics_source" is only allowed on shell steps`)
+		if !isShell && !isScript {
+			return fmt.Errorf(`"metrics_source" is only allowed on shell and script steps`)
 		}
 		if s.MetricsSource != "agent-validator" {
 			return fmt.Errorf(`unknown metrics_source %q`, s.MetricsSource)

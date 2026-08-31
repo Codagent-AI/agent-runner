@@ -150,6 +150,17 @@ func (r *headlessProcessRunner) RunScript(path string, stdin []byte, captureStdo
 	return result, errors.Join(err, r.output.outputError())
 }
 
+func (r *headlessProcessRunner) RunScriptWithEnv(path string, stdin []byte, captureStdout bool, workdir string, environment []string) (iexec.ProcessResult, error) {
+	environmentRunner, ok := r.ProcessRunner.(interface {
+		RunScriptWithEnv(string, []byte, bool, string, []string) (iexec.ProcessResult, error)
+	})
+	if !ok {
+		return iexec.ProcessResult{}, fmt.Errorf("process runner does not support script environments")
+	}
+	result, err := environmentRunner.RunScriptWithEnv(path, stdin, captureStdout, workdir, environment)
+	return result, errors.Join(err, r.output.outputError())
+}
+
 func (r *headlessProcessRunner) SetPrefix(prefix string) {
 	if setter, ok := r.ProcessRunner.(interface{ SetPrefix(string) }); ok {
 		setter.SetPrefix(prefix)
@@ -332,9 +343,17 @@ func wrapAgentWriter(writer io.Writer, wrapper func(io.Writer) io.Writer) (wrapp
 }
 
 func (r *realProcessRunner) RunScript(path string, stdin []byte, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
+	return r.runScript(path, stdin, captureStdout, workdir, nil)
+}
+
+func (r *realProcessRunner) RunScriptWithEnv(path string, stdin []byte, captureStdout bool, workdir string, environment []string) (iexec.ProcessResult, error) {
+	return r.runScript(path, stdin, captureStdout, workdir, environment)
+}
+
+func (r *realProcessRunner) runScript(path string, stdin []byte, captureStdout bool, workdir string, environment []string) (iexec.ProcessResult, error) {
 	c := exec.Command(path) // #nosec G204 -- workflow script path is validated by executor
 	c.Stdin = bytes.NewReader(stdin)
-	c.Env = append(agentRunnerCommandEnv(), "AGENT_RUNNER_BUNDLE_DIR="+scriptBundleDir(path))
+	c.Env = iexec.BuildAgentEnvironment(agentRunnerCommandEnv(), nil, append(environment, "AGENT_RUNNER_BUNDLE_DIR="+scriptBundleDir(path)))
 	if workdir != "" {
 		c.Dir = filepath.Clean(workdir) // #nosec G304
 	}

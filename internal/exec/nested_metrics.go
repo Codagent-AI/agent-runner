@@ -36,26 +36,42 @@ type nestedMetricsCapture struct {
 }
 
 func prepareNestedMetrics(step *model.Step, ctx *model.ExecutionContext, command string) (*nestedMetricsCapture, error) {
-	if step.MetricsSource == "" {
-		return &nestedMetricsCapture{command: command}, nil
-	}
-	dir := filepath.Join(ctx.SessionDir, "nested-metrics")
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return nil, fmt.Errorf("create nested metrics directory: %w", err)
-	}
-	file, err := os.CreateTemp(dir, "handoff-*.jsonl")
+	capture, environment, err := prepareNestedMetricsEnvironment(step, ctx)
 	if err != nil {
-		return nil, fmt.Errorf("create nested metrics handoff: %w", err)
+		return nil, err
 	}
-	path := file.Name()
-	if err := file.Close(); err != nil {
-		return nil, fmt.Errorf("close nested metrics handoff: %w", err)
+	if len(environment) == 0 {
+		capture.command = command
+		return capture, nil
 	}
-	instrumented := "env AGENT_RUNNER_NESTED_METRICS_PATH=" + textfmt.ShellQuote(path) +
+	capture.command = "env AGENT_RUNNER_NESTED_METRICS_PATH=" + textfmt.ShellQuote(capture.path) +
 		" AGENT_RUNNER_NESTED_METRICS_ROLE='implementation-validator'" +
 		" AGENT_RUNNER_NESTED_METRICS_TOOL=" + textfmt.ShellQuote(step.MetricsSource) +
 		" sh -c " + textfmt.ShellQuote(command)
-	return &nestedMetricsCapture{path: path, parentAttemptID: filepath.Base(path), command: instrumented}, nil
+	return capture, nil
+}
+
+func prepareNestedMetricsEnvironment(step *model.Step, ctx *model.ExecutionContext) (*nestedMetricsCapture, []string, error) {
+	if step.MetricsSource == "" {
+		return &nestedMetricsCapture{}, nil, nil
+	}
+	dir := filepath.Join(ctx.SessionDir, "nested-metrics")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return nil, nil, fmt.Errorf("create nested metrics directory: %w", err)
+	}
+	file, err := os.CreateTemp(dir, "handoff-*.jsonl")
+	if err != nil {
+		return nil, nil, fmt.Errorf("create nested metrics handoff: %w", err)
+	}
+	path := file.Name()
+	if err := file.Close(); err != nil {
+		return nil, nil, fmt.Errorf("close nested metrics handoff: %w", err)
+	}
+	return &nestedMetricsCapture{path: path, parentAttemptID: filepath.Base(path)}, []string{
+		"AGENT_RUNNER_NESTED_METRICS_PATH=" + path,
+		"AGENT_RUNNER_NESTED_METRICS_ROLE=implementation-validator",
+		"AGENT_RUNNER_NESTED_METRICS_TOOL=" + step.MetricsSource,
+	}, nil
 }
 
 func readNestedMetrics(path, expectedRole, expectedTool string) (records []nestedInvocationRecord, invalid bool) {
