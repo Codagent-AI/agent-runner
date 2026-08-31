@@ -28,7 +28,7 @@ The starting-directory boundary SHALL validate only where the child process star
 - **WHEN** a workspace at `/workspace/foo` activates configured repository `backend` at `/projects/backend` and a repository-scoped parent calls an agent without `workdir`
 - **THEN** the child starts within `/projects/backend` even though that repository is outside the workspace tree
 
-#### Scenario: Workdir cannot escape the active scope
+#### Scenario: Workdir cannot escape the current worktree
 - **WHEN** a call supplies a path or symbolic link that resolves outside the active workspace or repository boundary
 - **THEN** Agent Runner rejects the starting workdir without spawning the child
 

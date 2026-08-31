@@ -136,7 +136,7 @@ The built-in workflows that open or update a pull request SHALL record its URL t
 
 A workflow that opens no pull request SHALL record nothing and SHALL display no label for that scope.
 
-#### Scenario: OpenSpec change workflow shows every link
+#### Scenario: OpenSpec change workflow shows the link
 - **WHEN** a multi-repository run of `openspec/change-v2.0.yaml` finalizes the workspace pull request and a pull request for each affected implementation repository
 - **THEN** the run-view breadcrumb shows the workspace pull request first followed by every implementation pull request in affected-repository order
 
