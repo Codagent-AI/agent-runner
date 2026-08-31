@@ -1,6 +1,7 @@
 package listview
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -300,10 +301,7 @@ func measureRunListCols(runList []runs.RunInfo) runListCols {
 		if w := runewidth.StringWidth(sanitize(workflowDisplay(r))); w > c.wfMax {
 			c.wfMax = w
 		}
-		step := r.CurrentStep
-		if step == "" {
-			step = "—"
-		}
+		step := runStepDisplay(r)
 		if w := runewidth.StringWidth(sanitize(step)); w > c.stepMax {
 			c.stepMax = w
 		}
@@ -373,10 +371,7 @@ func (m *Model) renderRunListRow(r *runs.RunInfo, isSel bool, c runListCols) str
 		prefix = cursorStyle.Render("▶") + "  "
 	}
 
-	step := r.CurrentStep
-	if step == "" {
-		step = "—"
-	}
+	step := runStepDisplay(r)
 
 	style := dimStyle
 	if isSel {
@@ -385,7 +380,7 @@ func (m *Model) renderRunListRow(r *runs.RunInfo, isSel bool, c runListCols) str
 
 	wfStyle := style.Bold(true)
 
-	line := m.renderStatusIcon(r.Status) + "  " +
+	line := m.renderStatusIcon(r) + "  " +
 		wfStyle.Render(fitCell(sanitize(workflowDisplay(r)), c.wfMax)) + "  " +
 		style.Render(fitCell(sanitize(r.ChangeName), c.nameMax)) + "  " +
 		style.Render(fitCell(sanitize(step), c.stepMax))
@@ -393,8 +388,18 @@ func (m *Model) renderRunListRow(r *runs.RunInfo, isSel bool, c runListCols) str
 	return prefix + line + "\n"
 }
 
-func (m *Model) renderStatusIcon(s runs.Status) string {
-	switch s {
+func runStepDisplay(r *runs.RunInfo) string {
+	if r == nil || r.CurrentStep == "" {
+		if r != nil && r.WarningCount > 0 {
+			return fmt.Sprintf("complete with warnings (%d)", r.WarningCount)
+		}
+		return "—"
+	}
+	return r.CurrentStep
+}
+
+func (m *Model) renderStatusIcon(r *runs.RunInfo) string {
+	switch r.Status {
 	case runs.StatusActive:
 		if tuistyle.BlinkOn(m.pulsePhase) {
 			return tuistyle.StatusSuccess.Render("●")
@@ -403,6 +408,9 @@ func (m *Model) renderStatusIcon(s runs.Status) string {
 	case runs.StatusInactive:
 		return statusInactive.Render("○")
 	case runs.StatusCompleted:
+		if r.WarningCount > 0 {
+			return tuistyle.StatusInactive.Render("!")
+		}
 		return statusDone.Render("✓")
 	}
 	return " "

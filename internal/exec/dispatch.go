@@ -120,7 +120,7 @@ func executeGroupStep(
 			return OutcomeAborted, nil
 		}
 		recordLastStepOutcome(ctx, outcome)
-		if outcome == OutcomeFailed && !steps[i].ContinueOnFailure {
+		if outcome == OutcomeFailed && !steps[i].ContinueOnFailure && !IsWarningOutcome(&steps[i], outcome) {
 			ctx.NestingPath = originalNestingPath
 			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), nil, step)
 			return OutcomeFailed, nil

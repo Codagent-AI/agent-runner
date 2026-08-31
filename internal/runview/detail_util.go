@@ -106,6 +106,8 @@ func statusLabel(s NodeStatus) string {
 		return "success"
 	case StatusFailed:
 		return "failed"
+	case StatusWarning:
+		return "warning"
 	case StatusSkipped:
 		return "skipped"
 	case StatusInProgress:

@@ -115,7 +115,7 @@ func (m *Model) styledRunStatus() string {
 		case "failed", "stopped":
 			return tuistyle.StatusFailed.Bold(true).Render(m.liveResult)
 		default:
-			return tuistyle.StatusSuccess.Render("completed")
+			return m.styledCompletedStatus()
 		}
 	}
 	// Inspect / list mode: use the run-lock and root status.
@@ -131,7 +131,7 @@ func (m *Model) styledRunStatus() string {
 		}
 		return result
 	case StatusSuccess:
-		return tuistyle.StatusSuccess.Render("completed")
+		return m.styledCompletedStatus()
 	default:
 		hint := " (r to resume)"
 		if m.entered == FromDefinition {
@@ -140,6 +140,21 @@ func (m *Model) styledRunStatus() string {
 		return tuistyle.StatusInactive.Bold(true).Render("inactive") +
 			tuistyle.DimStyle.Render(hint)
 	}
+}
+
+func (m *Model) warningCount() int {
+	count := len(m.tree.WarningOrigins())
+	if m.tree.RunWarningCount > count {
+		return m.tree.RunWarningCount
+	}
+	return count
+}
+
+func (m *Model) styledCompletedStatus() string {
+	if count := m.warningCount(); count > 0 {
+		return tuistyle.StatusInactive.Render(fmt.Sprintf("complete with warnings (%d)", count))
+	}
+	return tuistyle.StatusSuccess.Render("completed")
 }
 
 func formatLiveElapsed(start, now time.Time) string {

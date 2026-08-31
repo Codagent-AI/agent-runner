@@ -71,6 +71,31 @@ func TestParseLine(t *testing.T) {
 	}
 }
 
+func TestWarningStepPreservesFailedOutcomeAndIsNavigable(t *testing.T) {
+	wf := model.Workflow{Name: "warning-run", Steps: []model.Step{
+		{ID: "advisory", Command: "false"},
+		{ID: "done", Command: "true"},
+	}}
+	tree := BuildTree(&wf, "workflow.yaml")
+	tree.ApplyEvent(RawEvent{Prefix: "[advisory]", Type: "step_start", Data: map[string]any{}})
+	tree.ApplyEvent(RawEvent{Prefix: "[advisory]", Type: "step_end", Data: map[string]any{"status": "warning", "outcome": "failed", "stdout": "validator output"}})
+	tree.ApplyEvent(RawEvent{Prefix: "[done]", Type: "step_end", Data: map[string]any{"outcome": "success"}})
+	tree.ApplyEvent(RawEvent{Type: "run_end", Data: map[string]any{"outcome": "success", "completed_with_warnings": true, "warning_count": float64(1)}})
+
+	advisory := childByID(tree.Root, "advisory")
+	if advisory.Status != StatusWarning || advisory.Outcome != "failed" {
+		t.Fatalf("advisory = status %v, outcome %q; want warning / failed", advisory.Status, advisory.Outcome)
+	}
+	if tree.Root.Status != StatusSuccess || len(tree.WarningOrigins()) != 1 {
+		t.Fatalf("root status/origins = %v/%d, want success/1", tree.Root.Status, len(tree.WarningOrigins()))
+	}
+	m := &Model{tree: tree, path: []*StepNode{tree.Root}, selected: childByID(tree.Root, "done")}
+	m.handleWarningKey()
+	if m.selectedNode() != advisory {
+		t.Fatalf("selected = %q, want warning origin", m.selectedNode().ID)
+	}
+}
+
 func TestParsePrefix(t *testing.T) {
 	cases := []struct {
 		name   string

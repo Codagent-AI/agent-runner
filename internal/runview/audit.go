@@ -435,6 +435,9 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 	case "run_end":
 		outcome, _ := stringField(e.Data, "outcome")
 		applyOutcome(t.Root, outcome)
+		if count, ok := intField(e.Data, "warning_count"); ok {
+			t.RunWarningCount = count
+		}
 		if totals, ok := decodeRunTotals(e.Data); ok {
 			t.RunTotals = totals
 		}
@@ -458,6 +461,7 @@ func (t *Tree) applyStepEvent(event RawEvent, tokens []prefixToken) {
 	}
 	if event.Type == "step_end" {
 		applyStepEnd(n, event.Data)
+		t.recomputeWarningAncestry()
 		t.recordFailedLeaf(n)
 		// Skipped steps are represented by an end event only. That decision is
 		// still an ordered terminal execution for selected-detail context.
@@ -474,6 +478,7 @@ func (t *Tree) applyStepEvent(event RawEvent, tokens []prefixToken) {
 	// Always transition to in-progress — on resume, a step restarted after a
 	// terminal outcome must lose its stale status so the TUI renders running.
 	n.Status = StatusInProgress
+	n.WarningOrigin = false
 	n.Aborted = false
 	n.Outcome = ""
 	n.StartedAt = parseEventTime(event.Timestamp)
@@ -530,6 +535,58 @@ func (t *Tree) recordFailedLeaf(node *StepNode) {
 		return
 	}
 	t.assignFailureOrdinal(node)
+}
+
+// WarningOrigins returns explicit terminal warning origins in durable execution
+// order. An origin can itself be a loop or other container; containers that
+// merely carry warning ancestry are excluded.
+func (t *Tree) WarningOrigins() []*StepNode {
+	if t == nil || t.Root == nil {
+		return nil
+	}
+	var origins []*StepNode
+	var visit func(*StepNode)
+	visit = func(node *StepNode) {
+		if node == nil {
+			return
+		}
+		if node.WarningOrigin {
+			origins = append(origins, node)
+		}
+		for _, child := range node.Children {
+			visit(child)
+		}
+	}
+	visit(t.Root)
+	slices.SortFunc(origins, func(a, b *StepNode) int {
+		if a.StartOrdinal < b.StartOrdinal {
+			return -1
+		}
+		if a.StartOrdinal > b.StartOrdinal {
+			return 1
+		}
+		return 0
+	})
+	return origins
+}
+
+func (t *Tree) recomputeWarningAncestry() {
+	if t == nil || t.Root == nil {
+		return
+	}
+	var visit func(*StepNode) bool
+	visit = func(node *StepNode) bool {
+		if node == nil {
+			return false
+		}
+		hasWarning := node.WarningOrigin
+		for _, child := range node.Children {
+			hasWarning = visit(child) || hasWarning
+		}
+		node.WarningDescendant = hasWarning && !node.WarningOrigin
+		return hasWarning
+	}
+	visit(t.Root)
 }
 
 func (t *Tree) applyError(tokens []prefixToken, data map[string]any) {
@@ -1004,6 +1061,10 @@ func preCreateLoopIterations(loop *StepNode) {
 func applyStepEnd(n *StepNode, data map[string]any) {
 	outcome, _ := stringField(data, "outcome")
 	applyOutcome(n, outcome)
+	if status, _ := stringField(data, "status"); status == "warning" {
+		n.Status = StatusWarning
+		n.WarningOrigin = true
+	}
 
 	if v, ok := intField(data, "exit_code"); ok {
 		iv := v

@@ -490,7 +490,7 @@ func executeIterationBody(
 
 		recordLastStepOutcome(iterCtx, outcome)
 
-		if outcome == OutcomeFailed && !steps[i].ContinueOnFailure {
+		if outcome == OutcomeFailed && !steps[i].ContinueOnFailure && !IsWarningOutcome(&steps[i], outcome) {
 			persistIterationFailState(iterCtx, loopStepID, iteration, bodyStepID, bodyCompleted)
 			return iterationResult{failed: true}, nil
 		}

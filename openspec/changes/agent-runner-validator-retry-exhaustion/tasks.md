@@ -1,4 +1,4 @@
-- [ ] Implement the change described by these files:
+- [x] Implement the change described by these files:
   - [proposal.md](proposal.md)
   - [specs/validator-retry-verification/spec.md](specs/validator-retry-verification/spec.md)
   - [specs/step-flow-control/spec.md](specs/step-flow-control/spec.md)

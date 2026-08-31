@@ -262,6 +262,9 @@ func (m *Model) renderTreeRowLabel(n *StepNode, selected, staticInProgress bool,
 	if n.Status == StatusFailed {
 		style = tuistyle.StatusFailed
 	}
+	if n.Status == StatusWarning || n.WarningDescendant {
+		glyph = styledStatusGlyph(StatusWarning)
+	}
 	return prefix + strings.Repeat("  ", depth) + glyph + "  " + style.Render(label) + "  " + typeCol
 }
 
@@ -453,6 +456,8 @@ func (m *Model) statusGlyph(n *StepNode) string {
 		return styledStatusGlyph(StatusSuccess)
 	case StatusFailed:
 		return styledStatusGlyph(StatusFailed)
+	case StatusWarning:
+		return styledStatusGlyph(StatusWarning)
 	case StatusSkipped:
 		return styledStatusGlyph(StatusSkipped)
 	}
@@ -469,6 +474,8 @@ func styledStatusGlyph(status NodeStatus) string {
 		return tuistyle.StatusSuccess.Render("✓")
 	case StatusFailed:
 		return tuistyle.StatusFailed.Render("✗")
+	case StatusWarning:
+		return tuistyle.StatusInactive.Render("!")
 	case StatusSkipped:
 		return tuistyle.StatusDone.Render("⇥")
 	}
@@ -550,6 +557,9 @@ func (m *Model) helpBarParts() []string {
 
 	if m.canLaunchDebug() {
 		parts = append(parts, "d debug")
+	}
+	if m.warningOriginsAvailable() {
+		parts = append(parts, "w warnings")
 	}
 
 	if m.selectedNodeHasTruncatedOutput() {
@@ -729,6 +739,7 @@ func (m *Model) renderLegend() string {
 	b.WriteString(tuistyle.ScreenMargin + styledStatusGlyph(StatusInProgress) + "  running\n")
 	b.WriteString(tuistyle.ScreenMargin + styledStatusGlyph(StatusPending) + "  pending\n")
 	b.WriteString(tuistyle.ScreenMargin + styledStatusGlyph(StatusSuccess) + "  success\n")
+	b.WriteString(tuistyle.ScreenMargin + styledStatusGlyph(StatusWarning) + "  warning\n")
 	b.WriteString(tuistyle.ScreenMargin + styledStatusGlyph(StatusFailed) + "  failed\n")
 	b.WriteString(tuistyle.ScreenMargin + styledStatusGlyph(StatusSkipped) + "  skipped\n")
 

@@ -88,6 +88,9 @@ type RunState struct {
 	// The state file is preserved (not deleted) so the TUI can still display
 	// the run's metadata after completion.
 	Completed bool `json:"completed,omitempty"`
+	// WarningCount is the number of explicit terminal warning origins recorded
+	// by a successfully completed workflow.
+	WarningCount int `json:"warningCount,omitempty"`
 }
 
 // ResolveResumeStepResult holds the outcome of resolving which step to resume from.

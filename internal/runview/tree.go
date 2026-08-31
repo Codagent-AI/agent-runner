@@ -38,6 +38,7 @@ const (
 	StatusInProgress
 	StatusSuccess
 	StatusFailed
+	StatusWarning
 	StatusSkipped
 )
 
@@ -46,11 +47,16 @@ const (
 // nodes are created lazily as iteration_start events arrive. Sub-workflow
 // bodies are loaded lazily on sub_workflow_start or on first drill-in.
 type StepNode struct {
-	ID       string
-	Type     NodeType
-	Status   NodeStatus
-	Parent   *StepNode
-	Children []*StepNode
+	ID     string
+	Type   NodeType
+	Status NodeStatus
+	// WarningOrigin marks an explicitly non-blocking terminal failure. It may
+	// be a leaf or a loop/container. WarningDescendant distinguishes ancestors
+	// that merely contain such an origin.
+	WarningOrigin     bool
+	WarningDescendant bool
+	Parent            *StepNode
+	Children          []*StepNode
 
 	// Body is the static template for a loop's inner steps. Used to seed
 	// iteration children when iteration_start events arrive; also used as
@@ -77,6 +83,7 @@ type StepNode struct {
 	StaticBreakIf            string
 	StaticWorkdir            string
 	StaticContinueOnFailure  bool
+	StaticWarnOnFailure      bool
 	StaticCaptureStderr      bool
 	StaticUITitle            string
 	StaticUIBody             string
@@ -231,6 +238,10 @@ type Tree struct {
 	// RunTotals is populated from the authoritative totals on the latest
 	// run_end event. It is nil while a run is active or for legacy audit logs.
 	RunTotals *model.RunTotals
+	// RunWarningCount is the persisted terminal completion count. Origin nodes
+	// remain the source of navigation; this field preserves the summary even
+	// when a truncated historical audit cannot reconstruct every leaf.
+	RunWarningCount int
 
 	// WorkflowPath is the resolved absolute path of the top-level workflow.
 	WorkflowPath string
@@ -277,7 +288,7 @@ func isTerminalExecution(node *StepNode) bool {
 	}
 	switch node.Type {
 	case NodeShell, NodeScript, NodeHeadlessAgent, NodeInteractiveAgent, NodeAgentCall, NodeUI:
-		return node.Aborted || node.Status == StatusSuccess || node.Status == StatusFailed || node.Status == StatusSkipped
+		return node.Aborted || node.Status == StatusSuccess || node.Status == StatusWarning || node.Status == StatusFailed || node.Status == StatusSkipped
 	default:
 		return false
 	}
@@ -316,6 +327,7 @@ func buildStepNode(s *model.Step, parent *StepNode) *StepNode {
 		StaticBreakIf:           s.BreakIf,
 		StaticWorkdir:           s.Workdir,
 		StaticContinueOnFailure: s.ContinueOnFailure,
+		StaticWarnOnFailure:     s.WarnOnFailure,
 		StaticCaptureStderr:     s.CaptureStderr,
 	}
 	switch {

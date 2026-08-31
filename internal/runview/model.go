@@ -1149,6 +1149,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleResumeKey()
 	case "d":
 		return m.handleDebugKey()
+	case "w":
+		m.handleWarningKey()
 	case "g":
 		m.handleLoadFull()
 		m.rebuildDetail()
@@ -1173,6 +1175,29 @@ func (m *Model) handleDebugKey() (tea.Model, tea.Cmd) {
 			FailedProjectDir: m.copyDirectory(),
 		}
 	}
+}
+
+func (m *Model) warningOriginsAvailable() bool {
+	terminal := m.rootStatus() == StatusSuccess || m.rootStatus() == StatusFailed
+	return terminal && !m.running && !m.active && len(m.tree.WarningOrigins()) > 0
+}
+
+func (m *Model) handleWarningKey() {
+	if !m.warningOriginsAvailable() {
+		return
+	}
+	origins := m.tree.WarningOrigins()
+	next := origins[0]
+	for i, origin := range origins {
+		if m.selectedNode() == origin {
+			next = origins[(i+1)%len(origins)]
+			break
+		}
+	}
+	m.path = []*StepNode{m.tree.Root}
+	m.treeOffset = 0
+	m.navigateToNode(next)
+	m.detailOffset = 0
 }
 
 func (m *Model) handleFollowKey() {

@@ -196,7 +196,7 @@ func executeChildSteps(
 
 		recordLastStepOutcome(childCtx, outcome)
 
-		if outcome == OutcomeFailed && !workflow.Steps[i].ContinueOnFailure {
+		if outcome == OutcomeFailed && !workflow.Steps[i].ContinueOnFailure && !IsWarningOutcome(&workflow.Steps[i], outcome) {
 			return OutcomeFailed, nil
 		}
 	}

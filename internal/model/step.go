@@ -169,20 +169,23 @@ type Step struct {
 	Capture           string            `yaml:"capture,omitempty" json:"capture,omitempty"`
 	CaptureStderr     bool              `yaml:"capture_stderr,omitempty" json:"capture_stderr,omitempty"`
 	ContinueOnFailure bool              `yaml:"continue_on_failure,omitempty" json:"continue_on_failure,omitempty"`
-	SkipIf            string            `yaml:"skip_if,omitempty" json:"skip_if,omitempty"`
-	BreakIf           string            `yaml:"break_if,omitempty" json:"break_if,omitempty"`
-	Model             string            `yaml:"model,omitempty" json:"model,omitempty"`
-	Workdir           string            `yaml:"workdir,omitempty" json:"workdir,omitempty"`
-	Workflow          string            `yaml:"workflow,omitempty" json:"workflow,omitempty"`
-	Loop              *Loop             `yaml:"loop,omitempty" json:"loop,omitempty"`
-	Params            map[string]string `yaml:"params,omitempty" json:"params,omitempty"`
-	Steps             []Step            `yaml:"steps,omitempty" json:"steps,omitempty"`
-	Title             string            `yaml:"title,omitempty" json:"title,omitempty"`
-	Body              string            `yaml:"body,omitempty" json:"body,omitempty"`
-	Actions           []UIAction        `yaml:"actions,omitempty" json:"actions,omitempty"`
-	Inputs            []UIInput         `yaml:"inputs,omitempty" json:"inputs,omitempty"`
-	OutcomeCapture    string            `yaml:"outcome_capture,omitempty" json:"outcome_capture,omitempty"`
-	Tools             RunnerTools       `yaml:"tools,omitempty" json:"tools,omitempty"`
+	// WarnOnFailure converts a terminal failed or exhausted outcome into a
+	// non-blocking warning while preserving that raw outcome in audit evidence.
+	WarnOnFailure  bool              `yaml:"warn_on_failure,omitempty" json:"warn_on_failure,omitempty"`
+	SkipIf         string            `yaml:"skip_if,omitempty" json:"skip_if,omitempty"`
+	BreakIf        string            `yaml:"break_if,omitempty" json:"break_if,omitempty"`
+	Model          string            `yaml:"model,omitempty" json:"model,omitempty"`
+	Workdir        string            `yaml:"workdir,omitempty" json:"workdir,omitempty"`
+	Workflow       string            `yaml:"workflow,omitempty" json:"workflow,omitempty"`
+	Loop           *Loop             `yaml:"loop,omitempty" json:"loop,omitempty"`
+	Params         map[string]string `yaml:"params,omitempty" json:"params,omitempty"`
+	Steps          []Step            `yaml:"steps,omitempty" json:"steps,omitempty"`
+	Title          string            `yaml:"title,omitempty" json:"title,omitempty"`
+	Body           string            `yaml:"body,omitempty" json:"body,omitempty"`
+	Actions        []UIAction        `yaml:"actions,omitempty" json:"actions,omitempty"`
+	Inputs         []UIInput         `yaml:"inputs,omitempty" json:"inputs,omitempty"`
+	OutcomeCapture string            `yaml:"outcome_capture,omitempty" json:"outcome_capture,omitempty"`
+	Tools          RunnerTools       `yaml:"tools,omitempty" json:"tools,omitempty"`
 	// MetricsSource declares that a shell step launches a tool which may invoke
 	// nested models and will write the Runner structured metrics handoff.
 	MetricsSource string `yaml:"metrics_source,omitempty" json:"metrics_source,omitempty"`

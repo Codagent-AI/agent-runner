@@ -570,7 +570,8 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 		outcome, loopResult, stepErr := runStep(step, rs)
 		rs.ctx.FlushState = nil
 
-		completed := stepErr == nil && outcome != exec.OutcomeAborted && outcome != exec.OutcomeFailed
+		warning := exec.IsWarningOutcome(step, outcome)
+		completed := stepErr == nil && outcome != exec.OutcomeAborted && (outcome != exec.OutcomeFailed || warning)
 		if !completed && rs.ctx.LastSubWorkflowChild == nil && resumeChild != nil {
 			// A resume can fail before any child step starts, for example when
 			// the persisted child ID no longer exists in a sub-workflow. Keep
@@ -593,6 +594,13 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 		if outcome == exec.OutcomeFailed {
 			o := string(outcome)
 			rs.ctx.LastStepOutcome = &o
+			if warning {
+				rs.log.Printf("--- step %q failed (warning; workflow continued) ---\n\n", step.ID)
+				if stopAfterUntil(rs, step.ID, i) {
+					return ResultSuccess
+				}
+				continue
+			}
 			if step.ContinueOnFailure {
 				rs.log.Printf("--- step %q failed (continue_on_failure) ---\n\n", step.ID)
 				if stopAfterUntil(rs, step.ID, i) {
@@ -695,7 +703,7 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 	switch result {
 	case ResultSuccess:
 		if !rs.untilLeavesRemaining {
-			if err := markStateCompleted(rs.sessionDir); err != nil {
+			if err := markStateCompleted(rs.sessionDir, len(rs.ctx.WarningOrigins)); err != nil {
 				rs.log.Printf("agent-runner: warning: could not mark state completed: %v\n", err)
 			}
 		}
@@ -709,9 +717,11 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 			Type:      audit.EventRunEnd,
 			Data: map[string]any{
-				"outcome":          string(result),
-				"duration_ms":      time.Since(rs.runStartTime).Milliseconds(),
-				metrics.DataTotals: totals,
+				"outcome":                 string(result),
+				"completed_with_warnings": result == ResultSuccess && len(rs.ctx.WarningOrigins) > 0,
+				"warning_count":           len(rs.ctx.WarningOrigins),
+				"duration_ms":             time.Since(rs.runStartTime).Milliseconds(),
+				metrics.DataTotals:        totals,
 			},
 		})
 		for _, metricsErr := range rs.metricsCollector.Errors() {
@@ -726,13 +736,14 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 // markStateCompleted reads the run's state.json, sets Completed=true, and
 // rewrites it so the TUI can continue to display the run's metadata after it
 // finishes. The state file is intentionally preserved rather than deleted.
-func markStateCompleted(sessionDir string) error {
+func markStateCompleted(sessionDir string, warningCount int) error {
 	statePath := filepath.Join(sessionDir, "state.json")
 	state, err := stateio.ReadState(statePath)
 	if err != nil {
 		return err
 	}
 	state.Completed = true
+	state.WarningCount = warningCount
 	return stateio.WriteState(&state, sessionDir)
 }
 

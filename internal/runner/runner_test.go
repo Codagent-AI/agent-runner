@@ -822,6 +822,44 @@ func TestRunWorkflow(t *testing.T) {
 		}
 	})
 
+	t.Run("warn_on_failure preserves failed evidence and completes successfully", func(t *testing.T) {
+		dir := t.TempDir()
+		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 1, Stdout: "validator failed"}, {ExitCode: 0}}}
+		w := model.Workflow{
+			Name: "test",
+			Steps: []model.Step{
+				{ID: "advisory", Command: "false", Session: model.SessionNew, WarnOnFailure: true},
+				shellStep("reached", "echo yes"),
+			},
+		}
+		w.ApplyDefaults()
+		result, err := RunWorkflow(&w, map[string]string{}, &Options{
+			ProcessRunner: runner,
+			GlobExpander:  &mockGlob{},
+			Log:           &mockLog{},
+			SessionDir:    dir,
+		})
+		if err != nil || result != ResultSuccess {
+			t.Fatalf("RunWorkflow() = (%q, %v), want success", result, err)
+		}
+		if len(runner.calls) != 2 {
+			t.Fatalf("calls = %d, want warning step and following step", len(runner.calls))
+		}
+		body, err := os.ReadFile(filepath.Join(dir, "audit.log"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{`"status":"warning"`, `"outcome":"failed"`, `"completed_with_warnings":true`, `"warning_count":1`} {
+			if !strings.Contains(string(body), want) {
+				t.Fatalf("audit missing %s:\n%s", want, body)
+			}
+		}
+		state, err := stateio.ReadState(filepath.Join(dir, "state.json"))
+		if err != nil || !state.Completed || state.WarningCount != 1 {
+			t.Fatalf("state = %#v, %v; want completed with one warning", state, err)
+		}
+	})
+
 	t.Run("counted loop exhaustion succeeds workflow", func(t *testing.T) {
 		maxIterations := 1
 		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}}}
@@ -887,6 +925,55 @@ func TestRunWorkflow(t *testing.T) {
 		}
 		if len(runner.calls) != 1 {
 			t.Fatalf("expected only the loop body to run, got %d calls", len(runner.calls))
+		}
+	})
+
+	t.Run("warn_on_failure turns exhausted retry loop into a warning", func(t *testing.T) {
+		maxIterations := 1
+		dir := t.TempDir()
+		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 1}, {ExitCode: 0}}}
+		w := model.Workflow{Name: "test", Steps: []model.Step{
+			{ID: "retry", Loop: &model.Loop{Max: &maxIterations}, WarnOnFailure: true, Steps: []model.Step{
+				{ID: "always-fail", Command: "false", ContinueOnFailure: true, BreakIf: "success"},
+			}},
+			shellStep("reached", "echo reached"),
+		}}
+		w.ApplyDefaults()
+		result, err := RunWorkflow(&w, nil, &Options{ProcessRunner: runner, GlobExpander: &mockGlob{}, Log: &mockLog{}, SessionDir: dir})
+		if err != nil || result != ResultSuccess || len(runner.calls) != 2 {
+			t.Fatalf("RunWorkflow = (%q, %v), calls=%d; want success after warning", result, err, len(runner.calls))
+		}
+		body, err := os.ReadFile(filepath.Join(dir, "audit.log"))
+		if err != nil || !strings.Contains(string(body), `"outcome":"exhausted"`) || !strings.Contains(string(body), `"status":"warning"`) {
+			t.Fatalf("audit = %q, %v; want exhausted warning evidence", body, err)
+		}
+	})
+
+	t.Run("third repair receives verification without a fourth repair", func(t *testing.T) {
+		maxIterations := 3
+		runner := &mockRunner{results: []exec.ProcessResult{
+			{ExitCode: 1}, {ExitCode: 0}, // first validate, repair
+			{ExitCode: 1}, {ExitCode: 0}, // second validate, repair
+			{ExitCode: 1}, {ExitCode: 0}, // third validate, repair
+			{ExitCode: 0}, // verification only
+		}}
+		w := model.Workflow{Name: "validator", Steps: []model.Step{
+			{ID: "retry", ContinueOnFailure: true, Loop: &model.Loop{Max: &maxIterations}, Steps: []model.Step{
+				{ID: "validate", Command: "validate", ContinueOnFailure: true, BreakIf: "success"},
+				{ID: "repair", Command: "repair", SkipIf: "previous_success", ContinueOnFailure: true},
+			}},
+			{ID: "verify-final", Command: "verify-final", SkipIf: "previous_success", WarnOnFailure: true},
+		}}
+		w.ApplyDefaults()
+		result, err := RunWorkflow(&w, nil, &Options{ProcessRunner: runner, GlobExpander: &mockGlob{}, Log: &mockLog{}, SessionDir: t.TempDir()})
+		if err != nil || result != ResultSuccess {
+			t.Fatalf("RunWorkflow = (%q, %v), want success", result, err)
+		}
+		if len(runner.calls) != 7 {
+			t.Fatalf("calls = %#v, want 3 repairs plus their 4 validations", runner.calls)
+		}
+		if got := runner.calls[len(runner.calls)-1][2]; got != "verify-final" {
+			t.Fatalf("last call = %q, want final verification", got)
 		}
 	})
 

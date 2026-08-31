@@ -384,6 +384,16 @@ func TestNewTab_TabCyclingIntoNewTabResetsShowHidden(t *testing.T) {
 	}
 }
 
+func TestListView_RendersCompletedWarningCount(t *testing.T) {
+	run := completedRun()
+	run.WarningCount = 2
+	m := newTestListModel([]runs.RunInfo{run})
+	view := m.renderRunList(m.currentRuns, 0, &m.currentDirOffset)
+	if !strings.Contains(view, "complete with warnings (2)") {
+		t.Fatalf("run list = %q, want warning-qualified completion", view)
+	}
+}
+
 func TestListView_UsesSingleScreenMargin(t *testing.T) {
 	m := newTestListModel([]runs.RunInfo{inactiveRun()})
 	m.cwd = "/repo/project"

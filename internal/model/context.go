@@ -190,6 +190,9 @@ type ExecutionContext struct {
 	// AgentDeprecations tracks legacy profile warnings already emitted in this
 	// run. Child contexts share the state so aliases warn at most once.
 	AgentDeprecations *AgentDeprecationState
+	// WarningOrigins is shared by child contexts and records explicitly
+	// designated terminal warnings by their complete audit prefix.
+	WarningOrigins map[string]struct{}
 
 	// Control is the lazily-created run-scoped control server. It is
 	// intentionally opaque here to keep core model types independent of runtime
@@ -303,6 +306,7 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		ProfileStore:             opts.ProfileStore,
 		AuditLogger:              opts.AuditLogger,
 		AgentDeprecations:        NewAgentDeprecationState(),
+		WarningOrigins:           make(map[string]struct{}),
 		PullRequestCaptureState:  NewPullRequestCaptureState(),
 		NamedSessions:            namedSessions,
 		NamedSessionDecls:        namedSessionDecls,
@@ -421,6 +425,7 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		ProfileStore:             parent.ProfileStore,
 		AuditLogger:              parent.AuditLogger,
 		AgentDeprecations:        parent.AgentDeprecations,
+		WarningOrigins:           parent.WarningOrigins,
 		PullRequestCaptureState:  parent.PullRequestCaptureState,
 		Control:                  parent.Control,
 		InteractiveAttempt:       parent.InteractiveAttempt,
@@ -508,6 +513,7 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		ProfileStore:             parent.ProfileStore,
 		AuditLogger:              parent.AuditLogger,
 		AgentDeprecations:        parent.AgentDeprecations,
+		WarningOrigins:           parent.WarningOrigins,
 		PullRequestCaptureState:  parent.PullRequestCaptureState,
 		Control:                  parent.Control,
 		InteractiveAttempt:       parent.InteractiveAttempt,

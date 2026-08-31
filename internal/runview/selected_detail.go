@@ -88,6 +88,9 @@ func buildDetailDocument(node *StepNode, options detailBuildOptions) detailDocum
 	if node.ErrorMessage != "" {
 		doc.sections = append(doc.sections, detailSection{label: "Error", kind: detailRailError, body: node.ErrorMessage, copy: node.ErrorMessage})
 	}
+	if node.Status == StatusWarning {
+		doc.sections = append(doc.sections, detailSection{label: "Warning", kind: detailRailError, body: "Workflow execution continued after this non-blocking failure.", copy: "Workflow execution continued after this non-blocking failure."})
+	}
 	return doc
 }
 
@@ -515,7 +518,7 @@ func aggregateChildStatuses(children []*StepNode) []string {
 		counts[child.Status]++
 	}
 	var lines []string
-	for _, status := range []NodeStatus{StatusSuccess, StatusInProgress, StatusPending, StatusSkipped, StatusFailed} {
+	for _, status := range []NodeStatus{StatusSuccess, StatusWarning, StatusInProgress, StatusPending, StatusSkipped, StatusFailed} {
 		if counts[status] > 0 {
 			lines = append(lines, fmt.Sprintf("%d %s", counts[status], statusLabel(status)))
 		}

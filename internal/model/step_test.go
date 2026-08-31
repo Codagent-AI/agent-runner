@@ -20,6 +20,13 @@ func TestStepSchema(t *testing.T) {
 		}
 	})
 
+	t.Run("accepts warn_on_failure on a script step", func(t *testing.T) {
+		s := Step{ID: "advisory", Script: "check.sh", WarnOnFailure: true}
+		if err := s.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
 	t.Run("accepts a valid agent step with prompt and agent", func(t *testing.T) {
 		s := Step{ID: "review", Agent: "planner", Mode: ModeInteractive, Prompt: "Review code", Session: SessionNew}
 		if err := s.Validate(nil); err != nil {
