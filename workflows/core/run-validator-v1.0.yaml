@@ -14,13 +14,9 @@ steps:
       max: 3
     steps:
       - id: run-validator
-        command: |
-          if [ -n "{{task_file}}" ]; then
-            agent-validator run --report --enable-review task-compliance --context-file "{{task_file}}"
-          else
-            agent-validator run --report
-          fi
-        metrics_source: agent-validator
+        script: run-validator.sh
+        script_inputs:
+          task_file: "{{task_file}}"
         capture: validator_output
         capture_stderr: true
         continue_on_failure: true
@@ -57,13 +53,9 @@ steps:
   # success means its validator already passed, so this only runs after the
   # repair budget was exhausted. It is verification-only: no fourth repair.
   - id: verify-final-validator
-    command: |
-      if [ -n "{{task_file}}" ]; then
-        agent-validator run --report --enable-review task-compliance --context-file "{{task_file}}"
-      else
-        agent-validator run --report
-      fi
-    metrics_source: agent-validator
+    script: run-validator.sh
+    script_inputs:
+      task_file: "{{task_file}}"
     capture: validator_output
     capture_stderr: true
     skip_if: previous_success

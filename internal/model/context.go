@@ -22,6 +22,13 @@ type AgentDeprecationState struct {
 	seen map[string]bool
 }
 
+// WarningState records explicit terminal warning origins for one workflow run.
+// It is shared by nested contexts, including concurrently dispatched steps.
+type WarningState struct {
+	mu      sync.Mutex
+	origins map[string]struct{}
+}
+
 // IntakeHandoffState coordinates the one-time automatic intake delivery for a
 // complete workflow run. Every nested execution context shares one instance.
 type IntakeHandoffState struct {
@@ -41,6 +48,31 @@ type AgentOverride struct {
 // NewAgentDeprecationState creates an empty run-scoped deprecation set.
 func NewAgentDeprecationState() *AgentDeprecationState {
 	return &AgentDeprecationState{seen: make(map[string]bool)}
+}
+
+// NewWarningState creates an empty run-scoped warning origin registry.
+func NewWarningState() *WarningState {
+	return &WarningState{origins: make(map[string]struct{})}
+}
+
+// Add records a warning origin by its complete audit prefix.
+func (s *WarningState) Add(prefix string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.origins[prefix] = struct{}{}
+}
+
+// Count returns the number of distinct warning origins recorded for the run.
+func (s *WarningState) Count() int {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.origins)
 }
 
 // NewIntakeHandoffState creates run-scoped intake delivery state.
@@ -192,7 +224,7 @@ type ExecutionContext struct {
 	AgentDeprecations *AgentDeprecationState
 	// WarningOrigins is shared by child contexts and records explicitly
 	// designated terminal warnings by their complete audit prefix.
-	WarningOrigins map[string]struct{}
+	WarningOrigins *WarningState
 
 	// Control is the lazily-created run-scoped control server. It is
 	// intentionally opaque here to keep core model types independent of runtime
@@ -306,7 +338,7 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		ProfileStore:             opts.ProfileStore,
 		AuditLogger:              opts.AuditLogger,
 		AgentDeprecations:        NewAgentDeprecationState(),
-		WarningOrigins:           make(map[string]struct{}),
+		WarningOrigins:           NewWarningState(),
 		PullRequestCaptureState:  NewPullRequestCaptureState(),
 		NamedSessions:            namedSessions,
 		NamedSessionDecls:        namedSessionDecls,

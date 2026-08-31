@@ -381,8 +381,8 @@ func (s *Step) validateCaptureFields(isAgent, isShell bool) error {
 	if s.CaptureStderr && s.Capture == "" {
 		return fmt.Errorf(`"capture_stderr" requires "capture"`)
 	}
-	if s.CaptureStderr && !isShell {
-		return fmt.Errorf(`"capture_stderr" is only allowed on shell steps`)
+	if s.CaptureStderr && !isShell && s.Script == "" {
+		return fmt.Errorf(`"capture_stderr" is only allowed on shell and script steps`)
 	}
 	return nil
 }

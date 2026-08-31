@@ -1,12 +1,30 @@
 package model
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/google/go-cmp/cmp"
 )
+
+func TestWarningStateSafelyDeduplicatesConcurrentOrigins(t *testing.T) {
+	state := NewWarningState()
+	var workers sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		workers.Add(1)
+		go func(index int) {
+			defer workers.Done()
+			state.Add(fmt.Sprintf("step-%d", index%4))
+		}(i)
+	}
+	workers.Wait()
+	if got := state.Count(); got != 4 {
+		t.Fatalf("warning origin count = %d, want 4", got)
+	}
+}
 
 func TestIntakeHandoffStateRetriesClaimAfterPendingInvocationDoesNotLaunch(t *testing.T) {
 	state := NewIntakeHandoffState(false)

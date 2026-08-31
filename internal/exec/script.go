@@ -54,7 +54,11 @@ func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner Pro
 		return OutcomeFailed, nil
 	}
 	if step.Capture != "" {
-		captured, err := captureScriptOutput(step.CaptureFormat, result.Stdout)
+		capturedOutput := result.Stdout
+		if step.CaptureStderr && result.ExitCode != 0 && result.Stderr != "" {
+			capturedOutput += "\n\nSTDERR:\n" + result.Stderr
+		}
+		captured, err := captureScriptOutput(step.CaptureFormat, capturedOutput)
 		if err != nil {
 			emitScriptEnd(ctx, prefix, startTime, step, "failed", &result, err)
 			return OutcomeFailed, err

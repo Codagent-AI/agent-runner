@@ -540,86 +540,84 @@ func auditProfileSource(cfg *config.Config) string {
 func executeSteps(rs *runState, startIndex int) WorkflowResult {
 	for i := startIndex; i < len(rs.workflow.Steps); i++ {
 		step := &rs.workflow.Steps[i]
-
-		skip, skipErr := exec.ShouldSkipStep(step.SkipIf, rs.ctx.LastStepOutcome, rs.ctx, step.ID)
-		if skipErr != nil {
-			rs.log.Printf("\nagent-runner: step %q skip_if evaluation failed: %v\n", step.ID, skipErr)
-			return ResultFailed
-		}
-		if skip {
-			emitSkippedStep(rs, step, i)
-			if step.ID == rs.until {
-				writeStepState(step, rs.ctx, &rs.workflow, rs.workflowHash, rs.sessionDir, nil, true)
-			}
-			if stopAfterUntil(rs, step.ID, i) {
-				return ResultSuccess
-			}
-			continue
-		}
-
-		// Fresh chain for each top-level step; writeStepState intentionally
-		// does not clear it so the mid-step and post-step writes can share.
-		resumeChild := rs.ctx.ResumeChildState
-		rs.ctx.LastSubWorkflowChild = nil
-
-		stepRef := step // capture for closure
-		rs.ctx.FlushState = func() {
-			writeStepState(stepRef, rs.ctx, &rs.workflow, rs.workflowHash, rs.sessionDir, nil, false)
-		}
-
-		outcome, loopResult, stepErr := runStep(step, rs)
-		rs.ctx.FlushState = nil
-
-		warning := exec.IsWarningOutcome(step, outcome)
-		completed := stepErr == nil && outcome != exec.OutcomeAborted && (outcome != exec.OutcomeFailed || warning)
-		if !completed && rs.ctx.LastSubWorkflowChild == nil && resumeChild != nil {
-			// A resume can fail before any child step starts, for example when
-			// the persisted child ID no longer exists in a sub-workflow. Keep
-			// the prior chain so this failed attempt does not erase the last
-			// recoverable resume position.
-			rs.ctx.LastSubWorkflowChild = resumeChild
-		}
-		writeStepState(step, rs.ctx, &rs.workflow, rs.workflowHash, rs.sessionDir, loopResult, completed)
-
-		if stepErr != nil {
-			rs.log.Printf("\nagent-runner: step %q error: %v\n", step.ID, stepErr)
-			return ResultFailed
-		}
-
-		if outcome == exec.OutcomeAborted {
-			rs.log.Println("\nagent-runner: workflow stopped.")
-			return ResultStopped
-		}
-
-		if outcome == exec.OutcomeFailed {
-			o := string(outcome)
-			rs.ctx.LastStepOutcome = &o
-			if warning {
-				rs.log.Printf("--- step %q failed (warning; workflow continued) ---\n\n", step.ID)
-				if stopAfterUntil(rs, step.ID, i) {
-					return ResultSuccess
-				}
-				continue
-			}
-			if step.ContinueOnFailure {
-				rs.log.Printf("--- step %q failed (continue_on_failure) ---\n\n", step.ID)
-				if stopAfterUntil(rs, step.ID, i) {
-					return ResultSuccess
-				}
-				continue
-			}
-			rs.log.Printf("\nagent-runner: step %q failed. Stopping.\n", step.ID)
-			return ResultFailed
-		}
-
-		o := "success"
-		rs.ctx.LastStepOutcome = &o
-		if stopAfterUntil(rs, step.ID, i) {
-			return ResultSuccess
+		result, terminal := executeTopLevelStep(rs, step, i)
+		if terminal {
+			return result
 		}
 	}
 
 	return ResultSuccess
+}
+
+func executeTopLevelStep(rs *runState, step *model.Step, index int) (WorkflowResult, bool) {
+	skip, err := exec.ShouldSkipStep(step.SkipIf, rs.ctx.LastStepOutcome, rs.ctx, step.ID)
+	if err != nil {
+		rs.log.Printf("\nagent-runner: step %q skip_if evaluation failed: %v\n", step.ID, err)
+		return ResultFailed, true
+	}
+	if skip {
+		emitSkippedStep(rs, step, index)
+		if step.ID == rs.until {
+			writeStepState(step, rs.ctx, &rs.workflow, rs.workflowHash, rs.sessionDir, nil, true)
+		}
+		return ResultSuccess, stopAfterUntil(rs, step.ID, index)
+	}
+
+	outcome, err := runAndPersistTopLevelStep(rs, step)
+	if err != nil {
+		rs.log.Printf("\nagent-runner: step %q error: %v\n", step.ID, err)
+		return ResultFailed, true
+	}
+	if outcome == exec.OutcomeAborted {
+		rs.log.Println("\nagent-runner: workflow stopped.")
+		return ResultStopped, true
+	}
+	if outcome == exec.OutcomeFailed {
+		return handleFailedTopLevelStep(rs, step, index)
+	}
+
+	o := "success"
+	rs.ctx.LastStepOutcome = &o
+	return ResultSuccess, stopAfterUntil(rs, step.ID, index)
+}
+
+func runAndPersistTopLevelStep(rs *runState, step *model.Step) (exec.StepOutcome, error) {
+	// Fresh chain for each top-level step; writeStepState intentionally does
+	// not clear it so the mid-step and post-step writes can share.
+	resumeChild := rs.ctx.ResumeChildState
+	rs.ctx.LastSubWorkflowChild = nil
+	stepRef := step
+	rs.ctx.FlushState = func() {
+		writeStepState(stepRef, rs.ctx, &rs.workflow, rs.workflowHash, rs.sessionDir, nil, false)
+	}
+
+	outcome, loopResult, err := runStep(step, rs)
+	rs.ctx.FlushState = nil
+	warning := exec.IsWarningOutcome(step, outcome)
+	completed := err == nil && outcome != exec.OutcomeAborted && (outcome != exec.OutcomeFailed || warning)
+	if !completed && rs.ctx.LastSubWorkflowChild == nil && resumeChild != nil {
+		// A resume can fail before any child step starts, for example when the
+		// persisted child ID no longer exists in a sub-workflow. Keep the prior
+		// chain so this failed attempt does not erase the recovery position.
+		rs.ctx.LastSubWorkflowChild = resumeChild
+	}
+	writeStepState(step, rs.ctx, &rs.workflow, rs.workflowHash, rs.sessionDir, loopResult, completed)
+	return outcome, err
+}
+
+func handleFailedTopLevelStep(rs *runState, step *model.Step, index int) (WorkflowResult, bool) {
+	o := string(exec.OutcomeFailed)
+	rs.ctx.LastStepOutcome = &o
+	if exec.IsWarningOutcome(step, exec.OutcomeFailed) {
+		rs.log.Printf("--- step %q failed (warning; workflow continued) ---\n\n", step.ID)
+		return ResultSuccess, stopAfterUntil(rs, step.ID, index)
+	}
+	if step.ContinueOnFailure {
+		rs.log.Printf("--- step %q failed (continue_on_failure) ---\n\n", step.ID)
+		return ResultSuccess, stopAfterUntil(rs, step.ID, index)
+	}
+	rs.log.Printf("\nagent-runner: step %q failed. Stopping.\n", step.ID)
+	return ResultFailed, true
 }
 
 func stopAfterUntil(rs *runState, stepID string, stepIndex int) bool {
@@ -703,7 +701,7 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 	switch result {
 	case ResultSuccess:
 		if !rs.untilLeavesRemaining {
-			if err := markStateCompleted(rs.sessionDir, len(rs.ctx.WarningOrigins)); err != nil {
+			if err := markStateCompleted(rs.sessionDir, rs.ctx.WarningOrigins.Count()); err != nil {
 				rs.log.Printf("agent-runner: warning: could not mark state completed: %v\n", err)
 			}
 		}
@@ -718,8 +716,8 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 			Type:      audit.EventRunEnd,
 			Data: map[string]any{
 				"outcome":                 string(result),
-				"completed_with_warnings": result == ResultSuccess && len(rs.ctx.WarningOrigins) > 0,
-				"warning_count":           len(rs.ctx.WarningOrigins),
+				"completed_with_warnings": result == ResultSuccess && rs.ctx.WarningOrigins.Count() > 0,
+				"warning_count":           rs.ctx.WarningOrigins.Count(),
 				"duration_ms":             time.Since(rs.runStartTime).Milliseconds(),
 				metrics.DataTotals:        totals,
 			},
