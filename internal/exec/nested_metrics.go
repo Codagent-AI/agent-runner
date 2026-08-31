@@ -157,6 +157,7 @@ func emitNestedMetricCapture(ctx *model.ExecutionContext, step *model.Step, pref
 			StepType: "agent", Kind: "nested-agent", CLI: record.Usage.CLI,
 			SessionID: record.SessionID, AgentInvoked: true, Role: record.Role, Tool: record.Tool,
 		}
+		setExecutionRepository(ctx, &identity)
 		emitAudit(ctx, audit.Event{
 			Timestamp: formatAuditTimestamp(time.Now()), Prefix: prefix,
 			Type: audit.EventNestedAgentEnd, Data: map[string]any{
@@ -177,6 +178,7 @@ func emitNestedMetricCapture(ctx *model.ExecutionContext, step *model.Step, pref
 			StepType: "agent", Kind: "nested-agent", AgentInvoked: true,
 			Role: "implementation-validator", Tool: step.MetricsSource,
 		}
+		setExecutionRepository(ctx, &identity)
 		emitAudit(ctx, audit.Event{
 			Timestamp: formatAuditTimestamp(time.Now()), Prefix: prefix,
 			Type: audit.EventNestedAgentEnd, Data: map[string]any{

@@ -421,6 +421,7 @@ func TestExecuteShellStepEmitsStructuredNestedModelMetrics(t *testing.T) {
 	ctx := makeCtx()
 	ctx.SessionDir = t.TempDir()
 	ctx.AuditLogger = auditLog
+	ctx.ActiveRepository = &model.Repository{Name: "backend", Dir: "/repos/backend"}
 	runner := &nestedMetricsRunner{contents: `{"schema_version":1,"invocation_id":"review-1","role":"implementation-validator","tool":"agent-validator","outcome":"success","duration_ms":25,"usage":{"status":"collected","cli":"codex","provider":"openai","model":"gpt-5.6-sol","identity":{"requested_cli":"codex","requested_model":"gpt-5.6-sol","effective_cli":"codex","effective_provider":"openai","effective_model":"gpt-5.6-sol","provider_source":"adapter","model_source":"invocation"},"tokens":{"input":7,"output":2},"token_totals":{"input":7,"output":2,"total":9},"source":"agent-validator:codex"}}` + "\n"}
 	step := model.Step{ID: "validate", Command: "agent-validator run", MetricsSource: "agent-validator"}
 
@@ -441,7 +442,8 @@ func TestExecuteShellStepEmitsStructuredNestedModelMetrics(t *testing.T) {
 	}
 	identity := nested.Data["identity"].(model.ExecutionIdentity)
 	usage := nested.Data["usage"].(model.UsageRecord)
-	if identity.Role != "implementation-validator" || identity.Tool != "agent-validator" || identity.StepID != "review-1" || usage.Tokens[model.TokenInput] != 7 {
+	if identity.Role != "implementation-validator" || identity.Tool != "agent-validator" || identity.StepID != "review-1" ||
+		identity.RepositoryName != "backend" || identity.RepositoryDir != "/repos/backend" || usage.Tokens[model.TokenInput] != 7 {
 		t.Fatalf("nested identity/usage = %+v / %+v", identity, usage)
 	}
 }

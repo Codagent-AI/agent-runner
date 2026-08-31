@@ -71,11 +71,15 @@ func executionIdentity(ctx *model.ExecutionContext, step *model.Step, kind strin
 		Iteration: iteration, CLI: cliName, SessionID: sessionID, SessionStrategy: string(step.Session), AgentInvoked: agentInvoked,
 		Role: role, Tool: tool,
 	}
+	setExecutionRepository(ctx, &identity)
+	return identity
+}
+
+func setExecutionRepository(ctx *model.ExecutionContext, identity *model.ExecutionIdentity) {
 	if ctx.ActiveRepository != nil && ctx.ActiveRepository.Name != "default" {
 		identity.RepositoryName = ctx.ActiveRepository.Name
 		identity.RepositoryDir = ctx.ActiveRepository.Dir
 	}
-	return identity
 }
 
 func executionIdentityPrefix(ctx *model.ExecutionContext) string {
