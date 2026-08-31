@@ -1,6 +1,7 @@
 package builtinworkflows
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -1373,6 +1374,56 @@ func TestCoreCommitChangePlanRejectsRepositoryRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(gitMarker); !os.IsNotExist(err) {
 		t.Fatalf("git was invoked for repository-root path: %v", err)
+	}
+}
+
+func TestCoreCheckPlanningArtifactsRejectsDotSegments(t *testing.T) {
+	script, err := ReadAsset("core/check-planning-artifacts.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(core/check-planning-artifacts.sh): %v", err)
+	}
+
+	tempDir := t.TempDir()
+	scriptPath := filepath.Join(tempDir, "check-planning-artifacts.sh")
+	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tempDir, "change", "nested"), 0o755); err != nil {
+		t.Fatalf("create change directory: %v", err)
+	}
+	for _, path := range []string{
+		filepath.Join(tempDir, "change", "proposal.md"),
+		filepath.Join(tempDir, "change", "nested", "tasks.md"),
+	} {
+		if err := os.WriteFile(path, []byte("content\n"), 0o600); err != nil {
+			t.Fatalf("write artifact: %v", err)
+		}
+	}
+	valid := exec.Command("sh", scriptPath)
+	valid.Dir = tempDir
+	valid.Stdin = strings.NewReader(
+		`{"change_dir":"change","required_files":"proposal.md,nested/tasks.md","require_specs":"false"}`,
+	)
+	if out, err := valid.CombinedOutput(); err != nil {
+		t.Fatalf("script rejected confined artifact paths: %v\n%s", err, out)
+	}
+
+	for _, requiredFiles := range []string{".", "./proposal.md", "nested/./tasks.md", "nested/."} {
+		t.Run(requiredFiles, func(t *testing.T) {
+			cmd := exec.Command("sh", scriptPath)
+			cmd.Dir = tempDir
+			cmd.Stdin = strings.NewReader(fmt.Sprintf(
+				`{"change_dir":"change","required_files":%q,"require_specs":"false"}`,
+				requiredFiles,
+			))
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("script accepted required_files=%q", requiredFiles)
+			}
+			if !strings.Contains(string(out), "required file must be a confined relative path") {
+				t.Fatalf("output = %q, want confined-path error", out)
+			}
+		})
 	}
 }
 
