@@ -464,9 +464,31 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 		t.applyStepEvent(e, tokens)
 	case "iteration_start", "iteration_end":
 		t.applyIterationEvent(e, tokens)
+	case "nested_agent_end":
+		t.applyNestedAgentEvent(e, tokens)
 	case "sub_workflow_start", "sub_workflow_end":
 		t.applySubWorkflowEvent(e, tokens)
 	}
+}
+
+func (t *Tree) applyNestedAgentEvent(event RawEvent, tokens []prefixToken) {
+	node := t.resolve(tokens, true)
+	if node == nil || !dataCarriesMetrics(event.Data) {
+		return
+	}
+	outcome, _ := stringField(event.Data, "outcome")
+	metrics := AttemptMetrics{
+		Attempt: len(node.Attempts) + 1, Outcome: outcome, AgentInvoked: true, NestedAgent: true,
+	}
+	if usage, ok := decodeUsageRecord(event.Data); ok {
+		metrics.Usage = usage
+	}
+	if cost, exists := event.Data["estimated_api_cost_usd"]; exists && cost != nil {
+		if value, ok := float64FieldValue(cost); ok {
+			metrics.CostUSD = &value
+		}
+	}
+	node.Attempts = append(node.Attempts, metrics)
 }
 
 func (t *Tree) applyRepositoryEvent(event RawEvent, tokens []prefixToken) {
@@ -1176,7 +1198,7 @@ func applyStepEnd(n *StepNode, data map[string]any) {
 		}
 	}
 	for i, a := range n.Attempts {
-		if a.Attempt == attempt {
+		if a.Attempt == attempt && a.AgentInvoked == agentInvoked {
 			n.Attempts[i] = metrics
 			return
 		}

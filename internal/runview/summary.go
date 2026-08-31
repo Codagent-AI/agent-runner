@@ -332,7 +332,7 @@ func aggregateOwnSummaryMetrics(node *StepNode, now time.Time) summaryMetrics {
 		// agent. Skipped or never-invoked agent steps are excluded so the
 		// mid-run indicator matches the finished-run one (which filters on
 		// agent_invoked via the authoritative run_end totals).
-		if isSummaryAgentExecution(node) && attempt.AgentInvoked {
+		if attempt.AgentInvoked && (isSummaryAgentExecution(node) || attempt.NestedAgent) {
 			metrics.agentAttempts++
 			if attempt.CostUSD != nil {
 				metrics.costReported++

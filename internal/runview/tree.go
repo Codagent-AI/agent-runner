@@ -170,6 +170,7 @@ type AttemptMetrics struct {
 	DurationMs   *int64
 	Outcome      string
 	AgentInvoked bool // whether this attempt actually launched an agent; gates mid-run coverage denominators
+	NestedAgent  bool // usage came from a nested agent launched by a non-agent step
 }
 
 // NodeKey returns a stable key for a node based on its structural position in
