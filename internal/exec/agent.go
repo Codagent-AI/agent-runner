@@ -231,10 +231,18 @@ func ExecuteAgentStep(
 		return invocation.Outcome, runErr
 	}
 
+	discoveredID := recordCompletedAgentStep(step, ctx, &invocation, log)
+
+	extraction := cli.UsageExtraction{Usage: invocation.Usage, EstimatedCostUSD: invocation.EstimatedCostUSD}
+	emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, invocation.CLILaunched, discoveredID, invocation.Outcome, invocation.Response, invocation.Stderr, &invocation.ExitCode, nil, &extraction, invocation.UsageError)
+
+	return invocation.Outcome, nil
+}
+
+func recordCompletedAgentStep(step *model.Step, ctx *model.ExecutionContext, invocation *AgentInvocationResult, log Logger) string {
 	if step.Capture != "" {
 		captureAgentResponse(step, ctx, invocation.Response)
 	}
-
 	// Record the originating profile before post-exit session discovery.
 	if step.Session == model.SessionNew || model.IsNamedSession(step.Session) {
 		ctx.LastSessionStepID = step.ID
@@ -242,13 +250,7 @@ func ExecuteAgentStep(
 			ctx.SessionProfiles[step.ID] = profile
 		}
 	}
-
-	discoveredID := storeDiscoveredSession(step, ctx, invocation.DiscoveredSessionID, log)
-
-	extraction := cli.UsageExtraction{Usage: invocation.Usage, EstimatedCostUSD: invocation.EstimatedCostUSD}
-	emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, invocation.CLILaunched, discoveredID, invocation.Outcome, invocation.Response, invocation.Stderr, &invocation.ExitCode, nil, &extraction, invocation.UsageError)
-
-	return invocation.Outcome, nil
+	return storeDiscoveredSession(step, ctx, invocation.DiscoveredSessionID, log)
 }
 
 func captureAgentResponse(step *model.Step, ctx *model.ExecutionContext, response string) {

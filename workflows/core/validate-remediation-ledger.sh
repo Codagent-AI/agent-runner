@@ -26,6 +26,7 @@ if not isinstance(repositories, str):
 
 path = Path(ledger_path)
 if not path.is_file():
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text('{"workspace":[],"repositories":{}}\n', encoding="utf-8")
 
 with path.open(encoding="utf-8") as ledger_file:

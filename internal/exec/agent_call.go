@@ -511,10 +511,7 @@ func (h *AgentCallHandler) emitAgentCallEnd(record *acceptedAgentCall, call *res
 		Role: call.profileName, Tool: "agent-runner",
 	}
 	if h.options.Context.ActiveRepository != nil && h.options.Context.ActiveRepository.Name != "default" {
-		identity.Prefix = "repo:" + h.options.Context.ActiveRepository.Name
-		if parentPrefix := agentCallIdentityPrefix(h.options.Parent.Prefix); parentPrefix != "" {
-			identity.Prefix += "/" + parentPrefix
-		}
+		identity.Prefix = identityPrefixWithRepository(h.options.Context, agentCallIdentityPrefix(h.options.Parent.Prefix))
 		identity.RepositoryName = h.options.Context.ActiveRepository.Name
 		identity.RepositoryDir = h.options.Context.ActiveRepository.Dir
 	}

@@ -80,9 +80,6 @@ func executionIdentity(ctx *model.ExecutionContext, step *model.Step, kind strin
 
 func executionIdentityPrefix(ctx *model.ExecutionContext) string {
 	parts := make([]string, 0, len(ctx.NestingPath)*2)
-	if ctx.ActiveRepository != nil && ctx.ActiveRepository.Name != "default" {
-		parts = append(parts, "repo:"+ctx.ActiveRepository.Name)
-	}
 	for _, segment := range ctx.NestingPath {
 		stepID := segment.StepID
 		if segment.Iteration != nil {
@@ -95,5 +92,23 @@ func executionIdentityPrefix(ctx *model.ExecutionContext) string {
 			parts = append(parts, "sub:"+segment.SubWorkflowName)
 		}
 	}
+	return identityPrefixWithRepository(ctx, strings.Join(parts, "/"))
+}
+
+func identityPrefixWithRepository(ctx *model.ExecutionContext, prefix string) string {
+	if ctx.ActiveRepository == nil || ctx.ActiveRepository.Name == "default" {
+		return prefix
+	}
+	parts := []string(nil)
+	if prefix != "" {
+		parts = strings.Split(prefix, "/")
+	}
+	token := "repo:" + ctx.ActiveRepository.Name
+	for _, part := range parts {
+		if part == token {
+			return strings.Join(parts, "/")
+		}
+	}
+	parts = audit.InsertRepositoryToken(parts, ctx.ActiveRepository.Name, ctx.RepositoryPrefixDepth)
 	return strings.Join(parts, "/")
 }

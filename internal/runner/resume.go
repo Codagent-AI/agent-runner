@@ -99,7 +99,23 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	if !intakeHandoffDelivered && state.IntakeHandoffContents != "" {
 		intakeHandoffDelivered = nestedStateHasAgentSession(state.CurrentStep.Nested)
 	}
-	resumeOpts := &Options{
+	resumeOpts := buildResumeOptions(&state, &workflow, opts, &resumeState, workspaceState, eng, profileOverride, intakeHandoffDelivered, stateFilePath)
+
+	return PrepareRun(&workflow, state.Params, resumeOpts)
+}
+
+func buildResumeOptions(
+	state *model.RunState,
+	workflow *model.Workflow,
+	opts *Options,
+	resumeState *restoredResumeContext,
+	workspaceState *model.NamespaceState,
+	eng engine.Engine,
+	profileOverride config.ProfileOverride,
+	intakeHandoffDelivered bool,
+	stateFilePath string,
+) *Options {
+	return &Options{
 		From:                      resumeState.fromStep,
 		WorkflowFile:              state.WorkflowFile,
 		WorkflowScope:             workflow.Scope,
@@ -123,7 +139,7 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		NamedSessions:             workspaceState.NamedSessions,
 		NamedSessionDecls:         workspaceState.NamedSessionDecls,
 		ChildState:                resumeState.childState,
-		InteractiveAttempt:        resumeInteractiveAttempt(&state),
+		InteractiveAttempt:        resumeInteractiveAttempt(state),
 		ProcessRunner:             opts.ProcessRunner,
 		GlobExpander:              opts.GlobExpander,
 		Log:                       opts.Log,
@@ -136,8 +152,6 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		RepositoryStartIndex:      resumeState.repositoryIndex,
 		RepositoryStartSet:        resumeState.repositoryIndexSet,
 	}
-
-	return PrepareRun(&workflow, state.Params, resumeOpts)
 }
 
 // prepareRepositoryResumeWorkspace reconstructs the current configuration

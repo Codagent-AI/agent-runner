@@ -110,6 +110,19 @@ func TestExecutionIdentityPreservesCrosscheckRole(t *testing.T) {
 	}
 }
 
+func TestExecutionIdentityPlacesRepositoryAtScopedBoundary(t *testing.T) {
+	ctx := makeCtx()
+	ctx.NestingPath = []model.NestingSegment{{StepID: "workspace-group"}, {StepID: "task-loop"}}
+	ctx.ActiveRepository = &model.Repository{Name: "backend", Dir: "/repos/backend"}
+	ctx.RepositoryPrefixDepth = 1
+	step := &model.Step{ID: "implement", Command: "true", Session: model.SessionNew}
+
+	got := executionIdentity(ctx, step, "step", 0, false, "", "")
+	if got.Prefix != "workspace-group/repo:backend/task-loop" {
+		t.Fatalf("execution identity prefix = %q, want repository at scoped boundary", got.Prefix)
+	}
+}
+
 func TestResolveStepProfile_RunAgentOverrideBeatsStepAndProfile(t *testing.T) {
 	ctx := makeCtx()
 	ctx.ProfileStore = &config.Config{ActiveAgents: map[string]*config.Agent{

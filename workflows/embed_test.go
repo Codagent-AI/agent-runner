@@ -726,6 +726,14 @@ func TestCoreValidateRemediationLedgerScript(t *testing.T) {
 		t.Fatalf("initialized ledger = %q, want %q", got, want)
 	}
 
+	nestedLedger := filepath.Join(t.TempDir(), "not-created", "acceptance-remediation.json")
+	if output, err := run(nestedLedger, "backend,frontend"); err != nil {
+		t.Fatalf("missing ledger parent initialization failed: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(nestedLedger); err != nil {
+		t.Fatalf("initialized nested ledger: %v", err)
+	}
+
 	if err := os.WriteFile(ledger, []byte(`{"workspace":[],"repositories":{"docs":[]}}`), 0o600); err != nil {
 		t.Fatalf("write invalid ledger: %v", err)
 	}
