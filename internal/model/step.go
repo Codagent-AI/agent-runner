@@ -52,6 +52,41 @@ const (
 // the built-in itself share this name rather than repeating the literal.
 const IntakeHandoffVar = "intake_handoff"
 
+// Scope determines whether a workflow body runs once from the coordination
+// workspace or once for each selected repository. The empty value is
+// intentionally meaningful: it preserves legacy execution semantics.
+type Scope string
+
+const (
+	ScopeLegacy       Scope = ""
+	ScopeWorkspace    Scope = "workspace"
+	ScopeRepositories Scope = "repositories"
+)
+
+// RepositoriesParam is the ordered, comma-separated repository target
+// parameter used by repository-scoped workflows. It is a control parameter
+// and capture sinks may not use this name.
+const RepositoriesParam = "repositories"
+
+var reservedScopedVariables = map[string]bool{
+	"workspace_dir":         true,
+	"repository_name":       true,
+	"repository_dir":        true,
+	"repository_output_dir": true,
+}
+
+// IsValid reports whether s is a valid persisted scope value, including the
+// omitted legacy value.
+func (s Scope) IsValid() bool {
+	return s == ScopeLegacy || s == ScopeWorkspace || s == ScopeRepositories
+}
+
+// IsReservedScopedVariable reports whether name has a canonical value owned
+// by the execution context rather than workflow parameters or captures.
+func IsReservedScopedVariable(name string) bool {
+	return reservedScopedVariables[name]
+}
+
 // RunnerTools is the list of Runner-owned tools enabled for an agent step.
 // Its field-level decoder preserves explicit field presence and validates shape.
 type RunnerTools []RunnerTool
@@ -183,6 +218,7 @@ type Step struct {
 	Inputs            []UIInput         `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 	OutcomeCapture    string            `yaml:"outcome_capture,omitempty" json:"outcome_capture,omitempty"`
 	Tools             RunnerTools       `yaml:"tools,omitempty" json:"tools,omitempty"`
+	Scope             Scope             `yaml:"scope,omitempty" json:"scope,omitempty"`
 	// MetricsSource declares that a shell step launches a tool which may invoke
 	// nested models and will write the Runner structured metrics handoff.
 	MetricsSource string `yaml:"metrics_source,omitempty" json:"metrics_source,omitempty"`
@@ -270,6 +306,12 @@ func validateCLIName(cliValue string, knownCLIs []string) error {
 // knownCLIs is the list of registered CLI adapter names; if nil, CLI name
 // validation is skipped (useful for tests that don't care about CLI names).
 func (s *Step) Validate(knownCLIs []string) error {
+	if !s.Scope.IsValid() {
+		return fmt.Errorf(`invalid scope %q (must be "workspace" or "repositories")`, s.Scope)
+	}
+	if s.Workflow != "" && s.Scope != ScopeLegacy {
+		return fmt.Errorf(`"scope" is not allowed on sub-workflow steps; declare the intended default on the referenced workflow`)
+	}
 	if s.Mode == ModeUI {
 		if err := s.validateUIExclusiveFields(); err != nil {
 			return err
@@ -351,8 +393,8 @@ func (s *Step) validateAgentField(isAgent, isShell bool) error {
 
 // validateCaptureFields checks capture and capture_stderr constraints.
 func (s *Step) validateCaptureFields(isAgent, isShell bool) error {
-	if s.Capture == IntakeHandoffVar {
-		return fmt.Errorf(`"capture" name %q is reserved`, IntakeHandoffVar)
+	if isReservedCaptureName(s.Capture) {
+		return fmt.Errorf(`"capture" name %q is reserved`, s.Capture)
 	}
 	if s.Capture != "" {
 		if isShell && s.Mode == ModeInteractive {
@@ -564,8 +606,8 @@ func (s *Step) validateUIFields(isUI bool) error {
 	if s.OutcomeCapture != "" && !isUI {
 		return fmt.Errorf(`"outcome_capture" is only allowed on ui steps`)
 	}
-	if s.OutcomeCapture == IntakeHandoffVar {
-		return fmt.Errorf(`"outcome_capture" name %q is reserved`, IntakeHandoffVar)
+	if isReservedCaptureName(s.OutcomeCapture) {
+		return fmt.Errorf(`"outcome_capture" name %q is reserved`, s.OutcomeCapture)
 	}
 	if !isUI {
 		if s.Title != "" || s.Body != "" || len(s.Actions) > 0 || len(s.Inputs) > 0 {
@@ -590,6 +632,10 @@ func (s *Step) validateUIFields(isUI bool) error {
 		return err
 	}
 	return validateUIInputs(s.Inputs)
+}
+
+func isReservedCaptureName(name string) bool {
+	return name == IntakeHandoffVar || name == RepositoriesParam || IsReservedScopedVariable(name)
 }
 
 func validateUIActions(actions []UIAction) error {
@@ -689,6 +735,7 @@ type Workflow struct {
 	Sessions    []SessionDecl `yaml:"sessions,omitempty" json:"sessions,omitempty"`
 	Steps       []Step        `yaml:"steps" json:"steps"`
 	Engine      *EngineConfig `yaml:"engine,omitempty" json:"engine,omitempty"`
+	Scope       Scope         `yaml:"scope,omitempty" json:"scope,omitempty"`
 }
 
 // ApplyDefaults sets default values for Workflow fields.
@@ -742,10 +789,20 @@ func (w *Workflow) Validate(knownCLIs []string) error {
 	if w.Engine != nil && w.Engine.Type == "" {
 		return fmt.Errorf("engine type is required")
 	}
+	if !w.Scope.IsValid() {
+		return fmt.Errorf(`invalid scope %q (must be "workspace" or "repositories")`, w.Scope)
+	}
+	hasRepositoryTargets := false
 	for _, param := range w.Params {
-		if param.Name == IntakeHandoffVar {
-			return fmt.Errorf(`parameter name %q is reserved`, IntakeHandoffVar)
+		if param.Name == IntakeHandoffVar || IsReservedScopedVariable(param.Name) {
+			return fmt.Errorf(`parameter name %q is reserved`, param.Name)
 		}
+		if param.Name == RepositoriesParam {
+			hasRepositoryTargets = param.IsRequired()
+		}
+	}
+	if w.RequiresRepositoryTargets() && !hasRepositoryTargets {
+		return fmt.Errorf(`repository-scoped workflows require a required repositories parameter`)
 	}
 
 	var errs []string
@@ -758,5 +815,39 @@ func (w *Workflow) Validate(knownCLIs []string) error {
 		return fmt.Errorf("workflow validation failed: %s", strings.Join(errs, "; "))
 	}
 
+	if err := validateWorkflowScopes(w.Scope, w.Steps); err != nil {
+		return err
+	}
+	return nil
+}
+
+// RequiresRepositoryTargets reports whether this workflow includes any
+// repository-scoped execution boundary.
+func (w *Workflow) RequiresRepositoryTargets() bool {
+	return w.Scope == ScopeRepositories || stepsRequireRepositoryTargets(w.Steps)
+}
+
+func stepsRequireRepositoryTargets(steps []Step) bool {
+	for i := range steps {
+		if steps[i].Scope == ScopeRepositories || stepsRequireRepositoryTargets(steps[i].Steps) {
+			return true
+		}
+	}
+	return false
+}
+
+func validateWorkflowScopes(workflowScope Scope, steps []Step) error {
+	for i := range steps {
+		step := &steps[i]
+		if workflowScope == ScopeLegacy && step.Scope != ScopeLegacy {
+			return fmt.Errorf(`steps[%d]: scoped steps require the workflow to declare a workflow scope`, i)
+		}
+		if workflowScope == ScopeRepositories && step.Scope == ScopeWorkspace {
+			return fmt.Errorf(`steps[%d]: workspace work must move into a workspace-scoped parent`, i)
+		}
+		if err := validateWorkflowScopes(workflowScope, step.Steps); err != nil {
+			return fmt.Errorf(`steps[%d]: %w`, i, err)
+		}
+	}
 	return nil
 }

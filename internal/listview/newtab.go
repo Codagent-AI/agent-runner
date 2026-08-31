@@ -93,11 +93,12 @@ func buildFilteredRows(workflows []discovery.WorkflowEntry, groups []discovery.G
 
 	groupRows := make(map[groupKey]*workflowGroup)
 
-	for i, e := range workflows {
+	for i := range workflows {
+		e := &workflows[i]
 		if e.Hidden && !showHidden {
 			continue
 		}
-		if filter != "" && !matchesFilter(&e, filter) {
+		if filter != "" && !matchesFilter(e, filter) {
 			continue
 		}
 

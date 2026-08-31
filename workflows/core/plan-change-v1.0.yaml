@@ -1,6 +1,7 @@
 name: plan-change
 description: "Autonomously validate an approved change definition and produce a reviewed task plan."
 hidden: true
+scope: workspace
 
 params:
   - name: change_name
@@ -33,7 +34,7 @@ steps:
 
       Task planning is autonomous because the definition artifacts have already been approved. This instruction overrides the skill's confirmation gate: do NOT ask the user to approve the number or grouping of tasks. Choose a right-sized breakdown using your best judgment and continue directly to writing the task files.
 
-      You MUST create detailed task files under `{{change_dir}}/tasks/*.md` and `{{change_dir}}/tasks.md` as an index linking to them. At least one non-empty `tasks/*.md` file is required.
+      Inspect `{{workspace_dir}}/.agent-runner/config.yaml`. If it declares repositories, make `tasks.md` an ordered set of `## Repository: <configured-name>` groups and link each task only from `{{change_dir}}/tasks/<repository>/`. Each configured repository may appear in at most one group. Otherwise retain the compatible flat `tasks/*.md` layout. At least one non-empty task file is required.
 
   - id: review-tasks
     workflow: review-tasks-v1.0.yaml
@@ -49,6 +50,15 @@ steps:
       change_dir: "{{change_dir}}"
       change_kind: "{{change_kind}}"
       require_tasks: "true"
+
+  - id: resolve-affected-repositories
+    script: resolve-task-group.sh
+    capture: affected_repositories
+    script_inputs:
+      workspace_dir: "{{workspace_dir}}"
+      change_dir: "{{change_dir}}"
+      plan_kind: "full"
+      output: "repositories"
 
   - id: commit-plan
     script: commit-change-plan.sh

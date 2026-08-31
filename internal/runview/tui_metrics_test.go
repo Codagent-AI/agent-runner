@@ -205,6 +205,42 @@ func TestRenderSummaryAggregatesAttemptsNestedContainersAndCoverage(t *testing.T
 	}
 }
 
+func TestRenderRepositorySummaryIncludesNestedAgentMetrics(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusSuccess}
+	group := &StepNode{ID: "repository-metrics", Type: NodeGroup, Status: StatusSuccess, Parent: root}
+	backend := &StepNode{ID: "backend", Type: NodeRepository, Status: StatusSuccess, Parent: group, RepositoryName: "backend"}
+	frontend := &StepNode{ID: "frontend", Type: NodeRepository, Status: StatusSuccess, Parent: group, RepositoryName: "frontend"}
+	backend.Children = []*StepNode{{ID: "validate", Type: NodeShell, Status: StatusSuccess, Parent: backend}}
+	frontend.Children = []*StepNode{{ID: "validate", Type: NodeShell, Status: StatusSuccess, Parent: frontend}}
+	group.Children = []*StepNode{backend, frontend}
+	root.Children = []*StepNode{group}
+	tree := &Tree{Root: root}
+
+	for _, repository := range []string{"backend", "frontend"} {
+		tree.ApplyEvent(nestedAgentMetricsEvent(repository, "validate", 7, 2))
+	}
+
+	m := newTestModel(tree, FromInspect)
+	m.path = []*StepNode{root, group}
+	lines := strings.Split(tuistyle.Sanitize(m.renderSummary()), "\n")
+	for _, repository := range []string{"backend", "frontend"} {
+		line := summaryLineContaining(t, lines, repository)
+		if !strings.Contains(line, "7") || !strings.Contains(line, "2") {
+			t.Fatalf("repository row does not include nested tokens: %q", line)
+		}
+	}
+	total := summaryLineContaining(t, lines, "Total")
+	if !strings.Contains(total, "14") || !strings.Contains(total, "4") {
+		t.Fatalf("repository total does not include nested tokens: %q", total)
+	}
+	processed := summaryLineContaining(t, lines, "Processed tokens")
+	for _, want := range []string{"input 14", "output 4", "total 18", "complete"} {
+		if !strings.Contains(processed, want) {
+			t.Fatalf("processed-token summary missing %q: %q", want, processed)
+		}
+	}
+}
+
 func TestRenderSummaryAlignsDurationAndCostColumns(t *testing.T) {
 	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusSuccess}
 	root.Children = []*StepNode{
@@ -251,6 +287,21 @@ func TestRenderSummaryDistinguishesUnavailableFromNotApplicableCost(t *testing.T
 	}
 	if got := strings.Count(shellLine, "—"); got != len(summaryTokenColumns)+1 {
 		t.Fatalf("shell row = %q, got %d not-applicable cells, want %d token columns plus cost", shellLine, got, len(summaryTokenColumns)+1)
+	}
+}
+
+func TestSummaryCoverageIgnoresOrdinaryShellAgentInvokedFlag(t *testing.T) {
+	root := &StepNode{ID: "workflow", Type: NodeRoot, Status: StatusSuccess}
+	root.Children = []*StepNode{{
+		ID: "shell", Type: NodeShell, Status: StatusSuccess, Parent: root,
+		Attempts: []AttemptMetrics{{
+			Attempt: 1, Usage: collectedUsageRecord(7, 2), Outcome: "success", AgentInvoked: true,
+		}},
+	}}
+
+	totals := (&Model{tree: &Tree{Root: root}}).summaryRunTotals(time.Time{})
+	if totals.UsageCoverage != model.CoverageNone {
+		t.Fatalf("ordinary shell usage coverage = %q, want none", totals.UsageCoverage)
 	}
 }
 
@@ -738,6 +789,29 @@ func stepEndMetricsEvent(id string, attempt int, duration int64, outcome string,
 		},
 		"estimated_api_cost_usd": costValue(cost),
 	}}
+}
+
+func nestedAgentMetricsEvent(repository, stepID string, input, output int64) RawEvent {
+	return RawEvent{
+		Prefix: "[repository-metrics, repo:" + repository + ", " + stepID + "]",
+		Type:   "nested_agent_end",
+		Data: map[string]any{
+			"outcome": "success",
+			"identity": map[string]any{
+				"attempt": float64(1), "kind": "nested-agent", "step_type": "agent", "agent_invoked": true,
+				"repository_name": repository, "repository_dir": "/repos/" + repository,
+			},
+			"usage": map[string]any{
+				"status": "collected", "cli": "codex", "provider": "openai", "model": "gpt-5.6-sol",
+				"tokens":       map[string]any{"input": float64(input), "output": float64(output)},
+				"token_totals": map[string]any{"input": float64(input), "output": float64(output), "total": float64(input + output)},
+				"source":       "agent-validator:codex", "completeness": "complete",
+			},
+			"estimated_api_cost_usd": nil,
+			"invocation_id":          "review-1",
+			"parent_attempt_id":      "parent-" + repository,
+		},
+	}
 }
 
 func summaryLeaf(id string, parent *StepNode, duration int64, cost *float64, usage *model.UsageRecord) *StepNode {

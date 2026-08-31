@@ -1,6 +1,7 @@
 name: implement-change
 description: "Implement and validate OpenSpec tasks, then prepare completion evidence and a draft pull request for human acceptance."
 hidden: true
+scope: workspace
 
 params:
   - name: change_name
@@ -10,12 +11,22 @@ params:
     default: "false"
 
 steps:
+  - id: resolve-affected-repositories
+    script: resolve-task-group.sh
+    capture: affected_repositories
+    script_inputs:
+      workspace_dir: "{{workspace_dir}}"
+      change_dir: "{{workspace_dir}}/openspec/changes/{{change_name}}"
+      plan_kind: "full"
+      output: "repositories"
+
   - id: implement
     workflow: ../core/implement-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
-      change_dir: "openspec/changes/{{change_name}}"
+      change_dir: "{{workspace_dir}}/openspec/changes/{{change_name}}"
       change_label: "OpenSpec change"
       change_kind: "openspec"
       artifact_validation_instruction: 'When an approved artifact changed, run `openspec validate --type change "{{change_name}}"`.'
       skip_validator: "{{skip_validator}}"
+      repositories: "{{affected_repositories}}"

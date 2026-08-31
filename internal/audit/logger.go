@@ -80,6 +80,67 @@ func BuildPrefix(nestingPath []NestingInfo, stepID string) string {
 	return "[" + strings.Join(tokens, ", ") + "]"
 }
 
+// WithRepository adds explicit repository identity to an event emitted while
+// that repository is active. The transparent default repository deliberately
+// keeps the legacy audit shape. Root-scoped events retain their empty prefix
+// but still carry the explicit repository fields.
+func WithRepository(event Event, name, dir string, prefixDepth int) Event {
+	if name == "" || name == "default" {
+		return event
+	}
+	if event.Data == nil {
+		event.Data = map[string]any{}
+	}
+	event.Data["repository_name"] = name
+	event.Data["repository_dir"] = dir
+	if event.Prefix == "" || hasRepositoryToken(event.Prefix, name) {
+		return event
+	}
+	event.Prefix = RepositoryPrefix(event.Prefix, name, prefixDepth)
+	return event
+}
+
+// RepositoryPrefix inserts a repository token at its execution boundary.
+// An empty base produces the root repository prefix used by lifecycle events.
+func RepositoryPrefix(prefix, name string, prefixDepth int) string {
+	tokens := prefixTokens(prefix)
+	tokens = InsertRepositoryToken(tokens, name, prefixDepth)
+	return "[" + strings.Join(tokens, ", ") + "]"
+}
+
+func hasRepositoryToken(prefix, name string) bool {
+	want := "repo:" + name
+	for _, token := range prefixTokens(prefix) {
+		if token == want {
+			return true
+		}
+	}
+	return false
+}
+
+func prefixTokens(prefix string) []string {
+	raw := strings.TrimPrefix(strings.TrimSuffix(prefix, "]"), "[")
+	if raw == "" {
+		return nil
+	}
+	return strings.Split(raw, ", ")
+}
+
+// InsertRepositoryToken adds a repository identity at the execution boundary
+// shared by audit prefixes and metrics identities.
+func InsertRepositoryToken(tokens []string, name string, prefixDepth int) []string {
+	if prefixDepth < 0 {
+		prefixDepth = 0
+	}
+	if prefixDepth > len(tokens) {
+		prefixDepth = len(tokens)
+	}
+	tokens = append(tokens, "")
+	copy(tokens[prefixDepth+1:], tokens[prefixDepth:])
+	tokens[prefixDepth] = "repo:" + name
+	return tokens
+}
+
 var pathUnsafeRe = regexp.MustCompile(`[/._]`)
 var fileUnsafeRe = regexp.MustCompile(`[\\/:*?"<>|]`)
 

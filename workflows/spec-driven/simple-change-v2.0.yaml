@@ -1,5 +1,6 @@
 name: simple-change
 description: "Use for a small branch-local change when you want lightweight spec-driven planning without OpenSpec or repository-local planning documents. It keeps artifacts outside the project repository and provides one guided flow for planning, independent review, validation, implementation, flow testing, and interactive refinement."
+scope: workspace
 
 params:
   - name: change_name
@@ -39,6 +40,13 @@ steps:
 
       Example valid output: /path/to/external/change-artifacts/my-change
 
+  - id: resolve-change-dir
+    script: resolve-change-dir.sh
+    capture: canonical_change_dir
+    script_inputs:
+      workspace_dir: "{{workspace_dir}}"
+      change_dir: "{{change_dir}}"
+
   - id: review-plan
     session: lead-agent
     mode: interactive
@@ -61,13 +69,23 @@ steps:
   - id: check-planning-artifacts
     workflow: ../core/check-planning-artifacts-v1.0.yaml
     params:
-      change_dir: "{{change_dir}}"
+      change_dir: "{{canonical_change_dir}}"
       required_files: "proposal.md,tasks.md"
       require_specs: "true"
+
+  - id: resolve-affected-repositories
+    script: resolve-task-group.sh
+    capture: affected_repositories
+    script_inputs:
+      workspace_dir: "{{workspace_dir}}"
+      change_dir: "{{canonical_change_dir}}"
+      plan_kind: "simple"
+      output: "repositories"
 
   - id: complete
     workflow: ../core/complete-simple-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
-      change_dir: "{{change_dir}}"
+      change_dir: "{{canonical_change_dir}}"
       change_label: "spec-driven change"
+      repositories: "{{affected_repositories}}"

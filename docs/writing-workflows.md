@@ -76,6 +76,28 @@ agent-runner hello
 
 Workflow parameters are declared in `params:` and referenced as `{{name}}`.
 
+## Workspace and repository scope
+
+Workflows that coordinate several repositories declare `scope: workspace` to
+run once from the coordination repository, or `scope: repositories` to run for
+explicitly selected repositories. Omit `scope` for an existing legacy workflow:
+omission deliberately preserves its prior launch behavior.
+
+Repository-scoped workflows must declare a required `repositories` parameter.
+It is an ordered comma-separated list such as `backend,frontend`; configuration
+does not imply that every repository is selected. A workspace-scoped workflow
+may put `scope: repositories` on an agent, shell, script, UI, group, or loop
+step. Sub-workflow steps cannot override scope: the referenced workflow owns
+its default scope.
+
+The scoped path variables `{{workspace_dir}}`, `{{repository_name}}`,
+`{{repository_dir}}`, and `{{repository_output_dir}}` are reserved. The
+repository variables are available only during repository execution. In a
+traditional project with no repository declarations, Agent Runner supplies an
+internal `default` target; users do not need to declare or enter it.
+
+Built-in planning captures parser-derived `affected_repositories` and passes it explicitly to repository-scoped children. Use the Runner-owned task-group resolver for plan ownership and canonical task paths; workflow scripts should not parse `tasks.md` headings themselves. Repository-local durable reports belong under `{{repository_output_dir}}`; workspace aggregation should consume the persisted repository evidence index from `{{session_dir}}/output/`.
+
 ```yaml
 name: review-pr
 

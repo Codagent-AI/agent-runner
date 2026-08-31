@@ -227,7 +227,7 @@ func (h *AgentCallHandler) lifecycleEvent(record *acceptedAgentCall, target agen
 
 func (h *AgentCallHandler) reject(envelope control.AgentCallRequest, failure *agentcall.Error) json.RawMessage {
 	if h.options.Context != nil && h.options.Context.AuditLogger != nil {
-		h.options.Context.AuditLogger.Emit(audit.Event{
+		emitAudit(h.options.Context, audit.Event{
 			Timestamp: formatAuditTimestamp(h.options.Now()),
 			Prefix:    h.options.Parent.Prefix,
 			Type:      audit.EventControlRejected,
@@ -276,7 +276,7 @@ func (h *AgentCallHandler) resolve(raw json.RawMessage) (*resolvedAgentCall, *ag
 	}
 	profileName := target.Name
 	if target.Kind == agentcall.TargetSession {
-		profileName = ctx.NamedSessionDecls[target.Name]
+		profileName = ctx.LookupNamedSessionDecl(target.Name)
 		if profileName == "" {
 			return nil, callFailure(agentcall.CodeUnknownSession, fmt.Sprintf("named session %q is not declared", target.Name), target)
 		}
@@ -311,7 +311,7 @@ func (h *AgentCallHandler) resolve(raw json.RawMessage) (*resolvedAgentCall, *ag
 	}
 	sessionID := ""
 	if target.Kind == agentcall.TargetSession {
-		sessionID = ctx.NamedSessions[target.Name]
+		sessionID = ctx.LookupNamedSession(target.Name)
 		sameCLI := h.options.Parent.CLI == resolvedProfile.CLI
 		sameNamedSession := h.options.Parent.NamedSession != "" && h.options.Parent.NamedSession == target.Name
 		sameResolvedSession := sessionID != "" && h.activeParentSessionID() == sessionID
@@ -450,7 +450,7 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 			discovered = sessionID
 		}
 		if discovered != "" {
-			h.options.Context.NamedSessions[call.target.Name] = discovered
+			h.options.Context.SetNamedSession(call.target.Name, discovered)
 			if h.options.Context.FlushState != nil {
 				h.options.Context.FlushState()
 			}
@@ -509,6 +509,11 @@ func (h *AgentCallHandler) emitAgentCallEnd(record *acceptedAgentCall, call *res
 		CLI: call.cliName, SessionID: resolvedSessionID, SessionStrategy: agentCallSessionStrategy(call),
 		SessionResumed: call.resume, AgentInvoked: invocation.CLILaunched,
 		Role: call.profileName, Tool: "agent-runner",
+	}
+	if h.options.Context.ActiveRepository != nil && h.options.Context.ActiveRepository.Name != "default" {
+		identity.Prefix = identityPrefixWithRepository(h.options.Context, agentCallIdentityPrefix(h.options.Parent.Prefix))
+		identity.RepositoryName = h.options.Context.ActiveRepository.Name
+		identity.RepositoryDir = h.options.Context.ActiveRepository.Dir
 	}
 	data := agentCallAuditData(record, call)
 	data["outcome"] = string(invocation.Outcome)

@@ -56,3 +56,25 @@ func TestRecordPullRequestCaptureDeduplicatesAcrossNestedContexts(t *testing.T) 
 		t.Fatalf("pull_request_recorded events = %d, want 1", recorded)
 	}
 }
+
+func TestRecordPullRequestCaptureSeparatesRepositoryScopes(t *testing.T) {
+	workspace := makeCtx()
+	recorder := &mockAuditLogger{}
+	workspace.AuditLogger = recorder
+	url := model.NewCapturedString("https://github.com/Codagent-AI/agent-runner/pull/62")
+	backend := model.NewRepositoryExecutionContext(workspace, model.Repository{Name: "backend", Dir: "/repos/backend"}, 0)
+	frontend := model.NewRepositoryExecutionContext(workspace, model.Repository{Name: "frontend", Dir: "/repos/frontend"}, 1)
+
+	recordPullRequestCapture(backend, "backend-pr", "pr_url", url)
+	recordPullRequestCapture(frontend, "frontend-pr", "pr_url", url)
+
+	var recorded int
+	for _, event := range recorder.events {
+		if event.Type == "pull_request_recorded" {
+			recorded++
+		}
+	}
+	if recorded != 2 {
+		t.Fatalf("pull_request_recorded events = %d, want one per repository", recorded)
+	}
+}

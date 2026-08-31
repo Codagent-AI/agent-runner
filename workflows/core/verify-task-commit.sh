@@ -46,6 +46,11 @@ case "$starting_head" in
     ;;
 esac
 
+if ! git rev-parse --verify "$starting_head^{commit}" >/dev/null 2>&1; then
+  printf 'verify-task-commit: invalid starting commit: %s\n' "$starting_head" >&2
+  exit 2
+fi
+
 current_head=$(git rev-parse --verify HEAD)
 
 if [ "$current_head" = "$starting_head" ]; then

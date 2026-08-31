@@ -66,10 +66,19 @@ func executionIdentity(ctx *model.ExecutionContext, step *model.Step, kind strin
 		role = stepProfileName(step, ctx)
 		tool = "agent-runner"
 	}
-	return model.ExecutionIdentity{
+	identity := model.ExecutionIdentity{
 		StepID: step.ID, Prefix: executionIdentityPrefix(ctx), StepType: step.StepType(), Kind: kind,
 		Iteration: iteration, CLI: cliName, SessionID: sessionID, SessionStrategy: string(step.Session), AgentInvoked: agentInvoked,
 		Role: role, Tool: tool,
+	}
+	setExecutionRepository(ctx, &identity)
+	return identity
+}
+
+func setExecutionRepository(ctx *model.ExecutionContext, identity *model.ExecutionIdentity) {
+	if ctx.ActiveRepository != nil && ctx.ActiveRepository.Name != "default" {
+		identity.RepositoryName = ctx.ActiveRepository.Name
+		identity.RepositoryDir = ctx.ActiveRepository.Dir
 	}
 }
 
@@ -87,5 +96,23 @@ func executionIdentityPrefix(ctx *model.ExecutionContext) string {
 			parts = append(parts, "sub:"+segment.SubWorkflowName)
 		}
 	}
+	return identityPrefixWithRepository(ctx, strings.Join(parts, "/"))
+}
+
+func identityPrefixWithRepository(ctx *model.ExecutionContext, prefix string) string {
+	if ctx.ActiveRepository == nil || ctx.ActiveRepository.Name == "default" {
+		return prefix
+	}
+	parts := []string(nil)
+	if prefix != "" {
+		parts = strings.Split(prefix, "/")
+	}
+	token := "repo:" + ctx.ActiveRepository.Name
+	for _, part := range parts {
+		if part == token {
+			return strings.Join(parts, "/")
+		}
+	}
+	parts = audit.InsertRepositoryToken(parts, ctx.ActiveRepository.Name, ctx.RepositoryPrefixDepth)
 	return strings.Join(parts, "/")
 }

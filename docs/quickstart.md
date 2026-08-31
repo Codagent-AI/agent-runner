@@ -73,6 +73,8 @@ as `deploy-v1.0.yaml`, but start with `agent-runner deploy`; Agent Runner picks
 the latest version. Sub-workflow references inside YAML pin exact versioned
 filenames.
 
+In a coordination workspace, built-in change workflows plan once at the workspace and then carry out each ordered repository task group in its named checkout. Run artifacts, resume identity, and shared acceptance stay at the coordination directory; each implementation repository has its own validation and pull request lifecycle.
+
 ## TUI Shortcuts
 
 | Shortcut | Location | Action |

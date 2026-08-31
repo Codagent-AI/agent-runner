@@ -1,6 +1,7 @@
 name: plan-change
 description: "Autonomously validate an approved spec-driven definition and produce a reviewed task plan."
 hidden: true
+scope: workspace
 
 params:
   - name: change_name
@@ -9,10 +10,17 @@ params:
     required: true
 
 steps:
+  - id: resolve-change-dir
+    script: resolve-change-dir.sh
+    capture: canonical_change_dir
+    script_inputs:
+      workspace_dir: "{{workspace_dir}}"
+      change_dir: "{{change_dir}}"
+
   - id: plan
     workflow: ../core/plan-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
-      change_dir: "{{change_dir}}"
+      change_dir: "{{canonical_change_dir}}"
       change_label: "spec-driven change"
       change_kind: "spec-driven"

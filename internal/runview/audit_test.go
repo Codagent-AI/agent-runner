@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestParseLine(t *testing.T) {
@@ -255,6 +256,122 @@ func TestApplyEvent_StepStartStepEnd(t *testing.T) {
 	}
 	if archive.DurationMs == nil || *archive.DurationMs != 2400 {
 		t.Errorf("duration not recorded: %v", archive.DurationMs)
+	}
+}
+
+func TestApplyEvent_ProjectsExplicitRepositoryAsContainer(t *testing.T) {
+	tree := BuildTree(&model.Workflow{Name: "run", Steps: []model.Step{{ID: "plan", Command: "plan"}, {ID: "implement", Command: "implement"}}}, "workflow.yaml")
+	tree.ApplyEvent(RawEvent{Prefix: "[plan]", Type: "step_start"})
+	tree.ApplyEvent(RawEvent{Prefix: "[plan]", Type: "step_end", Data: map[string]any{"outcome": "success"}})
+	tree.ApplyEvent(RawEvent{Prefix: "[repo:backend]", Type: "repository_start", Data: map[string]any{"repository_name": "backend", "repository_dir": "/repos/backend", "position": 0, "total": 2}})
+	tree.ApplyEvent(RawEvent{Prefix: "[repo:backend, implement]", Type: "step_start", Data: map[string]any{"repository_name": "backend", "repository_dir": "/repos/backend"}})
+	tree.ApplyEvent(RawEvent{Prefix: "[repo:backend, implement]", Type: "step_end", Data: map[string]any{"outcome": "success", "duration_ms": 7}})
+	tree.ApplyEvent(RawEvent{Prefix: "[repo:backend]", Type: "repository_end", Data: map[string]any{"outcome": "success", "duration_ms": 8}})
+
+	implement := tree.FindByPrefix("[repo:backend, implement]")
+	if implement == nil || implement.Parent == nil || implement.Parent.ID != "backend" {
+		t.Fatalf("repository step was not nested below a backend container: %#v", implement)
+	}
+	if got, want := implement.Parent.Status, StatusSuccess; got != want {
+		t.Fatalf("backend status = %v, want %v", got, want)
+	}
+}
+
+func TestApplyEvent_ProjectsRepositoryAtScopedGroupBoundary(t *testing.T) {
+	tree := BuildTree(&model.Workflow{Name: "run", Scope: model.ScopeWorkspace, Steps: []model.Step{
+		{ID: "plan", Command: "plan"},
+		{ID: "implement-task-groups", Scope: model.ScopeRepositories, Steps: []model.Step{{
+			ID: "task-loop", Loop: &model.Loop{Max: intPtr(1)}, Steps: []model.Step{{ID: "implement-task", Command: "work"}},
+		}}},
+	}}, "workflow.yaml")
+	tree.ApplyPersistedRepositories(&model.RunState{SelectedRepositories: []model.RepositoryIdentity{{Name: "backend", Dir: "/repos/backend"}}})
+	tree.ApplyEvent(RawEvent{Prefix: "[implement-task-groups, repo:backend]", Type: "repository_start", Data: map[string]any{"repository_name": "backend"}})
+	tree.ApplyEvent(RawEvent{Prefix: "[implement-task-groups, repo:backend, task-loop:0]", Type: "iteration_start"})
+	tree.ApplyEvent(RawEvent{Prefix: "[implement-task-groups, repo:backend, task-loop:0, implement-task]", Type: "step_start"})
+
+	backend := tree.FindByPrefix("[implement-task-groups, repo:backend]")
+	if backend == nil || backend.Type != NodeRepository || backend.Parent == nil || backend.Parent.ID != "implement-task-groups" {
+		t.Fatalf("repository boundary = %#v", backend)
+	}
+	implementation := tree.FindByPrefix("[implement-task-groups, repo:backend, task-loop:0, implement-task]")
+	if implementation == nil || implementation.Parent == nil || implementation.Parent.Type != NodeIteration {
+		t.Fatalf("nested implementation = %#v", implementation)
+	}
+	if repositoryChildByName(tree.Root, "backend") != nil {
+		t.Fatal("repository was also projected at workspace root")
+	}
+}
+
+func TestApplyEvent_RepositoryContainerClonesNestedWorkflowStructure(t *testing.T) {
+	tree := BuildTree(&model.Workflow{Name: "run", Steps: []model.Step{{
+		ID: "tasks", Loop: &model.Loop{Max: intPtr(1)}, Steps: []model.Step{{
+			ID: "child", Workflow: "child-v1.0.yaml",
+		}},
+	}}}, "workflow.yaml")
+	tree.ApplyEvent(RawEvent{Prefix: "[repo:backend]", Type: "repository_start", Data: map[string]any{"repository_name": "backend"}})
+	tree.ApplyEvent(RawEvent{Prefix: "[repo:backend, tasks:0]", Type: "iteration_start"})
+	tree.ApplyEvent(RawEvent{Prefix: "[repo:backend, tasks:0, child]", Type: "step_start"})
+
+	iteration := tree.FindByPrefix("[repo:backend, tasks:0]")
+	if iteration == nil || iteration.Type != NodeIteration {
+		t.Fatalf("repository loop iteration = %#v, want iteration node", iteration)
+	}
+	child := tree.FindByPrefix("[repo:backend, tasks:0, child]")
+	if child == nil || child.Type != NodeSubWorkflow || child.Parent != iteration {
+		t.Fatalf("repository child = %#v, want nested sub-workflow", child)
+	}
+}
+
+func TestApplyPersistedRepositoriesClonesNestedWorkflowStructure(t *testing.T) {
+	tree := BuildTree(&model.Workflow{Name: "run", Steps: []model.Step{{
+		ID: "tasks", Loop: &model.Loop{Max: intPtr(1)}, Steps: []model.Step{{ID: "child", Command: "echo child"}},
+	}}}, "workflow.yaml")
+	tree.ApplyPersistedRepositories(&model.RunState{SelectedRepositories: []model.RepositoryIdentity{{Name: "backend", Dir: "/repos/backend"}}})
+	tree.ApplyEvent(RawEvent{Prefix: "[repo:backend, tasks:0]", Type: "iteration_start"})
+
+	iteration := tree.FindByPrefix("[repo:backend, tasks:0]")
+	if iteration == nil || iteration.Type != NodeIteration {
+		t.Fatalf("persisted repository loop iteration = %#v, want iteration node", iteration)
+	}
+	child := tree.FindByPrefix("[repo:backend, tasks:0, child]")
+	if child == nil || child.Type != NodeShell || child.Parent != iteration {
+		t.Fatalf("persisted repository child = %#v, want nested shell", child)
+	}
+}
+
+func TestApplyEvent_ExistingRepositoryContainerGetsWorkflowStructure(t *testing.T) {
+	tree := BuildTree(&model.Workflow{Name: "run", Steps: []model.Step{{ID: "tasks", Loop: &model.Loop{Max: intPtr(1)}, Steps: []model.Step{{ID: "child", Command: "echo child"}}}}}, "workflow.yaml")
+	tree.Root.Children = append(tree.Root.Children, &StepNode{ID: "backend", Type: NodeRepository, Parent: tree.Root, RepositoryName: "backend"})
+	tree.ApplyEvent(RawEvent{Prefix: "[repo:backend]", Type: "repository_start", Data: map[string]any{"repository_name": "backend"}})
+	tree.ApplyEvent(RawEvent{Prefix: "[repo:backend, tasks:0]", Type: "iteration_start"})
+
+	if iteration := tree.FindByPrefix("[repo:backend, tasks:0]"); iteration == nil || iteration.Type != NodeIteration {
+		t.Fatalf("existing repository loop iteration = %#v, want iteration node", iteration)
+	}
+}
+
+func TestApplyPersistedRepositoriesKeepsPendingOrderAndPullRequests(t *testing.T) {
+	tree := BuildTree(&model.Workflow{Name: "run"}, "workflow.yaml")
+	tree.ApplyPersistedRepositories(&model.RunState{
+		SelectedRepositories: []model.RepositoryIdentity{{Name: "backend", Dir: "/repos/backend"}, {Name: "frontend", Dir: "/repos/frontend"}},
+		RepositoryFrame: &model.RepositoryFrame{Repositories: []model.RepositoryExecutionState{
+			{Identity: model.RepositoryIdentity{Name: "backend", Dir: "/repos/backend"}, Status: model.RepositoryFailed},
+			{Identity: model.RepositoryIdentity{Name: "frontend", Dir: "/repos/frontend"}, Status: model.RepositoryPending},
+		}},
+		RepositoryPullRequestURLs: map[string]string{"backend": "https://github.com/acme/backend/pull/62", "frontend": "https://github.com/acme/frontend/pull/17"},
+	})
+	if got, want := []string{tree.Root.Children[0].ID, tree.Root.Children[1].ID}, []string{"backend", "frontend"}; !cmp.Equal(got, want) {
+		t.Fatalf("repository order = %v, want %v", got, want)
+	}
+	if tree.Root.Children[0].Status != StatusFailed || tree.Root.Children[1].Status != StatusPending {
+		t.Fatalf("repository statuses = %v, %v", tree.Root.Children[0].Status, tree.Root.Children[1].Status)
+	}
+	if got, want := tree.RepositoryOrder, []string{"backend", "frontend"}; !cmp.Equal(got, want) {
+		t.Fatalf("persisted order = %v, want %v", got, want)
+	}
+	tree.ApplyEvent(RawEvent{Prefix: "[repo:backend]", Type: "repository_end", Data: map[string]any{"repository_name": "backend", "outcome": "success"}})
+	if got, want := tree.Root.Children[0].Status, StatusSuccess; got != want {
+		t.Fatalf("terminal audit state = %v, want %v", got, want)
 	}
 }
 

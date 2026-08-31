@@ -69,7 +69,9 @@ The agent CLI presents `call_agent` as a tool; these objects document its fields
 
 ## Execution And Safety
 
-Called children always run autonomous-headless through the resolved profile and CLI adapter. They receive the profile system prompt and the call's `prompt`, but not workflow-step enrichment. An omitted `workdir` inherits the parent's effective directory; an override must remain valid under the normal agent-step workdir rules and within the same worktree.
+Called children always run autonomous-headless through the resolved profile and CLI adapter. They receive the profile system prompt and the call's `prompt`, but not workflow-step enrichment. An omitted `workdir` inherits the parent's effective directory. In a scope-aware workspace, the child must start within the canonical coordination worktree; during repository-scoped work, it must start within the active repository instead, including a configured sibling repository outside the workspace tree. Relative paths resolve from the parent's effective directory, and paths that escape through a symbolic link are rejected before launch.
+
+This is a starting-directory boundary, not a filesystem sandbox. Once started, a child may still access other paths when its CLI, operating-system permissions, and project instructions allow it.
 
 Calls are synchronous and serial per parent attempt:
 
@@ -94,7 +96,9 @@ sessions:
     agent: implementor
 ```
 
-Calls and ordinary workflow steps share the same run-scoped named-session map. First use creates and persists the CLI session; later calls or steps resume it. A call-level model override affects only that invocation and does not change the profile pinned by the declaration.
+Calls and workflow steps share the same ancestor-visible namespace. A workspace-created binding is inherited by repository calls. If a call is the first use of a declared name while an explicit repository is active, its successful result creates a repository-local binding; sibling repositories cannot see or resume it. The binding is recorded with the run state and restored before a resumed call or step resolves the name. A failed, canceled, or transport-error first call does not create a binding.
+
+Within one visible namespace, calls and ordinary workflow steps share the same bindings. First use creates and persists the CLI session; later calls or steps in that namespace resume it. A call-level model override affects only that invocation and does not change the profile pinned by the declaration.
 
 Each `agent: <profile>` call is fresh, even when the same profile is called repeatedly. Those session IDs are retained as execution evidence but are not added to the named-session map.
 

@@ -36,6 +36,8 @@ func blockTypeGlyph(t NodeType) string {
 		return "»"
 	case NodeGroup:
 		return "▾"
+	case NodeRepository:
+		return "◆"
 	}
 	return "·"
 }

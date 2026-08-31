@@ -909,9 +909,9 @@ func (m *Model) handleResumeRun() (tea.Model, tea.Cmd) {
 
 func (m *Model) handleHelpRun() (tea.Model, tea.Cmd) {
 	const canonicalName = "onboarding:help"
-	for _, e := range m.newTab.workflows {
-		if e.CanonicalName == canonicalName {
-			entry := e
+	for i := range m.newTab.workflows {
+		if m.newTab.workflows[i].CanonicalName == canonicalName {
+			entry := m.newTab.workflows[i]
 			return m, func() tea.Msg { return discovery.StartRunMsg{Entry: entry} }
 		}
 	}

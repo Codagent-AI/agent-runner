@@ -35,16 +35,25 @@ func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner Pro
 	}
 
 	log.Printf("  script: %s\n", step.Script)
-	switch ps := runner.(type) {
-	case interface {
-		SetScriptPrefix(string, time.Duration)
-	}:
-		ps.SetScriptPrefix(prefix, scriptStepRevealDelay)
-	case interface{ SetPrefix(string) }:
-		ps.SetPrefix(prefix)
-	}
+	setRunnerOutputDirectory(runner, ctx)
 	var result ProcessResult
-	result, err = runner.RunScript(scriptPath, stdin, step.Capture != "", step.Workdir)
+	if scoped, ok := runner.(interface {
+		RunScriptWithPrefix(string, time.Duration, string, []byte, bool, string) (ProcessResult, error)
+	}); ok {
+		result, err = scoped.RunScriptWithPrefix(
+			prefix, scriptStepRevealDelay, scriptPath, stdin, step.Capture != "", step.Workdir,
+		)
+	} else {
+		switch ps := runner.(type) {
+		case interface {
+			SetScriptPrefix(string, time.Duration)
+		}:
+			ps.SetScriptPrefix(prefix, scriptStepRevealDelay)
+		case interface{ SetPrefix(string) }:
+			ps.SetPrefix(prefix)
+		}
+		result, err = runner.RunScript(scriptPath, stdin, step.Capture != "", step.Workdir)
+	}
 	if err != nil {
 		emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err)
 		return OutcomeFailed, err

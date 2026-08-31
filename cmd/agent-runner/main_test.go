@@ -9,10 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	iexec "github.com/codagent/agent-runner/internal/exec"
 	"github.com/codagent/agent-runner/internal/liverun"
+	"github.com/codagent/agent-runner/internal/model"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -426,6 +429,23 @@ steps:
 	}
 }
 
+func TestMatchParamsForLaunch_InjectsImplicitRepositoryTarget(t *testing.T) {
+	workflow := &model.Workflow{
+		Name: "repo", Scope: model.ScopeRepositories,
+		Params: []model.Param{{Name: model.RepositoriesParam}},
+	}
+	params, err := matchParamsForLaunch(workflow, nil, nil, true)
+	if err != nil {
+		t.Fatalf("matchParamsForLaunch() error = %v", err)
+	}
+	if got := params[model.RepositoriesParam]; got != "default" {
+		t.Fatalf("repositories = %q, want implicit default", got)
+	}
+	if _, err := matchParamsForLaunch(workflow, nil, nil, false); err == nil {
+		t.Fatal("configured workspace accepted missing repositories")
+	}
+}
+
 func TestHandleValidateArgsPrintsLegacyAgentDeprecationToStderr(t *testing.T) {
 	t.Chdir(t.TempDir())
 	t.Setenv("HOME", t.TempDir())
@@ -661,10 +681,204 @@ func TestHeadlessProcessRunnerReturnsConsoleWriteFailure(t *testing.T) {
 	}
 }
 
+func TestHeadlessProcessRunnerConsumesConsoleWriteFailurePerInvocation(t *testing.T) {
+	stdout := &failOnceOutputWriter{}
+	runner := newHeadlessProcessRunnerWithWriters(t.TempDir(), stdout, io.Discard)
+
+	if _, err := runner.RunShell("printf 'first'", false, ""); err == nil || !strings.Contains(err.Error(), "console output failed") {
+		t.Fatalf("first RunShell error = %v, want console output failure", err)
+	}
+	if _, err := runner.RunShell("printf 'second'", false, ""); err != nil {
+		t.Fatalf("second RunShell retained prior console failure: %v", err)
+	}
+}
+
+func TestHeadlessProcessRunnerAttributesConcurrentConsoleFailureToEmitter(t *testing.T) {
+	program := &headlessOutputProgram{stdout: selectiveFailOutputWriter{}, stderr: io.Discard}
+	base := &concurrentOutputRunner{program: program, firstWrote: make(chan struct{}), releaseFirst: make(chan struct{})}
+	runner := &headlessProcessRunner{ProcessRunner: base, output: program}
+
+	firstErr := make(chan error, 1)
+	go func() {
+		_, err := runner.RunAgent(&iexec.AgentProcessOptions{Prefix: "first"})
+		firstErr <- err
+	}()
+	<-base.firstWrote
+
+	if _, err := runner.RunAgent(&iexec.AgentProcessOptions{Prefix: "second"}); err != nil {
+		t.Fatalf("successful concurrent process received another process's console failure: %v", err)
+	}
+	close(base.releaseFirst)
+	if err := <-firstErr; err == nil || !strings.Contains(err.Error(), "console output failed") {
+		t.Fatalf("emitting process error = %v, want its console output failure", err)
+	}
+}
+
+func TestHeadlessProcessRunnerScopesConcurrentShellPrefixesToInvocations(t *testing.T) {
+	program := &headlessOutputProgram{stdout: selectiveFailOutputWriter{}, stderr: io.Discard}
+	base := newConcurrentPrefixedOutputRunner(program)
+	runner := &headlessProcessRunner{ProcessRunner: base, output: program}
+	scoped, ok := any(runner).(interface {
+		RunShellWithPrefix(string, string, bool, string) (iexec.ProcessResult, error)
+	})
+	if !ok {
+		t.Fatal("headless process runner does not support invocation-scoped shell prefixes")
+	}
+
+	firstErr := make(chan error, 1)
+	go func() {
+		_, err := scoped.RunShellWithPrefix("first", "first", false, "")
+		firstErr <- err
+	}()
+	<-base.firstWrote
+
+	secondErr := make(chan error, 1)
+	go func() {
+		_, err := scoped.RunShellWithPrefix("second", "second", false, "")
+		secondErr <- err
+	}()
+	close(base.releaseFirst)
+	if err := <-firstErr; err == nil || !strings.Contains(err.Error(), "console output failed") {
+		t.Fatalf("emitting shell error = %v, want its console output failure", err)
+	}
+	if err := <-secondErr; err != nil {
+		t.Fatalf("successful concurrent shell received another invocation's console failure: %v", err)
+	}
+}
+
+func TestHeadlessProcessRunnerScopesConcurrentScriptPrefixesToInvocations(t *testing.T) {
+	program := &headlessOutputProgram{stdout: selectiveFailOutputWriter{}, stderr: io.Discard}
+	base := newConcurrentPrefixedOutputRunner(program)
+	runner := &headlessProcessRunner{ProcessRunner: base, output: program}
+	scoped, ok := any(runner).(interface {
+		RunScriptWithPrefix(string, time.Duration, string, []byte, bool, string) (iexec.ProcessResult, error)
+	})
+	if !ok {
+		t.Fatal("headless process runner does not support invocation-scoped script prefixes")
+	}
+
+	firstErr := make(chan error, 1)
+	go func() {
+		_, err := scoped.RunScriptWithPrefix("first", 0, "first", nil, false, "")
+		firstErr <- err
+	}()
+	<-base.firstWrote
+
+	secondErr := make(chan error, 1)
+	go func() {
+		_, err := scoped.RunScriptWithPrefix("second", 0, "second", nil, false, "")
+		secondErr <- err
+	}()
+	close(base.releaseFirst)
+	if err := <-firstErr; err == nil || !strings.Contains(err.Error(), "console output failed") {
+		t.Fatalf("emitting script error = %v, want its console output failure", err)
+	}
+	if err := <-secondErr; err != nil {
+		t.Fatalf("successful concurrent script received another invocation's console failure: %v", err)
+	}
+}
+
 type failingOutputWriter struct{}
 
 func (failingOutputWriter) Write([]byte) (int, error) {
 	return 0, errors.New("console output failed")
+}
+
+type failOnceOutputWriter struct {
+	writes int
+}
+
+func (w *failOnceOutputWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes == 1 {
+		return 0, errors.New("console output failed")
+	}
+	return len(p), nil
+}
+
+type selectiveFailOutputWriter struct{}
+
+func (selectiveFailOutputWriter) Write(p []byte) (int, error) {
+	if string(p) == "fail" {
+		return 0, errors.New("console output failed")
+	}
+	return len(p), nil
+}
+
+type concurrentOutputRunner struct {
+	program      *headlessOutputProgram
+	firstWrote   chan struct{}
+	releaseFirst chan struct{}
+}
+
+type concurrentPrefixedOutputRunner struct {
+	program      *headlessOutputProgram
+	firstWrote   chan struct{}
+	releaseFirst chan struct{}
+
+	mu     sync.Mutex
+	prefix string
+}
+
+func newConcurrentPrefixedOutputRunner(program *headlessOutputProgram) *concurrentPrefixedOutputRunner {
+	return &concurrentPrefixedOutputRunner{
+		program: program, firstWrote: make(chan struct{}), releaseFirst: make(chan struct{}),
+	}
+}
+
+func (r *concurrentPrefixedOutputRunner) SetPrefix(prefix string) {
+	r.mu.Lock()
+	r.prefix = prefix
+	r.mu.Unlock()
+}
+
+func (r *concurrentPrefixedOutputRunner) SetScriptPrefix(prefix string, _ time.Duration) {
+	r.SetPrefix(prefix)
+}
+
+func (r *concurrentPrefixedOutputRunner) RunShell(command string, _ bool, _ string) (iexec.ProcessResult, error) {
+	return r.run(command)
+}
+
+func (r *concurrentPrefixedOutputRunner) RunScript(path string, _ []byte, _ bool, _ string) (iexec.ProcessResult, error) {
+	return r.run(path)
+}
+
+func (r *concurrentPrefixedOutputRunner) RunAgent(*iexec.AgentProcessOptions) (iexec.ProcessResult, error) {
+	return iexec.ProcessResult{}, nil
+}
+
+func (r *concurrentPrefixedOutputRunner) run(invocation string) (iexec.ProcessResult, error) {
+	r.mu.Lock()
+	prefix := r.prefix
+	r.mu.Unlock()
+	if invocation == "first" {
+		r.program.Send(liverun.OutputChunkMsg{StepPrefix: prefix, Stream: "stdout", Bytes: []byte("fail")})
+		close(r.firstWrote)
+		<-r.releaseFirst
+		return iexec.ProcessResult{}, nil
+	}
+	r.program.Send(liverun.OutputChunkMsg{StepPrefix: prefix, Stream: "stdout", Bytes: []byte("ok")})
+	return iexec.ProcessResult{}, nil
+}
+
+func (*concurrentOutputRunner) RunShell(string, bool, string) (iexec.ProcessResult, error) {
+	return iexec.ProcessResult{}, nil
+}
+
+func (*concurrentOutputRunner) RunScript(string, []byte, bool, string) (iexec.ProcessResult, error) {
+	return iexec.ProcessResult{}, nil
+}
+
+func (r *concurrentOutputRunner) RunAgent(options *iexec.AgentProcessOptions) (iexec.ProcessResult, error) {
+	if options.Prefix == "first" {
+		r.program.Send(liverun.OutputChunkMsg{StepPrefix: options.Prefix, Stream: "stdout", Bytes: []byte("fail")})
+		close(r.firstWrote)
+		<-r.releaseFirst
+		return iexec.ProcessResult{}, nil
+	}
+	r.program.Send(liverun.OutputChunkMsg{StepPrefix: options.Prefix, Stream: "stdout", Bytes: []byte("ok")})
+	return iexec.ProcessResult{}, nil
 }
 
 func writeTestFile(t *testing.T, path, content string) {

@@ -88,6 +88,74 @@ type RunState struct {
 	// The state file is preserved (not deleted) so the TUI can still display
 	// the run's metadata after completion.
 	Completed bool `json:"completed,omitempty"`
+	// RepositoryIndex is the selected repository currently being executed at
+	// the persisted step boundary. It is absent for legacy runs.
+	RepositoryIndex *int `json:"repositoryIndex,omitempty"`
+	// WorkspaceDir and SelectedRepositories identify a scoped run independently
+	// of the process that later resumes it. They are absent for legacy state.
+	WorkspaceDir         string               `json:"workspaceDir,omitempty"`
+	SelectedRepositories []RepositoryIdentity `json:"selectedRepositories,omitempty"`
+	RepositoryFrame      *RepositoryFrame     `json:"repositoryFrame,omitempty"`
+	TaskPlan             *TaskPlanState       `json:"taskPlan,omitempty"`
+	WorkspaceNamespace   *NamespaceState      `json:"workspaceNamespace,omitempty"`
+	// Pull-request links are scoped: workspace captures live at run level and
+	// explicit repositories retain their own latest link in selected order.
+	WorkspacePullRequestURL   string            `json:"workspacePullRequestUrl,omitempty"`
+	RepositoryPullRequestURLs map[string]string `json:"repositoryPullRequestUrls,omitempty"`
+}
+
+// NamespaceState is the durable mutable state for one execution namespace.
+// Repository frames retain their local state in NestedStepState; workspace
+// state is separate so a repository write cannot overwrite inherited bindings.
+type NamespaceState struct {
+	SessionIDs        map[string]string        `json:"sessionIds,omitempty"`
+	SessionProfiles   map[string]string        `json:"sessionProfiles,omitempty"`
+	CapturedVariables map[string]CapturedValue `json:"capturedVariables,omitempty"`
+	LastSessionStepID string                   `json:"lastSessionStepId,omitempty"`
+	NamedSessions     map[string]string        `json:"namedSessions,omitempty"`
+	NamedSessionDecls map[string]string        `json:"namedSessionDecls,omitempty"`
+}
+
+// RepositoryIdentity is the stable, canonical identity of one selected
+// checkout. The slice on RunState deliberately preserves the requested order.
+type RepositoryIdentity struct {
+	Name string `json:"name"`
+	Dir  string `json:"dir"`
+}
+
+type RepositoryStatus string
+
+const (
+	RepositoryPending   RepositoryStatus = "pending"
+	RepositoryActive    RepositoryStatus = "active"
+	RepositoryCompleted RepositoryStatus = "completed"
+	RepositoryFailed    RepositoryStatus = "failed"
+)
+
+// RepositoryFrame is the repository fan-out equivalent of NestedStepState.
+// Each entry owns the complete ordinary nested execution chain for that
+// repository, allowing a restart to skip completed siblings and restore only
+// the active sibling's deepest loop/sub-workflow position.
+type RepositoryFrame struct {
+	BoundaryID   string                     `json:"boundaryId,omitempty"`
+	Repositories []RepositoryExecutionState `json:"repositories"`
+}
+
+type RepositoryExecutionState struct {
+	Identity              RepositoryIdentity `json:"identity"`
+	Status                RepositoryStatus   `json:"status"`
+	Nested                *NestedStepState   `json:"nested,omitempty"`
+	NestedAtBoundaryChild *bool              `json:"nestedAtBoundaryChild,omitempty"`
+}
+
+// TaskPlanState is produced by the authoritative taskgroups parser. Keeping
+// both normalized data and its fingerprint makes future resume validation
+// independent of raw planning-file spelling.
+type TaskPlanState struct {
+	Snapshot    json.RawMessage `json:"snapshot"`
+	Fingerprint string          `json:"fingerprint"`
+	ChangeDir   string          `json:"changeDir"`
+	PlanKind    string          `json:"planKind"`
 }
 
 // ResolveResumeStepResult holds the outcome of resolving which step to resume from.

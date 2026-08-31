@@ -1,6 +1,7 @@
 name: define-change
 description: "Interactively define a structured change through proposal, specification, design, and testing strategy."
 hidden: true
+scope: workspace
 
 params:
   - name: change_name

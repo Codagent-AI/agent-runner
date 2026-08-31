@@ -1,13 +1,41 @@
 package exec
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/google/go-cmp/cmp"
 )
+
+func TestNestedRepositoryFanoutNormalizesCallbackErrorsToFailure(t *testing.T) {
+	workspace, backend := t.TempDir(), t.TempDir()
+	auditLog := &mockAuditLogger{}
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		WorkingDir: workspace, AuditLogger: auditLog,
+		Workspace: &model.WorkspaceContext{Dir: workspace, Repositories: map[string]model.Repository{
+			"backend": {Name: "backend", Dir: backend},
+		}, Selected: []string{"backend"}},
+	})
+	wantErr := errors.New("callback failed")
+	outcome, err := executeNestedRepositoryFanout(ctx, "[nested]", func(*model.ExecutionContext, int) (StepOutcome, error) {
+		return OutcomeSuccess, wantErr
+	})
+	if !errors.Is(err, wantErr) || outcome != OutcomeFailed {
+		t.Fatalf("executeNestedRepositoryFanout() = %q, %v; want failed, %v", outcome, err, wantErr)
+	}
+	if got := ctx.RepositoryFrame.Repositories[0].Status; got != model.RepositoryFailed {
+		t.Fatalf("repository status = %q, want %q", got, model.RepositoryFailed)
+	}
+	for _, event := range auditLog.events {
+		if event.Type == audit.EventRepositoryEnd && event.Data["outcome"] != string(OutcomeFailed) {
+			t.Fatalf("repository end outcome = %v, want failed", event.Data["outcome"])
+		}
+	}
+}
 
 type mockGlob struct {
 	matches []string
@@ -15,6 +43,171 @@ type mockGlob struct {
 
 func (g *mockGlob) Expand(_ string) ([]string, error) {
 	return g.matches, nil
+}
+
+func TestDispatchStep_FansRepositoryScopedGroupOutWithRepositoryWorkdirs(t *testing.T) {
+	workspace := t.TempDir()
+	backend := t.TempDir()
+	frontend := t.TempDir()
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		Params:      map[string]string{},
+		WorkingDir:  workspace,
+		ProjectRoot: workspace,
+		Workspace: &model.WorkspaceContext{
+			Dir: workspace,
+			Repositories: map[string]model.Repository{
+				"backend":  {Name: "backend", Dir: backend},
+				"frontend": {Name: "frontend", Dir: frontend},
+			},
+			Selected: []string{"backend", "frontend"},
+		},
+	})
+	runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}, {ExitCode: 0}, {ExitCode: 0}, {ExitCode: 0}}}
+	step := model.Step{
+		ID: "implement", Scope: model.ScopeRepositories,
+		Steps: []model.Step{
+			{ID: "first", Command: "first {{repository_name}}", Workdir: "first"},
+			{ID: "second", Command: "second {{repository_name}}", Workdir: "second"},
+		},
+	}
+
+	outcome, err := DispatchStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+	if err != nil || outcome != OutcomeSuccess {
+		t.Fatalf("DispatchStep() = %q, %v", outcome, err)
+	}
+	wantCalls := [][]string{
+		{"sh", "-c", "first 'backend'"},
+		{"sh", "-c", "second 'backend'"},
+		{"sh", "-c", "first 'frontend'"},
+		{"sh", "-c", "second 'frontend'"},
+	}
+	if diff := cmp.Diff(wantCalls, runner.calls); diff != "" {
+		t.Fatalf("calls mismatch (-want +got):\n%s", diff)
+	}
+	wantWorkdirs := []string{
+		filepath.Join(backend, "first"), filepath.Join(backend, "second"),
+		filepath.Join(frontend, "first"), filepath.Join(frontend, "second"),
+	}
+	if diff := cmp.Diff(wantWorkdirs, runner.workdirs); diff != "" {
+		t.Fatalf("workdirs mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestDispatchStep_EvaluatesGroupChildSkipIfInsideEachRepository(t *testing.T) {
+	workspace, backend, frontend := t.TempDir(), t.TempDir(), t.TempDir()
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		Params: map[string]string{}, WorkingDir: workspace, ProjectRoot: workspace,
+		Workspace: &model.WorkspaceContext{
+			Dir: workspace,
+			Repositories: map[string]model.Repository{
+				"backend": {Name: "backend", Dir: backend}, "frontend": {Name: "frontend", Dir: frontend},
+			},
+			Selected: []string{"backend", "frontend"},
+		},
+	})
+	runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}, {ExitCode: 0}}}
+	step := model.Step{ID: "scoped", Scope: model.ScopeRepositories, Steps: []model.Step{
+		{ID: "first", Command: "first {{repository_name}}"},
+		{ID: "second", Command: "second {{repository_name}}", SkipIf: "previous_success"},
+	}}
+
+	outcome, err := DispatchStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+	if err != nil || outcome != OutcomeSuccess {
+		t.Fatalf("DispatchStep() = %q, %v", outcome, err)
+	}
+	got := make([]string, len(runner.calls))
+	for i, call := range runner.calls {
+		got[i] = call[2]
+	}
+	if diff := cmp.Diff([]string{"first 'backend'", "first 'frontend'"}, got); diff != "" {
+		t.Fatalf("commands mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestDispatchStep_ResumesSubWorkflowInsideGroupFromChildProgress(t *testing.T) {
+	dir := t.TempDir()
+	childPath := filepath.Join(dir, "repository-child-v1.0.yaml")
+	childWorkflow := `name: repository-child
+steps:
+  - id: repository-preflight
+    command: preflight
+  - id: implement
+    command: implement
+`
+	if err := os.WriteFile(childPath, []byte(childWorkflow), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		Params:       map[string]string{},
+		WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"),
+		WorkingDir:   dir,
+	})
+	ctx.ResumeChildState = &model.NestedStepState{
+		StepID: "implement-repository-task-group",
+		Child:  &model.NestedStepState{StepID: "repository-preflight"},
+	}
+	runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}, {ExitCode: 0}}}
+	step := model.Step{ID: "implement-task-groups", Steps: []model.Step{{
+		ID: "implement-repository-task-group", Workflow: "repository-child-v1.0.yaml",
+	}}}
+
+	outcome, err := DispatchStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+	if err != nil || outcome != OutcomeSuccess {
+		t.Fatalf("DispatchStep() = %q, %v", outcome, err)
+	}
+	want := [][]string{{"sh", "-c", "preflight"}, {"sh", "-c", "implement"}}
+	if diff := cmp.Diff(want, runner.calls); diff != "" {
+		t.Fatalf("calls mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestDispatchStep_EvaluatesRepositoryBoundarySkipForEachRepository(t *testing.T) {
+	workspace, backend, frontend := t.TempDir(), t.TempDir(), t.TempDir()
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		WorkingDir: workspace,
+		Workspace: &model.WorkspaceContext{Dir: workspace, Repositories: map[string]model.Repository{
+			"backend": {Name: "backend", Dir: backend}, "frontend": {Name: "frontend", Dir: frontend},
+		}, Selected: []string{"backend", "frontend"}},
+	})
+	runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+	step := model.Step{
+		ID: "conditional", Scope: model.ScopeRepositories,
+		SkipIf:  "sh: test {{repository_name}} = backend",
+		Command: "run {{repository_name}}",
+	}
+
+	outcome, err := DispatchStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+	if err != nil || outcome != OutcomeSuccess {
+		t.Fatalf("DispatchStep() = %q, %v", outcome, err)
+	}
+	if diff := cmp.Diff([][]string{{"sh", "-c", "run 'frontend'"}}, runner.calls); diff != "" {
+		t.Fatalf("calls mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestDispatchStep_InsertsRepositoryAtScopedGroupAuditBoundary(t *testing.T) {
+	workspace, backend := t.TempDir(), t.TempDir()
+	auditLog := &mockAuditLogger{}
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		WorkingDir: workspace, AuditLogger: auditLog,
+		Workspace: &model.WorkspaceContext{Dir: workspace, Repositories: map[string]model.Repository{
+			"backend": {Name: "backend", Dir: backend},
+		}, Selected: []string{"backend"}},
+	})
+	iterationLimit := 1
+	step := model.Step{ID: "implement-task-groups", Scope: model.ScopeRepositories, Steps: []model.Step{{
+		ID: "task-loop", Loop: &model.Loop{Max: &iterationLimit}, Steps: []model.Step{{ID: "implement-task", Command: "work"}},
+	}}}
+	if outcome, err := DispatchStep(&step, ctx, &mockRunner{}, &mockGlob{}, &mockLogger{}); err != nil || outcome != OutcomeSuccess {
+		t.Fatalf("DispatchStep() = %q, %v", outcome, err)
+	}
+	want := "[implement-task-groups, repo:backend, task-loop:0, implement-task]"
+	for _, event := range auditLog.events {
+		if event.Type == audit.EventStepStart && event.Prefix == want {
+			return
+		}
+	}
+	t.Fatalf("audit did not contain %s; events = %#v", want, auditLog.events)
 }
 
 func TestDispatchStep(t *testing.T) {

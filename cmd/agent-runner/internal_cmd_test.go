@@ -15,6 +15,71 @@ import (
 	"github.com/codagent/agent-runner/internal/interactive"
 )
 
+func TestInternalTaskGroupsCommand(t *testing.T) {
+	workspace := t.TempDir()
+	changeDir := filepath.Join(workspace, "openspec", "changes", "demo")
+	for path, content := range map[string]string{
+		filepath.Join(workspace, ".agent-runner", "config.yaml"): "repositories:\n  backend:\n    path: ../backend\n  frontend:\n    path: ../frontend\n",
+		filepath.Join(changeDir, "tasks.md"): `## Repository: backend
+
+- [ ] [API](tasks/backend/01-api.md)
+
+## Repository: frontend
+
+- [ ] [UI](tasks/frontend/01-ui.md)
+`,
+		filepath.Join(changeDir, "tasks", "backend", "01-api.md"): "# API\n",
+		filepath.Join(changeDir, "tasks", "frontend", "01-ui.md"): "# UI\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := handleTaskGroups([]string{
+		"--workspace-dir", workspace,
+		"--change-dir", changeDir,
+		"--plan-kind", "full",
+		"--output", "repositories",
+	}, &stdout, &stderr)
+	if code != 0 || stdout.String() != "backend,frontend" || stderr.Len() != 0 {
+		t.Fatalf("repositories: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+
+	stdout.Reset()
+	code = handleTaskGroups([]string{
+		"--workspace-dir", workspace,
+		"--change-dir", changeDir,
+		"--plan-kind", "full",
+		"--repository", "backend",
+		"--output", "task-pattern",
+	}, &stdout, &stderr)
+	canonicalChange, err := filepath.EvalSymlinks(changeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 || stdout.String() != filepath.Join(canonicalChange, "tasks", "backend", "*.md") || stderr.Len() != 0 {
+		t.Fatalf("task-pattern: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = handleTaskGroups([]string{
+		"--workspace-dir", workspace,
+		"--change-dir", changeDir,
+		"--plan-kind", "full",
+		"--repository", "missing",
+		"--output", "task-pattern",
+	}, &stdout, &stderr)
+	if code == 0 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "no task group") {
+		t.Fatalf("invalid task-pattern: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
 func TestInternalWatchdogSkipsReusedPID(t *testing.T) {
 	identity, err := interactive.ReadProcessIdentity(os.Getpid())
 	if err != nil {

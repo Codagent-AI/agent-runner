@@ -46,6 +46,20 @@ func TestBuildPrefix(t *testing.T) {
 	})
 }
 
+func TestRepositoryPrefixInsertsAtScopedBoundary(t *testing.T) {
+	if got, want := RepositoryPrefix("[implement-task-groups, task-loop:0, implement-task]", "backend", 1), "[implement-task-groups, repo:backend, task-loop:0, implement-task]"; got != want {
+		t.Fatalf("RepositoryPrefix() = %q, want %q", got, want)
+	}
+}
+
+func TestWithRepositoryMatchesExistingRepositoryTokenExactly(t *testing.T) {
+	event := Event{Prefix: "[implement, repo:backend, validate]"}
+	got := WithRepository(event, "back", "/repos/back", 1)
+	if want := "[implement, repo:back, repo:backend, validate]"; got.Prefix != want {
+		t.Fatalf("WithRepository() prefix = %q, want %q", got.Prefix, want)
+	}
+}
+
 func TestEncodePath(t *testing.T) {
 	t.Run("replaces slashes dots and underscores with dashes", func(t *testing.T) {
 		result := EncodePath("/Users/paul/codagent/agent-runner")
@@ -182,6 +196,8 @@ func TestControlAndJobControlEventTypesAreRecognized(t *testing.T) {
 	types := []EventType{
 		EventRunStart,
 		EventRunEnd,
+		EventRepositoryStart,
+		EventRepositoryEnd,
 		EventStepStart,
 		EventStepEnd,
 		EventIterationStart,

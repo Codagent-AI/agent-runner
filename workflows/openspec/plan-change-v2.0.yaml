@@ -1,6 +1,7 @@
 name: plan-change
 description: "Autonomously validate an approved OpenSpec definition and produce a reviewed task plan."
 hidden: true
+scope: workspace
 
 params:
   - name: change_name
@@ -11,6 +12,6 @@ steps:
     workflow: ../core/plan-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
-      change_dir: "openspec/changes/{{change_name}}"
+      change_dir: "{{workspace_dir}}/openspec/changes/{{change_name}}"
       change_label: "OpenSpec change"
       change_kind: "openspec"

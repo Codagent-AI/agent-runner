@@ -63,18 +63,39 @@ func (m *Model) renderBreadcrumb() string {
 	result := tuistyle.ScreenMargin + crumbStr +
 		tuistyle.DimStyle.Render(suffix) +
 		m.styledRunStatus()
-	if m.tree.PullRequestURL != "" {
-		result += pullRequestBreadcrumbSegment(m.tree.PullRequestURL)
+	if urls := m.pullRequestURLs(); len(urls) > 0 {
+		result += pullRequestBreadcrumbSegment(urls)
 	}
 	return result
 }
 
-func pullRequestBreadcrumbSegment(rawURL string) string {
-	target, label, ok := linkablePullRequestURL(rawURL)
-	if !ok {
-		return tuistyle.DimStyle.Render(" · PR")
+func (m *Model) pullRequestURLs() []string {
+	if m == nil || m.tree == nil {
+		return nil
 	}
-	return tuistyle.DimStyle.Render(" · " + osc8Hyperlink(target, label))
+	urls := make([]string, 0, len(m.tree.RepositoryOrder)+1)
+	if m.tree.PullRequestURL != "" {
+		urls = append(urls, m.tree.PullRequestURL)
+	}
+	for _, name := range m.tree.RepositoryOrder {
+		if repositoryURL := m.tree.RepositoryPullRequestURLs[name]; repositoryURL != "" {
+			urls = append(urls, repositoryURL)
+		}
+	}
+	return urls
+}
+
+func pullRequestBreadcrumbSegment(rawURLs []string) string {
+	labels := make([]string, 0, len(rawURLs))
+	for _, rawURL := range rawURLs {
+		target, label, ok := linkablePullRequestURL(rawURL)
+		if !ok {
+			labels = append(labels, "PR")
+			continue
+		}
+		labels = append(labels, osc8Hyperlink(target, label))
+	}
+	return tuistyle.DimStyle.Render(" · " + strings.Join(labels, ", "))
 }
 
 // linkablePullRequestURL decides whether rawURL may be used as an OSC 8 target

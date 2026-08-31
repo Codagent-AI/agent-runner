@@ -81,7 +81,7 @@ func buildDetailDocument(node *StepNode, options detailBuildOptions) detailDocum
 	case NodeUI:
 		doc.addOutput(currentFormLabel, uiFormText(node))
 		doc.addOutput("Current outcome", outcomeText(node))
-	case NodeSubWorkflow, NodeLoop, NodeIteration, NodeGroup:
+	case NodeSubWorkflow, NodeLoop, NodeIteration, NodeGroup, NodeRepository:
 		doc.addOutput("Current status", containerStatusText(node))
 	}
 
@@ -572,6 +572,8 @@ func nodeTypeLabel(t NodeType) string {
 		return "iteration"
 	case NodeGroup:
 		return "group"
+	case NodeRepository:
+		return "repository"
 	}
 	return "step"
 }

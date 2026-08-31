@@ -19,6 +19,7 @@ import (
 	"github.com/codagent/agent-runner/internal/interactive"
 	"github.com/codagent/agent-runner/internal/profilewrite"
 	"github.com/codagent/agent-runner/internal/runner"
+	"github.com/codagent/agent-runner/internal/taskgroups"
 	"github.com/codagent/agent-runner/internal/usersettings"
 	"gopkg.in/yaml.v3"
 )
@@ -68,6 +69,8 @@ func handleInternalWithIO(args []string, stdin io.Reader, stderr io.Writer) int 
 		return 1
 	}
 	switch args[0] {
+	case "task-groups":
+		return handleTaskGroups(args[1:], os.Stdout, stderr)
 	case "launch-intake-route":
 		return handleLaunchIntakeRoute(args[1:], stderr)
 	case "watchdog":
@@ -163,6 +166,57 @@ func handleInternalWithIO(args []string, stdin io.Reader, stderr io.Writer) int 
 		_, _ = fmt.Fprintf(stderr, "agent-runner: unknown internal command %q\n", args[0])
 		return 1
 	}
+}
+
+func handleTaskGroups(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("internal task-groups", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	workspaceDir := flags.String("workspace-dir", "", "canonical workspace directory")
+	changeDir := flags.String("change-dir", "", "canonical change directory")
+	planKind := flags.String("plan-kind", "", "plan kind: full or simple")
+	repository := flags.String("repository", "", "repository task group")
+	output := flags.String("output", "", "output: repositories or task-pattern")
+	if err := flags.Parse(args); err != nil {
+		return 1
+	}
+	if flags.NArg() != 0 || *workspaceDir == "" || *changeDir == "" || (*planKind != string(taskgroups.Full) && *planKind != string(taskgroups.Simple)) || (*output != "repositories" && *output != "task-pattern") {
+		_, _ = fmt.Fprintln(stderr, "agent-runner: task-groups requires --workspace-dir, --change-dir, --plan-kind full|simple, and --output repositories|task-pattern")
+		return 1
+	}
+	if *output == "task-pattern" && *repository == "" {
+		_, _ = fmt.Fprintln(stderr, "agent-runner: task-groups task-pattern requires --repository")
+		return 1
+	}
+	cfg, err := agentconfig.Load(filepath.Join(*workspaceDir, ".agent-runner", "config.yaml"))
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "agent-runner: task-groups load workspace configuration: %v\n", err)
+		return 1
+	}
+	repositories := make([]string, 0, len(cfg.Repositories))
+	for name := range cfg.Repositories {
+		repositories = append(repositories, name)
+	}
+	plan, err := taskgroups.Parse(taskgroups.Options{
+		WorkspaceDir: *workspaceDir,
+		ChangeDir:    *changeDir,
+		PlanKind:     taskgroups.PlanKind(*planKind),
+		Repositories: repositories,
+	})
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "agent-runner: task-groups: %v\n", err)
+		return 1
+	}
+	if *output == "repositories" {
+		_, _ = fmt.Fprint(stdout, strings.Join(plan.Repositories, ","))
+		return 0
+	}
+	pattern := plan.TaskPattern(*repository)
+	if pattern == "" {
+		_, _ = fmt.Fprintf(stderr, "agent-runner: task-groups: repository %q has no task group\n", *repository)
+		return 1
+	}
+	_, _ = fmt.Fprint(stdout, pattern)
+	return 0
 }
 
 func handleLaunchIntakeRoute(args []string, stderr io.Writer) int {

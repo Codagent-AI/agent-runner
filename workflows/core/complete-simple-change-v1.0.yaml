@@ -1,6 +1,7 @@
 name: complete-simple-change
-description: "Implement, flow-test, and interactively review a small structured change."
+description: "Implement, flow-test, and review a small structured change once per planned repository."
 hidden: true
+scope: workspace
 
 params:
   - name: change_name
@@ -8,6 +9,8 @@ params:
   - name: change_dir
     required: true
   - name: change_label
+    required: true
+  - name: repositories
     required: true
 
 sessions:
@@ -17,32 +20,76 @@ sessions:
     agent: tester
 
 steps:
-  - id: implement
-    workflow: implement-task-v1.0.yaml
-    params:
-      task_file: "{{change_dir}}/tasks.md"
-      run_session_report: "true"
-      skip_validator: "false"
+  - id: implement-task-groups
+    scope: repositories
+    steps:
+      - id: repository-preflight
+        workflow: ../core/validate-feature-branch-v1.0.yaml
+        params:
+          workflow_name: "{{change_label}} simple implementation for {{repository_name}}"
+
+      - id: resolve-repository-task
+        script: resolve-task-group.sh
+        capture: repository_task_glob
+        script_inputs:
+          workspace_dir: "{{workspace_dir}}"
+          change_dir: "{{change_dir}}"
+          plan_kind: "simple"
+          output: "task-pattern"
+          repository_name: "{{repository_name}}"
+
+      - id: implement-tasks
+        loop:
+          over: "{{repository_task_glob}}"
+          as: task_file
+          require_matches: true
+        steps:
+          - id: implement
+            workflow: implement-task-v1.0.yaml
+            params:
+              task_file: "{{task_file}}"
+              run_session_report: "true"
+              skip_validator: "false"
 
   - id: test
     session: flow-tester
     mode: autonomous
     prompt: |
-      Use codagent:test-flows to perform lightweight branch-local flow testing for implemented {{change_label}} "{{change_name}}".
+      Use codagent:test-flows to perform lightweight branch-local flow testing for implemented {{change_label}} "{{change_name}}" from workspace {{workspace_dir}}.
 
-      Read the approved artifacts under `{{change_dir}}/` and relevant implementation evidence under `{{session_dir}}/output/`. Exercise representative public flows proportionally to this small change. Write a concise evidence report to `{{session_dir}}/output/test-flows.md` and place any UI screenshots beneath that output directory. Preserve material findings, evidence, ambiguities, and limitations accurately. Do not modify tracked files or fix findings.
+      Read the approved artifacts under `{{change_dir}}/`. Read implementation evidence only in persisted repository order through `{{session_dir}}/output/repository-evidence-index.json`; do not glob repository directories. Exercise representative public flows proportionally to this small change across every affected repository and their integration points. Write a concise aggregate report to `{{session_dir}}/output/test-flows.md` and place screenshots beneath that aggregate output directory. Preserve findings, evidence, ambiguities, and limitations accurately. Do not modify tracked files or fix findings.
 
   - id: review
     session: lead-agent
     mode: interactive
     tools: [call_agent]
     prompt: |
-      Help the user review implemented {{change_label}} "{{change_name}}".
+      Help the user review implemented {{change_label}} "{{change_name}}" from workspace {{workspace_dir}}.
 
-      Read `{{session_dir}}/output/test-flows.md`. Show the tester's material findings, evidence, and limitations before your own assessment. Also inspect the implementation session report under `{{session_dir}}/output/` and discuss any consequential unresolved assumption with the user.
+      Read `{{session_dir}}/output/test-flows.md` and repository implementation reports only through `{{session_dir}}/output/repository-evidence-index.json`. Present the tester's material findings, evidence, limitations, and consequential unresolved assumptions before your own assessment.
 
-      Help the user review and request fixes or minor enhancements without material scope expansion. Confirm consequential behavioral or design changes before editing. Before fixing a defect, invoke codagent:implement-with-tdd and follow red-green-refactor; add unit coverage where applicable and a practical integration or end-to-end regression test when it meaningfully protects the affected public flow. Update active specifications only when a decision changes or clarifies normative observable behavior.
+      Confirm consequential behavioral or design decisions and avoid material scope expansion. Apply workspace-owned artifact changes directly. Record every approved implementation-repository fix in `{{session_dir}}/output/acceptance-remediation.json`, using a separate workspace section and entries keyed only by selected repository names. Include codagent:implement-with-tdd, unit coverage where applicable, practical integration/end-to-end regression coverage, validation, commit, push, and draft-PR-head verification in each repository remediation instruction. Do not directly modify an implementation repository here.
 
-      After tracked changes, run relevant targeted checks, invoke validator-run, and commit related changes that belong to the current project repository following project conventions with the `[{{step_id}}]` prefix. Leave artifacts outside the repository uncommitted. If a changed public flow warrants another hands-on check, recommend targeted verification. When the user agrees, resume `flow-tester` with the prior finding, affected flow, and direct dependencies; require codagent:test-flows in targeted scope rather than a new broad pass, then present its exact result. Address approved actionable findings and repeat targeted verification when warranted until the user says review is complete. Do not create status files or hide an unresolved result behind a success claim.
+      Continue only when the user says testing and review are complete.
 
-      Continue to the next step only when the user says testing and review are complete.
+  - id: validate-remediation-ledger
+    script: validate-remediation-ledger.sh
+    script_inputs:
+      ledger: "{{session_dir}}/output/acceptance-remediation.json"
+      repositories: "{{repositories}}"
+
+  - id: remediate-repositories
+    scope: repositories
+    steps:
+      - id: remediate-repository
+        workflow: ../core/remediate-repository-v1.0.yaml
+        params:
+          change_dir: "{{change_dir}}"
+
+  - id: finalize-repositories
+    scope: repositories
+    steps:
+      - id: finalize-repository-group
+        workflow: finalize-repositories-v1.0.yaml
+        params:
+          repositories: "{{repositories}}"

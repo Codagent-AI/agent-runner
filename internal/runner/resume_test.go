@@ -14,6 +14,7 @@ import (
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/stateio"
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestPrepareResume_LoadsExactRecordedVersion(t *testing.T) {
@@ -217,6 +218,116 @@ func TestPrepareRun_PersistsAgentOverride(t *testing.T) {
 	if got := state.AgentOverride; got == nil || got.CLI != "codex" || got.Model != "gpt-5.2" {
 		t.Fatalf("recorded override = %#v, want codex/gpt-5.2", got)
 	}
+}
+
+func TestPrepareResume_RestoresRepositoryFrameAndValidatesIdentity(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace, backend, frontend := t.TempDir(), t.TempDir(), t.TempDir()
+	initGitWorktree(t, workspace)
+	initGitWorktree(t, backend)
+	initGitWorktree(t, frontend)
+	workflowPath := filepath.Join(workspace, "repository-resume-v1.0.yaml")
+	workflowSource := `name: repository-resume
+scope: repositories
+params:
+  - name: repositories
+steps:
+  - id: implement
+    command: echo implement
+`
+	if err := os.WriteFile(workflowPath, []byte(workflowSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backendRoot := canonicalTestDir(t, backend)
+	frontendRoot := canonicalTestDir(t, frontend)
+	active := 1
+	state := model.RunState{
+		WorkflowFile:    workflowPath,
+		WorkflowName:    "repository-resume",
+		WorkflowHash:    stateio.ComputeWorkflowHash(workflowSource),
+		WorkspaceDir:    canonicalTestDir(t, workspace),
+		Params:          map[string]string{model.RepositoriesParam: "backend,frontend"},
+		RepositoryIndex: &active,
+		SelectedRepositories: []model.RepositoryIdentity{
+			{Name: "backend", Dir: backendRoot},
+			{Name: "frontend", Dir: frontendRoot},
+		},
+		RepositoryFrame: &model.RepositoryFrame{Repositories: []model.RepositoryExecutionState{
+			{Identity: model.RepositoryIdentity{Name: "backend", Dir: backendRoot}, Status: model.RepositoryCompleted, Nested: &model.NestedStepState{StepID: "implement", CapturedVariables: map[string]model.CapturedValue{"output": model.NewCapturedString("backend")}}},
+			{Identity: model.RepositoryIdentity{Name: "frontend", Dir: frontendRoot}, Status: model.RepositoryFailed, Nested: &model.NestedStepState{StepID: "implement", CapturedVariables: map[string]model.CapturedValue{"output": model.NewCapturedString("frontend")}, NamedSessions: map[string]string{"worker": "frontend-worker"}, NamedSessionDecls: map[string]string{"worker": "implementor"}, Child: &model.NestedStepState{StepID: "inner"}}},
+		}},
+		WorkspaceNamespace:      &model.NamespaceState{NamedSessions: map[string]string{"planner": "workspace-planner"}, NamedSessionDecls: map[string]string{"planner": "lead"}, CapturedVariables: map[string]model.CapturedValue{"shared": model.NewCapturedString("workspace")}},
+		WorkspacePullRequestURL: "https://github.com/acme/workspace/pull/1",
+		RepositoryPullRequestURLs: map[string]string{
+			"backend":  "https://github.com/acme/backend/pull/2",
+			"frontend": "https://github.com/acme/frontend/pull/3",
+		},
+		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{StepID: "implement"}},
+	}
+	sessionDir := t.TempDir()
+	if err := stateio.WriteState(&state, sessionDir); err != nil {
+		t.Fatal(err)
+	}
+	profiles := &config.Config{Repositories: map[string]config.Repository{
+		"backend": {Path: backend}, "frontend": {Path: frontend},
+	}}
+	handle, err := PrepareResume(filepath.Join(sessionDir, "state.json"), &Options{
+		WorkingDir: workspace, ProfileStore: profiles,
+		ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareResume() error = %v", err)
+	}
+	defer finalizeRun(handle.rs, ResultStopped)
+	if diff := cmp.Diff(state.RepositoryFrame, handle.rs.ctx.RepositoryFrame); diff != "" {
+		t.Fatalf("restored repository frame mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(model.NewCapturedString("workspace"), handle.rs.ctx.CapturedVariables["shared"]); diff != "" {
+		t.Fatalf("workspace capture mismatch (-want +got):\n%s", diff)
+	}
+	if got := handle.rs.ctx.ResumeChildState; got == nil || got.StepID != "inner" {
+		t.Fatalf("active repository child state = %#v, want inner", got)
+	}
+	if got := handle.rs.ctx.LookupNamedSession("planner"); got != "workspace-planner" {
+		t.Fatalf("workspace named session = %q", got)
+	}
+	frontendContext := model.NewRepositoryExecutionContext(handle.rs.ctx, model.Repository{Name: "frontend", Dir: frontendRoot}, 1)
+	if diff := cmp.Diff(model.NewCapturedString("frontend"), frontendContext.CapturedVariables["output"]); diff != "" {
+		t.Fatalf("restored repository capture mismatch (-want +got):\n%s", diff)
+	}
+	if got := frontendContext.LookupNamedSession("worker"); got != "frontend-worker" {
+		t.Fatalf("restored repository-local session = %q", got)
+	}
+	workspacePR, repositoryPRs := handle.rs.ctx.PullRequestCaptureState.PullRequestURLs()
+	if diff := cmp.Diff(state.RepositoryPullRequestURLs, repositoryPRs); workspacePR != state.WorkspacePullRequestURL || diff != "" {
+		t.Fatalf("restored pull-request state = (%q, %#v), want (%q, %#v)", workspacePR, repositoryPRs, state.WorkspacePullRequestURL, state.RepositoryPullRequestURLs)
+	}
+
+	t.Run("rejects changed root before execution", func(t *testing.T) {
+		moved := t.TempDir()
+		initGitWorktree(t, moved)
+		changed := *profiles
+		changed.Repositories = map[string]config.Repository{"backend": {Path: moved}, "frontend": {Path: frontend}}
+		_, err := PrepareResume(filepath.Join(sessionDir, "state.json"), &Options{
+			WorkingDir: workspace, ProfileStore: &changed,
+			ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+		})
+		if err == nil || !strings.Contains(err.Error(), "backend") || !strings.Contains(err.Error(), "identity") {
+			t.Fatalf("PrepareResume() error = %v, want backend identity mismatch", err)
+		}
+	})
+
+	t.Run("rejects launch outside persisted workspace", func(t *testing.T) {
+		otherWorkspace := t.TempDir()
+		initGitWorktree(t, otherWorkspace)
+		_, err := PrepareResume(filepath.Join(sessionDir, "state.json"), &Options{
+			WorkingDir: otherWorkspace, ProfileStore: profiles,
+			ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+		})
+		if err == nil || !strings.Contains(err.Error(), "workspace") || !strings.Contains(err.Error(), "does not match") {
+			t.Fatalf("PrepareResume() error = %v, want workspace identity mismatch", err)
+		}
+	})
 }
 
 func TestPrepareRunPersistsIntakeHandoffAndPrepareResumeRestoresProvenance(t *testing.T) {
@@ -656,6 +767,282 @@ steps:
 	_, err := PrepareResume(filepath.Join(dir, "state.json"), &Options{})
 	if !errors.Is(err, ErrAlreadyCompleted) {
 		t.Fatalf("PrepareResume error = %v, want ErrAlreadyCompleted", err)
+	}
+}
+
+func TestPrepareResume_RepositoryFanoutSkipsCompletedRepositories(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace, backend, frontend, docs := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
+	initGitWorktree(t, workspace)
+	initGitWorktree(t, backend)
+	initGitWorktree(t, frontend)
+	initGitWorktree(t, docs)
+	workflowPath := filepath.Join(workspace, "resume-repositories-v1.0.yaml")
+	workflowYAML := `name: resume-repositories
+scope: repositories
+params:
+  - name: repositories
+steps:
+  - id: setup
+    command: setup {{repository_name}}
+  - id: deploy
+    command: deploy {{repository_name}}
+`
+	if err := os.WriteFile(workflowPath, []byte(workflowYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	failedRepository := 1
+	sessionDir := t.TempDir()
+	state := model.RunState{
+		WorkflowFile:    workflowPath,
+		WorkflowName:    "resume-repositories",
+		Params:          map[string]string{model.RepositoriesParam: "backend,frontend,docs"},
+		WorkflowHash:    stateio.ComputeWorkflowHash(workflowYAML),
+		RepositoryIndex: &failedRepository,
+		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+			StepID: "deploy", Completed: false,
+			SessionIDs: map[string]string{}, SessionProfiles: map[string]string{}, CapturedVariables: map[string]model.CapturedValue{},
+		}},
+	}
+	if err := stateio.WriteState(&state, sessionDir); err != nil {
+		t.Fatal(err)
+	}
+	spy := &repositorySpyRunner{}
+	handle, err := PrepareResume(filepath.Join(sessionDir, "state.json"), &Options{
+		WorkingDir: workspace,
+		ProfileStore: &config.Config{Repositories: map[string]config.Repository{
+			"backend": {Path: backend}, "frontend": {Path: frontend}, "docs": {Path: docs},
+		}},
+		ProcessRunner: spy,
+		GlobExpander:  &mockGlob{},
+		Log:           &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareResume() error = %v", err)
+	}
+	if result := ExecuteFromHandle(handle, nil); result != ResultSuccess {
+		t.Fatalf("ExecuteFromHandle() = %q, want success", result)
+	}
+	if diff := cmp.Diff([]string{"deploy 'frontend'", "setup 'docs'", "deploy 'docs'"}, spy.commands); diff != "" {
+		t.Fatalf("resumed commands mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestResumeNestedStateReplacesStaleRepositoryDescendantsAtBoundary(t *testing.T) {
+	active := 1
+	state := model.RunState{
+		RepositoryIndex: &active,
+		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+			StepID: "implement",
+			Child: &model.NestedStepState{
+				StepID: "implement-task-groups",
+				Child: &model.NestedStepState{
+					StepID: "implement-repository-task-group",
+					Child:  &model.NestedStepState{StepID: "stale-implement-tasks"},
+				},
+			},
+		}},
+		RepositoryFrame: &model.RepositoryFrame{
+			BoundaryID: "[implement, sub:implement-change, implement-task-groups]",
+			Repositories: []model.RepositoryExecutionState{
+				{Status: model.RepositoryCompleted},
+				{Status: model.RepositoryActive, Nested: &model.NestedStepState{
+					StepID: "simplify",
+					Child:  &model.NestedStepState{StepID: "run-validator"},
+				}},
+			},
+		},
+	}
+
+	nested := resumeNestedState(&state)
+	var got []string
+	for current := nested; current != nil; current = current.Child {
+		got = append(got, current.StepID)
+	}
+	want := []string{
+		"implement",
+		"implement-task-groups",
+		"implement-repository-task-group",
+		"simplify",
+		"run-validator",
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("resume chain mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestResumeNestedStateUsesFullBoundaryPathWhenStepIDsRepeat(t *testing.T) {
+	active := 0
+	atBoundaryChild := false
+	state := model.RunState{
+		RepositoryIndex: &active,
+		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+			StepID: "coordinate",
+			Child: &model.NestedStepState{
+				StepID: "task-groups",
+				Child: &model.NestedStepState{
+					StepID: "simplify",
+					Child:  &model.NestedStepState{StepID: "task-groups"},
+				},
+			},
+		}},
+		RepositoryFrame: &model.RepositoryFrame{
+			BoundaryID: "[coordinate, sub:workspace-child, task-groups]",
+			Repositories: []model.RepositoryExecutionState{{
+				Status:                model.RepositoryActive,
+				NestedAtBoundaryChild: &atBoundaryChild,
+				Nested: &model.NestedStepState{
+					StepID: "simplify",
+					Child:  &model.NestedStepState{StepID: "run-validator"},
+				},
+			}},
+		},
+	}
+
+	nested := resumeNestedState(&state)
+	var got []string
+	for current := nested; current != nil; current = current.Child {
+		got = append(got, current.StepID)
+	}
+	want := []string{"coordinate", "task-groups", "simplify", "simplify", "run-validator"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("resume chain mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestResumeNestedStateReplacesBoundaryChildWhenRepositoryProgressStartsThere(t *testing.T) {
+	active := 0
+	atBoundaryChild := true
+	state := model.RunState{
+		RepositoryIndex: &active,
+		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+			StepID: "coordinate",
+			Child:  &model.NestedStepState{StepID: "stale-repository-step"},
+		}},
+		RepositoryFrame: &model.RepositoryFrame{
+			BoundaryID: "[coordinate]",
+			Repositories: []model.RepositoryExecutionState{{
+				Status:                model.RepositoryActive,
+				NestedAtBoundaryChild: &atBoundaryChild,
+				Nested: &model.NestedStepState{
+					StepID: "repository-step",
+					Child:  &model.NestedStepState{StepID: "repository-child"},
+				},
+			}},
+		},
+	}
+
+	nested := resumeNestedState(&state)
+	var got []string
+	for current := nested; current != nil; current = current.Child {
+		got = append(got, current.StepID)
+	}
+	want := []string{"coordinate", "repository-step", "repository-child"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("resume chain mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestResumeNestedStateDoesNotReattachRepositoryChainAlreadyInRoot(t *testing.T) {
+	active := 0
+	atBoundaryChild := false
+	repositoryNested := &model.NestedStepState{
+		StepID: "repository-step",
+		Child:  &model.NestedStepState{StepID: "repository-child"},
+	}
+	state := model.RunState{
+		RepositoryIndex: &active,
+		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+			StepID: "coordinate",
+			Child:  repositoryNested,
+		}},
+		RepositoryFrame: &model.RepositoryFrame{
+			BoundaryID: "[coordinate]",
+			Repositories: []model.RepositoryExecutionState{{
+				Status:                model.RepositoryActive,
+				NestedAtBoundaryChild: &atBoundaryChild,
+				Nested:                repositoryNested,
+			}},
+		},
+	}
+
+	nested := resumeNestedState(&state)
+	var got []string
+	for current := nested; current != nil && len(got) < 4; current = current.Child {
+		got = append(got, current.StepID)
+	}
+	want := []string{"coordinate", "repository-step", "repository-child"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("resume chain mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestResolveLegacyRepositoryAttachment(t *testing.T) {
+	tests := []struct {
+		name         string
+		boundary     *model.NestedStepState
+		repository   *model.NestedStepState
+		wantAttached bool
+		wantErr      string
+	}{
+		{
+			name: "direct boundary child",
+			boundary: &model.NestedStepState{
+				StepID: "boundary",
+				Child:  &model.NestedStepState{StepID: "run", Child: &model.NestedStepState{StepID: "validate"}},
+			},
+			repository:   &model.NestedStepState{StepID: "run", Child: &model.NestedStepState{StepID: "validate"}},
+			wantAttached: true,
+		},
+		{
+			name: "repository local wrapper",
+			boundary: &model.NestedStepState{
+				StepID: "boundary",
+				Child:  &model.NestedStepState{StepID: "wrapper", Child: &model.NestedStepState{StepID: "stale"}},
+			},
+			repository: &model.NestedStepState{StepID: "run", Child: &model.NestedStepState{StepID: "validate"}},
+		},
+		{
+			name: "ambiguous reused step id",
+			boundary: &model.NestedStepState{
+				StepID: "boundary",
+				Child:  &model.NestedStepState{StepID: "run", Child: &model.NestedStepState{StepID: "stale"}},
+			},
+			repository: &model.NestedStepState{StepID: "run", Child: &model.NestedStepState{StepID: "validate"}},
+			wantErr:    "cannot safely resume legacy repository state",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			active := 0
+			state := model.RunState{
+				RepositoryIndex: &active,
+				CurrentStep:     model.CurrentStep{Nested: tt.boundary},
+				RepositoryFrame: &model.RepositoryFrame{
+					BoundaryID: "[boundary]",
+					Repositories: []model.RepositoryExecutionState{{
+						Status: model.RepositoryActive,
+						Nested: tt.repository,
+					}},
+				},
+			}
+
+			err := resolveLegacyRepositoryAttachment(&state)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("resolveLegacyRepositoryAttachment() error = %v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := state.RepositoryFrame.Repositories[0].NestedAtBoundaryChild
+			if got == nil || *got != tt.wantAttached {
+				t.Fatalf("NestedAtBoundaryChild = %v, want %t", got, tt.wantAttached)
+			}
+		})
 	}
 }
 

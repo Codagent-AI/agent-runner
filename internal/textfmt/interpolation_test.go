@@ -9,6 +9,16 @@ import (
 )
 
 func TestInterpolate(t *testing.T) {
+	t.Run("reserved scoped builtins cannot be shadowed", func(t *testing.T) {
+		result, err := Interpolate("{{workspace_dir}}", map[string]string{"workspace_dir": "from-param"}, map[string]string{"workspace_dir": "from-capture"}, map[string]string{"workspace_dir": "canonical"})
+		if err != nil {
+			t.Fatalf("Interpolate() error = %v", err)
+		}
+		if result != "canonical" {
+			t.Fatalf("Interpolate() = %q, want canonical reserved builtin", result)
+		}
+	})
+
 	t.Run("replaces builtins in template", func(t *testing.T) {
 		result, err := Interpolate("dir: {{session_dir}}", nil, nil,
 			map[string]string{"session_dir": "/tmp/run-1"})

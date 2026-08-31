@@ -1,6 +1,7 @@
 name: plan-change
 description: "Plan a change: create, propose, spec, design, task-plan, and review"
 hidden: true
+scope: workspace
 
 sessions:
   - name: lead-agent

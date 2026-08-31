@@ -484,7 +484,7 @@ func typeGlyph(t NodeType) string {
 		return scriptGlyphStyle.Render(raw)
 	case NodeUI:
 		return uiGlyphStyle.Render(raw)
-	case NodeLoop, NodeIteration, NodeGroup:
+	case NodeLoop, NodeIteration, NodeGroup, NodeRepository:
 		return loopGlyphStyle.Render(raw)
 	case NodeHeadlessAgent, NodeInteractiveAgent, NodeSubWorkflow, NodeAgentCall:
 		return subwfGlyphStyle.Render(raw)
@@ -599,7 +599,7 @@ func (m *Model) selectedNodeHelpParts(selected *StepNode) []string {
 		return nil
 	}
 	switch selected.Type {
-	case NodeLoop, NodeSubWorkflow, NodeIteration, NodeGroup:
+	case NodeLoop, NodeSubWorkflow, NodeIteration, NodeGroup, NodeRepository:
 		return []string{"enter drill"}
 	case NodeHeadlessAgent, NodeInteractiveAgent:
 		if selected.IsContainer() {

@@ -571,6 +571,74 @@ func TestParamSchema(t *testing.T) {
 }
 
 func TestWorkflowSchema(t *testing.T) {
+	t.Run("preserves an omitted scope as legacy", func(t *testing.T) {
+		var w Workflow
+		if w.Scope != ScopeLegacy {
+			t.Fatalf("Scope = %q, want omitted legacy scope", w.Scope)
+		}
+		w = Workflow{Name: "legacy", Steps: []Step{{ID: "run", Command: "true"}}}
+		w.ApplyDefaults()
+		if err := w.Validate(nil); err != nil {
+			t.Fatalf("Validate() error = %v", err)
+		}
+		if w.Scope != ScopeLegacy {
+			t.Fatalf("ApplyDefaults changed scope to %q, want legacy", w.Scope)
+		}
+	})
+
+	t.Run("validates scope declarations and overrides", func(t *testing.T) {
+		required := true
+		cases := []struct {
+			name     string
+			workflow Workflow
+			wantErr  string
+		}{
+			{
+				name: "workspace step may target repositories",
+				workflow: Workflow{Name: "workspace", Scope: ScopeWorkspace, Params: []Param{{Name: RepositoriesParam, Required: &required}}, Steps: []Step{
+					{ID: "repo-work", Command: "true", Scope: ScopeRepositories},
+				}},
+			},
+			{
+				name:     "invalid workflow scope",
+				workflow: Workflow{Name: "bad", Scope: "everywhere", Steps: []Step{{ID: "run", Command: "true"}}},
+				wantErr:  "invalid scope",
+			},
+			{
+				name:     "scoped step needs workflow scope",
+				workflow: Workflow{Name: "legacy", Steps: []Step{{ID: "run", Command: "true", Scope: ScopeWorkspace}}},
+				wantErr:  "declare a workflow scope",
+			},
+			{
+				name:     "repository workflow cannot override workspace",
+				workflow: Workflow{Name: "repo", Scope: ScopeRepositories, Params: []Param{{Name: RepositoriesParam, Required: &required}}, Steps: []Step{{ID: "run", Command: "true", Scope: ScopeWorkspace}}},
+				wantErr:  "workspace work must move",
+			},
+			{
+				name:     "sub workflow cannot override scope",
+				workflow: Workflow{Name: "workspace", Scope: ScopeWorkspace, Params: []Param{{Name: RepositoriesParam, Required: &required}}, Steps: []Step{{ID: "child", Workflow: "child.yaml", Scope: ScopeRepositories}}},
+				wantErr:  "referenced workflow",
+			},
+			{
+				name:     "repository workflow requires targets",
+				workflow: Workflow{Name: "repo", Scope: ScopeRepositories, Steps: []Step{{ID: "run", Command: "true"}}},
+				wantErr:  "required repositories parameter",
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				tc.workflow.ApplyDefaults()
+				err := tc.workflow.Validate(nil)
+				if tc.wantErr == "" && err != nil {
+					t.Fatalf("Validate() error = %v", err)
+				}
+				if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+					t.Fatalf("Validate() error = %v, want %q", err, tc.wantErr)
+				}
+			})
+		}
+	})
+
 	t.Run("rejects intake_handoff as a workflow parameter", func(t *testing.T) {
 		w := Workflow{
 			Name:   "test",
@@ -593,6 +661,15 @@ func TestWorkflowSchema(t *testing.T) {
 		for _, step := range steps {
 			if err := step.Validate(nil); err == nil || !strings.Contains(err.Error(), "reserved") {
 				t.Fatalf("Validate(%q) error = %v, want reserved-name error", step.ID, err)
+			}
+		}
+	})
+
+	t.Run("reserves repository targets and scoped builtins from capture sinks", func(t *testing.T) {
+		for _, name := range []string{RepositoriesParam, "workspace_dir", "repository_name", "repository_dir", "repository_output_dir"} {
+			step := Step{ID: "shell", Command: "echo hi", Capture: name}
+			if err := step.Validate(nil); err == nil || !strings.Contains(err.Error(), "reserved") {
+				t.Fatalf("Validate(capture=%q) error = %v, want reserved-name error", name, err)
 			}
 		}
 	})

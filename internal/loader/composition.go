@@ -52,10 +52,10 @@ func walkComposition(w *model.Workflow, workflowFile string, decls map[string]se
 		}
 	}
 
-	return walkSubWorkflows(w.Steps, workflowFile, decls, visited)
+	return walkSubWorkflows(w.Steps, workflowFile, w.Scope, decls, visited)
 }
 
-func walkSubWorkflows(steps []model.Step, parentFile string, decls map[string]sessionSource, visited map[string]bool) error {
+func walkSubWorkflows(steps []model.Step, parentFile string, parentScope model.Scope, decls map[string]sessionSource, visited map[string]bool) error {
 	for i := range steps {
 		step := &steps[i]
 		if step.Workflow != "" && !strings.Contains(step.Workflow, "{{") {
@@ -64,15 +64,28 @@ func walkSubWorkflows(steps []model.Step, parentFile string, decls map[string]se
 			if err != nil {
 				return fmt.Errorf("loading sub-workflow %s: %w", subPath, err)
 			}
+			if err := validateScopeComposition(parentScope, subWorkflow.Scope); err != nil {
+				return fmt.Errorf("sub-workflow %s: %w", subPath, err)
+			}
 			if err := walkComposition(&subWorkflow, subPath, decls, visited); err != nil {
 				return err
 			}
 		}
 		if len(step.Steps) > 0 {
-			if err := walkSubWorkflows(step.Steps, parentFile, decls, visited); err != nil {
+			if err := walkSubWorkflows(step.Steps, parentFile, parentScope, decls, visited); err != nil {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+// validateScopeComposition validates only the relationship which cannot be
+// expressed by a single workflow model: a repository body cannot call back
+// into workspace work. Unscoped children deliberately retain legacy behavior.
+func validateScopeComposition(parent, child model.Scope) error {
+	if parent == model.ScopeRepositories && child == model.ScopeWorkspace {
+		return fmt.Errorf("repository-scoped workflows cannot invoke a workspace-scoped child; invoke the workspace child from a workspace-scoped parent")
 	}
 	return nil
 }

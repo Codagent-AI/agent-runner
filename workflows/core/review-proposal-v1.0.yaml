@@ -1,6 +1,7 @@
 name: review-proposal
 description: "Adversarial proposal review: Crosscheck challenges, Lead responds, up to 3 rounds"
 hidden: true
+scope: workspace
 
 params:
   - name: proposal_dir

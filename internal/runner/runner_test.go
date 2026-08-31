@@ -3,8 +3,10 @@ package runner
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,6 +23,14 @@ import (
 	"github.com/codagent/agent-runner/internal/stateio"
 	"github.com/google/go-cmp/cmp"
 )
+
+func initGitWorktree(t *testing.T, dir string) {
+	t.Helper()
+	cmd := osexec.Command("git", "init", "-q", dir)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init %s: %v\n%s", dir, err, output)
+	}
+}
 
 // TestWriteStepStateDoesNotClobberIntakeRoute is the regression guard for the
 // sidecar boundary: writeStepState rebuilds state.json from context, so route
@@ -59,6 +69,599 @@ func TestWriteStepStateDoesNotClobberIntakeRoute(t *testing.T) {
 	}
 	if _, err := stateio.ReadState(filepath.Join(runDir, "state.json")); err != nil {
 		t.Fatalf("rewritten state is invalid: %v", err)
+	}
+}
+
+func TestPrepareWorkspace_ValidatesScopedRepositoryDeclarations(t *testing.T) {
+	workspace := t.TempDir()
+	backend := t.TempDir()
+	initGitWorktree(t, workspace)
+	initGitWorktree(t, backend)
+	profiles := &config.Config{Repositories: map[string]config.Repository{
+		"backend": {Path: backend},
+	}}
+
+	ctx, err := prepareWorkspace(model.ScopeWorkspace, workspace, profiles)
+	if err != nil {
+		t.Fatalf("prepareWorkspace() error = %v", err)
+	}
+	canonicalWorkspace, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalBackend, err := filepath.EvalSymlinks(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx.Dir != canonicalWorkspace || ctx.Repositories["backend"].Dir != canonicalBackend {
+		t.Fatalf("workspace = %#v", ctx)
+	}
+}
+
+func TestPrepareWorkspace_RejectsScopedLaunchBelowRootAndInvalidRepositories(t *testing.T) {
+	workspace := t.TempDir()
+	backend := t.TempDir()
+	initGitWorktree(t, workspace)
+	initGitWorktree(t, backend)
+	subdir := filepath.Join(workspace, "nested")
+	if err := os.Mkdir(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prepareWorkspace(model.ScopeWorkspace, subdir, &config.Config{}); err == nil || !strings.Contains(err.Error(), "canonical workspace root") {
+		t.Fatalf("prepareWorkspace(subdir) error = %v", err)
+	}
+
+	cases := []struct {
+		name  string
+		repos map[string]config.Repository
+	}{
+		{"reserved name", map[string]config.Repository{"default": {Path: backend}}},
+		{"workspace root", map[string]config.Repository{"backend": {Path: workspace}}},
+		{"not root", map[string]config.Repository{"backend": {Path: filepath.Join(backend, "nested")}}},
+	}
+	if err := os.Mkdir(filepath.Join(backend, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := prepareWorkspace(model.ScopeWorkspace, workspace, &config.Config{Repositories: tc.repos})
+			if err == nil {
+				t.Fatal("prepareWorkspace() succeeded, want error")
+			}
+		})
+	}
+}
+
+func TestPrepareWorkspace_UsesTransparentImplicitRepository(t *testing.T) {
+	workspace := t.TempDir()
+	initGitWorktree(t, workspace)
+	ctx, err := prepareWorkspace(model.ScopeRepositories, workspace, &config.Config{})
+	if err != nil {
+		t.Fatalf("prepareWorkspace() error = %v", err)
+	}
+	canonicalWorkspace, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ctx.Repositories["default"]; got.Name != "default" || got.Dir != canonicalWorkspace {
+		t.Fatalf("implicit repository = %#v", got)
+	}
+}
+
+func TestPrepareRun_PersistsOrderedRepositoryFrameBeforeExecution(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace, backend, frontend := t.TempDir(), t.TempDir(), t.TempDir()
+	initGitWorktree(t, workspace)
+	initGitWorktree(t, backend)
+	initGitWorktree(t, frontend)
+	workflow := &model.Workflow{
+		Name: "repository-frame", Scope: model.ScopeRepositories,
+		Params: []model.Param{{Name: model.RepositoriesParam}},
+		Steps:  []model.Step{{ID: "work", Command: "true"}},
+	}
+	sessionDir := t.TempDir()
+	_, err := PrepareRun(workflow, map[string]string{model.RepositoriesParam: "backend,frontend"}, &Options{
+		WorkflowFile: filepath.Join(workspace, "repository-frame-v1.0.yaml"),
+		WorkingDir:   workspace,
+		SessionDir:   sessionDir,
+		ProfileStore: &config.Config{Repositories: map[string]config.Repository{
+			"backend": {Path: backend}, "frontend": {Path: frontend},
+		}},
+		ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareRun() error = %v", err)
+	}
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.WorkspaceDir == "" {
+		t.Fatal("state did not persist workspace identity")
+	}
+	if diff := cmp.Diff([]model.RepositoryIdentity{
+		{Name: "backend", Dir: canonicalTestDir(t, backend)}, {Name: "frontend", Dir: canonicalTestDir(t, frontend)},
+	}, state.SelectedRepositories); diff != "" {
+		t.Fatalf("selected repositories mismatch (-want +got):\n%s", diff)
+	}
+	if state.RepositoryFrame == nil {
+		t.Fatal("state did not persist repository frame")
+	}
+	if diff := cmp.Diff([]model.RepositoryStatus{model.RepositoryPending, model.RepositoryPending}, []model.RepositoryStatus{
+		state.RepositoryFrame.Repositories[0].Status, state.RepositoryFrame.Repositories[1].Status,
+	}); diff != "" {
+		t.Fatalf("initial repository statuses mismatch (-want +got):\n%s", diff)
+	}
+	indexData, err := os.ReadFile(filepath.Join(sessionDir, "output", "repository-evidence-index.json"))
+	if err != nil {
+		t.Fatalf("read repository evidence index: %v", err)
+	}
+	var index repositoryEvidenceIndex
+	if err := json.Unmarshal(indexData, &index); err != nil {
+		t.Fatalf("decode repository evidence index: %v", err)
+	}
+	wantIndex := repositoryEvidenceIndex{Repositories: []repositoryEvidenceEntry{
+		{Name: "backend", OutputDir: filepath.Join(sessionDir, "output", "repositories", "backend")},
+		{Name: "frontend", OutputDir: filepath.Join(sessionDir, "output", "repositories", "frontend")},
+	}}
+	if diff := cmp.Diff(wantIndex, index); diff != "" {
+		t.Fatalf("repository evidence index mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestCaptureTaskPlanStatePersistsNormalizedOwnership(t *testing.T) {
+	workspace := t.TempDir()
+	changeDir := filepath.Join(workspace, "openspec", "changes", "demo")
+	for path, content := range map[string]string{
+		filepath.Join(changeDir, "tasks.md"):                      "## Repository: backend\n\n- [ ] [API](tasks/backend/01-api.md)\n",
+		filepath.Join(changeDir, "tasks", "backend", "01-api.md"): "# API\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		Workspace: &model.WorkspaceContext{Dir: workspace, Repositories: map[string]model.Repository{
+			"backend": {Name: "backend", Dir: t.TempDir()},
+		}},
+	})
+	step := &model.Step{ID: "resolve", Script: "resolve-task-group.sh", Capture: "affected_repositories", ScriptInputs: map[string]string{
+		"workspace_dir": workspace, "change_dir": changeDir, "plan_kind": "full", "output": "repositories",
+	}}
+	if err := captureTaskPlanState(step, ctx); err != nil {
+		t.Fatalf("captureTaskPlanState() error = %v", err)
+	}
+	if ctx.TaskPlan == nil || ctx.TaskPlan.Fingerprint == "" || ctx.TaskPlan.PlanKind != "full" {
+		t.Fatalf("task plan = %#v", ctx.TaskPlan)
+	}
+	if got, want := ctx.TaskPlan.ChangeDir, canonicalTestDir(t, changeDir); got != want {
+		t.Fatalf("change dir = %q, want %q", got, want)
+	}
+}
+
+func TestValidateTaskPlanResumeRejectsOwnershipDrift(t *testing.T) {
+	workspace := t.TempDir()
+	changeDir := filepath.Join(workspace, "openspec", "changes", "demo")
+	indexPath := filepath.Join(changeDir, "tasks.md")
+	for path, content := range map[string]string{
+		indexPath: "## Repository: backend\n\n- [ ] [API](tasks/backend/01-api.md)\n\n## Repository: frontend\n\n- [ ] [UI](tasks/frontend/01-ui.md)\n",
+		filepath.Join(changeDir, "tasks", "backend", "01-api.md"): "# API\n",
+		filepath.Join(changeDir, "tasks", "frontend", "01-ui.md"): "# UI\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	workspaceContext := &model.WorkspaceContext{Dir: workspace, Repositories: map[string]model.Repository{
+		"backend": {Name: "backend", Dir: t.TempDir()}, "frontend": {Name: "frontend", Dir: t.TempDir()},
+	}}
+	ctx := model.NewRootContext(&model.RootContextOptions{Workspace: workspaceContext})
+	step := &model.Step{ID: "resolve", Script: "resolve-task-group.sh", Capture: "affected_repositories", ScriptInputs: map[string]string{
+		"workspace_dir": workspace, "change_dir": changeDir, "plan_kind": "full", "output": "repositories",
+	}}
+	if err := captureTaskPlanState(step, ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(indexPath, []byte("## Repository: frontend\n\n- [ ] [UI](tasks/frontend/01-ui.md)\n\n## Repository: backend\n\n- [ ] [API](tasks/backend/01-api.md)\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTaskPlanResume(ctx.TaskPlan, workspaceContext); err == nil || !strings.Contains(err.Error(), "task plan changed") {
+		t.Fatalf("validateTaskPlanResume() error = %v", err)
+	}
+}
+
+func canonicalTestDir(t *testing.T, dir string) string {
+	t.Helper()
+	canonical, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
+}
+
+func TestRunWorkflow_ScopedLaunchContracts(t *testing.T) {
+	t.Run("rejects a scope-aware non-git launch", func(t *testing.T) {
+		workingDir := t.TempDir()
+		workflow := &model.Workflow{Name: "scoped", Scope: model.ScopeWorkspace, Steps: []model.Step{{ID: "run", Command: "true"}}}
+		workflow.ApplyDefaults()
+		_, err := RunWorkflow(workflow, nil, &Options{
+			WorkingDir: workingDir, SessionDir: t.TempDir(), ProfileStore: &config.Config{},
+			ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+		})
+		if err == nil || !strings.Contains(err.Error(), "Git worktree") {
+			t.Fatalf("RunWorkflow() error = %v", err)
+		}
+	})
+
+	t.Run("injects implicit target and exposes active repository builtins", func(t *testing.T) {
+		workingDir := t.TempDir()
+		initGitWorktree(t, workingDir)
+		sessionDir := t.TempDir()
+		workflow := &model.Workflow{
+			Name: "scoped", Scope: model.ScopeRepositories,
+			Params: []model.Param{{Name: model.RepositoriesParam}},
+			Steps:  []model.Step{{ID: "run", Command: "echo {{repository_name}}"}},
+		}
+		workflow.ApplyDefaults()
+		_, err := PrepareRun(workflow, nil, &Options{
+			WorkingDir: workingDir, SessionDir: sessionDir, ProfileStore: &config.Config{},
+			ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+		})
+		if err != nil {
+			t.Fatalf("PrepareRun() error = %v", err)
+		}
+	})
+}
+
+type repositorySpyRunner struct {
+	workdirs    []string
+	commands    []string
+	err         error
+	failCommand string
+}
+
+func (r *repositorySpyRunner) RunShell(command string, _ bool, workdir string) (exec.ProcessResult, error) {
+	r.commands = append(r.commands, command)
+	r.workdirs = append(r.workdirs, workdir)
+	if r.err != nil && (r.failCommand == "" || strings.Contains(command, r.failCommand)) {
+		return exec.ProcessResult{ExitCode: 1}, r.err
+	}
+	return exec.ProcessResult{ExitCode: 0}, nil
+}
+
+func (r *repositorySpyRunner) RunAgent(*exec.AgentProcessOptions) (exec.ProcessResult, error) {
+	return exec.ProcessResult{ExitCode: 0}, nil
+}
+
+func (r *repositorySpyRunner) RunScript(string, []byte, bool, string) (exec.ProcessResult, error) {
+	return exec.ProcessResult{ExitCode: 0}, nil
+}
+
+func TestRunWorkflow_FansRepositoryScopeOutInTargetOrder(t *testing.T) {
+	workspace, backend, frontend := t.TempDir(), t.TempDir(), t.TempDir()
+	initGitWorktree(t, workspace)
+	initGitWorktree(t, backend)
+	initGitWorktree(t, frontend)
+	workflow := &model.Workflow{
+		Name: "repo", Scope: model.ScopeRepositories,
+		Params: []model.Param{{Name: model.RepositoriesParam}},
+		Steps:  []model.Step{{ID: "run", Command: "echo {{repository_name}}"}},
+	}
+	workflow.ApplyDefaults()
+	spy := &repositorySpyRunner{}
+	result, err := RunWorkflow(workflow, map[string]string{model.RepositoriesParam: "frontend,backend"}, &Options{
+		WorkingDir: workspace, SessionDir: t.TempDir(), ProfileStore: &config.Config{Repositories: map[string]config.Repository{
+			"backend": {Path: backend}, "frontend": {Path: frontend},
+		}}, ProcessRunner: spy, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil || result != ResultSuccess {
+		t.Fatalf("RunWorkflow() = %q, %v", result, err)
+	}
+	canonicalFrontend, err := filepath.EvalSymlinks(frontend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalBackend, err := filepath.EvalSymlinks(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff([]string{canonicalFrontend, canonicalBackend}, spy.workdirs); diff != "" {
+		t.Fatalf("workdirs mismatch (-want +got):\n%s", diff)
+	}
+	if len(spy.commands) != 2 || !strings.Contains(spy.commands[0], "frontend") || !strings.Contains(spy.commands[1], "backend") {
+		t.Fatalf("commands = %#v", spy.commands)
+	}
+}
+
+func TestRunWorkflow_EvaluatesTopLevelRepositorySkipIfPerRepository(t *testing.T) {
+	workspace, backend, frontend := t.TempDir(), t.TempDir(), t.TempDir()
+	initGitWorktree(t, workspace)
+	initGitWorktree(t, backend)
+	initGitWorktree(t, frontend)
+	workflow := &model.Workflow{
+		Name: "mixed", Scope: model.ScopeWorkspace,
+		Params: []model.Param{{Name: model.RepositoriesParam}},
+		Steps: []model.Step{{
+			ID: "conditional", Scope: model.ScopeRepositories,
+			SkipIf:  `sh: test "{{repository_name}}" = backend`,
+			Command: "echo {{repository_name}}",
+		}},
+	}
+	workflow.ApplyDefaults()
+	spy := &repositorySpyRunner{}
+	result, err := RunWorkflow(workflow, map[string]string{model.RepositoriesParam: "backend,frontend"}, &Options{
+		WorkingDir: workspace, SessionDir: t.TempDir(), ProfileStore: &config.Config{Repositories: map[string]config.Repository{
+			"backend": {Path: backend}, "frontend": {Path: frontend},
+		}}, ProcessRunner: spy, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil || result != ResultSuccess {
+		t.Fatalf("RunWorkflow() = %q, %v", result, err)
+	}
+	if diff := cmp.Diff([]string{"echo 'frontend'"}, spy.commands); diff != "" {
+		t.Fatalf("commands mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestRunWorkflow_EmitsExplicitRepositoryBoundariesAndIdentity(t *testing.T) {
+	workspace, backend, frontend := t.TempDir(), t.TempDir(), t.TempDir()
+	initGitWorktree(t, workspace)
+	initGitWorktree(t, backend)
+	initGitWorktree(t, frontend)
+	workflow := &model.Workflow{
+		Name: "repo", Scope: model.ScopeRepositories,
+		Params: []model.Param{{Name: model.RepositoriesParam}},
+		Steps:  []model.Step{{ID: "run", Command: "echo {{repository_name}}"}},
+	}
+	workflow.ApplyDefaults()
+	sessionDir := t.TempDir()
+	result, err := RunWorkflow(workflow, map[string]string{model.RepositoriesParam: "backend,frontend"}, &Options{
+		WorkingDir: workspace, SessionDir: sessionDir, ProfileStore: &config.Config{Repositories: map[string]config.Repository{
+			"backend": {Path: backend}, "frontend": {Path: frontend},
+		}}, ProcessRunner: &repositorySpyRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil || result != ResultSuccess {
+		t.Fatalf("RunWorkflow() = %q, %v", result, err)
+	}
+	data, err := os.ReadFile(filepath.Join(sessionDir, "audit.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalBackend, err := filepath.EvalSymlinks(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(data)
+	for _, want := range []string{
+		`[repo:backend] repository_start`, `"repository_name":"backend"`, `"position":0`, `"total":2`,
+		`[repo:backend, run] step_start`, `"repository_dir":"` + canonicalBackend + `"`,
+		`[repo:backend] repository_end`, `[repo:frontend] repository_start`, `[repo:frontend] repository_end`,
+	} {
+		if !strings.Contains(log, want) {
+			t.Errorf("audit log missing %q:\n%s", want, log)
+		}
+	}
+}
+
+func TestRunWorkflow_AcquiresProcessLifetimeLocksForSelectedRepositories(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace, backend := t.TempDir(), t.TempDir()
+	initGitWorktree(t, workspace)
+	initGitWorktree(t, backend)
+	workflow := &model.Workflow{
+		Name: "repo", Scope: model.ScopeRepositories,
+		Params: []model.Param{{Name: model.RepositoriesParam}},
+		Steps:  []model.Step{{ID: "run", Command: "echo {{repository_name}}"}},
+	}
+	workflow.ApplyDefaults()
+	options := func() *Options {
+		return &Options{
+			WorkingDir: workspace, SessionDir: t.TempDir(), ProfileStore: &config.Config{Repositories: map[string]config.Repository{
+				"backend": {Path: backend},
+			}}, ProcessRunner: &repositorySpyRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+		}
+	}
+	if result, err := RunWorkflow(workflow, map[string]string{model.RepositoriesParam: "backend"}, options()); err != nil || result != ResultSuccess {
+		t.Fatalf("first RunWorkflow() = %q, %v", result, err)
+	}
+	if _, err := RunWorkflow(workflow, map[string]string{model.RepositoriesParam: "backend"}, options()); err == nil || !strings.Contains(err.Error(), "locked by run") {
+		t.Fatalf("second RunWorkflow() error = %v, want repository lock contention", err)
+	}
+}
+
+func TestRunWorkflow_LocksRepositoryTargetsSelectedByChildWorkflow(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace, backend := t.TempDir(), t.TempDir()
+	initGitWorktree(t, workspace)
+	initGitWorktree(t, backend)
+	childPath := filepath.Join(workspace, "child-v1.0.yaml")
+	child := `name: child
+scope: repositories
+params:
+  - name: repositories
+steps:
+  - id: run
+    command: echo {{repository_name}}
+`
+	if err := os.WriteFile(childPath, []byte(child), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workflow := &model.Workflow{
+		Name: "parent", Scope: model.ScopeWorkspace,
+		Steps: []model.Step{{ID: "child", Workflow: "child-v1.0.yaml", Params: map[string]string{model.RepositoriesParam: "backend"}}},
+	}
+	workflow.ApplyDefaults()
+	options := func() *Options {
+		return &Options{
+			WorkingDir: workspace, WorkflowFile: filepath.Join(workspace, "parent-v1.0.yaml"), SessionDir: t.TempDir(),
+			ProfileStore:  &config.Config{Repositories: map[string]config.Repository{"backend": {Path: backend}}},
+			ProcessRunner: &repositorySpyRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+		}
+	}
+	firstOptions := options()
+	if result, err := RunWorkflow(workflow, nil, firstOptions); err != nil || result != ResultSuccess {
+		t.Fatalf("first RunWorkflow() = %q, %v", result, err)
+	}
+	secondOptions := options()
+	if result, err := RunWorkflow(workflow, nil, secondOptions); err != nil || result != ResultFailed {
+		t.Fatalf("second RunWorkflow() = %q, %v, want failed locked repository dispatch", result, err)
+	}
+}
+
+func TestRunStep_RepositoryFanoutPreservesExecutorErrorAndResumeCursor(t *testing.T) {
+	workspace := &model.WorkspaceContext{
+		Dir: "/coordination",
+		Repositories: map[string]model.Repository{
+			"backend":  {Name: "backend", Dir: "/repos/backend"},
+			"frontend": {Name: "frontend", Dir: "/repos/frontend"},
+			"docs":     {Name: "docs", Dir: "/repos/docs"},
+		},
+		Selected: []string{"backend", "frontend", "docs"},
+	}
+	ctx := &model.ExecutionContext{
+		Workspace:         workspace,
+		WorkingDir:        workspace.Dir,
+		ProjectRoot:       workspace.Dir,
+		Params:            map[string]string{},
+		SessionIDs:        map[string]string{},
+		SessionProfiles:   map[string]string{},
+		CapturedVariables: map[string]model.CapturedValue{},
+	}
+	wantErr := errors.New("frontend executor failed")
+	spy := &repositorySpyRunner{err: wantErr, failCommand: "frontend"}
+	rs := &runState{ctx: ctx, runner: spy, glob: &mockGlob{}, log: &mockLog{}}
+	step := &model.Step{ID: "deploy", Command: "deploy {{repository_name}}", Scope: model.ScopeRepositories}
+
+	outcome, _, err := runStep(step, rs)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("runStep() error = %v, want %v", err, wantErr)
+	}
+	if outcome != exec.OutcomeFailed {
+		t.Fatalf("runStep() outcome = %q, want failed", outcome)
+	}
+	if diff := cmp.Diff([]string{"deploy 'backend'", "deploy 'frontend'"}, spy.commands); diff != "" {
+		t.Fatalf("fan-out commands mismatch (-want +got):\n%s", diff)
+	}
+	if ctx.RepositoryIndex == nil || *ctx.RepositoryIndex != 1 {
+		t.Fatalf("persisted repository cursor = %v, want frontend index 1", ctx.RepositoryIndex)
+	}
+
+	stateDir := t.TempDir()
+	workflow := &model.Workflow{Name: "deploy", Steps: []model.Step{*step}}
+	writeStepState(step, ctx, workflow, "hash", stateDir, nil, false)
+	state, err := stateio.ReadState(filepath.Join(stateDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resume := restoreResumeContext(&state)
+	if !resume.repositoryIndexSet || resume.repositoryIndex != 1 {
+		t.Fatalf("restored repository cursor = (%d, %t), want (1, true)", resume.repositoryIndex, resume.repositoryIndexSet)
+	}
+
+	resumedCtx := &model.ExecutionContext{Workspace: workspace, WorkingDir: workspace.Dir, ProjectRoot: workspace.Dir}
+	resumed := &runState{
+		ctx:                  resumedCtx,
+		log:                  &mockLog{},
+		repositoryStartIndex: resume.repositoryIndex,
+		repositoryStartSet:   resume.repositoryIndexSet,
+	}
+	var repositories []string
+	var starts []int
+	result := executeRepositoryFanout(resumed, 4, "", 0, func(start int) WorkflowResult {
+		repositories = append(repositories, resumed.ctx.ActiveRepository.Name)
+		starts = append(starts, start)
+		return ResultSuccess
+	})
+	if result != ResultSuccess {
+		t.Fatalf("executeRepositoryFanout() = %q", result)
+	}
+	if diff := cmp.Diff([]string{"frontend", "docs"}, repositories); diff != "" {
+		t.Fatalf("resumed repositories mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]int{4, 0}, starts); diff != "" {
+		t.Fatalf("resumed start indexes mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestRepositoryFanoutPersistsCompletedSiblingRuntimeState(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace, backend, frontend := t.TempDir(), t.TempDir(), t.TempDir()
+	initGitWorktree(t, workspace)
+	initGitWorktree(t, backend)
+	initGitWorktree(t, frontend)
+	workflow := &model.Workflow{
+		Name: "repository-progress", Scope: model.ScopeRepositories,
+		Params: []model.Param{{Name: model.RepositoriesParam}},
+		Steps:  []model.Step{{ID: "capture", Command: "echo {{repository_name}}"}},
+	}
+	workflow.ApplyDefaults()
+	sessionDir := t.TempDir()
+	spy := &repositorySpyRunner{failCommand: "frontend", err: errors.New("frontend failure")}
+	handle, err := PrepareRun(workflow, map[string]string{model.RepositoriesParam: "backend,frontend"}, &Options{
+		WorkflowFile: filepath.Join(workspace, "repository-progress-v1.0.yaml"), WorkingDir: workspace, SessionDir: sessionDir,
+		ProfileStore:  &config.Config{Repositories: map[string]config.Repository{"backend": {Path: backend}, "frontend": {Path: frontend}}},
+		ProcessRunner: spy, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ExecuteFromHandle(handle, nil); got != ResultFailed {
+		t.Fatalf("ExecuteFromHandle() = %q, want failed", got)
+	}
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.RepositoryFrame == nil {
+		t.Fatal("state missing repository frame")
+	}
+	backendState := state.RepositoryFrame.Repositories[0]
+	frontendState := state.RepositoryFrame.Repositories[1]
+	if backendState.Status != model.RepositoryCompleted || backendState.Nested == nil || backendState.Nested.StepID != "capture" {
+		t.Fatalf("backend persisted state = %#v, want completed runtime state", backendState)
+	}
+	if frontendState.Status != model.RepositoryFailed {
+		t.Fatalf("frontend status = %q, want failed", frontendState.Status)
+	}
+}
+
+func TestRepositoryFanoutStartsAnewForEachScopedStepBoundary(t *testing.T) {
+	workspace := &model.WorkspaceContext{Dir: t.TempDir(), Repositories: map[string]model.Repository{
+		"backend": {Name: "backend", Dir: t.TempDir()}, "frontend": {Name: "frontend", Dir: t.TempDir()},
+	}, Selected: []string{"backend", "frontend"}}
+	ctx := &model.ExecutionContext{Workspace: workspace, RepositoryFrame: newRepositoryFrame(workspace)}
+	sessionDir := t.TempDir()
+	if err := stateio.WriteState(&model.RunState{}, sessionDir); err != nil {
+		t.Fatal(err)
+	}
+	rs := &runState{ctx: ctx, sessionDir: sessionDir, log: &mockLog{}}
+	var visits []string
+	for _, boundary := range []string{"[implement]", "[remediate]"} {
+		if result := executeRepositoryFanout(rs, 0, boundary, 1, func(int) WorkflowResult {
+			visits = append(visits, boundary+":"+rs.ctx.ActiveRepository.Name)
+			return ResultSuccess
+		}); result != ResultSuccess {
+			t.Fatalf("executeRepositoryFanout(%s) = %s", boundary, result)
+		}
+	}
+	want := []string{"[implement]:backend", "[implement]:frontend", "[remediate]:backend", "[remediate]:frontend"}
+	if diff := cmp.Diff(want, visits); diff != "" {
+		t.Fatalf("visits mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPersistRepositoryFrameReportsStateReadFailure(t *testing.T) {
+	ctx := model.NewRootContext(&model.RootContextOptions{Workspace: &model.WorkspaceContext{
+		Dir: "/workspace", Selected: []string{"backend"},
+		Repositories: map[string]model.Repository{"backend": {Name: "backend", Dir: "/repos/backend"}},
+	}})
+	if err := persistRepositoryFrame(t.TempDir(), ctx); err == nil {
+		t.Fatal("persistRepositoryFrame() succeeded without state.json")
 	}
 }
 

@@ -442,6 +442,11 @@ func setupDebugRunHome(t *testing.T, runID string) (home, repo string) {
 	t.Helper()
 	home = t.TempDir()
 	repo = t.TempDir()
+	canonicalRepo, err := filepath.EvalSymlinks(repo)
+	if err != nil {
+		t.Fatalf("canonicalize repo: %v", err)
+	}
+	repo = canonicalRepo
 	projectDir := filepath.Join(home, ".agent-runner", "projects", audit.EncodePath(repo))
 	if err := os.MkdirAll(projectDir, 0o700); err != nil {
 		t.Fatalf("create project dir: %v", err)

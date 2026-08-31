@@ -21,9 +21,15 @@ func Interpolate(template string, params, capturedVars, builtins map[string]stri
 		merged[k] = v
 	}
 	for k, v := range params {
+		if model.IsReservedScopedVariable(k) {
+			continue
+		}
 		merged[k] = v
 	}
 	for k, v := range capturedVars {
+		if model.IsReservedScopedVariable(k) {
+			continue
+		}
 		merged[k] = v
 	}
 
@@ -190,6 +196,12 @@ func escapeDoubleQuotedShell(s string) string {
 }
 
 func resolveLegacyStringValue(key string, params, capturedVars, builtins map[string]string) (string, error) {
+	if model.IsReservedScopedVariable(key) {
+		if value, ok := builtins[key]; ok {
+			return value, nil
+		}
+		return "", fmt.Errorf("undefined variable: {{%s}}", key)
+	}
 	if value, ok := capturedVars[key]; ok {
 		return value, nil
 	}
@@ -233,6 +245,12 @@ func resolveStringValue(key string, params map[string]string, capturedVars map[s
 			return "", fmt.Errorf("undefined field: {{%s}}", key)
 		}
 		return value, nil
+	}
+	if model.IsReservedScopedVariable(key) {
+		if value, ok := builtins[key]; ok {
+			return value, nil
+		}
+		return "", fmt.Errorf("undefined variable: {{%s}}", key)
 	}
 	if captured, ok := capturedVars[key]; ok {
 		switch captured.Kind {

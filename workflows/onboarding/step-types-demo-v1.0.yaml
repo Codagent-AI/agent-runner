@@ -1,6 +1,7 @@
 name: step-types-demo
 description: Demonstrates Agent Runner workflow step types during onboarding.
 hidden: true
+scope: workspace
 steps:
   - id: intro-ui
     mode: ui

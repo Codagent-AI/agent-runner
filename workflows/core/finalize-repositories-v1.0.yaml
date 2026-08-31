@@ -1,0 +1,13 @@
+name: finalize-repositories
+description: "Finalize one pull request per selected implementation repository."
+hidden: true
+scope: repositories
+
+params:
+  - name: repositories
+    required: true
+
+steps:
+  - id: finalize-repository
+    workflow: ../core/finalize-pr-v1.0.yaml
+    skip_if: 'sh: test "{{repository_dir}}" = "{{workspace_dir}}"'

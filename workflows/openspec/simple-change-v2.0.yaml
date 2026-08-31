@@ -1,5 +1,6 @@
 name: simple-change
 description: "Use for a small branch-local change when the project uses OpenSpec and you want a compact end-to-end workflow rather than the full change lifecycle. It creates and commits repository-local OpenSpec artifacts, independently reviews and validates the plan, implements and flow-tests the change, supports interactive refinement, and archives the result."
+scope: workspace
 
 params:
   - name: change_name
@@ -54,9 +55,18 @@ steps:
   - id: check-planning-artifacts
     workflow: ../core/check-planning-artifacts-v1.0.yaml
     params:
-      change_dir: "openspec/changes/{{change_name}}"
+      change_dir: "{{workspace_dir}}/openspec/changes/{{change_name}}"
       required_files: "proposal.md,tasks.md"
       require_specs: "true"
+
+  - id: resolve-affected-repositories
+    script: resolve-task-group.sh
+    capture: affected_repositories
+    script_inputs:
+      workspace_dir: "{{workspace_dir}}"
+      change_dir: "{{workspace_dir}}/openspec/changes/{{change_name}}"
+      plan_kind: "simple"
+      output: "repositories"
 
   - id: validate-openspec
     script: validate-change.sh
@@ -73,8 +83,9 @@ steps:
     workflow: ../core/complete-simple-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
-      change_dir: "openspec/changes/{{change_name}}"
+      change_dir: "{{workspace_dir}}/openspec/changes/{{change_name}}"
       change_label: "OpenSpec change"
+      repositories: "{{affected_repositories}}"
 
   - id: archive
     script: archive-change.sh

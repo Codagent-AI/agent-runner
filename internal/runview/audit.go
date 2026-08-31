@@ -80,6 +80,7 @@ type prefixToken struct {
 	iteration *int
 	subName   string
 	callID    string
+	repoName  string
 }
 
 // parsePrefix splits a bracketed prefix like "[task-loop:2, verify, sub:verify-task, check]"
@@ -104,6 +105,10 @@ func parsePrefix(prefix string) []prefixToken {
 		}
 		if strings.HasPrefix(p, "call:") {
 			tokens = append(tokens, prefixToken{callID: strings.TrimPrefix(p, "call:")})
+			continue
+		}
+		if strings.HasPrefix(p, "repo:") {
+			tokens = append(tokens, prefixToken{repoName: strings.TrimPrefix(p, "repo:")})
 			continue
 		}
 		if colon := strings.LastIndexByte(p, ':'); colon > 0 {
@@ -422,9 +427,22 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 	}
 
 	switch e.Type {
+	case "repository_start", "repository_end":
+		t.applyRepositoryEvent(e, tokens)
 	case "pull_request_recorded":
 		if url, ok := stringField(e.Data, "url"); ok && strings.TrimSpace(url) != "" {
-			t.PullRequestURL = strings.TrimSpace(url)
+			name, _ := stringField(e.Data, "repository_name")
+			if name == "" && len(tokens) > 0 {
+				name = tokens[0].repoName
+			}
+			if name == "" || name == "default" {
+				t.PullRequestURL = strings.TrimSpace(url)
+			} else {
+				if t.RepositoryPullRequestURLs == nil {
+					t.RepositoryPullRequestURLs = map[string]string{}
+				}
+				t.RepositoryPullRequestURLs[name] = strings.TrimSpace(url)
+			}
 		}
 	case "run_start":
 		t.Root.Status = StatusInProgress
@@ -446,9 +464,119 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 		t.applyStepEvent(e, tokens)
 	case "iteration_start", "iteration_end":
 		t.applyIterationEvent(e, tokens)
+	case "nested_agent_end":
+		t.applyNestedAgentEvent(e, tokens)
 	case "sub_workflow_start", "sub_workflow_end":
 		t.applySubWorkflowEvent(e, tokens)
 	}
+}
+
+func (t *Tree) applyNestedAgentEvent(event RawEvent, tokens []prefixToken) {
+	node := t.resolve(tokens, true)
+	if node == nil || !dataCarriesMetrics(event.Data) {
+		return
+	}
+	outcome, _ := stringField(event.Data, "outcome")
+	metrics := AttemptMetrics{
+		Attempt: len(node.Attempts) + 1, Outcome: outcome, AgentInvoked: true, NestedAgent: true,
+	}
+	if usage, ok := decodeUsageRecord(event.Data); ok {
+		metrics.Usage = usage
+	}
+	if cost, exists := event.Data["estimated_api_cost_usd"]; exists && cost != nil {
+		if value, ok := float64FieldValue(cost); ok {
+			metrics.CostUSD = &value
+		}
+	}
+	node.Attempts = append(node.Attempts, metrics)
+}
+
+func (t *Tree) applyRepositoryEvent(event RawEvent, tokens []prefixToken) {
+	name, _ := stringField(event.Data, "repository_name")
+	repositoryToken := -1
+	for index, token := range tokens {
+		if token.repoName != "" {
+			repositoryToken = index
+			if name == "" {
+				name = token.repoName
+			}
+			break
+		}
+	}
+	if name == "" || name == "default" {
+		return
+	}
+	parent := t.Root
+	if repositoryToken > 0 {
+		parent = t.resolve(tokens[:repositoryToken], true)
+	}
+	repository := t.ensureRepositoryBelow(parent, name, event.Data)
+	if repository == nil {
+		return
+	}
+	if event.Type == "repository_start" {
+		repository.Status = StatusInProgress
+		repository.Outcome = ""
+		repository.Aborted = false
+		repository.StartedAt = parseEventTime(event.Timestamp)
+		return
+	}
+	outcome, _ := stringField(event.Data, "outcome")
+	applyOutcome(repository, outcome)
+	if duration, ok := int64Field(event.Data, "duration_ms"); ok {
+		repository.DurationMs = &duration
+	}
+}
+
+func (t *Tree) ensureRepositoryBelow(parent *StepNode, name string, data map[string]any) *StepNode {
+	if t == nil || t.Root == nil || parent == nil || name == "" {
+		return nil
+	}
+	if node := repositoryChildByName(parent, name); node != nil {
+		t.populateRepositoryChildren(node)
+		return node
+	}
+	node := &StepNode{ID: name, Type: NodeRepository, Status: StatusPending, Parent: parent, RepositoryName: name}
+	node.RepositoryDir, _ = stringField(data, "repository_dir")
+	if position, ok := intField(data, "position"); ok {
+		node.RepositoryPosition = position
+	}
+	if total, ok := intField(data, "total"); ok {
+		node.RepositoryTotal = total
+	}
+	t.populateRepositoryChildren(node)
+	parent.Children = append(parent.Children, node)
+	return node
+}
+
+// populateRepositoryChildren makes repository initialization idempotent. A
+// container can originate from persisted state or from replayed lifecycle
+// evidence, so both paths need the workflow-defined children before nested
+// audit prefixes are resolved.
+func (t *Tree) populateRepositoryChildren(repository *StepNode) {
+	if t == nil || t.Root == nil || repository == nil {
+		return
+	}
+	parent := repository.Parent
+	templates := parent.Children
+	if parent.Type == NodeLoop {
+		templates = parent.Body
+	}
+	for _, template := range templates {
+		if template.Type == NodeRepository || childByID(repository, template.ID) != nil {
+			continue
+		}
+		repository.Children = append(repository.Children, cloneTemplate(template, repository))
+	}
+}
+
+func repositoryChildByName(parent *StepNode, name string) *StepNode {
+	for _, child := range parent.Children {
+		if child.Type == NodeRepository && child.RepositoryName == name {
+			return child
+		}
+	}
+	return nil
 }
 
 func (t *Tree) applyStepEvent(event RawEvent, tokens []prefixToken) {
@@ -571,50 +699,58 @@ func (t *Tree) applyAgentCallEvent(event RawEvent, tokens []prefixToken) bool {
 func (t *Tree) resolve(tokens []prefixToken, createIterations bool) *StepNode {
 	current := t.Root
 	for _, tok := range tokens {
-		switch {
-		case tok.callID != "":
-			current = callChildByID(current, tok.callID)
-			if current == nil {
-				return nil
-			}
-		case tok.subName != "":
-			if err := t.ensureSubWorkflowLoaded(current); err != nil {
-				// Lazy-load failure: record on the node so the UI can display it;
-				// resolution stays here so the node itself remains targetable, but
-				// further descent will yield nil (no children).
-				if current.ErrorMessage == "" {
-					current.ErrorMessage = err.Error()
-				}
-			}
-			// Stay at the sub-workflow node — its children now hold the body.
-		case tok.iteration != nil:
-			loop := childByID(current, tok.stepID)
-			if loop == nil {
-				return nil
-			}
-			iter := findIteration(loop, *tok.iteration)
-			if iter == nil {
-				if !createIterations {
-					return nil
-				}
-				iter = ensureIteration(loop, *tok.iteration)
-			}
-			current = iter
-		default:
-			child := groupDescendantByID(current, tok.stepID, true)
-			if child == nil {
-				child = childByID(current, tok.stepID)
-			}
-			if child == nil {
-				child = groupDescendantByID(current, tok.stepID, false)
-			}
-			if child == nil {
-				return nil
-			}
-			current = child
+		current = t.resolveToken(current, tok, createIterations)
+		if current == nil {
+			return nil
 		}
 	}
 	return current
+}
+
+func (t *Tree) resolveToken(current *StepNode, tok prefixToken, createIterations bool) *StepNode {
+	switch {
+	case tok.repoName != "":
+		return t.ensureRepositoryBelow(current, tok.repoName, nil)
+	case tok.callID != "":
+		return callChildByID(current, tok.callID)
+	case tok.subName != "":
+		t.loadSubWorkflowForResolution(current)
+		return current
+	case tok.iteration != nil:
+		return resolveIterationToken(current, tok, createIterations)
+	default:
+		return resolveStepToken(current, tok.stepID)
+	}
+}
+
+func (t *Tree) loadSubWorkflowForResolution(node *StepNode) {
+	if err := t.ensureSubWorkflowLoaded(node); err != nil && node.ErrorMessage == "" {
+		node.ErrorMessage = err.Error()
+	}
+}
+
+func resolveIterationToken(current *StepNode, tok prefixToken, createIterations bool) *StepNode {
+	loop := childByID(current, tok.stepID)
+	if loop == nil {
+		return nil
+	}
+	if iteration := findIteration(loop, *tok.iteration); iteration != nil {
+		return iteration
+	}
+	if !createIterations {
+		return nil
+	}
+	return ensureIteration(loop, *tok.iteration)
+}
+
+func resolveStepToken(current *StepNode, id string) *StepNode {
+	if child := groupDescendantByID(current, id, true); child != nil {
+		return child
+	}
+	if child := childByID(current, id); child != nil {
+		return child
+	}
+	return groupDescendantByID(current, id, false)
 }
 
 func (t *Tree) applyAgentCallStart(event RawEvent, tokens []prefixToken) {
@@ -1062,7 +1198,7 @@ func applyStepEnd(n *StepNode, data map[string]any) {
 		}
 	}
 	for i, a := range n.Attempts {
-		if a.Attempt == attempt {
+		if a.Attempt == attempt && a.AgentInvoked == agentInvoked {
 			n.Attempts[i] = metrics
 			return
 		}

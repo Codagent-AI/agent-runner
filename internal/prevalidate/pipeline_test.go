@@ -35,6 +35,67 @@ steps:
 	}
 }
 
+func TestPipeline_ValidatesRepositoryBuiltinsAgainstStepScope(t *testing.T) {
+	dir := t.TempDir()
+	workspace := writeWorkflow(t, dir, "workspace-v1.0.yaml", `
+name: workspace
+scope: workspace
+steps:
+  - id: invalid
+    command: echo {{repository_name}}
+`)
+	repositoryOverride := writeWorkflow(t, dir, "repository-override-v1.0.yaml", `
+name: repository-override
+scope: workspace
+params:
+  - name: repositories
+steps:
+  - id: valid
+    scope: repositories
+    command: echo {{repository_name}}
+`)
+	opts, _, _ := fakeOptions(t, &config.Config{})
+	if _, err := Pipeline(workspace, nil, Strict, opts); err == nil || !strings.Contains(err.Error(), "unavailable in workspace scope") {
+		t.Fatalf("workspace Pipeline() error = %v", err)
+	}
+	if _, err := Pipeline(repositoryOverride, nil, Strict, opts); err != nil {
+		t.Fatalf("repository override Pipeline() error = %v", err)
+	}
+}
+
+func TestPipeline_UnscopedChildUsesRepositoryCallerScopeForBuiltins(t *testing.T) {
+	dir := t.TempDir()
+	writeWorkflow(t, dir, "context-neutral-v1.0.yaml", `
+name: context-neutral
+steps:
+  - id: active-repository
+    command: echo {{repository_name}} {{repository_dir}}
+`)
+	repositoryParent := writeWorkflow(t, dir, "repository-parent-v1.0.yaml", `
+name: repository-parent
+scope: repositories
+params:
+  - name: repositories
+steps:
+  - id: call
+    workflow: context-neutral-v1.0.yaml
+`)
+	workspaceParent := writeWorkflow(t, dir, "workspace-parent-v1.0.yaml", `
+name: workspace-parent
+scope: workspace
+steps:
+  - id: call
+    workflow: context-neutral-v1.0.yaml
+`)
+	opts, _, _ := fakeOptions(t, &config.Config{})
+	if _, err := Pipeline(repositoryParent, map[string]string{"repositories": "backend"}, Strict, opts); err != nil {
+		t.Fatalf("repository parent Pipeline() error = %v", err)
+	}
+	if _, err := Pipeline(workspaceParent, nil, Strict, opts); err == nil || !strings.Contains(err.Error(), "unavailable in workspace scope") {
+		t.Fatalf("workspace parent Pipeline() error = %v", err)
+	}
+}
+
 func TestPipelineHandlesUnboundSubWorkflowParamByMode(t *testing.T) {
 	dir := t.TempDir()
 	root := writeWorkflow(t, dir, "root-v1.0.yaml", `

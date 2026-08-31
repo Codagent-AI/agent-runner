@@ -106,6 +106,44 @@ func TestLoad_MissingProjectFileDoesNotWriteDefaults(t *testing.T) {
 	}
 }
 
+func TestLoad_ProjectRepositoryDeclarations(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	t.Setenv("HOME", home)
+	projectPath := filepath.Join(root, "workspace", ".agent-runner", "config.yaml")
+	writeConfigFile(t, projectPath, `
+repositories:
+  backend:
+    path: ../backend
+  frontend:
+    path: services/frontend
+`)
+
+	cfg, err := Load(projectPath)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.Repositories["backend"].Path; got != "../backend" {
+		t.Fatalf("backend path = %q", got)
+	}
+	if got := cfg.Repositories["frontend"].Path; got != "services/frontend" {
+		t.Fatalf("frontend path = %q", got)
+	}
+}
+
+func TestLoad_RejectsGlobalRepositoryDeclarations(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	t.Setenv("HOME", home)
+	globalPath := filepath.Join(home, ".agent-runner", "config.yaml")
+	writeConfigFile(t, globalPath, "repositories:\n  backend:\n    path: ../backend\n")
+
+	_, err := Load(filepath.Join(root, "workspace", ".agent-runner", "config.yaml"))
+	if err == nil || !strings.Contains(err.Error(), "repositories is not allowed") {
+		t.Fatalf("Load() error = %v, want global repositories error", err)
+	}
+}
+
 func TestLoad_SkipsGlobalConfigWhenHomeDirUnavailable(t *testing.T) {
 	original := userHomeDir
 	userHomeDir = func() (string, error) { return "", fmt.Errorf("home unavailable") }

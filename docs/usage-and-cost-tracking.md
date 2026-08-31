@@ -108,6 +108,13 @@ Each run stores a versioned file beside `state.json` and `audit.log`:
 
 The file is replaced atomically after each completed step or loop iteration. An interrupted run therefore keeps a valid artifact for work that already finished.
 
+When a step, loop iteration, or accepted agent call runs in an explicit
+repository, its record also has `repository_name` and `repository_dir`. These
+additive fields make per-repository reporting direct while preserving the
+existing shape for workspace and implicit single-repository runs. Repository
+summary rows roll up their own children once; the run total combines workspace
+and repository work without counting nested agent calls twice.
+
 See [Run State And Audit](run-state-and-audit.md) for the full run-directory layout and inspection commands.
 
 ## Legacy Runs

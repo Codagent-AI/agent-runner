@@ -1,5 +1,6 @@
 name: change
 description: "Use for a substantial or higher-risk change that needs a full proposal, specification, design, test plan, task breakdown, and acceptance process without adopting OpenSpec. It keeps change artifacts outside the project repository while guiding implementation, evidence-based acceptance, human review, and pull-request finalization."
+scope: workspace
 
 params:
   - name: change_name
@@ -19,11 +20,18 @@ steps:
       change_name: "{{change_name}}"
       change_dir: "{{change_dir}}"
 
+  - id: resolve-change-dir
+    script: resolve-change-dir.sh
+    capture: canonical_change_dir
+    script_inputs:
+      workspace_dir: "{{workspace_dir}}"
+      change_dir: "{{change_dir}}"
+
   - id: define
     workflow: ../core/define-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
-      change_dir: "{{change_dir}}"
+      change_dir: "{{canonical_change_dir}}"
       change_label: "spec-driven change"
       artifact_location_instruction: "Spec-driven artifacts are expected to live outside the current project repository and remain independent of its commits. Keep every definition and planning artifact under the external `{{change_dir}}/` directory."
 
@@ -31,27 +39,40 @@ steps:
     workflow: ../core/plan-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
-      change_dir: "{{change_dir}}"
+      change_dir: "{{canonical_change_dir}}"
       change_label: "spec-driven change"
       change_kind: "spec-driven"
+
+  - id: resolve-affected-repositories
+    script: resolve-task-group.sh
+    capture: affected_repositories
+    script_inputs:
+      workspace_dir: "{{workspace_dir}}"
+      change_dir: "{{canonical_change_dir}}"
+      plan_kind: "full"
+      output: "repositories"
 
   - id: implement
     workflow: ../core/implement-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
-      change_dir: "{{change_dir}}"
+      change_dir: "{{canonical_change_dir}}"
       change_label: "spec-driven change"
       change_kind: "spec-driven"
-      artifact_validation_instruction: 'When an approved artifact changed, read and follow `{{session_dir}}/bundled/spec-driven/definition-validation-checklist.md`, substituting "{{change_dir}}" for `<change-dir>` when validating "{{change_name}}".'
+      artifact_validation_instruction: 'When an approved artifact changed, read and follow `{{session_dir}}/bundled/spec-driven/definition-validation-checklist.md`, substituting "{{canonical_change_dir}}" for `<change-dir>` when validating "{{change_name}}".'
       skip_validator: "false"
+      repositories: "{{affected_repositories}}"
 
   - id: accept
     workflow: ../core/accept-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
-      change_dir: "{{change_dir}}"
+      change_dir: "{{canonical_change_dir}}"
       change_label: "spec-driven change"
-      artifact_validation_instruction: 'If a specification changed, read and follow `{{session_dir}}/bundled/spec-driven/definition-validation-checklist.md`, substituting "{{change_dir}}" for `<change-dir>` when validating "{{change_name}}".'
+      artifact_validation_instruction: 'If a specification changed, read and follow `{{session_dir}}/bundled/spec-driven/definition-validation-checklist.md`, substituting "{{canonical_change_dir}}" for `<change-dir>` when validating "{{change_name}}".'
+      repositories: "{{affected_repositories}}"
 
-  - id: finalize
-    workflow: ../core/finalize-pr-v1.0.yaml
+  - id: finalize-repositories
+    workflow: ../core/finalize-repositories-v1.0.yaml
+    params:
+      repositories: "{{affected_repositories}}"

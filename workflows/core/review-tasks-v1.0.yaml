@@ -1,6 +1,7 @@
 name: review-tasks
 description: "Independent review and autonomous correction of a change task plan."
 hidden: true
+scope: workspace
 
 params:
   - name: change_name

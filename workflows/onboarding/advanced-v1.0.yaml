@@ -1,6 +1,7 @@
 name: advanced
 description: Introduces advanced Agent Runner concepts and opens the help agent.
 hidden: true
+scope: workspace
 
 steps:
   - id: concepts-ui

@@ -4,6 +4,8 @@
 package runview
 
 import (
+	"maps"
+	"slices"
 	"strconv"
 	"time"
 
@@ -27,6 +29,7 @@ const (
 	NodeGroup
 	NodeAgentCall
 	NodeParentTurn
+	NodeRepository
 )
 
 // NodeStatus is the visual status of a StepNode.
@@ -77,6 +80,7 @@ type StepNode struct {
 	StaticBreakIf            string
 	StaticWorkdir            string
 	StaticContinueOnFailure  bool
+	StaticScope              model.Scope
 	StaticCaptureStderr      bool
 	StaticUITitle            string
 	StaticUIBody             string
@@ -102,6 +106,10 @@ type StepNode struct {
 	IterationsCompleted int
 	BreakTriggered      bool
 	ErrorMessage        string
+	RepositoryName      string
+	RepositoryDir       string
+	RepositoryPosition  int
+	RepositoryTotal     int
 	Aborted             bool // aborted mid-execution; UI suppresses blink when no run is active
 	Attempts            []AttemptMetrics
 	StartedAt           time.Time // wall-clock start of the current in-flight execution (from step_start); zero when not running
@@ -162,6 +170,7 @@ type AttemptMetrics struct {
 	DurationMs   *int64
 	Outcome      string
 	AgentInvoked bool // whether this attempt actually launched an agent; gates mid-run coverage denominators
+	NestedAgent  bool // usage came from a nested agent launched by a non-agent step
 }
 
 // NodeKey returns a stable key for a node based on its structural position in
@@ -211,6 +220,10 @@ type Tree struct {
 	// audit stream. Keeping it with the replayed tree makes historical and live
 	// run views use the same update path.
 	PullRequestURL string
+	// RepositoryOrder and RepositoryPullRequestURLs retain persisted selection
+	// order independently from event arrival order.
+	RepositoryOrder           []string
+	RepositoryPullRequestURLs map[string]string
 
 	// nextStartOrdinal assigns a deterministic replay order to execution
 	// starts. It is not persisted because it is reconstructed from audit order.
@@ -244,6 +257,93 @@ type Tree struct {
 	// relative "workflow:" field. Defaults to filepath.Dir of the parent
 	// sub-workflow's StaticWorkflowPath, falling back to WorkflowPath's dir.
 	ParentDirOf func(n *StepNode) string
+}
+
+// ApplyPersistedRepositories seeds explicit repository containers from state
+// before audit replay. This keeps a never-started selected repository visible
+// as pending and preserves the user's persisted selection order.
+func (t *Tree) ApplyPersistedRepositories(state *model.RunState) {
+	if t == nil || t.Root == nil || state == nil {
+		return
+	}
+	identities := persistedRepositoryIdentities(state)
+	boundaries := repositoryBoundaryNodes(t.Root)
+	if len(boundaries) == 0 {
+		boundaries = []*StepNode{t.Root}
+	}
+	for index, identity := range identities {
+		if identity.Name == "" || identity.Name == "default" {
+			continue
+		}
+		name := identity.Name
+		if !slices.Contains(t.RepositoryOrder, name) {
+			t.RepositoryOrder = append(t.RepositoryOrder, name)
+		}
+		for _, boundary := range boundaries {
+			node := t.ensureRepositoryBelow(boundary, name, map[string]any{"repository_dir": identity.Dir, "position": index, "total": len(identities)})
+			applyPersistedRepositoryStatus(node, state.RepositoryFrame, index)
+		}
+	}
+	t.applyPersistedPullRequestURLs(state)
+}
+
+func (t *Tree) applyPersistedPullRequestURLs(state *model.RunState) {
+	if state.RepositoryPullRequestURLs != nil {
+		t.RepositoryPullRequestURLs = maps.Clone(state.RepositoryPullRequestURLs)
+	}
+	if state.WorkspacePullRequestURL != "" {
+		t.PullRequestURL = state.WorkspacePullRequestURL
+	}
+}
+
+func persistedRepositoryIdentities(state *model.RunState) []model.RepositoryIdentity {
+	if len(state.SelectedRepositories) > 0 || state.RepositoryFrame == nil {
+		return state.SelectedRepositories
+	}
+	identities := make([]model.RepositoryIdentity, 0, len(state.RepositoryFrame.Repositories))
+	for _, entry := range state.RepositoryFrame.Repositories {
+		identities = append(identities, entry.Identity)
+	}
+	return identities
+}
+
+func applyPersistedRepositoryStatus(node *StepNode, frame *model.RepositoryFrame, index int) {
+	if frame == nil || index >= len(frame.Repositories) {
+		return
+	}
+	switch frame.Repositories[index].Status {
+	case model.RepositoryActive:
+		node.Status = StatusInProgress
+	case model.RepositoryCompleted:
+		node.Status = StatusSuccess
+	case model.RepositoryFailed:
+		node.Status = StatusFailed
+	}
+}
+
+func repositoryBoundaryNodes(root *StepNode) []*StepNode {
+	if root == nil {
+		return nil
+	}
+	if root.StaticScope == model.ScopeRepositories {
+		return []*StepNode{root}
+	}
+	var result []*StepNode
+	var visit func(*StepNode)
+	visit = func(node *StepNode) {
+		for _, child := range node.Children {
+			if child.Type == NodeRepository {
+				continue
+			}
+			if child.StaticScope == model.ScopeRepositories {
+				result = append(result, child)
+				continue
+			}
+			visit(child)
+		}
+	}
+	visit(root)
+	return result
 }
 
 // PreviousExecution returns the most recently started terminal leaf before
@@ -292,6 +392,7 @@ func BuildTree(wf *model.Workflow, workflowPath string) *Tree {
 		Status:             StatusPending,
 		StaticWorkflowPath: workflowPath,
 		SubLoaded:          true,
+		StaticScope:        wf.Scope,
 	}
 	for i := range wf.Steps {
 		child := buildStepNode(&wf.Steps[i], root)
@@ -316,6 +417,7 @@ func buildStepNode(s *model.Step, parent *StepNode) *StepNode {
 		StaticBreakIf:           s.BreakIf,
 		StaticWorkdir:           s.Workdir,
 		StaticContinueOnFailure: s.ContinueOnFailure,
+		StaticScope:             s.Scope,
 		StaticCaptureStderr:     s.CaptureStderr,
 	}
 	switch {
@@ -412,7 +514,7 @@ func (n *StepNode) IsContainer() bool {
 		return false
 	}
 	switch n.Type {
-	case NodeRoot, NodeLoop, NodeSubWorkflow, NodeIteration, NodeGroup:
+	case NodeRoot, NodeLoop, NodeSubWorkflow, NodeIteration, NodeGroup, NodeRepository:
 		return true
 	case NodeHeadlessAgent, NodeInteractiveAgent:
 		return len(n.Children) > 0
@@ -534,6 +636,7 @@ func cloneTemplate(src, parent *StepNode) *StepNode {
 		StaticBreakIf:           src.StaticBreakIf,
 		StaticWorkdir:           src.StaticWorkdir,
 		StaticContinueOnFailure: src.StaticContinueOnFailure,
+		StaticScope:             src.StaticScope,
 		StaticCaptureStderr:     src.StaticCaptureStderr,
 		StaticUITitle:           src.StaticUITitle,
 		StaticUIBody:            src.StaticUIBody,

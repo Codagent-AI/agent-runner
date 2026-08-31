@@ -1,0 +1,89 @@
+name: implement-repository-task-group
+description: "Complete one selected repository's implementation lifecycle."
+hidden: true
+scope: repositories
+
+params:
+  - name: repositories
+    required: true
+  - name: change_dir
+    required: true
+  - name: change_label
+    required: true
+  - name: skip_validator
+    required: true
+
+sessions:
+  - name: lead-agent
+    agent: lead
+
+steps:
+  - id: repository-preflight
+    workflow: ../core/validate-feature-branch-v1.0.yaml
+    params:
+      workflow_name: "{{change_label}} implementation for {{repository_name}}"
+  - id: resolve-repository-tasks
+    script: resolve-task-group.sh
+    capture: repository_task_glob
+    script_inputs:
+      workspace_dir: "{{workspace_dir}}"
+      change_dir: "{{change_dir}}"
+      plan_kind: "full"
+      output: "task-pattern"
+      repository_name: "{{repository_name}}"
+  - id: implement-tasks
+    loop:
+      over: "{{repository_task_glob}}"
+      as: task_file
+      require_matches: true
+    steps:
+      - id: implement-single-task
+        workflow: ../core/implement-task-v1.0.yaml
+        params:
+          task_file: "{{task_file}}"
+          run_session_report: "true"
+          skip_validator: "{{skip_validator}}"
+  - id: review-assumptions
+    session: lead-agent
+    mode: autonomous
+    prompt: |
+      The implementation tasks assigned to repository {{repository_name}} at {{repository_dir}} have completed. The shared orchestration workspace is {{workspace_dir}}.
+
+      Audit the risky and notable assumptions plus context gaps in this repository's implementation reports at `{{repository_output_dir}}/*session-report*.out`. Cross-reference each report with its matching task-file metadata in `{{session_dir}}/audit.log`; do not read or modify sibling repository evidence.
+
+      Build a complete finding ledger. Fix and commit high-confidence implementation issues in the active repository, following its commit conventions and prepending `[{{step_id}}]`. Do not ask the user during this autonomous phase and do not silently resolve product, scope, or design ambiguity.
+
+      Always write `{{repository_output_dir}}/acceptance-assumptions.md`. List every unresolved finding or context gap with its source, why it is undecided, the decision needed, and the likely impact of each option. If none remain, write `No unresolved assumptions or context gaps.`
+  - id: verify-assumptions-handoff
+    command: test -s "{{repository_output_dir}}/acceptance-assumptions.md"
+  - id: simplify
+    session: lead-agent
+    mode: autonomous
+    prompt: |
+      Review only repository {{repository_name}} at {{repository_dir}} for duplicated implementation, readability problems, unnecessarily deep nesting, unclear naming, and overly complex conditionals. The shared orchestration workspace is {{workspace_dir}}.
+
+      Use the simplify skill if available. Fix and commit clear-cut improvements in the active repository following its conventions with the `[{{step_id}}]` prefix. Do not change approved behavior, expand scope, edit workspace planning artifacts, or inspect sibling repositories.
+  - id: run-validator
+    workflow: ../core/run-validator-v1.0.yaml
+  - id: verify-clean-for-pr
+    command: test -z "$(git status --porcelain)"
+  - id: open-draft-pr
+    session: lead-agent
+    mode: autonomous
+    prompt: |
+      Final validation for repository {{repository_name}} at {{repository_dir}} is complete, and no tracked changes may remain uncommitted. The shared orchestration workspace is {{workspace_dir}}.
+
+      Invoke codagent:push-pr to push the active repository branch and create or update its pull request. Do not create a new implementation or artifact commit here; stop if tracked changes remain.
+
+      The pull request MUST remain a draft for human acceptance. Preserve the base of an existing pull request; otherwise use the repository's configured default base. Convert an existing non-draft pull request back to draft. Verify exactly one open pull request exists for the current branch, its base is non-empty, it is a draft, and its head SHA equals local `HEAD`. Report its URL and actual base branch.
+  - id: verify-draft-pr
+    capture: pr_url
+    command: |
+      branch=$(git branch --show-current); local_head=$(git rev-parse HEAD)
+      pr_json=$(gh pr list --head "$branch" --state open --json url,state,isDraft,baseRefName,headRefOid --limit 2)
+      test "$(printf '%s' "$pr_json" | jq length)" -eq 1
+      test "$(printf '%s' "$pr_json" | jq -r '.[0].state')" = OPEN
+      test "$(printf '%s' "$pr_json" | jq -r '.[0].isDraft')" = true
+      test -n "$(printf '%s' "$pr_json" | jq -r '.[0].baseRefName')"
+      test "$local_head" = "$(printf '%s' "$pr_json" | jq -r '.[0].headRefOid')"
+      printf '%s\n' "$(printf '%s' "$pr_json" | jq -r '.[0].url')"

@@ -1,5 +1,6 @@
 name: debug
 description: Debug a failed agent-runner run and optionally file an issue.
+scope: workspace
 
 params:
   - name: failed_session_dir

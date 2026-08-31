@@ -1,6 +1,7 @@
 name: check-planning-artifacts
 description: "Verify required files and optional specifications in a planning-artifact directory."
 hidden: true
+scope: workspace
 
 params:
   - name: change_dir

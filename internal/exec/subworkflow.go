@@ -68,7 +68,7 @@ func ExecuteSubWorkflowStep(
 
 	log.Printf("  sub-workflow: %s (%s)\n", workflow.Name, workflowPath)
 
-	outcome, err := executeChildSteps(&workflow, childCtx, runner, glob, log, startFromStepID, startCompleted)
+	outcome, err := executeScopedChildWorkflow(&workflow, childCtx, runner, glob, log, startFromStepID, startCompleted)
 
 	endData := map[string]any{
 		"outcome":     string(outcome),
@@ -90,6 +90,38 @@ func ExecuteSubWorkflowStep(
 	return outcome, err
 }
 
+// executeScopedChildWorkflow supplies the same repository boundary to a
+// complete child workflow body that DispatchStep supplies to nested groups and
+// loops. An already-active repository deliberately suppresses another fan-out
+// while preserving the parent's complete repositories parameter.
+func executeScopedChildWorkflow(
+	workflow *model.Workflow,
+	ctx *model.ExecutionContext,
+	runner ProcessRunner,
+	glob GlobExpander,
+	log Logger,
+	startFromStepID string,
+	startCompleted bool,
+) (StepOutcome, error) {
+	if workflow.Scope != model.ScopeRepositories || ctx.ActiveRepository != nil {
+		return executeChildSteps(workflow, ctx, runner, glob, log, startFromStepID, startCompleted)
+	}
+	boundaryPrefix := buildNestingPrefix(ctx.NestingPath)
+	return executeNestedRepositoryFanout(ctx, boundaryPrefix, func(repositoryCtx *model.ExecutionContext, index int) (StepOutcome, error) {
+		// The invoking step remains outside the repository-owned child body.
+		repositoryCtx.RepositoryPrefixDepth = ctx.AuditPrefixTokenCount()
+		if len(ctx.NestingPath) > 0 && ctx.NestingPath[len(ctx.NestingPath)-1].SubWorkflowName != "" {
+			repositoryCtx.RepositoryPrefixDepth--
+		}
+		entry := nestedRepositoryEntry(ctx.RepositoryFrame, index)
+		resumeStepID, resumeCompleted := "", false
+		if entry != nil && entry.Nested != nil {
+			resumeStepID, resumeCompleted = startFromStepID, startCompleted
+		}
+		return executeChildSteps(workflow, repositoryCtx, runner, glob, log, resumeStepID, resumeCompleted)
+	})
+}
+
 // prepareSubWorkflow resolves the sub-workflow path, loads it, validates its
 // params, constructs the child context, and merges its session declarations.
 // Extracted from ExecuteSubWorkflowStep to keep that function under the lint
@@ -104,6 +136,17 @@ func prepareSubWorkflow(
 	workflow, err := loader.LoadWorkflow(workflowPath, loader.Options{IsSubWorkflow: true})
 	if err != nil {
 		return model.Workflow{}, nil, err
+	}
+	if parentCtx.WorkflowScope == model.ScopeRepositories && workflow.Scope == model.ScopeWorkspace {
+		return model.Workflow{}, nil, fmt.Errorf("repository-scoped workflows cannot invoke a workspace-scoped child; invoke the workspace child from a workspace-scoped parent")
+	}
+	if workflow.RequiresRepositoryTargets() && parentCtx.Workspace != nil && len(parentCtx.Workspace.Repositories) == 1 {
+		if _, implicit := parentCtx.Workspace.Repositories["default"]; implicit {
+			if _, supplied := resolvedParams[model.RepositoriesParam]; !supplied {
+				resolvedParams = copyMap(resolvedParams)
+				resolvedParams[model.RepositoriesParam] = "default"
+			}
+		}
 	}
 
 	if err := validateSubWorkflowParams(&workflow, resolvedParams); err != nil {
@@ -128,9 +171,19 @@ func prepareSubWorkflow(
 		Params:          resolvedParams,
 		WorkflowFile:    workflowPath,
 		SubWorkflowName: workflow.Name,
+		WorkflowScope:   workflow.Scope,
 		EngineRef:       childEngine,
 		EngineSet:       workflow.Engine != nil,
 	})
+	if workflow.RequiresRepositoryTargets() && childCtx.Workspace != nil {
+		selected, err := model.ParseRepositoryTargets(resolvedParams[model.RepositoriesParam], childCtx.Workspace.Repositories)
+		if err != nil {
+			return model.Workflow{}, nil, err
+		}
+		workspace := *childCtx.Workspace
+		workspace.Selected = append([]string(nil), selected...)
+		childCtx.Workspace = &workspace
+	}
 
 	if err := MergeSessionDecls(childCtx, workflow.Sessions, log); err != nil {
 		return model.Workflow{}, nil, err
@@ -172,13 +225,15 @@ func executeChildSteps(
 			}
 		}
 
-		skip, skipErr := ShouldSkipStep(workflow.Steps[i].SkipIf, childCtx.LastStepOutcome, childCtx, workflow.Steps[i].ID)
-		if skipErr != nil {
-			return OutcomeFailed, fmt.Errorf("step %q skip_if evaluation failed: %w", workflow.Steps[i].ID, skipErr)
-		}
-		if skip {
-			skipChildStep(childCtx, &workflow.Steps[i])
-			continue
+		if shouldEvaluateSkipBeforeDispatch(&workflow.Steps[i], childCtx) {
+			skip, skipErr := ShouldSkipStep(workflow.Steps[i].SkipIf, childCtx.LastStepOutcome, childCtx, workflow.Steps[i].ID)
+			if skipErr != nil {
+				return OutcomeFailed, fmt.Errorf("step %q skip_if evaluation failed: %w", workflow.Steps[i].ID, skipErr)
+			}
+			if skip {
+				skipChildStep(childCtx, &workflow.Steps[i])
+				continue
+			}
 		}
 
 		updateChildProgress(childCtx, workflow.Steps[i].ID, false)
@@ -261,7 +316,59 @@ func recordChildProgress(childCtx *model.ExecutionContext, childStepID string, c
 	} else {
 		entry.Child = nestedChild
 	}
+	if childCtx.ActiveRepository != nil && childCtx.RepositoryIndex != nil {
+		if repositoryState := nestedRepositoryEntry(childCtx.RepositoryFrame, *childCtx.RepositoryIndex); repositoryState != nil {
+			repositoryState.Nested = repositoryProgressChain(childCtx, entry)
+			atBoundaryChild := repositoryProgressStartsAtBoundaryChild(childCtx)
+			repositoryState.NestedAtBoundaryChild = &atBoundaryChild
+		}
+	}
 	parent.LastSubWorkflowChild = entry
+}
+
+// repositoryProgressStartsAtBoundaryChild reports whether the persisted chain
+// begins at the repository fan-out boundary's direct child. A deeper child
+// leaves the first repository-local sub-workflow invocation in the ordinary
+// root chain, so resume must attach the authoritative repository progress
+// beneath that wrapper instead.
+func repositoryProgressStartsAtBoundaryChild(childCtx *model.ExecutionContext) bool {
+	parent := childCtx.ParentContext
+	return parent != nil && parent.ActiveRepository != nil &&
+		(parent.ParentContext == nil || parent.ParentContext.ActiveRepository == nil)
+}
+
+// repositoryProgressChain returns the complete state below a repository
+// fan-out boundary even when a deep child flushes before its sub-workflows
+// unwind. Workspace-owned wrappers stay in the ordinary root chain.
+func repositoryProgressChain(childCtx *model.ExecutionContext, leaf *model.NestedStepState) *model.NestedStepState {
+	chain := leaf
+	for current := childCtx; current != nil && current.ParentContext != nil; current = current.ParentContext {
+		parent := current.ParentContext
+		if parent.ActiveRepository == nil || parent.ParentContext == nil || parent.ParentContext.ActiveRepository == nil {
+			break
+		}
+		if len(current.NestingPath) == 0 {
+			break
+		}
+		segment := current.NestingPath[len(current.NestingPath)-1]
+		if segment.StepID == "" {
+			break
+		}
+		entry := &model.NestedStepState{
+			StepID:            segment.StepID,
+			SessionIDs:        copyMap(current.SessionIDs),
+			SessionProfiles:   copyMap(current.SessionProfiles),
+			CapturedVariables: copyMap(current.CapturedVariables),
+			LastSessionStepID: current.LastSessionStepID,
+			Child:             chain,
+		}
+		if segment.Iteration != nil {
+			iteration := *segment.Iteration
+			entry.Iteration = &iteration
+		}
+		chain = entry
+	}
+	return chain
 }
 
 func applyResumeState(parentCtx, childCtx *model.ExecutionContext) (string, bool) {
@@ -391,23 +498,24 @@ func MergeSessionDecls(ctx *model.ExecutionContext, sessions []model.SessionDecl
 			EmitAgentDeprecations(ctx, log, []config.Deprecation{*warning})
 		}
 		decl.Agent = canonicalAgent
-		existing, present := ctx.NamedSessionDecls[decl.Name]
+		existing := ctx.LookupNamedSessionDecl(decl.Name)
+		present := existing != ""
 		if present {
 			canonicalExisting, existingWarning := config.CanonicalAgentName(existing)
 			if existingWarning != nil {
 				EmitAgentDeprecations(ctx, log, []config.Deprecation{*existingWarning})
 				existing = canonicalExisting
-				ctx.NamedSessionDecls[decl.Name] = canonicalExisting
+				ctx.SetNamedSessionDecl(decl.Name, canonicalExisting)
 			}
 		}
 		if !present {
-			ctx.NamedSessionDecls[decl.Name] = decl.Agent
+			ctx.SetNamedSessionDecl(decl.Name, decl.Agent)
 			continue
 		}
 		if existing == decl.Agent {
 			continue
 		}
-		if ctx.NamedSessions[decl.Name] != "" {
+		if ctx.LookupNamedSession(decl.Name) != "" {
 			log.Printf("warning: named session %q: declared agent changed from %q to %q; continuing with original agent\n",
 				decl.Name, existing, decl.Agent)
 			continue

@@ -381,6 +381,31 @@ func TestAgentCallHandlerEmitsSuccessfulEvidencePairWithoutResponse(t *testing.T
 	}
 }
 
+func TestAgentCallHandlerPlacesRepositoryAtIdentityBoundary(t *testing.T) {
+	workdir := t.TempDir()
+	logger := &recordingAuditLogger{}
+	options := testAgentCallOptions(workdir, &callTestRunner{result: ProcessResult{Started: true}}, &callTestAdapter{})
+	options.Context.AuditLogger = logger
+	options.Context.ActiveRepository = &model.Repository{Name: "backend", Dir: workdir}
+	options.Context.RepositoryPrefixDepth = 1
+	options.Parent.Prefix = "[workspace-group, implement]"
+
+	response := decodeCallResponse(t, NewAgentCallHandler(options).HandleAgentCall(context.Background(), control.AgentCallRequest{
+		AttemptID: "attempt-1", RequestID: "request-1", Payload: json.RawMessage(`{"prompt":"child task","agent":"implementor"}`),
+	}))
+	if response.Error != nil {
+		t.Fatalf("response = %#v", response)
+	}
+	events := agentCallAuditEvents(logger.events)
+	if len(events) != 2 {
+		t.Fatalf("agent-call events = %+v", events)
+	}
+	identity := events[1].Data["identity"].(model.ExecutionIdentity)
+	if identity.Prefix != "workspace-group/repo:backend/implement" {
+		t.Fatalf("agent-call identity prefix = %q, want repository at scoped boundary", identity.Prefix)
+	}
+}
+
 func TestAgentCallHandlerResolvesRelativeWorkdirFromParentEffectiveDirectory(t *testing.T) {
 	worktree := t.TempDir()
 	parentWorkdir := filepath.Join(worktree, "apps")

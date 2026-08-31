@@ -1,5 +1,6 @@
 name: onboarding
 description: Optional Agent Runner workflow demo.
+scope: workspace
 steps:
   - id: step-types-demo
     workflow: step-types-demo-v1.0.yaml

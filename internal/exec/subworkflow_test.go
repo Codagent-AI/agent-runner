@@ -10,6 +10,7 @@ import (
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestAuditTimestampPreservesSubsecondPrecision(t *testing.T) {
@@ -20,6 +21,88 @@ func TestAuditTimestampPreservesSubsecondPrecision(t *testing.T) {
 }
 
 func TestExecuteSubWorkflowStep(t *testing.T) {
+	t.Run("fans a repository-scoped child workflow out once per selected repository", func(t *testing.T) {
+		dir := t.TempDir()
+		backend := t.TempDir()
+		frontend := t.TempDir()
+		childPath := filepath.Join(dir, "child-v1.0.yaml")
+		childYAML := `name: child
+scope: repositories
+params:
+  - name: repositories
+steps:
+  - id: first
+    command: first {{repository_name}}
+  - id: second
+    command: second {{repository_name}}
+`
+		if err := os.WriteFile(childPath, []byte(childYAML), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		ctx := model.NewRootContext(&model.RootContextOptions{
+			Params:       map[string]string{},
+			WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"),
+			WorkingDir:   dir,
+			ProjectRoot:  dir,
+			Workspace: &model.WorkspaceContext{
+				Dir: dir,
+				Repositories: map[string]model.Repository{
+					"backend":  {Name: "backend", Dir: backend},
+					"frontend": {Name: "frontend", Dir: frontend},
+				},
+			},
+		})
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}, {ExitCode: 0}, {ExitCode: 0}, {ExitCode: 0}}}
+		step := model.Step{ID: "child", Workflow: "child-v1.0.yaml", Params: map[string]string{"repositories": "backend,frontend"}}
+
+		outcome, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+		if err != nil || outcome != OutcomeSuccess {
+			t.Fatalf("ExecuteSubWorkflowStep() = %q, %v", outcome, err)
+		}
+		want := []string{"first 'backend'", "second 'backend'", "first 'frontend'", "second 'frontend'"}
+		got := make([]string, len(runner.calls))
+		for i, call := range runner.calls {
+			got[i] = call[2]
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Fatalf("commands mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("threads repository targets into a mixed-scope workspace child", func(t *testing.T) {
+		dir, backend, frontend := t.TempDir(), t.TempDir(), t.TempDir()
+		childYAML := `name: child
+scope: workspace
+params:
+  - name: repositories
+steps:
+  - id: repository-work
+    scope: repositories
+    steps:
+      - id: run
+        command: run {{repository_name}}
+`
+		if err := os.WriteFile(filepath.Join(dir, "child-v1.0.yaml"), []byte(childYAML), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		ctx := model.NewRootContext(&model.RootContextOptions{
+			WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"), WorkingDir: dir, ProjectRoot: dir,
+			Workspace: &model.WorkspaceContext{Dir: dir, Repositories: map[string]model.Repository{
+				"backend": {Name: "backend", Dir: backend}, "frontend": {Name: "frontend", Dir: frontend},
+			}},
+		})
+		runner := &mockRunner{}
+		step := model.Step{ID: "child", Workflow: "child-v1.0.yaml", Params: map[string]string{"repositories": "backend,frontend"}}
+		outcome, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+		if err != nil || outcome != OutcomeSuccess {
+			t.Fatalf("ExecuteSubWorkflowStep() = %q, %v", outcome, err)
+		}
+		got := []string{runner.calls[0][2], runner.calls[1][2]}
+		if diff := cmp.Diff([]string{"run 'backend'", "run 'frontend'"}, got); diff != "" {
+			t.Fatalf("commands mismatch (-want +got):\n%s", diff)
+		}
+	})
+
 	t.Run("executes child workflow steps", func(t *testing.T) {
 		// Create a temp workflow file
 		dir := t.TempDir()
@@ -577,6 +660,106 @@ func TestRecordChildProgressPreservesSameIDSubWorkflowNesting(t *testing.T) {
 	}
 	if got.Child.Child == nil || got.Child.Child.StepID != "proposal" {
 		t.Fatalf("recorded grandchild = %#v, want proposal", got.Child.Child)
+	}
+}
+
+func TestRecordChildProgressPersistsCompleteRepositoryChainBeforeUnwind(t *testing.T) {
+	workspace, repositoryDir := t.TempDir(), t.TempDir()
+	root := model.NewRootContext(&model.RootContextOptions{
+		Params: map[string]string{},
+		Workspace: &model.WorkspaceContext{
+			Dir: workspace,
+			Repositories: map[string]model.Repository{
+				"frontend": {Name: "frontend", Dir: repositoryDir},
+			},
+			Selected: []string{"frontend"},
+		},
+		RepositoryFrame: &model.RepositoryFrame{Repositories: []model.RepositoryExecutionState{{
+			Identity: model.RepositoryIdentity{Name: "frontend", Dir: repositoryDir},
+			Status:   model.RepositoryActive,
+		}}},
+	})
+	repository := model.NewRepositoryExecutionContext(root, root.Workspace.Repositories["frontend"], 0)
+	implementation := model.NewSubWorkflowContext(repository, &model.SubWorkflowContextOptions{StepID: "implement-repository-task-group"})
+	preflight := model.NewSubWorkflowContext(implementation, &model.SubWorkflowContextOptions{StepID: "repository-preflight"})
+	validation := model.NewSubWorkflowContext(preflight, &model.SubWorkflowContextOptions{StepID: "validate-feature-branch"})
+	preflight.SessionIDs = map[string]string{"agent": "preflight-session"}
+	preflight.SessionProfiles = map[string]string{"agent": "preflight-profile"}
+	preflight.CapturedVariables = map[string]model.CapturedValue{"result": model.NewCapturedString("preflight-result")}
+	preflight.LastSessionStepID = "preflight-agent"
+	validation.SessionIDs = map[string]string{"agent": "validation-session"}
+	validation.SessionProfiles = map[string]string{"agent": "validation-profile"}
+	validation.CapturedVariables = map[string]model.CapturedValue{"result": model.NewCapturedString("validation-result")}
+	validation.LastSessionStepID = "validation-agent"
+
+	recordChildProgress(validation, "validate-feature-branch", false)
+
+	if got := root.RepositoryFrame.Repositories[0].NestedAtBoundaryChild; got == nil || *got {
+		t.Fatalf("NestedAtBoundaryChild = %v, want false", got)
+	}
+	entry := root.RepositoryFrame.Repositories[0].Nested
+	type progressState struct {
+		StepID            string
+		SessionIDs        map[string]string
+		SessionProfiles   map[string]string
+		CapturedVariables map[string]model.CapturedValue
+		LastSessionStepID string
+	}
+	var got []progressState
+	for entry != nil {
+		got = append(got, progressState{
+			StepID:            entry.StepID,
+			SessionIDs:        entry.SessionIDs,
+			SessionProfiles:   entry.SessionProfiles,
+			CapturedVariables: entry.CapturedVariables,
+			LastSessionStepID: entry.LastSessionStepID,
+		})
+		entry = entry.Child
+	}
+	preflightState := progressState{
+		StepID:            "repository-preflight",
+		SessionIDs:        map[string]string{"agent": "preflight-session"},
+		SessionProfiles:   map[string]string{"agent": "preflight-profile"},
+		CapturedVariables: map[string]model.CapturedValue{"result": model.NewCapturedString("preflight-result")},
+		LastSessionStepID: "preflight-agent",
+	}
+	validationState := progressState{
+		StepID:            "validate-feature-branch",
+		SessionIDs:        map[string]string{"agent": "validation-session"},
+		SessionProfiles:   map[string]string{"agent": "validation-profile"},
+		CapturedVariables: map[string]model.CapturedValue{"result": model.NewCapturedString("validation-result")},
+		LastSessionStepID: "validation-agent",
+	}
+	want := []progressState{preflightState, validationState, validationState}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("repository resume chain mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestRecordChildProgressMarksDirectRepositoryBoundaryChild(t *testing.T) {
+	workspace, repositoryDir := t.TempDir(), t.TempDir()
+	root := model.NewRootContext(&model.RootContextOptions{
+		Params: map[string]string{},
+		Workspace: &model.WorkspaceContext{
+			Dir: workspace,
+			Repositories: map[string]model.Repository{
+				"frontend": {Name: "frontend", Dir: repositoryDir},
+			},
+			Selected: []string{"frontend"},
+		},
+		RepositoryFrame: &model.RepositoryFrame{Repositories: []model.RepositoryExecutionState{{
+			Identity: model.RepositoryIdentity{Name: "frontend", Dir: repositoryDir},
+			Status:   model.RepositoryActive,
+		}}},
+	})
+	repository := model.NewRepositoryExecutionContext(root, root.Workspace.Repositories["frontend"], 0)
+	directChild := model.NewSubWorkflowContext(repository, &model.SubWorkflowContextOptions{StepID: "repository-child"})
+
+	recordChildProgress(directChild, "run", false)
+
+	entry := root.RepositoryFrame.Repositories[0]
+	if entry.NestedAtBoundaryChild == nil || !*entry.NestedAtBoundaryChild {
+		t.Fatalf("NestedAtBoundaryChild = %v, want true", entry.NestedAtBoundaryChild)
 	}
 }
 

@@ -52,7 +52,9 @@ func RenderCatalog(catalog Catalog, intakeWorkflow string) string {
 	out.WriteString("# Workflows you can route to\n\n")
 	out.WriteString("Put the canonical name in the route request's `workflow` field. Supply every required\n")
 	out.WriteString("parameter and no parameter that is not listed here.\n")
-	for _, entry := range routableEntries(catalog, intakeWorkflow) {
+	entries := routableEntries(catalog, intakeWorkflow)
+	for i := range entries {
+		entry := &entries[i]
 		out.WriteString("\n## " + entry.CanonicalName + "\n")
 		if description := strings.TrimSpace(entry.Description); description != "" {
 			out.WriteString(description + "\n")
@@ -205,8 +207,8 @@ type RoutableCatalog interface {
 // NewCatalog returns a catalog backed by entries produced by discovery.Enumerate.
 func NewCatalog(entries []discovery.WorkflowEntry) Catalog {
 	catalog := &entryCatalog{byName: make(map[string]discovery.WorkflowEntry, len(entries))}
-	for _, entry := range entries {
-		catalog.byName[entry.CanonicalName] = entry
+	for i := range entries {
+		catalog.byName[entries[i].CanonicalName] = entries[i]
 	}
 	return catalog
 }
@@ -229,7 +231,8 @@ func (c *entryCatalog) ResolveWorkflow(name string) (discovery.WorkflowEntry, er
 // them behind its show-hidden toggle.
 func (c *entryCatalog) RoutableWorkflows() []discovery.WorkflowEntry {
 	entries := make([]discovery.WorkflowEntry, 0, len(c.byName))
-	for name, entry := range c.byName {
+	for name := range c.byName {
+		entry := c.byName[name]
 		if entry.Hidden {
 			continue
 		}
@@ -570,7 +573,8 @@ func workflowNotFoundError(opts *ValidateOptions, requested string) error {
 		entries = entries[:maxListedWorkflows]
 	}
 	lines := make([]string, 0, len(entries))
-	for _, entry := range entries {
+	for i := range entries {
+		entry := &entries[i]
 		line := "  " + entry.CanonicalName
 		if description := strings.TrimSpace(entry.Description); description != "" {
 			line += " - " + description
@@ -590,11 +594,11 @@ func routableEntries(catalog Catalog, intakeWorkflow string) []discovery.Workflo
 	}
 	routable := lister.RoutableWorkflows()
 	entries := make([]discovery.WorkflowEntry, 0, len(routable))
-	for _, entry := range routable {
-		if entry.CanonicalName == intakeWorkflow {
+	for i := range routable {
+		if routable[i].CanonicalName == intakeWorkflow {
 			continue
 		}
-		entries = append(entries, entry)
+		entries = append(entries, routable[i])
 	}
 	return entries
 }

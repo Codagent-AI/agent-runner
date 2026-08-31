@@ -173,6 +173,40 @@ func TestCreateLoopIterationContext(t *testing.T) {
 }
 
 func TestBuiltinVarsForStep(t *testing.T) {
+	t.Run("binds workspace and active repository builtins", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{
+			WorkflowFile: "test.yaml",
+			SessionDir:   "/tmp/runs/abc",
+			Workspace: &WorkspaceContext{
+				Dir: "/workspace",
+				Repositories: map[string]Repository{
+					"backend": {Name: "backend", Dir: "/repos/backend"},
+				},
+			},
+		})
+		vars := ctx.BuiltinVars()
+		if vars["workspace_dir"] != "/workspace" {
+			t.Fatalf("workspace_dir = %q", vars["workspace_dir"])
+		}
+		if _, ok := vars["repository_dir"]; ok {
+			t.Fatal("repository builtins available without an active repository")
+		}
+
+		ctx.ActiveRepository = &Repository{Name: "backend", Dir: "/repos/backend"}
+		vars = ctx.BuiltinVars()
+		if vars["repository_name"] != "backend" || vars["repository_dir"] != "/repos/backend" {
+			t.Fatalf("repository vars = %#v", vars)
+		}
+		if vars["repository_output_dir"] != "/tmp/runs/abc/output/repositories/backend" {
+			t.Fatalf("repository_output_dir = %q", vars["repository_output_dir"])
+		}
+
+		ctx.ActiveRepository = &Repository{Name: "default", Dir: "/workspace"}
+		if got := ctx.BuiltinVars()["repository_output_dir"]; got != "/tmp/runs/abc/output" {
+			t.Fatalf("implicit repository output = %q", got)
+		}
+	})
+
 	t.Run("includes step_id when provided", func(t *testing.T) {
 		ctx := NewRootContext(&RootContextOptions{
 			WorkflowFile: "test.yaml",
@@ -213,6 +247,25 @@ func TestBuiltinVarsForStep(t *testing.T) {
 			t.Fatal("expected session_dir to be absent")
 		}
 	})
+}
+
+func TestParseRepositoryTargets(t *testing.T) {
+	repositories := map[string]Repository{
+		"backend":  {Name: "backend", Dir: "/backend"},
+		"frontend": {Name: "frontend", Dir: "/frontend"},
+	}
+	targets, err := ParseRepositoryTargets(" frontend, backend ", repositories)
+	if err != nil {
+		t.Fatalf("ParseRepositoryTargets() error = %v", err)
+	}
+	if diff := cmp.Diff([]string{"frontend", "backend"}, targets); diff != "" {
+		t.Fatalf("targets mismatch (-want +got):\n%s", diff)
+	}
+	for _, value := range []string{"", "backend,,frontend", "backend,backend", "unknown"} {
+		if _, err := ParseRepositoryTargets(value, repositories); err == nil {
+			t.Fatalf("ParseRepositoryTargets(%q) succeeded, want error", value)
+		}
+	}
 }
 
 func TestIntakeHandoffPropagatesToNestedContexts(t *testing.T) {
@@ -478,6 +531,66 @@ func TestWorkflowResumedPropagation(t *testing.T) {
 }
 
 func TestNamedSessionSharing(t *testing.T) {
+	t.Run("repository namespace inherits workspace bindings without sharing new bindings", func(t *testing.T) {
+		workspace := NewRootContext(&RootContextOptions{
+			Params:            map[string]string{},
+			WorkflowFile:      "workspace.yaml",
+			NamedSessions:     map[string]string{"planner": "workspace-planner"},
+			NamedSessionDecls: map[string]string{"planner": "lead"},
+		})
+		backend := NewRepositoryExecutionContext(workspace, Repository{Name: "backend", Dir: "/repos/backend"}, 0)
+		backend.SetNamedSession("implementor", "backend-implementor")
+		backend.SetNamedSessionDecl("implementor", "implementor-agent")
+		if got := backend.LookupNamedSession("planner"); got != "workspace-planner" {
+			t.Fatalf("inherited workspace named session = %q", got)
+		}
+		if got := backend.LookupNamedSessionDecl("planner"); got != "lead" {
+			t.Fatalf("inherited workspace declaration = %q", got)
+		}
+
+		backendChild := NewSubWorkflowContext(backend, &SubWorkflowContextOptions{StepID: "child", Params: map[string]string{}, WorkflowFile: "child.yaml"})
+		if got := backendChild.LookupNamedSession("implementor"); got != "backend-implementor" {
+			t.Fatalf("repository child binding = %q", got)
+		}
+
+		frontend := NewRepositoryExecutionContext(workspace, Repository{Name: "frontend", Dir: "/repos/frontend"}, 1)
+		if got := frontend.LookupNamedSession("implementor"); got != "" {
+			t.Fatalf("sibling repository inherited local binding %q", got)
+		}
+		if got := frontend.LookupNamedSession("planner"); got != "workspace-planner" {
+			t.Fatalf("sibling repository did not inherit workspace binding: %q", got)
+		}
+		if got := frontend.LookupNamedSessionDecl("implementor"); got != "" {
+			t.Fatalf("sibling repository inherited local declaration %q", got)
+		}
+	})
+
+	t.Run("repository resume restores local state without a nested child", func(t *testing.T) {
+		index := 0
+		parent := NewRootContext(&RootContextOptions{WorkflowFile: "workspace.yaml"})
+		parent.RepositoryIndex = &index
+		parent.RepositoryFrame = &RepositoryFrame{Repositories: []RepositoryExecutionState{{
+			Identity: RepositoryIdentity{Name: "backend", Dir: "/repos/backend"},
+			Status:   RepositoryFailed,
+			Nested: &NestedStepState{
+				StepID: "implement", SessionIDs: map[string]string{"agent": "backend-agent"},
+				CapturedVariables: map[string]CapturedValue{"result": NewCapturedString("backend")},
+				NamedSessions:     map[string]string{"planner": "backend-planner"},
+			},
+		}}}
+
+		child := NewRepositoryExecutionContext(parent, Repository{Name: "backend", Dir: "/repos/backend"}, index)
+		if got := child.SessionIDs["agent"]; got != "backend-agent" {
+			t.Fatalf("restored unnamed session = %q", got)
+		}
+		if got := child.CapturedVariables["result"]; !cmp.Equal(got, NewCapturedString("backend")) {
+			t.Fatalf("restored capture = %#v", got)
+		}
+		if got := child.LookupNamedSession("planner"); got != "backend-planner" {
+			t.Fatalf("restored named session = %q", got)
+		}
+	})
+
 	t.Run("sub-workflow context shares NamedSessions pointer with parent", func(t *testing.T) {
 		parent := NewRootContext(&RootContextOptions{
 			Params:       map[string]string{},

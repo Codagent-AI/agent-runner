@@ -45,6 +45,17 @@ inspection, not fresh execution.
 
 Some `core:*` workflows are hidden from normal browsing because they are intended to be invoked by higher-level workflows. The shared change-lifecycle workflows accept an artifact directory and validation instructions; the OpenSpec and spec-driven namespaces provide those backend-specific values.
 
+### Multi-repository change lifecycle
+
+The same `change` and `simple-change` workflows work for a traditional single repository and for a configured coordination workspace. In a configured workspace, planning keeps `tasks.md` as the index but groups tasks in first-use order:
+
+```md
+## Repository: backend
+- [ ] [Add API](tasks/backend/01-add-api.md)
+```
+
+Each selected repository completes its task group, validation, and draft PR preparation before the next begins. Repository evidence is isolated beneath its run output directory; workspace acceptance reads the ordered `repository-evidence-index.json` and records owner-specific remediation in `acceptance-remediation.json`. OpenSpec finalizes the workspace PR and each implementation PR independently. Spec-driven flows finalize only implementation repositories when their external artifacts leave the workspace unchanged. Simple changes now finalize their implementation PRs too.
+
 ## OpenSpec
 
 | Workflow | Purpose |
@@ -53,7 +64,7 @@ Some `core:*` workflows are hidden from normal browsing because they are intende
 | `openspec:implement-change` | Implement reviewed task files, validate the result, open a draft PR, and prepare test-plan-driven acceptance evidence. |
 | `openspec:plan-change` | Validate an approved proposal, specs, design, and test plan, then create and review implementation tasks. |
 | `openspec:scaffold` | Bootstrap a brand new OpenSpec project, configure validation, and optionally publish it to GitHub. |
-| `openspec:simple-change` | Plan, independently crosscheck, implement, validate, flow-test, review, and archive a small branch-local change without creating a PR. |
+| `openspec:simple-change` | Plan, independently crosscheck, implement, validate, flow-test, review, archive, and finalize a small change. |
 
 The `openspec:change` workflow is a full development flow: it collaboratively defines the proposal,
 specifications, design, and test plan; autonomously plans and implements reviewed tasks; validates and
@@ -61,8 +72,7 @@ prepares acceptance evidence; supports human review; and continues through PR fi
 `openspec:simple-change` keeps one lightweight plan and one implementation unit for smaller changes.
 It adds a separate independent plan-crosscheck step and a lightweight Tester flow-check step before
 human review. The user—not a status-file protocol—decides when testing and refinements are complete. The
-workflow does not push, create a pull request, wait for CI, or finalize the branch, so several
-independently archived small changes can accumulate on one feature branch.
+workflow finalizes the implementation repository pull request after review and archival.
 `openspec:scaffold` runs `openspec init --tools none` so the project has OpenSpec directories without
 installing OpenSpec agent skills or slash commands.
 

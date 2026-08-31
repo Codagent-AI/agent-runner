@@ -93,8 +93,8 @@ type headlessOutputProgram struct {
 	stdout io.Writer
 	stderr io.Writer
 
-	mu  sync.Mutex
-	err error
+	mu     sync.Mutex
+	errors map[string]error
 }
 
 func (*headlessOutputProgram) ReleaseTerminal() error { return nil }
@@ -116,50 +116,108 @@ func (p *headlessOutputProgram) Send(msg tea.Msg) {
 		}
 		if err != nil {
 			p.mu.Lock()
-			if p.err == nil {
-				p.err = err
+			if p.errors == nil {
+				p.errors = make(map[string]error)
+			}
+			if p.errors[chunk.StepPrefix] == nil {
+				p.errors[chunk.StepPrefix] = err
 			}
 			p.mu.Unlock()
 		}
 	}
 }
 
-func (p *headlessOutputProgram) outputError() error {
+func (p *headlessOutputProgram) takeOutputError(prefix string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.err
+	err := p.errors[prefix]
+	delete(p.errors, prefix)
+	return err
 }
 
 type headlessProcessRunner struct {
 	iexec.ProcessRunner
 	output *headlessOutputProgram
+
+	mu           sync.Mutex
+	stepPrefix   string
+	invocationMu sync.Mutex
 }
 
 func (r *headlessProcessRunner) RunShell(command string, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
+	prefix := r.currentPrefix()
 	result, err := r.ProcessRunner.RunShell(command, captureStdout, workdir)
-	return result, errors.Join(err, r.output.outputError())
+	return result, errors.Join(err, r.output.takeOutputError(prefix))
+}
+
+func (r *headlessProcessRunner) RunShellWithPrefix(
+	prefix, command string,
+	captureStdout bool,
+	workdir string,
+) (iexec.ProcessResult, error) {
+	r.invocationMu.Lock()
+	defer r.invocationMu.Unlock()
+	r.setPrefix(prefix)
+	result, err := r.ProcessRunner.RunShell(command, captureStdout, workdir)
+	return result, errors.Join(err, r.output.takeOutputError(prefix))
 }
 
 func (r *headlessProcessRunner) RunAgent(options *iexec.AgentProcessOptions) (iexec.ProcessResult, error) {
 	result, err := r.ProcessRunner.RunAgent(options)
-	return result, errors.Join(err, r.output.outputError())
+	return result, errors.Join(err, r.output.takeOutputError(options.Prefix))
 }
 
 func (r *headlessProcessRunner) RunScript(path string, stdin []byte, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
+	prefix := r.currentPrefix()
 	result, err := r.ProcessRunner.RunScript(path, stdin, captureStdout, workdir)
-	return result, errors.Join(err, r.output.outputError())
+	return result, errors.Join(err, r.output.takeOutputError(prefix))
+}
+
+func (r *headlessProcessRunner) RunScriptWithPrefix(
+	prefix string,
+	delay time.Duration,
+	path string,
+	stdin []byte,
+	captureStdout bool,
+	workdir string,
+) (iexec.ProcessResult, error) {
+	r.invocationMu.Lock()
+	defer r.invocationMu.Unlock()
+	r.setScriptPrefix(prefix, delay)
+	result, err := r.ProcessRunner.RunScript(path, stdin, captureStdout, workdir)
+	return result, errors.Join(err, r.output.takeOutputError(prefix))
 }
 
 func (r *headlessProcessRunner) SetPrefix(prefix string) {
+	r.mu.Lock()
+	r.stepPrefix = prefix
+	r.mu.Unlock()
+	r.setPrefix(prefix)
+}
+
+func (r *headlessProcessRunner) setPrefix(prefix string) {
 	if setter, ok := r.ProcessRunner.(interface{ SetPrefix(string) }); ok {
 		setter.SetPrefix(prefix)
 	}
 }
 
 func (r *headlessProcessRunner) SetScriptPrefix(prefix string, delay time.Duration) {
+	r.mu.Lock()
+	r.stepPrefix = prefix
+	r.mu.Unlock()
+	r.setScriptPrefix(prefix, delay)
+}
+
+func (r *headlessProcessRunner) setScriptPrefix(prefix string, delay time.Duration) {
 	if setter, ok := r.ProcessRunner.(interface{ SetScriptPrefix(string, time.Duration) }); ok {
 		setter.SetScriptPrefix(prefix, delay)
 	}
+}
+
+func (r *headlessProcessRunner) currentPrefix() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stepPrefix
 }
 
 func (r *headlessProcessRunner) SetOutputDirectory(dir string) {
@@ -1555,9 +1613,9 @@ func resolveInspectSession(runID string) (sessionDir, projectDir string, err err
 	if err != nil {
 		return "", "", fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	cwd, err := os.Getwd()
+	cwd, err := canonicalWorkingDirectory()
 	if err != nil {
-		return "", "", fmt.Errorf("cannot determine working directory: %w", err)
+		return "", "", err
 	}
 
 	encoded := audit.EncodePath(cwd)
@@ -1681,7 +1739,7 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.startRunReady = true
 			return s, tea.Quit
 		}
-		if len(entry.Params) == 0 {
+		if len(entry.VisibleParams()) == 0 {
 			s.startRunReady = true
 			return s, tea.Quit
 		}
@@ -1797,9 +1855,9 @@ func resolveResumeStatePath(sessionID string) (string, error) {
 		return "", fmt.Errorf("cannot determine home directory: %w", err)
 	}
 
-	cwd, err := os.Getwd()
+	cwd, err := canonicalWorkingDirectory()
 	if err != nil {
-		return "", fmt.Errorf("cannot determine working directory: %w", err)
+		return "", err
 	}
 
 	encoded := audit.EncodePath(cwd)
@@ -1816,6 +1874,18 @@ func resolveResumeStatePath(sessionID string) (string, error) {
 		return "", fmt.Errorf("session not found: %s", sessionID)
 	}
 	return stateFile, nil
+}
+
+func canonicalWorkingDirectory() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine working directory: %w", err)
+	}
+	canonical, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return "", fmt.Errorf("cannot canonicalize working directory: %w", err)
+	}
+	return canonical, nil
 }
 
 func handleValidateArgs(args []string, profile ...config.ProfileOverride) int {
@@ -2113,11 +2183,22 @@ func prepareFreshRun(req *freshRunRequest) (*runner.RunHandle, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load workflow: %w", err)
 	}
-	params, err := matchParams(&workflow, req.Positional, req.Keyed)
+	var workspace *model.WorkspaceContext
+	if workflow.Scope != model.ScopeLegacy {
+		launchDir, err := os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("determine launch directory: %w", err)
+		}
+		workspace, err = runner.PrepareWorkspaceForLaunch(workflow.Scope, launchDir)
+		if err != nil {
+			return nil, err
+		}
+	}
+	profileStore, err := config.LoadWithProfile(filepath.Join(".agent-runner", "config.yaml"), req.ProfileOverride)
 	if err != nil {
 		return nil, err
 	}
-	profileStore, err := config.LoadWithProfile(filepath.Join(".agent-runner", "config.yaml"), req.ProfileOverride)
+	params, err := matchParamsForLaunch(&workflow, req.Positional, req.Keyed, workflow.RequiresRepositoryTargets() && len(profileStore.Repositories) == 0)
 	if err != nil {
 		return nil, err
 	}
@@ -2144,6 +2225,9 @@ func prepareFreshRun(req *freshRunRequest) (*runner.RunHandle, error) {
 		ProfileOverride:       req.ProfileOverride,
 		ProfileStore:          profileStore,
 		WorkflowFile:          req.SourceRef,
+		WorkingDir:            workspaceDir(workspace),
+		ProjectRoot:           workspaceDir(workspace),
+		Workspace:             workspace,
 		From:                  req.From,
 		Until:                 req.Until,
 		AgentOverride:         req.AgentOverride,
@@ -2154,6 +2238,13 @@ func prepareFreshRun(req *freshRunRequest) (*runner.RunHandle, error) {
 		GlobExpander:          &realGlobExpander{},
 		Log:                   log,
 	})
+}
+
+func workspaceDir(workspace *model.WorkspaceContext) string {
+	if workspace == nil {
+		return ""
+	}
+	return workspace.Dir
 }
 
 func isIntakeWorkflow(workflowFile string) bool {
@@ -3145,24 +3236,36 @@ func parseParams(args []string) (positional []string, keyed map[string]string, e
 	return positional, keyed, nil
 }
 
-// matchParams maps CLI args to workflow parameters, validating required params.
-// Supports positional args (mapped to params in order) and key=value overrides.
-func matchParams(workflow *model.Workflow, positional []string, keyed map[string]string) (map[string]string, error) {
+// matchParamsForLaunch keeps the internal implicit repository target out of
+// both positional argument accounting and required-parameter prompts. A
+// configured workspace deliberately receives no substitution.
+func matchParamsForLaunch(workflow *model.Workflow, positional []string, keyed map[string]string, implicitRepository bool) (map[string]string, error) {
 	result := make(map[string]string)
+	params := workflow.Params
+	if implicitRepository && workflow.Scope == model.ScopeRepositories {
+		params = make([]model.Param, 0, len(workflow.Params)-1)
+		for _, param := range workflow.Params {
+			if param.Name == model.RepositoriesParam {
+				result[model.RepositoriesParam] = "default"
+				continue
+			}
+			params = append(params, param)
+		}
+	}
 
 	// Apply positional arguments to workflow params in order.
-	if len(positional) > len(workflow.Params) {
-		return nil, fmt.Errorf("too many arguments: expected %d, got %d", len(workflow.Params), len(positional))
+	if len(positional) > len(params) {
+		return nil, fmt.Errorf("too many arguments: expected %d, got %d", len(params), len(positional))
 	}
 
 	for i, val := range positional {
-		result[workflow.Params[i].Name] = val
+		result[params[i].Name] = val
 	}
 
 	// Apply key=value overrides.
 	for key, val := range keyed {
 		found := false
-		for _, p := range workflow.Params {
+		for _, p := range params {
 			if p.Name == key {
 				found = true
 				break
@@ -3175,7 +3278,7 @@ func matchParams(workflow *model.Workflow, positional []string, keyed map[string
 	}
 
 	// Check for required parameters (default to required if not specified).
-	for _, p := range workflow.Params {
+	for _, p := range params {
 		required := p.Required == nil || *p.Required
 		if required {
 			if _, ok := result[p.Name]; !ok {

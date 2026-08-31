@@ -1,5 +1,6 @@
 name: scaffold
 description: "Bootstrap a brand new project, configure validation, and optionally publish it to GitHub."
+scope: workspace
 
 sessions:
   - name: scaffold-agent

@@ -47,6 +47,17 @@ func TestVerifyTaskCommitScript(t *testing.T) {
 		}
 	})
 
+	t.Run("rejects unknown hexadecimal starting commit", func(t *testing.T) {
+		unknown := strings.Repeat("f", 40)
+		out, err := run(t, unknown)
+		if err == nil {
+			t.Fatalf("script succeeded unexpectedly:\n%s", out)
+		}
+		if !strings.Contains(out, "invalid starting commit") {
+			t.Fatalf("output = %q, want invalid-commit explanation", out)
+		}
+	})
+
 	t.Run("rejects an empty commit", func(t *testing.T) {
 		runGit(t, repo, "commit", "--allow-empty", "-m", "empty")
 

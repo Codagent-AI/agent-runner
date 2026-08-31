@@ -110,6 +110,21 @@ func TestCollectorProjectsTerminalEventsAndNormalizesAttempts(t *testing.T) {
 	}
 }
 
+func TestCollectorProjectsExplicitRepositoryIdentityIntoArtifact(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(dir, "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, nil))
+	identity := agentIdentity("implement", true)
+	identity.RepositoryName = "backend"
+	identity.RepositoryDir = "/repos/backend"
+	c.Process(stepEvent(started.Add(time.Second), identity, unavailableUsage(), nil, "success", 1))
+	artifact := readArtifact(t, dir)
+	if len(artifact.Steps) != 1 || artifact.Steps[0].RepositoryName != "backend" || artifact.Steps[0].RepositoryDir != "/repos/backend" {
+		t.Fatalf("artifact repository identity = %#v", artifact.Steps)
+	}
+}
+
 func TestCollectorPreservesStableRoleAndToolIdentity(t *testing.T) {
 	dir := t.TempDir()
 	started := mustTime(t, "2026-07-17T10:00:00Z")

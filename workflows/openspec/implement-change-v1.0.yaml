@@ -1,6 +1,7 @@
 name: implement-change
 description: "For-each loop over task files, invoking implement-task per task"
 hidden: true
+scope: workspace
 
 params:
   - name: change_name
