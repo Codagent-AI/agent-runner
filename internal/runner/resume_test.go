@@ -400,6 +400,55 @@ func TestPrepareRunPersistsIntakeHandoffAndPrepareResumeRestoresProvenance(t *te
 	}
 }
 
+func TestPrepareResumeInfersDeliveredIntakeHandoffFromLegacyNestedSession(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	workflowPath := filepath.Join(dir, "routed-v1.0.yaml")
+	workflowSource := `name: routed
+steps:
+  - id: define
+    command: true
+  - id: implement
+    agent: implementor
+    session: new
+    mode: autonomous
+    prompt: Implement the approved task.
+`
+	if err := os.WriteFile(workflowPath, []byte(workflowSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := t.TempDir()
+	legacyState := model.RunState{
+		WorkflowFile:          workflowPath,
+		WorkflowName:          "routed",
+		WorkflowHash:          stateio.ComputeWorkflowHash(workflowSource),
+		IntakeHandoffContents: "Goal: add repository selection.",
+		IntakeParentRunID:     "intake-parent-run",
+		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+			StepID: "define", Completed: true,
+			Child: &model.NestedStepState{
+				StepID: "proposal", SessionIDs: map[string]string{"proposal": "session-id"}, Completed: true,
+			},
+		}},
+	}
+	if err := stateio.WriteState(&legacyState, sessionDir); err != nil {
+		t.Fatal(err)
+	}
+	profiles := &config.Config{ActiveAgents: map[string]*config.Agent{
+		"implementor": {DefaultMode: "autonomous", CLI: "claude", Model: "sonnet"},
+	}}
+	handle, err := PrepareResume(filepath.Join(sessionDir, "state.json"), &Options{
+		ProfileStore: profiles, ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareResume() error = %v", err)
+	}
+	defer finalizeRun(handle.rs, ResultStopped)
+	if !handle.rs.ctx.IntakeHandoffDelivered() {
+		t.Fatal("legacy resume did not infer that a nested agent already received the intake handoff")
+	}
+}
+
 func TestResumeAfterPreAgentFailureDeliversIntakeHandoffToFirstAgent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workflowPath := filepath.Join(t.TempDir(), "routed-v1.0.yaml")

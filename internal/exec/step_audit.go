@@ -9,6 +9,10 @@ import (
 	"github.com/codagent/agent-runner/internal/model"
 )
 
+func formatAuditTimestamp(at time.Time) string {
+	return at.UTC().Format(time.RFC3339Nano)
+}
+
 func emitStepStart(ctx *model.ExecutionContext, prefix string, startTime time.Time, data map[string]any) {
 	if data == nil {
 		data = map[string]any{}
@@ -17,7 +21,7 @@ func emitStepStart(ctx *model.ExecutionContext, prefix string, startTime time.Ti
 		data["context"] = contextSnapshot(ctx)
 	}
 	emitAudit(ctx, audit.Event{
-		Timestamp: startTime.UTC().Format(time.RFC3339Nano),
+		Timestamp: formatAuditTimestamp(startTime),
 		Prefix:    prefix,
 		Type:      audit.EventStepStart,
 		Data:      data,
@@ -48,7 +52,7 @@ func emitStepEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time
 	data["outcome"] = outcome
 	data["duration_ms"] = time.Since(startTime).Milliseconds()
 	emitAudit(ctx, audit.Event{
-		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Timestamp: formatAuditTimestamp(time.Now()),
 		Prefix:    prefix,
 		Type:      audit.EventStepEnd,
 		Data:      data,
@@ -56,9 +60,16 @@ func emitStepEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time
 }
 
 func executionIdentity(ctx *model.ExecutionContext, step *model.Step, kind string, iteration int, agentInvoked bool, cliName, sessionID string) model.ExecutionIdentity {
+	role := ""
+	tool := ""
+	if step.StepType() == "agent" {
+		role = stepProfileName(step, ctx)
+		tool = "agent-runner"
+	}
 	identity := model.ExecutionIdentity{
 		StepID: step.ID, Prefix: executionIdentityPrefix(ctx), StepType: step.StepType(), Kind: kind,
 		Iteration: iteration, CLI: cliName, SessionID: sessionID, SessionStrategy: string(step.Session), AgentInvoked: agentInvoked,
+		Role: role, Tool: tool,
 	}
 	if ctx.ActiveRepository != nil && ctx.ActiveRepository.Name != "default" {
 		identity.RepositoryName = ctx.ActiveRepository.Name

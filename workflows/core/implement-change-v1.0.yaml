@@ -82,7 +82,8 @@ steps:
       - aggregate evidence directory `{{session_dir}}/output/`;
       - verification scope: `full` for the first pass.
 
-      The authoritative test plan was structurally validated before implementation. The first pass must exercise every required `AT-*` and every conditional `AT-*` whose activation condition holds. A substitute is allowed only when that obligation explicitly permits it. Missing applicable-flow evidence is an impediment and cannot produce `ACCEPTANCE_COMPLETE`.
+      The authoritative test plan was structurally validated before implementation. Instruct the tester to execute its applicable `AT-*` inventory under the required skill.
+      The first pass must exercise every required `AT-*` and every conditional `AT-*` whose activation condition holds. A substitute is allowed only when that obligation explicitly permits it. Missing applicable-flow evidence is an impediment and cannot produce `ACCEPTANCE_COMPLETE`.
 
       Follow codagent:call-agent's verification and autonomous result-accounting rules after every pass. Inspect durable evidence and account for every in-scope finding. Preserve approved behavior, scope, design, and testing strategy. Record product, scope, or design ambiguity in `{{session_dir}}/output/acceptance-assumptions.md` rather than deciding it silently.
 
@@ -101,7 +102,11 @@ steps:
         exit 1
       fi
       status=$(sed '/^[[:space:]]*$/d' "{{session_dir}}/output/acceptance-preparation-status.txt" | tail -n 1)
-      if [ "$status" != "ACCEPTANCE_COMPLETE" ]; then
-        echo "acceptance preparation did not complete successfully" >&2
-        exit 1
-      fi
+      case "$status" in
+        ACCEPTANCE_COMPLETE|ACCEPTANCE_FAILED)
+          ;;
+        *)
+          echo "invalid acceptance preparation status: $status" >&2
+          exit 1
+          ;;
+      esac

@@ -19,7 +19,7 @@ This artifact is the supported boundary for external consumers (Agent Evals and 
 
 ### Requirement: Versioned schema
 
-`run-metrics.json` SHALL carry a top-level schema version field. Backward-incompatible changes to the artifact's structure SHALL increment the version. Consumers can rely on a given version's structure remaining stable across Agent Runner releases. (The v1 field names are fixed in this change's design document.)
+`run-metrics.json` SHALL carry a top-level schema version field. Backward-incompatible changes to the artifact's structure SHALL increment the version. Schema v2 adds stable role/tool and requested/effective identity plus structured nested model records. Runner SHALL read schema v1 and rewrite it as v2 without discarding its existing attempts. Migration SHALL populate derivable legacy identity and SHALL mark identity that v1 did not record as `unknown` with `legacy` provenance rather than infer it.
 
 #### Scenario: Version field present
 - **WHEN** any `run-metrics.json` is written
@@ -27,13 +27,17 @@ This artifact is the supported boundary for external consumers (Agent Evals and 
 
 ### Requirement: Artifact content
 
-`run-metrics.json` SHALL contain one record per executed step and a run-level aggregate. Each step record SHALL include the step's identifier and nesting prefix, step type, outcome, duration in milliseconds, the usage record (token categories, optional canonical processed-token totals, provenance, and completeness, per `agent-usage-collection`), and `estimated_api_cost_usd` (per `cost-capture`). The run-level aggregate SHALL include the run's duration, per-category token totals, canonical input/output/overall token totals, canonical-total coverage, and the cost total with its coverage indicator. Unavailable usage and absent totals/cost SHALL appear as explicit null/unavailable states, never as zeros.
+`run-metrics.json` SHALL contain one record per executed step or nested model invocation and a run-level aggregate. Each model record SHALL include stable role/tool identity and requested/effective invocation identity in addition to the step's identifier and nesting prefix, step type, outcome, duration in milliseconds, usage record, and `estimated_api_cost_usd`. The run-level aggregate SHALL include the run's duration, per-category token totals, canonical input/output/overall token totals, canonical-total coverage, and the cost total with its coverage indicator. Unavailable usage and absent totals/cost SHALL appear as explicit null/unavailable states, never as zeros.
 
 Per-category token totals SHALL be the sum of the values reported for that category across all executed steps regardless of outcome. Canonical input/output/overall totals SHALL sum only steps for which an adapter produced reliable canonical totals. Steps with unavailable usage, and categories or canonical totals a step did not report, contribute nothing to the corresponding aggregate. The aggregate SHALL include usage-coverage and canonical-total-coverage indicators — `complete` when every agent step that actually invoked its CLI reported the metric, `partial` when some did, and `none` when none did — parallel to the cost coverage indicator. Agent steps that never invoked their CLI (skipped, or failed before launch) SHALL NOT count toward these coverage denominators.
 
 #### Scenario: Agent step record content
 - **WHEN** an autonomous-headless agent step completes with usage and cost collected
-- **THEN** its record in `run-metrics.json` carries the step identifier, prefix, type, outcome, duration, token categories with provenance, and the reported cost
+- **THEN** its record in `run-metrics.json` carries role/tool and requested/effective identity, step identifier, prefix, type, outcome, duration, token categories with provenance, and the reported cost
+
+#### Scenario: Crosscheck role remains distinct
+- **WHEN** a workflow invokes a configured `crosscheck` agent
+- **THEN** its metric record has role `crosscheck` rather than being folded into `lead-agent`
 
 #### Scenario: Run aggregate content
 - **WHEN** a run ends
@@ -203,3 +207,24 @@ Every `run-metrics.json` step, iteration, and agent-call record produced while a
 - **WHEN** an external consumer reads records from a multi-repository run
 - **THEN** it can group explicit repository records by `repository_name` without decoding nesting prefixes
 
+### Requirement: Declared nested-tool model metrics
+
+A shell step that launches model-using implementation tooling SHALL explicitly declare its `metrics_source`. Runner SHALL provide that process a structured JSONL sink through `AGENT_RUNNER_NESTED_METRICS_PATH`. Each producer record SHALL carry a stable invocation ID, role, tool, outcome, duration, requested/effective provider-model identity, raw token categories, canonical non-overlapping totals when defensible, source provenance, and reported cost when available. Runner SHALL append each valid child as a distinct `kind: "nested-agent"` record with a Runner-generated parent attempt ID and include it in canonical run totals exactly once. Deduplication SHALL scope producer-local invocation IDs to that parent attempt so retries or resumes cannot silently suppress later invocations.
+
+If a declared producer emits no structured records, or any emitted record is invalid or identity-incomplete, Runner SHALL append an invoked unavailable gap record for that declared source. Validation SHALL reject unsupported outcomes, negative duration or token values, negative or non-finite cost, canonical totals outside the range supported by raw cache/reasoning categories, and role/tool or effective-identity mismatches. Valid sibling records remain measured, while the gap participates in coverage so missing nested usage produces `partial` or `none`, never silent `complete` coverage. Runner MUST NOT reconstruct this handoff by parsing human-readable console telemetry.
+
+#### Scenario: Validator child invocation is attributable
+- **WHEN** a declared Agent Validator shell step emits a valid structured child record
+- **THEN** `run-metrics.json` contains a separate `nested-agent` record with role `implementation-validator`, tool `agent-validator`, exact requested/effective identity, and its usage and cost evidence
+
+#### Scenario: Missing declared child metrics reduce coverage
+- **WHEN** a declared Agent Validator metrics source emits no structured records
+- **THEN** Runner appends an unavailable nested metrics gap and does not report complete usage coverage
+
+#### Scenario: Invalid sibling does not erase valid metrics
+- **WHEN** a producer emits one valid child record and one malformed or identity-incomplete record
+- **THEN** Runner retains the valid child, appends an unavailable gap, sums only known usage, and reports partial usage coverage
+
+#### Scenario: Human-readable telemetry is not ingested
+- **WHEN** Validator prints token summaries to stdout or stderr but does not write the structured sink
+- **THEN** Runner records the structured metrics gap rather than scraping the console text

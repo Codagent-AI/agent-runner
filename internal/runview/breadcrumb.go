@@ -146,7 +146,11 @@ func (m *Model) styledRunStatus() string {
 	status := m.rootStatus()
 	switch status {
 	case StatusFailed:
-		return tuistyle.StatusFailed.Bold(true).Render("failed")
+		result := tuistyle.StatusFailed.Bold(true).Render("failed")
+		if m.canResumeRun() {
+			result += tuistyle.DimStyle.Render(" (r to resume)")
+		}
+		return result
 	case StatusSuccess:
 		return tuistyle.StatusSuccess.Render("completed")
 	default:

@@ -799,18 +799,25 @@ func TestModel_R_CompletedRun_NoAgentSession_NoOp(t *testing.T) {
 	}
 }
 
-// r is ignored on failed runs with no resumable agent session.
-func TestModel_R_IgnoredOnFailedRunWithNoAgentSession(t *testing.T) {
+// r resumes a failed workflow run even when no individual agent session is resumable.
+func TestModel_R_FailedRun_EmitsResumeRunMsg(t *testing.T) {
 	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusFailed}
 	root.Children = []*StepNode{{ID: "archive", Type: NodeShell, Status: StatusFailed, Parent: root}}
 	tree := &Tree{Root: root}
-	tree.Root.Status = StatusFailed
 	m := newTestModel(tree, FromList)
 	m.sessionDir = "/runs/my-run-id"
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
-	if cmd != nil {
-		t.Fatalf("r on failed run should be no-op, got cmd %v", cmd)
+	if cmd == nil {
+		t.Fatal("r on failed run should produce a cmd")
+	}
+	msg := cmd()
+	resume, ok := msg.(ResumeRunMsg)
+	if !ok {
+		t.Fatalf("expected ResumeRunMsg, got %T", msg)
+	}
+	if resume.RunID != "my-run-id" {
+		t.Fatalf("RunID = %q, want %q", resume.RunID, "my-run-id")
 	}
 }
 
@@ -986,14 +993,15 @@ func TestModel_Breadcrumb_HidesAffordance_WhenCompleted(t *testing.T) {
 	}
 }
 
-func TestModel_Breadcrumb_HidesAffordance_WhenFailed(t *testing.T) {
+func TestModel_Breadcrumb_ShowsAffordance_WhenFailed(t *testing.T) {
 	tree := simpleTree()
 	tree.Root.Status = StatusFailed
 	m := newTestModel(tree, FromList)
+	m.sessionDir = "/runs/my-run-id"
 
 	bc := m.renderBreadcrumb()
-	if containsString(bc, "r to resume") {
-		t.Errorf("breadcrumb should not show '(r to resume)' for failed run: %q", bc)
+	if !containsString(bc, "r to resume") {
+		t.Errorf("breadcrumb should show '(r to resume)' for failed run: %q", bc)
 	}
 }
 
@@ -1123,6 +1131,18 @@ func TestModel_HelpBar_HidesRBinding_WhenCompletedRunHasNoAgentSession(t *testin
 	help := m.renderHelpBar()
 	if containsString(help, "r resume") {
 		t.Errorf("help bar should not show 'r resume' for completed run with no agent session: %q", help)
+	}
+}
+
+func TestModel_HelpBar_ShowsRBinding_WhenFailedRunHasNoAgentSession(t *testing.T) {
+	root := &StepNode{ID: "wf", Type: NodeRoot, Status: StatusFailed}
+	root.Children = []*StepNode{{ID: "archive", Type: NodeShell, Status: StatusFailed, Parent: root}}
+	m := newTestModel(&Tree{Root: root}, FromList)
+	m.sessionDir = "/runs/my-run-id"
+
+	help := m.renderHelpBar()
+	if !containsString(help, "r resume") {
+		t.Errorf("help bar should show 'r resume' for failed run: %q", help)
 	}
 }
 
@@ -2247,21 +2267,35 @@ func TestModel_LiveRun_QuitConfirm_Shown(t *testing.T) {
 	}
 }
 
-func TestModel_LiveRun_QuitConfirm_CtrlC(t *testing.T) {
+func TestModel_LiveRun_CtrlCDoesNotExitWhileInteractiveChildOwnsTerminal(t *testing.T) {
 	m := newLiveModel()
+	m.Update(liverun.SuspendedMsg{})
 	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	m = m2.(*Model)
 	if m.quitConfirming {
-		t.Fatal("Ctrl+C should exit immediately without opening quit confirmation")
+		t.Fatal("Ctrl+C should not open quit confirmation")
 	}
+	if cmd != nil {
+		t.Fatalf("Ctrl+C command = %T, want nil while a live run is active", cmd)
+	}
+	if m.ExitRequested() {
+		t.Fatal("Ctrl+C should not mark exit requested while a live run is active")
+	}
+}
+
+func TestModel_LiveRun_CtrlCExitsWhileTUIOwnsTerminal(t *testing.T) {
+	m := newLiveModel()
+
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = m2.(*Model)
 	if cmd == nil {
-		t.Fatal("Ctrl+C should return a quit command")
+		t.Fatal("Ctrl+C should quit while the live-run TUI owns the terminal")
 	}
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Fatalf("expected Ctrl+C command to quit, got %T", cmd())
 	}
 	if !m.ExitRequested() {
-		t.Fatal("Ctrl+C should mark exit requested")
+		t.Fatal("Ctrl+C should mark exit requested while the live-run TUI owns the terminal")
 	}
 }
 
@@ -2320,25 +2354,27 @@ func TestModel_LiveRun_QuitConfirm_AcceptMarksExitRequested(t *testing.T) {
 	}
 }
 
-func TestModel_LiveRun_CtrlCExitsFromQuitConfirmation(t *testing.T) {
+func TestModel_LiveRun_CtrlCCancelsQuitConfirmationDuringTerminalHandoff(t *testing.T) {
 	m := newLiveModel()
+	m.Update(liverun.SuspendedMsg{})
 	m.quitConfirming = true
 
 	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	m = m2.(*Model)
-	if cmd == nil {
-		t.Fatal("Ctrl+C should quit while confirmation is open")
+	if cmd != nil {
+		t.Fatalf("Ctrl+C command = %T, want nil while a live run is active", cmd)
 	}
-	if _, ok := cmd().(tea.QuitMsg); !ok {
-		t.Fatalf("expected Ctrl+C command to quit, got %T", cmd())
+	if m.ExitRequested() {
+		t.Fatal("Ctrl+C should not mark exit requested while a live run is active")
 	}
-	if !m.ExitRequested() {
-		t.Fatal("Ctrl+C should mark exit requested while confirmation is open")
+	if m.quitConfirming {
+		t.Fatal("Ctrl+C should dismiss the quit confirmation")
 	}
 }
 
-func TestModel_CtrlCExitsFromLegend(t *testing.T) {
+func TestModel_CtrlCExitsFromLegendAfterRun(t *testing.T) {
 	m := newLiveModel()
+	m.running = false
 	m.showLegend = true
 
 	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})

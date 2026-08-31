@@ -149,6 +149,9 @@ if test_plan_path.is_file() and test_plan_path.stat().st_size > 0:
         else:
             obligations[obligation_id] = match
 
+    if not any(key.startswith("AT-") for key in obligations):
+        failures.append(f"{test_plan_path} must define at least one AT-* acceptance obligation")
+
     required_fields = {
         "INT": ("Covers", "Boundary", "Setup", "Action", "Assertions", "Execution"),
         "E2E": ("Covers", "Surface", "Setup", "Journey", "Assertions", "Execution"),

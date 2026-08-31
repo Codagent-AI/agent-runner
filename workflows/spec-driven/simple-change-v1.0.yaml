@@ -15,7 +15,7 @@ steps:
   - id: plan
     session: lead-agent
     prompt: |
-      Help the user plan the change. Use any intake context supplied above as what the user already told an agent; if none was supplied, first ask the user what the change is about and DO NOT attempt to guess. Then, you MUST use the codagent:simple-plan skill.
+      Help the user plan the change. Use any intake context supplied above as what the user already told an agent; if none was supplied, first ask the user what the change is about and DO NOT attempt to guess. Intake context is prior factual context only: it is not approval of a direction, authorization to write, or a substitute for confirmation required by codagent:simple-plan. Then, you MUST use the codagent:simple-plan skill.
 
   - id: locate-task
     session: lead-agent

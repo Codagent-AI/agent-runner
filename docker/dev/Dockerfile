@@ -38,6 +38,7 @@ RUN npm install -g \
     @openai/codex \
     @anthropic-ai/claude-code \
     @codagent-ai/agent-plugin \
+    @fission-ai/openspec@1.6.0 \
     agent-validator \
     chrome-devtools-axi@0.1.26 \
     chrome-devtools-mcp@1.5.0 \

@@ -3,6 +3,8 @@ package exec
 import (
 	"context"
 	"io"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/codagent/agent-runner/internal/cli"
@@ -29,12 +31,14 @@ type AgentInvocation struct {
 	InvocationContext cli.InvocationContext
 	CLI               string
 	Model             string
+	Effort            string
 	SessionID         string
 	SessionResumed    bool
 
 	Log         Logger
 	SuspendHook func() error
 	ResumeHook  func() error
+	OnStarted   func()
 	direct      *directInvocation
 	Now         func() time.Time
 }
@@ -102,20 +106,25 @@ func InvokeAgent(input *AgentInvocation, runner ProcessRunner, fallbackLog Logge
 		Context: ctx, Args: input.Args, CaptureStdout: true,
 		Env: input.Env, DropEnv: dropEnv, Workdir: input.Workdir,
 		Prefix: input.Prefix, StdoutWrapper: stdoutWrapper,
-		StderrWrapper: stderrWrapper, Supervision: supervision,
+		StderrWrapper: stderrWrapper, Supervision: supervision, OnStarted: input.OnStarted, startedOnce: &sync.Once{},
 	}
 	direct := input.direct
 	if direct != nil {
 		invocationCopy := *direct
 		invocationCopy.spawnEnv = append([]string(nil), input.Env...)
 		invocationCopy.dropEnv = append([]string(nil), dropEnv...)
+		invocationCopy.onStarted = processOptions.NotifyStarted
 		direct = &invocationCopy
 	}
 	outcome, processResult, launched, runErr := runAgentProcess(
 		runner, input.Adapter, &processOptions, input.InvocationContext, log,
 		input.SuspendHook, input.ResumeHook, direct,
 	)
+	if launched {
+		processOptions.NotifyStarted()
+	}
 	extraction, usageErr := extractAgentUsage(input.Adapter, input.CLI, input.InvocationContext, processResult.Stdout)
+	attachInvocationIdentity(&extraction.Usage, input.CLI, input.Model, input.Effort)
 	result := AgentInvocationResult{
 		Outcome: outcome, Stdout: processResult.Stdout, Stderr: processResult.Stderr,
 		ExitCode: processResult.ExitCode, CLI: input.CLI, Model: input.Model,
@@ -137,4 +146,54 @@ func InvokeAgent(input *AgentInvocation, runner ProcessRunner, fallbackLog Logge
 	result.FinishedAt = now()
 	result.Duration = result.FinishedAt.Sub(result.StartedAt)
 	return result, runErr
+}
+
+func attachInvocationIdentity(usage *model.UsageRecord, requestedCLI, requestedModel, requestedEffort string) {
+	usage.Identity.RequestedCLI = requestedCLI
+	usage.Identity.RequestedModel = requestedModel
+	usage.Identity.RequestedEffort = requestedEffort
+	usage.Identity.EffectiveCLI = usage.CLI
+	if usage.Identity.EffectiveCLI == "" {
+		usage.Identity.EffectiveCLI = requestedCLI
+		usage.CLI = requestedCLI
+	}
+	if usage.Provider != "" {
+		usage.Identity.EffectiveProvider = usage.Provider
+		usage.Identity.ProviderSource = model.IdentitySourceAdapter
+	} else if provider := invocationProvider(requestedCLI, requestedModel); provider != "" {
+		usage.Provider = provider
+		usage.Identity.EffectiveProvider = provider
+		usage.Identity.ProviderSource = model.IdentitySourceInvocation
+	}
+	if usage.Model != "" {
+		usage.Identity.EffectiveModel = usage.Model
+		usage.Identity.ModelSource = model.IdentitySourceTelemetry
+	} else if requestedModel != "" {
+		usage.Model = requestedModel
+		usage.Identity.EffectiveModel = requestedModel
+		usage.Identity.ModelSource = model.IdentitySourceInvocation
+	}
+	if requestedEffort != "" {
+		usage.Identity.EffectiveEffort = requestedEffort
+		usage.Identity.EffortSource = model.IdentitySourceInvocation
+	}
+}
+
+func invocationProvider(cliName, modelName string) string {
+	switch cliName {
+	case "claude":
+		return "anthropic"
+	case "codex":
+		return "openai"
+	case "copilot":
+		return "github"
+	case "cursor":
+		return "cursor"
+	case "opencode":
+		provider, _, found := strings.Cut(modelName, "/")
+		if found {
+			return provider
+		}
+	}
+	return ""
 }

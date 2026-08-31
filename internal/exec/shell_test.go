@@ -3,6 +3,8 @@ package exec
 import (
 	"context"
 	"fmt"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -10,6 +12,31 @@ import (
 	"github.com/codagent/agent-runner/internal/interactive"
 	"github.com/codagent/agent-runner/internal/model"
 )
+
+var nestedMetricsPathPattern = regexp.MustCompile(`AGENT_RUNNER_NESTED_METRICS_PATH='([^']+)'`)
+
+type nestedMetricsRunner struct {
+	contents string
+	command  string
+}
+
+func (r *nestedMetricsRunner) RunShell(command string, _ bool, _ string) (ProcessResult, error) {
+	r.command = command
+	match := nestedMetricsPathPattern.FindStringSubmatch(command)
+	if len(match) == 2 && r.contents != "" {
+		if err := os.WriteFile(match[1], []byte(r.contents), 0o600); err != nil {
+			return ProcessResult{}, err
+		}
+	}
+	return ProcessResult{Started: true, ExitCode: 0}, nil
+}
+
+func (*nestedMetricsRunner) RunAgent(*AgentProcessOptions) (ProcessResult, error) {
+	return ProcessResult{}, nil
+}
+func (*nestedMetricsRunner) RunScript(string, []byte, bool, string) (ProcessResult, error) {
+	return ProcessResult{}, nil
+}
 
 type mockAuditLogger struct {
 	events []audit.Event
@@ -387,4 +414,106 @@ func TestExecuteShellStep(t *testing.T) {
 			t.Fatalf("expected ProcessRunner.RunShell not to be used, got %v", runner.calls)
 		}
 	})
+}
+
+func TestExecuteShellStepEmitsStructuredNestedModelMetrics(t *testing.T) {
+	auditLog := &mockAuditLogger{}
+	ctx := makeCtx()
+	ctx.SessionDir = t.TempDir()
+	ctx.AuditLogger = auditLog
+	runner := &nestedMetricsRunner{contents: `{"schema_version":1,"invocation_id":"review-1","role":"implementation-validator","tool":"agent-validator","outcome":"success","duration_ms":25,"usage":{"status":"collected","cli":"codex","provider":"openai","model":"gpt-5.6-sol","identity":{"requested_cli":"codex","requested_model":"gpt-5.6-sol","effective_cli":"codex","effective_provider":"openai","effective_model":"gpt-5.6-sol","provider_source":"adapter","model_source":"invocation"},"tokens":{"input":7,"output":2},"token_totals":{"input":7,"output":2,"total":9},"source":"agent-validator:codex"}}` + "\n"}
+	step := model.Step{ID: "validate", Command: "agent-validator run", MetricsSource: "agent-validator"}
+
+	if _, err := ExecuteShellStep(&step, ctx, runner, &mockLogger{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(runner.command, "AGENT_RUNNER_NESTED_METRICS_PATH=") {
+		t.Fatalf("instrumented command = %q", runner.command)
+	}
+	var nested *audit.Event
+	for i := range auditLog.events {
+		if auditLog.events[i].Type == audit.EventNestedAgentEnd {
+			nested = &auditLog.events[i]
+		}
+	}
+	if nested == nil {
+		t.Fatalf("events = %+v, want nested agent terminal event", auditLog.events)
+	}
+	identity := nested.Data["identity"].(model.ExecutionIdentity)
+	usage := nested.Data["usage"].(model.UsageRecord)
+	if identity.Role != "implementation-validator" || identity.Tool != "agent-validator" || identity.StepID != "review-1" || usage.Tokens[model.TokenInput] != 7 {
+		t.Fatalf("nested identity/usage = %+v / %+v", identity, usage)
+	}
+}
+
+func TestExecuteShellStepMakesMissingOrInvalidDeclaredMetricsExplicit(t *testing.T) {
+	for _, tc := range []struct {
+		name, contents, reason string
+	}{
+		{name: "missing", reason: "nested-metrics-missing"},
+		{name: "invalid", contents: "not-json\n", reason: "nested-metrics-invalid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			auditLog := &mockAuditLogger{}
+			ctx := makeCtx()
+			ctx.SessionDir = t.TempDir()
+			ctx.AuditLogger = auditLog
+			step := model.Step{ID: "validate", Command: "agent-validator run", MetricsSource: "agent-validator"}
+			if _, err := ExecuteShellStep(&step, ctx, &nestedMetricsRunner{contents: tc.contents}, &mockLogger{}); err != nil {
+				t.Fatal(err)
+			}
+			var usage model.UsageRecord
+			for _, event := range auditLog.events {
+				if event.Type == audit.EventNestedAgentEnd {
+					usage = event.Data["usage"].(model.UsageRecord)
+				}
+			}
+			if usage.Status != model.UsageUnavailable || string(usage.Reason) != tc.reason {
+				t.Fatalf("nested gap usage = %+v", usage)
+			}
+		})
+	}
+}
+
+func TestExecuteShellStepRejectsInvalidNestedMetricValues(t *testing.T) {
+	valid := `{"schema_version":1,"invocation_id":"review-1","role":"implementation-validator","tool":"agent-validator","outcome":"success","duration_ms":25,"usage":{"status":"collected","cli":"codex","provider":"openai","model":"gpt-5.6-sol","identity":{"requested_cli":"codex","requested_model":"gpt-5.6-sol","effective_cli":"codex","effective_provider":"openai","effective_model":"gpt-5.6-sol","provider_source":"adapter","model_source":"invocation"},"tokens":{"input":7,"output":2},"token_totals":{"input":7,"output":2,"total":9},"source":"agent-validator:codex"},"estimated_api_cost_usd":0.25}`
+	for _, tc := range []struct {
+		name, contents string
+	}{
+		{name: "negative duration", contents: strings.Replace(valid, `"duration_ms":25`, `"duration_ms":-1`, 1)},
+		{name: "negative token", contents: strings.Replace(valid, `"input":7`, `"input":-7`, 1)},
+		{name: "negative canonical total", contents: strings.Replace(valid, `"token_totals":{"input":7`, `"token_totals":{"input":-7`, 1)},
+		{name: "inconsistent canonical total", contents: strings.Replace(valid, `"total":9`, `"total":8`, 1)},
+		{name: "canonical total exceeds raw categories", contents: strings.Replace(valid, `"token_totals":{"input":7,"output":2,"total":9}`, `"token_totals":{"input":100,"output":2,"total":102}`, 1)},
+		{name: "negative cost", contents: strings.Replace(valid, `"estimated_api_cost_usd":0.25`, `"estimated_api_cost_usd":-0.25`, 1)},
+		{name: "non-finite cost", contents: strings.Replace(valid, `"estimated_api_cost_usd":0.25`, `"estimated_api_cost_usd":1e999`, 1)},
+		{name: "unsupported outcome", contents: strings.Replace(valid, `"outcome":"success"`, `"outcome":"surprise"`, 1)},
+		{name: "unexpected role", contents: strings.Replace(valid, `"role":"implementation-validator"`, `"role":"lead"`, 1)},
+		{name: "unexpected tool", contents: strings.Replace(valid, `"tool":"agent-validator"`, `"tool":"other-tool"`, 1)},
+		{name: "inconsistent effective model", contents: strings.Replace(valid, `"effective_model":"gpt-5.6-sol"`, `"effective_model":"other-model"`, 1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			auditLog := &mockAuditLogger{}
+			ctx := makeCtx()
+			ctx.SessionDir = t.TempDir()
+			ctx.AuditLogger = auditLog
+			step := model.Step{ID: "validate", Command: "agent-validator run", MetricsSource: "agent-validator"}
+			if _, err := ExecuteShellStep(&step, ctx, &nestedMetricsRunner{contents: tc.contents + "\n"}, &mockLogger{}); err != nil {
+				t.Fatal(err)
+			}
+			var nested []audit.Event
+			for _, event := range auditLog.events {
+				if event.Type == audit.EventNestedAgentEnd {
+					nested = append(nested, event)
+				}
+			}
+			if len(nested) != 1 {
+				t.Fatalf("nested events = %+v, want one explicit invalid gap", nested)
+			}
+			usage := nested[0].Data["usage"].(model.UsageRecord)
+			if usage.Status != model.UsageUnavailable || usage.Reason != model.UnavailableNestedMetricsInvalid {
+				t.Fatalf("nested invalid usage = %+v", usage)
+			}
+		})
+	}
 }

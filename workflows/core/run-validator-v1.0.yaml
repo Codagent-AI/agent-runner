@@ -26,6 +26,7 @@ steps:
           else
             agent-validator run --report
           fi
+        metrics_source: agent-validator
         capture: validator_output
         capture_stderr: true
         continue_on_failure: true

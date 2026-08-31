@@ -2,10 +2,35 @@ package model
 
 import (
 	"testing"
+	"time"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/google/go-cmp/cmp"
 )
+
+func TestIntakeHandoffStateRetriesClaimAfterPendingInvocationDoesNotLaunch(t *testing.T) {
+	state := NewIntakeHandoffState(false)
+	if !state.Claim() {
+		t.Fatal("first invocation did not claim the intake handoff")
+	}
+	secondClaim := make(chan bool, 1)
+	go func() { secondClaim <- state.Claim() }()
+	select {
+	case claimed := <-secondClaim:
+		t.Fatalf("competing claim returned %t before the pending invocation completed", claimed)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	state.Complete(false)
+	select {
+	case claimed := <-secondClaim:
+		if !claimed {
+			t.Fatal("competing invocation did not claim the released handoff")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("competing claim remained blocked after the handoff was released")
+	}
+}
 
 type stubAuditLogger struct{}
 

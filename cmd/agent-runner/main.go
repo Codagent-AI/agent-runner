@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -77,6 +78,107 @@ var defaultThemeDeps = themeDeps{
 
 // realProcessRunner implements exec.ProcessRunner using os/exec.
 type realProcessRunner struct{}
+
+func newHeadlessProcessRunner(sessionDir string) iexec.ProcessRunner {
+	return newHeadlessProcessRunnerWithWriters(sessionDir, os.Stdout, os.Stderr)
+}
+
+func newHeadlessProcessRunnerWithWriters(sessionDir string, stdout, stderr io.Writer) iexec.ProcessRunner {
+	program := &headlessOutputProgram{stdout: stdout, stderr: stderr}
+	processRunner := liverun.NewCoordinator(program, sessionDir).TUIProcessRunner(&realProcessRunner{})
+	return &headlessProcessRunner{ProcessRunner: processRunner, output: program}
+}
+
+type headlessOutputProgram struct {
+	stdout io.Writer
+	stderr io.Writer
+
+	mu  sync.Mutex
+	err error
+}
+
+func (*headlessOutputProgram) ReleaseTerminal() error { return nil }
+func (*headlessOutputProgram) RestoreTerminal() error { return nil }
+
+func (p *headlessOutputProgram) Send(msg tea.Msg) {
+	chunk, ok := msg.(liverun.OutputChunkMsg)
+	if !ok {
+		return
+	}
+	writer := p.stdout
+	if chunk.Stream == "stderr" {
+		writer = p.stderr
+	}
+	if writer != nil {
+		written, err := writer.Write(chunk.Bytes)
+		if err == nil && written != len(chunk.Bytes) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			p.mu.Lock()
+			if p.err == nil {
+				p.err = err
+			}
+			p.mu.Unlock()
+		}
+	}
+}
+
+func (p *headlessOutputProgram) outputError() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.err
+}
+
+type headlessProcessRunner struct {
+	iexec.ProcessRunner
+	output *headlessOutputProgram
+}
+
+func (r *headlessProcessRunner) RunShell(command string, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
+	result, err := r.ProcessRunner.RunShell(command, captureStdout, workdir)
+	return result, errors.Join(err, r.output.outputError())
+}
+
+func (r *headlessProcessRunner) RunAgent(options *iexec.AgentProcessOptions) (iexec.ProcessResult, error) {
+	result, err := r.ProcessRunner.RunAgent(options)
+	return result, errors.Join(err, r.output.outputError())
+}
+
+func (r *headlessProcessRunner) RunScript(path string, stdin []byte, captureStdout bool, workdir string) (iexec.ProcessResult, error) {
+	result, err := r.ProcessRunner.RunScript(path, stdin, captureStdout, workdir)
+	return result, errors.Join(err, r.output.outputError())
+}
+
+func (r *headlessProcessRunner) SetPrefix(prefix string) {
+	if setter, ok := r.ProcessRunner.(interface{ SetPrefix(string) }); ok {
+		setter.SetPrefix(prefix)
+	}
+}
+
+func (r *headlessProcessRunner) SetScriptPrefix(prefix string, delay time.Duration) {
+	if setter, ok := r.ProcessRunner.(interface{ SetScriptPrefix(string, time.Duration) }); ok {
+		setter.SetScriptPrefix(prefix, delay)
+	}
+}
+
+func (r *headlessProcessRunner) SetOutputDirectory(dir string) {
+	if setter, ok := r.ProcessRunner.(interface{ SetOutputDirectory(string) }); ok {
+		setter.SetOutputDirectory(dir)
+	}
+}
+
+func (r *headlessProcessRunner) NotifyAgentCallAccepted(call *iexec.AgentCallAccepted) {
+	if notifier, ok := r.ProcessRunner.(iexec.AgentCallLifecycleNotifier); ok {
+		notifier.NotifyAgentCallAccepted(call)
+	}
+}
+
+func (r *headlessProcessRunner) NotifyAgentCallFinished(call *iexec.AgentCallAccepted) {
+	if notifier, ok := r.ProcessRunner.(iexec.AgentCallLifecycleNotifier); ok {
+		notifier.NotifyAgentCallFinished(call)
+	}
+}
 
 func agentRunnerCommandEnv() []string {
 	env := os.Environ()
@@ -168,6 +270,7 @@ func (r *realProcessRunner) RunAgent(options *iexec.AgentProcessOptions) (iexec.
 		if err := c.Start(); err != nil {
 			return iexec.ProcessResult{}, err
 		}
+		options.NotifyStarted()
 		err := c.Wait()
 		result := iexec.ProcessResult{Started: true, ExitCode: -1, Stdout: stdoutBuf.String(), Stderr: stderrBuf.String()}
 		exitCode := 0
@@ -196,6 +299,7 @@ func (r *realProcessRunner) RunAgent(options *iexec.AgentProcessOptions) (iexec.
 	if err := c.Start(); err != nil {
 		return iexec.ProcessResult{}, err
 	}
+	options.NotifyStarted()
 	err := c.Wait()
 	result := iexec.ProcessResult{Started: true, ExitCode: -1}
 	exitCode := 0
@@ -772,7 +876,7 @@ func handleResumeWithOptions(sessionID string, liveOpts liveTUIOptions, profile 
 	if os.Getenv("AGENT_RUNNER_NO_TUI") == "1" {
 		result, runErr := runner.ResumeWorkflow(stateFilePath, &runner.Options{
 			ProfileStore: profiles, ProfileOverride: override,
-			ProcessRunner: &realProcessRunner{},
+			ProcessRunner: newHeadlessProcessRunner(filepath.Dir(stateFilePath)),
 			GlobExpander:  &realGlobExpander{},
 			Log:           &realLogger{},
 		})
@@ -2136,7 +2240,7 @@ func handleRunWithRunOptions(args []string, runOpts *runCommandOptions) liveTUIR
 			return liveTUIResult{exitCode: 1}
 		}
 		result := runner.ExecuteFromHandle(h, &runner.Options{
-			ProcessRunner: &realProcessRunner{},
+			ProcessRunner: newHeadlessProcessRunner(h.SessionDir),
 			GlobExpander:  &realGlobExpander{},
 			Log:           &realLogger{},
 		})

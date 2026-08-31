@@ -17,6 +17,7 @@ const (
 	EventSubWorkflowEnd         EventType = "sub_workflow_end"
 	EventAgentCallStart         EventType = "agent_call_start"
 	EventAgentCallEnd           EventType = "agent_call_end"
+	EventNestedAgentEnd         EventType = "nested_agent_end"
 	EventWarning                EventType = "warning"
 	EventError                  EventType = "error"
 	EventCompletionRequested    EventType = "completion_requested"

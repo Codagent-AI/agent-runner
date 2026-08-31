@@ -5,12 +5,20 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/google/go-cmp/cmp"
 )
+
+func TestAuditTimestampPreservesSubsecondPrecision(t *testing.T) {
+	at := time.Date(2026, time.August, 29, 20, 46, 3, 456789123, time.FixedZone("test", -4*60*60))
+	if got, want := formatAuditTimestamp(at), "2026-08-30T00:46:03.456789123Z"; got != want {
+		t.Fatalf("formatAuditTimestamp() = %q, want %q", got, want)
+	}
+}
 
 func TestExecuteSubWorkflowStep(t *testing.T) {
 	t.Run("fans a repository-scoped child workflow out once per selected repository", func(t *testing.T) {
@@ -755,7 +763,7 @@ func TestRecordChildProgressMarksDirectRepositoryBoundaryChild(t *testing.T) {
 	}
 }
 
-func TestExecuteSubWorkflowStep_PreservesExhaustedLoopResumeState(t *testing.T) {
+func TestExecuteSubWorkflowStep_RestartsExhaustedRetryLoopOnResume(t *testing.T) {
 	dir := t.TempDir()
 	childYAML := `name: child
 steps:
@@ -785,17 +793,17 @@ steps:
 		Completed: false,
 	}
 
-	runner := &mockRunner{}
+	runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 	step := model.Step{ID: "sub", Workflow: "child-v1.0.yaml"}
 	outcome, err := ExecuteSubWorkflowStep(&step, parent, runner, &mockGlob{}, &mockLogger{})
 	if err != nil {
 		t.Fatalf("ExecuteSubWorkflowStep returned error: %v", err)
 	}
-	if outcome != OutcomeFailed {
-		t.Fatalf("outcome = %q, want %q", outcome, OutcomeFailed)
+	if outcome != OutcomeSuccess {
+		t.Fatalf("outcome = %q, want %q", outcome, OutcomeSuccess)
 	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("expected exhausted resume to run no loop body steps, got %d calls", len(runner.calls))
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected exhausted retry to start a fresh cycle, got %d calls", len(runner.calls))
 	}
 	if parent.LastSubWorkflowChild == nil {
 		t.Fatal("expected sub-workflow progress to be recorded")
@@ -803,11 +811,11 @@ steps:
 	if parent.LastSubWorkflowChild.StepID != "retry" {
 		t.Fatalf("LastSubWorkflowChild.StepID = %q, want retry", parent.LastSubWorkflowChild.StepID)
 	}
-	if parent.LastSubWorkflowChild.Iteration == nil || *parent.LastSubWorkflowChild.Iteration != 3 {
-		t.Fatalf("LastSubWorkflowChild.Iteration = %v, want 3", parent.LastSubWorkflowChild.Iteration)
+	if parent.LastSubWorkflowChild.Iteration == nil || *parent.LastSubWorkflowChild.Iteration != 1 {
+		t.Fatalf("LastSubWorkflowChild.Iteration = %v, want 1", parent.LastSubWorkflowChild.Iteration)
 	}
-	if parent.LastSubWorkflowChild.Completed {
-		t.Fatal("expected exhausted retry loop to remain incomplete")
+	if !parent.LastSubWorkflowChild.Completed {
+		t.Fatal("expected successful resumed retry loop to be complete")
 	}
 }
 

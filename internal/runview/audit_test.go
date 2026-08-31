@@ -698,6 +698,64 @@ func TestApplyEvent_IterationStart_CreatesChildWithBinding(t *testing.T) {
 	}
 }
 
+func TestApplyEvent_ResumedLoopProgressUsesHighestObservedIteration(t *testing.T) {
+	tree := buildImplementChangeTree(t)
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[implement-tasks]",
+		Type:   "step_start",
+		Data: map[string]any{
+			"loop_type":        "for-each",
+			"resolved_matches": []any{"tasks/01.md", "tasks/02.md", "tasks/03.md", "tasks/04.md", "tasks/05.md", "tasks/06.md"},
+		},
+	})
+	for i := 0; i < 2; i++ {
+		tree.ApplyEvent(RawEvent{
+			Prefix: fmt.Sprintf("[implement-tasks:%d]", i),
+			Type:   "iteration_start",
+			Data:   map[string]any{"iteration": float64(i)},
+		})
+		tree.ApplyEvent(RawEvent{
+			Prefix: fmt.Sprintf("[implement-tasks:%d]", i),
+			Type:   "iteration_end",
+			Data:   map[string]any{"iteration": float64(i), "outcome": "success"},
+		})
+	}
+
+	// A resumed invocation starts at iteration index 2, then reports one
+	// iteration completed during this invocation.
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[implement-tasks]",
+		Type:   "step_start",
+		Data: map[string]any{
+			"loop_type":        "for-each",
+			"resolved_matches": []any{"tasks/01.md", "tasks/02.md", "tasks/03.md", "tasks/04.md", "tasks/05.md", "tasks/06.md"},
+		},
+	})
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[implement-tasks:2]",
+		Type:   "iteration_start",
+		Data:   map[string]any{"iteration": float64(2)},
+	})
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[implement-tasks:2]",
+		Type:   "iteration_end",
+		Data:   map[string]any{"iteration": float64(2), "outcome": "failed"},
+	})
+	tree.ApplyEvent(RawEvent{
+		Prefix: "[implement-tasks]",
+		Type:   "step_end",
+		Data: map[string]any{
+			"outcome":              "failed",
+			"iterations_completed": float64(1),
+		},
+	})
+
+	loop := childByID(tree.Root, "implement-tasks")
+	if loop.IterationsCompleted != 3 {
+		t.Fatalf("iterations completed = %d, want 3", loop.IterationsCompleted)
+	}
+}
+
 func TestApplyEvent_SubWorkflowLazyLoad(t *testing.T) {
 	tree := buildImplementChangeTree(t)
 	// Walk into iteration 0's sub-workflow step.

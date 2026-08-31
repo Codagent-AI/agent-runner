@@ -17,6 +17,7 @@ import (
 	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/exec"
 	"github.com/codagent/agent-runner/internal/intakeroute"
+	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/stateio"
@@ -756,6 +757,78 @@ func TestDiscoverProjectRootUsesWorkflowRepositoryFromAncestor(t *testing.T) {
 	}
 	if got != repo {
 		t.Fatalf("project root = %q, want %q", got, repo)
+	}
+}
+
+func TestRunWorkflowDeliversIntakeHandoffOnlyOnceAcrossSubWorkflows(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	childOnePath := filepath.Join(dir, "child-one-v1.0.yaml")
+	childTwoPath := filepath.Join(dir, "child-two-v1.0.yaml")
+	for path, prompt := range map[string]string{
+		childOnePath: "Plan the change.",
+		childTwoPath: "Implement the change.",
+	} {
+		name := strings.TrimSuffix(filepath.Base(path), "-v1.0.yaml")
+		source := fmt.Sprintf(`name: %s
+steps:
+  - id: work
+    agent: lead
+    session: new
+    mode: autonomous
+    prompt: %s
+`, name, prompt)
+		if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	parentPath := filepath.Join(dir, "parent-v1.0.yaml")
+	parentSource := fmt.Sprintf(`name: parent
+steps:
+  - id: define
+    workflow: %s
+  - id: implement
+    workflow: %s
+`, filepath.Base(childOnePath), filepath.Base(childTwoPath))
+	if err := os.WriteFile(parentPath, []byte(parentSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := loader.LoadWorkflow(parentPath, loader.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profiles := &config.Config{ActiveAgents: map[string]*config.Agent{
+		"lead": {DefaultMode: "autonomous", CLI: "claude", Model: "sonnet"},
+	}}
+	sessionDir := t.TempDir()
+	log := &mockLog{}
+	result, err := RunWorkflow(&workflow, nil, &Options{
+		WorkflowFile:          parentPath,
+		SessionDir:            sessionDir,
+		IntakeHandoffContents: "Goal: add repository selection.",
+		IntakeParentRunID:     "intake-parent-run",
+		ProfileStore:          profiles,
+		ProcessRunner:         &mockRunner{},
+		GlobExpander:          &mockGlob{},
+		Log:                   log,
+	})
+	if err != nil || result != ResultSuccess {
+		t.Fatalf("RunWorkflow() = (%q, %v), want success; log:\n%s", result, err, strings.Join(log.lines, "\n"))
+	}
+	auditData, err := os.ReadFile(filepath.Join(sessionDir, "audit.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const handoff = "Goal: add repository selection."
+	if count := strings.Count(string(auditData), handoff); count != 1 {
+		t.Fatalf("handoff occurrence count = %d, want exactly one delivery; audit:\n%s", count, auditData)
+	}
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.IntakeHandoffDelivered {
+		t.Fatal("completed run did not persist intake handoff delivery")
 	}
 }
 

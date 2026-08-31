@@ -992,6 +992,16 @@ func TestDevDockerfileIncludesGitHubCLIForDeliveryWorkflows(t *testing.T) {
 	}
 }
 
+func TestDevDockerfileIncludesOpenSpecForPlanningWorkflows(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "docker", "dev", "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read dev Dockerfile: %v", err)
+	}
+	if !strings.Contains(string(data), "@fission-ai/openspec@1.6.0") {
+		t.Fatalf("dev Dockerfile should install the OpenSpec CLI required by planning workflow scripts:\n%s", data)
+	}
+}
+
 func TestDockerFirstRunSmokeTrustsConfiguredBrewTapBeforeInstalling(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "docker-first-run-smoke.sh"))
 	if err != nil {

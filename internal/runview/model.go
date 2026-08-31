@@ -968,13 +968,14 @@ func (m *Model) handlePulseMsg() tea.Cmd {
 
 // canResumeRun reports whether the `r` resume-run action is available.
 // True only when the run is inactive (interrupted, not active elsewhere, not
-// a just-finished live run, and not in a terminal completed/failed state).
+// a just-finished live run, and not successfully completed). Failed runs retain
+// resumable workflow state and may be continued from their failed step.
 // Always false in FromDefinition mode (r emits StartRunMsg instead).
 func (m *Model) canResumeRun() bool {
 	return m.entered != FromDefinition &&
 		m.sessionDir != "" &&
 		!m.running && !m.active && m.liveResult == "" &&
-		m.rootStatus() != StatusFailed && m.rootStatus() != StatusSuccess
+		m.rootStatus() != StatusSuccess
 }
 
 func (m *Model) canLaunchDebug() bool {
@@ -1100,6 +1101,13 @@ func (m *Model) handleOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 // message switch within funlen limits.
 func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" {
+		if m.entered == FromLiveRun && m.running && m.suspended {
+			// An interactive child owns Ctrl-C while it has the terminal. Ignore
+			// any copy of the key Bubble Tea read during a release/restore race so
+			// it cannot tear down the supervising runner behind that child.
+			m.quitConfirming = false
+			return m, nil
+		}
 		m.exitRequested = true
 		return m, tea.Quit
 	}
@@ -1860,6 +1868,13 @@ func findFailedLeaf(n *StepNode) *StepNode {
 	var visit func(*StepNode, int)
 	visit = func(node *StepNode, depth int) {
 		if node == nil {
+			return
+		}
+		// A container's terminal success or skip supersedes failures retained
+		// beneath it for attempt history. Those descendants remain inspectable,
+		// but they are not candidates for the run's current failure focus.
+		if node != n && node.IsContainer() &&
+			(node.Status == StatusSuccess || node.Status == StatusSkipped) {
 			return
 		}
 		for _, child := range node.Children {

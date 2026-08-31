@@ -95,6 +95,10 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		}
 	}
 
+	intakeHandoffDelivered := state.IntakeHandoffDelivered
+	if !intakeHandoffDelivered && state.IntakeHandoffContents != "" {
+		intakeHandoffDelivered = nestedStateHasAgentSession(state.CurrentStep.Nested)
+	}
 	resumeOpts := &Options{
 		From:                      resumeState.fromStep,
 		WorkflowFile:              state.WorkflowFile,
@@ -108,6 +112,7 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		WorkingDir:                opts.WorkingDir,
 		SessionDir:                filepath.Dir(stateFilePath),
 		IntakeHandoffContents:     state.IntakeHandoffContents,
+		IntakeHandoffDelivered:    intakeHandoffDelivered,
 		IntakeParentRunID:         state.IntakeParentRunID,
 		AgentOverride:             state.AgentOverride,
 		Engine:                    eng,
@@ -195,6 +200,16 @@ func prepareRepositoryResumeWorkspace(state *model.RunState, scope model.Scope, 
 	}
 	workspace.Selected = append([]string(nil), persistedNames...)
 	return workspace, nil
+}
+
+func nestedStateHasAgentSession(state *model.NestedStepState) bool {
+	if state == nil {
+		return false
+	}
+	if state.LastSessionStepID != "" || len(state.SessionIDs) != 0 || len(state.NamedSessions) != 0 {
+		return true
+	}
+	return nestedStateHasAgentSession(state.Child)
 }
 
 func warnIfWorkflowHashChanged(state *model.RunState, log interface{ Printf(string, ...any) }) {

@@ -331,6 +331,37 @@ func TestExecuteLoopStep(t *testing.T) {
 		}
 	})
 
+	t.Run("resume exhausted retry loop starts a fresh retry cycle", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		step := model.Step{
+			ID: "retry", Session: model.SessionNew,
+			Loop: &model.Loop{Max: intPtr(3)},
+			Steps: []model.Step{{
+				ID: "run", Command: "check", Session: model.SessionNew,
+				ContinueOnFailure: true,
+				BreakIf:           "success",
+			}},
+		}
+		exhausted := 3
+		ctx := makeCtx()
+		ctx.ResumeChildState = &model.NestedStepState{
+			StepID:    "retry",
+			Iteration: &exhausted,
+			Completed: false,
+		}
+
+		result, err := ExecuteLoopStep(&step, ctx, runner, &mockGlob{}, &mockLogger{}, LoopExecuteOptions{ResumeFromIteration: exhausted})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Outcome != OutcomeSuccess {
+			t.Fatalf("expected resumed retry to succeed, got %q", result.Outcome)
+		}
+		if len(runner.calls) != 1 {
+			t.Fatalf("expected resumed retry to run once, got %d calls", len(runner.calls))
+		}
+	})
+
 	t.Run("resume enters iteration at mid body step", func(t *testing.T) {
 		// Iteration 0 had body step "a" completed and body step "b" in progress
 		// when the run failed. Resume should skip "a" and start at "b".

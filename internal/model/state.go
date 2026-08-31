@@ -80,9 +80,10 @@ type RunState struct {
 	ProfileSet   string            `json:"profileSet,omitempty"`
 	// IntakeHandoffContents and IntakeParentRunID are immutable provenance seeded
 	// from a frozen intake route and restored unchanged on resume.
-	IntakeHandoffContents string         `json:"intakeHandoffContents,omitempty"`
-	IntakeParentRunID     string         `json:"intakeParentRunId,omitempty"`
-	AgentOverride         *AgentOverride `json:"agentOverride,omitempty"`
+	IntakeHandoffContents  string         `json:"intakeHandoffContents,omitempty"`
+	IntakeHandoffDelivered bool           `json:"intakeHandoffDelivered,omitempty"`
+	IntakeParentRunID      string         `json:"intakeParentRunId,omitempty"`
+	AgentOverride          *AgentOverride `json:"agentOverride,omitempty"`
 	// Completed is set to true when the workflow has finished successfully.
 	// The state file is preserved (not deleted) so the TUI can still display
 	// the run's metadata after completion.

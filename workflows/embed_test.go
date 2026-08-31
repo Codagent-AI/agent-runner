@@ -1,6 +1,7 @@
 package builtinworkflows
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -386,11 +387,14 @@ func TestCoreImplementChangePreflightsValidatedPlanBeforeAgentWork(t *testing.T)
 			Name string `yaml:"name"`
 		} `yaml:"params"`
 		Steps []struct {
-			ID           string            `yaml:"id"`
-			Script       string            `yaml:"script"`
-			ScriptInputs map[string]string `yaml:"script_inputs"`
-			Prompt       string            `yaml:"prompt"`
-			Workflow     string            `yaml:"workflow"`
+			ID                string            `yaml:"id"`
+			Command           string            `yaml:"command"`
+			Script            string            `yaml:"script"`
+			ScriptInputs      map[string]string `yaml:"script_inputs"`
+			Prompt            string            `yaml:"prompt"`
+			Workflow          string            `yaml:"workflow"`
+			Loop              map[string]any    `yaml:"loop"`
+			ContinueOnFailure bool              `yaml:"continue_on_failure"`
 		} `yaml:"steps"`
 	}
 	if err := yaml.Unmarshal(body, &workflow); err != nil {
@@ -441,9 +445,18 @@ func TestCoreImplementChangePreflightsValidatedPlanBeforeAgentWork(t *testing.T)
 		t.Fatalf("check-plan index = %d, want immediately before repository group index %d", checkPlanIndex, repositoryGroupIndex)
 	}
 	for _, step := range workflow.Steps[:checkPlanIndex+1] {
-		if step.Prompt != "" || step.Workflow != "" {
-			t.Fatalf("preflight step %q can invoke an agent or sub-workflow before plan validation", step.ID)
+		if step.Prompt != "" || step.Workflow != "" || step.Command != "" || step.Loop != nil {
+			t.Fatalf("preflight step %q has work beyond deterministic script validation", step.ID)
 		}
+		if step.ContinueOnFailure {
+			t.Fatalf("preflight step %q permits later implementation or delivery work after failure", step.ID)
+		}
+	}
+	if got := workflow.Steps[0].Script; got != "validate-change-name.sh" {
+		t.Fatalf("first preflight script = %q, want validate-change-name.sh", got)
+	}
+	if repositoryGroupIndex != 2 {
+		t.Fatalf("repository task group index = %d, want 2 immediately after deterministic preflight", repositoryGroupIndex)
 	}
 }
 
@@ -832,11 +845,33 @@ None.
 	if err != nil {
 		t.Fatalf("read valid test plan: %v", err)
 	}
+	emptyAcceptanceInventory := strings.ReplaceAll(
+		string(validTestPlan),
+		`### AT-001: Use a widget
+- Classification: Required
+- Covers: Widget behavior
+- Actor and surface: User through the CLI
+- Setup: Isolated workspace
+- Steps: Create and inspect a widget
+- Expected: The widget is visible
+- Evidence: Captured terminal output
+- Effects and cleanup: Remove the workspace
+- Permitted substitutes: None
+
+`,
+		"",
+	)
+	emptyAcceptanceInventory = strings.ReplaceAll(
+		emptyAcceptanceInventory,
+		"| Widget behavior | INT-001 | E2E-001 | AT-001 | — |",
+		"| Widget behavior | INT-001 | E2E-001 | — | — |",
+	)
 	for name, content := range map[string]string{
-		"missing required section": strings.ReplaceAll(string(validTestPlan), "## Coverage Map", "## Traceability"),
-		"dangling coverage id":     strings.ReplaceAll(string(validTestPlan), "AT-001 | —", "AT-999 | —"),
-		"unmapped obligation id":   strings.ReplaceAll(string(validTestPlan), "E2E-001 | AT-001", "— | AT-001"),
-		"duplicate obligation id":  string(validTestPlan) + "\n### AT-001: Duplicate\n",
+		"missing required section":   strings.ReplaceAll(string(validTestPlan), "## Coverage Map", "## Traceability"),
+		"dangling coverage id":       strings.ReplaceAll(string(validTestPlan), "AT-001 | —", "AT-999 | —"),
+		"unmapped obligation id":     strings.ReplaceAll(string(validTestPlan), "E2E-001 | AT-001", "— | AT-001"),
+		"duplicate obligation id":    string(validTestPlan) + "\n### AT-001: Duplicate\n",
+		"empty acceptance inventory": emptyAcceptanceInventory,
 		"missing integration field": strings.ReplaceAll(
 			string(validTestPlan),
 			"- Boundary: CLI and service\n",
@@ -1364,6 +1399,70 @@ func TestSharedAcceptanceCallsUseTesterAndPreserveControls(t *testing.T) {
 	}
 }
 
+func TestImplementChangeAcceptanceHandoffAllowsFailedTestingForHumanReview(t *testing.T) {
+	body, err := ReadFile("builtin:core/implement-change-v1.0.yaml")
+	if err != nil {
+		t.Fatalf("ReadFile(implement-change): %v", err)
+	}
+	var workflow struct {
+		Steps []struct {
+			ID      string `yaml:"id"`
+			Command string `yaml:"command"`
+		} `yaml:"steps"`
+	}
+	if err := yaml.Unmarshal(body, &workflow); err != nil {
+		t.Fatalf("unmarshal implement-change: %v", err)
+	}
+
+	var command string
+	for _, step := range workflow.Steps {
+		if step.ID == "verify-acceptance-handoff" {
+			command = step.Command
+			break
+		}
+	}
+	if command == "" {
+		t.Fatal("implement-change has no verify-acceptance-handoff command")
+	}
+
+	for _, tt := range []struct {
+		name       string
+		status     string
+		wantPass   bool
+		writeFiles bool
+	}{
+		{name: "complete", status: "ACCEPTANCE_COMPLETE", wantPass: true, writeFiles: true},
+		{name: "failed testing", status: "ACCEPTANCE_FAILED", wantPass: true, writeFiles: true},
+		{name: "invalid status", status: "ACCEPTANCE_PENDING", writeFiles: true},
+		{name: "missing handoff"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sessionDir := t.TempDir()
+			if tt.writeFiles {
+				outputDir := filepath.Join(sessionDir, "output")
+				if err := os.MkdirAll(outputDir, 0o750); err != nil {
+					t.Fatalf("create output dir: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(outputDir, "acceptance-handoff.md"), []byte("handoff\n"), 0o600); err != nil {
+					t.Fatalf("write handoff: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(outputDir, "acceptance-preparation-status.txt"), []byte(tt.status+"\n"), 0o600); err != nil {
+					t.Fatalf("write status: %v", err)
+				}
+			}
+
+			resolved := strings.ReplaceAll(command, "{{session_dir}}", sessionDir)
+			err := exec.Command("sh", "-c", resolved).Run()
+			if tt.wantPass && err != nil {
+				t.Fatalf("verify handoff returned %v, want success", err)
+			}
+			if !tt.wantPass && err == nil {
+				t.Fatal("verify handoff succeeded, want failure")
+			}
+		})
+	}
+}
+
 func TestCoreReviewProposalUsesCrosscheckAgentProfile(t *testing.T) {
 	data, err := ReadFile("builtin:core/review-proposal-v1.0.yaml")
 	if err != nil {
@@ -1539,6 +1638,56 @@ func TestCoreCommitChangePlanRejectsRepositoryRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(gitMarker); !os.IsNotExist(err) {
 		t.Fatalf("git was invoked for repository-root path: %v", err)
+	}
+}
+
+func TestCoreCheckPlanningArtifactsRejectsDotSegments(t *testing.T) {
+	script, err := ReadAsset("core/check-planning-artifacts.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(core/check-planning-artifacts.sh): %v", err)
+	}
+
+	tempDir := t.TempDir()
+	scriptPath := filepath.Join(tempDir, "check-planning-artifacts.sh")
+	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tempDir, "change", "nested"), 0o755); err != nil {
+		t.Fatalf("create change directory: %v", err)
+	}
+	for _, path := range []string{
+		filepath.Join(tempDir, "change", "proposal.md"),
+		filepath.Join(tempDir, "change", "nested", "tasks.md"),
+	} {
+		if err := os.WriteFile(path, []byte("content\n"), 0o600); err != nil {
+			t.Fatalf("write artifact: %v", err)
+		}
+	}
+	valid := exec.Command("sh", scriptPath)
+	valid.Dir = tempDir
+	valid.Stdin = strings.NewReader(
+		`{"change_dir":"change","required_files":"proposal.md,nested/tasks.md","require_specs":"false"}`,
+	)
+	if out, err := valid.CombinedOutput(); err != nil {
+		t.Fatalf("script rejected confined artifact paths: %v\n%s", err, out)
+	}
+
+	for _, requiredFiles := range []string{".", "./proposal.md", "nested/./tasks.md", "nested/."} {
+		t.Run(requiredFiles, func(t *testing.T) {
+			cmd := exec.Command("sh", scriptPath)
+			cmd.Dir = tempDir
+			cmd.Stdin = strings.NewReader(fmt.Sprintf(
+				`{"change_dir":"change","required_files":%q,"require_specs":"false"}`,
+				requiredFiles,
+			))
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("script accepted required_files=%q", requiredFiles)
+			}
+			if !strings.Contains(string(out), "required file must be a confined relative path") {
+				t.Fatalf("output = %q, want confined-path error", out)
+			}
+		})
 	}
 }
 

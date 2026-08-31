@@ -67,7 +67,7 @@ old_ifs=$IFS
 IFS=','
 for file in $required_files; do
   case "$file" in
-    ""|/*|..|../*|*/../*|*/..)
+    ""|.|./*|*/./*|*/.|/*|..|../*|*/../*|*/..)
       printf 'check-planning-artifacts: required file must be a confined relative path: %s\n' "$file" >&2
       exit 1
       ;;

@@ -114,7 +114,7 @@ func TestInteractiveDirectHandoffJobControl(t *testing.T) {
 	buildAgentRunner(t, repoRoot, runnerBin)
 	writeInteractiveAgentFixtures(t, binDir, []string{"claude"})
 
-	for _, mode := range []string{"cooperative", "external"} {
+	for _, mode := range []string{"cooperative", "external", "terminal-output"} {
 		t.Run(mode, func(t *testing.T) {
 			home := filepath.Join(tmp, "home-"+mode)
 			writeSmokeProfileConfig(t, home)
@@ -147,6 +147,30 @@ func TestInteractiveDirectHandoffJobControl(t *testing.T) {
 				if err := unix.Kill(pid, unix.SIGSTOP); err != nil {
 					t.Fatalf("stop child: %v", err)
 				}
+			}
+			if mode == "terminal-output" {
+				if err := unix.Kill(-pid, unix.SIGTTOU); err != nil {
+					t.Fatalf("stop child for terminal output: %v", err)
+				}
+				time.Sleep(250 * time.Millisecond)
+				state, stateErr := exec.Command("ps", "-o", "state=", "-p", strconv.Itoa(pid)).Output()
+				if stateErr != nil || strings.HasPrefix(strings.TrimSpace(string(state)), "T") {
+					// Unstick the fixture before failing so the test never leaves the
+					// same stopped runner/child tree that this regression covers.
+					_, _ = ptmx.WriteString("fg\r")
+					time.Sleep(100 * time.Millisecond)
+					_, _ = ptmx.WriteString("R")
+					waitForPTYText(t, output, "JOB_SHELL_READY>", 15*time.Second)
+					_, _ = ptmx.WriteString("exit\r")
+					_ = command.Wait()
+					t.Fatalf("child state after SIGTTOU = %q, err %v; want automatic recovery", state, stateErr)
+				}
+				_, _ = ptmx.WriteString("R")
+				waitForPTYText(t, output, "JOB_CHILD_RESUMED "+mode, 10*time.Second)
+				waitForPTYText(t, output, "JOB_SHELL_READY>", 15*time.Second)
+				_, _ = ptmx.WriteString("exit\r")
+				_ = command.Wait()
+				return
 			}
 			waitForPTYText(t, output, "suspended", 10*time.Second)
 			if mode == "cooperative" {
