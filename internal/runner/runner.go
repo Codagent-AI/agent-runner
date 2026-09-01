@@ -81,7 +81,34 @@ type Options struct {
 	PrepareStepHook func(interactive bool)
 
 	UIStepHandler func(*model.UIStepRequest) (model.UIStepResult, error)
+
+	// PostFinalizationHook observes a top-level terminal run after its state,
+	// metrics, checkpoints, and audit events have been flushed. The hook runs
+	// while this invocation still owns the run lock, so it can atomically create
+	// derived artifacts before a resume can begin. Hook failures are warnings
+	// and never alter the workflow result.
+	PostFinalizationHook PostFinalizationHook
 }
+
+// PostFinalizationSummary is the immutable, audit-agnostic description passed
+// to a post-finalization hook. It intentionally contains only terminal run
+// facts and paths; concrete integrations own any derived lifecycle state.
+type PostFinalizationSummary struct {
+	RunID              string
+	ExecutionSessionID string
+	SessionDir         string
+	ProjectRoot        string
+	WorkingDir         string
+	WorkflowName       string
+	WorkflowFile       string
+	ProfileSet         string
+	Result             WorkflowResult
+	TopLevel           bool
+}
+
+// PostFinalizationHook is invoked after durable terminal evidence is flushed
+// and before the source lock is released.
+type PostFinalizationHook func(PostFinalizationSummary) error
 
 // RunHandle is returned by PrepareRun and PrepareResume. It holds all state
 // needed to call ExecuteFromHandle and exposes the session directory so callers
@@ -268,6 +295,7 @@ type runState struct {
 	log                  exec.Logger
 	runner               exec.ProcessRunner
 	glob                 exec.GlobExpander
+	postFinalizationHook PostFinalizationHook
 }
 
 func initRunState(workflow *model.Workflow, params map[string]string, opts *Options) (*runState, error) {
@@ -354,19 +382,25 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		return nil, err
 	}
 
+	postHook := opts.PostFinalizationHook
+	if postHook == nil {
+		postHook = defaultPostFinalizationHook()
+	}
+
 	return &runState{
-		workflow:         *workflow,
-		ctx:              ctx,
-		until:            opts.Until,
-		sessionDir:       sessionDir,
-		sessionID:        sessionID,
-		workflowHash:     computeHash(opts.WorkflowFile),
-		auditLogger:      auditLogger,
-		metricsCollector: metricsCollector,
-		runStartTime:     now,
-		log:              log,
-		runner:           opts.ProcessRunner,
-		glob:             opts.GlobExpander,
+		workflow:             *workflow,
+		ctx:                  ctx,
+		until:                opts.Until,
+		sessionDir:           sessionDir,
+		sessionID:            sessionID,
+		workflowHash:         computeHash(opts.WorkflowFile),
+		auditLogger:          auditLogger,
+		metricsCollector:     metricsCollector,
+		runStartTime:         now,
+		log:                  log,
+		runner:               opts.ProcessRunner,
+		glob:                 opts.GlobExpander,
+		postFinalizationHook: postHook,
 	}, nil
 }
 
@@ -695,8 +729,6 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 			rs.log.Printf("agent-runner: warning: close control endpoint: %v\n", err)
 		}
 	}
-	runlock.Delete(rs.sessionDir)
-
 	switch result {
 	case ResultSuccess:
 		if !rs.untilLeavesRemaining {
@@ -726,6 +758,26 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 	if rs.auditLogger != nil {
 		rs.auditLogger.Close()
 	}
+
+	if rs.postFinalizationHook != nil {
+		summary := PostFinalizationSummary{
+			RunID:              rs.sessionID,
+			ExecutionSessionID: rs.ctx.ExecutionSessionID,
+			SessionDir:         rs.sessionDir,
+			ProjectRoot:        rs.ctx.ProjectRoot,
+			WorkingDir:         rs.ctx.WorkingDir,
+			WorkflowName:       rs.workflow.Name,
+			WorkflowFile:       rs.ctx.WorkflowFile,
+			ProfileSet:         resolvedProfileSet(rs.ctx),
+			Result:             result,
+			TopLevel:           len(rs.ctx.NestingPath) == 0,
+		}
+		if err := rs.postFinalizationHook(summary); err != nil {
+			rs.log.Printf("agent-runner: warning: post-finalization hook: %v\n", err)
+		}
+	}
+
+	runlock.Delete(rs.sessionDir)
 }
 
 // markStateCompleted reads the run's state.json, sets Completed=true, and

@@ -61,7 +61,16 @@ func RefPath(workflowFile string) (string, error) {
 }
 
 func Resolve(name string) (string, error) {
-	return resolveFS(FS, name)
+	ref, err := resolveFS(FS, name)
+	if err == nil {
+		return ref, nil
+	}
+	if extra := registeredFS(); extra != nil {
+		if ref, extraErr := resolveFS(extra, name); extraErr == nil {
+			return ref, nil
+		}
+	}
+	return "", err
 }
 
 func resolveFS(fsys fs.FS, name string) (string, error) {
@@ -102,10 +111,13 @@ func ReadFile(workflowFile string) ([]byte, error) {
 		return nil, err
 	}
 	data, err := FS.ReadFile(relPath)
-	if err != nil {
-		return nil, err
+	if err == nil {
+		return data, nil
 	}
-	return data, nil
+	if data, ok := registeredFile(relPath); ok {
+		return data, nil
+	}
+	return nil, err
 }
 
 func ListAssets(namespace string) ([]string, error) {
@@ -150,7 +162,19 @@ func ReadAsset(assetPath string) ([]byte, error) {
 }
 
 func List() ([]string, error) {
-	return listFS(FS)
+	refs, err := listFS(FS)
+	if err != nil {
+		return nil, err
+	}
+	if extra := registeredFS(); extra != nil {
+		extraRefs, err := listFS(extra)
+		if err != nil {
+			return nil, err
+		}
+		refs = append(refs, extraRefs...)
+		sort.Strings(refs)
+	}
+	return refs, nil
 }
 
 func listFS(fsys fs.FS) ([]string, error) {
