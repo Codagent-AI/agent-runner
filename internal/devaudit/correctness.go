@@ -490,19 +490,14 @@ func publishCandidate(request Request, candidate CorrectnessCandidate, runner Co
 		}
 	}
 	if candidate.SemanticDuplicate.State == "open" || candidate.SemanticDuplicate.State == "closed" {
-		issue, err := viewIssue(runner, candidate.SemanticDuplicate.URL)
 		// The model owns semantic same-cause judgment and its duplicate result is
 		// already validated against the candidate's normalized defect key. The
 		// publisher independently verifies the selected issue's repository, URL,
 		// and current state through gh; requiring an audit marker here would make
 		// genuine manually filed duplicates impossible to link.
-		if err != nil || !strings.EqualFold(issue.State, candidate.SemanticDuplicate.State) {
-			finding.PublicationState = "ambiguous"
-			if err != nil {
-				finding.Failure = err.Error()
-			} else {
-				finding.Failure = "semantic duplicate could not be independently verified"
-			}
+		issue, err := verifySelectedDuplicate(runner, candidate.SemanticDuplicate)
+		if err != nil {
+			finding.PublicationState, finding.Failure = "ambiguous", err.Error()
 			return finding, nil
 		}
 		if candidate.SemanticDuplicate.State == "open" {
@@ -534,6 +529,17 @@ func publishCandidate(request Request, candidate CorrectnessCandidate, runner Co
 	}
 	finding.PublicationState = "created"
 	return finding, nil
+}
+
+func verifySelectedDuplicate(runner CommandRunner, duplicate Duplicate) (ghIssue, error) {
+	issue, err := viewIssue(runner, duplicate.URL)
+	if err != nil {
+		return ghIssue{}, err
+	}
+	if !strings.EqualFold(issue.State, duplicate.State) {
+		return ghIssue{}, fmt.Errorf("semantic duplicate could not be independently verified")
+	}
+	return issue, nil
 }
 
 func searchIssues(runner CommandRunner, query, state string) ([]ghIssue, error) {

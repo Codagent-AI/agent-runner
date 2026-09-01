@@ -141,34 +141,42 @@ func (c Coordinator) AfterFinalization(summary runner.PostFinalizationSummary) e
 	}
 	link := findLink(lifecycle.Links, summary.ExecutionSessionID, "automatic")
 	if link == nil {
-		auditID, err := newAuditID()
-		if err != nil {
+		link, err = c.reserveAutomaticAudit(summary, &lifecycle, path, now)
+		if err != nil || link == nil {
 			return err
 		}
-		snapshot, err := snapshotEvidenceForProject(summary.SessionDir, auditID, summary.WorkingDir)
-		if err != nil {
-			return c.persistFailure(summary, &lifecycle, auditID, err, now())
-		}
-		lifecycle.Links = append(lifecycle.Links, Link{
-			AuditRunID: auditID, ExecutionSessionID: summary.ExecutionSessionID, Trigger: "automatic",
-			State: LaunchReserved, SnapshotPath: snapshot, RequestedAt: now().UTC().Format(time.RFC3339Nano),
-		})
-		if err := writeLifecycle(path, lifecycle); err != nil {
-			return err
-		}
-		if err := appendSourceLink(summary.SessionDir, lifecycle.Links[len(lifecycle.Links)-1]); err != nil {
-			return err
-		}
-		if err := createAuditRun(summary, &lifecycle.Links[len(lifecycle.Links)-1]); err != nil {
-			return c.persistFailure(summary, &lifecycle, auditID, err, now())
-		}
-		appendLifecycleEvent(summary.SessionDir, audit.EventAuditLaunchRequested, lifecycle.Links[len(lifecycle.Links)-1])
-		link = &lifecycle.Links[len(lifecycle.Links)-1]
 	}
 	if link.State == LaunchLaunching || link.State == LaunchStarted || link.State == LaunchFailed || link.State == LaunchCompleted {
 		return nil
 	}
 	return c.launch(summary, &lifecycle, link, now)
+}
+
+func (c Coordinator) reserveAutomaticAudit(summary runner.PostFinalizationSummary, lifecycle *Lifecycle, path string, now func() time.Time) (*Link, error) {
+	auditID, err := newAuditID()
+	if err != nil {
+		return nil, err
+	}
+	snapshot, err := snapshotEvidenceForProject(summary.SessionDir, auditID, summary.WorkingDir)
+	if err != nil {
+		return nil, c.persistFailure(summary, lifecycle, auditID, err, now())
+	}
+	lifecycle.Links = append(lifecycle.Links, Link{
+		AuditRunID: auditID, ExecutionSessionID: summary.ExecutionSessionID, Trigger: "automatic",
+		State: LaunchReserved, SnapshotPath: snapshot, RequestedAt: now().UTC().Format(time.RFC3339Nano),
+	})
+	link := &lifecycle.Links[len(lifecycle.Links)-1]
+	if err := writeLifecycle(path, *lifecycle); err != nil {
+		return nil, err
+	}
+	if err := appendSourceLink(summary.SessionDir, *link); err != nil {
+		return nil, err
+	}
+	if err := createAuditRun(summary, link); err != nil {
+		return nil, c.persistFailure(summary, lifecycle, auditID, err, now())
+	}
+	appendLifecycleEvent(summary.SessionDir, audit.EventAuditLaunchRequested, *link)
+	return link, nil
 }
 
 func (c Coordinator) launch(summary runner.PostFinalizationSummary, lifecycle *Lifecycle, link *Link, now func() time.Time) error {
@@ -348,18 +356,15 @@ const maxSnapshottedGitCommits = 128
 func exportGitEvidence(projectRoot, snapshotDir string) error {
 	evidence := snapshottedGitEvidence{Commits: []snapshottedGitCommit{}}
 	if strings.TrimSpace(projectRoot) == "" {
-		evidence.Reason = "project root unavailable"
-		return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+		return persistGitEvidence(snapshotDir, evidence, "project root unavailable")
 	}
 	metricData, err := os.ReadFile(filepath.Join(snapshotDir, metrics.FileName)) // #nosec G304 -- fixed run artifact below the launch snapshot.
 	if err != nil {
-		evidence.Reason = "snapshotted Git boundaries are unavailable"
-		return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+		return persistGitEvidence(snapshotDir, evidence, "snapshotted Git boundaries are unavailable")
 	}
 	var artifact metrics.Artifact
 	if err := json.Unmarshal(metricData, &artifact); err != nil {
-		evidence.Reason = "snapshotted Git boundaries are invalid"
-		return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+		return persistGitEvidence(snapshotDir, evidence, "snapshotted Git boundaries are invalid")
 	}
 	shas := map[string]struct{}{}
 	for _, step := range artifact.Steps {
@@ -371,8 +376,7 @@ func exportGitEvidence(projectRoot, snapshotDir string) error {
 		}
 	}
 	if len(shas) == 0 {
-		evidence.Available = true
-		return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+		return persistGitEvidence(snapshotDir, evidence, "")
 	}
 	ordered := make([]string, 0, len(shas))
 	for sha := range shas {
@@ -380,14 +384,12 @@ func exportGitEvidence(projectRoot, snapshotDir string) error {
 	}
 	sort.Strings(ordered)
 	if len(ordered) > maxSnapshottedGitCommits {
-		evidence.Reason = fmt.Sprintf("Git boundary commit count exceeds %d", maxSnapshottedGitCommits)
-		return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+		return persistGitEvidence(snapshotDir, evidence, fmt.Sprintf("Git boundary commit count exceeds %d", maxSnapshottedGitCommits))
 	}
 	args := append([]string{"-C", projectRoot, "log", "--no-walk=sorted", "--format=%H%x09%s"}, ordered...)
 	output, err := exec.Command("git", args...).Output() // #nosec G204 -- bounded SHAs are read from snapshotted step boundaries.
 	if err != nil {
-		evidence.Reason = "git commit metadata unavailable"
-		return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+		return persistGitEvidence(snapshotDir, evidence, "git commit metadata unavailable")
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
 		sha, subject, ok := strings.Cut(line, "\t")
@@ -397,19 +399,29 @@ func exportGitEvidence(projectRoot, snapshotDir string) error {
 		evidence.Commits = append(evidence.Commits, snapshottedGitCommit{SHA: sha, Subject: subject, Paths: []string{}})
 	}
 	if !containsEveryCommit(evidence.Commits, ordered) {
-		evidence.Reason = "one or more boundary commits are unavailable"
-		return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+		return persistGitEvidence(snapshotDir, evidence, "one or more boundary commits are unavailable")
 	}
 	statsArgs := append([]string{"-C", projectRoot, "show", "--no-renames", "--format=%H", "--numstat"}, ordered...)
 	stats, err := exec.Command("git", statsArgs...).Output() // #nosec G204 -- same bounded boundary SHAs.
 	if err != nil {
-		evidence.Available = false
-		evidence.Reason = "Git commit statistics unavailable"
-		return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+		return persistGitEvidence(snapshotDir, evidence, "Git commit statistics unavailable")
 	}
+	if err := populateGitStats(evidence.Commits, ordered, stats); err != nil {
+		return persistGitEvidence(snapshotDir, evidence, err.Error())
+	}
+	return persistGitEvidence(snapshotDir, evidence, "")
+}
+
+func persistGitEvidence(snapshotDir string, evidence snapshottedGitEvidence, reason string) error {
+	evidence.Available = reason == ""
+	evidence.Reason = reason
+	return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+}
+
+func populateGitStats(commits []snapshottedGitCommit, ordered []string, stats []byte) error {
 	bySHA := map[string]*snapshottedGitCommit{}
-	for i := range evidence.Commits {
-		bySHA[evidence.Commits[i].SHA] = &evidence.Commits[i]
+	for i := range commits {
+		bySHA[commits[i].SHA] = &commits[i]
 	}
 	var current *snapshottedGitCommit
 	seenStats := map[string]bool{}
@@ -425,14 +437,10 @@ func exportGitEvidence(projectRoot, snapshotDir string) error {
 		}
 		var added, deleted int64
 		if _, err := fmt.Sscan(fields[0], &added); err != nil {
-			evidence.Available = false
-			evidence.Reason = "Git commit statistics are invalid"
-			return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+			return fmt.Errorf("Git commit statistics are invalid")
 		}
 		if _, err := fmt.Sscan(fields[1], &deleted); err != nil {
-			evidence.Available = false
-			evidence.Reason = "Git commit statistics are invalid"
-			return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+			return fmt.Errorf("Git commit statistics are invalid")
 		}
 		current.FilesChanged++
 		current.LinesAdded += added
@@ -441,16 +449,13 @@ func exportGitEvidence(projectRoot, snapshotDir string) error {
 	}
 	for _, sha := range ordered {
 		if !seenStats[sha] {
-			evidence.Available = false
-			evidence.Reason = "Git statistics are missing a boundary commit"
-			return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+			return fmt.Errorf("Git statistics are missing a boundary commit")
 		}
 	}
-	for i := range evidence.Commits {
-		sort.Strings(evidence.Commits[i].Paths)
+	for i := range commits {
+		sort.Strings(commits[i].Paths)
 	}
-	evidence.Available = true
-	return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+	return nil
 }
 
 func containsEveryCommit(commits []snapshottedGitCommit, want []string) bool {

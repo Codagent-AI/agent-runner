@@ -808,13 +808,7 @@ func ValidateValueOutputs(request Request, prepared PreparedValueAudit, outputs 
 	observations := []ValueObservation{}
 	seenBatches := map[string]struct{}{}
 	for _, pkg := range prepared.Packages {
-		var batch *ModelValueBatch
-		for index := range outputs {
-			if outputs[index].BatchID == pkg.BatchID {
-				batch = &outputs[index]
-				break
-			}
-		}
+		batch := findValueBatch(outputs, pkg.BatchID)
 		if batch == nil {
 			return ValueValidationResult{}, fmt.Errorf("missing model output for %s", pkg.BatchID)
 		}
@@ -822,46 +816,11 @@ func ValidateValueOutputs(request Request, prepared PreparedValueAudit, outputs 
 			return ValueValidationResult{}, fmt.Errorf("duplicate model output for %s", batch.BatchID)
 		}
 		seenBatches[batch.BatchID] = struct{}{}
-		expected := map[string]ObservationSkeleton{}
-		incomplete := map[string]bool{}
-		for _, leaf := range pkg.Leaves {
-			expected[leaf.Skeleton.ObservationID] = leaf.Skeleton
-			incomplete[leaf.Skeleton.ObservationID] = len(leaf.OmittedCategories) != 0
-			for _, ref := range leaf.Evidence {
-				if ref.Status != "available" {
-					incomplete[leaf.Skeleton.ObservationID] = true
-				}
-			}
+		validated, err := validateValueBatch(request, pkg, *batch, knownRefs)
+		if err != nil {
+			return ValueValidationResult{}, err
 		}
-		if len(batch.Observations) != len(expected) {
-			return ValueValidationResult{}, fmt.Errorf("%s observations = %d, want %d", pkg.BatchID, len(batch.Observations), len(expected))
-		}
-		for _, judgment := range batch.Observations {
-			skeleton, exists := expected[judgment.ObservationID]
-			if !exists {
-				return ValueValidationResult{}, fmt.Errorf("%s has unknown observation %q", pkg.BatchID, judgment.ObservationID)
-			}
-			delete(expected, judgment.ObservationID)
-			if err := validateJudgment(judgment, knownRefs); err != nil {
-				return ValueValidationResult{}, fmt.Errorf("%s observation %q: %w", pkg.BatchID, judgment.ObservationID, err)
-			}
-			if incomplete[judgment.ObservationID] && judgment.EvidenceCoverage == "complete" {
-				return ValueValidationResult{}, fmt.Errorf("%s observation %q claims complete coverage despite omitted evidence", pkg.BatchID, judgment.ObservationID)
-			}
-			provenance := batch.Provenance
-			if provenance.CLI == "" {
-				provenance = BatchProvenance{CLI: request.Crosscheck.CLI, Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, SessionID: "unknown"}
-			}
-			observations = append(observations, ValueObservation{
-				ObservationSkeleton: skeleton, OverallValue: judgment.OverallValue, ChangeEffect: judgment.ChangeEffect,
-				UniqueContribution: judgment.UniqueContribution, DownstreamEvidence: judgment.DownstreamEvidence,
-				Confidence: judgment.Confidence, EvidenceCoverage: judgment.EvidenceCoverage, Note: judgment.Note,
-				Consultations: append([]string(nil), judgment.Consultations...), JudgeModel: provenance.Model, JudgeCLI: provenance.CLI, JudgeEffort: provenance.Effort, JudgeSessionID: provenance.SessionID, RubricVersion: rubricVersion,
-			})
-		}
-		if len(expected) != 0 {
-			return ValueValidationResult{}, fmt.Errorf("%s omitted one or more observations", pkg.BatchID)
-		}
+		observations = append(observations, validated...)
 	}
 	outputAfter, err := fingerprintTree(filepath.Join(request.AuditSessionDir, "model-output"))
 	if err != nil {
@@ -871,6 +830,70 @@ func ValidateValueOutputs(request Request, prepared PreparedValueAudit, outputs 
 		SnapshotBefore: prepared.Index.Fingerprints.SnapshotBefore, SnapshotAfter: currentSnapshot,
 		OutputBefore: prepared.Index.Fingerprints.OutputBefore, OutputAfter: outputAfter,
 	}, Observations: observations}, nil
+}
+
+func findValueBatch(outputs []ModelValueBatch, batchID string) *ModelValueBatch {
+	for index := range outputs {
+		if outputs[index].BatchID == batchID {
+			return &outputs[index]
+		}
+	}
+	return nil
+}
+
+func validateValueBatch(request Request, pkg ValuePackage, batch ModelValueBatch, knownRefs map[string]struct{}) ([]ValueObservation, error) {
+	expected, incomplete := expectedValueObservations(pkg)
+	if len(batch.Observations) != len(expected) {
+		return nil, fmt.Errorf("%s observations = %d, want %d", pkg.BatchID, len(batch.Observations), len(expected))
+	}
+	provenance := batch.Provenance
+	if provenance.CLI == "" {
+		provenance = BatchProvenance{CLI: request.Crosscheck.CLI, Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, SessionID: "unknown"}
+	}
+	observations := make([]ValueObservation, 0, len(batch.Observations))
+	for _, judgment := range batch.Observations {
+		skeleton, exists := expected[judgment.ObservationID]
+		if !exists {
+			return nil, fmt.Errorf("%s has unknown observation %q", pkg.BatchID, judgment.ObservationID)
+		}
+		delete(expected, judgment.ObservationID)
+		if err := validateJudgment(judgment, knownRefs); err != nil {
+			return nil, fmt.Errorf("%s observation %q: %w", pkg.BatchID, judgment.ObservationID, err)
+		}
+		if incomplete[judgment.ObservationID] && judgment.EvidenceCoverage == "complete" {
+			return nil, fmt.Errorf("%s observation %q claims complete coverage despite omitted evidence", pkg.BatchID, judgment.ObservationID)
+		}
+		observations = append(observations, valueObservation(skeleton, judgment, provenance))
+	}
+	if len(expected) != 0 {
+		return nil, fmt.Errorf("%s omitted one or more observations", pkg.BatchID)
+	}
+	return observations, nil
+}
+
+func expectedValueObservations(pkg ValuePackage) (map[string]ObservationSkeleton, map[string]bool) {
+	expected := make(map[string]ObservationSkeleton, len(pkg.Leaves))
+	incomplete := make(map[string]bool, len(pkg.Leaves))
+	for _, leaf := range pkg.Leaves {
+		expected[leaf.Skeleton.ObservationID] = leaf.Skeleton
+		incomplete[leaf.Skeleton.ObservationID] = len(leaf.OmittedCategories) != 0
+		for _, ref := range leaf.Evidence {
+			if ref.Status != "available" {
+				incomplete[leaf.Skeleton.ObservationID] = true
+			}
+		}
+	}
+	return expected, incomplete
+}
+
+func valueObservation(skeleton ObservationSkeleton, judgment ModelValueJudgment, provenance BatchProvenance) ValueObservation {
+	return ValueObservation{
+		ObservationSkeleton: skeleton, OverallValue: judgment.OverallValue, ChangeEffect: judgment.ChangeEffect,
+		UniqueContribution: judgment.UniqueContribution, DownstreamEvidence: judgment.DownstreamEvidence,
+		Confidence: judgment.Confidence, EvidenceCoverage: judgment.EvidenceCoverage, Note: judgment.Note,
+		Consultations: append([]string(nil), judgment.Consultations...), JudgeModel: provenance.Model, JudgeCLI: provenance.CLI,
+		JudgeEffort: provenance.Effort, JudgeSessionID: provenance.SessionID, RubricVersion: rubricVersion,
+	}
 }
 
 func validateJudgment(judgment ModelValueJudgment, knownRefs map[string]struct{}) error {
