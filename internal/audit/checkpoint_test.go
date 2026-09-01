@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -112,6 +113,21 @@ func TestGitUntrackedStatsRejectsExcessiveFileCount(t *testing.T) {
 
 	if _, err := gitUntrackedStats(repo); err == nil {
 		t.Fatal("untracked evidence should be unavailable above the bounded file limit")
+	}
+}
+
+func TestGitUntrackedStatsRejectsExcessivePathOutput(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	for i := 0; i < 200; i++ {
+		name := filepath.Join(repo, fmt.Sprintf("%03d-%s.txt", i, strings.Repeat("a", 220)))
+		if err := os.WriteFile(name, []byte("x\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := gitUntrackedStats(repo); err == nil {
+		t.Fatal("untracked evidence should be unavailable above the bounded output limit")
 	}
 }
 

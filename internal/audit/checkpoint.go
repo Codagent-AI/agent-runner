@@ -1,8 +1,10 @@
 package audit
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,6 +39,7 @@ type GitCheckpoint struct {
 const (
 	maxUntrackedFiles     = 256
 	maxUntrackedFileBytes = 4 << 20
+	maxUntrackedPathBytes = 32 << 10
 )
 
 // GitChangeCounts is the aggregate projection used by metrics consumers.
@@ -164,20 +167,13 @@ func gitNumstat(root string, args ...string) ([]GitFileStat, error) {
 }
 
 func gitUntrackedStats(root string) ([]GitFileStat, error) {
-	output, err := gitOutput(root, "ls-files", "--others", "--exclude-standard", "-z")
+	paths, err := gitUntrackedPaths(root)
 	if err != nil {
 		return nil, err
 	}
-	paths := bytes.Split(bytes.TrimSuffix([]byte(output), []byte{0}), []byte{0})
-	if len(paths) > maxUntrackedFiles {
-		return nil, fmt.Errorf("untracked file count exceeds %d", maxUntrackedFiles)
-	}
 	stats := make([]GitFileStat, 0, len(paths))
 	for _, path := range paths {
-		if len(path) == 0 {
-			continue
-		}
-		clean := filepath.Clean(filepath.FromSlash(string(path)))
+		clean := filepath.Clean(filepath.FromSlash(path))
 		if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 			return nil, fmt.Errorf("unsafe untracked path %q", path)
 		}
@@ -196,9 +192,64 @@ func gitUntrackedStats(root string) ([]GitFileStat, error) {
 		if bytes.IndexByte(data, 0) >= 0 {
 			return nil, fmt.Errorf("untracked binary file %q", path)
 		}
-		stats = append(stats, GitFileStat{Path: string(path), Added: countLines(data)})
+		stats = append(stats, GitFileStat{Path: path, Added: countLines(data)})
 	}
 	return stats, nil
+}
+
+func gitUntrackedPaths(root string) ([]string, error) {
+	command := exec.Command("git", "-C", root, "ls-files", "--others", "--exclude-standard", "-z") // #nosec G204 -- root is the runner's resolved project root.
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := command.Start(); err != nil {
+		return nil, err
+	}
+	paths, readErr := readNULPaths(bufio.NewReader(stdout), maxUntrackedFiles, maxUntrackedPathBytes)
+	if readErr != nil {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		return nil, readErr
+	}
+	if err := command.Wait(); err != nil {
+		return nil, err
+	}
+	return paths, nil
+}
+
+func readNULPaths(reader *bufio.Reader, maxPaths, maxBytes int) ([]string, error) {
+	paths := make([]string, 0, maxPaths)
+	current := make([]byte, 0, 256)
+	observedBytes := 0
+	for {
+		fragment, err := reader.ReadSlice(0)
+		observedBytes += len(fragment)
+		if observedBytes > maxBytes {
+			return nil, fmt.Errorf("untracked path output exceeds %d bytes", maxBytes)
+		}
+		current = append(current, fragment...)
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		if err == io.EOF {
+			if len(current) == 0 {
+				return paths, nil
+			}
+			return nil, fmt.Errorf("unterminated untracked path output")
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(current) == 0 || current[len(current)-1] != 0 {
+			return nil, fmt.Errorf("invalid untracked path output")
+		}
+		if len(paths) == maxPaths {
+			return nil, fmt.Errorf("untracked file count exceeds %d", maxPaths)
+		}
+		paths = append(paths, string(current[:len(current)-1]))
+		current = current[:0]
+	}
 }
 
 func countLines(data []byte) int64 {
