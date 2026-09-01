@@ -13,8 +13,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
+	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
@@ -39,9 +41,14 @@ type Fingerprints struct {
 }
 
 type EvidenceReference struct {
-	ID       string `json:"id"`
-	Category string `json:"category"`
-	Status   string `json:"status"`
+	ID                       string `json:"id"`
+	Category                 string `json:"category"`
+	Status                   string `json:"status"`
+	ProducerExecutionSession string `json:"producer_execution_session"`
+	Lineage                  string `json:"lineage"`
+	Detail                   string `json:"detail,omitempty"`
+	Truncated                bool   `json:"truncated,omitempty"`
+	LocalPath                string `json:"-"`
 }
 
 type GitEvidence struct {
@@ -112,6 +119,10 @@ type PreparedValueAudit struct {
 	Packages []ValuePackage `json:"packages"`
 }
 
+type preparedArtifactsFingerprint struct {
+	Value string `json:"value"`
+}
+
 // PrepareEvidence projects only the selected session from a sealed snapshot.
 // It does not read the live source run.
 func PrepareEvidence(request Request) (PreparedValueAudit, error) {
@@ -154,7 +165,50 @@ func PrepareEvidence(request Request) (PreparedValueAudit, error) {
 	if err := persistPrepared(request, prepared); err != nil {
 		return PreparedValueAudit{}, err
 	}
+	if err := writePreparedFingerprint(request.AuditSessionDir); err != nil {
+		return PreparedValueAudit{}, err
+	}
 	return prepared, nil
+}
+
+func writePreparedFingerprint(auditSessionDir string) error {
+	value, err := preparedFingerprint(auditSessionDir)
+	if err != nil {
+		return err
+	}
+	return stateio.WriteJSONAtomic(filepath.Join(auditSessionDir, "prepared-fingerprint.json"), preparedArtifactsFingerprint{Value: value})
+}
+
+func verifyPreparedFingerprint(auditSessionDir string) error {
+	data, err := os.ReadFile(filepath.Join(auditSessionDir, "prepared-fingerprint.json")) // #nosec G304 -- fixed audit artifact.
+	if err != nil {
+		return err
+	}
+	var recorded preparedArtifactsFingerprint
+	if err := json.Unmarshal(data, &recorded); err != nil {
+		return err
+	}
+	actual, err := preparedFingerprint(auditSessionDir)
+	if err != nil {
+		return err
+	}
+	if recorded.Value != actual {
+		return fmt.Errorf("prepared audit artifacts changed after preparation")
+	}
+	return nil
+}
+
+func preparedFingerprint(auditSessionDir string) (string, error) {
+	hash := sha256.New()
+	for _, name := range []string{"evidence-index.json", "value-packages.json", "evidence-reference-manifest.json", "source-provenance.json"} {
+		data, err := os.ReadFile(filepath.Join(auditSessionDir, name)) // #nosec G304 -- fixed audit artifact names.
+		if err != nil {
+			return "", err
+		}
+		_, _ = hash.Write([]byte(name + "\x00"))
+		_, _ = hash.Write(data)
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func readMetrics(path string) (metrics.Artifact, error) {
@@ -283,15 +337,79 @@ func leafFromRecords(request Request, artifact metrics.Artifact, path string, re
 	}
 	skeleton := ObservationSkeleton{
 		SchemaVersion: valueSchemaVersion, ObservationID: observationID(request.AuditRunID, request.ExecutionSessionID, path), ObservedAtUTC: observedAt,
-		Workflow: request.SourceWorkflow, SourceRunID: request.SourceRunID, ExecutionSessionID: request.ExecutionSessionID, AuditRunID: request.AuditRunID,
+		Project: "unknown", Workflow: request.SourceWorkflow, SourceRunID: request.SourceRunID, ExecutionSessionID: request.ExecutionSessionID, AuditRunID: request.AuditRunID,
 		Trigger: request.Trigger, StepID: path, Lineage: lineage, StepOutcome: outcome,
-		Cost: CostEvidence{DurationMS: durationPtr, CostUSD: costPtr, TotalTokens: tokensPtr, SourceModels: sortedKeys(models)}, Git: aggregateGit(records, commits),
+		SourceOutcome: selectedSessionOutcome(artifact, request.ExecutionSessionID),
+		Cost:          CostEvidence{DurationMS: durationPtr, CostUSD: costPtr, TotalTokens: tokensPtr, SourceModels: sortedKeys(models)}, Git: aggregateGit(records, commits),
 	}
-	omitted := []string{}
-	if len(refs) == 0 {
-		omitted = []string{"artifacts", "native_session", "narrative", "validation"}
+	leafRefs := referencesForLeaf(refs, records, request.ExecutionSessionID)
+	gitDetail, _ := json.Marshal(skeleton.Git)
+	leafRefs = append(leafRefs, EvidenceReference{ID: "git-" + skeleton.ObservationID, Category: "git", Status: "available", ProducerExecutionSession: request.ExecutionSessionID, Lineage: skeleton.Lineage, Detail: string(gitDetail)})
+	if len(skeleton.Git.CommitSHAs) > 0 {
+		summaries := []snapshottedGitCommit{}
+		for _, sha := range skeleton.Git.CommitSHAs {
+			summaries = append(summaries, commits[sha])
+		}
+		detail, _ := json.Marshal(summaries)
+		leafRefs = append(leafRefs, EvidenceReference{ID: "commit-summary-" + skeleton.ObservationID, Category: "commit_summary", Status: "available", ProducerExecutionSession: request.ExecutionSessionID, Lineage: skeleton.Lineage, Detail: string(detail)})
 	}
-	return LeafEvidence{Skeleton: skeleton, Attempts: len(records), Iterations: iterations, Evidence: append([]EvidenceReference(nil), refs...), OmittedCategories: omitted}
+	sort.Slice(leafRefs, func(i, j int) bool {
+		return evidencePriority(leafRefs[i].Category) < evidencePriority(leafRefs[j].Category) || (evidencePriority(leafRefs[i].Category) == evidencePriority(leafRefs[j].Category) && leafRefs[i].ID < leafRefs[j].ID)
+	})
+	omitted := missingEvidenceCategories(leafRefs)
+	return LeafEvidence{Skeleton: skeleton, Attempts: len(records), Iterations: iterations, Evidence: leafRefs, OmittedCategories: omitted}
+}
+
+func referencesForLeaf(refs []EvidenceReference, records []metrics.StepRecord, executionSessionID string) []EvidenceReference {
+	result := []EvidenceReference{}
+	metricsDetail, _ := json.Marshal(records)
+	result = append(result, EvidenceReference{ID: "metrics-" + records[0].RecordID, Category: "metrics", Status: "available", ProducerExecutionSession: executionSessionID, Lineage: "new", Detail: string(metricsDetail)})
+	for _, ref := range refs {
+		for _, record := range records {
+			if (ref.Category == "validation" || ref.Category == "artifact" || ref.Category == "narrative") && strings.Contains(strings.ToLower(ref.LocalPath), strings.ToLower(record.ID)) {
+				result = append(result, ref)
+				break
+			}
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return evidencePriority(result[i].Category) < evidencePriority(result[j].Category) || (evidencePriority(result[i].Category) == evidencePriority(result[j].Category) && result[i].ID < result[j].ID)
+	})
+	return result
+}
+
+func missingEvidenceCategories(refs []EvidenceReference) []string {
+	required := []string{"metrics", "git", "commit_summary", "validation", "artifact", "narrative", "native_session"}
+	seen := map[string]bool{}
+	for _, ref := range refs {
+		if ref.Status == "available" {
+			seen[ref.Category] = true
+		}
+	}
+	missing := []string{}
+	for _, category := range required {
+		if !seen[category] {
+			missing = append(missing, category+"_unavailable")
+		}
+	}
+	return missing
+}
+
+func selectedSessionOutcome(artifact metrics.Artifact, executionSessionID string) string {
+	seen := false
+	for _, record := range artifact.Steps {
+		if record.ExecutionSessionID != executionSessionID {
+			continue
+		}
+		seen = true
+		if record.Outcome == "failed" || record.Outcome == "aborted" {
+			return record.Outcome
+		}
+	}
+	if seen {
+		return "success"
+	}
+	return "unknown"
 }
 
 func sortedKeys(values map[string]struct{}) []string {
@@ -347,10 +465,31 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 	if files != 0 || added != 0 || deleted != 0 {
 		result.Attribution = "working_tree"
 		result.FilesChanged, result.LinesAdded, result.LinesDeleted = &files, &added, &deleted
+		result.ChangedPaths = dirtyChangedPaths(records)
 	} else {
 		zero := int64(0)
 		result.FilesChanged, result.LinesAdded, result.LinesDeleted = &zero, &zero, &zero
 	}
+	return result
+}
+
+func dirtyChangedPaths(records []metrics.StepRecord) []string {
+	paths := map[string]struct{}{}
+	for _, record := range records {
+		if record.GitEnd == nil {
+			continue
+		}
+		for _, stats := range [][]audit.GitFileStat{record.GitEnd.Index, record.GitEnd.Worktree, record.GitEnd.Untracked} {
+			for _, stat := range stats {
+				paths[stat.Path] = struct{}{}
+			}
+		}
+	}
+	result := make([]string, 0, len(paths))
+	for path := range paths {
+		result = append(result, path)
+	}
+	sort.Strings(result)
 	return result
 }
 
@@ -421,7 +560,8 @@ func discoverEvidence(root string) ([]EvidenceReference, error) {
 			return nil
 		}
 		sum := sha256.Sum256([]byte(rel))
-		refs = append(refs, EvidenceReference{ID: category + "-" + hex.EncodeToString(sum[:8]), Category: category, Status: "available"})
+		detail, truncated := evidenceDetail(path, category)
+		refs = append(refs, EvidenceReference{ID: category + "-" + hex.EncodeToString(sum[:8]), Category: category, Status: "available", ProducerExecutionSession: "unknown", Lineage: "unknown", Detail: detail, Truncated: truncated, LocalPath: rel})
 		return nil
 	})
 	if err != nil {
@@ -429,9 +569,44 @@ func discoverEvidence(root string) ([]EvidenceReference, error) {
 	}
 	sort.Slice(refs, func(i, j int) bool { return refs[i].ID < refs[j].ID })
 	if !hasEvidenceCategory(refs, "native_session") {
-		refs = append(refs, EvidenceReference{ID: "native_session-unavailable", Category: "native_session", Status: "unavailable"})
+		refs = append(refs, EvidenceReference{ID: "native_session-unavailable", Category: "native_session", Status: "unavailable", ProducerExecutionSession: "unknown", Lineage: "unavailable"})
 	}
 	return refs, nil
+}
+
+func evidenceDetail(path, category string) (string, bool) {
+	if category != "validation" && category != "artifact" && category != "narrative" {
+		return "", false
+	}
+	file, err := os.Open(path) // #nosec G304 -- enumerated immutable snapshot file.
+	if err != nil {
+		return "", false
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, 4097))
+	if err != nil {
+		return "", false
+	}
+	return string(data[:min(len(data), 4096)]), len(data) > 4096
+}
+
+func evidencePriority(category string) int {
+	switch category {
+	case "metrics":
+		return 2
+	case "git":
+		return 3
+	case "commit_summary":
+		return 4
+	case "validation":
+		return 5
+	case "artifact":
+		return 6
+	case "narrative":
+		return 7
+	default:
+		return 8
+	}
 }
 
 func hasEvidenceCategory(refs []EvidenceReference, category string) bool {
@@ -512,6 +687,15 @@ func persistPrepared(request Request, prepared PreparedValueAudit) error {
 	if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "value-packages.json"), prepared.Packages); err != nil {
 		return err
 	}
+	manifest := map[string]string{}
+	for _, ref := range prepared.Index.References {
+		if ref.LocalPath != "" {
+			manifest[ref.ID] = filepath.Join(request.SnapshotPath, ref.LocalPath)
+		}
+	}
+	if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "evidence-reference-manifest.json"), manifest); err != nil {
+		return err
+	}
 	return stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "source-provenance.json"), request.RunnerSource)
 }
 
@@ -568,6 +752,14 @@ type ModelValueJudgment struct {
 type ModelValueBatch struct {
 	BatchID      string               `json:"batch_id"`
 	Observations []ModelValueJudgment `json:"observations"`
+	Provenance   BatchProvenance      `json:"-"`
+}
+
+type BatchProvenance struct {
+	CLI       string `json:"cli"`
+	Model     string `json:"model"`
+	Effort    string `json:"reasoning_effort"`
+	SessionID string `json:"session_id"`
 }
 
 type ValueObservation struct {
@@ -581,6 +773,9 @@ type ValueObservation struct {
 	Note               string   `json:"note,omitempty"`
 	Consultations      []string `json:"consultations,omitempty"`
 	JudgeModel         string   `json:"judge_model"`
+	JudgeCLI           string   `json:"judge_cli"`
+	JudgeEffort        string   `json:"judge_reasoning_effort"`
+	JudgeSessionID     string   `json:"judge_session_id"`
 	RubricVersion      string   `json:"rubric_version"`
 }
 
@@ -651,11 +846,15 @@ func ValidateValueOutputs(request Request, prepared PreparedValueAudit, outputs 
 			if incomplete[judgment.ObservationID] && judgment.EvidenceCoverage == "complete" {
 				return ValueValidationResult{}, fmt.Errorf("%s observation %q claims complete coverage despite omitted evidence", pkg.BatchID, judgment.ObservationID)
 			}
+			provenance := batch.Provenance
+			if provenance.CLI == "" {
+				provenance = BatchProvenance{CLI: request.Crosscheck.CLI, Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, SessionID: "unknown"}
+			}
 			observations = append(observations, ValueObservation{
 				ObservationSkeleton: skeleton, OverallValue: judgment.OverallValue, ChangeEffect: judgment.ChangeEffect,
 				UniqueContribution: judgment.UniqueContribution, DownstreamEvidence: judgment.DownstreamEvidence,
 				Confidence: judgment.Confidence, EvidenceCoverage: judgment.EvidenceCoverage, Note: judgment.Note,
-				Consultations: append([]string(nil), judgment.Consultations...), JudgeModel: request.Crosscheck.Model, RubricVersion: rubricVersion,
+				Consultations: append([]string(nil), judgment.Consultations...), JudgeModel: provenance.Model, JudgeCLI: provenance.CLI, JudgeEffort: provenance.Effort, JudgeSessionID: provenance.SessionID, RubricVersion: rubricVersion,
 			})
 		}
 		if len(expected) != 0 {
@@ -727,6 +926,9 @@ func safeValueNote(note string) error {
 }
 
 func loadPreparedValueAudit(auditSessionDir string) (PreparedValueAudit, error) {
+	if err := verifyPreparedFingerprint(auditSessionDir); err != nil {
+		return PreparedValueAudit{}, err
+	}
 	indexData, err := os.ReadFile(filepath.Join(auditSessionDir, "evidence-index.json")) // #nosec G304 -- fixed audit artifact.
 	if err != nil {
 		return PreparedValueAudit{}, err
@@ -769,6 +971,18 @@ func loadModelValueBatches(auditSessionDir string, packages []ValuePackage) ([]M
 			return nil, closeErr
 		}
 		outputs = append(outputs, output)
+	}
+	provenanceData, err := os.ReadFile(filepath.Join(auditSessionDir, "value-batch-provenance.json")) // #nosec G304 -- fixed audit artifact.
+	if err == nil {
+		provenance := map[string]BatchProvenance{}
+		if err := json.Unmarshal(provenanceData, &provenance); err != nil {
+			return nil, fmt.Errorf("decode value batch provenance: %w", err)
+		}
+		for index := range outputs {
+			outputs[index].Provenance = provenance[outputs[index].BatchID]
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
 	}
 	return outputs, nil
 }
@@ -823,16 +1037,22 @@ func ensureValueOutputs(request Request) error {
 	if err != nil {
 		return err
 	}
-	outputs, err := runValueBatches(request, prepared.Packages, invokeCrosscheckValueBatch)
-	if err != nil {
-		return err
-	}
-	for _, output := range outputs {
+	provenance := map[string]BatchProvenance{}
+	for _, pkg := range prepared.Packages {
+		output, err := invokeCrosscheckValueBatch(request, pkg)
+		if err != nil {
+			_ = stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "value-model-diagnostics.json"), map[string]string{"batch_id": pkg.BatchID, "error": err.Error()})
+			return fmt.Errorf("value model session for %s: %w", pkg.BatchID, err)
+		}
+		if output.BatchID != pkg.BatchID {
+			return fmt.Errorf("value model session returned batch %q, want %q", output.BatchID, pkg.BatchID)
+		}
+		provenance[pkg.BatchID] = output.Provenance
 		if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "model-output", output.BatchID+".json"), output); err != nil {
 			return err
 		}
 	}
-	return nil
+	return stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "value-batch-provenance.json"), provenance)
 }
 
 // valueBatchInvoker is deliberately called once per package. Its call boundary
@@ -855,6 +1075,9 @@ func runValueBatches(request Request, packages []ValuePackage, invoke valueBatch
 }
 
 func invokeCrosscheckValueBatch(request Request, pkg ValuePackage) (ModelValueBatch, error) {
+	if err := verifyPreparedFingerprint(request.AuditSessionDir); err != nil {
+		return ModelValueBatch{}, err
+	}
 	if request.Crosscheck.CLI == "" {
 		return ModelValueBatch{}, fmt.Errorf("frozen crosscheck CLI is unavailable")
 	}
@@ -867,9 +1090,13 @@ func invokeCrosscheckValueBatch(request Request, pkg ValuePackage) (ModelValueBa
 		return ModelValueBatch{}, err
 	}
 	prompt := "You are judging workflow-step value. Return exactly one JSON object matching the supplied batch, with one observation for every skeleton. You may fill only observation_id, overall_value, change_effect, unique_contribution, downstream_evidence, confidence, evidence_coverage, optional note, and consultation references. Do not include measured fields, paths, transcripts, or prose outside JSON. The audit workspace contains read-only snapshotted evidence; record only supplied consultation identifiers.\n\n" + string(input)
+	workspace, err := prepareModelWorkspace(request)
+	if err != nil {
+		return ModelValueBatch{}, err
+	}
 	args, err := cli.BuildInvocationArgs(adapter, &cli.BuildArgsInput{
 		Prompt: prompt, Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort,
-		Context: cli.ContextAutonomousHeadless, Workdir: request.AuditSessionDir,
+		Context: cli.ContextAutonomousHeadless, Workdir: workspace,
 		DisallowedTools: []string{"AskUserQuestion"},
 	})
 	if err != nil {
@@ -879,8 +1106,12 @@ func invokeCrosscheckValueBatch(request Request, pkg ValuePackage) (ModelValueBa
 		return ModelValueBatch{}, fmt.Errorf("crosscheck adapter produced no command")
 	}
 	command := exec.Command(args[0], args[1:]...) // #nosec G204 -- args are constructed by the frozen, registered crosscheck adapter.
-	command.Dir = request.AuditSessionDir
-	command.Env = cliEnvironment(adapter, request, pkg, input)
+	command.Dir = workspace
+	env, err := cliEnvironment(adapter, request, input, workspace)
+	if err != nil {
+		return ModelValueBatch{}, err
+	}
+	command.Env = env
 	result, err := command.Output()
 	if err != nil {
 		return ModelValueBatch{}, fmt.Errorf("run crosscheck: %w", err)
@@ -899,16 +1130,45 @@ func invokeCrosscheckValueBatch(request Request, pkg ValuePackage) (ModelValueBa
 	if decoder.Decode(&extra) != io.EOF {
 		return ModelValueBatch{}, fmt.Errorf("crosscheck result contains multiple JSON values")
 	}
+	if err := verifyPreparedFingerprint(request.AuditSessionDir); err != nil {
+		return ModelValueBatch{}, err
+	}
+	output.Provenance = BatchProvenance{CLI: request.Crosscheck.CLI, Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, SessionID: adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: time.Now(), Headless: true, ProcessOutput: response, Workdir: workspace})}
+	if output.Provenance.SessionID == "" {
+		output.Provenance.SessionID = "unknown"
+	}
 	return output, nil
 }
 
-func cliEnvironment(adapter cli.Adapter, request Request, pkg ValuePackage, input []byte) []string {
+func cliEnvironment(adapter cli.Adapter, request Request, input []byte, workdir string) ([]string, error) {
 	// Adapters may require isolated process-local setup. It is derived from this
 	// batch only and never persisted in the source snapshot.
-	build := &cli.BuildArgsInput{Prompt: string(input), Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, Context: cli.ContextAutonomousHeadless, Workdir: request.AuditSessionDir}
+	build := &cli.BuildArgsInput{Prompt: string(input), Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, Context: cli.ContextAutonomousHeadless, Workdir: workdir}
 	extra, err := cli.SpawnEnvForInvocation(adapter, build)
 	if err != nil {
-		return os.Environ()
+		return nil, fmt.Errorf("prepare crosscheck environment: %w", err)
 	}
-	return append(os.Environ(), extra...)
+	return append(os.Environ(), extra...), nil
+}
+
+func prepareModelWorkspace(request Request) (string, error) {
+	workspace := filepath.Join(request.AuditSessionDir, "model-workspace")
+	if err := os.RemoveAll(workspace); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		return "", err
+	}
+	if err := os.Symlink(request.SnapshotPath, filepath.Join(workspace, "evidence")); err != nil {
+		return "", err
+	}
+	for _, name := range []string{"evidence-index.json", "value-packages.json", "evidence-reference-manifest.json", "prepared-fingerprint.json"} {
+		if err := os.Symlink(filepath.Join(request.AuditSessionDir, name), filepath.Join(workspace, name)); err != nil {
+			return "", err
+		}
+	}
+	if err := os.Chmod(workspace, 0o500); err != nil {
+		return "", err
+	}
+	return workspace, nil
 }

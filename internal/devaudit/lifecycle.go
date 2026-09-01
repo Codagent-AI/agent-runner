@@ -18,6 +18,7 @@ import (
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/config"
+	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/stateio"
@@ -340,13 +341,48 @@ type snapshottedGitEvidence struct {
 	Commits   []snapshottedGitCommit `json:"commits"`
 }
 
+const maxSnapshottedGitCommits = 128
+
 func exportGitEvidence(projectRoot, snapshotDir string) error {
 	evidence := snapshottedGitEvidence{Commits: []snapshottedGitCommit{}}
 	if strings.TrimSpace(projectRoot) == "" {
 		evidence.Reason = "project root unavailable"
 		return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
 	}
-	output, err := exec.Command("git", "-C", projectRoot, "log", "--all", "--format=%H%x09%s").Output() // #nosec G204 -- fixed Git export command at launch.
+	metricData, err := os.ReadFile(filepath.Join(snapshotDir, metrics.FileName)) // #nosec G304 -- fixed run artifact below the launch snapshot.
+	if err != nil {
+		evidence.Reason = "snapshotted Git boundaries are unavailable"
+		return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+	}
+	var artifact metrics.Artifact
+	if err := json.Unmarshal(metricData, &artifact); err != nil {
+		evidence.Reason = "snapshotted Git boundaries are invalid"
+		return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+	}
+	shas := map[string]struct{}{}
+	for _, step := range artifact.Steps {
+		if step.GitEnd == nil {
+			continue
+		}
+		for _, sha := range step.GitEnd.Commits {
+			shas[sha] = struct{}{}
+		}
+	}
+	if len(shas) == 0 {
+		evidence.Available = true
+		return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+	}
+	ordered := make([]string, 0, len(shas))
+	for sha := range shas {
+		ordered = append(ordered, sha)
+	}
+	sort.Strings(ordered)
+	if len(ordered) > maxSnapshottedGitCommits {
+		evidence.Reason = fmt.Sprintf("Git boundary commit count exceeds %d", maxSnapshottedGitCommits)
+		return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+	}
+	args := append([]string{"-C", projectRoot, "log", "--no-walk=sorted", "--format=%H%x09%s", "--"}, ordered...)
+	output, err := exec.Command("git", args...).Output() // #nosec G204 -- bounded SHAs are read from snapshotted step boundaries.
 	if err != nil {
 		evidence.Reason = "git commit metadata unavailable"
 		return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
@@ -356,29 +392,47 @@ func exportGitEvidence(projectRoot, snapshotDir string) error {
 		if !ok || sha == "" {
 			continue
 		}
-		commit := snapshottedGitCommit{SHA: sha, Subject: subject, Paths: []string{}}
-		stats, statErr := exec.Command("git", "-C", projectRoot, "show", "--format=", "--numstat", sha).Output() // #nosec G204 -- SHA comes from the fixed Git log export.
-		if statErr == nil {
-			for _, stat := range strings.Split(strings.TrimSpace(string(stats)), "\n") {
-				fields := strings.Split(stat, "\t")
-				if len(fields) < 3 {
-					continue
-				}
-				var added, deleted int64
-				if _, err := fmt.Sscan(fields[0], &added); err != nil {
-					continue
-				}
-				if _, err := fmt.Sscan(fields[1], &deleted); err != nil {
-					continue
-				}
-				commit.FilesChanged++
-				commit.LinesAdded += added
-				commit.LinesDeleted += deleted
-				commit.Paths = append(commit.Paths, fields[2])
-			}
+		evidence.Commits = append(evidence.Commits, snapshottedGitCommit{SHA: sha, Subject: subject, Paths: []string{}})
+	}
+	statsArgs := append([]string{"-C", projectRoot, "show", "--no-renames", "--format=%H", "--numstat", "--"}, ordered...)
+	stats, err := exec.Command("git", statsArgs...).Output() // #nosec G204 -- same bounded boundary SHAs.
+	if err != nil {
+		evidence.Available = false
+		evidence.Reason = "Git commit statistics unavailable"
+		return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+	}
+	bySHA := map[string]*snapshottedGitCommit{}
+	for i := range evidence.Commits {
+		bySHA[evidence.Commits[i].SHA] = &evidence.Commits[i]
+	}
+	var current *snapshottedGitCommit
+	for _, line := range strings.Split(strings.TrimSpace(string(stats)), "\n") {
+		if commit, ok := bySHA[line]; ok {
+			current = commit
+			continue
 		}
-		sort.Strings(commit.Paths)
-		evidence.Commits = append(evidence.Commits, commit)
+		fields := strings.Split(line, "\t")
+		if current == nil || len(fields) < 3 {
+			continue
+		}
+		var added, deleted int64
+		if _, err := fmt.Sscan(fields[0], &added); err != nil {
+			evidence.Available = false
+			evidence.Reason = "Git commit statistics are invalid"
+			return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+		}
+		if _, err := fmt.Sscan(fields[1], &deleted); err != nil {
+			evidence.Available = false
+			evidence.Reason = "Git commit statistics are invalid"
+			return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+		}
+		current.FilesChanged++
+		current.LinesAdded += added
+		current.LinesDeleted += deleted
+		current.Paths = append(current.Paths, fields[2])
+	}
+	for i := range evidence.Commits {
+		sort.Strings(evidence.Commits[i].Paths)
 	}
 	evidence.Available = true
 	return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
