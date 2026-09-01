@@ -671,7 +671,7 @@ func migrateSchemaV2(artifact *Artifact) {
 			artifact.Sessions[i].ExecutionSessionID = deterministicExecutionSessionID(artifact.RunID, i, "legacy")
 		}
 	}
-	if len(artifact.Sessions) == 1 {
+	if len(artifact.Sessions) == 1 && artifact.HistoryComplete {
 		for i := range artifact.Steps {
 			if artifact.Steps[i].ExecutionSessionID == "" {
 				artifact.Steps[i].ExecutionSessionID = artifact.Sessions[0].ExecutionSessionID

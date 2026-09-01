@@ -1009,6 +1009,32 @@ func TestCollectorMigratesV2SessionsConservativelyAndKeepsSessionRollups(t *test
 	}
 }
 
+func TestCollectorDoesNotAttributeIncompleteV2HistoryToSoleSurvivingSession(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	legacy := Artifact{
+		SchemaVersion: 2, RunID: "run", Workflow: "workflow", HistoryComplete: false,
+		Sessions: []SessionRecord{{
+			StartedAt: started.Format(time.RFC3339Nano), LastObservedAt: started.Add(time.Second).Format(time.RFC3339Nano),
+			EndedAt: started.Add(time.Second).Format(time.RFC3339Nano), DurationMS: 1000, Status: SessionClosed,
+		}},
+		Steps:  []StepRecord{{RecordID: "one#1", ID: "one", Kind: "step", Type: "agent", Attempt: 1, DurationMS: 1000, AgentInvoked: true, Usage: ptrUsage(collectedUsage(3))}},
+		Totals: emptyTotals(),
+	}
+	if err := os.WriteFile(filepath.Join(dir, FileName), mustJSON(t, legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	collector := NewCollector(dir, "run", "workflow", started.Add(2*time.Second))
+	collector.Process(event(audit.EventRunStart, started.Add(2*time.Second), map[string]any{"execution_session_id": "new-session", "resumed": true}))
+	collector.Process(stepEvent(started.Add(3*time.Second), agentIdentity("two", true), collectedUsage(4), nil, "success", 1000))
+
+	artifact := readArtifact(t, dir)
+	if artifact.Steps[0].ExecutionSessionID != "" || artifact.Steps[0].ExecutionSessionCoverage != "unknown" {
+		t.Fatalf("incomplete legacy history was guessed: %+v", artifact.Steps[0])
+	}
+}
+
 func TestCollectorLeavesAmbiguousV2StepSessionUnknown(t *testing.T) {
 	dir := t.TempDir()
 	started := mustTime(t, "2026-07-17T10:00:00Z")
