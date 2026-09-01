@@ -491,7 +491,12 @@ func publishCandidate(request Request, candidate CorrectnessCandidate, runner Co
 	}
 	if candidate.SemanticDuplicate.State == "open" || candidate.SemanticDuplicate.State == "closed" {
 		issue, err := viewIssue(runner, candidate.SemanticDuplicate.URL)
-		if err != nil || !strings.EqualFold(issue.State, candidate.SemanticDuplicate.State) || !issueMatchesCause(issue, candidate.DefectKey) {
+		// The model owns semantic same-cause judgment and its duplicate result is
+		// already validated against the candidate's normalized defect key. The
+		// publisher independently verifies the selected issue's repository, URL,
+		// and current state through gh; requiring an audit marker here would make
+		// genuine manually filed duplicates impossible to link.
+		if err != nil || !strings.EqualFold(issue.State, candidate.SemanticDuplicate.State) {
 			finding.PublicationState = "ambiguous"
 			if err != nil {
 				finding.Failure = err.Error()

@@ -243,9 +243,9 @@ func TestPublishCorrectnessLinksOpenDuplicateWithoutMutation(t *testing.T) {
 
 func TestPublishCorrectnessDoesNotTrustUnverifiedModelDuplicate(t *testing.T) {
 	request, prepared := correctnessFixture(t)
-	runner := &recordingGH{}
 	candidate := confirmedCandidate()
 	candidate.SemanticDuplicate = Duplicate{State: "open", URL: "https://github.com/Codagent-AI/agent-runner/issues/9", DefectKey: "runner-retry-loss"}
+	runner := &recordingGH{view: &ghIssue{URL: candidate.SemanticDuplicate.URL, State: "CLOSED"}}
 
 	result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{candidate}}, runner)
 	if err != nil {
@@ -256,6 +256,24 @@ func TestPublishCorrectnessDoesNotTrustUnverifiedModelDuplicate(t *testing.T) {
 	}
 	if got := runner.createCalls(); got != 0 {
 		t.Fatalf("unverified duplicate created %d issues", got)
+	}
+}
+
+func TestPublishCorrectnessLinksModelSelectedManualDuplicateAfterGHVerification(t *testing.T) {
+	request, prepared := correctnessFixture(t)
+	candidate := confirmedCandidate()
+	candidate.SemanticDuplicate = Duplicate{State: "open", URL: "https://github.com/Codagent-AI/agent-runner/issues/9", DefectKey: candidate.DefectKey}
+	runner := &recordingGH{view: &ghIssue{URL: candidate.SemanticDuplicate.URL, State: "OPEN", Body: "manually filed issue without an audit marker"}}
+
+	result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{candidate}}, runner)
+	if err != nil {
+		t.Fatalf("publish correctness: %v", err)
+	}
+	if finding := result.Findings[0]; finding.PublicationState != "duplicate" || finding.DuplicateURL != candidate.SemanticDuplicate.URL {
+		t.Fatalf("finding = %#v, want verified manual duplicate", finding)
+	}
+	if got := runner.createCalls(); got != 0 {
+		t.Fatalf("verified manual duplicate created %d issues", got)
 	}
 }
 
