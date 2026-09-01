@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -1075,7 +1076,8 @@ func runValueBatches(request Request, packages []ValuePackage, invoke valueBatch
 }
 
 func invokeCrosscheckValueBatch(request Request, pkg ValuePackage) (ModelValueBatch, error) {
-	if err := verifyPreparedFingerprint(request.AuditSessionDir); err != nil {
+	trustedInputs, err := trustedAuditInputsFingerprint(request)
+	if err != nil {
 		return ModelValueBatch{}, err
 	}
 	if request.Crosscheck.CLI == "" {
@@ -1105,16 +1107,23 @@ func invokeCrosscheckValueBatch(request Request, pkg ValuePackage) (ModelValueBa
 	if len(args) == 0 {
 		return ModelValueBatch{}, fmt.Errorf("crosscheck adapter produced no command")
 	}
-	command := exec.Command(args[0], args[1:]...) // #nosec G204 -- args are constructed by the frozen, registered crosscheck adapter.
-	command.Dir = workspace
+	command, err := sandboxedCrosscheckCommand(args, workspace, filepath.Join(request.AuditSessionDir, "model-output"))
+	if err != nil {
+		return ModelValueBatch{}, err
+	}
 	env, err := cliEnvironment(adapter, request, input, workspace)
 	if err != nil {
 		return ModelValueBatch{}, err
 	}
 	command.Env = env
-	result, err := command.Output()
-	if err != nil {
-		return ModelValueBatch{}, fmt.Errorf("run crosscheck: %w", err)
+	result, runErr := command.Output()
+	if after, err := trustedAuditInputsFingerprint(request); err != nil {
+		return ModelValueBatch{}, err
+	} else if after != trustedInputs {
+		return ModelValueBatch{}, fmt.Errorf("trusted audit inputs changed during crosscheck")
+	}
+	if runErr != nil {
+		return ModelValueBatch{}, fmt.Errorf("run crosscheck: %w", runErr)
 	}
 	response := string(result)
 	if filter, ok := adapter.(cli.OutputFilter); ok {
@@ -1130,14 +1139,49 @@ func invokeCrosscheckValueBatch(request Request, pkg ValuePackage) (ModelValueBa
 	if decoder.Decode(&extra) != io.EOF {
 		return ModelValueBatch{}, fmt.Errorf("crosscheck result contains multiple JSON values")
 	}
-	if err := verifyPreparedFingerprint(request.AuditSessionDir); err != nil {
-		return ModelValueBatch{}, err
-	}
 	output.Provenance = BatchProvenance{CLI: request.Crosscheck.CLI, Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, SessionID: adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: time.Now(), Headless: true, ProcessOutput: response, Workdir: workspace})}
 	if output.Provenance.SessionID == "" {
 		output.Provenance.SessionID = "unknown"
 	}
 	return output, nil
+}
+
+func trustedAuditInputsFingerprint(request Request) (string, error) {
+	prepared, err := preparedFingerprint(request.AuditSessionDir)
+	if err != nil {
+		return "", err
+	}
+	snapshot, err := fingerprintTree(request.SnapshotPath)
+	if err != nil {
+		return "", err
+	}
+	requestJSON, err := json.Marshal(request)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(append(append([]byte(prepared+"\x00"+snapshot+"\x00"), requestJSON...), 0))
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func sandboxedCrosscheckCommand(args []string, workspace, outputDir string) (*exec.Cmd, error) {
+	if runtime.GOOS != "darwin" {
+		return nil, fmt.Errorf("OS-enforced audit filesystem sandbox is unavailable on %s", runtime.GOOS)
+	}
+	if _, err := exec.LookPath("sandbox-exec"); err != nil {
+		return nil, fmt.Errorf("resolve audit sandbox: %w", err)
+	}
+	if err := os.MkdirAll(outputDir, 0o700); err != nil {
+		return nil, err
+	}
+	profile := "(version 1)\n(deny file-write*)\n(allow file-write* (subpath \"" + sandboxProfilePath(outputDir) + "\"))\n"
+	argv := append([]string{"-p", profile, "--"}, args...)
+	command := exec.Command("sandbox-exec", argv...) // #nosec G204 -- registered adapter argv is wrapped in an audit-owned OS sandbox.
+	command.Dir = workspace
+	return command, nil
+}
+
+func sandboxProfilePath(path string) string {
+	return strings.ReplaceAll(path, "\\", "\\\\")
 }
 
 func cliEnvironment(adapter cli.Adapter, request Request, input []byte, workdir string) ([]string, error) {

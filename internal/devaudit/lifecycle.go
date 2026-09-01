@@ -381,7 +381,7 @@ func exportGitEvidence(projectRoot, snapshotDir string) error {
 		evidence.Reason = fmt.Sprintf("Git boundary commit count exceeds %d", maxSnapshottedGitCommits)
 		return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
 	}
-	args := append([]string{"-C", projectRoot, "log", "--no-walk=sorted", "--format=%H%x09%s", "--"}, ordered...)
+	args := append([]string{"-C", projectRoot, "log", "--no-walk=sorted", "--format=%H%x09%s"}, ordered...)
 	output, err := exec.Command("git", args...).Output() // #nosec G204 -- bounded SHAs are read from snapshotted step boundaries.
 	if err != nil {
 		evidence.Reason = "git commit metadata unavailable"
@@ -394,7 +394,11 @@ func exportGitEvidence(projectRoot, snapshotDir string) error {
 		}
 		evidence.Commits = append(evidence.Commits, snapshottedGitCommit{SHA: sha, Subject: subject, Paths: []string{}})
 	}
-	statsArgs := append([]string{"-C", projectRoot, "show", "--no-renames", "--format=%H", "--numstat", "--"}, ordered...)
+	if !containsEveryCommit(evidence.Commits, ordered) {
+		evidence.Reason = "one or more boundary commits are unavailable"
+		return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+	}
+	statsArgs := append([]string{"-C", projectRoot, "show", "--no-renames", "--format=%H", "--numstat"}, ordered...)
 	stats, err := exec.Command("git", statsArgs...).Output() // #nosec G204 -- same bounded boundary SHAs.
 	if err != nil {
 		evidence.Available = false
@@ -406,9 +410,11 @@ func exportGitEvidence(projectRoot, snapshotDir string) error {
 		bySHA[evidence.Commits[i].SHA] = &evidence.Commits[i]
 	}
 	var current *snapshottedGitCommit
+	seenStats := map[string]bool{}
 	for _, line := range strings.Split(strings.TrimSpace(string(stats)), "\n") {
 		if commit, ok := bySHA[line]; ok {
 			current = commit
+			seenStats[line] = true
 			continue
 		}
 		fields := strings.Split(line, "\t")
@@ -431,11 +437,34 @@ func exportGitEvidence(projectRoot, snapshotDir string) error {
 		current.LinesDeleted += deleted
 		current.Paths = append(current.Paths, fields[2])
 	}
+	for _, sha := range ordered {
+		if !seenStats[sha] {
+			evidence.Available = false
+			evidence.Reason = "Git statistics are missing a boundary commit"
+			return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+		}
+	}
 	for i := range evidence.Commits {
 		sort.Strings(evidence.Commits[i].Paths)
 	}
 	evidence.Available = true
 	return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+}
+
+func containsEveryCommit(commits []snapshottedGitCommit, want []string) bool {
+	seen := map[string]int{}
+	for _, commit := range commits {
+		seen[commit.SHA]++
+	}
+	if len(seen) != len(want) {
+		return false
+	}
+	for _, sha := range want {
+		if seen[sha] != 1 {
+			return false
+		}
+	}
+	return true
 }
 
 func copyEvidenceTree(source, destination string) error {
