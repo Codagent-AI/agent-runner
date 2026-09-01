@@ -3,6 +3,7 @@
 package devaudit
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -13,6 +14,14 @@ import (
 
 func TestCoordinatorReservesOneEligibleAuditPerExecutionSession(t *testing.T) {
 	dir := t.TempDir()
+	t.Cleanup(func() {
+		_ = filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+			if err == nil {
+				_ = os.Chmod(path, 0o700)
+			}
+			return nil
+		})
+	})
 	if err := stateio.WriteState(&model.RunState{RunID: "source-run", Completed: true}, dir); err != nil {
 		t.Fatalf("seed state: %v", err)
 	}

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/stateio"
@@ -24,9 +25,11 @@ import (
 const lifecycleFileName = "audit-lifecycle.json"
 
 const (
-	LaunchReserved = "reserved"
-	LaunchStarted  = "started"
-	LaunchFailed   = "failed"
+	LaunchReserved  = "reserved"
+	LaunchLaunching = "launching"
+	LaunchStarted   = "started"
+	LaunchFailed    = "failed"
+	LaunchCompleted = "completed"
 )
 
 // Request is the immutable child-launch request.
@@ -41,6 +44,15 @@ type Request struct {
 	ProfileSet         string           `json:"profile_set,omitempty"`
 	SourceWorkflow     string           `json:"source_workflow"`
 	RunnerSource       SourceProvenance `json:"runner_source"`
+	Crosscheck         AgentProvenance  `json:"crosscheck"`
+}
+
+// AgentProvenance freezes the resolved definition actually used by audit
+// model stages; the profile set name alone is intentionally not sufficient.
+type AgentProvenance struct {
+	CLI    string `json:"cli,omitempty"`
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"reasoning_effort,omitempty"`
 }
 
 // SourceProvenance records injected build provenance and the audited checkout
@@ -149,24 +161,34 @@ func (c Coordinator) AfterFinalization(summary runner.PostFinalizationSummary) e
 		appendLifecycleEvent(summary.SessionDir, audit.EventAuditLaunchRequested, lifecycle.Links[len(lifecycle.Links)-1])
 		link = &lifecycle.Links[len(lifecycle.Links)-1]
 	}
-	if link.State == LaunchStarted || link.State == LaunchFailed {
+	if link.State == LaunchLaunching || link.State == LaunchStarted || link.State == LaunchFailed || link.State == LaunchCompleted {
 		return nil
 	}
-	request := Request{AuditRunID: link.AuditRunID, AuditSessionDir: auditSessionDir(summary.SessionDir, link.AuditRunID), SourceSessionDir: summary.SessionDir, SourceRunID: summary.RunID, ExecutionSessionID: summary.ExecutionSessionID, Trigger: link.Trigger, SnapshotPath: link.SnapshotPath, ProfileSet: summary.ProfileSet, SourceWorkflow: summary.WorkflowFile, RunnerSource: snapshotRunnerSource(link.SnapshotPath)}
-	if err := stateio.WriteJSONAtomic(filepath.Join(link.SnapshotPath, "request.json"), request); err != nil {
-		return c.persistFailure(summary, &lifecycle, link.AuditRunID, err, now())
+	return c.launch(summary, &lifecycle, link, now)
+}
+
+func (c Coordinator) launch(summary runner.PostFinalizationSummary, lifecycle *Lifecycle, link *Link, now func() time.Time) error {
+	crosscheck, err := resolveCrosscheck(summary)
+	if err != nil {
+		return c.persistFailure(summary, lifecycle, link.AuditRunID, err, now())
+	}
+	request := Request{AuditRunID: link.AuditRunID, AuditSessionDir: auditSessionDir(summary.SessionDir, link.AuditRunID), SourceSessionDir: summary.SessionDir, SourceRunID: summary.RunID, ExecutionSessionID: summary.ExecutionSessionID, Trigger: link.Trigger, SnapshotPath: link.SnapshotPath, ProfileSet: summary.ProfileSet, SourceWorkflow: summary.WorkflowFile, RunnerSource: snapshotRunnerSource(link.SnapshotPath), Crosscheck: crosscheck}
+	if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "request.json"), request); err != nil {
+		return c.persistFailure(summary, lifecycle, link.AuditRunID, err, now())
+	}
+	if err := sealSnapshot(request.SnapshotPath); err != nil {
+		return c.persistFailure(summary, lifecycle, link.AuditRunID, err, now())
+	}
+	if err := transition(summary, lifecycle, link, LaunchLaunching, "", now()); err != nil {
+		return err
 	}
 	if c.Launcher != nil {
 		if err := c.Launcher(request); err != nil {
-			return c.persistFailure(summary, &lifecycle, link.AuditRunID, err, now())
+			return c.persistFailure(summary, lifecycle, link.AuditRunID, err, now())
 		}
 	}
-	link.State = LaunchStarted
-	link.StartedAt = now().UTC().Format(time.RFC3339Nano)
-	if err := writeLifecycle(path, lifecycle); err != nil {
-		return err
-	}
-	if err := appendSourceLink(summary.SessionDir, *link); err != nil {
+	if err := transition(summary, lifecycle, link, LaunchStarted, "", now()); err != nil {
+		// A durable launching claim prevents a duplicate child on retry.
 		return err
 	}
 	appendLifecycleEvent(summary.SessionDir, audit.EventAuditLaunched, *link)
@@ -185,8 +207,60 @@ func (c Coordinator) persistFailure(summary runner.PostFinalizationSummary, life
 		return err
 	}
 	_ = appendSourceLink(summary.SessionDir, *link)
+	_ = updateAuditState(auditSessionDir(summary.SessionDir, link.AuditRunID), *link, false)
 	appendLifecycleEvent(summary.SessionDir, audit.EventAuditLaunchFailed, *link)
 	return nil
+}
+
+func transition(summary runner.PostFinalizationSummary, lifecycle *Lifecycle, link *Link, state, warning string, at time.Time) error {
+	link.State = state
+	link.Warning = warning
+	stamp := at.UTC().Format(time.RFC3339Nano)
+	if state == LaunchStarted {
+		link.StartedAt = stamp
+	}
+	if state == LaunchFailed {
+		link.FailedAt = stamp
+	}
+	if err := writeLifecycle(filepath.Join(summary.SessionDir, lifecycleFileName), *lifecycle); err != nil {
+		return err
+	}
+	if err := appendSourceLink(summary.SessionDir, *link); err != nil {
+		return err
+	}
+	return updateAuditState(auditSessionDir(summary.SessionDir, link.AuditRunID), *link, false)
+}
+
+func updateAuditState(sessionDir string, link Link, completed bool) error {
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		return err
+	}
+	if state.Audit == nil {
+		state.Audit = &model.AuditMetadata{}
+	}
+	state.Audit.LifecycleState, state.Audit.Warning = link.State, link.Warning
+	if completed {
+		state.Completed = true
+	}
+	return stateio.WriteState(&state, sessionDir)
+}
+
+func resolveCrosscheck(summary runner.PostFinalizationSummary) (AgentProvenance, error) {
+	projectConfig := filepath.Join(summary.WorkingDir, ".agent-runner", "config.yaml")
+	override := config.ProfileOverride{}
+	if summary.ProfileSet != "" {
+		override = config.ProfileOverride{Name: summary.ProfileSet, Origin: config.OriginState}
+	}
+	profiles, err := config.LoadWithProfile(projectConfig, override)
+	if err != nil {
+		return AgentProvenance{}, fmt.Errorf("resolve audit profile: %w", err)
+	}
+	agent, err := profiles.Resolve("crosscheck")
+	if err != nil {
+		return AgentProvenance{}, fmt.Errorf("resolve crosscheck: %w", err)
+	}
+	return AgentProvenance{CLI: agent.CLI, Model: agent.Model, Effort: agent.Effort}, nil
 }
 
 func loadLifecycle(path, sourceRunID string) (Lifecycle, error) {
@@ -227,13 +301,42 @@ func snapshotEvidenceAt(sessionDir, dir string) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
-	for _, name := range []string{"state.json", "audit.log", "run-metrics.json"} {
-		source := filepath.Join(sessionDir, name)
-		if err := copyIfExists(source, filepath.Join(dir, name)); err != nil {
-			return "", fmt.Errorf("snapshot %s: %w", name, err)
-		}
+	if err := copyEvidenceTree(sessionDir, dir); err != nil {
+		return "", err
 	}
 	return dir, nil
+}
+
+func copyEvidenceTree(source, destination string) error {
+	if err := filepath.WalkDir(source, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		if entry.IsDir() && entry.Name() == "audit-snapshots" {
+			return filepath.SkipDir
+		}
+		if entry.Name() == "lock" {
+			return nil
+		}
+		target := filepath.Join(destination, rel)
+		if entry.IsDir() {
+			return os.MkdirAll(target, 0o700)
+		}
+		if !entry.Type().IsRegular() {
+			return nil
+		}
+		return copyIfExists(path, target)
+	}); err != nil {
+		return fmt.Errorf("copy durable evidence: %w", err)
+	}
+	return nil
 }
 
 func snapshotRunnerSource(snapshotDir string) SourceProvenance {
@@ -287,14 +390,14 @@ func copySourceTree(source, destination string) error {
 			return err
 		}
 		if rel == "." {
-			return os.MkdirAll(destination, 0o500)
+			return os.MkdirAll(destination, 0o700)
 		}
 		if entry.IsDir() && (entry.Name() == ".git" || entry.Name() == "worktrees") {
 			return filepath.SkipDir
 		}
 		target := filepath.Join(destination, rel)
 		if entry.IsDir() {
-			return os.MkdirAll(target, 0o500)
+			return os.MkdirAll(target, 0o700)
 		}
 		if !entry.Type().IsRegular() {
 			return nil
@@ -303,6 +406,21 @@ func copySourceTree(source, destination string) error {
 			return err
 		}
 		return os.Chmod(target, 0o400)
+	})
+}
+
+func sealSnapshot(root string) error {
+	return filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return os.Chmod(path, 0o500)
+		}
+		if entry.Type().IsRegular() {
+			return os.Chmod(path, 0o400)
+		}
+		return nil
 	})
 }
 
