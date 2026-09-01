@@ -205,7 +205,9 @@ func TestCorrectnessStageRecordsMissingModelOutputWithoutFailingAudit(t *testing
 	}
 }
 
-func TestAuditWorkflowStagesOneThroughSixCommitLocalReportBeforeDelivery(t *testing.T) {
+// E2E-001: the automatic audit keeps the source-independent local report when
+// stage 7 cannot use a configured connection.
+func TestE2E001AutomaticAuditCompletesLocallyWhenSheetsIsUnavailable(t *testing.T) {
 	temp := t.TempDir()
 	snapshot := filepath.Join(temp, "snapshot")
 	if err := os.MkdirAll(snapshot, 0o700); err != nil {
@@ -279,10 +281,11 @@ func TestAuditWorkflowStagesOneThroughSixCommitLocalReportBeforeDelivery(t *test
 	if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "model-output", correctnessOutput), correctness); err != nil {
 		t.Fatal(err)
 	}
-	oldGH, oldDestination := ghRunner, destinationResolver
+	oldGH, oldDestination, oldReporter := ghRunner, destinationResolver, defaultSheetsReporter
 	ghRunner = &recordingGH{}
 	destinationResolver = fakeDestination{DestinationState{State: "configured", SpreadsheetID: "sheet", Tab: "audit"}}
-	t.Cleanup(func() { ghRunner, destinationResolver = oldGH, oldDestination })
+	defaultSheetsReporter = SheetsReporter{Store: ConnectionStore{Home: t.TempDir(), allowInsecureTokenURI: true}}
+	t.Cleanup(func() { ghRunner, destinationResolver, defaultSheetsReporter = oldGH, oldDestination, oldReporter })
 	for _, stage := range []string{"value-audit", "validate-value"} {
 		if result, err := runAuditStage(stage, request.AuditSessionDir); err != nil || result.ExitCode != 0 {
 			t.Fatalf("%s = %+v, %v", stage, result, err)
@@ -291,7 +294,7 @@ func TestAuditWorkflowStagesOneThroughSixCommitLocalReportBeforeDelivery(t *test
 	if calls := ghRunner.(*recordingGH).calls; len(calls) != 0 {
 		t.Fatalf("value stages invoked publisher: %#v", calls)
 	}
-	for _, stage := range []string{"correctness-audit", "validate-publish-correctness", "assemble-local-report"} {
+	for _, stage := range []string{"correctness-audit", "validate-publish-correctness", "assemble-local-report", "report-value-observations"} {
 		if result, err := runAuditStage(stage, request.AuditSessionDir); err != nil || result.ExitCode != 0 {
 			t.Fatalf("%s = %+v, %v", stage, result, err)
 		}

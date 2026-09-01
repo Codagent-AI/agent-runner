@@ -13,9 +13,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
-func TestConnectionStoreImportsOnlyRefreshMaterialWithPrivateModes(t *testing.T) {
+// INT-005 exercises isolated credential import and source-file independence.
+func TestINT005ConnectionStoreImportsOnlyRefreshMaterialWithPrivateModes(t *testing.T) {
 	home := t.TempDir()
 	client := filepath.Join(t.TempDir(), "client.json")
 	token := filepath.Join(t.TempDir(), "token.json")
@@ -27,7 +29,7 @@ func TestConnectionStoreImportsOnlyRefreshMaterialWithPrivateModes(t *testing.T)
 		"scopes": []string{"https://www.googleapis.com/auth/spreadsheets"}, "token": "discarded-access-token",
 	})
 
-	store := ConnectionStore{Home: home}
+	store := ConnectionStore{Home: home, allowInsecureTokenURI: true}
 	if err := store.Import(SetupInput{ClientPath: client, TokenPath: token, SpreadsheetID: "sheet-id", Tab: "audit"}); err != nil {
 		t.Fatalf("import connection: %v", err)
 	}
@@ -63,13 +65,13 @@ func TestConnectionStoreAcceptsSpaceDelimitedAuthorizedUserScopes(t *testing.T) 
 	token := filepath.Join(t.TempDir(), "token.json")
 	writeJSON(t, client, map[string]any{"installed": map[string]any{"client_id": "client", "client_secret": "secret", "token_uri": "https://token.example.test/token"}})
 	writeJSON(t, token, map[string]any{"client_id": "client", "client_secret": "secret", "refresh_token": "refresh", "scopes": "openid https://www.googleapis.com/auth/spreadsheets"})
-	if err := (ConnectionStore{Home: t.TempDir()}).Import(SetupInput{ClientPath: client, TokenPath: token, SpreadsheetID: "sheet", Tab: "tab"}); err != nil {
+	if err := (ConnectionStore{Home: t.TempDir(), allowInsecureTokenURI: true}).Import(SetupInput{ClientPath: client, TokenPath: token, SpreadsheetID: "sheet", Tab: "tab"}); err != nil {
 		t.Fatalf("import authorized-user scopes string: %v", err)
 	}
 }
 
 func TestConnectionStoreRejectsUnprotectedConnectionRecord(t *testing.T) {
-	store := ConnectionStore{Home: t.TempDir()}
+	store := ConnectionStore{Home: t.TempDir(), allowInsecureTokenURI: true}
 	if err := store.Write(&Connection{SpreadsheetID: "sheet", Tab: "tab", ClientID: "client", ClientSecret: "secret", TokenURI: "https://token.example.test/token", RefreshToken: "refresh"}); err != nil {
 		t.Fatal(err)
 	}
@@ -94,16 +96,74 @@ func TestConnectionStoreRejectsUnprotectedConnectionRecord(t *testing.T) {
 	}
 }
 
-func TestDeliverReportUsesExactAllowlistAndDeduplicatesAmbiguousAppend(t *testing.T) {
+func TestConnectionStoreRejectsNonGoogleTokenEndpoint(t *testing.T) {
+	store := ConnectionStore{Home: t.TempDir()}
+	err := store.Write(&Connection{SpreadsheetID: "sheet", Tab: "tab", ClientID: "client", ClientSecret: "secret", TokenURI: "http://attacker.example.test/token", RefreshToken: "refresh"})
+	if err == nil {
+		t.Fatal("non-Google HTTP OAuth endpoint was accepted")
+	}
+}
+
+func TestA1RangeQuotesWorksheetNames(t *testing.T) {
+	if got, want := a1Range("Reviewer's audit! 2026", "B:B"), "'Reviewer''s audit! 2026'!B:B"; got != want {
+		t.Fatalf("quoted A1 range = %q, want %q", got, want)
+	}
+}
+
+func TestProjectFromRemoteDoesNotExportLocalRemoteParents(t *testing.T) {
+	if got, want := projectFromRemote("/Users/alice/private-repo.git", "/work/local-project"), "local-project"; got != want {
+		t.Fatalf("project from local remote = %q, want %q", got, want)
+	}
+}
+
+func TestReporterLockReturnsWhenContextExpires(t *testing.T) {
+	store := ConnectionStore{Home: t.TempDir(), allowInsecureTokenURI: true}
+	reporter := SheetsReporter{Store: store}
+	destination := DestinationState{SpreadsheetID: "sheet", Tab: "tab"}
+	unlock, err := reporter.lock(context.Background(), destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if _, err := reporter.lock(ctx, destination); err == nil {
+		t.Fatal("second reporter lock ignored context expiration")
+	}
+}
+
+func TestMigrateReportDestinationRequiresExplicitDestination(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "local-report.json")
+	writeJSON(t, path, LocalReport{SchemaVersion: valueSchemaVersion, Destination: DestinationState{State: "configured", SpreadsheetID: "old", Tab: "old-tab"}, DeliveryState: "pending"})
+	if err := MigrateReportDestination(dir, "new-sheet", "new-tab"); err != nil {
+		t.Fatalf("migrate report destination: %v", err)
+	}
+	var report LocalReport
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := report.Destination, (DestinationState{State: "configured", SpreadsheetID: "new-sheet", Tab: "new-tab"}); got != want {
+		t.Fatalf("migrated destination = %#v, want %#v", got, want)
+	}
+}
+
+// INT-006 exercises direct OAuth/Sheets projection, frozen destinations, and
+// ambiguous append idempotency against an in-memory HTTP boundary.
+func TestINT006DeliverReportUsesExactAllowlistAndDeduplicatesAmbiguousAppend(t *testing.T) {
 	var writes [][]string
 	const sheetHeader = "schema_version,observation_id,observed_at_utc,project,workflow,source_run_id,execution_session_id,audit_run_id,trigger,source_outcome,step_id,step_outcome,lineage,duration_ms,cost_usd,total_tokens,source_models,git_attribution,commit_shas,files_changed,lines_added,lines_deleted,overall_value,change_effect,unique_contribution,downstream_evidence,confidence,evidence_coverage,judge_model,rubric_version,note"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/token":
 			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "access", "token_type": "Bearer"})
-		case r.Method == http.MethodGet && r.URL.Path == "/v4/spreadsheets/sheet/values/audit!1:1":
+		case r.Method == http.MethodGet && r.URL.Path == "/v4/spreadsheets/sheet/values/'audit'!1:1":
 			_ = json.NewEncoder(w).Encode(map[string]any{"values": [][]string{strings.Split(sheetHeader, ",")}})
-		case r.Method == http.MethodGet && r.URL.Path == "/v4/spreadsheets/sheet/values/audit!B:B":
+		case r.Method == http.MethodGet && r.URL.Path == "/v4/spreadsheets/sheet/values/'audit'!B:B":
 			ids := [][]string{{"observation_id"}}
 			for _, row := range writes {
 				ids = append(ids, []string{row[1]})
@@ -125,7 +185,7 @@ func TestDeliverReportUsesExactAllowlistAndDeduplicatesAmbiguousAppend(t *testin
 	}))
 	defer server.Close()
 
-	store := ConnectionStore{Home: t.TempDir()}
+	store := ConnectionStore{Home: t.TempDir(), allowInsecureTokenURI: true}
 	if err := store.Write(&Connection{SpreadsheetID: "sheet", Tab: "audit", ClientID: "client", ClientSecret: "secret", TokenURI: server.URL + "/token", RefreshToken: "refresh"}); err != nil {
 		t.Fatal(err)
 	}

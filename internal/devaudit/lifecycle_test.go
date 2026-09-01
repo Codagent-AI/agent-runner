@@ -12,7 +12,10 @@ import (
 	"github.com/codagent/agent-runner/internal/stateio"
 )
 
-func TestCoordinatorReservesOneEligibleAuditPerExecutionSession(t *testing.T) {
+// E2E-002 covers the durable automatic-audit identity that resumes/replays
+// build on: repeated finalization for one execution session never launches a
+// second audit.
+func TestE2E002CoordinatorReservesOneEligibleAuditPerExecutionSession(t *testing.T) {
 	dir := t.TempDir()
 	t.Cleanup(func() {
 		_ = filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {

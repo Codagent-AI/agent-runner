@@ -411,6 +411,9 @@ func main() {
 
 func run() int {
 	ensureAgentRunnerExecutableEnv()
+	if handled, code := handleDevelopmentAuditCommand(os.Args[1:], os.Stdout, os.Stderr); handled {
+		return code
+	}
 	if handled, code := devaudit.HandleCommand(os.Args[1:], os.Stdout, os.Stderr); handled {
 		return code
 	}

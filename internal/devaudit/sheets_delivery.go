@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/codagent/agent-runner/internal/stateio"
@@ -52,7 +53,10 @@ type Connection struct {
 // ConnectionStore owns user-scoped integration state, not Runner config.
 // Home is injectable solely for isolated tests; an empty Home uses the user's
 // real home directory.
-type ConnectionStore struct{ Home string }
+type ConnectionStore struct {
+	Home                  string
+	allowInsecureTokenURI bool // test-only HTTP transport injection
+}
 
 func (s ConnectionStore) root() (string, error) {
 	if s.Home != "" {
@@ -102,7 +106,7 @@ func (s ConnectionStore) Import(input SetupInput) error {
 		return fmt.Errorf("decode authorized-user token: %w", err)
 	}
 	connection := Connection{SpreadsheetID: strings.TrimSpace(input.SpreadsheetID), Tab: strings.TrimSpace(input.Tab), ClientID: strings.TrimSpace(client.Installed.ClientID), ClientSecret: client.Installed.ClientSecret, TokenURI: strings.TrimSpace(client.Installed.TokenURI), RefreshToken: strings.TrimSpace(token.RefreshToken)}
-	if err := validateConnection(&connection); err != nil {
+	if err := s.validate(&connection); err != nil {
 		return err
 	}
 	if token.ClientID != "" && token.ClientID != connection.ClientID {
@@ -145,7 +149,11 @@ func hasSheetsWriteScope(scopes []string) bool {
 	return false
 }
 
-func validateConnection(connection *Connection) error {
+func (s ConnectionStore) validate(connection *Connection) error {
+	return validateConnection(connection, s.allowInsecureTokenURI)
+}
+
+func validateConnection(connection *Connection, allowInsecureTokenURI bool) error {
 	if connection.SpreadsheetID == "" || connection.Tab == "" {
 		return fmt.Errorf("spreadsheet ID and worksheet tab are required")
 	}
@@ -153,14 +161,23 @@ func validateConnection(connection *Connection) error {
 		return fmt.Errorf("OAuth client or refresh token is incomplete")
 	}
 	parsed, err := url.ParseRequestURI(connection.TokenURI)
-	if err != nil || parsed.Scheme != "https" && parsed.Scheme != "http" || parsed.Host == "" {
+	if err != nil || parsed.Host == "" {
+		return fmt.Errorf("OAuth token URI is invalid")
+	}
+	if allowInsecureTokenURI {
+		if parsed.Scheme != "http" && parsed.Scheme != "https" {
+			return fmt.Errorf("OAuth token URI is invalid")
+		}
+		return nil
+	}
+	if parsed.Scheme != "https" || parsed.Host != "oauth2.googleapis.com" || parsed.Path != "/token" {
 		return fmt.Errorf("OAuth token URI is invalid")
 	}
 	return nil
 }
 
 func (s ConnectionStore) Write(connection *Connection) error {
-	if err := validateConnection(connection); err != nil {
+	if err := s.validate(connection); err != nil {
 		return err
 	}
 	root, err := s.root()
@@ -211,7 +228,7 @@ func (s ConnectionStore) Read() (Connection, error) {
 	if err := json.Unmarshal(data, &connection); err != nil {
 		return Connection{}, fmt.Errorf("decode development-audit connection: %w", err)
 	}
-	if err := validateConnection(&connection); err != nil {
+	if err := s.validate(&connection); err != nil {
 		return Connection{}, err
 	}
 	return connection, nil
@@ -225,6 +242,8 @@ type SheetsReporter struct {
 	SheetsBaseURL string
 }
 
+var defaultSheetsReporter = SheetsReporter{Store: ConnectionStore{}}
+
 func (r SheetsReporter) Deliver(ctx context.Context, report *LocalReport) error {
 	if report == nil {
 		return fmt.Errorf("local report is required")
@@ -236,7 +255,9 @@ func (r SheetsReporter) Deliver(ctx context.Context, report *LocalReport) error 
 	if err != nil {
 		return fmt.Errorf("read reporting connection: %w", err)
 	}
-	unlock, err := r.lock(report.Destination)
+	lockContext, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	unlock, err := r.lock(lockContext, report.Destination)
 	if err != nil {
 		return err
 	}
@@ -326,7 +347,7 @@ func (r SheetsReporter) validateHeader(ctx context.Context, token string, destin
 	var response struct {
 		Values [][]string `json:"values"`
 	}
-	if err := r.getJSON(ctx, token, destination, destination.Tab+"!1:1", &response); err != nil {
+	if err := r.getJSON(ctx, token, destination, a1Range(destination.Tab, "1:1"), &response); err != nil {
 		return err
 	}
 	if len(response.Values) != 1 || !equalStrings(response.Values[0], stepValueHeader) {
@@ -339,7 +360,7 @@ func (r SheetsReporter) existingObservationIDs(ctx context.Context, token string
 	var response struct {
 		Values [][]string `json:"values"`
 	}
-	if err := r.getJSON(ctx, token, destination, destination.Tab+"!B:B", &response); err != nil {
+	if err := r.getJSON(ctx, token, destination, a1Range(destination.Tab, "B:B"), &response); err != nil {
 		return nil, err
 	}
 	ids := make(map[string]struct{}, len(response.Values))
@@ -379,7 +400,7 @@ func (r SheetsReporter) append(ctx context.Context, token string, destination De
 	if err != nil {
 		return err
 	}
-	endpoint := r.baseURL() + "/spreadsheets/" + url.PathEscape(destination.SpreadsheetID) + "/values/" + url.PathEscape(destination.Tab+"!A:AE") + ":append?valueInputOption=RAW&insertDataOption=INSERT_ROWS"
+	endpoint := r.baseURL() + "/spreadsheets/" + url.PathEscape(destination.SpreadsheetID) + "/values/" + url.PathEscape(a1Range(destination.Tab, "A:AE")) + ":append?valueInputOption=RAW&insertDataOption=INSERT_ROWS"
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(body)))
 	if err != nil {
 		return err
@@ -397,7 +418,7 @@ func (r SheetsReporter) append(ctx context.Context, token string, destination De
 	return nil
 }
 
-func (r SheetsReporter) lock(destination DestinationState) (func(), error) {
+func (r SheetsReporter) lock(ctx context.Context, destination DestinationState) (func(), error) {
 	root, err := r.Store.root()
 	if err != nil {
 		return nil, err
@@ -411,17 +432,33 @@ func (r SheetsReporter) lock(destination DestinationState) (func(), error) {
 	}
 	sum := sha256.Sum256([]byte(destination.SpreadsheetID + "\x00" + destination.Tab))
 	path := filepath.Join(lockDir, hex.EncodeToString(sum[:])+".lock")
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o600) // #nosec G304 -- hashed private destination lock path.
+	if err != nil {
+		return nil, err
+	}
 	for {
-		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- hashed private destination lock path.
+		err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
-			_ = file.Close()
-			return func() { _ = os.Remove(path) }, nil
+			return func() {
+				_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+				_ = file.Close()
+			}, nil
 		}
-		if !os.IsExist(err) {
+		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
+			_ = file.Close()
 			return nil, err
 		}
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			_ = file.Close()
+			return nil, ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
+}
+
+func a1Range(tab, cells string) string {
+	return "'" + strings.ReplaceAll(tab, "'", "''") + "'!" + cells
 }
 
 func projectObservation(observation *ValueObservation) ([]string, error) {
@@ -456,21 +493,47 @@ func projectForRepository(root string) string {
 	if strings.TrimSpace(root) == "" {
 		return "unknown"
 	}
-	command := exec.Command("git", "-C", root, "config", "--get", "remote.origin.url") // #nosec G204 -- fixed git query against Runner-owned project root.
+	command := exec.Command("git", "-C", root, "config", "--get-regexp", `^remote\..*\.url$`) // #nosec G204 -- fixed git query against Runner-owned project root.
 	output, err := command.Output()
 	if err != nil {
 		return projectFromRemote("", root)
 	}
-	return projectFromRemote(strings.TrimSpace(string(output)), root)
+	remotes := []string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 {
+			remotes = append(remotes, fields[1])
+		}
+	}
+	sort.Strings(remotes)
+	for _, remote := range remotes {
+		if project, ok := projectSlugFromRemote(remote); ok {
+			return project
+		}
+	}
+	return projectFromRemote("", root)
 }
 
 func projectFromRemote(remote, root string) string {
+	if project, ok := projectSlugFromRemote(remote); ok {
+		return project
+	}
+	return sanitizeProject(filepath.Base(root))
+}
+
+func projectSlugFromRemote(remote string) (string, bool) {
 	remote = strings.TrimSpace(remote)
 	if strings.HasPrefix(remote, "git@") {
 		if colon := strings.IndexByte(remote, ':'); colon >= 0 {
 			remote = remote[colon+1:]
+		} else {
+			return "", false
 		}
-	} else if parsed, err := url.Parse(remote); err == nil && parsed.Host != "" {
+	} else {
+		parsed, err := url.Parse(remote)
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "ssh" && parsed.Scheme != "git") {
+			return "", false
+		}
 		remote = parsed.Path
 	}
 	remote = strings.TrimSuffix(strings.Trim(remote, "/"), ".git")
@@ -478,10 +541,10 @@ func projectFromRemote(remote, root string) string {
 	if len(parts) >= 2 {
 		candidate := parts[len(parts)-2] + "/" + parts[len(parts)-1]
 		if sanitizeProject(candidate) == candidate {
-			return candidate
+			return candidate, true
 		}
 	}
-	return sanitizeProject(filepath.Base(root))
+	return "", false
 }
 func validProjectPart(value string) bool {
 	if value == "" || len(value) > 128 {
@@ -544,7 +607,7 @@ func reportValueObservationsStage(request Request) error {
 	if err := json.Unmarshal(data, &report); err != nil {
 		return fmt.Errorf("decode local report: %w", err)
 	}
-	if err := (SheetsReporter{Store: ConnectionStore{}}).Deliver(context.Background(), &report); err != nil {
+	if err := defaultSheetsReporter.Deliver(context.Background(), &report); err != nil {
 		report.DeliveryState = "pending"
 		if writeErr := stateio.WriteJSONAtomic(path, report); writeErr != nil {
 			return writeErr
@@ -570,8 +633,32 @@ func RetryReport(auditSessionDir string) error {
 	if err := json.Unmarshal(data, &report); err != nil {
 		return fmt.Errorf("decode local report: %w", err)
 	}
-	if err := (SheetsReporter{Store: ConnectionStore{}}).Deliver(context.Background(), &report); err != nil {
+	if err := defaultSheetsReporter.Deliver(context.Background(), &report); err != nil {
 		return err
 	}
 	return stateio.WriteJSONAtomic(filepath.Join(auditSessionDir, "local-report.json"), report)
+}
+
+// MigrateReportDestination deliberately replaces the destination frozen in a
+// completed report. Normal retries never call this; migration is an explicit
+// operator action for a report that has not yet been delivered.
+func MigrateReportDestination(auditSessionDir, spreadsheetID, tab string) error {
+	if strings.TrimSpace(spreadsheetID) == "" || strings.TrimSpace(tab) == "" {
+		return fmt.Errorf("migration spreadsheet ID and worksheet tab are required")
+	}
+	path := filepath.Join(auditSessionDir, "local-report.json")
+	data, err := os.ReadFile(path) // #nosec G304 -- caller-selected audit directory contains a fixed artifact name.
+	if err != nil {
+		return err
+	}
+	var report LocalReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		return fmt.Errorf("decode local report: %w", err)
+	}
+	if report.SchemaVersion != valueSchemaVersion {
+		return fmt.Errorf("report schema %q cannot be migrated", report.SchemaVersion)
+	}
+	report.Destination = DestinationState{State: "configured", SpreadsheetID: strings.TrimSpace(spreadsheetID), Tab: strings.TrimSpace(tab)}
+	report.DeliveryState = "pending"
+	return stateio.WriteJSONAtomic(path, report)
 }
