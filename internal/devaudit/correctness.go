@@ -629,25 +629,14 @@ type DestinationState struct {
 type connectionDestinationResolver struct{}
 
 func (connectionDestinationResolver) ResolveDestination() DestinationState {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return DestinationState{State: "unavailable", Diagnostic: "user home is unavailable"}
-	}
-	data, err := os.ReadFile(filepath.Join(home, ".agent-runner", "development-audit-connection.json")) // #nosec G304 -- fixed protected connection record.
+	connection, err := (ConnectionStore{}).Read()
 	if os.IsNotExist(err) {
 		return DestinationState{State: "unavailable", Diagnostic: "reporting destination is not configured"}
 	}
 	if err != nil {
-		return DestinationState{State: "unusable", Diagnostic: "reporting destination cannot be read"}
+		return DestinationState{State: "unusable", Diagnostic: "reporting destination is unusable"}
 	}
-	var record struct {
-		SpreadsheetID string `json:"spreadsheet_id"`
-		Tab           string `json:"tab"`
-	}
-	if json.Unmarshal(data, &record) != nil || record.SpreadsheetID == "" || record.Tab == "" {
-		return DestinationState{State: "unusable", Diagnostic: "reporting destination is incomplete"}
-	}
-	return DestinationState{State: "configured", SpreadsheetID: record.SpreadsheetID, Tab: record.Tab}
+	return DestinationState{State: "configured", SpreadsheetID: connection.SpreadsheetID, Tab: connection.Tab}
 }
 
 var destinationResolver DestinationResolver = connectionDestinationResolver{}

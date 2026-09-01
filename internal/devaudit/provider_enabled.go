@@ -119,6 +119,8 @@ func runAuditStage(stage, auditSessionDir string) (iexec.ProcessResult, error) {
 		stageErr = validatePublishCorrectnessStage(request)
 	case "assemble-local-report":
 		stageErr = assembleLocalReportStage(request)
+	case "report-value-observations":
+		stageErr = reportValueObservationsStage(request)
 	default:
 		stageErr = fmt.Errorf("audit stage %q is not implemented", stage)
 	}
@@ -241,13 +243,14 @@ func HandleCommand(args []string, stdout, stderr io.Writer) (bool, int) {
 		return false, 0
 	}
 	if len(args) == 1 || args[1] == "help" || args[1] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: agent-runner audit status <session-dir> | audit replay <session-dir> --session <execution-session-id> | audit setup")
+		_, _ = fmt.Fprintln(stdout, "Usage: agent-runner audit status <session-dir> | audit replay <session-dir> --session <execution-session-id> | audit setup --client <file> --token <file> --spreadsheet <id> --tab <tab> | audit retry <audit-session-dir>")
 		return true, 0
 	}
 	switch args[1] {
 	case "setup":
-		_, _ = fmt.Fprintln(stderr, "agent-runner audit setup: reporting integration setup is not implemented in this delivery")
-		return true, 1
+		return true, handleAuditSetup(args[2:], stdout, stderr)
+	case "retry":
+		return true, handleAuditRetry(args[2:], stdout, stderr)
 	case "status":
 		if len(args) != 3 {
 			_, _ = fmt.Fprintln(stderr, "agent-runner audit status: expected source session directory")
@@ -300,6 +303,41 @@ func HandleCommand(args []string, stdout, stderr io.Writer) (bool, int) {
 		_, _ = fmt.Fprintf(stderr, "agent-runner audit: unknown command %q\n", args[1])
 		return true, 1
 	}
+}
+
+func handleAuditRetry(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 {
+		_, _ = fmt.Fprintln(stderr, "Usage: agent-runner audit retry <audit-session-dir>")
+		return 1
+	}
+	if err := RetryReport(args[0]); err != nil {
+		_, _ = fmt.Fprintf(stderr, "agent-runner audit retry: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprintln(stdout, "agent-runner audit: report delivered")
+	return 0
+}
+
+func handleAuditSetup(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("audit setup", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	client := fs.String("client", "", "installed OAuth client JSON")
+	token := fs.String("token", "", "authorized-user OAuth token JSON")
+	spreadsheet := fs.String("spreadsheet", "", "existing spreadsheet ID")
+	tab := fs.String("tab", "", "existing worksheet tab")
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+	if fs.NArg() != 0 || *client == "" || *token == "" || *spreadsheet == "" || *tab == "" {
+		_, _ = fmt.Fprintln(stderr, "Usage: agent-runner audit setup --client <file> --token <file> --spreadsheet <id> --tab <tab>")
+		return 1
+	}
+	if err := (ConnectionStore{}).Import(SetupInput{ClientPath: *client, TokenPath: *token, SpreadsheetID: *spreadsheet, Tab: *tab}); err != nil {
+		_, _ = fmt.Fprintf(stderr, "agent-runner audit setup: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprintln(stdout, "agent-runner audit: Google Sheets connection imported")
+	return 0
 }
 
 func availableExecutionSessions(sourceSessionDir string) ([]string, error) {

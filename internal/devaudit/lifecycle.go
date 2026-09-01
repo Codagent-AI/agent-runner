@@ -45,6 +45,7 @@ type Request struct {
 	SnapshotPath       string           `json:"snapshot_path"`
 	ProfileSet         string           `json:"profile_set,omitempty"`
 	SourceWorkflow     string           `json:"source_workflow"`
+	Project            string           `json:"project"`
 	RunnerSource       SourceProvenance `json:"runner_source"`
 	Crosscheck         AgentProvenance  `json:"crosscheck"`
 }
@@ -175,7 +176,7 @@ func (c Coordinator) launch(summary runner.PostFinalizationSummary, lifecycle *L
 	if err != nil {
 		return c.persistFailure(summary, lifecycle, link.AuditRunID, err, now())
 	}
-	request := Request{AuditRunID: link.AuditRunID, AuditSessionDir: auditSessionDir(summary.SessionDir, link.AuditRunID), SourceSessionDir: summary.SessionDir, SourceRunID: summary.RunID, ExecutionSessionID: summary.ExecutionSessionID, Trigger: link.Trigger, SnapshotPath: link.SnapshotPath, ProfileSet: summary.ProfileSet, SourceWorkflow: summary.WorkflowFile, RunnerSource: snapshotRunnerSource(link.SnapshotPath), Crosscheck: crosscheck}
+	request := Request{AuditRunID: link.AuditRunID, AuditSessionDir: auditSessionDir(summary.SessionDir, link.AuditRunID), SourceSessionDir: summary.SessionDir, SourceRunID: summary.RunID, ExecutionSessionID: summary.ExecutionSessionID, Trigger: link.Trigger, SnapshotPath: link.SnapshotPath, ProfileSet: summary.ProfileSet, SourceWorkflow: summary.WorkflowFile, Project: projectForRepository(summary.WorkingDir), RunnerSource: snapshotRunnerSource(link.SnapshotPath), Crosscheck: crosscheck}
 	if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "request.json"), request); err != nil {
 		return c.persistFailure(summary, lifecycle, link.AuditRunID, err, now())
 	}

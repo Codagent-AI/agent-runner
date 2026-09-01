@@ -17,4 +17,4 @@ steps:
   - id: assemble-local-report
     command: 'audit-stage assemble-local-report'
   - id: report-value-observations
-    command: 'echo "audit stage report-value-observations requires the development audit handler" >&2; exit 1'
+    command: 'audit-stage report-value-observations'

@@ -339,7 +339,7 @@ func leafFromRecords(request Request, artifact metrics.Artifact, path string, re
 	}
 	skeleton := ObservationSkeleton{
 		SchemaVersion: valueSchemaVersion, ObservationID: observationID(request.AuditRunID, request.ExecutionSessionID, path), ObservedAtUTC: observedAt,
-		Project: "unknown", Workflow: request.SourceWorkflow, SourceRunID: request.SourceRunID, ExecutionSessionID: request.ExecutionSessionID, AuditRunID: request.AuditRunID,
+		Project: sanitizeProject(request.Project), Workflow: request.SourceWorkflow, SourceRunID: request.SourceRunID, ExecutionSessionID: request.ExecutionSessionID, AuditRunID: request.AuditRunID,
 		Trigger: request.Trigger, StepID: path, Lineage: lineage, StepOutcome: outcome,
 		SourceOutcome: selectedSessionOutcome(artifact, request.ExecutionSessionID),
 		Cost:          CostEvidence{DurationMS: durationPtr, CostUSD: costPtr, TotalTokens: tokensPtr, SourceModels: sortedKeys(models)}, Git: aggregateGit(records, commits),

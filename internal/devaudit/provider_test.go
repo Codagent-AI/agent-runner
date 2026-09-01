@@ -46,7 +46,7 @@ func TestAuditWorkflowUsesBoundedEvidenceAndLocalCorrectnessStageHandlers(t *tes
 	if len(workflow.Steps) != 7 {
 		t.Fatalf("audit stages = %d, want 7", len(workflow.Steps))
 	}
-	for _, step := range workflow.Steps[:6] {
+	for _, step := range workflow.Steps {
 		if strings.Contains(step.Command, "requires the development audit handler") {
 			t.Fatalf("%s still uses the unavailable-stage placeholder", step.ID)
 		}
