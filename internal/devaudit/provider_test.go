@@ -37,7 +37,7 @@ func TestTaggedProviderInjectsTheSingleHiddenAuditWorkflow(t *testing.T) {
 	}
 }
 
-func TestAuditWorkflowUsesBoundedEvidenceAndValueStageHandlers(t *testing.T) {
+func TestAuditWorkflowUsesBoundedEvidenceAndLocalCorrectnessStageHandlers(t *testing.T) {
 	workflow, err := loader.LoadWorkflow("builtin:audit/run-audit-v1.0.yaml", loader.Options{})
 	if err != nil {
 		t.Fatalf("load audit workflow: %v", err)
@@ -45,7 +45,7 @@ func TestAuditWorkflowUsesBoundedEvidenceAndValueStageHandlers(t *testing.T) {
 	if len(workflow.Steps) != 7 {
 		t.Fatalf("audit stages = %d, want 7", len(workflow.Steps))
 	}
-	for _, step := range workflow.Steps[:3] {
+	for _, step := range workflow.Steps[:6] {
 		if strings.Contains(step.Command, "requires the development audit handler") {
 			t.Fatalf("%s still uses the unavailable-stage placeholder", step.ID)
 		}
@@ -181,5 +181,25 @@ func TestValidateValueStageRejectsFabricatedMeasurementsAndUnsafeNotes(t *testin
 	}
 	if _, err := loadModelValueBatches(temp, []ValuePackage{{BatchID: "value-001"}}); err == nil {
 		t.Fatal("missing model output was accepted")
+	}
+}
+
+func TestCorrectnessStageRecordsMissingModelOutputWithoutFailingAudit(t *testing.T) {
+	temp := t.TempDir()
+	request := Request{AuditRunID: "audit", AuditSessionDir: temp, SnapshotPath: temp, ExecutionSessionID: "session"}
+	data, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(temp, "request.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := runAuditStage("correctness-audit", temp)
+	if err != nil || result.ExitCode != 0 {
+		t.Fatalf("correctness stage = %+v, %v", result, err)
+	}
+	if _, err := os.Stat(filepath.Join(temp, "correctness-model-diagnostics.json")); err != nil {
+		t.Fatalf("missing-output diagnostic was not persisted: %v", err)
 	}
 }

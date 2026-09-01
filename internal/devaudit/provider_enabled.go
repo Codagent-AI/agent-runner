@@ -113,6 +113,12 @@ func runAuditStage(stage, auditSessionDir string) (iexec.ProcessResult, error) {
 		stageErr = ensureValueOutputs(request)
 	case "validate-value":
 		stageErr = validateValueStage(request)
+	case "correctness-audit":
+		stageErr = ensureCorrectnessOutput(request)
+	case "validate-publish-correctness":
+		stageErr = validatePublishCorrectnessStage(request)
+	case "assemble-local-report":
+		stageErr = assembleLocalReportStage(request)
 	default:
 		stageErr = fmt.Errorf("audit stage %q is not implemented", stage)
 	}

@@ -11,10 +11,10 @@ steps:
   - id: validate-value
     command: 'audit-stage validate-value'
   - id: correctness-audit
-    command: 'echo "audit stage correctness-audit requires the development audit handler" >&2; exit 1'
+    command: 'audit-stage correctness-audit'
   - id: validate-publish-correctness
-    command: 'echo "audit stage validate-publish-correctness requires the development audit handler" >&2; exit 1'
+    command: 'audit-stage validate-publish-correctness'
   - id: assemble-local-report
-    command: 'echo "audit stage assemble-local-report requires the development audit handler" >&2; exit 1'
+    command: 'audit-stage assemble-local-report'
   - id: report-value-observations
     command: 'echo "audit stage report-value-observations requires the development audit handler" >&2; exit 1'
