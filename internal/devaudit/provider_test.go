@@ -11,6 +11,7 @@ import (
 
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/metrics"
+	"github.com/codagent/agent-runner/internal/stateio"
 	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
@@ -201,5 +202,109 @@ func TestCorrectnessStageRecordsMissingModelOutputWithoutFailingAudit(t *testing
 	}
 	if _, err := os.Stat(filepath.Join(temp, "correctness-model-diagnostics.json")); err != nil {
 		t.Fatalf("missing-output diagnostic was not persisted: %v", err)
+	}
+}
+
+func TestAuditWorkflowStagesOneThroughSixCommitLocalReportBeforeDelivery(t *testing.T) {
+	temp := t.TempDir()
+	snapshot := filepath.Join(temp, "snapshot")
+	if err := os.MkdirAll(snapshot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	artifact := metrics.Artifact{SchemaVersion: metrics.SchemaVersion, RunID: "source-run", Workflow: "core:example", Sessions: []metrics.SessionRecord{{ExecutionSessionID: "source-session"}}, Steps: []metrics.StepRecord{{Prefix: "[implement]", ID: "implement", Kind: "step", Type: "agent", Outcome: "success", ExecutionSessionID: "source-session"}}}
+	data, err := json.Marshal(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(snapshot, metrics.FileName), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runnerSource := filepath.Join(snapshot, "runner-source")
+	if err := os.MkdirAll(runnerSource, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runnerSource, "go.mod"), []byte("module github.com/codagent/agent-runner\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"cmd/agent-runner", "internal/runner", "workflows"} {
+		if err := os.MkdirAll(filepath.Join(runnerSource, path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request := Request{AuditRunID: "audit-run", AuditSessionDir: filepath.Join(temp, "audit"), SnapshotPath: snapshot, SourceRunID: "source-run", ExecutionSessionID: "source-session", SourceWorkflow: "core:example", Trigger: "automatic", RunnerSource: SourceProvenance{Verified: true, Coverage: "complete", SnapshotPath: runnerSource}}
+	if err := os.MkdirAll(request.AuditSessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	requestData, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(request.AuditSessionDir, "request.json"), requestData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := runAuditStage("prepare-evidence", request.AuditSessionDir); err != nil || result.ExitCode != 0 {
+		t.Fatalf("prepare = %+v, %v", result, err)
+	}
+	var packages []ValuePackage
+	packageData, err := os.ReadFile(filepath.Join(request.AuditSessionDir, "value-packages.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(packageData, &packages); err != nil {
+		t.Fatal(err)
+	}
+	value := ModelValueBatch{BatchID: packages[0].BatchID, Observations: []ModelValueJudgment{{ObservationID: packages[0].Leaves[0].Skeleton.ObservationID, OverallValue: "medium", ChangeEffect: "intended", UniqueContribution: "unique", DownstreamEvidence: "supporting", Confidence: "medium", EvidenceCoverage: "partial"}}}
+	if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "model-output", packages[0].BatchID+".json"), value); err != nil {
+		t.Fatal(err)
+	}
+	var index EvidenceIndex
+	indexData, err := os.ReadFile(filepath.Join(request.AuditSessionDir, "evidence-index.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(indexData, &index); err != nil {
+		t.Fatal(err)
+	}
+	ref := ""
+	for _, candidate := range index.References {
+		if candidate.Status == "available" {
+			ref = candidate.ID
+			break
+		}
+	}
+	if ref == "" {
+		t.Fatal("prepared fixture has no available evidence reference")
+	}
+	correctness := CorrectnessCandidates{Candidates: []CorrectnessCandidate{{Status: "confirmed", DefectKey: "runner-retry-loss", Title: "retry state is lost", Observed: "retry loses state", Expected: "retry preserves state", Verification: "run the retry workflow", AffectedComponent: "internal/runner", EvidenceRefs: []string{ref}, Confidence: "high", SemanticDuplicate: Duplicate{State: "none"}}}}
+	if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "model-output", correctnessOutput), correctness); err != nil {
+		t.Fatal(err)
+	}
+	oldGH, oldDestination := ghRunner, destinationResolver
+	ghRunner = &recordingGH{}
+	destinationResolver = fakeDestination{DestinationState{State: "configured", SpreadsheetID: "sheet", Tab: "audit"}}
+	t.Cleanup(func() { ghRunner, destinationResolver = oldGH, oldDestination })
+	for _, stage := range []string{"value-audit", "validate-value"} {
+		if result, err := runAuditStage(stage, request.AuditSessionDir); err != nil || result.ExitCode != 0 {
+			t.Fatalf("%s = %+v, %v", stage, result, err)
+		}
+	}
+	if calls := ghRunner.(*recordingGH).calls; len(calls) != 0 {
+		t.Fatalf("value stages invoked publisher: %#v", calls)
+	}
+	for _, stage := range []string{"correctness-audit", "validate-publish-correctness", "assemble-local-report"} {
+		if result, err := runAuditStage(stage, request.AuditSessionDir); err != nil || result.ExitCode != 0 {
+			t.Fatalf("%s = %+v, %v", stage, result, err)
+		}
+	}
+	data, err = os.ReadFile(filepath.Join(request.AuditSessionDir, "local-report.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report LocalReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.SchemaVersion != valueSchemaVersion || len(report.Correctness.Findings) != 1 || report.Correctness.Findings[0].PublicationState != "created" {
+		t.Fatalf("report = %#v", report)
 	}
 }

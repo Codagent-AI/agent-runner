@@ -67,6 +67,7 @@ type SourceProvenance struct {
 	LaunchRevision string `json:"launch_revision,omitempty"`
 	LaunchDirty    string `json:"launch_dirty,omitempty"`
 	SnapshotPath   string `json:"snapshot_path,omitempty"`
+	Coverage       string `json:"coverage,omitempty"`
 	Verified       bool   `json:"verified"`
 	Diagnostic     string `json:"diagnostic,omitempty"`
 }
@@ -500,7 +501,7 @@ func copyEvidenceTree(source, destination string) error {
 }
 
 func snapshotRunnerSource(snapshotDir string) SourceProvenance {
-	provenance := SourceProvenance{BuildRoot: BuildRoot, BuildRevision: BuildRevision, BuildDirty: BuildDirty}
+	provenance := SourceProvenance{BuildRoot: BuildRoot, BuildRevision: BuildRevision, BuildDirty: BuildDirty, Coverage: "unavailable"}
 	root := strings.TrimSpace(BuildRoot)
 	if root == "" {
 		provenance.Diagnostic = "development build did not inject an Agent Runner checkout"
@@ -527,8 +528,28 @@ func snapshotRunnerSource(snapshotDir string) SourceProvenance {
 		return provenance
 	}
 	provenance.SnapshotPath = destination
-	provenance.Verified = true
+	if runnerSnapshotComplete(destination) {
+		provenance.Coverage = "complete"
+		provenance.Verified = true
+	} else {
+		provenance.Coverage = "limited"
+		provenance.Diagnostic = "injected checkout snapshot is incomplete"
+	}
 	return provenance
+}
+
+func runnerSnapshotComplete(root string) bool {
+	module, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil || !strings.Contains(string(module), "module github.com/codagent/agent-runner") {
+		return false
+	}
+	for _, path := range []string{"cmd/agent-runner", "internal/runner", "workflows"} {
+		info, err := os.Stat(filepath.Join(root, path))
+		if err != nil || !info.IsDir() {
+			return false
+		}
+	}
+	return true
 }
 
 func gitOutput(root string, args ...string) string {

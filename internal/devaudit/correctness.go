@@ -25,6 +25,7 @@ const (
 	auditIssueRepository = "Codagent-AI/agent-runner"
 	correctnessOutput    = "correctness.json"
 	correctnessSchema    = "correctness_v1"
+	maxCrosscheckOutput  = 256 * 1024
 )
 
 // CorrectnessCandidates is the only writable product of the correctness
@@ -35,25 +36,35 @@ type CorrectnessCandidates struct {
 }
 
 type CorrectnessCandidate struct {
-	Status            string    `json:"status"`
-	DefectKey         string    `json:"defect_key,omitempty"`
-	Title             string    `json:"title,omitempty"`
-	Observed          string    `json:"observed,omitempty"`
-	Expected          string    `json:"expected,omitempty"`
-	Verification      string    `json:"verification,omitempty"`
-	AffectedComponent string    `json:"affected_component,omitempty"`
-	EvidenceRefs      []string  `json:"evidence_refs,omitempty"`
-	Consultations     []string  `json:"consultations,omitempty"`
-	Confidence        string    `json:"confidence,omitempty"`
-	Symptoms          []string  `json:"symptoms,omitempty"`
-	SemanticDuplicate Duplicate `json:"semantic_duplicate"`
+	Status              string                      `json:"status"`
+	DefectKey           string                      `json:"defect_key,omitempty"`
+	Title               string                      `json:"title,omitempty"`
+	Observed            string                      `json:"observed,omitempty"`
+	Expected            string                      `json:"expected,omitempty"`
+	Verification        string                      `json:"verification,omitempty"`
+	AffectedComponent   string                      `json:"affected_component,omitempty"`
+	EvidenceRefs        []string                    `json:"evidence_refs,omitempty"`
+	Consultations       []string                    `json:"consultations,omitempty"`
+	Confidence          string                      `json:"confidence,omitempty"`
+	Symptoms            []string                    `json:"symptoms,omitempty"`
+	IndependentEvidence []IndependentRunnerEvidence `json:"independent_evidence,omitempty"`
+	SemanticDuplicate   Duplicate                   `json:"semantic_duplicate"`
+}
+
+// IndependentRunnerEvidence names a deterministic evidence-index entry that
+// independently verifies this cause when the launch snapshot has limited coverage.
+type IndependentRunnerEvidence struct {
+	ReferenceID  string `json:"reference_id"`
+	DefectKey    string `json:"defect_key"`
+	Verification string `json:"verification"`
 }
 
 // Duplicate is model-supplied duplicate research. The publisher independently
 // verifies it through gh before it can influence publication.
 type Duplicate struct {
-	URL   string `json:"url,omitempty"`
-	State string `json:"state,omitempty"`
+	URL       string `json:"url,omitempty"`
+	State     string `json:"state,omitempty"`
+	DefectKey string `json:"defect_key,omitempty"`
 }
 
 type Finding struct {
@@ -136,7 +147,7 @@ func invokeCrosscheckCorrectness(request Request) (CorrectnessCandidates, error)
 	if err != nil {
 		return CorrectnessCandidates{}, err
 	}
-	prompt := "Investigate only reproducible Agent Runner defects using this immutable audit evidence and the read-only Runner source under evidence/runner-source. Return exactly one JSON object with candidates. A candidate has status (confirmed, inconclusive, excluded), normalized defect_key, title, observed, expected, verification, affected_component, evidence_refs, consultations, confidence, symptoms, and semantic_duplicate {url,state}. Do not edit repositories, run GitHub commands, include transcripts, paths, URLs other than duplicate issue URLs, secrets, or prose outside JSON. Project, user, and external failures are excluded unless evidence verifies an Agent Runner cause.\n\n" + string(input)
+	prompt := "Investigate only reproducible Agent Runner defects using this immutable audit evidence and the read-only Runner source under evidence/runner-source. Return exactly one JSON object with candidates. A candidate has status (confirmed, inconclusive, excluded), normalized defect_key, title, observed, expected, verification, affected_component, evidence_refs, consultations, confidence, symptoms, optional independent_evidence {reference_id,defect_key,verification}, and semantic_duplicate {url,state,defect_key}. Do not edit repositories, run GitHub commands, include transcripts, paths, URLs other than duplicate issue URLs, secrets, or prose outside JSON. Project, user, and external failures are excluded unless evidence verifies an Agent Runner cause.\n\n" + string(input)
 	workspace, err := prepareModelWorkspace(request)
 	if err != nil {
 		return CorrectnessCandidates{}, err
@@ -157,7 +168,7 @@ func invokeCrosscheckCorrectness(request Request) (CorrectnessCandidates, error)
 		return CorrectnessCandidates{}, err
 	}
 	command.Env = env
-	data, runErr := command.Output()
+	data, runErr := runBoundedOutput(command, maxCrosscheckOutput)
 	if after, err := trustedAuditInputsFingerprint(request); err != nil {
 		return CorrectnessCandidates{}, err
 	} else if after != trusted {
@@ -182,6 +193,30 @@ func invokeCrosscheckCorrectness(request Request) (CorrectnessCandidates, error)
 	}
 	output.Provenance = BatchProvenance{CLI: request.Crosscheck.CLI, Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, SessionID: "unknown"}
 	return output, nil
+}
+
+func runBoundedOutput(command *exec.Cmd, maximum int64) ([]byte, error) {
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := command.Start(); err != nil {
+		return nil, err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(stdout, maximum+1))
+	if int64(len(data)) > maximum {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		return nil, fmt.Errorf("crosscheck output exceeds maximum size of %d bytes", maximum)
+	}
+	waitErr := command.Wait()
+	if readErr != nil {
+		return nil, readErr
+	}
+	if waitErr != nil {
+		return nil, waitErr
+	}
+	return data, nil
 }
 
 func validatePublishCorrectnessStage(request Request) error {
@@ -243,10 +278,10 @@ func PublishCorrectness(request Request, prepared PreparedValueAudit, output Cor
 	if current != prepared.Index.Fingerprints.SnapshotBefore {
 		return CorrectnessResult{}, fmt.Errorf("frozen evidence changed after preparation")
 	}
-	known := map[string]struct{}{}
+	known := map[string]EvidenceReference{}
 	for _, ref := range prepared.Index.References {
 		if ref.Status == "available" {
-			known[ref.ID] = struct{}{}
+			known[ref.ID] = ref
 		}
 	}
 	result := CorrectnessResult{SchemaVersion: correctnessSchema, Findings: []Finding{}}
@@ -303,7 +338,7 @@ func persistCorrectnessOutcome(request Request, result CorrectnessResult) error 
 	return stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "correctness-findings.json"), result)
 }
 
-func validateCorrectnessCandidate(candidate CorrectnessCandidate, key string, known map[string]struct{}, source SourceProvenance) error {
+func validateCorrectnessCandidate(candidate CorrectnessCandidate, key string, known map[string]EvidenceReference, source SourceProvenance) error {
 	if key == "" || candidate.DefectKey != key {
 		return fmt.Errorf("defect_key is not normalized")
 	}
@@ -322,6 +357,9 @@ func validateCorrectnessCandidate(candidate CorrectnessCandidate, key string, kn
 	if candidate.SemanticDuplicate.URL != "" && !githubIssueURL(candidate.SemanticDuplicate.URL) {
 		return fmt.Errorf("semantic duplicate result has an unsafe issue URL")
 	}
+	if candidate.SemanticDuplicate.State != "none" && candidate.SemanticDuplicate.DefectKey != key {
+		return fmt.Errorf("semantic duplicate result does not identify the candidate cause")
+	}
 	if len(candidate.EvidenceRefs) == 0 {
 		return fmt.Errorf("candidate has no evidence references")
 	}
@@ -330,19 +368,37 @@ func validateCorrectnessCandidate(candidate CorrectnessCandidate, key string, kn
 			return fmt.Errorf("unknown or unavailable evidence reference %q", reference)
 		}
 	}
-	if !source.Verified || source.SnapshotPath == "" {
-		return fmt.Errorf("authoritative Runner source is unavailable")
-	}
-	module, err := os.ReadFile(filepath.Join(source.SnapshotPath, "go.mod")) // #nosec G304 -- frozen Runner source snapshot.
-	if err != nil || !strings.Contains(string(module), "module github.com/codagent/agent-runner") {
-		return fmt.Errorf("authoritative Runner source is not Agent Runner")
+	sourceComplete := source.Verified && source.Coverage == "complete" && source.SnapshotPath != "" && runnerSnapshotComplete(source.SnapshotPath)
+	if !sourceComplete && !hasIndependentRunnerEvidence(candidate, key, known) {
+		return fmt.Errorf("authoritative Runner source is unavailable or incomplete without independent verification")
 	}
 	for _, value := range []string{candidate.Title, candidate.Observed, candidate.Expected, candidate.Verification, candidate.AffectedComponent} {
 		if !boundedText(value) {
 			return fmt.Errorf("candidate content is unsafe or unbounded")
 		}
 	}
+	if len(candidate.Symptoms) > 10 {
+		return fmt.Errorf("candidate has too many related symptoms")
+	}
+	for _, symptom := range candidate.Symptoms {
+		if !safeSymptom(symptom) {
+			return fmt.Errorf("candidate symptom is unsafe or unbounded")
+		}
+	}
+	if candidateIssueTextBytes(candidate) > 6*1024 {
+		return fmt.Errorf("candidate issue content exceeds the focused-content limit")
+	}
 	return nil
+}
+
+func hasIndependentRunnerEvidence(candidate CorrectnessCandidate, key string, known map[string]EvidenceReference) bool {
+	for _, evidence := range candidate.IndependentEvidence {
+		ref, exists := known[evidence.ReferenceID]
+		if exists && evidence.DefectKey == key && boundedText(evidence.Verification) && ref.Category == "runner_source_match" && ref.Detail == "independently_verified" {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeDefectKey(value string) string {
@@ -353,6 +409,19 @@ func normalizeDefectKey(value string) string {
 
 func boundedText(value string) bool {
 	return value != "" && utf8.RuneCountInString(value) <= 1200 && !strings.Contains(value, "\x00")
+}
+
+func safeSymptom(value string) bool {
+	return value != "" && utf8.RuneCountInString(value) <= 280 && !strings.ContainsAny(value, "\r\n") && !strings.Contains(value, "```") && !strings.Contains(value, "\x00")
+}
+
+func candidateIssueTextBytes(candidate CorrectnessCandidate) int {
+	values := append([]string{candidate.Title, candidate.Observed, candidate.Expected, candidate.Verification, candidate.AffectedComponent}, candidate.Symptoms...)
+	total := 0
+	for _, value := range values {
+		total += len(value)
+	}
+	return total
 }
 
 func githubIssueURL(value string) bool {
@@ -369,6 +438,7 @@ func stableFindingID(key string) string {
 	return "finding-" + hex.EncodeToString(sum[:8])
 }
 func findingMarker(id string) string { return "<!-- agent-runner-audit:" + id + " -->" }
+func causeMarker(key string) string  { return "<!-- agent-runner-audit-key:" + key + " -->" }
 
 func mergeSymptoms(left, right CorrectnessCandidate) CorrectnessCandidate {
 	left.Symptoms = append(left.Symptoms, right.Symptoms...)
@@ -414,21 +484,31 @@ func publishCandidate(request Request, candidate CorrectnessCandidate, runner Co
 		}
 	}
 	for _, issue := range semantic {
-		if issue.State == "OPEN" || strings.EqualFold(issue.State, "open") {
+		if (issue.State == "OPEN" || strings.EqualFold(issue.State, "open")) && issueMatchesCause(issue, candidate.DefectKey) {
 			finding.PublicationState, finding.DuplicateURL = "duplicate", issue.URL
 			return finding, nil
 		}
 	}
-	if candidate.SemanticDuplicate.State == "open" && candidate.SemanticDuplicate.URL != "" {
-		finding.PublicationState, finding.DuplicateURL = "duplicate", candidate.SemanticDuplicate.URL
-		return finding, nil
+	if candidate.SemanticDuplicate.State == "open" || candidate.SemanticDuplicate.State == "closed" {
+		issue, err := viewIssue(runner, candidate.SemanticDuplicate.URL)
+		if err != nil || !strings.EqualFold(issue.State, candidate.SemanticDuplicate.State) || !issueMatchesCause(issue, candidate.DefectKey) {
+			finding.PublicationState = "ambiguous"
+			if err != nil {
+				finding.Failure = err.Error()
+			} else {
+				finding.Failure = "semantic duplicate could not be independently verified"
+			}
+			return finding, nil
+		}
+		if candidate.SemanticDuplicate.State == "open" {
+			finding.PublicationState, finding.DuplicateURL = "duplicate", issue.URL
+			return finding, nil
+		}
+		finding.PriorClosedIssue = issue.URL
 	}
 	if candidate.SemanticDuplicate.State == "ambiguous" {
 		finding.PublicationState, finding.Failure = "ambiguous", "semantic duplicate result requires review before issue creation"
 		return finding, nil
-	}
-	if candidate.SemanticDuplicate.State == "closed" {
-		finding.PriorClosedIssue = candidate.SemanticDuplicate.URL
 	}
 	body, redacted := issueBody(request, finding, candidate)
 	title := redactText(candidate.Title)
@@ -463,6 +543,29 @@ func searchIssues(runner CommandRunner, query, state string) ([]ghIssue, error) 
 	return issues, nil
 }
 
+func viewIssue(runner CommandRunner, issueURL string) (ghIssue, error) {
+	match := regexp.MustCompile(`/issues/([0-9]+)$`).FindStringSubmatch(issueURL)
+	if len(match) != 2 {
+		return ghIssue{}, fmt.Errorf("semantic duplicate URL is invalid")
+	}
+	output, err := runner.Run(context.Background(), "gh", []string{"issue", "view", match[1], "--repo", auditIssueRepository, "--json", "url,state,title,body"}, nil)
+	if err != nil {
+		return ghIssue{}, fmt.Errorf("view GitHub issue: %w: %s", err, strings.TrimSpace(output))
+	}
+	var issue ghIssue
+	if err := json.Unmarshal([]byte(output), &issue); err != nil {
+		return ghIssue{}, fmt.Errorf("decode GitHub issue view: %w", err)
+	}
+	if issue.URL != issueURL || !githubIssueURL(issue.URL) {
+		return ghIssue{}, fmt.Errorf("GitHub issue view returned an unexpected URL")
+	}
+	return issue, nil
+}
+
+func issueMatchesCause(issue ghIssue, key string) bool {
+	return strings.Contains(issue.Body, causeMarker(key))
+}
+
 func issueBody(request Request, finding Finding, candidate CorrectnessCandidate) (string, bool) {
 	redacted := false
 	redact := func(value string) string {
@@ -480,6 +583,7 @@ func issueBody(request Request, finding Finding, candidate CorrectnessCandidate)
 	if len(candidate.EvidenceRefs) > 0 {
 		parts = append(parts, "Evidence references: "+strings.Join(candidate.EvidenceRefs, ", "))
 	}
+	parts = append(parts, causeMarker(candidate.DefectKey))
 	if len(candidate.Symptoms) > 0 {
 		symptoms := make([]string, len(candidate.Symptoms))
 		for index, symptom := range candidate.Symptoms {

@@ -1041,6 +1041,12 @@ func ensureValueOutputs(request Request) error {
 	}
 	provenance := map[string]BatchProvenance{}
 	for _, pkg := range prepared.Packages {
+		outputPath := filepath.Join(request.AuditSessionDir, "model-output", pkg.BatchID+".json")
+		if _, err := os.Stat(outputPath); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return err
+		}
 		output, err := invokeCrosscheckValueBatch(request, pkg)
 		if err != nil {
 			_ = stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "value-model-diagnostics.json"), map[string]string{"batch_id": pkg.BatchID, "error": err.Error()})

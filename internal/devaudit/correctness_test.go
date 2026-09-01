@@ -5,7 +5,9 @@ package devaudit
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -27,6 +29,13 @@ func TestPublishCorrectnessRejectsCandidateWithoutSemanticDuplicateResult(t *tes
 	}
 }
 
+func TestRunBoundedOutputRejectsOversizedCrosscheckResponse(t *testing.T) {
+	command := exec.Command("sh", "-c", "head -c 1025 /dev/zero")
+	if _, err := runBoundedOutput(command, 1024); err == nil || !strings.Contains(err.Error(), "exceeds maximum size") {
+		t.Fatalf("oversized response error = %v", err)
+	}
+}
+
 func TestPublishCorrectnessRejectsPrivateSemanticDuplicateURL(t *testing.T) {
 	request, prepared := correctnessFixture(t)
 	candidate := confirmedCandidate()
@@ -41,6 +50,117 @@ func TestPublishCorrectnessRejectsPrivateSemanticDuplicateURL(t *testing.T) {
 	}
 }
 
+func TestPublishCorrectnessRejectsUnboundedSymptoms(t *testing.T) {
+	request, prepared := correctnessFixture(t)
+	candidate := confirmedCandidate()
+	candidate.Symptoms = []string{strings.Repeat("command output ", 300)}
+
+	result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{candidate}}, fakeGH{})
+	if err != nil {
+		t.Fatalf("publish correctness: %v", err)
+	}
+	if len(result.Findings) != 1 || result.Findings[0].PublicationState != "rejected" {
+		t.Fatalf("findings = %#v, want unsafe-symptom rejection", result.Findings)
+	}
+}
+
+func TestPublishCorrectnessRejectsIncompleteRunnerSourceSnapshot(t *testing.T) {
+	request, prepared := correctnessFixture(t)
+	incomplete := t.TempDir()
+	if err := os.WriteFile(filepath.Join(incomplete, "go.mod"), []byte("module github.com/codagent/agent-runner\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	request.RunnerSource = SourceProvenance{Verified: true, SnapshotPath: incomplete}
+
+	result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{confirmedCandidate()}}, fakeGH{})
+	if err != nil {
+		t.Fatalf("publish correctness: %v", err)
+	}
+	if len(result.Findings) != 1 || result.Findings[0].PublicationState != "rejected" {
+		t.Fatalf("findings = %#v, want incomplete-source rejection", result.Findings)
+	}
+}
+
+func TestPublishCorrectnessAcceptsValidatedIndependentRunnerEvidence(t *testing.T) {
+	request, prepared := correctnessFixture(t)
+	request.RunnerSource = SourceProvenance{Coverage: "unavailable"}
+	prepared.Index.References = append(prepared.Index.References, EvidenceReference{ID: "runner-match", Status: "available", Category: "runner_source_match", Detail: "independently_verified"})
+	candidate := confirmedCandidate()
+	candidate.IndependentEvidence = []IndependentRunnerEvidence{{ReferenceID: "runner-match", DefectKey: candidate.DefectKey, Verification: "matching Runner source was independently verified"}}
+	runner := &recordingGH{}
+
+	result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{candidate}}, runner)
+	if err != nil {
+		t.Fatalf("publish correctness: %v", err)
+	}
+	if finding := result.Findings[0]; finding.PublicationState != "created" {
+		t.Fatalf("finding = %#v", finding)
+	}
+}
+
+func TestPublishCorrectnessDoesNotModifyAuditedOrRunnerRepositories(t *testing.T) {
+	source := initializedGitRepository(t, false)
+	runnerSource := initializedGitRepository(t, true)
+	beforeSource, beforeRunner := gitState(t, source), gitState(t, runnerSource)
+	before, err := fingerprintTree(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := Request{AuditSessionDir: t.TempDir(), SnapshotPath: source, RunnerSource: SourceProvenance{Verified: true, Coverage: "complete", SnapshotPath: runnerSource}}
+	prepared := PreparedValueAudit{Index: EvidenceIndex{Fingerprints: Fingerprints{SnapshotBefore: before}, References: []EvidenceReference{{ID: "evidence-1", Status: "available"}}}}
+	if _, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{confirmedCandidate()}}, &recordingGH{}); err != nil {
+		t.Fatal(err)
+	}
+	if after := gitState(t, source); after != beforeSource {
+		t.Fatalf("audited repository changed: before=%q after=%q", beforeSource, after)
+	}
+	if after := gitState(t, runnerSource); after != beforeRunner {
+		t.Fatalf("Runner repository changed: before=%q after=%q", beforeRunner, after)
+	}
+}
+
+func initializedGitRepository(t *testing.T, runner bool) string {
+	t.Helper()
+	root := t.TempDir()
+	for _, args := range [][]string{{"init"}, {"config", "user.email", "audit@example.test"}, {"config", "user.name", "Audit Test"}} {
+		if output, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("fixture\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if runner {
+		if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module github.com/codagent/agent-runner\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range []string{"cmd/agent-runner", "internal/runner", "workflows"} {
+			if err := os.MkdirAll(filepath.Join(root, path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, args := range [][]string{{"add", "."}, {"commit", "-m", "test fixture"}} {
+		if output, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	return root
+}
+
+func gitState(t *testing.T, root string) string {
+	t.Helper()
+	head, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := exec.Command("git", "-C", root, "status", "--porcelain").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(head) + "\x00" + string(status)
+}
+
 func correctnessFixture(t *testing.T) (Request, PreparedValueAudit) {
 	t.Helper()
 	root := t.TempDir()
@@ -51,11 +171,16 @@ func correctnessFixture(t *testing.T) (Request, PreparedValueAudit) {
 	if err := os.WriteFile(filepath.Join(runnerSource, "go.mod"), []byte("module github.com/codagent/agent-runner\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	for _, path := range []string{"cmd/agent-runner", "internal/runner", "workflows"} {
+		if err := os.MkdirAll(filepath.Join(runnerSource, path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	before, err := fingerprintTree(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := Request{SnapshotPath: root, RunnerSource: SourceProvenance{Verified: true, SnapshotPath: runnerSource}}
+	request := Request{SnapshotPath: root, RunnerSource: SourceProvenance{Verified: true, Coverage: "complete", SnapshotPath: runnerSource}}
 	prepared := PreparedValueAudit{Index: EvidenceIndex{Fingerprints: Fingerprints{SnapshotBefore: before}, References: []EvidenceReference{{ID: "evidence-1", Status: "available"}}}}
 	return request, prepared
 }
@@ -102,13 +227,13 @@ func TestPublishCorrectnessCreatesOneFocusedRedactedIssue(t *testing.T) {
 
 func TestPublishCorrectnessLinksOpenDuplicateWithoutMutation(t *testing.T) {
 	request, prepared := correctnessFixture(t)
-	runner := &recordingGH{semantic: []ghIssue{{URL: "https://github.test/issues/7", State: "OPEN"}}}
+	runner := &recordingGH{semantic: []ghIssue{{URL: "https://github.com/Codagent-AI/agent-runner/issues/7", State: "OPEN", Body: causeMarker("runner-retry-loss")}}}
 
 	result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{confirmedCandidate()}}, runner)
 	if err != nil {
 		t.Fatalf("publish correctness: %v", err)
 	}
-	if finding := result.Findings[0]; finding.PublicationState != "duplicate" || finding.DuplicateURL != "https://github.test/issues/7" {
+	if finding := result.Findings[0]; finding.PublicationState != "duplicate" || finding.DuplicateURL != "https://github.com/Codagent-AI/agent-runner/issues/7" {
 		t.Fatalf("finding = %#v", finding)
 	}
 	if got := runner.createCalls(); got != 0 {
@@ -116,11 +241,29 @@ func TestPublishCorrectnessLinksOpenDuplicateWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestPublishCorrectnessDoesNotTrustUnverifiedModelDuplicate(t *testing.T) {
+	request, prepared := correctnessFixture(t)
+	runner := &recordingGH{}
+	candidate := confirmedCandidate()
+	candidate.SemanticDuplicate = Duplicate{State: "open", URL: "https://github.com/Codagent-AI/agent-runner/issues/9", DefectKey: "runner-retry-loss"}
+
+	result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{candidate}}, runner)
+	if err != nil {
+		t.Fatalf("publish correctness: %v", err)
+	}
+	if finding := result.Findings[0]; finding.PublicationState != "ambiguous" {
+		t.Fatalf("finding = %#v, want unverified duplicate to remain ambiguous", finding)
+	}
+	if got := runner.createCalls(); got != 0 {
+		t.Fatalf("unverified duplicate created %d issues", got)
+	}
+}
+
 func TestPublishCorrectnessKeepsAmbiguousDuplicateCandidateRetryable(t *testing.T) {
 	request, prepared := correctnessFixture(t)
 	runner := &recordingGH{}
 	candidate := confirmedCandidate()
-	candidate.SemanticDuplicate = Duplicate{State: "ambiguous", URL: "https://github.com/Codagent-AI/agent-runner/issues/8"}
+	candidate.SemanticDuplicate = Duplicate{State: "ambiguous", URL: "https://github.com/Codagent-AI/agent-runner/issues/8", DefectKey: "runner-retry-loss"}
 
 	result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{candidate}}, runner)
 	if err != nil {
@@ -131,6 +274,80 @@ func TestPublishCorrectnessKeepsAmbiguousDuplicateCandidateRetryable(t *testing.
 	}
 	if got := runner.createCalls(); got != 0 {
 		t.Fatalf("ambiguous candidate created %d issues", got)
+	}
+}
+
+func TestPublishCorrectnessVerifiesClosedRecurrenceBeforeCreating(t *testing.T) {
+	request, prepared := correctnessFixture(t)
+	candidate := confirmedCandidate()
+	candidate.SemanticDuplicate = Duplicate{State: "closed", URL: "https://github.com/Codagent-AI/agent-runner/issues/8", DefectKey: candidate.DefectKey}
+	runner := &recordingGH{view: &ghIssue{URL: candidate.SemanticDuplicate.URL, State: "CLOSED", Body: causeMarker(candidate.DefectKey)}}
+
+	result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{candidate}}, runner)
+	if err != nil {
+		t.Fatalf("publish correctness: %v", err)
+	}
+	if finding := result.Findings[0]; finding.PublicationState != "created" || finding.PriorClosedIssue != candidate.SemanticDuplicate.URL {
+		t.Fatalf("finding = %#v", finding)
+	}
+	if runner.createCalls() != 1 {
+		t.Fatalf("closed recurrence did not create exactly one issue: %#v", runner.calls)
+	}
+}
+
+func TestPublishCorrectnessDoesNotLinkSimilarIssueWithDifferentCause(t *testing.T) {
+	request, prepared := correctnessFixture(t)
+	runner := &recordingGH{semantic: []ghIssue{{URL: "https://github.com/Codagent-AI/agent-runner/issues/7", State: "OPEN", Body: causeMarker("different-cause")}}}
+
+	result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{confirmedCandidate()}}, runner)
+	if err != nil {
+		t.Fatalf("publish correctness: %v", err)
+	}
+	if finding := result.Findings[0]; finding.PublicationState != "created" {
+		t.Fatalf("finding = %#v", finding)
+	}
+	if runner.createCalls() != 1 {
+		t.Fatalf("similar issue suppressed creation: %#v", runner.calls)
+	}
+}
+
+func TestPublishCorrectnessGroupsSameCauseCandidates(t *testing.T) {
+	request, prepared := correctnessFixture(t)
+	first, second := confirmedCandidate(), confirmedCandidate()
+	first.Symptoms = []string{"first symptom"}
+	second.Observed, second.Symptoms = "second symptom", []string{"second symptom"}
+	runner := &recordingGH{}
+
+	result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{first, second}}, runner)
+	if err != nil {
+		t.Fatalf("publish correctness: %v", err)
+	}
+	if len(result.Findings) != 1 || runner.createCalls() != 1 {
+		t.Fatalf("findings=%#v calls=%#v", result.Findings, runner.calls)
+	}
+	if body := string(runner.calls[len(runner.calls)-1].stdin); !strings.Contains(body, "first symptom") || !strings.Contains(body, "second symptom") {
+		t.Fatalf("grouped body = %q", body)
+	}
+}
+
+func TestPublishCorrectnessRetriesFailedCreationThroughExactMarker(t *testing.T) {
+	request, prepared := correctnessFixture(t)
+	candidate := confirmedCandidate()
+	failing := &recordingGH{createErr: errors.New("GitHub unavailable")}
+	first, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{candidate}}, failing)
+	if err != nil {
+		t.Fatalf("first publish: %v", err)
+	}
+	if first.Findings[0].PublicationState != "failed" {
+		t.Fatalf("first finding = %#v", first.Findings[0])
+	}
+	retry := &recordingGH{marker: []ghIssue{{URL: "https://github.com/Codagent-AI/agent-runner/issues/42", State: "OPEN", Body: first.Findings[0].Marker}}}
+	second, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{candidate}}, retry)
+	if err != nil {
+		t.Fatalf("retry publish: %v", err)
+	}
+	if second.Findings[0].PublicationState != "created" || retry.createCalls() != 0 {
+		t.Fatalf("retry finding=%#v calls=%#v", second.Findings[0], retry.calls)
 	}
 }
 
@@ -282,8 +499,10 @@ type recordedGHCall struct {
 type recordingGH struct {
 	semantic     []ghIssue
 	marker       []ghIssue
+	view         *ghIssue
 	calls        []recordedGHCall
 	beforeCreate func()
+	createErr    error
 }
 
 func (runner *recordingGH) Run(_ context.Context, name string, args []string, stdin []byte) (string, error) {
@@ -292,7 +511,18 @@ func (runner *recordingGH) Run(_ context.Context, name string, args []string, st
 		if runner.beforeCreate != nil {
 			runner.beforeCreate()
 		}
+		if runner.createErr != nil {
+			return "temporary create failure", runner.createErr
+		}
 		return "https://github.com/Codagent-AI/agent-runner/issues/42\n", nil
+	}
+	if len(args) >= 2 && args[0] == "issue" && args[1] == "view" {
+		issue := ghIssue{URL: "https://github.com/Codagent-AI/agent-runner/issues/9", State: "OPEN"}
+		if runner.view != nil {
+			issue = *runner.view
+		}
+		data, _ := json.Marshal(issue)
+		return string(data), nil
 	}
 	query := args[indexOf(args, "--search")+1]
 	issues := runner.semantic
