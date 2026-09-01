@@ -85,7 +85,11 @@ Skipped agent steps and steps that fail before launching a CLI do not reduce cov
 
 Each execution attempt gets its own metrics record. If a step fails and runs again, both attempts contribute to the run totals.
 
-Resuming an Agent Runner run appends to the same metrics artifact. Active duration excludes time spent paused between invocations.
+Resuming an Agent Runner run appends to the same schema-v3 metrics artifact.
+Each invocation receives a durable `execution_session_id`; per-session rollups
+show only that invocation's work, while run totals cover every session. Active
+duration excludes time spent paused between invocations. This identity is not
+the agent CLI `session_id` used to resume a model conversation.
 
 Codex defines `turn.completed.usage` as the usage during that completed turn. Agent Runner therefore records that snapshot directly for new and resumed turns; it does not subtract the preceding turn. Cache and reasoning values remain detail categories within the canonical input/output totals and are not added to those totals again.
 
@@ -103,6 +107,10 @@ Each run stores a versioned file beside `state.json` and `audit.log`:
 - stable role/tool identity and separate requested/effective CLI, model, and effort identity with provenance;
 - duration, outcome, nesting identity, usage provenance, raw token categories, canonical non-overlapping totals, and reported cost;
 - execution-session durations for interrupted and resumed runs;
+- durable execution-session IDs and per-session rollups, plus explicit unknown
+  coverage for legacy records that cannot be assigned safely;
+- local Git checkpoint evidence for executable steps and aggregate repository
+  change counts when both checkpoints support a conservative derivation; and
 - run totals and coverage values; and
 - `history_complete`, which tells consumers whether earlier metrics were lost during recovery.
 

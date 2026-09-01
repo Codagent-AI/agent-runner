@@ -505,7 +505,8 @@ func (h *AgentCallHandler) emitAgentCallEnd(record *acceptedAgentCall, call *res
 		resolvedSessionID = invocation.SessionID
 	}
 	identity := model.ExecutionIdentity{
-		StepID: record.callID, Prefix: agentCallIdentityPrefix(h.options.Parent.Prefix), StepType: "agent", Kind: "agent-call",
+		ExecutionSessionID: h.options.Context.ExecutionSessionID,
+		StepID:             record.callID, Prefix: agentCallIdentityPrefix(h.options.Parent.Prefix), StepType: "agent", Kind: "agent-call",
 		CLI: call.cliName, SessionID: resolvedSessionID, SessionStrategy: agentCallSessionStrategy(call),
 		SessionResumed: call.resume, AgentInvoked: invocation.CLILaunched,
 		Role: call.profileName, Tool: "agent-runner",

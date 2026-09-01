@@ -98,19 +98,20 @@ type UsageRecord struct {
 // ExecutionIdentity identifies one terminal step or loop-iteration event.
 // Attempt is assigned by the metrics collector.
 type ExecutionIdentity struct {
-	StepID          string `json:"step_id"`
-	Prefix          string `json:"prefix"`
-	StepType        string `json:"step_type"`
-	Kind            string `json:"kind"`
-	Attempt         int    `json:"attempt"`
-	Iteration       int    `json:"iteration,omitempty"`
-	CLI             string `json:"cli,omitempty"`
-	SessionID       string `json:"session_id,omitempty"`
-	SessionStrategy string `json:"session_strategy,omitempty"`
-	SessionResumed  bool   `json:"session_resumed"`
-	AgentInvoked    bool   `json:"agent_invoked"`
-	Role            string `json:"role,omitempty"`
-	Tool            string `json:"tool,omitempty"`
+	ExecutionSessionID string `json:"execution_session_id,omitempty"`
+	StepID             string `json:"step_id"`
+	Prefix             string `json:"prefix"`
+	StepType           string `json:"step_type"`
+	Kind               string `json:"kind"`
+	Attempt            int    `json:"attempt"`
+	Iteration          int    `json:"iteration,omitempty"`
+	CLI                string `json:"cli,omitempty"`
+	SessionID          string `json:"session_id,omitempty"`
+	SessionStrategy    string `json:"session_strategy,omitempty"`
+	SessionResumed     bool   `json:"session_resumed"`
+	AgentInvoked       bool   `json:"agent_invoked"`
+	Role               string `json:"role,omitempty"`
+	Tool               string `json:"tool,omitempty"`
 }
 
 // Coverage describes how much of the eligible agent-step population reported

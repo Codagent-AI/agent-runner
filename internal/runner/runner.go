@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/control"
@@ -442,7 +444,8 @@ func buildExecutionContext(
 		log.Printf("agent-runner: warning: audit trail unavailable: %v\n", auditErr)
 	}
 	metricsCollector := metrics.NewCollector(sessionDir, sessionID, workflow.Name, runStart)
-	auditEventLogger := metrics.NewPipeline(metricsCollector, auditSink)
+	executionSessionID := uuid.NewString()
+	auditEventLogger := metrics.NewExecutionPipeline(metricsCollector, auditSink, opts.ProjectRoot, executionSessionID)
 
 	var profileStore any
 	if opts.ProfileStore != nil {
@@ -455,6 +458,7 @@ func buildExecutionContext(
 	}
 
 	ctx := model.NewRootContext(&model.RootContextOptions{
+		ExecutionSessionID:       executionSessionID,
 		Params:                   params,
 		WorkflowFile:             opts.WorkflowFile,
 		WorkflowName:             workflow.Name,
@@ -638,7 +642,8 @@ func emitSkippedStep(rs *runState, step *model.Step, index int) {
 		Data: map[string]any{
 			"outcome": "skipped", "skip_if": step.SkipIf, "duration_ms": int64(0),
 			metrics.DataIdentity: model.ExecutionIdentity{
-				StepID: step.ID, Prefix: metricsIdentityPrefix(rs.ctx), StepType: step.StepType(), Kind: "step", CLI: step.CLI,
+				ExecutionSessionID: rs.ctx.ExecutionSessionID,
+				StepID:             step.ID, Prefix: metricsIdentityPrefix(rs.ctx), StepType: step.StepType(), Kind: "step", CLI: step.CLI,
 				SessionStrategy: string(step.Session), AgentInvoked: false,
 			},
 			metrics.DataUsage:               skippedStepUsage(step),
