@@ -17,7 +17,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/codagent/agent-runner/internal/stateio"
@@ -432,29 +431,7 @@ func (r SheetsReporter) lock(ctx context.Context, destination DestinationState) 
 	}
 	sum := sha256.Sum256([]byte(destination.SpreadsheetID + "\x00" + destination.Tab))
 	path := filepath.Join(lockDir, hex.EncodeToString(sum[:])+".lock")
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o600) // #nosec G304 -- hashed private destination lock path.
-	if err != nil {
-		return nil, err
-	}
-	for {
-		err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-		if err == nil {
-			return func() {
-				_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
-				_ = file.Close()
-			}, nil
-		}
-		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
-			_ = file.Close()
-			return nil, err
-		}
-		select {
-		case <-ctx.Done():
-			_ = file.Close()
-			return nil, ctx.Err()
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
+	return acquireDeliveryLock(ctx, path)
 }
 
 func a1Range(tab, cells string) string {
@@ -493,25 +470,12 @@ func projectForRepository(root string) string {
 	if strings.TrimSpace(root) == "" {
 		return "unknown"
 	}
-	command := exec.Command("git", "-C", root, "config", "--get-regexp", `^remote\..*\.url$`) // #nosec G204 -- fixed git query against Runner-owned project root.
+	command := exec.Command("git", "-C", root, "config", "--get", "remote.origin.url") // #nosec G204 -- fixed git query against Runner-owned project root.
 	output, err := command.Output()
 	if err != nil {
 		return projectFromRemote("", root)
 	}
-	remotes := []string{}
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 2 {
-			remotes = append(remotes, fields[1])
-		}
-	}
-	sort.Strings(remotes)
-	for _, remote := range remotes {
-		if project, ok := projectSlugFromRemote(remote); ok {
-			return project
-		}
-	}
-	return projectFromRemote("", root)
+	return projectFromRemote(strings.TrimSpace(string(output)), root)
 }
 
 func projectFromRemote(remote, root string) string {

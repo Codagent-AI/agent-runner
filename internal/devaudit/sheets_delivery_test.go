@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -113,6 +114,18 @@ func TestA1RangeQuotesWorksheetNames(t *testing.T) {
 func TestProjectFromRemoteDoesNotExportLocalRemoteParents(t *testing.T) {
 	if got, want := projectFromRemote("/Users/alice/private-repo.git", "/work/local-project"), "local-project"; got != want {
 		t.Fatalf("project from local remote = %q, want %q", got, want)
+	}
+}
+
+func TestProjectForRepositoryPrefersOriginOverOtherRemotes(t *testing.T) {
+	root := t.TempDir()
+	for _, args := range [][]string{{"init", root}, {"-C", root, "remote", "add", "origin", "https://github.com/z-owner/desired.git"}, {"-C", root, "remote", "add", "archive", "https://github.com/aaa/other.git"}} {
+		if output, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	if got, want := projectForRepository(root), "z-owner/desired"; got != want {
+		t.Fatalf("project = %q, want origin %q", got, want)
 	}
 }
 
