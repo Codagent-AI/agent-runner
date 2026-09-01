@@ -57,6 +57,14 @@ exit 99
 func TestCoreRunValidatorTreatsTaskFileAsData(t *testing.T) {
 	workdir := t.TempDir()
 	binDir := t.TempDir()
+	writeFakeBinary(t, binDir, "agent-runner", `#!/bin/sh
+if [ "$1" = internal ] && [ "$2" = json-value ] && [ "$3" = task_file ]; then
+  IFS= read -r payload || :
+  printf '%s' '$(touch should-not-exist)'
+  exit 0
+fi
+exit 1
+`)
 	writeFakeBinary(t, binDir, "agent-validator", `#!/bin/sh
 printf '%s\n' "$@" > validator-args
 `)
@@ -64,7 +72,7 @@ printf '%s\n' "$@" > validator-args
 	cmd := exec.Command("sh", coreRunValidatorScript(t))
 	cmd.Dir = workdir
 	cmd.Stdin = strings.NewReader(`{"task_file":"$(touch should-not-exist)"}`)
-	cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd.Env = append(os.Environ(), "PATH="+binDir, "AGENT_RUNNER_EXECUTABLE="+filepath.Join(binDir, "agent-runner"))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("run-validator failed: %v\n%s", err, out)
 	}
