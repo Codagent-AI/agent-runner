@@ -110,7 +110,7 @@ The plan intentionally omits:
 
 ### AT-001: Real crosscheck agents produce a safe local audit
 
-- Classification: Required.
+- Classification: Required
 - Covers: real model prompt usability, concrete Git-first value judgment, fixed rubric output, selective available detailed-evidence access, distinction between project failure and Runner defect, and informational-only value behavior.
 - Actor and surface: Acceptance agent using the tagged headless CLI and the operator's working `crosscheck` agent profile.
 - Setup: An isolated small eligible workflow fixture with two executed leaves, one attributable commit, one useful no-commit planning artifact, downstream validation, and an ordinary project-caused failure. Disable real Sheets delivery for this flow and place a recording non-mutating `gh` substitute on `PATH` so an unexpected candidate cannot create an issue.
@@ -122,7 +122,7 @@ The plan intentionally omits:
 
 ### AT-002: TUI completion remains visible while audit runs independently
 
-- Classification: Required on Darwin or Linux.
+- Classification: Conditional: Darwin or Linux
 - Covers: launch before TUI exit, unchanged source completion display, background continuation after exit, and hidden audit presentation.
 - Actor and surface: Acceptance agent driving the tagged CLI's live run view through a PTY and reconstructing frames with a terminal emulator.
 - Setup: An eligible fast source fixture and a deterministic audit agent that waits on a sentinel after the linked audit starts. Launch the workflow directly into the live run view so no synthetic `r` keypress is required.
