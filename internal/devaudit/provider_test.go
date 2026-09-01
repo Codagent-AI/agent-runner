@@ -55,6 +55,24 @@ func TestAuditWorkflowUsesBoundedEvidenceAndValueStageHandlers(t *testing.T) {
 	}
 }
 
+func TestSandboxExecArgsBindsOutputDirectoryAsParameter(t *testing.T) {
+	outputDir := "/audit/output/\"untrusted\"\n(allow file-write*)"
+	args := sandboxExecArgs([]string{"crosscheck", "--batch"}, outputDir)
+
+	if got, want := args[0], "-D"; got != want {
+		t.Fatalf("first sandbox argument = %q, want %q", got, want)
+	}
+	if got, want := args[1], "OUTPUT_DIR="+outputDir; got != want {
+		t.Fatalf("sandbox parameter = %q, want %q", got, want)
+	}
+	if strings.Contains(args[3], outputDir) {
+		t.Fatalf("sandbox profile must not interpolate output path: %q", args[3])
+	}
+	if !strings.Contains(args[3], `(param "OUTPUT_DIR")`) {
+		t.Fatalf("sandbox profile must bind OUTPUT_DIR parameter: %q", args[3])
+	}
+}
+
 func TestPrepareEvidenceStagePersistsBoundedEvidenceArtifacts(t *testing.T) {
 	temp := t.TempDir()
 	snapshot := filepath.Join(temp, "snapshot")

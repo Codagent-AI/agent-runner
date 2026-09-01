@@ -30,6 +30,7 @@ const (
 	rubricVersion          = "value-rubric-v1"
 	defaultPackageBytes    = 256 * 1024
 	defaultLeafDetailBytes = 32 * 1024
+	auditSandboxProfile    = "(version 1)\n(deny file-write*)\n(allow file-write* (subpath (param \"OUTPUT_DIR\")))\n"
 )
 
 // Fingerprints bind each value result to its frozen intake and separately
@@ -1173,15 +1174,15 @@ func sandboxedCrosscheckCommand(args []string, workspace, outputDir string) (*ex
 	if err := os.MkdirAll(outputDir, 0o700); err != nil {
 		return nil, err
 	}
-	profile := "(version 1)\n(deny file-write*)\n(allow file-write* (subpath \"" + sandboxProfilePath(outputDir) + "\"))\n"
-	argv := append([]string{"-p", profile, "--"}, args...)
+	argv := sandboxExecArgs(args, outputDir)
 	command := exec.Command("sandbox-exec", argv...) // #nosec G204 -- registered adapter argv is wrapped in an audit-owned OS sandbox.
 	command.Dir = workspace
 	return command, nil
 }
 
-func sandboxProfilePath(path string) string {
-	return strings.ReplaceAll(path, "\\", "\\\\")
+func sandboxExecArgs(args []string, outputDir string) []string {
+	argv := []string{"-D", "OUTPUT_DIR=" + outputDir, "-p", auditSandboxProfile, "--"}
+	return append(argv, args...)
 }
 
 func cliEnvironment(adapter cli.Adapter, request Request, input []byte, workdir string) ([]string, error) {
