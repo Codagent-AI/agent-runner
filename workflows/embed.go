@@ -121,11 +121,24 @@ func ReadFile(workflowFile string) ([]byte, error) {
 }
 
 func ListAssets(namespace string) ([]string, error) {
+	assets, err := listAssetsFS(FS, namespace)
+	if err == nil {
+		return assets, nil
+	}
+	if extra := registeredFS(); extra != nil {
+		if assets, extraErr := listAssetsFS(extra, namespace); extraErr == nil {
+			return assets, nil
+		}
+	}
+	return nil, err
+}
+
+func listAssetsFS(fsys fs.FS, namespace string) ([]string, error) {
 	if namespace == "" || namespace == "." || namespace == ".." || strings.Contains(namespace, "/") || strings.Contains(namespace, `\`) {
 		return nil, fmt.Errorf("invalid builtin workflow namespace: %s", namespace)
 	}
 	var assets []string
-	err := fs.WalkDir(FS, namespace, func(p string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(fsys, namespace, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				return fmt.Errorf("workflow namespace %q not found", namespace)

@@ -36,6 +36,13 @@ func TestTaggedProviderInjectsTheSingleHiddenAuditWorkflow(t *testing.T) {
 			t.Fatalf("stage %d = %q, want %q", index, workflow.Steps[index].ID, id)
 		}
 	}
+	assets, err := builtinworkflows.ListAssets("audit")
+	if err != nil {
+		t.Fatalf("list audit workflow assets: %v", err)
+	}
+	if len(assets) != 0 {
+		t.Fatalf("audit workflow assets = %v, want none", assets)
+	}
 }
 
 func TestAuditWorkflowUsesBoundedEvidenceAndLocalCorrectnessStageHandlers(t *testing.T) {
