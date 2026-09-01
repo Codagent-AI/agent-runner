@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -68,6 +69,49 @@ func TestCheckpointLoggerRecordsUnavailableEvidenceWithoutChangingEvent(t *testi
 		if !ok || checkpoint.Available || checkpoint.Reason == "" {
 			t.Fatalf("unavailable checkpoint = %#v", event.Data["git_checkpoint"])
 		}
+	}
+}
+
+func TestCheckpointLoggerCountsCommittedStepChanges(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("one\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "tracked.txt")
+	runGit(t, repo, "commit", "-m", "initial")
+
+	sink := &capturedLogger{}
+	logger := NewCheckpointLogger(sink, repo, "execution-1")
+	started := time.Now().UTC()
+	logger.Emit(Event{Timestamp: started.Format(time.RFC3339Nano), Prefix: "[commit]", Type: EventStepStart, Data: map[string]any{"command": "commit"}})
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("one\ntwo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "tracked.txt")
+	runGit(t, repo, "commit", "-m", "[commit] add second line")
+	logger.Emit(Event{Timestamp: started.Add(time.Second).Format(time.RFC3339Nano), Prefix: "[commit]", Type: EventStepEnd, Data: map[string]any{"outcome": "success"}})
+
+	changes, ok := sink.events[1].Data["git_changes"].(GitChangeCounts)
+	if !ok || !changes.Available || changes.FilesChanged != 1 || changes.LinesAdded != 1 || changes.LinesDeleted != 0 {
+		t.Fatalf("committed Git changes = %#v", sink.events[1].Data["git_changes"])
+	}
+}
+
+func TestGitUntrackedStatsRejectsExcessiveFileCount(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	for i := 0; i < 257; i++ {
+		name := filepath.Join(repo, fmt.Sprintf("untracked-%03d.txt", i))
+		if err := os.WriteFile(name, []byte("x\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := gitUntrackedStats(repo); err == nil {
+		t.Fatal("untracked evidence should be unavailable above the bounded file limit")
 	}
 }
 

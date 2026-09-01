@@ -3,6 +3,7 @@ package audit
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -22,13 +23,21 @@ type GitFileStat struct {
 // GitCheckpoint is a conservative local Git observation. An unavailable
 // checkpoint is evidence of a limitation, not evidence of zero change.
 type GitCheckpoint struct {
-	Available bool          `json:"available"`
-	Reason    string        `json:"reason,omitempty"`
-	HEAD      string        `json:"head,omitempty"`
-	Index     []GitFileStat `json:"index,omitempty"`
-	Worktree  []GitFileStat `json:"worktree,omitempty"`
-	Untracked []GitFileStat `json:"untracked,omitempty"`
+	Available         bool          `json:"available"`
+	Reason            string        `json:"reason,omitempty"`
+	HEAD              string        `json:"head,omitempty"`
+	Index             []GitFileStat `json:"index,omitempty"`
+	Worktree          []GitFileStat `json:"worktree,omitempty"`
+	Untracked         []GitFileStat `json:"untracked,omitempty"`
+	Committed         []GitFileStat `json:"committed,omitempty"`
+	CommittedObserved bool          `json:"committed_observed,omitempty"`
+	Commits           []string      `json:"commits,omitempty"`
 }
+
+const (
+	maxUntrackedFiles     = 256
+	maxUntrackedFileBytes = 4 << 20
+)
 
 // GitChangeCounts is the aggregate projection used by metrics consumers.
 type GitChangeCounts struct {
@@ -90,6 +99,7 @@ func (l *CheckpointLogger) Decorate(event Event) Event {
 		l.mu.Unlock()
 		if found {
 			end := observeGit(l.projectRoot)
+			completeHeadTransition(l.projectRoot, &start, &end)
 			event.Data["git_start"] = start
 			event.Data["git_checkpoint"] = end
 			event.Data["git_start_checkpoint"] = start
@@ -159,28 +169,47 @@ func gitUntrackedStats(root string) ([]GitFileStat, error) {
 		return nil, err
 	}
 	paths := bytes.Split(bytes.TrimSuffix([]byte(output), []byte{0}), []byte{0})
+	if len(paths) > maxUntrackedFiles {
+		return nil, fmt.Errorf("untracked file count exceeds %d", maxUntrackedFiles)
+	}
 	stats := make([]GitFileStat, 0, len(paths))
 	for _, path := range paths {
 		if len(path) == 0 {
 			continue
 		}
-		// diff --no-index exits one when it finds a difference, so CombinedOutput
-		// is required to retain the valid numstat payload.
-		command := exec.Command("git", "-C", root, "diff", "--no-index", "--numstat", "--", "/dev/null", filepath.FromSlash(string(path))) // #nosec G204 -- fixed Git args and local path.
-		data, commandErr := command.CombinedOutput()
-		if commandErr != nil {
-			if exitErr, ok := commandErr.(*exec.ExitError); !ok || exitErr.ExitCode() != 1 {
-				return nil, commandErr
-			}
+		clean := filepath.Clean(filepath.FromSlash(string(path)))
+		if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("unsafe untracked path %q", path)
 		}
-		parsed, parseErr := parseNumstat(data)
-		if parseErr != nil || len(parsed) != 1 {
-			return nil, fmt.Errorf("parse untracked %q: %w", path, parseErr)
+		filePath := filepath.Join(root, clean)
+		info, statErr := os.Lstat(filePath) // #nosec G703 -- path is constrained to a Git-reported relative file.
+		if statErr != nil {
+			return nil, statErr
 		}
-		parsed[0].Path = string(path)
-		stats = append(stats, parsed[0])
+		if !info.Mode().IsRegular() || info.Size() > maxUntrackedFileBytes {
+			return nil, fmt.Errorf("untracked file %q cannot be measured within limits", path)
+		}
+		data, readErr := os.ReadFile(filePath) // #nosec G304 -- path was constrained above.
+		if readErr != nil {
+			return nil, readErr
+		}
+		if bytes.IndexByte(data, 0) >= 0 {
+			return nil, fmt.Errorf("untracked binary file %q", path)
+		}
+		stats = append(stats, GitFileStat{Path: string(path), Added: countLines(data)})
 	}
 	return stats, nil
+}
+
+func countLines(data []byte) int64 {
+	if len(data) == 0 {
+		return 0
+	}
+	lines := int64(bytes.Count(data, []byte{'\n'}))
+	if data[len(data)-1] != '\n' {
+		lines++
+	}
+	return lines
 }
 
 func parseNumstat(output []byte) ([]GitFileStat, error) {
@@ -207,6 +236,27 @@ func parseNumstat(output []byte) ([]GitFileStat, error) {
 	return stats, nil
 }
 
+func completeHeadTransition(root string, start, end *GitCheckpoint) {
+	if !end.Available || start.HEAD == end.HEAD {
+		return
+	}
+	committed, err := gitNumstat(root, "diff", "--numstat", "-z", start.HEAD, end.HEAD)
+	if err != nil {
+		end.Available = false
+		end.Reason = "committed Git delta unavailable"
+		return
+	}
+	commits, err := gitOutput(root, "log", "--format=%H", start.HEAD+".."+end.HEAD)
+	if err != nil {
+		end.Available = false
+		end.Reason = "Git commit evidence unavailable"
+		return
+	}
+	end.Committed = committed
+	end.CommittedObserved = true
+	end.Commits = strings.Fields(commits)
+}
+
 func deriveGitChanges(start, end *GitCheckpoint) GitChangeCounts {
 	if !start.Available || !end.Available {
 		reason := start.Reason
@@ -217,27 +267,16 @@ func deriveGitChanges(start, end *GitCheckpoint) GitChangeCounts {
 	}
 	before := flattenCheckpoint(start)
 	after := flattenCheckpoint(end)
-	paths := make(map[string]struct{}, len(before)+len(after))
-	for path := range before {
-		paths[path] = struct{}{}
-	}
-	for path := range after {
-		paths[path] = struct{}{}
-	}
-	var result GitChangeCounts
-	for path := range paths {
-		left, right := before[path], after[path]
-		if right.added < left.added || right.deleted < left.deleted {
-			return GitChangeCounts{Reason: "repository change cannot be derived conservatively"}
+	if start.HEAD != end.HEAD {
+		if !end.CommittedObserved {
+			return GitChangeCounts{Reason: "committed Git delta unavailable"}
 		}
-		if right != left {
-			result.FilesChanged++
-			result.LinesAdded += right.added - left.added
-			result.LinesDeleted += right.deleted - left.deleted
+		if len(before) != 0 {
+			return GitChangeCounts{Reason: "preexisting dirty state prevents conservative commit attribution"}
 		}
+		return countGitStats(mergeGitStats(statsMap(end.Committed), after))
 	}
-	result.Available = true
-	return result
+	return countDirtyDelta(before, after)
 }
 
 type gitCounts struct{ added, deleted int64 }
@@ -251,6 +290,61 @@ func flattenCheckpoint(checkpoint *GitCheckpoint) map[string]gitCounts {
 			current.deleted += stat.Deleted
 			result[stat.Path] = current
 		}
+	}
+	return result
+}
+
+func statsMap(stats []GitFileStat) map[string]gitCounts {
+	result := make(map[string]gitCounts, len(stats))
+	for _, stat := range stats {
+		result[stat.Path] = gitCounts{added: stat.Added, deleted: stat.Deleted}
+	}
+	return result
+}
+
+func mergeGitStats(left, right map[string]gitCounts) map[string]gitCounts {
+	result := make(map[string]gitCounts, len(left)+len(right))
+	for path, counts := range left {
+		result[path] = counts
+	}
+	for path, counts := range right {
+		current := result[path]
+		current.added += counts.added
+		current.deleted += counts.deleted
+		result[path] = current
+	}
+	return result
+}
+
+func countDirtyDelta(before, after map[string]gitCounts) GitChangeCounts {
+	paths := make(map[string]struct{}, len(before)+len(after))
+	for path := range before {
+		paths[path] = struct{}{}
+	}
+	for path := range after {
+		paths[path] = struct{}{}
+	}
+	result := GitChangeCounts{Available: true}
+	for path := range paths {
+		left, right := before[path], after[path]
+		if right.added < left.added || right.deleted < left.deleted {
+			return GitChangeCounts{Reason: "repository change cannot be derived conservatively"}
+		}
+		if right != left {
+			result.FilesChanged++
+			result.LinesAdded += right.added - left.added
+			result.LinesDeleted += right.deleted - left.deleted
+		}
+	}
+	return result
+}
+
+func countGitStats(stats map[string]gitCounts) GitChangeCounts {
+	result := GitChangeCounts{Available: true}
+	for _, counts := range stats {
+		result.FilesChanged++
+		result.LinesAdded += counts.added
+		result.LinesDeleted += counts.deleted
 	}
 	return result
 }

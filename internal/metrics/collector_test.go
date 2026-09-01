@@ -90,6 +90,20 @@ func TestCollectorProjectsKnownGitChangesWithoutCoercingCoverage(t *testing.T) {
 	}
 }
 
+func TestAggregateRepositoryChangesIgnoresNonExecutableMetricRecords(t *testing.T) {
+	known := &audit.GitChangeCounts{Available: true, FilesChanged: 2, LinesAdded: 4, LinesDeleted: 1}
+	got := aggregateRepositoryChanges([]StepRecord{
+		{Kind: "step", Type: "shell", Outcome: "success", GitChanges: known},
+		{Kind: "agent-call", Type: "agent", Outcome: "success"},
+		{Kind: "nested-agent", Type: "agent", Outcome: "success"},
+		{Kind: "iteration", Type: "loop", Outcome: "success"},
+		{Kind: "step", Type: "agent", Outcome: "skipped"},
+	})
+	if got == nil || !got.Available || got.FilesChanged != 2 || got.LinesAdded != 4 || got.LinesDeleted != 1 {
+		t.Fatalf("repository aggregate = %+v", got)
+	}
+}
+
 func TestCollectorProcessesConcurrentTerminalEventsSafely(t *testing.T) {
 	started := time.Now().UTC()
 	c := NewCollector(t.TempDir(), "run", "workflow", started)

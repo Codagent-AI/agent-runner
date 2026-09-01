@@ -525,12 +525,14 @@ func (c *Collector) refreshAggregatesLocked() {
 }
 
 func aggregateRepositoryChanges(records []StepRecord) *audit.GitChangeCounts {
-	if len(records) == 0 {
-		return nil
-	}
 	result := audit.GitChangeCounts{Available: true}
+	eligible := 0
 	for i := range records {
 		record := &records[i]
+		if !checkpointEligible(record) {
+			continue
+		}
+		eligible++
 		if record.GitChanges == nil || !record.GitChanges.Available {
 			return &audit.GitChangeCounts{Reason: "one or more step checkpoints unavailable"}
 		}
@@ -538,7 +540,22 @@ func aggregateRepositoryChanges(records []StepRecord) *audit.GitChangeCounts {
 		result.LinesAdded += record.GitChanges.LinesAdded
 		result.LinesDeleted += record.GitChanges.LinesDeleted
 	}
+	if eligible == 0 {
+		return nil
+	}
 	return &result
+}
+
+func checkpointEligible(record *StepRecord) bool {
+	if record.Kind != "step" || record.Outcome == "skipped" {
+		return false
+	}
+	switch record.Type {
+	case "agent", "shell", "script", "ui":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Collector) persist() {
