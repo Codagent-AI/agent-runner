@@ -5,11 +5,11 @@ params:
   - name: audit_request
 steps:
   - id: prepare-evidence
-    command: 'echo "audit stage prepare-evidence requires the development audit handler" >&2; exit 1'
+    command: 'audit-stage prepare-evidence'
   - id: value-audit
-    command: 'echo "audit stage value-audit requires the development audit handler" >&2; exit 1'
+    command: 'audit-stage value-audit'
   - id: validate-value
-    command: 'echo "audit stage validate-value requires the development audit handler" >&2; exit 1'
+    command: 'audit-stage validate-value'
   - id: correctness-audit
     command: 'echo "audit stage correctness-audit requires the development audit handler" >&2; exit 1'
   - id: validate-publish-correctness

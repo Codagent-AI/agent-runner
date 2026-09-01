@@ -74,6 +74,9 @@ func executeAuditWorkflow(request Request) error {
 type auditProcessRunner struct{}
 
 func (auditProcessRunner) RunShell(command string, capture bool, workdir string) (iexec.ProcessResult, error) {
+	if strings.HasPrefix(command, "audit-stage ") {
+		return runAuditStage(strings.TrimSpace(strings.TrimPrefix(command, "audit-stage ")), workdir)
+	}
 	cmd := exec.Command("sh", "-c", command) // #nosec G204 -- commands are from the injected private audit workflow.
 	cmd.Dir = workdir
 	var stdout, stderr strings.Builder
@@ -91,6 +94,35 @@ func (auditProcessRunner) RunShell(command string, capture bool, workdir string)
 		return result, nil
 	}
 	return result, err
+}
+
+func runAuditStage(stage, auditSessionDir string) (iexec.ProcessResult, error) {
+	data, err := os.ReadFile(filepath.Join(auditSessionDir, "request.json")) // #nosec G304 -- fixed audit-run request path.
+	if err != nil {
+		return iexec.ProcessResult{ExitCode: 1, Stderr: err.Error()}, nil
+	}
+	var request Request
+	if err := json.Unmarshal(data, &request); err != nil {
+		return iexec.ProcessResult{ExitCode: 1, Stderr: fmt.Sprintf("decode audit request: %v", err)}, nil
+	}
+	var stageErr error
+	switch stage {
+	case "prepare-evidence":
+		_, stageErr = PrepareEvidence(request)
+	case "value-audit":
+		stageErr = ensureValueOutputs(request)
+	case "validate-value":
+		stageErr = validateValueStage(request)
+	default:
+		stageErr = fmt.Errorf("audit stage %q is not implemented", stage)
+	}
+	if stageErr != nil {
+		if stage == "prepare-evidence" || stage == "value-audit" || stage == "validate-value" {
+			_ = stateio.WriteJSONAtomic(filepath.Join(auditSessionDir, "value-diagnostics.json"), map[string]string{"stage": stage, "error": stageErr.Error()})
+		}
+		return iexec.ProcessResult{ExitCode: 1, Stderr: stageErr.Error()}, nil
+	}
+	return iexec.ProcessResult{Started: true, ExitCode: 0}, nil
 }
 
 func (auditProcessRunner) RunAgent(*iexec.AgentProcessOptions) (iexec.ProcessResult, error) {
@@ -381,6 +413,9 @@ func Replay(sourceSessionDir, executionSessionID string, launch func(Request) er
 	}
 	snapshot, err := snapshotEvidenceAt(sourceSessionDir, filepath.Join(auditSessionDir(sourceSessionDir, auditID), "snapshot"))
 	if err != nil {
+		return err
+	}
+	if err := exportGitEvidence(summary.WorkingDir, snapshot); err != nil {
 		return err
 	}
 	link.SnapshotPath = snapshot

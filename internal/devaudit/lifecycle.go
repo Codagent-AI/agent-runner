@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -141,7 +142,7 @@ func (c Coordinator) AfterFinalization(summary runner.PostFinalizationSummary) e
 		if err != nil {
 			return err
 		}
-		snapshot, err := snapshotEvidence(summary.SessionDir, auditID)
+		snapshot, err := snapshotEvidenceForProject(summary.SessionDir, auditID, summary.WorkingDir)
 		if err != nil {
 			return c.persistFailure(summary, &lifecycle, auditID, err, now())
 		}
@@ -300,6 +301,20 @@ func snapshotEvidence(sessionDir, auditID string) (string, error) {
 	return snapshotEvidenceAt(sessionDir, dir)
 }
 
+// snapshotEvidenceForProject records Git facts while the source run still
+// owns its launch boundary. The export is optional evidence: a non-Git source
+// remains auditable with explicit unavailable attribution.
+func snapshotEvidenceForProject(sessionDir, auditID, projectRoot string) (string, error) {
+	dir := filepath.Join(sessionDir, "audit-snapshots", auditID)
+	if _, err := snapshotEvidenceAt(sessionDir, dir); err != nil {
+		return "", err
+	}
+	if err := exportGitEvidence(projectRoot, dir); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
 func snapshotEvidenceAt(sessionDir, dir string) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
@@ -308,6 +323,65 @@ func snapshotEvidenceAt(sessionDir, dir string) (string, error) {
 		return "", err
 	}
 	return dir, nil
+}
+
+type snapshottedGitCommit struct {
+	SHA          string   `json:"sha"`
+	Subject      string   `json:"subject"`
+	Paths        []string `json:"paths"`
+	FilesChanged int64    `json:"files_changed"`
+	LinesAdded   int64    `json:"lines_added"`
+	LinesDeleted int64    `json:"lines_deleted"`
+}
+
+type snapshottedGitEvidence struct {
+	Available bool                   `json:"available"`
+	Reason    string                 `json:"reason,omitempty"`
+	Commits   []snapshottedGitCommit `json:"commits"`
+}
+
+func exportGitEvidence(projectRoot, snapshotDir string) error {
+	evidence := snapshottedGitEvidence{Commits: []snapshottedGitCommit{}}
+	if strings.TrimSpace(projectRoot) == "" {
+		evidence.Reason = "project root unavailable"
+		return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+	}
+	output, err := exec.Command("git", "-C", projectRoot, "log", "--all", "--format=%H%x09%s").Output() // #nosec G204 -- fixed Git export command at launch.
+	if err != nil {
+		evidence.Reason = "git commit metadata unavailable"
+		return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		sha, subject, ok := strings.Cut(line, "\t")
+		if !ok || sha == "" {
+			continue
+		}
+		commit := snapshottedGitCommit{SHA: sha, Subject: subject, Paths: []string{}}
+		stats, statErr := exec.Command("git", "-C", projectRoot, "show", "--format=", "--numstat", sha).Output() // #nosec G204 -- SHA comes from the fixed Git log export.
+		if statErr == nil {
+			for _, stat := range strings.Split(strings.TrimSpace(string(stats)), "\n") {
+				fields := strings.Split(stat, "\t")
+				if len(fields) < 3 {
+					continue
+				}
+				var added, deleted int64
+				if _, err := fmt.Sscan(fields[0], &added); err != nil {
+					continue
+				}
+				if _, err := fmt.Sscan(fields[1], &deleted); err != nil {
+					continue
+				}
+				commit.FilesChanged++
+				commit.LinesAdded += added
+				commit.LinesDeleted += deleted
+				commit.Paths = append(commit.Paths, fields[2])
+			}
+		}
+		sort.Strings(commit.Paths)
+		evidence.Commits = append(evidence.Commits, commit)
+	}
+	evidence.Available = true
+	return stateio.WriteJSONAtomic(filepath.Join(snapshotDir, "git-evidence.json"), evidence)
 }
 
 func copyEvidenceTree(source, destination string) error {
