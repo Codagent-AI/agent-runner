@@ -222,13 +222,16 @@ func transition(summary runner.PostFinalizationSummary, lifecycle *Lifecycle, li
 	if state == LaunchFailed {
 		link.FailedAt = stamp
 	}
-	if err := writeLifecycle(filepath.Join(summary.SessionDir, lifecycleFileName), *lifecycle); err != nil {
-		return err
-	}
+	// The source and audit mirrors are the preconditions for a durable launch
+	// claim. Write them first: if either fails, lifecycle remains reserved and a
+	// later finalization attempt can safely retry before any child exists.
 	if err := appendSourceLink(summary.SessionDir, *link); err != nil {
 		return err
 	}
-	return updateAuditState(auditSessionDir(summary.SessionDir, link.AuditRunID), *link, false)
+	if err := updateAuditState(auditSessionDir(summary.SessionDir, link.AuditRunID), *link, false); err != nil {
+		return err
+	}
+	return writeLifecycle(filepath.Join(summary.SessionDir, lifecycleFileName), *lifecycle)
 }
 
 func updateAuditState(sessionDir string, link Link, completed bool) error {
