@@ -60,7 +60,7 @@ func executeAuditWorkflow(request Request) error {
 	}
 	result, runErr := runner.RunWorkflow(&workflow, map[string]string{"audit_request": filepath.Join(request.AuditSessionDir, "request.json")}, &runner.Options{
 		SessionDir: request.AuditSessionDir, WorkflowFile: "builtin:audit/run-audit-v1.0.yaml", WorkingDir: request.AuditSessionDir,
-		ProjectRoot: request.AuditSessionDir, ProcessRunner: auditProcessRunner{}, GlobExpander: auditGlobExpander{}, Log: &runner.DiscardLogger{},
+		ProjectRoot: request.AuditSessionDir, ProcessRunner: auditProcessRunner{auditSessionDir: request.AuditSessionDir}, GlobExpander: auditGlobExpander{}, Log: &runner.DiscardLogger{},
 	})
 	warning := ""
 	if runErr != nil {
@@ -71,11 +71,15 @@ func executeAuditWorkflow(request Request) error {
 	return completeAudit(request, warning)
 }
 
-type auditProcessRunner struct{}
+type auditProcessRunner struct{ auditSessionDir string }
 
-func (auditProcessRunner) RunShell(command string, capture bool, workdir string) (iexec.ProcessResult, error) {
+func (r auditProcessRunner) RunShell(command string, capture bool, workdir string) (iexec.ProcessResult, error) {
 	if strings.HasPrefix(command, "audit-stage ") {
-		return runAuditStage(strings.TrimSpace(strings.TrimPrefix(command, "audit-stage ")), workdir)
+		auditSessionDir := r.auditSessionDir
+		if auditSessionDir == "" {
+			auditSessionDir = workdir
+		}
+		return runAuditStage(strings.TrimSpace(strings.TrimPrefix(command, "audit-stage ")), auditSessionDir)
 	}
 	cmd := exec.Command("sh", "-c", command) // #nosec G204 -- commands are from the injected private audit workflow.
 	cmd.Dir = workdir

@@ -9,8 +9,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/metrics"
+	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/stateio"
 	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
@@ -114,6 +116,55 @@ func TestPrepareEvidenceStagePersistsBoundedEvidenceArtifacts(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(request.AuditSessionDir, name)); err != nil {
 			t.Fatalf("%s was not persisted: %v", name, err)
 		}
+	}
+}
+
+func TestAuditWorkflowStageUsesAuditSessionWhenStepWorkdirIsEmpty(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	temp := t.TempDir()
+	snapshot := filepath.Join(temp, "snapshot")
+	if err := os.MkdirAll(snapshot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	artifact := metrics.Artifact{
+		SchemaVersion: metrics.SchemaVersion,
+		RunID:         "source-run",
+		Workflow:      "core:example",
+		Sessions:      []metrics.SessionRecord{{ExecutionSessionID: "source-session"}},
+		Steps:         []metrics.StepRecord{{Prefix: "[implement]", ID: "implement", Kind: "step", Type: "agent", Outcome: "success", ExecutionSessionID: "source-session"}},
+	}
+	data, err := json.Marshal(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(snapshot, metrics.FileName), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	auditDir := filepath.Join(temp, "audit")
+	if err := os.MkdirAll(auditDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	request := Request{AuditRunID: "audit-run", AuditSessionDir: auditDir, SnapshotPath: snapshot, SourceRunID: "source-run", ExecutionSessionID: "source-session", SourceWorkflow: "core:example", Trigger: "automatic"}
+	requestData, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(auditDir, "request.json"), requestData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := loader.LoadWorkflow("builtin:audit/run-audit-v1.0.yaml", loader.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runner.RunWorkflow(&workflow, map[string]string{"audit_request": filepath.Join(auditDir, "request.json")}, &runner.Options{
+		SessionDir: auditDir, WorkflowFile: "builtin:audit/run-audit-v1.0.yaml", WorkingDir: auditDir, ProjectRoot: auditDir,
+		ProfileStore: &config.Config{}, ProcessRunner: auditProcessRunner{auditSessionDir: auditDir}, GlobExpander: auditGlobExpander{}, Log: &runner.DiscardLogger{},
+	})
+	if err != nil {
+		t.Fatalf("run audit workflow: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(auditDir, "evidence-index.json")); err != nil {
+		t.Fatalf("prepare-evidence did not use the audit session: %v", err)
 	}
 }
 
