@@ -449,7 +449,7 @@ func containerStatusText(node *StepNode) string {
 	}
 	if node.Type == NodeLoop {
 		if total := loopTotal(node); total > 0 {
-			lines = append(lines, fmt.Sprintf("iterations: %d of %d", node.IterationsCompleted, total))
+			lines = append(lines, fmt.Sprintf("iterations: %d of %d", loopDisplayProgress(node), total))
 		}
 	}
 	if node.Type == NodeIteration {

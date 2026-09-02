@@ -100,6 +100,28 @@ func loopTotal(n *StepNode) int {
 	return 0
 }
 
+// loopDisplayProgress includes the currently running iteration. The executor's
+// iterations_completed value is only emitted when the loop ends, so relying on
+// that field alone leaves live counters at zero throughout execution.
+func loopDisplayProgress(n *StepNode) int {
+	if n == nil {
+		return 0
+	}
+	progress := n.IterationsCompleted
+	for _, child := range n.Children {
+		if child.Type != NodeIteration || (child.Status == StatusPending && child.StartOrdinal == 0) {
+			continue
+		}
+		if current := child.IterationIndex + 1; current > progress {
+			progress = current
+		}
+	}
+	if total := loopTotal(n); total > 0 && progress > total {
+		return total
+	}
+	return progress
+}
+
 func statusLabel(s NodeStatus) string {
 	switch s {
 	case StatusSuccess:

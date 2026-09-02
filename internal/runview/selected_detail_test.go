@@ -45,6 +45,25 @@ func TestDetailDocumentShellUsesCurrentRailsAndKeepsStreamsDistinct(t *testing.T
 	}
 }
 
+func TestContainerStatusTextActiveLoopIncludesCurrentIteration(t *testing.T) {
+	maxIterations := 3
+	loop := &StepNode{
+		ID:                  "retry",
+		Type:                NodeLoop,
+		Status:              StatusInProgress,
+		IterationsCompleted: 0,
+		StaticLoopMax:       &maxIterations,
+	}
+	loop.Children = []*StepNode{
+		{Type: NodeIteration, Status: StatusFailed, Parent: loop, IterationIndex: 0},
+		{Type: NodeIteration, Status: StatusInProgress, Parent: loop, IterationIndex: 1},
+	}
+
+	if got := containerStatusText(loop); !strings.Contains(got, "iterations: 2 of 3") {
+		t.Fatalf("active loop detail did not include current iteration:\n%s", got)
+	}
+}
+
 func TestDetailDocumentCopyUsesFullInputAndOptionalPreviousSection(t *testing.T) {
 	prompt := strings.Repeat("long prompt words ", 20)
 	node := &StepNode{ID: "review", Type: NodeHeadlessAgent, Status: StatusSuccess, StaticPrompt: prompt, Stdout: "recorded response"}

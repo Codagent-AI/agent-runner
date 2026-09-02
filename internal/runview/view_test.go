@@ -261,7 +261,7 @@ func TestBuildStepRows_SelectedStepShowsDirectChildrenOnly(t *testing.T) {
 	if !regexp.MustCompile(`^\s{2,}\$ {2}gather`).MatchString(plain[2]) {
 		t.Fatalf("row 2 should show the first direct child with positive indent, got %q", plain[2])
 	}
-	if !regexp.MustCompile(`^\s{2,}↺ {2}fanout \(1/2\)`).MatchString(plain[3]) {
+	if !regexp.MustCompile(`^\s{2,}↺ {2}fanout \(2/2\)`).MatchString(plain[3]) {
 		t.Fatalf("row 3 should show the direct loop child with its glyph and counter, got %q", plain[3])
 	}
 	if strings.Contains(strings.Join(plain, "\n"), "iter 2") {
@@ -318,7 +318,7 @@ func TestBuildStepRows_SelectedLoopShowsIterationsWithoutBindingValues(t *testin
 	if !strings.Contains(joined, "↺") {
 		t.Fatalf("loop row should show a loop glyph, got:\n%s", joined)
 	}
-	if !strings.Contains(joined, "fanout (1/2)") {
+	if !strings.Contains(joined, "fanout (2/2)") {
 		t.Fatalf("loop row should show the iteration counter, got:\n%s", joined)
 	}
 	if !strings.Contains(joined, "iter 1") || !strings.Contains(joined, "iter 2") {
@@ -832,6 +832,27 @@ func TestStepRowParts_LoopShowsGlyphAndCounter(t *testing.T) {
 	}
 	if label != "fanout (3/4)" {
 		t.Fatalf("loop label = %q, want %q", label, "fanout (3/4)")
+	}
+}
+
+func TestStepRowParts_ActiveLoopCounterIncludesCurrentIteration(t *testing.T) {
+	m := newTestModel(&Tree{Root: &StepNode{ID: "wf", Type: NodeRoot}}, FromList)
+	loop := &StepNode{
+		ID:                  "fanout",
+		Type:                NodeLoop,
+		Status:              StatusInProgress,
+		IterationsCompleted: 0,
+		LoopMatches:         []string{"a", "b", "c", "d", "e"},
+	}
+	loop.Children = []*StepNode{
+		{Type: NodeIteration, Status: StatusSuccess, Parent: loop, IterationIndex: 0, StartOrdinal: 1},
+		{Type: NodeIteration, Status: StatusSuccess, Parent: loop, IterationIndex: 1, StartOrdinal: 2},
+		{Type: NodeIteration, Status: StatusInProgress, Parent: loop, IterationIndex: 2, StartOrdinal: 3},
+	}
+
+	_, label, _ := m.stepRowParts(loop)
+	if label != "fanout (3/5)" {
+		t.Fatalf("active loop label = %q, want %q", label, "fanout (3/5)")
 	}
 }
 
