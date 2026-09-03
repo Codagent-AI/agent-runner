@@ -50,5 +50,20 @@ if git diff --cached --quiet -- "$change_dir"; then
   exit 1
 fi
 
-git commit -m "[commit-plan] chore: add change documents for $change_name" -- "$change_dir"
+commit_message="[commit-plan] chore: add change documents for $change_name"
+ticket_prefix=${change_name%%-*}
+ticket_rest=${change_name#*-}
+ticket_number=${ticket_rest%%-*}
+case "$ticket_prefix:$ticket_number" in
+  "":*|*:*[!0-9]*)
+    ;;
+  *)
+    if [ "$ticket_rest" != "$ticket_number" ]; then
+      ticket_prefix=$(printf '%s' "$ticket_prefix" | tr '[:lower:]' '[:upper:]')
+      commit_message="$ticket_prefix-$ticket_number: Add change plan"
+    fi
+    ;;
+esac
+
+git commit -m "$commit_message" -- "$change_dir"
 agent-validator skip

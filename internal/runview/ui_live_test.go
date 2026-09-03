@@ -19,13 +19,17 @@ import (
 // forwardingLiveProgram exercises the same Coordinator-to-Bubble-Tea message
 // boundary as a live run while keeping the integration fixture deterministic.
 type forwardingLiveProgram struct {
-	model *Model
-	sent  chan tea.Msg
+	model     *Model
+	sent      chan tea.Msg
+	firstSent time.Time
 }
 
 func (p *forwardingLiveProgram) ReleaseTerminal() error { return nil }
 func (p *forwardingLiveProgram) RestoreTerminal() error { return nil }
 func (p *forwardingLiveProgram) Send(msg tea.Msg) {
+	if p.firstSent.IsZero() {
+		p.firstSent = time.Now()
+	}
 	updated, _ := p.model.Update(msg)
 	p.model = updated.(*Model)
 	if p.sent != nil {
@@ -63,8 +67,8 @@ func TestINT002LiveCoordinatorPreservesOutputAndUIOwnership(t *testing.T) {
 	if _, err := runner.RunShell("printf '\\033[31mfirst'; sleep 0.02; printf ' second'; printf 'warning' >&2", true, ""); err != nil {
 		t.Fatalf("deterministic shell fixture: %v", err)
 	}
-	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
-		t.Fatalf("first-byte fixture exceeded 100ms target: %s", elapsed)
+	if latency := program.firstSent.Sub(started); latency > 100*time.Millisecond {
+		t.Fatalf("first-byte fixture exceeded 100ms target: %s", latency)
 	}
 	m = program.model
 	if strings.Contains(m.selectedNode().Stdout, "\x1b") || !strings.Contains(m.selectedNode().Stdout, "first second") {

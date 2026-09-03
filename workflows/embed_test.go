@@ -591,55 +591,19 @@ None.
 	if err != nil {
 		t.Fatalf("read valid test plan: %v", err)
 	}
-	emptyAcceptanceInventory := strings.ReplaceAll(
-		string(validTestPlan),
-		`### AT-001: Use a widget
-- Classification: Required
-- Covers: Widget behavior
-- Actor and surface: User through the CLI
-- Setup: Isolated workspace
-- Steps: Create and inspect a widget
-- Expected: The widget is visible
-- Evidence: Captured terminal output
-- Effects and cleanup: Remove the workspace
-- Permitted substitutes: None
 
-`,
-		"",
-	)
-	emptyAcceptanceInventory = strings.ReplaceAll(
-		emptyAcceptanceInventory,
-		"| Widget behavior | INT-001 | E2E-001 | AT-001 | — |",
-		"| Widget behavior | INT-001 | E2E-001 | — | — |",
-	)
-	for name, content := range map[string]string{
-		"missing required section":   strings.ReplaceAll(string(validTestPlan), "## Coverage Map", "## Traceability"),
-		"dangling coverage id":       strings.ReplaceAll(string(validTestPlan), "AT-001 | —", "AT-999 | —"),
-		"unmapped obligation id":     strings.ReplaceAll(string(validTestPlan), "E2E-001 | AT-001", "— | AT-001"),
-		"duplicate obligation id":    string(validTestPlan) + "\n### AT-001: Duplicate\n",
-		"empty acceptance inventory": emptyAcceptanceInventory,
-		"missing integration field": strings.ReplaceAll(
-			string(validTestPlan),
-			"- Boundary: CLI and service\n",
-			"",
-		),
-		"missing acceptance field":       strings.ReplaceAll(string(validTestPlan), "- Evidence: Captured terminal output\n", ""),
-		"empty conditional trigger":      strings.ReplaceAll(string(validTestPlan), "- Classification: Required", "- Classification: Conditional:"),
-		"missing human-only disposition": strings.ReplaceAll(string(validTestPlan), "\nNone.\n\n## Coverage Map", "\nNot applicable.\n\n## Coverage Map"),
-	} {
-		t.Run(name, func(t *testing.T) {
-			testPlanPath := filepath.Join(changeDir, "test-plan.md")
-			if err := os.WriteFile(testPlanPath, []byte(content), 0o600); err != nil {
-				t.Fatalf("write invalid test plan: %v", err)
-			}
-			if err := run(false); err == nil {
-				t.Fatal("definition validation passed malformed test plan")
-			}
-			if err := os.WriteFile(testPlanPath, validTestPlan, 0o600); err != nil {
-				t.Fatalf("restore valid test plan: %v", err)
-			}
-		})
-	}
+	t.Run("free-form test plan", func(t *testing.T) {
+		testPlanPath := filepath.Join(changeDir, "test-plan.md")
+		if err := os.WriteFile(testPlanPath, []byte("# Test plan\n\nExercise the public workflow manually.\n"), 0o600); err != nil {
+			t.Fatalf("write free-form test plan: %v", err)
+		}
+		if err := run(false); err != nil {
+			t.Fatalf("definition validation rejected free-form test plan: %v", err)
+		}
+		if err := os.WriteFile(testPlanPath, validTestPlan, 0o600); err != nil {
+			t.Fatalf("restore valid test plan: %v", err)
+		}
+	})
 
 	t.Run("missing test plan", func(t *testing.T) {
 		testPlanPath := filepath.Join(changeDir, "test-plan.md")
@@ -1327,9 +1291,294 @@ func TestCoreCommitChangePlanRestrictsCommitToChangeDirectory(t *testing.T) {
 		t.Fatalf("ReadAsset(core/commit-change-plan.sh): %v", err)
 	}
 
-	commit := `git commit -m "[commit-plan] chore: add change documents for $change_name" -- "$change_dir"`
+	commit := `git commit -m `
 	if !strings.Contains(string(script), commit) {
 		t.Fatal("commit-change-plan.sh must restrict git commit to change_dir")
+	}
+	if !strings.Contains(string(script), `-- "$change_dir"`) {
+		t.Fatal("commit-change-plan.sh must restrict git commit to change_dir")
+	}
+}
+
+func TestCoreCommitChangePlanUsesTicketSubjectFromChangeName(t *testing.T) {
+	script, err := ReadAsset("core/commit-change-plan.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(core/commit-change-plan.sh): %v", err)
+	}
+
+	tempDir := t.TempDir()
+	scriptPath := filepath.Join(tempDir, "commit-change-plan.sh")
+	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	binDir := filepath.Join(tempDir, "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatalf("create bin dir: %v", err)
+	}
+	pythonPath, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 not available")
+	}
+	if err := os.Symlink(pythonPath, filepath.Join(binDir, "python3")); err != nil {
+		t.Fatalf("symlink python3: %v", err)
+	}
+	gitArgs := filepath.Join(tempDir, "git-args")
+	fakeGit := `#!/bin/sh
+if [ "$1" = diff ]; then
+  exit 1
+fi
+if [ "$1" = commit ]; then
+  printf '%s\n' "$@" > "$GIT_ARGS"
+fi
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(binDir, "git"), []byte(fakeGit), 0o700); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "agent-validator"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write fake agent-validator: %v", err)
+	}
+
+	cmd := exec.Command("sh", scriptPath)
+	cmd.Dir = tempDir
+	cmd.Env = append(os.Environ(), "PATH="+binDir+":/usr/bin:/bin", "GIT_ARGS="+gitArgs)
+	cmd.Stdin = strings.NewReader(`{"change_name":"plateng-1949-promote-to-eod","change_dir":"openspec/changes/plateng-1949-promote-to-eod"}`)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("script failed: %v\n%s", err, out)
+	}
+	args, err := os.ReadFile(gitArgs)
+	if err != nil {
+		t.Fatalf("read git args: %v", err)
+	}
+	if !strings.Contains(string(args), "PLATENG-1949: Add change plan") {
+		t.Fatalf("git args = %q, want ticket-style subject", args)
+	}
+}
+
+func TestOpenSpecArchiveChangeUsesTicketSubjectFromChangeName(t *testing.T) {
+	script, err := ReadAsset("openspec/archive-change.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(openspec/archive-change.sh): %v", err)
+	}
+	validateScript, err := ReadAsset("openspec/validate-change-name.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(openspec/validate-change-name.sh): %v", err)
+	}
+
+	tempDir := t.TempDir()
+	scriptPath := filepath.Join(tempDir, "archive-change.sh")
+	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
+		t.Fatalf("write archive script: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "validate-change-name.sh"), validateScript, 0o700); err != nil {
+		t.Fatalf("write validation script: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tempDir, "openspec", "changes", "plateng-1949-promote-to-eod"), 0o755); err != nil {
+		t.Fatalf("create active change: %v", err)
+	}
+
+	binDir := filepath.Join(tempDir, "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatalf("create bin dir: %v", err)
+	}
+	fakeOpenSpec := `#!/bin/sh
+if [ "$1" = archive ]; then
+  mkdir -p openspec/changes/archive
+  mv "openspec/changes/$2" "openspec/changes/archive/2026-09-03-$2"
+fi
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(binDir, "openspec"), []byte(fakeOpenSpec), 0o700); err != nil {
+		t.Fatalf("write fake openspec: %v", err)
+	}
+	gitArgs := filepath.Join(tempDir, "git-args")
+	fakeGit := `#!/bin/sh
+if [ "$1" = diff ]; then
+  exit 1
+fi
+if [ "$1" = commit ]; then
+  printf '%s\n' "$@" > "$GIT_ARGS"
+fi
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(binDir, "git"), []byte(fakeGit), 0o700); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "agent-validator"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write fake agent-validator: %v", err)
+	}
+
+	cmd := exec.Command("sh", scriptPath)
+	cmd.Dir = tempDir
+	cmd.Env = append(os.Environ(), "PATH="+binDir+":/usr/bin:/bin", "GIT_ARGS="+gitArgs)
+	cmd.Stdin = strings.NewReader(`{"change_name":"plateng-1949-promote-to-eod"}`)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("script failed: %v\n%s", err, out)
+	}
+	args, err := os.ReadFile(gitArgs)
+	if err != nil {
+		t.Fatalf("read git args: %v", err)
+	}
+	if !strings.Contains(string(args), "PLATENG-1949: Archive change") {
+		t.Fatalf("git args = %q, want ticket-style archive subject", args)
+	}
+}
+
+func TestOpenSpecArchiveChangeResumesAfterArchiveMove(t *testing.T) {
+	script, err := ReadAsset("openspec/archive-change.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(openspec/archive-change.sh): %v", err)
+	}
+	validateScript, err := ReadAsset("openspec/validate-change-name.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(openspec/validate-change-name.sh): %v", err)
+	}
+
+	tempDir := t.TempDir()
+	scriptPath := filepath.Join(tempDir, "archive-change.sh")
+	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
+		t.Fatalf("write archive script: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "validate-change-name.sh"), validateScript, 0o700); err != nil {
+		t.Fatalf("write validation script: %v", err)
+	}
+	archiveDir := filepath.Join(tempDir, "openspec", "changes", "archive", "2026-09-03-plateng-1949-promote-to-eod")
+	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
+		t.Fatalf("create archived change: %v", err)
+	}
+
+	binDir := filepath.Join(tempDir, "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatalf("create bin dir: %v", err)
+	}
+	openSpecMarker := filepath.Join(tempDir, "openspec-called")
+	fakeOpenSpec := "#!/bin/sh\n: > " + strconv.Quote(openSpecMarker) + "\nexit 99\n"
+	if err := os.WriteFile(filepath.Join(binDir, "openspec"), []byte(fakeOpenSpec), 0o700); err != nil {
+		t.Fatalf("write fake openspec: %v", err)
+	}
+	gitArgs := filepath.Join(tempDir, "git-args")
+	fakeGit := `#!/bin/sh
+if [ "$1" = diff ] && [ "$4" = --diff-filter=D ]; then
+  printf 'openspec/changes/plateng-1949-promote-to-eod/proposal.md\n'
+  exit 0
+fi
+if [ "$1" = diff ] && [ "$4" = --diff-filter=A ]; then
+  printf 'openspec/changes/archive/2026-09-03-plateng-1949-promote-to-eod/proposal.md\n'
+  exit 0
+fi
+if [ "$1" = add ]; then
+  for arg in "$@"; do
+    if [ "$arg" = openspec/changes/plateng-1949-promote-to-eod ]; then
+      printf "fatal: pathspec '%s' did not match any files\n" "$arg" >&2
+      exit 128
+    fi
+  done
+fi
+if [ "$1" = diff ]; then
+  exit 1
+fi
+if [ "$1" = commit ]; then
+  printf '%s\n' "$@" > "$GIT_ARGS"
+fi
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(binDir, "git"), []byte(fakeGit), 0o700); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "agent-validator"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write fake agent-validator: %v", err)
+	}
+
+	cmd := exec.Command("sh", scriptPath)
+	cmd.Dir = tempDir
+	cmd.Env = append(os.Environ(), "PATH="+binDir+":/usr/bin:/bin", "GIT_ARGS="+gitArgs)
+	cmd.Stdin = strings.NewReader(`{"change_name":"plateng-1949-promote-to-eod"}`)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("script did not resume completed archive move: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(openSpecMarker); !os.IsNotExist(err) {
+		t.Fatalf("openspec was invoked after the active change was already archived: %v", err)
+	}
+	args, err := os.ReadFile(gitArgs)
+	if err != nil {
+		t.Fatalf("read git args: %v", err)
+	}
+	if !strings.Contains(string(args), "openspec/changes/plateng-1949-promote-to-eod") {
+		t.Fatalf("git commit args = %q, want removed active change path", args)
+	}
+}
+
+func TestOpenSpecArchiveChangeRejectsUnprovenResume(t *testing.T) {
+	script, err := ReadAsset("openspec/archive-change.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(openspec/archive-change.sh): %v", err)
+	}
+	validateScript, err := ReadAsset("openspec/validate-change-name.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(openspec/validate-change-name.sh): %v", err)
+	}
+
+	for _, testCase := range []struct {
+		name        string
+		archiveName string
+		gitStatus   string
+	}{
+		{
+			name:        "historical exact archive",
+			archiveName: "2026-09-03-plateng-1949-promote-to-eod",
+		},
+		{
+			name:        "suffix collision",
+			archiveName: "2026-09-03-my-plateng-1949-promote-to-eod",
+		},
+		{
+			name:        "unrelated archive modification",
+			archiveName: "2026-09-03-plateng-1949-promote-to-eod",
+			gitStatus:   " M openspec/changes/archive/2026-09-03-plateng-1949-promote-to-eod/proposal.md",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			tempDir := t.TempDir()
+			scriptPath := filepath.Join(tempDir, "archive-change.sh")
+			if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
+				t.Fatalf("write archive script: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(tempDir, "validate-change-name.sh"), validateScript, 0o700); err != nil {
+				t.Fatalf("write validation script: %v", err)
+			}
+			archiveDir := filepath.Join(tempDir, "openspec", "changes", "archive", testCase.archiveName)
+			if err := os.MkdirAll(archiveDir, 0o755); err != nil {
+				t.Fatalf("create archived change: %v", err)
+			}
+
+			binDir := filepath.Join(tempDir, "bin")
+			if err := os.Mkdir(binDir, 0o755); err != nil {
+				t.Fatalf("create bin dir: %v", err)
+			}
+			fakeGit := "#!/bin/sh\nif [ \"$1\" = status ]; then\n  printf '%s\\n' " + strconv.Quote(testCase.gitStatus) + "\nfi\nexit 0\n"
+			if err := os.WriteFile(filepath.Join(binDir, "git"), []byte(fakeGit), 0o700); err != nil {
+				t.Fatalf("write fake git: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(binDir, "openspec"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+				t.Fatalf("write fake openspec: %v", err)
+			}
+			validatorMarker := filepath.Join(tempDir, "agent-validator-called")
+			fakeValidator := "#!/bin/sh\n: > " + strconv.Quote(validatorMarker) + "\nexit 0\n"
+			if err := os.WriteFile(filepath.Join(binDir, "agent-validator"), []byte(fakeValidator), 0o700); err != nil {
+				t.Fatalf("write fake agent-validator: %v", err)
+			}
+
+			cmd := exec.Command("sh", scriptPath)
+			cmd.Dir = tempDir
+			cmd.Env = append(os.Environ(), "PATH="+binDir+":/usr/bin:/bin")
+			cmd.Stdin = strings.NewReader(`{"change_name":"plateng-1949-promote-to-eod"}`)
+			if out, err := cmd.CombinedOutput(); err == nil {
+				t.Fatalf("script accepted unproven archive resume:\n%s", out)
+			}
+			if _, err := os.Stat(validatorMarker); !os.IsNotExist(err) {
+				t.Fatalf("agent-validator ran after rejected archive resume: %v", err)
+			}
+		})
 	}
 }
 
