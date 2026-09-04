@@ -91,7 +91,7 @@ func TestLoadCorrectnessCandidatesRejectsIndependentRunnerEvidenceFallback(t *te
 	if err := os.WriteFile(filepath.Join(outputDir, correctnessOutput), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := loadCorrectnessCandidates(request); err == nil || !strings.Contains(err.Error(), "unknown field") {
+	if _, _, err := loadCorrectnessCandidates(&request); err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("load correctness error = %v, want rejected independent fallback", err)
 	}
 }
@@ -436,7 +436,7 @@ func TestAssembleLocalReportFreezesConfiguredOrUnavailableDestination(t *testing
 	request, prepared := correctnessFixture(t)
 	request.AuditSessionDir = t.TempDir()
 	request.AuditRunID, request.SourceRunID, request.ExecutionSessionID, request.Trigger = "audit-1", "source-1", "session-1", "replay"
-	if err := persistPrepared(request, prepared); err != nil {
+	if err := persistPrepared(&request, &prepared); err != nil {
 		t.Fatal(err)
 	}
 	if err := writePreparedFingerprint(request.AuditSessionDir); err != nil {
@@ -449,7 +449,7 @@ func TestAssembleLocalReportFreezesConfiguredOrUnavailableDestination(t *testing
 	destinationResolver = fakeDestination{DestinationState{State: "configured", SpreadsheetID: "sheet-1", Tab: "audit"}}
 	t.Cleanup(func() { destinationResolver = oldResolver })
 
-	if err := assembleLocalReportStage(request); err != nil {
+	if err := assembleLocalReportStage(&request); err != nil {
 		t.Fatalf("assemble report: %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(request.AuditSessionDir, "local-report.json"))
@@ -476,7 +476,7 @@ func TestAssembleLocalReportPreservesUnavailableAndUnusableDestinationState(t *t
 		t.Run(destination.State, func(t *testing.T) {
 			request, prepared := correctnessFixture(t)
 			request.AuditSessionDir = t.TempDir()
-			if err := persistPrepared(request, prepared); err != nil {
+			if err := persistPrepared(&request, &prepared); err != nil {
 				t.Fatal(err)
 			}
 			if err := writePreparedFingerprint(request.AuditSessionDir); err != nil {
@@ -485,7 +485,7 @@ func TestAssembleLocalReportPreservesUnavailableAndUnusableDestinationState(t *t
 			oldResolver := destinationResolver
 			destinationResolver = fakeDestination{destination}
 			t.Cleanup(func() { destinationResolver = oldResolver })
-			if err := assembleLocalReportStage(request); err != nil {
+			if err := assembleLocalReportStage(&request); err != nil {
 				t.Fatal(err)
 			}
 			data, err := os.ReadFile(filepath.Join(request.AuditSessionDir, "local-report.json"))

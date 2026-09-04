@@ -156,7 +156,7 @@ func TestCoordinatorOnlyAuditsTopLevelCanonicalWorkflowNamespaces(t *testing.T) 
 		{"audit", runner.PostFinalizationSummary{WorkflowFile: "builtin:audit/run-audit-v1.0.yaml", Result: runner.ResultSuccess, TopLevel: true}, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := Eligible(test.summary); got != test.want {
+			if got := Eligible(&test.summary); got != test.want {
 				t.Fatalf("Eligible() = %v, want %v", got, test.want)
 			}
 		})

@@ -129,7 +129,7 @@ type preparedArtifactsFingerprint struct {
 
 // PrepareEvidence projects only the selected session from a sealed snapshot.
 // It does not read the live source run.
-func PrepareEvidence(request Request) (PreparedValueAudit, error) {
+func PrepareEvidence(request Request) (PreparedValueAudit, error) { //nolint:gocritic // Public stage boundary keeps the frozen request immutable.
 	if request.SnapshotPath == "" || request.AuditSessionDir == "" || request.ExecutionSessionID == "" {
 		return PreparedValueAudit{}, fmt.Errorf("prepare evidence: incomplete audit request")
 	}
@@ -176,13 +176,13 @@ func PrepareEvidence(request Request) (PreparedValueAudit, error) {
 		Fingerprints: Fingerprints{SnapshotBefore: before, OutputBefore: outputBefore},
 	}
 	commits := readGitEvidence(filepath.Join(request.SnapshotPath, "git-evidence.json"))
-	index.Leaves = buildLeaves(request, artifact, references, commits)
+	index.Leaves = buildLeaves(&request, &artifact, references, commits)
 	packages, err := buildValuePackages(index.Leaves)
 	if err != nil {
 		return PreparedValueAudit{}, err
 	}
 	prepared := PreparedValueAudit{Index: index, Packages: packages}
-	if err := persistPrepared(request, prepared); err != nil {
+	if err := persistPrepared(&request, &prepared); err != nil {
 		return PreparedValueAudit{}, err
 	}
 	if err := writePreparedFingerprint(request.AuditSessionDir); err != nil {
@@ -243,14 +243,15 @@ func readMetrics(path string) (metrics.Artifact, error) {
 	return artifact, nil
 }
 
-func buildLeaves(request Request, artifact metrics.Artifact, refs []EvidenceReference, commits map[string]snapshottedGitCommit) []LeafEvidence {
+func buildLeaves(request *Request, artifact *metrics.Artifact, refs []EvidenceReference, commits map[string]snapshottedGitCommit) []LeafEvidence {
 	groups := map[string][]metrics.StepRecord{}
-	for _, record := range artifact.Steps {
+	for index := range artifact.Steps {
+		record := &artifact.Steps[index]
 		if !valueLeaf(record) || record.ExecutionSessionID != request.ExecutionSessionID {
 			continue
 		}
 		key := logicalPath(record.Prefix, record.ID)
-		groups[key] = append(groups[key], record)
+		groups[key] = append(groups[key], *record)
 	}
 	keys := make([]string, 0, len(groups))
 	for key := range groups {
@@ -267,7 +268,7 @@ func buildLeaves(request Request, artifact metrics.Artifact, refs []EvidenceRefe
 	return leaves
 }
 
-func valueLeaf(record metrics.StepRecord) bool {
+func valueLeaf(record *metrics.StepRecord) bool {
 	if record.Kind != "step" || record.ID == "" {
 		return false
 	}
@@ -293,7 +294,7 @@ func logicalPath(prefix, id string) string {
 	return strings.Join(append(parts, id), "/")
 }
 
-func leafFromRecords(request Request, artifact metrics.Artifact, path string, records []metrics.StepRecord, refs []EvidenceReference, commits map[string]snapshottedGitCommit) LeafEvidence {
+func leafFromRecords(request *Request, artifact *metrics.Artifact, path string, records []metrics.StepRecord, refs []EvidenceReference, commits map[string]snapshottedGitCommit) LeafEvidence {
 	var duration, tokens int64
 	var durationKnown bool
 	tokensKnown, costKnown := true, true
@@ -301,7 +302,8 @@ func leafFromRecords(request Request, artifact metrics.Artifact, path string, re
 	models := map[string]struct{}{}
 	outcome := "unknown"
 	iterations := 0
-	for _, record := range records {
+	for index := range records {
+		record := &records[index]
 		if record.DurationMS > 0 {
 			duration += record.DurationMS
 			durationKnown = true
@@ -339,7 +341,8 @@ func leafFromRecords(request Request, artifact metrics.Artifact, path string, re
 		costPtr = &cost
 	}
 	lineage := "new"
-	for _, record := range artifact.Steps {
+	for index := range artifact.Steps {
+		record := &artifact.Steps[index]
 		if valueLeaf(record) && record.ExecutionSessionID != request.ExecutionSessionID && logicalPath(record.Prefix, record.ID) == path {
 			lineage = "overlap"
 			break
@@ -385,7 +388,8 @@ func referencesForLeaf(refs []EvidenceReference, records []metrics.StepRecord, e
 	metricsDetail, _ := json.Marshal(records)
 	result = append(result, EvidenceReference{ID: "metrics-" + records[0].RecordID, Category: "metrics", Status: "available", ProducerExecutionSession: executionSessionID, Lineage: "new", Detail: string(metricsDetail)})
 	for _, ref := range refs {
-		for _, record := range records {
+		for index := range records {
+			record := &records[index]
 			if (ref.Category == "validation" || ref.Category == "artifact" || ref.Category == "narrative") && strings.Contains(strings.ToLower(ref.LocalPath), strings.ToLower(record.ID)) {
 				result = append(result, ref)
 				break
@@ -415,9 +419,10 @@ func missingEvidenceCategories(refs []EvidenceReference) []string {
 	return missing
 }
 
-func selectedSessionOutcome(artifact metrics.Artifact, executionSessionID string) string {
+func selectedSessionOutcome(artifact *metrics.Artifact, executionSessionID string) string {
 	seen := false
-	for _, record := range artifact.Steps {
+	for index := range artifact.Steps {
+		record := &artifact.Steps[index]
 		if record.ExecutionSessionID != executionSessionID {
 			continue
 		}
@@ -449,7 +454,8 @@ func observationID(auditID, executionID, path string) string {
 func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGitCommit) GitEvidence {
 	result := GitEvidence{Attribution: "no_change", CommitSHAs: []string{}, DeferredSHAs: []string{}}
 	var files, added, deleted int64
-	for _, record := range records {
+	for index := range records {
+		record := &records[index]
 		if record.GitChanges == nil || !record.GitChanges.Available {
 			return GitEvidence{Attribution: "unavailable", CommitSHAs: []string{}, DeferredSHAs: []string{}, Reason: "Git checkpoint evidence unavailable"}
 		}
@@ -495,7 +501,8 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 
 func dirtyChangedPaths(records []metrics.StepRecord) []string {
 	paths := map[string]struct{}{}
-	for _, record := range records {
+	for index := range records {
+		record := &records[index]
 		if record.GitEnd == nil {
 			continue
 		}
@@ -608,7 +615,7 @@ func evidenceDetail(path, category string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	data, err := io.ReadAll(io.LimitReader(file, 4097))
 	if err != nil {
 		return "", false
@@ -676,7 +683,8 @@ func evidenceCategory(rel string) string {
 func buildValuePackages(leaves []LeafEvidence) ([]ValuePackage, error) {
 	packages := []ValuePackage{}
 	current := ValuePackage{SchemaVersion: evidenceSchemaVersion, BatchID: "value-001", Leaves: []LeafEvidence{}}
-	for _, leaf := range leaves {
+	for index := range leaves {
+		leaf := &leaves[index]
 		bounded := boundLeafDetail(leaf)
 		candidate := current
 		candidate.Leaves = append(candidate.Leaves, bounded)
@@ -699,8 +707,8 @@ func buildValuePackages(leaves []LeafEvidence) ([]ValuePackage, error) {
 	return packages, nil
 }
 
-func boundLeafDetail(leaf LeafEvidence) LeafEvidence {
-	result := leaf
+func boundLeafDetail(leaf *LeafEvidence) LeafEvidence {
+	result := *leaf
 	result.Evidence = append([]EvidenceReference(nil), leaf.Evidence...)
 	for len(result.Evidence) > 0 && encodedJSONBytes(result) > defaultLeafDetailBytes {
 		result.Evidence = result.Evidence[:len(result.Evidence)-1]
@@ -715,7 +723,7 @@ func encodedJSONBytes(value any) int {
 	return len(data)
 }
 
-func persistPrepared(request Request, prepared PreparedValueAudit) error {
+func persistPrepared(request *Request, prepared *PreparedValueAudit) error {
 	if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "evidence-index.json"), prepared.Index); err != nil {
 		return err
 	}
@@ -823,7 +831,7 @@ type ValueValidationResult struct {
 
 // ValidateValueOutputs accepts exactly the allowlisted qualitative output from
 // each batch. Immutable facts are joined from the prepared skeletons.
-func ValidateValueOutputs(request Request, prepared PreparedValueAudit, outputs []ModelValueBatch) (ValueValidationResult, error) {
+func ValidateValueOutputs(request Request, prepared PreparedValueAudit, outputs []ModelValueBatch) (ValueValidationResult, error) { //nolint:gocritic // Public validation boundary keeps the frozen request immutable.
 	currentSnapshot, err := fingerprintTree(request.SnapshotPath)
 	if err != nil {
 		return ValueValidationResult{}, err
@@ -849,7 +857,7 @@ func ValidateValueOutputs(request Request, prepared PreparedValueAudit, outputs 
 			return ValueValidationResult{}, fmt.Errorf("duplicate model output for %s", batch.BatchID)
 		}
 		seenBatches[batch.BatchID] = struct{}{}
-		validated, err := validateValueBatch(request, pkg, *batch, knownRefs)
+		validated, err := validateValueBatch(&request, pkg, batch, knownRefs)
 		if err != nil {
 			return ValueValidationResult{}, err
 		}
@@ -874,7 +882,7 @@ func findValueBatch(outputs []ModelValueBatch, batchID string) *ModelValueBatch 
 	return nil
 }
 
-func validateValueBatch(request Request, pkg ValuePackage, batch ModelValueBatch, knownRefs map[string]struct{}) ([]ValueObservation, error) {
+func validateValueBatch(request *Request, pkg ValuePackage, batch *ModelValueBatch, knownRefs map[string]struct{}) ([]ValueObservation, error) {
 	expected, incomplete := expectedValueObservations(pkg)
 	if len(batch.Observations) != len(expected) {
 		return nil, fmt.Errorf("%s observations = %d, want %d", pkg.BatchID, len(batch.Observations), len(expected))
@@ -884,7 +892,8 @@ func validateValueBatch(request Request, pkg ValuePackage, batch ModelValueBatch
 		provenance = BatchProvenance{CLI: request.Crosscheck.CLI, Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, SessionID: "unknown"}
 	}
 	observations := make([]ValueObservation, 0, len(batch.Observations))
-	for _, judgment := range batch.Observations {
+	for index := range batch.Observations {
+		judgment := &batch.Observations[index]
 		skeleton, exists := expected[judgment.ObservationID]
 		if !exists {
 			return nil, fmt.Errorf("%s has unknown observation %q", pkg.BatchID, judgment.ObservationID)
@@ -896,7 +905,7 @@ func validateValueBatch(request Request, pkg ValuePackage, batch ModelValueBatch
 		if incomplete[judgment.ObservationID] && judgment.EvidenceCoverage == "complete" {
 			return nil, fmt.Errorf("%s observation %q claims complete coverage despite omitted evidence", pkg.BatchID, judgment.ObservationID)
 		}
-		observations = append(observations, valueObservation(skeleton, judgment, provenance))
+		observations = append(observations, valueObservation(&skeleton, judgment, provenance))
 	}
 	if len(expected) != 0 {
 		return nil, fmt.Errorf("%s omitted one or more observations", pkg.BatchID)
@@ -904,10 +913,11 @@ func validateValueBatch(request Request, pkg ValuePackage, batch ModelValueBatch
 	return observations, nil
 }
 
-func expectedValueObservations(pkg ValuePackage) (map[string]ObservationSkeleton, map[string]bool) {
-	expected := make(map[string]ObservationSkeleton, len(pkg.Leaves))
-	incomplete := make(map[string]bool, len(pkg.Leaves))
-	for _, leaf := range pkg.Leaves {
+func expectedValueObservations(pkg ValuePackage) (expected map[string]ObservationSkeleton, incomplete map[string]bool) {
+	expected = make(map[string]ObservationSkeleton, len(pkg.Leaves))
+	incomplete = make(map[string]bool, len(pkg.Leaves))
+	for index := range pkg.Leaves {
+		leaf := &pkg.Leaves[index]
 		expected[leaf.Skeleton.ObservationID] = leaf.Skeleton
 		incomplete[leaf.Skeleton.ObservationID] = len(leaf.OmittedCategories) != 0
 		for _, ref := range leaf.Evidence {
@@ -919,9 +929,9 @@ func expectedValueObservations(pkg ValuePackage) (map[string]ObservationSkeleton
 	return expected, incomplete
 }
 
-func valueObservation(skeleton ObservationSkeleton, judgment ModelValueJudgment, provenance BatchProvenance) ValueObservation {
+func valueObservation(skeleton *ObservationSkeleton, judgment *ModelValueJudgment, provenance BatchProvenance) ValueObservation {
 	return ValueObservation{
-		ObservationSkeleton: skeleton, OverallValue: judgment.OverallValue, ChangeEffect: judgment.ChangeEffect,
+		ObservationSkeleton: *skeleton, OverallValue: judgment.OverallValue, ChangeEffect: judgment.ChangeEffect,
 		UniqueContribution: judgment.UniqueContribution, DownstreamEvidence: judgment.DownstreamEvidence,
 		Confidence: judgment.Confidence, EvidenceCoverage: judgment.EvidenceCoverage, Note: judgment.Note,
 		Consultations: append([]string(nil), judgment.Consultations...), JudgeModel: provenance.Model, JudgeCLI: provenance.CLI,
@@ -929,7 +939,7 @@ func valueObservation(skeleton ObservationSkeleton, judgment ModelValueJudgment,
 	}
 }
 
-func validateJudgment(judgment ModelValueJudgment, knownRefs map[string]struct{}) error {
+func validateJudgment(judgment *ModelValueJudgment, knownRefs map[string]struct{}) error {
 	if !oneOf(judgment.OverallValue, "high", "medium", "low", "none", "negative", "unknown") {
 		return fmt.Errorf("invalid overall_value")
 	}
@@ -1045,7 +1055,7 @@ func loadModelValueBatches(auditSessionDir string, packages []ValuePackage) ([]M
 	return outputs, nil
 }
 
-func validateValueStage(request Request) error {
+func validateValueStage(request *Request) error {
 	prepared, err := loadPreparedValueAudit(request.AuditSessionDir)
 	if err != nil {
 		return err
@@ -1054,7 +1064,7 @@ func validateValueStage(request Request) error {
 	if err != nil {
 		return err
 	}
-	result, err := ValidateValueOutputs(request, prepared, outputs)
+	result, err := ValidateValueOutputs(*request, prepared, outputs)
 	if err != nil {
 		return err
 	}
@@ -1076,7 +1086,8 @@ func consultationLedger(observations []ValueObservation, references []EvidenceRe
 		categories[reference.ID] = reference.Category
 	}
 	ledger := []consultationLedgerEntry{}
-	for _, observation := range observations {
+	for index := range observations {
+		observation := &observations[index]
 		for _, referenceID := range observation.Consultations {
 			ledger = append(ledger, consultationLedgerEntry{ObservationID: observation.ObservationID, ReferenceID: referenceID, Category: categories[referenceID]})
 		}
@@ -1090,7 +1101,7 @@ func consultationLedger(observations []ValueObservation, references []EvidenceRe
 	return ledger
 }
 
-func ensureValueOutputs(request Request) error {
+func ensureValueOutputs(request *Request) error {
 	prepared, err := loadPreparedValueAudit(request.AuditSessionDir)
 	if err != nil {
 		return err
@@ -1119,26 +1130,7 @@ func ensureValueOutputs(request Request) error {
 	return stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "value-batch-provenance.json"), provenance)
 }
 
-// valueBatchInvoker is deliberately called once per package. Its call boundary
-// is the fresh-session boundary: no model session ID is carried between calls.
-type valueBatchInvoker func(Request, ValuePackage) (ModelValueBatch, error)
-
-func runValueBatches(request Request, packages []ValuePackage, invoke valueBatchInvoker) ([]ModelValueBatch, error) {
-	outputs := make([]ModelValueBatch, 0, len(packages))
-	for _, pkg := range packages {
-		output, err := invoke(request, pkg)
-		if err != nil {
-			return outputs, fmt.Errorf("value model session for %s: %w", pkg.BatchID, err)
-		}
-		if output.BatchID != pkg.BatchID {
-			return outputs, fmt.Errorf("value model session returned batch %q, want %q", output.BatchID, pkg.BatchID)
-		}
-		outputs = append(outputs, output)
-	}
-	return outputs, nil
-}
-
-func invokeCrosscheckValueBatch(request Request, pkg ValuePackage) (ModelValueBatch, error) {
+func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueBatch, error) {
 	trustedInputs, err := trustedAuditInputsFingerprint(request)
 	if err != nil {
 		return ModelValueBatch{}, err
@@ -1209,7 +1201,7 @@ func invokeCrosscheckValueBatch(request Request, pkg ValuePackage) (ModelValueBa
 	return output, nil
 }
 
-func trustedAuditInputsFingerprint(request Request) (string, error) {
+func trustedAuditInputsFingerprint(request *Request) (string, error) {
 	prepared, err := preparedFingerprint(request.AuditSessionDir)
 	if err != nil {
 		return "", err
@@ -1247,7 +1239,7 @@ func sandboxExecArgs(args []string, outputDir string) []string {
 	return append(argv, args...)
 }
 
-func cliEnvironment(adapter cli.Adapter, request Request, input []byte, workdir string) ([]string, error) {
+func cliEnvironment(adapter cli.Adapter, request *Request, input []byte, workdir string) ([]string, error) {
 	// Adapters may require isolated process-local setup. It is derived from this
 	// batch only and never persisted in the source snapshot.
 	build := &cli.BuildArgsInput{Prompt: string(input), Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, Context: cli.ContextAutonomousHeadless, Workdir: workdir}
@@ -1258,7 +1250,7 @@ func cliEnvironment(adapter cli.Adapter, request Request, input []byte, workdir 
 	return append(os.Environ(), extra...), nil
 }
 
-func prepareModelWorkspace(request Request) (string, error) {
+func prepareModelWorkspace(request *Request) (string, error) {
 	workspace := filepath.Join(request.AuditSessionDir, "model-workspace")
 	if err := os.Chmod(workspace, 0o700); err != nil && !os.IsNotExist(err) {
 		return "", err

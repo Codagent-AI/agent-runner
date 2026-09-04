@@ -113,7 +113,7 @@ type Coordinator struct {
 	Now      func() time.Time
 }
 
-func Eligible(summary runner.PostFinalizationSummary) bool {
+func Eligible(summary *runner.PostFinalizationSummary) bool {
 	if !summary.TopLevel || summary.ExecutionSessionID == "" {
 		return false
 	}
@@ -126,8 +126,8 @@ func Eligible(summary runner.PostFinalizationSummary) bool {
 	return strings.HasPrefix(ref, "openspec/") || strings.HasPrefix(ref, "spec-driven/")
 }
 
-func (c Coordinator) AfterFinalization(summary runner.PostFinalizationSummary) error {
-	if !Eligible(summary) {
+func (c Coordinator) AfterFinalization(summary runner.PostFinalizationSummary) error { //nolint:gocritic // Hook contract passes the immutable summary by value.
+	if !Eligible(&summary) {
 		return nil
 	}
 	now := time.Now
@@ -141,7 +141,7 @@ func (c Coordinator) AfterFinalization(summary runner.PostFinalizationSummary) e
 	}
 	link := findLink(lifecycle.Links, summary.ExecutionSessionID, "automatic")
 	if link == nil {
-		link, err = c.reserveAutomaticAudit(summary, &lifecycle, path, now)
+		link, err = c.reserveAutomaticAudit(&summary, &lifecycle, path, now)
 		if err != nil || link == nil {
 			return err
 		}
@@ -149,10 +149,10 @@ func (c Coordinator) AfterFinalization(summary runner.PostFinalizationSummary) e
 	if link.State == LaunchLaunching || link.State == LaunchStarted || link.State == LaunchFailed || link.State == LaunchCompleted {
 		return nil
 	}
-	return c.launch(summary, &lifecycle, link, now)
+	return c.launch(&summary, &lifecycle, link, now)
 }
 
-func (c Coordinator) reserveAutomaticAudit(summary runner.PostFinalizationSummary, lifecycle *Lifecycle, path string, now func() time.Time) (*Link, error) {
+func (c Coordinator) reserveAutomaticAudit(summary *runner.PostFinalizationSummary, lifecycle *Lifecycle, path string, now func() time.Time) (*Link, error) {
 	auditID, err := newAuditID()
 	if err != nil {
 		return nil, err
@@ -169,17 +169,17 @@ func (c Coordinator) reserveAutomaticAudit(summary runner.PostFinalizationSummar
 	if err := writeLifecycle(path, *lifecycle); err != nil {
 		return nil, err
 	}
-	if err := appendSourceLink(summary.SessionDir, *link); err != nil {
+	if err := appendSourceLink(summary.SessionDir, link); err != nil {
 		return nil, err
 	}
 	if err := createAuditRun(summary, link); err != nil {
 		return nil, c.persistFailure(summary, lifecycle, auditID, err, now())
 	}
-	appendLifecycleEvent(summary.SessionDir, audit.EventAuditLaunchRequested, *link)
+	appendLifecycleEvent(summary.SessionDir, audit.EventAuditLaunchRequested, link)
 	return link, nil
 }
 
-func (c Coordinator) launch(summary runner.PostFinalizationSummary, lifecycle *Lifecycle, link *Link, now func() time.Time) error {
+func (c Coordinator) launch(summary *runner.PostFinalizationSummary, lifecycle *Lifecycle, link *Link, now func() time.Time) error {
 	crosscheck, err := resolveCrosscheck(summary)
 	if err != nil {
 		return c.persistFailure(summary, lifecycle, link.AuditRunID, err, now())
@@ -203,11 +203,11 @@ func (c Coordinator) launch(summary runner.PostFinalizationSummary, lifecycle *L
 		// A durable launching claim prevents a duplicate child on retry.
 		return err
 	}
-	appendLifecycleEvent(summary.SessionDir, audit.EventAuditLaunched, *link)
+	appendLifecycleEvent(summary.SessionDir, audit.EventAuditLaunched, link)
 	return nil
 }
 
-func (c Coordinator) persistFailure(summary runner.PostFinalizationSummary, lifecycle *Lifecycle, auditID string, launchErr error, at time.Time) error {
+func (c Coordinator) persistFailure(summary *runner.PostFinalizationSummary, lifecycle *Lifecycle, auditID string, launchErr error, at time.Time) error {
 	link := findLink(lifecycle.Links, summary.ExecutionSessionID, "automatic")
 	if link == nil {
 		lifecycle.Links = append(lifecycle.Links, Link{AuditRunID: auditID, ExecutionSessionID: summary.ExecutionSessionID, Trigger: "automatic", State: LaunchFailed, RequestedAt: at.UTC().Format(time.RFC3339Nano), FailedAt: at.UTC().Format(time.RFC3339Nano), Warning: launchErr.Error()})
@@ -218,13 +218,13 @@ func (c Coordinator) persistFailure(summary runner.PostFinalizationSummary, life
 	if err := writeLifecycle(filepath.Join(summary.SessionDir, lifecycleFileName), *lifecycle); err != nil {
 		return err
 	}
-	_ = appendSourceLink(summary.SessionDir, *link)
-	_ = updateAuditState(auditSessionDir(summary.SessionDir, link.AuditRunID), *link, false)
-	appendLifecycleEvent(summary.SessionDir, audit.EventAuditLaunchFailed, *link)
+	_ = appendSourceLink(summary.SessionDir, link)
+	_ = updateAuditState(auditSessionDir(summary.SessionDir, link.AuditRunID), link, false)
+	appendLifecycleEvent(summary.SessionDir, audit.EventAuditLaunchFailed, link)
 	return nil
 }
 
-func transition(summary runner.PostFinalizationSummary, lifecycle *Lifecycle, link *Link, state, warning string, at time.Time) error {
+func transition(summary *runner.PostFinalizationSummary, lifecycle *Lifecycle, link *Link, state, warning string, at time.Time) error {
 	link.State = state
 	link.Warning = warning
 	stamp := at.UTC().Format(time.RFC3339Nano)
@@ -237,16 +237,16 @@ func transition(summary runner.PostFinalizationSummary, lifecycle *Lifecycle, li
 	// The source and audit mirrors are the preconditions for a durable launch
 	// claim. Write them first: if either fails, lifecycle remains reserved and a
 	// later finalization attempt can safely retry before any child exists.
-	if err := appendSourceLink(summary.SessionDir, *link); err != nil {
+	if err := appendSourceLink(summary.SessionDir, link); err != nil {
 		return err
 	}
-	if err := updateAuditState(auditSessionDir(summary.SessionDir, link.AuditRunID), *link, false); err != nil {
+	if err := updateAuditState(auditSessionDir(summary.SessionDir, link.AuditRunID), link, false); err != nil {
 		return err
 	}
 	return writeLifecycle(filepath.Join(summary.SessionDir, lifecycleFileName), *lifecycle)
 }
 
-func updateAuditState(sessionDir string, link Link, completed bool) error {
+func updateAuditState(sessionDir string, link *Link, completed bool) error {
 	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
 	if err != nil {
 		return err
@@ -261,7 +261,7 @@ func updateAuditState(sessionDir string, link Link, completed bool) error {
 	return stateio.WriteState(&state, sessionDir)
 }
 
-func resolveCrosscheck(summary runner.PostFinalizationSummary) (AgentProvenance, error) {
+func resolveCrosscheck(summary *runner.PostFinalizationSummary) (AgentProvenance, error) {
 	projectConfig := filepath.Join(summary.WorkingDir, ".agent-runner", "config.yaml")
 	override := config.ProfileOverride{}
 	if summary.ProfileSet != "" {
@@ -305,11 +305,6 @@ func newAuditID() (string, error) {
 		return "", fmt.Errorf("generate audit ID: %w", err)
 	}
 	return "audit-" + hex.EncodeToString(bytes), nil
-}
-
-func snapshotEvidence(sessionDir, auditID string) (string, error) {
-	dir := filepath.Join(sessionDir, "audit-snapshots", auditID)
-	return snapshotEvidenceAt(sessionDir, dir)
 }
 
 // snapshotEvidenceForProject records Git facts while the source run still
@@ -365,9 +360,10 @@ func snapshotReplayEvidenceAt(sessionDir, dir, executionSessionID string) (strin
 		allowed[session.ExecutionSessionID] = struct{}{}
 	}
 	steps := make([]metrics.StepRecord, 0, len(artifact.Steps))
-	for _, step := range artifact.Steps {
+	for index := range artifact.Steps {
+		step := &artifact.Steps[index]
 		if _, ok := allowed[step.ExecutionSessionID]; ok {
-			steps = append(steps, step)
+			steps = append(steps, *step)
 		}
 	}
 	artifact.Steps = steps
@@ -425,7 +421,8 @@ func exportGitEvidence(projectRoot, snapshotDir string) error {
 		return persistGitEvidence(snapshotDir, evidence, "snapshotted Git boundaries are invalid")
 	}
 	shas := map[string]struct{}{}
-	for _, step := range artifact.Steps {
+	for index := range artifact.Steps {
+		step := &artifact.Steps[index]
 		if step.GitEnd == nil {
 			continue
 		}
@@ -495,10 +492,10 @@ func populateGitStats(commits []snapshottedGitCommit, ordered []string, stats []
 		}
 		var added, deleted int64
 		if _, err := fmt.Sscan(fields[0], &added); err != nil {
-			return fmt.Errorf("Git commit statistics are invalid")
+			return fmt.Errorf("git commit statistics are invalid")
 		}
 		if _, err := fmt.Sscan(fields[1], &deleted); err != nil {
-			return fmt.Errorf("Git commit statistics are invalid")
+			return fmt.Errorf("git commit statistics are invalid")
 		}
 		current.FilesChanged++
 		current.LinesAdded += added
@@ -507,7 +504,7 @@ func populateGitStats(commits []snapshottedGitCommit, ordered []string, stats []
 	}
 	for _, sha := range ordered {
 		if !seenStats[sha] {
-			return fmt.Errorf("Git statistics are missing a boundary commit")
+			return fmt.Errorf("git statistics are missing a boundary commit")
 		}
 	}
 	for i := range commits {
@@ -673,7 +670,7 @@ func auditSessionDir(sourceSessionDir, auditID string) string {
 	return filepath.Join(filepath.Dir(sourceSessionDir), auditID)
 }
 
-func createAuditRun(summary runner.PostFinalizationSummary, link *Link) error {
+func createAuditRun(summary *runner.PostFinalizationSummary, link *Link) error {
 	dir := auditSessionDir(summary.SessionDir, link.AuditRunID)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -698,7 +695,7 @@ func copyIfExists(source, target string) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) // #nosec G304 -- fixed snapshot file beneath a run directory.
 	if err != nil {
 		return err
@@ -708,7 +705,7 @@ func copyIfExists(source, target string) error {
 	return errorsJoin(copyErr, closeErr)
 }
 
-func appendSourceLink(sessionDir string, link Link) error {
+func appendSourceLink(sessionDir string, link *Link) error {
 	path := filepath.Join(sessionDir, "state.json")
 	state, err := stateio.ReadState(path)
 	if err != nil {
@@ -727,7 +724,7 @@ func appendSourceLink(sessionDir string, link Link) error {
 	return stateio.WriteState(&state, sessionDir)
 }
 
-func appendLifecycleEvent(sessionDir string, typ audit.EventType, link Link) {
+func appendLifecycleEvent(sessionDir string, typ audit.EventType, link *Link) {
 	logger, err := audit.NewLogger(filepath.Join(sessionDir, "audit.log"))
 	if err != nil {
 		return

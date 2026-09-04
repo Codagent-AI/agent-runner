@@ -97,7 +97,7 @@ func (executableRunner) Run(ctx context.Context, name string, args []string, std
 
 var ghRunner CommandRunner = executableRunner{}
 
-func ensureCorrectnessOutput(request Request) error {
+func ensureCorrectnessOutput(request *Request) error {
 	path := filepath.Join(request.AuditSessionDir, "model-output", correctnessOutput)
 	if _, err := os.Stat(path); err == nil {
 		return nil
@@ -114,11 +114,11 @@ func ensureCorrectnessOutput(request Request) error {
 	return stateio.WriteJSONAtomic(path, output)
 }
 
-func writeCorrectnessDiagnostic(request Request, message string) error {
+func writeCorrectnessDiagnostic(request *Request, message string) error {
 	return stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "correctness-model-diagnostics.json"), map[string]string{"error": message})
 }
 
-func invokeCrosscheckCorrectness(request Request) (CorrectnessCandidates, error) {
+func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error) {
 	trusted, err := trustedAuditInputsFingerprint(request)
 	if err != nil {
 		return CorrectnessCandidates{}, err
@@ -210,7 +210,7 @@ func runBoundedOutput(command *exec.Cmd, maximum int64) ([]byte, error) {
 	return data, nil
 }
 
-func validatePublishCorrectnessStage(request Request) error {
+func validatePublishCorrectnessStage(request *Request) error {
 	prepared, err := loadPreparedValueAudit(request.AuditSessionDir)
 	if err != nil {
 		return err
@@ -219,7 +219,7 @@ func validatePublishCorrectnessStage(request Request) error {
 	if err != nil {
 		return err
 	}
-	result, err := PublishCorrectness(request, prepared, output, ghRunner)
+	result, err := PublishCorrectness(*request, prepared, output, ghRunner)
 	if err != nil {
 		return err
 	}
@@ -232,7 +232,7 @@ func validatePublishCorrectnessStage(request Request) error {
 	return stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "correctness-findings.json"), result)
 }
 
-func loadCorrectnessCandidates(request Request) (CorrectnessCandidates, []string, error) {
+func loadCorrectnessCandidates(request *Request) (CorrectnessCandidates, []string, error) {
 	path := filepath.Join(request.AuditSessionDir, "model-output", correctnessOutput)
 	data, err := os.ReadFile(path) // #nosec G304 -- fixed audit-owned model output.
 	if os.IsNotExist(err) {
@@ -261,7 +261,7 @@ func loadCorrectnessCandidates(request Request) (CorrectnessCandidates, []string
 
 // PublishCorrectness validates model claims, then creates at most one issue per
 // stable finding. Every outcome is returned for durable local persistence.
-func PublishCorrectness(request Request, prepared PreparedValueAudit, output CorrectnessCandidates, runner CommandRunner) (CorrectnessResult, error) {
+func PublishCorrectness(request Request, prepared PreparedValueAudit, output CorrectnessCandidates, runner CommandRunner) (CorrectnessResult, error) { //nolint:gocritic // Value boundary keeps callers from mutating the frozen request.
 	current, err := fingerprintTree(request.SnapshotPath)
 	if err != nil {
 		return CorrectnessResult{}, err
@@ -277,7 +277,8 @@ func PublishCorrectness(request Request, prepared PreparedValueAudit, output Cor
 	}
 	result := CorrectnessResult{SchemaVersion: correctnessSchema, Findings: []Finding{}}
 	grouped := map[string]CorrectnessCandidate{}
-	for _, candidate := range output.Candidates {
+	for index := range output.Candidates {
+		candidate := &output.Candidates[index]
 		key := normalizeDefectKey(candidate.DefectKey)
 		if !oneOf(candidate.Status, "confirmed", "inconclusive", "excluded") {
 			result.Findings = append(result.Findings, findingFor(candidate, key, "rejected", "", "invalid candidate status"))
@@ -287,15 +288,15 @@ func PublishCorrectness(request Request, prepared PreparedValueAudit, output Cor
 			result.Findings = append(result.Findings, findingFor(candidate, key, "retained", "", ""))
 			continue
 		}
-		if err := validateCorrectnessCandidate(candidate, key, known, request.RunnerSource); err != nil {
+		if err := validateCorrectnessCandidate(candidate, key, known, &request.RunnerSource); err != nil {
 			result.Findings = append(result.Findings, findingFor(candidate, key, "rejected", "", err.Error()))
 			continue
 		}
 		candidate.DefectKey = key
 		if currentCandidate, exists := grouped[key]; exists {
-			grouped[key] = mergeSymptoms(currentCandidate, candidate)
+			grouped[key] = mergeSymptoms(&currentCandidate, candidate)
 		} else {
-			grouped[key] = candidate
+			grouped[key] = *candidate
 		}
 	}
 	keys := make([]string, 0, len(grouped))
@@ -306,30 +307,30 @@ func PublishCorrectness(request Request, prepared PreparedValueAudit, output Cor
 	for _, key := range keys {
 		candidate := grouped[key]
 		index := len(result.Findings)
-		result.Findings = append(result.Findings, findingFor(candidate, key, "pending", "", ""))
-		if err := persistCorrectnessOutcome(request, result); err != nil {
+		result.Findings = append(result.Findings, findingFor(&candidate, key, "pending", "", ""))
+		if err := persistCorrectnessOutcome(&request, &result); err != nil {
 			return CorrectnessResult{}, err
 		}
-		finding, err := publishCandidate(request, candidate, runner)
+		finding, err := publishCandidate(&request, &candidate, runner)
 		if err != nil {
 			return CorrectnessResult{}, err
 		}
 		result.Findings[index] = finding
-		if err := persistCorrectnessOutcome(request, result); err != nil {
+		if err := persistCorrectnessOutcome(&request, &result); err != nil {
 			return CorrectnessResult{}, err
 		}
 	}
 	return result, nil
 }
 
-func persistCorrectnessOutcome(request Request, result CorrectnessResult) error {
+func persistCorrectnessOutcome(request *Request, result *CorrectnessResult) error {
 	if request.AuditSessionDir == "" {
 		return nil
 	}
 	return stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "correctness-findings.json"), result)
 }
 
-func validateCorrectnessCandidate(candidate CorrectnessCandidate, key string, known map[string]EvidenceReference, source SourceProvenance) error {
+func validateCorrectnessCandidate(candidate *CorrectnessCandidate, key string, known map[string]EvidenceReference, source *SourceProvenance) error {
 	if key == "" || candidate.DefectKey != key {
 		return fmt.Errorf("defect_key is not normalized")
 	}
@@ -396,7 +397,7 @@ func safeSymptom(value string) bool {
 	return value != "" && utf8.RuneCountInString(value) <= 280 && !strings.ContainsAny(value, "\r\n") && !strings.Contains(value, "```") && !strings.Contains(value, "\x00")
 }
 
-func candidateIssueTextBytes(candidate CorrectnessCandidate) int {
+func candidateIssueTextBytes(candidate *CorrectnessCandidate) int {
 	values := append([]string{candidate.Title, candidate.Observed, candidate.Expected, candidate.Verification, candidate.AffectedComponent}, candidate.Symptoms...)
 	total := 0
 	for _, value := range values {
@@ -406,12 +407,12 @@ func candidateIssueTextBytes(candidate CorrectnessCandidate) int {
 }
 
 func githubIssueURL(value string) bool {
-	return regexp.MustCompile(`^https://github\.com/Codagent-AI/agent-runner/issues/[0-9]+$`).MatchString(value)
+	return regexp.MustCompile(`^https://github\.com/Codagent-AI/agent-runner/issues/\d+$`).MatchString(value)
 }
 
-func findingFor(candidate CorrectnessCandidate, key, state, url, failure string) Finding {
+func findingFor(candidate *CorrectnessCandidate, key, state, url, failure string) Finding {
 	id := stableFindingID(key)
-	return Finding{FindingID: id, Candidate: candidate, Marker: findingMarker(id), PublicationState: state, IssueURL: url, Failure: failure}
+	return Finding{FindingID: id, Candidate: *candidate, Marker: findingMarker(id), PublicationState: state, IssueURL: url, Failure: failure}
 }
 
 func stableFindingID(key string) string {
@@ -421,11 +422,12 @@ func stableFindingID(key string) string {
 func findingMarker(id string) string { return "<!-- agent-runner-audit:" + id + " -->" }
 func causeMarker(key string) string  { return "<!-- agent-runner-audit-key:" + key + " -->" }
 
-func mergeSymptoms(left, right CorrectnessCandidate) CorrectnessCandidate {
-	left.Symptoms = append(left.Symptoms, right.Symptoms...)
-	left.Symptoms = append(left.Symptoms, right.Observed)
-	left.Symptoms = uniqueStrings(left.Symptoms)
-	return left
+func mergeSymptoms(left, right *CorrectnessCandidate) CorrectnessCandidate {
+	merged := *left
+	merged.Symptoms = append(merged.Symptoms, right.Symptoms...)
+	merged.Symptoms = append(merged.Symptoms, right.Observed)
+	merged.Symptoms = uniqueStrings(merged.Symptoms)
+	return merged
 }
 func uniqueStrings(values []string) []string {
 	seen := map[string]bool{}
@@ -446,7 +448,7 @@ type ghIssue struct {
 	Body  string `json:"body"`
 }
 
-func publishCandidate(request Request, candidate CorrectnessCandidate, runner CommandRunner) (Finding, error) {
+func publishCandidate(request *Request, candidate *CorrectnessCandidate, runner CommandRunner) (Finding, error) {
 	finding := findingFor(candidate, candidate.DefectKey, "pending", "", "")
 	semantic, err := searchIssues(runner, candidate.DefectKey, "open")
 	if err != nil {
@@ -491,7 +493,7 @@ func publishCandidate(request Request, candidate CorrectnessCandidate, runner Co
 		finding.PublicationState, finding.Failure = "ambiguous", "semantic duplicate result requires review before issue creation"
 		return finding, nil
 	}
-	body, redacted := issueBody(request, finding, candidate)
+	body, redacted := issueBody(request, &finding, candidate)
 	title := redactText(candidate.Title)
 	finding.Redacted = redacted || title != candidate.Title
 	url, err := runner.Run(context.Background(), "gh", []string{"issue", "create", "--repo", auditIssueRepository, "--title", "[auto-audit] " + title, "--body", "-"}, []byte(body))
@@ -536,7 +538,7 @@ func searchIssues(runner CommandRunner, query, state string) ([]ghIssue, error) 
 }
 
 func viewIssue(runner CommandRunner, issueURL string) (ghIssue, error) {
-	match := regexp.MustCompile(`/issues/([0-9]+)$`).FindStringSubmatch(issueURL)
+	match := regexp.MustCompile(`/issues/(\d+)$`).FindStringSubmatch(issueURL)
 	if len(match) != 2 {
 		return ghIssue{}, fmt.Errorf("semantic duplicate URL is invalid")
 	}
@@ -558,7 +560,7 @@ func issueMatchesCause(issue ghIssue, key string) bool {
 	return strings.Contains(issue.Body, causeMarker(key))
 }
 
-func issueBody(request Request, finding Finding, candidate CorrectnessCandidate) (string, bool) {
+func issueBody(request *Request, finding *Finding, candidate *CorrectnessCandidate) (string, bool) {
 	redacted := false
 	redact := func(value string) string {
 		output := redactText(value)
@@ -592,8 +594,8 @@ func issueBody(request Request, finding Finding, candidate CorrectnessCandidate)
 }
 
 var (
-	privateURLPattern = regexp.MustCompile(`(?i)https?://[^\s]+`)
-	pathPattern       = regexp.MustCompile(`(?:^|\s)(?:/Users/|/home/|[A-Za-z]:\\)[^\s]+`)
+	privateURLPattern = regexp.MustCompile(`(?i)https?://\S+`)
+	pathPattern       = regexp.MustCompile(`(?:^|\s)(?:/Users/|/home/|[A-Za-z]:\\)\S+`)
 	secretPattern     = regexp.MustCompile(`(?i)(ghp_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]+|(?:token|password|secret|api[_-]?key)\s*[=:]\s*[^\s]+)`)
 )
 
@@ -601,13 +603,6 @@ func redactText(value string) string {
 	value = privateURLPattern.ReplaceAllString(value, "[private URL]")
 	value = pathPattern.ReplaceAllString(value, " [local path]")
 	return secretPattern.ReplaceAllString(value, "[redacted]")
-}
-func redactStrings(values []string) []string {
-	out := make([]string, len(values))
-	for i, value := range values {
-		out[i] = redactText(value)
-	}
-	return out
 }
 
 // DestinationResolver exposes only the frozen non-secret Sheets identity.
@@ -655,7 +650,7 @@ type correctnessConsultation struct {
 	Category    string `json:"category"`
 }
 
-func assembleLocalReportStage(request Request) error {
+func assembleLocalReportStage(request *Request) error {
 	prepared, err := loadPreparedValueAudit(request.AuditSessionDir)
 	if err != nil {
 		return err
@@ -694,7 +689,8 @@ func correctnessConsultationLedger(findings []Finding, references []EvidenceRefe
 		categories[reference.ID] = reference.Category
 	}
 	entries := []correctnessConsultation{}
-	for _, finding := range findings {
+	for index := range findings {
+		finding := &findings[index]
 		for _, reference := range finding.Candidate.Consultations {
 			entries = append(entries, correctnessConsultation{FindingID: finding.FindingID, ReferenceID: reference, Category: categories[reference]})
 		}

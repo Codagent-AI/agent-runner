@@ -54,7 +54,7 @@ func init() {
 // executeAuditWorkflow runs the one injected hidden workflow. Its first
 // unavailable stage intentionally fails the linked audit through normal Runner
 // execution; completing that diagnostic never changes the source outcome.
-func executeAuditWorkflow(request Request) error {
+func executeAuditWorkflow(request *Request) error {
 	workflow, err := loader.LoadWorkflow("builtin:audit/run-audit-v1.0.yaml", loader.Options{})
 	if err != nil {
 		return err
@@ -115,17 +115,17 @@ func runAuditStage(stage, auditSessionDir string) (iexec.ProcessResult, error) {
 	case "prepare-evidence":
 		_, stageErr = PrepareEvidence(request)
 	case "value-audit":
-		stageErr = ensureValueOutputs(request)
+		stageErr = ensureValueOutputs(&request)
 	case "validate-value":
-		stageErr = validateValueStage(request)
+		stageErr = validateValueStage(&request)
 	case "correctness-audit":
-		stageErr = ensureCorrectnessOutput(request)
+		stageErr = ensureCorrectnessOutput(&request)
 	case "validate-publish-correctness":
-		stageErr = validatePublishCorrectnessStage(request)
+		stageErr = validatePublishCorrectnessStage(&request)
 	case "assemble-local-report":
-		stageErr = assembleLocalReportStage(request)
+		stageErr = assembleLocalReportStage(&request)
 	case "report-value-observations":
-		stageErr = reportValueObservationsStage(request)
+		stageErr = reportValueObservationsStage(&request)
 	default:
 		stageErr = fmt.Errorf("audit stage %q is not implemented", stage)
 	}
@@ -150,7 +150,7 @@ type auditGlobExpander struct{}
 
 func (auditGlobExpander) Expand(pattern string) ([]string, error) { return filepath.Glob(pattern) }
 
-func completeAudit(request Request, warning string) error {
+func completeAudit(request *Request, warning string) error {
 	lifecyclePath := filepath.Join(request.SourceSessionDir, lifecycleFileName)
 	lifecycle, err := ReadLifecycle(lifecyclePath)
 	if err != nil {
@@ -170,17 +170,17 @@ func completeAudit(request Request, warning string) error {
 	if err := writeLifecycle(lifecyclePath, lifecycle); err != nil {
 		return err
 	}
-	if err := appendSourceLink(request.SourceSessionDir, *link); err != nil {
+	if err := appendSourceLink(request.SourceSessionDir, link); err != nil {
 		return err
 	}
-	if err := completeAuditState(request, *link); err != nil {
+	if err := completeAuditState(request, link); err != nil {
 		return err
 	}
-	appendLifecycleEvent(request.SourceSessionDir, audit.EventAuditCompleted, *link)
+	appendLifecycleEvent(request.SourceSessionDir, audit.EventAuditCompleted, link)
 	return nil
 }
 
-func completeAuditState(request Request, link Link) error {
+func completeAuditState(request *Request, link *Link) error {
 	state, err := stateio.ReadState(filepath.Join(request.AuditSessionDir, "state.json"))
 	if err != nil {
 		return err
@@ -193,33 +193,35 @@ func completeAuditState(request Request, link Link) error {
 
 // RecordReportingWarning is available to later delivery stages without
 // reopening or changing the source workflow outcome.
-func RecordReportingWarning(request Request, warning string) error {
+func RecordReportingWarning(request *Request, warning string) error {
 	lifecycle, err := ReadLifecycle(filepath.Join(request.SourceSessionDir, lifecycleFileName))
 	if err != nil {
 		return err
 	}
 	for index := range lifecycle.Links {
-		if lifecycle.Links[index].AuditRunID == request.AuditRunID {
-			lifecycle.Links[index].Warning = warning
-			if err := writeLifecycle(filepath.Join(request.SourceSessionDir, lifecycleFileName), lifecycle); err != nil {
-				return err
-			}
-			if err := appendSourceLink(request.SourceSessionDir, lifecycle.Links[index]); err != nil {
-				return err
-			}
-			if err := updateAuditState(request.AuditSessionDir, lifecycle.Links[index], true); err != nil {
-				return err
-			}
-			appendLifecycleEvent(request.SourceSessionDir, audit.EventAuditReportingWarning, lifecycle.Links[index])
-			return nil
+		link := &lifecycle.Links[index]
+		if link.AuditRunID != request.AuditRunID {
+			continue
 		}
+		link.Warning = warning
+		if err := writeLifecycle(filepath.Join(request.SourceSessionDir, lifecycleFileName), lifecycle); err != nil {
+			return err
+		}
+		if err := appendSourceLink(request.SourceSessionDir, link); err != nil {
+			return err
+		}
+		if err := updateAuditState(request.AuditSessionDir, link, true); err != nil {
+			return err
+		}
+		appendLifecycleEvent(request.SourceSessionDir, audit.EventAuditReportingWarning, link)
+		return nil
 	}
 	return fmt.Errorf("audit lifecycle link %q is missing", request.AuditRunID)
 }
 
 func Enabled() bool { return true }
 
-func launchDetached(request Request) error {
+func launchDetached(request Request) error { //nolint:gocritic // Coordinator launcher contract owns an immutable request value.
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolve current executable: %w", err)
@@ -241,7 +243,7 @@ func launchDetached(request Request) error {
 // HandleCommand owns the tagged-only command surface. It is called before the
 // ordinary CLI parser, ensuring production help and command routing contain no
 // audit option at all.
-func HandleCommand(args []string, stdout, stderr io.Writer) (bool, int) {
+func HandleCommand(args []string, stdout, stderr io.Writer) (handled bool, exitCode int) {
 	if len(args) >= 2 && args[0] == "internal" && args[1] == "audit-run" {
 		return true, handleInternalAudit(args[2:], stderr)
 	}
@@ -339,7 +341,8 @@ func resolveRecordedRun(ref string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for _, entry := range entries {
+	for index := range entries {
+		entry := &entries[index]
 		if entry.SessionID == ref {
 			return entry.SessionDir, nil
 		}
@@ -379,7 +382,7 @@ func handleInternalAudit(args []string, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "agent-runner internal audit-run: invalid request: %v\n", err)
 		return 1
 	}
-	if err := executeAuditWorkflow(request); err != nil {
+	if err := executeAuditWorkflow(&request); err != nil {
 		_, _ = fmt.Fprintf(stderr, "agent-runner internal audit-run: %v\n", err)
 		return 1
 	}
@@ -418,7 +421,7 @@ func Replay(sourceSessionDir, executionSessionID string, launch func(Request) er
 	link := Link{AuditRunID: auditID, ExecutionSessionID: executionSessionID, Trigger: "replay", State: LaunchReserved, RequestedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	workingDir, _ := os.Getwd()
 	summary := runner.PostFinalizationSummary{RunID: state.RunID, ExecutionSessionID: executionSessionID, SessionDir: sourceSessionDir, WorkingDir: workingDir, WorkflowFile: state.WorkflowFile, WorkflowName: state.WorkflowName, ProfileSet: state.ProfileSet, TopLevel: true}
-	if err := createAuditRun(summary, &link); err != nil {
+	if err := createAuditRun(&summary, &link); err != nil {
 		return err
 	}
 	snapshot, err := snapshotReplayEvidenceAt(sourceSessionDir, filepath.Join(auditSessionDir(sourceSessionDir, auditID), "snapshot"), executionSessionID)
@@ -437,9 +440,9 @@ func Replay(sourceSessionDir, executionSessionID string, launch func(Request) er
 	if err := writeLifecycle(filepath.Join(sourceSessionDir, lifecycleFileName), lifecycle); err != nil {
 		return err
 	}
-	if err := appendSourceLink(sourceSessionDir, link); err != nil {
+	if err := appendSourceLink(sourceSessionDir, &link); err != nil {
 		return err
 	}
-	appendLifecycleEvent(sourceSessionDir, audit.EventAuditLaunchRequested, link)
-	return (Coordinator{Launcher: launch}).launch(summary, &lifecycle, &lifecycle.Links[len(lifecycle.Links)-1], time.Now)
+	appendLifecycleEvent(sourceSessionDir, audit.EventAuditLaunchRequested, &link)
+	return (Coordinator{Launcher: launch}).launch(&summary, &lifecycle, &lifecycle.Links[len(lifecycle.Links)-1], time.Now)
 }

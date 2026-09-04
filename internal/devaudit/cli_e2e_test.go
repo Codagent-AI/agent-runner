@@ -201,18 +201,18 @@ func (f *cliAuditFixture) initProject() {
 	}
 }
 
-func (f *cliAuditFixture) writeCredentials() (string, string) {
+func (f *cliAuditFixture) writeCredentials() (clientPath, tokenPath string) {
 	f.t.Helper()
-	client := filepath.Join(f.root, "client.json")
-	token := filepath.Join(f.root, "token.json")
+	clientPath = filepath.Join(f.root, "client.json")
+	tokenPath = filepath.Join(f.root, "token.json")
 	clientJSON := fmt.Sprintf(`{"installed":{"client_id":"client","client_secret":"secret","token_uri":%q}}`, f.server.server.URL+"/token")
-	if err := os.WriteFile(client, []byte(clientJSON), 0o600); err != nil {
+	if err := os.WriteFile(clientPath, []byte(clientJSON), 0o600); err != nil {
 		f.t.Fatal(err)
 	}
-	if err := os.WriteFile(token, []byte(`{"client_id":"client","client_secret":"secret","refresh_token":"refresh","scopes":["https://www.googleapis.com/auth/spreadsheets"]}`), 0o600); err != nil {
+	if err := os.WriteFile(tokenPath, []byte(`{"client_id":"client","client_secret":"secret","refresh_token":"refresh","scopes":["https://www.googleapis.com/auth/spreadsheets"]}`), 0o600); err != nil {
 		f.t.Fatal(err)
 	}
-	return client, token
+	return clientPath, tokenPath
 }
 
 func (f *cliAuditFixture) run(wantSuccess bool, args ...string) string {
@@ -265,8 +265,8 @@ func (f *cliAuditFixture) waitForLinks(source string, count int, completed bool)
 		if err == nil && len(lifecycle.Links) >= count {
 			ready := true
 			if completed {
-				for _, link := range lifecycle.Links[:count] {
-					ready = ready && link.State == LaunchCompleted
+				for index := range lifecycle.Links[:count] {
+					ready = ready && lifecycle.Links[index].State == LaunchCompleted
 				}
 			}
 			if ready {
@@ -277,7 +277,8 @@ func (f *cliAuditFixture) waitForLinks(source string, count int, completed bool)
 	}
 	lifecycle, lifecycleErr := ReadLifecycle(filepath.Join(source, lifecycleFileName))
 	diagnostics := ""
-	for _, link := range lifecycle.Links {
+	for index := range lifecycle.Links {
+		link := &lifecycle.Links[index]
 		for _, name := range []string{"value-diagnostics.json", "correctness-model-diagnostics.json", "detached.log"} {
 			if data, err := os.ReadFile(filepath.Join(filepath.Dir(source), link.AuditRunID, name)); err == nil {
 				diagnostics += name + ": " + string(data) + "\n"

@@ -563,7 +563,7 @@ func allRowsPresent(rows [][]string, present map[string]struct{}) bool {
 	return true
 }
 
-func reportValueObservationsStage(request Request) error {
+func reportValueObservationsStage(request *Request) error {
 	path := filepath.Join(request.AuditSessionDir, "local-report.json")
 	data, err := os.ReadFile(path) // #nosec G304 -- fixed audit-owned report path.
 	if err != nil {
