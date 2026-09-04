@@ -14,6 +14,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +28,7 @@ import (
 	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/control"
 	"github.com/codagent/agent-runner/internal/liverun"
+	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
 
@@ -114,10 +117,11 @@ func TestInteractiveDirectHandoffJobControl(t *testing.T) {
 	buildAgentRunner(t, repoRoot, runnerBin)
 	writeInteractiveAgentFixtures(t, binDir, []string{"claude"})
 
-	for _, mode := range []string{"cooperative", "external", "terminal-output"} {
+	for _, mode := range []string{"cooperative", "external", "terminal-output", "interrupt-tui"} {
 		t.Run(mode, func(t *testing.T) {
 			home := filepath.Join(tmp, "home-"+mode)
 			writeSmokeProfileConfig(t, home)
+			writeTestFile(t, filepath.Join(home, ".agent-runner", "settings.yaml"), "theme: dark\n")
 			writeJobControlWorkflow(t, filepath.Join(home, ".agent-runner", "workflows"))
 			command := exec.Command(shell, "-f")
 			command.Dir = repoRoot
@@ -128,11 +132,24 @@ func TestInteractiveDirectHandoffJobControl(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer ptmx.Close()
+			defer func() {
+				_ = command.Process.Kill()
+				_ = command.Wait()
+			}()
 			output := make(chan string, 64)
 			go scanPTYText(ptmx, output)
 			waitForPTYText(t, output, "JOB_SHELL_READY>", 5*time.Second)
 			launch := fmt.Sprintf("AGENT_RUNNER_NO_TUI=1 %s=1 %s=%s %s --headless --profile smoke_test %s\r",
 				interactiveFixtureEnv, jobControlFixtureEnv, mode, runnerBin, "interactive-job-control")
+			if mode == "interrupt-tui" {
+				// Leave a real incomplete workflow and resume it through the CLI,
+				// matching interruption of the first prompt after --resume.
+				seed := fmt.Sprintf("AGENT_RUNNER_NO_TUI=1 %s=1 %s=seed %s --headless --profile smoke_test interactive-job-control\r", interactiveFixtureEnv, jobControlFixtureEnv, runnerBin)
+				_, _ = ptmx.WriteString(seed)
+				waitForPTYText(t, output, "JOB_SHELL_READY>", 30*time.Second)
+				sessionDir := latestWorkflowRunDir(t, home, repoRoot, "interactive-job-control")
+				launch = fmt.Sprintf("AGENT_RUNNER_NO_TUI=0 %s=1 %s=%s %s --resume %s\r", interactiveFixtureEnv, jobControlFixtureEnv, mode, runnerBin, filepath.Base(sessionDir))
+			}
 			_, _ = ptmx.WriteString(launch)
 			ready := waitForPTYText(t, output, "JOB_CHILD_READY "+mode+" ", 30*time.Second)
 			match := regexp.MustCompile(`JOB_CHILD_READY ` + mode + ` ([0-9]+)`).FindStringSubmatch(ready)
@@ -142,6 +159,25 @@ func TestInteractiveDirectHandoffJobControl(t *testing.T) {
 			pid, parseErr := strconv.Atoi(match[1])
 			if parseErr != nil {
 				t.Fatalf("parse child pid from %q: %v", ready, parseErr)
+			}
+			if mode == "interrupt-tui" {
+				_, _ = ptmx.Write([]byte{3})
+				waitForPTYText(t, output, "JOB_CHILD_INTERRUPTED", 10*time.Second)
+				sessionDir := latestWorkflowRunDir(t, home, repoRoot, "interactive-job-control")
+				if status := runlock.Check(sessionDir); status != runlock.LockActive {
+					t.Fatalf("lock after prompt interruption = %v, want active", status)
+				}
+				_, _ = ptmx.WriteString("R")
+				waitForPTYText(t, output, "JOB_CHILD_RESUMED "+mode, 10*time.Second)
+				waitForPTYText(t, output, "success", 15*time.Second)
+				_, _ = ptmx.WriteString("q")
+				waitForPTYText(t, output, "JOB_SHELL_READY>", 15*time.Second)
+				if status := runlock.Check(sessionDir); status != runlock.LockNone {
+					t.Fatalf("lock after workflow exit = %v, want removed", status)
+				}
+				_, _ = ptmx.WriteString("exit\r")
+				_ = command.Wait()
+				return
 			}
 			if mode == "external" {
 				if err := unix.Kill(pid, unix.SIGSTOP); err != nil {
@@ -278,7 +314,7 @@ func TestInteractiveTerminalLeaseFailures(t *testing.T) {
 	}
 	repoRoot := findRepoRoot(t)
 
-	for _, mode := range []string{"release", "restore"} {
+	for _, mode := range []string{"release", "restore", "startup"} {
 		t.Run(mode, func(t *testing.T) {
 			tmp := t.TempDir()
 			home := filepath.Join(tmp, "home")
@@ -310,6 +346,13 @@ func TestInteractiveTerminalLeaseFailures(t *testing.T) {
 				terminalLeaseWorkflowEnv+"="+workflowPath,
 			)
 			output, err := runCommandInPTY(cmd, 30*time.Second)
+			if mode == "startup" {
+				if err != nil {
+					t.Fatalf("terminal released before TUI startup completed: %v\n%s", err, output)
+				}
+				assertInteractiveFixtureInvocationCount(t, fixtureLog, 1)
+				return
+			}
 			if err == nil {
 				t.Fatalf("%s failure injection unexpectedly succeeded\n%s", mode, output)
 			}
@@ -345,7 +388,12 @@ func TestInteractiveTerminalLeaseFixtureProcess(t *testing.T) {
 		t.Fatalf("set runner executable: %v", err)
 	}
 	liveRunCoordinatorFactory = func(program *tea.Program, sessionDir string) *liverun.Coordinator {
-		return liverun.NewCoordinator(&terminalFaultProgram{Program: program, mode: mode}, sessionDir)
+		fault := &terminalFaultProgram{Program: program, mode: mode}
+		if mode == "startup" {
+			fault.startup = &slowStartupOutput{}
+			tea.WithOutput(fault.startup)(program)
+		}
+		return liverun.NewCoordinator(fault, sessionDir)
 	}
 	result := handleRunWithRunOptions([]string{os.Getenv(terminalLeaseWorkflowEnv)}, &runCommandOptions{
 		liveOpts:        liveTUIOptions{quitOnDone: true, startInAltScreen: true},
@@ -356,10 +404,29 @@ func TestInteractiveTerminalLeaseFixtureProcess(t *testing.T) {
 
 type terminalFaultProgram struct {
 	*tea.Program
-	mode string
+	mode    string
+	startup *slowStartupOutput
+}
+
+// Hold Bubble Tea inside terminal initialization long enough for a premature
+// workflow goroutine to attempt release. No child may launch in this window.
+type slowStartupOutput struct {
+	once  sync.Once
+	ready atomic.Bool
+}
+
+func (w *slowStartupOutput) Write(p []byte) (int, error) {
+	w.once.Do(func() {
+		time.Sleep(300 * time.Millisecond)
+		w.ready.Store(true)
+	})
+	return os.Stdout.Write(p)
 }
 
 func (p *terminalFaultProgram) ReleaseTerminal() error {
+	if p.startup != nil && !p.startup.ready.Load() {
+		return errors.New("terminal release raced TUI initialization")
+	}
 	if p.mode == "release" {
 		return errors.New("injected release failure")
 	}
@@ -501,6 +568,12 @@ func runInteractiveAgentFixture() error {
 		return err
 	}
 	if mode := os.Getenv(jobControlFixtureEnv); mode != "" {
+		if mode == "seed" {
+			return nil
+		}
+		if mode == "interrupt-tui" && !resume {
+			return errors.New("expected resumed agent session")
+		}
 		return runJobControlFixture(mode)
 	}
 	invocationNumber, err := appendInteractiveFixtureInvocation(&interactiveFixtureInvocation{
@@ -574,6 +647,15 @@ func runJobControlFixture(mode string) error {
 		}
 	}
 	input := []byte{0}
+	if mode == "interrupt-tui" {
+		if _, err := io.ReadFull(os.Stdin, input); err != nil {
+			return err
+		}
+		if input[0] != 3 {
+			return fmt.Errorf("expected Ctrl-C, got %q", input)
+		}
+		_, _ = fmt.Fprint(os.Stdout, "JOB_CHILD_INTERRUPTED\r\n")
+	}
 	if _, err := io.ReadFull(os.Stdin, input); err != nil {
 		return err
 	}
