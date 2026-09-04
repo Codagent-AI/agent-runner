@@ -83,6 +83,26 @@ func TestSandboxExecArgsBindsOutputDirectoryAsParameter(t *testing.T) {
 	}
 }
 
+func TestDiscoverEvidenceDoesNotClassifyRunnerSourceAsRunOutput(t *testing.T) {
+	root := t.TempDir()
+	runnerSource := filepath.Join(root, "runner-source", "internal")
+	if err := os.MkdirAll(runnerSource, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runnerSource, "output.go"), []byte("package internal\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	references, err := discoverEvidence(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reference := range references {
+		if reference.Status == "available" && reference.Category == "narrative" {
+			t.Fatalf("Runner source was classified as run narrative evidence: %#v", reference)
+		}
+	}
+}
+
 func TestPrepareEvidenceStagePersistsBoundedEvidenceArtifacts(t *testing.T) {
 	temp := t.TempDir()
 	snapshot := filepath.Join(temp, "snapshot")

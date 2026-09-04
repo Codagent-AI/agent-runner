@@ -30,9 +30,10 @@ import (
 // BuildRoot, BuildRevision, and BuildDirty are injected only by supported
 // local development build paths. They are diagnostic provenance, never config.
 var (
-	BuildRoot     string
-	BuildRevision string
-	BuildDirty    string
+	BuildRoot                     string
+	BuildRevision                 string
+	BuildDirty                    string
+	configureDetachedAuditCommand = func(*exec.Cmd, string) {}
 )
 
 //go:embed workflows/audit/run-audit-v1.0.yaml
@@ -229,6 +230,7 @@ func launchDetached(request Request) error {
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	cmd.SysProcAttr = &syscall.SysProcAttr{}
+	configureDetachedAuditCommand(cmd, request.AuditSessionDir)
 	configureDetachedProcess(cmd.SysProcAttr)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start linked audit: %w", err)
@@ -419,7 +421,7 @@ func Replay(sourceSessionDir, executionSessionID string, launch func(Request) er
 	if err := createAuditRun(summary, &link); err != nil {
 		return err
 	}
-	snapshot, err := snapshotEvidenceAt(sourceSessionDir, filepath.Join(auditSessionDir(sourceSessionDir, auditID), "snapshot"))
+	snapshot, err := snapshotReplayEvidenceAt(sourceSessionDir, filepath.Join(auditSessionDir(sourceSessionDir, auditID), "snapshot"), executionSessionID)
 	if err != nil {
 		return err
 	}

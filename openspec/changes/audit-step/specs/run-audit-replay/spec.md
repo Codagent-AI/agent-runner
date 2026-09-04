@@ -36,12 +36,24 @@ Every explicit replay SHALL have a distinct audit-run identity and SHALL mark it
 
 ### Requirement: Replay is non-mutating
 
-Explicit audit replay SHALL create and use an immutable launch-time snapshot of the selected durable source-run evidence and SHALL treat the source repository as read-only. It SHALL NOT alter the source run's state, outcome, resumability, commits, working tree, or recorded evidence. Later source-run changes SHALL NOT invalidate or silently enter an already launched replay.
+Explicit audit replay SHALL create and use an immutable launch-time snapshot of the selected durable source-run evidence and SHALL treat the source repository as read-only. It SHALL NOT alter the source run's outcome, resumability, commits, working tree, or recorded workflow evidence. As the sole exception, replay MAY append audit-only link and lifecycle metadata needed to associate the source run and selected execution session with the new audit run. Later source-run changes SHALL NOT invalidate or silently enter an already launched replay.
 
 #### Scenario: Replay completes
 - **WHEN** an explicit replay succeeds or fails
-- **THEN** the source run and source repository remain unchanged by the audit
+- **THEN** the source workflow evidence and source repository remain unchanged, while the source run may gain only reciprocal audit-link and lifecycle metadata
 
 #### Scenario: Source run changes during replay
 - **WHEN** the selected source run gains later evidence after the replay's launch snapshot is complete
 - **THEN** the replay continues against its snapshot and reports only the selected evidence version
+
+### Requirement: Historical replay excludes evidence without durable session ownership
+
+An explicit replay SHALL include quantitative records and other evidence only when Agent Runner can attribute them to the selected execution session or an earlier session relevant to its lineage. Detailed outputs, validation records, artifacts, narratives, native-session material, and other evidence without durable execution-session ownership SHALL be excluded from the replay snapshot and marked unavailable rather than exposed cumulatively or attributed by inference.
+
+#### Scenario: Later execution added ambiguous detail
+- **WHEN** an earlier execution session is replayed after a later session has added outputs or artifacts that lack durable session ownership
+- **THEN** the replay snapshot excludes those ambiguous details and reports the affected evidence categories as unavailable
+
+#### Scenario: Session-owned metrics are replayed
+- **WHEN** durable metrics identify the execution sessions that produced their records
+- **THEN** the replay retains records through the selected session for selected-session evaluation and prior-session lineage while excluding later-session records

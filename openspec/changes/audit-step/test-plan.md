@@ -122,7 +122,7 @@ The plan intentionally omits:
 
 ### AT-002: TUI completion remains visible while audit runs independently
 
-- Classification: Conditional: Darwin or Linux
+- Classification: Conditional: Darwin
 - Covers: launch before TUI exit, unchanged source completion display, background continuation after exit, and hidden audit presentation.
 - Actor and surface: Acceptance agent driving the tagged CLI's live run view through a PTY and reconstructing frames with a terminal emulator.
 - Setup: An eligible fast source fixture and a deterministic audit agent that waits on a sentinel after the linked audit starts. Launch the workflow directly into the live run view so no synthetic `r` keypress is required.

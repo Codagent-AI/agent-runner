@@ -42,7 +42,7 @@ Both model stages SHALL resolve the existing `crosscheck` role using the profile
 
 The supported development build paths SHALL inject the absolute Agent Runner checkout root and available build Git provenance into the tagged binary. At audit launch, Agent Runner SHALL verify that root, record its then-current revision and dirty state, and create a read-only snapshot for correctness verification. That launch-time snapshot SHALL be authoritative for whether the suspected behavior is a current Agent Runner defect. Build-time provenance SHALL remain diagnostic context and SHALL NOT require a separate repository setting.
 
-Before correctness publication, Agent Runner SHALL verify that the launch-time snapshot identifies the Agent Runner module. Missing, wrong-module, or incomplete launch-time source SHALL reduce coverage and prevent issue creation unless other matching repository evidence independently verifies the finding. A difference between build-time and launch-time provenance SHALL be recorded and MAY reduce confidence, but SHALL NOT by itself block publication of a defect verified against the authoritative launch-time snapshot.
+Before correctness publication, Agent Runner SHALL verify that the launch-time snapshot identifies the Agent Runner module. Missing, wrong-module, or incomplete launch-time source SHALL reduce coverage and prevent issue creation. A difference between build-time and launch-time provenance SHALL be recorded and MAY reduce confidence, but SHALL NOT by itself block publication of a defect verified against the authoritative launch-time snapshot.
 
 #### Scenario: Local binary runs from another project
 - **WHEN** a development-audit binary built in the Agent Runner checkout audits a workflow in another project
@@ -62,7 +62,19 @@ Before correctness publication, Agent Runner SHALL verify that the launch-time s
 
 #### Scenario: Launch snapshot is not Agent Runner source
 - **WHEN** the injected path resolves at launch but its snapshot does not identify the Agent Runner module
-- **THEN** correctness publication is blocked unless independent matching repository evidence verifies the finding
+- **THEN** correctness publication is blocked
+
+### Requirement: Model isolation is Darwin-only in the initial development audit
+
+The initial development-audit implementation SHALL invoke its model-driven stages only on Darwin, using the operating-system filesystem sandbox to keep the source and Runner snapshots read-only and to restrict writes to audit-owned output. On every other operating system, the model-driven stages SHALL fail closed with an explicit unsupported-platform diagnostic. This limitation SHALL affect only the linked audit and SHALL NOT alter the source execution's result.
+
+#### Scenario: Audit model stage runs on Darwin
+- **WHEN** a development audit reaches a model-driven stage on Darwin and the required operating-system sandbox is available
+- **THEN** Agent Runner launches the resolved crosscheck within the restricted audit workspace
+
+#### Scenario: Audit model stage runs on another operating system
+- **WHEN** a development audit reaches a model-driven stage on a non-Darwin operating system
+- **THEN** the linked audit records an unsupported-platform failure without launching the model or changing the source result
 
 ### Requirement: Google connection state is private and does not control auditing
 

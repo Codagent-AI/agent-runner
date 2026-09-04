@@ -33,6 +33,8 @@ const (
 	auditSandboxProfile    = "(version 1)\n(deny file-write*)\n(allow file-write* (subpath (param \"OUTPUT_DIR\")))\n"
 )
 
+var crosscheckCommand = sandboxedCrosscheckCommand
+
 // Fingerprints bind each value result to its frozen intake and separately
 // writable model-output boundary.
 type Fingerprints struct {
@@ -150,6 +152,22 @@ func PrepareEvidence(request Request) (PreparedValueAudit, error) {
 	references, err := discoverEvidence(request.SnapshotPath)
 	if err != nil {
 		return PreparedValueAudit{}, err
+	}
+	if request.Trigger == "replay" {
+		for _, category := range []string{"audit_log", "validation", "artifact", "narrative", "native_session"} {
+			if hasEvidenceCategoryReference(references, category) {
+				continue
+			}
+			references = append(references, EvidenceReference{
+				ID:                       "replay-" + category + "-unavailable",
+				Category:                 category,
+				Status:                   "unavailable",
+				ProducerExecutionSession: request.ExecutionSessionID,
+				Lineage:                  "unavailable",
+				Detail:                   "durable execution-session ownership is unavailable",
+			})
+		}
+		sort.Slice(references, func(i, j int) bool { return references[i].ID < references[j].ID })
 	}
 	index := EvidenceIndex{
 		SchemaVersion: evidenceSchemaVersion, SourceRunID: request.SourceRunID,
@@ -550,12 +568,18 @@ func discoverEvidence(root string) ([]EvidenceReference, error) {
 		if walkErr != nil {
 			return walkErr
 		}
-		if entry.IsDir() || !entry.Type().IsRegular() {
-			return nil
-		}
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
+		}
+		if entry.IsDir() {
+			if rel == "runner-source" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !entry.Type().IsRegular() {
+			return nil
 		}
 		category := evidenceCategory(rel)
 		if category == "" {
@@ -614,6 +638,15 @@ func evidencePriority(category string) int {
 func hasEvidenceCategory(refs []EvidenceReference, category string) bool {
 	for _, ref := range refs {
 		if ref.Category == category && ref.Status == "available" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEvidenceCategoryReference(refs []EvidenceReference, category string) bool {
+	for _, ref := range refs {
+		if ref.Category == category {
 			return true
 		}
 	}
@@ -1137,7 +1170,7 @@ func invokeCrosscheckValueBatch(request Request, pkg ValuePackage) (ModelValueBa
 	if len(args) == 0 {
 		return ModelValueBatch{}, fmt.Errorf("crosscheck adapter produced no command")
 	}
-	command, err := sandboxedCrosscheckCommand(args, workspace, filepath.Join(request.AuditSessionDir, "model-output"))
+	command, err := crosscheckCommand(args, workspace, filepath.Join(request.AuditSessionDir, "model-output"))
 	if err != nil {
 		return ModelValueBatch{}, err
 	}
@@ -1227,6 +1260,9 @@ func cliEnvironment(adapter cli.Adapter, request Request, input []byte, workdir 
 
 func prepareModelWorkspace(request Request) (string, error) {
 	workspace := filepath.Join(request.AuditSessionDir, "model-workspace")
+	if err := os.Chmod(workspace, 0o700); err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
 	if err := os.RemoveAll(workspace); err != nil {
 		return "", err
 	}

@@ -28,6 +28,8 @@ var stepValueHeader = []string{
 	"schema_version", "observation_id", "observed_at_utc", "project", "workflow", "source_run_id", "execution_session_id", "audit_run_id", "trigger", "source_outcome", "step_id", "step_outcome", "lineage", "duration_ms", "cost_usd", "total_tokens", "source_models", "git_attribution", "commit_shas", "files_changed", "lines_added", "lines_deleted", "overall_value", "change_effect", "unique_contribution", "downstream_evidence", "confidence", "evidence_coverage", "judge_model", "rubric_version", "note",
 }
 
+var allowInsecureDevelopmentAuditTestURI bool
+
 // SetupInput names operator-provided source files. Paths are used only while
 // importing and are deliberately never stored in Connection.
 type SetupInput struct {
@@ -149,7 +151,7 @@ func hasSheetsWriteScope(scopes []string) bool {
 }
 
 func (s ConnectionStore) validate(connection *Connection) error {
-	return validateConnection(connection, s.allowInsecureTokenURI)
+	return validateConnection(connection, s.allowInsecureTokenURI || allowInsecureDevelopmentAuditTestURI)
 }
 
 func validateConnection(connection *Connection, allowInsecureTokenURI bool) error {

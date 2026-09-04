@@ -36,27 +36,18 @@ type CorrectnessCandidates struct {
 }
 
 type CorrectnessCandidate struct {
-	Status              string                      `json:"status"`
-	DefectKey           string                      `json:"defect_key,omitempty"`
-	Title               string                      `json:"title,omitempty"`
-	Observed            string                      `json:"observed,omitempty"`
-	Expected            string                      `json:"expected,omitempty"`
-	Verification        string                      `json:"verification,omitempty"`
-	AffectedComponent   string                      `json:"affected_component,omitempty"`
-	EvidenceRefs        []string                    `json:"evidence_refs,omitempty"`
-	Consultations       []string                    `json:"consultations,omitempty"`
-	Confidence          string                      `json:"confidence,omitempty"`
-	Symptoms            []string                    `json:"symptoms,omitempty"`
-	IndependentEvidence []IndependentRunnerEvidence `json:"independent_evidence,omitempty"`
-	SemanticDuplicate   Duplicate                   `json:"semantic_duplicate"`
-}
-
-// IndependentRunnerEvidence names a deterministic evidence-index entry that
-// independently verifies this cause when the launch snapshot has limited coverage.
-type IndependentRunnerEvidence struct {
-	ReferenceID  string `json:"reference_id"`
-	DefectKey    string `json:"defect_key"`
-	Verification string `json:"verification"`
+	Status            string    `json:"status"`
+	DefectKey         string    `json:"defect_key,omitempty"`
+	Title             string    `json:"title,omitempty"`
+	Observed          string    `json:"observed,omitempty"`
+	Expected          string    `json:"expected,omitempty"`
+	Verification      string    `json:"verification,omitempty"`
+	AffectedComponent string    `json:"affected_component,omitempty"`
+	EvidenceRefs      []string  `json:"evidence_refs,omitempty"`
+	Consultations     []string  `json:"consultations,omitempty"`
+	Confidence        string    `json:"confidence,omitempty"`
+	Symptoms          []string  `json:"symptoms,omitempty"`
+	SemanticDuplicate Duplicate `json:"semantic_duplicate"`
 }
 
 // Duplicate is model-supplied duplicate research. The publisher independently
@@ -147,7 +138,7 @@ func invokeCrosscheckCorrectness(request Request) (CorrectnessCandidates, error)
 	if err != nil {
 		return CorrectnessCandidates{}, err
 	}
-	prompt := "Investigate only reproducible Agent Runner defects using this immutable audit evidence and the read-only Runner source under evidence/runner-source. Return exactly one JSON object with candidates. A candidate has status (confirmed, inconclusive, excluded), normalized defect_key, title, observed, expected, verification, affected_component, evidence_refs, consultations, confidence, symptoms, optional independent_evidence {reference_id,defect_key,verification}, and semantic_duplicate {url,state,defect_key}. Do not edit repositories, run GitHub commands, include transcripts, paths, URLs other than duplicate issue URLs, secrets, or prose outside JSON. Project, user, and external failures are excluded unless evidence verifies an Agent Runner cause.\n\n" + string(input)
+	prompt := "Investigate only reproducible Agent Runner defects using this immutable audit evidence and the read-only Runner source under evidence/runner-source. Return exactly one JSON object with candidates. A candidate has status (confirmed, inconclusive, excluded), normalized defect_key, title, observed, expected, verification, affected_component, evidence_refs, consultations, confidence, symptoms, and semantic_duplicate {url,state,defect_key}. Do not edit repositories, run GitHub commands, include transcripts, paths, URLs other than duplicate issue URLs, secrets, or prose outside JSON. Project, user, and external failures are excluded unless evidence verifies an Agent Runner cause.\n\n" + string(input)
 	workspace, err := prepareModelWorkspace(request)
 	if err != nil {
 		return CorrectnessCandidates{}, err
@@ -159,7 +150,7 @@ func invokeCrosscheckCorrectness(request Request) (CorrectnessCandidates, error)
 		}
 		return CorrectnessCandidates{}, err
 	}
-	command, err := sandboxedCrosscheckCommand(args, workspace, filepath.Join(request.AuditSessionDir, "model-output"))
+	command, err := crosscheckCommand(args, workspace, filepath.Join(request.AuditSessionDir, "model-output"))
 	if err != nil {
 		return CorrectnessCandidates{}, err
 	}
@@ -369,8 +360,8 @@ func validateCorrectnessCandidate(candidate CorrectnessCandidate, key string, kn
 		}
 	}
 	sourceComplete := source.Verified && source.Coverage == "complete" && source.SnapshotPath != "" && runnerSnapshotComplete(source.SnapshotPath)
-	if !sourceComplete && !hasIndependentRunnerEvidence(candidate, key, known) {
-		return fmt.Errorf("authoritative Runner source is unavailable or incomplete without independent verification")
+	if !sourceComplete {
+		return fmt.Errorf("authoritative Runner source is unavailable or incomplete")
 	}
 	for _, value := range []string{candidate.Title, candidate.Observed, candidate.Expected, candidate.Verification, candidate.AffectedComponent} {
 		if !boundedText(value) {
@@ -389,16 +380,6 @@ func validateCorrectnessCandidate(candidate CorrectnessCandidate, key string, kn
 		return fmt.Errorf("candidate issue content exceeds the focused-content limit")
 	}
 	return nil
-}
-
-func hasIndependentRunnerEvidence(candidate CorrectnessCandidate, key string, known map[string]EvidenceReference) bool {
-	for _, evidence := range candidate.IndependentEvidence {
-		ref, exists := known[evidence.ReferenceID]
-		if exists && evidence.DefectKey == key && boundedText(evidence.Verification) && ref.Category == "runner_source_match" && ref.Detail == "independently_verified" {
-			return true
-		}
-	}
-	return false
 }
 
 func normalizeDefectKey(value string) string {

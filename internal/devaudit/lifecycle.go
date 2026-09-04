@@ -336,6 +336,64 @@ func snapshotEvidenceAt(sessionDir, dir string) (string, error) {
 	return dir, nil
 }
 
+// snapshotReplayEvidenceAt retains only metrics whose durable session
+// ownership is known at or before the selected session. Run outputs and other
+// detail artifacts are intentionally omitted because older runs do not record
+// enough ownership metadata to prove which execution session produced them.
+func snapshotReplayEvidenceAt(sessionDir, dir, executionSessionID string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(sessionDir, metrics.FileName)) // #nosec G304 -- fixed evidence file beneath a resolved run directory.
+	if err != nil {
+		return "", fmt.Errorf("read replay metrics: %w", err)
+	}
+	var artifact metrics.Artifact
+	if err := json.Unmarshal(data, &artifact); err != nil {
+		return "", fmt.Errorf("decode replay metrics: %w", err)
+	}
+	selected := -1
+	for index, session := range artifact.Sessions {
+		if session.ExecutionSessionID == executionSessionID {
+			selected = index
+			break
+		}
+	}
+	if selected < 0 {
+		return "", fmt.Errorf("execution session %q is unavailable", executionSessionID)
+	}
+	allowed := make(map[string]struct{}, selected+1)
+	artifact.Sessions = append([]metrics.SessionRecord(nil), artifact.Sessions[:selected+1]...)
+	for _, session := range artifact.Sessions {
+		allowed[session.ExecutionSessionID] = struct{}{}
+	}
+	steps := make([]metrics.StepRecord, 0, len(artifact.Steps))
+	for _, step := range artifact.Steps {
+		if _, ok := allowed[step.ExecutionSessionID]; ok {
+			steps = append(steps, step)
+		}
+	}
+	artifact.Steps = steps
+	rollups := make([]metrics.SessionRollup, 0, len(artifact.SessionRollups))
+	for _, rollup := range artifact.SessionRollups {
+		if _, ok := allowed[rollup.ExecutionSessionID]; ok {
+			rollups = append(rollups, rollup)
+		}
+	}
+	artifact.SessionRollups = rollups
+	artifact.RepositoryChanges = nil
+	artifact.Totals = model.RunTotals{
+		Tokens:             make(model.TokenCounts),
+		UsageCoverage:      model.CoverageNone,
+		TokenTotalCoverage: model.CoverageNone,
+		CostCoverage:       model.CoverageNone,
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	if err := stateio.WriteJSONAtomic(filepath.Join(dir, metrics.FileName), artifact); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
 type snapshottedGitCommit struct {
 	SHA          string   `json:"sha"`
 	Subject      string   `json:"subject"`

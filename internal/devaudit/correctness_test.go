@@ -81,20 +81,18 @@ func TestPublishCorrectnessRejectsIncompleteRunnerSourceSnapshot(t *testing.T) {
 	}
 }
 
-func TestPublishCorrectnessAcceptsValidatedIndependentRunnerEvidence(t *testing.T) {
-	request, prepared := correctnessFixture(t)
-	request.RunnerSource = SourceProvenance{Coverage: "unavailable"}
-	prepared.Index.References = append(prepared.Index.References, EvidenceReference{ID: "runner-match", Status: "available", Category: "runner_source_match", Detail: "independently_verified"})
-	candidate := confirmedCandidate()
-	candidate.IndependentEvidence = []IndependentRunnerEvidence{{ReferenceID: "runner-match", DefectKey: candidate.DefectKey, Verification: "matching Runner source was independently verified"}}
-	runner := &recordingGH{}
-
-	result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{candidate}}, runner)
-	if err != nil {
-		t.Fatalf("publish correctness: %v", err)
+func TestLoadCorrectnessCandidatesRejectsIndependentRunnerEvidenceFallback(t *testing.T) {
+	request := Request{AuditSessionDir: t.TempDir()}
+	outputDir := filepath.Join(request.AuditSessionDir, "model-output")
+	if err := os.MkdirAll(outputDir, 0o700); err != nil {
+		t.Fatal(err)
 	}
-	if finding := result.Findings[0]; finding.PublicationState != "created" {
-		t.Fatalf("finding = %#v", finding)
+	data := []byte(`{"candidates":[{"status":"confirmed","independent_evidence":[{"reference_id":"runner-match","defect_key":"runner-retry-loss","verification":"matching source"}],"semantic_duplicate":{"state":"none"}}]}`)
+	if err := os.WriteFile(filepath.Join(outputDir, correctnessOutput), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := loadCorrectnessCandidates(request); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("load correctness error = %v, want rejected independent fallback", err)
 	}
 }
 
