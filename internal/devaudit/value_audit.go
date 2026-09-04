@@ -842,10 +842,6 @@ func ValidateValueOutputs(request Request, prepared PreparedValueAudit, outputs 
 	if len(outputs) != len(prepared.Packages) {
 		return ValueValidationResult{}, fmt.Errorf("value output batches = %d, want %d", len(outputs), len(prepared.Packages))
 	}
-	knownRefs := map[string]struct{}{}
-	for _, ref := range prepared.Index.References {
-		knownRefs[ref.ID] = struct{}{}
-	}
 	observations := []ValueObservation{}
 	seenBatches := map[string]struct{}{}
 	for _, pkg := range prepared.Packages {
@@ -857,6 +853,14 @@ func ValidateValueOutputs(request Request, prepared PreparedValueAudit, outputs 
 			return ValueValidationResult{}, fmt.Errorf("duplicate model output for %s", batch.BatchID)
 		}
 		seenBatches[batch.BatchID] = struct{}{}
+		knownRefs := map[string]struct{}{}
+		for index := range pkg.Leaves {
+			for _, ref := range pkg.Leaves[index].Evidence {
+				if ref.Status == "available" {
+					knownRefs[ref.ID] = struct{}{}
+				}
+			}
+		}
 		validated, err := validateValueBatch(&request, pkg, batch, knownRefs)
 		if err != nil {
 			return ValueValidationResult{}, err
@@ -1071,7 +1075,24 @@ func validateValueStage(request *Request) error {
 	if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "value-observations.json"), result); err != nil {
 		return err
 	}
-	return stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "value-consultations.json"), consultationLedger(result.Observations, prepared.Index.References))
+	return stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "value-consultations.json"), consultationLedger(result.Observations, allEvidenceReferences(&prepared.Index)))
+}
+
+func allEvidenceReferences(index *EvidenceIndex) []EvidenceReference {
+	references := append([]EvidenceReference(nil), index.References...)
+	seen := map[string]bool{}
+	for _, reference := range references {
+		seen[reference.ID] = true
+	}
+	for leafIndex := range index.Leaves {
+		for _, reference := range index.Leaves[leafIndex].Evidence {
+			if !seen[reference.ID] {
+				references = append(references, reference)
+				seen[reference.ID] = true
+			}
+		}
+	}
+	return references
 }
 
 type consultationLedgerEntry struct {
@@ -1162,14 +1183,20 @@ func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueB
 	if len(args) == 0 {
 		return ModelValueBatch{}, fmt.Errorf("crosscheck adapter produced no command")
 	}
+	args, finalResponsePath, removeStructuredFiles, err := withCodexOutputSchema(request.Crosscheck.CLI, args, filepath.Join(request.AuditSessionDir, "model-output"), "value", valueOutputSchema(pkg))
+	if err != nil {
+		return ModelValueBatch{}, err
+	}
+	defer removeStructuredFiles()
 	command, err := crosscheckCommand(args, workspace, filepath.Join(request.AuditSessionDir, "model-output"))
 	if err != nil {
 		return ModelValueBatch{}, err
 	}
-	env, err := cliEnvironment(adapter, request, input, workspace)
+	env, cleanup, err := cliEnvironment(adapter, request, input, workspace, filepath.Join(request.AuditSessionDir, "model-output"))
 	if err != nil {
 		return ModelValueBatch{}, err
 	}
+	defer cleanup()
 	command.Env = env
 	result, runErr := command.Output()
 	if after, err := trustedAuditInputsFingerprint(request); err != nil {
@@ -1180,8 +1207,14 @@ func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueB
 	if runErr != nil {
 		return ModelValueBatch{}, fmt.Errorf("run crosscheck: %w", runErr)
 	}
+	if finalResponsePath != "" {
+		result, err = os.ReadFile(finalResponsePath) // #nosec G304 -- path is created below the audit-owned output directory.
+		if err != nil {
+			return ModelValueBatch{}, fmt.Errorf("read structured crosscheck response: %w", err)
+		}
+	}
 	response := string(result)
-	if filter, ok := adapter.(cli.OutputFilter); ok {
+	if filter, ok := adapter.(cli.OutputFilter); ok && finalResponsePath == "" {
 		response = filter.FilterOutput(response)
 	}
 	decoder := json.NewDecoder(strings.NewReader(response))
@@ -1239,15 +1272,163 @@ func sandboxExecArgs(args []string, outputDir string) []string {
 	return append(argv, args...)
 }
 
-func cliEnvironment(adapter cli.Adapter, request *Request, input []byte, workdir string) ([]string, error) {
+func cliEnvironment(adapter cli.Adapter, request *Request, input []byte, workdir, outputDir string) (environment []string, cleanup func(), err error) {
 	// Adapters may require isolated process-local setup. It is derived from this
 	// batch only and never persisted in the source snapshot.
 	build := &cli.BuildArgsInput{Prompt: string(input), Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, Context: cli.ContextAutonomousHeadless, Workdir: workdir}
 	extra, err := cli.SpawnEnvForInvocation(adapter, build)
 	if err != nil {
-		return nil, fmt.Errorf("prepare crosscheck environment: %w", err)
+		return nil, nil, fmt.Errorf("prepare crosscheck environment: %w", err)
 	}
-	return append(os.Environ(), extra...), nil
+	cleanup = func() {}
+	if request.Crosscheck.CLI == "codex" {
+		var runtimeEnv []string
+		runtimeEnv, cleanup, err = prepareAuditCodexRuntime(outputDir)
+		if err != nil {
+			return nil, nil, fmt.Errorf("prepare disposable Codex runtime: %w", err)
+		}
+		extra = append(extra, runtimeEnv...)
+	}
+	return append(os.Environ(), extra...), cleanup, nil
+}
+
+func prepareAuditCodexRuntime(outputDir string) (environment []string, cleanup func(), err error) {
+	if err := os.MkdirAll(outputDir, 0o700); err != nil {
+		return nil, nil, err
+	}
+	runtimeRoot, err := os.MkdirTemp(outputDir, ".codex-runtime-")
+	if err != nil {
+		return nil, nil, err
+	}
+	cleanup = func() { _ = os.RemoveAll(runtimeRoot) }
+	codexHome := filepath.Join(runtimeRoot, "codex-home")
+	home := filepath.Join(runtimeRoot, "home")
+	temp := filepath.Join(runtimeRoot, "tmp")
+	for _, dir := range []string{codexHome, home, temp} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+	}
+	if err := os.WriteFile(filepath.Join(codexHome, "config.toml"), nil, 0o600); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	sourceHome := os.Getenv("CODEX_HOME")
+	if sourceHome == "" {
+		userHome, err := os.UserHomeDir()
+		if err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		sourceHome = filepath.Join(userHome, ".codex")
+	}
+	authSource := filepath.Join(sourceHome, "auth.json")
+	if _, err := os.Stat(authSource); err == nil { // #nosec G703 -- sourceHome is the user's selected Codex root and the joined filename is fixed.
+		if err := os.Symlink(authSource, filepath.Join(codexHome, "auth.json")); err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+	} else if !os.IsNotExist(err) {
+		cleanup()
+		return nil, nil, err
+	}
+	return []string{"CODEX_HOME=" + codexHome, "HOME=" + home, "TMPDIR=" + temp}, cleanup, nil
+}
+
+func withCodexOutputSchema(cliName string, args []string, outputDir, label string, schema map[string]any) (structured []string, responsePath string, cleanup func(), err error) {
+	if cliName != "codex" {
+		return args, "", func() {}, nil
+	}
+	if len(args) == 0 {
+		return nil, "", nil, fmt.Errorf("codex invocation has no prompt argument")
+	}
+	if err := os.MkdirAll(outputDir, 0o700); err != nil {
+		return nil, "", nil, err
+	}
+	file, err := os.CreateTemp(outputDir, "."+label+"-schema-*.json")
+	if err != nil {
+		return nil, "", nil, err
+	}
+	schemaPath := file.Name()
+	cleanup = func() { _ = os.Remove(schemaPath) }
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		cleanup()
+		return nil, "", nil, err
+	}
+	encoder := json.NewEncoder(file)
+	if err := encoder.Encode(schema); err != nil {
+		_ = file.Close()
+		cleanup()
+		return nil, "", nil, err
+	}
+	if err := file.Close(); err != nil {
+		cleanup()
+		return nil, "", nil, err
+	}
+	responseFile, err := os.CreateTemp(outputDir, "."+label+"-response-*.json")
+	if err != nil {
+		cleanup()
+		return nil, "", nil, err
+	}
+	responsePath = responseFile.Name()
+	if err := responseFile.Close(); err != nil {
+		cleanup()
+		_ = os.Remove(responsePath)
+		return nil, "", nil, err
+	}
+	cleanupSchema := cleanup
+	cleanup = func() {
+		cleanupSchema()
+		_ = os.Remove(responsePath)
+	}
+	structured = append([]string(nil), args[:len(args)-1]...)
+	structured = append(structured, "--output-schema", schemaPath, "--output-last-message", responsePath, args[len(args)-1])
+	return structured, responsePath, cleanup, nil
+}
+
+func valueOutputSchema(pkg ValuePackage) map[string]any {
+	observationIDs := make([]string, 0, len(pkg.Leaves))
+	consultations := []string{}
+	seenConsultations := map[string]bool{}
+	for leafIndex := range pkg.Leaves {
+		leaf := &pkg.Leaves[leafIndex]
+		observationIDs = append(observationIDs, leaf.Skeleton.ObservationID)
+		for _, reference := range leaf.Evidence {
+			if reference.Status == "available" && !seenConsultations[reference.ID] {
+				consultations = append(consultations, reference.ID)
+				seenConsultations[reference.ID] = true
+			}
+		}
+	}
+	consultationItems := map[string]any{"type": "string"}
+	if len(consultations) > 0 {
+		consultationItems["enum"] = consultations
+	}
+	judgment := map[string]any{
+		"type": "object", "additionalProperties": false,
+		"required": []string{"observation_id", "overall_value", "change_effect", "unique_contribution", "downstream_evidence", "confidence", "evidence_coverage", "note", "consultations"},
+		"properties": map[string]any{
+			"observation_id":      map[string]any{"type": "string", "enum": observationIDs},
+			"overall_value":       map[string]any{"type": "string", "enum": []string{"high", "medium", "low", "none", "negative", "unknown"}},
+			"change_effect":       map[string]any{"type": "string", "enum": []string{"intended", "partial", "no_material_change", "regressive", "not_applicable", "unknown"}},
+			"unique_contribution": map[string]any{"type": "string", "enum": []string{"unique", "complementary", "duplicative", "not_applicable", "unknown"}},
+			"downstream_evidence": map[string]any{"type": "string", "enum": []string{"confirmed", "supporting", "none", "contradicted", "unavailable"}},
+			"confidence":          map[string]any{"type": "string", "enum": []string{"high", "medium", "low"}},
+			"evidence_coverage":   map[string]any{"type": "string", "enum": []string{"complete", "partial", "limited"}},
+			"note":                map[string]any{"type": "string", "maxLength": 280},
+			"consultations":       map[string]any{"type": "array", "items": consultationItems},
+		},
+	}
+	return map[string]any{
+		"type": "object", "additionalProperties": false,
+		"required": []string{"batch_id", "observations"},
+		"properties": map[string]any{
+			"batch_id":     map[string]any{"type": "string", "enum": []string{pkg.BatchID}},
+			"observations": map[string]any{"type": "array", "minItems": len(pkg.Leaves), "maxItems": len(pkg.Leaves), "items": judgment},
+		},
+	}
 }
 
 func prepareModelWorkspace(request *Request) (string, error) {

@@ -374,12 +374,23 @@ func writeE2EFakeCodex(t *testing.T, path string) {
 	script := `#!/bin/sh
 set -eu
 prompt=""
-for arg in "$@"; do prompt=$arg; done
+output_path=""
+capture_output_path=""
+for arg in "$@"; do
+  prompt=$arg
+  if [ "$capture_output_path" = "true" ]; then
+    output_path=$arg
+    capture_output_path=""
+  elif [ "$arg" = "-o" ] || [ "$arg" = "--output-last-message" ]; then
+    capture_output_path="true"
+  fi
+done
 sleep "${AUDIT_E2E_DELAY_SECONDS:-0}"
 printf 'call\n' >> "$AUDIT_E2E_MODEL_CALLS"
-python3 - "$prompt" <<'PY'
+python3 - "$prompt" "$output_path" <<'PY'
 import json, sys
 prompt = sys.argv[1]
+output_path = sys.argv[2]
 if prompt.startswith("You are judging workflow-step value"):
     package = json.loads(prompt.split("\n\n", 1)[1])
     result = {"batch_id": package["batch_id"], "observations": []}
@@ -396,6 +407,9 @@ if prompt.startswith("You are judging workflow-step value"):
 else:
     result = {"candidates": []}
 text = json.dumps(result, separators=(",", ":"))
+if output_path:
+    with open(output_path, "w", encoding="utf-8") as stream:
+        stream.write(text + "\n")
 print(json.dumps({"type":"thread.started","thread_id":"audit-e2e"}))
 print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":text}}))
 print(json.dumps({"type":"turn.completed"}))

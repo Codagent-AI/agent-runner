@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/metrics"
@@ -118,6 +119,103 @@ func TestSandboxedCrosscheckCanExecuteAndOnlyWriteAuditOutput(t *testing.T) {
 	if _, err := os.Stat(deniedPath); !os.IsNotExist(err) {
 		t.Fatalf("write outside audit output was not blocked: %v", err)
 	}
+}
+
+func TestSandboxedCodexGetsDisposableWritableRuntime(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS sandbox-exec integration")
+	}
+	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(root, "workspace")
+	outputDir := filepath.Join(root, "output")
+	sourceCodexHome := filepath.Join(root, "source-codex-home")
+	for _, dir := range []string{workspace, sourceCodexHome} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(sourceCodexHome, "auth.json"), []byte("test-auth"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_HOME", sourceCodexHome)
+	adapter, err := cli.Get("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment, cleanup, err := cliEnvironment(adapter, &Request{Crosscheck: AgentProvenance{CLI: "codex"}}, nil, workspace, outputDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeHome := envValue(environment, "CODEX_HOME")
+	command, err := sandboxedCrosscheckCommand([]string{
+		"/bin/sh", "-c",
+		`test "$(cat "$CODEX_HOME/auth.json")" = test-auth; touch "$CODEX_HOME/state" "$HOME/home-state" "$TMPDIR/temp-state"; if touch "$1"; then exit 42; fi`,
+		"audit-codex-runtime", filepath.Join(root, "denied.txt"),
+	}, workspace, outputDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command.Env = environment
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("sandboxed Codex runtime is unusable: %v\n%s", err, output)
+	}
+	cleanup()
+	if _, err := os.Stat(runtimeHome); !os.IsNotExist(err) {
+		t.Fatalf("disposable Codex runtime remains after cleanup: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(sourceCodexHome, "auth.json")); err != nil || string(data) != "test-auth" {
+		t.Fatalf("source Codex authentication changed: %q, %v", data, err)
+	}
+}
+
+func TestCodexStructuredOutputSchemaIsEphemeralAndBindsValueIdentity(t *testing.T) {
+	outputDir := t.TempDir()
+	pkg := ValuePackage{BatchID: "value-007", Leaves: []LeafEvidence{{Skeleton: ObservationSkeleton{ObservationID: "observation-1"}}}}
+	args, responsePath, cleanup, err := withCodexOutputSchema("codex", []string{"codex", "exec", "prompt"}, outputDir, "value", valueOutputSchema(pkg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(args) != 7 || args[2] != "--output-schema" || args[4] != "--output-last-message" || args[5] != responsePath || args[6] != "prompt" {
+		t.Fatalf("structured Codex args = %v", args)
+	}
+	schemaPath := args[3]
+	data, err := os.ReadFile(schemaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	properties := schema["properties"].(map[string]any)
+	batch := properties["batch_id"].(map[string]any)
+	if got := batch["enum"].([]any)[0]; got != pkg.BatchID {
+		t.Fatalf("batch identity enum = %v, want %q", got, pkg.BatchID)
+	}
+	if _, exists := properties["schema_version"]; exists {
+		t.Fatal("model schema permits measured schema_version field")
+	}
+	cleanup()
+	if _, err := os.Stat(schemaPath); !os.IsNotExist(err) {
+		t.Fatalf("structured-output schema remains after cleanup: %v", err)
+	}
+	if _, err := os.Stat(responsePath); !os.IsNotExist(err) {
+		t.Fatalf("structured final response remains after cleanup: %v", err)
+	}
+}
+
+func envValue(environment []string, name string) string {
+	prefix := name + "="
+	for index := len(environment) - 1; index >= 0; index-- {
+		if strings.HasPrefix(environment[index], prefix) {
+			return strings.TrimPrefix(environment[index], prefix)
+		}
+	}
+	return ""
 }
 
 func TestDiscoverEvidenceDoesNotClassifyRunnerSourceAsRunOutput(t *testing.T) {
@@ -297,6 +395,36 @@ func TestValidateValueStageRejectsFabricatedMeasurementsAndUnsafeNotes(t *testin
 	}
 	if _, err := loadModelValueBatches(temp, []ValuePackage{{BatchID: "value-001"}}); err == nil {
 		t.Fatal("missing model output was accepted")
+	}
+}
+
+func TestValidateValueOutputsAcceptsLeafEvidenceConsultation(t *testing.T) {
+	temp := t.TempDir()
+	if err := os.Mkdir(filepath.Join(temp, "model-output"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	before, err := fingerprintTree(temp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := EvidenceReference{ID: "metrics-step#1", Category: "metrics", Status: "available"}
+	leaf := LeafEvidence{Skeleton: ObservationSkeleton{ObservationID: "observation"}, Evidence: []EvidenceReference{reference}}
+	prepared := PreparedValueAudit{
+		Index:    EvidenceIndex{Fingerprints: Fingerprints{SnapshotBefore: before}, Leaves: []LeafEvidence{leaf}},
+		Packages: []ValuePackage{{BatchID: "value-001", Leaves: []LeafEvidence{leaf}}},
+	}
+	request := Request{AuditSessionDir: temp, SnapshotPath: temp, Crosscheck: AgentProvenance{Model: "fake"}}
+	output := ModelValueBatch{BatchID: "value-001", Observations: []ModelValueJudgment{{
+		ObservationID: "observation", OverallValue: "medium", ChangeEffect: "intended", UniqueContribution: "unique",
+		DownstreamEvidence: "supporting", Confidence: "medium", EvidenceCoverage: "partial", Consultations: []string{reference.ID},
+	}}}
+	result, err := ValidateValueOutputs(request, prepared, []ModelValueBatch{output})
+	if err != nil {
+		t.Fatalf("validate leaf-evidence consultation: %v", err)
+	}
+	ledger := consultationLedger(result.Observations, allEvidenceReferences(&prepared.Index))
+	if len(ledger) != 1 || ledger[0].ReferenceID != reference.ID || ledger[0].Category != reference.Category {
+		t.Fatalf("consultation ledger = %#v", ledger)
 	}
 }
 

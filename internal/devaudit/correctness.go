@@ -150,14 +150,20 @@ func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error
 		}
 		return CorrectnessCandidates{}, err
 	}
+	args, finalResponsePath, removeStructuredFiles, err := withCodexOutputSchema(request.Crosscheck.CLI, args, filepath.Join(request.AuditSessionDir, "model-output"), "correctness", correctnessOutputSchema(allEvidenceReferences(&prepared.Index)))
+	if err != nil {
+		return CorrectnessCandidates{}, err
+	}
+	defer removeStructuredFiles()
 	command, err := crosscheckCommand(args, workspace, filepath.Join(request.AuditSessionDir, "model-output"))
 	if err != nil {
 		return CorrectnessCandidates{}, err
 	}
-	env, err := cliEnvironment(adapter, request, input, workspace)
+	env, cleanup, err := cliEnvironment(adapter, request, input, workspace, filepath.Join(request.AuditSessionDir, "model-output"))
 	if err != nil {
 		return CorrectnessCandidates{}, err
 	}
+	defer cleanup()
 	command.Env = env
 	data, runErr := runBoundedOutput(command, maxCrosscheckOutput)
 	if after, err := trustedAuditInputsFingerprint(request); err != nil {
@@ -168,8 +174,14 @@ func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error
 	if runErr != nil {
 		return CorrectnessCandidates{}, fmt.Errorf("run crosscheck: %w", runErr)
 	}
+	if finalResponsePath != "" {
+		data, err = os.ReadFile(finalResponsePath) // #nosec G304 -- path is created below the audit-owned output directory.
+		if err != nil {
+			return CorrectnessCandidates{}, fmt.Errorf("read structured crosscheck response: %w", err)
+		}
+	}
 	response := string(data)
-	if filter, ok := adapter.(cli.OutputFilter); ok {
+	if filter, ok := adapter.(cli.OutputFilter); ok && finalResponsePath == "" {
 		response = filter.FilterOutput(response)
 	}
 	decoder := json.NewDecoder(strings.NewReader(response))
@@ -184,6 +196,49 @@ func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error
 	}
 	output.Provenance = BatchProvenance{CLI: request.Crosscheck.CLI, Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, SessionID: "unknown"}
 	return output, nil
+}
+
+func correctnessOutputSchema(references []EvidenceReference) map[string]any {
+	known := []string{}
+	for _, reference := range references {
+		if reference.Status == "available" {
+			known = append(known, reference.ID)
+		}
+	}
+	referenceItems := map[string]any{"type": "string"}
+	if len(known) > 0 {
+		referenceItems["enum"] = known
+	}
+	text := map[string]any{"type": "string", "maxLength": 1200}
+	candidate := map[string]any{
+		"type": "object", "additionalProperties": false,
+		"required": []string{"status", "defect_key", "title", "observed", "expected", "verification", "affected_component", "evidence_refs", "consultations", "confidence", "symptoms", "semantic_duplicate"},
+		"properties": map[string]any{
+			"status":             map[string]any{"type": "string", "enum": []string{"confirmed", "inconclusive", "excluded"}},
+			"defect_key":         map[string]any{"type": "string"},
+			"title":              text,
+			"observed":           text,
+			"expected":           text,
+			"verification":       text,
+			"affected_component": text,
+			"evidence_refs":      map[string]any{"type": "array", "items": referenceItems},
+			"consultations":      map[string]any{"type": "array", "items": referenceItems},
+			"confidence":         map[string]any{"type": "string", "enum": []string{"high", "medium", "low"}},
+			"symptoms":           map[string]any{"type": "array", "maxItems": 10, "items": map[string]any{"type": "string", "maxLength": 280}},
+			"semantic_duplicate": map[string]any{
+				"type": "object", "additionalProperties": false,
+				"required": []string{"url", "state", "defect_key"},
+				"properties": map[string]any{
+					"url": map[string]any{"type": "string"}, "state": map[string]any{"type": "string", "enum": []string{"none", "open", "closed", "ambiguous"}}, "defect_key": map[string]any{"type": "string"},
+				},
+			},
+		},
+	}
+	return map[string]any{
+		"type": "object", "additionalProperties": false,
+		"required":   []string{"candidates"},
+		"properties": map[string]any{"candidates": map[string]any{"type": "array", "items": candidate}},
+	}
 }
 
 func runBoundedOutput(command *exec.Cmd, maximum int64) ([]byte, error) {
@@ -270,7 +325,7 @@ func PublishCorrectness(request Request, prepared PreparedValueAudit, output Cor
 		return CorrectnessResult{}, fmt.Errorf("frozen evidence changed after preparation")
 	}
 	known := map[string]EvidenceReference{}
-	for _, ref := range prepared.Index.References {
+	for _, ref := range allEvidenceReferences(&prepared.Index) {
 		if ref.Status == "available" {
 			known[ref.ID] = ref
 		}
