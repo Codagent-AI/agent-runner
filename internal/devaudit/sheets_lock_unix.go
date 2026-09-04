@@ -15,8 +15,8 @@ func acquireDeliveryLock(ctx context.Context, path string) (func(), error) {
 		return nil, err
 	}
 	for {
-		if err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
-			return func() { _ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN); _ = file.Close() }, nil
+		if err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil { // #nosec G115 -- a live OS file descriptor is representable as int on supported Unix targets.
+			return func() { _ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN); _ = file.Close() }, nil // #nosec G115 -- same live descriptor acquired above.
 		}
 		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
 			_ = file.Close()

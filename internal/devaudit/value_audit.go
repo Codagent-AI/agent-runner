@@ -763,7 +763,7 @@ func fingerprintTree(root string) (string, error) {
 			return nil
 		}
 		_, _ = io.WriteString(hash, "f\x00"+filepath.ToSlash(rel)+"\x00")
-		file, err := os.Open(path) // #nosec G304 -- path is enumerated below a frozen audit boundary.
+		file, err := os.Open(path) // #nosec G304,G122 -- path is enumerated below a sealed, owner-only audit boundary.
 		if err != nil {
 			return err
 		}
@@ -1252,7 +1252,7 @@ func cliEnvironment(adapter cli.Adapter, request *Request, input []byte, workdir
 
 func prepareModelWorkspace(request *Request) (string, error) {
 	workspace := filepath.Join(request.AuditSessionDir, "model-workspace")
-	if err := os.Chmod(workspace, 0o700); err != nil && !os.IsNotExist(err) {
+	if err := os.Chmod(workspace, 0o700); err != nil && !os.IsNotExist(err) { // #nosec G302 -- owner-only directory must remain traversable for cleanup.
 		return "", err
 	}
 	if err := os.RemoveAll(workspace); err != nil {
@@ -1269,7 +1269,7 @@ func prepareModelWorkspace(request *Request) (string, error) {
 			return "", err
 		}
 	}
-	if err := os.Chmod(workspace, 0o500); err != nil {
+	if err := os.Chmod(workspace, 0o500); err != nil { // #nosec G302 -- owner-only directory intentionally remains traversable and read-only.
 		return "", err
 	}
 	return workspace, nil

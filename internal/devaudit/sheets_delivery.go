@@ -188,7 +188,7 @@ func (s ConnectionStore) Write(connection *Connection) error {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return fmt.Errorf("create protected connection storage: %w", err)
 	}
-	if err := os.Chmod(root, 0o700); err != nil {
+	if err := os.Chmod(root, 0o700); err != nil { // #nosec G302 -- connection storage is an owner-only directory.
 		return fmt.Errorf("protect connection storage: %w", err)
 	}
 	path := filepath.Join(root, connectionFileName)
@@ -428,7 +428,7 @@ func (r SheetsReporter) lock(ctx context.Context, destination DestinationState) 
 	if err := os.MkdirAll(lockDir, 0o700); err != nil {
 		return nil, err
 	}
-	if err := os.Chmod(lockDir, 0o700); err != nil {
+	if err := os.Chmod(lockDir, 0o700); err != nil { // #nosec G302 -- report lock storage is an owner-only directory.
 		return nil, err
 	}
 	sum := sha256.Sum256([]byte(destination.SpreadsheetID + "\x00" + destination.Tab))

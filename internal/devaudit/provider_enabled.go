@@ -309,7 +309,7 @@ func HandleCommand(args []string, stdout, stderr io.Writer) (handled bool, exitC
 }
 
 func availableExecutionSessions(sourceSessionDir string) ([]string, error) {
-	data, err := os.ReadFile(filepath.Join(sourceSessionDir, metrics.FileName))
+	data, err := os.ReadFile(filepath.Join(sourceSessionDir, metrics.FileName)) // #nosec G304 -- sourceSessionDir is resolved from recorded Runner state.
 	if err != nil {
 		return nil, fmt.Errorf("source evidence unavailable: %w", err)
 	}

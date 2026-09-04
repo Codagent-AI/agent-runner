@@ -600,7 +600,7 @@ func snapshotRunnerSource(snapshotDir string) SourceProvenance {
 }
 
 func runnerSnapshotComplete(root string) bool {
-	module, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	module, err := os.ReadFile(filepath.Join(root, "go.mod")) // #nosec G304 -- root is the verified launch-time Runner snapshot.
 	if err != nil || !strings.Contains(string(module), "module github.com/codagent/agent-runner") {
 		return false
 	}
@@ -657,10 +657,10 @@ func sealSnapshot(root string) error {
 			return walkErr
 		}
 		if entry.IsDir() {
-			return os.Chmod(path, 0o500)
+			return os.Chmod(path, 0o500) // #nosec G302,G122 -- enumerated owner-only snapshot directories must remain traversable.
 		}
 		if entry.Type().IsRegular() {
-			return os.Chmod(path, 0o400)
+			return os.Chmod(path, 0o400) // #nosec G122 -- enumerated files are inside a sealed owner-only snapshot.
 		}
 		return nil
 	})
