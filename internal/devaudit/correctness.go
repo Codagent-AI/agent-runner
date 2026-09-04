@@ -710,20 +710,24 @@ func assembleLocalReportStage(request *Request) error {
 	if err != nil {
 		return err
 	}
-	values := ValueValidationResult{SchemaVersion: evidenceSchemaVersion, Diagnostics: []string{"value output is unavailable"}}
+	var values ValueValidationResult
 	if data, err := os.ReadFile(filepath.Join(request.AuditSessionDir, "value-observations.json")); err == nil {
 		if err := json.Unmarshal(data, &values); err != nil {
 			return err
 		}
-	} else if !os.IsNotExist(err) {
+	} else if os.IsNotExist(err) {
+		values = ValueValidationResult{SchemaVersion: evidenceSchemaVersion, Diagnostics: []string{"value output is unavailable"}}
+	} else {
 		return err
 	}
-	correctness := CorrectnessResult{SchemaVersion: correctnessSchema, Diagnostics: []string{"correctness output is unavailable"}}
+	var correctness CorrectnessResult
 	if data, err := os.ReadFile(filepath.Join(request.AuditSessionDir, "correctness-findings.json")); err == nil {
 		if err := json.Unmarshal(data, &correctness); err != nil {
 			return err
 		}
-	} else if !os.IsNotExist(err) {
+	} else if os.IsNotExist(err) {
+		correctness = CorrectnessResult{SchemaVersion: correctnessSchema, Diagnostics: []string{"correctness output is unavailable"}}
+	} else {
 		return err
 	}
 	valueConsultations := []consultationLedgerEntry{}
@@ -734,7 +738,7 @@ func assembleLocalReportStage(request *Request) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	report := LocalReport{SchemaVersion: valueSchemaVersion, AuditRunID: request.AuditRunID, SourceRunID: request.SourceRunID, ExecutionSessionID: request.ExecutionSessionID, Trigger: request.Trigger, Evidence: prepared.Index, Values: values, ValueConsultations: valueConsultations, Correctness: correctness, CorrectnessConsultation: correctnessConsultationLedger(correctness.Findings, prepared.Index.References), Destination: destinationResolver.ResolveDestination(), DeliveryState: "pending", RunnerSource: request.RunnerSource}
+	report := LocalReport{SchemaVersion: valueSchemaVersion, AuditRunID: request.AuditRunID, SourceRunID: request.SourceRunID, ExecutionSessionID: request.ExecutionSessionID, Trigger: request.Trigger, Evidence: prepared.Index, Values: values, ValueConsultations: valueConsultations, Correctness: correctness, CorrectnessConsultation: correctnessConsultationLedger(correctness.Findings, allEvidenceReferences(&prepared.Index)), Destination: destinationResolver.ResolveDestination(), DeliveryState: "pending", RunnerSource: request.RunnerSource}
 	return stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "local-report.json"), report)
 }
 

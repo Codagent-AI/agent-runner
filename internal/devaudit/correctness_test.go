@@ -468,6 +468,45 @@ func TestAssembleLocalReportFreezesConfiguredOrUnavailableDestination(t *testing
 	}
 }
 
+func TestAssembleLocalReportDoesNotRetainUnavailableDiagnosticsForPresentResults(t *testing.T) {
+	request, prepared := correctnessFixture(t)
+	request.AuditSessionDir = t.TempDir()
+	leafReference := EvidenceReference{ID: "leaf-metrics", Category: "metrics", Status: "available"}
+	prepared.Index.Leaves = []LeafEvidence{{Evidence: []EvidenceReference{leafReference}}}
+	if err := persistPrepared(&request, &prepared); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePreparedFingerprint(request.AuditSessionDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "value-observations.json"), ValueValidationResult{SchemaVersion: evidenceSchemaVersion, Observations: []ValueObservation{}}); err != nil {
+		t.Fatal(err)
+	}
+	correctness := CorrectnessResult{SchemaVersion: correctnessSchema, Findings: []Finding{{
+		FindingID: "finding-1", Candidate: CorrectnessCandidate{Consultations: []string{leafReference.ID}}, PublicationState: "retained",
+	}}}
+	if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "correctness-findings.json"), correctness); err != nil {
+		t.Fatal(err)
+	}
+	if err := assembleLocalReportStage(&request); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(request.AuditSessionDir, "local-report.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report LocalReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Values.Diagnostics) != 0 || len(report.Correctness.Diagnostics) != 0 {
+		t.Fatalf("present results retained unavailable diagnostics: values=%v correctness=%v", report.Values.Diagnostics, report.Correctness.Diagnostics)
+	}
+	if len(report.CorrectnessConsultation) != 1 || report.CorrectnessConsultation[0].Category != leafReference.Category {
+		t.Fatalf("correctness consultation ledger = %#v", report.CorrectnessConsultation)
+	}
+}
+
 func TestAssembleLocalReportPreservesUnavailableAndUnusableDestinationState(t *testing.T) {
 	for _, destination := range []DestinationState{
 		{State: "unavailable", Diagnostic: "not configured"},
