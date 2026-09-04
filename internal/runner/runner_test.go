@@ -949,6 +949,28 @@ func TestRunWorkflow(t *testing.T) {
 		}
 	})
 
+	t.Run("warned exhausted loop does not satisfy previous_success", func(t *testing.T) {
+		maxIterations := 1
+		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 1}, {ExitCode: 0}}}
+		w := model.Workflow{Name: "test", Steps: []model.Step{
+			{ID: "retry", Loop: &model.Loop{Max: &maxIterations}, WarnOnFailure: true, Steps: []model.Step{
+				{ID: "always-fail", Command: "false", ContinueOnFailure: true, BreakIf: "success"},
+			}},
+			{ID: "recover", Command: "recover", SkipIf: "previous_success"},
+		}}
+		w.ApplyDefaults()
+		result, err := RunWorkflow(&w, nil, &Options{ProcessRunner: runner, GlobExpander: &mockGlob{}, Log: &mockLog{}, SessionDir: t.TempDir()})
+		if err != nil || result != ResultSuccess {
+			t.Fatalf("RunWorkflow = (%q, %v), want success after warned exhaustion and recovery", result, err)
+		}
+		if len(runner.calls) != 2 {
+			t.Fatalf("calls = %#v, want exhausted loop body followed by recovery", runner.calls)
+		}
+		if got := runner.calls[1][2]; got != "recover" {
+			t.Fatalf("second call = %q, want recovery", got)
+		}
+	})
+
 	t.Run("third repair receives verification without a fourth repair", func(t *testing.T) {
 		maxIterations := 3
 		runner := &mockRunner{results: []exec.ProcessResult{
