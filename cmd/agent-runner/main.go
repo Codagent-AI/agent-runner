@@ -1149,6 +1149,8 @@ var liveRunCoordinatorFactory = func(program *tea.Program, sessionDir string) *l
 	return liverun.NewCoordinator(program, sessionDir)
 }
 
+type liveTUIReadyMsg struct{}
+
 func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResult {
 	rv, err := runview.New(h.SessionDir, h.ProjectDir, runview.FromLiveRun)
 	if err != nil {
@@ -1156,7 +1158,15 @@ func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResul
 		return liveTUIResult{exitCode: 1, sessionDir: h.SessionDir}
 	}
 
-	programOptions := []tea.ProgramOption{tea.WithMouseCellMotion()}
+	ready := make(chan struct{})
+	programDone := make(chan struct{})
+	programOptions := []tea.ProgramOption{tea.WithMouseCellMotion(), tea.WithFilter(func(_ tea.Model, msg tea.Msg) tea.Msg {
+		if _, ok := msg.(liveTUIReadyMsg); ok {
+			close(ready)
+			return nil
+		}
+		return msg
+	})}
 	if opts.startInAltScreen {
 		rv.StartInAltScreen()
 		programOptions = append(programOptions, tea.WithAltScreen())
@@ -1166,6 +1176,16 @@ func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResul
 
 	resultCh := make(chan runner.WorkflowResult, 1)
 	go func() {
+		// ReleaseTerminal must run after Bubble Tea initializes its input
+		// reader. Otherwise startup can create a reader after release and
+		// leave it competing with the foreground child (or stopping Runner
+		// with SIGTTIN). Receiving a message proves the event loop is ready.
+		p.Send(liveTUIReadyMsg{})
+		select {
+		case <-ready:
+		case <-programDone:
+			return
+		}
 		result := runner.ResultFailed
 		var runErr error
 		defer func() {
@@ -1197,6 +1217,7 @@ func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResul
 	}()
 
 	rv, err = finalRunviewModel(p.Run())
+	close(programDone)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return liveTUIResult{exitCode: 1, sessionDir: h.SessionDir}
