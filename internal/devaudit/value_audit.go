@@ -30,7 +30,7 @@ const (
 	rubricVersion          = "value-rubric-v1"
 	defaultPackageBytes    = 256 * 1024
 	defaultLeafDetailBytes = 32 * 1024
-	auditSandboxProfile    = "(version 1)\n(deny file-write*)\n(allow file-write* (subpath (param \"OUTPUT_DIR\")))\n"
+	auditSandboxProfile    = "(version 1)\n(allow default)\n(deny file-write* (require-not (subpath (param \"OUTPUT_DIR\"))))\n"
 )
 
 var crosscheckCommand = sandboxedCrosscheckCommand

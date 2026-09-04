@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -80,6 +81,42 @@ func TestSandboxExecArgsBindsOutputDirectoryAsParameter(t *testing.T) {
 	}
 	if !strings.Contains(args[3], `(param "OUTPUT_DIR")`) {
 		t.Fatalf("sandbox profile must bind OUTPUT_DIR parameter: %q", args[3])
+	}
+}
+
+func TestSandboxedCrosscheckCanExecuteAndOnlyWriteAuditOutput(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS sandbox-exec integration")
+	}
+	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(root, "workspace")
+	outputDir := filepath.Join(root, "output")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	allowedPath := filepath.Join(outputDir, "allowed.txt")
+	deniedPath := filepath.Join(root, "denied.txt")
+	command, err := sandboxedCrosscheckCommand([]string{
+		"/bin/sh", "-c",
+		`printf allowed > "$1"; if printf denied > "$2"; then exit 42; fi`,
+		"audit-sandbox", allowedPath, deniedPath,
+	}, workspace, outputDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandboxed crosscheck did not execute with its bounded write access: %v\n%s", err, output)
+	}
+	if data, err := os.ReadFile(allowedPath); err != nil || string(data) != "allowed" {
+		t.Fatalf("allowed audit output = %q, %v", data, err)
+	}
+	if _, err := os.Stat(deniedPath); !os.IsNotExist(err) {
+		t.Fatalf("write outside audit output was not blocked: %v", err)
 	}
 }
 
