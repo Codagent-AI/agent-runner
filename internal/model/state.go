@@ -91,6 +91,36 @@ type RunState struct {
 	// WarningCount is the number of explicit terminal warning origins recorded
 	// by a successfully completed workflow.
 	WarningCount int `json:"warningCount,omitempty"`
+	// RunKind identifies special persisted runs without changing how ordinary
+	// callers load them. Empty means an ordinary workflow execution.
+	RunKind string `json:"runKind,omitempty"`
+	// Audit records reciprocal audit linkage. It is intentionally data-only so
+	// untagged binaries can safely list and inspect development audit history.
+	Audit *AuditMetadata `json:"audit,omitempty"`
+}
+
+// AuditMetadata is the persisted, append-only linkage between a source run
+// execution session and its separately-owned audit run.
+type AuditMetadata struct {
+	SourceRunID     string      `json:"sourceRunId,omitempty"`
+	SourceSessionID string      `json:"sourceExecutionSessionId,omitempty"`
+	Trigger         string      `json:"trigger,omitempty"`
+	Links           []AuditLink `json:"links,omitempty"`
+	LifecycleState  string      `json:"lifecycleState,omitempty"`
+	Warning         string      `json:"warning,omitempty"`
+}
+
+// AuditLink is a source-side reservation or a reciprocal audit-side link.
+type AuditLink struct {
+	AuditRunID         string `json:"auditRunId"`
+	ExecutionSessionID string `json:"executionSessionId"`
+	Trigger            string `json:"trigger"`
+	State              string `json:"state"`
+	SnapshotPath       string `json:"snapshotPath,omitempty"`
+	RequestedAt        string `json:"requestedAt,omitempty"`
+	StartedAt          string `json:"startedAt,omitempty"`
+	FailedAt           string `json:"failedAt,omitempty"`
+	Warning            string `json:"warning,omitempty"`
 }
 
 // ResolveResumeStepResult holds the outcome of resolving which step to resume from.

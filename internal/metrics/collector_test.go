@@ -40,6 +40,70 @@ func TestPipelineForwardsNormalizedEventsAndWorksWithoutSink(t *testing.T) {
 	withoutSink.Emit(stepEvent(started.Add(time.Second), agentIdentity("one", true), unavailableUsage(), nil, "completed", 1))
 }
 
+func TestExecutionPipelineAssignsInvocationIdentityToLifecycleAndMetricRecords(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	sink := &recordingSink{}
+	pipeline := NewExecutionPipeline(NewCollector(dir, "run", "workflow", started), sink, t.TempDir(), "execution-1")
+	pipeline.Emit(event(audit.EventRunStart, started, nil))
+	pipeline.Emit(audit.Event{Timestamp: started.Add(500 * time.Millisecond).Format(time.RFC3339Nano), Prefix: "[one]", Type: audit.EventStepStart, Data: map[string]any{"command": "one"}})
+	identity := agentIdentity("one", true)
+	identity.Prefix = "[one]"
+	pipeline.Emit(stepEvent(started.Add(time.Second), identity, unavailableUsage(), nil, "success", 1))
+	pipeline.Emit(event(audit.EventRunEnd, started.Add(2*time.Second), nil))
+
+	artifact := readArtifact(t, dir)
+	if artifact.Sessions[0].ExecutionSessionID != "execution-1" || artifact.Steps[0].ExecutionSessionID != "execution-1" {
+		t.Fatalf("artifact invocation identity = sessions=%+v steps=%+v", artifact.Sessions, artifact.Steps)
+	}
+	if artifact.Steps[0].GitChanges == nil || artifact.Steps[0].GitChanges.Available || artifact.RepositoryChanges == nil || artifact.RepositoryChanges.Available {
+		t.Fatalf("unavailable repository evidence became known: step=%+v run=%+v", artifact.Steps[0].GitChanges, artifact.RepositoryChanges)
+	}
+	for _, event := range sink.events {
+		if event.Data["execution_session_id"] != "execution-1" {
+			t.Fatalf("event %s missing execution identity: %+v", event.Type, event.Data)
+		}
+	}
+}
+
+func TestCollectorProjectsKnownGitChangesWithoutCoercingCoverage(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(dir, "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, map[string]any{"execution_session_id": "execution-1"}))
+	identity := agentIdentity("one", true)
+	identity.ExecutionSessionID = "execution-1"
+	c.Process(audit.Event{Timestamp: started.Add(time.Second).Format(time.RFC3339Nano), Type: audit.EventStepEnd, Data: map[string]any{
+		DataIdentity: identity, DataUsage: unavailableUsage(), DataEstimatedAPICostUSD: (*float64)(nil), "outcome": "success", "duration_ms": int64(1),
+		"git_start_checkpoint": audit.GitCheckpoint{Available: true, HEAD: "before"},
+		"git_end_checkpoint":   audit.GitCheckpoint{Available: true, HEAD: "after"},
+		"git_changes":          audit.GitChangeCounts{Available: true, FilesChanged: 2, LinesAdded: 4, LinesDeleted: 1},
+	}})
+
+	artifact := readArtifact(t, dir)
+	changes := artifact.Steps[0].GitChanges
+	if changes == nil || !changes.Available || changes.FilesChanged != 2 || changes.LinesAdded != 4 || changes.LinesDeleted != 1 {
+		t.Fatalf("step Git projection = %+v", changes)
+	}
+	if artifact.SessionRollups[0].RepositoryChanges == nil || artifact.SessionRollups[0].RepositoryChanges.LinesAdded != 4 {
+		t.Fatalf("session Git projection = %+v", artifact.SessionRollups)
+	}
+}
+
+func TestAggregateRepositoryChangesIgnoresNonExecutableMetricRecords(t *testing.T) {
+	known := &audit.GitChangeCounts{Available: true, FilesChanged: 2, LinesAdded: 4, LinesDeleted: 1}
+	got := aggregateRepositoryChanges([]StepRecord{
+		{Kind: "step", Type: "shell", Outcome: "success", GitChanges: known},
+		{Kind: "agent-call", Type: "agent", Outcome: "success"},
+		{Kind: "nested-agent", Type: "agent", Outcome: "success"},
+		{Kind: "iteration", Type: "loop", Outcome: "success"},
+		{Kind: "step", Type: "agent", Outcome: "skipped"},
+	})
+	if got == nil || !got.Available || got.FilesChanged != 2 || got.LinesAdded != 4 || got.LinesDeleted != 1 {
+		t.Fatalf("repository aggregate = %+v", got)
+	}
+}
+
 func TestCollectorProcessesConcurrentTerminalEventsSafely(t *testing.T) {
 	started := time.Now().UTC()
 	c := NewCollector(t.TempDir(), "run", "workflow", started)
@@ -808,7 +872,7 @@ func TestCollectorRehydratesBaselinesAndExcludesPausedTime(t *testing.T) {
 		t.Fatalf("active duration = %dms, want 8m", got)
 	}
 	a := readArtifact(t, dir)
-	if len(a.Sessions) != 2 || a.Sessions[0].Status != SessionClosed || a.Sessions[0].EndedAt != a.Sessions[0].LastObservedAt || a.Sessions[1].Status != SessionOpen {
+	if len(a.Sessions) != 2 || a.Sessions[0].Status != SessionInterrupted || a.Sessions[0].EndedAt != a.Sessions[0].LastObservedAt || a.Sessions[1].Status != SessionOpen {
 		t.Fatalf("sessions = %+v", a.Sessions)
 	}
 }
@@ -913,6 +977,103 @@ func TestCollectorSessionObservationNeverRegresses(t *testing.T) {
 	}
 }
 
+func TestCollectorMigratesV2SessionsConservativelyAndKeepsSessionRollups(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	legacy := Artifact{
+		SchemaVersion: 2, RunID: "run", Workflow: "workflow", HistoryComplete: true,
+		Sessions: []SessionRecord{{
+			StartedAt: started.Format(time.RFC3339Nano), LastObservedAt: started.Add(time.Second).Format(time.RFC3339Nano),
+			EndedAt: started.Add(time.Second).Format(time.RFC3339Nano), DurationMS: 1000, Status: SessionClosed,
+		}},
+		Steps:  []StepRecord{{RecordID: "one#1", ID: "one", Kind: "step", Type: "agent", Attempt: 1, DurationMS: 1000, AgentInvoked: true, Usage: ptrUsage(collectedUsage(3))}},
+		Totals: emptyTotals(),
+	}
+	if err := os.WriteFile(filepath.Join(dir, FileName), mustJSON(t, legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c := NewCollector(dir, "run", "workflow", started.Add(2*time.Second))
+	c.Process(event(audit.EventRunStart, started.Add(2*time.Second), map[string]any{"execution_session_id": "new-session", "resumed": true}))
+	c.Process(stepEvent(started.Add(3*time.Second), agentIdentity("two", true), collectedUsage(4), nil, "success", 1000))
+
+	artifact := readArtifact(t, dir)
+	if artifact.SchemaVersion != 3 || len(artifact.Sessions) != 2 || artifact.Sessions[0].ExecutionSessionID == "" {
+		t.Fatalf("migrated sessions = %+v", artifact.Sessions)
+	}
+	if artifact.Steps[0].ExecutionSessionID != artifact.Sessions[0].ExecutionSessionID {
+		t.Fatalf("legacy step attribution = %q, want %q", artifact.Steps[0].ExecutionSessionID, artifact.Sessions[0].ExecutionSessionID)
+	}
+	if artifact.Steps[1].ExecutionSessionID != "new-session" || len(artifact.SessionRollups) != 2 {
+		t.Fatalf("new session projection = steps=%+v rollups=%+v", artifact.Steps, artifact.SessionRollups)
+	}
+}
+
+func TestCollectorDoesNotAttributeIncompleteV2HistoryToSoleSurvivingSession(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	legacy := Artifact{
+		SchemaVersion: 2, RunID: "run", Workflow: "workflow", HistoryComplete: false,
+		Sessions: []SessionRecord{{
+			StartedAt: started.Format(time.RFC3339Nano), LastObservedAt: started.Add(time.Second).Format(time.RFC3339Nano),
+			EndedAt: started.Add(time.Second).Format(time.RFC3339Nano), DurationMS: 1000, Status: SessionClosed,
+		}},
+		Steps:  []StepRecord{{RecordID: "one#1", ID: "one", Kind: "step", Type: "agent", Attempt: 1, DurationMS: 1000, AgentInvoked: true, Usage: ptrUsage(collectedUsage(3))}},
+		Totals: emptyTotals(),
+	}
+	if err := os.WriteFile(filepath.Join(dir, FileName), mustJSON(t, legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	collector := NewCollector(dir, "run", "workflow", started.Add(2*time.Second))
+	collector.Process(event(audit.EventRunStart, started.Add(2*time.Second), map[string]any{"execution_session_id": "new-session", "resumed": true}))
+	collector.Process(stepEvent(started.Add(3*time.Second), agentIdentity("two", true), collectedUsage(4), nil, "success", 1000))
+
+	artifact := readArtifact(t, dir)
+	if artifact.Steps[0].ExecutionSessionID != "" || artifact.Steps[0].ExecutionSessionCoverage != "unknown" {
+		t.Fatalf("incomplete legacy history was guessed: %+v", artifact.Steps[0])
+	}
+}
+
+func TestCollectorLeavesAmbiguousV2StepSessionUnknown(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	legacy := Artifact{
+		SchemaVersion: 2, RunID: "run", Workflow: "workflow", HistoryComplete: true,
+		Sessions: []SessionRecord{
+			{StartedAt: started.Format(time.RFC3339Nano), LastObservedAt: started.Add(time.Second).Format(time.RFC3339Nano), DurationMS: 1000, Status: SessionClosed},
+			{StartedAt: started.Add(2 * time.Second).Format(time.RFC3339Nano), LastObservedAt: started.Add(3 * time.Second).Format(time.RFC3339Nano), DurationMS: 1000, Status: SessionClosed},
+		},
+		Steps:  []StepRecord{{RecordID: "one#1", ID: "one", Kind: "step", Type: "agent", Attempt: 1, AgentInvoked: true, Usage: ptrUsage(collectedUsage(3))}},
+		Totals: emptyTotals(),
+	}
+	if err := os.WriteFile(filepath.Join(dir, FileName), mustJSON(t, legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c := NewCollector(dir, "run", "workflow", started.Add(4*time.Second))
+	c.Process(event(audit.EventRunStart, started.Add(4*time.Second), map[string]any{"execution_session_id": "new-session", "resumed": true}))
+	c.Process(stepEvent(started.Add(5*time.Second), agentIdentity("two", true), collectedUsage(4), nil, "success", 1000))
+
+	artifact := readArtifact(t, dir)
+	if artifact.HistoryComplete || artifact.Steps[0].ExecutionSessionID != "" || artifact.Steps[0].ExecutionSessionCoverage != "unknown" {
+		t.Fatalf("ambiguous legacy attribution was guessed: %+v", artifact)
+	}
+}
+
+func ptrUsage(usage model.UsageRecord) *model.UsageRecord { //nolint:gocritic // test literals remain concise with a value helper
+	return &usage
+}
+
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 func TestCollectorClosesSessionAndEmbedsFinalTotals(t *testing.T) {
 	dir := t.TempDir()
 	started := mustTime(t, "2026-07-17T10:00:00Z")
@@ -930,7 +1091,7 @@ func TestCollectorClosesSessionAndEmbedsFinalTotals(t *testing.T) {
 func TestCollectorRecoversCorruptAndUnsupportedArtifacts(t *testing.T) {
 	for _, tc := range []struct{ name, contents string }{
 		{name: "corrupt", contents: "not-json"},
-		{name: "newer schema", contents: `{"schema_version":3}`},
+		{name: "newer schema", contents: `{"schema_version":4,"run_id":"run","workflow":"workflow"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()

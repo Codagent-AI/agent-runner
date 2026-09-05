@@ -72,18 +72,42 @@ live runs and definition previews remain version-neutral.
 
 ## Run Metrics
 
-`run-metrics.json` is the supported machine-readable metrics artifact for a run. Schema version 2 records:
+`run-metrics.json` is the supported machine-readable metrics artifact for a run. Schema version 3 records:
 
 - each completed model attempt with stable role/tool identity, separate requested and effective invocation identity, nesting prefix, outcome, duration, usage state, and reported API cost;
 - each terminal accepted agent call as a `kind: "agent-call"` record with call, parent-attempt, target, session, usage, and cost fields;
 - structured nested model invocations from declared metrics-producing tools as `kind: "nested-agent"` records;
 - loop iteration completions with identity and duration only, avoiding duplicate usage rollups;
-- execution sessions with observed active duration and clean/open status; and
+- execution sessions with a durable `execution_session_id`, observed active duration, clean/open status, and a per-session rollup; and
 - run totals for active duration, token categories, usage coverage, estimated API cost, and cost coverage.
+
+Every lifecycle event and metric record emitted by a current Runner invocation
+has the same `execution_session_id`. This identifies one `agent-runner`
+invocation, including a resume; it is separate from an agent CLI's `session_id`
+and does not replace the stable run ID. A per-session rollup includes only work
+performed during that invocation, while the run totals remain cumulative.
+
+Executable leaf-step boundaries also retain local Git checkpoint evidence. When
+available it contains HEAD plus index, worktree, and untracked state; the
+metrics projection exposes aggregate `files_changed`, `lines_added`, and
+`lines_deleted`. Outside a supported Git worktree, or if an ending checkpoint
+was not captured, the evidence is explicitly unavailable rather than zero.
 
 The artifact is rewritten atomically after every terminal step or iteration event and finalized at `run_end`. An interrupted run therefore retains every completion already observed without exposing a partially written JSON document.
 
-On resume, Agent Runner reads this artifact directly, retains earlier attempts, and appends a new execution session. Schema-v1 artifacts are migrated in memory and rewritten as schema v2 on the next terminal event. Derivable CLI, provider, model, and tool values are preserved; identity that v1 never recorded is represented explicitly as `unknown` with `legacy` provenance rather than inferred. Paused time between invocations is excluded from active duration. If the existing artifact is corrupt or uses an unsupported schema version, Agent Runner preserves it under a unique `run-metrics.json.bak-<timestamp>` name, starts a fresh artifact with `history_complete: false`, and prints a warning.
+On resume, Agent Runner reads this artifact directly, retains earlier attempts,
+closes any previously open session at its last observed event, and appends a
+new execution session. Schema-v1 artifacts are migrated through v2 to v3.
+Schema-v2 sessions receive deterministic legacy execution-session IDs; legacy
+records are associated only when the persisted history makes that association
+unambiguous. Ambiguous record attribution remains `unknown` and sets
+`history_complete: false`. Derivable CLI, provider, model, and tool values are
+preserved; identity that v1 never recorded is represented explicitly as
+`unknown` with `legacy` provenance rather than inferred. Paused time between
+invocations is excluded from active duration. If the existing artifact is
+corrupt or uses an unsupported schema version, Agent Runner preserves it under
+a unique `run-metrics.json.bak-<timestamp>` name, starts a fresh artifact with
+`history_complete: false`, and prints a warning.
 
 ## Run Detail View
 

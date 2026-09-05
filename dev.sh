@@ -3,4 +3,16 @@ set -euo pipefail
 
 ORIG_DIR="$PWD"
 cd "$(dirname "$0")"
-go run ./cmd/agent-runner -C "$ORIG_DIR" "$@"
+DEV_AUDIT_ROOT="$(pwd -P)"
+DEV_AUDIT_ROOT_ENCODED="$(printf '%s' "${DEV_AUDIT_ROOT}" | base64 | tr -d '\n')"
+DEV_AUDIT_REVISION="$(git rev-parse HEAD 2>/dev/null || true)"
+DEV_AUDIT_DIRTY=""
+if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+  DEV_AUDIT_DIRTY="true"
+fi
+DEV_AUDIT_LDFLAGS="-X github.com/codagent/agent-runner/internal/devaudit.BuildRootEncoded=${DEV_AUDIT_ROOT_ENCODED} -X github.com/codagent/agent-runner/internal/devaudit.BuildRevision=${DEV_AUDIT_REVISION} -X github.com/codagent/agent-runner/internal/devaudit.BuildDirty=${DEV_AUDIT_DIRTY}"
+if [[ "${1:-}" == "audit" ]]; then
+  go run -tags dev_audit -ldflags "$DEV_AUDIT_LDFLAGS" ./cmd/agent-runner "$@"
+else
+  go run -tags dev_audit -ldflags "$DEV_AUDIT_LDFLAGS" ./cmd/agent-runner -C "$ORIG_DIR" "$@"
+fi

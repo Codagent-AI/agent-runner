@@ -1,0 +1,20 @@
+name: run-audit
+description: Development-only linked run audit.
+hidden: true
+params:
+  - name: audit_request
+steps:
+  - id: prepare-evidence
+    command: 'audit-stage prepare-evidence'
+  - id: value-audit
+    command: 'audit-stage value-audit'
+  - id: validate-value
+    command: 'audit-stage validate-value'
+  - id: correctness-audit
+    command: 'audit-stage correctness-audit'
+  - id: validate-publish-correctness
+    command: 'audit-stage validate-publish-correctness'
+  - id: assemble-local-report
+    command: 'audit-stage assemble-local-report'
+  - id: report-value-observations
+    command: 'audit-stage report-value-observations'

@@ -163,7 +163,8 @@ func emitNestedMetricCapture(ctx *model.ExecutionContext, step *model.Step, pref
 	for i := range records {
 		record := &records[i]
 		identity := model.ExecutionIdentity{
-			StepID: record.InvocationID, Prefix: identityPrefix,
+			ExecutionSessionID: ctx.ExecutionSessionID,
+			StepID:             record.InvocationID, Prefix: identityPrefix,
 			StepType: "agent", Kind: "nested-agent", CLI: record.Usage.CLI,
 			SessionID: record.SessionID, AgentInvoked: true, Role: record.Role, Tool: record.Tool,
 		}
@@ -183,7 +184,8 @@ func emitNestedMetricCapture(ctx *model.ExecutionContext, step *model.Step, pref
 			reason = model.UnavailableNestedMetricsInvalid
 		}
 		identity := model.ExecutionIdentity{
-			StepID: step.MetricsSource + "-metrics-gap", Prefix: identityPrefix,
+			ExecutionSessionID: ctx.ExecutionSessionID,
+			StepID:             step.MetricsSource + "-metrics-gap", Prefix: identityPrefix,
 			StepType: "agent", Kind: "nested-agent", AgentInvoked: true,
 			Role: "implementation-validator", Tool: step.MetricsSource,
 		}
