@@ -2878,6 +2878,9 @@ func resetOnboardingState() error {
 	return nil
 }
 
+// #nosec G703 -- callers pass only the fixed onboarding-owned .validator and
+// ~/.agent-runner/onboarding/runs paths; root symlinks are removed without
+// following them, and nested operations are confined with os.Root.
 func removeAllWritable(path string) error {
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {

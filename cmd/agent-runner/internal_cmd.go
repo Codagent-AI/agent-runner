@@ -287,7 +287,7 @@ func runValidatorInit(projectConfigPath string) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command("agent-validator", args...) // #nosec G204 -- executable is fixed and args are validated config CLI names
+	cmd := exec.Command("agent-validator", args...) // #nosec G204,G702 -- executable is fixed and args are fixed flags plus validated config CLI names
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
