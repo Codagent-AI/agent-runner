@@ -208,6 +208,43 @@ func TestCodexStructuredOutputSchemaIsEphemeralAndBindsValueIdentity(t *testing.
 	}
 }
 
+func TestValueAuditPromptRequiresMarginalCostAwareJudgment(t *testing.T) {
+	pkg := ValuePackage{BatchID: "value-007", Leaves: []LeafEvidence{{
+		Skeleton: ObservationSkeleton{
+			ObservationID: "observation-1",
+			StepID:        "validate/fix-violations",
+			Lineage:       "validate",
+			Cost:          CostEvidence{DurationMS: pointerTo(int64(120000)), TotalTokens: pointerTo(int64(500000))},
+		},
+		Attempts: 3,
+	}}}
+
+	prompt, err := valueAuditPrompt(pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"marginal contribution",
+		"resource use",
+		"Successful execution alone is not evidence of value",
+		"Do not equate no repository change with no value",
+		"detector and remediation",
+		"lineage",
+		"assumption review",
+		"simplification",
+		"quantify findings or resulting corrections",
+		`"batch_id":"value-007"`,
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Errorf("prompt does not contain %q", required)
+		}
+	}
+}
+
+func pointerTo[T any](value T) *T {
+	return &value
+}
+
 func envValue(environment []string, name string) string {
 	prefix := name + "="
 	for index := len(environment) - 1; index >= 0; index-- {

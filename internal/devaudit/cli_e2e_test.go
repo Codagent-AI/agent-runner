@@ -392,7 +392,7 @@ import json, sys
 prompt = sys.argv[1]
 output_path = sys.argv[2]
 if prompt.startswith("You are judging workflow-step value"):
-    package = json.loads(prompt.split("\n\n", 1)[1])
+    package = json.loads(prompt.rsplit("\n\n", 1)[1])
     result = {"batch_id": package["batch_id"], "observations": []}
     for leaf in package["leaves"]:
         result["observations"].append({

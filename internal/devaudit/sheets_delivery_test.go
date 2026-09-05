@@ -240,7 +240,7 @@ func TestProjectFromRemoteStripsHostProtocolCredentialsAndLocalPaths(t *testing.
 }
 
 func expectedDeliveryRow() []string {
-	return []string{"step_value_v1", "obs-1", "2026-09-01T00:00:00Z", "Codagent-AI/agent-runner", "core:example", "source", "session", "audit", "automatic", "success", "build", "success", "new", "", "", "", "a,z", "no_change", "", "", "", "", "high", "intended", "unique", "confirmed", "high", "complete", "judge", "value-rubric-v1", "High-level result."}
+	return []string{"step_value_v1", "obs-1", "2026-09-01T00:00:00Z", "Codagent-AI/agent-runner", "core:example", "source", "session", "audit", "automatic", "success", "build", "success", "new", "", "", "", "a,z", "no_change", "", "", "", "", "high", "intended", "unique", "confirmed", "high", "complete", "judge", "value-rubric-v2", "High-level result."}
 }
 
 func writeJSON(t *testing.T, path string, value any) {

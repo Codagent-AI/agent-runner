@@ -27,7 +27,7 @@ import (
 const (
 	evidenceSchemaVersion  = 1
 	valueSchemaVersion     = "step_value_v1"
-	rubricVersion          = "value-rubric-v1"
+	rubricVersion          = "value-rubric-v2"
 	defaultPackageBytes    = 256 * 1024
 	defaultLeafDetailBytes = 32 * 1024
 	auditSandboxProfile    = "(version 1)\n(allow default)\n(deny file-write* (require-not (subpath (param \"OUTPUT_DIR\"))))\n"
@@ -1167,7 +1167,10 @@ func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueB
 	if err != nil {
 		return ModelValueBatch{}, err
 	}
-	prompt := "You are judging workflow-step value. Return exactly one JSON object matching the supplied batch, with one observation for every skeleton. You may fill only observation_id, overall_value, change_effect, unique_contribution, downstream_evidence, confidence, evidence_coverage, optional note, and consultation references. Do not include measured fields, paths, transcripts, or prose outside JSON. The audit workspace contains read-only snapshotted evidence; record only supplied consultation identifiers.\n\n" + string(input)
+	prompt, err := valueAuditPrompt(pkg)
+	if err != nil {
+		return ModelValueBatch{}, err
+	}
 	workspace, err := prepareModelWorkspace(request)
 	if err != nil {
 		return ModelValueBatch{}, err
@@ -1232,6 +1235,27 @@ func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueB
 		output.Provenance.SessionID = "unknown"
 	}
 	return output, nil
+}
+
+func valueAuditPrompt(pkg ValuePackage) (string, error) {
+	input, err := json.Marshal(pkg)
+	if err != nil {
+		return "", err
+	}
+	instructions := `You are judging workflow-step value. Return exactly one JSON object matching the supplied batch, with one observation for every skeleton.
+
+Judge each step's marginal contribution, not how much activity occurred or whether it merely completed successfully. Successful execution alone is not evidence of value. Ground the judgment in the concrete result and its downstream effect. Git changes and directly attributed commits are primary evidence when present. Do not equate no repository change with no value: planning, review, validation, and decision steps can be valuable through their artifacts and consequences.
+
+Assess benefit relative to resource use. Consider trustworthy duration, tokens, and monetary cost together with attempts and iterations; an unavailable metric is unknown, not zero. A costly step may still be high value when it uniquely prevents or corrects consequential problems, while a cheap successful step may be low value when it adds little. Use unique_contribution to identify overlap with other steps and downstream_evidence to distinguish claimed benefit from confirmed benefit.
+
+Compare related leaves available in the batch and use lineage to understand nested review or validation work. Distinguish the contribution of a detector and remediation step: credit finding a real problem to the detector, credit implementing the correction to the fixer, and avoid double-crediting the same outcome. Do not invent comparisons to leaves or evidence that are unavailable.
+
+For review, validation, assumption review, and simplification steps, look for a distinct finding, decision, correction, complexity reduction, or useful confirmation and trace it to later evidence when possible. When the supplied evidence supports it, quantify findings or resulting corrections in the note. Do not treat an uneventful review as valuable merely because it ran, or as worthless merely because it correctly found no actionable problem.
+
+Consult the read-only snapshotted evidence when the compact package is insufficient, especially to understand commits, diffs, artifacts, validation results, or downstream corrections. Reduce confidence or evidence coverage when the evidence cannot support a firm judgment. When evidence permits, use the bounded note to name the concrete contribution or harm and the most important resource or overlap tradeoff. Do not include a transcript or transcript summary.
+
+You may fill only observation_id, overall_value, change_effect, unique_contribution, downstream_evidence, confidence, evidence_coverage, optional note, and consultation references. Do not include measured fields, paths, transcripts, or prose outside JSON. Record only supplied consultation identifiers.`
+	return instructions + "\n\n" + string(input), nil
 }
 
 func trustedAuditInputsFingerprint(request *Request) (string, error) {
