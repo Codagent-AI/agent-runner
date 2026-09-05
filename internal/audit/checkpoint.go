@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -178,16 +177,9 @@ func gitUntrackedStats(root string) ([]GitFileStat, error) {
 			return nil, fmt.Errorf("unsafe untracked path %q", path)
 		}
 		filePath := filepath.Join(root, clean)
-		info, statErr := os.Lstat(filePath) // #nosec G703 -- path is constrained to a Git-reported relative file.
-		if statErr != nil {
-			return nil, statErr
-		}
-		if !info.Mode().IsRegular() || info.Size() > maxUntrackedFileBytes {
-			return nil, fmt.Errorf("untracked file %q cannot be measured within limits", path)
-		}
-		data, readErr := os.ReadFile(filePath) // #nosec G304 -- path was constrained above.
+		data, readErr := readBoundedUntrackedFile(filePath)
 		if readErr != nil {
-			return nil, readErr
+			return nil, fmt.Errorf("untracked file %q cannot be measured within limits: %w", path, readErr)
 		}
 		if bytes.IndexByte(data, 0) >= 0 {
 			return nil, fmt.Errorf("untracked binary file %q", path)
@@ -195,6 +187,31 @@ func gitUntrackedStats(root string) ([]GitFileStat, error) {
 		stats = append(stats, GitFileStat{Path: path, Added: countLines(data)})
 	}
 	return stats, nil
+}
+
+var openUntrackedFile = openUntrackedFileNoFollow
+
+func readBoundedUntrackedFile(path string) ([]byte, error) {
+	file, err := openUntrackedFile(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > maxUntrackedFileBytes {
+		return nil, fmt.Errorf("file is not a bounded regular file")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxUntrackedFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxUntrackedFileBytes {
+		return nil, fmt.Errorf("file exceeds %d bytes", maxUntrackedFileBytes)
+	}
+	return data, nil
 }
 
 func gitUntrackedPaths(root string) ([]string, error) {

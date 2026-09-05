@@ -2,9 +2,10 @@
 
 GO_FILES := $(shell git ls-files --cached --others --exclude-standard '*.go' | while IFS= read -r file; do test ! -f "$$file" || printf '%s ' "$$file"; done)
 DEV_AUDIT_ROOT := $(CURDIR)
+DEV_AUDIT_ROOT_ENCODED := $(shell pwd | base64 | tr -d '\n')
 DEV_AUDIT_REVISION := $(shell git rev-parse HEAD 2>/dev/null || true)
 DEV_AUDIT_DIRTY := $(shell test -z "$$(git status --porcelain 2>/dev/null)" || printf 'true')
-DEV_AUDIT_LDFLAGS := -X github.com/codagent/agent-runner/internal/devaudit.BuildRoot=$(DEV_AUDIT_ROOT) -X github.com/codagent/agent-runner/internal/devaudit.BuildRevision=$(DEV_AUDIT_REVISION) -X github.com/codagent/agent-runner/internal/devaudit.BuildDirty=$(DEV_AUDIT_DIRTY)
+DEV_AUDIT_LDFLAGS := -X github.com/codagent/agent-runner/internal/devaudit.BuildRootEncoded=$(DEV_AUDIT_ROOT_ENCODED) -X github.com/codagent/agent-runner/internal/devaudit.BuildRevision=$(DEV_AUDIT_REVISION) -X github.com/codagent/agent-runner/internal/devaudit.BuildDirty=$(DEV_AUDIT_DIRTY)
 
 build:
 	go build -tags dev_audit -ldflags "$(DEV_AUDIT_LDFLAGS)" -o bin/agent-runner ./cmd/agent-runner

@@ -1134,7 +1134,10 @@ func ensureValueOutputs(request *Request) error {
 	if err != nil {
 		return err
 	}
-	provenance := map[string]BatchProvenance{}
+	provenance, err := loadValueBatchProvenance(request.AuditSessionDir)
+	if err != nil {
+		return err
+	}
 	for _, pkg := range prepared.Packages {
 		outputPath := filepath.Join(request.AuditSessionDir, "model-output", pkg.BatchID+".json")
 		if _, err := os.Stat(outputPath); err == nil {
@@ -1156,6 +1159,22 @@ func ensureValueOutputs(request *Request) error {
 		}
 	}
 	return stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "value-batch-provenance.json"), provenance)
+}
+
+func loadValueBatchProvenance(auditSessionDir string) (map[string]BatchProvenance, error) {
+	path := filepath.Join(auditSessionDir, "value-batch-provenance.json")
+	data, err := os.ReadFile(path) // #nosec G304 -- fixed audit artifact under the audit session.
+	if os.IsNotExist(err) {
+		return map[string]BatchProvenance{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	provenance := map[string]BatchProvenance{}
+	if err := json.Unmarshal(data, &provenance); err != nil {
+		return nil, fmt.Errorf("decode value batch provenance: %w", err)
+	}
+	return provenance, nil
 }
 
 func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueBatch, error) {

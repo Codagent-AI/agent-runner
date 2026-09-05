@@ -279,7 +279,7 @@ func (f *cliAuditFixture) waitForLinks(source string, count int, completed bool)
 	diagnostics := ""
 	for index := range lifecycle.Links {
 		link := &lifecycle.Links[index]
-		for _, name := range []string{"value-diagnostics.json", "correctness-model-diagnostics.json", "detached.log"} {
+		for _, name := range []string{"value-model-diagnostics.json", "correctness-model-diagnostics.json", "detached.log"} {
 			if data, err := os.ReadFile(filepath.Join(filepath.Dir(source), link.AuditRunID, name)); err == nil {
 				diagnostics += name + ": " + string(data) + "\n"
 			}

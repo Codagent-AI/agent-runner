@@ -872,7 +872,7 @@ func TestCollectorRehydratesBaselinesAndExcludesPausedTime(t *testing.T) {
 		t.Fatalf("active duration = %dms, want 8m", got)
 	}
 	a := readArtifact(t, dir)
-	if len(a.Sessions) != 2 || a.Sessions[0].Status != SessionClosed || a.Sessions[0].EndedAt != a.Sessions[0].LastObservedAt || a.Sessions[1].Status != SessionOpen {
+	if len(a.Sessions) != 2 || a.Sessions[0].Status != SessionInterrupted || a.Sessions[0].EndedAt != a.Sessions[0].LastObservedAt || a.Sessions[1].Status != SessionOpen {
 		t.Fatalf("sessions = %+v", a.Sessions)
 	}
 }
@@ -1091,7 +1091,7 @@ func TestCollectorClosesSessionAndEmbedsFinalTotals(t *testing.T) {
 func TestCollectorRecoversCorruptAndUnsupportedArtifacts(t *testing.T) {
 	for _, tc := range []struct{ name, contents string }{
 		{name: "corrupt", contents: "not-json"},
-		{name: "newer schema", contents: `{"schema_version":3}`},
+		{name: "newer schema", contents: `{"schema_version":4,"run_id":"run","workflow":"workflow"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()

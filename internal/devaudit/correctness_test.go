@@ -191,6 +191,32 @@ type fakeGH struct{}
 
 func (fakeGH) Run(context.Context, string, []string, []byte) (string, error) { return "[]", nil }
 
+type deadlineGH struct {
+	testing *testing.T
+}
+
+func (r deadlineGH) Run(ctx context.Context, _ string, args []string, _ []byte) (string, error) {
+	r.testing.Helper()
+	if _, ok := ctx.Deadline(); !ok {
+		r.testing.Fatalf("gh %v was invoked without a deadline", args)
+	}
+	if len(args) > 1 && args[1] == "create" {
+		return "https://github.com/Codagent-AI/agent-runner/issues/42", nil
+	}
+	return "[]", nil
+}
+
+func TestPublishCorrectnessBoundsEveryGitHubCommand(t *testing.T) {
+	request, prepared := correctnessFixture(t)
+	result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{confirmedCandidate()}}, deadlineGH{testing: t})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Findings[0].PublicationState != "created" {
+		t.Fatalf("finding = %#v", result.Findings[0])
+	}
+}
+
 func TestPublishCorrectnessCreatesOneFocusedRedactedIssue(t *testing.T) {
 	request, prepared := correctnessFixture(t)
 	runner := &recordingGH{}

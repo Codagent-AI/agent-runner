@@ -165,6 +165,51 @@ func TestMigrateReportDestinationRequiresExplicitDestination(t *testing.T) {
 	}
 }
 
+func TestMigrateReportDestinationRejectsDeliveredReport(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "local-report.json")
+	want := LocalReport{SchemaVersion: valueSchemaVersion, Destination: DestinationState{State: "configured", SpreadsheetID: "old", Tab: "old-tab"}, DeliveryState: "delivered"}
+	writeJSON(t, path, want)
+
+	if err := MigrateReportDestination(dir, "new-sheet", "new-tab"); err == nil {
+		t.Fatal("delivered report destination was migrated")
+	}
+	var got LocalReport
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("delivered report changed: got %#v, want %#v", got, want)
+	}
+}
+
+func TestSheetsReporterDoesNotFollowCredentialedRedirects(t *testing.T) {
+	redirected := make(chan struct{}, 1)
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		redirected <- struct{}{}
+	}))
+	defer target.Close()
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		http.Redirect(w, request, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer redirector.Close()
+
+	reporter := SheetsReporter{HTTPClient: redirector.Client()}
+	_, err := reporter.refresh(context.Background(), &Connection{TokenURI: redirector.URL, ClientID: "client", ClientSecret: "secret", RefreshToken: "refresh"})
+	if err == nil {
+		t.Fatal("credentialed redirect was accepted")
+	}
+	select {
+	case <-redirected:
+		t.Fatal("credentialed request followed redirect")
+	default:
+	}
+}
+
 // INT-006 exercises direct OAuth/Sheets projection, frozen destinations, and
 // ambiguous append idempotency against an in-memory HTTP boundary.
 func TestINT006DeliverReportUsesExactAllowlistAndDeduplicatesAmbiguousAppend(t *testing.T) {

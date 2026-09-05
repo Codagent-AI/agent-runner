@@ -562,8 +562,9 @@ func copyEvidenceTree(source, destination string) error {
 }
 
 func snapshotRunnerSource(snapshotDir string) SourceProvenance {
-	provenance := SourceProvenance{BuildRoot: BuildRoot, BuildRevision: BuildRevision, BuildDirty: BuildDirty, Coverage: "unavailable"}
-	root := strings.TrimSpace(BuildRoot)
+	buildRoot := injectedBuildRoot()
+	provenance := SourceProvenance{BuildRoot: buildRoot, BuildRevision: BuildRevision, BuildDirty: BuildDirty, Coverage: "unavailable"}
+	root := strings.TrimSpace(buildRoot)
 	if root == "" {
 		provenance.Diagnostic = "development build did not inject an Agent Runner checkout"
 		return provenance

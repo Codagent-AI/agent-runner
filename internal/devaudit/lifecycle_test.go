@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
+	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runner"
@@ -15,8 +17,24 @@ import (
 )
 
 func TestReplayExcludesEvidenceWithoutHistoricalSessionOwnership(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	root := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	project := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(project, ".agent-runner"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := "profiles:\n  default:\n    agents:\n      crosscheck:\n        default_mode: autonomous\n        cli: codex\n        model: gpt-5.6-sol\n        effort: low\n"
+	if err := os.WriteFile(filepath.Join(project, ".agent-runner", "config.yaml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	projectStateDir := filepath.Join(home, ".agent-runner", "projects", audit.EncodePath(project))
+	if err := os.MkdirAll(filepath.Join(projectStateDir, "runs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectStateDir, "meta.json"), []byte(`{"path":`+strconv.Quote(project)+`}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(projectStateDir, "runs")
 	t.Cleanup(func() {
 		_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 			if err == nil {
@@ -61,11 +79,15 @@ func TestReplayExcludesEvidenceWithoutHistoricalSessionOwnership(t *testing.T) {
 	}
 
 	var request Request
+	t.Chdir(t.TempDir())
 	if err := Replay(source, "session-1", func(got Request) error {
 		request = got
 		return nil
 	}); err != nil {
 		t.Fatalf("Replay() error = %v", err)
+	}
+	if request.Project != filepath.Base(project) || request.Crosscheck.CLI != "codex" {
+		t.Fatalf("replay source context = project %q crosscheck %#v", request.Project, request.Crosscheck)
 	}
 	if _, err := os.Stat(filepath.Join(request.SnapshotPath, "output", "later-session.out")); !os.IsNotExist(err) {
 		t.Fatalf("ambiguous later-session output remains in replay snapshot: %v", err)

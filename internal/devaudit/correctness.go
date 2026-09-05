@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/codagent/agent-runner/internal/cli"
@@ -96,6 +97,14 @@ func (executableRunner) Run(ctx context.Context, name string, args []string, std
 }
 
 var ghRunner CommandRunner = executableRunner{}
+
+const githubCommandTimeout = 30 * time.Second
+
+func runGitHubCommand(runner CommandRunner, args []string, stdin []byte) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), githubCommandTimeout)
+	defer cancel()
+	return runner.Run(ctx, "gh", args, stdin)
+}
 
 func ensureCorrectnessOutput(request *Request) error {
 	path := filepath.Join(request.AuditSessionDir, "model-output", correctnessOutput)
@@ -551,7 +560,7 @@ func publishCandidate(request *Request, candidate *CorrectnessCandidate, runner 
 	body, redacted := issueBody(request, &finding, candidate)
 	title := redactText(candidate.Title)
 	finding.Redacted = redacted || title != candidate.Title
-	url, err := runner.Run(context.Background(), "gh", []string{"issue", "create", "--repo", auditIssueRepository, "--title", "[auto-audit] " + title, "--body", "-"}, []byte(body))
+	url, err := runGitHubCommand(runner, []string{"issue", "create", "--repo", auditIssueRepository, "--title", "[auto-audit] " + title, "--body", "-"}, []byte(body))
 	if err != nil {
 		finding.PublicationState, finding.Failure = "failed", strings.TrimSpace(url)
 		if finding.Failure == "" {
@@ -581,7 +590,7 @@ func verifySelectedDuplicate(runner CommandRunner, duplicate Duplicate) (ghIssue
 }
 
 func searchIssues(runner CommandRunner, query, state string) ([]ghIssue, error) {
-	output, err := runner.Run(context.Background(), "gh", []string{"issue", "list", "--repo", auditIssueRepository, "--state", state, "--search", query, "--json", "url,state,title,body", "--limit", "20"}, nil)
+	output, err := runGitHubCommand(runner, []string{"issue", "list", "--repo", auditIssueRepository, "--state", state, "--search", query, "--json", "url,state,title,body", "--limit", "20"}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("search GitHub issues: %w: %s", err, strings.TrimSpace(output))
 	}
@@ -597,7 +606,7 @@ func viewIssue(runner CommandRunner, issueURL string) (ghIssue, error) {
 	if len(match) != 2 {
 		return ghIssue{}, fmt.Errorf("semantic duplicate URL is invalid")
 	}
-	output, err := runner.Run(context.Background(), "gh", []string{"issue", "view", match[1], "--repo", auditIssueRepository, "--json", "url,state,title,body"}, nil)
+	output, err := runGitHubCommand(runner, []string{"issue", "view", match[1], "--repo", auditIssueRepository, "--json", "url,state,title,body"}, nil)
 	if err != nil {
 		return ghIssue{}, fmt.Errorf("view GitHub issue: %w: %s", err, strings.TrimSpace(output))
 	}

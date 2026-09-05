@@ -28,8 +28,9 @@ const (
 	DataEstimatedAPICostUSD = "estimated_api_cost_usd"
 	DataTotals              = "totals"
 
-	SessionOpen   = "open"
-	SessionClosed = "closed"
+	SessionOpen        = "open"
+	SessionClosed      = "closed"
+	SessionInterrupted = "interrupted"
 )
 
 // Artifact is the stable run-metrics.json schema.
@@ -379,7 +380,7 @@ func sessionWasResumed(identity *model.ExecutionIdentity) bool {
 func (c *Collector) openSession(at time.Time, executionSessionID string) {
 	for i := range c.artifact.Sessions {
 		if c.artifact.Sessions[i].Status == SessionOpen {
-			c.artifact.Sessions[i].Status = SessionClosed
+			c.artifact.Sessions[i].Status = SessionInterrupted
 			c.artifact.Sessions[i].EndedAt = c.artifact.Sessions[i].LastObservedAt
 		}
 	}

@@ -4,6 +4,7 @@ package devaudit
 
 import (
 	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -31,10 +32,22 @@ import (
 // local development build paths. They are diagnostic provenance, never config.
 var (
 	BuildRoot                     string
+	BuildRootEncoded              string
 	BuildRevision                 string
 	BuildDirty                    string
 	configureDetachedAuditCommand = func(*exec.Cmd, string) {}
 )
+
+func injectedBuildRoot() string {
+	if BuildRootEncoded == "" {
+		return BuildRoot
+	}
+	decoded, err := base64.StdEncoding.DecodeString(BuildRootEncoded)
+	if err != nil {
+		return ""
+	}
+	return string(decoded)
+}
 
 //go:embed workflows/audit/run-audit-v1.0.yaml
 var auditWorkflow []byte
@@ -237,7 +250,14 @@ func launchDetached(request Request) error { //nolint:gocritic // Coordinator la
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start linked audit: %w", err)
 	}
+	reapDetachedProcess(cmd)
 	return nil
+}
+
+func reapDetachedProcess(cmd *exec.Cmd) {
+	go func() {
+		_ = cmd.Wait()
+	}()
 }
 
 // HandleCommand owns the tagged-only command surface. It is called before the
@@ -419,7 +439,10 @@ func Replay(sourceSessionDir, executionSessionID string, launch func(Request) er
 		return err
 	}
 	link := Link{AuditRunID: auditID, ExecutionSessionID: executionSessionID, Trigger: "replay", State: LaunchReserved, RequestedAt: time.Now().UTC().Format(time.RFC3339Nano)}
-	workingDir, _ := os.Getwd()
+	workingDir, err := recordedProjectRoot(sourceSessionDir)
+	if err != nil {
+		return err
+	}
 	summary := runner.PostFinalizationSummary{RunID: state.RunID, ExecutionSessionID: executionSessionID, SessionDir: sourceSessionDir, WorkingDir: workingDir, WorkflowFile: state.WorkflowFile, WorkflowName: state.WorkflowName, ProfileSet: state.ProfileSet, TopLevel: true}
 	if err := createAuditRun(&summary, &link); err != nil {
 		return err
@@ -445,4 +468,20 @@ func Replay(sourceSessionDir, executionSessionID string, launch func(Request) er
 	}
 	appendLifecycleEvent(sourceSessionDir, audit.EventAuditLaunchRequested, &link)
 	return (Coordinator{Launcher: launch}).launch(&summary, &lifecycle, &lifecycle.Links[len(lifecycle.Links)-1], time.Now)
+}
+
+func recordedProjectRoot(sourceSessionDir string) (string, error) {
+	runsDir := filepath.Dir(sourceSessionDir)
+	if filepath.Base(runsDir) != "runs" {
+		return "", fmt.Errorf("recorded source project is unavailable for %q", sourceSessionDir)
+	}
+	projectRoot := runs.ReadProjectPath(filepath.Dir(runsDir))
+	if strings.HasPrefix(projectRoot, "? ") || !filepath.IsAbs(projectRoot) {
+		return "", fmt.Errorf("recorded source project is unavailable for %q", sourceSessionDir)
+	}
+	info, err := os.Stat(projectRoot)
+	if err != nil || !info.IsDir() {
+		return "", fmt.Errorf("recorded source project is unavailable for %q", sourceSessionDir)
+	}
+	return filepath.Clean(projectRoot), nil
 }

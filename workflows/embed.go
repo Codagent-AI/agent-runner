@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 
@@ -186,6 +187,7 @@ func List() ([]string, error) {
 		}
 		refs = append(refs, extraRefs...)
 		sort.Strings(refs)
+		refs = slices.Compact(refs)
 	}
 	return refs, nil
 }

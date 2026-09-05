@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -128,6 +129,40 @@ func TestGitUntrackedStatsRejectsExcessivePathOutput(t *testing.T) {
 
 	if _, err := gitUntrackedStats(repo); err == nil {
 		t.Fatal("untracked evidence should be unavailable above the bounded output limit")
+	}
+}
+
+func TestGitUntrackedStatsReadsValidatedDescriptorAfterPathReplacement(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	path := filepath.Join(repo, "untracked.txt")
+	if err := os.WriteFile(path, []byte("one\ntwo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	originalOpen := openUntrackedFile
+	openUntrackedFile = func(name string) (*os.File, error) {
+		file, err := originalOpen(name)
+		if err != nil {
+			return nil, err
+		}
+		if err := os.Rename(name, name+".validated"); err != nil {
+			_ = file.Close()
+			return nil, err
+		}
+		if err := os.WriteFile(name, bytes.Repeat([]byte("x"), maxUntrackedFileBytes+1), 0o600); err != nil {
+			_ = file.Close()
+			return nil, err
+		}
+		return file, nil
+	}
+	t.Cleanup(func() { openUntrackedFile = originalOpen })
+
+	stats, err := gitUntrackedStats(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 || stats[0].Path != "untracked.txt" || stats[0].Added != 2 {
+		t.Fatalf("stable untracked stats = %#v", stats)
 	}
 }
 

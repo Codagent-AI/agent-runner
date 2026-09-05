@@ -10,6 +10,14 @@ import (
 	"github.com/codagent/agent-runner/internal/devaudit"
 )
 
+var (
+	importAuditConnection = func(input devaudit.SetupInput) error {
+		return (devaudit.ConnectionStore{}).Import(input)
+	}
+	migrateAuditReportDestination = devaudit.MigrateReportDestination
+	retryAuditReport              = devaudit.RetryReport
+)
+
 // handleDevelopmentAuditCommand keeps the tagged setup and retry CLI surface
 // at the executable boundary. devaudit owns only protected storage and
 // delivery operations.
@@ -45,7 +53,7 @@ func handleAuditSetupCommand(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "Usage: agent-runner audit setup --client <file> --token <file> --spreadsheet <id> --tab <tab>")
 		return 1
 	}
-	if err := (devaudit.ConnectionStore{}).Import(devaudit.SetupInput{ClientPath: *client, TokenPath: *token, SpreadsheetID: *spreadsheet, Tab: *tab}); err != nil {
+	if err := importAuditConnection(devaudit.SetupInput{ClientPath: *client, TokenPath: *token, SpreadsheetID: *spreadsheet, Tab: *tab}); err != nil {
 		_, _ = fmt.Fprintf(stderr, "agent-runner audit setup: %v\n", err)
 		return 1
 	}
@@ -72,12 +80,12 @@ func handleAuditRetryCommand(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if *migrateSpreadsheet != "" {
-		if err := devaudit.MigrateReportDestination(auditSessionDir, *migrateSpreadsheet, *migrateTab); err != nil {
+		if err := migrateAuditReportDestination(auditSessionDir, *migrateSpreadsheet, *migrateTab); err != nil {
 			_, _ = fmt.Fprintf(stderr, "agent-runner audit retry: %v\n", err)
 			return 1
 		}
 	}
-	if err := devaudit.RetryReport(auditSessionDir); err != nil {
+	if err := retryAuditReport(auditSessionDir); err != nil {
 		_, _ = fmt.Fprintf(stderr, "agent-runner audit retry: %v\n", err)
 		return 1
 	}

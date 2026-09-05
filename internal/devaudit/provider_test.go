@@ -5,10 +5,12 @@ package devaudit
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/config"
@@ -47,6 +49,21 @@ func TestTaggedProviderInjectsTheSingleHiddenAuditWorkflow(t *testing.T) {
 	}
 	if len(assets) != 0 {
 		t.Fatalf("audit workflow assets = %v, want none", assets)
+	}
+}
+
+func TestReapDetachedProcessWaitsForChild(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	reapDetachedProcess(cmd)
+	deadline := time.Now().Add(5 * time.Second)
+	for cmd.ProcessState == nil && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if cmd.ProcessState == nil {
+		t.Fatal("detached child was not reaped")
 	}
 }
 
@@ -206,6 +223,21 @@ func TestCodexStructuredOutputSchemaIsEphemeralAndBindsValueIdentity(t *testing.
 	}
 	if _, err := os.Stat(responsePath); !os.IsNotExist(err) {
 		t.Fatalf("structured final response remains after cleanup: %v", err)
+	}
+}
+
+func TestLoadValueBatchProvenancePreservesCompletedBatches(t *testing.T) {
+	dir := t.TempDir()
+	want := map[string]BatchProvenance{"value-001": {CLI: "codex", Model: "gpt-5.6-sol", Effort: "low", SessionID: "judge-session"}}
+	if err := stateio.WriteJSONAtomic(filepath.Join(dir, "value-batch-provenance.json"), want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadValueBatchProvenance(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("provenance mismatch (-want +got):\n%s", diff)
 	}
 }
 

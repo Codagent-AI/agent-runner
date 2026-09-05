@@ -305,10 +305,16 @@ func (r SheetsReporter) Deliver(ctx context.Context, report *LocalReport) error 
 }
 
 func (r SheetsReporter) client() *http.Client {
+	var client http.Client
 	if r.HTTPClient != nil {
-		return r.HTTPClient
+		client = *r.HTTPClient
+	} else {
+		client.Timeout = 20 * time.Second
 	}
-	return &http.Client{Timeout: 20 * time.Second}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &client
 }
 func (r SheetsReporter) baseURL() string {
 	if r.SheetsBaseURL != "" {
@@ -623,6 +629,9 @@ func MigrateReportDestination(auditSessionDir, spreadsheetID, tab string) error 
 	}
 	if report.SchemaVersion != valueSchemaVersion {
 		return fmt.Errorf("report schema %q cannot be migrated", report.SchemaVersion)
+	}
+	if report.DeliveryState != "pending" {
+		return fmt.Errorf("only pending reports can be migrated")
 	}
 	report.Destination = DestinationState{State: "configured", SpreadsheetID: strings.TrimSpace(spreadsheetID), Tab: strings.TrimSpace(tab)}
 	report.DeliveryState = "pending"

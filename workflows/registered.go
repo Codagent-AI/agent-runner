@@ -15,6 +15,9 @@ var registered struct {
 // Callers use it from a build-constrained package init; ordinary builds never
 // register development-only assets.
 func RegisterBuiltinAsset(relPath string, data []byte) {
+	if relPath == "." || !fs.ValidPath(relPath) {
+		panic("invalid builtin asset path: " + relPath)
+	}
 	registered.Lock()
 	defer registered.Unlock()
 	if registered.files == nil {
