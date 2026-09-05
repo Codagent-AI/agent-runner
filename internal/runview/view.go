@@ -424,7 +424,7 @@ func stepRowLabel(n *StepNode) (label, suffix string) {
 	switch n.Type {
 	case NodeLoop:
 		if total := loopTotal(n); total > 0 {
-			suffix = fmt.Sprintf(" (%d/%d)", n.IterationsCompleted, total)
+			suffix = fmt.Sprintf(" (%d/%d)", loopDisplayProgress(n), total)
 		}
 	case NodeIteration:
 		label = fmt.Sprintf("iter %d", n.IterationIndex+1)

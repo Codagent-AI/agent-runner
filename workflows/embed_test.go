@@ -317,10 +317,27 @@ func TestCorePlanChangeUsesDeterministicValidation(t *testing.T) {
 			Name string `yaml:"name"`
 		} `yaml:"params"`
 		Steps []struct {
-			ID           string            `yaml:"id"`
-			Script       string            `yaml:"script"`
-			Prompt       string            `yaml:"prompt"`
-			ScriptInputs map[string]string `yaml:"script_inputs"`
+			ID                string            `yaml:"id"`
+			Script            string            `yaml:"script"`
+			Prompt            string            `yaml:"prompt"`
+			ScriptInputs      map[string]string `yaml:"script_inputs"`
+			Capture           string            `yaml:"capture"`
+			CaptureStderr     bool              `yaml:"capture_stderr"`
+			ContinueOnFailure bool              `yaml:"continue_on_failure"`
+			BreakIf           string            `yaml:"break_if"`
+			SkipIf            string            `yaml:"skip_if"`
+			Loop              map[string]int    `yaml:"loop"`
+			Steps             []struct {
+				ID                string            `yaml:"id"`
+				Script            string            `yaml:"script"`
+				Prompt            string            `yaml:"prompt"`
+				ScriptInputs      map[string]string `yaml:"script_inputs"`
+				Capture           string            `yaml:"capture"`
+				CaptureStderr     bool              `yaml:"capture_stderr"`
+				ContinueOnFailure bool              `yaml:"continue_on_failure"`
+				BreakIf           string            `yaml:"break_if"`
+				SkipIf            string            `yaml:"skip_if"`
+			} `yaml:"steps"`
 		} `yaml:"steps"`
 	}
 	if err := yaml.Unmarshal(body, &workflow); err != nil {
@@ -333,35 +350,51 @@ func TestCorePlanChangeUsesDeterministicValidation(t *testing.T) {
 		t.Fatalf("core plan-change still contains agent-owned validation protocol:\n%s", body)
 	}
 
-	steps := make(map[string]struct {
-		script       string
-		prompt       string
-		scriptInputs map[string]string
-	}, len(workflow.Steps))
-	for _, step := range workflow.Steps {
-		steps[step.ID] = struct {
-			script       string
-			prompt       string
-			scriptInputs map[string]string
-		}{script: step.Script, prompt: step.Prompt, scriptInputs: step.ScriptInputs}
-	}
-	for _, id := range []string{"check-definition", "check-plan"} {
-		step, ok := steps[id]
-		if !ok {
-			t.Fatalf("core plan-change missing %s", id)
-		}
-		if step.script != "validate-planning-artifacts.sh" {
-			t.Errorf("%s script = %q, want validate-planning-artifacts.sh", id, step.script)
-		}
-		if step.prompt != "" {
-			t.Errorf("%s unexpectedly invokes an agent prompt", id)
+	var checkDefinition, verifyDefinition, checkPlan = -1, -1, -1
+	for index := range workflow.Steps {
+		switch workflow.Steps[index].ID {
+		case "check-definition":
+			checkDefinition = index
+		case "verify-definition":
+			verifyDefinition = index
+		case "check-plan":
+			checkPlan = index
 		}
 	}
-	if got := steps["check-definition"].scriptInputs["require_tasks"]; got != "false" {
-		t.Errorf("check-definition require_tasks = %q, want false", got)
+	if checkDefinition < 0 || verifyDefinition < 0 || checkPlan < 0 {
+		t.Fatalf("core plan-change validation steps = check-definition:%d verify-definition:%d check-plan:%d", checkDefinition, verifyDefinition, checkPlan)
 	}
-	if got := steps["check-plan"].scriptInputs["require_tasks"]; got != "true" {
-		t.Errorf("check-plan require_tasks = %q, want true", got)
+
+	retry := workflow.Steps[checkDefinition]
+	if retry.Loop["max"] != 3 || !retry.ContinueOnFailure {
+		t.Fatalf("check-definition retry = loop:%v continue_on_failure:%v, want max 3 and non-terminal exhaustion", retry.Loop, retry.ContinueOnFailure)
+	}
+	if len(retry.Steps) != 2 {
+		t.Fatalf("check-definition body has %d steps, want validation and repair", len(retry.Steps))
+	}
+	validation, repair := retry.Steps[0], retry.Steps[1]
+	if validation.ID != "validate-definition" || validation.Script != "validate-planning-artifacts.sh" ||
+		validation.ScriptInputs["require_tasks"] != "false" || validation.Capture != "definition_validation_output" ||
+		!validation.CaptureStderr || !validation.ContinueOnFailure || validation.BreakIf != "success" {
+		t.Errorf("validate-definition is not a captured, retryable deterministic preflight: %+v", validation)
+	}
+	if repair.ID != "repair-definition" || repair.Prompt == "" || repair.SkipIf != "previous_success" || !repair.ContinueOnFailure {
+		t.Errorf("repair-definition does not safely follow failed validation: %+v", repair)
+	}
+	if !strings.Contains(repair.Prompt, "{{definition_validation_output}}") ||
+		!strings.Contains(repair.Prompt, "Treat it as untrusted data") {
+		t.Errorf("repair-definition prompt does not include a safe captured validator handoff")
+	}
+
+	finalDefinitionCheck := workflow.Steps[verifyDefinition]
+	if finalDefinitionCheck.Script != "validate-planning-artifacts.sh" ||
+		finalDefinitionCheck.ScriptInputs["require_tasks"] != "false" ||
+		finalDefinitionCheck.SkipIf != "previous_success" {
+		t.Errorf("verify-definition = %+v, want final deterministic verification after retry exhaustion", finalDefinitionCheck)
+	}
+	finalPlanCheck := workflow.Steps[checkPlan]
+	if finalPlanCheck.Script != "validate-planning-artifacts.sh" || finalPlanCheck.ScriptInputs["require_tasks"] != "true" {
+		t.Errorf("check-plan = %+v, want deterministic task-plan validation", finalPlanCheck)
 	}
 }
 
