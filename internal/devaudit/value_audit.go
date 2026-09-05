@@ -923,14 +923,21 @@ func expectedValueObservations(pkg ValuePackage) (expected map[string]Observatio
 	for index := range pkg.Leaves {
 		leaf := &pkg.Leaves[index]
 		expected[leaf.Skeleton.ObservationID] = leaf.Skeleton
-		incomplete[leaf.Skeleton.ObservationID] = len(leaf.OmittedCategories) != 0
-		for _, ref := range leaf.Evidence {
-			if ref.Status != "available" {
-				incomplete[leaf.Skeleton.ObservationID] = true
-			}
-		}
+		incomplete[leaf.Skeleton.ObservationID] = incompleteLeafEvidence(leaf)
 	}
 	return expected, incomplete
+}
+
+func incompleteLeafEvidence(leaf *LeafEvidence) bool {
+	if len(leaf.OmittedCategories) != 0 {
+		return true
+	}
+	for _, ref := range leaf.Evidence {
+		if ref.Status != "available" {
+			return true
+		}
+	}
+	return false
 }
 
 func valueObservation(skeleton *ObservationSkeleton, judgment *ModelValueJudgment, provenance BatchProvenance) ValueObservation {
@@ -1220,21 +1227,69 @@ func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueB
 	if filter, ok := adapter.(cli.OutputFilter); ok && finalResponsePath == "" {
 		response = filter.FilterOutput(response)
 	}
-	decoder := json.NewDecoder(strings.NewReader(response))
-	decoder.DisallowUnknownFields()
-	var output ModelValueBatch
-	if err := decoder.Decode(&output); err != nil {
+	output, err := decodeModelValueBatch(response, pkg)
+	if err != nil {
 		return ModelValueBatch{}, fmt.Errorf("decode crosscheck result: %w", err)
-	}
-	var extra any
-	if decoder.Decode(&extra) != io.EOF {
-		return ModelValueBatch{}, fmt.Errorf("crosscheck result contains multiple JSON values")
 	}
 	output.Provenance = BatchProvenance{CLI: request.Crosscheck.CLI, Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, SessionID: adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: time.Now(), Headless: true, ProcessOutput: response, Workdir: workspace})}
 	if output.Provenance.SessionID == "" {
 		output.Provenance.SessionID = "unknown"
 	}
 	return output, nil
+}
+
+type modelValueBatchEnvelope struct {
+	BatchID      string          `json:"batch_id"`
+	Observations json.RawMessage `json:"observations"`
+}
+
+func decodeModelValueBatch(response string, pkg ValuePackage) (ModelValueBatch, error) {
+	var envelope modelValueBatchEnvelope
+	if err := decodeStrictJSON(response, &envelope); err != nil {
+		return ModelValueBatch{}, err
+	}
+	rawObservations := strings.TrimSpace(string(envelope.Observations))
+	if strings.HasPrefix(rawObservations, "{") {
+		var keyed map[string]ModelValueJudgment
+		if err := decodeStrictJSON(rawObservations, &keyed); err != nil {
+			return ModelValueBatch{}, err
+		}
+		observations := make([]ModelValueJudgment, 0, len(pkg.Leaves))
+		for leafIndex := range pkg.Leaves {
+			observationID := pkg.Leaves[leafIndex].Skeleton.ObservationID
+			judgment, exists := keyed[observationID]
+			if !exists {
+				return ModelValueBatch{}, fmt.Errorf("missing keyed observation %q", observationID)
+			}
+			if judgment.ObservationID != observationID {
+				return ModelValueBatch{}, fmt.Errorf("keyed observation %q contains identity %q", observationID, judgment.ObservationID)
+			}
+			observations = append(observations, judgment)
+			delete(keyed, observationID)
+		}
+		if len(keyed) != 0 {
+			return ModelValueBatch{}, fmt.Errorf("keyed observations contain unknown identities")
+		}
+		return ModelValueBatch{BatchID: envelope.BatchID, Observations: observations}, nil
+	}
+	var observations []ModelValueJudgment
+	if err := decodeStrictJSON(rawObservations, &observations); err != nil {
+		return ModelValueBatch{}, err
+	}
+	return ModelValueBatch{BatchID: envelope.BatchID, Observations: observations}, nil
+}
+
+func decodeStrictJSON(data string, target any) error {
+	decoder := json.NewDecoder(strings.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var extra any
+	if decoder.Decode(&extra) != io.EOF {
+		return fmt.Errorf("contains multiple JSON values")
+	}
+	return nil
 }
 
 func valueAuditPrompt(pkg ValuePackage) (string, error) {
@@ -1413,12 +1468,10 @@ func withCodexOutputSchema(cliName string, args []string, outputDir, label strin
 }
 
 func valueOutputSchema(pkg ValuePackage) map[string]any {
-	observationIDs := make([]string, 0, len(pkg.Leaves))
 	consultations := []string{}
 	seenConsultations := map[string]bool{}
 	for leafIndex := range pkg.Leaves {
 		leaf := &pkg.Leaves[leafIndex]
-		observationIDs = append(observationIDs, leaf.Skeleton.ObservationID)
 		for _, reference := range leaf.Evidence {
 			if reference.Status == "available" && !seenConsultations[reference.ID] {
 				consultations = append(consultations, reference.ID)
@@ -1430,27 +1483,42 @@ func valueOutputSchema(pkg ValuePackage) map[string]any {
 	if len(consultations) > 0 {
 		consultationItems["enum"] = consultations
 	}
-	judgment := map[string]any{
-		"type": "object", "additionalProperties": false,
-		"required": []string{"observation_id", "overall_value", "change_effect", "unique_contribution", "downstream_evidence", "confidence", "evidence_coverage", "note", "consultations"},
-		"properties": map[string]any{
-			"observation_id":      map[string]any{"type": "string", "enum": observationIDs},
-			"overall_value":       map[string]any{"type": "string", "enum": []string{"high", "medium", "low", "none", "negative", "unknown"}},
-			"change_effect":       map[string]any{"type": "string", "enum": []string{"intended", "partial", "no_material_change", "regressive", "not_applicable", "unknown"}},
-			"unique_contribution": map[string]any{"type": "string", "enum": []string{"unique", "complementary", "duplicative", "not_applicable", "unknown"}},
-			"downstream_evidence": map[string]any{"type": "string", "enum": []string{"confirmed", "supporting", "none", "contradicted", "unavailable"}},
-			"confidence":          map[string]any{"type": "string", "enum": []string{"high", "medium", "low"}},
-			"evidence_coverage":   map[string]any{"type": "string", "enum": []string{"complete", "partial", "limited"}},
-			"note":                map[string]any{"type": "string", "maxLength": 280},
-			"consultations":       map[string]any{"type": "array", "items": consultationItems},
-		},
+	observationIDs := make([]string, 0, len(pkg.Leaves))
+	judgments := make(map[string]any, len(pkg.Leaves))
+	for leafIndex := range pkg.Leaves {
+		leaf := &pkg.Leaves[leafIndex]
+		coverage := []string{"complete", "partial", "limited"}
+		if incompleteLeafEvidence(leaf) {
+			coverage = []string{"partial", "limited"}
+		}
+		observationID := leaf.Skeleton.ObservationID
+		observationIDs = append(observationIDs, observationID)
+		judgments[observationID] = valueJudgmentOutputSchema(observationID, coverage, consultationItems)
 	}
 	return map[string]any{
 		"type": "object", "additionalProperties": false,
 		"required": []string{"batch_id", "observations"},
 		"properties": map[string]any{
 			"batch_id":     map[string]any{"type": "string", "enum": []string{pkg.BatchID}},
-			"observations": map[string]any{"type": "array", "minItems": len(pkg.Leaves), "maxItems": len(pkg.Leaves), "items": judgment},
+			"observations": map[string]any{"type": "object", "additionalProperties": false, "required": observationIDs, "properties": judgments},
+		},
+	}
+}
+
+func valueJudgmentOutputSchema(observationID string, coverage []string, consultationItems map[string]any) map[string]any {
+	return map[string]any{
+		"type": "object", "additionalProperties": false,
+		"required": []string{"observation_id", "overall_value", "change_effect", "unique_contribution", "downstream_evidence", "confidence", "evidence_coverage", "note", "consultations"},
+		"properties": map[string]any{
+			"observation_id":      map[string]any{"type": "string", "enum": []string{observationID}},
+			"overall_value":       map[string]any{"type": "string", "enum": []string{"high", "medium", "low", "none", "negative", "unknown"}},
+			"change_effect":       map[string]any{"type": "string", "enum": []string{"intended", "partial", "no_material_change", "regressive", "not_applicable", "unknown"}},
+			"unique_contribution": map[string]any{"type": "string", "enum": []string{"unique", "complementary", "duplicative", "not_applicable", "unknown"}},
+			"downstream_evidence": map[string]any{"type": "string", "enum": []string{"confirmed", "supporting", "none", "contradicted", "unavailable"}},
+			"confidence":          map[string]any{"type": "string", "enum": []string{"high", "medium", "low"}},
+			"evidence_coverage":   map[string]any{"type": "string", "enum": coverage},
+			"note":                map[string]any{"type": "string", "maxLength": 280},
+			"consultations":       map[string]any{"type": "array", "items": consultationItems},
 		},
 	}
 }

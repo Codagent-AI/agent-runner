@@ -17,6 +17,7 @@ import (
 	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/stateio"
 	builtinworkflows "github.com/codagent/agent-runner/workflows"
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestTaggedProviderInjectsTheSingleHiddenAuditWorkflow(t *testing.T) {
@@ -205,6 +206,61 @@ func TestCodexStructuredOutputSchemaIsEphemeralAndBindsValueIdentity(t *testing.
 	}
 	if _, err := os.Stat(responsePath); !os.IsNotExist(err) {
 		t.Fatalf("structured final response remains after cleanup: %v", err)
+	}
+}
+
+func TestValueOutputSchemaDisallowsCompleteCoverageForOmittedEvidence(t *testing.T) {
+	pkg := ValuePackage{BatchID: "value-coverage", Leaves: []LeafEvidence{
+		{Skeleton: ObservationSkeleton{ObservationID: "complete-observation"}},
+		{Skeleton: ObservationSkeleton{ObservationID: "incomplete-observation"}, OmittedCategories: []string{"validation"}},
+	}}
+
+	schema := valueOutputSchema(pkg)
+	properties := schema["properties"].(map[string]any)
+	observations := properties["observations"].(map[string]any)
+	if diff := cmp.Diff([]string{"complete-observation", "incomplete-observation"}, observations["required"].([]string)); diff != "" {
+		t.Errorf("required observation IDs mismatch (-want +got):\n%s", diff)
+	}
+	complete := coverageEnumsForObservation(t, schema, "complete-observation")
+	incomplete := coverageEnumsForObservation(t, schema, "incomplete-observation")
+	if diff := cmp.Diff([]string{"complete", "partial", "limited"}, complete); diff != "" {
+		t.Errorf("complete evidence coverage enum mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{"partial", "limited"}, incomplete); diff != "" {
+		t.Errorf("incomplete evidence coverage enum mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func coverageEnumsForObservation(t *testing.T, schema map[string]any, observationID string) []string {
+	t.Helper()
+	properties := schema["properties"].(map[string]any)
+	observations := properties["observations"].(map[string]any)
+	observationProperties, ok := observations["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("value observation schema is not keyed by observation ID")
+	}
+	judgment, ok := observationProperties[observationID].(map[string]any)
+	if !ok {
+		t.Fatalf("value observation schema has no property for %q", observationID)
+	}
+	judgmentProperties := judgment["properties"].(map[string]any)
+	return judgmentProperties["evidence_coverage"].(map[string]any)["enum"].([]string)
+}
+
+func TestDecodeModelValueBatchNormalizesKeyedObservationsInPackageOrder(t *testing.T) {
+	pkg := ValuePackage{BatchID: "value-keyed", Leaves: []LeafEvidence{
+		{Skeleton: ObservationSkeleton{ObservationID: "observation-a"}},
+		{Skeleton: ObservationSkeleton{ObservationID: "observation-b"}},
+	}}
+	response := `{"batch_id":"value-keyed","observations":{"observation-b":{"observation_id":"observation-b","overall_value":"medium","change_effect":"intended","unique_contribution":"complementary","downstream_evidence":"supporting","confidence":"medium","evidence_coverage":"partial","note":"b","consultations":[]},"observation-a":{"observation_id":"observation-a","overall_value":"high","change_effect":"intended","unique_contribution":"unique","downstream_evidence":"confirmed","confidence":"high","evidence_coverage":"complete","note":"a","consultations":[]}}}`
+
+	batch, err := decodeModelValueBatch(response, pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := []string{batch.Observations[0].ObservationID, batch.Observations[1].ObservationID}
+	if diff := cmp.Diff([]string{"observation-a", "observation-b"}, got); diff != "" {
+		t.Errorf("normalized observation order mismatch (-want +got):\n%s", diff)
 	}
 }
 
