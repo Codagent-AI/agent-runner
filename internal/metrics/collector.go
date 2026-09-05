@@ -2,6 +2,7 @@
 package metrics
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -16,7 +17,7 @@ import (
 )
 
 const (
-	SchemaVersion = 2
+	SchemaVersion = 3
 	FileName      = "run-metrics.json"
 	// Compact UTC with fixed nanoseconds is sortable, collision-resistant, and
 	// safe on Windows (unlike RFC3339, which contains colons).
@@ -27,50 +28,69 @@ const (
 	DataEstimatedAPICostUSD = "estimated_api_cost_usd"
 	DataTotals              = "totals"
 
-	SessionOpen   = "open"
-	SessionClosed = "closed"
+	SessionOpen        = "open"
+	SessionClosed      = "closed"
+	SessionInterrupted = "interrupted"
 )
 
 // Artifact is the stable run-metrics.json schema.
 type Artifact struct {
-	SchemaVersion   int             `json:"schema_version"`
-	RunID           string          `json:"run_id"`
-	Workflow        string          `json:"workflow"`
-	HistoryComplete bool            `json:"history_complete"`
-	Sessions        []SessionRecord `json:"sessions"`
-	Steps           []StepRecord    `json:"steps"`
-	Totals          model.RunTotals `json:"totals"`
+	SchemaVersion     int                    `json:"schema_version"`
+	RunID             string                 `json:"run_id"`
+	Workflow          string                 `json:"workflow"`
+	HistoryComplete   bool                   `json:"history_complete"`
+	Sessions          []SessionRecord        `json:"sessions"`
+	Steps             []StepRecord           `json:"steps"`
+	SessionRollups    []SessionRollup        `json:"session_rollups"`
+	RepositoryChanges *audit.GitChangeCounts `json:"repository_changes,omitempty"`
+	Totals            model.RunTotals        `json:"totals"`
 }
 
 type SessionRecord struct {
-	StartedAt      string `json:"started_at"`
-	LastObservedAt string `json:"last_observed_at"`
-	EndedAt        string `json:"ended_at,omitempty"`
-	DurationMS     int64  `json:"duration_ms"`
-	Status         string `json:"status"`
+	ExecutionSessionID string `json:"execution_session_id"`
+	StartedAt          string `json:"started_at"`
+	LastObservedAt     string `json:"last_observed_at"`
+	EndedAt            string `json:"ended_at,omitempty"`
+	DurationMS         int64  `json:"duration_ms"`
+	Status             string `json:"status"`
 }
 
 type StepRecord struct {
-	RecordID            string             `json:"record_id"`
-	Prefix              string             `json:"prefix"`
-	ID                  string             `json:"id"`
-	Kind                string             `json:"kind"`
-	Type                string             `json:"type"`
-	Attempt             int                `json:"attempt"`
-	Iteration           *int               `json:"iteration"`
-	Outcome             string             `json:"outcome"`
-	DurationMS          int64              `json:"duration_ms"`
-	SessionID           string             `json:"session_id,omitempty"`
-	AgentInvoked        bool               `json:"agent_invoked"`
-	Role                string             `json:"role,omitempty"`
-	Tool                string             `json:"tool,omitempty"`
-	Usage               *model.UsageRecord `json:"usage"`
-	EstimatedAPICostUSD *float64           `json:"estimated_api_cost_usd"`
-	CallID              string             `json:"call_id,omitempty"`
-	InvocationID        string             `json:"invocation_id,omitempty"`
-	ParentAttemptID     string             `json:"parent_attempt_id,omitempty"`
-	TargetKind          string             `json:"target_kind,omitempty"`
-	TargetName          string             `json:"target_name,omitempty"`
+	RecordID                 string                 `json:"record_id"`
+	Prefix                   string                 `json:"prefix"`
+	ID                       string                 `json:"id"`
+	Kind                     string                 `json:"kind"`
+	Type                     string                 `json:"type"`
+	Attempt                  int                    `json:"attempt"`
+	Iteration                *int                   `json:"iteration"`
+	Outcome                  string                 `json:"outcome"`
+	DurationMS               int64                  `json:"duration_ms"`
+	SessionID                string                 `json:"session_id,omitempty"`
+	AgentInvoked             bool                   `json:"agent_invoked"`
+	Role                     string                 `json:"role,omitempty"`
+	Tool                     string                 `json:"tool,omitempty"`
+	Usage                    *model.UsageRecord     `json:"usage"`
+	EstimatedAPICostUSD      *float64               `json:"estimated_api_cost_usd"`
+	CallID                   string                 `json:"call_id,omitempty"`
+	InvocationID             string                 `json:"invocation_id,omitempty"`
+	ParentAttemptID          string                 `json:"parent_attempt_id,omitempty"`
+	TargetKind               string                 `json:"target_kind,omitempty"`
+	TargetName               string                 `json:"target_name,omitempty"`
+	ExecutionSessionID       string                 `json:"execution_session_id,omitempty"`
+	ExecutionSessionCoverage string                 `json:"execution_session_coverage,omitempty"`
+	GitStart                 *audit.GitCheckpoint   `json:"git_start,omitempty"`
+	GitEnd                   *audit.GitCheckpoint   `json:"git_end,omitempty"`
+	GitChanges               *audit.GitChangeCounts `json:"git_changes,omitempty"`
+}
+
+// SessionRollup exposes work attributable to exactly one Runner invocation.
+// It deliberately does not re-present work from earlier resume sessions.
+type SessionRollup struct {
+	ExecutionSessionID string                 `json:"execution_session_id"`
+	DurationMS         int64                  `json:"duration_ms"`
+	StepCount          int                    `json:"step_count"`
+	Totals             model.RunTotals        `json:"totals"`
+	RepositoryChanges  *audit.GitChangeCounts `json:"repository_changes,omitempty"`
 }
 
 type executionKey struct {
@@ -82,19 +102,20 @@ type executionKey struct {
 
 // Collector owns the in-memory projection and cumulative-usage baselines.
 type Collector struct {
-	mu             sync.Mutex
-	path           string
-	artifact       Artifact
-	attempts       map[executionKey]int
-	seenCalls      map[string]struct{}
-	baselines      map[string]model.TokenCounts
-	totalBaselines map[string]model.TokenTotals
-	errors         []error
-	writeFailures  int
-	lastWriteError error
-	writeRecovered bool
-	artifactLoaded bool
-	now            func() time.Time
+	mu                        sync.Mutex
+	path                      string
+	artifact                  Artifact
+	attempts                  map[executionKey]int
+	seenCalls                 map[string]struct{}
+	baselines                 map[string]model.TokenCounts
+	totalBaselines            map[string]model.TokenTotals
+	errors                    []error
+	writeFailures             int
+	lastWriteError            error
+	writeRecovered            bool
+	artifactLoaded            bool
+	currentExecutionSessionID string
+	now                       func() time.Time
 }
 
 // NewCollector creates a collector and rehydrates an existing artifact when
@@ -104,7 +125,7 @@ func NewCollector(sessionDir, runID, workflow string, sessionStart time.Time) *C
 		path: filepath.Join(sessionDir, FileName),
 		artifact: Artifact{
 			SchemaVersion: SchemaVersion, RunID: runID, Workflow: workflow, HistoryComplete: true,
-			Sessions: []SessionRecord{}, Steps: []StepRecord{}, Totals: emptyTotals(),
+			Sessions: []SessionRecord{}, Steps: []StepRecord{}, SessionRollups: []SessionRollup{}, Totals: emptyTotals(),
 		},
 		attempts:       make(map[executionKey]int),
 		seenCalls:      make(map[string]struct{}),
@@ -128,14 +149,14 @@ func (c *Collector) Process(event audit.Event) audit.Event {
 			c.artifact.HistoryComplete = false
 		}
 		if at, ok := c.eventTimestamp(event); ok {
-			c.openSession(at)
+			c.openSession(at, stringValue(event.Data["execution_session_id"]))
 		}
 	case audit.EventStepEnd, audit.EventIterationEnd, audit.EventAgentCallEnd, audit.EventNestedAgentEnd:
 		c.processTerminal(&event)
 		if at, ok := c.eventTimestamp(event); ok {
 			c.observeSession(at, false)
 		}
-		c.artifact.Totals = c.totalsLocked(false)
+		c.refreshAggregatesLocked()
 		c.persist()
 	case audit.EventRunEnd:
 		if at, ok := c.eventTimestamp(event); ok {
@@ -145,7 +166,7 @@ func (c *Collector) Process(event audit.Event) audit.Event {
 			// Close at the last trustworthy observation instead of inventing time.
 			c.closeSessionAtLastObservation()
 		}
-		c.artifact.Totals = c.totalsLocked(false)
+		c.refreshAggregatesLocked()
 		c.persist()
 	}
 	return event
@@ -225,6 +246,29 @@ func (c *Collector) processTerminal(event *audit.Event) {
 		Role: identity.Role, Tool: identity.Tool,
 		CallID: stringValue(event.Data["call_id"]), ParentAttemptID: stringValue(event.Data["parent_attempt_id"]),
 		TargetKind: stringValue(event.Data["target_kind"]), TargetName: stringValue(event.Data["target_name"]),
+		ExecutionSessionID: identity.ExecutionSessionID,
+	}
+	if record.ExecutionSessionID == "" {
+		record.ExecutionSessionID = stringValue(event.Data["execution_session_id"])
+	}
+	if record.ExecutionSessionID == "" {
+		record.ExecutionSessionID = c.currentExecutionSessionID
+	}
+	if record.ExecutionSessionID == "" {
+		record.ExecutionSessionCoverage = "unknown"
+	}
+	if checkpoint, ok := event.Data["git_start_checkpoint"].(audit.GitCheckpoint); ok {
+		record.GitStart = &checkpoint
+	} else if checkpoint, ok := event.Data["git_start"].(audit.GitCheckpoint); ok {
+		record.GitStart = &checkpoint
+	}
+	if checkpoint, ok := event.Data["git_end_checkpoint"].(audit.GitCheckpoint); ok {
+		record.GitEnd = &checkpoint
+	} else if checkpoint, ok := event.Data["git_checkpoint"].(audit.GitCheckpoint); ok {
+		record.GitEnd = &checkpoint
+	}
+	if changes, ok := event.Data["git_changes"].(audit.GitChangeCounts); ok {
+		record.GitChanges = &changes
 	}
 	if event.Type == audit.EventNestedAgentEnd {
 		record.InvocationID = stringValue(event.Data["invocation_id"])
@@ -333,16 +377,20 @@ func sessionWasResumed(identity *model.ExecutionIdentity) bool {
 		identity.SessionStrategy == string(model.SessionInherit)
 }
 
-func (c *Collector) openSession(at time.Time) {
+func (c *Collector) openSession(at time.Time, executionSessionID string) {
 	for i := range c.artifact.Sessions {
 		if c.artifact.Sessions[i].Status == SessionOpen {
-			c.artifact.Sessions[i].Status = SessionClosed
+			c.artifact.Sessions[i].Status = SessionInterrupted
 			c.artifact.Sessions[i].EndedAt = c.artifact.Sessions[i].LastObservedAt
 		}
 	}
+	if executionSessionID == "" {
+		executionSessionID = deterministicExecutionSessionID(c.artifact.RunID, len(c.artifact.Sessions), "current")
+	}
+	c.currentExecutionSessionID = executionSessionID
 	stamp := at.UTC().Format(time.RFC3339Nano)
 	c.artifact.Sessions = append(c.artifact.Sessions, SessionRecord{
-		StartedAt: stamp, LastObservedAt: stamp, Status: SessionOpen,
+		ExecutionSessionID: executionSessionID, StartedAt: stamp, LastObservedAt: stamp, Status: SessionOpen,
 	})
 }
 
@@ -388,27 +436,40 @@ func (c *Collector) closeSessionAtLastObservation() {
 }
 
 func (c *Collector) totalsLocked(includeLiveSession bool) model.RunTotals {
-	totals := emptyTotals()
+	return totalsForRecords(c.artifact.Steps, c.sessionDurationLocked(includeLiveSession, ""))
+}
+
+func (c *Collector) sessionDurationLocked(includeLiveSession bool, executionSessionID string) int64 {
+	var duration int64
 	for i, session := range c.artifact.Sessions {
-		duration := session.DurationMS
+		if executionSessionID != "" && session.ExecutionSessionID != executionSessionID {
+			continue
+		}
+		observedDuration := session.DurationMS
 		if includeLiveSession && i == len(c.artifact.Sessions)-1 && session.Status == SessionOpen {
 			if started, err := parseTimestamp(session.StartedAt); err == nil {
 				liveDuration := c.now().Sub(started).Milliseconds()
-				if liveDuration > duration {
-					duration = liveDuration
+				if liveDuration > observedDuration {
+					observedDuration = liveDuration
 				}
 			}
 		}
-		totals.ActiveDurationMS += duration
+		duration += observedDuration
 	}
+	return duration
+}
+
+func totalsForRecords(records []StepRecord, activeDuration int64) model.RunTotals {
+	totals := emptyTotals()
+	totals.ActiveDurationMS = activeDuration
 	agents := 0
 	usageReported := 0
 	tokenTotalsReported := 0
 	costReported := 0
 	var cost float64
 	canonicalTotals := model.TokenTotals{}
-	for i := range c.artifact.Steps {
-		step := &c.artifact.Steps[i]
+	for i := range records {
+		step := &records[i]
 		if step.Usage != nil && step.Usage.Status == model.UsageCollected {
 			for category, count := range step.Usage.Tokens {
 				totals.Tokens[category] += count
@@ -444,6 +505,60 @@ func (c *Collector) totalsLocked(includeLiveSession bool) model.RunTotals {
 	return totals
 }
 
+func (c *Collector) refreshAggregatesLocked() {
+	c.artifact.Totals = c.totalsLocked(false)
+	c.artifact.RepositoryChanges = aggregateRepositoryChanges(c.artifact.Steps)
+	rollups := make([]SessionRollup, 0, len(c.artifact.Sessions))
+	for _, session := range c.artifact.Sessions {
+		steps := make([]StepRecord, 0)
+		for i := range c.artifact.Steps {
+			step := &c.artifact.Steps[i]
+			if step.ExecutionSessionID == session.ExecutionSessionID {
+				steps = append(steps, *step)
+			}
+		}
+		rollups = append(rollups, SessionRollup{
+			ExecutionSessionID: session.ExecutionSessionID, DurationMS: session.DurationMS, StepCount: len(steps),
+			Totals: totalsForRecords(steps, session.DurationMS), RepositoryChanges: aggregateRepositoryChanges(steps),
+		})
+	}
+	c.artifact.SessionRollups = rollups
+}
+
+func aggregateRepositoryChanges(records []StepRecord) *audit.GitChangeCounts {
+	result := audit.GitChangeCounts{Available: true}
+	eligible := 0
+	for i := range records {
+		record := &records[i]
+		if !checkpointEligible(record) {
+			continue
+		}
+		eligible++
+		if record.GitChanges == nil || !record.GitChanges.Available {
+			return &audit.GitChangeCounts{Reason: "one or more step checkpoints unavailable"}
+		}
+		result.FilesChanged += record.GitChanges.FilesChanged
+		result.LinesAdded += record.GitChanges.LinesAdded
+		result.LinesDeleted += record.GitChanges.LinesDeleted
+	}
+	if eligible == 0 {
+		return nil
+	}
+	return &result
+}
+
+func checkpointEligible(record *StepRecord) bool {
+	if record.Kind != "step" || record.Outcome == "skipped" {
+		return false
+	}
+	switch record.Type {
+	case "agent", "shell", "script", "ui":
+		return true
+	default:
+		return false
+	}
+}
+
 func (c *Collector) persist() {
 	if err := stateio.WriteJSONAtomic(c.path, &c.artifact); err != nil {
 		c.writeFailures++
@@ -470,7 +585,7 @@ func (c *Collector) rehydrate(sessionStart time.Time) {
 		c.recoverArtifact(sessionStart, fmt.Errorf("parse existing artifact: %w", err))
 		return
 	}
-	if artifact.SchemaVersion != 1 && artifact.SchemaVersion != SchemaVersion {
+	if artifact.SchemaVersion != 1 && artifact.SchemaVersion != 2 && artifact.SchemaVersion != SchemaVersion {
 		c.recoverArtifact(sessionStart, fmt.Errorf("unsupported schema version %d", artifact.SchemaVersion))
 		return
 	}
@@ -494,8 +609,12 @@ func (c *Collector) rehydrate(sessionStart time.Time) {
 	if artifact.SchemaVersion == 1 {
 		migrateSchemaV1(&artifact)
 	}
+	if artifact.SchemaVersion == 1 || artifact.SchemaVersion == 2 {
+		migrateSchemaV2(&artifact)
+	}
 	c.artifact = artifact
 	c.artifact.SchemaVersion = SchemaVersion
+	c.refreshAggregatesLocked()
 	c.artifactLoaded = true
 	for i := range artifact.Steps {
 		record := &artifact.Steps[i]
@@ -545,6 +664,33 @@ func migrateSchemaV1(artifact *Artifact) {
 		}
 		migrateLegacyUsageIdentity(record.Usage)
 	}
+}
+
+func migrateSchemaV2(artifact *Artifact) {
+	for i := range artifact.Sessions {
+		if artifact.Sessions[i].ExecutionSessionID == "" {
+			artifact.Sessions[i].ExecutionSessionID = deterministicExecutionSessionID(artifact.RunID, i, "legacy")
+		}
+	}
+	if len(artifact.Sessions) == 1 && artifact.HistoryComplete {
+		for i := range artifact.Steps {
+			if artifact.Steps[i].ExecutionSessionID == "" {
+				artifact.Steps[i].ExecutionSessionID = artifact.Sessions[0].ExecutionSessionID
+			}
+		}
+		return
+	}
+	for i := range artifact.Steps {
+		if artifact.Steps[i].ExecutionSessionID == "" {
+			artifact.Steps[i].ExecutionSessionCoverage = "unknown"
+			artifact.HistoryComplete = false
+		}
+	}
+}
+
+func deterministicExecutionSessionID(runID string, index int, provenance string) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%s", runID, index, provenance)))
+	return fmt.Sprintf("legacy-%x", sum[:12])
 }
 
 func migrateLegacyUsageIdentity(usage *model.UsageRecord) {

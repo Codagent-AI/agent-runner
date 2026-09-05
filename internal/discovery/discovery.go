@@ -81,7 +81,11 @@ func UserWorkflowsDir() string {
 // scope list themselves, so a scope added here cannot reach one and not the
 // other.
 func EnumerateForProject(projectDir string) []WorkflowEntry {
-	return Enumerate(builtinworkflows.FS, projectDir, UserWorkflowsDir())
+	entries := Enumerate(builtinworkflows.FS, projectDir, UserWorkflowsDir())
+	for _, source := range builtinworkflows.Sources()[1:] {
+		entries = append(entries, enumerateBuiltinFS(source)...)
+	}
+	return entries
 }
 
 // Enumerate discovers workflows from three sources in order:
