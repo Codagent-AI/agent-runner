@@ -28,6 +28,7 @@ import (
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/config"
+	"github.com/codagent/agent-runner/internal/devaudit"
 	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/engine"
 	_ "github.com/codagent/agent-runner/internal/engine/openspec"
@@ -429,6 +430,12 @@ func main() {
 
 func run() int {
 	ensureAgentRunnerExecutableEnv()
+	if handled, code := handleDevelopmentAuditCommand(os.Args[1:], os.Stdout, os.Stderr); handled {
+		return code
+	}
+	if handled, code := devaudit.HandleCommand(os.Args[1:], os.Stdout, os.Stderr); handled {
+		return code
+	}
 
 	if len(os.Args) > 1 && os.Args[1] == "step" {
 		return handleStep(os.Args[2:])
@@ -2911,6 +2918,9 @@ func resetOnboardingState() error {
 	return nil
 }
 
+// #nosec G703 -- callers pass only the fixed onboarding-owned .validator and
+// ~/.agent-runner/onboarding/runs paths; root symlinks are removed without
+// following them, and nested operations are confined with os.Root.
 func removeAllWritable(path string) error {
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {

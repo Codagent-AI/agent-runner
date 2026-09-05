@@ -32,6 +32,11 @@ const (
 	EventRouteLaunchAttempted   EventType = "route_launch_attempted"
 	EventRouteLaunchFailed      EventType = "route_launch_failed"
 	EventPullRequestRecorded    EventType = "pull_request_recorded"
+	EventAuditLaunchRequested   EventType = "audit_launch_requested"
+	EventAuditLaunched          EventType = "audit_launched"
+	EventAuditLaunchFailed      EventType = "audit_launch_failed"
+	EventAuditCompleted         EventType = "audit_completed"
+	EventAuditReportingWarning  EventType = "audit_reporting_warning"
 )
 
 // Event is a single audit log entry.

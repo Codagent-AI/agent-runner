@@ -959,6 +959,56 @@ func TestDefinitionEnumerationIncludesYMLButExcludesMetadataAndTopLevelFiles(t *
 	}
 }
 
+func TestListDeduplicatesRegisteredBuiltinCollision(t *testing.T) {
+	preserveRegisteredFiles(t)
+	const relPath = "core/intake-v1.0.yaml"
+	RegisterBuiltinAsset(relPath, []byte("name: duplicate\n"))
+
+	refs, err := List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Ref(relPath)
+	count := 0
+	for _, ref := range refs {
+		if ref == want {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("List() contains %d copies of %q, want 1", count, want)
+	}
+}
+
+func TestRegisterBuiltinAssetRejectsInvalidPaths(t *testing.T) {
+	for _, relPath := range []string{"", ".", "..", "../audit.yaml", "/audit.yaml", "audit//run.yaml"} {
+		t.Run(strconv.Quote(relPath), func(t *testing.T) {
+			preserveRegisteredFiles(t)
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("RegisterBuiltinAsset(%q) did not reject invalid path", relPath)
+				}
+			}()
+			RegisterBuiltinAsset(relPath, []byte("name: invalid\n"))
+		})
+	}
+}
+
+func preserveRegisteredFiles(t *testing.T) {
+	t.Helper()
+	registered.Lock()
+	original := make(map[string][]byte, len(registered.files))
+	for name, data := range registered.files {
+		original[name] = append([]byte(nil), data...)
+	}
+	registered.Unlock()
+	t.Cleanup(func() {
+		registered.Lock()
+		registered.files = original
+		registered.Unlock()
+	})
+}
+
 func TestBuiltinReferenceAndAssetPathsStayConfined(t *testing.T) {
 	for _, ref := range []string{"builtin:../core/debug-v1.0.yaml", "builtin:/core/debug-v1.0.yaml"} {
 		if _, err := RefPath(ref); err == nil {

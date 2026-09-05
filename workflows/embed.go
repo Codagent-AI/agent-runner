@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 
@@ -61,7 +62,16 @@ func RefPath(workflowFile string) (string, error) {
 }
 
 func Resolve(name string) (string, error) {
-	return resolveFS(FS, name)
+	ref, err := resolveFS(FS, name)
+	if err == nil {
+		return ref, nil
+	}
+	if extra := registeredFS(); extra != nil {
+		if ref, extraErr := resolveFS(extra, name); extraErr == nil {
+			return ref, nil
+		}
+	}
+	return "", err
 }
 
 func resolveFS(fsys fs.FS, name string) (string, error) {
@@ -102,18 +112,34 @@ func ReadFile(workflowFile string) ([]byte, error) {
 		return nil, err
 	}
 	data, err := FS.ReadFile(relPath)
-	if err != nil {
-		return nil, err
+	if err == nil {
+		return data, nil
 	}
-	return data, nil
+	if data, ok := registeredFile(relPath); ok {
+		return data, nil
+	}
+	return nil, err
 }
 
 func ListAssets(namespace string) ([]string, error) {
+	assets, err := listAssetsFS(FS, namespace)
+	if err == nil {
+		return assets, nil
+	}
+	if extra := registeredFS(); extra != nil {
+		if assets, extraErr := listAssetsFS(extra, namespace); extraErr == nil {
+			return assets, nil
+		}
+	}
+	return nil, err
+}
+
+func listAssetsFS(fsys fs.FS, namespace string) ([]string, error) {
 	if namespace == "" || namespace == "." || namespace == ".." || strings.Contains(namespace, "/") || strings.Contains(namespace, `\`) {
 		return nil, fmt.Errorf("invalid builtin workflow namespace: %s", namespace)
 	}
 	var assets []string
-	err := fs.WalkDir(FS, namespace, func(p string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(fsys, namespace, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				return fmt.Errorf("workflow namespace %q not found", namespace)
@@ -150,7 +176,20 @@ func ReadAsset(assetPath string) ([]byte, error) {
 }
 
 func List() ([]string, error) {
-	return listFS(FS)
+	refs, err := listFS(FS)
+	if err != nil {
+		return nil, err
+	}
+	if extra := registeredFS(); extra != nil {
+		extraRefs, err := listFS(extra)
+		if err != nil {
+			return nil, err
+		}
+		refs = append(refs, extraRefs...)
+		sort.Strings(refs)
+		refs = slices.Compact(refs)
+	}
+	return refs, nil
 }
 
 func listFS(fsys fs.FS) ([]string, error) {

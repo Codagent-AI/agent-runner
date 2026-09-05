@@ -151,11 +151,14 @@ func (s *PullRequestCaptureState) Mark(url string) bool {
 
 // ExecutionContext carries state through workflow execution.
 type ExecutionContext struct {
-	Params            map[string]string
-	SessionIDs        map[string]string
-	SessionProfiles   map[string]string // maps session-originating step ID → profile name
-	CapturedVariables map[string]CapturedValue
-	LastStepOutcome   *string // nil, "success", or "failed"
+	// ExecutionSessionID identifies this one Agent Runner invocation. It is
+	// deliberately distinct from SessionIDs, which are agent CLI sessions.
+	ExecutionSessionID string
+	Params             map[string]string
+	SessionIDs         map[string]string
+	SessionProfiles    map[string]string // maps session-originating step ID → profile name
+	CapturedVariables  map[string]CapturedValue
+	LastStepOutcome    *string // nil, "success", or "failed"
 	// PullRequestCaptureState suppresses duplicate PR audit observations for
 	// the complete run. It is intentionally transient; captured variables
 	// remain the durable resume mechanism.
@@ -258,6 +261,7 @@ type ExecutionContext struct {
 
 // RootContextOptions configures a new root execution context.
 type RootContextOptions struct {
+	ExecutionSessionID       string
 	Params                   map[string]string
 	WorkflowFile             string
 	WorkflowName             string
@@ -315,6 +319,7 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 	}
 
 	return &ExecutionContext{
+		ExecutionSessionID:       opts.ExecutionSessionID,
 		Params:                   params,
 		SessionIDs:               sessionIDs,
 		SessionProfiles:          sessionProfiles,
@@ -433,6 +438,7 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 	}
 
 	return &ExecutionContext{
+		ExecutionSessionID:       parent.ExecutionSessionID,
 		Params:                   params,
 		SessionIDs:               sessionIDs,
 		SessionProfiles:          sessionProfiles,
@@ -521,6 +527,7 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 	}
 
 	return &ExecutionContext{
+		ExecutionSessionID:       parent.ExecutionSessionID,
 		Params:                   params,
 		SessionIDs:               sessionIDs,
 		SessionProfiles:          sessionProfiles,
